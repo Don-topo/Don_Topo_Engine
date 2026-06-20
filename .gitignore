@@ -1,0 +1,46 @@
+# Build directories
+build/
+cmake-build-*/
+.cmake/
+out/
+
+# CMake generated (in build dir, already covered by build/ — listed explicitly
+# for in-source build users)
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+# IDEs
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.sln.docinfo
+*.vcxproj.user
+.clangd/
+compile_commands.json
+
+# Compiled artifacts
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+*.dll
+*.so
+*.dylib
+*.pdb
+*.ilk
+*.exp
+*.map
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+ehthumbs.db
