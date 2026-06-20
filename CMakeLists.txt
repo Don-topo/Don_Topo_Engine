@@ -43,7 +43,8 @@ if(NOT FMOD_FOUND)
         "  Install FMOD Studio API from https://www.fmod.com/download\n"
         "  Then re-run cmake with -DFMOD_DIR=<install_root>"
     )
-    # Provide a stub target so engine/CMakeLists.txt links without error
+    # Intentional stub: allows DX (developers without FMOD can still configure).
+    # TODO: change to find_package(FMOD REQUIRED) and remove stub once FMOD is used in engine code.
     add_library(FMOD::FMOD INTERFACE IMPORTED)
 endif()
 

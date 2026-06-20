@@ -15,16 +15,14 @@ A cross-platform, Vulkan-based game engine written in C++20.
 
 ## Prerequisites
 
-All of these must be installed before configuring:
-
 | Tool | Version | Download |
 |---|---|---|
 | CMake | 3.25+ | https://cmake.org/download |
 | Vulkan SDK | Latest | https://vulkan.lunarg.com/sdk/home |
-| FMOD Studio API | Latest | https://www.fmod.com/download |
+| FMOD Studio API | Latest (optional) | https://www.fmod.com/download |
 | C++20 compiler | — | GCC 11+, Clang 13+, or MSVC 2022+ |
 
-GLFW and GLM are downloaded automatically by CMake at configure time.
+**Note:** CMake and Vulkan SDK are required. C++20 compiler is required. GLFW and GLM are downloaded automatically by CMake at configure time. FMOD is optional — if not found, the build succeeds but audio is disabled.
 
 ## Build
 
