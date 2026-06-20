@@ -12,7 +12,11 @@ target_link_libraries(DonTopoEngine
         Vulkan::Vulkan
         glfw
         glm::glm
-        FMOD::FMOD
 )
+
+if(FMOD_FOUND)
+    target_link_libraries(DonTopoEngine PUBLIC FMOD::FMOD)
+    target_compile_definitions(DonTopoEngine PUBLIC DT_FMOD_ENABLED)
+endif()
 
 target_compile_features(DonTopoEngine PUBLIC cxx_std_20)
