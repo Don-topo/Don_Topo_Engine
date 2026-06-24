@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include "DonTopo/Window.h"
 #include <algorithm>
+#include <fstream>
 
 namespace DonTopo {
 
@@ -20,10 +21,11 @@ namespace DonTopo {
         createSwapChain(window);
         createImageViews();
         createRenderPass();
+        createPipeline();
         createFramebuffers();
         createCommandPool();
         createCommandBuffers();
-        createSyncObjects();
+        createSyncObjects();        
     }
 
     void Renderer::drawFrame()
@@ -93,6 +95,8 @@ namespace DonTopo {
         {
             vkDestroyFramebuffer(m_device, framebuffer, nullptr);
         }
+        vkDestroyPipeline(m_device, m_pipeline, nullptr);
+        vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
         vkDestroyRenderPass(m_device, m_renderPass, nullptr);
         for(VkImageView imageView : m_swapChainImageViews)
         {
@@ -495,7 +499,155 @@ namespace DonTopo {
         renderPassBeginInfo.pClearValues        = &clearBlack;
 
         vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+
+        VkViewport viewport{};
+        viewport.x          = 0.0f;
+        viewport.y          = 0.0f;
+        viewport.width      = (float)m_swapChainExtent.width;
+        viewport.height     = (float) m_swapChainExtent.height;
+        viewport.minDepth   = 0.0f;
+        viewport.maxDepth   = 1.0f;
+        vkCmdSetViewport(m_commandBuffers[m_currentFrame], 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.offset = {0,0};
+        scissor.extent = m_swapChainExtent;
+        vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
+
+        vkCmdDraw(m_commandBuffers[m_currentFrame], 3,1,0,0);
+
         vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
         vkEndCommandBuffer(m_commandBuffers[m_currentFrame]);
+    }
+
+    void Renderer::createPipeline()
+    {
+        auto vertCode = loadShaderFile("shaders/triangle.vert.spv");
+        auto fragCode = loadShaderFile("shaders/triangle.frag.spv");
+
+        VkShaderModule vertModule = createShaderModule(vertCode);
+        VkShaderModule fragModule = createShaderModule(fragCode);
+
+        // 1. Shader stages — qué shader va en cada etapa
+        VkPipelineShaderStageCreateInfo vertStage{};
+        vertStage.sType     = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        vertStage.stage     = VK_SHADER_STAGE_VERTEX_BIT;
+        vertStage.module    = vertModule;
+        vertStage.pName     = "main";
+
+        VkPipelineShaderStageCreateInfo fragStage{};
+        fragStage.sType     = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragStage.stage     = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragStage.module    = fragModule;
+        fragStage.pName     = "main";
+
+        VkPipelineShaderStageCreateInfo stages[] = {vertStage,fragStage};
+
+        // 2. Vertex input — sin vertex buffer, las posiciones van en el shader
+        VkPipelineVertexInputStateCreateInfo vertexInput{};
+        vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+        // 3. Input assembly — qué primitivo forman los vértices
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.sType     = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        inputAssembly.topology  = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        // 4. Viewport y scissor — dinámicos, los seteamos en recordCommandBuffer
+        VkPipelineViewportStateCreateInfo viewportInfo{};
+        viewportInfo.sType          = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewportInfo.viewportCount  = 1;
+        viewportInfo.scissorCount   = 1;
+
+        // 5. Rasterizer — cómo se rellena el triángulo
+        VkPipelineRasterizationStateCreateInfo rasterizationInfo{};
+        rasterizationInfo.sType         = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterizationInfo.polygonMode   = VK_POLYGON_MODE_FILL;
+        rasterizationInfo.cullMode      = VK_CULL_MODE_BACK_BIT;
+        rasterizationInfo.frontFace     = VK_FRONT_FACE_CLOCKWISE;
+        rasterizationInfo.lineWidth     = 1.0f;
+
+        // 6. Multisampling — sin MSAA por ahora
+        VkPipelineMultisampleStateCreateInfo multisampleInfo{};
+        multisampleInfo.sType                   = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampleInfo.rasterizationSamples    = VK_SAMPLE_COUNT_1_BIT;
+
+        // 7. Color blending — opaco, sin transparencia
+        VkPipelineColorBlendAttachmentState blendAttachment{};
+        blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+        VkPipelineColorBlendStateCreateInfo colorBlendInfo{};
+        colorBlendInfo.sType            = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        colorBlendInfo.attachmentCount  = 1;
+        colorBlendInfo.pAttachments     = &blendAttachment;
+
+        // 8. Dynamic state — viewport y scissor los cambiamos en runtime (no hardcoded aquí)
+        VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+        VkPipelineDynamicStateCreateInfo dynamicInfo{};
+        dynamicInfo.sType               = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamicInfo.dynamicStateCount   = 2;
+        dynamicInfo.pDynamicStates      = dynamicStates;
+
+        // 9. Pipeline layout — sin descriptors ni push constants por ahora
+        VkPipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        if(vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create pipeline layout!");
+        }
+
+        // 10. Pipeline completo
+        VkGraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType                  = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.stageCount             = 2;
+        pipelineInfo.pStages                = stages;
+        pipelineInfo.pVertexInputState      = &vertexInput;
+        pipelineInfo.pInputAssemblyState    = &inputAssembly;
+        pipelineInfo.pViewportState         = &viewportInfo;
+        pipelineInfo.pRasterizationState    = &rasterizationInfo;
+        pipelineInfo.pMultisampleState      = &multisampleInfo;
+        pipelineInfo.pColorBlendState       = &colorBlendInfo;
+        pipelineInfo.pDynamicState          = &dynamicInfo;
+        pipelineInfo.layout                 = m_pipelineLayout;
+        pipelineInfo.renderPass             = m_renderPass;
+        pipelineInfo.subpass                = 0;
+
+        if(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipeline) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create graphics pipeline!");
+        }
+
+        // los módulos se destruyen al final de esta función — solo los necesita el pipeline
+        vkDestroyShaderModule(m_device, vertModule, nullptr);
+        vkDestroyShaderModule(m_device, fragModule, nullptr);
+        printf("pipeline OK\n"); fflush(stdout);
+    }
+
+    std::vector<char> Renderer::loadShaderFile(const std::string& path)
+    {
+        std::ifstream file(path, std::ios::ate | std::ios::binary);
+        if(!file.is_open())
+        {
+            throw std::runtime_error("failed to open shader: " + path);
+        }
+        size_t size = (size_t)file.tellg();
+        std::vector<char> buffer(size);
+        file.seekg(0);
+        file.read(buffer.data(), (std::streamsize)size);
+        return buffer;
+    }
+
+    VkShaderModule Renderer::createShaderModule(const std::vector<char>& code)
+    {
+        VkShaderModuleCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        createInfo.codeSize = code.size();
+        createInfo.pCode = reinterpret_cast<const uint32_t *>(code.data());
+        VkShaderModule shaderModule;
+        if(vkCreateShaderModule(m_device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create shader module!");
+        }
+        return shaderModule;
     }
 }
