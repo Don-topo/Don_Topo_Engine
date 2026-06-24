@@ -66,7 +66,7 @@ namespace DonTopo {
         submitInfo.commandBufferCount       = 1;
         submitInfo.pCommandBuffers          = &m_commandBuffers[m_currentFrame];
         submitInfo.signalSemaphoreCount     = 1;
-        submitInfo.pSignalSemaphores        = &m_renderFinished[m_currentFrame];
+        submitInfo.pSignalSemaphores        = &m_renderFinished[imageIndex];
         if(vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, m_inFlight[m_currentFrame]) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to submit graphics queue!");
@@ -76,7 +76,7 @@ namespace DonTopo {
         VkPresentInfoKHR presentInfo{};
         presentInfo.sType               = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         presentInfo.waitSemaphoreCount  = 1;
-        presentInfo.pWaitSemaphores     = &m_renderFinished[m_currentFrame];
+        presentInfo.pWaitSemaphores     = &m_renderFinished[imageIndex];
         presentInfo.swapchainCount      = 1;
         presentInfo.pSwapchains         = &m_swapChain;
         presentInfo.pImageIndices       = &imageIndex;
@@ -92,9 +92,13 @@ namespace DonTopo {
     {
         if (m_device == VK_NULL_HANDLE) return;
         vkDeviceWaitIdle(m_device);
+
+        for(auto sem : m_renderFinished){
+            vkDestroySemaphore(m_device, sem, nullptr);
+        }
+
         for(int i = 0; i < MAX_FRAMES; i++)
-        {
-            vkDestroySemaphore(m_device, m_renderFinished[i], nullptr);
+        {            
             vkDestroySemaphore(m_device, m_imageAvailable[i], nullptr);
             vkDestroyFence(m_device, m_inFlight[i], nullptr);
         }
@@ -186,10 +190,7 @@ namespace DonTopo {
         }            
     }
 
-    VKAPI_ATTR VkBool32 VKAPI_CALL Renderer::debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
-    VkDebugUtilsMessageTypeFlagsEXT,
-    const VkDebugUtilsMessengerCallbackDataEXT* data,
-    void*)
+    VKAPI_ATTR VkBool32 VKAPI_CALL Renderer::debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT, const VkDebugUtilsMessengerCallbackDataEXT* data, void*)
     {
         if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
             fprintf(stderr, "[Vulkan] %s\n", data->pMessage);
@@ -528,8 +529,7 @@ namespace DonTopo {
 
         for(int i = 0; i < MAX_FRAMES; i++)
         {
-            if(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_imageAvailable[i]) != VK_SUCCESS
-                || vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_renderFinished[i]) != VK_SUCCESS
+            if(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_imageAvailable[i]) != VK_SUCCESS                
                 || vkCreateFence(m_device, &fenceCreateInfo, nullptr, &m_inFlight[i]) != VK_SUCCESS)
             {
                 // m_imageAvailable — señala que hay imagen disponible del swapchain
@@ -538,7 +538,18 @@ namespace DonTopo {
                 throw std::runtime_error("failed to create sync objects!");
             }
         }
-        printf("sync objects OK\n"); fflush(stdout);
+
+        m_renderFinished.resize(m_swapChainImages.size());
+        VkSemaphoreCreateInfo semInfo{};
+        semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        for (auto& sem : m_renderFinished)
+        {
+            if (vkCreateSemaphore(m_device, &semInfo, nullptr, &sem) != VK_SUCCESS)
+            {
+                throw std::runtime_error("failed to create renderFinished semaphore!");
+            }                
+            printf("sync objects OK\n"); fflush(stdout);
+        }            
     }
 
     void Renderer::recordCommandBuffer(uint32_t imageIndex)

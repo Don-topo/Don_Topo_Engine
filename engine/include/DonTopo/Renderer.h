@@ -61,7 +61,7 @@ namespace DonTopo {
             std::vector<VkCommandBuffer> m_commandBuffers;
             static constexpr int MAX_FRAMES             = 2;
             VkSemaphore m_imageAvailable[MAX_FRAMES]    = {};
-            VkSemaphore m_renderFinished[MAX_FRAMES]    = {};
+            std::vector<VkSemaphore> m_renderFinished;
             VkFence m_inFlight[MAX_FRAMES]              = {};
             int m_currentFrame                          = 0;
             VkPipelineLayout m_pipelineLayout           = VK_NULL_HANDLE;
