@@ -5,6 +5,12 @@
 #include <algorithm>
 #include <fstream>
 
+#ifdef NDEBUG
+    static constexpr bool ENABLE_VALIDATION = false;
+#else
+    static constexpr bool ENABLE_VALIDATION = true;
+#endif
+
 namespace DonTopo {
 
     Renderer::~Renderer()
@@ -15,6 +21,7 @@ namespace DonTopo {
     void Renderer::init(Window& window)
     {
         createInstance();
+        setupDebugMessenger();
         createSurface(window);
         pickPhysicalDevice();
         createDevice();
@@ -83,6 +90,7 @@ namespace DonTopo {
 
     void Renderer::shutdown()
     {
+        if (m_device == VK_NULL_HANDLE) return;
         vkDeviceWaitIdle(m_device);
         for(int i = 0; i < MAX_FRAMES; i++)
         {
@@ -104,7 +112,16 @@ namespace DonTopo {
         }                        
         vkDestroySwapchainKHR(m_device, m_swapChain, nullptr);
         vkDestroyDevice(m_device, nullptr);
+        m_device = VK_NULL_HANDLE;
         vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
+        if(ENABLE_VALIDATION && m_debugMessenger != VK_NULL_HANDLE)
+        {
+            auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)
+                vkGetInstanceProcAddr(m_instance, "vkDestroyDebugUtilsMessengerEXT");
+            if(func){
+                func(m_instance, m_debugMessenger, nullptr);
+            }
+        }
         vkDestroyInstance(m_instance, nullptr);
         printf("destroy render items OK\n"); fflush(stdout);
     }
@@ -120,18 +137,63 @@ namespace DonTopo {
         appInfo.apiVersion          = VK_API_VERSION_1_0;
 
         uint32_t extensionCount = 0;
-        const char **extensions = glfwGetRequiredInstanceExtensions(&extensionCount);
+        const char **glfwExtensions = glfwGetRequiredInstanceExtensions(&extensionCount);
+        // Copia a vector para poder añadir extensiones extra
+        std::vector<const char*> extensions(glfwExtensions, glfwExtensions + extensionCount);
 
+        if(ENABLE_VALIDATION)
+        {
+            extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        }
+        
+        const char* validationLayer = "VK_LAYER_KHRONOS_validation";
+            
         VkInstanceCreateInfo createInfo{};
         createInfo.sType                    = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         createInfo.pApplicationInfo         = &appInfo;
-        createInfo.enabledExtensionCount    = extensionCount;
-        createInfo.ppEnabledExtensionNames  = extensions;
+        createInfo.enabledExtensionCount    = (uint32_t)extensions.size();
+        createInfo.ppEnabledExtensionNames  = extensions.data();
+        if(ENABLE_VALIDATION)
+        {
+            createInfo.enabledLayerCount    = 1;
+            createInfo.ppEnabledLayerNames  = &validationLayer;
+        }
 
         if(vkCreateInstance(&createInfo, nullptr, &m_instance) != VK_SUCCESS) {
             throw std::runtime_error("failed to create Vulkan instance!");
         }   
         printf("instance OK\n");  fflush(stdout);     
+    }
+    
+    void Renderer::setupDebugMessenger()
+    {
+        if(!ENABLE_VALIDATION) return;
+
+        VkDebugUtilsMessengerCreateInfoEXT createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        createInfo.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                                 VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                                 VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        createInfo.pfnUserCallback = debugCallback;
+
+        auto func = (PFN_vkCreateDebugUtilsMessengerEXT)
+            vkGetInstanceProcAddr(m_instance, "vkCreateDebugUtilsMessengerEXT");
+        if (!func || func(m_instance, &createInfo, nullptr, &m_debugMessenger) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to set up debug messenger!");
+        }            
+    }
+
+    VKAPI_ATTR VkBool32 VKAPI_CALL Renderer::debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+    VkDebugUtilsMessageTypeFlagsEXT,
+    const VkDebugUtilsMessengerCallbackDataEXT* data,
+    void*)
+    {
+        if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+            fprintf(stderr, "[Vulkan] %s\n", data->pMessage);
+        return VK_FALSE;
     }
 
     void Renderer::createSurface(Window& window)

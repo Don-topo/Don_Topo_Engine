@@ -18,6 +18,12 @@ namespace DonTopo {
             void shutdown();
 
         private:
+            void setupDebugMessenger();
+            static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
+                VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+                VkDebugUtilsMessageTypeFlagsEXT types,
+                const VkDebugUtilsMessengerCallbackDataEXT* data,
+                void* userData);
             void createInstance();
             void createSurface(Window& window);
             void pickPhysicalDevice();
@@ -34,6 +40,7 @@ namespace DonTopo {
             std::vector<char> loadShaderFile(const std::string& path);
             VkShaderModule createShaderModule(const std::vector<char>& code);
 
+            VkDebugUtilsMessengerEXT m_debugMessenger   = VK_NULL_HANDLE;
             VkInstance m_instance                       = VK_NULL_HANDLE;
             VkSurfaceKHR m_surface                      = VK_NULL_HANDLE;
             VkPhysicalDevice m_physicalDevice           = VK_NULL_HANDLE;
