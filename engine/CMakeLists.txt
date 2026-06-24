@@ -1,5 +1,7 @@
 add_library(DonTopoEngine STATIC
     src/Engine.cpp
+    src/Window.cpp
+    src/Renderer.cpp
 )
 
 target_include_directories(DonTopoEngine

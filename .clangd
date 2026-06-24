@@ -1,0 +1,6 @@
+CompileFlags:
+  Remove:
+    - -external:*
+  Add:
+    - -IC:/VulkanSDK/1.4.321.1/Include
+    - -IC:/Program Files (x86)/FMOD SoundSystem/FMOD Studio API Windows/api/core/inc

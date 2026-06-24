@@ -1,8 +1,15 @@
 # Build directories
 build/
+build-ninja/
 cmake-build-*/
 .cmake/
 out/
+
+# Claude Code
+.claude/
+
+# Compiled shaders
+shaders/*.spv
 
 # CMake generated (in build dir, already covered by build/ — listed explicitly
 # for in-source build users)
