@@ -40,6 +40,8 @@ namespace DonTopo {
             std::vector<char> loadShaderFile(const std::string& path);
             VkShaderModule createShaderModule(const std::vector<char>& code);
             void recreateSwapChain(Window& window);
+            void createVertexBuffer();
+            uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags props);
 
             VkDebugUtilsMessengerEXT m_debugMessenger   = VK_NULL_HANDLE;
             VkInstance m_instance                       = VK_NULL_HANDLE;
@@ -68,5 +70,7 @@ namespace DonTopo {
             VkPipelineLayout m_pipelineLayout           = VK_NULL_HANDLE;
             VkPipeline m_pipeline                       = VK_NULL_HANDLE;
             bool m_framebufferResized = false;
+            VkBuffer m_vertexBuffer = VK_NULL_HANDLE;
+            VkDeviceMemory m_vertexBufferMemory = VK_NULL_HANDLE;
     };
 }

@@ -4,6 +4,7 @@
 #include "DonTopo/Window.h"
 #include <algorithm>
 #include <fstream>
+#include "DonTopo/Vertex.h"
 
 #ifdef NDEBUG
     static constexpr bool ENABLE_VALIDATION = false;
@@ -17,6 +18,12 @@ namespace DonTopo {
     {
         shutdown();
     }
+
+    static const std::vector<DonTopo::Vertex> s_vertices = {
+    {{ 0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{ 0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{-0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
+    };
 
     void Renderer::init(Window& window)
     {
@@ -38,6 +45,7 @@ namespace DonTopo {
         createPipeline();
         createFramebuffers();
         createCommandPool();
+        createVertexBuffer();
         createCommandBuffers();
         createSyncObjects();        
     }
@@ -135,6 +143,8 @@ namespace DonTopo {
             vkDestroyImageView(m_device, imageView, nullptr);
         }                        
         vkDestroySwapchainKHR(m_device, m_swapChain, nullptr);
+        vkDestroyBuffer(m_device, m_vertexBuffer, nullptr);
+        vkFreeMemory(m_device, m_vertexBufferMemory, nullptr);
         vkDestroyDevice(m_device, nullptr);
         m_device = VK_NULL_HANDLE;
         vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
@@ -608,7 +618,11 @@ namespace DonTopo {
         scissor.extent = m_swapChainExtent;
         vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
 
-        vkCmdDraw(m_commandBuffers[m_currentFrame], 3,1,0,0);
+        VkBuffer vertexBuffers[] = { m_vertexBuffer};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vertexBuffers, offsets);
+
+        vkCmdDraw(m_commandBuffers[m_currentFrame], (uint32_t)s_vertices.size(),1,0,0);
 
         vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
         vkEndCommandBuffer(m_commandBuffers[m_currentFrame]);
@@ -638,8 +652,30 @@ namespace DonTopo {
         VkPipelineShaderStageCreateInfo stages[] = {vertStage,fragStage};
 
         // 2. Vertex input — sin vertex buffer, las posiciones van en el shader
+        VkVertexInputBindingDescription bindingDesc{};
+        bindingDesc.binding     = 0;
+        bindingDesc.stride      = sizeof(Vertex);
+        bindingDesc.inputRate   = VK_VERTEX_INPUT_RATE_VERTEX;
+
+        // Atributo 0: pos (vec2, offset 0)
+        VkVertexInputAttributeDescription attrDescs[2]{};
+        attrDescs[0].binding    = 0;
+        attrDescs[0].location   = 0;
+        attrDescs[0].format     = VK_FORMAT_R32G32_SFLOAT;
+        attrDescs[0].offset     = offsetof(Vertex, pos);
+
+        // Atributo 1: color (vec3, offset después de pos)
+        attrDescs[1].binding    = 0;
+        attrDescs[1].location   = 1;
+        attrDescs[1].format     = VK_FORMAT_R32G32B32_SFLOAT;
+        attrDescs[1].offset     = offsetof(Vertex, color);
+
         VkPipelineVertexInputStateCreateInfo vertexInput{};
-        vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vertexInput.sType                               = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vertexInput.vertexBindingDescriptionCount       = 1;
+        vertexInput.pVertexBindingDescriptions          = &bindingDesc;
+        vertexInput.vertexAttributeDescriptionCount     = 2;
+        vertexInput.pVertexAttributeDescriptions        = attrDescs;
 
         // 3. Input assembly — qué primitivo forman los vértices
         VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
@@ -793,5 +829,58 @@ namespace DonTopo {
         for (auto& sem : m_renderFinished)
             if (vkCreateSemaphore(m_device, &semInfo, nullptr, &sem) != VK_SUCCESS)
                 throw std::runtime_error("failed to create renderFinished semaphore!");
+    }
+
+    uint32_t Renderer::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags props)
+    {
+       VkPhysicalDeviceMemoryProperties memProps;
+       vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProps);
+
+       for(uint32_t i = 0; i < memProps.memoryTypeCount; i++)
+       {
+        if((typeFilter & (1 << i)) && (memProps.memoryTypes[i].propertyFlags & props) == props)
+            return i;
+       }
+
+       throw std::runtime_error("failed to find suitable memory type!");
+    }
+
+    void Renderer::createVertexBuffer()
+    {
+        VkDeviceSize size = sizeof(s_vertices[0]) * s_vertices.size();
+
+        // crear el buffer
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType        = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size         = size;
+        bufferInfo.usage        = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        bufferInfo.sharingMode  = VK_SHARING_MODE_EXCLUSIVE;
+
+        if(vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_vertexBuffer) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create vertex buffer!");
+        }
+
+        // Averiguar qué memoria necesita
+        VkMemoryRequirements memoryRequirements;
+        vkGetBufferMemoryRequirements(m_device, m_vertexBuffer, &memoryRequirements);
+
+        // Asignar memoria CPU-visible y coherente
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType             = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize    = memoryRequirements.size;
+        allocInfo.memoryTypeIndex   = findMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if(vkAllocateMemory(m_device, &allocInfo, nullptr, &m_vertexBufferMemory) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to allocate vertex buffer memory!");
+        }
+
+        vkBindBufferMemory(m_device, m_vertexBuffer, m_vertexBufferMemory, 0);
+
+        // Copiar vértices a la memoria
+        void* data;
+        vkMapMemory(m_device, m_vertexBufferMemory, 0, size, 0, &data);
+        memcpy(data, s_vertices.data(), (size_t)size);
+        vkUnmapMemory(m_device, m_vertexBufferMemory);
     }
 }
