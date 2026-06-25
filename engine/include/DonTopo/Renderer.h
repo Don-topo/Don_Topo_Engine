@@ -2,6 +2,7 @@
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <string>
+#include <glm/glm.hpp>
 
 namespace DonTopo {
 
@@ -72,5 +73,6 @@ namespace DonTopo {
             bool m_framebufferResized = false;
             VkBuffer m_vertexBuffer = VK_NULL_HANDLE;
             VkDeviceMemory m_vertexBufferMemory = VK_NULL_HANDLE;
+            glm::mat4 m_transform{1.0f};
     };
 }
