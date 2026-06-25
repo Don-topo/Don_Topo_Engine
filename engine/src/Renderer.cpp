@@ -26,6 +26,13 @@ namespace DonTopo {
         pickPhysicalDevice();
         createDevice();
         createSwapChain(window);
+
+        glfwSetWindowUserPointer(window.getNativeWindow(), &m_framebufferResized);
+        glfwSetFramebufferSizeCallback(window.getNativeWindow(), [](GLFWwindow* w, int, int) {
+            auto* flag = static_cast<bool*>(glfwGetWindowUserPointer(w));
+            *flag = true;
+        });
+
         createImageViews();
         createRenderPass();
         createPipeline();
@@ -35,18 +42,28 @@ namespace DonTopo {
         createSyncObjects();        
     }
 
-    void Renderer::drawFrame()
+    void Renderer::drawFrame(Window& window)
     {
         // 1. Espera a que el frame anterior terminó
-        vkWaitForFences(m_device, 1, &m_inFlight[m_currentFrame], VK_TRUE, UINT64_MAX);
-        vkResetFences(m_device, 1, &m_inFlight[m_currentFrame]);
+        vkWaitForFences(m_device, 1, &m_inFlight[m_currentFrame], VK_TRUE, UINT64_MAX);        
 
         // 2. Pide la siguiente imagen del swapchain
         uint32_t imageIndex;
-        if(vkAcquireNextImageKHR(m_device, m_swapChain, UINT64_MAX, m_imageAvailable[m_currentFrame], VK_NULL_HANDLE, &imageIndex) != VK_SUCCESS)
+        VkResult result;
+
+        result = vkAcquireNextImageKHR(m_device, m_swapChain, UINT64_MAX, m_imageAvailable[m_currentFrame], VK_NULL_HANDLE, &imageIndex);
+        if(result == VK_ERROR_OUT_OF_DATE_KHR)
+        {
+            recreateSwapChain(window);
+            return;
+        }
+
+        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
         {
             throw std::runtime_error("failed to acquire next image!");
-        }
+        }        
+
+        vkResetFences(m_device, 1, &m_inFlight[m_currentFrame]);
 
         // 3. Graba el command buffer
         if(vkResetCommandBuffer(m_commandBuffers[m_currentFrame], 0) != VK_SUCCESS)
@@ -80,8 +97,11 @@ namespace DonTopo {
         presentInfo.swapchainCount      = 1;
         presentInfo.pSwapchains         = &m_swapChain;
         presentInfo.pImageIndices       = &imageIndex;
-        if(vkQueuePresentKHR(m_presentQueue, &presentInfo) != VK_SUCCESS)
-        {
+        result = vkQueuePresentKHR(m_presentQueue, &presentInfo);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || m_framebufferResized) {
+            m_framebufferResized = false;
+            recreateSwapChain(window);
+        } else if (result != VK_SUCCESS) {
             throw std::runtime_error("failed to present!");
         }
 
@@ -722,5 +742,56 @@ namespace DonTopo {
             throw std::runtime_error("failed to create shader module!");
         }
         return shaderModule;
+    }
+
+    void Renderer::recreateSwapChain(Window& window)
+    {
+        int width = 0;
+        int height = 0;
+
+        glfwGetFramebufferSize(window.getNativeWindow(), &width, &height);
+        // Espera si la ventana está minimizada (0x0)
+        while(width == 0 || height == 0)
+        {
+            glfwWaitEvents();
+            glfwGetFramebufferSize(window.getNativeWindow(), &width, &height);
+        }
+
+        vkDeviceWaitIdle(m_device);
+
+        // Teardown
+        for(auto semaphore: m_renderFinished)
+        {
+            vkDestroySemaphore(m_device, semaphore, nullptr);
+        }
+        m_renderFinished.clear();
+
+        for(auto frameBuffer : m_swapChainFramebuffers)
+        {
+            vkDestroyFramebuffer(m_device, frameBuffer, nullptr);
+        }
+        m_swapChainFramebuffers.clear();
+
+        for(auto imageView : m_swapChainImageViews)
+        {
+            vkDestroyImageView(m_device, imageView, nullptr);
+        }
+        m_swapChainImageViews.clear();
+
+        vkDestroySwapchainKHR(m_device, m_swapChain, nullptr);
+        m_swapChain = VK_NULL_HANDLE;
+
+        // Recreate
+        createSwapChain(window);
+        createImageViews();
+        createFramebuffers();
+
+        // Solo recrear los semáforos que dependen del image count
+        m_renderFinished.resize(m_swapChainImages.size());
+        VkSemaphoreCreateInfo semInfo{};
+        semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        for (auto& sem : m_renderFinished)
+            if (vkCreateSemaphore(m_device, &semInfo, nullptr, &sem) != VK_SUCCESS)
+                throw std::runtime_error("failed to create renderFinished semaphore!");
     }
 }

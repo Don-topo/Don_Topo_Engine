@@ -15,7 +15,7 @@ int main()
 
         while (!window.shouldClose())
         {
-            renderer.drawFrame();
+            renderer.drawFrame(window);
             window.pollEvents();
         }            
         renderer.shutdown();

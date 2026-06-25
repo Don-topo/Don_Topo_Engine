@@ -14,7 +14,7 @@ namespace DonTopo {
             Renderer(const Renderer&) = delete;
             Renderer& operator=(const Renderer&) = delete;
             void init(Window& window) ;
-            void drawFrame();
+            void drawFrame(Window& window);
             void shutdown();
 
         private:
@@ -39,6 +39,7 @@ namespace DonTopo {
             void createPipeline();
             std::vector<char> loadShaderFile(const std::string& path);
             VkShaderModule createShaderModule(const std::vector<char>& code);
+            void recreateSwapChain(Window& window);
 
             VkDebugUtilsMessengerEXT m_debugMessenger   = VK_NULL_HANDLE;
             VkInstance m_instance                       = VK_NULL_HANDLE;
@@ -66,5 +67,6 @@ namespace DonTopo {
             int m_currentFrame                          = 0;
             VkPipelineLayout m_pipelineLayout           = VK_NULL_HANDLE;
             VkPipeline m_pipeline                       = VK_NULL_HANDLE;
+            bool m_framebufferResized = false;
     };
 }

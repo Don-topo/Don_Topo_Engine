@@ -13,7 +13,7 @@ void Window::init(int width, int height, const char* title) {
         throw std::runtime_error("GLFW: failed to initialize");
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Vulkan, sin contexto OpenGL
-    glfwWindowHint(GLFW_RESIZABLE,  GLFW_FALSE);
+    glfwWindowHint(GLFW_RESIZABLE,  GLFW_TRUE);
 
     m_window = glfwCreateWindow(width, height, title, nullptr, nullptr);
     if (!m_window) {
