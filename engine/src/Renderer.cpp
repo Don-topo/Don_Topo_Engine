@@ -23,9 +23,33 @@ namespace DonTopo {
     }
 
     static const std::vector<DonTopo::Vertex> s_vertices = {
-    {{ 0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{ 0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
+    // Frente (z=+0.5) — rojo
+    {{-0.5f, -0.5f,  0.5f}, {1,0,0}}, {{0.5f, -0.5f,  0.5f}, {1,0,0}},
+    {{ 0.5f,  0.5f,  0.5f}, {1,0,0}}, {{-0.5f, 0.5f,  0.5f}, {1,0,0}},
+    // Atrás (z=-0.5) — verde
+    {{ 0.5f, -0.5f, -0.5f}, {0,1,0}}, {{-0.5f, -0.5f, -0.5f}, {0,1,0}},
+    {{-0.5f,  0.5f, -0.5f}, {0,1,0}}, {{ 0.5f,  0.5f, -0.5f}, {0,1,0}},
+    // Izquierda (x=-0.5) — azul
+    {{-0.5f, -0.5f, -0.5f}, {0,0,1}}, {{-0.5f, -0.5f,  0.5f}, {0,0,1}},
+    {{-0.5f,  0.5f,  0.5f}, {0,0,1}}, {{-0.5f,  0.5f, -0.5f}, {0,0,1}},
+    // Derecha (x=+0.5) — amarillo
+    {{0.5f, -0.5f,  0.5f}, {1,1,0}}, {{0.5f, -0.5f, -0.5f}, {1,1,0}},
+    {{0.5f,  0.5f, -0.5f}, {1,1,0}}, {{0.5f,  0.5f,  0.5f}, {1,1,0}},
+    // Arriba (y=+0.5) — cian
+    {{-0.5f,  0.5f,  0.5f}, {0,1,1}}, {{ 0.5f,  0.5f,  0.5f}, {0,1,1}},
+    {{ 0.5f,  0.5f, -0.5f}, {0,1,1}}, {{-0.5f,  0.5f, -0.5f}, {0,1,1}},
+    // Abajo (y=-0.5) — magenta
+    {{-0.5f, -0.5f, -0.5f}, {1,0,1}}, {{ 0.5f, -0.5f, -0.5f}, {1,0,1}},
+    {{ 0.5f, -0.5f,  0.5f}, {1,0,1}}, {{-0.5f, -0.5f,  0.5f}, {1,0,1}},
+    };
+
+    static const std::vector<uint16_t> s_indices = {
+     0, 1, 2,  0, 2, 3,   // frente
+     4, 5, 6,  4, 6, 7,   // atrás
+     8, 9,10,  8,10,11,   // izquierda
+    12,13,14, 12,14,15,   // derecha
+    16,17,18, 16,18,19,   // arriba
+    20,21,22, 20,22,23,   // abajo
     };
 
     void Renderer::init(Window& window)
@@ -44,12 +68,14 @@ namespace DonTopo {
         });
 
         createImageViews();
+        createDepthResources();
         createRenderPass();
         createDescriptorSetLayout();
         createPipeline();
         createFramebuffers();
         createCommandPool();
         createVertexBuffer();
+        createIndexBuffer();
         createUniformBuffers();
         createDescriptorPool();
         createDescriptorSets();
@@ -92,7 +118,7 @@ namespace DonTopo {
 
         m_transform = glm::rotate(glm::mat4(1.0f), 
             elapsed * glm::radians(90.0f), 
-            glm::vec3(0.0f,0.0f,1.0f));
+            glm::vec3(0.0f,1.0f,0.0f));
             
         updateUniformBuffer(m_currentFrame);
         recordCommandBuffer(imageIndex);
@@ -167,7 +193,12 @@ namespace DonTopo {
             vkDestroyBuffer(m_device, m_uniformBuffers[i], nullptr);
             vkFreeMemory(m_device, m_uniformBuffersMemory[i], nullptr);
         }
+        vkDestroyBuffer(m_device, m_indexBuffer, nullptr);
+        vkFreeMemory(m_device, m_indexBufferMemory, nullptr);
         vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr);
+        vkDestroyImageView(m_device, m_depthImageView, nullptr);
+        vkDestroyImage(m_device, m_depthImage, nullptr);
+        vkFreeMemory(m_device, m_depthImageMemory, nullptr);
         vkDestroyDevice(m_device, nullptr);
         m_device = VK_NULL_HANDLE;
         vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
@@ -487,23 +518,39 @@ namespace DonTopo {
         colorReference.attachment   = 0; // Array attachment index
         colorReference.layout       = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+        VkAttachmentDescription depthAttachment{};
+        depthAttachment.format          = VK_FORMAT_D32_SFLOAT;
+        depthAttachment.samples         = VK_SAMPLE_COUNT_1_BIT;
+        depthAttachment.loadOp          = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp         = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.stencilLoadOp   = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthAttachment.stencilStoreOp  = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.initialLayout   = VK_IMAGE_LAYOUT_UNDEFINED;
+        depthAttachment.finalLayout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        VkAttachmentReference depthRef{};
+        depthRef.attachment = 1;
+        depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
         VkSubpassDescription subpass{};
         subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpass.colorAttachmentCount    = 1;
         subpass.pColorAttachments       = &colorReference;
+        subpass.pDepthStencilAttachment = &depthRef;
 
         VkSubpassDependency subpassDependency{};
         subpassDependency.srcSubpass    = VK_SUBPASS_EXTERNAL;
         subpassDependency.dstSubpass    = 0;
-        subpassDependency.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        subpassDependency.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
         subpassDependency.srcAccessMask = 0;
-        subpassDependency.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        subpassDependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        subpassDependency.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        subpassDependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
+        VkAttachmentDescription attachments[]= { colorAttachment, depthAttachment};
         VkRenderPassCreateInfo renderPassCreateInfo {};
         renderPassCreateInfo.sType              = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        renderPassCreateInfo.attachmentCount    = 1;
-        renderPassCreateInfo.pAttachments       = &colorAttachment;
+        renderPassCreateInfo.attachmentCount    = 2;
+        renderPassCreateInfo.pAttachments       = attachments;
         renderPassCreateInfo.subpassCount       = 1;
         renderPassCreateInfo.pSubpasses         = &subpass;
         renderPassCreateInfo.dependencyCount    = 1;
@@ -522,11 +569,12 @@ namespace DonTopo {
         m_swapChainFramebuffers.resize(m_swapChainImageViews.size());
         for(size_t i = 0; i < m_swapChainImageViews.size(); i++)
         {
+            VkImageView attachments[] = { m_swapChainImageViews[i], m_depthImageView };
             VkFramebufferCreateInfo framebufferCreateInfo{};
             framebufferCreateInfo.sType             = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
             framebufferCreateInfo.renderPass        = m_renderPass;
-            framebufferCreateInfo.attachmentCount   = 1;
-            framebufferCreateInfo.pAttachments      = &m_swapChainImageViews[i];
+            framebufferCreateInfo.attachmentCount   = 2;
+            framebufferCreateInfo.pAttachments      = attachments;
             framebufferCreateInfo.width             = m_swapChainExtent.width;
             framebufferCreateInfo.height            = m_swapChainExtent.height;   
             framebufferCreateInfo.layers            = 1;         
@@ -614,15 +662,18 @@ namespace DonTopo {
             throw std::runtime_error("failed to begin command buffer!");
         }
 
-        VkClearValue clearBlack = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
+        VkClearValue clearValues[2];
+        clearValues[0].color        = {0.0f, 0.0f, 0.0f, 1.0f};
+        clearValues[1].depthStencil = {1.0f, 0};
+
         VkRenderPassBeginInfo renderPassBeginInfo{};
         renderPassBeginInfo.sType               = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         renderPassBeginInfo.renderPass          = m_renderPass;
         renderPassBeginInfo.framebuffer         = m_swapChainFramebuffers[imageIndex];
         renderPassBeginInfo.renderArea.extent   = m_swapChainExtent;
         renderPassBeginInfo.renderArea.offset   = {0,0};
-        renderPassBeginInfo.clearValueCount     = 1;
-        renderPassBeginInfo.pClearValues        = &clearBlack;
+        renderPassBeginInfo.clearValueCount     = 2;
+        renderPassBeginInfo.pClearValues        = clearValues;
 
         vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
@@ -646,8 +697,9 @@ namespace DonTopo {
         VkBuffer vertexBuffers[] = { m_vertexBuffer};
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vertexBuffers, offsets);
+        vkCmdBindIndexBuffer(m_commandBuffers[m_currentFrame], m_indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
-        vkCmdDraw(m_commandBuffers[m_currentFrame], (uint32_t)s_vertices.size(),1,0,0);
+        vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], (uint32_t)s_indices.size(), 1, 0, 0, 0);
 
         vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
         vkEndCommandBuffer(m_commandBuffers[m_currentFrame]);
@@ -686,7 +738,7 @@ namespace DonTopo {
         VkVertexInputAttributeDescription attrDescs[2]{};
         attrDescs[0].binding    = 0;
         attrDescs[0].location   = 0;
-        attrDescs[0].format     = VK_FORMAT_R32G32_SFLOAT;
+        attrDescs[0].format     = VK_FORMAT_R32G32B32_SFLOAT;
         attrDescs[0].offset     = offsetof(Vertex, pos);
 
         // Atributo 1: color (vec3, offset después de pos)
@@ -725,6 +777,14 @@ namespace DonTopo {
         VkPipelineMultisampleStateCreateInfo multisampleInfo{};
         multisampleInfo.sType                   = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
         multisampleInfo.rasterizationSamples    = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencil.depthTestEnable       = VK_TRUE;
+        depthStencil.depthWriteEnable      = VK_TRUE;
+        depthStencil.depthCompareOp        = VK_COMPARE_OP_LESS;
+        depthStencil.depthBoundsTestEnable = VK_FALSE;
+        depthStencil.stencilTestEnable     = VK_FALSE;
 
         // 7. Color blending — opaco, sin transparencia
         VkPipelineColorBlendAttachmentState blendAttachment{};
@@ -774,6 +834,7 @@ namespace DonTopo {
         pipelineInfo.layout                 = m_pipelineLayout;
         pipelineInfo.renderPass             = m_renderPass;
         pipelineInfo.subpass                = 0;
+        pipelineInfo.pDepthStencilState     = &depthStencil;
 
         if(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipeline) != VK_SUCCESS)
         {
@@ -848,12 +909,16 @@ namespace DonTopo {
         }
         m_swapChainImageViews.clear();
 
+        vkDestroyImageView(m_device, m_depthImageView, nullptr);
+        vkDestroyImage(m_device, m_depthImage, nullptr);
+        vkFreeMemory(m_device, m_depthImageMemory, nullptr);
         vkDestroySwapchainKHR(m_device, m_swapChain, nullptr);
         m_swapChain = VK_NULL_HANDLE;
 
         // Recreate
         createSwapChain(window);
         createImageViews();
+        createDepthResources();
         createFramebuffers();
 
         // Solo recrear los semáforos que dependen del image count
@@ -916,6 +981,43 @@ namespace DonTopo {
         vkMapMemory(m_device, m_vertexBufferMemory, 0, size, 0, &data);
         memcpy(data, s_vertices.data(), (size_t)size);
         vkUnmapMemory(m_device, m_vertexBufferMemory);
+    }
+
+    void Renderer::createIndexBuffer()
+    {
+        VkDeviceSize size = sizeof(s_indices[0]) * s_indices.size();
+
+        VkBufferCreateInfo bufferCreate{};
+        bufferCreate.sType          = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferCreate.size           = size;
+        bufferCreate.usage          = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+        bufferCreate.sharingMode    = VK_SHARING_MODE_EXCLUSIVE;
+
+        if(vkCreateBuffer(m_device, &bufferCreate, nullptr, &m_indexBuffer) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create index buffer!");       
+        }
+
+        VkMemoryRequirements memReq;
+        vkGetBufferMemoryRequirements(m_device, m_indexBuffer, &memReq);
+        
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReq.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        if(vkAllocateMemory(m_device, &allocInfo, NULL, &m_indexBufferMemory) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to allocate index buffer memory!");
+        }
+
+        vkBindBufferMemory(m_device, m_indexBuffer, m_indexBufferMemory, 0);
+
+        void* data;
+        vkMapMemory(m_device, m_indexBufferMemory, 0, size, 0, &data);
+        memcpy(data, s_indices.data(), (size_t)size);
+        vkUnmapMemory(m_device, m_indexBufferMemory);
+
     }
 
     void Renderer::createDescriptorSetLayout()
@@ -1039,5 +1141,57 @@ namespace DonTopo {
         ubo.proj[1][1] *= -1.0f;    // Vulkan Y flip
 
         memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));        
+    }
+
+    void Renderer::createDepthResources()
+    {
+        VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
+
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType             = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType         = VK_IMAGE_TYPE_2D;
+        imageInfo.format            = depthFormat;
+        imageInfo.extent            = { m_swapChainExtent.width, m_swapChainExtent.height, 1 };
+        imageInfo.mipLevels         = 1;
+        imageInfo.arrayLayers       = 1;
+        imageInfo.samples           = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling            = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage             = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        imageInfo.sharingMode       = VK_SHARING_MODE_EXCLUSIVE;
+        imageInfo.initialLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if(vkCreateImage(m_device, &imageInfo, nullptr, &m_depthImage) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create depth image!");
+        }
+
+        VkMemoryRequirements memReq;
+        vkGetImageMemoryRequirements(m_device, m_depthImage, &memReq);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType             = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize    = memReq.size;
+        allocInfo.memoryTypeIndex   = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if(vkAllocateMemory(m_device, &allocInfo, nullptr, &m_depthImageMemory) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to allocate depth image memory!");
+        }
+
+        vkBindImageMemory(m_device, m_depthImage, m_depthImageMemory, 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_depthImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = depthFormat;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if(vkCreateImageView(m_device, &viewInfo, nullptr, &m_depthImageView) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create depth image view!");
+        }
     }
 }

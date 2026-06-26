@@ -42,12 +42,14 @@ namespace DonTopo {
             VkShaderModule createShaderModule(const std::vector<char>& code);
             void recreateSwapChain(Window& window);
             void createVertexBuffer();
+            void createIndexBuffer();
             uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags props);
             void createDescriptorSetLayout();
             void createUniformBuffers();
             void createDescriptorPool();
             void createDescriptorSets();
             void updateUniformBuffer(uint32_t frameIndex);
+            void createDepthResources();
 
             VkDebugUtilsMessengerEXT        m_debugMessenger   = VK_NULL_HANDLE;
             VkInstance                      m_instance                          = VK_NULL_HANDLE;
@@ -77,7 +79,9 @@ namespace DonTopo {
             VkPipeline                      m_pipeline                          = VK_NULL_HANDLE;
             bool                            m_framebufferResized                = false;
             VkBuffer                        m_vertexBuffer                      = VK_NULL_HANDLE;
+            VkBuffer                        m_indexBuffer                       = VK_NULL_HANDLE;
             VkDeviceMemory                  m_vertexBufferMemory                = VK_NULL_HANDLE;
+            VkDeviceMemory                  m_indexBufferMemory                 = VK_NULL_HANDLE;
             glm::mat4                       m_transform{1.0f};
             VkDescriptorSetLayout           m_descriptorSetLayout               = VK_NULL_HANDLE;
             VkBuffer                        m_uniformBuffers[MAX_FRAMES]        = {};
@@ -85,5 +89,8 @@ namespace DonTopo {
             void*                           m_uniformBuffersMapped[MAX_FRAMES]  = {};
             VkDescriptorPool                m_descriptorPool                    = VK_NULL_HANDLE;
             VkDescriptorSet                 m_descriptorSets[MAX_FRAMES]        = {};
+            VkImage                         m_depthImage                        = VK_NULL_HANDLE;
+            VkDeviceMemory                  m_depthImageMemory                  = VK_NULL_HANDLE;
+            VkImageView                     m_depthImageView                    = VK_NULL_HANDLE;
     };
 }
