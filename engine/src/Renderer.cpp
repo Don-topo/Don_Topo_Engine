@@ -7,6 +7,7 @@
 #include "DonTopo/Vertex.h"
 #include <chrono>
 #include <glm/gtc/matrix_transform.hpp>
+#include "DonTopo/UniformBufferObject.h"
 
 #ifdef NDEBUG
     static constexpr bool ENABLE_VALIDATION = false;
@@ -44,10 +45,14 @@ namespace DonTopo {
 
         createImageViews();
         createRenderPass();
+        createDescriptorSetLayout();
         createPipeline();
         createFramebuffers();
         createCommandPool();
         createVertexBuffer();
+        createUniformBuffers();
+        createDescriptorPool();
+        createDescriptorSets();
         createCommandBuffers();
         createSyncObjects();        
     }
@@ -89,6 +94,7 @@ namespace DonTopo {
             elapsed * glm::radians(90.0f), 
             glm::vec3(0.0f,0.0f,1.0f));
             
+        updateUniformBuffer(m_currentFrame);
         recordCommandBuffer(imageIndex);
 
         // 4. Envía a la GPU
@@ -153,8 +159,15 @@ namespace DonTopo {
             vkDestroyImageView(m_device, imageView, nullptr);
         }                        
         vkDestroySwapchainKHR(m_device, m_swapChain, nullptr);
+        vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
         vkDestroyBuffer(m_device, m_vertexBuffer, nullptr);
         vkFreeMemory(m_device, m_vertexBufferMemory, nullptr);
+        for(int i = 0; i < MAX_FRAMES; i++)
+        {
+            vkDestroyBuffer(m_device, m_uniformBuffers[i], nullptr);
+            vkFreeMemory(m_device, m_uniformBuffersMemory[i], nullptr);
+        }
+        vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr);
         vkDestroyDevice(m_device, nullptr);
         m_device = VK_NULL_HANDLE;
         vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
@@ -613,6 +626,7 @@ namespace DonTopo {
 
         vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+        vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,m_pipelineLayout,0,1,&m_descriptorSets[m_currentFrame], 0, nullptr);
         vkCmdPushConstants(m_commandBuffers[m_currentFrame], m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &m_transform);
 
         VkViewport viewport{};
@@ -704,7 +718,7 @@ namespace DonTopo {
         rasterizationInfo.sType         = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
         rasterizationInfo.polygonMode   = VK_POLYGON_MODE_FILL;
         rasterizationInfo.cullMode      = VK_CULL_MODE_BACK_BIT;
-        rasterizationInfo.frontFace     = VK_FRONT_FACE_CLOCKWISE;
+        rasterizationInfo.frontFace     = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rasterizationInfo.lineWidth     = 1.0f;
 
         // 6. Multisampling — sin MSAA por ahora
@@ -736,6 +750,8 @@ namespace DonTopo {
 
         VkPipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.sType                    = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layoutInfo.setLayoutCount           = 1;
+        layoutInfo.pSetLayouts              = &m_descriptorSetLayout;
         layoutInfo.pushConstantRangeCount   = 1;
         layoutInfo.pPushConstantRanges      = &pushRange;
         if(vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS)
@@ -900,5 +916,128 @@ namespace DonTopo {
         vkMapMemory(m_device, m_vertexBufferMemory, 0, size, 0, &data);
         memcpy(data, s_vertices.data(), (size_t)size);
         vkUnmapMemory(m_device, m_vertexBufferMemory);
+    }
+
+    void Renderer::createDescriptorSetLayout()
+    {
+        VkDescriptorSetLayoutBinding uboBinding{};
+        uboBinding.binding          = 0;
+        uboBinding.descriptorType   = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboBinding.descriptorCount  = 1;
+        uboBinding.stageFlags       = VK_SHADER_STAGE_VERTEX_BIT;
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType            = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount     = 1;
+        layoutInfo.pBindings        = &uboBinding;
+
+        if(vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create descriptor set layout!");
+        }
+    }
+
+    void Renderer::createUniformBuffers()
+    {
+        VkDeviceSize size = sizeof(UniformBufferObject);
+        for (int i = 0; i < MAX_FRAMES; i++) 
+        {
+            VkBufferCreateInfo bufferInfo{};
+            bufferInfo.sType        = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bufferInfo.size         = size;
+            bufferInfo.usage        = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+            bufferInfo.sharingMode  = VK_SHARING_MODE_EXCLUSIVE;
+            vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_uniformBuffers[i]);
+
+            VkMemoryRequirements memoryRequirements;
+            vkGetBufferMemoryRequirements(m_device, m_uniformBuffers[i], &memoryRequirements);
+
+            VkMemoryAllocateInfo allocInfo{};
+            allocInfo.sType             = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            allocInfo.allocationSize    = memoryRequirements.size;
+            allocInfo.memoryTypeIndex   = findMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            vkAllocateMemory(m_device, &allocInfo, NULL, &m_uniformBuffersMemory[i]);
+            vkBindBufferMemory(m_device, m_uniformBuffers[i], m_uniformBuffersMemory[i], 0);
+
+            // Mapeo persistente — nunca llamamos unmap
+            vkMapMemory(m_device, m_uniformBuffersMemory[i], 0, size, 0, &m_uniformBuffersMapped[i]);
+
+        }
+    }
+
+    void Renderer::createDescriptorPool()
+    {
+        VkDescriptorPoolSize poolSize{};
+        poolSize.type               = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSize.descriptorCount    = (uint32_t)MAX_FRAMES;
+
+        VkDescriptorPoolCreateInfo poolInfo{};
+        poolInfo.sType          = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.poolSizeCount  = 1;
+        poolInfo.pPoolSizes     = &poolSize;
+        poolInfo.maxSets        = (uint32_t)MAX_FRAMES;
+
+        if(vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create descriptor pool!");
+        }
+    }
+
+    void Renderer::createDescriptorSets()
+    {
+        VkDescriptorSetLayout layouts[MAX_FRAMES];
+        for(int i = 0; i < MAX_FRAMES; i++)
+        {
+            layouts[i] = m_descriptorSetLayout;
+        }
+
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType                 = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool        = m_descriptorPool;
+        allocInfo.descriptorSetCount    = (uint32_t)MAX_FRAMES;
+        allocInfo.pSetLayouts           = layouts;
+
+        if(vkAllocateDescriptorSets(m_device, &allocInfo, m_descriptorSets) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to allocate descriptor sets!");
+        }
+
+        for(int i = 0; i < MAX_FRAMES; i++)
+        {
+            VkDescriptorBufferInfo bufferInfo{};
+            bufferInfo.buffer   = m_uniformBuffers[i];
+            bufferInfo.offset   = 0;
+            bufferInfo.range    = sizeof(UniformBufferObject);
+
+            VkWriteDescriptorSet write{};
+            write.sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet            = m_descriptorSets[i];
+            write.dstBinding        = 0;
+            write.dstArrayElement   = 0;
+            write.descriptorType    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            write.descriptorCount   = 1;
+            write.pBufferInfo       = &bufferInfo;
+
+            vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+        }
+        
+    }
+
+    void Renderer::updateUniformBuffer(uint32_t frameIndex)
+    {
+        UniformBufferObject ubo{};
+        ubo.view = glm::lookAt(
+            glm::vec3(0.0f, 0.0f, 2.0f),        // camera
+            glm::vec3(0.0f, 0.0f, 0.0f),     // origin        
+            glm::vec3(0.0f, 1.0f, 0.0f)          // up Y+
+        );
+
+        ubo.proj = glm::perspective(
+        glm::radians(45.0f),
+        (float)m_swapChainExtent.width / (float)m_swapChainExtent.height,
+        0.1f, 10.0f);
+        ubo.proj[1][1] *= -1.0f;    // Vulkan Y flip
+
+        memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));        
     }
 }
