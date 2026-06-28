@@ -45,6 +45,15 @@ if(NOT FMOD_FOUND)
     )
 endif()
 
+# stb — single-header libs (stb_image para carga de texturas)
+FetchContent_Declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG        master
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(stb)
+
 # Future dependencies go here:
 # find_package(PhysX REQUIRED)   # physics
 # FetchContent_Declare(gainput ...) # dedicated input

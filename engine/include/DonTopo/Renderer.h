@@ -52,6 +52,15 @@ namespace DonTopo {
             void createDepthResources();
             void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props, VkBuffer& buffer, VkDeviceMemory& memory);
             void copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size);
+            VkCommandBuffer beginOneTimeCommands();
+            void endOneTimeCommands(VkCommandBuffer comandBuffer);
+            void createTextureImage();
+            void createImage(uint32_t w, uint32_t h, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags props, VkImage& image, VkDeviceMemory& memory);
+            void transitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout);
+            void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t w, uint32_t h);
+            void createTextureImageView();
+            void createTextureSampler();
+            
 
             VkDebugUtilsMessengerEXT        m_debugMessenger   = VK_NULL_HANDLE;
             VkInstance                      m_instance                          = VK_NULL_HANDLE;
@@ -94,5 +103,9 @@ namespace DonTopo {
             VkImage                         m_depthImage                        = VK_NULL_HANDLE;
             VkDeviceMemory                  m_depthImageMemory                  = VK_NULL_HANDLE;
             VkImageView                     m_depthImageView                    = VK_NULL_HANDLE;
+            VkImage                         m_textureImage                      = VK_NULL_HANDLE;
+            VkDeviceMemory                  m_textureImageMemory                = VK_NULL_HANDLE;
+            VkImageView                     m_textureImageView                  = VK_NULL_HANDLE;
+            VkSampler                       m_textureSampler                    = VK_NULL_HANDLE;
     };
 }

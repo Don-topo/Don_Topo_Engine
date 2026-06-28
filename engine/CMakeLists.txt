@@ -7,6 +7,7 @@ add_library(DonTopoEngine STATIC
 target_include_directories(DonTopoEngine
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${stb_SOURCE_DIR}
 )
 
 target_link_libraries(DonTopoEngine

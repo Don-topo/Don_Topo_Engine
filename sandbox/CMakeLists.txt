@@ -33,6 +33,14 @@ endforeach()
 add_custom_target(Shaders ALL DEPENDS ${SPV_FILES})
 add_dependencies(Sandbox Shaders)
 
+# Copiar assets al lado del ejecutable
+add_custom_command(TARGET Sandbox POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets
+        $<TARGET_FILE_DIR:Sandbox>/assets
+    COMMENT "Copying assets to output directory"
+)
+
 # Copiar los .spv compilados al lado del ejecutable
 add_custom_command(TARGET Sandbox POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUT_DIR}
