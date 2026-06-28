@@ -948,75 +948,54 @@ namespace DonTopo {
     {
         VkDeviceSize size = sizeof(s_vertices[0]) * s_vertices.size();
 
-        // crear el buffer
-        VkBufferCreateInfo bufferInfo{};
-        bufferInfo.sType        = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufferInfo.size         = size;
-        bufferInfo.usage        = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-        bufferInfo.sharingMode  = VK_SHARING_MODE_EXCLUSIVE;
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingMemory;
+        createBuffer(size,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            stagingBuffer, stagingMemory);
 
-        if(vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_vertexBuffer) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create vertex buffer!");
-        }
-
-        // Averiguar qué memoria necesita
-        VkMemoryRequirements memoryRequirements;
-        vkGetBufferMemoryRequirements(m_device, m_vertexBuffer, &memoryRequirements);
-
-        // Asignar memoria CPU-visible y coherente
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType             = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize    = memoryRequirements.size;
-        allocInfo.memoryTypeIndex   = findMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        if(vkAllocateMemory(m_device, &allocInfo, nullptr, &m_vertexBufferMemory) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to allocate vertex buffer memory!");
-        }
-
-        vkBindBufferMemory(m_device, m_vertexBuffer, m_vertexBufferMemory, 0);
-
-        // Copiar vértices a la memoria
         void* data;
-        vkMapMemory(m_device, m_vertexBufferMemory, 0, size, 0, &data);
+        vkMapMemory(m_device, stagingMemory, 0, size, 0, &data);
         memcpy(data, s_vertices.data(), (size_t)size);
-        vkUnmapMemory(m_device, m_vertexBufferMemory);
+        vkUnmapMemory(m_device, stagingMemory);
+
+        createBuffer(size,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            m_vertexBuffer, m_vertexBufferMemory);
+
+        copyBuffer(stagingBuffer, m_vertexBuffer, size);
+
+        vkDestroyBuffer(m_device, stagingBuffer, nullptr);
+        vkFreeMemory(m_device, stagingMemory, nullptr);
     }
 
     void Renderer::createIndexBuffer()
     {
         VkDeviceSize size = sizeof(s_indices[0]) * s_indices.size();
 
-        VkBufferCreateInfo bufferCreate{};
-        bufferCreate.sType          = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufferCreate.size           = size;
-        bufferCreate.usage          = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-        bufferCreate.sharingMode    = VK_SHARING_MODE_EXCLUSIVE;
-
-        if(vkCreateBuffer(m_device, &bufferCreate, nullptr, &m_indexBuffer) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create index buffer!");       
-        }
-
-        VkMemoryRequirements memReq;
-        vkGetBufferMemoryRequirements(m_device, m_indexBuffer, &memReq);
-        
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize = memReq.size;
-        allocInfo.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-        if(vkAllocateMemory(m_device, &allocInfo, NULL, &m_indexBufferMemory) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to allocate index buffer memory!");
-        }
-
-        vkBindBufferMemory(m_device, m_indexBuffer, m_indexBufferMemory, 0);
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingMemory;
+        createBuffer(size,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            stagingBuffer, stagingMemory);
 
         void* data;
-        vkMapMemory(m_device, m_indexBufferMemory, 0, size, 0, &data);
+        vkMapMemory(m_device, stagingMemory, 0, size, 0, &data);
         memcpy(data, s_indices.data(), (size_t)size);
-        vkUnmapMemory(m_device, m_indexBufferMemory);
+        vkUnmapMemory(m_device, stagingMemory);
+
+        createBuffer(size,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            m_indexBuffer, m_indexBufferMemory);
+
+        copyBuffer(stagingBuffer, m_indexBuffer, size);
+
+        vkDestroyBuffer(m_device, stagingBuffer, nullptr);
+        vkFreeMemory(m_device, stagingMemory, nullptr);
 
     }
 
@@ -1193,5 +1172,66 @@ namespace DonTopo {
         {
             throw std::runtime_error("failed to create depth image view!");
         }
+    }
+
+    void Renderer::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props, VkBuffer& buffer, VkDeviceMemory& memory)
+    {
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType        = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size         = size;
+        bufferInfo.usage        = usage;
+        bufferInfo.sharingMode  = VK_SHARING_MODE_EXCLUSIVE;
+
+        if(vkCreateBuffer(m_device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create buffer!");
+        }
+
+        VkMemoryRequirements req;
+        vkGetBufferMemoryRequirements(m_device, buffer, &req);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType             = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize    = req.size;
+        allocInfo.memoryTypeIndex   = findMemoryType(req.memoryTypeBits, props);
+
+        if(vkAllocateMemory(m_device, &allocInfo, nullptr, &memory) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to allocate buffer memory!");
+        }
+
+        vkBindBufferMemory(m_device, buffer, memory, 0);
+    }
+
+    void Renderer::copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size)
+    {
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType                 = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.level                 = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandPool           = m_commandPool;
+        allocInfo.commandBufferCount    = 1;
+
+        VkCommandBuffer commandBuffer;
+        vkAllocateCommandBuffers(m_device, &allocInfo, &commandBuffer);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+        VkBufferCopy region{};
+        region.size = size;
+        vkCmdCopyBuffer(commandBuffer, src, dst, 1, &region);
+
+        vkEndCommandBuffer(commandBuffer);
+
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+        vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(m_graphicsQueue);
+
+        vkFreeCommandBuffers(m_device, m_commandPool, 1, &commandBuffer);
     }
 }

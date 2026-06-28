@@ -50,6 +50,8 @@ namespace DonTopo {
             void createDescriptorSets();
             void updateUniformBuffer(uint32_t frameIndex);
             void createDepthResources();
+            void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props, VkBuffer& buffer, VkDeviceMemory& memory);
+            void copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size);
 
             VkDebugUtilsMessengerEXT        m_debugMessenger   = VK_NULL_HANDLE;
             VkInstance                      m_instance                          = VK_NULL_HANDLE;
