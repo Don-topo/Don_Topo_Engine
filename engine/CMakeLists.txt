@@ -2,6 +2,7 @@ add_library(DonTopoEngine STATIC
     src/Engine.cpp
     src/Window.cpp
     src/Renderer.cpp
+    src/ModelLoader.cpp
 )
 
 target_include_directories(DonTopoEngine
@@ -15,6 +16,7 @@ target_link_libraries(DonTopoEngine
         Vulkan::Vulkan
         glfw
         glm::glm
+        assimp
 )
 
 if(FMOD_FOUND)
