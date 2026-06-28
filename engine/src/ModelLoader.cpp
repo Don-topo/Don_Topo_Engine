@@ -3,6 +3,7 @@
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 #include <stdexcept>
+#include <filesystem>
 
 namespace DonTopo 
 {
@@ -47,7 +48,11 @@ namespace DonTopo
             aiString texPath;
             if(mat->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS)
             {
-                mesh.texturePath = texPath.C_Str();
+                // Resolve relative to model's directory so runtime paths work regardless of where the model was exported
+                namespace fs = std::filesystem;
+                fs::path modelDir = fs::path(path).parent_path();
+                fs::path texFilename = fs::path(texPath.C_Str()).filename();
+                mesh.texturePath = (modelDir / texFilename).string();
             }
         }
 

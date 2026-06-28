@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <glm/glm.hpp>
+#include "DonTopo/Mesh.h"
 
 namespace DonTopo {
 
@@ -14,7 +15,7 @@ namespace DonTopo {
             ~Renderer();
             Renderer(const Renderer&)               = delete;
             Renderer& operator=(const Renderer&)    = delete;
-            void init(Window& window);
+            void init(Window& window, const Mesh& mesh);
             void drawFrame(Window& window);
             void shutdown();
 
@@ -107,5 +108,10 @@ namespace DonTopo {
             VkDeviceMemory                  m_textureImageMemory                = VK_NULL_HANDLE;
             VkImageView                     m_textureImageView                  = VK_NULL_HANDLE;
             VkSampler                       m_textureSampler                    = VK_NULL_HANDLE;
+            std::vector<Vertex>             m_vertices;
+            std::vector<uint32_t>           m_indices;
+            std::string                     m_texturePath;
+            glm::vec3                       m_cameraTarget{0.0f};
+            float                           m_cameraDistance{5.0f};
     };
 }

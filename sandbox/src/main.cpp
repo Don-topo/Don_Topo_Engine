@@ -1,6 +1,7 @@
 #include "DonTopo/Engine.h"
 #include "DonTopo/Window.h"
 #include "DonTopo/Renderer.h"
+#include "DonTopo/ModelLoader.h"
 #include <iostream>
 
 int main()
@@ -10,8 +11,8 @@ int main()
         DonTopo::Window window;
         window.init(1280, 720, "Don Topo Engine");
         DonTopo::Renderer renderer;
-
-        renderer.init(window);
+        DonTopo::Mesh mesh = DonTopo::ModelLoader::load("assets/model.fbx");
+        renderer.init(window, mesh);
 
         while (!window.shouldClose())
         {

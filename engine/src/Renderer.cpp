@@ -8,6 +8,7 @@
 #include <chrono>
 #include <glm/gtc/matrix_transform.hpp>
 #include "DonTopo/UniformBufferObject.h"
+#include <limits>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
@@ -24,38 +25,23 @@ namespace DonTopo {
         shutdown();
     }
 
-    static const std::vector<DonTopo::Vertex> s_vertices = {
-    // Frente (z=+0.5) — rojo
-    {{-0.5f, -0.5f,  0.5f}, {1,0,0}, {0,0}}, {{ 0.5f, -0.5f,  0.5f}, {1,0,0}, {1,0}},
-    {{ 0.5f,  0.5f,  0.5f}, {1,0,0}, {1,1}}, {{-0.5f,  0.5f,  0.5f}, {1,0,0}, {0,1}},
-    // Atrás (z=-0.5) — verde
-    {{ 0.5f, -0.5f, -0.5f}, {0,1,0}, {0,0}}, {{-0.5f, -0.5f, -0.5f}, {0,1,0}, {1,0}},
-    {{-0.5f,  0.5f, -0.5f}, {0,1,0}, {1,1}}, {{ 0.5f,  0.5f, -0.5f}, {0,1,0}, {0,1}},
-    // Izquierda (x=-0.5) — azul
-    {{-0.5f, -0.5f, -0.5f}, {0,0,1}, {0,0}}, {{-0.5f, -0.5f,  0.5f}, {0,0,1}, {1,0}},
-    {{-0.5f,  0.5f,  0.5f}, {0,0,1}, {1,1}}, {{-0.5f,  0.5f, -0.5f}, {0,0,1}, {0,1}},
-    // Derecha (x=+0.5) — amarillo
-    {{ 0.5f, -0.5f,  0.5f}, {1,1,0}, {0,0}}, {{ 0.5f, -0.5f, -0.5f}, {1,1,0}, {1,0}},
-    {{ 0.5f,  0.5f, -0.5f}, {1,1,0}, {1,1}}, {{ 0.5f,  0.5f,  0.5f}, {1,1,0}, {0,1}},
-    // Arriba (y=+0.5) — cian
-    {{-0.5f,  0.5f,  0.5f}, {0,1,1}, {0,0}}, {{ 0.5f,  0.5f,  0.5f}, {0,1,1}, {1,0}},
-    {{ 0.5f,  0.5f, -0.5f}, {0,1,1}, {1,1}}, {{-0.5f,  0.5f, -0.5f}, {0,1,1}, {0,1}},
-    // Abajo (y=-0.5) — magenta
-    {{-0.5f, -0.5f, -0.5f}, {1,0,1}, {0,0}}, {{ 0.5f, -0.5f, -0.5f}, {1,0,1}, {1,0}},
-    {{ 0.5f, -0.5f,  0.5f}, {1,0,1}, {1,1}}, {{-0.5f, -0.5f,  0.5f}, {1,0,1}, {0,1}},
-    };
-
-    static const std::vector<uint16_t> s_indices = {
-     0, 1, 2,  0, 2, 3,   // frente
-     4, 5, 6,  4, 6, 7,   // atrás
-     8, 9,10,  8,10,11,   // izquierda
-    12,13,14, 12,14,15,   // derecha
-    16,17,18, 16,18,19,   // arriba
-    20,21,22, 20,22,23,   // abajo
-    };
-
-    void Renderer::init(Window& window)
+    void Renderer::init(Window& window, const Mesh& mesh)
     {
+        m_vertices      = mesh.vertices;
+        m_indices       = mesh.indices;
+        m_texturePath   = mesh.texturePath;
+
+        // Auto-fit camera to mesh bounding box
+        glm::vec3 bMin( std::numeric_limits<float>::max());
+        glm::vec3 bMax(-std::numeric_limits<float>::max());
+        for (auto& v : m_vertices) {
+            bMin = glm::min(bMin, v.pos);
+            bMax = glm::max(bMax, v.pos);
+        }
+        m_cameraTarget   = (bMin + bMax) * 0.5f;
+        float maxDim     = glm::max(bMax.x - bMin.x, glm::max(bMax.y - bMin.y, bMax.z - bMin.z));
+        m_cameraDistance = maxDim * 1.2f;
+
         createInstance();
         setupDebugMessenger();
         createSurface(window);
@@ -706,9 +692,9 @@ namespace DonTopo {
         VkBuffer vertexBuffers[] = { m_vertexBuffer};
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vertexBuffers, offsets);
-        vkCmdBindIndexBuffer(m_commandBuffers[m_currentFrame], m_indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+        vkCmdBindIndexBuffer(m_commandBuffers[m_currentFrame], m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-        vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], (uint32_t)s_indices.size(), 1, 0, 0, 0);
+        vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], (uint32_t)m_indices.size(), 1, 0, 0, 0);
 
         vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
         vkEndCommandBuffer(m_commandBuffers[m_currentFrame]);
@@ -961,7 +947,7 @@ namespace DonTopo {
 
     void Renderer::createVertexBuffer()
     {
-        VkDeviceSize size = sizeof(s_vertices[0]) * s_vertices.size();
+        VkDeviceSize size = sizeof(m_vertices[0]) * m_vertices.size();
 
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingMemory;
@@ -972,7 +958,7 @@ namespace DonTopo {
 
         void* data;
         vkMapMemory(m_device, stagingMemory, 0, size, 0, &data);
-        memcpy(data, s_vertices.data(), (size_t)size);
+        memcpy(data, m_vertices.data(), (size_t)size);
         vkUnmapMemory(m_device, stagingMemory);
 
         createBuffer(size,
@@ -988,7 +974,7 @@ namespace DonTopo {
 
     void Renderer::createIndexBuffer()
     {
-        VkDeviceSize size = sizeof(s_indices[0]) * s_indices.size();
+        VkDeviceSize size = sizeof(m_indices[0]) * m_indices.size();
 
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingMemory;
@@ -999,7 +985,7 @@ namespace DonTopo {
 
         void* data;
         vkMapMemory(m_device, stagingMemory, 0, size, 0, &data);
-        memcpy(data, s_indices.data(), (size_t)size);
+        memcpy(data, m_indices.data(), (size_t)size);
         vkUnmapMemory(m_device, stagingMemory);
 
         createBuffer(size,
@@ -1149,15 +1135,16 @@ namespace DonTopo {
     {
         UniformBufferObject ubo{};
         ubo.view = glm::lookAt(
-            glm::vec3(0.0f, 0.0f, 2.0f),        // camera
-            glm::vec3(0.0f, 0.0f, 0.0f),     // origin        
-            glm::vec3(0.0f, 1.0f, 0.0f)          // up Y+
+            m_cameraTarget + glm::vec3(0.0f, 0.0f, m_cameraDistance),
+            m_cameraTarget,
+            glm::vec3(0.0f, 1.0f, 0.0f)
         );
 
         ubo.proj = glm::perspective(
-        glm::radians(45.0f),
-        (float)m_swapChainExtent.width / (float)m_swapChainExtent.height,
-        0.1f, 10.0f);
+            glm::radians(45.0f),
+            (float)m_swapChainExtent.width / (float)m_swapChainExtent.height,
+            m_cameraDistance * 0.001f,
+            m_cameraDistance * 3.0f);
         ubo.proj[1][1] *= -1.0f;    // Vulkan Y flip
 
         memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));        
@@ -1410,13 +1397,23 @@ namespace DonTopo {
     void Renderer::createTextureImage()
     {
         int w, h, channels;
-        stbi_uc* pixels = stbi_load("assets/texture.png", &w, &h, &channels, STBI_rgb_alpha);
+        stbi_uc* pixels = nullptr;
+        bool fromStb = false;
+
+        if (!m_texturePath.empty())
+        {
+            pixels = stbi_load(m_texturePath.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+            fromStb = (pixels != nullptr);
+        }
+
+        // Fallback: 1x1 white pixel when no texture or file not found
+        uint32_t white = 0xFFFFFFFF;
         if (!pixels)
         {
-            
-            throw std::runtime_error(stbi_failure_reason());            
+            pixels = reinterpret_cast<stbi_uc*>(&white);
+            w = h = 1;
         }
-            
+
         VkDeviceSize imageSize = w * h * 4;
 
         VkBuffer stagingBuffer;
@@ -1430,7 +1427,7 @@ namespace DonTopo {
         vkMapMemory(m_device, stagingMemory, 0, imageSize, 0, &data);
         memcpy(data, pixels, (size_t)imageSize);
         vkUnmapMemory(m_device, stagingMemory);
-        stbi_image_free(pixels);
+        if (fromStb) stbi_image_free(pixels);
 
         createImage((uint32_t)w, (uint32_t)h,
             VK_FORMAT_R8G8B8A8_SRGB,
