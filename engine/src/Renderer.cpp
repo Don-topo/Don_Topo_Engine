@@ -204,6 +204,10 @@ namespace DonTopo {
         vkDestroyImageView(m_device, m_textureImageView, nullptr);
         vkDestroyImage(m_device, m_textureImage, nullptr);
         vkFreeMemory(m_device, m_textureImageMemory, nullptr);
+        vkDestroySampler(m_device, m_textureSampler, nullptr);
+        vkDestroyImageView(m_device, m_textureImageView, nullptr);
+        vkDestroyImage(m_device, m_textureImage, nullptr);
+        vkFreeMemory(m_device, m_textureImageMemory, nullptr);
         vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr);
         vkDestroyImageView(m_device, m_depthImageView, nullptr);
         vkDestroyImage(m_device, m_depthImage, nullptr);
@@ -744,7 +748,7 @@ namespace DonTopo {
         bindingDesc.inputRate   = VK_VERTEX_INPUT_RATE_VERTEX;
 
         // Atributo 0: pos (vec2, offset 0)
-        VkVertexInputAttributeDescription attrDescs[2]{};
+        VkVertexInputAttributeDescription attrDescs[3]{};
         attrDescs[0].binding    = 0;
         attrDescs[0].location   = 0;
         attrDescs[0].format     = VK_FORMAT_R32G32B32_SFLOAT;
@@ -756,11 +760,17 @@ namespace DonTopo {
         attrDescs[1].format     = VK_FORMAT_R32G32B32_SFLOAT;
         attrDescs[1].offset     = offsetof(Vertex, color);
 
+        // UV
+        attrDescs[2].binding    = 0;
+        attrDescs[2].location   = 2;
+        attrDescs[2].format     = VK_FORMAT_R32G32_SFLOAT;
+        attrDescs[2].offset     = offsetof(Vertex, uv);
+
         VkPipelineVertexInputStateCreateInfo vertexInput{};
         vertexInput.sType                               = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vertexInput.vertexBindingDescriptionCount       = 1;
         vertexInput.pVertexBindingDescriptions          = &bindingDesc;
-        vertexInput.vertexAttributeDescriptionCount     = 2;
+        vertexInput.vertexAttributeDescriptionCount     = 3;
         vertexInput.pVertexAttributeDescriptions        = attrDescs;
 
         // 3. Input assembly — qué primitivo forman los vértices
@@ -1016,10 +1026,18 @@ namespace DonTopo {
         uboBinding.descriptorCount  = 1;
         uboBinding.stageFlags       = VK_SHADER_STAGE_VERTEX_BIT;
 
+        VkDescriptorSetLayoutBinding samplerBinding{};
+        samplerBinding.binding         = 1;
+        samplerBinding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        samplerBinding.descriptorCount = 1;
+        samplerBinding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutBinding bindings[] = { uboBinding, samplerBinding};
+
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
         layoutInfo.sType            = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layoutInfo.bindingCount     = 1;
-        layoutInfo.pBindings        = &uboBinding;
+        layoutInfo.bindingCount     = 2;
+        layoutInfo.pBindings        = bindings;
 
         if(vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
         {
@@ -1057,14 +1075,16 @@ namespace DonTopo {
 
     void Renderer::createDescriptorPool()
     {
-        VkDescriptorPoolSize poolSize{};
-        poolSize.type               = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSize.descriptorCount    = (uint32_t)MAX_FRAMES;
+        VkDescriptorPoolSize poolSizes[2]{};
+        poolSizes[0].type               = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSizes[0].descriptorCount    = (uint32_t)MAX_FRAMES;
+        poolSizes[1].type               = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        poolSizes[1].descriptorCount    = (uint32_t)MAX_FRAMES;
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType          = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.poolSizeCount  = 1;
-        poolInfo.pPoolSizes     = &poolSize;
+        poolInfo.poolSizeCount  = 2;
+        poolInfo.pPoolSizes     = poolSizes;
         poolInfo.maxSets        = (uint32_t)MAX_FRAMES;
 
         if(vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
@@ -1099,6 +1119,11 @@ namespace DonTopo {
             bufferInfo.offset   = 0;
             bufferInfo.range    = sizeof(UniformBufferObject);
 
+            VkDescriptorImageInfo imageInfo{};
+            imageInfo.imageLayout   = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imageInfo.imageView     = m_textureImageView;
+            imageInfo.sampler       = m_textureSampler;
+
             VkWriteDescriptorSet write{};
             write.sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             write.dstSet            = m_descriptorSets[i];
@@ -1108,7 +1133,18 @@ namespace DonTopo {
             write.descriptorCount   = 1;
             write.pBufferInfo       = &bufferInfo;
 
-            vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+            VkWriteDescriptorSet writes[2]{};
+            writes[0] = write;
+
+            writes[1].sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[1].dstSet            = m_descriptorSets[i];
+            writes[1].dstBinding        = 1;
+            writes[1].dstArrayElement   = 0;
+            writes[1].descriptorType    = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[1].descriptorCount   = 1;
+            writes[1].pImageInfo        = &imageInfo;
+
+            vkUpdateDescriptorSets(m_device, 2, writes, 0, nullptr);
         }
         
     }
