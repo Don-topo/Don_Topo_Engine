@@ -1406,12 +1406,24 @@ namespace DonTopo {
             fromStb = (pixels != nullptr);
         }
 
-        // Fallback: 1x1 white pixel when no texture or file not found
-        uint32_t white = 0xFFFFFFFF;
+        // Fallback: purple/black checkerboard when no texture or file not found
+        std::vector<uint8_t> placeholder;
         if (!pixels)
         {
-            pixels = reinterpret_cast<stbi_uc*>(&white);
-            w = h = 1;
+            constexpr int SIZE = 64, TILE = 8;
+            placeholder.resize(SIZE * SIZE * 4);
+            for (int py = 0; py < SIZE; py++) {
+                for (int px = 0; px < SIZE; px++) {
+                    bool check = ((px / TILE) + (py / TILE)) % 2 == 0;
+                    uint8_t* p = placeholder.data() + (py * SIZE + px) * 4;
+                    p[0] = check ? 0x96 : 0x20;
+                    p[1] = 0x00;
+                    p[2] = check ? 0x96 : 0x20;
+                    p[3] = 0xFF;
+                }
+            }
+            pixels = placeholder.data();
+            w = h = SIZE;
         }
 
         VkDeviceSize imageSize = w * h * 4;
