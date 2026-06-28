@@ -204,10 +204,6 @@ namespace DonTopo {
         vkDestroyImageView(m_device, m_textureImageView, nullptr);
         vkDestroyImage(m_device, m_textureImage, nullptr);
         vkFreeMemory(m_device, m_textureImageMemory, nullptr);
-        vkDestroySampler(m_device, m_textureSampler, nullptr);
-        vkDestroyImageView(m_device, m_textureImageView, nullptr);
-        vkDestroyImage(m_device, m_textureImage, nullptr);
-        vkFreeMemory(m_device, m_textureImageMemory, nullptr);
         vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr);
         vkDestroyImageView(m_device, m_depthImageView, nullptr);
         vkDestroyImage(m_device, m_depthImage, nullptr);
