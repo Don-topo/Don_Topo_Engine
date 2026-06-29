@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <fstream>
 #include "DonTopo/Vertex.h"
-#include <chrono>
 #include <glm/gtc/matrix_transform.hpp>
 #include "DonTopo/UniformBufferObject.h"
 #include <limits>
@@ -97,14 +96,6 @@ namespace DonTopo {
             throw std::runtime_error("failed to reset command buffer!");
         }
 
-        static auto startTime = std::chrono::high_resolution_clock::now();
-        auto now = std::chrono::high_resolution_clock::now();
-        float elapsed = std::chrono::duration<float>(now - startTime).count();
-
-        m_transform = glm::rotate(glm::mat4(1.0f), 
-            elapsed * glm::radians(90.0f), 
-            glm::vec3(0.0f,1.0f,0.0f));
-            
         updateUniformBuffer(m_currentFrame);
         recordCommandBuffer(imageIndex);
 
