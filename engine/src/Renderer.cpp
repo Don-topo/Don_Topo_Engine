@@ -725,7 +725,7 @@ namespace DonTopo {
         bindingDesc.inputRate   = VK_VERTEX_INPUT_RATE_VERTEX;
 
         // Atributo 0: pos (vec2, offset 0)
-        VkVertexInputAttributeDescription attrDescs[4]{};
+        VkVertexInputAttributeDescription attrDescs[5]{};
         attrDescs[0].binding    = 0;
         attrDescs[0].location   = 0;
         attrDescs[0].format     = VK_FORMAT_R32G32B32_SFLOAT;
@@ -749,11 +749,17 @@ namespace DonTopo {
         attrDescs[3].format     = VK_FORMAT_R32G32B32_SFLOAT;
         attrDescs[3].offset     = offsetof(Vertex, normal);
 
+        // tangents
+        attrDescs[4].binding    = 0;
+        attrDescs[4].location   = 4;
+        attrDescs[4].format     = VK_FORMAT_R32G32B32_SFLOAT;
+        attrDescs[4].offset     = offsetof(Vertex, tangent);
+
         VkPipelineVertexInputStateCreateInfo vertexInput{};
         vertexInput.sType                               = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vertexInput.vertexBindingDescriptionCount       = 1;
         vertexInput.pVertexBindingDescriptions          = &bindingDesc;
-        vertexInput.vertexAttributeDescriptionCount     = 4;
+        vertexInput.vertexAttributeDescriptionCount     = 5;
         vertexInput.pVertexAttributeDescriptions        = attrDescs;
 
         // 3. Input assembly — qué primitivo forman los vértices
@@ -1015,11 +1021,17 @@ namespace DonTopo {
         samplerBinding.descriptorCount = 1;
         samplerBinding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-        VkDescriptorSetLayoutBinding bindings[] = { uboBinding, samplerBinding};
+        VkDescriptorSetLayoutBinding samplerNormal{};
+        samplerNormal.binding         = 2;
+        samplerNormal.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        samplerNormal.descriptorCount = 1;
+        samplerNormal.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutBinding bindings[] = { uboBinding, samplerBinding, samplerNormal };
 
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
         layoutInfo.sType            = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layoutInfo.bindingCount     = 2;
+        layoutInfo.bindingCount     = 3;
         layoutInfo.pBindings        = bindings;
 
         if(vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -1063,7 +1075,7 @@ namespace DonTopo {
         poolSizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         poolSizes[0].descriptorCount = n;
         poolSizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSizes[1].descriptorCount = n;
+        poolSizes[1].descriptorCount = n * 2;   // diffuse + normal map
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1102,7 +1114,12 @@ namespace DonTopo {
                 imageInfo.imageView   = obj.textureView;
                 imageInfo.sampler     = obj.sampler;
 
-                VkWriteDescriptorSet writes[2]{};
+                VkDescriptorImageInfo normalInfo{};
+                normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                normalInfo.imageView   = obj.normalView;
+                normalInfo.sampler     = obj.normalSampler;
+
+                VkWriteDescriptorSet writes[3]{};
                 writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 writes[0].dstSet          = obj.descriptorSets[i];
                 writes[0].dstBinding      = 0;
@@ -1117,7 +1134,14 @@ namespace DonTopo {
                 writes[1].descriptorCount = 1;
                 writes[1].pImageInfo      = &imageInfo;
 
-                vkUpdateDescriptorSets(m_device, 2, writes, 0, nullptr);
+                writes[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[2].dstSet          = obj.descriptorSets[i];
+                writes[2].dstBinding      = 2;
+                writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[2].descriptorCount = 1;
+                writes[2].pImageInfo      = &normalInfo;
+
+                vkUpdateDescriptorSets(m_device, 3, writes, 0, nullptr);
             }
         }
     }
@@ -1451,13 +1475,68 @@ namespace DonTopo {
         vkFreeMemory(m_device, stagingMemory, nullptr);
     }
 
-    void Renderer::createTextureImageView(VkImage image, VkImageView& view)
+    void Renderer::createNormalMapImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem)
+    {
+        int w, h, channels;
+        stbi_uc* pixels = nullptr;
+        bool fromStb = false;
+
+        if (!embedded.empty())
+        {
+            pixels = stbi_load_from_memory(embedded.data(), (int)embedded.size(), &w, &h, &channels, STBI_rgb_alpha);
+            fromStb = (pixels != nullptr);
+        }
+        else if (!path.empty())
+        {
+            pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+            fromStb = (pixels != nullptr);
+        }
+
+        // Fallback: flat normal (0,0,1) en tangent space = (128,128,255)
+        uint8_t flatNormal[4] = { 0x80, 0x80, 0xFF, 0xFF };
+        if (!pixels)
+        {
+            pixels = flatNormal;
+            w = h = 1;
+        }
+
+        VkDeviceSize imageSize = w * h * 4;
+
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingMemory;
+        createBuffer(imageSize,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            stagingBuffer, stagingMemory);
+
+        void* data;
+        vkMapMemory(m_device, stagingMemory, 0, imageSize, 0, &data);
+        memcpy(data, pixels, (size_t)imageSize);
+        vkUnmapMemory(m_device, stagingMemory);
+        if (fromStb) stbi_image_free(pixels);
+
+        createImage((uint32_t)w, (uint32_t)h,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            img, mem);
+
+        transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        copyBufferToImage(stagingBuffer, img, (uint32_t)w, (uint32_t)h);
+        transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+        vkDestroyBuffer(m_device, stagingBuffer, nullptr);
+        vkFreeMemory(m_device, stagingMemory, nullptr);
+    }
+
+    void Renderer::createTextureImageView(VkImage image, VkImageView& view, VkFormat format)
     {
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType                              = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image                              = image;
         viewInfo.viewType                           = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format                             = VK_FORMAT_R8G8B8A8_SRGB;
+        viewInfo.format                             = format;
         viewInfo.subresourceRange.aspectMask        = VK_IMAGE_ASPECT_COLOR_BIT;
         viewInfo.subresourceRange.baseMipLevel      = 0;
         viewInfo.subresourceRange.levelCount        = 1;
@@ -1492,21 +1571,28 @@ namespace DonTopo {
         obj.indexCount = (uint32_t)mesh.indices.size();
         createVertexBuffer(mesh.vertices,                               obj.vertexBuffer, obj.vertexMemory);
         createIndexBuffer(mesh.indices,                                 obj.indexBuffer,  obj.indexMemory);
-        createTextureImage(mesh.texturePath, mesh.embeddedTexture,      obj.textureImage, obj.textureMem);
-        createTextureImageView(obj.textureImage,                        obj.textureView);
+        createTextureImage(mesh.texturePath, mesh.embeddedTexture,         obj.textureImage, obj.textureMem);
+        createTextureImageView(obj.textureImage,                           obj.textureView);
         createTextureSampler(obj.sampler);
+        createNormalMapImage(mesh.normalMapPath, mesh.embeddedNormalMap,   obj.normalImage,  obj.normalMem);
+        createTextureImageView(obj.normalImage,                            obj.normalView, VK_FORMAT_R8G8B8A8_UNORM);
+        createTextureSampler(obj.normalSampler);
     }
 
     void Renderer::destroyRenderObject(RenderObject& obj)
     {
-        vkDestroySampler(m_device,   obj.sampler,      nullptr);
-        vkDestroyImageView(m_device, obj.textureView,  nullptr);
-        vkDestroyImage(m_device,     obj.textureImage, nullptr);
-        vkFreeMemory(m_device,       obj.textureMem,   nullptr);
-        vkDestroyBuffer(m_device,    obj.indexBuffer,  nullptr);
-        vkFreeMemory(m_device,       obj.indexMemory,  nullptr);
-        vkDestroyBuffer(m_device,    obj.vertexBuffer, nullptr);
-        vkFreeMemory(m_device,       obj.vertexMemory, nullptr);
+        vkDestroySampler(m_device,   obj.normalSampler, nullptr);
+        vkDestroyImageView(m_device, obj.normalView,    nullptr);
+        vkDestroyImage(m_device,     obj.normalImage,   nullptr);
+        vkFreeMemory(m_device,       obj.normalMem,     nullptr);
+        vkDestroySampler(m_device,   obj.sampler,       nullptr);
+        vkDestroyImageView(m_device, obj.textureView,   nullptr);
+        vkDestroyImage(m_device,     obj.textureImage,  nullptr);
+        vkFreeMemory(m_device,       obj.textureMem,    nullptr);
+        vkDestroyBuffer(m_device,    obj.indexBuffer,   nullptr);
+        vkFreeMemory(m_device,       obj.indexMemory,   nullptr);
+        vkDestroyBuffer(m_device,    obj.vertexBuffer,  nullptr);
+        vkFreeMemory(m_device,       obj.vertexMemory,  nullptr);
     }
 
 }

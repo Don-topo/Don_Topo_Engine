@@ -35,10 +35,16 @@ namespace DonTopo {
                 VkBuffer        indexBuffer         = VK_NULL_HANDLE;
                 VkDeviceMemory  indexMemory         = VK_NULL_HANDLE;
                 uint32_t        indexCount          = 0;
+                // first texture
                 VkImage         textureImage        = VK_NULL_HANDLE;
                 VkDeviceMemory  textureMem          = VK_NULL_HANDLE;
                 VkImageView     textureView         = VK_NULL_HANDLE;
                 VkSampler       sampler             = VK_NULL_HANDLE;
+                // Second texture
+                VkImage         normalImage         = VK_NULL_HANDLE;
+                VkDeviceMemory  normalMem           = VK_NULL_HANDLE;
+                VkImageView     normalView          = VK_NULL_HANDLE;
+                VkSampler       normalSampler       = VK_NULL_HANDLE;
                 VkDescriptorSet descriptorSets[2]   = {};
                 glm::mat4       transform{1.0f};
             };
@@ -79,12 +85,13 @@ namespace DonTopo {
             VkCommandBuffer beginOneTimeCommands();
             void endOneTimeCommands(VkCommandBuffer comandBuffer);
             void createTextureImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem);
+            void createNormalMapImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem);
             void createImage(uint32_t w, uint32_t h, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags props, VkImage& image, VkDeviceMemory& memory);
             void transitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout);
             void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t w, uint32_t h);
             void buildRenderObject(const Mesh& mesh, RenderObject& obj);
             void destroyRenderObject(RenderObject& obj);
-            void createTextureImageView(VkImage img, VkImageView& view);
+            void createTextureImageView(VkImage img, VkImageView& view, VkFormat format = VK_FORMAT_R8G8B8A8_SRGB);
             void createTextureSampler(VkSampler& out);
 
             

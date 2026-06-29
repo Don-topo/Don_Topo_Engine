@@ -4,8 +4,11 @@ layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec2 fragUV;
 layout(location = 2) in vec3 fragNormal;
 layout(location = 3) in vec3 fragWorldPos;
+layout(location = 4) in vec3 fragTangent;
+layout(location = 5) in vec3 fragBitangent;
 
 layout(location = 0) out vec4 outColor;
+
 
 layout(set = 0, binding = 0) uniform UBO {
     mat4 view;
@@ -15,10 +18,13 @@ layout(set = 0, binding = 0) uniform UBO {
 } ubo;
 
 layout(set = 0, binding = 1) uniform sampler2D texSampler;
+layout(set = 0, binding = 2) uniform sampler2D normalMap;
 
 void main()
 {
-    vec3 norm     = normalize(fragNormal);
+    mat3 TBN      = mat3(fragTangent, fragBitangent, fragNormal);
+    vec3 norm     = texture(normalMap, fragUV).rgb * 2.0 - 1.0;
+    norm          = normalize(TBN * norm);
     vec3 lightDir = normalize(ubo.lightPos.xyz - fragWorldPos);
     float diff    = max(dot(norm, lightDir), 0.0);
 

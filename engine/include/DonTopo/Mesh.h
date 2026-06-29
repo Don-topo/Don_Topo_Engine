@@ -11,5 +11,7 @@ namespace DonTopo
         std::vector<uint32_t>   indices;
         std::string             texturePath;
         std::vector<uint8_t>    embeddedTexture;
+        std::string             normalMapPath;
+        std::vector<uint8_t>    embeddedNormalMap;
     };
 }

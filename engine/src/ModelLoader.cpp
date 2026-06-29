@@ -10,7 +10,7 @@ namespace DonTopo
     Mesh ModelLoader::load(const std::string &path)
     {
         Assimp::Importer importer;
-        const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenNormals);
+        const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenNormals | aiProcess_CalcTangentSpace );
 
         if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
         {
@@ -30,7 +30,10 @@ namespace DonTopo
             {
                 v.uv = { ai->mTextureCoords[0][i].x, ai->mTextureCoords[0][i].y };
             }
-            v.normal = {ai->mNormals[i].x, ai->mNormals[i].y, ai->mNormals[i].z};
+            v.normal  = { ai->mNormals[i].x,  ai->mNormals[i].y,  ai->mNormals[i].z };
+            v.tangent = ai->mTangents
+                ? glm::vec3{ ai->mTangents[i].x, ai->mTangents[i].y, ai->mTangents[i].z }
+                : glm::vec3{ 1.0f, 0.0f, 0.0f };
             mesh.vertices.push_back(v);
         }
 
@@ -46,40 +49,45 @@ namespace DonTopo
         if(scene->mNumMaterials > 0)
         {
             aiMaterial* mat = scene->mMaterials[ai->mMaterialIndex];
-            aiString texPath;
-            if(mat->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS)
+            namespace fs = std::filesystem;
+            fs::path modelDir = fs::path(path).parent_path();
+
+            auto loadTex = [&](aiTextureType type, std::vector<uint8_t>& outEmbedded, std::string& outPath)
             {
+                aiString texPath;
+                if(mat->GetTexture(type, 0, &texPath) != AI_SUCCESS) return;
                 const char* raw = texPath.C_Str();
-                const aiTexture* embedded = scene->GetEmbeddedTexture(raw);
-                if(embedded)
+                const aiTexture* emb = scene->GetEmbeddedTexture(raw);
+                if(emb)
                 {
-                    if(embedded->mHeight == 0)
+                    if(emb->mHeight == 0)
                     {
-                        // Compressed (PNG/JPG): mWidth = byte count
-                        const uint8_t* begin = reinterpret_cast<const uint8_t*>(embedded->pcData);
-                        mesh.embeddedTexture.assign(begin, begin + embedded->mWidth);
+                        const uint8_t* begin = reinterpret_cast<const uint8_t*>(emb->pcData);
+                        outEmbedded.assign(begin, begin + emb->mWidth);
                     }
                     else
                     {
-                        // Uncompressed ARGB8888: convert to RGBA
-                        mesh.embeddedTexture.resize(embedded->mWidth * embedded->mHeight * 4);
-                        for(uint32_t i = 0; i < embedded->mWidth * embedded->mHeight; i++)
+                        outEmbedded.resize(emb->mWidth * emb->mHeight * 4);
+                        for(uint32_t k = 0; k < emb->mWidth * emb->mHeight; k++)
                         {
-                            mesh.embeddedTexture[i*4+0] = embedded->pcData[i].r;
-                            mesh.embeddedTexture[i*4+1] = embedded->pcData[i].g;
-                            mesh.embeddedTexture[i*4+2] = embedded->pcData[i].b;
-                            mesh.embeddedTexture[i*4+3] = embedded->pcData[i].a;
+                            outEmbedded[k*4+0] = emb->pcData[k].r;
+                            outEmbedded[k*4+1] = emb->pcData[k].g;
+                            outEmbedded[k*4+2] = emb->pcData[k].b;
+                            outEmbedded[k*4+3] = emb->pcData[k].a;
                         }
                     }
                 }
                 else
                 {
-                    namespace fs = std::filesystem;
-                    fs::path modelDir = fs::path(path).parent_path();
-                    fs::path texFilename = fs::path(raw).filename();
-                    mesh.texturePath = (modelDir / texFilename).string();
+                    outPath = (modelDir / fs::path(raw).filename()).string();
                 }
-            }
+            };
+
+            loadTex(aiTextureType_DIFFUSE, mesh.embeddedTexture, mesh.texturePath);
+            loadTex(aiTextureType_NORMALS, mesh.embeddedNormalMap, mesh.normalMapPath);
+            // Assimp suele guardar el normal map como HEIGHT en FBX
+            if(mesh.embeddedNormalMap.empty() && mesh.normalMapPath.empty())
+                loadTex(aiTextureType_HEIGHT, mesh.embeddedNormalMap, mesh.normalMapPath);
         }
 
         return mesh;
