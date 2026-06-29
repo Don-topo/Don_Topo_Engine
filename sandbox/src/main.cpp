@@ -6,6 +6,7 @@
 #include <GLFW/glfw3.h>
 #include <chrono>
 #include <iostream>
+#include <glm/gtc/matrix_transform.hpp>
 
 int main()
 {
@@ -14,9 +15,12 @@ int main()
         DonTopo::Window window;
         window.init(1280, 720, "Don Topo Engine");
         DonTopo::Renderer renderer;
-        DonTopo::Mesh mesh = DonTopo::ModelLoader::load("assets/modelTexture.fbx");
+        std::vector<DonTopo::Mesh> meshes;
+        meshes.push_back(DonTopo::ModelLoader::load("assets/modelTexture.fbx"));
+        meshes.push_back(DonTopo::ModelLoader::load("assets/model.fbx"));
         DonTopo::Camera camera({0.0f, 90.0f, 300.0f});
-        renderer.init(window, mesh);
+        renderer.init(window, meshes);
+        renderer.setTransform(1, glm::translate(glm::mat4(1.0f), glm::vec3(200.0f, 0.0f, 0.0f)));
 
         glfwSetInputMode(window.getNativeWindow(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 

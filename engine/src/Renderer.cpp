@@ -24,20 +24,22 @@ namespace DonTopo {
         shutdown();
     }
 
-    void Renderer::init(Window& window, const Mesh& mesh)
+    void Renderer::init(Window& window, const std::vector<Mesh>& meshes)
     {
-        m_vertices         = mesh.vertices;
-        m_indices          = mesh.indices;
-        m_texturePath      = mesh.texturePath;
-        m_embeddedTexture  = mesh.embeddedTexture;
 
         // Auto-fit camera to mesh bounding box
         glm::vec3 bMin( std::numeric_limits<float>::max());
         glm::vec3 bMax(-std::numeric_limits<float>::max());
-        for (auto& v : m_vertices) {
-            bMin = glm::min(bMin, v.pos);
-            bMax = glm::max(bMax, v.pos);
+
+        for(auto& mesh : meshes)
+        {
+            for (auto& v : mesh.vertices) 
+            {
+                bMin = glm::min(bMin, v.pos);
+                bMax = glm::max(bMax, v.pos);
+            }
         }
+        
         m_cameraTarget   = (bMin + bMax) * 0.5f;
         float maxDim     = glm::max(bMax.x - bMin.x, glm::max(bMax.y - bMin.y, bMax.z - bMin.z));
         m_cameraDistance = maxDim * 1.2f;
@@ -56,11 +58,13 @@ namespace DonTopo {
         createPipeline();
         createFramebuffers();
         createCommandPool();
-        createVertexBuffer();
-        createIndexBuffer();
-        createTextureImage();
-        createTextureImageView();
-        createTextureSampler();
+
+        m_objects.resize(meshes.size());
+        for(size_t i = 0; i < meshes.size(); i++)
+        {
+            buildRenderObject(meshes[i], m_objects[i]);
+        }
+       
         createUniformBuffers();
         createDescriptorPool();
         createDescriptorSets();
@@ -163,19 +167,14 @@ namespace DonTopo {
         }                        
         vkDestroySwapchainKHR(m_device, m_swapChain, nullptr);
         vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
-        vkDestroyBuffer(m_device, m_vertexBuffer, nullptr);
-        vkFreeMemory(m_device, m_vertexBufferMemory, nullptr);
+        for(auto& obj : m_objects)
+            destroyRenderObject(obj);
+        m_objects.clear();
         for(int i = 0; i < MAX_FRAMES; i++)
         {
             vkDestroyBuffer(m_device, m_uniformBuffers[i], nullptr);
             vkFreeMemory(m_device, m_uniformBuffersMemory[i], nullptr);
         }
-        vkDestroyBuffer(m_device, m_indexBuffer, nullptr);
-        vkFreeMemory(m_device, m_indexBufferMemory, nullptr);
-        vkDestroySampler(m_device, m_textureSampler, nullptr);
-        vkDestroyImageView(m_device, m_textureImageView, nullptr);
-        vkDestroyImage(m_device, m_textureImage, nullptr);
-        vkFreeMemory(m_device, m_textureImageMemory, nullptr);
         vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr);
         vkDestroyImageView(m_device, m_depthImageView, nullptr);
         vkDestroyImage(m_device, m_depthImage, nullptr);
@@ -664,14 +663,11 @@ namespace DonTopo {
 
         vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
-        vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,m_pipelineLayout,0,1,&m_descriptorSets[m_currentFrame], 0, nullptr);
-        vkCmdPushConstants(m_commandBuffers[m_currentFrame], m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &m_transform);
-
         VkViewport viewport{};
         viewport.x          = 0.0f;
         viewport.y          = 0.0f;
         viewport.width      = (float)m_swapChainExtent.width;
-        viewport.height     = (float) m_swapChainExtent.height;
+        viewport.height     = (float)m_swapChainExtent.height;
         viewport.minDepth   = 0.0f;
         viewport.maxDepth   = 1.0f;
         vkCmdSetViewport(m_commandBuffers[m_currentFrame], 0, 1, &viewport);
@@ -681,12 +677,19 @@ namespace DonTopo {
         scissor.extent = m_swapChainExtent;
         vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
 
-        VkBuffer vertexBuffers[] = { m_vertexBuffer};
-        VkDeviceSize offsets[] = {0};
-        vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vertexBuffers, offsets);
-        vkCmdBindIndexBuffer(m_commandBuffers[m_currentFrame], m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        for (auto& obj : m_objects)
+        {
+            vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                m_pipelineLayout, 0, 1, &obj.descriptorSets[m_currentFrame], 0, nullptr);
+            vkCmdPushConstants(m_commandBuffers[m_currentFrame], m_pipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &obj.transform);
 
-        vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], (uint32_t)m_indices.size(), 1, 0, 0, 0);
+            VkBuffer vbs[]        = { obj.vertexBuffer };
+            VkDeviceSize offs[]   = { 0 };
+            vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vbs, offs);
+            vkCmdBindIndexBuffer(m_commandBuffers[m_currentFrame], obj.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], obj.indexCount, 1, 0, 0, 0);
+        }
 
         vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
         vkEndCommandBuffer(m_commandBuffers[m_currentFrame]);
@@ -943,9 +946,9 @@ namespace DonTopo {
        throw std::runtime_error("failed to find suitable memory type!");
     }
 
-    void Renderer::createVertexBuffer()
+    void Renderer::createVertexBuffer(const std::vector<Vertex>& vertices, VkBuffer& buf, VkDeviceMemory& mem)
     {
-        VkDeviceSize size = sizeof(m_vertices[0]) * m_vertices.size();
+        VkDeviceSize size = sizeof(vertices[0]) * vertices.size();
 
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingMemory;
@@ -956,23 +959,23 @@ namespace DonTopo {
 
         void* data;
         vkMapMemory(m_device, stagingMemory, 0, size, 0, &data);
-        memcpy(data, m_vertices.data(), (size_t)size);
+        memcpy(data, vertices.data(), (size_t)size);
         vkUnmapMemory(m_device, stagingMemory);
 
         createBuffer(size,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            m_vertexBuffer, m_vertexBufferMemory);
+            buf, mem);
 
-        copyBuffer(stagingBuffer, m_vertexBuffer, size);
+        copyBuffer(stagingBuffer, buf, size);
 
         vkDestroyBuffer(m_device, stagingBuffer, nullptr);
         vkFreeMemory(m_device, stagingMemory, nullptr);
     }
 
-    void Renderer::createIndexBuffer()
+    void Renderer::createIndexBuffer(const std::vector<uint32_t>& idx, VkBuffer& buf, VkDeviceMemory& mem)
     {
-        VkDeviceSize size = sizeof(m_indices[0]) * m_indices.size();
+        VkDeviceSize size = sizeof(idx[0]) * idx.size();
 
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingMemory;
@@ -983,15 +986,15 @@ namespace DonTopo {
 
         void* data;
         vkMapMemory(m_device, stagingMemory, 0, size, 0, &data);
-        memcpy(data, m_indices.data(), (size_t)size);
+        memcpy(data, idx.data(), (size_t)size);
         vkUnmapMemory(m_device, stagingMemory);
 
         createBuffer(size,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            m_indexBuffer, m_indexBufferMemory);
+            buf, mem);
 
-        copyBuffer(stagingBuffer, m_indexBuffer, size);
+        copyBuffer(stagingBuffer, buf, size);
 
         vkDestroyBuffer(m_device, stagingBuffer, nullptr);
         vkFreeMemory(m_device, stagingMemory, nullptr);
@@ -1055,78 +1058,68 @@ namespace DonTopo {
 
     void Renderer::createDescriptorPool()
     {
+        uint32_t n = (uint32_t)(m_objects.size() * MAX_FRAMES);
         VkDescriptorPoolSize poolSizes[2]{};
-        poolSizes[0].type               = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSizes[0].descriptorCount    = (uint32_t)MAX_FRAMES;
-        poolSizes[1].type               = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSizes[1].descriptorCount    = (uint32_t)MAX_FRAMES;
+        poolSizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSizes[0].descriptorCount = n;
+        poolSizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        poolSizes[1].descriptorCount = n;
 
         VkDescriptorPoolCreateInfo poolInfo{};
-        poolInfo.sType          = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.poolSizeCount  = 2;
-        poolInfo.pPoolSizes     = poolSizes;
-        poolInfo.maxSets        = (uint32_t)MAX_FRAMES;
+        poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.poolSizeCount = 2;
+        poolInfo.pPoolSizes    = poolSizes;
+        poolInfo.maxSets       = n;
 
         if(vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
-        {
             throw std::runtime_error("failed to create descriptor pool!");
-        }
     }
 
     void Renderer::createDescriptorSets()
     {
-        VkDescriptorSetLayout layouts[MAX_FRAMES];
-        for(int i = 0; i < MAX_FRAMES; i++)
+        VkDescriptorSetLayout layouts[MAX_FRAMES] = { m_descriptorSetLayout, m_descriptorSetLayout };
+
+        for(auto& obj : m_objects)
         {
-            layouts[i] = m_descriptorSetLayout;
+            VkDescriptorSetAllocateInfo allocInfo{};
+            allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            allocInfo.descriptorPool     = m_descriptorPool;
+            allocInfo.descriptorSetCount = MAX_FRAMES;
+            allocInfo.pSetLayouts        = layouts;
+
+            if(vkAllocateDescriptorSets(m_device, &allocInfo, obj.descriptorSets) != VK_SUCCESS)
+                throw std::runtime_error("failed to allocate descriptor sets!");
+
+            for(int i = 0; i < MAX_FRAMES; i++)
+            {
+                VkDescriptorBufferInfo bufferInfo{};
+                bufferInfo.buffer = m_uniformBuffers[i];
+                bufferInfo.offset = 0;
+                bufferInfo.range  = sizeof(UniformBufferObject);
+
+                VkDescriptorImageInfo imageInfo{};
+                imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                imageInfo.imageView   = obj.textureView;
+                imageInfo.sampler     = obj.sampler;
+
+                VkWriteDescriptorSet writes[2]{};
+                writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[0].dstSet          = obj.descriptorSets[i];
+                writes[0].dstBinding      = 0;
+                writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                writes[0].descriptorCount = 1;
+                writes[0].pBufferInfo     = &bufferInfo;
+
+                writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[1].dstSet          = obj.descriptorSets[i];
+                writes[1].dstBinding      = 1;
+                writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[1].descriptorCount = 1;
+                writes[1].pImageInfo      = &imageInfo;
+
+                vkUpdateDescriptorSets(m_device, 2, writes, 0, nullptr);
+            }
         }
-
-        VkDescriptorSetAllocateInfo allocInfo{};
-        allocInfo.sType                 = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        allocInfo.descriptorPool        = m_descriptorPool;
-        allocInfo.descriptorSetCount    = (uint32_t)MAX_FRAMES;
-        allocInfo.pSetLayouts           = layouts;
-
-        if(vkAllocateDescriptorSets(m_device, &allocInfo, m_descriptorSets) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to allocate descriptor sets!");
-        }
-
-        for(int i = 0; i < MAX_FRAMES; i++)
-        {
-            VkDescriptorBufferInfo bufferInfo{};
-            bufferInfo.buffer   = m_uniformBuffers[i];
-            bufferInfo.offset   = 0;
-            bufferInfo.range    = sizeof(UniformBufferObject);
-
-            VkDescriptorImageInfo imageInfo{};
-            imageInfo.imageLayout   = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imageInfo.imageView     = m_textureImageView;
-            imageInfo.sampler       = m_textureSampler;
-
-            VkWriteDescriptorSet write{};
-            write.sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet            = m_descriptorSets[i];
-            write.dstBinding        = 0;
-            write.dstArrayElement   = 0;
-            write.descriptorType    = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            write.descriptorCount   = 1;
-            write.pBufferInfo       = &bufferInfo;
-
-            VkWriteDescriptorSet writes[2]{};
-            writes[0] = write;
-
-            writes[1].sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[1].dstSet            = m_descriptorSets[i];
-            writes[1].dstBinding        = 1;
-            writes[1].dstArrayElement   = 0;
-            writes[1].descriptorType    = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[1].descriptorCount   = 1;
-            writes[1].pImageInfo        = &imageInfo;
-
-            vkUpdateDescriptorSets(m_device, 2, writes, 0, nullptr);
-        }
-        
     }
 
     void Renderer::updateUniformBuffer(uint32_t frameIndex)
@@ -1391,20 +1384,20 @@ namespace DonTopo {
         endOneTimeCommands(cmd);
     }
 
-    void Renderer::createTextureImage()
+    void Renderer::createTextureImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem)
     {
         int w, h, channels;
         stbi_uc* pixels = nullptr;
         bool fromStb = false;
 
-        if (!m_embeddedTexture.empty())
+        if (!embedded.empty())
         {
-            pixels = stbi_load_from_memory(m_embeddedTexture.data(), (int)m_embeddedTexture.size(), &w, &h, &channels, STBI_rgb_alpha);
+            pixels = stbi_load_from_memory(embedded.data(), (int)embedded.size(), &w, &h, &channels, STBI_rgb_alpha);
             fromStb = (pixels != nullptr);
         }
-        else if (!m_texturePath.empty())
+        else if (!path.empty())
         {
-            pixels = stbi_load(m_texturePath.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+            pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
             fromStb = (pixels != nullptr);
         }
 
@@ -1448,42 +1441,34 @@ namespace DonTopo {
             VK_IMAGE_TILING_OPTIMAL,
             VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            m_textureImage, m_textureImageMemory);
+            img, mem);
 
-        transitionImageLayout(m_textureImage,
-            VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-
-        copyBufferToImage(stagingBuffer, m_textureImage, (uint32_t)w, (uint32_t)h);
-
-        transitionImageLayout(m_textureImage,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        copyBufferToImage(stagingBuffer, img, (uint32_t)w, (uint32_t)h);
+        transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
         vkDestroyBuffer(m_device, stagingBuffer, nullptr);
         vkFreeMemory(m_device, stagingMemory, nullptr);
     }
 
-    void Renderer::createTextureImageView()
+    void Renderer::createTextureImageView(VkImage image, VkImageView& view)
     {
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType                              = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image                              = m_textureImage;
+        viewInfo.image                              = image;
         viewInfo.viewType                           = VK_IMAGE_VIEW_TYPE_2D;
         viewInfo.format                             = VK_FORMAT_R8G8B8A8_SRGB;
         viewInfo.subresourceRange.aspectMask        = VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.baseMipLevel      = 0,
+        viewInfo.subresourceRange.baseMipLevel      = 0;
         viewInfo.subresourceRange.levelCount        = 1;
         viewInfo.subresourceRange.baseArrayLayer    = 0;
         viewInfo.subresourceRange.layerCount        = 1;
 
-        if(vkCreateImageView(m_device, &viewInfo, nullptr, &m_textureImageView) != VK_SUCCESS)
-        {
+        if(vkCreateImageView(m_device, &viewInfo, nullptr, &view) != VK_SUCCESS)
             throw std::runtime_error("failed to create texture image view!");
-        }
     }
 
-    void Renderer::createTextureSampler()
+    void Renderer::createTextureSampler(VkSampler& outSampler)
     {
         VkSamplerCreateInfo samplerInfo{};
         samplerInfo.sType                   = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -1498,9 +1483,30 @@ namespace DonTopo {
         samplerInfo.compareEnable           = VK_FALSE;
         samplerInfo.mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR;
 
-        if(vkCreateSampler(m_device, &samplerInfo, nullptr, &m_textureSampler) != VK_SUCCESS)
-        {
+        if(vkCreateSampler(m_device, &samplerInfo, nullptr, &outSampler) != VK_SUCCESS)
             throw std::runtime_error("failed to create texture sampler!");
-        }
     }
+
+    void Renderer::buildRenderObject(const Mesh& mesh, RenderObject& obj)
+    {
+        obj.indexCount = (uint32_t)mesh.indices.size();
+        createVertexBuffer(mesh.vertices,                               obj.vertexBuffer, obj.vertexMemory);
+        createIndexBuffer(mesh.indices,                                 obj.indexBuffer,  obj.indexMemory);
+        createTextureImage(mesh.texturePath, mesh.embeddedTexture,      obj.textureImage, obj.textureMem);
+        createTextureImageView(obj.textureImage,                        obj.textureView);
+        createTextureSampler(obj.sampler);
+    }
+
+    void Renderer::destroyRenderObject(RenderObject& obj)
+    {
+        vkDestroySampler(m_device,   obj.sampler,      nullptr);
+        vkDestroyImageView(m_device, obj.textureView,  nullptr);
+        vkDestroyImage(m_device,     obj.textureImage, nullptr);
+        vkFreeMemory(m_device,       obj.textureMem,   nullptr);
+        vkDestroyBuffer(m_device,    obj.indexBuffer,  nullptr);
+        vkFreeMemory(m_device,       obj.indexMemory,  nullptr);
+        vkDestroyBuffer(m_device,    obj.vertexBuffer, nullptr);
+        vkFreeMemory(m_device,       obj.vertexMemory, nullptr);
+    }
+
 }
