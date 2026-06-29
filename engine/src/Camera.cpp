@@ -15,13 +15,39 @@ namespace DonTopo
     void Camera::update(GLFWwindow* window, float deltaTime)
     {
         float velocity = moveSpeed * deltaTime;
+        glm::vec3 right = glm::normalize(glm::cross(m_front, m_up));
 
+        // Keyboard
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) m_pos += m_front * velocity;
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) m_pos -= m_front * velocity;
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) m_pos -= glm::normalize(glm::cross(m_front, m_up)) * velocity;
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) m_pos += glm::normalize(glm::cross(m_front, m_up)) * velocity;
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) m_pos -= right * velocity;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) m_pos += right * velocity;
         if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) m_pos += m_up * velocity;
         if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) m_pos -= m_up * velocity;
+
+        // Gamepad
+        GLFWgamepadstate gp{};
+        if (glfwGetGamepadState(GLFW_JOYSTICK_1, &gp))
+        {
+            auto dead = [](float v) { return std::abs(v) > 0.15f ? v : 0.0f; };
+
+            float lx = dead(gp.axes[GLFW_GAMEPAD_AXIS_LEFT_X]);
+            float ly = dead(gp.axes[GLFW_GAMEPAD_AXIS_LEFT_Y]);
+            float rx = dead(gp.axes[GLFW_GAMEPAD_AXIS_RIGHT_X]);
+            float ry = dead(gp.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y]);
+            float lt = (gp.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER]  + 1.0f) * 0.5f;
+            float rt = (gp.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] + 1.0f) * 0.5f;
+
+            // Left stick: move
+            m_pos += m_front * (-ly * velocity);
+            m_pos += right   * ( lx * velocity);
+
+            // Triggers: up / down
+            m_pos += m_up * ((rt - lt) * velocity);
+
+            // Right stick: look
+            processMouse(rx * gamepadSens * deltaTime, ry * gamepadSens * deltaTime);
+        }
     }
 
     void Camera::processMouse(float xOffset, float yOffset)
