@@ -49,12 +49,6 @@ namespace DonTopo {
         createDevice();
         createSwapChain(window);
 
-        glfwSetWindowUserPointer(window.getNativeWindow(), &m_framebufferResized);
-        glfwSetFramebufferSizeCallback(window.getNativeWindow(), [](GLFWwindow* w, int, int) {
-            auto* flag = static_cast<bool*>(glfwGetWindowUserPointer(w));
-            *flag = true;
-        });
-
         createImageViews();
         createDepthResources();
         createRenderPass();
@@ -207,6 +201,11 @@ namespace DonTopo {
         }
         vkDestroyInstance(m_instance, nullptr);
         printf("destroy render items OK\n"); fflush(stdout);
+    }
+
+    void Renderer::setCamera(const Camera& camera)
+    {
+        m_viewMatrix = camera.getViewMatrix();
     }
 
     void Renderer::createInstance()
@@ -1134,11 +1133,7 @@ namespace DonTopo {
     void Renderer::updateUniformBuffer(uint32_t frameIndex)
     {
         UniformBufferObject ubo{};
-        ubo.view = glm::lookAt(
-            m_cameraTarget + glm::vec3(0.0f, 0.0f, m_cameraDistance),
-            m_cameraTarget,
-            glm::vec3(0.0f, 1.0f, 0.0f)
-        );
+        ubo.view = m_viewMatrix;        
 
         ubo.proj = glm::perspective(
             glm::radians(45.0f),

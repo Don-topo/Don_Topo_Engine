@@ -4,6 +4,7 @@
 #include <string>
 #include <glm/glm.hpp>
 #include "DonTopo/Mesh.h"
+#include "DonTopo/Camera.h"
 
 namespace DonTopo {
 
@@ -18,6 +19,8 @@ namespace DonTopo {
             void init(Window& window, const Mesh& mesh);
             void drawFrame(Window& window);
             void shutdown();
+            void setCamera(const Camera& camera);
+            void notifyResize() { m_framebufferResized = true; }
 
         private:
             void setupDebugMessenger();
@@ -113,5 +116,6 @@ namespace DonTopo {
             std::string                     m_texturePath;
             glm::vec3                       m_cameraTarget{0.0f};
             float                           m_cameraDistance{5.0f};
+            glm::mat4                       m_viewMatrix{1.0f};
     };
 }
