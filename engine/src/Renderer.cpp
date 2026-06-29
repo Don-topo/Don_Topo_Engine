@@ -26,9 +26,10 @@ namespace DonTopo {
 
     void Renderer::init(Window& window, const Mesh& mesh)
     {
-        m_vertices      = mesh.vertices;
-        m_indices       = mesh.indices;
-        m_texturePath   = mesh.texturePath;
+        m_vertices         = mesh.vertices;
+        m_indices          = mesh.indices;
+        m_texturePath      = mesh.texturePath;
+        m_embeddedTexture  = mesh.embeddedTexture;
 
         // Auto-fit camera to mesh bounding box
         glm::vec3 bMin( std::numeric_limits<float>::max());
@@ -197,6 +198,7 @@ namespace DonTopo {
     void Renderer::setCamera(const Camera& camera)
     {
         m_viewMatrix = camera.getViewMatrix();
+        m_camera = camera;
     }
 
     void Renderer::createInstance()
@@ -720,7 +722,7 @@ namespace DonTopo {
         bindingDesc.inputRate   = VK_VERTEX_INPUT_RATE_VERTEX;
 
         // Atributo 0: pos (vec2, offset 0)
-        VkVertexInputAttributeDescription attrDescs[3]{};
+        VkVertexInputAttributeDescription attrDescs[4]{};
         attrDescs[0].binding    = 0;
         attrDescs[0].location   = 0;
         attrDescs[0].format     = VK_FORMAT_R32G32B32_SFLOAT;
@@ -738,11 +740,17 @@ namespace DonTopo {
         attrDescs[2].format     = VK_FORMAT_R32G32_SFLOAT;
         attrDescs[2].offset     = offsetof(Vertex, uv);
 
+        // normals
+        attrDescs[3].binding    = 0;
+        attrDescs[3].location   = 3;
+        attrDescs[3].format     = VK_FORMAT_R32G32B32_SFLOAT;
+        attrDescs[3].offset     = offsetof(Vertex, normal);
+
         VkPipelineVertexInputStateCreateInfo vertexInput{};
         vertexInput.sType                               = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vertexInput.vertexBindingDescriptionCount       = 1;
         vertexInput.pVertexBindingDescriptions          = &bindingDesc;
-        vertexInput.vertexAttributeDescriptionCount     = 3;
+        vertexInput.vertexAttributeDescriptionCount     = 4;
         vertexInput.pVertexAttributeDescriptions        = attrDescs;
 
         // 3. Input assembly — qué primitivo forman los vértices
@@ -996,7 +1004,7 @@ namespace DonTopo {
         uboBinding.binding          = 0;
         uboBinding.descriptorType   = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         uboBinding.descriptorCount  = 1;
-        uboBinding.stageFlags       = VK_SHADER_STAGE_VERTEX_BIT;
+        uboBinding.stageFlags       = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
         VkDescriptorSetLayoutBinding samplerBinding{};
         samplerBinding.binding         = 1;
@@ -1132,6 +1140,9 @@ namespace DonTopo {
             m_cameraDistance * 0.001f,
             m_cameraDistance * 3.0f);
         ubo.proj[1][1] *= -1.0f;    // Vulkan Y flip
+        
+        ubo.lightPos = glm::vec4(0.0f, 500.0f, 300.0f, 1.0f);
+        ubo.viewPos  = glm::vec4(m_camera.getPos(), 1.0f);
 
         memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));        
     }
@@ -1386,7 +1397,12 @@ namespace DonTopo {
         stbi_uc* pixels = nullptr;
         bool fromStb = false;
 
-        if (!m_texturePath.empty())
+        if (!m_embeddedTexture.empty())
+        {
+            pixels = stbi_load_from_memory(m_embeddedTexture.data(), (int)m_embeddedTexture.size(), &w, &h, &channels, STBI_rgb_alpha);
+            fromStb = (pixels != nullptr);
+        }
+        else if (!m_texturePath.empty())
         {
             pixels = stbi_load(m_texturePath.c_str(), &w, &h, &channels, STBI_rgb_alpha);
             fromStb = (pixels != nullptr);
@@ -1402,9 +1418,9 @@ namespace DonTopo {
                 for (int px = 0; px < SIZE; px++) {
                     bool check = ((px / TILE) + (py / TILE)) % 2 == 0;
                     uint8_t* p = placeholder.data() + (py * SIZE + px) * 4;
-                    p[0] = check ? 0x96 : 0x20;
-                    p[1] = 0x00;
-                    p[2] = check ? 0x96 : 0x20;
+                    p[0] = check ? 0xCC : 0x88;
+                    p[1] = check ? 0xCC : 0x88;
+                    p[2] = check ? 0xCC : 0x88;
                     p[3] = 0xFF;
                 }
             }

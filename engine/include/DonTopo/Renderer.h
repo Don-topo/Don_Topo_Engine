@@ -114,8 +114,10 @@ namespace DonTopo {
             std::vector<Vertex>             m_vertices;
             std::vector<uint32_t>           m_indices;
             std::string                     m_texturePath;
+            std::vector<uint8_t>            m_embeddedTexture;
             glm::vec3                       m_cameraTarget{0.0f};
             float                           m_cameraDistance{5.0f};
             glm::mat4                       m_viewMatrix{1.0f};
+            Camera                          m_camera;
     };
 }

@@ -14,7 +14,7 @@ int main()
         DonTopo::Window window;
         window.init(1280, 720, "Don Topo Engine");
         DonTopo::Renderer renderer;
-        DonTopo::Mesh mesh = DonTopo::ModelLoader::load("assets/model.fbx");
+        DonTopo::Mesh mesh = DonTopo::ModelLoader::load("assets/modelTexture.fbx");
         DonTopo::Camera camera({0.0f, 90.0f, 300.0f});
         renderer.init(window, mesh);
 
