@@ -4,6 +4,7 @@ add_library(DonTopoEngine STATIC
     src/Renderer.cpp
     src/ModelLoader.cpp
     src/Camera.cpp
+    src/SceneNode.cpp
 )
 
 target_include_directories(DonTopoEngine

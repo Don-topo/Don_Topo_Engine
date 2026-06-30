@@ -3,6 +3,7 @@
 #include "DonTopo/Renderer.h"
 #include "DonTopo/ModelLoader.h"
 #include "DonTopo/Camera.h"
+#include "DonTopo/SceneNode.h"
 #include <GLFW/glfw3.h>
 #include <chrono>
 #include <iostream>
@@ -20,7 +21,12 @@ int main()
         meshes.push_back(DonTopo::ModelLoader::load("assets/model.fbx"));
         DonTopo::Camera camera({0.0f, 90.0f, 300.0f});
         renderer.init(window, meshes);
-        renderer.setTransform(1, glm::translate(glm::mat4(1.0f), glm::vec3(200.0f, 0.0f, 0.0f)));
+
+        // Scene node
+        DonTopo::SceneNode root;
+        auto* soldier = root.addChild("soldier", 0);
+        auto* model = root.addChild("model", 1);
+        model->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(200.0f, 0.0f, 0.0f));
 
         glfwSetInputMode(window.getNativeWindow(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
@@ -52,6 +58,15 @@ int main()
             camera.update(window.getNativeWindow(), dt);
             renderer.setCamera(camera);
 
+            // SceneNode
+            root.updateWorldTransforms();
+            root.traverse([&](DonTopo::SceneNode* node) {
+                if(node->meshIndex >= 0)
+                {
+                    renderer.setTransform(node->meshIndex, node->worldTransform);
+                }
+            });
+            
             renderer.drawFrame(window);
             window.pollEvents();
         }            
