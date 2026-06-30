@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 #include "DonTopo/Mesh.h"
 #include "DonTopo/Camera.h"
+#include "DonTopo/UniformBufferObject.h"
 
 namespace DonTopo {
 
@@ -26,6 +27,7 @@ namespace DonTopo {
                 if (objectIndex < m_objects.size())
                     m_objects[objectIndex].transform = transform;
             }
+            void setLights(const std::vector<Light>& lights){ m_lights = lights; }
 
         private:
 
@@ -134,6 +136,7 @@ namespace DonTopo {
             float                           m_cameraDistance{5.0f};
             glm::mat4                       m_viewMatrix{1.0f};
             Camera                          m_camera;
+            std::vector<Light>              m_lights;
             std::vector<RenderObject> m_objects;
     };
 }

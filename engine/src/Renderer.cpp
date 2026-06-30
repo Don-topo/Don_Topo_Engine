@@ -1157,8 +1157,12 @@ namespace DonTopo {
             m_cameraDistance * 0.001f,
             m_cameraDistance * 3.0f);
         ubo.proj[1][1] *= -1.0f;    // Vulkan Y flip
+        ubo.numLights = std::min((int)m_lights.size(), MAX_LIGHTS);
+        for(int i = 0; i < ubo.numLights; i++)
+        {
+            ubo.lights[i] = m_lights[i];
+        }
         
-        ubo.lightPos = glm::vec4(0.0f, 500.0f, 300.0f, 1.0f);
         ubo.viewPos  = glm::vec4(m_camera.getPos(), 1.0f);
 
         memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));        

@@ -22,6 +22,12 @@ int main()
         DonTopo::Camera camera({0.0f, 90.0f, 300.0f});
         renderer.init(window, meshes);
 
+        // Lights
+        renderer.setLights({
+        { glm::vec4(0.0f, 500.0f, 300.0f, 1.0f), glm::vec4(1.0f, 0.95f, 0.8f, 1.0f) },      // cálida
+        { glm::vec4(-300.0f, 200.0f, -200.0f, 1.0f), glm::vec4(0.4f, 0.5f, 1.0f, 0.8f) },   // fría
+        });
+
         // Scene node
         DonTopo::SceneNode root;
         auto* soldier = root.addChild("soldier", 0);
@@ -66,7 +72,7 @@ int main()
                     renderer.setTransform(node->meshIndex, node->worldTransform);
                 }
             });
-            
+
             renderer.drawFrame(window);
             window.pollEvents();
         }            
