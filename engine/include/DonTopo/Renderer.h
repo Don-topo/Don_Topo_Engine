@@ -95,6 +95,8 @@ namespace DonTopo {
             void destroyRenderObject(RenderObject& obj);
             void createTextureImageView(VkImage img, VkImageView& view, VkFormat format = VK_FORMAT_R8G8B8A8_SRGB);
             void createTextureSampler(VkSampler& out);
+            void createShadowResources();
+            void recordShadowPass(VkCommandBuffer cmd);
 
             
             VkDebugUtilsMessengerEXT        m_debugMessenger                    = VK_NULL_HANDLE;
@@ -137,6 +139,18 @@ namespace DonTopo {
             glm::mat4                       m_viewMatrix{1.0f};
             Camera                          m_camera;
             std::vector<Light>              m_lights;
+            
+            // Shadow Map
+            static constexpr uint32_t       SHADOW_SIZE                         = 2048;
+            VkImage                         m_shadowImage                       = VK_NULL_HANDLE;
+            VkDeviceMemory                  m_shadowMemory                      = VK_NULL_HANDLE;
+            VkImageView                     m_shadowView                        = VK_NULL_HANDLE;
+            VkSampler                       m_shadowSampler                     = VK_NULL_HANDLE;
+            VkRenderPass                    m_shadowRenderPass                  = VK_NULL_HANDLE;
+            VkFramebuffer                   m_shadowFramebuffer                 = VK_NULL_HANDLE;
+            VkPipeline                      m_shadowPipeline                    = VK_NULL_HANDLE;
+            VkPipelineLayout                m_shadowPipelineLayout              = VK_NULL_HANDLE;
+
             std::vector<RenderObject> m_objects;
     };
 }

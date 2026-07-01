@@ -7,6 +7,7 @@
 #include <GLFW/glfw3.h>
 #include <chrono>
 #include <iostream>
+#include <limits>
 #include <glm/gtc/matrix_transform.hpp>
 
 int main()
@@ -19,6 +20,29 @@ int main()
         std::vector<DonTopo::Mesh> meshes;
         meshes.push_back(DonTopo::ModelLoader::load("assets/modelTexture.fbx"));
         meshes.push_back(DonTopo::ModelLoader::load("assets/model.fbx"));
+        // Suelo — y calculado desde el mínimo de los modelos cargados
+        {
+            float floorY = std::numeric_limits<float>::max();
+            for (auto& mesh : meshes)
+                for (auto& v : mesh.vertices)
+                    floorY = std::min(floorY, v.pos.y);
+
+            DonTopo::Mesh floor;
+            float s = 1000.0f;
+            DonTopo::Vertex v0, v1, v2, v3;
+            for (auto* v : {&v0,&v1,&v2,&v3}) {
+                v->color   = {0.6f, 0.6f, 0.6f};
+                v->normal  = {0.0f, 1.0f, 0.0f};
+                v->tangent = {1.0f, 0.0f, 0.0f};
+            }
+            v0.pos={-s,floorY,-s}; v0.uv={0,0};
+            v1.pos={ s,floorY,-s}; v1.uv={10,0};
+            v2.pos={ s,floorY, s}; v2.uv={10,10};
+            v3.pos={-s,floorY, s}; v3.uv={0,10};
+            floor.vertices = {v0,v1,v2,v3};
+            floor.indices  = {0,2,1, 0,3,2};
+            meshes.push_back(floor);
+        }
         DonTopo::Camera camera({0.0f, 90.0f, 300.0f});
         renderer.init(window, meshes);
 
@@ -33,7 +57,7 @@ int main()
         auto* soldier = root.addChild("soldier", 0);
         auto* model = root.addChild("model", 1);
         model->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(200.0f, 0.0f, 0.0f));
-
+        auto* floor = root.addChild("floor", 2);
         glfwSetInputMode(window.getNativeWindow(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
         struct AppCtx { DonTopo::Camera* cam; DonTopo::Renderer* rnd; };

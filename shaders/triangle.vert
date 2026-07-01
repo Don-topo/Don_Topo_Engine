@@ -12,13 +12,13 @@ layout(location = 2) out vec3 fragNormal;
 layout(location = 3) out vec3 fragWorldPos;
 layout(location = 4) out vec3 fragTangent;
 layout(location = 5) out vec3 fragBitangent;
+layout(location = 6) out vec4 fragLightSpacePos;
 
 layout(set = 0, binding = 0) uniform UBO
 {
     mat4 view;
     mat4 proj;
-    vec4 lightPos;
-    vec4 viewPos;
+    mat4 lightSpaceMatrix;
 } ubo;
 
 layout(push_constant) uniform PushData
@@ -38,4 +38,5 @@ void main()
     T = normalize(T - dot(T, N) * N);
     fragTangent   = T;
     fragBitangent = cross(N, T);
+    fragLightSpacePos = ubo.lightSpaceMatrix * push.transform * vec4(inPos, 1.0);
 }

@@ -15,6 +15,7 @@ namespace DonTopo
     {
         glm::mat4   view;
         glm::mat4   proj;
+        glm::mat4   lightSpaceMatrix;
         Light       lights[MAX_LIGHTS];
         glm::vec4   viewPos;
         int         numLights = 0;
