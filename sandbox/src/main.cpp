@@ -2,7 +2,6 @@
 #include "DonTopo/Window.h"
 #include "DonTopo/Renderer.h"
 #include "DonTopo/ModelLoader.h"
-#include "DonTopo/SkinnedMesh.h"
 #include "DonTopo/Camera.h"
 #include "DonTopo/SceneNode.h"
 #include <GLFW/glfw3.h>

@@ -52,8 +52,39 @@ namespace DonTopo {
                 VkDeviceMemory  normalMem           = VK_NULL_HANDLE;
                 VkImageView     normalView          = VK_NULL_HANDLE;
                 VkSampler       normalSampler       = VK_NULL_HANDLE;
+                // ORM texture (AO, roughness, metallic)
+                VkImage         ormImage            = VK_NULL_HANDLE;
+                VkDeviceMemory  ormMem              = VK_NULL_HANDLE;
+                VkImageView     ormView             = VK_NULL_HANDLE;
+                VkSampler       ormSampler          = VK_NULL_HANDLE;
+                float           metallic            = 0.0f;
+                float           roughness           = 0.5f;
                 VkDescriptorSet descriptorSets[2]   = {};
                 glm::mat4       transform{1.0f};
+            };
+
+            struct SkinnedMatGfx {
+                VkImage         textureImage  = VK_NULL_HANDLE;
+                VkDeviceMemory  textureMem    = VK_NULL_HANDLE;
+                VkImageView     textureView   = VK_NULL_HANDLE;
+                VkSampler       sampler       = VK_NULL_HANDLE;
+                VkImage         normalImage   = VK_NULL_HANDLE;
+                VkDeviceMemory  normalMem     = VK_NULL_HANDLE;
+                VkImageView     normalView    = VK_NULL_HANDLE;
+                VkSampler       normalSampler = VK_NULL_HANDLE;
+                VkImage         ormImage      = VK_NULL_HANDLE;
+                VkDeviceMemory  ormMem        = VK_NULL_HANDLE;
+                VkImageView     ormView       = VK_NULL_HANDLE;
+                VkSampler       ormSampler    = VK_NULL_HANDLE;
+                float           metallic      = 0.0f;
+                float           roughness     = 0.5f;
+                VkDescriptorSet descSets[2]   = {};
+            };
+
+            struct SubMeshDraw {
+                uint32_t indexStart;
+                uint32_t indexCount;
+                uint32_t materialIndex;
             };
 
             struct ComputePush
@@ -63,6 +94,14 @@ namespace DonTopo {
                 uint32_t vertexCount;
                 uint32_t pad;
             };
+
+            struct PushData {
+                glm::mat4 transform{1.0f};
+                float     metallic  = 1.0f;
+                float     roughness = 1.0f;
+                glm::vec2 _pad{};
+            };
+            static_assert(sizeof(PushData) == 80, "PushData must be 80 bytes");
 
             struct SkinnedRenderObject {
                 // SSBOs estáticos
@@ -90,18 +129,11 @@ namespace DonTopo {
                 uint32_t       indexCount           = 0;
                 uint32_t       vertexCount          = 0;
                 uint32_t       boneCount            = 0;
-                // Texturas (para graphics)
-                VkImage         textureImage        = VK_NULL_HANDLE;
-                VkDeviceMemory  textureMem          = VK_NULL_HANDLE;
-                VkImageView     textureView         = VK_NULL_HANDLE;
-                VkSampler       sampler             = VK_NULL_HANDLE;
-                VkImage         normalImage         = VK_NULL_HANDLE;
-                VkDeviceMemory  normalMem           = VK_NULL_HANDLE;
-                VkImageView     normalView          = VK_NULL_HANDLE;
-                VkSampler       normalSampler       = VK_NULL_HANDLE;
-                // Descriptor sets
+                // Descriptor set de compute
                 VkDescriptorSet computeDescSet      = VK_NULL_HANDLE;
-                VkDescriptorSet graphicsDescSets[2] = {};
+                // Texturas y descriptor sets por material
+                std::vector<SkinnedMatGfx>  matGfx;
+                std::vector<SubMeshDraw>    subMeshes;
                 // Estado de animación
                 float     animTime       = 0.0f;
                 float     duration       = 0.0f;
@@ -160,6 +192,7 @@ namespace DonTopo {
                             VkBuffer& buf, VkDeviceMemory& mem);
             void destroySkinnedRenderObject(SkinnedRenderObject& obj);
             void recordComputePass(VkCommandBuffer cmd);
+            void createSolidColorImage(const uint8_t rgba[4], VkImage& img, VkDeviceMemory& mem);
 
             
             VkDebugUtilsMessengerEXT        m_debugMessenger                    = VK_NULL_HANDLE;

@@ -713,8 +713,13 @@ namespace DonTopo {
         {
             vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
                 m_pipelineLayout, 0, 1, &obj.descriptorSets[m_currentFrame], 0, nullptr);
+            PushData push;
+            push.transform = obj.transform;
+            push.metallic  = obj.metallic;
+            push.roughness = obj.roughness;
             vkCmdPushConstants(m_commandBuffers[m_currentFrame], m_pipelineLayout,
-                VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &obj.transform);
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(PushData), &push);
 
             VkBuffer vbs[]        = { obj.vertexBuffer };
             VkDeviceSize offs[]   = { 0 };
@@ -729,20 +734,30 @@ namespace DonTopo {
             vkCmdBindPipeline(m_commandBuffers[m_currentFrame],
                 VK_PIPELINE_BIND_POINT_GRAPHICS, m_skinnedGfxPipeline);
 
-            for (auto& obj : m_skinnedObjects)
+            for (auto& sobj : m_skinnedObjects)
             {
-                vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame],
-                    VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
-                    0, 1, &obj.graphicsDescSets[m_currentFrame], 0, nullptr);
-                vkCmdPushConstants(m_commandBuffers[m_currentFrame], m_pipelineLayout,
-                    VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &obj.transform);
-
-                VkBuffer     vbs[]  = { obj.outputVertexBuffer };
+                VkBuffer     vbs[]  = { sobj.outputVertexBuffer };
                 VkDeviceSize offs[] = { 0 };
                 vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vbs, offs);
                 vkCmdBindIndexBuffer(m_commandBuffers[m_currentFrame],
-                    obj.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-                vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], obj.indexCount, 1, 0, 0, 0);
+                    sobj.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+                for (auto& sm : sobj.subMeshes)
+                {
+                    SkinnedMatGfx& mgfx = sobj.matGfx[sm.materialIndex];
+                    PushData push;
+                    push.transform = sobj.transform;
+                    push.metallic  = mgfx.metallic;
+                    push.roughness = mgfx.roughness;
+                    vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame],
+                        VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
+                        0, 1, &mgfx.descSets[m_currentFrame], 0, nullptr);
+                    vkCmdPushConstants(m_commandBuffers[m_currentFrame], m_pipelineLayout,
+                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                        0, sizeof(PushData), &push);
+                    vkCmdDrawIndexed(m_commandBuffers[m_currentFrame],
+                        sm.indexCount, 1, sm.indexStart, 0, 0);
+                }
             }
         }
         vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
@@ -752,7 +767,7 @@ namespace DonTopo {
     void Renderer::createPipeline()
     {
         auto vertCode = loadShaderFile("shaders/triangle.vert.spv");
-        auto fragCode = loadShaderFile("shaders/triangle.frag.spv");
+        auto fragCode = loadShaderFile("shaders/pbr.frag.spv");
 
         VkShaderModule vertModule = createShaderModule(vertCode);
         VkShaderModule fragModule = createShaderModule(fragCode);
@@ -866,9 +881,9 @@ namespace DonTopo {
 
         // 9. Pipeline layout — sin descriptors ni push constants por ahora
         VkPushConstantRange pushRange{};
-        pushRange.stageFlags    = VK_SHADER_STAGE_VERTEX_BIT;
+        pushRange.stageFlags    = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         pushRange.offset        = 0;
-        pushRange.size          = sizeof(glm::mat4);
+        pushRange.size          = sizeof(PushData);   // 80 bytes
 
         VkPipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.sType                    = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -1087,11 +1102,17 @@ namespace DonTopo {
         shadowBinding.descriptorCount = 1;
         shadowBinding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-        VkDescriptorSetLayoutBinding bindings[] = { uboBinding, samplerBinding, samplerNormal, shadowBinding };
+        VkDescriptorSetLayoutBinding ormBinding{};
+        ormBinding.binding         = 4;
+        ormBinding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ormBinding.descriptorCount = 1;
+        ormBinding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutBinding bindings[] = { uboBinding, samplerBinding, samplerNormal, shadowBinding, ormBinding };
 
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
         layoutInfo.sType            = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layoutInfo.bindingCount     = 4;
+        layoutInfo.bindingCount     = 5;
         layoutInfo.pBindings        = bindings;
 
         if(vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -1130,12 +1151,12 @@ namespace DonTopo {
 
     void Renderer::createDescriptorPool()
     {
-        uint32_t n = (uint32_t)((m_objects.size() + 16) * MAX_FRAMES);
+        uint32_t n = (uint32_t)((m_objects.size() + 128) * MAX_FRAMES);
         VkDescriptorPoolSize poolSizes[2]{};
         poolSizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         poolSizes[0].descriptorCount = n;
         poolSizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSizes[1].descriptorCount = n * 3;   // diffuse + normal map + shadow
+        poolSizes[1].descriptorCount = n * 4;   // diffuse + normal map + shadow + orm
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1184,7 +1205,12 @@ namespace DonTopo {
                 shadowInfo.imageView   = m_shadowView;
                 shadowInfo.sampler     = m_shadowSampler;
 
-                VkWriteDescriptorSet writes[4]{};
+                VkDescriptorImageInfo ormInfo{};
+                ormInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                ormInfo.imageView   = obj.ormView;
+                ormInfo.sampler     = obj.ormSampler;
+
+                VkWriteDescriptorSet writes[5]{};
                 writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 writes[0].dstSet          = obj.descriptorSets[i];
                 writes[0].dstBinding      = 0;
@@ -1213,7 +1239,14 @@ namespace DonTopo {
                 writes[3].descriptorCount = 1;
                 writes[3].pImageInfo      = &shadowInfo;
 
-                vkUpdateDescriptorSets(m_device, 4, writes, 0, nullptr);
+                writes[4].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[4].dstSet          = obj.descriptorSets[i];
+                writes[4].dstBinding      = 4;
+                writes[4].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[4].descriptorCount = 1;
+                writes[4].pImageInfo      = &ormInfo;
+
+                vkUpdateDescriptorSets(m_device, 5, writes, 0, nullptr);
             }
         }
     }
@@ -1650,6 +1683,27 @@ namespace DonTopo {
             throw std::runtime_error("failed to create texture sampler!");
     }
 
+    void Renderer::createSolidColorImage(const uint8_t rgba[4], VkImage& img, VkDeviceMemory& mem)
+    {
+        VkBuffer sb; VkDeviceMemory sm;
+        createBuffer(4,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            sb, sm);
+        void* mapped;
+        vkMapMemory(m_device, sm, 0, 4, 0, &mapped);
+        memcpy(mapped, rgba, 4);
+        vkUnmapMemory(m_device, sm);
+        createImage(1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img, mem);
+        transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        copyBufferToImage(sb, img, 1, 1);
+        transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        vkDestroyBuffer(m_device, sb, nullptr);
+        vkFreeMemory(m_device, sm, nullptr);
+    }
+
     void Renderer::buildRenderObject(const Mesh& mesh, RenderObject& obj)
     {
         obj.indexCount = (uint32_t)mesh.indices.size();
@@ -1661,10 +1715,31 @@ namespace DonTopo {
         createNormalMapImage(mesh.normalMapPath, mesh.embeddedNormalMap,   obj.normalImage,  obj.normalMem);
         createTextureImageView(obj.normalImage,                            obj.normalView, VK_FORMAT_R8G8B8A8_UNORM);
         createTextureSampler(obj.normalSampler);
+
+        if (!mesh.metallicRoughnessPath.empty() || !mesh.embeddedMetallicRoughness.empty())
+        {
+            createNormalMapImage(mesh.metallicRoughnessPath, mesh.embeddedMetallicRoughness,
+                                 obj.ormImage, obj.ormMem);
+            obj.metallic  = 1.0f;
+            obj.roughness = 1.0f;
+        }
+        else
+        {
+            constexpr uint8_t white[4] = {255, 255, 255, 255};
+            createSolidColorImage(white, obj.ormImage, obj.ormMem);
+            obj.metallic  = mesh.metallic;
+            obj.roughness = mesh.roughness;
+        }
+        createTextureImageView(obj.ormImage, obj.ormView, VK_FORMAT_R8G8B8A8_UNORM);
+        createTextureSampler(obj.ormSampler);
     }
 
     void Renderer::destroyRenderObject(RenderObject& obj)
     {
+        vkDestroySampler(m_device,   obj.ormSampler,    nullptr);
+        vkDestroyImageView(m_device, obj.ormView,       nullptr);
+        vkDestroyImage(m_device,     obj.ormImage,      nullptr);
+        vkFreeMemory(m_device,       obj.ormMem,        nullptr);
         vkDestroySampler(m_device,   obj.normalSampler, nullptr);
         vkDestroyImageView(m_device, obj.normalView,    nullptr);
         vkDestroyImage(m_device,     obj.normalImage,   nullptr);
@@ -1996,7 +2071,7 @@ namespace DonTopo {
          // --- Skinned graphics pipeline (stride=80, mismos shaders) ---
         {
             auto vertCode = loadShaderFile("shaders/triangle.vert.spv");
-            auto fragCode = loadShaderFile("shaders/triangle.frag.spv");
+            auto fragCode = loadShaderFile("shaders/pbr.frag.spv");
             auto vertMod  = createShaderModule(vertCode);
             auto fragMod  = createShaderModule(fragCode);
 
@@ -2126,14 +2201,23 @@ namespace DonTopo {
         destroy(obj.outputVertexBuffer,   obj.outputVertexMemory);
         destroy(obj.indexBuffer,          obj.indexMemory);
 
-        if (obj.textureView   != VK_NULL_HANDLE) { vkDestroyImageView(m_device, obj.textureView,   nullptr); obj.textureView   = VK_NULL_HANDLE; }
-        if (obj.textureImage  != VK_NULL_HANDLE) { vkDestroyImage    (m_device, obj.textureImage,  nullptr); obj.textureImage  = VK_NULL_HANDLE; }
-        if (obj.textureMem    != VK_NULL_HANDLE) { vkFreeMemory      (m_device, obj.textureMem,    nullptr); obj.textureMem    = VK_NULL_HANDLE; }
-        if (obj.sampler       != VK_NULL_HANDLE) { vkDestroySampler  (m_device, obj.sampler,       nullptr); obj.sampler       = VK_NULL_HANDLE; }
-        if (obj.normalView    != VK_NULL_HANDLE) { vkDestroyImageView(m_device, obj.normalView,    nullptr); obj.normalView    = VK_NULL_HANDLE; }
-        if (obj.normalImage   != VK_NULL_HANDLE) { vkDestroyImage    (m_device, obj.normalImage,   nullptr); obj.normalImage   = VK_NULL_HANDLE; }
-        if (obj.normalMem     != VK_NULL_HANDLE) { vkFreeMemory      (m_device, obj.normalMem,     nullptr); obj.normalMem     = VK_NULL_HANDLE; }
-        if (obj.normalSampler != VK_NULL_HANDLE) { vkDestroySampler  (m_device, obj.normalSampler, nullptr); obj.normalSampler = VK_NULL_HANDLE; }
+        for (auto& mgfx : obj.matGfx)
+        {
+            if (mgfx.ormSampler    != VK_NULL_HANDLE) { vkDestroySampler  (m_device, mgfx.ormSampler,    nullptr); }
+            if (mgfx.ormView       != VK_NULL_HANDLE) { vkDestroyImageView(m_device, mgfx.ormView,       nullptr); }
+            if (mgfx.ormImage      != VK_NULL_HANDLE) { vkDestroyImage    (m_device, mgfx.ormImage,      nullptr); }
+            if (mgfx.ormMem        != VK_NULL_HANDLE) { vkFreeMemory      (m_device, mgfx.ormMem,        nullptr); }
+            if (mgfx.normalSampler != VK_NULL_HANDLE) { vkDestroySampler  (m_device, mgfx.normalSampler, nullptr); }
+            if (mgfx.normalView    != VK_NULL_HANDLE) { vkDestroyImageView(m_device, mgfx.normalView,    nullptr); }
+            if (mgfx.normalImage   != VK_NULL_HANDLE) { vkDestroyImage    (m_device, mgfx.normalImage,   nullptr); }
+            if (mgfx.normalMem     != VK_NULL_HANDLE) { vkFreeMemory      (m_device, mgfx.normalMem,     nullptr); }
+            if (mgfx.sampler       != VK_NULL_HANDLE) { vkDestroySampler  (m_device, mgfx.sampler,       nullptr); }
+            if (mgfx.textureView   != VK_NULL_HANDLE) { vkDestroyImageView(m_device, mgfx.textureView,   nullptr); }
+            if (mgfx.textureImage  != VK_NULL_HANDLE) { vkDestroyImage    (m_device, mgfx.textureImage,  nullptr); }
+            if (mgfx.textureMem    != VK_NULL_HANDLE) { vkFreeMemory      (m_device, mgfx.textureMem,    nullptr); }
+        }
+        obj.matGfx.clear();
+        obj.subMeshes.clear();
     }
 
     int Renderer::addSkinnedMesh(const SkinnedMesh& mesh)
@@ -2270,68 +2354,116 @@ namespace DonTopo {
         }
         vkUpdateDescriptorSets(m_device, 8, writes, 0, nullptr);
 
-        // --- Texturas ---
-        createTextureImage(mesh.texturePath, mesh.embeddedTexture, obj.textureImage, obj.textureMem);
-        createTextureImageView(obj.textureImage, obj.textureView);
-        createTextureSampler(obj.sampler);
-        createNormalMapImage(mesh.normalMapPath, mesh.embeddedNormalMap, obj.normalImage, obj.normalMem);
-        createTextureImageView(obj.normalImage, obj.normalView, VK_FORMAT_R8G8B8A8_UNORM);
-        createTextureSampler(obj.normalSampler);
+        // --- Texturas y descriptor sets por material ---
+        constexpr uint8_t white[4] = {255, 255, 255, 255};
+        obj.matGfx.resize(mesh.materials.size());
 
-        // --- Graphics descriptor sets (UBO + textura + normalMap + shadowMap) ---
-        VkDescriptorSetLayout layouts[MAX_FRAMES] = { m_descriptorSetLayout, m_descriptorSetLayout };
-        VkDescriptorSetAllocateInfo gfxAlloc{};
-        gfxAlloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        gfxAlloc.descriptorPool     = m_descriptorPool;
-        gfxAlloc.descriptorSetCount = MAX_FRAMES;
-        gfxAlloc.pSetLayouts        = layouts;
-        if (vkAllocateDescriptorSets(m_device, &gfxAlloc, obj.graphicsDescSets) != VK_SUCCESS)
-            throw std::runtime_error("failed to allocate skinned graphics descriptor sets!");
-
-        for (int i = 0; i < MAX_FRAMES; i++)
+        for (size_t mi = 0; mi < mesh.materials.size(); mi++)
         {
-            VkDescriptorBufferInfo uboInfo{};
-            uboInfo.buffer = m_uniformBuffers[i];
-            uboInfo.offset = 0;
-            uboInfo.range  = sizeof(UniformBufferObject);
+            const SkinnedMaterial& smat = mesh.materials[mi];
+            SkinnedMatGfx& mgfx = obj.matGfx[mi];
 
-            VkDescriptorImageInfo texInfo{};
-            texInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            texInfo.imageView   = obj.textureView;
-            texInfo.sampler     = obj.sampler;
+            // Diffuse
+            createTextureImage(smat.texturePath, smat.embeddedTexture, mgfx.textureImage, mgfx.textureMem);
+            createTextureImageView(mgfx.textureImage, mgfx.textureView);
+            createTextureSampler(mgfx.sampler);
 
-            VkDescriptorImageInfo nrmInfo{};
-            nrmInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            nrmInfo.imageView   = obj.normalView;
-            nrmInfo.sampler     = obj.normalSampler;
+            // Normal map
+            createNormalMapImage(smat.normalMapPath, smat.embeddedNormalMap, mgfx.normalImage, mgfx.normalMem);
+            createTextureImageView(mgfx.normalImage, mgfx.normalView, VK_FORMAT_R8G8B8A8_UNORM);
+            createTextureSampler(mgfx.normalSampler);
 
-            VkDescriptorImageInfo shdInfo{};
-            shdInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-            shdInfo.imageView   = m_shadowView;
-            shdInfo.sampler     = m_shadowSampler;
+            // ORM
+            if (!smat.metallicRoughnessPath.empty() || !smat.embeddedMetallicRoughness.empty())
+            {
+                createNormalMapImage(smat.metallicRoughnessPath, smat.embeddedMetallicRoughness,
+                                     mgfx.ormImage, mgfx.ormMem);
+                mgfx.metallic  = 1.0f;
+                mgfx.roughness = 1.0f;
+            }
+            else
+            {
+                createSolidColorImage(white, mgfx.ormImage, mgfx.ormMem);
+                mgfx.metallic  = smat.metallic;
+                mgfx.roughness = smat.roughness;
+            }
+            createTextureImageView(mgfx.ormImage, mgfx.ormView, VK_FORMAT_R8G8B8A8_UNORM);
+            createTextureSampler(mgfx.ormSampler);
 
-            VkWriteDescriptorSet gw[4]{};
-            gw[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            gw[0].dstSet = obj.graphicsDescSets[i]; gw[0].dstBinding = 0;
-            gw[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            gw[0].descriptorCount = 1; gw[0].pBufferInfo = &uboInfo;
+            // Descriptor sets
+            VkDescriptorSetLayout layouts[MAX_FRAMES] = { m_descriptorSetLayout, m_descriptorSetLayout };
+            VkDescriptorSetAllocateInfo gfxAlloc{};
+            gfxAlloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            gfxAlloc.descriptorPool     = m_descriptorPool;
+            gfxAlloc.descriptorSetCount = MAX_FRAMES;
+            gfxAlloc.pSetLayouts        = layouts;
+            if (vkAllocateDescriptorSets(m_device, &gfxAlloc, mgfx.descSets) != VK_SUCCESS)
+                throw std::runtime_error("failed to allocate skinned graphics descriptor sets!");
 
-            gw[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            gw[1].dstSet = obj.graphicsDescSets[i]; gw[1].dstBinding = 1;
-            gw[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            gw[1].descriptorCount = 1; gw[1].pImageInfo = &texInfo;
+            for (int fi = 0; fi < MAX_FRAMES; fi++)
+            {
+                VkDescriptorBufferInfo uboInfo{};
+                uboInfo.buffer = m_uniformBuffers[fi];
+                uboInfo.offset = 0;
+                uboInfo.range  = sizeof(UniformBufferObject);
 
-            gw[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            gw[2].dstSet = obj.graphicsDescSets[i]; gw[2].dstBinding = 2;
-            gw[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            gw[2].descriptorCount = 1; gw[2].pImageInfo = &nrmInfo;
+                VkDescriptorImageInfo texInfo{};
+                texInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                texInfo.imageView   = mgfx.textureView;
+                texInfo.sampler     = mgfx.sampler;
 
-            gw[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            gw[3].dstSet = obj.graphicsDescSets[i]; gw[3].dstBinding = 3;
-            gw[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            gw[3].descriptorCount = 1; gw[3].pImageInfo = &shdInfo;
+                VkDescriptorImageInfo nrmInfo{};
+                nrmInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                nrmInfo.imageView   = mgfx.normalView;
+                nrmInfo.sampler     = mgfx.normalSampler;
 
-            vkUpdateDescriptorSets(m_device, 4, gw, 0, nullptr);
+                VkDescriptorImageInfo shdInfo{};
+                shdInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                shdInfo.imageView   = m_shadowView;
+                shdInfo.sampler     = m_shadowSampler;
+
+                VkDescriptorImageInfo ormInfo{};
+                ormInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                ormInfo.imageView   = mgfx.ormView;
+                ormInfo.sampler     = mgfx.ormSampler;
+
+                VkWriteDescriptorSet gw[5]{};
+                gw[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                gw[0].dstSet = mgfx.descSets[fi]; gw[0].dstBinding = 0;
+                gw[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                gw[0].descriptorCount = 1; gw[0].pBufferInfo = &uboInfo;
+
+                gw[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                gw[1].dstSet = mgfx.descSets[fi]; gw[1].dstBinding = 1;
+                gw[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                gw[1].descriptorCount = 1; gw[1].pImageInfo = &texInfo;
+
+                gw[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                gw[2].dstSet = mgfx.descSets[fi]; gw[2].dstBinding = 2;
+                gw[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                gw[2].descriptorCount = 1; gw[2].pImageInfo = &nrmInfo;
+
+                gw[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                gw[3].dstSet = mgfx.descSets[fi]; gw[3].dstBinding = 3;
+                gw[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                gw[3].descriptorCount = 1; gw[3].pImageInfo = &shdInfo;
+
+                gw[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                gw[4].dstSet = mgfx.descSets[fi]; gw[4].dstBinding = 4;
+                gw[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                gw[4].descriptorCount = 1; gw[4].pImageInfo = &ormInfo;
+
+                vkUpdateDescriptorSets(m_device, 5, gw, 0, nullptr);
+            }
+        }
+
+        // --- SubMesh draw list ---
+        obj.subMeshes.resize(mesh.subMeshRanges.size());
+        for (size_t si = 0; si < mesh.subMeshRanges.size(); si++)
+        {
+            obj.subMeshes[si].indexStart   = mesh.subMeshRanges[si].indexStart;
+            obj.subMeshes[si].indexCount   = mesh.subMeshRanges[si].indexCount;
+            obj.subMeshes[si].materialIndex = mesh.subMeshRanges[si].materialIndex;
         }
 
         return (int)m_skinnedObjects.size() - 1;

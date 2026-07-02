@@ -102,6 +102,8 @@ namespace DonTopo
             // Assimp suele guardar el normal map como HEIGHT en FBX
             if(mesh.embeddedNormalMap.empty() && mesh.normalMapPath.empty())
                 loadTex(aiTextureType_HEIGHT, mesh.embeddedNormalMap, mesh.normalMapPath);
+            // ORM (glTF metallic-roughness packed: R=AO, G=roughness, B=metallic)
+            loadTex(aiTextureType_UNKNOWN, mesh.embeddedMetallicRoughness, mesh.metallicRoughnessPath);
         }
 
         return mesh;
@@ -155,6 +157,7 @@ namespace DonTopo
         {
             aiMesh* aim = scene->mMeshes[m];
             uint32_t numVerts = aim->mNumVertices;
+            uint32_t idxStart = (uint32_t)smesh.indices.size();
 
             std::vector<std::array<Slot,4>> tempW(numVerts, {{{-1,0.f},{-1,0.f},{-1,0.f},{-1,0.f}}});
             std::vector<int> slotCount(numVerts, 0);
@@ -197,6 +200,12 @@ namespace DonTopo
             for (uint32_t i = 0; i < aim->mNumFaces; i++)
                 for (uint32_t j = 0; j < aim->mFaces[i].mNumIndices; j++)
                     smesh.indices.push_back(aim->mFaces[i].mIndices[j] + vertexOffset);
+
+            SubMeshRange range{};
+            range.indexStart   = idxStart;
+            range.indexCount   = (uint32_t)smesh.indices.size() - idxStart;
+            range.materialIndex = aim->mMaterialIndex;
+            smesh.subMeshRanges.push_back(range);
 
             vertexOffset += numVerts;
         }
@@ -301,14 +310,13 @@ namespace DonTopo
             }
         }
 
-        // --- Texturas (reutiliza misma lógica que load()) ---
-        if (scene->mNumMaterials > 0)
+        // --- Materiales: uno por cada materialIndex único entre los submeshes ---
         {
-            aiMaterial* mat = scene->mMaterials[scene->mMeshes[0]->mMaterialIndex];
             namespace fs = std::filesystem;
             fs::path modelDir = fs::path(path).parent_path();
 
-            auto loadTex = [&](aiTextureType type, std::vector<uint8_t>& outEmb, std::string& outPath)
+            auto loadTexFromMat = [&](aiMaterial* mat, aiTextureType type,
+                                      std::vector<uint8_t>& outEmb, std::string& outPath)
             {
                 aiString texPath;
                 if (mat->GetTexture(type, 0, &texPath) != AI_SUCCESS) return;
@@ -336,10 +344,30 @@ namespace DonTopo
                 else outPath = (modelDir / fs::path(raw).filename()).string();
             };
 
-            loadTex(aiTextureType_DIFFUSE, smesh.embeddedTexture,   smesh.texturePath);
-            loadTex(aiTextureType_NORMALS, smesh.embeddedNormalMap, smesh.normalMapPath);
-            if (smesh.embeddedNormalMap.empty() && smesh.normalMapPath.empty())
-                loadTex(aiTextureType_HEIGHT, smesh.embeddedNormalMap, smesh.normalMapPath);
+            std::unordered_map<uint32_t, uint32_t> matRemap;
+            for (uint32_t m = 0; m < scene->mNumMeshes; m++)
+            {
+                uint32_t assimpIdx = scene->mMeshes[m]->mMaterialIndex;
+                if (matRemap.count(assimpIdx)) continue;
+
+                uint32_t newIdx = (uint32_t)smesh.materials.size();
+                matRemap[assimpIdx] = newIdx;
+                smesh.materials.emplace_back();
+                SkinnedMaterial& smat = smesh.materials.back();
+
+                if (assimpIdx < scene->mNumMaterials)
+                {
+                    aiMaterial* mat = scene->mMaterials[assimpIdx];
+                    loadTexFromMat(mat, aiTextureType_DIFFUSE, smat.embeddedTexture,          smat.texturePath);
+                    loadTexFromMat(mat, aiTextureType_NORMALS, smat.embeddedNormalMap,         smat.normalMapPath);
+                    if (smat.embeddedNormalMap.empty() && smat.normalMapPath.empty())
+                        loadTexFromMat(mat, aiTextureType_HEIGHT, smat.embeddedNormalMap,     smat.normalMapPath);
+                    loadTexFromMat(mat, aiTextureType_UNKNOWN, smat.embeddedMetallicRoughness, smat.metallicRoughnessPath);
+                }
+            }
+
+            for (auto& range : smesh.subMeshRanges)
+                range.materialIndex = matRemap.at(range.materialIndex);
         }
         return smesh;
     }
