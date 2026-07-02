@@ -2,6 +2,7 @@
 #include "DonTopo/Window.h"
 #include "DonTopo/Renderer.h"
 #include "DonTopo/ModelLoader.h"
+#include "DonTopo/SkinnedMesh.h"
 #include "DonTopo/Camera.h"
 #include "DonTopo/SceneNode.h"
 #include <GLFW/glfw3.h>
@@ -17,10 +18,12 @@ int main()
         DonTopo::Window window;
         window.init(1280, 720, "Don Topo Engine");
         DonTopo::Renderer renderer;
+
         std::vector<DonTopo::Mesh> meshes;
         meshes.push_back(DonTopo::ModelLoader::load("assets/modelTexture.fbx"));
         meshes.push_back(DonTopo::ModelLoader::load("assets/model.fbx"));
-        // Suelo — y calculado desde el mínimo de los modelos cargados
+
+        // Suelo
         {
             float floorY = std::numeric_limits<float>::max();
             for (auto& mesh : meshes)
@@ -43,21 +46,29 @@ int main()
             floor.indices  = {0,2,1, 0,3,2};
             meshes.push_back(floor);
         }
+
+        // Cargar modelo animado antes de init
+        auto skinnedMesh = DonTopo::ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+
         DonTopo::Camera camera({0.0f, 90.0f, 300.0f});
         renderer.init(window, meshes);
 
-        // Lights
+        // Añadir skinned mesh después de init
+        int animIdx = renderer.addSkinnedMesh(skinnedMesh);
+        renderer.setSkinnedTransform(animIdx,
+            glm::translate(glm::mat4(1.0f), glm::vec3(-200.0f, 0.0f, 0.0f)));
+
         renderer.setLights({
-        { glm::vec4(0.0f, 500.0f, 300.0f, 1.0f), glm::vec4(1.0f, 0.95f, 0.8f, 1.0f) },      // cálida
-        { glm::vec4(-300.0f, 200.0f, -200.0f, 1.0f), glm::vec4(0.4f, 0.5f, 1.0f, 0.8f) },   // fría
+            { glm::vec4(0.0f, 500.0f, 300.0f, 1.0f),    glm::vec4(1.0f, 0.95f, 0.8f, 1.0f) },
+            { glm::vec4(-300.0f, 200.0f, -200.0f, 1.0f), glm::vec4(0.4f, 0.5f, 1.0f, 0.8f) },
         });
 
-        // Scene node
         DonTopo::SceneNode root;
-        auto* soldier = root.addChild("soldier", 0);
-        auto* model = root.addChild("model", 1);
+        auto* soldier  = root.addChild("soldier", 0);
+        auto* model    = root.addChild("model", 1);
         model->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(200.0f, 0.0f, 0.0f));
-        auto* floor = root.addChild("floor", 2);
+        auto* floor_node = root.addChild("floor", 2);
+
         glfwSetInputMode(window.getNativeWindow(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
         struct AppCtx { DonTopo::Camera* cam; DonTopo::Renderer* rnd; };
@@ -88,18 +99,18 @@ int main()
             camera.update(window.getNativeWindow(), dt);
             renderer.setCamera(camera);
 
-            // SceneNode
+            renderer.updateAnimation(animIdx, dt);
+
             root.updateWorldTransforms();
             root.traverse([&](DonTopo::SceneNode* node) {
-                if(node->meshIndex >= 0)
-                {
+                if (node->meshIndex >= 0)
                     renderer.setTransform(node->meshIndex, node->worldTransform);
-                }
             });
 
             renderer.drawFrame(window);
             window.pollEvents();
-        }            
+        }
+
         renderer.shutdown();
         window.shutdown();
     } catch (const std::exception& e) {

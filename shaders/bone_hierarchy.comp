@@ -1,0 +1,37 @@
+#version 450
+layout(local_size_x = 1) in;
+
+struct BoneInfo {
+    int posOffset, posCount;
+    int rotOffset, rotCount;
+    int scaleOffset, scaleCount;
+    int parentIndex, pad;
+    mat4 inverseBindPose;
+};
+
+layout(set=0, binding=3, std430) readonly buffer BoneInfos   { BoneInfo data[]; } boneInfos;
+layout(set=0, binding=4, std430) readonly buffer LocalXforms { mat4 data[]; }     localXforms;
+layout(set=0, binding=5, std430) buffer FinalBones           { mat4 data[]; }     finalBones;
+
+layout(push_constant) uniform PC {
+    float animTime;
+    uint  boneCount;
+    uint  vertexCount;
+    uint  pad;
+} push;
+
+void main()
+{
+    // Pass 1: world transforms (topological order guarantees parent < child)
+    for (uint i = 0; i < push.boneCount; i++)
+    {
+        int parent = boneInfos.data[i].parentIndex;
+        finalBones.data[i] = (parent < 0)
+            ? localXforms.data[i]
+            : finalBones.data[parent] * localXforms.data[i];
+    }
+
+    // Pass 2: apply inverse bind pose
+    for (uint i = 0; i < push.boneCount; i++)
+        finalBones.data[i] = finalBones.data[i] * boneInfos.data[i].inverseBindPose;
+}

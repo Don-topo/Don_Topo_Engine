@@ -1,0 +1,52 @@
+#version 450
+layout(local_size_x = 64) in;
+
+struct InputVertex {
+    vec4  position;
+    vec4  normal;
+    vec4  tangent;
+    vec4  uv_pad;
+    vec4  color;
+    ivec4 boneIndices;
+    vec4  boneWeights;
+};
+
+struct OutputVertex {
+    vec4 pos;
+    vec4 color;
+    vec4 uv;
+    vec4 normal;
+    vec4 tangent;
+};
+
+layout(set=0, binding=5, std430) readonly buffer FinalBones  { mat4 data[]; }         finalBones;
+layout(set=0, binding=6, std430) readonly buffer InputVerts  { InputVertex data[]; }  inputVerts;
+layout(set=0, binding=7, std430) buffer OutputVerts          { OutputVertex data[]; } outputVerts;
+
+layout(push_constant) uniform PC {
+    float animTime;
+    uint  boneCount;
+    uint  vertexCount;
+    uint  pad;
+} push;
+
+void main()
+{
+    uint vi = gl_GlobalInvocationID.x;
+    if (vi >= push.vertexCount) return;
+
+    InputVertex v = inputVerts.data[vi];
+
+    mat4 skin = mat4(0.0);
+    for (int i = 0; i < 4; i++)
+    {
+        float w = v.boneWeights[i];
+        if (w > 0.0) skin += w * finalBones.data[v.boneIndices[i]];
+    }
+
+    outputVerts.data[vi].pos     = skin * vec4(v.position.xyz, 1.0);
+    outputVerts.data[vi].color   = v.color;
+    outputVerts.data[vi].uv      = v.uv_pad;
+    outputVerts.data[vi].normal  = normalize(skin * vec4(v.normal.xyz,  0.0));
+    outputVerts.data[vi].tangent = normalize(skin * vec4(v.tangent.xyz, 0.0));
+}

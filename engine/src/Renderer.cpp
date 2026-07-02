@@ -10,6 +10,7 @@
 #include <limits>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+#include <cmath>
 
 #ifdef NDEBUG
     static constexpr bool ENABLE_VALIDATION = false;
@@ -58,6 +59,7 @@ namespace DonTopo {
         createPipeline();
         createShadowResources();
         createFramebuffers();
+        createComputePipelines();
         createCommandPool();
 
         m_objects.resize(meshes.size());
@@ -186,9 +188,25 @@ namespace DonTopo {
         vkDestroyImage(m_device, m_shadowImage, nullptr);
         vkFreeMemory(m_device, m_shadowMemory, nullptr);
         vkDestroyFramebuffer(m_device, m_shadowFramebuffer, nullptr);
+        vkDestroyPipeline(m_device, m_skinnedGfxPipeline, nullptr);
         vkDestroyPipeline(m_device, m_shadowPipeline, nullptr);
         vkDestroyPipelineLayout(m_device, m_shadowPipelineLayout, nullptr);
         vkDestroyRenderPass(m_device, m_shadowRenderPass, nullptr);
+        for (auto& obj : m_skinnedObjects)
+        {
+            destroySkinnedRenderObject(obj);
+        }
+        
+        m_skinnedObjects.clear();
+        if (m_computeDescPool != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorPool(m_device, m_computeDescPool, nullptr);
+        }
+        vkDestroyPipeline(m_device, m_boneEvalPipeline,      nullptr);
+        vkDestroyPipeline(m_device, m_boneHierarchyPipeline, nullptr);
+        vkDestroyPipeline(m_device, m_skinningPipeline,       nullptr);
+        vkDestroyPipelineLayout(m_device, m_computePipelineLayout, nullptr);
+        vkDestroyDescriptorSetLayout(m_device, m_computeDescLayout, nullptr);
         vkDestroyDevice(m_device, nullptr);
         m_device = VK_NULL_HANDLE;
         vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
@@ -658,6 +676,8 @@ namespace DonTopo {
             throw std::runtime_error("failed to begin command buffer!");
         }
 
+        recordComputePass(m_commandBuffers[m_currentFrame]);
+
         VkClearValue clearValues[2];
         clearValues[0].color        = {0.0f, 0.0f, 0.0f, 1.0f};
         clearValues[1].depthStencil = {1.0f, 0};
@@ -703,6 +723,28 @@ namespace DonTopo {
             vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], obj.indexCount, 1, 0, 0, 0);
         }
 
+        // Skinned meshes
+        if (!m_skinnedObjects.empty())
+        {
+            vkCmdBindPipeline(m_commandBuffers[m_currentFrame],
+                VK_PIPELINE_BIND_POINT_GRAPHICS, m_skinnedGfxPipeline);
+
+            for (auto& obj : m_skinnedObjects)
+            {
+                vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame],
+                    VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
+                    0, 1, &obj.graphicsDescSets[m_currentFrame], 0, nullptr);
+                vkCmdPushConstants(m_commandBuffers[m_currentFrame], m_pipelineLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &obj.transform);
+
+                VkBuffer     vbs[]  = { obj.outputVertexBuffer };
+                VkDeviceSize offs[] = { 0 };
+                vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vbs, offs);
+                vkCmdBindIndexBuffer(m_commandBuffers[m_currentFrame],
+                    obj.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], obj.indexCount, 1, 0, 0, 0);
+            }
+        }
         vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
         vkEndCommandBuffer(m_commandBuffers[m_currentFrame]);
     }
@@ -1088,7 +1130,7 @@ namespace DonTopo {
 
     void Renderer::createDescriptorPool()
     {
-        uint32_t n = (uint32_t)(m_objects.size() * MAX_FRAMES);
+        uint32_t n = (uint32_t)((m_objects.size() + 16) * MAX_FRAMES);
         VkDescriptorPoolSize poolSizes[2]{};
         poolSizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         poolSizes[0].descriptorCount = n;
@@ -1876,4 +1918,511 @@ namespace DonTopo {
         vkCmdEndRenderPass(cmd);
     }
 
+    void Renderer::createComputePipelines()
+    {
+        // --- Descriptor set layout: 8 storage buffers ---
+        VkDescriptorSetLayoutBinding bindings[8]{};
+        for (uint32_t i = 0; i < 8; i++)
+        {
+            bindings[i].binding         = i;
+            bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[i].descriptorCount = 1;
+            bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+
+        VkDescriptorSetLayoutCreateInfo dslInfo{};
+        dslInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dslInfo.bindingCount = 8;
+        dslInfo.pBindings    = bindings;
+        if (vkCreateDescriptorSetLayout(m_device, &dslInfo, nullptr, &m_computeDescLayout) != VK_SUCCESS)
+            throw std::runtime_error("failed to create compute descriptor set layout!");
+
+        // --- Pipeline layout (1 set + push constant) ---
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcr.offset     = 0;
+        pcr.size       = sizeof(ComputePush);
+
+        VkPipelineLayoutCreateInfo plInfo{};
+        plInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plInfo.setLayoutCount         = 1;
+        plInfo.pSetLayouts            = &m_computeDescLayout;
+        plInfo.pushConstantRangeCount = 1;
+        plInfo.pPushConstantRanges    = &pcr;
+        if (vkCreatePipelineLayout(m_device, &plInfo, nullptr, &m_computePipelineLayout) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create compute pipeline layout!");
+        }
+
+        // --- Descriptor pool: 8 SSBOs * 16 objetos max ---
+        VkDescriptorPoolSize ps{};
+        ps.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        ps.descriptorCount = 8 * 16;
+
+        VkDescriptorPoolCreateInfo poolInfo{};
+        poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.poolSizeCount = 1;
+        poolInfo.pPoolSizes    = &ps;
+        poolInfo.maxSets       = 16;
+        if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_computeDescPool) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create compute descriptor pool!");
+        }        
+
+        // --- Crear los tres pipelines ---
+        auto makePipeline = [&](const std::string& spv, VkPipeline& pipeline)
+        {
+            auto code   = loadShaderFile(spv);
+            auto module = createShaderModule(code);
+
+            VkComputePipelineCreateInfo info{};
+            info.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            info.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            info.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            info.stage.module = module;
+            info.stage.pName  = "main";
+            info.layout       = m_computePipelineLayout;
+
+            if (vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline) != VK_SUCCESS)
+                throw std::runtime_error("failed to create compute pipeline: " + spv);
+
+            vkDestroyShaderModule(m_device, module, nullptr);
+        };
+
+        makePipeline("shaders/bone_eval.comp.spv",      m_boneEvalPipeline);
+        makePipeline("shaders/bone_hierarchy.comp.spv", m_boneHierarchyPipeline);
+        makePipeline("shaders/skinning.comp.spv",       m_skinningPipeline);
+
+         // --- Skinned graphics pipeline (stride=80, mismos shaders) ---
+        {
+            auto vertCode = loadShaderFile("shaders/triangle.vert.spv");
+            auto fragCode = loadShaderFile("shaders/triangle.frag.spv");
+            auto vertMod  = createShaderModule(vertCode);
+            auto fragMod  = createShaderModule(fragCode);
+
+            VkPipelineShaderStageCreateInfo stages[2]{};
+            stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            stages[0].module = vertMod; stages[0].pName = "main";
+            stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[1].module = fragMod; stages[1].pName = "main";
+
+            VkVertexInputBindingDescription binding{};
+            binding.binding   = 0;
+            binding.stride    = 5 * (uint32_t)sizeof(glm::vec4);  // 80 bytes
+            binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+            // OutputVertex: pos@0, color@16, uv@32, normal@48, tangent@64
+            VkVertexInputAttributeDescription attrs[5]{};
+            attrs[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT,  0 };
+            attrs[1] = { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 16 };
+            attrs[2] = { 2, 0, VK_FORMAT_R32G32_SFLOAT,    32 };
+            attrs[3] = { 3, 0, VK_FORMAT_R32G32B32_SFLOAT, 48 };
+            attrs[4] = { 4, 0, VK_FORMAT_R32G32B32_SFLOAT, 64 };
+
+            VkPipelineVertexInputStateCreateInfo vi{};
+            vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            vi.vertexBindingDescriptionCount   = 1;  vi.pVertexBindingDescriptions  = &binding;
+            vi.vertexAttributeDescriptionCount = 5;  vi.pVertexAttributeDescriptions = attrs;
+
+            VkPipelineInputAssemblyStateCreateInfo ia{};
+            ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+            VkPipelineViewportStateCreateInfo vp{};
+            vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            vp.viewportCount = 1; vp.scissorCount = 1;
+
+            VkPipelineRasterizationStateCreateInfo rs{};
+            rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            rs.polygonMode = VK_POLYGON_MODE_FILL;
+            rs.cullMode    = VK_CULL_MODE_BACK_BIT;
+            rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rs.lineWidth   = 1.0f;
+
+            VkPipelineMultisampleStateCreateInfo ms{};
+            ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+            ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+            VkPipelineDepthStencilStateCreateInfo ds{};
+            ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+            ds.depthTestEnable  = VK_TRUE;
+            ds.depthWriteEnable = VK_TRUE;
+            ds.depthCompareOp   = VK_COMPARE_OP_LESS;
+
+            VkPipelineColorBlendAttachmentState blend{};
+            blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+            VkPipelineColorBlendStateCreateInfo cb{};
+            cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            cb.attachmentCount = 1; cb.pAttachments = &blend;
+
+            VkDynamicState dynStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+            VkPipelineDynamicStateCreateInfo dyn{};
+            dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dyn.dynamicStateCount = 2; dyn.pDynamicStates = dynStates;
+
+            VkGraphicsPipelineCreateInfo pci{};
+            pci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            pci.stageCount          = 2;  pci.pStages             = stages;
+            pci.pVertexInputState   = &vi; pci.pInputAssemblyState = &ia;
+            pci.pViewportState      = &vp; pci.pRasterizationState = &rs;
+            pci.pMultisampleState   = &ms; pci.pDepthStencilState  = &ds;
+            pci.pColorBlendState    = &cb; pci.pDynamicState       = &dyn;
+            pci.layout              = m_pipelineLayout;
+            pci.renderPass          = m_renderPass;
+            pci.subpass             = 0;
+
+            if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pci, nullptr, &m_skinnedGfxPipeline) != VK_SUCCESS)
+                throw std::runtime_error("failed to create skinned graphics pipeline!");
+
+            vkDestroyShaderModule(m_device, vertMod, nullptr);
+            vkDestroyShaderModule(m_device, fragMod, nullptr);
+        }
+    }
+
+    void Renderer::uploadBuffer(const void* data, VkDeviceSize size,
+                             VkBufferUsageFlags usage,
+                             VkBuffer& buf, VkDeviceMemory& mem)
+    {
+        VkBuffer       stagingBuf;
+        VkDeviceMemory stagingMem;
+        createBuffer(size,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            stagingBuf, stagingMem);
+
+        void* mapped;
+        vkMapMemory(m_device, stagingMem, 0, size, 0, &mapped);
+        memcpy(mapped, data, size);
+        vkUnmapMemory(m_device, stagingMem);
+
+        createBuffer(size,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            buf, mem);
+        copyBuffer(stagingBuf, buf, size);
+
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        vkFreeMemory(m_device, stagingMem, nullptr);
+    }
+
+    void Renderer::destroySkinnedRenderObject(SkinnedRenderObject& obj)
+    {
+        auto destroy = [&](VkBuffer& b, VkDeviceMemory& m)
+        {
+            if (b != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, b, nullptr); b = VK_NULL_HANDLE; }
+            if (m != VK_NULL_HANDLE) { vkFreeMemory(m_device, m, nullptr);    m = VK_NULL_HANDLE; }
+        };
+        destroy(obj.keyframePosBuffer,    obj.keyframePosMemory);
+        destroy(obj.keyframeRotBuffer,    obj.keyframeRotMemory);
+        destroy(obj.keyframeScaleBuffer,  obj.keyframeScaleMemory);
+        destroy(obj.boneInfoBuffer,       obj.boneInfoMemory);
+        destroy(obj.inputVertexBuffer,    obj.inputVertexMemory);
+        destroy(obj.localTransformBuffer, obj.localTransformMemory);
+        destroy(obj.finalBoneBuffer,      obj.finalBoneMemory);
+        destroy(obj.outputVertexBuffer,   obj.outputVertexMemory);
+        destroy(obj.indexBuffer,          obj.indexMemory);
+
+        if (obj.textureView   != VK_NULL_HANDLE) { vkDestroyImageView(m_device, obj.textureView,   nullptr); obj.textureView   = VK_NULL_HANDLE; }
+        if (obj.textureImage  != VK_NULL_HANDLE) { vkDestroyImage    (m_device, obj.textureImage,  nullptr); obj.textureImage  = VK_NULL_HANDLE; }
+        if (obj.textureMem    != VK_NULL_HANDLE) { vkFreeMemory      (m_device, obj.textureMem,    nullptr); obj.textureMem    = VK_NULL_HANDLE; }
+        if (obj.sampler       != VK_NULL_HANDLE) { vkDestroySampler  (m_device, obj.sampler,       nullptr); obj.sampler       = VK_NULL_HANDLE; }
+        if (obj.normalView    != VK_NULL_HANDLE) { vkDestroyImageView(m_device, obj.normalView,    nullptr); obj.normalView    = VK_NULL_HANDLE; }
+        if (obj.normalImage   != VK_NULL_HANDLE) { vkDestroyImage    (m_device, obj.normalImage,   nullptr); obj.normalImage   = VK_NULL_HANDLE; }
+        if (obj.normalMem     != VK_NULL_HANDLE) { vkFreeMemory      (m_device, obj.normalMem,     nullptr); obj.normalMem     = VK_NULL_HANDLE; }
+        if (obj.normalSampler != VK_NULL_HANDLE) { vkDestroySampler  (m_device, obj.normalSampler, nullptr); obj.normalSampler = VK_NULL_HANDLE; }
+    }
+
+    int Renderer::addSkinnedMesh(const SkinnedMesh& mesh)
+    {
+        m_skinnedObjects.emplace_back();
+        SkinnedRenderObject& obj = m_skinnedObjects.back();
+
+        const Skeleton&      skel = mesh.skeleton;
+        const AnimationClip& clip = mesh.animationClip;
+        int boneCount   = (int)skel.names.size();
+        int vertexCount = (int)mesh.skinnedVertices.size();
+
+        obj.boneCount      = (uint32_t)boneCount;
+        obj.vertexCount    = (uint32_t)vertexCount;
+        obj.indexCount     = (uint32_t)mesh.indices.size();
+        obj.duration       = clip.duration;
+        obj.ticksPerSecond = (clip.ticksPerSecond > 0.0f) ? clip.ticksPerSecond : 24.0f;
+
+        // --- Flatten keyframes a GPU format ---
+        std::vector<GpuPosKey>   allPos;
+        std::vector<GpuRotKey>   allRot;
+        std::vector<GpuPosKey>   allScale;
+        std::vector<GpuBoneInfo> boneInfos(boneCount);
+
+        for (int b = 0; b < boneCount; b++)
+        {
+            GpuBoneInfo& bi    = boneInfos[b];
+            bi.parentIndex     = skel.parentIndex[b];
+            bi.inverseBindPose = skel.inverseBindPose[b];
+            bi.pad             = 0;
+
+            const BoneChannel* ch = nullptr;
+            for (auto& c : clip.channels)
+                if (c.boneIndex == b) { ch = &c; break; }
+
+            bi.posOffset = (int)allPos.size();
+            bi.posCount  = ch ? (int)ch->posKeys.size() : 0;
+            for (int k = 0; k < bi.posCount; k++)
+            {
+                GpuPosKey pk{};
+                pk.timePad = { ch->posKeys[k].time, 0, 0, 0 };
+                pk.value   = { ch->posKeys[k].value.x, ch->posKeys[k].value.y, ch->posKeys[k].value.z, 0 };
+                allPos.push_back(pk);
+            }
+
+            bi.rotOffset = (int)allRot.size();
+            bi.rotCount  = ch ? (int)ch->rotKeys.size() : 0;
+            for (int k = 0; k < bi.rotCount; k++)
+            {
+                const glm::quat& q = ch->rotKeys[k].value;
+                GpuRotKey rk{};
+                rk.timePad = { ch->rotKeys[k].time, 0, 0, 0 };
+                rk.value   = { q.x, q.y, q.z, q.w };
+                allRot.push_back(rk);
+            }
+
+            bi.scaleOffset = (int)allScale.size();
+            bi.scaleCount  = ch ? (int)ch->scaleKeys.size() : 0;
+            for (int k = 0; k < bi.scaleCount; k++)
+            {
+                GpuPosKey sk{};
+                sk.timePad = { ch->scaleKeys[k].time, 0, 0, 0 };
+                sk.value   = { ch->scaleKeys[k].value.x, ch->scaleKeys[k].value.y, ch->scaleKeys[k].value.z, 0 };
+                allScale.push_back(sk);
+            }
+        }
+
+        // Vulkan no acepta buffers de tamaño 0
+        if (allPos.empty())   allPos.push_back({});
+        if (allRot.empty())   allRot.push_back({});
+        if (allScale.empty()) allScale.push_back({});
+
+        // --- Upload SSBOs estáticos ---
+        uploadBuffer(allPos.data(),   allPos.size()   * sizeof(GpuPosKey),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframePosBuffer,   obj.keyframePosMemory);
+        uploadBuffer(allRot.data(),   allRot.size()   * sizeof(GpuRotKey),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframeRotBuffer,   obj.keyframeRotMemory);
+        uploadBuffer(allScale.data(), allScale.size() * sizeof(GpuPosKey),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframeScaleBuffer, obj.keyframeScaleMemory);
+        uploadBuffer(boneInfos.data(), boneInfos.size() * sizeof(GpuBoneInfo),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.boneInfoBuffer,      obj.boneInfoMemory);
+        uploadBuffer(mesh.skinnedVertices.data(), mesh.skinnedVertices.size() * sizeof(SkinnedVertex),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.inputVertexBuffer,   obj.inputVertexMemory);
+
+        // --- Index buffer ---
+        createIndexBuffer(mesh.indices, obj.indexBuffer, obj.indexMemory);
+
+        // --- SSBOs dinámicos (device local, sin datos iniciales) ---
+        createBuffer((uint32_t)boneCount * sizeof(glm::mat4),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            obj.localTransformBuffer, obj.localTransformMemory);
+
+        createBuffer((uint32_t)boneCount * sizeof(glm::mat4),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            obj.finalBoneBuffer, obj.finalBoneMemory);
+
+        // --- Output vertex buffer: SSBO + VB, stride 80 bytes (5×vec4) ---
+        constexpr VkDeviceSize OUT_VERT = 5 * sizeof(glm::vec4);
+        createBuffer((uint32_t)vertexCount * OUT_VERT,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            obj.outputVertexBuffer, obj.outputVertexMemory);
+
+        // --- Compute descriptor set ---
+        VkDescriptorSetAllocateInfo dsAlloc{};
+        dsAlloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsAlloc.descriptorPool     = m_computeDescPool;
+        dsAlloc.descriptorSetCount = 1;
+        dsAlloc.pSetLayouts        = &m_computeDescLayout;
+        if (vkAllocateDescriptorSets(m_device, &dsAlloc, &obj.computeDescSet) != VK_SUCCESS)
+            throw std::runtime_error("failed to allocate compute descriptor set!");
+
+        VkDescriptorBufferInfo bufInfos[8]{};
+        bufInfos[0] = { obj.keyframePosBuffer,    0, VK_WHOLE_SIZE };
+        bufInfos[1] = { obj.keyframeRotBuffer,    0, VK_WHOLE_SIZE };
+        bufInfos[2] = { obj.keyframeScaleBuffer,  0, VK_WHOLE_SIZE };
+        bufInfos[3] = { obj.boneInfoBuffer,       0, VK_WHOLE_SIZE };
+        bufInfos[4] = { obj.localTransformBuffer, 0, VK_WHOLE_SIZE };
+        bufInfos[5] = { obj.finalBoneBuffer,      0, VK_WHOLE_SIZE };
+        bufInfos[6] = { obj.inputVertexBuffer,    0, VK_WHOLE_SIZE };
+        bufInfos[7] = { obj.outputVertexBuffer,   0, VK_WHOLE_SIZE };
+
+        VkWriteDescriptorSet writes[8]{};
+        for (int i = 0; i < 8; i++)
+        {
+            writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet          = obj.computeDescSet;
+            writes[i].dstBinding      = (uint32_t)i;
+            writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[i].descriptorCount = 1;
+            writes[i].pBufferInfo     = &bufInfos[i];
+        }
+        vkUpdateDescriptorSets(m_device, 8, writes, 0, nullptr);
+
+        // --- Texturas ---
+        createTextureImage(mesh.texturePath, mesh.embeddedTexture, obj.textureImage, obj.textureMem);
+        createTextureImageView(obj.textureImage, obj.textureView);
+        createTextureSampler(obj.sampler);
+        createNormalMapImage(mesh.normalMapPath, mesh.embeddedNormalMap, obj.normalImage, obj.normalMem);
+        createTextureImageView(obj.normalImage, obj.normalView, VK_FORMAT_R8G8B8A8_UNORM);
+        createTextureSampler(obj.normalSampler);
+
+        // --- Graphics descriptor sets (UBO + textura + normalMap + shadowMap) ---
+        VkDescriptorSetLayout layouts[MAX_FRAMES] = { m_descriptorSetLayout, m_descriptorSetLayout };
+        VkDescriptorSetAllocateInfo gfxAlloc{};
+        gfxAlloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        gfxAlloc.descriptorPool     = m_descriptorPool;
+        gfxAlloc.descriptorSetCount = MAX_FRAMES;
+        gfxAlloc.pSetLayouts        = layouts;
+        if (vkAllocateDescriptorSets(m_device, &gfxAlloc, obj.graphicsDescSets) != VK_SUCCESS)
+            throw std::runtime_error("failed to allocate skinned graphics descriptor sets!");
+
+        for (int i = 0; i < MAX_FRAMES; i++)
+        {
+            VkDescriptorBufferInfo uboInfo{};
+            uboInfo.buffer = m_uniformBuffers[i];
+            uboInfo.offset = 0;
+            uboInfo.range  = sizeof(UniformBufferObject);
+
+            VkDescriptorImageInfo texInfo{};
+            texInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            texInfo.imageView   = obj.textureView;
+            texInfo.sampler     = obj.sampler;
+
+            VkDescriptorImageInfo nrmInfo{};
+            nrmInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            nrmInfo.imageView   = obj.normalView;
+            nrmInfo.sampler     = obj.normalSampler;
+
+            VkDescriptorImageInfo shdInfo{};
+            shdInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            shdInfo.imageView   = m_shadowView;
+            shdInfo.sampler     = m_shadowSampler;
+
+            VkWriteDescriptorSet gw[4]{};
+            gw[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            gw[0].dstSet = obj.graphicsDescSets[i]; gw[0].dstBinding = 0;
+            gw[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            gw[0].descriptorCount = 1; gw[0].pBufferInfo = &uboInfo;
+
+            gw[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            gw[1].dstSet = obj.graphicsDescSets[i]; gw[1].dstBinding = 1;
+            gw[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            gw[1].descriptorCount = 1; gw[1].pImageInfo = &texInfo;
+
+            gw[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            gw[2].dstSet = obj.graphicsDescSets[i]; gw[2].dstBinding = 2;
+            gw[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            gw[2].descriptorCount = 1; gw[2].pImageInfo = &nrmInfo;
+
+            gw[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            gw[3].dstSet = obj.graphicsDescSets[i]; gw[3].dstBinding = 3;
+            gw[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            gw[3].descriptorCount = 1; gw[3].pImageInfo = &shdInfo;
+
+            vkUpdateDescriptorSets(m_device, 4, gw, 0, nullptr);
+        }
+
+        return (int)m_skinnedObjects.size() - 1;
+    }
+
+    void Renderer::updateAnimation(int index, float deltaTime)
+    {
+        if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
+        auto& obj = m_skinnedObjects[index];
+        if (obj.ticksPerSecond <= 0.0f || obj.duration <= 0.0f) return;
+        obj.animTime += deltaTime * obj.ticksPerSecond;
+        if (obj.animTime > obj.duration)
+            obj.animTime = std::fmod(obj.animTime, obj.duration);
+    }
+
+    void Renderer::setSkinnedTransform(int index, const glm::mat4& t)
+    {
+        if (index >= 0 && index < (int)m_skinnedObjects.size())
+            m_skinnedObjects[index].transform = t;
+    }
+
+    void Renderer::recordComputePass(VkCommandBuffer cmd)
+    {
+        if (m_skinnedObjects.empty()) return;
+
+        auto ssboBarrier = [](VkBuffer buf) {
+            VkBufferMemoryBarrier b{};
+            b.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            b.buffer        = buf;
+            b.offset        = 0;
+            b.size          = VK_WHOLE_SIZE;
+            return b;
+        };
+
+        for (auto& obj : m_skinnedObjects)
+        {
+            ComputePush push{};
+            push.animTime    = obj.animTime;
+            push.boneCount   = obj.boneCount;
+            push.vertexCount = obj.vertexCount;
+            push.pad         = 0;
+
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                m_computePipelineLayout, 0, 1, &obj.computeDescSet, 0, nullptr);
+
+            // --- Pass 1: bone_eval (local transforms) ---
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_boneEvalPipeline);
+            vkCmdPushConstants(cmd, m_computePipelineLayout,
+                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePush), &push);
+            vkCmdDispatch(cmd, (obj.boneCount + 63) / 64, 1, 1);
+
+            // Barrier: localTransform escrito → leído por bone_hierarchy
+            VkBufferMemoryBarrier b1 = ssboBarrier(obj.localTransformBuffer);
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 0, nullptr, 1, &b1, 0, nullptr);
+
+            // --- Pass 2: bone_hierarchy (world transforms + inverse bind pose) ---
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_boneHierarchyPipeline);
+            vkCmdPushConstants(cmd, m_computePipelineLayout,
+                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePush), &push);
+            vkCmdDispatch(cmd, 1, 1, 1);
+
+            // Barrier: finalBone escrito → leído por skinning
+            VkBufferMemoryBarrier b2 = ssboBarrier(obj.finalBoneBuffer);
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 0, nullptr, 1, &b2, 0, nullptr);
+
+            // --- Pass 3: skinning (output vertex buffer) ---
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_skinningPipeline);
+            vkCmdPushConstants(cmd, m_computePipelineLayout,
+                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePush), &push);
+            vkCmdDispatch(cmd, (obj.vertexCount + 63) / 64, 1, 1);
+
+            // Barrier: outputVertexBuffer escrito por compute → leído como VB en vertex shader
+            VkBufferMemoryBarrier b3{};
+            b3.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            b3.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            b3.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+            b3.buffer        = obj.outputVertexBuffer;
+            b3.offset        = 0;
+            b3.size          = VK_WHOLE_SIZE;
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                0, 0, nullptr, 1, &b3, 0, nullptr);
+        }
+    }
 }

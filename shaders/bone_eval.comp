@@ -1,0 +1,99 @@
+#version 450
+layout(local_size_x = 64) in;
+
+struct PosKey  { vec4 timePad; vec4 value; };
+struct RotKey  { vec4 timePad; vec4 quat;  };
+struct BoneInfo {
+    int posOffset, posCount;
+    int rotOffset, rotCount;
+    int scaleOffset, scaleCount;
+    int parentIndex, pad;
+    mat4 inverseBindPose;
+};
+
+layout(set=0, binding=0, std430) readonly buffer PosKeys    { PosKey  data[]; } posKeys;
+layout(set=0, binding=1, std430) readonly buffer RotKeys    { RotKey  data[]; } rotKeys;
+layout(set=0, binding=2, std430) readonly buffer ScaleKeys  { PosKey  data[]; } scaleKeys;
+layout(set=0, binding=3, std430) readonly buffer BoneInfos  { BoneInfo data[]; } boneInfos;
+layout(set=0, binding=4, std430) buffer LocalXforms         { mat4 data[]; } localXforms;
+
+layout(push_constant) uniform PC {
+    float animTime;
+    uint  boneCount;
+    uint  vertexCount;
+    uint  pad;
+} push;
+
+vec4 slerpQ(vec4 a, vec4 b, float t)
+{
+    float c = dot(a, b);
+    if (c < 0.0) { b = -b; c = -c; }
+    if (c > 0.9995) return normalize(mix(a, b, t));
+    float angle = acos(c);
+    float is    = 1.0 / sin(angle);
+    return (sin((1.0 - t) * angle) * a + sin(t * angle) * b) * is;
+}
+
+mat4 trs(vec3 t, vec4 q, vec3 s)
+{
+    float x=q.x, y=q.y, z=q.z, w=q.w;
+    float xx=x*x, yy=y*y, zz=z*z;
+    float xy=x*y, xz=x*z, yz=y*z;
+    float wx=w*x, wy=w*y, wz=w*z;
+    float r00=1.0-2.0*(yy+zz), r10=2.0*(xy+wz), r20=2.0*(xz-wy);
+    float r01=2.0*(xy-wz),     r11=1.0-2.0*(xx+zz), r21=2.0*(yz+wx);
+    float r02=2.0*(xz+wy),     r12=2.0*(yz-wx),     r22=1.0-2.0*(xx+yy);
+    return mat4(
+        r00*s.x, r10*s.x, r20*s.x, 0.0,
+        r01*s.y, r11*s.y, r21*s.y, 0.0,
+        r02*s.z, r12*s.z, r22*s.z, 0.0,
+        t.x, t.y, t.z, 1.0
+    );
+}
+
+void main()
+{
+    uint bi = gl_GlobalInvocationID.x;
+    if (bi >= push.boneCount) return;
+
+    BoneInfo info = boneInfos.data[bi];
+    float T = push.animTime;
+
+    // Position
+    vec3 pos = vec3(0.0);
+    if (info.posCount > 0)
+    {
+        int lo = info.posOffset, hi = info.posOffset + info.posCount - 1;
+        for (int k = info.posOffset; k < info.posOffset + info.posCount - 1; k++)
+            if (posKeys.data[k+1].timePad.x > T) { lo = k; hi = k+1; break; }
+        float t0 = posKeys.data[lo].timePad.x, t1 = posKeys.data[hi].timePad.x;
+        float f  = (t1 > t0) ? clamp((T - t0)/(t1 - t0), 0.0, 1.0) : 0.0;
+        pos = mix(posKeys.data[lo].value.xyz, posKeys.data[hi].value.xyz, f);
+    }
+
+    // Rotation
+    vec4 rot = vec4(0.0, 0.0, 0.0, 1.0);
+    if (info.rotCount > 0)
+    {
+        int lo = info.rotOffset, hi = info.rotOffset + info.rotCount - 1;
+        for (int k = info.rotOffset; k < info.rotOffset + info.rotCount - 1; k++)
+            if (rotKeys.data[k+1].timePad.x > T) { lo = k; hi = k+1; break; }
+        float t0 = rotKeys.data[lo].timePad.x, t1 = rotKeys.data[hi].timePad.x;
+        float f  = (t1 > t0) ? clamp((T - t0)/(t1 - t0), 0.0, 1.0) : 0.0;
+        rot = slerpQ(rotKeys.data[lo].quat, rotKeys.data[hi].quat, f);
+    }
+
+    // Scale
+    vec3 scl = vec3(1.0);
+    if (info.scaleCount > 0)
+    {
+        int lo = info.scaleOffset, hi = info.scaleOffset + info.scaleCount - 1;
+        for (int k = info.scaleOffset; k < info.scaleOffset + info.scaleCount - 1; k++)
+            if (scaleKeys.data[k+1].timePad.x > T) { lo = k; hi = k+1; break; }
+        float t0 = scaleKeys.data[lo].timePad.x, t1 = scaleKeys.data[hi].timePad.x;
+        float f  = (t1 > t0) ? clamp((T - t0)/(t1 - t0), 0.0, 1.0) : 0.0;
+        scl = mix(scaleKeys.data[lo].value.xyz, scaleKeys.data[hi].value.xyz, f);
+    }
+
+    localXforms.data[bi] = trs(pos, rot, scl);
+}

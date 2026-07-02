@@ -6,6 +6,7 @@
 #include "DonTopo/Mesh.h"
 #include "DonTopo/Camera.h"
 #include "DonTopo/UniformBufferObject.h"
+#include "DonTopo/SkinnedMesh.h"
 
 namespace DonTopo {
 
@@ -28,10 +29,14 @@ namespace DonTopo {
                     m_objects[objectIndex].transform = transform;
             }
             void setLights(const std::vector<Light>& lights){ m_lights = lights; }
+            int addSkinnedMesh(const SkinnedMesh& mesh);
+            void updateAnimation(int index, float deltaTime);
+            void setSkinnedTransform(int index, const glm::mat4& transform);
 
         private:
 
-            struct RenderObject {
+            struct RenderObject 
+            {
                 VkBuffer        vertexBuffer        = VK_NULL_HANDLE;
                 VkDeviceMemory  vertexMemory        = VK_NULL_HANDLE;
                 VkBuffer        indexBuffer         = VK_NULL_HANDLE;
@@ -49,6 +54,59 @@ namespace DonTopo {
                 VkSampler       normalSampler       = VK_NULL_HANDLE;
                 VkDescriptorSet descriptorSets[2]   = {};
                 glm::mat4       transform{1.0f};
+            };
+
+            struct ComputePush
+            {
+                float animTime;
+                uint32_t boneCount;
+                uint32_t vertexCount;
+                uint32_t pad;
+            };
+
+            struct SkinnedRenderObject {
+                // SSBOs estáticos
+                VkBuffer       keyframePosBuffer    = VK_NULL_HANDLE;
+                VkDeviceMemory keyframePosMemory    = VK_NULL_HANDLE;
+                VkBuffer       keyframeRotBuffer    = VK_NULL_HANDLE;
+                VkDeviceMemory keyframeRotMemory    = VK_NULL_HANDLE;
+                VkBuffer       keyframeScaleBuffer  = VK_NULL_HANDLE;
+                VkDeviceMemory keyframeScaleMemory  = VK_NULL_HANDLE;
+                VkBuffer       boneInfoBuffer       = VK_NULL_HANDLE;
+                VkDeviceMemory boneInfoMemory       = VK_NULL_HANDLE;
+                VkBuffer       inputVertexBuffer    = VK_NULL_HANDLE;
+                VkDeviceMemory inputVertexMemory    = VK_NULL_HANDLE;
+                // SSBOs dinámicos (escritos por compute)
+                VkBuffer       localTransformBuffer = VK_NULL_HANDLE;
+                VkDeviceMemory localTransformMemory = VK_NULL_HANDLE;
+                VkBuffer       finalBoneBuffer      = VK_NULL_HANDLE;
+                VkDeviceMemory finalBoneMemory      = VK_NULL_HANDLE;
+                // Output vertex buffer (usado también como VB en graphics)
+                VkBuffer       outputVertexBuffer   = VK_NULL_HANDLE;
+                VkDeviceMemory outputVertexMemory   = VK_NULL_HANDLE;
+                // Index buffer
+                VkBuffer       indexBuffer          = VK_NULL_HANDLE;
+                VkDeviceMemory indexMemory          = VK_NULL_HANDLE;
+                uint32_t       indexCount           = 0;
+                uint32_t       vertexCount          = 0;
+                uint32_t       boneCount            = 0;
+                // Texturas (para graphics)
+                VkImage         textureImage        = VK_NULL_HANDLE;
+                VkDeviceMemory  textureMem          = VK_NULL_HANDLE;
+                VkImageView     textureView         = VK_NULL_HANDLE;
+                VkSampler       sampler             = VK_NULL_HANDLE;
+                VkImage         normalImage         = VK_NULL_HANDLE;
+                VkDeviceMemory  normalMem           = VK_NULL_HANDLE;
+                VkImageView     normalView          = VK_NULL_HANDLE;
+                VkSampler       normalSampler       = VK_NULL_HANDLE;
+                // Descriptor sets
+                VkDescriptorSet computeDescSet      = VK_NULL_HANDLE;
+                VkDescriptorSet graphicsDescSets[2] = {};
+                // Estado de animación
+                float     animTime       = 0.0f;
+                float     duration       = 0.0f;
+                float     ticksPerSecond = 24.0f;
+                glm::mat4 transform      {1.0f};
             };
 
             void setupDebugMessenger();
@@ -97,6 +155,11 @@ namespace DonTopo {
             void createTextureSampler(VkSampler& out);
             void createShadowResources();
             void recordShadowPass(VkCommandBuffer cmd);
+            void createComputePipelines();
+            void uploadBuffer(const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
+                            VkBuffer& buf, VkDeviceMemory& mem);
+            void destroySkinnedRenderObject(SkinnedRenderObject& obj);
+            void recordComputePass(VkCommandBuffer cmd);
 
             
             VkDebugUtilsMessengerEXT        m_debugMessenger                    = VK_NULL_HANDLE;
@@ -150,6 +213,15 @@ namespace DonTopo {
             VkFramebuffer                   m_shadowFramebuffer                 = VK_NULL_HANDLE;
             VkPipeline                      m_shadowPipeline                    = VK_NULL_HANDLE;
             VkPipelineLayout                m_shadowPipelineLayout              = VK_NULL_HANDLE;
+            // Compute pipelines
+            VkPipeline            m_boneEvalPipeline      = VK_NULL_HANDLE;
+            VkPipeline            m_boneHierarchyPipeline = VK_NULL_HANDLE;
+            VkPipeline            m_skinningPipeline      = VK_NULL_HANDLE;
+            VkPipeline            m_skinnedGfxPipeline    = VK_NULL_HANDLE;
+            VkPipelineLayout      m_computePipelineLayout = VK_NULL_HANDLE;
+            VkDescriptorSetLayout m_computeDescLayout     = VK_NULL_HANDLE;
+            VkDescriptorPool      m_computeDescPool       = VK_NULL_HANDLE;
+            std::vector<SkinnedRenderObject> m_skinnedObjects;
 
             std::vector<RenderObject> m_objects;
     };
