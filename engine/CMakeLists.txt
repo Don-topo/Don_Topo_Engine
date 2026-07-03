@@ -22,6 +22,7 @@ target_link_libraries(DonTopoEngine
         glfw
         glm::glm
         assimp
+        imgui_backend
 )
 
 if(FMOD_FOUND)

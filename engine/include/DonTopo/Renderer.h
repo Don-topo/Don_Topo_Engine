@@ -145,8 +145,13 @@ namespace DonTopo {
 
             void createSwapChain(Window& window);
             void createImageViews();
+            void createOffscreenRenderPass();
             void createRenderPass();
             void createFramebuffers();
+            void createOffscreenImages();
+            void destroyOffscreenImages();
+            void initImGui(GLFWwindow* window);
+            void shutdownImGui();
             void createCommandBuffers();
             void createSyncObjects();
             void recordCommandBuffer(uint32_t imageIndex);
@@ -182,6 +187,18 @@ namespace DonTopo {
             std::vector<VkFramebuffer>      m_swapChainFramebuffers;
             std::vector<VkCommandBuffer>    m_commandBuffers;
             static constexpr int            MAX_FRAMES                          = 2;
+
+            // Offscreen render target (escena 3D → textura muestreada por ImGui)
+            VkRenderPass                    m_offscreenRenderPass               = VK_NULL_HANDLE;
+            VkImage                         m_offscreenImage[MAX_FRAMES]        = {};
+            VkDeviceMemory                  m_offscreenMemory[MAX_FRAMES]       = {};
+            VkImageView                     m_offscreenView[MAX_FRAMES]         = {};
+            VkSampler                       m_offscreenSampler                  = VK_NULL_HANDLE;
+            VkFramebuffer                   m_offscreenFramebuffer[MAX_FRAMES]  = {};
+            VkDescriptorSet                 m_offscreenDescSet[MAX_FRAMES]      = {};
+
+            // ImGui
+            VkDescriptorPool                m_imguiDescPool                     = VK_NULL_HANDLE;
             VkSemaphore                     m_imageAvailable[MAX_FRAMES]        = {};
             std::vector<VkSemaphore>        m_renderFinished;
             VkFence                         m_inFlight[MAX_FRAMES]              = {};
