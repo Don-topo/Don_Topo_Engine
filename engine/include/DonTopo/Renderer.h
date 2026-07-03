@@ -9,6 +9,7 @@
 #include "DonTopo/SkinnedMesh.h"
 #include "DonTopo/GpuDevice.h"
 #include "DonTopo/GpuResources.h"
+#include "DonTopo/EditorUI.h"
 
 namespace DonTopo {
 
@@ -243,5 +244,7 @@ namespace DonTopo {
             std::vector<SkinnedRenderObject> m_skinnedObjects;
 
             std::vector<RenderObject> m_objects;
+
+            EditorUI m_editorUI;
     };
 }

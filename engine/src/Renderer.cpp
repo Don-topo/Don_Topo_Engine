@@ -5,9 +5,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
-#include <ImGuiFileDialog.h>
 #include <algorithm>
-#include <filesystem>
 #include <fstream>
 #include "DonTopo/Vertex.h"
 #include <glm/gtc/matrix_transform.hpp>
@@ -106,221 +104,19 @@ namespace DonTopo {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        // DockSpace sobre toda la ventana
-        ImGuiWindowFlags dockFlags =
-            ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
-            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
-            ImGuiWindowFlags_NoNavFocus;
-        ImGuiViewport* vp = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(vp->Pos);
-        ImGui::SetNextWindowSize(vp->Size);
-        ImGui::SetNextWindowViewport(vp->ID);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-        ImGui::Begin("##DockSpace", nullptr, dockFlags);
-        ImGui::PopStyleVar(3);
-        ImGui::DockSpace(ImGui::GetID("MainDockSpace"), ImVec2(0, 0), ImGuiDockNodeFlags_None);
-        ImGui::End();
-
-        // Panel izquierdo: lista de meshes cargados
-        ImGui::Begin("Scene");
-        if (ImGui::CollapsingHeader("Static Meshes", ImGuiTreeNodeFlags_DefaultOpen))
         {
+            std::vector<std::string> staticNames(m_objects.size());
             for (size_t i = 0; i < m_objects.size(); i++)
-            {
-                const std::string& label = m_objects[i].name.empty()
-                    ? ("Mesh " + std::to_string(i))
-                    : m_objects[i].name;
-                ImGui::Selectable(label.c_str());
-            }
-        }
-        if (ImGui::CollapsingHeader("Skinned Meshes", ImGuiTreeNodeFlags_DefaultOpen))
-        {
+                staticNames[i] = m_objects[i].name.empty()
+                    ? ("Mesh " + std::to_string(i)) : m_objects[i].name;
+
+            std::vector<std::string> skinnedNames(m_skinnedObjects.size());
             for (size_t i = 0; i < m_skinnedObjects.size(); i++)
-            {
-                const std::string& label = m_skinnedObjects[i].name.empty()
-                    ? ("Skinned " + std::to_string(i))
-                    : m_skinnedObjects[i].name;
-                ImGui::Selectable(label.c_str());
-            }
+                skinnedNames[i] = m_skinnedObjects[i].name.empty()
+                    ? ("Skinned " + std::to_string(i)) : m_skinnedObjects[i].name;
+
+            m_editorUI.draw(m_offscreenDescSet[m_currentFrame], staticNames, skinnedNames);
         }
-        ImGui::End();
-
-        // Ventana viewport: la escena 3D como textura
-        ImGui::Begin("Viewport");
-        ImVec2 vpSize = ImGui::GetContentRegionAvail();
-        ImGui::Image((ImTextureID)(intptr_t)m_offscreenDescSet[m_currentFrame], vpSize);
-        ImGui::End();
-
-        // Panel derecho: Properties
-        ImGui::Begin("Properties");
-        {
-            ImGui::Text("Transform");
-            ImGui::Separator();
-
-            static float s_pos[3] = {0.0f, 0.0f, 0.0f};
-
-            ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-            if (ImGui::TreeNodeEx("Transform", ImGuiTreeNodeFlags_::ImGuiTreeNodeFlags_OpenOnArrow))
-            {
-                static float x1 = 0.f;
-                static float y1 = 0.f;
-                static float z1 = 0.f;
-
-                // Position
-                ImGui::Text("Position");
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-                // ImGui::DragFloat("X##1", &mSelectedGameObject.GetRenderObject()->GetModelData()->Position.x, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
-                ImGui::DragFloat("X##1", &x1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-                //ImGui::DragFloat("Y##1", &mSelectedGameObject.GetRenderObject()->GetModelData()->Position.y, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
-                ImGui::DragFloat("Y##1", &y1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-                //ImGui::DragFloat("Z##1", &mSelectedGameObject.GetRenderObject()->GetModelData()->Position.z, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
-                ImGui::DragFloat("Z##1", &z1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
-                // Rotation
-                ImGui::Text("Rotation");
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-                // ImGui::DragFloat("X##2", &mSelectedGameObject.GetRenderObject()->GetModelData()->Rotation.x, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
-                ImGui::DragFloat("X##2", &x1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-                //ImGui::DragFloat("Y##2", &mSelectedGameObject.GetRenderObject()->GetModelData()->Rotation.y, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
-                ImGui::DragFloat("Y##2", &y1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-                //ImGui::DragFloat("Z##2", &mSelectedGameObject.GetRenderObject()->GetModelData()->Rotation.z, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
-                ImGui::DragFloat("Z##2", &z1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
-                // Scale
-                ImGui::Text("Scale   ");
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-                // ImGui::DragFloat("X##3", &mSelectedGameObject.GetRenderObject()->GetModelData()->Scale.x, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
-                ImGui::DragFloat("X##3", &x1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-                // ImGui::DragFloat("Y##3", &mSelectedGameObject.GetRenderObject()->GetModelData()->Scale.y, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
-                ImGui::DragFloat("Y##3", &y1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-                // ImGui::DragFloat("Z##3", &mSelectedGameObject.GetRenderObject()->GetModelData()->Scale.z, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
-                ImGui::DragFloat("Z##3", &z1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
-                ImGui::TreePop();
-            }
-        }
-        ImGui::End();
-
-        // Panel inferior: Content Browser
-        ImGui::Begin("Content Browser");
-        {
-            float totalWidth  = ImGui::GetContentRegionAvail().x;
-            float totalHeight = ImGui::GetContentRegionAvail().y;
-            float leftWidth   = totalWidth * 0.38f;
-
-            // ── Izquierda: ImGuiFileDialog embedded ──────────────────────────
-            ImGui::BeginChild("##FileDlgPane", ImVec2(leftWidth, totalHeight), false);
-            {
-                static bool s_dlgOpen = false;
-                if (!s_dlgOpen) {
-                    IGFD::FileDialogConfig cfg;
-                    cfg.path  = "assets";
-                    cfg.flags = ImGuiFileDialogFlags_NoDialog |
-                                ImGuiFileDialogFlags_DontShowHiddenFiles;
-                    IGFD::FileDialog::Instance()->OpenDialog(
-                        "##ContentDlg", "Files", nullptr, cfg);
-                    s_dlgOpen = true;
-                }
-                ImVec2 dlgSize = ImGui::GetContentRegionAvail();
-                if (IGFD::FileDialog::Instance()->Display(
-                        "##ContentDlg", ImGuiWindowFlags_None, dlgSize, dlgSize))
-                {
-                    // Reabrir tras selección para mantener siempre visible
-                    IGFD::FileDialog::Instance()->Close();
-                    s_dlgOpen = false;
-                }
-            }
-            ImGui::EndChild();
-
-            ImGui::SameLine();
-
-            // ── Derecha: Asset browser con iconos ────────────────────────────
-            ImGui::BeginChild("##AssetPane", ImVec2(0, totalHeight), false);
-            {
-                // Escaneo lazy del directorio assets/
-                static std::vector<std::filesystem::path> s_assets;
-                static bool s_scanned = false;
-                if (!s_scanned) {
-                    s_assets.clear();
-                    if (std::filesystem::exists("assets")) {
-                        for (auto& e : std::filesystem::directory_iterator("assets"))
-                            if (e.is_regular_file())
-                                s_assets.push_back(e.path());
-                    }
-                    std::sort(s_assets.begin(), s_assets.end());
-                    s_scanned = true;
-                }
-
-                if (ImGui::SmallButton("Refresh")) s_scanned = false;
-                ImGui::Separator();
-
-                // Grid de iconos
-                constexpr float ICON_SIZE = 56.0f;
-                constexpr float CELL_PAD  = 12.0f;
-                float cellW   = ICON_SIZE + CELL_PAD;
-                float paneW   = ImGui::GetContentRegionAvail().x;
-                int   cols    = std::max(1, (int)(paneW / cellW));
-                ImGui::Columns(cols, "##AssetGrid", false);
-
-                for (auto& path : s_assets) {
-                    std::string ext = path.extension().string();
-                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-                    ImVec4 btnColor;
-                    const char* label;
-                    if (ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".glb") {
-                        btnColor = ImVec4(0.15f, 0.55f, 0.85f, 1.0f);
-                        label    = "3D";
-                    } else if (ext == ".mp3" || ext == ".wav" || ext == ".ogg" || ext == ".flac") {
-                        btnColor = ImVec4(0.20f, 0.72f, 0.35f, 1.0f);
-                        label    = "SFX";
-                    } else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga") {
-                        btnColor = ImVec4(0.85f, 0.72f, 0.10f, 1.0f);
-                        label    = "IMG";
-                    } else if (ext == ".spv") {
-                        btnColor = ImVec4(0.80f, 0.35f, 0.10f, 1.0f);
-                        label    = "SPV";
-                    } else {
-                        btnColor = ImVec4(0.40f, 0.40f, 0.40f, 1.0f);
-                        label    = "...";
-                    }
-
-                    ImGui::PushID(path.string().c_str());
-                    ImGui::PushStyleColor(ImGuiCol_Button,        btnColor);
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                        ImVec4(btnColor.x + 0.15f, btnColor.y + 0.15f, btnColor.z + 0.15f, 1.0f));
-                    ImGui::Button(label, ImVec2(ICON_SIZE, ICON_SIZE));
-                    ImGui::PopStyleColor(2);
-
-                    // Nombre truncado bajo el icono
-                    std::string fname = path.filename().string();
-                    if (fname.size() > 11) fname = fname.substr(0, 10) + "..";
-                    ImGui::TextUnformatted(fname.c_str());
-
-                    ImGui::NextColumn();
-                    ImGui::PopID();
-                }
-
-                ImGui::Columns(1);
-            }
-            ImGui::EndChild();
-        }
-        ImGui::End();
 
         ImGui::Render();
 

@@ -2,6 +2,7 @@ add_library(DonTopoEngine STATIC
     src/Engine.cpp
     src/Window.cpp
     src/Renderer.cpp
+    src/EditorUI.cpp
     src/ModelLoader.cpp
     src/Camera.cpp
     src/SceneNode.cpp
