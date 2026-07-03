@@ -94,6 +94,29 @@ target_include_directories(imgui_backend PUBLIC
 target_link_libraries(imgui_backend PUBLIC Vulkan::Vulkan glfw)
 target_compile_features(imgui_backend PUBLIC cxx_std_17)
 
+# ImGuiFileDialog — embedded file browser (NoDialog mode)
+# Usamos Populate (no MakeAvailable) para descargar fuentes sin ejecutar
+# el CMakeLists.txt de la librería, que busca imgui via find_package y falla.
+FetchContent_Declare(
+    ImGuiFileDialog
+    GIT_REPOSITORY https://github.com/aiekick/ImGuiFileDialog.git
+    GIT_TAG        master
+    GIT_SHALLOW    TRUE
+)
+FetchContent_GetProperties(ImGuiFileDialog)
+if(NOT imguifiledialog_POPULATED)
+    FetchContent_Populate(ImGuiFileDialog)
+endif()
+
+add_library(imgui_filedialog STATIC
+    ${imguifiledialog_SOURCE_DIR}/ImGuiFileDialog.cpp
+)
+target_include_directories(imgui_filedialog PUBLIC
+    ${imguifiledialog_SOURCE_DIR}
+)
+target_link_libraries(imgui_filedialog PUBLIC imgui_backend)
+target_compile_features(imgui_filedialog PUBLIC cxx_std_17)
+
 # Future dependencies go here:
 # find_package(PhysX REQUIRED)   # physics
 # FetchContent_Declare(gainput ...) # dedicated input

@@ -5,7 +5,9 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
+#include <ImGuiFileDialog.h>
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include "DonTopo/Vertex.h"
 #include <glm/gtc/matrix_transform.hpp>
@@ -150,6 +152,112 @@ namespace DonTopo {
         ImGui::Begin("Viewport");
         ImVec2 vpSize = ImGui::GetContentRegionAvail();
         ImGui::Image((ImTextureID)(intptr_t)m_offscreenDescSet[m_currentFrame], vpSize);
+        ImGui::End();
+
+        // Panel inferior: Content Browser
+        ImGui::Begin("Content Browser");
+        {
+            float totalWidth  = ImGui::GetContentRegionAvail().x;
+            float totalHeight = ImGui::GetContentRegionAvail().y;
+            float leftWidth   = totalWidth * 0.38f;
+
+            // ── Izquierda: ImGuiFileDialog embedded ──────────────────────────
+            ImGui::BeginChild("##FileDlgPane", ImVec2(leftWidth, totalHeight), false);
+            {
+                static bool s_dlgOpen = false;
+                if (!s_dlgOpen) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.path  = "assets";
+                    cfg.flags = ImGuiFileDialogFlags_NoDialog |
+                                ImGuiFileDialogFlags_DontShowHiddenFiles;
+                    IGFD::FileDialog::Instance()->OpenDialog(
+                        "##ContentDlg", "Files", nullptr, cfg);
+                    s_dlgOpen = true;
+                }
+                ImVec2 dlgSize = ImGui::GetContentRegionAvail();
+                if (IGFD::FileDialog::Instance()->Display(
+                        "##ContentDlg", ImGuiWindowFlags_None, dlgSize, dlgSize))
+                {
+                    // Reabrir tras selección para mantener siempre visible
+                    IGFD::FileDialog::Instance()->Close();
+                    s_dlgOpen = false;
+                }
+            }
+            ImGui::EndChild();
+
+            ImGui::SameLine();
+
+            // ── Derecha: Asset browser con iconos ────────────────────────────
+            ImGui::BeginChild("##AssetPane", ImVec2(0, totalHeight), false);
+            {
+                // Escaneo lazy del directorio assets/
+                static std::vector<std::filesystem::path> s_assets;
+                static bool s_scanned = false;
+                if (!s_scanned) {
+                    s_assets.clear();
+                    if (std::filesystem::exists("assets")) {
+                        for (auto& e : std::filesystem::directory_iterator("assets"))
+                            if (e.is_regular_file())
+                                s_assets.push_back(e.path());
+                    }
+                    std::sort(s_assets.begin(), s_assets.end());
+                    s_scanned = true;
+                }
+
+                if (ImGui::SmallButton("Refresh")) s_scanned = false;
+                ImGui::Separator();
+
+                // Grid de iconos
+                constexpr float ICON_SIZE = 56.0f;
+                constexpr float CELL_PAD  = 12.0f;
+                float cellW   = ICON_SIZE + CELL_PAD;
+                float paneW   = ImGui::GetContentRegionAvail().x;
+                int   cols    = std::max(1, (int)(paneW / cellW));
+                ImGui::Columns(cols, "##AssetGrid", false);
+
+                for (auto& path : s_assets) {
+                    std::string ext = path.extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+                    ImVec4 btnColor;
+                    const char* label;
+                    if (ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".glb") {
+                        btnColor = ImVec4(0.15f, 0.55f, 0.85f, 1.0f);
+                        label    = "3D";
+                    } else if (ext == ".mp3" || ext == ".wav" || ext == ".ogg" || ext == ".flac") {
+                        btnColor = ImVec4(0.20f, 0.72f, 0.35f, 1.0f);
+                        label    = "SFX";
+                    } else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga") {
+                        btnColor = ImVec4(0.85f, 0.72f, 0.10f, 1.0f);
+                        label    = "IMG";
+                    } else if (ext == ".spv") {
+                        btnColor = ImVec4(0.80f, 0.35f, 0.10f, 1.0f);
+                        label    = "SPV";
+                    } else {
+                        btnColor = ImVec4(0.40f, 0.40f, 0.40f, 1.0f);
+                        label    = "...";
+                    }
+
+                    ImGui::PushID(path.string().c_str());
+                    ImGui::PushStyleColor(ImGuiCol_Button,        btnColor);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                        ImVec4(btnColor.x + 0.15f, btnColor.y + 0.15f, btnColor.z + 0.15f, 1.0f));
+                    ImGui::Button(label, ImVec2(ICON_SIZE, ICON_SIZE));
+                    ImGui::PopStyleColor(2);
+
+                    // Nombre truncado bajo el icono
+                    std::string fname = path.filename().string();
+                    if (fname.size() > 11) fname = fname.substr(0, 10) + "..";
+                    ImGui::TextUnformatted(fname.c_str());
+
+                    ImGui::NextColumn();
+                    ImGui::PopID();
+                }
+
+                ImGui::Columns(1);
+            }
+            ImGui::EndChild();
+        }
         ImGui::End();
 
         ImGui::Render();

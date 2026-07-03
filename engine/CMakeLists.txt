@@ -23,6 +23,7 @@ target_link_libraries(DonTopoEngine
         glm::glm
         assimp
         imgui_backend
+        imgui_filedialog
 )
 
 if(FMOD_FOUND)
