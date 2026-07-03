@@ -4,6 +4,7 @@
 #include "DonTopo/ModelLoader.h"
 #include "DonTopo/Camera.h"
 #include "DonTopo/SceneNode.h"
+#include "DonTopo/AudioManager.h"
 #include <GLFW/glfw3.h>
 #include <chrono>
 #include <iostream>
@@ -50,6 +51,12 @@ int main()
         auto skinnedMesh = DonTopo::ModelLoader::loadSkinned("assets/modelAnimation.fbx");
 
         DonTopo::Camera camera({0.0f, 90.0f, 300.0f});
+
+        DonTopo::AudioManager audio;
+        audio.init();
+        int bgm = audio.loadBGM("assets/audio.mp3");
+        if (bgm >= 0) audio.playBGM(bgm);
+
         renderer.init(window, meshes);
 
         // Añadir skinned mesh después de init
@@ -97,6 +104,7 @@ int main()
 
             camera.update(window.getNativeWindow(), dt);
             renderer.setCamera(camera);
+            audio.update(camera.getPos(), camera.getFront(), camera.getUp());
 
             renderer.updateAnimation(animIdx, dt);
 
@@ -110,6 +118,7 @@ int main()
             window.pollEvents();
         }
 
+        audio.shutdown();
         renderer.shutdown();
         window.shutdown();
     } catch (const std::exception& e) {

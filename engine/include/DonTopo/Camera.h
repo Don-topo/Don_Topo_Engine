@@ -13,7 +13,9 @@ namespace DonTopo
             void processMouse(float xOffset, float yOffset);
             glm::mat4 getViewMatrix() const;
             float getFov() const { return m_fov; }
-            glm::vec3 getPos() const { return m_pos; }
+            glm::vec3 getPos()   const { return m_pos;   }
+            glm::vec3 getFront() const { return m_front; }
+            glm::vec3 getUp()    const { return m_up;    }
             float moveSpeed   = 50.0f;
             float mouseSens   = 0.1f;
             float gamepadSens = 150.0f;
