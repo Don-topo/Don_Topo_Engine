@@ -6,6 +6,8 @@
 #include "DonTopo/SceneNode.h"
 #include "DonTopo/AudioManager.h"
 #include <GLFW/glfw3.h>
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
 #include <chrono>
 #include <iostream>
 #include <limits>
@@ -75,8 +77,6 @@ int main()
         model->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(200.0f, 0.0f, 0.0f));
         auto* floor_node = root.addChild("floor", 2);
 
-        glfwSetInputMode(window.getNativeWindow(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-
         struct AppCtx { DonTopo::Camera* cam; DonTopo::Renderer* rnd; };
         AppCtx ctx{ &camera, &renderer };
         glfwSetWindowUserPointer(window.getNativeWindow(), &ctx);
@@ -84,13 +84,34 @@ int main()
         glfwSetFramebufferSizeCallback(window.getNativeWindow(), [](GLFWwindow* w, int, int) {
             static_cast<AppCtx*>(glfwGetWindowUserPointer(w))->rnd->notifyResize();
         });
+
+        // Cámara: solo rota con botón derecho y cuando ImGui no captura el ratón
         glfwSetCursorPosCallback(window.getNativeWindow(), [](GLFWwindow* w, double x, double y) {
+            ImGui_ImplGlfw_CursorPosCallback(w, x, y);
             static double lastX = x, lastY = y;
-            static_cast<AppCtx*>(glfwGetWindowUserPointer(w))->cam->processMouse(
-                (float)(x - lastX), (float)(y - lastY));
+            double dx = x - lastX, dy = y - lastY;
             lastX = x; lastY = y;
+            if (!ImGui::GetIO().WantCaptureMouse &&
+                glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS)
+            {
+                static_cast<AppCtx*>(glfwGetWindowUserPointer(w))->cam->processMouse(
+                    (float)dx, (float)dy);
+            }
         });
-        glfwSetKeyCallback(window.getNativeWindow(), [](GLFWwindow* w, int key, int, int action, int) {
+
+        // Reenviar mouse buttons y scroll a ImGui
+        glfwSetMouseButtonCallback(window.getNativeWindow(), [](GLFWwindow* w, int btn, int action, int mods) {
+            ImGui_ImplGlfw_MouseButtonCallback(w, btn, action, mods);
+        });
+        glfwSetScrollCallback(window.getNativeWindow(), [](GLFWwindow* w, double xoff, double yoff) {
+            ImGui_ImplGlfw_ScrollCallback(w, xoff, yoff);
+        });
+        glfwSetCharCallback(window.getNativeWindow(), [](GLFWwindow* w, unsigned int c) {
+            ImGui_ImplGlfw_CharCallback(w, c);
+        });
+
+        glfwSetKeyCallback(window.getNativeWindow(), [](GLFWwindow* w, int key, int scancode, int action, int mods) {
+            ImGui_ImplGlfw_KeyCallback(w, key, scancode, action, mods);
             if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
                 glfwSetWindowShouldClose(w, GLFW_TRUE);
         });
@@ -102,7 +123,8 @@ int main()
             float dt = std::chrono::duration<float>(now - last).count();
             last = now;
 
-            camera.update(window.getNativeWindow(), dt);
+            if (!ImGui::GetIO().WantCaptureKeyboard)
+                camera.update(window.getNativeWindow(), dt);
             renderer.setCamera(camera);
             audio.update(camera.getPos(), camera.getFront(), camera.getUp());
 
