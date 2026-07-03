@@ -8,6 +8,9 @@ out/
 # Claude Code
 .claude/
 
+# Third-party proprietary SDKs (not redistributable)
+third_party/fmod/
+
 # Compiled shaders
 shaders/*.spv
 

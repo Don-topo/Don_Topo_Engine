@@ -22,8 +22,9 @@ else()
     set(_FMOD_ARCH "x86")
 endif()
 
-# Search roots: cmake var > env var > platform defaults
+# Search roots: local third_party > cmake var > env var > platform defaults
 set(_FMOD_ROOTS
+    "${CMAKE_SOURCE_DIR}/third_party/fmod"
     "${FMOD_DIR}"
     "$ENV{FMOD_DIR}"
 )
@@ -76,7 +77,12 @@ endif()
 
 find_package_handle_standard_args(FMOD
     REQUIRED_VARS FMOD_LIBRARY FMOD_INCLUDE_DIR
-    FAIL_MESSAGE "FMOD SDK not found. Download from https://www.fmod.com/download, install the FMOD Studio API, then pass -DFMOD_DIR=<install_root> to cmake or set the FMOD_DIR environment variable."
+    FAIL_MESSAGE
+        "FMOD SDK not found.\n"
+        "  Option A (recommended): download 'FMOD Studio API' zip from https://www.fmod.com/download,\n"
+        "    extract it, and copy/move the extracted folder to <project_root>/third_party/fmod/\n"
+        "    (CMake will find it automatically on the next configure).\n"
+        "  Option B: pass -DFMOD_DIR=<install_root> or set the FMOD_DIR environment variable."
 )
 
 if(FMOD_FOUND AND NOT TARGET FMOD::FMOD)

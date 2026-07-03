@@ -19,16 +19,31 @@
 
 ---
 
-## FMOD Installation
+## FMOD Setup — descarga de la API
 
-FMOD Core API (included inside FMOD Studio API package):
+FMOD requiere cuenta gratuita. La descarga no puede automatizarse vía FetchContent (requiere autenticación). Flujo manual único:
 
-1. Register (free) at https://www.fmod.com/download
-2. Download **FMOD Studio API — Windows** (not the standalone FMOD Studio tool)
-3. Run installer → default path: `C:/Program Files (x86)/FMOD SoundSystem/FMOD Studio API Windows`
-4. `FindFMOD.cmake` (already in `cmake/`) searches this path automatically
-5. CMake configure: `DT_FMOD_ENABLED` is defined, `FMOD::FMOD` target is created
-6. `fmod.dll` must be next to the executable at runtime → handled by CMake `POST_BUILD` copy (see below)
+1. Crear cuenta en [fmod.com/download](https://www.fmod.com/download) (gratuita para uso no comercial / ingresos < $200k/año)
+2. Descargar **FMOD Studio API — Windows** → elegir la versión **zip** (no el installer)
+3. Extraer el zip → aparece una carpeta con estructura `api/core/inc/`, `api/core/lib/x64/`, etc.
+4. Mover/renombrar esa carpeta a **`<raíz del proyecto>/third_party/fmod/`**
+5. Re-ejecutar CMake — `FindFMOD.cmake` busca `third_party/fmod/` como primera opción; `FMOD::FMOD` se crea automáticamente
+6. `fmod.dll` se copia al directorio del ejecutable en cada build vía `POST_BUILD` (ver sección CMake)
+
+Estructura esperada tras el paso 4:
+
+```text
+third_party/
+  fmod/
+    api/
+      core/
+        inc/        ← fmod.hpp, fmod_errors.h, ...
+        lib/
+          x64/      ← fmod_vc.lib, fmod.dll
+          x86/      ← ...
+```
+
+`third_party/fmod/` debe añadirse a `.gitignore` (binarios propietarios, no van al repo).
 
 ---
 
