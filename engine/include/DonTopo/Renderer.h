@@ -7,6 +7,8 @@
 #include "DonTopo/Camera.h"
 #include "DonTopo/UniformBufferObject.h"
 #include "DonTopo/SkinnedMesh.h"
+#include "DonTopo/GpuDevice.h"
+#include "DonTopo/GpuResources.h"
 
 namespace DonTopo {
 
@@ -141,21 +143,10 @@ namespace DonTopo {
                 glm::mat4 transform      {1.0f};
             };
 
-            void setupDebugMessenger();
-            static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
-                VkDebugUtilsMessageSeverityFlagBitsEXT severity,
-                VkDebugUtilsMessageTypeFlagsEXT types,
-                const VkDebugUtilsMessengerCallbackDataEXT* data,
-                void* userData);
-            void createInstance();
-            void createSurface(Window& window);
-            void pickPhysicalDevice();
-            void createDevice();
             void createSwapChain(Window& window);
             void createImageViews();
             void createRenderPass();
             void createFramebuffers();
-            void createCommandPool();
             void createCommandBuffers();
             void createSyncObjects();
             void recordCommandBuffer(uint32_t imageIndex);
@@ -165,45 +156,22 @@ namespace DonTopo {
             void recreateSwapChain(Window& window);
             void createVertexBuffer(const std::vector<Vertex>& v, VkBuffer& buf, VkDeviceMemory& mem);
             void createIndexBuffer(const std::vector<uint32_t>& idx, VkBuffer& buf, VkDeviceMemory& mem);
-            uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags props);
             void createDescriptorSetLayout();
             void createUniformBuffers();
             void createDescriptorPool();
             void createDescriptorSets();
             void updateUniformBuffer(uint32_t frameIndex);
             void createDepthResources();
-            void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props, VkBuffer& buffer, VkDeviceMemory& memory);
-            void copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size);
-            VkCommandBuffer beginOneTimeCommands();
-            void endOneTimeCommands(VkCommandBuffer comandBuffer);
-            void createTextureImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem);
-            void createNormalMapImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem);
-            void createImage(uint32_t w, uint32_t h, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags props, VkImage& image, VkDeviceMemory& memory);
-            void transitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout);
-            void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t w, uint32_t h);
             void buildRenderObject(const Mesh& mesh, RenderObject& obj);
             void destroyRenderObject(RenderObject& obj);
-            void createTextureImageView(VkImage img, VkImageView& view, VkFormat format = VK_FORMAT_R8G8B8A8_SRGB);
-            void createTextureSampler(VkSampler& out);
             void createShadowResources();
             void recordShadowPass(VkCommandBuffer cmd);
             void createComputePipelines();
-            void uploadBuffer(const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
-                            VkBuffer& buf, VkDeviceMemory& mem);
             void destroySkinnedRenderObject(SkinnedRenderObject& obj);
             void recordComputePass(VkCommandBuffer cmd);
-            void createSolidColorImage(const uint8_t rgba[4], VkImage& img, VkDeviceMemory& mem);
 
-            
-            VkDebugUtilsMessengerEXT        m_debugMessenger                    = VK_NULL_HANDLE;
-            VkInstance                      m_instance                          = VK_NULL_HANDLE;
-            VkSurfaceKHR                    m_surface                           = VK_NULL_HANDLE;
-            VkPhysicalDevice                m_physicalDevice                    = VK_NULL_HANDLE;
-            uint32_t                        m_graphicsFamily                    = 0;
-            uint32_t                        m_presentFamily                     = 0;
-            VkDevice                        m_device                            = VK_NULL_HANDLE;
-            VkQueue                         m_graphicsQueue                     = VK_NULL_HANDLE;
-            VkQueue                         m_presentQueue                      = VK_NULL_HANDLE;
+            GpuDevice                       m_gpu;
+            GpuResources                    m_res{ m_gpu };
             VkSwapchainKHR                  m_swapChain                         = VK_NULL_HANDLE;
             VkFormat                        m_swapChainFormat                   = VK_FORMAT_UNDEFINED;
             VkExtent2D                      m_swapChainExtent                   = {};
@@ -212,7 +180,6 @@ namespace DonTopo {
             std::vector<VkImageView>        m_swapChainImageViews;
             VkRenderPass                    m_renderPass                        = VK_NULL_HANDLE;
             std::vector<VkFramebuffer>      m_swapChainFramebuffers;
-            VkCommandPool                   m_commandPool                       = VK_NULL_HANDLE;
             std::vector<VkCommandBuffer>    m_commandBuffers;
             static constexpr int            MAX_FRAMES                          = 2;
             VkSemaphore                     m_imageAvailable[MAX_FRAMES]        = {};

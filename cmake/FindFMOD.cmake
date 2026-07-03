@@ -77,12 +77,7 @@ endif()
 
 find_package_handle_standard_args(FMOD
     REQUIRED_VARS FMOD_LIBRARY FMOD_INCLUDE_DIR
-    FAIL_MESSAGE
-        "FMOD SDK not found.\n"
-        "  Option A (recommended): download 'FMOD Studio API' zip from https://www.fmod.com/download,\n"
-        "    extract it, and copy/move the extracted folder to <project_root>/third_party/fmod/\n"
-        "    (CMake will find it automatically on the next configure).\n"
-        "  Option B: pass -DFMOD_DIR=<install_root> or set the FMOD_DIR environment variable."
+    FAIL_MESSAGE "FMOD SDK not found. Option A: download 'FMOD Studio API' zip from https://www.fmod.com/download and extract to <project_root>/third_party/fmod/. Option B: pass -DFMOD_DIR=<install_root> or set FMOD_DIR env var."
 )
 
 if(FMOD_FOUND AND NOT TARGET FMOD::FMOD)

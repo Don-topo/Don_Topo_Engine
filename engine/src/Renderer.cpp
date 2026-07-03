@@ -1,4 +1,4 @@
-#include "DonTopo/Renderer.h"
+﻿#include "DonTopo/Renderer.h"
 #include <GLFW/glfw3.h>
 #include <stdexcept>
 #include "DonTopo/Window.h"
@@ -8,15 +8,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include "DonTopo/UniformBufferObject.h"
 #include <limits>
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
 #include <cmath>
-
-#ifdef NDEBUG
-    static constexpr bool ENABLE_VALIDATION = false;
-#else
-    static constexpr bool ENABLE_VALIDATION = true;
-#endif
 
 namespace DonTopo {
 
@@ -45,11 +37,7 @@ namespace DonTopo {
         float maxDim     = glm::max(bMax.x - bMin.x, glm::max(bMax.y - bMin.y, bMax.z - bMin.z));
         m_cameraDistance = maxDim * 1.2f;
 
-        createInstance();
-        setupDebugMessenger();
-        createSurface(window);
-        pickPhysicalDevice();
-        createDevice();
+        m_gpu.init(window.getNativeWindow());
         createSwapChain(window);
 
         createImageViews();
@@ -60,7 +48,6 @@ namespace DonTopo {
         createShadowResources();
         createFramebuffers();
         createComputePipelines();
-        createCommandPool();
 
         m_objects.resize(meshes.size());
         for(size_t i = 0; i < meshes.size(); i++)
@@ -78,13 +65,13 @@ namespace DonTopo {
     void Renderer::drawFrame(Window& window)
     {
         // 1. Espera a que el frame anterior terminó
-        vkWaitForFences(m_device, 1, &m_inFlight[m_currentFrame], VK_TRUE, UINT64_MAX);        
+        vkWaitForFences(m_gpu.device(), 1, &m_inFlight[m_currentFrame], VK_TRUE, UINT64_MAX);        
 
         // 2. Pide la siguiente imagen del swapchain
         uint32_t imageIndex;
         VkResult result;
 
-        result = vkAcquireNextImageKHR(m_device, m_swapChain, UINT64_MAX, m_imageAvailable[m_currentFrame], VK_NULL_HANDLE, &imageIndex);
+        result = vkAcquireNextImageKHR(m_gpu.device(), m_swapChain, UINT64_MAX, m_imageAvailable[m_currentFrame], VK_NULL_HANDLE, &imageIndex);
         if(result == VK_ERROR_OUT_OF_DATE_KHR)
         {
             recreateSwapChain(window);
@@ -96,7 +83,7 @@ namespace DonTopo {
             throw std::runtime_error("failed to acquire next image!");
         }        
 
-        vkResetFences(m_device, 1, &m_inFlight[m_currentFrame]);
+        vkResetFences(m_gpu.device(), 1, &m_inFlight[m_currentFrame]);
 
         // 3. Graba el command buffer
         if(vkResetCommandBuffer(m_commandBuffers[m_currentFrame], 0) != VK_SUCCESS)
@@ -118,7 +105,7 @@ namespace DonTopo {
         submitInfo.pCommandBuffers          = &m_commandBuffers[m_currentFrame];
         submitInfo.signalSemaphoreCount     = 1;
         submitInfo.pSignalSemaphores        = &m_renderFinished[imageIndex];
-        if(vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, m_inFlight[m_currentFrame]) != VK_SUCCESS)
+        if(vkQueueSubmit(m_gpu.graphicsQueue(), 1, &submitInfo, m_inFlight[m_currentFrame]) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to submit graphics queue!");
         }
@@ -131,7 +118,7 @@ namespace DonTopo {
         presentInfo.swapchainCount      = 1;
         presentInfo.pSwapchains         = &m_swapChain;
         presentInfo.pImageIndices       = &imageIndex;
-        result = vkQueuePresentKHR(m_presentQueue, &presentInfo);
+        result = vkQueuePresentKHR(m_gpu.presentQueue(), &presentInfo);
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || m_framebufferResized) {
             m_framebufferResized = false;
             recreateSwapChain(window);
@@ -144,54 +131,53 @@ namespace DonTopo {
 
     void Renderer::shutdown()
     {
-        if (m_device == VK_NULL_HANDLE) return;
-        vkDeviceWaitIdle(m_device);
+        if (m_gpu.device() == VK_NULL_HANDLE) return;
+        vkDeviceWaitIdle(m_gpu.device());
 
         for(auto sem : m_renderFinished){
-            vkDestroySemaphore(m_device, sem, nullptr);
+            vkDestroySemaphore(m_gpu.device(), sem, nullptr);
         }
 
         for(int i = 0; i < MAX_FRAMES; i++)
         {            
-            vkDestroySemaphore(m_device, m_imageAvailable[i], nullptr);
-            vkDestroyFence(m_device, m_inFlight[i], nullptr);
+            vkDestroySemaphore(m_gpu.device(), m_imageAvailable[i], nullptr);
+            vkDestroyFence(m_gpu.device(), m_inFlight[i], nullptr);
         }
-        vkDestroyCommandPool(m_device, m_commandPool, nullptr);
         for(auto framebuffer : m_swapChainFramebuffers)
         {
-            vkDestroyFramebuffer(m_device, framebuffer, nullptr);
+            vkDestroyFramebuffer(m_gpu.device(), framebuffer, nullptr);
         }
-        vkDestroyPipeline(m_device, m_pipeline, nullptr);
-        vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
-        vkDestroyRenderPass(m_device, m_renderPass, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_pipeline, nullptr);
+        vkDestroyPipelineLayout(m_gpu.device(), m_pipelineLayout, nullptr);
+        vkDestroyRenderPass(m_gpu.device(), m_renderPass, nullptr);
         for(VkImageView imageView : m_swapChainImageViews)
         {
-            vkDestroyImageView(m_device, imageView, nullptr);
+            vkDestroyImageView(m_gpu.device(), imageView, nullptr);
         }                        
-        vkDestroySwapchainKHR(m_device, m_swapChain, nullptr);
-        vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
+        vkDestroySwapchainKHR(m_gpu.device(), m_swapChain, nullptr);
+        vkDestroyDescriptorPool(m_gpu.device(), m_descriptorPool, nullptr);
         for(auto& obj : m_objects)
             destroyRenderObject(obj);
         m_objects.clear();
         for(int i = 0; i < MAX_FRAMES; i++)
         {
-            vkDestroyBuffer(m_device, m_uniformBuffers[i], nullptr);
-            vkFreeMemory(m_device, m_uniformBuffersMemory[i], nullptr);
+            vkDestroyBuffer(m_gpu.device(), m_uniformBuffers[i], nullptr);
+            vkFreeMemory(m_gpu.device(), m_uniformBuffersMemory[i], nullptr);
         }
-        vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr);
-        vkDestroyImageView(m_device, m_depthImageView, nullptr);
-        vkDestroyImage(m_device, m_depthImage, nullptr);
-        vkFreeMemory(m_device, m_depthImageMemory, nullptr);
+        vkDestroyDescriptorSetLayout(m_gpu.device(), m_descriptorSetLayout, nullptr);
+        vkDestroyImageView(m_gpu.device(), m_depthImageView, nullptr);
+        vkDestroyImage(m_gpu.device(), m_depthImage, nullptr);
+        vkFreeMemory(m_gpu.device(), m_depthImageMemory, nullptr);
         // Shadow Map
-        vkDestroySampler(m_device, m_shadowSampler, nullptr);
-        vkDestroyImageView(m_device, m_shadowView, nullptr);
-        vkDestroyImage(m_device, m_shadowImage, nullptr);
-        vkFreeMemory(m_device, m_shadowMemory, nullptr);
-        vkDestroyFramebuffer(m_device, m_shadowFramebuffer, nullptr);
-        vkDestroyPipeline(m_device, m_skinnedGfxPipeline, nullptr);
-        vkDestroyPipeline(m_device, m_shadowPipeline, nullptr);
-        vkDestroyPipelineLayout(m_device, m_shadowPipelineLayout, nullptr);
-        vkDestroyRenderPass(m_device, m_shadowRenderPass, nullptr);
+        vkDestroySampler(m_gpu.device(), m_shadowSampler, nullptr);
+        vkDestroyImageView(m_gpu.device(), m_shadowView, nullptr);
+        vkDestroyImage(m_gpu.device(), m_shadowImage, nullptr);
+        vkFreeMemory(m_gpu.device(), m_shadowMemory, nullptr);
+        vkDestroyFramebuffer(m_gpu.device(), m_shadowFramebuffer, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_skinnedGfxPipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_shadowPipeline, nullptr);
+        vkDestroyPipelineLayout(m_gpu.device(), m_shadowPipelineLayout, nullptr);
+        vkDestroyRenderPass(m_gpu.device(), m_shadowRenderPass, nullptr);
         for (auto& obj : m_skinnedObjects)
         {
             destroySkinnedRenderObject(obj);
@@ -200,26 +186,15 @@ namespace DonTopo {
         m_skinnedObjects.clear();
         if (m_computeDescPool != VK_NULL_HANDLE)
         {
-            vkDestroyDescriptorPool(m_device, m_computeDescPool, nullptr);
+            vkDestroyDescriptorPool(m_gpu.device(), m_computeDescPool, nullptr);
         }
-        vkDestroyPipeline(m_device, m_boneEvalPipeline,      nullptr);
-        vkDestroyPipeline(m_device, m_boneHierarchyPipeline, nullptr);
-        vkDestroyPipeline(m_device, m_skinningPipeline,       nullptr);
-        vkDestroyPipelineLayout(m_device, m_computePipelineLayout, nullptr);
-        vkDestroyDescriptorSetLayout(m_device, m_computeDescLayout, nullptr);
-        vkDestroyDevice(m_device, nullptr);
-        m_device = VK_NULL_HANDLE;
-        vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
-        if(ENABLE_VALIDATION && m_debugMessenger != VK_NULL_HANDLE)
-        {
-            auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)
-                vkGetInstanceProcAddr(m_instance, "vkDestroyDebugUtilsMessengerEXT");
-            if(func){
-                func(m_instance, m_debugMessenger, nullptr);
-            }
-        }
-        vkDestroyInstance(m_instance, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_boneEvalPipeline,      nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_boneHierarchyPipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_skinningPipeline,       nullptr);
+        vkDestroyPipelineLayout(m_gpu.device(), m_computePipelineLayout, nullptr);
+        vkDestroyDescriptorSetLayout(m_gpu.device(), m_computeDescLayout, nullptr);
         printf("destroy render items OK\n"); fflush(stdout);
+        m_gpu.shutdown();
     }
 
     void Renderer::setCamera(const Camera& camera)
@@ -228,192 +203,20 @@ namespace DonTopo {
         m_camera = camera;
     }
 
-    void Renderer::createInstance()
-    {
-        VkApplicationInfo appInfo{};
-        appInfo.sType               = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-        appInfo.pApplicationName    = "DonTopo";
-        appInfo.applicationVersion  = VK_MAKE_VERSION(1, 0, 0);
-        appInfo.pEngineName         = "DonTopo Engine";
-        appInfo.engineVersion       = VK_MAKE_VERSION(1, 0, 0);
-        appInfo.apiVersion          = VK_API_VERSION_1_0;
-
-        uint32_t extensionCount = 0;
-        const char **glfwExtensions = glfwGetRequiredInstanceExtensions(&extensionCount);
-        // Copia a vector para poder añadir extensiones extra
-        std::vector<const char*> extensions(glfwExtensions, glfwExtensions + extensionCount);
-
-        if(ENABLE_VALIDATION)
-        {
-            extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-        }
-        
-        const char* validationLayer = "VK_LAYER_KHRONOS_validation";
-            
-        VkInstanceCreateInfo createInfo{};
-        createInfo.sType                    = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-        createInfo.pApplicationInfo         = &appInfo;
-        createInfo.enabledExtensionCount    = (uint32_t)extensions.size();
-        createInfo.ppEnabledExtensionNames  = extensions.data();
-        if(ENABLE_VALIDATION)
-        {
-            createInfo.enabledLayerCount    = 1;
-            createInfo.ppEnabledLayerNames  = &validationLayer;
-        }
-
-        if(vkCreateInstance(&createInfo, nullptr, &m_instance) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create Vulkan instance!");
-        }   
-        printf("instance OK\n");  fflush(stdout);     
-    }
-    
-    void Renderer::setupDebugMessenger()
-    {
-        if(!ENABLE_VALIDATION) return;
-
-        VkDebugUtilsMessengerCreateInfoEXT createInfo{};
-        createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-        createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-        createInfo.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                                 VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                                 VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-        createInfo.pfnUserCallback = debugCallback;
-
-        auto func = (PFN_vkCreateDebugUtilsMessengerEXT)
-            vkGetInstanceProcAddr(m_instance, "vkCreateDebugUtilsMessengerEXT");
-        if (!func || func(m_instance, &createInfo, nullptr, &m_debugMessenger) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to set up debug messenger!");
-        }            
-    }
-
-    VKAPI_ATTR VkBool32 VKAPI_CALL Renderer::debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT, const VkDebugUtilsMessengerCallbackDataEXT* data, void*)
-    {
-        if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
-            fprintf(stderr, "[Vulkan] %s\n", data->pMessage);
-        return VK_FALSE;
-    }
-
-    void Renderer::createSurface(Window& window)
-    {
-        if(glfwCreateWindowSurface(m_instance, window.getNativeWindow(), nullptr, &m_surface) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create window surface!");
-        }
-        printf("surface OK\n");   fflush(stdout);
-    }
-
-    void Renderer::pickPhysicalDevice()
-    {
-        uint32_t deviceCount = 0;
-        vkEnumeratePhysicalDevices(m_instance, &deviceCount,nullptr);
-        if(deviceCount == 0)
-        {
-            throw std::runtime_error("failed to find GPUs with Vulkan support!");
-        }
-
-        std::vector<VkPhysicalDevice> devices(deviceCount);
-        vkEnumeratePhysicalDevices(m_instance, &deviceCount, devices.data());
-    
-        for(VkPhysicalDevice device : devices)
-        {
-            uint32_t familyCount = 0;
-            vkGetPhysicalDeviceQueueFamilyProperties(device, &familyCount, nullptr);
-
-            std::vector<VkQueueFamilyProperties> families(familyCount);
-            vkGetPhysicalDeviceQueueFamilyProperties(device, &familyCount, families.data());
-
-            bool hasGraphics = false;
-            bool hasPresent = false;
-
-            for(uint32_t i = 0; i < familyCount; i++)
-            {
-                // Check if the queue family supports graphics
-                if(families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
-                {
-                    hasGraphics = true;
-                    m_graphicsFamily = i;
-                }
-                // Check if the queue family supports presentation to the surface
-                VkBool32 presentSupport = false;
-                vkGetPhysicalDeviceSurfaceSupportKHR(device, i, m_surface, &presentSupport);
-                if(presentSupport)
-                {
-                    hasPresent = true;
-                    m_presentFamily = i;
-                }
-                if(hasGraphics && hasPresent)
-                {
-                    m_physicalDevice = device;
-                    printf("device OK\n"); fflush(stdout);
-                    break;
-                }
-            }
-
-            if(m_physicalDevice != VK_NULL_HANDLE)
-            {
-                break;
-            }
-        }
-        
-        if(m_physicalDevice == VK_NULL_HANDLE)
-        {
-            throw std::runtime_error("failed to find a suitable GPU!");
-        }
-
-    }
-
-    void Renderer::createDevice()
-    {
-        float priority = 1.0f;
-        std::vector<VkDeviceQueueCreateInfo> queueInfos;
-
-        // Si son la misma family, crea solo 1 entrada
-        uint32_t uniqueFamilies[] = { m_graphicsFamily, m_presentFamily };
-        for (uint32_t family : uniqueFamilies) {
-            bool alreadyAdded = false;
-            for (auto& q : queueInfos)
-                if (q.queueFamilyIndex == family) { alreadyAdded = true; break; }
-            if (alreadyAdded) continue;
-
-            VkDeviceQueueCreateInfo qi{};
-            qi.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-            qi.queueFamilyIndex = family;
-            qi.queueCount       = 1;
-            qi.pQueuePriorities = &priority;
-            queueInfos.push_back(qi);
-        }
-
-        const char* extensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-        VkDeviceCreateInfo createInfo{};
-        createInfo.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        createInfo.queueCreateInfoCount    = (uint32_t)queueInfos.size();
-        createInfo.pQueueCreateInfos       = queueInfos.data();
-        createInfo.enabledExtensionCount   = 1;
-        createInfo.ppEnabledExtensionNames = extensions;
-
-        if (vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device) != VK_SUCCESS)
-            throw std::runtime_error("failed to create logical device!");
-
-        vkGetDeviceQueue(m_device, m_graphicsFamily, 0, &m_graphicsQueue);
-        vkGetDeviceQueue(m_device, m_presentFamily,  0, &m_presentQueue);
-        printf("logical device OK\n"); fflush(stdout);
-    }
-
     void Renderer::createSwapChain(Window& window)
     {
         VkSurfaceCapabilitiesKHR surfaceCapabilities;
-        if(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_physicalDevice, m_surface, &surfaceCapabilities) != VK_SUCCESS) {
+        if(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_gpu.physicalDevice(), m_gpu.surface(), &surfaceCapabilities) != VK_SUCCESS) {
             throw std::runtime_error("failed to get surface capabilities!");
         }
 
         uint32_t formatCount;
-        if(vkGetPhysicalDeviceSurfaceFormatsKHR(m_physicalDevice, m_surface, &formatCount, nullptr) != VK_SUCCESS) {
+        if(vkGetPhysicalDeviceSurfaceFormatsKHR(m_gpu.physicalDevice(), m_gpu.surface(), &formatCount, nullptr) != VK_SUCCESS) {
             throw std::runtime_error("failed to get surface formats!");
         }
 
         std::vector<VkSurfaceFormatKHR> surfaceFormats(formatCount);
-        if(vkGetPhysicalDeviceSurfaceFormatsKHR(m_physicalDevice, m_surface, &formatCount, surfaceFormats.data()) != VK_SUCCESS) {
+        if(vkGetPhysicalDeviceSurfaceFormatsKHR(m_gpu.physicalDevice(), m_gpu.surface(), &formatCount, surfaceFormats.data()) != VK_SUCCESS) {
             throw std::runtime_error("failed to get surface formats!");
         }
 
@@ -454,7 +257,7 @@ namespace DonTopo {
 
         VkSwapchainCreateInfoKHR createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-        createInfo.surface = m_surface;
+        createInfo.surface = m_gpu.surface();
         createInfo.minImageCount = imageCount;
         createInfo.imageFormat = m_swapChainFormat;
         createInfo.imageColorSpace = m_swapChainColorSpace;
@@ -467,17 +270,17 @@ namespace DonTopo {
         createInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR; // vsync
         createInfo.clipped = VK_TRUE;
 
-        if(vkCreateSwapchainKHR(m_device, &createInfo, nullptr, &m_swapChain) != VK_SUCCESS)
+        if(vkCreateSwapchainKHR(m_gpu.device(), &createInfo, nullptr, &m_swapChain) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create swap chain!");
         }
         
-        if(vkGetSwapchainImagesKHR(m_device, m_swapChain, &imageCount, nullptr) != VK_SUCCESS)
+        if(vkGetSwapchainImagesKHR(m_gpu.device(), m_swapChain, &imageCount, nullptr) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to get swap chain images!");
         }
         m_swapChainImages.resize(imageCount);
-        if(vkGetSwapchainImagesKHR(m_device, m_swapChain, &imageCount, m_swapChainImages.data()) != VK_SUCCESS)
+        if(vkGetSwapchainImagesKHR(m_gpu.device(), m_swapChain, &imageCount, m_swapChainImages.data()) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to get swap chain images!");
         }
@@ -507,7 +310,7 @@ namespace DonTopo {
             createInfo.subresourceRange.baseArrayLayer  = 0;
             createInfo.subresourceRange.layerCount      = 1;
 
-            if(vkCreateImageView(m_device, &createInfo, nullptr, &m_swapChainImageViews[i]) != VK_SUCCESS)
+            if(vkCreateImageView(m_gpu.device(), &createInfo, nullptr, &m_swapChainImageViews[i]) != VK_SUCCESS)
             {
                 throw std::runtime_error("failed to create image views!");
             }
@@ -570,7 +373,7 @@ namespace DonTopo {
         renderPassCreateInfo.dependencyCount    = 1;
         renderPassCreateInfo.pDependencies      = &subpassDependency;
 
-        if(vkCreateRenderPass(m_device, &renderPassCreateInfo, nullptr, &m_renderPass) != VK_SUCCESS)
+        if(vkCreateRenderPass(m_gpu.device(), &renderPassCreateInfo, nullptr, &m_renderPass) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create render pass!");
         }
@@ -593,7 +396,7 @@ namespace DonTopo {
             framebufferCreateInfo.height            = m_swapChainExtent.height;   
             framebufferCreateInfo.layers            = 1;         
 
-            if(vkCreateFramebuffer(m_device, &framebufferCreateInfo, nullptr, &m_swapChainFramebuffers[i]) != VK_SUCCESS)
+            if(vkCreateFramebuffer(m_gpu.device(), &framebufferCreateInfo, nullptr, &m_swapChainFramebuffers[i]) != VK_SUCCESS)
             {
                 throw std::runtime_error("failed to create framebuffer!");
             }            
@@ -601,31 +404,18 @@ namespace DonTopo {
         printf("framebuffers OK\n"); fflush(stdout);
     }
 
-    void Renderer::createCommandPool()
-    {
-        VkCommandPoolCreateInfo commandPoolCreateInfo{};
-        commandPoolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        commandPoolCreateInfo.queueFamilyIndex = m_graphicsFamily;
-        
-        if(vkCreateCommandPool(m_device, &commandPoolCreateInfo, nullptr, &m_commandPool) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create command pool!");
-        }
 
-        printf("command pool OK\n"); fflush(stdout);
-    }
 
     void Renderer::createCommandBuffers()
     {
         m_commandBuffers.resize(2);
         VkCommandBufferAllocateInfo commandBufferAllocateInfo{};
         commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        commandBufferAllocateInfo.commandPool = m_commandPool;
+        commandBufferAllocateInfo.commandPool = m_gpu.commandPool();
         commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         commandBufferAllocateInfo.commandBufferCount = 2;
 
-        if(vkAllocateCommandBuffers(m_device, &commandBufferAllocateInfo, m_commandBuffers.data()) != VK_SUCCESS)
+        if(vkAllocateCommandBuffers(m_gpu.device(), &commandBufferAllocateInfo, m_commandBuffers.data()) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to allocate command buffers!");
         }
@@ -644,8 +434,8 @@ namespace DonTopo {
 
         for(int i = 0; i < MAX_FRAMES; i++)
         {
-            if(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_imageAvailable[i]) != VK_SUCCESS                
-                || vkCreateFence(m_device, &fenceCreateInfo, nullptr, &m_inFlight[i]) != VK_SUCCESS)
+            if(vkCreateSemaphore(m_gpu.device(), &semaphoreInfo, nullptr, &m_imageAvailable[i]) != VK_SUCCESS                
+                || vkCreateFence(m_gpu.device(), &fenceCreateInfo, nullptr, &m_inFlight[i]) != VK_SUCCESS)
             {
                 // m_imageAvailable — señala que hay imagen disponible del swapchain
                 // m_renderFinished — señala que el render terminó, listo para presentar
@@ -659,7 +449,7 @@ namespace DonTopo {
         semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         for (auto& sem : m_renderFinished)
         {
-            if (vkCreateSemaphore(m_device, &semInfo, nullptr, &sem) != VK_SUCCESS)
+            if (vkCreateSemaphore(m_gpu.device(), &semInfo, nullptr, &sem) != VK_SUCCESS)
             {
                 throw std::runtime_error("failed to create renderFinished semaphore!");
             }                
@@ -891,7 +681,7 @@ namespace DonTopo {
         layoutInfo.pSetLayouts              = &m_descriptorSetLayout;
         layoutInfo.pushConstantRangeCount   = 1;
         layoutInfo.pPushConstantRanges      = &pushRange;
-        if(vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS)
+        if(vkCreatePipelineLayout(m_gpu.device(), &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create pipeline layout!");
         }
@@ -913,14 +703,14 @@ namespace DonTopo {
         pipelineInfo.subpass                = 0;
         pipelineInfo.pDepthStencilState     = &depthStencil;
 
-        if(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipeline) != VK_SUCCESS)
+        if(vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipeline) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create graphics pipeline!");
         }
 
         // los módulos se destruyen al final de esta función — solo los necesita el pipeline
-        vkDestroyShaderModule(m_device, vertModule, nullptr);
-        vkDestroyShaderModule(m_device, fragModule, nullptr);
+        vkDestroyShaderModule(m_gpu.device(), vertModule, nullptr);
+        vkDestroyShaderModule(m_gpu.device(), fragModule, nullptr);
         printf("pipeline OK\n"); fflush(stdout);
     }
 
@@ -945,7 +735,7 @@ namespace DonTopo {
         createInfo.codeSize = code.size();
         createInfo.pCode = reinterpret_cast<const uint32_t *>(code.data());
         VkShaderModule shaderModule;
-        if(vkCreateShaderModule(m_device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS)
+        if(vkCreateShaderModule(m_gpu.device(), &createInfo, nullptr, &shaderModule) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create shader module!");
         }
@@ -965,31 +755,31 @@ namespace DonTopo {
             glfwGetFramebufferSize(window.getNativeWindow(), &width, &height);
         }
 
-        vkDeviceWaitIdle(m_device);
+        vkDeviceWaitIdle(m_gpu.device());
 
         // Teardown
         for(auto semaphore: m_renderFinished)
         {
-            vkDestroySemaphore(m_device, semaphore, nullptr);
+            vkDestroySemaphore(m_gpu.device(), semaphore, nullptr);
         }
         m_renderFinished.clear();
 
         for(auto frameBuffer : m_swapChainFramebuffers)
         {
-            vkDestroyFramebuffer(m_device, frameBuffer, nullptr);
+            vkDestroyFramebuffer(m_gpu.device(), frameBuffer, nullptr);
         }
         m_swapChainFramebuffers.clear();
 
         for(auto imageView : m_swapChainImageViews)
         {
-            vkDestroyImageView(m_device, imageView, nullptr);
+            vkDestroyImageView(m_gpu.device(), imageView, nullptr);
         }
         m_swapChainImageViews.clear();
 
-        vkDestroyImageView(m_device, m_depthImageView, nullptr);
-        vkDestroyImage(m_device, m_depthImage, nullptr);
-        vkFreeMemory(m_device, m_depthImageMemory, nullptr);
-        vkDestroySwapchainKHR(m_device, m_swapChain, nullptr);
+        vkDestroyImageView(m_gpu.device(), m_depthImageView, nullptr);
+        vkDestroyImage(m_gpu.device(), m_depthImage, nullptr);
+        vkFreeMemory(m_gpu.device(), m_depthImageMemory, nullptr);
+        vkDestroySwapchainKHR(m_gpu.device(), m_swapChain, nullptr);
         m_swapChain = VK_NULL_HANDLE;
 
         // Recreate
@@ -1003,22 +793,8 @@ namespace DonTopo {
         VkSemaphoreCreateInfo semInfo{};
         semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         for (auto& sem : m_renderFinished)
-            if (vkCreateSemaphore(m_device, &semInfo, nullptr, &sem) != VK_SUCCESS)
+            if (vkCreateSemaphore(m_gpu.device(), &semInfo, nullptr, &sem) != VK_SUCCESS)
                 throw std::runtime_error("failed to create renderFinished semaphore!");
-    }
-
-    uint32_t Renderer::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags props)
-    {
-       VkPhysicalDeviceMemoryProperties memProps;
-       vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProps);
-
-       for(uint32_t i = 0; i < memProps.memoryTypeCount; i++)
-       {
-        if((typeFilter & (1 << i)) && (memProps.memoryTypes[i].propertyFlags & props) == props)
-            return i;
-       }
-
-       throw std::runtime_error("failed to find suitable memory type!");
     }
 
     void Renderer::createVertexBuffer(const std::vector<Vertex>& vertices, VkBuffer& buf, VkDeviceMemory& mem)
@@ -1027,25 +803,25 @@ namespace DonTopo {
 
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingMemory;
-        createBuffer(size,
+        m_res.createBuffer(size,
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             stagingBuffer, stagingMemory);
 
         void* data;
-        vkMapMemory(m_device, stagingMemory, 0, size, 0, &data);
+        vkMapMemory(m_gpu.device(), stagingMemory, 0, size, 0, &data);
         memcpy(data, vertices.data(), (size_t)size);
-        vkUnmapMemory(m_device, stagingMemory);
+        vkUnmapMemory(m_gpu.device(), stagingMemory);
 
-        createBuffer(size,
+        m_res.createBuffer(size,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             buf, mem);
 
-        copyBuffer(stagingBuffer, buf, size);
+        m_res.copyBuffer(stagingBuffer, buf, size);
 
-        vkDestroyBuffer(m_device, stagingBuffer, nullptr);
-        vkFreeMemory(m_device, stagingMemory, nullptr);
+        vkDestroyBuffer(m_gpu.device(), stagingBuffer, nullptr);
+        vkFreeMemory(m_gpu.device(), stagingMemory, nullptr);
     }
 
     void Renderer::createIndexBuffer(const std::vector<uint32_t>& idx, VkBuffer& buf, VkDeviceMemory& mem)
@@ -1054,25 +830,25 @@ namespace DonTopo {
 
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingMemory;
-        createBuffer(size,
+        m_res.createBuffer(size,
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             stagingBuffer, stagingMemory);
 
         void* data;
-        vkMapMemory(m_device, stagingMemory, 0, size, 0, &data);
+        vkMapMemory(m_gpu.device(), stagingMemory, 0, size, 0, &data);
         memcpy(data, idx.data(), (size_t)size);
-        vkUnmapMemory(m_device, stagingMemory);
+        vkUnmapMemory(m_gpu.device(), stagingMemory);
 
-        createBuffer(size,
+        m_res.createBuffer(size,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             buf, mem);
 
-        copyBuffer(stagingBuffer, buf, size);
+        m_res.copyBuffer(stagingBuffer, buf, size);
 
-        vkDestroyBuffer(m_device, stagingBuffer, nullptr);
-        vkFreeMemory(m_device, stagingMemory, nullptr);
+        vkDestroyBuffer(m_gpu.device(), stagingBuffer, nullptr);
+        vkFreeMemory(m_gpu.device(), stagingMemory, nullptr);
 
     }
 
@@ -1115,7 +891,7 @@ namespace DonTopo {
         layoutInfo.bindingCount     = 5;
         layoutInfo.pBindings        = bindings;
 
-        if(vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
+        if(vkCreateDescriptorSetLayout(m_gpu.device(), &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create descriptor set layout!");
         }
@@ -1131,20 +907,20 @@ namespace DonTopo {
             bufferInfo.size         = size;
             bufferInfo.usage        = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
             bufferInfo.sharingMode  = VK_SHARING_MODE_EXCLUSIVE;
-            vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_uniformBuffers[i]);
+            vkCreateBuffer(m_gpu.device(), &bufferInfo, nullptr, &m_uniformBuffers[i]);
 
             VkMemoryRequirements memoryRequirements;
-            vkGetBufferMemoryRequirements(m_device, m_uniformBuffers[i], &memoryRequirements);
+            vkGetBufferMemoryRequirements(m_gpu.device(), m_uniformBuffers[i], &memoryRequirements);
 
             VkMemoryAllocateInfo allocInfo{};
             allocInfo.sType             = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
             allocInfo.allocationSize    = memoryRequirements.size;
-            allocInfo.memoryTypeIndex   = findMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-            vkAllocateMemory(m_device, &allocInfo, NULL, &m_uniformBuffersMemory[i]);
-            vkBindBufferMemory(m_device, m_uniformBuffers[i], m_uniformBuffersMemory[i], 0);
+            allocInfo.memoryTypeIndex   = m_gpu.findMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            vkAllocateMemory(m_gpu.device(), &allocInfo, NULL, &m_uniformBuffersMemory[i]);
+            vkBindBufferMemory(m_gpu.device(), m_uniformBuffers[i], m_uniformBuffersMemory[i], 0);
 
             // Mapeo persistente — nunca llamamos unmap
-            vkMapMemory(m_device, m_uniformBuffersMemory[i], 0, size, 0, &m_uniformBuffersMapped[i]);
+            vkMapMemory(m_gpu.device(), m_uniformBuffersMemory[i], 0, size, 0, &m_uniformBuffersMapped[i]);
 
         }
     }
@@ -1164,7 +940,7 @@ namespace DonTopo {
         poolInfo.pPoolSizes    = poolSizes;
         poolInfo.maxSets       = n;
 
-        if(vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
+        if(vkCreateDescriptorPool(m_gpu.device(), &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
             throw std::runtime_error("failed to create descriptor pool!");
     }
 
@@ -1180,7 +956,7 @@ namespace DonTopo {
             allocInfo.descriptorSetCount = MAX_FRAMES;
             allocInfo.pSetLayouts        = layouts;
 
-            if(vkAllocateDescriptorSets(m_device, &allocInfo, obj.descriptorSets) != VK_SUCCESS)
+            if(vkAllocateDescriptorSets(m_gpu.device(), &allocInfo, obj.descriptorSets) != VK_SUCCESS)
                 throw std::runtime_error("failed to allocate descriptor sets!");
 
             for(int i = 0; i < MAX_FRAMES; i++)
@@ -1246,7 +1022,7 @@ namespace DonTopo {
                 writes[4].descriptorCount = 1;
                 writes[4].pImageInfo      = &ormInfo;
 
-                vkUpdateDescriptorSets(m_device, 5, writes, 0, nullptr);
+                vkUpdateDescriptorSets(m_gpu.device(), 5, writes, 0, nullptr);
             }
         }
     }
@@ -1298,24 +1074,24 @@ namespace DonTopo {
         imageInfo.sharingMode       = VK_SHARING_MODE_EXCLUSIVE;
         imageInfo.initialLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
 
-        if(vkCreateImage(m_device, &imageInfo, nullptr, &m_depthImage) != VK_SUCCESS)
+        if(vkCreateImage(m_gpu.device(), &imageInfo, nullptr, &m_depthImage) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create depth image!");
         }
 
         VkMemoryRequirements memReq;
-        vkGetImageMemoryRequirements(m_device, m_depthImage, &memReq);
+        vkGetImageMemoryRequirements(m_gpu.device(), m_depthImage, &memReq);
 
         VkMemoryAllocateInfo allocInfo{};
         allocInfo.sType             = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocInfo.allocationSize    = memReq.size;
-        allocInfo.memoryTypeIndex   = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        if(vkAllocateMemory(m_device, &allocInfo, nullptr, &m_depthImageMemory) != VK_SUCCESS)
+        allocInfo.memoryTypeIndex   = m_gpu.findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if(vkAllocateMemory(m_gpu.device(), &allocInfo, nullptr, &m_depthImageMemory) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to allocate depth image memory!");
         }
 
-        vkBindImageMemory(m_device, m_depthImage, m_depthImageMemory, 0);
+        vkBindImageMemory(m_gpu.device(), m_depthImage, m_depthImageMemory, 0);
 
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -1327,381 +1103,10 @@ namespace DonTopo {
         viewInfo.subresourceRange.baseMipLevel = 0;
         viewInfo.subresourceRange.layerCount = 1;
 
-        if(vkCreateImageView(m_device, &viewInfo, nullptr, &m_depthImageView) != VK_SUCCESS)
+        if(vkCreateImageView(m_gpu.device(), &viewInfo, nullptr, &m_depthImageView) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create depth image view!");
         }
-    }
-
-    void Renderer::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props, VkBuffer& buffer, VkDeviceMemory& memory)
-    {
-        VkBufferCreateInfo bufferInfo{};
-        bufferInfo.sType        = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufferInfo.size         = size;
-        bufferInfo.usage        = usage;
-        bufferInfo.sharingMode  = VK_SHARING_MODE_EXCLUSIVE;
-
-        if(vkCreateBuffer(m_device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create buffer!");
-        }
-
-        VkMemoryRequirements req;
-        vkGetBufferMemoryRequirements(m_device, buffer, &req);
-
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType             = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize    = req.size;
-        allocInfo.memoryTypeIndex   = findMemoryType(req.memoryTypeBits, props);
-
-        if(vkAllocateMemory(m_device, &allocInfo, nullptr, &memory) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to allocate buffer memory!");
-        }
-
-        vkBindBufferMemory(m_device, buffer, memory, 0);
-    }
-
-    void Renderer::copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size)
-    {
-        VkCommandBufferAllocateInfo allocInfo{};
-        allocInfo.sType                 = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.level                 = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandPool           = m_commandPool;
-        allocInfo.commandBufferCount    = 1;
-
-        VkCommandBuffer commandBuffer;
-        vkAllocateCommandBuffers(m_device, &allocInfo, &commandBuffer);
-
-        VkCommandBufferBeginInfo beginInfo{};
-        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(commandBuffer, &beginInfo);
-
-        VkBufferCopy region{};
-        region.size = size;
-        vkCmdCopyBuffer(commandBuffer, src, dst, 1, &region);
-
-        vkEndCommandBuffer(commandBuffer);
-
-        VkSubmitInfo submitInfo{};
-        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &commandBuffer;
-        vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-        vkQueueWaitIdle(m_graphicsQueue);
-
-        vkFreeCommandBuffers(m_device, m_commandPool, 1, &commandBuffer);
-    }
-
-    VkCommandBuffer Renderer::beginOneTimeCommands()
-    {
-        VkCommandBufferAllocateInfo allocInfo{};
-        allocInfo.sType                 = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.level                 = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandPool           = m_commandPool;
-        allocInfo.commandBufferCount    = 1;
-
-        VkCommandBuffer cmd;
-        vkAllocateCommandBuffers(m_device, &allocInfo, &cmd);
-
-        VkCommandBufferBeginInfo beginInfo{};
-        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cmd, &beginInfo);
-        return cmd;
-    } 
-
-    void Renderer::endOneTimeCommands(VkCommandBuffer cmd)
-    {
-        vkEndCommandBuffer(cmd);
-
-        VkSubmitInfo submitInfo{};
-        submitInfo.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submitInfo.commandBufferCount   = 1;
-        submitInfo.pCommandBuffers      = &cmd;
-        vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-        vkQueueWaitIdle(m_graphicsQueue);
-
-        vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
-    }
-
-    void Renderer::createImage(uint32_t w, uint32_t h, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags props, VkImage& image, VkDeviceMemory& memory)
-    {
-        VkImageCreateInfo imageInfo{};
-        imageInfo.sType             = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        imageInfo.imageType         = VK_IMAGE_TYPE_2D;
-        imageInfo.format            = format;
-        imageInfo.extent            = { w, h, 1};
-        imageInfo.mipLevels         = 1,
-        imageInfo.arrayLayers       = 1;
-        imageInfo.samples           = VK_SAMPLE_COUNT_1_BIT;
-        imageInfo.tiling            = tiling;
-        imageInfo.usage             = usage;
-        imageInfo.sharingMode       = VK_SHARING_MODE_EXCLUSIVE;
-        imageInfo.initialLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
-
-        if(vkCreateImage(m_device, &imageInfo, nullptr, &image) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create image!");
-        }
-
-        VkMemoryRequirements memoryRequirement;
-        vkGetImageMemoryRequirements(m_device, image, &memoryRequirement);
-
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType             = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize    = memoryRequirement.size;
-        allocInfo.memoryTypeIndex   = findMemoryType(memoryRequirement.memoryTypeBits, props);
-
-        if(vkAllocateMemory(m_device, &allocInfo, nullptr, &memory) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to allocate image memory!");
-        }
-
-        vkBindImageMemory(m_device, image, memory, 0);
-    }
-
-    void Renderer::transitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout)
-    {
-        VkCommandBuffer cmd = beginOneTimeCommands();
-
-        VkImageMemoryBarrier barrier{};
-        barrier.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.oldLayout                       = oldLayout;
-        barrier.newLayout                       = newLayout;
-        barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image                           = image;
-        barrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        barrier.subresourceRange.baseMipLevel   = 0;
-        barrier.subresourceRange.levelCount     = 1;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount     = 1;
-
-        VkPipelineStageFlags srcStage, dstStage;
-
-        if(oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-        {
-            barrier.srcAccessMask   = 0;
-            barrier.dstAccessMask   = VK_ACCESS_TRANSFER_WRITE_BIT;
-            srcStage                = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            dstStage                = VK_PIPELINE_STAGE_TRANSFER_BIT;
-        }
-        else if( oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-        {
-            barrier.srcAccessMask   = VK_ACCESS_TRANSFER_WRITE_BIT;
-            barrier.dstAccessMask   = VK_ACCESS_SHADER_READ_BIT;
-            srcStage                = VK_PIPELINE_STAGE_TRANSFER_BIT;
-            dstStage                = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        }
-        else 
-        {
-            throw std::runtime_error("unsupported layout transition!");
-        }
-        
-        vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-
-        endOneTimeCommands(cmd);
-    }
-
-    void Renderer::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t w, uint32_t h)
-    {
-        VkCommandBuffer cmd = beginOneTimeCommands();
-
-        VkBufferImageCopy region{};
-        region.bufferOffset                     = 0;
-        region.bufferRowLength                  = 0;
-        region.bufferImageHeight                = 0;
-        region.imageSubresource.aspectMask      = VK_IMAGE_ASPECT_COLOR_BIT;
-        region.imageSubresource.mipLevel        = 0;
-        region.imageSubresource.baseArrayLayer  = 0;
-        region.imageSubresource.layerCount      = 1;
-        region.imageOffset                      = {0,0,0};
-        region.imageExtent                      = {w,h,1};
-
-        vkCmdCopyBufferToImage(cmd, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-        endOneTimeCommands(cmd);
-    }
-
-    void Renderer::createTextureImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem)
-    {
-        int w, h, channels;
-        stbi_uc* pixels = nullptr;
-        bool fromStb = false;
-
-        if (!embedded.empty())
-        {
-            pixels = stbi_load_from_memory(embedded.data(), (int)embedded.size(), &w, &h, &channels, STBI_rgb_alpha);
-            fromStb = (pixels != nullptr);
-        }
-        else if (!path.empty())
-        {
-            pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
-            fromStb = (pixels != nullptr);
-        }
-
-        // Fallback: purple/black checkerboard when no texture or file not found
-        std::vector<uint8_t> placeholder;
-        if (!pixels)
-        {
-            constexpr int SIZE = 64, TILE = 8;
-            placeholder.resize(SIZE * SIZE * 4);
-            for (int py = 0; py < SIZE; py++) {
-                for (int px = 0; px < SIZE; px++) {
-                    bool check = ((px / TILE) + (py / TILE)) % 2 == 0;
-                    uint8_t* p = placeholder.data() + (py * SIZE + px) * 4;
-                    p[0] = check ? 0xCC : 0x88;
-                    p[1] = check ? 0xCC : 0x88;
-                    p[2] = check ? 0xCC : 0x88;
-                    p[3] = 0xFF;
-                }
-            }
-            pixels = placeholder.data();
-            w = h = SIZE;
-        }
-
-        VkDeviceSize imageSize = w * h * 4;
-
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingMemory;
-        createBuffer(imageSize,
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            stagingBuffer, stagingMemory);
-
-        void* data;
-        vkMapMemory(m_device, stagingMemory, 0, imageSize, 0, &data);
-        memcpy(data, pixels, (size_t)imageSize);
-        vkUnmapMemory(m_device, stagingMemory);
-        if (fromStb) stbi_image_free(pixels);
-
-        createImage((uint32_t)w, (uint32_t)h,
-            VK_FORMAT_R8G8B8A8_SRGB,
-            VK_IMAGE_TILING_OPTIMAL,
-            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            img, mem);
-
-        transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        copyBufferToImage(stagingBuffer, img, (uint32_t)w, (uint32_t)h);
-        transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-        vkDestroyBuffer(m_device, stagingBuffer, nullptr);
-        vkFreeMemory(m_device, stagingMemory, nullptr);
-    }
-
-    void Renderer::createNormalMapImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem)
-    {
-        int w, h, channels;
-        stbi_uc* pixels = nullptr;
-        bool fromStb = false;
-
-        if (!embedded.empty())
-        {
-            pixels = stbi_load_from_memory(embedded.data(), (int)embedded.size(), &w, &h, &channels, STBI_rgb_alpha);
-            fromStb = (pixels != nullptr);
-        }
-        else if (!path.empty())
-        {
-            pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
-            fromStb = (pixels != nullptr);
-        }
-
-        // Fallback: flat normal (0,0,1) en tangent space = (128,128,255)
-        uint8_t flatNormal[4] = { 0x80, 0x80, 0xFF, 0xFF };
-        if (!pixels)
-        {
-            pixels = flatNormal;
-            w = h = 1;
-        }
-
-        VkDeviceSize imageSize = w * h * 4;
-
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingMemory;
-        createBuffer(imageSize,
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            stagingBuffer, stagingMemory);
-
-        void* data;
-        vkMapMemory(m_device, stagingMemory, 0, imageSize, 0, &data);
-        memcpy(data, pixels, (size_t)imageSize);
-        vkUnmapMemory(m_device, stagingMemory);
-        if (fromStb) stbi_image_free(pixels);
-
-        createImage((uint32_t)w, (uint32_t)h,
-            VK_FORMAT_R8G8B8A8_UNORM,
-            VK_IMAGE_TILING_OPTIMAL,
-            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            img, mem);
-
-        transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        copyBufferToImage(stagingBuffer, img, (uint32_t)w, (uint32_t)h);
-        transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-        vkDestroyBuffer(m_device, stagingBuffer, nullptr);
-        vkFreeMemory(m_device, stagingMemory, nullptr);
-    }
-
-    void Renderer::createTextureImageView(VkImage image, VkImageView& view, VkFormat format)
-    {
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType                              = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image                              = image;
-        viewInfo.viewType                           = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format                             = format;
-        viewInfo.subresourceRange.aspectMask        = VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.baseMipLevel      = 0;
-        viewInfo.subresourceRange.levelCount        = 1;
-        viewInfo.subresourceRange.baseArrayLayer    = 0;
-        viewInfo.subresourceRange.layerCount        = 1;
-
-        if(vkCreateImageView(m_device, &viewInfo, nullptr, &view) != VK_SUCCESS)
-            throw std::runtime_error("failed to create texture image view!");
-    }
-
-    void Renderer::createTextureSampler(VkSampler& outSampler)
-    {
-        VkSamplerCreateInfo samplerInfo{};
-        samplerInfo.sType                   = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        samplerInfo.magFilter               = VK_FILTER_LINEAR;
-        samplerInfo.minFilter               = VK_FILTER_LINEAR;
-        samplerInfo.addressModeU            = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerInfo.addressModeV            = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerInfo.addressModeW            = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerInfo.anisotropyEnable        = VK_FALSE;
-        samplerInfo.borderColor             = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
-        samplerInfo.unnormalizedCoordinates = VK_FALSE;
-        samplerInfo.compareEnable           = VK_FALSE;
-        samplerInfo.mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-
-        if(vkCreateSampler(m_device, &samplerInfo, nullptr, &outSampler) != VK_SUCCESS)
-            throw std::runtime_error("failed to create texture sampler!");
-    }
-
-    void Renderer::createSolidColorImage(const uint8_t rgba[4], VkImage& img, VkDeviceMemory& mem)
-    {
-        VkBuffer sb; VkDeviceMemory sm;
-        createBuffer(4,
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            sb, sm);
-        void* mapped;
-        vkMapMemory(m_device, sm, 0, 4, 0, &mapped);
-        memcpy(mapped, rgba, 4);
-        vkUnmapMemory(m_device, sm);
-        createImage(1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
-            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img, mem);
-        transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        copyBufferToImage(sb, img, 1, 1);
-        transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        vkDestroyBuffer(m_device, sb, nullptr);
-        vkFreeMemory(m_device, sm, nullptr);
     }
 
     void Renderer::buildRenderObject(const Mesh& mesh, RenderObject& obj)
@@ -1709,16 +1114,16 @@ namespace DonTopo {
         obj.indexCount = (uint32_t)mesh.indices.size();
         createVertexBuffer(mesh.vertices,                               obj.vertexBuffer, obj.vertexMemory);
         createIndexBuffer(mesh.indices,                                 obj.indexBuffer,  obj.indexMemory);
-        createTextureImage(mesh.texturePath, mesh.embeddedTexture,         obj.textureImage, obj.textureMem);
-        createTextureImageView(obj.textureImage,                           obj.textureView);
-        createTextureSampler(obj.sampler);
-        createNormalMapImage(mesh.normalMapPath, mesh.embeddedNormalMap,   obj.normalImage,  obj.normalMem);
-        createTextureImageView(obj.normalImage,                            obj.normalView, VK_FORMAT_R8G8B8A8_UNORM);
-        createTextureSampler(obj.normalSampler);
+        m_res.createTextureImage(mesh.texturePath, mesh.embeddedTexture,         obj.textureImage, obj.textureMem);
+        m_res.createTextureImageView(obj.textureImage,                           obj.textureView);
+        m_res.createTextureSampler(obj.sampler);
+        m_res.createNormalMapImage(mesh.normalMapPath, mesh.embeddedNormalMap,   obj.normalImage,  obj.normalMem);
+        m_res.createTextureImageView(obj.normalImage,                            obj.normalView, VK_FORMAT_R8G8B8A8_UNORM);
+        m_res.createTextureSampler(obj.normalSampler);
 
         if (!mesh.metallicRoughnessPath.empty() || !mesh.embeddedMetallicRoughness.empty())
         {
-            createNormalMapImage(mesh.metallicRoughnessPath, mesh.embeddedMetallicRoughness,
+            m_res.createNormalMapImage(mesh.metallicRoughnessPath, mesh.embeddedMetallicRoughness,
                                  obj.ormImage, obj.ormMem);
             obj.metallic  = 1.0f;
             obj.roughness = 1.0f;
@@ -1726,38 +1131,38 @@ namespace DonTopo {
         else
         {
             constexpr uint8_t white[4] = {255, 255, 255, 255};
-            createSolidColorImage(white, obj.ormImage, obj.ormMem);
+            m_res.createSolidColorImage(white, obj.ormImage, obj.ormMem);
             obj.metallic  = mesh.metallic;
             obj.roughness = mesh.roughness;
         }
-        createTextureImageView(obj.ormImage, obj.ormView, VK_FORMAT_R8G8B8A8_UNORM);
-        createTextureSampler(obj.ormSampler);
+        m_res.createTextureImageView(obj.ormImage, obj.ormView, VK_FORMAT_R8G8B8A8_UNORM);
+        m_res.createTextureSampler(obj.ormSampler);
     }
 
     void Renderer::destroyRenderObject(RenderObject& obj)
     {
-        vkDestroySampler(m_device,   obj.ormSampler,    nullptr);
-        vkDestroyImageView(m_device, obj.ormView,       nullptr);
-        vkDestroyImage(m_device,     obj.ormImage,      nullptr);
-        vkFreeMemory(m_device,       obj.ormMem,        nullptr);
-        vkDestroySampler(m_device,   obj.normalSampler, nullptr);
-        vkDestroyImageView(m_device, obj.normalView,    nullptr);
-        vkDestroyImage(m_device,     obj.normalImage,   nullptr);
-        vkFreeMemory(m_device,       obj.normalMem,     nullptr);
-        vkDestroySampler(m_device,   obj.sampler,       nullptr);
-        vkDestroyImageView(m_device, obj.textureView,   nullptr);
-        vkDestroyImage(m_device,     obj.textureImage,  nullptr);
-        vkFreeMemory(m_device,       obj.textureMem,    nullptr);
-        vkDestroyBuffer(m_device,    obj.indexBuffer,   nullptr);
-        vkFreeMemory(m_device,       obj.indexMemory,   nullptr);
-        vkDestroyBuffer(m_device,    obj.vertexBuffer,  nullptr);
-        vkFreeMemory(m_device,       obj.vertexMemory,  nullptr);
+        vkDestroySampler(m_gpu.device(),   obj.ormSampler,    nullptr);
+        vkDestroyImageView(m_gpu.device(), obj.ormView,       nullptr);
+        vkDestroyImage(m_gpu.device(),     obj.ormImage,      nullptr);
+        vkFreeMemory(m_gpu.device(),       obj.ormMem,        nullptr);
+        vkDestroySampler(m_gpu.device(),   obj.normalSampler, nullptr);
+        vkDestroyImageView(m_gpu.device(), obj.normalView,    nullptr);
+        vkDestroyImage(m_gpu.device(),     obj.normalImage,   nullptr);
+        vkFreeMemory(m_gpu.device(),       obj.normalMem,     nullptr);
+        vkDestroySampler(m_gpu.device(),   obj.sampler,       nullptr);
+        vkDestroyImageView(m_gpu.device(), obj.textureView,   nullptr);
+        vkDestroyImage(m_gpu.device(),     obj.textureImage,  nullptr);
+        vkFreeMemory(m_gpu.device(),       obj.textureMem,    nullptr);
+        vkDestroyBuffer(m_gpu.device(),    obj.indexBuffer,   nullptr);
+        vkFreeMemory(m_gpu.device(),       obj.indexMemory,   nullptr);
+        vkDestroyBuffer(m_gpu.device(),    obj.vertexBuffer,  nullptr);
+        vkFreeMemory(m_gpu.device(),       obj.vertexMemory,  nullptr);
     }
 
     void Renderer::createShadowResources()
     {
         // 1. Imagen depth para shadow map
-        createImage(SHADOW_SIZE, SHADOW_SIZE, VK_FORMAT_D32_SFLOAT, VK_IMAGE_TILING_OPTIMAL, 
+        m_res.createImage(SHADOW_SIZE, SHADOW_SIZE, VK_FORMAT_D32_SFLOAT, VK_IMAGE_TILING_OPTIMAL, 
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_shadowImage, m_shadowMemory);
 
@@ -1770,7 +1175,7 @@ namespace DonTopo {
         viewInfo.subresourceRange.aspectMask    = VK_IMAGE_ASPECT_DEPTH_BIT;
         viewInfo.subresourceRange.layerCount    = 1;
         viewInfo.subresourceRange.levelCount    = 1;    
-        if(vkCreateImageView(m_device, &viewInfo, nullptr, &m_shadowView) != VK_SUCCESS)
+        if(vkCreateImageView(m_gpu.device(), &viewInfo, nullptr, &m_shadowView) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create shadow image view!");
         }
@@ -1787,7 +1192,7 @@ namespace DonTopo {
         samplerInfo.compareEnable           = VK_TRUE;
         samplerInfo.compareOp               = VK_COMPARE_OP_LESS_OR_EQUAL;
         samplerInfo.mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        if(vkCreateSampler(m_device, &samplerInfo, nullptr, &m_shadowSampler) != VK_SUCCESS)
+        if(vkCreateSampler(m_gpu.device(), &samplerInfo, nullptr, &m_shadowSampler) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create shadow sampler!");
         }
@@ -1833,7 +1238,7 @@ namespace DonTopo {
         renderPassInfo.pSubpasses        = &subpass;
         renderPassInfo.dependencyCount   = 2;
         renderPassInfo.pDependencies     = dependencies;
-        if(vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_shadowRenderPass) != VK_SUCCESS)
+        if(vkCreateRenderPass(m_gpu.device(), &renderPassInfo, nullptr, &m_shadowRenderPass) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create shadow render pass!");
         }
@@ -1847,7 +1252,7 @@ namespace DonTopo {
         fbInfo.width           = SHADOW_SIZE;
         fbInfo.height          = SHADOW_SIZE;
         fbInfo.layers          = 1;
-        if (vkCreateFramebuffer(m_device, &fbInfo, nullptr, &m_shadowFramebuffer) != VK_SUCCESS)
+        if (vkCreateFramebuffer(m_gpu.device(), &fbInfo, nullptr, &m_shadowFramebuffer) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create shadow framebuffer!");
         }            
@@ -1929,7 +1334,7 @@ namespace DonTopo {
         layoutInfo.pSetLayouts            = &m_descriptorSetLayout;
         layoutInfo.pushConstantRangeCount = 1;
         layoutInfo.pPushConstantRanges    = &pushRange;
-        if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_shadowPipelineLayout) != VK_SUCCESS)
+        if (vkCreatePipelineLayout(m_gpu.device(), &layoutInfo, nullptr, &m_shadowPipelineLayout) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create shadow pipeline layout!");
         }            
@@ -1948,12 +1353,12 @@ namespace DonTopo {
         pipelineInfo.pDynamicState       = &dynamicState;
         pipelineInfo.layout              = m_shadowPipelineLayout;
         pipelineInfo.renderPass          = m_shadowRenderPass;
-        if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_shadowPipeline) != VK_SUCCESS)
+        if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_shadowPipeline) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create shadow pipeline!");
         }            
 
-        vkDestroyShaderModule(m_device, vertModule, nullptr);
+        vkDestroyShaderModule(m_gpu.device(), vertModule, nullptr);
     }
 
     void Renderer::recordShadowPass(VkCommandBuffer cmd)
@@ -2009,7 +1414,7 @@ namespace DonTopo {
         dslInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         dslInfo.bindingCount = 8;
         dslInfo.pBindings    = bindings;
-        if (vkCreateDescriptorSetLayout(m_device, &dslInfo, nullptr, &m_computeDescLayout) != VK_SUCCESS)
+        if (vkCreateDescriptorSetLayout(m_gpu.device(), &dslInfo, nullptr, &m_computeDescLayout) != VK_SUCCESS)
             throw std::runtime_error("failed to create compute descriptor set layout!");
 
         // --- Pipeline layout (1 set + push constant) ---
@@ -2024,7 +1429,7 @@ namespace DonTopo {
         plInfo.pSetLayouts            = &m_computeDescLayout;
         plInfo.pushConstantRangeCount = 1;
         plInfo.pPushConstantRanges    = &pcr;
-        if (vkCreatePipelineLayout(m_device, &plInfo, nullptr, &m_computePipelineLayout) != VK_SUCCESS)
+        if (vkCreatePipelineLayout(m_gpu.device(), &plInfo, nullptr, &m_computePipelineLayout) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create compute pipeline layout!");
         }
@@ -2039,7 +1444,7 @@ namespace DonTopo {
         poolInfo.poolSizeCount = 1;
         poolInfo.pPoolSizes    = &ps;
         poolInfo.maxSets       = 16;
-        if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_computeDescPool) != VK_SUCCESS)
+        if (vkCreateDescriptorPool(m_gpu.device(), &poolInfo, nullptr, &m_computeDescPool) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create compute descriptor pool!");
         }        
@@ -2058,10 +1463,10 @@ namespace DonTopo {
             info.stage.pName  = "main";
             info.layout       = m_computePipelineLayout;
 
-            if (vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline) != VK_SUCCESS)
+            if (vkCreateComputePipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &info, nullptr, &pipeline) != VK_SUCCESS)
                 throw std::runtime_error("failed to create compute pipeline: " + spv);
 
-            vkDestroyShaderModule(m_device, module, nullptr);
+            vkDestroyShaderModule(m_gpu.device(), module, nullptr);
         };
 
         makePipeline("shaders/bone_eval.comp.spv",      m_boneEvalPipeline);
@@ -2150,46 +1555,20 @@ namespace DonTopo {
             pci.renderPass          = m_renderPass;
             pci.subpass             = 0;
 
-            if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pci, nullptr, &m_skinnedGfxPipeline) != VK_SUCCESS)
+            if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &pci, nullptr, &m_skinnedGfxPipeline) != VK_SUCCESS)
                 throw std::runtime_error("failed to create skinned graphics pipeline!");
 
-            vkDestroyShaderModule(m_device, vertMod, nullptr);
-            vkDestroyShaderModule(m_device, fragMod, nullptr);
+            vkDestroyShaderModule(m_gpu.device(), vertMod, nullptr);
+            vkDestroyShaderModule(m_gpu.device(), fragMod, nullptr);
         }
-    }
-
-    void Renderer::uploadBuffer(const void* data, VkDeviceSize size,
-                             VkBufferUsageFlags usage,
-                             VkBuffer& buf, VkDeviceMemory& mem)
-    {
-        VkBuffer       stagingBuf;
-        VkDeviceMemory stagingMem;
-        createBuffer(size,
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            stagingBuf, stagingMem);
-
-        void* mapped;
-        vkMapMemory(m_device, stagingMem, 0, size, 0, &mapped);
-        memcpy(mapped, data, size);
-        vkUnmapMemory(m_device, stagingMem);
-
-        createBuffer(size,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            buf, mem);
-        copyBuffer(stagingBuf, buf, size);
-
-        vkDestroyBuffer(m_device, stagingBuf, nullptr);
-        vkFreeMemory(m_device, stagingMem, nullptr);
     }
 
     void Renderer::destroySkinnedRenderObject(SkinnedRenderObject& obj)
     {
         auto destroy = [&](VkBuffer& b, VkDeviceMemory& m)
         {
-            if (b != VK_NULL_HANDLE) { vkDestroyBuffer(m_device, b, nullptr); b = VK_NULL_HANDLE; }
-            if (m != VK_NULL_HANDLE) { vkFreeMemory(m_device, m, nullptr);    m = VK_NULL_HANDLE; }
+            if (b != VK_NULL_HANDLE) { vkDestroyBuffer(m_gpu.device(), b, nullptr); b = VK_NULL_HANDLE; }
+            if (m != VK_NULL_HANDLE) { vkFreeMemory(m_gpu.device(), m, nullptr);    m = VK_NULL_HANDLE; }
         };
         destroy(obj.keyframePosBuffer,    obj.keyframePosMemory);
         destroy(obj.keyframeRotBuffer,    obj.keyframeRotMemory);
@@ -2203,18 +1582,18 @@ namespace DonTopo {
 
         for (auto& mgfx : obj.matGfx)
         {
-            if (mgfx.ormSampler    != VK_NULL_HANDLE) { vkDestroySampler  (m_device, mgfx.ormSampler,    nullptr); }
-            if (mgfx.ormView       != VK_NULL_HANDLE) { vkDestroyImageView(m_device, mgfx.ormView,       nullptr); }
-            if (mgfx.ormImage      != VK_NULL_HANDLE) { vkDestroyImage    (m_device, mgfx.ormImage,      nullptr); }
-            if (mgfx.ormMem        != VK_NULL_HANDLE) { vkFreeMemory      (m_device, mgfx.ormMem,        nullptr); }
-            if (mgfx.normalSampler != VK_NULL_HANDLE) { vkDestroySampler  (m_device, mgfx.normalSampler, nullptr); }
-            if (mgfx.normalView    != VK_NULL_HANDLE) { vkDestroyImageView(m_device, mgfx.normalView,    nullptr); }
-            if (mgfx.normalImage   != VK_NULL_HANDLE) { vkDestroyImage    (m_device, mgfx.normalImage,   nullptr); }
-            if (mgfx.normalMem     != VK_NULL_HANDLE) { vkFreeMemory      (m_device, mgfx.normalMem,     nullptr); }
-            if (mgfx.sampler       != VK_NULL_HANDLE) { vkDestroySampler  (m_device, mgfx.sampler,       nullptr); }
-            if (mgfx.textureView   != VK_NULL_HANDLE) { vkDestroyImageView(m_device, mgfx.textureView,   nullptr); }
-            if (mgfx.textureImage  != VK_NULL_HANDLE) { vkDestroyImage    (m_device, mgfx.textureImage,  nullptr); }
-            if (mgfx.textureMem    != VK_NULL_HANDLE) { vkFreeMemory      (m_device, mgfx.textureMem,    nullptr); }
+            if (mgfx.ormSampler    != VK_NULL_HANDLE) { vkDestroySampler  (m_gpu.device(), mgfx.ormSampler,    nullptr); }
+            if (mgfx.ormView       != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.ormView,       nullptr); }
+            if (mgfx.ormImage      != VK_NULL_HANDLE) { vkDestroyImage    (m_gpu.device(), mgfx.ormImage,      nullptr); }
+            if (mgfx.ormMem        != VK_NULL_HANDLE) { vkFreeMemory      (m_gpu.device(), mgfx.ormMem,        nullptr); }
+            if (mgfx.normalSampler != VK_NULL_HANDLE) { vkDestroySampler  (m_gpu.device(), mgfx.normalSampler, nullptr); }
+            if (mgfx.normalView    != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.normalView,    nullptr); }
+            if (mgfx.normalImage   != VK_NULL_HANDLE) { vkDestroyImage    (m_gpu.device(), mgfx.normalImage,   nullptr); }
+            if (mgfx.normalMem     != VK_NULL_HANDLE) { vkFreeMemory      (m_gpu.device(), mgfx.normalMem,     nullptr); }
+            if (mgfx.sampler       != VK_NULL_HANDLE) { vkDestroySampler  (m_gpu.device(), mgfx.sampler,       nullptr); }
+            if (mgfx.textureView   != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.textureView,   nullptr); }
+            if (mgfx.textureImage  != VK_NULL_HANDLE) { vkDestroyImage    (m_gpu.device(), mgfx.textureImage,  nullptr); }
+            if (mgfx.textureMem    != VK_NULL_HANDLE) { vkFreeMemory      (m_gpu.device(), mgfx.textureMem,    nullptr); }
         }
         obj.matGfx.clear();
         obj.subMeshes.clear();
@@ -2291,34 +1670,34 @@ namespace DonTopo {
         if (allScale.empty()) allScale.push_back({});
 
         // --- Upload SSBOs estáticos ---
-        uploadBuffer(allPos.data(),   allPos.size()   * sizeof(GpuPosKey),
+        m_res.uploadBuffer(allPos.data(),   allPos.size()   * sizeof(GpuPosKey),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframePosBuffer,   obj.keyframePosMemory);
-        uploadBuffer(allRot.data(),   allRot.size()   * sizeof(GpuRotKey),
+        m_res.uploadBuffer(allRot.data(),   allRot.size()   * sizeof(GpuRotKey),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframeRotBuffer,   obj.keyframeRotMemory);
-        uploadBuffer(allScale.data(), allScale.size() * sizeof(GpuPosKey),
+        m_res.uploadBuffer(allScale.data(), allScale.size() * sizeof(GpuPosKey),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframeScaleBuffer, obj.keyframeScaleMemory);
-        uploadBuffer(boneInfos.data(), boneInfos.size() * sizeof(GpuBoneInfo),
+        m_res.uploadBuffer(boneInfos.data(), boneInfos.size() * sizeof(GpuBoneInfo),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.boneInfoBuffer,      obj.boneInfoMemory);
-        uploadBuffer(mesh.skinnedVertices.data(), mesh.skinnedVertices.size() * sizeof(SkinnedVertex),
+        m_res.uploadBuffer(mesh.skinnedVertices.data(), mesh.skinnedVertices.size() * sizeof(SkinnedVertex),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.inputVertexBuffer,   obj.inputVertexMemory);
 
         // --- Index buffer ---
         createIndexBuffer(mesh.indices, obj.indexBuffer, obj.indexMemory);
 
         // --- SSBOs dinámicos (device local, sin datos iniciales) ---
-        createBuffer((uint32_t)boneCount * sizeof(glm::mat4),
+        m_res.createBuffer((uint32_t)boneCount * sizeof(glm::mat4),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             obj.localTransformBuffer, obj.localTransformMemory);
 
-        createBuffer((uint32_t)boneCount * sizeof(glm::mat4),
+        m_res.createBuffer((uint32_t)boneCount * sizeof(glm::mat4),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             obj.finalBoneBuffer, obj.finalBoneMemory);
 
         // --- Output vertex buffer: SSBO + VB, stride 80 bytes (5×vec4) ---
         constexpr VkDeviceSize OUT_VERT = 5 * sizeof(glm::vec4);
-        createBuffer((uint32_t)vertexCount * OUT_VERT,
+        m_res.createBuffer((uint32_t)vertexCount * OUT_VERT,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             obj.outputVertexBuffer, obj.outputVertexMemory);
@@ -2329,7 +1708,7 @@ namespace DonTopo {
         dsAlloc.descriptorPool     = m_computeDescPool;
         dsAlloc.descriptorSetCount = 1;
         dsAlloc.pSetLayouts        = &m_computeDescLayout;
-        if (vkAllocateDescriptorSets(m_device, &dsAlloc, &obj.computeDescSet) != VK_SUCCESS)
+        if (vkAllocateDescriptorSets(m_gpu.device(), &dsAlloc, &obj.computeDescSet) != VK_SUCCESS)
             throw std::runtime_error("failed to allocate compute descriptor set!");
 
         VkDescriptorBufferInfo bufInfos[8]{};
@@ -2352,7 +1731,7 @@ namespace DonTopo {
             writes[i].descriptorCount = 1;
             writes[i].pBufferInfo     = &bufInfos[i];
         }
-        vkUpdateDescriptorSets(m_device, 8, writes, 0, nullptr);
+        vkUpdateDescriptorSets(m_gpu.device(), 8, writes, 0, nullptr);
 
         // --- Texturas y descriptor sets por material ---
         constexpr uint8_t white[4] = {255, 255, 255, 255};
@@ -2364,31 +1743,31 @@ namespace DonTopo {
             SkinnedMatGfx& mgfx = obj.matGfx[mi];
 
             // Diffuse
-            createTextureImage(smat.texturePath, smat.embeddedTexture, mgfx.textureImage, mgfx.textureMem);
-            createTextureImageView(mgfx.textureImage, mgfx.textureView);
-            createTextureSampler(mgfx.sampler);
+            m_res.createTextureImage(smat.texturePath, smat.embeddedTexture, mgfx.textureImage, mgfx.textureMem);
+            m_res.createTextureImageView(mgfx.textureImage, mgfx.textureView);
+            m_res.createTextureSampler(mgfx.sampler);
 
             // Normal map
-            createNormalMapImage(smat.normalMapPath, smat.embeddedNormalMap, mgfx.normalImage, mgfx.normalMem);
-            createTextureImageView(mgfx.normalImage, mgfx.normalView, VK_FORMAT_R8G8B8A8_UNORM);
-            createTextureSampler(mgfx.normalSampler);
+            m_res.createNormalMapImage(smat.normalMapPath, smat.embeddedNormalMap, mgfx.normalImage, mgfx.normalMem);
+            m_res.createTextureImageView(mgfx.normalImage, mgfx.normalView, VK_FORMAT_R8G8B8A8_UNORM);
+            m_res.createTextureSampler(mgfx.normalSampler);
 
             // ORM
             if (!smat.metallicRoughnessPath.empty() || !smat.embeddedMetallicRoughness.empty())
             {
-                createNormalMapImage(smat.metallicRoughnessPath, smat.embeddedMetallicRoughness,
+                m_res.createNormalMapImage(smat.metallicRoughnessPath, smat.embeddedMetallicRoughness,
                                      mgfx.ormImage, mgfx.ormMem);
                 mgfx.metallic  = 1.0f;
                 mgfx.roughness = 1.0f;
             }
             else
             {
-                createSolidColorImage(white, mgfx.ormImage, mgfx.ormMem);
+                m_res.createSolidColorImage(white, mgfx.ormImage, mgfx.ormMem);
                 mgfx.metallic  = smat.metallic;
                 mgfx.roughness = smat.roughness;
             }
-            createTextureImageView(mgfx.ormImage, mgfx.ormView, VK_FORMAT_R8G8B8A8_UNORM);
-            createTextureSampler(mgfx.ormSampler);
+            m_res.createTextureImageView(mgfx.ormImage, mgfx.ormView, VK_FORMAT_R8G8B8A8_UNORM);
+            m_res.createTextureSampler(mgfx.ormSampler);
 
             // Descriptor sets
             VkDescriptorSetLayout layouts[MAX_FRAMES] = { m_descriptorSetLayout, m_descriptorSetLayout };
@@ -2397,7 +1776,7 @@ namespace DonTopo {
             gfxAlloc.descriptorPool     = m_descriptorPool;
             gfxAlloc.descriptorSetCount = MAX_FRAMES;
             gfxAlloc.pSetLayouts        = layouts;
-            if (vkAllocateDescriptorSets(m_device, &gfxAlloc, mgfx.descSets) != VK_SUCCESS)
+            if (vkAllocateDescriptorSets(m_gpu.device(), &gfxAlloc, mgfx.descSets) != VK_SUCCESS)
                 throw std::runtime_error("failed to allocate skinned graphics descriptor sets!");
 
             for (int fi = 0; fi < MAX_FRAMES; fi++)
@@ -2453,7 +1832,7 @@ namespace DonTopo {
                 gw[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 gw[4].descriptorCount = 1; gw[4].pImageInfo = &ormInfo;
 
-                vkUpdateDescriptorSets(m_device, 5, gw, 0, nullptr);
+                vkUpdateDescriptorSets(m_gpu.device(), 5, gw, 0, nullptr);
             }
         }
 
