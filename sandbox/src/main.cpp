@@ -92,11 +92,11 @@ int main()
             static double lastX = x, lastY = y;
             double dx = x - lastX, dy = y - lastY;
             lastX = x; lastY = y;
-            if (!ImGui::GetIO().WantCaptureMouse &&
+            auto* ctx = static_cast<AppCtx*>(glfwGetWindowUserPointer(w));
+            if (ctx->rnd->isViewportHovered() &&
                 glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS)
             {
-                static_cast<AppCtx*>(glfwGetWindowUserPointer(w))->cam->processMouse(
-                    (float)dx, (float)dy);
+                ctx->cam->processMouse((float)dx, (float)dy);
             }
         });
 

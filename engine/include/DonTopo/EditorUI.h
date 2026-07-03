@@ -16,6 +16,8 @@ public:
               const std::vector<std::string>& staticNames,
               const std::vector<std::string>& skinnedNames);
 
+    bool isViewportHovered() const { return m_viewportHovered; }
+
 private:
     void drawDockSpace();
     void drawScene(const std::vector<std::string>& staticNames,
@@ -23,6 +25,9 @@ private:
     void drawViewport(VkDescriptorSet viewportTexture);
     void drawProperties();
     void drawContentBrowser();
+
+    // Viewport
+    bool m_viewportHovered = false;
 
     // Content Browser
     bool m_dlgOpen = false;

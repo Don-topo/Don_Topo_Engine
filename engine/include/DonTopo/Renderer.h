@@ -26,6 +26,7 @@ namespace DonTopo {
             void shutdown();
             void setCamera(const Camera& camera);
             void notifyResize() { m_framebufferResized = true; }
+            bool isViewportHovered() const { return m_editorUI.isViewportHovered(); }
             void setTransform(size_t objectIndex, const glm::mat4& transform)
             {
                 if (objectIndex < m_objects.size())

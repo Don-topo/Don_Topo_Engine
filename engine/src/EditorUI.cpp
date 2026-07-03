@@ -53,6 +53,7 @@ void EditorUI::drawScene(const std::vector<std::string>& staticNames,
 void EditorUI::drawViewport(VkDescriptorSet viewportTexture)
 {
     ImGui::Begin("Viewport");
+    m_viewportHovered = ImGui::IsWindowHovered();
     ImVec2 vpSize = ImGui::GetContentRegionAvail();
     ImGui::Image((ImTextureID)(intptr_t)viewportTexture, vpSize);
     ImGui::End();
