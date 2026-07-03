@@ -154,6 +154,42 @@ namespace DonTopo {
         ImGui::Image((ImTextureID)(intptr_t)m_offscreenDescSet[m_currentFrame], vpSize);
         ImGui::End();
 
+        // Panel derecho: Properties
+        ImGui::Begin("Properties");
+        {
+            ImGui::Text("Transform");
+            ImGui::Separator();
+
+            static float s_pos[3] = {0.0f, 0.0f, 0.0f};
+
+            if (ImGui::BeginTable("##tfm", 2, ImGuiTableFlags_SizingStretchProp))
+            {
+                ImGui::TableSetupColumn("##lbl", ImGuiTableColumnFlags_WidthFixed, 14.0f);
+                ImGui::TableSetupColumn("##val", ImGuiTableColumnFlags_WidthStretch);
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0); ImGui::Text("x");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-1);
+                ImGui::InputFloat("##px", &s_pos[0], 0.0f, 0.0f, "%.3f");
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0); ImGui::Text("y");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-1);
+                ImGui::InputFloat("##py", &s_pos[1], 0.0f, 0.0f, "%.3f");
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0); ImGui::Text("z");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-1);
+                ImGui::InputFloat("##pz", &s_pos[2], 0.0f, 0.0f, "%.3f");
+
+                ImGui::EndTable();
+            }
+        }
+        ImGui::End();
+
         // Panel inferior: Content Browser
         ImGui::Begin("Content Browser");
         {
