@@ -37,8 +37,9 @@ namespace DonTopo {
 
         private:
 
-            struct RenderObject 
+            struct RenderObject
             {
+                std::string     name;
                 VkBuffer        vertexBuffer        = VK_NULL_HANDLE;
                 VkDeviceMemory  vertexMemory        = VK_NULL_HANDLE;
                 VkBuffer        indexBuffer         = VK_NULL_HANDLE;
@@ -106,6 +107,7 @@ namespace DonTopo {
             static_assert(sizeof(PushData) == 80, "PushData must be 80 bytes");
 
             struct SkinnedRenderObject {
+                std::string    name;
                 // SSBOs estáticos
                 VkBuffer       keyframePosBuffer    = VK_NULL_HANDLE;
                 VkDeviceMemory keyframePosMemory    = VK_NULL_HANDLE;

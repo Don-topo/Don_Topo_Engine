@@ -122,6 +122,30 @@ namespace DonTopo {
         ImGui::DockSpace(ImGui::GetID("MainDockSpace"), ImVec2(0, 0), ImGuiDockNodeFlags_None);
         ImGui::End();
 
+        // Panel izquierdo: lista de meshes cargados
+        ImGui::Begin("Scene");
+        if (ImGui::CollapsingHeader("Static Meshes", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            for (size_t i = 0; i < m_objects.size(); i++)
+            {
+                const std::string& label = m_objects[i].name.empty()
+                    ? ("Mesh " + std::to_string(i))
+                    : m_objects[i].name;
+                ImGui::Selectable(label.c_str());
+            }
+        }
+        if (ImGui::CollapsingHeader("Skinned Meshes", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            for (size_t i = 0; i < m_skinnedObjects.size(); i++)
+            {
+                const std::string& label = m_skinnedObjects[i].name.empty()
+                    ? ("Skinned " + std::to_string(i))
+                    : m_skinnedObjects[i].name;
+                ImGui::Selectable(label.c_str());
+            }
+        }
+        ImGui::End();
+
         // Ventana viewport: la escena 3D como textura
         ImGui::Begin("Viewport");
         ImVec2 vpSize = ImGui::GetContentRegionAvail();
@@ -1223,6 +1247,7 @@ namespace DonTopo {
 
     void Renderer::buildRenderObject(const Mesh& mesh, RenderObject& obj)
     {
+        obj.name       = mesh.name;
         obj.indexCount = (uint32_t)mesh.indices.size();
         createVertexBuffer(mesh.vertices,                               obj.vertexBuffer, obj.vertexMemory);
         createIndexBuffer(mesh.indices,                                 obj.indexBuffer,  obj.indexMemory);
@@ -1721,6 +1746,7 @@ namespace DonTopo {
         int boneCount   = (int)skel.names.size();
         int vertexCount = (int)mesh.skinnedVertices.size();
 
+        obj.name           = mesh.name;
         obj.boneCount      = (uint32_t)boneCount;
         obj.vertexCount    = (uint32_t)vertexCount;
         obj.indexCount     = (uint32_t)mesh.indices.size();
@@ -2140,17 +2166,22 @@ namespace DonTopo {
 
     void Renderer::initImGui(GLFWwindow* window)
     {
-        // Pool dedicado para ImGui (necesita FREE_DESCRIPTOR_SET_BIT)
-        VkDescriptorPoolSize poolSize{};
-        poolSize.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSize.descriptorCount = 16;
+        // Pool dedicado para ImGui (necesita FREE_DESCRIPTOR_SET_BIT).
+        // La API nueva (sept 2025) usa SAMPLER + SAMPLED_IMAGE separados en AddTexture().
+        VkDescriptorPoolSize poolSizes[3]{};
+        poolSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        poolSizes[0].descriptorCount = 16;
+        poolSizes[1].type            = VK_DESCRIPTOR_TYPE_SAMPLER;
+        poolSizes[1].descriptorCount = 16;
+        poolSizes[2].type            = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        poolSizes[2].descriptorCount = 16;
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        poolInfo.maxSets       = 16;
-        poolInfo.poolSizeCount = 1;
-        poolInfo.pPoolSizes    = &poolSize;
+        poolInfo.maxSets       = 48;
+        poolInfo.poolSizeCount = 3;
+        poolInfo.pPoolSizes    = poolSizes;
         if (vkCreateDescriptorPool(m_gpu.device(), &poolInfo, nullptr, &m_imguiDescPool) != VK_SUCCESS)
             throw std::runtime_error("failed to create ImGui descriptor pool!");
 

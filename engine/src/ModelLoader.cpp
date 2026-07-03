@@ -32,6 +32,7 @@ namespace DonTopo
         }
 
         Mesh mesh;
+        mesh.name = std::filesystem::path(path).stem().string();
         aiMesh* ai = scene->mMeshes[0];
 
         mesh.vertices.reserve(ai->mNumVertices);
@@ -369,6 +370,7 @@ namespace DonTopo
             for (auto& range : smesh.subMeshRanges)
                 range.materialIndex = matRemap.at(range.materialIndex);
         }
+        smesh.name = std::filesystem::path(path).stem().string();
         return smesh;
     }
 }

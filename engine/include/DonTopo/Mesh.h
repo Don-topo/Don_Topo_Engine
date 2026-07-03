@@ -7,6 +7,7 @@ namespace DonTopo
 {
     struct Mesh
     {
+        std::string             name;
         std::vector<Vertex>     vertices;
         std::vector<uint32_t>   indices;
         std::string             texturePath;
