@@ -124,7 +124,7 @@ int main()
             float dt = std::chrono::duration<float>(now - last).count();
             last = now;
 
-            if (!ImGui::GetIO().WantCaptureKeyboard)
+            if (renderer.isViewportHovered())
                 camera.update(window.getNativeWindow(), dt);
             renderer.setCamera(camera);
             audio.update(camera.getPos(), camera.getFront(), camera.getUp());
