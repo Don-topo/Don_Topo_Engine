@@ -49,3 +49,17 @@ add_custom_command(TARGET Sandbox POST_BUILD
         ${SHADER_OUT_DIR}
     COMMENT "Copying compiled shaders to output directory"
 )
+
+# Copy FMOD runtime DLL next to the executable (Windows only)
+if(FMOD_FOUND AND WIN32)
+    get_filename_component(_fmod_lib_dir "${FMOD_LIBRARY}" DIRECTORY)
+    set(_fmod_dll "${_fmod_lib_dir}/fmod.dll")
+    if(EXISTS "${_fmod_dll}")
+        add_custom_command(TARGET Sandbox POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_fmod_dll}"
+                "$<TARGET_FILE_DIR:Sandbox>/fmod.dll"
+            COMMENT "Copying fmod.dll to output"
+        )
+    endif()
+endif()
