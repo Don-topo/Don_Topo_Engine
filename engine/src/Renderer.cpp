@@ -162,30 +162,56 @@ namespace DonTopo {
 
             static float s_pos[3] = {0.0f, 0.0f, 0.0f};
 
-            if (ImGui::BeginTable("##tfm", 2, ImGuiTableFlags_SizingStretchProp))
+            ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+            if (ImGui::TreeNodeEx("Transform", ImGuiTreeNodeFlags_::ImGuiTreeNodeFlags_OpenOnArrow))
             {
-                ImGui::TableSetupColumn("##lbl", ImGuiTableColumnFlags_WidthFixed, 14.0f);
-                ImGui::TableSetupColumn("##val", ImGuiTableColumnFlags_WidthStretch);
+                static float x1 = 0.f;
+                static float y1 = 0.f;
+                static float z1 = 0.f;
 
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0); ImGui::Text("x");
-                ImGui::TableSetColumnIndex(1);
-                ImGui::SetNextItemWidth(-1);
-                ImGui::InputFloat("##px", &s_pos[0], 0.0f, 0.0f, "%.3f");
-
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0); ImGui::Text("y");
-                ImGui::TableSetColumnIndex(1);
-                ImGui::SetNextItemWidth(-1);
-                ImGui::InputFloat("##py", &s_pos[1], 0.0f, 0.0f, "%.3f");
-
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0); ImGui::Text("z");
-                ImGui::TableSetColumnIndex(1);
-                ImGui::SetNextItemWidth(-1);
-                ImGui::InputFloat("##pz", &s_pos[2], 0.0f, 0.0f, "%.3f");
-
-                ImGui::EndTable();
+                // Position
+                ImGui::Text("Position");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+                // ImGui::DragFloat("X##1", &mSelectedGameObject.GetRenderObject()->GetModelData()->Position.x, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
+                ImGui::DragFloat("X##1", &x1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+                //ImGui::DragFloat("Y##1", &mSelectedGameObject.GetRenderObject()->GetModelData()->Position.y, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
+                ImGui::DragFloat("Y##1", &y1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+                //ImGui::DragFloat("Z##1", &mSelectedGameObject.GetRenderObject()->GetModelData()->Position.z, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
+                ImGui::DragFloat("Z##1", &z1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
+                // Rotation
+                ImGui::Text("Rotation");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+                // ImGui::DragFloat("X##2", &mSelectedGameObject.GetRenderObject()->GetModelData()->Rotation.x, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
+                ImGui::DragFloat("X##2", &x1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+                //ImGui::DragFloat("Y##2", &mSelectedGameObject.GetRenderObject()->GetModelData()->Rotation.y, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
+                ImGui::DragFloat("Y##2", &y1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+                //ImGui::DragFloat("Z##2", &mSelectedGameObject.GetRenderObject()->GetModelData()->Rotation.z, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
+                ImGui::DragFloat("Z##2", &z1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
+                // Scale
+                ImGui::Text("Scale   ");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+                // ImGui::DragFloat("X##3", &mSelectedGameObject.GetRenderObject()->GetModelData()->Scale.x, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
+                ImGui::DragFloat("X##3", &x1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+                // ImGui::DragFloat("Y##3", &mSelectedGameObject.GetRenderObject()->GetModelData()->Scale.y, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
+                ImGui::DragFloat("Y##3", &y1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+                // ImGui::DragFloat("Z##3", &mSelectedGameObject.GetRenderObject()->GetModelData()->Scale.z, 0.005f, -FLT_MAX, +FLT_MAX, "%.3f", ImGuiSliderFlags_None);
+                ImGui::DragFloat("Z##3", &z1, 0.005f, -FLT_MAX, +FLT_MAX, "% .3f", ImGuiSliderFlags_None);
+                ImGui::TreePop();
             }
         }
         ImGui::End();
