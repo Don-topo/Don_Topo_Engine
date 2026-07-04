@@ -1,17 +1,21 @@
 #include "DonTopo/EditorUI.h"
+#include "DonTopo/GameObject.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <filesystem>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
+#include <glm/gtx/euler_angles.hpp>
 
 namespace DonTopo {
 
-void EditorUI::draw(VkDescriptorSet viewportTexture,
-                    const std::vector<std::string>& staticNames,
-                    const std::vector<std::string>& skinnedNames)
+void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot)
 {
     drawDockSpace();
-    drawScene(staticNames, skinnedNames);
+    drawScene(sceneRoot);
     drawViewport(viewportTexture);
     drawProperties();
     drawContentBrowser();
@@ -37,17 +41,33 @@ void EditorUI::drawDockSpace()
     ImGui::End();
 }
 
-void EditorUI::drawScene(const std::vector<std::string>& staticNames,
-                         const std::vector<std::string>& skinnedNames)
+void EditorUI::drawScene(GameObject* sceneRoot)
 {
     ImGui::Begin("Scene");
-    if (ImGui::CollapsingHeader("Static Meshes", ImGuiTreeNodeFlags_DefaultOpen))
-        for (const auto& name : staticNames)
-            ImGui::Selectable(name.c_str());
-    if (ImGui::CollapsingHeader("Skinned Meshes", ImGuiTreeNodeFlags_DefaultOpen))
-        for (const auto& name : skinnedNames)
-            ImGui::Selectable(name.c_str());
+    if (sceneRoot)
+        drawSceneNode(sceneRoot);
     ImGui::End();
+}
+
+void EditorUI::drawSceneNode(GameObject* node)
+{
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen;
+    if (node->children.empty())
+        flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_Bullet;
+    if (node == m_selected)
+        flags |= ImGuiTreeNodeFlags_Selected;
+
+    const std::string label = node->name.empty() ? "GameObject" : node->name;
+    bool open = ImGui::TreeNodeEx((const void*)node, flags, "%s", label.c_str());
+    if (ImGui::IsItemClicked())
+        m_selected = node;
+
+    if (open && !node->children.empty())
+    {
+        for (const auto& child : node->children)
+            drawSceneNode(child.get());
+        ImGui::TreePop();
+    }
 }
 
 void EditorUI::drawViewport(VkDescriptorSet viewportTexture)
@@ -62,8 +82,22 @@ void EditorUI::drawViewport(VkDescriptorSet viewportTexture)
 void EditorUI::drawProperties()
 {
     ImGui::Begin("Properties");
-    ImGui::Text("Transform");
+    if (!m_selected)
+    {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Text("%s", m_selected->name.empty() ? "GameObject" : m_selected->name.c_str());
     ImGui::Separator();
+
+    glm::vec3 scale, translation, skew;
+    glm::vec4 perspective;
+    glm::quat orientation;
+    glm::decompose(m_selected->localTransform, scale, orientation, translation, skew, perspective);
+    glm::vec3 eulerDeg = glm::degrees(glm::eulerAngles(orientation));
+
+    bool changed = false;
 
     ImGui::SetNextItemOpen(true, ImGuiCond_Once);
     if (ImGui::TreeNodeEx("Transform", ImGuiTreeNodeFlags_OpenOnArrow))
@@ -71,38 +105,36 @@ void EditorUI::drawProperties()
         ImGui::Text("Position");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        ImGui::DragFloat("X##1", &m_pos[0], 0.005f, -FLT_MAX, +FLT_MAX, "% .3f");
+        changed |= ImGui::DragFloat("X##1", &translation.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        ImGui::DragFloat("Y##1", &m_pos[1], 0.005f, -FLT_MAX, +FLT_MAX, "% .3f");
+        changed |= ImGui::DragFloat("Y##1", &translation.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        ImGui::DragFloat("Z##1", &m_pos[2], 0.005f, -FLT_MAX, +FLT_MAX, "% .3f");
+        changed |= ImGui::DragFloat("Z##1", &translation.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
 
         ImGui::Text("Rotation");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        ImGui::DragFloat("X##2", &m_rot[0], 0.005f, -FLT_MAX, +FLT_MAX, "% .3f");
+        changed |= ImGui::DragFloat("X##2", &eulerDeg.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        ImGui::DragFloat("Y##2", &m_rot[1], 0.005f, -FLT_MAX, +FLT_MAX, "% .3f");
+        changed |= ImGui::DragFloat("Y##2", &eulerDeg.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        ImGui::DragFloat("Z##2", &m_rot[2], 0.005f, -FLT_MAX, +FLT_MAX, "% .3f");
-
-        ImGui::Text("Scale   ");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        ImGui::DragFloat("X##3", &m_scl[0], 0.005f, -FLT_MAX, +FLT_MAX, "% .3f");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        ImGui::DragFloat("Y##3", &m_scl[1], 0.005f, -FLT_MAX, +FLT_MAX, "% .3f");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        ImGui::DragFloat("Z##3", &m_scl[2], 0.005f, -FLT_MAX, +FLT_MAX, "% .3f");
+        changed |= ImGui::DragFloat("Z##2", &eulerDeg.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
 
         ImGui::TreePop();
     }
+
+    if (changed)
+    {
+        glm::mat4 t = glm::translate(glm::mat4(1.0f), translation);
+        glm::mat4 r = glm::mat4_cast(glm::quat(glm::radians(eulerDeg)));
+        glm::mat4 s = glm::scale(glm::mat4(1.0f), scale);
+        m_selected->localTransform = t * r * s;
+    }
+
     ImGui::End();
 }
 

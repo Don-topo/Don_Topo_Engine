@@ -87,6 +87,7 @@ int main()
         if (bgm >= 0) audio.playBGM(bgm);
 
         renderer.init(window, meshes);
+        renderer.setSceneRoot(&root);
 
         renderer.initSkybox({
             "assets/skybox/px.png",  // +X

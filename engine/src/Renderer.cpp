@@ -104,19 +104,7 @@ namespace DonTopo {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        {
-            std::vector<std::string> staticNames(m_objects.size());
-            for (size_t i = 0; i < m_objects.size(); i++)
-                staticNames[i] = m_objects[i].name.empty()
-                    ? ("Mesh " + std::to_string(i)) : m_objects[i].name;
-
-            std::vector<std::string> skinnedNames(m_skinnedObjects.size());
-            for (size_t i = 0; i < m_skinnedObjects.size(); i++)
-                skinnedNames[i] = m_skinnedObjects[i].name.empty()
-                    ? ("Skinned " + std::to_string(i)) : m_skinnedObjects[i].name;
-
-            m_editorUI.draw(m_offscreenDescSet[m_currentFrame], staticNames, skinnedNames);
-        }
+        m_editorUI.draw(m_offscreenDescSet[m_currentFrame], m_sceneRoot);
 
         ImGui::Render();
 
