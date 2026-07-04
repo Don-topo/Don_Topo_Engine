@@ -16,6 +16,7 @@ set(SHADER_OUT_DIR $<TARGET_FILE_DIR:Sandbox>/shaders)
 file(GLOB GLSL_SOURCES
     "${SHADER_SRC_DIR}/*.vert"
     "${SHADER_SRC_DIR}/*.frag"
+    "${SHADER_SRC_DIR}/*.comp"
 )
 
 foreach(SHADER ${GLSL_SOURCES})
@@ -41,13 +42,16 @@ add_custom_command(TARGET Sandbox POST_BUILD
     COMMENT "Copying assets to output directory"
 )
 
-# Copiar los .spv compilados al lado del ejecutable
+# Copiar los .spv compilados al lado del ejecutable y a la raíz del proyecto
 add_custom_command(TARGET Sandbox POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUT_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_BINARY_DIR}/spv
         ${SHADER_OUT_DIR}
-    COMMENT "Copying compiled shaders to output directory"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_BINARY_DIR}/spv
+        ${CMAKE_SOURCE_DIR}/shaders
+    COMMENT "Copying compiled shaders to output directory and project shaders/"
 )
 
 # Copy FMOD runtime DLL next to the executable (Windows only)

@@ -62,6 +62,14 @@ int main()
 
         renderer.init(window, meshes);
 
+        renderer.initSkybox({
+            "assets/skybox/px.png",  // +X
+            "assets/skybox/nx.png",  // -X
+            "assets/skybox/py.png",  // +Y
+            "assets/skybox/ny.png",  // -Y
+            "assets/skybox/pz.png",  // +Z
+            "assets/skybox/nz.png",  // -Z
+        });
         // Añadir skinned mesh después de init
         int animIdx = renderer.addSkinnedMesh(skinnedMesh);
         renderer.setSkinnedTransform(animIdx,

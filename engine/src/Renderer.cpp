@@ -226,8 +226,14 @@ namespace DonTopo {
         vkDestroyPipeline(m_gpu.device(), m_skinningPipeline,       nullptr);
         vkDestroyPipelineLayout(m_gpu.device(), m_computePipelineLayout, nullptr);
         vkDestroyDescriptorSetLayout(m_gpu.device(), m_computeDescLayout, nullptr);
+        m_skybox.shutdown(m_gpu);
         printf("destroy render items OK\n"); fflush(stdout);
         m_gpu.shutdown();
+    }
+
+    void Renderer::initSkybox(const std::array<std::string, 6>& facePaths)
+    {
+        m_skybox.init(m_gpu, m_offscreenRenderPass, m_swapChainFormat, facePaths);
     }
 
     void Renderer::setCamera(const Camera& camera)
@@ -631,6 +637,18 @@ namespace DonTopo {
                             sm.indexCount, 1, sm.indexStart, 0, 0);
                     }
                 }
+            }
+
+            // Skybox — fullscreen quad, depth LEQUAL sin escritura (al final del pass)
+            if (m_skybox.isInitialized()) {
+                glm::mat4 proj = glm::perspective(
+                    glm::radians(45.0f),
+                    (float)m_swapChainExtent.width / (float)m_swapChainExtent.height,
+                    m_cameraDistance * 0.001f, m_cameraDistance * 3.0f);
+                proj[1][1] *= -1.0f;
+                glm::mat4 rotView    = glm::mat4(glm::mat3(m_viewMatrix)); // sin traslación
+                glm::mat4 invViewProj = glm::inverse(proj * rotView);
+                m_skybox.draw(m_commandBuffers[m_currentFrame], invViewProj);
             }
 
             vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);

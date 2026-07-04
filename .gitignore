@@ -1,6 +1,7 @@
 # Build directories
 build/
 build-ninja/
+build-ninja-release/
 cmake-build-*/
 .cmake/
 out/

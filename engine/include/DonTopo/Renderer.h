@@ -10,6 +10,8 @@
 #include "DonTopo/GpuDevice.h"
 #include "DonTopo/GpuResources.h"
 #include "DonTopo/EditorUI.h"
+#include "DonTopo/Skybox.h"
+#include <array>
 
 namespace DonTopo {
 
@@ -27,6 +29,8 @@ namespace DonTopo {
             void setCamera(const Camera& camera);
             void notifyResize() { m_framebufferResized = true; }
             bool isViewportHovered() const { return m_editorUI.isViewportHovered(); }
+            // facePaths: +X, -X, +Y, -Y, +Z, -Z (cualquier formato soportado por stb_image)
+            void initSkybox(const std::array<std::string, 6>& facePaths);
             void setTransform(size_t objectIndex, const glm::mat4& transform)
             {
                 if (objectIndex < m_objects.size())
@@ -247,5 +251,6 @@ namespace DonTopo {
             std::vector<RenderObject> m_objects;
 
             EditorUI m_editorUI;
+            Skybox   m_skybox;
     };
 }
