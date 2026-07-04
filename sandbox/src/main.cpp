@@ -4,6 +4,7 @@
 #include "DonTopo/ModelLoader.h"
 #include "DonTopo/Cube.h"
 #include "DonTopo/Sphere.h"
+#include "DonTopo/Plane.h"
 #include "DonTopo/Camera.h"
 #include "DonTopo/SceneNode.h"
 #include "DonTopo/AudioManager.h"
@@ -27,29 +28,14 @@ int main()
         meshes.push_back(DonTopo::ModelLoader::load("assets/modelTexture.fbx"));
         meshes.push_back(DonTopo::ModelLoader::load("assets/model.fbx"));
 
-        // Suelo
+        // Suelo (instancia de Plane)
         {
             float floorY = std::numeric_limits<float>::max();
             for (auto& mesh : meshes)
                 for (auto& v : mesh.vertices)
                     floorY = std::min(floorY, v.pos.y);
 
-            DonTopo::Mesh floor;
-            float s = 1000.0f;
-            DonTopo::Vertex v0, v1, v2, v3;
-            for (auto* v : {&v0,&v1,&v2,&v3}) {
-                v->color   = {0.6f, 0.6f, 0.6f};
-                v->normal  = {0.0f, 1.0f, 0.0f};
-                v->tangent = {1.0f, 0.0f, 0.0f};
-            }
-            v0.pos={-s,floorY,-s}; v0.uv={0,0};
-            v1.pos={ s,floorY,-s}; v1.uv={10,0};
-            v2.pos={ s,floorY, s}; v2.uv={10,10};
-            v3.pos={-s,floorY, s}; v3.uv={0,10};
-            floor.name     = "floor";
-            floor.vertices = {v0,v1,v2,v3};
-            floor.indices  = {0,2,1, 0,3,2};
-            meshes.push_back(floor);
+            meshes.push_back(DonTopo::Plane::create(1000.0f, floorY));
         }
 
         // Cubo de prueba (sin textura -> placeholder checkerboard)
