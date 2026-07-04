@@ -2,6 +2,7 @@
 #include "DonTopo/Window.h"
 #include "DonTopo/Renderer.h"
 #include "DonTopo/ModelLoader.h"
+#include "DonTopo/Cube.h"
 #include "DonTopo/Camera.h"
 #include "DonTopo/SceneNode.h"
 #include "DonTopo/AudioManager.h"
@@ -50,6 +51,10 @@ int main()
             meshes.push_back(floor);
         }
 
+        // Cubo de prueba (sin textura -> placeholder checkerboard)
+        size_t cubeIndex = meshes.size();
+        meshes.push_back(DonTopo::Cube::create(50.0f));
+
         // Cargar modelo animado antes de init
         auto skinnedMesh = DonTopo::ModelLoader::loadSkinned("assets/modelAnimation.fbx");
 
@@ -61,6 +66,9 @@ int main()
         if (bgm >= 0) audio.playBGM(bgm);
 
         renderer.init(window, meshes);
+
+        renderer.setTransform(cubeIndex,
+            glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 50.0f, -200.0f)));
 
         renderer.initSkybox({
             "assets/skybox/px.png",  // +X
