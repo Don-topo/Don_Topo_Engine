@@ -1,64 +1,81 @@
 # Don Topo Engine
 
-A cross-platform, Vulkan-based game engine written in C++20.
+A Vulkan-based game engine written in C++20.
+
+## Features
+
+- PBR rendering (Cook-Torrance GGX, ACES tonemapping)
+- GPU skeletal animation (compute shader skinning: bone eval → hierarchy → skinning)
+- Shadow mapping (PCF 3×3)
+- Normal maps + tangent space
+- Cubemap skybox (fullscreen quad, inverse view-projection)
+- 3D spatial audio (FMOD)
+- Dockable ImGui editor with offscreen viewport
+- Scene graph (hierarchical transforms)
+- FBX / OBJ model loading (embedded textures supported)
 
 ## Tech Stack
 
-| Component | Library |
-|---|---|
-| Graphics | Vulkan |
-| Window / Input | GLFW 3.4 |
-| Math | GLM 1.0.1 |
-| Audio | FMOD Studio |
-| Build | CMake 3.25+ |
-| Language | C++20 |
+| Component | Library | Source |
+| --- | --- | --- |
+| Graphics | Vulkan | System SDK |
+| Window / Input | GLFW 3.4 | Auto-fetched |
+| Math | GLM 1.0.1 | Auto-fetched |
+| 3D Model loading | Assimp | Auto-fetched |
+| Image loading | stb_image | Auto-fetched |
+| Editor UI | Dear ImGui | Auto-fetched |
+| File dialog | ImGuiFileDialog | Auto-fetched |
+| Audio | FMOD Studio (optional) | Manual install |
+| Build | CMake 3.25+ | — |
+| Language | C++20 | — |
 
 ## Prerequisites
 
-| Tool | Version | Download |
-|---|---|---|
-| CMake | 3.25+ | https://cmake.org/download |
-| Vulkan SDK | Latest | https://vulkan.lunarg.com/sdk/home |
-| FMOD Studio API | Latest (optional) | https://www.fmod.com/download |
-| C++20 compiler | — | GCC 11+, Clang 13+, or MSVC 2022+ |
+| Tool | Version | Notes |
+| --- | --- | --- |
+| CMake | 3.25+ | Required |
+| Vulkan SDK | 1.3+ | Required — includes `glslc` shader compiler |
+| MSVC | 2022+ | Required on Windows |
+| FMOD Studio API | Latest | Optional — audio disabled if not found |
 
-**Note:** CMake and Vulkan SDK are required. C++20 compiler is required. GLFW and GLM are downloaded automatically by CMake at configure time. FMOD is optional — if not found, the build succeeds but audio is disabled.
+GLFW, GLM, Assimp, stb_image, ImGui and ImGuiFileDialog are downloaded and built automatically by CMake.
 
-## Build
+## Build (Windows)
 
-```bash
-# Configure
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+```batch
+# Configure + build (release)
+configure.bat
+build-release.bat
 
-# If FMOD is not in a standard location:
-cmake -S . -B build -DFMOD_DIR="/path/to/fmod/api" -DCMAKE_BUILD_TYPE=Debug
-
-# Build
-cmake --build build --config Debug
-
-# Run sandbox
-./build/sandbox/Sandbox          # Linux / macOS
-build\sandbox\Debug\Sandbox.exe  # Windows
+# Run
+build-ninja-release\sandbox\Sandbox.exe
 ```
+
+Or via VS Code: `Ctrl+Shift+B` → **Build Release**.
+
+Shaders are compiled from `shaders/*.{vert,frag,comp}` to SPIR-V automatically during build and copied to both the executable directory and `shaders/`.
 
 ## Project Structure
 
 ```
 Don_Topo_Engine/
-├── cmake/          # Custom Find modules for external SDKs
+├── assets/         # Runtime assets (models, textures, audio, skybox)
+├── cmake/          # Custom Find modules
 ├── engine/         # Core engine (static library: DonTopoEngine)
 │   ├── include/    # Public headers (DonTopo/)
 │   └── src/        # Implementation
-└── sandbox/        # Test playground executable (Sandbox)
+├── sandbox/        # Test playground executable (Sandbox)
+└── shaders/        # GLSL sources + compiled SPIR-V
 ```
 
-## Planned / Future Dependencies
+## Planned
 
-| System | Candidate libraries |
-|---|---|
+| System | Candidates |
+| --- | --- |
 | Physics | Jolt Physics, Bullet, PhysX |
-| Dedicated input | gainput, SDL3 (input only) |
-| Editor | TBD — separate `editor/` module |
+| Cascaded shadow maps | — |
+| PBR environment maps / IBL | — |
+| Post-processing | Bloom, SSAO, TAA |
 
 ## License
 
