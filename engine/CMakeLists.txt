@@ -6,6 +6,7 @@ add_library(DonTopoEngine STATIC
     src/Skybox.cpp
     src/ModelLoader.cpp
     src/Cube.cpp
+    src/Sphere.cpp
     src/Camera.cpp
     src/SceneNode.cpp
     src/AudioManager.cpp
