@@ -6,7 +6,7 @@
 #include "DonTopo/Sphere.h"
 #include "DonTopo/Plane.h"
 #include "DonTopo/Camera.h"
-#include "DonTopo/SceneNode.h"
+#include "DonTopo/GameObject.h"
 #include "DonTopo/AudioManager.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -24,30 +24,60 @@ int main()
         window.init(1280, 720, "Don Topo Engine");
         DonTopo::Renderer renderer;
 
-        std::vector<DonTopo::Mesh> meshes;
-        meshes.push_back(DonTopo::ModelLoader::load("assets/modelTexture.fbx"));
-        meshes.push_back(DonTopo::ModelLoader::load("assets/model.fbx"));
+        DonTopo::GameObject root("root");
 
-        // Suelo (instancia de Plane)
-        {
-            float floorY = std::numeric_limits<float>::max();
-            for (auto& mesh : meshes)
-                for (auto& v : mesh.vertices)
-                    floorY = std::min(floorY, v.pos.y);
+        auto soldierMesh = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load("assets/modelTexture.fbx"));
+        auto modelMesh    = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load("assets/model.fbx"));
 
-            meshes.push_back(DonTopo::Plane::create(1000.0f, floorY));
-        }
+        // Suelo (instancia de Plane), altura calculada a partir de soldier/model
+        float floorY = std::numeric_limits<float>::max();
+        for (auto* m : { soldierMesh.get(), modelMesh.get() })
+            for (auto& v : m->vertices)
+                floorY = std::min(floorY, v.pos.y);
+        auto floorMesh = std::make_shared<DonTopo::Mesh>(DonTopo::Plane::create(1000.0f, floorY));
 
-        // Cubo de prueba (sin textura -> placeholder checkerboard)
-        size_t cubeIndex = meshes.size();
-        meshes.push_back(DonTopo::Cube::create(50.0f));
-
-        // Esfera de prueba (sin textura -> placeholder checkerboard)
-        size_t sphereIndex = meshes.size();
-        meshes.push_back(DonTopo::Sphere::create(50.0f));
+        // Cubo y esfera de prueba (sin textura -> placeholder checkerboard)
+        auto cubeMesh   = std::make_shared<DonTopo::Mesh>(DonTopo::Cube::create(50.0f));
+        auto sphereMesh = std::make_shared<DonTopo::Mesh>(DonTopo::Sphere::create(50.0f));
 
         // Cargar modelo animado antes de init
-        auto skinnedMesh = DonTopo::ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+        auto soldierAnimMesh = std::make_shared<DonTopo::SkinnedMesh>(DonTopo::ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+
+        auto* soldier = root.addChild("soldier");
+        soldier->setMesh(soldierMesh);
+
+        auto* model = root.addChild("model");
+        model->setMesh(modelMesh);
+        model->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(200.0f, 0.0f, 0.0f));
+
+        auto* floorNode = root.addChild("floor");
+        floorNode->setMesh(floorMesh);
+
+        auto* cube = root.addChild("cube");
+        cube->setMesh(cubeMesh);
+        cube->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 50.0f, -200.0f));
+
+        auto* sphere = root.addChild("sphere");
+        sphere->setMesh(sphereMesh);
+        sphere->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 50.0f, 200.0f));
+
+        auto* soldierAnim = root.addChild("soldier_animado");
+        soldierAnim->setMesh(soldierAnimMesh);
+        soldierAnim->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(-200.0f, 0.0f, 0.0f));
+
+        std::vector<DonTopo::GameObject*> allNodes;
+        root.traverse([&](DonTopo::GameObject* go) { allNodes.push_back(go); });
+
+        // Pasada 1: meshes estáticos -> Renderer::init(meshes)
+        std::vector<DonTopo::Mesh> meshes;
+        for (auto* go : allNodes)
+        {
+            if (go->hasMesh() && !go->isSkinned())
+            {
+                go->staticRenderIndex = (int)meshes.size();
+                meshes.push_back(*go->getMesh());
+            }
+        }
 
         DonTopo::Camera camera({0.0f, 90.0f, 300.0f});
 
@@ -58,12 +88,6 @@ int main()
 
         renderer.init(window, meshes);
 
-        renderer.setTransform(cubeIndex,
-            glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 50.0f, -200.0f)));
-
-        renderer.setTransform(sphereIndex,
-            glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 50.0f, 200.0f)));
-
         renderer.initSkybox({
             "assets/skybox/px.png",  // +X
             "assets/skybox/nx.png",  // -X
@@ -72,21 +96,18 @@ int main()
             "assets/skybox/pz.png",  // +Z
             "assets/skybox/nz.png",  // -Z
         });
-        // Añadir skinned mesh después de init
-        int animIdx = renderer.addSkinnedMesh(skinnedMesh);
-        renderer.setSkinnedTransform(animIdx,
-            glm::translate(glm::mat4(1.0f), glm::vec3(-200.0f, 0.0f, 0.0f)));
+
+        // Pasada 2: meshes animados -> addSkinnedMesh (después de init, como requiere el Renderer)
+        for (auto* go : allNodes)
+        {
+            if (go->hasMesh() && go->isSkinned())
+                go->skinnedRenderIndex = renderer.addSkinnedMesh(*go->getSkinnedMesh());
+        }
 
         renderer.setLights({
             { glm::vec4(0.0f, 500.0f, 300.0f, 1.0f),    glm::vec4(1.0f, 0.95f, 0.8f, 1.0f) },
             { glm::vec4(-300.0f, 200.0f, -200.0f, 1.0f), glm::vec4(0.4f, 0.5f, 1.0f, 0.8f) },
         });
-
-        DonTopo::SceneNode root;
-        auto* soldier  = root.addChild("soldier", 0);
-        auto* model    = root.addChild("model", 1);
-        model->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(200.0f, 0.0f, 0.0f));
-        auto* floor_node = root.addChild("floor", 2);
 
         struct AppCtx { DonTopo::Camera* cam; DonTopo::Renderer* rnd; };
         AppCtx ctx{ &camera, &renderer };
@@ -139,13 +160,18 @@ int main()
             renderer.setCamera(camera);
             audio.update(camera.getPos(), camera.getFront(), camera.getUp());
 
-            renderer.updateAnimation(animIdx, dt);
-
             root.updateWorldTransforms();
-            root.traverse([&](DonTopo::SceneNode* node) {
-                if (node->meshIndex >= 0)
-                    renderer.setTransform(node->meshIndex, node->worldTransform);
-            });
+            for (auto* go : allNodes)
+            {
+                if (go->staticRenderIndex >= 0)
+                    renderer.setTransform(go->staticRenderIndex, go->worldTransform);
+
+                if (go->skinnedRenderIndex >= 0)
+                {
+                    renderer.updateAnimation(go->skinnedRenderIndex, dt);
+                    renderer.setSkinnedTransform(go->skinnedRenderIndex, go->worldTransform);
+                }
+            }
 
             renderer.drawFrame(window);
             window.pollEvents();

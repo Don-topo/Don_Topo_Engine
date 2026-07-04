@@ -98,13 +98,13 @@ namespace DonTopo
                 }
             };
 
-            loadTex(aiTextureType_DIFFUSE, mesh.embeddedTexture, mesh.texturePath);
-            loadTex(aiTextureType_NORMALS, mesh.embeddedNormalMap, mesh.normalMapPath);
+            loadTex(aiTextureType_DIFFUSE, mesh.material.embeddedTexture, mesh.material.texturePath);
+            loadTex(aiTextureType_NORMALS, mesh.material.embeddedNormalMap, mesh.material.normalMapPath);
             // Assimp suele guardar el normal map como HEIGHT en FBX
-            if(mesh.embeddedNormalMap.empty() && mesh.normalMapPath.empty())
-                loadTex(aiTextureType_HEIGHT, mesh.embeddedNormalMap, mesh.normalMapPath);
+            if(mesh.material.embeddedNormalMap.empty() && mesh.material.normalMapPath.empty())
+                loadTex(aiTextureType_HEIGHT, mesh.material.embeddedNormalMap, mesh.material.normalMapPath);
             // ORM (glTF metallic-roughness packed: R=AO, G=roughness, B=metallic)
-            loadTex(aiTextureType_UNKNOWN, mesh.embeddedMetallicRoughness, mesh.metallicRoughnessPath);
+            loadTex(aiTextureType_UNKNOWN, mesh.material.embeddedMetallicRoughness, mesh.material.metallicRoughnessPath);
         }
 
         return mesh;
@@ -354,7 +354,7 @@ namespace DonTopo
                 uint32_t newIdx = (uint32_t)smesh.materials.size();
                 matRemap[assimpIdx] = newIdx;
                 smesh.materials.emplace_back();
-                SkinnedMaterial& smat = smesh.materials.back();
+                Material& smat = smesh.materials.back();
 
                 if (assimpIdx < scene->mNumMaterials)
                 {

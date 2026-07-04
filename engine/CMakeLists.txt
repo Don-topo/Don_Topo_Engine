@@ -9,7 +9,7 @@ add_library(DonTopoEngine STATIC
     src/Sphere.cpp
     src/Plane.cpp
     src/Camera.cpp
-    src/SceneNode.cpp
+    src/GameObject.cpp
     src/AudioManager.cpp
     src/GpuDevice.cpp
     src/GpuResources.cpp

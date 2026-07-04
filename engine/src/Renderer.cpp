@@ -1235,16 +1235,16 @@ namespace DonTopo {
         obj.indexCount = (uint32_t)mesh.indices.size();
         createVertexBuffer(mesh.vertices,                               obj.vertexBuffer, obj.vertexMemory);
         createIndexBuffer(mesh.indices,                                 obj.indexBuffer,  obj.indexMemory);
-        m_res.createTextureImage(mesh.texturePath, mesh.embeddedTexture,         obj.textureImage, obj.textureMem);
+        m_res.createTextureImage(mesh.material.texturePath, mesh.material.embeddedTexture,         obj.textureImage, obj.textureMem);
         m_res.createTextureImageView(obj.textureImage,                           obj.textureView);
         m_res.createTextureSampler(obj.sampler);
-        m_res.createNormalMapImage(mesh.normalMapPath, mesh.embeddedNormalMap,   obj.normalImage,  obj.normalMem);
+        m_res.createNormalMapImage(mesh.material.normalMapPath, mesh.material.embeddedNormalMap,   obj.normalImage,  obj.normalMem);
         m_res.createTextureImageView(obj.normalImage,                            obj.normalView, VK_FORMAT_R8G8B8A8_UNORM);
         m_res.createTextureSampler(obj.normalSampler);
 
-        if (!mesh.metallicRoughnessPath.empty() || !mesh.embeddedMetallicRoughness.empty())
+        if (!mesh.material.metallicRoughnessPath.empty() || !mesh.material.embeddedMetallicRoughness.empty())
         {
-            m_res.createNormalMapImage(mesh.metallicRoughnessPath, mesh.embeddedMetallicRoughness,
+            m_res.createNormalMapImage(mesh.material.metallicRoughnessPath, mesh.material.embeddedMetallicRoughness,
                                  obj.ormImage, obj.ormMem);
             obj.metallic  = 1.0f;
             obj.roughness = 1.0f;
@@ -1253,8 +1253,8 @@ namespace DonTopo {
         {
             constexpr uint8_t white[4] = {255, 255, 255, 255};
             m_res.createSolidColorImage(white, obj.ormImage, obj.ormMem);
-            obj.metallic  = mesh.metallic;
-            obj.roughness = mesh.roughness;
+            obj.metallic  = mesh.material.metallic;
+            obj.roughness = mesh.material.roughness;
         }
         m_res.createTextureImageView(obj.ormImage, obj.ormView, VK_FORMAT_R8G8B8A8_UNORM);
         m_res.createTextureSampler(obj.ormSampler);
@@ -1861,7 +1861,7 @@ namespace DonTopo {
 
         for (size_t mi = 0; mi < mesh.materials.size(); mi++)
         {
-            const SkinnedMaterial& smat = mesh.materials[mi];
+            const Material& smat = mesh.materials[mi];
             SkinnedMatGfx& mgfx = obj.matGfx[mi];
 
             // Diffuse
