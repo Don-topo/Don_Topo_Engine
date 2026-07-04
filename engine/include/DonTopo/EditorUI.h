@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <filesystem>
+#include <glm/glm.hpp>
 
 namespace DonTopo {
 
@@ -36,6 +37,14 @@ private:
 
     // Scene selection
     GameObject* m_selected = nullptr;
+
+    // Properties – cache de edición del nodo seleccionado (persiste entre
+    // frames para que DragFloat pueda acumular el delta del arrastre;
+    // solo se re-sincroniza con localTransform al cambiar de selección).
+    GameObject* m_propsCachedFor = nullptr;
+    glm::vec3   m_editPosition{0.0f};
+    glm::vec3   m_editRotationDeg{0.0f};
+    glm::vec3   m_editScale{1.0f};
 };
 
 } // namespace DonTopo

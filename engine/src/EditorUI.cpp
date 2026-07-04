@@ -84,18 +84,27 @@ void EditorUI::drawProperties()
     ImGui::Begin("Properties");
     if (!m_selected)
     {
+        m_propsCachedFor = nullptr;
         ImGui::End();
         return;
     }
 
+    // Solo re-sincroniza el cache de edición al cambiar de selección: si se
+    // recompusiera desde localTransform en cada frame, un valor intermedio
+    // inválido (p.ej. escala 0 mientras se teclea "0.5") se re-descompondría
+    // y rompería posición/rotación de forma permanente.
+    if (m_propsCachedFor != m_selected)
+    {
+        glm::vec3 skew;
+        glm::vec4 perspective;
+        glm::quat orientation;
+        glm::decompose(m_selected->localTransform, m_editScale, orientation, m_editPosition, skew, perspective);
+        m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
+        m_propsCachedFor = m_selected;
+    }
+
     ImGui::Text("%s", m_selected->name.empty() ? "GameObject" : m_selected->name.c_str());
     ImGui::Separator();
-
-    glm::vec3 scale, translation, skew;
-    glm::vec4 perspective;
-    glm::quat orientation;
-    glm::decompose(m_selected->localTransform, scale, orientation, translation, skew, perspective);
-    glm::vec3 eulerDeg = glm::degrees(glm::eulerAngles(orientation));
 
     bool changed = false;
 
@@ -105,33 +114,44 @@ void EditorUI::drawProperties()
         ImGui::Text("Position");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        changed |= ImGui::DragFloat("X##1", &translation.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        changed |= ImGui::DragFloat("X##1", &m_editPosition.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        changed |= ImGui::DragFloat("Y##1", &translation.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        changed |= ImGui::DragFloat("Y##1", &m_editPosition.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        changed |= ImGui::DragFloat("Z##1", &translation.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        changed |= ImGui::DragFloat("Z##1", &m_editPosition.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
 
         ImGui::Text("Rotation");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        changed |= ImGui::DragFloat("X##2", &eulerDeg.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        changed |= ImGui::DragFloat("X##2", &m_editRotationDeg.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        changed |= ImGui::DragFloat("Y##2", &eulerDeg.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        changed |= ImGui::DragFloat("Y##2", &m_editRotationDeg.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
-        changed |= ImGui::DragFloat("Z##2", &eulerDeg.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        changed |= ImGui::DragFloat("Z##2", &m_editRotationDeg.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+
+        ImGui::Text("Scale   ");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        changed |= ImGui::DragFloat("X##3", &m_editScale.x, 0.005f, 0.001f, +FLT_MAX, "% .3f");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        changed |= ImGui::DragFloat("Y##3", &m_editScale.y, 0.005f, 0.001f, +FLT_MAX, "% .3f");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        changed |= ImGui::DragFloat("Z##3", &m_editScale.z, 0.005f, 0.001f, +FLT_MAX, "% .3f");
 
         ImGui::TreePop();
     }
 
     if (changed)
     {
-        glm::mat4 t = glm::translate(glm::mat4(1.0f), translation);
-        glm::mat4 r = glm::mat4_cast(glm::quat(glm::radians(eulerDeg)));
-        glm::mat4 s = glm::scale(glm::mat4(1.0f), scale);
+        glm::mat4 t = glm::translate(glm::mat4(1.0f), m_editPosition);
+        glm::mat4 r = glm::mat4_cast(glm::quat(glm::radians(m_editRotationDeg)));
+        glm::mat4 s = glm::scale(glm::mat4(1.0f), m_editScale);
         m_selected->localTransform = t * r * s;
     }
 
