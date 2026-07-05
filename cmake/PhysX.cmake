@@ -56,16 +56,22 @@ if(WIN32 OR (UNIX AND NOT APPLE))
         set(PHYSX_SLN_FREEGLUT_PATH "${CMAKE_BINARY_DIR}/physx_stub/freeglut/bin" CACHE INTERNAL "PhysX freeglut stub copy path")
     endif()
 
-    if(WIN32)
-        # On Windows/MSVC, PhysX's CMake picks a debug/release C runtime library
-        # via CMAKE_MSVC_RUNTIME_LIBRARY based on the active config. By default
-        # (NV_USE_DEBUG_WINCRT=OFF) its "debug" config flags *also* define NDEBUG
-        # (PhysX's "debug" maps closer to a checked/optimized build), while the
-        # debug DLL runtime (/MDd) implicitly defines _DEBUG — PhysX's own
-        # PxPreprocessor.h then fails a static_assert-style #error requiring
-        # exactly one of NDEBUG/_DEBUG. Forcing NV_USE_DEBUG_WINCRT=ON makes its
-        # debug config define only _DEBUG, matching the debug CRT and resolving
-        # the conflict for our single-config (Ninja) Debug build.
+    if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+        # On Windows/MSVC, PhysX's CMake (NvidiaBuildOptions.cmake) computes a
+        # WINCRT_DEBUG value that only feeds CMAKE_CXX_FLAGS_DEBUG — it has no
+        # effect on the Checked/Profile/Release flags (those use a separate
+        # WINCRT_NDEBUG value, unaffected by this option). By default
+        # (NV_USE_DEBUG_WINCRT=OFF) WINCRT_DEBUG *also* defines NDEBUG (PhysX's
+        # "debug" config maps closer to a checked/optimized build), while the
+        # debug DLL runtime (/MDd, selected by CMAKE_MSVC_RUNTIME_LIBRARY for
+        # our single-config Ninja "Debug" build) implicitly defines _DEBUG —
+        # PhysX's own PxPreprocessor.h then fails a static_assert-style #error
+        # requiring exactly one of NDEBUG/_DEBUG. Forcing NV_USE_DEBUG_WINCRT=ON
+        # makes the debug config define only _DEBUG, resolving the conflict.
+        # Scoped to the Debug config specifically (verified the Release config
+        # builds cleanly without it — see task-1-report.md) since this project
+        # uses single-config Ninja presets where CMAKE_BUILD_TYPE is reliably
+        # "Debug" or "Release" at configure time.
         set(NV_USE_DEBUG_WINCRT ON CACHE BOOL "" FORCE)
     endif()
 
