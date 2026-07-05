@@ -40,18 +40,24 @@ de fragilidad — puede requerir ajuste al implementar según la versión exacta
 - Guardado condicional: el módulo solo se incluye si `WIN32` o (`UNIX AND NOT APPLE)`.
   En cualquier otra plataforma, `PHYSX_FOUND` queda `FALSE`, se emite un
   `message(WARNING ...)` y el motor compila sin física (mismo patrón que FMOD).
-- `FetchContent_Declare(physx GIT_REPOSITORY https://github.com/NVIDIA-Omniverse/PhysX.git GIT_TAG <tag 5.x> GIT_SHALLOW TRUE)`
+- `FetchContent_Declare(physx GIT_REPOSITORY https://github.com/NVIDIA-Omniverse/PhysX.git GIT_TAG 110.0-omni-and-physx-5.8.0 GIT_SHALLOW TRUE)`
   seguido de `FetchContent_Populate` (no `MakeAvailable`).
-- Antes de `add_subdirectory`, fijar en cache las variables que el build de PhysX
-  requiere: `TARGET_BUILD_PLATFORM`, `PX_OUTPUT_ARCH`, `PX_GENERATE_STATIC_LIBRARIES ON`,
-  `PX_BUILDSNIPPETS OFF`, `PX_BUILDPUBLICSAMPLES OFF`, `NV_USE_STATIC_WINCRT`
-  (acorde al runtime MSVC que ya usa el proyecto), y añadir
-  `${physx_SOURCE_DIR}/physx/source/compiler/cmake/modules` a `CMAKE_MODULE_PATH`.
+- Antes de `add_subdirectory`, fijar en cache las variables que
+  `physx/compiler/public/CMakeLists.txt` exige (verificado leyendo el archivo
+  real del repo, tag `110.0-omni-and-physx-5.8.0`):
+  `PHYSX_ROOT_DIR` (= `${physx_SOURCE_DIR}/physx`, debe existir),
+  `TARGET_BUILD_PLATFORM` (`"windows"` o `"linux"`), `PX_GENERATE_STATIC_LIBRARIES ON`.
+  El propio CMakeLists de PhysX se encarga de añadir su carpeta de módulos
+  a `CMAKE_MODULE_PATH` — no hace falta hacerlo manualmente. GPU/CUDA
+  (`PX_GENERATE_GPU_PROJECTS`) queda OFF por defecto, así que no depende de
+  `packman` ni CUDA Toolkit para este build CPU-only.
 - `add_subdirectory(${physx_SOURCE_DIR}/physx/compiler/public ...)`.
 - Target agregado `PhysX::SDK` (`INTERFACE`) que linkea las libs necesarias para
   colliders estáticos: `PhysX`, `PhysXCommon`, `PhysXFoundation`, `PhysXExtensions`,
-  `PhysXPvdSDK`. Nombres exactos de los targets internos se confirman durante la
-  implementación (dependen de la versión de PhysX fetcheada).
+  `PhysXPvdSDK` (nombres confirmados existen como archivos
+  `physx/source/compiler/cmake/windows/*.cmake` en el repo). Si el linker pide
+  símbolos de otras libs del SDK (`PhysXCooking`, `PhysXTask`, etc.), se añaden
+  durante la implementación.
 - `DonTopoEngine` linkea `PhysX::SDK` solo si `PHYSX_FOUND`, y define
   `DT_PHYSX_ENABLED` (mismo patrón que `DT_FMOD_ENABLED`).
 
