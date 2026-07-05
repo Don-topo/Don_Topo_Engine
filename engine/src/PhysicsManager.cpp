@@ -147,6 +147,8 @@ std::shared_ptr<RigidBody> PhysicsManager::createDynamicBoxCollider(const glm::v
 void PhysicsManager::stepSimulation(float dt)
 {
 #ifdef DT_PHYSX_ENABLED
+    if (dt <= 0.0f) return; // primer frame: dt=0 (last se inicializa == now), PxScene::simulate exige > 0
+
     static_cast<PxScene*>(m_scene)->simulate(dt);
     static_cast<PxScene*>(m_scene)->fetchResults(true);
 #else
