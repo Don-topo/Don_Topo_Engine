@@ -28,6 +28,13 @@ int main()
         window.init(1280, 720, "Don Topo Engine");
         DonTopo::Renderer renderer;
 
+        // physics se declara antes que root: en cualquier salida de scope (normal
+        // o por excepción) root se destruye primero (liberando los BoxCollider de
+        // sus GameObject) y physics se destruye después — nunca al revés, evitando
+        // que ~BoxCollider() libere un PxRigidStatic sobre una PxScene ya liberada.
+        DonTopo::PhysicsManager physics;
+        physics.init();
+
         DonTopo::GameObject root("root");
 
         auto soldierMesh = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load("assets/modelTexture.fbx"));
@@ -56,9 +63,6 @@ int main()
 
         auto* floorNode = root.addChild("floor");
         floorNode->setMesh(floorMesh);
-
-        DonTopo::PhysicsManager physics;
-        physics.init();
 
         auto* cube = root.addChild("cube");
         cube->setMesh(cubeMesh);
