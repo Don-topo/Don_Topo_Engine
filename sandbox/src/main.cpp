@@ -64,12 +64,15 @@ int main()
         auto* floorNode = root.addChild("floor");
         floorNode->setMesh(floorMesh);
 
+        glm::mat4 floorColliderPose = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, floorY - 0.5f, 0.0f));
+        floorNode->setCollider(physics.createBoxCollider(glm::vec3(500.0f, 0.5f, 500.0f), floorColliderPose));
+
         auto* cube = root.addChild("cube");
         cube->setMesh(cubeMesh);
         cube->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 50.0f, -200.0f));
 
         cube->updateWorldTransforms();
-        cube->setCollider(physics.createBoxCollider(glm::vec3(25.0f, 25.0f, 25.0f), cube->worldTransform));
+        cube->setRigidBody(physics.createDynamicBoxCollider(glm::vec3(25.0f, 25.0f, 25.0f), cube->worldTransform));
 
 #ifdef DT_PHYSX_ENABLED
         {
@@ -186,11 +189,15 @@ int main()
             renderer.setCamera(camera);
             audio.update(camera.getPos(), camera.getFront(), camera.getUp());
 
+            physics.stepSimulation(dt);
             root.updateWorldTransforms();
             // Recorrido en vivo (no la lista allNodes cacheada al arrancar): el
             // editor permite borrar GameObjects en tiempo real, así que un
             // puntero cacheado podría quedar colgante tras un delete.
             root.traverse([&](DonTopo::GameObject* go) {
+                if (go->hasRigidBody())
+                    go->worldTransform = go->getRigidBody()->getWorldTransform();
+
                 if (go->staticRenderIndex >= 0)
                     renderer.setTransform(go->staticRenderIndex, go->worldTransform);
 
@@ -214,7 +221,10 @@ int main()
         // root se destruye al final del scope, después de physics — sin esto, el
         // BoxCollider de cada GameObject intentaría release() sobre un actor cuya
         // PxScene/PxPhysics ya fue liberada.
-        root.traverse([](DonTopo::GameObject* go) { go->setCollider(nullptr); });
+        root.traverse([](DonTopo::GameObject* go) {
+            go->setCollider(nullptr);
+            go->setRigidBody(nullptr);
+        });
         physics.shutdown();
         renderer.shutdown();
         window.shutdown();
