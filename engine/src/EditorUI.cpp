@@ -131,6 +131,8 @@ void EditorUI::drawScene(GameObject* sceneRoot)
     // como hijo directo del root (equivalente a soltar sobre la fila root
     // de antes, ahora que esa fila ya no existe).
     ImGui::Dummy(ImGui::GetContentRegionAvail());
+    if (ImGui::IsItemClicked())
+        m_selected = nullptr; // clic en zona vacía deselecciona
     if (sceneRoot && ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_GAMEOBJECT"))
