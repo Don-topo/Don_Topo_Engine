@@ -7,6 +7,7 @@
 #endif
 
 namespace DonTopo { class BoxCollider; }
+namespace DonTopo { class RigidBody; }
 
 namespace DonTopo {
 
@@ -22,6 +23,12 @@ public:
 
     std::shared_ptr<BoxCollider> createBoxCollider(const glm::vec3& halfExtents,
                                                     const glm::mat4& worldTransform);
+
+    std::shared_ptr<RigidBody> createDynamicBoxCollider(const glm::vec3& halfExtents,
+                                                         const glm::mat4& worldTransform,
+                                                         float density = 1.0f);
+
+    void stepSimulation(float dt);
 
 #ifdef DT_PHYSX_ENABLED
     bool raycast(const physx::PxVec3& origin, const physx::PxVec3& dir, float maxDistance, physx::PxRaycastBuffer& hit);

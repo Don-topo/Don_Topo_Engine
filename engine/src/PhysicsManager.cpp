@@ -1,5 +1,6 @@
 #include "DonTopo/PhysicsManager.h"
 #include "DonTopo/BoxCollider.h"
+#include "DonTopo/RigidBody.h"
 
 #ifdef DT_PHYSX_ENABLED
 #define GLM_ENABLE_EXPERIMENTAL
@@ -43,7 +44,7 @@ void PhysicsManager::init()
     m_dispatcher = dispatcher;
 
     PxSceneDesc sceneDesc(physics->getTolerancesScale());
-    sceneDesc.gravity       = PxVec3(0.0f, -9.81f, 0.0f);
+    sceneDesc.gravity       = PxVec3(0.0f, -981.0f, 0.0f);
     sceneDesc.cpuDispatcher = dispatcher;
     sceneDesc.filterShader  = PxDefaultSimulationFilterShader;
     auto* scene = physics->createScene(sceneDesc);
@@ -103,5 +104,47 @@ bool PhysicsManager::raycast(const PxVec3& origin, const PxVec3& dir, float maxD
     return static_cast<PxScene*>(m_scene)->raycast(origin, dir, maxDistance, hit);
 }
 #endif
+
+std::shared_ptr<RigidBody> PhysicsManager::createDynamicBoxCollider(const glm::vec3& halfExtents,
+                                                                     const glm::mat4& worldTransform,
+                                                                     float density)
+{
+#ifdef DT_PHYSX_ENABLED
+    glm::vec3 scale, translation, skew;
+    glm::vec4 perspective;
+    glm::quat rotation;
+    glm::decompose(worldTransform, scale, rotation, translation, skew, perspective);
+
+    PxTransform pose(
+        PxVec3(translation.x, translation.y, translation.z),
+        PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
+    );
+
+    auto* physics = static_cast<PxPhysics*>(m_physics);
+    auto* material = static_cast<PxMaterial*>(m_material);
+    auto* scene = static_cast<PxScene*>(m_scene);
+
+    PxBoxGeometry geometry(halfExtents.x, halfExtents.y, halfExtents.z);
+    PxRigidDynamic* actor = PxCreateDynamic(*physics, pose, geometry, *material, density);
+    physxCheck(actor, "PxCreateDynamic");
+    scene->addActor(*actor);
+
+    return std::make_shared<RigidBody>(actor);
+#else
+    (void)worldTransform;
+    (void)density;
+    return std::make_shared<RigidBody>(nullptr);
+#endif
+}
+
+void PhysicsManager::stepSimulation(float dt)
+{
+#ifdef DT_PHYSX_ENABLED
+    static_cast<PxScene*>(m_scene)->simulate(dt);
+    static_cast<PxScene*>(m_scene)->fetchResults(true);
+#else
+    (void)dt;
+#endif
+}
 
 } // namespace DonTopo
