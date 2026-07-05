@@ -34,7 +34,14 @@ void PhysicsManager::init()
     physxCheck(foundation, "PxCreateFoundation");
     m_foundation = foundation;
 
+    // El mundo usa centímetros (gravedad -981 = -9.81 m/s² * 100), no metros.
+    // PxTolerancesScale default asume 1 unidad = 1 metro; con ese default,
+    // sleepThreshold/contactOffset/bounceThresholdVelocity quedan ~100x
+    // demasiado pequeños para velocidades en cm/s, así que un actor en reposo
+    // nunca alcanza el umbral de sueño y vibra indefinidamente.
     PxTolerancesScale scale;
+    scale.length = 100.0f; // 100 unidades = 1 metro
+    scale.speed  = 981.0f; // velocidad típica de caída tras 1s bajo esta gravedad
     auto* physics = PxCreatePhysics(PX_PHYSICS_VERSION, *foundation, scale);
     physxCheck(physics, "PxCreatePhysics");
     m_physics = physics;
