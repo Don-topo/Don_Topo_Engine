@@ -206,6 +206,12 @@ int main()
         }
 
         audio.shutdown();
+
+        // Liberar colliders (y sus PxRigidStatic) antes de destruir la escena/física:
+        // root se destruye al final del scope, después de physics — sin esto, el
+        // BoxCollider de cada GameObject intentaría release() sobre un actor cuya
+        // PxScene/PxPhysics ya fue liberada.
+        root.traverse([](DonTopo::GameObject* go) { go->setCollider(nullptr); });
         physics.shutdown();
         renderer.shutdown();
         window.shutdown();
