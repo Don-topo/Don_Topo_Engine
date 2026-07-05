@@ -54,6 +54,17 @@ add_custom_command(TARGET Sandbox POST_BUILD
     COMMENT "Copying compiled shaders to output directory and project shaders/"
 )
 
+# Sembrar imgui.ini por defecto (layout del editor) solo si el ejecutable
+# todavía no tiene uno propio — así un clone+build nuevo arranca con un
+# layout razonable, pero no se pisa el que el usuario ya haya personalizado.
+add_custom_command(TARGET Sandbox POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+        -DSRC=${CMAKE_SOURCE_DIR}/imgui.ini
+        -DDST=$<TARGET_FILE_DIR:Sandbox>/imgui.ini
+        -P ${CMAKE_SOURCE_DIR}/cmake/CopyIfMissing.cmake
+    COMMENT "Seeding default imgui.ini layout (if missing)"
+)
+
 # Copy FMOD runtime DLL next to the executable (Windows only)
 if(FMOD_FOUND AND WIN32)
     get_filename_component(_fmod_lib_dir "${FMOD_LIBRARY}" DIRECTORY)
