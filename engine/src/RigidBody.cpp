@@ -5,6 +5,7 @@
 #include <PxPhysicsAPI.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
 
 using namespace physx;
 #endif
@@ -42,6 +43,30 @@ glm::mat4 RigidBody::getWorldTransform() const
     return translation * rotationMat;
 #else
     return glm::mat4(1.0f);
+#endif
+}
+
+void RigidBody::setWorldTransform(const glm::mat4& worldTransform)
+{
+#ifdef DT_PHYSX_ENABLED
+    if (!m_actor) return;
+
+    glm::vec3 scale, translation, skew;
+    glm::vec4 perspective;
+    glm::quat rotation;
+    glm::decompose(worldTransform, scale, rotation, translation, skew, perspective);
+
+    PxTransform pose(
+        PxVec3(translation.x, translation.y, translation.z),
+        PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
+    );
+
+    auto* actor = static_cast<PxRigidDynamic*>(m_actor);
+    actor->setGlobalPose(pose);
+    actor->setLinearVelocity(PxVec3(0.0f));
+    actor->setAngularVelocity(PxVec3(0.0f));
+#else
+    (void)worldTransform;
 #endif
 }
 

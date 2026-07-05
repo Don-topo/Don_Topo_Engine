@@ -28,7 +28,7 @@
 - Produces: `DonTopo::RigidBody::setWorldTransform(const glm::mat4& worldTransform)` — teletransporta el actor dinámico a la pose dada (pos+rot; escala ignorada) y resetea `linearVelocity`/`angularVelocity` a cero.
 - Consumes: `GameObject::hasRigidBody()`, `GameObject::getRigidBody()`, `GameObject::updateWorldTransforms(const glm::mat4&)` (ya existen, ver `engine/include/DonTopo/GameObject.h`).
 
-- [ ] **Step 1: Añadir la declaración a `engine/include/DonTopo/RigidBody.h`**
+- [x] **Step 1: Añadir la declaración a `engine/include/DonTopo/RigidBody.h`**
 
 Archivo completo resultante:
 
@@ -66,7 +66,7 @@ private:
 } // namespace DonTopo
 ```
 
-- [ ] **Step 2: Implementar `setWorldTransform` en `engine/src/RigidBody.cpp`**
+- [x] **Step 2: Implementar `setWorldTransform` en `engine/src/RigidBody.cpp`**
 
 Añadir al final del archivo (antes de `} // namespace DonTopo`), tras `getWorldTransform`:
 
@@ -110,12 +110,12 @@ using namespace physx;
 #endif
 ```
 
-- [ ] **Step 3: Compilar para verificar que el archivo modificado compila**
+- [x] **Step 3: Compilar para verificar que el archivo modificado compila**
 
 Run: `build.bat`
 Expected: compila sin error. `setWorldTransform` no se usa todavía en ningún sitio (código muerto hasta el Step 4), así que no debería haber ningún cambio de comportamiento.
 
-- [ ] **Step 4: Llamar a `setWorldTransform` desde `EditorUI::drawProperties`**
+- [x] **Step 4: Llamar a `setWorldTransform` desde `EditorUI::drawProperties`**
 
 En `engine/src/EditorUI.cpp`, dentro de `drawProperties()`, reemplazar:
 
@@ -150,12 +150,12 @@ por:
 
 (`GameObject.h` ya incluye `DonTopo/RigidBody.h`, y `EditorUI.cpp` ya incluye `GameObject.h` transitivamente vía los headers existentes — no hace falta ningún include nuevo.)
 
-- [ ] **Step 5: Compilar**
+- [x] **Step 5: Compilar**
 
 Run: `build.bat`
 Expected: compila sin error.
 
-- [ ] **Step 6: Smoke-test manual end-to-end**
+- [x] **Step 6: Smoke-test manual end-to-end**
 
 Ejecutar `build-ninja\sandbox\Sandbox.exe`. En el editor:
 
@@ -167,7 +167,7 @@ Ejecutar `build-ninja\sandbox\Sandbox.exe`. En el editor:
 
 Cerrar la ventana normalmente (botón X o Escape, no matar el proceso) y confirmar que no hay crash ni warnings de PhysX en consola.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add engine/include/DonTopo/RigidBody.h engine/src/RigidBody.cpp engine/src/EditorUI.cpp

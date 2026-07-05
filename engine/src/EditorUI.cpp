@@ -430,6 +430,13 @@ void EditorUI::drawProperties()
         glm::mat4 r = glm::mat4_cast(glm::quat(glm::radians(m_editRotationDeg)));
         glm::mat4 s = glm::scale(glm::mat4(1.0f), m_editScale);
         m_selected->localTransform = t * r * s;
+
+        if (m_selected->hasRigidBody())
+        {
+            m_selected->updateWorldTransforms(m_selected->parent ? m_selected->parent->worldTransform
+                                                                   : glm::mat4(1.0f));
+            m_selected->getRigidBody()->setWorldTransform(m_selected->worldTransform);
+        }
     }
 
     ImGui::End();
