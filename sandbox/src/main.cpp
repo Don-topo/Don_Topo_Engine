@@ -162,8 +162,10 @@ int main()
             audio.update(camera.getPos(), camera.getFront(), camera.getUp());
 
             root.updateWorldTransforms();
-            for (auto* go : allNodes)
-            {
+            // Recorrido en vivo (no la lista allNodes cacheada al arrancar): el
+            // editor permite borrar GameObjects en tiempo real, así que un
+            // puntero cacheado podría quedar colgante tras un delete.
+            root.traverse([&](DonTopo::GameObject* go) {
                 if (go->staticRenderIndex >= 0)
                     renderer.setTransform(go->staticRenderIndex, go->worldTransform);
 
@@ -172,7 +174,7 @@ int main()
                     renderer.updateAnimation(go->skinnedRenderIndex, dt);
                     renderer.setSkinnedTransform(go->skinnedRenderIndex, go->worldTransform);
                 }
-            }
+            });
 
             renderer.drawFrame(window);
             window.pollEvents();

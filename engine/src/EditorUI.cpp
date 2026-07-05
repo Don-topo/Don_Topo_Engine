@@ -46,6 +46,53 @@ void EditorUI::drawScene(GameObject* sceneRoot)
     ImGui::Begin("Scene");
     if (sceneRoot)
         drawSceneNode(sceneRoot);
+
+    bool canDelete = m_selected && m_selected->parent != nullptr;
+
+    if (ImGui::IsWindowFocused() && canDelete && ImGui::IsKeyPressed(ImGuiKey_Delete))
+        m_pendingDelete = m_selected;
+
+    if (ImGui::BeginPopupContextWindow("##SceneContext",
+            ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+    {
+        if (ImGui::MenuItem("Create GameObject") && sceneRoot)
+            sceneRoot->addChild("GameObject");
+        if (ImGui::MenuItem("Delete GameObject", nullptr, false, canDelete))
+            m_pendingDelete = m_selected;
+        ImGui::EndPopup();
+    }
+
+    // Ejecutar el borrado tras recorrer todo el árbol: hacerlo antes
+    // invalidaría los for-range de children en curso en la pila de llamadas.
+    if (m_pendingDelete)
+    {
+        GameObject* target = m_pendingDelete;
+        m_pendingDelete = nullptr;
+
+        // La selección puede ser el propio target o un descendiente suyo;
+        // hay que comprobarlo antes de borrar el subárbol (después ya no existe).
+        bool selectionInSubtree = false;
+        target->traverse([&](GameObject* go) {
+            if (go == m_selected) selectionInSubtree = true;
+        });
+
+        if (m_onDelete)
+            m_onDelete(target);
+        if (target->parent)
+        {
+            auto& siblings = target->parent->children;
+            siblings.erase(
+                std::remove_if(siblings.begin(), siblings.end(),
+                    [target](const std::unique_ptr<GameObject>& c) { return c.get() == target; }),
+                siblings.end());
+        }
+        if (selectionInSubtree)
+        {
+            m_selected = nullptr;
+            m_propsCachedFor = nullptr;
+        }
+    }
+
     ImGui::End();
 }
 
@@ -53,7 +100,7 @@ void EditorUI::drawSceneNode(GameObject* node)
 {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen;
     if (node->children.empty())
-        flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_Bullet;
+        flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_Bullet;
     if (node == m_selected)
         flags |= ImGuiTreeNodeFlags_Selected;
 
@@ -62,7 +109,17 @@ void EditorUI::drawSceneNode(GameObject* node)
     if (ImGui::IsItemClicked())
         m_selected = node;
 
-    if (open && !node->children.empty())
+    if (ImGui::BeginPopupContextItem())
+    {
+        if (ImGui::MenuItem("Create GameObject"))
+            node->addChild("GameObject");
+        bool canDelete = node->parent != nullptr;
+        if (ImGui::MenuItem("Delete GameObject", nullptr, false, canDelete))
+            m_pendingDelete = node;
+        ImGui::EndPopup();
+    }
+
+    if (open)
     {
         for (const auto& child : node->children)
             drawSceneNode(child.get());
@@ -192,18 +249,22 @@ void EditorUI::drawContentBrowser()
     // Right: Asset browser with type icons
     ImGui::BeginChild("##AssetPane", ImVec2(0, totalHeight), false);
     {
+        std::string browsedDir = IGFD::FileDialog::Instance()->GetCurrentPath();
+        if (browsedDir.empty()) browsedDir = "assets";
+        if (browsedDir != m_currentDir) {
+            m_currentDir = browsedDir;
+            m_scanned = false;
+        }
+
         if (!m_scanned) {
             m_assets.clear();
-            if (std::filesystem::exists("assets"))
-                for (auto& e : std::filesystem::directory_iterator("assets"))
+            if (std::filesystem::exists(m_currentDir))
+                for (auto& e : std::filesystem::directory_iterator(m_currentDir))
                     if (e.is_regular_file())
                         m_assets.push_back(e.path());
             std::sort(m_assets.begin(), m_assets.end());
             m_scanned = true;
         }
-
-        if (ImGui::SmallButton("Refresh")) m_scanned = false;
-        ImGui::Separator();
 
         constexpr float ICON_SIZE = 56.0f;
         constexpr float CELL_PAD  = 12.0f;

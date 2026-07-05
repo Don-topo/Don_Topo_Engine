@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <filesystem>
+#include <functional>
 #include <glm/glm.hpp>
 
 namespace DonTopo {
@@ -19,6 +20,11 @@ public:
 
     bool isViewportHovered() const { return m_viewportHovered; }
 
+    // Notificado justo antes de desenganchar node de su padre (node sigue
+    // siendo válido y su subárbol completo también), para que el dueño
+    // pueda liberar recursos externos (meshes/texturas en GPU) asociados.
+    void setOnDelete(std::function<void(GameObject*)> cb) { m_onDelete = std::move(cb); }
+
 private:
     void drawDockSpace();
     void drawScene(GameObject* sceneRoot);
@@ -33,10 +39,16 @@ private:
     // Content Browser
     bool m_dlgOpen = false;
     bool m_scanned = false;
+    std::string m_currentDir;
     std::vector<std::filesystem::path> m_assets;
 
     // Scene selection
     GameObject* m_selected = nullptr;
+    // Borrado diferido al final del frame: el árbol se recorre con
+    // recursión sobre std::vector<unique_ptr<GameObject>>, borrar en medio
+    // de esa recursión invalidaría los iteradores de los for-range activos.
+    GameObject* m_pendingDelete = nullptr;
+    std::function<void(GameObject*)> m_onDelete;
 
     // Properties – cache de edición del nodo seleccionado (persiste entre
     // frames para que DragFloat pueda acumular el delta del arrastre;

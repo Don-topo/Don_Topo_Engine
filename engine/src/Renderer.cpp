@@ -1,4 +1,5 @@
 ﻿#include "DonTopo/Renderer.h"
+#include "DonTopo/GameObject.h"
 #include <GLFW/glfw3.h>
 #include <stdexcept>
 #include "DonTopo/Window.h"
@@ -579,6 +580,7 @@ namespace DonTopo {
             vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
             for (auto& obj : m_objects)
             {
+                if (obj.vertexBuffer == VK_NULL_HANDLE) continue; // borrado desde el editor
                 vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
                     m_pipelineLayout, 0, 1, &obj.descriptorSets[m_currentFrame], 0, nullptr);
                 PushData push;
@@ -602,6 +604,7 @@ namespace DonTopo {
 
                 for (auto& sobj : m_skinnedObjects)
                 {
+                    if (sobj.outputVertexBuffer == VK_NULL_HANDLE) continue; // borrado desde el editor
                     VkBuffer     vbs[]  = { sobj.outputVertexBuffer };
                     VkDeviceSize offs[] = { 0 };
                     vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vbs, offs);
@@ -1494,6 +1497,7 @@ namespace DonTopo {
 
         for(auto& obj : m_objects)
         {
+            if (obj.vertexBuffer == VK_NULL_HANDLE) continue; // borrado desde el editor
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout, 0, 1, &obj.descriptorSets[m_currentFrame], 0, nullptr);
             vkCmdPushConstants(cmd, m_shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &obj.transform);
 
@@ -1974,6 +1978,44 @@ namespace DonTopo {
             m_skinnedObjects[index].transform = t;
     }
 
+    void Renderer::setSceneRoot(GameObject* root)
+    {
+        m_sceneRoot = root;
+        m_editorUI.setOnDelete([this](GameObject* node) { removeGameObject(node); });
+    }
+
+    void Renderer::removeStaticObject(int index)
+    {
+        if (index < 0 || index >= (int)m_objects.size()) return;
+        RenderObject& obj = m_objects[index];
+        if (obj.vertexBuffer == VK_NULL_HANDLE) return; // ya liberado
+        destroyRenderObject(obj);
+        obj = RenderObject{};
+    }
+
+    void Renderer::removeSkinnedObject(int index)
+    {
+        if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
+        SkinnedRenderObject& obj = m_skinnedObjects[index];
+        if (obj.outputVertexBuffer == VK_NULL_HANDLE) return; // ya liberado
+        destroySkinnedRenderObject(obj);
+        obj = SkinnedRenderObject{};
+    }
+
+    void Renderer::removeGameObject(GameObject* node)
+    {
+        if (!node) return;
+        // Espera a que la GPU termine antes de destruir buffers/texturas que
+        // un command buffer en vuelo (double buffering) pudiera seguir usando.
+        vkDeviceWaitIdle(m_gpu.device());
+        node->traverse([this](GameObject* go) {
+            if (go->staticRenderIndex >= 0)
+                removeStaticObject(go->staticRenderIndex);
+            if (go->skinnedRenderIndex >= 0)
+                removeSkinnedObject(go->skinnedRenderIndex);
+        });
+    }
+
     void Renderer::recordComputePass(VkCommandBuffer cmd)
     {
         if (m_skinnedObjects.empty()) return;
@@ -1991,6 +2033,7 @@ namespace DonTopo {
 
         for (auto& obj : m_skinnedObjects)
         {
+            if (obj.outputVertexBuffer == VK_NULL_HANDLE) continue; // borrado desde el editor
             ComputePush push{};
             push.animTime    = obj.animTime;
             push.boneCount   = obj.boneCount;
