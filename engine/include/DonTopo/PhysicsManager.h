@@ -1,4 +1,12 @@
 #pragma once
+#include <glm/glm.hpp>
+#include <memory>
+
+#ifdef DT_PHYSX_ENABLED
+#include <PxPhysicsAPI.h>
+#endif
+
+namespace DonTopo { class BoxCollider; }
 
 namespace DonTopo {
 
@@ -11,6 +19,13 @@ public:
 
     void init();
     void shutdown();
+
+    std::shared_ptr<BoxCollider> createBoxCollider(const glm::vec3& halfExtents,
+                                                    const glm::mat4& worldTransform);
+
+#ifdef DT_PHYSX_ENABLED
+    bool raycast(const physx::PxVec3& origin, const physx::PxVec3& dir, float maxDistance, physx::PxRaycastBuffer& hit);
+#endif
 
 private:
 #ifdef DT_PHYSX_ENABLED

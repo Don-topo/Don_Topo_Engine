@@ -5,6 +5,7 @@
 #include <memory>
 #include "DonTopo/Mesh.h"
 #include "DonTopo/SkinnedMesh.h"
+#include "DonTopo/BoxCollider.h"
 
 namespace DonTopo
 {
@@ -20,6 +21,10 @@ namespace DonTopo
             bool hasMesh()   const { return m_mesh != nullptr; }
             bool isSkinned() const { return m_mesh && dynamic_cast<SkinnedMesh*>(m_mesh.get()) != nullptr; }
             SkinnedMesh* getSkinnedMesh() const { return m_mesh ? dynamic_cast<SkinnedMesh*>(m_mesh.get()) : nullptr; }
+
+            void setCollider(std::shared_ptr<BoxCollider> collider) { m_collider = std::move(collider); }
+            const std::shared_ptr<BoxCollider>& getCollider() const { return m_collider; }
+            bool hasCollider() const { return m_collider != nullptr; }
 
             void updateWorldTransforms(const glm::mat4& parentWorld = glm::mat4(1.0f));
 
@@ -43,5 +48,6 @@ namespace DonTopo
 
         private:
             std::shared_ptr<Mesh> m_mesh;
+            std::shared_ptr<BoxCollider> m_collider;
     };
 }

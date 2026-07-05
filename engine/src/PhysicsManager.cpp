@@ -1,7 +1,11 @@
 #include "DonTopo/PhysicsManager.h"
+#include "DonTopo/BoxCollider.h"
 
 #ifdef DT_PHYSX_ENABLED
+#define GLM_ENABLE_EXPERIMENTAL
 #include <PxPhysicsAPI.h>
+#include <glm/gtx/matrix_decompose.hpp>
+#include <glm/gtx/quaternion.hpp>
 #include <stdexcept>
 #include <string>
 
@@ -62,5 +66,42 @@ void PhysicsManager::shutdown()
     m_material = nullptr; // liberado implícitamente por PxPhysics::release()
 #endif
 }
+
+std::shared_ptr<BoxCollider> PhysicsManager::createBoxCollider(const glm::vec3& halfExtents,
+                                                                const glm::mat4& worldTransform)
+{
+#ifdef DT_PHYSX_ENABLED
+    glm::vec3 scale, translation, skew;
+    glm::vec4 perspective;
+    glm::quat rotation;
+    glm::decompose(worldTransform, scale, rotation, translation, skew, perspective);
+
+    PxTransform pose(
+        PxVec3(translation.x, translation.y, translation.z),
+        PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
+    );
+
+    auto* physics = static_cast<PxPhysics*>(m_physics);
+    auto* material = static_cast<PxMaterial*>(m_material);
+    auto* scene = static_cast<PxScene*>(m_scene);
+
+    PxBoxGeometry geometry(halfExtents.x, halfExtents.y, halfExtents.z);
+    PxRigidStatic* actor = PxCreateStatic(*physics, pose, geometry, *material);
+    physxCheck(actor, "PxCreateStatic");
+    scene->addActor(*actor);
+
+    return std::make_shared<BoxCollider>(actor, halfExtents);
+#else
+    (void)worldTransform;
+    return std::make_shared<BoxCollider>(nullptr, halfExtents);
+#endif
+}
+
+#ifdef DT_PHYSX_ENABLED
+bool PhysicsManager::raycast(const PxVec3& origin, const PxVec3& dir, float maxDistance, PxRaycastBuffer& hit)
+{
+    return static_cast<PxScene*>(m_scene)->raycast(origin, dir, maxDistance, hit);
+}
+#endif
 
 } // namespace DonTopo
