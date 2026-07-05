@@ -37,4 +37,9 @@ if(FMOD_FOUND)
     target_compile_definitions(DonTopoEngine PUBLIC DT_FMOD_ENABLED)
 endif()
 
+if(PHYSX_FOUND)
+    target_link_libraries(DonTopoEngine PUBLIC PhysX::SDK)
+    target_compile_definitions(DonTopoEngine PUBLIC DT_PHYSX_ENABLED)
+endif()
+
 target_compile_features(DonTopoEngine PUBLIC cxx_std_20)

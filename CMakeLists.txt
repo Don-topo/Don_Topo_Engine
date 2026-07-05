@@ -140,8 +140,10 @@ target_include_directories(imguizmo PUBLIC
 target_link_libraries(imguizmo PUBLIC imgui_backend)
 target_compile_features(imguizmo PUBLIC cxx_std_17)
 
+# PhysX SDK — física (compilado desde fuente, ver cmake/PhysX.cmake)
+include(cmake/PhysX.cmake)
+
 # Future dependencies go here:
-# find_package(PhysX REQUIRED)   # physics
 # FetchContent_Declare(gainput ...) # dedicated input
 
 # ─── Targets ─────────────────────────────────────────────────────────────────
