@@ -111,6 +111,17 @@ if(PHYSX_FOUND)
     target_include_directories(PhysX::SDK INTERFACE
         ${PHYSX_ROOT_DIR}/include
     )
+    # PhysX's own CMake defines PX_PHYSX_STATIC_LIB internally when
+    # PX_GENERATE_STATIC_LIBRARIES is ON (see
+    # source/compiler/cmake/windows/CMakeLists.txt), which switches its public
+    # headers (e.g. PxFoundationConfig.h) away from __declspec(dllimport) for
+    # entry points like PxCreatePhysics. That define is private to PhysX's own
+    # targets and isn't propagated as a usage requirement, so any consumer
+    # (like our PhysicsManager) that includes PxPhysicsAPI.h without it ends up
+    # trying to dllimport symbols that only exist as static archive exports —
+    # unresolved __imp_PxCreatePhysics at link time. Define it here so it
+    # reaches every consumer of PhysX::SDK.
+    target_compile_definitions(PhysX::SDK INTERFACE PX_PHYSX_STATIC_LIB)
 else()
     message(WARNING
         "PhysX SDK no disponible en esta plataforma — física no estará disponible.\n"

@@ -11,6 +11,7 @@ add_library(DonTopoEngine STATIC
     src/Camera.cpp
     src/GameObject.cpp
     src/AudioManager.cpp
+    src/PhysicsManager.cpp
     src/GpuDevice.cpp
     src/GpuResources.cpp
 )

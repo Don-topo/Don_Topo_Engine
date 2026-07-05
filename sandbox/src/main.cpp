@@ -8,6 +8,7 @@
 #include "DonTopo/Camera.h"
 #include "DonTopo/GameObject.h"
 #include "DonTopo/AudioManager.h"
+#include "DonTopo/PhysicsManager.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -85,6 +86,9 @@ int main()
         audio.init();
         int bgm = audio.loadBGM("assets/audio.mp3");
         if (bgm >= 0) audio.playBGM(bgm);
+
+        DonTopo::PhysicsManager physics;
+        physics.init();
 
         renderer.init(window, meshes);
         renderer.setSceneRoot(&root);
@@ -182,6 +186,7 @@ int main()
         }
 
         audio.shutdown();
+        physics.shutdown();
         renderer.shutdown();
         window.shutdown();
     } catch (const std::exception& e) {
