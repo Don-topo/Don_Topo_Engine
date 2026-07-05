@@ -11,6 +11,8 @@ add_library(DonTopoEngine STATIC
     src/Camera.cpp
     src/GameObject.cpp
     src/AudioManager.cpp
+    src/PhysicsManager.cpp
+    src/BoxCollider.cpp
     src/GpuDevice.cpp
     src/GpuResources.cpp
 )
@@ -35,6 +37,11 @@ target_link_libraries(DonTopoEngine
 if(FMOD_FOUND)
     target_link_libraries(DonTopoEngine PUBLIC FMOD::FMOD)
     target_compile_definitions(DonTopoEngine PUBLIC DT_FMOD_ENABLED)
+endif()
+
+if(PHYSX_FOUND)
+    target_link_libraries(DonTopoEngine PUBLIC PhysX::SDK)
+    target_compile_definitions(DonTopoEngine PUBLIC DT_PHYSX_ENABLED)
 endif()
 
 target_compile_features(DonTopoEngine PUBLIC cxx_std_20)

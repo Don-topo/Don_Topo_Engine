@@ -8,6 +8,7 @@
 #include "DonTopo/Camera.h"
 #include "DonTopo/GameObject.h"
 #include "DonTopo/AudioManager.h"
+#include "DonTopo/PhysicsManager.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -15,6 +16,9 @@
 #include <iostream>
 #include <limits>
 #include <glm/gtc/matrix_transform.hpp>
+#ifdef DT_PHYSX_ENABLED
+#include <PxPhysicsAPI.h>
+#endif
 
 int main()
 {
@@ -23,6 +27,13 @@ int main()
         DonTopo::Window window;
         window.init(1280, 720, "Don Topo Engine");
         DonTopo::Renderer renderer;
+
+        // physics se declara antes que root: en cualquier salida de scope (normal
+        // o por excepción) root se destruye primero (liberando los BoxCollider de
+        // sus GameObject) y physics se destruye después — nunca al revés, evitando
+        // que ~BoxCollider() libere un PxRigidStatic sobre una PxScene ya liberada.
+        DonTopo::PhysicsManager physics;
+        physics.init();
 
         DonTopo::GameObject root("root");
 
@@ -56,6 +67,19 @@ int main()
         auto* cube = root.addChild("cube");
         cube->setMesh(cubeMesh);
         cube->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 50.0f, -200.0f));
+
+        cube->updateWorldTransforms();
+        cube->setCollider(physics.createBoxCollider(glm::vec3(25.0f, 25.0f, 25.0f), cube->worldTransform));
+
+#ifdef DT_PHYSX_ENABLED
+        {
+            physx::PxRaycastBuffer hit;
+            physx::PxVec3 origin(cube->worldTransform[3].x, cube->worldTransform[3].y + 200.0f, cube->worldTransform[3].z);
+            physx::PxVec3 dir(0.0f, -1.0f, 0.0f);
+            bool didHit = physics.raycast(origin, dir, 400.0f, hit);
+            std::cout << "[PhysX smoke test] raycast al cubo: " << (didHit ? "HIT" : "MISS") << std::endl;
+        }
+#endif
 
         auto* sphere = root.addChild("sphere");
         sphere->setMesh(sphereMesh);
@@ -175,6 +199,9 @@ int main()
                     renderer.updateAnimation(go->skinnedRenderIndex, dt);
                     renderer.setSkinnedTransform(go->skinnedRenderIndex, go->worldTransform);
                 }
+
+                if (go->hasCollider())
+                    go->getCollider()->syncTransform(go->worldTransform);
             });
 
             renderer.drawFrame(window);
@@ -182,6 +209,13 @@ int main()
         }
 
         audio.shutdown();
+
+        // Liberar colliders (y sus PxRigidStatic) antes de destruir la escena/física:
+        // root se destruye al final del scope, después de physics — sin esto, el
+        // BoxCollider de cada GameObject intentaría release() sobre un actor cuya
+        // PxScene/PxPhysics ya fue liberada.
+        root.traverse([](DonTopo::GameObject* go) { go->setCollider(nullptr); });
+        physics.shutdown();
         renderer.shutdown();
         window.shutdown();
     } catch (const std::exception& e) {
