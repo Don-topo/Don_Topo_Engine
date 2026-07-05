@@ -31,6 +31,8 @@ private:
     void drawDockSpace();
     void drawScene(GameObject* sceneRoot);
     void drawSceneNode(GameObject* node);
+    // Abre el popup de rename pa node (root, parent==nullptr, no se puede renombrar).
+    void beginRename(GameObject* node);
     void drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& cameraView);
     void drawProperties();
     void drawContentBrowser();
@@ -52,6 +54,11 @@ private:
     GameObject* m_pendingDelete = nullptr;
     std::function<void(GameObject*)> m_onDelete;
     std::function<void(const glm::vec3&)> m_onAxisSelected;
+
+    // Rename – popup modal disparado por "Rename" (click derecho) o F2.
+    GameObject* m_renameTarget = nullptr;
+    char        m_renameBuffer[128] = {};
+    bool        m_openRenamePopup = false;
 
     // Properties – cache de edición del nodo seleccionado (persiste entre
     // frames para que DragFloat pueda acumular el delta del arrastre;

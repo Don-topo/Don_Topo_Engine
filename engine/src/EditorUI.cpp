@@ -3,12 +3,43 @@
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
+#include <cctype>
+#include <cstring>
 #include <filesystem>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/euler_angles.hpp>
+
+namespace {
+
+// Nombre válido: no vacío tras trim, solo alfanuméricos/espacio/_/-/. (sin
+// caracteres de control ni símbolos que puedan romper rutas de asset o UI).
+bool isValidGameObjectName(const std::string& name)
+{
+    size_t begin = name.find_first_not_of(" \t");
+    size_t end   = name.find_last_not_of(" \t");
+    if (begin == std::string::npos)
+        return false;
+
+    for (size_t i = begin; i <= end; ++i)
+    {
+        unsigned char c = static_cast<unsigned char>(name[i]);
+        if (!std::isalnum(c) && c != ' ' && c != '_' && c != '-' && c != '.')
+            return false;
+    }
+    return true;
+}
+
+std::string trim(const std::string& name)
+{
+    size_t begin = name.find_first_not_of(" \t");
+    size_t end   = name.find_last_not_of(" \t");
+    return name.substr(begin, end - begin + 1);
+}
+
+} // namespace
 
 namespace DonTopo {
 
@@ -48,15 +79,20 @@ void EditorUI::drawScene(GameObject* sceneRoot)
         drawSceneNode(sceneRoot);
 
     bool canDelete = m_selected && m_selected->parent != nullptr;
+    bool canRename = m_selected && m_selected->parent != nullptr;
 
     if (ImGui::IsWindowFocused() && canDelete && ImGui::IsKeyPressed(ImGuiKey_Delete))
         m_pendingDelete = m_selected;
+    if (ImGui::IsWindowFocused() && canRename && ImGui::IsKeyPressed(ImGuiKey_F2))
+        beginRename(m_selected);
 
     if (ImGui::BeginPopupContextWindow("##SceneContext",
             ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
     {
         if (ImGui::MenuItem("Create GameObject") && sceneRoot)
             sceneRoot->addChild("GameObject");
+        if (ImGui::MenuItem("Rename", nullptr, false, canRename))
+            beginRename(m_selected);
         if (ImGui::MenuItem("Delete GameObject", nullptr, false, canDelete))
             m_pendingDelete = m_selected;
         ImGui::EndPopup();
@@ -93,7 +129,52 @@ void EditorUI::drawScene(GameObject* sceneRoot)
         }
     }
 
+    if (m_openRenamePopup)
+    {
+        ImGui::OpenPopup("Rename GameObject");
+        m_openRenamePopup = false;
+    }
+    if (ImGui::BeginPopupModal("Rename GameObject", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        if (ImGui::IsWindowAppearing())
+            ImGui::SetKeyboardFocusHere();
+
+        bool enterPressed = ImGui::InputText("##renameInput", m_renameBuffer, sizeof(m_renameBuffer),
+                                              ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::Separator();
+        bool accept = ImGui::Button("Accept") || enterPressed;
+        ImGui::SameLine();
+        bool cancel = ImGui::Button("Cancel");
+
+        if (accept)
+        {
+            std::string newName = trim(m_renameBuffer);
+            if (m_renameTarget && isValidGameObjectName(newName))
+                m_renameTarget->name = newName;
+            m_renameTarget = nullptr;
+            ImGui::CloseCurrentPopup();
+        }
+        else if (cancel)
+        {
+            m_renameTarget = nullptr;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     ImGui::End();
+}
+
+void EditorUI::beginRename(GameObject* node)
+{
+    if (!node || !node->parent)
+        return; // root no se puede renombrar
+
+    m_renameTarget = node;
+    std::string current = node->name.empty() ? "GameObject" : node->name;
+    std::strncpy(m_renameBuffer, current.c_str(), sizeof(m_renameBuffer) - 1);
+    m_renameBuffer[sizeof(m_renameBuffer) - 1] = '\0';
+    m_openRenamePopup = true;
 }
 
 void EditorUI::drawSceneNode(GameObject* node)
@@ -113,8 +194,10 @@ void EditorUI::drawSceneNode(GameObject* node)
     {
         if (ImGui::MenuItem("Create GameObject"))
             node->addChild("GameObject");
-        bool canDelete = node->parent != nullptr;
-        if (ImGui::MenuItem("Delete GameObject", nullptr, false, canDelete))
+        bool canModify = node->parent != nullptr;
+        if (ImGui::MenuItem("Rename", nullptr, false, canModify))
+            beginRename(node);
+        if (ImGui::MenuItem("Delete GameObject", nullptr, false, canModify))
             m_pendingDelete = node;
         ImGui::EndPopup();
     }
