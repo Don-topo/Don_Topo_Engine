@@ -2,12 +2,19 @@
 
 #ifdef DT_PHYSX_ENABLED
 #include <PxPhysicsAPI.h>
+#include <stdexcept>
+#include <string>
 
 using namespace physx;
 
 namespace {
     PxDefaultAllocator      g_allocator;
     PxDefaultErrorCallback  g_errorCallback;
+}
+
+static void physxCheck(void* ptr, const char* ctx) {
+    if (!ptr)
+        throw std::runtime_error(std::string(ctx) + ": creation failed");
 }
 #endif
 
@@ -19,22 +26,29 @@ void PhysicsManager::init()
 {
 #ifdef DT_PHYSX_ENABLED
     auto* foundation = PxCreateFoundation(PX_PHYSICS_VERSION, g_allocator, g_errorCallback);
+    physxCheck(foundation, "PxCreateFoundation");
     m_foundation = foundation;
 
     PxTolerancesScale scale;
     auto* physics = PxCreatePhysics(PX_PHYSICS_VERSION, *foundation, scale);
+    physxCheck(physics, "PxCreatePhysics");
     m_physics = physics;
 
     auto* dispatcher = PxDefaultCpuDispatcherCreate(2);
+    physxCheck(dispatcher, "PxDefaultCpuDispatcherCreate");
     m_dispatcher = dispatcher;
 
     PxSceneDesc sceneDesc(physics->getTolerancesScale());
     sceneDesc.gravity       = PxVec3(0.0f, -9.81f, 0.0f);
     sceneDesc.cpuDispatcher = dispatcher;
     sceneDesc.filterShader  = PxDefaultSimulationFilterShader;
-    m_scene = physics->createScene(sceneDesc);
+    auto* scene = physics->createScene(sceneDesc);
+    physxCheck(scene, "PxPhysics::createScene");
+    m_scene = scene;
 
-    m_material = physics->createMaterial(0.5f, 0.5f, 0.1f);
+    auto* material = physics->createMaterial(0.5f, 0.5f, 0.1f);
+    physxCheck(material, "PxPhysics::createMaterial");
+    m_material = material;
 #endif
 }
 
