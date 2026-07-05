@@ -55,6 +55,12 @@ private:
     std::function<void(GameObject*)> m_onDelete;
     std::function<void(const glm::vec3&)> m_onAxisSelected;
 
+    // Reorder por drag&drop, diferido al final del frame por la misma razón
+    // que m_pendingDelete: mutar children en medio de la recursión del árbol
+    // invalidaría el for-range de un ancestro que sigue en la pila.
+    GameObject* m_pendingMoveSource = nullptr;
+    GameObject* m_pendingMoveTarget = nullptr;
+
     // Rename – popup modal disparado por "Rename" (click derecho) o F2.
     GameObject* m_renameTarget = nullptr;
     char        m_renameBuffer[128] = {};

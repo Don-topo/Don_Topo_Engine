@@ -39,6 +39,51 @@ std::string trim(const std::string& name)
     return name.substr(begin, end - begin + 1);
 }
 
+// Mueve dragged pa la posición de target dentro de la lista de hijos de
+// target->parent (o al final de target->children si target es el root: así
+// nunca puede quedar como hermano del root ni fuera de su subárbol).
+void moveGameObject(DonTopo::GameObject* dragged, DonTopo::GameObject* target)
+{
+    using DonTopo::GameObject;
+
+    if (!dragged || !target || dragged == target || !dragged->parent)
+        return; // root (sin parent) no se puede arrastrar
+
+    bool cycle = false;
+    dragged->traverse([&](GameObject* go) { if (go == target) cycle = true; });
+    if (cycle)
+        return; // no soltar un nodo dentro de su propio subárbol
+
+    GameObject* destParent;
+    ptrdiff_t destIndex;
+    if (!target->parent)
+    {
+        destParent = target;
+        destIndex  = static_cast<ptrdiff_t>(destParent->children.size());
+    }
+    else
+    {
+        destParent = target->parent;
+        auto it = std::find_if(destParent->children.begin(), destParent->children.end(),
+            [target](const std::unique_ptr<GameObject>& c) { return c.get() == target; });
+        destIndex = it - destParent->children.begin();
+    }
+
+    GameObject* srcParent = dragged->parent;
+    auto srcIt = std::find_if(srcParent->children.begin(), srcParent->children.end(),
+        [dragged](const std::unique_ptr<GameObject>& c) { return c.get() == dragged; });
+    ptrdiff_t srcIndex = srcIt - srcParent->children.begin();
+
+    std::unique_ptr<GameObject> moved = std::move(*srcIt);
+    srcParent->children.erase(srcIt);
+
+    if (srcParent == destParent && srcIndex < destIndex)
+        --destIndex; // el hueco dejado por el erase desplaza los índices siguientes
+
+    moved->parent = destParent;
+    destParent->children.insert(destParent->children.begin() + destIndex, std::move(moved));
+}
+
 } // namespace
 
 namespace DonTopo {
@@ -75,8 +120,26 @@ void EditorUI::drawDockSpace()
 void EditorUI::drawScene(GameObject* sceneRoot)
 {
     ImGui::Begin("Scene");
+    // El root no se dibuja como nodo: la lista muestra directamente sus
+    // hijos, root sigue siendo el padre real por debajo (mismo comportamiento
+    // de create/delete/rename/reorder que ya tenían).
     if (sceneRoot)
-        drawSceneNode(sceneRoot);
+        for (const auto& child : sceneRoot->children)
+            drawSceneNode(child.get());
+
+    // Espacio vacío tras la lista: soltar aquí reengancha el nodo arrastrado
+    // como hijo directo del root (equivalente a soltar sobre la fila root
+    // de antes, ahora que esa fila ya no existe).
+    ImGui::Dummy(ImGui::GetContentRegionAvail());
+    if (sceneRoot && ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_GAMEOBJECT"))
+        {
+            m_pendingMoveSource = *(GameObject**)payload->Data;
+            m_pendingMoveTarget = sceneRoot;
+        }
+        ImGui::EndDragDropTarget();
+    }
 
     bool canDelete = m_selected && m_selected->parent != nullptr;
     bool canRename = m_selected && m_selected->parent != nullptr;
@@ -127,6 +190,13 @@ void EditorUI::drawScene(GameObject* sceneRoot)
             m_selected = nullptr;
             m_propsCachedFor = nullptr;
         }
+    }
+
+    if (m_pendingMoveSource && m_pendingMoveTarget)
+    {
+        moveGameObject(m_pendingMoveSource, m_pendingMoveTarget);
+        m_pendingMoveSource = nullptr;
+        m_pendingMoveTarget = nullptr;
     }
 
     if (m_openRenamePopup)
@@ -189,6 +259,25 @@ void EditorUI::drawSceneNode(GameObject* node)
     bool open = ImGui::TreeNodeEx((const void*)node, flags, "%s", label.c_str());
     if (ImGui::IsItemClicked())
         m_selected = node;
+
+    // Drag: el root (parent == nullptr) no se puede arrastrar.
+    if (node->parent && ImGui::BeginDragDropSource())
+    {
+        ImGui::SetDragDropPayload("DT_GAMEOBJECT", &node, sizeof(GameObject*));
+        ImGui::Text("%s", label.c_str());
+        ImGui::EndDragDropSource();
+    }
+    // Drop: soltar sobre cualquier nodo (incluido el root) reposiciona el
+    // arrastrado; moveGameObject ya bloquea ciclos y "salir" del root.
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_GAMEOBJECT"))
+        {
+            m_pendingMoveSource = *(GameObject**)payload->Data;
+            m_pendingMoveTarget = node;
+        }
+        ImGui::EndDragDropTarget();
+    }
 
     if (ImGui::BeginPopupContextItem())
     {
