@@ -379,11 +379,27 @@ void EditorUI::drawProperties()
         m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
         m_propsCachedFor = m_selected;
     }
+    // RigidBody dinámico: PhysX mueve worldTransform cada frame (ver traverse
+    // en el loop principal), pero eso nunca toca localTransform ni este cache
+    // — sin este refresco, Position/Rotation mostrados quedan congelados en
+    // el valor de cuando se seleccionó, aunque el objeto siga cayendo/rotando
+    // por física. Solo posición+rotación (la escala es puramente del editor,
+    // physx no la conoce); se salta mientras se está arrastrando un slider
+    // pa no pelear con el drag del usuario.
+    else if (m_selected->hasRigidBody() && !m_transformDragActive)
+    {
+        glm::vec3 skew, unusedScale;
+        glm::vec4 perspective;
+        glm::quat orientation;
+        glm::decompose(m_selected->worldTransform, unusedScale, orientation, m_editPosition, skew, perspective);
+        m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
+    }
 
     ImGui::Text("%s", m_selected->name.empty() ? "GameObject" : m_selected->name.c_str());
     ImGui::Separator();
 
     bool changed = false;
+    bool posRotActive = false;
 
     ImGui::SetNextItemOpen(true, ImGuiCond_Once);
     if (ImGui::TreeNodeEx("Transform", ImGuiTreeNodeFlags_OpenOnArrow))
@@ -392,23 +408,29 @@ void EditorUI::drawProperties()
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("X##1", &m_editPosition.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        posRotActive |= ImGui::IsItemActive();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Y##1", &m_editPosition.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        posRotActive |= ImGui::IsItemActive();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Z##1", &m_editPosition.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        posRotActive |= ImGui::IsItemActive();
 
         ImGui::Text("Rotation");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("X##2", &m_editRotationDeg.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        posRotActive |= ImGui::IsItemActive();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Y##2", &m_editRotationDeg.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        posRotActive |= ImGui::IsItemActive();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Z##2", &m_editRotationDeg.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        posRotActive |= ImGui::IsItemActive();
 
         ImGui::Text("Scale   ");
         ImGui::SameLine();
@@ -423,6 +445,8 @@ void EditorUI::drawProperties()
 
         ImGui::TreePop();
     }
+
+    m_transformDragActive = posRotActive;
 
     if (changed)
     {
