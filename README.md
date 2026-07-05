@@ -11,7 +11,9 @@ A Vulkan-based game engine written in C++20.
 - Cubemap skybox (fullscreen quad, inverse view-projection)
 - 3D spatial audio (FMOD)
 - Dockable ImGui editor with offscreen viewport
-- Scene graph (hierarchical transforms)
+- Scene graph (hierarchical transforms), GameObject hierarchy panel (create/delete/rename, drag-drop reorder)
+- ImGuizmo transform gizmo (translate/rotate/scale, camera-oriented axis gizmo)
+- Physics (PhysX): static `BoxCollider`, dynamic `RigidBody`, raycasting
 - FBX / OBJ model loading (embedded textures supported)
 
 ## Tech Stack
@@ -25,6 +27,8 @@ A Vulkan-based game engine written in C++20.
 | Image loading | stb_image | Auto-fetched |
 | Editor UI | Dear ImGui | Auto-fetched |
 | File dialog | ImGuiFileDialog | Auto-fetched |
+| Transform gizmo | ImGuizmo | Auto-fetched |
+| Physics | NVIDIA PhysX 5.8.0 | Auto-fetched |
 | Audio | FMOD Studio (optional) | Manual install |
 | Build | CMake 3.25+ | — |
 | Language | C++20 | — |
@@ -72,7 +76,6 @@ Don_Topo_Engine/
 
 | System | Candidates |
 | --- | --- |
-| Physics | Jolt Physics, Bullet, PhysX |
 | Cascaded shadow maps | — |
 | PBR environment maps / IBL | — |
 | Post-processing | Bloom, SSAO, TAA |
