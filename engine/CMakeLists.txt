@@ -13,6 +13,7 @@ add_library(DonTopoEngine STATIC
     src/AudioManager.cpp
     src/PhysicsManager.cpp
     src/BoxCollider.cpp
+    src/RigidBody.cpp
     src/GpuDevice.cpp
     src/GpuResources.cpp
 )
