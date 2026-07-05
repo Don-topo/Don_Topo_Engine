@@ -105,7 +105,7 @@ namespace DonTopo {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        m_editorUI.draw(m_offscreenDescSet[m_currentFrame], m_sceneRoot);
+        m_editorUI.draw(m_offscreenDescSet[m_currentFrame], m_sceneRoot, m_viewMatrix);
 
         ImGui::Render();
 

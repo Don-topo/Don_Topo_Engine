@@ -88,6 +88,7 @@ int main()
 
         renderer.init(window, meshes);
         renderer.setSceneRoot(&root);
+        renderer.setOnAxisSelected([&camera](const glm::vec3& axis) { camera.lookAlongAxis(axis); });
 
         renderer.initSkybox({
             "assets/skybox/px.png",  // +X

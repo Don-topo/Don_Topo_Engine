@@ -29,6 +29,7 @@ target_link_libraries(DonTopoEngine
         assimp
         imgui_backend
         imgui_filedialog
+        imguizmo
 )
 
 if(FMOD_FOUND)

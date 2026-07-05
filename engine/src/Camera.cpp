@@ -58,6 +58,14 @@ namespace DonTopo
         updateVectors();
     }
 
+    void Camera::lookAlongAxis(const glm::vec3& axis)
+    {
+        glm::vec3 dir = -glm::normalize(axis);
+        m_pitch = glm::degrees(asin(std::clamp(dir.y, -1.0f, 1.0f)));
+        m_yaw   = glm::degrees(atan2(dir.z, dir.x));
+        updateVectors();
+    }
+
     glm::mat4 Camera::getViewMatrix() const
     {
         return glm::lookAt(m_pos, m_pos + m_front, m_up);

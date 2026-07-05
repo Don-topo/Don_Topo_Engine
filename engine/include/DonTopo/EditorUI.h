@@ -16,7 +16,7 @@ public:
     EditorUI(const EditorUI&)            = delete;
     EditorUI& operator=(const EditorUI&) = delete;
 
-    void draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot);
+    void draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView);
 
     bool isViewportHovered() const { return m_viewportHovered; }
 
@@ -24,12 +24,14 @@ public:
     // siendo válido y su subárbol completo también), para que el dueño
     // pueda liberar recursos externos (meshes/texturas en GPU) asociados.
     void setOnDelete(std::function<void(GameObject*)> cb) { m_onDelete = std::move(cb); }
+    // Llamado con el eje mundo (1,0,0 / 0,1,0 / 0,0,1) al clicar la bola del axis gizmo.
+    void setOnAxisSelected(std::function<void(const glm::vec3&)> cb) { m_onAxisSelected = std::move(cb); }
 
 private:
     void drawDockSpace();
     void drawScene(GameObject* sceneRoot);
     void drawSceneNode(GameObject* node);
-    void drawViewport(VkDescriptorSet viewportTexture);
+    void drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& cameraView);
     void drawProperties();
     void drawContentBrowser();
 
@@ -49,6 +51,7 @@ private:
     // de esa recursión invalidaría los iteradores de los for-range activos.
     GameObject* m_pendingDelete = nullptr;
     std::function<void(GameObject*)> m_onDelete;
+    std::function<void(const glm::vec3&)> m_onAxisSelected;
 
     // Properties – cache de edición del nodo seleccionado (persiste entre
     // frames para que DragFloat pueda acumular el delta del arrastre;

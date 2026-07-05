@@ -12,11 +12,11 @@
 
 namespace DonTopo {
 
-void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot)
+void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView)
 {
     drawDockSpace();
     drawScene(sceneRoot);
-    drawViewport(viewportTexture);
+    drawViewport(viewportTexture, cameraView);
     drawProperties();
     drawContentBrowser();
 }
@@ -127,12 +127,60 @@ void EditorUI::drawSceneNode(GameObject* node)
     }
 }
 
-void EditorUI::drawViewport(VkDescriptorSet viewportTexture)
+void EditorUI::drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& cameraView)
 {
     ImGui::Begin("Viewport");
     m_viewportHovered = ImGui::IsWindowHovered();
+    ImVec2 vpPos  = ImGui::GetCursorScreenPos();
     ImVec2 vpSize = ImGui::GetContentRegionAvail();
     ImGui::Image((ImTextureID)(intptr_t)viewportTexture, vpSize);
+
+    // Axis gizmo estilo Unity/Godot (esquina superior derecha): ejes mundo
+    // proyectados por la rotación real de la cámara (parte 3x3 de la view
+    // matrix), así que gira con ella. Clicar una bola reorienta la cámara
+    // pa mirar a lo largo de ese eje (via m_onAxisSelected).
+    const glm::mat3 camRot(cameraView);
+
+    struct Axis { glm::vec3 world; glm::vec3 screenDir; ImU32 color; const char* label; };
+    Axis axes[3] = {
+        { glm::vec3(1, 0, 0), camRot * glm::vec3(1, 0, 0), IM_COL32(220,  60,  60, 255), "X" },
+        { glm::vec3(0, 1, 0), camRot * glm::vec3(0, 1, 0), IM_COL32( 70, 200,  70, 255), "Y" },
+        { glm::vec3(0, 0, 1), camRot * glm::vec3(0, 0, 1), IM_COL32( 70, 130, 230, 255), "Z" },
+    };
+
+    const float radius = 34.0f;
+    const float margin  = 16.0f;
+    const float ballRadius = 7.0f;
+    ImVec2 center(vpPos.x + vpSize.x - radius - margin, vpPos.y + radius + margin);
+
+    // Pinta primero el eje más lejano de cámara pa que el más cercano quede encima.
+    int order[3] = { 0, 1, 2 };
+    std::sort(order, order + 3, [&](int a, int b) { return axes[a].screenDir.z < axes[b].screenDir.z; });
+
+    ImVec2 mouse = ImGui::GetIO().MousePos;
+    bool clicked = m_viewportHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    for (int i : order)
+    {
+        const glm::vec3& d = axes[i].screenDir;
+        ImVec2 tip(center.x + d.x * radius, center.y - d.y * radius);
+        drawList->AddLine(center, tip, axes[i].color, 2.0f);
+        drawList->AddCircleFilled(tip, ballRadius, axes[i].color);
+
+        ImVec2 textSize = ImGui::CalcTextSize(axes[i].label);
+        drawList->AddText(ImVec2(tip.x - textSize.x * 0.5f, tip.y - textSize.y * 0.5f),
+                           IM_COL32(0, 0, 0, 255), axes[i].label);
+
+        if (clicked && m_onAxisSelected)
+        {
+            float dx = mouse.x - tip.x, dy = mouse.y - tip.y;
+            if (dx * dx + dy * dy <= ballRadius * ballRadius)
+                m_onAxisSelected(axes[i].world);
+        }
+    }
+    drawList->AddCircleFilled(center, 3.0f, IM_COL32(200, 200, 200, 255));
+
     ImGui::End();
 }
 

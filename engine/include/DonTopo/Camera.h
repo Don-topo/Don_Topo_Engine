@@ -11,6 +11,9 @@ namespace DonTopo
             Camera(glm::vec3 position = {0,0,3}, float yaw = -90.0f, float pitch = 0.0f);
             void update(GLFWwindow* window, float deltaTime);
             void processMouse(float xOffset, float yOffset);
+            // Reorienta la cámara pa mirar hacia el eje dado (usado por el
+            // axis gizmo del viewport); solo rota, no cambia posición.
+            void lookAlongAxis(const glm::vec3& axis);
             glm::mat4 getViewMatrix() const;
             float getFov() const { return m_fov; }
             glm::vec3 getPos()   const { return m_pos;   }

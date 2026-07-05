@@ -117,6 +117,29 @@ target_include_directories(imgui_filedialog PUBLIC
 target_link_libraries(imgui_filedialog PUBLIC imgui_backend)
 target_compile_features(imgui_filedialog PUBLIC cxx_std_17)
 
+# ImGuizmo — gizmo de transformación / view manipulate cube
+# Igual que ImGuiFileDialog: Populate en vez de MakeAvailable, su CMakeLists
+# busca imgui via find_package y falla.
+FetchContent_Declare(
+    ImGuizmo
+    GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
+    GIT_TAG        master
+    GIT_SHALLOW    TRUE
+)
+FetchContent_GetProperties(ImGuizmo)
+if(NOT imguizmo_POPULATED)
+    FetchContent_Populate(ImGuizmo)
+endif()
+
+add_library(imguizmo STATIC
+    ${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp
+)
+target_include_directories(imguizmo PUBLIC
+    ${imguizmo_SOURCE_DIR}/src
+)
+target_link_libraries(imguizmo PUBLIC imgui_backend)
+target_compile_features(imguizmo PUBLIC cxx_std_17)
+
 # Future dependencies go here:
 # find_package(PhysX REQUIRED)   # physics
 # FetchContent_Declare(gainput ...) # dedicated input
