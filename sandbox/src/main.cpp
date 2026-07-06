@@ -216,6 +216,36 @@ int main()
                         go->getBoxCollider()->syncTransform(go->worldTransform);
                 }
 
+                if (go->hasSphereCollider())
+                {
+                    if (go->getSphereCollider()->isDynamic())
+                    {
+                        go->worldTransform = go->getSphereCollider()->getWorldTransform();
+                        glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
+                        go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
+                    }
+                    else
+                        go->getSphereCollider()->syncTransform(go->worldTransform);
+                }
+
+                if (go->hasCapsuleCollider())
+                {
+                    if (go->getCapsuleCollider()->isDynamic())
+                    {
+                        go->worldTransform = go->getCapsuleCollider()->getWorldTransform();
+                        glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
+                        go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
+                    }
+                    else
+                        go->getCapsuleCollider()->syncTransform(go->worldTransform);
+                }
+
+                // Plane Collider siempre es kinematic (isDynamic()==false
+                // hardcoded) — nunca lee pose de PhysX, solo empuja la del
+                // GameObject.
+                if (go->hasPlaneCollider())
+                    go->getPlaneCollider()->syncTransform(go->worldTransform);
+
                 if (go->staticRenderIndex >= 0)
                     renderer.setTransform(go->staticRenderIndex, go->worldTransform);
 
@@ -238,6 +268,9 @@ int main()
         // PxScene/PxPhysics ya fue liberada.
         root.traverse([](DonTopo::GameObject* go) {
             go->setBoxCollider(nullptr);
+            go->setSphereCollider(nullptr);
+            go->setCapsuleCollider(nullptr);
+            go->setPlaneCollider(nullptr);
         });
         physics.shutdown();
         renderer.shutdown();
