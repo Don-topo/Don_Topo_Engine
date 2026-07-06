@@ -110,8 +110,8 @@ int main()
 
         DonTopo::AudioManager audio;
         audio.init();
-        int bgm = audio.loadBGM("assets/audio.mp3");
-        if (bgm >= 0) audio.playBGM(bgm);
+        //int bgm = audio.loadBGM("assets/audio.mp3");
+        //if (bgm >= 0) audio.playBGM(bgm);
 
         renderer.init(window, meshes);
         renderer.setSceneRoot(&root);
