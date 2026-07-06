@@ -102,10 +102,9 @@ void PlaneCollider::teleport(const glm::mat4& worldTransform)
         PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
     );
 
-    auto* actor = static_cast<PxRigidDynamic*>(m_actor);
-    actor->setGlobalPose(pose);
-    actor->setLinearVelocity(PxVec3(0.0f));
-    actor->setAngularVelocity(PxVec3(0.0f));
+    // Sin reset de velocidad: PlaneCollider siempre es kinematic, y PhysX
+    // prohíbe set{Linear,Angular}Velocity sobre un actor kinematic.
+    static_cast<PxRigidDynamic*>(m_actor)->setGlobalPose(pose);
 #else
     (void)worldTransform;
 #endif

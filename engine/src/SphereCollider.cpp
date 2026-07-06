@@ -127,8 +127,14 @@ void SphereCollider::teleport(const glm::mat4& worldTransform)
 
     auto* actor = static_cast<PxRigidDynamic*>(m_actor);
     actor->setGlobalPose(pose);
-    actor->setLinearVelocity(PxVec3(0.0f));
-    actor->setAngularVelocity(PxVec3(0.0f));
+    // PhysX prohíbe set{Linear,Angular}Velocity sobre un actor kinematic
+    // (useGravity=false) — solo tiene sentido resetear velocidad cuando es
+    // un cuerpo dinámico real.
+    if (m_useGravity)
+    {
+        actor->setLinearVelocity(PxVec3(0.0f));
+        actor->setAngularVelocity(PxVec3(0.0f));
+    }
 #else
     (void)worldTransform;
 #endif
