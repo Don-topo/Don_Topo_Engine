@@ -1,6 +1,5 @@
 #include "DonTopo/PhysicsManager.h"
 #include "DonTopo/BoxCollider.h"
-#include "DonTopo/RigidBody.h"
 
 #ifdef DT_PHYSX_ENABLED
 #define GLM_ENABLE_EXPERIMENTAL
@@ -75,8 +74,12 @@ void PhysicsManager::shutdown()
 #endif
 }
 
-std::shared_ptr<BoxCollider> PhysicsManager::createBoxCollider(const glm::vec3& halfExtents,
-                                                                const glm::mat4& worldTransform)
+std::shared_ptr<BoxCollider> PhysicsManager::createBoxColliderComponent(
+    const glm::vec3& halfExtents,
+    const glm::vec3& center,
+    const glm::mat4& worldTransform,
+    bool useGravity,
+    float density)
 {
 #ifdef DT_PHYSX_ENABLED
     glm::vec3 scale, translation, skew;
@@ -93,15 +96,26 @@ std::shared_ptr<BoxCollider> PhysicsManager::createBoxCollider(const glm::vec3& 
     auto* material = static_cast<PxMaterial*>(m_material);
     auto* scene = static_cast<PxScene*>(m_scene);
 
+    PxRigidDynamic* actor = physics->createRigidDynamic(pose);
+    physxCheck(actor, "PxPhysics::createRigidDynamic");
+
     PxBoxGeometry geometry(halfExtents.x, halfExtents.y, halfExtents.z);
-    PxRigidStatic* actor = PxCreateStatic(*physics, pose, geometry, *material);
-    physxCheck(actor, "PxCreateStatic");
+    PxShape* shape = PxRigidActorExt::createExclusiveShape(*actor, geometry, *material);
+    physxCheck(shape, "PxRigidActorExt::createExclusiveShape");
+    shape->setLocalPose(PxTransform(PxVec3(center.x, center.y, center.z)));
+
+    PxRigidBodyExt::updateMassAndInertia(*actor, density);
+
+    actor->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, !useGravity);
+    actor->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, !useGravity);
+
     scene->addActor(*actor);
 
-    return std::make_shared<BoxCollider>(actor, halfExtents);
+    return std::make_shared<BoxCollider>(actor, shape, halfExtents, center, useGravity);
 #else
     (void)worldTransform;
-    return std::make_shared<BoxCollider>(nullptr, halfExtents);
+    (void)density;
+    return std::make_shared<BoxCollider>(nullptr, nullptr, halfExtents, center, useGravity);
 #endif
 }
 
@@ -111,38 +125,6 @@ bool PhysicsManager::raycast(const PxVec3& origin, const PxVec3& dir, float maxD
     return static_cast<PxScene*>(m_scene)->raycast(origin, dir, maxDistance, hit);
 }
 #endif
-
-std::shared_ptr<RigidBody> PhysicsManager::createDynamicBoxCollider(const glm::vec3& halfExtents,
-                                                                     const glm::mat4& worldTransform,
-                                                                     float density)
-{
-#ifdef DT_PHYSX_ENABLED
-    glm::vec3 scale, translation, skew;
-    glm::vec4 perspective;
-    glm::quat rotation;
-    glm::decompose(worldTransform, scale, rotation, translation, skew, perspective);
-
-    PxTransform pose(
-        PxVec3(translation.x, translation.y, translation.z),
-        PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
-    );
-
-    auto* physics = static_cast<PxPhysics*>(m_physics);
-    auto* material = static_cast<PxMaterial*>(m_material);
-    auto* scene = static_cast<PxScene*>(m_scene);
-
-    PxBoxGeometry geometry(halfExtents.x, halfExtents.y, halfExtents.z);
-    PxRigidDynamic* actor = PxCreateDynamic(*physics, pose, geometry, *material, density);
-    physxCheck(actor, "PxCreateDynamic");
-    scene->addActor(*actor);
-
-    return std::make_shared<RigidBody>(actor);
-#else
-    (void)worldTransform;
-    (void)density;
-    return std::make_shared<RigidBody>(nullptr);
-#endif
-}
 
 void PhysicsManager::stepSimulation(float dt)
 {

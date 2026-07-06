@@ -7,7 +7,6 @@
 #endif
 
 namespace DonTopo { class BoxCollider; }
-namespace DonTopo { class RigidBody; }
 
 namespace DonTopo {
 
@@ -21,12 +20,11 @@ public:
     void init();
     void shutdown();
 
-    std::shared_ptr<BoxCollider> createBoxCollider(const glm::vec3& halfExtents,
-                                                    const glm::mat4& worldTransform);
-
-    std::shared_ptr<RigidBody> createDynamicBoxCollider(const glm::vec3& halfExtents,
-                                                         const glm::mat4& worldTransform,
-                                                         float density = 1.0f);
+    std::shared_ptr<BoxCollider> createBoxColliderComponent(const glm::vec3& halfExtents,
+                                                              const glm::vec3& center,
+                                                              const glm::mat4& worldTransform,
+                                                              bool useGravity,
+                                                              float density = 1.0f);
 
     void stepSimulation(float dt);
 
