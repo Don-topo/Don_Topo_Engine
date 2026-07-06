@@ -6,6 +6,9 @@
 #include "DonTopo/Mesh.h"
 #include "DonTopo/SkinnedMesh.h"
 #include "DonTopo/BoxCollider.h"
+#include "DonTopo/SphereCollider.h"
+#include "DonTopo/CapsuleCollider.h"
+#include "DonTopo/PlaneCollider.h"
 
 namespace DonTopo
 {
@@ -25,6 +28,26 @@ namespace DonTopo
             void setBoxCollider(std::shared_ptr<BoxCollider> bc) { m_boxCollider = std::move(bc); }
             const std::shared_ptr<BoxCollider>& getBoxCollider() const { return m_boxCollider; }
             bool hasBoxCollider() const { return m_boxCollider != nullptr; }
+
+            void setSphereCollider(std::shared_ptr<SphereCollider> sc) { m_sphereCollider = std::move(sc); }
+            const std::shared_ptr<SphereCollider>& getSphereCollider() const { return m_sphereCollider; }
+            bool hasSphereCollider() const { return m_sphereCollider != nullptr; }
+
+            void setCapsuleCollider(std::shared_ptr<CapsuleCollider> cc) { m_capsuleCollider = std::move(cc); }
+            const std::shared_ptr<CapsuleCollider>& getCapsuleCollider() const { return m_capsuleCollider; }
+            bool hasCapsuleCollider() const { return m_capsuleCollider != nullptr; }
+
+            void setPlaneCollider(std::shared_ptr<PlaneCollider> pc) { m_planeCollider = std::move(pc); }
+            const std::shared_ptr<PlaneCollider>& getPlaneCollider() const { return m_planeCollider; }
+            bool hasPlaneCollider() const { return m_planeCollider != nullptr; }
+
+            // true si tiene cualquiera de los 4 tipos de collider — los 4 son
+            // mutuamente excluyentes (impuesto por EditorUI, no por esta clase),
+            // usado como guard único en el popup "Add".
+            bool hasAnyCollider() const
+            {
+                return m_boxCollider || m_sphereCollider || m_capsuleCollider || m_planeCollider;
+            }
 
             void updateWorldTransforms(const glm::mat4& parentWorld = glm::mat4(1.0f));
 
@@ -49,5 +72,8 @@ namespace DonTopo
         private:
             std::shared_ptr<Mesh> m_mesh;
             std::shared_ptr<BoxCollider> m_boxCollider;
+            std::shared_ptr<SphereCollider> m_sphereCollider;
+            std::shared_ptr<CapsuleCollider> m_capsuleCollider;
+            std::shared_ptr<PlaneCollider> m_planeCollider;
     };
 }
