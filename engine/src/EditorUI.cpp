@@ -193,6 +193,7 @@ void EditorUI::drawScene(GameObject* sceneRoot)
         {
             m_selected = nullptr;
             m_propsCachedFor = nullptr;
+            m_colliderCachedFor = nullptr;
         }
     }
 

@@ -31,7 +31,7 @@ int main()
         // physics se declara antes que root: en cualquier salida de scope (normal
         // o por excepción) root se destruye primero (liberando los BoxCollider de
         // sus GameObject) y physics se destruye después — nunca al revés, evitando
-        // que ~BoxCollider() libere un PxRigidStatic sobre una PxScene ya liberada.
+        // que ~BoxCollider() libere un PxRigidDynamic sobre una PxScene ya liberada.
         DonTopo::PhysicsManager physics;
         physics.init();
 
@@ -201,7 +201,17 @@ int main()
                 if (go->hasBoxCollider())
                 {
                     if (go->getBoxCollider()->isDynamic())
+                    {
                         go->worldTransform = go->getBoxCollider()->getWorldTransform();
+                        // Mantener localTransform sincronizado con la pose física:
+                        // si luego se desactiva la gravedad (toggle a kinematic),
+                        // updateWorldTransforms() recalculará worldTransform a
+                        // partir de localTransform, y sin este refresco usaría el
+                        // valor stale de antes de caer, provocando un salto de
+                        // vuelta a esa posición vieja.
+                        glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
+                        go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
+                    }
                     else
                         go->getBoxCollider()->syncTransform(go->worldTransform);
                 }
@@ -222,7 +232,7 @@ int main()
 
         audio.shutdown();
 
-        // Liberar colliders (y sus PxRigidStatic) antes de destruir la escena/física:
+        // Liberar colliders (y sus PxRigidDynamic) antes de destruir la escena/física:
         // root se destruye al final del scope, después de physics — sin esto, el
         // BoxCollider de cada GameObject intentaría release() sobre un actor cuya
         // PxScene/PxPhysics ya fue liberada.

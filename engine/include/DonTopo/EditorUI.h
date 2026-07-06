@@ -83,7 +83,7 @@ private:
     glm::vec3   m_editScale{1.0f};
     // true si el frame anterior el usuario tenía el mouse presionado sobre
     // algún DragFloat de Position/Rotation (evita que el refresco en vivo de
-    // RigidBody pelee con el drag).
+    // BoxCollider dinámico pelee con el drag).
     bool        m_transformDragActive = false;
 
     // Box Collider – mismo patrón de cache que Transform: persiste entre
