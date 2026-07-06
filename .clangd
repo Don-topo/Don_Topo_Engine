@@ -4,3 +4,4 @@ CompileFlags:
   Add:
     - -IC:/VulkanSDK/1.4.321.1/Include
     - -IC:/Program Files (x86)/FMOD SoundSystem/FMOD Studio API Windows/api/core/inc
+    - -IC:/Users/ruben/Documents/Don_Topo_Engine/build-ninja/_deps/physx-src/physx/include
