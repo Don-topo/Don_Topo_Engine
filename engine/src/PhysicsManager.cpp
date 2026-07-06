@@ -1,5 +1,8 @@
 #include "DonTopo/PhysicsManager.h"
 #include "DonTopo/BoxCollider.h"
+#include "DonTopo/SphereCollider.h"
+#include "DonTopo/CapsuleCollider.h"
+#include "DonTopo/PlaneCollider.h"
 
 #ifdef DT_PHYSX_ENABLED
 #define GLM_ENABLE_EXPERIMENTAL
@@ -14,6 +17,12 @@ using namespace physx;
 namespace {
     PxDefaultAllocator      g_allocator;
     PxDefaultErrorCallback  g_errorCallback;
+
+    // Mismo truco usado en CapsuleCollider.cpp/PlaneCollider.cpp: PhysX
+    // orienta PxCapsuleGeometry a lo largo de X y define la normal de
+    // PxPlaneGeometry como el eje X local del shape. Esta rotación fija
+    // (90° sobre Z) mapea ese eje X a Y en ambos casos.
+    PxQuat axisCorrection() { return PxQuat(PxHalfPi, PxVec3(0.0f, 0.0f, 1.0f)); }
 }
 
 static void physxCheck(void* ptr, const char* ctx) {
@@ -116,6 +125,139 @@ std::shared_ptr<BoxCollider> PhysicsManager::createBoxColliderComponent(
     (void)worldTransform;
     (void)density;
     return std::make_shared<BoxCollider>(nullptr, nullptr, halfExtents, center, useGravity);
+#endif
+}
+
+std::shared_ptr<SphereCollider> PhysicsManager::createSphereColliderComponent(
+    float radius,
+    const glm::vec3& center,
+    const glm::mat4& worldTransform,
+    bool useGravity,
+    float density)
+{
+#ifdef DT_PHYSX_ENABLED
+    glm::vec3 scale, translation, skew;
+    glm::vec4 perspective;
+    glm::quat rotation;
+    glm::decompose(worldTransform, scale, rotation, translation, skew, perspective);
+
+    PxTransform pose(
+        PxVec3(translation.x, translation.y, translation.z),
+        PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
+    );
+
+    auto* physics = static_cast<PxPhysics*>(m_physics);
+    auto* material = static_cast<PxMaterial*>(m_material);
+    auto* scene = static_cast<PxScene*>(m_scene);
+
+    PxRigidDynamic* actor = physics->createRigidDynamic(pose);
+    physxCheck(actor, "PxPhysics::createRigidDynamic");
+
+    PxSphereGeometry geometry(radius);
+    PxShape* shape = PxRigidActorExt::createExclusiveShape(*actor, geometry, *material);
+    physxCheck(shape, "PxRigidActorExt::createExclusiveShape");
+    shape->setLocalPose(PxTransform(PxVec3(center.x, center.y, center.z)));
+
+    PxRigidBodyExt::updateMassAndInertia(*actor, density);
+
+    actor->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, !useGravity);
+    actor->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, !useGravity);
+
+    scene->addActor(*actor);
+
+    return std::make_shared<SphereCollider>(actor, shape, radius, center, useGravity);
+#else
+    (void)worldTransform;
+    (void)density;
+    return std::make_shared<SphereCollider>(nullptr, nullptr, radius, center, useGravity);
+#endif
+}
+
+std::shared_ptr<CapsuleCollider> PhysicsManager::createCapsuleColliderComponent(
+    float radius,
+    float halfHeight,
+    const glm::vec3& center,
+    const glm::mat4& worldTransform,
+    bool useGravity,
+    float density)
+{
+#ifdef DT_PHYSX_ENABLED
+    glm::vec3 scale, translation, skew;
+    glm::vec4 perspective;
+    glm::quat rotation;
+    glm::decompose(worldTransform, scale, rotation, translation, skew, perspective);
+
+    PxTransform pose(
+        PxVec3(translation.x, translation.y, translation.z),
+        PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
+    );
+
+    auto* physics = static_cast<PxPhysics*>(m_physics);
+    auto* material = static_cast<PxMaterial*>(m_material);
+    auto* scene = static_cast<PxScene*>(m_scene);
+
+    PxRigidDynamic* actor = physics->createRigidDynamic(pose);
+    physxCheck(actor, "PxPhysics::createRigidDynamic");
+
+    PxCapsuleGeometry geometry(radius, halfHeight);
+    PxShape* shape = PxRigidActorExt::createExclusiveShape(*actor, geometry, *material);
+    physxCheck(shape, "PxRigidActorExt::createExclusiveShape");
+    shape->setLocalPose(PxTransform(PxVec3(center.x, center.y, center.z), axisCorrection()));
+
+    PxRigidBodyExt::updateMassAndInertia(*actor, density);
+
+    actor->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, !useGravity);
+    actor->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, !useGravity);
+
+    scene->addActor(*actor);
+
+    return std::make_shared<CapsuleCollider>(actor, shape, radius, halfHeight, center, useGravity);
+#else
+    (void)worldTransform;
+    (void)density;
+    return std::make_shared<CapsuleCollider>(nullptr, nullptr, radius, halfHeight, center, useGravity);
+#endif
+}
+
+std::shared_ptr<PlaneCollider> PhysicsManager::createPlaneColliderComponent(
+    const glm::vec3& center,
+    const glm::mat4& worldTransform)
+{
+#ifdef DT_PHYSX_ENABLED
+    glm::vec3 scale, translation, skew;
+    glm::vec4 perspective;
+    glm::quat rotation;
+    glm::decompose(worldTransform, scale, rotation, translation, skew, perspective);
+
+    PxTransform pose(
+        PxVec3(translation.x, translation.y, translation.z),
+        PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
+    );
+
+    auto* physics = static_cast<PxPhysics*>(m_physics);
+    auto* material = static_cast<PxMaterial*>(m_material);
+    auto* scene = static_cast<PxScene*>(m_scene);
+
+    PxRigidDynamic* actor = physics->createRigidDynamic(pose);
+    physxCheck(actor, "PxPhysics::createRigidDynamic");
+
+    PxPlaneGeometry geometry;
+    PxShape* shape = PxRigidActorExt::createExclusiveShape(*actor, geometry, *material);
+    physxCheck(shape, "PxRigidActorExt::createExclusiveShape");
+    shape->setLocalPose(PxTransform(PxVec3(center.x, center.y, center.z), axisCorrection()));
+
+    // Sin updateMassAndInertia: un plano no tiene volumen, PhysX no puede
+    // calcular masa/inercia sobre esa geometría. No hace falta — el actor
+    // siempre queda kinematic (nunca se simula como cuerpo dinámico).
+    actor->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, true);
+    actor->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
+
+    scene->addActor(*actor);
+
+    return std::make_shared<PlaneCollider>(actor, shape, center);
+#else
+    (void)worldTransform;
+    return std::make_shared<PlaneCollider>(nullptr, nullptr, center);
 #endif
 }
 

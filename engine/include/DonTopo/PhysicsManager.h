@@ -6,7 +6,7 @@
 #include <PxPhysicsAPI.h>
 #endif
 
-namespace DonTopo { class BoxCollider; }
+namespace DonTopo { class BoxCollider; class SphereCollider; class CapsuleCollider; class PlaneCollider; }
 
 namespace DonTopo {
 
@@ -25,6 +25,22 @@ public:
                                                               const glm::mat4& worldTransform,
                                                               bool useGravity,
                                                               float density = 1.0f);
+
+    std::shared_ptr<SphereCollider> createSphereColliderComponent(float radius,
+                                                                    const glm::vec3& center,
+                                                                    const glm::mat4& worldTransform,
+                                                                    bool useGravity,
+                                                                    float density = 1.0f);
+
+    std::shared_ptr<CapsuleCollider> createCapsuleColliderComponent(float radius,
+                                                                      float halfHeight,
+                                                                      const glm::vec3& center,
+                                                                      const glm::mat4& worldTransform,
+                                                                      bool useGravity,
+                                                                      float density = 1.0f);
+
+    std::shared_ptr<PlaneCollider> createPlaneColliderComponent(const glm::vec3& center,
+                                                                  const glm::mat4& worldTransform);
 
     void stepSimulation(float dt);
 
