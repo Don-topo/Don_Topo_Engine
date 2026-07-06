@@ -25,7 +25,7 @@ int main()
     try {
         DonTopo::Engine engine;
         DonTopo::Window window;
-        window.init(1280, 720, "Don Topo Engine");
+        window.init(1280, 720, "Don Topo Engine", "assets/MainEngineLogo.png");
         DonTopo::Renderer renderer;
 
         // physics se declara antes que root: en cualquier salida de scope (normal

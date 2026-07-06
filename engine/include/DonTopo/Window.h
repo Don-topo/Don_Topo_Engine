@@ -12,7 +12,10 @@ public:
     Window(const Window&)            = delete;
     Window& operator=(const Window&) = delete;
 
-    void init(int width, int height, const char* title);
+    // iconPath: ruta a un PNG (RGBA o no) para el icono de la ventana y de
+    // la barra de tareas (glfwSetWindowIcon). nullptr = icono por defecto
+    // del sistema.
+    void init(int width, int height, const char* title, const char* iconPath = nullptr);
     void shutdown();
 
     bool shouldClose() const;
