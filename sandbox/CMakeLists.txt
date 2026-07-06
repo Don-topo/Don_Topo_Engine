@@ -1,5 +1,6 @@
 add_executable(Sandbox
     src/main.cpp
+    Sandbox.rc
 )
 
 target_link_libraries(Sandbox

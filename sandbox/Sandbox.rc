@@ -1,0 +1,5 @@
+// Icono del ejecutable (título de ventana lo pone Window.cpp en runtime vía
+// glfwSetWindowIcon; este recurso es el que usa la taskbar de Windows, que
+// para procesos subsystem:console lee el icono del propio .exe, no el que
+// se setea en tiempo de ejecución sobre la ventana).
+IDI_ICON1 ICON "../assets/MainEngineLogo.ico"

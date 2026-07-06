@@ -16,6 +16,12 @@ void Window::init(int width, int height, const char* title, const char* iconPath
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Vulkan, sin contexto OpenGL
     glfwWindowHint(GLFW_RESIZABLE,  GLFW_TRUE);
+    // Oculta hasta setear el icono: Windows crea la entrada de la taskbar
+    // en cuanto la ventana se hace visible y cachea ese icono inicial —
+    // si glfwSetWindowIcon se llama después de que la ventana ya es
+    // visible, la barra de título se actualiza (responde a WM_SETICON en
+    // cualquier momento) pero la taskbar no siempre refresca.
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
     m_window = glfwCreateWindow(width, height, title, nullptr, nullptr);
     if (!m_window) {
@@ -36,6 +42,8 @@ void Window::init(int width, int height, const char* title, const char* iconPath
             std::fprintf(stderr, "Window: no se pudo cargar el icono '%s'\n", iconPath);
         }
     }
+
+    glfwShowWindow(m_window);
 }
 
 void Window::shutdown() {
