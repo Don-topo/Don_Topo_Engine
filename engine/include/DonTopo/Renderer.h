@@ -17,6 +17,7 @@ namespace DonTopo {
 
     class Window;
     class GameObject;
+    class PhysicsManager;
 
     class Renderer {
         public:                
@@ -32,6 +33,7 @@ namespace DonTopo {
             bool isViewportHovered() const { return m_editorUI.isViewportHovered(); }
             // Reenvía al axis gizmo del viewport; cb recibe el eje mundo clicado.
             void setOnAxisSelected(std::function<void(const glm::vec3&)> cb) { m_editorUI.setOnAxisSelected(std::move(cb)); }
+            void setPhysicsManager(PhysicsManager* physics) { m_editorUI.setPhysicsManager(physics); }
             void setSceneRoot(GameObject* root);
             // Libera mesh/skinnedMesh/texturas en GPU de node y todo su subárbol
             // (llamado por EditorUI justo antes de borrar el nodo del scene graph).

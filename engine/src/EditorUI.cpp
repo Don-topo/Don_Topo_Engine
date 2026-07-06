@@ -1,5 +1,7 @@
 #include "DonTopo/EditorUI.h"
 #include "DonTopo/GameObject.h"
+#include "DonTopo/PhysicsManager.h"
+#include "DonTopo/BoxCollider.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>

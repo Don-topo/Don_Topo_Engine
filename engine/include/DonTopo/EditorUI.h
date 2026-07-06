@@ -9,6 +9,7 @@
 namespace DonTopo {
 
 class GameObject;
+class PhysicsManager;
 
 class EditorUI {
 public:
@@ -26,6 +27,10 @@ public:
     void setOnDelete(std::function<void(GameObject*)> cb) { m_onDelete = std::move(cb); }
     // Llamado con el eje mundo (1,0,0 / 0,1,0 / 0,0,1) al clicar la bola del axis gizmo.
     void setOnAxisSelected(std::function<void(const glm::vec3&)> cb) { m_onAxisSelected = std::move(cb); }
+    // Puntero no-propietario: PhysicsManager vive en main.cpp, fuera del
+    // ciclo de vida del EditorUI. Necesario para crear el actor PhysX al
+    // pulsar "Add > Box Collider" desde el panel Properties.
+    void setPhysicsManager(PhysicsManager* physics) { m_physics = physics; }
 
 private:
     void drawDockSpace();
@@ -77,6 +82,8 @@ private:
     // algún DragFloat de Position/Rotation (evita que el refresco en vivo de
     // RigidBody pelee con el drag).
     bool        m_transformDragActive = false;
+
+    PhysicsManager* m_physics = nullptr;
 };
 
 } // namespace DonTopo

@@ -117,6 +117,7 @@ int main()
 
         renderer.init(window, meshes);
         renderer.setSceneRoot(&root);
+        renderer.setPhysicsManager(&physics);
         renderer.setOnAxisSelected([&camera](const glm::vec3& axis) { camera.lookAlongAxis(axis); });
 
         renderer.initSkybox({
