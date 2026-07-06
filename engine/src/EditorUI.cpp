@@ -2,6 +2,9 @@
 #include "DonTopo/GameObject.h"
 #include "DonTopo/PhysicsManager.h"
 #include "DonTopo/BoxCollider.h"
+#include "DonTopo/SphereCollider.h"
+#include "DonTopo/CapsuleCollider.h"
+#include "DonTopo/PlaneCollider.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -460,19 +463,30 @@ void EditorUI::drawProperties()
         glm::mat4 s = glm::scale(glm::mat4(1.0f), m_editScale);
         m_selected->localTransform = t * r * s;
 
-        if (m_selected->hasBoxCollider())
+        if (m_selected->hasAnyCollider())
         {
             m_selected->updateWorldTransforms(m_selected->parent ? m_selected->parent->worldTransform
                                                                    : glm::mat4(1.0f));
             // teleport() (no syncTransform): funciona tanto si el actor es
             // dinámico (isDynamic()==true) como si es kinematic
             // (isDynamic()==false) — syncTransform usa setKinematicTarget,
-            // que solo es válido en modo kinematic.
-            m_selected->getBoxCollider()->teleport(m_selected->worldTransform);
+            // que solo es válido en modo kinematic. hasAnyCollider() cubre
+            // los 4 tipos porque son mutuamente excluyentes.
+            if (m_selected->hasBoxCollider())
+                m_selected->getBoxCollider()->teleport(m_selected->worldTransform);
+            else if (m_selected->hasSphereCollider())
+                m_selected->getSphereCollider()->teleport(m_selected->worldTransform);
+            else if (m_selected->hasCapsuleCollider())
+                m_selected->getCapsuleCollider()->teleport(m_selected->worldTransform);
+            else if (m_selected->hasPlaneCollider())
+                m_selected->getPlaneCollider()->teleport(m_selected->worldTransform);
         }
     }
 
     drawBoxColliderSection();
+    drawSphereColliderSection();
+    drawCapsuleColliderSection();
+    drawPlaneColliderSection();
     drawAddComponentButton();
 
     ImGui::End();
@@ -563,6 +577,220 @@ void EditorUI::drawBoxColliderSection()
     }
 }
 
+void EditorUI::drawSphereColliderSection()
+{
+    if (!m_selected->hasSphereCollider())
+    {
+        m_sphereColliderCachedFor = nullptr;
+        return;
+    }
+
+    SphereCollider* sc = m_selected->getSphereCollider().get();
+
+    if (m_sphereColliderCachedFor != sc)
+    {
+        m_editSphereCenter        = sc->getCenter();
+        m_editSphereRadius        = sc->getRadius();
+        m_editSphereUseGravity    = sc->getUseGravity();
+        m_sphereColliderCachedFor = sc;
+    }
+    else if (sc->isDynamic() && !m_sphereColliderDragActive)
+    {
+        m_editSphereCenter = sc->getCenter();
+        m_editSphereRadius = sc->getRadius();
+    }
+
+    ImGui::Separator();
+    bool sectionOpen = ImGui::TreeNodeEx("Sphere Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+    bool removeClicked = ImGui::SmallButton("x");
+
+    bool colliderChanged = false;
+    bool dragActive = false;
+
+    if (sectionOpen)
+    {
+        ImGui::Text("Center");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("X##s1", &m_editSphereCenter.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Y##s1", &m_editSphereCenter.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Z##s1", &m_editSphereCenter.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+
+        ImGui::Text("Radius");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("##s2", &m_editSphereRadius, 0.5f, 0.01f, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+
+        if (ImGui::Checkbox("Use Gravity", &m_editSphereUseGravity))
+            colliderChanged = true;
+
+        ImGui::TreePop();
+    }
+
+    m_sphereColliderDragActive = dragActive;
+
+    if (colliderChanged)
+    {
+        sc->setCenter(m_editSphereCenter);
+        sc->setRadius(m_editSphereRadius);
+        sc->setUseGravity(m_editSphereUseGravity);
+    }
+
+    if (removeClicked)
+    {
+        m_selected->setSphereCollider(nullptr);
+        m_sphereColliderCachedFor = nullptr;
+    }
+}
+
+void EditorUI::drawCapsuleColliderSection()
+{
+    if (!m_selected->hasCapsuleCollider())
+    {
+        m_capsuleColliderCachedFor = nullptr;
+        return;
+    }
+
+    CapsuleCollider* cc = m_selected->getCapsuleCollider().get();
+
+    if (m_capsuleColliderCachedFor != cc)
+    {
+        m_editCapsuleCenter        = cc->getCenter();
+        m_editCapsuleRadius        = cc->getRadius();
+        m_editCapsuleHeight        = cc->getHalfHeight() * 2.0f;
+        m_editCapsuleUseGravity    = cc->getUseGravity();
+        m_capsuleColliderCachedFor = cc;
+    }
+    else if (cc->isDynamic() && !m_capsuleColliderDragActive)
+    {
+        m_editCapsuleCenter = cc->getCenter();
+        m_editCapsuleRadius = cc->getRadius();
+        m_editCapsuleHeight = cc->getHalfHeight() * 2.0f;
+    }
+
+    ImGui::Separator();
+    bool sectionOpen = ImGui::TreeNodeEx("Capsule Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+    bool removeClicked = ImGui::SmallButton("x");
+
+    bool colliderChanged = false;
+    bool dragActive = false;
+
+    if (sectionOpen)
+    {
+        ImGui::Text("Center");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("X##k1", &m_editCapsuleCenter.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Y##k1", &m_editCapsuleCenter.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Z##k1", &m_editCapsuleCenter.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+
+        ImGui::Text("Radius");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("##k2", &m_editCapsuleRadius, 0.5f, 0.01f, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+
+        ImGui::Text("Height");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("##k3", &m_editCapsuleHeight, 0.5f, 0.01f, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+
+        if (ImGui::Checkbox("Use Gravity", &m_editCapsuleUseGravity))
+            colliderChanged = true;
+
+        ImGui::TreePop();
+    }
+
+    m_capsuleColliderDragActive = dragActive;
+
+    if (colliderChanged)
+    {
+        cc->setCenter(m_editCapsuleCenter);
+        cc->setRadius(m_editCapsuleRadius);
+        cc->setHalfHeight(m_editCapsuleHeight * 0.5f);
+        cc->setUseGravity(m_editCapsuleUseGravity);
+    }
+
+    if (removeClicked)
+    {
+        m_selected->setCapsuleCollider(nullptr);
+        m_capsuleColliderCachedFor = nullptr;
+    }
+}
+
+void EditorUI::drawPlaneColliderSection()
+{
+    if (!m_selected->hasPlaneCollider())
+    {
+        m_planeColliderCachedFor = nullptr;
+        return;
+    }
+
+    PlaneCollider* pc = m_selected->getPlaneCollider().get();
+
+    if (m_planeColliderCachedFor != pc)
+    {
+        m_editPlaneCenter        = pc->getCenter();
+        m_planeColliderCachedFor = pc;
+    }
+
+    ImGui::Separator();
+    bool sectionOpen = ImGui::TreeNodeEx("Plane Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+    bool removeClicked = ImGui::SmallButton("x");
+
+    bool colliderChanged = false;
+    bool dragActive = false;
+
+    if (sectionOpen)
+    {
+        ImGui::Text("Center");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("X##p1", &m_editPlaneCenter.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Y##p1", &m_editPlaneCenter.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Z##p1", &m_editPlaneCenter.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+
+        ImGui::TreePop();
+    }
+
+    m_planeColliderDragActive = dragActive;
+
+    if (colliderChanged)
+        pc->setCenter(m_editPlaneCenter);
+
+    if (removeClicked)
+    {
+        m_selected->setPlaneCollider(nullptr);
+        m_planeColliderCachedFor = nullptr;
+    }
+}
+
 void EditorUI::drawAddComponentButton()
 {
     ImGui::Separator();
@@ -571,15 +799,38 @@ void EditorUI::drawAddComponentButton()
 
     if (ImGui::BeginPopup("AddComponentPopup"))
     {
-        bool alreadyHasCollider = m_selected->hasBoxCollider();
-        ImGui::BeginDisabled(alreadyHasCollider);
-        if (ImGui::Selectable("Box Collider") && !alreadyHasCollider && m_physics)
+        bool alreadyHasAny = m_selected->hasAnyCollider();
+        ImGui::BeginDisabled(alreadyHasAny);
+
+        if (ImGui::Selectable("Box Collider") && !alreadyHasAny && m_physics)
         {
             m_selected->setBoxCollider(m_physics->createBoxColliderComponent(
                 glm::vec3(25.0f, 25.0f, 25.0f), glm::vec3(0.0f),
                 m_selected->worldTransform, /*useGravity=*/false));
             m_colliderCachedFor = nullptr;
         }
+
+        if (ImGui::Selectable("Sphere Collider") && !alreadyHasAny && m_physics)
+        {
+            m_selected->setSphereCollider(m_physics->createSphereColliderComponent(
+                25.0f, glm::vec3(0.0f), m_selected->worldTransform, /*useGravity=*/false));
+            m_sphereColliderCachedFor = nullptr;
+        }
+
+        if (ImGui::Selectable("Capsule Collider") && !alreadyHasAny && m_physics)
+        {
+            m_selected->setCapsuleCollider(m_physics->createCapsuleColliderComponent(
+                15.0f, 25.0f, glm::vec3(0.0f), m_selected->worldTransform, /*useGravity=*/false));
+            m_capsuleColliderCachedFor = nullptr;
+        }
+
+        if (ImGui::Selectable("Plane Collider") && !alreadyHasAny && m_physics)
+        {
+            m_selected->setPlaneCollider(m_physics->createPlaneColliderComponent(
+                glm::vec3(0.0f), m_selected->worldTransform));
+            m_planeColliderCachedFor = nullptr;
+        }
+
         ImGui::EndDisabled();
         ImGui::EndPopup();
     }

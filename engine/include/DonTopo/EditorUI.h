@@ -11,6 +11,9 @@ namespace DonTopo {
 class GameObject;
 class PhysicsManager;
 class BoxCollider;
+class SphereCollider;
+class CapsuleCollider;
+class PlaneCollider;
 
 class EditorUI {
 public:
@@ -42,6 +45,9 @@ private:
     void drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& cameraView);
     void drawProperties();
     void drawBoxColliderSection();
+    void drawSphereColliderSection();
+    void drawCapsuleColliderSection();
+    void drawPlaneColliderSection();
     void drawAddComponentButton();
     void drawContentBrowser();
 
@@ -96,6 +102,26 @@ private:
     glm::vec3    m_editColliderSize{50.0f};
     bool         m_editUseGravity = false;
     bool         m_colliderDragActive = false;
+
+    // Sphere Collider – mismo patrón de cache que Box Collider.
+    SphereCollider* m_sphereColliderCachedFor = nullptr;
+    glm::vec3       m_editSphereCenter{0.0f};
+    float           m_editSphereRadius{25.0f};
+    bool            m_editSphereUseGravity = false;
+    bool            m_sphereColliderDragActive = false;
+
+    // Capsule Collider – mismo patrón de cache que Box Collider.
+    CapsuleCollider* m_capsuleColliderCachedFor = nullptr;
+    glm::vec3        m_editCapsuleCenter{0.0f};
+    float            m_editCapsuleRadius{15.0f};
+    float            m_editCapsuleHeight{50.0f};
+    bool             m_editCapsuleUseGravity = false;
+    bool             m_capsuleColliderDragActive = false;
+
+    // Plane Collider – solo Center (sin Size/Use Gravity, siempre estático).
+    PlaneCollider* m_planeColliderCachedFor = nullptr;
+    glm::vec3      m_editPlaneCenter{0.0f};
+    bool           m_planeColliderDragActive = false;
 
     PhysicsManager* m_physics = nullptr;
 };
