@@ -384,9 +384,9 @@ void EditorUI::drawProperties()
         m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
         m_propsCachedFor = m_selected;
     }
-    // BoxCollider dinámico (useGravity=true): PhysX mueve worldTransform cada
-    // frame (ver traverse en el loop principal), pero eso nunca toca
-    // localTransform ni este cache — sin este refresco, Position/Rotation
+    // BoxCollider dinámico (useGravity=true): PhysX mueve worldTransform (y
+    // localTransform, ver traverse en el loop principal) cada frame, pero eso
+    // nunca toca este cache de edición — sin este refresco, Position/Rotation
     // mostrados quedan congelados en el valor de cuando se seleccionó, aunque
     // el objeto siga cayendo/rotando por física. Solo posición+rotación (la
     // escala es puramente del editor, physx no la conoce); se salta mientras
