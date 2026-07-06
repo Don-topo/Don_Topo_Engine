@@ -264,7 +264,7 @@ int main()
 
         // Liberar colliders (y sus PxRigidDynamic) antes de destruir la escena/física:
         // root se destruye al final del scope, después de physics — sin esto, el
-        // BoxCollider de cada GameObject intentaría release() sobre un actor cuya
+        // collider de cada GameObject intentaría release() sobre un actor cuya
         // PxScene/PxPhysics ya fue liberada.
         root.traverse([](DonTopo::GameObject* go) {
             go->setBoxCollider(nullptr);
