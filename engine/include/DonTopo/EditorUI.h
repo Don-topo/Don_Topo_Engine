@@ -9,6 +9,8 @@
 namespace DonTopo {
 
 class GameObject;
+class PhysicsManager;
+class BoxCollider;
 
 class EditorUI {
 public:
@@ -26,6 +28,10 @@ public:
     void setOnDelete(std::function<void(GameObject*)> cb) { m_onDelete = std::move(cb); }
     // Llamado con el eje mundo (1,0,0 / 0,1,0 / 0,0,1) al clicar la bola del axis gizmo.
     void setOnAxisSelected(std::function<void(const glm::vec3&)> cb) { m_onAxisSelected = std::move(cb); }
+    // Puntero no-propietario: PhysicsManager vive en main.cpp, fuera del
+    // ciclo de vida del EditorUI. Necesario para crear el actor PhysX al
+    // pulsar "Add > Box Collider" desde el panel Properties.
+    void setPhysicsManager(PhysicsManager* physics) { m_physics = physics; }
 
 private:
     void drawDockSpace();
@@ -35,6 +41,8 @@ private:
     void beginRename(GameObject* node);
     void drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& cameraView);
     void drawProperties();
+    void drawBoxColliderSection();
+    void drawAddComponentButton();
     void drawContentBrowser();
 
     // Viewport
@@ -75,8 +83,21 @@ private:
     glm::vec3   m_editScale{1.0f};
     // true si el frame anterior el usuario tenía el mouse presionado sobre
     // algún DragFloat de Position/Rotation (evita que el refresco en vivo de
-    // RigidBody pelee con el drag).
+    // BoxCollider dinámico pelee con el drag).
     bool        m_transformDragActive = false;
+
+    // Box Collider – mismo patrón de cache que Transform: persiste entre
+    // frames para que los DragFloat acumulen el delta del arrastre, y se
+    // resincroniza con el BoxCollider real al cambiar de selección o (si es
+    // dinámico y no se está arrastrando) cada frame para reflejar cambios
+    // externos de tamaño/gravedad.
+    BoxCollider* m_colliderCachedFor = nullptr;
+    glm::vec3    m_editColliderCenter{0.0f};
+    glm::vec3    m_editColliderSize{50.0f};
+    bool         m_editUseGravity = false;
+    bool         m_colliderDragActive = false;
+
+    PhysicsManager* m_physics = nullptr;
 };
 
 } // namespace DonTopo

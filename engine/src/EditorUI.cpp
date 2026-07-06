@@ -1,5 +1,7 @@
 #include "DonTopo/EditorUI.h"
 #include "DonTopo/GameObject.h"
+#include "DonTopo/PhysicsManager.h"
+#include "DonTopo/BoxCollider.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -191,6 +193,7 @@ void EditorUI::drawScene(GameObject* sceneRoot)
         {
             m_selected = nullptr;
             m_propsCachedFor = nullptr;
+            m_colliderCachedFor = nullptr;
         }
     }
 
@@ -381,14 +384,14 @@ void EditorUI::drawProperties()
         m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
         m_propsCachedFor = m_selected;
     }
-    // RigidBody dinámico: PhysX mueve worldTransform cada frame (ver traverse
-    // en el loop principal), pero eso nunca toca localTransform ni este cache
-    // — sin este refresco, Position/Rotation mostrados quedan congelados en
-    // el valor de cuando se seleccionó, aunque el objeto siga cayendo/rotando
-    // por física. Solo posición+rotación (la escala es puramente del editor,
-    // physx no la conoce); se salta mientras se está arrastrando un slider
-    // pa no pelear con el drag del usuario.
-    else if (m_selected->hasRigidBody() && !m_transformDragActive)
+    // BoxCollider dinámico (useGravity=true): PhysX mueve worldTransform (y
+    // localTransform, ver traverse en el loop principal) cada frame, pero eso
+    // nunca toca este cache de edición — sin este refresco, Position/Rotation
+    // mostrados quedan congelados en el valor de cuando se seleccionó, aunque
+    // el objeto siga cayendo/rotando por física. Solo posición+rotación (la
+    // escala es puramente del editor, physx no la conoce); se salta mientras
+    // se está arrastrando un slider pa no pelear con el drag del usuario.
+    else if (m_selected->hasBoxCollider() && m_selected->getBoxCollider()->isDynamic() && !m_transformDragActive)
     {
         glm::vec3 skew, unusedScale;
         glm::vec4 perspective;
@@ -457,15 +460,129 @@ void EditorUI::drawProperties()
         glm::mat4 s = glm::scale(glm::mat4(1.0f), m_editScale);
         m_selected->localTransform = t * r * s;
 
-        if (m_selected->hasRigidBody())
+        if (m_selected->hasBoxCollider())
         {
             m_selected->updateWorldTransforms(m_selected->parent ? m_selected->parent->worldTransform
                                                                    : glm::mat4(1.0f));
-            m_selected->getRigidBody()->setWorldTransform(m_selected->worldTransform);
+            // teleport() (no syncTransform): funciona tanto si el actor es
+            // dinámico (isDynamic()==true) como si es kinematic
+            // (isDynamic()==false) — syncTransform usa setKinematicTarget,
+            // que solo es válido en modo kinematic.
+            m_selected->getBoxCollider()->teleport(m_selected->worldTransform);
         }
     }
 
+    drawBoxColliderSection();
+    drawAddComponentButton();
+
     ImGui::End();
+}
+
+void EditorUI::drawBoxColliderSection()
+{
+    if (!m_selected->hasBoxCollider())
+    {
+        m_colliderCachedFor = nullptr;
+        return;
+    }
+
+    BoxCollider* bc = m_selected->getBoxCollider().get();
+
+    if (m_colliderCachedFor != bc)
+    {
+        m_editColliderCenter = bc->getCenter();
+        m_editColliderSize   = bc->getHalfExtents() * 2.0f;
+        m_editUseGravity     = bc->getUseGravity();
+        m_colliderCachedFor  = bc;
+    }
+    else if (bc->isDynamic() && !m_colliderDragActive)
+    {
+        // Solo Center/Size se refrescan (son estables bajo simulación); el
+        // toggle de gravedad lo controla el usuario y no cambia solo.
+        m_editColliderCenter = bc->getCenter();
+        m_editColliderSize   = bc->getHalfExtents() * 2.0f;
+    }
+
+    ImGui::Separator();
+    bool sectionOpen = ImGui::TreeNodeEx("Box Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+    bool removeClicked = ImGui::SmallButton("x");
+
+    bool colliderChanged = false;
+    bool dragActive = false;
+
+    if (sectionOpen)
+    {
+        ImGui::Text("Center");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("X##c1", &m_editColliderCenter.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Y##c1", &m_editColliderCenter.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Z##c1", &m_editColliderCenter.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+
+        ImGui::Text("Size  ");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("X##c2", &m_editColliderSize.x, 0.5f, 0.01f, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Y##c2", &m_editColliderSize.y, 0.5f, 0.01f, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Z##c2", &m_editColliderSize.z, 0.5f, 0.01f, +FLT_MAX, "% .3f");
+        dragActive |= ImGui::IsItemActive();
+
+        if (ImGui::Checkbox("Use Gravity", &m_editUseGravity))
+            colliderChanged = true;
+
+        ImGui::TreePop();
+    }
+
+    m_colliderDragActive = dragActive;
+
+    if (colliderChanged)
+    {
+        bc->setCenter(m_editColliderCenter);
+        bc->setHalfExtents(m_editColliderSize * 0.5f);
+        bc->setUseGravity(m_editUseGravity);
+    }
+
+    if (removeClicked)
+    {
+        m_selected->setBoxCollider(nullptr);
+        m_colliderCachedFor = nullptr;
+    }
+}
+
+void EditorUI::drawAddComponentButton()
+{
+    ImGui::Separator();
+    if (ImGui::Button("Add"))
+        ImGui::OpenPopup("AddComponentPopup");
+
+    if (ImGui::BeginPopup("AddComponentPopup"))
+    {
+        bool alreadyHasCollider = m_selected->hasBoxCollider();
+        ImGui::BeginDisabled(alreadyHasCollider);
+        if (ImGui::Selectable("Box Collider") && !alreadyHasCollider && m_physics)
+        {
+            m_selected->setBoxCollider(m_physics->createBoxColliderComponent(
+                glm::vec3(25.0f, 25.0f, 25.0f), glm::vec3(0.0f),
+                m_selected->worldTransform, /*useGravity=*/false));
+            m_colliderCachedFor = nullptr;
+        }
+        ImGui::EndDisabled();
+        ImGui::EndPopup();
+    }
 }
 
 void EditorUI::drawContentBrowser()

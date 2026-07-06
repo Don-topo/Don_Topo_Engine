@@ -13,7 +13,7 @@ A Vulkan-based game engine written in C++20.
 - Dockable ImGui editor with offscreen viewport
 - Scene graph (hierarchical transforms), GameObject hierarchy panel (create/delete/rename, drag-drop reorder)
 - ImGuizmo transform gizmo (translate/rotate/scale, camera-oriented axis gizmo)
-- Physics (PhysX): static `BoxCollider`, dynamic `RigidBody`, raycasting
+- Physics (PhysX): unified `BoxCollider` (toggleable dynamic/kinematic via gravity), raycasting
 - FBX / OBJ model loading (embedded textures supported)
 
 ## Tech Stack
