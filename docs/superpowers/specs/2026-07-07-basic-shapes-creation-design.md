@@ -139,13 +139,26 @@ Geometría: cilindro de altura `height` entre dos semiesferas de radio `radius` 
 ### 3. `EditorUI` — puntero a Renderer + submenú Basic Shapes
 
 ```cpp
-// EditorUI.h
+// EditorUI.h — junto a las demás forward declarations
+class Renderer;
+...
 void setRenderer(Renderer* renderer) { m_renderer = renderer; }
 ...
 Renderer* m_renderer = nullptr;
 ```
 
-`Renderer::setSceneRoot` (o `Renderer::init`, donde ya se hace `m_editorUI.setPhysicsManager`) pasa `m_editorUI.setRenderer(this)`.
+A diferencia de `PhysicsManager` (que vive en `main.cpp`, fuera de `Renderer`, y por eso necesita `Renderer::setPhysicsManager` reenviando desde fuera), el `Renderer` es dueño directo de `m_editorUI` — puede pasarse `this` sin exponer API nueva a `main.cpp`. Basta con añadir una línea a `Renderer::setSceneRoot` (ya existe, `Renderer.cpp`):
+
+```cpp
+void Renderer::setSceneRoot(GameObject* root)
+{
+    m_sceneRoot = root;
+    m_editorUI.setOnDelete([this](GameObject* node) { removeGameObject(node); });
+    m_editorUI.setRenderer(this);
+}
+```
+
+`EditorUI.cpp` incluye `"DonTopo/Renderer.h"` para poder llamar `m_renderer->addStaticMesh(...)` (mismo patrón circular ya resuelto hoy: `Renderer.h` incluye `EditorUI.h` para el miembro `m_editorUI`, y `EditorUI.h` solo forward-declara `Renderer`; `#pragma once` en ambos evita el ciclo en tiempo de compilación).
 
 Nuevo helper privado en `EditorUI`:
 
