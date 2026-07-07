@@ -3,6 +3,7 @@
 #include <GLFW/glfw3.h>
 #include <stdexcept>
 #include "DonTopo/Window.h"
+#include "DonTopo/Gizmos.h"
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
@@ -47,6 +48,7 @@ namespace DonTopo {
         createImageViews();
         createDepthResources();
         createOffscreenRenderPass();
+        Gizmos::init(m_gpu, m_offscreenRenderPass, m_swapChainFormat);
         createRenderPass();
         createDescriptorSetLayout();
         createPipeline();
@@ -143,6 +145,7 @@ namespace DonTopo {
             throw std::runtime_error("failed to present!");
         }
 
+        Gizmos::clear();
         m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES;
     }
 
@@ -216,6 +219,7 @@ namespace DonTopo {
         vkDestroyPipelineLayout(m_gpu.device(), m_computePipelineLayout, nullptr);
         vkDestroyDescriptorSetLayout(m_gpu.device(), m_computeDescLayout, nullptr);
         m_skybox.shutdown(m_gpu);
+        Gizmos::shutdown(m_gpu);
         printf("destroy render items OK\n"); fflush(stdout);
         m_gpu.shutdown();
     }
@@ -640,6 +644,16 @@ namespace DonTopo {
                 glm::mat4 rotView    = glm::mat4(glm::mat3(m_viewMatrix)); // sin traslación
                 glm::mat4 invViewProj = glm::inverse(proj * rotView);
                 m_skybox.draw(m_commandBuffers[m_currentFrame], invViewProj);
+            }
+
+            // Gizmos — mismo pass, tras el skybox, respetando el depth test de la escena.
+            {
+                glm::mat4 proj = glm::perspective(
+                    glm::radians(45.0f),
+                    (float)m_swapChainExtent.width / (float)m_swapChainExtent.height,
+                    m_cameraDistance * 0.001f, m_cameraDistance * 3.0f);
+                proj[1][1] *= -1.0f;
+                Gizmos::draw(m_commandBuffers[m_currentFrame], proj * m_viewMatrix, m_currentFrame);
             }
 
             vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);

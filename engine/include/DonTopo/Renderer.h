@@ -11,6 +11,7 @@
 #include "DonTopo/GpuResources.h"
 #include "DonTopo/EditorUI.h"
 #include "DonTopo/Skybox.h"
+#include "DonTopo/Gizmos.h"
 #include <array>
 
 namespace DonTopo {
