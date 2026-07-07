@@ -3,7 +3,6 @@
 #include <GLFW/glfw3.h>
 #include <stdexcept>
 #include "DonTopo/Window.h"
-#include "DonTopo/Gizmos.h"
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
@@ -24,6 +23,12 @@ namespace DonTopo {
 
     void Renderer::init(Window& window, const std::vector<Mesh>& meshes)
     {
+        // Gizmos::kFramesInFlight se usa para dimensionar buffers por frame en vuelo
+        // dentro de Gizmos; debe coincidir siempre con Renderer::MAX_FRAMES. MAX_FRAMES
+        // es private, así que este static_assert vive aquí (contexto de miembro) en vez
+        // de a nivel de archivo.
+        static_assert(Gizmos::kFramesInFlight == MAX_FRAMES,
+            "Gizmos::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
 
         // Auto-fit camera to mesh bounding box
         glm::vec3 bMin( std::numeric_limits<float>::max());
@@ -73,8 +78,14 @@ namespace DonTopo {
 
     void Renderer::drawFrame(Window& window)
     {
+        // Limpiamos los vértices de gizmos acumulados el frame anterior antes de
+        // que Gizmos::drawX(...) empiece a añadir los de este frame. Se hace al
+        // principio (en vez de al final) para que también cubra los early-return
+        // (p.ej. VK_ERROR_OUT_OF_DATE_KHR) que ocurren más abajo en esta función.
+        Gizmos::clear();
+
         // 1. Espera a que el frame anterior terminó
-        vkWaitForFences(m_gpu.device(), 1, &m_inFlight[m_currentFrame], VK_TRUE, UINT64_MAX);        
+        vkWaitForFences(m_gpu.device(), 1, &m_inFlight[m_currentFrame], VK_TRUE, UINT64_MAX);
 
         // 2. Pide la siguiente imagen del swapchain
         uint32_t imageIndex;
@@ -145,7 +156,6 @@ namespace DonTopo {
             throw std::runtime_error("failed to present!");
         }
 
-        Gizmos::clear();
         m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES;
     }
 
@@ -634,13 +644,15 @@ namespace DonTopo {
                 }
             }
 
+            // Proyección compartida por skybox y gizmos (mismo pass, misma cámara).
+            glm::mat4 proj = glm::perspective(
+                glm::radians(45.0f),
+                (float)m_swapChainExtent.width / (float)m_swapChainExtent.height,
+                m_cameraDistance * 0.001f, m_cameraDistance * 3.0f);
+            proj[1][1] *= -1.0f;
+
             // Skybox — fullscreen quad, depth LEQUAL sin escritura (al final del pass)
             if (m_skybox.isInitialized()) {
-                glm::mat4 proj = glm::perspective(
-                    glm::radians(45.0f),
-                    (float)m_swapChainExtent.width / (float)m_swapChainExtent.height,
-                    m_cameraDistance * 0.001f, m_cameraDistance * 3.0f);
-                proj[1][1] *= -1.0f;
                 glm::mat4 rotView    = glm::mat4(glm::mat3(m_viewMatrix)); // sin traslación
                 glm::mat4 invViewProj = glm::inverse(proj * rotView);
                 m_skybox.draw(m_commandBuffers[m_currentFrame], invViewProj);
@@ -648,11 +660,6 @@ namespace DonTopo {
 
             // Gizmos — mismo pass, tras el skybox, respetando el depth test de la escena.
             {
-                glm::mat4 proj = glm::perspective(
-                    glm::radians(45.0f),
-                    (float)m_swapChainExtent.width / (float)m_swapChainExtent.height,
-                    m_cameraDistance * 0.001f, m_cameraDistance * 3.0f);
-                proj[1][1] *= -1.0f;
                 Gizmos::draw(m_commandBuffers[m_currentFrame], proj * m_viewMatrix, m_currentFrame);
             }
 

@@ -39,10 +39,14 @@ public:
     static void drawFrustum(const glm::mat4& viewProj, const glm::vec3& color);
 
     // Uso exclusivo de Renderer.
+    // colorFormat: no usado (el renderPass ya lo lleva), se mantiene por simetría con Skybox::init.
     static void init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat);
     static void shutdown(GpuDevice& gpu);
     static void draw(VkCommandBuffer cmd, const glm::mat4& viewProj, int frameIndex);
     static void clear();
+
+    // Debe coincidir con Renderer::MAX_FRAMES (comprobado con static_assert en Renderer.cpp).
+    static constexpr int kFramesInFlight = 2;
 
 private:
     Gizmos()                         = default;
@@ -60,7 +64,6 @@ private:
     void createPipeline(GpuDevice& gpu, VkRenderPass renderPass);
 
     static constexpr uint32_t kMaxGizmoVertices = 65536;
-    static constexpr int      kFramesInFlight   = 2;
 
     bool m_enabled        = true;
     bool m_capacityWarned = false;
