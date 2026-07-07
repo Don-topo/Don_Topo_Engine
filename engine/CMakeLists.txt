@@ -18,6 +18,7 @@ add_library(DonTopoEngine STATIC
     src/PlaneCollider.cpp
     src/GpuDevice.cpp
     src/GpuResources.cpp
+    src/Gizmos.cpp
 )
 
 target_include_directories(DonTopoEngine
