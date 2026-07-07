@@ -198,7 +198,11 @@ int main()
             // Recorrido en vivo (no la lista allNodes cacheada al arrancar): el
             // editor permite borrar GameObjects en tiempo real, así que un
             // puntero cacheado podría quedar colgante tras un delete.
+            DonTopo::GameObject* liveCube = nullptr;
             root.traverse([&](DonTopo::GameObject* go) {
+                if (go == cube)
+                    liveCube = go;
+
                 if (go->hasBoxCollider())
                 {
                     if (go->getBoxCollider()->isDynamic())
@@ -260,13 +264,20 @@ int main()
             // --- Gizmos: demo de depuración visual (bbox, ray, frustum) ---
             // Los ejes ya no se dibujan fijos aquí: EditorUI::drawSelectionGizmo()
             // los muestra automáticamente sobre cualquier GameObject seleccionado.
-            if (cube->hasBoxCollider())
-                DonTopo::Gizmos::drawWireBox(cube->worldTransform,
-                    cube->getBoxCollider()->getHalfExtents(), glm::vec3(1.0f, 1.0f, 0.0f));
+            // liveCube (capturado en el traverse de arriba, no el puntero `cube`
+            // cacheado en el setup) evita un use-after-free si el usuario borró el
+            // GameObject "cube" desde el editor: root.traverse() solo visita nodos
+            // vivos, así que liveCube queda nullptr ese frame en vez de colgante.
+            if (liveCube)
+            {
+                if (liveCube->hasBoxCollider())
+                    DonTopo::Gizmos::drawWireBox(liveCube->worldTransform,
+                        liveCube->getBoxCollider()->getHalfExtents(), glm::vec3(1.0f, 1.0f, 0.0f));
 
-            DonTopo::Gizmos::drawRay(
-                glm::vec3(cube->worldTransform[3].x, cube->worldTransform[3].y + 200.0f, cube->worldTransform[3].z),
-                glm::vec3(0.0f, -1.0f, 0.0f), 400.0f, glm::vec3(1.0f, 0.0f, 1.0f));
+                DonTopo::Gizmos::drawRay(
+                    glm::vec3(liveCube->worldTransform[3].x, liveCube->worldTransform[3].y + 200.0f, liveCube->worldTransform[3].z),
+                    glm::vec3(0.0f, -1.0f, 0.0f), 400.0f, glm::vec3(1.0f, 0.0f, 1.0f));
+            }
 
             {
                 glm::mat4 debugView = glm::lookAt(glm::vec3(0.0f, 300.0f, 300.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
