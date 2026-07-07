@@ -41,7 +41,7 @@ public:
     // Uso exclusivo de Renderer.
     static void init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat);
     static void shutdown(GpuDevice& gpu);
-    static void draw(VkCommandBuffer cmd, const glm::mat4& viewProj);
+    static void draw(VkCommandBuffer cmd, const glm::mat4& viewProj, int frameIndex);
     static void clear();
 
 private:
@@ -60,14 +60,15 @@ private:
     void createPipeline(GpuDevice& gpu, VkRenderPass renderPass);
 
     static constexpr uint32_t kMaxGizmoVertices = 65536;
+    static constexpr int      kFramesInFlight   = 2;
 
     bool m_enabled        = true;
     bool m_capacityWarned = false;
     std::vector<GizmoVertex> m_vertices;
 
-    VkBuffer         m_vertexBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory   m_vertexMemory = VK_NULL_HANDLE;
-    void*            m_mapped       = nullptr;
+    VkBuffer         m_vertexBuffer[kFramesInFlight] = {};
+    VkDeviceMemory   m_vertexMemory[kFramesInFlight] = {};
+    void*            m_mapped[kFramesInFlight]       = {};
     VkPipelineLayout m_pipeLayout   = VK_NULL_HANDLE;
     VkPipeline       m_pipeline     = VK_NULL_HANDLE;
 };

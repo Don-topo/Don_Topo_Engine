@@ -69,26 +69,28 @@ void Gizmos::createBuffer(GpuDevice& gpu)
 {
     VkDeviceSize size = sizeof(GizmoVertex) * (VkDeviceSize)kMaxGizmoVertices;
 
-    VkBufferCreateInfo ci{};
-    ci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    ci.size        = size;
-    ci.usage       = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (vkCreateBuffer(gpu.device(), &ci, nullptr, &m_vertexBuffer) != VK_SUCCESS)
-        throw std::runtime_error("Gizmos: failed to create vertex buffer");
+    for (int i = 0; i < kFramesInFlight; ++i) {
+        VkBufferCreateInfo ci{};
+        ci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        ci.size        = size;
+        ci.usage       = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateBuffer(gpu.device(), &ci, nullptr, &m_vertexBuffer[i]) != VK_SUCCESS)
+            throw std::runtime_error("Gizmos: failed to create vertex buffer");
 
-    VkMemoryRequirements req;
-    vkGetBufferMemoryRequirements(gpu.device(), m_vertexBuffer, &req);
-    VkMemoryAllocateInfo ai{};
-    ai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    ai.allocationSize  = req.size;
-    ai.memoryTypeIndex = gpu.findMemoryType(req.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (vkAllocateMemory(gpu.device(), &ai, nullptr, &m_vertexMemory) != VK_SUCCESS)
-        throw std::runtime_error("Gizmos: failed to allocate vertex buffer memory");
-    vkBindBufferMemory(gpu.device(), m_vertexBuffer, m_vertexMemory, 0);
+        VkMemoryRequirements req;
+        vkGetBufferMemoryRequirements(gpu.device(), m_vertexBuffer[i], &req);
+        VkMemoryAllocateInfo ai{};
+        ai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize  = req.size;
+        ai.memoryTypeIndex = gpu.findMemoryType(req.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (vkAllocateMemory(gpu.device(), &ai, nullptr, &m_vertexMemory[i]) != VK_SUCCESS)
+            throw std::runtime_error("Gizmos: failed to allocate vertex buffer memory");
+        vkBindBufferMemory(gpu.device(), m_vertexBuffer[i], m_vertexMemory[i], 0);
 
-    vkMapMemory(gpu.device(), m_vertexMemory, 0, size, 0, &m_mapped);
+        vkMapMemory(gpu.device(), m_vertexMemory[i], 0, size, 0, &m_mapped[i]);
+    }
 }
 
 void Gizmos::createPipeline(GpuDevice& gpu, VkRenderPass renderPass)
@@ -222,23 +224,25 @@ void Gizmos::shutdown(GpuDevice& gpu)
     VkDevice dev = gpu.device();
     vkDestroyPipeline(dev, g.m_pipeline, nullptr);
     vkDestroyPipelineLayout(dev, g.m_pipeLayout, nullptr);
-    vkUnmapMemory(dev, g.m_vertexMemory);
-    vkDestroyBuffer(dev, g.m_vertexBuffer, nullptr);
-    vkFreeMemory(dev, g.m_vertexMemory, nullptr);
+    for (int i = 0; i < kFramesInFlight; ++i) {
+        vkUnmapMemory(dev, g.m_vertexMemory[i]);
+        vkDestroyBuffer(dev, g.m_vertexBuffer[i], nullptr);
+        vkFreeMemory(dev, g.m_vertexMemory[i], nullptr);
+    }
     g.m_pipeline = VK_NULL_HANDLE;
 }
 
-void Gizmos::draw(VkCommandBuffer cmd, const glm::mat4& viewProj)
+void Gizmos::draw(VkCommandBuffer cmd, const glm::mat4& viewProj, int frameIndex)
 {
     Gizmos& g = get();
     if (!g.m_enabled || g.m_vertices.empty() || g.m_pipeline == VK_NULL_HANDLE) return;
 
     VkDeviceSize copySize = sizeof(GizmoVertex) * (VkDeviceSize)g.m_vertices.size();
-    memcpy(g.m_mapped, g.m_vertices.data(), (size_t)copySize);
+    memcpy(g.m_mapped[frameIndex], g.m_vertices.data(), (size_t)copySize);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g.m_pipeline);
     VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &g.m_vertexBuffer, &offset);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &g.m_vertexBuffer[frameIndex], &offset);
     vkCmdPushConstants(cmd, g.m_pipeLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &viewProj);
     vkCmdDraw(cmd, (uint32_t)g.m_vertices.size(), 1, 0, 0);
 }
