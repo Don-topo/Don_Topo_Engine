@@ -1080,84 +1080,72 @@ namespace DonTopo {
 
     void Renderer::createDescriptorSets()
     {
+        for (auto& obj : m_objects)
+            allocateObjectDescriptorSet(obj);
+    }
+
+    void Renderer::allocateObjectDescriptorSet(RenderObject& obj)
+    {
         VkDescriptorSetLayout layouts[MAX_FRAMES] = { m_descriptorSetLayout, m_descriptorSetLayout };
 
-        for(auto& obj : m_objects)
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool     = m_descriptorPool;
+        allocInfo.descriptorSetCount = MAX_FRAMES;
+        allocInfo.pSetLayouts        = layouts;
+
+        if (vkAllocateDescriptorSets(m_gpu.device(), &allocInfo, obj.descriptorSets) != VK_SUCCESS)
+            throw std::runtime_error("failed to allocate descriptor sets!");
+
+        for (int i = 0; i < MAX_FRAMES; i++)
         {
-            VkDescriptorSetAllocateInfo allocInfo{};
-            allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            allocInfo.descriptorPool     = m_descriptorPool;
-            allocInfo.descriptorSetCount = MAX_FRAMES;
-            allocInfo.pSetLayouts        = layouts;
+            VkDescriptorBufferInfo bufferInfo{};
+            bufferInfo.buffer = m_uniformBuffers[i];
+            bufferInfo.offset = 0;
+            bufferInfo.range  = sizeof(UniformBufferObject);
 
-            if(vkAllocateDescriptorSets(m_gpu.device(), &allocInfo, obj.descriptorSets) != VK_SUCCESS)
-                throw std::runtime_error("failed to allocate descriptor sets!");
+            VkDescriptorImageInfo imageInfo{};
+            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imageInfo.imageView   = obj.textureView;
+            imageInfo.sampler     = obj.sampler;
 
-            for(int i = 0; i < MAX_FRAMES; i++)
-            {
-                VkDescriptorBufferInfo bufferInfo{};
-                bufferInfo.buffer = m_uniformBuffers[i];
-                bufferInfo.offset = 0;
-                bufferInfo.range  = sizeof(UniformBufferObject);
+            VkDescriptorImageInfo normalInfo{};
+            normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            normalInfo.imageView   = obj.normalView;
+            normalInfo.sampler     = obj.normalSampler;
 
-                VkDescriptorImageInfo imageInfo{};
-                imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                imageInfo.imageView   = obj.textureView;
-                imageInfo.sampler     = obj.sampler;
+            VkDescriptorImageInfo shadowInfo{};
+            shadowInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            shadowInfo.imageView   = m_shadowView;
+            shadowInfo.sampler     = m_shadowSampler;
 
-                VkDescriptorImageInfo normalInfo{};
-                normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                normalInfo.imageView   = obj.normalView;
-                normalInfo.sampler     = obj.normalSampler;
+            VkDescriptorImageInfo ormInfo{};
+            ormInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            ormInfo.imageView   = obj.ormView;
+            ormInfo.sampler     = obj.ormSampler;
 
-                VkDescriptorImageInfo shadowInfo{};
-                shadowInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                shadowInfo.imageView   = m_shadowView;
-                shadowInfo.sampler     = m_shadowSampler;
+            VkWriteDescriptorSet writes[5]{};
+            writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[0].dstSet = obj.descriptorSets[i];
+            writes[0].dstBinding = 0; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            writes[0].descriptorCount = 1; writes[0].pBufferInfo = &bufferInfo;
 
-                VkDescriptorImageInfo ormInfo{};
-                ormInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                ormInfo.imageView   = obj.ormView;
-                ormInfo.sampler     = obj.ormSampler;
+            writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[1].dstSet = obj.descriptorSets[i];
+            writes[1].dstBinding = 1; writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[1].descriptorCount = 1; writes[1].pImageInfo = &imageInfo;
 
-                VkWriteDescriptorSet writes[5]{};
-                writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[0].dstSet          = obj.descriptorSets[i];
-                writes[0].dstBinding      = 0;
-                writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                writes[0].descriptorCount = 1;
-                writes[0].pBufferInfo     = &bufferInfo;
+            writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[2].dstSet = obj.descriptorSets[i];
+            writes[2].dstBinding = 2; writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[2].descriptorCount = 1; writes[2].pImageInfo = &normalInfo;
 
-                writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[1].dstSet          = obj.descriptorSets[i];
-                writes[1].dstBinding      = 1;
-                writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[1].descriptorCount = 1;
-                writes[1].pImageInfo      = &imageInfo;
+            writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[3].dstSet = obj.descriptorSets[i];
+            writes[3].dstBinding = 3; writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[3].descriptorCount = 1; writes[3].pImageInfo = &shadowInfo;
 
-                writes[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[2].dstSet          = obj.descriptorSets[i];
-                writes[2].dstBinding      = 2;
-                writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[2].descriptorCount = 1;
-                writes[2].pImageInfo      = &normalInfo;
+            writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[4].dstSet = obj.descriptorSets[i];
+            writes[4].dstBinding = 4; writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[4].descriptorCount = 1; writes[4].pImageInfo = &ormInfo;
 
-                writes[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[3].dstSet          = obj.descriptorSets[i];
-                writes[3].dstBinding      = 3;
-                writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[3].descriptorCount = 1;
-                writes[3].pImageInfo      = &shadowInfo;
-
-                writes[4].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[4].dstSet          = obj.descriptorSets[i];
-                writes[4].dstBinding      = 4;
-                writes[4].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[4].descriptorCount = 1;
-                writes[4].pImageInfo      = &ormInfo;
-
-                vkUpdateDescriptorSets(m_gpu.device(), 5, writes, 0, nullptr);
-            }
+            vkUpdateDescriptorSets(m_gpu.device(), 5, writes, 0, nullptr);
         }
     }
 
@@ -1272,6 +1260,15 @@ namespace DonTopo {
         }
         m_res.createTextureImageView(obj.ormImage, obj.ormView, VK_FORMAT_R8G8B8A8_UNORM);
         m_res.createTextureSampler(obj.ormSampler);
+    }
+
+    int Renderer::addStaticMesh(const Mesh& mesh)
+    {
+        m_objects.emplace_back();
+        RenderObject& obj = m_objects.back();
+        buildRenderObject(mesh, obj);
+        allocateObjectDescriptorSet(obj);
+        return (int)m_objects.size() - 1;
     }
 
     void Renderer::destroyRenderObject(RenderObject& obj)
@@ -2005,6 +2002,7 @@ namespace DonTopo {
     {
         m_sceneRoot = root;
         m_editorUI.setOnDelete([this](GameObject* node) { removeGameObject(node); });
+        m_editorUI.setRenderer(this);
     }
 
     void Renderer::removeStaticObject(int index)

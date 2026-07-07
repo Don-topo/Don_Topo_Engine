@@ -6,6 +6,11 @@
 #include "DonTopo/CapsuleCollider.h"
 #include "DonTopo/PlaneCollider.h"
 #include "DonTopo/Gizmos.h"
+#include "DonTopo/Renderer.h"
+#include "DonTopo/Cube.h"
+#include "DonTopo/Sphere.h"
+#include "DonTopo/Plane.h"
+#include "DonTopo/Capsule.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -163,6 +168,18 @@ void EditorUI::drawScene(GameObject* sceneRoot)
     {
         if (ImGui::MenuItem("Create GameObject") && sceneRoot)
             sceneRoot->addChild("GameObject");
+        if (ImGui::BeginMenu("Basic Shapes"))
+        {
+            if (ImGui::MenuItem("Cube"))
+                createBasicShape(sceneRoot, "Cube", std::make_shared<Mesh>(Cube::create(50.0f)));
+            if (ImGui::MenuItem("Sphere"))
+                createBasicShape(sceneRoot, "Sphere", std::make_shared<Mesh>(Sphere::create(50.0f)));
+            if (ImGui::MenuItem("Plane"))
+                createBasicShape(sceneRoot, "Plane", std::make_shared<Mesh>(Plane::create(50.0f, 0.0f)));
+            if (ImGui::MenuItem("Capsule"))
+                createBasicShape(sceneRoot, "Capsule", std::make_shared<Mesh>(Capsule::create(25.0f, 50.0f)));
+            ImGui::EndMenu();
+        }
         if (ImGui::MenuItem("Rename", nullptr, false, canRename))
             beginRename(m_selected);
         if (ImGui::MenuItem("Delete GameObject", nullptr, false, canDelete))
@@ -257,6 +274,16 @@ void EditorUI::beginRename(GameObject* node)
     m_openRenamePopup = true;
 }
 
+void EditorUI::createBasicShape(GameObject* parent, const std::string& name, std::shared_ptr<Mesh> mesh)
+{
+    if (!parent || !m_renderer || !mesh)
+        return;
+
+    GameObject* go = parent->addChild(name);
+    go->staticRenderIndex = m_renderer->addStaticMesh(*mesh);
+    go->setMesh(std::move(mesh));
+}
+
 void EditorUI::drawSceneNode(GameObject* node)
 {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen;
@@ -293,6 +320,18 @@ void EditorUI::drawSceneNode(GameObject* node)
     {
         if (ImGui::MenuItem("Create GameObject"))
             node->addChild("GameObject");
+        if (ImGui::BeginMenu("Basic Shapes"))
+        {
+            if (ImGui::MenuItem("Cube"))
+                createBasicShape(node, "Cube", std::make_shared<Mesh>(Cube::create(50.0f)));
+            if (ImGui::MenuItem("Sphere"))
+                createBasicShape(node, "Sphere", std::make_shared<Mesh>(Sphere::create(50.0f)));
+            if (ImGui::MenuItem("Plane"))
+                createBasicShape(node, "Plane", std::make_shared<Mesh>(Plane::create(50.0f, 0.0f)));
+            if (ImGui::MenuItem("Capsule"))
+                createBasicShape(node, "Capsule", std::make_shared<Mesh>(Capsule::create(25.0f, 50.0f)));
+            ImGui::EndMenu();
+        }
         bool canModify = node->parent != nullptr;
         if (ImGui::MenuItem("Rename", nullptr, false, canModify))
             beginRename(node);

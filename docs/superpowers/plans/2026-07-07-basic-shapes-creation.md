@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- No hay framework de tests en el repo (sin gtest/ctest). Verificación = build (`cmake --build --preset debug`) + ejecutar `build-ninja/sandbox/DonTopoSandbox.exe` + revisar visualmente, igual que el resto del proyecto.
+- No hay framework de tests en el repo (sin gtest/ctest). Verificación = build (`cmake --build --preset debug`) + ejecutar `build-ninja/sandbox/Sandbox.exe` + revisar visualmente, igual que el resto del proyecto.
 - El pool de descriptores ya tiene 128 slots de margen (`createDescriptorPool`, `n = (m_objects.size()+128)*MAX_FRAMES`) — no se toca, no se valida el límite (fuera de alcance, ver spec).
 - El shape nuevo nace **sin collider** — el flujo "Add" del panel Properties (ya existente) no se modifica.
 - Nombre del GameObject = nombre fijo del shape ("Cube"/"Sphere"/"Plane"/"Capsule"), duplicados entre hermanos permitidos.
@@ -148,7 +148,7 @@ Expected: build termina sin error.
 
 - [ ] **Step 5: Verificar que no hay regresión visual**
 
-Run: `build-ninja/sandbox/DonTopoSandbox.exe`
+Run: `build-ninja/sandbox/Sandbox.exe`
 Expected: la escena arranca igual que antes del refactor — soldier, model, floor, cube, sphere, soldier_animado visibles y texturizados correctamente (el refactor de `createDescriptorSets` no cambia el resultado, solo la estructura del código).
 
 - [ ] **Step 6: Commit**
@@ -511,7 +511,7 @@ Expected: build termina sin error.
 
 - [ ] **Step 7: Verificación manual completa**
 
-Run: `build-ninja/sandbox/DonTopoSandbox.exe`
+Run: `build-ninja/sandbox/Sandbox.exe`
 
 Verificar en el editor:
 1. Click derecho en área vacía del panel Scene → "Basic Shapes" despliega Cube/Sphere/Plane/Capsule.

@@ -48,6 +48,9 @@ namespace DonTopo {
             }
             void setLights(const std::vector<Light>& lights){ m_lights = lights; }
             int addSkinnedMesh(const SkinnedMesh& mesh);
+            // Añade un mesh estático nuevo (buffers + texturas + descriptor set) y lo
+            // registra en m_objects. Devuelve el índice para GameObject::staticRenderIndex.
+            int addStaticMesh(const Mesh& mesh);
             void updateAnimation(int index, float deltaTime);
             void setSkinnedTransform(int index, const glm::mat4& transform);
 
@@ -186,6 +189,7 @@ namespace DonTopo {
             void updateUniformBuffer(uint32_t frameIndex);
             void createDepthResources();
             void buildRenderObject(const Mesh& mesh, RenderObject& obj);
+            void allocateObjectDescriptorSet(RenderObject& obj);
             void destroyRenderObject(RenderObject& obj);
             void createShadowResources();
             void recordShadowPass(VkCommandBuffer cmd);
