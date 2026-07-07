@@ -312,7 +312,10 @@ void EditorUI::drawSceneNode(GameObject* node)
 float EditorUI::selectionAxisScale(GameObject* node) const
 {
     constexpr float kFallback = 50.0f;
-    constexpr float kFactor   = 1.3f;
+    // 2.0 en vez de 1.3: con 1.3 solo sobresalía un poco del mesh y costaba
+    // verlo; así el tramo visible fuera del objeto es tan largo como su
+    // propio medio-tamaño.
+    constexpr float kFactor   = 2.0f;
 
     if (!node->hasMesh())
         return kFallback;
