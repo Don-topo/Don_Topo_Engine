@@ -8,6 +8,7 @@ add_library(DonTopoEngine STATIC
     src/Cube.cpp
     src/Sphere.cpp
     src/Plane.cpp
+    src/Capsule.cpp
     src/Camera.cpp
     src/GameObject.cpp
     src/AudioManager.cpp
