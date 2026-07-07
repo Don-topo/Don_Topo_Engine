@@ -66,7 +66,7 @@ namespace DonTopo
                 uint32_t i2 = (r + 1) * cols + c + 1;
                 uint32_t i3 = (r + 1) * cols + c;
 
-                mesh.indices.insert(mesh.indices.end(), { i0, i1, i2, i0, i2, i3 });
+                mesh.indices.insert(mesh.indices.end(), { i0, i3, i2, i0, i2, i1 });
             }
         }
 
