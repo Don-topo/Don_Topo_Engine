@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstddef>
+#include <cmath>
 
 namespace DonTopo {
 
@@ -250,6 +251,151 @@ void Gizmos::draw(VkCommandBuffer cmd, const glm::mat4& viewProj, int frameIndex
 void Gizmos::clear()
 {
     get().m_vertices.clear();
+}
+
+void Gizmos::drawRay(const glm::vec3& origin, const glm::vec3& dir, float length, const glm::vec3& color)
+{
+    if (!get().m_enabled) return;
+    float len = glm::length(dir);
+    glm::vec3 d = len > 1e-6f ? dir / len : dir;
+    get().addLine(origin, origin + d * length, color);
+}
+
+void Gizmos::drawVector(const glm::vec3& origin, const glm::vec3& v, const glm::vec3& color, float headSize)
+{
+    if (!get().m_enabled) return;
+    glm::vec3 tip = origin + v;
+    get().addLine(origin, tip, color);
+
+    float len = glm::length(v);
+    if (len < 1e-6f) return;
+    glm::vec3 dir  = v / len;
+    glm::vec3 up   = (std::fabs(dir.y) < 0.99f) ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+    glm::vec3 side = glm::normalize(glm::cross(dir, up));
+    float headLen  = len * headSize;
+    glm::vec3 back = tip - dir * headLen;
+    get().addLine(tip, back + side * headLen * 0.5f, color);
+    get().addLine(tip, back - side * headLen * 0.5f, color);
+}
+
+void Gizmos::addBoxEdges(const std::array<glm::vec3, 8>& corners, const glm::vec3& color)
+{
+    static constexpr int kEdges[12][2] = {
+        {0,1},{1,2},{2,3},{3,0},
+        {4,5},{5,6},{6,7},{7,4},
+        {0,4},{1,5},{2,6},{3,7},
+    };
+    for (auto& e : kEdges)
+        addLine(corners[e[0]], corners[e[1]], color);
+}
+
+void Gizmos::drawWireBox(const glm::mat4& transform, const glm::vec3& halfExtents, const glm::vec3& color)
+{
+    if (!get().m_enabled) return;
+    glm::vec3 h = halfExtents;
+    std::array<glm::vec3, 8> local = {
+        glm::vec3(-h.x, -h.y, -h.z),
+        glm::vec3( h.x, -h.y, -h.z),
+        glm::vec3( h.x,  h.y, -h.z),
+        glm::vec3(-h.x,  h.y, -h.z),
+        glm::vec3(-h.x, -h.y,  h.z),
+        glm::vec3( h.x, -h.y,  h.z),
+        glm::vec3( h.x,  h.y,  h.z),
+        glm::vec3(-h.x,  h.y,  h.z),
+    };
+    std::array<glm::vec3, 8> corners;
+    for (int i = 0; i < 8; i++)
+        corners[i] = glm::vec3(transform * glm::vec4(local[i], 1.0f));
+    get().addBoxEdges(corners, color);
+}
+
+void Gizmos::drawFrustum(const glm::mat4& viewProj, const glm::vec3& color)
+{
+    if (!get().m_enabled) return;
+    glm::mat4 invVP = glm::inverse(viewProj);
+    std::array<glm::vec3, 8> ndc = {
+        glm::vec3(-1,-1,-1), glm::vec3( 1,-1,-1), glm::vec3( 1, 1,-1), glm::vec3(-1, 1,-1),
+        glm::vec3(-1,-1, 1), glm::vec3( 1,-1, 1), glm::vec3( 1, 1, 1), glm::vec3(-1, 1, 1),
+    };
+    std::array<glm::vec3, 8> corners;
+    for (int i = 0; i < 8; i++) {
+        glm::vec4 clip = invVP * glm::vec4(ndc[i], 1.0f);
+        corners[i] = glm::vec3(clip) / clip.w;
+    }
+    get().addBoxEdges(corners, color);
+}
+
+void Gizmos::drawAxes(const glm::mat4& transform, float scale)
+{
+    if (!get().m_enabled) return;
+    glm::vec3 origin = glm::vec3(transform[3]);
+    glm::vec3 x = origin + glm::vec3(transform * glm::vec4(scale, 0.0f, 0.0f, 0.0f));
+    glm::vec3 y = origin + glm::vec3(transform * glm::vec4(0.0f, scale, 0.0f, 0.0f));
+    glm::vec3 z = origin + glm::vec3(transform * glm::vec4(0.0f, 0.0f, scale, 0.0f));
+    get().addLine(origin, x, glm::vec3(1.0f, 0.0f, 0.0f));
+    get().addLine(origin, y, glm::vec3(0.0f, 1.0f, 0.0f));
+    get().addLine(origin, z, glm::vec3(0.0f, 0.0f, 1.0f));
+}
+
+void Gizmos::addArc(const glm::mat4& transform, const glm::vec3& center,
+                     const glm::vec3& axisA, const glm::vec3& axisB, float radius,
+                     float angleStart, float angleEnd, int segments, const glm::vec3& color)
+{
+    glm::vec3 prevLocal = center + radius * (std::cos(angleStart) * axisA + std::sin(angleStart) * axisB);
+    glm::vec3 prev = glm::vec3(transform * glm::vec4(prevLocal, 1.0f));
+    for (int i = 1; i <= segments; i++) {
+        float t = angleStart + (angleEnd - angleStart) * (float)i / (float)segments;
+        glm::vec3 local = center + radius * (std::cos(t) * axisA + std::sin(t) * axisB);
+        glm::vec3 p = glm::vec3(transform * glm::vec4(local, 1.0f));
+        addLine(prev, p, color);
+        prev = p;
+    }
+}
+
+void Gizmos::drawWireSphere(const glm::mat4& transform, const glm::vec3& center, float radius, const glm::vec3& color)
+{
+    if (!get().m_enabled) return;
+    constexpr int   kSegments = 24;
+    constexpr float kTwoPi    = 6.28318530718f;
+    get().addArc(transform, center, glm::vec3(1,0,0), glm::vec3(0,1,0), radius, 0.0f, kTwoPi, kSegments, color);
+    get().addArc(transform, center, glm::vec3(1,0,0), glm::vec3(0,0,1), radius, 0.0f, kTwoPi, kSegments, color);
+    get().addArc(transform, center, glm::vec3(0,1,0), glm::vec3(0,0,1), radius, 0.0f, kTwoPi, kSegments, color);
+}
+
+void Gizmos::drawWireCapsule(const glm::mat4& transform, const glm::vec3& center,
+                              float radius, float halfHeight, const glm::vec3& color)
+{
+    if (!get().m_enabled) return;
+    constexpr int   kSegments    = 24;
+    constexpr int   kArcSegments = 12;
+    constexpr float kTwoPi       = 6.28318530718f;
+    constexpr float kPi          = 3.14159265359f;
+
+    glm::vec3 top    = center + glm::vec3(0.0f,  halfHeight, 0.0f);
+    glm::vec3 bottom = center + glm::vec3(0.0f, -halfHeight, 0.0f);
+
+    // Anillos ecuatoriales (plano XZ) en cada extremo del cilindro.
+    get().addArc(transform, top,    glm::vec3(1,0,0), glm::vec3(0,0,1), radius, 0.0f, kTwoPi, kSegments, color);
+    get().addArc(transform, bottom, glm::vec3(1,0,0), glm::vec3(0,0,1), radius, 0.0f, kTwoPi, kSegments, color);
+
+    // Domo superior: dos arcos perpendiculares abombando hacia +Y.
+    get().addArc(transform, top, glm::vec3(1,0,0), glm::vec3(0, 1,0), radius, 0.0f, kPi, kArcSegments, color);
+    get().addArc(transform, top, glm::vec3(0,0,1), glm::vec3(0, 1,0), radius, 0.0f, kPi, kArcSegments, color);
+
+    // Domo inferior: dos arcos perpendiculares abombando hacia -Y.
+    get().addArc(transform, bottom, glm::vec3(1,0,0), glm::vec3(0,-1,0), radius, 0.0f, kPi, kArcSegments, color);
+    get().addArc(transform, bottom, glm::vec3(0,0,1), glm::vec3(0,-1,0), radius, 0.0f, kPi, kArcSegments, color);
+
+    // 4 líneas laterales (silueta recta del cilindro).
+    std::array<glm::vec3, 4> offsets = {
+        glm::vec3(radius, 0.0f, 0.0f), glm::vec3(-radius, 0.0f, 0.0f),
+        glm::vec3(0.0f, 0.0f, radius), glm::vec3(0.0f, 0.0f, -radius),
+    };
+    for (auto& off : offsets) {
+        glm::vec3 a = glm::vec3(transform * glm::vec4(top + off, 1.0f));
+        glm::vec3 b = glm::vec3(transform * glm::vec4(bottom + off, 1.0f));
+        get().addLine(a, b, color);
+    }
 }
 
 } // namespace DonTopo
