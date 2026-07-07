@@ -78,12 +78,6 @@ namespace DonTopo {
 
     void Renderer::drawFrame(Window& window)
     {
-        // Limpiamos los vértices de gizmos acumulados el frame anterior antes de
-        // que Gizmos::drawX(...) empiece a añadir los de este frame. Se hace al
-        // principio (en vez de al final) para que también cubra los early-return
-        // (p.ej. VK_ERROR_OUT_OF_DATE_KHR) que ocurren más abajo en esta función.
-        Gizmos::clear();
-
         // 1. Espera a que el frame anterior terminó
         vkWaitForFences(m_gpu.device(), 1, &m_inFlight[m_currentFrame], VK_TRUE, UINT64_MAX);
 
@@ -95,6 +89,10 @@ namespace DonTopo {
         if(result == VK_ERROR_OUT_OF_DATE_KHR)
         {
             recreateSwapChain(window);
+            // Este frame no llega a grabar/dibujar comandos: limpiar aquí evita
+            // que los vértices de gizmos acumulados por drawX(...) antes de esta
+            // llamada se arrastren duplicados al siguiente frame que sí dibuje.
+            Gizmos::clear();
             return;
         }
 
@@ -156,6 +154,10 @@ namespace DonTopo {
             throw std::runtime_error("failed to present!");
         }
 
+        // Limpia los vértices de gizmos ya subidos/dibujados este frame, para
+        // que el siguiente ciclo de drawX(...) (llamado por el caller ANTES de
+        // invocar drawFrame) empiece desde un buffer vacío.
+        Gizmos::clear();
         m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES;
     }
 
