@@ -4,16 +4,19 @@
 #include <string>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <glm/glm.hpp>
 
 namespace DonTopo {
 
 class GameObject;
+class Mesh;
 class PhysicsManager;
 class BoxCollider;
 class SphereCollider;
 class CapsuleCollider;
 class PlaneCollider;
+class Renderer;
 
 class EditorUI {
 public:
@@ -35,6 +38,10 @@ public:
     // ciclo de vida del EditorUI. Necesario para crear el actor PhysX al
     // pulsar "Add > Box Collider" desde el panel Properties.
     void setPhysicsManager(PhysicsManager* physics) { m_physics = physics; }
+    // Puntero no-propietario: Renderer es dueño de este EditorUI y se pasa a sí
+    // mismo desde setSceneRoot. Necesario para registrar el mesh GPU (addStaticMesh)
+    // al crear un shape desde el menú "Basic Shapes".
+    void setRenderer(Renderer* renderer) { m_renderer = renderer; }
 
 private:
     void drawDockSpace();
@@ -56,6 +63,10 @@ private:
     void drawCapsuleColliderSection();
     void drawPlaneColliderSection();
     void drawAddComponentButton();
+    // Crea un GameObject hijo de parent con el mesh dado, lo registra en el
+    // Renderer (staticRenderIndex) y lo deja sin collider. No-op si parent o
+    // m_renderer son nullptr.
+    void createBasicShape(GameObject* parent, const std::string& name, std::shared_ptr<Mesh> mesh);
     void drawContentBrowser();
 
     // Viewport
@@ -131,6 +142,7 @@ private:
     bool           m_planeColliderDragActive = false;
 
     PhysicsManager* m_physics = nullptr;
+    Renderer*       m_renderer = nullptr;
 };
 
 } // namespace DonTopo

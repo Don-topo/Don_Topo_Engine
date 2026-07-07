@@ -2002,6 +2002,7 @@ namespace DonTopo {
     {
         m_sceneRoot = root;
         m_editorUI.setOnDelete([this](GameObject* node) { removeGameObject(node); });
+        m_editorUI.setRenderer(this);
     }
 
     void Renderer::removeStaticObject(int index)
