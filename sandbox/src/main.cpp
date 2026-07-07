@@ -9,6 +9,7 @@
 #include "DonTopo/GameObject.h"
 #include "DonTopo/AudioManager.h"
 #include "DonTopo/PhysicsManager.h"
+#include "DonTopo/Gizmos.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -255,6 +256,24 @@ int main()
                     renderer.setSkinnedTransform(go->skinnedRenderIndex, go->worldTransform);
                 }
             });
+
+            // --- Gizmos: demo de depuración visual (ejes, bbox, ray, frustum) ---
+            DonTopo::Gizmos::drawAxes(cube->worldTransform, 40.0f);
+
+            if (cube->hasBoxCollider())
+                DonTopo::Gizmos::drawWireBox(cube->worldTransform,
+                    cube->getBoxCollider()->getHalfExtents(), glm::vec3(1.0f, 1.0f, 0.0f));
+
+            DonTopo::Gizmos::drawRay(
+                glm::vec3(cube->worldTransform[3].x, cube->worldTransform[3].y + 200.0f, cube->worldTransform[3].z),
+                glm::vec3(0.0f, -1.0f, 0.0f), 400.0f, glm::vec3(1.0f, 0.0f, 1.0f));
+
+            {
+                glm::mat4 debugView = glm::lookAt(glm::vec3(0.0f, 300.0f, 300.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+                glm::mat4 debugProj = glm::perspective(glm::radians(45.0f), 16.0f / 9.0f, 10.0f, 500.0f);
+                debugProj[1][1] *= -1.0f;
+                DonTopo::Gizmos::drawFrustum(debugProj * debugView, glm::vec3(1.0f));
+            }
 
             renderer.drawFrame(window);
             window.pollEvents();
