@@ -19,7 +19,85 @@ Añadir al panel Scene la capacidad de crear GameObjects primitivos (Cube, Spher
 
 ### 1. `Renderer::addStaticMesh`
 
-Nuevo método público, mismo patrón que `addSkinnedMesh`:
+`buildRenderObject(mesh, obj)` solo crea buffers/texturas — **no** aloca `obj.descriptorSets`. Eso lo hace hoy `createDescriptorSets()`, en un único paso ejecutado una vez al final de `init()` que itera todo `m_objects`. Para poder añadir un objeto en caliente hace falta extraer esa alocación+escritura de descriptor set a un método privado reutilizable por objeto:
+
+```cpp
+// Renderer.h (sección privada, junto a buildRenderObject/destroyRenderObject)
+void allocateObjectDescriptorSet(RenderObject& obj);
+```
+
+```cpp
+// Renderer.cpp — cuerpo extraído literal del bucle `for(auto& obj : m_objects)`
+// de createDescriptorSets() (líneas 1085-1161 actuales), parametrizado sobre un solo obj.
+void Renderer::allocateObjectDescriptorSet(RenderObject& obj)
+{
+    VkDescriptorSetLayout layouts[MAX_FRAMES] = { m_descriptorSetLayout, m_descriptorSetLayout };
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool     = m_descriptorPool;
+    allocInfo.descriptorSetCount = MAX_FRAMES;
+    allocInfo.pSetLayouts        = layouts;
+
+    if (vkAllocateDescriptorSets(m_gpu.device(), &allocInfo, obj.descriptorSets) != VK_SUCCESS)
+        throw std::runtime_error("failed to allocate descriptor sets!");
+
+    for (int i = 0; i < MAX_FRAMES; i++)
+    {
+        VkDescriptorBufferInfo bufferInfo{};
+        bufferInfo.buffer = m_uniformBuffers[i];
+        bufferInfo.offset = 0;
+        bufferInfo.range  = sizeof(UniformBufferObject);
+
+        VkDescriptorImageInfo imageInfo{};
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfo.imageView   = obj.textureView;
+        imageInfo.sampler     = obj.sampler;
+
+        VkDescriptorImageInfo normalInfo{};
+        normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        normalInfo.imageView   = obj.normalView;
+        normalInfo.sampler     = obj.normalSampler;
+
+        VkDescriptorImageInfo shadowInfo{};
+        shadowInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        shadowInfo.imageView   = m_shadowView;
+        shadowInfo.sampler     = m_shadowSampler;
+
+        VkDescriptorImageInfo ormInfo{};
+        ormInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        ormInfo.imageView   = obj.ormView;
+        ormInfo.sampler     = obj.ormSampler;
+
+        VkWriteDescriptorSet writes[5]{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[0].dstSet = obj.descriptorSets[i];
+        writes[0].dstBinding = 0; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].descriptorCount = 1; writes[0].pBufferInfo = &bufferInfo;
+
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[1].dstSet = obj.descriptorSets[i];
+        writes[1].dstBinding = 1; writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].descriptorCount = 1; writes[1].pImageInfo = &imageInfo;
+
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[2].dstSet = obj.descriptorSets[i];
+        writes[2].dstBinding = 2; writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2].descriptorCount = 1; writes[2].pImageInfo = &normalInfo;
+
+        writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[3].dstSet = obj.descriptorSets[i];
+        writes[3].dstBinding = 3; writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[3].descriptorCount = 1; writes[3].pImageInfo = &shadowInfo;
+
+        writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[4].dstSet = obj.descriptorSets[i];
+        writes[4].dstBinding = 4; writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[4].descriptorCount = 1; writes[4].pImageInfo = &ormInfo;
+
+        vkUpdateDescriptorSets(m_gpu.device(), 5, writes, 0, nullptr);
+    }
+}
+```
+
+`createDescriptorSets()` pasa a ser un simple `for(auto& obj : m_objects) allocateObjectDescriptorSet(obj);` (mismo comportamiento, cero regresión).
+
+Nuevo método público:
 
 ```cpp
 // Renderer.h (sección pública)
@@ -33,9 +111,12 @@ int Renderer::addStaticMesh(const Mesh& mesh)
     m_objects.emplace_back();
     RenderObject& obj = m_objects.back();
     buildRenderObject(mesh, obj);
+    allocateObjectDescriptorSet(obj);
     return (int)m_objects.size() - 1;
 }
 ```
+
+**Por qué es seguro sin sincronización explícita:** `recordCommandBuffer` se vuelve a grabar entero cada `drawFrame` (no hay comandos en vuelo que referencien buffers todavía no creados), y el pool de descriptores ya se crea con margen para esto: `createDescriptorPool()` usa `n = (m_objects.size() + 128) * MAX_FRAMES` como `maxSets` — 128 slots de sobra ya reservados en `init()`, pensados exactamente para altas en caliente como ésta (mismo pool, sin necesidad de recrearlo). El límite práctico de este pass: no crear más de 128 shapes nuevos en una sesión sin reiniciar — no se valida ni se avisa (fuera de alcance, ver más abajo).
 
 No reutiliza slots liberados por `removeStaticObject` (igual que el precedente skinned) — consistente y más simple; el hueco vacío en el vector no se dibuja porque `recordCommandBuffer` ya salta objetos con `vertexBuffer == VK_NULL_HANDLE` (mismo chequeo que usa `recordComputePass` para skinned).
 
@@ -114,6 +195,7 @@ if (ImGui::BeginMenu("Basic Shapes"))
 - No se auto-asigna collider al crear el shape (decisión explícita: consistente con el resto del editor).
 - No se intenta que el tamaño del collider añadido después coincida automáticamente con el tamaño del mesh — eso ya es el comportamiento actual para cualquier GameObject (el usuario ajusta el collider manualmente desde Properties).
 - No se añade un mecanismo de reciclado de slots libres en `m_objects`; se acepta el mismo comportamiento que `addSkinnedMesh` (crecimiento del vector, huecos no reutilizados).
+- No se valida el límite de 128 objetos estáticos añadidos en caliente (headroom del descriptor pool, ver sección 1) — pasado ese número `vkAllocateDescriptorSets` fallaría con `VK_ERROR_OUT_OF_POOL_MEMORY` y lanzaría excepción; aceptable para este pass (uso manual desde el editor).
 - No se persiste la escena a disco (fuera del alcance de este proyecto por ahora, igual que "Create GameObject").
 
 ## Testing
