@@ -5,6 +5,7 @@
 #include "DonTopo/SphereCollider.h"
 #include "DonTopo/CapsuleCollider.h"
 #include "DonTopo/PlaneCollider.h"
+#include "DonTopo/Gizmos.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -97,6 +98,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
 {
     drawDockSpace();
     drawScene(sceneRoot);
+    drawSelectionGizmo();
     drawViewport(viewportTexture, cameraView);
     drawProperties();
     drawContentBrowser();
@@ -305,6 +307,38 @@ void EditorUI::drawSceneNode(GameObject* node)
             drawSceneNode(child.get());
         ImGui::TreePop();
     }
+}
+
+float EditorUI::selectionAxisScale(GameObject* node) const
+{
+    constexpr float kFallback = 50.0f;
+    constexpr float kFactor   = 1.3f;
+
+    if (!node->hasMesh())
+        return kFallback;
+
+    const auto& vertices = node->getMesh()->vertices;
+    if (vertices.empty())
+        return kFallback;
+
+    glm::vec3 bMin = vertices[0].pos;
+    glm::vec3 bMax = vertices[0].pos;
+    for (const auto& v : vertices)
+    {
+        bMin = glm::min(bMin, v.pos);
+        bMax = glm::max(bMax, v.pos);
+    }
+
+    glm::vec3 extent  = bMax - bMin;
+    float     maxHalf = glm::max(extent.x, glm::max(extent.y, extent.z)) * 0.5f;
+    return glm::max(maxHalf, 1.0f) * kFactor;
+}
+
+void EditorUI::drawSelectionGizmo()
+{
+    if (!m_selected)
+        return;
+    Gizmos::drawAxes(m_selected->worldTransform, selectionAxisScale(m_selected));
 }
 
 void EditorUI::drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& cameraView)

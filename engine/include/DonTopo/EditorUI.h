@@ -40,6 +40,13 @@ private:
     void drawDockSpace();
     void drawScene(GameObject* sceneRoot);
     void drawSceneNode(GameObject* node);
+    // Dibuja los ejes RGB de Gizmos sobre m_selected (si hay selección),
+    // cada frame — desaparecen solos cuando m_selected pasa a nullptr.
+    void drawSelectionGizmo();
+    // Longitud de eje proporcional al bbox local del mesh de node (mitad
+    // del eje más largo); si node no tiene mesh (o el mesh no tiene
+    // vértices), valor fijo de repliegue.
+    float selectionAxisScale(GameObject* node) const;
     // Abre el popup de rename pa node (root, parent==nullptr, no se puede renombrar).
     void beginRename(GameObject* node);
     void drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& cameraView);

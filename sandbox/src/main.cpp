@@ -257,9 +257,9 @@ int main()
                 }
             });
 
-            // --- Gizmos: demo de depuración visual (ejes, bbox, ray, frustum) ---
-            DonTopo::Gizmos::drawAxes(cube->worldTransform, 40.0f);
-
+            // --- Gizmos: demo de depuración visual (bbox, ray, frustum) ---
+            // Los ejes ya no se dibujan fijos aquí: EditorUI::drawSelectionGizmo()
+            // los muestra automáticamente sobre cualquier GameObject seleccionado.
             if (cube->hasBoxCollider())
                 DonTopo::Gizmos::drawWireBox(cube->worldTransform,
                     cube->getBoxCollider()->getHalfExtents(), glm::vec3(1.0f, 1.0f, 0.0f));
