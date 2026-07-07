@@ -9,6 +9,7 @@ out/
 # Claude Code
 .claude/
 .superpowers/
+.worktrees/
 
 # Third-party proprietary SDKs (not redistributable)
 third_party/fmod/
