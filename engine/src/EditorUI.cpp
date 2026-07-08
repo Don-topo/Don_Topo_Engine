@@ -1,6 +1,8 @@
 #include "DonTopo/EditorUI.h"
 #include "DonTopo/GameObject.h"
 #include "DonTopo/PhysicsManager.h"
+#include "DonTopo/AudioManager.h"
+#include "DonTopo/AudioClipComponent.h"
 #include "DonTopo/BoxCollider.h"
 #include "DonTopo/SphereCollider.h"
 #include "DonTopo/CapsuleCollider.h"
@@ -19,6 +21,7 @@
 #include <cctype>
 #include <cstring>
 #include <filesystem>
+#include <set>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -103,6 +106,7 @@ namespace DonTopo {
 
 EditorUI::EditorUI()
     : m_meshFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_audioFileDialog(std::make_unique<IGFD::FileDialog>())
 {
 }
 
@@ -116,6 +120,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     drawViewport(viewportTexture, cameraView);
     drawProperties();
     drawMeshDialog();
+    drawAudioClipDialog();
     drawContentBrowser();
 }
 
@@ -318,6 +323,30 @@ void EditorUI::loadMeshForSelected(const std::string& path)
     {
         m_meshLoadError = e.what();
     }
+}
+
+void EditorUI::loadAudioClipForSelected(const std::string& path)
+{
+    if (!m_selected || !m_audio || m_selected->hasAudioClip())
+        return;
+
+    std::string ext = std::filesystem::path(path).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    static const std::set<std::string> kValidExt = {".wav", ".mp3", ".ogg", ".flac"};
+    if (!kValidExt.count(ext))
+    {
+        m_audioLoadError = "Formato no soportado: " + ext;
+        return;
+    }
+
+    auto clip = m_audio->createAudioClipComponent(path, /*is3D=*/false, /*loop=*/false);
+    if (!clip)
+    {
+        m_audioLoadError = "No se pudo cargar el audio";
+        return;
+    }
+    m_selected->setAudioClip(std::move(clip));
+    m_audioLoadError.clear();
 }
 
 void EditorUI::drawSceneNode(GameObject* node)
@@ -537,6 +566,7 @@ void EditorUI::drawProperties()
         m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
         m_propsCachedFor = m_selected;
         m_meshLoadError.clear();
+        m_audioLoadError.clear();
     }
     // BoxCollider dinámico (useGravity=true): PhysX mueve worldTransform (y
     // localTransform, ver traverse en el loop principal) cada frame, pero eso
@@ -639,6 +669,7 @@ void EditorUI::drawProperties()
     drawCapsuleColliderSection();
     drawPlaneColliderSection();
     drawMeshSection();
+    drawAudioClipSection();
     drawAddComponentButton();
 
     ImGui::End();
@@ -1025,6 +1056,98 @@ void EditorUI::drawMeshDialog()
     }
 }
 
+void EditorUI::drawAudioClipSection()
+{
+    // Oculto por defecto: solo se dibuja si ya tiene AudioClip, o si se
+    // pulsó "Add > Audio Clip" para este GameObject concreto
+    // (m_audioClipAddRequestedFor).
+    if (!m_selected->hasAudioClip() && m_audioClipAddRequestedFor != m_selected)
+        return;
+
+    ImGui::Separator();
+
+    if (m_selected->hasAudioClip())
+    {
+        auto& clip = m_selected->getAudioClip();
+        bool sectionOpen = ImGui::TreeNodeEx("Audio Clip", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+        ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+        bool removeClicked = ImGui::SmallButton("x");
+
+        if (sectionOpen)
+        {
+            std::string fname = std::filesystem::path(clip->getPath()).filename().string();
+            ImGui::Text("%s", fname.c_str());
+
+            ImGui::BeginDisabled(m_audio == nullptr);
+            if (ImGui::Button("Play"))
+            {
+                glm::vec3 worldPos(m_selected->worldTransform[3]);
+                clip->play(worldPos);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Stop"))
+                clip->stop();
+            ImGui::EndDisabled();
+
+            bool loop = clip->getLoop();
+            if (ImGui::Checkbox("Loop", &loop))
+                clip->setLoop(loop);
+
+            bool is3D = clip->getIs3D();
+            if (ImGui::Checkbox("Is 3D?", &is3D))
+                clip->setIs3D(is3D);
+
+            ImGui::TreePop();
+        }
+
+        if (removeClicked)
+        {
+            m_selected->setAudioClip(nullptr);
+            // Vuelve a ocultar la sección tras quitar el clip — hay que
+            // pulsar "Add > Audio Clip" de nuevo para reabrirla.
+            m_audioClipAddRequestedFor = nullptr;
+        }
+
+        return;
+    }
+
+    ImGui::Text("Audio Clip");
+    ImGui::BeginDisabled(m_audio == nullptr);
+    if (ImGui::Button("Browse..."))
+    {
+        m_audioDlgOpen = true;
+        IGFD::FileDialogConfig cfg;
+        cfg.path = "assets";
+        // Key plana sin "##" (mismo motivo documentado en drawMeshSection
+        // para AddMeshDlg: con prefijo "##" el título concatenado generaba
+        // 4 almohadillas seguidas y rompía el ID persistido de ImGui).
+        m_audioFileDialog->OpenDialog("AddAudioDlg", "Choose Audio", ".wav,.mp3,.ogg,.flac", cfg);
+    }
+    ImGui::EndDisabled();
+
+    ImGui::BeginChild("##AudioDropZone", ImVec2(0, 40), true);
+    ImGui::TextDisabled("Drop audio here");
+    ImGui::EndChild();
+
+    if (!m_audioLoadError.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_audioLoadError.c_str());
+}
+
+void EditorUI::drawAudioClipDialog()
+{
+    // Se ejecuta cada frame independientemente de m_selected/hasAudioClip():
+    // si no se drena aquí, cambiar de selección mientras el diálogo está
+    // abierto deja m_audioDlgOpen atascado en true (mismo motivo que
+    // drawMeshDialog).
+    if (m_audioDlgOpen && m_audioFileDialog->Display("AddAudioDlg"))
+    {
+        if (m_audioFileDialog->IsOk())
+            loadAudioClipForSelected(m_audioFileDialog->GetFilePathName());
+        m_audioFileDialog->Close();
+        m_audioDlgOpen = false;
+    }
+}
+
 void EditorUI::drawAddComponentButton()
 {
     ImGui::Separator();
@@ -1071,6 +1194,12 @@ void EditorUI::drawAddComponentButton()
         ImGui::BeginDisabled(alreadyHasMesh);
         if (ImGui::Selectable("Mesh") && !alreadyHasMesh)
             m_meshAddRequestedFor = m_selected;
+        ImGui::EndDisabled();
+
+        bool alreadyHasAudio = m_selected->hasAudioClip();
+        ImGui::BeginDisabled(alreadyHasAudio);
+        if (ImGui::Selectable("Audio Clip") && !alreadyHasAudio)
+            m_audioClipAddRequestedFor = m_selected;
         ImGui::EndDisabled();
 
         ImGui::EndPopup();

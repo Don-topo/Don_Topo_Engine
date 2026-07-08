@@ -77,6 +77,8 @@ private:
     void drawPlaneColliderSection();
     void drawMeshSection();
     void drawMeshDialog();
+    void drawAudioClipSection();
+    void drawAudioClipDialog();
     void drawAddComponentButton();
     // Crea un GameObject hijo de parent con el mesh dado, lo registra en el
     // Renderer (staticRenderIndex) y lo deja sin collider. No-op si parent o
@@ -87,6 +89,11 @@ private:
     // o m_selected ya tiene mesh. Extensión no .fbx o fallo de Assimp
     // escriben m_meshLoadError sin modificar m_selected.
     void loadMeshForSelected(const std::string& path);
+    // Único punto de entrada para asignar un AudioClip a m_selected (Browse o
+    // drag&drop convergen aquí). No-op si no hay selección, no hay
+    // AudioManager, o m_selected ya tiene AudioClip. Extensión no soportada o
+    // fallo de FMOD escriben m_audioLoadError sin modificar m_selected.
+    void loadAudioClipForSelected(const std::string& path);
     void drawContentBrowser();
 
     // Viewport
@@ -95,6 +102,7 @@ private:
     // Content Browser
     bool m_dlgOpen = false;
     bool m_meshDlgOpen = false;
+    bool m_audioDlgOpen = false;
     bool m_scanned = false;
     std::string m_currentDir;
     std::vector<std::filesystem::path> m_assets;
@@ -106,6 +114,9 @@ private:
     // mientras Content Browser seguía dibujando su panel embebido el mismo
     // frame. unique_ptr porque IGFD::FileDialog es tipo incompleto aquí.
     std::unique_ptr<IGFD::FileDialog> m_meshFileDialog;
+    // Misma razón que m_meshFileDialog: instancia propia, nunca compartida
+    // con el singleton de Content Browser ni con m_meshFileDialog.
+    std::unique_ptr<IGFD::FileDialog> m_audioFileDialog;
 
     // Scene selection
     GameObject* m_selected = nullptr;
@@ -182,6 +193,10 @@ private:
     // usuario vuelve al mismo GameObject sin haber completado la carga, la
     // sección sigue visible (igual que dejar un diálogo de collider a medias).
     GameObject*     m_meshAddRequestedFor = nullptr;
+    // Mismo patrón que m_meshLoadError/m_meshAddRequestedFor pero para el
+    // componente AudioClip.
+    std::string     m_audioLoadError;
+    GameObject*     m_audioClipAddRequestedFor = nullptr;
 };
 
 } // namespace DonTopo
