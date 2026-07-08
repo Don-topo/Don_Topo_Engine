@@ -17,6 +17,7 @@ class SphereCollider;
 class CapsuleCollider;
 class PlaneCollider;
 class Renderer;
+class Camera;
 
 class EditorUI {
 public:
@@ -42,6 +43,9 @@ public:
     // mismo desde setSceneRoot. Necesario para registrar el mesh GPU (addStaticMesh)
     // al crear un shape desde el menú "Basic Shapes".
     void setRenderer(Renderer* renderer) { m_renderer = renderer; }
+    // Centra la cámara en m_selected (no-op si no hay selección). Usado por
+    // el atajo de teclado "F" en main.cpp.
+    void focusSelected(Camera& camera);
 
 private:
     void drawDockSpace();

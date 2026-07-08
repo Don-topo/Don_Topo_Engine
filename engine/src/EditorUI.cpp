@@ -7,6 +7,7 @@
 #include "DonTopo/PlaneCollider.h"
 #include "DonTopo/Gizmos.h"
 #include "DonTopo/Renderer.h"
+#include "DonTopo/Camera.h"
 #include "DonTopo/Cube.h"
 #include "DonTopo/Sphere.h"
 #include "DonTopo/Plane.h"
@@ -374,6 +375,44 @@ float EditorUI::selectionAxisScale(GameObject* node) const
     glm::vec3 extent  = bMax - bMin;
     float     maxHalf = glm::max(extent.x, glm::max(extent.y, extent.z)) * 0.5f;
     return glm::max(maxHalf, 1.0f) * kFactor;
+}
+
+void EditorUI::focusSelected(Camera& camera)
+{
+    if (!m_selected)
+        return;
+
+    constexpr float kFallbackRadius = 50.0f;
+
+    glm::vec3 center = glm::vec3(m_selected->worldTransform[3]);
+    float     radius = kFallbackRadius;
+
+    if (m_selected->hasMesh())
+    {
+        const auto& vertices = m_selected->getMesh()->vertices;
+        if (!vertices.empty())
+        {
+            glm::vec3 bMin = vertices[0].pos;
+            glm::vec3 bMax = vertices[0].pos;
+            for (const auto& v : vertices)
+            {
+                bMin = glm::min(bMin, v.pos);
+                bMax = glm::max(bMax, v.pos);
+            }
+            glm::vec3 extent   = bMax - bMin;
+            float     maxHalf  = glm::max(extent.x, glm::max(extent.y, extent.z)) * 0.5f;
+
+            glm::vec3 worldScale(
+                glm::length(glm::vec3(m_selected->worldTransform[0])),
+                glm::length(glm::vec3(m_selected->worldTransform[1])),
+                glm::length(glm::vec3(m_selected->worldTransform[2])));
+            float maxWorldScale = glm::max(worldScale.x, glm::max(worldScale.y, worldScale.z));
+
+            radius = glm::max(maxHalf, 1.0f) * maxWorldScale;
+        }
+    }
+
+    camera.focusOn(center, radius);
 }
 
 void EditorUI::drawSelectionGizmo()

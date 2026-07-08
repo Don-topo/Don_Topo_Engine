@@ -14,6 +14,11 @@ namespace DonTopo
             // Reorienta la cámara pa mirar hacia el eje dado (usado por el
             // axis gizmo del viewport); solo rota, no cambia posición.
             void lookAlongAxis(const glm::vec3& axis);
+            // Reposiciona la cámara pa encuadrar un objeto: retrocede a lo largo
+            // del vector cámara→center actual una distancia proporcional a
+            // boundingRadius, y queda mirando directo a center (usado por "F"
+            // pa centrar en el GameObject seleccionado).
+            void focusOn(const glm::vec3& center, float boundingRadius);
             glm::mat4 getViewMatrix() const;
             float getFov() const { return m_fov; }
             glm::vec3 getPos()   const { return m_pos;   }
