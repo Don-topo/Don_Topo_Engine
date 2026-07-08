@@ -179,6 +179,11 @@ int main()
             ImGui_ImplGlfw_KeyCallback(w, key, scancode, action, mods);
             if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
                 glfwSetWindowShouldClose(w, GLFW_TRUE);
+            if (key == GLFW_KEY_F && action == GLFW_PRESS && !ImGui::GetIO().WantTextInput)
+            {
+                auto* ctx = static_cast<AppCtx*>(glfwGetWindowUserPointer(w));
+                ctx->rnd->focusSelected(*ctx->cam);
+            }
         });
 
         while (!window.shouldClose())
