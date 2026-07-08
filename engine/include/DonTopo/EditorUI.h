@@ -71,6 +71,11 @@ private:
     // Renderer (staticRenderIndex) y lo deja sin collider. No-op si parent o
     // m_renderer son nullptr.
     void createBasicShape(GameObject* parent, const std::string& name, std::shared_ptr<Mesh> mesh);
+    // Único punto de entrada para asignar un Mesh a m_selected (Browse o
+    // drag&drop convergen aquí). No-op si no hay selección, no hay Renderer,
+    // o m_selected ya tiene mesh. Extensión no .fbx o fallo de Assimp
+    // escriben m_meshLoadError sin modificar m_selected.
+    void loadMeshForSelected(const std::string& path);
     void drawContentBrowser();
 
     // Viewport
@@ -147,6 +152,9 @@ private:
 
     PhysicsManager* m_physics = nullptr;
     Renderer*       m_renderer = nullptr;
+    // Mensaje del último intento fallido de carga de Mesh (vacío si no hay
+    // error pendiente); se limpia al cambiar de selección o al cargar bien.
+    std::string     m_meshLoadError;
 };
 
 } // namespace DonTopo

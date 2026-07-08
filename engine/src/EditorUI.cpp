@@ -12,6 +12,7 @@
 #include "DonTopo/Sphere.h"
 #include "DonTopo/Plane.h"
 #include "DonTopo/Capsule.h"
+#include "DonTopo/ModelLoader.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -283,6 +284,32 @@ void EditorUI::createBasicShape(GameObject* parent, const std::string& name, std
     GameObject* go = parent->addChild(name);
     go->staticRenderIndex = m_renderer->addStaticMesh(*mesh);
     go->setMesh(std::move(mesh));
+}
+
+void EditorUI::loadMeshForSelected(const std::string& path)
+{
+    if (!m_selected || !m_renderer || m_selected->hasMesh())
+        return;
+
+    std::string ext = std::filesystem::path(path).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (ext != ".fbx")
+    {
+        m_meshLoadError = "Formato no soportado: " + ext;
+        return;
+    }
+
+    try
+    {
+        auto mesh = std::make_shared<Mesh>(ModelLoader::load(path));
+        m_selected->staticRenderIndex = m_renderer->addStaticMesh(*mesh);
+        m_selected->setMesh(std::move(mesh));
+        m_meshLoadError.clear();
+    }
+    catch (const std::exception& e)
+    {
+        m_meshLoadError = e.what();
+}
 }
 
 void EditorUI::drawSceneNode(GameObject* node)

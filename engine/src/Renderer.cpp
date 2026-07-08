@@ -2037,6 +2037,18 @@ namespace DonTopo {
         });
     }
 
+    void Renderer::removeMeshComponent(GameObject* go)
+    {
+        if (!go || !go->hasMesh()) return;
+        // Mismo wait que removeGameObject: evita liberar buffers que un
+        // command buffer en vuelo (double buffering) pudiera seguir usando.
+        vkDeviceWaitIdle(m_gpu.device());
+        if (go->staticRenderIndex >= 0)
+            removeStaticObject(go->staticRenderIndex);
+        go->staticRenderIndex = -1;
+        go->setMesh(nullptr);
+    }
+
     void Renderer::recordComputePass(VkCommandBuffer cmd)
     {
         if (m_skinnedObjects.empty()) return;
