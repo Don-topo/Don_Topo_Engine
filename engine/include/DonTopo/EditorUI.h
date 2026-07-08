@@ -7,6 +7,8 @@
 #include <memory>
 #include <glm/glm.hpp>
 
+namespace IGFD { class FileDialog; }
+
 namespace DonTopo {
 
 class GameObject;
@@ -21,7 +23,8 @@ class Camera;
 
 class EditorUI {
 public:
-    EditorUI()                           = default;
+    EditorUI();
+    ~EditorUI();
     EditorUI(const EditorUI&)            = delete;
     EditorUI& operator=(const EditorUI&) = delete;
 
@@ -66,11 +69,18 @@ private:
     void drawSphereColliderSection();
     void drawCapsuleColliderSection();
     void drawPlaneColliderSection();
+    void drawMeshSection();
+    void drawMeshDialog();
     void drawAddComponentButton();
     // Crea un GameObject hijo de parent con el mesh dado, lo registra en el
     // Renderer (staticRenderIndex) y lo deja sin collider. No-op si parent o
     // m_renderer son nullptr.
     void createBasicShape(GameObject* parent, const std::string& name, std::shared_ptr<Mesh> mesh);
+    // Único punto de entrada para asignar un Mesh a m_selected (Browse o
+    // drag&drop convergen aquí). No-op si no hay selección, no hay Renderer,
+    // o m_selected ya tiene mesh. Extensión no .fbx o fallo de Assimp
+    // escriben m_meshLoadError sin modificar m_selected.
+    void loadMeshForSelected(const std::string& path);
     void drawContentBrowser();
 
     // Viewport
@@ -78,9 +88,18 @@ private:
 
     // Content Browser
     bool m_dlgOpen = false;
+    bool m_meshDlgOpen = false;
     bool m_scanned = false;
     std::string m_currentDir;
     std::vector<std::filesystem::path> m_assets;
+    // Instancia propia de ImGuiFileDialog para "Add > Mesh", separada del
+    // singleton IGFD::FileDialog::Instance() que usa Content Browser: la
+    // librería documenta que Instance() no soporta 2 diálogos concurrentes
+    // (mismo estado interno de lista de ficheros/thumbnails/columnas);
+    // compartirlo causaba corrupción al redimensionar el popup de Mesh
+    // mientras Content Browser seguía dibujando su panel embebido el mismo
+    // frame. unique_ptr porque IGFD::FileDialog es tipo incompleto aquí.
+    std::unique_ptr<IGFD::FileDialog> m_meshFileDialog;
 
     // Scene selection
     GameObject* m_selected = nullptr;
@@ -147,6 +166,15 @@ private:
 
     PhysicsManager* m_physics = nullptr;
     Renderer*       m_renderer = nullptr;
+    // Mensaje del último intento fallido de carga de Mesh (vacío si no hay
+    // error pendiente); se limpia al cambiar de selección o al cargar bien.
+    std::string     m_meshLoadError;
+    // GameObject para el que se pulsó "Add > Mesh" (revela la sección
+    // Browse/drop hasta que se asigne un mesh o se pulse "x" para quitarlo).
+    // nullptr = sección oculta. No se limpia al cambiar de selección: si el
+    // usuario vuelve al mismo GameObject sin haber completado la carga, la
+    // sección sigue visible (igual que dejar un diálogo de collider a medias).
+    GameObject*     m_meshAddRequestedFor = nullptr;
 };
 
 } // namespace DonTopo

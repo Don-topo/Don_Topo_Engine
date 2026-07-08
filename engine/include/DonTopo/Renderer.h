@@ -40,6 +40,9 @@ namespace DonTopo {
             // Libera mesh/skinnedMesh/texturas en GPU de node y todo su subárbol
             // (llamado por EditorUI justo antes de borrar el nodo del scene graph).
             void removeGameObject(GameObject* node);
+            // Quita solo el componente Mesh de go (no borra el GameObject ni sus
+            // otros componentes). No-op si go es nullptr o no tiene mesh.
+            void removeMeshComponent(GameObject* go);
             // facePaths: +X, -X, +Y, -Y, +Z, -Z (cualquier formato soportado por stb_image)
             void initSkybox(const std::array<std::string, 6>& facePaths);
             void setTransform(size_t objectIndex, const glm::mat4& transform)

@@ -12,6 +12,7 @@
 #include "DonTopo/Sphere.h"
 #include "DonTopo/Plane.h"
 #include "DonTopo/Capsule.h"
+#include "DonTopo/ModelLoader.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -100,6 +101,13 @@ void moveGameObject(DonTopo::GameObject* dragged, DonTopo::GameObject* target)
 
 namespace DonTopo {
 
+EditorUI::EditorUI()
+    : m_meshFileDialog(std::make_unique<IGFD::FileDialog>())
+{
+}
+
+EditorUI::~EditorUI() = default;
+
 void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView)
 {
     drawDockSpace();
@@ -107,6 +115,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     drawSelectionGizmo();
     drawViewport(viewportTexture, cameraView);
     drawProperties();
+    drawMeshDialog();
     drawContentBrowser();
 }
 
@@ -283,6 +292,32 @@ void EditorUI::createBasicShape(GameObject* parent, const std::string& name, std
     GameObject* go = parent->addChild(name);
     go->staticRenderIndex = m_renderer->addStaticMesh(*mesh);
     go->setMesh(std::move(mesh));
+}
+
+void EditorUI::loadMeshForSelected(const std::string& path)
+{
+    if (!m_selected || !m_renderer || m_selected->hasMesh())
+        return;
+
+    std::string ext = std::filesystem::path(path).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (ext != ".fbx")
+    {
+        m_meshLoadError = "Formato no soportado: " + ext;
+        return;
+    }
+
+    try
+    {
+        auto mesh = std::make_shared<Mesh>(ModelLoader::load(path));
+        m_selected->staticRenderIndex = m_renderer->addStaticMesh(*mesh);
+        m_selected->setMesh(std::move(mesh));
+        m_meshLoadError.clear();
+    }
+    catch (const std::exception& e)
+    {
+        m_meshLoadError = e.what();
+    }
 }
 
 void EditorUI::drawSceneNode(GameObject* node)
@@ -501,6 +536,7 @@ void EditorUI::drawProperties()
         glm::decompose(m_selected->localTransform, m_editScale, orientation, m_editPosition, skew, perspective);
         m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
         m_propsCachedFor = m_selected;
+        m_meshLoadError.clear();
     }
     // BoxCollider dinámico (useGravity=true): PhysX mueve worldTransform (y
     // localTransform, ver traverse en el loop principal) cada frame, pero eso
@@ -602,6 +638,7 @@ void EditorUI::drawProperties()
     drawSphereColliderSection();
     drawCapsuleColliderSection();
     drawPlaneColliderSection();
+    drawMeshSection();
     drawAddComponentButton();
 
     ImGui::End();
@@ -906,6 +943,88 @@ void EditorUI::drawPlaneColliderSection()
     }
 }
 
+void EditorUI::drawMeshSection()
+{
+    // Oculto por defecto: solo se dibuja si ya tiene mesh, o si se pulsó
+    // "Add > Mesh" para este GameObject concreto (m_meshAddRequestedFor).
+    if (!m_selected->hasMesh() && m_meshAddRequestedFor != m_selected)
+        return;
+
+    ImGui::Separator();
+
+    if (m_selected->hasMesh())
+    {
+        bool sectionOpen = ImGui::TreeNodeEx("Mesh", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+        ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+        bool removeClicked = ImGui::SmallButton("x");
+
+        if (sectionOpen)
+        {
+            ImGui::Text("%s", m_selected->getMesh()->name.c_str());
+            ImGui::TreePop();
+        }
+
+        if (removeClicked && m_renderer)
+        {
+            m_renderer->removeMeshComponent(m_selected);
+            // Vuelve a ocultar la sección tras quitar el mesh — hay que
+            // pulsar "Add > Mesh" de nuevo para reabrirla.
+            m_meshAddRequestedFor = nullptr;
+        }
+
+        return;
+    }
+
+    ImGui::Text("Mesh");
+    if (ImGui::Button("Browse..."))
+    {
+        m_meshDlgOpen = true;
+        IGFD::FileDialogConfig cfg;
+        cfg.path = "assets";
+        // Key sin prefijo "##": Display() construye el nombre interno de la
+        // ventana como título+"##"+key; con key="##AddMeshDlg" el resultado
+        // llevaba 4 almohadillas seguidas ("Choose FBX####AddMeshDlg"), y
+        // ImGui trata "###" como separador especial de ID (todo lo posterior
+        // determina el ID, ignorando el resto) — se calculaba distinto en
+        // window->ID que en el ID guardado en settings al persistir el
+        // layout, y el mismatch disparaba
+        // "Assertion failed: settings->ID == window->ID" al redimensionar
+        // (momento en que se fuerza el guardado). El ejemplo oficial de IGFD
+        // usa keys planas (sin "##"), como aquí.
+        m_meshFileDialog->OpenDialog("AddMeshDlg", "Choose FBX", ".fbx", cfg);
+    }
+
+    ImGui::BeginChild("##MeshDropZone", ImVec2(0, 40), true);
+    ImGui::TextDisabled("Drop .fbx here");
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+            loadMeshForSelected(std::string(static_cast<const char*>(payload->Data)));
+        ImGui::EndDragDropTarget();
+    }
+    ImGui::EndChild();
+
+    if (!m_meshLoadError.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_meshLoadError.c_str());
+}
+
+void EditorUI::drawMeshDialog()
+{
+    // Se ejecuta cada frame independientemente de m_selected/hasMesh(): si no
+    // se drena aquí, cambiar de selección (o deseleccionar) mientras el
+    // diálogo está abierto deja m_meshDlgOpen atascado en true para siempre.
+    // m_meshFileDialog es una instancia propia (no el singleton Instance()
+    // de Content Browser), así que redimensionar este popup no toca el
+    // estado interno de ContentDlg ni viceversa.
+    if (m_meshDlgOpen && m_meshFileDialog->Display("AddMeshDlg"))
+    {
+        if (m_meshFileDialog->IsOk())
+            loadMeshForSelected(m_meshFileDialog->GetFilePathName());
+        m_meshFileDialog->Close();
+        m_meshDlgOpen = false;
+    }
+}
+
 void EditorUI::drawAddComponentButton()
 {
     ImGui::Separator();
@@ -947,6 +1066,13 @@ void EditorUI::drawAddComponentButton()
         }
 
         ImGui::EndDisabled();
+
+        bool alreadyHasMesh = m_selected->hasMesh();
+        ImGui::BeginDisabled(alreadyHasMesh);
+        if (ImGui::Selectable("Mesh") && !alreadyHasMesh)
+            m_meshAddRequestedFor = m_selected;
+        ImGui::EndDisabled();
+
         ImGui::EndPopup();
     }
 }
@@ -1033,6 +1159,14 @@ void EditorUI::drawContentBrowser()
                 ImVec4(btnColor.x + 0.15f, btnColor.y + 0.15f, btnColor.z + 0.15f, 1.0f));
             ImGui::Button(label, ImVec2(ICON_SIZE, ICON_SIZE));
             ImGui::PopStyleColor(2);
+
+            if (ext == ".fbx" && ImGui::BeginDragDropSource())
+            {
+                std::string fullPath = path.string();
+                ImGui::SetDragDropPayload("DT_ASSET_PATH", fullPath.c_str(), fullPath.size() + 1);
+                ImGui::Text("%s", fullPath.c_str());
+                ImGui::EndDragDropSource();
+            }
 
             std::string fname = path.filename().string();
             if (fname.size() > 11) fname = fname.substr(0, 10) + "..";

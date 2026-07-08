@@ -43,9 +43,17 @@ inválido, borrado, selección cambiante).
   reorder de jerarquía con payload `"DT_GAMEOBJECT"` (`EditorUI.cpp:302-317`).
 - `ImGuiFileDialog` ya integrado y en uso embebido (modo `NoDialog`) dentro
   de Content Browser con key `"##ContentDlg"` (`EditorUI.cpp:964-979`). Para
-  Add Mesh se abre una instancia *distinta* (key `"##AddMeshDlg"`, modo
-  modal normal, sin `NoDialog`) — la librería soporta múltiples diálogos
-  simultáneos por key.
+  Add Mesh se abre una clave *distinta* (`"##AddMeshDlg"`, modo modal
+  normal, sin `NoDialog`) — pero **`IGFD::FileDialog::Instance()` es un
+  singleton real (solo un diálogo activo a la vez, confirmado en el header
+  vendorizado)**, no soporta claves concurrentes como se asumió aquí
+  originalmente. Requiere coordinación explícita: un flag (`m_meshDlgOpen`)
+  que cede el singleton al abrir Add Mesh (`Close()` + `m_dlgOpen = false`)
+  y bloquea el reopen de Content Browser mientras esté activo; el drenado
+  del diálogo (`Display`/`IsOk`/`Close`) debe ejecutarse cada frame de forma
+  incondicional (no solo dentro de la rama sin-mesh de la sección
+  Properties), o queda atascado si la selección cambia con el diálogo
+  abierto. Ver implementación final en `EditorUI::drawMeshDialog()`.
 
 ## Arquitectura
 
