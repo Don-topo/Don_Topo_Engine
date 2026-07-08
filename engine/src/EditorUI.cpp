@@ -1127,6 +1127,12 @@ void EditorUI::drawAudioClipSection()
 
     ImGui::BeginChild("##AudioDropZone", ImVec2(0, 40), true);
     ImGui::TextDisabled("Drop audio here");
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+            loadAudioClipForSelected(std::string(static_cast<const char*>(payload->Data)));
+        ImGui::EndDragDropTarget();
+    }
     ImGui::EndChild();
 
     if (!m_audioLoadError.empty())
@@ -1264,6 +1270,8 @@ void EditorUI::drawContentBrowser()
         int   cols  = std::max(1, (int)(paneW / cellW));
         ImGui::Columns(cols, "##AssetGrid", false);
 
+        static const std::set<std::string> kDraggableExt = {".fbx", ".wav", ".mp3", ".ogg", ".flac"};
+
         for (auto& path : m_assets) {
             std::string ext = path.extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -1289,7 +1297,7 @@ void EditorUI::drawContentBrowser()
             ImGui::Button(label, ImVec2(ICON_SIZE, ICON_SIZE));
             ImGui::PopStyleColor(2);
 
-            if (ext == ".fbx" && ImGui::BeginDragDropSource())
+            if (kDraggableExt.count(ext) && ImGui::BeginDragDropSource())
             {
                 std::string fullPath = path.string();
                 ImGui::SetDragDropPayload("DT_ASSET_PATH", fullPath.c_str(), fullPath.size() + 1);
