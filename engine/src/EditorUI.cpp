@@ -974,6 +974,12 @@ void EditorUI::drawMeshSection()
 
     ImGui::BeginChild("##MeshDropZone", ImVec2(0, 40), true);
     ImGui::TextDisabled("Drop .fbx here");
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+            loadMeshForSelected(std::string(static_cast<const char*>(payload->Data)));
+        ImGui::EndDragDropTarget();
+    }
     ImGui::EndChild();
 
     if (!m_meshLoadError.empty())
@@ -1122,6 +1128,14 @@ void EditorUI::drawContentBrowser()
                 ImVec4(btnColor.x + 0.15f, btnColor.y + 0.15f, btnColor.z + 0.15f, 1.0f));
             ImGui::Button(label, ImVec2(ICON_SIZE, ICON_SIZE));
             ImGui::PopStyleColor(2);
+
+            if (ext == ".fbx" && ImGui::BeginDragDropSource())
+            {
+                std::string fullPath = path.string();
+                ImGui::SetDragDropPayload("DT_ASSET_PATH", fullPath.c_str(), fullPath.size() + 1);
+                ImGui::Text("%s", fullPath.c_str());
+                ImGui::EndDragDropSource();
+            }
 
             std::string fname = path.filename().string();
             if (fname.size() > 11) fname = fname.substr(0, 10) + "..";
