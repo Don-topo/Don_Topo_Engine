@@ -101,6 +101,13 @@ void moveGameObject(DonTopo::GameObject* dragged, DonTopo::GameObject* target)
 
 namespace DonTopo {
 
+EditorUI::EditorUI()
+    : m_meshFileDialog(std::make_unique<IGFD::FileDialog>())
+{
+}
+
+EditorUI::~EditorUI() = default;
+
 void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView)
 {
     drawDockSpace();
@@ -971,15 +978,20 @@ void EditorUI::drawMeshSection()
     ImGui::Text("Mesh");
     if (ImGui::Button("Browse..."))
     {
-        // Instance() es singleton: hay que ceder el turno al diálogo embebido
-        // de Content Browser (##ContentDlg) antes de abrir este, si no su
-        // estado interno se pisa y Content Browser deja de reabrirlo.
-        IGFD::FileDialog::Instance()->Close();
-        m_dlgOpen = false;
         m_meshDlgOpen = true;
         IGFD::FileDialogConfig cfg;
         cfg.path = "assets";
-        IGFD::FileDialog::Instance()->OpenDialog("##AddMeshDlg", "Choose FBX", ".fbx", cfg);
+        // Key sin prefijo "##": Display() construye el nombre interno de la
+        // ventana como título+"##"+key; con key="##AddMeshDlg" el resultado
+        // llevaba 4 almohadillas seguidas ("Choose FBX####AddMeshDlg"), y
+        // ImGui trata "###" como separador especial de ID (todo lo posterior
+        // determina el ID, ignorando el resto) — se calculaba distinto en
+        // window->ID que en el ID guardado en settings al persistir el
+        // layout, y el mismatch disparaba
+        // "Assertion failed: settings->ID == window->ID" al redimensionar
+        // (momento en que se fuerza el guardado). El ejemplo oficial de IGFD
+        // usa keys planas (sin "##"), como aquí.
+        m_meshFileDialog->OpenDialog("AddMeshDlg", "Choose FBX", ".fbx", cfg);
     }
 
     ImGui::BeginChild("##MeshDropZone", ImVec2(0, 40), true);
@@ -1000,13 +1012,15 @@ void EditorUI::drawMeshDialog()
 {
     // Se ejecuta cada frame independientemente de m_selected/hasMesh(): si no
     // se drena aquí, cambiar de selección (o deseleccionar) mientras el
-    // diálogo está abierto deja m_meshDlgOpen atascado en true para siempre,
-    // y Content Browser nunca vuelve a reabrir su propio diálogo.
-    if (m_meshDlgOpen && IGFD::FileDialog::Instance()->Display("##AddMeshDlg"))
+    // diálogo está abierto deja m_meshDlgOpen atascado en true para siempre.
+    // m_meshFileDialog es una instancia propia (no el singleton Instance()
+    // de Content Browser), así que redimensionar este popup no toca el
+    // estado interno de ContentDlg ni viceversa.
+    if (m_meshDlgOpen && m_meshFileDialog->Display("AddMeshDlg"))
     {
-        if (IGFD::FileDialog::Instance()->IsOk())
-            loadMeshForSelected(IGFD::FileDialog::Instance()->GetFilePathName());
-        IGFD::FileDialog::Instance()->Close();
+        if (m_meshFileDialog->IsOk())
+            loadMeshForSelected(m_meshFileDialog->GetFilePathName());
+        m_meshFileDialog->Close();
         m_meshDlgOpen = false;
     }
 }
@@ -1073,7 +1087,7 @@ void EditorUI::drawContentBrowser()
     // Left: ImGuiFileDialog embedded
     ImGui::BeginChild("##FileDlgPane", ImVec2(leftWidth, totalHeight), false);
     {
-        if (!m_dlgOpen && !m_meshDlgOpen) {
+        if (!m_dlgOpen) {
             IGFD::FileDialogConfig cfg;
             cfg.path  = "assets";
             cfg.flags = ImGuiFileDialogFlags_NoDialog |
