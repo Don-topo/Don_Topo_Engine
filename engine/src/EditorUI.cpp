@@ -960,16 +960,23 @@ void EditorUI::drawMeshSection()
     ImGui::Text("Mesh");
     if (ImGui::Button("Browse..."))
     {
+        // Instance() es singleton: hay que ceder el turno al diálogo embebido
+        // de Content Browser (##ContentDlg) antes de abrir este, si no su
+        // estado interno se pisa y Content Browser deja de reabrirlo.
+        IGFD::FileDialog::Instance()->Close();
+        m_dlgOpen = false;
+        m_meshDlgOpen = true;
         IGFD::FileDialogConfig cfg;
         cfg.path = "assets";
         IGFD::FileDialog::Instance()->OpenDialog("##AddMeshDlg", "Choose FBX", ".fbx", cfg);
     }
 
-    if (IGFD::FileDialog::Instance()->Display("##AddMeshDlg"))
+    if (m_meshDlgOpen && IGFD::FileDialog::Instance()->Display("##AddMeshDlg"))
     {
         if (IGFD::FileDialog::Instance()->IsOk())
             loadMeshForSelected(IGFD::FileDialog::Instance()->GetFilePathName());
         IGFD::FileDialog::Instance()->Close();
+        m_meshDlgOpen = false;
     }
 
     ImGui::BeginChild("##MeshDropZone", ImVec2(0, 40), true);
@@ -1035,7 +1042,7 @@ void EditorUI::drawContentBrowser()
     // Left: ImGuiFileDialog embedded
     ImGui::BeginChild("##FileDlgPane", ImVec2(leftWidth, totalHeight), false);
     {
-        if (!m_dlgOpen) {
+        if (!m_dlgOpen && !m_meshDlgOpen) {
             IGFD::FileDialogConfig cfg;
             cfg.path  = "assets";
             cfg.flags = ImGuiFileDialogFlags_NoDialog |

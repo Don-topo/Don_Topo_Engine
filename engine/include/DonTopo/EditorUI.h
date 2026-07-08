@@ -84,6 +84,7 @@ private:
 
     // Content Browser
     bool m_dlgOpen = false;
+    bool m_meshDlgOpen = false;
     bool m_scanned = false;
     std::string m_currentDir;
     std::vector<std::filesystem::path> m_assets;
