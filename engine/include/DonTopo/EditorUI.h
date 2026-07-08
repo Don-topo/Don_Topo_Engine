@@ -158,6 +158,12 @@ private:
     // Mensaje del último intento fallido de carga de Mesh (vacío si no hay
     // error pendiente); se limpia al cambiar de selección o al cargar bien.
     std::string     m_meshLoadError;
+    // GameObject para el que se pulsó "Add > Mesh" (revela la sección
+    // Browse/drop hasta que se asigne un mesh o se pulse "x" para quitarlo).
+    // nullptr = sección oculta. No se limpia al cambiar de selección: si el
+    // usuario vuelve al mismo GameObject sin haber completado la carga, la
+    // sección sigue visible (igual que dejar un diálogo de collider a medias).
+    GameObject*     m_meshAddRequestedFor = nullptr;
 };
 
 } // namespace DonTopo

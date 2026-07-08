@@ -938,6 +938,11 @@ void EditorUI::drawPlaneColliderSection()
 
 void EditorUI::drawMeshSection()
 {
+    // Oculto por defecto: solo se dibuja si ya tiene mesh, o si se pulsó
+    // "Add > Mesh" para este GameObject concreto (m_meshAddRequestedFor).
+    if (!m_selected->hasMesh() && m_meshAddRequestedFor != m_selected)
+        return;
+
     ImGui::Separator();
 
     if (m_selected->hasMesh())
@@ -953,7 +958,12 @@ void EditorUI::drawMeshSection()
         }
 
         if (removeClicked && m_renderer)
+        {
             m_renderer->removeMeshComponent(m_selected);
+            // Vuelve a ocultar la sección tras quitar el mesh — hay que
+            // pulsar "Add > Mesh" de nuevo para reabrirla.
+            m_meshAddRequestedFor = nullptr;
+        }
 
         return;
     }
@@ -1042,6 +1052,13 @@ void EditorUI::drawAddComponentButton()
         }
 
         ImGui::EndDisabled();
+
+        bool alreadyHasMesh = m_selected->hasMesh();
+        ImGui::BeginDisabled(alreadyHasMesh);
+        if (ImGui::Selectable("Mesh") && !alreadyHasMesh)
+            m_meshAddRequestedFor = m_selected;
+        ImGui::EndDisabled();
+
         ImGui::EndPopup();
     }
 }
