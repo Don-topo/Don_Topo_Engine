@@ -310,7 +310,7 @@ void EditorUI::loadMeshForSelected(const std::string& path)
     catch (const std::exception& e)
     {
         m_meshLoadError = e.what();
-}
+    }
 }
 
 void EditorUI::drawSceneNode(GameObject* node)
