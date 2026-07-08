@@ -29,12 +29,17 @@ int main()
         window.init(1280, 720, "Don Topo Engine", "assets/MainEngineLogo.png");
         DonTopo::Renderer renderer;
 
-        // physics se declara antes que root: en cualquier salida de scope (normal
-        // o por excepción) root se destruye primero (liberando los BoxCollider de
-        // sus GameObject) y physics se destruye después — nunca al revés, evitando
-        // que ~BoxCollider() libere un PxRigidDynamic sobre una PxScene ya liberada.
+        // physics y audio se declaran antes que root: en cualquier salida de scope
+        // (normal o por excepción) root se destruye primero (liberando los
+        // BoxCollider/AudioClipComponent de sus GameObject) y physics/audio se
+        // destruyen después — nunca al revés, evitando que ~BoxCollider() libere un
+        // PxRigidDynamic sobre una PxScene ya liberada, o que ~AudioClipComponent()
+        // llame a AudioManager::unloadSound sobre un AudioManager ya destruido.
         DonTopo::PhysicsManager physics;
         physics.init();
+
+        DonTopo::AudioManager audio;
+        audio.init();
 
         DonTopo::GameObject root("root");
 
@@ -111,14 +116,13 @@ int main()
 
         DonTopo::Camera camera({0.0f, 90.0f, 300.0f});
 
-        DonTopo::AudioManager audio;
-        audio.init();
         //int bgm = audio.loadBGM("assets/audio.mp3");
         //if (bgm >= 0) audio.playBGM(bgm);
 
         renderer.init(window, meshes);
         renderer.setSceneRoot(&root);
         renderer.setPhysicsManager(&physics);
+        renderer.setAudioManager(&audio);
         renderer.setOnAxisSelected([&camera](const glm::vec3& axis) { camera.lookAlongAxis(axis); });
 
         renderer.initSkybox({

@@ -19,6 +19,7 @@ namespace DonTopo {
     class Window;
     class GameObject;
     class PhysicsManager;
+    class AudioManager;
 
     class Renderer {
         public:                
@@ -35,6 +36,7 @@ namespace DonTopo {
             // Reenvía al axis gizmo del viewport; cb recibe el eje mundo clicado.
             void setOnAxisSelected(std::function<void(const glm::vec3&)> cb) { m_editorUI.setOnAxisSelected(std::move(cb)); }
             void setPhysicsManager(PhysicsManager* physics) { m_editorUI.setPhysicsManager(physics); }
+            void setAudioManager(AudioManager* audio) { m_editorUI.setAudioManager(audio); }
             void focusSelected(Camera& camera) { m_editorUI.focusSelected(camera); }
             void setSceneRoot(GameObject* root);
             // Libera mesh/skinnedMesh/texturas en GPU de node y todo su subárbol

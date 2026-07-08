@@ -14,6 +14,7 @@ namespace DonTopo {
 class GameObject;
 class Mesh;
 class PhysicsManager;
+class AudioManager;
 class BoxCollider;
 class SphereCollider;
 class CapsuleCollider;
@@ -42,6 +43,11 @@ public:
     // ciclo de vida del EditorUI. Necesario para crear el actor PhysX al
     // pulsar "Add > Box Collider" desde el panel Properties.
     void setPhysicsManager(PhysicsManager* physics) { m_physics = physics; }
+    // Puntero no-propietario: AudioManager vive fuera del EditorUI (ver
+    // wiring en sandbox/main.cpp), mismo patrón que m_physics. Necesario
+    // para cargar/reproducir clips desde la sección Audio Clip del panel
+    // Properties.
+    void setAudioManager(AudioManager* audio) { m_audio = audio; }
     // Puntero no-propietario: Renderer es dueño de este EditorUI y se pasa a sí
     // mismo desde setSceneRoot. Necesario para registrar el mesh GPU (addStaticMesh)
     // al crear un shape desde el menú "Basic Shapes".
@@ -166,6 +172,7 @@ private:
 
     PhysicsManager* m_physics = nullptr;
     Renderer*       m_renderer = nullptr;
+    AudioManager*   m_audio = nullptr;
     // Mensaje del último intento fallido de carga de Mesh (vacío si no hay
     // error pendiente); se limpia al cambiar de selección o al cargar bien.
     std::string     m_meshLoadError;
