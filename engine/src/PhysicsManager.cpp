@@ -241,6 +241,13 @@ std::shared_ptr<PlaneCollider> PhysicsManager::createPlaneColliderComponent(
     PxRigidDynamic* actor = physics->createRigidDynamic(pose);
     physxCheck(actor, "PxPhysics::createRigidDynamic");
 
+    // El actor debe quedar kinematic ANTES de attachear el shape de plano:
+    // PhysX rechaza (createExclusiveShape devuelve null) un shape de
+    // geometría plane/mesh como simulation shape sobre un PxRigidDynamic que
+    // todavía no es kinematic en el momento del attach.
+    actor->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, true);
+    actor->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
+
     PxPlaneGeometry geometry;
     PxShape* shape = PxRigidActorExt::createExclusiveShape(*actor, geometry, *material);
     physxCheck(shape, "PxRigidActorExt::createExclusiveShape");
@@ -249,8 +256,6 @@ std::shared_ptr<PlaneCollider> PhysicsManager::createPlaneColliderComponent(
     // Sin updateMassAndInertia: un plano no tiene volumen, PhysX no puede
     // calcular masa/inercia sobre esa geometría. No hace falta — el actor
     // siempre queda kinematic (nunca se simula como cuerpo dinámico).
-    actor->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, true);
-    actor->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
 
     scene->addActor(*actor);
 
