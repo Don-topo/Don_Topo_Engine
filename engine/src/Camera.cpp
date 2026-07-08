@@ -66,6 +66,22 @@ namespace DonTopo
         updateVectors();
     }
 
+    void Camera::focusOn(const glm::vec3& center, float boundingRadius)
+    {
+        constexpr float kFocusDistanceFactor = 2.5f;
+        constexpr float kMinRadius           = 5.0f;
+        constexpr float kEpsilon             = 0.0001f;
+
+        glm::vec3 dir = m_pos - center;
+        if (glm::length(dir) < kEpsilon)
+            dir = -m_front;
+        dir = glm::normalize(dir);
+
+        float distance = std::max(boundingRadius, kMinRadius) * kFocusDistanceFactor;
+        m_pos = center + dir * distance;
+        lookAlongAxis(dir);
+    }
+
     glm::mat4 Camera::getViewMatrix() const
     {
         return glm::lookAt(m_pos, m_pos + m_front, m_up);
