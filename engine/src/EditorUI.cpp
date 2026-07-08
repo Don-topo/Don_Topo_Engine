@@ -528,6 +528,7 @@ void EditorUI::drawProperties()
         glm::decompose(m_selected->localTransform, m_editScale, orientation, m_editPosition, skew, perspective);
         m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
         m_propsCachedFor = m_selected;
+        m_meshLoadError.clear();
     }
     // BoxCollider dinámico (useGravity=true): PhysX mueve worldTransform (y
     // localTransform, ver traverse en el loop principal) cada frame, pero eso
@@ -629,6 +630,7 @@ void EditorUI::drawProperties()
     drawSphereColliderSection();
     drawCapsuleColliderSection();
     drawPlaneColliderSection();
+    drawMeshSection();
     drawAddComponentButton();
 
     ImGui::End();
@@ -931,6 +933,51 @@ void EditorUI::drawPlaneColliderSection()
         m_selected->setPlaneCollider(nullptr);
         m_planeColliderCachedFor = nullptr;
     }
+}
+
+void EditorUI::drawMeshSection()
+{
+    ImGui::Separator();
+
+    if (m_selected->hasMesh())
+    {
+        bool sectionOpen = ImGui::TreeNodeEx("Mesh", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+        ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+        bool removeClicked = ImGui::SmallButton("x");
+
+        if (sectionOpen)
+        {
+            ImGui::Text("%s", m_selected->getMesh()->name.c_str());
+            ImGui::TreePop();
+        }
+
+        if (removeClicked && m_renderer)
+            m_renderer->removeMeshComponent(m_selected);
+
+        return;
+    }
+
+    ImGui::Text("Mesh");
+    if (ImGui::Button("Browse..."))
+    {
+        IGFD::FileDialogConfig cfg;
+        cfg.path = "assets";
+        IGFD::FileDialog::Instance()->OpenDialog("##AddMeshDlg", "Choose FBX", ".fbx", cfg);
+    }
+
+    if (IGFD::FileDialog::Instance()->Display("##AddMeshDlg"))
+    {
+        if (IGFD::FileDialog::Instance()->IsOk())
+            loadMeshForSelected(IGFD::FileDialog::Instance()->GetFilePathName());
+        IGFD::FileDialog::Instance()->Close();
+    }
+
+    ImGui::BeginChild("##MeshDropZone", ImVec2(0, 40), true);
+    ImGui::TextDisabled("Drop .fbx here");
+    ImGui::EndChild();
+
+    if (!m_meshLoadError.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_meshLoadError.c_str());
 }
 
 void EditorUI::drawAddComponentButton()
