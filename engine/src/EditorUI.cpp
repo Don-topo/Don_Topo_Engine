@@ -108,6 +108,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     drawSelectionGizmo();
     drawViewport(viewportTexture, cameraView);
     drawProperties();
+    drawMeshDialog();
     drawContentBrowser();
 }
 
@@ -971,6 +972,20 @@ void EditorUI::drawMeshSection()
         IGFD::FileDialog::Instance()->OpenDialog("##AddMeshDlg", "Choose FBX", ".fbx", cfg);
     }
 
+    ImGui::BeginChild("##MeshDropZone", ImVec2(0, 40), true);
+    ImGui::TextDisabled("Drop .fbx here");
+    ImGui::EndChild();
+
+    if (!m_meshLoadError.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_meshLoadError.c_str());
+}
+
+void EditorUI::drawMeshDialog()
+{
+    // Se ejecuta cada frame independientemente de m_selected/hasMesh(): si no
+    // se drena aquí, cambiar de selección (o deseleccionar) mientras el
+    // diálogo está abierto deja m_meshDlgOpen atascado en true para siempre,
+    // y Content Browser nunca vuelve a reabrir su propio diálogo.
     if (m_meshDlgOpen && IGFD::FileDialog::Instance()->Display("##AddMeshDlg"))
     {
         if (IGFD::FileDialog::Instance()->IsOk())
@@ -978,13 +993,6 @@ void EditorUI::drawMeshSection()
         IGFD::FileDialog::Instance()->Close();
         m_meshDlgOpen = false;
     }
-
-    ImGui::BeginChild("##MeshDropZone", ImVec2(0, 40), true);
-    ImGui::TextDisabled("Drop .fbx here");
-    ImGui::EndChild();
-
-    if (!m_meshLoadError.empty())
-        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_meshLoadError.c_str());
 }
 
 void EditorUI::drawAddComponentButton()

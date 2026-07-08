@@ -67,6 +67,7 @@ private:
     void drawCapsuleColliderSection();
     void drawPlaneColliderSection();
     void drawMeshSection();
+    void drawMeshDialog();
     void drawAddComponentButton();
     // Crea un GameObject hijo de parent con el mesh dado, lo registra en el
     // Renderer (staticRenderIndex) y lo deja sin collider. No-op si parent o
