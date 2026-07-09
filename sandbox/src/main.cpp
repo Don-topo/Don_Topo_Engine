@@ -279,11 +279,6 @@ int main()
             // vivos, así que liveCube queda nullptr ese frame en vez de colgante.
             if (liveCube)
             {
-                if (liveCube->hasBoxCollider())
-                    DonTopo::Gizmos::drawWireBox(liveCube->worldTransform,
-                        liveCube->getBoxCollider()->getCenter(),
-                        liveCube->getBoxCollider()->getHalfExtents(), glm::vec3(1.0f, 1.0f, 0.0f));
-
                 DonTopo::Gizmos::drawRay(
                     glm::vec3(liveCube->worldTransform[3].x, liveCube->worldTransform[3].y + 200.0f, liveCube->worldTransform[3].z),
                     glm::vec3(0.0f, -1.0f, 0.0f), 400.0f, glm::vec3(1.0f, 0.0f, 1.0f));
