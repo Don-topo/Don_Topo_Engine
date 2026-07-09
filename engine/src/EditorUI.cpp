@@ -1059,7 +1059,11 @@ void EditorUI::drawMeshSection()
     {
         m_meshDlgOpen = true;
         IGFD::FileDialogConfig cfg;
-        cfg.path = "assets";
+        cfg.path  = "assets";
+        cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                    ImGuiFileDialogFlags_HideColumnDate |
+                    ImGuiFileDialogFlags_DisableThumbnailMode |
+                    ImGuiFileDialogFlags_DisablePlaceMode;
         // Key sin prefijo "##": Display() construye el nombre interno de la
         // ventana como título+"##"+key; con key="##AddMeshDlg" el resultado
         // llevaba 4 almohadillas seguidas ("Choose FBX####AddMeshDlg"), y
@@ -1165,7 +1169,11 @@ void EditorUI::drawAudioClipSection()
     {
         m_audioDlgOpen = true;
         IGFD::FileDialogConfig cfg;
-        cfg.path = "assets";
+        cfg.path  = "assets";
+        cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                    ImGuiFileDialogFlags_HideColumnDate |
+                    ImGuiFileDialogFlags_DisableThumbnailMode |
+                    ImGuiFileDialogFlags_DisablePlaceMode;
         // Key plana sin "##" (mismo motivo documentado en drawMeshSection
         // para AddMeshDlg: con prefijo "##" el título concatenado generaba
         // 4 almohadillas seguidas y rompía el ID persistido de ImGui).
@@ -1274,7 +1282,11 @@ void EditorUI::drawContentBrowser()
             IGFD::FileDialogConfig cfg;
             cfg.path  = "assets";
             cfg.flags = ImGuiFileDialogFlags_NoDialog |
-                        ImGuiFileDialogFlags_DontShowHiddenFiles;
+                        ImGuiFileDialogFlags_DontShowHiddenFiles |
+                        ImGuiFileDialogFlags_HideColumnType |
+                        ImGuiFileDialogFlags_HideColumnDate |
+                        ImGuiFileDialogFlags_DisableThumbnailMode |
+                        ImGuiFileDialogFlags_DisablePlaceMode;
             IGFD::FileDialog::Instance()->OpenDialog(
                 "##ContentDlg", "Files", nullptr, cfg);
             m_dlgOpen = true;
