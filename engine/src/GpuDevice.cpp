@@ -163,12 +163,18 @@ void GpuDevice::createDevice()
     }
 
     const char* extensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+
+    // fillModeNonSolid: requerida para VK_POLYGON_MODE_LINE (modo wireframe).
+    VkPhysicalDeviceFeatures deviceFeatures{};
+    deviceFeatures.fillModeNonSolid = VK_TRUE;
+
     VkDeviceCreateInfo createInfo{};
     createInfo.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.queueCreateInfoCount    = (uint32_t)queueInfos.size();
     createInfo.pQueueCreateInfos       = queueInfos.data();
     createInfo.enabledExtensionCount   = 1;
     createInfo.ppEnabledExtensionNames = extensions;
+    createInfo.pEnabledFeatures        = &deviceFeatures;
 
     if (vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device) != VK_SUCCESS)
         throw std::runtime_error("failed to create logical device!");

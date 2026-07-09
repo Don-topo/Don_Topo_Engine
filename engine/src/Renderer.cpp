@@ -185,6 +185,7 @@ namespace DonTopo {
             vkDestroyFramebuffer(m_gpu.device(), framebuffer, nullptr);
         }
         vkDestroyPipeline(m_gpu.device(), m_pipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_wireframePipeline, nullptr);
         vkDestroyPipelineLayout(m_gpu.device(), m_pipelineLayout, nullptr);
         vkDestroyRenderPass(m_gpu.device(), m_renderPass, nullptr);
         for(VkImageView imageView : m_swapChainImageViews)
@@ -212,6 +213,7 @@ namespace DonTopo {
         vkFreeMemory(m_gpu.device(), m_shadowMemory, nullptr);
         vkDestroyFramebuffer(m_gpu.device(), m_shadowFramebuffer, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedGfxPipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_skinnedWireframePipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_shadowPipeline, nullptr);
         vkDestroyPipelineLayout(m_gpu.device(), m_shadowPipelineLayout, nullptr);
         vkDestroyRenderPass(m_gpu.device(), m_shadowRenderPass, nullptr);
@@ -593,7 +595,8 @@ namespace DonTopo {
             scissor.extent = m_swapChainExtent;
             vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
 
-            vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+            vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                m_wireframeMode ? m_wireframePipeline : m_pipeline);
             for (auto& obj : m_objects)
             {
                 if (obj.vertexBuffer == VK_NULL_HANDLE) continue; // borrado desde el editor
@@ -615,8 +618,8 @@ namespace DonTopo {
 
             if (!m_skinnedObjects.empty())
             {
-                vkCmdBindPipeline(m_commandBuffers[m_currentFrame],
-                    VK_PIPELINE_BIND_POINT_GRAPHICS, m_skinnedGfxPipeline);
+                vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    m_wireframeMode ? m_skinnedWireframePipeline : m_skinnedGfxPipeline);
 
                 for (auto& sobj : m_skinnedObjects)
                 {
@@ -653,8 +656,9 @@ namespace DonTopo {
                 m_cameraDistance * 0.001f, m_cameraDistance * 3.0f);
             proj[1][1] *= -1.0f;
 
-            // Skybox — fullscreen quad, depth LEQUAL sin escritura (al final del pass)
-            if (m_skybox.isInitialized()) {
+            // Skybox — fullscreen quad, depth LEQUAL sin escritura (al final del pass).
+            // Omitido en wireframe: el fondo ya es negro sólido (clearValue por defecto).
+            if (!m_wireframeMode && m_skybox.isInitialized()) {
                 glm::mat4 rotView    = glm::mat4(glm::mat3(m_viewMatrix)); // sin traslación
                 glm::mat4 invViewProj = glm::inverse(proj * rotView);
                 m_skybox.draw(m_commandBuffers[m_currentFrame], invViewProj);
@@ -844,9 +848,35 @@ namespace DonTopo {
             throw std::runtime_error("failed to create graphics pipeline!");
         }
 
+        // Pipeline wireframe: mismo vertex input/layout/render pass, solo
+        // cambia polygonMode a LINE y el fragment shader a color plano.
+        auto wireFragCode = loadShaderFile("shaders/wireframe.frag.spv");
+        VkShaderModule wireFragModule = createShaderModule(wireFragCode);
+
+        VkPipelineShaderStageCreateInfo wireFragStage{};
+        wireFragStage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        wireFragStage.stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+        wireFragStage.module = wireFragModule;
+        wireFragStage.pName  = "main";
+
+        VkPipelineShaderStageCreateInfo wireStages[] = { vertStage, wireFragStage };
+
+        VkPipelineRasterizationStateCreateInfo wireRasterizationInfo = rasterizationInfo;
+        wireRasterizationInfo.polygonMode = VK_POLYGON_MODE_LINE;
+
+        VkGraphicsPipelineCreateInfo wirePipelineInfo = pipelineInfo;
+        wirePipelineInfo.pStages             = wireStages;
+        wirePipelineInfo.pRasterizationState = &wireRasterizationInfo;
+
+        if(vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &wirePipelineInfo, nullptr, &m_wireframePipeline) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create wireframe graphics pipeline!");
+        }
+
         // los módulos se destruyen al final de esta función — solo los necesita el pipeline
         vkDestroyShaderModule(m_gpu.device(), vertModule, nullptr);
         vkDestroyShaderModule(m_gpu.device(), fragModule, nullptr);
+        vkDestroyShaderModule(m_gpu.device(), wireFragModule, nullptr);
         printf("pipeline OK\n"); fflush(stdout);
     }
 
@@ -1691,8 +1721,33 @@ namespace DonTopo {
             if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &pci, nullptr, &m_skinnedGfxPipeline) != VK_SUCCESS)
                 throw std::runtime_error("failed to create skinned graphics pipeline!");
 
+            // Pipeline wireframe skinned: mismo vertex input/layout que el
+            // gfx pipeline de arriba, solo cambia polygonMode a LINE y el
+            // fragment shader a color plano.
+            auto wireFragCode = loadShaderFile("shaders/wireframe.frag.spv");
+            auto wireFragMod  = createShaderModule(wireFragCode);
+
+            VkPipelineShaderStageCreateInfo wireFragStage{};
+            wireFragStage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            wireFragStage.stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            wireFragStage.module = wireFragMod;
+            wireFragStage.pName  = "main";
+
+            VkPipelineShaderStageCreateInfo wireStages[] = { stages[0], wireFragStage };
+
+            VkPipelineRasterizationStateCreateInfo wireRs = rs;
+            wireRs.polygonMode = VK_POLYGON_MODE_LINE;
+
+            VkGraphicsPipelineCreateInfo wirePci = pci;
+            wirePci.pStages             = wireStages;
+            wirePci.pRasterizationState = &wireRs;
+
+            if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &wirePci, nullptr, &m_skinnedWireframePipeline) != VK_SUCCESS)
+                throw std::runtime_error("failed to create skinned wireframe pipeline!");
+
             vkDestroyShaderModule(m_gpu.device(), vertMod, nullptr);
             vkDestroyShaderModule(m_gpu.device(), fragMod, nullptr);
+            vkDestroyShaderModule(m_gpu.device(), wireFragMod, nullptr);
         }
     }
 
