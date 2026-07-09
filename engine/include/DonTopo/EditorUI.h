@@ -110,6 +110,11 @@ private:
     // Raíz del proyecto (canonicalizada una vez); el Content Browser no deja
     // navegar por encima de este path (ni vía ".." ni vía breadcrumb).
     std::filesystem::path m_projectRoot;
+    // Path al que reabrir el diálogo IGFD la próxima vez que !m_dlgOpen;
+    // vacío = reabrir en m_projectRoot. Se consume (se vacía) en cada
+    // reapertura — quien quiera reabrir en una carpeta concreta debe
+    // asignarlo de nuevo antes de poner m_dlgOpen = false.
+    std::string m_dlgReopenPath;
     std::vector<std::filesystem::path> m_assets;
     // Instancia propia de ImGuiFileDialog para "Add > Mesh", separada del
     // singleton IGFD::FileDialog::Instance() que usa Content Browser: la

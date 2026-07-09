@@ -1284,7 +1284,7 @@ void EditorUI::drawContentBrowser()
     {
         if (!m_dlgOpen) {
             IGFD::FileDialogConfig cfg;
-            cfg.path  = m_projectRoot.string();
+            cfg.path  = m_dlgReopenPath.empty() ? m_projectRoot.string() : m_dlgReopenPath;
             cfg.flags = ImGuiFileDialogFlags_NoDialog |
                         ImGuiFileDialogFlags_DontShowHiddenFiles |
                         ImGuiFileDialogFlags_HideColumnType |
@@ -1294,6 +1294,7 @@ void EditorUI::drawContentBrowser()
             IGFD::FileDialog::Instance()->OpenDialog(
                 "##ContentDlg", "Files", ".*", cfg);
             m_dlgOpen = true;
+            m_dlgReopenPath.clear();
         }
         ImVec2 dlgSize = ImGui::GetContentRegionAvail();
         if (IGFD::FileDialog::Instance()->Display(
@@ -1316,6 +1317,7 @@ void EditorUI::drawContentBrowser()
             if (!insideRoot) {
                 IGFD::FileDialog::Instance()->Close();
                 m_dlgOpen = false;
+                m_dlgReopenPath.clear();
             }
         }
     }
@@ -1337,7 +1339,7 @@ void EditorUI::drawContentBrowser()
             m_assets.clear();
             if (std::filesystem::exists(m_currentDir))
                 for (auto& e : std::filesystem::directory_iterator(m_currentDir))
-                    if (e.is_regular_file())
+                    if (e.is_regular_file() || e.is_directory())
                         m_assets.push_back(e.path());
             std::sort(m_assets.begin(), m_assets.end());
             m_scanned = true;
@@ -1353,12 +1355,15 @@ void EditorUI::drawContentBrowser()
         static const std::set<std::string> kDraggableExt = {".fbx", ".wav", ".mp3", ".ogg", ".flac"};
 
         for (auto& path : m_assets) {
-            std::string ext = path.extension().string();
+            bool isDir = std::filesystem::is_directory(path);
+            std::string ext = isDir ? "" : path.extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
             ImVec4      btnColor;
             const char* label;
-            if (ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".glb") {
+            if (isDir) {
+                btnColor = ImVec4(0.55f, 0.55f, 0.60f, 1.0f); label = "DIR";
+            } else if (ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".glb") {
                 btnColor = ImVec4(0.15f, 0.55f, 0.85f, 1.0f); label = "3D";
             } else if (ext == ".mp3" || ext == ".wav" || ext == ".ogg" || ext == ".flac") {
                 btnColor = ImVec4(0.20f, 0.72f, 0.35f, 1.0f); label = "SFX";
@@ -1377,7 +1382,16 @@ void EditorUI::drawContentBrowser()
             ImGui::Button(label, ImVec2(ICON_SIZE, ICON_SIZE));
             ImGui::PopStyleColor(2);
 
-            if (kDraggableExt.count(ext) && ImGui::BeginDragDropSource())
+            if (isDir && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+                m_dlgReopenPath = path.string();
+                IGFD::FileDialog::Instance()->Close();
+                m_dlgOpen    = false;
+                m_currentDir = path.string();
+                m_scanned    = false;
+            }
+
+            if (!isDir && kDraggableExt.count(ext) && ImGui::BeginDragDropSource())
             {
                 std::string fullPath = path.string();
                 ImGui::SetDragDropPayload("DT_ASSET_PATH", fullPath.c_str(), fullPath.size() + 1);
