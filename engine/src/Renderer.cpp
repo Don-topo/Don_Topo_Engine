@@ -213,6 +213,7 @@ namespace DonTopo {
         vkFreeMemory(m_gpu.device(), m_shadowMemory, nullptr);
         vkDestroyFramebuffer(m_gpu.device(), m_shadowFramebuffer, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedGfxPipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_skinnedWireframePipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_shadowPipeline, nullptr);
         vkDestroyPipelineLayout(m_gpu.device(), m_shadowPipelineLayout, nullptr);
         vkDestroyRenderPass(m_gpu.device(), m_shadowRenderPass, nullptr);
@@ -1718,8 +1719,33 @@ namespace DonTopo {
             if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &pci, nullptr, &m_skinnedGfxPipeline) != VK_SUCCESS)
                 throw std::runtime_error("failed to create skinned graphics pipeline!");
 
+            // Pipeline wireframe skinned: mismo vertex input/layout que el
+            // gfx pipeline de arriba, solo cambia polygonMode a LINE y el
+            // fragment shader a color plano.
+            auto wireFragCode = loadShaderFile("shaders/wireframe.frag.spv");
+            auto wireFragMod  = createShaderModule(wireFragCode);
+
+            VkPipelineShaderStageCreateInfo wireFragStage{};
+            wireFragStage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            wireFragStage.stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            wireFragStage.module = wireFragMod;
+            wireFragStage.pName  = "main";
+
+            VkPipelineShaderStageCreateInfo wireStages[] = { stages[0], wireFragStage };
+
+            VkPipelineRasterizationStateCreateInfo wireRs = rs;
+            wireRs.polygonMode = VK_POLYGON_MODE_LINE;
+
+            VkGraphicsPipelineCreateInfo wirePci = pci;
+            wirePci.pStages             = wireStages;
+            wirePci.pRasterizationState = &wireRs;
+
+            if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &wirePci, nullptr, &m_skinnedWireframePipeline) != VK_SUCCESS)
+                throw std::runtime_error("failed to create skinned wireframe pipeline!");
+
             vkDestroyShaderModule(m_gpu.device(), vertMod, nullptr);
             vkDestroyShaderModule(m_gpu.device(), fragMod, nullptr);
+            vkDestroyShaderModule(m_gpu.device(), wireFragMod, nullptr);
         }
     }
 

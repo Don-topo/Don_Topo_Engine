@@ -265,7 +265,8 @@ namespace DonTopo {
             VkPipeline            m_boneEvalPipeline      = VK_NULL_HANDLE;
             VkPipeline            m_boneHierarchyPipeline = VK_NULL_HANDLE;
             VkPipeline            m_skinningPipeline      = VK_NULL_HANDLE;
-            VkPipeline            m_skinnedGfxPipeline    = VK_NULL_HANDLE;
+            VkPipeline            m_skinnedGfxPipeline        = VK_NULL_HANDLE;
+            VkPipeline            m_skinnedWireframePipeline  = VK_NULL_HANDLE;
             VkPipelineLayout      m_computePipelineLayout = VK_NULL_HANDLE;
             VkDescriptorSetLayout m_computeDescLayout     = VK_NULL_HANDLE;
             VkDescriptorPool      m_computeDescPool       = VK_NULL_HANDLE;
