@@ -96,7 +96,18 @@ private:
     // AudioManager, o m_selected ya tiene AudioClip. Extensión no soportada o
     // fallo de FMOD escriben m_audioLoadError sin modificar m_selected.
     void loadAudioClipForSelected(const std::string& path);
-    void drawContentBrowser();
+    void drawContentBrowser(GameObject* sceneRoot);
+    // Arma el popup modal "Rename Asset" precargado con el nombre actual de
+    // path (stem si es fichero, nombre completo si es carpeta).
+    void beginAssetRename(const std::filesystem::path& path, bool isDir);
+    // Recorre sceneRoot actualizando Mesh::sourcePath, los 3 paths de
+    // Material y AudioClipComponent::getPath() que matcheen oldPath (exacto
+    // si !isDir, por prefijo si isDir) al nuevo valor tras un rename en
+    // disco ya realizado.
+    void updateSceneReferencesForRename(GameObject* sceneRoot,
+                                         const std::filesystem::path& oldPath,
+                                         const std::filesystem::path& newPath,
+                                         bool isDir);
 
     // Viewport
     bool m_viewportHovered = false;
@@ -116,6 +127,14 @@ private:
     // asignarlo de nuevo antes de poner m_dlgOpen = false.
     std::string m_dlgReopenPath;
     std::vector<std::filesystem::path> m_assets;
+
+    // Asset rename — popup modal disparado por right-click > Rename en el
+    // grid derecho del Content Browser.
+    std::filesystem::path m_assetRenameTarget;
+    bool                   m_assetRenameIsDir = false;
+    char                   m_assetRenameBuffer[128] = {};
+    std::string            m_assetRenameError;
+    bool                   m_openAssetRenamePopup = false;
     // Instancia propia de ImGuiFileDialog para "Add > Mesh", separada del
     // singleton IGFD::FileDialog::Instance() que usa Content Browser: la
     // librería documenta que Instance() no soporta 2 diálogos concurrentes

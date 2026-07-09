@@ -100,6 +100,60 @@ void moveGameObject(DonTopo::GameObject* dragged, DonTopo::GameObject* target)
     destParent->children.insert(destParent->children.begin() + destIndex, std::move(moved));
 }
 
+// Compara dos paths de forma robusta a mayúsc/minúsc (Windows es
+// case-insensitive pero std::filesystem::path::operator== no lo es) y a
+// formato relativo/absoluto (weakly_canonical antes de comparar).
+bool samePath(const std::filesystem::path& a, const std::filesystem::path& b)
+{
+    std::error_code ecA, ecB;
+    std::filesystem::path ca = std::filesystem::weakly_canonical(a, ecA);
+    std::filesystem::path cb = std::filesystem::weakly_canonical(b, ecB);
+    std::string sa = (ecA ? a : ca).string();
+    std::string sb = (ecB ? b : cb).string();
+    std::transform(sa.begin(), sa.end(), sa.begin(), ::tolower);
+    std::transform(sb.begin(), sb.end(), sb.begin(), ::tolower);
+    return sa == sb;
+}
+
+// true si p está estrictamente dentro de dir (p == dir cuenta como false).
+bool pathUnderDir(const std::filesystem::path& p, const std::filesystem::path& dir)
+{
+    std::error_code ecP, ecD;
+    std::filesystem::path cp = std::filesystem::weakly_canonical(p, ecP);
+    std::filesystem::path cd = std::filesystem::weakly_canonical(dir, ecD);
+    std::string sp = (ecP ? p : cp).string();
+    std::string sd = (ecD ? dir : cd).string();
+    std::transform(sp.begin(), sp.end(), sp.begin(), ::tolower);
+    std::transform(sd.begin(), sd.end(), sd.begin(), ::tolower);
+    if (sp.size() <= sd.size() || sp.compare(0, sd.size(), sd) != 0)
+        return false;
+    char sep = sp[sd.size()];
+    return sep == '\\' || sep == '/';
+}
+
+// Sustituye el prefijo oldDir por newDir en original. Asume que
+// pathUnderDir(original, oldDir) ya dio true.
+std::string replacePathPrefix(const std::string& original,
+                               const std::filesystem::path& oldDir,
+                               const std::filesystem::path& newDir)
+{
+    std::string oldStr = oldDir.string();
+    return newDir.string() + original.substr(oldStr.size());
+}
+
+// Nombre de fichero/carpeta válido: no vacío tras trim, sin separadores de
+// path ni caracteres reservados de Windows.
+bool isValidFileName(const std::string& name)
+{
+    if (name.empty())
+        return false;
+    static const std::string kReserved = "\\/:*?\"<>|";
+    for (char c : name)
+        if (kReserved.find(c) != std::string::npos)
+            return false;
+    return true;
+}
+
 } // namespace
 
 namespace DonTopo {
@@ -122,7 +176,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     drawProperties();
     drawMeshDialog();
     drawAudioClipDialog();
-    drawContentBrowser();
+    drawContentBrowser(sceneRoot);
 }
 
 void EditorUI::drawToolbar()
@@ -310,6 +364,55 @@ void EditorUI::beginRename(GameObject* node)
     std::strncpy(m_renameBuffer, current.c_str(), sizeof(m_renameBuffer) - 1);
     m_renameBuffer[sizeof(m_renameBuffer) - 1] = '\0';
     m_openRenamePopup = true;
+}
+
+void EditorUI::beginAssetRename(const std::filesystem::path& path, bool isDir)
+{
+    m_assetRenameTarget = path;
+    m_assetRenameIsDir  = isDir;
+    m_assetRenameError.clear();
+    std::string prefill = isDir ? path.filename().string() : path.stem().string();
+    std::strncpy(m_assetRenameBuffer, prefill.c_str(), sizeof(m_assetRenameBuffer) - 1);
+    m_assetRenameBuffer[sizeof(m_assetRenameBuffer) - 1] = '\0';
+    m_openAssetRenamePopup = true;
+}
+
+void EditorUI::updateSceneReferencesForRename(GameObject* sceneRoot,
+                                               const std::filesystem::path& oldPath,
+                                               const std::filesystem::path& newPath,
+                                               bool isDir)
+{
+    if (!sceneRoot) return;
+
+    sceneRoot->traverse([&](GameObject* go)
+    {
+        auto updateField = [&](std::string& field)
+        {
+            if (field.empty()) return;
+            bool matches = isDir ? pathUnderDir(field, oldPath) : samePath(field, oldPath);
+            if (matches)
+                field = isDir ? replacePathPrefix(field, oldPath, newPath) : newPath.string();
+        };
+
+        if (go->hasMesh())
+        {
+            Mesh* mesh = go->getMesh().get();
+            updateField(mesh->sourcePath);
+            updateField(mesh->material.texturePath);
+            updateField(mesh->material.normalMapPath);
+            updateField(mesh->material.metallicRoughnessPath);
+        }
+        if (go->hasAudioClip())
+        {
+            std::string audioPath = go->getAudioClip()->getPath();
+            bool matches = isDir ? pathUnderDir(audioPath, oldPath) : samePath(audioPath, oldPath);
+            if (matches)
+            {
+                std::string newAudioPath = isDir ? replacePathPrefix(audioPath, oldPath, newPath) : newPath.string();
+                go->getAudioClip()->setPath(newAudioPath);
+            }
+        }
+    });
 }
 
 void EditorUI::createBasicShape(GameObject* parent, const std::string& name, std::shared_ptr<Mesh> mesh)
@@ -1269,7 +1372,7 @@ void EditorUI::drawAddComponentButton()
     }
 }
 
-void EditorUI::drawContentBrowser()
+void EditorUI::drawContentBrowser(GameObject* sceneRoot)
 {
     ImGui::Begin("Content Browser");
     float totalWidth  = ImGui::GetContentRegionAvail().x;
@@ -1399,6 +1502,13 @@ void EditorUI::drawContentBrowser()
                 ImGui::EndDragDropSource();
             }
 
+            if (ImGui::BeginPopupContextItem())
+            {
+                if (ImGui::MenuItem("Rename"))
+                    beginAssetRename(path, isDir);
+                ImGui::EndPopup();
+            }
+
             std::string fname = path.filename().string();
             if (fname.size() > 11) fname = fname.substr(0, 10) + "..";
             ImGui::TextUnformatted(fname.c_str());
@@ -1407,6 +1517,75 @@ void EditorUI::drawContentBrowser()
             ImGui::PopID();
         }
         ImGui::Columns(1);
+
+        if (m_openAssetRenamePopup)
+        {
+            ImGui::OpenPopup("Rename Asset");
+            m_openAssetRenamePopup = false;
+        }
+        if (ImGui::BeginPopupModal("Rename Asset", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            if (ImGui::IsWindowAppearing())
+                ImGui::SetKeyboardFocusHere();
+
+            bool enterPressed = ImGui::InputText("##assetRenameInput", m_assetRenameBuffer,
+                                                  sizeof(m_assetRenameBuffer),
+                                                  ImGuiInputTextFlags_EnterReturnsTrue);
+            if (!m_assetRenameIsDir)
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", m_assetRenameTarget.extension().string().c_str());
+            }
+            if (!m_assetRenameError.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_assetRenameError.c_str());
+            ImGui::Separator();
+            bool accept = ImGui::Button("Accept") || enterPressed;
+            ImGui::SameLine();
+            bool cancel = ImGui::Button("Cancel");
+
+            if (accept)
+            {
+                std::string newStem = trim(m_assetRenameBuffer);
+                if (!isValidFileName(newStem))
+                {
+                    m_assetRenameError = "Nombre invalido";
+                }
+                else
+                {
+                    std::string newName = m_assetRenameIsDir
+                        ? newStem
+                        : (newStem + m_assetRenameTarget.extension().string());
+                    std::filesystem::path newPath = m_assetRenameTarget.parent_path() / newName;
+                    std::error_code existsEc;
+                    if (!samePath(newPath, m_assetRenameTarget) && std::filesystem::exists(newPath, existsEc))
+                    {
+                        m_assetRenameError = "Ya existe un fichero/carpeta con ese nombre";
+                    }
+                    else
+                    {
+                        std::error_code renameEc;
+                        std::filesystem::rename(m_assetRenameTarget, newPath, renameEc);
+                        if (renameEc)
+                        {
+                            m_assetRenameError = renameEc.message();
+                        }
+                        else
+                        {
+                            updateSceneReferencesForRename(sceneRoot, m_assetRenameTarget, newPath, m_assetRenameIsDir);
+                            m_scanned       = false;
+                            m_dlgReopenPath = m_currentDir;
+                            m_dlgOpen       = false;
+                            ImGui::CloseCurrentPopup();
+                        }
+                    }
+                }
+            }
+            else if (cancel)
+            {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
     }
     ImGui::EndChild();
     ImGui::End();
