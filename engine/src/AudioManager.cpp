@@ -1,4 +1,5 @@
 #include "DonTopo/AudioManager.h"
+#include "DonTopo/AudioClipComponent.h"
 
 #ifdef DT_FMOD_ENABLED
 #include <fmod.hpp>
@@ -66,17 +67,29 @@ void AudioManager::shutdown()
 #endif
 }
 
-int AudioManager::loadSound(const std::string& path, bool is3D)
+int AudioManager::loadSound(const std::string& path, bool is3D, bool loop)
 {
 #ifdef DT_FMOD_ENABLED
     if (!m_system) return -1;
-    FMOD_MODE mode = is3D ? (FMOD_3D | FMOD_LOOP_OFF) : (FMOD_2D | FMOD_LOOP_OFF);
+    FMOD_MODE mode = (is3D ? FMOD_3D : FMOD_2D) | (loop ? FMOD_LOOP_NORMAL : FMOD_LOOP_OFF);
     FMOD::Sound* snd;
     if (SYS->createSound(path.c_str(), mode, nullptr, &snd) != FMOD_OK) return -1;
     m_sounds.push_back(snd);
+    m_sfxChannels.push_back(nullptr);
     return (int)m_sounds.size() - 1;
 #else
+    (void)loop;
     return -1;
+#endif
+}
+
+void AudioManager::unloadSound(int id)
+{
+#ifdef DT_FMOD_ENABLED
+    if (!m_system || id < 0 || id >= (int)m_sounds.size() || !m_sounds[id]) return;
+    reinterpret_cast<FMOD::Sound*>(m_sounds[id])->release();
+    m_sounds[id] = nullptr;
+    m_sfxChannels[id] = nullptr;
 #endif
 }
 
@@ -97,16 +110,25 @@ int AudioManager::loadBGM(const std::string& path)
 void AudioManager::playSound(int id, const glm::vec3& worldPos)
 {
 #ifdef DT_FMOD_ENABLED
-    if (!m_system || id < 0 || id >= (int)m_sounds.size()) return;
+    if (!m_system || id < 0 || id >= (int)m_sounds.size() || !m_sounds[id]) return;
     FMOD::Channel* ch;
     auto* snd = reinterpret_cast<FMOD::Sound*>(m_sounds[id]);
     if (SYS->playSound(snd, SFXG, false, &ch) != FMOD_OK) return;
+    m_sfxChannels[id] = ch;
     FMOD_MODE mode; snd->getMode(&mode);
     if (mode & FMOD_3D) {
         FMOD_VECTOR p = { worldPos.x, worldPos.y, worldPos.z };
         FMOD_VECTOR v = { 0, 0, 0 };
         ch->set3DAttributes(&p, &v);
     }
+#endif
+}
+
+void AudioManager::stopSound(int id)
+{
+#ifdef DT_FMOD_ENABLED
+    if (id < 0 || id >= (int)m_sfxChannels.size() || !m_sfxChannels[id]) return;
+    reinterpret_cast<FMOD::Channel*>(m_sfxChannels[id])->stop();
 #endif
 }
 
@@ -157,6 +179,13 @@ void AudioManager::setBgmVolume(float v)
 #ifdef DT_FMOD_ENABLED
     if (BGMG) BGMG->setVolume(v);
 #endif
+}
+
+std::shared_ptr<AudioClipComponent> AudioManager::createAudioClipComponent(const std::string& path, bool is3D, bool loop)
+{
+    int id = loadSound(path, is3D, loop);
+    if (id < 0) return nullptr;
+    return std::make_shared<AudioClipComponent>(this, path, id, is3D, loop);
 }
 
 } // namespace DonTopo

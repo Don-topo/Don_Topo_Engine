@@ -9,6 +9,7 @@
 #include "DonTopo/SphereCollider.h"
 #include "DonTopo/CapsuleCollider.h"
 #include "DonTopo/PlaneCollider.h"
+#include "DonTopo/AudioClipComponent.h"
 
 namespace DonTopo
 {
@@ -49,6 +50,10 @@ namespace DonTopo
                 return m_boxCollider || m_sphereCollider || m_capsuleCollider || m_planeCollider;
             }
 
+            void setAudioClip(std::shared_ptr<AudioClipComponent> clip) { m_audioClip = std::move(clip); }
+            const std::shared_ptr<AudioClipComponent>& getAudioClip() const { return m_audioClip; }
+            bool hasAudioClip() const { return m_audioClip != nullptr; }
+
             void updateWorldTransforms(const glm::mat4& parentWorld = glm::mat4(1.0f));
 
             template <typename Fn>
@@ -75,5 +80,6 @@ namespace DonTopo
             std::shared_ptr<SphereCollider> m_sphereCollider;
             std::shared_ptr<CapsuleCollider> m_capsuleCollider;
             std::shared_ptr<PlaneCollider> m_planeCollider;
+            std::shared_ptr<AudioClipComponent> m_audioClip;
     };
 }
