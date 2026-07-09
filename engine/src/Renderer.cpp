@@ -595,7 +595,8 @@ namespace DonTopo {
             scissor.extent = m_swapChainExtent;
             vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
 
-            vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+            vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                m_wireframeMode ? m_wireframePipeline : m_pipeline);
             for (auto& obj : m_objects)
             {
                 if (obj.vertexBuffer == VK_NULL_HANDLE) continue; // borrado desde el editor
@@ -617,8 +618,8 @@ namespace DonTopo {
 
             if (!m_skinnedObjects.empty())
             {
-                vkCmdBindPipeline(m_commandBuffers[m_currentFrame],
-                    VK_PIPELINE_BIND_POINT_GRAPHICS, m_skinnedGfxPipeline);
+                vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    m_wireframeMode ? m_skinnedWireframePipeline : m_skinnedGfxPipeline);
 
                 for (auto& sobj : m_skinnedObjects)
                 {
@@ -655,8 +656,9 @@ namespace DonTopo {
                 m_cameraDistance * 0.001f, m_cameraDistance * 3.0f);
             proj[1][1] *= -1.0f;
 
-            // Skybox — fullscreen quad, depth LEQUAL sin escritura (al final del pass)
-            if (m_skybox.isInitialized()) {
+            // Skybox — fullscreen quad, depth LEQUAL sin escritura (al final del pass).
+            // Omitido en wireframe: el fondo ya es negro sólido (clearValue por defecto).
+            if (!m_wireframeMode && m_skybox.isInitialized()) {
                 glm::mat4 rotView    = glm::mat4(glm::mat3(m_viewMatrix)); // sin traslación
                 glm::mat4 invViewProj = glm::inverse(proj * rotView);
                 m_skybox.draw(m_commandBuffers[m_currentFrame], invViewProj);

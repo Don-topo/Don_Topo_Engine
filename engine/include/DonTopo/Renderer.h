@@ -32,6 +32,8 @@ namespace DonTopo {
             void shutdown();
             void setCamera(const Camera& camera);
             void notifyResize() { m_framebufferResized = true; }
+            void setWireframeMode(bool enabled) { m_wireframeMode = enabled; }
+            bool isWireframeMode() const { return m_wireframeMode; }
             bool isViewportHovered() const { return m_editorUI.isViewportHovered(); }
             // Reenvía al axis gizmo del viewport; cb recibe el eje mundo clicado.
             void setOnAxisSelected(std::function<void(const glm::vec3&)> cb) { m_editorUI.setOnAxisSelected(std::move(cb)); }
@@ -237,6 +239,7 @@ namespace DonTopo {
             VkPipeline                      m_pipeline                          = VK_NULL_HANDLE;
             VkPipeline                      m_wireframePipeline                 = VK_NULL_HANDLE;
             bool                            m_framebufferResized                = false;
+            bool                            m_wireframeMode                     = false;
             VkDescriptorSetLayout           m_descriptorSetLayout               = VK_NULL_HANDLE;
             VkBuffer                        m_uniformBuffers[MAX_FRAMES]        = {};
             VkDeviceMemory                  m_uniformBuffersMemory[MAX_FRAMES]  = {};
