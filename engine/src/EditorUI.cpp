@@ -1276,12 +1276,15 @@ void EditorUI::drawContentBrowser()
     float totalHeight = ImGui::GetContentRegionAvail().y;
     float leftWidth   = totalWidth * 0.38f;
 
+    if (m_projectRoot.empty())
+        m_projectRoot = std::filesystem::canonical(std::filesystem::current_path());
+
     // Left: ImGuiFileDialog embedded
     ImGui::BeginChild("##FileDlgPane", ImVec2(leftWidth, totalHeight), false);
     {
         if (!m_dlgOpen) {
             IGFD::FileDialogConfig cfg;
-            cfg.path  = "assets";
+            cfg.path  = m_projectRoot.string();
             cfg.flags = ImGuiFileDialogFlags_NoDialog |
                         ImGuiFileDialogFlags_DontShowHiddenFiles |
                         ImGuiFileDialogFlags_HideColumnType |
@@ -1289,7 +1292,7 @@ void EditorUI::drawContentBrowser()
                         ImGuiFileDialogFlags_DisableThumbnailMode |
                         ImGuiFileDialogFlags_DisablePlaceMode;
             IGFD::FileDialog::Instance()->OpenDialog(
-                "##ContentDlg", "Files", nullptr, cfg);
+                "##ContentDlg", "Files", ".*", cfg);
             m_dlgOpen = true;
         }
         ImVec2 dlgSize = ImGui::GetContentRegionAvail();
@@ -1298,6 +1301,22 @@ void EditorUI::drawContentBrowser()
         {
             IGFD::FileDialog::Instance()->Close();
             m_dlgOpen = false;
+        }
+
+        // Clamp: si el usuario navegó por encima de la raíz (".." o
+        // breadcrumb), reabrir el diálogo anclado en m_projectRoot.
+        if (m_dlgOpen) {
+            std::error_code ec;
+            std::string     rawPath = IGFD::FileDialog::Instance()->GetCurrentPath();
+            std::filesystem::path canon =
+                std::filesystem::weakly_canonical(std::filesystem::path(rawPath), ec);
+            bool insideRoot = !ec && std::mismatch(m_projectRoot.begin(), m_projectRoot.end(),
+                                                    canon.begin(), canon.end())
+                                          .first == m_projectRoot.end();
+            if (!insideRoot) {
+                IGFD::FileDialog::Instance()->Close();
+                m_dlgOpen = false;
+            }
         }
     }
     ImGui::EndChild();

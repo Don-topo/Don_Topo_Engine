@@ -107,6 +107,9 @@ private:
     bool m_audioDlgOpen = false;
     bool m_scanned = false;
     std::string m_currentDir;
+    // Raíz del proyecto (canonicalizada una vez); el Content Browser no deja
+    // navegar por encima de este path (ni vía ".." ni vía breadcrumb).
+    std::filesystem::path m_projectRoot;
     std::vector<std::filesystem::path> m_assets;
     // Instancia propia de ImGuiFileDialog para "Add > Mesh", separada del
     // singleton IGFD::FileDialog::Instance() que usa Content Browser: la
