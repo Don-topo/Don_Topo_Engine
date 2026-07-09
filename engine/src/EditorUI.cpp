@@ -434,7 +434,11 @@ int EditorUI::countSceneReferences(GameObject* sceneRoot, const std::filesystem:
             return isDir ? pathUnderDir(field, path) : samePath(field, path);
         };
 
-        bool meshMatches  = go->hasMesh() && matches(go->getMesh()->sourcePath);
+        bool meshMatches = go->hasMesh() &&
+            (matches(go->getMesh()->sourcePath) ||
+             matches(go->getMesh()->material.texturePath) ||
+             matches(go->getMesh()->material.normalMapPath) ||
+             matches(go->getMesh()->material.metallicRoughnessPath));
         bool audioMatches = go->hasAudioClip() && matches(go->getAudioClip()->getPath());
         if (meshMatches || audioMatches)
             ++count;
