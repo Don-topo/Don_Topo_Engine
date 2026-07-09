@@ -484,6 +484,31 @@ void EditorUI::drawSelectionGizmo()
     if (!m_selected)
         return;
     Gizmos::drawAxes(m_selected->worldTransform, selectionAxisScale(m_selected));
+
+    const glm::vec3 kColliderColor(1.0f, 1.0f, 0.0f);
+    if (m_selected->hasBoxCollider())
+    {
+        BoxCollider* bc = m_selected->getBoxCollider().get();
+        Gizmos::drawWireBox(m_selected->worldTransform, bc->getCenter(),
+                             bc->getHalfExtents(), kColliderColor);
+    }
+    else if (m_selected->hasSphereCollider())
+    {
+        SphereCollider* sc = m_selected->getSphereCollider().get();
+        Gizmos::drawWireSphere(m_selected->worldTransform, sc->getCenter(),
+                                sc->getRadius(), kColliderColor);
+    }
+    else if (m_selected->hasCapsuleCollider())
+    {
+        CapsuleCollider* cc = m_selected->getCapsuleCollider().get();
+        Gizmos::drawWireCapsule(m_selected->worldTransform, cc->getCenter(),
+                                 cc->getRadius(), cc->getHalfHeight(), kColliderColor);
+    }
+    else if (m_selected->hasPlaneCollider())
+    {
+        PlaneCollider* pc = m_selected->getPlaneCollider().get();
+        Gizmos::drawWirePlane(m_selected->worldTransform, pc->getCenter(), kColliderColor);
+    }
 }
 
 void EditorUI::drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& cameraView)

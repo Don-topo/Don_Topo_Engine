@@ -289,19 +289,20 @@ void Gizmos::addBoxEdges(const std::array<glm::vec3, 8>& corners, const glm::vec
         addLine(corners[e[0]], corners[e[1]], color);
 }
 
-void Gizmos::drawWireBox(const glm::mat4& transform, const glm::vec3& halfExtents, const glm::vec3& color)
+void Gizmos::drawWireBox(const glm::mat4& transform, const glm::vec3& center,
+                          const glm::vec3& halfExtents, const glm::vec3& color)
 {
     if (!get().m_enabled) return;
     glm::vec3 h = halfExtents;
     std::array<glm::vec3, 8> local = {
-        glm::vec3(-h.x, -h.y, -h.z),
-        glm::vec3( h.x, -h.y, -h.z),
-        glm::vec3( h.x,  h.y, -h.z),
-        glm::vec3(-h.x,  h.y, -h.z),
-        glm::vec3(-h.x, -h.y,  h.z),
-        glm::vec3( h.x, -h.y,  h.z),
-        glm::vec3( h.x,  h.y,  h.z),
-        glm::vec3(-h.x,  h.y,  h.z),
+        center + glm::vec3(-h.x, -h.y, -h.z),
+        center + glm::vec3( h.x, -h.y, -h.z),
+        center + glm::vec3( h.x,  h.y, -h.z),
+        center + glm::vec3(-h.x,  h.y, -h.z),
+        center + glm::vec3(-h.x, -h.y,  h.z),
+        center + glm::vec3( h.x, -h.y,  h.z),
+        center + glm::vec3( h.x,  h.y,  h.z),
+        center + glm::vec3(-h.x,  h.y,  h.z),
     };
     std::array<glm::vec3, 8> corners;
     for (int i = 0; i < 8; i++)
@@ -395,6 +396,29 @@ void Gizmos::drawWireCapsule(const glm::mat4& transform, const glm::vec3& center
         glm::vec3 a = glm::vec3(transform * glm::vec4(top + off, 1.0f));
         glm::vec3 b = glm::vec3(transform * glm::vec4(bottom + off, 1.0f));
         get().addLine(a, b, color);
+    }
+}
+
+void Gizmos::drawWirePlane(const glm::mat4& transform, const glm::vec3& center, const glm::vec3& color)
+{
+    if (!get().m_enabled) return;
+    constexpr float kHalfSize   = 5.0f;
+    constexpr int   kDivisions  = 10;
+    constexpr float kStep       = (kHalfSize * 2.0f) / (float)kDivisions;
+
+    for (int i = 0; i <= kDivisions; i++)
+    {
+        float offset = -kHalfSize + kStep * (float)i;
+
+        glm::vec3 aX = center + glm::vec3(offset, 0.0f, -kHalfSize);
+        glm::vec3 bX = center + glm::vec3(offset, 0.0f,  kHalfSize);
+        get().addLine(glm::vec3(transform * glm::vec4(aX, 1.0f)),
+                      glm::vec3(transform * glm::vec4(bX, 1.0f)), color);
+
+        glm::vec3 aZ = center + glm::vec3(-kHalfSize, 0.0f, offset);
+        glm::vec3 bZ = center + glm::vec3( kHalfSize, 0.0f, offset);
+        get().addLine(glm::vec3(transform * glm::vec4(aZ, 1.0f)),
+                      glm::vec3(transform * glm::vec4(bZ, 1.0f)), color);
     }
 }
 

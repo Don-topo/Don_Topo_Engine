@@ -29,8 +29,10 @@ public:
                          float length, const glm::vec3& color);
     static void drawVector(const glm::vec3& origin, const glm::vec3& v,
                             const glm::vec3& color, float headSize = 0.1f);
-    static void drawWireBox(const glm::mat4& transform, const glm::vec3& halfExtents,
-                            const glm::vec3& color);
+    static void drawWireBox(const glm::mat4& transform, const glm::vec3& center,
+                            const glm::vec3& halfExtents, const glm::vec3& color);
+    static void drawWirePlane(const glm::mat4& transform, const glm::vec3& center,
+                              const glm::vec3& color);
     static void drawWireSphere(const glm::mat4& transform, const glm::vec3& center,
                                float radius, const glm::vec3& color);
     static void drawWireCapsule(const glm::mat4& transform, const glm::vec3& center,
