@@ -466,11 +466,23 @@ void EditorUI::detachSceneReferencesForDelete(GameObject* sceneRoot, const std::
                 if (m_renderer)
                     m_renderer->removeMeshComponent(go);
             }
-            else
+            else if (m_renderer && go->staticRenderIndex >= 0)
             {
-                if (matches(mesh->material.texturePath))            mesh->material.texturePath.clear();
-                if (matches(mesh->material.normalMapPath))           mesh->material.normalMapPath.clear();
-                if (matches(mesh->material.metallicRoughnessPath))   mesh->material.metallicRoughnessPath.clear();
+                if (matches(mesh->material.texturePath))
+                {
+                    mesh->material.texturePath.clear();
+                    m_renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, Renderer::TextureSlot::Diffuse);
+                }
+                if (matches(mesh->material.normalMapPath))
+                {
+                    mesh->material.normalMapPath.clear();
+                    m_renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, Renderer::TextureSlot::Normal);
+                }
+                if (matches(mesh->material.metallicRoughnessPath))
+                {
+                    mesh->material.metallicRoughnessPath.clear();
+                    m_renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, Renderer::TextureSlot::MetallicRoughness);
+                }
             }
         }
         if (go->hasAudioClip() && matches(go->getAudioClip()->getPath()))

@@ -2104,6 +2104,75 @@ namespace DonTopo {
         go->setMesh(nullptr);
     }
 
+    void Renderer::replaceStaticTextureWithMissing(int renderIndex, TextureSlot slot)
+    {
+        if (renderIndex < 0 || renderIndex >= (int)m_objects.size()) return;
+        RenderObject& obj = m_objects[renderIndex];
+
+        // Evita tocar un descriptor set que un command buffer en vuelo
+        // (double buffering) pudiera seguir referenciando.
+        vkDeviceWaitIdle(m_gpu.device());
+
+        VkImage*        img     = nullptr;
+        VkDeviceMemory* mem     = nullptr;
+        VkImageView*    view    = nullptr;
+        VkSampler*      sampler = nullptr;
+        uint32_t        binding = 1;
+
+        switch (slot)
+        {
+            case TextureSlot::Diffuse:
+                img = &obj.textureImage; mem = &obj.textureMem; view = &obj.textureView; sampler = &obj.sampler;
+                binding = 1;
+                break;
+            case TextureSlot::Normal:
+                img = &obj.normalImage; mem = &obj.normalMem; view = &obj.normalView; sampler = &obj.normalSampler;
+                binding = 2;
+                break;
+            case TextureSlot::MetallicRoughness:
+                img = &obj.ormImage; mem = &obj.ormMem; view = &obj.ormView; sampler = &obj.ormSampler;
+                binding = 4;
+                break;
+        }
+
+        vkDestroySampler(m_gpu.device(),   *sampler, nullptr);
+        vkDestroyImageView(m_gpu.device(), *view,    nullptr);
+        vkDestroyImage(m_gpu.device(),     *img,     nullptr);
+        vkFreeMemory(m_gpu.device(),       *mem,     nullptr);
+
+        // path vacío + sin bytes embebidos = createTextureImage genera el
+        // checkerboard "missing" de fallback (mismo camino que un modelo
+        // cargado sin textura). createTextureImage crea la VkImage con
+        // formato VK_FORMAT_R8G8B8A8_SRGB (hardcoded) para todos los slots;
+        // por eso la image view se crea también en SRGB (formato por
+        // defecto de createTextureImageView) para los tres slots, aunque
+        // Normal/MetallicRoughness normalmente usen UNORM — la imagen no se
+        // crea con VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, así que la view debe
+        // usar el mismo formato exacto con el que se creó la imagen o la
+        // validation layer dispara VUID-VkImageViewCreateInfo-image-01762.
+        m_res.createTextureImage("", {}, *img, *mem);
+        m_res.createTextureImageView(*img, *view);
+        m_res.createTextureSampler(*sampler);
+
+        for (int i = 0; i < MAX_FRAMES; i++)
+        {
+            VkDescriptorImageInfo imageInfo{};
+            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imageInfo.imageView   = *view;
+            imageInfo.sampler     = *sampler;
+
+            VkWriteDescriptorSet write{};
+            write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet          = obj.descriptorSets[i];
+            write.dstBinding      = binding;
+            write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.descriptorCount = 1;
+            write.pImageInfo      = &imageInfo;
+
+            vkUpdateDescriptorSets(m_gpu.device(), 1, &write, 0, nullptr);
+        }
+    }
+
     void Renderer::recordComputePass(VkCommandBuffer cmd)
     {
         if (m_skinnedObjects.empty()) return;

@@ -47,6 +47,14 @@ namespace DonTopo {
             // Quita solo el componente Mesh de go (no borra el GameObject ni sus
             // otros componentes). No-op si go es nullptr o no tiene mesh.
             void removeMeshComponent(GameObject* go);
+            enum class TextureSlot { Diffuse, Normal, MetallicRoughness };
+            // Sustituye la textura del slot indicado por el checkerboard
+            // "missing" (mismo generador que createTextureImage usa cuando no
+            // hay path/bytes). No-op si renderIndex está fuera de rango.
+            // Sincroniza con vkDeviceWaitIdle antes de tocar el descriptor
+            // set (evita pisar un frame en vuelo). Solo cubre meshes
+            // estáticos — no hay UI hoy que asigne meshes skinned.
+            void replaceStaticTextureWithMissing(int renderIndex, TextureSlot slot);
             // facePaths: +X, -X, +Y, -Y, +Z, -Z (cualquier formato soportado por stb_image)
             void initSkybox(const std::array<std::string, 6>& facePaths);
             void setTransform(size_t objectIndex, const glm::mat4& transform)
