@@ -57,6 +57,8 @@ public:
     void focusSelected(Camera& camera);
 
 private:
+    static constexpr float kToolbarHeight = 30.0f;
+    void drawToolbar();
     void drawDockSpace();
     void drawScene(GameObject* sceneRoot);
     void drawSceneNode(GameObject* node);

@@ -114,6 +114,7 @@ EditorUI::~EditorUI() = default;
 
 void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView)
 {
+    drawToolbar();
     drawDockSpace();
     drawScene(sceneRoot);
     drawSelectionGizmo();
@@ -124,6 +125,28 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     drawContentBrowser();
 }
 
+void EditorUI::drawToolbar()
+{
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->Pos);
+    ImGui::SetNextWindowSize(ImVec2(vp->Size.x, kToolbarHeight));
+    ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse;
+    ImGui::Begin("##Toolbar", nullptr, flags);
+
+    bool wireframe = m_renderer && m_renderer->isWireframeMode();
+    if (wireframe)
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    if (ImGui::Button("Wireframe") && m_renderer)
+        m_renderer->setWireframeMode(!wireframe);
+    if (wireframe)
+        ImGui::PopStyleColor();
+
+    ImGui::End();
+}
+
 void EditorUI::drawDockSpace()
 {
     ImGuiWindowFlags dockFlags =
@@ -132,8 +155,8 @@ void EditorUI::drawDockSpace()
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
         ImGuiWindowFlags_NoNavFocus;
     ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->Pos);
-    ImGui::SetNextWindowSize(vp->Size);
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x, vp->Pos.y + kToolbarHeight));
+    ImGui::SetNextWindowSize(ImVec2(vp->Size.x, vp->Size.y - kToolbarHeight));
     ImGui::SetNextWindowViewport(vp->ID);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
