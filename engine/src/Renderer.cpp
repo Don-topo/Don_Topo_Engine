@@ -185,6 +185,7 @@ namespace DonTopo {
             vkDestroyFramebuffer(m_gpu.device(), framebuffer, nullptr);
         }
         vkDestroyPipeline(m_gpu.device(), m_pipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_wireframePipeline, nullptr);
         vkDestroyPipelineLayout(m_gpu.device(), m_pipelineLayout, nullptr);
         vkDestroyRenderPass(m_gpu.device(), m_renderPass, nullptr);
         for(VkImageView imageView : m_swapChainImageViews)
@@ -844,9 +845,35 @@ namespace DonTopo {
             throw std::runtime_error("failed to create graphics pipeline!");
         }
 
+        // Pipeline wireframe: mismo vertex input/layout/render pass, solo
+        // cambia polygonMode a LINE y el fragment shader a color plano.
+        auto wireFragCode = loadShaderFile("shaders/wireframe.frag.spv");
+        VkShaderModule wireFragModule = createShaderModule(wireFragCode);
+
+        VkPipelineShaderStageCreateInfo wireFragStage{};
+        wireFragStage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        wireFragStage.stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+        wireFragStage.module = wireFragModule;
+        wireFragStage.pName  = "main";
+
+        VkPipelineShaderStageCreateInfo wireStages[] = { vertStage, wireFragStage };
+
+        VkPipelineRasterizationStateCreateInfo wireRasterizationInfo = rasterizationInfo;
+        wireRasterizationInfo.polygonMode = VK_POLYGON_MODE_LINE;
+
+        VkGraphicsPipelineCreateInfo wirePipelineInfo = pipelineInfo;
+        wirePipelineInfo.pStages             = wireStages;
+        wirePipelineInfo.pRasterizationState = &wireRasterizationInfo;
+
+        if(vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &wirePipelineInfo, nullptr, &m_wireframePipeline) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create wireframe graphics pipeline!");
+        }
+
         // los módulos se destruyen al final de esta función — solo los necesita el pipeline
         vkDestroyShaderModule(m_gpu.device(), vertModule, nullptr);
         vkDestroyShaderModule(m_gpu.device(), fragModule, nullptr);
+        vkDestroyShaderModule(m_gpu.device(), wireFragModule, nullptr);
         printf("pipeline OK\n"); fflush(stdout);
     }
 

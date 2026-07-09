@@ -235,6 +235,7 @@ namespace DonTopo {
             int                             m_currentFrame                      = 0;
             VkPipelineLayout                m_pipelineLayout                    = VK_NULL_HANDLE;
             VkPipeline                      m_pipeline                          = VK_NULL_HANDLE;
+            VkPipeline                      m_wireframePipeline                 = VK_NULL_HANDLE;
             bool                            m_framebufferResized                = false;
             VkDescriptorSetLayout           m_descriptorSetLayout               = VK_NULL_HANDLE;
             VkBuffer                        m_uniformBuffers[MAX_FRAMES]        = {};
