@@ -152,6 +152,7 @@ private:
     bool                   m_assetDeleteIsDir = false;
     int                    m_assetDeleteAffectedCount = 0;
     bool                   m_openAssetDeletePopup = false;
+    std::string            m_assetDeleteError;
     // Instancia propia de ImGuiFileDialog para "Add > Mesh", separada del
     // singleton IGFD::FileDialog::Instance() que usa Content Browser: la
     // librería documenta que Instance() no soporta 2 diálogos concurrentes

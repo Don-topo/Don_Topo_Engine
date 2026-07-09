@@ -497,6 +497,7 @@ void EditorUI::beginAssetDelete(GameObject* sceneRoot, const std::filesystem::pa
     m_assetDeleteTarget         = path;
     m_assetDeleteIsDir          = isDir;
     m_assetDeleteAffectedCount  = countSceneReferences(sceneRoot, path, isDir);
+    m_assetDeleteError.clear();
     m_openAssetDeletePopup      = true;
 }
 
@@ -1685,6 +1686,8 @@ void EditorUI::drawContentBrowser(GameObject* sceneRoot)
             if (m_assetDeleteAffectedCount > 0)
                 ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
                     "%d objeto(s) lo usan y perderan la referencia.", m_assetDeleteAffectedCount);
+            if (!m_assetDeleteError.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_assetDeleteError.c_str());
             ImGui::Separator();
             bool confirm = ImGui::Button("Borrar");
             ImGui::SameLine();
@@ -1692,16 +1695,24 @@ void EditorUI::drawContentBrowser(GameObject* sceneRoot)
 
             if (confirm)
             {
-                detachSceneReferencesForDelete(sceneRoot, m_assetDeleteTarget, m_assetDeleteIsDir);
                 std::error_code removeEc;
                 if (m_assetDeleteIsDir)
                     std::filesystem::remove_all(m_assetDeleteTarget, removeEc);
                 else
                     std::filesystem::remove(m_assetDeleteTarget, removeEc);
-                m_scanned       = false;
-                m_dlgReopenPath = m_currentDir;
-                m_dlgOpen       = false;
-                ImGui::CloseCurrentPopup();
+
+                if (removeEc)
+                {
+                    m_assetDeleteError = removeEc.message();
+                }
+                else
+                {
+                    detachSceneReferencesForDelete(sceneRoot, m_assetDeleteTarget, m_assetDeleteIsDir);
+                    m_scanned       = false;
+                    m_dlgReopenPath = m_currentDir;
+                    m_dlgOpen       = false;
+                    ImGui::CloseCurrentPopup();
+                }
             }
             else if (cancel)
             {
