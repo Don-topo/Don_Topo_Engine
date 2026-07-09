@@ -137,8 +137,14 @@ std::string replacePathPrefix(const std::string& original,
                                const std::filesystem::path& oldDir,
                                const std::filesystem::path& newDir)
 {
-    std::string oldStr = oldDir.string();
-    return newDir.string() + original.substr(oldStr.size());
+    std::error_code ecO, ecD;
+    std::filesystem::path canonOriginal = std::filesystem::weakly_canonical(std::filesystem::path(original), ecO);
+    std::filesystem::path canonOldDir   = std::filesystem::weakly_canonical(oldDir, ecD);
+    std::string canonOriginalStr = ecO ? original      : canonOriginal.string();
+    std::string canonOldDirStr   = ecD ? oldDir.string() : canonOldDir.string();
+    if (canonOriginalStr.size() <= canonOldDirStr.size())
+        return newDir.string(); // defensive: pathUnderDir should already guarantee original is strictly under oldDir
+    return newDir.string() + canonOriginalStr.substr(canonOldDirStr.size());
 }
 
 // Nombre de fichero/carpeta válido: no vacío tras trim, sin separadores de
