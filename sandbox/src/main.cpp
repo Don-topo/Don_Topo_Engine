@@ -281,6 +281,7 @@ int main()
             {
                 if (liveCube->hasBoxCollider())
                     DonTopo::Gizmos::drawWireBox(liveCube->worldTransform,
+                        liveCube->getBoxCollider()->getCenter(),
                         liveCube->getBoxCollider()->getHalfExtents(), glm::vec3(1.0f, 1.0f, 0.0f));
 
                 DonTopo::Gizmos::drawRay(
