@@ -108,6 +108,17 @@ private:
                                          const std::filesystem::path& oldPath,
                                          const std::filesystem::path& newPath,
                                          bool isDir);
+    // Arma el popup modal "Delete Asset", precalculando cuántos GameObjects
+    // referencian path (mesh o audio) para mostrarlo en el texto de aviso.
+    void beginAssetDelete(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir);
+    // Cuenta cuántos GameObjects de sceneRoot referencian path (mesh o
+    // audio; exacto si !isDir, por prefijo si isDir).
+    int countSceneReferences(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir);
+    // Desengancha de la escena cualquier referencia a path antes de
+    // borrarlo de disco: mesh en uso -> Renderer::removeMeshComponent;
+    // audio en uso -> setAudioClip(nullptr); textura de Material en uso ->
+    // limpia el campo de path (Task 5 añade el hot-swap de GPU aquí).
+    void detachSceneReferencesForDelete(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir);
 
     // Viewport
     bool m_viewportHovered = false;
@@ -135,6 +146,12 @@ private:
     char                   m_assetRenameBuffer[128] = {};
     std::string            m_assetRenameError;
     bool                   m_openAssetRenamePopup = false;
+
+    // Asset delete — popup modal disparado por right-click > Delete.
+    std::filesystem::path m_assetDeleteTarget;
+    bool                   m_assetDeleteIsDir = false;
+    int                    m_assetDeleteAffectedCount = 0;
+    bool                   m_openAssetDeletePopup = false;
     // Instancia propia de ImGuiFileDialog para "Add > Mesh", separada del
     // singleton IGFD::FileDialog::Instance() que usa Content Browser: la
     // librería documenta que Instance() no soporta 2 diálogos concurrentes

@@ -421,6 +421,69 @@ void EditorUI::updateSceneReferencesForRename(GameObject* sceneRoot,
     });
 }
 
+int EditorUI::countSceneReferences(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir)
+{
+    if (!sceneRoot) return 0;
+
+    int count = 0;
+    sceneRoot->traverse([&](GameObject* go)
+    {
+        auto matches = [&](const std::string& field)
+        {
+            if (field.empty()) return false;
+            return isDir ? pathUnderDir(field, path) : samePath(field, path);
+        };
+
+        bool meshMatches  = go->hasMesh() && matches(go->getMesh()->sourcePath);
+        bool audioMatches = go->hasAudioClip() && matches(go->getAudioClip()->getPath());
+        if (meshMatches || audioMatches)
+            ++count;
+    });
+    return count;
+}
+
+void EditorUI::detachSceneReferencesForDelete(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir)
+{
+    if (!sceneRoot) return;
+
+    sceneRoot->traverse([&](GameObject* go)
+    {
+        auto matches = [&](const std::string& field)
+        {
+            if (field.empty()) return false;
+            return isDir ? pathUnderDir(field, path) : samePath(field, path);
+        };
+
+        if (go->hasMesh())
+        {
+            Mesh* mesh = go->getMesh().get();
+            if (matches(mesh->sourcePath))
+            {
+                if (m_renderer)
+                    m_renderer->removeMeshComponent(go);
+            }
+            else
+            {
+                if (matches(mesh->material.texturePath))            mesh->material.texturePath.clear();
+                if (matches(mesh->material.normalMapPath))           mesh->material.normalMapPath.clear();
+                if (matches(mesh->material.metallicRoughnessPath))   mesh->material.metallicRoughnessPath.clear();
+            }
+        }
+        if (go->hasAudioClip() && matches(go->getAudioClip()->getPath()))
+        {
+            go->setAudioClip(nullptr);
+        }
+    });
+}
+
+void EditorUI::beginAssetDelete(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir)
+{
+    m_assetDeleteTarget         = path;
+    m_assetDeleteIsDir          = isDir;
+    m_assetDeleteAffectedCount  = countSceneReferences(sceneRoot, path, isDir);
+    m_openAssetDeletePopup      = true;
+}
+
 void EditorUI::createBasicShape(GameObject* parent, const std::string& name, std::shared_ptr<Mesh> mesh)
 {
     if (!parent || !m_renderer || !mesh)
@@ -1512,6 +1575,8 @@ void EditorUI::drawContentBrowser(GameObject* sceneRoot)
             {
                 if (ImGui::MenuItem("Rename"))
                     beginAssetRename(path, isDir);
+                if (ImGui::MenuItem("Delete"))
+                    beginAssetDelete(sceneRoot, path, isDir);
                 ImGui::EndPopup();
             }
 
@@ -1585,6 +1650,42 @@ void EditorUI::drawContentBrowser(GameObject* sceneRoot)
                         }
                     }
                 }
+            }
+            else if (cancel)
+            {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        if (m_openAssetDeletePopup)
+        {
+            ImGui::OpenPopup("Delete Asset");
+            m_openAssetDeletePopup = false;
+        }
+        if (ImGui::BeginPopupModal("Delete Asset", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::Text("Borrar '%s'?", m_assetDeleteTarget.filename().string().c_str());
+            if (m_assetDeleteAffectedCount > 0)
+                ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
+                    "%d objeto(s) lo usan y perderan la referencia.", m_assetDeleteAffectedCount);
+            ImGui::Separator();
+            bool confirm = ImGui::Button("Borrar");
+            ImGui::SameLine();
+            bool cancel = ImGui::Button("Cancelar");
+
+            if (confirm)
+            {
+                detachSceneReferencesForDelete(sceneRoot, m_assetDeleteTarget, m_assetDeleteIsDir);
+                std::error_code removeEc;
+                if (m_assetDeleteIsDir)
+                    std::filesystem::remove_all(m_assetDeleteTarget, removeEc);
+                else
+                    std::filesystem::remove(m_assetDeleteTarget, removeEc);
+                m_scanned       = false;
+                m_dlgReopenPath = m_currentDir;
+                m_dlgOpen       = false;
+                ImGui::CloseCurrentPopup();
             }
             else if (cancel)
             {
