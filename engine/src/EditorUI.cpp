@@ -338,6 +338,7 @@ void EditorUI::loadMeshForSelected(const std::string& path)
     try
     {
         auto mesh = std::make_shared<Mesh>(ModelLoader::load(path));
+        mesh->sourcePath = path;
         m_selected->staticRenderIndex = m_renderer->addStaticMesh(*mesh);
         m_selected->setMesh(std::move(mesh));
         m_meshLoadError.clear();
