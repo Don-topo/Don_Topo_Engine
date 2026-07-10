@@ -302,24 +302,40 @@ namespace DonTopo
             !j.contains("root") || !j["root"].is_object())
             return false;
 
-        shutdown(physics, audio);
-        m_root.children.clear();
-
         const nlohmann::json& rootJson = j["root"];
-        m_root.name = rootJson.value("name", "root");
 
+        // Construye el árbol nuevo en un GameObject temporal, desconectado de
+        // m_root: si nodeFromJson lanza a mitad de un nodo interno malformado,
+        // el temporal se destruye solo al salir de scope (liberando los
+        // colliders/audio ya creados en él — physics/audio siguen vivos) y
+        // m_root queda intacto. Garantiza que una carga fallida nunca deja la
+        // escena a medio reconstruir, no solo en el chequeo de version/root de
+        // arriba sino también ante malformación anidada más abajo en el árbol
+        // (spec: "carga fallida no modifica la escena").
+        GameObject newRoot(rootJson.value("name", "root"));
         try
         {
-            nodeFromJson(rootJson, &m_root, glm::mat4(1.0f), physics, audio);
+            nodeFromJson(rootJson, &newRoot, glm::mat4(1.0f), physics, audio);
         }
         catch (const nlohmann::json::exception&)
         {
-            // Nodo interno malformado (campo requerido ausente/tipo incorrecto):
-            // la escena queda parcialmente reconstruida en vez de crashear. Caso
-            // no cubierto por el spec de forma explícita — se prioriza no-crash
-            // sobre atomicidad total de la carga.
             return false;
         }
+
+        shutdown(physics, audio);
+        m_root = std::move(newRoot);
+        // addChild() (llamado dentro de nodeFromJson vía newRoot.addChild/
+        // node->addChild) apunta el parent de cada hijo directo al objeto
+        // newRoot original — que era una variable local a esta función. Tras
+        // el move-assignment, m_root vive en su propia dirección estable (es
+        // un miembro de Scene), así que hay que re-apuntar el parent de los
+        // hijos directos a &m_root. Los nietos y descendientes más profundos NO
+        // necesitan este arreglo: su parent apunta a su padre inmediato, que
+        // vive en el heap vía unique_ptr y no se mueve de dirección con este
+        // move-assignment.
+        m_root.parent = nullptr;
+        for (auto& child : m_root.children)
+            child->parent = &m_root;
 
         m_root.updateWorldTransforms();
         return true;

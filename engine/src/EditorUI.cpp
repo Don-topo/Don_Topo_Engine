@@ -1453,11 +1453,14 @@ void EditorUI::drawSceneDialog()
         else if (m_scene && m_renderer && m_physics && m_audio)
         {
             // Valida la estructura básica del JSON ANTES de tocar GPU/Scene:
-            // Scene::load hace este mismo chequeo internamente y no muta nada
-            // si falla, pero para entonces ya habríamos liberado los meshes
-            // GPU de la escena actual más abajo. Replicamos el chequeo aquí
-            // para que un fichero corrupto no deje el viewport vacío aunque
-            // Scene::load rechace la carga sin modificar sus datos.
+            // rechaza un fichero top-level corrupto sin tocar nada (fast
+            // path, evita el churn de GPU de abajo). No cubre malformación
+            // anidada (un nodo interno con campos rotos) — para eso,
+            // Scene::load es atómico (construye en un árbol temporal y solo
+            // reemplaza m_root si TODO el parseo tiene éxito), y el bloque
+            // de re-registro de más abajo cubre ambos desenlaces: árbol
+            // nuevo si load tuvo éxito, o el mismo árbol viejo intacto (con
+            // sus índices GPU reseteados) si falló.
             auto parsed = FileManager::readJson(path);
             bool structureOk = parsed.has_value() &&
                                 parsed->contains("version") && (*parsed)["version"].is_number_integer() &&
@@ -1472,18 +1475,36 @@ void EditorUI::drawSceneDialog()
                 return;
             }
 
-            // Libera recursos GPU de la escena actual antes de que
-            // Scene::load la reemplace — Scene::load solo limpia datos/
-            // colliders/audio, no conoce Renderer (ver constraints del plan).
+            // Libera recursos GPU de la escena actual y resetea sus índices
+            // a -1: si Scene::load falla más abajo por malformación anidada,
+            // m_root sigue siendo este mismo árbol (Scene::load es atómico),
+            // y resetear los índices aquí permite que el traverse de
+            // re-registro de abajo lo vuelva a registrar igual que si fuera
+            // el árbol nuevo — sin esto, el árbol viejo quedaría con índices
+            // obsoletos (Renderer::removeGameObject no los resetea) y sin
+            // re-registrar tras un fallo, dejando el viewport vacío pese a
+            // que los datos de Scene no cambiaron.
             for (auto& child : m_scene->getRoot().children)
-                m_renderer->removeGameObject(child.get());
-
-            if (m_scene->load(path, *m_physics, *m_audio))
             {
-                m_scene->traverse([this](GameObject* go) {
-                    if (go->hasMesh() && go->staticRenderIndex < 0)
-                        go->staticRenderIndex = m_renderer->addStaticMesh(*go->getMesh());
+                m_renderer->removeGameObject(child.get());
+                child->traverse([](GameObject* go) {
+                    go->staticRenderIndex = -1;
+                    go->skinnedRenderIndex = -1;
                 });
+            }
+
+            bool loaded = m_scene->load(path, *m_physics, *m_audio);
+            // Se ejecuta tanto si loaded es true (árbol nuevo, índices ya en
+            // -1 por construcción) como si es false (árbol viejo intacto,
+            // índices reseteados justo arriba) — en ambos casos hay que
+            // volver a subir los meshes a GPU.
+            m_scene->traverse([this](GameObject* go) {
+                if (go->hasMesh() && go->staticRenderIndex < 0)
+                    go->staticRenderIndex = m_renderer->addStaticMesh(*go->getMesh());
+            });
+
+            if (loaded)
+            {
                 m_selected = nullptr; // la selección anterior ya no existe
                 m_sceneIOError.clear();
             }
