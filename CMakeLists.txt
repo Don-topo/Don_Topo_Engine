@@ -140,6 +140,15 @@ target_include_directories(imguizmo PUBLIC
 target_link_libraries(imguizmo PUBLIC imgui_backend)
 target_compile_features(imguizmo PUBLIC cxx_std_17)
 
+# nlohmann/json — serialización JSON (Scene save/load)
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
 # PhysX SDK — física (compilado desde fuente, ver cmake/PhysX.cmake)
 include(cmake/PhysX.cmake)
 

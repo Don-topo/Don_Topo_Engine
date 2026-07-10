@@ -1,6 +1,204 @@
 #include "DonTopo/Scene.h"
+#include "DonTopo/PhysicsManager.h"
+#include "DonTopo/AudioManager.h"
+#include "DonTopo/AudioClipComponent.h"
+#include "DonTopo/BoxCollider.h"
+#include "DonTopo/SphereCollider.h"
+#include "DonTopo/CapsuleCollider.h"
+#include "DonTopo/PlaneCollider.h"
+#include "DonTopo/Mesh.h"
+#include "DonTopo/ModelLoader.h"
+#include "DonTopo/Cube.h"
+#include "DonTopo/Sphere.h"
+#include "DonTopo/Plane.h"
+#include "DonTopo/Capsule.h"
+#include "DonTopo/FileManager.h"
 #include <algorithm>
+#include <cctype>
 #include <memory>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtc/type_ptr.hpp>
+
+namespace
+{
+    using DonTopo::GameObject;
+
+    nlohmann::json mat4ToJson(const glm::mat4& m)
+    {
+        auto arr = nlohmann::json::array();
+        const float* p = glm::value_ptr(m);
+        for (int i = 0; i < 16; ++i)
+            arr.push_back(p[i]);
+        return arr;
+    }
+
+    nlohmann::json vec3ToJson(const glm::vec3& v)
+    {
+        return nlohmann::json::array({ v.x, v.y, v.z });
+    }
+
+    nlohmann::json nodeToJson(const GameObject& node)
+    {
+        nlohmann::json j;
+        j["name"] = node.name;
+        j["localTransform"] = mat4ToJson(node.localTransform);
+
+        if (node.hasMesh())
+        {
+            const auto& mesh = node.getMesh();
+            j["mesh"] = { {"sourcePath", mesh->sourcePath}, {"name", mesh->name} };
+        }
+        if (node.hasBoxCollider())
+        {
+            const auto& c = node.getBoxCollider();
+            j["boxCollider"] = { {"halfExtents", vec3ToJson(c->getHalfExtents())},
+                                  {"center", vec3ToJson(c->getCenter())},
+                                  {"useGravity", c->getUseGravity()} };
+        }
+        if (node.hasSphereCollider())
+        {
+            const auto& c = node.getSphereCollider();
+            j["sphereCollider"] = { {"radius", c->getRadius()},
+                                     {"center", vec3ToJson(c->getCenter())},
+                                     {"useGravity", c->getUseGravity()} };
+        }
+        if (node.hasCapsuleCollider())
+        {
+            const auto& c = node.getCapsuleCollider();
+            j["capsuleCollider"] = { {"radius", c->getRadius()},
+                                      {"halfHeight", c->getHalfHeight()},
+                                      {"center", vec3ToJson(c->getCenter())},
+                                      {"useGravity", c->getUseGravity()} };
+        }
+        if (node.hasPlaneCollider())
+        {
+            const auto& c = node.getPlaneCollider();
+            j["planeCollider"] = { {"center", vec3ToJson(c->getCenter())} };
+        }
+        if (node.hasAudioClip())
+        {
+            const auto& clip = node.getAudioClip();
+            j["audioClip"] = { {"path", clip->getPath()},
+                                {"loop", clip->getLoop()},
+                                {"is3D", clip->getIs3D()} };
+        }
+
+        j["children"] = nlohmann::json::array();
+        for (const auto& child : node.children)
+            j["children"].push_back(nodeToJson(*child));
+
+        return j;
+    }
+
+    glm::mat4 jsonToMat4(const nlohmann::json& j)
+    {
+        glm::mat4 m(1.0f);
+        float* p = glm::value_ptr(m);
+        for (int i = 0; i < 16; ++i)
+            p[i] = j.at(i).get<float>();
+        return m;
+    }
+
+    glm::vec3 jsonToVec3(const nlohmann::json& j)
+    {
+        return glm::vec3(j.at(0).get<float>(), j.at(1).get<float>(), j.at(2).get<float>());
+    }
+
+    // Crea el Mesh procedural correspondiente a meshName (case-insensitive),
+    // con los mismos parámetros fijos que EditorUI::createBasicShape. nullptr
+    // si meshName no matchea ninguna de las 4 formas básicas.
+    std::shared_ptr<DonTopo::Mesh> proceduralMeshByName(const std::string& meshName)
+    {
+        std::string lower = meshName;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        if (lower == "cube")    return std::make_shared<DonTopo::Mesh>(DonTopo::Cube::create(50.0f));
+        if (lower == "sphere")  return std::make_shared<DonTopo::Mesh>(DonTopo::Sphere::create(50.0f));
+        if (lower == "plane")   return std::make_shared<DonTopo::Mesh>(DonTopo::Plane::create(50.0f, 0.0f));
+        if (lower == "capsule") return std::make_shared<DonTopo::Mesh>(DonTopo::Capsule::create(25.0f, 50.0f));
+        return nullptr;
+    }
+
+    // Reconstruye node (ya insertado en el árbol) desde j, y recursivamente
+    // sus hijos. parentWorld es el worldTransform ya resuelto del padre —
+    // necesario para pasar un worldTransform correcto a las factories de
+    // collider (que fijan la pose inicial del actor PhysX a partir de él).
+    void nodeFromJson(const nlohmann::json& j, GameObject* node, const glm::mat4& parentWorld,
+                       DonTopo::PhysicsManager& physics, DonTopo::AudioManager& audio)
+    {
+        node->localTransform = jsonToMat4(j.at("localTransform"));
+        node->worldTransform = parentWorld * node->localTransform;
+
+        if (j.contains("mesh"))
+        {
+            std::string sourcePath = j["mesh"].value("sourcePath", "");
+            std::string meshName   = j["mesh"].value("name", "");
+            try
+            {
+                if (!sourcePath.empty())
+                {
+                    auto mesh = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load(sourcePath));
+                    mesh->sourcePath = sourcePath;
+                    node->setMesh(std::move(mesh));
+                }
+                else if (auto mesh = proceduralMeshByName(meshName))
+                {
+                    node->setMesh(std::move(mesh));
+                }
+            }
+            catch (const std::exception&)
+            {
+                // Asset roto (movido/borrado) o formato no soportado: node
+                // queda sin mesh, el resto de la escena sigue cargando.
+            }
+        }
+
+        if (j.contains("boxCollider"))
+        {
+            const auto& c = j["boxCollider"];
+            node->setBoxCollider(physics.createBoxColliderComponent(
+                jsonToVec3(c.at("halfExtents")), jsonToVec3(c.at("center")),
+                node->worldTransform, c.at("useGravity").get<bool>()));
+        }
+        if (j.contains("sphereCollider"))
+        {
+            const auto& c = j["sphereCollider"];
+            node->setSphereCollider(physics.createSphereColliderComponent(
+                c.at("radius").get<float>(), jsonToVec3(c.at("center")),
+                node->worldTransform, c.at("useGravity").get<bool>()));
+        }
+        if (j.contains("capsuleCollider"))
+        {
+            const auto& c = j["capsuleCollider"];
+            node->setCapsuleCollider(physics.createCapsuleColliderComponent(
+                c.at("radius").get<float>(), c.at("halfHeight").get<float>(),
+                jsonToVec3(c.at("center")), node->worldTransform, c.at("useGravity").get<bool>()));
+        }
+        if (j.contains("planeCollider"))
+        {
+            const auto& c = j["planeCollider"];
+            node->setPlaneCollider(physics.createPlaneColliderComponent(
+                jsonToVec3(c.at("center")), node->worldTransform));
+        }
+        if (j.contains("audioClip"))
+        {
+            const auto& c = j["audioClip"];
+            auto clip = audio.createAudioClipComponent(
+                c.at("path").get<std::string>(), c.at("is3D").get<bool>(), c.at("loop").get<bool>());
+            if (clip)
+                node->setAudioClip(std::move(clip));
+            // clip nullptr (asset roto/formato no soportado): node queda sin
+            // audio, el resto de la escena sigue cargando.
+        }
+
+        for (const auto& childJson : j.at("children"))
+        {
+            GameObject* child = node->addChild(childJson.at("name").get<std::string>());
+            nodeFromJson(childJson, child, node->worldTransform, physics, audio);
+        }
+    }
+}
 
 namespace DonTopo
 {
@@ -83,5 +281,63 @@ namespace DonTopo
             go->setPlaneCollider(nullptr);
             go->setAudioClip(nullptr);
         });
+    }
+
+    bool Scene::save(const std::string& path) const
+    {
+        nlohmann::json root;
+        root["version"] = 1;
+        root["root"] = nodeToJson(m_root);
+        return FileManager::writeJson(path, root);
+    }
+
+    bool Scene::load(const std::string& path, PhysicsManager& physics, AudioManager& audio)
+    {
+        auto parsed = FileManager::readJson(path);
+        if (!parsed)
+            return false;
+
+        const nlohmann::json& j = *parsed;
+        if (!j.contains("version") || !j["version"].is_number_integer() || j["version"].get<int>() != 1 ||
+            !j.contains("root") || !j["root"].is_object())
+            return false;
+
+        const nlohmann::json& rootJson = j["root"];
+
+        // Construye el árbol nuevo en un GameObject temporal, desconectado de
+        // m_root: si nodeFromJson lanza a mitad de un nodo interno malformado,
+        // el temporal se destruye solo al salir de scope (liberando los
+        // colliders/audio ya creados en él — physics/audio siguen vivos) y
+        // m_root queda intacto. Garantiza que una carga fallida nunca deja la
+        // escena a medio reconstruir, no solo en el chequeo de version/root de
+        // arriba sino también ante malformación anidada más abajo en el árbol
+        // (spec: "carga fallida no modifica la escena").
+        GameObject newRoot(rootJson.value("name", "root"));
+        try
+        {
+            nodeFromJson(rootJson, &newRoot, glm::mat4(1.0f), physics, audio);
+        }
+        catch (const nlohmann::json::exception&)
+        {
+            return false;
+        }
+
+        shutdown(physics, audio);
+        m_root = std::move(newRoot);
+        // addChild() (llamado dentro de nodeFromJson vía newRoot.addChild/
+        // node->addChild) apunta el parent de cada hijo directo al objeto
+        // newRoot original — que era una variable local a esta función. Tras
+        // el move-assignment, m_root vive en su propia dirección estable (es
+        // un miembro de Scene), así que hay que re-apuntar el parent de los
+        // hijos directos a &m_root. Los nietos y descendientes más profundos NO
+        // necesitan este arreglo: su parent apunta a su padre inmediato, que
+        // vive en el heap vía unique_ptr y no se mueve de dirección con este
+        // move-assignment.
+        m_root.parent = nullptr;
+        for (auto& child : m_root.children)
+            child->parent = &m_root;
+
+        m_root.updateWorldTransforms();
+        return true;
     }
 }

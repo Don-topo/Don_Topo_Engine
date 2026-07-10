@@ -16,6 +16,7 @@
 #include "DonTopo/Plane.h"
 #include "DonTopo/Capsule.h"
 #include "DonTopo/ModelLoader.h"
+#include "DonTopo/FileManager.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -169,6 +170,7 @@ namespace DonTopo {
 EditorUI::EditorUI()
     : m_meshFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_audioFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_sceneFileDialog(std::make_unique<IGFD::FileDialog>())
 {
 }
 
@@ -184,6 +186,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     drawProperties();
     drawMeshDialog();
     drawAudioClipDialog();
+    drawSceneDialog();
     drawContentBrowser(sceneRoot);
 }
 
@@ -205,6 +208,41 @@ void EditorUI::drawToolbar()
         m_renderer->setWireframeMode(!wireframe);
     if (wireframe)
         ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+    if (ImGui::Button("Save Scene") && m_scene)
+    {
+        m_sceneDlgOpen   = true;
+        m_sceneDlgIsSave = true;
+        IGFD::FileDialogConfig cfg;
+        cfg.path  = "assets";
+        cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                    ImGuiFileDialogFlags_HideColumnDate |
+                    ImGuiFileDialogFlags_DisableThumbnailMode |
+                    ImGuiFileDialogFlags_DisablePlaceMode |
+                    ImGuiFileDialogFlags_ConfirmOverwrite;
+        m_sceneFileDialog->OpenDialog("SceneDlg", "Save Scene", ".json", cfg);
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Load Scene") && m_scene)
+    {
+        m_sceneDlgOpen   = true;
+        m_sceneDlgIsSave = false;
+        IGFD::FileDialogConfig cfg;
+        cfg.path  = "assets";
+        cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                    ImGuiFileDialogFlags_HideColumnDate |
+                    ImGuiFileDialogFlags_DisableThumbnailMode |
+                    ImGuiFileDialogFlags_DisablePlaceMode;
+        m_sceneFileDialog->OpenDialog("SceneDlg", "Load Scene", ".json", cfg);
+    }
+
+    if (!m_sceneIOError.empty())
+    {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_sceneIOError.c_str());
+    }
 
     ImGui::End();
 }
@@ -1394,6 +1432,91 @@ void EditorUI::drawAudioClipDialog()
         m_audioFileDialog->Close();
         m_audioDlgOpen = false;
     }
+}
+
+void EditorUI::drawSceneDialog()
+{
+    // Mismo motivo que drawMeshDialog/drawAudioClipDialog: se ejecuta cada
+    // frame independientemente de m_sceneDlgOpen para drenar el diálogo aunque
+    // el usuario lo cierre sin confirmar.
+    if (!m_sceneDlgOpen || !m_sceneFileDialog->Display("SceneDlg"))
+        return;
+
+    if (m_sceneFileDialog->IsOk())
+    {
+        std::string path = m_sceneFileDialog->GetFilePathName();
+
+        if (m_sceneDlgIsSave)
+        {
+            m_sceneIOError = (m_scene && m_scene->save(path)) ? "" : "No se pudo guardar la escena";
+        }
+        else if (m_scene && m_renderer && m_physics && m_audio)
+        {
+            // Valida la estructura básica del JSON ANTES de tocar GPU/Scene:
+            // rechaza un fichero top-level corrupto sin tocar nada (fast
+            // path, evita el churn de GPU de abajo). No cubre malformación
+            // anidada (un nodo interno con campos rotos) — para eso,
+            // Scene::load es atómico (construye en un árbol temporal y solo
+            // reemplaza m_root si TODO el parseo tiene éxito), y el bloque
+            // de re-registro de más abajo cubre ambos desenlaces: árbol
+            // nuevo si load tuvo éxito, o el mismo árbol viejo intacto (con
+            // sus índices GPU reseteados) si falló.
+            auto parsed = FileManager::readJson(path);
+            bool structureOk = parsed.has_value() &&
+                                parsed->contains("version") && (*parsed)["version"].is_number_integer() &&
+                                (*parsed)["version"].get<int>() == 1 &&
+                                parsed->contains("root") && (*parsed)["root"].is_object();
+
+            if (!structureOk)
+            {
+                m_sceneIOError = "No se pudo cargar la escena";
+                m_sceneFileDialog->Close();
+                m_sceneDlgOpen = false;
+                return;
+            }
+
+            // Libera recursos GPU de la escena actual y resetea sus índices
+            // a -1: si Scene::load falla más abajo por malformación anidada,
+            // m_root sigue siendo este mismo árbol (Scene::load es atómico),
+            // y resetear los índices aquí permite que el traverse de
+            // re-registro de abajo lo vuelva a registrar igual que si fuera
+            // el árbol nuevo — sin esto, el árbol viejo quedaría con índices
+            // obsoletos (Renderer::removeGameObject no los resetea) y sin
+            // re-registrar tras un fallo, dejando el viewport vacío pese a
+            // que los datos de Scene no cambiaron.
+            for (auto& child : m_scene->getRoot().children)
+            {
+                m_renderer->removeGameObject(child.get());
+                child->traverse([](GameObject* go) {
+                    go->staticRenderIndex = -1;
+                    go->skinnedRenderIndex = -1;
+                });
+            }
+
+            bool loaded = m_scene->load(path, *m_physics, *m_audio);
+            // Se ejecuta tanto si loaded es true (árbol nuevo, índices ya en
+            // -1 por construcción) como si es false (árbol viejo intacto,
+            // índices reseteados justo arriba) — en ambos casos hay que
+            // volver a subir los meshes a GPU.
+            m_scene->traverse([this](GameObject* go) {
+                if (go->hasMesh() && go->staticRenderIndex < 0)
+                    go->staticRenderIndex = m_renderer->addStaticMesh(*go->getMesh());
+            });
+
+            if (loaded)
+            {
+                m_selected = nullptr; // la selección anterior ya no existe
+                m_sceneIOError.clear();
+            }
+            else
+            {
+                m_sceneIOError = "No se pudo cargar la escena";
+            }
+        }
+    }
+
+    m_sceneFileDialog->Close();
+    m_sceneDlgOpen = false;
 }
 
 void EditorUI::drawAddComponentButton()

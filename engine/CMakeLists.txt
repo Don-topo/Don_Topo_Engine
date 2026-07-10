@@ -12,6 +12,7 @@ add_library(DonTopoEngine STATIC
     src/Camera.cpp
     src/GameObject.cpp
     src/Scene.cpp
+    src/FileManager.cpp
     src/AudioManager.cpp
     src/AudioClipComponent.cpp
     src/PhysicsManager.cpp
@@ -39,6 +40,7 @@ target_link_libraries(DonTopoEngine
         imgui_backend
         imgui_filedialog
         imguizmo
+        nlohmann_json::nlohmann_json
 )
 
 if(FMOD_FOUND)

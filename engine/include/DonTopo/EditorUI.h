@@ -87,6 +87,7 @@ private:
     void drawMeshDialog();
     void drawAudioClipSection();
     void drawAudioClipDialog();
+    void drawSceneDialog();
     void drawAddComponentButton();
     // Crea un GameObject hijo de parent con el mesh dado, lo registra en el
     // Renderer (staticRenderIndex) y lo deja sin collider. No-op si parent o
@@ -170,6 +171,17 @@ private:
     // Misma razón que m_meshFileDialog: instancia propia, nunca compartida
     // con el singleton de Content Browser ni con m_meshFileDialog.
     std::unique_ptr<IGFD::FileDialog> m_audioFileDialog;
+
+    // Scene save/load — instancia propia de diálogo, mismo motivo que
+    // m_meshFileDialog/m_audioFileDialog (Instance() singleton no soporta
+    // diálogos concurrentes). Se reusa la misma instancia para Save y Load
+    // porque nunca están abiertos a la vez (ambos disparados desde botones
+    // secuenciales del toolbar).
+    std::unique_ptr<IGFD::FileDialog> m_sceneFileDialog;
+    bool        m_sceneDlgOpen = false;
+    bool        m_sceneDlgIsSave = false;
+    // Último error de guardado/carga de escena (vacío si ninguno pendiente).
+    std::string m_sceneIOError;
 
     // Scene selection
     GameObject* m_selected = nullptr;
