@@ -1,6 +1,95 @@
 #include "DonTopo/Scene.h"
+#include "DonTopo/PhysicsManager.h"
+#include "DonTopo/AudioManager.h"
+#include "DonTopo/AudioClipComponent.h"
+#include "DonTopo/BoxCollider.h"
+#include "DonTopo/SphereCollider.h"
+#include "DonTopo/CapsuleCollider.h"
+#include "DonTopo/PlaneCollider.h"
+#include "DonTopo/Mesh.h"
+#include "DonTopo/ModelLoader.h"
+#include "DonTopo/Cube.h"
+#include "DonTopo/Sphere.h"
+#include "DonTopo/Plane.h"
+#include "DonTopo/Capsule.h"
+#include "DonTopo/FileManager.h"
 #include <algorithm>
+#include <cctype>
 #include <memory>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtc/type_ptr.hpp>
+
+namespace
+{
+    using DonTopo::GameObject;
+
+    nlohmann::json mat4ToJson(const glm::mat4& m)
+    {
+        auto arr = nlohmann::json::array();
+        const float* p = glm::value_ptr(m);
+        for (int i = 0; i < 16; ++i)
+            arr.push_back(p[i]);
+        return arr;
+    }
+
+    nlohmann::json vec3ToJson(const glm::vec3& v)
+    {
+        return nlohmann::json::array({ v.x, v.y, v.z });
+    }
+
+    nlohmann::json nodeToJson(const GameObject& node)
+    {
+        nlohmann::json j;
+        j["name"] = node.name;
+        j["localTransform"] = mat4ToJson(node.localTransform);
+
+        if (node.hasMesh())
+        {
+            const auto& mesh = node.getMesh();
+            j["mesh"] = { {"sourcePath", mesh->sourcePath}, {"name", mesh->name} };
+        }
+        if (node.hasBoxCollider())
+        {
+            const auto& c = node.getBoxCollider();
+            j["boxCollider"] = { {"halfExtents", vec3ToJson(c->getHalfExtents())},
+                                  {"center", vec3ToJson(c->getCenter())},
+                                  {"useGravity", c->getUseGravity()} };
+        }
+        if (node.hasSphereCollider())
+        {
+            const auto& c = node.getSphereCollider();
+            j["sphereCollider"] = { {"radius", c->getRadius()},
+                                     {"center", vec3ToJson(c->getCenter())},
+                                     {"useGravity", c->getUseGravity()} };
+        }
+        if (node.hasCapsuleCollider())
+        {
+            const auto& c = node.getCapsuleCollider();
+            j["capsuleCollider"] = { {"radius", c->getRadius()},
+                                      {"halfHeight", c->getHalfHeight()},
+                                      {"center", vec3ToJson(c->getCenter())},
+                                      {"useGravity", c->getUseGravity()} };
+        }
+        if (node.hasPlaneCollider())
+        {
+            const auto& c = node.getPlaneCollider();
+            j["planeCollider"] = { {"center", vec3ToJson(c->getCenter())} };
+        }
+        if (node.hasAudioClip())
+        {
+            const auto& clip = node.getAudioClip();
+            j["audioClip"] = { {"path", clip->getPath()},
+                                {"loop", clip->getLoop()},
+                                {"is3D", clip->getIs3D()} };
+        }
+
+        j["children"] = nlohmann::json::array();
+        for (const auto& child : node.children)
+            j["children"].push_back(nodeToJson(*child));
+
+        return j;
+    }
+}
 
 namespace DonTopo
 {
@@ -83,5 +172,13 @@ namespace DonTopo
             go->setPlaneCollider(nullptr);
             go->setAudioClip(nullptr);
         });
+    }
+
+    bool Scene::save(const std::string& path) const
+    {
+        nlohmann::json root;
+        root["version"] = 1;
+        root["root"] = nodeToJson(m_root);
+        return FileManager::writeJson(path, root);
     }
 }
