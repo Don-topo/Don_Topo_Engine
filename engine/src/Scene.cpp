@@ -298,7 +298,8 @@ namespace DonTopo
             return false;
 
         const nlohmann::json& j = *parsed;
-        if (!j.contains("version") || j["version"].get<int>() != 1 || !j.contains("root"))
+        if (!j.contains("version") || !j["version"].is_number_integer() || j["version"].get<int>() != 1 ||
+            !j.contains("root") || !j["root"].is_object())
             return false;
 
         shutdown(physics, audio);
