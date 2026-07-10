@@ -16,6 +16,7 @@
 #include "DonTopo/Plane.h"
 #include "DonTopo/Capsule.h"
 #include "DonTopo/ModelLoader.h"
+#include "DonTopo/FileManager.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -1451,6 +1452,26 @@ void EditorUI::drawSceneDialog()
         }
         else if (m_scene && m_renderer && m_physics && m_audio)
         {
+            // Valida la estructura básica del JSON ANTES de tocar GPU/Scene:
+            // Scene::load hace este mismo chequeo internamente y no muta nada
+            // si falla, pero para entonces ya habríamos liberado los meshes
+            // GPU de la escena actual más abajo. Replicamos el chequeo aquí
+            // para que un fichero corrupto no deje el viewport vacío aunque
+            // Scene::load rechace la carga sin modificar sus datos.
+            auto parsed = FileManager::readJson(path);
+            bool structureOk = parsed.has_value() &&
+                                parsed->contains("version") && (*parsed)["version"].is_number_integer() &&
+                                (*parsed)["version"].get<int>() == 1 &&
+                                parsed->contains("root") && (*parsed)["root"].is_object();
+
+            if (!structureOk)
+            {
+                m_sceneIOError = "No se pudo cargar la escena";
+                m_sceneFileDialog->Close();
+                m_sceneDlgOpen = false;
+                return;
+            }
+
             // Libera recursos GPU de la escena actual antes de que
             // Scene::load la reemplace — Scene::load solo limpia datos/
             // colliders/audio, no conoce Renderer (ver constraints del plan).
