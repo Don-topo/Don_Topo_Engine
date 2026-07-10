@@ -21,6 +21,7 @@ class CapsuleCollider;
 class PlaneCollider;
 class Renderer;
 class Camera;
+class Scene;
 
 class EditorUI {
 public:
@@ -48,6 +49,11 @@ public:
     // para cargar/reproducir clips desde la sección Audio Clip del panel
     // Properties.
     void setAudioManager(AudioManager* audio) { m_audio = audio; }
+    // Puntero no-propietario: Scene vive en main.cpp, fuera del ciclo de
+    // vida del EditorUI (mismo patrón que m_physics/m_audio). Necesario
+    // para delegar el borrado diferido (m_pendingDelete) en
+    // Scene::removeGameObject en vez de mutar children a mano.
+    void setScene(Scene* scene) { m_scene = scene; }
     // Puntero no-propietario: Renderer es dueño de este EditorUI y se pasa a sí
     // mismo desde setSceneRoot. Necesario para registrar el mesh GPU (addStaticMesh)
     // al crear un shape desde el menú "Basic Shapes".
@@ -231,6 +237,7 @@ private:
     PhysicsManager* m_physics = nullptr;
     Renderer*       m_renderer = nullptr;
     AudioManager*   m_audio = nullptr;
+    Scene*          m_scene = nullptr;
     // Mensaje del último intento fallido de carga de Mesh (vacío si no hay
     // error pendiente); se limpia al cambiar de selección o al cargar bien.
     std::string     m_meshLoadError;

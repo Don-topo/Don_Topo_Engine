@@ -1,4 +1,5 @@
 #include "DonTopo/EditorUI.h"
+#include "DonTopo/Scene.h"
 #include "DonTopo/GameObject.h"
 #include "DonTopo/PhysicsManager.h"
 #include "DonTopo/AudioManager.h"
@@ -301,14 +302,8 @@ void EditorUI::drawScene(GameObject* sceneRoot)
 
         if (m_onDelete)
             m_onDelete(target);
-        if (target->parent)
-        {
-            auto& siblings = target->parent->children;
-            siblings.erase(
-                std::remove_if(siblings.begin(), siblings.end(),
-                    [target](const std::unique_ptr<GameObject>& c) { return c.get() == target; }),
-                siblings.end());
-        }
+        if (m_scene)
+            m_scene->removeGameObject(target);
         if (selectionInSubtree)
         {
             m_selected = nullptr;
