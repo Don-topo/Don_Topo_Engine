@@ -7,6 +7,7 @@
 #include "DonTopo/Plane.h"
 #include "DonTopo/Camera.h"
 #include "DonTopo/GameObject.h"
+#include "DonTopo/Scene.h"
 #include "DonTopo/AudioManager.h"
 #include "DonTopo/PhysicsManager.h"
 #include "DonTopo/Gizmos.h"
@@ -29,19 +30,19 @@ int main()
         window.init(1280, 720, "Don Topo Engine", "assets/MainEngineLogo.png");
         DonTopo::Renderer renderer;
 
-        // physics y audio se declaran antes que root: en cualquier salida de scope
-        // (normal o por excepción) root se destruye primero (liberando los
-        // BoxCollider/AudioClipComponent de sus GameObject) y physics/audio se
-        // destruyen después — nunca al revés, evitando que ~BoxCollider() libere un
-        // PxRigidDynamic sobre una PxScene ya liberada, o que ~AudioClipComponent()
-        // llame a AudioManager::unloadSound sobre un AudioManager ya destruido.
+        // scene.shutdown(physics, audio) libera explícitamente los colliders/
+        // audioclips de la escena antes de destruir physics/audio (ver más abajo).
+        // physics/audio se siguen declarando antes que scene como red de
+        // seguridad ante una salida por excepción anterior a ese shutdown
+        // explícito: en ese caso, el orden de declaración garantiza igualmente
+        // que scene se destruya antes que physics/audio.
         DonTopo::PhysicsManager physics;
         physics.init();
 
         DonTopo::AudioManager audio;
         audio.init();
 
-        DonTopo::GameObject root("root");
+        DonTopo::Scene scene;
 
         auto soldierMesh = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load("assets/modelTexture.fbx"));
         auto modelMesh    = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load("assets/model.fbx"));
@@ -60,21 +61,21 @@ int main()
         // Cargar modelo animado antes de init
         auto soldierAnimMesh = std::make_shared<DonTopo::SkinnedMesh>(DonTopo::ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
 
-        auto* soldier = root.addChild("soldier");
+        auto* soldier = scene.addGameObject("soldier");
         soldier->setMesh(soldierMesh);
 
-        auto* model = root.addChild("model");
+        auto* model = scene.addGameObject("model");
         model->setMesh(modelMesh);
         model->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(200.0f, 0.0f, 0.0f));
 
-        auto* floorNode = root.addChild("floor");
+        auto* floorNode = scene.addGameObject("floor");
         floorNode->setMesh(floorMesh);
 
         glm::mat4 floorColliderPose = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, floorY - 0.5f, 0.0f));
         floorNode->setBoxCollider(physics.createBoxColliderComponent(
             glm::vec3(500.0f, 0.5f, 500.0f), glm::vec3(0.0f), floorColliderPose, /*useGravity=*/false));
 
-        auto* cube = root.addChild("cube");
+        auto* cube = scene.addGameObject("cube");
         cube->setMesh(cubeMesh);
         cube->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 50.0f, -200.0f));
 
@@ -92,16 +93,16 @@ int main()
         }
 #endif
 
-        auto* sphere = root.addChild("sphere");
+        auto* sphere = scene.addGameObject("sphere");
         sphere->setMesh(sphereMesh);
         sphere->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 50.0f, 200.0f));
 
-        auto* soldierAnim = root.addChild("soldier_animado");
+        auto* soldierAnim = scene.addGameObject("soldier_animado");
         soldierAnim->setMesh(soldierAnimMesh);
         soldierAnim->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(-200.0f, 0.0f, 0.0f));
 
         std::vector<DonTopo::GameObject*> allNodes;
-        root.traverse([&](DonTopo::GameObject* go) { allNodes.push_back(go); });
+        scene.traverse([&](DonTopo::GameObject* go) { allNodes.push_back(go); });
 
         // Pasada 1: meshes estáticos -> Renderer::init(meshes)
         std::vector<DonTopo::Mesh> meshes;
@@ -120,7 +121,8 @@ int main()
         //if (bgm >= 0) audio.playBGM(bgm);
 
         renderer.init(window, meshes);
-        renderer.setSceneRoot(&root);
+        renderer.setSceneRoot(&scene.getRoot());
+        renderer.setScene(&scene);
         renderer.setPhysicsManager(&physics);
         renderer.setAudioManager(&audio);
         renderer.setOnAxisSelected([&camera](const glm::vec3& axis) { camera.lookAlongAxis(axis); });
@@ -203,62 +205,15 @@ int main()
             audio.update(camera.getPos(), camera.getFront(), camera.getUp());
 
             physics.stepSimulation(dt);
-            root.updateWorldTransforms();
+            scene.update(dt, physics);
+
             // Recorrido en vivo (no la lista allNodes cacheada al arrancar): el
             // editor permite borrar GameObjects en tiempo real, así que un
             // puntero cacheado podría quedar colgante tras un delete.
             DonTopo::GameObject* liveCube = nullptr;
-            root.traverse([&](DonTopo::GameObject* go) {
+            scene.traverse([&](DonTopo::GameObject* go) {
                 if (go == cube)
                     liveCube = go;
-
-                if (go->hasBoxCollider())
-                {
-                    if (go->getBoxCollider()->isDynamic())
-                    {
-                        go->worldTransform = go->getBoxCollider()->getWorldTransform();
-                        // Mantener localTransform sincronizado con la pose física:
-                        // si luego se desactiva la gravedad (toggle a kinematic),
-                        // updateWorldTransforms() recalculará worldTransform a
-                        // partir de localTransform, y sin este refresco usaría el
-                        // valor stale de antes de caer, provocando un salto de
-                        // vuelta a esa posición vieja.
-                        glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
-                        go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
-                    }
-                    else
-                        go->getBoxCollider()->syncTransform(go->worldTransform);
-                }
-
-                if (go->hasSphereCollider())
-                {
-                    if (go->getSphereCollider()->isDynamic())
-                    {
-                        go->worldTransform = go->getSphereCollider()->getWorldTransform();
-                        glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
-                        go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
-                    }
-                    else
-                        go->getSphereCollider()->syncTransform(go->worldTransform);
-                }
-
-                if (go->hasCapsuleCollider())
-                {
-                    if (go->getCapsuleCollider()->isDynamic())
-                    {
-                        go->worldTransform = go->getCapsuleCollider()->getWorldTransform();
-                        glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
-                        go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
-                    }
-                    else
-                        go->getCapsuleCollider()->syncTransform(go->worldTransform);
-                }
-
-                // Plane Collider siempre es kinematic (isDynamic()==false
-                // hardcoded) — nunca lee pose de PhysX, solo empuja la del
-                // GameObject.
-                if (go->hasPlaneCollider())
-                    go->getPlaneCollider()->syncTransform(go->worldTransform);
 
                 if (go->staticRenderIndex >= 0)
                     renderer.setTransform(go->staticRenderIndex, go->worldTransform);
@@ -275,7 +230,7 @@ int main()
             // los muestra automáticamente sobre cualquier GameObject seleccionado.
             // liveCube (capturado en el traverse de arriba, no el puntero `cube`
             // cacheado en el setup) evita un use-after-free si el usuario borró el
-            // GameObject "cube" desde el editor: root.traverse() solo visita nodos
+            // GameObject "cube" desde el editor: scene.traverse() solo visita nodos
             // vivos, así que liveCube queda nullptr ese frame en vez de colgante.
             if (liveCube)
             {
@@ -297,16 +252,11 @@ int main()
 
         audio.shutdown();
 
-        // Liberar colliders (y sus PxRigidDynamic) antes de destruir la escena/física:
-        // root se destruye al final del scope, después de physics — sin esto, el
-        // collider de cada GameObject intentaría release() sobre un actor cuya
-        // PxScene/PxPhysics ya fue liberada.
-        root.traverse([](DonTopo::GameObject* go) {
-            go->setBoxCollider(nullptr);
-            go->setSphereCollider(nullptr);
-            go->setCapsuleCollider(nullptr);
-            go->setPlaneCollider(nullptr);
-        });
+        // Libera explícitamente colliders/audioclips antes de destruir
+        // physics/audio: sin esto, ~BoxCollider() intentaría release() un
+        // PxRigidDynamic sobre una PxScene ya liberada (o ~AudioClipComponent
+        // llamaría a un AudioManager ya destruido).
+        scene.shutdown(physics, audio);
         physics.shutdown();
         renderer.shutdown();
         window.shutdown();
