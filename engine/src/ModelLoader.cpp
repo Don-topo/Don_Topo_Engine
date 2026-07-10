@@ -372,6 +372,7 @@ namespace DonTopo
                 range.materialIndex = matRemap.at(range.materialIndex);
         }
         smesh.name = std::filesystem::path(path).stem().string();
+        smesh.sourcePath = path;
         return smesh;
     }
 }

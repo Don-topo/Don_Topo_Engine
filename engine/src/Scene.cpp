@@ -7,6 +7,7 @@
 #include "DonTopo/CapsuleCollider.h"
 #include "DonTopo/PlaneCollider.h"
 #include "DonTopo/Mesh.h"
+#include "DonTopo/SkinnedMesh.h"
 #include "DonTopo/ModelLoader.h"
 #include "DonTopo/Cube.h"
 #include "DonTopo/Sphere.h"
@@ -46,7 +47,7 @@ namespace
         if (node.hasMesh())
         {
             const auto& mesh = node.getMesh();
-            j["mesh"] = { {"sourcePath", mesh->sourcePath}, {"name", mesh->name} };
+            j["mesh"] = { {"sourcePath", mesh->sourcePath}, {"name", mesh->name}, {"skinned", node.isSkinned()} };
         }
         if (node.hasBoxCollider())
         {
@@ -134,12 +135,20 @@ namespace
         {
             std::string sourcePath = j["mesh"].value("sourcePath", "");
             std::string meshName   = j["mesh"].value("name", "");
+            // "skinned" no existe en ficheros guardados antes de este campo
+            // — default false, se reconstruyen como mesh estático (mismo
+            // comportamiento que tenían antes de soportar skinned).
+            bool skinned = j["mesh"].value("skinned", false);
             try
             {
-                if (!sourcePath.empty())
+                if (skinned && !sourcePath.empty())
+                {
+                    auto mesh = std::make_shared<DonTopo::SkinnedMesh>(DonTopo::ModelLoader::loadSkinned(sourcePath));
+                    node->setMesh(std::move(mesh));
+                }
+                else if (!sourcePath.empty())
                 {
                     auto mesh = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load(sourcePath));
-                    mesh->sourcePath = sourcePath;
                     node->setMesh(std::move(mesh));
                 }
                 else if (auto mesh = proceduralMeshByName(meshName))

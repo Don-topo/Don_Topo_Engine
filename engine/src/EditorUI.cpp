@@ -1498,8 +1498,15 @@ void EditorUI::drawSceneDialog()
             // índices reseteados justo arriba) — en ambos casos hay que
             // volver a subir los meshes a GPU.
             m_scene->traverse([this](GameObject* go) {
-                if (go->hasMesh() && go->staticRenderIndex < 0)
+                if (go->isSkinned())
+                {
+                    if (go->skinnedRenderIndex < 0)
+                        go->skinnedRenderIndex = m_renderer->addSkinnedMesh(*go->getSkinnedMesh());
+                }
+                else if (go->hasMesh() && go->staticRenderIndex < 0)
+                {
                     go->staticRenderIndex = m_renderer->addStaticMesh(*go->getMesh());
+                }
             });
 
             if (loaded)
