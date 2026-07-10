@@ -70,5 +70,14 @@ namespace DonTopo
 
         m_root.updateWorldTransforms();
     }
-    void Scene::shutdown(PhysicsManager&, AudioManager&) {}
+    void Scene::shutdown(PhysicsManager& /*physics*/, AudioManager& /*audio*/)
+    {
+        m_root.traverse([](GameObject* go) {
+            go->setBoxCollider(nullptr);
+            go->setSphereCollider(nullptr);
+            go->setCapsuleCollider(nullptr);
+            go->setPlaneCollider(nullptr);
+            go->setAudioClip(nullptr);
+        });
+    }
 }
