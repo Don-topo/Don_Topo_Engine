@@ -33,6 +33,7 @@ namespace DonTopo
 
         Mesh mesh;
         mesh.name = std::filesystem::path(path).stem().string();
+        mesh.sourcePath = path;
         aiMesh* ai = scene->mMeshes[0];
 
         mesh.vertices.reserve(ai->mNumVertices);
