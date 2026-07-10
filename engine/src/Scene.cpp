@@ -38,6 +38,15 @@ namespace
         return nlohmann::json::array({ v.x, v.y, v.z });
     }
 
+    nlohmann::json vertexToJson(const DonTopo::Vertex& v)
+    {
+        return { {"pos", vec3ToJson(v.pos)},
+                 {"color", vec3ToJson(v.color)},
+                 {"uv", nlohmann::json::array({v.uv.x, v.uv.y})},
+                 {"normal", vec3ToJson(v.normal)},
+                 {"tangent", vec3ToJson(v.tangent)} };
+    }
+
     nlohmann::json nodeToJson(const GameObject& node)
     {
         nlohmann::json j;
@@ -47,7 +56,25 @@ namespace
         if (node.hasMesh())
         {
             const auto& mesh = node.getMesh();
-            j["mesh"] = { {"sourcePath", mesh->sourcePath}, {"name", mesh->name}, {"skinned", node.isSkinned()} };
+            nlohmann::json meshJson = { {"sourcePath", mesh->sourcePath}, {"name", mesh->name}, {"skinned", node.isSkinned()} };
+            if (mesh->sourcePath.empty())
+            {
+                // Procedural (Cube/Sphere/Plane/Capsule): no hay fichero de
+                // origen que recargar. Regenerar vía los parámetros fijos de
+                // EditorUI::createBasicShape asumiría que el mesh se creó con
+                // esos defaults — falso para meshes procedurales con
+                // parámetros custom (ej. el floor, Plane::create(1000.0f,
+                // floorY) en main.cpp, muy distinto del Plane 50/0 del menú
+                // Basic Shapes). Se serializa la geometría real para
+                // reconstruir el mesh exacto sin depender de qué parámetros
+                // lo generaron.
+                nlohmann::json verts = nlohmann::json::array();
+                for (const auto& v : mesh->vertices)
+                    verts.push_back(vertexToJson(v));
+                meshJson["vertices"] = std::move(verts);
+                meshJson["indices"]  = mesh->indices;
+            }
+            j["mesh"] = std::move(meshJson);
         }
         if (node.hasBoxCollider())
         {
@@ -105,6 +132,17 @@ namespace
         return glm::vec3(j.at(0).get<float>(), j.at(1).get<float>(), j.at(2).get<float>());
     }
 
+    DonTopo::Vertex jsonToVertex(const nlohmann::json& j)
+    {
+        DonTopo::Vertex v{};
+        v.pos     = jsonToVec3(j.at("pos"));
+        v.color   = jsonToVec3(j.at("color"));
+        v.uv      = glm::vec2(j.at("uv").at(0).get<float>(), j.at("uv").at(1).get<float>());
+        v.normal  = jsonToVec3(j.at("normal"));
+        v.tangent = jsonToVec3(j.at("tangent"));
+        return v;
+    }
+
     // Crea el Mesh procedural correspondiente a meshName (case-insensitive),
     // con los mismos parámetros fijos que EditorUI::createBasicShape. nullptr
     // si meshName no matchea ninguna de las 4 formas básicas.
@@ -151,8 +189,26 @@ namespace
                     auto mesh = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load(sourcePath));
                     node->setMesh(std::move(mesh));
                 }
+                else if (j["mesh"].contains("vertices") && j["mesh"].contains("indices"))
+                {
+                    // Procedural con geometría serializada (ficheros
+                    // guardados con este fix o posteriores): reconstruye el
+                    // mesh exacto, sin depender de qué parámetros lo
+                    // generaron originalmente.
+                    auto mesh = std::make_shared<DonTopo::Mesh>();
+                    mesh->name = meshName;
+                    for (const auto& vj : j["mesh"]["vertices"])
+                        mesh->vertices.push_back(jsonToVertex(vj));
+                    mesh->indices = j["mesh"]["indices"].get<std::vector<uint32_t>>();
+                    node->setMesh(std::move(mesh));
+                }
                 else if (auto mesh = proceduralMeshByName(meshName))
                 {
+                    // Fallback para ficheros guardados ANTES de este fix
+                    // (sin vertices/indices) — best-effort con los
+                    // parámetros fijos de Basic Shapes, mismo comportamiento
+                    // (potencialmente incorrecto para tamaños custom) que
+                    // tenían antes.
                     node->setMesh(std::move(mesh));
                 }
             }
