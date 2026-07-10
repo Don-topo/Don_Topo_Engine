@@ -1,4 +1,5 @@
 #include "DonTopo/EditorUI.h"
+#include "DonTopo/Scene.h"
 #include "DonTopo/GameObject.h"
 #include "DonTopo/PhysicsManager.h"
 #include "DonTopo/AudioManager.h"
@@ -18,6 +19,7 @@
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <cstring>
 #include <filesystem>
@@ -301,14 +303,8 @@ void EditorUI::drawScene(GameObject* sceneRoot)
 
         if (m_onDelete)
             m_onDelete(target);
-        if (target->parent)
-        {
-            auto& siblings = target->parent->children;
-            siblings.erase(
-                std::remove_if(siblings.begin(), siblings.end(),
-                    [target](const std::unique_ptr<GameObject>& c) { return c.get() == target; }),
-                siblings.end());
-        }
+        assert(m_scene && "EditorUI::m_scene debe estar asignado (ver Renderer::setScene) antes de borrar GameObjects");
+        m_scene->removeGameObject(target);
         if (selectionInSubtree)
         {
             m_selected = nullptr;

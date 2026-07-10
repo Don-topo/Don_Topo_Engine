@@ -20,6 +20,7 @@ namespace DonTopo {
     class GameObject;
     class PhysicsManager;
     class AudioManager;
+    class Scene;
 
     class Renderer {
         public:                
@@ -39,6 +40,7 @@ namespace DonTopo {
             void setOnAxisSelected(std::function<void(const glm::vec3&)> cb) { m_editorUI.setOnAxisSelected(std::move(cb)); }
             void setPhysicsManager(PhysicsManager* physics) { m_editorUI.setPhysicsManager(physics); }
             void setAudioManager(AudioManager* audio) { m_editorUI.setAudioManager(audio); }
+            void setScene(Scene* scene) { m_editorUI.setScene(scene); }
             void focusSelected(Camera& camera) { m_editorUI.focusSelected(camera); }
             void setSceneRoot(GameObject* root);
             // Libera mesh/skinnedMesh/texturas en GPU de node y todo su subárbol
