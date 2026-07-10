@@ -68,6 +68,10 @@ namespace DonTopo
                 go->getPlaneCollider()->syncTransform(go->worldTransform);
         });
 
+        // Sync física-transform corre antes de propagar transforms locales:
+        // los colliders ya escriben worldTransform/localTransform directamente,
+        // así que updateWorldTransforms() solo necesita recalcular los nodos
+        // sin collider (hijos de un padre cuyo worldTransform pudo cambiar).
         m_root.updateWorldTransforms();
     }
     void Scene::shutdown(PhysicsManager& /*physics*/, AudioManager& /*audio*/)

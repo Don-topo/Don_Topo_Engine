@@ -250,13 +250,12 @@ int main()
             window.pollEvents();
         }
 
-        audio.shutdown();
-
         // Libera explícitamente colliders/audioclips antes de destruir
         // physics/audio: sin esto, ~BoxCollider() intentaría release() un
         // PxRigidDynamic sobre una PxScene ya liberada (o ~AudioClipComponent
         // llamaría a un AudioManager ya destruido).
         scene.shutdown(physics, audio);
+        audio.shutdown();
         physics.shutdown();
         renderer.shutdown();
         window.shutdown();
