@@ -12,6 +12,11 @@ namespace DonTopo
         std::vector<Vertex>     vertices;
         std::vector<uint32_t>   indices;
         Material                material;
+        // Path del .fbx de origen (vacío para meshes procedurales: Cube/Sphere/
+        // Plane/Capsule creados desde "Basic Shapes"). Content Browser lo usa
+        // para localizar qué GameObjects referencian un fichero al hacer
+        // rename/delete.
+        std::string             sourcePath;
 
         virtual ~Mesh() = default;
     };

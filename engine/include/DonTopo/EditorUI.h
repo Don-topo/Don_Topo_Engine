@@ -96,7 +96,29 @@ private:
     // AudioManager, o m_selected ya tiene AudioClip. Extensión no soportada o
     // fallo de FMOD escriben m_audioLoadError sin modificar m_selected.
     void loadAudioClipForSelected(const std::string& path);
-    void drawContentBrowser();
+    void drawContentBrowser(GameObject* sceneRoot);
+    // Arma el popup modal "Rename Asset" precargado con el nombre actual de
+    // path (stem si es fichero, nombre completo si es carpeta).
+    void beginAssetRename(const std::filesystem::path& path, bool isDir);
+    // Recorre sceneRoot actualizando Mesh::sourcePath, los 3 paths de
+    // Material y AudioClipComponent::getPath() que matcheen oldPath (exacto
+    // si !isDir, por prefijo si isDir) al nuevo valor tras un rename en
+    // disco ya realizado.
+    void updateSceneReferencesForRename(GameObject* sceneRoot,
+                                         const std::filesystem::path& oldPath,
+                                         const std::filesystem::path& newPath,
+                                         bool isDir);
+    // Arma el popup modal "Delete Asset", precalculando cuántos GameObjects
+    // referencian path (mesh o audio) para mostrarlo en el texto de aviso.
+    void beginAssetDelete(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir);
+    // Cuenta cuántos GameObjects de sceneRoot referencian path (mesh o
+    // audio; exacto si !isDir, por prefijo si isDir).
+    int countSceneReferences(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir);
+    // Desengancha de la escena cualquier referencia a path antes de
+    // borrarlo de disco: mesh en uso -> Renderer::removeMeshComponent;
+    // audio en uso -> setAudioClip(nullptr); textura de Material en uso ->
+    // limpia el campo de path (Task 5 añade el hot-swap de GPU aquí).
+    void detachSceneReferencesForDelete(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir);
 
     // Viewport
     bool m_viewportHovered = false;
@@ -107,7 +129,30 @@ private:
     bool m_audioDlgOpen = false;
     bool m_scanned = false;
     std::string m_currentDir;
+    // Raíz del proyecto (canonicalizada una vez); el Content Browser no deja
+    // navegar por encima de este path (ni vía ".." ni vía breadcrumb).
+    std::filesystem::path m_projectRoot;
+    // Path al que reabrir el diálogo IGFD la próxima vez que !m_dlgOpen;
+    // vacío = reabrir en m_projectRoot. Se consume (se vacía) en cada
+    // reapertura — quien quiera reabrir en una carpeta concreta debe
+    // asignarlo de nuevo antes de poner m_dlgOpen = false.
+    std::string m_dlgReopenPath;
     std::vector<std::filesystem::path> m_assets;
+
+    // Asset rename — popup modal disparado por right-click > Rename en el
+    // grid derecho del Content Browser.
+    std::filesystem::path m_assetRenameTarget;
+    bool                   m_assetRenameIsDir = false;
+    char                   m_assetRenameBuffer[128] = {};
+    std::string            m_assetRenameError;
+    bool                   m_openAssetRenamePopup = false;
+
+    // Asset delete — popup modal disparado por right-click > Delete.
+    std::filesystem::path m_assetDeleteTarget;
+    bool                   m_assetDeleteIsDir = false;
+    int                    m_assetDeleteAffectedCount = 0;
+    bool                   m_openAssetDeletePopup = false;
+    std::string            m_assetDeleteError;
     // Instancia propia de ImGuiFileDialog para "Add > Mesh", separada del
     // singleton IGFD::FileDialog::Instance() que usa Content Browser: la
     // librería documenta que Instance() no soporta 2 diálogos concurrentes
