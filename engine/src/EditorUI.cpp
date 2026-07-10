@@ -169,6 +169,7 @@ namespace DonTopo {
 EditorUI::EditorUI()
     : m_meshFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_audioFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_sceneFileDialog(std::make_unique<IGFD::FileDialog>())
 {
 }
 
@@ -184,6 +185,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     drawProperties();
     drawMeshDialog();
     drawAudioClipDialog();
+    drawSceneDialog();
     drawContentBrowser(sceneRoot);
 }
 
@@ -205,6 +207,41 @@ void EditorUI::drawToolbar()
         m_renderer->setWireframeMode(!wireframe);
     if (wireframe)
         ImGui::PopStyleColor();
+
+    ImGui::SameLine();
+    if (ImGui::Button("Save Scene") && m_scene)
+    {
+        m_sceneDlgOpen   = true;
+        m_sceneDlgIsSave = true;
+        IGFD::FileDialogConfig cfg;
+        cfg.path  = "assets";
+        cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                    ImGuiFileDialogFlags_HideColumnDate |
+                    ImGuiFileDialogFlags_DisableThumbnailMode |
+                    ImGuiFileDialogFlags_DisablePlaceMode |
+                    ImGuiFileDialogFlags_ConfirmOverwrite;
+        m_sceneFileDialog->OpenDialog("SceneDlg", "Save Scene", ".json", cfg);
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Load Scene") && m_scene)
+    {
+        m_sceneDlgOpen   = true;
+        m_sceneDlgIsSave = false;
+        IGFD::FileDialogConfig cfg;
+        cfg.path  = "assets";
+        cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                    ImGuiFileDialogFlags_HideColumnDate |
+                    ImGuiFileDialogFlags_DisableThumbnailMode |
+                    ImGuiFileDialogFlags_DisablePlaceMode;
+        m_sceneFileDialog->OpenDialog("SceneDlg", "Load Scene", ".json", cfg);
+    }
+
+    if (!m_sceneIOError.empty())
+    {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_sceneIOError.c_str());
+    }
 
     ImGui::End();
 }
@@ -1394,6 +1431,50 @@ void EditorUI::drawAudioClipDialog()
         m_audioFileDialog->Close();
         m_audioDlgOpen = false;
     }
+}
+
+void EditorUI::drawSceneDialog()
+{
+    // Mismo motivo que drawMeshDialog/drawAudioClipDialog: se ejecuta cada
+    // frame independientemente de m_sceneDlgOpen para drenar el diálogo aunque
+    // el usuario lo cierre sin confirmar.
+    if (!m_sceneDlgOpen || !m_sceneFileDialog->Display("SceneDlg"))
+        return;
+
+    if (m_sceneFileDialog->IsOk())
+    {
+        std::string path = m_sceneFileDialog->GetFilePathName();
+
+        if (m_sceneDlgIsSave)
+        {
+            m_sceneIOError = (m_scene && m_scene->save(path)) ? "" : "No se pudo guardar la escena";
+        }
+        else if (m_scene && m_renderer && m_physics && m_audio)
+        {
+            // Libera recursos GPU de la escena actual antes de que
+            // Scene::load la reemplace — Scene::load solo limpia datos/
+            // colliders/audio, no conoce Renderer (ver constraints del plan).
+            for (auto& child : m_scene->getRoot().children)
+                m_renderer->removeGameObject(child.get());
+
+            if (m_scene->load(path, *m_physics, *m_audio))
+            {
+                m_scene->traverse([this](GameObject* go) {
+                    if (go->hasMesh() && go->staticRenderIndex < 0)
+                        go->staticRenderIndex = m_renderer->addStaticMesh(*go->getMesh());
+                });
+                m_selected = nullptr; // la selección anterior ya no existe
+                m_sceneIOError.clear();
+            }
+            else
+            {
+                m_sceneIOError = "No se pudo cargar la escena";
+            }
+        }
+    }
+
+    m_sceneFileDialog->Close();
+    m_sceneDlgOpen = false;
 }
 
 void EditorUI::drawAddComponentButton()
