@@ -201,6 +201,29 @@ void EditorUI::drawToolbar()
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse;
     ImGui::Begin("##Toolbar", nullptr, flags);
 
+    bool canPlay = m_scene && m_physics && m_audio && m_renderer;
+    ImGui::BeginDisabled(!canPlay);
+    if (m_isPlaying)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        if (ImGui::Button("Stop"))
+        {
+            m_sceneIOError = reloadSceneFromJson(m_playSnapshot) ? "" : "No se pudo restaurar la escena";
+            m_isPlaying = false;
+        }
+        ImGui::PopStyleColor();
+    }
+    else
+    {
+        if (ImGui::Button("Play"))
+        {
+            m_playSnapshot = m_scene->toJson();
+            m_isPlaying = true;
+        }
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
     bool wireframe = m_renderer && m_renderer->isWireframeMode();
     if (wireframe)
         ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
@@ -1433,6 +1456,51 @@ void EditorUI::drawAudioClipDialog()
     }
 }
 
+bool EditorUI::reloadSceneFromJson(const nlohmann::json& j)
+{
+    if (!m_scene || !m_renderer || !m_physics || !m_audio)
+        return false;
+
+    // Libera recursos GPU de la escena actual y resetea sus índices a -1:
+    // si fromJson falla más abajo por malformación anidada, m_root sigue
+    // siendo este mismo árbol (Scene::fromJson es atómico), y resetear los
+    // índices aquí permite que el traverse de re-registro de abajo lo
+    // vuelva a registrar igual que si fuera el árbol nuevo — sin esto, el
+    // árbol viejo quedaría con índices obsoletos (Renderer::removeGameObject
+    // no los resetea) y sin re-registrar tras un fallo, dejando el viewport
+    // vacío pese a que los datos de Scene no cambiaron.
+    for (auto& child : m_scene->getRoot().children)
+    {
+        m_renderer->removeGameObject(child.get());
+        child->traverse([](GameObject* go) {
+            go->staticRenderIndex = -1;
+            go->skinnedRenderIndex = -1;
+        });
+    }
+
+    bool loaded = m_scene->fromJson(j, *m_physics, *m_audio);
+    // Se ejecuta tanto si loaded es true (árbol nuevo, índices ya en -1 por
+    // construcción) como si es false (árbol viejo intacto, índices
+    // reseteados justo arriba) — en ambos casos hay que volver a subir los
+    // meshes a GPU.
+    m_scene->traverse([this](GameObject* go) {
+        if (go->isSkinned())
+        {
+            if (go->skinnedRenderIndex < 0)
+                go->skinnedRenderIndex = m_renderer->addSkinnedMesh(*go->getSkinnedMesh());
+        }
+        else if (go->hasMesh() && go->staticRenderIndex < 0)
+        {
+            go->staticRenderIndex = m_renderer->addStaticMesh(*go->getMesh());
+        }
+    });
+
+    if (loaded)
+        m_selected = nullptr; // la selección anterior ya no existe
+
+    return loaded;
+}
+
 void EditorUI::drawSceneDialog()
 {
     // Mismo motivo que drawMeshDialog/drawAudioClipDialog: se ejecuta cada
@@ -1449,75 +1517,20 @@ void EditorUI::drawSceneDialog()
         {
             m_sceneIOError = (m_scene && m_scene->save(path)) ? "" : "No se pudo guardar la escena";
         }
-        else if (m_scene && m_renderer && m_physics && m_audio)
+        else
         {
             // Valida la estructura básica del JSON ANTES de tocar GPU/Scene:
             // rechaza un fichero top-level corrupto sin tocar nada (fast
-            // path, evita el churn de GPU de abajo). No cubre malformación
-            // anidada (un nodo interno con campos rotos) — para eso,
-            // Scene::load es atómico (construye en un árbol temporal y solo
-            // reemplaza m_root si TODO el parseo tiene éxito), y el bloque
-            // de re-registro de más abajo cubre ambos desenlaces: árbol
-            // nuevo si load tuvo éxito, o el mismo árbol viejo intacto (con
-            // sus índices GPU reseteados) si falló.
+            // path, evita el churn de GPU de reloadSceneFromJson). No cubre
+            // malformación anidada — para eso, Scene::fromJson es atómico y
+            // reloadSceneFromJson cubre ambos desenlaces.
             auto parsed = FileManager::readJson(path);
             bool structureOk = parsed.has_value() &&
                                 parsed->contains("version") && (*parsed)["version"].is_number_integer() &&
                                 (*parsed)["version"].get<int>() == 1 &&
                                 parsed->contains("root") && (*parsed)["root"].is_object();
 
-            if (!structureOk)
-            {
-                m_sceneIOError = "No se pudo cargar la escena";
-                m_sceneFileDialog->Close();
-                m_sceneDlgOpen = false;
-                return;
-            }
-
-            // Libera recursos GPU de la escena actual y resetea sus índices
-            // a -1: si Scene::load falla más abajo por malformación anidada,
-            // m_root sigue siendo este mismo árbol (Scene::load es atómico),
-            // y resetear los índices aquí permite que el traverse de
-            // re-registro de abajo lo vuelva a registrar igual que si fuera
-            // el árbol nuevo — sin esto, el árbol viejo quedaría con índices
-            // obsoletos (Renderer::removeGameObject no los resetea) y sin
-            // re-registrar tras un fallo, dejando el viewport vacío pese a
-            // que los datos de Scene no cambiaron.
-            for (auto& child : m_scene->getRoot().children)
-            {
-                m_renderer->removeGameObject(child.get());
-                child->traverse([](GameObject* go) {
-                    go->staticRenderIndex = -1;
-                    go->skinnedRenderIndex = -1;
-                });
-            }
-
-            bool loaded = m_scene->load(path, *m_physics, *m_audio);
-            // Se ejecuta tanto si loaded es true (árbol nuevo, índices ya en
-            // -1 por construcción) como si es false (árbol viejo intacto,
-            // índices reseteados justo arriba) — en ambos casos hay que
-            // volver a subir los meshes a GPU.
-            m_scene->traverse([this](GameObject* go) {
-                if (go->isSkinned())
-                {
-                    if (go->skinnedRenderIndex < 0)
-                        go->skinnedRenderIndex = m_renderer->addSkinnedMesh(*go->getSkinnedMesh());
-                }
-                else if (go->hasMesh() && go->staticRenderIndex < 0)
-                {
-                    go->staticRenderIndex = m_renderer->addStaticMesh(*go->getMesh());
-                }
-            });
-
-            if (loaded)
-            {
-                m_selected = nullptr; // la selección anterior ya no existe
-                m_sceneIOError.clear();
-            }
-            else
-            {
-                m_sceneIOError = "No se pudo cargar la escena";
-            }
+            m_sceneIOError = (structureOk && reloadSceneFromJson(*parsed)) ? "" : "No se pudo cargar la escena";
         }
     }
 

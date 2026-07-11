@@ -348,21 +348,21 @@ namespace DonTopo
         });
     }
 
-    bool Scene::save(const std::string& path) const
+    nlohmann::json Scene::toJson() const
     {
         nlohmann::json root;
         root["version"] = 1;
         root["root"] = nodeToJson(m_root);
-        return FileManager::writeJson(path, root);
+        return root;
     }
 
-    bool Scene::load(const std::string& path, PhysicsManager& physics, AudioManager& audio)
+    bool Scene::save(const std::string& path) const
     {
-        auto parsed = FileManager::readJson(path);
-        if (!parsed)
-            return false;
+        return FileManager::writeJson(path, toJson());
+    }
 
-        const nlohmann::json& j = *parsed;
+    bool Scene::fromJson(const nlohmann::json& j, PhysicsManager& physics, AudioManager& audio)
+    {
         if (!j.contains("version") || !j["version"].is_number_integer() || j["version"].get<int>() != 1 ||
             !j.contains("root") || !j["root"].is_object())
             return false;
@@ -404,5 +404,13 @@ namespace DonTopo
 
         m_root.updateWorldTransforms();
         return true;
+    }
+
+    bool Scene::load(const std::string& path, PhysicsManager& physics, AudioManager& audio)
+    {
+        auto parsed = FileManager::readJson(path);
+        if (!parsed)
+            return false;
+        return fromJson(*parsed, physics, audio);
     }
 }

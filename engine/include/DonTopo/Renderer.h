@@ -36,6 +36,7 @@ namespace DonTopo {
             void setWireframeMode(bool enabled) { m_wireframeMode = enabled; }
             bool isWireframeMode() const { return m_wireframeMode; }
             bool isViewportHovered() const { return m_editorUI.isViewportHovered(); }
+            bool isPlaying() const { return m_editorUI.isPlaying(); }
             // Reenvía al axis gizmo del viewport; cb recibe el eje mundo clicado.
             void setOnAxisSelected(std::function<void(const glm::vec3&)> cb) { m_editorUI.setOnAxisSelected(std::move(cb)); }
             void setPhysicsManager(PhysicsManager* physics) { m_editorUI.setPhysicsManager(physics); }
