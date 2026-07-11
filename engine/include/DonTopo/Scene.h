@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <nlohmann/json_fwd.hpp>
 #include "DonTopo/GameObject.h"
 
 namespace DonTopo
@@ -25,14 +26,21 @@ namespace DonTopo
             void shutdown(PhysicsManager& physics, AudioManager& audio);
 
             // Serializa el árbol completo (transforms, mesh, colliders, audio
-            // clip) a path en formato JSON. false si la escritura falla.
+            // clip) a un nlohmann::json en memoria.
+            nlohmann::json toJson() const;
+            // Reemplaza el árbol actual por el contenido de j. Limpia la
+            // escena existente (shutdown + move-assignment) SOLO si j es
+            // válido — una carga fallida no modifica la escena en memoria.
+            // Recrea colliders/audio vía physics/audio (mismas factories que
+            // usa EditorUI). No toca Renderer — el caller debe registrar/
+            // liberar los meshes en GPU (ver EditorUI::reloadSceneFromJson).
+            bool fromJson(const nlohmann::json& j, PhysicsManager& physics, AudioManager& audio);
+
+            // Serializa el árbol completo a path en formato JSON (vía
+            // toJson()). false si la escritura falla.
             bool save(const std::string& path) const;
-            // Reemplaza el árbol actual por el contenido de path. Limpia la
-            // escena existente (shutdown + children.clear()) SOLO si el
-            // fichero es válido — una carga fallida no modifica la escena en
-            // memoria. Recrea colliders/audio vía physics/audio (mismas
-            // factories que usa EditorUI). No toca Renderer — el caller debe
-            // registrar/liberar los meshes en GPU (ver EditorUI::drawSceneDialog).
+            // Lee y parsea path, delega en fromJson(...). false si el
+            // fichero no existe o el JSON es inválido.
             bool load(const std::string& path, PhysicsManager& physics, AudioManager& audio);
 
         private:
