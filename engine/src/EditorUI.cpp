@@ -1854,6 +1854,8 @@ void EditorUI::drawContentBrowser(GameObject* sceneRoot)
                         }
                         else
                         {
+                            pushLog("Asset renombrado: '" + m_assetRenameTarget.filename().string() +
+                                    "' -> '" + newPath.filename().string() + "'");
                             updateSceneReferencesForRename(sceneRoot, m_assetRenameTarget, newPath, m_assetRenameIsDir);
                             m_scanned       = false;
                             m_dlgReopenPath = m_currentDir;
@@ -1902,6 +1904,7 @@ void EditorUI::drawContentBrowser(GameObject* sceneRoot)
                 }
                 else
                 {
+                    pushLog("Asset eliminado: " + m_assetDeleteTarget.string());
                     detachSceneReferencesForDelete(sceneRoot, m_assetDeleteTarget, m_assetDeleteIsDir);
                     m_scanned       = false;
                     m_dlgReopenPath = m_currentDir;
