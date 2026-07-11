@@ -22,7 +22,9 @@
 #include <algorithm>
 #include <cassert>
 #include <cctype>
+#include <chrono>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <set>
 #define GLM_ENABLE_EXPERIMENTAL
@@ -184,6 +186,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     drawSelectionGizmo();
     drawViewport(viewportTexture, cameraView);
     drawProperties();
+    drawLogPanel();
     drawMeshDialog();
     drawAudioClipDialog();
     drawSceneDialog();
@@ -287,6 +290,35 @@ void EditorUI::drawDockSpace()
     ImGui::Begin("##DockSpace", nullptr, dockFlags);
     ImGui::PopStyleVar(3);
     ImGui::DockSpace(ImGui::GetID("MainDockSpace"), ImVec2(0, 0), ImGuiDockNodeFlags_None);
+    ImGui::End();
+}
+
+void EditorUI::pushLog(const std::string& message)
+{
+    std::time_t t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm     tmBuf{};
+    localtime_s(&tmBuf, &t);
+    char timeStr[16];
+    std::strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &tmBuf);
+
+    m_logEntries.push_back(std::string("[") + timeStr + "] " + message);
+    if (m_logEntries.size() > kLogMaxEntries)
+        m_logEntries.pop_front();
+}
+
+void EditorUI::drawLogPanel()
+{
+    ImGui::Begin("Log");
+    for (const auto& line : m_logEntries)
+        ImGui::TextUnformatted(line.c_str());
+
+    // Autoscroll: solo si ya estaba al fondo antes de este frame (no pelea
+    // con el usuario si sube a revisar historial mientras entran líneas
+    // nuevas).
+    if (m_logAutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+        ImGui::SetScrollHereY(1.0f);
+    m_logAutoScroll = ImGui::GetScrollY() >= ImGui::GetScrollMaxY();
+
     ImGui::End();
 }
 

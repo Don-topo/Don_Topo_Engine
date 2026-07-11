@@ -2,6 +2,7 @@
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <string>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -83,6 +84,11 @@ private:
     void beginRename(GameObject* node);
     void drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& cameraView);
     void drawProperties();
+    // Único punto de escritura del log — añade "[HH:MM:SS] message" al
+    // final de m_logEntries y descarta la más antigua si se supera
+    // kLogMaxEntries. Llamado desde cada acción de edición confirmada.
+    void pushLog(const std::string& message);
+    void drawLogPanel();
     void drawBoxColliderSection();
     void drawSphereColliderSection();
     void drawCapsuleColliderSection();
@@ -142,6 +148,15 @@ private:
 
     // Viewport
     bool m_viewportHovered = false;
+
+    // Log — ring buffer de acciones de edición confirmadas, más reciente al
+    // final. Sin persistencia a disco (spec: no hace falta guardar nada).
+    static constexpr size_t kLogMaxEntries = 200;
+    std::deque<std::string> m_logEntries;
+    // true si el panel ya estaba scrolleado al fondo el frame anterior —
+    // evita pelear con el usuario si sube a leer historial mientras llegan
+    // más líneas.
+    bool m_logAutoScroll = true;
 
     // Content Browser
     bool m_dlgOpen = false;
