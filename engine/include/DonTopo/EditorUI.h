@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <glm/glm.hpp>
+#include <nlohmann/json.hpp>
 
 namespace IGFD { class FileDialog; }
 
@@ -33,6 +34,9 @@ public:
     void draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView);
 
     bool isViewportHovered() const { return m_viewportHovered; }
+
+    // true mientras Play Mode está activo (física + audio corriendo).
+    bool isPlaying() const { return m_isPlaying; }
 
     // Notificado justo antes de desenganchar node de su padre (node sigue
     // siendo válido y su subárbol completo también), para que el dueño
@@ -88,6 +92,15 @@ private:
     void drawAudioClipSection();
     void drawAudioClipDialog();
     void drawSceneDialog();
+    // Limpia GPU de la escena actual, reemplaza su contenido con j (vía
+    // Scene::fromJson) y re-registra GPU (estático + skinned) de lo que
+    // quede — tanto si fromJson tuvo éxito (árbol nuevo) como si falló
+    // (árbol viejo intacto, con índices reseteados antes de liberar GPU).
+    // Limpia m_selected si fromJson tuvo éxito. Devuelve lo que devuelva
+    // fromJson. Usado por drawSceneDialog (Load Scene) y por el handler de
+    // Stop en drawToolbar. false sin efecto si falta algún puntero
+    // (m_scene/m_renderer/m_physics/m_audio).
+    bool reloadSceneFromJson(const nlohmann::json& j);
     void drawAddComponentButton();
     // Crea un GameObject hijo de parent con el mesh dado, lo registra en el
     // Renderer (staticRenderIndex) y lo deja sin collider. No-op si parent o
@@ -182,6 +195,13 @@ private:
     bool        m_sceneDlgIsSave = false;
     // Último error de guardado/carga de escena (vacío si ninguno pendiente).
     std::string m_sceneIOError;
+
+    // Play Mode — snapshot en RAM del árbol justo antes de pulsar Play,
+    // restaurado íntegro al pulsar Stop (tipo Unity Play-In-Editor). No se
+    // bloquea la edición mientras está activo — cualquier cambio se
+    // descarta igual al restaurar.
+    bool           m_isPlaying = false;
+    nlohmann::json m_playSnapshot;
 
     // Scene selection
     GameObject* m_selected = nullptr;
