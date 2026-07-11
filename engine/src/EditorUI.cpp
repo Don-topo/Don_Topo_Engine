@@ -629,6 +629,7 @@ void EditorUI::loadMeshForSelected(const std::string& path)
         m_selected->staticRenderIndex = m_renderer->addStaticMesh(*mesh);
         m_selected->setMesh(std::move(mesh));
         m_meshLoadError.clear();
+        pushLog("Componente Mesh añadido a '" + m_selected->name + "'");
     }
     catch (const std::exception& e)
     {
@@ -658,6 +659,7 @@ void EditorUI::loadAudioClipForSelected(const std::string& path)
     }
     m_selected->setAudioClip(std::move(clip));
     m_audioLoadError.clear();
+    pushLog("Componente Audio Clip añadido a '" + m_selected->name + "'");
 }
 
 void EditorUI::drawSceneNode(GameObject* node)
@@ -1600,6 +1602,7 @@ void EditorUI::drawAddComponentButton()
                 glm::vec3(25.0f, 25.0f, 25.0f), glm::vec3(0.0f),
                 m_selected->worldTransform, /*useGravity=*/false));
             m_colliderCachedFor = nullptr;
+            pushLog("Componente Box Collider añadido a '" + m_selected->name + "'");
         }
 
         if (ImGui::Selectable("Sphere Collider") && !alreadyHasAny && m_physics)
@@ -1607,6 +1610,7 @@ void EditorUI::drawAddComponentButton()
             m_selected->setSphereCollider(m_physics->createSphereColliderComponent(
                 25.0f, glm::vec3(0.0f), m_selected->worldTransform, /*useGravity=*/false));
             m_sphereColliderCachedFor = nullptr;
+            pushLog("Componente Sphere Collider añadido a '" + m_selected->name + "'");
         }
 
         if (ImGui::Selectable("Capsule Collider") && !alreadyHasAny && m_physics)
@@ -1614,6 +1618,7 @@ void EditorUI::drawAddComponentButton()
             m_selected->setCapsuleCollider(m_physics->createCapsuleColliderComponent(
                 15.0f, 25.0f, glm::vec3(0.0f), m_selected->worldTransform, /*useGravity=*/false));
             m_capsuleColliderCachedFor = nullptr;
+            pushLog("Componente Capsule Collider añadido a '" + m_selected->name + "'");
         }
 
         if (ImGui::Selectable("Plane Collider") && !alreadyHasAny && m_physics)
@@ -1621,6 +1626,7 @@ void EditorUI::drawAddComponentButton()
             m_selected->setPlaneCollider(m_physics->createPlaneColliderComponent(
                 glm::vec3(0.0f), m_selected->worldTransform));
             m_planeColliderCachedFor = nullptr;
+            pushLog("Componente Plane Collider añadido a '" + m_selected->name + "'");
         }
 
         ImGui::EndDisabled();
