@@ -360,7 +360,10 @@ void EditorUI::drawScene(GameObject* sceneRoot)
             ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
     {
         if (ImGui::MenuItem("Create GameObject") && sceneRoot)
-            sceneRoot->addChild("GameObject");
+        {
+            GameObject* created = sceneRoot->addChild("GameObject");
+            pushLog("GameObject '" + created->name + "' creado");
+        }
         if (ImGui::BeginMenu("Basic Shapes"))
         {
             if (ImGui::MenuItem("Cube"))
@@ -393,6 +396,8 @@ void EditorUI::drawScene(GameObject* sceneRoot)
         target->traverse([&](GameObject* go) {
             if (go == m_selected) selectionInSubtree = true;
         });
+
+        pushLog("GameObject '" + target->name + "' eliminado");
 
         if (m_onDelete)
             m_onDelete(target);
@@ -434,7 +439,11 @@ void EditorUI::drawScene(GameObject* sceneRoot)
         {
             std::string newName = trim(m_renameBuffer);
             if (m_renameTarget && isValidGameObjectName(newName))
+            {
+                std::string oldName  = m_renameTarget->name;
                 m_renameTarget->name = newName;
+                pushLog("GameObject renombrado: '" + oldName + "' -> '" + newName + "'");
+            }
             m_renameTarget = nullptr;
             ImGui::CloseCurrentPopup();
         }
@@ -598,6 +607,7 @@ void EditorUI::createBasicShape(GameObject* parent, const std::string& name, std
     GameObject* go = parent->addChild(name);
     go->staticRenderIndex = m_renderer->addStaticMesh(*mesh);
     go->setMesh(std::move(mesh));
+    pushLog("GameObject '" + go->name + "' creado");
 }
 
 void EditorUI::loadMeshForSelected(const std::string& path)
@@ -685,7 +695,10 @@ void EditorUI::drawSceneNode(GameObject* node)
     if (ImGui::BeginPopupContextItem())
     {
         if (ImGui::MenuItem("Create GameObject"))
-            node->addChild("GameObject");
+        {
+            GameObject* created = node->addChild("GameObject");
+            pushLog("GameObject '" + created->name + "' creado");
+        }
         if (ImGui::BeginMenu("Basic Shapes"))
         {
             if (ImGui::MenuItem("Cube"))
