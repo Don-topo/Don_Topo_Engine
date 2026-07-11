@@ -213,6 +213,7 @@ void EditorUI::drawToolbar()
         {
             m_sceneIOError = reloadSceneFromJson(m_playSnapshot) ? "" : "No se pudo restaurar la escena";
             m_isPlaying = false;
+            pushLog("Play Mode detenido");
         }
         ImGui::PopStyleColor();
     }
@@ -222,6 +223,7 @@ void EditorUI::drawToolbar()
         {
             m_playSnapshot = m_scene->toJson();
             m_isPlaying = true;
+            pushLog("Play Mode iniciado");
         }
     }
     ImGui::EndDisabled();
@@ -1562,7 +1564,9 @@ void EditorUI::drawSceneDialog()
 
         if (m_sceneDlgIsSave)
         {
-            m_sceneIOError = (m_scene && m_scene->save(path)) ? "" : "No se pudo guardar la escena";
+            bool saved   = m_scene && m_scene->save(path);
+            m_sceneIOError = saved ? "" : "No se pudo guardar la escena";
+            pushLog(saved ? ("Escena guardada: " + path) : ("Error al guardar escena: " + path));
         }
         else
         {
@@ -1577,7 +1581,9 @@ void EditorUI::drawSceneDialog()
                                 (*parsed)["version"].get<int>() == 1 &&
                                 parsed->contains("root") && (*parsed)["root"].is_object();
 
-            m_sceneIOError = (structureOk && reloadSceneFromJson(*parsed)) ? "" : "No se pudo cargar la escena";
+            bool loaded  = structureOk && reloadSceneFromJson(*parsed);
+            m_sceneIOError = loaded ? "" : "No se pudo cargar la escena";
+            pushLog(loaded ? ("Escena cargada: " + path) : ("Error al cargar escena: " + path));
         }
     }
 
