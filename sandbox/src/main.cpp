@@ -202,10 +202,25 @@ int main()
             if (renderer.isViewportHovered())
                 camera.update(window.getNativeWindow(), dt);
             renderer.setCamera(camera);
-            audio.update(camera.getPos(), camera.getFront(), camera.getUp());
 
-            physics.stepSimulation(dt);
-            scene.update(dt, physics);
+            if (renderer.isPlaying())
+            {
+                audio.update(camera.getPos(), camera.getFront(), camera.getUp());
+                physics.stepSimulation(dt);
+                scene.update(dt, physics);
+            }
+            else
+            {
+                // Sin física corriendo, pero los transforms padre→hijo se
+                // siguen propagando: gizmo/Properties deben seguir
+                // funcionando en Edit Mode. Scene::update también hace esto,
+                // pero además impone la pose de PhysX sobre cada GameObject
+                // con collider dinámico — justo lo que hace imposible editar
+                // esos objetos hoy (la física los pelea cada frame). Al
+                // saltarnos scene.update() entero en Edit Mode, ese pull ya
+                // no ocurre.
+                scene.getRoot().updateWorldTransforms();
+            }
 
             // Recorrido en vivo (no la lista allNodes cacheada al arrancar): el
             // editor permite borrar GameObjects en tiempo real, así que un
