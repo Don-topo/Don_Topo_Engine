@@ -1279,6 +1279,9 @@ void EditorUI::drawCapsuleColliderSection()
 
     bool colliderChanged = false;
     bool dragActive = false;
+    bool centerCommitted = false;
+    bool radiusCommitted = false;
+    bool heightCommitted = false;
 
     if (sectionOpen)
     {
@@ -1287,34 +1290,50 @@ void EditorUI::drawCapsuleColliderSection()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("X##k1", &m_editCapsuleCenter.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Y##k1", &m_editCapsuleCenter.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Z##k1", &m_editCapsuleCenter.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::Text("Radius");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("##k2", &m_editCapsuleRadius, 0.5f, 0.01f, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        radiusCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::Text("Height");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("##k3", &m_editCapsuleHeight, 0.5f, 0.01f, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        heightCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         if (ImGui::Checkbox("Use Gravity", &m_editCapsuleUseGravity))
+        {
             colliderChanged = true;
+            pushLog(std::string("Use Gravity de '") + m_selected->name +
+                     "' (Capsule Collider) " + (m_editCapsuleUseGravity ? "activado" : "desactivado"));
+        }
 
         ImGui::TreePop();
     }
 
     m_capsuleColliderDragActive = dragActive;
+
+    if (centerCommitted)
+        pushLog("Center de '" + m_selected->name + "' (Capsule Collider) cambiado a " + formatVec3(m_editCapsuleCenter));
+    if (radiusCommitted)
+        pushLog("Radius de '" + m_selected->name + "' (Capsule Collider) cambiado a " + formatFloat(m_editCapsuleRadius));
+    if (heightCommitted)
+        pushLog("Height de '" + m_selected->name + "' (Capsule Collider) cambiado a " + formatFloat(m_editCapsuleHeight));
 
     if (colliderChanged)
     {
@@ -1354,6 +1373,7 @@ void EditorUI::drawPlaneColliderSection()
 
     bool colliderChanged = false;
     bool dragActive = false;
+    bool centerCommitted = false;
 
     if (sectionOpen)
     {
@@ -1362,19 +1382,25 @@ void EditorUI::drawPlaneColliderSection()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("X##p1", &m_editPlaneCenter.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Y##p1", &m_editPlaneCenter.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Z##p1", &m_editPlaneCenter.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::TreePop();
     }
 
     m_planeColliderDragActive = dragActive;
+
+    if (centerCommitted)
+        pushLog("Center de '" + m_selected->name + "' (Plane Collider) cambiado a " + formatVec3(m_editPlaneCenter));
 
     if (colliderChanged)
         pc->setCenter(m_editPlaneCenter);
