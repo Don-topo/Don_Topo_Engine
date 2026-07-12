@@ -41,6 +41,7 @@ target_link_libraries(DonTopoEngine
         imgui_filedialog
         imguizmo
         nlohmann_json::nlohmann_json
+        sol2_lib
 )
 
 if(FMOD_FOUND)
