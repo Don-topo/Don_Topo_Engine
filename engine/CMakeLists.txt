@@ -16,6 +16,7 @@ add_library(DonTopoEngine STATIC
     src/AudioManager.cpp
     src/AudioClipComponent.cpp
     src/ScriptComponent.cpp
+    src/ScriptManager.cpp
     src/PhysicsManager.cpp
     src/BoxCollider.cpp
     src/SphereCollider.cpp
