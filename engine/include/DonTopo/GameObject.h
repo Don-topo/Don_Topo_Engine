@@ -13,10 +13,15 @@
 
 namespace DonTopo
 {
+    class ScriptComponent;
+
     class GameObject
     {
         public:
             explicit GameObject(std::string name = "");
+            ~GameObject();
+            GameObject(GameObject&&) noexcept;
+            GameObject& operator=(GameObject&&) noexcept;
 
             GameObject* addChild(std::string childName);
 
@@ -54,6 +59,14 @@ namespace DonTopo
             const std::shared_ptr<AudioClipComponent>& getAudioClip() const { return m_audioClip; }
             bool hasAudioClip() const { return m_audioClip != nullptr; }
 
+            // Scripts Lua — a diferencia del resto de slots, vector: se
+            // permiten varios scripts por GameObject (incluso repetidos).
+            void addScript(std::unique_ptr<ScriptComponent> script);
+            void removeScript(ScriptComponent* script);
+            std::vector<std::unique_ptr<ScriptComponent>>&       getScripts()       { return m_scripts; }
+            const std::vector<std::unique_ptr<ScriptComponent>>& getScripts() const { return m_scripts; }
+            bool hasScripts() const { return !m_scripts.empty(); }
+
             void updateWorldTransforms(const glm::mat4& parentWorld = glm::mat4(1.0f));
 
             template <typename Fn>
@@ -81,5 +94,6 @@ namespace DonTopo
             std::shared_ptr<CapsuleCollider> m_capsuleCollider;
             std::shared_ptr<PlaneCollider> m_planeCollider;
             std::shared_ptr<AudioClipComponent> m_audioClip;
+            std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
     };
 }
