@@ -13,6 +13,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/euler_angles.hpp>
@@ -41,12 +42,19 @@ namespace DonTopo::ScriptBindings
         struct LuaPlaneCollider { LuaEntity e; };
         struct LuaAudioClip { LuaEntity e; };
 
-        // Descompone localTransform en T/R/S (grados pa Lua).
+        // Descompone localTransform en T/R/S (grados pa Lua). La extracción de
+        // ángulos usa extractEulerAngleXYZ — el inverso exacto del
+        // eulerAngleXYZ de recomposeLocal; mezclar convenciones (p.ej.
+        // glm::eulerAngles sobre el quat) corrompe la rotación en cualquier
+        // objeto rotado en más de un eje.
         void decomposeLocal(GameObject* go, glm::vec3& pos, glm::vec3& eulerDeg, glm::vec3& scale)
         {
             glm::quat rot; glm::vec3 skew; glm::vec4 persp;
             glm::decompose(go->localTransform, scale, rot, pos, skew, persp);
-            eulerDeg = glm::degrees(glm::eulerAngles(rot));
+            glm::mat4 rotOnly = glm::mat4_cast(rot);
+            float t1 = 0.0f, t2 = 0.0f, t3 = 0.0f;
+            glm::extractEulerAngleXYZ(rotOnly, t1, t2, t3);
+            eulerDeg = glm::degrees(glm::vec3(t1, t2, t3));
         }
 
         void recomposeLocal(GameObject* go, const glm::vec3& pos, const glm::vec3& eulerDeg, const glm::vec3& scale)
@@ -418,7 +426,7 @@ namespace DonTopo::ScriptBindings
                     }
                     if (name == "AudioClip" && !go->hasAudioClip() && mgr->audioManager() && arg)
                     {
-                        auto clip = mgr->audioManager()->createAudioClipComponent(*arg, true, false);
+                        auto clip = mgr->audioManager()->createAudioClipComponent(*arg, false, false);
                         if (clip) { go->setAudioClip(std::move(clip)); return sol::make_object(lua, LuaAudioClip{e}); }
                     }
                     if (name.rfind("Script:", 0) == 0)
