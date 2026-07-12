@@ -149,4 +149,24 @@ namespace DonTopo
         if (!m_scene) return;
         m_scene->traverse([this](GameObject* go) { m_alive.insert(go); });
     }
+
+    void ScriptManager::instantiateComponent(ScriptComponent& comp)
+    {
+        comp.instance = createInstance(comp.scriptName, comp.overrides);
+        comp.started  = false;
+        comp.hasError = false;
+        if (!comp.instance.valid()) return;   // clase no registrada (missing)
+
+        comp.instance["entity"] = LuaEntity{ comp.owner, this };
+
+        auto isFn = [&](const char* n) {
+            return comp.instance[n].get_type() == sol::type::function;
+        };
+        comp.hasAwake       = isFn("Awake");
+        comp.hasStart       = isFn("Start");
+        comp.hasUpdate      = isFn("Update");
+        comp.hasFixedUpdate = isFn("FixedUpdate");
+        comp.hasLateUpdate  = isFn("LateUpdate");
+        comp.hasOnDestroy   = isFn("OnDestroy");
+    }
 }

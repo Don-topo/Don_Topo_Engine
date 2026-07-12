@@ -73,6 +73,15 @@ public:
     // del lifecycle y tras cualquier alta/baja estructural.
     void rebuildAliveSet();
 
+    void setOnInstantiated(std::function<void(GameObject*)> cb) { m_onInstantiated = std::move(cb); }
+    void setOnDestroying(std::function<void(GameObject*)> cb)   { m_onDestroying = std::move(cb); }
+    // Borrado diferido — procesado al final del frame del lifecycle.
+    void queueDestroy(GameObject* go) { m_destroyQueue.push_back(go); }
+    // Crea la tabla instancia del comp (defaults+overrides), inyecta
+    // self.entity y cachea qué callbacks define. NO llama Awake/Start.
+    void instantiateComponent(ScriptComponent& comp);
+    const std::function<void(GameObject*)>& onInstantiated() const { return m_onInstantiated; }
+
 private:
     // Extrae las props serializables (number/boolean/string) de classTable.
     std::vector<ScriptProp> detectProps(const sol::table& classTable);
@@ -89,6 +98,10 @@ private:
     PhysicsManager* m_physics = nullptr;
     AudioManager*   m_audio   = nullptr;
     std::set<GameObject*> m_alive;
+
+    std::vector<GameObject*> m_destroyQueue;
+    std::function<void(GameObject*)> m_onInstantiated;
+    std::function<void(GameObject*)> m_onDestroying;
 };
 
 } // namespace DonTopo

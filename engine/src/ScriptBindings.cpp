@@ -458,7 +458,70 @@ namespace DonTopo::ScriptBindings
                     }
                 });
         }
-    }
+
+        void registerScene(DonTopo::ScriptManager& mgr)
+        {
+            sol::state& lua = mgr.lua();
+            sol::table sceneTable = lua.create_named_table("Scene");
+
+            sceneTable["Find"] = [&mgr](const std::string& name) -> sol::object {
+                if (!mgr.scene()) return sol::nil;
+                GameObject* found = nullptr;
+                mgr.scene()->traverse([&](GameObject* go) {
+                    if (!found && go->parent && go->name == name) found = go;
+                });
+                if (!found) return sol::nil;
+                return sol::make_object(mgr.lua(), LuaEntity{found, &mgr});
+            };
+
+            sceneTable["CreateGameObject"] = [&mgr](const std::string& name,
+                                                    sol::optional<LuaEntity> parent) -> sol::object {
+                if (!mgr.scene()) return sol::nil;
+                GameObject* p = parent ? deref(*parent) : nullptr;
+                GameObject* go = mgr.scene()->addGameObject(name, p);
+                mgr.rebuildAliveSet();
+                return sol::make_object(mgr.lua(), LuaEntity{go, &mgr});
+            };
+
+            sceneTable["Destroy"] = [&mgr](const LuaEntity& e) {
+                mgr.queueDestroy(deref(e));
+            };
+
+            sceneTable["Instantiate"] = [&mgr](const LuaEntity& src,
+                                               sol::optional<LuaEntity> parent) -> sol::object {
+                if (!mgr.scene() || !mgr.physics() || !mgr.audioManager()) return sol::nil;
+                GameObject* srcGo = deref(src);
+                GameObject* p = parent ? deref(*parent) : nullptr;
+                GameObject* clone = mgr.scene()->cloneGameObject(
+                    srcGo, p, *mgr.physics(), *mgr.audioManager());
+                if (!clone) return sol::nil;
+
+                if (mgr.onInstantiated()) mgr.onInstantiated()(clone);
+                mgr.rebuildAliveSet();
+                // Los scripts del clon se instancian ya; Awake inmediato,
+                // Start lo dispara el lifecycle antes de su primer Update
+                // (started == false).
+                clone->traverse([&mgr](GameObject* n) {
+                    for (auto& s : n->getScripts())
+                    {
+                        mgr.instantiateComponent(*s);
+                        if (s->instance.valid() && s->hasAwake)
+                        {
+                            sol::protected_function f = s->instance["Awake"];
+                            auto r = f(s->instance);
+                            if (!r.valid())
+                            {
+                                sol::error err = r;
+                                mgr.log("Script '" + s->scriptName + "' Awake: " + std::string(err.what()));
+                                s->hasError = true;
+                            }
+                        }
+                    }
+                });
+                return sol::make_object(mgr.lua(), LuaEntity{clone, &mgr});
+            };
+        }
+    } // namespace (anónimo)
 
     void registerAll(ScriptManager& mgr)
     {
@@ -468,5 +531,6 @@ namespace DonTopo::ScriptBindings
         registerTransform(mgr.lua());
         registerComponents(mgr.lua());
         registerEntity(mgr);
+        registerScene(mgr);   // Task 7
     }
 }
