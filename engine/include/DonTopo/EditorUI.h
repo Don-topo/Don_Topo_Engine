@@ -71,6 +71,9 @@ public:
     // disparar el ciclo de vida al pulsar Play/Stop y para la sección
     // Scripts del panel Properties (Task 10).
     void setScriptManager(ScriptManager* sm) { m_scriptManager = sm; }
+    // Punto de entrada externo al Log Console (usado por ScriptManager vía
+    // el wiring de main.cpp: mensajes de compilación/errores de scripts).
+    void pushExternalLog(const std::string& message) { pushLog(message); }
 
 private:
     static constexpr float kToolbarHeight = 30.0f;
@@ -102,6 +105,10 @@ private:
     void drawMeshDialog();
     void drawAudioClipSection();
     void drawAudioClipDialog();
+    // Sección Scripts del panel Properties: un header colapsable por
+    // ScriptComponent de m_selected, con props auto-generadas desde el
+    // registro de ScriptManager (Task 10).
+    void drawScriptsSection();
     void drawSceneDialog();
     // Limpia GPU de la escena actual, reemplaza su contenido con j (vía
     // Scene::fromJson) y re-registra GPU (estático + skinned) de lo que

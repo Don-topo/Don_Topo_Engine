@@ -138,7 +138,9 @@ int main()
         scriptManager.setScene(&scene);
         scriptManager.setPhysicsManager(&physics);
         scriptManager.setAudioManager(&audio);
-        scriptManager.setLogCallback([](const std::string& msg) { std::cout << msg << std::endl; });
+        scriptManager.setLogCallback([&renderer](const std::string& msg) {
+            renderer.pushEditorLog(msg);
+        });
         scriptManager.setOnInstantiated([&renderer](DonTopo::GameObject* go) {
             go->traverse([&renderer](DonTopo::GameObject* n) {
                 if (!n->hasMesh()) return;

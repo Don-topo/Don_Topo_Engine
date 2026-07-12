@@ -46,6 +46,9 @@ namespace DonTopo {
             // Passthrough al EditorUI embebido, mismo patrón que
             // setPhysicsManager/setAudioManager.
             void setScriptManager(ScriptManager* sm) { m_editorUI.setScriptManager(sm); }
+            // Passthrough al EditorUI embebido — usado por el wiring de
+            // main.cpp pa redirigir el log de ScriptManager al Log Console.
+            void pushEditorLog(const std::string& m) { m_editorUI.pushExternalLog(m); }
             void focusSelected(Camera& camera) { m_editorUI.focusSelected(camera); }
             void setSceneRoot(GameObject* root);
             // Libera mesh/skinnedMesh/texturas en GPU de node y todo su subárbol
