@@ -14,8 +14,10 @@
 #include "DonTopo/Plane.h"
 #include "DonTopo/Capsule.h"
 #include "DonTopo/FileManager.h"
+#include "DonTopo/ScriptComponent.h"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <memory>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/type_ptr.hpp>
@@ -109,6 +111,32 @@ namespace
             j["audioClip"] = { {"path", clip->getPath()},
                                 {"loop", clip->getLoop()},
                                 {"is3D", clip->getIs3D()} };
+        }
+        if (node.hasScripts())
+        {
+            auto arr = nlohmann::json::array();
+            for (const auto& s : node.getScripts())
+            {
+                nlohmann::json ov = nlohmann::json::object();
+                for (const auto& [key, val] : s->overrides)
+                {
+                    std::visit([&](auto&& v) {
+                        using T = std::decay_t<decltype(v)>;
+                        if constexpr (std::is_same_v<T, double>)
+                        {
+                            // Preserva enteros como enteros en el JSON
+                            if (v == std::floor(v) && std::abs(v) < 1e15)
+                                ov[key] = static_cast<int64_t>(v);
+                            else
+                                ov[key] = v;
+                        }
+                        else
+                            ov[key] = v;
+                    }, val);
+                }
+                arr.push_back({ {"name", s->scriptName}, {"overrides", std::move(ov)} });
+            }
+            j["scripts"] = std::move(arr);
         }
 
         j["children"] = nlohmann::json::array();
@@ -256,6 +284,28 @@ namespace
             // clip nullptr (asset roto/formato no soportado): node queda sin
             // audio, el resto de la escena sigue cargando.
         }
+        if (j.contains("scripts"))
+        {
+            for (const auto& sj : j["scripts"])
+            {
+                auto comp = std::make_unique<DonTopo::ScriptComponent>(
+                    sj.at("name").get<std::string>(), node);
+                if (sj.contains("overrides"))
+                {
+                    for (const auto& [key, val] : sj["overrides"].items())
+                    {
+                        if (val.is_boolean())     comp->overrides[key] = val.get<bool>();
+                        else if (val.is_string()) comp->overrides[key] = val.get<std::string>();
+                        else if (val.is_number()) comp->overrides[key] = val.get<double>();
+                        // Otros tipos: ignorados (no son props serializables)
+                    }
+                }
+                // Nota: si el script ya no existe en Scripts/, el componente
+                // se conserva igual ("missing script", spec) — la UI lo
+                // señala; los overrides no se pierden al re-guardar.
+                node->addScript(std::move(comp));
+            }
+        }
 
         for (const auto& childJson : j.at("children"))
         {
@@ -284,6 +334,32 @@ namespace DonTopo
             std::remove_if(siblings.begin(), siblings.end(),
                 [node](const std::unique_ptr<GameObject>& c) { return c.get() == node; }),
             siblings.end());
+    }
+
+    GameObject* Scene::cloneGameObject(GameObject* src, GameObject* parent,
+                                       PhysicsManager& physics, AudioManager& audio)
+    {
+        if (!src || src == &m_root) return nullptr;
+
+        GameObject* target = parent ? parent : (src->parent ? src->parent : &m_root);
+        nlohmann::json j = nodeToJson(*src);
+
+        GameObject* clone = target->addChild(src->name + " (Clone)");
+        try
+        {
+            nodeFromJson(j, clone, target->worldTransform, physics, audio);
+        }
+        catch (const nlohmann::json::exception&)
+        {
+            removeGameObject(clone);
+            return nullptr;
+        }
+
+        clone->traverse([](GameObject* n) {
+            n->staticRenderIndex  = -1;
+            n->skinnedRenderIndex = -1;
+        });
+        return clone;
     }
 
     void Scene::update(float /*dt*/, PhysicsManager& /*physics*/)
@@ -345,6 +421,7 @@ namespace DonTopo
             go->setCapsuleCollider(nullptr);
             go->setPlaneCollider(nullptr);
             go->setAudioClip(nullptr);
+            go->getScripts().clear();
         });
     }
 
