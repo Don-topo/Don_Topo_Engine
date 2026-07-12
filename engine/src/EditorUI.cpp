@@ -1087,6 +1087,8 @@ void EditorUI::drawBoxColliderSection()
 
     bool colliderChanged = false;
     bool dragActive = false;
+    bool centerCommitted = false;
+    bool sizeCommitted = false;
 
     if (sectionOpen)
     {
@@ -1095,36 +1097,51 @@ void EditorUI::drawBoxColliderSection()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("X##c1", &m_editColliderCenter.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Y##c1", &m_editColliderCenter.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Z##c1", &m_editColliderCenter.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::Text("Size  ");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("X##c2", &m_editColliderSize.x, 0.5f, 0.01f, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        sizeCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Y##c2", &m_editColliderSize.y, 0.5f, 0.01f, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        sizeCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Z##c2", &m_editColliderSize.z, 0.5f, 0.01f, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        sizeCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         if (ImGui::Checkbox("Use Gravity", &m_editUseGravity))
+        {
             colliderChanged = true;
+            pushLog(std::string("Use Gravity de '") + m_selected->name +
+                     "' (Box Collider) " + (m_editUseGravity ? "activado" : "desactivado"));
+        }
 
         ImGui::TreePop();
     }
 
     m_colliderDragActive = dragActive;
+
+    if (centerCommitted)
+        pushLog("Center de '" + m_selected->name + "' (Box Collider) cambiado a " + formatVec3(m_editColliderCenter));
+    if (sizeCommitted)
+        pushLog("Size de '" + m_selected->name + "' (Box Collider) cambiado a " + formatVec3(m_editColliderSize));
 
     if (colliderChanged)
     {
@@ -1170,6 +1187,8 @@ void EditorUI::drawSphereColliderSection()
 
     bool colliderChanged = false;
     bool dragActive = false;
+    bool centerCommitted = false;
+    bool radiusCommitted = false;
 
     if (sectionOpen)
     {
@@ -1178,28 +1197,41 @@ void EditorUI::drawSphereColliderSection()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("X##s1", &m_editSphereCenter.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Y##s1", &m_editSphereCenter.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Z##s1", &m_editSphereCenter.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::Text("Radius");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("##s2", &m_editSphereRadius, 0.5f, 0.01f, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        radiusCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         if (ImGui::Checkbox("Use Gravity", &m_editSphereUseGravity))
+        {
             colliderChanged = true;
+            pushLog(std::string("Use Gravity de '") + m_selected->name +
+                     "' (Sphere Collider) " + (m_editSphereUseGravity ? "activado" : "desactivado"));
+        }
 
         ImGui::TreePop();
     }
 
     m_sphereColliderDragActive = dragActive;
+
+    if (centerCommitted)
+        pushLog("Center de '" + m_selected->name + "' (Sphere Collider) cambiado a " + formatVec3(m_editSphereCenter));
+    if (radiusCommitted)
+        pushLog("Radius de '" + m_selected->name + "' (Sphere Collider) cambiado a " + formatFloat(m_editSphereRadius));
 
     if (colliderChanged)
     {
