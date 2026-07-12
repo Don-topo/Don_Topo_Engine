@@ -120,6 +120,10 @@ private:
     // (m_scene/m_renderer/m_physics/m_audio).
     bool reloadSceneFromJson(const nlohmann::json& j);
     void drawAddComponentButton();
+    // Popup modal "Nuevo Script": crea Scripts/<Nombre>.lua desde plantilla,
+    // lo registra en ScriptManager y añade el componente al GameObject que
+    // estaba seleccionado al abrir el popup.
+    void drawNewScriptPopup();
     // Crea un GameObject hijo de parent con el mesh dado, lo registra en el
     // Renderer (staticRenderIndex) y lo deja sin collider. No-op si parent o
     // m_renderer son nullptr.
@@ -298,6 +302,14 @@ private:
     AudioManager*   m_audio = nullptr;
     Scene*          m_scene = nullptr;
     ScriptManager*  m_scriptManager = nullptr;
+
+    // Popup "Nuevo Script" — disparado desde Add > Script > Nuevo Script...
+    // m_newScriptTarget se captura al abrir (m_selected puede cambiar con el
+    // popup abierto) y se revalida contra la escena antes de añadir.
+    bool        m_openNewScriptPopup = false;
+    char        m_newScriptNameBuffer[64] = {};
+    std::string m_newScriptError;
+    GameObject* m_newScriptTarget = nullptr;
     // Mensaje del último intento fallido de carga de Mesh (vacío si no hay
     // error pendiente); se limpia al cambiar de selección o al cargar bien.
     std::string     m_meshLoadError;

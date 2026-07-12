@@ -29,6 +29,7 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <set>
 #include <type_traits>
 #include <variant>
@@ -1743,9 +1744,13 @@ void EditorUI::drawScriptsSection()
         ScriptComponent* comp = compPtr.get();
         ImGui::PushID(comp);
 
-        bool open = ImGui::CollapsingHeader(
-            (comp->scriptName + " (Script)").c_str(), ImGuiTreeNodeFlags_DefaultOpen);
-        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 12.0f);
+        // TreeNodeEx (label estrecho) y no CollapsingHeader (frame de ancho
+        // completo): el header solaparía el botón "x" y se comería su click.
+        // Mismo patrón que las secciones de collider.
+        ImGui::Separator();
+        bool open = ImGui::TreeNodeEx((comp->scriptName + " (Script)").c_str(),
+            ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+        ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
         if (ImGui::SmallButton("x"))
             toRemove = comp;
 
@@ -1853,6 +1858,7 @@ void EditorUI::drawScriptsSection()
                             m_selected->name + "'");
                 }
             }
+            ImGui::TreePop();
         }
         ImGui::PopID();
     }
@@ -1924,7 +1930,7 @@ void EditorUI::drawAddComponentButton()
             m_audioClipAddRequestedFor = m_selected;
         ImGui::EndDisabled();
 
-        if (m_scriptManager && !m_scriptManager->getRegistry().empty())
+        if (m_scriptManager)
         {
             if (ImGui::BeginMenu("Script"))
             {
@@ -1940,12 +1946,105 @@ void EditorUI::drawAddComponentButton()
                         pushLog("Componente Script '" + name + "' añadido a '" + m_selected->name + "'");
                     }
                 }
+                if (!m_scriptManager->getRegistry().empty())
+                    ImGui::Separator();
+                if (ImGui::MenuItem("Nuevo Script..."))
+                {
+                    m_newScriptTarget = m_selected;
+                    m_newScriptNameBuffer[0] = '\0';
+                    m_newScriptError.clear();
+                    m_openNewScriptPopup = true;
+                }
                 ImGui::EndMenu();
             }
         }
 
         ImGui::EndPopup();
     }
+
+    drawNewScriptPopup();
+}
+
+void EditorUI::drawNewScriptPopup()
+{
+    if (m_openNewScriptPopup)
+    {
+        ImGui::OpenPopup("Nuevo Script");
+        m_openNewScriptPopup = false;
+    }
+
+    if (!ImGui::BeginPopupModal("Nuevo Script", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    ImGui::Text("Nombre del script (sin .lua):");
+    ImGui::InputText("##NewScriptName", m_newScriptNameBuffer, sizeof(m_newScriptNameBuffer));
+    if (!m_newScriptError.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s", m_newScriptError.c_str());
+
+    if (ImGui::Button("Crear"))
+    {
+        const std::string name = m_newScriptNameBuffer;
+
+        // Identificador Lua válido: letra o '_' + alfanuméricos/'_' — el
+        // nombre del archivo es también el de la tabla global de la clase.
+        bool validName = !name.empty() &&
+            (std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_');
+        for (size_t i = 1; validName && i < name.size(); ++i)
+            validName = std::isalnum(static_cast<unsigned char>(name[i])) || name[i] == '_';
+
+        const std::filesystem::path path = m_scriptManager->scriptsDirPath() / (name + ".lua");
+
+        if (!validName)
+            m_newScriptError = "Nombre inválido: letra o '_' inicial, luego alfanuméricos o '_'";
+        else if (m_scriptManager->hasClass(name) || std::filesystem::exists(path))
+            m_newScriptError = "Ya existe un script con ese nombre";
+        else
+        {
+            std::ofstream file(path);
+            if (!file)
+                m_newScriptError = "No se pudo crear el archivo en " + path.string();
+            else
+            {
+                file << name << " = {\n"
+                     << "    -- Propiedades serializables (aparecen en el editor)\n"
+                     << "    speed = 1\n"
+                     << "}\n\n"
+                     << "function " << name << ":Start()\n"
+                     << "end\n\n"
+                     << "function " << name << ":Update(dt)\n"
+                     << "end\n";
+                file.close();
+
+                if (m_scriptManager->loadScript(path))
+                {
+                    // El GameObject pudo borrarse mientras el popup estaba
+                    // abierto — comprobar que sigue vivo antes de añadir.
+                    bool targetAlive = false;
+                    if (m_scene && m_newScriptTarget)
+                        m_scene->traverse([&](GameObject* go) {
+                            if (go == m_newScriptTarget) targetAlive = true;
+                        });
+                    if (targetAlive)
+                    {
+                        m_newScriptTarget->addScript(
+                            std::make_unique<ScriptComponent>(name, m_newScriptTarget));
+                        pushLog("Script '" + name + "' creado y añadido a '" +
+                                m_newScriptTarget->name + "'");
+                    }
+                    else
+                        pushLog("Script '" + name + "' creado (el GameObject ya no existe)");
+                    ImGui::CloseCurrentPopup();
+                }
+                else
+                    m_newScriptError = "El script no compiló (ver Log)";
+            }
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancelar"))
+        ImGui::CloseCurrentPopup();
+
+    ImGui::EndPopup();
 }
 
 void EditorUI::drawContentBrowser(GameObject* sceneRoot)

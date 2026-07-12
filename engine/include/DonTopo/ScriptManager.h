@@ -53,6 +53,9 @@ public:
     bool hasClass(const std::string& name) const { return m_registry.count(name) > 0; }
     const std::map<std::string, ScriptClass>& getRegistry() const { return m_registry; }
     const std::string* getCompileError(const std::string& name) const;
+    // Carpeta de scripts resuelta en init() — usada por el editor pa crear
+    // archivos .lua nuevos en el sitio correcto.
+    const std::filesystem::path& scriptsDirPath() const { return m_scriptsDir; }
 
     // Tabla instancia nueva: copia de props (defaults + overrides) +
     // metatable __index -> tabla clase. Tabla inválida si name no existe.

@@ -182,9 +182,20 @@ namespace DonTopo::ScriptBindings
                     recomposeLocal(go, p + d, r, s);
                 },
                 "Rotate", [](const LuaTransform& t, const glm::vec3& dEuler) {
+                    // Rotación incremental compuesta como quaternion, NUNCA
+                    // sumando eulers: extractEulerAngleXYZ acota el ángulo
+                    // medio a ±90°, y acumular sobre esa representación hace
+                    // que una rotación continua se "atasque" al llegar al
+                    // límite (gira y luego se queda casi quieta).
                     GameObject* go = deref(t.e);
-                    glm::vec3 p, r, s; decomposeLocal(go, p, r, s);
-                    recomposeLocal(go, p, r + dEuler, s);
+                    glm::vec3 scale, pos, skew; glm::quat rot; glm::vec4 persp;
+                    glm::decompose(go->localTransform, scale, rot, pos, skew, persp);
+                    rot = rot * glm::quat(glm::radians(dEuler));
+                    go->localTransform = glm::translate(glm::mat4(1.0f), pos) *
+                                         glm::mat4_cast(rot) *
+                                         glm::scale(glm::mat4(1.0f), scale);
+                    go->updateWorldTransforms(go->parent ? go->parent->worldTransform
+                                                         : glm::mat4(1.0f));
                 });
         }
 
