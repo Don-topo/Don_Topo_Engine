@@ -149,6 +149,30 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
+# Lua 5.4 — VM de scripting (compilado desde fuente, ver cmake/Lua.cmake)
+include(cmake/Lua.cmake)
+
+# sol2 — binding C++/Lua (header-only). Populate en vez de MakeAvailable,
+# mismo patrón que ImGuiFileDialog: evitamos su CMakeLists (tests/opciones
+# que no necesitamos) y definimos una INTERFACE propia.
+FetchContent_Declare(
+    sol2
+    GIT_REPOSITORY https://github.com/ThePhD/sol2.git
+    GIT_TAG        v3.3.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_GetProperties(sol2)
+if(NOT sol2_POPULATED)
+    FetchContent_Populate(sol2)
+endif()
+
+add_library(sol2_lib INTERFACE)
+target_include_directories(sol2_lib INTERFACE ${sol2_SOURCE_DIR}/include)
+target_link_libraries(sol2_lib INTERFACE lua_lib)
+# Chequeos de tipo/stack de sol2 activos siempre: los errores de binding
+# aparecen como errores Lua legibles en vez de UB.
+target_compile_definitions(sol2_lib INTERFACE SOL_ALL_SAFETIES_ON=1)
+
 # PhysX SDK — física (compilado desde fuente, ver cmake/PhysX.cmake)
 include(cmake/PhysX.cmake)
 

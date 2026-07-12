@@ -17,6 +17,8 @@
 #include "DonTopo/Capsule.h"
 #include "DonTopo/ModelLoader.h"
 #include "DonTopo/FileManager.h"
+#include "DonTopo/ScriptManager.h"
+#include "DonTopo/ScriptComponent.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -28,6 +30,8 @@
 #include <ctime>
 #include <filesystem>
 #include <set>
+#include <type_traits>
+#include <variant>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -183,6 +187,20 @@ bool isValidFileName(const std::string& name)
     return true;
 }
 
+// "attackRange" -> "Attack Range" (labels de props de scripts)
+std::string prettyPropLabel(const std::string& raw)
+{
+    std::string out;
+    for (size_t i = 0; i < raw.size(); ++i)
+    {
+        char c = raw[i];
+        if (i == 0) { out += static_cast<char>(std::toupper(static_cast<unsigned char>(c))); continue; }
+        if (std::isupper(static_cast<unsigned char>(c))) out += ' ';
+        out += c;
+    }
+    return out;
+}
+
 } // namespace
 
 namespace DonTopo {
@@ -229,6 +247,7 @@ void EditorUI::drawToolbar()
         ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
         if (ImGui::Button("Stop"))
         {
+            if (m_scriptManager) m_scriptManager->onPlayStop();
             m_sceneIOError = reloadSceneFromJson(m_playSnapshot) ? "" : "No se pudo restaurar la escena";
             m_isPlaying = false;
             pushLog("Play Mode detenido");
@@ -241,6 +260,7 @@ void EditorUI::drawToolbar()
         {
             m_playSnapshot = m_scene->toJson();
             m_isPlaying = true;
+            if (m_scriptManager) m_scriptManager->onPlayStart();
             pushLog("Play Mode iniciado");
         }
     }
@@ -421,8 +441,27 @@ void EditorUI::drawScene(GameObject* sceneRoot)
 
         if (m_onDelete)
             m_onDelete(target);
+
+        // Sin esto, borrar desde el editor en Play salta OnDestroy y deja
+        // punteros muertos en el alive-set hasta el siguiente update
+        // (ventana de use-after-free vía hot reload).
+        if (m_isPlaying && m_scriptManager)
+        {
+            // Snapshot antes de llamar a Lua — OnDestroy puede añadir
+            // componentes e invalidar la iteración.
+            std::vector<ScriptComponent*> subtreeScripts;
+            target->traverse([&](GameObject* n) {
+                for (auto& s : n->getScripts())
+                    subtreeScripts.push_back(s.get());
+            });
+            for (ScriptComponent* s : subtreeScripts)
+                m_scriptManager->callOnDestroy(*s);
+        }
+
         assert(m_scene && "EditorUI::m_scene debe estar asignado (ver Renderer::setScene) antes de borrar GameObjects");
         m_scene->removeGameObject(target);
+        if (m_scriptManager)
+            m_scriptManager->rebuildAliveSet();
         if (selectionInSubtree)
         {
             m_selected = nullptr;
@@ -1050,6 +1089,7 @@ void EditorUI::drawProperties()
     drawPlaneColliderSection();
     drawMeshSection();
     drawAudioClipSection();
+    drawScriptsSection();
     drawAddComponentButton();
 
     ImGui::End();
@@ -1692,6 +1732,140 @@ void EditorUI::drawSceneDialog()
     m_sceneDlgOpen = false;
 }
 
+void EditorUI::drawScriptsSection()
+{
+    if (!m_selected || !m_scriptManager || !m_selected->hasScripts()) return;
+
+    ScriptComponent* toRemove = nullptr;
+
+    for (auto& compPtr : m_selected->getScripts())
+    {
+        ScriptComponent* comp = compPtr.get();
+        ImGui::PushID(comp);
+
+        bool open = ImGui::CollapsingHeader(
+            (comp->scriptName + " (Script)").c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 12.0f);
+        if (ImGui::SmallButton("x"))
+            toRemove = comp;
+
+        if (open)
+        {
+            if (!m_scriptManager->hasClass(comp->scriptName))
+            {
+                const std::string* err = m_scriptManager->getCompileError(comp->scriptName);
+                if (err)
+                    ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
+                        "Error de compilación:\n%s", err->c_str());
+                else
+                    ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
+                        "Script no encontrado: %s.lua", comp->scriptName.c_str());
+                // Overrides intactos (spec: no se pierden datos)
+            }
+            else
+            {
+                const ScriptClass& cls = m_scriptManager->getRegistry().at(comp->scriptName);
+                const bool live = m_isPlaying && comp->instance.valid();
+
+                for (const ScriptProp& prop : cls.props)
+                {
+                    // Valor mostrado: instancia viva > override > default
+                    ScriptValue value = prop.defaultValue;
+                    if (auto it = comp->overrides.find(prop.name); it != comp->overrides.end())
+                        value = it->second;
+                    if (live)
+                    {
+                        sol::object lv = comp->instance[prop.name];
+                        if (lv.get_type() == sol::type::number)       value = lv.as<double>();
+                        else if (lv.get_type() == sol::type::boolean) value = lv.as<bool>();
+                        else if (lv.get_type() == sol::type::string)  value = lv.as<std::string>();
+                    }
+
+                    const std::string label = prettyPropLabel(prop.name);
+                    bool edited = false;
+
+                    if (std::holds_alternative<double>(value))
+                    {
+                        double d = std::get<double>(value);
+                        if (prop.isInteger)
+                        {
+                            int i = static_cast<int>(d);
+                            if (ImGui::DragInt(label.c_str(), &i)) { value = double(i); edited = true; }
+                        }
+                        else
+                        {
+                            float f = static_cast<float>(d);
+                            if (ImGui::DragFloat(label.c_str(), &f, 0.1f)) { value = double(f); edited = true; }
+                        }
+                    }
+                    else if (std::holds_alternative<bool>(value))
+                    {
+                        bool b = std::get<bool>(value);
+                        if (ImGui::Checkbox(label.c_str(), &b)) { value = b; edited = true; }
+                    }
+                    else
+                    {
+                        char buf[256] = {};
+                        const std::string& s = std::get<std::string>(value);
+                        strncpy_s(buf, s.c_str(), sizeof(buf) - 1);
+                        if (ImGui::InputText(label.c_str(), buf, sizeof(buf)))
+                        { value = std::string(buf); edited = true; }
+                    }
+
+                    if (edited)
+                    {
+                        comp->overrides[prop.name] = value;
+                        if (live)
+                        {
+                            std::visit([&](auto&& v) {
+                                using T = std::decay_t<decltype(v)>;
+                                if constexpr (std::is_same_v<T, double>)
+                                {
+                                    if (prop.isInteger) comp->instance[prop.name] = static_cast<int64_t>(v);
+                                    else                comp->instance[prop.name] = v;
+                                }
+                                else comp->instance[prop.name] = v;
+                            }, value);
+                        }
+                        pushLog("Script '" + comp->scriptName + "." + prop.name +
+                                "' cambiado en '" + m_selected->name + "'");
+                    }
+                }
+
+                if (ImGui::Button("Reset"))
+                {
+                    comp->overrides.clear();
+                    if (live)
+                    {
+                        // Reaplica defaults del .lua a la instancia viva
+                        for (const ScriptProp& prop : cls.props)
+                            std::visit([&](auto&& v) {
+                                using T = std::decay_t<decltype(v)>;
+                                if constexpr (std::is_same_v<T, double>)
+                                {
+                                    if (prop.isInteger) comp->instance[prop.name] = static_cast<int64_t>(v);
+                                    else                comp->instance[prop.name] = v;
+                                }
+                                else comp->instance[prop.name] = v;
+                            }, prop.defaultValue);
+                    }
+                    pushLog("Script '" + comp->scriptName + "' reseteado a defaults en '" +
+                            m_selected->name + "'");
+                }
+            }
+        }
+        ImGui::PopID();
+    }
+
+    if (toRemove)
+    {
+        if (m_isPlaying) m_scriptManager->callOnDestroy(*toRemove);
+        const std::string name = toRemove->scriptName;
+        m_selected->removeScript(toRemove);
+        pushLog("Componente Script '" + name + "' quitado de '" + m_selected->name + "'");
+    }
+}
+
 void EditorUI::drawAddComponentButton()
 {
     ImGui::Separator();
@@ -1749,6 +1923,26 @@ void EditorUI::drawAddComponentButton()
         if (ImGui::Selectable("Audio Clip") && !alreadyHasAudio)
             m_audioClipAddRequestedFor = m_selected;
         ImGui::EndDisabled();
+
+        if (m_scriptManager && !m_scriptManager->getRegistry().empty())
+        {
+            if (ImGui::BeginMenu("Script"))
+            {
+                for (const auto& entry : m_scriptManager->getRegistry())
+                {
+                    const std::string& name = entry.first;
+                    if (ImGui::MenuItem(name.c_str()))
+                    {
+                        auto comp = std::make_unique<ScriptComponent>(name, m_selected);
+                        m_selected->addScript(std::move(comp));
+                        // En Play el lifecycle instancia y dispara Awake/Start
+                        // en el siguiente update (started == false).
+                        pushLog("Componente Script '" + name + "' añadido a '" + m_selected->name + "'");
+                    }
+                }
+                ImGui::EndMenu();
+            }
+        }
 
         ImGui::EndPopup();
     }

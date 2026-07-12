@@ -19,6 +19,14 @@ namespace DonTopo
             GameObject* addGameObject(const std::string& name, GameObject* parent = nullptr);
             void removeGameObject(GameObject* node);
 
+            // Deep clone de src (transform, mesh, colliders, audio, scripts
+            // con overrides) como hijo nuevo de parent (o del padre de src si
+            // parent es nullptr). Los render indices del subtree quedan a -1:
+            // el caller debe registrar los meshes en GPU. nullptr si src es
+            // la raíz o la reconstrucción falla.
+            GameObject* cloneGameObject(GameObject* src, GameObject* parent,
+                                        PhysicsManager& physics, AudioManager& audio);
+
             template <typename Fn>
             void traverse(Fn fn) { m_root.traverse(fn); }
 
