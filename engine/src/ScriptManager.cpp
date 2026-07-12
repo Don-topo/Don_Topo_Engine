@@ -1,5 +1,6 @@
 #include "DonTopo/ScriptManager.h"
 #include "DonTopo/ScriptBindings.h"
+#include "DonTopo/Scene.h"
 #include <algorithm>
 
 namespace DonTopo
@@ -140,5 +141,12 @@ namespace DonTopo
         mt["__index"] = cls.classTable;
         inst[sol::metatable_key] = mt;
         return inst;
+    }
+
+    void ScriptManager::rebuildAliveSet()
+    {
+        m_alive.clear();
+        if (!m_scene) return;
+        m_scene->traverse([this](GameObject* go) { m_alive.insert(go); });
     }
 }

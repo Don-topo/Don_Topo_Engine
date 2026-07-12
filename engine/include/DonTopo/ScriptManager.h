@@ -66,6 +66,13 @@ public:
 
     void log(const std::string& msg) { if (m_log) m_log(msg); }
 
+    // true si go sigue en el árbol de la escena. Los bindings lo consultan
+    // antes de deref: una entity destruida produce error Lua, nunca crash.
+    bool isAlive(GameObject* go) const { return m_alive.count(go) > 0; }
+    // Reconstruye el set desde la escena. Llamado al inicio de cada update
+    // del lifecycle y tras cualquier alta/baja estructural.
+    void rebuildAliveSet();
+
 private:
     // Extrae las props serializables (number/boolean/string) de classTable.
     std::vector<ScriptProp> detectProps(const sol::table& classTable);
@@ -81,6 +88,7 @@ private:
     Scene*          m_scene   = nullptr;
     PhysicsManager* m_physics = nullptr;
     AudioManager*   m_audio   = nullptr;
+    std::set<GameObject*> m_alive;
 };
 
 } // namespace DonTopo
