@@ -23,6 +23,7 @@
 #include <cassert>
 #include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -58,6 +59,23 @@ std::string trim(const std::string& name)
     size_t begin = name.find_first_not_of(" \t");
     size_t end   = name.find_last_not_of(" \t");
     return name.substr(begin, end - begin + 1);
+}
+
+// 2 decimales — suficiente para leer el valor de un vistazo en el Log sin
+// líneas kilométricas; el panel Properties ya muestra 3 decimales para
+// edición fina, el Log es solo un resumen legible.
+std::string formatVec3(const glm::vec3& v)
+{
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "(%.2f, %.2f, %.2f)", v.x, v.y, v.z);
+    return buf;
+}
+
+std::string formatFloat(float f)
+{
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.2f", f);
+    return buf;
 }
 
 // Mueve dragged pa la posición de target dentro de la lista de hijos de
@@ -932,6 +950,9 @@ void EditorUI::drawProperties()
 
     bool changed = false;
     bool posRotActive = false;
+    bool posCommitted = false;
+    bool rotCommitted = false;
+    bool scaleCommitted = false;
 
     ImGui::SetNextItemOpen(true, ImGuiCond_Once);
     if (ImGui::TreeNodeEx("Transform", ImGuiTreeNodeFlags_OpenOnArrow))
@@ -941,44 +962,60 @@ void EditorUI::drawProperties()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("X##1", &m_editPosition.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         posRotActive |= ImGui::IsItemActive();
+        posCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Y##1", &m_editPosition.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         posRotActive |= ImGui::IsItemActive();
+        posCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Z##1", &m_editPosition.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         posRotActive |= ImGui::IsItemActive();
+        posCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::Text("Rotation");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("X##2", &m_editRotationDeg.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         posRotActive |= ImGui::IsItemActive();
+        rotCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Y##2", &m_editRotationDeg.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         posRotActive |= ImGui::IsItemActive();
+        rotCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Z##2", &m_editRotationDeg.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         posRotActive |= ImGui::IsItemActive();
+        rotCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::Text("Scale   ");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("X##3", &m_editScale.x, 0.005f, 0.001f, +FLT_MAX, "% .3f");
+        scaleCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Y##3", &m_editScale.y, 0.005f, 0.001f, +FLT_MAX, "% .3f");
+        scaleCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Z##3", &m_editScale.z, 0.005f, 0.001f, +FLT_MAX, "% .3f");
+        scaleCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::TreePop();
     }
 
     m_transformDragActive = posRotActive;
+
+    if (posCommitted)
+        pushLog("Position de '" + m_selected->name + "' cambiado a " + formatVec3(m_editPosition));
+    if (rotCommitted)
+        pushLog("Rotation de '" + m_selected->name + "' cambiado a " + formatVec3(m_editRotationDeg));
+    if (scaleCommitted)
+        pushLog("Scale de '" + m_selected->name + "' cambiado a " + formatVec3(m_editScale));
 
     if (changed)
     {
