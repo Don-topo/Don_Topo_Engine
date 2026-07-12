@@ -40,13 +40,21 @@ namespace DonTopo::ScriptBindings
             logTable["Info"]  = [&mgr](const std::string& m) { mgr.log("[Lua] " + m); };
             logTable["Warn"]  = [&mgr](const std::string& m) { mgr.log("[Lua][WARN] " + m); };
             logTable["Error"] = [&mgr](const std::string& m) { mgr.log("[Lua][ERROR] " + m); };
-            // print nativo -> mismo destino que Log.Info
+            // print nativo -> mismo destino que Log.Info. Cada argumento pasa
+            // por el tostring de Lua (maneja números, nil, tablas y el
+            // metamétodo __tostring), igual que el print nativo.
             lua["print"] = [&mgr](sol::variadic_args args) {
+                sol::state_view lua(args.lua_state());
+                sol::protected_function tostring = lua["tostring"];
                 std::string out;
                 for (auto a : args)
                 {
                     if (!out.empty()) out += "\t";
-                    out += a.get<sol::object>().as<std::string>();
+                    sol::protected_function_result r = tostring(a.get<sol::object>());
+                    if (r.valid() && r.get_type() == sol::type::string)
+                        out += r.get<std::string>();
+                    else
+                        out += "?";
                 }
                 mgr.log("[Lua] " + out);
             };
