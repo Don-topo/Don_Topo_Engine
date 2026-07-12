@@ -447,10 +447,15 @@ void EditorUI::drawScene(GameObject* sceneRoot)
         // (ventana de use-after-free vía hot reload).
         if (m_isPlaying && m_scriptManager)
         {
-            target->traverse([this](GameObject* n) {
+            // Snapshot antes de llamar a Lua — OnDestroy puede añadir
+            // componentes e invalidar la iteración.
+            std::vector<ScriptComponent*> subtreeScripts;
+            target->traverse([&](GameObject* n) {
                 for (auto& s : n->getScripts())
-                    m_scriptManager->callOnDestroy(*s);
+                    subtreeScripts.push_back(s.get());
             });
+            for (ScriptComponent* s : subtreeScripts)
+                m_scriptManager->callOnDestroy(*s);
         }
 
         assert(m_scene && "EditorUI::m_scene debe estar asignado (ver Renderer::setScene) antes de borrar GameObjects");

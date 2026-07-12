@@ -305,7 +305,13 @@ namespace DonTopo
         });
 
         // Cola de destroy de entities (Scene.Destroy) — tras LateUpdate
-        for (GameObject* go : m_destroyQueue)
+        // La cola se mueve a un local antes de iterar: un OnDestroy puede
+        // llamar Scene.Destroy y hacer push_back sobre m_destroyQueue en
+        // plena iteración (UB con range-for sobre el propio vector). Lo
+        // encolado reentrante se procesa el frame siguiente.
+        std::vector<GameObject*> queue;
+        queue.swap(m_destroyQueue);
+        for (GameObject* go : queue)
         {
             if (!isAlive(go)) continue;   // destruido dos veces o hijo de otro destruido
             // Snapshot antes de llamar a Lua — un callback puede añadir
@@ -319,7 +325,6 @@ namespace DonTopo
             m_scene->removeGameObject(go);
             rebuildAliveSet();
         }
-        m_destroyQueue.clear();
     }
 
     void ScriptManager::pollChanges()
