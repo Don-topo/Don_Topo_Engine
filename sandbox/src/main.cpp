@@ -17,6 +17,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <glm/gtc/matrix_transform.hpp>
@@ -152,7 +153,25 @@ int main()
             // Libera GPU del subtree completo (estático + skinned).
             renderer.removeGameObject(go);
         });
-        scriptManager.init("Scripts");
+        // Scripts/ vive en la raíz del repo y NO se copia junto al exe
+        // (a diferencia de assets/shaders): el hot reload debe vigilar los
+        // .lua originales que edita el usuario, no una copia que cada build
+        // pisaría. Como el exe corre con CWD en build-ninja/sandbox, se
+        // busca la carpeta hacia arriba desde el directorio actual.
+        std::filesystem::path scriptsDir = "Scripts";
+        if (!std::filesystem::is_directory(scriptsDir))
+        {
+            for (auto dir = std::filesystem::current_path();
+                 dir != dir.parent_path(); dir = dir.parent_path())
+            {
+                if (std::filesystem::is_directory(dir / "Scripts"))
+                {
+                    scriptsDir = dir / "Scripts";
+                    break;
+                }
+            }
+        }
+        scriptManager.init(scriptsDir.string());
         renderer.setScriptManager(&scriptManager);
 
         renderer.setOnAxisSelected([&camera](const glm::vec3& axis) { camera.lookAlongAxis(axis); });
