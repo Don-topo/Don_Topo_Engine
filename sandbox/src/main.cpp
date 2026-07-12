@@ -10,6 +10,7 @@
 #include "DonTopo/Scene.h"
 #include "DonTopo/AudioManager.h"
 #include "DonTopo/PhysicsManager.h"
+#include "DonTopo/ScriptManager.h"
 #include "DonTopo/Gizmos.h"
 #include "DonTopo/Input.h"
 #include <GLFW/glfw3.h>
@@ -43,6 +44,12 @@ int main()
 
         DonTopo::AudioManager audio;
         audio.init();
+
+        // scriptManager se declara ANTES que scene: los ScriptComponent del
+        // árbol guardan sol::table cuyo destructor toca la VM Lua, así que
+        // scene debe destruirse antes que el sol::state de scriptManager
+        // (orden de destrucción = inverso al de declaración).
+        DonTopo::ScriptManager scriptManager;
 
         DonTopo::Scene scene;
 
@@ -127,6 +134,26 @@ int main()
         renderer.setScene(&scene);
         renderer.setPhysicsManager(&physics);
         renderer.setAudioManager(&audio);
+
+        scriptManager.setScene(&scene);
+        scriptManager.setPhysicsManager(&physics);
+        scriptManager.setAudioManager(&audio);
+        scriptManager.setLogCallback([](const std::string& msg) { std::cout << msg << std::endl; });
+        scriptManager.setOnInstantiated([&renderer](DonTopo::GameObject* go) {
+            go->traverse([&renderer](DonTopo::GameObject* n) {
+                if (!n->hasMesh()) return;
+                if (n->isSkinned()) n->skinnedRenderIndex = renderer.addSkinnedMesh(*n->getSkinnedMesh());
+                else                n->staticRenderIndex  = renderer.addStaticMesh(*n->getMesh());
+            });
+        });
+        scriptManager.setOnDestroying([&renderer](DonTopo::GameObject* go) {
+            go->traverse([&renderer](DonTopo::GameObject* n) {
+                if (n->hasMesh()) renderer.removeMeshComponent(n);
+            });
+        });
+        scriptManager.init("Scripts");
+        renderer.setScriptManager(&scriptManager);
+
         renderer.setOnAxisSelected([&camera](const glm::vec3& axis) { camera.lookAlongAxis(axis); });
 
         renderer.initSkybox({
@@ -212,6 +239,7 @@ int main()
                 audio.update(camera.getPos(), camera.getFront(), camera.getUp());
                 physics.stepSimulation(dt);
                 scene.update(dt, physics);
+                scriptManager.update(dt);
             }
             else
             {

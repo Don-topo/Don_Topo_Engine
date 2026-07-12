@@ -169,4 +169,127 @@ namespace DonTopo
         comp.hasLateUpdate  = isFn("LateUpdate");
         comp.hasOnDestroy   = isFn("OnDestroy");
     }
+
+    void ScriptManager::callCallback(ScriptComponent& comp, const char* fn, const float* dt)
+    {
+        if (comp.hasError || !comp.instance.valid()) return;
+        sol::protected_function f = comp.instance[fn];
+        auto r = dt ? f(comp.instance, *dt) : f(comp.instance);
+        if (!r.valid())
+        {
+            sol::error err = r;
+            log("Script '" + comp.scriptName + "' " + fn + ": " + std::string(err.what()));
+            comp.hasError = true;
+        }
+    }
+
+    void ScriptManager::callOnDestroy(ScriptComponent& comp)
+    {
+        if (comp.hasOnDestroy) callCallback(comp, "OnDestroy", nullptr);
+    }
+
+    std::vector<ScriptComponent*> ScriptManager::collectComponents()
+    {
+        std::vector<ScriptComponent*> comps;
+        if (!m_scene) return comps;
+        m_scene->traverse([&](GameObject* go) {
+            for (auto& s : go->getScripts()) comps.push_back(s.get());
+        });
+        return comps;
+    }
+
+    void ScriptManager::onPlayStart()
+    {
+        m_playing = true;
+        m_fixedAccumulator = 0.0f;
+        m_destroyQueue.clear();
+        rebuildAliveSet();
+
+        auto comps = collectComponents();
+        for (auto* c : comps) instantiateComponent(*c);
+        // Two-pass como Unity: todos los Awake antes del primer Start.
+        for (auto* c : comps) if (c->hasAwake) callCallback(*c, "Awake", nullptr);
+        for (auto* c : comps)
+        {
+            if (c->hasStart) callCallback(*c, "Start", nullptr);
+            c->started = true;
+        }
+    }
+
+    void ScriptManager::onPlayStop()
+    {
+        auto comps = collectComponents();
+        for (auto* c : comps) callOnDestroy(*c);
+        for (auto* c : comps)
+        {
+            c->instance = sol::table();
+            c->started  = false;
+            c->hasError = false;
+            c->pendingRemove = false;
+        }
+        m_destroyQueue.clear();
+        m_playing = false;
+    }
+
+    void ScriptManager::update(float dt)
+    {
+        if (!m_playing || !m_scene) return;
+        rebuildAliveSet();
+
+        // Snapshot de punteros: los scripts pueden añadir componentes en
+        // mitad del frame (se recogen el frame siguiente); los borrados van
+        // SIEMPRE por colas diferidas, así que ningún puntero del snapshot
+        // muere durante la iteración.
+        auto comps = collectComponents();
+
+        // Comps añadidos después de Play (Instantiate, AddComponent, editor):
+        // Awake (si no vino ya de Instantiate: instance inválida) + Start.
+        for (auto* c : comps)
+        {
+            if (c->started) continue;
+            if (!c->instance.valid())
+            {
+                instantiateComponent(*c);
+                if (c->hasAwake) callCallback(*c, "Awake", nullptr);
+            }
+            if (c->hasStart) callCallback(*c, "Start", nullptr);
+            c->started = true;
+        }
+
+        for (auto* c : comps) if (c->hasUpdate) callCallback(*c, "Update", &dt);
+
+        m_fixedAccumulator = std::min(m_fixedAccumulator + dt, kMaxAccumulator);
+        while (m_fixedAccumulator >= kFixedStep)
+        {
+            float step = kFixedStep;
+            for (auto* c : comps) if (c->hasFixedUpdate) callCallback(*c, "FixedUpdate", &step);
+            m_fixedAccumulator -= kFixedStep;
+        }
+
+        for (auto* c : comps) if (c->hasLateUpdate) callCallback(*c, "LateUpdate", nullptr);
+
+        // RemoveComponent("Script:X") diferidos
+        m_scene->traverse([&](GameObject* go) {
+            auto& scripts = go->getScripts();
+            for (auto& s : scripts)
+                if (s->pendingRemove) callOnDestroy(*s);
+            scripts.erase(
+                std::remove_if(scripts.begin(), scripts.end(),
+                    [](const std::unique_ptr<ScriptComponent>& s) { return s->pendingRemove; }),
+                scripts.end());
+        });
+
+        // Cola de destroy de entities (Scene.Destroy) — tras LateUpdate
+        for (GameObject* go : m_destroyQueue)
+        {
+            if (!isAlive(go)) continue;   // destruido dos veces o hijo de otro destruido
+            go->traverse([this](GameObject* n) {
+                for (auto& s : n->getScripts()) callOnDestroy(*s);
+            });
+            if (m_onDestroying) m_onDestroying(go);
+            m_scene->removeGameObject(go);
+            rebuildAliveSet();
+        }
+        m_destroyQueue.clear();
+    }
 }

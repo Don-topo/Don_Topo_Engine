@@ -21,6 +21,7 @@ namespace DonTopo {
     class PhysicsManager;
     class AudioManager;
     class Scene;
+    class ScriptManager;
 
     class Renderer {
         public:                
@@ -42,6 +43,9 @@ namespace DonTopo {
             void setPhysicsManager(PhysicsManager* physics) { m_editorUI.setPhysicsManager(physics); }
             void setAudioManager(AudioManager* audio) { m_editorUI.setAudioManager(audio); }
             void setScene(Scene* scene) { m_editorUI.setScene(scene); }
+            // Passthrough al EditorUI embebido, mismo patrón que
+            // setPhysicsManager/setAudioManager.
+            void setScriptManager(ScriptManager* sm) { m_editorUI.setScriptManager(sm); }
             void focusSelected(Camera& camera) { m_editorUI.focusSelected(camera); }
             void setSceneRoot(GameObject* root);
             // Libera mesh/skinnedMesh/texturas en GPU de node y todo su subárbol

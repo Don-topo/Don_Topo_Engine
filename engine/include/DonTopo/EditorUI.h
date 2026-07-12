@@ -24,6 +24,7 @@ class PlaneCollider;
 class Renderer;
 class Camera;
 class Scene;
+class ScriptManager;
 
 class EditorUI {
 public:
@@ -66,6 +67,10 @@ public:
     // Centra la cámara en m_selected (no-op si no hay selección). Usado por
     // el atajo de teclado "F" en main.cpp.
     void focusSelected(Camera& camera);
+    // Puntero no-propietario, mismo patrón que m_physics. Necesario para
+    // disparar el ciclo de vida al pulsar Play/Stop y para la sección
+    // Scripts del panel Properties (Task 10).
+    void setScriptManager(ScriptManager* sm) { m_scriptManager = sm; }
 
 private:
     static constexpr float kToolbarHeight = 30.0f;
@@ -285,6 +290,7 @@ private:
     Renderer*       m_renderer = nullptr;
     AudioManager*   m_audio = nullptr;
     Scene*          m_scene = nullptr;
+    ScriptManager*  m_scriptManager = nullptr;
     // Mensaje del último intento fallido de carga de Mesh (vacío si no hay
     // error pendiente); se limpia al cambiar de selección o al cargar bien.
     std::string     m_meshLoadError;

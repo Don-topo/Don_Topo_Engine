@@ -17,6 +17,7 @@
 #include "DonTopo/Capsule.h"
 #include "DonTopo/ModelLoader.h"
 #include "DonTopo/FileManager.h"
+#include "DonTopo/ScriptManager.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -229,6 +230,7 @@ void EditorUI::drawToolbar()
         ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
         if (ImGui::Button("Stop"))
         {
+            if (m_scriptManager) m_scriptManager->onPlayStop();
             m_sceneIOError = reloadSceneFromJson(m_playSnapshot) ? "" : "No se pudo restaurar la escena";
             m_isPlaying = false;
             pushLog("Play Mode detenido");
@@ -241,6 +243,7 @@ void EditorUI::drawToolbar()
         {
             m_playSnapshot = m_scene->toJson();
             m_isPlaying = true;
+            if (m_scriptManager) m_scriptManager->onPlayStart();
             pushLog("Play Mode iniciado");
         }
     }

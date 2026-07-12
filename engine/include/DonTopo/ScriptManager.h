@@ -82,7 +82,23 @@ public:
     void instantiateComponent(ScriptComponent& comp);
     const std::function<void(GameObject*)>& onInstantiated() const { return m_onInstantiated; }
 
+    void onPlayStart();
+    void onPlayStop();
+    void update(float dt);
+    // OnDestroy protegido de un solo componente (usado por EditorUI al
+    // quitar el componente en Play y por el procesado de colas).
+    void callOnDestroy(ScriptComponent& comp);
 private:
+    // Llama comp.instance[fn](instance[, dt]) protegido; error -> log +
+    // hasError (el comp deja de recibir callbacks).
+    void callCallback(ScriptComponent& comp, const char* fn, const float* dt);
+    // Todos los ScriptComponent vivos de la escena, en orden de traverse.
+    std::vector<ScriptComponent*> collectComponents();
+    static constexpr float kFixedStep = 1.0f / 60.0f;
+    static constexpr float kMaxAccumulator = 0.25f;   // anti spiral-of-death
+    float m_fixedAccumulator = 0.0f;
+    bool  m_playing = false;
+
     // Extrae las props serializables (number/boolean/string) de classTable.
     std::vector<ScriptProp> detectProps(const sol::table& classTable);
 
