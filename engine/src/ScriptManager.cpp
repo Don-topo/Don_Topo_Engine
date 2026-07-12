@@ -152,7 +152,13 @@ namespace DonTopo
 
     void ScriptManager::instantiateComponent(ScriptComponent& comp)
     {
-        comp.instance = createInstance(comp.scriptName, comp.overrides);
+        instantiateComponentWith(comp, comp.overrides);
+    }
+
+    void ScriptManager::instantiateComponentWith(
+        ScriptComponent& comp, const std::map<std::string, ScriptValue>& values)
+    {
+        comp.instance = createInstance(comp.scriptName, values);
         comp.started  = false;
         comp.hasError = false;
         if (!comp.instance.valid()) return;   // clase no registrada (missing)
@@ -291,5 +297,69 @@ namespace DonTopo
             rebuildAliveSet();
         }
         m_destroyQueue.clear();
+    }
+
+    void ScriptManager::pollChanges()
+    {
+        if (++m_pollCounter < 60) return;
+        m_pollCounter = 0;
+
+        std::error_code ec;
+
+        // 1) Cambios en scripts registrados
+        std::vector<std::string> changed;
+        for (auto& [name, cls] : m_registry)
+        {
+            auto mtime = std::filesystem::last_write_time(cls.path, ec);
+            if (!ec && mtime != cls.mtime) changed.push_back(name);
+        }
+
+        for (const std::string& name : changed)
+        {
+            const std::filesystem::path path = m_registry[name].path;
+            log("Script '" + name + "' cambió en disco — recargando");
+            // Actualiza mtime siempre (aunque compile mal, pa no reintentar
+            // en bucle el mismo contenido roto).
+            m_registry[name].mtime = std::filesystem::last_write_time(path, ec);
+            if (!loadScript(path))
+                continue;   // error logueado; instancias viejas siguen corriendo
+
+            if (!m_playing || !m_scene) continue;
+            // Reinstancia los comps vivos de esta clase preservando el valor
+            // actual de las props serializables (spec: estado no
+            // serializable se pierde).
+            m_scene->traverse([&](GameObject* go) {
+                for (auto& s : go->getScripts())
+                {
+                    if (s->scriptName != name || !s->instance.valid()) continue;
+
+                    std::map<std::string, ScriptValue> current = s->overrides;
+                    for (const ScriptProp& p : m_registry[name].props)
+                    {
+                        sol::object v = s->instance[p.name];
+                        if (v.get_type() == sol::type::number)       current[p.name] = v.as<double>();
+                        else if (v.get_type() == sol::type::boolean) current[p.name] = v.as<bool>();
+                        else if (v.get_type() == sol::type::string)  current[p.name] = v.as<std::string>();
+                    }
+
+                    instantiateComponentWith(*s, current);   // ver refactor abajo
+                    if (s->hasAwake) callCallback(*s, "Awake", nullptr);
+                    if (s->hasStart) callCallback(*s, "Start", nullptr);
+                    s->started = true;
+                }
+            });
+        }
+
+        // 2) Scripts nuevos en la carpeta
+        if (std::filesystem::is_directory(m_scriptsDir, ec))
+        {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(m_scriptsDir, ec))
+            {
+                if (!entry.is_regular_file() || entry.path().extension() != ".lua") continue;
+                const std::string name = entry.path().stem().string();
+                if (!m_registry.count(name) && !m_compileErrors.count(name))
+                    loadScript(entry.path());
+            }
+        }
     }
 }

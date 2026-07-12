@@ -224,6 +224,7 @@ int main()
         while (!window.shouldClose())
         {
             DonTopo::Input::update();
+            scriptManager.pollChanges();
 
             auto now = std::chrono::high_resolution_clock::now();
             static auto last = now;

@@ -88,7 +88,17 @@ public:
     // OnDestroy protegido de un solo componente (usado por EditorUI al
     // quitar el componente en Play y por el procesado de colas).
     void callOnDestroy(ScriptComponent& comp);
+
+    // Hot reload: detecta cambios de mtime y .lua nuevos en Scripts/.
+    // Llamable cada frame — solo escanea 1 de cada 60 llamadas (~1s a 60fps).
+    void pollChanges();
 private:
+    // Núcleo de instantiateComponent parametrizado por valores (el hot
+    // reload instancia con los valores actuales, no con comp.overrides).
+    void instantiateComponentWith(ScriptComponent& comp,
+                                  const std::map<std::string, ScriptValue>& values);
+    int m_pollCounter = 0;
+
     // Llama comp.instance[fn](instance[, dt]) protegido; error -> log +
     // hasError (el comp deja de recibir callbacks).
     void callCallback(ScriptComponent& comp, const char* fn, const float* dt);
