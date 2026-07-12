@@ -11,6 +11,7 @@
 #include "DonTopo/AudioManager.h"
 #include "DonTopo/PhysicsManager.h"
 #include "DonTopo/Gizmos.h"
+#include "DonTopo/Input.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -28,6 +29,7 @@ int main()
         DonTopo::Engine engine;
         DonTopo::Window window;
         window.init(1280, 720, "Don Topo Engine", "assets/MainEngineLogo.png");
+        DonTopo::Input::init(window.getNativeWindow());
         DonTopo::Renderer renderer;
 
         // scene.shutdown(physics, audio) libera explícitamente los colliders/
@@ -194,6 +196,8 @@ int main()
 
         while (!window.shouldClose())
         {
+            DonTopo::Input::update();
+
             auto now = std::chrono::high_resolution_clock::now();
             static auto last = now;
             float dt = std::chrono::duration<float>(now - last).count();

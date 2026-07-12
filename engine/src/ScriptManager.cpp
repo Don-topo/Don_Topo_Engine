@@ -1,4 +1,5 @@
 #include "DonTopo/ScriptManager.h"
+#include "DonTopo/ScriptBindings.h"
 #include <algorithm>
 
 namespace DonTopo
@@ -12,6 +13,8 @@ namespace DonTopo
         // no necesitan io/os, y así un script no puede tocar disco.
         m_lua.open_libraries(sol::lib::base, sol::lib::math,
                              sol::lib::string, sol::lib::table);
+
+        ScriptBindings::registerAll(*this);
 
         m_scriptsDir = scriptsDir;
         std::error_code ec;
