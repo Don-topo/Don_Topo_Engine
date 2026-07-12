@@ -1154,6 +1154,7 @@ void EditorUI::drawBoxColliderSection()
     {
         m_selected->setBoxCollider(nullptr);
         m_colliderCachedFor = nullptr;
+        pushLog("Componente Box Collider quitado de '" + m_selected->name + "'");
     }
 }
 
@@ -1244,6 +1245,7 @@ void EditorUI::drawSphereColliderSection()
     {
         m_selected->setSphereCollider(nullptr);
         m_sphereColliderCachedFor = nullptr;
+        pushLog("Componente Sphere Collider quitado de '" + m_selected->name + "'");
     }
 }
 
@@ -1347,6 +1349,7 @@ void EditorUI::drawCapsuleColliderSection()
     {
         m_selected->setCapsuleCollider(nullptr);
         m_capsuleColliderCachedFor = nullptr;
+        pushLog("Componente Capsule Collider quitado de '" + m_selected->name + "'");
     }
 }
 
@@ -1409,6 +1412,7 @@ void EditorUI::drawPlaneColliderSection()
     {
         m_selected->setPlaneCollider(nullptr);
         m_planeColliderCachedFor = nullptr;
+        pushLog("Componente Plane Collider quitado de '" + m_selected->name + "'");
     }
 }
 
@@ -1439,6 +1443,7 @@ void EditorUI::drawMeshSection()
             // Vuelve a ocultar la sección tras quitar el mesh — hay que
             // pulsar "Add > Mesh" de nuevo para reabrirla.
             m_meshAddRequestedFor = nullptr;
+            pushLog("Componente Mesh quitado de '" + m_selected->name + "'");
         }
 
         return;
@@ -1548,6 +1553,7 @@ void EditorUI::drawAudioClipSection()
             // Vuelve a ocultar la sección tras quitar el clip — hay que
             // pulsar "Add > Audio Clip" de nuevo para reabrirla.
             m_audioClipAddRequestedFor = nullptr;
+            pushLog("Componente Audio Clip quitado de '" + m_selected->name + "'");
         }
 
         return;
