@@ -441,8 +441,22 @@ void EditorUI::drawScene(GameObject* sceneRoot)
 
         if (m_onDelete)
             m_onDelete(target);
+
+        // Sin esto, borrar desde el editor en Play salta OnDestroy y deja
+        // punteros muertos en el alive-set hasta el siguiente update
+        // (ventana de use-after-free vía hot reload).
+        if (m_isPlaying && m_scriptManager)
+        {
+            target->traverse([this](GameObject* n) {
+                for (auto& s : n->getScripts())
+                    m_scriptManager->callOnDestroy(*s);
+            });
+        }
+
         assert(m_scene && "EditorUI::m_scene debe estar asignado (ver Renderer::setScene) antes de borrar GameObjects");
         m_scene->removeGameObject(target);
+        if (m_scriptManager)
+            m_scriptManager->rebuildAliveSet();
         if (selectionInSubtree)
         {
             m_selected = nullptr;
@@ -1909,20 +1923,15 @@ void EditorUI::drawAddComponentButton()
         {
             if (ImGui::BeginMenu("Script"))
             {
-                for (const auto& [name, cls] : m_scriptManager->getRegistry())
+                for (const auto& entry : m_scriptManager->getRegistry())
                 {
+                    const std::string& name = entry.first;
                     if (ImGui::MenuItem(name.c_str()))
                     {
                         auto comp = std::make_unique<ScriptComponent>(name, m_selected);
-                        ScriptComponent* raw = comp.get();
                         m_selected->addScript(std::move(comp));
-                        if (m_isPlaying)
-                        {
-                            // En Play el comp entra en caliente: instancia ya;
-                            // Awake/Start los dispara el lifecycle (started
-                            // == false) en el siguiente update.
-                            m_scriptManager->instantiateComponent(*raw);
-                        }
+                        // En Play el lifecycle instancia y dispara Awake/Start
+                        // en el siguiente update (started == false).
                         pushLog("Componente Script '" + name + "' añadido a '" + m_selected->name + "'");
                     }
                 }

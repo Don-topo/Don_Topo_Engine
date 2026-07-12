@@ -149,9 +149,8 @@ int main()
             });
         });
         scriptManager.setOnDestroying([&renderer](DonTopo::GameObject* go) {
-            go->traverse([&renderer](DonTopo::GameObject* n) {
-                if (n->hasMesh()) renderer.removeMeshComponent(n);
-            });
+            // Libera GPU del subtree completo (estático + skinned).
+            renderer.removeGameObject(go);
         });
         scriptManager.init("Scripts");
         renderer.setScriptManager(&scriptManager);

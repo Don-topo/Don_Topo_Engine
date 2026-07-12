@@ -118,6 +118,9 @@ private:
     // Último error de compilación por nombre de script (persiste aunque el
     // script siga registrado con su versión anterior válida).
     std::map<std::string, std::string> m_compileErrors;
+    // Scripts que fallaron su primera carga — reintentados cuando cambia su
+    // mtime; los que ya estaban registrados se reintentan vía m_registry.
+    std::map<std::string, std::pair<std::filesystem::path, std::filesystem::file_time_type>> m_erroredScripts;
     std::function<void(const std::string&)> m_log;
 
     Scene*          m_scene   = nullptr;

@@ -40,6 +40,13 @@ namespace DonTopo
         {
             sol::error err = result;
             m_compileErrors[className] = err.what();
+            // Si nunca llegó a registrarse, guardamos su mtime pa poder
+            // reintentar la carga cuando el archivo cambie.
+            if (!m_registry.count(className))
+            {
+                std::error_code ec;
+                m_erroredScripts[className] = { path, std::filesystem::last_write_time(path, ec) };
+            }
             log("Script '" + className + "': error de compilación: " + err.what());
             return false;
         }
@@ -49,6 +56,11 @@ namespace DonTopo
         {
             m_compileErrors[className] =
                 "el archivo no define una tabla global '" + className + "'";
+            if (!m_registry.count(className))
+            {
+                std::error_code ec;
+                m_erroredScripts[className] = { path, std::filesystem::last_write_time(path, ec) };
+            }
             log("Script '" + className + "': no define la tabla global '" + className + "'");
             return false;
         }
@@ -62,6 +74,7 @@ namespace DonTopo
 
         m_registry[className] = std::move(cls);
         m_compileErrors.erase(className);
+        m_erroredScripts.erase(className);
         log("Script '" + className + "' registrado (" +
             std::to_string(m_registry[className].props.size()) + " props)");
         return true;
@@ -274,11 +287,17 @@ namespace DonTopo
 
         for (auto* c : comps) if (c->hasLateUpdate) callCallback(*c, "LateUpdate", nullptr);
 
-        // RemoveComponent("Script:X") diferidos
+        // RemoveComponent("Script:X") diferidos.
+        // Snapshot antes de llamar a Lua — un callback puede añadir
+        // componentes/entities y invalidar la iteración en vivo.
+        std::vector<ScriptComponent*> toRemove;
+        m_scene->traverse([&](GameObject* go) {
+            for (auto& s : go->getScripts())
+                if (s->pendingRemove) toRemove.push_back(s.get());
+        });
+        for (ScriptComponent* s : toRemove) callOnDestroy(*s);
         m_scene->traverse([&](GameObject* go) {
             auto& scripts = go->getScripts();
-            for (auto& s : scripts)
-                if (s->pendingRemove) callOnDestroy(*s);
             scripts.erase(
                 std::remove_if(scripts.begin(), scripts.end(),
                     [](const std::unique_ptr<ScriptComponent>& s) { return s->pendingRemove; }),
@@ -289,9 +308,13 @@ namespace DonTopo
         for (GameObject* go : m_destroyQueue)
         {
             if (!isAlive(go)) continue;   // destruido dos veces o hijo de otro destruido
-            go->traverse([this](GameObject* n) {
-                for (auto& s : n->getScripts()) callOnDestroy(*s);
+            // Snapshot antes de llamar a Lua — un callback puede añadir
+            // componentes/entities y invalidar la iteración en vivo.
+            std::vector<ScriptComponent*> subtreeScripts;
+            go->traverse([&](GameObject* n) {
+                for (auto& s : n->getScripts()) subtreeScripts.push_back(s.get());
             });
+            for (ScriptComponent* s : subtreeScripts) callOnDestroy(*s);
             if (m_onDestroying) m_onDestroying(go);
             m_scene->removeGameObject(go);
             rebuildAliveSet();
@@ -325,29 +348,52 @@ namespace DonTopo
                 continue;   // error logueado; instancias viejas siguen corriendo
 
             if (!m_playing || !m_scene) continue;
+            // El editor pudo borrar entities este mismo frame.
+            rebuildAliveSet();
+
             // Reinstancia los comps vivos de esta clase preservando el valor
             // actual de las props serializables (spec: estado no
             // serializable se pierde).
+            // Snapshot antes de llamar a Lua — un callback puede añadir
+            // componentes/entities y invalidar la iteración en vivo.
+            std::vector<ScriptComponent*> toReinstantiate;
             m_scene->traverse([&](GameObject* go) {
                 for (auto& s : go->getScripts())
-                {
-                    if (s->scriptName != name || !s->instance.valid()) continue;
-
-                    std::map<std::string, ScriptValue> current = s->overrides;
-                    for (const ScriptProp& p : m_registry[name].props)
-                    {
-                        sol::object v = s->instance[p.name];
-                        if (v.get_type() == sol::type::number)       current[p.name] = v.as<double>();
-                        else if (v.get_type() == sol::type::boolean) current[p.name] = v.as<bool>();
-                        else if (v.get_type() == sol::type::string)  current[p.name] = v.as<std::string>();
-                    }
-
-                    instantiateComponentWith(*s, current);   // ver refactor abajo
-                    if (s->hasAwake) callCallback(*s, "Awake", nullptr);
-                    if (s->hasStart) callCallback(*s, "Start", nullptr);
-                    s->started = true;
-                }
+                    if (s->scriptName == name && s->instance.valid())
+                        toReinstantiate.push_back(s.get());
             });
+            for (ScriptComponent* s : toReinstantiate)
+            {
+                std::map<std::string, ScriptValue> current = s->overrides;
+                for (const ScriptProp& p : m_registry[name].props)
+                {
+                    sol::object v = s->instance[p.name];
+                    if (v.get_type() == sol::type::number)       current[p.name] = v.as<double>();
+                    else if (v.get_type() == sol::type::boolean) current[p.name] = v.as<bool>();
+                    else if (v.get_type() == sol::type::string)  current[p.name] = v.as<std::string>();
+                }
+
+                instantiateComponentWith(*s, current);
+                if (s->hasAwake) callCallback(*s, "Awake", nullptr);
+                if (s->hasStart) callCallback(*s, "Start", nullptr);
+                s->started = true;
+            }
+        }
+
+        // 1b) Reintento de scripts que fallaron su primera carga si su
+        // archivo cambió — los ya registrados se cubren arriba.
+        std::vector<std::string> retryErrored;
+        for (auto& [name, entry] : m_erroredScripts)
+        {
+            auto mtime = std::filesystem::last_write_time(entry.first, ec);
+            if (!ec && mtime != entry.second) retryErrored.push_back(name);
+        }
+        for (const std::string& name : retryErrored)
+        {
+            const std::filesystem::path path = m_erroredScripts[name].first;
+            log("Script '" + name + "': reintentando script con error previo");
+            m_erroredScripts[name].second = std::filesystem::last_write_time(path, ec);
+            loadScript(path);
         }
 
         // 2) Scripts nuevos en la carpeta
