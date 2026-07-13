@@ -123,50 +123,20 @@ void ScriptEditorPanel::draw()
                     ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
                     saveTab(tab);
 
-                tab.editor.Render("##TextEditor", ImGui::GetContentRegionAvail());
-                if (tab.editor.IsTextChanged())
-                    tab.dirty = true;
-
-                ImVec2 editorOrigin = ImGui::GetItemRectMin();
-
-                Fragment frag = extractFragment(tab.editor);
-                bool fragmentChanged = frag.text != tab.acLastFragment;
-                tab.acLastFragment = frag.text;
-                if (fragmentChanged)
-                    tab.acDismissed = false;
-
-                bool forceOpen = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
-                    ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Space, false);
-
-                if (forceOpen || (tab.editor.IsTextChanged() && frag.text.size() >= 2 && !tab.acDismissed))
+                bool acKeyConsumed = false;
+                if (tab.acVisible && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
                 {
-                    tab.acMatches.clear();
-                    for (const auto& symbol : DonTopo::luaApiSymbols())
-                        if (startsWithCaseInsensitive(symbol, frag.text))
-                            tab.acMatches.push_back(symbol);
-
-                    if (!tab.acMatches.empty())
-                    {
-                        tab.acVisible = true;
-                        tab.acSelected = 0;
-                        tab.acFragmentStart = TextEditor::Coordinates(
-                            tab.editor.GetCursorPosition().mLine, frag.startColumn);
-                    }
-                    else if (!forceOpen)
-                    {
-                        tab.acVisible = false;
-                    }
-                }
-
-                if (tab.acVisible)
-                {
-                    tab.editor.SetHandleKeyboardInputs(false);
-
                     if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true))
+                    {
                         tab.acSelected = (tab.acSelected + 1) % static_cast<int>(tab.acMatches.size());
+                        acKeyConsumed = true;
+                    }
                     else if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true))
+                    {
                         tab.acSelected = (tab.acSelected - 1 + static_cast<int>(tab.acMatches.size())) %
                                          static_cast<int>(tab.acMatches.size());
+                        acKeyConsumed = true;
+                    }
                     else if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_Tab, false))
                     {
                         // DeleteRange/InsertTextAt son privados en el TextEditor vendored
@@ -184,18 +154,63 @@ void ScriptEditorPanel::draw()
                         tab.editor.InsertText(tab.acMatches[tab.acSelected]);
                         tab.dirty = true;
                         tab.acVisible = false;
-                        tab.editor.SetHandleKeyboardInputs(true);
+                        acKeyConsumed = true;
                     }
                     else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
                     {
                         tab.acVisible = false;
                         tab.acDismissed = true;
-                        tab.editor.SetHandleKeyboardInputs(true);
+                        acKeyConsumed = true;
                     }
                 }
-                else
+                // Solo desactivamos el manejo de teclado del editor el frame en
+                // que de verdad consumimos una de las teclas del popup — el
+                // resto de frames con el popup abierto, escribir/mover el
+                // caret con flechas sigue funcionando con normalidad.
+                // (SetHandleKeyboardInputs(false) afecta al *siguiente*
+                // Render(), por eso este bloque corre antes del Render() de
+                // abajo: así el frame en que se consume una tecla es el mismo
+                // frame en que se desactiva el manejo antes de que el editor
+                // la procese.)
+                tab.editor.SetHandleKeyboardInputs(!acKeyConsumed);
+
+                tab.editor.Render("##TextEditor", ImGui::GetContentRegionAvail());
+                if (tab.editor.IsTextChanged())
+                    tab.dirty = true;
+
+                ImVec2 editorOrigin = ImGui::GetItemRectMin();
+
+                TextEditor::Coordinates currentCursor = tab.editor.GetCursorPosition();
+                bool cursorMoved = !acKeyConsumed && (currentCursor != tab.acLastCursor);
+                tab.acLastCursor = currentCursor;
+                if (cursorMoved && tab.acVisible)
+                    tab.acVisible = false;
+
+                Fragment frag = extractFragment(tab.editor);
+                bool fragmentChanged = frag.text != tab.acLastFragment;
+                tab.acLastFragment = frag.text;
+                if (fragmentChanged)
+                    tab.acDismissed = false;
+
+                bool forceOpen = !acKeyConsumed &&
+                    ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+                    ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Space, false);
+
+                if (!acKeyConsumed &&
+                    (forceOpen || (tab.editor.IsTextChanged() && frag.text.size() >= 2 && !tab.acDismissed)))
                 {
-                    tab.editor.SetHandleKeyboardInputs(true);
+                    tab.acMatches.clear();
+                    for (const auto& symbol : DonTopo::luaApiSymbols())
+                        if (startsWithCaseInsensitive(symbol, frag.text))
+                            tab.acMatches.push_back(symbol);
+
+                    tab.acVisible = !tab.acMatches.empty();
+                    if (tab.acVisible)
+                    {
+                        tab.acSelected = 0;
+                        tab.acFragmentStart = TextEditor::Coordinates(
+                            tab.editor.GetCursorPosition().mLine, frag.startColumn);
+                    }
                 }
 
                 if (tab.acVisible)

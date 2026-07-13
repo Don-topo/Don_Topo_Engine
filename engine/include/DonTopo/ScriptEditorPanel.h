@@ -37,6 +37,10 @@ private:
         int acSelected = 0;
         TextEditor::Coordinates acFragmentStart;
         std::string acLastFragment;
+        // Última posición de cursor observada — permite detectar movimiento
+        // de caret (p.ej. click de ratón) que no dispara IsTextChanged(),
+        // para cerrar el popup si queda con coordenadas obsoletas.
+        TextEditor::Coordinates acLastCursor;
     };
 
     void saveTab(Tab& tab);
