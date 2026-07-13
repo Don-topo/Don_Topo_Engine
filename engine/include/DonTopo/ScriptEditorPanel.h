@@ -26,6 +26,17 @@ private:
         std::filesystem::path path;
         TextEditor editor;
         bool dirty = false;
+
+        // Estado del popup de autocomplete (Task: diagnostics+autocomplete).
+        bool acVisible = false;
+        // true tras Escape, hasta que el fragmento bajo el cursor cambie —
+        // evita que el popup se vuelva a abrir solo mientras se sigue
+        // escribiendo la misma palabra que el usuario acaba de descartar.
+        bool acDismissed = false;
+        std::vector<std::string> acMatches;
+        int acSelected = 0;
+        TextEditor::Coordinates acFragmentStart;
+        std::string acLastFragment;
     };
 
     void saveTab(Tab& tab);

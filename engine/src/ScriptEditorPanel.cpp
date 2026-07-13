@@ -1,10 +1,50 @@
 #include "DonTopo/ScriptEditorPanel.h"
 #include "DonTopo/FileManager.h"
 #include "DonTopo/LuaSyntaxCheck.h"
+#include "DonTopo/LuaApiReference.h"
 #include <imgui.h>
 #include <optional>
+#include <algorithm>
+#include <cctype>
 
 namespace DonTopo {
+
+namespace {
+
+bool isFragmentChar(char c)
+{
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.' || c == ':';
+}
+
+// Escanea GetCurrentLineText() hacia atrás desde la columna del cursor
+// mientras los caracteres sean parte de un identificador/ruta con puntos
+// (soporta "Entity:Get...", "Log.I..."). Devuelve el fragmento y su
+// columna de inicio en la misma línea que el cursor.
+struct Fragment { std::string text; int startColumn; };
+
+Fragment extractFragment(const TextEditor& editor)
+{
+    TextEditor::Coordinates cursor = editor.GetCursorPosition();
+    std::string line = editor.GetCurrentLineText();
+    int col = std::min(cursor.mColumn, static_cast<int>(line.size()));
+
+    int start = col;
+    while (start > 0 && isFragmentChar(line[start - 1]))
+        --start;
+
+    return Fragment{ line.substr(start, col - start), start };
+}
+
+bool startsWithCaseInsensitive(const std::string& value, const std::string& prefix)
+{
+    if (value.size() < prefix.size())
+        return false;
+    return std::equal(prefix.begin(), prefix.end(), value.begin(),
+        [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) ==
+                                     std::tolower(static_cast<unsigned char>(b)); });
+}
+
+} // namespace (anónimo)
 
 void ScriptEditorPanel::openFile(const std::filesystem::path& path)
 {
@@ -86,6 +126,116 @@ void ScriptEditorPanel::draw()
                 tab.editor.Render("##TextEditor", ImGui::GetContentRegionAvail());
                 if (tab.editor.IsTextChanged())
                     tab.dirty = true;
+
+                ImVec2 editorOrigin = ImGui::GetItemRectMin();
+
+                Fragment frag = extractFragment(tab.editor);
+                bool fragmentChanged = frag.text != tab.acLastFragment;
+                tab.acLastFragment = frag.text;
+                if (fragmentChanged)
+                    tab.acDismissed = false;
+
+                bool forceOpen = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+                    ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Space, false);
+
+                if (forceOpen || (tab.editor.IsTextChanged() && frag.text.size() >= 2 && !tab.acDismissed))
+                {
+                    tab.acMatches.clear();
+                    for (const auto& symbol : DonTopo::luaApiSymbols())
+                        if (startsWithCaseInsensitive(symbol, frag.text))
+                            tab.acMatches.push_back(symbol);
+
+                    if (!tab.acMatches.empty())
+                    {
+                        tab.acVisible = true;
+                        tab.acSelected = 0;
+                        tab.acFragmentStart = TextEditor::Coordinates(
+                            tab.editor.GetCursorPosition().mLine, frag.startColumn);
+                    }
+                    else if (!forceOpen)
+                    {
+                        tab.acVisible = false;
+                    }
+                }
+
+                if (tab.acVisible)
+                {
+                    tab.editor.SetHandleKeyboardInputs(false);
+
+                    if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true))
+                        tab.acSelected = (tab.acSelected + 1) % static_cast<int>(tab.acMatches.size());
+                    else if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true))
+                        tab.acSelected = (tab.acSelected - 1 + static_cast<int>(tab.acMatches.size())) %
+                                         static_cast<int>(tab.acMatches.size());
+                    else if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_Tab, false))
+                    {
+                        // DeleteRange/InsertTextAt son privados en el TextEditor vendored
+                        // (ver TextEditor.h línea 325) — usamos la API pública equivalente:
+                        // seleccionar el rango del fragmento y Delete(). Delete() no hace
+                        // no-op si start==end (a diferencia de DeleteRange), así que solo
+                        // seleccionamos/borramos cuando hay algo real que borrar.
+                        TextEditor::Coordinates cursor = tab.editor.GetCursorPosition();
+                        if (cursor != tab.acFragmentStart)
+                        {
+                            tab.editor.SetSelection(tab.acFragmentStart, cursor);
+                            tab.editor.Delete();
+                        }
+                        tab.editor.SetCursorPosition(tab.acFragmentStart);
+                        tab.editor.InsertText(tab.acMatches[tab.acSelected]);
+                        tab.dirty = true;
+                        tab.acVisible = false;
+                        tab.editor.SetHandleKeyboardInputs(true);
+                    }
+                    else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+                    {
+                        tab.acVisible = false;
+                        tab.acDismissed = true;
+                        tab.editor.SetHandleKeyboardInputs(true);
+                    }
+                }
+                else
+                {
+                    tab.editor.SetHandleKeyboardInputs(true);
+                }
+
+                if (tab.acVisible)
+                {
+                    float charWidth = ImGui::CalcTextSize("A").x;
+                    float lineHeight = ImGui::GetTextLineHeightWithSpacing();
+                    ImVec2 popupPos(
+                        editorOrigin.x + tab.acFragmentStart.mColumn * charWidth,
+                        editorOrigin.y + tab.acFragmentStart.mLine * lineHeight + lineHeight);
+
+                    ImGui::SetNextWindowPos(popupPos);
+                    ImGui::SetNextWindowSize(ImVec2(280.0f, 0.0f));
+                    ImGuiWindowFlags acFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoFocusOnAppearing;
+
+                    ImGui::Begin("##ScriptEditorAutocomplete", nullptr, acFlags);
+                    int visibleCount = std::min(static_cast<int>(tab.acMatches.size()), 8);
+                    for (int m = 0; m < static_cast<int>(tab.acMatches.size()); ++m)
+                    {
+                        bool selected = (m == tab.acSelected);
+                        if (ImGui::Selectable(tab.acMatches[m].c_str(), selected))
+                        {
+                            TextEditor::Coordinates cursor = tab.editor.GetCursorPosition();
+                            if (cursor != tab.acFragmentStart)
+                            {
+                                tab.editor.SetSelection(tab.acFragmentStart, cursor);
+                                tab.editor.Delete();
+                            }
+                            tab.editor.SetCursorPosition(tab.acFragmentStart);
+                            tab.editor.InsertText(tab.acMatches[m]);
+                            tab.dirty = true;
+                            tab.acVisible = false;
+                            tab.editor.SetHandleKeyboardInputs(true);
+                        }
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    (void)visibleCount;
+                    ImGui::End();
+                }
 
                 ImGui::EndTabItem();
             }
