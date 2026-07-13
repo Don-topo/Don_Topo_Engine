@@ -18,5 +18,13 @@ namespace DonTopo
             // Lee y parsea path. std::nullopt si el fichero no existe o el
             // JSON es inválido (nunca lanza excepción hacia el caller).
             static std::optional<nlohmann::json> readJson(const std::string& path);
+
+            // Lee el contenido completo de path como texto plano. std::nullopt
+            // si el fichero no existe o no se pudo abrir.
+            static std::optional<std::string> readText(const std::string& path);
+
+            // Escribe content en path, reemplazando cualquier contenido previo.
+            // false si el fichero no se pudo abrir/escribir.
+            static bool writeText(const std::string& path, const std::string& content);
     };
 }

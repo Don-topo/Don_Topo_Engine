@@ -1,5 +1,6 @@
 #include "DonTopo/FileManager.h"
 #include <fstream>
+#include <sstream>
 
 namespace DonTopo
 {
@@ -29,5 +30,26 @@ namespace DonTopo
             return std::nullopt;
         }
         return j;
+    }
+
+    std::optional<std::string> FileManager::readText(const std::string& path)
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open())
+            return std::nullopt;
+
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    }
+
+    bool FileManager::writeText(const std::string& path, const std::string& content)
+    {
+        std::ofstream out(path, std::ios::binary);
+        if (!out.is_open())
+            return false;
+
+        out << content;
+        return out.good();
     }
 }
