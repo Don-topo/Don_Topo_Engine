@@ -27,6 +27,7 @@ add_library(DonTopoEngine STATIC
     src/GpuDevice.cpp
     src/GpuResources.cpp
     src/Gizmos.cpp
+    src/ScriptEditorPanel.cpp
 )
 
 target_include_directories(DonTopoEngine
