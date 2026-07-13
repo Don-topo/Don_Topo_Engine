@@ -2173,6 +2173,12 @@ void EditorUI::drawContentBrowser(GameObject* sceneRoot)
                 m_scanned    = false;
             }
 
+            if (!isDir && ext == ".lua" && ImGui::IsItemHovered() &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+                m_scriptEditor->openFile(path);
+            }
+
             if (!isDir && kDraggableExt.count(ext) && ImGui::BeginDragDropSource())
             {
                 std::string fullPath = path.string();
