@@ -13,6 +13,12 @@ const std::vector<std::string>& luaApiSymbols()
         // Globals
         "print",
 
+        // self — instancia del script (parámetro implícito de las funciones
+        // Script:Método). 'self.entity' es el único campo inyectado por
+        // ScriptManager para todo script (ver ScriptManager.cpp); el resto
+        // de campos son los definidos por el propio script (no listables).
+        "self", "self.entity",
+
         // Log
         "Log.Info", "Log.Warn", "Log.Error",
 
