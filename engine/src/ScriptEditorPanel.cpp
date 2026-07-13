@@ -164,13 +164,27 @@ void ScriptEditorPanel::draw()
         for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i)
         {
             Tab& tab = m_tabs[i];
-            std::string title = tab.path.filename().string() + (tab.dirty ? " *" : "");
+            // El label del TabItem no debe cambiar de texto nunca: aunque el ID sea
+            // estable (el "##" + path de abajo), ImGui pierde el foco del child de
+            // dentro (el editor) en cuanto el TEXTO VISIBLE de un tab cambia entre
+            // frames — confirmado bisectando (append " *" al título al pasar a dirty
+            // causaba pérdida de foco del editor un frame después, con o sin ID
+            // estable). Por eso el estado "sin guardar" se indica con el flag nativo
+            // ImGuiTabItemFlags_UnsavedDocument (un punto junto al label) en vez de
+            // tocar el texto.
+            std::string title = tab.path.filename().string();
+            // "##" + path: el ID del TabItem es independiente del texto visible,
+            // así que reordenar tabs o rutas duplicadas en distintas carpetas no
+            // colisionan.
+            std::string tabLabel = title + "##" + tab.path.string();
             ImGuiTabItemFlags flags = (m_focusIndex == i) ? ImGuiTabItemFlags_SetSelected
                                                            : ImGuiTabItemFlags_None;
+            if (tab.dirty)
+                flags |= ImGuiTabItemFlags_UnsavedDocument;
             bool open = true;
 
             ImGui::PushID(i);
-            if (ImGui::BeginTabItem(title.c_str(), &open, flags))
+            if (ImGui::BeginTabItem(tabLabel.c_str(), &open, flags))
             {
                 if (ImGui::Button("Save"))
                     saveTab(tab);
