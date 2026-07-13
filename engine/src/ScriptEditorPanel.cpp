@@ -1,14 +1,24 @@
 #include "DonTopo/ScriptEditorPanel.h"
 #include "DonTopo/FileManager.h"
 #include <imgui.h>
+#include <optional>
 
 namespace DonTopo {
 
 void ScriptEditorPanel::openFile(const std::filesystem::path& path)
 {
+    // Canonicalizamos el path antes de comparar/guardar: los distintos call sites
+    // (Content Browser vs Properties/Nuevo-Script) construyen el mismo fichero real
+    // desde raíces distintas, y una comparación lexical puede no coincidir (".." ,
+    // separadores, mayúsculas de unidad, etc.), llevando a tabs duplicadas que
+    // pisan silenciosamente los cambios de la otra al guardar.
+    std::error_code ec;
+    std::filesystem::path canonicalPath = std::filesystem::weakly_canonical(path, ec);
+    if (ec) canonicalPath = path;
+
     for (size_t i = 0; i < m_tabs.size(); ++i)
     {
-        if (m_tabs[i].path == path)
+        if (m_tabs[i].path == canonicalPath)
         {
             m_focusIndex = static_cast<int>(i);
             return;
@@ -23,7 +33,7 @@ void ScriptEditorPanel::openFile(const std::filesystem::path& path)
     }
 
     Tab tab;
-    tab.path = path;
+    tab.path = canonicalPath;
     tab.editor.SetLanguageDefinition(TextEditor::LanguageDefinition::Lua());
     tab.editor.SetText(*content);
     m_tabs.push_back(std::move(tab));
@@ -61,7 +71,7 @@ void ScriptEditorPanel::draw()
                     saveTab(tab);
 
                 if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
-                    ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S))
+                    ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
                     saveTab(tab);
 
                 tab.editor.Render("##TextEditor", ImGui::GetContentRegionAvail());
