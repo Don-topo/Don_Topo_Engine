@@ -104,6 +104,8 @@ bool startsWithCaseInsensitive(const std::string& value, const std::string& pref
 
 void ScriptEditorPanel::openFile(const std::filesystem::path& path)
 {
+    m_open = true;
+
     // Canonicalizamos el path antes de comparar/guardar: los distintos call sites
     // (Content Browser vs Properties/Nuevo-Script) construyen el mismo fichero real
     // desde raíces distintas, y una comparación lexical puede no coincidir (".." ,
@@ -155,7 +157,8 @@ void ScriptEditorPanel::saveTab(Tab& tab)
 
 void ScriptEditorPanel::draw()
 {
-    ImGui::Begin("Script Editor");
+    if (!m_open) return;
+    ImGui::Begin("Script Editor", &m_open);
 
     int closeRequested = -1;
 

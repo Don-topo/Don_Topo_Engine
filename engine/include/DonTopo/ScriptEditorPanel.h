@@ -14,12 +14,17 @@ namespace DonTopo {
 class ScriptEditorPanel {
 public:
     // No-op si path ya está abierto en alguna tab (esa tab pasa a tener foco).
+    // También reabre el panel si estaba cerrado (m_open = true) — abrir un
+    // fichero desde Properties/Content Browser debe hacerlo visible.
     void openFile(const std::filesystem::path& path);
     void draw();
     // Fallos de lectura/escritura se reportan aquí en vez de silenciarse
     // (spec: deben verse en el Log Console del editor, pero este panel no
     // conoce EditorUI — EditorUI inyecta pushLog vía este callback).
     void setLogCallback(std::function<void(const std::string&)> cb) { m_log = std::move(cb); }
+    // Puntero al flag de visibilidad de la ventana, usado por el checkbox
+    // del menú View de EditorUI (ImGui::MenuItem togglea *bool directamente).
+    bool* GetOpenPtr() { return &m_open; }
 
 private:
     struct Tab {
@@ -58,6 +63,10 @@ private:
     // Índice de tab con el popup "cambios sin guardar" pendiente (-1 = ninguno).
     int m_closeConfirmIndex = -1;
     bool m_openCloseConfirmPopup = false;
+    // Visibilidad de la ventana del panel — togglable desde el menú View de
+    // EditorUI vía GetOpenPtr(). No afecta a m_tabs: cerrar el panel solo
+    // oculta la ventana, las tabs y su estado siguen en memoria.
+    bool m_open = true;
     std::function<void(const std::string&)> m_log;
 };
 
