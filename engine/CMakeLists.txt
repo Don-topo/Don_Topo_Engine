@@ -28,6 +28,7 @@ add_library(DonTopoEngine STATIC
     src/GpuResources.cpp
     src/Gizmos.cpp
     src/ScriptEditorPanel.cpp
+    src/LuaSyntaxCheck.cpp
 )
 
 target_include_directories(DonTopoEngine
