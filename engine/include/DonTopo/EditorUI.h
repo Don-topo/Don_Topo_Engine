@@ -78,6 +78,7 @@ public:
 
 private:
     static constexpr float kToolbarHeight = 30.0f;
+    void drawMenuBar();
     void drawToolbar();
     void drawDockSpace();
     void drawScene(GameObject* sceneRoot);
@@ -162,6 +163,16 @@ private:
     // audio en uso -> setAudioClip(nullptr); textura de Material en uso ->
     // limpia el campo de path (Task 5 añade el hot-swap de GPU aquí).
     void detachSceneReferencesForDelete(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir);
+
+    // Visibilidad de paneles — togglable desde el menú View (drawMenuBar).
+    // Todos empiezan visibles; cerrar solo oculta la ventana ImGui, el
+    // estado interno de cada panel (selección, scroll, tabs de Script
+    // Editor...) no se pierde mientras está oculto.
+    bool m_sceneOpen          = true;
+    bool m_viewportOpen       = true;
+    bool m_propertiesOpen     = true;
+    bool m_logOpen            = true;
+    bool m_contentBrowserOpen = true;
 
     // Viewport
     bool m_viewportHovered = false;
