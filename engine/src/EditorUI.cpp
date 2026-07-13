@@ -19,6 +19,7 @@
 #include "DonTopo/FileManager.h"
 #include "DonTopo/ScriptManager.h"
 #include "DonTopo/ScriptComponent.h"
+#include "DonTopo/ScriptEditorPanel.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -210,7 +211,9 @@ EditorUI::EditorUI()
     : m_meshFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_audioFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_sceneFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_scriptEditor(std::make_unique<ScriptEditorPanel>())
 {
+    m_scriptEditor->setLogCallback([this](const std::string& msg) { pushLog(msg); });
 }
 
 EditorUI::~EditorUI() = default;
@@ -228,6 +231,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     drawAudioClipDialog();
     drawSceneDialog();
     drawContentBrowser(sceneRoot);
+    m_scriptEditor->draw();
 }
 
 void EditorUI::drawToolbar()
