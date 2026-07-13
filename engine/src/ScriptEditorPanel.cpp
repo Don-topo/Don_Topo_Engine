@@ -1,5 +1,6 @@
 #include "DonTopo/ScriptEditorPanel.h"
 #include "DonTopo/FileManager.h"
+#include "DonTopo/LuaSyntaxCheck.h"
 #include <imgui.h>
 #include <optional>
 
@@ -46,6 +47,14 @@ void ScriptEditorPanel::saveTab(Tab& tab)
         tab.dirty = false;
     else
         log("Script Editor: no se pudo guardar '" + tab.path.string() + "'");
+
+    // El chequeo de sintaxis se muestra vía marker visual, nunca al Log
+    // Console — sería ruido redundante con el marker.
+    TextEditor::ErrorMarkers markers;
+    auto err = checkLuaSyntax(tab.editor.GetText());
+    if (err)
+        markers[err->first] = err->second;
+    tab.editor.SetErrorMarkers(markers);
 }
 
 void ScriptEditorPanel::draw()
