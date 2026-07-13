@@ -160,6 +160,7 @@ void ScriptEditorPanel::draw()
                     {
                         tab.acVisible = false;
                         tab.acDismissed = true;
+                        tab.acDismissedFragment = tab.acLastFragment;
                         acKeyConsumed = true;
                     }
                 }
@@ -187,9 +188,8 @@ void ScriptEditorPanel::draw()
                     tab.acVisible = false;
 
                 Fragment frag = extractFragment(tab.editor);
-                bool fragmentChanged = frag.text != tab.acLastFragment;
                 tab.acLastFragment = frag.text;
-                if (fragmentChanged)
+                if (tab.acDismissed && !frag.text.starts_with(tab.acDismissedFragment))
                     tab.acDismissed = false;
 
                 bool forceOpen = !acKeyConsumed &&
