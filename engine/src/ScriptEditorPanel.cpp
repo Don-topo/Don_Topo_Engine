@@ -240,7 +240,19 @@ void ScriptEditorPanel::draw()
                 // abajo: así el frame en que se consume una tecla es el mismo
                 // frame en que se desactiva el manejo antes de que el editor
                 // la procese.)
-                tab.editor.SetHandleKeyboardInputs(!(acKeyConsumed || forceOpen));
+                bool suppressEditorInput = acKeyConsumed || forceOpen;
+                tab.editor.SetHandleKeyboardInputs(!suppressEditorInput);
+
+                // TextEditor::Render() solo pone io.WantCaptureKeyboard = true
+                // dentro de su propio HandleKeyboardInputs() — que nos saltamos
+                // arriba a propósito. Sin esto, el Enter/Tab/flechas que acabamos
+                // de consumir para el popup queda libre para el sistema de Nav de
+                // ImGui, que lo usa para mover el foco de teclado a otro widget
+                // (p.ej. cambia de pestaña del tab bar, o deja el editor sin foco
+                // — la línea actual se pinta en gris). Reclamamos la captura
+                // nosotros mismos para que Nav no toque esa misma tecla.
+                if (suppressEditorInput)
+                    ImGui::GetIO().WantCaptureKeyboard = true;
 
                 tab.editor.Render("##TextEditor", ImGui::GetContentRegionAvail());
                 if (tab.editor.IsTextChanged())
