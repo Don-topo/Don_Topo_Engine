@@ -16,17 +16,73 @@ bool isFragmentChar(char c)
     return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.' || c == ':';
 }
 
+// GetCurrentLineText()/GetCursorPosition().mColumn viven en espacios distintos:
+// la primera devuelve los caracteres reales de la línea (un '\t' literal ocupa
+// una sola posición), mientras que mColumn es una columna *visual* (un '\t'
+// cuenta como hasta GetTabSize() celdas — ver TextEditor.h, doc de Coordinates).
+// Indexar la línea con mColumn directamente es incorrecto en líneas con tabs
+// precedentes. TextEditor::GetCharacterIndex/GetCharacterColumn hacen esta
+// conversión pero son privados en el widget vendored (TextEditor.h línea
+// 332-333), así que replicamos aquí el mismo algoritmo (TextEditor.cpp
+// líneas 492-527) sobre el std::string público que ya tenemos.
+int utf8CharLength(unsigned char c)
+{
+    if ((c & 0xFE) == 0xFC) return 6;
+    if ((c & 0xFC) == 0xF8) return 5;
+    if ((c & 0xF8) == 0xF0) return 4;
+    if ((c & 0xF0) == 0xE0) return 3;
+    if ((c & 0xE0) == 0xC0) return 2;
+    return 1;
+}
+
+// Columna visual -> índice de carácter real (equivalente a GetCharacterIndex).
+int characterIndexFromColumn(const TextEditor& editor, const std::string& line, int column)
+{
+    int tabSize = editor.GetTabSize();
+    int c = 0;
+    int i = 0;
+    for (; i < static_cast<int>(line.size()) && c < column;)
+    {
+        if (line[i] == '\t')
+            c = (c / tabSize) * tabSize + tabSize;
+        else
+            ++c;
+        i += utf8CharLength(static_cast<unsigned char>(line[i]));
+    }
+    return i;
+}
+
+// Índice de carácter real -> columna visual (equivalente a GetCharacterColumn).
+int characterColumnFromIndex(const TextEditor& editor, const std::string& line, int index)
+{
+    int tabSize = editor.GetTabSize();
+    int col = 0;
+    int i = 0;
+    while (i < index && i < static_cast<int>(line.size()))
+    {
+        char c = line[i];
+        i += utf8CharLength(static_cast<unsigned char>(c));
+        if (c == '\t')
+            col = (col / tabSize) * tabSize + tabSize;
+        else
+            ++col;
+    }
+    return col;
+}
+
 // Escanea GetCurrentLineText() hacia atrás desde la columna del cursor
 // mientras los caracteres sean parte de un identificador/ruta con puntos
-// (soporta "Entity:Get...", "Log.I..."). Devuelve el fragmento y su
-// columna de inicio en la misma línea que el cursor.
+// (soporta "Entity:Get...", "Log.I..."). Devuelve el fragmento y su columna
+// de inicio (índice de carácter real, no visual) en la misma línea que el
+// cursor.
 struct Fragment { std::string text; int startColumn; };
 
 Fragment extractFragment(const TextEditor& editor)
 {
     TextEditor::Coordinates cursor = editor.GetCursorPosition();
     std::string line = editor.GetCurrentLineText();
-    int col = std::min(cursor.mColumn, static_cast<int>(line.size()));
+    int col = std::min(characterIndexFromColumn(editor, line, cursor.mColumn),
+        static_cast<int>(line.size()));
 
     int start = col;
     while (start > 0 && isFragmentChar(line[start - 1]))
@@ -208,8 +264,14 @@ void ScriptEditorPanel::draw()
                     if (tab.acVisible)
                     {
                         tab.acSelected = 0;
-                        tab.acFragmentStart = TextEditor::Coordinates(
-                            tab.editor.GetCursorPosition().mLine, frag.startColumn);
+                        // frag.startColumn es un índice de carácter real; acFragmentStart
+                        // se usa como Coordinates (columna visual) en SetSelection/Delete/
+                        // SetCursorPosition y en el posicionamiento del popup, así que hay
+                        // que reconvertir aquí, no antes.
+                        int line = tab.editor.GetCursorPosition().mLine;
+                        int visualColumn = characterColumnFromIndex(
+                            tab.editor, tab.editor.GetCurrentLineText(), frag.startColumn);
+                        tab.acFragmentStart = TextEditor::Coordinates(line, visualColumn);
                     }
                 }
 
@@ -228,6 +290,8 @@ void ScriptEditorPanel::draw()
 
                     ImGui::Begin("##ScriptEditorAutocomplete", nullptr, acFlags);
                     int visibleCount = std::min(static_cast<int>(tab.acMatches.size()), 8);
+                    ImGui::BeginChild("##ScriptEditorAutocompleteList",
+                        ImVec2(0.0f, visibleCount * ImGui::GetTextLineHeightWithSpacing()), false);
                     for (int m = 0; m < static_cast<int>(tab.acMatches.size()); ++m)
                     {
                         bool selected = (m == tab.acSelected);
@@ -248,7 +312,7 @@ void ScriptEditorPanel::draw()
                         if (selected)
                             ImGui::SetItemDefaultFocus();
                     }
-                    (void)visibleCount;
+                    ImGui::EndChild();
                     ImGui::End();
                 }
 
