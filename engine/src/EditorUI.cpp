@@ -2024,6 +2024,8 @@ void EditorUI::drawNewScriptPopup()
 
                 if (m_scriptManager->loadScript(path))
                 {
+                    m_scriptEditor->openFile(path);
+
                     // El GameObject pudo borrarse mientras el popup estaba
                     // abierto — comprobar que sigue vivo antes de añadir.
                     bool targetAlive = false;
