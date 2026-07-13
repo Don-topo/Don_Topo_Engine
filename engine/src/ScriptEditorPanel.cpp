@@ -220,16 +220,27 @@ void ScriptEditorPanel::draw()
                         acKeyConsumed = true;
                     }
                 }
+                // Ctrl+Space fuerza la apertura del popup incluso sin acVisible
+                // previo. Hay que detectarlo aquí, antes del Render(), y sumarlo
+                // a la desactivación del manejo de teclado del editor —
+                // detectarlo después de Render() (como estaba) dejaba que
+                // HandleKeyboardInputs() del editor ya hubiera procesado la
+                // tecla ese mismo frame e insertado un espacio literal.
+                bool forceOpen = !acKeyConsumed &&
+                    ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+                    ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Space, false);
+
                 // Solo desactivamos el manejo de teclado del editor el frame en
-                // que de verdad consumimos una de las teclas del popup — el
-                // resto de frames con el popup abierto, escribir/mover el
-                // caret con flechas sigue funcionando con normalidad.
+                // que de verdad consumimos una de las teclas del popup (o
+                // forzamos su apertura) — el resto de frames con el popup
+                // abierto, escribir/mover el caret con flechas sigue
+                // funcionando con normalidad.
                 // (SetHandleKeyboardInputs(false) afecta al *siguiente*
                 // Render(), por eso este bloque corre antes del Render() de
                 // abajo: así el frame en que se consume una tecla es el mismo
                 // frame en que se desactiva el manejo antes de que el editor
                 // la procese.)
-                tab.editor.SetHandleKeyboardInputs(!acKeyConsumed);
+                tab.editor.SetHandleKeyboardInputs(!(acKeyConsumed || forceOpen));
 
                 tab.editor.Render("##TextEditor", ImGui::GetContentRegionAvail());
                 if (tab.editor.IsTextChanged())
@@ -247,10 +258,6 @@ void ScriptEditorPanel::draw()
                 tab.acLastFragment = frag.text;
                 if (tab.acDismissed && !frag.text.starts_with(tab.acDismissedFragment))
                     tab.acDismissed = false;
-
-                bool forceOpen = !acKeyConsumed &&
-                    ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
-                    ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Space, false);
 
                 if (!acKeyConsumed &&
                     (forceOpen || (tab.editor.IsTextChanged() && frag.text.size() >= 2 && !tab.acDismissed)))
