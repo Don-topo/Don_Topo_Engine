@@ -95,6 +95,13 @@ panels. `Ctrl+S` or the **Save** button writes the file to disk; the existing ho
 polling picks up the change like any external edit. Closing a tab with unsaved changes
 prompts to save/discard/cancel.
 
+Saving (`Ctrl+S`/**Save**) also runs a syntax-only compile check; a Lua syntax
+error is shown as an inline marker on the offending line (hover for the
+message) and clears automatically on the next successful save. While typing,
+an autocomplete popup suggests Lua keywords and the scripting API (`Entity`,
+`Transform`, `Log`, `Input`, colliders, `Scene`, etc.) filtered by prefix —
+`Enter`/`Tab` accepts, `Escape` dismisses, `Ctrl+Space` re-opens it manually.
+
 ```lua
 -- Scripts/Rotator.lua — filename == global table name (the script's class)
 Rotator = {
