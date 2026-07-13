@@ -220,6 +220,7 @@ EditorUI::~EditorUI() = default;
 
 void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView)
 {
+    drawMenuBar();
     drawToolbar();
     drawDockSpace();
     drawScene(sceneRoot);
@@ -234,11 +235,32 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     m_scriptEditor->draw();
 }
 
+void EditorUI::drawMenuBar()
+{
+    if (ImGui::BeginMainMenuBar())
+    {
+        if (ImGui::BeginMenu("View"))
+        {
+            ImGui::MenuItem("Scene", nullptr, &m_sceneOpen);
+            ImGui::MenuItem("Viewport", nullptr, &m_viewportOpen);
+            ImGui::MenuItem("Properties", nullptr, &m_propertiesOpen);
+            ImGui::MenuItem("Log", nullptr, &m_logOpen);
+            ImGui::MenuItem("Content Browser", nullptr, &m_contentBrowserOpen);
+            ImGui::MenuItem("Script Editor", nullptr, m_scriptEditor->GetOpenPtr());
+            ImGui::EndMenu();
+        }
+        ImGui::EndMainMenuBar();
+    }
+}
+
 void EditorUI::drawToolbar()
 {
+    // vp->WorkPos/WorkSize (no vp->Pos/vp->Size) porque BeginMainMenuBar
+    // reserva su franja restando de WorkPos/WorkSize del viewport principal
+    // — así la Toolbar queda justo debajo del MenuBar en vez de solaparlo.
     ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->Pos);
-    ImGui::SetNextWindowSize(ImVec2(vp->Size.x, kToolbarHeight));
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x, kToolbarHeight));
     ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
@@ -326,8 +348,8 @@ void EditorUI::drawDockSpace()
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
         ImGuiWindowFlags_NoNavFocus;
     ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x, vp->Pos.y + kToolbarHeight));
-    ImGui::SetNextWindowSize(ImVec2(vp->Size.x, vp->Size.y - kToolbarHeight));
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x, vp->WorkPos.y + kToolbarHeight));
+    ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x, vp->WorkSize.y - kToolbarHeight));
     ImGui::SetNextWindowViewport(vp->ID);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
