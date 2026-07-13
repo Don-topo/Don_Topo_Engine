@@ -1754,6 +1754,9 @@ void EditorUI::drawScriptsSection()
         ImGui::Separator();
         bool open = ImGui::TreeNodeEx((comp->scriptName + " (Script)").c_str(),
             ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+        ImGui::SameLine(ImGui::GetWindowWidth() - 65.0f);
+        if (ImGui::SmallButton("Edit"))
+            m_scriptEditor->openFile(m_scriptManager->scriptsDirPath() / (comp->scriptName + ".lua"));
         ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
         if (ImGui::SmallButton("x"))
             toRemove = comp;
