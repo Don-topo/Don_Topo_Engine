@@ -25,6 +25,7 @@ class Renderer;
 class Camera;
 class Scene;
 class ScriptManager;
+class ScriptEditorPanel;
 
 class EditorUI {
 public:
@@ -302,6 +303,11 @@ private:
     AudioManager*   m_audio = nullptr;
     Scene*          m_scene = nullptr;
     ScriptManager*  m_scriptManager = nullptr;
+
+    // Panel de edición de código .lua (Task: Script Editor Panel). unique_ptr
+    // + forward declaration para no arrastrar <TextEditor.h>/<imgui.h> a todo
+    // el que incluya EditorUI.h — mismo patrón que m_meshFileDialog.
+    std::unique_ptr<ScriptEditorPanel> m_scriptEditor;
 
     // Popup "Nuevo Script" — disparado desde Add > Script > Nuevo Script...
     // m_newScriptTarget se captura al abrir (m_selected puede cambiar con el

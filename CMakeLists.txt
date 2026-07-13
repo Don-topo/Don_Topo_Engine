@@ -140,6 +140,29 @@ target_include_directories(imguizmo PUBLIC
 target_link_libraries(imguizmo PUBLIC imgui_backend)
 target_compile_features(imguizmo PUBLIC cxx_std_17)
 
+# ImGuiColorTextEdit — editor de código embebido (Script Editor Panel)
+# Igual que ImGuiFileDialog/ImGuizmo: Populate en vez de MakeAvailable, el
+# repo no trae CMakeLists usable (solo demo standalone).
+FetchContent_Declare(
+    ImGuiColorTextEdit
+    GIT_REPOSITORY https://github.com/BalazsJako/ImGuiColorTextEdit.git
+    GIT_TAG        master
+    GIT_SHALLOW    TRUE
+)
+FetchContent_GetProperties(ImGuiColorTextEdit)
+if(NOT imguicolortextedit_POPULATED)
+    FetchContent_Populate(ImGuiColorTextEdit)
+endif()
+
+add_library(imgui_texteditor STATIC
+    ${imguicolortextedit_SOURCE_DIR}/TextEditor.cpp
+)
+target_include_directories(imgui_texteditor PUBLIC
+    ${imguicolortextedit_SOURCE_DIR}
+)
+target_link_libraries(imgui_texteditor PUBLIC imgui_backend)
+target_compile_features(imgui_texteditor PUBLIC cxx_std_17)
+
 # nlohmann/json — serialización JSON (Scene save/load)
 FetchContent_Declare(
     nlohmann_json

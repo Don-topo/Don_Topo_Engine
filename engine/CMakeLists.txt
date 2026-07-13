@@ -27,6 +27,7 @@ add_library(DonTopoEngine STATIC
     src/GpuDevice.cpp
     src/GpuResources.cpp
     src/Gizmos.cpp
+    src/ScriptEditorPanel.cpp
 )
 
 target_include_directories(DonTopoEngine
@@ -44,6 +45,7 @@ target_link_libraries(DonTopoEngine
         imgui_backend
         imgui_filedialog
         imguizmo
+        imgui_texteditor
         nlohmann_json::nlohmann_json
         sol2_lib
 )

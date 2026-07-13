@@ -19,6 +19,7 @@
 #include "DonTopo/FileManager.h"
 #include "DonTopo/ScriptManager.h"
 #include "DonTopo/ScriptComponent.h"
+#include "DonTopo/ScriptEditorPanel.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -210,7 +211,9 @@ EditorUI::EditorUI()
     : m_meshFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_audioFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_sceneFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_scriptEditor(std::make_unique<ScriptEditorPanel>())
 {
+    m_scriptEditor->setLogCallback([this](const std::string& msg) { pushLog(msg); });
 }
 
 EditorUI::~EditorUI() = default;
@@ -228,6 +231,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     drawAudioClipDialog();
     drawSceneDialog();
     drawContentBrowser(sceneRoot);
+    m_scriptEditor->draw();
 }
 
 void EditorUI::drawToolbar()
@@ -1750,6 +1754,9 @@ void EditorUI::drawScriptsSection()
         ImGui::Separator();
         bool open = ImGui::TreeNodeEx((comp->scriptName + " (Script)").c_str(),
             ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+        ImGui::SameLine(ImGui::GetWindowWidth() - 65.0f);
+        if (ImGui::SmallButton("Edit"))
+            m_scriptEditor->openFile(m_scriptManager->scriptsDirPath() / (comp->scriptName + ".lua"));
         ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
         if (ImGui::SmallButton("x"))
             toRemove = comp;
@@ -2017,6 +2024,8 @@ void EditorUI::drawNewScriptPopup()
 
                 if (m_scriptManager->loadScript(path))
                 {
+                    m_scriptEditor->openFile(path);
+
                     // El GameObject pudo borrarse mientras el popup estaba
                     // abierto — comprobar que sigue vivo antes de añadir.
                     bool targetAlive = false;
@@ -2167,6 +2176,12 @@ void EditorUI::drawContentBrowser(GameObject* sceneRoot)
                 m_dlgOpen    = false;
                 m_currentDir = path.string();
                 m_scanned    = false;
+            }
+
+            if (!isDir && ext == ".lua" && ImGui::IsItemHovered() &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+                m_scriptEditor->openFile(path);
             }
 
             if (!isDir && kDraggableExt.count(ext) && ImGui::BeginDragDropSource())
