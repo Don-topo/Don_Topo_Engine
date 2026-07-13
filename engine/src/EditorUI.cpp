@@ -353,7 +353,8 @@ void EditorUI::pushLog(const std::string& message)
 
 void EditorUI::drawLogPanel()
 {
-    ImGui::Begin("Log");
+    if (!m_logOpen) return;
+    ImGui::Begin("Log", &m_logOpen);
     for (const auto& line : m_logEntries)
         ImGui::TextUnformatted(line.c_str());
 
@@ -369,7 +370,8 @@ void EditorUI::drawLogPanel()
 
 void EditorUI::drawScene(GameObject* sceneRoot)
 {
-    ImGui::Begin("Scene");
+    if (!m_sceneOpen) return;
+    ImGui::Begin("Scene", &m_sceneOpen);
     // El root no se dibuja como nodo: la lista muestra directamente sus
     // hijos, root sigue siendo el padre real por debajo (mismo comportamiento
     // de create/delete/rename/reorder que ya tenían).
@@ -893,7 +895,15 @@ void EditorUI::drawSelectionGizmo()
 
 void EditorUI::drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& cameraView)
 {
-    ImGui::Begin("Viewport");
+    if (!m_viewportOpen)
+    {
+        // Sin esto, cerrar Viewport dejaría m_viewportHovered en su último
+        // valor (posiblemente true) y el mouse-look de la cámara en
+        // sandbox/src/main.cpp seguiría respondiendo con el panel oculto.
+        m_viewportHovered = false;
+        return;
+    }
+    ImGui::Begin("Viewport", &m_viewportOpen);
     m_viewportHovered = ImGui::IsWindowHovered();
     ImVec2 vpPos  = ImGui::GetCursorScreenPos();
     ImVec2 vpSize = ImGui::GetContentRegionAvail();
@@ -950,7 +960,8 @@ void EditorUI::drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& ca
 
 void EditorUI::drawProperties()
 {
-    ImGui::Begin("Properties");
+    if (!m_propertiesOpen) return;
+    ImGui::Begin("Properties", &m_propertiesOpen);
     if (!m_selected)
     {
         m_propsCachedFor = nullptr;
@@ -2058,7 +2069,8 @@ void EditorUI::drawNewScriptPopup()
 
 void EditorUI::drawContentBrowser(GameObject* sceneRoot)
 {
-    ImGui::Begin("Content Browser");
+    if (!m_contentBrowserOpen) return;
+    ImGui::Begin("Content Browser", &m_contentBrowserOpen);
     float totalWidth  = ImGui::GetContentRegionAvail().x;
     float totalHeight = ImGui::GetContentRegionAvail().y;
     float leftWidth   = totalWidth * 0.38f;
