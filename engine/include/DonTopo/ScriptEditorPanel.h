@@ -26,6 +26,26 @@ private:
         std::filesystem::path path;
         TextEditor editor;
         bool dirty = false;
+
+        // Estado del popup de autocomplete (Task: diagnostics+autocomplete).
+        bool acVisible = false;
+        // true tras Escape, hasta que el fragmento bajo el cursor cambie —
+        // evita que el popup se vuelva a abrir solo mientras se sigue
+        // escribiendo la misma palabra que el usuario acaba de descartar.
+        bool acDismissed = false;
+        // Fragmento exacto en el momento de Escape — permite distinguir
+        // "seguir escribiendo la misma palabra" (extiende este prefijo,
+        // se mantiene descartado) de "cambiar de palabra" (deja de
+        // extenderlo, se vuelve a permitir el popup automático).
+        std::string acDismissedFragment;
+        std::vector<std::string> acMatches;
+        int acSelected = 0;
+        TextEditor::Coordinates acFragmentStart;
+        std::string acLastFragment;
+        // Última posición de cursor observada — permite detectar movimiento
+        // de caret (p.ej. click de ratón) que no dispara IsTextChanged(),
+        // para cerrar el popup si queda con coordenadas obsoletas.
+        TextEditor::Coordinates acLastCursor;
     };
 
     void saveTab(Tab& tab);
