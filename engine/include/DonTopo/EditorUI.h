@@ -285,9 +285,14 @@ private:
     glm::vec3   m_editRotationDeg{0.0f};
     glm::vec3   m_editScale{1.0f};
     // true si el frame anterior el usuario tenía el mouse presionado sobre
-    // algún DragFloat de Position/Rotation (evita que el refresco en vivo de
-    // BoxCollider dinámico pelee con el drag).
+    // algún DragFloat de Position/Rotation/Scale (evita que el refresco en
+    // vivo de BoxCollider dinámico pelee con el drag, y delimita la sesión de
+    // edición pa el snapshot de Undo de abajo).
     bool        m_transformDragActive = false;
+    // Snapshot de localTransform tomado al iniciar un drag de Position/
+    // Rotation/Scale (primer IsItemActivated de la sesión) — "before" del
+    // PropertyCommand<glm::mat4> que se empuja al confirmar (commit).
+    glm::mat4   m_transformBeforeEdit{1.0f};
 
     // Box Collider – mismo patrón de cache que Transform: persiste entre
     // frames para que los DragFloat acumulen el delta del arrastre, y se

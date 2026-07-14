@@ -1050,6 +1050,8 @@ void EditorUI::drawProperties()
 
     bool changed = false;
     bool posRotActive = false;
+    bool scaleActive = false;
+    bool activated = false;
     bool posCommitted = false;
     bool rotCommitted = false;
     bool scaleCommitted = false;
@@ -1062,16 +1064,19 @@ void EditorUI::drawProperties()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("X##1", &m_editPosition.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         posRotActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         posCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Y##1", &m_editPosition.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         posRotActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         posCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Z##1", &m_editPosition.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         posRotActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         posCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::Text("Rotation");
@@ -1079,36 +1084,48 @@ void EditorUI::drawProperties()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("X##2", &m_editRotationDeg.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         posRotActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         rotCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Y##2", &m_editRotationDeg.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         posRotActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         rotCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Z##2", &m_editRotationDeg.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         posRotActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         rotCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::Text("Scale   ");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("X##3", &m_editScale.x, 0.005f, 0.001f, +FLT_MAX, "% .3f");
+        scaleActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         scaleCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Y##3", &m_editScale.y, 0.005f, 0.001f, +FLT_MAX, "% .3f");
+        scaleActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         scaleCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         changed |= ImGui::DragFloat("Z##3", &m_editScale.z, 0.005f, 0.001f, +FLT_MAX, "% .3f");
+        scaleActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         scaleCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::TreePop();
     }
 
-    m_transformDragActive = posRotActive;
+    m_transformDragActive = posRotActive || scaleActive;
+
+    if (activated)
+        m_transformBeforeEdit = m_selected->localTransform;
 
     if (posCommitted)
         pushLog("Position de '" + m_selected->name + "' cambiado a " + formatVec3(m_editPosition));
@@ -1142,6 +1159,33 @@ void EditorUI::drawProperties()
             else if (m_selected->hasPlaneCollider())
                 m_selected->getPlaneCollider()->teleport(m_selected->worldTransform);
         }
+    }
+
+    if ((posCommitted || rotCommitted || scaleCommitted) && m_scene)
+    {
+        Scene* scene = m_scene;
+        uint64_t id = m_selected->id;
+        glm::mat4 before = m_transformBeforeEdit;
+        glm::mat4 after = m_selected->localTransform;
+        m_undoHistory.push(std::make_unique<PropertyCommand<glm::mat4>>(
+            "Transform de '" + m_selected->name + "'", before, after,
+            [scene, id](const glm::mat4& t) {
+                GameObject* go = scene->findById(id);
+                if (!go) return;
+                go->localTransform = t;
+                if (go->hasAnyCollider())
+                {
+                    go->updateWorldTransforms(go->parent ? go->parent->worldTransform : glm::mat4(1.0f));
+                    if (go->hasBoxCollider())
+                        go->getBoxCollider()->teleport(go->worldTransform);
+                    else if (go->hasSphereCollider())
+                        go->getSphereCollider()->teleport(go->worldTransform);
+                    else if (go->hasCapsuleCollider())
+                        go->getCapsuleCollider()->teleport(go->worldTransform);
+                    else if (go->hasPlaneCollider())
+                        go->getPlaneCollider()->teleport(go->worldTransform);
+                }
+            }));
     }
 
     drawBoxColliderSection();
