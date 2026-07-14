@@ -8,6 +8,7 @@
 #include <memory>
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
+#include "DonTopo/UndoManager.h"
 
 namespace IGFD { class FileDialog; }
 
@@ -78,6 +79,10 @@ public:
 
 private:
     static constexpr float kToolbarHeight = 30.0f;
+    // Ctrl+Z/Ctrl+Y — no-op si !m_scene, si m_isPlaying, o si algún widget de
+    // texto tiene el foco (WantTextInput, evita chocar con el undo nativo de
+    // un ImGuiInputTextMultiline como el del Script Editor).
+    void handleUndoRedoShortcut();
     void drawMenuBar();
     void drawToolbar();
     void drawDockSpace();
@@ -245,6 +250,12 @@ private:
     // descarta igual al restaurar.
     bool           m_isPlaying = false;
     nlohmann::json m_playSnapshot;
+
+    // Undo/Redo — historial de las últimas 50 acciones de edición (Transform,
+    // propiedades de collider, Create/Delete/Reparent GameObject). Se resetea
+    // en Load Scene y al entrar/salir de Play Mode (ver reloadSceneFromJson y
+    // el handler de Play en drawToolbar).
+    UndoManager m_undoHistory;
 
     // Scene selection
     GameObject* m_selected = nullptr;

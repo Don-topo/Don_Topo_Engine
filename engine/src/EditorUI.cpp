@@ -220,6 +220,7 @@ EditorUI::~EditorUI() = default;
 
 void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView)
 {
+    handleUndoRedoShortcut();
     drawMenuBar();
     drawToolbar();
     drawDockSpace();
@@ -233,6 +234,27 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     drawSceneDialog();
     drawContentBrowser(sceneRoot);
     m_scriptEditor->draw();
+}
+
+void EditorUI::handleUndoRedoShortcut()
+{
+    if (!m_scene || m_isPlaying || !ImGui::GetIO().KeyCtrl || ImGui::GetIO().WantTextInput)
+        return;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Z) && m_undoHistory.canUndo())
+    {
+        uint64_t prevSelId = m_selected ? m_selected->id : 0;
+        m_undoHistory.undo();
+        m_selected = prevSelId ? m_scene->findById(prevSelId) : nullptr;
+        pushLog("Undo: " + m_undoHistory.lastLabel());
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Y) && m_undoHistory.canRedo())
+    {
+        uint64_t prevSelId = m_selected ? m_selected->id : 0;
+        m_undoHistory.redo();
+        m_selected = prevSelId ? m_scene->findById(prevSelId) : nullptr;
+        pushLog("Redo: " + m_undoHistory.lastLabel());
+    }
 }
 
 void EditorUI::drawMenuBar()
@@ -286,6 +308,7 @@ void EditorUI::drawToolbar()
         if (ImGui::Button("Play"))
         {
             m_playSnapshot = m_scene->toJson();
+            m_undoHistory.clear();
             m_isPlaying = true;
             if (m_scriptManager) m_scriptManager->onPlayStart();
             pushLog("Play Mode iniciado");
@@ -1714,7 +1737,10 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j)
     m_renderer->registerGameObject(&m_scene->getRoot());
 
     if (loaded)
+    {
         m_selected = nullptr; // la selección anterior ya no existe
+        m_undoHistory.clear();
+    }
 
     return loaded;
 }
