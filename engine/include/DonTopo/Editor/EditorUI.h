@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 #include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Editor/LogPanel.h"
+#include "DonTopo/Editor/ScenePanel.h"
 
 namespace IGFD { class FileDialog; }
 
@@ -60,7 +61,7 @@ public:
     void setAudioManager(AudioManager* audio) { m_audio = audio; }
     // Puntero no-propietario: Scene vive en main.cpp, fuera del ciclo de
     // vida del EditorUI (mismo patrón que m_physics/m_audio). Necesario
-    // para delegar el borrado diferido (m_pendingDelete) en
+    // para delegar el borrado diferido (ScenePanel::m_pendingDelete) en
     // Scene::removeGameObject en vez de mutar children a mano.
     void setScene(Scene* scene) { m_scene = scene; }
     // Puntero no-propietario: Renderer es dueño de este EditorUI y se pasa a sí
@@ -87,8 +88,6 @@ private:
     void drawMenuBar();
     void drawToolbar();
     void drawDockSpace();
-    void drawScene(GameObject* sceneRoot);
-    void drawSceneNode(GameObject* node);
     // Dibuja los ejes RGB de Gizmos sobre m_selected (si hay selección),
     // cada frame — desaparecen solos cuando m_selected pasa a nullptr.
     void drawSelectionGizmo();
@@ -96,8 +95,6 @@ private:
     // del eje más largo); si node no tiene mesh (o el mesh no tiene
     // vértices), valor fijo de repliegue.
     float selectionAxisScale(GameObject* node) const;
-    // Abre el popup de rename pa node (root, parent==nullptr, no se puede renombrar).
-    void beginRename(GameObject* node);
     void drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& cameraView);
     void drawProperties();
     void drawBoxColliderSection();
@@ -127,10 +124,6 @@ private:
     // lo registra en ScriptManager y añade el componente al GameObject que
     // estaba seleccionado al abrir el popup.
     void drawNewScriptPopup();
-    // Crea un GameObject hijo de parent con el mesh dado, lo registra en el
-    // Renderer (staticRenderIndex) y lo deja sin collider. No-op si parent o
-    // m_renderer son nullptr.
-    void createBasicShape(GameObject* parent, const std::string& name, std::shared_ptr<Mesh> mesh);
     // Único punto de entrada para asignar un Mesh a m_selected (Browse o
     // drag&drop convergen aquí). No-op si no hay selección, no hay Renderer,
     // o m_selected ya tiene mesh. Extensión no .fbx o fallo de Assimp
@@ -169,7 +162,6 @@ private:
     // Todos empiezan visibles; cerrar solo oculta la ventana ImGui, el
     // estado interno de cada panel (selección, scroll, tabs de Script
     // Editor...) no se pierde mientras está oculto.
-    bool m_sceneOpen          = true;
     bool m_viewportOpen       = true;
     bool m_propertiesOpen     = true;
     bool m_contentBrowserOpen = true;
@@ -179,6 +171,8 @@ private:
 
     // Log Console — extraído a LogPanel (Task 2).
     LogPanel m_logPanel;
+    // Scene — árbol jerárquico de GameObjects, extraído a ScenePanel (Task 3).
+    ScenePanel m_scenePanel;
 
     // Content Browser
     bool m_dlgOpen = false;
@@ -248,23 +242,8 @@ private:
 
     // Scene selection
     GameObject* m_selected = nullptr;
-    // Borrado diferido al final del frame: el árbol se recorre con
-    // recursión sobre std::vector<unique_ptr<GameObject>>, borrar en medio
-    // de esa recursión invalidaría los iteradores de los for-range activos.
-    GameObject* m_pendingDelete = nullptr;
     std::function<void(GameObject*)> m_onDelete;
     std::function<void(const glm::vec3&)> m_onAxisSelected;
-
-    // Reorder por drag&drop, diferido al final del frame por la misma razón
-    // que m_pendingDelete: mutar children en medio de la recursión del árbol
-    // invalidaría el for-range de un ancestro que sigue en la pila.
-    GameObject* m_pendingMoveSource = nullptr;
-    GameObject* m_pendingMoveTarget = nullptr;
-
-    // Rename – popup modal disparado por "Rename" (click derecho) o F2.
-    GameObject* m_renameTarget = nullptr;
-    char        m_renameBuffer[128] = {};
-    bool        m_openRenamePopup = false;
 
     // Properties – cache de edición del nodo seleccionado (persiste entre
     // frames para que DragFloat pueda acumular el delta del arrastre;

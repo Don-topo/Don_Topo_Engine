@@ -1,4 +1,5 @@
 #include "DonTopo/Editor/EditorUI.h"
+#include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Physics/PhysicsManager.h"
@@ -11,10 +12,6 @@
 #include "DonTopo/Editor/Gizmos.h"
 #include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Core/Camera.h"
-#include "DonTopo/Renderer/Cube.h"
-#include "DonTopo/Renderer/Sphere.h"
-#include "DonTopo/Renderer/Plane.h"
-#include "DonTopo/Renderer/Capsule.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Files/FileManager.h"
 #include "DonTopo/Scripting/ScriptManager.h"
@@ -42,24 +39,6 @@
 
 namespace {
 
-// Nombre válido: no vacío tras trim, solo alfanuméricos/espacio/_/-/. (sin
-// caracteres de control ni símbolos que puedan romper rutas de asset o UI).
-bool isValidGameObjectName(const std::string& name)
-{
-    size_t begin = name.find_first_not_of(" \t");
-    size_t end   = name.find_last_not_of(" \t");
-    if (begin == std::string::npos)
-        return false;
-
-    for (size_t i = begin; i <= end; ++i)
-    {
-        unsigned char c = static_cast<unsigned char>(name[i]);
-        if (!std::isalnum(c) && c != ' ' && c != '_' && c != '-' && c != '.')
-            return false;
-    }
-    return true;
-}
-
 std::string trim(const std::string& name)
 {
     size_t begin = name.find_first_not_of(" \t");
@@ -82,51 +61,6 @@ std::string formatFloat(float f)
     char buf[32];
     std::snprintf(buf, sizeof(buf), "%.2f", f);
     return buf;
-}
-
-// Mueve dragged pa la posición de target dentro de la lista de hijos de
-// target->parent (o al final de target->children si target es el root: así
-// nunca puede quedar como hermano del root ni fuera de su subárbol).
-void moveGameObject(DonTopo::GameObject* dragged, DonTopo::GameObject* target)
-{
-    using DonTopo::GameObject;
-
-    if (!dragged || !target || dragged == target || !dragged->parent)
-        return; // root (sin parent) no se puede arrastrar
-
-    bool cycle = false;
-    dragged->traverse([&](GameObject* go) { if (go == target) cycle = true; });
-    if (cycle)
-        return; // no soltar un nodo dentro de su propio subárbol
-
-    GameObject* destParent;
-    ptrdiff_t destIndex;
-    if (!target->parent)
-    {
-        destParent = target;
-        destIndex  = static_cast<ptrdiff_t>(destParent->children.size());
-    }
-    else
-    {
-        destParent = target->parent;
-        auto it = std::find_if(destParent->children.begin(), destParent->children.end(),
-            [target](const std::unique_ptr<GameObject>& c) { return c.get() == target; });
-        destIndex = it - destParent->children.begin();
-    }
-
-    GameObject* srcParent = dragged->parent;
-    auto srcIt = std::find_if(srcParent->children.begin(), srcParent->children.end(),
-        [dragged](const std::unique_ptr<GameObject>& c) { return c.get() == dragged; });
-    ptrdiff_t srcIndex = srcIt - srcParent->children.begin();
-
-    std::unique_ptr<GameObject> moved = std::move(*srcIt);
-    srcParent->children.erase(srcIt);
-
-    if (srcParent == destParent && srcIndex < destIndex)
-        --destIndex; // el hueco dejado por el erase desplaza los índices siguientes
-
-    moved->parent = destParent;
-    destParent->children.insert(destParent->children.begin() + destIndex, std::move(moved));
 }
 
 // Compara dos paths de forma robusta a mayúsc/minúsc (Windows es
@@ -224,7 +158,33 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     drawMenuBar();
     drawToolbar();
     drawDockSpace();
-    drawScene(sceneRoot);
+
+    // Ctx único, construido una vez por frame y compartido por referencia
+    // con todos los paneles (patrón fijado aquí para las tareas siguientes).
+    EditorContext ctx{
+        m_selected,
+        m_isPlaying,
+        m_physics,
+        m_renderer,
+        m_audio,
+        m_scene,
+        m_scriptManager,
+        &m_undoHistory,
+        [this](const std::string& msg) { m_logPanel.push(msg); },
+        m_onDelete,
+        m_onAxisSelected,
+    };
+
+    m_scenePanel.draw(ctx, sceneRoot);
+    // ScenePanel puede vaciar la selección (deselección en zona vacía o
+    // borrado del GameObject seleccionado) — invalida los caches de edición
+    // de Properties pa que no arrastren punteros colgantes (GameObject /
+    // BoxCollider ya liberados) hasta la próxima selección real.
+    if (!m_selected)
+    {
+        m_propsCachedFor = nullptr;
+        m_colliderCachedFor = nullptr;
+    }
     drawSelectionGizmo();
     drawViewport(viewportTexture, cameraView);
     drawProperties();
@@ -267,7 +227,7 @@ void EditorUI::drawMenuBar()
     {
         if (ImGui::BeginMenu("View"))
         {
-            ImGui::MenuItem("Scene", nullptr, &m_sceneOpen);
+            ImGui::MenuItem("Scene", nullptr, m_scenePanel.GetOpenPtr());
             ImGui::MenuItem("Viewport", nullptr, &m_viewportOpen);
             ImGui::MenuItem("Properties", nullptr, &m_propertiesOpen);
             ImGui::MenuItem("Log", nullptr, m_logPanel.GetOpenPtr());
@@ -389,257 +349,6 @@ void EditorUI::drawDockSpace()
     ImGui::PopStyleVar(3);
     ImGui::DockSpace(ImGui::GetID("MainDockSpace"), ImVec2(0, 0), ImGuiDockNodeFlags_None);
     ImGui::End();
-}
-
-void EditorUI::drawScene(GameObject* sceneRoot)
-{
-    if (!m_sceneOpen) return;
-    ImGui::Begin("Scene", &m_sceneOpen);
-    // El root no se dibuja como nodo: la lista muestra directamente sus
-    // hijos, root sigue siendo el padre real por debajo (mismo comportamiento
-    // de create/delete/rename/reorder que ya tenían).
-    if (sceneRoot)
-        for (const auto& child : sceneRoot->children)
-            drawSceneNode(child.get());
-
-    // Espacio vacío tras la lista: soltar aquí reengancha el nodo arrastrado
-    // como hijo directo del root (equivalente a soltar sobre la fila root
-    // de antes, ahora que esa fila ya no existe).
-    ImGui::Dummy(ImGui::GetContentRegionAvail());
-    if (ImGui::IsItemClicked())
-        m_selected = nullptr; // clic en zona vacía deselecciona
-    if (sceneRoot && ImGui::BeginDragDropTarget())
-    {
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_GAMEOBJECT"))
-        {
-            m_pendingMoveSource = *(GameObject**)payload->Data;
-            m_pendingMoveTarget = sceneRoot;
-        }
-        ImGui::EndDragDropTarget();
-    }
-
-    bool canDelete = m_selected && m_selected->parent != nullptr;
-    bool canRename = m_selected && m_selected->parent != nullptr;
-
-    if (ImGui::IsWindowFocused() && canDelete && ImGui::IsKeyPressed(ImGuiKey_Delete))
-        m_pendingDelete = m_selected;
-    if (ImGui::IsWindowFocused() && canRename && ImGui::IsKeyPressed(ImGuiKey_F2))
-        beginRename(m_selected);
-
-    if (ImGui::BeginPopupContextWindow("##SceneContext",
-            ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
-    {
-        if (ImGui::MenuItem("Create GameObject") && sceneRoot)
-        {
-            GameObject* created = sceneRoot->addChild("GameObject");
-            m_logPanel.push("GameObject '" + created->name + "' creado");
-
-            if (m_scene && m_physics && m_audio && m_renderer)
-            {
-                uint64_t parentId = sceneRoot->id;
-                size_t index = sceneRoot->children.size() - 1;
-                nlohmann::json snapshot = m_scene->subtreeToJson(created);
-                m_undoHistory.push(std::make_unique<CreateGameObjectCommand>(
-                    *m_scene, *m_physics, *m_audio, *m_renderer,
-                    "Crear '" + created->name + "'", parentId, index, std::move(snapshot)));
-            }
-        }
-        if (ImGui::BeginMenu("Basic Shapes"))
-        {
-            if (ImGui::MenuItem("Cube"))
-                createBasicShape(sceneRoot, "Cube", std::make_shared<Mesh>(Cube::create(50.0f)));
-            if (ImGui::MenuItem("Sphere"))
-                createBasicShape(sceneRoot, "Sphere", std::make_shared<Mesh>(Sphere::create(50.0f)));
-            if (ImGui::MenuItem("Plane"))
-                createBasicShape(sceneRoot, "Plane", std::make_shared<Mesh>(Plane::create(50.0f, 0.0f)));
-            if (ImGui::MenuItem("Capsule"))
-                createBasicShape(sceneRoot, "Capsule", std::make_shared<Mesh>(Capsule::create(25.0f, 50.0f)));
-            ImGui::EndMenu();
-        }
-        if (ImGui::MenuItem("Rename", nullptr, false, canRename))
-            beginRename(m_selected);
-        if (ImGui::MenuItem("Delete GameObject", nullptr, false, canDelete))
-            m_pendingDelete = m_selected;
-        ImGui::EndPopup();
-    }
-
-    // Ejecutar el borrado tras recorrer todo el árbol: hacerlo antes
-    // invalidaría los for-range de children en curso en la pila de llamadas.
-    if (m_pendingDelete)
-    {
-        GameObject* target = m_pendingDelete;
-        m_pendingDelete = nullptr;
-
-        // La selección puede ser el propio target o un descendiente suyo;
-        // hay que comprobarlo antes de borrar el subárbol (después ya no existe).
-        bool selectionInSubtree = false;
-        target->traverse([&](GameObject* go) {
-            if (go == m_selected) selectionInSubtree = true;
-        });
-
-        m_logPanel.push("GameObject '" + target->name + "' eliminado");
-
-        // Snapshot pa Undo, tomado ANTES de tocar nada (m_onDelete libera
-        // GPU pero no cambia los datos de Scene que subtreeToJson serializa).
-        bool canUndoDelete = m_scene && m_physics && m_audio && m_renderer && target->parent;
-        uint64_t parentId = 0;
-        size_t index = 0;
-        nlohmann::json snapshot;
-        std::string deletedName = target->name;
-        if (canUndoDelete)
-        {
-            parentId = target->parent->id;
-            auto& siblings = target->parent->children;
-            auto it = std::find_if(siblings.begin(), siblings.end(),
-                [target](const std::unique_ptr<GameObject>& c) { return c.get() == target; });
-            index = static_cast<size_t>(it - siblings.begin());
-            snapshot = m_scene->subtreeToJson(target);
-        }
-
-        if (m_onDelete)
-            m_onDelete(target);
-
-        // Sin esto, borrar desde el editor en Play salta OnDestroy y deja
-        // punteros muertos en el alive-set hasta el siguiente update
-        // (ventana de use-after-free vía hot reload).
-        if (m_isPlaying && m_scriptManager)
-        {
-            // Snapshot antes de llamar a Lua — OnDestroy puede añadir
-            // componentes e invalidar la iteración.
-            std::vector<ScriptComponent*> subtreeScripts;
-            target->traverse([&](GameObject* n) {
-                for (auto& s : n->getScripts())
-                    subtreeScripts.push_back(s.get());
-            });
-            for (ScriptComponent* s : subtreeScripts)
-                m_scriptManager->callOnDestroy(*s);
-        }
-
-        assert(m_scene && "EditorUI::m_scene debe estar asignado (ver Renderer::setScene) antes de borrar GameObjects");
-        m_scene->removeGameObject(target);
-        if (m_scriptManager)
-            m_scriptManager->rebuildAliveSet();
-        if (selectionInSubtree)
-        {
-            m_selected = nullptr;
-            m_propsCachedFor = nullptr;
-            m_colliderCachedFor = nullptr;
-        }
-
-        if (canUndoDelete)
-        {
-            m_undoHistory.push(std::make_unique<DeleteGameObjectCommand>(
-                *m_scene, *m_physics, *m_audio, *m_renderer,
-                "Borrar '" + deletedName + "'", parentId, index, std::move(snapshot)));
-        }
-    }
-
-    if (m_pendingMoveSource && m_pendingMoveTarget)
-    {
-        GameObject* dragged = m_pendingMoveSource;
-        GameObject* target  = m_pendingMoveTarget;
-        m_pendingMoveSource = nullptr;
-        m_pendingMoveTarget = nullptr;
-
-        bool canUndoMove = m_scene && dragged->parent;
-        uint64_t id = 0, oldParentId = 0;
-        size_t oldIndex = 0;
-        std::string draggedName;
-        if (canUndoMove)
-        {
-            id = dragged->id;
-            oldParentId = dragged->parent->id;
-            draggedName = dragged->name;
-            auto& oldSiblings = dragged->parent->children;
-            auto it = std::find_if(oldSiblings.begin(), oldSiblings.end(),
-                [dragged](const std::unique_ptr<GameObject>& c) { return c.get() == dragged; });
-            oldIndex = static_cast<size_t>(it - oldSiblings.begin());
-        }
-
-        moveGameObject(dragged, target);
-
-        if (canUndoMove && dragged->parent)
-        {
-            uint64_t newParentId = dragged->parent->id;
-            auto& newSiblings = dragged->parent->children;
-            auto it = std::find_if(newSiblings.begin(), newSiblings.end(),
-                [dragged](const std::unique_ptr<GameObject>& c) { return c.get() == dragged; });
-            size_t newIndex = static_cast<size_t>(it - newSiblings.begin());
-
-            // moveGameObject() puede ser un no-op (drop en sí mismo, en un
-            // descendiente propio, o dragged sin parent) — si nada cambió,
-            // no ensuciar el stack con un comando fantasma.
-            if (!(newParentId == oldParentId && newIndex == oldIndex))
-            {
-                m_undoHistory.push(std::make_unique<ReparentCommand>(
-                    *m_scene, "Mover '" + draggedName + "'", id,
-                    oldParentId, oldIndex, newParentId, newIndex));
-            }
-        }
-    }
-
-    if (m_openRenamePopup)
-    {
-        ImGui::OpenPopup("Rename GameObject");
-        m_openRenamePopup = false;
-    }
-    if (ImGui::BeginPopupModal("Rename GameObject", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-    {
-        if (ImGui::IsWindowAppearing())
-            ImGui::SetKeyboardFocusHere();
-
-        bool enterPressed = ImGui::InputText("##renameInput", m_renameBuffer, sizeof(m_renameBuffer),
-                                              ImGuiInputTextFlags_EnterReturnsTrue);
-        ImGui::Separator();
-        bool accept = ImGui::Button("Accept") || enterPressed;
-        ImGui::SameLine();
-        bool cancel = ImGui::Button("Cancel");
-
-        if (accept)
-        {
-            std::string newName = trim(m_renameBuffer);
-            if (m_renameTarget && isValidGameObjectName(newName))
-            {
-                std::string oldName  = m_renameTarget->name;
-                m_renameTarget->name = newName;
-                m_logPanel.push("GameObject renombrado: '" + oldName + "' -> '" + newName + "'");
-
-                if (m_scene && newName != oldName)
-                {
-                    Scene* scene = m_scene;
-                    uint64_t id = m_renameTarget->id;
-                    m_undoHistory.push(std::make_unique<PropertyCommand<std::string>>(
-                        "Renombrar '" + oldName + "' a '" + newName + "'", oldName, newName,
-                        [scene, id](const std::string& n) {
-                            GameObject* go = scene->findById(id);
-                            if (go) go->name = n;
-                        }));
-                }
-            }
-            m_renameTarget = nullptr;
-            ImGui::CloseCurrentPopup();
-        }
-        else if (cancel)
-        {
-            m_renameTarget = nullptr;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-
-    ImGui::End();
-}
-
-void EditorUI::beginRename(GameObject* node)
-{
-    if (!node || !node->parent)
-        return; // root no se puede renombrar
-
-    m_renameTarget = node;
-    std::string current = node->name.empty() ? "GameObject" : node->name;
-    std::strncpy(m_renameBuffer, current.c_str(), sizeof(m_renameBuffer) - 1);
-    m_renameBuffer[sizeof(m_renameBuffer) - 1] = '\0';
-    m_openRenamePopup = true;
 }
 
 void EditorUI::beginAssetRename(const std::filesystem::path& path, bool isDir)
@@ -771,27 +480,6 @@ void EditorUI::beginAssetDelete(GameObject* sceneRoot, const std::filesystem::pa
     m_openAssetDeletePopup      = true;
 }
 
-void EditorUI::createBasicShape(GameObject* parent, const std::string& name, std::shared_ptr<Mesh> mesh)
-{
-    if (!parent || !m_renderer || !mesh)
-        return;
-
-    GameObject* go = parent->addChild(name);
-    go->staticRenderIndex = m_renderer->addStaticMesh(*mesh);
-    go->setMesh(std::move(mesh));
-    m_logPanel.push("GameObject '" + go->name + "' creado");
-
-    if (m_scene && m_physics && m_audio && m_renderer)
-    {
-        uint64_t parentId = parent->id;
-        size_t index = parent->children.size() - 1;
-        nlohmann::json snapshot = m_scene->subtreeToJson(go);
-        m_undoHistory.push(std::make_unique<CreateGameObjectCommand>(
-            *m_scene, *m_physics, *m_audio, *m_renderer,
-            "Crear '" + go->name + "'", parentId, index, std::move(snapshot)));
-    }
-}
-
 void EditorUI::loadMeshForSelected(const std::string& path)
 {
     if (!m_selected || !m_renderer || m_selected->hasMesh())
@@ -842,83 +530,6 @@ void EditorUI::loadAudioClipForSelected(const std::string& path)
     m_selected->setAudioClip(std::move(clip));
     m_audioLoadError.clear();
     m_logPanel.push("Componente Audio Clip añadido a '" + m_selected->name + "'");
-}
-
-void EditorUI::drawSceneNode(GameObject* node)
-{
-    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen;
-    if (node->children.empty())
-        flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_Bullet;
-    if (node == m_selected)
-        flags |= ImGuiTreeNodeFlags_Selected;
-
-    const std::string label = node->name.empty() ? "GameObject" : node->name;
-    bool open = ImGui::TreeNodeEx((const void*)node, flags, "%s", label.c_str());
-    if (ImGui::IsItemClicked())
-        m_selected = node;
-
-    // Drag: el root (parent == nullptr) no se puede arrastrar.
-    if (node->parent && ImGui::BeginDragDropSource())
-    {
-        ImGui::SetDragDropPayload("DT_GAMEOBJECT", &node, sizeof(GameObject*));
-        ImGui::Text("%s", label.c_str());
-        ImGui::EndDragDropSource();
-    }
-    // Drop: soltar sobre cualquier nodo (incluido el root) reposiciona el
-    // arrastrado; moveGameObject ya bloquea ciclos y "salir" del root.
-    if (ImGui::BeginDragDropTarget())
-    {
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_GAMEOBJECT"))
-        {
-            m_pendingMoveSource = *(GameObject**)payload->Data;
-            m_pendingMoveTarget = node;
-        }
-        ImGui::EndDragDropTarget();
-    }
-
-    if (ImGui::BeginPopupContextItem())
-    {
-        if (ImGui::MenuItem("Create GameObject"))
-        {
-            GameObject* created = node->addChild("GameObject");
-            m_logPanel.push("GameObject '" + created->name + "' creado");
-
-            if (m_scene && m_physics && m_audio && m_renderer)
-            {
-                uint64_t parentId = node->id;
-                size_t index = node->children.size() - 1;
-                nlohmann::json snapshot = m_scene->subtreeToJson(created);
-                m_undoHistory.push(std::make_unique<CreateGameObjectCommand>(
-                    *m_scene, *m_physics, *m_audio, *m_renderer,
-                    "Crear '" + created->name + "'", parentId, index, std::move(snapshot)));
-            }
-        }
-        if (ImGui::BeginMenu("Basic Shapes"))
-        {
-            if (ImGui::MenuItem("Cube"))
-                createBasicShape(node, "Cube", std::make_shared<Mesh>(Cube::create(50.0f)));
-            if (ImGui::MenuItem("Sphere"))
-                createBasicShape(node, "Sphere", std::make_shared<Mesh>(Sphere::create(50.0f)));
-            if (ImGui::MenuItem("Plane"))
-                createBasicShape(node, "Plane", std::make_shared<Mesh>(Plane::create(50.0f, 0.0f)));
-            if (ImGui::MenuItem("Capsule"))
-                createBasicShape(node, "Capsule", std::make_shared<Mesh>(Capsule::create(25.0f, 50.0f)));
-            ImGui::EndMenu();
-        }
-        bool canModify = node->parent != nullptr;
-        if (ImGui::MenuItem("Rename", nullptr, false, canModify))
-            beginRename(node);
-        if (ImGui::MenuItem("Delete GameObject", nullptr, false, canModify))
-            m_pendingDelete = node;
-        ImGui::EndPopup();
-    }
-
-    if (open)
-    {
-        for (const auto& child : node->children)
-            drawSceneNode(child.get());
-        ImGui::TreePop();
-    }
 }
 
 float EditorUI::selectionAxisScale(GameObject* node) const
