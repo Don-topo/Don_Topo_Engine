@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <string>
 #include <nlohmann/json_fwd.hpp>
-#include "DonTopo/GameObject.h"
+#include "DonTopo/Core/GameObject.h"
 
 namespace DonTopo
 {

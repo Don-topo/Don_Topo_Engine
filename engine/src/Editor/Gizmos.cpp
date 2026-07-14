@@ -1,5 +1,5 @@
-#include "DonTopo/Gizmos.h"
-#include "DonTopo/GpuDevice.h"
+#include "DonTopo/Editor/Gizmos.h"
+#include "DonTopo/Renderer/GpuDevice.h"
 #include <fstream>
 #include <stdexcept>
 #include <cstring>

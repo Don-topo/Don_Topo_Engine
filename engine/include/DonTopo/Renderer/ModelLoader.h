@@ -1,6 +1,6 @@
 #pragma once
-#include "DonTopo/Mesh.h"
-#include "DonTopo/SkinnedMesh.h"
+#include "DonTopo/Renderer/Mesh.h"
+#include "DonTopo/Renderer/SkinnedMesh.h"
 #include <string>
 
 namespace DonTopo

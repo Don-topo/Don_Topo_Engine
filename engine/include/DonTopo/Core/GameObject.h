@@ -4,13 +4,13 @@
 #include <vector>
 #include <string>
 #include <memory>
-#include "DonTopo/Mesh.h"
-#include "DonTopo/SkinnedMesh.h"
-#include "DonTopo/BoxCollider.h"
-#include "DonTopo/SphereCollider.h"
-#include "DonTopo/CapsuleCollider.h"
-#include "DonTopo/PlaneCollider.h"
-#include "DonTopo/AudioClipComponent.h"
+#include "DonTopo/Renderer/Mesh.h"
+#include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Physics/Colliders/BoxCollider.h"
+#include "DonTopo/Physics/Colliders/SphereCollider.h"
+#include "DonTopo/Physics/Colliders/CapsuleCollider.h"
+#include "DonTopo/Physics/Colliders/PlaneCollider.h"
+#include "DonTopo/Audio/AudioClipComponent.h"
 
 namespace DonTopo
 {

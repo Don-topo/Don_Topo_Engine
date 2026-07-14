@@ -1,16 +1,16 @@
-﻿#include "DonTopo/Renderer.h"
-#include "DonTopo/GameObject.h"
+﻿#include "DonTopo/Renderer/Renderer.h"
+#include "DonTopo/Core/GameObject.h"
 #include <GLFW/glfw3.h>
 #include <stdexcept>
-#include "DonTopo/Window.h"
+#include "DonTopo/Core/Window.h"
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 #include <algorithm>
 #include <fstream>
-#include "DonTopo/Vertex.h"
+#include "DonTopo/Renderer/Vertex.h"
 #include <glm/gtc/matrix_transform.hpp>
-#include "DonTopo/UniformBufferObject.h"
+#include "DonTopo/Renderer/UniformBufferObject.h"
 #include <limits>
 #include <cmath>
 

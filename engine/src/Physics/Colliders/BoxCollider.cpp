@@ -1,4 +1,4 @@
-#include "DonTopo/BoxCollider.h"
+#include "DonTopo/Physics/Colliders/BoxCollider.h"
 
 #ifdef DT_PHYSX_ENABLED
 #define GLM_ENABLE_EXPERIMENTAL

@@ -1,5 +1,5 @@
-#include "DonTopo/GameObject.h"
-#include "DonTopo/ScriptComponent.h"
+#include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Scripting/ScriptComponent.h"
 #include <algorithm>
 #include <atomic>
 

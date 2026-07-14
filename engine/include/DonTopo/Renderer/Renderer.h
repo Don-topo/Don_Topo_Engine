@@ -3,15 +3,15 @@
 #include <vector>
 #include <string>
 #include <glm/glm.hpp>
-#include "DonTopo/Mesh.h"
-#include "DonTopo/Camera.h"
-#include "DonTopo/UniformBufferObject.h"
-#include "DonTopo/SkinnedMesh.h"
-#include "DonTopo/GpuDevice.h"
-#include "DonTopo/GpuResources.h"
-#include "DonTopo/EditorUI.h"
-#include "DonTopo/Skybox.h"
-#include "DonTopo/Gizmos.h"
+#include "DonTopo/Renderer/Mesh.h"
+#include "DonTopo/Core/Camera.h"
+#include "DonTopo/Renderer/UniformBufferObject.h"
+#include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Renderer/GpuDevice.h"
+#include "DonTopo/Renderer/GpuResources.h"
+#include "DonTopo/Editor/EditorUI.h"
+#include "DonTopo/Renderer/Skybox.h"
+#include "DonTopo/Editor/Gizmos.h"
 #include <array>
 
 namespace DonTopo {

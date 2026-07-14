@@ -1,4 +1,4 @@
-#include "DonTopo/CapsuleCollider.h"
+#include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 
 #ifdef DT_PHYSX_ENABLED
 #define GLM_ENABLE_EXPERIMENTAL

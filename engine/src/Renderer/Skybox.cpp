@@ -1,5 +1,5 @@
-#include "DonTopo/Skybox.h"
-#include "DonTopo/GpuDevice.h"
+#include "DonTopo/Renderer/Skybox.h"
+#include "DonTopo/Renderer/GpuDevice.h"
 #include <stb_image.h>
 #include <stdexcept>
 #include <fstream>

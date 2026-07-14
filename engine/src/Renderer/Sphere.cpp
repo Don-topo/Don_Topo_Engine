@@ -1,4 +1,4 @@
-#include "DonTopo/Sphere.h"
+#include "DonTopo/Renderer/Sphere.h"
 #include <cmath>
 
 namespace DonTopo

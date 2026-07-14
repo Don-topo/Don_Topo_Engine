@@ -1,5 +1,5 @@
-#include "DonTopo/GpuResources.h"
-#include "DonTopo/GpuDevice.h"
+#include "DonTopo/Renderer/GpuResources.h"
+#include "DonTopo/Renderer/GpuDevice.h"
 #include <stdexcept>
 #include <cstring>
 #define STB_IMAGE_IMPLEMENTATION

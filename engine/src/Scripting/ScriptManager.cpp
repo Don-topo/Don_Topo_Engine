@@ -1,6 +1,6 @@
-#include "DonTopo/ScriptManager.h"
-#include "DonTopo/ScriptBindings.h"
-#include "DonTopo/Scene.h"
+#include "DonTopo/Scripting/ScriptManager.h"
+#include "DonTopo/Scripting/ScriptBindings.h"
+#include "DonTopo/Core/Scene.h"
 #include <algorithm>
 
 namespace DonTopo

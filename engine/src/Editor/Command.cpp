@@ -1,9 +1,9 @@
-#include "DonTopo/Command.h"
-#include "DonTopo/Scene.h"
-#include "DonTopo/GameObject.h"
-#include "DonTopo/Renderer.h"
-#include "DonTopo/PhysicsManager.h"
-#include "DonTopo/AudioManager.h"
+#include "DonTopo/Editor/Command.h"
+#include "DonTopo/Core/Scene.h"
+#include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Renderer/Renderer.h"
+#include "DonTopo/Physics/PhysicsManager.h"
+#include "DonTopo/Audio/AudioManager.h"
 #include <algorithm>
 
 namespace DonTopo {

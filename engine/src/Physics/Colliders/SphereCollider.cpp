@@ -1,4 +1,4 @@
-#include "DonTopo/SphereCollider.h"
+#include "DonTopo/Physics/Colliders/SphereCollider.h"
 
 #ifdef DT_PHYSX_ENABLED
 #define GLM_ENABLE_EXPERIMENTAL

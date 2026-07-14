@@ -1,8 +1,8 @@
-#include "DonTopo/PhysicsManager.h"
-#include "DonTopo/BoxCollider.h"
-#include "DonTopo/SphereCollider.h"
-#include "DonTopo/CapsuleCollider.h"
-#include "DonTopo/PlaneCollider.h"
+#include "DonTopo/Physics/PhysicsManager.h"
+#include "DonTopo/Physics/Colliders/BoxCollider.h"
+#include "DonTopo/Physics/Colliders/SphereCollider.h"
+#include "DonTopo/Physics/Colliders/CapsuleCollider.h"
+#include "DonTopo/Physics/Colliders/PlaneCollider.h"
 
 #ifdef DT_PHYSX_ENABLED
 #define GLM_ENABLE_EXPERIMENTAL

@@ -1,4 +1,4 @@
-#include "DonTopo/LuaSyntaxCheck.h"
+#include "DonTopo/Scripting/LuaSyntaxCheck.h"
 #include <regex>
 
 extern "C" {

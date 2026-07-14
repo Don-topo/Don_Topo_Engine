@@ -6,7 +6,7 @@
 #include <set>
 #include <string>
 #include <vector>
-#include "DonTopo/ScriptComponent.h"
+#include "DonTopo/Scripting/ScriptComponent.h"
 
 namespace DonTopo {
 

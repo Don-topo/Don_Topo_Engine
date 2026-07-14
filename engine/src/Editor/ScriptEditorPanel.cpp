@@ -1,7 +1,7 @@
-#include "DonTopo/ScriptEditorPanel.h"
-#include "DonTopo/FileManager.h"
-#include "DonTopo/LuaSyntaxCheck.h"
-#include "DonTopo/LuaApiReference.h"
+#include "DonTopo/Editor/ScriptEditorPanel.h"
+#include "DonTopo/Files/FileManager.h"
+#include "DonTopo/Scripting/LuaSyntaxCheck.h"
+#include "DonTopo/Scripting/LuaApiReference.h"
 #include <imgui.h>
 #include <optional>
 #include <algorithm>

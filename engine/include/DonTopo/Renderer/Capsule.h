@@ -1,6 +1,6 @@
-// engine/include/DonTopo/Capsule.h
+// engine/include/DonTopo/Renderer/Capsule.h
 #pragma once
-#include "DonTopo/Mesh.h"
+#include "DonTopo/Renderer/Mesh.h"
 #include <glm/glm.hpp>
 #include <cstdint>
 

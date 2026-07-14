@@ -1,8 +1,8 @@
 #pragma once
 #include <vector>
 #include <string>
-#include "DonTopo/Vertex.h"
-#include "DonTopo/Material.h"
+#include "DonTopo/Renderer/Vertex.h"
+#include "DonTopo/Renderer/Material.h"
 
 namespace DonTopo
 {

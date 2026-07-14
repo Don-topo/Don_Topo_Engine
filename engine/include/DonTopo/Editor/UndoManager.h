@@ -3,7 +3,7 @@
 #include <deque>
 #include <memory>
 #include <string>
-#include "DonTopo/Command.h"
+#include "DonTopo/Editor/Command.h"
 
 namespace DonTopo {
 

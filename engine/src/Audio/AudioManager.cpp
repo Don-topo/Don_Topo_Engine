@@ -1,5 +1,5 @@
-#include "DonTopo/AudioManager.h"
-#include "DonTopo/AudioClipComponent.h"
+#include "DonTopo/Audio/AudioManager.h"
+#include "DonTopo/Audio/AudioClipComponent.h"
 
 #ifdef DT_FMOD_ENABLED
 #include <fmod.hpp>
