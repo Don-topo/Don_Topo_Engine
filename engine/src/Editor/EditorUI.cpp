@@ -9,9 +9,7 @@
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
-#include "DonTopo/Editor/Gizmos.h"
 #include "DonTopo/Renderer/Renderer.h"
-#include "DonTopo/Core/Camera.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Files/FileManager.h"
 #include "DonTopo/Scripting/ScriptManager.h"
@@ -184,8 +182,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
         m_propsCachedFor = nullptr;
         m_colliderCachedFor = nullptr;
     }
-    drawSelectionGizmo();
-    drawViewport(viewportTexture, cameraView);
+    m_viewportPanel.draw(ctx, viewportTexture, cameraView);
     drawProperties();
     m_logPanel.draw();
     drawMeshDialog();
@@ -227,7 +224,7 @@ void EditorUI::drawMenuBar()
         if (ImGui::BeginMenu("View"))
         {
             ImGui::MenuItem("Scene", nullptr, m_scenePanel.GetOpenPtr());
-            ImGui::MenuItem("Viewport", nullptr, &m_viewportOpen);
+            ImGui::MenuItem("Viewport", nullptr, m_viewportPanel.GetOpenPtr());
             ImGui::MenuItem("Properties", nullptr, &m_propertiesOpen);
             ImGui::MenuItem("Log", nullptr, m_logPanel.GetOpenPtr());
             ImGui::MenuItem("Content Browser", nullptr, &m_contentBrowserOpen);
@@ -531,167 +528,24 @@ void EditorUI::loadAudioClipForSelected(const std::string& path)
     m_logPanel.push("Componente Audio Clip añadido a '" + m_selected->name + "'");
 }
 
-float EditorUI::selectionAxisScale(GameObject* node) const
-{
-    constexpr float kFallback = 50.0f;
-    // 2.0 en vez de 1.3: con 1.3 solo sobresalía un poco del mesh y costaba
-    // verlo; así el tramo visible fuera del objeto es tan largo como su
-    // propio medio-tamaño.
-    constexpr float kFactor   = 2.0f;
-
-    if (!node->hasMesh())
-        return kFallback;
-
-    const auto& vertices = node->getMesh()->vertices;
-    if (vertices.empty())
-        return kFallback;
-
-    glm::vec3 bMin = vertices[0].pos;
-    glm::vec3 bMax = vertices[0].pos;
-    for (const auto& v : vertices)
-    {
-        bMin = glm::min(bMin, v.pos);
-        bMax = glm::max(bMax, v.pos);
-    }
-
-    glm::vec3 extent  = bMax - bMin;
-    float     maxHalf = glm::max(extent.x, glm::max(extent.y, extent.z)) * 0.5f;
-    return glm::max(maxHalf, 1.0f) * kFactor;
-}
-
 void EditorUI::focusSelected(Camera& camera)
 {
-    if (!m_selected)
-        return;
-
-    constexpr float kFallbackRadius = 50.0f;
-
-    glm::vec3 center = glm::vec3(m_selected->worldTransform[3]);
-    float     radius = kFallbackRadius;
-
-    if (m_selected->hasMesh())
-    {
-        const auto& vertices = m_selected->getMesh()->vertices;
-        if (!vertices.empty())
-        {
-            glm::vec3 bMin = vertices[0].pos;
-            glm::vec3 bMax = vertices[0].pos;
-            for (const auto& v : vertices)
-            {
-                bMin = glm::min(bMin, v.pos);
-                bMax = glm::max(bMax, v.pos);
-            }
-            glm::vec3 extent   = bMax - bMin;
-            float     maxHalf  = glm::max(extent.x, glm::max(extent.y, extent.z)) * 0.5f;
-
-            glm::vec3 worldScale(
-                glm::length(glm::vec3(m_selected->worldTransform[0])),
-                glm::length(glm::vec3(m_selected->worldTransform[1])),
-                glm::length(glm::vec3(m_selected->worldTransform[2])));
-            float maxWorldScale = glm::max(worldScale.x, glm::max(worldScale.y, worldScale.z));
-
-            radius = glm::max(maxHalf, 1.0f) * maxWorldScale;
-        }
-    }
-
-    camera.focusOn(center, radius);
-}
-
-void EditorUI::drawSelectionGizmo()
-{
-    if (!m_selected)
-        return;
-    Gizmos::drawAxes(m_selected->worldTransform, selectionAxisScale(m_selected));
-
-    const glm::vec3 kColliderColor(1.0f, 1.0f, 0.0f);
-    if (m_selected->hasBoxCollider())
-    {
-        BoxCollider* bc = m_selected->getBoxCollider().get();
-        Gizmos::drawWireBox(m_selected->worldTransform, bc->getCenter(),
-                             bc->getHalfExtents(), kColliderColor);
-    }
-    else if (m_selected->hasSphereCollider())
-    {
-        SphereCollider* sc = m_selected->getSphereCollider().get();
-        Gizmos::drawWireSphere(m_selected->worldTransform, sc->getCenter(),
-                                sc->getRadius(), kColliderColor);
-    }
-    else if (m_selected->hasCapsuleCollider())
-    {
-        CapsuleCollider* cc = m_selected->getCapsuleCollider().get();
-        Gizmos::drawWireCapsule(m_selected->worldTransform, cc->getCenter(),
-                                 cc->getRadius(), cc->getHalfHeight(), kColliderColor);
-    }
-    else if (m_selected->hasPlaneCollider())
-    {
-        PlaneCollider* pc = m_selected->getPlaneCollider().get();
-        Gizmos::drawWirePlane(m_selected->worldTransform, pc->getCenter(), kColliderColor);
-    }
-}
-
-void EditorUI::drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& cameraView)
-{
-    if (!m_viewportOpen)
-    {
-        // Sin esto, cerrar Viewport dejaría m_viewportHovered en su último
-        // valor (posiblemente true) y el mouse-look de la cámara en
-        // sandbox/src/main.cpp seguiría respondiendo con el panel oculto.
-        m_viewportHovered = false;
-        return;
-    }
-    ImGui::Begin("Viewport", &m_viewportOpen);
-    m_viewportHovered = ImGui::IsWindowHovered();
-    ImVec2 vpPos  = ImGui::GetCursorScreenPos();
-    ImVec2 vpSize = ImGui::GetContentRegionAvail();
-    ImGui::Image((ImTextureID)(intptr_t)viewportTexture, vpSize);
-
-    // Axis gizmo estilo Unity/Godot (esquina superior derecha): ejes mundo
-    // proyectados por la rotación real de la cámara (parte 3x3 de la view
-    // matrix), así que gira con ella. Clicar una bola reorienta la cámara
-    // pa mirar a lo largo de ese eje (via m_onAxisSelected).
-    const glm::mat3 camRot(cameraView);
-
-    struct Axis { glm::vec3 world; glm::vec3 screenDir; ImU32 color; const char* label; };
-    Axis axes[3] = {
-        { glm::vec3(1, 0, 0), camRot * glm::vec3(1, 0, 0), IM_COL32(220,  60,  60, 255), "X" },
-        { glm::vec3(0, 1, 0), camRot * glm::vec3(0, 1, 0), IM_COL32( 70, 200,  70, 255), "Y" },
-        { glm::vec3(0, 0, 1), camRot * glm::vec3(0, 0, 1), IM_COL32( 70, 130, 230, 255), "Z" },
+    // ctx local, no miembro persistente: evita vida útil ambigua de las
+    // referencias (mismo patrón que EditorContext en draw()).
+    EditorContext ctx{
+        m_selected,
+        m_isPlaying,
+        m_physics,
+        m_renderer,
+        m_audio,
+        m_scene,
+        m_scriptManager,
+        &m_undoHistory,
+        [this](const std::string& msg) { m_logPanel.push(msg); },
+        m_onDelete,
+        m_onAxisSelected,
     };
-
-    const float radius = 34.0f;
-    const float margin  = 16.0f;
-    const float ballRadius = 7.0f;
-    ImVec2 center(vpPos.x + vpSize.x - radius - margin, vpPos.y + radius + margin);
-
-    // Pinta primero el eje más lejano de cámara pa que el más cercano quede encima.
-    int order[3] = { 0, 1, 2 };
-    std::sort(order, order + 3, [&](int a, int b) { return axes[a].screenDir.z < axes[b].screenDir.z; });
-
-    ImVec2 mouse = ImGui::GetIO().MousePos;
-    bool clicked = m_viewportHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    for (int i : order)
-    {
-        const glm::vec3& d = axes[i].screenDir;
-        ImVec2 tip(center.x + d.x * radius, center.y - d.y * radius);
-        drawList->AddLine(center, tip, axes[i].color, 2.0f);
-        drawList->AddCircleFilled(tip, ballRadius, axes[i].color);
-
-        ImVec2 textSize = ImGui::CalcTextSize(axes[i].label);
-        drawList->AddText(ImVec2(tip.x - textSize.x * 0.5f, tip.y - textSize.y * 0.5f),
-                           IM_COL32(0, 0, 0, 255), axes[i].label);
-
-        if (clicked && m_onAxisSelected)
-        {
-            float dx = mouse.x - tip.x, dy = mouse.y - tip.y;
-            if (dx * dx + dy * dy <= ballRadius * ballRadius)
-                m_onAxisSelected(axes[i].world);
-        }
-    }
-    drawList->AddCircleFilled(center, 3.0f, IM_COL32(200, 200, 200, 255));
-
-    ImGui::End();
+    m_viewportPanel.focusSelected(ctx, camera);
 }
 
 void EditorUI::drawProperties()

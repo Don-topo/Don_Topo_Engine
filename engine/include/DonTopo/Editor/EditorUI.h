@@ -11,6 +11,7 @@
 #include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Editor/LogPanel.h"
 #include "DonTopo/Editor/ScenePanel.h"
+#include "DonTopo/Editor/ViewportPanel.h"
 
 namespace IGFD { class FileDialog; }
 
@@ -39,7 +40,7 @@ public:
 
     void draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView);
 
-    bool isViewportHovered() const { return m_viewportHovered; }
+    bool isViewportHovered() const { return m_viewportPanel.isHovered(); }
 
     // true mientras Play Mode está activo (física + audio corriendo).
     bool isPlaying() const { return m_isPlaying; }
@@ -88,14 +89,6 @@ private:
     void drawMenuBar();
     void drawToolbar();
     void drawDockSpace();
-    // Dibuja los ejes RGB de Gizmos sobre m_selected (si hay selección),
-    // cada frame — desaparecen solos cuando m_selected pasa a nullptr.
-    void drawSelectionGizmo();
-    // Longitud de eje proporcional al bbox local del mesh de node (mitad
-    // del eje más largo); si node no tiene mesh (o el mesh no tiene
-    // vértices), valor fijo de repliegue.
-    float selectionAxisScale(GameObject* node) const;
-    void drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& cameraView);
     void drawProperties();
     void drawBoxColliderSection();
     void drawSphereColliderSection();
@@ -162,17 +155,16 @@ private:
     // Todos empiezan visibles; cerrar solo oculta la ventana ImGui, el
     // estado interno de cada panel (selección, scroll, tabs de Script
     // Editor...) no se pierde mientras está oculto.
-    bool m_viewportOpen       = true;
     bool m_propertiesOpen     = true;
     bool m_contentBrowserOpen = true;
-
-    // Viewport
-    bool m_viewportHovered = false;
 
     // Log Console — extraído a LogPanel (Task 2).
     LogPanel m_logPanel;
     // Scene — árbol jerárquico de GameObjects, extraído a ScenePanel (Task 3).
     ScenePanel m_scenePanel;
+    // Viewport — render 3D embebido + gizmo de selección, extraído a
+    // ViewportPanel (Task 4).
+    ViewportPanel m_viewportPanel;
 
     // Content Browser
     bool m_dlgOpen = false;

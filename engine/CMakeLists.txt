@@ -5,6 +5,7 @@ add_library(DonTopoEngine STATIC
     src/Editor/EditorUI.cpp
     src/Editor/LogPanel.cpp
     src/Editor/ScenePanel.cpp
+    src/Editor/ViewportPanel.cpp
     src/Editor/Command.cpp
     src/Editor/UndoManager.cpp
     src/Renderer/Skybox.cpp
