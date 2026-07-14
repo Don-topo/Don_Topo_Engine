@@ -246,6 +246,8 @@ void EditorUI::handleUndoRedoShortcut()
         uint64_t prevSelId = m_selected ? m_selected->id : 0;
         m_undoHistory.undo();
         m_selected = prevSelId ? m_scene->findById(prevSelId) : nullptr;
+        m_propsCachedFor = nullptr;
+        m_colliderCachedFor = nullptr;
         pushLog("Undo: " + m_undoHistory.lastLabel());
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Y) && m_undoHistory.canRedo())
@@ -253,6 +255,8 @@ void EditorUI::handleUndoRedoShortcut()
         uint64_t prevSelId = m_selected ? m_selected->id : 0;
         m_undoHistory.redo();
         m_selected = prevSelId ? m_scene->findById(prevSelId) : nullptr;
+        m_propsCachedFor = nullptr;
+        m_colliderCachedFor = nullptr;
         pushLog("Redo: " + m_undoHistory.lastLabel());
     }
 }
@@ -791,7 +795,7 @@ void EditorUI::createBasicShape(GameObject* parent, const std::string& name, std
     go->setMesh(std::move(mesh));
     pushLog("GameObject '" + go->name + "' creado");
 
-    if (m_scene && m_physics && m_audio)
+    if (m_scene && m_physics && m_audio && m_renderer)
     {
         uint64_t parentId = parent->id;
         size_t index = parent->children.size() - 1;
@@ -2001,10 +2005,8 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j)
     m_renderer->registerGameObject(&m_scene->getRoot());
 
     if (loaded)
-    {
         m_selected = nullptr; // la selección anterior ya no existe
-        m_undoHistory.clear();
-    }
+    m_undoHistory.clear();
 
     return loaded;
 }
