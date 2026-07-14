@@ -629,6 +629,18 @@ void EditorUI::drawScene(GameObject* sceneRoot)
                 std::string oldName  = m_renameTarget->name;
                 m_renameTarget->name = newName;
                 pushLog("GameObject renombrado: '" + oldName + "' -> '" + newName + "'");
+
+                if (m_scene && newName != oldName)
+                {
+                    Scene* scene = m_scene;
+                    uint64_t id = m_renameTarget->id;
+                    m_undoHistory.push(std::make_unique<PropertyCommand<std::string>>(
+                        "Renombrar '" + oldName + "' a '" + newName + "'", oldName, newName,
+                        [scene, id](const std::string& n) {
+                            GameObject* go = scene->findById(id);
+                            if (go) go->name = n;
+                        }));
+                }
             }
             m_renameTarget = nullptr;
             ImGui::CloseCurrentPopup();
