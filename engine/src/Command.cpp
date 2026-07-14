@@ -1,6 +1,9 @@
 #include "DonTopo/Command.h"
 #include "DonTopo/Scene.h"
 #include "DonTopo/GameObject.h"
+#include "DonTopo/Renderer.h"
+#include "DonTopo/PhysicsManager.h"
+#include "DonTopo/AudioManager.h"
 #include <algorithm>
 
 namespace DonTopo {
@@ -33,6 +36,52 @@ void ReparentCommand::moveTo(uint64_t parentId, size_t index)
     auto& newSiblings = newParent->children;
     size_t clampedIndex = std::min(index, newSiblings.size());
     newSiblings.insert(newSiblings.begin() + static_cast<long>(clampedIndex), std::move(moved));
+}
+
+DeleteGameObjectCommand::DeleteGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio,
+                                                  Renderer& renderer, std::string label,
+                                                  uint64_t parentId, size_t index, nlohmann::json snapshot)
+    : m_scene(scene), m_physics(physics), m_audio(audio), m_renderer(renderer),
+      m_label(std::move(label)), m_parentId(parentId), m_index(index), m_snapshot(std::move(snapshot)) {}
+
+void DeleteGameObjectCommand::execute()
+{
+    uint64_t id = m_snapshot.value("id", uint64_t{0});
+    GameObject* node = m_scene.findById(id);
+    if (!node) return;
+    m_renderer.removeGameObject(node);
+    m_scene.removeGameObject(node);
+}
+
+void DeleteGameObjectCommand::undo()
+{
+    GameObject* parent = m_scene.findById(m_parentId);
+    GameObject* node = m_scene.insertFromJson(m_snapshot, parent, m_index, m_physics, m_audio);
+    if (node)
+        m_renderer.registerGameObject(node);
+}
+
+CreateGameObjectCommand::CreateGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio,
+                                                  Renderer& renderer, std::string label,
+                                                  uint64_t parentId, size_t index, nlohmann::json snapshot)
+    : m_scene(scene), m_physics(physics), m_audio(audio), m_renderer(renderer),
+      m_label(std::move(label)), m_parentId(parentId), m_index(index), m_snapshot(std::move(snapshot)) {}
+
+void CreateGameObjectCommand::execute()
+{
+    GameObject* parent = m_scene.findById(m_parentId);
+    GameObject* node = m_scene.insertFromJson(m_snapshot, parent, m_index, m_physics, m_audio);
+    if (node)
+        m_renderer.registerGameObject(node);
+}
+
+void CreateGameObjectCommand::undo()
+{
+    uint64_t id = m_snapshot.value("id", uint64_t{0});
+    GameObject* node = m_scene.findById(id);
+    if (!node) return;
+    m_renderer.removeGameObject(node);
+    m_scene.removeGameObject(node);
 }
 
 } // namespace DonTopo

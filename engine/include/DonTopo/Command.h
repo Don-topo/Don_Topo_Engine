@@ -72,4 +72,50 @@ private:
     size_t m_newIndex;
 };
 
+// Borra un GameObject ya existente (execute) / lo reconstruye desde un
+// snapshot JSON tomado ANTES de borrarlo (undo). El snapshot conserva el id
+// original (Scene::subtreeToJson/nodeToJson serializan "id"), así que
+// comandos posteriores en el stack que referencien ese id lo siguen
+// resolviendo tras un undo() de este comando.
+class DeleteGameObjectCommand : public ICommand {
+public:
+    DeleteGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio, Renderer& renderer,
+                             std::string label, uint64_t parentId, size_t index, nlohmann::json snapshot);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    Scene& m_scene;
+    PhysicsManager& m_physics;
+    AudioManager& m_audio;
+    Renderer& m_renderer;
+    std::string m_label;
+    uint64_t m_parentId;
+    size_t m_index;
+    nlohmann::json m_snapshot;
+};
+
+// Inverso de DeleteGameObjectCommand: reconstruye desde snapshot (execute) /
+// borra (undo). snapshot ya incluye el subárbol completo tal y como quedó
+// justo después de crearlo (mismo formato que DeleteGameObjectCommand).
+class CreateGameObjectCommand : public ICommand {
+public:
+    CreateGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio, Renderer& renderer,
+                             std::string label, uint64_t parentId, size_t index, nlohmann::json snapshot);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    Scene& m_scene;
+    PhysicsManager& m_physics;
+    AudioManager& m_audio;
+    Renderer& m_renderer;
+    std::string m_label;
+    uint64_t m_parentId;
+    size_t m_index;
+    nlohmann::json m_snapshot;
+};
+
 } // namespace DonTopo
