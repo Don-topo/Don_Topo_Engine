@@ -2092,6 +2092,22 @@ namespace DonTopo {
         });
     }
 
+    void Renderer::registerGameObject(GameObject* node)
+    {
+        if (!node) return;
+        node->traverse([this](GameObject* go) {
+            if (go->isSkinned())
+            {
+                if (go->skinnedRenderIndex < 0)
+                    go->skinnedRenderIndex = addSkinnedMesh(*go->getSkinnedMesh());
+            }
+            else if (go->hasMesh() && go->staticRenderIndex < 0)
+            {
+                go->staticRenderIndex = addStaticMesh(*go->getMesh());
+            }
+        });
+    }
+
     void Renderer::removeMeshComponent(GameObject* go)
     {
         if (!go || !go->hasMesh()) return;

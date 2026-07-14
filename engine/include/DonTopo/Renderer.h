@@ -54,6 +54,13 @@ namespace DonTopo {
             // Libera mesh/skinnedMesh/texturas en GPU de node y todo su subárbol
             // (llamado por EditorUI justo antes de borrar el nodo del scene graph).
             void removeGameObject(GameObject* node);
+            // Inverso de removeGameObject: sube a GPU los meshes (estático o
+            // skinned) de node y su subárbol que aún no estén registrados
+            // (staticRenderIndex/skinnedRenderIndex < 0). Usado tras
+            // reconstruir un subárbol desde JSON — reloadSceneFromJson (toda
+            // la escena) y CreateGameObjectCommand/DeleteGameObjectCommand en
+            // Command.cpp (un solo subárbol).
+            void registerGameObject(GameObject* node);
             // Quita solo el componente Mesh de go (no borra el GameObject ni sus
             // otros componentes). No-op si go es nullptr o no tiene mesh.
             void removeMeshComponent(GameObject* go);

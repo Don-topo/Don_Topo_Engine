@@ -1711,17 +1711,7 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j)
     // construcción) como si es false (árbol viejo intacto, índices
     // reseteados justo arriba) — en ambos casos hay que volver a subir los
     // meshes a GPU.
-    m_scene->traverse([this](GameObject* go) {
-        if (go->isSkinned())
-        {
-            if (go->skinnedRenderIndex < 0)
-                go->skinnedRenderIndex = m_renderer->addSkinnedMesh(*go->getSkinnedMesh());
-        }
-        else if (go->hasMesh() && go->staticRenderIndex < 0)
-        {
-            go->staticRenderIndex = m_renderer->addStaticMesh(*go->getMesh());
-        }
-    });
+    m_renderer->registerGameObject(&m_scene->getRoot());
 
     if (loaded)
         m_selected = nullptr; // la selección anterior ya no existe
