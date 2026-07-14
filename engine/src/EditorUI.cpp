@@ -855,6 +855,16 @@ void EditorUI::drawSceneNode(GameObject* node)
         {
             GameObject* created = node->addChild("GameObject");
             pushLog("GameObject '" + created->name + "' creado");
+
+            if (m_scene && m_physics && m_audio && m_renderer)
+            {
+                uint64_t parentId = node->id;
+                size_t index = node->children.size() - 1;
+                nlohmann::json snapshot = m_scene->subtreeToJson(created);
+                m_undoHistory.push(std::make_unique<CreateGameObjectCommand>(
+                    *m_scene, *m_physics, *m_audio, *m_renderer,
+                    "Crear '" + created->name + "'", parentId, index, std::move(snapshot)));
+            }
         }
         if (ImGui::BeginMenu("Basic Shapes"))
         {
