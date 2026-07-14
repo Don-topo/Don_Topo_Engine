@@ -1,6 +1,7 @@
 #pragma once
 #include <functional>
 #include <string>
+#include <filesystem>
 #include <glm/glm.hpp>
 
 namespace DonTopo {
@@ -33,6 +34,13 @@ struct EditorContext {
     std::function<void(const std::string&)>   pushLog;
     std::function<void(GameObject*)>          onDelete;
     std::function<void(const glm::vec3&)>     onAxisSelected;
+    // Abre path en el Script Editor (EditorUI::m_scriptEditor, fuera del
+    // Consumes original de PropertiesPanel — Task 5 añadió este callback
+    // porque drawScriptsSection/drawNewScriptPopup necesitan abrir el
+    // fichero .lua tras editar/crear un script, y ScriptEditorPanel sigue
+    // siendo propiedad de EditorUI, no de ningún panel). Vacío/no asignado
+    // por defecto — solo lo rellena EditorUI::draw().
+    std::function<void(const std::filesystem::path&)> openScript;
 };
 
 } // namespace DonTopo

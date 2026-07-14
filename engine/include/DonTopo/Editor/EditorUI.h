@@ -12,6 +12,7 @@
 #include "DonTopo/Editor/LogPanel.h"
 #include "DonTopo/Editor/ScenePanel.h"
 #include "DonTopo/Editor/ViewportPanel.h"
+#include "DonTopo/Editor/PropertiesPanel.h"
 
 namespace IGFD { class FileDialog; }
 
@@ -21,10 +22,6 @@ class GameObject;
 class Mesh;
 class PhysicsManager;
 class AudioManager;
-class BoxCollider;
-class SphereCollider;
-class CapsuleCollider;
-class PlaneCollider;
 class Renderer;
 class Camera;
 class Scene;
@@ -89,19 +86,6 @@ private:
     void drawMenuBar();
     void drawToolbar();
     void drawDockSpace();
-    void drawProperties();
-    void drawBoxColliderSection();
-    void drawSphereColliderSection();
-    void drawCapsuleColliderSection();
-    void drawPlaneColliderSection();
-    void drawMeshSection();
-    void drawMeshDialog();
-    void drawAudioClipSection();
-    void drawAudioClipDialog();
-    // Sección Scripts del panel Properties: un header colapsable por
-    // ScriptComponent de m_selected, con props auto-generadas desde el
-    // registro de ScriptManager (Task 10).
-    void drawScriptsSection();
     void drawSceneDialog();
     // Limpia GPU de la escena actual, reemplaza su contenido con j (vía
     // Scene::fromJson) y re-registra GPU (estático + skinned) de lo que
@@ -112,21 +96,6 @@ private:
     // Stop en drawToolbar. false sin efecto si falta algún puntero
     // (m_scene/m_renderer/m_physics/m_audio).
     bool reloadSceneFromJson(const nlohmann::json& j);
-    void drawAddComponentButton();
-    // Popup modal "Nuevo Script": crea Scripts/<Nombre>.lua desde plantilla,
-    // lo registra en ScriptManager y añade el componente al GameObject que
-    // estaba seleccionado al abrir el popup.
-    void drawNewScriptPopup();
-    // Único punto de entrada para asignar un Mesh a m_selected (Browse o
-    // drag&drop convergen aquí). No-op si no hay selección, no hay Renderer,
-    // o m_selected ya tiene mesh. Extensión no .fbx o fallo de Assimp
-    // escriben m_meshLoadError sin modificar m_selected.
-    void loadMeshForSelected(const std::string& path);
-    // Único punto de entrada para asignar un AudioClip a m_selected (Browse o
-    // drag&drop convergen aquí). No-op si no hay selección, no hay
-    // AudioManager, o m_selected ya tiene AudioClip. Extensión no soportada o
-    // fallo de FMOD escriben m_audioLoadError sin modificar m_selected.
-    void loadAudioClipForSelected(const std::string& path);
     void drawContentBrowser(GameObject* sceneRoot);
     // Arma el popup modal "Rename Asset" precargado con el nombre actual de
     // path (stem si es fichero, nombre completo si es carpeta).
@@ -155,7 +124,6 @@ private:
     // Todos empiezan visibles; cerrar solo oculta la ventana ImGui, el
     // estado interno de cada panel (selección, scroll, tabs de Script
     // Editor...) no se pierde mientras está oculto.
-    bool m_propertiesOpen     = true;
     bool m_contentBrowserOpen = true;
 
     // Log Console — extraído a LogPanel (Task 2).
@@ -165,11 +133,12 @@ private:
     // Viewport — render 3D embebido + gizmo de selección, extraído a
     // ViewportPanel (Task 4).
     ViewportPanel m_viewportPanel;
+    // Properties — transform/colliders/mesh/audio/scripts/add-component,
+    // extraído a PropertiesPanel (Task 5).
+    PropertiesPanel m_propertiesPanel;
 
     // Content Browser
     bool m_dlgOpen = false;
-    bool m_meshDlgOpen = false;
-    bool m_audioDlgOpen = false;
     bool m_scanned = false;
     std::string m_currentDir;
     // Raíz del proyecto (canonicalizada una vez); el Content Browser no deja
@@ -196,20 +165,9 @@ private:
     int                    m_assetDeleteAffectedCount = 0;
     bool                   m_openAssetDeletePopup = false;
     std::string            m_assetDeleteError;
-    // Instancia propia de ImGuiFileDialog para "Add > Mesh", separada del
-    // singleton IGFD::FileDialog::Instance() que usa Content Browser: la
-    // librería documenta que Instance() no soporta 2 diálogos concurrentes
-    // (mismo estado interno de lista de ficheros/thumbnails/columnas);
-    // compartirlo causaba corrupción al redimensionar el popup de Mesh
-    // mientras Content Browser seguía dibujando su panel embebido el mismo
-    // frame. unique_ptr porque IGFD::FileDialog es tipo incompleto aquí.
-    std::unique_ptr<IGFD::FileDialog> m_meshFileDialog;
-    // Misma razón que m_meshFileDialog: instancia propia, nunca compartida
-    // con el singleton de Content Browser ni con m_meshFileDialog.
-    std::unique_ptr<IGFD::FileDialog> m_audioFileDialog;
 
-    // Scene save/load — instancia propia de diálogo, mismo motivo que
-    // m_meshFileDialog/m_audioFileDialog (Instance() singleton no soporta
+    // Scene save/load — instancia propia de diálogo, mismo motivo que los
+    // diálogos de PropertiesPanel (Instance() singleton no soporta
     // diálogos concurrentes). Se reusa la misma instancia para Save y Load
     // porque nunca están abiertos a la vez (ambos disparados desde botones
     // secuenciales del toolbar).
@@ -237,60 +195,6 @@ private:
     std::function<void(GameObject*)> m_onDelete;
     std::function<void(const glm::vec3&)> m_onAxisSelected;
 
-    // Properties – cache de edición del nodo seleccionado (persiste entre
-    // frames para que DragFloat pueda acumular el delta del arrastre;
-    // solo se re-sincroniza con localTransform al cambiar de selección).
-    GameObject* m_propsCachedFor = nullptr;
-    glm::vec3   m_editPosition{0.0f};
-    glm::vec3   m_editRotationDeg{0.0f};
-    glm::vec3   m_editScale{1.0f};
-    // true si el frame anterior el usuario tenía el mouse presionado sobre
-    // algún DragFloat de Position/Rotation/Scale (evita que el refresco en
-    // vivo de BoxCollider dinámico pelee con el drag, y delimita la sesión de
-    // edición pa el snapshot de Undo de abajo).
-    bool        m_transformDragActive = false;
-    // Snapshot de localTransform tomado al iniciar un drag de Position/
-    // Rotation/Scale (primer IsItemActivated de la sesión) — "before" del
-    // PropertyCommand<glm::mat4> que se empuja al confirmar (commit).
-    glm::mat4   m_transformBeforeEdit{1.0f};
-
-    // Box Collider – mismo patrón de cache que Transform: persiste entre
-    // frames para que los DragFloat acumulen el delta del arrastre, y se
-    // resincroniza con el BoxCollider real al cambiar de selección o (si es
-    // dinámico y no se está arrastrando) cada frame para reflejar cambios
-    // externos de tamaño/gravedad.
-    BoxCollider* m_colliderCachedFor = nullptr;
-    glm::vec3    m_editColliderCenter{0.0f};
-    glm::vec3    m_editColliderSize{50.0f};
-    bool         m_editUseGravity = false;
-    bool         m_colliderDragActive = false;
-    // Snapshot tomado al iniciar un drag de Center/Size — "before" del
-    // PropertyCommand<BoxColliderState> que se empuja al confirmar.
-    BoxColliderState m_boxColliderBeforeEdit{};
-
-    // Sphere Collider – mismo patrón de cache que Box Collider.
-    SphereCollider* m_sphereColliderCachedFor = nullptr;
-    glm::vec3       m_editSphereCenter{0.0f};
-    float           m_editSphereRadius{25.0f};
-    bool            m_editSphereUseGravity = false;
-    bool            m_sphereColliderDragActive = false;
-    SphereColliderState m_sphereColliderBeforeEdit{};
-
-    // Capsule Collider – mismo patrón de cache que Box Collider.
-    CapsuleCollider* m_capsuleColliderCachedFor = nullptr;
-    glm::vec3        m_editCapsuleCenter{0.0f};
-    float            m_editCapsuleRadius{15.0f};
-    float            m_editCapsuleHeight{50.0f};
-    bool             m_editCapsuleUseGravity = false;
-    bool             m_capsuleColliderDragActive = false;
-    CapsuleColliderState m_capsuleColliderBeforeEdit{};
-
-    // Plane Collider – solo Center (sin Size/Use Gravity, siempre estático).
-    PlaneCollider* m_planeColliderCachedFor = nullptr;
-    glm::vec3      m_editPlaneCenter{0.0f};
-    bool           m_planeColliderDragActive = false;
-    PlaneColliderState m_planeColliderBeforeEdit{};
-
     PhysicsManager* m_physics = nullptr;
     Renderer*       m_renderer = nullptr;
     AudioManager*   m_audio = nullptr;
@@ -299,29 +203,8 @@ private:
 
     // Panel de edición de código .lua (Task: Script Editor Panel). unique_ptr
     // + forward declaration para no arrastrar <TextEditor.h>/<imgui.h> a todo
-    // el que incluya EditorUI.h — mismo patrón que m_meshFileDialog.
+    // el que incluya EditorUI.h — mismo patrón que m_sceneFileDialog.
     std::unique_ptr<ScriptEditorPanel> m_scriptEditor;
-
-    // Popup "Nuevo Script" — disparado desde Add > Script > Nuevo Script...
-    // m_newScriptTarget se captura al abrir (m_selected puede cambiar con el
-    // popup abierto) y se revalida contra la escena antes de añadir.
-    bool        m_openNewScriptPopup = false;
-    char        m_newScriptNameBuffer[64] = {};
-    std::string m_newScriptError;
-    GameObject* m_newScriptTarget = nullptr;
-    // Mensaje del último intento fallido de carga de Mesh (vacío si no hay
-    // error pendiente); se limpia al cambiar de selección o al cargar bien.
-    std::string     m_meshLoadError;
-    // GameObject para el que se pulsó "Add > Mesh" (revela la sección
-    // Browse/drop hasta que se asigne un mesh o se pulse "x" para quitarlo).
-    // nullptr = sección oculta. No se limpia al cambiar de selección: si el
-    // usuario vuelve al mismo GameObject sin haber completado la carga, la
-    // sección sigue visible (igual que dejar un diálogo de collider a medias).
-    GameObject*     m_meshAddRequestedFor = nullptr;
-    // Mismo patrón que m_meshLoadError/m_meshAddRequestedFor pero para el
-    // componente AudioClip.
-    std::string     m_audioLoadError;
-    GameObject*     m_audioClipAddRequestedFor = nullptr;
 };
 
 } // namespace DonTopo
