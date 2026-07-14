@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 #include "DonTopo/Editor/UndoManager.h"
+#include "DonTopo/Editor/LogPanel.h"
 
 namespace IGFD { class FileDialog; }
 
@@ -75,7 +76,7 @@ public:
     void setScriptManager(ScriptManager* sm) { m_scriptManager = sm; }
     // Punto de entrada externo al Log Console (usado por ScriptManager vía
     // el wiring de main.cpp: mensajes de compilación/errores de scripts).
-    void pushExternalLog(const std::string& message) { pushLog(message); }
+    void pushExternalLog(const std::string& message) { m_logPanel.push(message); }
 
 private:
     static constexpr float kToolbarHeight = 30.0f;
@@ -99,11 +100,6 @@ private:
     void beginRename(GameObject* node);
     void drawViewport(VkDescriptorSet viewportTexture, const glm::mat4& cameraView);
     void drawProperties();
-    // Único punto de escritura del log — añade "[HH:MM:SS] message" al
-    // final de m_logEntries y descarta la más antigua si se supera
-    // kLogMaxEntries. Llamado desde cada acción de edición confirmada.
-    void pushLog(const std::string& message);
-    void drawLogPanel();
     void drawBoxColliderSection();
     void drawSphereColliderSection();
     void drawCapsuleColliderSection();
@@ -176,20 +172,13 @@ private:
     bool m_sceneOpen          = true;
     bool m_viewportOpen       = true;
     bool m_propertiesOpen     = true;
-    bool m_logOpen            = true;
     bool m_contentBrowserOpen = true;
 
     // Viewport
     bool m_viewportHovered = false;
 
-    // Log — ring buffer de acciones de edición confirmadas, más reciente al
-    // final. Sin persistencia a disco (spec: no hace falta guardar nada).
-    static constexpr size_t kLogMaxEntries = 200;
-    std::deque<std::string> m_logEntries;
-    // true si el panel ya estaba scrolleado al fondo el frame anterior —
-    // evita pelear con el usuario si sube a leer historial mientras llegan
-    // más líneas.
-    bool m_logAutoScroll = true;
+    // Log Console — extraído a LogPanel (Task 2).
+    LogPanel m_logPanel;
 
     // Content Browser
     bool m_dlgOpen = false;

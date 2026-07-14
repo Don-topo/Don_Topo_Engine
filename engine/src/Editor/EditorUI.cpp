@@ -213,7 +213,7 @@ EditorUI::EditorUI()
     , m_sceneFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_scriptEditor(std::make_unique<ScriptEditorPanel>())
 {
-    m_scriptEditor->setLogCallback([this](const std::string& msg) { pushLog(msg); });
+    m_scriptEditor->setLogCallback([this](const std::string& msg) { m_logPanel.push(msg); });
 }
 
 EditorUI::~EditorUI() = default;
@@ -228,7 +228,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     drawSelectionGizmo();
     drawViewport(viewportTexture, cameraView);
     drawProperties();
-    drawLogPanel();
+    m_logPanel.draw();
     drawMeshDialog();
     drawAudioClipDialog();
     drawSceneDialog();
@@ -248,7 +248,7 @@ void EditorUI::handleUndoRedoShortcut()
         m_selected = prevSelId ? m_scene->findById(prevSelId) : nullptr;
         m_propsCachedFor = nullptr;
         m_colliderCachedFor = nullptr;
-        pushLog("Undo: " + m_undoHistory.lastLabel());
+        m_logPanel.push("Undo: " + m_undoHistory.lastLabel());
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Y) && m_undoHistory.canRedo())
     {
@@ -257,7 +257,7 @@ void EditorUI::handleUndoRedoShortcut()
         m_selected = prevSelId ? m_scene->findById(prevSelId) : nullptr;
         m_propsCachedFor = nullptr;
         m_colliderCachedFor = nullptr;
-        pushLog("Redo: " + m_undoHistory.lastLabel());
+        m_logPanel.push("Redo: " + m_undoHistory.lastLabel());
     }
 }
 
@@ -270,7 +270,7 @@ void EditorUI::drawMenuBar()
             ImGui::MenuItem("Scene", nullptr, &m_sceneOpen);
             ImGui::MenuItem("Viewport", nullptr, &m_viewportOpen);
             ImGui::MenuItem("Properties", nullptr, &m_propertiesOpen);
-            ImGui::MenuItem("Log", nullptr, &m_logOpen);
+            ImGui::MenuItem("Log", nullptr, m_logPanel.GetOpenPtr());
             ImGui::MenuItem("Content Browser", nullptr, &m_contentBrowserOpen);
             ImGui::MenuItem("Script Editor", nullptr, m_scriptEditor->GetOpenPtr());
             ImGui::EndMenu();
@@ -303,7 +303,7 @@ void EditorUI::drawToolbar()
             if (m_scriptManager) m_scriptManager->onPlayStop();
             m_sceneIOError = reloadSceneFromJson(m_playSnapshot) ? "" : "No se pudo restaurar la escena";
             m_isPlaying = false;
-            pushLog("Play Mode detenido");
+            m_logPanel.push("Play Mode detenido");
         }
         ImGui::PopStyleColor();
     }
@@ -319,7 +319,7 @@ void EditorUI::drawToolbar()
                 if (go->hasAudioClip() && go->getAudioClip()->getPlayOnAwake())
                     go->getAudioClip()->play(glm::vec3(go->worldTransform[3]));
             });
-            pushLog("Play Mode iniciado");
+            m_logPanel.push("Play Mode iniciado");
         }
     }
     ImGui::EndDisabled();
@@ -391,36 +391,6 @@ void EditorUI::drawDockSpace()
     ImGui::End();
 }
 
-void EditorUI::pushLog(const std::string& message)
-{
-    std::time_t t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    std::tm     tmBuf{};
-    localtime_s(&tmBuf, &t);
-    char timeStr[16];
-    std::strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &tmBuf);
-
-    m_logEntries.push_back(std::string("[") + timeStr + "] " + message);
-    if (m_logEntries.size() > kLogMaxEntries)
-        m_logEntries.pop_front();
-}
-
-void EditorUI::drawLogPanel()
-{
-    if (!m_logOpen) return;
-    ImGui::Begin("Log", &m_logOpen);
-    for (const auto& line : m_logEntries)
-        ImGui::TextUnformatted(line.c_str());
-
-    // Autoscroll: solo si ya estaba al fondo antes de este frame (no pelea
-    // con el usuario si sube a revisar historial mientras entran líneas
-    // nuevas).
-    if (m_logAutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
-        ImGui::SetScrollHereY(1.0f);
-    m_logAutoScroll = ImGui::GetScrollY() >= ImGui::GetScrollMaxY();
-
-    ImGui::End();
-}
-
 void EditorUI::drawScene(GameObject* sceneRoot)
 {
     if (!m_sceneOpen) return;
@@ -462,7 +432,7 @@ void EditorUI::drawScene(GameObject* sceneRoot)
         if (ImGui::MenuItem("Create GameObject") && sceneRoot)
         {
             GameObject* created = sceneRoot->addChild("GameObject");
-            pushLog("GameObject '" + created->name + "' creado");
+            m_logPanel.push("GameObject '" + created->name + "' creado");
 
             if (m_scene && m_physics && m_audio && m_renderer)
             {
@@ -507,7 +477,7 @@ void EditorUI::drawScene(GameObject* sceneRoot)
             if (go == m_selected) selectionInSubtree = true;
         });
 
-        pushLog("GameObject '" + target->name + "' eliminado");
+        m_logPanel.push("GameObject '" + target->name + "' eliminado");
 
         // Snapshot pa Undo, tomado ANTES de tocar nada (m_onDelete libera
         // GPU pero no cambia los datos de Scene que subtreeToJson serializa).
@@ -632,7 +602,7 @@ void EditorUI::drawScene(GameObject* sceneRoot)
             {
                 std::string oldName  = m_renameTarget->name;
                 m_renameTarget->name = newName;
-                pushLog("GameObject renombrado: '" + oldName + "' -> '" + newName + "'");
+                m_logPanel.push("GameObject renombrado: '" + oldName + "' -> '" + newName + "'");
 
                 if (m_scene && newName != oldName)
                 {
@@ -809,7 +779,7 @@ void EditorUI::createBasicShape(GameObject* parent, const std::string& name, std
     GameObject* go = parent->addChild(name);
     go->staticRenderIndex = m_renderer->addStaticMesh(*mesh);
     go->setMesh(std::move(mesh));
-    pushLog("GameObject '" + go->name + "' creado");
+    m_logPanel.push("GameObject '" + go->name + "' creado");
 
     if (m_scene && m_physics && m_audio && m_renderer)
     {
@@ -841,7 +811,7 @@ void EditorUI::loadMeshForSelected(const std::string& path)
         m_selected->staticRenderIndex = m_renderer->addStaticMesh(*mesh);
         m_selected->setMesh(std::move(mesh));
         m_meshLoadError.clear();
-        pushLog("Componente Mesh añadido a '" + m_selected->name + "'");
+        m_logPanel.push("Componente Mesh añadido a '" + m_selected->name + "'");
     }
     catch (const std::exception& e)
     {
@@ -871,7 +841,7 @@ void EditorUI::loadAudioClipForSelected(const std::string& path)
     }
     m_selected->setAudioClip(std::move(clip));
     m_audioLoadError.clear();
-    pushLog("Componente Audio Clip añadido a '" + m_selected->name + "'");
+    m_logPanel.push("Componente Audio Clip añadido a '" + m_selected->name + "'");
 }
 
 void EditorUI::drawSceneNode(GameObject* node)
@@ -911,7 +881,7 @@ void EditorUI::drawSceneNode(GameObject* node)
         if (ImGui::MenuItem("Create GameObject"))
         {
             GameObject* created = node->addChild("GameObject");
-            pushLog("GameObject '" + created->name + "' creado");
+            m_logPanel.push("GameObject '" + created->name + "' creado");
 
             if (m_scene && m_physics && m_audio && m_renderer)
             {
@@ -1239,11 +1209,11 @@ void EditorUI::drawProperties()
         m_transformBeforeEdit = m_selected->localTransform;
 
     if (posCommitted)
-        pushLog("Position de '" + m_selected->name + "' cambiado a " + formatVec3(m_editPosition));
+        m_logPanel.push("Position de '" + m_selected->name + "' cambiado a " + formatVec3(m_editPosition));
     if (rotCommitted)
-        pushLog("Rotation de '" + m_selected->name + "' cambiado a " + formatVec3(m_editRotationDeg));
+        m_logPanel.push("Rotation de '" + m_selected->name + "' cambiado a " + formatVec3(m_editRotationDeg));
     if (scaleCommitted)
-        pushLog("Scale de '" + m_selected->name + "' cambiado a " + formatVec3(m_editScale));
+        m_logPanel.push("Scale de '" + m_selected->name + "' cambiado a " + formatVec3(m_editScale));
 
     if (changed)
     {
@@ -1403,7 +1373,7 @@ void EditorUI::drawBoxColliderSection()
         if (ImGui::Checkbox("Use Gravity", &m_editUseGravity))
         {
             colliderChanged = true;
-            pushLog(std::string("Use Gravity de '") + m_selected->name +
+            m_logPanel.push(std::string("Use Gravity de '") + m_selected->name +
                      "' (Box Collider) " + (m_editUseGravity ? "activado" : "desactivado"));
             if (m_scene)
             {
@@ -1423,9 +1393,9 @@ void EditorUI::drawBoxColliderSection()
         m_boxColliderBeforeEdit = BoxColliderState{ m_editColliderCenter, m_editColliderSize, m_editUseGravity };
 
     if (centerCommitted)
-        pushLog("Center de '" + m_selected->name + "' (Box Collider) cambiado a " + formatVec3(m_editColliderCenter));
+        m_logPanel.push("Center de '" + m_selected->name + "' (Box Collider) cambiado a " + formatVec3(m_editColliderCenter));
     if (sizeCommitted)
-        pushLog("Size de '" + m_selected->name + "' (Box Collider) cambiado a " + formatVec3(m_editColliderSize));
+        m_logPanel.push("Size de '" + m_selected->name + "' (Box Collider) cambiado a " + formatVec3(m_editColliderSize));
 
     if (colliderChanged)
     {
@@ -1446,7 +1416,7 @@ void EditorUI::drawBoxColliderSection()
     {
         m_selected->setBoxCollider(nullptr);
         m_colliderCachedFor = nullptr;
-        pushLog("Componente Box Collider quitado de '" + m_selected->name + "'");
+        m_logPanel.push("Componente Box Collider quitado de '" + m_selected->name + "'");
     }
 }
 
@@ -1528,7 +1498,7 @@ void EditorUI::drawSphereColliderSection()
         if (ImGui::Checkbox("Use Gravity", &m_editSphereUseGravity))
         {
             colliderChanged = true;
-            pushLog(std::string("Use Gravity de '") + m_selected->name +
+            m_logPanel.push(std::string("Use Gravity de '") + m_selected->name +
                      "' (Sphere Collider) " + (m_editSphereUseGravity ? "activado" : "desactivado"));
             if (m_scene)
             {
@@ -1548,9 +1518,9 @@ void EditorUI::drawSphereColliderSection()
         m_sphereColliderBeforeEdit = SphereColliderState{ m_editSphereCenter, m_editSphereRadius, m_editSphereUseGravity };
 
     if (centerCommitted)
-        pushLog("Center de '" + m_selected->name + "' (Sphere Collider) cambiado a " + formatVec3(m_editSphereCenter));
+        m_logPanel.push("Center de '" + m_selected->name + "' (Sphere Collider) cambiado a " + formatVec3(m_editSphereCenter));
     if (radiusCommitted)
-        pushLog("Radius de '" + m_selected->name + "' (Sphere Collider) cambiado a " + formatFloat(m_editSphereRadius));
+        m_logPanel.push("Radius de '" + m_selected->name + "' (Sphere Collider) cambiado a " + formatFloat(m_editSphereRadius));
 
     if (colliderChanged)
     {
@@ -1571,7 +1541,7 @@ void EditorUI::drawSphereColliderSection()
     {
         m_selected->setSphereCollider(nullptr);
         m_sphereColliderCachedFor = nullptr;
-        pushLog("Componente Sphere Collider quitado de '" + m_selected->name + "'");
+        m_logPanel.push("Componente Sphere Collider quitado de '" + m_selected->name + "'");
     }
 }
 
@@ -1665,7 +1635,7 @@ void EditorUI::drawCapsuleColliderSection()
         if (ImGui::Checkbox("Use Gravity", &m_editCapsuleUseGravity))
         {
             colliderChanged = true;
-            pushLog(std::string("Use Gravity de '") + m_selected->name +
+            m_logPanel.push(std::string("Use Gravity de '") + m_selected->name +
                      "' (Capsule Collider) " + (m_editCapsuleUseGravity ? "activado" : "desactivado"));
             if (m_scene)
             {
@@ -1685,11 +1655,11 @@ void EditorUI::drawCapsuleColliderSection()
         m_capsuleColliderBeforeEdit = CapsuleColliderState{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleUseGravity };
 
     if (centerCommitted)
-        pushLog("Center de '" + m_selected->name + "' (Capsule Collider) cambiado a " + formatVec3(m_editCapsuleCenter));
+        m_logPanel.push("Center de '" + m_selected->name + "' (Capsule Collider) cambiado a " + formatVec3(m_editCapsuleCenter));
     if (radiusCommitted)
-        pushLog("Radius de '" + m_selected->name + "' (Capsule Collider) cambiado a " + formatFloat(m_editCapsuleRadius));
+        m_logPanel.push("Radius de '" + m_selected->name + "' (Capsule Collider) cambiado a " + formatFloat(m_editCapsuleRadius));
     if (heightCommitted)
-        pushLog("Height de '" + m_selected->name + "' (Capsule Collider) cambiado a " + formatFloat(m_editCapsuleHeight));
+        m_logPanel.push("Height de '" + m_selected->name + "' (Capsule Collider) cambiado a " + formatFloat(m_editCapsuleHeight));
 
     if (colliderChanged)
     {
@@ -1711,7 +1681,7 @@ void EditorUI::drawCapsuleColliderSection()
     {
         m_selected->setCapsuleCollider(nullptr);
         m_capsuleColliderCachedFor = nullptr;
-        pushLog("Componente Capsule Collider quitado de '" + m_selected->name + "'");
+        m_logPanel.push("Componente Capsule Collider quitado de '" + m_selected->name + "'");
     }
 }
 
@@ -1780,7 +1750,7 @@ void EditorUI::drawPlaneColliderSection()
         m_planeColliderBeforeEdit = PlaneColliderState{ m_editPlaneCenter };
 
     if (centerCommitted)
-        pushLog("Center de '" + m_selected->name + "' (Plane Collider) cambiado a " + formatVec3(m_editPlaneCenter));
+        m_logPanel.push("Center de '" + m_selected->name + "' (Plane Collider) cambiado a " + formatVec3(m_editPlaneCenter));
 
     if (colliderChanged)
         pc->setCenter(m_editPlaneCenter);
@@ -1797,7 +1767,7 @@ void EditorUI::drawPlaneColliderSection()
     {
         m_selected->setPlaneCollider(nullptr);
         m_planeColliderCachedFor = nullptr;
-        pushLog("Componente Plane Collider quitado de '" + m_selected->name + "'");
+        m_logPanel.push("Componente Plane Collider quitado de '" + m_selected->name + "'");
     }
 }
 
@@ -1828,7 +1798,7 @@ void EditorUI::drawMeshSection()
             // Vuelve a ocultar la sección tras quitar el mesh — hay que
             // pulsar "Add > Mesh" de nuevo para reabrirla.
             m_meshAddRequestedFor = nullptr;
-            pushLog("Componente Mesh quitado de '" + m_selected->name + "'");
+            m_logPanel.push("Componente Mesh quitado de '" + m_selected->name + "'");
         }
 
         return;
@@ -1942,7 +1912,7 @@ void EditorUI::drawAudioClipSection()
             // Vuelve a ocultar la sección tras quitar el clip — hay que
             // pulsar "Add > Audio Clip" de nuevo para reabrirla.
             m_audioClipAddRequestedFor = nullptr;
-            pushLog("Componente Audio Clip quitado de '" + m_selected->name + "'");
+            m_logPanel.push("Componente Audio Clip quitado de '" + m_selected->name + "'");
         }
 
         return;
@@ -2047,7 +2017,7 @@ void EditorUI::drawSceneDialog()
         {
             bool saved   = m_scene && m_scene->save(path);
             m_sceneIOError = saved ? "" : "No se pudo guardar la escena";
-            pushLog(saved ? ("Escena guardada: " + path) : ("Error al guardar escena: " + path));
+            m_logPanel.push(saved ? ("Escena guardada: " + path) : ("Error al guardar escena: " + path));
         }
         else
         {
@@ -2064,7 +2034,7 @@ void EditorUI::drawSceneDialog()
 
             bool loaded  = structureOk && reloadSceneFromJson(*parsed);
             m_sceneIOError = loaded ? "" : "No se pudo cargar la escena";
-            pushLog(loaded ? ("Escena cargada: " + path) : ("Error al cargar escena: " + path));
+            m_logPanel.push(loaded ? ("Escena cargada: " + path) : ("Error al cargar escena: " + path));
         }
     }
 
@@ -2174,7 +2144,7 @@ void EditorUI::drawScriptsSection()
                                 else comp->instance[prop.name] = v;
                             }, value);
                         }
-                        pushLog("Script '" + comp->scriptName + "." + prop.name +
+                        m_logPanel.push("Script '" + comp->scriptName + "." + prop.name +
                                 "' cambiado en '" + m_selected->name + "'");
                     }
                 }
@@ -2196,7 +2166,7 @@ void EditorUI::drawScriptsSection()
                                 else comp->instance[prop.name] = v;
                             }, prop.defaultValue);
                     }
-                    pushLog("Script '" + comp->scriptName + "' reseteado a defaults en '" +
+                    m_logPanel.push("Script '" + comp->scriptName + "' reseteado a defaults en '" +
                             m_selected->name + "'");
                 }
             }
@@ -2210,7 +2180,7 @@ void EditorUI::drawScriptsSection()
         if (m_isPlaying) m_scriptManager->callOnDestroy(*toRemove);
         const std::string name = toRemove->scriptName;
         m_selected->removeScript(toRemove);
-        pushLog("Componente Script '" + name + "' quitado de '" + m_selected->name + "'");
+        m_logPanel.push("Componente Script '" + name + "' quitado de '" + m_selected->name + "'");
     }
 }
 
@@ -2231,7 +2201,7 @@ void EditorUI::drawAddComponentButton()
                 glm::vec3(25.0f, 25.0f, 25.0f), glm::vec3(0.0f),
                 m_selected->worldTransform, /*useGravity=*/false));
             m_colliderCachedFor = nullptr;
-            pushLog("Componente Box Collider añadido a '" + m_selected->name + "'");
+            m_logPanel.push("Componente Box Collider añadido a '" + m_selected->name + "'");
         }
 
         if (ImGui::Selectable("Sphere Collider") && !alreadyHasAny && m_physics)
@@ -2239,7 +2209,7 @@ void EditorUI::drawAddComponentButton()
             m_selected->setSphereCollider(m_physics->createSphereColliderComponent(
                 25.0f, glm::vec3(0.0f), m_selected->worldTransform, /*useGravity=*/false));
             m_sphereColliderCachedFor = nullptr;
-            pushLog("Componente Sphere Collider añadido a '" + m_selected->name + "'");
+            m_logPanel.push("Componente Sphere Collider añadido a '" + m_selected->name + "'");
         }
 
         if (ImGui::Selectable("Capsule Collider") && !alreadyHasAny && m_physics)
@@ -2247,7 +2217,7 @@ void EditorUI::drawAddComponentButton()
             m_selected->setCapsuleCollider(m_physics->createCapsuleColliderComponent(
                 15.0f, 25.0f, glm::vec3(0.0f), m_selected->worldTransform, /*useGravity=*/false));
             m_capsuleColliderCachedFor = nullptr;
-            pushLog("Componente Capsule Collider añadido a '" + m_selected->name + "'");
+            m_logPanel.push("Componente Capsule Collider añadido a '" + m_selected->name + "'");
         }
 
         if (ImGui::Selectable("Plane Collider") && !alreadyHasAny && m_physics)
@@ -2255,7 +2225,7 @@ void EditorUI::drawAddComponentButton()
             m_selected->setPlaneCollider(m_physics->createPlaneColliderComponent(
                 glm::vec3(0.0f), m_selected->worldTransform));
             m_planeColliderCachedFor = nullptr;
-            pushLog("Componente Plane Collider añadido a '" + m_selected->name + "'");
+            m_logPanel.push("Componente Plane Collider añadido a '" + m_selected->name + "'");
         }
 
         ImGui::EndDisabled();
@@ -2285,7 +2255,7 @@ void EditorUI::drawAddComponentButton()
                         m_selected->addScript(std::move(comp));
                         // En Play el lifecycle instancia y dispara Awake/Start
                         // en el siguiente update (started == false).
-                        pushLog("Componente Script '" + name + "' añadido a '" + m_selected->name + "'");
+                        m_logPanel.push("Componente Script '" + name + "' añadido a '" + m_selected->name + "'");
                     }
                 }
                 if (!m_scriptManager->getRegistry().empty())
@@ -2372,11 +2342,11 @@ void EditorUI::drawNewScriptPopup()
                     {
                         m_newScriptTarget->addScript(
                             std::make_unique<ScriptComponent>(name, m_newScriptTarget));
-                        pushLog("Script '" + name + "' creado y añadido a '" +
+                        m_logPanel.push("Script '" + name + "' creado y añadido a '" +
                                 m_newScriptTarget->name + "'");
                     }
                     else
-                        pushLog("Script '" + name + "' creado (el GameObject ya no existe)");
+                        m_logPanel.push("Script '" + name + "' creado (el GameObject ya no existe)");
                     ImGui::CloseCurrentPopup();
                 }
                 else
@@ -2599,7 +2569,7 @@ void EditorUI::drawContentBrowser(GameObject* sceneRoot)
                         }
                         else
                         {
-                            pushLog("Asset renombrado: '" + m_assetRenameTarget.filename().string() +
+                            m_logPanel.push("Asset renombrado: '" + m_assetRenameTarget.filename().string() +
                                     "' -> '" + newPath.filename().string() + "'");
                             updateSceneReferencesForRename(sceneRoot, m_assetRenameTarget, newPath, m_assetRenameIsDir);
                             m_scanned       = false;
@@ -2649,7 +2619,7 @@ void EditorUI::drawContentBrowser(GameObject* sceneRoot)
                 }
                 else
                 {
-                    pushLog("Asset eliminado: " + m_assetDeleteTarget.string());
+                    m_logPanel.push("Asset eliminado: " + m_assetDeleteTarget.string());
                     detachSceneReferencesForDelete(sceneRoot, m_assetDeleteTarget, m_assetDeleteIsDir);
                     m_scanned       = false;
                     m_dlgReopenPath = m_currentDir;
