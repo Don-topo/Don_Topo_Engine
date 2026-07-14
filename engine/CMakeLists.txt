@@ -3,6 +3,7 @@ add_library(DonTopoEngine STATIC
     src/Window.cpp
     src/Renderer.cpp
     src/EditorUI.cpp
+    src/Command.cpp
     src/Skybox.cpp
     src/ModelLoader.cpp
     src/Cube.cpp
