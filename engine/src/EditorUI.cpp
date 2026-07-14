@@ -558,9 +558,46 @@ void EditorUI::drawScene(GameObject* sceneRoot)
 
     if (m_pendingMoveSource && m_pendingMoveTarget)
     {
-        moveGameObject(m_pendingMoveSource, m_pendingMoveTarget);
+        GameObject* dragged = m_pendingMoveSource;
+        GameObject* target  = m_pendingMoveTarget;
         m_pendingMoveSource = nullptr;
         m_pendingMoveTarget = nullptr;
+
+        bool canUndoMove = m_scene && dragged->parent;
+        uint64_t id = 0, oldParentId = 0;
+        size_t oldIndex = 0;
+        std::string draggedName;
+        if (canUndoMove)
+        {
+            id = dragged->id;
+            oldParentId = dragged->parent->id;
+            draggedName = dragged->name;
+            auto& oldSiblings = dragged->parent->children;
+            auto it = std::find_if(oldSiblings.begin(), oldSiblings.end(),
+                [dragged](const std::unique_ptr<GameObject>& c) { return c.get() == dragged; });
+            oldIndex = static_cast<size_t>(it - oldSiblings.begin());
+        }
+
+        moveGameObject(dragged, target);
+
+        if (canUndoMove && dragged->parent)
+        {
+            uint64_t newParentId = dragged->parent->id;
+            auto& newSiblings = dragged->parent->children;
+            auto it = std::find_if(newSiblings.begin(), newSiblings.end(),
+                [dragged](const std::unique_ptr<GameObject>& c) { return c.get() == dragged; });
+            size_t newIndex = static_cast<size_t>(it - newSiblings.begin());
+
+            // moveGameObject() puede ser un no-op (drop en sí mismo, en un
+            // descendiente propio, o dragged sin parent) — si nada cambió,
+            // no ensuciar el stack con un comando fantasma.
+            if (!(newParentId == oldParentId && newIndex == oldIndex))
+            {
+                m_undoHistory.push(std::make_unique<ReparentCommand>(
+                    *m_scene, "Mover '" + draggedName + "'", id,
+                    oldParentId, oldIndex, newParentId, newIndex));
+            }
+        }
     }
 
     if (m_openRenamePopup)
