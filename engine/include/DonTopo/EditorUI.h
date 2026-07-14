@@ -304,6 +304,9 @@ private:
     glm::vec3    m_editColliderSize{50.0f};
     bool         m_editUseGravity = false;
     bool         m_colliderDragActive = false;
+    // Snapshot tomado al iniciar un drag de Center/Size — "before" del
+    // PropertyCommand<BoxColliderState> que se empuja al confirmar.
+    BoxColliderState m_boxColliderBeforeEdit{};
 
     // Sphere Collider – mismo patrón de cache que Box Collider.
     SphereCollider* m_sphereColliderCachedFor = nullptr;
@@ -311,6 +314,7 @@ private:
     float           m_editSphereRadius{25.0f};
     bool            m_editSphereUseGravity = false;
     bool            m_sphereColliderDragActive = false;
+    SphereColliderState m_sphereColliderBeforeEdit{};
 
     // Capsule Collider – mismo patrón de cache que Box Collider.
     CapsuleCollider* m_capsuleColliderCachedFor = nullptr;
@@ -319,11 +323,13 @@ private:
     float            m_editCapsuleHeight{50.0f};
     bool             m_editCapsuleUseGravity = false;
     bool             m_capsuleColliderDragActive = false;
+    CapsuleColliderState m_capsuleColliderBeforeEdit{};
 
     // Plane Collider – solo Center (sin Size/Use Gravity, siempre estático).
     PlaneCollider* m_planeColliderCachedFor = nullptr;
     glm::vec3      m_editPlaneCenter{0.0f};
     bool           m_planeColliderDragActive = false;
+    PlaneColliderState m_planeColliderBeforeEdit{};
 
     PhysicsManager* m_physics = nullptr;
     Renderer*       m_renderer = nullptr;

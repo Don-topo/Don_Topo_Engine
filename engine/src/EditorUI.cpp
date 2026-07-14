@@ -1225,6 +1225,16 @@ void EditorUI::drawBoxColliderSection()
         m_editColliderSize   = bc->getHalfExtents() * 2.0f;
     }
 
+    Scene* scene = m_scene;
+    uint64_t id = m_selected->id;
+    auto applyBoxState = [scene, id](const BoxColliderState& s) {
+        GameObject* go = scene->findById(id);
+        if (!go || !go->hasBoxCollider()) return;
+        go->getBoxCollider()->setCenter(s.center);
+        go->getBoxCollider()->setHalfExtents(s.size * 0.5f);
+        go->getBoxCollider()->setUseGravity(s.useGravity);
+    };
+
     ImGui::Separator();
     bool sectionOpen = ImGui::TreeNodeEx("Box Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
@@ -1232,6 +1242,7 @@ void EditorUI::drawBoxColliderSection()
 
     bool colliderChanged = false;
     bool dragActive = false;
+    bool activated = false;
     bool centerCommitted = false;
     bool sizeCommitted = false;
 
@@ -1242,16 +1253,19 @@ void EditorUI::drawBoxColliderSection()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("X##c1", &m_editColliderCenter.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Y##c1", &m_editColliderCenter.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Z##c1", &m_editColliderCenter.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::Text("Size  ");
@@ -1259,29 +1273,43 @@ void EditorUI::drawBoxColliderSection()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("X##c2", &m_editColliderSize.x, 0.5f, 0.01f, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         sizeCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Y##c2", &m_editColliderSize.y, 0.5f, 0.01f, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         sizeCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Z##c2", &m_editColliderSize.z, 0.5f, 0.01f, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         sizeCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
+        bool oldGravity = m_editUseGravity;
         if (ImGui::Checkbox("Use Gravity", &m_editUseGravity))
         {
             colliderChanged = true;
             pushLog(std::string("Use Gravity de '") + m_selected->name +
                      "' (Box Collider) " + (m_editUseGravity ? "activado" : "desactivado"));
+            if (m_scene)
+            {
+                BoxColliderState before{ m_editColliderCenter, m_editColliderSize, oldGravity };
+                BoxColliderState after{ m_editColliderCenter, m_editColliderSize, m_editUseGravity };
+                m_undoHistory.push(std::make_unique<PropertyCommand<BoxColliderState>>(
+                    "Use Gravity de '" + m_selected->name + "' (Box Collider)", before, after, applyBoxState));
+            }
         }
 
         ImGui::TreePop();
     }
 
     m_colliderDragActive = dragActive;
+
+    if (activated)
+        m_boxColliderBeforeEdit = BoxColliderState{ m_editColliderCenter, m_editColliderSize, m_editUseGravity };
 
     if (centerCommitted)
         pushLog("Center de '" + m_selected->name + "' (Box Collider) cambiado a " + formatVec3(m_editColliderCenter));
@@ -1293,6 +1321,14 @@ void EditorUI::drawBoxColliderSection()
         bc->setCenter(m_editColliderCenter);
         bc->setHalfExtents(m_editColliderSize * 0.5f);
         bc->setUseGravity(m_editUseGravity);
+    }
+
+    if ((centerCommitted || sizeCommitted) && m_scene)
+    {
+        BoxColliderState before = m_boxColliderBeforeEdit;
+        BoxColliderState after{ m_editColliderCenter, m_editColliderSize, m_editUseGravity };
+        m_undoHistory.push(std::make_unique<PropertyCommand<BoxColliderState>>(
+            "Box Collider de '" + m_selected->name + "'", before, after, applyBoxState));
     }
 
     if (removeClicked)
@@ -1326,6 +1362,16 @@ void EditorUI::drawSphereColliderSection()
         m_editSphereRadius = sc->getRadius();
     }
 
+    Scene* scene = m_scene;
+    uint64_t id = m_selected->id;
+    auto applySphereState = [scene, id](const SphereColliderState& s) {
+        GameObject* go = scene->findById(id);
+        if (!go || !go->hasSphereCollider()) return;
+        go->getSphereCollider()->setCenter(s.center);
+        go->getSphereCollider()->setRadius(s.radius);
+        go->getSphereCollider()->setUseGravity(s.useGravity);
+    };
+
     ImGui::Separator();
     bool sectionOpen = ImGui::TreeNodeEx("Sphere Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
@@ -1333,6 +1379,7 @@ void EditorUI::drawSphereColliderSection()
 
     bool colliderChanged = false;
     bool dragActive = false;
+    bool activated = false;
     bool centerCommitted = false;
     bool radiusCommitted = false;
 
@@ -1343,16 +1390,19 @@ void EditorUI::drawSphereColliderSection()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("X##s1", &m_editSphereCenter.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Y##s1", &m_editSphereCenter.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Z##s1", &m_editSphereCenter.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::Text("Radius");
@@ -1360,19 +1410,31 @@ void EditorUI::drawSphereColliderSection()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("##s2", &m_editSphereRadius, 0.5f, 0.01f, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         radiusCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
+        bool oldGravity = m_editSphereUseGravity;
         if (ImGui::Checkbox("Use Gravity", &m_editSphereUseGravity))
         {
             colliderChanged = true;
             pushLog(std::string("Use Gravity de '") + m_selected->name +
                      "' (Sphere Collider) " + (m_editSphereUseGravity ? "activado" : "desactivado"));
+            if (m_scene)
+            {
+                SphereColliderState before{ m_editSphereCenter, m_editSphereRadius, oldGravity };
+                SphereColliderState after{ m_editSphereCenter, m_editSphereRadius, m_editSphereUseGravity };
+                m_undoHistory.push(std::make_unique<PropertyCommand<SphereColliderState>>(
+                    "Use Gravity de '" + m_selected->name + "' (Sphere Collider)", before, after, applySphereState));
+            }
         }
 
         ImGui::TreePop();
     }
 
     m_sphereColliderDragActive = dragActive;
+
+    if (activated)
+        m_sphereColliderBeforeEdit = SphereColliderState{ m_editSphereCenter, m_editSphereRadius, m_editSphereUseGravity };
 
     if (centerCommitted)
         pushLog("Center de '" + m_selected->name + "' (Sphere Collider) cambiado a " + formatVec3(m_editSphereCenter));
@@ -1384,6 +1446,14 @@ void EditorUI::drawSphereColliderSection()
         sc->setCenter(m_editSphereCenter);
         sc->setRadius(m_editSphereRadius);
         sc->setUseGravity(m_editSphereUseGravity);
+    }
+
+    if ((centerCommitted || radiusCommitted) && m_scene)
+    {
+        SphereColliderState before = m_sphereColliderBeforeEdit;
+        SphereColliderState after{ m_editSphereCenter, m_editSphereRadius, m_editSphereUseGravity };
+        m_undoHistory.push(std::make_unique<PropertyCommand<SphereColliderState>>(
+            "Sphere Collider de '" + m_selected->name + "'", before, after, applySphereState));
     }
 
     if (removeClicked)
@@ -1419,6 +1489,17 @@ void EditorUI::drawCapsuleColliderSection()
         m_editCapsuleHeight = cc->getHalfHeight() * 2.0f;
     }
 
+    Scene* scene = m_scene;
+    uint64_t id = m_selected->id;
+    auto applyCapsuleState = [scene, id](const CapsuleColliderState& s) {
+        GameObject* go = scene->findById(id);
+        if (!go || !go->hasCapsuleCollider()) return;
+        go->getCapsuleCollider()->setCenter(s.center);
+        go->getCapsuleCollider()->setRadius(s.radius);
+        go->getCapsuleCollider()->setHalfHeight(s.height * 0.5f);
+        go->getCapsuleCollider()->setUseGravity(s.useGravity);
+    };
+
     ImGui::Separator();
     bool sectionOpen = ImGui::TreeNodeEx("Capsule Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
@@ -1426,6 +1507,7 @@ void EditorUI::drawCapsuleColliderSection()
 
     bool colliderChanged = false;
     bool dragActive = false;
+    bool activated = false;
     bool centerCommitted = false;
     bool radiusCommitted = false;
     bool heightCommitted = false;
@@ -1437,16 +1519,19 @@ void EditorUI::drawCapsuleColliderSection()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("X##k1", &m_editCapsuleCenter.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Y##k1", &m_editCapsuleCenter.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Z##k1", &m_editCapsuleCenter.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::Text("Radius");
@@ -1454,6 +1539,7 @@ void EditorUI::drawCapsuleColliderSection()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("##k2", &m_editCapsuleRadius, 0.5f, 0.01f, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         radiusCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::Text("Height");
@@ -1461,19 +1547,31 @@ void EditorUI::drawCapsuleColliderSection()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("##k3", &m_editCapsuleHeight, 0.5f, 0.01f, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         heightCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
+        bool oldGravity = m_editCapsuleUseGravity;
         if (ImGui::Checkbox("Use Gravity", &m_editCapsuleUseGravity))
         {
             colliderChanged = true;
             pushLog(std::string("Use Gravity de '") + m_selected->name +
                      "' (Capsule Collider) " + (m_editCapsuleUseGravity ? "activado" : "desactivado"));
+            if (m_scene)
+            {
+                CapsuleColliderState before{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, oldGravity };
+                CapsuleColliderState after{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleUseGravity };
+                m_undoHistory.push(std::make_unique<PropertyCommand<CapsuleColliderState>>(
+                    "Use Gravity de '" + m_selected->name + "' (Capsule Collider)", before, after, applyCapsuleState));
+            }
         }
 
         ImGui::TreePop();
     }
 
     m_capsuleColliderDragActive = dragActive;
+
+    if (activated)
+        m_capsuleColliderBeforeEdit = CapsuleColliderState{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleUseGravity };
 
     if (centerCommitted)
         pushLog("Center de '" + m_selected->name + "' (Capsule Collider) cambiado a " + formatVec3(m_editCapsuleCenter));
@@ -1488,6 +1586,14 @@ void EditorUI::drawCapsuleColliderSection()
         cc->setRadius(m_editCapsuleRadius);
         cc->setHalfHeight(m_editCapsuleHeight * 0.5f);
         cc->setUseGravity(m_editCapsuleUseGravity);
+    }
+
+    if ((centerCommitted || radiusCommitted || heightCommitted) && m_scene)
+    {
+        CapsuleColliderState before = m_capsuleColliderBeforeEdit;
+        CapsuleColliderState after{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleUseGravity };
+        m_undoHistory.push(std::make_unique<PropertyCommand<CapsuleColliderState>>(
+            "Capsule Collider de '" + m_selected->name + "'", before, after, applyCapsuleState));
     }
 
     if (removeClicked)
@@ -1514,6 +1620,14 @@ void EditorUI::drawPlaneColliderSection()
         m_planeColliderCachedFor = pc;
     }
 
+    Scene* scene = m_scene;
+    uint64_t id = m_selected->id;
+    auto applyPlaneState = [scene, id](const PlaneColliderState& s) {
+        GameObject* go = scene->findById(id);
+        if (!go || !go->hasPlaneCollider()) return;
+        go->getPlaneCollider()->setCenter(s.center);
+    };
+
     ImGui::Separator();
     bool sectionOpen = ImGui::TreeNodeEx("Plane Collider", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
     ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
@@ -1521,6 +1635,7 @@ void EditorUI::drawPlaneColliderSection()
 
     bool colliderChanged = false;
     bool dragActive = false;
+    bool activated = false;
     bool centerCommitted = false;
 
     if (sectionOpen)
@@ -1530,16 +1645,19 @@ void EditorUI::drawPlaneColliderSection()
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("X##p1", &m_editPlaneCenter.x, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Y##p1", &m_editPlaneCenter.y, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
         colliderChanged |= ImGui::DragFloat("Z##p1", &m_editPlaneCenter.z, 0.5f, -FLT_MAX, +FLT_MAX, "% .3f");
         dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
         ImGui::TreePop();
@@ -1547,11 +1665,22 @@ void EditorUI::drawPlaneColliderSection()
 
     m_planeColliderDragActive = dragActive;
 
+    if (activated)
+        m_planeColliderBeforeEdit = PlaneColliderState{ m_editPlaneCenter };
+
     if (centerCommitted)
         pushLog("Center de '" + m_selected->name + "' (Plane Collider) cambiado a " + formatVec3(m_editPlaneCenter));
 
     if (colliderChanged)
         pc->setCenter(m_editPlaneCenter);
+
+    if (centerCommitted && m_scene)
+    {
+        PlaneColliderState before = m_planeColliderBeforeEdit;
+        PlaneColliderState after{ m_editPlaneCenter };
+        m_undoHistory.push(std::make_unique<PropertyCommand<PlaneColliderState>>(
+            "Plane Collider de '" + m_selected->name + "'", before, after, applyPlaneState));
+    }
 
     if (removeClicked)
     {
