@@ -111,7 +111,8 @@ namespace
             const auto& clip = node.getAudioClip();
             j["audioClip"] = { {"path", clip->getPath()},
                                 {"loop", clip->getLoop()},
-                                {"is3D", clip->getIs3D()} };
+                                {"is3D", clip->getIs3D()},
+                                {"playOnAwake", clip->getPlayOnAwake()} };
         }
         if (node.hasScripts())
         {
@@ -289,7 +290,12 @@ namespace
             auto clip = audio.createAudioClipComponent(
                 c.at("path").get<std::string>(), c.at("is3D").get<bool>(), c.at("loop").get<bool>());
             if (clip)
+            {
+                // .value() con default false: compat con escenas guardadas
+                // antes de que existiera este campo.
+                clip->setPlayOnAwake(c.value("playOnAwake", false));
                 node->setAudioClip(std::move(clip));
+            }
             // clip nullptr (asset roto/formato no soportado): node queda sin
             // audio, el resto de la escena sigue cargando.
         }

@@ -315,6 +315,10 @@ void EditorUI::drawToolbar()
             m_undoHistory.clear();
             m_isPlaying = true;
             if (m_scriptManager) m_scriptManager->onPlayStart();
+            m_scene->traverse([](GameObject* go) {
+                if (go->hasAudioClip() && go->getAudioClip()->getPlayOnAwake())
+                    go->getAudioClip()->play(glm::vec3(go->worldTransform[3]));
+            });
             pushLog("Play Mode iniciado");
         }
     }
@@ -1924,6 +1928,10 @@ void EditorUI::drawAudioClipSection()
             bool is3D = clip->getIs3D();
             if (ImGui::Checkbox("Is 3D?", &is3D))
                 clip->setIs3D(is3D);
+
+            bool playOnAwake = clip->getPlayOnAwake();
+            if (ImGui::Checkbox("Play On Awake", &playOnAwake))
+                clip->setPlayOnAwake(playOnAwake);
 
             ImGui::TreePop();
         }

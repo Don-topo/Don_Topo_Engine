@@ -28,6 +28,11 @@ public:
     bool getLoop() const  { return m_loop; }
     bool getIs3D() const  { return m_is3D; }
     const std::string& getPath() const { return m_path; }
+
+    // Si está activo, Play Mode llama play() automáticamente al entrar
+    // (ver EditorUI::drawToolbar). No afecta al FMOD_MODE, no hace falta reload.
+    bool getPlayOnAwake() const { return m_playOnAwake; }
+    void setPlayOnAwake(bool playOnAwake) { m_playOnAwake = playOnAwake; }
     // Actualiza solo el bookkeeping del path (ej. tras un rename en disco);
     // el sonido FMOD ya cargado no cambia de contenido, no hace falta reload.
     void setPath(const std::string& path) { m_path = path; }
@@ -40,6 +45,7 @@ private:
     int           m_soundId;
     bool          m_is3D;
     bool          m_loop;
+    bool          m_playOnAwake = false;
 };
 
 } // namespace DonTopo
