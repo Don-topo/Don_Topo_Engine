@@ -455,6 +455,16 @@ void EditorUI::drawScene(GameObject* sceneRoot)
         {
             GameObject* created = sceneRoot->addChild("GameObject");
             pushLog("GameObject '" + created->name + "' creado");
+
+            if (m_scene && m_physics && m_audio && m_renderer)
+            {
+                uint64_t parentId = sceneRoot->id;
+                size_t index = sceneRoot->children.size() - 1;
+                nlohmann::json snapshot = m_scene->subtreeToJson(created);
+                m_undoHistory.push(std::make_unique<CreateGameObjectCommand>(
+                    *m_scene, *m_physics, *m_audio, *m_renderer,
+                    "Crear '" + created->name + "'", parentId, index, std::move(snapshot)));
+            }
         }
         if (ImGui::BeginMenu("Basic Shapes"))
         {
@@ -491,6 +501,23 @@ void EditorUI::drawScene(GameObject* sceneRoot)
 
         pushLog("GameObject '" + target->name + "' eliminado");
 
+        // Snapshot pa Undo, tomado ANTES de tocar nada (m_onDelete libera
+        // GPU pero no cambia los datos de Scene que subtreeToJson serializa).
+        bool canUndoDelete = m_scene && m_physics && m_audio && m_renderer && target->parent;
+        uint64_t parentId = 0;
+        size_t index = 0;
+        nlohmann::json snapshot;
+        std::string deletedName = target->name;
+        if (canUndoDelete)
+        {
+            parentId = target->parent->id;
+            auto& siblings = target->parent->children;
+            auto it = std::find_if(siblings.begin(), siblings.end(),
+                [target](const std::unique_ptr<GameObject>& c) { return c.get() == target; });
+            index = static_cast<size_t>(it - siblings.begin());
+            snapshot = m_scene->subtreeToJson(target);
+        }
+
         if (m_onDelete)
             m_onDelete(target);
 
@@ -519,6 +546,13 @@ void EditorUI::drawScene(GameObject* sceneRoot)
             m_selected = nullptr;
             m_propsCachedFor = nullptr;
             m_colliderCachedFor = nullptr;
+        }
+
+        if (canUndoDelete)
+        {
+            m_undoHistory.push(std::make_unique<DeleteGameObjectCommand>(
+                *m_scene, *m_physics, *m_audio, *m_renderer,
+                "Borrar '" + deletedName + "'", parentId, index, std::move(snapshot)));
         }
     }
 
@@ -719,6 +753,16 @@ void EditorUI::createBasicShape(GameObject* parent, const std::string& name, std
     go->staticRenderIndex = m_renderer->addStaticMesh(*mesh);
     go->setMesh(std::move(mesh));
     pushLog("GameObject '" + go->name + "' creado");
+
+    if (m_scene && m_physics && m_audio)
+    {
+        uint64_t parentId = parent->id;
+        size_t index = parent->children.size() - 1;
+        nlohmann::json snapshot = m_scene->subtreeToJson(go);
+        m_undoHistory.push(std::make_unique<CreateGameObjectCommand>(
+            *m_scene, *m_physics, *m_audio, *m_renderer,
+            "Crear '" + go->name + "'", parentId, index, std::move(snapshot)));
+    }
 }
 
 void EditorUI::loadMeshForSelected(const std::string& path)
