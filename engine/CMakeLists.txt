@@ -1,37 +1,37 @@
 add_library(DonTopoEngine STATIC
-    src/Engine.cpp
-    src/Window.cpp
-    src/Renderer.cpp
-    src/EditorUI.cpp
-    src/Command.cpp
-    src/UndoManager.cpp
-    src/Skybox.cpp
-    src/ModelLoader.cpp
-    src/Cube.cpp
-    src/Sphere.cpp
-    src/Plane.cpp
-    src/Capsule.cpp
-    src/Camera.cpp
-    src/GameObject.cpp
-    src/Scene.cpp
-    src/FileManager.cpp
-    src/AudioManager.cpp
-    src/AudioClipComponent.cpp
-    src/ScriptComponent.cpp
-    src/ScriptManager.cpp
-    src/Input.cpp
-    src/ScriptBindings.cpp
-    src/PhysicsManager.cpp
-    src/BoxCollider.cpp
-    src/SphereCollider.cpp
-    src/CapsuleCollider.cpp
-    src/PlaneCollider.cpp
-    src/GpuDevice.cpp
-    src/GpuResources.cpp
-    src/Gizmos.cpp
-    src/ScriptEditorPanel.cpp
-    src/LuaSyntaxCheck.cpp
-    src/LuaApiReference.cpp
+    src/Core/Engine.cpp
+    src/Core/Window.cpp
+    src/Renderer/Renderer.cpp
+    src/Editor/EditorUI.cpp
+    src/Editor/Command.cpp
+    src/Editor/UndoManager.cpp
+    src/Renderer/Skybox.cpp
+    src/Renderer/ModelLoader.cpp
+    src/Renderer/Cube.cpp
+    src/Renderer/Sphere.cpp
+    src/Renderer/Plane.cpp
+    src/Renderer/Capsule.cpp
+    src/Core/Camera.cpp
+    src/Core/GameObject.cpp
+    src/Core/Scene.cpp
+    src/Files/FileManager.cpp
+    src/Audio/AudioManager.cpp
+    src/Audio/AudioClipComponent.cpp
+    src/Scripting/ScriptComponent.cpp
+    src/Scripting/ScriptManager.cpp
+    src/Core/Input.cpp
+    src/Scripting/ScriptBindings.cpp
+    src/Physics/PhysicsManager.cpp
+    src/Physics/Colliders/BoxCollider.cpp
+    src/Physics/Colliders/SphereCollider.cpp
+    src/Physics/Colliders/CapsuleCollider.cpp
+    src/Physics/Colliders/PlaneCollider.cpp
+    src/Renderer/GpuDevice.cpp
+    src/Renderer/GpuResources.cpp
+    src/Editor/Gizmos.cpp
+    src/Editor/ScriptEditorPanel.cpp
+    src/Scripting/LuaSyntaxCheck.cpp
+    src/Scripting/LuaApiReference.cpp
 )
 
 target_include_directories(DonTopoEngine
@@ -70,5 +70,5 @@ target_compile_features(DonTopoEngine PUBLIC cxx_std_20)
 # volumen de plantillas generadas supera el límite de secciones de MSVC
 # (C1128) sin /bigobj.
 if(MSVC)
-    set_source_files_properties(src/ScriptBindings.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
+    set_source_files_properties(src/Scripting/ScriptBindings.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
 endif()
