@@ -12,3 +12,5 @@ function Rotator:Update(dt)
     local t = self.entity:GetTransform()
     t:Rotate(Vec3.new(0, self.speed * dt, 0))
 end
+
+
