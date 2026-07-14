@@ -1,10 +1,13 @@
 #include "DonTopo/GameObject.h"
 #include "DonTopo/ScriptComponent.h"
 #include <algorithm>
+#include <atomic>
 
 namespace DonTopo
 {
-    GameObject::GameObject(std::string name) : name(std::move(name)) {}
+    namespace { std::atomic<uint64_t> s_nextId{1}; }
+
+    GameObject::GameObject(std::string name) : id(s_nextId++), name(std::move(name)) {}
     GameObject::~GameObject() = default;
     GameObject::GameObject(GameObject&&) noexcept = default;
     GameObject& GameObject::operator=(GameObject&&) noexcept = default;

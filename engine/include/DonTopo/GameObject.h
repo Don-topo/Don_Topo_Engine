@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <vector>
 #include <string>
@@ -18,6 +19,13 @@ namespace DonTopo
     class GameObject
     {
         public:
+            // Único entre todos los GameObject de la sesión (contador atómico
+            // en el constructor) — usado por los comandos de Undo/Redo pa
+            // resolver el objeto en vivo vía Scene::findById tras un ciclo
+            // undo/redo que reconstruye el GameObject (Undo de Delete), donde
+            // un GameObject* crudo quedaría colgado.
+            uint64_t id;
+
             explicit GameObject(std::string name = "");
             ~GameObject();
             GameObject(GameObject&&) noexcept;
