@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 #include <nlohmann/json_fwd.hpp>
 #include "DonTopo/GameObject.h"
@@ -18,6 +19,29 @@ namespace DonTopo
 
             GameObject* addGameObject(const std::string& name, GameObject* parent = nullptr);
             void removeGameObject(GameObject* node);
+
+            // Busca por GameObject::id en todo el árbol (incluida la raíz).
+            // nullptr si ningún nodo tiene ese id. O(n) sobre el árbol — usado
+            // por los comandos de Undo/Redo (Command.cpp) pa resolver su
+            // objetivo en vivo en cada execute()/undo(), nunca un puntero crudo.
+            GameObject* findById(uint64_t id);
+
+            // Serializa solo el subárbol de node (mismo formato de nodo que
+            // usa toJson() internamente, incluido su id) — usado por
+            // CreateGameObjectCommand/DeleteGameObjectCommand (Command.cpp)
+            // pa capturar el snapshot de un GameObject sin serializar la
+            // escena entera.
+            nlohmann::json subtreeToJson(const GameObject* node) const;
+
+            // Reconstruye un subárbol desde j como hijo de parent (o de la
+            // raíz si parent es nullptr, mismo criterio que cloneGameObject),
+            // insertado en la posición index de parent->children (si index
+            // queda fuera de rango, al final). Los render indices del
+            // subtree quedan a -1: el caller debe registrar los meshes en
+            // GPU (ver Renderer::registerGameObject). nullptr si la
+            // reconstrucción falla (subárbol malformado).
+            GameObject* insertFromJson(const nlohmann::json& j, GameObject* parent, size_t index,
+                                        PhysicsManager& physics, AudioManager& audio);
 
             // Deep clone de src (transform, mesh, colliders, audio, scripts
             // con overrides) como hijo nuevo de parent (o del padre de src si

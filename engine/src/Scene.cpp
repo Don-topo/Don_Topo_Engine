@@ -52,6 +52,7 @@ namespace
     nlohmann::json nodeToJson(const GameObject& node)
     {
         nlohmann::json j;
+        j["id"] = node.id;
         j["name"] = node.name;
         j["localTransform"] = mat4ToJson(node.localTransform);
 
@@ -194,6 +195,14 @@ namespace
     void nodeFromJson(const nlohmann::json& j, GameObject* node, const glm::mat4& parentWorld,
                        DonTopo::PhysicsManager& physics, DonTopo::AudioManager& audio)
     {
+        // "id" no existe en ficheros .scene guardados antes de este campo —
+        // se deja el id que el constructor de GameObject ya asignó (contador
+        // atómico), backward-compatible. Cuando sí existe (snapshots propios
+        // de Undo/Redo o escenas re-guardadas), se reusa el mismo id: así un
+        // Undo de Delete reconstruye el GameObject con el id original y los
+        // comandos siguientes en el stack lo siguen resolviendo bien.
+        if (j.contains("id"))
+            node->id = j.at("id").get<uint64_t>();
         node->localTransform = jsonToMat4(j.at("localTransform"));
         node->worldTransform = parentWorld * node->localTransform;
 
@@ -360,6 +369,49 @@ namespace DonTopo
             n->skinnedRenderIndex = -1;
         });
         return clone;
+    }
+
+    GameObject* Scene::findById(uint64_t id)
+    {
+        GameObject* found = nullptr;
+        m_root.traverse([&](GameObject* n) { if (n->id == id) found = n; });
+        return found;
+    }
+
+    nlohmann::json Scene::subtreeToJson(const GameObject* node) const
+    {
+        return nodeToJson(*node);
+    }
+
+    GameObject* Scene::insertFromJson(const nlohmann::json& j, GameObject* parent, size_t index,
+                                       PhysicsManager& physics, AudioManager& audio)
+    {
+        GameObject* target = parent ? parent : &m_root;
+        GameObject* node = target->addChild(j.value("name", std::string()));
+        try
+        {
+            nodeFromJson(j, node, target->worldTransform, physics, audio);
+        }
+        catch (const nlohmann::json::exception&)
+        {
+            removeGameObject(node);
+            return nullptr;
+        }
+
+        node->traverse([](GameObject* n) {
+            n->staticRenderIndex  = -1;
+            n->skinnedRenderIndex = -1;
+        });
+
+        // addChild() insertó al final; reposicionar a index si no es ya ahí.
+        auto& siblings = target->children;
+        size_t insertedAt = siblings.size() - 1;
+        if (index < insertedAt)
+        {
+            auto last = siblings.begin() + static_cast<long>(insertedAt);
+            std::rotate(siblings.begin() + static_cast<long>(index), last, last + 1);
+        }
+        return node;
     }
 
     void Scene::update(float /*dt*/, PhysicsManager& /*physics*/)
