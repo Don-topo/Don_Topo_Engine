@@ -15,6 +15,10 @@ class ScenePanel {
 public:
     void draw(EditorContext& ctx, GameObject* sceneRoot);
     bool* GetOpenPtr() { return &m_open; }
+    // true si el draw() más reciente borró el GameObject que estaba
+    // seleccionado (para que EditorUI invalide los caches de edición de
+    // Properties SOLO en ese caso, no en cualquier deselección).
+    bool selectionWasDeletedThisFrame() const { return m_selectionDeletedThisFrame; }
 
 private:
     void drawNode(EditorContext& ctx, GameObject* node);
@@ -30,6 +34,9 @@ private:
     GameObject* m_pendingDelete = nullptr;
     GameObject* m_pendingMoveSource = nullptr;
     GameObject* m_pendingMoveTarget = nullptr;
+
+    // true si el draw() más reciente borró el GameObject seleccionado.
+    bool m_selectionDeletedThisFrame = false;
 
     // Rename — popup modal disparado por "Rename" (click derecho) o F2.
     GameObject* m_renameTarget = nullptr;

@@ -176,11 +176,10 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     };
 
     m_scenePanel.draw(ctx, sceneRoot);
-    // ScenePanel puede vaciar la selección (deselección en zona vacía o
-    // borrado del GameObject seleccionado) — invalida los caches de edición
-    // de Properties pa que no arrastren punteros colgantes (GameObject /
-    // BoxCollider ya liberados) hasta la próxima selección real.
-    if (!m_selected)
+    // ScenePanel ha borrado el GameObject seleccionado — invalida los caches
+    // de edición de Properties pa que no arrastren punteros colgantes
+    // (GameObject / BoxCollider ya liberados) hasta la próxima selección real.
+    if (m_scenePanel.selectionWasDeletedThisFrame())
     {
         m_propsCachedFor = nullptr;
         m_colliderCachedFor = nullptr;

@@ -98,6 +98,7 @@ namespace DonTopo {
 void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
 {
     if (!m_open) return;
+    m_selectionDeletedThisFrame = false;
     ImGui::Begin("Scene", &m_open);
     // El root no se dibuja como nodo: la lista muestra directamente sus
     // hijos, root sigue siendo el padre real por debajo (mismo comportamiento
@@ -226,6 +227,7 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         if (selectionInSubtree)
         {
             ctx.selected = nullptr;
+            m_selectionDeletedThisFrame = true;
         }
 
         if (canUndoDelete)
