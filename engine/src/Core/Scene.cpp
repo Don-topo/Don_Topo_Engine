@@ -64,7 +64,7 @@ namespace
             {
                 // Procedural (Cube/Sphere/Plane/Capsule): no hay fichero de
                 // origen que recargar. Regenerar vía los parámetros fijos de
-                // EditorUI::createBasicShape asumiría que el mesh se creó con
+                // ScenePanel::createBasicShape asumiría que el mesh se creó con
                 // esos defaults — falso para meshes procedurales con
                 // parámetros custom (ej. el floor, Plane::create(1000.0f,
                 // floorY) en main.cpp, muy distinto del Plane 50/0 del menú
@@ -174,7 +174,7 @@ namespace
     }
 
     // Crea el Mesh procedural correspondiente a meshName (case-insensitive),
-    // con los mismos parámetros fijos que EditorUI::createBasicShape. nullptr
+    // con los mismos parámetros fijos que ScenePanel::createBasicShape. nullptr
     // si meshName no matchea ninguna de las 4 formas básicas.
     std::shared_ptr<DonTopo::Mesh> proceduralMeshByName(const std::string& meshName)
     {

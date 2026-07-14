@@ -294,7 +294,7 @@ int main()
             });
 
             // --- Gizmos: demo de depuración visual (bbox, ray, frustum) ---
-            // Los ejes ya no se dibujan fijos aquí: EditorUI::drawSelectionGizmo()
+            // Los ejes ya no se dibujan fijos aquí: ViewportPanel::drawSelectionGizmo()
             // los muestra automáticamente sobre cualquier GameObject seleccionado.
             // liveCube (capturado en el traverse de arriba, no el puntero `cube`
             // cacheado en el setup) evita un use-after-free si el usuario borró el
