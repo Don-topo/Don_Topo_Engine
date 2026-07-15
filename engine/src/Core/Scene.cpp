@@ -506,8 +506,28 @@ namespace DonTopo
             }
             else
             {
-                // Solo collider (static): empujar pose por si el editor la movió.
-                col->teleport(go->worldTransform);
+                // Solo collider (static): empujar pose SÓLO si cambió. Mover un
+                // PxRigidStatic cada frame ensucia el pruner de scene-query de
+                // PhysX (y emite warnings), así que se compara la pose actual
+                // del actor (T*R, sin escala) con la del GameObject normalizada
+                // (quitando escala) y sólo se teleporta si difieren.
+                glm::mat4 want = go->worldTransform;
+                for (int i = 0; i < 3; ++i)
+                {
+                    float len = glm::length(glm::vec3(want[i]));
+                    if (len > 1e-6f) want[i] = glm::vec4(glm::vec3(want[i]) / len, 0.0f);
+                }
+                want[3].w = 1.0f;
+                glm::mat4 have = col->getWorldTransform();
+                bool changed = false;
+                for (int i = 0; i < 4 && !changed; ++i)
+                    for (int j = 0; j < 4; ++j)
+                    {
+                        float d = have[i][j] - want[i][j];
+                        if (d < 0.0f) d = -d;
+                        if (d > 1e-4f) { changed = true; break; }
+                    }
+                if (changed) col->teleport(go->worldTransform);
             }
         });
 

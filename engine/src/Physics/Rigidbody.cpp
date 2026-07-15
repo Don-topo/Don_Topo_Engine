@@ -50,7 +50,12 @@ void Rigidbody::setUseGravity(bool enabled)
 {
     m_useGravity = enabled;
 #ifdef DT_PHYSX_ENABLED
-    if (m_actor) static_cast<PxRigidDynamic*>(m_actor)->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, !enabled);
+    if (!m_actor) return;
+    auto* a = static_cast<PxRigidDynamic*>(m_actor);
+    a->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, !enabled);
+    // Reactivar gravedad sobre un cuerpo dormido no lo despierta solo: sin
+    // wakeUp se queda congelado hasta que algo lo perturbe.
+    if (enabled && !m_isKinematic) a->wakeUp();
 #endif
 }
 
@@ -58,7 +63,12 @@ void Rigidbody::setIsKinematic(bool enabled)
 {
     m_isKinematic = enabled;
 #ifdef DT_PHYSX_ENABLED
-    if (m_actor) static_cast<PxRigidDynamic*>(m_actor)->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, enabled);
+    if (!m_actor) return;
+    auto* a = static_cast<PxRigidDynamic*>(m_actor);
+    a->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, enabled);
+    // Al pasar de kinematic a dinámico, despertarlo para que la simulación lo
+    // retome (si no, cae sólo tras la primera perturbación).
+    if (!enabled) a->wakeUp();
 #endif
 }
 

@@ -387,6 +387,12 @@ void PhysicsManager::detachRigidbody(const std::shared_ptr<Collider>& collider)
     void* actor = collider->actorHandle();
     if (actor && static_cast<PxRigidActor*>(actor)->is<PxRigidDynamic>())
         rebuildActor(collider, /*dynamic=*/false);
+    // Nota: el Rigidbody que apuntaba a este collider conserva un m_actor que
+    // ahora cuelga (el dynamic viejo fue liberado por rebuildActor). Contrato:
+    // los callers (editor "Remove Rigidbody", Lua RemoveComponent) sueltan el
+    // shared_ptr<Rigidbody> inmediatamente después de detach, así que nadie lo
+    // desreferencia. Si aparece un caller que reutilice el Rigidbody, debe
+    // re-bindear (rb->bindActor(nullptr) o attach a otro collider) antes de usarlo.
 #else
     (void)collider;
 #endif
@@ -414,6 +420,7 @@ void* PhysicsManager::rebuildActor(const std::shared_ptr<Collider>& collider, bo
     PxRigidActor* newActor = dynamic
         ? static_cast<PxRigidActor*>(physics->createRigidDynamic(pose))
         : static_cast<PxRigidActor*>(physics->createRigidStatic(pose));
+    physxCheck(newActor, "rebuildActor: createRigidActor");
     newActor->attachShape(*shape);
     shape->release();
     if (dynamic)

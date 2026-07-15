@@ -885,34 +885,34 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
                                m_editRbDrag, m_editRbAngularDrag, m_editRbConstraints };
     };
 
-    // --- Drag floats: snapshot al activar, comando al soltar ---
+    // --- Drag floats: snapshot al activar CUALQUIERA, comando al soltar
+    // CUALQUIERA. IsItemActivated/IsItemDeactivatedAfterEdit se consultan por
+    // widget y se acumulan (no una sola query final: esa sólo reflejaría el
+    // último DragFloat y dejaría Mass/Drag sin undo).
+    auto snapshotBefore = [&]() {
+        if (!m_rigidbodyDragActive)
+        {
+            m_rigidbodyDragActive = true;
+            m_rigidbodyBeforeEdit = RigidbodyState{ rb->getMass(), rb->getUseGravity(), rb->getIsKinematic(),
+                                                    rb->getDrag(), rb->getAngularDrag(), rb->getConstraints() };
+        }
+    };
     bool floatChanged = false;
+    bool floatCommitted = false;
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6);
     floatChanged |= ImGui::DragFloat("Mass", &m_editRbMass, 0.1f, 0.0001f, FLT_MAX, "%.3f");
-    if (ImGui::IsItemActivated() && !m_rigidbodyDragActive)
-    {
-        m_rigidbodyDragActive = true;
-        m_rigidbodyBeforeEdit = RigidbodyState{ rb->getMass(), rb->getUseGravity(), rb->getIsKinematic(),
-                                                rb->getDrag(), rb->getAngularDrag(), rb->getConstraints() };
-    }
+    if (ImGui::IsItemActivated()) snapshotBefore();
+    floatCommitted |= ImGui::IsItemDeactivatedAfterEdit();
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6);
     floatChanged |= ImGui::DragFloat("Drag", &m_editRbDrag, 0.01f, 0.0f, FLT_MAX, "%.3f");
-    if (ImGui::IsItemActivated() && !m_rigidbodyDragActive)
-    {
-        m_rigidbodyDragActive = true;
-        m_rigidbodyBeforeEdit = RigidbodyState{ rb->getMass(), rb->getUseGravity(), rb->getIsKinematic(),
-                                                rb->getDrag(), rb->getAngularDrag(), rb->getConstraints() };
-    }
+    if (ImGui::IsItemActivated()) snapshotBefore();
+    floatCommitted |= ImGui::IsItemDeactivatedAfterEdit();
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6);
     floatChanged |= ImGui::DragFloat("Angular Drag", &m_editRbAngularDrag, 0.01f, 0.0f, FLT_MAX, "%.3f");
-    if (ImGui::IsItemActivated() && !m_rigidbodyDragActive)
-    {
-        m_rigidbodyDragActive = true;
-        m_rigidbodyBeforeEdit = RigidbodyState{ rb->getMass(), rb->getUseGravity(), rb->getIsKinematic(),
-                                                rb->getDrag(), rb->getAngularDrag(), rb->getConstraints() };
-    }
+    if (ImGui::IsItemActivated()) snapshotBefore();
+    floatCommitted |= ImGui::IsItemDeactivatedAfterEdit();
     if (floatChanged) { rb->setMass(m_editRbMass); rb->setDrag(m_editRbDrag); rb->setAngularDrag(m_editRbAngularDrag); }
-    if (m_rigidbodyDragActive && ImGui::IsItemDeactivatedAfterEdit())
+    if (m_rigidbodyDragActive && floatCommitted)
     {
         m_rigidbodyDragActive = false;
         if (ctx.scene)
