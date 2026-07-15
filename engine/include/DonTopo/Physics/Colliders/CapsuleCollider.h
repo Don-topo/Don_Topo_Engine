@@ -36,9 +36,9 @@ public:
     void* actorHandle() const override;
     void  setActorHandle(void* actor) override;
 
-    glm::mat4 getWorldTransform() const;
-    void syncTransform(const glm::mat4& worldTransform);
-    void teleport(const glm::mat4& worldTransform);
+    glm::mat4 getWorldTransform() const override;
+    void syncTransform(const glm::mat4& worldTransform) override;
+    void teleport(const glm::mat4& worldTransform) override;
 
 protected:
     void* triggerShape() const override;

@@ -34,18 +34,18 @@ public:
 
     // Lee la pose global del actor (traslación + rotación, sin escala). El
     // motor la lee hacia el GameObject cuando hay un Rigidbody simulado.
-    glm::mat4 getWorldTransform() const;
+    glm::mat4 getWorldTransform() const override;
 
     // Empuja worldTransform hacia PhysX. Si el actor es dynamic-kinematic usa
     // setKinematicTarget; en cualquier otro caso cae a setGlobalPose.
-    void syncTransform(const glm::mat4& worldTransform);
+    void syncTransform(const glm::mat4& worldTransform) override;
 
     // Teletransporta el actor (setGlobalPose, no setKinematicTarget) sea
     // cual sea el modo, y resetea su velocidad a cero. Válido en ambos
     // modos (dinámico o kinematic) — pensado para ediciones puntuales desde
     // el Transform panel del editor, no para el empuje continuo por frame
     // (eso es syncTransform).
-    void teleport(const glm::mat4& worldTransform);
+    void teleport(const glm::mat4& worldTransform) override;
 
 protected:
     void* triggerShape() const override;

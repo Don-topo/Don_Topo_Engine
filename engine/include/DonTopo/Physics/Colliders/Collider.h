@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <unordered_set>
+#include <glm/glm.hpp>
 
 namespace DonTopo {
 
@@ -76,6 +77,17 @@ public:
     // triggerShape() interno. Lo usa PhysicsManager::rebuildActor pa
     // re-adjuntar la MISMA shape al nuevo actor tras el swap static<->dynamic.
     void* geometryShape() const { return triggerShape(); }
+
+    // Mecánica de pose del actor, polimórfica: la recorre Scene::update sobre
+    // el collider base (anyCollider) sin ramificar por tipo concreto. Cada
+    // collider las implementa idénticas sobre su m_actor.
+    //   getWorldTransform: lee pose actor -> mundo (cuerpo simulado).
+    //   syncTransform:     empuja mundo -> actor (setKinematicTarget si
+    //                      dynamic-kinematic; setGlobalPose en otro caso).
+    //   teleport:          setGlobalPose + reset de velocidad si dynamic real.
+    virtual glm::mat4 getWorldTransform() const = 0;
+    virtual void      syncTransform(const glm::mat4& worldTransform) = 0;
+    virtual void      teleport(const glm::mat4& worldTransform) = 0;
 
     // Bookkeeping de overlaps, invocado por el dispatcher de PhysicsManager.
     void beginOverlap(Collider* other);        // TOUCH_FOUND: inserta + onTriggerEnter

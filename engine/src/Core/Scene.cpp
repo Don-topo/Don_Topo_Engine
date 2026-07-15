@@ -435,46 +435,30 @@ namespace DonTopo
     void Scene::update(float /*dt*/, PhysicsManager& /*physics*/)
     {
         m_root.traverse([](GameObject* go) {
-            if (go->hasBoxCollider())
-            {
-                if (go->getBoxCollider()->isDynamic())
-                {
-                    go->worldTransform = go->getBoxCollider()->getWorldTransform();
-                    glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
-                    go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
-                }
-                else
-                    go->getBoxCollider()->syncTransform(go->worldTransform);
-            }
+            auto col = go->anyCollider();
+            if (!col) return;
 
-            if (go->hasSphereCollider())
-            {
-                if (go->getSphereCollider()->isDynamic())
-                {
-                    go->worldTransform = go->getSphereCollider()->getWorldTransform();
-                    glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
-                    go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
-                }
-                else
-                    go->getSphereCollider()->syncTransform(go->worldTransform);
-            }
+            const bool hasRb     = go->hasRigidbody();
+            const bool kinematic = hasRb && go->getRigidbody()->getIsKinematic();
+            const bool simulated = hasRb && !kinematic; // cuerpo dinámico real
 
-            if (go->hasCapsuleCollider())
+            if (simulated)
             {
-                if (go->getCapsuleCollider()->isDynamic())
-                {
-                    go->worldTransform = go->getCapsuleCollider()->getWorldTransform();
-                    glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
-                    go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
-                }
-                else
-                    go->getCapsuleCollider()->syncTransform(go->worldTransform);
+                // PhysX manda: leer pose actor -> GameObject.
+                go->worldTransform = col->getWorldTransform();
+                glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
+                go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
             }
-
-            // Plane Collider siempre es kinematic (isDynamic()==false hardcoded):
-            // nunca lee pose de PhysX, solo empuja la del GameObject.
-            if (go->hasPlaneCollider())
-                go->getPlaneCollider()->syncTransform(go->worldTransform);
+            else if (kinematic)
+            {
+                // Kinematic: empujar pose GameObject -> actor (setKinematicTarget).
+                col->syncTransform(go->worldTransform);
+            }
+            else
+            {
+                // Solo collider (static): empujar pose por si el editor la movió.
+                col->teleport(go->worldTransform);
+            }
         });
 
         // Sync física-transform corre antes de propagar transforms locales:

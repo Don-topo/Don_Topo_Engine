@@ -32,16 +32,16 @@ public:
     void  setActorHandle(void* actor) override;
 
     // Lee la pose global del actor (traslación + rotación, sin escala).
-    glm::mat4 getWorldTransform() const;
+    glm::mat4 getWorldTransform() const override;
 
     // Empuja worldTransform hacia PhysX (setKinematicTarget si dynamic-kinematic,
     // si no setGlobalPose).
-    void syncTransform(const glm::mat4& worldTransform);
+    void syncTransform(const glm::mat4& worldTransform) override;
 
     // Teletransporta el actor (setGlobalPose, no setKinematicTarget) sea
     // cual sea el modo, y resetea su velocidad a cero. Pensado para
     // ediciones puntuales desde el Transform panel del editor.
-    void teleport(const glm::mat4& worldTransform);
+    void teleport(const glm::mat4& worldTransform) override;
 
 protected:
     void* triggerShape() const override;
