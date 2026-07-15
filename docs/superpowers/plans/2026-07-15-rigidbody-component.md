@@ -963,36 +963,77 @@ git commit -m "feat(physics): serializa Rigidbody + migracion back-compat de use
 
 ---
 
-### Task 6: Editor UI — Rigidbody section + Add/Remove
+### Task 6: Editor UI — Rigidbody section (with undo) + strip collider useGravity
 
 **Files:**
+- Modify: `engine/include/DonTopo/Editor/Command.h` (add `RigidbodyState`; remove `useGravity` from collider state structs)
 - Modify: `engine/include/DonTopo/Editor/PropertiesPanel.h`
 - Modify: `engine/src/Editor/PropertiesPanel.cpp`
 
 **Interfaces:**
-- Consumes: `GameObject::hasRigidbody/getRigidbody/setRigidbody`, `Rigidbody` setters, `PhysicsManager::attachRigidbody/detachRigidbody`, `EditorContext` (`selected`, `physics`, `undo`, `pushLog`).
-- Produces: `PropertiesPanel::drawRigidbodySection(EditorContext&)`, called from the same place the collider sections are drawn; a new "Rigidbody" entry in the Add-component popup.
+- Consumes: `GameObject::hasRigidbody/getRigidbody/setRigidbody/anyCollider`, `Rigidbody` getters/setters, `PhysicsManager::attachRigidbody/detachRigidbody`, `EditorContext` (`selected`, `scene`, `physics`, `undo`, `pushLog`), `PropertyCommand<T>` (label, before, after, apply-lambda resolving the GameObject by id via `scene->findById`).
+- Produces: `PropertiesPanel::drawRigidbodySection(EditorContext&)`, called next to the collider sections; a "Rigidbody" entry in the Add-component popup. Edits are undoable via `PropertyCommand<RigidbodyState>`, exactly like the collider sections' `PropertyCommand<BoxColliderState>`.
 
-- [ ] **Step 1: Declare the section method + cache state in the header**
+**Why this task also touches colliders:** Task 2 removed `Collider::getUseGravity/setUseGravity`. The editor's collider sections still render a "Use Gravity" checkbox, carry `useGravity` in their `*ColliderState` structs, and call `setUseGravity` in their apply-lambdas. Those must all be removed here — gravity now lives on the Rigidbody. Without this, `PropertiesPanel.cpp` does not compile.
 
-In `PropertiesPanel.h`, next to `drawBoxColliderSection`, declare:
+- [ ] **Step 1: Update Command.h state structs**
+
+In `engine/include/DonTopo/Editor/Command.h`, remove the `useGravity` field from the collider snapshots and add a Rigidbody snapshot:
 ```cpp
-    void drawRigidbodySection(EditorContext& ctx);
+struct BoxColliderState     { glm::vec3 center; glm::vec3 size; bool isTrigger; };
+struct SphereColliderState  { glm::vec3 center; float radius; bool isTrigger; };
+struct CapsuleColliderState { glm::vec3 center; float radius; float height; bool isTrigger; };
+struct PlaneColliderState   { glm::vec3 center; bool isTrigger; };
+
+// Snapshot value-type del Rigidbody — T de PropertyCommand<T> en la seccion
+// Rigidbody del panel Properties.
+struct RigidbodyState {
+    float    mass;
+    bool     useGravity;
+    bool     isKinematic;
+    float    drag;
+    float    angularDrag;
+    uint32_t constraints;
+};
 ```
-Add cached edit state members (mirroring the collider caches):
+Ensure `#include <cstdint>` is present in `Command.h` (for `uint32_t`).
+
+- [ ] **Step 2: Strip "Use Gravity" from the collider sections**
+
+In `PropertiesPanel.cpp`, in each of `drawBoxColliderSection`, `drawSphereColliderSection`, `drawCapsuleColliderSection`:
+- Delete the `m_editUseGravity` / `m_editSphereUseGravity` / `m_editCapsuleUseGravity` cache assignment (the collider no longer has `getUseGravity`).
+- Delete the entire "Use Gravity" `ImGui::Checkbox(...)` block and its associated `PropertyCommand` push (the block around box lines ~430-458).
+- In each apply-lambda (`applyBoxState`, `applySphereState`, `applyCapsuleState`), delete the `go->getBoxCollider()->setUseGravity(s.useGravity);` line.
+- Update every `BoxColliderState{...}` / `SphereColliderState{...}` / `CapsuleColliderState{...}` aggregate initializer to drop the `useGravity` element (it was the 3rd field for box, matching the new struct order `{center, size, isTrigger}`).
+- Remove the now-unused `m_editUseGravity` (and sphere/capsule equivalents) members from `PropertiesPanel.h`.
+
+Also remove the `PropertiesPanel.cpp` dynamic-collider read-back guard that referenced `isDynamic()` (around line 171: `... hasBoxCollider() && ctx.selected->getBoxCollider()->isDynamic() ...`). Replace the `isDynamic()` test with `ctx.selected->hasRigidbody() && !ctx.selected->getRigidbody()->getIsKinematic()` so the panel still avoids fighting a simulated body's transform:
 ```cpp
-    const void* m_rigidbodyCachedFor = nullptr;
-    float       m_editRbMass = 1.0f;
-    bool        m_editRbUseGravity = true;
-    bool        m_editRbKinematic = false;
-    float       m_editRbDrag = 0.0f;
-    float       m_editRbAngularDrag = 0.05f;
-    uint32_t    m_editRbConstraints = 0;
+            else if (ctx.selected->hasAnyCollider()
+                     && ctx.selected->hasRigidbody()
+                     && !ctx.selected->getRigidbody()->getIsKinematic()
+                     && !m_transformDragActive)
+```
+(Adjust to the exact surrounding condition; the intent is "a simulated body drives its own transform, so don't overwrite it from the panel.")
+
+- [ ] **Step 3: Declare the Rigidbody section + cache in the header**
+
+In `PropertiesPanel.h`, next to `drawBoxColliderSection`, declare `void drawRigidbodySection(EditorContext& ctx);` and add cache + before-edit snapshot (mirroring the Box collider cache + `m_boxColliderBeforeEdit`):
+```cpp
+    const void*   m_rigidbodyCachedFor = nullptr;
+    float         m_editRbMass = 1.0f;
+    bool          m_editRbUseGravity = true;
+    bool          m_editRbKinematic = false;
+    float         m_editRbDrag = 0.0f;
+    float         m_editRbAngularDrag = 0.05f;
+    uint32_t      m_editRbConstraints = 0;
+    bool          m_rigidbodyDragActive = false;
+    RigidbodyState m_rigidbodyBeforeEdit{};
 ```
 
-- [ ] **Step 2: Implement drawRigidbodySection**
+- [ ] **Step 4: Implement drawRigidbodySection with undo**
 
-In `PropertiesPanel.cpp`, add the include `#include "DonTopo/Physics/Rigidbody.h"` and implement (immediate-apply model like the trigger checkbox; no per-field undo command to keep scope tight — matches how `isTrigger` applies directly):
+In `PropertiesPanel.cpp`, add `#include "DonTopo/Physics/Rigidbody.h"` and implement. The apply-lambda resolves the GameObject by id (surviving undo-of-delete) exactly like `applyBoxState`. Drag floats use the begin/commit snapshot pattern (`IsItemActivated` → snapshot; `IsItemDeactivatedAfterEdit` → push command); checkboxes push a command immediately with before/after:
 ```cpp
 void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
 {
@@ -1010,38 +1051,81 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
 
     if (!ImGui::CollapsingHeader("Rigidbody", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
-    if (ImGui::DragFloat("Mass", &m_editRbMass, 0.1f, 0.0001f, FLT_MAX, "%.3f"))
-        rb->setMass(m_editRbMass);
-    if (ImGui::DragFloat("Drag", &m_editRbDrag, 0.01f, 0.0f, FLT_MAX, "%.3f"))
-        rb->setDrag(m_editRbDrag);
-    if (ImGui::DragFloat("Angular Drag", &m_editRbAngularDrag, 0.01f, 0.0f, FLT_MAX, "%.3f"))
-        rb->setAngularDrag(m_editRbAngularDrag);
-    if (ImGui::Checkbox("Use Gravity", &m_editRbUseGravity))
-        rb->setUseGravity(m_editRbUseGravity);
-    if (ImGui::Checkbox("Is Kinematic", &m_editRbKinematic))
-        rb->setIsKinematic(m_editRbKinematic);
+    Scene*          scene   = ctx.scene;
+    uint64_t        id      = ctx.selected->id;
+    PhysicsManager* physics = ctx.physics;
+    (void)physics;
 
+    // Aplica un RigidbodyState al GameObject resuelto por id (sobrevive a
+    // undo-de-delete). Mismo patron que applyBoxState.
+    auto applyRbState = [scene, id](const RigidbodyState& s) {
+        GameObject* go = scene->findById(id);
+        if (!go || !go->hasRigidbody()) return;
+        auto rb2 = go->getRigidbody();
+        rb2->setMass(s.mass);
+        rb2->setUseGravity(s.useGravity);
+        rb2->setIsKinematic(s.isKinematic);
+        rb2->setDrag(s.drag);
+        rb2->setAngularDrag(s.angularDrag);
+        rb2->setConstraints(s.constraints);
+    };
+    auto currentState = [&]() {
+        return RigidbodyState{ m_editRbMass, m_editRbUseGravity, m_editRbKinematic,
+                               m_editRbDrag, m_editRbAngularDrag, m_editRbConstraints };
+    };
+
+    // --- Drag floats: snapshot al activar, comando al soltar ---
+    bool floatChanged = false;
+    floatChanged |= ImGui::DragFloat("Mass", &m_editRbMass, 0.1f, 0.0001f, FLT_MAX, "%.3f");
+    floatChanged |= ImGui::DragFloat("Drag", &m_editRbDrag, 0.01f, 0.0f, FLT_MAX, "%.3f");
+    floatChanged |= ImGui::DragFloat("Angular Drag", &m_editRbAngularDrag, 0.01f, 0.0f, FLT_MAX, "%.3f");
+    if (ImGui::IsItemActivated() && !m_rigidbodyDragActive) {
+        m_rigidbodyDragActive = true;
+        m_rigidbodyBeforeEdit = RigidbodyState{ rb->getMass(), rb->getUseGravity(), rb->getIsKinematic(),
+                                                rb->getDrag(), rb->getAngularDrag(), rb->getConstraints() };
+    }
+    if (floatChanged) { rb->setMass(m_editRbMass); rb->setDrag(m_editRbDrag); rb->setAngularDrag(m_editRbAngularDrag); }
+    if (m_rigidbodyDragActive && ImGui::IsItemDeactivatedAfterEdit()) {
+        m_rigidbodyDragActive = false;
+        ctx.undo->push(std::make_unique<PropertyCommand<RigidbodyState>>(
+            "Rigidbody de '" + ctx.selected->name + "'", m_rigidbodyBeforeEdit, currentState(), applyRbState));
+    }
+
+    // --- Checkboxes: comando inmediato con before/after ---
+    auto pushToggle = [&](const char* what, RigidbodyState before) {
+        applyRbState(currentState());
+        ctx.undo->push(std::make_unique<PropertyCommand<RigidbodyState>>(
+            std::string(what) + " de '" + ctx.selected->name + "' (Rigidbody)", before, currentState(), applyRbState));
+    };
+    {
+        RigidbodyState before = currentState();
+        if (ImGui::Checkbox("Use Gravity", &m_editRbUseGravity)) pushToggle("Use Gravity", before);
+    }
+    {
+        RigidbodyState before = currentState();
+        if (ImGui::Checkbox("Is Kinematic", &m_editRbKinematic)) pushToggle("Is Kinematic", before);
+    }
+
+    // --- Constraints ---
     ImGui::TextUnformatted("Freeze Position");
-    bool px = m_editRbConstraints & RB_FreezePositionX;
-    bool py = m_editRbConstraints & RB_FreezePositionY;
-    bool pz = m_editRbConstraints & RB_FreezePositionZ;
-    bool changed = false;
-    changed |= ImGui::Checkbox("PX", &px); ImGui::SameLine();
-    changed |= ImGui::Checkbox("PY", &py); ImGui::SameLine();
-    changed |= ImGui::Checkbox("PZ", &pz);
+    bool px = m_editRbConstraints & RB_FreezePositionX, py = m_editRbConstraints & RB_FreezePositionY, pz = m_editRbConstraints & RB_FreezePositionZ;
+    bool cbChanged = false; RigidbodyState cbBefore = currentState();
+    cbChanged |= ImGui::Checkbox("PX", &px); ImGui::SameLine();
+    cbChanged |= ImGui::Checkbox("PY", &py); ImGui::SameLine();
+    cbChanged |= ImGui::Checkbox("PZ", &pz);
     ImGui::TextUnformatted("Freeze Rotation");
-    bool rx = m_editRbConstraints & RB_FreezeRotationX;
-    bool ry = m_editRbConstraints & RB_FreezeRotationY;
-    bool rz = m_editRbConstraints & RB_FreezeRotationZ;
-    changed |= ImGui::Checkbox("RX", &rx); ImGui::SameLine();
-    changed |= ImGui::Checkbox("RY", &ry); ImGui::SameLine();
-    changed |= ImGui::Checkbox("RZ", &rz);
-    if (changed) {
+    bool rx = m_editRbConstraints & RB_FreezeRotationX, ry = m_editRbConstraints & RB_FreezeRotationY, rz = m_editRbConstraints & RB_FreezeRotationZ;
+    cbChanged |= ImGui::Checkbox("RX", &rx); ImGui::SameLine();
+    cbChanged |= ImGui::Checkbox("RY", &ry); ImGui::SameLine();
+    cbChanged |= ImGui::Checkbox("RZ", &rz);
+    if (cbChanged) {
         uint32_t mask = 0;
         if (px) mask |= RB_FreezePositionX; if (py) mask |= RB_FreezePositionY; if (pz) mask |= RB_FreezePositionZ;
         if (rx) mask |= RB_FreezeRotationX; if (ry) mask |= RB_FreezeRotationY; if (rz) mask |= RB_FreezeRotationZ;
         m_editRbConstraints = mask;
-        rb->setConstraints(mask);
+        applyRbState(currentState());
+        ctx.undo->push(std::make_unique<PropertyCommand<RigidbodyState>>(
+            "Constraints de '" + ctx.selected->name + "' (Rigidbody)", cbBefore, currentState(), applyRbState));
     }
 
     if (ImGui::Button("Remove Rigidbody")) {
@@ -1053,14 +1137,11 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
     }
 }
 ```
+Note: Add/Remove Rigidbody itself is not wrapped in an undo command here (colliders' Add/Remove are likewise direct in this codebase); the property edits are. If the reviewer flags Add/Remove-undo as required for parity, that is a plan decision — surface it, do not silently expand scope.
 
-- [ ] **Step 3: Call the section + add it to the Add-component popup**
+- [ ] **Step 5: Call the section + add it to the Add-component popup**
 
-Where the collider sections are invoked (`drawBoxColliderSection(ctx); ...`), add:
-```cpp
-            drawRigidbodySection(ctx);
-```
-In `drawAddComponentButton(ctx)` (the Add popup), add a menu entry that is disabled unless the object has a collider (a Rigidbody needs a shape) and hidden when it already has one:
+Where the collider sections are invoked (`drawBoxColliderSection(ctx); ...`), add `drawRigidbodySection(ctx);`. In `drawAddComponentButton(ctx)`, add an entry shown only when the object has a collider and no rigidbody yet (a Rigidbody needs a shape):
 ```cpp
         if (!ctx.selected->hasRigidbody() && ctx.selected->hasAnyCollider())
         {
@@ -1074,18 +1155,18 @@ In `drawAddComponentButton(ctx)` (the Add popup), add a menu entry that is disab
             }
         }
 ```
-(Follow the exact style/guards used by the existing collider entries in that popup — this snippet matches their pattern.)
+(Match the exact style/guards of the existing collider entries in that popup.)
 
-- [ ] **Step 4: Build**
+- [ ] **Step 6: Build**
 
 Run: `./build.bat`
-Expected: green. GUI behavior stays manual-verify (memory `project_gui_manual_verification_pending`).
+Expected: green (this is the first task since Task 1 where the full app + editor compiles cleanly). GUI behavior stays manual-verify (memory `project_gui_manual_verification_pending`).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add engine/include/DonTopo/Editor/PropertiesPanel.h engine/src/Editor/PropertiesPanel.cpp
-git commit -m "feat(editor): seccion Rigidbody en Properties + Add/Remove con gate de collider"
+git add engine/include/DonTopo/Editor/Command.h engine/include/DonTopo/Editor/PropertiesPanel.h engine/src/Editor/PropertiesPanel.cpp
+git commit -m "feat(editor): seccion Rigidbody con undo + quita Use Gravity de colliders"
 ```
 
 ---
