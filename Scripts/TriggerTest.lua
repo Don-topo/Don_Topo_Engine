@@ -9,6 +9,7 @@ TriggerTest = {}
 
 function TriggerTest:OnTriggerEnter(other)
     Log.Info(self.entity.name .. ": ENTER <- " .. other.name)
+	DestroyGameObject(self.entity)
 end
 
 function TriggerTest:OnTriggerExit(other)
@@ -20,3 +21,4 @@ end
 -- function TriggerTest:OnTriggerStay(other)
 --     Log.Info(self.entity.name .. ": STAY <- " .. other.name)
 -- end
+

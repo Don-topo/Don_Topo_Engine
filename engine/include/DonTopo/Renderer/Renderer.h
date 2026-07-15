@@ -49,6 +49,10 @@ namespace DonTopo {
             // Passthrough al EditorUI embebido — usado por el wiring de
             // main.cpp pa redirigir el log de ScriptManager al Log Console.
             void pushEditorLog(const std::string& m) { m_editorUI.pushExternalLog(m); }
+            // Passthrough al EditorUI embebido — el destroy de Play (ScriptManager)
+            // lo llama antes de liberar el GameObject para que el editor suelte su
+            // selección si apunta al subárbol (evita puntero colgante -> crash).
+            void notifyGameObjectDestroyed(GameObject* node) { m_editorUI.onGameObjectDestroyed(node); }
             void focusSelected(Camera& camera) { m_editorUI.focusSelected(camera); }
             void setSceneRoot(GameObject* root);
             // Libera mesh/skinnedMesh/texturas en GPU de node y todo su subárbol

@@ -150,6 +150,10 @@ int main()
             });
         });
         scriptManager.setOnDestroying([&renderer](DonTopo::GameObject* go) {
+            // Suelta la selección del editor si apunta a go o su subtree ANTES de
+            // liberar nada — si no, m_selected queda colgando y el editor crashea
+            // al dibujar Properties/gizmo el frame siguiente.
+            renderer.notifyGameObjectDestroyed(go);
             // Libera GPU del subtree completo (estático + skinned).
             renderer.removeGameObject(go);
         });

@@ -77,6 +77,13 @@ public:
     // el wiring de main.cpp: mensajes de compilación/errores de scripts).
     void pushExternalLog(const std::string& message) { m_logPanel.push(message); }
 
+    // Suelta m_selected si cae dentro del subárbol de node (incluido node).
+    // Lo llama el destroy de Play (ScriptManager, vía Renderer) JUSTO antes de
+    // liberar el GameObject: de lo contrario el editor conservaría un puntero
+    // colgante y crashearía al dibujar Properties/gizmo el frame siguiente.
+    // Es el mismo saneo que hace ScenePanel al borrar desde la jerarquía.
+    void onGameObjectDestroyed(GameObject* node);
+
 private:
     static constexpr float kToolbarHeight = 30.0f;
     // Ctrl+Z/Ctrl+Y — no-op si !m_scene, si m_isPlaying, o si algún widget de

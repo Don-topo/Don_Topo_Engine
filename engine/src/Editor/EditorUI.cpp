@@ -66,6 +66,18 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     m_scriptEditor->draw();
 }
 
+void EditorUI::onGameObjectDestroyed(GameObject* node)
+{
+    if (!node || !m_selected) return;
+    bool selectionInSubtree = false;
+    node->traverse([&](GameObject* n) { if (n == m_selected) selectionInSubtree = true; });
+    if (selectionInSubtree)
+    {
+        m_selected = nullptr;               // el objeto va a liberarse: no dejar puntero colgante
+        m_propertiesPanel.invalidateCaches(); // los caches de edición apuntaban a componentes ya liberados
+    }
+}
+
 void EditorUI::handleUndoRedoShortcut()
 {
     if (!m_scene || m_isPlaying || !ImGui::GetIO().KeyCtrl || ImGui::GetIO().WantTextInput)
