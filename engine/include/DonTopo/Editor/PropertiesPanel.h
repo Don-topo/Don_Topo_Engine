@@ -78,6 +78,7 @@ private:
     glm::vec3    m_editColliderCenter{0.0f};
     glm::vec3    m_editColliderSize{50.0f};
     bool         m_editUseGravity = false;
+    bool         m_editIsTrigger = false;
     bool         m_colliderDragActive = false;
     // Snapshot tomado al iniciar un drag de Center/Size — "before" del
     // PropertyCommand<BoxColliderState> que se empuja al confirmar.
@@ -88,6 +89,7 @@ private:
     glm::vec3       m_editSphereCenter{0.0f};
     float           m_editSphereRadius{25.0f};
     bool            m_editSphereUseGravity = false;
+    bool            m_editSphereIsTrigger = false;
     bool            m_sphereColliderDragActive = false;
     SphereColliderState m_sphereColliderBeforeEdit{};
 
@@ -97,12 +99,14 @@ private:
     float            m_editCapsuleRadius{15.0f};
     float            m_editCapsuleHeight{50.0f};
     bool             m_editCapsuleUseGravity = false;
+    bool             m_editCapsuleIsTrigger = false;
     bool             m_capsuleColliderDragActive = false;
     CapsuleColliderState m_capsuleColliderBeforeEdit{};
 
     // Plane Collider – solo Center (sin Size/Use Gravity, siempre estático).
     PlaneCollider* m_planeColliderCachedFor = nullptr;
     glm::vec3      m_editPlaneCenter{0.0f};
+    bool           m_editPlaneIsTrigger = false;
     bool           m_planeColliderDragActive = false;
     PlaneColliderState m_planeColliderBeforeEdit{};
 

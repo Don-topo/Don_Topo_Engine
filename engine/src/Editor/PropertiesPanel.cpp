@@ -352,6 +352,7 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
         m_editColliderCenter = bc->getCenter();
         m_editColliderSize   = bc->getHalfExtents() * 2.0f;
         m_editUseGravity     = bc->getUseGravity();
+        m_editIsTrigger      = bc->isTrigger();
         m_colliderCachedFor  = bc;
     }
     else if (bc->isDynamic() && !m_colliderDragActive)
@@ -364,12 +365,14 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
 
     Scene* scene = ctx.scene;
     uint64_t id = ctx.selected->id;
-    auto applyBoxState = [scene, id](const BoxColliderState& s) {
+    PhysicsManager* physics = ctx.physics;
+    auto applyBoxState = [scene, id, physics](const BoxColliderState& s) {
         GameObject* go = scene->findById(id);
         if (!go || !go->hasBoxCollider()) return;
         go->getBoxCollider()->setCenter(s.center);
         go->getBoxCollider()->setHalfExtents(s.size * 0.5f);
         go->getBoxCollider()->setUseGravity(s.useGravity);
+        if (physics) physics->setTrigger(go->getBoxCollider(), s.isTrigger);
     };
 
     ImGui::Separator();
@@ -433,10 +436,26 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
                      "' (Box Collider) " + (m_editUseGravity ? "activado" : "desactivado"));
             if (ctx.scene)
             {
-                BoxColliderState before{ m_editColliderCenter, m_editColliderSize, oldGravity };
-                BoxColliderState after{ m_editColliderCenter, m_editColliderSize, m_editUseGravity };
+                BoxColliderState before{ m_editColliderCenter, m_editColliderSize, oldGravity, m_editIsTrigger };
+                BoxColliderState after{ m_editColliderCenter, m_editColliderSize, m_editUseGravity, m_editIsTrigger };
                 ctx.undo->push(std::make_unique<PropertyCommand<BoxColliderState>>(
                     "Use Gravity de '" + ctx.selected->name + "' (Box Collider)", before, after, applyBoxState));
+            }
+        }
+
+        bool oldTrigger = m_editIsTrigger;
+        if (ImGui::Checkbox("Is Trigger", &m_editIsTrigger))
+        {
+            if (ctx.physics)
+                ctx.physics->setTrigger(ctx.selected->getBoxCollider(), m_editIsTrigger);
+            ctx.pushLog(std::string("Is Trigger de '") + ctx.selected->name +
+                     "' (Box Collider) " + (m_editIsTrigger ? "activado" : "desactivado"));
+            if (ctx.scene)
+            {
+                BoxColliderState before{ m_editColliderCenter, m_editColliderSize, m_editUseGravity, oldTrigger };
+                BoxColliderState after{ m_editColliderCenter, m_editColliderSize, m_editUseGravity, m_editIsTrigger };
+                ctx.undo->push(std::make_unique<PropertyCommand<BoxColliderState>>(
+                    "Is Trigger de '" + ctx.selected->name + "' (Box Collider)", before, after, applyBoxState));
             }
         }
 
@@ -446,7 +465,7 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
     m_colliderDragActive = dragActive;
 
     if (activated)
-        m_boxColliderBeforeEdit = BoxColliderState{ m_editColliderCenter, m_editColliderSize, m_editUseGravity };
+        m_boxColliderBeforeEdit = BoxColliderState{ m_editColliderCenter, m_editColliderSize, m_editUseGravity, m_editIsTrigger };
 
     if (centerCommitted)
         ctx.pushLog("Center de '" + ctx.selected->name + "' (Box Collider) cambiado a " + formatVec3(m_editColliderCenter));
@@ -463,7 +482,7 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
     if ((centerCommitted || sizeCommitted) && ctx.scene)
     {
         BoxColliderState before = m_boxColliderBeforeEdit;
-        BoxColliderState after{ m_editColliderCenter, m_editColliderSize, m_editUseGravity };
+        BoxColliderState after{ m_editColliderCenter, m_editColliderSize, m_editUseGravity, m_editIsTrigger };
         ctx.undo->push(std::make_unique<PropertyCommand<BoxColliderState>>(
             "Box Collider de '" + ctx.selected->name + "'", before, after, applyBoxState));
     }
@@ -491,6 +510,7 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
         m_editSphereCenter        = sc->getCenter();
         m_editSphereRadius        = sc->getRadius();
         m_editSphereUseGravity    = sc->getUseGravity();
+        m_editSphereIsTrigger     = sc->isTrigger();
         m_sphereColliderCachedFor = sc;
     }
     else if (sc->isDynamic() && !m_sphereColliderDragActive)
@@ -501,12 +521,14 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
 
     Scene* scene = ctx.scene;
     uint64_t id = ctx.selected->id;
-    auto applySphereState = [scene, id](const SphereColliderState& s) {
+    PhysicsManager* physics = ctx.physics;
+    auto applySphereState = [scene, id, physics](const SphereColliderState& s) {
         GameObject* go = scene->findById(id);
         if (!go || !go->hasSphereCollider()) return;
         go->getSphereCollider()->setCenter(s.center);
         go->getSphereCollider()->setRadius(s.radius);
         go->getSphereCollider()->setUseGravity(s.useGravity);
+        if (physics) physics->setTrigger(go->getSphereCollider(), s.isTrigger);
     };
 
     ImGui::Separator();
@@ -558,10 +580,26 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
                      "' (Sphere Collider) " + (m_editSphereUseGravity ? "activado" : "desactivado"));
             if (ctx.scene)
             {
-                SphereColliderState before{ m_editSphereCenter, m_editSphereRadius, oldGravity };
-                SphereColliderState after{ m_editSphereCenter, m_editSphereRadius, m_editSphereUseGravity };
+                SphereColliderState before{ m_editSphereCenter, m_editSphereRadius, oldGravity, m_editSphereIsTrigger };
+                SphereColliderState after{ m_editSphereCenter, m_editSphereRadius, m_editSphereUseGravity, m_editSphereIsTrigger };
                 ctx.undo->push(std::make_unique<PropertyCommand<SphereColliderState>>(
                     "Use Gravity de '" + ctx.selected->name + "' (Sphere Collider)", before, after, applySphereState));
+            }
+        }
+
+        bool oldTrigger = m_editSphereIsTrigger;
+        if (ImGui::Checkbox("Is Trigger", &m_editSphereIsTrigger))
+        {
+            if (ctx.physics)
+                ctx.physics->setTrigger(ctx.selected->getSphereCollider(), m_editSphereIsTrigger);
+            ctx.pushLog(std::string("Is Trigger de '") + ctx.selected->name +
+                     "' (Sphere Collider) " + (m_editSphereIsTrigger ? "activado" : "desactivado"));
+            if (ctx.scene)
+            {
+                SphereColliderState before{ m_editSphereCenter, m_editSphereRadius, m_editSphereUseGravity, oldTrigger };
+                SphereColliderState after{ m_editSphereCenter, m_editSphereRadius, m_editSphereUseGravity, m_editSphereIsTrigger };
+                ctx.undo->push(std::make_unique<PropertyCommand<SphereColliderState>>(
+                    "Is Trigger de '" + ctx.selected->name + "' (Sphere Collider)", before, after, applySphereState));
             }
         }
 
@@ -571,7 +609,7 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
     m_sphereColliderDragActive = dragActive;
 
     if (activated)
-        m_sphereColliderBeforeEdit = SphereColliderState{ m_editSphereCenter, m_editSphereRadius, m_editSphereUseGravity };
+        m_sphereColliderBeforeEdit = SphereColliderState{ m_editSphereCenter, m_editSphereRadius, m_editSphereUseGravity, m_editSphereIsTrigger };
 
     if (centerCommitted)
         ctx.pushLog("Center de '" + ctx.selected->name + "' (Sphere Collider) cambiado a " + formatVec3(m_editSphereCenter));
@@ -588,7 +626,7 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
     if ((centerCommitted || radiusCommitted) && ctx.scene)
     {
         SphereColliderState before = m_sphereColliderBeforeEdit;
-        SphereColliderState after{ m_editSphereCenter, m_editSphereRadius, m_editSphereUseGravity };
+        SphereColliderState after{ m_editSphereCenter, m_editSphereRadius, m_editSphereUseGravity, m_editSphereIsTrigger };
         ctx.undo->push(std::make_unique<PropertyCommand<SphereColliderState>>(
             "Sphere Collider de '" + ctx.selected->name + "'", before, after, applySphereState));
     }
@@ -617,6 +655,7 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
         m_editCapsuleRadius        = cc->getRadius();
         m_editCapsuleHeight        = cc->getHalfHeight() * 2.0f;
         m_editCapsuleUseGravity    = cc->getUseGravity();
+        m_editCapsuleIsTrigger     = cc->isTrigger();
         m_capsuleColliderCachedFor = cc;
     }
     else if (cc->isDynamic() && !m_capsuleColliderDragActive)
@@ -628,13 +667,15 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
 
     Scene* scene = ctx.scene;
     uint64_t id = ctx.selected->id;
-    auto applyCapsuleState = [scene, id](const CapsuleColliderState& s) {
+    PhysicsManager* physics = ctx.physics;
+    auto applyCapsuleState = [scene, id, physics](const CapsuleColliderState& s) {
         GameObject* go = scene->findById(id);
         if (!go || !go->hasCapsuleCollider()) return;
         go->getCapsuleCollider()->setCenter(s.center);
         go->getCapsuleCollider()->setRadius(s.radius);
         go->getCapsuleCollider()->setHalfHeight(s.height * 0.5f);
         go->getCapsuleCollider()->setUseGravity(s.useGravity);
+        if (physics) physics->setTrigger(go->getCapsuleCollider(), s.isTrigger);
     };
 
     ImGui::Separator();
@@ -695,10 +736,26 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
                      "' (Capsule Collider) " + (m_editCapsuleUseGravity ? "activado" : "desactivado"));
             if (ctx.scene)
             {
-                CapsuleColliderState before{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, oldGravity };
-                CapsuleColliderState after{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleUseGravity };
+                CapsuleColliderState before{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, oldGravity, m_editCapsuleIsTrigger };
+                CapsuleColliderState after{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleUseGravity, m_editCapsuleIsTrigger };
                 ctx.undo->push(std::make_unique<PropertyCommand<CapsuleColliderState>>(
                     "Use Gravity de '" + ctx.selected->name + "' (Capsule Collider)", before, after, applyCapsuleState));
+            }
+        }
+
+        bool oldTrigger = m_editCapsuleIsTrigger;
+        if (ImGui::Checkbox("Is Trigger", &m_editCapsuleIsTrigger))
+        {
+            if (ctx.physics)
+                ctx.physics->setTrigger(ctx.selected->getCapsuleCollider(), m_editCapsuleIsTrigger);
+            ctx.pushLog(std::string("Is Trigger de '") + ctx.selected->name +
+                     "' (Capsule Collider) " + (m_editCapsuleIsTrigger ? "activado" : "desactivado"));
+            if (ctx.scene)
+            {
+                CapsuleColliderState before{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleUseGravity, oldTrigger };
+                CapsuleColliderState after{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleUseGravity, m_editCapsuleIsTrigger };
+                ctx.undo->push(std::make_unique<PropertyCommand<CapsuleColliderState>>(
+                    "Is Trigger de '" + ctx.selected->name + "' (Capsule Collider)", before, after, applyCapsuleState));
             }
         }
 
@@ -708,7 +765,7 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
     m_capsuleColliderDragActive = dragActive;
 
     if (activated)
-        m_capsuleColliderBeforeEdit = CapsuleColliderState{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleUseGravity };
+        m_capsuleColliderBeforeEdit = CapsuleColliderState{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleUseGravity, m_editCapsuleIsTrigger };
 
     if (centerCommitted)
         ctx.pushLog("Center de '" + ctx.selected->name + "' (Capsule Collider) cambiado a " + formatVec3(m_editCapsuleCenter));
@@ -728,7 +785,7 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
     if ((centerCommitted || radiusCommitted || heightCommitted) && ctx.scene)
     {
         CapsuleColliderState before = m_capsuleColliderBeforeEdit;
-        CapsuleColliderState after{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleUseGravity };
+        CapsuleColliderState after{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleUseGravity, m_editCapsuleIsTrigger };
         ctx.undo->push(std::make_unique<PropertyCommand<CapsuleColliderState>>(
             "Capsule Collider de '" + ctx.selected->name + "'", before, after, applyCapsuleState));
     }
@@ -754,15 +811,18 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
     if (m_planeColliderCachedFor != pc)
     {
         m_editPlaneCenter        = pc->getCenter();
+        m_editPlaneIsTrigger     = pc->isTrigger();
         m_planeColliderCachedFor = pc;
     }
 
     Scene* scene = ctx.scene;
     uint64_t id = ctx.selected->id;
-    auto applyPlaneState = [scene, id](const PlaneColliderState& s) {
+    PhysicsManager* physics = ctx.physics;
+    auto applyPlaneState = [scene, id, physics](const PlaneColliderState& s) {
         GameObject* go = scene->findById(id);
         if (!go || !go->hasPlaneCollider()) return;
         go->getPlaneCollider()->setCenter(s.center);
+        if (physics) physics->setTrigger(go->getPlaneCollider(), s.isTrigger);
     };
 
     ImGui::Separator();
@@ -797,13 +857,29 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
         activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
+        bool oldTrigger = m_editPlaneIsTrigger;
+        if (ImGui::Checkbox("Is Trigger", &m_editPlaneIsTrigger))
+        {
+            if (ctx.physics)
+                ctx.physics->setTrigger(ctx.selected->getPlaneCollider(), m_editPlaneIsTrigger);
+            ctx.pushLog(std::string("Is Trigger de '") + ctx.selected->name +
+                     "' (Plane Collider) " + (m_editPlaneIsTrigger ? "activado" : "desactivado"));
+            if (ctx.scene)
+            {
+                PlaneColliderState before{ m_editPlaneCenter, oldTrigger };
+                PlaneColliderState after{ m_editPlaneCenter, m_editPlaneIsTrigger };
+                ctx.undo->push(std::make_unique<PropertyCommand<PlaneColliderState>>(
+                    "Is Trigger de '" + ctx.selected->name + "' (Plane Collider)", before, after, applyPlaneState));
+            }
+        }
+
         ImGui::TreePop();
     }
 
     m_planeColliderDragActive = dragActive;
 
     if (activated)
-        m_planeColliderBeforeEdit = PlaneColliderState{ m_editPlaneCenter };
+        m_planeColliderBeforeEdit = PlaneColliderState{ m_editPlaneCenter, m_editPlaneIsTrigger };
 
     if (centerCommitted)
         ctx.pushLog("Center de '" + ctx.selected->name + "' (Plane Collider) cambiado a " + formatVec3(m_editPlaneCenter));
@@ -814,7 +890,7 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
     if (centerCommitted && ctx.scene)
     {
         PlaneColliderState before = m_planeColliderBeforeEdit;
-        PlaneColliderState after{ m_editPlaneCenter };
+        PlaneColliderState after{ m_editPlaneCenter, m_editPlaneIsTrigger };
         ctx.undo->push(std::make_unique<PropertyCommand<PlaneColliderState>>(
             "Plane Collider de '" + ctx.selected->name + "'", before, after, applyPlaneState));
     }
@@ -1179,6 +1255,8 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             ctx.selected->setBoxCollider(ctx.physics->createBoxColliderComponent(
                 glm::vec3(25.0f, 25.0f, 25.0f), glm::vec3(0.0f),
                 ctx.selected->worldTransform, /*useGravity=*/false));
+            // Owner opaco = GameObject, para que TriggerEvent.other lo resuelva.
+            ctx.selected->getBoxCollider()->setOwner(ctx.selected);
             m_colliderCachedFor = nullptr;
             ctx.pushLog("Componente Box Collider añadido a '" + ctx.selected->name + "'");
         }
@@ -1187,6 +1265,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         {
             ctx.selected->setSphereCollider(ctx.physics->createSphereColliderComponent(
                 25.0f, glm::vec3(0.0f), ctx.selected->worldTransform, /*useGravity=*/false));
+            ctx.selected->getSphereCollider()->setOwner(ctx.selected);
             m_sphereColliderCachedFor = nullptr;
             ctx.pushLog("Componente Sphere Collider añadido a '" + ctx.selected->name + "'");
         }
@@ -1195,6 +1274,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         {
             ctx.selected->setCapsuleCollider(ctx.physics->createCapsuleColliderComponent(
                 15.0f, 25.0f, glm::vec3(0.0f), ctx.selected->worldTransform, /*useGravity=*/false));
+            ctx.selected->getCapsuleCollider()->setOwner(ctx.selected);
             m_capsuleColliderCachedFor = nullptr;
             ctx.pushLog("Componente Capsule Collider añadido a '" + ctx.selected->name + "'");
         }
@@ -1203,6 +1283,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         {
             ctx.selected->setPlaneCollider(ctx.physics->createPlaneColliderComponent(
                 glm::vec3(0.0f), ctx.selected->worldTransform));
+            ctx.selected->getPlaneCollider()->setOwner(ctx.selected);
             m_planeColliderCachedFor = nullptr;
             ctx.pushLog("Componente Plane Collider añadido a '" + ctx.selected->name + "'");
         }

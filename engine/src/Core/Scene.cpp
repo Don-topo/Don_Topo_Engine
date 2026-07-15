@@ -84,14 +84,16 @@ namespace
             const auto& c = node.getBoxCollider();
             j["boxCollider"] = { {"halfExtents", vec3ToJson(c->getHalfExtents())},
                                   {"center", vec3ToJson(c->getCenter())},
-                                  {"useGravity", c->getUseGravity()} };
+                                  {"useGravity", c->getUseGravity()},
+                                  {"isTrigger", c->isTrigger()} };
         }
         if (node.hasSphereCollider())
         {
             const auto& c = node.getSphereCollider();
             j["sphereCollider"] = { {"radius", c->getRadius()},
                                      {"center", vec3ToJson(c->getCenter())},
-                                     {"useGravity", c->getUseGravity()} };
+                                     {"useGravity", c->getUseGravity()},
+                                     {"isTrigger", c->isTrigger()} };
         }
         if (node.hasCapsuleCollider())
         {
@@ -99,12 +101,14 @@ namespace
             j["capsuleCollider"] = { {"radius", c->getRadius()},
                                       {"halfHeight", c->getHalfHeight()},
                                       {"center", vec3ToJson(c->getCenter())},
-                                      {"useGravity", c->getUseGravity()} };
+                                      {"useGravity", c->getUseGravity()},
+                                      {"isTrigger", c->isTrigger()} };
         }
         if (node.hasPlaneCollider())
         {
             const auto& c = node.getPlaneCollider();
-            j["planeCollider"] = { {"center", vec3ToJson(c->getCenter())} };
+            j["planeCollider"] = { {"center", vec3ToJson(c->getCenter())},
+                                    {"isTrigger", c->isTrigger()} };
         }
         if (node.hasAudioClip())
         {
@@ -263,6 +267,8 @@ namespace
             node->setBoxCollider(physics.createBoxColliderComponent(
                 jsonToVec3(c.at("halfExtents")), jsonToVec3(c.at("center")),
                 node->worldTransform, c.at("useGravity").get<bool>()));
+            node->getBoxCollider()->setOwner(node);
+            physics.setTrigger(node->getBoxCollider(), c.value("isTrigger", false));
         }
         if (j.contains("sphereCollider"))
         {
@@ -270,6 +276,8 @@ namespace
             node->setSphereCollider(physics.createSphereColliderComponent(
                 c.at("radius").get<float>(), jsonToVec3(c.at("center")),
                 node->worldTransform, c.at("useGravity").get<bool>()));
+            node->getSphereCollider()->setOwner(node);
+            physics.setTrigger(node->getSphereCollider(), c.value("isTrigger", false));
         }
         if (j.contains("capsuleCollider"))
         {
@@ -277,12 +285,16 @@ namespace
             node->setCapsuleCollider(physics.createCapsuleColliderComponent(
                 c.at("radius").get<float>(), c.at("halfHeight").get<float>(),
                 jsonToVec3(c.at("center")), node->worldTransform, c.at("useGravity").get<bool>()));
+            node->getCapsuleCollider()->setOwner(node);
+            physics.setTrigger(node->getCapsuleCollider(), c.value("isTrigger", false));
         }
         if (j.contains("planeCollider"))
         {
             const auto& c = j["planeCollider"];
             node->setPlaneCollider(physics.createPlaneColliderComponent(
                 jsonToVec3(c.at("center")), node->worldTransform));
+            node->getPlaneCollider()->setOwner(node);
+            physics.setTrigger(node->getPlaneCollider(), c.value("isTrigger", false));
         }
         if (j.contains("audioClip"))
         {

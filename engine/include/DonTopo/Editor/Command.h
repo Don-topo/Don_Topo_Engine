@@ -46,10 +46,10 @@ private:
 
 // Snapshots value-type pa cada tipo de collider — T de PropertyCommand<T>
 // en las secciones Box/Sphere/Capsule/Plane Collider del panel Properties.
-struct BoxColliderState     { glm::vec3 center; glm::vec3 size; bool useGravity; };
-struct SphereColliderState  { glm::vec3 center; float radius; bool useGravity; };
-struct CapsuleColliderState { glm::vec3 center; float radius; float height; bool useGravity; };
-struct PlaneColliderState   { glm::vec3 center; };
+struct BoxColliderState     { glm::vec3 center; glm::vec3 size; bool useGravity; bool isTrigger; };
+struct SphereColliderState  { glm::vec3 center; float radius; bool useGravity; bool isTrigger; };
+struct CapsuleColliderState { glm::vec3 center; float radius; float height; bool useGravity; bool isTrigger; };
+struct PlaneColliderState   { glm::vec3 center; bool isTrigger; };
 
 class ReparentCommand : public ICommand {
 public:
