@@ -4,19 +4,18 @@
 
 namespace DonTopo {
 
-// Componente único de física de tipo caja. Siempre respaldado por un
-// physx::PxRigidDynamic (nunca PxRigidStatic): con useGravity=false el actor
-// queda kinematic + gravedad desactivada (se mueve empujado desde el
-// GameObject); con useGravity=true PhysX lo simula normal y su pose se lee
-// de vuelta hacia el GameObject cada frame. Togglear useGravity solo cambia
-// flags del actor existente, nunca lo destruye/recrea.
+// Componente único de física de tipo caja. Respaldado por un physx::PxRigidStatic
+// (sin Rigidbody) o un physx::PxRigidDynamic (con Rigidbody). El collider POSEE
+// su actor (lo libera en el dtor); PhysicsManager reconstruye el actor al
+// pasar de static a dynamic o viceversa (attach/detachRigidbody). La política
+// de gravedad/kinematic ya NO vive aquí: vive en el Rigidbody.
 class BoxCollider : public Collider {
 public:
-    // actor: physx::PxRigidDynamic* ya creado y añadido a la escena por
-    // PhysicsManager. shape: physx::PxShape* de geometría caja adjunta a ese
-    // actor, con localPose ya puesto a partir de center.
+    // actor: physx::PxRigidStatic* o PxRigidDynamic* ya creado y añadido a la
+    // escena por PhysicsManager. shape: physx::PxShape* de geometría caja
+    // adjunta a ese actor, con localPose ya puesto a partir de center.
     BoxCollider(void* actor, void* shape, const glm::vec3& halfExtents,
-                const glm::vec3& center, bool useGravity);
+                const glm::vec3& center);
     ~BoxCollider();
 
     BoxCollider(const BoxCollider&)            = delete;
@@ -26,27 +25,19 @@ public:
     void setCenter(const glm::vec3& center);
     // Medio-tamaño de la caja (PxShape::setGeometry con nueva PxBoxGeometry).
     void setHalfExtents(const glm::vec3& halfExtents);
-    // true: actor dinámico normal (cae con la gravedad de la escena).
-    // false: actor kinematic + gravedad desactivada (no cae, se empuja
-    // desde el GameObject vía syncTransform).
-    void setUseGravity(bool enabled);
 
     glm::vec3 getCenter() const       { return m_center; }
     glm::vec3 getHalfExtents() const  { return m_halfExtents; }
-    bool      getUseGravity() const   { return m_useGravity; }
 
-    // true si el motor debe LEER la pose de PhysX hacia el GameObject
-    // (getWorldTransform); false si debe EMPUJAR la pose del GameObject
-    // hacia PhysX (syncTransform).
-    bool isDynamic() const { return m_useGravity; }
+    void* actorHandle() const override;
+    void  setActorHandle(void* actor) override;
 
-    // Lee physx::PxRigidDynamic::getGlobalPose() (traslación + rotación,
-    // sin escala). Solo válido cuando isDynamic() es true.
+    // Lee la pose global del actor (traslación + rotación, sin escala). El
+    // motor la lee hacia el GameObject cuando hay un Rigidbody simulado.
     glm::mat4 getWorldTransform() const;
 
-    // Empuja worldTransform hacia PhysX vía setKinematicTarget (traslación +
-    // rotación; la escala se ignora). Solo válido cuando isDynamic() es
-    // false.
+    // Empuja worldTransform hacia PhysX. Si el actor es dynamic-kinematic usa
+    // setKinematicTarget; en cualquier otro caso cae a setGlobalPose.
     void syncTransform(const glm::mat4& worldTransform);
 
     // Teletransporta el actor (setGlobalPose, no setKinematicTarget) sea
@@ -61,12 +52,11 @@ protected:
 
 private:
 #ifdef DT_PHYSX_ENABLED
-    void* m_actor = nullptr; // physx::PxRigidDynamic*
+    void* m_actor = nullptr; // physx::PxRigidActor* (static o dynamic)
     void* m_shape = nullptr; // physx::PxShape*
 #endif
     glm::vec3 m_halfExtents;
     glm::vec3 m_center;
-    bool      m_useGravity;
 };
 
 } // namespace DonTopo

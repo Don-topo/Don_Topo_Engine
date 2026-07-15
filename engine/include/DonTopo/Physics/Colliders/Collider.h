@@ -65,6 +65,18 @@ public:
     // avisar de su destrucción y purgarse de los overlaps de otros triggers.
     void setManager(PhysicsManager* manager) { m_manager = manager; }
 
+    // Actor PhysX subyacente (PxRigidStatic* o PxRigidDynamic*), como void*.
+    // Lo usa PhysicsManager::rebuildActor pa reasignar el actor tras cambiar
+    // de tipo (static <-> dynamic). El collider sigue siendo el DUEÑO: lo
+    // libera en su dtor.
+    virtual void* actorHandle() const = 0;
+    virtual void  setActorHandle(void* actor) = 0;
+
+    // physx::PxShape* del collider concreto (como void*), reutiliza el
+    // triggerShape() interno. Lo usa PhysicsManager::rebuildActor pa
+    // re-adjuntar la MISMA shape al nuevo actor tras el swap static<->dynamic.
+    void* geometryShape() const { return triggerShape(); }
+
     // Bookkeeping de overlaps, invocado por el dispatcher de PhysicsManager.
     void beginOverlap(Collider* other);        // TOUCH_FOUND: inserta + onTriggerEnter
     void endOverlap(Collider* other);          // TOUCH_LOST : borra   + onTriggerExit

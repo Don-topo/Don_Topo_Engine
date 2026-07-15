@@ -5,10 +5,9 @@
 namespace DonTopo {
 
 // Componente único de física de tipo plano infinito. A diferencia de
-// Box/Sphere/Capsule, siempre es kinematic + gravedad desactivada (un plano
-// "cayendo" no tiene sentido físico) — no expone toggle Use Gravity.
-// isDynamic() retorna false hardcoded: el motor siempre empuja la pose del
-// GameObject hacia PhysX (syncTransform), nunca lee de vuelta.
+// Box/Sphere/Capsule, nunca lleva Rigidbody (un plano "cayendo" no tiene
+// sentido físico): su actor siempre es kinematic. El motor empuja la pose del
+// GameObject hacia PhysX (teleport), nunca lee de vuelta.
 class PlaneCollider : public Collider {
 public:
     // actor/shape ya creados por PhysicsManager, con localPose ya puesto a
@@ -25,7 +24,9 @@ public:
     void setCenter(const glm::vec3& center);
 
     glm::vec3 getCenter() const { return m_center; }
-    bool isDynamic() const { return false; }
+
+    void* actorHandle() const override;
+    void  setActorHandle(void* actor) override;
 
     glm::mat4 getWorldTransform() const;
     void syncTransform(const glm::mat4& worldTransform);
