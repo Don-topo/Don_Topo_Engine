@@ -498,6 +498,18 @@ namespace DonTopo::ScriptBindings
                 mgr.queueDestroy(deref(e));
             };
 
+            // Global estilo Unity Destroy(): destruye el GameObject y todo su
+            // subtree durante Play. Misma cola diferida que Scene.Destroy — el
+            // teardown (OnDestroy en scripts, liberación de GPU vía
+            // m_onDestroying, destructor de GameObject que suelta colliders/
+            // audio y lo saca de los managers) lo procesa el lifecycle al final
+            // del frame. Diferido a propósito: destruir en mitad de Update
+            // rompería la iteración del lifecycle. deref valida que la entity
+            // siga viva (error Lua si ya fue destruida).
+            lua["DestroyGameObject"] = [&mgr](const LuaEntity& e) {
+                mgr.queueDestroy(deref(e));
+            };
+
             sceneTable["Instantiate"] = [&mgr](const LuaEntity& src,
                                                sol::optional<LuaEntity> parent) -> sol::object {
                 if (!mgr.scene() || !mgr.physics() || !mgr.audioManager()) return sol::nil;

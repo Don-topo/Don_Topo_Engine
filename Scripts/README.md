@@ -112,8 +112,14 @@ Up/Down/Left/Right/A..Z/Num0..Num9`, `MouseButton.Left/Right/Middle`.
 | --- | --- |
 | `Scene.Find(name)` | Primer GameObject con ese nombre (excluye la raíz), o `nil` |
 | `Scene.CreateGameObject(name, parent?)` | Crea un GameObject nuevo, opcionalmente hijo de `parent` |
-| `Scene.Destroy(entity)` | Encola destrucción (procesada al final del frame) |
+| `Scene.Destroy(entity)` | Encola destrucción (procesada al final del frame). Alias interno de `DestroyGameObject` |
 | `Scene.Instantiate(entity, parent?)` | Clona un GameObject (incl. sub-árbol, componentes, scripts); `Awake` se llama de inmediato, `Start` en el siguiente lifecycle update |
+
+## Globales
+
+| Función | Descripción |
+| --- | --- |
+| `DestroyGameObject(entity)` | Destruye el GameObject y todo su sub-árbol durante Play: llama `OnDestroy` en sus scripts, libera los meshes de GPU y suelta colliders/audio (sale de todos los managers). Diferido al final del frame — llamarlo dentro de `Update` es seguro. `entity` puede ser `self.entity` (auto-destrucción) u otra entity. Error Lua si la entity ya fue destruida |
 
 ## Colliders — BoxCollider / SphereCollider / CapsuleCollider / PlaneCollider
 

@@ -12,6 +12,9 @@ const std::vector<std::string>& luaApiSymbols()
 
         // Globals
         "print",
+        // DestroyGameObject(entity) — destruye el GameObject y su subtree en
+        // Play (diferido a fin de frame). Ver Scene / README.
+        "DestroyGameObject",
 
         // self — instancia del script (parámetro implícito de las funciones
         // Script:Método). 'self.entity' es el único campo inyectado por
