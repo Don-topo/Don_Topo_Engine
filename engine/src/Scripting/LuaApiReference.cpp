@@ -19,9 +19,12 @@ const std::vector<std::string>& luaApiSymbols()
         // de campos son los definidos por el propio script (no listables).
         "self", "self.entity",
 
-        // Callbacks de trigger — los define el script (function Script:Nombre)
-        // y el motor los llama cuando otro collider entra/permanece/sale de un
-        // collider marcado Is Trigger. Reciben la Entity que lo provocó.
+        // Callbacks de lifecycle — los define el script (function Script:Nombre)
+        // y el motor los llama en Play Mode (ver ScriptManager). Awake/Start una
+        // vez; Update/LateUpdate cada frame; FixedUpdate a paso fijo; OnDestroy
+        // al destruir; OnTrigger* cuando otro collider entra/permanece/sale de
+        // un collider Is Trigger (reciben la Entity que lo provocó).
+        "Awake", "Start", "Update", "FixedUpdate", "LateUpdate", "OnDestroy",
         "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit",
 
         // Log
