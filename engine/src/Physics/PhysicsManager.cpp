@@ -1,4 +1,5 @@
 #include "DonTopo/Physics/PhysicsManager.h"
+#include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Physics/Colliders/Collider.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
@@ -156,8 +157,7 @@ std::shared_ptr<BoxCollider> PhysicsManager::createBoxColliderComponent(
     const glm::vec3& halfExtents,
     const glm::vec3& center,
     const glm::mat4& worldTransform,
-    bool useGravity,
-    float density)
+    bool dynamic)
 {
 #ifdef DT_PHYSX_ENABLED
     glm::vec3 scale, translation, skew;
@@ -174,22 +174,26 @@ std::shared_ptr<BoxCollider> PhysicsManager::createBoxColliderComponent(
     auto* material = static_cast<PxMaterial*>(m_material);
     auto* scene = static_cast<PxScene*>(m_scene);
 
-    PxRigidDynamic* actor = physics->createRigidDynamic(pose);
-    physxCheck(actor, "PxPhysics::createRigidDynamic");
+    PxRigidActor* actor = dynamic
+        ? static_cast<PxRigidActor*>(physics->createRigidDynamic(pose))
+        : static_cast<PxRigidActor*>(physics->createRigidStatic(pose));
+    physxCheck(actor, "PxPhysics::createRigidActor(box)");
 
     PxBoxGeometry geometry(halfExtents.x, halfExtents.y, halfExtents.z);
     PxShape* shape = PxRigidActorExt::createExclusiveShape(*actor, geometry, *material);
     physxCheck(shape, "PxRigidActorExt::createExclusiveShape");
     shape->setLocalPose(PxTransform(PxVec3(center.x, center.y, center.z)));
 
-    PxRigidBodyExt::updateMassAndInertia(*actor, density);
-
-    actor->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, !useGravity);
-    actor->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, !useGravity);
+    if (dynamic)
+    {
+        // Masa por defecto: Rigidbody la recalcula en bindActor. Sin gravedad ni
+        // kinematic aquí; los pone attachRigidbody -> Rigidbody::bindActor.
+        PxRigidBodyExt::updateMassAndInertia(*static_cast<PxRigidDynamic*>(actor), 1.0f);
+    }
 
     scene->addActor(*actor);
 
-    auto collider = std::make_shared<BoxCollider>(actor, shape, halfExtents, center, useGravity);
+    auto collider = std::make_shared<BoxCollider>(actor, shape, halfExtents, center);
     collider->setManager(this);
     // userData del actor = Collider* base (upcast explícito para respetar
     // cualquier offset de la base); lo lee el TriggerDispatcher para saber
@@ -199,8 +203,8 @@ std::shared_ptr<BoxCollider> PhysicsManager::createBoxColliderComponent(
     return collider;
 #else
     (void)worldTransform;
-    (void)density;
-    auto collider = std::make_shared<BoxCollider>(nullptr, nullptr, halfExtents, center, useGravity);
+    (void)dynamic;
+    auto collider = std::make_shared<BoxCollider>(nullptr, nullptr, halfExtents, center);
     collider->setManager(this);
     return collider;
 #endif
@@ -210,8 +214,7 @@ std::shared_ptr<SphereCollider> PhysicsManager::createSphereColliderComponent(
     float radius,
     const glm::vec3& center,
     const glm::mat4& worldTransform,
-    bool useGravity,
-    float density)
+    bool dynamic)
 {
 #ifdef DT_PHYSX_ENABLED
     glm::vec3 scale, translation, skew;
@@ -228,30 +231,30 @@ std::shared_ptr<SphereCollider> PhysicsManager::createSphereColliderComponent(
     auto* material = static_cast<PxMaterial*>(m_material);
     auto* scene = static_cast<PxScene*>(m_scene);
 
-    PxRigidDynamic* actor = physics->createRigidDynamic(pose);
-    physxCheck(actor, "PxPhysics::createRigidDynamic");
+    PxRigidActor* actor = dynamic
+        ? static_cast<PxRigidActor*>(physics->createRigidDynamic(pose))
+        : static_cast<PxRigidActor*>(physics->createRigidStatic(pose));
+    physxCheck(actor, "PxPhysics::createRigidActor(sphere)");
 
     PxSphereGeometry geometry(radius);
     PxShape* shape = PxRigidActorExt::createExclusiveShape(*actor, geometry, *material);
     physxCheck(shape, "PxRigidActorExt::createExclusiveShape");
     shape->setLocalPose(PxTransform(PxVec3(center.x, center.y, center.z)));
 
-    PxRigidBodyExt::updateMassAndInertia(*actor, density);
-
-    actor->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, !useGravity);
-    actor->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, !useGravity);
+    if (dynamic)
+        PxRigidBodyExt::updateMassAndInertia(*static_cast<PxRigidDynamic*>(actor), 1.0f);
 
     scene->addActor(*actor);
 
-    auto collider = std::make_shared<SphereCollider>(actor, shape, radius, center, useGravity);
+    auto collider = std::make_shared<SphereCollider>(actor, shape, radius, center);
     collider->setManager(this);
     Collider* base = collider.get();
     actor->userData = base;
     return collider;
 #else
     (void)worldTransform;
-    (void)density;
-    auto collider = std::make_shared<SphereCollider>(nullptr, nullptr, radius, center, useGravity);
+    (void)dynamic;
+    auto collider = std::make_shared<SphereCollider>(nullptr, nullptr, radius, center);
     collider->setManager(this);
     return collider;
 #endif
@@ -262,8 +265,7 @@ std::shared_ptr<CapsuleCollider> PhysicsManager::createCapsuleColliderComponent(
     float halfHeight,
     const glm::vec3& center,
     const glm::mat4& worldTransform,
-    bool useGravity,
-    float density)
+    bool dynamic)
 {
 #ifdef DT_PHYSX_ENABLED
     glm::vec3 scale, translation, skew;
@@ -280,30 +282,30 @@ std::shared_ptr<CapsuleCollider> PhysicsManager::createCapsuleColliderComponent(
     auto* material = static_cast<PxMaterial*>(m_material);
     auto* scene = static_cast<PxScene*>(m_scene);
 
-    PxRigidDynamic* actor = physics->createRigidDynamic(pose);
-    physxCheck(actor, "PxPhysics::createRigidDynamic");
+    PxRigidActor* actor = dynamic
+        ? static_cast<PxRigidActor*>(physics->createRigidDynamic(pose))
+        : static_cast<PxRigidActor*>(physics->createRigidStatic(pose));
+    physxCheck(actor, "PxPhysics::createRigidActor(capsule)");
 
     PxCapsuleGeometry geometry(radius, halfHeight);
     PxShape* shape = PxRigidActorExt::createExclusiveShape(*actor, geometry, *material);
     physxCheck(shape, "PxRigidActorExt::createExclusiveShape");
     shape->setLocalPose(PxTransform(PxVec3(center.x, center.y, center.z), axisCorrection()));
 
-    PxRigidBodyExt::updateMassAndInertia(*actor, density);
-
-    actor->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, !useGravity);
-    actor->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, !useGravity);
+    if (dynamic)
+        PxRigidBodyExt::updateMassAndInertia(*static_cast<PxRigidDynamic*>(actor), 1.0f);
 
     scene->addActor(*actor);
 
-    auto collider = std::make_shared<CapsuleCollider>(actor, shape, radius, halfHeight, center, useGravity);
+    auto collider = std::make_shared<CapsuleCollider>(actor, shape, radius, halfHeight, center);
     collider->setManager(this);
     Collider* base = collider.get();
     actor->userData = base;
     return collider;
 #else
     (void)worldTransform;
-    (void)density;
-    auto collider = std::make_shared<CapsuleCollider>(nullptr, nullptr, radius, halfHeight, center, useGravity);
+    (void)dynamic;
+    auto collider = std::make_shared<CapsuleCollider>(nullptr, nullptr, radius, halfHeight, center);
     collider->setManager(this);
     return collider;
 #endif
@@ -361,6 +363,77 @@ std::shared_ptr<PlaneCollider> PhysicsManager::createPlaneColliderComponent(
     return collider;
 #endif
 }
+
+void PhysicsManager::attachRigidbody(const std::shared_ptr<Collider>& collider,
+                                     const std::shared_ptr<Rigidbody>& rb)
+{
+    if (!collider || !rb) return;
+#ifdef DT_PHYSX_ENABLED
+    void* actor = collider->actorHandle();
+    // Si el actor todavía es static, reconstruirlo como dynamic antes de enlazar.
+    if (actor && !static_cast<PxRigidActor*>(actor)->is<PxRigidDynamic>())
+        rebuildActor(collider, /*dynamic=*/true);
+    rb->bindActor(collider->actorHandle());
+#else
+    (void)collider;
+    rb->bindActor(nullptr);
+#endif
+}
+
+void PhysicsManager::detachRigidbody(const std::shared_ptr<Collider>& collider)
+{
+    if (!collider) return;
+#ifdef DT_PHYSX_ENABLED
+    void* actor = collider->actorHandle();
+    if (actor && static_cast<PxRigidActor*>(actor)->is<PxRigidDynamic>())
+        rebuildActor(collider, /*dynamic=*/false);
+    // Nota: el Rigidbody que apuntaba a este collider conserva un m_actor que
+    // ahora cuelga (el dynamic viejo fue liberado por rebuildActor). Contrato:
+    // los callers (editor "Remove Rigidbody", Lua RemoveComponent) sueltan el
+    // shared_ptr<Rigidbody> inmediatamente después de detach, así que nadie lo
+    // desreferencia. Si aparece un caller que reutilice el Rigidbody, debe
+    // re-bindear (rb->bindActor(nullptr) o attach a otro collider) antes de usarlo.
+#else
+    (void)collider;
+#endif
+}
+
+#ifdef DT_PHYSX_ENABLED
+void* PhysicsManager::rebuildActor(const std::shared_ptr<Collider>& collider, bool dynamic)
+{
+    auto* physics  = static_cast<PxPhysics*>(m_physics);
+    auto* scene    = static_cast<PxScene*>(m_scene);
+    auto* oldActor = static_cast<PxRigidActor*>(collider->actorHandle());
+    if (!oldActor) return nullptr;
+
+    PxTransform pose = oldActor->getGlobalPose();
+    auto* shape = static_cast<PxShape*>(collider->geometryShape());
+    bool wasTrigger = collider->isTrigger();
+
+    // PxShape es refcounted: se coge una ref extra pa que sobreviva al detach
+    // del actor viejo, y se suelta tras re-adjuntarla al nuevo.
+    shape->acquireReference();
+    oldActor->detachShape(*shape);
+    scene->removeActor(*oldActor);
+    oldActor->release();
+
+    PxRigidActor* newActor = dynamic
+        ? static_cast<PxRigidActor*>(physics->createRigidDynamic(pose))
+        : static_cast<PxRigidActor*>(physics->createRigidStatic(pose));
+    physxCheck(newActor, "rebuildActor: createRigidActor");
+    newActor->attachShape(*shape);
+    shape->release();
+    if (dynamic)
+        PxRigidBodyExt::updateMassAndInertia(*static_cast<PxRigidDynamic*>(newActor), 1.0f);
+    scene->addActor(*newActor);
+    newActor->userData = collider.get();
+
+    collider->setActorHandle(newActor);
+    // Los flags de trigger viven en la shape (que sobrevivió), pero se re-asegura.
+    if (wasTrigger) collider->applyTriggerFlag(true);
+    return newActor;
+}
+#endif
 
 #ifdef DT_PHYSX_ENABLED
 bool PhysicsManager::raycast(const PxVec3& origin, const PxVec3& dir, float maxDistance, PxRaycastBuffer& hit)

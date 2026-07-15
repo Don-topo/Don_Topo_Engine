@@ -7,7 +7,7 @@
 #include <PxPhysicsAPI.h>
 #endif
 
-namespace DonTopo { class Collider; class BoxCollider; class SphereCollider; class CapsuleCollider; class PlaneCollider; }
+namespace DonTopo { class Collider; class BoxCollider; class SphereCollider; class CapsuleCollider; class PlaneCollider; class Rigidbody; }
 
 namespace DonTopo {
 
@@ -21,27 +21,35 @@ public:
     void init();
     void shutdown();
 
+    // dynamic=false -> PxRigidStatic (collider sin Rigidbody); dynamic=true ->
+    // PxRigidDynamic (collider con Rigidbody, la config la aplica luego
+    // attachRigidbody -> Rigidbody::bindActor).
     std::shared_ptr<BoxCollider> createBoxColliderComponent(const glm::vec3& halfExtents,
                                                               const glm::vec3& center,
                                                               const glm::mat4& worldTransform,
-                                                              bool useGravity,
-                                                              float density = 1.0f);
+                                                              bool dynamic);
 
     std::shared_ptr<SphereCollider> createSphereColliderComponent(float radius,
                                                                     const glm::vec3& center,
                                                                     const glm::mat4& worldTransform,
-                                                                    bool useGravity,
-                                                                    float density = 1.0f);
+                                                                    bool dynamic);
 
     std::shared_ptr<CapsuleCollider> createCapsuleColliderComponent(float radius,
                                                                       float halfHeight,
                                                                       const glm::vec3& center,
                                                                       const glm::mat4& worldTransform,
-                                                                      bool useGravity,
-                                                                      float density = 1.0f);
+                                                                      bool dynamic);
 
+    // Plane: siempre static/kinematic, nunca lleva Rigidbody (firma sin dynamic).
     std::shared_ptr<PlaneCollider> createPlaneColliderComponent(const glm::vec3& center,
                                                                   const glm::mat4& worldTransform);
+
+    // Asegura que el actor del collider sea PxRigidDynamic (reconstruye si era
+    // static), luego enlaza el Rigidbody (rb->bindActor). Collider WITHOUT
+    // Rigidbody = static; WITH = dynamic.
+    void attachRigidbody(const std::shared_ptr<Collider>& collider, const std::shared_ptr<Rigidbody>& rb);
+    // Reconstruye el actor del collider como PxRigidStatic (deshace attach).
+    void detachRigidbody(const std::shared_ptr<Collider>& collider);
 
     void stepSimulation(float dt);
 
@@ -60,6 +68,12 @@ public:
 #endif
 
 private:
+#ifdef DT_PHYSX_ENABLED
+    // Cambia el tipo de actor del collider (static<->dynamic) preservando shape,
+    // pose y estado trigger. Devuelve el nuevo PxRigidActor* como void*.
+    void* rebuildActor(const std::shared_ptr<Collider>& collider, bool dynamic);
+#endif
+
     // Triggers registrados (weak: los GameObjects poseen los colliders vía
     // shared_ptr). Se recorren cada frame para emitir onTriggerStay; los
     // expirados se podan al vuelo.

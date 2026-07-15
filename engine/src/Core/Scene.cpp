@@ -6,6 +6,7 @@
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
+#include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/ModelLoader.h"
@@ -25,6 +26,7 @@
 namespace
 {
     using DonTopo::GameObject;
+    using DonTopo::Rigidbody;
 
     nlohmann::json mat4ToJson(const glm::mat4& m)
     {
@@ -84,7 +86,6 @@ namespace
             const auto& c = node.getBoxCollider();
             j["boxCollider"] = { {"halfExtents", vec3ToJson(c->getHalfExtents())},
                                   {"center", vec3ToJson(c->getCenter())},
-                                  {"useGravity", c->getUseGravity()},
                                   {"isTrigger", c->isTrigger()} };
         }
         if (node.hasSphereCollider())
@@ -92,7 +93,6 @@ namespace
             const auto& c = node.getSphereCollider();
             j["sphereCollider"] = { {"radius", c->getRadius()},
                                      {"center", vec3ToJson(c->getCenter())},
-                                     {"useGravity", c->getUseGravity()},
                                      {"isTrigger", c->isTrigger()} };
         }
         if (node.hasCapsuleCollider())
@@ -101,7 +101,6 @@ namespace
             j["capsuleCollider"] = { {"radius", c->getRadius()},
                                       {"halfHeight", c->getHalfHeight()},
                                       {"center", vec3ToJson(c->getCenter())},
-                                      {"useGravity", c->getUseGravity()},
                                       {"isTrigger", c->isTrigger()} };
         }
         if (node.hasPlaneCollider())
@@ -109,6 +108,16 @@ namespace
             const auto& c = node.getPlaneCollider();
             j["planeCollider"] = { {"center", vec3ToJson(c->getCenter())},
                                     {"isTrigger", c->isTrigger()} };
+        }
+        if (node.hasRigidbody())
+        {
+            const auto& rb = node.getRigidbody();
+            j["rigidbody"] = { {"mass", rb->getMass()},
+                               {"useGravity", rb->getUseGravity()},
+                               {"isKinematic", rb->getIsKinematic()},
+                               {"drag", rb->getDrag()},
+                               {"angularDrag", rb->getAngularDrag()},
+                               {"constraints", rb->getConstraints()} };
         }
         if (node.hasAudioClip())
         {
@@ -261,12 +270,15 @@ namespace
             }
         }
 
+        // Los colliders se cargan siempre como static (dynamic=false); si el
+        // nodo trae un Rigidbody (o useGravity legacy), el bloque de abajo lo
+        // promociona a dynamic vía physics.attachRigidbody.
         if (j.contains("boxCollider"))
         {
             const auto& c = j["boxCollider"];
             node->setBoxCollider(physics.createBoxColliderComponent(
                 jsonToVec3(c.at("halfExtents")), jsonToVec3(c.at("center")),
-                node->worldTransform, c.at("useGravity").get<bool>()));
+                node->worldTransform, /*dynamic=*/false));
             node->getBoxCollider()->setOwner(node);
             physics.setTrigger(node->getBoxCollider(), c.value("isTrigger", false));
         }
@@ -275,7 +287,7 @@ namespace
             const auto& c = j["sphereCollider"];
             node->setSphereCollider(physics.createSphereColliderComponent(
                 c.at("radius").get<float>(), jsonToVec3(c.at("center")),
-                node->worldTransform, c.at("useGravity").get<bool>()));
+                node->worldTransform, /*dynamic=*/false));
             node->getSphereCollider()->setOwner(node);
             physics.setTrigger(node->getSphereCollider(), c.value("isTrigger", false));
         }
@@ -284,7 +296,7 @@ namespace
             const auto& c = j["capsuleCollider"];
             node->setCapsuleCollider(physics.createCapsuleColliderComponent(
                 c.at("radius").get<float>(), c.at("halfHeight").get<float>(),
-                jsonToVec3(c.at("center")), node->worldTransform, c.at("useGravity").get<bool>()));
+                jsonToVec3(c.at("center")), node->worldTransform, /*dynamic=*/false));
             node->getCapsuleCollider()->setOwner(node);
             physics.setTrigger(node->getCapsuleCollider(), c.value("isTrigger", false));
         }
@@ -295,6 +307,44 @@ namespace
                 jsonToVec3(c.at("center")), node->worldTransform));
             node->getPlaneCollider()->setOwner(node);
             physics.setTrigger(node->getPlaneCollider(), c.value("isTrigger", false));
+        }
+
+        // Rigidbody: bloque nuevo. Back-compat: escenas viejas guardaban
+        // useGravity DENTRO del collider; si no hay bloque rigidbody pero un
+        // collider trae useGravity legacy == true, sintetizamos un Rigidbody
+        // heredando ese valor (cuerpo dinámico como antes). useGravity legacy
+        // == false (kinematic sin gravedad) equivale a un collider static, que
+        // es justo el estado por defecto → no se crea Rigidbody.
+        auto legacyGravity = [&](const char* key) -> int {
+            if (j.contains(key) && j[key].contains("useGravity"))
+                return j[key]["useGravity"].get<bool>() ? 1 : 0;
+            return -1; // sin campo legacy
+        };
+        if (j.contains("rigidbody"))
+        {
+            const auto& r = j["rigidbody"];
+            auto rb = std::make_shared<Rigidbody>();
+            rb->setMass(r.value("mass", 1.0f));
+            rb->setUseGravity(r.value("useGravity", true));
+            rb->setIsKinematic(r.value("isKinematic", false));
+            rb->setDrag(r.value("drag", 0.0f));
+            rb->setAngularDrag(r.value("angularDrag", 0.05f));
+            rb->setConstraints(r.value("constraints", 0u));
+            node->setRigidbody(rb);
+            if (auto col = node->anyCollider()) physics.attachRigidbody(col, rb);
+        }
+        else
+        {
+            int g = legacyGravity("boxCollider");
+            if (g < 0) g = legacyGravity("sphereCollider");
+            if (g < 0) g = legacyGravity("capsuleCollider");
+            if (g == 1)
+            {
+                auto rb = std::make_shared<Rigidbody>();
+                rb->setUseGravity(true);
+                node->setRigidbody(rb);
+                if (auto col = node->anyCollider()) physics.attachRigidbody(col, rb);
+            }
         }
         if (j.contains("audioClip"))
         {
@@ -435,46 +485,50 @@ namespace DonTopo
     void Scene::update(float /*dt*/, PhysicsManager& /*physics*/)
     {
         m_root.traverse([](GameObject* go) {
-            if (go->hasBoxCollider())
-            {
-                if (go->getBoxCollider()->isDynamic())
-                {
-                    go->worldTransform = go->getBoxCollider()->getWorldTransform();
-                    glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
-                    go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
-                }
-                else
-                    go->getBoxCollider()->syncTransform(go->worldTransform);
-            }
+            auto col = go->anyCollider();
+            if (!col) return;
 
-            if (go->hasSphereCollider())
-            {
-                if (go->getSphereCollider()->isDynamic())
-                {
-                    go->worldTransform = go->getSphereCollider()->getWorldTransform();
-                    glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
-                    go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
-                }
-                else
-                    go->getSphereCollider()->syncTransform(go->worldTransform);
-            }
+            const bool hasRb     = go->hasRigidbody();
+            const bool kinematic = hasRb && go->getRigidbody()->getIsKinematic();
+            const bool simulated = hasRb && !kinematic; // cuerpo dinámico real
 
-            if (go->hasCapsuleCollider())
+            if (simulated)
             {
-                if (go->getCapsuleCollider()->isDynamic())
-                {
-                    go->worldTransform = go->getCapsuleCollider()->getWorldTransform();
-                    glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
-                    go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
-                }
-                else
-                    go->getCapsuleCollider()->syncTransform(go->worldTransform);
+                // PhysX manda: leer pose actor -> GameObject.
+                go->worldTransform = col->getWorldTransform();
+                glm::mat4 parentWorld = go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
+                go->localTransform = glm::inverse(parentWorld) * go->worldTransform;
             }
-
-            // Plane Collider siempre es kinematic (isDynamic()==false hardcoded):
-            // nunca lee pose de PhysX, solo empuja la del GameObject.
-            if (go->hasPlaneCollider())
-                go->getPlaneCollider()->syncTransform(go->worldTransform);
+            else if (kinematic)
+            {
+                // Kinematic: empujar pose GameObject -> actor (setKinematicTarget).
+                col->syncTransform(go->worldTransform);
+            }
+            else
+            {
+                // Solo collider (static): empujar pose SÓLO si cambió. Mover un
+                // PxRigidStatic cada frame ensucia el pruner de scene-query de
+                // PhysX (y emite warnings), así que se compara la pose actual
+                // del actor (T*R, sin escala) con la del GameObject normalizada
+                // (quitando escala) y sólo se teleporta si difieren.
+                glm::mat4 want = go->worldTransform;
+                for (int i = 0; i < 3; ++i)
+                {
+                    float len = glm::length(glm::vec3(want[i]));
+                    if (len > 1e-6f) want[i] = glm::vec4(glm::vec3(want[i]) / len, 0.0f);
+                }
+                want[3].w = 1.0f;
+                glm::mat4 have = col->getWorldTransform();
+                bool changed = false;
+                for (int i = 0; i < 4 && !changed; ++i)
+                    for (int j = 0; j < 4; ++j)
+                    {
+                        float d = have[i][j] - want[i][j];
+                        if (d < 0.0f) d = -d;
+                        if (d > 1e-4f) { changed = true; break; }
+                    }
+                if (changed) col->teleport(go->worldTransform);
+            }
         });
 
         // Sync física-transform corre antes de propagar transforms locales:

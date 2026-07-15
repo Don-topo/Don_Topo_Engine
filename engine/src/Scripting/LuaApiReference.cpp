@@ -58,18 +58,21 @@ const std::vector<std::string>& luaApiSymbols()
         "Transform:GetScale", "Transform:SetScale",
         "Transform:GetWorldPosition", "Transform:Translate", "Transform:Rotate",
 
-        // Colliders
-        "BoxCollider:GetUseGravity", "BoxCollider:SetUseGravity",
+        // Colliders (la gravedad/dinámica vive ahora en Rigidbody)
         "BoxCollider:GetHalfExtents", "BoxCollider:SetHalfExtents",
-        "BoxCollider:GetCenter", "BoxCollider:SetCenter", "BoxCollider:IsDynamic",
-        "SphereCollider:GetUseGravity", "SphereCollider:SetUseGravity",
+        "BoxCollider:GetCenter", "BoxCollider:SetCenter",
         "SphereCollider:GetRadius", "SphereCollider:SetRadius",
-        "SphereCollider:GetCenter", "SphereCollider:SetCenter", "SphereCollider:IsDynamic",
-        "CapsuleCollider:GetUseGravity", "CapsuleCollider:SetUseGravity",
+        "SphereCollider:GetCenter", "SphereCollider:SetCenter",
         "CapsuleCollider:GetRadius", "CapsuleCollider:SetRadius",
         "CapsuleCollider:GetHalfHeight", "CapsuleCollider:SetHalfHeight",
-        "CapsuleCollider:GetCenter", "CapsuleCollider:SetCenter", "CapsuleCollider:IsDynamic",
+        "CapsuleCollider:GetCenter", "CapsuleCollider:SetCenter",
         "PlaneCollider:GetCenter", "PlaneCollider:SetCenter",
+
+        // Rigidbody (dinámica estilo Unity; GetComponent("Rigidbody"))
+        "Rigidbody.mass", "Rigidbody.useGravity", "Rigidbody.isKinematic",
+        "Rigidbody.drag", "Rigidbody.angularDrag",
+        "Rigidbody.velocity", "Rigidbody.angularVelocity",
+        "Rigidbody:AddForce", "Rigidbody:AddTorque", "Rigidbody:AddImpulse",
 
         // AudioClip
         "AudioClip:Play", "AudioClip:Stop", "AudioClip:SetLoop", "AudioClip:GetLoop",

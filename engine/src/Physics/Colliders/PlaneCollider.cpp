@@ -35,7 +35,26 @@ PlaneCollider::PlaneCollider(void* actor, void* shape, const glm::vec3& center)
 PlaneCollider::~PlaneCollider()
 {
 #ifdef DT_PHYSX_ENABLED
-    if (m_actor) static_cast<PxRigidDynamic*>(m_actor)->release();
+    // release() vía base PxActor (uniforme con el resto de colliders).
+    if (m_actor) static_cast<PxActor*>(m_actor)->release();
+#endif
+}
+
+void* PlaneCollider::actorHandle() const
+{
+#ifdef DT_PHYSX_ENABLED
+    return m_actor;
+#else
+    return nullptr;
+#endif
+}
+
+void PlaneCollider::setActorHandle(void* actor)
+{
+#ifdef DT_PHYSX_ENABLED
+    m_actor = actor;
+#else
+    (void)actor;
 #endif
 }
 

@@ -13,6 +13,7 @@ class BoxCollider;
 class SphereCollider;
 class CapsuleCollider;
 class PlaneCollider;
+class Rigidbody;
 struct EditorContext;
 
 // Ventana "Properties" — transform, colliders (Box/Sphere/Capsule/Plane),
@@ -40,6 +41,7 @@ private:
     void drawSphereColliderSection(EditorContext& ctx);
     void drawCapsuleColliderSection(EditorContext& ctx);
     void drawPlaneColliderSection(EditorContext& ctx);
+    void drawRigidbodySection(EditorContext& ctx);
     void drawMeshSection(EditorContext& ctx);
     void drawMeshDialog(EditorContext& ctx);
     void drawAudioClipSection(EditorContext& ctx);
@@ -77,7 +79,6 @@ private:
     BoxCollider* m_colliderCachedFor = nullptr;
     glm::vec3    m_editColliderCenter{0.0f};
     glm::vec3    m_editColliderSize{50.0f};
-    bool         m_editUseGravity = false;
     bool         m_editIsTrigger = false;
     bool         m_colliderDragActive = false;
     // Snapshot tomado al iniciar un drag de Center/Size — "before" del
@@ -88,7 +89,6 @@ private:
     SphereCollider* m_sphereColliderCachedFor = nullptr;
     glm::vec3       m_editSphereCenter{0.0f};
     float           m_editSphereRadius{25.0f};
-    bool            m_editSphereUseGravity = false;
     bool            m_editSphereIsTrigger = false;
     bool            m_sphereColliderDragActive = false;
     SphereColliderState m_sphereColliderBeforeEdit{};
@@ -98,7 +98,6 @@ private:
     glm::vec3        m_editCapsuleCenter{0.0f};
     float            m_editCapsuleRadius{15.0f};
     float            m_editCapsuleHeight{50.0f};
-    bool             m_editCapsuleUseGravity = false;
     bool             m_editCapsuleIsTrigger = false;
     bool             m_capsuleColliderDragActive = false;
     CapsuleColliderState m_capsuleColliderBeforeEdit{};
@@ -109,6 +108,20 @@ private:
     bool           m_editPlaneIsTrigger = false;
     bool           m_planeColliderDragActive = false;
     PlaneColliderState m_planeColliderBeforeEdit{};
+
+    // Rigidbody – mismo patrón de cache que los colliders. Los DragFloat
+    // (mass/drag/angularDrag) usan begin/commit con m_rigidbodyBeforeEdit para
+    // empujar un único PropertyCommand<RigidbodyState> al soltar; los checkbox
+    // (gravity/kinematic/constraints) empujan comando inmediato.
+    const void*    m_rigidbodyCachedFor = nullptr;
+    float          m_editRbMass = 1.0f;
+    bool           m_editRbUseGravity = true;
+    bool           m_editRbKinematic = false;
+    float          m_editRbDrag = 0.0f;
+    float          m_editRbAngularDrag = 0.05f;
+    uint32_t       m_editRbConstraints = 0;
+    bool           m_rigidbodyDragActive = false;
+    RigidbodyState m_rigidbodyBeforeEdit{};
 
     // Instancia propia de ImGuiFileDialog para "Add > Mesh", separada del
     // singleton IGFD::FileDialog::Instance() que usa Content Browser: la
