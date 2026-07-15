@@ -19,6 +19,11 @@ const std::vector<std::string>& luaApiSymbols()
         // de campos son los definidos por el propio script (no listables).
         "self", "self.entity",
 
+        // Callbacks de trigger — los define el script (function Script:Nombre)
+        // y el motor los llama cuando otro collider entra/permanece/sale de un
+        // collider marcado Is Trigger. Reciben la Entity que lo provocó.
+        "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit",
+
         // Log
         "Log.Info", "Log.Warn", "Log.Error",
 
