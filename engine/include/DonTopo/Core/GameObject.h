@@ -63,6 +63,19 @@ namespace DonTopo
                 return m_boxCollider || m_sphereCollider || m_capsuleCollider || m_planeCollider;
             }
 
+            // Devuelve el collider del GameObject como base Collider (hay como
+            // mucho uno por la exclusividad mutua), o nullptr si no tiene.
+            // Usado por el scripting para registrar el listener de triggers sin
+            // ramificar por tipo concreto.
+            std::shared_ptr<Collider> anyCollider() const
+            {
+                if (m_boxCollider)     return m_boxCollider;
+                if (m_sphereCollider)  return m_sphereCollider;
+                if (m_capsuleCollider) return m_capsuleCollider;
+                if (m_planeCollider)   return m_planeCollider;
+                return nullptr;
+            }
+
             void setAudioClip(std::shared_ptr<AudioClipComponent> clip) { m_audioClip = std::move(clip); }
             const std::shared_ptr<AudioClipComponent>& getAudioClip() const { return m_audioClip; }
             bool hasAudioClip() const { return m_audioClip != nullptr; }

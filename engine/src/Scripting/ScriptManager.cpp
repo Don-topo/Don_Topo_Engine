@@ -1,10 +1,40 @@
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Scripting/ScriptBindings.h"
 #include "DonTopo/Core/Scene.h"
+#include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Physics/Colliders/Collider.h"
 #include <algorithm>
 
 namespace DonTopo
 {
+    // Adapter que engancha los callbacks de trigger del módulo de física a la
+    // cola de ScriptManager. Uno por collider registrado en onPlayStart;
+    // captura el GameObject dueño del collider trigger. `e.other` es el owner
+    // opaco (void*) del otro collider = GameObject* (lo setea el editor/carga).
+    class ScriptTriggerListener : public ITriggerListener
+    {
+    public:
+        ScriptTriggerListener(ScriptManager* mgr, GameObject* owner)
+            : m_mgr(mgr), m_owner(owner) {}
+
+        void onTriggerEnter(const TriggerEvent& e) override
+        {
+            m_mgr->onTriggerEvent(m_owner, TriggerPhase::Enter, static_cast<GameObject*>(e.other));
+        }
+        void onTriggerStay(const TriggerEvent& e) override
+        {
+            m_mgr->onTriggerEvent(m_owner, TriggerPhase::Stay, static_cast<GameObject*>(e.other));
+        }
+        void onTriggerExit(const TriggerEvent& e) override
+        {
+            m_mgr->onTriggerEvent(m_owner, TriggerPhase::Exit, static_cast<GameObject*>(e.other));
+        }
+
+    private:
+        ScriptManager* m_mgr;
+        GameObject*    m_owner;
+    };
+
     ScriptManager::ScriptManager()  = default;
     ScriptManager::~ScriptManager() = default;
 
@@ -181,12 +211,15 @@ namespace DonTopo
         auto isFn = [&](const char* n) {
             return comp.instance[n].get_type() == sol::type::function;
         };
-        comp.hasAwake       = isFn("Awake");
-        comp.hasStart       = isFn("Start");
-        comp.hasUpdate      = isFn("Update");
-        comp.hasFixedUpdate = isFn("FixedUpdate");
-        comp.hasLateUpdate  = isFn("LateUpdate");
-        comp.hasOnDestroy   = isFn("OnDestroy");
+        comp.hasAwake          = isFn("Awake");
+        comp.hasStart          = isFn("Start");
+        comp.hasUpdate         = isFn("Update");
+        comp.hasFixedUpdate    = isFn("FixedUpdate");
+        comp.hasLateUpdate     = isFn("LateUpdate");
+        comp.hasOnDestroy      = isFn("OnDestroy");
+        comp.hasOnTriggerEnter = isFn("OnTriggerEnter");
+        comp.hasOnTriggerStay  = isFn("OnTriggerStay");
+        comp.hasOnTriggerExit  = isFn("OnTriggerExit");
     }
 
     void ScriptManager::callCallback(ScriptComponent& comp, const char* fn, const float* dt)
@@ -202,9 +235,90 @@ namespace DonTopo
         }
     }
 
+    void ScriptManager::callTriggerCallback(ScriptComponent& comp, const char* fn, GameObject* other)
+    {
+        if (comp.hasError || !comp.instance.valid()) return;
+        sol::protected_function f = comp.instance[fn];
+        auto r = f(comp.instance, LuaEntity{ other, this });
+        if (!r.valid())
+        {
+            sol::error err = r;
+            log("Script '" + comp.scriptName + "' " + fn + ": " + std::string(err.what()));
+            comp.hasError = true;
+        }
+    }
+
     void ScriptManager::callOnDestroy(ScriptComponent& comp)
     {
         if (comp.hasOnDestroy) callCallback(comp, "OnDestroy", nullptr);
+    }
+
+    void ScriptManager::onTriggerEvent(GameObject* owner, TriggerPhase phase, GameObject* other)
+    {
+        m_triggerQueue.push_back({ owner, phase, other });
+    }
+
+    void ScriptManager::registerTriggerListeners()
+    {
+        if (!m_scene) return;
+        m_scene->traverse([&](GameObject* go) {
+            std::shared_ptr<Collider> collider = go->anyCollider();
+            if (!collider) return;
+            auto listener = std::make_unique<ScriptTriggerListener>(this, go);
+            collider->addListener(listener.get());
+            m_triggerListeners.push_back(std::move(listener));
+            m_triggerListenerColliders.push_back(collider); // shared -> weak
+        });
+    }
+
+    void ScriptManager::clearTriggerListeners()
+    {
+        // Desregistra de los colliders todavía vivos (onPlayStop corre ANTES de
+        // que el restore de la escena destruya/recree los colliders de Play);
+        // los ya expirados se ignoran (su lista de listeners murió con ellos).
+        for (size_t i = 0; i < m_triggerListeners.size(); ++i)
+        {
+            if (auto collider = m_triggerListenerColliders[i].lock())
+                collider->removeListener(m_triggerListeners[i].get());
+        }
+        m_triggerListeners.clear();
+        m_triggerListenerColliders.clear();
+        m_triggerQueue.clear();
+    }
+
+    void ScriptManager::drainTriggerQueue()
+    {
+        if (m_triggerQueue.empty()) return;
+        // Snapshot: un callback puede encolar más triggers o mutar la escena;
+        // se procesa lo de este frame y lo reentrante queda pal siguiente.
+        std::vector<QueuedTrigger> batch;
+        batch.swap(m_triggerQueue);
+
+        for (const QueuedTrigger& t : batch)
+        {
+            if (!isAlive(t.owner)) continue;
+            // Snapshot de los scripts del owner: un callback puede
+            // Add/RemoveComponent (el remove va diferido, así que los punteros
+            // siguen válidos este frame).
+            std::vector<ScriptComponent*> scripts;
+            for (auto& s : t.owner->getScripts()) scripts.push_back(s.get());
+
+            for (ScriptComponent* s : scripts)
+            {
+                switch (t.phase)
+                {
+                    case TriggerPhase::Enter:
+                        if (s->hasOnTriggerEnter) callTriggerCallback(*s, "OnTriggerEnter", t.other);
+                        break;
+                    case TriggerPhase::Stay:
+                        if (s->hasOnTriggerStay) callTriggerCallback(*s, "OnTriggerStay", t.other);
+                        break;
+                    case TriggerPhase::Exit:
+                        if (s->hasOnTriggerExit) callTriggerCallback(*s, "OnTriggerExit", t.other);
+                        break;
+                }
+            }
+        }
     }
 
     std::vector<ScriptComponent*> ScriptManager::collectComponents()
@@ -233,10 +347,15 @@ namespace DonTopo
             if (c->hasStart) callCallback(*c, "Start", nullptr);
             c->started = true;
         }
+
+        // Colliders ya vivos aquí (Play no los recrea al arrancar): registra
+        // el listener de triggers en cada uno.
+        registerTriggerListeners();
     }
 
     void ScriptManager::onPlayStop()
     {
+        clearTriggerListeners();
         auto comps = collectComponents();
         for (auto* c : comps) callOnDestroy(*c);
         for (auto* c : comps)
@@ -274,6 +393,12 @@ namespace DonTopo
             if (c->hasStart) callCallback(*c, "Start", nullptr);
             c->started = true;
         }
+
+        // Triggers encolados por el paso de física de este frame
+        // (physics.stepSimulation corre antes que scriptManager.update en el
+        // loop principal): OnTriggerEnter/Stay/Exit antes de Update, cercano al
+        // orden de Unity (callbacks de física preceden a Update).
+        drainTriggerQueue();
 
         for (auto* c : comps) if (c->hasUpdate) callCallback(*c, "Update", &dt);
 

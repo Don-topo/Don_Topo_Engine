@@ -39,6 +39,9 @@ public:
     // instanciar, no cada frame (spec).
     bool hasAwake = false, hasStart = false, hasUpdate = false,
          hasFixedUpdate = false, hasLateUpdate = false, hasOnDestroy = false;
+    // Callbacks de trigger (estilo Unity): reciben la Entity que provocó el
+    // solape. Solo el lado trigger del par los recibe.
+    bool hasOnTriggerEnter = false, hasOnTriggerStay = false, hasOnTriggerExit = false;
 
     // Props editadas en el editor que difieren del default del .lua.
     // Solo esto se serializa — los defaults viven en el script.
