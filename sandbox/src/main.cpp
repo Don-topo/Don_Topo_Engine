@@ -10,6 +10,7 @@
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Physics/PhysicsManager.h"
+#include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Editor/Gizmos.h"
 #include "DonTopo/Core/Input.h"
@@ -83,7 +84,7 @@ int main()
 
         glm::mat4 floorColliderPose = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, floorY - 0.5f, 0.0f));
         floorNode->setBoxCollider(physics.createBoxColliderComponent(
-            glm::vec3(500.0f, 0.5f, 500.0f), glm::vec3(0.0f), floorColliderPose, /*useGravity=*/false));
+            glm::vec3(500.0f, 0.5f, 500.0f), glm::vec3(0.0f), floorColliderPose, /*dynamic=*/false));
 
         auto* cube = scene.addGameObject("cube");
         cube->setMesh(cubeMesh);
@@ -91,7 +92,14 @@ int main()
 
         cube->updateWorldTransforms();
         cube->setBoxCollider(physics.createBoxColliderComponent(
-            glm::vec3(25.0f, 25.0f, 25.0f), glm::vec3(0.0f), cube->worldTransform, /*useGravity=*/true));
+            glm::vec3(25.0f, 25.0f, 25.0f), glm::vec3(0.0f), cube->worldTransform, /*dynamic=*/true));
+        // Rigidbody: hace del cubo un cuerpo simulado (cae con la gravedad de la
+        // escena). Sin Rigidbody el collider sería static y no caería.
+        {
+            auto cubeRb = std::make_shared<DonTopo::Rigidbody>();
+            physics.attachRigidbody(cube->getBoxCollider(), cubeRb);
+            cube->setRigidbody(cubeRb);
+        }
 
 #ifdef DT_PHYSX_ENABLED
         {

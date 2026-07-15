@@ -6,6 +6,7 @@
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
+#include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/ModelLoader.h"
@@ -25,6 +26,7 @@
 namespace
 {
     using DonTopo::GameObject;
+    using DonTopo::Rigidbody;
 
     nlohmann::json mat4ToJson(const glm::mat4& m)
     {
