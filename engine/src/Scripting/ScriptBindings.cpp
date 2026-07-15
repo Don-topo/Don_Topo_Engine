@@ -10,6 +10,7 @@
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
+#include "DonTopo/Physics/Rigidbody.h"
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -41,6 +42,7 @@ namespace DonTopo::ScriptBindings
         struct LuaCapsuleCollider { LuaEntity e; };
         struct LuaPlaneCollider { LuaEntity e; };
         struct LuaAudioClip { LuaEntity e; };
+        struct LuaRigidbody { LuaEntity e; };
 
         // Descompone localTransform en T/R/S (grados pa Lua). La extracción de
         // ángulos usa extractEulerAngleXYZ — el inverso exacto del
@@ -203,16 +205,6 @@ namespace DonTopo::ScriptBindings
         {
             lua.new_usertype<LuaBoxCollider>("BoxCollider",
                 sol::no_constructor,
-                "GetUseGravity", [](const LuaBoxCollider& c) {
-                    GameObject* go = deref(c.e);
-                    if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
-                    return go->getBoxCollider()->getUseGravity();
-                },
-                "SetUseGravity", [](const LuaBoxCollider& c, bool g) {
-                    GameObject* go = deref(c.e);
-                    if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
-                    go->getBoxCollider()->setUseGravity(g);
-                },
                 "GetHalfExtents", [](const LuaBoxCollider& c) {
                     GameObject* go = deref(c.e);
                     if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
@@ -232,25 +224,10 @@ namespace DonTopo::ScriptBindings
                     GameObject* go = deref(c.e);
                     if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
                     go->getBoxCollider()->setCenter(ctr);
-                },
-                "IsDynamic", [](const LuaBoxCollider& c) {
-                    GameObject* go = deref(c.e);
-                    if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
-                    return go->getBoxCollider()->isDynamic();
                 });
 
             lua.new_usertype<LuaSphereCollider>("SphereCollider",
                 sol::no_constructor,
-                "GetUseGravity", [](const LuaSphereCollider& c) {
-                    GameObject* go = deref(c.e);
-                    if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
-                    return go->getSphereCollider()->getUseGravity();
-                },
-                "SetUseGravity", [](const LuaSphereCollider& c, bool g) {
-                    GameObject* go = deref(c.e);
-                    if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
-                    go->getSphereCollider()->setUseGravity(g);
-                },
                 "GetRadius", [](const LuaSphereCollider& c) {
                     GameObject* go = deref(c.e);
                     if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
@@ -270,25 +247,10 @@ namespace DonTopo::ScriptBindings
                     GameObject* go = deref(c.e);
                     if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
                     go->getSphereCollider()->setCenter(ctr);
-                },
-                "IsDynamic", [](const LuaSphereCollider& c) {
-                    GameObject* go = deref(c.e);
-                    if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
-                    return go->getSphereCollider()->isDynamic();
                 });
 
             lua.new_usertype<LuaCapsuleCollider>("CapsuleCollider",
                 sol::no_constructor,
-                "GetUseGravity", [](const LuaCapsuleCollider& c) {
-                    GameObject* go = deref(c.e);
-                    if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
-                    return go->getCapsuleCollider()->getUseGravity();
-                },
-                "SetUseGravity", [](const LuaCapsuleCollider& c, bool g) {
-                    GameObject* go = deref(c.e);
-                    if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
-                    go->getCapsuleCollider()->setUseGravity(g);
-                },
                 "GetRadius", [](const LuaCapsuleCollider& c) {
                     GameObject* go = deref(c.e);
                     if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
@@ -318,11 +280,6 @@ namespace DonTopo::ScriptBindings
                     GameObject* go = deref(c.e);
                     if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
                     go->getCapsuleCollider()->setCenter(ctr);
-                },
-                "IsDynamic", [](const LuaCapsuleCollider& c) {
-                    GameObject* go = deref(c.e);
-                    if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
-                    return go->getCapsuleCollider()->isDynamic();
                 });
 
             lua.new_usertype<LuaPlaneCollider>("PlaneCollider",
@@ -360,6 +317,41 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
                     return go->getAudioClip()->getLoop();
                 });
+
+            // Rigidbody: dinámica estilo Unity. Propiedades (mass/useGravity/
+            // isKinematic/drag/angularDrag/velocity/angularVelocity) + métodos
+            // AddForce/AddTorque/AddImpulse. Se obtiene con GetComponent("Rigidbody").
+            auto rbOf = [](const LuaRigidbody& c) -> Rigidbody* {
+                GameObject* go = deref(c.e);
+                if (!go->hasRigidbody()) throw std::runtime_error("El GameObject ya no tiene Rigidbody");
+                return go->getRigidbody().get();
+            };
+            lua.new_usertype<LuaRigidbody>("Rigidbody",
+                sol::no_constructor,
+                "mass", sol::property(
+                    [rbOf](const LuaRigidbody& c) { return rbOf(c)->getMass(); },
+                    [rbOf](const LuaRigidbody& c, float v) { rbOf(c)->setMass(v); }),
+                "useGravity", sol::property(
+                    [rbOf](const LuaRigidbody& c) { return rbOf(c)->getUseGravity(); },
+                    [rbOf](const LuaRigidbody& c, bool v) { rbOf(c)->setUseGravity(v); }),
+                "isKinematic", sol::property(
+                    [rbOf](const LuaRigidbody& c) { return rbOf(c)->getIsKinematic(); },
+                    [rbOf](const LuaRigidbody& c, bool v) { rbOf(c)->setIsKinematic(v); }),
+                "drag", sol::property(
+                    [rbOf](const LuaRigidbody& c) { return rbOf(c)->getDrag(); },
+                    [rbOf](const LuaRigidbody& c, float v) { rbOf(c)->setDrag(v); }),
+                "angularDrag", sol::property(
+                    [rbOf](const LuaRigidbody& c) { return rbOf(c)->getAngularDrag(); },
+                    [rbOf](const LuaRigidbody& c, float v) { rbOf(c)->setAngularDrag(v); }),
+                "velocity", sol::property(
+                    [rbOf](const LuaRigidbody& c) { return rbOf(c)->getVelocity(); },
+                    [rbOf](const LuaRigidbody& c, const glm::vec3& v) { rbOf(c)->setVelocity(v); }),
+                "angularVelocity", sol::property(
+                    [rbOf](const LuaRigidbody& c) { return rbOf(c)->getAngularVelocity(); },
+                    [rbOf](const LuaRigidbody& c, const glm::vec3& v) { rbOf(c)->setAngularVelocity(v); }),
+                "AddForce",   [rbOf](const LuaRigidbody& c, float x, float y, float z) { rbOf(c)->addForce({x, y, z}); },
+                "AddTorque",  [rbOf](const LuaRigidbody& c, float x, float y, float z) { rbOf(c)->addTorque({x, y, z}); },
+                "AddImpulse", [rbOf](const LuaRigidbody& c, float x, float y, float z) { rbOf(c)->addImpulse({x, y, z}); });
         }
 
         void registerEntity(DonTopo::ScriptManager& mgr)
@@ -395,6 +387,7 @@ namespace DonTopo::ScriptBindings
                     if (name == "CapsuleCollider" && go->hasCapsuleCollider()) return sol::make_object(lua, LuaCapsuleCollider{e});
                     if (name == "PlaneCollider"   && go->hasPlaneCollider())   return sol::make_object(lua, LuaPlaneCollider{e});
                     if (name == "AudioClip"       && go->hasAudioClip())       return sol::make_object(lua, LuaAudioClip{e});
+                    if (name == "Rigidbody"       && go->hasRigidbody())       return sol::make_object(lua, LuaRigidbody{e});
                     if (name.rfind("Script:", 0) == 0)
                     {
                         const std::string scriptName = name.substr(7);
@@ -440,6 +433,15 @@ namespace DonTopo::ScriptBindings
                         auto clip = mgr->audioManager()->createAudioClipComponent(*arg, false, false);
                         if (clip) { go->setAudioClip(std::move(clip)); return sol::make_object(lua, LuaAudioClip{e}); }
                     }
+                    // Rigidbody: necesita un collider que aporte la forma y que no
+                    // exista ya. attachRigidbody promociona el actor a dynamic.
+                    if (name == "Rigidbody" && go->hasAnyCollider() && !go->hasRigidbody() && mgr->physics())
+                    {
+                        auto rb = std::make_shared<Rigidbody>();
+                        go->setRigidbody(rb);
+                        if (auto col = go->anyCollider()) mgr->physics()->attachRigidbody(col, rb);
+                        return sol::make_object(lua, LuaRigidbody{e});
+                    }
                     if (name.rfind("Script:", 0) == 0)
                     {
                         auto comp = std::make_unique<DonTopo::ScriptComponent>(name.substr(7), go);
@@ -458,6 +460,13 @@ namespace DonTopo::ScriptBindings
                     else if (name == "CapsuleCollider") go->setCapsuleCollider(nullptr);
                     else if (name == "PlaneCollider")   go->setPlaneCollider(nullptr);
                     else if (name == "AudioClip")       go->setAudioClip(nullptr);
+                    else if (name == "Rigidbody")
+                    {
+                        // Reconstruye el actor como static antes de soltar el Rigidbody.
+                        if (auto col = go->anyCollider(); col && e.mgr && e.mgr->physics())
+                            e.mgr->physics()->detachRigidbody(col);
+                        go->setRigidbody(nullptr);
+                    }
                     else if (name.rfind("Script:", 0) == 0)
                     {
                         // Diferido: el lifecycle lo procesa al final del frame
