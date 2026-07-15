@@ -84,7 +84,6 @@ namespace
             const auto& c = node.getBoxCollider();
             j["boxCollider"] = { {"halfExtents", vec3ToJson(c->getHalfExtents())},
                                   {"center", vec3ToJson(c->getCenter())},
-                                  {"useGravity", c->getUseGravity()},
                                   {"isTrigger", c->isTrigger()} };
         }
         if (node.hasSphereCollider())
@@ -92,7 +91,6 @@ namespace
             const auto& c = node.getSphereCollider();
             j["sphereCollider"] = { {"radius", c->getRadius()},
                                      {"center", vec3ToJson(c->getCenter())},
-                                     {"useGravity", c->getUseGravity()},
                                      {"isTrigger", c->isTrigger()} };
         }
         if (node.hasCapsuleCollider())
@@ -101,7 +99,6 @@ namespace
             j["capsuleCollider"] = { {"radius", c->getRadius()},
                                       {"halfHeight", c->getHalfHeight()},
                                       {"center", vec3ToJson(c->getCenter())},
-                                      {"useGravity", c->getUseGravity()},
                                       {"isTrigger", c->isTrigger()} };
         }
         if (node.hasPlaneCollider())
@@ -109,6 +106,16 @@ namespace
             const auto& c = node.getPlaneCollider();
             j["planeCollider"] = { {"center", vec3ToJson(c->getCenter())},
                                     {"isTrigger", c->isTrigger()} };
+        }
+        if (node.hasRigidbody())
+        {
+            const auto& rb = node.getRigidbody();
+            j["rigidbody"] = { {"mass", rb->getMass()},
+                               {"useGravity", rb->getUseGravity()},
+                               {"isKinematic", rb->getIsKinematic()},
+                               {"drag", rb->getDrag()},
+                               {"angularDrag", rb->getAngularDrag()},
+                               {"constraints", rb->getConstraints()} };
         }
         if (node.hasAudioClip())
         {
@@ -261,12 +268,15 @@ namespace
             }
         }
 
+        // Los colliders se cargan siempre como static (dynamic=false); si el
+        // nodo trae un Rigidbody (o useGravity legacy), el bloque de abajo lo
+        // promociona a dynamic vía physics.attachRigidbody.
         if (j.contains("boxCollider"))
         {
             const auto& c = j["boxCollider"];
             node->setBoxCollider(physics.createBoxColliderComponent(
                 jsonToVec3(c.at("halfExtents")), jsonToVec3(c.at("center")),
-                node->worldTransform, c.at("useGravity").get<bool>()));
+                node->worldTransform, /*dynamic=*/false));
             node->getBoxCollider()->setOwner(node);
             physics.setTrigger(node->getBoxCollider(), c.value("isTrigger", false));
         }
@@ -275,7 +285,7 @@ namespace
             const auto& c = j["sphereCollider"];
             node->setSphereCollider(physics.createSphereColliderComponent(
                 c.at("radius").get<float>(), jsonToVec3(c.at("center")),
-                node->worldTransform, c.at("useGravity").get<bool>()));
+                node->worldTransform, /*dynamic=*/false));
             node->getSphereCollider()->setOwner(node);
             physics.setTrigger(node->getSphereCollider(), c.value("isTrigger", false));
         }
@@ -284,7 +294,7 @@ namespace
             const auto& c = j["capsuleCollider"];
             node->setCapsuleCollider(physics.createCapsuleColliderComponent(
                 c.at("radius").get<float>(), c.at("halfHeight").get<float>(),
-                jsonToVec3(c.at("center")), node->worldTransform, c.at("useGravity").get<bool>()));
+                jsonToVec3(c.at("center")), node->worldTransform, /*dynamic=*/false));
             node->getCapsuleCollider()->setOwner(node);
             physics.setTrigger(node->getCapsuleCollider(), c.value("isTrigger", false));
         }
@@ -295,6 +305,44 @@ namespace
                 jsonToVec3(c.at("center")), node->worldTransform));
             node->getPlaneCollider()->setOwner(node);
             physics.setTrigger(node->getPlaneCollider(), c.value("isTrigger", false));
+        }
+
+        // Rigidbody: bloque nuevo. Back-compat: escenas viejas guardaban
+        // useGravity DENTRO del collider; si no hay bloque rigidbody pero un
+        // collider trae useGravity legacy == true, sintetizamos un Rigidbody
+        // heredando ese valor (cuerpo dinámico como antes). useGravity legacy
+        // == false (kinematic sin gravedad) equivale a un collider static, que
+        // es justo el estado por defecto → no se crea Rigidbody.
+        auto legacyGravity = [&](const char* key) -> int {
+            if (j.contains(key) && j[key].contains("useGravity"))
+                return j[key]["useGravity"].get<bool>() ? 1 : 0;
+            return -1; // sin campo legacy
+        };
+        if (j.contains("rigidbody"))
+        {
+            const auto& r = j["rigidbody"];
+            auto rb = std::make_shared<Rigidbody>();
+            rb->setMass(r.value("mass", 1.0f));
+            rb->setUseGravity(r.value("useGravity", true));
+            rb->setIsKinematic(r.value("isKinematic", false));
+            rb->setDrag(r.value("drag", 0.0f));
+            rb->setAngularDrag(r.value("angularDrag", 0.05f));
+            rb->setConstraints(r.value("constraints", 0u));
+            node->setRigidbody(rb);
+            if (auto col = node->anyCollider()) physics.attachRigidbody(col, rb);
+        }
+        else
+        {
+            int g = legacyGravity("boxCollider");
+            if (g < 0) g = legacyGravity("sphereCollider");
+            if (g < 0) g = legacyGravity("capsuleCollider");
+            if (g == 1)
+            {
+                auto rb = std::make_shared<Rigidbody>();
+                rb->setUseGravity(true);
+                node->setRigidbody(rb);
+                if (auto col = node->anyCollider()) physics.attachRigidbody(col, rb);
+            }
         }
         if (j.contains("audioClip"))
         {
