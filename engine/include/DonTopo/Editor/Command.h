@@ -46,10 +46,22 @@ private:
 
 // Snapshots value-type pa cada tipo de collider — T de PropertyCommand<T>
 // en las secciones Box/Sphere/Capsule/Plane Collider del panel Properties.
-struct BoxColliderState     { glm::vec3 center; glm::vec3 size; bool useGravity; bool isTrigger; };
-struct SphereColliderState  { glm::vec3 center; float radius; bool useGravity; bool isTrigger; };
-struct CapsuleColliderState { glm::vec3 center; float radius; float height; bool useGravity; bool isTrigger; };
+// La gravedad ya no vive en el collider (pasó al Rigidbody): ver RigidbodyState.
+struct BoxColliderState     { glm::vec3 center; glm::vec3 size; bool isTrigger; };
+struct SphereColliderState  { glm::vec3 center; float radius; bool isTrigger; };
+struct CapsuleColliderState { glm::vec3 center; float radius; float height; bool isTrigger; };
 struct PlaneColliderState   { glm::vec3 center; bool isTrigger; };
+
+// Snapshot value-type del Rigidbody — T de PropertyCommand<T> en la sección
+// Rigidbody del panel Properties.
+struct RigidbodyState {
+    float    mass;
+    bool     useGravity;
+    bool     isKinematic;
+    float    drag;
+    float    angularDrag;
+    uint32_t constraints;
+};
 
 class ReparentCommand : public ICommand {
 public:
