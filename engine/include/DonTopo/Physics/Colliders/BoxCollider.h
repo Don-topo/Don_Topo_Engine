@@ -1,5 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
+#include "DonTopo/Physics/Colliders/Collider.h"
 
 namespace DonTopo {
 
@@ -9,7 +10,7 @@ namespace DonTopo {
 // GameObject); con useGravity=true PhysX lo simula normal y su pose se lee
 // de vuelta hacia el GameObject cada frame. Togglear useGravity solo cambia
 // flags del actor existente, nunca lo destruye/recrea.
-class BoxCollider {
+class BoxCollider : public Collider {
 public:
     // actor: physx::PxRigidDynamic* ya creado y añadido a la escena por
     // PhysicsManager. shape: physx::PxShape* de geometría caja adjunta a ese
@@ -54,6 +55,9 @@ public:
     // el Transform panel del editor, no para el empuje continuo por frame
     // (eso es syncTransform).
     void teleport(const glm::mat4& worldTransform);
+
+protected:
+    void* triggerShape() const override;
 
 private:
 #ifdef DT_PHYSX_ENABLED

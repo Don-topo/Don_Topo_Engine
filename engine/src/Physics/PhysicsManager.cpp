@@ -1,8 +1,11 @@
 #include "DonTopo/Physics/PhysicsManager.h"
+#include "DonTopo/Physics/Colliders/Collider.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
+
+#include <algorithm>
 
 #ifdef DT_PHYSX_ENABLED
 #define GLM_ENABLE_EXPERIMENTAL
@@ -23,6 +26,65 @@ namespace {
     // PxPlaneGeometry como el eje X local del shape. Esta rotación fija
     // (90° sobre Z) mapea ese eje X a Y en ambos casos.
     PxQuat axisCorrection() { return PxQuat(PxHalfPi, PxVec3(0.0f, 0.0f, 1.0f)); }
+
+    // Recibe los pares de trigger de PhysX y los reenvía a los callbacks del
+    // collider. cada PxShape lleva en su actor un userData = Collider* (lo pone
+    // PhysicsManager al crear el collider), así se recupera quién solapó a
+    // quién. PhysX solo emite Enter/Exit (TOUCH_FOUND/LOST); el Stay lo
+    // sintetiza PhysicsManager::stepSimulation recorriendo los overlaps.
+    class TriggerDispatcher : public PxSimulationEventCallback {
+    public:
+        void onTrigger(PxTriggerPair* pairs, PxU32 count) override {
+            for (PxU32 i = 0; i < count; ++i) {
+                const PxTriggerPair& p = pairs[i];
+                // shape ya liberado (actor destruido este frame): userData
+                // colgaría, se ignora.
+                if (p.flags & (PxTriggerPairFlag::eREMOVED_SHAPE_TRIGGER |
+                               PxTriggerPairFlag::eREMOVED_SHAPE_OTHER))
+                    continue;
+
+                PxRigidActor* tActor = p.triggerShape->getActor();
+                PxRigidActor* oActor = p.otherShape->getActor();
+                if (!tActor || !oActor) continue;
+
+                auto* triggerCol = static_cast<DonTopo::Collider*>(tActor->userData);
+                auto* otherCol   = static_cast<DonTopo::Collider*>(oActor->userData);
+                if (!triggerCol || !otherCol) continue;
+
+                if (p.status & PxPairFlag::eNOTIFY_TOUCH_FOUND)
+                    triggerCol->beginOverlap(otherCol);
+                else if (p.status & PxPairFlag::eNOTIFY_TOUCH_LOST)
+                    triggerCol->endOverlap(otherCol);
+            }
+        }
+
+        // Resto de eventos de simulación: no usados.
+        void onConstraintBreak(PxConstraintInfo*, PxU32) override {}
+        void onWake(PxActor**, PxU32) override {}
+        void onSleep(PxActor**, PxU32) override {}
+        void onContact(const PxContactPairHeader&, const PxContactPair*, PxU32) override {}
+        void onAdvance(const PxRigidBody* const*, const PxTransform*, PxU32) override {}
+    };
+
+    // Filter shader: para pares que involucran un trigger, pide notificación
+    // Enter/Exit (eTRIGGER_DEFAULT) SIN suprimir por kinematic — el
+    // PxDefaultSimulationFilterShader descarta los pares kinematic-kinematic y
+    // kinematic-static, y como aquí casi todos los colliders son kinematic
+    // (useGravity=false), sin esto los triggers no dispararían nada. Los pares
+    // NO-trigger se delegan al shader por defecto para preservar exactamente el
+    // comportamiento de colisión previo.
+    PxFilterFlags dtTriggerFilterShader(
+        PxFilterObjectAttributes attr0, PxFilterData fd0,
+        PxFilterObjectAttributes attr1, PxFilterData fd1,
+        PxPairFlags& pairFlags, const void* constantBlock, PxU32 constantBlockSize)
+    {
+        if (PxFilterObjectIsTrigger(attr0) || PxFilterObjectIsTrigger(attr1)) {
+            pairFlags = PxPairFlag::eTRIGGER_DEFAULT;
+            return PxFilterFlag::eDEFAULT;
+        }
+        return PxDefaultSimulationFilterShader(attr0, fd0, attr1, fd1,
+                                               pairFlags, constantBlock, constantBlockSize);
+    }
 }
 
 static void physxCheck(void* ptr, const char* ctx) {
@@ -61,7 +123,7 @@ void PhysicsManager::init()
     PxSceneDesc sceneDesc(physics->getTolerancesScale());
     sceneDesc.gravity       = PxVec3(0.0f, -981.0f, 0.0f);
     sceneDesc.cpuDispatcher = dispatcher;
-    sceneDesc.filterShader  = PxDefaultSimulationFilterShader;
+    sceneDesc.filterShader  = dtTriggerFilterShader;
     auto* scene = physics->createScene(sceneDesc);
     physxCheck(scene, "PxPhysics::createScene");
     m_scene = scene;
@@ -69,6 +131,11 @@ void PhysicsManager::init()
     auto* material = physics->createMaterial(0.5f, 0.5f, 0.1f);
     physxCheck(material, "PxPhysics::createMaterial");
     m_material = material;
+
+    // Callback que recibe los pares de trigger y los reenvía a los colliders.
+    auto* triggerCallback = new TriggerDispatcher();
+    scene->setSimulationEventCallback(triggerCallback);
+    m_triggerCallback = triggerCallback;
 #endif
 }
 
@@ -76,6 +143,8 @@ void PhysicsManager::shutdown()
 {
 #ifdef DT_PHYSX_ENABLED
     if (m_scene)      { static_cast<PxScene*>(m_scene)->release();      m_scene = nullptr; }
+    // Tras liberar la escena nadie más referencia el callback: se borra aquí.
+    if (m_triggerCallback) { delete static_cast<TriggerDispatcher*>(m_triggerCallback); m_triggerCallback = nullptr; }
     if (m_dispatcher) { static_cast<PxDefaultCpuDispatcher*>(m_dispatcher)->release(); m_dispatcher = nullptr; }
     if (m_physics)    { static_cast<PxPhysics*>(m_physics)->release();  m_physics = nullptr; }
     if (m_foundation) { static_cast<PxFoundation*>(m_foundation)->release(); m_foundation = nullptr; }
@@ -120,11 +189,20 @@ std::shared_ptr<BoxCollider> PhysicsManager::createBoxColliderComponent(
 
     scene->addActor(*actor);
 
-    return std::make_shared<BoxCollider>(actor, shape, halfExtents, center, useGravity);
+    auto collider = std::make_shared<BoxCollider>(actor, shape, halfExtents, center, useGravity);
+    collider->setManager(this);
+    // userData del actor = Collider* base (upcast explícito para respetar
+    // cualquier offset de la base); lo lee el TriggerDispatcher para saber
+    // quién solapó a quién.
+    Collider* base = collider.get();
+    actor->userData = base;
+    return collider;
 #else
     (void)worldTransform;
     (void)density;
-    return std::make_shared<BoxCollider>(nullptr, nullptr, halfExtents, center, useGravity);
+    auto collider = std::make_shared<BoxCollider>(nullptr, nullptr, halfExtents, center, useGravity);
+    collider->setManager(this);
+    return collider;
 #endif
 }
 
@@ -165,11 +243,17 @@ std::shared_ptr<SphereCollider> PhysicsManager::createSphereColliderComponent(
 
     scene->addActor(*actor);
 
-    return std::make_shared<SphereCollider>(actor, shape, radius, center, useGravity);
+    auto collider = std::make_shared<SphereCollider>(actor, shape, radius, center, useGravity);
+    collider->setManager(this);
+    Collider* base = collider.get();
+    actor->userData = base;
+    return collider;
 #else
     (void)worldTransform;
     (void)density;
-    return std::make_shared<SphereCollider>(nullptr, nullptr, radius, center, useGravity);
+    auto collider = std::make_shared<SphereCollider>(nullptr, nullptr, radius, center, useGravity);
+    collider->setManager(this);
+    return collider;
 #endif
 }
 
@@ -211,11 +295,17 @@ std::shared_ptr<CapsuleCollider> PhysicsManager::createCapsuleColliderComponent(
 
     scene->addActor(*actor);
 
-    return std::make_shared<CapsuleCollider>(actor, shape, radius, halfHeight, center, useGravity);
+    auto collider = std::make_shared<CapsuleCollider>(actor, shape, radius, halfHeight, center, useGravity);
+    collider->setManager(this);
+    Collider* base = collider.get();
+    actor->userData = base;
+    return collider;
 #else
     (void)worldTransform;
     (void)density;
-    return std::make_shared<CapsuleCollider>(nullptr, nullptr, radius, halfHeight, center, useGravity);
+    auto collider = std::make_shared<CapsuleCollider>(nullptr, nullptr, radius, halfHeight, center, useGravity);
+    collider->setManager(this);
+    return collider;
 #endif
 }
 
@@ -259,10 +349,16 @@ std::shared_ptr<PlaneCollider> PhysicsManager::createPlaneColliderComponent(
 
     scene->addActor(*actor);
 
-    return std::make_shared<PlaneCollider>(actor, shape, center);
+    auto collider = std::make_shared<PlaneCollider>(actor, shape, center);
+    collider->setManager(this);
+    Collider* base = collider.get();
+    actor->userData = base;
+    return collider;
 #else
     (void)worldTransform;
-    return std::make_shared<PlaneCollider>(nullptr, nullptr, center);
+    auto collider = std::make_shared<PlaneCollider>(nullptr, nullptr, center);
+    collider->setManager(this);
+    return collider;
 #endif
 }
 
@@ -276,13 +372,74 @@ bool PhysicsManager::raycast(const PxVec3& origin, const PxVec3& dir, float maxD
 void PhysicsManager::stepSimulation(float dt)
 {
 #ifdef DT_PHYSX_ENABLED
-    if (dt <= 0.0f) return; // primer frame: dt=0 (last se inicializa == now), PxScene::simulate exige > 0
-
-    static_cast<PxScene*>(m_scene)->simulate(dt);
-    static_cast<PxScene*>(m_scene)->fetchResults(true);
+    // primer frame: dt=0 (last se inicializa == now), PxScene::simulate exige
+    // > 0. En fetchResults se despachan los Enter/Exit vía TriggerDispatcher.
+    if (dt > 0.0f)
+    {
+        static_cast<PxScene*>(m_scene)->simulate(dt);
+        static_cast<PxScene*>(m_scene)->fetchResults(true);
+    }
 #else
     (void)dt;
 #endif
+
+    // Sintetiza onTriggerStay: PhysX solo da Enter/Exit, así que se recorren los
+    // triggers vivos y se emite Stay por cada overlap actual. Los triggers
+    // expirados (GameObject destruido) se podan al vuelo. Sin PhysX el registro
+    // está siempre vacío.
+    for (auto it = m_triggerColliders.begin(); it != m_triggerColliders.end(); )
+    {
+        auto collider = it->lock();
+        if (!collider) { it = m_triggerColliders.erase(it); continue; }
+        collider->dispatchStay();
+        ++it;
+    }
+}
+
+void PhysicsManager::setTrigger(const std::shared_ptr<Collider>& collider, bool enabled)
+{
+    if (!collider) return;
+    collider->applyTriggerFlag(enabled);
+
+    // Poda expirados y detecta si ya estaba registrado (una sola pasada).
+    bool present = false;
+    for (auto it = m_triggerColliders.begin(); it != m_triggerColliders.end(); )
+    {
+        auto existing = it->lock();
+        if (!existing) { it = m_triggerColliders.erase(it); continue; }
+        if (existing == collider) present = true;
+        ++it;
+    }
+
+    if (enabled && !present)
+    {
+        m_triggerColliders.push_back(collider);
+    }
+    else if (!enabled && present)
+    {
+        m_triggerColliders.erase(
+            std::remove_if(m_triggerColliders.begin(), m_triggerColliders.end(),
+                [&](const std::weak_ptr<Collider>& w) {
+                    auto s = w.lock();
+                    return !s || s == collider;
+                }),
+            m_triggerColliders.end());
+    }
+}
+
+void PhysicsManager::onColliderDestroyed(Collider* collider)
+{
+    // El collider que muere puede estar en los overlaps de otros triggers:
+    // se purga de todos para no dejar punteros colgantes en el próximo Stay.
+    // Si el que muere era él mismo un trigger, su weak_ptr ya no bloquea
+    // (refcount 0 durante ~Collider) y se poda aquí.
+    for (auto it = m_triggerColliders.begin(); it != m_triggerColliders.end(); )
+    {
+        auto trigger = it->lock();
+        if (!trigger) { it = m_triggerColliders.erase(it); continue; }
+        trigger->removeOverlapSilent(collider);
+        ++it;
+    }
 }
 
 } // namespace DonTopo

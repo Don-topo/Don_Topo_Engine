@@ -1,5 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
+#include "DonTopo/Physics/Colliders/Collider.h"
 
 namespace DonTopo {
 
@@ -8,7 +9,7 @@ namespace DonTopo {
 // orienta PxCapsuleGeometry por defecto a lo largo del eje X local del
 // shape; aquí se compone una rotación fija de 90° sobre Z en el localPose
 // para que la "altura" quede en Y (cápsula de pie, tipo personaje).
-class CapsuleCollider {
+class CapsuleCollider : public Collider {
 public:
     // actor/shape ya creados por PhysicsManager, con localPose ya puesto a
     // partir de center + la rotación fija de corrección de eje.
@@ -41,6 +42,9 @@ public:
     glm::mat4 getWorldTransform() const;
     void syncTransform(const glm::mat4& worldTransform);
     void teleport(const glm::mat4& worldTransform);
+
+protected:
+    void* triggerShape() const override;
 
 private:
 #ifdef DT_PHYSX_ENABLED

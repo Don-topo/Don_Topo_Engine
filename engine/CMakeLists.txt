@@ -27,6 +27,7 @@ add_library(DonTopoEngine STATIC
     src/Core/Input.cpp
     src/Scripting/ScriptBindings.cpp
     src/Physics/PhysicsManager.cpp
+    src/Physics/Colliders/Collider.cpp
     src/Physics/Colliders/BoxCollider.cpp
     src/Physics/Colliders/SphereCollider.cpp
     src/Physics/Colliders/CapsuleCollider.cpp

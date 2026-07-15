@@ -110,4 +110,13 @@ void PlaneCollider::teleport(const glm::mat4& worldTransform)
 #endif
 }
 
+void* PlaneCollider::triggerShape() const
+{
+#ifdef DT_PHYSX_ENABLED
+    return m_shape;
+#else
+    return nullptr;
+#endif
+}
+
 } // namespace DonTopo

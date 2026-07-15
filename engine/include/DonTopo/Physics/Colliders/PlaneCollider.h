@@ -1,5 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
+#include "DonTopo/Physics/Colliders/Collider.h"
 
 namespace DonTopo {
 
@@ -8,7 +9,7 @@ namespace DonTopo {
 // "cayendo" no tiene sentido físico) — no expone toggle Use Gravity.
 // isDynamic() retorna false hardcoded: el motor siempre empuja la pose del
 // GameObject hacia PhysX (syncTransform), nunca lee de vuelta.
-class PlaneCollider {
+class PlaneCollider : public Collider {
 public:
     // actor/shape ya creados por PhysicsManager, con localPose ya puesto a
     // partir de center + la rotación fija que mapea la normal por defecto a
@@ -29,6 +30,13 @@ public:
     glm::mat4 getWorldTransform() const;
     void syncTransform(const glm::mat4& worldTransform);
     void teleport(const glm::mat4& worldTransform);
+
+protected:
+    // Nota: PhysX puede rechazar eTRIGGER_SHAPE sobre geometría de plano
+    // infinito (los triggers suelen limitarse a box/sphere/capsule/convex).
+    // Se expone igual por uniformidad; marcar un PlaneCollider como trigger es
+    // un caso límite a validar si se usa.
+    void* triggerShape() const override;
 
 private:
 #ifdef DT_PHYSX_ENABLED

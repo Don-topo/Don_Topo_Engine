@@ -1,5 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
+#include "DonTopo/Physics/Colliders/Collider.h"
 
 namespace DonTopo {
 
@@ -9,7 +10,7 @@ namespace DonTopo {
 // empujado desde el GameObject); con useGravity=true PhysX lo simula normal
 // y su pose se lee de vuelta hacia el GameObject cada frame. Togglear
 // useGravity solo cambia flags del actor existente, nunca lo destruye/recrea.
-class SphereCollider {
+class SphereCollider : public Collider {
 public:
     // actor: physx::PxRigidDynamic* ya creado y añadido a la escena por
     // PhysicsManager. shape: physx::PxShape* de geometría esfera adjunta a
@@ -52,6 +53,9 @@ public:
     // cual sea el modo, y resetea su velocidad a cero. Pensado para
     // ediciones puntuales desde el Transform panel del editor.
     void teleport(const glm::mat4& worldTransform);
+
+protected:
+    void* triggerShape() const override;
 
 private:
 #ifdef DT_PHYSX_ENABLED
