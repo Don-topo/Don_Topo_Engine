@@ -304,6 +304,10 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     {
         std::error_code cwdEc, canonEc;
         std::filesystem::path cwd = std::filesystem::current_path(cwdEc);
+        // current_path devuelve un path vacío al fallar, y canonical("") falla
+        // siempre: sin este fallback m_projectRoot acabaría vacío.
+        if (cwdEc)
+            cwd = ".";
         std::filesystem::path canon = std::filesystem::canonical(cwd, canonEc);
         // Si canonical o current_path fallan (permisos, cwd borrado bajo los
         // pies), no dejar m_projectRoot vacío: eso reintentaría este bloque
