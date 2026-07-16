@@ -17,6 +17,7 @@ add_library(DonTopoEngine STATIC
     src/Renderer/Plane.cpp
     src/Renderer/Capsule.cpp
     src/Core/Camera.cpp
+    src/Core/CameraComponent.cpp
     src/Core/GameObject.cpp
     src/Core/Scene.cpp
     src/Files/FileManager.cpp
