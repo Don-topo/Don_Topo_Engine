@@ -3,6 +3,7 @@
 #include <string>
 #include <glm/glm.hpp>
 #include "DonTopo/Editor/UndoManager.h" // BoxColliderState, SphereColliderState, CapsuleColliderState, PlaneColliderState
+#include "DonTopo/Core/CameraComponent.h"
 
 namespace IGFD { class FileDialog; }
 
@@ -42,6 +43,7 @@ private:
     void drawCapsuleColliderSection(EditorContext& ctx);
     void drawPlaneColliderSection(EditorContext& ctx);
     void drawRigidbodySection(EditorContext& ctx);
+    void drawCameraSection(EditorContext& ctx);
     void drawMeshSection(EditorContext& ctx);
     void drawMeshDialog(EditorContext& ctx);
     void drawAudioClipSection(EditorContext& ctx);
@@ -122,6 +124,19 @@ private:
     uint32_t       m_editRbConstraints = 0;
     bool           m_rigidbodyDragActive = false;
     RigidbodyState m_rigidbodyBeforeEdit{};
+
+    // Camera – mismo patrón de cache que Rigidbody. Los DragFloat (fov/size/
+    // near/far) usan begin/commit con m_cameraBeforeEdit pa empujar un único
+    // PropertyCommand<CameraState> al soltar; el combo de modo empuja comando
+    // inmediato.
+    const void* m_cameraCachedFor = nullptr;
+    CameraComponent::ProjectionMode m_editCamMode = CameraComponent::ProjectionMode::Perspective;
+    float       m_editCamFov = 45.0f;
+    float       m_editCamOrthoSize = 100.0f;
+    float       m_editCamNear = 1.0f;
+    float       m_editCamFar = 2000.0f;
+    bool        m_cameraDragActive = false;
+    CameraState m_cameraBeforeEdit{};
 
     // Instancia propia de ImGuiFileDialog para "Add > Mesh", separada de
     // m_audioFileDialog: la librería documenta que una única instancia

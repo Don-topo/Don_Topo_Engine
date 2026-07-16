@@ -15,6 +15,7 @@
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Scripting/ScriptComponent.h"
+#include "DonTopo/Core/CameraComponent.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -321,6 +322,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
             drawCapsuleColliderSection(ctx);
             drawPlaneColliderSection(ctx);
             drawRigidbodySection(ctx);
+            drawCameraSection(ctx);
             drawMeshSection(ctx);
             drawAudioClipSection(ctx);
             drawScriptsSection(ctx);
@@ -987,6 +989,150 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
     ImGui::TreePop();
 }
 
+void PropertiesPanel::drawCameraSection(EditorContext& ctx)
+{
+    // Oculta hasta que se pulse Add: la sección solo existe si el componente
+    // existe, y el componente solo existe tras Add (mismo early-return que
+    // drawRigidbodySection).
+    if (!ctx.selected || !ctx.selected->hasCameraComponent()) { m_cameraCachedFor = nullptr; return; }
+    CameraComponent* cam = ctx.selected->getCameraComponent().get();
+    if (m_cameraCachedFor != cam)
+    {
+        m_editCamMode      = cam->getMode();
+        m_editCamFov       = cam->getFov();
+        m_editCamOrthoSize = cam->getOrthographicSize();
+        m_editCamNear      = cam->getNear();
+        m_editCamFar       = cam->getFar();
+        m_cameraCachedFor  = cam;
+    }
+
+    ImGui::Separator();
+    if (!ImGui::TreeNodeEx("Camera", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen))
+        return;
+
+    Scene*   scene = ctx.scene;
+    uint64_t id    = ctx.selected->id;
+
+    // Aplica un CameraState al GameObject resuelto por id (sobrevive a
+    // undo-de-delete). Mismo patrón que applyRbState.
+    auto applyCamState = [scene, id](const CameraState& s) {
+        GameObject* go = scene->findById(id);
+        if (!go || !go->hasCameraComponent()) return;
+        auto c = go->getCameraComponent();
+        c->setMode(s.mode);
+        // far antes que near: setNear clampa contra el far actual.
+        c->setFar(s.farPlane);
+        c->setNear(s.nearPlane);
+        c->setFov(s.fov);
+        c->setOrthographicSize(s.orthographicSize);
+    };
+    auto currentState = [&]() {
+        return CameraState{ m_editCamMode, m_editCamFov, m_editCamOrthoSize, m_editCamNear, m_editCamFar };
+    };
+
+    // --- Combo de modo: comando inmediato con before/after ---
+    {
+        CameraState before = currentState();
+        const char* modes[] = { "Perspective", "Orthographic" };
+        int modeIdx = (m_editCamMode == CameraComponent::ProjectionMode::Orthographic) ? 1 : 0;
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+        if (ImGui::Combo("Projection", &modeIdx, modes, 2))
+        {
+            m_editCamMode = (modeIdx == 1) ? CameraComponent::ProjectionMode::Orthographic
+                                            : CameraComponent::ProjectionMode::Perspective;
+            applyCamState(currentState());
+            ctx.pushLog(std::string("Projection de '") + ctx.selected->name + "' (Camera): " + modes[modeIdx]);
+            if (ctx.scene)
+                ctx.undo->push(std::make_unique<PropertyCommand<CameraState>>(
+                    "Projection de '" + ctx.selected->name + "' (Camera)", before, currentState(), applyCamState));
+        }
+    }
+
+    // --- Drag floats: snapshot al activar CUALQUIERA, comando al soltar
+    // CUALQUIERA (mismo patrón acumulativo que Rigidbody).
+    auto snapshotBefore = [&]() {
+        if (!m_cameraDragActive)
+        {
+            m_cameraDragActive = true;
+            m_cameraBeforeEdit = CameraState{ cam->getMode(), cam->getFov(), cam->getOrthographicSize(),
+                                               cam->getNear(), cam->getFar() };
+        }
+    };
+    bool floatChanged = false;
+    bool floatCommitted = false;
+
+    // Solo se muestra el campo del modo activo: enseñar el otro sugeriría que
+    // hace algo, y no hace nada.
+    if (m_editCamMode == CameraComponent::ProjectionMode::Orthographic)
+    {
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6);
+        floatChanged |= ImGui::DragFloat("Size", &m_editCamOrthoSize, 1.0f, 0.001f, FLT_MAX, "%.3f");
+        if (ImGui::IsItemActivated()) snapshotBefore();
+        floatCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+    }
+    else
+    {
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6);
+        floatChanged |= ImGui::DragFloat("Field of View", &m_editCamFov, 0.5f, 1.0f, 179.0f, "%.1f");
+        if (ImGui::IsItemActivated()) snapshotBefore();
+        floatCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+    }
+
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6);
+    floatChanged |= ImGui::DragFloat("Near", &m_editCamNear, 0.1f, 0.001f, FLT_MAX, "%.3f");
+    if (ImGui::IsItemActivated()) snapshotBefore();
+    floatCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6);
+    floatChanged |= ImGui::DragFloat("Far", &m_editCamFar, 1.0f, 0.001f, FLT_MAX, "%.3f");
+    if (ImGui::IsItemActivated()) snapshotBefore();
+    floatCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+
+    if (floatChanged)
+    {
+        applyCamState(currentState());
+        // Los clamps del componente pueden haber corregido el valor (p.ej. near
+        // por encima de far): se re-sincroniza el cache pa que el widget enseñe
+        // lo que de verdad quedó guardado, no lo que se arrastró.
+        m_editCamFov       = cam->getFov();
+        m_editCamOrthoSize = cam->getOrthographicSize();
+        m_editCamNear      = cam->getNear();
+        m_editCamFar       = cam->getFar();
+    }
+    if (m_cameraDragActive && floatCommitted)
+    {
+        m_cameraDragActive = false;
+        if (ctx.scene)
+            ctx.undo->push(std::make_unique<PropertyCommand<CameraState>>(
+                "Camera de '" + ctx.selected->name + "'", m_cameraBeforeEdit, currentState(), applyCamState));
+    }
+
+    if (ImGui::Button("Remove Camera"))
+    {
+        // Pasa por el stack igual que el Add (ver CameraComponentCommand): si el
+        // Remove no fuera deshacible, quitar la cámara sería una pérdida
+        // irreversible.
+        CameraState st = currentState();
+        m_cameraCachedFor = nullptr;
+        ctx.pushLog("Componente Camera quitado de '" + ctx.selected->name + "'");
+        if (ctx.scene && ctx.undo)
+        {
+            auto cmd = std::make_unique<CameraComponentCommand>(
+                *ctx.scene, "Quitar Camera de '" + ctx.selected->name + "'", id, /*add=*/false, st);
+            cmd->execute();
+            ctx.undo->push(std::move(cmd));
+        }
+        else
+        {
+            ctx.selected->setCameraComponent(nullptr);
+        }
+        ImGui::TreePop();
+        return;
+    }
+
+    ImGui::TreePop();
+}
+
 void PropertiesPanel::drawMeshSection(EditorContext& ctx)
 {
     // Oculto por defecto: solo se dibuja si ya tiene mesh, o si se pulsó
@@ -1400,6 +1546,29 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         if (ImGui::Selectable("Audio Clip") && !alreadyHasAudio)
             m_audioClipAddRequestedFor = ctx.selected;
         ImGui::EndDisabled();
+
+        // Cámara: como mucho una por escena, y el gate pregunta a la única
+        // fuente de verdad (Scene::findCamera), no a un flag propio. Deshabilitado
+        // y no oculto porque es lo que hacen los demás items de este popup — y el
+        // tooltip dice QUIÉN la tiene ya, que si no un item gris sin explicación
+        // es un callejón sin salida.
+        GameObject* existingCamera = ctx.scene ? ctx.scene->findCamera() : nullptr;
+        ImGui::BeginDisabled(existingCamera != nullptr);
+        if (ImGui::Selectable("Camera") && !existingCamera && ctx.scene && ctx.undo)
+        {
+            CameraComponent defaults;
+            CameraState st{ defaults.getMode(), defaults.getFov(), defaults.getOrthographicSize(),
+                            defaults.getNear(), defaults.getFar() };
+            auto cmd = std::make_unique<CameraComponentCommand>(
+                *ctx.scene, "Añadir Camera a '" + ctx.selected->name + "'", ctx.selected->id, /*add=*/true, st);
+            cmd->execute();
+            ctx.undo->push(std::move(cmd));
+            m_cameraCachedFor = nullptr;
+            ctx.pushLog("Componente Camera añadido a '" + ctx.selected->name + "'");
+        }
+        ImGui::EndDisabled();
+        if (existingCamera && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Ya hay una cámara en la escena ('%s')", existingCamera->name.c_str());
 
         if (ctx.scriptManager)
         {
