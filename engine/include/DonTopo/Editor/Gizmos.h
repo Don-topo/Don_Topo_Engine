@@ -43,7 +43,8 @@ public:
     // GLM_FORCE_DEPTH_ZERO_TO_ONE) son NO: near -> z_ndc=-1, pensadas pa
     // OpenGL. CameraComponent::projectionMatrix usa *_ZO (near -> z_ndc=0)
     // porque Vulkan clipea 0<=z<=w. Reconstruir corners con el z_ndc
-    // equivocado deja los 4 de la cara cercana detrás del ojo. El default
+    // equivocado descoloca la cara cercana: en ortográfica se va detrás del
+    // ojo, en perspectiva se queda por delante del near plane. El default
     // false mantiene intactos los callers existentes (p.ej. sandbox/main.cpp,
     // que usa una matriz NO de glm sin tocar).
     static void drawFrustum(const glm::mat4& viewProj, const glm::vec3& color,
