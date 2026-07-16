@@ -310,7 +310,12 @@ static void test_camera_command_add_undo_redo()
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Objetivo");
 
-    CameraState st{ CameraComponent::ProjectionMode::Orthographic, 60.0f, 300.0f, 2.0f, 900.0f };
+    // near > el far por defecto (2000) a propósito: apply() tiene que llamar a
+    // setFar ANTES que a setNear (setNear clampa contra el far ACTUAL). Con
+    // valores pequeños los dos órdenes dan el mismo resultado y la regresión
+    // pasaría desapercibida; con near=3000 el orden inverso lo truncaría a
+    // 1999.999 y este test cae.
+    CameraState st{ CameraComponent::ProjectionMode::Orthographic, 60.0f, 300.0f, 3000.0f, 8000.0f };
     CameraComponentCommand cmd(scene, "Add Camera", go->id, /*add=*/true, st);
 
     cmd.execute();
@@ -328,8 +333,8 @@ static void test_camera_command_add_undo_redo()
     CHECK(c->getMode() == CameraComponent::ProjectionMode::Orthographic);
     CHECK(nearlyEqual(c->getFov(), 60.0f));
     CHECK(nearlyEqual(c->getOrthographicSize(), 300.0f));
-    CHECK(nearlyEqual(c->getNear(), 2.0f));
-    CHECK(nearlyEqual(c->getFar(), 900.0f));
+    CHECK(nearlyEqual(c->getNear(), 3000.0f));
+    CHECK(nearlyEqual(c->getFar(), 8000.0f));
 }
 
 // add=false invierte el sentido: execute quita, undo devuelve.
