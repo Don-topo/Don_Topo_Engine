@@ -111,8 +111,6 @@ namespace DonTopo {
             throw std::runtime_error("failed to reset command buffer!");
         }
 
-        updateUniformBuffer(m_currentFrame);
-
         // ── Construir frame ImGui (antes de grabar el command buffer) ─────────────
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -121,6 +119,17 @@ namespace DonTopo {
         m_editorUI.draw(m_offscreenDescSet[m_currentFrame], m_sceneRoot, m_viewMatrix);
 
         ImGui::Render();
+
+        // Se muestrea AQUÍ, después de m_editorUI.draw() y no antes: ese draw()
+        // es quien puede voltear m_isPlaying (botones Play/Stop) o mutar la
+        // escena (Add/Remove/Create Camera). currentFrameCamera() lee ambas
+        // cosas, así que si se llamaba antes del draw(), el UBO (geometría
+        // iluminada) y el command buffer grabado justo debajo (skybox +
+        // gizmos) podían acabar leyendo cámaras distintas en el frame exacto
+        // del clic — un frame de tearing visible. El UBO está en memoria
+        // host-mapeada: basta con escribirlo antes del vkQueueSubmit de más
+        // abajo, no hace falta que sea lo primero del frame.
+        updateUniformBuffer(m_currentFrame);
 
         recordCommandBuffer(imageIndex);
 
