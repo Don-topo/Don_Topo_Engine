@@ -178,6 +178,25 @@ Two details worth stating explicitly:
 - `projectionMatrix` applies the Vulkan Y-flip (`proj[1][1] *= -1`) internally. Both
   consumers need it (the renderer for the UBO, `Gizmos::drawFrustum` for a viewProj);
   leaving it to callers would duplicate it and invite a forgotten flip.
+- **It uses glm's `*RH_ZO` variants** (`orthoRH_ZO` / `perspectiveRH_ZO`), not the bare
+  `glm::ortho` / `glm::perspective`. Without `GLM_FORCE_DEPTH_ZERO_TO_ONE` (which this
+  repo does not define, and which we deliberately do not add — it would change the
+  projection of the entire renderer), the bare functions map near → `z_ndc = -1`, the
+  OpenGL convention. Vulkan clips `0 ≤ z_clip ≤ w_clip`, so everything at `z_ndc < 0` is
+  discarded. In orthographic (`w == 1`) that silently throws away the near HALF of the
+  range: with the defaults, only geometry between 1000.5 and 2000 units would render —
+  a black screen at this repo's scale. Perspective loses only the first ~2 units, which
+  is why the same flaw in the editor's own projection (`Renderer::currentFrameCamera`'s
+  fallback) has gone unnoticed and is left alone as out of scope. `Renderer.cpp:1233`
+  already used `orthoRH_ZO` for the shadow map — the precedent was there.
+
+  Consequence: `Gizmos::drawFrustum` reconstructs its corners from NDC and therefore
+  needs to know the convention. It gains `bool depthZeroToOne = false`; the default
+  preserves every existing caller (notably `sandbox/src/main.cpp:326`, which passes a
+  glm-default matrix and is out of scope), and `ViewportPanel::drawCameraGizmo` passes
+  `true`. Reconstruction (ZO matrix → world-space corners) and rendering (the editor's
+  projection, applied to those world-space lines like any other gizmo) stay separate
+  roles: a world-space point carries no depth convention.
 - `viewFromWorld` normalizes the basis axes before inverting. A scaled GameObject would
   otherwise bake its scale into the view matrix and warp the image.
 

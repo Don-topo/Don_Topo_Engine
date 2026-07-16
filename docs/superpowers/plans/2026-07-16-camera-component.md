@@ -2100,6 +2100,7 @@ Confirm each, or report what actually happened:
 4. Properties on the camera → the **Camera section is visible**, with Projection / Field of View / Near / Far.
 5. Editing **Field of View / Near / Far** reshapes the frustum live.
 6. Switching Projection to **Orthographic** → "Field of View" is replaced by "Size", and the frustum becomes a box.
+6b. **Press Play in Orthographic mode and confirm the scene actually renders.** This was a real Critical found in the final review: the projection used glm's OpenGL depth range, which Vulkan clips, leaving only the far half of the range visible — a black screen at this repo's scale. Fixed (`orthoRH_ZO`) and covered by a headless test, but the on-screen result has never been observed.
 7. On a *different* GameObject: Properties → **"Add" → "Camera" is greyed out**, and hovering shows the tooltip naming the GameObject that has it.
 8. Right-click the Scene panel again → **"Create Camera" is gone** (a camera already exists).
 9. On a GameObject *without* a camera: Properties → **no Camera section** until "Add" → "Camera" is pressed.
