@@ -21,6 +21,12 @@ public:
 
 private:
     void drawSelectionGizmo(EditorContext& ctx);
+    // Wireframe del frustum de la cámara de la escena, siempre visible en
+    // edición (no solo al seleccionarla). Solo el frustum: los ejes del
+    // transform ya los dibuja drawSelectionGizmo al seleccionar cualquier
+    // objeto, y repetirlos aquí daría dos juegos de ejes superpuestos de
+    // distinta longitud.
+    void drawCameraGizmo(EditorContext& ctx);
     // Longitud de eje proporcional al bbox local del mesh de node (mitad
     // del eje más largo); si node no tiene mesh (o el mesh no tiene
     // vértices), valor fijo de repliegue.

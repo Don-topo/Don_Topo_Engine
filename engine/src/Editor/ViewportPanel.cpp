@@ -2,11 +2,14 @@
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Camera.h"
+#include "DonTopo/Core/CameraComponent.h"
+#include "DonTopo/Core/Scene.h"
 #include "DonTopo/Editor/Gizmos.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
+#include "DonTopo/Renderer/Renderer.h"
 #include <imgui.h>
 #include <algorithm>
 
@@ -110,9 +113,32 @@ void ViewportPanel::drawSelectionGizmo(EditorContext& ctx)
     }
 }
 
+void ViewportPanel::drawCameraGizmo(EditorContext& ctx)
+{
+    // Solo en edición: en Play ya se está mirando POR esa cámara, dibujar su
+    // propio frustum no aporta nada (y taparía la vista desde dentro).
+    if (ctx.isPlaying || !ctx.scene || !ctx.renderer)
+        return;
+
+    GameObject* cam = ctx.scene->findCamera();
+    if (!cam) return;
+
+    // El aspect sale del Renderer (el del render target), no del tamaño de esta
+    // ventana ImGui: tiene que ser EXACTAMENTE el que usará la proyección al
+    // dar a Play, o el wireframe dibujaría un encuadre que luego no se cumple.
+    const glm::mat4 viewProj =
+        cam->getCameraComponent()->projectionMatrix(ctx.renderer->viewportAspect()) *
+        CameraComponent::viewFromWorld(cam->worldTransform);
+
+    // Cian: distinto del amarillo de los colliders, pa no confundirlos.
+    const glm::vec3 kCameraGizmoColor(0.0f, 1.0f, 1.0f);
+    Gizmos::drawFrustum(viewProj, kCameraGizmoColor);
+}
+
 void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, const glm::mat4& cameraView)
 {
     drawSelectionGizmo(ctx);
+    drawCameraGizmo(ctx);
 
     if (!m_open)
     {
