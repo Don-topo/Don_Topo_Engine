@@ -90,6 +90,42 @@ static void test_projection_degenerate_aspect()
     CHECK(!std::isnan(p[0][0]));
 }
 
+// Vulkan clipea 0 <= z_clip <= w_clip, así que la proyección tiene que mapear
+// near->0 y far->1. El default de glm (sin GLM_FORCE_DEPTH_ZERO_TO_ONE) mapea
+// near->-1 pensando en OpenGL: en ortográfica eso tiraba la mitad cercana del
+// rango entero (con near=1/far=2000 sólo se veía de 1000.5 en adelante).
+static void test_orthographic_uses_vulkan_depth_range()
+{
+    CameraComponent c; // near=1, far=2000
+    c.setMode(CameraComponent::ProjectionMode::Orthographic);
+    glm::mat4 p = c.projectionMatrix(1.0f);
+
+    glm::vec4 atNear = p * glm::vec4(0.0f, 0.0f, -1.0f, 1.0f);
+    CHECK(nearlyEqual(atNear.z / atNear.w, 0.0f));
+    glm::vec4 atFar = p * glm::vec4(0.0f, 0.0f, -2000.0f, 1.0f);
+    CHECK(nearlyEqual(atFar.z / atFar.w, 1.0f));
+    // Un objeto a la escala de este repo (cámara del sandbox a z=300) tiene que
+    // quedar DENTRO del rango visible, no clipeado.
+    glm::vec4 mid = p * glm::vec4(0.0f, 0.0f, -300.0f, 1.0f);
+    CHECK(mid.z / mid.w > 0.0f);
+    CHECK(mid.z / mid.w < 1.0f);
+}
+
+// Mismo contrato en perspectiva (ahí el fallo sólo recortaba los primeros ~2
+// units, por eso pasaba desapercibido).
+static void test_perspective_uses_vulkan_depth_range()
+{
+    CameraComponent c; // perspectiva por defecto, near=1, far=2000
+    glm::mat4 p = c.projectionMatrix(16.0f / 9.0f);
+
+    glm::vec4 atNear = p * glm::vec4(0.0f, 0.0f, -1.0f, 1.0f);
+    CHECK(nearlyEqual(atNear.z / atNear.w, 0.0f));
+    glm::vec4 atFar = p * glm::vec4(0.0f, 0.0f, -2000.0f, 1.0f);
+    CHECK(nearlyEqual(atFar.z / atFar.w, 1.0f));
+    glm::vec4 mid = p * glm::vec4(0.0f, 0.0f, -300.0f, 1.0f);
+    CHECK(mid.z / mid.w > 0.0f);
+}
+
 // La cámara mira a -Z local (convención de glm/lookAt y de DonTopo::Camera,
 // cuyo yaw por defecto de -90° da front = (0,0,-1)).
 static void test_view_from_world_translation()
@@ -384,6 +420,8 @@ int main()
     test_projection_has_vulkan_y_flip();
     test_projection_modes_differ();
     test_projection_degenerate_aspect();
+    test_orthographic_uses_vulkan_depth_range();
+    test_perspective_uses_vulkan_depth_range();
     test_view_from_world_translation();
     test_view_from_world_ignores_scale();
     test_find_camera_at_any_depth();

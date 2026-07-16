@@ -38,7 +38,16 @@ public:
     static void drawWireCapsule(const glm::mat4& transform, const glm::vec3& center,
                                 float radius, float halfHeight, const glm::vec3& color);
     static void drawAxes(const glm::mat4& transform, float scale = 1.0f);
-    static void drawFrustum(const glm::mat4& viewProj, const glm::vec3& color);
+    // depthZeroToOne: la matriz viewProj puede venir de dos convenciones de
+    // profundidad distintas. glm::perspective/ortho por defecto (sin
+    // GLM_FORCE_DEPTH_ZERO_TO_ONE) son NO: near -> z_ndc=-1, pensadas pa
+    // OpenGL. CameraComponent::projectionMatrix usa *_ZO (near -> z_ndc=0)
+    // porque Vulkan clipea 0<=z<=w. Reconstruir corners con el z_ndc
+    // equivocado deja los 4 de la cara cercana detrás del ojo. El default
+    // false mantiene intactos los callers existentes (p.ej. sandbox/main.cpp,
+    // que usa una matriz NO de glm sin tocar).
+    static void drawFrustum(const glm::mat4& viewProj, const glm::vec3& color,
+                            bool depthZeroToOne = false);
 
     // Uso exclusivo de Renderer.
     // colorFormat: no usado (el renderPass ya lo lleva), se mantiene por simetría con Skybox::init.

@@ -310,12 +310,16 @@ void Gizmos::drawWireBox(const glm::mat4& transform, const glm::vec3& center,
     get().addBoxEdges(corners, color);
 }
 
-void Gizmos::drawFrustum(const glm::mat4& viewProj, const glm::vec3& color)
+void Gizmos::drawFrustum(const glm::mat4& viewProj, const glm::vec3& color, bool depthZeroToOne)
 {
     if (!get().m_enabled) return;
     glm::mat4 invVP = glm::inverse(viewProj);
+    // La cara cercana (los 4 primeros corners) usa el z_ndc de near según la
+    // convención de la matriz recibida; la cara lejana siempre es z=1 en
+    // ambas (NO y ZO coinciden en el far plane).
+    const float zNear = depthZeroToOne ? 0.0f : -1.0f;
     std::array<glm::vec3, 8> ndc = {
-        glm::vec3(-1,-1,-1), glm::vec3( 1,-1,-1), glm::vec3( 1, 1,-1), glm::vec3(-1, 1,-1),
+        glm::vec3(-1,-1,zNear), glm::vec3( 1,-1,zNear), glm::vec3( 1, 1,zNear), glm::vec3(-1, 1,zNear),
         glm::vec3(-1,-1, 1), glm::vec3( 1,-1, 1), glm::vec3( 1, 1, 1), glm::vec3(-1, 1, 1),
     };
     std::array<glm::vec3, 8> corners;

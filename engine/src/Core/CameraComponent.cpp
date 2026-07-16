@@ -41,16 +41,22 @@ namespace DonTopo
         if (!(aspect > 0.0f))
             aspect = 1.0f;
 
+        // *_ZO (zero-to-one) y no el *_NO (glm por defecto sin
+        // GLM_FORCE_DEPTH_ZERO_TO_ONE): Vulkan clipea 0 <= z_clip <= w_clip,
+        // pero la convención NO de glm está pensada pa OpenGL y manda near a
+        // z_ndc=-1. En ortográfica (w=1) eso recorta directamente la mitad
+        // cercana de todo el rango near/far, no solo un margen fino como en
+        // perspectiva. Mismo criterio que la shadow matrix en Renderer.cpp.
         glm::mat4 proj;
         if (m_mode == ProjectionMode::Orthographic)
         {
             const float halfHeight = m_orthographicSize;
             const float halfWidth  = halfHeight * aspect;
-            proj = glm::ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, m_near, m_far);
+            proj = glm::orthoRH_ZO(-halfWidth, halfWidth, -halfHeight, halfHeight, m_near, m_far);
         }
         else
         {
-            proj = glm::perspective(glm::radians(m_fov), aspect, m_near, m_far);
+            proj = glm::perspectiveRH_ZO(glm::radians(m_fov), aspect, m_near, m_far);
         }
         proj[1][1] *= -1.0f; // Vulkan Y flip
         return proj;

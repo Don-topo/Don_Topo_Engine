@@ -132,7 +132,9 @@ void ViewportPanel::drawCameraGizmo(EditorContext& ctx)
 
     // Cian: distinto del amarillo de los colliders, pa no confundirlos.
     const glm::vec3 kCameraGizmoColor(0.0f, 1.0f, 1.0f);
-    Gizmos::drawFrustum(viewProj, kCameraGizmoColor);
+    // true: esta viewProj sale de CameraComponent::projectionMatrix, que usa
+    // *_ZO (near->z_ndc=0) pa Vulkan, no la convención NO por defecto de glm.
+    Gizmos::drawFrustum(viewProj, kCameraGizmoColor, /*depthZeroToOne=*/true);
 }
 
 void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, const glm::mat4& cameraView)
