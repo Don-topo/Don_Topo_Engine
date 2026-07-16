@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Core/Camera.h"
+#include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Renderer/UniformBufferObject.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/GpuDevice.h"
@@ -42,7 +43,20 @@ namespace DonTopo {
             void setOnAxisSelected(std::function<void(const glm::vec3&)> cb) { m_editorUI.setOnAxisSelected(std::move(cb)); }
             void setPhysicsManager(PhysicsManager* physics) { m_editorUI.setPhysicsManager(physics); }
             void setAudioManager(AudioManager* audio) { m_editorUI.setAudioManager(audio); }
-            void setScene(Scene* scene) { m_editorUI.setScene(scene); }
+            // Guarda la escena además del passthrough al EditorUI:
+            // currentFrameCamera() necesita preguntarle por su cámara cada
+            // frame (Scene::findCamera es la única fuente de verdad).
+            void setScene(Scene* scene) { m_scene = scene; m_editorUI.setScene(scene); }
+
+            // Aspect del render target. Público porque el gizmo de frustum
+            // (ViewportPanel) tiene que usar EXACTAMENTE el mismo que usará la
+            // proyección de Play, o dibujaría un encuadre que no se corresponde.
+            float viewportAspect() const
+            {
+                return m_swapChainExtent.height > 0
+                    ? (float)m_swapChainExtent.width / (float)m_swapChainExtent.height
+                    : 1.0f;
+            }
             // Passthrough al EditorUI embebido, mismo patrón que
             // setPhysicsManager/setAudioManager.
             void setScriptManager(ScriptManager* sm) { m_editorUI.setScriptManager(sm); }
@@ -236,6 +250,21 @@ namespace DonTopo {
             void removeStaticObject(int index);
             void removeSkinnedObject(int index);
 
+            // Cámara efectiva de un frame. eye va aquí porque ubo.viewPos
+            // alimenta el specular: sin él, en Play los brillos se calcularían
+            // desde la posición de la cámara del editor.
+            struct FrameCamera {
+                glm::mat4 view;
+                glm::mat4 proj;
+                glm::vec3 eye;
+            };
+
+            // La del CameraComponent en Play (si la escena tiene una), la de
+            // vuelo del editor en cualquier otro caso. Único sitio donde se
+            // decide: antes la proyección estaba duplicada a pelo en
+            // recordCommandBuffer y updateUniformBuffer.
+            FrameCamera currentFrameCamera() const;
+
             GpuDevice                       m_gpu;
             GpuResources                    m_res{ m_gpu };
             VkSwapchainKHR                  m_swapChain                         = VK_NULL_HANDLE;
@@ -309,5 +338,6 @@ namespace DonTopo {
             EditorUI m_editorUI;
             Skybox   m_skybox;
             GameObject* m_sceneRoot = nullptr;
+            Scene* m_scene = nullptr;
     };
 }

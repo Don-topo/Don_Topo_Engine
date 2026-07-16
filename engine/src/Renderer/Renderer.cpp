@@ -1,5 +1,7 @@
 ﻿#include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/Scene.h"
+#include "DonTopo/Core/CameraComponent.h"
 #include <GLFW/glfw3.h>
 #include <stdexcept>
 #include "DonTopo/Core/Window.h"
@@ -247,6 +249,38 @@ namespace DonTopo {
     {
         m_viewMatrix = camera.getViewMatrix();
         m_camera = camera;
+    }
+
+    Renderer::FrameCamera Renderer::currentFrameCamera() const
+    {
+        const float aspect = viewportAspect();
+
+        // Edición: la proyección de siempre (45° fijos + near/far derivados de
+        // m_cameraDistance). No se toca a propósito — el componente solo manda
+        // en Play, así que el editor no cambia de look.
+        FrameCamera fc{ m_viewMatrix,
+                        glm::perspective(glm::radians(45.0f), aspect,
+                                          m_cameraDistance * 0.001f, m_cameraDistance * 3.0f),
+                        m_camera.getPos() };
+        fc.proj[1][1] *= -1.0f; // Vulkan Y flip
+
+        // Play con cámara en escena: manda el CameraComponent. m_camera y
+        // m_viewMatrix NO se tocan nunca — siguen siendo los del editor, así que
+        // al parar Play la vista vuelve sola, sin guardar ni restaurar estado
+        // (y sin que main.cpp, que llama a setCamera cada frame, se entere).
+        // Sin cámara en escena se cae al repliegue de arriba; el aviso al Log lo
+        // da EditorUI al arrancar Play, no aquí (esto corre cada frame).
+        if (m_editorUI.isPlaying() && m_scene)
+        {
+            if (GameObject* cam = m_scene->findCamera())
+            {
+                const auto& c = cam->getCameraComponent();
+                fc.view = CameraComponent::viewFromWorld(cam->worldTransform);
+                fc.proj = c->projectionMatrix(aspect);
+                fc.eye  = glm::vec3(cam->worldTransform[3]);
+            }
+        }
+        return fc;
     }
 
     void Renderer::createSwapChain(Window& window)
@@ -649,24 +683,22 @@ namespace DonTopo {
                 }
             }
 
-            // Proyección compartida por skybox y gizmos (mismo pass, misma cámara).
-            glm::mat4 proj = glm::perspective(
-                glm::radians(45.0f),
-                (float)m_swapChainExtent.width / (float)m_swapChainExtent.height,
-                m_cameraDistance * 0.001f, m_cameraDistance * 3.0f);
-            proj[1][1] *= -1.0f;
+            // Proyección compartida por skybox y gizmos (mismo pass, misma
+            // cámara). El Y-flip ya viene aplicado desde currentFrameCamera().
+            const FrameCamera fc = currentFrameCamera();
+            const glm::mat4 proj = fc.proj;
 
             // Skybox — fullscreen quad, depth LEQUAL sin escritura (al final del pass).
             // Omitido en wireframe: el fondo ya es negro sólido (clearValue por defecto).
             if (!m_wireframeMode && m_skybox.isInitialized()) {
-                glm::mat4 rotView    = glm::mat4(glm::mat3(m_viewMatrix)); // sin traslación
+                glm::mat4 rotView    = glm::mat4(glm::mat3(fc.view)); // sin traslación
                 glm::mat4 invViewProj = glm::inverse(proj * rotView);
                 m_skybox.draw(m_commandBuffers[m_currentFrame], invViewProj);
             }
 
             // Gizmos — mismo pass, tras el skybox, respetando el depth test de la escena.
             {
-                Gizmos::draw(m_commandBuffers[m_currentFrame], proj * m_viewMatrix, m_currentFrame);
+                Gizmos::draw(m_commandBuffers[m_currentFrame], proj * fc.view, m_currentFrame);
             }
 
             vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
@@ -1181,22 +1213,19 @@ namespace DonTopo {
 
     void Renderer::updateUniformBuffer(uint32_t frameIndex)
     {
+        // Cámara del CameraComponent en Play, la del editor en edición. El
+        // Y-flip de Vulkan ya viene aplicado desde currentFrameCamera().
+        const FrameCamera fc = currentFrameCamera();
         UniformBufferObject ubo{};
-        ubo.view = m_viewMatrix;        
-
-        ubo.proj = glm::perspective(
-            glm::radians(45.0f),
-            (float)m_swapChainExtent.width / (float)m_swapChainExtent.height,
-            m_cameraDistance * 0.001f,
-            m_cameraDistance * 3.0f);
-        ubo.proj[1][1] *= -1.0f;    // Vulkan Y flip
+        ubo.view = fc.view;
+        ubo.proj = fc.proj;
         ubo.numLights = std::min((int)m_lights.size(), MAX_LIGHTS);
         for(int i = 0; i < ubo.numLights; i++)
         {
             ubo.lights[i] = m_lights[i];
         }
         
-        ubo.viewPos  = glm::vec4(m_camera.getPos(), 1.0f);
+        ubo.viewPos  = glm::vec4(fc.eye, 1.0f);
         if (!m_lights.empty())
         {
             glm::vec3 lpos     = glm::vec3(m_lights[0].position);
