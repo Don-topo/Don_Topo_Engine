@@ -153,6 +153,12 @@ void EditorUI::drawToolbar()
         {
             m_playSnapshot = m_scene->toJson();
             m_undoHistory.clear();
+            // Aviso una sola vez al arrancar Play (no cada frame: el Renderer
+            // consulta findCamera() en todos, y loguear ahí inundaría la
+            // consola). Sin cámara, Play arranca igual con la del editor — que
+            // se pueda iterar sin cámara importa más que forzar disciplina.
+            if (!m_scene->findCamera())
+                m_logPanel.push("No hay cámara en la escena; usando la del editor");
             m_isPlaying = true;
             if (m_scriptManager) m_scriptManager->onPlayStart();
             m_scene->traverse([](GameObject* go) {
@@ -281,7 +287,15 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j)
     m_renderer->registerGameObject(&m_scene->getRoot());
 
     if (loaded)
+    {
         m_selected = nullptr; // la selección anterior ya no existe
+        // Avisos de la carga (p.ej. escena con dos cámaras, donde fromJson se
+        // queda con la primera): Core no conoce el Log Console, así que los
+        // vuelca aquí quien sí lo conoce. Solo si loaded — una carga fallida
+        // no modifica la escena y sus avisos no aplican.
+        for (const auto& w : m_scene->lastWarnings())
+            m_logPanel.push(w);
+    }
     m_undoHistory.clear();
 
     return loaded;
