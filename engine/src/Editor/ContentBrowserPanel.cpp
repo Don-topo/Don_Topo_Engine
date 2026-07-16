@@ -4,7 +4,6 @@
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Renderer/Renderer.h"
 #include <imgui.h>
-#include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -242,6 +241,44 @@ void ContentBrowserPanel::beginAssetDelete(GameObject* sceneRoot, const std::fil
     m_openAssetDeletePopup      = true;
 }
 
+void ContentBrowserPanel::drawFolderTree(const std::filesystem::path& dir)
+{
+    std::vector<std::filesystem::path> subdirs = listVisibleSubdirs(dir);
+
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
+                               ImGuiTreeNodeFlags_OpenOnDoubleClick |
+                               ImGuiTreeNodeFlags_SpanAvailWidth;
+    if (subdirs.empty())
+        flags |= ImGuiTreeNodeFlags_Leaf;
+    if (samePath(dir, std::filesystem::path(m_currentDir)))
+        flags |= ImGuiTreeNodeFlags_Selected;
+    if (samePath(dir, m_projectRoot))
+        flags |= ImGuiTreeNodeFlags_DefaultOpen;
+
+    // Si la carpeta seleccionada cuelga de ésta, forzar la rama abierta para
+    // que se vea (p.ej. tras doble-clic en una carpeta del grid derecho).
+    if (pathUnderDir(std::filesystem::path(m_currentDir), dir))
+        ImGui::SetNextItemOpen(true);
+
+    ImGui::PushID(dir.string().c_str());
+    bool open = ImGui::TreeNodeEx("##node", flags, "%s", dir.filename().string().c_str());
+
+    // IsItemToggledOpen: pulsar la flecha expande, pero no cambia selección.
+    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
+    {
+        m_currentDir = dir.string();
+        m_scanned    = false;
+    }
+
+    if (open)
+    {
+        for (const auto& sub : subdirs)
+            drawFolderTree(sub);
+        ImGui::TreePop();
+    }
+    ImGui::PopID();
+}
+
 void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
 {
     if (!m_open) return;
@@ -252,49 +289,12 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
 
     if (m_projectRoot.empty())
         m_projectRoot = std::filesystem::canonical(std::filesystem::current_path());
+    if (m_currentDir.empty())
+        m_currentDir = m_projectRoot.string();
 
-    // Left: ImGuiFileDialog embedded
-    ImGui::BeginChild("##FileDlgPane", ImVec2(leftWidth, totalHeight), false);
-    {
-        if (!m_dlgOpen) {
-            IGFD::FileDialogConfig cfg;
-            cfg.path  = m_dlgReopenPath.empty() ? m_projectRoot.string() : m_dlgReopenPath;
-            cfg.flags = ImGuiFileDialogFlags_NoDialog |
-                        ImGuiFileDialogFlags_DontShowHiddenFiles |
-                        ImGuiFileDialogFlags_HideColumnType |
-                        ImGuiFileDialogFlags_HideColumnDate |
-                        ImGuiFileDialogFlags_DisableThumbnailMode |
-                        ImGuiFileDialogFlags_DisablePlaceMode;
-            IGFD::FileDialog::Instance()->OpenDialog(
-                "##ContentDlg", "Files", ".*", cfg);
-            m_dlgOpen = true;
-            m_dlgReopenPath.clear();
-        }
-        ImVec2 dlgSize = ImGui::GetContentRegionAvail();
-        if (IGFD::FileDialog::Instance()->Display(
-                "##ContentDlg", ImGuiWindowFlags_None, dlgSize, dlgSize))
-        {
-            IGFD::FileDialog::Instance()->Close();
-            m_dlgOpen = false;
-        }
-
-        // Clamp: si el usuario navegó por encima de la raíz (".." o
-        // breadcrumb), reabrir el diálogo anclado en m_projectRoot.
-        if (m_dlgOpen) {
-            std::error_code ec;
-            std::string     rawPath = IGFD::FileDialog::Instance()->GetCurrentPath();
-            std::filesystem::path canon =
-                std::filesystem::weakly_canonical(std::filesystem::path(rawPath), ec);
-            bool insideRoot = !ec && std::mismatch(m_projectRoot.begin(), m_projectRoot.end(),
-                                                    canon.begin(), canon.end())
-                                          .first == m_projectRoot.end();
-            if (!insideRoot) {
-                IGFD::FileDialog::Instance()->Close();
-                m_dlgOpen = false;
-                m_dlgReopenPath.clear();
-            }
-        }
-    }
+    // Left: árbol de carpetas
+    ImGui::BeginChild("##FolderTreePane", ImVec2(leftWidth, totalHeight), false);
+    drawFolderTree(m_projectRoot);
     ImGui::EndChild();
 
     ImGui::SameLine();
@@ -302,13 +302,6 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     // Right: Asset browser with type icons
     ImGui::BeginChild("##AssetPane", ImVec2(0, totalHeight), false);
     {
-        std::string browsedDir = IGFD::FileDialog::Instance()->GetCurrentPath();
-        if (browsedDir.empty()) browsedDir = "assets";
-        if (browsedDir != m_currentDir) {
-            m_currentDir = browsedDir;
-            m_scanned = false;
-        }
-
         if (!m_scanned) {
             m_assets.clear();
             if (std::filesystem::exists(m_currentDir))
@@ -358,9 +351,6 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
 
             if (isDir && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
             {
-                m_dlgReopenPath = path.string();
-                IGFD::FileDialog::Instance()->Close();
-                m_dlgOpen    = false;
                 m_currentDir = path.string();
                 m_scanned    = false;
             }
@@ -453,9 +443,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                             ctx.pushLog("Asset renombrado: '" + m_assetRenameTarget.filename().string() +
                                     "' -> '" + newPath.filename().string() + "'");
                             updateSceneReferencesForRename(ctx, sceneRoot, m_assetRenameTarget, newPath, m_assetRenameIsDir);
-                            m_scanned       = false;
-                            m_dlgReopenPath = m_currentDir;
-                            m_dlgOpen       = false;
+                            m_scanned = false;
                             ImGui::CloseCurrentPopup();
                         }
                     }
@@ -502,9 +490,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 {
                     ctx.pushLog("Asset eliminado: " + m_assetDeleteTarget.string());
                     detachSceneReferencesForDelete(ctx, sceneRoot, m_assetDeleteTarget, m_assetDeleteIsDir);
-                    m_scanned       = false;
-                    m_dlgReopenPath = m_currentDir;
-                    m_dlgOpen       = false;
+                    m_scanned = false;
                     ImGui::CloseCurrentPopup();
                 }
             }

@@ -47,19 +47,19 @@ private:
     // Arma el popup modal "Delete Asset", precalculando cuántos GameObjects
     // referencian path (mesh o audio) para mostrarlo en el texto de aviso.
     void beginAssetDelete(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir);
+    // Pinta recursivamente dir y sus subcarpetas visibles como TreeNodes.
+    // Click en la etiqueta selecciona la carpeta (m_currentDir); click en la
+    // flecha sólo expande. Escanea disco en cada frame para los nodos
+    // abiertos: sin caché que invalidar y los cambios hechos fuera del editor
+    // aparecen solos.
+    void drawFolderTree(const std::filesystem::path& dir);
 
     bool m_open = true;
-    bool m_dlgOpen = false;
     bool m_scanned = false;
     std::string m_currentDir;
-    // Raíz del proyecto (canonicalizada una vez); el Content Browser no deja
-    // navegar por encima de este path (ni vía ".." ni vía breadcrumb).
+    // Raíz del proyecto (canonicalizada una vez); es la raíz del árbol de
+    // carpetas, y por tanto el límite natural de navegación del panel.
     std::filesystem::path m_projectRoot;
-    // Path al que reabrir el diálogo IGFD la próxima vez que !m_dlgOpen;
-    // vacío = reabrir en m_projectRoot. Se consume (se vacía) en cada
-    // reapertura — quien quiera reabrir en una carpeta concreta debe
-    // asignarlo de nuevo antes de poner m_dlgOpen = false.
-    std::string m_dlgReopenPath;
     std::vector<std::filesystem::path> m_assets;
 
     // Asset rename — popup modal disparado por right-click > Rename en el
