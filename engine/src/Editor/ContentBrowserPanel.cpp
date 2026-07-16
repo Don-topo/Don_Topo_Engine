@@ -92,9 +92,17 @@ std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::pat
     std::filesystem::directory_iterator it(dir, ec);
     if (ec) return out; // no existe, es un fichero o no hay permisos
 
-    for (const auto& entry : it)
+    // Avance manual con la sobrecarga que no lanza excepciones: operator++
+    // del range-based for lanza filesystem_error si la enumeración falla a
+    // mitad de camino (carpeta borrada, permisos, etc.), y esta función se
+    // llama cada frame desde el render loop del editor.
+    static const std::filesystem::directory_iterator kEnd;
+    for (; it != kEnd; it.increment(ec))
     {
-        if (!entry.is_directory(ec) || ec) { ec.clear(); continue; }
+        if (ec) break;
+        const auto& entry = *it;
+        std::error_code isDirEc;
+        if (!entry.is_directory(isDirEc) || isDirEc) continue;
         std::string name = entry.path().filename().string();
         if (name.empty() || name[0] == '.' || kHiddenDirs.count(name)) continue;
         out.push_back(entry.path());
