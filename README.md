@@ -74,10 +74,19 @@ Shaders are compiled from `shaders/*.{vert,frag,comp}` to SPIR-V automatically d
 Don_Topo_Engine/
 ├── assets/         # Runtime assets (models, textures, audio, skybox)
 ├── Scripts/        # Lua gameplay scripts (Scripts/<Name>.lua defines global table <Name>)
-├── cmake/          # Custom Find modules (PhysX, Lua)
+├── cmake/          # Custom Find modules (PhysX, Lua, FMOD)
+├── docs/           # Design specs and implementation plans (superpowers/)
 ├── engine/         # Core engine (static library: DonTopoEngine)
-│   ├── include/    # Public headers (DonTopo/)
-│   └── src/        # Implementation
+│   ├── include/    # Public headers, mirroring the module layout (DonTopo/<Module>/)
+│   ├── src/        # Implementation, split into seven modules:
+│   │   ├── Core/       # Engine loop, Window, Input, Scene, GameObject, Camera
+│   │   ├── Renderer/   # Vulkan device, meshes, materials, model loading, skybox
+│   │   ├── Physics/    # PhysX integration, Rigidbody, Colliders/
+│   │   ├── Audio/      # FMOD wrapper, AudioClipComponent
+│   │   ├── Scripting/  # Lua/sol2 bindings, ScriptManager, syntax check
+│   │   ├── Editor/     # ImGui panels, gizmos, undo/redo
+│   │   └── Files/      # Filesystem helpers
+│   └── tests/      # Headless unit tests (GoogleTest)
 ├── sandbox/        # Test playground executable (Sandbox)
 └── shaders/        # GLSL sources + compiled SPIR-V
 ```
