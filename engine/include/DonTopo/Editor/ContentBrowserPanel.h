@@ -8,6 +8,14 @@ namespace DonTopo {
 class GameObject;
 struct EditorContext;
 
+// Subcarpetas directas de dir, ordenadas por path, filtrando el ruido que
+// no interesa ver en el árbol del Content Browser: entradas ocultas (nombre
+// que empieza por '.') y el directorio de build. Devuelve vacío —sin
+// lanzar— si dir no existe, no es un directorio o no se puede leer.
+// Declarada aquí (y no en el anonymous namespace del .cpp) para que el test
+// headless pueda enlazarla.
+std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::path& dir);
+
 // Ventana "Content Browser" — explorador de assets del proyecto (mesh,
 // audio, scripts), con rename/delete y detección de referencias en la
 // escena para desengancharlas antes de borrar/renombrar en disco.
@@ -39,19 +47,26 @@ private:
     // Arma el popup modal "Delete Asset", precalculando cuántos GameObjects
     // referencian path (mesh o audio) para mostrarlo en el texto de aviso.
     void beginAssetDelete(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir);
+    // Pinta recursivamente dir y sus subcarpetas visibles como TreeNodes.
+    // Click en la etiqueta selecciona la carpeta (m_currentDir); click en la
+    // flecha sólo expande. Escanea disco en cada frame para los nodos
+    // abiertos: sin caché que invalidar y los cambios hechos fuera del editor
+    // aparecen solos.
+    void drawFolderTree(const std::filesystem::path& dir);
 
     bool m_open = true;
-    bool m_dlgOpen = false;
     bool m_scanned = false;
     std::string m_currentDir;
-    // Raíz del proyecto (canonicalizada una vez); el Content Browser no deja
-    // navegar por encima de este path (ni vía ".." ni vía breadcrumb).
+    // Reveal de un solo frame: sólo el doble-clic en una carpeta del grid
+    // derecho la pone a true (esa carpeta puede no estar visible aún en el
+    // árbol). drawFolderTree la consulta para forzar abierta la rama
+    // ancestro de m_currentDir, y draw() la limpia justo después de esa
+    // llamada, así el usuario recupera el control para volver a colapsar esa
+    // rama a mano en el siguiente frame.
+    bool m_revealCurrentDir = false;
+    // Raíz del proyecto (canonicalizada una vez); es la raíz del árbol de
+    // carpetas, y por tanto el límite natural de navegación del panel.
     std::filesystem::path m_projectRoot;
-    // Path al que reabrir el diálogo IGFD la próxima vez que !m_dlgOpen;
-    // vacío = reabrir en m_projectRoot. Se consume (se vacía) en cada
-    // reapertura — quien quiera reabrir en una carpeta concreta debe
-    // asignarlo de nuevo antes de poner m_dlgOpen = false.
-    std::string m_dlgReopenPath;
     std::vector<std::filesystem::path> m_assets;
 
     // Asset rename — popup modal disparado por right-click > Rename en el
