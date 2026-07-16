@@ -5,6 +5,7 @@
 #include <string>
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
+#include "DonTopo/Core/CameraComponent.h"
 
 namespace DonTopo {
 
@@ -61,6 +62,16 @@ struct RigidbodyState {
     float    drag;
     float    angularDrag;
     uint32_t constraints;
+};
+
+// Snapshot value-type del CameraComponent — T de PropertyCommand<T> en la
+// sección Camera del panel Properties.
+struct CameraState {
+    CameraComponent::ProjectionMode mode;
+    float fov;
+    float orthographicSize;
+    float nearPlane;
+    float farPlane;
 };
 
 class ReparentCommand : public ICommand {
@@ -128,6 +139,37 @@ private:
     uint64_t m_parentId;
     size_t m_index;
     nlohmann::json m_snapshot;
+};
+
+// Añade (add=true) o quita (add=false) el CameraComponent del GameObject id;
+// undo() hace lo contrario.
+//
+// A diferencia de los Add de collider/Rigidbody (que no pasan por el stack),
+// el de cámara SÍ: sin esto se puede llegar a dos cámaras en escena — Add a X,
+// Delete X (el snapshot se lleva la cámara), Add a Z (permitido, findCamera()
+// es nullptr), Ctrl+Z resucita X CON su cámara. Con el Add en el stack, para
+// deshacer el Delete de X hay que deshacer antes el Add de Z, y el orden impone
+// el invariante sin descartar nada.
+//
+// Resuelve el GameObject por id en cada execute()/undo() (nunca puntero crudo),
+// mismo contrato que PropertyCommand. m_state conserva los valores pa que un
+// Add-undo-redo no los devuelva a los defaults.
+class CameraComponentCommand : public ICommand {
+public:
+    CameraComponentCommand(Scene& scene, std::string label, uint64_t id,
+                            bool add, CameraState state);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(bool add);
+
+    Scene& m_scene;
+    std::string m_label;
+    uint64_t m_id;
+    bool m_add;
+    CameraState m_state;
 };
 
 } // namespace DonTopo

@@ -12,6 +12,7 @@
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
+#include "DonTopo/Editor/Command.h"
 #include <nlohmann/json.hpp>
 #include <memory>
 
@@ -301,6 +302,67 @@ static void test_clone_strips_camera_from_descendant(PhysicsManager& pm, AudioMa
     CHECK(cameraCount == 1);
 }
 
+// El Add/Remove de cámara pasa por el stack de Undo (a diferencia de los Add de
+// collider/Rigidbody): si no, un Undo de Delete podría resucitar una cámara
+// borrada estando ya otra en escena. Ver spec, "The One-Camera Invariant".
+static void test_camera_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Objetivo");
+
+    CameraState st{ CameraComponent::ProjectionMode::Orthographic, 60.0f, 300.0f, 2.0f, 900.0f };
+    CameraComponentCommand cmd(scene, "Add Camera", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasCameraComponent());
+    CHECK(scene.findCamera() == go);
+
+    cmd.undo();
+    CHECK(!go->hasCameraComponent());
+    CHECK(scene.findCamera() == nullptr);
+
+    // Redo: los valores del state se conservan, no vuelve a los defaults.
+    cmd.execute();
+    CHECK(go->hasCameraComponent());
+    const auto& c = go->getCameraComponent();
+    CHECK(c->getMode() == CameraComponent::ProjectionMode::Orthographic);
+    CHECK(nearlyEqual(c->getFov(), 60.0f));
+    CHECK(nearlyEqual(c->getOrthographicSize(), 300.0f));
+    CHECK(nearlyEqual(c->getNear(), 2.0f));
+    CHECK(nearlyEqual(c->getFar(), 900.0f));
+}
+
+// add=false invierte el sentido: execute quita, undo devuelve.
+static void test_camera_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Objetivo");
+    go->setCameraComponent(std::make_shared<CameraComponent>());
+
+    CameraState st{ CameraComponent::ProjectionMode::Perspective, 45.0f, 100.0f, 1.0f, 2000.0f };
+    CameraComponentCommand cmd(scene, "Remove Camera", go->id, /*add=*/false, st);
+
+    cmd.execute();
+    CHECK(!go->hasCameraComponent());
+    cmd.undo();
+    CHECK(go->hasCameraComponent());
+}
+
+// El comando resuelve el GameObject por id en cada execute()/undo(), nunca
+// guarda un puntero crudo: sobrevive a que el objeto se reconstruya entretanto.
+static void test_camera_command_survives_missing_target()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Objetivo");
+    uint64_t id = go->id;
+    CameraState st{ CameraComponent::ProjectionMode::Perspective, 45.0f, 100.0f, 1.0f, 2000.0f };
+    CameraComponentCommand cmd(scene, "Add Camera", id, /*add=*/true, st);
+
+    scene.removeGameObject(go);
+    cmd.execute(); // no debe crashear: findById devuelve nullptr y sale
+    CHECK(scene.findCamera() == nullptr);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -329,6 +391,9 @@ int main()
     test_load_with_one_camera_has_no_warnings(pm, am);
     test_clone_never_keeps_camera(pm, am);
     test_clone_strips_camera_from_descendant(pm, am);
+    test_camera_command_add_undo_redo();
+    test_camera_command_remove();
+    test_camera_command_survives_missing_target();
 
     am.shutdown();
     pm.shutdown();

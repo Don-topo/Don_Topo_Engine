@@ -84,4 +84,32 @@ void CreateGameObjectCommand::undo()
     m_scene.removeGameObject(node);
 }
 
+CameraComponentCommand::CameraComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                                bool add, CameraState state)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(state) {}
+
+void CameraComponentCommand::execute() { apply(m_add); }
+void CameraComponentCommand::undo()    { apply(!m_add); }
+
+void CameraComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setCameraComponent(nullptr);
+        return;
+    }
+
+    auto cam = std::make_shared<CameraComponent>();
+    cam->setMode(m_state.mode);
+    // far antes que near: setNear clampa contra el far actual (ver
+    // CameraComponent::setNear).
+    cam->setFar(m_state.farPlane);
+    cam->setNear(m_state.nearPlane);
+    cam->setFov(m_state.fov);
+    cam->setOrthographicSize(m_state.orthographicSize);
+    go->setCameraComponent(cam);
+}
+
 } // namespace DonTopo
