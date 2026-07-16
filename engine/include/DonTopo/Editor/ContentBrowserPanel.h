@@ -8,6 +8,14 @@ namespace DonTopo {
 class GameObject;
 struct EditorContext;
 
+// Subcarpetas directas de dir, ordenadas por path, filtrando el ruido que
+// no interesa ver en el árbol del Content Browser: entradas ocultas (nombre
+// que empieza por '.') y el directorio de build. Devuelve vacío —sin
+// lanzar— si dir no existe, no es un directorio o no se puede leer.
+// Declarada aquí (y no en el anonymous namespace del .cpp) para que el test
+// headless pueda enlazarla.
+std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::path& dir);
+
 // Ventana "Content Browser" — explorador de assets del proyecto (mesh,
 // audio, scripts), con rename/delete y detección de referencias en la
 // escena para desengancharlas antes de borrar/renombrar en disco.

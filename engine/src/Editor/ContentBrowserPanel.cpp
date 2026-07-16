@@ -83,6 +83,26 @@ bool isValidFileName(const std::string& name)
 
 namespace DonTopo {
 
+std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::path& dir)
+{
+    static const std::set<std::string> kHiddenDirs = { "build-ninja" };
+
+    std::vector<std::filesystem::path> out;
+    std::error_code ec;
+    std::filesystem::directory_iterator it(dir, ec);
+    if (ec) return out; // no existe, es un fichero o no hay permisos
+
+    for (const auto& entry : it)
+    {
+        if (!entry.is_directory(ec) || ec) { ec.clear(); continue; }
+        std::string name = entry.path().filename().string();
+        if (name.empty() || name[0] == '.' || kHiddenDirs.count(name)) continue;
+        out.push_back(entry.path());
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 void ContentBrowserPanel::beginAssetRename(const std::filesystem::path& path, bool isDir)
 {
     m_assetRenameTarget = path;

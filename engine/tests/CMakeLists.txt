@@ -2,3 +2,7 @@ add_executable(dt_physics_tests physics_tests.cpp)
 # DonTopoEngine expone PhysX y DT_PHYSX_ENABLED como PUBLIC: el test los hereda.
 target_link_libraries(dt_physics_tests PRIVATE DonTopoEngine)
 target_compile_features(dt_physics_tests PRIVATE cxx_std_20)
+
+add_executable(dt_content_browser_tests content_browser_tests.cpp)
+target_link_libraries(dt_content_browser_tests PRIVATE DonTopoEngine)
+target_compile_features(dt_content_browser_tests PRIVATE cxx_std_20)
