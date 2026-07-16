@@ -2,6 +2,7 @@
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
+#include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
@@ -27,6 +28,7 @@ namespace
 {
     using DonTopo::GameObject;
     using DonTopo::Rigidbody;
+    using DonTopo::CameraComponent;
 
     nlohmann::json mat4ToJson(const glm::mat4& m)
     {
@@ -118,6 +120,18 @@ namespace
                                {"drag", rb->getDrag()},
                                {"angularDrag", rb->getAngularDrag()},
                                {"constraints", rb->getConstraints()} };
+        }
+        if (node.hasCameraComponent())
+        {
+            const auto& c = node.getCameraComponent();
+            // "mode" como string y no como int del enum: legible en un .scene
+            // editado a mano y estable si el enum crece por el medio.
+            j["camera"] = { {"mode", c->getMode() == CameraComponent::ProjectionMode::Orthographic
+                                         ? "orthographic" : "perspective"},
+                            {"fov", c->getFov()},
+                            {"orthographicSize", c->getOrthographicSize()},
+                            {"near", c->getNear()},
+                            {"far", c->getFar()} };
         }
         if (node.hasAudioClip())
         {
@@ -345,6 +359,25 @@ namespace
                 node->setRigidbody(rb);
                 if (auto col = node->anyCollider()) physics.attachRigidbody(col, rb);
             }
+        }
+        // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
+        // y cargan igual (version sigue en 1). Valor de "mode" desconocido ->
+        // perspective.
+        if (j.contains("camera"))
+        {
+            const auto& c = j["camera"];
+            auto cam = std::make_shared<CameraComponent>();
+            cam->setMode(c.value("mode", std::string("perspective")) == "orthographic"
+                             ? CameraComponent::ProjectionMode::Orthographic
+                             : CameraComponent::ProjectionMode::Perspective);
+            // far ANTES que near: setNear clampa contra el far ACTUAL, así que
+            // cargarlos al revés recortaría un near grande contra el far por
+            // defecto (2000) y lo dejaría mal.
+            cam->setFar(c.value("far", 2000.0f));
+            cam->setNear(c.value("near", 1.0f));
+            cam->setFov(c.value("fov", 45.0f));
+            cam->setOrthographicSize(c.value("orthographicSize", 100.0f));
+            node->setCameraComponent(cam);
         }
         if (j.contains("audioClip"))
         {

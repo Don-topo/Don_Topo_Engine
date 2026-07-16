@@ -1,8 +1,18 @@
-// Test headless del CameraComponent (sin GUI). Plain main + asserts, sin
-// framework — coherente con physics_tests.cpp.
+// Test headless del CameraComponent y de la serialización/invariante de cámara
+// en Scene (sin GUI). Plain main + asserts, sin framework — coherente con
+// physics_tests.cpp.
+//
+// PhysX sólo admite UNA PxFoundation por proceso (crearla dos veces, aunque se
+// libere entremedias, crashea). Por eso se crea un único PhysicsManager en
+// main() y se pasa por referencia: aquí sólo hace falta porque Scene::fromJson/
+// insertFromJson/cloneGameObject lo exigen en su firma para recrear colliders,
+// no porque estos tests simulen física.
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Physics/PhysicsManager.h"
+#include "DonTopo/Audio/AudioManager.h"
+#include <nlohmann/json.hpp>
 #include <memory>
 
 #include <glm/glm.hpp>
@@ -140,8 +150,86 @@ static void test_find_camera_returns_first_in_preorder()
     CHECK(scene.findCamera() == a);
 }
 
+// Round-trip completo por toJson/fromJson. Los valores NO son los defaults a
+// propósito: unos defaults se "preservarían" solos aunque el bloque no se
+// serializara. near/far grandes cubren además el orden de carga (setNear clampa
+// contra el far actual, así que far tiene que cargarse antes).
+static void test_serialization_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Observador");
+    auto cam = std::make_shared<CameraComponent>();
+    cam->setMode(CameraComponent::ProjectionMode::Orthographic);
+    cam->setFar(8000.0f);
+    cam->setNear(3000.0f);
+    cam->setFov(70.0f);
+    cam->setOrthographicSize(250.0f);
+    go->setCameraComponent(cam);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+
+    GameObject* found = loaded.findCamera();
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "Observador");
+    const auto& c = found->getCameraComponent();
+    CHECK(c->getMode() == CameraComponent::ProjectionMode::Orthographic);
+    CHECK(nearlyEqual(c->getFov(), 70.0f));
+    CHECK(nearlyEqual(c->getOrthographicSize(), 250.0f));
+    CHECK(nearlyEqual(c->getNear(), 3000.0f));
+    CHECK(nearlyEqual(c->getFar(), 8000.0f));
+}
+
+// Camino de subtreeToJson/insertFromJson — el que usan los comandos de
+// Undo/Redo. Sin él, un Undo de Delete devolvería el GameObject sin su cámara.
+static void test_subtree_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("ConCamara");
+    auto cam = std::make_shared<CameraComponent>();
+    cam->setFov(33.0f);
+    go->setCameraComponent(cam);
+
+    nlohmann::json snapshot = scene.subtreeToJson(go);
+    scene.removeGameObject(go);
+    CHECK(scene.findCamera() == nullptr);
+
+    GameObject* restored = scene.insertFromJson(snapshot, nullptr, 0, pm, am);
+    CHECK(restored != nullptr);
+    if (!restored) return;
+    CHECK(restored->hasCameraComponent());
+    CHECK(nearlyEqual(restored->getCameraComponent()->getFov(), 33.0f));
+}
+
+// Back-compat: las escenas guardadas antes de este cambio no traen bloque
+// "camera" y tienen que cargar igual (version sigue en 1).
+static void test_scene_without_camera_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    scene.addGameObject("Cubo");
+    nlohmann::json j = scene.toJson();
+    CHECK(!j["root"]["children"][0].contains("camera"));
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    CHECK(loaded.findCamera() == nullptr);
+    CHECK(loaded.getRoot().children.size() == 1);
+}
+
 int main()
 {
+    // Una sola PxFoundation por proceso: un único PhysicsManager compartido
+    // por todos los tests, nunca uno por test. Aquí physics/audio solo hacen
+    // falta porque Scene::fromJson/insertFromJson/cloneGameObject los exigen
+    // en su firma pa recrear colliders y clips — estos tests no simulan nada.
+    PhysicsManager pm;
+    pm.init();
+    AudioManager am;
+    am.init();
+
     test_defaults();
     test_clamps();
     test_projection_has_vulkan_y_flip();
@@ -152,6 +240,12 @@ int main()
     test_find_camera_at_any_depth();
     test_find_camera_ignores_name();
     test_find_camera_returns_first_in_preorder();
+    test_serialization_round_trip(pm, am);
+    test_subtree_round_trip(pm, am);
+    test_scene_without_camera_block_still_loads(pm, am);
+
+    am.shutdown();
+    pm.shutdown();
     if (g_failures == 0) std::printf("ALL CAMERA TESTS PASSED\n");
     std::fflush(stdout);
     return g_failures == 0 ? 0 : 1;
