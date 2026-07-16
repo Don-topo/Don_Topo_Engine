@@ -1,12 +1,5 @@
-// Test headless del CameraComponent y de la serialización/invariante de cámara
-// en Scene (sin GUI). Plain main + asserts, sin framework — coherente con
-// physics_tests.cpp.
-//
-// PhysX sólo admite UNA PxFoundation por proceso (crearla dos veces, aunque se
-// libere entremedias, crashea). Por eso se crea un único PhysicsManager en
-// main() y se pasa por referencia: aquí sólo hace falta porque Scene::fromJson/
-// insertFromJson/cloneGameObject lo exigen en su firma para recrear colliders,
-// no porque estos tests simulen física.
+// Test headless del CameraComponent (sin GUI). Plain main + asserts, sin
+// framework — coherente con physics_tests.cpp.
 #include "DonTopo/Core/CameraComponent.h"
 
 #include <glm/glm.hpp>

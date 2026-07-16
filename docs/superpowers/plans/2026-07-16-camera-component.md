@@ -55,7 +55,11 @@
 - Consumes: nothing (first task).
 - Produces: `DonTopo::CameraComponent` with `enum class ProjectionMode { Perspective, Orthographic }`; `getMode()/setMode(ProjectionMode)`, `getFov()/setFov(float)`, `getOrthographicSize()/setOrthographicSize(float)`, `getNear()/setNear(float)`, `getFar()/setFar(float)`, `glm::mat4 projectionMatrix(float aspect) const`, `static glm::mat4 viewFromWorld(const glm::mat4& world)`. Test executable `dt_camera_tests`.
 
-**Note on `engine/src/Core/CameraComponent.cpp`:** the engine target globs its sources (`engine/src/**`), so no CMake edit is needed for the new `.cpp` — only `engine/tests/CMakeLists.txt` for the new test executable. Verify the glob assumption by building; if the file is not picked up, stop and report rather than editing the engine's CMakeLists.
+**Note on `engine/src/Core/CameraComponent.cpp`:** `engine/CMakeLists.txt` lists the engine's sources **explicitly — it does not glob**. The new `.cpp` must be registered with one added line, `src/Core/CameraComponent.cpp`, next to the other Core sources, mirroring how `src/Physics/Rigidbody.cpp` is registered (line 30). The user has approved this single line. It is the only permitted change to that file: do not reorganize the list and do not convert it to a glob.
+
+`engine/tests/CMakeLists.txt` is edited separately for the new test executable (also approved).
+
+No later task in this plan creates a new source file, so no later task needs a CMake change.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -651,6 +655,27 @@ Add these includes at the top of `camera_tests.cpp`:
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include <nlohmann/json.hpp>
+```
+
+This task is where the suite starts depending on PhysX, so **expand the file's header comment** to record why. Replace:
+
+```cpp
+// Test headless del CameraComponent (sin GUI). Plain main + asserts, sin
+// framework — coherente con physics_tests.cpp.
+```
+
+with:
+
+```cpp
+// Test headless del CameraComponent y de la serialización/invariante de cámara
+// en Scene (sin GUI). Plain main + asserts, sin framework — coherente con
+// physics_tests.cpp.
+//
+// PhysX sólo admite UNA PxFoundation por proceso (crearla dos veces, aunque se
+// libere entremedias, crashea). Por eso se crea un único PhysicsManager en
+// main() y se pasa por referencia: aquí sólo hace falta porque Scene::fromJson/
+// insertFromJson/cloneGameObject lo exigen en su firma para recrear colliders,
+// no porque estos tests simulen física.
 ```
 
 Change `main` to create the single shared managers and pass them by reference:
