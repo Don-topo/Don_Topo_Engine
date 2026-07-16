@@ -12,6 +12,7 @@
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
+#include "DonTopo/Core/CameraComponent.h"
 
 namespace DonTopo
 {
@@ -87,6 +88,15 @@ namespace DonTopo
             const std::shared_ptr<AudioClipComponent>& getAudioClip() const { return m_audioClip; }
             bool hasAudioClip() const { return m_audioClip != nullptr; }
 
+            // Cámara de juego: al dar a Play el Renderer renderiza desde este
+            // GameObject (su worldTransform da posición y orientación). Como
+            // mucho una por escena — el invariante lo impone Scene::findCamera,
+            // no esta clase, igual que la exclusividad de colliders la impone
+            // el editor.
+            void setCameraComponent(std::shared_ptr<CameraComponent> camera) { m_cameraComponent = std::move(camera); }
+            const std::shared_ptr<CameraComponent>& getCameraComponent() const { return m_cameraComponent; }
+            bool hasCameraComponent() const { return m_cameraComponent != nullptr; }
+
             // Scripts Lua — a diferencia del resto de slots, vector: se
             // permiten varios scripts por GameObject (incluso repetidos).
             void addScript(std::unique_ptr<ScriptComponent> script);
@@ -123,6 +133,7 @@ namespace DonTopo
             std::shared_ptr<PlaneCollider> m_planeCollider;
             std::shared_ptr<Rigidbody> m_rigidbody;
             std::shared_ptr<AudioClipComponent> m_audioClip;
+            std::shared_ptr<CameraComponent> m_cameraComponent;
             std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
     };
 }

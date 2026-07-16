@@ -446,6 +446,24 @@ namespace DonTopo
         return found;
     }
 
+    GameObject* Scene::findCamera()
+    {
+        GameObject* found = nullptr;
+        // traverse es pre-orden (fn(this) antes que los hijos) y no permite
+        // early-exit: el guard de !found deja ganar a la primera igualmente.
+        m_root.traverse([&](GameObject* n) {
+            if (!found && n->hasCameraComponent()) found = n;
+        });
+        return found;
+    }
+
+    const GameObject* Scene::findCamera() const
+    {
+        // traverse es non-const (template en GameObject); el const_cast se
+        // queda contenido aquí y la versión const no muta nada.
+        return const_cast<Scene*>(this)->findCamera();
+    }
+
     nlohmann::json Scene::subtreeToJson(const GameObject* node) const
     {
         return nodeToJson(*node);

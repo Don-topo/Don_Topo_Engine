@@ -26,6 +26,15 @@ namespace DonTopo
             // objetivo en vivo en cada execute()/undo(), nunca un puntero crudo.
             GameObject* findById(uint64_t id);
 
+            // Única fuente de verdad del invariante "como mucho una cámara por
+            // escena": la buscan el gate de "Add" de Properties, el menú
+            // contextual del panel Scene, el switch de cámara del Renderer y el
+            // aviso al dar a Play — ninguno guarda estado propio. Pre-orden
+            // desde la raíz (gana la primera), nullptr si no hay ninguna. O(n)
+            // sobre el árbol, igual que findById.
+            GameObject* findCamera();
+            const GameObject* findCamera() const;
+
             // Serializa solo el subárbol de node (mismo formato de nodo que
             // usa toJson() internamente, incluido su id) — usado por
             // CreateGameObjectCommand/DeleteGameObjectCommand (Command.cpp)

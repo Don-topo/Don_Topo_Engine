@@ -1,6 +1,9 @@
 // Test headless del CameraComponent (sin GUI). Plain main + asserts, sin
 // framework — coherente con physics_tests.cpp.
 #include "DonTopo/Core/CameraComponent.h"
+#include "DonTopo/Core/Scene.h"
+#include "DonTopo/Core/GameObject.h"
+#include <memory>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -100,6 +103,43 @@ static void test_view_from_world_ignores_scale()
             CHECK(nearlyEqual(unscaled[col][row], scaled[col][row]));
 }
 
+// findCamera() es la ÚNICA fuente de verdad del invariante "una cámara por
+// escena": tiene que encontrarla esté donde esté, no solo colgando de la raíz.
+static void test_find_camera_at_any_depth()
+{
+    Scene scene("Test");
+    CHECK(scene.findCamera() == nullptr);
+
+    GameObject* parent = scene.addGameObject("Parent");
+    GameObject* child  = scene.addGameObject("Child", parent);
+    GameObject* nieto  = scene.addGameObject("Nieto", child);
+    nieto->setCameraComponent(std::make_shared<CameraComponent>());
+
+    CHECK(scene.findCamera() == nieto);
+}
+
+// La cámara puede vivir en CUALQUIER GameObject, no solo en uno llamado
+// "Camera".
+static void test_find_camera_ignores_name()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("CualquierNombre");
+    go->setCameraComponent(std::make_shared<CameraComponent>());
+    CHECK(scene.findCamera() == go);
+    CHECK(scene.findCamera()->hasCameraComponent());
+}
+
+// Pre-orden: gana la primera en el recorrido, no una cualquiera.
+static void test_find_camera_returns_first_in_preorder()
+{
+    Scene scene("Test");
+    GameObject* a = scene.addGameObject("A");
+    GameObject* b = scene.addGameObject("B");
+    a->setCameraComponent(std::make_shared<CameraComponent>());
+    b->setCameraComponent(std::make_shared<CameraComponent>());
+    CHECK(scene.findCamera() == a);
+}
+
 int main()
 {
     test_defaults();
@@ -109,6 +149,9 @@ int main()
     test_projection_degenerate_aspect();
     test_view_from_world_translation();
     test_view_from_world_ignores_scale();
+    test_find_camera_at_any_depth();
+    test_find_camera_ignores_name();
+    test_find_camera_returns_first_in_preorder();
     if (g_failures == 0) std::printf("ALL CAMERA TESTS PASSED\n");
     std::fflush(stdout);
     return g_failures == 0 ? 0 : 1;
