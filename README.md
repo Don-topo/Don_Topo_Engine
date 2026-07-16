@@ -15,7 +15,8 @@ A Vulkan-based game engine written in C++20.
 - Scene graph (hierarchical transforms), GameObject hierarchy panel (create/delete/rename, drag-drop reorder)
 - Basic shapes menu (Cube/Sphere/Plane/Capsule), Content Browser (asset browsing, rename/delete)
 - ImGuizmo transform gizmo (translate/rotate/scale, camera-oriented axis gizmo), debug-draw gizmos, collider gizmos
-- Physics (PhysX): Box/Sphere/Capsule/Plane colliders (toggleable dynamic/kinematic via gravity), raycasting
+- **Camera component**: any GameObject can be the scene camera (perspective/orthographic, fov, near/far); frustum gizmo in edit mode, renders from it on Play
+- Physics (PhysX): Box/Sphere/Capsule/Plane colliders (shape only) + `Rigidbody` (mass, gravity, drag, kinematic, 6-axis constraints, forces/impulses), raycasting
 - Scene serialization (JSON save/load, full GameObject tree incl. mesh/colliders/audio/scripts)
 - Play Mode (edit/play toggle, snapshot restore, physics gated to Play)
 - Log Console panel (edit-action history, live value editing)
@@ -80,6 +81,26 @@ Don_Topo_Engine/
 ├── sandbox/        # Test playground executable (Sandbox)
 └── shaders/        # GLSL sources + compiled SPIR-V
 ```
+
+## Camera
+
+Any GameObject can be the scene's camera — via **Properties → Add → Camera**, or in one
+click with **right-click → Create Camera** in the Scene panel. The GameObject's transform
+supplies position and orientation; the component supplies only the projection (perspective
+or orthographic, fov / orthographic size, near, far). Aspect ratio comes from the viewport,
+so resizing never stretches the image.
+
+**At most one camera per scene**, enforced through `Scene::findCamera()` as the single
+source of truth: **Add → Camera** greys out (the tooltip names the GameObject that already
+holds one) and **Create Camera** disappears once a camera exists. Loading a hand-edited
+scene that contains two keeps the first in pre-order, drops the extra component (the
+GameObject survives) and says so in the Log.
+
+In edit mode a cyan wireframe draws the camera's frustum, built from the component's own
+matrices — the same ones the renderer uses, so the gizmo cannot promise a framing that Play
+won't deliver. On Play the renderer switches to that camera; on Stop it returns to the
+editor's fly camera exactly where it was. With no camera in the scene, Play still starts,
+falls back to the editor camera, and logs why the view didn't change.
 
 ## Lua Scripting
 
