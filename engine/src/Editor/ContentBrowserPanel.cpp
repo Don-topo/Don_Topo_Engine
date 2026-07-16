@@ -78,14 +78,24 @@ bool isValidFileName(const std::string& name)
     return true;
 }
 
+// Predicado único de "carpeta oculta para el Content Browser": nombre que
+// empieza por '.' o está en la lista de directorios de build/ruido. Usado
+// tanto por listVisibleSubdirs (árbol izquierdo) como por el escaneo del
+// grid derecho (##AssetPane) para que ambos paneles vean el mismo conjunto
+// de carpetas — si no, un doble-clic en el grid puede seleccionar una
+// carpeta que el árbol nunca muestra.
+bool isHiddenDirName(const std::string& name)
+{
+    static const std::set<std::string> kHiddenDirs = { "build-ninja" };
+    return name.empty() || name[0] == '.' || kHiddenDirs.count(name) != 0;
+}
+
 } // namespace
 
 namespace DonTopo {
 
 std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::path& dir)
 {
-    static const std::set<std::string> kHiddenDirs = { "build-ninja" };
-
     std::vector<std::filesystem::path> out;
     std::error_code ec;
     std::filesystem::directory_iterator it(dir, ec);
@@ -103,7 +113,7 @@ std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::pat
         std::error_code isDirEc;
         if (!entry.is_directory(isDirEc) || isDirEc) continue;
         std::string name = entry.path().filename().string();
-        if (name.empty() || name[0] == '.' || kHiddenDirs.count(name)) continue;
+        if (isHiddenDirName(name)) continue;
         out.push_back(entry.path());
     }
     std::sort(out.begin(), out.end());
@@ -257,7 +267,10 @@ void ContentBrowserPanel::drawFolderTree(const std::filesystem::path& dir)
 
     // Si la carpeta seleccionada cuelga de ésta, forzar la rama abierta para
     // que se vea (p.ej. tras doble-clic en una carpeta del grid derecho).
-    if (pathUnderDir(std::filesystem::path(m_currentDir), dir))
+    // Sólo cuando m_revealCurrentDir está activo (un solo frame): si se
+    // hiciera en todos los frames, el usuario nunca podría colapsar a mano
+    // un ancestro de la carpeta seleccionada.
+    if (m_revealCurrentDir && pathUnderDir(std::filesystem::path(m_currentDir), dir))
         ImGui::SetNextItemOpen(true);
 
     ImGui::PushID(dir.string().c_str());
@@ -288,7 +301,15 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     float leftWidth   = totalWidth * 0.38f;
 
     if (m_projectRoot.empty())
-        m_projectRoot = std::filesystem::canonical(std::filesystem::current_path());
+    {
+        std::error_code cwdEc, canonEc;
+        std::filesystem::path cwd = std::filesystem::current_path(cwdEc);
+        std::filesystem::path canon = std::filesystem::canonical(cwd, canonEc);
+        // Si canonical o current_path fallan (permisos, cwd borrado bajo los
+        // pies), no dejar m_projectRoot vacío: eso reintentaría este bloque
+        // cada frame. Cae al mejor valor disponible.
+        m_projectRoot = canonEc ? cwd : canon;
+    }
     if (m_currentDir.empty())
         m_currentDir = m_projectRoot.string();
 
@@ -296,6 +317,10 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     ImGui::BeginChild("##FolderTreePane", ImVec2(leftWidth, totalHeight), false);
     drawFolderTree(m_projectRoot);
     ImGui::EndChild();
+    // Reveal de un solo frame (ver comentario junto a la declaración en el
+    // header): una vez pintado el árbol con la rama forzada abierta, se
+    // limpia para que el usuario pueda volver a colapsarla a mano.
+    m_revealCurrentDir = false;
 
     ImGui::SameLine();
 
@@ -304,10 +329,35 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     {
         if (!m_scanned) {
             m_assets.clear();
-            if (std::filesystem::exists(m_currentDir))
-                for (auto& e : std::filesystem::directory_iterator(m_currentDir))
-                    if (e.is_regular_file() || e.is_directory())
-                        m_assets.push_back(e.path());
+            std::error_code existsEc;
+            if (std::filesystem::exists(m_currentDir, existsEc) && !existsEc)
+            {
+                std::error_code iterEc;
+                std::filesystem::directory_iterator it(m_currentDir, iterEc);
+                // Mismo patrón que listVisibleSubdirs: avance manual con la
+                // sobrecarga que no lanza. exists() y la iteración son dos
+                // llamadas a disco separadas (TOCTOU) — la carpeta puede
+                // desaparecer entre medias (checkout, build, herramienta
+                // externa) — y este bloque corre cada frame desde el render
+                // loop, así que un fallo debe dejar el grid vacío ese frame
+                // en vez de tirar el editor.
+                static const std::filesystem::directory_iterator kEnd;
+                for (; it != kEnd; it.increment(iterEc))
+                {
+                    if (iterEc) break;
+                    const auto& entry = *it;
+                    std::error_code fileEc, dirEc;
+                    bool isFile      = entry.is_regular_file(fileEc);
+                    bool isDirEntry  = entry.is_directory(dirEc);
+                    // Filtrar carpetas ocultas/ruido igual que el árbol
+                    // izquierdo (mismo predicado); los ficheros no se
+                    // filtran, se listan todos como siempre.
+                    if (isDirEntry && isHiddenDirName(entry.path().filename().string()))
+                        continue;
+                    if (isFile || isDirEntry)
+                        m_assets.push_back(entry.path());
+                }
+            }
             std::sort(m_assets.begin(), m_assets.end());
             m_scanned = true;
         }
@@ -322,7 +372,8 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         static const std::set<std::string> kDraggableExt = {".fbx", ".wav", ".mp3", ".ogg", ".flac"};
 
         for (auto& path : m_assets) {
-            bool isDir = std::filesystem::is_directory(path);
+            std::error_code isDirEc;
+            bool isDir = std::filesystem::is_directory(path, isDirEc);
             std::string ext = isDir ? "" : path.extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
@@ -351,8 +402,15 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
 
             if (isDir && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
             {
-                m_currentDir = path.string();
-                m_scanned    = false;
+                m_currentDir        = path.string();
+                m_scanned           = false;
+                // Esta carpeta puede no estar visible aún en el árbol (fue
+                // seleccionada desde el grid, no clicada en el árbol), así
+                // que pedimos un reveal de un solo frame para forzar abierta
+                // su rama de ancestros. Un click en el árbol no necesita
+                // esto: la carpeta clicada ahí ya es visible por
+                // construcción.
+                m_revealCurrentDir  = true;
             }
 
             if (!isDir && ext == ".lua" && ImGui::IsItemHovered() &&

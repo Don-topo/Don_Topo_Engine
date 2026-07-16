@@ -57,6 +57,13 @@ private:
     bool m_open = true;
     bool m_scanned = false;
     std::string m_currentDir;
+    // Reveal de un solo frame: sólo el doble-clic en una carpeta del grid
+    // derecho la pone a true (esa carpeta puede no estar visible aún en el
+    // árbol). drawFolderTree la consulta para forzar abierta la rama
+    // ancestro de m_currentDir, y draw() la limpia justo después de esa
+    // llamada, así el usuario recupera el control para volver a colapsar esa
+    // rama a mano en el siguiente frame.
+    bool m_revealCurrentDir = false;
     // Raíz del proyecto (canonicalizada una vez); es la raíz del árbol de
     // carpetas, y por tanto el límite natural de navegación del panel.
     std::filesystem::path m_projectRoot;

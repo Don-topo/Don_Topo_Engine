@@ -1062,9 +1062,9 @@ void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
     // Se ejecuta cada frame independientemente de ctx.selected/hasMesh(): si no
     // se drena aquí, cambiar de selección (o deseleccionar) mientras el
     // diálogo está abierto deja m_meshDlgOpen atascado en true para siempre.
-    // m_meshFileDialog es una instancia propia (no el singleton Instance()
-    // de Content Browser), así que redimensionar este popup no toca el
-    // estado interno de ContentDlg ni viceversa.
+    // m_meshFileDialog es una instancia propia (no compartida con
+    // m_audioFileDialog), así que redimensionar este popup no toca el
+    // estado interno del diálogo de Audio ni viceversa.
     if (m_meshDlgOpen && m_meshFileDialog->Display("AddMeshDlg"))
     {
         if (m_meshFileDialog->IsOk())

@@ -123,12 +123,13 @@ private:
     bool           m_rigidbodyDragActive = false;
     RigidbodyState m_rigidbodyBeforeEdit{};
 
-    // Instancia propia de ImGuiFileDialog para "Add > Mesh", separada del
-    // singleton IGFD::FileDialog::Instance() que usa Content Browser: la
-    // librería documenta que Instance() no soporta 2 diálogos concurrentes
-    // (mismo estado interno de lista de ficheros/thumbnails/columnas);
-    // compartirlo causaba corrupción al redimensionar el popup de Mesh
-    // mientras Content Browser seguía dibujando su panel embebido el mismo
+    // Instancia propia de ImGuiFileDialog para "Add > Mesh", separada de
+    // m_audioFileDialog: la librería documenta que una única instancia
+    // compartida (p.ej. el singleton IGFD::FileDialog::Instance()) no
+    // soporta 2 diálogos concurrentes (mismo estado interno de lista de
+    // ficheros/thumbnails/columnas), y los diálogos de Mesh y Audio pueden
+    // estar abiertos a la vez; compartir instancia causaba corrupción al
+    // redimensionar el popup de uno mientras el otro seguía abierto el mismo
     // frame. unique_ptr porque IGFD::FileDialog es tipo incompleto aquí.
     bool m_meshDlgOpen = false;
     std::unique_ptr<IGFD::FileDialog> m_meshFileDialog;
@@ -143,7 +144,7 @@ private:
     GameObject* m_meshAddRequestedFor = nullptr;
 
     // Misma razón que m_meshFileDialog: instancia propia, nunca compartida
-    // con el singleton de Content Browser ni con m_meshFileDialog.
+    // con m_meshFileDialog.
     bool m_audioDlgOpen = false;
     std::unique_ptr<IGFD::FileDialog> m_audioFileDialog;
     // Mismo patrón que m_meshLoadError/m_meshAddRequestedFor pero para el
