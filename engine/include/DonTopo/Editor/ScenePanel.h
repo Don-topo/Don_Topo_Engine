@@ -25,6 +25,10 @@ private:
     void beginRename(GameObject* node);
     void createBasicShape(EditorContext& ctx, GameObject* parent, const std::string& name,
                            std::shared_ptr<Mesh> mesh);
+    // Crea un GameObject con CameraComponent de un tirón, pasando por el stack
+    // de Undo igual que createBasicShape. El caller comprueba que no haya ya
+    // una cámara (Scene::findCamera) antes de ofrecer la acción.
+    void createCamera(EditorContext& ctx, GameObject* parent);
 
     bool m_open = true;
 

@@ -2,6 +2,7 @@
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Scene.h"
+#include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Physics/PhysicsManager.h"
@@ -148,6 +149,13 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     *ctx.scene, *ctx.physics, *ctx.audio, *ctx.renderer,
                     "Crear '" + created->name + "'", parentId, index, std::move(snapshot)));
             }
+        }
+        // Visible solo si no hay ya una cámara en la escena — el invariante lo
+        // decide Scene::findCamera, no un flag de este panel.
+        if (ctx.scene && !ctx.scene->findCamera())
+        {
+            if (ImGui::MenuItem("Create Camera") && sceneRoot)
+                createCamera(ctx, sceneRoot);
         }
         if (ImGui::BeginMenu("Basic Shapes"))
         {
@@ -368,6 +376,27 @@ void ScenePanel::createBasicShape(EditorContext& ctx, GameObject* parent, const 
     }
 }
 
+void ScenePanel::createCamera(EditorContext& ctx, GameObject* parent)
+{
+    if (!parent || !ctx.scene) return;
+
+    GameObject* go = parent->addChild("Camera");
+    go->setCameraComponent(std::make_shared<CameraComponent>());
+    ctx.pushLog("GameObject '" + go->name + "' con Camera creado");
+
+    // Mismo patrón que createBasicShape: el snapshot se toma DESPUÉS de montar
+    // el componente, así que el Undo/Redo lo reconstruye entero.
+    if (ctx.physics && ctx.audio && ctx.renderer && ctx.undo)
+    {
+        uint64_t parentId = parent->id;
+        size_t index = parent->children.size() - 1;
+        nlohmann::json snapshot = ctx.scene->subtreeToJson(go);
+        ctx.undo->push(std::make_unique<CreateGameObjectCommand>(
+            *ctx.scene, *ctx.physics, *ctx.audio, *ctx.renderer,
+            "Crear '" + go->name + "'", parentId, index, std::move(snapshot)));
+    }
+}
+
 void ScenePanel::drawNode(EditorContext& ctx, GameObject* node)
 {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen;
@@ -416,6 +445,13 @@ void ScenePanel::drawNode(EditorContext& ctx, GameObject* node)
                     *ctx.scene, *ctx.physics, *ctx.audio, *ctx.renderer,
                     "Crear '" + created->name + "'", parentId, index, std::move(snapshot)));
             }
+        }
+        // Mismo gate que el menú de la ventana: la cámara puede colgar de
+        // cualquier nodo, pero solo puede haber una.
+        if (ctx.scene && !ctx.scene->findCamera())
+        {
+            if (ImGui::MenuItem("Create Camera"))
+                createCamera(ctx, node);
         }
         if (ImGui::BeginMenu("Basic Shapes"))
         {
