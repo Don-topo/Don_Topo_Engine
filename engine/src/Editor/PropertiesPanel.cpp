@@ -83,6 +83,13 @@ void PropertiesPanel::invalidateCaches()
 {
     m_propsCachedFor = nullptr;
     m_colliderCachedFor = nullptr;
+    // Un Undo/Redo de cámara muta el componente EN SITIO (el puntero no
+    // cambia), así que sin esto m_cameraCachedFor seguiría apuntando al mismo
+    // CameraComponent y drawCameraSection nunca refrescaría m_editCam* tras el
+    // undo: el panel se quedaría mostrando el valor deshecho, y el próximo
+    // drag de OTRO campo reaplicaría ese valor stale, resucitando el cambio
+    // que el usuario acababa de deshacer.
+    m_cameraCachedFor = nullptr;
 }
 
 void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, const std::string& path)
