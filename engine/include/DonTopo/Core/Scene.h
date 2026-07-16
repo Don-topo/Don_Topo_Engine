@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <nlohmann/json_fwd.hpp>
 #include "DonTopo/Core/GameObject.h"
 
@@ -34,6 +35,17 @@ namespace DonTopo
             // sobre el árbol, igual que findById.
             GameObject* findCamera();
             const GameObject* findCamera() const;
+
+            // Avisos de la última operación que tuvo que corregir el invariante
+            // de una cámara por escena (fromJson con varias, cloneGameObject de
+            // una cámara). Core no conoce el Log Console: EditorUI los vuelca
+            // tras cargar. Se limpian al principio de cada operación que los
+            // pueda rellenar, así que nunca crecen sin control.
+            //
+            // OJO: hoy solo los drena el editor tras cargar escena. El aviso del
+            // clone (Instantiate de Lua, en Play) no tiene consumidor de Log —
+            // queda registrado pa los tests y pa un futuro consumidor.
+            const std::vector<std::string>& lastWarnings() const { return m_warnings; }
 
             // Serializa solo el subárbol de node (mismo formato de nodo que
             // usa toJson() internamente, incluido su id) — usado por
@@ -87,5 +99,15 @@ namespace DonTopo
         private:
             std::string m_name;
             GameObject  m_root;
+
+            // Impone el invariante de una cámara por escena tras reconstruir el
+            // árbol: se queda con la primera en pre-orden y le quita el
+            // CameraComponent al resto (el GameObject se conserva — solo se cae
+            // el componente). Así un .scene editado a mano con dos cámaras se
+            // abre igual, con aviso, en vez de fallar la carga o quedar en un
+            // estado donde findCamera() decide sobre una escena incoherente.
+            void pruneExtraCameras();
+
+            std::vector<std::string> m_warnings;
     };
 }

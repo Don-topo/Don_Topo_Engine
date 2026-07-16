@@ -465,9 +465,22 @@ namespace DonTopo
             return nullptr;
         }
 
-        clone->traverse([](GameObject* n) {
+        m_warnings.clear();
+        clone->traverse([&](GameObject* n) {
             n->staticRenderIndex  = -1;
             n->skinnedRenderIndex = -1;
+            // El clon nunca se lleva el CameraComponent: al clonar, el original
+            // sigue vivo con su cámara, así que findCamera() ya es no-nulo y el
+            // clon rompería el invariante. Determinista, no condicional. Su
+            // único caller es Instantiate de Lua (ScriptBindings.cpp), que corre
+            // en Play — ningún gate de la UI puede evitarlo, por eso la regla
+            // vive aquí.
+            if (n->hasCameraComponent())
+            {
+                n->setCameraComponent(nullptr);
+                m_warnings.push_back("Clone de '" + n->name +
+                                      "': se descarta el CameraComponent (ya hay una cámara en la escena)");
+            }
         });
         return clone;
     }
@@ -495,6 +508,18 @@ namespace DonTopo
         // traverse es non-const (template en GameObject); el const_cast se
         // queda contenido aquí y la versión const no muta nada.
         return const_cast<Scene*>(this)->findCamera();
+    }
+
+    void Scene::pruneExtraCameras()
+    {
+        GameObject* first = nullptr;
+        m_root.traverse([&](GameObject* n) {
+            if (!n->hasCameraComponent()) return;
+            if (!first) { first = n; return; }
+            m_warnings.push_back("Escena con más de una cámara: se descarta la de '" + n->name +
+                                  "' (se conserva la de '" + first->name + "')");
+            n->setCameraComponent(nullptr);
+        });
     }
 
     nlohmann::json Scene::subtreeToJson(const GameObject* node) const
@@ -615,6 +640,7 @@ namespace DonTopo
 
     bool Scene::fromJson(const nlohmann::json& j, PhysicsManager& physics, AudioManager& audio)
     {
+        m_warnings.clear();
         if (!j.contains("version") || !j["version"].is_number_integer() || j["version"].get<int>() != 1 ||
             !j.contains("root") || !j["root"].is_object())
             return false;
@@ -655,6 +681,9 @@ namespace DonTopo
             child->parent = &m_root;
 
         m_root.updateWorldTransforms();
+
+        // Tras reconstruir: el fichero puede traer dos cámaras (editado a mano).
+        pruneExtraCameras();
         return true;
     }
 

@@ -219,6 +219,88 @@ static void test_scene_without_camera_block_still_loads(PhysicsManager& pm, Audi
     CHECK(loaded.getRoot().children.size() == 1);
 }
 
+// Escena con DOS cámaras (JSON editado a mano): gana la primera en pre-orden,
+// la otra pierde SOLO el componente (su GameObject se conserva) y queda aviso.
+// Así un .scene recuperable se abre igual, en vez de fallar la carga.
+static void test_load_with_two_cameras_keeps_first(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* a = scene.addGameObject("Primera");
+    GameObject* b = scene.addGameObject("Segunda");
+    a->setCameraComponent(std::make_shared<CameraComponent>());
+    b->setCameraComponent(std::make_shared<CameraComponent>());
+    // toJson serializa las dos: el invariante lo impone la carga, que es donde
+    // puede llegar un fichero editado a mano.
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+
+    int cameraCount = 0;
+    loaded.traverse([&](GameObject* n) { if (n->hasCameraComponent()) ++cameraCount; });
+    CHECK(cameraCount == 1);
+
+    GameObject* cam = loaded.findCamera();
+    CHECK(cam != nullptr);
+    if (cam) CHECK(cam->name == "Primera");
+    // Los dos GameObjects siguen ahí: solo se cae el componente sobrante.
+    CHECK(loaded.getRoot().children.size() == 2);
+    CHECK(!loaded.lastWarnings().empty());
+}
+
+// Una escena con UNA cámara no genera avisos (el prune no es un falso positivo).
+static void test_load_with_one_camera_has_no_warnings(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    scene.addGameObject("Solo")->setCameraComponent(std::make_shared<CameraComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    CHECK(loaded.findCamera() != nullptr);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Clonar un GameObject con cámara NO puede dar dos cámaras. Su único caller es
+// Instantiate de Lua, que corre en Play: ningún gate de UI puede evitarlo, así
+// que la regla vive en Scene.
+static void test_clone_never_keeps_camera(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Camara");
+    go->setCameraComponent(std::make_shared<CameraComponent>());
+
+    GameObject* clone = scene.cloneGameObject(go, nullptr, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+    CHECK(!clone->hasCameraComponent());
+    CHECK(!scene.lastWarnings().empty());
+    // El original conserva la suya y sigue siendo LA cámara de la escena.
+    CHECK(go->hasCameraComponent());
+    CHECK(scene.findCamera() == go);
+
+    int cameraCount = 0;
+    scene.traverse([&](GameObject* n) { if (n->hasCameraComponent()) ++cameraCount; });
+    CHECK(cameraCount == 1);
+}
+
+// La cámara puede estar en un descendiente del subárbol clonado, no solo en su
+// raíz.
+static void test_clone_strips_camera_from_descendant(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* parent = scene.addGameObject("Padre");
+    GameObject* child  = scene.addGameObject("Hijo", parent);
+    child->setCameraComponent(std::make_shared<CameraComponent>());
+
+    GameObject* clone = scene.cloneGameObject(parent, nullptr, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+    int cameraCount = 0;
+    scene.traverse([&](GameObject* n) { if (n->hasCameraComponent()) ++cameraCount; });
+    CHECK(cameraCount == 1);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -243,6 +325,10 @@ int main()
     test_serialization_round_trip(pm, am);
     test_subtree_round_trip(pm, am);
     test_scene_without_camera_block_still_loads(pm, am);
+    test_load_with_two_cameras_keeps_first(pm, am);
+    test_load_with_one_camera_has_no_warnings(pm, am);
+    test_clone_never_keeps_camera(pm, am);
+    test_clone_strips_camera_from_descendant(pm, am);
 
     am.shutdown();
     pm.shutdown();
