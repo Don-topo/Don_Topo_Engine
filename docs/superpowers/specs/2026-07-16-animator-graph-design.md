@@ -114,9 +114,17 @@ es byte a byte la actual.
 
 ### Datos (`engine/include/DonTopo/Renderer/SkinnedMesh.h`)
 
-- `AnimationClip` gana `bool loop = true` (requisito 4; el default preserva el
-  comportamiento actual).
 - `SkinnedMesh::animationClip` (singular) → `std::vector<AnimationClip> animationClips`.
+- `AnimationClip` **no** gana un flag `loop`.
+
+**Dónde vive el loop (requisito 4).** En `AnimatorComponent::State`, no en `AnimationClip`.
+El `SkinnedMesh` no se serializa: se reconstruye llamando a `ModelLoader::loadSkinned` sobre
+el FBX en cada carga de escena (`Scene.cpp:249`). Un `loop` en `AnimationClip` se perdería en
+cada ciclo guardar → cargar, y el criterio de aceptación 3 lo exige persistente. En el
+`State` sí sobrevive, porque el grafo entero va al JSON de escena.
+
+El requisito se cumple igual — un nodo del grafo contiene exactamente un clip — y además dos
+nodos que usen el mismo clip pueden tener loop distinto.
 
 ### Carga (`engine/src/Renderer/ModelLoader.cpp:275-313`)
 
@@ -156,7 +164,10 @@ cambiar su firma ni su contrato.
   idénticos en cada bloque de clip.
 - Los buffers de tamaño 0 se siguen rellenando con una entrada dummy (Vulkan no acepta
   buffers vacíos), igual que hoy en `Renderer.cpp:1895-1897`.
-- `SkinnedRenderObject` gana **un solo campo**: `uint32_t activeClip = 0`. Sus escalares
+- `SkinnedRenderObject` gana **dos campos**: `uint32_t activeClip = 0` y `uint32_t clipCount = 1`.
+  `clipCount` existe para que `setAnimationState` clampe un `clipIndex` fuera de rango a 0: sin
+  el clamp, `clipBase` apuntaría fuera del SSBO de `BoneInfos` y el compute leería basura sin
+  que nada avise. Sus escalares
   `duration`/`ticksPerSecond` se quedan como están (los del clip 0): su único consumidor es
   `updateAnimation`, que solo corre en el caso sin Animator. Cuando hay Animator, `animTime`
   llega ya calculado por `setAnimationState` y el Renderer no necesita saber la duración de
@@ -210,10 +221,11 @@ class AnimatorComponent
         };
         struct State {
             std::string name;
+            std::string clipName;                // resuelto a clipIndex por bindClips
             int         clipIndex      = -1;     // índice en SkinnedMesh::animationClips
-            float       duration       = 0.0f;   // ticks, cacheado
-            float       ticksPerSecond = 24.0f;  // cacheado
-            bool        loop           = true;   // cacheado
+            float       duration       = 0.0f;   // ticks, cacheado de bindClips
+            float       ticksPerSecond = 24.0f;  // cacheado de bindClips
+            bool        loop           = true;   // autoría del usuario, NO cacheado
             glm::vec2   editorPos{0.0f};
         };
 
@@ -237,11 +249,15 @@ class AnimatorComponent
 };
 ```
 
-**Por qué `State` cachea `duration`/`ticksPerSecond`/`loop`** en vez de consultarlos en el
+**Por qué `State` cachea `duration`/`ticksPerSecond`** en vez de consultarlos en el
 `SkinnedMesh`: deja el componente auto-contenido y permite que el test headless construya
-estados a mano sin Vulkan ni FBX. Los rellena `bindClips(const SkinnedMesh&)`, que resuelve
-`clipIndex` por nombre de clip y copia los tres campos; se llama al cargar la escena y al
+estados a mano sin Vulkan ni FBX. Los rellena `bindClips(const SkinnedMesh&, warnings)`, que
+resuelve `clipIndex` por `clipName` y copia esos dos campos; se llama al cargar la escena y al
 añadir el componente.
+
+`loop` **no** lo toca `bindClips`: es autoría del usuario (checkbox en el nodo), no un dato
+del FBX. Si `bindClips` lo sobrescribiera, recargar la escena descartaría lo que el usuario
+marcó en el grafo.
 
 **`update(dt, evaluateTransitions)`** — orden estricto:
 
@@ -295,8 +311,21 @@ del sandbox ni en escenas ya guardadas.
 
 ### Lua (`engine/src/Scripting/ScriptBindings.cpp`)
 
-Siguiendo el patrón de los bindings existentes: `obj:SetBool(name, v)`, `obj:GetBool(name)`,
-`obj:SetTrigger(name)`, `obj:GetAnimatorState()` → nombre del estado actual.
+El binding sigue el patrón exacto de `Rigidbody` (`ScriptBindings.cpp:324-354`): un wrapper
+`struct LuaAnimator { LuaEntity e; }`, un `new_usertype<LuaAnimator>("Animator", ...)`, y
+acceso vía `GetComponent("Animator")` — **no** métodos sueltos colgados de `Entity`, que no
+es como este motor expone ningún componente.
+
+```lua
+local anim = self.entity:GetComponent("Animator")
+anim:SetBool("running", true)
+anim:SetTrigger("jump")
+if anim:GetState() == "Jump" then ... end
+```
+
+Métodos: `SetBool(name, v)`, `GetBool(name)`, `SetTrigger(name)`, `GetState()` → nombre del
+estado actual. Las entradas correspondientes se añaden a `LuaApiReference.cpp` para el
+autocompletado del Script Editor.
 
 ---
 
@@ -431,7 +460,7 @@ contra el asset real, y el 9 ejercita el camino N>1 con datos construidos a mano
 | --- | --- |
 | `CMakeLists.txt` (raíz) | Bloque FetchContent + `add_library(imgui_node_editor)` |
 | `engine/CMakeLists.txt` | Registra `AnimatorComponent.cpp`, `SkinnedMeshPacking.cpp`, `AnimatorPanel.cpp`; linka `imgui_node_editor` |
-| `engine/include/DonTopo/Renderer/SkinnedMesh.h` | `AnimationClip::loop`; `animationClip` → `animationClips` |
+| `engine/include/DonTopo/Renderer/SkinnedMesh.h` | `animationClip` → `animationClips` |
 | `engine/include/DonTopo/Renderer/SkinnedMeshPacking.h` | **Nuevo** — `PackedClips`, `packSkinnedClips` |
 | `engine/src/Renderer/SkinnedMeshPacking.cpp` | **Nuevo** — flatten extraído de `addSkinnedMesh` |
 | `engine/src/Renderer/ModelLoader.cpp` | Bucle sobre `mAnimations`; nombres por defecto |
