@@ -300,7 +300,25 @@ int main()
 
                 if (go->skinnedRenderIndex >= 0)
                 {
-                    renderer.updateAnimation(go->skinnedRenderIndex, dt);
+                    if (const auto& anim = go->getAnimator())
+                    {
+                        // El Animator es el único dueño de animTime: calcula en
+                        // CPU y el Renderer solo recibe el resultado. En Edit el
+                        // grafo no evalúa transiciones (solo avanza el tiempo del
+                        // estado de entrada); si no, las condiciones "animation
+                        // finished" pasearían el grafo solo en el editor.
+                        anim->update(dt, renderer.isPlaying());
+                        renderer.setAnimationState(go->skinnedRenderIndex,
+                                                    (uint32_t)anim->currentClipIndex(),
+                                                    anim->animTime());
+                    }
+                    else
+                    {
+                        // Sin Animator: clip 0 en bucle, exactamente como antes
+                        // de que existiera el componente. Los dos caminos no se
+                        // pisan.
+                        renderer.updateAnimation(go->skinnedRenderIndex, dt);
+                    }
                     renderer.setSkinnedTransform(go->skinnedRenderIndex, go->worldTransform);
                 }
             });
