@@ -2041,6 +2041,17 @@ namespace DonTopo {
             obj.animTime = std::fmod(obj.animTime, obj.duration);
     }
 
+    void Renderer::setAnimationState(int index, uint32_t clipIndex, float animTime)
+    {
+        if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
+        auto& obj = m_skinnedObjects[index];
+        // Clamp y no assert: un clipIndex fuera de rango (escena con un grafo que
+        // referencia un clip que el FBX ya no trae) haría que clipBase apuntara
+        // fuera del SSBO de BoneInfos, y el compute leería basura en silencio.
+        obj.activeClip = (clipIndex < obj.clipCount) ? clipIndex : 0;
+        obj.animTime   = animTime;
+    }
+
     void Renderer::setSkinnedTransform(int index, const glm::mat4& t)
     {
         if (index >= 0 && index < (int)m_skinnedObjects.size())
@@ -2205,7 +2216,7 @@ namespace DonTopo {
             push.animTime    = obj.animTime;
             push.boneCount   = obj.boneCount;
             push.vertexCount = obj.vertexCount;
-            push.pad         = 0;
+            push.clipBase    = obj.activeClip * obj.boneCount;
 
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                 m_computePipelineLayout, 0, 1, &obj.computeDescSet, 0, nullptr);

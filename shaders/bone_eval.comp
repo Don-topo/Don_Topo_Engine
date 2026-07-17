@@ -21,7 +21,11 @@ layout(push_constant) uniform PC {
     float animTime;
     uint  boneCount;
     uint  vertexCount;
-    uint  pad;
+    // activeClip * boneCount. BoneInfos va en layout [clip][hueso], así que
+    // esto salta al bloque del clip activo. bone_hierarchy y skinning declaran
+    // este mismo slot como "pad" y no lo leen: parentIndex e inverseBindPose
+    // son iguales en todos los bloques, así que el del clip 0 les vale.
+    uint  clipBase;
 } push;
 
 vec4 slerpQ(vec4 a, vec4 b, float t)
@@ -56,7 +60,7 @@ void main()
     uint bi = gl_GlobalInvocationID.x;
     if (bi >= push.boneCount) return;
 
-    BoneInfo info = boneInfos.data[bi];
+    BoneInfo info = boneInfos.data[push.clipBase + bi];
     float T = push.animTime;
 
     // Position

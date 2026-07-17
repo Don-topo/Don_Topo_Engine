@@ -103,6 +103,12 @@ namespace DonTopo {
             // registra en m_objects. Devuelve el índice para GameObject::staticRenderIndex.
             int addStaticMesh(const Mesh& mesh);
             void updateAnimation(int index, float deltaTime);
+            // Sink puro: fija el clip y el tiempo que el Animator ya ha
+            // calculado en CPU. No avanza el tiempo — a diferencia de
+            // updateAnimation, que sigue siendo el camino de los objetos SIN
+            // AnimatorComponent. Los dos no se pisan: quien tiene Animator nunca
+            // pasa por updateAnimation.
+            void setAnimationState(int index, uint32_t clipIndex, float animTime);
             void setSkinnedTransform(int index, const glm::mat4& transform);
 
         private:
@@ -160,13 +166,21 @@ namespace DonTopo {
                 uint32_t materialIndex;
             };
 
+            // ABI compartida por los 3 compute shaders. 16 bytes, fijos: el 4º
+            // campo era un pad sin usar y ahora lleva el clipBase, así que
+            // ningún offset se ha movido.
             struct ComputePush
             {
                 float animTime;
                 uint32_t boneCount;
                 uint32_t vertexCount;
-                uint32_t pad;
+                // activeClip * boneCount: índice base del bloque del clip activo
+                // dentro del SSBO de BoneInfos, que va en layout [clip][hueso].
+                // Solo lo lee bone_eval.comp; bone_hierarchy y skinning declaran
+                // este slot como "pad" y no lo tocan.
+                uint32_t clipBase;
             };
+            static_assert(sizeof(ComputePush) == 16, "ComputePush debe seguir en 16 bytes: los 3 .comp declaran este layout");
 
             struct PushData {
                 glm::mat4 transform{1.0f};
@@ -215,6 +229,9 @@ namespace DonTopo {
                 std::vector<SubMeshDraw>    subMeshes;
                 // Estado de animación
                 float     animTime       = 0.0f;
+                // Índice del clip que se evalúa este frame. Sin blending solo se
+                // evalúa uno: los demás residen en el SSBO y no se leen.
+                uint32_t  activeClip     = 0;
                 float     duration       = 0.0f;
                 float     ticksPerSecond = 24.0f;
                 glm::mat4 transform      {1.0f};
