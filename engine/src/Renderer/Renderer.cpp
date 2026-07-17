@@ -13,6 +13,7 @@
 #include "DonTopo/Renderer/Vertex.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include "DonTopo/Renderer/UniformBufferObject.h"
+#include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include <limits>
 #include <cmath>
 
@@ -1846,68 +1847,19 @@ namespace DonTopo {
         obj.duration       = clip.duration;
         obj.ticksPerSecond = (clip.ticksPerSecond > 0.0f) ? clip.ticksPerSecond : 24.0f;
 
-        // --- Flatten keyframes a GPU format ---
-        std::vector<GpuPosKey>   allPos;
-        std::vector<GpuRotKey>   allRot;
-        std::vector<GpuPosKey>   allScale;
-        std::vector<GpuBoneInfo> boneInfos(boneCount);
-
-        for (int b = 0; b < boneCount; b++)
-        {
-            GpuBoneInfo& bi    = boneInfos[b];
-            bi.parentIndex     = skel.parentIndex[b];
-            bi.inverseBindPose = skel.inverseBindPose[b];
-            bi.pad             = 0;
-
-            const BoneChannel* ch = nullptr;
-            for (auto& c : clip.channels)
-                if (c.boneIndex == b) { ch = &c; break; }
-
-            bi.posOffset = (int)allPos.size();
-            bi.posCount  = ch ? (int)ch->posKeys.size() : 0;
-            for (int k = 0; k < bi.posCount; k++)
-            {
-                GpuPosKey pk{};
-                pk.timePad = { ch->posKeys[k].time, 0, 0, 0 };
-                pk.value   = { ch->posKeys[k].value.x, ch->posKeys[k].value.y, ch->posKeys[k].value.z, 0 };
-                allPos.push_back(pk);
-            }
-
-            bi.rotOffset = (int)allRot.size();
-            bi.rotCount  = ch ? (int)ch->rotKeys.size() : 0;
-            for (int k = 0; k < bi.rotCount; k++)
-            {
-                const glm::quat& q = ch->rotKeys[k].value;
-                GpuRotKey rk{};
-                rk.timePad = { ch->rotKeys[k].time, 0, 0, 0 };
-                rk.value   = { q.x, q.y, q.z, q.w };
-                allRot.push_back(rk);
-            }
-
-            bi.scaleOffset = (int)allScale.size();
-            bi.scaleCount  = ch ? (int)ch->scaleKeys.size() : 0;
-            for (int k = 0; k < bi.scaleCount; k++)
-            {
-                GpuPosKey sk{};
-                sk.timePad = { ch->scaleKeys[k].time, 0, 0, 0 };
-                sk.value   = { ch->scaleKeys[k].value.x, ch->scaleKeys[k].value.y, ch->scaleKeys[k].value.z, 0 };
-                allScale.push_back(sk);
-            }
-        }
-
-        // Vulkan no acepta buffers de tamaño 0
-        if (allPos.empty())   allPos.push_back({});
-        if (allRot.empty())   allRot.push_back({});
-        if (allScale.empty()) allScale.push_back({});
+        // --- Flatten keyframes de TODOS los clips a formato GPU ---
+        // (packSkinnedClips vive fuera pa poder probarse sin un VkDevice)
+        const PackedClips packed = packSkinnedClips(mesh);
+        obj.clipCount = (uint32_t)(mesh.animationClips.empty() ? 1u : mesh.animationClips.size());
 
         // --- Upload SSBOs estáticos ---
-        m_res.uploadBuffer(allPos.data(),   allPos.size()   * sizeof(GpuPosKey),
+        m_res.uploadBuffer(packed.pos.data(),   packed.pos.size()   * sizeof(GpuPosKey),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframePosBuffer,   obj.keyframePosMemory);
-        m_res.uploadBuffer(allRot.data(),   allRot.size()   * sizeof(GpuRotKey),
+        m_res.uploadBuffer(packed.rot.data(),   packed.rot.size()   * sizeof(GpuRotKey),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframeRotBuffer,   obj.keyframeRotMemory);
-        m_res.uploadBuffer(allScale.data(), allScale.size() * sizeof(GpuPosKey),
+        m_res.uploadBuffer(packed.scale.data(), packed.scale.size() * sizeof(GpuPosKey),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframeScaleBuffer, obj.keyframeScaleMemory);
-        m_res.uploadBuffer(boneInfos.data(), boneInfos.size() * sizeof(GpuBoneInfo),
+        m_res.uploadBuffer(packed.boneInfos.data(), packed.boneInfos.size() * sizeof(GpuBoneInfo),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.boneInfoBuffer,      obj.boneInfoMemory);
         m_res.uploadBuffer(mesh.skinnedVertices.data(), mesh.skinnedVertices.size() * sizeof(SkinnedVertex),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.inputVertexBuffer,   obj.inputVertexMemory);

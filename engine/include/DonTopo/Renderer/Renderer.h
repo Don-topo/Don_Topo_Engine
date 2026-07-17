@@ -203,6 +203,11 @@ namespace DonTopo {
                 uint32_t       indexCount           = 0;
                 uint32_t       vertexCount          = 0;
                 uint32_t       boneCount            = 0;
+                // Nº de clips concatenados en los SSBOs de keyframes. Solo se usa
+                // pa clampar en setAnimationState (Task 3): un clipIndex fuera de
+                // rango haría que clipBase apuntara fuera del SSBO de BoneInfos y
+                // el compute leyera basura sin que nada avisara.
+                uint32_t       clipCount            = 1;
                 // Descriptor set de compute
                 VkDescriptorSet computeDescSet      = VK_NULL_HANDLE;
                 // Texturas y descriptor sets por material
