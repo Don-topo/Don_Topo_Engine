@@ -1640,13 +1640,14 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         const bool canAnimate     = ctx.selected->isSkinned();
         const bool alreadyHasAnim = ctx.selected->hasAnimator();
         ImGui::BeginDisabled(!canAnimate || alreadyHasAnim);
-        if (ImGui::Selectable("Animator") && canAnimate && !alreadyHasAnim && ctx.scene && ctx.undo)
+        if (ImGui::Selectable("Animator") && canAnimate && !alreadyHasAnim)
         {
-            auto cmd = std::make_unique<AnimatorComponentCommand>(
-                *ctx.scene, "Añadir Animator a '" + ctx.selected->name + "'",
-                ctx.selected->id, /*add=*/true, AnimatorComponent{});
-            cmd->execute();
-            ctx.undo->push(std::move(cmd));
+            // Fuera del stack de undo, igual que Script: el usuario construye el
+            // grafo por mutación directa (sin comandos), y un Ctrl+Z reflejo tras
+            // Add popparía el AnimatorComponentCommand y vaciaría el grafo entero
+            // vía setAnimator(nullptr). Remove sí pasa por el stack (ver más abajo
+            // en drawAnimatorSection) porque ahí no hay ese riesgo.
+            ctx.selected->setAnimator(std::make_shared<AnimatorComponent>());
             ctx.pushLog("Componente Animator añadido a '" + ctx.selected->name + "'");
         }
         ImGui::EndDisabled();

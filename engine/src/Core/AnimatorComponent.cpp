@@ -7,6 +7,18 @@ namespace DonTopo
 {
     int AnimatorComponent::addState(State s)
     {
+        // editorId estable pa el canvas del AnimatorPanel: nunca depende del
+        // índice en m_states (ver comentario del campo en el header). Un estado
+        // fresco (editor) llega con -1 y se le asigna aquí; uno copiado (redo de
+        // AnimatorComponentCommand) o cargado (Scene::animatorFromJson, que
+        // tampoco serializa editorId) también llega con -1 y cae en el mismo
+        // camino, asignándose en orden de carga/copia — estable dentro de la
+        // sesión, que es todo lo que el canvas necesita. Si ya trae un id (una
+        // copia de un estado que SÍ tenía uno asignado) se conserva, y el
+        // contador se adelanta pa que el siguiente addState nunca lo repita.
+        if (s.editorId < 0) s.editorId = m_nextEditorId++;
+        else                m_nextEditorId = std::max(m_nextEditorId, s.editorId + 1);
+
         m_states.push_back(std::move(s));
         // Primer estado añadido: entrada por defecto. Un grafo sin entrada no
         // arranca, y obligar a marcarla a mano sería un pie en el que tropezar.

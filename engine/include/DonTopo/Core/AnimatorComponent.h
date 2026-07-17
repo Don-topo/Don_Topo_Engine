@@ -60,6 +60,13 @@ namespace DonTopo
                 bool        loop           = true;
                 // Posición del nodo en el canvas del AnimatorPanel.
                 glm::vec2   editorPos{0.0f};
+                // Id estable pa el nodo del canvas del editor (AnimatorPanel), NO
+                // el índice en m_states: ese índice cambia cuando removeState
+                // reindexa el vector, y si el id del canvas fuera el índice, un
+                // superviviente heredaría el slot visual (posición/selección) del
+                // nodo borrado en imgui-node-editor, que los cachea por id. NO se
+                // serializa (ver Scene.cpp): se regenera en addState al cargar.
+                int         editorId = -1;
             };
 
             struct Parameter
@@ -129,5 +136,11 @@ namespace DonTopo
             bool                    m_finished     = false;
             std::unordered_map<std::string, bool> m_bools;
             std::unordered_map<std::string, bool> m_triggers;
+
+            // Siguiente editorId a repartir en addState. Nunca se resetea ni se
+            // reutiliza un id liberado por removeState: mientras el panel esté
+            // abierto en el mismo frame de un borrado, un id repetido volvería a
+            // liar la identidad visual que este campo existe para evitar.
+            int                     m_nextEditorId = 0;
     };
 }

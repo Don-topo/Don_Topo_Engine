@@ -331,6 +331,59 @@ static void test_edit_mode_does_not_transition()
     CHECK(a.currentState() == 1);            // en Play sí
 }
 
+// Fix #2 (task-16): editorId identifica un estado independientemente de su
+// posición en el vector. Sin esto, el AnimatorPanel deriva el id del nodo del
+// canvas del índice del vector, y borrar un estado de en medio reindexa el
+// vector: el superviviente que hereda el índice del borrado hereda también su
+// id de nodo, y como imgui-node-editor cachea posición/selección POR id, ese
+// superviviente "salta" a la posición/estado visual del nodo borrado. Este
+// test discrimina exactamente eso: si editorId fuera == índice (el bug),
+// tras borrar el estado del medio el superviviente que pasa de índice 2 a 1
+// cambiaría de id (2 -> 1) y este CHECK fallaría.
+static void test_addstate_assigns_stable_unique_editor_ids()
+{
+    AnimatorComponent a;
+
+    AnimatorComponent::State sa; sa.name = "A"; sa.clipName = "A";
+    AnimatorComponent::State sb; sb.name = "B"; sb.clipName = "B";
+    AnimatorComponent::State sc; sc.name = "C"; sc.clipName = "C";
+
+    a.addState(sa);
+    a.addState(sb);
+    a.addState(sc);
+
+    const int idA = a.states()[0].editorId;
+    const int idB = a.states()[1].editorId;
+    const int idC = a.states()[2].editorId;
+
+    // Recién asignados: únicos entre sí.
+    CHECK(idA != idB);
+    CHECK(idB != idC);
+    CHECK(idA != idC);
+
+    a.removeState(1);    // borra "B", el vector reindexa: A pasa a quedarse en
+                          // 0 (ya estaba) y C pasa del índice 2 al 1.
+    CHECK(a.states().size() == 2u);
+    CHECK(a.states()[0].name == "A");
+    CHECK(a.states()[1].name == "C");
+
+    // Identidad, no posición: A sigue con idA (índice sin cambios) y C sigue
+    // con idC AUNQUE su índice haya cambiado de 2 a 1. Con ids derivados del
+    // índice, este segundo CHECK fallaría (C tendría el id que antes era de B).
+    CHECK(a.states()[0].editorId == idA);
+    CHECK(a.states()[1].editorId == idC);
+    CHECK(a.states()[0].editorId != a.states()[1].editorId);
+
+    // Un estado añadido después del borrado saca un id fresco, distinto de
+    // todos los que siguen vivos (el contador no retrocede ni reutiliza el id
+    // que quedó libre al borrar B).
+    AnimatorComponent::State sd; sd.name = "D"; sd.clipName = "D";
+    a.addState(sd);
+    const int idD = a.states()[2].editorId;
+    CHECK(idD != idA);
+    CHECK(idD != idC);
+}
+
 // Borrar un estado reindexa las transiciones que apuntaban por encima y tira las
 // que lo tocaban. Sin esto, borrar un nodo dejaría links apuntando a otro estado.
 static void test_remove_state_reindexes()
@@ -790,6 +843,7 @@ int main()
     test_bool_condition_expected();
     test_trigger_consumption();
     test_edit_mode_does_not_transition();
+    test_addstate_assigns_stable_unique_editor_ids();
     test_remove_state_reindexes();
     test_first_matching_transition_wins();
     test_transition_without_conditions_never_fires();
