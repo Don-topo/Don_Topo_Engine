@@ -2,6 +2,7 @@
 // estados y serialización. Plain main + asserts, sin framework — coherente con
 // camera_tests.cpp y physics_tests.cpp.
 #include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
@@ -10,6 +11,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <string>
 
 using namespace DonTopo;
@@ -435,6 +437,60 @@ static void test_remove_parameter_ignores_empty_name()
     CHECK(countFinishedConditions() == 1u);  // sigue viva: el nombre vacío no cuenta como parámetro real
 }
 
+// bindClips resuelve el clip por NOMBRE y cachea duration/ticksPerSecond. Un
+// nombre que no exista deja clipIndex a -1 y avisa: falla ruidoso, no silencioso.
+// loop NO se toca: es del usuario, no del FBX.
+static void test_bind_clips_resolves_by_name()
+{
+    SkinnedMesh mesh;
+    mesh.skeleton.names           = { "root" };
+    mesh.skeleton.parentIndex     = { -1 };
+    mesh.skeleton.inverseBindPose = { glm::mat4(1.0f) };
+
+    AnimationClip idle;  idle.name = "Idle"; idle.duration = 30.0f; idle.ticksPerSecond = 30.0f;
+    AnimationClip run;   run.name  = "Run";  run.duration  = 20.0f; run.ticksPerSecond  = 20.0f;
+    mesh.animationClips = { idle, run };
+
+    AnimatorComponent a;
+    AnimatorComponent::State s0; s0.name = "A"; s0.clipName = "Run";     s0.loop = false;
+    AnimatorComponent::State s1; s1.name = "B"; s1.clipName = "NoExiste"; s1.loop = true;
+    a.addState(s0);
+    a.addState(s1);
+
+    std::vector<std::string> warnings;
+    a.bindClips(mesh, &warnings);
+
+    // Resuelto por nombre, no por orden de declaración en el grafo
+    CHECK(a.states()[0].clipIndex == 1);
+    CHECK(nearlyEqual(a.states()[0].duration, 20.0f));
+    CHECK(nearlyEqual(a.states()[0].ticksPerSecond, 20.0f));
+    // loop lo puso el usuario: bindClips no lo pisa
+    CHECK(a.states()[0].loop == false);
+
+    // Clip inexistente: -1 y aviso
+    CHECK(a.states()[1].clipIndex == -1);
+    CHECK(warnings.size() == 1u);
+
+    // clipIndex -1 no puede reventar el Renderer: currentClipIndex cae a 0
+    a.setEntryState(1);
+    CHECK(a.currentClipIndex() == 0);
+}
+
+// El slot sigue el patrón de CameraComponent, pero sin invariante de unicidad:
+// cada GameObject skinned puede tener el suyo.
+static void test_gameobject_animator_slot()
+{
+    GameObject go("personaje");
+    CHECK(!go.hasAnimator());
+    CHECK(go.getAnimator() == nullptr);
+
+    go.setAnimator(std::make_shared<AnimatorComponent>());
+    CHECK(go.hasAnimator());
+
+    go.setAnimator(nullptr);
+    CHECK(!go.hasAnimator());
+}
+
 int main()
 {
     test_loader_reads_all_clips();
@@ -451,6 +507,9 @@ int main()
     test_first_matching_transition_wins();
     test_transition_without_conditions_never_fires();
     test_remove_parameter_ignores_empty_name();
+
+    test_bind_clips_resolves_by_name();
+    test_gameobject_animator_slot();
 
     if (g_failures) { std::printf("dt_animator_tests: %d FAILURES\n", g_failures); return 1; }
     std::printf("dt_animator_tests: OK\n");

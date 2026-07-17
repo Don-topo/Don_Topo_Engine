@@ -13,6 +13,7 @@
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Core/CameraComponent.h"
+#include "DonTopo/Core/AnimatorComponent.h"
 
 namespace DonTopo
 {
@@ -97,6 +98,13 @@ namespace DonTopo
             const std::shared_ptr<CameraComponent>& getCameraComponent() const { return m_cameraComponent; }
             bool hasCameraComponent() const { return m_cameraComponent != nullptr; }
 
+            // Animator: máquina de estados que decide qué clip del SkinnedMesh
+            // se reproduce. A diferencia de la cámara, no hay invariante de
+            // unicidad por escena: cada GameObject skinned lleva el suyo.
+            void setAnimator(std::shared_ptr<AnimatorComponent> a) { m_animator = std::move(a); }
+            const std::shared_ptr<AnimatorComponent>& getAnimator() const { return m_animator; }
+            bool hasAnimator() const { return m_animator != nullptr; }
+
             // Scripts Lua — a diferencia del resto de slots, vector: se
             // permiten varios scripts por GameObject (incluso repetidos).
             void addScript(std::unique_ptr<ScriptComponent> script);
@@ -134,6 +142,7 @@ namespace DonTopo
             std::shared_ptr<Rigidbody> m_rigidbody;
             std::shared_ptr<AudioClipComponent> m_audioClip;
             std::shared_ptr<CameraComponent> m_cameraComponent;
+            std::shared_ptr<AnimatorComponent> m_animator;
             std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
     };
 }
