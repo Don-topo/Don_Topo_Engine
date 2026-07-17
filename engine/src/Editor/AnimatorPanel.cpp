@@ -5,6 +5,7 @@
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include <imgui.h>
 #include <imgui_node_editor.h>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -201,16 +202,53 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     // --- Borrar nodos y links ---
     if (ed::BeginDelete())
     {
+        // Con box-select + Supr, una sola pasada de BeginDelete puede traer
+        // varios ids (varios QueryDeletedNode/QueryDeletedLink). Si se borrara
+        // cada uno según se acepta, el primer erase reindexa el vector y los
+        // ids ya encolados (calculados antes de ese erase) pasan a apuntar a
+        // otro elemento o se salen de rango — removeState/removeTransition
+        // hacen bounds-check silencioso y ese elemento sobrevive sin más aviso.
+        // Por eso se recogen todos los índices primero y se borran después, de
+        // atrás hacia adelante: así cada erase solo desplaza índices ya
+        // procesados, nunca los que quedan pendientes en esta misma pasada.
+        std::vector<int> transitionsToRemove;
         ed::LinkId dl;
         while (ed::QueryDeletedLink(&dl))
             if (ed::AcceptDeletedItem())
-                anim->removeTransition((int)dl.Get() - 100000);
+                transitionsToRemove.push_back((int)dl.Get() - 100000);
 
+        std::vector<int> statesToRemove;
         ed::NodeId dn;
         while (ed::QueryDeletedNode(&dn))
             if (ed::AcceptDeletedItem())
-                // removeState reindexa las transiciones supervivientes.
-                anim->removeState(((int)dn.Get() - 1) / 3);
+                statesToRemove.push_back(((int)dn.Get() - 1) / 3);
+
+        std::sort(transitionsToRemove.rbegin(), transitionsToRemove.rend());
+        for (int idx : transitionsToRemove)
+            anim->removeTransition(idx);
+
+        // Se borran los links explícitamente pedidos antes que los estados: un
+        // estado borrado se lleva también sus transiciones (removeState las
+        // reindexa/purga), así que procesar los links sueltos primero evita
+        // pisarse con esa purga automática.
+        std::sort(statesToRemove.rbegin(), statesToRemove.rend());
+        for (int idx : statesToRemove)
+            // removeState reindexa las transiciones supervivientes.
+            anim->removeState(idx);
+
+        if (!transitionsToRemove.empty() || !statesToRemove.empty())
+        {
+            // Los ids posicionales del canvas (nodeId/linkId) ya no
+            // corresponden al vector reindexado que queda tras el borrado: no
+            // se puede fiar la posición de vuelta este mismo frame (haría
+            // que syncPositionsToComponent escribiera la posición del nodo
+            // borrado en el estado que ahora ocupa su índice). Se desvincula
+            // el objeto pa que el próximo frame vuelque de nuevo las
+            // posiciones correctas desde el componente antes de leer nada
+            // del canvas — y de paso, el chequeo "m_boundTo == go" de más
+            // abajo se salta el sync inverso de este frame.
+            m_boundTo = nullptr;
+        }
     }
     ed::EndDelete();
 
@@ -380,9 +418,17 @@ void AnimatorPanel::draw(EditorContext& ctx)
         m_boundTo = go;
     }
     drawGraph(ctx, go);
-    ed::SetCurrentEditor(m_ctx);
-    syncPositionsToComponent(go);
-    ed::SetCurrentEditor(nullptr);
+    // Si drawGraph aceptó un borrado este frame, puso m_boundTo a nullptr
+    // (Finding 1): los ids del canvas ya no cuadran con el vector reindexado,
+    // así que leerlos de vuelta escribiría posiciones ajenas en editorPos. Se
+    // salta el sync inverso ese frame; el de arriba (m_boundTo != go) lo
+    // corrige en el siguiente volcando otra vez desde el componente.
+    if (m_boundTo == go)
+    {
+        ed::SetCurrentEditor(m_ctx);
+        syncPositionsToComponent(go);
+        ed::SetCurrentEditor(nullptr);
+    }
     ImGui::EndChild();
 
     ImGui::End();
