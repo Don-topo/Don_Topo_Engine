@@ -11,6 +11,7 @@
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
 #include "DonTopo/Physics/Rigidbody.h"
+#include "DonTopo/Core/AnimatorComponent.h"
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -43,6 +44,7 @@ namespace DonTopo::ScriptBindings
         struct LuaPlaneCollider { LuaEntity e; };
         struct LuaAudioClip { LuaEntity e; };
         struct LuaRigidbody { LuaEntity e; };
+        struct LuaAnimator { LuaEntity e; };
 
         // Descompone localTransform en T/R/S (grados pa Lua). La extracción de
         // ángulos usa extractEulerAngleXYZ — el inverso exacto del
@@ -352,6 +354,21 @@ namespace DonTopo::ScriptBindings
                 "AddForce",   [rbOf](const LuaRigidbody& c, float x, float y, float z) { rbOf(c)->addForce({x, y, z}); },
                 "AddTorque",  [rbOf](const LuaRigidbody& c, float x, float y, float z) { rbOf(c)->addTorque({x, y, z}); },
                 "AddImpulse", [rbOf](const LuaRigidbody& c, float x, float y, float z) { rbOf(c)->addImpulse({x, y, z}); });
+
+            // Animator: máquina de estados de animación. Se obtiene con
+            // GetComponent("Animator"). Sin propiedades: los parámetros se
+            // declaran en el grafo y se consultan por nombre, no son campos.
+            auto animOf = [](const LuaAnimator& c) -> AnimatorComponent* {
+                GameObject* go = deref(c.e);
+                if (!go->hasAnimator()) throw std::runtime_error("El GameObject ya no tiene Animator");
+                return go->getAnimator().get();
+            };
+            lua.new_usertype<LuaAnimator>("Animator",
+                sol::no_constructor,
+                "SetBool",    [animOf](const LuaAnimator& c, const std::string& n, bool v) { animOf(c)->setBool(n, v); },
+                "GetBool",    [animOf](const LuaAnimator& c, const std::string& n) { return animOf(c)->getBool(n); },
+                "SetTrigger", [animOf](const LuaAnimator& c, const std::string& n) { animOf(c)->setTrigger(n); },
+                "GetState",   [animOf](const LuaAnimator& c) { return animOf(c)->currentStateName(); });
         }
 
         void registerEntity(DonTopo::ScriptManager& mgr)
@@ -388,6 +405,7 @@ namespace DonTopo::ScriptBindings
                     if (name == "PlaneCollider"   && go->hasPlaneCollider())   return sol::make_object(lua, LuaPlaneCollider{e});
                     if (name == "AudioClip"       && go->hasAudioClip())       return sol::make_object(lua, LuaAudioClip{e});
                     if (name == "Rigidbody"       && go->hasRigidbody())       return sol::make_object(lua, LuaRigidbody{e});
+                    if (name == "Animator"        && go->hasAnimator())        return sol::make_object(lua, LuaAnimator{e});
                     if (name.rfind("Script:", 0) == 0)
                     {
                         const std::string scriptName = name.substr(7);

@@ -663,6 +663,29 @@ static void test_animator_command_survives_missing_target()
     cmd.undo();
 }
 
+// La API que consume Lua: los parámetros se consultan por nombre y solo si
+// están declarados en el grafo. Un nombre no declarado se ignora en vez de
+// crear un parámetro fantasma que ninguna condición miraría.
+static void test_parameter_api_ignores_undeclared()
+{
+    AnimatorComponent a = makeGraph();
+
+    a.setBool("running", true);
+    CHECK(a.getBool("running"));
+
+    // No declarado: ni se guarda ni revienta
+    a.setBool("noExiste", true);
+    CHECK(!a.getBool("noExiste"));
+
+    // Tipo equivocado: "jump" es trigger, no bool
+    a.setBool("jump", true);
+    CHECK(!a.getBool("jump"));
+
+    CHECK(a.currentStateName() == "Idle");
+    a.update(0.016f, true);
+    CHECK(a.currentStateName() == "Run");
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -688,6 +711,7 @@ int main()
     test_first_matching_transition_wins();
     test_transition_without_conditions_never_fires();
     test_remove_parameter_ignores_empty_name();
+    test_parameter_api_ignores_undeclared();
 
     test_bind_clips_resolves_by_name();
     test_gameobject_animator_slot();
