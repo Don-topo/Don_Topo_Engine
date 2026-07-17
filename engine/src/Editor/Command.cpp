@@ -112,4 +112,23 @@ void CameraComponentCommand::apply(bool add)
     go->setCameraComponent(cam);
 }
 
+AnimatorComponentCommand::AnimatorComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                                    bool add, AnimatorComponent state)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}
+
+void AnimatorComponentCommand::execute() { apply(m_add); }
+void AnimatorComponentCommand::undo()    { apply(!m_add); }
+
+void AnimatorComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setAnimator(nullptr);
+        return;
+    }
+    go->setAnimator(std::make_shared<AnimatorComponent>(m_state));
+}
+
 } // namespace DonTopo

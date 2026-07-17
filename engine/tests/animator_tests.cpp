@@ -9,6 +9,7 @@
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
+#include "DonTopo/Editor/Command.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
@@ -597,6 +598,71 @@ static void test_scene_without_animator_block_loads(PhysicsManager& pm, AudioMan
     CHECK(!found->hasAnimator());
 }
 
+// Add/Remove del componente pasan por el stack de undo. El comando guarda una
+// COPIA del grafo pa que un Add-undo-redo no lo devuelva a un componente vacío.
+static void test_animator_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    AnimatorComponent st;
+    AnimatorComponent::State s; s.name = "Idle"; s.clipName = "ClipIdle"; s.loop = false;
+    st.addState(s);
+    st.addParameter("running", AnimatorComponent::ParamType::Bool);
+
+    AnimatorComponentCommand cmd(scene, "Añadir Animator", id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasAnimator());
+    CHECK(go->getAnimator()->states().size() == 1u);
+
+    cmd.undo();
+    CHECK(!go->hasAnimator());
+
+    // Redo: el grafo vuelve entero, no un componente vacío
+    cmd.execute();
+    CHECK(go->hasAnimator());
+    CHECK(go->getAnimator()->states().size() == 1u);
+    CHECK(go->getAnimator()->states()[0].name == "Idle");
+    CHECK(go->getAnimator()->states()[0].loop == false);
+    CHECK(go->getAnimator()->parameters().size() == 1u);
+}
+
+// El Remove es el mismo comando con add=false: execute quita, undo devuelve.
+static void test_animator_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    AnimatorComponent st;
+    AnimatorComponent::State s; s.name = "Idle"; s.clipName = "ClipIdle";
+    st.addState(s);
+    go->setAnimator(std::make_shared<AnimatorComponent>(st));
+
+    AnimatorComponentCommand cmd(scene, "Quitar Animator", id, /*add=*/false, st);
+    cmd.execute();
+    CHECK(!go->hasAnimator());
+    cmd.undo();
+    CHECK(go->hasAnimator());
+    CHECK(go->getAnimator()->states().size() == 1u);
+}
+
+// El objeto puede haber desaparecido entre el execute y el undo: se resuelve por
+// id en cada uno, nunca por puntero crudo, así que no debe crashear.
+static void test_animator_command_survives_missing_target()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    AnimatorComponentCommand cmd(scene, "Añadir Animator", id, /*add=*/true, AnimatorComponent{});
+    scene.removeGameObject(go);
+    cmd.execute();   // findById devuelve nullptr y sale sin tocar nada
+    cmd.undo();
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -628,6 +694,10 @@ int main()
 
     test_graph_survives_scene_round_trip(pm, am);
     test_scene_without_animator_block_loads(pm, am);
+
+    test_animator_command_add_undo_redo();
+    test_animator_command_remove();
+    test_animator_command_survives_missing_target();
 
     am.shutdown();
     pm.shutdown();
