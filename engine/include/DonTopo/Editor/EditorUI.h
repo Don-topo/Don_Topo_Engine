@@ -14,6 +14,7 @@
 #include "DonTopo/Editor/ViewportPanel.h"
 #include "DonTopo/Editor/PropertiesPanel.h"
 #include "DonTopo/Editor/ContentBrowserPanel.h"
+#include "DonTopo/Editor/AnimatorPanel.h"
 
 namespace IGFD { class FileDialog; }
 
@@ -157,6 +158,7 @@ private:
     // + forward declaration para no arrastrar <TextEditor.h>/<imgui.h> a todo
     // el que incluya EditorUI.h — mismo patrón que m_sceneFileDialog.
     std::unique_ptr<ScriptEditorPanel> m_scriptEditor;
+    AnimatorPanel m_animatorPanel;
 };
 
 } // namespace DonTopo

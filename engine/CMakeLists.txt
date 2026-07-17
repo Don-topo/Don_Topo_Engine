@@ -8,6 +8,7 @@ add_library(DonTopoEngine STATIC
     src/Editor/ViewportPanel.cpp
     src/Editor/PropertiesPanel.cpp
     src/Editor/ContentBrowserPanel.cpp
+    src/Editor/AnimatorPanel.cpp
     src/Editor/Command.cpp
     src/Editor/UndoManager.cpp
     src/Renderer/Skybox.cpp

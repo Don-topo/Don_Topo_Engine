@@ -50,6 +50,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
         m_onDelete,
         m_onAxisSelected,
         [this](const std::filesystem::path& p) { m_scriptEditor->openFile(p); },
+        [this]() { m_animatorPanel.open(); },
     };
 
     m_scenePanel.draw(ctx, sceneRoot);
@@ -64,6 +65,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     drawSceneDialog();
     m_contentBrowserPanel.draw(ctx, sceneRoot);
     m_scriptEditor->draw();
+    m_animatorPanel.draw(ctx);
 }
 
 void EditorUI::onGameObjectDestroyed(GameObject* node)
@@ -113,6 +115,7 @@ void EditorUI::drawMenuBar()
             ImGui::MenuItem("Log", nullptr, m_logPanel.GetOpenPtr());
             ImGui::MenuItem("Content Browser", nullptr, m_contentBrowserPanel.GetOpenPtr());
             ImGui::MenuItem("Script Editor", nullptr, m_scriptEditor->GetOpenPtr());
+            ImGui::MenuItem("Animator", nullptr, m_animatorPanel.GetOpenPtr());
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();

@@ -41,6 +41,10 @@ struct EditorContext {
     // siendo propiedad de EditorUI, no de ningún panel). Vacío/no asignado
     // por defecto — solo lo rellena EditorUI::draw().
     std::function<void(const std::filesystem::path&)> openScript;
+    // Abre el panel Animator (EditorUI::m_animatorPanel, fuera del alcance de
+    // PropertiesPanel — mismo caso y mismo patrón que openScript). Vacío por
+    // defecto: solo lo rellena EditorUI::draw().
+    std::function<void()> openAnimator;
 };
 
 } // namespace DonTopo
