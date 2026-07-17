@@ -16,6 +16,7 @@
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Scripting/ScriptComponent.h"
 #include "DonTopo/Core/CameraComponent.h"
+#include "DonTopo/Core/AnimatorComponent.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -330,6 +331,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
             drawPlaneColliderSection(ctx);
             drawRigidbodySection(ctx);
             drawCameraSection(ctx);
+            drawAnimatorSection(ctx);
             drawMeshSection(ctx);
             drawAudioClipSection(ctx);
             drawScriptsSection(ctx);
@@ -1140,6 +1142,62 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
     ImGui::TreePop();
 }
 
+// El grafo NO se edita aquí: eso es del panel Animator (el canvas necesita su
+// propio zoom/pan). Esta sección solo resume y da la puerta de entrada.
+void PropertiesPanel::drawAnimatorSection(EditorContext& ctx)
+{
+    if (!ctx.selected || !ctx.selected->hasAnimator()) return;
+    auto anim = ctx.selected->getAnimator();
+
+    if (!ImGui::TreeNodeEx("Animator", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen))
+        return;
+
+    ImGui::Text("Estados: %d", (int)anim->states().size());
+    ImGui::Text("Transiciones: %d", (int)anim->transitions().size());
+    const int entry = anim->entryState();
+    if (entry >= 0 && entry < (int)anim->states().size())
+        ImGui::Text("Entrada: %s", anim->states()[entry].name.c_str());
+    else
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Sin estado de entrada");
+
+    if (!anim->parameters().empty())
+    {
+        ImGui::Separator();
+        ImGui::TextUnformatted("Parameters");
+        for (const auto& p : anim->parameters())
+            ImGui::BulletText("%s (%s)", p.name.c_str(),
+                p.type == AnimatorComponent::ParamType::Trigger ? "trigger" : "bool");
+    }
+
+    if (ImGui::Button("Open Animator") && ctx.openAnimator)
+        ctx.openAnimator();
+
+    ImGui::SameLine();
+    if (ImGui::Button("Remove Animator"))
+    {
+        // Pasa por el stack igual que el Add (ver AnimatorComponentCommand): el
+        // grafo se conserva en el comando pa que el Undo lo devuelva entero.
+        const uint64_t id = ctx.selected->id;
+        AnimatorComponent st = *anim;
+        ctx.pushLog("Componente Animator quitado de '" + ctx.selected->name + "'");
+        if (ctx.scene && ctx.undo)
+        {
+            auto cmd = std::make_unique<AnimatorComponentCommand>(
+                *ctx.scene, "Quitar Animator de '" + ctx.selected->name + "'", id, /*add=*/false, st);
+            cmd->execute();
+            ctx.undo->push(std::move(cmd));
+        }
+        else
+        {
+            ctx.selected->setAnimator(nullptr);
+        }
+        ImGui::TreePop();
+        return;
+    }
+
+    ImGui::TreePop();
+}
+
 void PropertiesPanel::drawMeshSection(EditorContext& ctx)
 {
     // Oculto por defecto: solo se dibuja si ya tiene mesh, o si se pulsó
@@ -1576,6 +1634,24 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         ImGui::EndDisabled();
         if (existingCamera && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Ya hay una cámara en la escena ('%s')", existingCamera->name.c_str());
+
+        // Animator: solo tiene sentido sobre un mesh skinned (es quien trae los
+        // clips). El gate pregunta al GameObject, no a un flag propio.
+        const bool canAnimate     = ctx.selected->isSkinned();
+        const bool alreadyHasAnim = ctx.selected->hasAnimator();
+        ImGui::BeginDisabled(!canAnimate || alreadyHasAnim);
+        if (ImGui::Selectable("Animator") && canAnimate && !alreadyHasAnim && ctx.scene && ctx.undo)
+        {
+            auto cmd = std::make_unique<AnimatorComponentCommand>(
+                *ctx.scene, "Añadir Animator a '" + ctx.selected->name + "'",
+                ctx.selected->id, /*add=*/true, AnimatorComponent{});
+            cmd->execute();
+            ctx.undo->push(std::move(cmd));
+            ctx.pushLog("Componente Animator añadido a '" + ctx.selected->name + "'");
+        }
+        ImGui::EndDisabled();
+        if (!canAnimate && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("El Animator necesita un mesh skinned (los clips vienen del FBX)");
 
         if (ctx.scriptManager)
         {

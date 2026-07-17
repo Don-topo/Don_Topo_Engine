@@ -44,6 +44,7 @@ private:
     void drawPlaneColliderSection(EditorContext& ctx);
     void drawRigidbodySection(EditorContext& ctx);
     void drawCameraSection(EditorContext& ctx);
+    void drawAnimatorSection(EditorContext& ctx);
     void drawMeshSection(EditorContext& ctx);
     void drawMeshDialog(EditorContext& ctx);
     void drawAudioClipSection(EditorContext& ctx);
