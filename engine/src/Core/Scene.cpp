@@ -3,6 +3,7 @@
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Core/CameraComponent.h"
+#include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
@@ -29,6 +30,7 @@ namespace
     using DonTopo::GameObject;
     using DonTopo::Rigidbody;
     using DonTopo::CameraComponent;
+    using DonTopo::AnimatorComponent;
 
     nlohmann::json mat4ToJson(const glm::mat4& m)
     {
@@ -42,6 +44,136 @@ namespace
     nlohmann::json vec3ToJson(const glm::vec3& v)
     {
         return nlohmann::json::array({ v.x, v.y, v.z });
+    }
+
+    // Los enums van como string y no como int: legible en un .scene editado a
+    // mano y estable si el enum crece por el medio. Mismo criterio que el "mode"
+    // de la cámara.
+    const char* paramTypeToStr(AnimatorComponent::ParamType t)
+    {
+        return t == AnimatorComponent::ParamType::Trigger ? "trigger" : "bool";
+    }
+
+    AnimatorComponent::ParamType paramTypeFromStr(const std::string& s)
+    {
+        return s == "trigger" ? AnimatorComponent::ParamType::Trigger
+                              : AnimatorComponent::ParamType::Bool;
+    }
+
+    const char* condTypeToStr(AnimatorComponent::ConditionType t)
+    {
+        switch (t)
+        {
+            case AnimatorComponent::ConditionType::Trigger:           return "trigger";
+            case AnimatorComponent::ConditionType::AnimationFinished: return "animationFinished";
+            default:                                                  return "bool";
+        }
+    }
+
+    AnimatorComponent::ConditionType condTypeFromStr(const std::string& s)
+    {
+        if (s == "trigger")           return AnimatorComponent::ConditionType::Trigger;
+        if (s == "animationFinished") return AnimatorComponent::ConditionType::AnimationFinished;
+        return AnimatorComponent::ConditionType::Bool;
+    }
+
+    nlohmann::json animatorToJson(const AnimatorComponent& a)
+    {
+        auto states = nlohmann::json::array();
+        for (const auto& s : a.states())
+        {
+            // El clip va por NOMBRE: el índice depende del orden de mAnimations
+            // en el FBX, y reexportar el modelo lo baraja en silencio.
+            states.push_back({ {"name", s.name},
+                               {"clip", s.clipName},
+                               {"loop", s.loop},
+                               {"pos", nlohmann::json::array({ s.editorPos.x, s.editorPos.y })} });
+        }
+
+        auto params = nlohmann::json::array();
+        for (const auto& p : a.parameters())
+            params.push_back({ {"name", p.name}, {"type", paramTypeToStr(p.type)} });
+
+        auto transitions = nlohmann::json::array();
+        for (const auto& t : a.transitions())
+        {
+            auto conds = nlohmann::json::array();
+            for (const auto& c : t.conditions)
+            {
+                nlohmann::json cj = { {"type", condTypeToStr(c.type)} };
+                if (c.type != AnimatorComponent::ConditionType::AnimationFinished)
+                    cj["param"] = c.paramName;
+                if (c.type == AnimatorComponent::ConditionType::Bool)
+                    cj["expected"] = c.expected;
+                conds.push_back(cj);
+            }
+            // from/to son índices al array "states" de ESTE mismo JSON:
+            // self-contained, sin depender de ningún asset externo.
+            transitions.push_back({ {"from", t.fromState}, {"to", t.toState}, {"conditions", conds} });
+        }
+
+        return { {"entryState", a.entryState()},
+                 {"parameters", params},
+                 {"states", states},
+                 {"transitions", transitions} };
+    }
+
+    // No deserializa estado runtime (estado actual, animTime, valores de
+    // parámetros, triggers pendientes) porque no se serializa: el Stop de Play
+    // reconstruye la escena desde JSON, así que el reset al estado de entrada
+    // sale gratis, y guardar en mitad de Play no hornea estado transitorio.
+    std::shared_ptr<AnimatorComponent> animatorFromJson(const nlohmann::json& j)
+    {
+        auto a = std::make_shared<AnimatorComponent>();
+
+        // Parámetros primero: addParameter es quien crea las entradas de bools/
+        // triggers que las condiciones consultarán.
+        if (j.contains("parameters"))
+            for (const auto& p : j["parameters"])
+                a->addParameter(p.value("name", std::string()),
+                                paramTypeFromStr(p.value("type", std::string("bool"))));
+
+        if (j.contains("states"))
+        {
+            for (const auto& s : j["states"])
+            {
+                AnimatorComponent::State st;
+                st.name     = s.value("name", std::string());
+                st.clipName = s.value("clip", std::string());
+                st.loop     = s.value("loop", true);
+                if (s.contains("pos") && s["pos"].is_array() && s["pos"].size() == 2)
+                    st.editorPos = glm::vec2(s["pos"][0].get<float>(), s["pos"][1].get<float>());
+                // duration/ticksPerSecond/clipIndex los rellena bindClips contra
+                // el SkinnedMesh: son del FBX, no del fichero de escena.
+                a->addState(st);
+            }
+        }
+
+        if (j.contains("transitions"))
+        {
+            for (const auto& t : j["transitions"])
+            {
+                AnimatorComponent::Transition tr;
+                tr.fromState = t.value("from", -1);
+                tr.toState   = t.value("to", -1);
+                if (t.contains("conditions"))
+                {
+                    for (const auto& c : t["conditions"])
+                    {
+                        AnimatorComponent::Condition cond;
+                        cond.type      = condTypeFromStr(c.value("type", std::string("bool")));
+                        cond.paramName = c.value("param", std::string());
+                        cond.expected  = c.value("expected", true);
+                        tr.conditions.push_back(cond);
+                    }
+                }
+                a->addTransition(tr);
+            }
+        }
+
+        // Después de addState: setEntryState valida contra m_states.size().
+        a->setEntryState(j.value("entryState", 0));
+        return a;
     }
 
     nlohmann::json vertexToJson(const DonTopo::Vertex& v)
@@ -133,6 +265,8 @@ namespace
                             {"near", c->getNear()},
                             {"far", c->getFar()} };
         }
+        if (node.hasAnimator())
+            j["animator"] = animatorToJson(*node.getAnimator());
         if (node.hasAudioClip())
         {
             const auto& clip = node.getAudioClip();
@@ -221,7 +355,8 @@ namespace
     // necesario para pasar un worldTransform correcto a las factories de
     // collider (que fijan la pose inicial del actor PhysX a partir de él).
     void nodeFromJson(const nlohmann::json& j, GameObject* node, const glm::mat4& parentWorld,
-                       DonTopo::PhysicsManager& physics, DonTopo::AudioManager& audio)
+                       DonTopo::PhysicsManager& physics, DonTopo::AudioManager& audio,
+                       std::vector<std::string>* warnings)
     {
         // "id" no existe en ficheros .scene guardados antes de este campo —
         // se deja el id que el constructor de GameObject ya asignó (contador
@@ -379,6 +514,19 @@ namespace
             cam->setOrthographicSize(c.value("orthographicSize", 100.0f));
             node->setCameraComponent(cam);
         }
+        // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
+        // y cargan igual (version sigue en 1).
+        if (j.contains("animator"))
+        {
+            auto anim = animatorFromJson(j["animator"]);
+            // El bloque "mesh" se parsea ANTES que este, así que el SkinnedMesh
+            // ya está montado y bindClips puede resolver los nombres de clip
+            // aquí mismo. Sin malla skinned (grafo huérfano) los clipIndex se
+            // quedan a -1 y currentClipIndex cae a 0.
+            if (auto* sm = node->getSkinnedMesh())
+                anim->bindClips(*sm, warnings);
+            node->setAnimator(std::move(anim));
+        }
         if (j.contains("audioClip"))
         {
             const auto& c = j["audioClip"];
@@ -420,7 +568,7 @@ namespace
         for (const auto& childJson : j.at("children"))
         {
             GameObject* child = node->addChild(childJson.at("name").get<std::string>());
-            nodeFromJson(childJson, child, node->worldTransform, physics, audio);
+            nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings);
         }
     }
 }
@@ -455,9 +603,13 @@ namespace DonTopo
         nlohmann::json j = nodeToJson(*src);
 
         GameObject* clone = target->addChild(src->name + " (Clone)");
+        // Antes de nodeFromJson: si se limpiara después (como estaba), los
+        // avisos que bindClips empuja a m_warnings durante la carga se
+        // perderían de inmediato.
+        m_warnings.clear();
         try
         {
-            nodeFromJson(j, clone, target->worldTransform, physics, audio);
+            nodeFromJson(j, clone, target->worldTransform, physics, audio, &m_warnings);
         }
         catch (const nlohmann::json::exception&)
         {
@@ -465,7 +617,6 @@ namespace DonTopo
             return nullptr;
         }
 
-        m_warnings.clear();
         clone->traverse([&](GameObject* n) {
             n->staticRenderIndex  = -1;
             n->skinnedRenderIndex = -1;
@@ -534,7 +685,7 @@ namespace DonTopo
         GameObject* node = target->addChild(j.value("name", std::string()));
         try
         {
-            nodeFromJson(j, node, target->worldTransform, physics, audio);
+            nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings);
         }
         catch (const nlohmann::json::exception&)
         {
@@ -658,7 +809,7 @@ namespace DonTopo
         GameObject newRoot(rootJson.value("name", "root"));
         try
         {
-            nodeFromJson(rootJson, &newRoot, glm::mat4(1.0f), physics, audio);
+            nodeFromJson(rootJson, &newRoot, glm::mat4(1.0f), physics, audio, &m_warnings);
         }
         catch (const nlohmann::json::exception&)
         {

@@ -3,11 +3,15 @@
 // camera_tests.cpp y physics_tests.cpp.
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/Scene.h"
+#include "DonTopo/Physics/PhysicsManager.h"
+#include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <nlohmann/json.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -491,8 +495,119 @@ static void test_gameobject_animator_slot()
     CHECK(!go.hasAnimator());
 }
 
+// Criterio 3: el grafo entero (nodos, posiciones, links, condiciones,
+// parámetros, loop por nodo y estado de entrada) sobrevive guardar -> cargar.
+static void test_graph_survives_scene_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    // nodeFromJson reutiliza el "id" del JSON cuando existe, así que el mismo id
+    // resuelve el nodo en la escena cargada. Scene no tiene findByName.
+    const uint64_t id = go->id;
+
+    auto a = std::make_shared<AnimatorComponent>();
+
+    AnimatorComponent::State idle;
+    idle.name = "Idle"; idle.clipName = "ClipIdle";
+    idle.loop = true;  idle.editorPos = glm::vec2(10.0f, 20.0f);
+    AnimatorComponent::State jump;
+    jump.name = "Jump"; jump.clipName = "ClipJump";
+    jump.loop = false; jump.editorPos = glm::vec2(300.0f, 40.0f);
+    a->addState(idle);
+    a->addState(jump);
+    a->setEntryState(1);                    // entrada NO por defecto, a propósito
+
+    a->addParameter("running", AnimatorComponent::ParamType::Bool);
+    a->addParameter("jump",    AnimatorComponent::ParamType::Trigger);
+
+    AnimatorComponent::Transition t0;
+    t0.fromState = 0; t0.toState = 1;
+    t0.conditions.push_back({ AnimatorComponent::ConditionType::Bool, "running", false });
+    t0.conditions.push_back({ AnimatorComponent::ConditionType::Trigger, "jump", true });
+    a->addTransition(t0);
+
+    AnimatorComponent::Transition t1;
+    t1.fromState = 1; t1.toState = 0;
+    t1.conditions.push_back({ AnimatorComponent::ConditionType::AnimationFinished, "", true });
+    a->addTransition(t1);
+
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "Personaje");
+    CHECK(found->hasAnimator());
+    if (!found->hasAnimator()) return;
+    const AnimatorComponent& r = *found->getAnimator();
+
+    // Estados: nombre, clip, loop, posición del nodo
+    CHECK(r.states().size() == 2u);
+    CHECK(r.states()[0].name == "Idle");
+    CHECK(r.states()[0].clipName == "ClipIdle");
+    CHECK(r.states()[0].loop == true);
+    CHECK(nearlyEqual(r.states()[0].editorPos.x, 10.0f));
+    CHECK(nearlyEqual(r.states()[0].editorPos.y, 20.0f));
+    CHECK(r.states()[1].name == "Jump");
+    CHECK(r.states()[1].clipName == "ClipJump");
+    CHECK(r.states()[1].loop == false);
+    CHECK(nearlyEqual(r.states()[1].editorPos.x, 300.0f));
+
+    // Estado de entrada
+    CHECK(r.entryState() == 1);
+
+    // Parámetros con su tipo
+    CHECK(r.parameters().size() == 2u);
+    CHECK(r.parameters()[0].name == "running");
+    CHECK(r.parameters()[0].type == AnimatorComponent::ParamType::Bool);
+    CHECK(r.parameters()[1].name == "jump");
+    CHECK(r.parameters()[1].type == AnimatorComponent::ParamType::Trigger);
+
+    // Links y condiciones (incluido expected == false, que un default a true
+    // se comería sin que nada fallara)
+    CHECK(r.transitions().size() == 2u);
+    CHECK(r.transitions()[0].fromState == 0);
+    CHECK(r.transitions()[0].toState == 1);
+    CHECK(r.transitions()[0].conditions.size() == 2u);
+    CHECK(r.transitions()[0].conditions[0].type == AnimatorComponent::ConditionType::Bool);
+    CHECK(r.transitions()[0].conditions[0].paramName == "running");
+    CHECK(r.transitions()[0].conditions[0].expected == false);
+    CHECK(r.transitions()[0].conditions[1].type == AnimatorComponent::ConditionType::Trigger);
+    CHECK(r.transitions()[1].conditions[0].type == AnimatorComponent::ConditionType::AnimationFinished);
+}
+
+// Bloque aditivo: una escena guardada antes de que existiera "animator" carga
+// igual, sin animator y sin avisos.
+static void test_scene_without_animator_block_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    const uint64_t id = scene.addGameObject("Vacio")->id;
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(!found->hasAnimator());
+}
+
 int main()
 {
+    // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
+    // todos los tests, nunca uno por test. physics/audio solo hacen falta porque
+    // Scene::fromJson los exige en su firma pa recrear colliders y clips — estos
+    // tests no simulan nada.
+    PhysicsManager pm;
+    pm.init();
+    AudioManager am;
+    am.init();
+
     test_loader_reads_all_clips();
     test_pack_concatenates_clips();
     test_pack_mesh_without_clips();
@@ -511,7 +626,13 @@ int main()
     test_bind_clips_resolves_by_name();
     test_gameobject_animator_slot();
 
-    if (g_failures) { std::printf("dt_animator_tests: %d FAILURES\n", g_failures); return 1; }
+    test_graph_survives_scene_round_trip(pm, am);
+    test_scene_without_animator_block_loads(pm, am);
+
+    am.shutdown();
+    pm.shutdown();
+    if (g_failures) { std::printf("dt_animator_tests: %d FAILURES\n", g_failures); std::fflush(stdout); return 1; }
     std::printf("dt_animator_tests: OK\n");
+    std::fflush(stdout);
     return 0;
 }
