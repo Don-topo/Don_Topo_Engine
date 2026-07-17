@@ -66,6 +66,11 @@ namespace DonTopo
 
     void AnimatorComponent::removeParameter(const std::string& name)
     {
+        // Nombre vacío == el que usan las condiciones AnimationFinished (ver
+        // Condition::paramName); si siguiéramos de largo, el bucle de abajo las
+        // borraría todas del grafo sin que el usuario lo pidiera.
+        if (name.empty()) return;
+
         m_parameters.erase(
             std::remove_if(m_parameters.begin(), m_parameters.end(),
                 [&name](const Parameter& p) { return p.name == name; }),

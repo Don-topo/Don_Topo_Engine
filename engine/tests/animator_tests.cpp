@@ -132,6 +132,8 @@ static void test_pack_mesh_without_clips()
 // Idle->Run   por bool "running" == true
 // Run->Jump   por trigger "jump"
 // Jump->Idle  por animation finished
+// Run->Idle   por bool "running" == false (cierra el ciclo del bool, así el
+//             caso expected == false también queda ejercitado)
 static AnimatorComponent makeGraph()
 {
     AnimatorComponent a;
@@ -170,6 +172,11 @@ static AnimatorComponent makeGraph()
     t2.fromState = 2; t2.toState = 0;
     t2.conditions.push_back({ AnimatorComponent::ConditionType::AnimationFinished, "", true });
     a.addTransition(t2);
+
+    AnimatorComponent::Transition t3;
+    t3.fromState = 1; t3.toState = 0;
+    t3.conditions.push_back({ AnimatorComponent::ConditionType::Bool, "running", false });
+    a.addTransition(t3);
 
     a.reset();
     return a;
@@ -254,7 +261,11 @@ static void test_loop_flag()
     CHECK(!looping.finished());
 }
 
-// Condición bool: dispara con expected cumplido, no con el contrario.
+// Condición bool: dispara con expected cumplido, no con el contrario. Ida Y
+// vuelta: si expected se ignorase (p.ej. tratando Bool como "getBool(param)
+// == true" a secas), Idle->Run seguiría funcionando pero Run->Idle jamás
+// dispararía con running == false, así que este segundo tramo es el que
+// realmente prueba que expected == false se respeta.
 static void test_bool_condition_expected()
 {
     AnimatorComponent a = makeGraph();
@@ -264,7 +275,11 @@ static void test_bool_condition_expected()
 
     a.setBool("running", true);
     a.update(0.016f, true);
-    CHECK(a.currentState() == 1);
+    CHECK(a.currentState() == 1);    // Idle -> Run: expected == true, running == true
+
+    a.setBool("running", false);
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 0);    // Run -> Idle: expected == false, running == false
 }
 
 // El trigger que consume la transición ganadora se apaga. Uno no consumido sigue
@@ -326,6 +341,100 @@ static void test_remove_state_reindexes()
     CHECK(a.entryState() == 0);
 }
 
+// Orden de declaración: si dos transiciones que salen del mismo estado pueden
+// cumplirse a la vez, gana la declarada primero, no la última que el bucle
+// visite. Grafo standalone (no makeGraph): A tiene dos salidas hacia B y C,
+// ambas con la misma condición "flag" == true.
+static void test_first_matching_transition_wins()
+{
+    AnimatorComponent a;
+
+    AnimatorComponent::State sa;
+    sa.name = "A"; sa.clipName = "A"; sa.clipIndex = 0;
+
+    AnimatorComponent::State sb;
+    sb.name = "B"; sb.clipName = "B"; sb.clipIndex = 1;
+
+    AnimatorComponent::State sc;
+    sc.name = "C"; sc.clipName = "C"; sc.clipIndex = 2;
+
+    a.addState(sa);
+    a.addState(sb);
+    a.addState(sc);
+    a.setEntryState(0);
+
+    a.addParameter("flag", AnimatorComponent::ParamType::Bool);
+
+    // Declarada PRIMERO: A -> B
+    AnimatorComponent::Transition toB;
+    toB.fromState = 0; toB.toState = 1;
+    toB.conditions.push_back({ AnimatorComponent::ConditionType::Bool, "flag", true });
+    a.addTransition(toB);
+
+    // Declarada DESPUÉS, con la misma condición: A -> C
+    AnimatorComponent::Transition toC;
+    toC.fromState = 0; toC.toState = 2;
+    toC.conditions.push_back({ AnimatorComponent::ConditionType::Bool, "flag", true });
+    a.addTransition(toC);
+
+    a.reset();
+    a.setBool("flag", true);         // ambas condiciones se cumplen a la vez
+    a.update(0.016f, true);
+
+    CHECK(a.currentState() == 1);    // B gana: es la primera en orden de declaración
+}
+
+// Una transición sin condiciones nunca dispara (exit time está fuera de
+// alcance). Grafo standalone de dos estados con un único link vacío de
+// condiciones: tras varios update(), el grafo debe seguir en el estado de
+// entrada.
+static void test_transition_without_conditions_never_fires()
+{
+    AnimatorComponent a;
+
+    AnimatorComponent::State s0;
+    s0.name = "X"; s0.clipName = "X"; s0.clipIndex = 0;
+
+    AnimatorComponent::State s1;
+    s1.name = "Y"; s1.clipName = "Y"; s1.clipIndex = 1;
+
+    a.addState(s0);
+    a.addState(s1);
+    a.setEntryState(0);
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;    // sin condiciones
+    a.addTransition(t);
+
+    a.reset();
+    for (int i = 0; i < 5; i++)
+        a.update(0.1f, true);
+
+    CHECK(a.currentState() == 0);      // se queda en X: el link vacío nunca dispara
+}
+
+// removeParameter("") no debe tocar las condiciones AnimationFinished: su
+// paramName es "" por diseño (no representan un parámetro real), y borrar con
+// nombre vacío las dejaría huérfanas de un plumazo.
+static void test_remove_parameter_ignores_empty_name()
+{
+    AnimatorComponent a = makeGraph();       // Jump->Idle lleva una condición AnimationFinished
+
+    auto countFinishedConditions = [&a]() {
+        size_t n = 0;
+        for (const auto& t : a.transitions())
+            for (const auto& c : t.conditions)
+                if (c.type == AnimatorComponent::ConditionType::AnimationFinished) n++;
+        return n;
+    };
+
+    CHECK(countFinishedConditions() == 1u);
+
+    a.removeParameter("");
+
+    CHECK(countFinishedConditions() == 1u);  // sigue viva: el nombre vacío no cuenta como parámetro real
+}
+
 int main()
 {
     test_loader_reads_all_clips();
@@ -339,6 +448,9 @@ int main()
     test_trigger_consumption();
     test_edit_mode_does_not_transition();
     test_remove_state_reindexes();
+    test_first_matching_transition_wins();
+    test_transition_without_conditions_never_fires();
+    test_remove_parameter_ignores_empty_name();
 
     if (g_failures) { std::printf("dt_animator_tests: %d FAILURES\n", g_failures); return 1; }
     std::printf("dt_animator_tests: OK\n");
