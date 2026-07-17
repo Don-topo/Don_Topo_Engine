@@ -271,12 +271,28 @@ namespace DonTopo
                 if (v.boneWeights[s] > 0.0f)
                     v.boneIndices[s] = remap[v.boneIndices[s]];
 
-        // --- Animación (clip 0) ---
-        if (scene->mNumAnimations > 0)
+        // --- Animaciones: todas las del fichero ---
+        for (uint32_t a = 0; a < scene->mNumAnimations; a++)
         {
-            aiAnimation* anim = scene->mAnimations[0];
-            AnimationClip& clip = smesh.animationClip;
-            clip.name            = anim->mName.C_Str();
+            aiAnimation* anim = scene->mAnimations[a];
+            AnimationClip clip;
+
+            // Nombres únicos y no vacíos: Mixamo exporta cada take como
+            // "mixamo.com", y los FBX de Blender a veces sin nombre. El
+            // Animator resuelve los clips por nombre, así que dos clips
+            // homónimos harían que el segundo fuera inalcanzable.
+            std::string base = anim->mName.C_Str();
+            if (base.empty()) base = "Animation " + std::to_string(a);
+            std::string unique = base;
+            int suffix = 1;
+            auto taken = [&](const std::string& n) {
+                for (const auto& c : smesh.animationClips)
+                    if (c.name == n) return true;
+                return false;
+            };
+            while (taken(unique)) unique = base + " (" + std::to_string(suffix++) + ")";
+
+            clip.name            = unique;
             clip.duration        = (float)anim->mDuration;
             clip.ticksPerSecond  = (anim->mTicksPerSecond > 0.0) ? (float)anim->mTicksPerSecond : 24.0f;
 
@@ -310,6 +326,7 @@ namespace DonTopo
                 }
                 clip.channels.push_back(std::move(bc));
             }
+            smesh.animationClips.push_back(std::move(clip));
         }
 
         // --- Materiales: uno por cada materialIndex único entre los submeshes ---

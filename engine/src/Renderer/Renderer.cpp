@@ -1831,7 +1831,11 @@ namespace DonTopo {
         SkinnedRenderObject& obj = m_skinnedObjects.back();
 
         const Skeleton&      skel = mesh.skeleton;
-        const AnimationClip& clip = mesh.animationClip;
+        // Clip 0 pa duration/ticksPerSecond del objeto: son lo que consume
+        // updateAnimation(), que solo corre en el caso SIN Animator (Task 3
+        // añade el camino con Animator). Malla sin animaciones -> clip vacío.
+        static const AnimationClip kEmptyClip{};
+        const AnimationClip& clip = mesh.animationClips.empty() ? kEmptyClip : mesh.animationClips[0];
         int boneCount   = (int)skel.names.size();
         int vertexCount = (int)mesh.skinnedVertices.size();
 

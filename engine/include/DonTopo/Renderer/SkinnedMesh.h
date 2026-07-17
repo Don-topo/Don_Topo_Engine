@@ -55,7 +55,10 @@ namespace DonTopo
     {
         std::vector<SkinnedVertex>   skinnedVertices;
         Skeleton                     skeleton;
-        AnimationClip                animationClip;
+        // Todas las animaciones del fichero de origen, en el orden de
+        // scene->mAnimations. El Animator las referencia por nombre (no por
+        // índice): reexportar el modelo puede reordenarlas.
+        std::vector<AnimationClip>   animationClips;
         std::vector<SubMeshRange>    subMeshRanges;
         std::vector<Material>        materials;
     };
