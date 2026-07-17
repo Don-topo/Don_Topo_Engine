@@ -26,6 +26,11 @@ avanza el tiempo y decide; lo único que cruza a GPU es `(clip activo, animTime)
 - **ABI de `ComputePush`:** queda en 16 bytes. `pad` se renombra a `clipBase` (offset 12).
   Prohibido añadir campos o cambiar el tamaño.
 - **Bindings de los 3 compute shaders:** NO se tocan.
+- **Los shaders SÍ los compila el build.** `sandbox/CMakeLists.txt:11-56` define un target
+  `Shaders ALL` que corre `glslc` sobre `shaders/*.{vert,frag,comp}` y copia los `.spv` al
+  lado del ejecutable y de vuelta a `shaders/` (que está en `.gitignore`). `build.bat` basta;
+  no hace falta invocar `glslc` a mano. Ojo: el `file(GLOB ...)` corre en configure, así que
+  un shader NUEVO exige `configure.bat` — este plan no añade ninguno.
 - **`shaders/bone_hierarchy.comp` y `shaders/skinning.comp`: NO se tocan.** Siguen declarando
   el 4º campo del push como `uint pad`; no lo leen, así que el nombre distinto respecto a
   `bone_eval.comp` es inocuo y mantiene el diff mínimo.
@@ -628,7 +633,7 @@ Esperado: `dt_animator_tests: OK`, exit code 0.
 - [ ] **Step 9: Verificar que no hay regresión visual**
 
 ```powershell
-.\build-ninja\sandbox\DonTopoSandbox.exe
+.\build-ninja\sandbox\Sandbox.exe
 ```
 
 El personaje animado debe verse EXACTAMENTE igual que antes (un solo clip, `clipBase` aún no
@@ -736,18 +741,15 @@ Y la línea 59, `BoneInfo info = boneInfos.data[bi];`, por:
 
 No toques nada más del fichero. NO toques `bone_hierarchy.comp` ni `skinning.comp`.
 
-- [ ] **Step 4: Recompilar el SPIR-V**
+- [ ] **Step 4: Recompilar el SPIR-V (lo hace el build)**
 
-El build NO compila shaders: `Renderer::createComputePipelines` carga `.spv` ya compilados
-(`Renderer.cpp:1673`) y `shaders/*.spv` está en `.gitignore`. Sin este paso, el cambio del
-Step 3 no tiene ningún efecto.
+`build.bat` recompila el shader solo: `sandbox/CMakeLists.txt:11-56` corre `glslc` sobre
+`shaders/*.comp` vía el target `Shaders ALL` y copia los `.spv` al lado del ejecutable y de
+vuelta a `shaders/`. `Renderer::createComputePipelines` carga esos `.spv`
+(`Renderer.cpp:1673`), que están en `.gitignore`.
 
-```powershell
-glslc shaders/bone_eval.comp -o shaders/bone_eval.comp.spv
-```
-
-Esperado: sin salida y exit code 0. Un error de sintaxis GLSL se imprime aquí, no en el build
-de C++.
+No hace falta ningún paso manual: basta con el `.\build.bat` del Step 7. Un error de sintaxis
+GLSL sale en la salida del build, en la línea `Compiling shader bone_eval.comp`.
 
 - [ ] **Step 5: Cargar `clipBase` en el push constant**
 
@@ -781,7 +783,7 @@ En `engine/src/Renderer/Renderer.cpp`, justo después del cierre de `Renderer::u
 ```powershell
 .\build.bat
 .\build-ninja\engine\tests\dt_animator_tests.exe
-.\build-ninja\sandbox\DonTopoSandbox.exe
+.\build-ninja\sandbox\Sandbox.exe
 ```
 
 Los tests deben seguir en `OK`. En el sandbox, el personaje animado debe verse EXACTAMENTE
@@ -2131,7 +2133,7 @@ por:
 
 ```powershell
 .\build.bat
-.\build-ninja\sandbox\DonTopoSandbox.exe
+.\build-ninja\sandbox\Sandbox.exe
 ```
 
 El personaje del sandbox no tiene `AnimatorComponent`, así que cae por la rama `else` y debe
@@ -3142,7 +3144,7 @@ En `engine/src/Editor/PropertiesPanel.cpp`, en el popup de Add, tras el bloque d
 ```powershell
 .\build.bat
 .\build-ninja\engine\tests\dt_animator_tests.exe
-.\build-ninja\sandbox\DonTopoSandbox.exe
+.\build-ninja\sandbox\Sandbox.exe
 ```
 
 En la ventana: selecciona el GameObject skinned → Properties → Add → Animator. El bloque
@@ -3385,7 +3387,7 @@ Los 4 ejecutables deben salir con exit code 0. Criterio de aceptación 4.
 NO declares la feature terminada. Pídele al usuario que haga esto y espera su respuesta —
 ningún subagente tiene GUI, así que esta parte solo la puede verificar él:
 
-> Abre `.\build-ninja\sandbox\DonTopoSandbox.exe` y comprueba:
+> Abre `.\build-ninja\sandbox\Sandbox.exe` y comprueba:
 >
 > 1. **Add-gate.** Selecciona el GameObject del personaje animado (el que tiene mesh
 >    skinned) → panel **Properties** → botón **Add**. Debe aparecer **Animator**, habilitado.
