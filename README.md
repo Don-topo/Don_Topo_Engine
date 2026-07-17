@@ -16,6 +16,7 @@ A Vulkan-based game engine written in C++20.
 - Basic shapes menu (Cube/Sphere/Plane/Capsule), Content Browser (asset browsing, rename/delete)
 - ImGuizmo transform gizmo (translate/rotate/scale, camera-oriented axis gizmo), debug-draw gizmos, collider gizmos
 - **Camera component**: any GameObject can be the scene camera (perspective/orthographic, fov, near/far); frustum gizmo in edit mode, renders from it on Play
+- **Animator component**: Unity-style animation state graph (node = clip, link = transition; `bool`/`trigger`/`animation finished` conditions), edited in a node panel; instant-cut transitions (no blending), driven from Lua
 - Physics (PhysX): Box/Sphere/Capsule/Plane colliders (shape only) + `Rigidbody` (mass, gravity, drag, kinematic, 6-axis constraints, forces/impulses), raycasting
 - Scene serialization (JSON save/load, full GameObject tree incl. mesh/colliders/audio/scripts)
 - Play Mode (edit/play toggle, snapshot restore, physics gated to Play)
@@ -35,6 +36,7 @@ A Vulkan-based game engine written in C++20.
 | Editor UI | Dear ImGui | Auto-fetched |
 | File dialog | ImGuiFileDialog | Auto-fetched |
 | Transform gizmo | ImGuizmo | Auto-fetched |
+| Node graph UI | imgui-node-editor (thedmd) | Auto-fetched |
 | Physics | NVIDIA PhysX 5.8.0 | Auto-fetched |
 | Audio | FMOD Studio (optional) | Manual install |
 | Scene serialization | nlohmann/json 3.11.3 | Auto-fetched |
@@ -51,7 +53,7 @@ A Vulkan-based game engine written in C++20.
 | MSVC | 2022+ | Required on Windows |
 | FMOD Studio API | Latest | Optional — audio disabled if not found |
 
-GLFW, GLM, Assimp, stb_image, ImGui, ImGuiFileDialog, ImGuizmo, PhysX, nlohmann/json, Lua and sol2 are downloaded and built automatically by CMake.
+GLFW, GLM, Assimp, stb_image, ImGui, ImGuiFileDialog, ImGuizmo, imgui-node-editor, PhysX, nlohmann/json, Lua and sol2 are downloaded and built automatically by CMake.
 
 ## Build (Windows)
 
@@ -110,6 +112,46 @@ matrices — the same ones the renderer uses, so the gizmo cannot promise a fram
 won't deliver. On Play the renderer switches to that camera; on Stop it returns to the
 editor's fly camera exactly where it was. With no camera in the scene, Play still starts,
 falls back to the editor camera, and logs why the view didn't change.
+
+## Animator
+
+A Unity-style animation state machine for skinned meshes. A **node** is a state holding one
+of the model's animation clips; a **link** is a directed transition. There is no blending —
+a transition is an instant cut. The component is opt-in: **Properties → Add → Animator**,
+greyed out on non-skinned objects (an Animator has no clips to name without a skeleton).
+
+Open the graph with **View → Animator**. In the node panel:
+
+- **Add State from Clip** adds a node from one of the model's clips.
+- Drag from a node's **output pin** to another's **input pin** to create a transition.
+- Right-click a node → **Set as Entry** to mark the entry state (shown tinted); a state whose
+  clip name no longer resolves against the model is flagged red.
+- Right-click a link to edit its **conditions**; each node has a **loop** checkbox.
+
+Transitions fire on three condition types and no others: **`bool`**, **`trigger`**, and
+**`animation finished`**. Parameters (bools and triggers) are declared in the Animator's
+parameter list and set/queried from code by name. A transition fires when *all* its
+conditions hold; a transition with no conditions never fires.
+
+The graph only evaluates transitions in **Play** mode. In **Edit** the entry state's clip
+previews in place. Stopping Play resets to the entry state — the scene rebuilds from its JSON,
+so no runtime state is carried over.
+
+Drive it from Lua via `GetComponent("Animator")`:
+
+```lua
+local anim = self.entity:GetComponent("Animator")
+anim:SetBool("running", true)
+anim:SetTrigger("jump")
+if anim:GetState() == "Jump" then
+    -- ...
+end
+```
+
+The whole graph — nodes, canvas positions, links, conditions, parameters, per-node loop and
+the entry state — is saved in the scene file. Clips are referenced **by name**, so
+re-exporting the model with a clip renamed unlinks that state (it warns on load rather than
+silently pointing at the wrong animation).
 
 ## Lua Scripting
 
