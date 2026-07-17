@@ -85,6 +85,15 @@ namespace DonTopo
                 std::remove_if(t.conditions.begin(), t.conditions.end(),
                     [&name](const Condition& c) { return c.paramName == name; }),
                 t.conditions.end());
+
+        // Una transición que se quedó sin condiciones (ésta era la única) no
+        // puede disparar nunca (conditionsMet exige al menos una), así que
+        // dejarla sería un link invisible y muerto en el canvas. Si conservó
+        // otras condiciones, sobrevive tal cual.
+        m_transitions.erase(
+            std::remove_if(m_transitions.begin(), m_transitions.end(),
+                [](const Transition& t) { return t.conditions.empty(); }),
+            m_transitions.end());
     }
 
     bool AnimatorComponent::hasParam(const std::string& n, ParamType type) const
@@ -224,6 +233,17 @@ namespace DonTopo
                     m_finished = true;
                 }
             }
+        }
+        else
+        {
+            // Un clip sin resolver (clipIndex == -1, duration a 0) o de
+            // duración cero real nunca entraría en el bloque de arriba y
+            // jamás pondría m_finished a true: una salida "animation finished"
+            // se quedaría esperando para siempre. Semánticamente un estado de
+            // duración 0 ya ha terminado en el instante en que entra, así que
+            // se reafirma finished cada frame (igual que el clamp de arriba lo
+            // reafirma en el último frame de un clip normal sin loop).
+            m_finished = true;
         }
 
         if (!evaluateTransitions) return;

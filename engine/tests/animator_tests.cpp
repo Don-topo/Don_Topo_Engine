@@ -442,6 +442,89 @@ static void test_remove_parameter_ignores_empty_name()
     CHECK(countFinishedConditions() == 1u);  // sigue viva: el nombre vacío no cuenta como parámetro real
 }
 
+// Fix #3: si removeParameter deja una transición sin condiciones (era su
+// única condición), esa transición debe desaparecer del grafo, no quedarse
+// como un link dibujado en el canvas que jamás puede disparar (conditionsMet
+// exige al menos una condición). Grafo standalone de dos salidas desde A:
+// T1 solo por bool "p" (se vacía y debe caer), T2 por bool "p" Y trigger "q"
+// (pierde la de "p" pero sobrevive con "q").
+static void test_remove_parameter_drops_emptied_transitions()
+{
+    AnimatorComponent a;
+
+    AnimatorComponent::State sa;
+    sa.name = "A"; sa.clipName = "A"; sa.clipIndex = 0;
+    AnimatorComponent::State sb;
+    sb.name = "B"; sb.clipName = "B"; sb.clipIndex = 1;
+    AnimatorComponent::State sc;
+    sc.name = "C"; sc.clipName = "C"; sc.clipIndex = 2;
+
+    a.addState(sa);
+    a.addState(sb);
+    a.addState(sc);
+    a.setEntryState(0);
+
+    a.addParameter("p", AnimatorComponent::ParamType::Bool);
+    a.addParameter("q", AnimatorComponent::ParamType::Trigger);
+
+    AnimatorComponent::Transition t1;    // A -> B, únicamente por "p"
+    t1.fromState = 0; t1.toState = 1;
+    t1.conditions.push_back({ AnimatorComponent::ConditionType::Bool, "p", true });
+    a.addTransition(t1);
+
+    AnimatorComponent::Transition t2;    // A -> C, por "p" Y "q"
+    t2.fromState = 0; t2.toState = 2;
+    t2.conditions.push_back({ AnimatorComponent::ConditionType::Bool, "p", true });
+    t2.conditions.push_back({ AnimatorComponent::ConditionType::Trigger, "q", true });
+    a.addTransition(t2);
+
+    CHECK(a.transitions().size() == 2u);
+
+    a.removeParameter("p");
+
+    // T1 se queda sin condiciones y desaparece; T2 sobrevive con solo "q".
+    CHECK(a.transitions().size() == 1u);
+    CHECK(a.transitions()[0].toState == 2);
+    CHECK(a.transitions()[0].conditions.size() == 1u);
+    CHECK(a.transitions()[0].conditions[0].type == AnimatorComponent::ConditionType::Trigger);
+    CHECK(a.transitions()[0].conditions[0].paramName == "q");
+}
+
+// Fix #2: un estado con duration <= 0 (clip sin resolver, o de duración
+// real cero) nunca entra en el bloque de avance de tiempo, así que sin el
+// fix jamás marcaría m_finished y una salida "animation finished" se
+// quedaría esperando para siempre (grafo aparcado en A). Grafo standalone de
+// dos estados A(duration=0)->B por una única condición AnimationFinished.
+static void test_animation_finished_fires_on_zero_duration_state()
+{
+    AnimatorComponent a;
+
+    AnimatorComponent::State sa;
+    sa.name = "A"; sa.clipName = "A"; sa.clipIndex = -1;   // clip sin resolver
+    sa.duration = 0.0f; sa.ticksPerSecond = 30.0f; sa.loop = false;
+
+    AnimatorComponent::State sb;
+    sb.name = "B"; sb.clipName = "B"; sb.clipIndex = 0;
+    sb.duration = 10.0f; sb.ticksPerSecond = 10.0f;
+
+    a.addState(sa);
+    a.addState(sb);
+    a.setEntryState(0);
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    t.conditions.push_back({ AnimatorComponent::ConditionType::AnimationFinished, "", true });
+    a.addTransition(t);
+
+    a.reset();
+    CHECK(a.currentState() == 0);
+    CHECK(!a.finished());       // recién entrado: reset() lo pone a false
+
+    a.update(0.016f, true);     // un solo update: sin el fix se quedaría en A
+
+    CHECK(a.currentState() == 1);
+}
+
 // bindClips resuelve el clip por NOMBRE y cachea duration/ticksPerSecond. Un
 // nombre que no exista deja clipIndex a -1 y avisa: falla ruidoso, no silencioso.
 // loop NO se toca: es del usuario, no del FBX.
@@ -711,7 +794,9 @@ int main()
     test_first_matching_transition_wins();
     test_transition_without_conditions_never_fires();
     test_remove_parameter_ignores_empty_name();
+    test_remove_parameter_drops_emptied_transitions();
     test_parameter_api_ignores_undeclared();
+    test_animation_finished_fires_on_zero_duration_state();
 
     test_bind_clips_resolves_by_name();
     test_gameobject_animator_slot();

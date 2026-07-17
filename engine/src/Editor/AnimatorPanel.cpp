@@ -348,12 +348,22 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
         }
         ImGui::PopID();
     }
+    // "animation finished" nunca dispara saliendo de un estado en loop (un
+    // clip en loop nunca "termina", ver AnimatorComponent::update): se deja
+    // el item pero deshabilitado, con tooltip, para que el usuario no arme un
+    // link muerto sin saberlo.
+    const bool fromLoops = tr.fromState >= 0 && tr.fromState < (int)anim->states().size()
+                            && anim->states()[tr.fromState].loop;
+    ImGui::BeginDisabled(fromLoops);
     if (ImGui::MenuItem("Add: animation finished"))
     {
         AnimatorComponent::Condition cond;
         cond.type = AnimatorComponent::ConditionType::AnimationFinished;
         tr.conditions.push_back(cond);
     }
+    ImGui::EndDisabled();
+    if (fromLoops && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("El estado de origen está en loop: 'animation finished' nunca dispara aquí (un clip en loop nunca termina).");
 
     ImGui::EndPopup();
 }
