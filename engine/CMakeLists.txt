@@ -60,6 +60,7 @@ target_link_libraries(DonTopoEngine
         imgui_filedialog
         imguizmo
         imgui_texteditor
+        imgui_node_editor
         nlohmann_json::nlohmann_json
         sol2_lib
 )

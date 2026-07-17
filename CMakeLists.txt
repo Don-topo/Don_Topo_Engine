@@ -163,6 +163,42 @@ target_include_directories(imgui_texteditor PUBLIC
 target_link_libraries(imgui_texteditor PUBLIC imgui_backend)
 target_compile_features(imgui_texteditor PUBLIC cxx_std_17)
 
+# imgui-node-editor — canvas de nodos del panel Animator
+# Igual que ImGuiFileDialog/ImGuizmo/ImGuiColorTextEdit: Populate en vez de
+# MakeAvailable, su CMakeLists busca imgui por find_package y falla.
+FetchContent_Declare(
+    ImGuiNodeEditor
+    GIT_REPOSITORY https://github.com/thedmd/imgui-node-editor.git
+    GIT_TAG        master
+    GIT_SHALLOW    TRUE
+)
+FetchContent_GetProperties(ImGuiNodeEditor)
+if(NOT imguinodeeditor_POPULATED)
+    FetchContent_Populate(ImGuiNodeEditor)
+endif()
+
+# imgui_extra_math.inl de esta librería redefine
+# "operator*(const float, const ImVec2&)" sin el guard de versión que sí
+# tienen sus operadores vecinos (bug upstream, presente tanto en master como
+# en el tag v0.9.3). Nuestro ImGui 1.92.9 WIP ya implementa ese operador
+# bajo IMGUI_DEFINE_MATH_OPERATORS, así que sin parchear hay doble
+# definición y imgui_node_editor no compila. Se aplica siempre (no solo la
+# primera vez) porque el parche edita las fuentes ya populadas y debe ser
+# seguro repetirlo en cada re-configure; ver cmake/PatchImGuiNodeEditor.cmake.
+include(cmake/PatchImGuiNodeEditor.cmake)
+
+add_library(imgui_node_editor STATIC
+    ${imguinodeeditor_SOURCE_DIR}/imgui_node_editor.cpp
+    ${imguinodeeditor_SOURCE_DIR}/imgui_node_editor_api.cpp
+    ${imguinodeeditor_SOURCE_DIR}/imgui_canvas.cpp
+    ${imguinodeeditor_SOURCE_DIR}/crude_json.cpp
+)
+target_include_directories(imgui_node_editor PUBLIC
+    ${imguinodeeditor_SOURCE_DIR}
+)
+target_link_libraries(imgui_node_editor PUBLIC imgui_backend)
+target_compile_features(imgui_node_editor PUBLIC cxx_std_17)
+
 # nlohmann/json — serialización JSON (Scene save/load)
 FetchContent_Declare(
     nlohmann_json
