@@ -72,8 +72,13 @@ namespace DonTopo
             if (p.name == name) return;      // nombres únicos: se consultan por nombre
         m_parameters.push_back({ std::move(name), type });
         const std::string& n = m_parameters.back().name;
-        if (type == ParamType::Bool) m_bools[n] = false;
-        else                         m_triggers[n] = false;
+        switch (type)
+        {
+            case ParamType::Bool:    m_bools[n]    = false;  break;
+            case ParamType::Trigger: m_triggers[n] = false;  break;
+            case ParamType::Int:     m_ints[n]     = 0;      break;
+            case ParamType::Float:   m_floats[n]   = 0.0f;   break;
+        }
     }
 
     void AnimatorComponent::removeParameter(const std::string& name)
@@ -89,6 +94,8 @@ namespace DonTopo
             m_parameters.end());
         m_bools.erase(name);
         m_triggers.erase(name);
+        m_ints.erase(name);
+        m_floats.erase(name);
 
         // Las condiciones que lo usaban quedarían colgadas y no dispararían
         // nunca: se van con él.
@@ -139,6 +146,30 @@ namespace DonTopo
         return it != m_triggers.end() && it->second;
     }
 
+    void AnimatorComponent::setInt(const std::string& n, int v)
+    {
+        if (!hasParam(n, ParamType::Int)) return;
+        m_ints[n] = v;
+    }
+
+    int AnimatorComponent::getInt(const std::string& n) const
+    {
+        auto it = m_ints.find(n);
+        return it != m_ints.end() ? it->second : 0;
+    }
+
+    void AnimatorComponent::setFloat(const std::string& n, float v)
+    {
+        if (!hasParam(n, ParamType::Float)) return;
+        m_floats[n] = v;
+    }
+
+    float AnimatorComponent::getFloat(const std::string& n) const
+    {
+        auto it = m_floats.find(n);
+        return it != m_floats.end() ? it->second : 0.0f;
+    }
+
     int AnimatorComponent::currentClipIndex() const
     {
         if (m_currentState < 0 || m_currentState >= (int)m_states.size()) return 0;
@@ -159,6 +190,8 @@ namespace DonTopo
         m_finished     = false;
         for (auto& b : m_bools)    b.second = false;
         for (auto& t : m_triggers) t.second = false;
+        for (auto& i : m_ints)     i.second = 0;
+        for (auto& f : m_floats)   f.second = 0.0f;
     }
 
     void AnimatorComponent::bindClips(const SkinnedMesh& mesh, std::vector<std::string>* warnings)
@@ -204,6 +237,12 @@ namespace DonTopo
                     break;
                 case ConditionType::AnimationFinished:
                     if (!m_finished) return false;
+                    break;
+                case ConditionType::Int:
+                    if (!evalCompare(getInt(c.paramName), c.compare, (int)c.threshold)) return false;
+                    break;
+                case ConditionType::Float:
+                    if (!evalCompare(getFloat(c.paramName), c.compare, c.threshold)) return false;
                     break;
             }
         }

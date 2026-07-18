@@ -24,14 +24,27 @@ namespace DonTopo
     class AnimatorComponent
     {
         public:
-            enum class ConditionType { Bool, Trigger, AnimationFinished };
-            enum class ParamType     { Bool, Trigger };
+            // Los valores nuevos van AL FINAL: los tests usan inicialización
+            // agregada de Condition y la serialización va por string, así que
+            // añadir por el medio rompería lo primero sin ganar nada.
+            enum class ConditionType { Bool, Trigger, AnimationFinished, Int, Float };
+            enum class ParamType     { Bool, Trigger, Int, Float };
+            // Comparadores de las condiciones numéricas. La UI solo ofrece
+            // Greater/Less para Float (== sobre float casi nunca dispara), pero
+            // el evaluador los implementa los cuatro: un JSON editado a mano con
+            // Equals sobre un float se evalúa, no se ignora en silencio.
+            enum class Compare       { Greater, Less, Equals, NotEquals };
 
             struct Condition
             {
                 ConditionType type     = ConditionType::Bool;
                 std::string   paramName;          // vacío si AnimationFinished
                 bool          expected = true;    // solo Bool
+                // Solo Int/Float. Un único umbral en float sirve a los dos: la
+                // UI de Int usa DragInt, así que siempre entra un valor íntegro,
+                // y float representa enteros exactos hasta 2^24.
+                Compare       compare   = Compare::Greater;
+                float         threshold = 0.0f;
             };
 
             struct Transition
@@ -103,6 +116,13 @@ namespace DonTopo
             void setBool(const std::string& n, bool v);
             bool getBool(const std::string& n) const;
             void setTrigger(const std::string& n);
+            // Devuelven 0 si el parámetro no existe; los setters no hacen nada
+            // si el nombre no está declarado o es de otro tipo (misma guarda que
+            // setBool).
+            void  setInt(const std::string& n, int v);
+            int   getInt(const std::string& n) const;
+            void  setFloat(const std::string& n, float v);
+            float getFloat(const std::string& n) const;
 
             // evaluateTransitions == false (Edit Mode): avanza el tiempo del
             // estado actual pero no mueve el grafo.
@@ -122,6 +142,20 @@ namespace DonTopo
 
         private:
             bool conditionsMet(const Transition& t) const;
+            // Estático porque no toca estado: aísla los cuatro comparadores en
+            // un sitio y sirve tanto a Int como a Float.
+            template <typename T>
+            static bool evalCompare(T value, Compare op, T threshold)
+            {
+                switch (op)
+                {
+                    case Compare::Greater:   return value >  threshold;
+                    case Compare::Less:      return value <  threshold;
+                    case Compare::Equals:    return value == threshold;
+                    case Compare::NotEquals: return value != threshold;
+                }
+                return false;
+            }
             void consumeTriggers(const Transition& t);
             bool isTriggerSet(const std::string& n) const;
             bool hasParam(const std::string& n, ParamType type) const;
@@ -136,6 +170,8 @@ namespace DonTopo
             bool                    m_finished     = false;
             std::unordered_map<std::string, bool> m_bools;
             std::unordered_map<std::string, bool> m_triggers;
+            std::unordered_map<std::string, int>    m_ints;
+            std::unordered_map<std::string, float>  m_floats;
 
             // Siguiente editorId a repartir en addState. Nunca se resetea ni se
             // reutiliza un id liberado por removeState: mientras el panel esté
