@@ -1165,8 +1165,7 @@ void PropertiesPanel::drawAnimatorSection(EditorContext& ctx)
         ImGui::Separator();
         ImGui::TextUnformatted("Parameters");
         for (const auto& p : anim->parameters())
-            ImGui::BulletText("%s (%s)", p.name.c_str(),
-                p.type == AnimatorComponent::ParamType::Trigger ? "trigger" : "bool");
+            ImGui::BulletText("%s (%s)", p.name.c_str(), paramTypeLabel(p.type));
     }
 
     if (ImGui::Button("Open Animator") && ctx.openAnimator)

@@ -822,6 +822,332 @@ static void test_parameter_api_ignores_undeclared()
     CHECK(a.currentStateName() == "Run");
 }
 
+// Criterio: un parámetro Int dispara una transición según su comparador. Se
+// construye un grafo mínimo aparte de makeGraph() pa no tocar los tests ya
+// existentes, que dependen de su forma exacta.
+static AnimatorComponent makeNumericGraph()
+{
+    AnimatorComponent a;
+
+    AnimatorComponent::State idle;
+    idle.name = "Idle"; idle.clipName = "Idle";
+    idle.clipIndex = 0; idle.duration = 30.0f; idle.ticksPerSecond = 30.0f; idle.loop = true;
+
+    AnimatorComponent::State run;
+    run.name = "Run"; run.clipName = "Run";
+    run.clipIndex = 1; run.duration = 20.0f; run.ticksPerSecond = 20.0f; run.loop = true;
+
+    a.addState(idle);
+    a.addState(run);
+    a.setEntryState(0);
+
+    a.addParameter("combo", AnimatorComponent::ParamType::Int);
+    a.addParameter("speed", AnimatorComponent::ParamType::Float);
+
+    a.reset();
+    return a;
+}
+
+static void test_int_condition_greater_and_equals()
+{
+    AnimatorComponent a = makeNumericGraph();
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    AnimatorComponent::Condition c;
+    c.type      = AnimatorComponent::ConditionType::Int;
+    c.paramName = "combo";
+    c.compare   = AnimatorComponent::Compare::Greater;
+    c.threshold = 2.0f;
+    t.conditions.push_back(c);
+    a.addTransition(t);
+
+    // Valor inicial 0: no dispara
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 0);
+
+    // Igual al umbral: Greater es estricto, sigue sin disparar
+    a.setInt("combo", 2);
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 0);
+
+    a.setInt("combo", 3);
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 1);
+
+    // Equals: mismo grafo, otro comparador
+    AnimatorComponent b = makeNumericGraph();
+    AnimatorComponent::Transition tb;
+    tb.fromState = 0; tb.toState = 1;
+    AnimatorComponent::Condition cb;
+    cb.type      = AnimatorComponent::ConditionType::Int;
+    cb.paramName = "combo";
+    cb.compare   = AnimatorComponent::Compare::Equals;
+    cb.threshold = 3.0f;
+    tb.conditions.push_back(cb);
+    b.addTransition(tb);
+
+    b.setInt("combo", 4);
+    b.update(0.016f, true);
+    CHECK(b.currentState() == 0);
+
+    b.setInt("combo", 3);
+    b.update(0.016f, true);
+    CHECK(b.currentState() == 1);
+}
+
+static void test_float_condition_less()
+{
+    AnimatorComponent a = makeNumericGraph();
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    AnimatorComponent::Condition c;
+    c.type      = AnimatorComponent::ConditionType::Float;
+    c.paramName = "speed";
+    c.compare   = AnimatorComponent::Compare::Less;
+    c.threshold = -1.0f;
+    t.conditions.push_back(c);
+    a.addTransition(t);
+
+    // Valor inicial 0.0f: no es menor que -1.0f
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 0);
+
+    a.setFloat("speed", -2.5f);
+    CHECK(nearlyEqual(a.getFloat("speed"), -2.5f));
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 1);
+}
+
+// Equals/NotEquals sobre un Float: se ofrecen en la UI igual que en Int, y el
+// evaluador los aplica con == pelado, sin epsilon. Se usa 2.5f, exactamente
+// representable en binario, pa que el test sea sobre el comparador y no sobre
+// precisión de punto flotante.
+static void test_float_condition_equals_and_not_equals()
+{
+    AnimatorComponent a = makeNumericGraph();
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    AnimatorComponent::Condition c;
+    c.type      = AnimatorComponent::ConditionType::Float;
+    c.paramName = "speed";
+    c.compare   = AnimatorComponent::Compare::Equals;
+    c.threshold = 2.5f;
+    t.conditions.push_back(c);
+    a.addTransition(t);
+
+    // Distinto del umbral: Equals no dispara
+    a.setFloat("speed", 1.0f);
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 0);
+
+    // Coincidencia exacta: Equals sí dispara
+    a.setFloat("speed", 2.5f);
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 1);
+
+    // NotEquals: mismo grafo, comparador contrario
+    AnimatorComponent b = makeNumericGraph();
+    AnimatorComponent::Transition tb;
+    tb.fromState = 0; tb.toState = 1;
+    AnimatorComponent::Condition cb;
+    cb.type      = AnimatorComponent::ConditionType::Float;
+    cb.paramName = "speed";
+    cb.compare   = AnimatorComponent::Compare::NotEquals;
+    cb.threshold = 2.5f;
+    tb.conditions.push_back(cb);
+    b.addTransition(tb);
+
+    // Igual al umbral: NotEquals no dispara
+    b.setFloat("speed", 2.5f);
+    b.update(0.016f, true);
+    CHECK(b.currentState() == 0);
+
+    // Distinto: NotEquals sí dispara
+    b.setFloat("speed", 1.0f);
+    b.update(0.016f, true);
+    CHECK(b.currentState() == 1);
+}
+
+// Misma guarda que setBool: un nombre no declarado o de otro tipo se ignora en
+// vez de crear un parámetro fantasma que ninguna condición miraría.
+static void test_numeric_api_type_guards()
+{
+    AnimatorComponent a = makeNumericGraph();
+    a.addParameter("running", AnimatorComponent::ParamType::Bool);
+
+    a.setInt("combo", 7);
+    CHECK(a.getInt("combo") == 7);
+    a.setFloat("speed", 1.5f);
+    CHECK(nearlyEqual(a.getFloat("speed"), 1.5f));
+
+    // No declarado
+    a.setInt("noExiste", 5);
+    CHECK(a.getInt("noExiste") == 0);
+    a.setFloat("tampoco", 5.0f);
+    CHECK(nearlyEqual(a.getFloat("tampoco"), 0.0f));
+
+    // Tipo equivocado en ambos sentidos
+    a.setInt("speed", 9);            // speed es float
+    CHECK(a.getInt("speed") == 0);
+    a.setFloat("combo", 9.0f);       // combo es int
+    CHECK(nearlyEqual(a.getFloat("combo"), 0.0f));
+    a.setInt("running", 1);          // running es bool
+    CHECK(a.getInt("running") == 0);
+
+    // reset devuelve los numéricos a cero, igual que los bools
+    a.reset();
+    CHECK(a.getInt("combo") == 0);
+    CHECK(nearlyEqual(a.getFloat("speed"), 0.0f));
+}
+
+// removeParameter ya limpiaba bools y triggers; los numéricos entran en el mismo
+// camino, incluida la poda de transiciones que se quedan sin condiciones.
+static void test_remove_numeric_parameter_cleans_conditions()
+{
+    AnimatorComponent a = makeNumericGraph();
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    AnimatorComponent::Condition c;
+    c.type      = AnimatorComponent::ConditionType::Int;
+    c.paramName = "combo";
+    c.compare   = AnimatorComponent::Compare::Greater;
+    c.threshold = 0.0f;
+    t.conditions.push_back(c);
+    a.addTransition(t);
+    CHECK(a.transitions().size() == 1);
+
+    a.removeParameter("combo");
+    CHECK(a.parameters().size() == 1);          // solo queda "speed"
+    CHECK(a.transitions().empty());             // se quedó sin condiciones
+    CHECK(a.getInt("combo") == 0);
+}
+
+// Round-trip completo de un grafo con parámetros y condiciones numéricas: si
+// compare o threshold no sobrevivieran, la transición cargada dispararía cuando
+// no debe (o nunca).
+static void test_numeric_graph_survives_scene_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    auto a = std::make_shared<AnimatorComponent>();
+
+    AnimatorComponent::State idle;
+    idle.name = "Idle"; idle.clipName = "ClipIdle"; idle.loop = true;
+    AnimatorComponent::State run;
+    run.name = "Run"; run.clipName = "ClipRun"; run.loop = true;
+    a->addState(idle);
+    a->addState(run);
+
+    a->addParameter("combo", AnimatorComponent::ParamType::Int);
+    a->addParameter("speed", AnimatorComponent::ParamType::Float);
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    AnimatorComponent::Condition ci;
+    ci.type      = AnimatorComponent::ConditionType::Int;
+    ci.paramName = "combo";
+    ci.compare   = AnimatorComponent::Compare::NotEquals;
+    ci.threshold = 4.0f;
+    t.conditions.push_back(ci);
+    AnimatorComponent::Condition cf;
+    cf.type      = AnimatorComponent::ConditionType::Float;
+    cf.paramName = "speed";
+    cf.compare   = AnimatorComponent::Compare::Less;
+    cf.threshold = 2.5f;
+    t.conditions.push_back(cf);
+    a->addTransition(t);
+
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->hasAnimator());
+    if (!found->hasAnimator()) return;
+
+    auto la = found->getAnimator();
+    CHECK(la->parameters().size() == 2);
+    CHECK(la->parameters()[0].type == AnimatorComponent::ParamType::Int);
+    CHECK(la->parameters()[1].type == AnimatorComponent::ParamType::Float);
+
+    CHECK(la->transitions().size() == 1);
+    if (la->transitions().empty()) return;
+    const auto& lc = la->transitions()[0].conditions;
+    CHECK(lc.size() == 2);
+    if (lc.size() != 2) return;
+
+    CHECK(lc[0].type    == AnimatorComponent::ConditionType::Int);
+    CHECK(lc[0].compare == AnimatorComponent::Compare::NotEquals);
+    CHECK(nearlyEqual(lc[0].threshold, 4.0f));
+    CHECK(lc[1].type    == AnimatorComponent::ConditionType::Float);
+    CHECK(lc[1].compare == AnimatorComponent::Compare::Less);
+    CHECK(nearlyEqual(lc[1].threshold, 2.5f));
+}
+
+// Retrocompatibilidad: una condición guardada antes de este cambio no lleva
+// "compare" ni "threshold" y debe cargar con los defaults del struct, sin
+// warnings ni excepciones de nlohmann.
+static void test_condition_without_compare_fields_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State idle;
+    idle.name = "Idle"; idle.clipName = "ClipIdle";
+    AnimatorComponent::State run;
+    run.name = "Run"; run.clipName = "ClipRun";
+    a->addState(idle);
+    a->addState(run);
+    a->addParameter("running", AnimatorComponent::ParamType::Bool);
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    t.conditions.push_back({ AnimatorComponent::ConditionType::Bool, "running", true });
+    a->addTransition(t);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+
+    // Una condición Bool no debe emitir los campos numéricos: son ruido en el
+    // .scene y confundirían a quien lo lea a mano. El árbol es
+    // root["root"]["children"], no un array plano (ver Scene::toJson).
+    bool checkedEmission = false;
+    for (const auto& node : j["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        const auto& cond = node["animator"]["transitions"][0]["conditions"][0];
+        CHECK(!cond.contains("compare"));
+        CHECK(!cond.contains("threshold"));
+        checkedEmission = true;
+    }
+    CHECK(checkedEmission);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found || !found->hasAnimator()) return;
+
+    const auto& lc = found->getAnimator()->transitions()[0].conditions[0];
+    CHECK(lc.type    == AnimatorComponent::ConditionType::Bool);
+    CHECK(lc.expected);
+    CHECK(lc.compare == AnimatorComponent::Compare::Greater);   // default
+    CHECK(nearlyEqual(lc.threshold, 0.0f));                     // default
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -850,6 +1176,11 @@ int main()
     test_remove_parameter_ignores_empty_name();
     test_remove_parameter_drops_emptied_transitions();
     test_parameter_api_ignores_undeclared();
+    test_int_condition_greater_and_equals();
+    test_float_condition_less();
+    test_float_condition_equals_and_not_equals();
+    test_numeric_api_type_guards();
+    test_remove_numeric_parameter_cleans_conditions();
     test_animation_finished_fires_on_zero_duration_state();
 
     test_bind_clips_resolves_by_name();
@@ -857,6 +1188,8 @@ int main()
 
     test_graph_survives_scene_round_trip(pm, am);
     test_scene_without_animator_block_loads(pm, am);
+    test_numeric_graph_survives_scene_round_trip(pm, am);
+    test_condition_without_compare_fields_loads(pm, am);
 
     test_animator_command_add_undo_redo();
     test_animator_command_remove();

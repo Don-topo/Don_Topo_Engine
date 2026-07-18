@@ -75,7 +75,9 @@ const std::vector<std::string>& luaApiSymbols()
         "Rigidbody:AddForce", "Rigidbody:AddTorque", "Rigidbody:AddImpulse",
 
         // Animator (máquina de estados; GetComponent("Animator"))
-        "Animator:SetBool", "Animator:GetBool", "Animator:SetTrigger", "Animator:GetState",
+        "Animator:SetBool", "Animator:GetBool", "Animator:SetTrigger",
+        "Animator:SetInt", "Animator:GetInt", "Animator:SetFloat", "Animator:GetFloat",
+        "Animator:GetState",
 
         // AudioClip
         "AudioClip:Play", "AudioClip:Stop", "AudioClip:SetLoop", "AudioClip:GetLoop",
