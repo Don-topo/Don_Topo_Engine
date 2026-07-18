@@ -29,10 +29,10 @@ namespace DonTopo
             // añadir por el medio rompería lo primero sin ganar nada.
             enum class ConditionType { Bool, Trigger, AnimationFinished, Int, Float };
             enum class ParamType     { Bool, Trigger, Int, Float };
-            // Comparadores de las condiciones numéricas. La UI solo ofrece
-            // Greater/Less para Float (== sobre float casi nunca dispara), pero
-            // el evaluador los implementa los cuatro: un JSON editado a mano con
-            // Equals sobre un float se evalúa, no se ignora en silencio.
+            // Comparadores de las condiciones numéricas: los cuatro valen tanto
+            // para Int como para Float. Sobre un float, Equals exige igualdad
+            // binaria exacta — un valor calculado casi nunca la cumple, uno
+            // asignado con setFloat sí.
             enum class Compare       { Greater, Less, Equals, NotEquals };
 
             struct Condition

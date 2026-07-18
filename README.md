@@ -132,9 +132,10 @@ A parameter is one of four types — **`bool`**, **`trigger`**, **`int`** or **`
 declared in the Animator's parameter list and set/queried from code by name. A condition
 matches a `bool` or `trigger` parameter's own value, or, independent of any parameter,
 **`animation finished`** (the current clip reached its end). `int`/`float` parameters
-condition by comparing a threshold with `>`, `<`, `==` or `!=` — the last two (`==`/`!=`)
-are offered only for `int`, since equality on a float is rarely what fires. A transition
-fires when *all* its conditions hold; a transition with no conditions never fires.
+condition by comparing a threshold with `>`, `<`, `==` or `!=`. On a `float`, `==` means
+exact binary equality: a value you assign with `SetFloat` matches, one you arrive at by
+accumulating usually will not. A transition fires when *all* its conditions hold; a
+transition with no conditions never fires.
 
 The graph only evaluates transitions in **Play** mode. In **Edit** the entry state's clip
 previews in place. Stopping Play resets to the entry state — the scene rebuilds from its JSON,

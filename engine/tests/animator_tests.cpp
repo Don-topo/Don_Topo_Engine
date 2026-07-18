@@ -920,12 +920,10 @@ static void test_float_condition_less()
     CHECK(a.currentState() == 1);
 }
 
-// La UI solo ofrece Greater/Less para Float (un == sobre float casi nunca
-// dispara), pero el evaluador implementa los cuatro comparadores: un JSON
-// editado a mano con Equals/NotEquals sobre un float se evalúa, no se ignora
-// en silencio (ver AnimatorPanel::drawConditionsPopup y conditionsMet). Se usa
-// 2.5f, exactamente representable en binario, pa que el test sea sobre el
-// comparador y no sobre precisión de punto flotante.
+// Equals/NotEquals sobre un Float: se ofrecen en la UI igual que en Int, y el
+// evaluador los aplica con == pelado, sin epsilon. Se usa 2.5f, exactamente
+// representable en binario, pa que el test sea sobre el comparador y no sobre
+// precisión de punto flotante.
 static void test_float_condition_equals_and_not_equals()
 {
     AnimatorComponent a = makeNumericGraph();
