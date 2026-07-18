@@ -457,9 +457,10 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
             else
             {
                 // El umbral vive en float pa no duplicar el campo; la UI de Int
-                // pasa por un int temporal, así que nunca entra un valor con
-                // parte fraccionaria que el evaluador truncaría a espaldas del
-                // usuario.
+                // pasa por un int temporal, así que por aquí nunca entra un
+                // valor con parte fraccionaria y lo que se ve es exactamente lo
+                // que evalúa conditionsMet (que redondea, no trunca, pa cubrir
+                // los que llegan de un JSON editado a mano).
                 int thr = (int)cond.threshold;
                 if (ImGui::DragInt("##thr", &thr)) cond.threshold = (float)thr;
             }
