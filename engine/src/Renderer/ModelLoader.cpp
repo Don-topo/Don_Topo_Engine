@@ -329,6 +329,17 @@ namespace DonTopo
             smesh.animationClips.push_back(std::move(clip));
         }
 
+        // Fuente builtin: el propio FBX. Se registra siempre, incluso sin
+        // animaciones — la UI necesita una fila que represente al modelo.
+        {
+            AnimationSource builtin;
+            builtin.path    = path;
+            builtin.builtin = true;
+            for (const auto& c : smesh.animationClips)
+                builtin.clipNames.push_back(c.name);
+            smesh.animationSources.push_back(std::move(builtin));
+        }
+
         // --- Materiales: uno por cada materialIndex único entre los submeshes ---
         {
             namespace fs = std::filesystem;

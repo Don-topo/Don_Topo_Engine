@@ -48,6 +48,25 @@ static void test_loader_reads_all_clips()
     }
 }
 
+// El FBX del propio modelo se registra como fuente "builtin": es la entrada de
+// la lista que la UI muestra sin botón de borrar, y la que la escena reconstruye
+// vía mesh.sourcePath en vez de vía addAnimationSource.
+static void test_loader_registers_builtin_source()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+
+    CHECK(m.animationSources.size() == 1u);
+    if (m.animationSources.empty()) return;
+
+    const AnimationSource& src = m.animationSources[0];
+    CHECK(src.builtin == true);
+    CHECK(src.path == "assets/modelAnimation.fbx");
+    // clipNames refleja exactamente los clips cargados, en el mismo orden
+    CHECK(src.clipNames.size() == m.animationClips.size());
+    for (size_t i = 0; i < src.clipNames.size() && i < m.animationClips.size(); i++)
+        CHECK(src.clipNames[i] == m.animationClips[i].name);
+}
+
 // Los keyframes de los N clips van concatenados en los mismos vectores y
 // boneInfos queda en layout [clip][hueso]. parentIndex/inverseBindPose son del
 // esqueleto, no del clip: idénticos en todos los bloques — eso es lo que deja a
@@ -1160,6 +1179,7 @@ int main()
     am.init();
 
     test_loader_reads_all_clips();
+    test_loader_registers_builtin_source();
     test_pack_concatenates_clips();
     test_pack_mesh_without_clips();
 

@@ -51,6 +51,21 @@ namespace DonTopo
         uint32_t materialIndex;
     };
 
+    // Fichero del que salieron uno o más clips. La lista existe para poder
+    // mostrar los clips agrupados por origen en el Animator Panel y para poder
+    // quitar un fichero entero; la evaluación en GPU no la mira nunca, sigue
+    // consumiendo animationClips plano.
+    //
+    // builtin marca el FBX que aportó la malla y el esqueleto: no se puede
+    // quitar (quitarlo sería quitar el modelo) y la escena lo reconstruye vía
+    // Mesh::sourcePath, no vía addAnimationSource.
+    struct AnimationSource
+    {
+        std::string              path;
+        bool                     builtin = false;
+        std::vector<std::string> clipNames; // nombres finales, en el orden en que se añadieron
+    };
+
     struct SkinnedMesh : Mesh
     {
         std::vector<SkinnedVertex>   skinnedVertices;
@@ -59,6 +74,9 @@ namespace DonTopo
         // scene->mAnimations. El Animator las referencia por nombre (no por
         // índice): reexportar el modelo puede reordenarlas.
         std::vector<AnimationClip>   animationClips;
+        // Origen de cada clip. Invariante: la concatenación de los clipNames de
+        // todas las fuentes es una permutación de los nombres de animationClips.
+        std::vector<AnimationSource> animationSources;
         std::vector<SubMeshRange>    subMeshRanges;
         std::vector<Material>        materials;
     };
