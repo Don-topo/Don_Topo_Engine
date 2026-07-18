@@ -239,7 +239,10 @@ namespace DonTopo
                     if (!m_finished) return false;
                     break;
                 case ConditionType::Int:
-                    if (!evalCompare(getInt(c.paramName), c.compare, (int)c.threshold)) return false;
+                    // El umbral vive en float (ver comentario en AnimatorPanel), así que
+                    // redondeamos en vez de truncar: un JSON editado a mano con
+                    // threshold: 2.9 debe evaluar como 3, no como 2 silenciosamente.
+                    if (!evalCompare(getInt(c.paramName), c.compare, (int)std::lround(c.threshold))) return false;
                     break;
                 case ConditionType::Float:
                     if (!evalCompare(getFloat(c.paramName), c.compare, c.threshold)) return false;

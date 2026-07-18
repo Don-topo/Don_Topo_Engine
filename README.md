@@ -155,7 +155,8 @@ end
 `SetInt(name, v)` / `GetInt(name)` and `SetFloat(name, v)` / `GetFloat(name)` read/write
 the graph's numeric parameters the same way `SetBool`/`GetBool` do. All four setters
 silently ignore an undeclared name or a name of the wrong type; the getters return `0`
-for an unknown name — none of them throws.
+for an unknown name — none of them throws over a bad *name*. (They do still throw if the
+GameObject lost its Animator component between `GetComponent` and the call.)
 
 The whole graph — nodes, canvas positions, links, conditions, parameters, per-node loop and
 the entry state — is saved in the scene file. Clips are referenced **by name**, so

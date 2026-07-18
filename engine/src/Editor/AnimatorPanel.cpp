@@ -437,8 +437,16 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
             ImGui::SameLine();
             ImGui::SetNextItemWidth(50);
             int op = (int)cond.compare;
-            // Float recorta el combo a Greater/Less; Int ofrece los cuatro.
-            if (ImGui::Combo("##cmp", &op, kCompareLabels, isFloat ? 2 : 4))
+            // Float recorta el combo a Greater/Less para no ofrecer un == que
+            // casi nunca dispara; pero si la condicion viene de un JSON editado
+            // a mano con Equals/NotEquals (op 2 o 3), un combo de 2 items lo
+            // deja fuera de rango y ImGui pinta el preview en blanco -> el
+            // valor cargado queda invisible y la unica interaccion posible lo
+            // destruye. Por eso el límite solo se recorta a 2 cuando op ya
+            // esta dentro de ese rango; si viene de fuera, se muestran los 4
+            // para que siga siendo visible y editable (el evaluador ya lo
+            // soporta, ver AnimatorComponent::conditionsMet).
+            if (ImGui::Combo("##cmp", &op, kCompareLabels, (isFloat && op < 2) ? 2 : 4))
                 cond.compare = (AnimatorComponent::Compare)op;
             ImGui::SameLine();
             ImGui::SetNextItemWidth(70);

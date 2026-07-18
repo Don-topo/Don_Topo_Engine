@@ -920,6 +920,59 @@ static void test_float_condition_less()
     CHECK(a.currentState() == 1);
 }
 
+// La UI solo ofrece Greater/Less para Float (un == sobre float casi nunca
+// dispara), pero el evaluador implementa los cuatro comparadores: un JSON
+// editado a mano con Equals/NotEquals sobre un float se evalúa, no se ignora
+// en silencio (ver AnimatorPanel::drawConditionsPopup y conditionsMet). Se usa
+// 2.5f, exactamente representable en binario, pa que el test sea sobre el
+// comparador y no sobre precisión de punto flotante.
+static void test_float_condition_equals_and_not_equals()
+{
+    AnimatorComponent a = makeNumericGraph();
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    AnimatorComponent::Condition c;
+    c.type      = AnimatorComponent::ConditionType::Float;
+    c.paramName = "speed";
+    c.compare   = AnimatorComponent::Compare::Equals;
+    c.threshold = 2.5f;
+    t.conditions.push_back(c);
+    a.addTransition(t);
+
+    // Distinto del umbral: Equals no dispara
+    a.setFloat("speed", 1.0f);
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 0);
+
+    // Coincidencia exacta: Equals sí dispara
+    a.setFloat("speed", 2.5f);
+    a.update(0.016f, true);
+    CHECK(a.currentState() == 1);
+
+    // NotEquals: mismo grafo, comparador contrario
+    AnimatorComponent b = makeNumericGraph();
+    AnimatorComponent::Transition tb;
+    tb.fromState = 0; tb.toState = 1;
+    AnimatorComponent::Condition cb;
+    cb.type      = AnimatorComponent::ConditionType::Float;
+    cb.paramName = "speed";
+    cb.compare   = AnimatorComponent::Compare::NotEquals;
+    cb.threshold = 2.5f;
+    tb.conditions.push_back(cb);
+    b.addTransition(tb);
+
+    // Igual al umbral: NotEquals no dispara
+    b.setFloat("speed", 2.5f);
+    b.update(0.016f, true);
+    CHECK(b.currentState() == 0);
+
+    // Distinto: NotEquals sí dispara
+    b.setFloat("speed", 1.0f);
+    b.update(0.016f, true);
+    CHECK(b.currentState() == 1);
+}
+
 // Misma guarda que setBool: un nombre no declarado o de otro tipo se ignora en
 // vez de crear un parámetro fantasma que ninguna condición miraría.
 static void test_numeric_api_type_guards()
@@ -1127,6 +1180,7 @@ int main()
     test_parameter_api_ignores_undeclared();
     test_int_condition_greater_and_equals();
     test_float_condition_less();
+    test_float_condition_equals_and_not_equals();
     test_numeric_api_type_guards();
     test_remove_numeric_parameter_cleans_conditions();
     test_animation_finished_fires_on_zero_duration_state();
