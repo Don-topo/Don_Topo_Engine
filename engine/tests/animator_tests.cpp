@@ -83,6 +83,94 @@ static void test_unique_clip_name()
     CHECK(uniqueClipName(existing, "")     == "Animation");
 }
 
+// Importar animaciones contra el esqueleto del propio fichero tiene que dar
+// exactamente lo mismo que loadSkinned: mismos clips, mismos boneIndex, sin
+// avisos. Es el caso "el FBX de animación es del mismo rig que el modelo".
+static void test_load_animation_clips_matches_full_load()
+{
+    SkinnedMesh base = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    LoadedClips lc = ModelLoader::loadAnimationClips("assets/modelAnimation.fbx", base.skeleton);
+
+    CHECK(lc.warnings.empty());
+    CHECK(lc.clips.size() == base.animationClips.size());
+    CHECK(lc.mappedChannels == lc.totalChannels);
+    CHECK(lc.totalChannels > 0);
+
+    for (size_t i = 0; i < lc.clips.size() && i < base.animationClips.size(); i++)
+    {
+        const AnimationClip& a = lc.clips[i];
+        const AnimationClip& b = base.animationClips[i];
+        CHECK(nearlyEqual(a.duration, b.duration));
+        CHECK(nearlyEqual(a.ticksPerSecond, b.ticksPerSecond));
+        CHECK(a.channels.size() == b.channels.size());
+        for (size_t c = 0; c < a.channels.size() && c < b.channels.size(); c++)
+        {
+            CHECK(a.channels[c].boneIndex == b.channels[c].boneIndex);
+            CHECK(a.channels[c].posKeys.size()   == b.channels[c].posKeys.size());
+            CHECK(a.channels[c].rotKeys.size()   == b.channels[c].rotKeys.size());
+            CHECK(a.channels[c].scaleKeys.size() == b.channels[c].scaleKeys.size());
+        }
+    }
+}
+
+// Esqueleto ajeno: ningún hueso casa, así que no hay nada que importar. Se avisa
+// y se devuelven 0 clips — el caller lo convierte en rechazo.
+static void test_load_animation_clips_against_foreign_skeleton()
+{
+    Skeleton foreign;
+    foreign.names           = { "hueso_que_no_existe" };
+    foreign.parentIndex     = { -1 };
+    foreign.inverseBindPose = { glm::mat4(1.0f) };
+    foreign.boneMap         = { { "hueso_que_no_existe", 0 } };
+
+    LoadedClips lc = ModelLoader::loadAnimationClips("assets/modelAnimation.fbx", foreign);
+
+    CHECK(lc.clips.empty());
+    CHECK(!lc.warnings.empty());
+    CHECK(lc.mappedChannels == 0);
+    CHECK(lc.totalChannels > 0);
+}
+
+// Esqueleto parcial: se importa lo que casa y se avisa de lo que no. Es el caso
+// real de un rig al que le faltan huesos de dedos respecto al FBX de animación.
+static void test_load_animation_clips_partial_skeleton()
+{
+    SkinnedMesh base = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    CHECK(base.skeleton.names.size() >= 2u);
+    if (base.skeleton.names.size() < 2u) return;
+
+    // Esqueleto recortado: solo el primer hueso del original
+    Skeleton partial;
+    partial.names           = { base.skeleton.names[0] };
+    partial.parentIndex     = { -1 };
+    partial.inverseBindPose = { base.skeleton.inverseBindPose[0] };
+    partial.boneMap         = { { base.skeleton.names[0], 0 } };
+
+    LoadedClips lc = ModelLoader::loadAnimationClips("assets/modelAnimation.fbx", partial);
+
+    CHECK(!lc.warnings.empty());                 // avisa de los huesos ignorados
+    CHECK(lc.mappedChannels < lc.totalChannels);
+    // Los canales que sobreviven apuntan al único hueso del esqueleto recortado
+    for (const auto& c : lc.clips)
+        for (const auto& ch : c.channels)
+            CHECK(ch.boneIndex == 0);
+}
+
+// Fichero inexistente: no lanza, avisa. La UI lo convierte en un mensaje rojo,
+// y Scene::fromJson en un log — ninguno de los dos quiere una excepción.
+static void test_load_animation_clips_missing_file()
+{
+    Skeleton skel;
+    skel.names = { "root" }; skel.parentIndex = { -1 };
+    skel.inverseBindPose = { glm::mat4(1.0f) };
+    skel.boneMap = { { "root", 0 } };
+
+    LoadedClips lc = ModelLoader::loadAnimationClips("assets/no_existe_este_fichero.fbx", skel);
+
+    CHECK(lc.clips.empty());
+    CHECK(!lc.warnings.empty());
+}
+
 // Los keyframes de los N clips van concatenados en los mismos vectores y
 // boneInfos queda en layout [clip][hueso]. parentIndex/inverseBindPose son del
 // esqueleto, no del clip: idénticos en todos los bloques — eso es lo que deja a
@@ -1197,6 +1285,10 @@ int main()
     test_loader_reads_all_clips();
     test_loader_registers_builtin_source();
     test_unique_clip_name();
+    test_load_animation_clips_matches_full_load();
+    test_load_animation_clips_against_foreign_skeleton();
+    test_load_animation_clips_partial_skeleton();
+    test_load_animation_clips_missing_file();
     test_pack_concatenates_clips();
     test_pack_mesh_without_clips();
 

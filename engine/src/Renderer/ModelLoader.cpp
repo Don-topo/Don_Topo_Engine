@@ -22,6 +22,62 @@ namespace DonTopo
         );
     }
 
+    // Convierte una aiAnimation a AnimationClip resolviendo cada canal contra
+    // skel POR NOMBRE. Compartido por loadSkinned y loadAnimationClips: son el
+    // mismo trabajo, y duplicarlo garantizaba que las dos rutas divergieran.
+    //
+    // clip.name queda con el nombre CRUDO del FBX: la unicidad la aplica quien
+    // llama, que es quien sabe qué clips hay ya en el mesh destino.
+    static AnimationClip clipFromAssimp(const aiAnimation* anim, const Skeleton& skel,
+                                        int& mappedChannels, int& totalChannels,
+                                        std::vector<std::string>* unknownBones)
+    {
+        AnimationClip clip;
+        clip.name           = anim->mName.C_Str();
+        clip.duration       = (float)anim->mDuration;
+        clip.ticksPerSecond = (anim->mTicksPerSecond > 0.0) ? (float)anim->mTicksPerSecond : 24.0f;
+
+        for (uint32_t c = 0; c < anim->mNumChannels; c++)
+        {
+            aiNodeAnim* ch = anim->mChannels[c];
+            std::string boneName = ch->mNodeName.C_Str();
+            totalChannels++;
+
+            auto it = skel.boneMap.find(boneName);
+            if (it == skel.boneMap.end())
+            {
+                if (unknownBones) unknownBones->push_back(boneName);
+                continue;
+            }
+            mappedChannels++;
+
+            BoneChannel bc;
+            bc.boneIndex = it->second;
+
+            for (uint32_t k = 0; k < ch->mNumPositionKeys; k++)
+            {
+                auto& key = ch->mPositionKeys[k];
+                bc.posKeys.push_back({ (float)key.mTime,
+                    { key.mValue.x, key.mValue.y, key.mValue.z } });
+            }
+            for (uint32_t k = 0; k < ch->mNumRotationKeys; k++)
+            {
+                auto& key = ch->mRotationKeys[k];
+                // glm::quat constructor: (w, x, y, z)
+                bc.rotKeys.push_back({ (float)key.mTime,
+                    glm::quat(key.mValue.w, key.mValue.x, key.mValue.y, key.mValue.z) });
+            }
+            for (uint32_t k = 0; k < ch->mNumScalingKeys; k++)
+            {
+                auto& key = ch->mScalingKeys[k];
+                bc.scaleKeys.push_back({ (float)key.mTime,
+                    { key.mValue.x, key.mValue.y, key.mValue.z } });
+            }
+            clip.channels.push_back(std::move(bc));
+        }
+        return clip;
+    }
+
     Mesh ModelLoader::load(const std::string &path)
     {
         Assimp::Importer importer;
@@ -275,50 +331,13 @@ namespace DonTopo
         // --- Animaciones: todas las del fichero ---
         for (uint32_t a = 0; a < scene->mNumAnimations; a++)
         {
-            aiAnimation* anim = scene->mAnimations[a];
-            AnimationClip clip;
-
+            int mapped = 0, total = 0;
+            AnimationClip clip = clipFromAssimp(scene->mAnimations[a], skel, mapped, total, nullptr);
             // Nombres únicos y no vacíos: Mixamo exporta cada take como
-            // "mixamo.com", y los FBX de Blender a veces sin nombre. La regla
-            // vive en uniqueClipName porque la importación de ficheros extra
-            // tiene que aplicar exactamente la misma.
-            const std::string unique =
-                uniqueClipName(smesh.animationClips, anim->mName.C_Str());
-
-            clip.name            = unique;
-            clip.duration        = (float)anim->mDuration;
-            clip.ticksPerSecond  = (anim->mTicksPerSecond > 0.0) ? (float)anim->mTicksPerSecond : 24.0f;
-
-            for (uint32_t c = 0; c < anim->mNumChannels; c++)
-            {
-                aiNodeAnim* ch = anim->mChannels[c];
-                std::string boneName = ch->mNodeName.C_Str();
-                if (!skel.boneMap.count(boneName)) continue;
-
-                BoneChannel bc;
-                bc.boneIndex = skel.boneMap[boneName];
-
-                for (uint32_t k = 0; k < ch->mNumPositionKeys; k++)
-                {
-                    auto& key = ch->mPositionKeys[k];
-                    bc.posKeys.push_back({ (float)key.mTime,
-                        { key.mValue.x, key.mValue.y, key.mValue.z } });
-                }
-                for (uint32_t k = 0; k < ch->mNumRotationKeys; k++)
-                {
-                    auto& key = ch->mRotationKeys[k];
-                    // glm::quat constructor: (w, x, y, z)
-                    bc.rotKeys.push_back({ (float)key.mTime,
-                        glm::quat(key.mValue.w, key.mValue.x, key.mValue.y, key.mValue.z) });
-                }
-                for (uint32_t k = 0; k < ch->mNumScalingKeys; k++)
-                {
-                    auto& key = ch->mScalingKeys[k];
-                    bc.scaleKeys.push_back({ (float)key.mTime,
-                        { key.mValue.x, key.mValue.y, key.mValue.z } });
-                }
-                clip.channels.push_back(std::move(bc));
-            }
+            // "mixamo.com", y los FBX de Blender a veces sin nombre. El
+            // Animator resuelve los clips por nombre, así que dos clips
+            // homónimos harían que el segundo fuera inalcanzable.
+            clip.name = uniqueClipName(smesh.animationClips, clip.name);
             smesh.animationClips.push_back(std::move(clip));
         }
 
@@ -395,5 +414,66 @@ namespace DonTopo
         smesh.name = std::filesystem::path(path).stem().string();
         smesh.sourcePath = path;
         return smesh;
+    }
+
+    LoadedClips ModelLoader::loadAnimationClips(const std::string& path, const Skeleton& skel)
+    {
+        LoadedClips out;
+
+        Assimp::Importer importer;
+        // Flags mínimos: aquí no se construye geometría, así que triangulate,
+        // normales y tangentes serían trabajo tirado. Assimp lee las
+        // animaciones igual.
+        const aiScene* scene = importer.ReadFile(path, 0);
+
+        const std::string file = std::filesystem::path(path).filename().string();
+
+        if (!scene || !scene->mRootNode)
+        {
+            out.warnings.push_back(file + ": " + std::string(importer.GetErrorString()));
+            return out;
+        }
+        if (scene->mNumAnimations == 0)
+        {
+            out.warnings.push_back(file + ": no contiene animaciones");
+            return out;
+        }
+
+        std::vector<std::string> unknownBones;
+        for (uint32_t a = 0; a < scene->mNumAnimations; a++)
+        {
+            AnimationClip clip = clipFromAssimp(scene->mAnimations[a], skel,
+                                                out.mappedChannels, out.totalChannels,
+                                                &unknownBones);
+            // Un clip sin un solo canal válido no aporta nada: se descarta
+            // individualmente en vez de tumbar el fichero entero.
+            if (clip.channels.empty()) continue;
+            out.clips.push_back(std::move(clip));
+        }
+
+        if (out.mappedChannels == 0)
+        {
+            out.warnings.push_back(file + ": ningún hueso coincide con el esqueleto (0/"
+                                    + std::to_string(out.totalChannels) + " canales)");
+            out.clips.clear();
+            return out;
+        }
+
+        if (!unknownBones.empty())
+        {
+            std::string msg = file + ": " + std::to_string(out.mappedChannels) + "/"
+                            + std::to_string(out.totalChannels) + " canales mapeados, "
+                            + std::to_string(unknownBones.size()) + " huesos desconocidos ignorados (";
+            // Solo los 5 primeros: la lista completa de un rig ajeno llenaría
+            // el Log Console sin decir nada más de lo que dicen 5 ejemplos.
+            const size_t shown = unknownBones.size() < 5 ? unknownBones.size() : 5;
+            for (size_t i = 0; i < shown; i++)
+                msg += (i ? ", " : "") + unknownBones[i];
+            if (unknownBones.size() > shown) msg += ", ...";
+            msg += ")";
+            out.warnings.push_back(std::move(msg));
+        }
+
+        return out;
     }
 }
