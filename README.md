@@ -128,10 +128,13 @@ Open the graph with **View → Animator**. In the node panel:
   clip name no longer resolves against the model is flagged red.
 - Right-click a link to edit its **conditions**; each node has a **loop** checkbox.
 
-Transitions fire on three condition types and no others: **`bool`**, **`trigger`**, and
-**`animation finished`**. Parameters (bools and triggers) are declared in the Animator's
-parameter list and set/queried from code by name. A transition fires when *all* its
-conditions hold; a transition with no conditions never fires.
+A parameter is one of four types — **`bool`**, **`trigger`**, **`int`** or **`float`** —
+declared in the Animator's parameter list and set/queried from code by name. A condition
+matches a `bool` or `trigger` parameter's own value, or, independent of any parameter,
+**`animation finished`** (the current clip reached its end). `int`/`float` parameters
+condition by comparing a threshold with `>`, `<`, `==` or `!=` — the last two (`==`/`!=`)
+are offered only for `int`, since equality on a float is rarely what fires. A transition
+fires when *all* its conditions hold; a transition with no conditions never fires.
 
 The graph only evaluates transitions in **Play** mode. In **Edit** the entry state's clip
 previews in place. Stopping Play resets to the entry state — the scene rebuilds from its JSON,
@@ -143,10 +146,16 @@ Drive it from Lua via `GetComponent("Animator")`:
 local anim = self.entity:GetComponent("Animator")
 anim:SetBool("running", true)
 anim:SetTrigger("jump")
+anim:SetInt("combo", anim:GetInt("combo") + 1)
 if anim:GetState() == "Jump" then
     -- ...
 end
 ```
+
+`SetInt(name, v)` / `GetInt(name)` and `SetFloat(name, v)` / `GetFloat(name)` read/write
+the graph's numeric parameters the same way `SetBool`/`GetBool` do. All four setters
+silently ignore an undeclared name or a name of the wrong type; the getters return `0`
+for an unknown name — none of them throws.
 
 The whole graph — nodes, canvas positions, links, conditions, parameters, per-node loop and
 the entry state — is saved in the scene file. Clips are referenced **by name**, so

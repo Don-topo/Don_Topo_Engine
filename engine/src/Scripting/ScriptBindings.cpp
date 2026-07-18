@@ -368,6 +368,13 @@ namespace DonTopo::ScriptBindings
                 "SetBool",    [animOf](const LuaAnimator& c, const std::string& n, bool v) { animOf(c)->setBool(n, v); },
                 "GetBool",    [animOf](const LuaAnimator& c, const std::string& n) { return animOf(c)->getBool(n); },
                 "SetTrigger", [animOf](const LuaAnimator& c, const std::string& n) { animOf(c)->setTrigger(n); },
+                // Numéricos: mismo contrato que los bools — un nombre no
+                // declarado (o de otro tipo) se ignora en el setter y devuelve 0
+                // en el getter, nunca lanza.
+                "SetInt",     [animOf](const LuaAnimator& c, const std::string& n, int v) { animOf(c)->setInt(n, v); },
+                "GetInt",     [animOf](const LuaAnimator& c, const std::string& n) { return animOf(c)->getInt(n); },
+                "SetFloat",   [animOf](const LuaAnimator& c, const std::string& n, float v) { animOf(c)->setFloat(n, v); },
+                "GetFloat",   [animOf](const LuaAnimator& c, const std::string& n) { return animOf(c)->getFloat(n); },
                 "GetState",   [animOf](const LuaAnimator& c) { return animOf(c)->currentStateName(); });
         }
 
