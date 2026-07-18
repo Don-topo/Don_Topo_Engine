@@ -1,4 +1,5 @@
 #include "DonTopo/Renderer/ModelLoader.h"
+#include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
@@ -278,19 +279,11 @@ namespace DonTopo
             AnimationClip clip;
 
             // Nombres únicos y no vacíos: Mixamo exporta cada take como
-            // "mixamo.com", y los FBX de Blender a veces sin nombre. El
-            // Animator resuelve los clips por nombre, así que dos clips
-            // homónimos harían que el segundo fuera inalcanzable.
-            std::string base = anim->mName.C_Str();
-            if (base.empty()) base = "Animation " + std::to_string(a);
-            std::string unique = base;
-            int suffix = 1;
-            auto taken = [&](const std::string& n) {
-                for (const auto& c : smesh.animationClips)
-                    if (c.name == n) return true;
-                return false;
-            };
-            while (taken(unique)) unique = base + " (" + std::to_string(suffix++) + ")";
+            // "mixamo.com", y los FBX de Blender a veces sin nombre. La regla
+            // vive en uniqueClipName porque la importación de ficheros extra
+            // tiene que aplicar exactamente la misma.
+            const std::string unique =
+                uniqueClipName(smesh.animationClips, anim->mName.C_Str());
 
             clip.name            = unique;
             clip.duration        = (float)anim->mDuration;

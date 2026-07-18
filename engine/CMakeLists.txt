@@ -14,6 +14,7 @@ add_library(DonTopoEngine STATIC
     src/Renderer/Skybox.cpp
     src/Renderer/ModelLoader.cpp
     src/Renderer/SkinnedMeshPacking.cpp
+    src/Renderer/SkinnedMeshAnimations.cpp
     src/Renderer/Cube.cpp
     src/Renderer/Sphere.cpp
     src/Renderer/Plane.cpp

@@ -9,6 +9,7 @@
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
+#include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Editor/Command.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -65,6 +66,21 @@ static void test_loader_registers_builtin_source()
     CHECK(src.clipNames.size() == m.animationClips.size());
     for (size_t i = 0; i < src.clipNames.size() && i < m.animationClips.size(); i++)
         CHECK(src.clipNames[i] == m.animationClips[i].name);
+}
+
+// La regla de nombres únicos es la misma que ya aplicaba el loader (Mixamo
+// exporta todo como "mixamo.com"), pero ahora vive en un sitio compartido: la
+// usan tanto loadSkinned como la importación de ficheros extra.
+static void test_unique_clip_name()
+{
+    std::vector<AnimationClip> existing;
+    AnimationClip a; a.name = "walk";       existing.push_back(a);
+    AnimationClip b; b.name = "walk (1)";   existing.push_back(b);
+
+    CHECK(uniqueClipName(existing, "run")  == "run");
+    CHECK(uniqueClipName(existing, "walk") == "walk (2)");
+    // Nombre vacío: no puede quedarse vacío, el Animator resuelve por nombre
+    CHECK(uniqueClipName(existing, "")     == "Animation");
 }
 
 // Los keyframes de los N clips van concatenados en los mismos vectores y
@@ -1180,6 +1196,7 @@ int main()
 
     test_loader_reads_all_clips();
     test_loader_registers_builtin_source();
+    test_unique_clip_name();
     test_pack_concatenates_clips();
     test_pack_mesh_without_clips();
 
