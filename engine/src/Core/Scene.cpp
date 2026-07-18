@@ -51,13 +51,21 @@ namespace
     // de la cámara.
     const char* paramTypeToStr(AnimatorComponent::ParamType t)
     {
-        return t == AnimatorComponent::ParamType::Trigger ? "trigger" : "bool";
+        switch (t)
+        {
+            case AnimatorComponent::ParamType::Trigger: return "trigger";
+            case AnimatorComponent::ParamType::Int:     return "int";
+            case AnimatorComponent::ParamType::Float:   return "float";
+            default:                                    return "bool";
+        }
     }
 
     AnimatorComponent::ParamType paramTypeFromStr(const std::string& s)
     {
-        return s == "trigger" ? AnimatorComponent::ParamType::Trigger
-                              : AnimatorComponent::ParamType::Bool;
+        if (s == "trigger") return AnimatorComponent::ParamType::Trigger;
+        if (s == "int")     return AnimatorComponent::ParamType::Int;
+        if (s == "float")   return AnimatorComponent::ParamType::Float;
+        return AnimatorComponent::ParamType::Bool;
     }
 
     const char* condTypeToStr(AnimatorComponent::ConditionType t)
@@ -66,6 +74,8 @@ namespace
         {
             case AnimatorComponent::ConditionType::Trigger:           return "trigger";
             case AnimatorComponent::ConditionType::AnimationFinished: return "animationFinished";
+            case AnimatorComponent::ConditionType::Int:               return "int";
+            case AnimatorComponent::ConditionType::Float:             return "float";
             default:                                                  return "bool";
         }
     }
@@ -74,7 +84,28 @@ namespace
     {
         if (s == "trigger")           return AnimatorComponent::ConditionType::Trigger;
         if (s == "animationFinished") return AnimatorComponent::ConditionType::AnimationFinished;
+        if (s == "int")               return AnimatorComponent::ConditionType::Int;
+        if (s == "float")             return AnimatorComponent::ConditionType::Float;
         return AnimatorComponent::ConditionType::Bool;
+    }
+
+    const char* compareToStr(AnimatorComponent::Compare c)
+    {
+        switch (c)
+        {
+            case AnimatorComponent::Compare::Less:      return "less";
+            case AnimatorComponent::Compare::Equals:    return "equals";
+            case AnimatorComponent::Compare::NotEquals: return "notEquals";
+            default:                                    return "greater";
+        }
+    }
+
+    AnimatorComponent::Compare compareFromStr(const std::string& s)
+    {
+        if (s == "less")      return AnimatorComponent::Compare::Less;
+        if (s == "equals")    return AnimatorComponent::Compare::Equals;
+        if (s == "notEquals") return AnimatorComponent::Compare::NotEquals;
+        return AnimatorComponent::Compare::Greater;
     }
 
     nlohmann::json animatorToJson(const AnimatorComponent& a)
@@ -105,6 +136,13 @@ namespace
                     cj["param"] = c.paramName;
                 if (c.type == AnimatorComponent::ConditionType::Bool)
                     cj["expected"] = c.expected;
+                // Solo las numéricas: en una Bool serían ruido en el .scene.
+                if (c.type == AnimatorComponent::ConditionType::Int ||
+                    c.type == AnimatorComponent::ConditionType::Float)
+                {
+                    cj["compare"]   = compareToStr(c.compare);
+                    cj["threshold"] = c.threshold;
+                }
                 conds.push_back(cj);
             }
             // from/to son índices al array "states" de ESTE mismo JSON:
@@ -164,6 +202,10 @@ namespace
                         cond.type      = condTypeFromStr(c.value("type", std::string("bool")));
                         cond.paramName = c.value("param", std::string());
                         cond.expected  = c.value("expected", true);
+                        // Ausentes en escenas anteriores a los parámetros
+                        // numéricos: caen en los defaults del struct.
+                        cond.compare   = compareFromStr(c.value("compare", std::string("greater")));
+                        cond.threshold = c.value("threshold", 0.0f);
                         tr.conditions.push_back(cond);
                     }
                 }

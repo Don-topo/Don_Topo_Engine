@@ -975,6 +975,128 @@ static void test_remove_numeric_parameter_cleans_conditions()
     CHECK(a.getInt("combo") == 0);
 }
 
+// Round-trip completo de un grafo con parámetros y condiciones numéricas: si
+// compare o threshold no sobrevivieran, la transición cargada dispararía cuando
+// no debe (o nunca).
+static void test_numeric_graph_survives_scene_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    auto a = std::make_shared<AnimatorComponent>();
+
+    AnimatorComponent::State idle;
+    idle.name = "Idle"; idle.clipName = "ClipIdle"; idle.loop = true;
+    AnimatorComponent::State run;
+    run.name = "Run"; run.clipName = "ClipRun"; run.loop = true;
+    a->addState(idle);
+    a->addState(run);
+
+    a->addParameter("combo", AnimatorComponent::ParamType::Int);
+    a->addParameter("speed", AnimatorComponent::ParamType::Float);
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    AnimatorComponent::Condition ci;
+    ci.type      = AnimatorComponent::ConditionType::Int;
+    ci.paramName = "combo";
+    ci.compare   = AnimatorComponent::Compare::NotEquals;
+    ci.threshold = 4.0f;
+    t.conditions.push_back(ci);
+    AnimatorComponent::Condition cf;
+    cf.type      = AnimatorComponent::ConditionType::Float;
+    cf.paramName = "speed";
+    cf.compare   = AnimatorComponent::Compare::Less;
+    cf.threshold = 2.5f;
+    t.conditions.push_back(cf);
+    a->addTransition(t);
+
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->hasAnimator());
+    if (!found->hasAnimator()) return;
+
+    auto la = found->getAnimator();
+    CHECK(la->parameters().size() == 2);
+    CHECK(la->parameters()[0].type == AnimatorComponent::ParamType::Int);
+    CHECK(la->parameters()[1].type == AnimatorComponent::ParamType::Float);
+
+    CHECK(la->transitions().size() == 1);
+    if (la->transitions().empty()) return;
+    const auto& lc = la->transitions()[0].conditions;
+    CHECK(lc.size() == 2);
+    if (lc.size() != 2) return;
+
+    CHECK(lc[0].type    == AnimatorComponent::ConditionType::Int);
+    CHECK(lc[0].compare == AnimatorComponent::Compare::NotEquals);
+    CHECK(nearlyEqual(lc[0].threshold, 4.0f));
+    CHECK(lc[1].type    == AnimatorComponent::ConditionType::Float);
+    CHECK(lc[1].compare == AnimatorComponent::Compare::Less);
+    CHECK(nearlyEqual(lc[1].threshold, 2.5f));
+}
+
+// Retrocompatibilidad: una condición guardada antes de este cambio no lleva
+// "compare" ni "threshold" y debe cargar con los defaults del struct, sin
+// warnings ni excepciones de nlohmann.
+static void test_condition_without_compare_fields_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State idle;
+    idle.name = "Idle"; idle.clipName = "ClipIdle";
+    AnimatorComponent::State run;
+    run.name = "Run"; run.clipName = "ClipRun";
+    a->addState(idle);
+    a->addState(run);
+    a->addParameter("running", AnimatorComponent::ParamType::Bool);
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    t.conditions.push_back({ AnimatorComponent::ConditionType::Bool, "running", true });
+    a->addTransition(t);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+
+    // Una condición Bool no debe emitir los campos numéricos: son ruido en el
+    // .scene y confundirían a quien lo lea a mano. El árbol es
+    // root["root"]["children"], no un array plano (ver Scene::toJson).
+    bool checkedEmission = false;
+    for (const auto& node : j["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        const auto& cond = node["animator"]["transitions"][0]["conditions"][0];
+        CHECK(!cond.contains("compare"));
+        CHECK(!cond.contains("threshold"));
+        checkedEmission = true;
+    }
+    CHECK(checkedEmission);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found || !found->hasAnimator()) return;
+
+    const auto& lc = found->getAnimator()->transitions()[0].conditions[0];
+    CHECK(lc.type    == AnimatorComponent::ConditionType::Bool);
+    CHECK(lc.expected);
+    CHECK(lc.compare == AnimatorComponent::Compare::Greater);   // default
+    CHECK(nearlyEqual(lc.threshold, 0.0f));                     // default
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -1014,6 +1136,8 @@ int main()
 
     test_graph_survives_scene_round_trip(pm, am);
     test_scene_without_animator_block_loads(pm, am);
+    test_numeric_graph_survives_scene_round_trip(pm, am);
+    test_condition_without_compare_fields_loads(pm, am);
 
     test_animator_command_add_undo_redo();
     test_animator_command_remove();
