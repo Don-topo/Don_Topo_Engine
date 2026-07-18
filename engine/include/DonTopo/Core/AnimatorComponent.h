@@ -179,4 +179,13 @@ namespace DonTopo
             // liar la identidad visual que este campo existe para evitar.
             int                     m_nextEditorId = 0;
     };
+
+    // Etiqueta legible de un tipo de parámetro, compartida por AnimatorPanel y
+    // PropertiesPanel. Vive aquí y no en el editor porque con cuatro tipos el
+    // ternario "trigger : bool" que ambos duplicaban deja de funcionar, y dos
+    // copias de un switch se desincronizan al añadir el quinto tipo.
+    //
+    // NO reutiliza (ni la reutiliza) paramTypeToStr de Scene.cpp: aquello es el
+    // formato del .scene y no puede cambiar al retocar un texto de la UI.
+    const char* paramTypeLabel(AnimatorComponent::ParamType t);
 }

@@ -56,9 +56,16 @@ namespace {
         {
             case AnimatorComponent::ConditionType::Trigger:           return "trigger";
             case AnimatorComponent::ConditionType::AnimationFinished: return "animation finished";
+            case AnimatorComponent::ConditionType::Int:               return "int";
+            case AnimatorComponent::ConditionType::Float:             return "float";
             default:                                                  return "bool";
         }
     }
+
+    // Etiquetas de Compare en el orden del enum. Float solo expone las dos
+    // primeras (Greater, Less): un == sobre float casi nunca dispara y sería una
+    // trampa ofrecerlo en el combo.
+    const char* kCompareLabels[] = { ">", "<", "==", "!=" };
 }
 
 AnimatorPanel::AnimatorPanel()
@@ -98,7 +105,9 @@ void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
 {
     auto anim = go->getAnimator();
 
-    ImGui::BeginChild("params", ImVec2(200, 0), true);
+    // 260 y no 200: con el widget de valor de int/float al lado del nombre, a
+    // 200 el DragFloat se comía el botón de borrado.
+    ImGui::BeginChild("params", ImVec2(260, 0), true);
     ImGui::TextUnformatted("Parameters");
     ImGui::Separator();
 
@@ -108,7 +117,39 @@ void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
         ImGui::PushID(p.name.c_str());
         ImGui::TextUnformatted(p.name.c_str());
         ImGui::SameLine();
-        ImGui::TextDisabled("%s", p.type == AnimatorComponent::ParamType::Trigger ? "(trigger)" : "(bool)");
+        ImGui::TextDisabled("(%s)", paramTypeLabel(p.type));
+        ImGui::SameLine();
+
+        // Valor editable in situ: en Play permite provocar una transición a mano
+        // sin escribir Lua, que es como se depura un grafo.
+        ImGui::SetNextItemWidth(70);
+        switch (p.type)
+        {
+            case AnimatorComponent::ParamType::Bool:
+            {
+                bool v = anim->getBool(p.name);
+                if (ImGui::Checkbox("##val", &v)) anim->setBool(p.name, v);
+                break;
+            }
+            case AnimatorComponent::ParamType::Trigger:
+                // Un trigger no tiene valor que mostrar: se arma y lo consume la
+                // primera transición que lo mire (ver consumeTriggers).
+                if (ImGui::SmallButton("Set")) anim->setTrigger(p.name);
+                break;
+            case AnimatorComponent::ParamType::Int:
+            {
+                int v = anim->getInt(p.name);
+                if (ImGui::DragInt("##val", &v)) anim->setInt(p.name, v);
+                break;
+            }
+            case AnimatorComponent::ParamType::Float:
+            {
+                float v = anim->getFloat(p.name);
+                if (ImGui::DragFloat("##val", &v, 0.01f)) anim->setFloat(p.name, v);
+                break;
+            }
+        }
+
         ImGui::SameLine();
         if (ImGui::SmallButton("X")) toRemove = p.name;
         ImGui::PopID();
@@ -123,14 +164,14 @@ void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
     ImGui::Separator();
     ImGui::SetNextItemWidth(110);
     ImGui::InputText("##newparam", m_newParamName, sizeof(m_newParamName));
-    const char* types[] = { "bool", "trigger" };
+    // El orden coincide con el del enum ParamType, así que el índice del combo
+    // castea directo: si el enum crece, esta lista crece con él.
+    const char* types[] = { "bool", "trigger", "int", "float" };
     ImGui::SetNextItemWidth(110);
-    ImGui::Combo("##newparamtype", &m_newParamType, types, 2);
+    ImGui::Combo("##newparamtype", &m_newParamType, types, IM_ARRAYSIZE(types));
     if (ImGui::Button("Add Parameter") && m_newParamName[0] != '\0')
     {
-        anim->addParameter(m_newParamName,
-            m_newParamType == 1 ? AnimatorComponent::ParamType::Trigger
-                                : AnimatorComponent::ParamType::Bool);
+        anim->addParameter(m_newParamName, (AnimatorComponent::ParamType)m_newParamType);
         ctx.pushLog(std::string("Animator: parámetro '") + m_newParamName + "' añadido");
         m_newParamName[0] = '\0';
     }
@@ -389,6 +430,32 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
             ImGui::SameLine();
             ImGui::Checkbox("expected", &cond.expected);
         }
+        if (cond.type == AnimatorComponent::ConditionType::Int ||
+            cond.type == AnimatorComponent::ConditionType::Float)
+        {
+            const bool isFloat = cond.type == AnimatorComponent::ConditionType::Float;
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(50);
+            int op = (int)cond.compare;
+            // Float recorta el combo a Greater/Less; Int ofrece los cuatro.
+            if (ImGui::Combo("##cmp", &op, kCompareLabels, isFloat ? 2 : 4))
+                cond.compare = (AnimatorComponent::Compare)op;
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(70);
+            if (isFloat)
+            {
+                ImGui::DragFloat("##thr", &cond.threshold, 0.01f);
+            }
+            else
+            {
+                // El umbral vive en float pa no duplicar el campo; la UI de Int
+                // pasa por un int temporal, así que nunca entra un valor con
+                // parte fraccionaria que el evaluador truncaría a espaldas del
+                // usuario.
+                int thr = (int)cond.threshold;
+                if (ImGui::DragInt("##thr", &thr)) cond.threshold = (float)thr;
+            }
+        }
         ImGui::SameLine();
         if (ImGui::SmallButton("X")) toRemove = (int)c;
         ImGui::PopID();
@@ -407,9 +474,18 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
         if (ImGui::Selectable(("Add: " + p.name).c_str(), false, ImGuiSelectableFlags_DontClosePopups))
         {
             AnimatorComponent::Condition cond;
-            cond.type = (p.type == AnimatorComponent::ParamType::Trigger)
-                          ? AnimatorComponent::ConditionType::Trigger
-                          : AnimatorComponent::ConditionType::Bool;
+            // El tipo del parámetro decide el de la condición 1:1.
+            switch (p.type)
+            {
+                case AnimatorComponent::ParamType::Trigger:
+                    cond.type = AnimatorComponent::ConditionType::Trigger; break;
+                case AnimatorComponent::ParamType::Int:
+                    cond.type = AnimatorComponent::ConditionType::Int;     break;
+                case AnimatorComponent::ParamType::Float:
+                    cond.type = AnimatorComponent::ConditionType::Float;   break;
+                default:
+                    cond.type = AnimatorComponent::ConditionType::Bool;    break;
+            }
             cond.paramName = p.name;
             cond.expected  = true;
             tr.conditions.push_back(cond);

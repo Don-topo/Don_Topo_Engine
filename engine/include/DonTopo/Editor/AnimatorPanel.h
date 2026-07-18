@@ -59,7 +59,7 @@ private:
     int m_nodeCtxTarget = -1;
 
     char m_newParamName[64] = {};
-    int  m_newParamType     = 0;   // 0 = bool, 1 = trigger
+    int  m_newParamType     = 0;   // índice en ParamType: 0 bool, 1 trigger, 2 int, 3 float
 };
 
 } // namespace DonTopo

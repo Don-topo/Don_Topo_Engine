@@ -314,4 +314,15 @@ namespace DonTopo
             return;                  // una transición por update
         }
     }
+
+    const char* paramTypeLabel(AnimatorComponent::ParamType t)
+    {
+        switch (t)
+        {
+            case AnimatorComponent::ParamType::Trigger: return "trigger";
+            case AnimatorComponent::ParamType::Int:     return "int";
+            case AnimatorComponent::ParamType::Float:   return "float";
+            default:                                    return "bool";
+        }
+    }
 }
