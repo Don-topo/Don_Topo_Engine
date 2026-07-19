@@ -17,6 +17,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 
@@ -66,6 +68,89 @@ static void test_loader_registers_builtin_source()
     CHECK(src.clipNames.size() == m.animationClips.size());
     for (size_t i = 0; i < src.clipNames.size() && i < m.animationClips.size(); i++)
         CHECK(src.clipNames[i] == m.animationClips[i].name);
+}
+
+// El gate del Animator pregunta por isSkinned(), y hasta ahora el import del
+// editor descartaba huesos y pesos llamando siempre a load(). hasBones es quien
+// decide: mira el fichero, no al llamante.
+static void test_has_bones_detects_rigged_fbx()
+{
+    CHECK(ModelLoader::hasBones("assets/modelAnimation.fbx") == true);
+}
+
+// Escribe un OBJ mínimo (triángulo, sin huesos: el formato OBJ no tiene
+// concepto de esqueleto) en el directorio temporal del sistema. Helper
+// compartido por los dos tests de "modelo sin rig" de abajo: cada uno pide un
+// nombre de fichero distinto para no pisarse si llegaran a correr en paralelo.
+static std::string writeUnriggedObjFixture(const std::string& filename)
+{
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / filename;
+    std::ofstream f(path);
+    f << "v 0 0 0\n"
+         "v 1 0 0\n"
+         "v 0 1 0\n"
+         "f 1 2 3\n";
+    return path.string();
+}
+
+// El repo no tiene ningún modelo sin rig: los dos únicos FBX trackeados,
+// model.fbx y modelTexture.fbx, parecen props estáticos por el nombre pero
+// son personajes Mixamo completos (65 y 67 huesos respectivamente,
+// verificado con un probe de Assimp antes de escribir este test). Por eso el
+// caso negativo se genera aquí en vez de apuntar a un asset del repo: un OBJ
+// no puede declarar huesos ni queriendo, así que es un negativo real y no un
+// accidente de qué .fbx haya en assets/. Si alguien "arregla" esto apuntando
+// otra vez a model.fbx o modelTexture.fbx, el test vuelve a fallar.
+//
+// Un FBX/OBJ sin rig tiene que seguir entrando como Mesh plano: cargarlo
+// skinned pagaría vértices de 112 B y una SSBO de huesos vacía para nada.
+static void test_has_bones_rejects_unrigged_model()
+{
+    const std::string path = writeUnriggedObjFixture("dt_test_has_bones_unrigged.obj");
+    CHECK(ModelLoader::hasBones(path) == false);
+    std::filesystem::remove(path);
+}
+
+// No lanza: el fichero ilegible lo reporta el loader real, con su mensaje. Si
+// hasBones lanzara, el import moriría antes de llegar a ese mensaje.
+static void test_has_bones_survives_missing_file()
+{
+    bool threw = false;
+    bool result = true;
+    try { result = ModelLoader::hasBones("assets/no_existe_este_fichero.fbx"); }
+    catch (...) { threw = true; }
+    CHECK(!threw);
+    CHECK(result == false);
+}
+
+// loadAuto devuelve el tipo dinámico correcto: es lo único que mira
+// GameObject::isSkinned(), y por tanto lo único que habilita el Animator.
+static void test_load_auto_returns_skinned_for_rigged()
+{
+    std::shared_ptr<Mesh> m = ModelLoader::loadAuto("assets/modelAnimation.fbx");
+    CHECK(m != nullptr);
+    if (!m) return;
+    SkinnedMesh* sm = dynamic_cast<SkinnedMesh*>(m.get());
+    CHECK(sm != nullptr);
+    if (!sm) return;
+    CHECK(!sm->skeleton.names.empty());
+    // La fuente builtin la crea loadSkinned; loadAuto no debe alterarla.
+    CHECK(sm->animationSources.size() == 1u);
+}
+
+// Mismo motivo que test_has_bones_rejects_unrigged_model: no hay ningún FBX
+// sin rig en el repo (model.fbx y modelTexture.fbx son personajes Mixamo
+// rigged pese al nombre), así que el negativo de loadAuto también se genera
+// como OBJ en vez de apuntar a un asset de assets/.
+static void test_load_auto_returns_static_for_unrigged()
+{
+    const std::string path = writeUnriggedObjFixture("dt_test_load_auto_unrigged.obj");
+    std::shared_ptr<Mesh> m = ModelLoader::loadAuto(path);
+    std::filesystem::remove(path);
+    CHECK(m != nullptr);
+    if (!m) return;
+    CHECK(dynamic_cast<SkinnedMesh*>(m.get()) == nullptr);
+    CHECK(!m->vertices.empty());
 }
 
 // La regla de nombres únicos es la misma que ya aplicaba el loader (Mixamo
@@ -2086,6 +2171,12 @@ int main()
     test_numeric_api_type_guards();
     test_remove_numeric_parameter_cleans_conditions();
     test_animation_finished_fires_on_zero_duration_state();
+
+    test_has_bones_detects_rigged_fbx();
+    test_has_bones_rejects_unrigged_model();
+    test_has_bones_survives_missing_file();
+    test_load_auto_returns_skinned_for_rigged();
+    test_load_auto_returns_static_for_unrigged();
 
     test_bind_clips_resolves_by_name();
     test_gameobject_animator_slot();

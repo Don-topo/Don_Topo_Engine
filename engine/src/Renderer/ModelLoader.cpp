@@ -8,6 +8,7 @@
 #include <string>
 #include <functional>
 #include <array>
+#include <memory>
 
 namespace DonTopo 
 {
@@ -475,5 +476,27 @@ namespace DonTopo
         }
 
         return out;
+    }
+
+    bool ModelLoader::hasBones(const std::string& path)
+    {
+        Assimp::Importer importer;
+        // Flags a cero, igual que loadAnimationClips: aquí no se construye
+        // geometría, así que triangulate, normales y tangentes serían trabajo
+        // tirado. mNumBones se lee igual.
+        const aiScene* scene = importer.ReadFile(path, 0);
+        if (!scene || !scene->mRootNode) return false;
+
+        for (uint32_t i = 0; i < scene->mNumMeshes; i++)
+            if (scene->mMeshes[i]->mNumBones > 0) return true;
+
+        return false;
+    }
+
+    std::shared_ptr<Mesh> ModelLoader::loadAuto(const std::string& path)
+    {
+        if (hasBones(path))
+            return std::make_shared<SkinnedMesh>(loadSkinned(path));  // convierte solo a shared_ptr<Mesh>
+        return std::make_shared<Mesh>(load(path));
     }
 }
