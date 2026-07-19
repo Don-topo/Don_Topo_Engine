@@ -796,6 +796,52 @@ static void test_scene_load_warns_on_load_exception(PhysicsManager& pm, AudioMan
     CHECK(warnsLoadFailure);
 }
 
+// Finding de revisión (task-3): hasBonesCache es una cache POR-CARGA dentro de
+// Scene::fromJson (ver nodeFromJson en Scene.cpp) que evita repetir el
+// ReadFile completo de Assimp cuando varios nodos comparten sourcePath. Todos
+// los demás tests de este fichero usan un único GameObject por sourcePath, así
+// que la rama de cache-HIT (sourcePath ya presente en el mapa) nunca se
+// ejercitaba en la suite — solo la de miss. Este test crea a propósito DOS
+// GameObjects que apuntan al MISMO FBX rigged: el primer nodo puebla la cache
+// (miss) y el segundo la consulta (hit). Si la cache guardara la clave
+// equivocada, el valor equivocado, o tratara el hit como "sin huesos" por
+// error, el segundo nodo cargaría como Mesh plano mientras el primero cargaría
+// SkinnedMesh — esa asimetría es justo lo que detecta este test. No
+// simplificar a un solo nodo: eso perdería la cobertura que pide el finding.
+static void test_scene_load_shares_has_bones_cache_across_nodes(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go1 = scene.addGameObject("Personaje1");
+    GameObject* go2 = scene.addGameObject("Personaje2");
+    const uint64_t id1 = go1->id;
+    const uint64_t id2 = go2->id;
+
+    go1->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx")));
+    go2->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx")));
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+
+    GameObject* found1 = loaded.findById(id1);
+    GameObject* found2 = loaded.findById(id2);
+    CHECK(found1 != nullptr);
+    CHECK(found2 != nullptr);
+    if (!found1 || !found2) return;
+
+    // Primer nodo: rama MISS de la cache (la puebla).
+    SkinnedMesh* sm1 = found1->getSkinnedMesh();
+    CHECK(sm1 != nullptr);
+    if (sm1) CHECK(!sm1->skeleton.names.empty());
+
+    // Segundo nodo: rama HIT de la cache — debe dar la MISMA respuesta que el
+    // primero, no una lectura fallida ni un Mesh estático.
+    SkinnedMesh* sm2 = found2->getSkinnedMesh();
+    CHECK(sm2 != nullptr);
+    if (sm2) CHECK(!sm2->skeleton.names.empty());
+}
+
 // Fix de review: un forcedName que ya está en uso (por un clip existente, o
 // por un forcedName anterior de esta misma importación) NO puede colarse tal
 // cual — dejaría dos clips homónimos y el Animator resuelve por nombre, así
@@ -2344,6 +2390,7 @@ int main()
     test_scene_load_warns_when_rig_disappeared(pm, am);
     test_scene_load_warns_when_file_missing(pm, am);
     test_scene_load_warns_on_load_exception(pm, am);
+    test_scene_load_shares_has_bones_cache_across_nodes(pm, am);
 
     test_animator_command_add_undo_redo();
     test_animator_command_remove();
