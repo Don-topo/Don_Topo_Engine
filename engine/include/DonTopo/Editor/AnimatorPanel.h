@@ -43,10 +43,12 @@ private:
     void drawConditionsPopup(EditorContext& ctx, GameObject* go);
     // Lista de ficheros FBX que aportan clips, con Add/Remove y rename inline.
     void drawAnimationSources(EditorContext& ctx, GameObject* go);
-    // Drena el diálogo de fichero cada frame, incondicionalmente: si solo se
-    // drenara con el GameObject correcto seleccionado, cambiar de selección con
-    // el diálogo abierto dejaría m_animSrcDlgOpen atascado en true para siempre.
-    // Mismo patrón que PropertiesPanel::drawMeshDialog.
+    // Drena el diálogo de fichero cada frame, incondicionalmente — incluso si
+    // el panel está cerrado o colapsado (por eso draw() la llama fuera del
+    // if(m_open) y del ImGui::Begin/End, no dentro): si solo se drenara con
+    // la ventana visible, cerrar o colapsar el panel con el diálogo abierto
+    // dejaría m_animSrcDlgOpen (y el estado interno de IGFD) atascado en true
+    // para siempre. Mismo patrón que PropertiesPanel::draw + drawMeshDialog.
     void drawAnimationSourceDialog(EditorContext& ctx);
     // Importa path como fuente del GameObject seleccionado, vía comando (undo).
     void importAnimationSource(EditorContext& ctx, GameObject* go, const std::string& path);
@@ -78,6 +80,15 @@ private:
     // un popup tocara el otro.
     std::unique_ptr<IGFD::FileDialog> m_animSrcDialog;
     bool m_animSrcDlgOpen = false;
+    // Id del GameObject objetivo, capturado al pulsar "Add Animation FBX..."
+    // (OpenDialog), NO leído de ctx.selected al drenar: el diálogo no es
+    // modal, así que el usuario puede cambiar de selección mientras elige el
+    // fichero, y el FBX tiene que ir a quien estaba seleccionado al abrir el
+    // diálogo. Se resuelve vía Scene::findById en vez de guardar un
+    // GameObject* crudo por el mismo motivo que los comandos de Undo: el
+    // objeto puede haberse borrado (o reconstruido) mientras el diálogo
+    // estaba abierto.
+    uint64_t m_animSrcDlgTarget = 0;
     std::string m_animSrcError;      // último error, en rojo bajo la lista
     // Clip cuyo nombre se está editando, "" si ninguno.
     std::string m_renamingClip;

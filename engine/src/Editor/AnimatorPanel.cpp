@@ -577,7 +577,12 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
     for (size_t s = 0; s < mesh->animationSources.size(); s++)
     {
         const AnimationSource& src = mesh->animationSources[s];
-        ImGui::PushID((int)s);
+        // El path como ID en vez del índice s: quitar una fuente reindexa el
+        // vector, y si el ID fuera el índice, cada fila posterior heredaría
+        // el estado abierto/cerrado (y el m_renamingClip en vuelo, si lo
+        // hubiera) de la fila que ocupaba su índice antes del borrado. El
+        // path es estable mientras la fuente exista.
+        ImGui::PushID(src.path.c_str());
 
         const std::string file = std::filesystem::path(src.path).filename().string();
         const std::string label = file + "  (" + std::to_string(src.clipNames.size()) + " clips)"
@@ -607,33 +612,45 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
                                           ImGuiInputTextFlags_EnterReturnsTrue))
                     {
                         const std::string nuevo = m_renameBuf;
-                        // Enter sin cambiar el texto (p.ej. doble clic seguido de
-                        // Enter por error): renameClip lo rechaza igual que un
-                        // vacío o un duplicado (oldName == newName -> false), así
-                        // que aquí se corta antes de crear el comando — si no, el
-                        // escaneo de más abajo encuentra el clip con su nombre de
-                        // siempre, lo da por "aplicado" y mete en el undo stack
-                        // una entrada que no cambia nada.
-                        if (nuevo != clipName)
-                        {
-                            auto cmd = std::make_unique<ClipRenameCommand>(
-                                *ctx.scene, "Renombrar clip", go->id, clipName, nuevo);
-                            cmd->execute();
-                            // El comando no informa de si el rename se aplicó, así
-                            // que se comprueba en el mesh: un duplicado o un vacío
-                            // no debe entrar en el stack de undo.
-                            bool aplicado = false;
+
+                        // Validación ANTES de ejecutar nada, replicando exactamente
+                        // las reglas de rechazo de renameClip (ver
+                        // SkinnedMeshAnimations.cpp): nombre vacío, nombre ya usado
+                        // por cualquier clip, o nombre idéntico al actual. Antes se
+                        // ejecutaba el comando primero y se inferÍa el éxito
+                        // escaneando el mesh por el nombre nuevo — eso no podía
+                        // distinguir "el rename se aplicó" de "ya existía un clip
+                        // con ese nombre", que es justo el motivo por el que
+                        // renameClip lo rechaza: un duplicado (p.ej. renombrar
+                        // "Walk" a "Idle" cuando "Idle" ya existe) se colaba en el
+                        // undo stack como si hubiera funcionado, y el siguiente
+                        // Ctrl+Z del usuario no deshacía nada porque el comando no
+                        // había mutado nada.
+                        bool rechazado = nuevo.empty() || nuevo == clipName;
+                        if (!rechazado)
                             for (const auto& c : mesh->animationClips)
-                                if (c.name == nuevo) aplicado = true;
-                            if (aplicado)
-                            {
-                                ctx.undo->push(std::move(cmd));
-                                ctx.pushLog("Animator: clip '" + clipName + "' renombrado a '" + nuevo + "'");
-                            }
-                            else
-                            {
-                                m_animSrcError = "Nombre inválido o ya en uso: " + nuevo;
-                            }
+                                if (c.name == nuevo) { rechazado = true; break; }
+
+                        if (rechazado)
+                        {
+                            m_animSrcError = "No se pudo renombrar a '" + nuevo
+                                            + "': nombre vacío, duplicado o igual al actual";
+                        }
+                        else
+                        {
+                            // Copia del nombre viejo ANTES de execute(): clipName
+                            // es una const std::string& que apunta directo al
+                            // elemento de src.clipNames, y renameClip lo reescribe
+                            // in-place — tras execute() clipName ya vale "nuevo",
+                            // así que usarla en el log duplicaría el nombre nuevo
+                            // en vez de mostrar qué cambió.
+                            const std::string viejo = clipName;
+                            auto cmd = std::make_unique<ClipRenameCommand>(
+                                *ctx.scene, "Renombrar clip", go->id, viejo, nuevo);
+                            cmd->execute();
+                            ctx.undo->push(std::move(cmd));
+                            m_animSrcError.clear();
+                            ctx.pushLog("Animator: clip '" + viejo + "' renombrado a '" + nuevo + "'");
                         }
                         m_renamingClip.clear();
                     }
@@ -687,6 +704,12 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
                     ImGuiFileDialogFlags_DisablePlaceMode;
         m_animSrcDialog->OpenDialog("AddAnimSrcDlg", "Choose Animation FBX", ".fbx", cfg);
         m_animSrcDlgOpen = true;
+        // Se captura el id AHORA, al abrir, no ctx.selected al drenar: el
+        // diálogo no es modal, así que el usuario puede cambiar de selección
+        // mientras elige el fichero — el FBX debe ir a "go" (a quien estaba
+        // seleccionado al pulsar el botón), no a quien sea que esté
+        // seleccionado cuando el usuario por fin cierra el diálogo.
+        m_animSrcDlgTarget = go->id;
     }
 
     // Drop target: el Content Browser emite "DT_ASSET_PATH" (ver
@@ -714,8 +737,29 @@ void AnimatorPanel::drawAnimationSourceDialog(EditorContext& ctx)
     if (!m_animSrcDlgOpen) return;
     if (!m_animSrcDialog->Display("AddAnimSrcDlg")) return;
 
-    if (m_animSrcDialog->IsOk() && ctx.selected && ctx.selected->hasAnimator())
-        importAnimationSource(ctx, ctx.selected, m_animSrcDialog->GetFilePathName());
+    if (m_animSrcDialog->IsOk())
+    {
+        // Resuelve por id (capturado al abrir el diálogo, ver OpenDialog más
+        // arriba), no ctx.selected: para cuando el usuario cierra el diálogo
+        // la selección puede haber cambiado, y el objeto original puede
+        // incluso haberse borrado. Sin este resuelto explícito, un guard tipo
+        // "ctx.selected && ctx.selected->hasAnimator()" habría importado el
+        // FBX en el GameObject equivocado sin avisar, o lo habría descartado
+        // en silencio si el actualmente seleccionado no tuviera Animator.
+        GameObject* target = ctx.scene ? ctx.scene->findById(m_animSrcDlgTarget) : nullptr;
+        if (!target)
+        {
+            m_animSrcError = "El GameObject de destino ya no existe en la escena";
+        }
+        else if (!target->getSkinnedMesh())
+        {
+            m_animSrcError = "'" + target->name + "' ya no tiene un mesh skinned";
+        }
+        else
+        {
+            importAnimationSource(ctx, target, m_animSrcDialog->GetFilePathName());
+        }
+    }
 
     m_animSrcDialog->Close();
     m_animSrcDlgOpen = false;
@@ -723,87 +767,104 @@ void AnimatorPanel::drawAnimationSourceDialog(EditorContext& ctx)
 
 void AnimatorPanel::draw(EditorContext& ctx)
 {
-    if (!m_open) return;
-    if (!ImGui::Begin("Animator", &m_open)) { ImGui::End(); return; }
-
-    GameObject* go = ctx.selected;
-    if (!go || !go->hasAnimator())
+    // El cuerpo va en un bloque, no en early-returns: drawAnimationSourceDialog()
+    // de más abajo tiene que ejecutarse SIEMPRE, tanto si el panel está cerrado
+    // (m_open == false, p.ej. tras pulsar la X de la ventana, que Begin escribe
+    // directo en m_open) como si Begin devuelve false (ventana colapsada). Con
+    // los early-returns de antes, cerrar o colapsar el panel mientras el
+    // diálogo de fichero estaba abierto dejaba m_animSrcDlgOpen (y el estado
+    // interno de IGFD) atascados en true para siempre: el diálogo resucitaba
+    // solo, sin pedirlo, al reabrir el panel. Begin/End se llaman siempre en
+    // pareja pase lo que pase (regla de ImGui), de ahí el End() incondicional
+    // dentro del if(m_open). Mismo patrón que PropertiesPanel::draw +
+    // drawMeshDialog.
+    if (m_open)
     {
-        ImGui::TextDisabled("Selecciona un GameObject con componente Animator.");
-        ImGui::TextDisabled("Properties > Add > Animator");
-        m_boundTo = nullptr;
-        // El diálogo se drena aquí también: si estaba abierto y el usuario
-        // deselecciona (o selecciona un GameObject sin Animator) antes de
-        // elegir fichero, este early-return no puede saltárselo o
-        // m_animSrcDlgOpen se queda atascado en true para siempre.
-        drawAnimationSourceDialog(ctx);
-        ImGui::End();
-        return;
-    }
-
-    drawAnimationSources(ctx, go);
-
-    // --- Añadir estado desde los clips del modelo ---
-    SkinnedMesh* mesh = go->getSkinnedMesh();
-    if (!mesh || mesh->animationClips.empty())
-    {
-        ImGui::TextDisabled("El GameObject no tiene un mesh skinned con animaciones.");
-    }
-    else if (ImGui::BeginCombo("##addstate", "Add State from Clip"))
-    {
-        for (size_t i = 0; i < mesh->animationClips.size(); i++)
+        if (ImGui::Begin("Animator", &m_open))
         {
-            if (!ImGui::Selectable(mesh->animationClips[i].name.c_str())) continue;
-            AnimatorComponent::State st;
-            st.name           = mesh->animationClips[i].name;
-            st.clipName       = mesh->animationClips[i].name;
-            st.clipIndex      = (int)i;
-            st.duration       = mesh->animationClips[i].duration;
-            st.ticksPerSecond = mesh->animationClips[i].ticksPerSecond;
-            st.editorPos      = glm::vec2(40.0f + 40.0f * (float)go->getAnimator()->states().size(),
-                                           40.0f + 30.0f * (float)go->getAnimator()->states().size());
-            const int idx = go->getAnimator()->addState(st);
-            const int eid = go->getAnimator()->states()[idx].editorId;
-            // El nodo es nuevo: hay que colocarlo en el canvas a mano, el sync
-            // general solo corre al cambiar de objeto.
-            ed::SetCurrentEditor(m_ctx);
-            ed::SetNodePosition(nodeId(eid), ImVec2(st.editorPos.x, st.editorPos.y));
-            ed::SetCurrentEditor(nullptr);
-            ctx.pushLog("Animator: estado '" + st.name + "' añadido");
+            GameObject* go = ctx.selected;
+            if (!go || !go->hasAnimator())
+            {
+                ImGui::TextDisabled("Selecciona un GameObject con componente Animator.");
+                ImGui::TextDisabled("Properties > Add > Animator");
+                m_boundTo = nullptr;
+            }
+            else
+            {
+                // Cambio de objeto vinculado: se comprueba UNA vez aquí arriba
+                // (antes de dibujar nada) para poder limpiar m_renamingClip antes
+                // de que drawAnimationSources lo lea. Si no, un clip con el mismo
+                // nombre en el nuevo GameObject heredaría el modo edición y el
+                // buffer del clip del objeto anterior durante un frame.
+                const bool selectionChanged = (m_boundTo != go);
+                if (selectionChanged) m_renamingClip.clear();
+
+                drawAnimationSources(ctx, go);
+
+                // --- Añadir estado desde los clips del modelo ---
+                SkinnedMesh* mesh = go->getSkinnedMesh();
+                if (!mesh || mesh->animationClips.empty())
+                {
+                    ImGui::TextDisabled("El GameObject no tiene un mesh skinned con animaciones.");
+                }
+                else if (ImGui::BeginCombo("##addstate", "Add State from Clip"))
+                {
+                    for (size_t i = 0; i < mesh->animationClips.size(); i++)
+                    {
+                        if (!ImGui::Selectable(mesh->animationClips[i].name.c_str())) continue;
+                        AnimatorComponent::State st;
+                        st.name           = mesh->animationClips[i].name;
+                        st.clipName       = mesh->animationClips[i].name;
+                        st.clipIndex      = (int)i;
+                        st.duration       = mesh->animationClips[i].duration;
+                        st.ticksPerSecond = mesh->animationClips[i].ticksPerSecond;
+                        st.editorPos      = glm::vec2(40.0f + 40.0f * (float)go->getAnimator()->states().size(),
+                                                       40.0f + 30.0f * (float)go->getAnimator()->states().size());
+                        const int idx = go->getAnimator()->addState(st);
+                        const int eid = go->getAnimator()->states()[idx].editorId;
+                        // El nodo es nuevo: hay que colocarlo en el canvas a mano, el
+                        // sync general solo corre al cambiar de objeto.
+                        ed::SetCurrentEditor(m_ctx);
+                        ed::SetNodePosition(nodeId(eid), ImVec2(st.editorPos.x, st.editorPos.y));
+                        ed::SetCurrentEditor(nullptr);
+                        ctx.pushLog("Animator: estado '" + st.name + "' añadido");
+                    }
+                    ImGui::EndCombo();
+                }
+
+                drawParameterList(ctx, go);
+                ImGui::SameLine();
+
+                ImGui::BeginChild("canvas", ImVec2(0, 0), false);
+                if (selectionChanged)
+                {
+                    // Cambio de selección: el canvas todavía tiene las posiciones del
+                    // objeto anterior. Se vuelca una vez, no cada frame — si no, el
+                    // usuario no podría arrastrar los nodos.
+                    ed::SetCurrentEditor(m_ctx);
+                    syncPositionsFromComponent(go);
+                    ed::SetCurrentEditor(nullptr);
+                    m_boundTo = go;
+                }
+                drawGraph(ctx, go);
+                // Sync inverso cada frame, incondicional (ya no hace falta el guardia
+                // de Task 10 que lo saltaba tras un borrado): con editorId estable, un
+                // superviviente conserva su id de nodo pase lo que pase con el vector,
+                // así que GetNodePosition(nodeId(editorId)) siempre lee la posición
+                // del nodo correcto, incluso el mismo frame en que se borró otro nodo.
+                ed::SetCurrentEditor(m_ctx);
+                syncPositionsToComponent(go);
+                ed::SetCurrentEditor(nullptr);
+                ImGui::EndChild();
+            }
         }
-        ImGui::EndCombo();
+        ImGui::End();
     }
 
-    drawParameterList(ctx, go);
-    ImGui::SameLine();
-
-    ImGui::BeginChild("canvas", ImVec2(0, 0), false);
-    if (m_boundTo != go)
-    {
-        // Cambio de selección: el canvas todavía tiene las posiciones del objeto
-        // anterior. Se vuelca una vez, no cada frame — si no, el usuario no
-        // podría arrastrar los nodos.
-        ed::SetCurrentEditor(m_ctx);
-        syncPositionsFromComponent(go);
-        ed::SetCurrentEditor(nullptr);
-        m_boundTo = go;
-    }
-    drawGraph(ctx, go);
-    // Sync inverso cada frame, incondicional (ya no hace falta el guardia de
-    // Task 10 que lo saltaba tras un borrado): con editorId estable, un
-    // superviviente conserva su id de nodo pase lo que pase con el vector, así
-    // que GetNodePosition(nodeId(editorId)) siempre lee la posición del nodo
-    // correcto, incluso el mismo frame en que se borró otro nodo.
-    ed::SetCurrentEditor(m_ctx);
-    syncPositionsToComponent(go);
-    ed::SetCurrentEditor(nullptr);
-    ImGui::EndChild();
-
-    // Fuera del early-return de "sin Animator": el diálogo tiene que drenarse
-    // aunque la selección cambie mientras está abierto.
+    // Incondicional y fuera de la ventana: tiene que drenarse aunque el panel
+    // esté cerrado/colapsado o la selección haya cambiado mientras el diálogo
+    // estaba abierto (ver comentario grande al principio de esta función).
     drawAnimationSourceDialog(ctx);
-
-    ImGui::End();
 }
 
 } // namespace DonTopo
