@@ -171,6 +171,132 @@ static void test_load_animation_clips_missing_file()
     CHECK(!lc.warnings.empty());
 }
 
+// El caso central de la feature: los clips de un segundo fichero se suman a los
+// del modelo. Se importa el MISMO fbx dos veces a propósito — ejercita la
+// deduplicación de nombres sin necesitar un asset extra en el repo.
+static void test_add_animation_source_appends_clips()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    const size_t before = m.animationClips.size();
+
+    std::vector<std::string> warnings;
+    CHECK(addAnimationSource(m, "assets/modelAnimation.fbx", warnings));
+
+    CHECK(m.animationClips.size() == before * 2);
+    CHECK(m.animationSources.size() == 2u);
+    CHECK(m.animationSources[1].builtin == false);
+    CHECK(m.animationSources[1].path == "assets/modelAnimation.fbx");
+    CHECK(m.animationSources[1].clipNames.size() == before);
+
+    // Nombres únicos entre TODOS los clips: el Animator resuelve por nombre
+    for (size_t i = 0; i < m.animationClips.size(); i++)
+        for (size_t j = i + 1; j < m.animationClips.size(); j++)
+            CHECK(m.animationClips[i].name != m.animationClips[j].name);
+
+    // Los clips nuevos se nombran por el fichero, no por el nombre interno
+    CHECK(m.animationSources[1].clipNames[0].rfind("modelAnimation", 0) == 0);
+}
+
+// Rechazo: un rig que no casa deja el mesh EXACTAMENTE como estaba. Nada de
+// clips a medias ni de una fuente registrada que no aportó nada.
+static void test_add_animation_source_rejects_foreign_rig()
+{
+    SkinnedMesh m;
+    m.skeleton.names           = { "hueso_que_no_existe" };
+    m.skeleton.parentIndex     = { -1 };
+    m.skeleton.inverseBindPose = { glm::mat4(1.0f) };
+    m.skeleton.boneMap         = { { "hueso_que_no_existe", 0 } };
+
+    std::vector<std::string> warnings;
+    CHECK(!addAnimationSource(m, "assets/modelAnimation.fbx", warnings));
+
+    CHECK(m.animationClips.empty());
+    CHECK(m.animationSources.empty());
+    CHECK(!warnings.empty());
+}
+
+// Quitar una fuente se lleva sus clips y solo los suyos, y el packing GPU queda
+// coherente con la lista nueva (clipCount y offsets).
+static void test_remove_animation_source()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    const size_t builtinCount = m.animationClips.size();
+    std::vector<std::string> builtinNames;
+    for (const auto& c : m.animationClips) builtinNames.push_back(c.name);
+
+    std::vector<std::string> warnings;
+    CHECK(addAnimationSource(m, "assets/modelAnimation.fbx", warnings));
+    CHECK(removeAnimationSource(m, 1));
+
+    CHECK(m.animationSources.size() == 1u);
+    CHECK(m.animationClips.size() == builtinCount);
+    for (size_t i = 0; i < builtinNames.size() && i < m.animationClips.size(); i++)
+        CHECK(m.animationClips[i].name == builtinNames[i]);   // orden intacto
+
+    // El packing refleja la lista nueva: un boneInfos de más significaría que la
+    // GPU seguiría teniendo el bloque del clip borrado.
+    const PackedClips packed = packSkinnedClips(m);
+    CHECK(packed.boneInfos.size() == m.animationClips.size() * m.skeleton.names.size());
+}
+
+// La fuente builtin es el modelo: quitarla dejaría un mesh sin el FBX que lo
+// creó. Se rechaza, sin tocar nada.
+static void test_remove_builtin_source_is_rejected()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    const size_t before = m.animationClips.size();
+
+    CHECK(!removeAnimationSource(m, 0));
+    CHECK(m.animationSources.size() == 1u);
+    CHECK(m.animationClips.size() == before);
+
+    // Índice fuera de rango: mismo trato, false y sin efectos
+    CHECK(!removeAnimationSource(m, 99));
+}
+
+// Rename: cambia el clip y el clipNames de su fuente. Rechaza vacío y duplicado
+// — los dos dejarían clips inalcanzables por nombre.
+static void test_rename_clip()
+{
+    SkinnedMesh m;
+    m.skeleton.names = { "root" };
+    AnimationClip a; a.name = "walk"; m.animationClips.push_back(a);
+    AnimationClip b; b.name = "run";  m.animationClips.push_back(b);
+    AnimationSource src; src.path = "x.fbx"; src.builtin = true;
+    src.clipNames = { "walk", "run" };
+    m.animationSources.push_back(src);
+
+    CHECK(renameClip(m, "walk", "andar"));
+    CHECK(m.animationClips[0].name == "andar");
+    CHECK(m.animationSources[0].clipNames[0] == "andar");
+
+    CHECK(!renameClip(m, "andar", ""));       // vacío
+    CHECK(!renameClip(m, "andar", "run"));    // ya existe
+    CHECK(!renameClip(m, "no_existe", "x"));  // origen inexistente
+    CHECK(m.animationClips[0].name == "andar");
+}
+
+// forcedNames es lo que hace que un rename sobreviva a guardar/cargar y a un
+// undo: los clips se importan con los nombres que ya tenían, no con los del
+// fichero.
+static void test_add_animation_source_with_forced_names()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    const size_t builtinCount = m.animationClips.size();
+
+    std::vector<std::string> forced;
+    for (size_t i = 0; i < builtinCount; i++)
+        forced.push_back("MiClip" + std::to_string(i));
+
+    std::vector<std::string> warnings;
+    CHECK(addAnimationSource(m, "assets/modelAnimation.fbx", warnings, &forced));
+
+    CHECK(m.animationSources.size() == 2u);
+    CHECK(m.animationSources[1].clipNames == forced);
+    for (size_t i = 0; i < forced.size(); i++)
+        CHECK(m.animationClips[builtinCount + i].name == forced[i]);
+}
+
 // Los keyframes de los N clips van concatenados en los mismos vectores y
 // boneInfos queda en layout [clip][hueso]. parentIndex/inverseBindPose son del
 // esqueleto, no del clip: idénticos en todos los bloques — eso es lo que deja a
@@ -1289,6 +1415,12 @@ int main()
     test_load_animation_clips_against_foreign_skeleton();
     test_load_animation_clips_partial_skeleton();
     test_load_animation_clips_missing_file();
+    test_add_animation_source_appends_clips();
+    test_add_animation_source_rejects_foreign_rig();
+    test_remove_animation_source();
+    test_remove_builtin_source_is_rejected();
+    test_rename_clip();
+    test_add_animation_source_with_forced_names();
     test_pack_concatenates_clips();
     test_pack_mesh_without_clips();
 
