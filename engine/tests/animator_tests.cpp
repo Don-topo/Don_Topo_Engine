@@ -1038,6 +1038,72 @@ static void test_pack_mesh_without_clips()
     CHECK(p.scale.size() == 1u);
 }
 
+// Réplica en CPU de bone_hierarchy.comp: las dos pasadas, tal cual. Sirve pa
+// comprobar la matriz que acaba viendo skinning.comp sin necesitar un VkDevice.
+static std::vector<glm::mat4> runBoneHierarchy(const PackedClips& p, size_t boneCount)
+{
+    std::vector<glm::mat4> final(boneCount, glm::mat4(1.0f));
+
+    // Pass 1: transformada de mundo. bone_eval escribe la identidad en el local
+    // de todo hueso cuyos tres counts sean 0, así que aquí se replica eso mismo.
+    for (size_t i = 0; i < boneCount; i++)
+    {
+        const GpuBoneInfo& bi = p.boneInfos[i];
+        const bool sinKeys    = bi.posCount == 0 && bi.rotCount == 0 && bi.scaleCount == 0;
+        CHECK(sinKeys); // el caso bajo prueba es justo el de cero clips
+        const glm::mat4 local = glm::mat4(1.0f);
+
+        final[i] = (bi.parentIndex < 0) ? local : final[(size_t)bi.parentIndex] * local;
+    }
+
+    // Pass 2: inverse bind pose
+    for (size_t i = 0; i < boneCount; i++)
+        final[i] = final[i] * p.boneInfos[i].inverseBindPose;
+
+    return final;
+}
+
+static bool nearlyIdentity(const glm::mat4& m, float eps = 0.001f)
+{
+    for (int c = 0; c < 4; c++)
+        for (int r = 0; r < 4; r++)
+            if (!nearlyEqual(m[c][r], glm::mat4(1.0f)[c][r], eps)) return false;
+    return true;
+}
+
+// skinnedVertices guarda posiciones en bind pose (es lo que da Assimp), así que
+// la matriz de skinning mapea bind pose -> pose actual. Sin animación ninguna la
+// pose actual ES la bind pose: la matriz correcta es la identidad y la malla
+// debe salir exactamente como sus vértices almacenados. Si finalBones acaba
+// valiendo la inverse bind pose, el personaje se ve deformado.
+static void test_pack_without_clips_yields_identity_final_bones()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    CHECK(!m.skeleton.names.empty());
+    m.animationClips.clear(); // FBX riggeado pero sin animaciones
+
+    const size_t boneCount = m.skeleton.names.size();
+    PackedClips  p         = packSkinnedClips(m);
+    CHECK(p.boneInfos.size() == boneCount);
+
+    std::vector<glm::mat4> final = runBoneHierarchy(p, boneCount);
+
+    int malas = 0;
+    for (size_t i = 0; i < boneCount; i++)
+    {
+        if (nearlyIdentity(final[i])) continue;
+        if (malas == 0)
+        {
+            std::printf("  hueso %zu (%s) no es identidad:\n", i, m.skeleton.names[i].c_str());
+            for (int r = 0; r < 4; r++)
+                std::printf("    [% .4f % .4f % .4f % .4f]\n",
+                            final[i][0][r], final[i][1][r], final[i][2][r], final[i][3][r]);
+        }
+        ++malas;
+    }
+    CHECK(malas == 0);
+}
+
 // Helper: grafo Idle(loop) -> Run(loop) -> Jump(no loop) -> Idle.
 // Idle->Run   por bool "running" == true
 // Run->Jump   por trigger "jump"
@@ -2414,6 +2480,7 @@ int main()
     test_apply_clip_names_positionally_rejects_external_collision();
     test_pack_concatenates_clips();
     test_pack_mesh_without_clips();
+    test_pack_without_clips_yields_identity_final_bones();
 
     test_trigger_switches_state();
     test_animation_finished_timing();

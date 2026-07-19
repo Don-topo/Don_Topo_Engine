@@ -7,9 +7,17 @@ namespace DonTopo
         const Skeleton& skel      = mesh.skeleton;
         const int       boneCount = (int)skel.names.size();
         // Malla sin animaciones: un bloque igualmente, con todos los counts a 0.
-        // bone_eval devuelve entonces la identidad, que es lo que hacía el
-        // código de un solo clip cuando el FBX no traía animación.
         const size_t clipCount = mesh.animationClips.empty() ? 1u : mesh.animationClips.size();
+
+        // Sin clips, bone_eval deja la identidad en cada localXform y la pasada 1
+        // de bone_hierarchy propaga identidades, pero la pasada 2 multiplica por
+        // inverseBindPose: finalBones acabaría valiendo la inverse bind pose y
+        // skinning.comp deformaría la malla. Como skinnedVertices YA está en bind
+        // pose, la matriz correcta sin animación es la identidad, así que aquí se
+        // codifica la identidad en el propio campo inverseBindPose para que la
+        // pasada 2 salga identidad * identidad, exacta y sin tocar shaders. Ojo:
+        // en este caso el campo NO contiene la inverse bind pose real.
+        const bool bindPoseEstatica = mesh.animationClips.empty();
 
         PackedClips out;
         out.boneInfos.resize(clipCount * (size_t)boneCount);
@@ -22,7 +30,7 @@ namespace DonTopo
             {
                 GpuBoneInfo& bi    = out.boneInfos[c * (size_t)boneCount + (size_t)b];
                 bi.parentIndex     = skel.parentIndex[b];
-                bi.inverseBindPose = skel.inverseBindPose[b];
+                bi.inverseBindPose = bindPoseEstatica ? glm::mat4(1.0f) : skel.inverseBindPose[b];
                 bi.pad             = 0;
 
                 const BoneChannel* ch = nullptr;
