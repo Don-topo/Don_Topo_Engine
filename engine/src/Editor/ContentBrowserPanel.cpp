@@ -171,11 +171,18 @@ void ContentBrowserPanel::updateSceneReferencesForRename(EditorContext& ctx, Gam
 
         if (go->hasMesh())
         {
-            Mesh* mesh = go->getMesh().get();
-            updateField(mesh->sourcePath);
-            updateField(mesh->material.texturePath);
-            updateField(mesh->material.normalMapPath);
-            updateField(mesh->material.metallicRoughnessPath);
+            updateField(go->getMesh()->sourcePath);
+            // Mismo punto ciego que en count/detach: en skinned los materiales
+            // viven en SkinnedMesh::materials, nunca en el Mesh::material
+            // heredado. Sin esto, renombrar una textura dejaba a todos los
+            // personajes con rig apuntando al nombre viejo — referencia rota
+            // al recargar la escena, y en silencio.
+            for (Material* mat : materialsOf(go))
+            {
+                updateField(mat->texturePath);
+                updateField(mat->normalMapPath);
+                updateField(mat->metallicRoughnessPath);
+            }
         }
         if (go->hasAudioClip())
         {
