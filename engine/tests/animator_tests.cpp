@@ -90,6 +90,13 @@ static std::string writeUnriggedObjFixture(const std::string& filename)
          "v 1 0 0\n"
          "v 0 1 0\n"
          "f 1 2 3\n";
+    f.close();
+    // Sin este CHECK un temp dir no escribible pasaba desapercibido: el
+    // fichero no existiría y hasBones() devolvería false igualmente, así que
+    // test_has_bones_rejects_unrigged_model PASARÍA por el motivo equivocado,
+    // mientras los demás call sites tumbarían el binario con una excepción sin
+    // capturar de ModelLoader::load. Fallo con nombre aquí, en el helper.
+    CHECK(!f.fail());
     return path.string();
 }
 
@@ -840,6 +847,65 @@ static void test_scene_load_shares_has_bones_cache_across_nodes(PhysicsManager& 
     SkinnedMesh* sm2 = found2->getSkinnedMesh();
     CHECK(sm2 != nullptr);
     if (sm2) CHECK(!sm2->skeleton.names.empty());
+}
+
+// Finding de revisión final: nada ejercitaba cloneGameObject con una malla
+// rigged. Su único caller es Scene.Instantiate de Lua, que corre dentro del
+// bucle de Play — y hasta el fix pasaba hasBonesCache == nullptr, así que cada
+// spawn sondeaba el FBX con Assimp y lo volvía a parsear entero. La respuesta
+// autoritativa ya está en memoria (src->isSkinned()): si el clon volviera como
+// Mesh plano —porque el FBX se está reexportando en ese instante, o porque
+// alguien rompiera la siembra de la cache— el clon perdería el Animator
+// mientras el original lo conserva. Eso es justo lo que detecta este test.
+static void test_clone_of_rigged_mesh_stays_skinned(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    go->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx")));
+    CHECK(go->isSkinned());
+
+    GameObject* clone = scene.cloneGameObject(go, nullptr, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+
+    CHECK(clone != go);
+    CHECK(clone->isSkinned());
+    SkinnedMesh* sm = clone->getSkinnedMesh();
+    CHECK(sm != nullptr);
+    if (!sm) return;
+    CHECK(!sm->skeleton.names.empty());
+    CHECK(sm->sourcePath == "assets/modelAnimation.fbx");
+}
+
+// Mismo finding, la otra ruta que pasaba nullptr: insertFromJson, que es el
+// undo de un Delete. Se reproduce el ciclo completo del comando —snapshot con
+// subtreeToJson, borrado, reinserción— porque es ahí donde el tipo de malla se
+// decide de nuevo: el JSON no manda (el flag "skinned" ya no se lee), lo
+// reconstruye la detección de rig. Un personaje borrado y recuperado tiene que
+// volver skinned, o el undo le habría quitado el Animator en silencio.
+static void test_delete_undo_restores_rigged_mesh_as_skinned(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    go->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx")));
+
+    nlohmann::json snapshot = scene.subtreeToJson(go);
+    scene.removeGameObject(go);
+    CHECK(scene.findById(id) == nullptr);
+
+    GameObject* restored = scene.insertFromJson(snapshot, nullptr, 0, pm, am);
+    CHECK(restored != nullptr);
+    if (!restored) return;
+
+    // El id se conserva: los comandos posteriores del stack de undo siguen
+    // resolviendo contra el mismo GameObject.
+    CHECK(restored->id == id);
+    CHECK(restored->isSkinned());
+    SkinnedMesh* sm = restored->getSkinnedMesh();
+    CHECK(sm != nullptr);
+    if (!sm) return;
+    CHECK(!sm->skeleton.names.empty());
 }
 
 // Fix de review: un forcedName que ya está en uso (por un clip existente, o
@@ -2391,6 +2457,8 @@ int main()
     test_scene_load_warns_when_file_missing(pm, am);
     test_scene_load_warns_on_load_exception(pm, am);
     test_scene_load_shares_has_bones_cache_across_nodes(pm, am);
+    test_clone_of_rigged_mesh_stays_skinned(pm, am);
+    test_delete_undo_restores_rigged_mesh_as_skinned(pm, am);
 
     test_animator_command_add_undo_redo();
     test_animator_command_remove();
