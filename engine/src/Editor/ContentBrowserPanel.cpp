@@ -151,10 +151,10 @@ void ContentBrowserPanel::beginAssetRename(const std::filesystem::path& path, bo
     m_openAssetRenamePopup = true;
 }
 
-void ContentBrowserPanel::updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
-                                                           const std::filesystem::path& oldPath,
-                                                           const std::filesystem::path& newPath,
-                                                           bool isDir)
+void updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
+                                     const std::filesystem::path& oldPath,
+                                     const std::filesystem::path& newPath,
+                                     bool isDir)
 {
     (void)ctx;
     if (!sceneRoot) return;
@@ -202,7 +202,7 @@ void ContentBrowserPanel::updateSceneReferencesForRename(EditorContext& ctx, Gam
     });
 }
 
-int ContentBrowserPanel::countSceneReferences(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir)
+int countSceneReferences(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir)
 {
     if (!sceneRoot) return 0;
 
@@ -230,8 +230,8 @@ int ContentBrowserPanel::countSceneReferences(GameObject* sceneRoot, const std::
     return count;
 }
 
-void ContentBrowserPanel::detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
-                                                           const std::filesystem::path& path, bool isDir)
+void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
+                                     const std::filesystem::path& path, bool isDir)
 {
     if (!sceneRoot) return;
 
