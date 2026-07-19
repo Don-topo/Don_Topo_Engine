@@ -466,17 +466,20 @@ namespace
             // al sitio equivocado y esconde que la malla no cargó en absoluto.
             if (skinnedFlag && !skinned && !sourcePath.empty() && warnings)
             {
-                const std::string file = std::filesystem::path(sourcePath).filename().string();
+                // Path COMPLETO, no filename(): en el caso de fichero ausente
+                // este aviso y el del catch de abajo disparan para el mismo
+                // nodo, y con identificadores distintos el Log Console parecía
+                // estar hablando de dos assets diferentes.
                 if (!std::filesystem::exists(sourcePath))
                 {
-                    warnings->push_back(file + ": la escena lo tenía guardado como animado, pero el"
-                                                " fichero no se encuentra (¿se movió o se borró?);"
-                                                " la malla no se puede cargar");
+                    warnings->push_back(sourcePath + ": la escena lo tenía guardado como animado, pero el"
+                                                      " fichero no se encuentra (¿se movió o se borró?);"
+                                                      " la malla no se puede cargar");
                 }
                 else
                 {
-                    warnings->push_back(file + ": la escena lo tenía guardado como animado, pero el fichero"
-                                                " ya no declara huesos; se descartan sus fuentes de animación");
+                    warnings->push_back(sourcePath + ": la escena lo tenía guardado como animado, pero el fichero"
+                                                      " ya no declara huesos; se descartan sus fuentes de animación");
                 }
             }
             try
@@ -771,9 +774,21 @@ namespace DonTopo
         // avisos que bindClips empuja a m_warnings durante la carga se
         // perderían de inmediato.
         m_warnings.clear();
+        // Cache sembrada con la respuesta AUTORITATIVA: el objeto origen ya
+        // está en memoria, así que isSkinned() es gratis y no puede mentir.
+        // Sin esto cada clon volvía a sondear el FBX con Assimp (y luego a
+        // parsearlo entero otra vez), dos lecturas síncronas de fichero por
+        // spawn dentro del bucle de Play — su único caller es Scene.Instantiate
+        // de Lua. Peor que el coste: leer el disco permite que un clon tomado
+        // mientras el artista reexporta el FBX vuelva con un tipo de malla
+        // distinto al del objeto del que se clonó. Si el clon es un subárbol,
+        // la cache además dedup entre todos sus nodos.
+        std::unordered_map<std::string, bool> cache;
+        if (src->hasMesh() && !src->getMesh()->sourcePath.empty())
+            cache[src->getMesh()->sourcePath] = src->isSkinned();
         try
         {
-            nodeFromJson(j, clone, target->worldTransform, physics, audio, &m_warnings, nullptr);
+            nodeFromJson(j, clone, target->worldTransform, physics, audio, &m_warnings, &cache);
         }
         catch (const nlohmann::json::exception&)
         {
@@ -847,9 +862,14 @@ namespace DonTopo
     {
         GameObject* target = parent ? parent : &m_root;
         GameObject* node = target->addChild(j.value("name", std::string()));
+        // Sin objeto vivo al que preguntar (esto reconstruye un subárbol ya
+        // borrado: el undo de un Delete), así que la cache arranca vacía y
+        // sólo aporta el dedup entre los nodos de ESE subárbol — que ya evita
+        // repetir el ReadFile de Assimp por cada nodo que comparta sourcePath.
+        std::unordered_map<std::string, bool> cache;
         try
         {
-            nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings, nullptr);
+            nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings, &cache);
         }
         catch (const nlohmann::json::exception&)
         {
