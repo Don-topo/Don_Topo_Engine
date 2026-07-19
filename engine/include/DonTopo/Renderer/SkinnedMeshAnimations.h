@@ -55,4 +55,27 @@ namespace DonTopo
     // Renderer y no debe depender de Core).
     bool renameClip(SkinnedMesh& mesh, const std::string& oldName,
                     const std::string& newName);
+
+    // Aplica savedNames POSICIONALMENTE, de una sola vez, a los primeros
+    // min(savedNames.size(), source.clipNames.size()) clips de source —
+    // pensado para restaurar los renames guardados de una escena sobre la
+    // fuente builtin recién reconstruida por loadSkinned.
+    //
+    // A diferencia de encadenar renameClip clip a clip, esto resuelve
+    // CUALQUIER permutación correctamente: un swap de dos nombres con
+    // renameClip secuencial colisiona consigo mismo (el segundo rename choca
+    // con el nombre que el primero acaba de dejar libre, en el hueco
+    // equivocado) y no aplica nada — los clips se quedan con el nombre que
+    // trae el FBX y un Animator que referencia el nombre guardado bindea al
+    // clip EQUIVOCADO en silencio, que es peor que un huérfano.
+    //
+    // Guarda el invariante de nombres únicos: si savedNames trae duplicados
+    // entre sí, o un nombre guardado ya pertenece a un clip que NO es parte
+    // de este mismo lote (otra fuente, u otro clip fuera de los n primeros),
+    // ESE índice no se aplica —se deja el clip con el nombre que ya tenía— y
+    // se avisa nombrando el clip. Un nombre guardado igual al que el clip ya
+    // tiene es un no-op válido, no una colisión.
+    void applyClipNamesPositionally(SkinnedMesh& mesh, AnimationSource& source,
+                                    const std::vector<std::string>& savedNames,
+                                    std::vector<std::string>& warnings);
 }

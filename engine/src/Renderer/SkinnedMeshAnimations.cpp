@@ -114,4 +114,87 @@ namespace DonTopo
 
         return true;
     }
+
+    void applyClipNamesPositionally(SkinnedMesh& mesh, AnimationSource& source,
+                                    const std::vector<std::string>& savedNames,
+                                    std::vector<std::string>& warnings)
+    {
+        const size_t n = savedNames.size() < source.clipNames.size()
+                        ? savedNames.size() : source.clipNames.size();
+        if (n == 0) return;
+
+        // Snapshot ANTES de tocar nada: source.clipNames[i] se sobreescribe
+        // más abajo, y localizar cada clip en mesh.animationClips por su
+        // nombre ANTIGUO tiene que hacerse contra el estado previo a
+        // cualquier mutación — si no, un rename ya aplicado podría dejar dos
+        // clips con el mismo nombre temporalmente y una búsqueda por nombre
+        // más adelante en el bucle encontraría el equivocado.
+        std::vector<std::string> oldNames(source.clipNames.begin(), source.clipNames.begin() + (long)n);
+
+        // Índice en animationClips de cada clip del lote, resuelto una sola
+        // vez contra oldNames (todavía intactos en este punto).
+        std::vector<long> clipIdx(n, -1);
+        for (size_t i = 0; i < n; i++)
+            for (size_t k = 0; k < mesh.animationClips.size(); k++)
+                if (mesh.animationClips[k].name == oldNames[i]) { clipIdx[i] = (long)k; break; }
+
+        std::vector<bool> skip(n, false);
+
+        // 1) Duplicados entre los propios savedNames: dos índices apuntando
+        //    al mismo nombre destino dejarían un clip inalcanzable. Se
+        //    descartan ambos índices, no se aplica ninguno de los dos.
+        for (size_t i = 0; i < n; i++)
+        {
+            for (size_t j = i + 1; j < n; j++)
+            {
+                if (savedNames[i] != savedNames[j]) continue;
+                if (!skip[i] && !skip[j])
+                    warnings.push_back("Nombre de clip duplicado al restaurar la fuente builtin: '"
+                                        + savedNames[i] + "' — se conservan los nombres originales");
+                skip[i] = true;
+                skip[j] = true;
+            }
+        }
+
+        // batchSet: nombres ORIGINALES de los clips que forman este lote —
+        // "los clips que se están renombrando en esta misma operación", tal
+        // cual pide el finding. Un nombre destino que coincide con uno de
+        // estos no es una colisión externa (es, por ejemplo, el otro lado de
+        // un swap).
+        auto inBatch = [&](const std::string& name) {
+            for (size_t k = 0; k < n; k++)
+                if (oldNames[k] == name) return true;
+            return false;
+        };
+
+        // 2) Colisión con un clip AJENO al lote (otra fuente, u otro clip del
+        //    propio mesh fuera de estos n). Un nombre igual al que el clip ya
+        //    tiene es un no-op válido, nunca una colisión.
+        for (size_t i = 0; i < n; i++)
+        {
+            if (skip[i] || clipIdx[i] < 0) continue;
+            if (savedNames[i] == oldNames[i]) continue;   // no-op
+
+            for (const auto& c : mesh.animationClips)
+            {
+                if (c.name != savedNames[i] || inBatch(c.name)) continue;
+                warnings.push_back("Nombre de clip guardado '" + savedNames[i]
+                                    + "' ya en uso por otro clip — no se aplica al restaurar la fuente builtin");
+                skip[i] = true;
+                break;
+            }
+        }
+
+        // 3) Aplicar lo que sobrevivió: todo de una vez, así que un swap
+        //    (A->B y B->A a la vez) converge en vez de colisionar consigo
+        //    mismo como pasaría encadenando renameClip.
+        for (size_t i = 0; i < n; i++)
+        {
+            if (skip[i] || clipIdx[i] < 0) continue;
+            if (savedNames[i] == oldNames[i]) continue;   // no-op
+
+            mesh.animationClips[(size_t)clipIdx[i]].name = savedNames[i];
+            source.clipNames[i] = savedNames[i];
+        }
+    }
 }

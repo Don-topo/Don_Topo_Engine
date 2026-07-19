@@ -441,9 +441,11 @@ namespace
 
                     // Fuentes de animación. La builtin ya la creó loadSkinned:
                     // de ella solo se recuperan los NOMBRES (un rename), y se
-                    // aplican en orden hasta el menor de los dos tamaños — un
-                    // FBX reexportado con más o menos clips no debe romper la
-                    // carga.
+                    // aplican POSICIONALMENTE de una sola vez (no encadenando
+                    // renameClip: eso colisiona consigo mismo ante un swap de
+                    // dos nombres y no aplica nada) hasta el menor de los dos
+                    // tamaños — un FBX reexportado con más o menos clips no
+                    // debe romper la carga.
                     if (j["mesh"].contains("animationSources"))
                     {
                         for (const auto& sj : j["mesh"]["animationSources"])
@@ -458,23 +460,31 @@ namespace
                             {
                                 if (mesh->animationSources.empty()) continue;
                                 auto& b = mesh->animationSources[0];
-                                const size_t n = names.size() < b.clipNames.size()
-                                                ? names.size() : b.clipNames.size();
-                                for (size_t i = 0; i < n; i++)
-                                    DonTopo::renameClip(*mesh, b.clipNames[i], names[i]);
+                                std::vector<std::string> renameWarnings;
+                                DonTopo::applyClipNamesPositionally(*mesh, b, names, renameWarnings);
+                                // Al warnings del parámetro, igual que el resto
+                                // de esta función: printf no llega al Log
+                                // Console en un build sin consola.
+                                if (warnings)
+                                    for (const auto& w : renameWarnings)
+                                        warnings->push_back(w);
                                 continue;
                             }
 
-                            std::vector<std::string> warnings;
-                            if (!DonTopo::addAnimationSource(*mesh, path, warnings, &names))
+                            std::vector<std::string> sourceWarnings;
+                            if (!DonTopo::addAnimationSource(*mesh, path, sourceWarnings, &names))
                             {
                                 // Fichero movido, borrado o de otro rig: se
                                 // avisa y se sigue. Los estados que usaran sus
                                 // clips quedan huérfanos, y bindClips ya lo
                                 // reporta — perder la escena entera por esto
-                                // sería mucho peor.
-                                for (const auto& w : warnings)
-                                    std::printf("Scene: %s\n", w.c_str());
+                                // sería mucho peor. Al warnings del parámetro
+                                // (Scene::lastWarnings(), lo que lee el Log
+                                // Console), no a stdout: en un build sin
+                                // consola un printf es invisible.
+                                if (warnings)
+                                    for (const auto& w : sourceWarnings)
+                                        warnings->push_back(w);
                             }
                         }
                     }

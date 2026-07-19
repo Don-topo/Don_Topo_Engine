@@ -317,6 +317,106 @@ static void test_rename_clip_references_in_animator()
     CHECK(a.renameClipReferences("no_existe", "x") == 0);
 }
 
+// Fix de review (finding 1, task-6): un swap de dos nombres builtin
+// encadenando renameClip clip a clip colisiona consigo mismo y no aplica
+// nada — el segundo rename choca con el nombre que el primero acaba de dejar
+// libre, en el hueco equivocado. applyClipNamesPositionally lo resuelve de
+// una vez. Se construye a mano el estado "recién cargado del FBX" (igual que
+// test_rename_clip) porque el único asset del repo (modelAnimation.fbx)
+// trae un solo clip y no puede producir un swap real de dos clips builtin
+// vía Scene::fromJson.
+static void test_apply_clip_names_positionally_swap()
+{
+    SkinnedMesh m;
+    m.skeleton.names = { "root" };
+    AnimationClip a; a.name = "Idle"; m.animationClips.push_back(a);
+    AnimationClip b; b.name = "Walk"; m.animationClips.push_back(b);
+    AnimationSource src; src.path = "x.fbx"; src.builtin = true;
+    src.clipNames = { "Idle", "Walk" };
+    m.animationSources.push_back(src);
+
+    // Nombres guardados: exactamente el swap de los actuales.
+    std::vector<std::string> saved = { "Walk", "Idle" };
+    std::vector<std::string> warnings;
+    applyClipNamesPositionally(m, m.animationSources[0], saved, warnings);
+
+    CHECK(warnings.empty());
+    CHECK(m.animationClips[0].name == "Walk");
+    CHECK(m.animationClips[1].name == "Idle");
+    CHECK(m.animationSources[0].clipNames[0] == "Walk");
+    CHECK(m.animationSources[0].clipNames[1] == "Idle");
+
+    // Un AnimatorComponent que referencia el clip por su nombre NUEVO tiene
+    // que bindear al índice correcto: es la consecuencia real del bug. Con
+    // renameClip secuencial los nombres se habrían quedado como estaban
+    // (Idle/Walk) y este binding habría resuelto al clip EQUIVOCADO en vez
+    // de fallar de forma visible.
+    AnimatorComponent anim;
+    AnimatorComponent::State st;
+    st.name = "S"; st.clipName = "Walk";   // el nombre que AHORA tiene el clip 0
+    anim.addState(st);
+
+    std::vector<std::string> bindWarnings;
+    anim.bindClips(m, &bindWarnings);
+    CHECK(bindWarnings.empty());
+    CHECK(anim.states()[0].clipIndex == 0);   // clip 0 es el que ahora se llama "Walk"
+}
+
+// Guard del finding 1: nombres guardados duplicados entre sí dejarían dos
+// clips homónimos (el Animator resuelve por nombre) — se descarta ESE
+// subconjunto y se avisa, sin tocar ningún clip.
+static void test_apply_clip_names_positionally_rejects_duplicate_saved_names()
+{
+    SkinnedMesh m;
+    m.skeleton.names = { "root" };
+    AnimationClip a; a.name = "Idle"; m.animationClips.push_back(a);
+    AnimationClip b; b.name = "Walk"; m.animationClips.push_back(b);
+    AnimationSource src; src.path = "x.fbx"; src.builtin = true;
+    src.clipNames = { "Idle", "Walk" };
+    m.animationSources.push_back(src);
+
+    std::vector<std::string> saved = { "Mismo", "Mismo" };
+    std::vector<std::string> warnings;
+    applyClipNamesPositionally(m, m.animationSources[0], saved, warnings);
+
+    CHECK(!warnings.empty());
+    // Nada se aplicó: los clips siguen con su nombre original
+    CHECK(m.animationClips[0].name == "Idle");
+    CHECK(m.animationClips[1].name == "Walk");
+    CHECK(m.animationSources[0].clipNames[0] == "Idle");
+    CHECK(m.animationSources[0].clipNames[1] == "Walk");
+}
+
+// Guard del finding 1: un nombre guardado que colisiona con un clip AJENO al
+// lote (de otra fuente) no se aplica — dejaría dos clips con el mismo
+// nombre. El segundo nombre del lote es un no-op (Walk == Walk) y sí debe
+// sobrevivir intacto.
+static void test_apply_clip_names_positionally_rejects_external_collision()
+{
+    SkinnedMesh m;
+    m.skeleton.names = { "root" };
+    AnimationClip a; a.name = "Idle"; m.animationClips.push_back(a);
+    AnimationClip b; b.name = "Walk"; m.animationClips.push_back(b);
+    AnimationClip c; c.name = "Jump"; m.animationClips.push_back(c);   // de otra fuente
+
+    AnimationSource builtin; builtin.path = "x.fbx"; builtin.builtin = true;
+    builtin.clipNames = { "Idle", "Walk" };
+    m.animationSources.push_back(builtin);
+    AnimationSource other; other.path = "y.fbx"; other.builtin = false;
+    other.clipNames = { "Jump" };
+    m.animationSources.push_back(other);
+
+    std::vector<std::string> saved = { "Jump", "Walk" };   // "Jump" ya en uso fuera del lote
+    std::vector<std::string> warnings;
+    applyClipNamesPositionally(m, m.animationSources[0], saved, warnings);
+
+    CHECK(!warnings.empty());
+    CHECK(m.animationClips[0].name == "Idle");             // no se aplicó por la colisión
+    CHECK(m.animationSources[0].clipNames[0] == "Idle");
+    CHECK(m.animationClips[1].name == "Walk");             // no-op, permanece igual
+    CHECK(m.animationSources[0].clipNames[1] == "Walk");
+}
+
 // Las fuentes extra y los renames viven en la escena: el SkinnedMesh se
 // reconstruye desde los FBX en cada carga, así que sin esto un proyecto
 // guardado perdería todas las animaciones importadas.
@@ -402,6 +502,38 @@ static void test_missing_animation_source_does_not_break_load(PhysicsManager& pm
     // La fuente fantasma no se registra; el modelo sigue entero
     CHECK(lm->animationSources.size() == 1u);
     CHECK(!lm->animationClips.empty());
+}
+
+// Fix de review (finding 2, task-6): el aviso de una fuente que no carga
+// tenía que llegar a Scene::lastWarnings() —lo que lee el Log Console del
+// editor— y no solo a stdout vía std::printf, invisible en un build sin
+// consola. Mismo escenario que el test anterior, pero comprobando el
+// warning en vez de solo la resiliencia de la carga.
+static void test_missing_animation_source_warns_through_scene(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+    go->setMesh(mesh);
+
+    nlohmann::json j = scene.toJson();
+    j["root"]["children"][0]["mesh"]["animationSources"].push_back(
+        { {"path", "assets/no_existe.fbx"}, {"builtin", false}, {"clips", {"Fantasma"}} });
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+
+    // El aviso del loader (fichero inexistente) tiene que llegar a
+    // m_warnings, visible vía lastWarnings() — el mismo camino que usa el
+    // editor, no stdout.
+    bool sawMissingSourceWarning = false;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("no_existe.fbx") != std::string::npos) sawMissingSourceWarning = true;
+    CHECK(sawMissingSourceWarning);
 }
 
 // Escenas guardadas antes de esta feature no tienen "animationSources": cargan
@@ -1597,6 +1729,9 @@ int main()
     test_add_animation_source_with_forced_names();
     test_rename_clip_references_in_animator();
     test_add_animation_source_with_forced_names_collision();
+    test_apply_clip_names_positionally_swap();
+    test_apply_clip_names_positionally_rejects_duplicate_saved_names();
+    test_apply_clip_names_positionally_rejects_external_collision();
     test_pack_concatenates_clips();
     test_pack_mesh_without_clips();
 
@@ -1629,6 +1764,7 @@ int main()
     test_condition_without_compare_fields_loads(pm, am);
     test_animation_sources_survive_scene_round_trip(pm, am);
     test_missing_animation_source_does_not_break_load(pm, am);
+    test_missing_animation_source_warns_through_scene(pm, am);
     test_scene_without_animation_sources_loads(pm, am);
 
     test_animator_command_add_undo_redo();
