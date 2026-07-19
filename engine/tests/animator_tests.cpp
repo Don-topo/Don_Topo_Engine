@@ -317,6 +317,117 @@ static void test_rename_clip_references_in_animator()
     CHECK(a.renameClipReferences("no_existe", "x") == 0);
 }
 
+// Las fuentes extra y los renames viven en la escena: el SkinnedMesh se
+// reconstruye desde los FBX en cada carga, así que sin esto un proyecto
+// guardado perdería todas las animaciones importadas.
+static void test_animation_sources_survive_scene_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+    std::vector<std::string> warnings;
+    CHECK(addAnimationSource(*mesh, "assets/modelAnimation.fbx", warnings));
+    const std::string importedName = mesh->animationSources[1].clipNames[0];
+    CHECK(renameClip(*mesh, importedName, "SaltoRenombrado"));
+    const std::string builtinName = mesh->animationSources[0].clipNames[0];
+    go->setMesh(mesh);
+
+    // Un estado que usa el clip importado y renombrado: tras cargar tiene que
+    // seguir resolviendo
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State st;
+    st.name = "Salto"; st.clipName = "SaltoRenombrado";
+    a->addState(st);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+
+    SkinnedMesh* lm = found->getSkinnedMesh();
+    CHECK(lm != nullptr);
+    if (!lm) return;
+
+    CHECK(lm->animationSources.size() == 2u);
+    CHECK(lm->animationSources[0].builtin == true);
+    CHECK(lm->animationSources[0].clipNames[0] == builtinName);
+    CHECK(lm->animationSources[1].builtin == false);
+    CHECK(lm->animationSources[1].path == "assets/modelAnimation.fbx");
+    CHECK(lm->animationSources[1].clipNames[0] == "SaltoRenombrado");
+
+    // El clip renombrado existe con ese nombre en la lista plana
+    bool encontrado = false;
+    for (const auto& c : lm->animationClips)
+        if (c.name == "SaltoRenombrado") encontrado = true;
+    CHECK(encontrado);
+
+    // Y el estado lo resuelve sin avisos
+    std::vector<std::string> bindWarnings;
+    found->getAnimator()->bindClips(*lm, &bindWarnings);
+    CHECK(bindWarnings.empty());
+    CHECK(found->getAnimator()->states()[0].clipIndex >= 0);
+}
+
+// Una fuente cuyo fichero ya no está no puede tumbar la carga de la escena: se
+// avisa y se sigue, dejando los estados que la usaran huérfanos (bindClips ya
+// los marca).
+static void test_missing_animation_source_does_not_break_load(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+    go->setMesh(mesh);
+
+    nlohmann::json j = scene.toJson();
+    // Se inyecta a mano una fuente que apunta a un fichero inexistente: simula
+    // un proyecto cuyo .fbx se borró o se movió después de guardar.
+    j["root"]["children"][0]["mesh"]["animationSources"].push_back(
+        { {"path", "assets/no_existe.fbx"}, {"builtin", false}, {"clips", {"Fantasma"}} });
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+    SkinnedMesh* lm = found->getSkinnedMesh();
+    CHECK(lm != nullptr);
+    if (!lm) return;
+    // La fuente fantasma no se registra; el modelo sigue entero
+    CHECK(lm->animationSources.size() == 1u);
+    CHECK(!lm->animationClips.empty());
+}
+
+// Escenas guardadas antes de esta feature no tienen "animationSources": cargan
+// con la fuente builtin sintetizada desde sourcePath, sin avisos.
+static void test_scene_without_animation_sources_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    go->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx")));
+
+    nlohmann::json j = scene.toJson();
+    j["root"]["children"][0]["mesh"].erase("animationSources");
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+    SkinnedMesh* lm = found->getSkinnedMesh();
+    CHECK(lm != nullptr);
+    if (!lm) return;
+    CHECK(lm->animationSources.size() == 1u);
+    CHECK(lm->animationSources[0].builtin == true);
+}
+
 // Fix de review: un forcedName que ya está en uso (por un clip existente, o
 // por un forcedName anterior de esta misma importación) NO puede colarse tal
 // cual — dejaría dos clips homónimos y el Animator resuelve por nombre, así
@@ -1516,6 +1627,9 @@ int main()
     test_scene_without_animator_block_loads(pm, am);
     test_numeric_graph_survives_scene_round_trip(pm, am);
     test_condition_without_compare_fields_loads(pm, am);
+    test_animation_sources_survive_scene_round_trip(pm, am);
+    test_missing_animation_source_does_not_break_load(pm, am);
+    test_scene_without_animation_sources_loads(pm, am);
 
     test_animator_command_add_undo_redo();
     test_animator_command_remove();

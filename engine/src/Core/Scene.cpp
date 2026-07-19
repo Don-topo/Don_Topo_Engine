@@ -11,6 +11,7 @@
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/Cube.h"
 #include "DonTopo/Renderer/Sphere.h"
@@ -255,6 +256,19 @@ namespace
                 meshJson["vertices"] = std::move(verts);
                 meshJson["indices"]  = mesh->indices;
             }
+
+            // Fuentes de animación: el SkinnedMesh se reconstruye desde los FBX
+            // en cada carga, así que sin esto los clips importados de ficheros
+            // extra (y los renames) se perderían al guardar.
+            if (const DonTopo::SkinnedMesh* sm = node.getSkinnedMesh())
+            {
+                nlohmann::json sources = nlohmann::json::array();
+                for (const auto& src : sm->animationSources)
+                    sources.push_back({ {"path", src.path},
+                                        {"builtin", src.builtin},
+                                        {"clips", src.clipNames} });
+                meshJson["animationSources"] = std::move(sources);
+            }
             j["mesh"] = std::move(meshJson);
         }
         if (node.hasBoxCollider())
@@ -424,6 +438,47 @@ namespace
                 if (skinned && !sourcePath.empty())
                 {
                     auto mesh = std::make_shared<DonTopo::SkinnedMesh>(DonTopo::ModelLoader::loadSkinned(sourcePath));
+
+                    // Fuentes de animación. La builtin ya la creó loadSkinned:
+                    // de ella solo se recuperan los NOMBRES (un rename), y se
+                    // aplican en orden hasta el menor de los dos tamaños — un
+                    // FBX reexportado con más o menos clips no debe romper la
+                    // carga.
+                    if (j["mesh"].contains("animationSources"))
+                    {
+                        for (const auto& sj : j["mesh"]["animationSources"])
+                        {
+                            const std::string path = sj.value("path", std::string());
+                            const bool builtin     = sj.value("builtin", false);
+                            std::vector<std::string> names;
+                            if (sj.contains("clips"))
+                                names = sj["clips"].get<std::vector<std::string>>();
+
+                            if (builtin)
+                            {
+                                if (mesh->animationSources.empty()) continue;
+                                auto& b = mesh->animationSources[0];
+                                const size_t n = names.size() < b.clipNames.size()
+                                                ? names.size() : b.clipNames.size();
+                                for (size_t i = 0; i < n; i++)
+                                    DonTopo::renameClip(*mesh, b.clipNames[i], names[i]);
+                                continue;
+                            }
+
+                            std::vector<std::string> warnings;
+                            if (!DonTopo::addAnimationSource(*mesh, path, warnings, &names))
+                            {
+                                // Fichero movido, borrado o de otro rig: se
+                                // avisa y se sigue. Los estados que usaran sus
+                                // clips quedan huérfanos, y bindClips ya lo
+                                // reporta — perder la escena entera por esto
+                                // sería mucho peor.
+                                for (const auto& w : warnings)
+                                    std::printf("Scene: %s\n", w.c_str());
+                            }
+                        }
+                    }
+
                     node->setMesh(std::move(mesh));
                 }
                 else if (!sourcePath.empty())
