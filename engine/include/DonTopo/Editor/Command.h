@@ -205,24 +205,28 @@ private:
 // del GameObject id; undo() hace lo contrario. Mismo contrato que el resto:
 // resuelve el GameObject por id en cada execute()/undo().
 //
-// m_clipNames guarda los nombres que la fuente aportó. Sin él, deshacer un
-// Remove reimportaría el fichero con los nombres del FBX y se perdería
-// cualquier rename — dejando huérfanos los estados del grafo que los usaban.
+// m_clipNames guarda los nombres que la fuente aportó, y hace dos trabajos.
+// Uno: sin él, deshacer un Remove reimportaría el fichero con los nombres del
+// FBX y se perdería cualquier rename — dejando huérfanos los estados del grafo
+// que los usaban. Dos: es la IDENTIDAD con la que applyRemove localiza su
+// fuente. Los nombres de clip son únicos dentro del mesh (uniqueClipName lo
+// garantiza) y viajan CON la fuente, mientras que una posición describe dónde
+// estaba: applyAdd re-añade al final, así que cualquier ordinal guardado por
+// otro comando del stack cambia de significado en cuanto se deshace un Remove.
 //
 // renderer puede ser nullptr (tests headless). Cuando no lo es, los SSBOs del
 // objeto skinned se rehacen: la lista de clips ha cambiado y la GPU tiene la
 // vieja.
 class AnimationSourceCommand : public ICommand {
 public:
-    // pathOccurrence: qué fuente no-builtin con ese path quitar, CONTADO
-    // DESDE EL FINAL del vector (0 = la más reciente/última). Ver el
-    // comentario de applyRemove en Command.cpp para el porqué de contar
-    // desde el final y no desde el principio: importar el mismo FBX dos
-    // veces es legal (AnimatorPanel::drawAnimationSources las distingue con
-    // pathOccurrence), y sin este dato applyRemove no puede saber cuál de
-    // las dos filas pulsó el usuario. 0 por defecto vale tanto para un Add
-    // real (nada que desambiguar, la fuente nueva siempre va al final) como
-    // para el undo de un Add.
+    // pathOccurrence: FALLBACK posicional para applyRemove — qué fuente
+    // no-builtin con ese path quitar, CONTADO DESDE EL FINAL del vector
+    // (0 = la más reciente/última). Solo se usa cuando la búsqueda por
+    // identidad (m_clipNames) no encuentra nada, p.ej. con m_clipNames vacío.
+    // Importar el mismo FBX dos veces es legal, y AnimatorPanel distingue las
+    // filas con este mismo ordinal. 0 por defecto vale tanto para un Add real
+    // (nada que desambiguar, la fuente nueva siempre va al final) como para el
+    // undo de un Add.
     AnimationSourceCommand(Scene& scene, Renderer* renderer, std::string label,
                             uint64_t id, bool add, std::string path,
                             std::vector<std::string> clipNames,
