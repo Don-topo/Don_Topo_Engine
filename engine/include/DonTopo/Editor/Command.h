@@ -214,9 +214,19 @@ private:
 // vieja.
 class AnimationSourceCommand : public ICommand {
 public:
+    // pathOccurrence: qué fuente no-builtin con ese path quitar, CONTADO
+    // DESDE EL FINAL del vector (0 = la más reciente/última). Ver el
+    // comentario de applyRemove en Command.cpp para el porqué de contar
+    // desde el final y no desde el principio: importar el mismo FBX dos
+    // veces es legal (AnimatorPanel::drawAnimationSources las distingue con
+    // pathOccurrence), y sin este dato applyRemove no puede saber cuál de
+    // las dos filas pulsó el usuario. 0 por defecto vale tanto para un Add
+    // real (nada que desambiguar, la fuente nueva siempre va al final) como
+    // para el undo de un Add.
     AnimationSourceCommand(Scene& scene, Renderer* renderer, std::string label,
                             uint64_t id, bool add, std::string path,
-                            std::vector<std::string> clipNames);
+                            std::vector<std::string> clipNames,
+                            size_t pathOccurrence = 0);
     void execute() override;
     void undo() override;
     std::string label() const override { return m_label; }
@@ -232,6 +242,7 @@ private:
     bool m_add;
     std::string m_path;
     std::vector<std::string> m_clipNames;
+    size_t m_pathOccurrence;
 };
 
 // Renombra un clip del mesh y arrastra los estados del Animator que lo usaban.

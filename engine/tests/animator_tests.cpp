@@ -1416,6 +1416,161 @@ static void test_animation_source_command_remove_restores_names()
     CHECK(encontrado);
 }
 
+// Finding 1 de la revisión final: bindClips es lo único que resuelve
+// clipName -> clipIndex, y su único llamador en el motor es
+// Scene::nodeFromJson. Sin que AnimationSourceCommand re-resuelva tras
+// mutar animationClips, un estado sobrevive con el índice VIEJO, que tras
+// quitar una fuente del medio puede pasar a apuntar a un clip DISTINTO del
+// que su nombre dice — sin aviso, y el Renderer lo reproduce igualmente
+// (currentClipIndex no distingue "resuelto" de "por casualidad en rango").
+// Este test arma tres estados (uno por clip: builtin + dos importados),
+// quita la fuente importada del MEDIO, y comprueba la invariante real: cada
+// estado que sigue resuelto apunta a un clip cuyo nombre coincide con el
+// suyo, o está en -1 (huérfano). Ningún índice "se cuela" apuntando a otro
+// clip. Se repite tras el undo (que reinserta al final, ver applyAdd) para
+// cubrir también el camino de Add.
+static void test_animation_source_command_remove_rebinds_clip_indices()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+    go->setMesh(mesh);
+
+    std::vector<std::string> warnings;
+    CHECK(addAnimationSource(*mesh, "assets/modelAnimation.fbx", warnings));
+    CHECK(addAnimationSource(*mesh, "assets/modelAnimation.fbx", warnings));
+    CHECK(mesh->animationSources.size() == 3u);   // builtin + 2 importadas
+
+    // Un estado por clip existente, mismo nombre que el clip para poder
+    // comprobar la invariante por igualdad de nombre.
+    auto anim = std::make_shared<AnimatorComponent>();
+    for (const auto& c : mesh->animationClips)
+    {
+        AnimatorComponent::State st;
+        st.name = c.name;
+        st.clipName = c.name;
+        anim->addState(st);
+    }
+    go->setAnimator(anim);
+    anim->bindClips(*mesh);   // resuelve como lo haría Scene::nodeFromJson
+
+    auto checkInvariant = [&]()
+    {
+        for (const auto& st : anim->states())
+        {
+            if (st.clipIndex < 0) continue;   // huérfano: aceptable
+            CHECK((size_t)st.clipIndex < mesh->animationClips.size());
+            if ((size_t)st.clipIndex < mesh->animationClips.size())
+                CHECK(mesh->animationClips[(size_t)st.clipIndex].name == st.clipName);
+        }
+    };
+    checkInvariant();   // premisa: cierto antes de tocar nada
+
+    // Quita la fuente importada del medio (índice 1): desplaza los clips de
+    // la fuente 2 un hueco hacia atrás en la lista plana. pathOccurrence=1
+    // porque hay una fuente con el mismo path por delante (la fila 2, ver
+    // el comentario de applyRemove en Command.cpp sobre contar desde el final).
+    const AnimationSource middle = mesh->animationSources[1];
+    const std::string middleClipName = middle.clipNames[0];
+    AnimationSourceCommand cmd(scene, /*renderer=*/nullptr, "Quitar animaciones",
+                                id, /*add=*/false, middle.path, middle.clipNames,
+                                /*pathOccurrence=*/1);
+    cmd.execute();
+
+    CHECK(mesh->animationSources.size() == 2u);
+    checkInvariant();   // invariante de Finding 1 tras el Remove
+
+    // Y en concreto: el estado que nombraba el clip quitado quedó huérfano,
+    // no reapuntado a otro clip por casualidad de índice.
+    for (const auto& st : anim->states())
+        if (st.clipName == middleClipName) CHECK(st.clipIndex == -1);
+
+    // Mirror del camino de Add: undo() de un Remove es un applyAdd (reinserta
+    // al final), y también tiene que re-resolver.
+    cmd.undo();
+    CHECK(mesh->animationSources.size() == 3u);
+    checkInvariant();
+    for (const auto& st : anim->states())
+        if (st.clipName == middleClipName) CHECK(st.clipIndex != -1);   // ya no huérfano
+}
+
+// Finding 2 de la revisión final: importar el mismo FBX dos veces es legal
+// (AnimatorPanel las distingue con pathOccurrence en el panel), así que dos
+// filas pueden compartir path. El comando original localizaba por path solo,
+// escaneando hacia atrás — quitar la PRIMERA de las dos filas borraba
+// siempre la ÚLTIMA. Este test pincha exactamente ese caso: pide quitar la
+// fila 1 (pathOccurrence=1, la fila 2 queda por delante) y comprueba que
+// desaparece el clip de la fila 1, no el de la fila 2.
+static void test_animation_source_command_remove_targets_clicked_occurrence()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+    go->setMesh(mesh);
+
+    std::vector<std::string> warnings;
+    CHECK(addAnimationSource(*mesh, "assets/modelAnimation.fbx", warnings));
+    CHECK(addAnimationSource(*mesh, "assets/modelAnimation.fbx", warnings));
+    CHECK(mesh->animationSources.size() == 3u);
+    CHECK(mesh->animationSources[1].path == mesh->animationSources[2].path);   // mismo path, filas distintas
+
+    const std::string firstImportedName  = mesh->animationSources[1].clipNames[0];
+    const std::string secondImportedName = mesh->animationSources[2].clipNames[0];
+    CHECK(firstImportedName != secondImportedName);   // uniqueClipName ya lo garantiza
+
+    AnimationSourceCommand cmd(scene, /*renderer=*/nullptr, "Quitar animaciones",
+                                id, /*add=*/false,
+                                mesh->animationSources[1].path,
+                                mesh->animationSources[1].clipNames,
+                                /*pathOccurrence=*/1);
+    cmd.execute();
+
+    CHECK(mesh->animationSources.size() == 2u);
+    bool firstGone = true;
+    bool secondSurvives = false;
+    for (const auto& c : mesh->animationClips)
+    {
+        if (c.name == firstImportedName)  firstGone = false;
+        if (c.name == secondImportedName) secondSurvives = true;
+    }
+    CHECK(firstGone);
+    CHECK(secondSurvives);
+}
+
+// Finding 3 de la revisión final: si el escaneo no encuentra nada que quitar
+// (occurrence que ya no existe: redo tras recarga, o mesh reemplazado entre
+// execute() y undo()), applyRemove no debe mutar el mesh. No hay renderer
+// real en un test headless pa comprobar que se ahorra el rebuild, pero SÍ se
+// puede comprobar que el mesh queda intacto — antes el early-return no
+// existía y el código de más abajo (el rebuild) corría igual sobre una malla
+// sin cambios.
+static void test_animation_source_command_remove_noop_when_occurrence_missing()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+    go->setMesh(mesh);
+
+    std::vector<std::string> warnings;
+    CHECK(addAnimationSource(*mesh, "assets/modelAnimation.fbx", warnings));
+    const size_t sourcesBefore = mesh->animationSources.size();
+    const size_t clipsBefore   = mesh->animationClips.size();
+
+    // pathOccurrence=5: no hay ni de lejos cinco fuentes con ese path.
+    AnimationSourceCommand cmd(scene, /*renderer=*/nullptr, "Quitar animaciones",
+                                id, /*add=*/false,
+                                "assets/modelAnimation.fbx",
+                                std::vector<std::string>{"loQueSea"},
+                                /*pathOccurrence=*/5);
+    cmd.execute();
+
+    CHECK(mesh->animationSources.size() == sourcesBefore);
+    CHECK(mesh->animationClips.size() == clipsBefore);
+}
+
 // El rename es undoable y arrastra a los estados del grafo en ambos sentidos.
 static void test_clip_rename_command()
 {
@@ -1879,6 +2034,9 @@ int main()
 
     test_animation_source_command_add_undo_redo();
     test_animation_source_command_remove_restores_names();
+    test_animation_source_command_remove_rebinds_clip_indices();
+    test_animation_source_command_remove_targets_clicked_occurrence();
+    test_animation_source_command_remove_noop_when_occurrence_missing();
     test_clip_rename_command();
     test_animation_source_command_survives_missing_target();
 

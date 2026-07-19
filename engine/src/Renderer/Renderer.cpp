@@ -205,10 +205,11 @@ namespace DonTopo {
             vkDestroyImageView(m_gpu.device(), imageView, nullptr);
         }                        
         vkDestroySwapchainKHR(m_gpu.device(), m_swapChain, nullptr);
-        // m_descriptorPool se destruye más abajo, DESPUÉS del bucle que llama a
-        // destroySkinnedRenderObject: esa función libera sets del pool (ahora
-        // creado con FREE_DESCRIPTOR_SET_BIT pa soportar rebuildSkinnedMesh), y
-        // hacerlo aquí antes dejaría un handle de pool ya destruido.
+        // m_descriptorPool se destruye más abajo, DESPUÉS de los dos bucles que
+        // llaman a destroyRenderObject y destroySkinnedRenderObject: ambas
+        // funciones liberan sets del pool (creado con
+        // FREE_DESCRIPTOR_SET_BIT pa soportar rebuildSkinnedMesh), y destruir
+        // el pool aquí antes dejaría un handle ya destruido al que liberar.
         for(auto& obj : m_objects)
             destroyRenderObject(obj);
         m_objects.clear();
@@ -1368,6 +1369,14 @@ namespace DonTopo {
         vkFreeMemory(m_gpu.device(),       obj.indexMemory,   nullptr);
         vkDestroyBuffer(m_gpu.device(),    obj.vertexBuffer,  nullptr);
         vkFreeMemory(m_gpu.device(),       obj.vertexMemory,  nullptr);
+
+        // Los sets vuelven al pool (creado con FREE_DESCRIPTOR_SET_BIT), igual
+        // que destroySkinnedRenderObject: sin esto, cada removeStaticObject /
+        // rebuild agotaba m_descriptorPool en vez de reciclar sus sets.
+        if (obj.descriptorSets[0] != VK_NULL_HANDLE)
+            vkFreeDescriptorSets(m_gpu.device(), m_descriptorPool, MAX_FRAMES, obj.descriptorSets);
+        obj.descriptorSets[0] = VK_NULL_HANDLE;
+        obj.descriptorSets[1] = VK_NULL_HANDLE;
     }
 
     void Renderer::createShadowResources()

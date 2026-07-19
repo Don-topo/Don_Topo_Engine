@@ -92,7 +92,13 @@ private:
     std::string m_animSrcError;      // último error, en rojo bajo la lista
     // Clip cuyo nombre se está editando, "" si ninguno.
     std::string m_renamingClip;
-    char m_renameBuf[64] = {};
+    // 256 y no 64: un nombre Mixamo (p.ej. "mixamorig_Explosive_Superhero_Idle")
+    // más el sufijo " (N)" que añade addAnimationSource en colisión ya roza los
+    // 64 bytes, y un snprintf truncado aquí se convierte en un rename real (no
+    // un rechazo) en cuanto el usuario pulsa Enter: silenciosamente perdería
+    // los últimos caracteres del nombre. 256 deja el truncamiento implausible
+    // sin añadir una ruta de rechazo nueva en la UI.
+    char m_renameBuf[256] = {};
 };
 
 } // namespace DonTopo

@@ -135,9 +135,11 @@ void AnimatorComponentCommand::apply(bool add)
 AnimationSourceCommand::AnimationSourceCommand(Scene& scene, Renderer* renderer,
                                                 std::string label, uint64_t id, bool add,
                                                 std::string path,
-                                                std::vector<std::string> clipNames)
+                                                std::vector<std::string> clipNames,
+                                                size_t pathOccurrence)
     : m_scene(scene), m_renderer(renderer), m_label(std::move(label)), m_id(id),
-      m_add(add), m_path(std::move(path)), m_clipNames(std::move(clipNames)) {}
+      m_add(add), m_path(std::move(path)), m_clipNames(std::move(clipNames)),
+      m_pathOccurrence(pathOccurrence) {}
 
 void AnimationSourceCommand::execute() { m_add ? applyAdd() : applyRemove(); }
 void AnimationSourceCommand::undo()    { m_add ? applyRemove() : applyAdd(); }
@@ -157,6 +159,32 @@ void AnimationSourceCommand::applyAdd()
     if (!addAnimationSource(*mesh, m_path, warnings, forced)) return;
 
     m_clipNames = mesh->animationSources.back().clipNames;
+    // addAnimationSource siempre añade al final: la fuente que acabamos de
+    // (re)meter es, por definición, la última con ese path — occurrence 0
+    // contado desde el final. Esto se recalcula en cada applyAdd (tanto el
+    // Add real como el undo de un Remove que reinserta al final) para que un
+    // applyRemove posterior siga apuntando a ELLA y no a la ordinal que se
+    // capturó en el clic original, que tras el reinsert ya no describe su
+    // posición (ver comentario largo en applyRemove).
+    m_pathOccurrence = 0;
+
+    // bindClips resuelve por nombre en Scene::nodeFromJson, pero eso solo
+    // corre en una carga de escena: aquí el mesh muta en caliente (puede que
+    // a mitad de Play Mode) y nadie más re-resuelve clipIndex. Sin esto, los
+    // estados quedan con el índice VIEJO, que tras el add sigue siendo
+    // válido como índice pero puede apuntar a un clip distinto (Finding 1 de
+    // la revisión: "Remove" desplaza el resto de la lista). rebindClips (sin
+    // el reset() de bindClips) preserva m_currentState y los parámetros del
+    // usuario, que bindClips destruiría.
+    if (go->hasAnimator())
+    {
+        std::vector<std::string> bindWarnings;
+        go->getAnimator()->rebindClips(*mesh, &bindWarnings);
+        // Sin canal de log desde Command.cpp (ICommand no conoce
+        // EditorContext/pushLog, a diferencia de AnimatorPanel): se
+        // descartan, mismo precedente que ya sienta este mismo método unas
+        // líneas arriba con los warnings de addAnimationSource.
+    }
 
     if (m_renderer && go->skinnedRenderIndex >= 0)
         m_renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *mesh);
@@ -169,16 +197,56 @@ void AnimationSourceCommand::applyRemove()
     SkinnedMesh* mesh = go->getSkinnedMesh();
     if (!mesh) return;
 
-    // Se localiza por path Y por no-builtin: dos fuentes pueden compartir
-    // path (reimportar el mismo fichero), así que se quita la última que
-    // coincida, que es la que este comando añadió.
+    // Se localiza por path Y por posición, no solo por path: dos fuentes
+    // pueden compartir path a propósito (reimportar el mismo fichero, ver
+    // AnimatorPanel::drawAnimationSources) y coexistir como filas
+    // independientes. m_pathOccurrence cuenta, ESCANEANDO DESDE EL FINAL,
+    // cuántas fuentes no-builtin con ese path hay que saltarse antes de
+    // llegar a la que se quiere quitar (0 = la primera que se encuentra
+    // yendo desde el final, o sea la más reciente).
+    //
+    // Por qué desde el final y no un índice absoluto: undo() de un Remove
+    // reinserta la fuente al FINAL del vector (applyAdd), no en su posición
+    // original — así que su índice absoluto cambia entre el borrado y un
+    // redo posterior. Contar desde el final sí es estable: applyAdd
+    // recalcula m_pathOccurrence a 0 cada vez que reinserta (porque lo que
+    // acaba de reinsertar es, por definición, lo último), así que un
+    // redo inmediato vuelve a encontrar exactamente esa misma fuente aquí.
+    // El único caso en que m_pathOccurrence vale algo distinto de 0 es el
+    // clic ORIGINAL del usuario sobre una fila que no es la última con ese
+    // path (el bug que corrige este fix): AnimatorPanel::drawAnimationSources
+    // lo calcula en ese momento.
+    bool removed = false;
+    size_t skipped = 0;
     for (size_t i = mesh->animationSources.size(); i-- > 0; )
     {
         const auto& src = mesh->animationSources[i];
         if (src.builtin || src.path != m_path) continue;
+        if (skipped != m_pathOccurrence) { skipped++; continue; }
         m_clipNames = src.clipNames;
         removeAnimationSource(*mesh, i);
+        removed = true;
         break;
+    }
+
+    // Nada que quitar (redo tras recarga de escena, o mesh reemplazado entre
+    // execute() y undo()): rebuildSkinnedMesh es un vkDeviceWaitIdle + un
+    // destroy/recreate completo de buffers/texturas/descriptor sets, y
+    // pagarlo por una malla que no cambió es puro desperdicio (applyAdd ya
+    // hacía este mismo early-return con su "if (!addAnimationSource(...))
+    // return;").
+    if (!removed) return;
+
+    // Mismo motivo que en applyAdd: el mesh mutó en caliente y clipIndex
+    // apunta a índices que ya no describen los mismos clips (el hueco que
+    // deja el clip quitado desplaza a los de detrás). reset() no: se
+    // preserva el estado runtime del Animator.
+    if (go->hasAnimator())
+    {
+        std::vector<std::string> bindWarnings;
+        go->getAnimator()->rebindClips(*mesh, &bindWarnings);
+        // Se descartan por el mismo motivo que en applyAdd: no hay canal de
+        // log disponible desde un ICommand.
     }
 
     if (m_renderer && go->skinnedRenderIndex >= 0)

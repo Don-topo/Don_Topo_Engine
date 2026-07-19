@@ -194,7 +194,7 @@ namespace DonTopo
         for (auto& f : m_floats)   f.second = 0.0f;
     }
 
-    void AnimatorComponent::bindClips(const SkinnedMesh& mesh, std::vector<std::string>* warnings)
+    void AnimatorComponent::rebindClips(const SkinnedMesh& mesh, std::vector<std::string>* warnings)
     {
         for (auto& st : m_states)
         {
@@ -215,6 +215,11 @@ namespace DonTopo
             st.ticksPerSecond = mesh.animationClips[found].ticksPerSecond;
             // st.loop NO se toca: es autoría del usuario, no un dato del FBX.
         }
+    }
+
+    void AnimatorComponent::bindClips(const SkinnedMesh& mesh, std::vector<std::string>* warnings)
+    {
+        rebindClips(mesh, warnings);
         reset();
     }
 

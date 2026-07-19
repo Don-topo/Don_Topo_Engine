@@ -691,14 +691,34 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
         // Diferido fuera del for: mutar animationSources dentro del propio
         // bucle que lo recorre invalidaría el iterador de este mismo frame.
         const AnimationSource& src = mesh->animationSources[(size_t)sourceToRemove];
+
+        // Ordinal contado DESDE EL FINAL (0 = la última con ese path), no
+        // desde el principio: es lo que AnimationSourceCommand::applyRemove
+        // espera (ver el comentario largo ahí sobre por qué el escaneo va
+        // desde el final). Cuenta cuántas fuentes no-builtin con el mismo
+        // path hay POR DELANTE de la fila pulsada: si el usuario quita la
+        // primera de dos filas con el mismo path, esto vale 1 (la segunda
+        // fila queda por delante), y el comando la salta correctamente en
+        // vez de quitar -por backward-scan ciego- la última (el bug que
+        // corrige este fix).
+        size_t pathOccurrence = 0;
+        for (size_t k = (size_t)sourceToRemove + 1; k < mesh->animationSources.size(); k++)
+        {
+            const auto& later = mesh->animationSources[k];
+            if (!later.builtin && later.path == src.path) pathOccurrence++;
+        }
+
         auto cmd = std::make_unique<AnimationSourceCommand>(
             *ctx.scene, ctx.renderer, "Quitar animaciones", go->id,
-            /*add=*/false, src.path, src.clipNames);
+            /*add=*/false, src.path, src.clipNames, pathOccurrence);
         cmd->execute();
         ctx.undo->push(std::move(cmd));
         // Los estados que usaran esos clips quedan huérfanos a propósito: el
         // grafo es trabajo del usuario y borrarlo por él sería peor que dejarlo
-        // avisado. bindClips los reporta en la siguiente vinculación.
+        // avisado. AnimationSourceCommand::applyRemove ya llama a
+        // rebindClips en caliente, así que clipIndex queda en -1 en el
+        // momento del borrado (no hace falta esperar a una recarga de
+        // escena o a un ciclo de Play/Stop).
         ctx.pushLog("Animator: fuente de animación quitada; los estados que la usaran quedan sin clip");
     }
 

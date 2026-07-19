@@ -110,7 +110,21 @@ namespace DonTopo
             // Resuelve clipName -> clipIndex y cachea duration/ticksPerSecond de
             // cada estado. Un clipName que no exista en la malla deja clipIndex a
             // -1 y empuja un aviso (falla ruidoso, no silencioso). NO toca loop.
+            // Termina en reset(): pensado pa carga de escena / entrada a Play,
+            // donde reiniciar m_currentState y los parámetros es lo correcto.
             void bindClips(const SkinnedMesh& mesh, std::vector<std::string>* warnings = nullptr);
+
+            // El bucle de resolución de bindClips, SIN el reset() final. Lo usan
+            // los comandos del editor (AnimationSourceCommand) que mutan
+            // animationClips en caliente: tras añadir/quitar una fuente de
+            // animación, m_states[].clipIndex apunta a índices del array VIEJO
+            // (o a un índice que ahora es un clip distinto, ver Finding 1 de la
+            // revisión), así que hay que re-resolver por nombre. Pero es en
+            // caliente: puede correr a mitad de Play Mode, y bindClips's reset()
+            // borraría m_currentState y todos los bool/trigger/int/float del
+            // usuario, que es justo lo que NO se quiere en ese momento (a
+            // diferencia de una carga de escena, donde reset() es correcto).
+            void rebindClips(const SkinnedMesh& mesh, std::vector<std::string>* warnings = nullptr);
 
             // Reescribe clipName en los estados que usaban oldName. Devuelve
             // cuántos cambió. Lo llama el Animator Panel tras renombrar un clip
