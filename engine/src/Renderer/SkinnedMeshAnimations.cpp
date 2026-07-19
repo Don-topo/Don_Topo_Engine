@@ -48,12 +48,12 @@ namespace DonTopo
             const bool forced = forcedNames && i < forcedNames->size();
             if (forced)
             {
-                // El nombre forzado manda SI está libre (un rename tiene que
-                // sobrevivir a un save/load intacto). Si ya está en uso —por
-                // un clip previo, o por un forcedName anterior de esta misma
-                // importación— uniqueClipName lo devuelve tal cual, así que
-                // comparar el resultado con lo pedido detecta la colisión sin
-                // duplicar la lógica de "taken".
+                // El nombre forzado manda SI está libre: uniqueClipName lo
+                // devuelve tal cual y un rename sobrevive a un save/load
+                // intacto. Si ya está en uso —por un clip previo, o por un
+                // forcedName anterior de esta misma importación— devuelve una
+                // variante con sufijo, así que comparar el resultado con lo
+                // pedido detecta la colisión sin duplicar la lógica de "taken".
                 const std::string& wanted = (*forcedNames)[i];
                 clip.name = uniqueClipName(mesh.animationClips, wanted);
                 if (clip.name != wanted)
