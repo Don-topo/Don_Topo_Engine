@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 #include "DonTopo/Core/CameraComponent.h"
@@ -198,6 +199,60 @@ private:
     uint64_t m_id;
     bool m_add;
     AnimatorComponent m_state;
+};
+
+// Añade (add=true) o quita (add=false) una fuente de animación del SkinnedMesh
+// del GameObject id; undo() hace lo contrario. Mismo contrato que el resto:
+// resuelve el GameObject por id en cada execute()/undo().
+//
+// m_clipNames guarda los nombres que la fuente aportó. Sin él, deshacer un
+// Remove reimportaría el fichero con los nombres del FBX y se perdería
+// cualquier rename — dejando huérfanos los estados del grafo que los usaban.
+//
+// renderer puede ser nullptr (tests headless). Cuando no lo es, los SSBOs del
+// objeto skinned se rehacen: la lista de clips ha cambiado y la GPU tiene la
+// vieja.
+class AnimationSourceCommand : public ICommand {
+public:
+    AnimationSourceCommand(Scene& scene, Renderer* renderer, std::string label,
+                            uint64_t id, bool add, std::string path,
+                            std::vector<std::string> clipNames);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void applyAdd();
+    void applyRemove();
+
+    Scene& m_scene;
+    Renderer* m_renderer;
+    std::string m_label;
+    uint64_t m_id;
+    bool m_add;
+    std::string m_path;
+    std::vector<std::string> m_clipNames;
+};
+
+// Renombra un clip del mesh y arrastra los estados del Animator que lo usaban.
+// No toca la GPU: los buffers van por índice de clip, y renombrar no reordena
+// nada.
+class ClipRenameCommand : public ICommand {
+public:
+    ClipRenameCommand(Scene& scene, std::string label, uint64_t id,
+                       std::string oldName, std::string newName);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(const std::string& from, const std::string& to);
+
+    Scene& m_scene;
+    std::string m_label;
+    uint64_t m_id;
+    std::string m_oldName;
+    std::string m_newName;
 };
 
 } // namespace DonTopo

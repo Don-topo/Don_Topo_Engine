@@ -2,6 +2,7 @@
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Renderer/Renderer.h"
+#include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include <algorithm>
@@ -129,6 +130,78 @@ void AnimatorComponentCommand::apply(bool add)
         return;
     }
     go->setAnimator(std::make_shared<AnimatorComponent>(m_state));
+}
+
+AnimationSourceCommand::AnimationSourceCommand(Scene& scene, Renderer* renderer,
+                                                std::string label, uint64_t id, bool add,
+                                                std::string path,
+                                                std::vector<std::string> clipNames)
+    : m_scene(scene), m_renderer(renderer), m_label(std::move(label)), m_id(id),
+      m_add(add), m_path(std::move(path)), m_clipNames(std::move(clipNames)) {}
+
+void AnimationSourceCommand::execute() { m_add ? applyAdd() : applyRemove(); }
+void AnimationSourceCommand::undo()    { m_add ? applyRemove() : applyAdd(); }
+
+void AnimationSourceCommand::applyAdd()
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    SkinnedMesh* mesh = go->getSkinnedMesh();
+    if (!mesh) return;
+
+    std::vector<std::string> warnings;
+    // m_clipNames vacío = primera vez (el usuario acaba de elegir el
+    // fichero): los nombres los decide addAnimationSource y se guardan aquí
+    // para que un redo posterior reproduzca exactamente los mismos.
+    const std::vector<std::string>* forced = m_clipNames.empty() ? nullptr : &m_clipNames;
+    if (!addAnimationSource(*mesh, m_path, warnings, forced)) return;
+
+    m_clipNames = mesh->animationSources.back().clipNames;
+
+    if (m_renderer && go->skinnedRenderIndex >= 0)
+        m_renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *mesh);
+}
+
+void AnimationSourceCommand::applyRemove()
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    SkinnedMesh* mesh = go->getSkinnedMesh();
+    if (!mesh) return;
+
+    // Se localiza por path Y por no-builtin: dos fuentes pueden compartir
+    // path (reimportar el mismo fichero), así que se quita la última que
+    // coincida, que es la que este comando añadió.
+    for (size_t i = mesh->animationSources.size(); i-- > 0; )
+    {
+        const auto& src = mesh->animationSources[i];
+        if (src.builtin || src.path != m_path) continue;
+        m_clipNames = src.clipNames;
+        removeAnimationSource(*mesh, i);
+        break;
+    }
+
+    if (m_renderer && go->skinnedRenderIndex >= 0)
+        m_renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *mesh);
+}
+
+ClipRenameCommand::ClipRenameCommand(Scene& scene, std::string label, uint64_t id,
+                                      std::string oldName, std::string newName)
+    : m_scene(scene), m_label(std::move(label)), m_id(id),
+      m_oldName(std::move(oldName)), m_newName(std::move(newName)) {}
+
+void ClipRenameCommand::execute() { apply(m_oldName, m_newName); }
+void ClipRenameCommand::undo()    { apply(m_newName, m_oldName); }
+
+void ClipRenameCommand::apply(const std::string& from, const std::string& to)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    SkinnedMesh* mesh = go->getSkinnedMesh();
+    if (!mesh) return;
+    if (!renameClip(*mesh, from, to)) return;
+    if (go->hasAnimator())
+        go->getAnimator()->renameClipReferences(from, to);
 }
 
 } // namespace DonTopo

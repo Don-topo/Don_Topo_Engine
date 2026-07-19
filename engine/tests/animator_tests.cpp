@@ -1354,6 +1354,112 @@ static void test_animator_command_survives_missing_target()
     cmd.undo();
 }
 
+// Añadir una fuente pasa por el stack: sin esto, un Ctrl+Z tras importar por
+// error un FBX de 60 clips no tendría vuelta atrás.
+static void test_animation_source_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+    const size_t before = mesh->animationClips.size();
+    go->setMesh(mesh);
+
+    AnimationSourceCommand cmd(scene, /*renderer=*/nullptr, "Añadir animaciones",
+                                id, /*add=*/true, "assets/modelAnimation.fbx",
+                                /*clipNames=*/{});
+
+    cmd.execute();
+    CHECK(mesh->animationSources.size() == 2u);
+    CHECK(mesh->animationClips.size() == before * 2);
+
+    cmd.undo();
+    CHECK(mesh->animationSources.size() == 1u);
+    CHECK(mesh->animationClips.size() == before);
+
+    // Redo: vuelven los mismos clips con los mismos nombres que la primera vez
+    cmd.execute();
+    CHECK(mesh->animationSources.size() == 2u);
+    CHECK(mesh->animationClips.size() == before * 2);
+}
+
+// El Remove es el mismo comando con add=false, y su undo tiene que devolver los
+// clips con los nombres EXACTOS que tenían (por eso el comando guarda
+// clipNames): si volvieran con el nombre del fichero, los estados del grafo
+// quedarían huérfanos tras un Ctrl+Z.
+static void test_animation_source_command_remove_restores_names()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+    go->setMesh(mesh);
+
+    std::vector<std::string> warnings;
+    CHECK(addAnimationSource(*mesh, "assets/modelAnimation.fbx", warnings));
+    const std::string imported = mesh->animationSources[1].clipNames[0];
+    CHECK(renameClip(*mesh, imported, "MiSalto"));
+    const std::vector<std::string> names = mesh->animationSources[1].clipNames;
+
+    AnimationSourceCommand cmd(scene, nullptr, "Quitar animaciones",
+                                id, /*add=*/false, "assets/modelAnimation.fbx", names);
+
+    cmd.execute();
+    CHECK(mesh->animationSources.size() == 1u);
+
+    cmd.undo();
+    CHECK(mesh->animationSources.size() == 2u);
+    CHECK(mesh->animationSources[1].clipNames == names);
+    bool encontrado = false;
+    for (const auto& c : mesh->animationClips)
+        if (c.name == "MiSalto") encontrado = true;
+    CHECK(encontrado);
+}
+
+// El rename es undoable y arrastra a los estados del grafo en ambos sentidos.
+static void test_clip_rename_command()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    auto mesh = std::make_shared<SkinnedMesh>();
+    AnimationClip c; c.name = "walk"; mesh->animationClips.push_back(c);
+    AnimationSource src; src.path = "x.fbx"; src.builtin = true; src.clipNames = { "walk" };
+    mesh->animationSources.push_back(src);
+    go->setMesh(mesh);
+
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State st; st.name = "Andar"; st.clipName = "walk";
+    a->addState(st);
+    go->setAnimator(a);
+
+    ClipRenameCommand cmd(scene, "Renombrar clip", id, "walk", "andar");
+
+    cmd.execute();
+    CHECK(mesh->animationClips[0].name == "andar");
+    CHECK(a->states()[0].clipName == "andar");
+
+    cmd.undo();
+    CHECK(mesh->animationClips[0].name == "walk");
+    CHECK(a->states()[0].clipName == "walk");
+}
+
+// Igual que el resto de comandos: el objeto puede haber desaparecido entre
+// execute y undo. Se resuelve por id cada vez, nunca por puntero crudo.
+static void test_animation_source_command_survives_missing_target()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    AnimationSourceCommand cmd(scene, nullptr, "Añadir animaciones",
+                                id, true, "assets/modelAnimation.fbx", {});
+    scene.removeGameObject(go);
+    cmd.execute();   // findById devuelve nullptr y sale sin tocar nada
+    cmd.undo();
+}
+
 // La API que consume Lua: los parámetros se consultan por nombre y solo si
 // están declarados en el grafo. Un nombre no declarado se ignora en vez de
 // crear un parámetro fantasma que ninguna condición miraría.
@@ -1770,6 +1876,11 @@ int main()
     test_animator_command_add_undo_redo();
     test_animator_command_remove();
     test_animator_command_survives_missing_target();
+
+    test_animation_source_command_add_undo_redo();
+    test_animation_source_command_remove_restores_names();
+    test_clip_rename_command();
+    test_animation_source_command_survives_missing_target();
 
     am.shutdown();
     pm.shutdown();
