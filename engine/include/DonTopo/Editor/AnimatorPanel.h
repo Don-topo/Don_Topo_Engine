@@ -1,8 +1,11 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <memory>
+#include <vector>
 
 namespace ax::NodeEditor { struct EditorContext; }
+namespace IGFD { class FileDialog; }
 
 namespace DonTopo {
 
@@ -38,6 +41,15 @@ private:
     void drawParameterList(EditorContext& ctx, GameObject* go);
     void drawGraph(EditorContext& ctx, GameObject* go);
     void drawConditionsPopup(EditorContext& ctx, GameObject* go);
+    // Lista de ficheros FBX que aportan clips, con Add/Remove y rename inline.
+    void drawAnimationSources(EditorContext& ctx, GameObject* go);
+    // Drena el diálogo de fichero cada frame, incondicionalmente: si solo se
+    // drenara con el GameObject correcto seleccionado, cambiar de selección con
+    // el diálogo abierto dejaría m_animSrcDlgOpen atascado en true para siempre.
+    // Mismo patrón que PropertiesPanel::drawMeshDialog.
+    void drawAnimationSourceDialog(EditorContext& ctx);
+    // Importa path como fuente del GameObject seleccionado, vía comando (undo).
+    void importAnimationSource(EditorContext& ctx, GameObject* go, const std::string& path);
 
     ax::NodeEditor::EditorContext* m_ctx = nullptr;
     bool m_open = false;   // arranca cerrado: es un panel especializado
@@ -60,6 +72,16 @@ private:
 
     char m_newParamName[64] = {};
     int  m_newParamType     = 0;   // índice en ParamType: 0 bool, 1 trigger, 2 int, 3 float
+
+    // Instancia propia y no compartida con los diálogos de PropertiesPanel:
+    // IGFD guarda estado por instancia, y compartirla haría que redimensionar
+    // un popup tocara el otro.
+    std::unique_ptr<IGFD::FileDialog> m_animSrcDialog;
+    bool m_animSrcDlgOpen = false;
+    std::string m_animSrcError;      // último error, en rojo bajo la lista
+    // Clip cuyo nombre se está editando, "" si ninguno.
+    std::string m_renamingClip;
+    char m_renameBuf[64] = {};
 };
 
 } // namespace DonTopo

@@ -1,11 +1,20 @@
 #include "DonTopo/Editor/AnimatorPanel.h"
 #include "DonTopo/Editor/EditorContext.h"
+#include "DonTopo/Editor/UndoManager.h"
+#include "DonTopo/Editor/Command.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Core/Scene.h"
+#include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include <imgui.h>
 #include <imgui_node_editor.h>
+#include <ImGuiFileDialog.h>
 #include <algorithm>
+#include <cstdio>
+#include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -78,6 +87,7 @@ AnimatorPanel::AnimatorPanel()
     // de verdad peleándose.
     config.SettingsFile = nullptr;
     m_ctx = ed::CreateEditor(&config);
+    m_animSrcDialog = std::make_unique<IGFD::FileDialog>();
 }
 
 AnimatorPanel::~AnimatorPanel()
@@ -516,6 +526,201 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
     ImGui::EndPopup();
 }
 
+void AnimatorPanel::importAnimationSource(EditorContext& ctx, GameObject* go, const std::string& path)
+{
+    SkinnedMesh* mesh = go->getSkinnedMesh();
+    if (!mesh) return;
+
+    std::string ext = std::filesystem::path(path).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (ext != ".fbx")
+    {
+        m_animSrcError = "Formato no soportado: " + ext;
+        return;
+    }
+
+    // Ensayo en seco sobre una copia: el comando no puede decir "no" a medias
+    // (AnimationSourceCommand::applyAdd descarta los warnings de
+    // addAnimationSource y simplemente no hace nada si falla), y así el error
+    // del loader (rig equivocado, fichero sin animaciones) llega al usuario
+    // antes de meter nada en el stack de undo.
+    SkinnedMesh probe = *mesh;
+    std::vector<std::string> warnings;
+    const bool ok = addAnimationSource(probe, path, warnings);
+    for (const auto& w : warnings) ctx.pushLog("Animator: " + w);
+
+    if (!ok)
+    {
+        m_animSrcError = warnings.empty() ? ("No se pudieron importar animaciones de " + path)
+                                           : warnings.back();
+        return;
+    }
+    m_animSrcError.clear();
+
+    auto cmd = std::make_unique<AnimationSourceCommand>(
+        *ctx.scene, ctx.renderer, "Añadir animaciones", go->id,
+        /*add=*/true, path, std::vector<std::string>{});
+    cmd->execute();
+    ctx.undo->push(std::move(cmd));
+    ctx.pushLog("Animator: animaciones de '" + path + "' importadas");
+}
+
+void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
+{
+    SkinnedMesh* mesh = go->getSkinnedMesh();
+    if (!mesh) return;
+
+    if (!ImGui::CollapsingHeader("Animation Sources", ImGuiTreeNodeFlags_DefaultOpen))
+        return;
+
+    int sourceToRemove = -1;
+    for (size_t s = 0; s < mesh->animationSources.size(); s++)
+    {
+        const AnimationSource& src = mesh->animationSources[s];
+        ImGui::PushID((int)s);
+
+        const std::string file = std::filesystem::path(src.path).filename().string();
+        const std::string label = file + "  (" + std::to_string(src.clipNames.size()) + " clips)"
+                                + (src.builtin ? "  [modelo]" : "");
+
+        const bool open = ImGui::TreeNodeEx("##src", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", label.c_str());
+
+        // La fuente builtin es el FBX del modelo: quitarla dejaría la malla sin
+        // el fichero que la creó, así que el botón existe pero deshabilitado
+        // (mostrarlo y explicarlo enseña la regla; ocultarlo la esconde).
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20.0f);
+        ImGui::BeginDisabled(src.builtin);
+        if (ImGui::SmallButton("X")) sourceToRemove = (int)s;
+        ImGui::EndDisabled();
+        if (src.builtin && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Es el FBX del modelo: sus animaciones no se pueden quitar por separado.");
+
+        if (open)
+        {
+            for (const std::string& clipName : src.clipNames)
+            {
+                ImGui::PushID(clipName.c_str());
+                if (m_renamingClip == clipName)
+                {
+                    ImGui::SetNextItemWidth(180.0f);
+                    if (ImGui::InputText("##rename", m_renameBuf, sizeof(m_renameBuf),
+                                          ImGuiInputTextFlags_EnterReturnsTrue))
+                    {
+                        const std::string nuevo = m_renameBuf;
+                        // Enter sin cambiar el texto (p.ej. doble clic seguido de
+                        // Enter por error): renameClip lo rechaza igual que un
+                        // vacío o un duplicado (oldName == newName -> false), así
+                        // que aquí se corta antes de crear el comando — si no, el
+                        // escaneo de más abajo encuentra el clip con su nombre de
+                        // siempre, lo da por "aplicado" y mete en el undo stack
+                        // una entrada que no cambia nada.
+                        if (nuevo != clipName)
+                        {
+                            auto cmd = std::make_unique<ClipRenameCommand>(
+                                *ctx.scene, "Renombrar clip", go->id, clipName, nuevo);
+                            cmd->execute();
+                            // El comando no informa de si el rename se aplicó, así
+                            // que se comprueba en el mesh: un duplicado o un vacío
+                            // no debe entrar en el stack de undo.
+                            bool aplicado = false;
+                            for (const auto& c : mesh->animationClips)
+                                if (c.name == nuevo) aplicado = true;
+                            if (aplicado)
+                            {
+                                ctx.undo->push(std::move(cmd));
+                                ctx.pushLog("Animator: clip '" + clipName + "' renombrado a '" + nuevo + "'");
+                            }
+                            else
+                            {
+                                m_animSrcError = "Nombre inválido o ya en uso: " + nuevo;
+                            }
+                        }
+                        m_renamingClip.clear();
+                    }
+                    // Clic fuera sin pulsar Enter (InputTextFlags_EnterReturnsTrue
+                    // no dispara ahí): se cierra el modo edición sin tocar nada,
+                    // ni el mesh ni el undo stack — el usuario se arrepintió.
+                    if (ImGui::IsItemDeactivated()) m_renamingClip.clear();
+                }
+                else
+                {
+                    ImGui::BulletText("%s", clipName.c_str());
+                    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0))
+                    {
+                        m_renamingClip = clipName;
+                        std::snprintf(m_renameBuf, sizeof(m_renameBuf), "%s", clipName.c_str());
+                    }
+                }
+                ImGui::PopID();
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
+
+    if (sourceToRemove >= 0)
+    {
+        // Diferido fuera del for: mutar animationSources dentro del propio
+        // bucle que lo recorre invalidaría el iterador de este mismo frame.
+        const AnimationSource& src = mesh->animationSources[(size_t)sourceToRemove];
+        auto cmd = std::make_unique<AnimationSourceCommand>(
+            *ctx.scene, ctx.renderer, "Quitar animaciones", go->id,
+            /*add=*/false, src.path, src.clipNames);
+        cmd->execute();
+        ctx.undo->push(std::move(cmd));
+        // Los estados que usaran esos clips quedan huérfanos a propósito: el
+        // grafo es trabajo del usuario y borrarlo por él sería peor que dejarlo
+        // avisado. bindClips los reporta en la siguiente vinculación.
+        ctx.pushLog("Animator: fuente de animación quitada; los estados que la usaran quedan sin clip");
+    }
+
+    if (ImGui::Button("Add Animation FBX..."))
+    {
+        IGFD::FileDialogConfig cfg;
+        // "assets", como el diálogo de malla de PropertiesPanel: los FBX de
+        // este proyecto viven ahí, y abrir en la raíz del repo obligaría a
+        // navegar cada vez.
+        cfg.path = "assets";
+        cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                    ImGuiFileDialogFlags_HideColumnDate |
+                    ImGuiFileDialogFlags_DisableThumbnailMode |
+                    ImGuiFileDialogFlags_DisablePlaceMode;
+        m_animSrcDialog->OpenDialog("AddAnimSrcDlg", "Choose Animation FBX", ".fbx", cfg);
+        m_animSrcDlgOpen = true;
+    }
+
+    // Drop target: el Content Browser emite "DT_ASSET_PATH" (ver
+    // ContentBrowserPanel::BeginDragDropSource), no "CONTENT_BROWSER_ITEM" —
+    // mismo id y mismo patrón (payload->Data es char* terminado en '\0',
+    // tamaño = fullPath.size()+1) que usa PropertiesPanel::drawMeshSection
+    // para su propio drop target de .fbx.
+    ImGui::SameLine();
+    ImGui::TextDisabled("(o arrastra un .fbx aquí)");
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+            importAnimationSource(ctx, go, std::string(static_cast<const char*>(payload->Data)));
+        ImGui::EndDragDropTarget();
+    }
+
+    if (!m_animSrcError.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_animSrcError.c_str());
+
+    ImGui::Separator();
+}
+
+void AnimatorPanel::drawAnimationSourceDialog(EditorContext& ctx)
+{
+    if (!m_animSrcDlgOpen) return;
+    if (!m_animSrcDialog->Display("AddAnimSrcDlg")) return;
+
+    if (m_animSrcDialog->IsOk() && ctx.selected && ctx.selected->hasAnimator())
+        importAnimationSource(ctx, ctx.selected, m_animSrcDialog->GetFilePathName());
+
+    m_animSrcDialog->Close();
+    m_animSrcDlgOpen = false;
+}
+
 void AnimatorPanel::draw(EditorContext& ctx)
 {
     if (!m_open) return;
@@ -527,9 +732,16 @@ void AnimatorPanel::draw(EditorContext& ctx)
         ImGui::TextDisabled("Selecciona un GameObject con componente Animator.");
         ImGui::TextDisabled("Properties > Add > Animator");
         m_boundTo = nullptr;
+        // El diálogo se drena aquí también: si estaba abierto y el usuario
+        // deselecciona (o selecciona un GameObject sin Animator) antes de
+        // elegir fichero, este early-return no puede saltárselo o
+        // m_animSrcDlgOpen se queda atascado en true para siempre.
+        drawAnimationSourceDialog(ctx);
         ImGui::End();
         return;
     }
+
+    drawAnimationSources(ctx, go);
 
     // --- Añadir estado desde los clips del modelo ---
     SkinnedMesh* mesh = go->getSkinnedMesh();
@@ -586,6 +798,10 @@ void AnimatorPanel::draw(EditorContext& ctx)
     syncPositionsToComponent(go);
     ed::SetCurrentEditor(nullptr);
     ImGui::EndChild();
+
+    // Fuera del early-return de "sin Animator": el diálogo tiene que drenarse
+    // aunque la selección cambie mientras está abierto.
+    drawAnimationSourceDialog(ctx);
 
     ImGui::End();
 }
