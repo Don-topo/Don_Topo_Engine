@@ -108,11 +108,25 @@ void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, const std::string&
 
     try
     {
-        auto mesh = std::make_shared<Mesh>(ModelLoader::load(path));
-        ctx.selected->staticRenderIndex = ctx.renderer->addStaticMesh(*mesh);
+        // loadAuto decide skinned vs estático mirando el FBX. Un fichero rigged
+        // sin animaciones tiene que entrar skinned igual: es lo que habilita el
+        // botón Animator, y los clips vendrán luego de otros ficheros.
+        auto mesh = ModelLoader::loadAuto(path);
+        // setMesh antes del registro: así isSkinned() resuelve el tipo por
+        // nosotros y no hay que repetir el dynamic_cast aquí.
         ctx.selected->setMesh(std::move(mesh));
+
+        if (ctx.selected->isSkinned())
+            ctx.selected->skinnedRenderIndex = ctx.renderer->addSkinnedMesh(*ctx.selected->getSkinnedMesh());
+        else
+            ctx.selected->staticRenderIndex  = ctx.renderer->addStaticMesh(*ctx.selected->getMesh());
+
         m_meshLoadError.clear();
-        ctx.pushLog("Componente Mesh añadido a '" + ctx.selected->name + "'");
+        // Distinguir los dos casos en el log: sin esto, ante un FBX que el
+        // usuario creía rigged y no lo está, el botón Animator se queda gris
+        // sin ninguna pista de por qué.
+        ctx.pushLog(std::string(ctx.selected->isSkinned() ? "Componente Skinned Mesh" : "Componente Mesh")
+                    + " añadido a '" + ctx.selected->name + "'");
     }
     catch (const std::exception& e)
     {
