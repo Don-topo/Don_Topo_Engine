@@ -3,6 +3,7 @@
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Renderer/Renderer.h"
+#include "DonTopo/Renderer/SkinnedMesh.h"
 #include <imgui.h>
 #include <algorithm>
 #include <cstring>
@@ -63,6 +64,25 @@ std::string replacePathPrefix(const std::string& original,
     if (canonOriginalStr.size() <= canonOldDirStr.size())
         return newDir.string(); // defensive: pathUnderDir should already guarantee original is strictly under oldDir
     return newDir.string() + canonOriginalStr.substr(canonOldDirStr.size());
+}
+
+// Todos los materiales de un GameObject en una sola lista, sea la malla
+// estática o skinned. ModelLoader::loadSkinned NUNCA puebla el Mesh::material
+// heredado: reparte un Material por submalla en SkinnedMesh::materials, así
+// que mirar sólo material dejaba a cualquier personaje con rig fuera del
+// tracking de texturas — borrar una textura suya decía "0 objetos afectados"
+// en un diálogo destructivo. Devuelve punteros al material real para que los
+// callers puedan limpiar campos, no copias.
+std::vector<DonTopo::Material*> materialsOf(DonTopo::GameObject* go)
+{
+    std::vector<DonTopo::Material*> out;
+    if (!go->hasMesh()) return out;
+    if (DonTopo::SkinnedMesh* sm = go->getSkinnedMesh())
+        for (DonTopo::Material& m : sm->materials)
+            out.push_back(&m);
+    else
+        out.push_back(&go->getMesh()->material);
+    return out;
 }
 
 // Nombre de fichero/carpeta válido: no vacío tras trim, sin separadores de
@@ -183,11 +203,14 @@ int ContentBrowserPanel::countSceneReferences(GameObject* sceneRoot, const std::
             return isDir ? pathUnderDir(field, path) : samePath(field, path);
         };
 
+        bool textureMatches = false;
+        for (const Material* mat : materialsOf(go))
+            if (matches(mat->texturePath) || matches(mat->normalMapPath) ||
+                matches(mat->metallicRoughnessPath))
+                textureMatches = true;
+
         bool meshMatches = go->hasMesh() &&
-            (matches(go->getMesh()->sourcePath) ||
-             matches(go->getMesh()->material.texturePath) ||
-             matches(go->getMesh()->material.normalMapPath) ||
-             matches(go->getMesh()->material.metallicRoughnessPath));
+            (matches(go->getMesh()->sourcePath) || textureMatches);
         bool audioMatches = go->hasAudioClip() && matches(go->getAudioClip()->getPath());
         if (meshMatches || audioMatches)
             ++count;
@@ -216,22 +239,36 @@ void ContentBrowserPanel::detachSceneReferencesForDelete(EditorContext& ctx, Gam
                 if (ctx.renderer)
                     ctx.renderer->removeMeshComponent(go);
             }
-            else if (ctx.renderer && go->staticRenderIndex >= 0)
+            else
             {
-                if (matches(mesh->material.texturePath))
+                // El path se limpia SIEMPRE que casa: el fichero se va del
+                // disco, dejarlo apuntado en el material sólo garantiza una
+                // referencia rota al volver a cargar la escena. El hot-swap a
+                // la textura "missing" en cambio sólo existe para el pipeline
+                // estático (replaceStaticTextureWithMissing indexa m_objects),
+                // así que en skinned la GPU sigue mostrando la textura vieja
+                // hasta la siguiente carga de la malla.
+                const bool canSwap = ctx.renderer && go->staticRenderIndex >= 0;
+                for (Material* mat : materialsOf(go))
                 {
-                    mesh->material.texturePath.clear();
-                    ctx.renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, Renderer::TextureSlot::Diffuse);
-                }
-                if (matches(mesh->material.normalMapPath))
-                {
-                    mesh->material.normalMapPath.clear();
-                    ctx.renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, Renderer::TextureSlot::Normal);
-                }
-                if (matches(mesh->material.metallicRoughnessPath))
-                {
-                    mesh->material.metallicRoughnessPath.clear();
-                    ctx.renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, Renderer::TextureSlot::MetallicRoughness);
+                    if (matches(mat->texturePath))
+                    {
+                        mat->texturePath.clear();
+                        if (canSwap)
+                            ctx.renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, Renderer::TextureSlot::Diffuse);
+                    }
+                    if (matches(mat->normalMapPath))
+                    {
+                        mat->normalMapPath.clear();
+                        if (canSwap)
+                            ctx.renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, Renderer::TextureSlot::Normal);
+                    }
+                    if (matches(mat->metallicRoughnessPath))
+                    {
+                        mat->metallicRoughnessPath.clear();
+                        if (canSwap)
+                            ctx.renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, Renderer::TextureSlot::MetallicRoughness);
+                    }
                 }
             }
         }
