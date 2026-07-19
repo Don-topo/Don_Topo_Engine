@@ -197,36 +197,60 @@ void AnimationSourceCommand::applyRemove()
     SkinnedMesh* mesh = go->getSkinnedMesh();
     if (!mesh) return;
 
-    // Se localiza por path Y por posición, no solo por path: dos fuentes
-    // pueden compartir path a propósito (reimportar el mismo fichero, ver
-    // AnimatorPanel::drawAnimationSources) y coexistir como filas
-    // independientes. m_pathOccurrence cuenta, ESCANEANDO DESDE EL FINAL,
-    // cuántas fuentes no-builtin con ese path hay que saltarse antes de
-    // llegar a la que se quiere quitar (0 = la primera que se encuentra
-    // yendo desde el final, o sea la más reciente).
+    // Localización por IDENTIDAD, no por posición: m_pathOccurrence es
+    // "la fuente N-ésima con este path, contando desde el final del vector",
+    // y eso es estable para UN comando aislado, pero se rompe con comandos
+    // INTERCALADOS. applyAdd (más arriba) SIEMPRE reinserta al final; así que
+    // cuando el undo de un Remove pendiente reinserta una fuente, el "final"
+    // que el pathOccurrence de OTRO comando en el stack daba por supuesto se
+    // ha desplazado por debajo. Ejemplo real (revisión final, bloqueante):
+    // sources=[B,S1], se reimporta el mismo FBX (cmdA, sources=[B,S1,S2]), se
+    // quita la fila S1 (cmdB, pathOccurrence=1 porque S2 queda por delante,
+    // sources=[B,S2]); Ctrl+Z de cmdB reinserta S1 al final (sources=
+    // [B,S2,S1]); Ctrl+Z de cmdA, con su pathOccurrence=0, encuentra la
+    // PRIMERA fuente no-builtin escaneando desde el final — que ahora es el
+    // S1 recién recuperado, no el S2 que cmdA realmente insertó.
     //
-    // Por qué desde el final y no un índice absoluto: undo() de un Remove
-    // reinserta la fuente al FINAL del vector (applyAdd), no en su posición
-    // original — así que su índice absoluto cambia entre el borrado y un
-    // redo posterior. Contar desde el final sí es estable: applyAdd
-    // recalcula m_pathOccurrence a 0 cada vez que reinserta (porque lo que
-    // acaba de reinsertar es, por definición, lo último), así que un
-    // redo inmediato vuelve a encontrar exactamente esa misma fuente aquí.
-    // El único caso en que m_pathOccurrence vale algo distinto de 0 es el
-    // clic ORIGINAL del usuario sobre una fila que no es la última con ese
-    // path (el bug que corrige este fix): AnimatorPanel::drawAnimationSources
-    // lo calcula en ese momento.
+    // uniqueClipName (SkinnedMeshAnimations.cpp) garantiza que los nombres de
+    // clip son únicos dentro de la malla — removeAnimationSource ya se apoya
+    // en esa invariante (ver su comentario) — así que el conjunto exacto de
+    // clipNames de una fuente la identifica sin ambigüedad, sea cual sea su
+    // posición actual en el vector. m_clipNames viaja siempre con el comando:
+    // lo pasa el panel (src.clipNames) o lo recalcula applyAdd tras un
+    // (re)import con éxito, así que en el camino normal nunca está vacío
+    // cuando llegamos aquí.
     bool removed = false;
-    size_t skipped = 0;
-    for (size_t i = mesh->animationSources.size(); i-- > 0; )
+    if (!m_clipNames.empty())
     {
-        const auto& src = mesh->animationSources[i];
-        if (src.builtin || src.path != m_path) continue;
-        if (skipped != m_pathOccurrence) { skipped++; continue; }
-        m_clipNames = src.clipNames;
-        removeAnimationSource(*mesh, i);
-        removed = true;
-        break;
+        for (size_t i = mesh->animationSources.size(); i-- > 0; )
+        {
+            const auto& src = mesh->animationSources[i];
+            if (src.builtin || src.clipNames != m_clipNames) continue;
+            removeAnimationSource(*mesh, i);
+            removed = true;
+            break;
+        }
+    }
+
+    // Fallback posicional: solo puede disparar si m_clipNames llega vacío
+    // (no debería en el camino normal) o si ninguna fuente viva coincide por
+    // nombres (p.ej. redo tras recarga de escena, con el mesh reconstruido
+    // desde JSON). Se conserva el escaneo original, contado desde el final
+    // por el mismo motivo de siempre: applyAdd reinserta al final, así que
+    // pathOccurrence=0 sigue apuntando a lo último reinsertado.
+    if (!removed)
+    {
+        size_t skipped = 0;
+        for (size_t i = mesh->animationSources.size(); i-- > 0; )
+        {
+            const auto& src = mesh->animationSources[i];
+            if (src.builtin || src.path != m_path) continue;
+            if (skipped != m_pathOccurrence) { skipped++; continue; }
+            m_clipNames = src.clipNames;
+            removeAnimationSource(*mesh, i);
+            removed = true;
+            break;
+        }
     }
 
     // Nada que quitar (redo tras recarga de escena, o mesh reemplazado entre

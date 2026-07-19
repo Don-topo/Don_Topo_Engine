@@ -1571,6 +1571,77 @@ static void test_animation_source_command_remove_noop_when_occurrence_missing()
     CHECK(mesh->animationClips.size() == clipsBefore);
 }
 
+// Finding de la revisión final (bloqueante): m_pathOccurrence localiza "la
+// fuente N-ésima con este path, contando desde el final", y eso es estable
+// para UN comando aislado, pero no para comandos INTERCALADOS: applyAdd
+// siempre reinserta al final, así que cada undo/redo de un Add ajeno
+// desplaza el "final" que el pathOccurrence de otro comando pendiente da
+// por supuesto. Repro exacto de la revisión:
+//   1. Mesh ya tiene [builtin B, S1(mismo FBX)].
+//   2. Se reimporta el mismo FBX -> cmdA (Add), sources = [B, S1, S2].
+//   3. Se quita la fila 1 (S1) -> cmdB (Remove, pathOccurrence=1 porque S2
+//      queda por delante). sources = [B, S2].
+//   4. Ctrl+Z de cmdB -> applyAdd reinserta S1 AL FINAL: [B, S2, S1'].
+//   5. Ctrl+Z de cmdA -> applyRemove con pathOccurrence=0 (el que se
+//      recalculó en su propio execute) encuentra la PRIMERA fuente no-builtin
+//      escaneando desde el final: eso es ahora S1', no S2 -- borra lo que el
+//      usuario acababa de recuperar y deja vivo lo que cmdA había metido.
+// El fix resuelve por identidad (m_clipNames, únicos en la malla por
+// uniqueClipName) en vez de por posición, así que este test comprueba que
+// tras deshacer cmdB y luego cmdA, la fuente que sobrevive es S1 (la que
+// cmdA NO tocó), no S2.
+static void test_animation_source_command_undo_add_after_interleaved_remove_undo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+    go->setMesh(mesh);
+
+    // Estado de partida del repro: [B, S1]. S1 se importa fuera del undo
+    // stack (representa "lo que ya había antes de que arrancara este
+    // escenario").
+    std::vector<std::string> warnings;
+    CHECK(addAnimationSource(*mesh, "assets/modelAnimation.fbx", warnings));
+    CHECK(mesh->animationSources.size() == 2u);
+    const std::string s1Path = mesh->animationSources[1].path;
+    const std::vector<std::string> s1Names = mesh->animationSources[1].clipNames;
+
+    // cmdA: reimportar el mismo FBX, tal como AnimatorPanel::onAnimationFbxSelected
+    // construye el comando (clipNames vacío, pathOccurrence por defecto 0).
+    auto cmdA = std::make_unique<AnimationSourceCommand>(
+        scene, /*renderer=*/nullptr, "Añadir animaciones", id,
+        /*add=*/true, s1Path, std::vector<std::string>{});
+    cmdA->execute();
+    CHECK(mesh->animationSources.size() == 3u);   // [B, S1, S2]
+    const std::vector<std::string> s2Names = mesh->animationSources[2].clipNames;
+    CHECK(s1Names != s2Names);   // uniqueClipName las distingue
+
+    // cmdB: clic en la X de la fila 1 (S1), con pathOccurrence calculado
+    // exactamente como AnimatorPanel::drawAnimationSources (cuenta las
+    // fuentes no-builtin con el mismo path por DELANTE de la fila pulsada:
+    // S2 queda por delante, así que vale 1).
+    auto cmdB = std::make_unique<AnimationSourceCommand>(
+        scene, /*renderer=*/nullptr, "Quitar animaciones", id,
+        /*add=*/false, s1Path, s1Names, /*pathOccurrence=*/1);
+    cmdB->execute();
+    CHECK(mesh->animationSources.size() == 2u);   // [B, S2]
+
+    // LIFO del UndoManager real: se deshace primero lo último apilado
+    // (cmdB), luego cmdA.
+    cmdB->undo();   // applyAdd: reinserta S1' AL FINAL -> [B, S2, S1']
+    CHECK(mesh->animationSources.size() == 3u);
+
+    cmdA->undo();   // applyRemove: debe quitar S2 (lo que cmdA insertó), no S1'
+
+    CHECK(mesh->animationSources.size() == 2u);
+    CHECK(!mesh->animationSources[1].builtin);
+    // La aserción clave: la fuente que sobrevive es S1, no S2. Con el bug
+    // (localización por posición) esto falla porque applyRemove borra S1'
+    // (lo que el usuario acababa de recuperar) y deja vivo S2.
+    CHECK(mesh->animationSources[1].clipNames == s1Names);
+}
+
 // El rename es undoable y arrastra a los estados del grafo en ambos sentidos.
 static void test_clip_rename_command()
 {
@@ -2037,6 +2108,7 @@ int main()
     test_animation_source_command_remove_rebinds_clip_indices();
     test_animation_source_command_remove_targets_clicked_occurrence();
     test_animation_source_command_remove_noop_when_occurrence_missing();
+    test_animation_source_command_undo_add_after_interleaved_remove_undo();
     test_clip_rename_command();
     test_animation_source_command_survives_missing_target();
 
