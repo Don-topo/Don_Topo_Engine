@@ -715,6 +715,87 @@ static void test_scene_load_warns_when_rig_disappeared(PhysicsManager& pm, Audio
     CHECK(avisado);
 }
 
+// Fix de review (task-3): hasBones() devuelve false tanto si el fichero no
+// tiene huesos como si directamente no se puede leer (movido/borrado). Antes
+// de este fix ambos casos disparaban el mismo aviso ("ya no declara huesos"),
+// que en el caso de fichero ausente apunta al sitio equivocado — y encima el
+// intento de ModelLoader::load() sobre un path inexistente lanzaba y la
+// excepción se tragaba en silencio, dejando al usuario sin ninguna pista.
+// Simula el fichero movido/borrado: se guarda la escena con un sourcePath
+// real, y luego se sustituye por uno que no existe antes de recargar — así
+// no hace falta tocar disco de verdad para dejar "colgante" la ruta.
+static void test_scene_load_warns_when_file_missing(PhysicsManager& pm, AudioManager& am)
+{
+    const std::string unriggedPath = writeUnriggedObjFixture("dt_test_scene_file_missing.obj");
+
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Prop");
+    const uint64_t id = go->id;
+    go->setMesh(std::make_shared<Mesh>(ModelLoader::load(unriggedPath)));
+
+    nlohmann::json j = scene.toJson();
+    std::filesystem::remove(unriggedPath);
+    // Escena guardada creyendo que era animado; el fichero real (el OBJ, que
+    // nunca tuvo huesos) ya no está en disco al recargar.
+    j["root"]["children"][0]["mesh"]["skinned"] = true;
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+
+    // El fichero no existe: no hay malla que cargar, pero la escena entera
+    // sigue viva (no crashea, no aborta la carga).
+    CHECK(!found->hasMesh());
+
+    bool warnsMissingFile  = false;
+    bool wronglyClaimsBones = false;
+    for (const auto& w : loaded.lastWarnings())
+    {
+        if (w.find("dt_test_scene_file_missing.obj") != std::string::npos &&
+            w.find("no se encuentra") != std::string::npos)
+            warnsMissingFile = true;
+        if (w.find("ya no declara huesos") != std::string::npos)
+            wronglyClaimsBones = true;
+    }
+    CHECK(warnsMissingFile);
+    CHECK(!wronglyClaimsBones);
+}
+
+// Fix de review (task-3): el catch que envuelve la carga de la malla se
+// tragaba cualquier std::exception en silencio. Con esto, el warning de
+// arriba avisa del motivo (fichero ausente); este test comprueba que ADEMÁS
+// el catch de la carga en sí (el de ModelLoader::load lanzando) deja su
+// propio rastro con el mensaje de la excepción — no solo el aviso de
+// hasBones. Reusa el mismo escenario que el test anterior.
+static void test_scene_load_warns_on_load_exception(PhysicsManager& pm, AudioManager& am)
+{
+    const std::string unriggedPath = writeUnriggedObjFixture("dt_test_scene_load_exception.obj");
+
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Prop");
+    const uint64_t id = go->id;
+    go->setMesh(std::make_shared<Mesh>(ModelLoader::load(unriggedPath)));
+
+    nlohmann::json j = scene.toJson();
+    std::filesystem::remove(unriggedPath);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(!found->hasMesh());
+
+    bool warnsLoadFailure = false;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("dt_test_scene_load_exception.obj") != std::string::npos &&
+            w.find("no se pudo cargar la malla") != std::string::npos)
+            warnsLoadFailure = true;
+    CHECK(warnsLoadFailure);
+}
+
 // Fix de review: un forcedName que ya está en uso (por un clip existente, o
 // por un forcedName anterior de esta misma importación) NO puede colarse tal
 // cual — dejaría dos clips homónimos y el Animator resuelve por nombre, así
@@ -2261,6 +2342,8 @@ int main()
     test_scene_without_animation_sources_loads(pm, am);
     test_scene_load_ignores_stale_skinned_false(pm, am);
     test_scene_load_warns_when_rig_disappeared(pm, am);
+    test_scene_load_warns_when_file_missing(pm, am);
+    test_scene_load_warns_on_load_exception(pm, am);
 
     test_animator_command_add_undo_redo();
     test_animator_command_remove();
