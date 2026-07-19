@@ -2189,6 +2189,12 @@ namespace DonTopo {
         if (go->staticRenderIndex >= 0)
             removeStaticObject(go->staticRenderIndex);
         go->staticRenderIndex = -1;
+        // Desde que el import detecta rigs, el editor sí crea mallas skinned:
+        // sin esto, quitar el componente filtra su render object en GPU y deja
+        // el índice stale, que el resto del código toma por válido.
+        if (go->skinnedRenderIndex >= 0)
+            removeSkinnedObject(go->skinnedRenderIndex);
+        go->skinnedRenderIndex = -1;
         go->setMesh(nullptr);
     }
 
