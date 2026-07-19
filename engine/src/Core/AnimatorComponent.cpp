@@ -218,6 +218,19 @@ namespace DonTopo
         reset();
     }
 
+    int AnimatorComponent::renameClipReferences(const std::string& oldName,
+                                                 const std::string& newName)
+    {
+        int changed = 0;
+        for (auto& st : m_states)
+        {
+            if (st.clipName != oldName) continue;
+            st.clipName = newName;
+            changed++;
+        }
+        return changed;
+    }
+
     bool AnimatorComponent::conditionsMet(const Transition& t) const
     {
         // Una transición sin condiciones dispararía el frame en que se crea y

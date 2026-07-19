@@ -297,6 +297,26 @@ static void test_add_animation_source_with_forced_names()
         CHECK(m.animationClips[builtinCount + i].name == forced[i]);
 }
 
+// Renombrar un clip tiene que arrastrar a los estados que lo usan: si no, el
+// rename dejaría el grafo apuntando a un nombre que ya no existe y bindClips
+// los marcaría como huérfanos.
+static void test_rename_clip_references_in_animator()
+{
+    AnimatorComponent a;
+    AnimatorComponent::State s0; s0.name = "A"; s0.clipName = "walk";
+    AnimatorComponent::State s1; s1.name = "B"; s1.clipName = "run";
+    AnimatorComponent::State s2; s2.name = "C"; s2.clipName = "walk";
+    a.addState(s0); a.addState(s1); a.addState(s2);
+
+    CHECK(a.renameClipReferences("walk", "andar") == 2);
+    CHECK(a.states()[0].clipName == "andar");
+    CHECK(a.states()[1].clipName == "run");
+    CHECK(a.states()[2].clipName == "andar");
+
+    // Nombre no usado por ningún estado: 0 y sin efectos
+    CHECK(a.renameClipReferences("no_existe", "x") == 0);
+}
+
 // Fix de review: un forcedName que ya está en uso (por un clip existente, o
 // por un forcedName anterior de esta misma importación) NO puede colarse tal
 // cual — dejaría dos clips homónimos y el Animator resuelve por nombre, así
@@ -1464,6 +1484,7 @@ int main()
     test_remove_builtin_source_is_rejected();
     test_rename_clip();
     test_add_animation_source_with_forced_names();
+    test_rename_clip_references_in_animator();
     test_add_animation_source_with_forced_names_collision();
     test_pack_concatenates_clips();
     test_pack_mesh_without_clips();

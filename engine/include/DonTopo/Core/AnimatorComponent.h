@@ -112,6 +112,12 @@ namespace DonTopo
             // -1 y empuja un aviso (falla ruidoso, no silencioso). NO toca loop.
             void bindClips(const SkinnedMesh& mesh, std::vector<std::string>* warnings = nullptr);
 
+            // Reescribe clipName en los estados que usaban oldName. Devuelve
+            // cuántos cambió. Lo llama el Animator Panel tras renombrar un clip
+            // del mesh: el grafo referencia por nombre, así que sin esto el
+            // rename dejaría los estados huérfanos.
+            int renameClipReferences(const std::string& oldName, const std::string& newName);
+
             // --- Runtime ---
             void setBool(const std::string& n, bool v);
             bool getBool(const std::string& n) const;
