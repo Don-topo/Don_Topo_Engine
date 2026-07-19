@@ -582,7 +582,17 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
         // el estado abierto/cerrado (y el m_renamingClip en vuelo, si lo
         // hubiera) de la fila que ocupaba su índice antes del borrado. El
         // path es estable mientras la fuente exista.
+        //
+        // El path SOLO no basta: dos fuentes pueden compartir path a
+        // propósito (reimportar el mismo fichero), y con el mismo ID las dos
+        // filas compartirían el estado del TreeNode — expandir una expandiría
+        // la otra. Se compone con cuántas fuentes anteriores repiten ese path,
+        // que distingue las copias sin depender del índice absoluto.
+        int pathOccurrence = 0;
+        for (size_t k = 0; k < s; k++)
+            if (mesh->animationSources[k].path == src.path) pathOccurrence++;
         ImGui::PushID(src.path.c_str());
+        ImGui::PushID(pathOccurrence);
 
         const std::string file = std::filesystem::path(src.path).filename().string();
         const std::string label = file + "  (" + std::to_string(src.clipNames.size()) + " clips)"
@@ -672,7 +682,8 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
             }
             ImGui::TreePop();
         }
-        ImGui::PopID();
+        ImGui::PopID();   // pathOccurrence
+        ImGui::PopID();   // src.path
     }
 
     if (sourceToRemove >= 0)
