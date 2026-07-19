@@ -297,6 +297,49 @@ static void test_add_animation_source_with_forced_names()
         CHECK(m.animationClips[builtinCount + i].name == forced[i]);
 }
 
+// Fix de review: un forcedName que ya está en uso (por un clip existente, o
+// por un forcedName anterior de esta misma importación) NO puede colarse tal
+// cual — dejaría dos clips homónimos y el Animator resuelve por nombre, así
+// que uno de los dos quedaría inalcanzable. Debe caer en uniqueClipName y
+// avisar. Se fuerza la colisión reutilizando el nombre del clip builtin como
+// forcedName de la fuente añadida.
+static void test_add_animation_source_with_forced_names_collision()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    const size_t builtinCount = m.animationClips.size();
+    CHECK(builtinCount >= 1u);
+    if (builtinCount < 1u) return;
+
+    const std::string collidingName = m.animationClips[0].name;
+
+    std::vector<std::string> forced;
+    forced.push_back(collidingName);            // colisiona con el clip builtin
+    for (size_t i = 1; i < builtinCount; i++)
+        forced.push_back("Extra" + std::to_string(i));
+
+    std::vector<std::string> warnings;
+    CHECK(addAnimationSource(m, "assets/modelAnimation.fbx", warnings, &forced));
+
+    // (a) Ningún nombre repetido entre TODOS los clips del mesh
+    for (size_t i = 0; i < m.animationClips.size(); i++)
+        for (size_t j = i + 1; j < m.animationClips.size(); j++)
+            CHECK(m.animationClips[i].name != m.animationClips[j].name);
+
+    // (b) clipNames de la fuente refleja exactamente lo que quedó en
+    // animationClips, no los forcedNames pedidos a ciegas
+    CHECK(m.animationSources.size() == 2u);
+    CHECK(m.animationSources[1].clipNames.size() == builtinCount);
+    for (size_t i = 0; i < m.animationSources[1].clipNames.size(); i++)
+        CHECK(m.animationClips[builtinCount + i].name == m.animationSources[1].clipNames[i]);
+
+    // El forcedName colisionado no se coló pelado: lleva el sufijo " (N)"
+    // que pone uniqueClipName en vez del nombre exacto pedido.
+    CHECK(m.animationSources[1].clipNames[0] == collidingName + " (1)");
+
+    // (c) Se avisó del renombrado forzado
+    CHECK(!warnings.empty());
+}
+
 // Los keyframes de los N clips van concatenados en los mismos vectores y
 // boneInfos queda en layout [clip][hueso]. parentIndex/inverseBindPose son del
 // esqueleto, no del clip: idénticos en todos los bloques — eso es lo que deja a
@@ -1421,6 +1464,7 @@ int main()
     test_remove_builtin_source_is_rejected();
     test_rename_clip();
     test_add_animation_source_with_forced_names();
+    test_add_animation_source_with_forced_names_collision();
     test_pack_concatenates_clips();
     test_pack_mesh_without_clips();
 

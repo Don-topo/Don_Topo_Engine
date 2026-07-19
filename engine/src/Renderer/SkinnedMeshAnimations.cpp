@@ -34,6 +34,7 @@ namespace DonTopo
         if (loaded.clips.empty()) return false;   // el warning ya lo puso el loader
 
         const std::string base = std::filesystem::path(path).stem().string();
+        const std::string file = std::filesystem::path(path).filename().string();
 
         AnimationSource src;
         src.path    = path;
@@ -45,8 +46,24 @@ namespace DonTopo
             // forcedNames manda; si se agota (el FBX trae más clips que la
             // última vez), el resto cae en la regla normal de basename.
             const bool forced = forcedNames && i < forcedNames->size();
-            clip.name = forced ? (*forcedNames)[i]
-                                : uniqueClipName(mesh.animationClips, base);
+            if (forced)
+            {
+                // El nombre forzado manda SI está libre (un rename tiene que
+                // sobrevivir a un save/load intacto). Si ya está en uso —por
+                // un clip previo, o por un forcedName anterior de esta misma
+                // importación— uniqueClipName lo devuelve tal cual, así que
+                // comparar el resultado con lo pedido detecta la colisión sin
+                // duplicar la lógica de "taken".
+                const std::string& wanted = (*forcedNames)[i];
+                clip.name = uniqueClipName(mesh.animationClips, wanted);
+                if (clip.name != wanted)
+                    warnings.push_back(file + ": el nombre de clip guardado '" + wanted
+                                        + "' ya estaba en uso, renombrado a '" + clip.name + "'");
+            }
+            else
+            {
+                clip.name = uniqueClipName(mesh.animationClips, base);
+            }
             src.clipNames.push_back(clip.name);
             mesh.animationClips.push_back(std::move(clip));
         }

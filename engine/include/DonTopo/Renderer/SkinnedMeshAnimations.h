@@ -28,6 +28,11 @@ namespace DonTopo
     // renombrado volvería con el nombre del fichero y los estados del grafo que
     // lo referencian quedarían huérfanos.
     //
+    // Un forcedName ya en uso (por un clip existente o por otro forcedName
+    // anterior de esta misma llamada) NO se duplica: cae en uniqueClipName y se
+    // añade un warning. Duplicar el nombre dejaría uno de los dos clips
+    // inalcanzable, porque el Animator resuelve por nombre.
+    //
     // Devuelve false y deja mesh INTACTO si el fichero no aporta nada (ilegible,
     // sin animaciones, o ningún hueso en común con mesh.skeleton).
     bool addAnimationSource(SkinnedMesh& mesh, const std::string& path,
