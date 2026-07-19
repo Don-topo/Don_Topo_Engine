@@ -645,6 +645,76 @@ static void test_scene_without_animation_sources_loads(PhysicsManager& pm, Audio
     CHECK(lm->animationSources[0].builtin == true);
 }
 
+// Las escenas guardadas antes de la auto-detección tienen "skinned": false para
+// TODOS sus meshes — el editor nunca creaba skinned. Si la carga siguiera
+// leyendo ese flag, esos proyectos nunca podrían tener Animator sin reimportar
+// la malla a mano. Manda el fichero, no el flag.
+static void test_scene_load_ignores_stale_skinned_false(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+    go->setMesh(mesh);
+
+    nlohmann::json j = scene.toJson();
+    // Simula el fichero viejo: flag a false sobre un FBX que sí tiene huesos.
+    j["root"]["children"][0]["mesh"]["skinned"] = false;
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+
+    SkinnedMesh* lm = found->getSkinnedMesh();
+    CHECK(lm != nullptr);
+    if (!lm) return;
+    CHECK(!lm->skeleton.names.empty());
+    CHECK(found->isSkinned());
+}
+
+// El caso simétrico: escena con "skinned": true cuyo FBX se reexportó luego sin
+// huesos. Carga estática y sus fuentes de animación se descartan — pero con un
+// aviso en Scene::lastWarnings() (lo que lee el Log Console), no en silencio.
+// No hay ningún FBX del repo que sirva de "sin rig" (model.fbx y
+// modelTexture.fbx son personajes Mixamo rigged pese al nombre, ver el
+// comentario de writeUnriggedObjFixture más arriba), así que se reusa ese
+// mismo helper con un nombre de fichero propio para no colisionar con los
+// tests de Task 1.
+static void test_scene_load_warns_when_rig_disappeared(PhysicsManager& pm, AudioManager& am)
+{
+    const std::string unriggedPath = writeUnriggedObjFixture("dt_test_scene_rig_disappeared.obj");
+
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Prop");
+    const uint64_t id = go->id;
+    go->setMesh(std::make_shared<Mesh>(ModelLoader::load(unriggedPath)));
+
+    nlohmann::json j = scene.toJson();
+    // Simula el reexport: la escena creía que era skinned y guardó fuentes.
+    j["root"]["children"][0]["mesh"]["skinned"] = true;
+    j["root"]["children"][0]["mesh"]["animationSources"] = nlohmann::json::array({
+        { {"path", "assets/modelAnimation.fbx"}, {"builtin", false}, {"clips", {"Salto"}} }
+    });
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    std::filesystem::remove(unriggedPath);
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+
+    // Carga, pero estático: sin huesos no hay nada que animar.
+    CHECK(found->hasMesh());
+    CHECK(found->getSkinnedMesh() == nullptr);
+
+    bool avisado = false;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("dt_test_scene_rig_disappeared.obj") != std::string::npos) avisado = true;
+    CHECK(avisado);
+}
+
 // Fix de review: un forcedName que ya está en uso (por un clip existente, o
 // por un forcedName anterior de esta misma importación) NO puede colarse tal
 // cual — dejaría dos clips homónimos y el Animator resuelve por nombre, así
@@ -2189,6 +2259,8 @@ int main()
     test_missing_animation_source_does_not_break_load(pm, am);
     test_missing_animation_source_warns_through_scene(pm, am);
     test_scene_without_animation_sources_loads(pm, am);
+    test_scene_load_ignores_stale_skinned_false(pm, am);
+    test_scene_load_warns_when_rig_disappeared(pm, am);
 
     test_animator_command_add_undo_redo();
     test_animator_command_remove();

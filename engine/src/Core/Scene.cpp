@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <memory>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/type_ptr.hpp>
@@ -429,13 +430,29 @@ namespace
         {
             std::string sourcePath = j["mesh"].value("sourcePath", "");
             std::string meshName   = j["mesh"].value("name", "");
-            // "skinned" no existe en ficheros guardados antes de este campo
-            // — default false, se reconstruyen como mesh estático (mismo
-            // comportamiento que tenían antes de soportar skinned).
-            bool skinned = j["mesh"].value("skinned", false);
+            // El flag "skinned" se sigue GUARDANDO (dato informativo, y no
+            // rompe ficheros viejos) pero ya no se lee: manda el fichero, en
+            // carga igual que en import. Si no fuera así, las escenas guardadas
+            // antes de la auto-detección — todas con el flag a false, porque el
+            // editor nunca creaba skinned — jamás podrían tener Animator sin
+            // reimportar la malla a mano.
+            const bool skinnedFlag = j["mesh"].value("skinned", false);
+            const bool skinned     = !sourcePath.empty() && DonTopo::ModelLoader::hasBones(sourcePath);
+
+            // El FBX se reexportó sin huesos después de guardar la escena: sus
+            // fuentes de animación no tienen dónde aplicarse y se pierden. Se
+            // avisa por Scene::lastWarnings() (lo que lee el Log Console) en vez
+            // de dejarlo pasar en silencio: perder animaciones sin decir nada es
+            // el tipo de bug que el usuario descubre semanas después.
+            if (skinnedFlag && !skinned && !sourcePath.empty() && warnings)
+            {
+                const std::string file = std::filesystem::path(sourcePath).filename().string();
+                warnings->push_back(file + ": la escena lo tenía guardado como animado, pero el fichero"
+                                            " ya no declara huesos; se descartan sus fuentes de animación");
+            }
             try
             {
-                if (skinned && !sourcePath.empty())
+                if (skinned)
                 {
                     auto mesh = std::make_shared<DonTopo::SkinnedMesh>(DonTopo::ModelLoader::loadSkinned(sourcePath));
 
