@@ -205,7 +205,10 @@ namespace DonTopo {
             vkDestroyImageView(m_gpu.device(), imageView, nullptr);
         }                        
         vkDestroySwapchainKHR(m_gpu.device(), m_swapChain, nullptr);
-        vkDestroyDescriptorPool(m_gpu.device(), m_descriptorPool, nullptr);
+        // m_descriptorPool se destruye más abajo, DESPUÉS del bucle que llama a
+        // destroySkinnedRenderObject: esa función libera sets del pool (ahora
+        // creado con FREE_DESCRIPTOR_SET_BIT pa soportar rebuildSkinnedMesh), y
+        // hacerlo aquí antes dejaría un handle de pool ya destruido.
         for(auto& obj : m_objects)
             destroyRenderObject(obj);
         m_objects.clear();
@@ -233,8 +236,11 @@ namespace DonTopo {
         {
             destroySkinnedRenderObject(obj);
         }
-        
+
         m_skinnedObjects.clear();
+        // Ahora sí: ya no queda ningún destroySkinnedRenderObject pendiente que
+        // necesite liberar sets de m_descriptorPool.
+        vkDestroyDescriptorPool(m_gpu.device(), m_descriptorPool, nullptr);
         if (m_computeDescPool != VK_NULL_HANDLE)
         {
             vkDestroyDescriptorPool(m_gpu.device(), m_computeDescPool, nullptr);
@@ -1145,6 +1151,10 @@ namespace DonTopo {
         poolInfo.poolSizeCount = 2;
         poolInfo.pPoolSizes    = poolSizes;
         poolInfo.maxSets       = n;
+        // FREE_DESCRIPTOR_SET: rebuildSkinnedMesh destruye y recrea el objeto en
+        // su sitio, y sin poder devolver los sets al pool cada reimportación
+        // consumiría slots hasta agotarlo.
+        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
         if(vkCreateDescriptorPool(m_gpu.device(), &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
             throw std::runtime_error("failed to create descriptor pool!");
@@ -1646,6 +1656,7 @@ namespace DonTopo {
         poolInfo.poolSizeCount = 1;
         poolInfo.pPoolSizes    = &ps;
         poolInfo.maxSets       = 16;
+        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
         if (vkCreateDescriptorPool(m_gpu.device(), &poolInfo, nullptr, &m_computeDescPool) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create compute descriptor pool!");
@@ -1822,6 +1833,22 @@ namespace DonTopo {
             if (mgfx.textureImage  != VK_NULL_HANDLE) { vkDestroyImage    (m_gpu.device(), mgfx.textureImage,  nullptr); }
             if (mgfx.textureMem    != VK_NULL_HANDLE) { vkFreeMemory      (m_gpu.device(), mgfx.textureMem,    nullptr); }
         }
+
+        // Los sets vuelven al pool (creado con FREE_DESCRIPTOR_SET_BIT): sin
+        // esto, reconstruir el objeto lo agotaría.
+        if (obj.computeDescSet != VK_NULL_HANDLE)
+        {
+            vkFreeDescriptorSets(m_gpu.device(), m_computeDescPool, 1, &obj.computeDescSet);
+            obj.computeDescSet = VK_NULL_HANDLE;
+        }
+        for (auto& mgfx : obj.matGfx)
+        {
+            if (mgfx.descSets[0] != VK_NULL_HANDLE)
+                vkFreeDescriptorSets(m_gpu.device(), m_descriptorPool, MAX_FRAMES, mgfx.descSets);
+            mgfx.descSets[0] = VK_NULL_HANDLE;
+            mgfx.descSets[1] = VK_NULL_HANDLE;
+        }
+
         obj.matGfx.clear();
         obj.subMeshes.clear();
     }
@@ -1829,8 +1856,12 @@ namespace DonTopo {
     int Renderer::addSkinnedMesh(const SkinnedMesh& mesh)
     {
         m_skinnedObjects.emplace_back();
-        SkinnedRenderObject& obj = m_skinnedObjects.back();
+        initSkinnedRenderObject(m_skinnedObjects.back(), mesh);
+        return (int)m_skinnedObjects.size() - 1;
+    }
 
+    void Renderer::initSkinnedRenderObject(SkinnedRenderObject& obj, const SkinnedMesh& mesh)
+    {
         const Skeleton&      skel = mesh.skeleton;
         // Clip 0 pa duration/ticksPerSecond del objeto: son lo que consume
         // updateAnimation(), que solo corre en el caso SIN Animator (Task 3
@@ -2027,8 +2058,35 @@ namespace DonTopo {
             obj.subMeshes[si].indexCount   = mesh.subMeshRanges[si].indexCount;
             obj.subMeshes[si].materialIndex = mesh.subMeshRanges[si].materialIndex;
         }
+    }
 
-        return (int)m_skinnedObjects.size() - 1;
+    void Renderer::rebuildSkinnedMesh(int index, const SkinnedMesh& mesh)
+    {
+        if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
+
+        // Espera a que la GPU termine: un command buffer en vuelo (double
+        // buffering) puede estar leyendo los buffers que vamos a destruir.
+        // Mismo motivo que en removeGameObject.
+        vkDeviceWaitIdle(m_gpu.device());
+
+        SkinnedRenderObject& obj = m_skinnedObjects[index];
+
+        // El estado de animación es del Animator, no de los buffers: perderlo
+        // haría que el personaje diera un salto visible al importar un fichero.
+        const glm::mat4 transform  = obj.transform;
+        const float     animTime   = obj.animTime;
+        const uint32_t  activeClip = obj.activeClip;
+
+        destroySkinnedRenderObject(obj);
+        obj = SkinnedRenderObject{};
+        initSkinnedRenderObject(obj, mesh);
+
+        obj.transform = transform;
+        obj.animTime  = animTime;
+        // Clamp: la lista de clips puede haber encogido y activeClip apuntaría
+        // fuera del SSBO de BoneInfos, con el compute leyendo basura en
+        // silencio. Mismo criterio que setAnimationState.
+        obj.activeClip = (activeClip < obj.clipCount) ? activeClip : 0;
     }
 
     void Renderer::updateAnimation(int index, float deltaTime)

@@ -99,6 +99,12 @@ namespace DonTopo {
             }
             void setLights(const std::vector<Light>& lights){ m_lights = lights; }
             int addSkinnedMesh(const SkinnedMesh& mesh);
+            // Rehace TODOS los recursos GPU del objeto skinned `index` a partir
+            // de `mesh`, en el mismo slot (el skinnedRenderIndex del GameObject
+            // no cambia). Necesario tras añadir o quitar clips: los keyframes
+            // viven en SSBOs subidos una sola vez, y la GPU tendría la lista
+            // vieja. Conserva transform, animTime y activeClip.
+            void rebuildSkinnedMesh(int index, const SkinnedMesh& mesh);
             // Añade un mesh estático nuevo (buffers + texturas + descriptor set) y lo
             // registra en m_objects. Devuelve el índice para GameObject::staticRenderIndex.
             int addStaticMesh(const Mesh& mesh);
@@ -268,6 +274,10 @@ namespace DonTopo {
             void recordShadowPass(VkCommandBuffer cmd);
             void createComputePipelines();
             void destroySkinnedRenderObject(SkinnedRenderObject& obj);
+            // Cuerpo compartido por addSkinnedMesh y rebuildSkinnedMesh: crea
+            // buffers, sube SSBOs, aloja descriptor sets y carga texturas sobre
+            // un SkinnedRenderObject ya vacío.
+            void initSkinnedRenderObject(SkinnedRenderObject& obj, const SkinnedMesh& mesh);
             void recordComputePass(VkCommandBuffer cmd);
             void removeStaticObject(int index);
             void removeSkinnedObject(int index);
