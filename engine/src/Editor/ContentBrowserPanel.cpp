@@ -175,8 +175,13 @@ void ContentBrowserPanel::updateSceneReferencesForRename(EditorContext& ctx, Gam
             // Mismo punto ciego que en count/detach: en skinned los materiales
             // viven en SkinnedMesh::materials, nunca en el Mesh::material
             // heredado. Sin esto, renombrar una textura dejaba a todos los
-            // personajes con rig apuntando al nombre viejo — referencia rota
-            // al recargar la escena, y en silencio.
+            // personajes con rig apuntando en memoria al nombre viejo durante
+            // el resto de la sesión — en silencio, hasta el siguiente intento
+            // de tocar esa ruta. No es cuestión de durabilidad entre
+            // sesiones: nodeToJson (Scene.cpp) no serializa texturePath/
+            // normalMapPath/metallicRoughnessPath, así que al recargar la
+            // escena el material se re-deriva del FBX igual, con o sin este
+            // fix.
             for (Material* mat : materialsOf(go))
             {
                 updateField(mat->texturePath);
@@ -248,13 +253,19 @@ void ContentBrowserPanel::detachSceneReferencesForDelete(EditorContext& ctx, Gam
             }
             else
             {
-                // El path se limpia SIEMPRE que casa: el fichero se va del
-                // disco, dejarlo apuntado en el material sólo garantiza una
-                // referencia rota al volver a cargar la escena. El hot-swap a
-                // la textura "missing" en cambio sólo existe para el pipeline
-                // estático (replaceStaticTextureWithMissing indexa m_objects),
-                // así que en skinned la GPU sigue mostrando la textura vieja
-                // hasta la siguiente carga de la malla.
+                // El path se limpia SIEMPRE que casa, aunque no haya hot-swap:
+                // el fichero se va del disco, y dejar el path apuntando a él
+                // haría que un registerGameObject/re-register posterior
+                // intentase stbi_load sobre una ruta que ya no existe. No es
+                // cuestión de durabilidad entre sesiones — nodeToJson
+                // (Scene.cpp) no serializa texturePath/normalMapPath/
+                // metallicRoughnessPath, así que al recargar la escena el
+                // material se re-deriva del FBX de todas formas. El hot-swap
+                // a la textura "missing", en cambio, sólo existe para el
+                // pipeline estático (replaceStaticTextureWithMissing indexa
+                // m_objects), así que en skinned el path queda vacío pero la
+                // GPU sigue mostrando la textura vieja hasta la siguiente
+                // carga de la malla.
                 const bool canSwap = ctx.renderer && go->staticRenderIndex >= 0;
                 for (Material* mat : materialsOf(go))
                 {

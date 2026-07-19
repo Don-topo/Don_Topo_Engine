@@ -41,7 +41,12 @@ private:
     // Desengancha de la escena cualquier referencia a path antes de
     // borrarlo de disco: mesh en uso -> Renderer::removeMeshComponent;
     // audio en uso -> setAudioClip(nullptr); textura de Material en uso ->
-    // limpia el campo de path y hace hot-swap de GPU.
+    // el campo de path se limpia SIEMPRE (evita que un re-register intente
+    // stbi_load un fichero ya borrado), pero el hot-swap de GPU a la
+    // textura "missing" sólo se dispara si ctx.renderer && staticRenderIndex
+    // >= 0: replaceStaticTextureWithMissing indexa la lista de objetos
+    // estáticos, así que en skinned nunca ocurre — la GPU sigue mostrando
+    // la textura vieja hasta que se recargue la escena.
     void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
                                          const std::filesystem::path& path, bool isDir);
     // Arma el popup modal "Delete Asset", precalculando cuántos GameObjects
