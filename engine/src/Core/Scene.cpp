@@ -22,7 +22,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <memory>
+#include <unordered_map>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/type_ptr.hpp>
 
@@ -412,7 +414,8 @@ namespace
     // collider (que fijan la pose inicial del actor PhysX a partir de él).
     void nodeFromJson(const nlohmann::json& j, GameObject* node, const glm::mat4& parentWorld,
                        DonTopo::PhysicsManager& physics, DonTopo::AudioManager& audio,
-                       std::vector<std::string>* warnings)
+                       std::vector<std::string>* warnings,
+                       std::unordered_map<std::string, bool>* hasBonesCache)
     {
         // "id" no existe en ficheros .scene guardados antes de este campo —
         // se deja el id que el constructor de GameObject ya asignó (contador
@@ -429,13 +432,59 @@ namespace
         {
             std::string sourcePath = j["mesh"].value("sourcePath", "");
             std::string meshName   = j["mesh"].value("name", "");
-            // "skinned" no existe en ficheros guardados antes de este campo
-            // — default false, se reconstruyen como mesh estático (mismo
-            // comportamiento que tenían antes de soportar skinned).
-            bool skinned = j["mesh"].value("skinned", false);
+            // El flag "skinned" se sigue GUARDANDO (dato informativo, y no
+            // rompe ficheros viejos) pero ya no se lee: manda el fichero, en
+            // carga igual que en import. Si no fuera así, las escenas guardadas
+            // antes de la auto-detección — todas con el flag a false, porque el
+            // editor nunca creaba skinned — jamás podrían tener Animator sin
+            // reimportar la malla a mano.
+            const bool skinnedFlag = j["mesh"].value("skinned", false);
+            bool skinned = false;
+            if (!sourcePath.empty())
+            {
+                // Cache por-carga (ver hasBonesCache más abajo): sin ella cada
+                // nodo que comparte sourcePath con otro repetiría el ReadFile
+                // completo de Assimp que hace hasBones.
+                if (hasBonesCache)
+                {
+                    auto it = hasBonesCache->find(sourcePath);
+                    if (it != hasBonesCache->end())
+                        skinned = it->second;
+                    else
+                        skinned = (*hasBonesCache)[sourcePath] = DonTopo::ModelLoader::hasBones(sourcePath);
+                }
+                else
+                {
+                    skinned = DonTopo::ModelLoader::hasBones(sourcePath);
+                }
+            }
+
+            // hasBones() devuelve false tanto si el fichero no tiene huesos
+            // como si no se puede leer (movido/borrado) — hay que distinguir
+            // antes de avisar, porque decir "ya no declara huesos" de un
+            // fichero que directamente no existe es peor que no avisar: apunta
+            // al sitio equivocado y esconde que la malla no cargó en absoluto.
+            if (skinnedFlag && !skinned && !sourcePath.empty() && warnings)
+            {
+                // Path COMPLETO, no filename(): en el caso de fichero ausente
+                // este aviso y el del catch de abajo disparan para el mismo
+                // nodo, y con identificadores distintos el Log Console parecía
+                // estar hablando de dos assets diferentes.
+                if (!std::filesystem::exists(sourcePath))
+                {
+                    warnings->push_back(sourcePath + ": la escena lo tenía guardado como animado, pero el"
+                                                      " fichero no se encuentra (¿se movió o se borró?);"
+                                                      " la malla no se puede cargar");
+                }
+                else
+                {
+                    warnings->push_back(sourcePath + ": la escena lo tenía guardado como animado, pero el fichero"
+                                                      " ya no declara huesos; se descartan sus fuentes de animación");
+                }
+            }
             try
             {
-                if (skinned && !sourcePath.empty())
+                if (skinned)
                 {
                     auto mesh = std::make_shared<DonTopo::SkinnedMesh>(DonTopo::ModelLoader::loadSkinned(sourcePath));
 
@@ -519,10 +568,21 @@ namespace
                     node->setMesh(std::move(mesh));
                 }
             }
-            catch (const std::exception&)
+            catch (const std::exception& e)
             {
                 // Asset roto (movido/borrado) o formato no soportado: node
-                // queda sin mesh, el resto de la escena sigue cargando.
+                // queda sin mesh, el resto de la escena sigue cargando. Antes
+                // la excepción se tragaba aquí sin más — si el warning de
+                // arriba ni siquiera dispara (skinnedFlag == false, o el
+                // fichero nunca tuvo huesos) el usuario se queda sin ninguna
+                // pista de por qué el mesh está vacío. Se reporta por
+                // warnings, no por stdout: en un build sin consola un printf
+                // es invisible.
+                if (warnings)
+                {
+                    const std::string ref = sourcePath.empty() ? meshName : sourcePath;
+                    warnings->push_back(ref + ": no se pudo cargar la malla (" + e.what() + ")");
+                }
             }
         }
 
@@ -675,7 +735,7 @@ namespace
         for (const auto& childJson : j.at("children"))
         {
             GameObject* child = node->addChild(childJson.at("name").get<std::string>());
-            nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings);
+            nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, hasBonesCache);
         }
     }
 }
@@ -714,9 +774,21 @@ namespace DonTopo
         // avisos que bindClips empuja a m_warnings durante la carga se
         // perderían de inmediato.
         m_warnings.clear();
+        // Cache sembrada con la respuesta AUTORITATIVA: el objeto origen ya
+        // está en memoria, así que isSkinned() es gratis y no puede mentir.
+        // Sin esto cada clon volvía a sondear el FBX con Assimp (y luego a
+        // parsearlo entero otra vez), dos lecturas síncronas de fichero por
+        // spawn dentro del bucle de Play — su único caller es Scene.Instantiate
+        // de Lua. Peor que el coste: leer el disco permite que un clon tomado
+        // mientras el artista reexporta el FBX vuelva con un tipo de malla
+        // distinto al del objeto del que se clonó. Si el clon es un subárbol,
+        // la cache además dedup entre todos sus nodos.
+        std::unordered_map<std::string, bool> cache;
+        if (src->hasMesh() && !src->getMesh()->sourcePath.empty())
+            cache[src->getMesh()->sourcePath] = src->isSkinned();
         try
         {
-            nodeFromJson(j, clone, target->worldTransform, physics, audio, &m_warnings);
+            nodeFromJson(j, clone, target->worldTransform, physics, audio, &m_warnings, &cache);
         }
         catch (const nlohmann::json::exception&)
         {
@@ -790,9 +862,14 @@ namespace DonTopo
     {
         GameObject* target = parent ? parent : &m_root;
         GameObject* node = target->addChild(j.value("name", std::string()));
+        // Sin objeto vivo al que preguntar (esto reconstruye un subárbol ya
+        // borrado: el undo de un Delete), así que la cache arranca vacía y
+        // sólo aporta el dedup entre los nodos de ESE subárbol — que ya evita
+        // repetir el ReadFile de Assimp por cada nodo que comparta sourcePath.
+        std::unordered_map<std::string, bool> cache;
         try
         {
-            nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings);
+            nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings, &cache);
         }
         catch (const nlohmann::json::exception&)
         {
@@ -914,9 +991,18 @@ namespace DonTopo
         // arriba sino también ante malformación anidada más abajo en el árbol
         // (spec: "carga fallida no modifica la escena").
         GameObject newRoot(rootJson.value("name", "root"));
+        // Cache de hasBones() con vida atada a ESTA llamada a fromJson (local,
+        // no miembro ni static): un FBX puede cambiar en disco entre dos
+        // cargas de escena dentro de la misma sesión de editor, y un cache que
+        // sobreviviera a esta función serviría un resultado stale — cargaría
+        // el tipo de malla equivocado sin que nada lo delate. Dentro de una
+        // sola carga el fichero es estable, así que compartirla entre los
+        // nodos que repiten sourcePath (varios enemigos con el mismo FBX) es
+        // seguro y evita repetir el ReadFile completo de Assimp por cada uno.
+        std::unordered_map<std::string, bool> hasBonesCache;
         try
         {
-            nodeFromJson(rootJson, &newRoot, glm::mat4(1.0f), physics, audio, &m_warnings);
+            nodeFromJson(rootJson, &newRoot, glm::mat4(1.0f), physics, audio, &m_warnings, &hasBonesCache);
         }
         catch (const nlohmann::json::exception&)
         {

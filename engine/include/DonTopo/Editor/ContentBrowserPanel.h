@@ -16,6 +16,33 @@ struct EditorContext;
 // headless pueda enlazarla.
 std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::path& dir);
 
+// Las tres funciones siguientes no tocan estado privado de ContentBrowserPanel
+// (sólo sus parámetros), así que se declaran aquí como funciones libres —igual
+// que listVisibleSubdirs— para que el test headless pueda enlazarlas sin
+// instanciar el panel completo (que arrastraría ImGui/Vulkan).
+
+// Cuenta cuántos GameObjects de sceneRoot referencian path (mesh o audio;
+// exacto si !isDir, por prefijo si isDir).
+int countSceneReferences(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir);
+// Recorre sceneRoot actualizando Mesh::sourcePath, los 3 paths de
+// Material y AudioClipComponent::getPath() que matcheen oldPath (exacto
+// si !isDir, por prefijo si isDir) al nuevo valor tras un rename en
+// disco ya realizado.
+void updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
+                                     const std::filesystem::path& oldPath,
+                                     const std::filesystem::path& newPath, bool isDir);
+// Desengancha de la escena cualquier referencia a path antes de
+// borrarlo de disco: mesh en uso -> Renderer::removeMeshComponent;
+// audio en uso -> setAudioClip(nullptr); textura de Material en uso ->
+// el campo de path se limpia SIEMPRE (evita que un re-register intente
+// stbi_load un fichero ya borrado), pero el hot-swap de GPU a la
+// textura "missing" sólo se dispara si ctx.renderer && staticRenderIndex
+// >= 0: replaceStaticTextureWithMissing indexa la lista de objetos
+// estáticos, así que en skinned nunca ocurre — la GPU sigue mostrando
+// la textura vieja hasta que se recargue la escena.
+void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
+                                     const std::filesystem::path& path, bool isDir);
+
 // Ventana "Content Browser" — explorador de assets del proyecto (mesh,
 // audio, scripts), con rename/delete y detección de referencias en la
 // escena para desengancharlas antes de borrar/renombrar en disco.
@@ -28,22 +55,6 @@ private:
     // Arma el popup modal "Rename Asset" precargado con el nombre actual de
     // path (stem si es fichero, nombre completo si es carpeta).
     void beginAssetRename(const std::filesystem::path& path, bool isDir);
-    // Recorre sceneRoot actualizando Mesh::sourcePath, los 3 paths de
-    // Material y AudioClipComponent::getPath() que matcheen oldPath (exacto
-    // si !isDir, por prefijo si isDir) al nuevo valor tras un rename en
-    // disco ya realizado.
-    void updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
-                                         const std::filesystem::path& oldPath,
-                                         const std::filesystem::path& newPath, bool isDir);
-    // Cuenta cuántos GameObjects de sceneRoot referencian path (mesh o
-    // audio; exacto si !isDir, por prefijo si isDir).
-    int  countSceneReferences(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir);
-    // Desengancha de la escena cualquier referencia a path antes de
-    // borrarlo de disco: mesh en uso -> Renderer::removeMeshComponent;
-    // audio en uso -> setAudioClip(nullptr); textura de Material en uso ->
-    // limpia el campo de path y hace hot-swap de GPU.
-    void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
-                                         const std::filesystem::path& path, bool isDir);
     // Arma el popup modal "Delete Asset", precalculando cuántos GameObjects
     // referencian path (mesh o audio) para mostrarlo en el texto de aviso.
     void beginAssetDelete(GameObject* sceneRoot, const std::filesystem::path& path, bool isDir);

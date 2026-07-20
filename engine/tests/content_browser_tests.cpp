@@ -1,10 +1,15 @@
 // Test headless de los helpers del Content Browser (sin GUI). Plain main +
 // asserts, sin framework — mismo patrón que physics_tests.cpp.
 #include "DonTopo/Editor/ContentBrowserPanel.h"
+#include "DonTopo/Editor/EditorContext.h"
+#include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Renderer/ModelLoader.h"
+#include "DonTopo/Renderer/SkinnedMesh.h"
 
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <system_error>
 #include <vector>
 
@@ -59,6 +64,62 @@ static void test_path_is_file(const fs::path& root)
     CHECK(listVisibleSubdirs(root / "readme.txt").empty());
 }
 
+// GameObject con SkinnedMesh (ModelLoader::loadSkinned) y un path de textura
+// conocido fijado a mano en materials[0] en vez del que traiga el FBX: el
+// objetivo de los tests siguientes es fijar el recorrido de materialsOf()
+// (countSceneReferences/updateSceneReferencesForRename/
+// detachSceneReferencesForDelete), no el contenido concreto del asset.
+static std::unique_ptr<GameObject> makeSkinnedFixture(const std::string& texturePath)
+{
+    auto go = std::make_unique<GameObject>("Rigged");
+    auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+    CHECK(!mesh->materials.empty());
+    if (!mesh->materials.empty())
+        mesh->materials[0].texturePath = texturePath;
+    go->setMesh(mesh);
+    return go;
+}
+
+// loadSkinned nunca puebla el Mesh::material heredado (reparte materiales en
+// SkinnedMesh::materials); mirar sólo material dejaba a este caso devolviendo
+// 0 en silencio — éste es exactamente el "0 objetos afectados" que veía un
+// personaje con rig en el diálogo destructivo de delete antes del fix.
+static void test_count_references_finds_skinned_material_texture()
+{
+    const std::string knownPath = "assets/knownTexture.png";
+    auto go = makeSkinnedFixture(knownPath);
+    CHECK(countSceneReferences(go.get(), knownPath, /*isDir=*/false) == 1);
+    CHECK(countSceneReferences(go.get(), std::string("assets/otraTextura.png"), false) == 0);
+}
+
+// El rename debe reescribir el path dentro de SkinnedMesh::materials, no sólo
+// en el Mesh::material heredado (que loadSkinned deja vacío).
+static void test_rename_rewrites_skinned_material_path()
+{
+    const std::string oldPath = "assets/knownTexture.png";
+    const std::string newPath = "assets/renamedTexture.png";
+    auto go = makeSkinnedFixture(oldPath);
+    GameObject* selected = nullptr;
+    bool isPlaying = false;
+    EditorContext ctx{selected, isPlaying};
+    updateSceneReferencesForRename(ctx, go.get(), oldPath, newPath, /*isDir=*/false);
+    CHECK(go->getSkinnedMesh()->materials[0].texturePath == newPath);
+}
+
+// El detach debe limpiar el path dentro de SkinnedMesh::materials antes de
+// borrar el fichero de disco, para que un re-register posterior no intente
+// stbi_load sobre una ruta ya borrada.
+static void test_detach_clears_skinned_material_path()
+{
+    const std::string knownPath = "assets/knownTexture.png";
+    auto go = makeSkinnedFixture(knownPath);
+    GameObject* selected = nullptr;
+    bool isPlaying = false;
+    EditorContext ctx{selected, isPlaying};
+    detachSceneReferencesForDelete(ctx, go.get(), knownPath, /*isDir=*/false);
+    CHECK(go->getSkinnedMesh()->materials[0].texturePath.empty());
+}
+
 int main()
 {
     fs::path root = makeFixture();
@@ -66,6 +127,9 @@ int main()
     test_empty_dir(root);
     test_missing_dir(root);
     test_path_is_file(root);
+    test_count_references_finds_skinned_material_texture();
+    test_rename_rewrites_skinned_material_path();
+    test_detach_clears_skinned_material_path();
     std::error_code ec;
     fs::remove_all(root, ec);
     if (g_failures == 0) std::printf("ALL CONTENT BROWSER TESTS PASSED\n");

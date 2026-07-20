@@ -17,6 +17,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 
@@ -66,6 +68,96 @@ static void test_loader_registers_builtin_source()
     CHECK(src.clipNames.size() == m.animationClips.size());
     for (size_t i = 0; i < src.clipNames.size() && i < m.animationClips.size(); i++)
         CHECK(src.clipNames[i] == m.animationClips[i].name);
+}
+
+// El gate del Animator pregunta por isSkinned(), y hasta ahora el import del
+// editor descartaba huesos y pesos llamando siempre a load(). hasBones es quien
+// decide: mira el fichero, no al llamante.
+static void test_has_bones_detects_rigged_fbx()
+{
+    CHECK(ModelLoader::hasBones("assets/modelAnimation.fbx") == true);
+}
+
+// Escribe un OBJ mínimo (triángulo, sin huesos: el formato OBJ no tiene
+// concepto de esqueleto) en el directorio temporal del sistema. Helper
+// compartido por los dos tests de "modelo sin rig" de abajo: cada uno pide un
+// nombre de fichero distinto para no pisarse si llegaran a correr en paralelo.
+static std::string writeUnriggedObjFixture(const std::string& filename)
+{
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / filename;
+    std::ofstream f(path);
+    f << "v 0 0 0\n"
+         "v 1 0 0\n"
+         "v 0 1 0\n"
+         "f 1 2 3\n";
+    f.close();
+    // Sin este CHECK un temp dir no escribible pasaba desapercibido: el
+    // fichero no existiría y hasBones() devolvería false igualmente, así que
+    // test_has_bones_rejects_unrigged_model PASARÍA por el motivo equivocado,
+    // mientras los demás call sites tumbarían el binario con una excepción sin
+    // capturar de ModelLoader::load. Fallo con nombre aquí, en el helper.
+    CHECK(!f.fail());
+    return path.string();
+}
+
+// El repo no tiene ningún modelo sin rig: los dos únicos FBX trackeados,
+// model.fbx y modelTexture.fbx, parecen props estáticos por el nombre pero
+// son personajes Mixamo completos (65 y 67 huesos respectivamente,
+// verificado con un probe de Assimp antes de escribir este test). Por eso el
+// caso negativo se genera aquí en vez de apuntar a un asset del repo: un OBJ
+// no puede declarar huesos ni queriendo, así que es un negativo real y no un
+// accidente de qué .fbx haya en assets/. Si alguien "arregla" esto apuntando
+// otra vez a model.fbx o modelTexture.fbx, el test vuelve a fallar.
+//
+// Un FBX/OBJ sin rig tiene que seguir entrando como Mesh plano: cargarlo
+// skinned pagaría vértices de 112 B y una SSBO de huesos vacía para nada.
+static void test_has_bones_rejects_unrigged_model()
+{
+    const std::string path = writeUnriggedObjFixture("dt_test_has_bones_unrigged.obj");
+    CHECK(ModelLoader::hasBones(path) == false);
+    std::filesystem::remove(path);
+}
+
+// No lanza: el fichero ilegible lo reporta el loader real, con su mensaje. Si
+// hasBones lanzara, el import moriría antes de llegar a ese mensaje.
+static void test_has_bones_survives_missing_file()
+{
+    bool threw = false;
+    bool result = true;
+    try { result = ModelLoader::hasBones("assets/no_existe_este_fichero.fbx"); }
+    catch (...) { threw = true; }
+    CHECK(!threw);
+    CHECK(result == false);
+}
+
+// loadAuto devuelve el tipo dinámico correcto: es lo único que mira
+// GameObject::isSkinned(), y por tanto lo único que habilita el Animator.
+static void test_load_auto_returns_skinned_for_rigged()
+{
+    std::shared_ptr<Mesh> m = ModelLoader::loadAuto("assets/modelAnimation.fbx");
+    CHECK(m != nullptr);
+    if (!m) return;
+    SkinnedMesh* sm = dynamic_cast<SkinnedMesh*>(m.get());
+    CHECK(sm != nullptr);
+    if (!sm) return;
+    CHECK(!sm->skeleton.names.empty());
+    // La fuente builtin la crea loadSkinned; loadAuto no debe alterarla.
+    CHECK(sm->animationSources.size() == 1u);
+}
+
+// Mismo motivo que test_has_bones_rejects_unrigged_model: no hay ningún FBX
+// sin rig en el repo (model.fbx y modelTexture.fbx son personajes Mixamo
+// rigged pese al nombre), así que el negativo de loadAuto también se genera
+// como OBJ en vez de apuntar a un asset de assets/.
+static void test_load_auto_returns_static_for_unrigged()
+{
+    const std::string path = writeUnriggedObjFixture("dt_test_load_auto_unrigged.obj");
+    std::shared_ptr<Mesh> m = ModelLoader::loadAuto(path);
+    std::filesystem::remove(path);
+    CHECK(m != nullptr);
+    if (!m) return;
+    CHECK(dynamic_cast<SkinnedMesh*>(m.get()) == nullptr);
+    CHECK(!m->vertices.empty());
 }
 
 // La regla de nombres únicos es la misma que ya aplicaba el loader (Mixamo
@@ -560,6 +652,262 @@ static void test_scene_without_animation_sources_loads(PhysicsManager& pm, Audio
     CHECK(lm->animationSources[0].builtin == true);
 }
 
+// Las escenas guardadas antes de la auto-detección tienen "skinned": false para
+// TODOS sus meshes — el editor nunca creaba skinned. Si la carga siguiera
+// leyendo ese flag, esos proyectos nunca podrían tener Animator sin reimportar
+// la malla a mano. Manda el fichero, no el flag.
+static void test_scene_load_ignores_stale_skinned_false(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+    go->setMesh(mesh);
+
+    nlohmann::json j = scene.toJson();
+    // Simula el fichero viejo: flag a false sobre un FBX que sí tiene huesos.
+    j["root"]["children"][0]["mesh"]["skinned"] = false;
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+
+    SkinnedMesh* lm = found->getSkinnedMesh();
+    CHECK(lm != nullptr);
+    if (!lm) return;
+    CHECK(!lm->skeleton.names.empty());
+    CHECK(found->isSkinned());
+}
+
+// El caso simétrico: escena con "skinned": true cuyo FBX se reexportó luego sin
+// huesos. Carga estática y sus fuentes de animación se descartan — pero con un
+// aviso en Scene::lastWarnings() (lo que lee el Log Console), no en silencio.
+// No hay ningún FBX del repo que sirva de "sin rig" (model.fbx y
+// modelTexture.fbx son personajes Mixamo rigged pese al nombre, ver el
+// comentario de writeUnriggedObjFixture más arriba), así que se reusa ese
+// mismo helper con un nombre de fichero propio para no colisionar con los
+// tests de Task 1.
+static void test_scene_load_warns_when_rig_disappeared(PhysicsManager& pm, AudioManager& am)
+{
+    const std::string unriggedPath = writeUnriggedObjFixture("dt_test_scene_rig_disappeared.obj");
+
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Prop");
+    const uint64_t id = go->id;
+    go->setMesh(std::make_shared<Mesh>(ModelLoader::load(unriggedPath)));
+
+    nlohmann::json j = scene.toJson();
+    // Simula el reexport: la escena creía que era skinned y guardó fuentes.
+    j["root"]["children"][0]["mesh"]["skinned"] = true;
+    j["root"]["children"][0]["mesh"]["animationSources"] = nlohmann::json::array({
+        { {"path", "assets/modelAnimation.fbx"}, {"builtin", false}, {"clips", {"Salto"}} }
+    });
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    std::filesystem::remove(unriggedPath);
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+
+    // Carga, pero estático: sin huesos no hay nada que animar.
+    CHECK(found->hasMesh());
+    CHECK(found->getSkinnedMesh() == nullptr);
+
+    bool avisado = false;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("dt_test_scene_rig_disappeared.obj") != std::string::npos) avisado = true;
+    CHECK(avisado);
+}
+
+// Fix de review (task-3): hasBones() devuelve false tanto si el fichero no
+// tiene huesos como si directamente no se puede leer (movido/borrado). Antes
+// de este fix ambos casos disparaban el mismo aviso ("ya no declara huesos"),
+// que en el caso de fichero ausente apunta al sitio equivocado — y encima el
+// intento de ModelLoader::load() sobre un path inexistente lanzaba y la
+// excepción se tragaba en silencio, dejando al usuario sin ninguna pista.
+// Simula el fichero movido/borrado: se guarda la escena con un sourcePath
+// real, y luego se sustituye por uno que no existe antes de recargar — así
+// no hace falta tocar disco de verdad para dejar "colgante" la ruta.
+static void test_scene_load_warns_when_file_missing(PhysicsManager& pm, AudioManager& am)
+{
+    const std::string unriggedPath = writeUnriggedObjFixture("dt_test_scene_file_missing.obj");
+
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Prop");
+    const uint64_t id = go->id;
+    go->setMesh(std::make_shared<Mesh>(ModelLoader::load(unriggedPath)));
+
+    nlohmann::json j = scene.toJson();
+    std::filesystem::remove(unriggedPath);
+    // Escena guardada creyendo que era animado; el fichero real (el OBJ, que
+    // nunca tuvo huesos) ya no está en disco al recargar.
+    j["root"]["children"][0]["mesh"]["skinned"] = true;
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+
+    // El fichero no existe: no hay malla que cargar, pero la escena entera
+    // sigue viva (no crashea, no aborta la carga).
+    CHECK(!found->hasMesh());
+
+    bool warnsMissingFile  = false;
+    bool wronglyClaimsBones = false;
+    for (const auto& w : loaded.lastWarnings())
+    {
+        if (w.find("dt_test_scene_file_missing.obj") != std::string::npos &&
+            w.find("no se encuentra") != std::string::npos)
+            warnsMissingFile = true;
+        if (w.find("ya no declara huesos") != std::string::npos)
+            wronglyClaimsBones = true;
+    }
+    CHECK(warnsMissingFile);
+    CHECK(!wronglyClaimsBones);
+}
+
+// Fix de review (task-3): el catch que envuelve la carga de la malla se
+// tragaba cualquier std::exception en silencio. Con esto, el warning de
+// arriba avisa del motivo (fichero ausente); este test comprueba que ADEMÁS
+// el catch de la carga en sí (el de ModelLoader::load lanzando) deja su
+// propio rastro con el mensaje de la excepción — no solo el aviso de
+// hasBones. Reusa el mismo escenario que el test anterior.
+static void test_scene_load_warns_on_load_exception(PhysicsManager& pm, AudioManager& am)
+{
+    const std::string unriggedPath = writeUnriggedObjFixture("dt_test_scene_load_exception.obj");
+
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Prop");
+    const uint64_t id = go->id;
+    go->setMesh(std::make_shared<Mesh>(ModelLoader::load(unriggedPath)));
+
+    nlohmann::json j = scene.toJson();
+    std::filesystem::remove(unriggedPath);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(!found->hasMesh());
+
+    bool warnsLoadFailure = false;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("dt_test_scene_load_exception.obj") != std::string::npos &&
+            w.find("no se pudo cargar la malla") != std::string::npos)
+            warnsLoadFailure = true;
+    CHECK(warnsLoadFailure);
+}
+
+// Finding de revisión (task-3): hasBonesCache es una cache POR-CARGA dentro de
+// Scene::fromJson (ver nodeFromJson en Scene.cpp) que evita repetir el
+// ReadFile completo de Assimp cuando varios nodos comparten sourcePath. Todos
+// los demás tests de este fichero usan un único GameObject por sourcePath, así
+// que la rama de cache-HIT (sourcePath ya presente en el mapa) nunca se
+// ejercitaba en la suite — solo la de miss. Este test crea a propósito DOS
+// GameObjects que apuntan al MISMO FBX rigged: el primer nodo puebla la cache
+// (miss) y el segundo la consulta (hit). Si la cache guardara la clave
+// equivocada, el valor equivocado, o tratara el hit como "sin huesos" por
+// error, el segundo nodo cargaría como Mesh plano mientras el primero cargaría
+// SkinnedMesh — esa asimetría es justo lo que detecta este test. No
+// simplificar a un solo nodo: eso perdería la cobertura que pide el finding.
+static void test_scene_load_shares_has_bones_cache_across_nodes(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go1 = scene.addGameObject("Personaje1");
+    GameObject* go2 = scene.addGameObject("Personaje2");
+    const uint64_t id1 = go1->id;
+    const uint64_t id2 = go2->id;
+
+    go1->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx")));
+    go2->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx")));
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+
+    GameObject* found1 = loaded.findById(id1);
+    GameObject* found2 = loaded.findById(id2);
+    CHECK(found1 != nullptr);
+    CHECK(found2 != nullptr);
+    if (!found1 || !found2) return;
+
+    // Primer nodo: rama MISS de la cache (la puebla).
+    SkinnedMesh* sm1 = found1->getSkinnedMesh();
+    CHECK(sm1 != nullptr);
+    if (sm1) CHECK(!sm1->skeleton.names.empty());
+
+    // Segundo nodo: rama HIT de la cache — debe dar la MISMA respuesta que el
+    // primero, no una lectura fallida ni un Mesh estático.
+    SkinnedMesh* sm2 = found2->getSkinnedMesh();
+    CHECK(sm2 != nullptr);
+    if (sm2) CHECK(!sm2->skeleton.names.empty());
+}
+
+// Finding de revisión final: nada ejercitaba cloneGameObject con una malla
+// rigged. Su único caller es Scene.Instantiate de Lua, que corre dentro del
+// bucle de Play — y hasta el fix pasaba hasBonesCache == nullptr, así que cada
+// spawn sondeaba el FBX con Assimp y lo volvía a parsear entero. La respuesta
+// autoritativa ya está en memoria (src->isSkinned()): si el clon volviera como
+// Mesh plano —porque el FBX se está reexportando en ese instante, o porque
+// alguien rompiera la siembra de la cache— el clon perdería el Animator
+// mientras el original lo conserva. Eso es justo lo que detecta este test.
+static void test_clone_of_rigged_mesh_stays_skinned(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    go->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx")));
+    CHECK(go->isSkinned());
+
+    GameObject* clone = scene.cloneGameObject(go, nullptr, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+
+    CHECK(clone != go);
+    CHECK(clone->isSkinned());
+    SkinnedMesh* sm = clone->getSkinnedMesh();
+    CHECK(sm != nullptr);
+    if (!sm) return;
+    CHECK(!sm->skeleton.names.empty());
+    CHECK(sm->sourcePath == "assets/modelAnimation.fbx");
+}
+
+// Mismo finding, la otra ruta que pasaba nullptr: insertFromJson, que es el
+// undo de un Delete. Se reproduce el ciclo completo del comando —snapshot con
+// subtreeToJson, borrado, reinserción— porque es ahí donde el tipo de malla se
+// decide de nuevo: el JSON no manda (el flag "skinned" ya no se lee), lo
+// reconstruye la detección de rig. Un personaje borrado y recuperado tiene que
+// volver skinned, o el undo le habría quitado el Animator en silencio.
+static void test_delete_undo_restores_rigged_mesh_as_skinned(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    go->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx")));
+
+    nlohmann::json snapshot = scene.subtreeToJson(go);
+    scene.removeGameObject(go);
+    CHECK(scene.findById(id) == nullptr);
+
+    GameObject* restored = scene.insertFromJson(snapshot, nullptr, 0, pm, am);
+    CHECK(restored != nullptr);
+    if (!restored) return;
+
+    // El id se conserva: los comandos posteriores del stack de undo siguen
+    // resolviendo contra el mismo GameObject.
+    CHECK(restored->id == id);
+    CHECK(restored->isSkinned());
+    SkinnedMesh* sm = restored->getSkinnedMesh();
+    CHECK(sm != nullptr);
+    if (!sm) return;
+    CHECK(!sm->skeleton.names.empty());
+}
+
 // Fix de review: un forcedName que ya está en uso (por un clip existente, o
 // por un forcedName anterior de esta misma importación) NO puede colarse tal
 // cual — dejaría dos clips homónimos y el Animator resuelve por nombre, así
@@ -688,6 +1036,289 @@ static void test_pack_mesh_without_clips()
     CHECK(p.pos.size() == 1u);     // dummy
     CHECK(p.rot.size() == 1u);
     CHECK(p.scale.size() == 1u);
+}
+
+// Réplica en CPU de slerpQ de bone_eval.comp, incluida la negación por
+// producto escalar negativo: glm::slerp no toma necesariamente el mismo camino,
+// y aquí interesa reproducir lo que calcula la GPU, no lo que es equivalente.
+static glm::vec4 slerpQ(glm::vec4 a, glm::vec4 b, float t)
+{
+    float c = glm::dot(a, b);
+    if (c < 0.0f) { b = -b; c = -c; }
+    if (c > 0.9995f) return glm::normalize(glm::mix(a, b, t));
+    const float angle = std::acos(c);
+    const float is    = 1.0f / std::sin(angle);
+    return (std::sin((1.0f - t) * angle) * a + std::sin(t * angle) * b) * is;
+}
+
+// Réplica en CPU de bone_eval.comp: el transform local del hueso i dentro del
+// bloque de clip que empieza en clipBase, evaluado en el instante T. Misma
+// búsqueda lineal del tramo y misma interpolación que el shader, para que lo
+// que se afirme en los tests sea lo que de verdad acaba calculando la GPU.
+static glm::mat4 evalLocalXform(const PackedClips& p, size_t clipBase, size_t i, float T)
+{
+    const GpuBoneInfo& info = p.boneInfos[clipBase + i];
+
+    // Hueso del que el clip no dice absolutamente nada: conserva su local de
+    // bind pose. Poner la identidad aquí lo colapsaría sobre el origen y la
+    // orientación de su padre — ver test_bone_without_channel_keeps_bind_pose.
+    if (info.posCount == 0 && info.rotCount == 0 && info.scaleCount == 0)
+        return info.bindLocal;
+
+    glm::vec3 pos(0.0f);
+    if (info.posCount > 0)
+    {
+        int lo = info.posOffset, hi = info.posOffset + info.posCount - 1;
+        for (int k = info.posOffset; k < info.posOffset + info.posCount - 1; k++)
+            if (p.pos[(size_t)k + 1].timePad.x > T) { lo = k; hi = k + 1; break; }
+        const float t0 = p.pos[(size_t)lo].timePad.x, t1 = p.pos[(size_t)hi].timePad.x;
+        const float f  = (t1 > t0) ? glm::clamp((T - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
+        pos = glm::mix(glm::vec3(p.pos[(size_t)lo].value), glm::vec3(p.pos[(size_t)hi].value), f);
+    }
+
+    glm::vec4 rot(0.0f, 0.0f, 0.0f, 1.0f);
+    if (info.rotCount > 0)
+    {
+        int lo = info.rotOffset, hi = info.rotOffset + info.rotCount - 1;
+        for (int k = info.rotOffset; k < info.rotOffset + info.rotCount - 1; k++)
+            if (p.rot[(size_t)k + 1].timePad.x > T) { lo = k; hi = k + 1; break; }
+        const float t0 = p.rot[(size_t)lo].timePad.x, t1 = p.rot[(size_t)hi].timePad.x;
+        const float f  = (t1 > t0) ? glm::clamp((T - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
+        rot = slerpQ(p.rot[(size_t)lo].value, p.rot[(size_t)hi].value, f);
+    }
+
+    glm::vec3 scl(1.0f);
+    if (info.scaleCount > 0)
+    {
+        int lo = info.scaleOffset, hi = info.scaleOffset + info.scaleCount - 1;
+        for (int k = info.scaleOffset; k < info.scaleOffset + info.scaleCount - 1; k++)
+            if (p.scale[(size_t)k + 1].timePad.x > T) { lo = k; hi = k + 1; break; }
+        const float t0 = p.scale[(size_t)lo].timePad.x, t1 = p.scale[(size_t)hi].timePad.x;
+        const float f  = (t1 > t0) ? glm::clamp((T - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
+        scl = glm::mix(glm::vec3(p.scale[(size_t)lo].value), glm::vec3(p.scale[(size_t)hi].value), f);
+    }
+
+    // trs(): rotación por cuaternión, columnas escaladas, traslación en la 4ª.
+    // El shader guarda el cuaternión como (x,y,z,w) y glm::quat se construye
+    // (w,x,y,z) — invertir esto daría una rotación distinta sin fallar nada.
+    glm::mat4 out = glm::mat4_cast(glm::quat(rot.w, rot.x, rot.y, rot.z));
+    out[0] *= scl.x;
+    out[1] *= scl.y;
+    out[2] *= scl.z;
+    out[3] = glm::vec4(pos, 1.0f);
+    return out;
+}
+
+// Réplica en CPU de bone_hierarchy.comp: las dos pasadas, tal cual. Sirve pa
+// comprobar la matriz que acaba viendo skinning.comp sin necesitar un VkDevice.
+static std::vector<glm::mat4> runBoneHierarchy(const PackedClips& p, size_t clipBase,
+                                               size_t boneCount, float T)
+{
+    std::vector<glm::mat4> final(boneCount, glm::mat4(1.0f));
+
+    // Pass 1: transformada de mundo (el orden topológico garantiza padre < hijo)
+    for (size_t i = 0; i < boneCount; i++)
+    {
+        const glm::mat4 local  = evalLocalXform(p, clipBase, i, T);
+        const int       parent = p.boneInfos[clipBase + i].parentIndex;
+        final[i] = (parent < 0) ? local : final[(size_t)parent] * local;
+    }
+
+    // Pass 2: inverse bind pose
+    for (size_t i = 0; i < boneCount; i++)
+        final[i] = final[i] * p.boneInfos[clipBase + i].inverseBindPose;
+
+    return final;
+}
+
+static bool nearlyEqualMat(const glm::mat4& a, const glm::mat4& b, float eps = 0.001f)
+{
+    for (int c = 0; c < 4; c++)
+        for (int r = 0; r < 4; r++)
+            if (!nearlyEqual(a[c][r], b[c][r], eps)) return false;
+    return true;
+}
+
+static bool nearlyIdentity(const glm::mat4& m, float eps = 0.001f)
+{
+    return nearlyEqualMat(m, glm::mat4(1.0f), eps);
+}
+
+// skinnedVertices guarda posiciones en bind pose (es lo que da Assimp), así que
+// la matriz de skinning mapea bind pose -> pose actual. Sin animación ninguna la
+// pose actual ES la bind pose: la matriz correcta es la identidad y la malla
+// debe salir exactamente como sus vértices almacenados. Si finalBones acaba
+// valiendo la inverse bind pose, el personaje se ve deformado.
+//
+// Este caso no tiene mecanismo propio: es el extremo degenerado de la regla
+// general que fija test_bone_without_channel_keeps_bind_pose. Sin clips, TODOS
+// los huesos están sin canal, así que todos reciben su local de bind pose, la
+// pasada 1 reconstruye exactamente la global de bind pose y la pasada 2 la
+// multiplica por su inversa: identidad, por construcción y no por un caso
+// especial. Que este test siga en verde con la inverse bind pose REAL en
+// boneInfos es la prueba de que la regla general lo cubre.
+static void test_pack_without_clips_yields_identity_final_bones()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    CHECK(!m.skeleton.names.empty());
+    m.animationClips.clear(); // FBX riggeado pero sin animaciones
+
+    const size_t boneCount = m.skeleton.names.size();
+    PackedClips  p         = packSkinnedClips(m);
+    CHECK(p.boneInfos.size() == boneCount);
+
+    // Sin clips no hay ni una sola key: es la precondición del caso.
+    for (size_t i = 0; i < boneCount; i++)
+        CHECK(p.boneInfos[i].posCount == 0 && p.boneInfos[i].rotCount == 0 &&
+              p.boneInfos[i].scaleCount == 0);
+
+    std::vector<glm::mat4> final = runBoneHierarchy(p, 0, boneCount, 0.0f);
+
+    int malas = 0;
+    for (size_t i = 0; i < boneCount; i++)
+    {
+        if (nearlyIdentity(final[i])) continue;
+        if (malas == 0)
+        {
+            std::printf("  hueso %zu (%s) no es identidad:\n", i, m.skeleton.names[i].c_str());
+            for (int r = 0; r < 4; r++)
+                std::printf("    [% .4f % .4f % .4f % .4f]\n",
+                            final[i][0][r], final[i][1][r], final[i][2][r], final[i][3][r]);
+        }
+        ++malas;
+    }
+    CHECK(malas == 0);
+}
+
+// EL bug de render: un clip NO tiene por qué traer un canal por cada hueso del
+// esqueleto. Para un hueso sin canal packSkinnedClips deja los tres counts a 0,
+// y bone_eval.comp traducía esos ceros a transform local IDENTIDAD. Un local
+// identidad no es "quieto": borra el offset del hueso respecto a su padre, así
+// que el hueso colapsa sobre el origen y la orientación del padre y se lleva por
+// delante toda su cadena descendiente. En el asset del usuario era
+// mixamorig:RightShoulder (1262 vértices, sin canal) el que dejaba el brazo
+// derecho entero colgando a la altura de la cabeza.
+//
+// La suite no lo pillaba porque modelAnimation.fbx lo esquiva por casualidad:
+// sus 13 huesos sin canal son puntas (*_End, *4) que influyen 0 vértices. Por
+// eso aquí el caso se construye a mano — se le quita el canal a un hueso que SÍ
+// tiene hijos y SÍ deforma geometría, y al de todo su subárbol, que es
+// exactamente la forma en que el bug se manifestó.
+//
+// La propiedad que se fija es "el miembro sin animar se queda donde lo
+// rigearon": un hueso sin canal viaja RÍGIDAMENTE con su padre, conservando el
+// offset de bind pose. Formalmente final[b] == final[padre(b)], porque
+//   final[b] = global[padre] * localBind[b] * invBind[b]
+// y localBind[b] * invBind[b] == invBind[padre] por definición de localBind.
+// Se elige esta formulación porque es EXACTA con el clip real animado, sin
+// depender del instante ni de descomponer ninguna matriz en TRS. Su consecuencia
+// visible —y es lo que el usuario veía roto— es que el descendiente aterriza
+// donde le toca respecto a ese padre, no a media pantalla de distancia.
+static void test_bone_without_channel_keeps_bind_pose()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    CHECK(!m.skeleton.names.empty());
+    CHECK(!m.animationClips.empty());
+    if (m.skeleton.names.empty() || m.animationClips.empty()) return;
+
+    const size_t boneCount = m.skeleton.names.size();
+
+    // Vértices influidos por hueso: el bug sólo es visible en los que deforman
+    // geometría, y es justo lo que le faltaba al caso que la suite ya tenía.
+    std::vector<int> verts(boneCount, 0);
+    for (const auto& v : m.skinnedVertices)
+        for (int s = 0; s < 4; s++)
+            if (v.boneWeights[s] > 0.0f && v.boneIndices[s] >= 0 &&
+                (size_t)v.boneIndices[s] < (int)boneCount)
+                verts[(size_t)v.boneIndices[s]]++;
+
+    AnimationClip& clip = m.animationClips[0];
+    std::vector<bool> tieneCanal(boneCount, false);
+    for (const auto& ch : clip.channels)
+        if (ch.boneIndex >= 0 && (size_t)ch.boneIndex < boneCount)
+            tieneCanal[(size_t)ch.boneIndex] = true;
+
+    // Tamaño de subárbol. parentIndex está en orden topológico (padre < hijo),
+    // así que un recorrido hacia atrás lo acumula en una sola pasada.
+    std::vector<int> subtree(boneCount, 1);
+    for (size_t i = boneCount; i-- > 1; )
+    {
+        const int par = m.skeleton.parentIndex[i];
+        if (par >= 0) subtree[(size_t)par] += subtree[i];
+    }
+
+    // B: hueso con canal, con padre, que deforma geometría y del que cuelga la
+    // cadena más larga — el análogo del RightShoulder que rompía el asset real.
+    int B = -1;
+    for (size_t i = 0; i < boneCount; i++)
+        if (m.skeleton.parentIndex[i] >= 0 && tieneCanal[i] && verts[i] > 0 && subtree[i] > 1)
+            if (B < 0 || subtree[i] > subtree[(size_t)B]) B = (int)i;
+    CHECK(B >= 0);
+    if (B < 0) return;
+
+    const int P = m.skeleton.parentIndex[(size_t)B];
+    // El padre tiene que seguir animado: si no, no habría nada a lo que "seguir"
+    // y el test pasaría por el motivo equivocado.
+    CHECK(tieneCanal[(size_t)P]);
+
+    std::vector<bool> enSubarbol(boneCount, false);
+    enSubarbol[(size_t)B] = true;
+    for (size_t i = (size_t)B + 1; i < boneCount; i++)
+    {
+        const int par = m.skeleton.parentIndex[i];
+        if (par >= 0 && enSubarbol[(size_t)par]) enSubarbol[i] = true;
+    }
+
+    // D: el descendiente más profundo de B que deforma geometría — el "dedo"
+    // cuya posición delata el colapso.
+    std::vector<int> depth(boneCount, 0);
+    int D = -1;
+    for (size_t i = 0; i < boneCount; i++)
+    {
+        const int par = m.skeleton.parentIndex[i];
+        depth[i] = (par >= 0) ? depth[(size_t)par] + 1 : 0;
+        if (enSubarbol[i] && (int)i != B && verts[i] > 0)
+            if (D < 0 || depth[i] > depth[(size_t)D]) D = (int)i;
+    }
+    CHECK(D >= 0);
+    if (D < 0) return;
+
+    // Se quitan los canales de B y de todo su subárbol: el miembro entero pasa a
+    // no tener animación propia.
+    std::vector<BoneChannel> quedan;
+    for (const auto& ch : clip.channels)
+        if (ch.boneIndex < 0 || (size_t)ch.boneIndex >= boneCount ||
+            !enSubarbol[(size_t)ch.boneIndex])
+            quedan.push_back(ch);
+    CHECK(quedan.size() < clip.channels.size());
+    clip.channels = quedan;
+
+    PackedClips p = packSkinnedClips(m);
+    CHECK(p.boneInfos.size() == boneCount);
+    CHECK(p.boneInfos[(size_t)B].posCount == 0);
+    CHECK(p.boneInfos[(size_t)P].posCount > 0);   // el padre sí se anima
+
+    std::vector<glm::mat4> final = runBoneHierarchy(p, 0, boneCount, 0.0f);
+
+    // Consecuencia visible: el origen de D en bind pose, deformado por su propia
+    // matriz final, tiene que caer donde lo lleva la matriz del padre animado P.
+    const glm::vec3 bindD    = glm::vec3(glm::inverse(m.skeleton.inverseBindPose[(size_t)D])[3]);
+    const glm::vec3 esperado = glm::vec3(final[(size_t)P] * glm::vec4(bindD, 1.0f));
+    const glm::vec3 real     = glm::vec3(final[(size_t)D] * glm::vec4(bindD, 1.0f));
+    const float     dist     = glm::length(real - esperado);
+
+    if (dist > 0.2f)
+        std::printf("  %s (sin canal, bajo %s): esperado (%.3f %.3f %.3f), real (%.3f %.3f %.3f)"
+                    " -> desplazado %.3f unidades\n",
+                    m.skeleton.names[(size_t)D].c_str(), m.skeleton.names[(size_t)P].c_str(),
+                    esperado.x, esperado.y, esperado.z, real.x, real.y, real.z, dist);
+    CHECK(dist < 0.2f);
+
+    // Umbral holgado a propósito: localBind se obtiene invirtiendo la inverse
+    // bind pose, y con traslaciones de ~180 unidades el error en float ronda
+    // 1e-3. El fallo que persigue el test son decenas de unidades.
+    CHECK(nearlyEqualMat(final[(size_t)B], final[(size_t)P], 0.05f));
+    CHECK(nearlyEqualMat(final[(size_t)D], final[(size_t)P], 0.05f));
 }
 
 // Helper: grafo Idle(loop) -> Run(loop) -> Jump(no loop) -> Idle.
@@ -2066,6 +2697,8 @@ int main()
     test_apply_clip_names_positionally_rejects_external_collision();
     test_pack_concatenates_clips();
     test_pack_mesh_without_clips();
+    test_pack_without_clips_yields_identity_final_bones();
+    test_bone_without_channel_keeps_bind_pose();
 
     test_trigger_switches_state();
     test_animation_finished_timing();
@@ -2087,6 +2720,12 @@ int main()
     test_remove_numeric_parameter_cleans_conditions();
     test_animation_finished_fires_on_zero_duration_state();
 
+    test_has_bones_detects_rigged_fbx();
+    test_has_bones_rejects_unrigged_model();
+    test_has_bones_survives_missing_file();
+    test_load_auto_returns_skinned_for_rigged();
+    test_load_auto_returns_static_for_unrigged();
+
     test_bind_clips_resolves_by_name();
     test_gameobject_animator_slot();
 
@@ -2098,6 +2737,13 @@ int main()
     test_missing_animation_source_does_not_break_load(pm, am);
     test_missing_animation_source_warns_through_scene(pm, am);
     test_scene_without_animation_sources_loads(pm, am);
+    test_scene_load_ignores_stale_skinned_false(pm, am);
+    test_scene_load_warns_when_rig_disappeared(pm, am);
+    test_scene_load_warns_when_file_missing(pm, am);
+    test_scene_load_warns_on_load_exception(pm, am);
+    test_scene_load_shares_has_bones_cache_across_nodes(pm, am);
+    test_clone_of_rigged_mesh_stays_skinned(pm, am);
+    test_delete_undo_restores_rigged_mesh_as_skinned(pm, am);
 
     test_animator_command_add_undo_redo();
     test_animator_command_remove();

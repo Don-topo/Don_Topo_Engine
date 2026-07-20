@@ -1,12 +1,17 @@
 #version 450
 layout(local_size_x = 1) in;
 
+// Layout std430, espejo de GpuBoneInfo (engine/include/DonTopo/Renderer/SkinnedMesh.h)
+// y del mismo struct en bone_eval.comp. Este shader no lee bindLocal, pero el
+// campo tiene que estar igualmente: comparten la misma SSBO (binding 3) y
+// omitirlo desplazaría la lectura de inverseBindPose de los huesos siguientes.
 struct BoneInfo {
     int posOffset, posCount;
     int rotOffset, rotCount;
     int scaleOffset, scaleCount;
     int parentIndex, pad;
     mat4 inverseBindPose;
+    mat4 bindLocal;
 };
 
 layout(set=0, binding=3, std430) readonly buffer BoneInfos   { BoneInfo data[]; } boneInfos;

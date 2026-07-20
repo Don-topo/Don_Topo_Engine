@@ -7,8 +7,6 @@ namespace DonTopo
         const Skeleton& skel      = mesh.skeleton;
         const int       boneCount = (int)skel.names.size();
         // Malla sin animaciones: un bloque igualmente, con todos los counts a 0.
-        // bone_eval devuelve entonces la identidad, que es lo que hacía el
-        // código de un solo clip cuando el FBX no traía animación.
         const size_t clipCount = mesh.animationClips.empty() ? 1u : mesh.animationClips.size();
 
         PackedClips out;
@@ -24,6 +22,23 @@ namespace DonTopo
                 bi.parentIndex     = skel.parentIndex[b];
                 bi.inverseBindPose = skel.inverseBindPose[b];
                 bi.pad             = 0;
+
+                // Local de bind pose, el valor por defecto de un hueso del que
+                // el clip activo no dice nada. La identidad NO sirve: borraría
+                // el offset del hueso respecto a su padre y lo colapsaría sobre
+                // él, arrastrando toda su cadena descendiente (un brazo entero
+                // acababa a la altura de la cabeza).
+                //
+                //   globalBind[b] = inverse(inverseBindPose[b])
+                //   localBind[b]  = inverse(globalBind[padre]) * globalBind[b]
+                //
+                // y como inverse(globalBind[padre]) ES inverseBindPose[padre],
+                // basta una inversión por hueso en vez de dos. Se pasa la matriz
+                // entera a la GPU en vez de descomponerla en TRS: así es exacta.
+                const glm::mat4 globalBind = glm::inverse(skel.inverseBindPose[b]);
+                const int       padre      = skel.parentIndex[b];
+                bi.bindLocal = (padre < 0) ? globalBind
+                                           : skel.inverseBindPose[padre] * globalBind;
 
                 const BoneChannel* ch = nullptr;
                 if (clip)

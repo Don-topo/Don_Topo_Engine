@@ -3,12 +3,16 @@ layout(local_size_x = 64) in;
 
 struct PosKey  { vec4 timePad; vec4 value; };
 struct RotKey  { vec4 timePad; vec4 quat;  };
+// Layout std430, espejo de GpuBoneInfo (engine/include/DonTopo/Renderer/SkinnedMesh.h)
+// y del mismo struct en bone_hierarchy.comp. Los tres tienen que coincidir campo
+// a campo y en el mismo orden.
 struct BoneInfo {
     int posOffset, posCount;
     int rotOffset, rotCount;
     int scaleOffset, scaleCount;
     int parentIndex, pad;
     mat4 inverseBindPose;
+    mat4 bindLocal;
 };
 
 layout(set=0, binding=0, std430) readonly buffer PosKeys    { PosKey  data[]; } posKeys;
@@ -62,6 +66,18 @@ void main()
 
     BoneInfo info = boneInfos.data[push.clipBase + bi];
     float T = push.animTime;
+
+    // Un clip no tiene por qué traer un canal por cada hueso del esqueleto. Del
+    // hueso del que no dice nada hay que conservar su local de bind pose: con la
+    // identidad se perdería su offset respecto al padre y colapsaría encima de
+    // él, llevándose por delante toda su cadena descendiente. Los huesos que SÍ
+    // tienen canal siguen por la interpolación de abajo — Assimp rellena los
+    // tres arrays de keys a todo hueso al que le da canal.
+    if (info.posCount == 0 && info.rotCount == 0 && info.scaleCount == 0)
+    {
+        localXforms.data[bi] = info.bindLocal;
+        return;
+    }
 
     // Position
     vec3 pos = vec3(0.0);

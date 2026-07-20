@@ -1,6 +1,7 @@
 #pragma once
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include <memory>
 #include <string>
 
 namespace DonTopo
@@ -28,5 +29,22 @@ namespace DonTopo
             //
             // No lanza: un fichero ilegible devuelve clips vacío y un warning.
             static LoadedClips loadAnimationClips(const std::string& path, const Skeleton& skel);
+
+            // true si algún aiMesh del fichero declara huesos. Es lo que separa
+            // un personaje de un prop: sin huesos no hay pesos por vértice, y
+            // sin pesos no hay nada que una animación pueda deformar.
+            //
+            // No lanza. Un fichero ilegible devuelve false y deja que load()
+            // dé el error de verdad, con su mensaje.
+            static bool hasBones(const std::string& path);
+
+            // Decide estático vs skinned mirando el fichero, no al llamante. Un
+            // FBX con huesos entra siempre como SkinnedMesh, aunque no traiga ni
+            // una animación: es lo que habilita el Animator, y los clips pueden
+            // venir después de otros ficheros (ver addAnimationSource).
+            //
+            // Propaga las excepciones de load()/loadSkinned(): los llamantes ya
+            // tienen su try/catch y su mensaje de error para el usuario.
+            static std::shared_ptr<Mesh> loadAuto(const std::string& path);
     };
 }
