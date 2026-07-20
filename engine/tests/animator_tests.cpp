@@ -1038,37 +1038,110 @@ static void test_pack_mesh_without_clips()
     CHECK(p.scale.size() == 1u);
 }
 
+// Réplica en CPU de slerpQ de bone_eval.comp, incluida la negación por
+// producto escalar negativo: glm::slerp no toma necesariamente el mismo camino,
+// y aquí interesa reproducir lo que calcula la GPU, no lo que es equivalente.
+static glm::vec4 slerpQ(glm::vec4 a, glm::vec4 b, float t)
+{
+    float c = glm::dot(a, b);
+    if (c < 0.0f) { b = -b; c = -c; }
+    if (c > 0.9995f) return glm::normalize(glm::mix(a, b, t));
+    const float angle = std::acos(c);
+    const float is    = 1.0f / std::sin(angle);
+    return (std::sin((1.0f - t) * angle) * a + std::sin(t * angle) * b) * is;
+}
+
+// Réplica en CPU de bone_eval.comp: el transform local del hueso i dentro del
+// bloque de clip que empieza en clipBase, evaluado en el instante T. Misma
+// búsqueda lineal del tramo y misma interpolación que el shader, para que lo
+// que se afirme en los tests sea lo que de verdad acaba calculando la GPU.
+static glm::mat4 evalLocalXform(const PackedClips& p, size_t clipBase, size_t i, float T)
+{
+    const GpuBoneInfo& info = p.boneInfos[clipBase + i];
+
+    // Hueso del que el clip no dice absolutamente nada: conserva su local de
+    // bind pose. Poner la identidad aquí lo colapsaría sobre el origen y la
+    // orientación de su padre — ver test_bone_without_channel_keeps_bind_pose.
+    if (info.posCount == 0 && info.rotCount == 0 && info.scaleCount == 0)
+        return info.bindLocal;
+
+    glm::vec3 pos(0.0f);
+    if (info.posCount > 0)
+    {
+        int lo = info.posOffset, hi = info.posOffset + info.posCount - 1;
+        for (int k = info.posOffset; k < info.posOffset + info.posCount - 1; k++)
+            if (p.pos[(size_t)k + 1].timePad.x > T) { lo = k; hi = k + 1; break; }
+        const float t0 = p.pos[(size_t)lo].timePad.x, t1 = p.pos[(size_t)hi].timePad.x;
+        const float f  = (t1 > t0) ? glm::clamp((T - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
+        pos = glm::mix(glm::vec3(p.pos[(size_t)lo].value), glm::vec3(p.pos[(size_t)hi].value), f);
+    }
+
+    glm::vec4 rot(0.0f, 0.0f, 0.0f, 1.0f);
+    if (info.rotCount > 0)
+    {
+        int lo = info.rotOffset, hi = info.rotOffset + info.rotCount - 1;
+        for (int k = info.rotOffset; k < info.rotOffset + info.rotCount - 1; k++)
+            if (p.rot[(size_t)k + 1].timePad.x > T) { lo = k; hi = k + 1; break; }
+        const float t0 = p.rot[(size_t)lo].timePad.x, t1 = p.rot[(size_t)hi].timePad.x;
+        const float f  = (t1 > t0) ? glm::clamp((T - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
+        rot = slerpQ(p.rot[(size_t)lo].value, p.rot[(size_t)hi].value, f);
+    }
+
+    glm::vec3 scl(1.0f);
+    if (info.scaleCount > 0)
+    {
+        int lo = info.scaleOffset, hi = info.scaleOffset + info.scaleCount - 1;
+        for (int k = info.scaleOffset; k < info.scaleOffset + info.scaleCount - 1; k++)
+            if (p.scale[(size_t)k + 1].timePad.x > T) { lo = k; hi = k + 1; break; }
+        const float t0 = p.scale[(size_t)lo].timePad.x, t1 = p.scale[(size_t)hi].timePad.x;
+        const float f  = (t1 > t0) ? glm::clamp((T - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
+        scl = glm::mix(glm::vec3(p.scale[(size_t)lo].value), glm::vec3(p.scale[(size_t)hi].value), f);
+    }
+
+    // trs(): rotación por cuaternión, columnas escaladas, traslación en la 4ª.
+    // El shader guarda el cuaternión como (x,y,z,w) y glm::quat se construye
+    // (w,x,y,z) — invertir esto daría una rotación distinta sin fallar nada.
+    glm::mat4 out = glm::mat4_cast(glm::quat(rot.w, rot.x, rot.y, rot.z));
+    out[0] *= scl.x;
+    out[1] *= scl.y;
+    out[2] *= scl.z;
+    out[3] = glm::vec4(pos, 1.0f);
+    return out;
+}
+
 // Réplica en CPU de bone_hierarchy.comp: las dos pasadas, tal cual. Sirve pa
 // comprobar la matriz que acaba viendo skinning.comp sin necesitar un VkDevice.
-static std::vector<glm::mat4> runBoneHierarchy(const PackedClips& p, size_t boneCount)
+static std::vector<glm::mat4> runBoneHierarchy(const PackedClips& p, size_t clipBase,
+                                               size_t boneCount, float T)
 {
     std::vector<glm::mat4> final(boneCount, glm::mat4(1.0f));
 
-    // Pass 1: transformada de mundo. bone_eval escribe la identidad en el local
-    // de todo hueso cuyos tres counts sean 0, así que aquí se replica eso mismo.
+    // Pass 1: transformada de mundo (el orden topológico garantiza padre < hijo)
     for (size_t i = 0; i < boneCount; i++)
     {
-        const GpuBoneInfo& bi = p.boneInfos[i];
-        const bool sinKeys    = bi.posCount == 0 && bi.rotCount == 0 && bi.scaleCount == 0;
-        CHECK(sinKeys); // el caso bajo prueba es justo el de cero clips
-        const glm::mat4 local = glm::mat4(1.0f);
-
-        final[i] = (bi.parentIndex < 0) ? local : final[(size_t)bi.parentIndex] * local;
+        const glm::mat4 local  = evalLocalXform(p, clipBase, i, T);
+        const int       parent = p.boneInfos[clipBase + i].parentIndex;
+        final[i] = (parent < 0) ? local : final[(size_t)parent] * local;
     }
 
     // Pass 2: inverse bind pose
     for (size_t i = 0; i < boneCount; i++)
-        final[i] = final[i] * p.boneInfos[i].inverseBindPose;
+        final[i] = final[i] * p.boneInfos[clipBase + i].inverseBindPose;
 
     return final;
 }
 
-static bool nearlyIdentity(const glm::mat4& m, float eps = 0.001f)
+static bool nearlyEqualMat(const glm::mat4& a, const glm::mat4& b, float eps = 0.001f)
 {
     for (int c = 0; c < 4; c++)
         for (int r = 0; r < 4; r++)
-            if (!nearlyEqual(m[c][r], glm::mat4(1.0f)[c][r], eps)) return false;
+            if (!nearlyEqual(a[c][r], b[c][r], eps)) return false;
     return true;
+}
+
+static bool nearlyIdentity(const glm::mat4& m, float eps = 0.001f)
+{
+    return nearlyEqualMat(m, glm::mat4(1.0f), eps);
 }
 
 // skinnedVertices guarda posiciones en bind pose (es lo que da Assimp), así que
@@ -1076,6 +1149,14 @@ static bool nearlyIdentity(const glm::mat4& m, float eps = 0.001f)
 // pose actual ES la bind pose: la matriz correcta es la identidad y la malla
 // debe salir exactamente como sus vértices almacenados. Si finalBones acaba
 // valiendo la inverse bind pose, el personaje se ve deformado.
+//
+// Este caso no tiene mecanismo propio: es el extremo degenerado de la regla
+// general que fija test_bone_without_channel_keeps_bind_pose. Sin clips, TODOS
+// los huesos están sin canal, así que todos reciben su local de bind pose, la
+// pasada 1 reconstruye exactamente la global de bind pose y la pasada 2 la
+// multiplica por su inversa: identidad, por construcción y no por un caso
+// especial. Que este test siga en verde con la inverse bind pose REAL en
+// boneInfos es la prueba de que la regla general lo cubre.
 static void test_pack_without_clips_yields_identity_final_bones()
 {
     SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
@@ -1086,7 +1167,12 @@ static void test_pack_without_clips_yields_identity_final_bones()
     PackedClips  p         = packSkinnedClips(m);
     CHECK(p.boneInfos.size() == boneCount);
 
-    std::vector<glm::mat4> final = runBoneHierarchy(p, boneCount);
+    // Sin clips no hay ni una sola key: es la precondición del caso.
+    for (size_t i = 0; i < boneCount; i++)
+        CHECK(p.boneInfos[i].posCount == 0 && p.boneInfos[i].rotCount == 0 &&
+              p.boneInfos[i].scaleCount == 0);
+
+    std::vector<glm::mat4> final = runBoneHierarchy(p, 0, boneCount, 0.0f);
 
     int malas = 0;
     for (size_t i = 0; i < boneCount; i++)
@@ -1102,6 +1188,137 @@ static void test_pack_without_clips_yields_identity_final_bones()
         ++malas;
     }
     CHECK(malas == 0);
+}
+
+// EL bug de render: un clip NO tiene por qué traer un canal por cada hueso del
+// esqueleto. Para un hueso sin canal packSkinnedClips deja los tres counts a 0,
+// y bone_eval.comp traducía esos ceros a transform local IDENTIDAD. Un local
+// identidad no es "quieto": borra el offset del hueso respecto a su padre, así
+// que el hueso colapsa sobre el origen y la orientación del padre y se lleva por
+// delante toda su cadena descendiente. En el asset del usuario era
+// mixamorig:RightShoulder (1262 vértices, sin canal) el que dejaba el brazo
+// derecho entero colgando a la altura de la cabeza.
+//
+// La suite no lo pillaba porque modelAnimation.fbx lo esquiva por casualidad:
+// sus 13 huesos sin canal son puntas (*_End, *4) que influyen 0 vértices. Por
+// eso aquí el caso se construye a mano — se le quita el canal a un hueso que SÍ
+// tiene hijos y SÍ deforma geometría, y al de todo su subárbol, que es
+// exactamente la forma en que el bug se manifestó.
+//
+// La propiedad que se fija es "el miembro sin animar se queda donde lo
+// rigearon": un hueso sin canal viaja RÍGIDAMENTE con su padre, conservando el
+// offset de bind pose. Formalmente final[b] == final[padre(b)], porque
+//   final[b] = global[padre] * localBind[b] * invBind[b]
+// y localBind[b] * invBind[b] == invBind[padre] por definición de localBind.
+// Se elige esta formulación porque es EXACTA con el clip real animado, sin
+// depender del instante ni de descomponer ninguna matriz en TRS. Su consecuencia
+// visible —y es lo que el usuario veía roto— es que el descendiente aterriza
+// donde le toca respecto a ese padre, no a media pantalla de distancia.
+static void test_bone_without_channel_keeps_bind_pose()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    CHECK(!m.skeleton.names.empty());
+    CHECK(!m.animationClips.empty());
+    if (m.skeleton.names.empty() || m.animationClips.empty()) return;
+
+    const size_t boneCount = m.skeleton.names.size();
+
+    // Vértices influidos por hueso: el bug sólo es visible en los que deforman
+    // geometría, y es justo lo que le faltaba al caso que la suite ya tenía.
+    std::vector<int> verts(boneCount, 0);
+    for (const auto& v : m.skinnedVertices)
+        for (int s = 0; s < 4; s++)
+            if (v.boneWeights[s] > 0.0f && v.boneIndices[s] >= 0 &&
+                (size_t)v.boneIndices[s] < (int)boneCount)
+                verts[(size_t)v.boneIndices[s]]++;
+
+    AnimationClip& clip = m.animationClips[0];
+    std::vector<bool> tieneCanal(boneCount, false);
+    for (const auto& ch : clip.channels)
+        if (ch.boneIndex >= 0 && (size_t)ch.boneIndex < boneCount)
+            tieneCanal[(size_t)ch.boneIndex] = true;
+
+    // Tamaño de subárbol. parentIndex está en orden topológico (padre < hijo),
+    // así que un recorrido hacia atrás lo acumula en una sola pasada.
+    std::vector<int> subtree(boneCount, 1);
+    for (size_t i = boneCount; i-- > 1; )
+    {
+        const int par = m.skeleton.parentIndex[i];
+        if (par >= 0) subtree[(size_t)par] += subtree[i];
+    }
+
+    // B: hueso con canal, con padre, que deforma geometría y del que cuelga la
+    // cadena más larga — el análogo del RightShoulder que rompía el asset real.
+    int B = -1;
+    for (size_t i = 0; i < boneCount; i++)
+        if (m.skeleton.parentIndex[i] >= 0 && tieneCanal[i] && verts[i] > 0 && subtree[i] > 1)
+            if (B < 0 || subtree[i] > subtree[(size_t)B]) B = (int)i;
+    CHECK(B >= 0);
+    if (B < 0) return;
+
+    const int P = m.skeleton.parentIndex[(size_t)B];
+    // El padre tiene que seguir animado: si no, no habría nada a lo que "seguir"
+    // y el test pasaría por el motivo equivocado.
+    CHECK(tieneCanal[(size_t)P]);
+
+    std::vector<bool> enSubarbol(boneCount, false);
+    enSubarbol[(size_t)B] = true;
+    for (size_t i = (size_t)B + 1; i < boneCount; i++)
+    {
+        const int par = m.skeleton.parentIndex[i];
+        if (par >= 0 && enSubarbol[(size_t)par]) enSubarbol[i] = true;
+    }
+
+    // D: el descendiente más profundo de B que deforma geometría — el "dedo"
+    // cuya posición delata el colapso.
+    std::vector<int> depth(boneCount, 0);
+    int D = -1;
+    for (size_t i = 0; i < boneCount; i++)
+    {
+        const int par = m.skeleton.parentIndex[i];
+        depth[i] = (par >= 0) ? depth[(size_t)par] + 1 : 0;
+        if (enSubarbol[i] && (int)i != B && verts[i] > 0)
+            if (D < 0 || depth[i] > depth[(size_t)D]) D = (int)i;
+    }
+    CHECK(D >= 0);
+    if (D < 0) return;
+
+    // Se quitan los canales de B y de todo su subárbol: el miembro entero pasa a
+    // no tener animación propia.
+    std::vector<BoneChannel> quedan;
+    for (const auto& ch : clip.channels)
+        if (ch.boneIndex < 0 || (size_t)ch.boneIndex >= boneCount ||
+            !enSubarbol[(size_t)ch.boneIndex])
+            quedan.push_back(ch);
+    CHECK(quedan.size() < clip.channels.size());
+    clip.channels = quedan;
+
+    PackedClips p = packSkinnedClips(m);
+    CHECK(p.boneInfos.size() == boneCount);
+    CHECK(p.boneInfos[(size_t)B].posCount == 0);
+    CHECK(p.boneInfos[(size_t)P].posCount > 0);   // el padre sí se anima
+
+    std::vector<glm::mat4> final = runBoneHierarchy(p, 0, boneCount, 0.0f);
+
+    // Consecuencia visible: el origen de D en bind pose, deformado por su propia
+    // matriz final, tiene que caer donde lo lleva la matriz del padre animado P.
+    const glm::vec3 bindD    = glm::vec3(glm::inverse(m.skeleton.inverseBindPose[(size_t)D])[3]);
+    const glm::vec3 esperado = glm::vec3(final[(size_t)P] * glm::vec4(bindD, 1.0f));
+    const glm::vec3 real     = glm::vec3(final[(size_t)D] * glm::vec4(bindD, 1.0f));
+    const float     dist     = glm::length(real - esperado);
+
+    if (dist > 0.2f)
+        std::printf("  %s (sin canal, bajo %s): esperado (%.3f %.3f %.3f), real (%.3f %.3f %.3f)"
+                    " -> desplazado %.3f unidades\n",
+                    m.skeleton.names[(size_t)D].c_str(), m.skeleton.names[(size_t)P].c_str(),
+                    esperado.x, esperado.y, esperado.z, real.x, real.y, real.z, dist);
+    CHECK(dist < 0.2f);
+
+    // Umbral holgado a propósito: localBind se obtiene invirtiendo la inverse
+    // bind pose, y con traslaciones de ~180 unidades el error en float ronda
+    // 1e-3. El fallo que persigue el test son decenas de unidades.
+    CHECK(nearlyEqualMat(final[(size_t)B], final[(size_t)P], 0.05f));
+    CHECK(nearlyEqualMat(final[(size_t)D], final[(size_t)P], 0.05f));
 }
 
 // Helper: grafo Idle(loop) -> Run(loop) -> Jump(no loop) -> Idle.
@@ -2481,6 +2698,7 @@ int main()
     test_pack_concatenates_clips();
     test_pack_mesh_without_clips();
     test_pack_without_clips_yields_identity_final_bones();
+    test_bone_without_channel_keeps_bind_pose();
 
     test_trigger_switches_state();
     test_animation_finished_timing();

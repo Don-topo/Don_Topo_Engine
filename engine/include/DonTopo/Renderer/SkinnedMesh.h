@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <vector>
 #include <string>
 #include <unordered_map>
@@ -93,6 +94,10 @@ namespace DonTopo
         glm::vec4 value;
     };
 
+    // Espejo exacto del struct BoneInfo de shaders/bone_eval.comp y
+    // shaders/bone_hierarchy.comp (std430). Cualquier campo que se añada aquí
+    // hay que añadirlo en LOS DOS shaders y en el mismo sitio: un desajuste no
+    // da error de compilación, sólo lecturas desplazadas.
     struct GpuBoneInfo
     {
         int32_t posOffset, posCount;
@@ -101,5 +106,20 @@ namespace DonTopo
         int32_t parentIndex;
         int32_t pad;
         glm::mat4 inverseBindPose;
+        // Transform local del hueso en bind pose, o sea el que tiene respecto a
+        // su padre tal y como lo rigearon. Es el valor por defecto de un hueso
+        // del que el clip activo no dice nada: la identidad no vale, porque
+        // borraría su offset con el padre y lo colapsaría encima de él.
+        glm::mat4 bindLocal;
     };
+
+    // Offsets y tamaño que glslc genera para el BoneInfo std430 de los dos
+    // shaders (verificado con spirv-dis: Offset 0/4/8/12/16/20/24/28/32/96,
+    // ArrayStride 160). Un desajuste de layout entre CPU y GPU no da error de
+    // compilación en ningún lado, sólo lecturas desplazadas y basura en pantalla
+    // — así que se comprueba aquí, donde sí puede fallar el build.
+    static_assert(offsetof(GpuBoneInfo, parentIndex)     == 24, "layout std430 de BoneInfo roto");
+    static_assert(offsetof(GpuBoneInfo, inverseBindPose) == 32, "layout std430 de BoneInfo roto");
+    static_assert(offsetof(GpuBoneInfo, bindLocal)       == 96, "layout std430 de BoneInfo roto");
+    static_assert(sizeof(GpuBoneInfo)                    == 160, "layout std430 de BoneInfo roto");
 }
