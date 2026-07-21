@@ -146,6 +146,11 @@ private:
     char        m_exportNameBuffer[64]   = "Game";
     bool        m_openExportNamePopup    = false;
     bool        m_openExportConfirmPopup = false;
+    // true si el popup de confirmación se abrió porque exists() no pudo
+    // determinar si pkg existe (error_code puesto), no porque exista de
+    // verdad; distingue los dos textos del popup para no afirmar en falso
+    // "la carpeta ya existe" cuando en realidad no se pudo comprobar.
+    bool        m_exportExistsCheckFailed = false;
 
     // Play Mode — snapshot en RAM del árbol justo antes de pulsar Play,
     // restaurado íntegro al pulsar Stop (tipo Unity Play-In-Editor). No se
