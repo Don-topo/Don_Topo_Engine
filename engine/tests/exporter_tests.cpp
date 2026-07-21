@@ -269,7 +269,18 @@ static void test_package_contents(const fs::path& root)
     scene.addGameObject("hero")->setMesh(makeMesh(root / "assets" / "hero.fbx"));
     std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
 
-    fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_out";
+    fs::path tempRoot = fs::temp_directory_path(ec);
+    // Sin temp_directory_path no hay dónde escribir con seguridad: si ec
+    // queda puesto o el path vuelve vacío, "dest" pasaría a ser relativo al
+    // directorio de trabajo actual y el remove_all/writeExportPackage de
+    // abajo operarían fuera del temp, rompiendo el contrato de que este test
+    // solo toca fs::temp_directory_path().
+    if (ec || tempRoot.empty())
+    {
+        CHECK(!ec && !tempRoot.empty());
+        return;
+    }
+    fs::path dest = tempRoot / "dt_exporter_out";
     fs::remove_all(dest, ec);
 
     ExportResult r = writeExportPackage(assets, scene.toJson(), dest, "MiJuego",
@@ -286,8 +297,35 @@ static void test_package_contents(const fs::path& root)
     CHECK(fs::exists(pkg / "Scripts" / "Player.lua"));
     // Criterio 3: el asset no referenciado se queda fuera.
     CHECK(!fs::exists(pkg / "assets" / "huerfano.fbx"));
-    CHECK(r.fileCount > 0);
+
+    // Número exacto de ficheros, no solo "> 0": un off-by-one o una
+    // categoría contada de más no lo detectaría un CHECK laxo. Desglose para
+    // esta escena/fixture concretos:
+    //   1  MiJuego.exe            (runtimeExe renombrado)
+    //   1  assets/hero.fbx        (único asset que la escena referencia)
+    //   6  assets/skybox/*.png    (las 6 caras, hardcoded, van siempre)
+    //   1  shaders/triangle.vert.spv (único .spv creado por este fixture)
+    //   1  Scripts/Player.lua     (único fichero bajo Scripts/ en el fixture)
+    //   0  fmod.dll               (este fixture no lo crea)
+    //   1  game.scene
+    //  = 11
+    CHECK(r.fileCount == 11);
     CHECK(r.totalBytes > 0);
+
+    // Hallazgo 1: totalBytes debe incluir también game.scene. Se comprueba
+    // recalculando el tamaño real en disco de todo el paquete copiado y
+    // exigiendo que coincida exactamente con lo reportado; sin sumar
+    // game.scene, este CHECK fallaría por debajo en justo el tamaño de ese
+    // fichero.
+    std::uintmax_t diskTotal = 0;
+    std::error_code walkEc;
+    for (fs::recursive_directory_iterator it(pkg, walkEc), end; !walkEc && it != end; it.increment(walkEc))
+    {
+        if (!it->is_regular_file()) continue;
+        std::error_code sizeEc;
+        diskTotal += fs::file_size(it->path(), sizeEc);
+    }
+    CHECK(r.totalBytes == diskTotal);
 
     fs::remove_all(dest, ec);
 }
@@ -297,7 +335,15 @@ static void test_package_contents(const fs::path& root)
 static void test_package_overwrite_is_clean(const fs::path& root)
 {
     std::error_code ec;
-    fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_out2";
+    fs::path tempRoot = fs::temp_directory_path(ec);
+    // Mismo motivo que en test_package_contents: sin esta comprobación, un
+    // fallo de temp_directory_path haría que "dest" cayera fuera del temp.
+    if (ec || tempRoot.empty())
+    {
+        CHECK(!ec && !tempRoot.empty());
+        return;
+    }
+    fs::path dest = tempRoot / "dt_exporter_out2";
     fs::remove_all(dest, ec);
     fs::create_directories(dest / "MiJuego" / "assets", ec);
     std::ofstream(dest / "MiJuego" / "assets" / "basura_vieja.fbx") << "x";
@@ -318,7 +364,15 @@ static void test_package_overwrite_is_clean(const fs::path& root)
 static void test_missing_runtime_aborts(const fs::path& root)
 {
     std::error_code ec;
-    fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_out3";
+    fs::path tempRoot = fs::temp_directory_path(ec);
+    // Mismo motivo que en test_package_contents: sin esta comprobación, un
+    // fallo de temp_directory_path haría que "dest" cayera fuera del temp.
+    if (ec || tempRoot.empty())
+    {
+        CHECK(!ec && !tempRoot.empty());
+        return;
+    }
+    fs::path dest = tempRoot / "dt_exporter_out3";
     fs::remove_all(dest, ec);
 
     Scene scene;
@@ -326,6 +380,9 @@ static void test_missing_runtime_aborts(const fs::path& root)
                                         root, root / "Scripts", root / "no_existe_runtime.exe");
     CHECK(!r.ok);
     CHECK(!r.messages.empty());
+    // Contrato: sin runtime no se llega a crear ni siquiera la carpeta
+    // destino, no solo se aborta "a medias".
+    CHECK(!fs::exists(dest / "MiJuego"));
 
     fs::remove_all(dest, ec);
 }

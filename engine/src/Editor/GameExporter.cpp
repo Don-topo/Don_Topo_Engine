@@ -220,9 +220,27 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     // huérfanos de un export anterior y dejaría de cumplir "solo los
     // referenciados". La confirmación al usuario la pide la UI antes de
     // llamar aquí.
-    fs::remove_all(pkg, ec);
-    fs::create_directories(pkg, ec);
-    if (ec)
+    //
+    // Dos error_code separados a propósito: create_directories() sobre una
+    // carpeta que ya existe NO es un error, así que si compartiera el ec del
+    // remove_all() anterior, un borrado fallido a medias (p.ej. un
+    // MiJuego.exe del export previo todavía en ejecución y bloqueado)
+    // quedaría enmascarado en cuanto create_directories "tuviera éxito" sobre
+    // esa misma carpeta a medio borrar. La función seguiría creyendo que
+    // tiene un paquete limpio y sobrevivirían ficheros huérfanos.
+    std::error_code removeEc;
+    fs::remove_all(pkg, removeEc);
+    if (removeEc)
+    {
+        r.messages.push_back("Export fallido: no se pudo limpiar el paquete anterior en " +
+                             pkg.string() + " (" + removeEc.message() +
+                             "). ¿Hay algún proceso usando ficheros de esa carpeta?");
+        return r;
+    }
+
+    std::error_code createEc;
+    fs::create_directories(pkg, createEc);
+    if (createEc)
     {
         r.messages.push_back("Export fallido: no se pudo crear " + pkg.string());
         return r;
@@ -295,6 +313,11 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     else
     {
         ++r.fileCount;
+        // Mismo patrón tolerante a error que copyOne: game.scene también
+        // pesa y el resumen ("N ficheros, M KB") lo estaba dejando fuera.
+        std::error_code sec;
+        std::uintmax_t size = fs::file_size(pkg / "game.scene", sec);
+        if (!sec) r.totalBytes += size;
     }
 
     r.ok = ok;
