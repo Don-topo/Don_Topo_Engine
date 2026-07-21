@@ -12,7 +12,9 @@ class Scene;
 
 // Un asset que el paquete exportado debe contener.
 struct ExportAsset {
-    // Ruta absoluta en disco, canonicalizada. Origen de la copia.
+    // Ruta absoluta en disco, resuelta con weakly_canonical (no canonical:
+    // tolera que el último componente no exista, necesario para los casos con
+    // existsOnDisk == false). Origen de la copia.
     std::string sourcePath;
     // Ruta relativa a la raíz del paquete, con '/' como separador:
     // "assets/model.fbx". Destino de la copia y valor que acaba en el

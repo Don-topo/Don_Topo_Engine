@@ -113,7 +113,6 @@ static void test_deduplicates_shared_mesh(const fs::path& root)
 // con sourcePath y no debe duplicarlo.
 static void test_animation_sources(const fs::path& root)
 {
-    std::error_code ec;
     std::ofstream(root / "assets" / "run.fbx") << "fbx";
 
     Scene scene;
@@ -125,6 +124,38 @@ static void test_animation_sources(const fs::path& root)
 
     std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
     CHECK(assets.size() == 2);
+}
+
+// loadSkinned NUNCA puebla el Material heredado de Mesh: reparte uno por
+// submalla en SkinnedMesh::materials. materialsOf() tiene una rama aparte
+// para leer justo ese vector, y sin este test nadie la ejercitaba (el resto
+// de tests deja SkinnedMesh::materials vacío). Ese punto ciego exacto ya
+// causó un bug real en el Content Browser: borrar una textura usada por un
+// personaje con rig informaba "0 objetos afectados" en un diálogo
+// destructivo, porque el buscador de referencias solo miraba `mesh.material`.
+static void test_skinned_mesh_materials(const fs::path& root)
+{
+    std::ofstream(root / "assets" / "hero_skin.png") << "png";
+
+    Scene scene;
+    auto skinned = std::make_shared<SkinnedMesh>();
+    skinned->sourcePath = (root / "assets" / "hero.fbx").string();
+    Material submeshMaterial;
+    submeshMaterial.texturePath = (root / "assets" / "hero_skin.png").string();
+    skinned->materials.push_back(submeshMaterial);
+    scene.addGameObject("hero")->setMesh(skinned);
+
+    std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+
+    std::vector<std::string> pkg;
+    for (const ExportAsset& a : assets) pkg.push_back(a.packagePath);
+    CHECK(std::find(pkg.begin(), pkg.end(), "assets/hero_skin.png") != pkg.end());
+
+    // Y la textura debe llegar marcada como existente, no solo presente.
+    auto it = std::find_if(assets.begin(), assets.end(), [](const ExportAsset& a) {
+        return a.packagePath == "assets/hero_skin.png";
+    });
+    CHECK(it != assets.end() && it->existsOnDisk);
 }
 
 // Asset fuera de la raíz del proyecto -> assets/_external/, con sufijo ante
@@ -172,6 +203,7 @@ int main()
     test_procedural_mesh_contributes_nothing(root);
     test_deduplicates_shared_mesh(root);
     test_animation_sources(root);
+    test_skinned_mesh_materials(root);
     test_external_assets(root);
     test_missing_asset_flagged(root);
 
