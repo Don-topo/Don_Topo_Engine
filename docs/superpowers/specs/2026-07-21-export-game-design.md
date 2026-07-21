@@ -185,13 +185,21 @@ assets referenciados":
 
 - Las 6 caras de `assets/skybox/*.png` (el runtime las tiene hardcoded),
   tomadas de `projectRoot`.
-- `shaders/*.spv`, tomados del directorio del editor (`<exeDir>/shaders`), que
-  es donde el POST_BUILD de `sandbox/CMakeLists.txt:47-56` los deja. Van a la
-  raíz del paquete porque `Renderer::createPipeline` los abre como
-  `shaders/<nombre>.spv` relativo al CWD.
-- `Scripts/` completa, desde `projectRoot`.
-- `fmod.dll`, si existe junto al editor.
-- `DonTopoRuntime.exe`, renombrado a `<Nombre>.exe`.
+- `shaders/*.spv`, desde `projectRoot/shaders`. `Renderer::createPipeline` ya
+  los abre como `shaders/<nombre>.spv` relativo al CWD, así que si el editor
+  arranca es porque están ahí; van a la raíz del paquete por el mismo motivo.
+- `Scripts/`, completa, desde **`ScriptManager::scriptsDirPath()`** — no desde
+  `projectRoot`. La carpeta se resuelve subiendo directorios desde el CWD
+  (`sandbox/src/main.cpp:168-186`), así que vive en la raíz del repo mientras
+  que `projectRoot` es el directorio del ejecutable.
+- `fmod.dll`, desde `projectRoot`, si existe.
+- `DonTopoRuntime.exe`, desde `projectRoot`, renombrado a `<Nombre>.exe`.
+
+`projectRoot` es `std::filesystem::current_path()` canonicalizado, la misma
+convención que usa `ContentBrowserPanel` (`ContentBrowserPanel.cpp:358-371`).
+En una build normal eso es el directorio del ejecutable del editor, que es
+donde el POST_BUILD de `sandbox/CMakeLists.txt` deja `assets/`, `shaders/` y
+`fmod.dll`.
 
 El mapa `sourceToPackage` que consume `rewriteScenePaths` se deriva de la
 propia lista de `ExportAsset` (`sourcePath` → `packagePath`); no hay una
