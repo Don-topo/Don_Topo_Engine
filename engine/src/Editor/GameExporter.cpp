@@ -5,6 +5,7 @@
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Scripting/ScriptComponent.h"
+#include "DonTopo/Files/FileManager.h"
 
 #include <nlohmann/json.hpp>
 
@@ -193,6 +194,115 @@ int rewriteScenePaths(nlohmann::json& sceneJson,
     if (sceneJson.contains("root") && sceneJson["root"].is_object())
         return rewriteNode(sceneJson["root"], sourceToPackage);
     return rewriteNode(sceneJson, sourceToPackage);
+}
+
+ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
+                                const nlohmann::json& rewrittenScene,
+                                const fs::path& destDir,
+                                const std::string& gameName,
+                                const fs::path& projectRoot,
+                                const fs::path& scriptsDir,
+                                const fs::path& runtimeExe)
+{
+    ExportResult r;
+    std::error_code ec;
+
+    if (!fs::exists(runtimeExe, ec) || ec)
+    {
+        r.messages.push_back("Export cancelado: no se encuentra " + runtimeExe.string() +
+                             ". Compila el target DonTopoRuntime.");
+        return r;
+    }
+
+    const fs::path pkg = destDir / gameName;
+
+    // Borrado + recreado: si se copiara encima, el paquete arrastraría assets
+    // huérfanos de un export anterior y dejaría de cumplir "solo los
+    // referenciados". La confirmación al usuario la pide la UI antes de
+    // llamar aquí.
+    fs::remove_all(pkg, ec);
+    fs::create_directories(pkg, ec);
+    if (ec)
+    {
+        r.messages.push_back("Export fallido: no se pudo crear " + pkg.string());
+        return r;
+    }
+
+    auto copyOne = [&](const fs::path& from, const fs::path& to) -> bool
+    {
+        std::error_code cec;
+        fs::create_directories(to.parent_path(), cec);
+        if (!fs::copy_file(from, to, fs::copy_options::overwrite_existing, cec))
+        {
+            r.messages.push_back("No se pudo copiar " + from.string());
+            return false;
+        }
+        std::error_code sec;
+        std::uintmax_t size = fs::file_size(to, sec);
+        if (!sec) r.totalBytes += size;
+        ++r.fileCount;
+        return true;
+    };
+
+    bool ok = copyOne(runtimeExe, pkg / (gameName + ".exe"));
+
+    for (const ExportAsset& a : assets)
+        ok = copyOne(fs::path(a.sourcePath), pkg / fs::path(a.packagePath)) && ok;
+
+    // Skybox: el runtime lo tiene hardcoded (initSkybox con assets/skybox/*),
+    // así que va siempre aunque la escena no lo "referencie".
+    for (const char* face : { "px", "nx", "py", "ny", "pz", "nz" })
+    {
+        const fs::path from = projectRoot / "assets" / "skybox" / (std::string(face) + ".png");
+        if (fs::exists(from, ec))
+            ok = copyOne(from, pkg / "assets" / "skybox" / from.filename()) && ok;
+    }
+
+    // shaders/*.spv a la raíz del paquete: Renderer::createPipeline los abre
+    // como "shaders/<nombre>.spv" relativo al CWD.
+    {
+        std::error_code dec;
+        for (fs::directory_iterator it(projectRoot / "shaders", dec), end; !dec && it != end; it.increment(dec))
+        {
+            if (it->path().extension() != ".spv") continue;
+            ok = copyOne(it->path(), pkg / "shaders" / it->path().filename()) && ok;
+        }
+    }
+
+    // Scripts/ entera: los .lua se referencian por nombre y pueden hacer
+    // require entre ellos, así que filtrar por referencias los rompería.
+    if (fs::exists(scriptsDir, ec))
+    {
+        std::error_code rec;
+        for (fs::recursive_directory_iterator it(scriptsDir, rec), end; !rec && it != end; it.increment(rec))
+        {
+            if (!it->is_regular_file()) continue;
+            std::error_code relEc;
+            fs::path rel = fs::relative(it->path(), scriptsDir, relEc);
+            if (relEc) continue;
+            ok = copyOne(it->path(), pkg / "Scripts" / rel) && ok;
+        }
+    }
+
+    if (fs::exists(projectRoot / "fmod.dll", ec))
+        ok = copyOne(projectRoot / "fmod.dll", pkg / "fmod.dll") && ok;
+
+    if (!FileManager::writeJson((pkg / "game.scene").string(), rewrittenScene))
+    {
+        r.messages.push_back("No se pudo escribir game.scene");
+        ok = false;
+    }
+    else
+    {
+        ++r.fileCount;
+    }
+
+    r.ok = ok;
+    if (ok)
+        r.messages.push_back("Export completado en " + pkg.string() + ": " +
+                             std::to_string(r.fileCount) + " ficheros, " +
+                             std::to_string(r.totalBytes / 1024) + " KB");
+    return r;
 }
 
 } // namespace DonTopo

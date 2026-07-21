@@ -247,6 +247,89 @@ static void test_rewrite_leaves_unknown_paths(const fs::path& root)
     CHECK(j["root"]["mesh"]["sourcePath"].get<std::string>() == "C:/otro/sitio/x.fbx");
 }
 
+// El paquete contiene el exe renombrado, game.scene, los assets del plan, el
+// skybox, los shaders y Scripts/ — y ningún asset del proyecto que la escena
+// no referencie (criterio de aceptación 3).
+static void test_package_contents(const fs::path& root)
+{
+    std::error_code ec;
+
+    // Completar el fixture con lo que writeExportPackage añade por su cuenta.
+    fs::create_directories(root / "assets" / "skybox", ec);
+    for (const char* face : { "px", "nx", "py", "ny", "pz", "nz" })
+        std::ofstream(root / "assets" / "skybox" / (std::string(face) + ".png")) << "png";
+    fs::create_directories(root / "shaders", ec);
+    std::ofstream(root / "shaders" / "triangle.vert.spv") << "spv";
+    // Asset del proyecto que la escena NO referencia: no debe acabar copiado.
+    std::ofstream(root / "assets" / "huerfano.fbx") << "fbx";
+    // Runtime de mentira.
+    std::ofstream(root / "DonTopoRuntime.exe") << "MZ";
+
+    Scene scene;
+    scene.addGameObject("hero")->setMesh(makeMesh(root / "assets" / "hero.fbx"));
+    std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+
+    fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_out";
+    fs::remove_all(dest, ec);
+
+    ExportResult r = writeExportPackage(assets, scene.toJson(), dest, "MiJuego",
+                                        root, root / "Scripts", root / "DonTopoRuntime.exe");
+
+    const fs::path pkg = dest / "MiJuego";
+    CHECK(r.ok);
+    CHECK(fs::exists(pkg / "MiJuego.exe"));
+    CHECK(fs::exists(pkg / "game.scene"));
+    CHECK(fs::exists(pkg / "assets" / "hero.fbx"));
+    CHECK(fs::exists(pkg / "assets" / "skybox" / "px.png"));
+    CHECK(fs::exists(pkg / "assets" / "skybox" / "nz.png"));
+    CHECK(fs::exists(pkg / "shaders" / "triangle.vert.spv"));
+    CHECK(fs::exists(pkg / "Scripts" / "Player.lua"));
+    // Criterio 3: el asset no referenciado se queda fuera.
+    CHECK(!fs::exists(pkg / "assets" / "huerfano.fbx"));
+    CHECK(r.fileCount > 0);
+    CHECK(r.totalBytes > 0);
+
+    fs::remove_all(dest, ec);
+}
+
+// Re-exportar sobre una carpeta existente la deja limpia: nada de un export
+// anterior sobrevive.
+static void test_package_overwrite_is_clean(const fs::path& root)
+{
+    std::error_code ec;
+    fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_out2";
+    fs::remove_all(dest, ec);
+    fs::create_directories(dest / "MiJuego" / "assets", ec);
+    std::ofstream(dest / "MiJuego" / "assets" / "basura_vieja.fbx") << "x";
+
+    Scene scene;
+    scene.addGameObject("hero")->setMesh(makeMesh(root / "assets" / "hero.fbx"));
+
+    ExportResult r = writeExportPackage(collectSceneAssets(scene, root, {}), scene.toJson(),
+                                        dest, "MiJuego", root, root / "Scripts",
+                                        root / "DonTopoRuntime.exe");
+    CHECK(r.ok);
+    CHECK(!fs::exists(dest / "MiJuego" / "assets" / "basura_vieja.fbx"));
+
+    fs::remove_all(dest, ec);
+}
+
+// Sin binario de runtime no se exporta nada: error explícito y carpeta sin crear.
+static void test_missing_runtime_aborts(const fs::path& root)
+{
+    std::error_code ec;
+    fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_out3";
+    fs::remove_all(dest, ec);
+
+    Scene scene;
+    ExportResult r = writeExportPackage({}, scene.toJson(), dest, "MiJuego",
+                                        root, root / "Scripts", root / "no_existe_runtime.exe");
+    CHECK(!r.ok);
+    CHECK(!r.messages.empty());
+
+    fs::remove_all(dest, ec);
+}
+
 int main()
 {
     fs::path root = makeProjectFixture();
@@ -260,6 +343,9 @@ int main()
     test_missing_asset_flagged(root);
     test_rewrite_makes_paths_relative(root);
     test_rewrite_leaves_unknown_paths(root);
+    test_package_contents(root);
+    test_package_overwrite_is_clean(root);
+    test_missing_runtime_aborts(root);
 
     std::error_code ec;
     fs::remove_all(root, ec);
