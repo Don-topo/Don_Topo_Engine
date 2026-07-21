@@ -104,6 +104,13 @@ private:
     // Stop en drawToolbar. false sin efecto si falta algún puntero
     // (m_scene/m_renderer/m_physics/m_audio).
     bool reloadSceneFromJson(const nlohmann::json& j);
+    // Export Game — drena el diálogo de carpeta destino y pinta los dos
+    // popups modales (nombre y confirmación de sobrescritura). Se llama cada
+    // frame desde draw(), igual que drawSceneDialog.
+    void drawExportDialog();
+    // Ejecuta el export completo con m_exportDestDir y m_exportNameBuffer ya
+    // fijados. Vuelca al Log Console tanto los errores como el resumen.
+    void runExport();
 
     // Log Console — extraído a LogPanel (Task 2).
     LogPanel m_logPanel;
@@ -129,6 +136,16 @@ private:
     bool        m_sceneDlgIsSave = false;
     // Último error de guardado/carga de escena (vacío si ninguno pendiente).
     std::string m_sceneIOError;
+
+    // Export Game — instancia propia de diálogo por el mismo motivo que
+    // m_sceneFileDialog: IGFD::FileDialog::Instance() no soporta diálogos
+    // concurrentes.
+    std::unique_ptr<IGFD::FileDialog> m_exportDialog;
+    bool        m_exportDlgOpen          = false;
+    std::string m_exportDestDir;
+    char        m_exportNameBuffer[64]   = "Game";
+    bool        m_openExportNamePopup    = false;
+    bool        m_openExportConfirmPopup = false;
 
     // Play Mode — snapshot en RAM del árbol justo antes de pulsar Play,
     // restaurado íntegro al pulsar Stop (tipo Unity Play-In-Editor). No se

@@ -9,6 +9,7 @@
 #include "DonTopo/Files/FileManager.h"
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Editor/ScriptEditorPanel.h"
+#include "DonTopo/Editor/GameExporter.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <cassert>
@@ -23,6 +24,7 @@ EditorUI::EditorUI()
     : m_sceneFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_scriptEditor(std::make_unique<ScriptEditorPanel>())
 {
+    m_exportDialog = std::make_unique<IGFD::FileDialog>();
     m_scriptEditor->setLogCallback([this](const std::string& msg) { m_logPanel.push(msg); });
 }
 
@@ -63,6 +65,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     m_propertiesPanel.draw(ctx);
     m_logPanel.draw();
     drawSceneDialog();
+    drawExportDialog();
     m_contentBrowserPanel.draw(ctx, sceneRoot);
     m_scriptEditor->draw();
     m_animatorPanel.draw(ctx);
@@ -107,6 +110,22 @@ void EditorUI::drawMenuBar()
 {
     if (ImGui::BeginMainMenuBar())
     {
+        if (ImGui::BeginMenu("File"))
+        {
+            if (ImGui::MenuItem("Export Game...", nullptr, false, m_scene != nullptr))
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = ".";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                // filters = nullptr -> IGFD selecciona carpeta, no fichero.
+                m_exportDialog->OpenDialog("ExportDlg", "Carpeta destino del export", nullptr, cfg);
+                m_exportDlgOpen = true;
+            }
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("View"))
         {
             ImGui::MenuItem("Scene", nullptr, m_scenePanel.GetOpenPtr());
@@ -343,6 +362,145 @@ void EditorUI::drawSceneDialog()
 
     m_sceneFileDialog->Close();
     m_sceneDlgOpen = false;
+}
+
+void EditorUI::drawExportDialog()
+{
+    // Se ejecuta cada frame aunque m_exportDlgOpen sea false, mismo motivo
+    // que drawSceneDialog: hay que drenar el diálogo aunque el usuario lo
+    // cierre sin confirmar.
+    if (m_exportDlgOpen && m_exportDialog->Display("ExportDlg"))
+    {
+        if (m_exportDialog->IsOk())
+        {
+            m_exportDestDir = m_exportDialog->GetCurrentPath();
+            m_openExportNamePopup = true;
+        }
+        m_exportDialog->Close();
+        m_exportDlgOpen = false;
+    }
+
+    if (m_openExportNamePopup)
+    {
+        ImGui::OpenPopup("Export Game");
+        m_openExportNamePopup = false;
+    }
+
+    if (ImGui::BeginPopupModal("Export Game", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::Text("Destino: %s", m_exportDestDir.c_str());
+        ImGui::InputText("Nombre", m_exportNameBuffer, sizeof(m_exportNameBuffer));
+
+        const bool nameOk = m_exportNameBuffer[0] != '\0';
+        ImGui::BeginDisabled(!nameOk);
+        if (ImGui::Button("Export"))
+        {
+            std::error_code ec;
+            const std::filesystem::path pkg =
+                std::filesystem::path(m_exportDestDir) / m_exportNameBuffer;
+            if (std::filesystem::exists(pkg, ec))
+                m_openExportConfirmPopup = true;
+            else
+                runExport();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    if (m_openExportConfirmPopup)
+    {
+        ImGui::OpenPopup("Sobrescribir export");
+        m_openExportConfirmPopup = false;
+    }
+
+    if (ImGui::BeginPopupModal("Sobrescribir export", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
+                           "La carpeta '%s' ya existe.", m_exportNameBuffer);
+        ImGui::Text("Se borrara todo su contenido antes de exportar.");
+        if (ImGui::Button("Borrar y exportar"))
+        {
+            runExport();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+}
+
+void EditorUI::runExport()
+{
+    namespace fs = std::filesystem;
+
+    if (!m_scene)
+    {
+        m_logPanel.push("Export cancelado: no hay escena abierta");
+        return;
+    }
+    // Sin camara el juego no podria renderizar: se falla aqui, donde el
+    // usuario puede arreglarlo, y no en un .exe que abre una ventana negra.
+    if (!m_scene->findCamera())
+    {
+        m_logPanel.push("Export cancelado: la escena no tiene camara (Add > Camera en Properties)");
+        return;
+    }
+
+    std::error_code ec;
+    fs::path projectRoot = fs::current_path(ec);
+    if (ec) projectRoot = ".";
+    fs::path canon = fs::canonical(projectRoot, ec);
+    if (!ec) projectRoot = canon;
+
+    const fs::path runtimeExe = projectRoot / "DonTopoRuntime.exe";
+    if (!fs::exists(runtimeExe, ec))
+    {
+        m_logPanel.push("Export cancelado: falta " + runtimeExe.string() +
+                        ". Compila el target DonTopoRuntime.");
+        return;
+    }
+
+    std::map<std::string, fs::path> scriptPaths;
+    if (m_scriptManager)
+        for (const auto& [name, cls] : m_scriptManager->getRegistry())
+            scriptPaths[name] = cls.path;
+
+    std::vector<ExportAsset> assets = collectSceneAssets(*m_scene, projectRoot, scriptPaths);
+
+    std::vector<std::string> missing;
+    for (const ExportAsset& a : assets)
+        if (!a.existsOnDisk) missing.push_back(a.sourcePath);
+    if (!missing.empty())
+    {
+        m_logPanel.push("Export cancelado: faltan en disco " +
+                        std::to_string(missing.size()) + " assets referenciados:");
+        for (const std::string& m : missing)
+            m_logPanel.push("  " + m);
+        return;
+    }
+
+    std::map<std::string, std::string> sourceToPackage;
+    for (const ExportAsset& a : assets)
+        sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
+
+    nlohmann::json sceneJson = m_scene->toJson();
+    rewriteScenePaths(sceneJson, sourceToPackage);
+
+    const fs::path scriptsDir = m_scriptManager ? m_scriptManager->scriptsDirPath()
+                                                : projectRoot / "Scripts";
+
+    ExportResult result = writeExportPackage(assets, sceneJson, m_exportDestDir,
+                                             m_exportNameBuffer, projectRoot,
+                                             scriptsDir, runtimeExe);
+    for (const std::string& msg : result.messages)
+        m_logPanel.push(msg);
+    if (!result.ok)
+        m_logPanel.push("Export FALLIDO");
 }
 
 } // namespace DonTopo
