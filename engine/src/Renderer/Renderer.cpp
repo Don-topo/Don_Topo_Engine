@@ -141,7 +141,18 @@ namespace DonTopo {
         recordCommandBuffer(imageIndex);
 
         // 4. Envía a la GPU
+        // En headless el pass 2 no dibuja ImGui: blitea la imagen offscreen al
+        // swapchain (recordCommandBuffer), así que el primer uso real de la
+        // imagen adquirida ocurre en TRANSFER, no en COLOR_ATTACHMENT_OUTPUT.
+        // Esperar el semáforo también en TRANSFER hace que esa ordenación sea
+        // local y explícita, en vez de depender de que la barrera del blit se
+        // encadene con trabajo previo del pass 1 (ver el comentario largo del
+        // srcStageMask en recordCommandBuffer, que sigue vigente y explica por
+        // qué ESA barrera no puede esperar solo en TRANSFER). Añadir un stage
+        // al wait solo puede hacer que la GPU espere más, nunca menos: no
+        // cambia nada del camino con editor.
         VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        if (m_headless) waitStage |= VK_PIPELINE_STAGE_TRANSFER_BIT;
         VkSubmitInfo submitInfo{};
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submitInfo.waitSemaphoreCount       = 1;

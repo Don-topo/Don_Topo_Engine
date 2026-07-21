@@ -356,3 +356,34 @@ ejecutando build y tests.
 Build settings en la UI, multi-escena, perfiles de release, menú de opciones
 in-game, splash screen, compresión o empaquetado, y el split
 `DonTopoCore` / `DonTopoEditor` (tarea posterior).
+
+### El paquete es autocontenido, no redistribuible
+
+"Carpeta autocontenida" significa que el paquete no depende de rutas del repo:
+lleva dentro todo lo que el runtime abre en disco (`.exe`, `game.scene`,
+`assets/`, `shaders/*.spv`, `Scripts/`, `fmod.dll`) y los resuelve relativos a
+su propio directorio. Se puede mover a cualquier carpeta **de la máquina que lo
+exportó** y sigue funcionando.
+
+Lo que **no** es, hoy, es distribuible a una máquina limpia. Dos motivos
+concretos, ambos del entorno de build y no del exportador:
+
+1. **Build Debug.** `configure.bat` fija `CMAKE_BUILD_TYPE=Debug`, así que
+   `DonTopoRuntime.exe` enlaza el CRT de depuración (`ucrtbased.dll`,
+   `vcruntime140d.dll`). Esas DLL **no son redistribuibles**: solo están en
+   máquinas con Visual Studio instalado. El paquete no las copia, y copiarlas
+   estaría prohibido por licencia.
+2. **Capas de validación de Vulkan.** `GpuDevice.cpp:7-11` activa
+   `ENABLE_VALIDATION` cuando no hay `NDEBUG` — es decir, siempre, porque la
+   build es Debug. `VK_LAYER_KHRONOS_validation` se pide sin comprobar antes su
+   disponibilidad, así que en una máquina sin el Vulkan SDK `vkCreateInstance`
+   devuelve `VK_ERROR_LAYER_NOT_PRESENT` y el juego muere al arrancar.
+
+Los dos se resuelven con lo mismo: construir en Release (define `NDEBUG`, que
+apaga las capas por sí solo, y enlaza el CRT redistribuible). Hacerlo
+distribuible es una tarea aparte de esta feature: build de Release al menos
+para el target del runtime, y — si se quiere soportar máquinas sin runtime de
+VC++ instalado — enlace estático del CRT o el redistribuible junto al paquete.
+Independientemente del build type, pedir una capa sin consultar antes
+`vkEnumerateInstanceLayerProperties` es frágil. Nada de eso toca
+`GameExporter`.

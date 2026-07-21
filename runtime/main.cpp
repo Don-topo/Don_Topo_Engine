@@ -220,9 +220,23 @@ int main(int argc, char** argv)
                 // vez de -Z, el audio 3D quedaría reflejado respecto a lo que
                 // se ve por pantalla: los sonidos de la izquierda sonarían a
                 // la derecha y viceversa.
-                listenerPos = glm::vec3(cam->worldTransform[3]);
-                listenerFwd = glm::normalize(-glm::vec3(cam->worldTransform[2]));
-                listenerUp  = glm::normalize(glm::vec3(cam->worldTransform[1]));
+                // Base degenerada (algún eje del Transform con escala 0, algo
+                // que el editor deja poner desde los campos de Scale): aquí
+                // glm::normalize daría NaN y ese NaN llegaría a
+                // set3DListenerAttributes, donde FMOD ya no tiene forma de
+                // recuperarse — el audio 3D queda roto el resto de la partida.
+                // Mismo criterio de epsilon que CameraComponent::viewFromWorld
+                // (CameraComponent.cpp:71-74), que resuelve el caso espejo para
+                // la matriz de vista; si la base no sirve, se cae a los valores
+                // por defecto de arriba (origen, -Z, +Y) en vez de propagar NaN.
+                const glm::vec3 camFwdAxis = glm::vec3(cam->worldTransform[2]);
+                const glm::vec3 camUpAxis  = glm::vec3(cam->worldTransform[1]);
+                if (glm::length(camFwdAxis) >= 1e-6f && glm::length(camUpAxis) >= 1e-6f)
+                {
+                    listenerPos = glm::vec3(cam->worldTransform[3]);
+                    listenerFwd = glm::normalize(-camFwdAxis);
+                    listenerUp  = glm::normalize(camUpAxis);
+                }
             }
             audio.update(listenerPos, listenerFwd, listenerUp);
             physics.stepSimulation(dt);
