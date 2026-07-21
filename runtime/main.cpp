@@ -12,7 +12,9 @@
 #include "DonTopo/Scripting/ScriptManager.h"
 
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -26,7 +28,10 @@ namespace {
 
 // Directorio del ejecutable. El paquete exportado usa rutas relativas
 // (assets/, shaders/, Scripts/), así que el runtime fija su CWD aquí: sin
-// esto, lanzar el juego desde otra carpeta no encontraría nada.
+// esto, lanzar el juego desde otra carpeta no encontraría nada. Ojo: esto
+// pasa ANTES de leer argv[1], así que un argv[1] relativo (p.ej.
+// "..\niveles\l2.scene") también se resuelve contra el directorio del
+// ejecutable, no contra el cwd de quien lo lanzó — deliberado, mismo motivo.
 std::filesystem::path executableDir()
 {
 #ifdef _WIN32
@@ -80,6 +85,16 @@ int main(int argc, char** argv)
             return EXIT_FAILURE;
         }
 
+        // Sin CameraComponent, Renderer::currentFrameCamera() cae al repliegue
+        // del editor (m_camera/m_viewMatrix), y si además la escena no tiene
+        // meshes estáticos el auto-fit de Renderer::init deja m_cameraDistance en
+        // -inf: proyección con NaN y ventana negra sin ninguna pista. El editor
+        // avisa al dar a Play (EditorUI.cpp); aquí no hay Play que pulsar, así
+        // que el aviso va nada más cargar la escena.
+        if (!scene.findCamera())
+            std::cerr << "Aviso: la escena no tiene una camara (CameraComponent); "
+                          "el juego no podra renderizar correctamente." << std::endl;
+
         // Antes de init(): initImGui y createOffscreenImages leen el flag.
         renderer.setHeadless(true);
 
@@ -98,6 +113,13 @@ int main(int argc, char** argv)
         }
 
         renderer.init(window, meshes);
+        // setSceneRoot/setPhysicsManager/setAudioManager (y más abajo
+        // setScriptManager) son passthroughs puros al EditorUI embebido del
+        // Renderer: en headless no dibujan nada ni cambian ningún cálculo. Se
+        // llaman igual, por simetría con sandbox/src/main.cpp, para que el
+        // siguiente lector no se pregunte si faltan a propósito. setScene es
+        // la excepción del grupo: currentFrameCamera() SÍ lo usa (findCamera()
+        // en Play), así que no vale quitarlo ni tratarlo como muerto.
         renderer.setSceneRoot(&scene.getRoot());
         renderer.setScene(&scene);
         renderer.setPhysicsManager(&physics);
@@ -157,6 +179,15 @@ int main(int argc, char** argv)
 
         scriptManager.onPlayStart();
 
+        // Réplica exacta del botón Play del editor (EditorUI.cpp:167-170): sin
+        // esto, un AudioClipComponent con playOnAwake activado suena al pulsar
+        // Play en el editor pero sale mudo en el .exe exportado — el diseñador
+        // lo activó confiando en lo que oyó, y aquí no hay ningún log que avise.
+        scene.traverse([](DonTopo::GameObject* go) {
+            if (go->hasAudioClip() && go->getAudioClip()->getPlayOnAwake())
+                go->getAudioClip()->play(glm::vec3(go->worldTransform[3]));
+        });
+
         while (!window.shouldClose())
         {
             DonTopo::Input::update();
@@ -166,7 +197,34 @@ int main(int argc, char** argv)
             float dt = std::chrono::duration<float>(now - last).count();
             last = now;
 
-            audio.update(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+            // Listener 3D: FMOD se inicializa con FMOD_INIT_3D_RIGHTHANDED
+            // (AudioManager::init), así que la atenuación y el paneo dependen
+            // de a dónde apunte el listener, no solo de dónde esté. Se
+            // resuelve por findCamera() en cada iteración -no una vez antes
+            // del bucle- porque un script Lua puede destruir GameObjects en
+            // cualquier frame; cachear el puntero lo dejaría colgante. Sin
+            // cámara en la escena se cae al origen mirando a -Z (mismos
+            // valores que traía este código antes del fix), no a un deref de
+            // nullptr.
+            glm::vec3 listenerPos(0.0f);
+            glm::vec3 listenerFwd(0.0f, 0.0f, -1.0f);
+            glm::vec3 listenerUp(0.0f, 1.0f, 0.0f);
+            if (DonTopo::GameObject* cam = scene.findCamera())
+            {
+                // Misma convención de ejes que usa el Renderer para construir
+                // la imagen que se ve en pantalla (Renderer.cpp:296-304,
+                // Renderer::currentFrameCamera en Play) y que confirma
+                // camera_tests.cpp: la cámara mira a -Z LOCAL (world[2] es el
+                // eje +Z local llevado a mundo, así que el "adelante" real es
+                // su negado) y +Y local es "arriba". Si aquí se usara +Z en
+                // vez de -Z, el audio 3D quedaría reflejado respecto a lo que
+                // se ve por pantalla: los sonidos de la izquierda sonarían a
+                // la derecha y viceversa.
+                listenerPos = glm::vec3(cam->worldTransform[3]);
+                listenerFwd = glm::normalize(-glm::vec3(cam->worldTransform[2]));
+                listenerUp  = glm::normalize(glm::vec3(cam->worldTransform[1]));
+            }
+            audio.update(listenerPos, listenerFwd, listenerUp);
             physics.stepSimulation(dt);
             scene.update(dt, physics);
             scriptManager.update(dt);
