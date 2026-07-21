@@ -65,7 +65,7 @@ namespace DonTopo {
         createComputePipelines();
         // necesita m_renderPass + m_swapChainImages.size()
         if (!m_headless) initImGui(window.getNativeWindow());
-        createOffscreenImages();  // necesita ImGui inicializado (llama AddTexture)
+        createOffscreenImages();  // en editor necesita ImGui inicializado (llama AddTexture); en headless no llama a ImGui, así que el orden con initImGui() no importa
 
         m_objects.resize(meshes.size());
         for(size_t i = 0; i < meshes.size(); i++)
@@ -293,7 +293,7 @@ namespace DonTopo {
         // (y sin que main.cpp, que llama a setCamera cada frame, se entere).
         // Sin cámara en escena se cae al repliegue de arriba; el aviso al Log lo
         // da EditorUI al arrancar Play, no aquí (esto corre cada frame).
-        if (m_editorUI.isPlaying() && m_scene)
+        if (isPlaying() && m_scene)
         {
             if (GameObject* cam = m_scene->findCamera())
             {
@@ -783,6 +783,23 @@ namespace DonTopo {
             toTransferDst.srcAccessMask       = 0;
             toTransferDst.dstAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
 
+            // srcStageMask = COLOR_ATTACHMENT_OUTPUT y no TRANSFER: esto no es un
+            // despiste, es lo que ordena esta barrera (y por tanto el blit de abajo)
+            // detrás del semáforo de vkAcquireNextImageKHR. El submit de este frame
+            // solo espera ese semáforo en COLOR_ATTACHMENT_OUTPUT_BIT
+            // (submitInfo.pWaitDstStageMask, más abajo), que no cubre TRANSFER — así
+            // que si la barrera esperase únicamente en TRANSFER, el driver no tendría
+            // ninguna dependencia que la obligue a ir después de la adquisición de la
+            // imagen del swapchain y el blit podría ejecutarse sobre una imagen que
+            // aún no es nuestra (o pisar la del frame anterior in-flight). Que
+            // funcione depende de que el Pass 1 (offscreen) SIEMPRE emita trabajo en
+            // COLOR_ATTACHMENT_OUTPUT antes de esta barrera, así que el srcStageMask
+            // de aquí se encadena con ese trabajo y queda correctamente después del
+            // semáforo. Si algún día "se corrige" este srcStageMask a
+            // VK_PIPELINE_STAGE_TRANSFER_BIT (que es lo que parece obvio a primera
+            // vista), se rompe esa cadena en silencio: sin validation layers de por
+            // medio no hay ningún aviso, solo un blit ocasionalmente sobre una imagen
+            // todavía no adquirida.
             VkImageMemoryBarrier preBarriers[] = { toTransferSrc, toTransferDst };
             vkCmdPipelineBarrier(cmd,
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
