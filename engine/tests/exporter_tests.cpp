@@ -13,6 +13,8 @@
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Scripting/ScriptComponent.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
@@ -195,6 +197,56 @@ static void test_missing_asset_flagged(const fs::path& root)
     CHECK(!assets[0].existsOnDisk);
 }
 
+// Tras reescribir, ningún path del .scene puede seguir siendo absoluto: el
+// paquete se ejecuta en otra máquina y otro directorio.
+static void test_rewrite_makes_paths_relative(const fs::path& root)
+{
+    Scene scene;
+
+    auto* hero = scene.addGameObject("hero");
+    auto skinned = std::make_shared<SkinnedMesh>();
+    skinned->sourcePath = (root / "assets" / "hero.fbx").string();
+    skinned->animationSources.push_back({ (root / "assets" / "run.fbx").string(), false, {} });
+    hero->setMesh(skinned);
+    hero->setAudioClip(std::make_shared<AudioClipComponent>(
+        nullptr, (root / "assets" / "step.wav").string(), -1, false, false));
+
+    std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+    std::map<std::string, std::string> sourceToPackage;
+    for (const ExportAsset& a : assets)
+        sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
+
+    nlohmann::json j = scene.toJson();
+    int rewritten = rewriteScenePaths(j, sourceToPackage);
+
+    // hero.fbx (mesh) + hero.fbx (animationSource builtin? no lo hay) +
+    // run.fbx + step.wav = 3 campos reescritos.
+    CHECK(rewritten == 3);
+
+    const nlohmann::json& node = j["root"]["children"][0];
+    CHECK(node["mesh"]["sourcePath"].get<std::string>() == "assets/hero.fbx");
+    CHECK(node["mesh"]["animationSources"][0]["path"].get<std::string>() == "assets/run.fbx");
+    CHECK(node["audioClip"]["path"].get<std::string>() == "assets/step.wav");
+
+    // Ningún path absoluto residual (en Windows: sin ':' de unidad).
+    CHECK(node["mesh"]["sourcePath"].get<std::string>().find(':') == std::string::npos);
+    CHECK(node["audioClip"]["path"].get<std::string>().find(':') == std::string::npos);
+}
+
+// Un path que no está en el mapa se deja intacto, no se borra ni se vacía.
+static void test_rewrite_leaves_unknown_paths(const fs::path& root)
+{
+    nlohmann::json j;
+    j["version"] = 1;
+    j["root"] = { { "name", "root" },
+                  { "mesh", { { "sourcePath", "C:/otro/sitio/x.fbx" } } },
+                  { "children", nlohmann::json::array() } };
+
+    int rewritten = rewriteScenePaths(j, {});
+    CHECK(rewritten == 0);
+    CHECK(j["root"]["mesh"]["sourcePath"].get<std::string>() == "C:/otro/sitio/x.fbx");
+}
+
 int main()
 {
     fs::path root = makeProjectFixture();
@@ -206,6 +258,8 @@ int main()
     test_skinned_mesh_materials(root);
     test_external_assets(root);
     test_missing_asset_flagged(root);
+    test_rewrite_makes_paths_relative(root);
+    test_rewrite_leaves_unknown_paths(root);
 
     std::error_code ec;
     fs::remove_all(root, ec);

@@ -6,6 +6,8 @@
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Scripting/ScriptComponent.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <system_error>
@@ -144,6 +146,53 @@ std::vector<ExportAsset> collectSceneAssets(
     std::sort(out.begin(), out.end(),
               [](const ExportAsset& a, const ExportAsset& b) { return a.packagePath < b.packagePath; });
     return out;
+}
+
+namespace {
+
+// Reescribe un campo de path si el mapa lo conoce. Devuelve 1 si tocó algo.
+int rewriteField(nlohmann::json& holder, const char* field,
+                 const std::map<std::string, std::string>& sourceToPackage)
+{
+    if (!holder.contains(field) || !holder[field].is_string()) return 0;
+    const std::string current = holder[field].get<std::string>();
+    if (current.empty()) return 0;
+    auto it = sourceToPackage.find(DonTopo::exportPathKey(current));
+    if (it == sourceToPackage.end()) return 0;
+    holder[field] = it->second;
+    return 1;
+}
+
+int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& sourceToPackage)
+{
+    int n = 0;
+    if (node.contains("mesh") && node["mesh"].is_object())
+    {
+        nlohmann::json& mesh = node["mesh"];
+        n += rewriteField(mesh, "sourcePath", sourceToPackage);
+        if (mesh.contains("animationSources") && mesh["animationSources"].is_array())
+            for (nlohmann::json& src : mesh["animationSources"])
+                n += rewriteField(src, "path", sourceToPackage);
+    }
+    if (node.contains("audioClip") && node["audioClip"].is_object())
+        n += rewriteField(node["audioClip"], "path", sourceToPackage);
+
+    if (node.contains("children") && node["children"].is_array())
+        for (nlohmann::json& child : node["children"])
+            n += rewriteNode(child, sourceToPackage);
+    return n;
+}
+
+} // namespace
+
+int rewriteScenePaths(nlohmann::json& sceneJson,
+                      const std::map<std::string, std::string>& sourceToPackage)
+{
+    // Acepta tanto el documento completo de Scene::toJson() ({version, root})
+    // como un nodo suelto, para que los tests puedan armar el JSON a mano.
+    if (sceneJson.contains("root") && sceneJson["root"].is_object())
+        return rewriteNode(sceneJson["root"], sourceToPackage);
+    return rewriteNode(sceneJson, sourceToPackage);
 }
 
 } // namespace DonTopo
