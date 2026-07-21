@@ -42,6 +42,7 @@ add_library(DonTopoEngine STATIC
     src/Renderer/GpuResources.cpp
     src/Editor/Gizmos.cpp
     src/Editor/ScriptEditorPanel.cpp
+    src/Editor/GameExporter.cpp
     src/Scripting/LuaSyntaxCheck.cpp
     src/Scripting/LuaApiReference.cpp
 )
