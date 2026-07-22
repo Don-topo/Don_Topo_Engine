@@ -569,10 +569,18 @@ En `engine/include/DonTopo/Editor/PropertiesPanel.h`, junto a los otros miembros
 ```cpp
     // Snapshot al empezar el drag de los sliders de audio: un drag continuo no
     // puede empujar un comando por frame, así que se captura al activar y se
-    // empuja uno solo al soltar. Mismo patrón que Transform y Rigidbody.
-    bool  m_audioDragActive = false;
-    float m_audioDragBeforeVolume = 1.0f;
-    float m_audioDragBeforePitch  = 1.0f;
+    // empuja uno solo al soltar.
+    //
+    // NO es el mismo patrón que Transform y Rigidbody, aunque se le parezca:
+    // esas secciones usan DragFloat y escriben en el objeto DESPUÉS de
+    // snapshotear. Aquí son SliderFloat, que ya salta al punto del click en el
+    // frame en que se activa, así que el valor previo se lee antes de dibujar
+    // (ver drawAudioClipSection). m_audioDragOwnerId evita que un drag
+    // interrumpido en un GameObject commitee contra otro.
+    bool     m_audioDragActive = false;
+    uint64_t m_audioDragOwnerId = 0;
+    float    m_audioDragBeforeVolume = 1.0f;
+    float    m_audioDragBeforePitch  = 1.0f;
 ```
 
 - [ ] **Step 3: Dibujar los sliders con undo**
@@ -584,8 +592,16 @@ En `engine/src/Editor/PropertiesPanel.cpp`, tras el checkbox de `Play On Awake` 
             // un solo comando al soltar. Los valores se escriben en vivo
             // mientras se arrastra (así se oye el cambio), y el comando sólo
             // sirve para que Ctrl+Z devuelva el drag entero de una vez.
-            float volume = clip->getVolume();
-            float pitch  = clip->getPitch();
+            // Las lecturas previas se hoistean ANTES de dibujar: SliderFloat
+            // salta al punto del click en el MISMO frame en que
+            // IsItemActivated() es true (a diferencia de DragFloat, que exige
+            // movimiento del raton), asi que releer el componente despues de
+            // dibujar daria un "before" ya contaminado por el propio click y
+            // el undo devolveria el valor del click, no el de antes del drag.
+            const float volumeBefore = clip->getVolume();
+            const float pitchBefore  = clip->getPitch();
+            float volume = volumeBefore;
+            float pitch  = pitchBefore;
 
             const uint64_t clipOwnerId = ctx.selected->id;
             Scene* scene = ctx.scene;
@@ -603,14 +619,23 @@ En `engine/src/Editor/PropertiesPanel.cpp`, tras el checkbox de `Play On Awake` 
             activated |= ImGui::IsItemActivated();
             committed |= ImGui::IsItemDeactivatedAfterEdit();
 
-            if (activated && !m_audioDragActive)
+            // Sin gate por m_audioDragActive: solo un widget puede tener
+            // ActiveId a la vez, y el gate dejaba el flag pegado cuando un
+            // click no llegaba a editar (IsItemDeactivatedAfterEdit exige
+            // edicion previa), con lo que la siguiente edicion — incluso en
+            // OTRO GameObject — reutilizaba un before rancio.
+            if (activated)
             {
                 m_audioDragActive       = true;
-                m_audioDragBeforeVolume = clip->getVolume();
-                m_audioDragBeforePitch  = clip->getPitch();
+                m_audioDragBeforeVolume = volumeBefore;
+                m_audioDragBeforePitch  = pitchBefore;
+                m_audioDragOwnerId      = clipOwnerId;
             }
 
-            if (committed && m_audioDragActive)
+            // La guarda de propietario cubre el drag interrumpido: Ctrl+Z SI
+            // funciona a mitad de arrastre (EditorUI.cpp:88 solo bloquea el
+            // atajo con WantTextInput) y puede hacer desaparecer el objeto.
+            if (committed && m_audioDragActive && m_audioDragOwnerId == clipOwnerId)
             {
                 m_audioDragActive = false;
                 const AudioClipState before{ m_audioDragBeforeVolume, m_audioDragBeforePitch };
