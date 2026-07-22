@@ -144,10 +144,14 @@ de un asset) o vía `entity:AddComponent("AudioClip", path)`.
 | `clip:Stop()` | Detiene la reproducción |
 | `clip:SetLoop(bool)` | Activa/desactiva loop (recarga el sonido si cambia) |
 | `clip:GetLoop()` | Estado actual de loop |
+| `clip:SetVolume(v)` | Volumen del clip, recortado a `[0, 1]`. Seguro de llamar en `Update`: sólo escribe en el canal. |
+| `clip:GetVolume()` | Volumen actual. |
+| `clip:SetPitch(p)` | Pitch del clip, recortado a `[0.5, 2]`. `2.0` es una octava arriba y el doble de velocidad. Seguro en `Update`. |
+| `clip:GetPitch()` | Pitch actual. |
+| `clip:SetIs3D(b)` | Cambia entre 2D y 3D. **Recarga el sonido y corta lo que esté sonando**: es configuración, no lo llames por frame. |
+| `clip:GetIs3D()` | `true` si el clip es 3D. |
 
-No expuesto aún a Lua (existe en C++, `AudioClipComponent`): `SetIs3D/GetIs3D`.
-No hay volumen/pitch por-clip — el volumen es global por bus
-(`AudioManager::setMasterVolume/setSfxVolume/setBgmVolume`, no scriptable).
+Ver `Scripts/AudioFade.lua` para un fade completo.
 
 ```lua
 -- Scripts/AudioTest.lua
@@ -168,5 +172,6 @@ end
 ## Ejemplos existentes
 
 `Scripts/Mover.lua` (Input + Transform), `Scripts/Rotator.lua` (rotación
-continua), `Scripts/AudioTest.lua` (AudioClip Play/Stop/Loop), `Scripts/Test.lua`
+continua), `Scripts/AudioTest.lua` (AudioClip Play/Stop/Loop),
+`Scripts/AudioFade.lua` (AudioClip SetVolume/GetVolume por frame), `Scripts/Test.lua`
 (plantilla vacía).
