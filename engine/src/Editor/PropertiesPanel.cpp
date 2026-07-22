@@ -1355,8 +1355,18 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             // un solo comando al soltar. Los valores se escriben en vivo
             // mientras se arrastra (así se oye el cambio), y el comando sólo
             // sirve para que Ctrl+Z devuelva el drag entero de una vez.
-            float volume = clip->getVolume();
-            float pitch  = clip->getPitch();
+            //
+            // SliderFloat (a diferencia de DragFloat) salta al valor bajo el
+            // cursor en el MISMO frame en que IsItemActivated() se vuelve
+            // true, así que el "before" no puede releerse del componente
+            // después de dibujar el widget: para entonces ya vale el valor
+            // nuevo. Por eso se hoistean las lecturas aquí, antes de los
+            // sliders, y el snapshot usa estas variables en vez de releer
+            // clip->getVolume()/getPitch().
+            const float volumeBefore = clip->getVolume();
+            const float pitchBefore  = clip->getPitch();
+            float volume = volumeBefore;
+            float pitch  = pitchBefore;
 
             const uint64_t clipOwnerId = ctx.selected->id;
             Scene* scene = ctx.scene;
@@ -1374,14 +1384,27 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             activated |= ImGui::IsItemActivated();
             committed |= ImGui::IsItemDeactivatedAfterEdit();
 
-            if (activated && !m_audioDragActive)
+            // Sin gate por m_audioDragActive: solo un widget de ImGui puede
+            // tener ActiveId a la vez, así que el gate no aporta nada salvo
+            // un bug: IsItemDeactivatedAfterEdit() exige edición real, y un
+            // click que activa el slider sin moverlo nunca llega a
+            // "committed", dejando el flag pegado con un "before" rancio que
+            // la siguiente edición —incluso en otro GameObject— reutilizaría.
+            if (activated)
             {
                 m_audioDragActive       = true;
-                m_audioDragBeforeVolume = clip->getVolume();
-                m_audioDragBeforePitch  = clip->getPitch();
+                m_audioDragBeforeVolume = volumeBefore;
+                m_audioDragBeforePitch  = pitchBefore;
+                m_audioDragOwnerId      = clipOwnerId;
             }
 
-            if (committed && m_audioDragActive)
+            // Guarda de propietario: si el drag se interrumpió sin commit
+            // (p.ej. un Ctrl+Z a mitad de arrastre reconstruyó/borró el
+            // GameObject seleccionado; el atajo solo se bloquea con
+            // WantTextInput, no durante un drag de slider) y el siguiente
+            // commit llega para otro AudioClip, este id evita aplicar un
+            // "before" que no le corresponde a ese objeto.
+            if (committed && m_audioDragActive && m_audioDragOwnerId == clipOwnerId)
             {
                 m_audioDragActive = false;
                 const AudioClipState before{ m_audioDragBeforeVolume, m_audioDragBeforePitch };
