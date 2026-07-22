@@ -112,7 +112,11 @@ void EditorUI::drawMenuBar()
     {
         if (ImGui::BeginMenu("File"))
         {
-            if (ImGui::MenuItem("Export Game...", nullptr, false, m_scene != nullptr))
+            // Fuera de Play Mode por el mismo motivo que Save/Load: el paquete
+            // se construye desde la escena EN MEMORIA, así que exportar durante
+            // Play empaquetaría el estado de simulación en vez de la escena de
+            // autor, y el juego exportado arrancaría a media partida.
+            if (ImGui::MenuItem("Export Game...", nullptr, false, m_scene != nullptr && !m_isPlaying))
             {
                 IGFD::FileDialogConfig cfg;
                 cfg.path  = ".";
@@ -182,6 +186,22 @@ void EditorUI::drawToolbar()
             if (!m_scene->findCamera())
                 m_logPanel.push("No hay cámara en la escena; usando la del editor");
             m_isPlaying = true;
+            // Un diálogo de Save/Load o de export abierto al arrancar Play se
+            // queda huérfano: la operación ya no se ejecutaría, pero el
+            // diálogo seguiría en pantalla hasta el Stop. Los dos son de IGFD
+            // y no bloquean la toolbar, así que se llega aquí con ellos
+            // abiertos; los popups modales del export sí bloquean y no hace
+            // falta tocarlos.
+            if (m_sceneDlgOpen)
+            {
+                m_sceneFileDialog->Close();
+                m_sceneDlgOpen = false;
+            }
+            if (m_exportDlgOpen)
+            {
+                m_exportDialog->Close();
+                m_exportDlgOpen = false;
+            }
             if (m_scriptManager) m_scriptManager->onPlayStart();
             m_scene->traverse([](GameObject* go) {
                 if (go->hasAudioClip() && go->getAudioClip()->getPlayOnAwake())
@@ -201,7 +221,15 @@ void EditorUI::drawToolbar()
     if (wireframe)
         ImGui::PopStyleColor();
 
+    // Save/Load quedan fuera de Play Mode: lo que hay en memoria durante Play
+    // es estado de simulación (posiciones movidas por la física, valores que
+    // mutaron los scripts), no la escena que el usuario está creando.
+    // Guardarlo lo haría permanente sin que se note —un volumen a 0 o una
+    // rotación acumulada no se ven en ninguna parte— y cargar otra escena
+    // dejaría a m_playSnapshot describiendo una escena que ya no existe, así
+    // que el Stop restauraría algo ajeno.
     ImGui::SameLine();
+    ImGui::BeginDisabled(m_isPlaying);
     if (ImGui::Button("Save Scene") && m_scene)
     {
         m_sceneDlgOpen   = true;
@@ -215,6 +243,8 @@ void EditorUI::drawToolbar()
                     ImGuiFileDialogFlags_ConfirmOverwrite;
         m_sceneFileDialog->OpenDialog("SceneDlg", "Save Scene", ".json", cfg);
     }
+    if (m_isPlaying && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Para el Play Mode para guardar o cargar escenas");
 
     ImGui::SameLine();
     if (ImGui::Button("Load Scene") && m_scene)
@@ -229,6 +259,9 @@ void EditorUI::drawToolbar()
                     ImGuiFileDialogFlags_DisablePlaceMode;
         m_sceneFileDialog->OpenDialog("SceneDlg", "Load Scene", ".json", cfg);
     }
+    ImGui::EndDisabled();
+    if (m_isPlaying && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Para el Play Mode para guardar o cargar escenas");
 
     if (!m_sceneIOError.empty())
     {
@@ -330,6 +363,18 @@ void EditorUI::drawSceneDialog()
     // el diálogo aunque el usuario lo cierre sin confirmar.
     if (!m_sceneDlgOpen || !m_sceneFileDialog->Display("SceneDlg"))
         return;
+
+    // La guarda vive aquí, en el sitio que de verdad escribe y carga, no sólo
+    // en los botones: el diálogo de IGFD no bloquea la toolbar, así que se
+    // puede abrir Save, pulsar Play y confirmar después. El botón deshabilitado
+    // comunica; esto es lo que impide.
+    if (m_isPlaying)
+    {
+        m_sceneFileDialog->Close();
+        m_sceneDlgOpen = false;
+        m_logPanel.push("Operación de escena cancelada: no se puede guardar ni cargar en Play Mode");
+        return;
+    }
 
     if (m_sceneFileDialog->IsOk())
     {
@@ -493,6 +538,17 @@ void EditorUI::runExport()
     if (!m_scene)
     {
         m_logPanel.push("Export cancelado: no hay escena abierta");
+        return;
+    }
+
+    // Defensa en el punto que construye el paquete, no sólo en el menú. Los
+    // dos popups del flujo (nombre y confirmación) son BeginPopupModal y sí
+    // bloquean la toolbar, pero el diálogo de carpeta es IGFD y no: se puede
+    // dejar abierto, pulsar Play y seguir. Y aunque hoy no quedara ningún
+    // hueco, esta es la función que hay que blindar: es la que lee la escena.
+    if (m_isPlaying)
+    {
+        m_logPanel.push("Export cancelado: para el Play Mode antes de exportar");
         return;
     }
 
