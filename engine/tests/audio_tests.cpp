@@ -93,15 +93,70 @@ static void test_tojson_emits_volume_and_pitch()
 
     nlohmann::json j = scene.toJson();
     const nlohmann::json& node = j["root"]["children"][0];
+    // Ancla explícita: si el constructor de Scene algún día sembrara un hijo
+    // por defecto, este CHECK señala la causa real en vez de que los asserts
+    // de abajo fallen contra el nodo equivocado sin ninguna pista.
+    CHECK(node["name"] == "altavoz");
     CHECK(node.contains("audioClip"));
     if (!node.contains("audioClip")) return;
     CHECK(nearlyEqual(node["audioClip"].value("volume", -1.0f), 0.25f));
     CHECK(nearlyEqual(node["audioClip"].value("pitch",  -1.0f), 1.5f));
 }
 
+// Round-trip completo por toJson/fromJson con valores NO neutros y, a
+// propósito, DISTINTOS entre sí (mismo patrón que
+// camera_tests.cpp:190-221, test_serialization_round_trip). 1.0/1.0 es a la
+// vez el neutro de fábrica del componente y el default con el que carga
+// Scene::fromJson cuando faltan las claves: un round-trip con esos valores
+// "pasaría" igual aunque nadie escribiera ni leyera nada (ver hallazgo 1 del
+// review — es justo lo que test_scene_without_volume_loads_neutral no podía
+// distinguir por sí solo). Que volume != pitch además destapa un cruce de
+// setters (setVolume(c.value("pitch",...)) o al revés): con valores iguales
+// el cruce pasaría desapercibido.
+//
+// Necesita FMOD vivo, igual que el back-compat: Scene::fromJson crea el clip
+// con AudioManager::createAudioClipComponent, que sin sonido cargado
+// devuelve nullptr. Mismo SKIP si no hay FMOD disponible en la máquina.
+static void test_volume_pitch_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false);
+    if (!probe)
+    {
+        std::printf("SKIP test_volume_pitch_round_trip (FMOD no disponible)\n");
+        return;
+    }
+
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("altavoz");
+    probe->setVolume(0.25f);
+    probe->setPitch(1.5f);
+    go->setAudioClip(probe);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+
+    GameObject* found = loaded.findById(go->id);
+    CHECK(found != nullptr);
+    if (!found || !found->hasAudioClip()) { CHECK(false); return; }
+    CHECK(nearlyEqual(found->getAudioClip()->getVolume(), 0.25f));
+    CHECK(nearlyEqual(found->getAudioClip()->getPitch(),  1.5f));
+}
+
 // Back-compat: una escena guardada antes de esta feature no trae los campos y
 // tiene que cargar con los valores neutros. Es lo que se rompe si alguien
 // cambia el .value() de la carga por un .at().
+//
+// El JSON se construye a partir de scene.toJson() y no a mano: un literal
+// escrito a pelo ya se desincronizó una vez del formato real de
+// nodeFromJson/Scene::fromJson (le faltaba "version" y usaba
+// position/rotation/scale en vez de localTransform). Partir de toJson() y
+// borrar ahí las claves que queremos que falten es inmune a cambios de
+// esquema (mismo patrón que camera_tests.cpp:246-257). Los valores previos al
+// borrado son NO neutros a propósito: si erase() no quitara de verdad las
+// claves (o fromJson las leyera de otro lado), el test vería 0.25/1.5 en vez
+// del neutro 1.0/1.0 y fallaría igual.
 //
 // Necesita FMOD vivo: Scene::fromJson crea el clip con
 // AudioManager::createAudioClipComponent, que sin sonido cargado devuelve
@@ -116,40 +171,26 @@ static void test_scene_without_volume_loads_neutral(PhysicsManager& pm, AudioMan
         return;
     }
 
-    // NOTA: el brief de la tarea traía "position"/"rotation"/"scale" y sin
-    // "version" en la raíz, pero el formato real (nodeFromJson/Scene::fromJson)
-    // exige "version":1 y una "localTransform" (mat4 de 16 floats, aquí
-    // identidad) por nodo — con el formato del brief fromJson devuelve false
-    // pase lo que pase con volume/pitch. Se corrige aquí al formato real,
-    // conservando la intención del test: ni "volume" ni "pitch" en audioClip.
-    const auto identity = nlohmann::json::array({ 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 });
-    nlohmann::json j = {
-        { "version", 1 },
-        { "name", "Test" },
-        { "root", {
-            { "name", "Root" }, { "id", 1 },
-            { "localTransform", identity },
-            { "children", nlohmann::json::array({
-                {
-                    { "name", "altavoz" }, { "id", 2 },
-                    { "localTransform", identity },
-                    { "children", nlohmann::json::array() },
-                    { "audioClip", {
-                        { "path", "assets/audio.mp3" },
-                        { "loop", false }, { "is3D", false }, { "playOnAwake", false }
-                    }}
-                }
-            })}
-        }}
-    };
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("altavoz");
+    probe->setVolume(0.25f);
+    probe->setPitch(1.5f);
+    go->setAudioClip(probe);
+
+    nlohmann::json j = scene.toJson();
+    nlohmann::json& audioClip = j["root"]["children"][0]["audioClip"];
+    CHECK(audioClip.contains("volume"));
+    CHECK(audioClip.contains("pitch"));
+    audioClip.erase("volume");
+    audioClip.erase("pitch");
 
     Scene loaded("Vacia");
     CHECK(loaded.fromJson(j, pm, am));
-    GameObject* go = loaded.findById(2);
-    CHECK(go != nullptr);
-    if (!go || !go->hasAudioClip()) { CHECK(false); return; }
-    CHECK(nearlyEqual(go->getAudioClip()->getVolume(), 1.0f));
-    CHECK(nearlyEqual(go->getAudioClip()->getPitch(),  1.0f));
+    GameObject* loadedGo = loaded.findById(go->id);
+    CHECK(loadedGo != nullptr);
+    if (!loadedGo || !loadedGo->hasAudioClip()) { CHECK(false); return; }
+    CHECK(nearlyEqual(loadedGo->getAudioClip()->getVolume(), 1.0f));
+    CHECK(nearlyEqual(loadedGo->getAudioClip()->getPitch(),  1.0f));
 }
 
 int main()
@@ -164,6 +205,7 @@ int main()
     test_pitch_clamps_to_range();
     test_setters_survive_without_manager();
     test_tojson_emits_volume_and_pitch();
+    test_volume_pitch_round_trip(pm, am);
     test_scene_without_volume_loads_neutral(pm, am);
 
     am.shutdown();
