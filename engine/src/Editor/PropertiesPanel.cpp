@@ -922,13 +922,20 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
     // CUALQUIERA. IsItemActivated/IsItemDeactivatedAfterEdit se consultan por
     // widget y se acumulan (no una sola query final: esa sólo reflejaría el
     // último DragFloat y dejaría Mass/Drag sin undo).
+    //
+    // Sin gate por m_rigidbodyDragActive: sólo un widget de ImGui puede tener
+    // ActiveId a la vez, así que el gate no evitaba ningún re-snapshot real y a
+    // cambio dejaba el flag pegado cuando un click no llegaba a editar
+    // (IsItemDeactivatedAfterEdit exige edición previa, y DragFloat no edita si
+    // el ratón no se mueve). Con el flag pegado, la siguiente edición —incluso
+    // en OTRO GameObject— reutilizaba el snapshot viejo, y el Ctrl+Z escribía
+    // en el objeto nuevo la masa, gravedad, kinematic, drag, angular drag y
+    // constraints del anterior.
     auto snapshotBefore = [&]() {
-        if (!m_rigidbodyDragActive)
-        {
-            m_rigidbodyDragActive = true;
-            m_rigidbodyBeforeEdit = RigidbodyState{ rb->getMass(), rb->getUseGravity(), rb->getIsKinematic(),
-                                                    rb->getDrag(), rb->getAngularDrag(), rb->getConstraints() };
-        }
+        m_rigidbodyDragActive  = true;
+        m_rigidbodyDragOwnerId = id;
+        m_rigidbodyBeforeEdit  = RigidbodyState{ rb->getMass(), rb->getUseGravity(), rb->getIsKinematic(),
+                                                 rb->getDrag(), rb->getAngularDrag(), rb->getConstraints() };
     };
     bool floatChanged = false;
     bool floatCommitted = false;
@@ -945,7 +952,10 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
     if (ImGui::IsItemActivated()) snapshotBefore();
     floatCommitted |= ImGui::IsItemDeactivatedAfterEdit();
     if (floatChanged) { rb->setMass(m_editRbMass); rb->setDrag(m_editRbDrag); rb->setAngularDrag(m_editRbAngularDrag); }
-    if (m_rigidbodyDragActive && floatCommitted)
+    // La guarda de propietario cubre el drag que empieza en un GameObject y
+    // acaba commiteando mientras el panel ya dibuja otro: sin ella se aplicaría
+    // el "before" del primero al segundo.
+    if (m_rigidbodyDragActive && floatCommitted && m_rigidbodyDragOwnerId == id)
     {
         m_rigidbodyDragActive = false;
         if (ctx.scene)
@@ -1081,13 +1091,16 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
 
     // --- Drag floats: snapshot al activar CUALQUIERA, comando al soltar
     // CUALQUIERA (mismo patrón acumulativo que Rigidbody).
+    //
+    // Sin gate por m_cameraDragActive, y con propietario: mismo motivo que en
+    // drawRigidbodySection — el gate dejaba el flag pegado cuando un click no
+    // llegaba a editar, y el siguiente drag en otro GameObject commiteaba el
+    // snapshot ajeno.
     auto snapshotBefore = [&]() {
-        if (!m_cameraDragActive)
-        {
-            m_cameraDragActive = true;
-            m_cameraBeforeEdit = CameraState{ cam->getMode(), cam->getFov(), cam->getOrthographicSize(),
-                                               cam->getNear(), cam->getFar() };
-        }
+        m_cameraDragActive  = true;
+        m_cameraDragOwnerId = id;
+        m_cameraBeforeEdit  = CameraState{ cam->getMode(), cam->getFov(), cam->getOrthographicSize(),
+                                           cam->getNear(), cam->getFar() };
     };
     bool floatChanged = false;
     bool floatCommitted = false;
@@ -1130,7 +1143,7 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
         m_editCamNear      = cam->getNear();
         m_editCamFar       = cam->getFar();
     }
-    if (m_cameraDragActive && floatCommitted)
+    if (m_cameraDragActive && floatCommitted && m_cameraDragOwnerId == id)
     {
         m_cameraDragActive = false;
         if (ctx.scene)

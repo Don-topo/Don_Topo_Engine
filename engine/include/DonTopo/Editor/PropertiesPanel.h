@@ -125,6 +125,7 @@ private:
     float          m_editRbAngularDrag = 0.05f;
     uint32_t       m_editRbConstraints = 0;
     bool           m_rigidbodyDragActive = false;
+    uint64_t       m_rigidbodyDragOwnerId = 0;
     RigidbodyState m_rigidbodyBeforeEdit{};
 
     // Camera – mismo patrón de cache que Rigidbody. Los DragFloat (fov/size/
@@ -138,6 +139,7 @@ private:
     float       m_editCamNear = 1.0f;
     float       m_editCamFar = 2000.0f;
     bool        m_cameraDragActive = false;
+    uint64_t    m_cameraDragOwnerId = 0;
     CameraState m_cameraBeforeEdit{};
 
     // Instancia propia de ImGuiFileDialog para "Add > Mesh", separada de
