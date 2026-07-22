@@ -63,8 +63,9 @@ namespace DonTopo {
         createShadowResources();
         createFramebuffers();
         createComputePipelines();
-        initImGui(window.getNativeWindow()); // necesita m_renderPass + m_swapChainImages.size()
-        createOffscreenImages();  // necesita ImGui inicializado (llama AddTexture)
+        // necesita m_renderPass + m_swapChainImages.size()
+        if (!m_headless) initImGui(window.getNativeWindow());
+        createOffscreenImages();  // en editor necesita ImGui inicializado (llama AddTexture); en headless no llama a ImGui, así que el orden con initImGui() no importa
 
         m_objects.resize(meshes.size());
         for(size_t i = 0; i < meshes.size(); i++)
@@ -113,13 +114,18 @@ namespace DonTopo {
         }
 
         // ── Construir frame ImGui (antes de grabar el command buffer) ─────────────
-        ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
+        // En headless no hay contexto ImGui que alimentar: el runtime blitea
+        // la imagen offscreen directamente al swapchain (ver recordCommandBuffer).
+        if (!m_headless)
+        {
+            ImGui_ImplVulkan_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
 
-        m_editorUI.draw(m_offscreenDescSet[m_currentFrame], m_sceneRoot, m_viewMatrix);
+            m_editorUI.draw(m_offscreenDescSet[m_currentFrame], m_sceneRoot, m_viewMatrix);
 
-        ImGui::Render();
+            ImGui::Render();
+        }
 
         // Se muestrea AQUÍ, después de m_editorUI.draw() y no antes: ese draw()
         // es quien puede voltear m_isPlaying (botones Play/Stop) o mutar la
@@ -135,7 +141,18 @@ namespace DonTopo {
         recordCommandBuffer(imageIndex);
 
         // 4. Envía a la GPU
+        // En headless el pass 2 no dibuja ImGui: blitea la imagen offscreen al
+        // swapchain (recordCommandBuffer), así que el primer uso real de la
+        // imagen adquirida ocurre en TRANSFER, no en COLOR_ATTACHMENT_OUTPUT.
+        // Esperar el semáforo también en TRANSFER hace que esa ordenación sea
+        // local y explícita, en vez de depender de que la barrera del blit se
+        // encadene con trabajo previo del pass 1 (ver el comentario largo del
+        // srcStageMask en recordCommandBuffer, que sigue vigente y explica por
+        // qué ESA barrera no puede esperar solo en TRANSFER). Añadir un stage
+        // al wait solo puede hacer que la GPU espere más, nunca menos: no
+        // cambia nada del camino con editor.
         VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        if (m_headless) waitStage |= VK_PIPELINE_STAGE_TRANSFER_BIT;
         VkSubmitInfo submitInfo{};
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submitInfo.waitSemaphoreCount       = 1;
@@ -179,7 +196,7 @@ namespace DonTopo {
         vkDeviceWaitIdle(m_gpu.device());
 
         destroyOffscreenImages();
-        shutdownImGui();
+        if (!m_headless) shutdownImGui();
         vkDestroyRenderPass(m_gpu.device(), m_offscreenRenderPass, nullptr);
         m_offscreenRenderPass = VK_NULL_HANDLE;
 
@@ -287,7 +304,7 @@ namespace DonTopo {
         // (y sin que main.cpp, que llama a setCamera cada frame, se entere).
         // Sin cámara en escena se cae al repliegue de arriba; el aviso al Log lo
         // da EditorUI al arrancar Play, no aquí (esto corre cada frame).
-        if (m_editorUI.isPlaying() && m_scene)
+        if (isPlaying() && m_scene)
         {
             if (GameObject* cam = m_scene->findCamera())
             {
@@ -360,7 +377,10 @@ namespace DonTopo {
         createInfo.imageColorSpace = m_swapChainColorSpace;
         createInfo.imageExtent = m_swapChainExtent;
         createInfo.imageArrayLayers = 1;
-        createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        // TRANSFER_DST: en modo headless la imagen offscreen se blitea aquí en
+        // vez de dibujarse ImGui encima. El flag va incondicional para que
+        // editor y runtime compartan el mismo camino de creación de recursos.
+        createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         createInfo.preTransform = surfaceCapabilities.currentTransform;
         createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -722,6 +742,7 @@ namespace DonTopo {
         }
 
         // ── Pass 2: ImGui → swapchain ─────────────────────────────────────────────
+        if (!m_headless)
         {
             VkClearValue clearColor{};
             clearColor.color = {0.12f, 0.12f, 0.12f, 1.0f};
@@ -738,6 +759,92 @@ namespace DonTopo {
             vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
             ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), m_commandBuffers[m_currentFrame]);
             vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
+        }
+        else
+        {
+            // ── Pass 2 (headless): offscreen → swapchain ──────────────────────────
+            // Sin editor no hay quien muestree la imagen offscreen, así que se
+            // copia tal cual a la imagen de presentación. Es un blit 1:1: la
+            // offscreen se crea con el mismo formato y extent que el swapchain
+            // (createOffscreenImages). El renderpass offscreen declara
+            // initialLayout=UNDEFINED, así que no hay que restaurar su layout
+            // después del blit.
+            VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
+            const VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+            VkImageMemoryBarrier toTransferSrc{};
+            toTransferSrc.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            toTransferSrc.oldLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            toTransferSrc.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            toTransferSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toTransferSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toTransferSrc.image               = m_offscreenImage[m_currentFrame];
+            toTransferSrc.subresourceRange    = range;
+            toTransferSrc.srcAccessMask       = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            toTransferSrc.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
+
+            VkImageMemoryBarrier toTransferDst{};
+            toTransferDst.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            toTransferDst.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+            toTransferDst.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toTransferDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toTransferDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toTransferDst.image               = m_swapChainImages[imageIndex];
+            toTransferDst.subresourceRange    = range;
+            toTransferDst.srcAccessMask       = 0;
+            toTransferDst.dstAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+            // srcStageMask = COLOR_ATTACHMENT_OUTPUT y no TRANSFER: esto no es un
+            // despiste, es lo que ordena esta barrera (y por tanto el blit de abajo)
+            // detrás del semáforo de vkAcquireNextImageKHR. El submit de este frame
+            // solo espera ese semáforo en COLOR_ATTACHMENT_OUTPUT_BIT
+            // (submitInfo.pWaitDstStageMask, más abajo), que no cubre TRANSFER — así
+            // que si la barrera esperase únicamente en TRANSFER, el driver no tendría
+            // ninguna dependencia que la obligue a ir después de la adquisición de la
+            // imagen del swapchain y el blit podría ejecutarse sobre una imagen que
+            // aún no es nuestra (o pisar la del frame anterior in-flight). Que
+            // funcione depende de que el Pass 1 (offscreen) SIEMPRE emita trabajo en
+            // COLOR_ATTACHMENT_OUTPUT antes de esta barrera, así que el srcStageMask
+            // de aquí se encadena con ese trabajo y queda correctamente después del
+            // semáforo. Si algún día "se corrige" este srcStageMask a
+            // VK_PIPELINE_STAGE_TRANSFER_BIT (que es lo que parece obvio a primera
+            // vista), se rompe esa cadena en silencio: sin validation layers de por
+            // medio no hay ningún aviso, solo un blit ocasionalmente sobre una imagen
+            // todavía no adquirida.
+            VkImageMemoryBarrier preBarriers[] = { toTransferSrc, toTransferDst };
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0, 0, nullptr, 0, nullptr, 2, preBarriers);
+
+            VkImageBlit blit{};
+            blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            blit.srcOffsets[0]  = { 0, 0, 0 };
+            blit.srcOffsets[1]  = { (int32_t)m_swapChainExtent.width, (int32_t)m_swapChainExtent.height, 1 };
+            blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            blit.dstOffsets[0]  = { 0, 0, 0 };
+            blit.dstOffsets[1]  = { (int32_t)m_swapChainExtent.width, (int32_t)m_swapChainExtent.height, 1 };
+
+            vkCmdBlitImage(cmd,
+                m_offscreenImage[m_currentFrame], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                m_swapChainImages[imageIndex],     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, &blit, VK_FILTER_NEAREST);
+
+            VkImageMemoryBarrier toPresent{};
+            toPresent.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            toPresent.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toPresent.newLayout           = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toPresent.image               = m_swapChainImages[imageIndex];
+            toPresent.subresourceRange    = range;
+            toPresent.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toPresent.dstAccessMask       = 0;
+
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                0, 0, nullptr, 0, nullptr, 1, &toPresent);
         }
 
         vkEndCommandBuffer(m_commandBuffers[m_currentFrame]);
@@ -2364,7 +2471,9 @@ namespace DonTopo {
                 m_swapChainExtent.width, m_swapChainExtent.height,
                 m_swapChainFormat,
                 VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                // TRANSFER_SRC: origen del blit al swapchain en headless.
+                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                 m_offscreenImage[i], m_offscreenMemory[i]);
 
@@ -2383,10 +2492,15 @@ namespace DonTopo {
             if (vkCreateFramebuffer(m_gpu.device(), &fbInfo, nullptr, &m_offscreenFramebuffer[i]) != VK_SUCCESS)
                 throw std::runtime_error("failed to create offscreen framebuffer!");
 
-            // Registrar la textura en ImGui para obtener el VkDescriptorSet
-            m_offscreenDescSet[i] = ImGui_ImplVulkan_AddTexture(
-                m_offscreenSampler, m_offscreenView[i],
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            // Registrar la textura en ImGui para obtener el VkDescriptorSet.
+            // En headless nadie la muestrea: el descriptor set se queda nulo y
+            // destroyOffscreenImages ya comprueba antes de liberarlo.
+            if (!m_headless)
+            {
+                m_offscreenDescSet[i] = ImGui_ImplVulkan_AddTexture(
+                    m_offscreenSampler, m_offscreenView[i],
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            }
         }
         printf("offscreen images OK\n"); fflush(stdout);
     }

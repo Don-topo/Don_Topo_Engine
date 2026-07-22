@@ -38,7 +38,15 @@ namespace DonTopo {
             void setWireframeMode(bool enabled) { m_wireframeMode = enabled; }
             bool isWireframeMode() const { return m_wireframeMode; }
             bool isViewportHovered() const { return m_editorUI.isViewportHovered(); }
-            bool isPlaying() const { return m_editorUI.isPlaying(); }
+            // En headless no hay editor que pulse Play: el runtime arranca
+            // jugando desde el frame 0. Esto es además lo que hace que
+            // currentFrameCamera() elija el CameraComponent de la escena en
+            // vez de la cámara de vuelo del editor.
+            bool isPlaying() const { return m_headless || m_editorUI.isPlaying(); }
+            // Modo runtime: ni ImGui ni paneles. Solo tiene efecto si se
+            // llama ANTES de init() — initImGui/createOffscreenImages leen el
+            // flag durante la inicialización.
+            void setHeadless(bool headless) { m_headless = headless; }
             // Reenvía al axis gizmo del viewport; cb recibe el eje mundo clicado.
             void setOnAxisSelected(std::function<void(const glm::vec3&)> cb) { m_editorUI.setOnAxisSelected(std::move(cb)); }
             void setPhysicsManager(PhysicsManager* physics) { m_editorUI.setPhysicsManager(physics); }
@@ -330,6 +338,7 @@ namespace DonTopo {
             VkPipeline                      m_wireframePipeline                 = VK_NULL_HANDLE;
             bool                            m_framebufferResized                = false;
             bool                            m_wireframeMode                     = false;
+            bool                            m_headless                          = false;
             VkDescriptorSetLayout           m_descriptorSetLayout               = VK_NULL_HANDLE;
             VkBuffer                        m_uniformBuffers[MAX_FRAMES]        = {};
             VkDeviceMemory                  m_uniformBuffersMemory[MAX_FRAMES]  = {};

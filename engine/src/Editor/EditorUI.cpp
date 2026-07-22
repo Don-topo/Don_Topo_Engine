@@ -9,6 +9,7 @@
 #include "DonTopo/Files/FileManager.h"
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Editor/ScriptEditorPanel.h"
+#include "DonTopo/Editor/GameExporter.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
 #include <cassert>
@@ -21,6 +22,7 @@ namespace DonTopo {
 
 EditorUI::EditorUI()
     : m_sceneFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_exportDialog(std::make_unique<IGFD::FileDialog>())
     , m_scriptEditor(std::make_unique<ScriptEditorPanel>())
 {
     m_scriptEditor->setLogCallback([this](const std::string& msg) { m_logPanel.push(msg); });
@@ -63,6 +65,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     m_propertiesPanel.draw(ctx);
     m_logPanel.draw();
     drawSceneDialog();
+    drawExportDialog();
     m_contentBrowserPanel.draw(ctx, sceneRoot);
     m_scriptEditor->draw();
     m_animatorPanel.draw(ctx);
@@ -107,6 +110,22 @@ void EditorUI::drawMenuBar()
 {
     if (ImGui::BeginMainMenuBar())
     {
+        if (ImGui::BeginMenu("File"))
+        {
+            if (ImGui::MenuItem("Export Game...", nullptr, false, m_scene != nullptr))
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = ".";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                // filters = nullptr -> IGFD selecciona carpeta, no fichero.
+                m_exportDialog->OpenDialog("ExportDlg", "Carpeta destino del export", nullptr, cfg);
+                m_exportDlgOpen = true;
+            }
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("View"))
         {
             ImGui::MenuItem("Scene", nullptr, m_scenePanel.GetOpenPtr());
@@ -343,6 +362,161 @@ void EditorUI::drawSceneDialog()
 
     m_sceneFileDialog->Close();
     m_sceneDlgOpen = false;
+}
+
+void EditorUI::drawExportDialog()
+{
+    // Corre cada frame porque los dos BeginPopupModal de abajo (nombre y
+    // confirmación) necesitan submitirse en todo frame para que ImGui los
+    // mantenga abiertos tras el OpenPopup que los dispara — si esta función
+    // no se llamara, el popup se cerraría solo aunque el usuario no pulsara
+    // Cancel. (El Display("ExportDlg") sí es condicional a m_exportDlgOpen:
+    // el && de abajo cortocircuita y no lo evalúa cuando el diálogo de
+    // carpeta está cerrado.)
+    if (m_exportDlgOpen && m_exportDialog->Display("ExportDlg"))
+    {
+        if (m_exportDialog->IsOk())
+        {
+            m_exportDestDir = m_exportDialog->GetCurrentPath();
+            m_openExportNamePopup = true;
+        }
+        m_exportDialog->Close();
+        m_exportDlgOpen = false;
+    }
+
+    if (m_openExportNamePopup)
+    {
+        ImGui::OpenPopup("Export Game");
+        m_openExportNamePopup = false;
+    }
+
+    if (ImGui::BeginPopupModal("Export Game", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::Text("Destino: %s", m_exportDestDir.c_str());
+        ImGui::InputText("Nombre", m_exportNameBuffer, sizeof(m_exportNameBuffer));
+
+        // pkg es lo que realmente se va a crear/borrar: se calcula y se
+        // enseña aquí (no el nombre crudo) para que el usuario evalúe la
+        // ruta real, no un fragmento de texto que podría no coincidir con
+        // ella (ver isValidExportGameName en GameExporter.cpp).
+        const std::filesystem::path pkg =
+            std::filesystem::path(m_exportDestDir) / m_exportNameBuffer;
+        std::string nameError;
+        const bool nameOk = isValidExportGameName(m_exportNameBuffer, nameError);
+
+        // inspectExportTarget solo se consulta con un nombre válido: con un
+        // nombre inválido pkg puede no representar siquiera una ruta útil
+        // (separadores sueltos, nombre de dispositivo...) y no hay nada que
+        // clasificar todavía. Missing es un valor cualquiera de relleno para
+        // ese caso — nunca se lee porque canExport ya exige nameOk.
+        const ExportTargetState targetState =
+            nameOk ? inspectExportTarget(pkg) : ExportTargetState::Missing;
+        // Occupied deshabilita el botón en vez de pedir confirmación: si se
+        // dejara confirmar, writeExportPackage abortaría igualmente (es
+        // autoritativo, GameExporter.h:103-107) pero después de que el
+        // usuario ya haya dicho "sí, borra" sobre algo que en realidad nunca
+        // se iba a borrar — una confirmación que miente sobre lo que hace.
+        const bool occupied  = nameOk && targetState == ExportTargetState::Occupied;
+        const bool canExport = nameOk && !occupied;
+
+        if (!nameOk)
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", nameError.c_str());
+        else if (occupied)
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
+                               "'%s' ya existe y tiene contenido que no es de un export "
+                               "anterior; elige otro nombre u otra carpeta destino.",
+                               pkg.string().c_str());
+        else
+            ImGui::Text("Paquete: %s", pkg.string().c_str());
+
+        ImGui::BeginDisabled(!canExport);
+        if (ImGui::Button("Export"))
+        {
+            // Missing/Empty: nada que perder, se exporta directo. PriorPackage:
+            // hay un export anterior de verdad ahí, se confirma antes de
+            // borrarlo (Occupied ya deshabilitó el botón más arriba).
+            if (targetState == ExportTargetState::PriorPackage)
+                m_openExportConfirmPopup = true;
+            else
+                runExport();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    if (m_openExportConfirmPopup)
+    {
+        ImGui::OpenPopup("Sobrescribir export");
+        m_openExportConfirmPopup = false;
+    }
+
+    if (ImGui::BeginPopupModal("Sobrescribir export", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        // Misma ruta resuelta que el popup anterior, no el nombre crudo: es
+        // literalmente lo que remove_all() va a borrar si el usuario
+        // confirma, y el nombre por sí solo no lo representa (ver hallazgo
+        // de review: "La carpeta '..' ya existe" no dice "voy a borrar
+        // C:\Users\ruben").
+        const std::filesystem::path pkg =
+            std::filesystem::path(m_exportDestDir) / m_exportNameBuffer;
+        // Solo se llega aquí con targetState == PriorPackage (ver botón
+        // Export de arriba): pkg existe de verdad y contiene un game.scene,
+        // así que no hace falta el matiz "no se pudo comprobar" que llevaba
+        // antes este texto — Occupied (fallo de fs::status incluido) nunca
+        // deja abrir este popup.
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
+                           "'%s' contiene un export anterior.", pkg.string().c_str());
+        ImGui::Text("Se borrara todo su contenido antes de exportar.");
+        if (ImGui::Button("Borrar y exportar"))
+        {
+            runExport();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+}
+
+void EditorUI::runExport()
+{
+    namespace fs = std::filesystem;
+
+    // exportGame() toma Scene& (no Scene*): el chequeo de "hay escena
+    // abierta" no puede vivir dentro de ella y se queda aquí, antes de
+    // dereferenciar m_scene.
+    if (!m_scene)
+    {
+        m_logPanel.push("Export cancelado: no hay escena abierta");
+        return;
+    }
+
+    std::error_code ec;
+    fs::path projectRoot = fs::current_path(ec);
+    if (ec) projectRoot = ".";
+    fs::path canon = fs::canonical(projectRoot, ec);
+    if (!ec) projectRoot = canon;
+
+    const fs::path runtimeExe = projectRoot / "DonTopoRuntime.exe";
+    const fs::path scriptsDir = m_scriptManager ? m_scriptManager->scriptsDirPath()
+                                                : projectRoot / "Scripts";
+
+    std::map<std::string, fs::path> scriptPaths;
+    if (m_scriptManager)
+        for (const auto& [name, cls] : m_scriptManager->getRegistry())
+            scriptPaths[name] = cls.path;
+
+    ExportResult result = exportGame(*m_scene, scriptPaths, m_exportDestDir,
+                                     m_exportNameBuffer, projectRoot, scriptsDir, runtimeExe);
+    for (const std::string& msg : result.messages)
+        m_logPanel.push(msg);
+    if (!result.ok)
+        m_logPanel.push("Export FALLIDO");
 }
 
 } // namespace DonTopo
