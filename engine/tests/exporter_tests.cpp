@@ -8,6 +8,7 @@
 #include "DonTopo/Editor/GameExporter.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
@@ -330,8 +331,12 @@ static void test_package_contents(const fs::path& root)
     fs::remove_all(dest, ec);
 }
 
-// Re-exportar sobre una carpeta existente la deja limpia: nada de un export
-// anterior sobrevive.
+// Re-exportar sobre un paquete de un export anterior lo deja limpio: nada
+// del export viejo sobrevive. La carpeta lleva game.scene, la única marca
+// que inspectExportTarget acepta como "esto es mio y lo puedo regenerar"
+// (GameExporter.cpp: inspectExportTarget) — sin ella este mismo fixture
+// pasaria a ser Occupied y writeExportPackage abortaria sin borrar nada,
+// que es justo el otro caso que cubre test_writeExportPackage_aborts_on_occupied.
 static void test_package_overwrite_is_clean(const fs::path& root)
 {
     std::error_code ec;
@@ -347,6 +352,7 @@ static void test_package_overwrite_is_clean(const fs::path& root)
     fs::remove_all(dest, ec);
     fs::create_directories(dest / "MiJuego" / "assets", ec);
     std::ofstream(dest / "MiJuego" / "assets" / "basura_vieja.fbx") << "x";
+    std::ofstream(dest / "MiJuego" / "game.scene") << "{}";
 
     Scene scene;
     scene.addGameObject("hero")->setMesh(makeMesh(root / "assets" / "hero.fbx"));
@@ -358,6 +364,95 @@ static void test_package_overwrite_is_clean(const fs::path& root)
     CHECK(!fs::exists(dest / "MiJuego" / "assets" / "basura_vieja.fbx"));
 
     fs::remove_all(dest, ec);
+}
+
+// Un directorio destino con contenido ajeno (sin game.scene) hace abortar a
+// writeExportPackage SIN tocar nada: ni se borra lo que habia ni se crea el
+// paquete. Es el caso que rompia antes de inspectExportTarget/Occupied — el
+// ejemplo real es <repo>/assets, que remove_all se llevaba por delante
+// (ver comentario de writeExportPackage sobre el estado del destino).
+static void test_writeExportPackage_aborts_on_occupied(const fs::path& root)
+{
+    std::error_code ec;
+    fs::path tempRoot = fs::temp_directory_path(ec);
+    if (ec || tempRoot.empty())
+    {
+        CHECK(!ec && !tempRoot.empty());
+        return;
+    }
+    fs::path dest = tempRoot / "dt_exporter_occupied";
+    fs::remove_all(dest, ec);
+    fs::create_directories(dest / "MiJuego", ec);
+    std::ofstream(dest / "MiJuego" / "algo_del_usuario.fbx") << "dato importante";
+
+    Scene scene;
+    scene.addGameObject("hero")->setMesh(makeMesh(root / "assets" / "hero.fbx"));
+
+    ExportResult r = writeExportPackage(collectSceneAssets(scene, root, {}), scene.toJson(),
+                                        dest, "MiJuego", root, root / "Scripts",
+                                        root / "DonTopoRuntime.exe");
+    CHECK(!r.ok);
+    CHECK(!r.messages.empty());
+    // El contenido ajeno sigue exactamente donde estaba: ni un remove_all
+    // parcial ni un create_directories encima lo tocaron.
+    CHECK(fs::exists(dest / "MiJuego" / "algo_del_usuario.fbx"));
+
+    fs::remove_all(dest, ec);
+}
+
+// inspectExportTarget en sus cuatro estados: la clasificacion mira QUE hay
+// dentro del directorio, no DONDE esta, y falla en cerrado (Occupied) ante
+// cualquier cosa que no encaje en un patron reconocido.
+static void test_inspect_export_target_states()
+{
+    std::error_code ec;
+    fs::path base = fs::temp_directory_path(ec) / "dt_exporter_inspect";
+    fs::remove_all(base, ec);
+    fs::create_directories(base, ec);
+
+    // Missing: no existe en absoluto.
+    CHECK(inspectExportTarget(base / "no_existe") == ExportTargetState::Missing);
+
+    // Empty: existe y esta vacio.
+    fs::path empty = base / "vacia";
+    fs::create_directories(empty, ec);
+    CHECK(inspectExportTarget(empty) == ExportTargetState::Empty);
+
+    // PriorPackage: existe y contiene game.scene en su raiz.
+    fs::path prior = base / "paquete_previo";
+    fs::create_directories(prior, ec);
+    std::ofstream(prior / "game.scene") << "{}";
+    CHECK(inspectExportTarget(prior) == ExportTargetState::PriorPackage);
+
+    // Occupied: existe con contenido que no es un game.scene.
+    fs::path occupied = base / "ocupada";
+    fs::create_directories(occupied, ec);
+    std::ofstream(occupied / "documento_del_usuario.txt") << "no me borres";
+    CHECK(inspectExportTarget(occupied) == ExportTargetState::Occupied);
+
+    // Occupied tambien para un fichero (no un directorio) con ese nombre:
+    // remove_all se lo llevaria igual, y no es un paquete nuestro.
+    fs::path fileTarget = base / "esto_es_un_fichero.txt";
+    std::ofstream(fileTarget) << "x";
+    CHECK(inspectExportTarget(fileTarget) == ExportTargetState::Occupied);
+
+    fs::remove_all(base, ec);
+}
+
+// isValidExportGameName: los casos que writeExportPackage necesita rechazar
+// antes de construir destDir/name, porque ese path es el que luego borra.
+static void test_valid_export_game_name()
+{
+    std::string reason;
+    CHECK(!isValidExportGameName("..", reason));               // sube un nivel
+    CHECK(!isValidExportGameName(".", reason));                 // Win32 lo descarta al crear la carpeta
+    CHECK(!isValidExportGameName("C:\\Windows", reason));       // absoluto: operator/ ignoraria destDir
+    CHECK(!isValidExportGameName("carpeta/nombre", reason));    // separador '/'
+    CHECK(!isValidExportGameName("carpeta\\nombre", reason));   // separador '\'
+    CHECK(!isValidExportGameName("nombre*raro", reason));       // caracter reservado de Windows
+    CHECK(!isValidExportGameName("   ", reason));                // solo espacios en blanco
+    CHECK(!isValidExportGameName("NUL", reason));                // nombre de dispositivo reservado
+    CHECK(isValidExportGameName("MiJuegoValido", reason));
 }
 
 // Sin binario de runtime no se exporta nada: error explícito y carpeta sin crear.
@@ -387,6 +482,120 @@ static void test_missing_runtime_aborts(const fs::path& root)
     fs::remove_all(dest, ec);
 }
 
+// Skybox incompleto (falta una de las 6 caras) -> ok == false con mensaje:
+// Skybox.cpp:84 lanza al arrancar si falta cualquiera, asi que un export
+// "completado" con menos de 6 caras produce un paquete que no arranca.
+static void test_incomplete_skybox_marks_not_ok()
+{
+    std::error_code ec;
+    fs::path fixRoot = fs::temp_directory_path(ec) / "dt_exporter_skybox_fixture";
+    fs::remove_all(fixRoot, ec);
+    fs::create_directories(fixRoot / "assets" / "skybox", ec);
+    fs::create_directories(fixRoot / "shaders", ec);
+    // Solo 5 de las 6 caras: falta "nz".
+    for (const char* face : { "px", "nx", "py", "ny", "pz" })
+        std::ofstream(fixRoot / "assets" / "skybox" / (std::string(face) + ".png")) << "png";
+    std::ofstream(fixRoot / "shaders" / "triangle.vert.spv") << "spv";
+    std::ofstream(fixRoot / "DonTopoRuntime.exe") << "MZ";
+
+    fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_skybox_out";
+    fs::remove_all(dest, ec);
+
+    Scene scene;
+    ExportResult r = writeExportPackage({}, scene.toJson(), dest, "MiJuego",
+                                        fixRoot, fixRoot / "Scripts", fixRoot / "DonTopoRuntime.exe");
+
+    CHECK(!r.ok);
+    bool hasSkyboxMsg = std::any_of(r.messages.begin(), r.messages.end(), [](const std::string& m) {
+        return m.find("skybox") != std::string::npos;
+    });
+    CHECK(hasSkyboxMsg);
+
+    fs::remove_all(fixRoot, ec);
+    fs::remove_all(dest, ec);
+}
+
+// Cero shaders .spv copiados -> ok == false con mensaje: sin ninguno el
+// runtime muere en createPipeline, y un Log que diga "completado" esconderia
+// justo el fallo que hace inarrancable al paquete.
+static void test_zero_shaders_marks_not_ok()
+{
+    std::error_code ec;
+    fs::path fixRoot = fs::temp_directory_path(ec) / "dt_exporter_noshader_fixture";
+    fs::remove_all(fixRoot, ec);
+    fs::create_directories(fixRoot / "assets" / "skybox", ec);
+    fs::create_directories(fixRoot / "shaders", ec); // existe pero vacia: 0 .spv
+    for (const char* face : { "px", "nx", "py", "ny", "pz", "nz" })
+        std::ofstream(fixRoot / "assets" / "skybox" / (std::string(face) + ".png")) << "png";
+    std::ofstream(fixRoot / "DonTopoRuntime.exe") << "MZ";
+
+    fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_noshader_out";
+    fs::remove_all(dest, ec);
+
+    Scene scene;
+    ExportResult r = writeExportPackage({}, scene.toJson(), dest, "MiJuego",
+                                        fixRoot, fixRoot / "Scripts", fixRoot / "DonTopoRuntime.exe");
+
+    CHECK(!r.ok);
+    bool hasShaderMsg = std::any_of(r.messages.begin(), r.messages.end(), [](const std::string& m) {
+        return m.find("shader") != std::string::npos;
+    });
+    CHECK(hasShaderMsg);
+
+    fs::remove_all(fixRoot, ec);
+    fs::remove_all(dest, ec);
+}
+
+// exportGame aborta sin camara en la escena, antes de tocar disco: sin ella
+// el juego no podria renderizar y el fallo debe ocurrir aqui, no en un .exe
+// que abre una ventana negra.
+static void test_exportGame_aborts_without_camera(const fs::path& root)
+{
+    std::error_code ec;
+    if (!fs::exists(root / "DonTopoRuntime.exe", ec))
+        std::ofstream(root / "DonTopoRuntime.exe") << "MZ";
+
+    Scene scene; // sin CameraComponent en ningun GameObject
+    scene.addGameObject("hero")->setMesh(makeMesh(root / "assets" / "hero.fbx"));
+
+    fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_nocam_out";
+    fs::remove_all(dest, ec);
+
+    ExportResult r = exportGame(scene, {}, dest, "MiJuego", root,
+                                root / "Scripts", root / "DonTopoRuntime.exe");
+    CHECK(!r.ok);
+    CHECK(!r.messages.empty());
+    CHECK(!fs::exists(dest / "MiJuego")); // aborta antes de crear nada
+
+    fs::remove_all(dest, ec);
+}
+
+// exportGame aborta si algun asset referenciado no existe en disco. La
+// escena SI tiene camara, para aislar exactamente esta guarda de la de
+// arriba.
+static void test_exportGame_aborts_missing_asset(const fs::path& root)
+{
+    std::error_code ec;
+    if (!fs::exists(root / "DonTopoRuntime.exe", ec))
+        std::ofstream(root / "DonTopoRuntime.exe") << "MZ";
+
+    Scene scene;
+    auto* cam = scene.addGameObject("cam");
+    cam->setCameraComponent(std::make_shared<CameraComponent>());
+    scene.addGameObject("ghost")->setMesh(makeMesh(root / "assets" / "no_existe_de_verdad.fbx"));
+
+    fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_missingasset_out";
+    fs::remove_all(dest, ec);
+
+    ExportResult r = exportGame(scene, {}, dest, "MiJuego", root,
+                                root / "Scripts", root / "DonTopoRuntime.exe");
+    CHECK(!r.ok);
+    CHECK(!r.messages.empty());
+    CHECK(!fs::exists(dest / "MiJuego"));
+
+    fs::remove_all(dest, ec);
+}
+
 int main()
 {
     fs::path root = makeProjectFixture();
@@ -402,7 +611,14 @@ int main()
     test_rewrite_leaves_unknown_paths(root);
     test_package_contents(root);
     test_package_overwrite_is_clean(root);
+    test_writeExportPackage_aborts_on_occupied(root);
     test_missing_runtime_aborts(root);
+    test_inspect_export_target_states();
+    test_valid_export_game_name();
+    test_incomplete_skybox_marks_not_ok();
+    test_zero_shaders_marks_not_ok();
+    test_exportGame_aborts_without_camera(root);
+    test_exportGame_aborts_missing_asset(root);
 
     std::error_code ec;
     fs::remove_all(root, ec);

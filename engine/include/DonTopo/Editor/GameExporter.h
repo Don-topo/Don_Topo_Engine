@@ -65,9 +65,46 @@ std::vector<ExportAsset> collectSceneAssets(
 int rewriteScenePaths(nlohmann::json& sceneJson,
                       const std::map<std::string, std::string>& sourceToPackage);
 
-// Crea <destDir>/<gameName>/ (borrando su contenido si ya existía: la
-// confirmación es responsabilidad de la UI), copia el runtime, los assets,
-// el skybox, shaders/*.spv, Scripts/ y fmod.dll, y escribe game.scene.
+// Valida que 'name' sea un componente de ruta seguro para construir
+// destDir / name. Rellena 'reason' con el motivo cuando devuelve false.
+//
+// Vive aquí y no en la UI porque quien lo necesita es el código que va a
+// borrar: writeExportPackage() construye destDir/gameName y hace remove_all()
+// sobre esa ruta. ".." sube un nivel, un nombre absoluto como "C:\Windows"
+// hace que operator/ IGNORE destDir por completo (así trata operator/ una
+// ruta absoluta), y Win32 descarta espacios/puntos finales del último
+// componente al crear la carpeta, colapsando el destino real sobre la carpeta
+// padre aunque el string en pantalla parezca inofensivo.
+bool isValidExportGameName(const std::string& name, std::string& reason);
+
+// Estado del directorio destino de un export, para decidir si es seguro
+// borrarlo. El criterio es inverso al que había antes (enumerar a mano los
+// sitios prohibidos: dentro del proyecto, dentro de Scripts...): esa lista
+// siempre dejaba fuera un caso — el último, <repo>/assets, borraba los assets
+// fuente y encima reportaba éxito. Aquí no se pregunta "¿dónde está el
+// destino?" sino "¿qué hay dentro?", que es lo único que determina si un
+// remove_all() destruye trabajo ajeno.
+enum class ExportTargetState {
+    Missing,        // no existe: se crea, nada que borrar
+    Empty,          // existe y está vacío: seguro
+    PriorPackage,   // existe y contiene game.scene: paquete de un export anterior, seguro
+    Occupied        // existe con contenido ajeno: NUNCA se borra
+};
+
+// Clasifica el directorio de paquete 'pkg' (== destDir/gameName). Si el
+// estado no se puede determinar (permisos, path inválido, cualquier error del
+// sistema de ficheros) devuelve Occupied: falla en cerrado, porque el coste de
+// equivocarse hacia el otro lado es borrar datos del usuario.
+ExportTargetState inspectExportTarget(const std::filesystem::path& pkg);
+
+// Crea <destDir>/<gameName>/, copia el runtime, los assets, el skybox,
+// shaders/*.spv, Scripts/ y fmod.dll, y escribe game.scene.
+//
+// Llama a inspectExportTarget() por su cuenta y aborta sin tocar nada si el
+// destino está Occupied: es autoritativo, no da por hecho que la UI haya
+// mirado. Con Missing/Empty/PriorPackage sí hace remove_all() + recreado, para
+// que el paquete no arrastre assets huérfanos de un export anterior (pedir
+// confirmación en el caso PriorPackage sigue siendo cosa de la UI).
 ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                 const nlohmann::json& rewrittenScene,
                                 const std::filesystem::path& destDir,
@@ -75,5 +112,20 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                 const std::filesystem::path& projectRoot,
                                 const std::filesystem::path& scriptsDir,
                                 const std::filesystem::path& runtimeExe);
+
+// Export completo: valida, recolecta, reescribe y escribe el paquete.
+// Los mensajes para el usuario van en ExportResult::messages; el llamador
+// decide dónde mostrarlos (el editor los vuelca al Log Console).
+//
+// Está aquí y no en EditorUI porque no dibuja nada: es orquestación de export
+// y aritmética de rutas. Que viva en el módulo es lo que permite a
+// exporter_tests ejercitar los caminos destructivos sin abrir una ventana.
+ExportResult exportGame(Scene& scene,
+                        const std::map<std::string, std::filesystem::path>& scriptPaths,
+                        const std::filesystem::path& destDir,
+                        const std::string& gameName,
+                        const std::filesystem::path& projectRoot,
+                        const std::filesystem::path& scriptsDir,
+                        const std::filesystem::path& runtimeExe);
 
 } // namespace DonTopo
