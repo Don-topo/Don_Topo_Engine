@@ -12,122 +12,11 @@
 #include "DonTopo/Editor/GameExporter.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
-#include <algorithm>
-#include <array>
 #include <cassert>
-#include <cctype>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
-
-namespace {
-
-// Valida que 'name' sea un componente de ruta seguro para construir
-// destDir / name. writeExportPackage() hace remove_all() sobre ese path
-// confiando ciegamente en que la UI ya lo validó (ver comentario de
-// GameExporter.h:68-70): sin este chequeo, ".." sube un nivel, un nombre
-// absoluto como "C:\Windows" hace que operator/ IGNORE destDir por
-// completo (así es como std::filesystem::path::operator/ trata una ruta
-// absoluta), y Win32 descarta espacios/puntos finales del último
-// componente al crear la carpeta, colapsando el destino real sobre la
-// carpeta padre aunque el string en pantalla parezca inofensivo.
-// isspace de <cctype> con un char con signo (p.ej. una tilde en Latin-1) es
-// UB; se pasa siempre por unsigned char primero.
-bool isBlankChar(char c)
-{
-    return std::isspace(static_cast<unsigned char>(c)) != 0;
-}
-
-bool isValidExportGameName(const std::string& name, std::string& reason)
-{
-    // find_first_not_of(' ') solo descartaba el espacio U+0020: un nombre de
-    // puros tabuladores ("\t\t\t") lo pasaba y reventaba después al crear la
-    // carpeta. std::all_of + isBlankChar cubre cualquier espacio en blanco
-    // real (tab, CR, LF, form feed...).
-    if (name.empty() || std::all_of(name.begin(), name.end(), isBlankChar))
-    {
-        reason = "El nombre no puede estar vacio";
-        return false;
-    }
-    // Cubre "." y ".." a la vez que cualquier nombre con puntos/espacios
-    // finales (p.ej. "...", "Juego. "): Win32 los descarta al crear la
-    // carpeta, así que el destino real deja de ser el que se le mostró al
-    // usuario en el popup.
-    if (name.back() == '.' || isBlankChar(name.back()))
-    {
-        reason = "El nombre no puede terminar en '.' ni en espacio";
-        return false;
-    }
-    // Mismo conjunto de caracteres reservados de Windows que
-    // ContentBrowserPanel.cpp::isValidFileName (kReserved ahí): el comentario
-    // que decía "mismo patrón" solo cubría ':' y los separadores, así que
-    // "Mi*Juego", "a?b", "x|y" o "<z>" pasaban aquí y fallaban después con un
-    // "no se pudo crear" genérico en vez de este motivo concreto.
-    static const std::string kReserved = "\\/:*?\"<>|";
-    for (char c : name)
-    {
-        if (kReserved.find(c) != std::string::npos)
-        {
-            reason = "El nombre no puede contener ninguno de estos caracteres: \\ / : * ? \" < > |";
-            return false;
-        }
-    }
-    // filename() distinto del nombre completo == contiene separadores de
-    // ruta ('/' o '\') o es una ruta absoluta; en ambos casos destDir / name
-    // deja de apuntar dentro de la carpeta que el usuario eligió en el
-    // diálogo. Redundante con kReserved de arriba (ambos separadores ya están
-    // en el set) pero se deja como red de seguridad extra sobre operator/.
-    if (std::filesystem::path(name).filename().string() != name)
-    {
-        reason = "El nombre no puede contener separadores de ruta";
-        return false;
-    }
-    // Nombres de dispositivo reservados por Windows (CON, NUL, COM1..9,
-    // LPT1..9): "<destino>\NUL" no crea una carpeta, resuelve al dispositivo
-    // NUL. exists() sobre eso da true, así que el popup de confirmación
-    // afirmaría "la carpeta ya existe y se borrará su contenido" sobre algo
-    // que no es una carpeta y no tiene contenido. La regla de Windows mira el
-    // nombre SIN extensión (todo lo anterior al primer '.'), sin distinguir
-    // mayúsculas/minúsculas, así que "NUL.txt" también está reservado.
-    static const std::array<std::string, 22> kReservedDeviceNames = {
-        "CON", "PRN", "AUX", "NUL",
-        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-    };
-    std::string baseUpper = name.substr(0, name.find('.'));
-    std::transform(baseUpper.begin(), baseUpper.end(), baseUpper.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-    for (const std::string& reserved : kReservedDeviceNames)
-    {
-        if (baseUpper == reserved)
-        {
-            reason = "'" + name + "' es un nombre de dispositivo reservado por Windows";
-            return false;
-        }
-    }
-    return true;
-}
-
-// True si 'inner' es exactamente 'root' o cae dentro de él. Compara vía
-// DonTopo::exportPathKey (weakly_canonical + minúsculas + '/'), la misma
-// normalización que usa el resto del módulo de export (GameExporter.h:36-42),
-// para que mayúsculas o separadores mezclados no dejen colar una carpeta que
-// en realidad sí está dentro de root.
-bool isPathWithinOrEqual(const std::filesystem::path& inner, const std::filesystem::path& root)
-{
-    const std::string innerKey = DonTopo::exportPathKey(inner.string());
-    const std::string rootKey  = DonTopo::exportPathKey(root.string());
-    if (innerKey == rootKey)
-        return true;
-    // exportPathKey siempre normaliza a '/' como separador, así que
-    // comprobar el prefijo "rootKey/" basta para detectar contención.
-    return innerKey.size() > rootKey.size() &&
-           innerKey.compare(0, rootKey.size(), rootKey) == 0 &&
-           innerKey[rootKey.size()] == '/';
-}
-
-} // namespace
 
 namespace DonTopo {
 
@@ -509,30 +398,44 @@ void EditorUI::drawExportDialog()
         // pkg es lo que realmente se va a crear/borrar: se calcula y se
         // enseña aquí (no el nombre crudo) para que el usuario evalúe la
         // ruta real, no un fragmento de texto que podría no coincidir con
-        // ella (ver isValidExportGameName más arriba).
+        // ella (ver isValidExportGameName en GameExporter.cpp).
         const std::filesystem::path pkg =
             std::filesystem::path(m_exportDestDir) / m_exportNameBuffer;
         std::string nameError;
         const bool nameOk = isValidExportGameName(m_exportNameBuffer, nameError);
-        if (nameOk)
-            ImGui::Text("Paquete: %s", pkg.string().c_str());
-        else
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", nameError.c_str());
 
-        ImGui::BeginDisabled(!nameOk);
+        // inspectExportTarget solo se consulta con un nombre válido: con un
+        // nombre inválido pkg puede no representar siquiera una ruta útil
+        // (separadores sueltos, nombre de dispositivo...) y no hay nada que
+        // clasificar todavía. Missing es un valor cualquiera de relleno para
+        // ese caso — nunca se lee porque canExport ya exige nameOk.
+        const ExportTargetState targetState =
+            nameOk ? inspectExportTarget(pkg) : ExportTargetState::Missing;
+        // Occupied deshabilita el botón en vez de pedir confirmación: si se
+        // dejara confirmar, writeExportPackage abortaría igualmente (es
+        // autoritativo, GameExporter.h:103-107) pero después de que el
+        // usuario ya haya dicho "sí, borra" sobre algo que en realidad nunca
+        // se iba a borrar — una confirmación que miente sobre lo que hace.
+        const bool occupied  = nameOk && targetState == ExportTargetState::Occupied;
+        const bool canExport = nameOk && !occupied;
+
+        if (!nameOk)
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", nameError.c_str());
+        else if (occupied)
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
+                               "'%s' ya existe y tiene contenido que no es de un export "
+                               "anterior; elige otro nombre u otra carpeta destino.",
+                               pkg.string().c_str());
+        else
+            ImGui::Text("Paquete: %s", pkg.string().c_str());
+
+        ImGui::BeginDisabled(!canExport);
         if (ImGui::Button("Export"))
         {
-            std::error_code ec;
-            const bool exists = std::filesystem::exists(pkg, ec);
-            // Si exists() falla, ec queda set y el valor de retorno es
-            // false — es decir, "no puedo saberlo" se leería como "no
-            // existe" y nos saltaríamos la confirmación justo antes de un
-            // remove_all(). Tratamos cualquier fallo de la consulta como si
-            // la carpeta existiera: falla cerrado, no abierto. Se guarda cuál
-            // de los dos casos fue para que el popup no mienta diciendo
-            // "ya existe" cuando en realidad no se pudo comprobar.
-            m_exportExistsCheckFailed = static_cast<bool>(ec);
-            if (exists || ec)
+            // Missing/Empty: nada que perder, se exporta directo. PriorPackage:
+            // hay un export anterior de verdad ahí, se confirma antes de
+            // borrarlo (Occupied ya deshabilitó el botón más arriba).
+            if (targetState == ExportTargetState::PriorPackage)
                 m_openExportConfirmPopup = true;
             else
                 runExport();
@@ -560,16 +463,13 @@ void EditorUI::drawExportDialog()
         // C:\Users\ruben").
         const std::filesystem::path pkg =
             std::filesystem::path(m_exportDestDir) / m_exportNameBuffer;
-        // Falla cerrado (ver comentario del botón Export): se llega aquí
-        // tanto si pkg existe de verdad como si exists() no pudo
-        // determinarlo. Son dos afirmaciones distintas y solo una es cierta
-        // en cada caso — mentir sobre cuál fue socava la confirmación.
-        if (m_exportExistsCheckFailed)
-            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
-                               "No se pudo comprobar si '%s' ya existe.", pkg.string().c_str());
-        else
-            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
-                               "La carpeta '%s' ya existe.", pkg.string().c_str());
+        // Solo se llega aquí con targetState == PriorPackage (ver botón
+        // Export de arriba): pkg existe de verdad y contiene un game.scene,
+        // así que no hace falta el matiz "no se pudo comprobar" que llevaba
+        // antes este texto — Occupied (fallo de fs::status incluido) nunca
+        // deja abrir este popup.
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
+                           "'%s' contiene un export anterior.", pkg.string().c_str());
         ImGui::Text("Se borrara todo su contenido antes de exportar.");
         if (ImGui::Button("Borrar y exportar"))
         {
@@ -587,28 +487,12 @@ void EditorUI::runExport()
 {
     namespace fs = std::filesystem;
 
-    // runExport es la última función antes del remove_all() destructivo, y
-    // hoy confía en que BeginDisabled(!nameOk) del popup haya bloqueado todo
-    // camino inválido. Ese invariante vive en drawExportDialog, no aquí: el
-    // guardián de un borrado irreversible no debería depender de un flag de
-    // UI ajeno. Se revalida el nombre aquí mismo, por si acaso.
-    std::string nameError;
-    if (!isValidExportGameName(m_exportNameBuffer, nameError))
-    {
-        m_logPanel.push("Export cancelado: nombre invalido (" + nameError + ")");
-        return;
-    }
-
+    // exportGame() toma Scene& (no Scene*): el chequeo de "hay escena
+    // abierta" no puede vivir dentro de ella y se queda aquí, antes de
+    // dereferenciar m_scene.
     if (!m_scene)
     {
         m_logPanel.push("Export cancelado: no hay escena abierta");
-        return;
-    }
-    // Sin camara el juego no podria renderizar: se falla aqui, donde el
-    // usuario puede arreglarlo, y no en un .exe que abre una ventana negra.
-    if (!m_scene->findCamera())
-    {
-        m_logPanel.push("Export cancelado: la escena no tiene camara (Add > Camera en Properties)");
         return;
     }
 
@@ -619,93 +503,16 @@ void EditorUI::runExport()
     if (!ec) projectRoot = canon;
 
     const fs::path runtimeExe = projectRoot / "DonTopoRuntime.exe";
-    if (!fs::exists(runtimeExe, ec))
-    {
-        m_logPanel.push("Export cancelado: falta " + runtimeExe.string() +
-                        ". Compila el target DonTopoRuntime.");
-        return;
-    }
-
     const fs::path scriptsDir = m_scriptManager ? m_scriptManager->scriptsDirPath()
                                                 : projectRoot / "Scripts";
-
-    // writeExportPackage() hace remove_all(destDir/gameName) sin validar
-    // nada (GameExporter.h:68-70): si ese path cae dentro del proyecto o
-    // coincide con la carpeta de scripts, el borrado se lleva por delante
-    // los assets/scripts originales ANTES de que collectSceneAssets/copyOne
-    // lleguen a leerlos, y el export encima falla después porque ya no
-    // encuentra lo que acaba de borrar. Se aborta aquí, antes de tocar nada.
-    const fs::path pkg = fs::path(m_exportDestDir) / m_exportNameBuffer;
-
-    // isPathWithinOrEqual(inner, root) es direccional: solo responde "¿inner
-    // cae dentro de root?". Faltaba el sentido contrario -- que pkg CONTENGA
-    // al proyecto o a scripts. Ejemplo real con este repo: projectRoot es
-    // <repo>\build-ninja\sandbox y scriptsDir es <repo>\Scripts; con destino
-    // "C:\Users\ruben\Documents" y nombre "Don_Topo_Engine", pkg =
-    // C:\Users\ruben\Documents\Don_Topo_Engine contiene a los dos. Sin este
-    // chequeo ninguna de las dos guardas de abajo saltaba y writeExportPackage
-    // hacía remove_all() sobre el repositorio entero (.git, Scripts/,
-    // assets/, el propio árbol de build) -- el espejo estrictamente peor del
-    // caso que estas guardas existen para prevenir. Se reusa el mismo
-    // predicado invirtiendo los argumentos.
-    if (isPathWithinOrEqual(pkg, projectRoot))
-    {
-        m_logPanel.push("Export cancelado: el destino '" + pkg.string() +
-                        "' cae dentro de la carpeta del proyecto (" + projectRoot.string() +
-                        "); el export borraria los assets originales antes de copiarlos.");
-        return;
-    }
-    if (isPathWithinOrEqual(projectRoot, pkg))
-    {
-        m_logPanel.push("Export cancelado: el destino '" + pkg.string() +
-                        "' contiene a la carpeta del proyecto (" + projectRoot.string() +
-                        "); el export borraria el proyecto entero (incluido el propio editor) antes de exportar.");
-        return;
-    }
-    if (isPathWithinOrEqual(pkg, scriptsDir))
-    {
-        m_logPanel.push("Export cancelado: el destino '" + pkg.string() +
-                        "' coincide con la carpeta de scripts (" + scriptsDir.string() +
-                        ") o cae dentro de ella.");
-        return;
-    }
-    if (isPathWithinOrEqual(scriptsDir, pkg))
-    {
-        m_logPanel.push("Export cancelado: el destino '" + pkg.string() +
-                        "' contiene a la carpeta de scripts (" + scriptsDir.string() +
-                        "); el export borraria los scripts originales antes de copiarlos.");
-        return;
-    }
 
     std::map<std::string, fs::path> scriptPaths;
     if (m_scriptManager)
         for (const auto& [name, cls] : m_scriptManager->getRegistry())
             scriptPaths[name] = cls.path;
 
-    std::vector<ExportAsset> assets = collectSceneAssets(*m_scene, projectRoot, scriptPaths);
-
-    std::vector<std::string> missing;
-    for (const ExportAsset& a : assets)
-        if (!a.existsOnDisk) missing.push_back(a.sourcePath);
-    if (!missing.empty())
-    {
-        m_logPanel.push("Export cancelado: faltan en disco " +
-                        std::to_string(missing.size()) + " assets referenciados:");
-        for (const std::string& m : missing)
-            m_logPanel.push("  " + m);
-        return;
-    }
-
-    std::map<std::string, std::string> sourceToPackage;
-    for (const ExportAsset& a : assets)
-        sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
-
-    nlohmann::json sceneJson = m_scene->toJson();
-    rewriteScenePaths(sceneJson, sourceToPackage);
-
-    ExportResult result = writeExportPackage(assets, sceneJson, m_exportDestDir,
-                                             m_exportNameBuffer, projectRoot,
-                                             scriptsDir, runtimeExe);
+    ExportResult result = exportGame(*m_scene, scriptPaths, m_exportDestDir,
+                                     m_exportNameBuffer, projectRoot, scriptsDir, runtimeExe);
     for (const std::string& msg : result.messages)
         m_logPanel.push(msg);
     if (!result.ok)
