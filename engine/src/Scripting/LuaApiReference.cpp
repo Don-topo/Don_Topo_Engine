@@ -81,6 +81,8 @@ const std::vector<std::string>& luaApiSymbols()
 
         // AudioClip
         "AudioClip:Play", "AudioClip:Stop", "AudioClip:SetLoop", "AudioClip:GetLoop",
+        "AudioClip:SetVolume", "AudioClip:GetVolume", "AudioClip:SetPitch", "AudioClip:GetPitch",
+        "AudioClip:SetIs3D", "AudioClip:GetIs3D",
 
         // Scene
         "Scene.Find", "Scene.CreateGameObject", "Scene.Destroy", "Scene.Instantiate",

@@ -14,6 +14,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -23,6 +24,26 @@ static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_failures; } } while (0)
 
 static bool nearlyEqual(float a, float b, float eps = 0.0001f) { return std::fabs(a - b) < eps; }
+
+// createAudioClipComponent devuelve nullptr por DOS motivos distintos: FMOD
+// no disponible en la máquina (SKIP legítimo) o el exe se lanzó desde un
+// directorio donde no existe "assets/audio.mp3" (cwd equivocado). Sin
+// distinguirlos, el segundo caso da exit 0 con el test sin ejecutar: un falso
+// verde para un criterio de repo que es "exit code 0".
+static bool checkAudioProbe(const std::shared_ptr<AudioClipComponent>& probe, const char* testName)
+{
+    if (probe) return true;
+    if (!std::filesystem::exists("assets/audio.mp3"))
+    {
+        std::printf("FAIL: %s - assets/audio.mp3 no existe (ejecuta los tests desde la raiz del repo)\n", testName);
+        ++g_failures;
+    }
+    else
+    {
+        std::printf("SKIP %s (FMOD no disponible)\n", testName);
+    }
+    return false;
+}
 
 static std::shared_ptr<AudioClipComponent> makeClip()
 {
@@ -120,11 +141,7 @@ static void test_tojson_emits_volume_and_pitch()
 static void test_volume_pitch_round_trip(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false);
-    if (!probe)
-    {
-        std::printf("SKIP test_volume_pitch_round_trip (FMOD no disponible)\n");
-        return;
-    }
+    if (!checkAudioProbe(probe, "test_volume_pitch_round_trip")) return;
 
     Scene scene("Test");
     GameObject* go = scene.addGameObject("altavoz");
@@ -165,11 +182,7 @@ static void test_volume_pitch_round_trip(PhysicsManager& pm, AudioManager& am)
 static void test_scene_without_volume_loads_neutral(PhysicsManager& pm, AudioManager& am)
 {
     auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false);
-    if (!probe)
-    {
-        std::printf("SKIP test_scene_without_volume_loads_neutral (FMOD no disponible)\n");
-        return;
-    }
+    if (!checkAudioProbe(probe, "test_scene_without_volume_loads_neutral")) return;
 
     Scene scene("Test");
     GameObject* go = scene.addGameObject("altavoz");

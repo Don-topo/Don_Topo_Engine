@@ -161,9 +161,13 @@ void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, fl
     // que suene la primera muestra. Arrancándolo sonando, un clip 3D se oye un
     // instante desde el origen del mundo y con el volumen del canal anterior.
     if (SYS->playSound(snd, SFXG, true, &ch) != FMOD_OK) return;
-    // Se descarta a sabiendas el canal de una reproducción anterior de este
-    // mismo id: si seguía sonando, queda huérfano (sin referencia) con el
-    // volumen/pitch que tenía y termina de sonar por su cuenta.
+    // Si el id ya tenía una voz sonando de una reproducción anterior, se para
+    // antes de pisar la referencia: si no, ese canal queda huérfano (sin
+    // referencia) y sigue sonando indefinidamente si tiene loop, sin que
+    // stop() ni los setters de volumen/pitch puedan alcanzarlo ya. Misma
+    // semántica que AudioSource.Play() en Unity: un Play() nuevo corta el
+    // anterior.
+    if (FMOD::Channel* prev = liveChannel(m_sfxChannels[id], m_sounds[id])) prev->stop();
     m_sfxChannels[id] = ch;
 
     ch->setVolume(volume);

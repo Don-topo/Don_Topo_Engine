@@ -144,7 +144,7 @@ de un asset) o vía `entity:AddComponent("AudioClip", path)`.
 | `clip:Stop()` | Detiene la reproducción |
 | `clip:SetLoop(bool)` | Activa/desactiva loop (recarga el sonido si cambia) |
 | `clip:GetLoop()` | Estado actual de loop |
-| `clip:SetVolume(v)` | Volumen del clip, recortado a `[0, 1]`. Seguro de llamar en `Update`: sólo escribe en el canal. |
+| `clip:SetVolume(v)` | Volumen del clip, recortado a `[0, 1]`. Se MULTIPLICA con el volumen del grupo SFX y el master (`setMasterVolume`/`setSfxVolume`/`setBgmVolume`), no lo sustituye. Seguro de llamar en `Update`: sólo escribe en el canal. |
 | `clip:GetVolume()` | Volumen actual. |
 | `clip:SetPitch(p)` | Pitch del clip, recortado a `[0.5, 2]`. `2.0` es una octava arriba y el doble de velocidad. Seguro en `Update`. |
 | `clip:GetPitch()` | Pitch actual. |

@@ -1398,12 +1398,14 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 m_audioDragOwnerId      = clipOwnerId;
             }
 
-            // Guarda de propietario: si el drag se interrumpió sin commit
-            // (p.ej. un Ctrl+Z a mitad de arrastre reconstruyó/borró el
-            // GameObject seleccionado; el atajo solo se bloquea con
-            // WantTextInput, no durante un drag de slider) y el siguiente
-            // commit llega para otro AudioClip, este id evita aplicar un
-            // "before" que no le corresponde a ese objeto.
+            // Guarda de propietario: el ActiveId de un slider de ImGui se
+            // conserva mientras el ratón sigue pulsado, aunque la selección
+            // cambie a mitad de arrastre (Hierarchy, atajo de teclado o un
+            // script) y el panel pase a dibujar el AudioClip de OTRO
+            // GameObject. Como el id del widget ("Volume"/"Pitch") es el
+            // mismo en ambos, ImGui seguiría considerándolo el mismo drag y
+            // el commit final llegaría para ese otro objeto; este id evita
+            // aplicarle un "before" que pertenece al GameObject original.
             if (committed && m_audioDragActive && m_audioDragOwnerId == clipOwnerId)
             {
                 m_audioDragActive = false;
