@@ -205,6 +205,60 @@ static void test_add_force_applies_finite_value(ScriptManager& sm, PhysicsManage
     CHECK(log.empty());
 }
 
+// El ORDEN importa, y este test es lo único que lo protege: ensureFinite
+// tiene que correr DESPUÉS del deref, no antes.
+//
+// Con el guard delante, un script que toca una entity ya destruida pasándole
+// además un NaN recibía un aviso de "valor no finito" y un return silencioso
+// — enmascarando el use-after-destroy, que es el fallo grave de los dos. Con
+// el orden correcto, deref lanza error de Lua y del NaN no se llega a hablar.
+//
+// Sin este test, revertir ese reordenamiento entero deja los 7 ejecutables en
+// verde: el caso feliz no lo distingue, porque cuando la entity está viva los
+// dos órdenes se comportan igual.
+static void test_dead_entity_wins_over_nan(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Condenado");
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    // El Transform se obtiene MIENTRAS la entity vive y se guarda. Si se
+    // pidiera después del borrado, el deref que hace el propio GetTransform
+    // lanzaría antes de llegar a SetPosition y este test pasaría sin ejercitar
+    // nada — comprobado: así no distinguía el orden correcto del invertido.
+    sm.lua().script("t = e:GetTransform()");
+
+    // Ahora sí: la entity de Lua sostiene un GameObject que ya no está en la
+    // escena, y el Transform guardado apunta a ella.
+    scene.removeGameObject(go);
+    sm.rebuildAliveSet();
+
+    // pcall: se espera que LANCE. Con script() a secas el error se propagaría
+    // y abortaría el test en vez de comprobarlo.
+    sm.lua().script(
+        "ok, err = pcall(function() t:SetPosition(Vec3.new(0/0, 1, 2)) end)");
+
+    const bool ok = sm.lua()["ok"];
+    CHECK(!ok);                              // tiene que fallar, no avisar
+
+    // Y el motivo debe ser la entity muerta, no el NaN. El early-return es
+    // necesario: si la llamada NO lanzó, "err" es nil y leerlo como string
+    // hace panic a sol2, que abortaría el proceso en vez de dejar un FAIL
+    // legible.
+    if (!ok)
+    {
+        const std::string err = sm.lua()["err"];
+        CHECK(err.find("destruida") != std::string::npos);
+        CHECK(err.find("SetPosition") == std::string::npos);
+    }
+    CHECK(!logContains(log, "SetPosition"));
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -226,6 +280,7 @@ int main()
     test_set_radius_applies_finite_value(sm, pm);
     test_add_force_rejects_nan(sm, pm);
     test_add_force_applies_finite_value(sm, pm);
+    test_dead_entity_wins_over_nan(sm);
 
     am.shutdown();
     pm.shutdown();
