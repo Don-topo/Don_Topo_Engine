@@ -53,9 +53,15 @@ void AudioClipComponent::setVolume(float volume)
     // "null" (nlohmann no tiene forma de escribir NaN) y esa es la cadena
     // que tumbaba Scene::fromJson entero por un solo campo corrupto (ver
     // Scene.cpp). Se rechaza aquí, antes del clamp, conservando el valor
-    // anterior. Sin log: este componente no tiene canal al Log Console —
-    // el aviso al usuario lo da la capa que sí lo tiene, el binding de Lua
-    // en ScriptBindings.cpp, ANTES de llegar a este setter.
+    // anterior. Sin log: este componente no tiene canal al Log Console.
+    // Cuando la llamada viene de Lua (ScriptBindings.cpp), el binding SÍ
+    // avisa antes de llegar aquí — pero este setter también se llama
+    // directamente sin pasar por Lua: el slider de Volume del Inspector
+    // (PropertiesPanel.cpp) y el apply() del Undo/Redo de ese mismo slider
+    // llaman a setVolume/setPitch a pelo. Por esas dos rutas un valor
+    // corrupto se descarta aquí SIN ningún feedback al usuario (ni Log ni
+    // UI) — no hay contradicción con el guard, solo una asimetría de canal
+    // de aviso pendiente de resolver si algún día el slider necesita avisar.
     if (!std::isfinite(volume)) return;
     m_volume = std::clamp(volume, 0.0f, 1.0f);
     if (m_audio) m_audio->setChannelVolume(m_soundId, m_volume);
