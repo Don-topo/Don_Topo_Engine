@@ -1,9 +1,34 @@
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Renderer/ModelLoader.h"
+#include <cmath>
 #include <filesystem>
 
 namespace DonTopo
 {
+    bool clipHasMotion(const AnimationClip& clip)
+    {
+        constexpr float kEps = 1e-4f;
+
+        // Basta con comparar contra la PRIMERA key de la pista: si todas son
+        // iguales a la primera, todas son iguales entre sí, y si alguna difiere
+        // ya hay movimiento. No hace falta comparar cada par.
+        auto varia = [](const auto& keys, auto component) {
+            for (size_t k = 1; k < keys.size(); k++)
+                for (int c = 0; c < component(keys[0]).length(); c++)
+                    if (std::fabs(component(keys[k])[c] - component(keys[0])[c]) > kEps)
+                        return true;
+            return false;
+        };
+
+        for (const auto& ch : clip.channels)
+        {
+            if (varia(ch.posKeys,   [](const BoneKeyframe& k)  { return k.value; })) return true;
+            if (varia(ch.scaleKeys, [](const BoneKeyframe& k)  { return k.value; })) return true;
+            if (varia(ch.rotKeys,   [](const BoneKeyframeQ& k) { return k.value; })) return true;
+        }
+        return false;
+    }
+
     std::string uniqueClipName(const std::vector<AnimationClip>& existing,
                                const std::string& base)
     {

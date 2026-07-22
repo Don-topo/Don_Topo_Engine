@@ -334,6 +334,11 @@ namespace DonTopo
         {
             int mapped = 0, total = 0;
             AnimationClip clip = clipFromAssimp(scene->mAnimations[a], skel, mapped, total, nullptr);
+            // Take estático: no anima nada y se llevaría el clip 0, que es
+            // donde caen todos los caminos degradados del motor. Ver
+            // clipHasMotion. El mesh se queda sin clips y eso ya está
+            // soportado: la fuente builtin de abajo se registra igual.
+            if (!clipHasMotion(clip)) continue;
             // Nombres únicos y no vacíos: Mixamo exporta cada take como
             // "mixamo.com", y los FBX de Blender a veces sin nombre. El
             // Animator resuelve los clips por nombre, así que dos clips
@@ -449,6 +454,15 @@ namespace DonTopo
             // Un clip sin un solo canal válido no aporta nada: se descarta
             // individualmente en vez de tumbar el fichero entero.
             if (clip.channels.empty()) continue;
+            // Ídem un take estático (ver clipHasMotion). Aquí sí se avisa: el
+            // usuario ha elegido este fichero a mano esperando animación, y sin
+            // el warning vería una fuente que no aporta clips y ninguna razón.
+            if (!clipHasMotion(clip))
+            {
+                out.warnings.push_back(file + ": el clip '" + clip.name +
+                                       "' no anima nada (una sola key por canal), descartado");
+                continue;
+            }
             out.clips.push_back(std::move(clip));
         }
 

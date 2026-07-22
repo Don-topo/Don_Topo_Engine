@@ -130,6 +130,113 @@ static void test_has_bones_survives_missing_file()
     CHECK(result == false);
 }
 
+// clipHasMotion separa un clip de verdad de un take estático comparando
+// VALORES. Contar keys no vale, y este test lo fija: el take de Mixamo tiene un
+// canal con dos keys por pista cuyos valores son idénticos, así que un criterio
+// basado en "tiene más de una key" lo daba por animado y no filtraba nada.
+static void test_clip_has_motion_criterion()
+{
+    AnimationClip vacio;                    // sin canales: no anima nada
+    CHECK(clipHasMotion(vacio) == false);
+
+    // Forma exacta del take de Mixamo: un canal con dos keys por pista de valor
+    // repetido, y el resto con una sola key.
+    AnimationClip estatico;
+    for (int b = 0; b < 3; b++)
+    {
+        BoneChannel ch;
+        ch.boneIndex = b;
+        ch.posKeys   = { { 0.0f, { 1.0f, 2.0f, 3.0f } } };
+        ch.rotKeys   = { { 0.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f) } };
+        ch.scaleKeys = { { 0.0f, { 1.0f, 1.0f, 1.0f } } };
+        if (b == 0)
+        {
+            ch.posKeys.push_back({ 1.0f, { 1.0f, 2.0f, 3.0f } });
+            ch.rotKeys.push_back({ 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f) });
+            ch.scaleKeys.push_back({ 1.0f, { 1.0f, 1.0f, 1.0f } });
+        }
+        estatico.channels.push_back(std::move(ch));
+    }
+    CHECK(clipHasMotion(estatico) == false);
+
+    // Jitter por debajo de la tolerancia: sigue sin ser animación.
+    {
+        AnimationClip c = estatico;
+        c.channels[0].posKeys[1].value.y += 1e-6f;
+        CHECK(clipHasMotion(c) == false);
+    }
+
+    // Un valor que cambia de verdad, en una sola pista de un solo canal, ya es
+    // movimiento. Se comprueban las tres por separado: si el criterio mirase
+    // solo posKeys, una animación puramente rotacional (lo normal en un rig
+    // humanoide, donde solo Hips se traslada) se tiraría entera.
+    for (int pista = 0; pista < 3; pista++)
+    {
+        AnimationClip c = estatico;
+        if (pista == 0) c.channels[1].posKeys.push_back({ 1.0f, { 9.0f, 2.0f, 3.0f } });
+        if (pista == 1) c.channels[1].rotKeys.push_back({ 1.0f, glm::quat(0.0f, 1.0f, 0.0f, 0.0f) });
+        if (pista == 2) c.channels[1].scaleKeys.push_back({ 1.0f, { 2.0f, 1.0f, 1.0f } });
+        CHECK(clipHasMotion(c) == true);
+    }
+}
+
+// El FBX del personaje desnudo de Mixamo trae un take "mixamo.com" de 1 tick
+// cuyos canales tienen una sola key: no anima nada, deja la malla en su bind
+// pose. Importarlo como clip normal lo dejaba en el índice 0, y TODOS los
+// caminos degradados del motor caen a ese índice (AnimatorComponent::
+// currentClipIndex sin estado o con clipIndex -1, Renderer::setAnimationState
+// con índice fuera de rango, Scene::fromJson con el grafo huérfano). El
+// resultado era un personaje en T-pose que parecía un fallo del remapeo de
+// huesos y no lo era: el rig y el skinning estaban bien, el clip por defecto
+// no animaba.
+static void test_loader_drops_static_take()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/animatedCharacter/Maw J Laygo.fbx");
+    CHECK(!m.skeleton.names.empty());
+
+    // Ese FBX trae exactamente un take, y es el estático: el modelo tiene que
+    // entrar sin un solo clip. Afirmar solo "los que haya animan" pasaría
+    // igualmente con la lista vacía y no probaría que el filtro actuó.
+    CHECK(m.animationClips.empty());
+    for (const auto& c : m.animationClips)
+        CHECK(clipHasMotion(c));
+
+    // La fuente builtin se registra igual: la UI necesita la fila del modelo
+    // aunque no aporte un solo clip.
+    CHECK(m.animationSources.size() == 1);
+    if (m.animationSources.empty()) return;
+    CHECK(m.animationSources[0].builtin);
+    CHECK(m.animationSources[0].clipNames.size() == m.animationClips.size());
+}
+
+// El filtro no puede llevarse por delante los clips buenos: los FBX de
+// animación de Mixamo entran por loadAnimationClips, no por loadSkinned.
+static void test_external_clips_survive_filter()
+{
+    SkinnedMesh base = ModelLoader::loadSkinned("assets/animatedCharacter/Maw J Laygo.fbx");
+    LoadedClips lc = ModelLoader::loadAnimationClips(
+        "assets/animatedCharacter/standing walk forward.fbx", base.skeleton);
+    CHECK(lc.clips.size() == 1);
+    CHECK(lc.mappedChannels == lc.totalChannels);
+    for (const auto& c : lc.clips)
+        CHECK(clipHasMotion(c));
+}
+
+// El motivo del filtro, end to end: sobre el rig limpio, el primer FBX de
+// animación que se añade se queda con el índice 0. Antes lo ocupaba el take
+// estático y todos los fallbacks del motor (currentClipIndex sin estado,
+// setAnimationState fuera de rango, grafo huérfano) mostraban la bind pose.
+static void test_first_added_clip_becomes_index_zero()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/animatedCharacter/Maw J Laygo.fbx");
+    std::vector<std::string> warnings;
+    CHECK(addAnimationSource(m, "assets/animatedCharacter/standing walk forward.fbx", warnings));
+    CHECK(m.animationClips.size() == 1);
+    if (m.animationClips.empty()) return;
+    CHECK(m.animationClips[0].name == "standing walk forward");
+    CHECK(clipHasMotion(m.animationClips[0]));
+}
+
 // loadAuto devuelve el tipo dinámico correcto: es lo único que mira
 // GameObject::isSkinned(), y por tanto lo único que habilita el Animator.
 static void test_load_auto_returns_skinned_for_rigged()
@@ -2723,6 +2830,10 @@ int main()
     test_has_bones_detects_rigged_fbx();
     test_has_bones_rejects_unrigged_model();
     test_has_bones_survives_missing_file();
+    test_clip_has_motion_criterion();
+    test_loader_drops_static_take();
+    test_external_clips_survive_filter();
+    test_first_added_clip_becomes_index_zero();
     test_load_auto_returns_skinned_for_rigged();
     test_load_auto_returns_static_for_unrigged();
 

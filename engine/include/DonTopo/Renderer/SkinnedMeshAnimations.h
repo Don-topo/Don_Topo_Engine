@@ -9,6 +9,23 @@ namespace DonTopo
     // SkinnedMeshPacking. Dentro del Renderer solo se podría probar con un
     // VkDevice vivo, es decir, no se podría probar.
 
+    // true si el clip anima algo: algún canal en el que algún valor cambie a lo
+    // largo del tiempo. Un clip que no lo cumple deja al personaje clavado en su
+    // bind pose por muy larga que sea su duration y por muchas keys que traiga.
+    //
+    // Se comparan VALORES, no cuentas de keys. Los FBX de personaje de Mixamo
+    // traen un take "mixamo.com" de un tick cuyo canal de Hips tiene dos keys
+    // por pista con el MISMO valor en t=0 y t=1, y el resto de canales una sola
+    // key: contar keys lo daría por animado. Ese take acababa ocupando el clip
+    // 0 — justo el índice al que caen todos los caminos degradados del motor
+    // (estado sin resolver, clipIndex fuera de rango, grafo huérfano), así que
+    // cualquier desajuste se veía como un personaje en T-pose.
+    //
+    // Tolerancia absoluta de 1e-4: por debajo de eso hay jitter de exportador,
+    // no intención de animar. En unidades Mixamo (personaje de ~236 de alto)
+    // son micras, y en un cuaternión, milésimas de grado.
+    bool clipHasMotion(const AnimationClip& clip);
+
     // Devuelve base si ningún clip de existing lo usa; si no, base + " (N)" con
     // el primer N libre. base vacío -> "Animation": el Animator resuelve los
     // clips por nombre, así que un nombre vacío o repetido deja clips
