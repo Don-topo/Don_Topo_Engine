@@ -168,6 +168,13 @@ private:
     std::string m_audioLoadError;
     GameObject* m_audioClipAddRequestedFor = nullptr;
 
+    // Snapshot al empezar el drag de los sliders de audio: un drag continuo no
+    // puede empujar un comando por frame, así que se captura al activar y se
+    // empuja uno solo al soltar. Mismo patrón que Transform y Rigidbody.
+    bool  m_audioDragActive = false;
+    float m_audioDragBeforeVolume = 1.0f;
+    float m_audioDragBeforePitch  = 1.0f;
+
     // Popup "Nuevo Script" — disparado desde Add > Script > Nuevo Script...
     // m_newScriptTarget se captura al abrir (ctx.selected puede cambiar con
     // el popup abierto) y se revalida contra la escena antes de añadir.

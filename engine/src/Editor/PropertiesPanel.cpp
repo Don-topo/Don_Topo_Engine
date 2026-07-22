@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -68,6 +69,10 @@ std::string prettyPropLabel(const std::string& raw)
     }
     return out;
 }
+
+// Compara floats con tolerancia — evita empujar un comando de Undo cuando el
+// drag termina en el mismo valor con el que empezó (ruido de redondeo).
+bool nearlyEqualF(float a, float b) { return std::fabs(a - b) < 0.0001f; }
 
 } // namespace
 
@@ -1345,6 +1350,60 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             bool playOnAwake = clip->getPlayOnAwake();
             if (ImGui::Checkbox("Play On Awake", &playOnAwake))
                 clip->setPlayOnAwake(playOnAwake);
+
+            // --- Volume / Pitch: snapshot al activar cualquiera de los dos,
+            // un solo comando al soltar. Los valores se escriben en vivo
+            // mientras se arrastra (así se oye el cambio), y el comando sólo
+            // sirve para que Ctrl+Z devuelva el drag entero de una vez.
+            float volume = clip->getVolume();
+            float pitch  = clip->getPitch();
+
+            const uint64_t clipOwnerId = ctx.selected->id;
+            Scene* scene = ctx.scene;
+
+            bool activated = false;
+            bool committed = false;
+
+            if (ImGui::SliderFloat("Volume", &volume, 0.0f, 1.0f, "%.2f"))
+                clip->setVolume(volume);
+            activated |= ImGui::IsItemActivated();
+            committed |= ImGui::IsItemDeactivatedAfterEdit();
+
+            if (ImGui::SliderFloat("Pitch", &pitch, 0.5f, 2.0f, "%.2f"))
+                clip->setPitch(pitch);
+            activated |= ImGui::IsItemActivated();
+            committed |= ImGui::IsItemDeactivatedAfterEdit();
+
+            if (activated && !m_audioDragActive)
+            {
+                m_audioDragActive       = true;
+                m_audioDragBeforeVolume = clip->getVolume();
+                m_audioDragBeforePitch  = clip->getPitch();
+            }
+
+            if (committed && m_audioDragActive)
+            {
+                m_audioDragActive = false;
+                const AudioClipState before{ m_audioDragBeforeVolume, m_audioDragBeforePitch };
+                const AudioClipState after { clip->getVolume(), clip->getPitch() };
+
+                if (!nearlyEqualF(before.volume, after.volume) ||
+                    !nearlyEqualF(before.pitch,  after.pitch))
+                {
+                    // Resuelve el GameObject por id en cada aplicación, nunca
+                    // captura el puntero: sobrevive a un undo de Delete que
+                    // haya reconstruido el objeto entretanto.
+                    auto apply = [scene, clipOwnerId](const AudioClipState& s) {
+                        GameObject* go = scene->findById(clipOwnerId);
+                        if (!go || !go->hasAudioClip()) return;
+                        go->getAudioClip()->setVolume(s.volume);
+                        go->getAudioClip()->setPitch(s.pitch);
+                    };
+                    if (ctx.scene)
+                        ctx.undo->push(std::make_unique<PropertyCommand<AudioClipState>>(
+                            "Audio Clip de '" + ctx.selected->name + "'", before, after, apply));
+                }
+            }
 
             ImGui::TreePop();
         }
