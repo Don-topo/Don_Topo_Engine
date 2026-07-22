@@ -11,10 +11,13 @@
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include <nlohmann/json.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 
@@ -206,6 +209,112 @@ static void test_scene_without_volume_loads_neutral(PhysicsManager& pm, AudioMan
     CHECK(nearlyEqual(loadedGo->getAudioClip()->getPitch(),  1.0f));
 }
 
+// setVolume(NaN)/setPitch(NaN) tienen que dejar el valor anterior intacto.
+// El clamp por sí solo NO lo hacía: std::clamp(NaN, lo, hi) devuelve NaN
+// (toda comparación con NaN es falsa), así que antes de este fix un NaN
+// llegado desde un script Lua roto (un 0/0, por ejemplo) pasaba de largo el
+// clamp y se guardaba tal cual en m_volume/m_pitch — para acabar
+// serializado como "null" en el .scene y tumbar Scene::fromJson entero (ver
+// el resto de tests de este fichero). Este test ejercita el guard añadido
+// directamente en AudioClipComponent::setVolume/setPitch, sin pasar por
+// Lua ni por Scene.
+static void test_setVolume_setPitch_reject_nan()
+{
+    auto clip = makeClip();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+
+    clip->setVolume(0.6f);
+    clip->setVolume(nan);
+    CHECK(nearlyEqual(clip->getVolume(), 0.6f));
+
+    clip->setPitch(1.4f);
+    clip->setPitch(nan);
+    CHECK(nearlyEqual(clip->getPitch(), 1.4f));
+}
+
+// EL TEST QUE IMPORTA: una escena cuyo JSON trae "volume": null (el mismo
+// "null" que nlohmann escribe al serializar un NaN, ver
+// AudioClipComponent::setVolume) tiene que cargar bien entera — no solo el
+// audioClip roto, sino el resto de sus campos (pitch) también — con el
+// clip cayendo al volumen neutro por defecto y un aviso en
+// Scene::lastWarnings() que nombra el campo. Antes de este fix,
+// Scene::fromJson devolvía false: json::exception (302, "type must be
+// number, but is null") escapaba de nodeFromJson y el catch de fromJson
+// tiraba la carga de TODA la escena por este único campo.
+static void test_scene_with_null_volume_loads_with_warning(PhysicsManager& pm, AudioManager& am)
+{
+    auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false);
+    if (!checkAudioProbe(probe, "test_scene_with_null_volume_loads_with_warning")) return;
+
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("altavoz");
+    probe->setVolume(0.4f);
+    probe->setPitch(1.3f);
+    go->setAudioClip(probe);
+
+    nlohmann::json j = scene.toJson();
+    nlohmann::json& audioClip = j["root"]["children"][0]["audioClip"];
+    CHECK(audioClip.contains("volume"));
+    // Mete el null a mano: así es exactamente como llega un NaN serializado.
+    audioClip["volume"] = nullptr;
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(go->id);
+    CHECK(found != nullptr);
+    if (!found || !found->hasAudioClip()) { CHECK(false); return; }
+    CHECK(nearlyEqual(found->getAudioClip()->getVolume(), 1.0f)); // default neutro
+    CHECK(nearlyEqual(found->getAudioClip()->getPitch(),  1.3f)); // el resto siguió cargando bien
+
+    bool warned = false;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("volume") != std::string::npos) { warned = true; break; }
+    CHECK(warned);
+}
+
+// Compara componente a componente contra la identidad (evita depender de
+// que glm::mat4 tenga operator== disponible en este TU).
+static bool isIdentity(const glm::mat4& m)
+{
+    const glm::mat4 id(1.0f);
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r)
+            if (!nearlyEqual(m[c][r], id[c][r])) return false;
+    return true;
+}
+
+// Un localTransform con un null entre sus 16 floats (mismo origen que el
+// volume: un NaN serializado) no puede tumbar la escena entera. Diseño
+// elegido (documentado también en Scene.cpp junto a jsonToMat4): CUALQUIER
+// float corrupto de los 16 descarta la matriz entera y cae a la identidad
+// completa, no solo ese componente — una matriz "a medias" podría parecer
+// válida y tener la escala o la rotación rotas en silencio. No necesita
+// FMOD: el nodo no lleva audioClip.
+static void test_localTransform_null_element_loads_identity(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("cosa");
+    go->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 20.0f, 30.0f));
+
+    nlohmann::json j = scene.toJson();
+    nlohmann::json& lt = j["root"]["children"][0]["localTransform"];
+    CHECK(lt.is_array());
+    CHECK(lt.size() == 16);
+    lt[5] = nullptr; // uno de los 16 floats corrupto (posición arbitraria)
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(go->id);
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(isIdentity(found->localTransform));
+
+    bool warned = false;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("localTransform") != std::string::npos) { warned = true; break; }
+    CHECK(warned);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -220,6 +329,9 @@ int main()
     test_tojson_emits_volume_and_pitch();
     test_volume_pitch_round_trip(pm, am);
     test_scene_without_volume_loads_neutral(pm, am);
+    test_setVolume_setPitch_reject_nan();
+    test_scene_with_null_volume_loads_with_warning(pm, am);
+    test_localTransform_null_element_loads_identity(pm, am);
 
     am.shutdown();
     pm.shutdown();
