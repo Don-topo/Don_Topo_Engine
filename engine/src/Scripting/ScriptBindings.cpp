@@ -318,6 +318,40 @@ namespace DonTopo::ScriptBindings
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
                     return go->getAudioClip()->getLoop();
+                },
+                "SetVolume", [](const LuaAudioClip& c, float v) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    go->getAudioClip()->setVolume(v);
+                },
+                "GetVolume", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return go->getAudioClip()->getVolume();
+                },
+                "SetPitch", [](const LuaAudioClip& c, float p) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    go->getAudioClip()->setPitch(p);
+                },
+                "GetPitch", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return go->getAudioClip()->getPitch();
+                },
+                // Ojo: setIs3D RECARGA el sonido (unloadSound + loadSound
+                // porque is3D va horneado en el FMOD_MODE) y corta lo que
+                // estuviera sonando. Es configuración, no algo de llamar por
+                // frame — al revés que SetVolume/SetPitch.
+                "SetIs3D", [](const LuaAudioClip& c, bool b) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    go->getAudioClip()->setIs3D(b);
+                },
+                "GetIs3D", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return go->getAudioClip()->getIs3D();
                 });
 
             // Rigidbody: dinámica estilo Unity. Propiedades (mass/useGravity/

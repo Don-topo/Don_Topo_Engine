@@ -1,6 +1,8 @@
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Audio/AudioManager.h"
 
+#include <algorithm>
+
 namespace DonTopo {
 
 AudioClipComponent::AudioClipComponent(AudioManager* audio, std::string path, int soundId, bool is3D, bool loop)
@@ -19,7 +21,7 @@ AudioClipComponent::~AudioClipComponent()
 
 void AudioClipComponent::play(const glm::vec3& worldPos)
 {
-    if (m_audio) m_audio->playSound(m_soundId, worldPos);
+    if (m_audio) m_audio->playSound(m_soundId, worldPos, m_volume, m_pitch);
 }
 
 void AudioClipComponent::stop()
@@ -39,6 +41,18 @@ void AudioClipComponent::setIs3D(bool is3D)
     if (is3D == m_is3D) return;
     m_is3D = is3D;
     reload();
+}
+
+void AudioClipComponent::setVolume(float volume)
+{
+    m_volume = std::clamp(volume, 0.0f, 1.0f);
+    if (m_audio) m_audio->setChannelVolume(m_soundId, m_volume);
+}
+
+void AudioClipComponent::setPitch(float pitch)
+{
+    m_pitch = std::clamp(pitch, 0.5f, 2.0f);
+    if (m_audio) m_audio->setChannelPitch(m_soundId, m_pitch);
 }
 
 void AudioClipComponent::reload()

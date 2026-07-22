@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <glm/glm.hpp>
@@ -167,6 +168,22 @@ private:
     // componente AudioClip.
     std::string m_audioLoadError;
     GameObject* m_audioClipAddRequestedFor = nullptr;
+
+    // Snapshot al empezar el drag de los sliders de audio: un drag continuo no
+    // puede empujar un comando por frame, así que se captura al activar y se
+    // empuja uno solo al soltar. A diferencia de Transform/Rigidbody (que usan
+    // DragFloat), aquí se usa SliderFloat: salta al valor bajo el cursor en el
+    // MISMO frame en que se activa por click, así que el "before" no puede
+    // releerse del componente después de dibujar el widget (ya valdría el
+    // nuevo valor); por eso el .cpp hoistea las lecturas antes del slider.
+    bool     m_audioDragActive = false;
+    float    m_audioDragBeforeVolume = 1.0f;
+    float    m_audioDragBeforePitch  = 1.0f;
+    // Dueño del snapshot en curso: si el drag se interrumpe sin commit (p.ej.
+    // Ctrl+Z a mitad de arrastre reconstruye/borra el GameObject seleccionado)
+    // y el siguiente commit llega para otro AudioClip, este id evita aplicar
+    // un "before" que no le corresponde.
+    uint64_t m_audioDragOwnerId = 0;
 
     // Popup "Nuevo Script" — disparado desde Add > Script > Nuevo Script...
     // m_newScriptTarget se captura al abrir (ctx.selected puede cambiar con

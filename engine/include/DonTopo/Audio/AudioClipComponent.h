@@ -25,9 +25,18 @@ public:
     void setLoop(bool loop);
     void setIs3D(bool is3D);
 
+    // Volumen y pitch son propiedades del CANAL, no del FMOD_MODE del sonido:
+    // a diferencia de setLoop/setIs3D, no recargan nada y se pueden mover
+    // mientras suena. El clamp vive aquí para que ni la UI ni Lua puedan
+    // colar un valor fuera de rango.
+    void setVolume(float volume);   // [0, 1]
+    void setPitch (float pitch);    // [0.5, 2]
+
     bool getLoop() const  { return m_loop; }
     bool getIs3D() const  { return m_is3D; }
     const std::string& getPath() const { return m_path; }
+    float getVolume() const { return m_volume; }
+    float getPitch()  const { return m_pitch;  }
 
     // Si está activo, Play Mode llama play() automáticamente al entrar
     // (ver EditorUI::drawToolbar). No afecta al FMOD_MODE, no hace falta reload.
@@ -46,6 +55,8 @@ private:
     bool          m_is3D;
     bool          m_loop;
     bool          m_playOnAwake = false;
+    float         m_volume = 1.0f;
+    float         m_pitch  = 1.0f;
 };
 
 } // namespace DonTopo

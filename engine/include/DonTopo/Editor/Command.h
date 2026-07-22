@@ -66,6 +66,14 @@ struct RigidbodyState {
     uint32_t constraints;
 };
 
+// Snapshot value-type del AudioClipComponent — T de PropertyCommand<T> en la
+// sección Audio Clip del panel Properties. Sólo volumen y pitch: loop, is3D y
+// playOnAwake se escriben directos y no tienen undo.
+struct AudioClipState {
+    float volume;
+    float pitch;
+};
+
 // Snapshot value-type del CameraComponent — T de PropertyCommand<T> en la
 // sección Camera del panel Properties.
 struct CameraState {

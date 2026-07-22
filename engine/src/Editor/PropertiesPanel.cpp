@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -68,6 +69,10 @@ std::string prettyPropLabel(const std::string& raw)
     }
     return out;
 }
+
+// Compara floats con tolerancia — evita empujar un comando de Undo cuando el
+// drag termina en el mismo valor con el que empezó (ruido de redondeo).
+bool nearlyEqualF(float a, float b) { return std::fabs(a - b) < 0.0001f; }
 
 } // namespace
 
@@ -1345,6 +1350,85 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             bool playOnAwake = clip->getPlayOnAwake();
             if (ImGui::Checkbox("Play On Awake", &playOnAwake))
                 clip->setPlayOnAwake(playOnAwake);
+
+            // --- Volume / Pitch: snapshot al activar cualquiera de los dos,
+            // un solo comando al soltar. Los valores se escriben en vivo
+            // mientras se arrastra (así se oye el cambio), y el comando sólo
+            // sirve para que Ctrl+Z devuelva el drag entero de una vez.
+            //
+            // SliderFloat (a diferencia de DragFloat) salta al valor bajo el
+            // cursor en el MISMO frame en que IsItemActivated() se vuelve
+            // true, así que el "before" no puede releerse del componente
+            // después de dibujar el widget: para entonces ya vale el valor
+            // nuevo. Por eso se hoistean las lecturas aquí, antes de los
+            // sliders, y el snapshot usa estas variables en vez de releer
+            // clip->getVolume()/getPitch().
+            const float volumeBefore = clip->getVolume();
+            const float pitchBefore  = clip->getPitch();
+            float volume = volumeBefore;
+            float pitch  = pitchBefore;
+
+            const uint64_t clipOwnerId = ctx.selected->id;
+            Scene* scene = ctx.scene;
+
+            bool activated = false;
+            bool committed = false;
+
+            if (ImGui::SliderFloat("Volume", &volume, 0.0f, 1.0f, "%.2f"))
+                clip->setVolume(volume);
+            activated |= ImGui::IsItemActivated();
+            committed |= ImGui::IsItemDeactivatedAfterEdit();
+
+            if (ImGui::SliderFloat("Pitch", &pitch, 0.5f, 2.0f, "%.2f"))
+                clip->setPitch(pitch);
+            activated |= ImGui::IsItemActivated();
+            committed |= ImGui::IsItemDeactivatedAfterEdit();
+
+            // Sin gate por m_audioDragActive: solo un widget de ImGui puede
+            // tener ActiveId a la vez, así que el gate no aporta nada salvo
+            // un bug: IsItemDeactivatedAfterEdit() exige edición real, y un
+            // click que activa el slider sin moverlo nunca llega a
+            // "committed", dejando el flag pegado con un "before" rancio que
+            // la siguiente edición —incluso en otro GameObject— reutilizaría.
+            if (activated)
+            {
+                m_audioDragActive       = true;
+                m_audioDragBeforeVolume = volumeBefore;
+                m_audioDragBeforePitch  = pitchBefore;
+                m_audioDragOwnerId      = clipOwnerId;
+            }
+
+            // Guarda de propietario: el ActiveId de un slider de ImGui se
+            // conserva mientras el ratón sigue pulsado, aunque la selección
+            // cambie a mitad de arrastre (Hierarchy, atajo de teclado o un
+            // script) y el panel pase a dibujar el AudioClip de OTRO
+            // GameObject. Como el id del widget ("Volume"/"Pitch") es el
+            // mismo en ambos, ImGui seguiría considerándolo el mismo drag y
+            // el commit final llegaría para ese otro objeto; este id evita
+            // aplicarle un "before" que pertenece al GameObject original.
+            if (committed && m_audioDragActive && m_audioDragOwnerId == clipOwnerId)
+            {
+                m_audioDragActive = false;
+                const AudioClipState before{ m_audioDragBeforeVolume, m_audioDragBeforePitch };
+                const AudioClipState after { clip->getVolume(), clip->getPitch() };
+
+                if (!nearlyEqualF(before.volume, after.volume) ||
+                    !nearlyEqualF(before.pitch,  after.pitch))
+                {
+                    // Resuelve el GameObject por id en cada aplicación, nunca
+                    // captura el puntero: sobrevive a un undo de Delete que
+                    // haya reconstruido el objeto entretanto.
+                    auto apply = [scene, clipOwnerId](const AudioClipState& s) {
+                        GameObject* go = scene->findById(clipOwnerId);
+                        if (!go || !go->hasAudioClip()) return;
+                        go->getAudioClip()->setVolume(s.volume);
+                        go->getAudioClip()->setPitch(s.pitch);
+                    };
+                    if (ctx.scene)
+                        ctx.undo->push(std::make_unique<PropertyCommand<AudioClipState>>(
+                            "Audio Clip de '" + ctx.selected->name + "'", before, after, apply));
+                }
+            }
 
             ImGui::TreePop();
         }

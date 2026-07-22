@@ -331,7 +331,9 @@ namespace
             j["audioClip"] = { {"path", clip->getPath()},
                                 {"loop", clip->getLoop()},
                                 {"is3D", clip->getIs3D()},
-                                {"playOnAwake", clip->getPlayOnAwake()} };
+                                {"playOnAwake", clip->getPlayOnAwake()},
+                                {"volume", clip->getVolume()},
+                                {"pitch", clip->getPitch()} };
         }
         if (node.hasScripts())
         {
@@ -704,6 +706,11 @@ namespace
                 // .value() con default false: compat con escenas guardadas
                 // antes de que existiera este campo.
                 clip->setPlayOnAwake(c.value("playOnAwake", false));
+                // .value() con default: compat con escenas guardadas antes de
+                // que existieran estos campos. Con .at() reventaría toda
+                // escena anterior a la feature.
+                clip->setVolume(c.value("volume", 1.0f));
+                clip->setPitch(c.value("pitch", 1.0f));
                 node->setAudioClip(std::move(clip));
             }
             // clip nullptr (asset roto/formato no soportado): node queda sin
