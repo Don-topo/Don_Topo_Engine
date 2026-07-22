@@ -107,20 +107,72 @@ int AudioManager::loadBGM(const std::string& path)
 #endif
 }
 
-void AudioManager::playSound(int id, const glm::vec3& worldPos)
+#ifdef DT_FMOD_ENABLED
+// El Channel* guardado para id, sólo si sigue sonando y sigue siendo el canal
+// de ESE sonido. Devuelve nullptr en cualquier otro caso.
+static FMOD::Channel* liveChannel(void* raw, void* expectedSound)
+{
+    auto* ch = reinterpret_cast<FMOD::Channel*>(raw);
+    if (!ch) return nullptr;
+
+    bool playing = false;
+    if (ch->isPlaying(&playing) != FMOD_OK || !playing) return nullptr;
+
+    FMOD::Sound* current = nullptr;
+    if (ch->getCurrentSound(&current) != FMOD_OK) return nullptr;
+    if (current != reinterpret_cast<FMOD::Sound*>(expectedSound)) return nullptr;
+
+    return ch;
+}
+#endif
+
+void AudioManager::setChannelVolume(int id, float volume)
+{
+#ifdef DT_FMOD_ENABLED
+    if (id < 0 || id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
+    if (FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]))
+        ch->setVolume(volume);
+#else
+    (void)id; (void)volume;
+#endif
+}
+
+void AudioManager::setChannelPitch(int id, float pitch)
+{
+#ifdef DT_FMOD_ENABLED
+    if (id < 0 || id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
+    if (FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]))
+        ch->setPitch(pitch);
+#else
+    (void)id; (void)pitch;
+#endif
+}
+
+void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, float pitch)
 {
 #ifdef DT_FMOD_ENABLED
     if (!m_system || id < 0 || id >= (int)m_sounds.size() || !m_sounds[id]) return;
     FMOD::Channel* ch;
     auto* snd = reinterpret_cast<FMOD::Sound*>(m_sounds[id]);
-    if (SYS->playSound(snd, SFXG, false, &ch) != FMOD_OK) return;
+    // paused = true: hay que dejar volumen, pitch y posición puestos ANTES de
+    // que suene la primera muestra. Arrancándolo sonando, un clip 3D se oye un
+    // instante desde el origen del mundo y con el volumen del canal anterior.
+    if (SYS->playSound(snd, SFXG, true, &ch) != FMOD_OK) return;
     m_sfxChannels[id] = ch;
+
+    ch->setVolume(volume);
+    ch->setPitch(pitch);
+
     FMOD_MODE mode; snd->getMode(&mode);
     if (mode & FMOD_3D) {
         FMOD_VECTOR p = { worldPos.x, worldPos.y, worldPos.z };
         FMOD_VECTOR v = { 0, 0, 0 };
         ch->set3DAttributes(&p, &v);
     }
+
+    ch->setPaused(false);
+#else
+    (void)id; (void)worldPos; (void)volume; (void)pitch;
 #endif
 }
 

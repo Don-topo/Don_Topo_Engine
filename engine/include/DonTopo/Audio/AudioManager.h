@@ -25,8 +25,21 @@ public:
     void unloadSound(int soundId);
     int  loadBGM(const std::string& path);
 
-    void playSound(int soundId, const glm::vec3& worldPos = {});
+    void playSound(int soundId, const glm::vec3& worldPos = {},
+                   float volume = 1.0f, float pitch = 1.0f);
     void stopSound(int soundId);
+
+    // Empujan el valor al canal de la última reproducción de soundId, si
+    // sigue siendo suyo. FMOD recicla los Channel*: un canal que ya terminó
+    // puede haber sido reasignado a otro sonido, y escribirle el volumen se
+    // lo cambiaría a un sonido ajeno. Por eso se comprueba isPlaying() y que
+    // getCurrentSound() sea el sonido de ese id.
+    //
+    // No pasa nada si no hay canal: el valor vive en AudioClipComponent y se
+    // aplicará en el siguiente playSound.
+    void setChannelVolume(int soundId, float volume);
+    void setChannelPitch (int soundId, float pitch);
+
     void playBGM(int bgmId);
     void stopBGM();
     void pauseBGM(bool paused);
