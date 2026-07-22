@@ -39,10 +39,17 @@ namespace
     // lectores tolerantes a JSON corrupto (definidos junto a jsonToMat4/
     // jsonToVec3, después en el fichero) para el threshold de las
     // condiciones numéricas y el editorPos de los estados.
+    //
+    // required (default false, back-compat de toda la vida): la clave/índice
+    // AUSENTE también avisa cuando required == true. Es para los campos que
+    // nodeToJson escribe SIEMPRE (nunca son opcionales de verdad) — ver el
+    // comentario grande de abajo, hallazgo 1 del review de este fix.
     float readFloat(const nlohmann::json& j, const char* key, float def,
-                     std::vector<std::string>* warnings, const std::string& contexto);
+                     std::vector<std::string>* warnings, const std::string& contexto,
+                     bool required = false);
     float readArrayFloat(const nlohmann::json& arr, size_t idx, float def,
-                          std::vector<std::string>* warnings, const std::string& contexto);
+                          std::vector<std::string>* warnings, const std::string& contexto,
+                          bool required = false);
 
     nlohmann::json mat4ToJson(const glm::mat4& m)
     {
@@ -400,17 +407,40 @@ namespace
     // std::isfinite (cubre ambos) por robustez, pero es el caso NaN el que
     // motiva este bloque entero.
     //
-    // warnings puede ser nullptr (algún caller, como el jsonToVertex de más
-    // abajo cuando no hace falta reportar, no tiene canal de avisos a mano).
+    // warnings acepta nullptr por robustez de la firma, pero en la práctica
+    // nunca lo es: los 9 call-sites de jsonToVec3 (y, en cascada, todo lo que
+    // cuelga de nodeFromJson) pasan &m_warnings — los tres callers de
+    // nodeFromJson (fromJson, insertFromJson, cloneGameObject) lo hacen
+    // siempre.
+    //
+    // required distingue dos familias de campos:
+    //  - required == false (default): back-compat legítima. Son campos que se
+    //    añadieron a lo largo de la vida del formato (volume, pitch, fov,
+    //    near, far, mass, drag, threshold...) y una escena vieja nunca los
+    //    escribió. Ausente -> default silencioso, sin aviso.
+    //  - required == true: campos que nodeToJson escribe SIEMPRE, incondicio-
+    //    nalmente (halfExtents/center de los colliders, pos/color/uv/normal/
+    //    tangent de cada vértice...). Ahí la ausencia NUNCA es back-compat:
+    //    es la misma corrupción (merge mal resuelto, escritura truncada,
+    //    edición a mano) que un valor null o no finito, así que también avisa
+    //    nombrando el campo y el objeto en vez de fabricar en silencio un
+    //    valor plausible (una caja de 25 unidades en el origen que el usuario
+    //    ve, no cuestiona, y acaba sobrescribiendo el dato real al Guardar).
 
-    // Lee j[key] como float tolerando clave ausente (back-compat normal de
-    // toda la vida con escenas antiguas: sin aviso, es lo esperado), valor
-    // null, tipo no numérico, o número no finito (NaN/Inf) — en estos tres
-    // últimos casos se avisa (si hay canal) nombrando el campo y se cae a def.
+    // Lee j[key] como float. Ausente: silencioso si !required, avisa si
+    // required. Valor null, tipo no numérico, o número no finito (NaN/Inf):
+    // SIEMPRE avisa (si hay canal) nombrando el campo, y cae a def.
     float readFloat(const nlohmann::json& j, const char* key, float def,
-                     std::vector<std::string>* warnings, const std::string& contexto)
+                     std::vector<std::string>* warnings, const std::string& contexto,
+                     bool required)
     {
-        if (!j.contains(key)) return def;
+        if (!j.contains(key))
+        {
+            if (required && warnings)
+                warnings->push_back(contexto + "." + key +
+                                     ": falta en la escena, se usa el valor por defecto");
+            return def;
+        }
         const nlohmann::json& v = j[key];
         if (v.is_null() || !v.is_number())
         {
@@ -431,13 +461,34 @@ namespace
     }
 
     // Variante de readFloat para un ELEMENTO de un array JSON por índice (en
-    // vez de una clave de objeto) — la usan jsonToVec3/jsonToMat4/uv. Índice
-    // fuera de rango se trata igual que clave ausente en readFloat: silencioso,
-    // es el caso de un array más corto de lo esperado.
+    // vez de una clave de objeto) — la usan jsonToVec3/jsonToMat4/uv.
+    //
+    // OJO: "arr no es un array" y "arr es un array pero más corto de lo
+    // esperado" son dos anomalías DISTINTAS y se tratan distinto (hallazgo 2
+    // del review): un valor no-array (típicamente null — la forma exacta que
+    // toma un NaN serializado, ver comentario grande de arriba) es corrupción
+    // de verdad y avisa SIEMPRE, sea o no required el campo. Un array corto
+    // (índice fuera de rango) es la firma de "campo ausente" cuando el
+    // llamador lo extrajo con ".value(key, array())": ahí sí aplica la regla
+    // de required, igual que en readFloat.
     float readArrayFloat(const nlohmann::json& arr, size_t idx, float def,
-                          std::vector<std::string>* warnings, const std::string& contexto)
+                          std::vector<std::string>* warnings, const std::string& contexto,
+                          bool required)
     {
-        if (!arr.is_array() || idx >= arr.size()) return def;
+        if (!arr.is_array())
+        {
+            if (warnings)
+                warnings->push_back(contexto + "[" + std::to_string(idx) +
+                                     "]: se esperaba un número y no lo es, se usa el valor por defecto");
+            return def;
+        }
+        if (idx >= arr.size())
+        {
+            if (required && warnings)
+                warnings->push_back(contexto + "[" + std::to_string(idx) +
+                                     "]: falta en la escena, se usa el valor por defecto");
+            return def;
+        }
         const nlohmann::json& v = arr[idx];
         if (v.is_null() || !v.is_number())
         {
@@ -484,25 +535,34 @@ namespace
         return m;
     }
 
+    // required se reenvía tal cual a los 3 readArrayFloat: un vec3 required
+    // ausente o corrupto avisa 3 veces (una por componente), pero cada línea
+    // ya nombra el objeto y el campo (contexto), así que sigue siendo
+    // diagnosticable — no merece la complejidad de deduplicar en un único
+    // aviso a nivel de vec3.
     glm::vec3 jsonToVec3(const nlohmann::json& j, std::vector<std::string>* warnings,
-                         const std::string& contexto, const glm::vec3& def = glm::vec3(0.0f))
+                         const std::string& contexto, const glm::vec3& def = glm::vec3(0.0f),
+                         bool required = false)
     {
-        return glm::vec3(readArrayFloat(j, 0, def.x, warnings, contexto),
-                          readArrayFloat(j, 1, def.y, warnings, contexto),
-                          readArrayFloat(j, 2, def.z, warnings, contexto));
+        return glm::vec3(readArrayFloat(j, 0, def.x, warnings, contexto, required),
+                          readArrayFloat(j, 1, def.y, warnings, contexto, required),
+                          readArrayFloat(j, 2, def.z, warnings, contexto, required));
     }
 
+    // Vertex: nodeToJson lo escribe SIEMPRE con sus 5 campos completos (nunca
+    // es opcional un vértice "a medias") — todos required (hallazgo 1 del
+    // review).
     DonTopo::Vertex jsonToVertex(const nlohmann::json& j, std::vector<std::string>* warnings,
                                   const std::string& contexto)
     {
         DonTopo::Vertex v{};
-        v.pos     = jsonToVec3(j.value("pos",    nlohmann::json::array()), warnings, contexto + ".pos");
-        v.color   = jsonToVec3(j.value("color",  nlohmann::json::array()), warnings, contexto + ".color", glm::vec3(1.0f));
+        v.pos     = jsonToVec3(j.value("pos",    nlohmann::json::array()), warnings, contexto + ".pos", glm::vec3(0.0f), true);
+        v.color   = jsonToVec3(j.value("color",  nlohmann::json::array()), warnings, contexto + ".color", glm::vec3(1.0f), true);
         const nlohmann::json uv = j.value("uv", nlohmann::json::array());
-        v.uv      = glm::vec2(readArrayFloat(uv, 0, 0.0f, warnings, contexto + ".uv"),
-                               readArrayFloat(uv, 1, 0.0f, warnings, contexto + ".uv"));
-        v.normal  = jsonToVec3(j.value("normal",  nlohmann::json::array()), warnings, contexto + ".normal", glm::vec3(0.0f, 1.0f, 0.0f));
-        v.tangent = jsonToVec3(j.value("tangent", nlohmann::json::array()), warnings, contexto + ".tangent", glm::vec3(1.0f, 0.0f, 0.0f));
+        v.uv      = glm::vec2(readArrayFloat(uv, 0, 0.0f, warnings, contexto + ".uv", true),
+                               readArrayFloat(uv, 1, 0.0f, warnings, contexto + ".uv", true));
+        v.normal  = jsonToVec3(j.value("normal",  nlohmann::json::array()), warnings, contexto + ".normal", glm::vec3(0.0f, 1.0f, 0.0f), true);
+        v.tangent = jsonToVec3(j.value("tangent", nlohmann::json::array()), warnings, contexto + ".tangent", glm::vec3(1.0f, 0.0f, 0.0f), true);
         return v;
     }
 
@@ -709,8 +769,8 @@ namespace
             const auto& c = j["boxCollider"];
             const std::string ctx = "boxCollider de '" + node->name + "'";
             node->setBoxCollider(physics.createBoxColliderComponent(
-                jsonToVec3(c.value("halfExtents", nlohmann::json::array()), warnings, ctx + ".halfExtents", glm::vec3(25.0f)),
-                jsonToVec3(c.value("center", nlohmann::json::array()), warnings, ctx + ".center"),
+                jsonToVec3(c.value("halfExtents", nlohmann::json::array()), warnings, ctx + ".halfExtents", glm::vec3(25.0f), true),
+                jsonToVec3(c.value("center", nlohmann::json::array()), warnings, ctx + ".center", glm::vec3(0.0f), true),
                 node->worldTransform, /*dynamic=*/false));
             node->getBoxCollider()->setOwner(node);
             physics.setTrigger(node->getBoxCollider(), c.value("isTrigger", false));
@@ -720,8 +780,8 @@ namespace
             const auto& c = j["sphereCollider"];
             const std::string ctx = "sphereCollider de '" + node->name + "'";
             node->setSphereCollider(physics.createSphereColliderComponent(
-                readFloat(c, "radius", 25.0f, warnings, ctx),
-                jsonToVec3(c.value("center", nlohmann::json::array()), warnings, ctx + ".center"),
+                readFloat(c, "radius", 25.0f, warnings, ctx, true),
+                jsonToVec3(c.value("center", nlohmann::json::array()), warnings, ctx + ".center", glm::vec3(0.0f), true),
                 node->worldTransform, /*dynamic=*/false));
             node->getSphereCollider()->setOwner(node);
             physics.setTrigger(node->getSphereCollider(), c.value("isTrigger", false));
@@ -731,9 +791,9 @@ namespace
             const auto& c = j["capsuleCollider"];
             const std::string ctx = "capsuleCollider de '" + node->name + "'";
             node->setCapsuleCollider(physics.createCapsuleColliderComponent(
-                readFloat(c, "radius", 15.0f, warnings, ctx),
-                readFloat(c, "halfHeight", 25.0f, warnings, ctx),
-                jsonToVec3(c.value("center", nlohmann::json::array()), warnings, ctx + ".center"),
+                readFloat(c, "radius", 15.0f, warnings, ctx, true),
+                readFloat(c, "halfHeight", 25.0f, warnings, ctx, true),
+                jsonToVec3(c.value("center", nlohmann::json::array()), warnings, ctx + ".center", glm::vec3(0.0f), true),
                 node->worldTransform, /*dynamic=*/false));
             node->getCapsuleCollider()->setOwner(node);
             physics.setTrigger(node->getCapsuleCollider(), c.value("isTrigger", false));
@@ -742,7 +802,7 @@ namespace
         {
             const auto& c = j["planeCollider"];
             node->setPlaneCollider(physics.createPlaneColliderComponent(
-                jsonToVec3(c.value("center", nlohmann::json::array()), warnings, "planeCollider de '" + node->name + "'.center"),
+                jsonToVec3(c.value("center", nlohmann::json::array()), warnings, "planeCollider de '" + node->name + "'.center", glm::vec3(0.0f), true),
                 node->worldTransform));
             node->getPlaneCollider()->setOwner(node);
             physics.setTrigger(node->getPlaneCollider(), c.value("isTrigger", false));

@@ -9,6 +9,8 @@
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Physics/PhysicsManager.h"
+#include "DonTopo/Physics/Colliders/BoxCollider.h"
+#include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include <nlohmann/json.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
@@ -315,6 +317,68 @@ static void test_localTransform_null_element_loads_identity(PhysicsManager& pm, 
     CHECK(warned);
 }
 
+// Hallazgo 1 del review: boxCollider.halfExtents lo escribe nodeToJson
+// SIEMPRE (nunca es opcional, a diferencia de volume/pitch/fov...) — si el
+// .scene lo pierde (merge mal resuelto, escritura truncada, edición a mano)
+// NO es back-compat legítima, es corrupción, y tiene que avisar nombrando el
+// campo y el objeto en vez de caer en un valor plausible sin ni un WARN.
+// Antes de este fix: caja de 25 unidades centrada en el origen, cero avisos,
+// el usuario la ve, no cuestiona nada, pulsa Guardar y las medidas originales
+// se pierden para siempre. No necesita FMOD (el nodo no lleva audioClip).
+static void test_boxCollider_missing_halfExtents_warns(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Caja");
+    go->setBoxCollider(pm.createBoxColliderComponent(glm::vec3(3.0f, 4.0f, 5.0f), glm::vec3(0.0f),
+                                                      go->worldTransform, /*dynamic=*/false));
+
+    nlohmann::json j = scene.toJson();
+    nlohmann::json& box = j["root"]["children"][0]["boxCollider"];
+    CHECK(box.contains("halfExtents"));
+    box.erase("halfExtents");
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(go->id);
+    CHECK(found != nullptr);
+    if (!found || !found->hasBoxCollider()) { CHECK(false); return; }
+
+    bool warned = false;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("halfExtents") != std::string::npos) { warned = true; break; }
+    CHECK(warned);
+}
+
+// Hallazgo 2 del review: "center": null (la forma EXACTA que toma un NaN
+// serializado, ver el resto de este fichero) no puede caer en silencio a
+// (0,0,0). Antes de este fix, readArrayFloat trataba "no es un array" igual
+// que "índice fuera de rango" (los dos por la misma rama silenciosa): una
+// cápsula con center corrupto se movía al origen sin dejar ni rastro en el
+// Log — "la cápsula se ha movido sola", tal cual lo describe el review.
+static void test_capsuleCollider_null_center_warns(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Capsula");
+    go->setCapsuleCollider(pm.createCapsuleColliderComponent(
+        15.0f, 25.0f, glm::vec3(10.0f, 20.0f, 30.0f), go->worldTransform, /*dynamic=*/false));
+
+    nlohmann::json j = scene.toJson();
+    nlohmann::json& cap = j["root"]["children"][0]["capsuleCollider"];
+    CHECK(cap.contains("center"));
+    cap["center"] = nullptr; // así llega exactamente un NaN serializado
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(go->id);
+    CHECK(found != nullptr);
+    if (!found || !found->hasCapsuleCollider()) { CHECK(false); return; }
+
+    bool warned = false;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("center") != std::string::npos) { warned = true; break; }
+    CHECK(warned);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -332,6 +396,8 @@ int main()
     test_setVolume_setPitch_reject_nan();
     test_scene_with_null_volume_loads_with_warning(pm, am);
     test_localTransform_null_element_loads_identity(pm, am);
+    test_boxCollider_missing_halfExtents_warns(pm, am);
+    test_capsuleCollider_null_center_warns(pm, am);
 
     am.shutdown();
     pm.shutdown();
