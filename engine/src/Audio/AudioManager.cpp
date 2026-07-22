@@ -58,7 +58,7 @@ void AudioManager::shutdown()
     if (!m_system) return;
     for (auto* s : m_sounds)    if (s) reinterpret_cast<FMOD::Sound*>(s)->release();
     for (auto* s : m_bgmSounds) if (s) reinterpret_cast<FMOD::Sound*>(s)->release();
-    m_sounds.clear(); m_bgmSounds.clear();
+    m_sounds.clear(); m_bgmSounds.clear(); m_sfxChannels.clear();
     if (SFXG) SFXG->release();
     if (BGMG) BGMG->release();
     SYS->close();
@@ -129,7 +129,8 @@ static FMOD::Channel* liveChannel(void* raw, void* expectedSound)
 void AudioManager::setChannelVolume(int id, float volume)
 {
 #ifdef DT_FMOD_ENABLED
-    if (id < 0 || id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
+    if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
+        id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
     if (FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]))
         ch->setVolume(volume);
 #else
@@ -140,7 +141,8 @@ void AudioManager::setChannelVolume(int id, float volume)
 void AudioManager::setChannelPitch(int id, float pitch)
 {
 #ifdef DT_FMOD_ENABLED
-    if (id < 0 || id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
+    if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
+        id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
     if (FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]))
         ch->setPitch(pitch);
 #else
@@ -151,19 +153,23 @@ void AudioManager::setChannelPitch(int id, float pitch)
 void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, float pitch)
 {
 #ifdef DT_FMOD_ENABLED
-    if (!m_system || id < 0 || id >= (int)m_sounds.size() || !m_sounds[id]) return;
+    if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
+        id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
     FMOD::Channel* ch;
     auto* snd = reinterpret_cast<FMOD::Sound*>(m_sounds[id]);
     // paused = true: hay que dejar volumen, pitch y posición puestos ANTES de
     // que suene la primera muestra. Arrancándolo sonando, un clip 3D se oye un
     // instante desde el origen del mundo y con el volumen del canal anterior.
     if (SYS->playSound(snd, SFXG, true, &ch) != FMOD_OK) return;
+    // Se descarta a sabiendas el canal de una reproducción anterior de este
+    // mismo id: si seguía sonando, queda huérfano (sin referencia) con el
+    // volumen/pitch que tenía y termina de sonar por su cuenta.
     m_sfxChannels[id] = ch;
 
     ch->setVolume(volume);
     ch->setPitch(pitch);
 
-    FMOD_MODE mode; snd->getMode(&mode);
+    FMOD_MODE mode = 0; snd->getMode(&mode);
     if (mode & FMOD_3D) {
         FMOD_VECTOR p = { worldPos.x, worldPos.y, worldPos.z };
         FMOD_VECTOR v = { 0, 0, 0 };
