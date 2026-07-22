@@ -166,22 +166,60 @@ static void test_skinned_mesh_materials(const fs::path& root)
 static void test_external_assets(const fs::path& root)
 {
     std::error_code ec;
-    fs::path outside = fs::temp_directory_path(ec) / "dt_exporter_outside";
+    fs::path tempRoot = fs::temp_directory_path(ec);
+    if (ec || tempRoot.empty())
+    {
+        // Sin directorio temporal no hay sitio seguro donde escribir: se falla
+        // el test en vez de caer a una ruta relativa al CWD, que dejaría los
+        // remove_all de abajo apuntando dentro del repo.
+        CHECK(false);
+        return;
+    }
+
+    fs::path outside = tempRoot / "dt_exporter_outside";
     fs::remove_all(outside, ec);
     fs::create_directories(outside / "a", ec);
     fs::create_directories(outside / "b", ec);
+    // Cada FBX con su textura hermana y EL MISMO nombre en las dos carpetas:
+    // es el caso que el esquema viejo (aplanar a assets/_external/<nombre> con
+    // sufijo numérico) rompía en silencio.
     std::ofstream(outside / "a" / "prop.fbx") << "fbx";
+    std::ofstream(outside / "a" / "prop.png") << "png";
     std::ofstream(outside / "b" / "prop.fbx") << "fbx";
+    std::ofstream(outside / "b" / "prop.png") << "png";
 
     Scene scene;
-    scene.addGameObject("a")->setMesh(makeMesh(outside / "a" / "prop.fbx"));
-    scene.addGameObject("b")->setMesh(makeMesh(outside / "b" / "prop.fbx"));
+    scene.addGameObject("a")->setMesh(makeMesh(outside / "a" / "prop.fbx", outside / "a" / "prop.png"));
+    scene.addGameObject("b")->setMesh(makeMesh(outside / "b" / "prop.fbx", outside / "b" / "prop.png"));
 
     std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
-    CHECK(assets.size() == 2);
-    CHECK(assets[0].packagePath != assets[1].packagePath);
+    CHECK(assets.size() == 4);
     for (const ExportAsset& a : assets)
         CHECK(a.packagePath.rfind("assets/_external/", 0) == 0);
+
+    // El invariante que de verdad importa no son las rutas literales, sino que
+    // cada FBX siga siendo hermano de SU textura: ModelLoader deriva la
+    // textura como dirname(fbx)/basename (ModelLoader.cpp:156), así que si los
+    // dos pares acaban en la misma carpeta, el segundo modelo carga la textura
+    // del primero y el render sale mal sin ningún error. Afirmar solo
+    // "packagePath[0] != packagePath[1]" no detectaba eso: el esquema viejo
+    // también daba nombres distintos.
+    auto packagePathOf = [&](const fs::path& source) {
+        const std::string key = exportPathKey(source.string());
+        for (const ExportAsset& a : assets)
+            if (exportPathKey(a.sourcePath) == key) return a.packagePath;
+        return std::string();
+    };
+
+    const fs::path fbxA = fs::path(packagePathOf(outside / "a" / "prop.fbx")).parent_path();
+    const fs::path texA = fs::path(packagePathOf(outside / "a" / "prop.png")).parent_path();
+    const fs::path fbxB = fs::path(packagePathOf(outside / "b" / "prop.fbx")).parent_path();
+    const fs::path texB = fs::path(packagePathOf(outside / "b" / "prop.png")).parent_path();
+
+    CHECK(!fbxA.empty() && !fbxB.empty());
+    CHECK(fbxA == texA);   // el par de 'a' viaja junto
+    CHECK(fbxB == texB);   // el par de 'b' viaja junto
+    CHECK(fbxA != fbxB);   // y los dos pares van a carpetas distintas
 
     fs::remove_all(outside, ec);
 }
