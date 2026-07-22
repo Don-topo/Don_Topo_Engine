@@ -20,6 +20,7 @@
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/euler_angles.hpp>
 #include <stdexcept>
+#include <cmath>
 
 namespace DonTopo::ScriptBindings
 {
@@ -35,6 +36,33 @@ namespace DonTopo::ScriptBindings
             if (!e.go || !e.mgr || !e.mgr->isAlive(e.go))
                 throw std::runtime_error("Entity destruida o inválida");
             return e.go;
+        }
+
+        // std::clamp(NaN, lo, hi) devuelve NaN: toda comparación con NaN es
+        // falsa, así que el clamp de rango (p.ej. el [0,1] de volume) no lo
+        // detiene. Los infinitos SÍ se clampan bien (clamp(+inf,0,1) == 1.0),
+        // así que el peligroso de verdad es el NaN, no el infinito: un NaN se
+        // cuela hasta el JSON de la escena (nlohmann lo serializa como
+        // "null"), y al releer ese "null" con .get<float>() nlohmann lanza
+        // json::exception, lo que hacía fallar Scene::fromJson ENTERO por un
+        // solo campo corrupto. Se ataja aquí, en el punto de entrada desde
+        // Lua: se ignora el valor (se deja el anterior) y se avisa por el Log
+        // Console, sin lanzar error de Lua — un cálculo roto en un script
+        // (p.ej. un 0/0) no debe matar la partida.
+        bool ensureFinite(ScriptManager& mgr, const char* metodo, float v)
+        {
+            if (std::isfinite(v)) return true;
+            mgr.log(std::string("[Lua][WARN] ") + metodo +
+                    ": valor no finito (NaN/Inf) ignorado, se conserva el anterior");
+            return false;
+        }
+
+        bool ensureFinite(ScriptManager& mgr, const char* metodo, const glm::vec3& v)
+        {
+            if (std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z)) return true;
+            mgr.log(std::string("[Lua][WARN] ") + metodo +
+                    ": vector con componente no finito (NaN/Inf) ignorado, se conserva el anterior");
+            return false;
         }
 
         struct LuaTransform { LuaEntity e; };
@@ -148,14 +176,16 @@ namespace DonTopo::ScriptBindings
             mb["Middle"] = GLFW_MOUSE_BUTTON_MIDDLE;
         }
 
-        void registerTransform(sol::state& lua)
+        void registerTransform(ScriptManager& mgr)
         {
+            sol::state& lua = mgr.lua();
             lua.new_usertype<LuaTransform>("Transform",
                 sol::no_constructor,
                 "GetPosition", [](const LuaTransform& t) {
                     glm::vec3 p, r, s; decomposeLocal(deref(t.e), p, r, s); return p;
                 },
-                "SetPosition", [](const LuaTransform& t, const glm::vec3& np) {
+                "SetPosition", [&mgr](const LuaTransform& t, const glm::vec3& np) {
+                    if (!ensureFinite(mgr, "Transform.SetPosition", np)) return;
                     GameObject* go = deref(t.e);
                     glm::vec3 p, r, s; decomposeLocal(go, p, r, s);
                     recomposeLocal(go, np, r, s);
@@ -163,7 +193,8 @@ namespace DonTopo::ScriptBindings
                 "GetRotation", [](const LuaTransform& t) {
                     glm::vec3 p, r, s; decomposeLocal(deref(t.e), p, r, s); return r;
                 },
-                "SetRotation", [](const LuaTransform& t, const glm::vec3& nr) {
+                "SetRotation", [&mgr](const LuaTransform& t, const glm::vec3& nr) {
+                    if (!ensureFinite(mgr, "Transform.SetRotation", nr)) return;
                     GameObject* go = deref(t.e);
                     glm::vec3 p, r, s; decomposeLocal(go, p, r, s);
                     recomposeLocal(go, p, nr, s);
@@ -171,7 +202,8 @@ namespace DonTopo::ScriptBindings
                 "GetScale", [](const LuaTransform& t) {
                     glm::vec3 p, r, s; decomposeLocal(deref(t.e), p, r, s); return s;
                 },
-                "SetScale", [](const LuaTransform& t, const glm::vec3& ns) {
+                "SetScale", [&mgr](const LuaTransform& t, const glm::vec3& ns) {
+                    if (!ensureFinite(mgr, "Transform.SetScale", ns)) return;
                     GameObject* go = deref(t.e);
                     glm::vec3 p, r, s; decomposeLocal(go, p, r, s);
                     recomposeLocal(go, p, r, ns);
@@ -180,17 +212,19 @@ namespace DonTopo::ScriptBindings
                     GameObject* go = deref(t.e);
                     return glm::vec3(go->worldTransform[3]);
                 },
-                "Translate", [](const LuaTransform& t, const glm::vec3& d) {
+                "Translate", [&mgr](const LuaTransform& t, const glm::vec3& d) {
+                    if (!ensureFinite(mgr, "Transform.Translate", d)) return;
                     GameObject* go = deref(t.e);
                     glm::vec3 p, r, s; decomposeLocal(go, p, r, s);
                     recomposeLocal(go, p + d, r, s);
                 },
-                "Rotate", [](const LuaTransform& t, const glm::vec3& dEuler) {
+                "Rotate", [&mgr](const LuaTransform& t, const glm::vec3& dEuler) {
                     // Rotación incremental compuesta como quaternion, NUNCA
                     // sumando eulers: extractEulerAngleXYZ acota el ángulo
                     // medio a ±90°, y acumular sobre esa representación hace
                     // que una rotación continua se "atasque" al llegar al
                     // límite (gira y luego se queda casi quieta).
+                    if (!ensureFinite(mgr, "Transform.Rotate", dEuler)) return;
                     GameObject* go = deref(t.e);
                     glm::vec3 scale, pos, skew; glm::quat rot; glm::vec4 persp;
                     glm::decompose(go->localTransform, scale, rot, pos, skew, persp);
@@ -203,8 +237,9 @@ namespace DonTopo::ScriptBindings
                 });
         }
 
-        void registerComponents(sol::state& lua)
+        void registerComponents(ScriptManager& mgr)
         {
+            sol::state& lua = mgr.lua();
             lua.new_usertype<LuaBoxCollider>("BoxCollider",
                 sol::no_constructor,
                 "GetHalfExtents", [](const LuaBoxCollider& c) {
@@ -212,7 +247,8 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
                     return go->getBoxCollider()->getHalfExtents();
                 },
-                "SetHalfExtents", [](const LuaBoxCollider& c, const glm::vec3& he) {
+                "SetHalfExtents", [&mgr](const LuaBoxCollider& c, const glm::vec3& he) {
+                    if (!ensureFinite(mgr, "BoxCollider.SetHalfExtents", he)) return;
                     GameObject* go = deref(c.e);
                     if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
                     go->getBoxCollider()->setHalfExtents(he);
@@ -222,7 +258,8 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
                     return go->getBoxCollider()->getCenter();
                 },
-                "SetCenter", [](const LuaBoxCollider& c, const glm::vec3& ctr) {
+                "SetCenter", [&mgr](const LuaBoxCollider& c, const glm::vec3& ctr) {
+                    if (!ensureFinite(mgr, "BoxCollider.SetCenter", ctr)) return;
                     GameObject* go = deref(c.e);
                     if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
                     go->getBoxCollider()->setCenter(ctr);
@@ -235,7 +272,8 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
                     return go->getSphereCollider()->getRadius();
                 },
-                "SetRadius", [](const LuaSphereCollider& c, float r) {
+                "SetRadius", [&mgr](const LuaSphereCollider& c, float r) {
+                    if (!ensureFinite(mgr, "SphereCollider.SetRadius", r)) return;
                     GameObject* go = deref(c.e);
                     if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
                     go->getSphereCollider()->setRadius(r);
@@ -245,7 +283,8 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
                     return go->getSphereCollider()->getCenter();
                 },
-                "SetCenter", [](const LuaSphereCollider& c, const glm::vec3& ctr) {
+                "SetCenter", [&mgr](const LuaSphereCollider& c, const glm::vec3& ctr) {
+                    if (!ensureFinite(mgr, "SphereCollider.SetCenter", ctr)) return;
                     GameObject* go = deref(c.e);
                     if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
                     go->getSphereCollider()->setCenter(ctr);
@@ -258,7 +297,8 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
                     return go->getCapsuleCollider()->getRadius();
                 },
-                "SetRadius", [](const LuaCapsuleCollider& c, float r) {
+                "SetRadius", [&mgr](const LuaCapsuleCollider& c, float r) {
+                    if (!ensureFinite(mgr, "CapsuleCollider.SetRadius", r)) return;
                     GameObject* go = deref(c.e);
                     if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
                     go->getCapsuleCollider()->setRadius(r);
@@ -268,7 +308,8 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
                     return go->getCapsuleCollider()->getHalfHeight();
                 },
-                "SetHalfHeight", [](const LuaCapsuleCollider& c, float h) {
+                "SetHalfHeight", [&mgr](const LuaCapsuleCollider& c, float h) {
+                    if (!ensureFinite(mgr, "CapsuleCollider.SetHalfHeight", h)) return;
                     GameObject* go = deref(c.e);
                     if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
                     go->getCapsuleCollider()->setHalfHeight(h);
@@ -278,7 +319,8 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
                     return go->getCapsuleCollider()->getCenter();
                 },
-                "SetCenter", [](const LuaCapsuleCollider& c, const glm::vec3& ctr) {
+                "SetCenter", [&mgr](const LuaCapsuleCollider& c, const glm::vec3& ctr) {
+                    if (!ensureFinite(mgr, "CapsuleCollider.SetCenter", ctr)) return;
                     GameObject* go = deref(c.e);
                     if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
                     go->getCapsuleCollider()->setCenter(ctr);
@@ -291,7 +333,8 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
                     return go->getPlaneCollider()->getCenter();
                 },
-                "SetCenter", [](const LuaPlaneCollider& c, const glm::vec3& ctr) {
+                "SetCenter", [&mgr](const LuaPlaneCollider& c, const glm::vec3& ctr) {
+                    if (!ensureFinite(mgr, "PlaneCollider.SetCenter", ctr)) return;
                     GameObject* go = deref(c.e);
                     if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
                     go->getPlaneCollider()->setCenter(ctr);
@@ -319,7 +362,8 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
                     return go->getAudioClip()->getLoop();
                 },
-                "SetVolume", [](const LuaAudioClip& c, float v) {
+                "SetVolume", [&mgr](const LuaAudioClip& c, float v) {
+                    if (!ensureFinite(mgr, "AudioClip.SetVolume", v)) return;
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
                     go->getAudioClip()->setVolume(v);
@@ -329,7 +373,8 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
                     return go->getAudioClip()->getVolume();
                 },
-                "SetPitch", [](const LuaAudioClip& c, float p) {
+                "SetPitch", [&mgr](const LuaAudioClip& c, float p) {
+                    if (!ensureFinite(mgr, "AudioClip.SetPitch", p)) return;
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
                     go->getAudioClip()->setPitch(p);
@@ -366,7 +411,10 @@ namespace DonTopo::ScriptBindings
                 sol::no_constructor,
                 "mass", sol::property(
                     [rbOf](const LuaRigidbody& c) { return rbOf(c)->getMass(); },
-                    [rbOf](const LuaRigidbody& c, float v) { rbOf(c)->setMass(v); }),
+                    [rbOf, &mgr](const LuaRigidbody& c, float v) {
+                        if (!ensureFinite(mgr, "Rigidbody.mass", v)) return;
+                        rbOf(c)->setMass(v);
+                    }),
                 "useGravity", sol::property(
                     [rbOf](const LuaRigidbody& c) { return rbOf(c)->getUseGravity(); },
                     [rbOf](const LuaRigidbody& c, bool v) { rbOf(c)->setUseGravity(v); }),
@@ -375,19 +423,43 @@ namespace DonTopo::ScriptBindings
                     [rbOf](const LuaRigidbody& c, bool v) { rbOf(c)->setIsKinematic(v); }),
                 "drag", sol::property(
                     [rbOf](const LuaRigidbody& c) { return rbOf(c)->getDrag(); },
-                    [rbOf](const LuaRigidbody& c, float v) { rbOf(c)->setDrag(v); }),
+                    [rbOf, &mgr](const LuaRigidbody& c, float v) {
+                        if (!ensureFinite(mgr, "Rigidbody.drag", v)) return;
+                        rbOf(c)->setDrag(v);
+                    }),
                 "angularDrag", sol::property(
                     [rbOf](const LuaRigidbody& c) { return rbOf(c)->getAngularDrag(); },
-                    [rbOf](const LuaRigidbody& c, float v) { rbOf(c)->setAngularDrag(v); }),
+                    [rbOf, &mgr](const LuaRigidbody& c, float v) {
+                        if (!ensureFinite(mgr, "Rigidbody.angularDrag", v)) return;
+                        rbOf(c)->setAngularDrag(v);
+                    }),
                 "velocity", sol::property(
                     [rbOf](const LuaRigidbody& c) { return rbOf(c)->getVelocity(); },
-                    [rbOf](const LuaRigidbody& c, const glm::vec3& v) { rbOf(c)->setVelocity(v); }),
+                    [rbOf, &mgr](const LuaRigidbody& c, const glm::vec3& v) {
+                        if (!ensureFinite(mgr, "Rigidbody.velocity", v)) return;
+                        rbOf(c)->setVelocity(v);
+                    }),
                 "angularVelocity", sol::property(
                     [rbOf](const LuaRigidbody& c) { return rbOf(c)->getAngularVelocity(); },
-                    [rbOf](const LuaRigidbody& c, const glm::vec3& v) { rbOf(c)->setAngularVelocity(v); }),
-                "AddForce",   [rbOf](const LuaRigidbody& c, float x, float y, float z) { rbOf(c)->addForce({x, y, z}); },
-                "AddTorque",  [rbOf](const LuaRigidbody& c, float x, float y, float z) { rbOf(c)->addTorque({x, y, z}); },
-                "AddImpulse", [rbOf](const LuaRigidbody& c, float x, float y, float z) { rbOf(c)->addImpulse({x, y, z}); });
+                    [rbOf, &mgr](const LuaRigidbody& c, const glm::vec3& v) {
+                        if (!ensureFinite(mgr, "Rigidbody.angularVelocity", v)) return;
+                        rbOf(c)->setAngularVelocity(v);
+                    }),
+                "AddForce",   [rbOf, &mgr](const LuaRigidbody& c, float x, float y, float z) {
+                    glm::vec3 f(x, y, z);
+                    if (!ensureFinite(mgr, "Rigidbody.AddForce", f)) return;
+                    rbOf(c)->addForce(f);
+                },
+                "AddTorque",  [rbOf, &mgr](const LuaRigidbody& c, float x, float y, float z) {
+                    glm::vec3 t(x, y, z);
+                    if (!ensureFinite(mgr, "Rigidbody.AddTorque", t)) return;
+                    rbOf(c)->addTorque(t);
+                },
+                "AddImpulse", [rbOf, &mgr](const LuaRigidbody& c, float x, float y, float z) {
+                    glm::vec3 f(x, y, z);
+                    if (!ensureFinite(mgr, "Rigidbody.AddImpulse", f)) return;
+                    rbOf(c)->addImpulse(f);
+                });
 
             // Animator: máquina de estados de animación. Se obtiene con
             // GetComponent("Animator"). Sin propiedades: los parámetros se
@@ -407,7 +479,10 @@ namespace DonTopo::ScriptBindings
                 // en el getter, nunca lanza.
                 "SetInt",     [animOf](const LuaAnimator& c, const std::string& n, int v) { animOf(c)->setInt(n, v); },
                 "GetInt",     [animOf](const LuaAnimator& c, const std::string& n) { return animOf(c)->getInt(n); },
-                "SetFloat",   [animOf](const LuaAnimator& c, const std::string& n, float v) { animOf(c)->setFloat(n, v); },
+                "SetFloat",   [animOf, &mgr](const LuaAnimator& c, const std::string& n, float v) {
+                    if (!ensureFinite(mgr, "Animator.SetFloat", v)) return;
+                    animOf(c)->setFloat(n, v);
+                },
                 "GetFloat",   [animOf](const LuaAnimator& c, const std::string& n) { return animOf(c)->getFloat(n); },
                 "GetState",   [animOf](const LuaAnimator& c) { return animOf(c)->currentStateName(); });
         }
@@ -619,8 +694,8 @@ namespace DonTopo::ScriptBindings
         registerVec3(mgr.lua());
         registerLog(mgr);
         registerInput(mgr.lua());
-        registerTransform(mgr.lua());
-        registerComponents(mgr.lua());
+        registerTransform(mgr);
+        registerComponents(mgr);
         registerEntity(mgr);
         registerScene(mgr);   // Task 7
     }
