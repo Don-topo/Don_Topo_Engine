@@ -300,6 +300,82 @@ static void test_load_with_one_camera_has_no_warnings(PhysicsManager& pm, AudioM
     CHECK(loaded.lastWarnings().empty());
 }
 
+// Cuenta cuántos avisos de loaded contienen needle.
+static int countWarnings(const Scene& scene, const char* needle)
+{
+    int n = 0;
+    for (const auto& w : scene.lastWarnings())
+        if (w.find(needle) != std::string::npos) ++n;
+    return n;
+}
+
+// Un aviso que se repite se colapsa a UNA entrada con "(xN)". Sin esto, una
+// malla corrupta escribe un aviso idéntico por vértice y sepulta en el Log los
+// demás avisos de la misma carga.
+//
+// Se montan tres objetos con el MISMO nombre (el contexto del aviso es el
+// nombre, no el índice, así que los tres avisos salen byte a byte iguales) y a
+// los tres se les corrompe camera.far. Como además las tres traen cámara, el
+// prune deja dos avisos también idénticos entre sí: eso fija de paso que
+// collapseWarnings corre DESPUÉS de pruneExtraCameras, no antes.
+static void test_repeated_warnings_are_collapsed(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    for (int i = 0; i < 3; i++)
+        scene.addGameObject("Cam")->setCameraComponent(std::make_shared<CameraComponent>());
+    nlohmann::json j = scene.toJson();
+    for (auto& child : j["root"]["children"])
+        child["camera"]["far"] = nullptr; // corrupto: readFloat avisa y cae al default
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+
+    // Una sola entrada por mensaje, no tres ni dos.
+    CHECK(countWarnings(loaded, "far") == 1);
+    CHECK(countWarnings(loaded, "más de una cámara") == 1);
+    CHECK(loaded.lastWarnings().size() == 2);
+    // Y el recuento real va en el texto.
+    CHECK(countWarnings(loaded, "far: valor corrupto en la escena, se usa el valor por defecto (x3)") == 1);
+    CHECK(countWarnings(loaded, "(x2)") == 1);
+}
+
+// El sufijo solo aparece cuando hay repetición: un aviso único se queda tal cual.
+static void test_single_warning_has_no_suffix(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    scene.addGameObject("Sola")->setCameraComponent(std::make_shared<CameraComponent>());
+    nlohmann::json j = scene.toJson();
+    j["root"]["children"][0]["camera"]["far"] = nullptr;
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    CHECK(loaded.lastWarnings().size() == 1);
+    CHECK(countWarnings(loaded, "(x") == 0);
+}
+
+// insertFromJson (el undo de un Delete) limpia los avisos de la operación
+// anterior en vez de apilar los suyos encima. Sin el clear, m_warnings crecía
+// durante toda la sesión de editor y lastWarnings() dejaba de significar "la
+// última operación", que es lo que su contrato promete.
+static void test_insert_from_json_resets_warnings(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    for (int i = 0; i < 2; i++)
+        scene.addGameObject("Cam")->setCameraComponent(std::make_shared<CameraComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am)); // deja el aviso del prune
+    CHECK(!loaded.lastWarnings().empty());
+
+    // Un insert limpio detrás: sus avisos son los suyos, ninguno.
+    GameObject* go = loaded.addGameObject("Otro");
+    nlohmann::json snapshot = loaded.subtreeToJson(go);
+    loaded.removeGameObject(go);
+    CHECK(loaded.insertFromJson(snapshot, nullptr, 0, pm, am) != nullptr);
+    CHECK(loaded.lastWarnings().empty());
+}
+
 // Clonar un GameObject con cámara NO puede dar dos cámaras. Su único caller es
 // Instantiate de Lua, que corre en Play: ningún gate de UI puede evitarlo, así
 // que la regla vive en Scene.
@@ -509,6 +585,9 @@ int main()
     test_scene_without_camera_block_still_loads(pm, am);
     test_load_with_two_cameras_keeps_first(pm, am);
     test_load_with_one_camera_has_no_warnings(pm, am);
+    test_repeated_warnings_are_collapsed(pm, am);
+    test_single_warning_has_no_suffix(pm, am);
+    test_insert_from_json_resets_warnings(pm, am);
     test_clone_never_keeps_camera(pm, am);
     test_clone_strips_camera_from_descendant(pm, am);
     test_clone_gets_fresh_id(pm, am);
