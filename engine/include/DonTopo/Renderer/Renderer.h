@@ -12,6 +12,7 @@
 #include "DonTopo/Renderer/GpuResources.h"
 #include "DonTopo/Editor/EditorUI.h"
 #include "DonTopo/Renderer/Skybox.h"
+#include "DonTopo/Renderer/SplashScreen.h"
 #include "DonTopo/Editor/Gizmos.h"
 #include <array>
 
@@ -40,6 +41,13 @@ namespace DonTopo {
             // subida de mallas estaticas y auto-fit de camara (necesita meshes).
             // init() la llama despues.
             void initSceneResources(const std::vector<Mesh>& meshes);
+            // Inicializa el splash sobre el render pass del swapchain (requiere
+            // initPresentation ya llamado). false si el logo no carga: el caller
+            // se salta el splash. Solo lo llama el runtime; el editor no.
+            bool beginSplash(const std::string& logoPath);
+            // Presenta un frame con solo el splash a alpha [0,1]. No-op si el
+            // splash no se inicializo.
+            void drawSplashFrame(float alpha);
             void drawFrame(Window& window);
             void shutdown();
             void setCamera(const Camera& camera);
@@ -387,6 +395,7 @@ namespace DonTopo {
 
             EditorUI m_editorUI;
             Skybox   m_skybox;
+            SplashScreen m_splash;
             GameObject* m_sceneRoot = nullptr;
             Scene* m_scene = nullptr;
     };

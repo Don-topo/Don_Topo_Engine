@@ -117,6 +117,86 @@ namespace DonTopo {
         createDescriptorSets();
     }
 
+    bool Renderer::beginSplash(const std::string& logoPath)
+    {
+        // Sobre el render pass del swapchain ya creado por initPresentation
+        // (createRenderPass): color-only, un solo attachment (VK_FORMAT =
+        // m_swapChainFormat, sin depth) — ver el comentario "solo color,
+        // usados por el pass ImGui" en createFramebuffers. El pipeline del
+        // splash (Task 3) se crea con pDepthStencilState = nullptr, que es
+        // compatible con este render pass precisamente porque no tiene
+        // attachment de depth/stencil. No lanza si el logo falta.
+        return m_splash.init(m_gpu, m_renderPass, m_swapChainFormat, logoPath);
+    }
+
+    void Renderer::drawSplashFrame(float alpha)
+    {
+        if (!m_splash.isInitialized()) return;
+
+        vkWaitForFences(m_gpu.device(), 1, &m_inFlight[m_currentFrame], VK_TRUE, UINT64_MAX);
+
+        uint32_t imageIndex;
+        VkResult res = vkAcquireNextImageKHR(m_gpu.device(), m_swapChain, UINT64_MAX,
+            m_imageAvailable[m_currentFrame], VK_NULL_HANDLE, &imageIndex);
+        if (res == VK_ERROR_OUT_OF_DATE_KHR) return; // durante el splash no recreamos: el siguiente frame lo hara
+        if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR) return;
+
+        vkResetFences(m_gpu.device(), 1, &m_inFlight[m_currentFrame]);
+        vkResetCommandBuffer(m_commandBuffers[m_currentFrame], 0);
+
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        vkBeginCommandBuffer(m_commandBuffers[m_currentFrame], &bi);
+
+        VkClearValue clear{};
+        clear.color = { { 0.05f, 0.05f, 0.06f, 1.0f } }; // mismo fondo que el shader
+
+        VkRenderPassBeginInfo rp{};
+        rp.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rp.renderPass        = m_renderPass;
+        rp.framebuffer       = m_swapChainFramebuffers[imageIndex];
+        rp.renderArea.extent = m_swapChainExtent;
+        rp.clearValueCount   = 1; // m_renderPass es color-only (createRenderPass, 1 attachment)
+        rp.pClearValues      = &clear;
+        vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &rp, VK_SUBPASS_CONTENTS_INLINE);
+
+        // Viewport/scissor dinamicos (el pipeline los declara dinamicos).
+        VkViewport vp{ 0, 0, (float)m_swapChainExtent.width, (float)m_swapChainExtent.height, 0.0f, 1.0f };
+        VkRect2D sc{ { 0, 0 }, m_swapChainExtent };
+        vkCmdSetViewport(m_commandBuffers[m_currentFrame], 0, 1, &vp);
+        vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &sc);
+
+        float aspect = m_swapChainExtent.height > 0
+            ? (float)m_swapChainExtent.width / (float)m_swapChainExtent.height : 1.0f;
+        m_splash.recordDraw(m_commandBuffers[m_currentFrame], alpha, aspect);
+
+        vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
+        vkEndCommandBuffer(m_commandBuffers[m_currentFrame]);
+
+        VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkSubmitInfo si{};
+        si.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.waitSemaphoreCount   = 1;
+        si.pWaitSemaphores      = &m_imageAvailable[m_currentFrame];
+        si.pWaitDstStageMask    = &waitStage;
+        si.commandBufferCount   = 1;
+        si.pCommandBuffers      = &m_commandBuffers[m_currentFrame];
+        si.signalSemaphoreCount = 1;
+        si.pSignalSemaphores    = &m_renderFinished[imageIndex];
+        vkQueueSubmit(m_gpu.graphicsQueue(), 1, &si, m_inFlight[m_currentFrame]);
+
+        VkPresentInfoKHR pi{};
+        pi.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        pi.waitSemaphoreCount = 1;
+        pi.pWaitSemaphores    = &m_renderFinished[imageIndex];
+        pi.swapchainCount     = 1;
+        pi.pSwapchains        = &m_swapChain;
+        pi.pImageIndices      = &imageIndex;
+        vkQueuePresentKHR(m_gpu.presentQueue(), &pi);
+
+        m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES;
+    }
+
     void Renderer::drawFrame(Window& window)
     {
         // 1. Espera a que el frame anterior terminó
@@ -306,6 +386,7 @@ namespace DonTopo {
         vkDestroyPipelineLayout(m_gpu.device(), m_computePipelineLayout, nullptr);
         vkDestroyDescriptorSetLayout(m_gpu.device(), m_computeDescLayout, nullptr);
         m_skybox.shutdown(m_gpu);
+        m_splash.shutdown(m_gpu);
         Gizmos::shutdown(m_gpu);
         printf("destroy render items OK\n"); fflush(stdout);
         m_gpu.shutdown();
