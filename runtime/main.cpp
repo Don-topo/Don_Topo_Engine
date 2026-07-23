@@ -10,6 +10,7 @@
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Scripting/ScriptManager.h"
+#include "SplashDriver.h"
 
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -112,7 +113,36 @@ int main(int argc, char** argv)
             }
         }
 
-        renderer.init(window, meshes);
+        // Resuelve el logo: en un paquete exportado esta junto al .exe como
+        // splash.png; en dev (sin exportar) se cae a assets/MainEngineLogo.png.
+        std::string logoPath = "splash.png";
+        {
+            std::error_code lec;
+            if (!std::filesystem::exists(logoPath, lec) || lec)
+                logoPath = "assets/MainEngineLogo.png";
+        }
+
+        renderer.initPresentation(window);
+
+        const auto splashStart = std::chrono::high_resolution_clock::now();
+        const bool haveSplash = renderer.beginSplash(logoPath);
+        const SplashTimings splashT;
+        auto sinceSplash = [&]() {
+            return std::chrono::duration<float>(
+                std::chrono::high_resolution_clock::now() - splashStart).count();
+        };
+        auto pumpSplash = [&](bool loadingDone, float loadingDoneAt) {
+            if (!haveSplash) return;
+            window.pollEvents();
+            SplashState s = splashStateAt(splashT, sinceSplash(), loadingDone, loadingDoneAt);
+            renderer.drawSplashFrame(s.alpha);
+        };
+
+        // Un frame de splash antes de la carga pesada (alpha del fade-in inicial).
+        pumpSplash(false, 0.0f);
+
+        renderer.initSceneResources(meshes);
+        pumpSplash(false, 0.0f);
         // setSceneRoot/setPhysicsManager/setAudioManager (y más abajo
         // setScriptManager) son passthroughs puros al EditorUI embebido del
         // Renderer: en headless no dibujan nada ni cambian ningún cálculo. Se
@@ -133,12 +163,14 @@ int main(int argc, char** argv)
             "assets/skybox/pz.png",
             "assets/skybox/nz.png",
         });
+        pumpSplash(false, 0.0f);
 
         // Pasada 2: meshes animados, después de init como exige el Renderer.
         for (auto* go : allNodes)
         {
             if (go->hasMesh() && go->isSkinned())
                 go->skinnedRenderIndex = renderer.addSkinnedMesh(*go->getSkinnedMesh());
+            pumpSplash(false, 0.0f);
         }
 
         // Mismas luces que el editor: la escena no las serializa.
@@ -166,6 +198,7 @@ int main(int argc, char** argv)
         // Scripts/ va dentro del paquete, junto al ejecutable — a diferencia
         // del editor, que la busca subiendo directorios hacia el repo.
         scriptManager.init("Scripts");
+        pumpSplash(false, 0.0f);
         renderer.setScriptManager(&scriptManager);
 
         glfwSetWindowUserPointer(window.getNativeWindow(), &renderer);
@@ -176,6 +209,23 @@ int main(int argc, char** argv)
             if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
                 glfwSetWindowShouldClose(w, GLFW_TRUE);
         });
+
+        // La carga termino: marcar el instante y drenar el resto del splash
+        // (hold hasta minTotal + fade-out). Fallback simple (sin crossfade
+        // con la escena): el logo funde a su color de fondo y se corta al
+        // primer frame de juego. El crossfade real es una mejora posterior.
+        if (haveSplash)
+        {
+            const float loadingDoneAt = sinceSplash();
+            for (;;)
+            {
+                window.pollEvents();
+                if (window.shouldClose()) break;
+                SplashState s = splashStateAt(splashT, sinceSplash(), true, loadingDoneAt);
+                renderer.drawSplashFrame(s.alpha);
+                if (s.done) break;
+            }
+        }
 
         scriptManager.onPlayStart();
 
