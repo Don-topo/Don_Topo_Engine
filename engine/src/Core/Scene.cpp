@@ -1,3 +1,4 @@
+#include <functional>
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
@@ -961,6 +962,24 @@ namespace DonTopo
 
         GameObject* target = parent ? parent : (src->parent ? src->parent : &m_root);
         nlohmann::json j = nodeToJson(*src);
+
+        // Fuera los "id" del árbol serializado, para que addChild/GameObject
+        // dejen los suyos recién generados.
+        //
+        // nodeFromJson reusa el id que venga en el JSON, y hace bien: es lo que
+        // permite que el Undo de un Delete reconstruya el GameObject con su id
+        // original y los comandos que quedan en el stack lo sigan resolviendo.
+        // Pero al clonar el ORIGINAL SIGUE VIVO, así que reusarlo dejaba dos
+        // nodos con el mismo id; findById devuelve el último del recorrido —el
+        // clon—, y cualquier comando de undo resuelto por id acababa
+        // escribiendo en el objeto equivocado.
+        std::function<void(nlohmann::json&)> stripIds = [&](nlohmann::json& node) {
+            node.erase("id");
+            if (auto it = node.find("children"); it != node.end() && it->is_array())
+                for (nlohmann::json& child : *it)
+                    stripIds(child);
+        };
+        stripIds(j);
 
         GameObject* clone = target->addChild(src->name + " (Clone)");
         // Antes de nodeFromJson: si se limpiara después (como estaba), los
