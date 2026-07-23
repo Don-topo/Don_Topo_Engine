@@ -6,6 +6,7 @@
 #include <optional>
 #include <algorithm>
 #include <cctype>
+#include <regex>
 
 namespace DonTopo {
 
@@ -76,6 +77,35 @@ int characterColumnFromIndex(const TextEditor& editor, const std::string& line, 
 // de inicio (índice de carácter real, no visual) en la misma línea que el
 // cursor.
 struct Fragment { std::string text; int startColumn; };
+
+// Línea donde pintar el marker de un error de sintaxis, dado el error que
+// devuelve checkLuaSyntax y cuántas líneas tiene el editor.
+//
+// Hay dos trampas, las dos medidas (ver los tests de scripting_tests.cpp):
+//
+// 1. Lua reporta los errores de "algo sin cerrar" en <eof>, que cae UNA LÍNEA
+//    MÁS ALLÁ del final del documento — y el editor solo dibuja markers de
+//    líneas que existen, así que ese marker no se pintaba nunca. Es el caso
+//    más frecuente: es lo que pasa al borrar un 'end'.
+// 2. Acotarlo sin más a la última línea tampoco sirve de mucho: el editor
+//    añade un salto final, así que esa última línea suele estar VACÍA y la
+//    banda roja queda al final del fichero, donde no dice nada.
+//
+// Por eso, cuando Lua nombra la construcción que quedó abierta ("'end'
+// expected (to close 'function' at line 12)"), se marca ESA línea: es donde
+// está el problema de verdad. Si no la nombra, se cae al clamp.
+int markerLine(const std::pair<int, std::string>& err, int totalLines)
+{
+    static const std::regex openedAt(R"(to close '[^']*' at line (\d+))");
+    std::smatch match;
+    if (std::regex_search(err.second, match, openedAt))
+    {
+        const int opened = std::stoi(match[1].str());
+        if (opened >= 1 && opened <= totalLines) return opened;
+    }
+    const int line = (err.first > totalLines) ? totalLines : err.first;
+    return line < 1 ? 1 : line;
+}
 
 Fragment extractFragment(const TextEditor& editor)
 {
@@ -151,17 +181,7 @@ void ScriptEditorPanel::saveTab(Tab& tab)
     TextEditor::ErrorMarkers markers;
     auto err = checkLuaSyntax(tab.editor.GetText());
     if (err)
-    {
-        // Acota la línea al documento: Lua reporta los errores de "algo sin
-        // cerrar" en <eof>, que es UNA LÍNEA MÁS ALLÁ del final (2 líneas de
-        // texto -> error en la 3). El editor solo dibuja los markers de las
-        // líneas que existen, así que ese marker se guardaba y no se pintaba
-        // nunca — que es el caso más común, porque es lo que pasa al borrar un
-        // 'end'. Con el clamp, el aviso cae en la última línea real.
-        const int lastLine = tab.editor.GetTotalLines();
-        const int line     = (err->first > lastLine) ? lastLine : err->first;
-        markers[line < 1 ? 1 : line] = err->second;
-    }
+        markers[markerLine(*err, tab.editor.GetTotalLines())] = err->second;
     tab.editor.SetErrorMarkers(markers);
 }
 

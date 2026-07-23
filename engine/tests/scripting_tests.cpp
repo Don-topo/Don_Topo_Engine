@@ -29,6 +29,7 @@
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Audio/AudioManager.h"
+#include <TextEditor.h>
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
@@ -290,6 +291,42 @@ static void test_lua_syntax_check_detects_error()
     CHECK(mid->first == 2);
 }
 
+// El editor real: SetText -> GetText -> checkLuaSyntax, que es exactamente lo
+// que hace saveTab. Fija las dos trampas que impedían ver el marker, medidas
+// con el TextEditor de verdad y no supuestas:
+//
+//  a) GetText() devuelve UN CARÁCTER MÁS del que se metió (el editor añade un
+//     salto final), así que Lua ve una línea de más y sitúa el <eof> fuera del
+//     documento. El editor solo pinta markers de líneas existentes.
+//  b) Esa última línea, además, está VACÍA — acotar el marker ahí lo deja al
+//     final del fichero, sin señalar nada útil.
+static void test_syntax_error_line_is_out_of_document()
+{
+    // Script SIN el 'end' final, con salto final como cualquier fichero real.
+    const std::string roto = "Rotator = {\n  speed = 45\n}\n\nfunction Rotator:Update(dt)\n  local t = 1\n";
+
+    TextEditor ed;
+    ed.SetText(roto);
+    const std::string ida = ed.GetText();
+
+    // (a) el round-trip por el editor añade el salto final
+    CHECK(ida.size() == roto.size() + 1);
+
+    auto err = checkLuaSyntax(ida);
+    CHECK(err.has_value());
+    if (!err) return;
+
+    // El error cae MÁS ALLÁ de la última línea del editor: ese marker no se
+    // pintaría nunca. Es el corazón del bug.
+    CHECK(err->first > ed.GetTotalLines());
+
+    // Y el mensaje nombra la línea donde se abrió lo que quedó sin cerrar
+    // (aquí el 'function' de la línea 5), que es lo que markerLine usa para
+    // poner la banda en un sitio con sentido.
+    CHECK(err->second.find("to close") != std::string::npos);
+    CHECK(err->second.find("at line 5") != std::string::npos);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -313,6 +350,7 @@ int main()
     test_add_force_applies_finite_value(sm, pm);
     test_dead_entity_wins_over_nan(sm);
     test_lua_syntax_check_detects_error();
+    test_syntax_error_line_is_out_of_document();
 
     am.shutdown();
     pm.shutdown();
