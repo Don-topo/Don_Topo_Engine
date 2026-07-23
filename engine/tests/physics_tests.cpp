@@ -9,6 +9,7 @@
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
+#include "DonTopo/Physics/Colliders/Collider.h"
 
 #include <glm/glm.hpp>
 #include <cmath>
@@ -88,6 +89,77 @@ static void test_rebuild_preserves_shape(PhysicsManager& pm)
     CHECK(col->getHalfExtents() == glm::vec3(1.0f)); // geometría intacta
 }
 
+// --- Triggers: la regla de "al menos un Rigidbody" ---------------------------
+//
+// PhysX NO genera pares para dos actores estáticos: no se pueden mover el uno
+// respecto al otro, así que ni siquiera llama al filter shader. Un collider sin
+// Rigidbody es PxRigidStatic desde que la dinámica se separó del Collider, de
+// modo que un trigger sin Rigidbody NO detecta objetos que tampoco lo tengan.
+//
+// Es la misma regla que Unity ("al menos uno de los dos necesita Rigidbody"),
+// pero aquí no había nada que la dijera: se marcaba Is Trigger y no pasaba
+// nada, sin diagnóstico. Estos tests la fijan en código ejecutable, y de paso
+// miden qué combinaciones funcionan de verdad en vez de suponerlo.
+
+// Listener de prueba: cuenta los Enter/Exit que recibe.
+struct CountingListener : ITriggerListener {
+    int enters = 0;
+    int exits  = 0;
+    void onTriggerEnter(const TriggerEvent&) override { ++enters; }
+    void onTriggerExit (const TriggerEvent&) override { ++exits;  }
+};
+
+// Monta trigger y objeto SOLAPADOS (mismo origen) y simula. Devuelve los Enter
+// que recibió el trigger. withRbTrigger/withRbOther deciden si cada lado lleva
+// Rigidbody, que es lo único que cambia entre los tres tests de abajo.
+static int entersWith(PhysicsManager& pm, bool withRbTrigger, bool withRbOther)
+{
+    auto trigger = pm.createBoxColliderComponent(glm::vec3(10.0f), glm::vec3(0.0f),
+                                                  glm::mat4(1.0f), withRbTrigger);
+    auto rbT = std::make_shared<Rigidbody>();
+    if (withRbTrigger)
+    {
+        pm.attachRigidbody(trigger, rbT);
+        rbT->setIsKinematic(true);   // que no se caiga durante la prueba
+    }
+    pm.setTrigger(trigger, true);
+
+    auto other = pm.createBoxColliderComponent(glm::vec3(5.0f), glm::vec3(0.0f),
+                                                glm::mat4(1.0f), withRbOther);
+    auto rbO = std::make_shared<Rigidbody>();
+    if (withRbOther)
+    {
+        pm.attachRigidbody(other, rbO);
+        rbO->setIsKinematic(true);
+    }
+
+    CountingListener listener;
+    trigger->addListener(&listener);
+    step(pm, 5, 1.0f / 60.0f);
+    trigger->removeListener(&listener);
+    pm.setTrigger(trigger, false);
+    return listener.enters;
+}
+
+// EL CASO QUE ROMPÍA: los dos sin Rigidbody, o sea los dos PxRigidStatic.
+// PhysX no forma el par y el trigger no se entera de nada.
+static void test_trigger_needs_a_rigidbody(PhysicsManager& pm)
+{
+    CHECK(entersWith(pm, /*trigger*/false, /*other*/false) == 0);
+}
+
+// Basta con que lo tenga EL OBJETO que entra: static vs dynamic sí forma par.
+static void test_trigger_fires_when_other_has_rigidbody(PhysicsManager& pm)
+{
+    CHECK(entersWith(pm, /*trigger*/false, /*other*/true) > 0);
+}
+
+// O con que lo tenga el propio trigger, que es el caso simétrico.
+static void test_trigger_fires_when_trigger_has_rigidbody(PhysicsManager& pm)
+{
+    CHECK(entersWith(pm, /*trigger*/true, /*other*/false) > 0);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -97,6 +169,9 @@ int main()
     test_freeze_position_y(pm);
     test_add_impulse(pm);
     test_rebuild_preserves_shape(pm);
+    test_trigger_needs_a_rigidbody(pm);
+    test_trigger_fires_when_other_has_rigidbody(pm);
+    test_trigger_fires_when_trigger_has_rigidbody(pm);
     pm.shutdown();
     if (g_failures == 0) std::printf("ALL PHYSICS TESTS PASSED\n");
     std::fflush(stdout);

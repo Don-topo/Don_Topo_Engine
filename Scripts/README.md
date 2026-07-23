@@ -32,10 +32,35 @@ function Rotator:OnDestroy() end
 | `FixedUpdate(dt)` | Paso fijo (`1/60`), acumulador con tope anti spiral-of-death |
 | `LateUpdate()` | Cada frame, después de todos los `Update` |
 | `OnDestroy()` | Al destruirse el GameObject o quitarse el componente |
+| `OnTriggerEnter(other)` | Otro collider entra en este trigger |
+| `OnTriggerStay(other)` | Cada frame de física mientras siguen solapando |
+| `OnTriggerExit(other)` | El otro collider sale |
 
 Todos son opcionales — solo se llaman los que el script define. Un error en
 cualquiera loguea el mensaje y **desactiva ese componente** (deja de recibir
 callbacks) hasta hot reload o `Stop`; nunca crashea el motor.
+
+### Triggers
+
+Los tres `OnTrigger*` exigen que el GameObject tenga un collider con **Is
+Trigger** marcado en Properties. `other` es una `Entity`, igual que
+`self.entity`.
+
+Tres reglas que se descubren tarde si nadie las dice:
+
+- **Al menos uno de los dos objetos necesita un Rigidbody** — el trigger o el
+  que entra, da igual cuál. PhysX no reporta solapes entre dos objetos
+  estáticos, y un collider sin Rigidbody lo es. Sin esto no salta nada y no hay
+  ningún error: el editor lo avisa bajo el checkbox. Misma regla que Unity.
+- **Solo el lado trigger recibe los callbacks.** El objeto que entra no se
+  entera, salvo que él también sea trigger frente a un no-trigger.
+- **Trigger contra trigger no dispara nada**, por la misma limitación de PhysX.
+
+`OnTriggerStay` se sintetiza por frame (PhysX solo da Enter y Exit), así que
+loguear ahí inunda la consola enseguida.
+
+Ejemplos: `Scripts/TriggerProbe.lua` (cuenta entradas y salidas) y
+`Scripts/TriggerTest.lua` (destruye su GameObject en el Enter).
 
 Scripts solo corren en **Play Mode**. `self.entity` (tipo `Entity`, ver abajo)
 se inyecta automáticamente en la instancia.
