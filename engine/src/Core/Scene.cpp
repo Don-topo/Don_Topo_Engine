@@ -35,6 +35,22 @@ namespace
     using DonTopo::CameraComponent;
     using DonTopo::AnimatorComponent;
 
+    // Forward declarations: animatorFromJson (más abajo) necesita estos
+    // lectores tolerantes a JSON corrupto (definidos junto a jsonToMat4/
+    // jsonToVec3, después en el fichero) para el threshold de las
+    // condiciones numéricas y el editorPos de los estados.
+    //
+    // required (default false, back-compat de toda la vida): la clave/índice
+    // AUSENTE también avisa cuando required == true. Es para los campos que
+    // nodeToJson escribe SIEMPRE (nunca son opcionales de verdad) — ver el
+    // comentario grande de abajo, hallazgo 1 del review de este fix.
+    float readFloat(const nlohmann::json& j, const char* key, float def,
+                     std::vector<std::string>* warnings, const std::string& contexto,
+                     bool required = false);
+    float readArrayFloat(const nlohmann::json& arr, size_t idx, float def,
+                          std::vector<std::string>* warnings, const std::string& contexto,
+                          bool required = false);
+
     nlohmann::json mat4ToJson(const glm::mat4& m)
     {
         auto arr = nlohmann::json::array();
@@ -163,7 +179,8 @@ namespace
     // parámetros, triggers pendientes) porque no se serializa: el Stop de Play
     // reconstruye la escena desde JSON, así que el reset al estado de entrada
     // sale gratis, y guardar en mitad de Play no hornea estado transitorio.
-    std::shared_ptr<AnimatorComponent> animatorFromJson(const nlohmann::json& j)
+    std::shared_ptr<AnimatorComponent> animatorFromJson(const nlohmann::json& j,
+                                                          std::vector<std::string>* warnings)
     {
         auto a = std::make_shared<AnimatorComponent>();
 
@@ -183,7 +200,8 @@ namespace
                 st.clipName = s.value("clip", std::string());
                 st.loop     = s.value("loop", true);
                 if (s.contains("pos") && s["pos"].is_array() && s["pos"].size() == 2)
-                    st.editorPos = glm::vec2(s["pos"][0].get<float>(), s["pos"][1].get<float>());
+                    st.editorPos = glm::vec2(readArrayFloat(s["pos"], 0, 0.0f, warnings, "animator.state." + st.name + ".pos"),
+                                              readArrayFloat(s["pos"], 1, 0.0f, warnings, "animator.state." + st.name + ".pos"));
                 // duration/ticksPerSecond/clipIndex los rellena bindClips contra
                 // el SkinnedMesh: son del FBX, no del fichero de escena.
                 a->addState(st);
@@ -208,7 +226,9 @@ namespace
                         // Ausentes en escenas anteriores a los parámetros
                         // numéricos: caen en los defaults del struct.
                         cond.compare   = compareFromStr(c.value("compare", std::string("greater")));
-                        cond.threshold = c.value("threshold", 0.0f);
+                        cond.threshold = readFloat(c, "threshold", 0.0f, warnings,
+                                                    "animator.transition[" + std::to_string(tr.fromState) +
+                                                    "->" + std::to_string(tr.toState) + "].condition");
                         tr.conditions.push_back(cond);
                     }
                 }
@@ -369,28 +389,180 @@ namespace
         return j;
     }
 
-    glm::mat4 jsonToMat4(const nlohmann::json& j)
+    // --- Lectura tolerante de números desde un .scene potencialmente corrupto ---
+    //
+    // std::clamp(NaN, lo, hi) devuelve NaN (toda comparación con NaN es
+    // falsa, así que el clamp no lo detiene) y nlohmann serializa un NaN
+    // como JSON "null". Un valor así llegado desde un script Lua roto (un
+    // 0/0, por ejemplo — ver el guard equivalente en ScriptBindings.cpp)
+    // pasa el clamp de setVolume/setPitch/etc., se cuela en el .scene como
+    // null y, al releerlo, tanto ".at(key).get<float>()" como
+    // ".value(key, default)" lanzan json::exception (type_error.302, "type
+    // must be number, but is null"). Antes de este fix esa excepción escapaba
+    // de nodeFromJson sin que nadie la distinguiera de una escena realmente
+    // corrupta, y Scene::fromJson la capturaba devolviendo false: UN solo
+    // campo corrupto tumbaba la carga de la escena ENTERA. Los infinitos, en
+    // cambio, el clamp de rango sí los para bien (clamp(+inf,0,1) == 1.0) —
+    // el peligroso de verdad es el NaN, no el infinito; se comprueba con
+    // std::isfinite (cubre ambos) por robustez, pero es el caso NaN el que
+    // motiva este bloque entero.
+    //
+    // warnings acepta nullptr por robustez de la firma, pero en la práctica
+    // nunca lo es: los 9 call-sites de jsonToVec3 (y, en cascada, todo lo que
+    // cuelga de nodeFromJson) pasan &m_warnings — los tres callers de
+    // nodeFromJson (fromJson, insertFromJson, cloneGameObject) lo hacen
+    // siempre.
+    //
+    // required distingue dos familias de campos:
+    //  - required == false (default): back-compat legítima. Son campos que se
+    //    añadieron a lo largo de la vida del formato (volume, pitch, fov,
+    //    near, far, mass, drag, threshold...) y una escena vieja nunca los
+    //    escribió. Ausente -> default silencioso, sin aviso.
+    //  - required == true: campos que nodeToJson escribe SIEMPRE, incondicio-
+    //    nalmente (halfExtents/center de los colliders, pos/color/uv/normal/
+    //    tangent de cada vértice...). Ahí la ausencia NUNCA es back-compat:
+    //    es la misma corrupción (merge mal resuelto, escritura truncada,
+    //    edición a mano) que un valor null o no finito, así que también avisa
+    //    nombrando el campo y el objeto en vez de fabricar en silencio un
+    //    valor plausible (una caja de 25 unidades en el origen que el usuario
+    //    ve, no cuestiona, y acaba sobrescribiendo el dato real al Guardar).
+
+    // Lee j[key] como float. Ausente: silencioso si !required, avisa si
+    // required. Valor null, tipo no numérico, o número no finito (NaN/Inf):
+    // SIEMPRE avisa (si hay canal) nombrando el campo, y cae a def.
+    float readFloat(const nlohmann::json& j, const char* key, float def,
+                     std::vector<std::string>* warnings, const std::string& contexto,
+                     bool required)
     {
+        if (!j.contains(key))
+        {
+            if (required && warnings)
+                warnings->push_back(contexto + "." + key +
+                                     ": falta en la escena, se usa el valor por defecto");
+            return def;
+        }
+        const nlohmann::json& v = j[key];
+        if (v.is_null() || !v.is_number())
+        {
+            if (warnings)
+                warnings->push_back(contexto + "." + key +
+                                     ": valor corrupto en la escena, se usa el valor por defecto");
+            return def;
+        }
+        float f = v.get<float>();
+        if (!std::isfinite(f))
+        {
+            if (warnings)
+                warnings->push_back(contexto + "." + key +
+                                     ": valor no finito (NaN/Inf) en la escena, se usa el valor por defecto");
+            return def;
+        }
+        return f;
+    }
+
+    // Variante de readFloat para un ELEMENTO de un array JSON por índice (en
+    // vez de una clave de objeto) — la usan jsonToVec3/jsonToMat4/uv.
+    //
+    // OJO: "arr no es un array" y "arr es un array pero más corto de lo
+    // esperado" son dos anomalías DISTINTAS y se tratan distinto (hallazgo 2
+    // del review): un valor no-array (típicamente null — la forma exacta que
+    // toma un NaN serializado, ver comentario grande de arriba) es corrupción
+    // de verdad y avisa SIEMPRE, sea o no required el campo. Un array corto
+    // (índice fuera de rango) es la firma de "campo ausente" cuando el
+    // llamador lo extrajo con ".value(key, array())": ahí sí aplica la regla
+    // de required, igual que en readFloat.
+    float readArrayFloat(const nlohmann::json& arr, size_t idx, float def,
+                          std::vector<std::string>* warnings, const std::string& contexto,
+                          bool required)
+    {
+        if (!arr.is_array())
+        {
+            if (warnings)
+                warnings->push_back(contexto + "[" + std::to_string(idx) +
+                                     "]: se esperaba un número y no lo es, se usa el valor por defecto");
+            return def;
+        }
+        if (idx >= arr.size())
+        {
+            if (required && warnings)
+                warnings->push_back(contexto + "[" + std::to_string(idx) +
+                                     "]: falta en la escena, se usa el valor por defecto");
+            return def;
+        }
+        const nlohmann::json& v = arr[idx];
+        if (v.is_null() || !v.is_number())
+        {
+            if (warnings)
+                warnings->push_back(contexto + "[" + std::to_string(idx) +
+                                     "]: valor corrupto en la escena, se usa el valor por defecto");
+            return def;
+        }
+        float f = v.get<float>();
+        if (!std::isfinite(f))
+        {
+            if (warnings)
+                warnings->push_back(contexto + "[" + std::to_string(idx) +
+                                     "]: valor no finito (NaN/Inf) en la escena, se usa el valor por defecto");
+            return def;
+        }
+        return f;
+    }
+
+    // A diferencia de jsonToVec3 (que rellena componente a componente), aquí
+    // CUALQUIER float corrupto de los 16 descarta la matriz entera y cae a la
+    // identidad: una transformación "a medias" (15 valores originales + 1
+    // puesto a su valor de identidad) puede parecer plausible y en realidad
+    // tener la escala o la rotación rotas de forma silenciosa — preferible
+    // una identidad reconocible y un aviso claro a un Frankenstein de campos
+    // mezclados. Ver el bloque de comentarios de arriba para el porqué NaN.
+    glm::mat4 jsonToMat4(const nlohmann::json& j, std::vector<std::string>* warnings,
+                          const std::string& contexto)
+    {
+        bool ok = j.is_array() && j.size() >= 16;
+        for (int i = 0; ok && i < 16; ++i)
+            ok = j[i].is_number() && std::isfinite(j[i].get<float>());
+        if (!ok)
+        {
+            if (warnings)
+                warnings->push_back(contexto + ": localTransform corrupto en la escena "
+                                     "(valor no numérico, ausente o no finito); se usa la matriz identidad");
+            return glm::mat4(1.0f);
+        }
         glm::mat4 m(1.0f);
         float* p = glm::value_ptr(m);
         for (int i = 0; i < 16; ++i)
-            p[i] = j.at(i).get<float>();
+            p[i] = j[i].get<float>();
         return m;
     }
 
-    glm::vec3 jsonToVec3(const nlohmann::json& j)
+    // required se reenvía tal cual a los 3 readArrayFloat: un vec3 required
+    // ausente o corrupto avisa 3 veces (una por componente), pero cada línea
+    // ya nombra el objeto y el campo (contexto), así que sigue siendo
+    // diagnosticable — no merece la complejidad de deduplicar en un único
+    // aviso a nivel de vec3.
+    glm::vec3 jsonToVec3(const nlohmann::json& j, std::vector<std::string>* warnings,
+                         const std::string& contexto, const glm::vec3& def = glm::vec3(0.0f),
+                         bool required = false)
     {
-        return glm::vec3(j.at(0).get<float>(), j.at(1).get<float>(), j.at(2).get<float>());
+        return glm::vec3(readArrayFloat(j, 0, def.x, warnings, contexto, required),
+                          readArrayFloat(j, 1, def.y, warnings, contexto, required),
+                          readArrayFloat(j, 2, def.z, warnings, contexto, required));
     }
 
-    DonTopo::Vertex jsonToVertex(const nlohmann::json& j)
+    // Vertex: nodeToJson lo escribe SIEMPRE con sus 5 campos completos (nunca
+    // es opcional un vértice "a medias") — todos required (hallazgo 1 del
+    // review).
+    DonTopo::Vertex jsonToVertex(const nlohmann::json& j, std::vector<std::string>* warnings,
+                                  const std::string& contexto)
     {
         DonTopo::Vertex v{};
-        v.pos     = jsonToVec3(j.at("pos"));
-        v.color   = jsonToVec3(j.at("color"));
-        v.uv      = glm::vec2(j.at("uv").at(0).get<float>(), j.at("uv").at(1).get<float>());
-        v.normal  = jsonToVec3(j.at("normal"));
-        v.tangent = jsonToVec3(j.at("tangent"));
+        v.pos     = jsonToVec3(j.value("pos",    nlohmann::json::array()), warnings, contexto + ".pos", glm::vec3(0.0f), true);
+        v.color   = jsonToVec3(j.value("color",  nlohmann::json::array()), warnings, contexto + ".color", glm::vec3(1.0f), true);
+        const nlohmann::json uv = j.value("uv", nlohmann::json::array());
+        v.uv      = glm::vec2(readArrayFloat(uv, 0, 0.0f, warnings, contexto + ".uv", true),
+                               readArrayFloat(uv, 1, 0.0f, warnings, contexto + ".uv", true));
+        v.normal  = jsonToVec3(j.value("normal",  nlohmann::json::array()), warnings, contexto + ".normal", glm::vec3(0.0f, 1.0f, 0.0f), true);
+        v.tangent = jsonToVec3(j.value("tangent", nlohmann::json::array()), warnings, contexto + ".tangent", glm::vec3(1.0f, 0.0f, 0.0f), true);
         return v;
     }
 
@@ -427,7 +599,8 @@ namespace
         // comandos siguientes en el stack lo siguen resolviendo bien.
         if (j.contains("id"))
             node->id = j.at("id").get<uint64_t>();
-        node->localTransform = jsonToMat4(j.at("localTransform"));
+        node->localTransform = jsonToMat4(j.value("localTransform", nlohmann::json::array()),
+                                           warnings, "localTransform de '" + node->name + "'");
         node->worldTransform = parentWorld * node->localTransform;
 
         if (j.contains("mesh"))
@@ -556,7 +729,7 @@ namespace
                     auto mesh = std::make_shared<DonTopo::Mesh>();
                     mesh->name = meshName;
                     for (const auto& vj : j["mesh"]["vertices"])
-                        mesh->vertices.push_back(jsonToVertex(vj));
+                        mesh->vertices.push_back(jsonToVertex(vj, warnings, "mesh de '" + node->name + "'"));
                     mesh->indices = j["mesh"]["indices"].get<std::vector<uint32_t>>();
                     node->setMesh(std::move(mesh));
                 }
@@ -594,8 +767,10 @@ namespace
         if (j.contains("boxCollider"))
         {
             const auto& c = j["boxCollider"];
+            const std::string ctx = "boxCollider de '" + node->name + "'";
             node->setBoxCollider(physics.createBoxColliderComponent(
-                jsonToVec3(c.at("halfExtents")), jsonToVec3(c.at("center")),
+                jsonToVec3(c.value("halfExtents", nlohmann::json::array()), warnings, ctx + ".halfExtents", glm::vec3(25.0f), true),
+                jsonToVec3(c.value("center", nlohmann::json::array()), warnings, ctx + ".center", glm::vec3(0.0f), true),
                 node->worldTransform, /*dynamic=*/false));
             node->getBoxCollider()->setOwner(node);
             physics.setTrigger(node->getBoxCollider(), c.value("isTrigger", false));
@@ -603,8 +778,10 @@ namespace
         if (j.contains("sphereCollider"))
         {
             const auto& c = j["sphereCollider"];
+            const std::string ctx = "sphereCollider de '" + node->name + "'";
             node->setSphereCollider(physics.createSphereColliderComponent(
-                c.at("radius").get<float>(), jsonToVec3(c.at("center")),
+                readFloat(c, "radius", 25.0f, warnings, ctx, true),
+                jsonToVec3(c.value("center", nlohmann::json::array()), warnings, ctx + ".center", glm::vec3(0.0f), true),
                 node->worldTransform, /*dynamic=*/false));
             node->getSphereCollider()->setOwner(node);
             physics.setTrigger(node->getSphereCollider(), c.value("isTrigger", false));
@@ -612,9 +789,12 @@ namespace
         if (j.contains("capsuleCollider"))
         {
             const auto& c = j["capsuleCollider"];
+            const std::string ctx = "capsuleCollider de '" + node->name + "'";
             node->setCapsuleCollider(physics.createCapsuleColliderComponent(
-                c.at("radius").get<float>(), c.at("halfHeight").get<float>(),
-                jsonToVec3(c.at("center")), node->worldTransform, /*dynamic=*/false));
+                readFloat(c, "radius", 15.0f, warnings, ctx, true),
+                readFloat(c, "halfHeight", 25.0f, warnings, ctx, true),
+                jsonToVec3(c.value("center", nlohmann::json::array()), warnings, ctx + ".center", glm::vec3(0.0f), true),
+                node->worldTransform, /*dynamic=*/false));
             node->getCapsuleCollider()->setOwner(node);
             physics.setTrigger(node->getCapsuleCollider(), c.value("isTrigger", false));
         }
@@ -622,7 +802,8 @@ namespace
         {
             const auto& c = j["planeCollider"];
             node->setPlaneCollider(physics.createPlaneColliderComponent(
-                jsonToVec3(c.at("center")), node->worldTransform));
+                jsonToVec3(c.value("center", nlohmann::json::array()), warnings, "planeCollider de '" + node->name + "'.center", glm::vec3(0.0f), true),
+                node->worldTransform));
             node->getPlaneCollider()->setOwner(node);
             physics.setTrigger(node->getPlaneCollider(), c.value("isTrigger", false));
         }
@@ -641,12 +822,13 @@ namespace
         if (j.contains("rigidbody"))
         {
             const auto& r = j["rigidbody"];
+            const std::string ctx = "rigidbody de '" + node->name + "'";
             auto rb = std::make_shared<Rigidbody>();
-            rb->setMass(r.value("mass", 1.0f));
+            rb->setMass(readFloat(r, "mass", 1.0f, warnings, ctx));
             rb->setUseGravity(r.value("useGravity", true));
             rb->setIsKinematic(r.value("isKinematic", false));
-            rb->setDrag(r.value("drag", 0.0f));
-            rb->setAngularDrag(r.value("angularDrag", 0.05f));
+            rb->setDrag(readFloat(r, "drag", 0.0f, warnings, ctx));
+            rb->setAngularDrag(readFloat(r, "angularDrag", 0.05f, warnings, ctx));
             rb->setConstraints(r.value("constraints", 0u));
             node->setRigidbody(rb);
             if (auto col = node->anyCollider()) physics.attachRigidbody(col, rb);
@@ -670,6 +852,7 @@ namespace
         if (j.contains("camera"))
         {
             const auto& c = j["camera"];
+            const std::string ctx = "camera de '" + node->name + "'";
             auto cam = std::make_shared<CameraComponent>();
             cam->setMode(c.value("mode", std::string("perspective")) == "orthographic"
                              ? CameraComponent::ProjectionMode::Orthographic
@@ -677,17 +860,17 @@ namespace
             // far ANTES que near: setNear clampa contra el far ACTUAL, así que
             // cargarlos al revés recortaría un near grande contra el far por
             // defecto (2000) y lo dejaría mal.
-            cam->setFar(c.value("far", 2000.0f));
-            cam->setNear(c.value("near", 1.0f));
-            cam->setFov(c.value("fov", 45.0f));
-            cam->setOrthographicSize(c.value("orthographicSize", 100.0f));
+            cam->setFar(readFloat(c, "far", 2000.0f, warnings, ctx));
+            cam->setNear(readFloat(c, "near", 1.0f, warnings, ctx));
+            cam->setFov(readFloat(c, "fov", 45.0f, warnings, ctx));
+            cam->setOrthographicSize(readFloat(c, "orthographicSize", 100.0f, warnings, ctx));
             node->setCameraComponent(cam);
         }
         // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
         // y cargan igual (version sigue en 1).
         if (j.contains("animator"))
         {
-            auto anim = animatorFromJson(j["animator"]);
+            auto anim = animatorFromJson(j["animator"], warnings);
             // El bloque "mesh" se parsea ANTES que este, así que el SkinnedMesh
             // ya está montado y bindClips puede resolver los nombres de clip
             // aquí mismo. Sin malla skinned (grafo huérfano) los clipIndex se
@@ -708,9 +891,12 @@ namespace
                 clip->setPlayOnAwake(c.value("playOnAwake", false));
                 // .value() con default: compat con escenas guardadas antes de
                 // que existieran estos campos. Con .at() reventaría toda
-                // escena anterior a la feature.
-                clip->setVolume(c.value("volume", 1.0f));
-                clip->setPitch(c.value("pitch", 1.0f));
+                // escena anterior a la feature. readFloat además tolera un
+                // "null" (NaN serializado, ver el bloque de comentarios junto
+                // a jsonToMat4): antes, ese null hacía fallar fromJson entero.
+                const std::string ctx = "audioClip de '" + node->name + "'";
+                clip->setVolume(readFloat(c, "volume", 1.0f, warnings, ctx));
+                clip->setPitch(readFloat(c, "pitch", 1.0f, warnings, ctx));
                 node->setAudioClip(std::move(clip));
             }
             // clip nullptr (asset roto/formato no soportado): node queda sin
