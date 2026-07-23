@@ -131,6 +131,23 @@ Up/Down/Left/Right/A..Z/Num0..Num9`, `MouseButton.Left/Right/Middle`.
 | `t:Translate(Vec3 delta)` | Suma delta a la posición local |
 | `t:Rotate(Vec3 deltaEulerGrados)` | Rotación incremental compuesta como quaternion (no se atasca en rotación continua multi-eje) |
 
+### Mover por Transform NO colisiona
+
+Un objeto movido con `SetPosition`/`Translate` **atraviesa las paredes**, tenga
+o no Rigidbody. No es un fallo: mover el transform es un teletransporte, y
+PhysX no resuelve colisiones en un teleport — con Rigidbody kinematic va a
+`setKinematicTarget` (un kinematic empuja a los dinámicos, pero nada lo detiene
+a él) y con Rigidbody dinámico va a `setGlobalPose`, que lo deja donde le digas
+aunque quede solapado. Es la misma regla que en Unity con `transform.position`.
+
+Para que un objeto **choque** de verdad hay que moverlo por la física: dejarlo
+caer con gravedad, o empujarlo con `AddForce`/`AddImpulse`/`velocity` del
+Rigidbody.
+
+Los **triggers sí funcionan** moviendo por Transform: detectan solape, que no
+necesita resolución de colisión. Por eso un objeto puede disparar
+`OnTriggerEnter` de una zona y aun así atravesar una pared sólida.
+
 ## Scene
 
 | Método | Descripción |
