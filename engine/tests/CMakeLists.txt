@@ -30,6 +30,7 @@ target_compile_features(dt_scripting_tests PRIVATE cxx_std_20)
 add_executable(dt_splash_tests splash_tests.cpp)
 target_link_libraries(dt_splash_tests PRIVATE DonTopoEngine)
 target_compile_features(dt_splash_tests PRIVATE cxx_std_20)
+target_include_directories(dt_splash_tests PRIVATE ${CMAKE_SOURCE_DIR}/runtime)
 
 # Ambos ejecutables enlazan DonTopoEngine, que arrastra FMOD (Audio). Sin
 # copiar fmod.dll al lado del .exe, un clone limpio falla en runtime con
