@@ -511,6 +511,28 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                              "arrancara hasta que copies esa DLL junto al .exe.");
 #endif
 
+    // Un binario Debug de MSVC enlaza el CRT de depuracion (ucrtbased.dll,
+    // MSVCP140D.dll, VCRUNTIME140D.dll y companeros). Microsoft NO permite
+    // redistribuir esas DLL y solo estan instaladas donde hay Visual Studio:
+    // el paquete arranca en la maquina que lo exporto y muere con "falta
+    // ucrtbased.dll" en la de cualquier otro. Es justo el fallo que ninguna
+    // prueba local puede ver, porque la maquina del desarrollador siempre
+    // cumple la precondicion que le falta al jugador.
+    //
+    // Basta con mirar como se compilo ESTE binario: el runtime que se copia al
+    // paquete es siempre de la misma configuracion que el editor que exporta
+    // (el POST_BUILD de runtime/CMakeLists.txt lo deja junto a Sandbox.exe).
+    //
+    // Aviso y no error, mismo criterio que fmod.dll: exportar en Debug para
+    // probar en local es legitimo y el resto del paquete es correcto.
+#ifndef NDEBUG
+    r.messages.push_back("Aviso: exportado en configuracion Debug. Este paquete solo arranca en "
+                         "maquinas con Visual Studio instalado, porque enlaza el CRT de "
+                         "depuracion de MSVC (ucrtbased.dll y companeros), que no es "
+                         "redistribuible. Para repartir el juego: configure-release.bat, "
+                         "build-release.bat, y exporta desde build-ninja-release.");
+#endif
+
     if (!FileManager::writeJson((pkg / "game.scene").string(), rewrittenScene))
     {
         r.messages.push_back("No se pudo escribir game.scene");
