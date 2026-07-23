@@ -58,15 +58,27 @@ GLFW, GLM, Assimp, stb_image, ImGui, ImGuiFileDialog, ImGuizmo, imgui-node-edito
 ## Build (Windows)
 
 ```batch
-# Configure + build (release)
+# Debug (build-ninja\)
 configure.bat
-build-release.bat
+build.bat
+build-ninja\sandbox\Sandbox.exe
 
-# Run
+# Release (build-ninja-release\)
+configure-release.bat
+build-release.bat
 build-ninja-release\sandbox\Sandbox.exe
 ```
 
+Each configuration has its own build directory and its own configure step: `build-release.bat`
+fails until `configure-release.bat` has generated `build-ninja-release\`.
+
 Or via VS Code: `Ctrl+Shift+B` → **Build Release**.
+
+**Ship games from a Release editor.** A Debug build links the MSVC debug CRT (`ucrtbased.dll`,
+`MSVCP140D.dll` and friends), which Microsoft does not allow redistributing and which only exists
+on machines with Visual Studio installed. A package exported from a Debug editor runs on the
+machine that produced it and dies with a missing-DLL error anywhere else — File > Export Game
+warns when this applies. Debug packages are still fine for testing locally.
 
 Shaders are compiled from `shaders/*.{vert,frag,comp}` to SPIR-V automatically during build and copied to both the executable directory and `shaders/`.
 

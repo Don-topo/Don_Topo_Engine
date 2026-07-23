@@ -584,6 +584,49 @@ static void test_zero_shaders_marks_not_ok()
     fs::remove_all(dest, ec);
 }
 
+// Un paquete exportado desde un editor Debug enlaza el CRT de depuracion de
+// MSVC, que no es redistribuible: arranca en la maquina que lo exporto y falla
+// con "falta ucrtbased.dll" en la de cualquier otro. El export sigue siendo
+// valido (probar en local es legitimo), pero tiene que decirlo, porque es un
+// fallo que ninguna prueba en la maquina del desarrollador puede destapar.
+//
+// El test comprueba las DOS ramas segun como se compilo el propio test: en
+// Debug el aviso tiene que estar, y en Release NO puede estar (un aviso que
+// saliera siempre seria ruido que se acaba ignorando, justo cuando importa).
+static void test_debug_build_warns_about_crt(const fs::path& root)
+{
+    std::error_code ec;
+    fs::path fixRoot = fs::temp_directory_path(ec) / "dt_exporter_crt_fixture";
+    fs::remove_all(fixRoot, ec);
+    fs::create_directories(fixRoot / "assets" / "skybox", ec);
+    fs::create_directories(fixRoot / "shaders", ec);
+    for (const char* face : { "px", "nx", "py", "ny", "pz", "nz" })
+        std::ofstream(fixRoot / "assets" / "skybox" / (std::string(face) + ".png")) << "png";
+    std::ofstream(fixRoot / "shaders" / "triangle.vert.spv") << "spv";
+    std::ofstream(fixRoot / "DonTopoRuntime.exe") << "MZ";
+    (void)root;
+
+    fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_crt_out";
+    fs::remove_all(dest, ec);
+
+    Scene scene;
+    ExportResult r = writeExportPackage({}, scene.toJson(), dest, "MiJuego",
+                                        fixRoot, fixRoot / "Scripts", fixRoot / "DonTopoRuntime.exe");
+    CHECK(r.ok); // el paquete es correcto: esto es un aviso, no un error
+
+    bool avisa = std::any_of(r.messages.begin(), r.messages.end(), [](const std::string& m) {
+        return m.find("Debug") != std::string::npos && m.find("ucrtbased") != std::string::npos;
+    });
+#ifndef NDEBUG
+    CHECK(avisa);
+#else
+    CHECK(!avisa);
+#endif
+
+    fs::remove_all(fixRoot, ec);
+    fs::remove_all(dest, ec);
+}
+
 // exportGame aborta sin camara en la escena, antes de tocar disco: sin ella
 // el juego no podria renderizar y el fallo debe ocurrir aqui, no en un .exe
 // que abre una ventana negra.
@@ -655,6 +698,7 @@ int main()
     test_valid_export_game_name();
     test_incomplete_skybox_marks_not_ok();
     test_zero_shaders_marks_not_ok();
+    test_debug_build_warns_about_crt(root);
     test_exportGame_aborts_without_camera(root);
     test_exportGame_aborts_missing_asset(root);
 
