@@ -74,6 +74,25 @@ std::string prettyPropLabel(const std::string& raw)
 // drag termina en el mismo valor con el que empezó (ruido de redondeo).
 bool nearlyEqualF(float a, float b) { return std::fabs(a - b) < 0.0001f; }
 
+// Aviso bajo el checkbox "Is Trigger" cuando el GameObject no tiene Rigidbody.
+//
+// PhysX no genera pares entre dos actores estáticos —no pueden moverse el uno
+// respecto al otro, así que ni siquiera llama al filter shader—, y un collider
+// sin Rigidbody es PxRigidStatic. O sea: un trigger sin Rigidbody NO detecta
+// objetos que tampoco lo tengan. Es la misma regla que Unity, pero aquí no
+// había nada que la dijera: se marcaba el checkbox, no pasaba nada, y no
+// quedaba ni una pista de por qué. Ver los tests de triggers en
+// physics_tests.cpp, que fijan las tres combinaciones.
+void drawTriggerRigidbodyHint(const DonTopo::GameObject* go, bool isTrigger)
+{
+    if (!isTrigger || !go || go->hasRigidbody()) return;
+    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
+                       "Sin Rigidbody: solo detecta objetos que sí lo tengan");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("PhysX no reporta solapes entre dos objetos estáticos.\n"
+                          "Añade un Rigidbody a este objeto o al que deba entrar.");
+}
+
 } // namespace
 
 namespace DonTopo {
@@ -470,6 +489,7 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
                     "Is Trigger de '" + ctx.selected->name + "' (Box Collider)", before, after, applyBoxState));
             }
         }
+        drawTriggerRigidbodyHint(ctx.selected, m_editIsTrigger);
 
         ImGui::TreePop();
     }
@@ -596,6 +616,7 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
                     "Is Trigger de '" + ctx.selected->name + "' (Sphere Collider)", before, after, applySphereState));
             }
         }
+        drawTriggerRigidbodyHint(ctx.selected, m_editSphereIsTrigger);
 
         ImGui::TreePop();
     }
@@ -734,6 +755,7 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
                     "Is Trigger de '" + ctx.selected->name + "' (Capsule Collider)", before, after, applyCapsuleState));
             }
         }
+        drawTriggerRigidbodyHint(ctx.selected, m_editCapsuleIsTrigger);
 
         ImGui::TreePop();
     }
@@ -847,6 +869,7 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
                     "Is Trigger de '" + ctx.selected->name + "' (Plane Collider)", before, after, applyPlaneState));
             }
         }
+        drawTriggerRigidbodyHint(ctx.selected, m_editPlaneIsTrigger);
 
         ImGui::TreePop();
     }

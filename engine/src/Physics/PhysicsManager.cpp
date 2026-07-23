@@ -70,10 +70,20 @@ namespace {
     // Filter shader: para pares que involucran un trigger, pide notificación
     // Enter/Exit (eTRIGGER_DEFAULT) SIN suprimir por kinematic — el
     // PxDefaultSimulationFilterShader descarta los pares kinematic-kinematic y
-    // kinematic-static, y como aquí casi todos los colliders son kinematic
-    // (useGravity=false), sin esto los triggers no dispararían nada. Los pares
-    // NO-trigger se delegan al shader por defecto para preservar exactamente el
-    // comportamiento de colisión previo.
+    // kinematic-static, y sin esto un trigger no vería a los objetos con
+    // Rigidbody kinematic, que son la mayoría de los que se mueven por script.
+    // Los pares NO-trigger se delegan al shader por defecto para preservar
+    // exactamente el comportamiento de colisión previo.
+    //
+    // OJO con lo que este shader NO puede arreglar: los pares static-static no
+    // llegan hasta aquí. PhysX no los forma siquiera —dos actores estáticos no
+    // pueden moverse el uno respecto al otro—, así que un trigger sin
+    // Rigidbody no detecta objetos que tampoco lo tengan. Es la regla de Unity
+    // ("al menos uno de los dos necesita Rigidbody"); la avisa el editor en la
+    // sección del collider y la fijan los tests de trigger de physics_tests.cpp.
+    // (Este comentario decía antes que "casi todos los colliders son
+    // kinematic": dejó de ser cierto cuando la dinámica se separó del Collider
+    // y un collider sin Rigidbody pasó a ser PxRigidStatic.)
     PxFilterFlags dtTriggerFilterShader(
         PxFilterObjectAttributes attr0, PxFilterData fd0,
         PxFilterObjectAttributes attr1, PxFilterData fd1,
