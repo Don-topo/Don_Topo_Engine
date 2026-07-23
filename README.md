@@ -80,6 +80,12 @@ on machines with Visual Studio installed. A package exported from a Debug editor
 machine that produced it and dies with a missing-DLL error anywhere else — File > Export Game
 warns when this applies. Debug packages are still fine for testing locally.
 
+**Splash screen.** The exported game shows the engine logo while it loads, covering the black
+window during Vulkan/asset init. The exporter copies `assets/MainEngineLogo.png` into the package
+as `splash.png`; if the PNG is missing the game just starts without a splash (never blocked). The
+logo fades in, holds during load, and fades to the scene. The logo is fixed for now (not yet
+configurable per project). Only the exported runtime shows it — the editor does not.
+
 Shaders are compiled from `shaders/*.{vert,frag,comp}` to SPIR-V automatically during build and copied to both the executable directory and `shaders/`.
 
 ## Project Structure
