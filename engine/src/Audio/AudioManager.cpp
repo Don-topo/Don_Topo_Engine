@@ -189,8 +189,14 @@ void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, fl
 void AudioManager::stopSound(int id)
 {
 #ifdef DT_FMOD_ENABLED
-    if (id < 0 || id >= (int)m_sfxChannels.size() || !m_sfxChannels[id]) return;
-    reinterpret_cast<FMOD::Channel*>(m_sfxChannels[id])->stop();
+    if (id < 0 || id >= (int)m_sfxChannels.size() || id >= (int)m_sounds.size()) return;
+    // Vía liveChannel, igual que los setters de volumen/pitch: FMOD recicla los
+    // Channel* de las voces que terminan, así que el puntero guardado aquí puede
+    // apuntar ya a la voz de OTRO sonido. Parándolo a ciegas, un stopSound(id)
+    // sobre un clip que hace rato que acabó corta el que esté sonando ahora.
+    if (FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id])) ch->stop();
+#else
+    (void)id;
 #endif
 }
 
