@@ -151,7 +151,17 @@ void ScriptEditorPanel::saveTab(Tab& tab)
     TextEditor::ErrorMarkers markers;
     auto err = checkLuaSyntax(tab.editor.GetText());
     if (err)
-        markers[err->first] = err->second;
+    {
+        // Acota la línea al documento: Lua reporta los errores de "algo sin
+        // cerrar" en <eof>, que es UNA LÍNEA MÁS ALLÁ del final (2 líneas de
+        // texto -> error en la 3). El editor solo dibuja los markers de las
+        // líneas que existen, así que ese marker se guardaba y no se pintaba
+        // nunca — que es el caso más común, porque es lo que pasa al borrar un
+        // 'end'. Con el clamp, el aviso cae en la última línea real.
+        const int lastLine = tab.editor.GetTotalLines();
+        const int line     = (err->first > lastLine) ? lastLine : err->first;
+        markers[line < 1 ? 1 : line] = err->second;
+    }
     tab.editor.SetErrorMarkers(markers);
 }
 

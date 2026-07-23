@@ -21,6 +21,7 @@
 // Log en un std::vector<std::string> vía setLogCallback.
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Scripting/ScriptBindings.h"
+#include "DonTopo/Scripting/LuaSyntaxCheck.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Physics/PhysicsManager.h"
@@ -259,6 +260,36 @@ static void test_dead_entity_wins_over_nan(ScriptManager& sm)
     CHECK(!logContains(log, "SetPosition"));
 }
 
+// checkLuaSyntax alimenta los markers de error del Script Editor y no tenía
+// ninguna cobertura. Lo que importa es que devuelva la LÍNEA correcta: el
+// marker se pinta por número de línea, así que un off-by-one o un fallo del
+// regex que parsea el mensaje de Lua deja el aviso en el sitio equivocado —
+// o, si no detecta nada, sin marker ninguno.
+static void test_lua_syntax_check_detects_error()
+{
+    // Script válido: no hay error.
+    CHECK(!checkLuaSyntax("local x = 1\nprint(x)\n").has_value());
+
+    // 'end' que falta: el caso MÁS COMÚN, y el que destapó que los markers no
+    // se veían. Lua lo reporta en <eof>, o sea UNA LÍNEA MÁS ALLÁ del final —
+    // con 2 líneas de texto, dice línea 3. El editor solo pinta markers de
+    // líneas que existen, así que ScriptEditorPanel::saveTab tiene que acotar
+    // la línea al documento antes de pasarla; si alguien quita ese clamp, el
+    // marker vuelve a guardarse sin dibujarse nunca.
+    auto err = checkLuaSyntax("function f()\n  local y = 2\n");
+    CHECK(err.has_value());
+    if (!err) return;
+    CHECK(err->first == 3);          // fuera del texto: 2 líneas, error en la 3
+    CHECK(!err->second.empty());
+
+    // Error en una línea concreta del medio: la línea reportada tiene que ser
+    // ESA, no la primera ni la última.
+    auto mid = checkLuaSyntax("local a = 1\nlocal b = = 2\nlocal c = 3\n");
+    CHECK(mid.has_value());
+    if (!mid) return;
+    CHECK(mid->first == 2);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -281,6 +312,7 @@ int main()
     test_add_force_rejects_nan(sm, pm);
     test_add_force_applies_finite_value(sm, pm);
     test_dead_entity_wins_over_nan(sm);
+    test_lua_syntax_check_detects_error();
 
     am.shutdown();
     pm.shutdown();
