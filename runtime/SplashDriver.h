@@ -1,6 +1,5 @@
 #pragma once
 #include <algorithm>
-#include <cmath>
 
 // Calculo puro del alpha del splash por fase. Sin GPU ni estado: dado el tiempo
 // transcurrido y si la carga termino (y cuando), devuelve el alpha y en que

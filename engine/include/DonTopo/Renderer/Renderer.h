@@ -61,8 +61,9 @@ namespace DonTopo {
             // vez de la cámara de vuelo del editor.
             bool isPlaying() const { return m_headless || m_editorUI.isPlaying(); }
             // Modo runtime: ni ImGui ni paneles. Solo tiene efecto si se
-            // llama ANTES de init() — initImGui/createOffscreenImages leen el
-            // flag durante la inicialización.
+            // llama ANTES de initPresentation() (o de init(), que la llama) —
+            // initImGui/createOffscreenImages leen el flag durante esa
+            // inicialización.
             void setHeadless(bool headless) { m_headless = headless; }
             // Reenvía al axis gizmo del viewport; cb recibe el eje mundo clicado.
             void setOnAxisSelected(std::function<void(const glm::vec3&)> cb) { m_editorUI.setOnAxisSelected(std::move(cb)); }

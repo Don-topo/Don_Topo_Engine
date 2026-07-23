@@ -96,7 +96,8 @@ int main(int argc, char** argv)
             std::cerr << "Aviso: la escena no tiene una camara (CameraComponent); "
                           "el juego no podra renderizar correctamente." << std::endl;
 
-        // Antes de init(): initImGui y createOffscreenImages leen el flag.
+        // Antes de initPresentation(): initImGui y createOffscreenImages leen
+        // el flag durante esa inicialización.
         renderer.setHeadless(true);
 
         std::vector<DonTopo::GameObject*> allNodes;
@@ -222,6 +223,10 @@ int main(int argc, char** argv)
                 window.pollEvents();
                 if (window.shouldClose()) break;
                 SplashState s = splashStateAt(splashT, sinceSplash(), true, loadingDoneAt);
+                // s.crossfading se ignora a proposito: este fallback solo
+                // dibuja el splash (fundido a su color de fondo), nunca la
+                // escena debajo. El crossfade con la escena queda fuera de
+                // alcance, no es un olvido.
                 renderer.drawSplashFrame(s.alpha);
                 if (s.done) break;
             }

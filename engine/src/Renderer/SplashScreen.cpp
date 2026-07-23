@@ -194,14 +194,29 @@ bool SplashScreen::init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorF
         vkCreateSampler(gpu.device(), &ci, nullptr, &m_sampler);
     }
 
-    createDescriptors(gpu);
-    createPipeline(gpu, renderPass);
+    // Todo lo que sigue (descriptores + pipeline) puede lanzar
+    // std::runtime_error (shader ausente/corrupto, fallo de creacion de
+    // pipeline). El splash es siempre opcional: cualquier fallo aqui debe
+    // resultar en init() devolviendo false, nunca en una excepcion que suba
+    // hasta main(). Se libera todo lo ya creado y se reporta false.
+    try {
+        createDescriptors(gpu);
+        createPipeline(gpu, renderPass);
+    } catch (const std::exception&) {
+        destroyResources(gpu);
+        return false;
+    }
     return true;
 }
 
 void SplashScreen::shutdown(GpuDevice& gpu)
 {
     if (m_pipeline == VK_NULL_HANDLE) return;
+    destroyResources(gpu);
+}
+
+void SplashScreen::destroyResources(GpuDevice& gpu)
+{
     VkDevice dev = gpu.device();
     vkDestroyPipeline(dev,            m_pipeline,   nullptr);
     vkDestroyPipelineLayout(dev,      m_pipeLayout, nullptr);
@@ -211,7 +226,14 @@ void SplashScreen::shutdown(GpuDevice& gpu)
     vkDestroyImageView(dev,           m_view,       nullptr);
     vkDestroyImage(dev,               m_image,      nullptr);
     vkFreeMemory(dev,                 m_memory,     nullptr);
-    m_pipeline = VK_NULL_HANDLE;
+    m_pipeline   = VK_NULL_HANDLE;
+    m_pipeLayout = VK_NULL_HANDLE;
+    m_descPool   = VK_NULL_HANDLE;
+    m_descLayout = VK_NULL_HANDLE;
+    m_sampler    = VK_NULL_HANDLE;
+    m_view       = VK_NULL_HANDLE;
+    m_image      = VK_NULL_HANDLE;
+    m_memory     = VK_NULL_HANDLE;
 }
 
 void SplashScreen::recordDraw(VkCommandBuffer cmd, float alpha, float screenAspect)
@@ -369,12 +391,18 @@ void SplashScreen::createPipeline(GpuDevice& gpu, VkRenderPass renderPass)
     pCI.renderPass          = renderPass;
     pCI.subpass             = 0;
 
-    if (vkCreateGraphicsPipelines(gpu.device(), VK_NULL_HANDLE, 1, &pCI, nullptr, &m_pipeline)
-            != VK_SUCCESS)
-        throw std::runtime_error("SplashScreen: failed to create pipeline");
+    VkResult pipeResult = vkCreateGraphicsPipelines(
+        gpu.device(), VK_NULL_HANDLE, 1, &pCI, nullptr, &m_pipeline);
 
+    // Los shader modules son locales a esta funcion y solo hacen falta
+    // durante la creacion del pipeline: se destruyen aqui SIEMPRE, tanto en
+    // el camino de exito como en el de fallo, para que un throw no los deje
+    // filtrados (vkCreateGraphicsPipelines no los consume/posee).
     vkDestroyShaderModule(gpu.device(), vertMod, nullptr);
     vkDestroyShaderModule(gpu.device(), fragMod, nullptr);
+
+    if (pipeResult != VK_SUCCESS)
+        throw std::runtime_error("SplashScreen: failed to create pipeline");
 }
 
 } // namespace DonTopo

@@ -35,6 +35,11 @@ public:
 private:
     void createDescriptors(GpuDevice& gpu);
     void createPipeline(GpuDevice& gpu, VkRenderPass renderPass);
+    // Destruye incondicionalmente cualquier handle no-null y los deja en
+    // VK_NULL_HANDLE. vkDestroy*/vkFree* con VK_NULL_HANDLE es no-op valido,
+    // asi que sirve tanto para el shutdown normal como para el rollback tras
+    // una excepcion a mitad de init().
+    void destroyResources(GpuDevice& gpu);
 
     int                   m_logoW      = 0;
     int                   m_logoH      = 0;
