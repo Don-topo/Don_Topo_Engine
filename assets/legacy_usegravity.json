@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "root": {
+    "id": 1,
+    "name": "root",
+    "localTransform": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1],
+    "children": [
+      {
+        "id": 2,
+        "name": "CajaLegacyConGravedad",
+        "localTransform": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,120,0,1],
+        "children": [],
+        "boxCollider": {
+          "halfExtents": [25.0, 25.0, 25.0],
+          "center": [0.0, 0.0, 0.0],
+          "useGravity": true
+        }
+      },
+      {
+        "id": 3,
+        "name": "SueloLegacySinGravedad",
+        "localTransform": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,-40,0,1],
+        "children": [],
+        "boxCollider": {
+          "halfExtents": [200.0, 10.0, 200.0],
+          "center": [0.0, 0.0, 0.0],
+          "useGravity": false
+        }
+      }
+    ]
+  }
+}
