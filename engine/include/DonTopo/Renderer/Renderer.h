@@ -31,6 +31,15 @@ namespace DonTopo {
             Renderer(const Renderer&)               = delete;
             Renderer& operator=(const Renderer&)    = delete;
             void init(Window& window, const std::vector<Mesh>& meshes);
+            // Fase 1 del arranque: lo minimo para presentar (device, swapchain,
+            // render pass, framebuffers, command buffers, sync, ImGui). No crea
+            // pipelines de escena. La usa el runtime para poder dibujar el
+            // splash antes de la carga pesada. init() la llama primero.
+            void initPresentation(Window& window);
+            // Fase 2: pipelines PBR/shadow/compute, offscreen, descriptor sets,
+            // subida de mallas estaticas y auto-fit de camara (necesita meshes).
+            // init() la llama despues.
+            void initSceneResources(const std::vector<Mesh>& meshes);
             void drawFrame(Window& window);
             void shutdown();
             void setCamera(const Camera& camera);

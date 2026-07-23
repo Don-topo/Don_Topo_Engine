@@ -26,6 +26,17 @@ namespace DonTopo {
 
     void Renderer::init(Window& window, const std::vector<Mesh>& meshes)
     {
+        // Se mantiene como la suma de las dos fases, en el mismo orden que
+        // antes (ver initPresentation/initSceneResources para el detalle del
+        // reparto). El editor (Sandbox) llama a init() y no cambia; el
+        // runtime llama a las dos fases por separado para colar el splash
+        // entre medias.
+        initPresentation(window);
+        initSceneResources(meshes);
+    }
+
+    void Renderer::initPresentation(Window& window)
+    {
         // Gizmos::kFramesInFlight se usa para dimensionar buffers por frame en vuelo
         // dentro de Gizmos; debe coincidir siempre con Renderer::MAX_FRAMES. MAX_FRAMES
         // es private, así que este static_assert vive aquí (contexto de miembro) en vez
@@ -33,23 +44,11 @@ namespace DonTopo {
         static_assert(Gizmos::kFramesInFlight == MAX_FRAMES,
             "Gizmos::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
 
-        // Auto-fit camera to mesh bounding box
-        glm::vec3 bMin( std::numeric_limits<float>::max());
-        glm::vec3 bMax(-std::numeric_limits<float>::max());
-
-        for(auto& mesh : meshes)
-        {
-            for (auto& v : mesh.vertices) 
-            {
-                bMin = glm::min(bMin, v.pos);
-                bMax = glm::max(bMax, v.pos);
-            }
-        }
-        
-        m_cameraTarget   = (bMin + bMax) * 0.5f;
-        float maxDim     = glm::max(bMax.x - bMin.x, glm::max(bMax.y - bMin.y, bMax.z - bMin.z));
-        m_cameraDistance = maxDim * 1.2f;
-
+        // Fase 1: lo minimo para poder presentar un frame (splash incluido).
+        // El auto-fit de cámara y los recursos de escena (pipelines, shadow,
+        // compute, ImGui-descriptor-independientes como offscreen, mallas)
+        // viven en initSceneResources porque dependen de `meshes` o de
+        // recursos creados ahí mismo.
         m_gpu.init(window.getNativeWindow());
         createSwapChain(window);
 
@@ -58,26 +57,64 @@ namespace DonTopo {
         createOffscreenRenderPass();
         Gizmos::init(m_gpu, m_offscreenRenderPass, m_swapChainFormat);
         createRenderPass();
+        createFramebuffers();
+        // createCommandBuffers/createSyncObjects solo dependen del device y
+        // del command pool (createCommandBuffers) o del device y
+        // m_swapChainImages.size() (createSyncObjects) — nada de
+        // initSceneResources (descriptor sets, pipelines, malla) los toca
+        // durante el init. Se adelantan aquí, respecto al original, para que
+        // queden listos en la fase 1 junto con el resto de lo necesario para
+        // presentar.
+        createCommandBuffers();
+        createSyncObjects();
+        // necesita m_renderPass + m_swapChainImages.size(); no depende de
+        // nada de initSceneResources, así que se mueve aquí (antes vivía a
+        // mitad del init original) para que el splash pueda dibujar con
+        // ImGui ya operativo si hiciera falta.
+        if (!m_headless) initImGui(window.getNativeWindow());
+    }
+
+    void Renderer::initSceneResources(const std::vector<Mesh>& meshes)
+    {
+        // Auto-fit camera to mesh bounding box (necesita `meshes`; por eso
+        // vive aquí y no en initPresentation).
+        glm::vec3 bMin( std::numeric_limits<float>::max());
+        glm::vec3 bMax(-std::numeric_limits<float>::max());
+
+        for(auto& mesh : meshes)
+        {
+            for (auto& v : mesh.vertices)
+            {
+                bMin = glm::min(bMin, v.pos);
+                bMax = glm::max(bMax, v.pos);
+            }
+        }
+
+        m_cameraTarget   = (bMin + bMax) * 0.5f;
+        float maxDim     = glm::max(bMax.x - bMin.x, glm::max(bMax.y - bMin.y, bMax.z - bMin.z));
+        m_cameraDistance = maxDim * 1.2f;
+
         createDescriptorSetLayout();
         createPipeline();
         createShadowResources();
-        createFramebuffers();
         createComputePipelines();
-        // necesita m_renderPass + m_swapChainImages.size()
-        if (!m_headless) initImGui(window.getNativeWindow());
-        createOffscreenImages();  // en editor necesita ImGui inicializado (llama AddTexture); en headless no llama a ImGui, así que el orden con initImGui() no importa
+        // ImGui ya se inicializó en initPresentation. En editor,
+        // createOffscreenImages necesita ImGui inicializado (llama
+        // AddTexture); en headless no llama a ImGui, así que el orden con
+        // initImGui() no importa. Como initImGui corrió antes (fase 1) y
+        // esta llamada corre en fase 2, el orden ImGui→offscreen se
+        // conserva igual que en el init original.
+        createOffscreenImages();
 
         m_objects.resize(meshes.size());
         for(size_t i = 0; i < meshes.size(); i++)
         {
             buildRenderObject(meshes[i], m_objects[i]);
         }
-       
+
         createUniformBuffers();
         createDescriptorPool();
         createDescriptorSets();
-        createCommandBuffers();
-        createSyncObjects();        
     }
 
     void Renderer::drawFrame(Window& window)
