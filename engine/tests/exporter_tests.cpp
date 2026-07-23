@@ -369,6 +369,38 @@ static void test_package_contents(const fs::path& root)
     fs::remove_all(dest, ec);
 }
 
+// El logo del splash se copia como splash.png junto al .exe aunque la escena
+// no lo referencie (la escena no lo referencia; el runtime lo busca por ese
+// nombre fijo). Reutiliza skybox/shaders/DonTopoRuntime.exe que
+// test_package_contents ya dejó en root.
+static void test_package_includes_splash(const fs::path& root)
+{
+    std::error_code ec;
+    std::ofstream(root / "assets" / "MainEngineLogo.png") << "png";
+
+    Scene scene;
+    scene.addGameObject("hero")->setMesh(makeMesh(root / "assets" / "hero.fbx"));
+    std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+
+    fs::path tempRoot = fs::temp_directory_path(ec);
+    if (ec || tempRoot.empty())
+    {
+        CHECK(!ec && !tempRoot.empty());
+        return;
+    }
+    fs::path dest = tempRoot / "dt_exporter_splash_out";
+    fs::remove_all(dest, ec);
+
+    ExportResult r = writeExportPackage(assets, scene.toJson(), dest, "MiJuego",
+                                        root, root / "Scripts", root / "DonTopoRuntime.exe");
+
+    const fs::path pkg = dest / "MiJuego";
+    CHECK(r.ok);
+    CHECK(fs::exists(pkg / "splash.png"));
+
+    fs::remove_all(dest, ec);
+}
+
 // Re-exportar sobre un paquete de un export anterior lo deja limpio: nada
 // del export viejo sobrevive. La carpeta lleva game.scene, la única marca
 // que inspectExportTarget acepta como "esto es mio y lo puedo regenerar"
@@ -691,6 +723,7 @@ int main()
     test_rewrite_makes_paths_relative(root);
     test_rewrite_leaves_unknown_paths(root);
     test_package_contents(root);
+    test_package_includes_splash(root);
     test_package_overwrite_is_clean(root);
     test_writeExportPackage_aborts_on_occupied(root);
     test_missing_runtime_aborts(root);
