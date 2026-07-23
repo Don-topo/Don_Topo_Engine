@@ -358,25 +358,9 @@ void SplashScreen::recordDraw(VkCommandBuffer cmd, float alpha, float screenAspe
 ```
 - `shutdown`: calcar `Skybox::shutdown` (destruir pipeline, layout, descPool, descLayout, sampler, view, image, memory; guard `if (m_pipeline == VK_NULL_HANDLE) return;`).
 
-Nota sobre el push constant del fragment: el shader lo declara como `{ float alpha; vec2 imgAspect; }` (16 bytes por alineación de `vec2` a 8). El C++ envía `{ float alpha; float imgAR; float screenAR; }` (12 bytes). Para evitar el desajuste de alineación std430, declarar el push del fragment como tres floats: cambiar `shaders/splash.frag` a `layout(push_constant) uniform Push { float alpha; float imgAR; float screenAR; } push;` y usar `push.imgAR`/`push.screenAR` en el letterbox (ajustar Task 1 si se implementa después, o corregir aquí). El plan asume tres floats sueltos — actualizar el `.frag` en consecuencia y recompilar.
+Nota de consistencia con el push constant: el `shaders/splash.frag` de Task 1 ya declara el push como tres floats sueltos (`{ float alpha; float imgAR; float screenAR; }`, 12 bytes) precisamente para casar con este `struct Push` del C++ sin el padding std430 de `vec2`. El `struct Push` de arriba debe seguir siendo tres floats en el mismo orden; NO cambiar el `.frag` (ya es correcto). Si al implementar el orden o el tipo no casan, arreglar el C++ para que case con el shader de Task 1, no al revés.
 
-- [ ] **Step 2: Corregir `shaders/splash.frag` a tres floats sueltos y recompilar**
-
-Reemplazar el bloque push del fragment por:
-
-```glsl
-layout(push_constant) uniform Push {
-    float alpha;
-    float imgAR;     // logoW/logoH
-    float screenAR;  // screenW/screenH
-} push;
-```
-y en `main`: `float logoAR = push.imgAR; float screenAR = push.screenAR;`.
-
-Run (PowerShell): `.\build.bat` (recompila el .spv por el custom command) y `.\build-release.bat`.
-Expected: sin errores.
-
-- [ ] **Step 3: Compilar (Debug) para verificar que `SplashScreen.cpp` enlaza**
+- [ ] **Step 2: Compilar (Debug) para verificar que `SplashScreen.cpp` enlaza**
 
 Run (PowerShell): `.\build.bat`
 Expected: `DonTopoEngine` y los tests compilan y enlazan sin errores. (No hay test automático de la parte Vulkan: se valida al usarla en el runtime, Task 7, y en verificación manual.)
