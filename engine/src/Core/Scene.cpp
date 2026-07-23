@@ -1024,6 +1024,7 @@ namespace DonTopo
                                       "': se descarta el CameraComponent (ya hay una cámara en la escena)");
             }
         });
+        collapseWarnings();
         return clone;
     }
 
@@ -1052,6 +1053,28 @@ namespace DonTopo
         return const_cast<Scene*>(this)->findCamera();
     }
 
+    void Scene::collapseWarnings()
+    {
+        std::vector<std::string> unicos;
+        std::vector<size_t>      veces;
+        // Mapea mensaje -> posición en unicos. Con el mensaje entero como clave:
+        // dos avisos distintos del mismo objeto tienen que seguir siendo dos.
+        std::unordered_map<std::string, size_t> visto;
+
+        for (const std::string& w : m_warnings)
+        {
+            auto [it, nuevo] = visto.emplace(w, unicos.size());
+            if (nuevo) { unicos.push_back(w); veces.push_back(1); }
+            else       { veces[it->second]++; }
+        }
+
+        for (size_t i = 0; i < unicos.size(); i++)
+            if (veces[i] > 1)
+                unicos[i] += " (x" + std::to_string(veces[i]) + ")";
+
+        m_warnings = std::move(unicos);
+    }
+
     void Scene::pruneExtraCameras()
     {
         GameObject* first = nullptr;
@@ -1074,6 +1097,11 @@ namespace DonTopo
     {
         GameObject* target = parent ? parent : &m_root;
         GameObject* node = target->addChild(j.value("name", std::string()));
+        // Igual que fromJson y cloneGameObject: los avisos son de ESTA operación.
+        // Sin este clear, cada undo de un Delete apilaba los suyos sobre los de
+        // la carga anterior y m_warnings crecía durante toda la sesión, en contra
+        // de lo que promete lastWarnings() en el header.
+        m_warnings.clear();
         // Sin objeto vivo al que preguntar (esto reconstruye un subárbol ya
         // borrado: el undo de un Delete), así que la cache arranca vacía y
         // sólo aporta el dedup entre los nodos de ESE subárbol — que ya evita
@@ -1102,6 +1130,7 @@ namespace DonTopo
             auto last = siblings.begin() + static_cast<long>(insertedAt);
             std::rotate(siblings.begin() + static_cast<long>(index), last, last + 1);
         }
+        collapseWarnings();
         return node;
     }
 
@@ -1240,6 +1269,7 @@ namespace DonTopo
 
         // Tras reconstruir: el fichero puede traer dos cámaras (editado a mano).
         pruneExtraCameras();
+        collapseWarnings(); // después de pruneExtraCameras: también empuja avisos
         return true;
     }
 

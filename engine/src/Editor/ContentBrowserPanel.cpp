@@ -98,16 +98,36 @@ bool isValidFileName(const std::string& name)
     return true;
 }
 
-// Predicado único de "carpeta oculta para el Content Browser": nombre que
-// empieza por '.' o está en la lista de directorios de build/ruido. Usado
-// tanto por listVisibleSubdirs (árbol izquierdo) como por el escaneo del
-// grid derecho (##AssetPane) para que ambos paneles vean el mismo conjunto
-// de carpetas — si no, un doble-clic en el grid puede seleccionar una
-// carpeta que el árbol nunca muestra.
-bool isHiddenDirName(const std::string& name)
+// Predicado único de "carpeta oculta para el Content Browser". Usado tanto por
+// listVisibleSubdirs (árbol izquierdo) como por el escaneo del grid derecho
+// (##AssetPane) para que ambos paneles vean el mismo conjunto de carpetas — si
+// no, un doble-clic en el grid puede seleccionar una carpeta que el árbol
+// nunca muestra.
+//
+// El criterio que manda es el CONTENIDO, no el nombre. Enumerar nombres de
+// carpetas de build no escala: aquí es build-ninja, en CLion cmake-build-debug,
+// en Visual Studio x64-Debug, y el siguiente que aparezca vuelve a colarse en el
+// panel. Lo que de verdad distingue a un árbol de build es lo que tiene DENTRO:
+// un CMakeCache.txt.
+//
+// Por eso NO están aquí los nombres genéricos ("build", "out"): el único caso
+// que cubrirían es el de una carpeta de build recién creada y todavía sin
+// configurar —vacía, o sea inofensiva en el panel— y a cambio esconderían una
+// carpeta de assets del usuario que se llame así. Los dos que quedan son
+// inequívocos: build-ninja es el de este repo y cmake-build-* el de CLion.
+//
+// El coste es un stat por subcarpeta y por frame (listVisibleSubdirs corre en
+// el render loop), sobre las subcarpetas de UN directorio, no recursivo.
+bool isHiddenDir(const std::filesystem::path& dir)
 {
-    static const std::set<std::string> kHiddenDirs = { "build-ninja" };
-    return name.empty() || name[0] == '.' || kHiddenDirs.count(name) != 0;
+    const std::string name = dir.filename().string();
+    if (name.empty() || name[0] == '.') return true;
+
+    if (name == "build-ninja") return true;
+    if (name.rfind("cmake-build-", 0) == 0) return true; // cmake-build-debug, -release...
+
+    std::error_code ec;
+    return std::filesystem::exists(dir / "CMakeCache.txt", ec) && !ec;
 }
 
 } // namespace
@@ -132,8 +152,7 @@ std::vector<std::filesystem::path> listVisibleSubdirs(const std::filesystem::pat
         const auto& entry = *it;
         std::error_code isDirEc;
         if (!entry.is_directory(isDirEc) || isDirEc) continue;
-        std::string name = entry.path().filename().string();
-        if (isHiddenDirName(name)) continue;
+        if (isHiddenDir(entry.path())) continue;
         out.push_back(entry.path());
     }
     std::sort(out.begin(), out.end());
@@ -411,7 +430,7 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                     // Filtrar carpetas ocultas/ruido igual que el árbol
                     // izquierdo (mismo predicado); los ficheros no se
                     // filtran, se listan todos como siempre.
-                    if (isDirEntry && isHiddenDirName(entry.path().filename().string()))
+                    if (isDirEntry && isHiddenDir(entry.path()))
                         continue;
                     if (isFile || isDirEntry)
                         m_assets.push_back(entry.path());

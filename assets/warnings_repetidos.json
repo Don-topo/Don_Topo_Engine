@@ -1,0 +1,53 @@
+{
+  "_comment": "Fixture de verificacion manual del colapsado de avisos de carga. Cinco objetos con el MISMO nombre y las tres componentes de halfExtents a null: el contexto del aviso es el nombre del objeto, no el indice, asi que los 15 avisos que salen son solo 3 mensajes distintos repetidos 5 veces cada uno. En el Log tienen que aparecer 3 lineas con (x5), no 15 lineas. El Suelo trae un unico campo corrupto: su aviso sale sin sufijo.",
+  "version": 1,
+  "root": {
+    "id": 1,
+    "name": "root",
+    "localTransform": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1],
+    "children": [
+      {
+        "id": 2,
+        "name": "Caja",
+        "localTransform": [1,0,0,0, 0,1,0,0, 0,0,1,0, -200,60,0,1],
+        "children": [],
+        "boxCollider": { "halfExtents": [null, null, null], "center": [0.0, 0.0, 0.0] }
+      },
+      {
+        "id": 3,
+        "name": "Caja",
+        "localTransform": [1,0,0,0, 0,1,0,0, 0,0,1,0, -100,60,0,1],
+        "children": [],
+        "boxCollider": { "halfExtents": [null, null, null], "center": [0.0, 0.0, 0.0] }
+      },
+      {
+        "id": 4,
+        "name": "Caja",
+        "localTransform": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,60,0,1],
+        "children": [],
+        "boxCollider": { "halfExtents": [null, null, null], "center": [0.0, 0.0, 0.0] }
+      },
+      {
+        "id": 5,
+        "name": "Caja",
+        "localTransform": [1,0,0,0, 0,1,0,0, 0,0,1,0, 100,60,0,1],
+        "children": [],
+        "boxCollider": { "halfExtents": [null, null, null], "center": [0.0, 0.0, 0.0] }
+      },
+      {
+        "id": 6,
+        "name": "Caja",
+        "localTransform": [1,0,0,0, 0,1,0,0, 0,0,1,0, 200,60,0,1],
+        "children": [],
+        "boxCollider": { "halfExtents": [null, null, null], "center": [0.0, 0.0, 0.0] }
+      },
+      {
+        "id": 7,
+        "name": "Suelo",
+        "localTransform": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,-40,0,1],
+        "children": [],
+        "boxCollider": { "halfExtents": [200.0, 10.0, 200.0], "center": [0.0, null, 0.0] }
+      }
+    ]
+  }
+}

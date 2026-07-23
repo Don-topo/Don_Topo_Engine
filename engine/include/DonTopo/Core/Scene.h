@@ -36,11 +36,17 @@ namespace DonTopo
             GameObject* findCamera();
             const GameObject* findCamera() const;
 
-            // Avisos de la última operación que tuvo que corregir el invariante
-            // de una cámara por escena (fromJson con varias, cloneGameObject de
-            // una cámara). Core no conoce el Log Console: EditorUI los vuelca
-            // tras cargar. Se limpian al principio de cada operación que los
-            // pueda rellenar, así que nunca crecen sin control.
+            // Avisos de la última operación que tuvo que corregir la escena
+            // cargada (campos corruptos, varias cámaras, clips que ya no casan).
+            // Core no conoce el Log Console: EditorUI los vuelca tras cargar. Se
+            // limpian al principio de cada operación que los pueda rellenar, así
+            // que nunca crecen sin control.
+            //
+            // Los repetidos vienen colapsados a una sola entrada con " (xN)" al
+            // final: un mesh corrupto genera un aviso IDÉNTICO por vértice (el
+            // contexto es el nombre del objeto, no el índice), y sin colapsar una
+            // sola malla rota escribe miles de líneas en el Log y sepulta los
+            // demás avisos de esa misma carga.
             //
             // OJO: hoy solo los drena el editor tras cargar escena. El aviso del
             // clone (Instantiate de Lua, en Play) no tiene consumidor de Log —
@@ -107,6 +113,12 @@ namespace DonTopo
             // abre igual, con aviso, en vez de fallar la carga o quedar en un
             // estado donde findCamera() decide sobre una escena incoherente.
             void pruneExtraCameras();
+
+            // Colapsa los avisos repetidos de m_warnings in situ, conservando el
+            // orden de primera aparición y añadiendo " (xN)" a los que salieron
+            // más de una vez. Se llama al final de cada operación que rellena
+            // m_warnings, nunca durante: los productores empujan sin mirar.
+            void collapseWarnings();
 
             std::vector<std::string> m_warnings;
     };
