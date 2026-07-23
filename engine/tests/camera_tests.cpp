@@ -14,6 +14,8 @@
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Editor/Command.h"
 #include <nlohmann/json.hpp>
+#include <algorithm>
+#include <vector>
 #include <memory>
 
 #include <glm/glm.hpp>
@@ -338,6 +340,81 @@ static void test_clone_strips_camera_from_descendant(PhysicsManager& pm, AudioMa
     CHECK(cameraCount == 1);
 }
 
+// Un clon necesita id PROPIO. cloneGameObject serializa el origen con
+// nodeToJson (que emite "id") y lo reconstruye con nodeFromJson, que reusa ese
+// id a propósito: es justo lo que hace falta en el Undo de un Delete, para que
+// los comandos que quedan en el stack sigan resolviendo el objeto
+// reconstruido. Pero al clonar el ORIGINAL SIGUE VIVO, así que reusarlo deja
+// dos GameObjects con el mismo id y findById devuelve el último del recorrido:
+// el clon. Cualquier comando de undo resuelto por id (Transform, Rigidbody,
+// Audio Clip, Camera...) acabaría escribiendo en el objeto equivocado.
+static void test_clone_gets_fresh_id(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Original");
+    const uint64_t originalId = go->id;
+
+    GameObject* clone = scene.cloneGameObject(go, nullptr, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+
+    CHECK(clone->id != originalId);
+    // Y el id del original tiene que seguir resolviendo AL ORIGINAL, que es lo
+    // que de verdad rompía: findById devolvía el clon.
+    CHECK(scene.findById(originalId) == go);
+    CHECK(scene.findById(clone->id) == clone);
+}
+
+// Mismo invariante en un subárbol: los descendientes del clon también tienen
+// que estrenar id, no solo su raíz.
+static void test_clone_subtree_gets_fresh_ids(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* parent = scene.addGameObject("Padre");
+    GameObject* child  = scene.addGameObject("Hijo", parent);
+    const uint64_t childId = child->id;
+
+    GameObject* clone = scene.cloneGameObject(parent, nullptr, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone || clone->children.empty()) { CHECK(false); return; }
+
+    CHECK(clone->children[0]->id != childId);
+    CHECK(scene.findById(childId) == child);
+
+    // Ningún id repetido en toda la escena.
+    std::vector<uint64_t> ids;
+    scene.traverse([&](GameObject* n) { ids.push_back(n->id); });
+    std::sort(ids.begin(), ids.end());
+    CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
+}
+
+// La contrapartida de los dos tests de arriba, y la razón de que el strip de
+// ids viva en cloneGameObject y NO en nodeFromJson: insertFromJson (el camino
+// del Undo de un Delete) tiene que SEGUIR reusando el id del snapshot. Ahí el
+// original ya no existe, así que no hay colisión posible, y conservarlo es lo
+// que permite que los comandos que quedan en el stack sigan resolviendo el
+// objeto reconstruido.
+//
+// Sin este test, mover el strip a nodeFromJson —que parece la simplificación
+// obvia— rompería el undo en silencio: ningún otro test lo notaría.
+static void test_undo_delete_keeps_original_id(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Borrado");
+    const uint64_t originalId = go->id;
+
+    // Snapshot + borrado, que es lo que hace DeleteGameObjectCommand.
+    nlohmann::json snapshot = scene.subtreeToJson(go);
+    scene.removeGameObject(go);
+    CHECK(scene.findById(originalId) == nullptr);
+
+    GameObject* restored = scene.insertFromJson(snapshot, nullptr, 0, pm, am);
+    CHECK(restored != nullptr);
+    if (!restored) return;
+    CHECK(restored->id == originalId);
+    CHECK(scene.findById(originalId) == restored);
+}
+
 // El Add/Remove de cámara pasa por el stack de Undo (a diferencia de los Add de
 // collider/Rigidbody): si no, un Undo de Delete podría resucitar una cámara
 // borrada estando ya otra en escena. Ver spec, "The One-Camera Invariant".
@@ -434,6 +511,9 @@ int main()
     test_load_with_one_camera_has_no_warnings(pm, am);
     test_clone_never_keeps_camera(pm, am);
     test_clone_strips_camera_from_descendant(pm, am);
+    test_clone_gets_fresh_id(pm, am);
+    test_clone_subtree_gets_fresh_ids(pm, am);
+    test_undo_delete_keeps_original_id(pm, am);
     test_camera_command_add_undo_redo();
     test_camera_command_remove();
     test_camera_command_survives_missing_target();
