@@ -12,6 +12,7 @@ add_library(DonTopoEngine STATIC
     src/Editor/Command.cpp
     src/Editor/UndoManager.cpp
     src/Renderer/Skybox.cpp
+    src/Renderer/SplashScreen.cpp
     src/Renderer/ModelLoader.cpp
     src/Renderer/SkinnedMeshPacking.cpp
     src/Renderer/SkinnedMeshAnimations.cpp
