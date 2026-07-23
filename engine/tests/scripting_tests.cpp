@@ -21,6 +21,7 @@
 // Log en un std::vector<std::string> vía setLogCallback.
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Scripting/ScriptBindings.h"
+#include "DonTopo/Scripting/LuaSyntaxCheck.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Physics/PhysicsManager.h"
@@ -28,6 +29,7 @@
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Audio/AudioManager.h"
+#include <TextEditor.h>
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
@@ -259,6 +261,72 @@ static void test_dead_entity_wins_over_nan(ScriptManager& sm)
     CHECK(!logContains(log, "SetPosition"));
 }
 
+// checkLuaSyntax alimenta los markers de error del Script Editor y no tenía
+// ninguna cobertura. Lo que importa es que devuelva la LÍNEA correcta: el
+// marker se pinta por número de línea, así que un off-by-one o un fallo del
+// regex que parsea el mensaje de Lua deja el aviso en el sitio equivocado —
+// o, si no detecta nada, sin marker ninguno.
+static void test_lua_syntax_check_detects_error()
+{
+    // Script válido: no hay error.
+    CHECK(!checkLuaSyntax("local x = 1\nprint(x)\n").has_value());
+
+    // 'end' que falta: el caso MÁS COMÚN, y el que destapó que los markers no
+    // se veían. Lua lo reporta en <eof>, o sea UNA LÍNEA MÁS ALLÁ del final —
+    // con 2 líneas de texto, dice línea 3. El editor solo pinta markers de
+    // líneas que existen, así que ScriptEditorPanel::saveTab tiene que acotar
+    // la línea al documento antes de pasarla; si alguien quita ese clamp, el
+    // marker vuelve a guardarse sin dibujarse nunca.
+    auto err = checkLuaSyntax("function f()\n  local y = 2\n");
+    CHECK(err.has_value());
+    if (!err) return;
+    CHECK(err->first == 3);          // fuera del texto: 2 líneas, error en la 3
+    CHECK(!err->second.empty());
+
+    // Error en una línea concreta del medio: la línea reportada tiene que ser
+    // ESA, no la primera ni la última.
+    auto mid = checkLuaSyntax("local a = 1\nlocal b = = 2\nlocal c = 3\n");
+    CHECK(mid.has_value());
+    if (!mid) return;
+    CHECK(mid->first == 2);
+}
+
+// El editor real: SetText -> GetText -> checkLuaSyntax, que es exactamente lo
+// que hace saveTab. Fija las dos trampas que impedían ver el marker, medidas
+// con el TextEditor de verdad y no supuestas:
+//
+//  a) GetText() devuelve UN CARÁCTER MÁS del que se metió (el editor añade un
+//     salto final), así que Lua ve una línea de más y sitúa el <eof> fuera del
+//     documento. El editor solo pinta markers de líneas existentes.
+//  b) Esa última línea, además, está VACÍA — acotar el marker ahí lo deja al
+//     final del fichero, sin señalar nada útil.
+static void test_syntax_error_line_is_out_of_document()
+{
+    // Script SIN el 'end' final, con salto final como cualquier fichero real.
+    const std::string roto = "Rotator = {\n  speed = 45\n}\n\nfunction Rotator:Update(dt)\n  local t = 1\n";
+
+    TextEditor ed;
+    ed.SetText(roto);
+    const std::string ida = ed.GetText();
+
+    // (a) el round-trip por el editor añade el salto final
+    CHECK(ida.size() == roto.size() + 1);
+
+    auto err = checkLuaSyntax(ida);
+    CHECK(err.has_value());
+    if (!err) return;
+
+    // El error cae MÁS ALLÁ de la última línea del editor: ese marker no se
+    // pintaría nunca. Es el corazón del bug.
+    CHECK(err->first > ed.GetTotalLines());
+
+    // Y el mensaje nombra la línea donde se abrió lo que quedó sin cerrar
+    // (aquí el 'function' de la línea 5), que es lo que markerLine usa para
+    // poner la banda en un sitio con sentido.
+    CHECK(err->second.find("to close") != std::string::npos);
+    CHECK(err->second.find("at line 5") != std::string::npos);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -281,6 +349,8 @@ int main()
     test_add_force_rejects_nan(sm, pm);
     test_add_force_applies_finite_value(sm, pm);
     test_dead_entity_wins_over_nan(sm);
+    test_lua_syntax_check_detects_error();
+    test_syntax_error_line_is_out_of_document();
 
     am.shutdown();
     pm.shutdown();
