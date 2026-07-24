@@ -6,12 +6,6 @@ namespace DonTopo
 {
     void JobSystem::start(unsigned threads)
     {
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            if (!m_threads.empty()) return;   // ya arrancado
-            m_stop = false;
-        }
-
         if (threads == 0)
         {
             const unsigned hw = std::thread::hardware_concurrency();
@@ -20,6 +14,16 @@ namespace DonTopo
             threads = std::clamp(avail, 2u, 8u);
         }
 
+        // El lock se mantiene durante todo el spawn: si no, dos start()
+        // concurrentes pueden pasar los dos el "if (!m_threads.empty())"
+        // (check-then-act sin protección) y arrancar el doble de hilos. Es
+        // seguro tenerlo cogido aquí: un worker recién creado simplemente se
+        // bloquea en m_cv.wait hasta que este scope suelte el mutex, no hay
+        // deadlock.
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_threads.empty()) return;   // ya arrancado
+        m_stop = false;
+
         m_threads.reserve(threads);
         for (unsigned i = 0; i < threads; ++i)
             m_threads.emplace_back([this] { workerLoop(); });
@@ -27,20 +31,33 @@ namespace DonTopo
 
     void JobSystem::shutdown()
     {
+        std::vector<std::thread> threadsToJoin;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            // Idempotencia: sin esto, el segundo shutdown() haría join sobre
-            // hilos ya unidos y abortaría. El destructor llama a shutdown(), y
-            // el usuario también: los dos caminos tienen que convivir.
+            // Idempotencia real (no solo cosmética): el destructor llama a
+            // shutdown(), y el usuario también puede — los dos caminos, o dos
+            // shutdown() concurrentes, tienen que convivir. Sin esta guarda,
+            // la llamada que ve m_threads ya vacío (porque la otra ya hizo el
+            // move de abajo) NO tiene hilos que unir -su join es instantáneo-
+            // y llega en microsegundos al m_queue.clear() de más abajo. Si en
+            // ese momento la OTRA llamada sigue bloqueada en join() esperando
+            // a un worker que todavía está drenando la cola real, ese clear()
+            // se la vacía por debajo: jobs ya encolados se descartan sin
+            // correr y sin que nadie se entere. Con la guarda, la llamada que
+            // pierde la carrera por el mutex retorna aquí mismo y nunca llega
+            // a tocar m_queue.
             if (m_threads.empty()) return;
             m_stop = true;
+            // Vaciar el vector aquí, bajo el lock, es lo que hace que
+            // m_threads.empty() sea una lectura fiable para submit()/
+            // threadCount()/otro shutdown() mientras el join (lento, fuera
+            // del lock) está en marcha.
+            threadsToJoin = std::move(m_threads);
         }
         m_cv.notify_all();
 
-        for (auto& t : m_threads)
+        for (auto& t : threadsToJoin)
             if (t.joinable()) t.join();
-
-        m_threads.clear();
 
         std::lock_guard<std::mutex> lock(m_mutex);
         m_queue.clear();
@@ -66,15 +83,16 @@ namespace DonTopo
         return m_nextId++;
     }
 
-    void JobSystem::submitWithId(JobId id, std::function<void()> fn)
+    bool JobSystem::submitWithId(JobId id, std::function<void()> fn)
     {
-        if (id == 0) return;
+        if (id == 0) return false;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            if (m_threads.empty() || m_stop) return;
+            if (m_threads.empty() || m_stop) return false;
             m_queue.push_back(Job{id, std::move(fn)});
         }
         m_cv.notify_one();
+        return true;
     }
 
     void JobSystem::cancel(JobId id)

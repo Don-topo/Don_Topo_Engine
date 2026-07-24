@@ -8,8 +8,10 @@
 
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstdio>
-#include <vector>
+#include <stdexcept>
+#include <thread>
 
 namespace {
 
@@ -72,17 +74,51 @@ void testCancelPreventsQueuedJob()
     }
 }
 
-// shutdown() dos veces no cuelga ni peta. Sabotaje: quitar la guarda de
-// idempotencia — el segundo join sobre hilos ya unidos aborta o deadlockea.
+// shutdown() llamado dos veces EN PARALELO (no solo secuencial: el destructor
+// puede correr en un hilo mientras otro código llama shutdown() a mano — la
+// clase no lo prohíbe) no debe perder jobs ya encolados.
+//
+// Con 1 solo worker y un primer job bloqueado con "release", el worker está
+// atascado y la cola real (50 jobs) sigue sin drenar cuando llegan los dos
+// shutdown(). El mutex serializa quién "gana": el ganador mueve m_threads
+// (con hilos de verdad) y se queda bloqueado en join() esperando a que el
+// worker despierte. El perdedor ve m_threads YA vacío. Sabotaje: quitar la
+// guarda de idempotencia ("if (m_threads.empty()) return;") — sin ella, el
+// perdedor no retorna: sigue de largo, no tiene nada que unir (join instantáneo
+// sobre un vector vacío) y llega en microsegundos al m_queue.clear() final,
+// que se ejecuta MIENTRAS el worker sigue bloqueado sin haber tocado la cola
+// real. Esos 50 jobs se descartan antes de correr — silenciosamente, como en
+// el finding 2 pero por la puerta de atrás. Con la guarda puesta, el perdedor
+// retorna en cuanto ve m_threads vacío y nunca llega a ese clear().
 void testDoubleShutdown()
 {
     for (int it = 0; it < kIters; ++it)
     {
         DonTopo::JobSystem js;
-        js.start();
-        js.submit([] {});
-        js.shutdown();
-        js.shutdown();
+        js.start(1);   // 1 hilo: no hay ambigüedad sobre quién drena qué.
+
+        std::atomic<bool> release{false};
+        std::atomic<int>  ran{0};
+
+        js.submit([&release] { while (!release.load(std::memory_order_acquire)) {} });
+        for (int i = 0; i < 50; ++i)
+            js.submit([&ran] { ran.fetch_add(1, std::memory_order_relaxed); });
+
+        std::thread t1([&js] { js.shutdown(); });
+        std::thread t2([&js] { js.shutdown(); });
+
+        // Dar tiempo a que el "perdedor" complete su camino corto -incluido
+        // el clear() final- mientras el "ganador" sigue bloqueado en join().
+        // Sin este margen la carrera existe igual pero con ventana estrecha.
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        release.store(true, std::memory_order_release);
+
+        t1.join();
+        t2.join();
+
+        assert(ran.load() == 50 && "shutdown() concurrente no debe perder jobs ya encolados");
+        assert(js.threadCount() == 0 && "tras shutdown no deben quedar hilos");
+        assert(js.idle() && "tras shutdown el pool debe estar idle");
     }
 }
 
@@ -107,6 +143,36 @@ void testAutoThreadCountClamped()
     const unsigned n = js.threadCount();
     assert(n >= 2 && n <= 8 && "el clamp automatico debe caer en [2,8]");
     js.shutdown();
+}
+
+// idle() es lo que AsyncAssetLoader (Task 2) va a hacer polling para saber si
+// terminó de cargar: falso mientras hay un job corriendo, verdadero cuando ya
+// no. Sabotaje: quitar el "--m_inFlight" en workerLoop() tras job.fn() — idle()
+// se queda en false para siempre y el assert final salta.
+void testIdleReflectsInFlightJob()
+{
+    for (int it = 0; it < kIters; ++it)
+    {
+        DonTopo::JobSystem js;
+        js.start(1);
+
+        std::atomic<bool> release{false};
+        std::atomic<bool> jobStarted{false};
+
+        js.submit([&release, &jobStarted]
+        {
+            jobStarted.store(true, std::memory_order_release);
+            while (!release.load(std::memory_order_acquire)) {}
+        });
+
+        while (!jobStarted.load(std::memory_order_acquire)) {}
+        assert(!js.idle() && "un job en ejecucion no puede reportar idle()");
+
+        release.store(true, std::memory_order_release);
+        js.shutdown();
+
+        assert(js.idle() && "tras shutdown() sin jobs pendientes idle() debe ser true");
+    }
 }
 
 // Un job que lanza no tumba el proceso: el worker lo traga. Sabotaje: quitar el
@@ -166,6 +232,7 @@ int main()
     testShutdownDrains();
     testCancelPreventsQueuedJob();
     testDoubleShutdown();
+    testIdleReflectsInFlightJob();
     testSingleThread();
     testAutoThreadCountClamped();
     testJobExceptionDoesNotTerminate();

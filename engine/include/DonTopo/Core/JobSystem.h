@@ -21,6 +21,12 @@ namespace DonTopo
         public:
             using JobId = uint64_t;
 
+            // El destructor DRENA (llama a shutdown(), que ejecuta lo pendiente),
+            // no descarta. Cualquier cosa que un job capture por referencia tiene
+            // que vivir más que el JobSystem: si se declara después en el mismo
+            // scope, el destructor del JobSystem corre primero (orden inverso de
+            // declaración) y no hay problema; si vive en otro sitio, es cosa del
+            // llamador garantizar el orden.
             JobSystem() = default;
             ~JobSystem() { shutdown(); }
             JobSystem(const JobSystem&)            = delete;
@@ -44,7 +50,13 @@ namespace DonTopo
             // retornar, y un worker rápido puede haber arrancado ya. Leerlo
             // entonces desde el lambda es una carrera.
             JobId reserveId();
-            void  submitWithId(JobId id, std::function<void()> fn);
+
+            // Devuelve false si el pool no está arrancado — el job NO se
+            // encola y fn se descarta. El llamador ya tiene el id (de
+            // reserveId()): con false sabe que ese id nunca va a completarse
+            // ni a fallar, y puede reaccionar (p.ej. no sumarlo a un contador
+            // de progreso que si no, nunca llegaría a cero).
+            bool submitWithId(JobId id, std::function<void()> fn);
 
             // Marca id como cancelado. Un job ya arrancado NO se interrumpe (no
             // se puede parar un Assimp::ReadFile a medias): termina y es el
