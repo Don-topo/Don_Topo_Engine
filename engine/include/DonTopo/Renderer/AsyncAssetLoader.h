@@ -103,5 +103,15 @@ namespace DonTopo
 
             std::unordered_map<std::string, PendingGroup> m_groups;
             int                                           m_readFileCount = 0;
+
+            // Generación de cancelación en bloque. cancelAllPending() la
+            // incrementa; un job ya arrancado (incancelable) captura la
+            // generación al sacar sus waiters del grupo y, al ir a postar sus
+            // resultados, los descarta si la generación cambió mientras copiaba
+            // fuera del lock — esos targets se cancelaron y su m_pending ya se
+            // puso a 0. Sin esto, postar tras un cancelAllPending dejaría
+            // m_pending negativo para siempre (el loader es longevo) y
+            // entregaría meshes de objetos ya cancelados. Ver runJob().
+            uint64_t                                      m_epoch = 0;
     };
 }

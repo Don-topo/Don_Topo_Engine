@@ -310,6 +310,72 @@ void testDedupSharesReadFileNotPointers(const std::string& fbx)
     }
 }
 
+// Carrera cancelAllPending() vs runJob posteando resultados. Con N waiters del
+// mismo path, runJob saca los N del grupo e incrementa readFileCount bajo el
+// lock (seccion 1), COPIA los N meshes FUERA del lock, y re-bloquea para postar
+// (seccion 2). Si cancelAllPending() cae entre ambas secciones, esos resultados
+// son de targets ya cancelados (su m_pending se puso a 0 en el cancel): postar
+// dejaria pending() negativo PARA SIEMPRE — el loader es longevo, uno por
+// Renderer, y pending() es la senal de "carga terminada" del modal — y
+// entregaria meshes de objetos muertos. El contador de epoch los descarta.
+//
+// Se sincroniza sobre readFileCount()==1 (que runJob incrementa en la seccion
+// 1, bajo el lock, justo antes de copiar) para llamar a cancelAllPending()
+// mientras el job esta copiando: asi la ventana se ataca de forma fiable en vez
+// de por suerte ciega. Aun asi, kIters=50 cubre las interleavings en que el job
+// termina de copiar antes (buzon limpiado por el cancel, tambien correcto).
+//
+// Invariante tras un cancel en bloque sin peticiones nuevas: NADA se entrega y
+// pending() queda en 0, jamas negativo.
+//
+// Sabotaje: quitar el chequeo de epoch en la seccion 2 de runJob (postar
+// siempre) — en las vueltas que caen en la ventana, pumpCompleted entrega los
+// huerfanos y hace pending() negativo; ambos asserts saltan.
+void testCancelAllPendingDropsInflightResults(const std::string& fbx)
+{
+    for (int it = 0; it < kIters; ++it)
+    {
+        DonTopo::JobSystem js;
+        js.start();
+        DonTopo::AsyncAssetLoader loader(js);
+
+        constexpr uint64_t kWaiters = 40;
+        for (uint64_t t = 0; t < kWaiters; ++t)
+            loader.requestMesh(fbx, t);
+
+        // Esperar a que la seccion 1 de runJob corra (readFileCount pasa a 1):
+        // a partir de ahi el job esta copiando los meshes fuera del lock, que
+        // es la ventana que queremos atacar.
+        const auto d1 = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+        while (loader.readFileCount() == 0 && std::chrono::steady_clock::now() < d1)
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+
+        // Cancelar en bloque, idealmente mientras el job aun copia.
+        loader.cancelAllPending();
+
+        // Tras el cancel, sin peticiones nuevas: NADA debe entregarse y
+        // pending() nunca puede quedar negativo (ni distinto de 0). Se comprueba
+        // en CADA pump, no solo al final.
+        const auto d2 = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+        while (std::chrono::steady_clock::now() < d2)
+        {
+            std::vector<DonTopo::LoadedMesh> got = loader.pumpCompleted(1000.0f);
+            assert(got.empty() && "tras cancelAllPending no debe entregarse ningun resultado");
+            assert(loader.pending() == 0 &&
+                   "pending() debe quedar en 0, nunca negativo, tras cancelAllPending");
+            if (js.idle()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
+        // Drenar el pool del todo y reconfirmar: ningun resultado tardio, y
+        // pending() sigue en 0.
+        js.shutdown();
+        std::vector<DonTopo::LoadedMesh> tail = loader.pumpCompleted(1000.0f);
+        assert(tail.empty() && "nada tardio debe llegar tras shutdown");
+        assert(loader.pending() == 0 && "pending() final debe ser 0, nunca negativo");
+    }
+}
+
 } // namespace
 
 int main()
@@ -329,6 +395,7 @@ int main()
     testZeroBudgetKeepsResults(fbx);
     testTexturesArriveDecoded(fbx);
     testDedupSharesReadFileNotPointers(fbx);
+    testCancelAllPendingDropsInflightResults(fbx);
 
     std::printf("asset_loader_tests OK\n");
     return 0;

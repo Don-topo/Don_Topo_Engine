@@ -203,9 +203,11 @@ namespace DonTopo
         }
 
         std::vector<std::pair<JobSystem::JobId, uint64_t>> waiters;
+        uint64_t myEpoch = 0;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             ++m_readFileCount;
+            myEpoch = m_epoch;   // generación vigente al sacar los waiters
             auto it = m_groups.find(path);
             if (it != m_groups.end())
             {
@@ -230,6 +232,13 @@ namespace DonTopo
             results.push_back(buildResultFor(loaded, job, targetId));
 
         std::lock_guard<std::mutex> lock(m_mutex);
+        // Si hubo un cancelAllPending() mientras copiábamos fuera del lock, la
+        // generación cambió: estos waiters ya se cancelaron (su m_pending se
+        // puso a 0 allí) y sus targets son basura. Descartar los resultados —
+        // postarlos dejaría m_pending negativo para siempre en el siguiente
+        // pumpCompleted (-= out.size()) y entregaría meshes de objetos muertos.
+        if (myEpoch != m_epoch)
+            return;
         for (auto& r : results)
             m_inbox.push_back(std::move(r));
     }
@@ -302,6 +311,12 @@ namespace DonTopo
         std::vector<JobSystem::JobId> toCancel;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
+            // Bump de generación: un job ya arrancado (incancelable) que sacó
+            // sus waiters ANTES de este bump y todavía está copiando fuera del
+            // lock verá el epoch cambiado al ir a postar y descartará sus
+            // resultados (ver runJob()). Sin esto, esos posts dejarían
+            // m_pending negativo para siempre y entregarían meshes cancelados.
+            ++m_epoch;
             // Solo el id encolado por grupo: los ids reservados por waiters no
             // primeros nunca se enviaron al JobSystem, así que cancelarlos solo
             // ensuciaría su set m_cancelled (que no se limpia hasta que un job
