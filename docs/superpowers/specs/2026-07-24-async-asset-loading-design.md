@@ -139,7 +139,7 @@ struct LoadedMesh {
     JobSystem::JobId          job;
     uint64_t                  targetId;   // GameObject::id, nunca un puntero
     std::string               path;
-    std::unique_ptr<Mesh>     mesh;       // puede ser SkinnedMesh (loadAuto)
+    std::shared_ptr<Mesh>     mesh;       // puede ser SkinnedMesh (loadAuto)
     std::vector<DecodedImage> images;
     std::string               error;      // no vacío = falló
 };
@@ -159,16 +159,24 @@ se pierde la mayor parte de la ganancia.
 
 **Deduplicación por path.** Varias peticiones del mismo `path` con `targetId`
 distintos comparten un único job, y por tanto un único `ReadFile`. Cada target
-recibe su propio `LoadedMesh`: el `Mesh` y los `DecodedImage` se **copian** desde
-el resultado del job al construir cada entrada del buzón, porque
-`std::unique_ptr<Mesh>` no se puede compartir. La copia ocurre en el worker, no
-en el hilo principal.
+recibe su propio `LoadedMesh`, con el `Mesh` y los `DecodedImage` **copiados**
+desde el resultado del job. La copia ocurre en el worker, no en el principal.
 
-Se copia en lugar de compartir con `shared_ptr` a propósito: `addStaticMesh`
-sube cada `Mesh` a su propio par de buffers de GPU, así que compartir la copia en
-RAM no ahorraría memoria de vídeo, y sí abriría la puerta a que dos
-`GameObject` acabaran apuntando al mismo `Mesh` mutable. Deduplicar el
-`ReadFile` — que es el coste dominante — ya captura casi toda la ganancia.
+El tipo es `std::shared_ptr<Mesh>` porque es lo que devuelven
+`ModelLoader::loadAuto` (`ModelLoader.h:48`) y lo que consume
+`GameObject::setMesh` (`GameObject.h:39`). Podría compartirse el puntero, y se
+copia igualmente **a propósito**: hoy cada nodo de `Scene::nodeFromJson` obtiene
+su propio `make_shared<Mesh>` (`Scene.cpp:721`), y `Renderer::addStaticMesh` sube
+cada `Mesh` a su propio par de buffers de GPU. Compartir no ahorraría memoria de
+vídeo, cambiaría la semántica de propiedad actual, y dejaría a dos `GameObject`
+apuntando al mismo `Mesh` mutable. Deduplicar el `ReadFile`, que es el coste
+dominante, ya captura casi toda la ganancia.
+
+**Corrección sobre el código actual:** el `std::unordered_map<std::string, bool>`
+de `Scene.cpp:1109` cachea resultados de `hasBones()`, no mallas. Hoy dos nodos
+con el mismo `sourcePath` hacen cada uno su `ModelLoader::load` completo. El
+dedup de mallas de esta spec es **comportamiento nuevo**, no la conservación de
+algo existente.
 
 **Ciclo de vida y aliasing:**
 
@@ -304,8 +312,9 @@ fallar.
   que reescribir nada en `engine/tests/`.
 - **No nulo → asíncrono.** Los `GameObject` se crean completos (transform,
   jerarquía, colliders, scripts) pero sin mesh; cada `sourcePath` encola una
-  petición. El cache de `sourcePath` de `Scene.cpp:1108` se conserva: pasa de
-  deduplicar `ReadFile` a deduplicar peticiones.
+  petición. El cache de `hasBones()` de `Scene.cpp:1109` sigue igual y con su
+  cometido de hoy; el dedup de mallas lo aporta `AsyncAssetLoader`, que es capa
+  aparte.
 
 Solo `EditorUI` (Load Scene) y el runtime pasan loader.
 
@@ -383,9 +392,9 @@ Con FBX reales de `assets/`.
   si mañana cambia el importador, el test sigue siendo válido.
 - Cuatro peticiones concurrentes al mismo path con `targetId` distintos producen
   un solo `ReadFile` y cuatro `LoadedMesh` de contenido idéntico pero con
-  punteros `mesh` **distintos**. Comprobar los dos lados: que los datos coinciden
-  y que las direcciones no. Solo lo primero pasaría también con un `shared_ptr`
-  compartido, que es justo lo que el diseño descarta.
+  `mesh.get()` **distintos**. Comprobar los dos lados: que los datos coinciden y
+  que las direcciones no. Solo lo primero pasaría también compartiendo el
+  `shared_ptr`, que es justo lo que el diseño descarta.
 - Un path inexistente devuelve `error` no vacío y `mesh == nullptr`, sin que
   ninguna excepción cruce el límite de hilo.
 - `pumpCompleted(0.0f)` no procesa nada y no pierde resultados: el siguiente
