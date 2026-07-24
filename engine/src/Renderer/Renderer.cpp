@@ -26,6 +26,17 @@ namespace DonTopo {
 
     void Renderer::init(Window& window, const std::vector<Mesh>& meshes)
     {
+        // Se mantiene como la suma de las dos fases, en el mismo orden que
+        // antes (ver initPresentation/initSceneResources para el detalle del
+        // reparto). El editor (Sandbox) llama a init() y no cambia; el
+        // runtime llama a las dos fases por separado para colar el splash
+        // entre medias.
+        initPresentation(window);
+        initSceneResources(meshes);
+    }
+
+    void Renderer::initPresentation(Window& window)
+    {
         // Gizmos::kFramesInFlight se usa para dimensionar buffers por frame en vuelo
         // dentro de Gizmos; debe coincidir siempre con Renderer::MAX_FRAMES. MAX_FRAMES
         // es private, así que este static_assert vive aquí (contexto de miembro) en vez
@@ -33,23 +44,11 @@ namespace DonTopo {
         static_assert(Gizmos::kFramesInFlight == MAX_FRAMES,
             "Gizmos::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
 
-        // Auto-fit camera to mesh bounding box
-        glm::vec3 bMin( std::numeric_limits<float>::max());
-        glm::vec3 bMax(-std::numeric_limits<float>::max());
-
-        for(auto& mesh : meshes)
-        {
-            for (auto& v : mesh.vertices) 
-            {
-                bMin = glm::min(bMin, v.pos);
-                bMax = glm::max(bMax, v.pos);
-            }
-        }
-        
-        m_cameraTarget   = (bMin + bMax) * 0.5f;
-        float maxDim     = glm::max(bMax.x - bMin.x, glm::max(bMax.y - bMin.y, bMax.z - bMin.z));
-        m_cameraDistance = maxDim * 1.2f;
-
+        // Fase 1: lo minimo para poder presentar un frame (splash incluido).
+        // El auto-fit de cámara y los recursos de escena (pipelines, shadow,
+        // compute, ImGui-descriptor-independientes como offscreen, mallas)
+        // viven en initSceneResources porque dependen de `meshes` o de
+        // recursos creados ahí mismo.
         m_gpu.init(window.getNativeWindow());
         createSwapChain(window);
 
@@ -58,26 +57,144 @@ namespace DonTopo {
         createOffscreenRenderPass();
         Gizmos::init(m_gpu, m_offscreenRenderPass, m_swapChainFormat);
         createRenderPass();
+        createFramebuffers();
+        // createCommandBuffers/createSyncObjects solo dependen del device y
+        // del command pool (createCommandBuffers) o del device y
+        // m_swapChainImages.size() (createSyncObjects) — nada de
+        // initSceneResources (descriptor sets, pipelines, malla) los toca
+        // durante el init. Se adelantan aquí, respecto al original, para que
+        // queden listos en la fase 1 junto con el resto de lo necesario para
+        // presentar.
+        createCommandBuffers();
+        createSyncObjects();
+        // necesita m_renderPass + m_swapChainImages.size(); no depende de
+        // nada de initSceneResources, así que se mueve aquí (antes vivía a
+        // mitad del init original) para que el splash pueda dibujar con
+        // ImGui ya operativo si hiciera falta.
+        if (!m_headless) initImGui(window.getNativeWindow());
+    }
+
+    void Renderer::initSceneResources(const std::vector<Mesh>& meshes)
+    {
+        // Auto-fit camera to mesh bounding box (necesita `meshes`; por eso
+        // vive aquí y no en initPresentation).
+        glm::vec3 bMin( std::numeric_limits<float>::max());
+        glm::vec3 bMax(-std::numeric_limits<float>::max());
+
+        for(auto& mesh : meshes)
+        {
+            for (auto& v : mesh.vertices)
+            {
+                bMin = glm::min(bMin, v.pos);
+                bMax = glm::max(bMax, v.pos);
+            }
+        }
+
+        m_cameraTarget   = (bMin + bMax) * 0.5f;
+        float maxDim     = glm::max(bMax.x - bMin.x, glm::max(bMax.y - bMin.y, bMax.z - bMin.z));
+        m_cameraDistance = maxDim * 1.2f;
+
         createDescriptorSetLayout();
         createPipeline();
         createShadowResources();
-        createFramebuffers();
         createComputePipelines();
-        // necesita m_renderPass + m_swapChainImages.size()
-        if (!m_headless) initImGui(window.getNativeWindow());
-        createOffscreenImages();  // en editor necesita ImGui inicializado (llama AddTexture); en headless no llama a ImGui, así que el orden con initImGui() no importa
+        // ImGui ya se inicializó en initPresentation. En editor,
+        // createOffscreenImages necesita ImGui inicializado (llama
+        // AddTexture); en headless no llama a ImGui, así que el orden con
+        // initImGui() no importa. Como initImGui corrió antes (fase 1) y
+        // esta llamada corre en fase 2, el orden ImGui→offscreen se
+        // conserva igual que en el init original.
+        createOffscreenImages();
 
         m_objects.resize(meshes.size());
         for(size_t i = 0; i < meshes.size(); i++)
         {
             buildRenderObject(meshes[i], m_objects[i]);
         }
-       
+
         createUniformBuffers();
         createDescriptorPool();
         createDescriptorSets();
-        createCommandBuffers();
-        createSyncObjects();        
+    }
+
+    bool Renderer::beginSplash(const std::string& logoPath)
+    {
+        // Sobre el render pass del swapchain ya creado por initPresentation
+        // (createRenderPass): color-only, un solo attachment (VK_FORMAT =
+        // m_swapChainFormat, sin depth) — ver el comentario "solo color,
+        // usados por el pass ImGui" en createFramebuffers. El pipeline del
+        // splash (Task 3) se crea con pDepthStencilState = nullptr, que es
+        // compatible con este render pass precisamente porque no tiene
+        // attachment de depth/stencil. No lanza si el logo falta.
+        return m_splash.init(m_gpu, m_renderPass, m_swapChainFormat, logoPath);
+    }
+
+    void Renderer::drawSplashFrame(float alpha)
+    {
+        if (!m_splash.isInitialized()) return;
+
+        vkWaitForFences(m_gpu.device(), 1, &m_inFlight[m_currentFrame], VK_TRUE, UINT64_MAX);
+
+        uint32_t imageIndex;
+        VkResult res = vkAcquireNextImageKHR(m_gpu.device(), m_swapChain, UINT64_MAX,
+            m_imageAvailable[m_currentFrame], VK_NULL_HANDLE, &imageIndex);
+        if (res == VK_ERROR_OUT_OF_DATE_KHR) return; // durante el splash no recreamos: el siguiente frame lo hara
+        if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR) return;
+
+        vkResetFences(m_gpu.device(), 1, &m_inFlight[m_currentFrame]);
+        vkResetCommandBuffer(m_commandBuffers[m_currentFrame], 0);
+
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        vkBeginCommandBuffer(m_commandBuffers[m_currentFrame], &bi);
+
+        VkClearValue clear{};
+        clear.color = { { 0.05f, 0.05f, 0.06f, 1.0f } }; // mismo fondo que el shader
+
+        VkRenderPassBeginInfo rp{};
+        rp.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rp.renderPass        = m_renderPass;
+        rp.framebuffer       = m_swapChainFramebuffers[imageIndex];
+        rp.renderArea.extent = m_swapChainExtent;
+        rp.clearValueCount   = 1; // m_renderPass es color-only (createRenderPass, 1 attachment)
+        rp.pClearValues      = &clear;
+        vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &rp, VK_SUBPASS_CONTENTS_INLINE);
+
+        // Viewport/scissor dinamicos (el pipeline los declara dinamicos).
+        VkViewport vp{ 0, 0, (float)m_swapChainExtent.width, (float)m_swapChainExtent.height, 0.0f, 1.0f };
+        VkRect2D sc{ { 0, 0 }, m_swapChainExtent };
+        vkCmdSetViewport(m_commandBuffers[m_currentFrame], 0, 1, &vp);
+        vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &sc);
+
+        float aspect = m_swapChainExtent.height > 0
+            ? (float)m_swapChainExtent.width / (float)m_swapChainExtent.height : 1.0f;
+        m_splash.recordDraw(m_commandBuffers[m_currentFrame], alpha, aspect);
+
+        vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
+        vkEndCommandBuffer(m_commandBuffers[m_currentFrame]);
+
+        VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkSubmitInfo si{};
+        si.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.waitSemaphoreCount   = 1;
+        si.pWaitSemaphores      = &m_imageAvailable[m_currentFrame];
+        si.pWaitDstStageMask    = &waitStage;
+        si.commandBufferCount   = 1;
+        si.pCommandBuffers      = &m_commandBuffers[m_currentFrame];
+        si.signalSemaphoreCount = 1;
+        si.pSignalSemaphores    = &m_renderFinished[imageIndex];
+        vkQueueSubmit(m_gpu.graphicsQueue(), 1, &si, m_inFlight[m_currentFrame]);
+
+        VkPresentInfoKHR pi{};
+        pi.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        pi.waitSemaphoreCount = 1;
+        pi.pWaitSemaphores    = &m_renderFinished[imageIndex];
+        pi.swapchainCount     = 1;
+        pi.pSwapchains        = &m_swapChain;
+        pi.pImageIndices      = &imageIndex;
+        vkQueuePresentKHR(m_gpu.presentQueue(), &pi);
+
+        m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES;
     }
 
     void Renderer::drawFrame(Window& window)
@@ -269,6 +386,7 @@ namespace DonTopo {
         vkDestroyPipelineLayout(m_gpu.device(), m_computePipelineLayout, nullptr);
         vkDestroyDescriptorSetLayout(m_gpu.device(), m_computeDescLayout, nullptr);
         m_skybox.shutdown(m_gpu);
+        m_splash.shutdown(m_gpu);
         Gizmos::shutdown(m_gpu);
         printf("destroy render items OK\n"); fflush(stdout);
         m_gpu.shutdown();

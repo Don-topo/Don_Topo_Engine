@@ -10,6 +10,7 @@
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Scripting/ScriptManager.h"
+#include "SplashDriver.h"
 
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -61,7 +62,11 @@ int main(int argc, char** argv)
 
         DonTopo::Engine engine;
         DonTopo::Window window;
-        window.init(1280, 720, exeDir.stem().string().c_str(), nullptr);
+        // Oculta de entrada: se enseña tras presentar el primer frame (el del
+        // splash). Sin esto, la ventana se hacia visible aqui y Windows pintaba
+        // el area de cliente en BLANCO durante los ~520ms que tarda
+        // initPresentation en levantar Vulkan — un flash blanco antes del logo.
+        window.init(1280, 720, exeDir.stem().string().c_str(), nullptr, /*showOnInit=*/false);
         DonTopo::Input::init(window.getNativeWindow());
         DonTopo::Renderer renderer;
 
@@ -95,7 +100,8 @@ int main(int argc, char** argv)
             std::cerr << "Aviso: la escena no tiene una camara (CameraComponent); "
                           "el juego no podra renderizar correctamente." << std::endl;
 
-        // Antes de init(): initImGui y createOffscreenImages leen el flag.
+        // Antes de initPresentation(): initImGui y createOffscreenImages leen
+        // el flag durante esa inicialización.
         renderer.setHeadless(true);
 
         std::vector<DonTopo::GameObject*> allNodes;
@@ -112,7 +118,48 @@ int main(int argc, char** argv)
             }
         }
 
-        renderer.init(window, meshes);
+        // Resuelve el logo: en un paquete exportado esta junto al .exe como
+        // splash.png; en dev (sin exportar) se cae a assets/MainEngineLogo.png.
+        std::string logoPath = "splash.png";
+        {
+            std::error_code lec;
+            if (!std::filesystem::exists(logoPath, lec) || lec)
+                logoPath = "assets/MainEngineLogo.png";
+        }
+
+        renderer.initPresentation(window);
+
+        const auto splashStart = std::chrono::high_resolution_clock::now();
+        const bool haveSplash = renderer.beginSplash(logoPath);
+        const SplashTimings splashT;
+        auto sinceSplash = [&]() {
+            return std::chrono::duration<float>(
+                std::chrono::high_resolution_clock::now() - splashStart).count();
+        };
+        auto pumpSplash = [&](bool loadingDone, float loadingDoneAt) {
+            if (!haveSplash) return;
+            window.pollEvents();
+            SplashState s = splashStateAt(splashT, sinceSplash(), loadingDone, loadingDoneAt);
+            renderer.drawSplashFrame(s.alpha);
+        };
+
+        // Un frame de splash antes de la carga pesada (alpha del fade-in inicial).
+        pumpSplash(false, 0.0f);
+
+        // La ventana se enseña AQUI, ya con el primer frame del splash
+        // presentado: lo primero que ve el usuario es el logo sobre el fondo
+        // oscuro del shader, nunca el blanco por defecto de la ventana.
+        // Sin splash (logo ausente) se queda oculta hasta justo antes del bucle
+        // de juego — ver el show() de mas abajo—, que tambien evita el blanco.
+        bool windowShown = false;
+        if (haveSplash)
+        {
+            window.show();
+            windowShown = true;
+        }
+
+        renderer.initSceneResources(meshes);
+        pumpSplash(false, 0.0f);
         // setSceneRoot/setPhysicsManager/setAudioManager (y más abajo
         // setScriptManager) son passthroughs puros al EditorUI embebido del
         // Renderer: en headless no dibujan nada ni cambian ningún cálculo. Se
@@ -133,12 +180,14 @@ int main(int argc, char** argv)
             "assets/skybox/pz.png",
             "assets/skybox/nz.png",
         });
+        pumpSplash(false, 0.0f);
 
         // Pasada 2: meshes animados, después de init como exige el Renderer.
         for (auto* go : allNodes)
         {
             if (go->hasMesh() && go->isSkinned())
                 go->skinnedRenderIndex = renderer.addSkinnedMesh(*go->getSkinnedMesh());
+            pumpSplash(false, 0.0f);
         }
 
         // Mismas luces que el editor: la escena no las serializa.
@@ -166,6 +215,7 @@ int main(int argc, char** argv)
         // Scripts/ va dentro del paquete, junto al ejecutable — a diferencia
         // del editor, que la busca subiendo directorios hacia el repo.
         scriptManager.init("Scripts");
+        pumpSplash(false, 0.0f);
         renderer.setScriptManager(&scriptManager);
 
         glfwSetWindowUserPointer(window.getNativeWindow(), &renderer);
@@ -176,6 +226,36 @@ int main(int argc, char** argv)
             if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
                 glfwSetWindowShouldClose(w, GLFW_TRUE);
         });
+
+        // La carga termino: marcar el instante y drenar el resto del splash
+        // (hold hasta minTotal + fade-out). Fallback simple (sin crossfade
+        // con la escena): el logo funde a su color de fondo y se corta al
+        // primer frame de juego. El crossfade real es una mejora posterior.
+        if (haveSplash)
+        {
+            const float loadingDoneAt = sinceSplash();
+            for (;;)
+            {
+                window.pollEvents();
+                if (window.shouldClose()) break;
+                SplashState s = splashStateAt(splashT, sinceSplash(), true, loadingDoneAt);
+                // s.crossfading se ignora a proposito: este fallback solo
+                // dibuja el splash (fundido a su color de fondo), nunca la
+                // escena debajo. El crossfade con la escena queda fuera de
+                // alcance, no es un olvido.
+                renderer.drawSplashFrame(s.alpha);
+                if (s.done) break;
+            }
+        }
+
+        // Sin splash la ventana sigue oculta: se enseña aqui, con todo cargado,
+        // para que el primer frame que se vea sea el de la escena. Asi el camino
+        // "logo ausente" tampoco muestra el blanco de la ventana vacia.
+        if (!windowShown)
+        {
+            window.show();
+            windowShown = true;
+        }
 
         scriptManager.onPlayStart();
 

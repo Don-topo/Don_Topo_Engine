@@ -12,6 +12,7 @@
 #include "DonTopo/Renderer/GpuResources.h"
 #include "DonTopo/Editor/EditorUI.h"
 #include "DonTopo/Renderer/Skybox.h"
+#include "DonTopo/Renderer/SplashScreen.h"
 #include "DonTopo/Editor/Gizmos.h"
 #include <array>
 
@@ -31,6 +32,22 @@ namespace DonTopo {
             Renderer(const Renderer&)               = delete;
             Renderer& operator=(const Renderer&)    = delete;
             void init(Window& window, const std::vector<Mesh>& meshes);
+            // Fase 1 del arranque: lo minimo para presentar (device, swapchain,
+            // render pass, framebuffers, command buffers, sync, ImGui). No crea
+            // pipelines de escena. La usa el runtime para poder dibujar el
+            // splash antes de la carga pesada. init() la llama primero.
+            void initPresentation(Window& window);
+            // Fase 2: pipelines PBR/shadow/compute, offscreen, descriptor sets,
+            // subida de mallas estaticas y auto-fit de camara (necesita meshes).
+            // init() la llama despues.
+            void initSceneResources(const std::vector<Mesh>& meshes);
+            // Inicializa el splash sobre el render pass del swapchain (requiere
+            // initPresentation ya llamado). false si el logo no carga: el caller
+            // se salta el splash. Solo lo llama el runtime; el editor no.
+            bool beginSplash(const std::string& logoPath);
+            // Presenta un frame con solo el splash a alpha [0,1]. No-op si el
+            // splash no se inicializo.
+            void drawSplashFrame(float alpha);
             void drawFrame(Window& window);
             void shutdown();
             void setCamera(const Camera& camera);
@@ -44,8 +61,9 @@ namespace DonTopo {
             // vez de la cámara de vuelo del editor.
             bool isPlaying() const { return m_headless || m_editorUI.isPlaying(); }
             // Modo runtime: ni ImGui ni paneles. Solo tiene efecto si se
-            // llama ANTES de init() — initImGui/createOffscreenImages leen el
-            // flag durante la inicialización.
+            // llama ANTES de initPresentation() (o de init(), que la llama) —
+            // initImGui/createOffscreenImages leen el flag durante esa
+            // inicialización.
             void setHeadless(bool headless) { m_headless = headless; }
             // Reenvía al axis gizmo del viewport; cb recibe el eje mundo clicado.
             void setOnAxisSelected(std::function<void(const glm::vec3&)> cb) { m_editorUI.setOnAxisSelected(std::move(cb)); }
@@ -378,6 +396,7 @@ namespace DonTopo {
 
             EditorUI m_editorUI;
             Skybox   m_skybox;
+            SplashScreen m_splash;
             GameObject* m_sceneRoot = nullptr;
             Scene* m_scene = nullptr;
     };

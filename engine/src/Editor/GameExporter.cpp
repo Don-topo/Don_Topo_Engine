@@ -440,6 +440,20 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         ok = false;
     }
 
+    // Logo del splash: el runtime lo busca como splash.png junto al .exe. Va
+    // siempre (la escena no lo referencia), pero faltar es AVISO, no error: sin
+    // el, el runtime arranca directo sin splash (SplashScreen::init devuelve
+    // false y el runtime lo respeta). Mismo criterio que fmod.dll.
+    {
+        const fs::path logo = projectRoot / "assets" / "MainEngineLogo.png";
+        std::error_code lec;
+        if (fs::exists(logo, lec) && !lec)
+            ok = copyOne(logo, pkg / "splash.png") && ok;
+        else
+            r.messages.push_back("Aviso: no se encontro " + logo.string() +
+                                 "; el juego exportado arrancara sin splash screen.");
+    }
+
     // shaders/*.spv a la raíz del paquete: Renderer::createPipeline los abre
     // como "shaders/<nombre>.spv" relativo al CWD.
     //

@@ -10,7 +10,8 @@ Window::~Window() {
     shutdown();
 }
 
-void Window::init(int width, int height, const char* title, const char* iconPath) {
+void Window::init(int width, int height, const char* title, const char* iconPath,
+                  bool showOnInit) {
     if (!glfwInit())
         throw std::runtime_error("GLFW: failed to initialize");
 
@@ -43,7 +44,16 @@ void Window::init(int width, int height, const char* title, const char* iconPath
         }
     }
 
-    glfwShowWindow(m_window);
+    // Con showOnInit=false la ventana se queda oculta: la enseña el caller con
+    // show() tras presentar su primer frame, para que lo primero que se vea sea
+    // ese frame y no el fondo blanco por defecto de la ventana.
+    if (showOnInit)
+        glfwShowWindow(m_window);
+}
+
+void Window::show() const {
+    if (m_window)
+        glfwShowWindow(m_window);
 }
 
 void Window::shutdown() {
