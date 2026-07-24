@@ -86,6 +86,14 @@ as `splash.png`; if the PNG is missing the game just starts without a splash (ne
 logo fades in, holds during load, and fades to the scene. The logo is fixed for now (not yet
 configurable per project). Only the exported runtime shows it — the editor does not.
 
+**No console window, logs go to a file.** The exported game links against the Windows subsystem, so
+double-clicking it opens the game window and nothing else. Everything the engine and Lua `print()`
+would have written to the terminal goes to `game.log`, created next to the executable on every run
+(overwritten each time). Errors that stop the game — a scene that fails to load, an unhandled
+exception — also pop up a message box, so the window never just disappears without explanation.
+The editor (`Sandbox.exe`) keeps its console: run it from a terminal and its output stays there,
+while Lua `print()` goes to the editor's Log Console panel.
+
 Shaders are compiled from `shaders/*.{vert,frag,comp}` to SPIR-V automatically during build and copied to both the executable directory and `shaders/`.
 
 ## Project Structure
