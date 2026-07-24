@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace DonTopo
@@ -70,5 +71,18 @@ namespace DonTopo
             mutable std::mutex      m_mutex;
             std::vector<LoadedMesh> m_inbox;
             int                     m_pending = 0;
+
+            // Contabilidad de pending() frente a cancel() — ver el comentario
+            // largo en cancel() (AsyncAssetLoader.cpp) para el razonamiento
+            // completo de la carrera. Resumen: runJob() marca su id en
+            // m_started nada más entrar, bajo el mismo mutex que usa cancel()
+            // para decidir; eso hace que "¿ya había arrancado?" sea una
+            // pregunta atómica y sin ambigüedad aunque cancel() y el worker
+            // compitan por microsegundos. m_cancelledBeforeStart evita que un
+            // id resuelto por cancel() (pending ya decrementado ahí) se
+            // vuelva a decrementar si, pese a todo, el job todavía llega a
+            // correr y postea al buzón.
+            std::unordered_set<JobSystem::JobId> m_started;
+            std::unordered_set<JobSystem::JobId> m_cancelledBeforeStart;
     };
 }

@@ -61,11 +61,58 @@ namespace DonTopo
 
     void AsyncAssetLoader::cancel(JobSystem::JobId id)
     {
+        // Best-effort: si JobSystem todavía no ha sacado este job de la
+        // cola, esto evita que llegue a correr (workerLoop lo salta al
+        // hacer pop). Un job ya arrancado NO se interrumpe — eso es cosa de
+        // JobSystem, no nuestra (ver JobSystem::cancel()).
         m_jobs.cancel(id);
+
+        // pending() cuenta "en cola, en vuelo o en el buzón" (ver header).
+        // Un id cancelado ANTES de arrancar nunca va a pasar por runJob(), y
+        // por tanto nunca va a pasar por el post al buzón ni por la entrega
+        // de pumpCompleted — que son los DOS únicos sitios que hoy
+        // decrementan m_pending. Sin este bloque, ese id se queda contado
+        // para siempre: el bug que arregla este fix.
+        //
+        // El problema es que cancel() no puede saber, de forma síncrona, si
+        // el job ya había arrancado cuando llega la cancelación — es una
+        // carrera real contra el worker. La resolvemos así: runJob() marca
+        // su propio id en m_started como PRIMERA operación, bajo este mismo
+        // m_mutex. Como cancel() también lee m_started bajo el mismo mutex,
+        // "¿ya había arrancado?" es una pregunta atómica: o bien cancel()
+        // adquiere el lock primero (m_started todavía no tiene el id) o
+        // runJob() lo adquiere primero (ya lo tiene) — no hay tercer caso.
+        //
+        //  - No había arrancado: decrementamos aquí y marcamos el id en
+        //    m_cancelledBeforeStart. Si pese a todo el job termina
+        //    corriendo igualmente (JobSystem perdió la carrera interna por
+        //    microsegundos) y postea su resultado al buzón, pumpCompleted
+        //    verá el id en m_cancelledBeforeStart y NO volverá a
+        //    decrementar — evita el doble decremento.
+        //  - Ya había arrancado (o ya se entregó): no tocamos el contador.
+        //    Lo resuelve runJob() + pumpCompleted() exactamente igual que
+        //    si no se hubiera cancelado — el resultado sigue llegando al
+        //    buzón y contando una única vez, ahí.
+        //
+        // insert().second sólo es true la primera vez: una cancelación
+        // repetida del mismo id (o una cancelación tras la entrega) es un
+        // no-op, nunca decrementa dos veces.
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_started.count(id) && m_cancelledBeforeStart.insert(id).second)
+            --m_pending;
     }
 
     void AsyncAssetLoader::runJob(JobSystem::JobId id, const std::string& path, uint64_t targetId)
     {
+        {
+            // Marca de "ya arrancado" para la contabilidad de cancel() (ver
+            // el comentario largo ahí). Tiene que ser lo PRIMERO que hace
+            // runJob(), antes de tocar disco o Assimp, para que la ventana
+            // de carrera con cancel() sea lo más pequeña posible.
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_started.insert(id);
+        }
+
         LoadedMesh result;
         result.job      = id;
         result.targetId = targetId;
@@ -76,6 +123,13 @@ namespace DonTopo
             result.mesh = ModelLoader::loadAuto(path);
             if (result.mesh)
             {
+                // Solo se decodifica Mesh::material (singular). Un
+                // SkinnedMesh (loadAuto de un FBX con rig) guarda sus
+                // texturas por submesh en SkinnedMesh::materials, que aquí
+                // NO se toca a propósito — decisión diferida. Para esos
+                // modelos, result.images queda vacío y la textura se sigue
+                // resolviendo en el hilo principal por la vía síncrona
+                // existente (el fallback de buildRenderObject, Task 6).
                 const Material& mat = result.mesh->material;
                 decodeSlot(mat.texturePath,             mat.embeddedTexture,            DecodedImage::Albedo, result.images);
                 decodeSlot(mat.normalMapPath,           mat.embeddedNormalMap,          DecodedImage::Normal, result.images);
@@ -143,7 +197,17 @@ namespace DonTopo
             std::lock_guard<std::mutex> lock(m_mutex);
             for (auto& r : leftover)
                 m_inbox.push_back(std::move(r));
-            m_pending -= static_cast<int>(out.size());
+            // Decremento por elemento, no en bloque: un id que cancel() ya
+            // resolvió como "cancelado antes de arrancar" (ver cancel()) ya
+            // decrementó m_pending ahí. Si ese mismo id, pese a todo, llegó a
+            // correr y aparece aquí en 'out', hay que saltarlo — sumarlo
+            // otra vez sería un doble decremento y dejaría m_pending
+            // negativo o por debajo de la cuenta real.
+            for (auto& r : out)
+            {
+                if (m_cancelledBeforeStart.erase(r.job) == 0)
+                    --m_pending;
+            }
         }
         return out;
     }
