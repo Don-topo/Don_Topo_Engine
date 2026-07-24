@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -49,6 +50,57 @@ std::filesystem::path executableDir()
 #endif
 }
 
+// Manda std::cout y std::cerr a game.log, junto al ejecutable. El runtime se
+// enlaza como subsystem WINDOWS (runtime/CMakeLists.txt) para no abrir una
+// consola detras del juego, y sin consola esos flujos no van a ninguna parte:
+// los mensajes del motor y los print() de Lua se perderian en silencio.
+//
+// Se cambia el rdbuf en vez de reabrir stdout con freopen: sin consola el CRT
+// de MSVC no tiene stream que reabrir (_fileno(stdout) == -2) y freopen_s falla
+// devolviendo error sin llegar a crear el fichero — probado, no es teoria.
+// Cambiar el rdbuf no toca los descriptores del sistema, asi que funciona igual
+// con consola y sin ella. Lo que escriba una libreria de terceros por printf
+// (Assimp, PhysX) sigue sin capturarse; el motor solo usa cout/cerr.
+//
+// El ofstream se filtra a proposito: cout/cerr guardan su rdbuf, y destruirlo
+// al salir dejaria esos punteros colgando durante la destruccion de los objetos
+// estaticos, donde todavia puede haber logs. unitbuf hace que cada << llegue al
+// disco, asi que un crash no se lleva por delante las ultimas lineas — que son
+// justo las que interesan.
+void redirectStdioToLogFile()
+{
+    auto* logStream = new std::ofstream("game.log", std::ios::out | std::ios::trunc);
+    if (!logStream->is_open())
+    {
+        delete logStream;
+        return;
+    }
+    std::cout.rdbuf(logStream->rdbuf());
+    std::cerr.rdbuf(logStream->rdbuf());
+    std::cout.setf(std::ios::unitbuf);
+    std::cerr.setf(std::ios::unitbuf);
+}
+
+// Errores que impiden jugar: sin consola, un mensaje por stderr solo acaba en
+// game.log y el usuario ve la ventana cerrarse sin explicacion. Va tambien al
+// log, que es donde queda el rastro despues de cerrar el dialogo.
+void reportFatal(const std::string& msg)
+{
+    std::cerr << msg << std::endl;
+#ifdef _WIN32
+    // MessageBoxW y no MessageBoxA: los mensajes vienen en UTF-8 (lo que hay en
+    // los .cpp y lo que devuelve what()), y la version ANSI los interpretaria
+    // con la codepage del sistema — cualquier acento saldria como garabatos.
+    const int wlen = MultiByteToWideChar(CP_UTF8, 0, msg.c_str(), -1, nullptr, 0);
+    if (wlen > 0)
+    {
+        std::wstring wmsg(wlen, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, msg.c_str(), -1, wmsg.data(), wlen);
+        MessageBoxW(nullptr, wmsg.c_str(), L"Don Topo Engine", MB_OK | MB_ICONERROR);
+    }
+#endif
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -57,6 +109,9 @@ int main(int argc, char** argv)
         const std::filesystem::path exeDir = executableDir();
         std::error_code ec;
         std::filesystem::current_path(exeDir, ec);
+        // Despues del current_path: game.log se crea junto al ejecutable, no en
+        // el directorio desde el que se lanzo el juego.
+        redirectStdioToLogFile();
 
         const std::string scenePath = (argc > 1) ? argv[1] : "game.scene";
 
@@ -86,7 +141,7 @@ int main(int argc, char** argv)
 
         if (!scene.load(scenePath, physics, audio))
         {
-            std::cerr << "Error: no se pudo cargar la escena '" << scenePath << "'" << std::endl;
+            reportFatal("Error: no se pudo cargar la escena '" + scenePath + "'");
             return EXIT_FAILURE;
         }
 
@@ -355,7 +410,7 @@ int main(int argc, char** argv)
         renderer.shutdown();
         window.shutdown();
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        reportFatal(std::string("Error: ") + e.what());
         return EXIT_FAILURE;
     }
     return 0;
