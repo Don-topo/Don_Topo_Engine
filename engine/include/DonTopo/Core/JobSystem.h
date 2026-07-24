@@ -37,8 +37,26 @@ namespace DonTopo
             // veces sin shutdown() entre medias es un no-op.
             void start(unsigned threads = 0);
 
-            // Drena la cola (ejecuta lo pendiente), para los hilos y hace join.
-            // Idempotente: el destructor lo llama y el usuario también puede.
+            // Drena la cola (ejecuta lo pendiente), para los hilos y hace
+            // join. Cuando shutdown() retorna, TODOS los workers están
+            // parados y unidos — esto vale para cualquier llamador, no solo
+            // para el que "gana" la carrera si hay dos llamadas explícitas
+            // concurrentes (p.ej. dos hilos que llaman shutdown() a mano).
+            // La que pierde la carrera por el mutex ESPERA a que la
+            // ganadora termine de drenar y hacer join antes de retornar, en
+            // vez de retornar ya con los workers de la ganadora todavía
+            // vivos. Eso importa porque el primer paso de un teardown
+            // ordenado (p.ej. antes de vkDeviceWaitIdle) es "ya no queda
+            // ningún worker vivo", y esa garantía tiene que valer para
+            // cualquiera de las llamadas, no solo para la que llegó primero
+            // al mutex.
+            //
+            // Esto NO cubre destruir el JobSystem mientras otro hilo sigue
+            // llamando a uno de sus miembros: eso es undefined behavior del
+            // lenguaje (el objeto deja de existir bajo los pies de esa
+            // llamada) y ninguna sincronización interna puede defenderse de
+            // eso. shutdown() resuelve la carrera entre llamadas a MIEMBROS
+            // concurrentes, no la destrucción concurrente con una llamada.
             void shutdown();
 
             // Devuelve 0 si el pool no está arrancado — el job NO se ejecuta.
@@ -76,12 +94,21 @@ namespace DonTopo
             void workerLoop();
 
             mutable std::mutex       m_mutex;
-            std::condition_variable  m_cv;
+            std::condition_variable  m_cv;          // señal de cola: la usan los workers.
+            // Handshake de shutdown() concurrente. Deliberadamente SEPARADA de
+            // m_cv: reutilizar m_cv arriesga un lost wakeup (un notify_all()
+            // de shutdown() podría "gastarse" en un worker que esperaba por
+            // cola, no en el llamador que espera a que termine el shutdown
+            // ganador). start() también espera aquí antes de arrancar, para
+            // no lanzar un pool nuevo mientras un shutdown() en curso todavía
+            // tiene pendiente su limpieza final (ver JobSystem.cpp).
+            std::condition_variable  m_shutdownCv;
             std::deque<Job>          m_queue;
             std::unordered_set<JobId> m_cancelled;
             std::vector<std::thread> m_threads;
-            JobId                    m_nextId   = 1;
-            int                      m_inFlight = 0;
-            bool                     m_stop     = false;
+            JobId                    m_nextId       = 1;
+            int                      m_inFlight     = 0;
+            bool                     m_stop         = false;
+            bool                     m_shuttingDown = false;
     };
 }

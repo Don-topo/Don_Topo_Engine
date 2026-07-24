@@ -20,7 +20,19 @@ namespace DonTopo
         // seguro tenerlo cogido aquí: un worker recién creado simplemente se
         // bloquea en m_cv.wait hasta que este scope suelte el mutex, no hay
         // deadlock.
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::unique_lock<std::mutex> lock(m_mutex);
+
+        // Esperar a que un shutdown() concurrente termine DEL TODO (incluida
+        // su limpieza final de m_queue/m_cancelled) antes de mirar si hay
+        // que arrancar. Sin esto: un shutdown() ganador mueve m_threads y lo
+        // deja vacío, suelta el mutex para hacer join (lento) de los hilos
+        // viejos, y en esa ventana un start() vería m_threads vacío,
+        // lanzaría un pool nuevo y ya arrancado — para que el shutdown()
+        // viejo, al re-adquirir el mutex, le vaciara la cola al pool NUEVO
+        // con su m_queue.clear() de cierre. m_shuttingDown cierra esa
+        // ventana: mientras siga puesto, start() no toca nada.
+        m_shutdownCv.wait(lock, [this] { return !m_shuttingDown; });
+
         if (!m_threads.empty()) return;   // ya arrancado
         m_stop = false;
 
@@ -33,35 +45,68 @@ namespace DonTopo
     {
         std::vector<std::thread> threadsToJoin;
         {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            // Idempotencia real (no solo cosmética): el destructor llama a
-            // shutdown(), y el usuario también puede — los dos caminos, o dos
-            // shutdown() concurrentes, tienen que convivir. Sin esta guarda,
-            // la llamada que ve m_threads ya vacío (porque la otra ya hizo el
-            // move de abajo) NO tiene hilos que unir -su join es instantáneo-
-            // y llega en microsegundos al m_queue.clear() de más abajo. Si en
-            // ese momento la OTRA llamada sigue bloqueada en join() esperando
-            // a un worker que todavía está drenando la cola real, ese clear()
-            // se la vacía por debajo: jobs ya encolados se descartan sin
-            // correr y sin que nadie se entere. Con la guarda, la llamada que
-            // pierde la carrera por el mutex retorna aquí mismo y nunca llega
-            // a tocar m_queue.
+            std::unique_lock<std::mutex> lock(m_mutex);
+
+            // Otra llamada a shutdown() ya está en marcha (desde otro hilo:
+            // dos shutdown() manuales, o uno manual junto al del destructor
+            // al final del mismo scope). En vez de retornar ya -que es lo
+            // que hacía la guarda original-, ESPERAMOS a que la ganadora
+            // termine de drenar, notificar a los workers y hacer join, y
+            // retornamos justo después: para esta llamada ya no queda nada
+            // que hacer, todo lo que había que parar ya está parado. Si no
+            // esperáramos, "shutdown() ha retornado" dejaría de significar
+            // "no queda ningún worker vivo" para el que pierde la carrera:
+            // podría retornar con la ganadora todavía bloqueada en join(), y
+            // si ese que pierde es el destructor, destruye
+            // m_mutex/m_cv/m_queue con workers reales todavía usándolos.
+            if (m_shuttingDown)
+            {
+                m_shutdownCv.wait(lock, [this] { return !m_shuttingDown; });
+                return;
+            }
+
+            // Idempotencia para el caso puramente secuencial (nadie más
+            // llamando a la vez): si no hay hilos que parar es que ya se
+            // hizo shutdown del todo antes y nadie lo está haciendo ahora
+            // -si lo estuviera, la rama de arriba ya nos habría hecho
+            // esperar y retornar-. Nótese que esta guarda YA NO es la que
+            // evita perder jobs en la carrera concurrente -eso ahora lo
+            // hace la rama de arriba esperando en vez de retornar ya-; sin
+            // ella, una llamada secuencial redundante (p.ej. el destructor
+            // tras un shutdown() manual) repetiría el "vaciar, notificar,
+            // unir nada, limpiar nada" entero sin hacer daño -m_threads y
+            // m_queue ya están vacíos-, solo trabajo de más.
             if (m_threads.empty()) return;
-            m_stop = true;
+
+            m_shuttingDown = true;
+            m_stop         = true;
             // Vaciar el vector aquí, bajo el lock, es lo que hace que
             // m_threads.empty() sea una lectura fiable para submit()/
-            // threadCount()/otro shutdown() mientras el join (lento, fuera
-            // del lock) está en marcha.
+            // threadCount()/start()/otro shutdown() mientras el join (lento,
+            // fuera del lock) está en marcha.
             threadsToJoin = std::move(m_threads);
+            // move-asignación deja la fuente "válida pero no especificada",
+            // no garantiza vacío por norma — en la práctica todas las
+            // implementaciones la dejan vacía, pero la guarda de arriba
+            // (m_threads.empty()) depende de que lo esté SIEMPRE. clear()
+            // convierte ese detalle de implementación en garantía real.
+            m_threads.clear();
         }
         m_cv.notify_all();
 
         for (auto& t : threadsToJoin)
             if (t.joinable()) t.join();
 
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_queue.clear();
-        m_cancelled.clear();
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_queue.clear();
+            m_cancelled.clear();
+            m_shuttingDown = false;
+        }
+        // Fuera del lock: a quien esperaba (otro shutdown() perdedor, o un
+        // start() que aguardaba su turno) le basta con despertar y volver a
+        // adquirir el mutex, no hace falta tenerlo cogido para notificar.
+        m_shutdownCv.notify_all();
     }
 
     JobSystem::JobId JobSystem::submit(std::function<void()> fn)

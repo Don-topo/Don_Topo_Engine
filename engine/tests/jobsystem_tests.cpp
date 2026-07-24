@@ -74,22 +74,27 @@ void testCancelPreventsQueuedJob()
     }
 }
 
-// shutdown() llamado dos veces EN PARALELO (no solo secuencial: el destructor
-// puede correr en un hilo mientras otro código llama shutdown() a mano — la
-// clase no lo prohíbe) no debe perder jobs ya encolados.
+// shutdown() llamado dos veces EN PARALELO (dos hilos que llaman shutdown() a
+// mano — no el destructor: destruir el objeto mientras otro código sigue
+// llamando a uno de sus miembros es UB del lenguaje, no un caso que esta
+// clase pueda soportar; lo que la clase SÍ garantiza es que dos llamadas
+// explícitas a shutdown() convivan) no debe perder jobs ya encolados.
 //
 // Con 1 solo worker y un primer job bloqueado con "release", el worker está
 // atascado y la cola real (50 jobs) sigue sin drenar cuando llegan los dos
 // shutdown(). El mutex serializa quién "gana": el ganador mueve m_threads
 // (con hilos de verdad) y se queda bloqueado en join() esperando a que el
-// worker despierte. El perdedor ve m_threads YA vacío. Sabotaje: quitar la
-// guarda de idempotencia ("if (m_threads.empty()) return;") — sin ella, el
-// perdedor no retorna: sigue de largo, no tiene nada que unir (join instantáneo
-// sobre un vector vacío) y llega en microsegundos al m_queue.clear() final,
-// que se ejecuta MIENTRAS el worker sigue bloqueado sin haber tocado la cola
-// real. Esos 50 jobs se descartan antes de correr — silenciosamente, como en
-// el finding 2 pero por la puerta de atrás. Con la guarda puesta, el perdedor
-// retorna en cuanto ve m_threads vacío y nunca llega a ese clear().
+// worker despierte. El perdedor ve m_shuttingDown a true y ESPERA en
+// m_shutdownCv a que el ganador termine, en vez de retornar ya. Sabotaje:
+// quitar la guarda de idempotencia ("if (m_threads.empty()) return;") — sin
+// ella, el perdedor no espera ni retorna por ahí: sigue de largo, no tiene
+// nada que unir (join instantáneo sobre un vector vacío) y llega en
+// microsegundos al m_queue.clear() final, que se ejecuta MIENTRAS el worker
+// sigue bloqueado sin haber tocado la cola real. Esos 50 jobs se descartan
+// antes de correr — silenciosamente, como en el finding 2 pero por la puerta
+// de atrás. Con la guarda puesta, el perdedor espera a que el ganador drene
+// y una los hilos antes de retornar, y nunca llega a ese clear() por su
+// cuenta.
 void testDoubleShutdown()
 {
     for (int it = 0; it < kIters; ++it)
@@ -122,27 +127,82 @@ void testDoubleShutdown()
     }
 }
 
+// shutdown() concurrente debe significar "todo ha terminado" para AMBOS
+// llamadores, no solo para el que gana la carrera por el mutex. Un job
+// deliberadamente lento (20ms) deja una ventana amplia: si el perdedor
+// retornase ya (en vez de esperar en m_shutdownCv a que el ganador drene y
+// una los hilos), su shutdown() volvería con el job todavía sin terminar.
+// Cada hilo mira el flag justo al volver de SU PROPIA llamada a shutdown();
+// con la espera puesta, los dos deben verlo ya en true.
+//
+// Sabotaje: en la rama "if (m_shuttingDown)" de shutdown(), cambiar el
+// m_shutdownCv.wait(...) por un return inmediato (el perdedor ya no espera
+// al ganador). Resultado esperado: seenByLoser da false en varias de las
+// 50 iteraciones porque el hilo que pierde la carrera por el mutex retorna
+// en microsegundos, mucho antes de que el job de 20ms haya podido terminar.
+void testConcurrentShutdownWaitsForWinner()
+{
+    for (int it = 0; it < kIters; ++it)
+    {
+        DonTopo::JobSystem js;
+        js.start(1);
+
+        std::atomic<bool> finished{false};
+        js.submit([&finished]
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            finished.store(true, std::memory_order_release);
+        });
+
+        std::atomic<bool> seenByT1{false};
+        std::atomic<bool> seenByT2{false};
+
+        std::thread t1([&js, &finished, &seenByT1]
+        {
+            js.shutdown();
+            seenByT1.store(finished.load(std::memory_order_acquire));
+        });
+        std::thread t2([&js, &finished, &seenByT2]
+        {
+            js.shutdown();
+            seenByT2.store(finished.load(std::memory_order_acquire));
+        });
+
+        t1.join();
+        t2.join();
+
+        assert(seenByT1.load() && seenByT2.load() &&
+               "shutdown() debe retornar solo cuando el job ya ha terminado, para las dos llamadas concurrentes");
+    }
+}
+
 // start(1) es válido: cubre el clamp inferior sin depender del hardware.
 void testSingleThread()
 {
-    DonTopo::JobSystem js;
-    js.start(1);
-    assert(js.threadCount() == 1);
-    std::atomic<int> counter{0};
-    for (int i = 0; i < 50; ++i)
-        js.submit([&counter] { counter.fetch_add(1, std::memory_order_relaxed); });
-    js.shutdown();
-    assert(counter.load() == 50);
+    for (int it = 0; it < kIters; ++it)
+    {
+        DonTopo::JobSystem js;
+        js.start(1);
+        assert(js.threadCount() == 1);
+        std::atomic<int> counter{0};
+        for (int i = 0; i < 50; ++i)
+            js.submit([&counter] { counter.fetch_add(1, std::memory_order_relaxed); });
+        js.shutdown();
+        assert(counter.load() == 50);
+    }
 }
 
 // start(0) aplica clamp(hardware_concurrency()-1, 2, 8): nunca 0, nunca >8.
 void testAutoThreadCountClamped()
 {
-    DonTopo::JobSystem js;
-    js.start(0);
-    const unsigned n = js.threadCount();
-    assert(n >= 2 && n <= 8 && "el clamp automatico debe caer en [2,8]");
-    js.shutdown();
+    for (int it = 0; it < kIters; ++it)
+    {
+        DonTopo::JobSystem js;
+        js.start(0);
+        const unsigned n = js.threadCount();
+        assert(n >= 2 && n <= 8 && "el clamp automatico debe caer en [2,8]");
+        js.shutdown();
+    }
 }
 
 // idle() es lo que AsyncAssetLoader (Task 2) va a hacer polling para saber si
@@ -179,49 +239,74 @@ void testIdleReflectsInFlightJob()
 // try/catch del worker — std::terminate y el test no llega a imprimir OK.
 void testJobExceptionDoesNotTerminate()
 {
-    DonTopo::JobSystem js;
-    js.start(2);
-    js.submit([] { throw std::runtime_error("boom"); });
-    std::atomic<int> after{0};
-    js.submit([&after] { after.fetch_add(1, std::memory_order_relaxed); });
-    js.shutdown();
-    assert(after.load() == 1 && "una excepcion en un job no puede matar al worker");
+    for (int it = 0; it < kIters; ++it)
+    {
+        DonTopo::JobSystem js;
+        js.start(2);
+        js.submit([] { throw std::runtime_error("boom"); });
+        std::atomic<int> after{0};
+        js.submit([&after] { after.fetch_add(1, std::memory_order_relaxed); });
+        js.shutdown();
+        assert(after.load() == 1 && "una excepcion en un job no puede matar al worker");
+    }
 }
 
 // reserveId() da ids unicos y submitWithId() los respeta: el job ve su propio
 // id sin la carrera de leerlo despues de submit(). Sabotaje: hacer que
 // reserveId devuelva siempre 1 — el assert de unicidad salta.
+//
+// También se comprueba el bool que devuelve submitWithId(): true con el pool
+// arrancado (si no, "return true;" a secas pasaría el test igual, dejando
+// el fix del finding 2 de la primera review sin verificar), y false con un
+// pool sin arrancar, donde el id ya se reservó pero el job nunca se encola.
 void testReserveIdIsUniqueAndUsable()
 {
-    DonTopo::JobSystem js;
-    js.start(2);
+    for (int it = 0; it < kIters; ++it)
+    {
+        DonTopo::JobSystem js;
+        js.start(2);
 
-    const DonTopo::JobSystem::JobId a = js.reserveId();
-    const DonTopo::JobSystem::JobId b = js.reserveId();
-    assert(a != 0 && b != 0 && a != b && "cada reserveId da un id distinto y no nulo");
+        const DonTopo::JobSystem::JobId a = js.reserveId();
+        const DonTopo::JobSystem::JobId b = js.reserveId();
+        assert(a != 0 && b != 0 && a != b && "cada reserveId da un id distinto y no nulo");
 
-    std::atomic<uint64_t> seen{0};
-    js.submitWithId(a, [&seen, a] { seen.store(a, std::memory_order_relaxed); });
-    js.shutdown();
+        std::atomic<uint64_t> seen{0};
+        assert(js.submitWithId(a, [&seen, a] { seen.store(a, std::memory_order_relaxed); }) &&
+               "submitWithId debe devolver true con el pool arrancado");
+        js.shutdown();
 
-    assert(seen.load() == a && "el job debe poder capturar su propio id ya relleno");
+        assert(seen.load() == a && "el job debe poder capturar su propio id ya relleno");
+    }
+
+    // Pool nunca arrancado: submit() y submitWithId() deben rechazar el
+    // trabajo (0 / false) en vez de encolarlo silenciosamente.
+    {
+        DonTopo::JobSystem js;
+        assert(js.submit([] {}) == 0 && "submit() en un pool no arrancado debe devolver 0");
+        assert(!js.submitWithId(js.reserveId(), [] {}) &&
+               "submitWithId() en un pool no arrancado debe devolver false");
+    }
 }
 
 // Un id reservado y cancelado antes de submitWithId no llega a ejecutarse.
 // Sabotaje: ignorar m_cancelled en el worker — el contador sube.
 void testCancelBeforeSubmitWithId()
 {
-    DonTopo::JobSystem js;
-    js.start(1);
+    for (int it = 0; it < kIters; ++it)
+    {
+        DonTopo::JobSystem js;
+        js.start(1);
 
-    const DonTopo::JobSystem::JobId id = js.reserveId();
-    js.cancel(id);
+        const DonTopo::JobSystem::JobId id = js.reserveId();
+        js.cancel(id);
 
-    std::atomic<int> ran{0};
-    js.submitWithId(id, [&ran] { ran.fetch_add(1, std::memory_order_relaxed); });
-    js.shutdown();
+        std::atomic<int> ran{0};
+        assert(js.submitWithId(id, [&ran] { ran.fetch_add(1, std::memory_order_relaxed); }) &&
+               "submitWithId debe devolver true: el pool sigue arrancado, solo el job esta cancelado");
+        js.shutdown();
 
-    assert(ran.load() == 0 && "cancelar antes de encolar tambien debe impedir la ejecucion");
+        assert(ran.load() == 0 && "cancelar antes de encolar tambien debe impedir la ejecucion");
+    }
 }
 
 } // namespace
@@ -232,6 +317,7 @@ int main()
     testShutdownDrains();
     testCancelPreventsQueuedJob();
     testDoubleShutdown();
+    testConcurrentShutdownWaitsForWinner();
     testIdleReflectsInFlightJob();
     testSingleThread();
     testAutoThreadCountClamped();
