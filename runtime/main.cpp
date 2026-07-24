@@ -62,7 +62,11 @@ int main(int argc, char** argv)
 
         DonTopo::Engine engine;
         DonTopo::Window window;
-        window.init(1280, 720, exeDir.stem().string().c_str(), nullptr);
+        // Oculta de entrada: se enseña tras presentar el primer frame (el del
+        // splash). Sin esto, la ventana se hacia visible aqui y Windows pintaba
+        // el area de cliente en BLANCO durante los ~520ms que tarda
+        // initPresentation en levantar Vulkan — un flash blanco antes del logo.
+        window.init(1280, 720, exeDir.stem().string().c_str(), nullptr, /*showOnInit=*/false);
         DonTopo::Input::init(window.getNativeWindow());
         DonTopo::Renderer renderer;
 
@@ -141,6 +145,18 @@ int main(int argc, char** argv)
 
         // Un frame de splash antes de la carga pesada (alpha del fade-in inicial).
         pumpSplash(false, 0.0f);
+
+        // La ventana se enseña AQUI, ya con el primer frame del splash
+        // presentado: lo primero que ve el usuario es el logo sobre el fondo
+        // oscuro del shader, nunca el blanco por defecto de la ventana.
+        // Sin splash (logo ausente) se queda oculta hasta justo antes del bucle
+        // de juego — ver el show() de mas abajo—, que tambien evita el blanco.
+        bool windowShown = false;
+        if (haveSplash)
+        {
+            window.show();
+            windowShown = true;
+        }
 
         renderer.initSceneResources(meshes);
         pumpSplash(false, 0.0f);
@@ -230,6 +246,15 @@ int main(int argc, char** argv)
                 renderer.drawSplashFrame(s.alpha);
                 if (s.done) break;
             }
+        }
+
+        // Sin splash la ventana sigue oculta: se enseña aqui, con todo cargado,
+        // para que el primer frame que se vea sea el de la escena. Asi el camino
+        // "logo ausente" tampoco muestra el blanco de la ventana vacia.
+        if (!windowShown)
+        {
+            window.show();
+            windowShown = true;
         }
 
         scriptManager.onPlayStart();
