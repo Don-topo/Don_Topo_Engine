@@ -32,6 +32,10 @@ target_link_libraries(dt_splash_tests PRIVATE DonTopoEngine)
 target_compile_features(dt_splash_tests PRIVATE cxx_std_20)
 target_include_directories(dt_splash_tests PRIVATE ${CMAKE_SOURCE_DIR}/runtime)
 
+add_executable(dt_jobsystem_tests jobsystem_tests.cpp)
+target_link_libraries(dt_jobsystem_tests PRIVATE DonTopoEngine)
+target_compile_features(dt_jobsystem_tests PRIVATE cxx_std_20)
+
 # Ambos ejecutables enlazan DonTopoEngine, que arrastra FMOD (Audio). Sin
 # copiar fmod.dll al lado del .exe, un clone limpio falla en runtime con
 # STATUS_ENTRYPOINT_NOT_FOUND. Mismo patrón que sandbox/CMakeLists.txt.

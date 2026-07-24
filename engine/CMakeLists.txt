@@ -24,6 +24,7 @@ add_library(DonTopoEngine STATIC
     src/Core/CameraComponent.cpp
     src/Core/AnimatorComponent.cpp
     src/Core/GameObject.cpp
+    src/Core/JobSystem.cpp
     src/Core/Scene.cpp
     src/Files/FileManager.cpp
     src/Audio/AudioManager.cpp
