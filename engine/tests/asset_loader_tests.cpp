@@ -117,34 +117,50 @@ void testMissingFileReportsError()
 // presupuesto — el segundo drain se queda a cero y el test se cuelga hasta el
 // timeout, fallando el assert de tamano.
 //
-// kIters reducido a propósito: el "while (loader.pending() > 0)" de más abajo
-// espera a que pending() llegue a 0, pero pending() SOLO decrementa cuando
-// pumpCompleted entrega algo (ver el header de AsyncAssetLoader — "en cola,
-// en vuelo o en el buzón" cuenta como pendiente) y este bucle no llama a
-// pumpCompleted todavía. O sea: ese while agota SIEMPRE el deadline de 30 s,
-// por diseño, en cada pasada. Correrlo kIters=50 veces tardaría ~25 minutos;
-// con las 5 pasadas de aquí el caso de leftover/presupuesto-cero sigue
-// cubierto (es una aserción determinista, no depende del azar de scheduling)
-// sin disparar el tiempo de test a niveles no razonables.
+// kIters a 50 como el resto de casos de concurrencia (pump/leftover/cancel):
+// la version anterior esperaba a "pending() == 0" antes de tocar
+// pumpCompleted, pero pending() SOLO decrementa cuando pumpCompleted entrega
+// algo (ver el header de AsyncAssetLoader) — ese while nunca salia antes del
+// deadline, asi que cada pasada quemaba 30s fijos por diseno, no por el coste
+// real de la aserción. El fix es detectar el "ya esta listo" CONSUMIENDO con
+// un presupuesto real (pumpCompleted(1000ms)) dentro del propio bucle de
+// espera, en vez de mirar pending(): cada iteracion termina en cuanto el
+// worker postea, del orden de milisegundos, y 50 pasadas quedan dominadas
+// solo por 50 cargas reales del FBX.
 void testZeroBudgetKeepsResults(const std::string& fbx)
 {
-    constexpr int kZeroBudgetIters = 5;
-    for (int it = 0; it < kZeroBudgetIters; ++it)
+    for (int it = 0; it < kIters; ++it)
     {
         DonTopo::JobSystem js;
         js.start();
         DonTopo::AsyncAssetLoader loader(js);
 
         loader.requestMesh(fbx, 1);
-        // Espera activa a que el worker deje el resultado en el buzon.
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-        while (loader.pending() > 0 && std::chrono::steady_clock::now() < deadline)
+
+        bool everReady = false;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            // Presupuesto 0: SIEMPRE vacio, este resultado ya este listo o
+            // no — es la aserción central del test, se comprueba en CADA
+            // vuelta del sondeo, no solo una vez al final.
+            assert(loader.pumpCompleted(0.0f).empty() && "presupuesto 0 no procesa nada");
+
+            // Detecta que el worker ya termino consumiendo con presupuesto
+            // real. Si llega algo, es el resultado que buscabamos: ni
+            // pumpCompleted(0) lo devolvio antes (assert de arriba) ni lo
+            // perdio (si no, este pump se quedaria vacio para siempre y el
+            // assert de everReady de mas abajo saltaria al agotar el plazo).
+            std::vector<DonTopo::LoadedMesh> got = loader.pumpCompleted(1000.0f);
+            if (!got.empty())
+            {
+                assert(got.size() == 1 && "un pump con presupuesto 0 no puede perder resultados");
+                everReady = true;
+                break;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
-
-        assert(loader.pumpCompleted(0.0f).empty() && "presupuesto 0 no procesa nada");
-
-        std::vector<DonTopo::LoadedMesh> got = drain(loader, 1);
-        assert(got.size() == 1 && "un pump con presupuesto 0 no puede perder resultados");
+        }
+        assert(everReady && "el resultado debe llegar; presupuesto 0 no puede perderlo");
 
         js.shutdown();
     }
