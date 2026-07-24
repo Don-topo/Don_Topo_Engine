@@ -6,7 +6,8 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <unordered_set>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace DonTopo
@@ -64,25 +65,43 @@ namespace DonTopo
             // en el buzón). Es lo que lee el modal de progreso.
             int pending() const;
 
+            // Solo para tests: cuántos ReadFile de verdad se han hecho. Es la
+            // única forma de comprobar el dedup desde fuera — contar resultados
+            // no distingue "un ReadFile compartido" de "cuatro ReadFile".
+            int readFileCount() const;
+
+            // Cancela todas las peticiones vivas y vacía el buzón. Lo llama el
+            // botón Cancelar del modal de carga (Task 9). Los jobs ya arrancados
+            // terminan igual — no se puede parar un ReadFile a medias — pero sus
+            // resultados se descartan.
+            void cancelAllPending();
+
         private:
-            void runJob(JobSystem::JobId id, const std::string& path, uint64_t targetId);
+            // Peticiones agrupadas por path mientras el job está en vuelo. El
+            // primero que pide un path arranca UN job (jobId); los que llegan
+            // mientras sigue en vuelo se apuntan como waiters al mismo. Al
+            // terminar, el worker construye un LoadedMesh por cada waiter
+            // (copiando el Mesh) y vacía el grupo.
+            //
+            // jobId se guarda aparte de los waiters a propósito: es el id con
+            // el que se encoló el job, que sigue siendo válido aunque su waiter
+            // original se cancele mientras otros siguen esperando el ReadFile.
+            struct PendingGroup
+            {
+                JobSystem::JobId jobId = 0;   // id encolado en el JobSystem (primer waiter)
+                std::vector<std::pair<JobSystem::JobId, uint64_t>> waiters;  // (job, targetId)
+            };
+
+            void      runJob(const std::string& path);
+            LoadedMesh buildResultFor(const LoadedMesh& src,
+                                      JobSystem::JobId job, uint64_t targetId);
 
             JobSystem&              m_jobs;
             mutable std::mutex      m_mutex;
             std::vector<LoadedMesh> m_inbox;
             int                     m_pending = 0;
 
-            // Contabilidad de pending() frente a cancel() — ver el comentario
-            // largo en cancel() (AsyncAssetLoader.cpp) para el razonamiento
-            // completo de la carrera. Resumen: runJob() marca su id en
-            // m_started nada más entrar, bajo el mismo mutex que usa cancel()
-            // para decidir; eso hace que "¿ya había arrancado?" sea una
-            // pregunta atómica y sin ambigüedad aunque cancel() y el worker
-            // compitan por microsegundos. m_cancelledBeforeStart evita que un
-            // id resuelto por cancel() (pending ya decrementado ahí) se
-            // vuelva a decrementar si, pese a todo, el job todavía llega a
-            // correr y postea al buzón.
-            std::unordered_set<JobSystem::JobId> m_started;
-            std::unordered_set<JobSystem::JobId> m_cancelledBeforeStart;
+            std::unordered_map<std::string, PendingGroup> m_groups;
+            int                                           m_readFileCount = 0;
     };
 }

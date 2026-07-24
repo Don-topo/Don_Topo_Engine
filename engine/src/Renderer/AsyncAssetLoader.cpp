@@ -1,8 +1,10 @@
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/ModelLoader.h"
+#include "DonTopo/Renderer/SkinnedMesh.h"
 
 #include <stb_image.h>
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <utility>
@@ -42,119 +44,194 @@ namespace DonTopo
 
     JobSystem::JobId AsyncAssetLoader::requestMesh(const std::string& path, uint64_t targetId)
     {
+        // El id se reserva ANTES de tocar el grupo: el primer waiter de un path
+        // encola el job con ESTE id, y el grupo lo guarda para poder
+        // cancelarlo después aunque su waiter original desaparezca. Reservar
+        // fuera del lock es seguro — reserveId() toma el lock del JobSystem, no
+        // el nuestro.
+        const JobSystem::JobId id = m_jobs.reserveId();
+
+        bool needsJob = false;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             ++m_pending;
+
+            PendingGroup& group = m_groups[path];
+            // El primero que pide un path arranca el job; los que llegan
+            // mientras sigue en vuelo se apuntan al mismo. El coste dominante es
+            // el ReadFile de Assimp, así que deduplicarlo captura casi toda la
+            // ganancia aunque luego se copie el Mesh por target.
+            needsJob = group.waiters.empty();
+            if (needsJob)
+                group.jobId = id;
+            group.waiters.emplace_back(id, targetId);
         }
 
-        // El id se reserva ANTES de encolar: el job necesita conocer el suyo
-        // para etiquetar el resultado, y leerlo del retorno de submit() sería
-        // una carrera con un worker que ya hubiera arrancado.
-        //
-        // path y targetId van POR COPIA. Por referencia serían dangling en
-        // cuanto el caller saliera de scope, y no se vería hasta que el worker
-        // arrancase — el peor tipo de bug de este diseño.
-        const JobSystem::JobId id = m_jobs.reserveId();
-        m_jobs.submitWithId(id, [this, id, path, targetId] { runJob(id, path, targetId); });
+        if (needsJob)
+        {
+            // path por copia: por referencia sería dangling en cuanto el caller
+            // saliera de scope, y no se vería hasta que el worker arrancase.
+            m_jobs.submitWithId(id, [this, path] { runJob(path); });
+        }
         return id;
     }
 
     void AsyncAssetLoader::cancel(JobSystem::JobId id)
     {
-        // Best-effort: si JobSystem todavía no ha sacado este job de la
-        // cola, esto evita que llegue a correr (workerLoop lo salta al
-        // hacer pop). Un job ya arrancado NO se interrumpe — eso es cosa de
-        // JobSystem, no nuestra (ver JobSystem::cancel()).
-        m_jobs.cancel(id);
-
-        // pending() cuenta "en cola, en vuelo o en el buzón" (ver header).
-        // Un id cancelado ANTES de arrancar nunca va a pasar por runJob(), y
-        // por tanto nunca va a pasar por el post al buzón ni por la entrega
-        // de pumpCompleted — que son los DOS únicos sitios que hoy
-        // decrementan m_pending. Sin este bloque, ese id se queda contado
-        // para siempre: el bug que arregla este fix.
+        // cancel() sólo recibe un id, sin path: hay que localizar su waiter
+        // recorriendo los grupos bajo el lock. Los grupos son pocos (el loader
+        // se drena por frame) y el único caller de cancel(id) es el test —
+        // producción cancela en bloque con cancelAllPending() — así que un
+        // barrido lineal sobra.
         //
-        // El problema es que cancel() no puede saber, de forma síncrona, si
-        // el job ya había arrancado cuando llega la cancelación — es una
-        // carrera real contra el worker. La resolvemos así: runJob() marca
-        // su propio id en m_started como PRIMERA operación, bajo este mismo
-        // m_mutex. Como cancel() también lee m_started bajo el mismo mutex,
-        // "¿ya había arrancado?" es una pregunta atómica: o bien cancel()
-        // adquiere el lock primero (m_started todavía no tiene el id) o
-        // runJob() lo adquiere primero (ya lo tiene) — no hay tercer caso.
-        //
-        //  - No había arrancado: decrementamos aquí y marcamos el id en
-        //    m_cancelledBeforeStart. Si pese a todo el job termina
-        //    corriendo igualmente (JobSystem perdió la carrera interna por
-        //    microsegundos) y postea su resultado al buzón, pumpCompleted
-        //    verá el id en m_cancelledBeforeStart y NO volverá a
-        //    decrementar — evita el doble decremento.
-        //  - Ya había arrancado (o ya se entregó): no tocamos el contador.
-        //    Lo resuelve runJob() + pumpCompleted() exactamente igual que
-        //    si no se hubiera cancelado — el resultado sigue llegando al
-        //    buzón y contando una única vez, ahí.
-        //
-        // insert().second sólo es true la primera vez: una cancelación
-        // repetida del mismo id (o una cancelación tras la entrega) es un
-        // no-op, nunca decrementa dos veces.
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (!m_started.count(id) && m_cancelledBeforeStart.insert(id).second)
-            --m_pending;
-    }
-
-    void AsyncAssetLoader::runJob(JobSystem::JobId id, const std::string& path, uint64_t targetId)
-    {
+        // Carrera cancel() vs runJob(), resuelta por m_mutex: un waiter sale de
+        // m_pending por EXACTAMENTE UNA de dos vías mutuamente excluyentes,
+        // ambas bajo este mutex:
+        //   1) runJob() saca los waiters del grupo (move + erase) → luego
+        //      pumpCompleted() entrega su resultado y decrementa ALLÍ.
+        //   2) cancel() encuentra el waiter todavía en su grupo → lo quita y
+        //      decrementa AQUÍ; ese target no produce resultado.
+        // Como el move-out de runJob() y el erase de cancel() ocurren ambos
+        // bajo m_mutex, un waiter o sigue en el grupo (caso 2) o ya está en
+        // resultados (caso 1), nunca las dos — sin tombstones ni doble
+        // decremento. Por eso este diseño puede prescindir del m_started /
+        // m_cancelledBeforeStart de la Task 2.
+        JobSystem::JobId jobToCancel = 0;
+        bool             cancelJob   = false;
         {
-            // Marca de "ya arrancado" para la contabilidad de cancel() (ver
-            // el comentario largo ahí). Tiene que ser lo PRIMERO que hace
-            // runJob(), antes de tocar disco o Assimp, para que la ventana
-            // de carrera con cancel() sea lo más pequeña posible.
             std::lock_guard<std::mutex> lock(m_mutex);
-            m_started.insert(id);
+            for (auto it = m_groups.begin(); it != m_groups.end(); ++it)
+            {
+                PendingGroup& group = it->second;
+                auto w = std::find_if(group.waiters.begin(), group.waiters.end(),
+                                      [id](const auto& pair) { return pair.first == id; });
+                if (w == group.waiters.end())
+                    continue;
+
+                group.waiters.erase(w);
+                --m_pending;
+
+                if (group.waiters.empty())
+                {
+                    // Nadie más espera este ReadFile: se puede intentar parar el
+                    // job (best-effort; si ya arrancó, JobSystem lo ignora y
+                    // runJob() terminará encontrando el grupo vacío/ausente y no
+                    // construirá nada). Si quedan waiters, el job DEBE seguir:
+                    // los demás necesitan el ReadFile.
+                    jobToCancel = group.jobId;
+                    cancelJob   = true;
+                    m_groups.erase(it);
+                }
+                break;
+            }
+            // id no encontrado en ningún grupo: el resultado ya se construyó y
+            // se movió a resultados/buzón. pumpCompleted() es el dueño de ese
+            // decremento — aquí no se toca m_pending.
         }
 
-        LoadedMesh result;
-        result.job      = id;
-        result.targetId = targetId;
-        result.path     = path;
+        // m_jobs.cancel() toma el lock del JobSystem, no el nuestro. Llamarlo
+        // dentro de nuestro lock sería un orden de adquisición cruzado con el
+        // worker (que toma primero el del JobSystem y luego el nuestro):
+        // deadlock clásico. Por eso se hace FUERA del lock.
+        if (cancelJob)
+            m_jobs.cancel(jobToCancel);
+    }
+
+    LoadedMesh AsyncAssetLoader::buildResultFor(const LoadedMesh& src,
+                                                JobSystem::JobId job, uint64_t targetId)
+    {
+        LoadedMesh out;
+        out.job      = job;
+        out.targetId = targetId;
+        out.path     = src.path;
+        out.error    = src.error;
+        out.images   = src.images;   // copia: cada target sube su propia textura
+
+        // Copia profunda del Mesh, no del shared_ptr. Compartirlo dejaría a dos
+        // GameObject apuntando al mismo Mesh mutable, cambiando la semántica de
+        // propiedad que hay hoy en Scene.cpp:721 (un make_shared por nodo).
+        // Tampoco ahorraría VRAM: addStaticMesh sube cada Mesh a su propio par
+        // de buffers.
+        if (src.mesh)
+        {
+            if (const SkinnedMesh* sk = dynamic_cast<const SkinnedMesh*>(src.mesh.get()))
+                out.mesh = std::make_shared<SkinnedMesh>(*sk);
+            else
+                out.mesh = std::make_shared<Mesh>(*src.mesh);
+        }
+        return out;
+    }
+
+    void AsyncAssetLoader::runJob(const std::string& path)
+    {
+        LoadedMesh loaded;
+        loaded.path = path;
 
         try
         {
-            result.mesh = ModelLoader::loadAuto(path);
-            if (result.mesh)
+            loaded.mesh = ModelLoader::loadAuto(path);
+            if (loaded.mesh)
             {
                 // Solo se decodifica Mesh::material (singular). Un
                 // SkinnedMesh (loadAuto de un FBX con rig) guarda sus
                 // texturas por submesh en SkinnedMesh::materials, que aquí
                 // NO se toca a propósito — decisión diferida. Para esos
-                // modelos, result.images queda vacío y la textura se sigue
+                // modelos, loaded.images queda vacío y la textura se sigue
                 // resolviendo en el hilo principal por la vía síncrona
                 // existente (el fallback de buildRenderObject, Task 6).
-                const Material& mat = result.mesh->material;
-                decodeSlot(mat.texturePath,             mat.embeddedTexture,            DecodedImage::Albedo, result.images);
-                decodeSlot(mat.normalMapPath,           mat.embeddedNormalMap,          DecodedImage::Normal, result.images);
-                decodeSlot(mat.metallicRoughnessPath,   mat.embeddedMetallicRoughness,  DecodedImage::ORM,    result.images);
+                const Material& mat = loaded.mesh->material;
+                decodeSlot(mat.texturePath,             mat.embeddedTexture,            DecodedImage::Albedo, loaded.images);
+                decodeSlot(mat.normalMapPath,           mat.embeddedNormalMap,          DecodedImage::Normal, loaded.images);
+                decodeSlot(mat.metallicRoughnessPath,   mat.embeddedMetallicRoughness,  DecodedImage::ORM,    loaded.images);
             }
             else
             {
-                result.error = "No se pudo cargar el modelo: " + path;
+                loaded.error = "No se pudo cargar el modelo: " + path;
             }
         }
         catch (const std::exception& e)
         {
             // Una excepción no puede cruzar el límite de hilo: escapar de un
             // worker es std::terminate. Viaja como string.
-            result.mesh  = nullptr;
-            result.error = e.what();
+            loaded.mesh  = nullptr;
+            loaded.error = e.what();
         }
         catch (...)
         {
-            result.mesh  = nullptr;
-            result.error = "Error desconocido cargando " + path;
+            loaded.mesh  = nullptr;
+            loaded.error = "Error desconocido cargando " + path;
         }
 
+        std::vector<std::pair<JobSystem::JobId, uint64_t>> waiters;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            ++m_readFileCount;
+            auto it = m_groups.find(path);
+            if (it != m_groups.end())
+            {
+                // Sacar los waiters bajo el lock cierra la carrera con
+                // cancel(): a partir de aquí ese grupo ya no existe, así que un
+                // cancel() posterior no encontrará el id y no tocará m_pending
+                // (pumpCompleted lo hará al entregar).
+                waiters = std::move(it->second.waiters);
+                m_groups.erase(it);
+            }
+            // Si el grupo ya no está, cancel() vació y borró el grupo antes de
+            // que este job (ya arrancado, incancelable) llegara: no hay waiters
+            // que servir.
+        }
+
+        // Las copias se hacen FUERA del lock: con decenas de objetos del mismo
+        // path, el hilo principal se quedaría esperando el mutex justo mientras
+        // intenta pintar.
+        std::vector<LoadedMesh> results;
+        results.reserve(waiters.size());
+        for (const auto& [job, targetId] : waiters)
+            results.push_back(buildResultFor(loaded, job, targetId));
+
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_inbox.push_back(std::move(result));
+        for (auto& r : results)
+            m_inbox.push_back(std::move(r));
     }
 
     std::vector<LoadedMesh> AsyncAssetLoader::pumpCompleted(float budgetMs)
@@ -197,17 +274,13 @@ namespace DonTopo
             std::lock_guard<std::mutex> lock(m_mutex);
             for (auto& r : leftover)
                 m_inbox.push_back(std::move(r));
-            // Decremento por elemento, no en bloque: un id que cancel() ya
-            // resolvió como "cancelado antes de arrancar" (ver cancel()) ya
-            // decrementó m_pending ahí. Si ese mismo id, pese a todo, llegó a
-            // correr y aparece aquí en 'out', hay que saltarlo — sumarlo
-            // otra vez sería un doble decremento y dejaría m_pending
-            // negativo o por debajo de la cuenta real.
-            for (auto& r : out)
-            {
-                if (m_cancelledBeforeStart.erase(r.job) == 0)
-                    --m_pending;
-            }
+            // Un decremento por resultado ENTREGADO. Cada resultado nació de un
+            // waiter que sumó +1 en requestMesh() y que runJob() sacó de su
+            // grupo (nunca lo canceló cancel(), o no estaría aquí). Los waiters
+            // cancelados antes de construirse ya decrementaron en cancel() y no
+            // llegan a 'out'. Sin tombstones: la exclusión grupo-vs-resultado
+            // bajo m_mutex garantiza que no hay doble conteo (ver cancel()).
+            m_pending -= static_cast<int>(out.size());
         }
         return out;
     }
@@ -216,5 +289,34 @@ namespace DonTopo
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         return m_pending;
+    }
+
+    int AsyncAssetLoader::readFileCount() const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_readFileCount;
+    }
+
+    void AsyncAssetLoader::cancelAllPending()
+    {
+        std::vector<JobSystem::JobId> toCancel;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            // Solo el id encolado por grupo: los ids reservados por waiters no
+            // primeros nunca se enviaron al JobSystem, así que cancelarlos solo
+            // ensuciaría su set m_cancelled (que no se limpia hasta que un job
+            // con ese id se saca de la cola, cosa que nunca pasaría).
+            for (const auto& [path, group] : m_groups)
+                toCancel.push_back(group.jobId);
+            m_groups.clear();
+            m_inbox.clear();
+            m_pending = 0;
+        }
+
+        // cancel() toma el lock del JobSystem, no el nuestro. Llamarlo dentro de
+        // nuestro lock sería un orden de adquisición cruzado con el worker, que
+        // toma primero el del JobSystem y luego el nuestro: deadlock clásico.
+        for (JobSystem::JobId id : toCancel)
+            m_jobs.cancel(id);
     }
 }

@@ -11,6 +11,7 @@
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -253,6 +254,62 @@ void testCancelBeforeStartDropsPending()
     }
 }
 
+// Cuatro peticiones del mismo path con targetId distintos comparten UN ReadFile
+// y producen cuatro LoadedMesh de contenido identico con punteros DISTINTOS.
+//
+// Los dos lados importan. Comprobar solo el contenido pasaria tambien
+// compartiendo el shared_ptr, que es justo lo que el diseno descarta: hoy cada
+// nodo de Scene::nodeFromJson tiene su propio make_shared<Mesh> (Scene.cpp:721),
+// y dos GameObject sobre el mismo Mesh mutable cambiaria esa semantica.
+//
+// Fresh JobSystem+loader por iteracion, como el resto de casos: readFileCount()
+// es acumulativo por loader, asi que con un loader nuevo por vuelta la
+// aserción "== 1" vale en cada pasada. Cuatro peticiones deduplicadas = un solo
+// ReadFile por iteracion, mas barato que testAsyncMatchesSync (que carga dos
+// veces por vuelta), asi que las 50 iteraciones no penalizan.
+//
+// Sabotaje: devolver el mismo shared_ptr a los cuatro (quitar la copia en
+// buildResultFor) — el assert de punteros distintos salta.
+void testDedupSharesReadFileNotPointers(const std::string& fbx)
+{
+    for (int it = 0; it < kIters; ++it)
+    {
+        DonTopo::JobSystem js;
+        js.start();
+        DonTopo::AsyncAssetLoader loader(js);
+
+        for (uint64_t t = 100; t < 104; ++t)
+            loader.requestMesh(fbx, t);
+
+        std::vector<DonTopo::LoadedMesh> got = drain(loader, 4);
+        assert(got.size() == 4 && "cuatro peticiones, cuatro resultados");
+
+        assert(loader.readFileCount() == 1 && "cuatro peticiones del mismo path = un solo ReadFile");
+
+        std::vector<uint64_t> targets;
+        for (const auto& r : got)
+        {
+            assert(r.error.empty());
+            assert(r.mesh != nullptr);
+            assert(r.mesh->vertices.size() == got[0].mesh->vertices.size());
+            assert(r.mesh->indices.size()  == got[0].mesh->indices.size());
+            targets.push_back(r.targetId);
+        }
+
+        // Los cuatro targetId son distintos y estan los cuatro esperados.
+        std::sort(targets.begin(), targets.end());
+        assert((targets == std::vector<uint64_t>{100, 101, 102, 103}));
+
+        // Y los punteros NO se comparten.
+        for (size_t i = 0; i < got.size(); ++i)
+            for (size_t k = i + 1; k < got.size(); ++k)
+                assert(got[i].mesh.get() != got[k].mesh.get()
+                       && "cada target recibe su propia copia del Mesh");
+
+        js.shutdown();
+    }
+}
+
 } // namespace
 
 int main()
@@ -271,6 +328,7 @@ int main()
     testAsyncMatchesSync(fbx);
     testZeroBudgetKeepsResults(fbx);
     testTexturesArriveDecoded(fbx);
+    testDedupSharesReadFileNotPointers(fbx);
 
     std::printf("asset_loader_tests OK\n");
     return 0;
