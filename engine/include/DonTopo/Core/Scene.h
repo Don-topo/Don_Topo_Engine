@@ -9,6 +9,7 @@ namespace DonTopo
 {
     class PhysicsManager;
     class AudioManager;
+    class AsyncAssetLoader;
 
     class Scene
     {
@@ -93,14 +94,24 @@ namespace DonTopo
             // Recrea colliders/audio vía physics/audio (mismas factories que
             // usa EditorUI). No toca Renderer — el caller debe registrar/
             // liberar los meshes en GPU (ver EditorUI::reloadSceneFromJson).
-            bool fromJson(const nlohmann::json& j, PhysicsManager& physics, AudioManager& audio);
+            //
+            // loader == nullptr → carga síncrona, comportamiento idéntico al de
+            // siempre. Es lo que usan el restore de Play→Stop y los tests.
+            //
+            // loader != nullptr → los GameObject se crean completos pero sin
+            // mesh, y cada sourcePath encola una petición. El caller es
+            // responsable de bombear y de mostrar el progreso.
+            bool fromJson(const nlohmann::json& j, PhysicsManager& physics, AudioManager& audio,
+                          AsyncAssetLoader* loader = nullptr);
 
             // Serializa el árbol completo a path en formato JSON (vía
             // toJson()). false si la escritura falla.
             bool save(const std::string& path) const;
             // Lee y parsea path, delega en fromJson(...). false si el
-            // fichero no existe o el JSON es inválido.
-            bool load(const std::string& path, PhysicsManager& physics, AudioManager& audio);
+            // fichero no existe o el JSON es inválido. Ver fromJson para el
+            // contrato de loader.
+            bool load(const std::string& path, PhysicsManager& physics, AudioManager& audio,
+                      AsyncAssetLoader* loader = nullptr);
 
         private:
             std::string m_name;

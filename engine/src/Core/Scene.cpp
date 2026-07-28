@@ -14,6 +14,7 @@
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Renderer/ModelLoader.h"
+#include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/Cube.h"
 #include "DonTopo/Renderer/Sphere.h"
 #include "DonTopo/Renderer/Plane.h"
@@ -590,7 +591,8 @@ namespace
     void nodeFromJson(const nlohmann::json& j, GameObject* node, const glm::mat4& parentWorld,
                        DonTopo::PhysicsManager& physics, DonTopo::AudioManager& audio,
                        std::vector<std::string>* warnings,
-                       std::unordered_map<std::string, bool>* hasBonesCache)
+                       std::unordered_map<std::string, bool>* hasBonesCache,
+                       DonTopo::AsyncAssetLoader* loader = nullptr)
     {
         // "id" no existe en ficheros .scene guardados antes de este campo —
         // se deja el id que el constructor de GameObject ya asignó (contador
@@ -662,6 +664,16 @@ namespace
             {
                 if (skinned)
                 {
+                    // La carga skinned se queda SÍNCRONA a propósito, aunque
+                    // haya loader: reconstruye la config de clips del Animator
+                    // (applyClipNamesPositionally/addAnimationSource, más abajo)
+                    // a partir del JSON guardado y del SkinnedMesh ya cargado.
+                    // El pump asíncrono (Task 9, applyLoadedMesh) solo hace
+                    // addSkinnedMesh + setMesh — no reaplica esa config — así
+                    // que una carga async de escena perdería en silencio los
+                    // clips guardados. El drop en vivo (PropertiesPanel) sí es
+                    // seguro async porque un FBX recién soltado no trae clips
+                    // guardados que reconstruir.
                     auto mesh = std::make_shared<DonTopo::SkinnedMesh>(DonTopo::ModelLoader::loadSkinned(sourcePath));
 
                     // Fuentes de animación. La builtin ya la creó loadSkinned:
@@ -718,8 +730,19 @@ namespace
                 }
                 else if (!sourcePath.empty())
                 {
-                    auto mesh = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load(sourcePath));
-                    node->setMesh(std::move(mesh));
+                    if (loader)
+                    {
+                        // Asíncrono: el GameObject queda sin mesh y se apunta a
+                        // la petición. El pump lo resolverá por id — nunca por
+                        // puntero, que sería dangling si el usuario lo borra
+                        // mientras carga.
+                        node->pendingMeshJob = loader->requestMesh(sourcePath, node->id);
+                    }
+                    else
+                    {
+                        auto mesh = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load(sourcePath));
+                        node->setMesh(std::move(mesh));
+                    }
                 }
                 else if (j["mesh"].contains("vertices") && j["mesh"].contains("indices"))
                 {
@@ -929,7 +952,7 @@ namespace
         for (const auto& childJson : j.at("children"))
         {
             GameObject* child = node->addChild(childJson.at("name").get<std::string>());
-            nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, hasBonesCache);
+            nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, hasBonesCache, loader);
         }
     }
 }
@@ -1214,7 +1237,8 @@ namespace DonTopo
         return FileManager::writeJson(path, toJson());
     }
 
-    bool Scene::fromJson(const nlohmann::json& j, PhysicsManager& physics, AudioManager& audio)
+    bool Scene::fromJson(const nlohmann::json& j, PhysicsManager& physics, AudioManager& audio,
+                         AsyncAssetLoader* loader)
     {
         m_warnings.clear();
         if (!j.contains("version") || !j["version"].is_number_integer() || j["version"].get<int>() != 1 ||
@@ -1243,7 +1267,7 @@ namespace DonTopo
         std::unordered_map<std::string, bool> hasBonesCache;
         try
         {
-            nodeFromJson(rootJson, &newRoot, glm::mat4(1.0f), physics, audio, &m_warnings, &hasBonesCache);
+            nodeFromJson(rootJson, &newRoot, glm::mat4(1.0f), physics, audio, &m_warnings, &hasBonesCache, loader);
         }
         catch (const nlohmann::json::exception&)
         {
@@ -1273,11 +1297,12 @@ namespace DonTopo
         return true;
     }
 
-    bool Scene::load(const std::string& path, PhysicsManager& physics, AudioManager& audio)
+    bool Scene::load(const std::string& path, PhysicsManager& physics, AudioManager& audio,
+                     AsyncAssetLoader* loader)
     {
         auto parsed = FileManager::readJson(path);
         if (!parsed)
             return false;
-        return fromJson(*parsed, physics, audio);
+        return fromJson(*parsed, physics, audio, loader);
     }
 }

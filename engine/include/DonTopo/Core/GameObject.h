@@ -29,6 +29,12 @@ namespace DonTopo
             // un GameObject* crudo quedaría colgado.
             uint64_t id;
 
+            // JobId de la carga de mesh en vuelo, 0 = ninguna. Es un uint64_t
+            // opaco a propósito: Core no conoce AsyncAssetLoader, y el
+            // destructor NO cancela nada — el pump ya descarta los resultados
+            // cuyo targetId no existe.
+            uint64_t pendingMeshJob = 0;
+
             explicit GameObject(std::string name = "");
             ~GameObject();
             GameObject(GameObject&&) noexcept;
