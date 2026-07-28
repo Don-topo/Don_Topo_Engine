@@ -71,7 +71,13 @@ int AudioManager::loadSound(const std::string& path, bool is3D, bool loop)
 {
 #ifdef DT_FMOD_ENABLED
     if (!m_system) return -1;
-    FMOD_MODE mode = (is3D ? FMOD_3D : FMOD_2D) | (loop ? FMOD_LOOP_NORMAL : FMOD_LOOP_OFF);
+    // FMOD arranca con FMOD_INIT_NORMAL (línea 29), que es la API thread-safe.
+    // NONBLOCKING descarga la lectura y decodificación al hilo interno de FMOD:
+    // createSound retorna al instante y no escribimos ni una línea de código de
+    // concurrencia. Es por lo que el audio no pasa por el JobSystem.
+    FMOD_MODE mode = (is3D ? FMOD_3D : FMOD_2D)
+                   | (loop ? FMOD_LOOP_NORMAL : FMOD_LOOP_OFF)
+                   | FMOD_NONBLOCKING;
     FMOD::Sound* snd;
     if (SYS->createSound(path.c_str(), mode, nullptr, &snd) != FMOD_OK) return -1;
     m_sounds.push_back(snd);
@@ -98,7 +104,9 @@ int AudioManager::loadBGM(const std::string& path)
 #ifdef DT_FMOD_ENABLED
     if (!m_system) return -1;
     FMOD::Sound* snd;
-    FMOD_MODE mode = FMOD_2D | FMOD_LOOP_NORMAL | FMOD_CREATESTREAM;
+    // CREATESTREAM ya evitaba cargar el fichero entero, pero createSound seguía
+    // abriéndolo y leyendo cabeceras en este hilo. NONBLOCKING quita también eso.
+    FMOD_MODE mode = FMOD_2D | FMOD_LOOP_NORMAL | FMOD_CREATESTREAM | FMOD_NONBLOCKING;
     if (SYS->createSound(path.c_str(), mode, nullptr, &snd) != FMOD_OK) return -1;
     m_bgmSounds.push_back(snd);
     return (int)m_bgmSounds.size() - 1;
@@ -157,6 +165,14 @@ void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, fl
         id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
     FMOD::Channel* ch;
     auto* snd = reinterpret_cast<FMOD::Sound*>(m_sounds[id]);
+    // Con NONBLOCKING, el Sound existe pero puede estar todavía cargando. Un
+    // playSound sobre él devuelve FMOD_ERR_NOTREADY. Se ignora en silencio en
+    // vez de escupir un error: el usuario ha pedido reproducir algo que aún no
+    // está, y el caso normal es que dé a Play nada más soltar el fichero.
+    FMOD_OPENSTATE state;
+    if (snd->getOpenState(&state, nullptr, nullptr, nullptr) == FMOD_OK
+        && state == FMOD_OPENSTATE_LOADING)
+        return;
     // paused = true: hay que dejar volumen, pitch y posición puestos ANTES de
     // que suene la primera muestra. Arrancándolo sonando, un clip 3D se oye un
     // instante desde el origen del mundo y con el volumen del canal anterior.

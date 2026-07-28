@@ -21,6 +21,9 @@ public:
                 const glm::vec3& listenerUp);
     void shutdown();
 
+    // Retorna al instante: FMOD carga en su hilo interno (FMOD_NONBLOCKING). El
+    // id es válido desde ya, pero un playSound antes de que termine la carga no
+    // reproduce nada — no es un error, solo aún no está listo.
     int  loadSound(const std::string& path, bool is3D = true, bool loop = false);
     void unloadSound(int soundId);
     int  loadBGM(const std::string& path);
