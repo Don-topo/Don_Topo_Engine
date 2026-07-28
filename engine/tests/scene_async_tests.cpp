@@ -23,6 +23,15 @@
 
 namespace {
 
+// Check con fallo RUIDOSO y valido en Release: assert() se compila a nada bajo
+// NDEBUG, asi que un `assert(ptr); ptr->campo` deja un deref de puntero
+// potencialmente nulo sin red. CHECK cuenta el fallo, lo imprime y NO
+// desreferencia — un test roto reporta en vez de petar con un 0xC0000005 mudo.
+int g_failures = 0;
+#define CHECK(cond, msg) do { if (!(cond)) { \
+    std::fprintf(stderr, "FAIL: %s (%s:%d)\n", (msg), __FILE__, __LINE__); \
+    ++g_failures; } } while (0)
+
 // Una sola PhysicsManager para todo el fichero: crear y liberar una por test
 // crashea al segundo init porque PxFoundation es unica por proceso.
 DonTopo::PhysicsManager& physics()
@@ -119,32 +128,30 @@ void stripIds(nlohmann::json& node)
 // Sabotaje: invertir la condicion a `if (!loader)` en la rama estatica de
 // nodeFromJson -> los dos asserts de abajo se intercambian (sin loader
 // encolaria, con loader no) y el test falla.
-void testSyncPathUnchanged()
+void testSyncPathUnchanged(DonTopo::AsyncAssetLoader& loader)
 {
     DonTopo::Scene sync;
-    assert(sync.fromJson(sceneWithPendingLoad(), physics(), audio(), nullptr));
+    CHECK(sync.fromJson(sceneWithPendingLoad(), physics(), audio(), nullptr), "fromJson nullptr debe cargar");
     DonTopo::GameObject* hijoASync = nullptr;
     sync.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") hijoASync = go; });
-    assert(hijoASync);
+    CHECK(hijoASync, "hijoA debe existir (sync)");
     // Sin loader: corre la rama sincrona (ModelLoader::load). El fichero no
     // existe, asi que no hay mesh — pero sobre todo NO se llamo a
     // requestMesh en absoluto, y pendingMeshJob se queda en su valor por
     // defecto (0).
-    assert(hijoASync->pendingMeshJob == 0 &&
-           "sin loader no debe encolarse ninguna peticion (rama sincrona)");
+    if (hijoASync)
+        CHECK(hijoASync->pendingMeshJob == 0,
+              "sin loader no debe encolarse ninguna peticion (rama sincrona)");
 
-    DonTopo::JobSystem js;
-    js.start();
-    DonTopo::AsyncAssetLoader loader(js);
     DonTopo::Scene withLoader;
-    assert(withLoader.fromJson(sceneWithPendingLoad(), physics(), audio(), &loader));
+    CHECK(withLoader.fromJson(sceneWithPendingLoad(), physics(), audio(), &loader), "fromJson &loader debe cargar");
     DonTopo::GameObject* hijoAAsync = nullptr;
     withLoader.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") hijoAAsync = go; });
-    assert(hijoAAsync);
+    CHECK(hijoAAsync, "hijoA debe existir (async)");
     // Con loader: corre la rama asincrona -> requestMesh SI se llamo.
-    assert(hijoAAsync->pendingMeshJob != 0 &&
-           "con loader debe encolarse una peticion real (rama asincrona)");
-    js.shutdown();
+    if (hijoAAsync)
+        CHECK(hijoAAsync->pendingMeshJob != 0,
+              "con loader debe encolarse una peticion real (rama asincrona)");
 }
 
 // Comprobacion secundaria de determinismo: el parametro por defecto y el
@@ -155,14 +162,14 @@ void testSyncPathUnchanged()
 void testSyncDefaultArgEqualsExplicitNullptr()
 {
     DonTopo::Scene a, b;
-    assert(a.fromJson(twoNodeScene(), physics(), audio()));
-    assert(b.fromJson(twoNodeScene(), physics(), audio(), nullptr));
+    CHECK(a.fromJson(twoNodeScene(), physics(), audio()), "fromJson default-arg debe cargar");
+    CHECK(b.fromJson(twoNodeScene(), physics(), audio(), nullptr), "fromJson nullptr explicito debe cargar");
 
     nlohmann::json ja = a.toJson();
     nlohmann::json jb = b.toJson();
     stripIds(ja["root"]);
     stripIds(jb["root"]);
-    assert(ja == jb);
+    CHECK(ja == jb, "default-arg y nullptr explicito dan el mismo resultado");
 }
 
 // Con loader, los GameObject existen ya con su jerarquia y su transform: lo
@@ -170,40 +177,34 @@ void testSyncDefaultArgEqualsExplicitNullptr()
 // en vuelo (pendingMeshJob != 0) y sin render index — nada se ha bombeado
 // todavia. Sabotaje: crear los nodos solo al bombear — el assert de nombres
 // falla porque la escena esta vacia.
-void testAsyncCreatesNodesImmediately()
+void testAsyncCreatesNodesImmediately(DonTopo::AsyncAssetLoader& loader)
 {
-    DonTopo::JobSystem js;
-    js.start();
-    DonTopo::AsyncAssetLoader loader(js);
-
     DonTopo::Scene s;
-    assert(s.fromJson(sceneWithPendingLoad(), physics(), audio(), &loader));
+    CHECK(s.fromJson(sceneWithPendingLoad(), physics(), audio(), &loader), "fromJson &loader debe cargar");
 
     int found = 0;
     bool hijoAHasPendingJob = false;
     s.traverse([&](DonTopo::GameObject* go) {
         if (go->name == "hijoA" || go->name == "hijoB") ++found;
         // Nada se ha bombeado todavia: ningun nodo puede tener indice de render.
-        assert(go->staticRenderIndex  == -1);
-        assert(go->skinnedRenderIndex == -1);
+        CHECK(go->staticRenderIndex  == -1, "sin bombear no hay indice static");
+        CHECK(go->skinnedRenderIndex == -1, "sin bombear no hay indice skinned");
         if (go->name == "hijoA")
         {
             // hijoA traia sourcePath: debe tener una peticion en vuelo y
             // NINGUN mesh todavia (el GameObject existe completo desde el
             // frame 0, sin esperar al asset).
             hijoAHasPendingJob = (go->pendingMeshJob != 0);
-            assert(!go->hasMesh());
+            CHECK(!go->hasMesh(), "hijoA no debe tener mesh todavia");
         }
         if (go->name == "hijoB")
         {
             // hijoB no traia sourcePath: no hay nada que pedir.
-            assert(go->pendingMeshJob == 0);
+            CHECK(go->pendingMeshJob == 0, "hijoB sin sourcePath no encola");
         }
     });
-    assert(found == 2 && "los GameObject existen desde el frame 0, sin esperar al asset");
-    assert(hijoAHasPendingJob && "el nodo con sourcePath debe encolar una peticion real");
-
-    js.shutdown();
+    CHECK(found == 2, "los GameObject existen desde el frame 0, sin esperar al asset");
+    CHECK(hijoAHasPendingJob, "el nodo con sourcePath debe encolar una peticion real");
 }
 
 // Borrar un GameObject con carga pendiente y bombear despues no crashea: el
@@ -212,23 +213,20 @@ void testAsyncCreatesNodesImmediately()
 // Es el test con mas valor de los tres: el use-after-free clasico de este
 // patron es guardar un GameObject* en la peticion. Sabotaje: guardar el
 // puntero en vez del id y desreferenciarlo al bombear — crash o basura.
-void testDeletedTargetIsDiscarded()
+void testDeletedTargetIsDiscarded(DonTopo::AsyncAssetLoader& loader)
 {
-    DonTopo::JobSystem js;
-    js.start();
-    DonTopo::AsyncAssetLoader loader(js);
-
     DonTopo::Scene s;
     // sceneWithPendingLoad, no twoNodeScene: hace falta una peticion REAL en
     // vuelo (hijoA tiene sourcePath) para que este test compruebe algo — con
     // la fixture sin mesh del brief, pumpCompleted() no tenia nada que
     // entregar y el test pasaba sin ejercitar el camino de descarte.
-    assert(s.fromJson(sceneWithPendingLoad(), physics(), audio(), &loader));
+    CHECK(s.fromJson(sceneWithPendingLoad(), physics(), audio(), &loader), "fromJson &loader debe cargar");
 
     DonTopo::GameObject* victim = nullptr;
     s.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") victim = go; });
-    assert(victim);
-    assert(victim->pendingMeshJob != 0 && "hace falta una peticion real en vuelo para este test");
+    CHECK(victim, "hijoA debe existir");
+    if (!victim) return;   // Release-safe: sin victim no se puede seguir sin desreferenciar nulo
+    CHECK(victim->pendingMeshJob != 0, "hace falta una peticion real en vuelo para este test");
 
     const uint64_t goneId = victim->id;
     s.removeGameObject(victim);
@@ -236,13 +234,11 @@ void testDeletedTargetIsDiscarded()
     // Un resultado dirigido a un id que ya no existe no puede tocar memoria
     // liberada. Se comprueba que sigue sin aparecer tras bombear.
     for (auto& r : loader.pumpCompleted(1000.0f))
-        assert(r.targetId != goneId || true);   // solo importa que no crashee
+        (void)r;   // solo importa que no crashee
 
     bool stillThere = false;
     s.traverse([&](DonTopo::GameObject* go) { if (go->id == goneId) stillThere = true; });
-    assert(!stillThere && "el nodo borrado no puede resucitar al bombear");
-
-    js.shutdown();
+    CHECK(!stillThere, "el nodo borrado no puede resucitar al bombear");
 }
 
 // La cache de precarga (PreloadedMeshCache) se consulta ANTES de leer disco: un
@@ -276,50 +272,72 @@ void testPreloadedCacheConsulted()
     // existe: sin cache no habria mesh). Ademas debe ser COPIA PROFUNDA, no el
     // mismo shared_ptr — dos GameObject no pueden compartir un Mesh mutable.
     DonTopo::Scene withCache;
-    assert(withCache.fromJson(sceneWithPendingLoad(), physics(), audio(), nullptr, &cache));
+    CHECK(withCache.fromJson(sceneWithPendingLoad(), physics(), audio(), nullptr, &cache), "fromJson con cache debe cargar");
     DonTopo::GameObject* hijoA = nullptr;
     withCache.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") hijoA = go; });
-    assert(hijoA);
-    assert(hijoA->hasMesh() && "con cache el nodo debe recibir la malla precargada, sin leer disco");
-    assert(hijoA->getMesh()->name == "malla_precargada_ficticia" &&
-           "el nombre debe venir de la malla cacheada");
-    assert(hijoA->getMesh()->vertices.size() == 1 &&
-           hijoA->getMesh()->vertices[0].pos == glm::vec3(7.0f, 8.0f, 9.0f) &&
-           "los vertices deben ser los de la malla cacheada");
-    assert(hijoA->getMesh().get() != fabricated.get() &&
-           "debe ser copia profunda, no el mismo objeto compartido");
+    CHECK(hijoA, "hijoA debe existir (cache)");
+    if (hijoA)
+    {
+        CHECK(hijoA->hasMesh(), "con cache el nodo debe recibir la malla precargada, sin leer disco");
+        if (hijoA->hasMesh())
+        {
+            CHECK(hijoA->getMesh()->name == "malla_precargada_ficticia", "el nombre debe venir de la malla cacheada");
+            CHECK(hijoA->getMesh()->vertices.size() == 1 &&
+                  hijoA->getMesh()->vertices[0].pos == glm::vec3(7.0f, 8.0f, 9.0f),
+                  "los vertices deben ser los de la malla cacheada");
+            CHECK(hijoA->getMesh().get() != fabricated.get(), "debe ser copia profunda, no el mismo objeto compartido");
+        }
+    }
 
     // Cache-miss (cache con otra clave que no casa): cae al disco inexistente ->
     // sin mesh. Prueba que un miss no inventa nada y respeta el fallback.
     DonTopo::PreloadedMeshCache otherCache;
     otherCache["assets/otra_cosa.fbx"] = fabricated;
     DonTopo::Scene withMiss;
-    assert(withMiss.fromJson(sceneWithPendingLoad(), physics(), audio(), nullptr, &otherCache));
+    CHECK(withMiss.fromJson(sceneWithPendingLoad(), physics(), audio(), nullptr, &otherCache), "fromJson cache-miss debe cargar");
     DonTopo::GameObject* missA = nullptr;
     withMiss.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") missA = go; });
-    assert(missA);
-    assert(!missA->hasMesh() &&
-           "cache-miss para un path inexistente debe caer al disco y quedarse sin mesh");
+    CHECK(missA, "hijoA debe existir (miss)");
+    if (missA)
+        CHECK(!missA->hasMesh(), "cache-miss para un path inexistente debe caer al disco y quedarse sin mesh");
 
     // preloaded == nullptr: identico al miss (fallback a disco), byte-compatible
     // con todos los callers de siempre.
     DonTopo::Scene noCache;
-    assert(noCache.fromJson(sceneWithPendingLoad(), physics(), audio(), nullptr, nullptr));
+    CHECK(noCache.fromJson(sceneWithPendingLoad(), physics(), audio(), nullptr, nullptr), "fromJson nullptr cache debe cargar");
     DonTopo::GameObject* nullA = nullptr;
     noCache.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") nullA = go; });
-    assert(nullA);
-    assert(!nullA->hasMesh() && "sin cache el path inexistente no da mesh");
+    CHECK(nullA, "hijoA debe existir (nullptr cache)");
+    if (nullA)
+        CHECK(!nullA->hasMesh(), "sin cache el path inexistente no da mesh");
 }
 
 } // namespace
 
 int main()
 {
-    testSyncPathUnchanged();
+    // UN solo JobSystem + AsyncAssetLoader para todo el fichero, creados aqui y
+    // pasados por referencia — igual que en produccion, donde el editor y el
+    // runtime crean UNA instancia de cada, viva toda la app. Antes cada test
+    // creaba y destruia los suyos (start/shutdown por test): ese churn repetido
+    // de arranque/parada de hilos es lo que este experimento aisla.
+    DonTopo::JobSystem jobSystem;
+    jobSystem.start();
+    DonTopo::AsyncAssetLoader loader(jobSystem);
+
+    testSyncPathUnchanged(loader);
     testSyncDefaultArgEqualsExplicitNullptr();
-    testAsyncCreatesNodesImmediately();
-    testDeletedTargetIsDiscarded();
+    testAsyncCreatesNodesImmediately(loader);
+    testDeletedTargetIsDiscarded(loader);
     testPreloadedCacheConsulted();
-    std::printf("scene_async_tests OK\n");
-    return 0;
+
+    jobSystem.shutdown();
+
+    if (g_failures == 0)
+    {
+        std::printf("scene_async_tests OK\n");
+        return 0;
+    }
+    std::fprintf(stderr, "scene_async_tests FAILED: %d checks\n", g_failures);
+    return 1;
 }
