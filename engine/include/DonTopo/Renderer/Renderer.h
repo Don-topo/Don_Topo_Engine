@@ -162,6 +162,15 @@ namespace DonTopo {
             // o batches todavía en vuelo. Lo consume el runtime (Task 10) para saber
             // si aún debe seguir bombeando antes de dar la carga por terminada.
             bool hasPendingUploads() const;
+            // Cierra el batch pendiente y BLOQUEA hasta que todos los uploads en
+            // vuelo hayan completado y sido reclamados, de modo que los objetos
+            // recién registrados sean visibles en ESTE frame. Uso reservado a las
+            // transiciones síncronas raras iniciadas por el usuario (restore de
+            // Play->Stop, undo/redo de un Create): ahí el stall de vkDeviceWaitIdle
+            // es aceptable y reproduce la visibilidad inmediata previa a la carga
+            // asíncrona. NO usar en el camino async de Load Scene (tiene su modal +
+            // pump por frame; bloquear reintroduciría el stall que el modal evita).
+            void flushUploadsAndWait();
             void updateAnimation(int index, float deltaTime);
             // Sink puro: fija el clip y el tiempo que el Animator ya ha
             // calculado en CPU. No avanza el tiempo — a diferencia de

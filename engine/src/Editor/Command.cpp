@@ -59,7 +59,13 @@ void DeleteGameObjectCommand::undo()
     GameObject* parent = m_scene.findById(m_parentId);
     GameObject* node = m_scene.insertFromJson(m_snapshot, parent, m_index, m_physics, m_audio);
     if (node)
+    {
         m_renderer.registerGameObject(node);
+        // registerGameObject encola el upload en el batch diferido; sin flush
+        // el objeto recreado quedaría invisible ~2 frames (pop-in). Esta es una
+        // transición síncrona iniciada por el usuario, así que se bloquea.
+        m_renderer.flushUploadsAndWait();
+    }
 }
 
 CreateGameObjectCommand::CreateGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio,
@@ -73,7 +79,12 @@ void CreateGameObjectCommand::execute()
     GameObject* parent = m_scene.findById(m_parentId);
     GameObject* node = m_scene.insertFromJson(m_snapshot, parent, m_index, m_physics, m_audio);
     if (node)
+    {
         m_renderer.registerGameObject(node);
+        // Mismo motivo que en DeleteGameObjectCommand::undo: subida síncrona
+        // para que el objeto creado sea visible ya, sin pop-in de ~2 frames.
+        m_renderer.flushUploadsAndWait();
+    }
 }
 
 void CreateGameObjectCommand::undo()

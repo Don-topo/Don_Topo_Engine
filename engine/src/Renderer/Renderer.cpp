@@ -2457,6 +2457,20 @@ namespace DonTopo {
         return (m_pendingBatch && !m_pendingBatch->empty()) || !m_inFlightBatches.empty();
     }
 
+    void Renderer::flushUploadsAndWait()
+    {
+        // Envía el batch pendiente (si lo hay) y lo pasa a m_inFlightBatches.
+        flushPendingUploads();
+        // Tras vkDeviceWaitIdle todas las fences de los batches en vuelo están
+        // señaladas, así que cada uno es complete() y tickDeferredDeletes los
+        // reclama y avanza m_lastCompletedTicket en una sola pasada: el bucle
+        // termina en cuanto hasPendingUploads() es false. La espera es un stall
+        // deliberado, aceptable en estas transiciones síncronas raras.
+        vkDeviceWaitIdle(m_gpu.device());
+        while (hasPendingUploads())
+            tickDeferredDeletes();
+    }
+
     void Renderer::tickDeferredDeletes()
     {
         m_deferredDeletes.tick(m_gpu.device());

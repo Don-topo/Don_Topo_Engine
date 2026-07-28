@@ -360,6 +360,14 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j, bool async)
         });
     }
 
+    // Antes de arrancar una Load Scene async, cancela cualquier carga aún en
+    // vuelo de una operación anterior: sus resultados resolverían a targets ya
+    // borrados y se descartarían igual, pero dejarlos vivos inflaría el
+    // pending() con el que se abre el modal de abajo. Solo en el camino async y
+    // solo si hay loader.
+    if (async && m_assetLoader)
+        m_assetLoader->cancelAllPending();
+
     // Solo Load Scene (async) va asíncrono. El restore de Play->Stop se queda
     // síncrono a propósito: meter estados a medias en esa transición no
     // compensa la ganancia, que la capa B ya da sola. Sin loader (o en
@@ -371,6 +379,15 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j, bool async)
     // reseteados justo arriba) — en ambos casos hay que volver a subir los
     // meshes a GPU.
     m_renderer->registerGameObject(&m_scene->getRoot());
+
+    // Camino síncrono (restore de Play->Stop): los meshes se registran vía el
+    // batch diferido, que sin flush no se hace visible hasta ~2 frames después
+    // (los objetos viejos ya se quitaron arriba => pop-in/parpadeo). Se sube y
+    // se espera aquí para que la geometría restaurada esté visible en este mismo
+    // frame, igual que antes de la carga asíncrona. El camino async NO pasa por
+    // aquí: mantiene su modal + pump por frame.
+    if (!async)
+        m_renderer->flushUploadsAndWait();
 
     if (loaded)
     {
