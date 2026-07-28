@@ -1,9 +1,30 @@
 #include "DonTopo/Renderer/GpuResources.h"
 #include "DonTopo/Renderer/GpuDevice.h"
+#include "DonTopo/Renderer/TransferBatch.h"
 #include <stdexcept>
 #include <cstring>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+
+namespace {
+    // Devuelve el command buffer a usar. Con batch == nullptr abre uno
+    // one-time igual que hasta ahora, y el caller debe cerrarlo con
+    // endOneTime(). Con batch, se cuelga del command buffer compartido y NO se
+    // cierra aquí.
+    struct CmdScope
+    {
+        const DonTopo::GpuDevice& gpu;
+        DonTopo::TransferBatch*   batch;
+        VkCommandBuffer           cmd;
+
+        CmdScope(const DonTopo::GpuDevice& g, DonTopo::TransferBatch* b)
+            : gpu(g), batch(b), cmd(b ? b->cmd() : g.beginOneTimeCommands()) {}
+
+        // Solo cierra y espera si NO hay batch: con batch, el submit y la fence
+        // son responsabilidad de quien lo posee.
+        ~CmdScope() { if (!batch) gpu.endOneTimeCommands(cmd); }
+    };
+}
 
 namespace DonTopo {
 
@@ -32,41 +53,20 @@ void GpuResources::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkM
     vkBindBufferMemory(m_gpu.device(), buffer, memory, 0);
 }
 
-void GpuResources::copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size)
+void GpuResources::copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size,
+                              TransferBatch* batch)
 {
-    VkCommandBufferAllocateInfo allocInfo{};
-    allocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandPool        = m_gpu.commandPool();
-    allocInfo.commandBufferCount = 1;
-
-    VkCommandBuffer commandBuffer;
-    vkAllocateCommandBuffers(m_gpu.device(), &allocInfo, &commandBuffer);
-
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(commandBuffer, &beginInfo);
+    CmdScope scope(m_gpu, batch);
 
     VkBufferCopy region{};
     region.size = size;
-    vkCmdCopyBuffer(commandBuffer, src, dst, 1, &region);
-
-    vkEndCommandBuffer(commandBuffer);
-
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers    = &commandBuffer;
-    vkQueueSubmit(m_gpu.graphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(m_gpu.graphicsQueue());
-
-    vkFreeCommandBuffers(m_gpu.device(), m_gpu.commandPool(), 1, &commandBuffer);
+    vkCmdCopyBuffer(scope.cmd, src, dst, 1, &region);
 }
 
 void GpuResources::uploadBuffer(const void* data, VkDeviceSize size,
                                 VkBufferUsageFlags usage,
-                                VkBuffer& buf, VkDeviceMemory& mem)
+                                VkBuffer& buf, VkDeviceMemory& mem,
+                                TransferBatch* batch)
 {
     VkBuffer       stagingBuf;
     VkDeviceMemory stagingMem;
@@ -84,10 +84,15 @@ void GpuResources::uploadBuffer(const void* data, VkDeviceSize size,
         VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
         buf, mem);
-    copyBuffer(stagingBuf, buf, size);
+    copyBuffer(stagingBuf, buf, size, batch);
 
-    vkDestroyBuffer(m_gpu.device(), stagingBuf, nullptr);
-    vkFreeMemory(m_gpu.device(), stagingMem, nullptr);
+    if (batch)
+        batch->addStaging(stagingBuf, stagingMem);   // se libera al senalar la fence
+    else
+    {
+        vkDestroyBuffer(m_gpu.device(), stagingBuf, nullptr);
+        vkFreeMemory(m_gpu.device(), stagingMem, nullptr);
+    }
 }
 
 void GpuResources::createImage(uint32_t w, uint32_t h, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags props, VkImage& image, VkDeviceMemory& memory)
@@ -122,9 +127,9 @@ void GpuResources::createImage(uint32_t w, uint32_t h, VkFormat format, VkImageT
     vkBindImageMemory(m_gpu.device(), image, memory, 0);
 }
 
-void GpuResources::transitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout)
+void GpuResources::transitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout, TransferBatch* batch)
 {
-    VkCommandBuffer cmd = m_gpu.beginOneTimeCommands();
+    CmdScope scope(m_gpu, batch);
 
     VkImageMemoryBarrier barrier{};
     barrier.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -155,14 +160,12 @@ void GpuResources::transitionImageLayout(VkImage image, VkImageLayout oldLayout,
         throw std::runtime_error("unsupported layout transition!");
     }
 
-    vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-
-    m_gpu.endOneTimeCommands(cmd);
+    vkCmdPipelineBarrier(scope.cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
 
-void GpuResources::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t w, uint32_t h)
+void GpuResources::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t w, uint32_t h, TransferBatch* batch)
 {
-    VkCommandBuffer cmd = m_gpu.beginOneTimeCommands();
+    CmdScope scope(m_gpu, batch);
 
     VkBufferImageCopy region{};
     region.bufferOffset                    = 0;
@@ -175,12 +178,10 @@ void GpuResources::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t w,
     region.imageOffset                     = {0, 0, 0};
     region.imageExtent                     = {w, h, 1};
 
-    vkCmdCopyBufferToImage(cmd, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-    m_gpu.endOneTimeCommands(cmd);
+    vkCmdCopyBufferToImage(scope.cmd, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 }
 
-void GpuResources::createTextureImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem)
+void GpuResources::createTextureImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem, TransferBatch* batch)
 {
     int w, h, channels;
     stbi_uc* pixels = nullptr;
@@ -235,15 +236,20 @@ void GpuResources::createTextureImage(const std::string& path, const std::vector
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
         img, mem);
 
-    transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    copyBufferToImage(stagingBuffer, img, (uint32_t)w, (uint32_t)h);
-    transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, batch);
+    copyBufferToImage(stagingBuffer, img, (uint32_t)w, (uint32_t)h, batch);
+    transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, batch);
 
-    vkDestroyBuffer(m_gpu.device(), stagingBuffer, nullptr);
-    vkFreeMemory(m_gpu.device(), stagingMemory, nullptr);
+    if (batch)
+        batch->addStaging(stagingBuffer, stagingMemory);   // se libera al senalar la fence
+    else
+    {
+        vkDestroyBuffer(m_gpu.device(), stagingBuffer, nullptr);
+        vkFreeMemory(m_gpu.device(), stagingMemory, nullptr);
+    }
 }
 
-void GpuResources::createNormalMapImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem)
+void GpuResources::createNormalMapImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem, TransferBatch* batch)
 {
     int w, h, channels;
     stbi_uc* pixels = nullptr;
@@ -286,12 +292,17 @@ void GpuResources::createNormalMapImage(const std::string& path, const std::vect
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
         img, mem);
 
-    transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    copyBufferToImage(stagingBuffer, img, (uint32_t)w, (uint32_t)h);
-    transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, batch);
+    copyBufferToImage(stagingBuffer, img, (uint32_t)w, (uint32_t)h, batch);
+    transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, batch);
 
-    vkDestroyBuffer(m_gpu.device(), stagingBuffer, nullptr);
-    vkFreeMemory(m_gpu.device(), stagingMemory, nullptr);
+    if (batch)
+        batch->addStaging(stagingBuffer, stagingMemory);   // se libera al senalar la fence
+    else
+    {
+        vkDestroyBuffer(m_gpu.device(), stagingBuffer, nullptr);
+        vkFreeMemory(m_gpu.device(), stagingMemory, nullptr);
+    }
 }
 
 void GpuResources::createTextureImageView(VkImage image, VkImageView& view, VkFormat format)
@@ -330,7 +341,7 @@ void GpuResources::createTextureSampler(VkSampler& outSampler)
         throw std::runtime_error("failed to create texture sampler!");
 }
 
-void GpuResources::createSolidColorImage(const uint8_t rgba[4], VkImage& img, VkDeviceMemory& mem)
+void GpuResources::createSolidColorImage(const uint8_t rgba[4], VkImage& img, VkDeviceMemory& mem, TransferBatch* batch)
 {
     VkBuffer sb; VkDeviceMemory sm;
     createBuffer(4,
@@ -344,11 +355,88 @@ void GpuResources::createSolidColorImage(const uint8_t rgba[4], VkImage& img, Vk
     createImage(1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img, mem);
-    transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    copyBufferToImage(sb, img, 1, 1);
-    transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    vkDestroyBuffer(m_gpu.device(), sb, nullptr);
-    vkFreeMemory(m_gpu.device(), sm, nullptr);
+    transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, batch);
+    copyBufferToImage(sb, img, 1, 1, batch);
+    transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, batch);
+    if (batch)
+        batch->addStaging(sb, sm);   // se libera al senalar la fence
+    else
+    {
+        vkDestroyBuffer(m_gpu.device(), sb, nullptr);
+        vkFreeMemory(m_gpu.device(), sm, nullptr);
+    }
+}
+
+void GpuResources::createTextureImageFromPixels(const uint8_t* rgba, uint32_t w, uint32_t h,
+                                                VkImage& img, VkDeviceMemory& mem,
+                                                TransferBatch* batch)
+{
+    const VkDeviceSize imageSize = static_cast<VkDeviceSize>(w) * h * 4;
+
+    VkBuffer       stagingBuffer;
+    VkDeviceMemory stagingMemory;
+    createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                 stagingBuffer, stagingMemory);
+
+    void* data;
+    vkMapMemory(m_gpu.device(), stagingMemory, 0, imageSize, 0, &data);
+    memcpy(data, rgba, static_cast<size_t>(imageSize));
+    vkUnmapMemory(m_gpu.device(), stagingMemory);
+
+    createImage(w, h, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img, mem);
+
+    transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, batch);
+    copyBufferToImage(stagingBuffer, img, w, h, batch);
+    transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, batch);
+
+    if (batch)
+        batch->addStaging(stagingBuffer, stagingMemory);
+    else
+    {
+        vkDestroyBuffer(m_gpu.device(), stagingBuffer, nullptr);
+        vkFreeMemory(m_gpu.device(), stagingMemory, nullptr);
+    }
+}
+
+void GpuResources::createNormalMapImageFromPixels(const uint8_t* rgba, uint32_t w, uint32_t h,
+                                                  VkImage& img, VkDeviceMemory& mem,
+                                                  TransferBatch* batch)
+{
+    const VkDeviceSize imageSize = static_cast<VkDeviceSize>(w) * h * 4;
+
+    VkBuffer       stagingBuffer;
+    VkDeviceMemory stagingMemory;
+    createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                 stagingBuffer, stagingMemory);
+
+    void* data;
+    vkMapMemory(m_gpu.device(), stagingMemory, 0, imageSize, 0, &data);
+    memcpy(data, rgba, static_cast<size_t>(imageSize));
+    vkUnmapMemory(m_gpu.device(), stagingMemory);
+
+    createImage(w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img, mem);
+
+    transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, batch);
+    copyBufferToImage(stagingBuffer, img, w, h, batch);
+    transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, batch);
+
+    if (batch)
+        batch->addStaging(stagingBuffer, stagingMemory);
+    else
+    {
+        vkDestroyBuffer(m_gpu.device(), stagingBuffer, nullptr);
+        vkFreeMemory(m_gpu.device(), stagingMemory, nullptr);
+    }
 }
 
 } // namespace DonTopo
