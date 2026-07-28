@@ -1,6 +1,8 @@
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <nlohmann/json_fwd.hpp>
 #include "DonTopo/Core/GameObject.h"
@@ -10,6 +12,16 @@ namespace DonTopo
     class PhysicsManager;
     class AudioManager;
     class AsyncAssetLoader;
+    struct Mesh;
+
+    // Cache opcional de mallas ya cargadas en RAM, indexada por sourcePath. La
+    // consulta la carga de escena (nodeFromJson) para saltarse el ReadFile de
+    // disco de un sourcePath que ya se precargó — el runtime la rellena en
+    // paralelo con el JobSystem y muestra progreso en el splash mientras tanto.
+    // Los valores pueden ser SkinnedMesh (un FBX con rig): la carga hace un
+    // dynamic_cast para reconstruir el tipo correcto. El caller conserva la
+    // propiedad; la carga hace copia profunda de la malla que use.
+    using PreloadedMeshCache = std::unordered_map<std::string, std::shared_ptr<Mesh>>;
 
     class Scene
     {
@@ -101,8 +113,18 @@ namespace DonTopo
             // loader != nullptr → los GameObject se crean completos pero sin
             // mesh, y cada sourcePath encola una petición. El caller es
             // responsable de bombear y de mostrar el progreso.
+            //
+            // preloaded == nullptr → sin cache, cada sourcePath se lee de disco
+            // como siempre. preloaded != nullptr → antes de leer el disco se
+            // consulta la cache por sourcePath y, si está, se usa una copia
+            // profunda de la malla precargada (skinned incluido). Un miss cae al
+            // camino de disco normal, así que el resultado es idéntico salvo por
+            // no repetir el ReadFile. Va DESPUÉS de loader a propósito: los
+            // callers existentes (editor, tests) no lo pasan y quedan byte a
+            // byte iguales.
             bool fromJson(const nlohmann::json& j, PhysicsManager& physics, AudioManager& audio,
-                          AsyncAssetLoader* loader = nullptr);
+                          AsyncAssetLoader* loader = nullptr,
+                          const PreloadedMeshCache* preloaded = nullptr);
 
             // Serializa el árbol completo a path en formato JSON (vía
             // toJson()). false si la escritura falla.
@@ -111,7 +133,8 @@ namespace DonTopo
             // fichero no existe o el JSON es inválido. Ver fromJson para el
             // contrato de loader.
             bool load(const std::string& path, PhysicsManager& physics, AudioManager& audio,
-                      AsyncAssetLoader* loader = nullptr);
+                      AsyncAssetLoader* loader = nullptr,
+                      const PreloadedMeshCache* preloaded = nullptr);
 
         private:
             std::string m_name;

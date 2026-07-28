@@ -5,7 +5,7 @@
 namespace DonTopo {
 
 class GameObject;
-class Mesh;
+struct Mesh;
 struct EditorContext;
 
 // Ventana "Scene" — árbol jerárquico de GameObjects (hover/click de

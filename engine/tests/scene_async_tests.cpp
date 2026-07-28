@@ -12,11 +12,14 @@
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
+#include "DonTopo/Renderer/Mesh.h"
 
+#include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 
 #include <cassert>
 #include <cstdio>
+#include <memory>
 
 namespace {
 
@@ -242,6 +245,72 @@ void testDeletedTargetIsDiscarded()
     js.shutdown();
 }
 
+// La cache de precarga (PreloadedMeshCache) se consulta ANTES de leer disco: un
+// sourcePath presente en la cache usa una copia profunda de la malla cacheada
+// sin tocar el fichero. Es lo que permite al runtime cargar la escena desde
+// mallas ya precargadas en paralelo (con progreso en el splash) sin cambiar el
+// modelo de registro ni perder la config de animacion.
+//
+// Verificable sin asset real: se fabrica una malla en RAM con nombre y
+// vertices DISTINTIVOS y se mete en la cache bajo el sourcePath de hijoA, que
+// apunta a un fichero que NO existe. Si el nodo acaba con esa malla, la cache
+// se consulto de verdad — sin cache, un path inexistente no da mesh alguno.
+//
+// Sabotaje: si nodeFromJson ignorase `preloaded` (no consultara la cache), el
+// primer bloque falla en `hijoA->hasMesh()`: el path inexistente cae al disco,
+// que no puede leerse, y el nodo se queda sin mesh.
+void testPreloadedCacheConsulted()
+{
+    const std::string src = "assets/__no_existe__.fbx";
+
+    auto fabricated = std::make_shared<DonTopo::Mesh>();
+    fabricated->name = "malla_precargada_ficticia";
+    DonTopo::Vertex v{};
+    v.pos = glm::vec3(7.0f, 8.0f, 9.0f);
+    fabricated->vertices.push_back(v);
+
+    DonTopo::PreloadedMeshCache cache;
+    cache[src] = fabricated;
+
+    // Con cache: el nodo recibe la malla ficticia sin leer disco (el fichero no
+    // existe: sin cache no habria mesh). Ademas debe ser COPIA PROFUNDA, no el
+    // mismo shared_ptr — dos GameObject no pueden compartir un Mesh mutable.
+    DonTopo::Scene withCache;
+    assert(withCache.fromJson(sceneWithPendingLoad(), physics(), audio(), nullptr, &cache));
+    DonTopo::GameObject* hijoA = nullptr;
+    withCache.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") hijoA = go; });
+    assert(hijoA);
+    assert(hijoA->hasMesh() && "con cache el nodo debe recibir la malla precargada, sin leer disco");
+    assert(hijoA->getMesh()->name == "malla_precargada_ficticia" &&
+           "el nombre debe venir de la malla cacheada");
+    assert(hijoA->getMesh()->vertices.size() == 1 &&
+           hijoA->getMesh()->vertices[0].pos == glm::vec3(7.0f, 8.0f, 9.0f) &&
+           "los vertices deben ser los de la malla cacheada");
+    assert(hijoA->getMesh().get() != fabricated.get() &&
+           "debe ser copia profunda, no el mismo objeto compartido");
+
+    // Cache-miss (cache con otra clave que no casa): cae al disco inexistente ->
+    // sin mesh. Prueba que un miss no inventa nada y respeta el fallback.
+    DonTopo::PreloadedMeshCache otherCache;
+    otherCache["assets/otra_cosa.fbx"] = fabricated;
+    DonTopo::Scene withMiss;
+    assert(withMiss.fromJson(sceneWithPendingLoad(), physics(), audio(), nullptr, &otherCache));
+    DonTopo::GameObject* missA = nullptr;
+    withMiss.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") missA = go; });
+    assert(missA);
+    assert(!missA->hasMesh() &&
+           "cache-miss para un path inexistente debe caer al disco y quedarse sin mesh");
+
+    // preloaded == nullptr: identico al miss (fallback a disco), byte-compatible
+    // con todos los callers de siempre.
+    DonTopo::Scene noCache;
+    assert(noCache.fromJson(sceneWithPendingLoad(), physics(), audio(), nullptr, nullptr));
+    DonTopo::GameObject* nullA = nullptr;
+    noCache.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") nullA = go; });
+    assert(nullA);
+    assert(!nullA->hasMesh() && "sin cache el path inexistente no da mesh");
+}
+
 } // namespace
 
 int main()
@@ -250,6 +319,7 @@ int main()
     testSyncDefaultArgEqualsExplicitNullptr();
     testAsyncCreatesNodesImmediately();
     testDeletedTargetIsDiscarded();
+    testPreloadedCacheConsulted();
     std::printf("scene_async_tests OK\n");
     return 0;
 }

@@ -6,20 +6,26 @@
 #include "DonTopo/Core/Input.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Scene.h"
+#include "DonTopo/Core/JobSystem.h"
 #include "DonTopo/Renderer/Renderer.h"
+#include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Scripting/ScriptManager.h"
+#include "DonTopo/Files/FileManager.h"
 #include "SplashDriver.h"
 
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
+#include <nlohmann/json.hpp>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #ifdef _WIN32
@@ -139,39 +145,19 @@ int main(int argc, char** argv)
 
         DonTopo::Scene scene;
 
-        if (!scene.load(scenePath, physics, audio))
-        {
-            reportFatal("Error: no se pudo cargar la escena '" + scenePath + "'");
-            return EXIT_FAILURE;
-        }
-
-        // Sin CameraComponent, Renderer::currentFrameCamera() cae al repliegue
-        // del editor (m_camera/m_viewMatrix), y si además la escena no tiene
-        // meshes estáticos el auto-fit de Renderer::init deja m_cameraDistance en
-        // -inf: proyección con NaN y ventana negra sin ninguna pista. El editor
-        // avisa al dar a Play (EditorUI.cpp); aquí no hay Play que pulsar, así
-        // que el aviso va nada más cargar la escena.
-        if (!scene.findCamera())
-            std::cerr << "Aviso: la escena no tiene una camara (CameraComponent); "
-                          "el juego no podra renderizar correctamente." << std::endl;
-
         // Antes de initPresentation(): initImGui y createOffscreenImages leen
-        // el flag durante esa inicialización.
+        // el flag durante esa inicialización. Adelantado respecto al orden
+        // original porque ahora initPresentation corre ANTES de scene.load (ver
+        // abajo), y setHeadless debe precederlo igualmente.
         renderer.setHeadless(true);
 
-        std::vector<DonTopo::GameObject*> allNodes;
-        scene.traverse([&](DonTopo::GameObject* go) { allNodes.push_back(go); });
-
-        // Pasada 1: meshes estáticos -> Renderer::init(meshes)
-        std::vector<DonTopo::Mesh> meshes;
-        for (auto* go : allNodes)
-        {
-            if (go->hasMesh() && !go->isSkinned())
-            {
-                go->staticRenderIndex = (int)meshes.size();
-                meshes.push_back(*go->getMesh());
-            }
-        }
+        // Pool de hilos + loader asíncrono. El JobSystem se declara aquí, ANTES
+        // que nada que un job pudiera capturar por referencia, y se apaga a mano
+        // antes del teardown de la escena (ver el final): un worker vivo tocando
+        // la escena a medio destruir sería un crash al salir.
+        DonTopo::JobSystem jobSystem;
+        jobSystem.start();
+        DonTopo::AsyncAssetLoader assetLoader(jobSystem);
 
         // Resuelve el logo: en un paquete exportado esta junto al .exe como
         // splash.png; en dev (sin exportar) se cae a assets/MainEngineLogo.png.
@@ -182,6 +168,11 @@ int main(int argc, char** argv)
                 logoPath = "assets/MainEngineLogo.png";
         }
 
+        // initPresentation + splash ANTES de scene.load: ninguno depende de la
+        // escena (initPresentation es la fase 1 "poder presentar"; el auto-fit y
+        // los recursos que necesitan meshes viven en initSceneResources, fase 2,
+        // que sigue yendo DESPUÉS de la carga). Así el splash ya está en pantalla
+        // mientras se cargan los assets y puede mostrar progreso real.
         renderer.initPresentation(window);
 
         const auto splashStart = std::chrono::high_resolution_clock::now();
@@ -203,7 +194,9 @@ int main(int argc, char** argv)
 
         // La ventana se enseña AQUI, ya con el primer frame del splash
         // presentado: lo primero que ve el usuario es el logo sobre el fondo
-        // oscuro del shader, nunca el blanco por defecto de la ventana.
+        // oscuro del shader, nunca el blanco por defecto de la ventana. Este
+        // timing (show DESPUÉS del primer present del splash) es el que evita el
+        // flash blanco y se conserva intacto pese al reordenado.
         // Sin splash (logo ausente) se queda oculta hasta justo antes del bucle
         // de juego — ver el show() de mas abajo—, que tambien evita el blanco.
         bool windowShown = false;
@@ -211,6 +204,105 @@ int main(int argc, char** argv)
         {
             window.show();
             windowShown = true;
+        }
+
+        // --- Precarga en paralelo (progreso en el splash) ---
+        // El coste pesado de scene.load es el Assimp::ReadFile de cada malla,
+        // síncrono. Se parsea el JSON de la escena a mano para recolectar los
+        // sourcePath únicos, se cargan en los workers, y luego scene.load los
+        // consume de una cache en RAM en vez de leer disco — bombeando el splash
+        // todo el rato para que la ventana responda y muestre avance.
+        DonTopo::PreloadedMeshCache preloaded;
+        {
+            auto sceneJson = DonTopo::FileManager::readJson(scenePath);
+            if (!sceneJson)
+            {
+                reportFatal("Error: no se pudo cargar la escena '" + scenePath + "'");
+                jobSystem.shutdown();
+                return EXIT_FAILURE;
+            }
+
+            // Set de sourcePath únicos: varios nodos que comparten FBX generan un
+            // solo ReadFile (el loader además dedup por path internamente).
+            std::unordered_set<std::string> uniquePaths;
+            std::function<void(const nlohmann::json&)> collect = [&](const nlohmann::json& node) {
+                if (node.contains("mesh") && node["mesh"].is_object())
+                {
+                    const std::string sp = node["mesh"].value("sourcePath", std::string());
+                    if (!sp.empty()) uniquePaths.insert(sp);
+                }
+                if (auto it = node.find("children"); it != node.end() && it->is_array())
+                    for (const auto& child : *it)
+                        collect(child);
+            };
+            if (sceneJson->contains("root") && (*sceneJson)["root"].is_object())
+                collect((*sceneJson)["root"]);
+
+            // Encola una petición por path. targetId no se usa aquí (la cache se
+            // indexa por path, no por GameObject: aún no hay escena), así que va
+            // un índice cualquiera distinto de 0.
+            uint64_t reqId = 1;
+            for (const auto& p : uniquePaths)
+                assetLoader.requestMesh(p, reqId++);
+
+            // Bombea el splash mientras cargan los workers, guardando cada
+            // resultado en la cache por path. Un error (fichero movido/roto)
+            // deja el path fuera de la cache: scene.load caerá a un ReadFile de
+            // disco para ese, exactamente como el camino de siempre.
+            while (assetLoader.pending() > 0)
+            {
+                for (auto& r : assetLoader.pumpCompleted(1000.0f))
+                {
+                    if (!r.error.empty())
+                    {
+                        std::cerr << "Precarga fallida '" << r.path << "': " << r.error
+                                  << " (se reintentara desde disco al cargar la escena)" << std::endl;
+                        continue;
+                    }
+                    if (r.mesh)
+                        preloaded[r.path] = r.mesh;
+                }
+                pumpSplash(false, 0.0f);
+            }
+        }
+
+        // Carga de la escena desde la cache. loader == nullptr: NO se usa la ruta
+        // async por-GameObject de la Task 8 (que perdería la config de clips del
+        // Animator y no haría auto-fit a tiempo). En su lugar, preloaded aporta
+        // las mallas ya en RAM y la carga corre por el camino síncrono de
+        // siempre, solo que sin ReadFile — mismo modelo de registro, misma
+        // config de animación.
+        if (!scene.load(scenePath, physics, audio, /*loader=*/nullptr, /*preloaded=*/&preloaded))
+        {
+            reportFatal("Error: no se pudo cargar la escena '" + scenePath + "'");
+            jobSystem.shutdown();
+            return EXIT_FAILURE;
+        }
+
+        // Sin CameraComponent, Renderer::currentFrameCamera() cae al repliegue
+        // del editor (m_camera/m_viewMatrix), y si además la escena no tiene
+        // meshes estáticos el auto-fit de Renderer::init deja m_cameraDistance en
+        // -inf: proyección con NaN y ventana negra sin ninguna pista. El editor
+        // avisa al dar a Play (EditorUI.cpp); aquí no hay Play que pulsar, así
+        // que el aviso va nada más cargar la escena.
+        if (!scene.findCamera())
+            std::cerr << "Aviso: la escena no tiene una camara (CameraComponent); "
+                          "el juego no podra renderizar correctamente." << std::endl;
+
+        std::vector<DonTopo::GameObject*> allNodes;
+        scene.traverse([&](DonTopo::GameObject* go) { allNodes.push_back(go); });
+
+        // Pasada 1: meshes estáticos -> Renderer::init(meshes). Las mallas ya
+        // están en los GameObject (vinieron de la cache), así que el auto-fit de
+        // initSceneResources funciona igual que con la carga síncrona.
+        std::vector<DonTopo::Mesh> meshes;
+        for (auto* go : allNodes)
+        {
+            if (go->hasMesh() && !go->isSkinned())
+            {
+                go->staticRenderIndex = (int)meshes.size();
+                meshes.push_back(*go->getMesh());
+            }
         }
 
         renderer.initSceneResources(meshes);
@@ -243,6 +335,24 @@ int main(int argc, char** argv)
             if (go->hasMesh() && go->isSkinned())
                 go->skinnedRenderIndex = renderer.addSkinnedMesh(*go->getSkinnedMesh());
             pumpSplash(false, 0.0f);
+        }
+
+        // --- Espera de uploads antes del primer frame de juego (correctness) ---
+        // addSkinnedMesh NO sube al instante: mete el upload en m_pendingBatch y
+        // marca el objeto con un uploadTicket > 0, así que el mesh queda
+        // INVISIBLE hasta que el batch se envía (flushPendingUploads) y su fence
+        // señala (lo detecta tickDeferredDeletes, que avanza m_lastCompletedTicket).
+        // Sin esto el .exe exportado enseñaba los personajes rigged a medio subir
+        // —o sea, invisibles— en el primer frame. Se fuerza el envío y se espera
+        // a que TODOS los tickets señalen, con el splash todavía en pantalla para
+        // que la ventana siga respondiendo y no haya pop-in. Los meshes estáticos
+        // no pasan por el batch (uploadTicket == 0), así que ya eran visibles;
+        // esto solo hace falta por los skinned.
+        renderer.flushPendingUploads();
+        while (renderer.hasPendingUploads())
+        {
+            renderer.tickDeferredDeletes();   // recupera batches completados, avanza m_lastCompletedTicket
+            pumpSplash(false, 0.0f);          // splash arriba / ventana viva
         }
 
         // Mismas luces que el editor: la escena no las serializa.
@@ -399,11 +509,28 @@ int main(int argc, char** argv)
                 }
             });
 
+            // Antes de drawFrame: los scripts Lua pueden instanciar/borrar
+            // GameObjects en cualquier frame. tickDeferredDeletes reclama los
+            // batches ya señalados (avanza la visibilidad) y drena los borrados
+            // diferidos; flushPendingUploads envía el batch de lo instanciado
+            // ESTE frame (addStaticMesh/addSkinnedMesh vía setOnInstantiated lo
+            // dejan en m_pendingBatch: sin flush no se sube nunca y el objeto
+            // queda invisible). Mismo par que el bucle del editor
+            // (sandbox/src/main.cpp: tickDeferredDeletes + onAssetsLoaded, que
+            // acaba en flushPendingUploads). En régimen estable, sin instanciar
+            // nada, el flush es un no-op barato.
+            renderer.tickDeferredDeletes();
+            renderer.flushPendingUploads();
             renderer.drawFrame(window);
             window.pollEvents();
         }
 
         scriptManager.onPlayStop();
+        // jobSystem.shutdown() ANTES del teardown de la escena: para y une todos
+        // los workers, así ninguno puede tocar la escena mientras se destruye.
+        // (En este punto ya no debería quedar nada pendiente —la precarga se
+        // drenó entera antes del bucle— pero el orden se respeta igualmente.)
+        jobSystem.shutdown();
         scene.shutdown(physics, audio);
         audio.shutdown();
         physics.shutdown();
