@@ -120,7 +120,11 @@ void PropertiesPanel::invalidateCaches()
 
 void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, const std::string& path)
 {
-    if (!ctx.selected || !ctx.renderer || ctx.selected->hasMesh())
+    // El guard de hasMesh() ya no basta: mientras la carga está en vuelo
+    // hasMesh() es falso, así que un segundo drop encolaría una carga duplicada
+    // y el segundo resultado pisaría al primero. pendingMeshJob != 0 lo corta.
+    if (!ctx.selected || !ctx.assetLoader
+        || ctx.selected->hasMesh() || ctx.selected->pendingMeshJob != 0)
         return;
 
     std::string ext = std::filesystem::path(path).extension().string();
@@ -131,34 +135,12 @@ void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, const std::string&
         return;
     }
 
-    try
-    {
-        // loadAuto decide skinned vs estático mirando el FBX. Un fichero rigged
-        // sin animaciones tiene que entrar skinned igual: es lo que habilita el
-        // botón Animator, y los clips vendrán luego de otros ficheros.
-        auto mesh = ModelLoader::loadAuto(path);
-
-        // Registrar ANTES de setMesh: si el registro lanza, el GameObject queda
-        // intacto y el usuario puede reintentar. Con setMesh primero, el guard
-        // hasMesh() de arriba convertiría el reintento en un no-op silencioso.
-        SkinnedMesh* skinned = dynamic_cast<SkinnedMesh*>(mesh.get());
-        if (skinned)
-            ctx.selected->skinnedRenderIndex = ctx.renderer->addSkinnedMesh(*skinned);
-        else
-            ctx.selected->staticRenderIndex  = ctx.renderer->addStaticMesh(*mesh);
-
-        ctx.selected->setMesh(std::move(mesh));
-        m_meshLoadError.clear();
-        // Distinguir los dos casos en el log: sin esto, ante un FBX que el
-        // usuario creía rigged y no lo está, el botón Animator se queda gris
-        // sin ninguna pista de por qué.
-        ctx.pushLog(std::string(skinned ? "Componente Skinned Mesh" : "Componente Mesh")
-                    + " añadido a '" + ctx.selected->name + "'");
-    }
-    catch (const std::exception& e)
-    {
-        m_meshLoadError = e.what();
-    }
+    // No carga: encola. El registro en el Renderer (addSkinnedMesh/addStaticMesh)
+    // y el setMesh los hace EditorUI::onAssetsLoaded (vía applyLoadedMesh) cuando
+    // el worker termine y el pump por frame lo recoja.
+    ctx.selected->pendingMeshJob = ctx.assetLoader->requestMesh(path, ctx.selected->id);
+    m_meshLoadError.clear();
+    ctx.pushLog("Cargando '" + path + "'...");
 }
 
 void PropertiesPanel::loadAudioClipForSelected(EditorContext& ctx, const std::string& path)
@@ -1313,7 +1295,9 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
 
     ImGui::BeginChild("##MeshDropZone", ImVec2(0, 40), true);
     ImGui::TextDisabled("Drop .fbx here");
-    if (ImGui::BeginDragDropTarget())
+    // Veto de edición mientras el modal de carga está activo: no se aceptan
+    // drops nuevos hasta que Load Scene termine (o se cancele).
+    if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
             loadMeshForSelected(ctx, std::string(static_cast<const char*>(payload->Data)));
@@ -1501,7 +1485,8 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
 
     ImGui::BeginChild("##AudioDropZone", ImVec2(0, 40), true);
     ImGui::TextDisabled("Drop audio here");
-    if (ImGui::BeginDragDropTarget())
+    // Mismo veto que el drop de mesh: sin drops nuevos mientras carga la escena.
+    if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
             loadAudioClipForSelected(ctx, std::string(static_cast<const char*>(payload->Data)));

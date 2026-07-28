@@ -13,6 +13,7 @@ class Renderer;
 class Scene;
 class ScriptManager;
 class UndoManager;
+class AsyncAssetLoader;
 
 // Estado compartido entre los paneles del editor, construido de nuevo cada
 // frame dentro de EditorUI::draw() y pasado por referencia a cada
@@ -45,6 +46,18 @@ struct EditorContext {
     // PropertiesPanel — mismo caso y mismo patrón que openScript). Vacío por
     // defecto: solo lo rellena EditorUI::draw().
     std::function<void()> openAnimator;
+
+    // Loader de assets asíncrono (vive en main.cpp, no-propietario). Sin él,
+    // el drop de FBX no encola nada (loadMeshForSelected es no-op). Lo rellena
+    // EditorUI::draw() a partir de EditorUI::m_assetLoader.
+    AsyncAssetLoader* assetLoader = nullptr;
+
+    // true mientras el modal de carga está activo (Load Scene en vuelo). Veta la
+    // edición —gizmo, reparent de jerarquía, drops de asset— pero NO el render:
+    // la ventana sigue pintando frames. Los sitios de edición lo consultan con
+    // `if (!ctx.editingLocked)`. Default false: fuera de Load Scene todo se edita
+    // como siempre (los tests headless lo dejan en su default).
+    bool editingLocked = false;
 };
 
 } // namespace DonTopo

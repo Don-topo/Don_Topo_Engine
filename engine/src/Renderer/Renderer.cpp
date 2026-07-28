@@ -2667,6 +2667,11 @@ namespace DonTopo {
         for (auto& obj : m_skinnedObjects)
         {
             if (obj.outputVertexBuffer == VK_NULL_HANDLE) continue; // borrado desde el editor
+            // Aún en vuelo: su SSBO de entrada se subió en un batch cuyo fence no
+            // ha señalado, así que despachar skinning ahora sería un read-after-write
+            // que la validación de sync marca. No se dibuja hasta que el ticket
+            // complete (igual que los otros tres record loops), saltarlo no cuesta nada.
+            if (obj.uploadTicket > m_lastCompletedTicket) continue;
             ComputePush push{};
             push.animTime    = obj.animTime;
             push.boneCount   = obj.boneCount;

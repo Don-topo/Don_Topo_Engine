@@ -139,7 +139,11 @@ void ViewportPanel::drawCameraGizmo(EditorContext& ctx)
 
 void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, const glm::mat4& cameraView)
 {
-    drawSelectionGizmo(ctx);
+    // Veto de edición mientras el modal de carga está activo: el gizmo de
+    // manipulación (ImGuizmo) mueve/rota/escala el objeto seleccionado, así que
+    // se salta. drawCameraGizmo es solo debug-draw (no edita), se deja siempre.
+    if (!ctx.editingLocked)
+        drawSelectionGizmo(ctx);
     drawCameraGizmo(ctx);
 
     if (!m_open)

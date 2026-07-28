@@ -53,6 +53,8 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
         m_onAxisSelected,
         [this](const std::filesystem::path& p) { m_scriptEditor->openFile(p); },
         [this]() { m_animatorPanel.open(); },
+        m_assetLoader,
+        m_loadingModal.active(),   // veta la edición mientras el modal carga
     };
 
     m_scenePanel.draw(ctx, sceneRoot);
@@ -69,6 +71,28 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     m_contentBrowserPanel.draw(ctx, sceneRoot);
     m_scriptEditor->draw();
     m_animatorPanel.draw(ctx);
+
+    // Overlay de progreso: se actualiza con lo que aún queda por bombear y se
+    // pinta por encima. draw() devuelve true solo el frame en que se pulsa
+    // Cancelar -> se cancelan las peticiones vivas y el buzón se vacía; la
+    // escena se queda con lo ya aplicado (estado válido y guardable).
+    m_loadingModal.update(m_assetLoader ? m_assetLoader->pending() : 0);
+    if (m_loadingModal.draw() && m_assetLoader)
+        m_assetLoader->cancelAllPending();
+}
+
+void EditorUI::onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, Renderer& renderer)
+{
+    for (auto& r : results)
+    {
+        std::string err;
+        if (!applyLoadedMesh(r, scene, renderer, &err) && !err.empty())
+            m_logPanel.push(err);
+    }
+
+    // Un solo submit para todos los uploads de este pump. Es lo que convierte
+    // ~440 vkQueueWaitIdle (uno por objeto) en uno.
+    renderer.flushPendingUploads();
 }
 
 void EditorUI::onGameObjectDestroyed(GameObject* node)
@@ -167,7 +191,9 @@ void EditorUI::drawToolbar()
         if (ImGui::Button("Stop"))
         {
             if (m_scriptManager) m_scriptManager->onPlayStop();
-            m_sceneIOError = reloadSceneFromJson(m_playSnapshot) ? "" : "No se pudo restaurar la escena";
+            // Restore síncrono (async=false): sin modal, determinista. Meter
+            // estados a medias en la transición Play->Stop no compensa.
+            m_sceneIOError = reloadSceneFromJson(m_playSnapshot, /*async=*/false) ? "" : "No se pudo restaurar la escena";
             m_isPlaying = false;
             m_logPanel.push("Play Mode detenido");
         }
@@ -312,7 +338,7 @@ void EditorUI::focusSelected(Camera& camera)
     m_viewportPanel.focusSelected(ctx, camera);
 }
 
-bool EditorUI::reloadSceneFromJson(const nlohmann::json& j)
+bool EditorUI::reloadSceneFromJson(const nlohmann::json& j, bool async)
 {
     if (!m_scene || !m_renderer || !m_physics || !m_audio)
         return false;
@@ -334,7 +360,12 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j)
         });
     }
 
-    bool loaded = m_scene->fromJson(j, *m_physics, *m_audio);
+    // Solo Load Scene (async) va asíncrono. El restore de Play->Stop se queda
+    // síncrono a propósito: meter estados a medias en esa transición no
+    // compensa la ganancia, que la capa B ya da sola. Sin loader (o en
+    // síncrono) fromJson carga los meshes en el sitio, como siempre.
+    bool loaded = m_scene->fromJson(j, *m_physics, *m_audio,
+                                    async ? m_assetLoader : nullptr);
     // Se ejecuta tanto si loaded es true (árbol nuevo, índices ya en -1 por
     // construcción) como si es false (árbol viejo intacto, índices
     // reseteados justo arriba) — en ambos casos hay que volver a subir los
@@ -350,6 +381,12 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j)
         // no modifica la escena y sus avisos no aplican.
         for (const auto& w : m_scene->lastWarnings())
             m_logPanel.push(w);
+
+        // En async, fromJson encoló una petición por cada sourcePath; abrir el
+        // modal con ese conteo. begin() no hace nada si son 0 (escena sin
+        // meshes de fichero), así que no aparece un modal vacío.
+        if (async && m_assetLoader)
+            m_loadingModal.begin(m_assetLoader->pending());
     }
     m_undoHistory.clear();
 
@@ -399,7 +436,7 @@ void EditorUI::drawSceneDialog()
                                 (*parsed)["version"].get<int>() == 1 &&
                                 parsed->contains("root") && (*parsed)["root"].is_object();
 
-            bool loaded  = structureOk && reloadSceneFromJson(*parsed);
+            bool loaded  = structureOk && reloadSceneFromJson(*parsed, /*async=*/true);
             m_sceneIOError = loaded ? "" : "No se pudo cargar la escena";
             m_logPanel.push(loaded ? ("Escena cargada: " + path) : ("Error al cargar escena: " + path));
         }

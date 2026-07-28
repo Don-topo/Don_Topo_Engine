@@ -15,6 +15,8 @@
 #include "DonTopo/Editor/PropertiesPanel.h"
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/AnimatorPanel.h"
+#include "DonTopo/Editor/LoadingModal.h"
+#include "DonTopo/Renderer/AsyncAssetLoader.h"
 
 namespace IGFD { class FileDialog; }
 
@@ -85,6 +87,15 @@ public:
     // Es el mismo saneo que hace ScenePanel al borrar desde la jerarquía.
     void onGameObjectDestroyed(GameObject* node);
 
+    // Aplica a la escena los resultados que devuelve AsyncAssetLoader::pumpCompleted
+    // y cierra el batch con UN solo flushPendingUploads. Lo llama el pump por
+    // frame de main.cpp.
+    void onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, Renderer& renderer);
+
+    // Lo rellena main() antes del bucle; sin él, los drops no encolan nada y
+    // Load Scene se queda en la ruta síncrona.
+    void setAssetLoader(AsyncAssetLoader* loader) { m_assetLoader = loader; }
+
 private:
     static constexpr float kToolbarHeight = 30.0f;
     // Ctrl+Z/Ctrl+Y — no-op si !m_scene, si m_isPlaying, o si algún widget de
@@ -103,7 +114,10 @@ private:
     // fromJson. Usado por drawSceneDialog (Load Scene) y por el handler de
     // Stop en drawToolbar. false sin efecto si falta algún puntero
     // (m_scene/m_renderer/m_physics/m_audio).
-    bool reloadSceneFromJson(const nlohmann::json& j);
+    // async == true (Load Scene): los meshes se encolan en m_assetLoader y se
+    // abre el modal de progreso. async == false (restore de Play->Stop y
+    // cualquier ruta sin loader): carga síncrona, determinista, sin modal.
+    bool reloadSceneFromJson(const nlohmann::json& j, bool async);
     // Export Game — drena el diálogo de carpeta destino y pinta los dos
     // popups modales (nombre y confirmación de sobrescritura). Se llama cada
     // frame desde draw(), igual que drawSceneDialog.
@@ -176,6 +190,13 @@ private:
     // el que incluya EditorUI.h — mismo patrón que m_sceneFileDialog.
     std::unique_ptr<ScriptEditorPanel> m_scriptEditor;
     AnimatorPanel m_animatorPanel;
+
+    // Overlay de progreso de Load Scene. Solo lo activa reloadSceneFromJson en
+    // la ruta asíncrona; el pump de main.cpp lo va actualizando cada frame.
+    LoadingModal      m_loadingModal;
+    // Loader asíncrono no-propietario (vive en main.cpp). Lo rellena
+    // setAssetLoader antes del bucle. nullptr => Load Scene cae a síncrono.
+    AsyncAssetLoader* m_assetLoader = nullptr;
 };
 
 } // namespace DonTopo

@@ -1,6 +1,9 @@
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Renderer/Renderer.h"
+#include "DonTopo/Core/Scene.h"
+#include "DonTopo/Core/GameObject.h"
 
 #include <stb_image.h>
 
@@ -304,6 +307,48 @@ namespace DonTopo
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         return m_readFileCount;
+    }
+
+    bool applyLoadedMesh(LoadedMesh& r, Scene& scene, Renderer& renderer,
+                         std::string* outError)
+    {
+        // Recorrido en vivo, no una lista cacheada: el editor permite borrar
+        // GameObjects en cualquier frame, así que un puntero guardado en la
+        // petición sería colgante. Mismo motivo que el liveCube de main.cpp:293.
+        GameObject* target = nullptr;
+        scene.traverse([&](GameObject* go) { if (go->id == r.targetId) target = go; });
+
+        // Borrado mientras cargaba: el trabajo del worker se tira y ya está. Sin
+        // tocar memoria liberada, que es justo lo que evita resolver por id.
+        if (!target) return false;
+
+        target->pendingMeshJob = 0;
+
+        if (!r.error.empty())
+        {
+            if (outError) *outError = "Error cargando '" + r.path + "': " + r.error;
+            return false;
+        }
+        if (!r.mesh) return false;
+
+        // Registrar en el Renderer ANTES de setMesh, igual que la ruta síncrona
+        // de PropertiesPanel:144-150: si el registro lanza, el GameObject queda
+        // intacto y el reintento funciona en vez de ser un no-op silencioso.
+        try
+        {
+            if (SkinnedMesh* sk = dynamic_cast<SkinnedMesh*>(r.mesh.get()))
+                target->skinnedRenderIndex = renderer.addSkinnedMesh(*sk, &r.images);
+            else
+                target->staticRenderIndex  = renderer.addStaticMesh(*r.mesh, &r.images);
+
+            target->setMesh(r.mesh);
+        }
+        catch (const std::exception& e)
+        {
+            if (outError) *outError = std::string("Error subiendo a GPU '") + r.path + "': " + e.what();
+            return false;
+        }
+        return true;
     }
 
     void AsyncAssetLoader::cancelAllPending()

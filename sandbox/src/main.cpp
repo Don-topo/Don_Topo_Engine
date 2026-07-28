@@ -8,6 +8,8 @@
 #include "DonTopo/Core/Camera.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Scene.h"
+#include "DonTopo/Core/JobSystem.h"
+#include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Physics/Rigidbody.h"
@@ -253,6 +255,16 @@ int main()
             }
         });
 
+        // JobSystem + loader asíncrono de assets. Se crean tras todo el setup y
+        // ANTES del bucle: el drop de FBX y Load Scene encolan aquí, y el pump
+        // por frame (más abajo) drena los resultados. El shutdown del JobSystem
+        // va lo PRIMERO al salir del bucle (join de los workers antes de destruir
+        // Renderer/Scene) — ver el bloque de apagado.
+        DonTopo::JobSystem        jobSystem;
+        jobSystem.start();
+        DonTopo::AsyncAssetLoader assetLoader(jobSystem);
+        renderer.setAssetLoader(&assetLoader);
+
         while (!window.shouldClose())
         {
             DonTopo::Input::update();
@@ -286,6 +298,15 @@ int main()
                 // no ocurre.
                 scene.getRoot().updateWorldTransforms();
             }
+
+            // Pump por frame de la carga asíncrona, ANTES del traverse: los
+            // objetos cuyo mesh acaba de llegar tienen que estar ya registrados
+            // en el Renderer cuando se recorra la escena para empujar transforms.
+            // tickDeferredDeletes primero (libera lo borrado); onAssetsLoaded
+            // aplica los resultados y cierra el batch con UN solo
+            // flushPendingUploads (así ~440 vkQueueWaitIdle se vuelven uno).
+            renderer.tickDeferredDeletes();
+            renderer.onAssetsLoaded(assetLoader.pumpCompleted(2.0f), scene);
 
             // Recorrido en vivo (no la lista allNodes cacheada al arrancar): el
             // editor permite borrar GameObjects en tiempo real, así que un
@@ -323,12 +344,6 @@ int main()
                 }
             });
 
-            // TEMP (Task 6): sin el pump del runtime (Task 9) que lo llama, los
-            // meshes añadidos por addStaticMesh/addSkinnedMesh quedarían invisibles
-            // para siempre. Cierra el batch del frame y arranca la resolución del
-            // ticket. Lo sustituirá el pump de la carga asíncrona.
-            renderer.flushPendingUploads();
-
             // --- Gizmos: demo de depuración visual (bbox, ray, frustum) ---
             // Los ejes ya no se dibujan fijos aquí: ViewportPanel::drawSelectionGizmo()
             // los muestra automáticamente sobre cualquier GameObject seleccionado.
@@ -350,10 +365,15 @@ int main()
                 DonTopo::Gizmos::drawFrustum(debugProj * debugView, glm::vec3(1.0f));
             }
 
-            renderer.tickDeferredDeletes();
             renderer.drawFrame(window);
             window.pollEvents();
         }
+
+        // PRIMERO el JobSystem: si se destruyera después del Renderer/Scene, un
+        // worker aún en vuelo (un ReadFile de FBX a medias) podría tocar memoria
+        // ya liberada. El join de shutdown() garantiza que ningún hilo sigue vivo
+        // antes de empezar a destruir el resto.
+        jobSystem.shutdown();
 
         // Libera explícitamente colliders/audioclips antes de destruir
         // physics/audio: sin esto, ~BoxCollider() intentaría release() un

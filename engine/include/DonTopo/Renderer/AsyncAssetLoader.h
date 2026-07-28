@@ -114,4 +114,17 @@ namespace DonTopo
             // entregaría meshes de objetos ya cancelados. Ver runJob().
             uint64_t                                      m_epoch = 0;
     };
+
+    class Scene;
+    class Renderer;
+
+    // Aplica un resultado a la escena resolviendo por targetId sobre la escena
+    // VIVA. Devuelve false si el GameObject ya no existe (borrado mientras
+    // cargaba) o si el resultado trae error; en ese caso outError, si no es
+    // nulo, recibe el mensaje para el log.
+    //
+    // No llama a flushPendingUploads: el caller decide cuándo cerrar el batch,
+    // porque el sentido de todo esto es agrupar N resultados en UN submit.
+    bool applyLoadedMesh(LoadedMesh& r, Scene& scene, Renderer& renderer,
+                         std::string* outError);
 }

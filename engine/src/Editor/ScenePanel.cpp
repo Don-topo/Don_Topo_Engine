@@ -114,7 +114,9 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     ImGui::Dummy(ImGui::GetContentRegionAvail());
     if (ImGui::IsItemClicked())
         ctx.selected = nullptr; // clic en zona vacía deselecciona
-    if (sceneRoot && ImGui::BeginDragDropTarget())
+    // Veto de reparent mientras el modal de carga está activo (edición de
+    // jerarquía). El render del árbol y la selección siguen: solo se veta mover.
+    if (!ctx.editingLocked && sceneRoot && ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_GAMEOBJECT"))
         {
@@ -410,8 +412,9 @@ void ScenePanel::drawNode(EditorContext& ctx, GameObject* node)
     if (ImGui::IsItemClicked())
         ctx.selected = node;
 
-    // Drag: el root (parent == nullptr) no se puede arrastrar.
-    if (node->parent && ImGui::BeginDragDropSource())
+    // Drag: el root (parent == nullptr) no se puede arrastrar. Vetado también
+    // mientras el modal de carga está activo (edición de jerarquía).
+    if (!ctx.editingLocked && node->parent && ImGui::BeginDragDropSource())
     {
         ImGui::SetDragDropPayload("DT_GAMEOBJECT", &node, sizeof(GameObject*));
         ImGui::Text("%s", label.c_str());
@@ -419,7 +422,7 @@ void ScenePanel::drawNode(EditorContext& ctx, GameObject* node)
     }
     // Drop: soltar sobre cualquier nodo (incluido el root) reposiciona el
     // arrastrado; moveGameObject ya bloquea ciclos y "salir" del root.
-    if (ImGui::BeginDragDropTarget())
+    if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_GAMEOBJECT"))
         {

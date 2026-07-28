@@ -101,6 +101,15 @@ namespace DonTopo {
             // selección si apunta al subárbol (evita puntero colgante -> crash).
             void notifyGameObjectDestroyed(GameObject* node) { m_editorUI.onGameObjectDestroyed(node); }
             void focusSelected(Camera& camera) { m_editorUI.focusSelected(camera); }
+            // Passthrough al EditorUI embebido — el wiring de main.cpp le pasa el
+            // loader asíncrono antes del bucle, y bombea sus resultados por frame.
+            void setAssetLoader(AsyncAssetLoader* loader) { m_editorUI.setAssetLoader(loader); }
+            // Aplica los resultados del pump a la escena y cierra el batch (un
+            // solo submit). Pasa *this como Renderer: el registro GPU vive aquí.
+            void onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene)
+            {
+                m_editorUI.onAssetsLoaded(std::move(results), scene, *this);
+            }
             void setSceneRoot(GameObject* root);
             // Libera mesh/skinnedMesh/texturas en GPU de node y todo su subárbol
             // (llamado por EditorUI justo antes de borrar el nodo del scene graph).
