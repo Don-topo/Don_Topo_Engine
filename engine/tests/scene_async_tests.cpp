@@ -3,7 +3,10 @@
 // El caso mas importante es el primero: con loader == nullptr el
 // comportamiento tiene que ser IDENTICO al de antes de esta feature. Es lo que
 // protege el restore de Play->Stop (EditorUI.cpp:170) y las ocho suites que ya
-// existen.
+// existen. Ese test (testSyncPathUnchanged) es un DIFERENCIAL sobre
+// pendingMeshJob con una escena que SI tiene sourcePath — no una comparacion
+// de toJson() entre dos cargas nullptr, que no puede detectar una seleccion
+// de rama invertida (ver el comentario junto a la funcion para el porque).
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Core/JobSystem.h"
 #include "DonTopo/Core/Scene.h"
@@ -95,16 +98,63 @@ void stripIds(nlohmann::json& node)
             stripIds(child);
 }
 
-// loader == nullptr produce exactamente lo de siempre. Sabotaje: hacer que la
-// rama sincrona encole en vez de cargar — los nodos pierden su mesh y el
-// toJson deja de coincidir.
+// El caso mas importante: con loader == nullptr el comportamiento tiene que
+// ser IDENTICO al de antes de esta feature — en particular, la rama estatica
+// que esta tarea toco (el `else if (!sourcePath.empty()) { if (loader) {...}
+// else {...} }` dentro de nodeFromJson) NO debe encolar ninguna peticion.
+//
+// Es un DIFERENCIAL sobre pendingMeshJob, no una comparacion de toJson():
+// carga la MISMA escena con y sin loader y compara el campo que la rama
+// if(loader)/else realmente escribe. Esto SI prueba seleccion de rama — a
+// diferencia de comparar dos toJson() donde AMBOS lados usan loader==nullptr
+// (ver testSyncDefaultArgEqualsExplicitNullptr mas abajo): con los dos lados
+// nullptr, una rama corrupta corrompe los dos por igual y esa comparacion
+// seguiria cuadrando. Hace falta un nodo con sourcePath (sceneWithPendingLoad,
+// no twoNodeScene) para que la rama exista siquiera — con twoNodeScene
+// j.contains("mesh") es false y todo el bloque queda muerto para el test.
+//
+// Sabotaje: invertir la condicion a `if (!loader)` en la rama estatica de
+// nodeFromJson -> los dos asserts de abajo se intercambian (sin loader
+// encolaria, con loader no) y el test falla.
 void testSyncPathUnchanged()
+{
+    DonTopo::Scene sync;
+    assert(sync.fromJson(sceneWithPendingLoad(), physics(), audio(), nullptr));
+    DonTopo::GameObject* hijoASync = nullptr;
+    sync.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") hijoASync = go; });
+    assert(hijoASync);
+    // Sin loader: corre la rama sincrona (ModelLoader::load). El fichero no
+    // existe, asi que no hay mesh — pero sobre todo NO se llamo a
+    // requestMesh en absoluto, y pendingMeshJob se queda en su valor por
+    // defecto (0).
+    assert(hijoASync->pendingMeshJob == 0 &&
+           "sin loader no debe encolarse ninguna peticion (rama sincrona)");
+
+    DonTopo::JobSystem js;
+    js.start();
+    DonTopo::AsyncAssetLoader loader(js);
+    DonTopo::Scene withLoader;
+    assert(withLoader.fromJson(sceneWithPendingLoad(), physics(), audio(), &loader));
+    DonTopo::GameObject* hijoAAsync = nullptr;
+    withLoader.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") hijoAAsync = go; });
+    assert(hijoAAsync);
+    // Con loader: corre la rama asincrona -> requestMesh SI se llamo.
+    assert(hijoAAsync->pendingMeshJob != 0 &&
+           "con loader debe encolarse una peticion real (rama asincrona)");
+    js.shutdown();
+}
+
+// Comprobacion secundaria de determinismo: el parametro por defecto y el
+// nullptr explicito son el MISMO camino (misma jerarquia/transforms tras
+// stripIds). NO prueba seleccion de rama — ver testSyncPathUnchanged para
+// eso — porque los dos lados son loader==nullptr: una rama estatica
+// corrupta corrompe ambos por igual y esta comparacion seguiria cuadrando.
+void testSyncDefaultArgEqualsExplicitNullptr()
 {
     DonTopo::Scene a, b;
     assert(a.fromJson(twoNodeScene(), physics(), audio()));
     assert(b.fromJson(twoNodeScene(), physics(), audio(), nullptr));
 
-    // El parametro por defecto y el nullptr explicito son el MISMO camino.
     nlohmann::json ja = a.toJson();
     nlohmann::json jb = b.toJson();
     stripIds(ja["root"]);
@@ -197,6 +247,7 @@ void testDeletedTargetIsDiscarded()
 int main()
 {
     testSyncPathUnchanged();
+    testSyncDefaultArgEqualsExplicitNullptr();
     testAsyncCreatesNodesImmediately();
     testDeletedTargetIsDiscarded();
     std::printf("scene_async_tests OK\n");
