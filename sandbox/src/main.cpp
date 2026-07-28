@@ -323,6 +323,12 @@ int main()
                 }
             });
 
+            // TEMP (Task 6): sin el pump del runtime (Task 9) que lo llama, los
+            // meshes añadidos por addStaticMesh/addSkinnedMesh quedarían invisibles
+            // para siempre. Cierra el batch del frame y arranca la resolución del
+            // ticket. Lo sustituirá el pump de la carga asíncrona.
+            renderer.flushPendingUploads();
+
             // --- Gizmos: demo de depuración visual (bbox, ray, frustum) ---
             // Los ejes ya no se dibujan fijos aquí: ViewportPanel::drawSelectionGizmo()
             // los muestra automáticamente sobre cualquier GameObject seleccionado.

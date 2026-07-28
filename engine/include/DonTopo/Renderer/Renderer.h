@@ -2,6 +2,7 @@
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <string>
+#include <memory>
 #include <glm/glm.hpp>
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Core/Camera.h"
@@ -11,6 +12,8 @@
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/GpuResources.h"
 #include "DonTopo/Renderer/DeferredDelete.h"
+#include "DonTopo/Renderer/TransferBatch.h"
+#include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Editor/EditorUI.h"
 #include "DonTopo/Renderer/Skybox.h"
 #include "DonTopo/Renderer/SplashScreen.h"
@@ -128,7 +131,11 @@ namespace DonTopo {
                     m_objects[objectIndex].transform = transform;
             }
             void setLights(const std::vector<Light>& lights){ m_lights = lights; }
-            int addSkinnedMesh(const SkinnedMesh& mesh);
+            // decoded: píxeles que el worker ya decodificó para este mesh (nullptr
+            // en el camino síncrono). Encola todos los uploads en el batch del pump
+            // actual y marca el objeto con el ticket vigente: no se dibuja hasta que
+            // flushPendingUploads() lo envíe y su fence señale.
+            int addSkinnedMesh(const SkinnedMesh& mesh, const std::vector<DecodedImage>* decoded = nullptr);
             // Rehace TODOS los recursos GPU del objeto skinned `index` a partir
             // de `mesh`, en el mismo slot (el skinnedRenderIndex del GameObject
             // no cambia). Necesario tras añadir o quitar clips: los keyframes
@@ -137,7 +144,15 @@ namespace DonTopo {
             void rebuildSkinnedMesh(int index, const SkinnedMesh& mesh);
             // Añade un mesh estático nuevo (buffers + texturas + descriptor set) y lo
             // registra en m_objects. Devuelve el índice para GameObject::staticRenderIndex.
-            int addStaticMesh(const Mesh& mesh);
+            // decoded: mismo contrato que addSkinnedMesh (nullptr = camino síncrono).
+            int addStaticMesh(const Mesh& mesh, const std::vector<DecodedImage>* decoded = nullptr);
+            // Cierra y envía el batch del pump actual. Llamar UNA vez tras
+            // procesar todos los resultados del frame.
+            void flushPendingUploads();
+            // true si hay uploads sin completar: un batch abierto en m_pendingBatch
+            // o batches todavía en vuelo. Lo consume el runtime (Task 10) para saber
+            // si aún debe seguir bombeando antes de dar la carga por terminada.
+            bool hasPendingUploads() const;
             void updateAnimation(int index, float deltaTime);
             // Sink puro: fija el clip y el tiempo que el Animator ya ha
             // calculado en CPU. No avanza el tiempo — a diferencia de
@@ -176,6 +191,10 @@ namespace DonTopo {
                 float           roughness           = 0.5f;
                 VkDescriptorSet descriptorSets[2]   = {};
                 glm::mat4       transform{1.0f};
+                // 0 = subido y visible. >0 = esperando a que la fence del batch
+                // con ese ticket señale. Sin esto, el objeto se dibujaría con
+                // sus texturas todavía en TRANSFER_DST_OPTIMAL.
+                uint64_t        uploadTicket        = 0;
             };
 
             struct SkinnedMatGfx {
@@ -271,6 +290,10 @@ namespace DonTopo {
                 float     duration       = 0.0f;
                 float     ticksPerSecond = 24.0f;
                 glm::mat4 transform      {1.0f};
+                // 0 = subido y visible. >0 = esperando a que la fence del batch
+                // con ese ticket señale. Sin esto, el objeto se dibujaría con
+                // sus texturas todavía en TRANSFER_DST_OPTIMAL.
+                uint64_t  uploadTicket   = 0;
             };
 
             void createSwapChain(Window& window);
@@ -289,15 +312,17 @@ namespace DonTopo {
             std::vector<char> loadShaderFile(const std::string& path);
             VkShaderModule createShaderModule(const std::vector<char>& code);
             void recreateSwapChain(Window& window);
-            void createVertexBuffer(const std::vector<Vertex>& v, VkBuffer& buf, VkDeviceMemory& mem);
-            void createIndexBuffer(const std::vector<uint32_t>& idx, VkBuffer& buf, VkDeviceMemory& mem);
+            void createVertexBuffer(const std::vector<Vertex>& v, VkBuffer& buf, VkDeviceMemory& mem, TransferBatch* batch = nullptr);
+            void createIndexBuffer(const std::vector<uint32_t>& idx, VkBuffer& buf, VkDeviceMemory& mem, TransferBatch* batch = nullptr);
             void createDescriptorSetLayout();
             void createUniformBuffers();
             void createDescriptorPool();
             void createDescriptorSets();
             void updateUniformBuffer(uint32_t frameIndex);
             void createDepthResources();
-            void buildRenderObject(const Mesh& mesh, RenderObject& obj);
+            void buildRenderObject(const Mesh& mesh, RenderObject& obj,
+                                   TransferBatch* batch = nullptr,
+                                   const std::vector<DecodedImage>* decoded = nullptr);
             void allocateObjectDescriptorSet(RenderObject& obj);
             void destroyRenderObject(RenderObject& obj);
             void createShadowResources();
@@ -307,7 +332,9 @@ namespace DonTopo {
             // Cuerpo compartido por addSkinnedMesh y rebuildSkinnedMesh: crea
             // buffers, sube SSBOs, aloja descriptor sets y carga texturas sobre
             // un SkinnedRenderObject ya vacío.
-            void initSkinnedRenderObject(SkinnedRenderObject& obj, const SkinnedMesh& mesh);
+            void initSkinnedRenderObject(SkinnedRenderObject& obj, const SkinnedMesh& mesh,
+                                         TransferBatch* batch = nullptr,
+                                         const std::vector<DecodedImage>* decoded = nullptr);
             void recordComputePass(VkCommandBuffer cmd);
             void removeStaticObject(int index);
             void removeSkinnedObject(int index);
@@ -404,6 +431,14 @@ namespace DonTopo {
             std::vector<SkinnedRenderObject> m_skinnedObjects;
 
             std::vector<RenderObject> m_objects;
+
+            // Batch abierto donde caen los uploads del pump actual. Se envía en
+            // flushPendingUploads() y pasa a m_inFlightBatches.
+            std::unique_ptr<TransferBatch> m_pendingBatch;
+            struct InFlightBatch { uint64_t ticket; std::unique_ptr<TransferBatch> batch; };
+            std::vector<InFlightBatch>     m_inFlightBatches;
+            uint64_t                       m_nextUploadTicket      = 1;
+            uint64_t                       m_lastCompletedTicket   = 0;
 
             DeferredDeleteQueue m_deferredDeletes;
 

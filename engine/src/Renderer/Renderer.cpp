@@ -793,6 +793,10 @@ namespace DonTopo {
             for (auto& obj : m_objects)
             {
                 if (obj.vertexBuffer == VK_NULL_HANDLE) continue; // borrado desde el editor
+                // Todavía en vuelo: sus texturas siguen en TRANSFER_DST_OPTIMAL y
+                // samplearlas sería leer basura. Aparece en cuanto la fence de su
+                // batch señale.
+                if (obj.uploadTicket > m_lastCompletedTicket) continue;
                 vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
                     m_pipelineLayout, 0, 1, &obj.descriptorSets[m_currentFrame], 0, nullptr);
                 PushData push;
@@ -817,6 +821,8 @@ namespace DonTopo {
                 for (auto& sobj : m_skinnedObjects)
                 {
                     if (sobj.outputVertexBuffer == VK_NULL_HANDLE) continue; // borrado desde el editor
+                    // En vuelo: sus texturas de material siguen en TRANSFER_DST_OPTIMAL.
+                    if (sobj.uploadTicket > m_lastCompletedTicket) continue;
                     VkBuffer     vbs[]  = { sobj.outputVertexBuffer };
                     VkDeviceSize offs[] = { 0 };
                     vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vbs, offs);
@@ -1239,7 +1245,7 @@ namespace DonTopo {
                 throw std::runtime_error("failed to create renderFinished semaphore!");
     }
 
-    void Renderer::createVertexBuffer(const std::vector<Vertex>& vertices, VkBuffer& buf, VkDeviceMemory& mem)
+    void Renderer::createVertexBuffer(const std::vector<Vertex>& vertices, VkBuffer& buf, VkDeviceMemory& mem, TransferBatch* batch)
     {
         VkDeviceSize size = sizeof(vertices[0]) * vertices.size();
 
@@ -1260,13 +1266,21 @@ namespace DonTopo {
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             buf, mem);
 
-        m_res.copyBuffer(stagingBuffer, buf, size);
+        m_res.copyBuffer(stagingBuffer, buf, size, batch);
 
-        vkDestroyBuffer(m_gpu.device(), stagingBuffer, nullptr);
-        vkFreeMemory(m_gpu.device(), stagingMemory, nullptr);
+        // Con batch, la copia se ejecuta al enviar la fence: destruir el staging
+        // ahora sería un use-after-free en la GPU. Lo posee el batch hasta que
+        // señala. Sin batch, la copia ya esperó (vkQueueWaitIdle) y se libera ya.
+        if (batch)
+            batch->addStaging(stagingBuffer, stagingMemory);
+        else
+        {
+            vkDestroyBuffer(m_gpu.device(), stagingBuffer, nullptr);
+            vkFreeMemory(m_gpu.device(), stagingMemory, nullptr);
+        }
     }
 
-    void Renderer::createIndexBuffer(const std::vector<uint32_t>& idx, VkBuffer& buf, VkDeviceMemory& mem)
+    void Renderer::createIndexBuffer(const std::vector<uint32_t>& idx, VkBuffer& buf, VkDeviceMemory& mem, TransferBatch* batch)
     {
         VkDeviceSize size = sizeof(idx[0]) * idx.size();
 
@@ -1287,11 +1301,16 @@ namespace DonTopo {
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             buf, mem);
 
-        m_res.copyBuffer(stagingBuffer, buf, size);
+        m_res.copyBuffer(stagingBuffer, buf, size, batch);
 
-        vkDestroyBuffer(m_gpu.device(), stagingBuffer, nullptr);
-        vkFreeMemory(m_gpu.device(), stagingMemory, nullptr);
-
+        // Ver createVertexBuffer: el staging vive hasta la fence cuando hay batch.
+        if (batch)
+            batch->addStaging(stagingBuffer, stagingMemory);
+        else
+        {
+            vkDestroyBuffer(m_gpu.device(), stagingBuffer, nullptr);
+            vkFreeMemory(m_gpu.device(), stagingMemory, nullptr);
+        }
     }
 
     void Renderer::createDescriptorSetLayout()
@@ -1540,30 +1559,65 @@ namespace DonTopo {
         }
     }
 
-    void Renderer::buildRenderObject(const Mesh& mesh, RenderObject& obj)
+    void Renderer::buildRenderObject(const Mesh& mesh, RenderObject& obj,
+                                     TransferBatch* batch,
+                                     const std::vector<DecodedImage>* decoded)
     {
         obj.name       = mesh.name;
         obj.indexCount = (uint32_t)mesh.indices.size();
-        createVertexBuffer(mesh.vertices,                               obj.vertexBuffer, obj.vertexMemory);
-        createIndexBuffer(mesh.indices,                                 obj.indexBuffer,  obj.indexMemory);
-        m_res.createTextureImage(mesh.material.texturePath, mesh.material.embeddedTexture,         obj.textureImage, obj.textureMem);
-        m_res.createTextureImageView(obj.textureImage,                           obj.textureView);
+        createVertexBuffer(mesh.vertices, obj.vertexBuffer, obj.vertexMemory, batch);
+        createIndexBuffer(mesh.indices,   obj.indexBuffer,  obj.indexMemory,  batch);
+
+        // Busca un slot entre los píxeles que ya decodificó el worker. Sin
+        // acierto se cae a la ruta de siempre (stbi_load en este hilo), que es
+        // lo que pasa en el init síncrono y en las texturas sin decodificar.
+        auto findSlot = [decoded](DecodedImage::Slot s) -> const DecodedImage* {
+            if (!decoded) return nullptr;
+            for (const auto& d : *decoded) if (d.slot == s) return &d;
+            return nullptr;
+        };
+
+        if (const DecodedImage* albedo = findSlot(DecodedImage::Albedo))
+            m_res.createTextureImageFromPixels(albedo->pixels.data(),
+                                               (uint32_t)albedo->w, (uint32_t)albedo->h,
+                                               obj.textureImage, obj.textureMem, batch);
+        else
+            m_res.createTextureImage(mesh.material.texturePath, mesh.material.embeddedTexture,
+                                     obj.textureImage, obj.textureMem, batch);
+        m_res.createTextureImageView(obj.textureImage, obj.textureView);
         m_res.createTextureSampler(obj.sampler);
-        m_res.createNormalMapImage(mesh.material.normalMapPath, mesh.material.embeddedNormalMap,   obj.normalImage,  obj.normalMem);
-        m_res.createTextureImageView(obj.normalImage,                            obj.normalView, VK_FORMAT_R8G8B8A8_UNORM);
+
+        if (const DecodedImage* normal = findSlot(DecodedImage::Normal))
+            m_res.createNormalMapImageFromPixels(normal->pixels.data(),
+                                                 (uint32_t)normal->w, (uint32_t)normal->h,
+                                                 obj.normalImage, obj.normalMem, batch);
+        else
+            m_res.createNormalMapImage(mesh.material.normalMapPath, mesh.material.embeddedNormalMap,
+                                       obj.normalImage, obj.normalMem, batch);
+        m_res.createTextureImageView(obj.normalImage, obj.normalView, VK_FORMAT_R8G8B8A8_UNORM);
         m_res.createTextureSampler(obj.normalSampler);
 
-        if (!mesh.material.metallicRoughnessPath.empty() || !mesh.material.embeddedMetallicRoughness.empty())
+        if (const DecodedImage* orm = findSlot(DecodedImage::ORM))
         {
-            m_res.createNormalMapImage(mesh.material.metallicRoughnessPath, mesh.material.embeddedMetallicRoughness,
-                                 obj.ormImage, obj.ormMem);
+            m_res.createNormalMapImageFromPixels(orm->pixels.data(),
+                                                 (uint32_t)orm->w, (uint32_t)orm->h,
+                                                 obj.ormImage, obj.ormMem, batch);
+            obj.metallic  = 1.0f;
+            obj.roughness = 1.0f;
+        }
+        else if (!mesh.material.metallicRoughnessPath.empty()
+                 || !mesh.material.embeddedMetallicRoughness.empty())
+        {
+            m_res.createNormalMapImage(mesh.material.metallicRoughnessPath,
+                                       mesh.material.embeddedMetallicRoughness,
+                                       obj.ormImage, obj.ormMem, batch);
             obj.metallic  = 1.0f;
             obj.roughness = 1.0f;
         }
         else
         {
             constexpr uint8_t white[4] = {255, 255, 255, 255};
-            m_res.createSolidColorImage(white, obj.ormImage, obj.ormMem);
+            m_res.createSolidColorImage(white, obj.ormImage, obj.ormMem, batch);
             obj.metallic  = mesh.material.metallic;
             obj.roughness = mesh.material.roughness;
         }
@@ -1571,12 +1625,20 @@ namespace DonTopo {
         m_res.createTextureSampler(obj.ormSampler);
     }
 
-    int Renderer::addStaticMesh(const Mesh& mesh)
+    int Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImage>* decoded)
     {
+        if (!m_pendingBatch)
+            m_pendingBatch = std::make_unique<TransferBatch>(m_gpu);
+
         m_objects.emplace_back();
         RenderObject& obj = m_objects.back();
-        buildRenderObject(mesh, obj);
+        buildRenderObject(mesh, obj, m_pendingBatch.get(), decoded);
         allocateObjectDescriptorSet(obj);
+
+        // El objeto no se dibuja hasta que la fence de este batch señale. Es la
+        // decisión de producto de la spec: nada de placeholders, el GameObject
+        // aparece cuando está listo.
+        obj.uploadTicket = m_nextUploadTicket;
         return (int)m_objects.size() - 1;
     }
 
@@ -1835,6 +1897,9 @@ namespace DonTopo {
         for(auto& obj : m_objects)
         {
             if (obj.vertexBuffer == VK_NULL_HANDLE) continue; // borrado desde el editor
+            // Aún en vuelo: no debe proyectar sombra si todavía no es visible, o
+            // habría una sombra flotando sin objeto que la eche.
+            if (obj.uploadTicket > m_lastCompletedTicket) continue;
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout, 0, 1, &obj.descriptorSets[m_currentFrame], 0, nullptr);
             vkCmdPushConstants(cmd, m_shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &obj.transform);
 
@@ -2091,15 +2156,29 @@ namespace DonTopo {
         obj.subMeshes.clear();
     }
 
-    int Renderer::addSkinnedMesh(const SkinnedMesh& mesh)
+    int Renderer::addSkinnedMesh(const SkinnedMesh& mesh, const std::vector<DecodedImage>* decoded)
     {
+        if (!m_pendingBatch)
+            m_pendingBatch = std::make_unique<TransferBatch>(m_gpu);
+
         m_skinnedObjects.emplace_back();
-        initSkinnedRenderObject(m_skinnedObjects.back(), mesh);
+        SkinnedRenderObject& obj = m_skinnedObjects.back();
+        initSkinnedRenderObject(obj, mesh, m_pendingBatch.get(), decoded);
+
+        // Igual que los estáticos: invisible hasta que la fence del batch señale.
+        obj.uploadTicket = m_nextUploadTicket;
         return (int)m_skinnedObjects.size() - 1;
     }
 
-    void Renderer::initSkinnedRenderObject(SkinnedRenderObject& obj, const SkinnedMesh& mesh)
+    void Renderer::initSkinnedRenderObject(SkinnedRenderObject& obj, const SkinnedMesh& mesh,
+                                           TransferBatch* batch,
+                                           const std::vector<DecodedImage>* decoded)
     {
+        // Las texturas de los materiales skinned no se decodifican en el worker
+        // (no hay forma de mapear un DecodedImage a un submesh concreto), así que
+        // toman siempre la ruta síncrona de stbi_load — pero SIEMPRE con batch,
+        // para que sus uploads caigan en m_pendingBatch y el ticket se resuelva.
+        (void)decoded;
         const Skeleton&      skel = mesh.skeleton;
         // Clip 0 pa duration/ticksPerSecond del objeto: son lo que consume
         // updateAnimation(), que solo corre en el caso SIN Animator (Task 3
@@ -2123,18 +2202,18 @@ namespace DonTopo {
 
         // --- Upload SSBOs estáticos ---
         m_res.uploadBuffer(packed.pos.data(),   packed.pos.size()   * sizeof(GpuPosKey),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframePosBuffer,   obj.keyframePosMemory);
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframePosBuffer,   obj.keyframePosMemory,   batch);
         m_res.uploadBuffer(packed.rot.data(),   packed.rot.size()   * sizeof(GpuRotKey),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframeRotBuffer,   obj.keyframeRotMemory);
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframeRotBuffer,   obj.keyframeRotMemory,   batch);
         m_res.uploadBuffer(packed.scale.data(), packed.scale.size() * sizeof(GpuPosKey),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframeScaleBuffer, obj.keyframeScaleMemory);
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.keyframeScaleBuffer, obj.keyframeScaleMemory, batch);
         m_res.uploadBuffer(packed.boneInfos.data(), packed.boneInfos.size() * sizeof(GpuBoneInfo),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.boneInfoBuffer,      obj.boneInfoMemory);
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.boneInfoBuffer,      obj.boneInfoMemory,      batch);
         m_res.uploadBuffer(mesh.skinnedVertices.data(), mesh.skinnedVertices.size() * sizeof(SkinnedVertex),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.inputVertexBuffer,   obj.inputVertexMemory);
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, obj.inputVertexBuffer,   obj.inputVertexMemory,   batch);
 
         // --- Index buffer ---
-        createIndexBuffer(mesh.indices, obj.indexBuffer, obj.indexMemory);
+        createIndexBuffer(mesh.indices, obj.indexBuffer, obj.indexMemory, batch);
 
         // --- SSBOs dinámicos (device local, sin datos iniciales) ---
         m_res.createBuffer((uint32_t)boneCount * sizeof(glm::mat4),
@@ -2195,12 +2274,12 @@ namespace DonTopo {
             SkinnedMatGfx& mgfx = obj.matGfx[mi];
 
             // Diffuse
-            m_res.createTextureImage(smat.texturePath, smat.embeddedTexture, mgfx.textureImage, mgfx.textureMem);
+            m_res.createTextureImage(smat.texturePath, smat.embeddedTexture, mgfx.textureImage, mgfx.textureMem, batch);
             m_res.createTextureImageView(mgfx.textureImage, mgfx.textureView);
             m_res.createTextureSampler(mgfx.sampler);
 
             // Normal map
-            m_res.createNormalMapImage(smat.normalMapPath, smat.embeddedNormalMap, mgfx.normalImage, mgfx.normalMem);
+            m_res.createNormalMapImage(smat.normalMapPath, smat.embeddedNormalMap, mgfx.normalImage, mgfx.normalMem, batch);
             m_res.createTextureImageView(mgfx.normalImage, mgfx.normalView, VK_FORMAT_R8G8B8A8_UNORM);
             m_res.createTextureSampler(mgfx.normalSampler);
 
@@ -2208,13 +2287,13 @@ namespace DonTopo {
             if (!smat.metallicRoughnessPath.empty() || !smat.embeddedMetallicRoughness.empty())
             {
                 m_res.createNormalMapImage(smat.metallicRoughnessPath, smat.embeddedMetallicRoughness,
-                                     mgfx.ormImage, mgfx.ormMem);
+                                     mgfx.ormImage, mgfx.ormMem, batch);
                 mgfx.metallic  = 1.0f;
                 mgfx.roughness = 1.0f;
             }
             else
             {
-                m_res.createSolidColorImage(white, mgfx.ormImage, mgfx.ormMem);
+                m_res.createSolidColorImage(white, mgfx.ormImage, mgfx.ormMem, batch);
                 mgfx.metallic  = smat.metallic;
                 mgfx.roughness = smat.roughness;
             }
@@ -2361,9 +2440,41 @@ namespace DonTopo {
         m_editorUI.setRenderer(this);
     }
 
+    void Renderer::flushPendingUploads()
+    {
+        if (m_pendingBatch && !m_pendingBatch->empty())
+        {
+            m_pendingBatch->submit();
+            m_inFlightBatches.push_back(InFlightBatch{m_nextUploadTicket,
+                                                      std::move(m_pendingBatch)});
+        }
+        m_pendingBatch.reset();
+        ++m_nextUploadTicket;
+    }
+
+    bool Renderer::hasPendingUploads() const
+    {
+        return (m_pendingBatch && !m_pendingBatch->empty()) || !m_inFlightBatches.empty();
+    }
+
     void Renderer::tickDeferredDeletes()
     {
         m_deferredDeletes.tick(m_gpu.device());
+
+        // Los batches se reclaman EN ORDEN estricto: un ticket solo se da por
+        // completado cuando el suyo y todos los anteriores han señalado. Por eso
+        // paramos en el primer batch del frente que aún no ha señalado, aunque uno
+        // posterior ya lo haya hecho: si dejáramos que un batch posterior avanzara
+        // m_lastCompletedTicket, un objeto de un batch anterior todavía en vuelo
+        // (texturas aún en TRANSFER_DST_OPTIMAL) se volvería visible y samplearía
+        // basura. Los batches se insertan con ticket creciente, así que el frente
+        // es siempre el más antiguo.
+        while (!m_inFlightBatches.empty() && m_inFlightBatches.front().batch->complete())
+        {
+            m_inFlightBatches.front().batch->reclaim();
+            m_lastCompletedTicket = m_inFlightBatches.front().ticket;
+            m_inFlightBatches.erase(m_inFlightBatches.begin());
+        }
     }
 
     void Renderer::queueDestroyRenderObject(RenderObject& obj)
