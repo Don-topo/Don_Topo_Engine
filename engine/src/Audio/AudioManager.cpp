@@ -220,10 +220,23 @@ void AudioManager::playBGM(int bgmId)
 {
 #ifdef DT_FMOD_ENABLED
     if (!m_system || bgmId < 0 || bgmId >= (int)m_bgmSounds.size()) return;
+    auto* snd = reinterpret_cast<FMOD::Sound*>(m_bgmSounds[bgmId]);
+    // Mismo caso que en playSound: loadBGM también lleva FMOD_NONBLOCKING, así
+    // que el stream puede seguir cargando cuando se pide Play. Sin esta guarda,
+    // SYS->playSound devuelve FMOD_ERR_NOTREADY y no garantiza dejar *ch
+    // inicializado: guardar ese puntero basura en m_bgmCh revienta en el
+    // siguiente stopBGM/pauseBGM.
+    FMOD_OPENSTATE state;
+    if (snd->getOpenState(&state, nullptr, nullptr, nullptr) == FMOD_OK
+        && state == FMOD_OPENSTATE_LOADING)
+        return;
     stopBGM();
     FMOD::Channel* ch;
-    SYS->playSound(reinterpret_cast<FMOD::Sound*>(m_bgmSounds[bgmId]), BGMG, false, &ch);
-    m_bgmCh = ch;
+    // Solo se guarda el canal si playSound tuvo éxito: en cualquier otro
+    // fallo (además de NOTREADY) FMOD tampoco garantiza *ch, y m_bgmCh
+    // apuntando a basura es peor que quedarse sin BGM sonando.
+    if (SYS->playSound(snd, BGMG, false, &ch) == FMOD_OK)
+        m_bgmCh = ch;
 #endif
 }
 
