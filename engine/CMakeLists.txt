@@ -42,6 +42,7 @@ add_library(DonTopoEngine STATIC
     src/Physics/Colliders/PlaneCollider.cpp
     src/Renderer/GpuDevice.cpp
     src/Renderer/GpuResources.cpp
+    src/Renderer/DeferredDelete.cpp
     src/Renderer/TransferBatch.cpp
     src/Renderer/AsyncAssetLoader.cpp
     src/Editor/Gizmos.cpp

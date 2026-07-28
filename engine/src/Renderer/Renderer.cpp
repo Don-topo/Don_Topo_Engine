@@ -312,6 +312,10 @@ namespace DonTopo {
         if (m_gpu.device() == VK_NULL_HANDLE) return;
         vkDeviceWaitIdle(m_gpu.device());
 
+        // El vkDeviceWaitIdle de arriba es la precondición de flushAll: sin él,
+        // esto destruiría recursos que la GPU todavía puede estar leyendo.
+        m_deferredDeletes.flushAll(m_gpu.device());
+
         destroyOffscreenImages();
         if (!m_headless) shutdownImGui();
         vkDestroyRenderPass(m_gpu.device(), m_offscreenRenderPass, nullptr);
@@ -2357,13 +2361,43 @@ namespace DonTopo {
         m_editorUI.setRenderer(this);
     }
 
+    void Renderer::tickDeferredDeletes()
+    {
+        m_deferredDeletes.tick(m_gpu.device());
+    }
+
+    void Renderer::queueDestroyRenderObject(RenderObject& obj)
+    {
+        // Se copian los handles y se vacía el objeto YA: así el resto del frame
+        // ve un RenderObject sin recursos (el skip de recordCommandBuffer lo
+        // detecta por vertexBuffer == VK_NULL_HANDLE) mientras la destrucción de
+        // verdad ocurre kDelayFrames después.
+        RenderObject snapshot = obj;
+        obj = RenderObject{};
+
+        m_deferredDeletes.push([this, snapshot](VkDevice) mutable {
+            destroyRenderObject(snapshot);
+        });
+    }
+
+    void Renderer::queueDestroySkinnedRenderObject(SkinnedRenderObject& obj)
+    {
+        SkinnedRenderObject snapshot = std::move(obj);
+        obj = SkinnedRenderObject{};
+
+        m_deferredDeletes.push([this, snapshot = std::move(snapshot)](VkDevice) mutable {
+            destroySkinnedRenderObject(snapshot);
+        });
+    }
+
     void Renderer::removeStaticObject(int index)
     {
         if (index < 0 || index >= (int)m_objects.size()) return;
         RenderObject& obj = m_objects[index];
         if (obj.vertexBuffer == VK_NULL_HANDLE) return; // ya liberado
-        destroyRenderObject(obj);
-        obj = RenderObject{};
+        // queueDestroy... ya deja obj vacío: la asignación de después sobra y
+        // pisaría el snapshot si se dejara.
+        queueDestroyRenderObject(obj);
     }
 
     void Renderer::removeSkinnedObject(int index)
@@ -2371,16 +2405,17 @@ namespace DonTopo {
         if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
         SkinnedRenderObject& obj = m_skinnedObjects[index];
         if (obj.outputVertexBuffer == VK_NULL_HANDLE) return; // ya liberado
-        destroySkinnedRenderObject(obj);
-        obj = SkinnedRenderObject{};
+        // queueDestroy... ya deja obj vacío: la asignación de después sobra y
+        // pisaría el snapshot si se dejara.
+        queueDestroySkinnedRenderObject(obj);
     }
 
     void Renderer::removeGameObject(GameObject* node)
     {
         if (!node) return;
-        // Espera a que la GPU termine antes de destruir buffers/texturas que
-        // un command buffer en vuelo (double buffering) pudiera seguir usando.
-        vkDeviceWaitIdle(m_gpu.device());
+        // Sin vkDeviceWaitIdle: removeStaticObject/removeSkinnedObject encolan
+        // la destrucción kDelayFrames frames, que es más de lo que cualquier
+        // command buffer en vuelo puede tardar.
         node->traverse([this](GameObject* go) {
             if (go->staticRenderIndex >= 0)
                 removeStaticObject(go->staticRenderIndex);
@@ -2408,9 +2443,9 @@ namespace DonTopo {
     void Renderer::removeMeshComponent(GameObject* go)
     {
         if (!go || !go->hasMesh()) return;
-        // Mismo wait que removeGameObject: evita liberar buffers que un
-        // command buffer en vuelo (double buffering) pudiera seguir usando.
-        vkDeviceWaitIdle(m_gpu.device());
+        // Sin vkDeviceWaitIdle: removeStaticObject/removeSkinnedObject encolan
+        // la destrucción kDelayFrames frames, que es más de lo que cualquier
+        // command buffer en vuelo puede tardar.
         if (go->staticRenderIndex >= 0)
             removeStaticObject(go->staticRenderIndex);
         go->staticRenderIndex = -1;
@@ -2428,9 +2463,10 @@ namespace DonTopo {
         if (renderIndex < 0 || renderIndex >= (int)m_objects.size()) return;
         RenderObject& obj = m_objects[renderIndex];
 
-        // Evita tocar un descriptor set que un command buffer en vuelo
-        // (double buffering) pudiera seguir referenciando.
-        vkDeviceWaitIdle(m_gpu.device());
+        // Sin vkDeviceWaitIdle: los handles viejos se encolan (ver más abajo) en
+        // lugar de destruirse ya, así que un command buffer en vuelo que aún
+        // referencie el descriptor set los sigue viendo válidos hasta que la
+        // cola los libera kDelayFrames frames después.
 
         VkImage*        img     = nullptr;
         VkDeviceMemory* mem     = nullptr;
@@ -2454,10 +2490,20 @@ namespace DonTopo {
                 break;
         }
 
-        vkDestroySampler(m_gpu.device(),   *sampler, nullptr);
-        vkDestroyImageView(m_gpu.device(), *view,    nullptr);
-        vkDestroyImage(m_gpu.device(),     *img,     nullptr);
-        vkFreeMemory(m_gpu.device(),       *mem,     nullptr);
+        // Los cuatro handles viejos siguen referenciados por el descriptor set
+        // que un command buffer en vuelo puede estar usando. Se encolan por
+        // valor: capturar los punteros img/mem/view/sampler sería leer los
+        // NUEVOS cuando el lambda corriera, tres frames después.
+        const VkImage        oldImage   = *img;
+        const VkDeviceMemory oldMem     = *mem;
+        const VkImageView    oldView    = *view;
+        const VkSampler      oldSampler = *sampler;
+        m_deferredDeletes.push([oldImage, oldMem, oldView, oldSampler](VkDevice dev) {
+            vkDestroySampler(dev,   oldSampler, nullptr);
+            vkDestroyImageView(dev, oldView,    nullptr);
+            vkDestroyImage(dev,     oldImage,   nullptr);
+            vkFreeMemory(dev,       oldMem,     nullptr);
+        });
 
         // path vacío + sin bytes embebidos = createTextureImage genera el
         // checkerboard "missing" de fallback (mismo camino que un modelo

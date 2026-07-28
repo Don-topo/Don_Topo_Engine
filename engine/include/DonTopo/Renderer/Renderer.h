@@ -10,6 +10,7 @@
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/GpuResources.h"
+#include "DonTopo/Renderer/DeferredDelete.h"
 #include "DonTopo/Editor/EditorUI.h"
 #include "DonTopo/Renderer/Skybox.h"
 #include "DonTopo/Renderer/SplashScreen.h"
@@ -49,6 +50,9 @@ namespace DonTopo {
             // splash no se inicializo.
             void drawSplashFrame(float alpha);
             void drawFrame(Window& window);
+            // Una vez por frame, desde el bucle principal, ANTES de drawFrame.
+            // Es lo que hace avanzar la cola de destrucción diferida.
+            void tickDeferredDeletes();
             void shutdown();
             void setCamera(const Camera& camera);
             void notifyResize() { m_framebufferResized = true; }
@@ -308,6 +312,13 @@ namespace DonTopo {
             void removeStaticObject(int index);
             void removeSkinnedObject(int index);
 
+            // Encolan la destrucción en lugar de ejecutarla. Son el ÚNICO camino
+            // permitido: llamar a destroyRenderObject directamente desde un call
+            // site nuevo volvería a necesitar un vkDeviceWaitIdle, y nadie se
+            // acordaría de ponerlo.
+            void queueDestroyRenderObject(RenderObject& obj);
+            void queueDestroySkinnedRenderObject(SkinnedRenderObject& obj);
+
             // Cámara efectiva de un frame. eye va aquí porque ubo.viewPos
             // alimenta el specular: sin él, en Play los brillos se calcularían
             // desde la posición de la cámara del editor.
@@ -393,6 +404,8 @@ namespace DonTopo {
             std::vector<SkinnedRenderObject> m_skinnedObjects;
 
             std::vector<RenderObject> m_objects;
+
+            DeferredDeleteQueue m_deferredDeletes;
 
             EditorUI m_editorUI;
             Skybox   m_skybox;

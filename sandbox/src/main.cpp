@@ -344,6 +344,7 @@ int main()
                 DonTopo::Gizmos::drawFrustum(debugProj * debugView, glm::vec3(1.0f));
             }
 
+            renderer.tickDeferredDeletes();
             renderer.drawFrame(window);
             window.pollEvents();
         }
