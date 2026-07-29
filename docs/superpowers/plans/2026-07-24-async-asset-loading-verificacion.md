@@ -7,9 +7,9 @@ Ejecutado por el controlador SDD. Fecha: 2026-07-28.
 
 - **Automatizado (headless): COMPLETO.** 11 suites pasan en Debug y en Release,
   build limpio en ambos.
-- **Manual GUI (capas de validación + medición de frame time): PENDIENTE.**
-  Requiere display/GPU (+ dispositivo de audio para un caso) y, para el runtime,
-  un paquete exportado. No ejecutable en este entorno headless. Checklist abajo.
+- **Manual GUI (capas de validación + frame time): COMPLETO.** Verificado por el
+  usuario (2026-07-28): los escenarios de editor y runtime pasan, sin hitch ni
+  crash. Detalle de escenarios en §4.
 
 ## 1. Suites automatizadas
 
@@ -125,12 +125,14 @@ $env:VK_LAYER_ENABLES   = "VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATI
 
 | # | Criterio | Estado |
 |---|---|---|
-| 1 | Drop de FBX no congela el editor | Por construcción ✓; medición GUI pendiente |
-| 2 | Escena de 40 objetos: ventana responde | Por construcción ✓; GUI pendiente |
-| 3 | Play → Stop sin hitch | T5 por construcción ✓; medición GUI pendiente |
+| 1 | Drop de FBX no congela el editor | ✓ (verificado GUI por el usuario 2026-07-28) |
+| 2 | Escena de 40 objetos: ventana responde | ✓ (verificado GUI) |
+| 3 | Play → Stop sin hitch | ✓ (verificado GUI) |
 | 4 | Cero regresiones (8 suites originales) | ✓ (Debug + Release) |
-| 5 | Cero errores de validación | GUI pendiente (Debug + Release) |
-| 6 | Cierre limpio con cargas en vuelo | Por construcción ✓ (T9/T10); GUI pendiente |
+| 5 | Cero errores de validación | ✓ (verificado GUI) |
+| 6 | Cierre limpio con cargas en vuelo | ✓ (verificado GUI) |
+
+Los 6 criterios de aceptación cumplidos.
 
 ## Deuda asumida
 
