@@ -348,9 +348,12 @@ namespace DonTopo {
         // funciones liberan sets del pool (creado con
         // FREE_DESCRIPTOR_SET_BIT pa soportar rebuildSkinnedMesh), y destruir
         // el pool aquí antes dejaría un handle ya destruido al que liberar.
-        for(auto& obj : m_objects)
-            destroyRenderObject(obj);
         m_objects.clear();
+        // Sin refcounts ni diferido: el vkDeviceWaitIdle de arriba garantiza que
+        // nadie está leyendo, y a estas alturas ya no queda quien dibuje.
+        m_sharedMeshes.destroyAll([this](const SharedGpuMesh& gpu) {
+            destroySharedGpuMesh(gpu);
+        });
         for(int i = 0; i < MAX_FRAMES; i++)
         {
             vkDestroyBuffer(m_gpu.device(), m_uniformBuffers[i], nullptr);
@@ -878,32 +881,33 @@ namespace DonTopo {
                 m_wireframeMode ? m_wireframePipeline : m_pipeline);
             for (auto& obj : m_objects)
             {
-                if (obj.vertexBuffer == VK_NULL_HANDLE) continue; // borrado desde el editor
+                const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
+                if (!gpu) continue; // borrado desde el editor
                 // Todavía en vuelo: sus texturas siguen en TRANSFER_DST_OPTIMAL y
                 // samplearlas sería leer basura. Aparece en cuanto la fence de su
                 // batch señale.
-                if (obj.uploadTicket > m_lastCompletedTicket) continue;
+                if (gpu->uploadTicket > m_lastCompletedTicket) continue;
                 // Fuera de cámara: ni descriptor set, ni push constants, ni
                 // draw. Los objetos sin AABB (mesh vacío) pasan siempre.
-                if (obj.hasBounds &&
-                    !aabbVisible(camFrustum, obj.aabbMin, obj.aabbMax, obj.transform))
+                if (gpu->hasBounds &&
+                    !aabbVisible(camFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
                 {
                     continue;
                 }
                 vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    m_pipelineLayout, 0, 1, &obj.descriptorSets[m_currentFrame], 0, nullptr);
+                    m_pipelineLayout, 0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
                 PushData push;
                 push.transform = obj.transform;
-                push.metallic  = obj.metallic;
-                push.roughness = obj.roughness;
+                push.metallic  = gpu->metallic;
+                push.roughness = gpu->roughness;
                 vkCmdPushConstants(m_commandBuffers[m_currentFrame], m_pipelineLayout,
                     VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                     0, sizeof(PushData), &push);
-                VkBuffer vbs[]      = { obj.vertexBuffer };
+                VkBuffer vbs[]      = { gpu->vertexBuffer };
                 VkDeviceSize offs[] = { 0 };
                 vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vbs, offs);
-                vkCmdBindIndexBuffer(m_commandBuffers[m_currentFrame], obj.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-                vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], obj.indexCount, 1, 0, 0, 0);
+                vkCmdBindIndexBuffer(m_commandBuffers[m_currentFrame], gpu->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], gpu->indexCount, 1, 0, 0, 0);
             }
 
             if (!m_skinnedObjects.empty())
@@ -1504,11 +1508,15 @@ namespace DonTopo {
 
     void Renderer::createDescriptorSets()
     {
-        for (auto& obj : m_objects)
-            allocateObjectDescriptorSet(obj);
+        // Por entrada compartida, no por objeto: initSceneResources construye
+        // primero todos los RenderObject (sin pool todavía) y luego llama aquí.
+        // Iterar m_objects alojaría N sets para la misma entrada y los N-1
+        // primeros se perderían.
+        for (int index : m_sharedMeshes.liveIndices())
+            allocateObjectDescriptorSet(*m_sharedMeshes.get(index));
     }
 
-    void Renderer::allocateObjectDescriptorSet(RenderObject& obj)
+    void Renderer::allocateObjectDescriptorSet(SharedGpuMesh& obj)
     {
         VkDescriptorSetLayout layouts[MAX_FRAMES] = { m_descriptorSetLayout, m_descriptorSetLayout };
 
@@ -1648,16 +1656,30 @@ namespace DonTopo {
         }
     }
 
-    void Renderer::buildRenderObject(const Mesh& mesh, RenderObject& obj,
+    bool Renderer::buildRenderObject(const Mesh& mesh, RenderObject& obj,
                                      TransferBatch* batch,
                                      const std::vector<DecodedImage>* decoded)
     {
-        obj.name       = mesh.name;
+        obj.name = mesh.name;
+
+        bool created = false;
+        obj.sharedIndex = m_sharedMeshes.acquire(
+            makeSharedMeshKey(mesh),
+            [&](SharedGpuMesh& gpu) { createSharedGpuMesh(mesh, gpu, batch, decoded); },
+            &created);
+        return created;
+    }
+
+    void Renderer::createSharedGpuMesh(const Mesh& mesh, SharedGpuMesh& obj,
+                                       TransferBatch* batch,
+                                       const std::vector<DecodedImage>* decoded)
+    {
         obj.indexCount = (uint32_t)mesh.indices.size();
 
         // AABB local para el frustum culling. Se calcula aquí y no en el bucle
         // de dibujo porque la geometría no cambia después: lo único que se
-        // mueve es obj.transform, y el test ya la transforma cada frame.
+        // mueve es el transform del RenderObject, y el test ya la transforma
+        // cada frame.
         obj.hasBounds = !mesh.vertices.empty();
         if (obj.hasBounds)
         {
@@ -1737,17 +1759,23 @@ namespace DonTopo {
 
         m_objects.emplace_back();
         RenderObject& obj = m_objects.back();
-        buildRenderObject(mesh, obj, m_pendingBatch.get(), decoded);
-        allocateObjectDescriptorSet(obj);
+        const bool created = buildRenderObject(mesh, obj, m_pendingBatch.get(), decoded);
 
-        // El objeto no se dibuja hasta que la fence de este batch señale. Es la
-        // decisión de producto de la spec: nada de placeholders, el GameObject
-        // aparece cuando está listo.
-        obj.uploadTicket = m_nextUploadTicket;
+        if (created)
+        {
+            SharedGpuMesh& gpu = *m_sharedMeshes.get(obj.sharedIndex);
+            allocateObjectDescriptorSet(gpu);
+            // La entrada no se dibuja hasta que la fence de este batch señale.
+            // Es la decisión de producto de la spec: nada de placeholders, el
+            // GameObject aparece cuando está listo. Si la entrada ya existía no
+            // se toca su ticket: o ya está subida (0), o sigue esperando el
+            // suyo, y machacarlo con uno posterior la retrasaría de más.
+            gpu.uploadTicket = m_nextUploadTicket;
+        }
         return (int)m_objects.size() - 1;
     }
 
-    void Renderer::destroyRenderObject(RenderObject& obj)
+    void Renderer::destroySharedGpuMesh(const SharedGpuMesh& obj)
     {
         vkDestroySampler(m_gpu.device(),   obj.ormSampler,    nullptr);
         vkDestroyImageView(m_gpu.device(), obj.ormView,       nullptr);
@@ -1768,11 +1796,11 @@ namespace DonTopo {
 
         // Los sets vuelven al pool (creado con FREE_DESCRIPTOR_SET_BIT), igual
         // que destroySkinnedRenderObject: sin esto, cada removeStaticObject /
-        // rebuild agotaba m_descriptorPool en vez de reciclar sus sets.
+        // rebuild agotaba m_descriptorPool en vez de reciclar sus sets. No hace
+        // falta anularlos: obj es siempre la copia que la cache sacó de la
+        // tabla, y el slot original ya quedó vacío.
         if (obj.descriptorSets[0] != VK_NULL_HANDLE)
             vkFreeDescriptorSets(m_gpu.device(), m_descriptorPool, MAX_FRAMES, obj.descriptorSets);
-        obj.descriptorSets[0] = VK_NULL_HANDLE;
-        obj.descriptorSets[1] = VK_NULL_HANDLE;
     }
 
     void Renderer::createShadowResources()
@@ -2012,25 +2040,26 @@ namespace DonTopo {
 
         for(auto& obj : m_objects)
         {
-            if (obj.vertexBuffer == VK_NULL_HANDLE) continue; // borrado desde el editor
+            const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
+            if (!gpu) continue; // borrado desde el editor
             // Aún en vuelo: no debe proyectar sombra si todavía no es visible, o
             // habría una sombra flotando sin objeto que la eche.
-            if (obj.uploadTicket > m_lastCompletedTicket) continue;
+            if (gpu->uploadTicket > m_lastCompletedTicket) continue;
             // Fuera del volumen que cubre el shadow map: su sombra no cabría en
             // la textura de todos modos.
-            if (cullByLight && obj.hasBounds &&
-                !aabbVisible(lightFrustum, obj.aabbMin, obj.aabbMax, obj.transform))
+            if (cullByLight && gpu->hasBounds &&
+                !aabbVisible(lightFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
             {
                 continue;
             }
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout, 0, 1, &obj.descriptorSets[m_currentFrame], 0, nullptr);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout, 0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
             vkCmdPushConstants(cmd, m_shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &obj.transform);
 
-            VkBuffer vb[] = { obj.vertexBuffer };
+            VkBuffer vb[] = { gpu->vertexBuffer };
             VkDeviceSize offsets[] = { 0 };
             vkCmdBindVertexBuffers(cmd, 0, 1, vb, offsets);
-            vkCmdBindIndexBuffer(cmd, obj.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(cmd, obj.indexCount, 1, 0, 0, 0);
+            vkCmdBindIndexBuffer(cmd, gpu->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, gpu->indexCount, 1, 0, 0, 0);
         }
 
         vkCmdEndRenderPass(cmd);
@@ -2614,17 +2643,20 @@ namespace DonTopo {
         }
     }
 
-    void Renderer::queueDestroyRenderObject(RenderObject& obj)
+    void Renderer::releaseRenderObject(RenderObject& obj)
     {
-        // Se copian los handles y se vacía el objeto YA: así el resto del frame
-        // ve un RenderObject sin recursos (el skip de recordCommandBuffer lo
-        // detecta por vertexBuffer == VK_NULL_HANDLE) mientras la destrucción de
-        // verdad ocurre kDelayFrames después.
-        RenderObject snapshot = obj;
-        obj = RenderObject{};
+        // El objeto suelta su referencia YA: el resto del frame lo ve sin
+        // recursos (el skip de recordCommandBuffer lo detecta por
+        // sharedIndex < 0). Si quedan más holders no se destruye nada; si era
+        // el último, la cache nos pasa una copia de los handles y la
+        // destrucción de verdad ocurre kDelayFrames después.
+        const int index = obj.sharedIndex;
+        obj.sharedIndex = -1;
 
-        m_deferredDeletes.push([this, snapshot](VkDevice) mutable {
-            destroyRenderObject(snapshot);
+        m_sharedMeshes.release(index, [this](const SharedGpuMesh& gpu) {
+            m_deferredDeletes.push([this, gpu](VkDevice) {
+                destroySharedGpuMesh(gpu);
+            });
         });
     }
 
@@ -2642,10 +2674,8 @@ namespace DonTopo {
     {
         if (index < 0 || index >= (int)m_objects.size()) return;
         RenderObject& obj = m_objects[index];
-        if (obj.vertexBuffer == VK_NULL_HANDLE) return; // ya liberado
-        // queueDestroy... ya deja obj vacío: la asignación de después sobra y
-        // pisaría el snapshot si se dejara.
-        queueDestroyRenderObject(obj);
+        if (obj.sharedIndex < 0) return; // ya liberado
+        releaseRenderObject(obj);
     }
 
     void Renderer::removeSkinnedObject(int index)
@@ -2709,7 +2739,12 @@ namespace DonTopo {
     void Renderer::replaceStaticTextureWithMissing(int renderIndex, TextureSlot slot)
     {
         if (renderIndex < 0 || renderIndex >= (int)m_objects.size()) return;
-        RenderObject& obj = m_objects[renderIndex];
+        // La textura vive en la entrada compartida, así que el checkerboard lo
+        // ven TODOS los objetos que comparten esa malla+material. Es lo
+        // correcto: el asset que ha desaparecido es el mismo para todos ellos.
+        SharedGpuMesh* gpuPtr = m_sharedMeshes.get(m_objects[renderIndex].sharedIndex);
+        if (!gpuPtr) return;
+        SharedGpuMesh& obj = *gpuPtr;
 
         // Sin vkDeviceWaitIdle: los handles viejos se encolan (ver más abajo) en
         // lugar de destruirse ya, así que un command buffer en vuelo que aún

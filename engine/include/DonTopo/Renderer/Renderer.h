@@ -11,6 +11,7 @@
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/GpuResources.h"
+#include "DonTopo/Renderer/SharedGpuMesh.h"
 #include "DonTopo/Renderer/DeferredDelete.h"
 #include "DonTopo/Renderer/TransferBatch.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
@@ -211,44 +212,19 @@ namespace DonTopo {
 
         private:
 
+            // Una instancia dibujable. Ya NO posee recursos GPU: buffers,
+            // texturas y descriptor set viven en la entrada compartida que
+            // apunta sharedIndex, y N objetos con la misma malla+material
+            // apuntan todos a la misma. Lo único por instancia es el transform
+            // (y el nombre, que es de depuración).
             struct RenderObject
             {
                 std::string     name;
-                VkBuffer        vertexBuffer        = VK_NULL_HANDLE;
-                VkDeviceMemory  vertexMemory        = VK_NULL_HANDLE;
-                VkBuffer        indexBuffer         = VK_NULL_HANDLE;
-                VkDeviceMemory  indexMemory         = VK_NULL_HANDLE;
-                uint32_t        indexCount          = 0;
-                // first texture
-                VkImage         textureImage        = VK_NULL_HANDLE;
-                VkDeviceMemory  textureMem          = VK_NULL_HANDLE;
-                VkImageView     textureView         = VK_NULL_HANDLE;
-                VkSampler       sampler             = VK_NULL_HANDLE;
-                // Second texture
-                VkImage         normalImage         = VK_NULL_HANDLE;
-                VkDeviceMemory  normalMem           = VK_NULL_HANDLE;
-                VkImageView     normalView          = VK_NULL_HANDLE;
-                VkSampler       normalSampler       = VK_NULL_HANDLE;
-                // ORM texture (AO, roughness, metallic)
-                VkImage         ormImage            = VK_NULL_HANDLE;
-                VkDeviceMemory  ormMem              = VK_NULL_HANDLE;
-                VkImageView     ormView             = VK_NULL_HANDLE;
-                VkSampler       ormSampler          = VK_NULL_HANDLE;
-                float           metallic            = 0.0f;
-                float           roughness           = 0.5f;
-                VkDescriptorSet descriptorSets[2]   = {};
+                // -1 = sin recursos (nunca construido, o ya liberado desde el
+                // editor). Es el chequeo que sustituye al viejo
+                // "vertexBuffer == VK_NULL_HANDLE".
+                int             sharedIndex         = -1;
                 glm::mat4       transform{1.0f};
-                // AABB en espacio local del mesh, para el frustum culling. Se
-                // calcula una vez en buildRenderObject. hasBounds=false (mesh
-                // sin vértices) significa "no se puede acotar": el objeto se
-                // dibuja siempre, que es lo seguro.
-                glm::vec3       aabbMin{0.0f};
-                glm::vec3       aabbMax{0.0f};
-                bool            hasBounds           = false;
-                // 0 = subido y visible. >0 = esperando a que la fence del batch
-                // con ese ticket señale. Sin esto, el objeto se dibujaría con
-                // sus texturas todavía en TRANSFER_DST_OPTIMAL.
-                uint64_t        uploadTicket        = 0;
             };
 
             struct SkinnedMatGfx {
@@ -374,11 +350,21 @@ namespace DonTopo {
             void createDescriptorSets();
             void updateUniformBuffer(uint32_t frameIndex);
             void createDepthResources();
-            void buildRenderObject(const Mesh& mesh, RenderObject& obj,
+            // Resuelve mesh a una entrada compartida y deja obj apuntando a
+            // ella: la crea (buffers + texturas) solo si ningún otro objeto
+            // había subido ya esa misma malla+material. Devuelve true si ha
+            // tenido que crearla — el caller lo usa pa saber si además hay que
+            // alojarle el descriptor set.
+            bool buildRenderObject(const Mesh& mesh, RenderObject& obj,
                                    TransferBatch* batch = nullptr,
                                    const std::vector<DecodedImage>* decoded = nullptr);
-            void allocateObjectDescriptorSet(RenderObject& obj);
-            void destroyRenderObject(RenderObject& obj);
+            // Rellena una entrada recién creada. Es el cuerpo que antes estaba
+            // en buildRenderObject, sin la parte de resolución de la clave.
+            void createSharedGpuMesh(const Mesh& mesh, SharedGpuMesh& gpu,
+                                     TransferBatch* batch,
+                                     const std::vector<DecodedImage>* decoded);
+            void allocateObjectDescriptorSet(SharedGpuMesh& gpu);
+            void destroySharedGpuMesh(const SharedGpuMesh& gpu);
             void createShadowResources();
             void recordShadowPass(VkCommandBuffer cmd);
             void createComputePipelines();
@@ -393,11 +379,16 @@ namespace DonTopo {
             void removeStaticObject(int index);
             void removeSkinnedObject(int index);
 
-            // Encolan la destrucción en lugar de ejecutarla. Son el ÚNICO camino
-            // permitido: llamar a destroyRenderObject directamente desde un call
-            // site nuevo volvería a necesitar un vkDeviceWaitIdle, y nadie se
-            // acordaría de ponerlo.
-            void queueDestroyRenderObject(RenderObject& obj);
+            // Sueltan la referencia / encolan la destrucción en lugar de
+            // ejecutarla. Son el ÚNICO camino permitido: llamar a
+            // destroySharedGpuMesh directamente desde un call site nuevo
+            // destruiría recursos que otros objetos siguen usando, y aunque no
+            // los hubiera volvería a necesitar un vkDeviceWaitIdle que nadie se
+            // acordaría de poner.
+            //
+            // releaseRenderObject deja obj.sharedIndex en -1 y solo encola la
+            // destrucción cuando cae el último holder de la entrada.
+            void releaseRenderObject(RenderObject& obj);
             void queueDestroySkinnedRenderObject(SkinnedRenderObject& obj);
 
             // Cámara efectiva de un frame. eye va aquí porque ubo.viewPos
@@ -485,6 +476,12 @@ namespace DonTopo {
             std::vector<SkinnedRenderObject> m_skinnedObjects;
 
             std::vector<RenderObject> m_objects;
+
+            // Recursos GPU compartidos por los objetos estáticos. Los objetos
+            // guardan un índice aquí; la tabla los mantiene vivos mientras
+            // quede algún holder. (Los skinned no comparten: sus SSBOs de
+            // salida los escribe el compute por instancia.)
+            SharedGpuMeshCache m_sharedMeshes;
 
             // Batch abierto donde caen los uploads del pump actual. Se envía en
             // flushPendingUploads() y pasa a m_inFlightBatches.
