@@ -439,6 +439,86 @@ namespace DonTopo {
         return fc;
     }
 
+    Renderer::Frustum Renderer::frustumFromViewProj(const glm::mat4& m)
+    {
+        // glm es column-major: m[col][row]. Las filas de la matriz, que es lo
+        // que necesita Gribb-Hartmann, hay que componerlas a mano.
+        const glm::vec4 r0(m[0][0], m[1][0], m[2][0], m[3][0]);
+        const glm::vec4 r1(m[0][1], m[1][1], m[2][1], m[3][1]);
+        const glm::vec4 r2(m[0][2], m[1][2], m[2][2], m[3][2]);
+        const glm::vec4 r3(m[0][3], m[1][3], m[2][3], m[3][3]);
+
+        Frustum f;
+        f.planes[0] = r3 + r0;  // izquierda
+        f.planes[1] = r3 - r0;  // derecha
+        f.planes[2] = r3 + r1;  // abajo
+        f.planes[3] = r3 - r1;  // arriba
+        // Cercano por el convenio de OpenGL (r3 + r2) y NO por el de Vulkan
+        // (r2 a secas), a propósito: este motor mezcla los dos rangos de
+        // profundidad (el editor arma su proyección con glm::perspective, que
+        // sin GLM_FORCE_DEPTH_ZERO_TO_ONE da z=[-1,1]; CameraComponent y la luz
+        // usan *RH_ZO, que da z=[0,1]). Sobre una matriz ZO, r3+r2 describe un
+        // plano algo por DETRÁS del cercano real: recorta menos de lo que
+        // podría, pero nunca descarta algo que se vería. Al revés — r2 sobre
+        // una matriz [-1,1] — se comería la mitad cercana de la escena, y el
+        // síntoma serían objetos que desaparecen al acercarse la cámara.
+        f.planes[4] = r3 + r2;  // cercano
+        f.planes[5] = r3 - r2;  // lejano
+
+        // Normalizar: sin esto, dot(n,c)+d no es una distancia y el radio
+        // proyectado de la AABB no sería comparable con ella.
+        for (glm::vec4& p : f.planes)
+        {
+            const float len = glm::length(glm::vec3(p));
+            if (len > 0.0f) p /= len;
+        }
+        return f;
+    }
+
+    bool Renderer::aabbVisible(const Frustum& frustum,
+                               const glm::vec3& localMin,
+                               const glm::vec3& localMax,
+                               const glm::mat4& model)
+    {
+        // Centro + semiejes en vez de las 8 esquinas: el test por plano sale en
+        // dos productos escalares en lugar de ocho.
+        const glm::vec3 localCenter = (localMin + localMax) * 0.5f;
+        const glm::vec3 localExtent = (localMax - localMin) * 0.5f;
+
+        const glm::vec3 center = glm::vec3(model * glm::vec4(localCenter, 1.0f));
+
+        // Semiejes de la AABB que envuelve a la caja ya transformada. El valor
+        // absoluto de la 3x3 es lo que convierte una rotación en "cuánto crece
+        // la caja alineada a ejes"; con escalado no uniforme sale bien igual.
+        const glm::mat3 rs = glm::mat3(model);
+        const glm::vec3 extent(
+            std::abs(rs[0][0]) * localExtent.x + std::abs(rs[1][0]) * localExtent.y + std::abs(rs[2][0]) * localExtent.z,
+            std::abs(rs[0][1]) * localExtent.x + std::abs(rs[1][1]) * localExtent.y + std::abs(rs[2][1]) * localExtent.z,
+            std::abs(rs[0][2]) * localExtent.x + std::abs(rs[1][2]) * localExtent.y + std::abs(rs[2][2]) * localExtent.z);
+
+        for (const glm::vec4& p : frustum.planes)
+        {
+            const glm::vec3 n(p);
+            const float distance = glm::dot(n, center) + p.w;
+            // Radio de la caja proyectado sobre la normal del plano: la esquina
+            // que más sobresale hacia el lado positivo.
+            const float radius = std::abs(n.x) * extent.x + std::abs(n.y) * extent.y + std::abs(n.z) * extent.z;
+            if (distance + radius < 0.0f) return false; // entera del lado de fuera
+        }
+        return true;
+    }
+
+    glm::mat4 Renderer::shadowLightSpaceMatrix() const
+    {
+        if (m_lights.empty()) return glm::mat4(1.0f);
+
+        const glm::vec3 lightPos = glm::vec3(m_lights[0].position);
+        glm::mat4 lightView = glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::mat4 lightProj = glm::orthoRH_ZO(-350.0f, 350.0f, -350.0f, 350.0f, 1.0f, 2000.0f);
+        lightProj[1][1] *= -1.0f;
+        return lightProj * lightView;
+    }
+
     void Renderer::createSwapChain(Window& window)
     {
         VkSurfaceCapabilitiesKHR surfaceCapabilities;
@@ -788,6 +868,12 @@ namespace DonTopo {
             scissor.extent = m_swapChainExtent;
             vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
 
+            // Cámara del frame: la usan el culling de aquí abajo y, más
+            // adelante en este mismo pass, el skybox y los gizmos. Se muestrea
+            // UNA vez para que los tres vean exactamente la misma.
+            const FrameCamera fc = currentFrameCamera();
+            const Frustum camFrustum = frustumFromViewProj(fc.proj * fc.view);
+
             vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
                 m_wireframeMode ? m_wireframePipeline : m_pipeline);
             for (auto& obj : m_objects)
@@ -797,6 +883,13 @@ namespace DonTopo {
                 // samplearlas sería leer basura. Aparece en cuanto la fence de su
                 // batch señale.
                 if (obj.uploadTicket > m_lastCompletedTicket) continue;
+                // Fuera de cámara: ni descriptor set, ni push constants, ni
+                // draw. Los objetos sin AABB (mesh vacío) pasan siempre.
+                if (obj.hasBounds &&
+                    !aabbVisible(camFrustum, obj.aabbMin, obj.aabbMax, obj.transform))
+                {
+                    continue;
+                }
                 vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
                     m_pipelineLayout, 0, 1, &obj.descriptorSets[m_currentFrame], 0, nullptr);
                 PushData push;
@@ -849,8 +942,8 @@ namespace DonTopo {
             }
 
             // Proyección compartida por skybox y gizmos (mismo pass, misma
-            // cámara). El Y-flip ya viene aplicado desde currentFrameCamera().
-            const FrameCamera fc = currentFrameCamera();
+            // cámara que el culling de arriba). El Y-flip ya viene aplicado
+            // desde currentFrameCamera().
             const glm::mat4 proj = fc.proj;
 
             // Skybox — fullscreen quad, depth LEQUAL sin escritura (al final del pass).
@@ -1497,11 +1590,7 @@ namespace DonTopo {
         ubo.viewPos  = glm::vec4(fc.eye, 1.0f);
         if (!m_lights.empty())
         {
-            glm::vec3 lpos     = glm::vec3(m_lights[0].position);
-            glm::mat4 lightView = glm::lookAt(lpos, glm::vec3(0.0f), glm::vec3(0.0f,1.0f,0.0f));
-            glm::mat4 lightProj = glm::orthoRH_ZO(-350.0f, 350.0f, -350.0f, 350.0f, 1.0f, 2000.0f);
-            lightProj[1][1] *= -1.0f;
-            ubo.lightSpaceMatrix = lightProj * lightView;
+            ubo.lightSpaceMatrix = shadowLightSpaceMatrix();
         }
 
         memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));        
@@ -1565,6 +1654,22 @@ namespace DonTopo {
     {
         obj.name       = mesh.name;
         obj.indexCount = (uint32_t)mesh.indices.size();
+
+        // AABB local para el frustum culling. Se calcula aquí y no en el bucle
+        // de dibujo porque la geometría no cambia después: lo único que se
+        // mueve es obj.transform, y el test ya la transforma cada frame.
+        obj.hasBounds = !mesh.vertices.empty();
+        if (obj.hasBounds)
+        {
+            obj.aabbMin = glm::vec3(std::numeric_limits<float>::max());
+            obj.aabbMax = glm::vec3(std::numeric_limits<float>::lowest());
+            for (const Vertex& v : mesh.vertices)
+            {
+                obj.aabbMin = glm::min(obj.aabbMin, v.pos);
+                obj.aabbMax = glm::max(obj.aabbMax, v.pos);
+            }
+        }
+
         createVertexBuffer(mesh.vertices, obj.vertexBuffer, obj.vertexMemory, batch);
         createIndexBuffer(mesh.indices,   obj.indexBuffer,  obj.indexMemory,  batch);
 
@@ -1894,12 +1999,30 @@ namespace DonTopo {
         vkCmdSetViewport(cmd, 0, 1, &vp);
         vkCmdSetScissor(cmd, 0, 1, &sc);
 
+        // Culling por el frustum de la LUZ, no por el de la cámara: un objeto
+        // que la cámara no ve puede seguir proyectando sombra sobre lo que sí
+        // se ve. Con el frustum de la cámara desaparecerían esas sombras.
+        //
+        // Sin luces no hay matriz que extraer (shadowLightSpaceMatrix devuelve
+        // la identidad, cuyo frustum es el cubo unidad y culearía casi todo):
+        // en ese caso se graba el pass entero como antes.
+        const bool    cullByLight  = !m_lights.empty();
+        const Frustum lightFrustum = cullByLight ? frustumFromViewProj(shadowLightSpaceMatrix())
+                                                 : Frustum{};
+
         for(auto& obj : m_objects)
         {
             if (obj.vertexBuffer == VK_NULL_HANDLE) continue; // borrado desde el editor
             // Aún en vuelo: no debe proyectar sombra si todavía no es visible, o
             // habría una sombra flotando sin objeto que la eche.
             if (obj.uploadTicket > m_lastCompletedTicket) continue;
+            // Fuera del volumen que cubre el shadow map: su sombra no cabría en
+            // la textura de todos modos.
+            if (cullByLight && obj.hasBounds &&
+                !aabbVisible(lightFrustum, obj.aabbMin, obj.aabbMax, obj.transform))
+            {
+                continue;
+            }
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout, 0, 1, &obj.descriptorSets[m_currentFrame], 0, nullptr);
             vkCmdPushConstants(cmd, m_shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &obj.transform);
 

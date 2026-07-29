@@ -180,6 +180,35 @@ namespace DonTopo {
             void setAnimationState(int index, uint32_t clipIndex, float animTime);
             void setSkinnedTransform(int index, const glm::mat4& transform);
 
+            // ── Frustum culling ──────────────────────────────────────────────
+            // Seis planos en espacio de mundo, con la normal apuntando HACIA
+            // DENTRO del volumen: un punto es visible si queda del lado
+            // positivo de los seis. Cada plano es (nx, ny, nz, d) con la normal
+            // normalizada, de forma que dot(n, p) + d es la distancia con signo.
+            struct Frustum {
+                glm::vec4 planes[6] = {};
+            };
+            // Extrae los planos de una matriz viewProj (Gribb-Hartmann). Asume
+            // el rango de profundidad de Vulkan z=[0,1] — el plano cercano sale
+            // de la fila 2 a secas, no de (fila3 + fila2) como en el convenio
+            // de OpenGL. Con matrices *RH_ZO (las que usa este motor, ver
+            // updateUniformBuffer) esto es lo correcto; con glm::perspective a
+            // secas culearía de más por el lado cercano.
+            static Frustum frustumFromViewProj(const glm::mat4& viewProj);
+            // AABB en espacio LOCAL del mesh + su transform a mundo. Devuelve
+            // false solo si la caja queda entera fuera de algún plano; es un
+            // test conservador (puede dar true de más en las esquinas del
+            // frustum, nunca false de menos, que sería un objeto desaparecido).
+            static bool aabbVisible(const Frustum& frustum,
+                                    const glm::vec3& localMin,
+                                    const glm::vec3& localMax,
+                                    const glm::mat4& model);
+            // Matriz de la luz que proyecta sombra. La comparten el UBO (para
+            // que el fragment shader muestree el shadow map) y el culling del
+            // pass de sombras: si las dos se calcularan por separado y una
+            // cambiara, se culearían objetos que el shadow map sí necesita.
+            glm::mat4 shadowLightSpaceMatrix() const;
+
         private:
 
             struct RenderObject
@@ -209,6 +238,13 @@ namespace DonTopo {
                 float           roughness           = 0.5f;
                 VkDescriptorSet descriptorSets[2]   = {};
                 glm::mat4       transform{1.0f};
+                // AABB en espacio local del mesh, para el frustum culling. Se
+                // calcula una vez en buildRenderObject. hasBounds=false (mesh
+                // sin vértices) significa "no se puede acotar": el objeto se
+                // dibuja siempre, que es lo seguro.
+                glm::vec3       aabbMin{0.0f};
+                glm::vec3       aabbMax{0.0f};
+                bool            hasBounds           = false;
                 // 0 = subido y visible. >0 = esperando a que la fence del batch
                 // con ese ticket señale. Sin esto, el objeto se dibujaría con
                 // sus texturas todavía en TRANSFER_DST_OPTIMAL.
