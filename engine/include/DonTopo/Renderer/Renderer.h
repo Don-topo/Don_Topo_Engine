@@ -210,6 +210,49 @@ namespace DonTopo {
             // cambiara, se culearían objetos que el shadow map sí necesita.
             glm::mat4 shadowLightSpaceMatrix() const;
 
+            // ── Draw batching por instancing ─────────────────────────────────
+            // Un draw instanciado: todas las instancias del rango
+            // [firstInstance, firstInstance + instanceCount) del SSBO de
+            // transforms comparten la entrada compartida sharedIndex, así que
+            // se dibujan con un solo vkCmdDrawIndexed.
+            struct InstanceBatch {
+                int      sharedIndex   = -1;
+                uint32_t firstInstance = 0;
+                uint32_t instanceCount = 0;
+            };
+            // Un objeto ya evaluado por el pass que lo va a dibujar. Las guardas
+            // (entrada borrada, upload en vuelo) y el culling por AABB los
+            // resuelve el llamante -es quien tiene la caché GPU y el frustum- y
+            // llegan aquí resumidos en `visible`. El transform va por puntero: el
+            // agrupado solo lo copia al SSBO, no lo guarda.
+            struct BatchCandidate {
+                int              sharedIndex = -1;
+                bool             visible     = false;
+                const glm::mat4* transform   = nullptr;
+            };
+            // Agrupa por sharedIndex los candidatos VISIBLES y deja sus
+            // transforms contiguos por grupo en outTransforms (que apunta ya al
+            // hueco del SSBO, con sitio para outCapacity matrices). El orden es
+            // estable: los grupos salen por orden de primera aparición y dentro
+            // de cada grupo se conserva el orden de los candidatos, de modo que
+            // el resultado no baila entre frames.
+            //
+            // firstInstanceBase es el índice ABSOLUTO dentro del SSBO de la
+            // primera matriz escrita: los dos passes comparten buffer y el
+            // segundo escribe detrás del primero, así que sin base los
+            // firstInstance del pass principal apuntarían al rango de sombras.
+            //
+            // Devuelve cuántas matrices se han escrito. Si no caben todas trunca
+            // por grupos (los que no entran salen con instanceCount 0 y se
+            // descartan) antes que escribir fuera de rango: el llamante
+            // dimensiona el buffer antes, esto es la red de seguridad.
+            static uint32_t buildInstanceBatches(const BatchCandidate* candidates,
+                                                 size_t                count,
+                                                 glm::mat4*            outTransforms,
+                                                 uint32_t              outCapacity,
+                                                 uint32_t              firstInstanceBase,
+                                                 std::vector<InstanceBatch>& outBatches);
+
         private:
 
             // Una instancia dibujable. Ya NO posee recursos GPU: buffers,
@@ -271,7 +314,13 @@ namespace DonTopo {
                 glm::mat4 transform{1.0f};
                 float     metallic  = 1.0f;
                 float     roughness = 1.0f;
-                glm::vec2 _pad{};
+                // flags.x = 1: triangle.vert coge el model matrix del SSBO de
+                // instancias por gl_InstanceIndex (ruta estática, agrupada);
+                // 0: lo coge de `transform` (ruta skinned, que comparte este
+                // vertex shader y dibuja una instancia con su propia matriz).
+                // Es el viejo _pad reaprovechado: mismo tipo y offset, así que
+                // pbr.frag sigue declarando el bloque igual que siempre.
+                glm::vec2 flags{0.0f, 0.0f};
             };
             static_assert(sizeof(PushData) == 80, "PushData must be 80 bytes");
 
@@ -445,6 +494,30 @@ namespace DonTopo {
             VkDeviceMemory                  m_uniformBuffersMemory[MAX_FRAMES]  = {};
             void*                           m_uniformBuffersMapped[MAX_FRAMES]  = {};
             VkDescriptorPool                m_descriptorPool                    = VK_NULL_HANDLE;
+            // ── SSBO de transforms por instancia (set 1, binding 0) ──────────
+            // Uno por frame-in-flight y mapeado en persistente: el frame
+            // anterior puede seguir en vuelo leyendo el suyo. Los dos passes
+            // (sombras primero, escena después) comparten el buffer del frame:
+            // m_instanceCursor es el nº de matrices ya escritas y hace de base
+            // del siguiente pass.
+            VkDescriptorSetLayout           m_instanceDescLayout                = VK_NULL_HANDLE;
+            VkDescriptorPool                m_instanceDescPool                  = VK_NULL_HANDLE;
+            VkDescriptorSet                 m_instanceDescSets[MAX_FRAMES]      = {};
+            VkBuffer                        m_instanceBuffers[MAX_FRAMES]       = {};
+            VkDeviceMemory                  m_instanceMemory[MAX_FRAMES]        = {};
+            void*                           m_instanceMapped[MAX_FRAMES]        = {};
+            uint32_t                        m_instanceCapacity[MAX_FRAMES]      = {}; // en matrices
+            uint32_t                        m_instanceCursor                    = 0;
+            // Scratch reutilizado entre frames y entre passes: el agrupado corre
+            // dos veces por frame y no debe alojar nada en ese camino.
+            std::vector<BatchCandidate>     m_batchCandidates;
+            std::vector<InstanceBatch>      m_instanceBatches;
+            void createInstanceResources();
+            // Asegura sitio para `matrices` en el buffer del frame actual. Se
+            // llama al principio de recordCommandBuffer, con la fence del frame
+            // ya esperada: recrear el buffer aquí no pisa nada en vuelo.
+            void ensureInstanceCapacity(uint32_t matrices);
+            void destroyInstanceBuffer(int frame);
             VkImage                         m_depthImage                        = VK_NULL_HANDLE;
             VkDeviceMemory                  m_depthImageMemory                  = VK_NULL_HANDLE;
             VkImageView                     m_depthImageView                    = VK_NULL_HANDLE;

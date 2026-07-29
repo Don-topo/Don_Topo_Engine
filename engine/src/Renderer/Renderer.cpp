@@ -94,6 +94,9 @@ namespace DonTopo {
         float maxDim     = glm::max(bMax.x - bMin.x, glm::max(bMax.y - bMin.y, bMax.z - bMin.z));
         m_cameraDistance = maxDim * 1.2f;
 
+        // ANTES de createPipeline y createShadowResources: los dos pipeline
+        // layouts declaran m_instanceDescLayout como set 1.
+        createInstanceResources();
         createDescriptorSetLayout();
         createPipeline();
         createShadowResources();
@@ -360,6 +363,12 @@ namespace DonTopo {
             vkFreeMemory(m_gpu.device(), m_uniformBuffersMemory[i], nullptr);
         }
         vkDestroyDescriptorSetLayout(m_gpu.device(), m_descriptorSetLayout, nullptr);
+        // SSBO de instancias: los sets salen con el pool (sin
+        // FREE_DESCRIPTOR_SET, viven todo el proceso).
+        for (int i = 0; i < MAX_FRAMES; i++)
+            destroyInstanceBuffer(i);
+        vkDestroyDescriptorPool(m_gpu.device(), m_instanceDescPool, nullptr);
+        vkDestroyDescriptorSetLayout(m_gpu.device(), m_instanceDescLayout, nullptr);
         vkDestroyImageView(m_gpu.device(), m_depthImageView, nullptr);
         vkDestroyImage(m_gpu.device(), m_depthImage, nullptr);
         vkFreeMemory(m_gpu.device(), m_depthImageMemory, nullptr);
@@ -840,6 +849,15 @@ namespace DonTopo {
             throw std::runtime_error("failed to begin command buffer!");
         }
 
+        // SSBO de instancias del frame: se dimensiona ANTES de grabar nada,
+        // porque crecerlo recrea el buffer y actualiza su descriptor set (aquí
+        // es seguro: drawFrame ya esperó la fence de este frame). El peor caso
+        // es que todos los objetos sean visibles en los DOS passes, de ahí el
+        // factor 2. El cursor arranca a 0: sombras escriben delante, escena
+        // detrás.
+        ensureInstanceCapacity((uint32_t)m_objects.size() * 2);
+        m_instanceCursor = 0;
+
         recordComputePass(m_commandBuffers[m_currentFrame]);
         recordShadowPass(m_commandBuffers[m_currentFrame]);
 
@@ -879,27 +897,59 @@ namespace DonTopo {
 
             vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
                 m_wireframeMode ? m_wireframePipeline : m_pipeline);
+            // Las guardas y el culling siguen siendo POR OBJETO: se resuelven
+            // aquí, que es donde está la caché GPU, y el agrupado solo ve el
+            // resultado en `visible`. Agrupar antes de cullear dibujaría de más.
+            m_batchCandidates.clear();
+            m_batchCandidates.reserve(m_objects.size());
             for (auto& obj : m_objects)
             {
                 const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
-                if (!gpu) continue; // borrado desde el editor
-                // Todavía en vuelo: sus texturas siguen en TRANSFER_DST_OPTIMAL y
-                // samplearlas sería leer basura. Aparece en cuanto la fence de su
-                // batch señale.
-                if (gpu->uploadTicket > m_lastCompletedTicket) continue;
-                // Fuera de cámara: ni descriptor set, ni push constants, ni
-                // draw. Los objetos sin AABB (mesh vacío) pasan siempre.
-                if (gpu->hasBounds &&
+                // !gpu: borrado desde el editor. uploadTicket por delante del
+                // último completado: todavía en vuelo, sus texturas siguen en
+                // TRANSFER_DST_OPTIMAL y samplearlas sería leer basura; aparece
+                // en cuanto la fence de su batch señale.
+                bool visible = gpu && gpu->uploadTicket <= m_lastCompletedTicket;
+                // Fuera de cámara: no gasta ni slot en el SSBO. Los objetos sin
+                // AABB (mesh vacío) pasan siempre.
+                if (visible && gpu->hasBounds &&
                     !aabbVisible(camFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
                 {
-                    continue;
+                    visible = false;
                 }
+                m_batchCandidates.push_back({ obj.sharedIndex, visible, &obj.transform });
+            }
+
+            // El pass de sombras ya ha escrito su parte del buffer: sus
+            // transforms van delante y los de aquí detrás, con el cursor como
+            // base de los firstInstance.
+            const uint32_t instanceBase = m_instanceCursor;
+            glm::mat4* dst = (glm::mat4*)m_instanceMapped[m_currentFrame] + instanceBase;
+            m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
+                dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
+
+            // Set 1 una sola vez para todo el pass: el SSBO no cambia entre
+            // draws, y el pipeline skinned de abajo comparte layout, así que
+            // sigue bindeado y válido también para él.
+            vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                m_pipelineLayout, 1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
+
+            for (const InstanceBatch& batch : m_instanceBatches)
+            {
+                // No puede ser nullptr: solo llegan a un grupo los candidatos
+                // que ya pasaron la guarda de arriba.
+                const SharedGpuMesh* gpu = m_sharedMeshes.get(batch.sharedIndex);
                 vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
                     m_pipelineLayout, 0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
                 PushData push;
-                push.transform = obj.transform;
+                // transform se queda en la identidad: con useInstancing = 1 el
+                // vertex shader coge el model matrix del SSBO. metallic y
+                // roughness siguen aquí porque son por ENTRADA compartida (no
+                // por instancia): son constantes dentro del grupo y pbr.frag ya
+                // los lee de este mismo bloque.
                 push.metallic  = gpu->metallic;
                 push.roughness = gpu->roughness;
+                push.flags.x   = 1.0f;
                 vkCmdPushConstants(m_commandBuffers[m_currentFrame], m_pipelineLayout,
                     VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                     0, sizeof(PushData), &push);
@@ -907,7 +957,8 @@ namespace DonTopo {
                 VkDeviceSize offs[] = { 0 };
                 vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vbs, offs);
                 vkCmdBindIndexBuffer(m_commandBuffers[m_currentFrame], gpu->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-                vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], gpu->indexCount, 1, 0, 0, 0);
+                vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], gpu->indexCount,
+                    batch.instanceCount, 0, 0, batch.firstInstance);
             }
 
             if (!m_skinnedObjects.empty())
@@ -1196,10 +1247,17 @@ namespace DonTopo {
         pushRange.offset        = 0;
         pushRange.size          = sizeof(PushData);   // 80 bytes
 
+        // Set 0: UBO + texturas (por entrada compartida). Set 1: SSBO de
+        // transforms por instancia, uno por frame, que se bindea una vez por
+        // pass. Este layout lo comparten el pipeline estático, el wireframe y el
+        // skinned; el skinned no lee el set 1 (useInstancing = 0), pero al
+        // compartir layout el set sigue bindeado y es válido.
+        VkDescriptorSetLayout setLayouts[] = { m_descriptorSetLayout, m_instanceDescLayout };
+
         VkPipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.sType                    = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        layoutInfo.setLayoutCount           = 1;
-        layoutInfo.pSetLayouts              = &m_descriptorSetLayout;
+        layoutInfo.setLayoutCount           = 2;
+        layoutInfo.pSetLayouts              = setLayouts;
         layoutInfo.pushConstantRangeCount   = 1;
         layoutInfo.pPushConstantRanges      = &pushRange;
         if(vkCreatePipelineLayout(m_gpu.device(), &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS)
@@ -1481,6 +1539,202 @@ namespace DonTopo {
             vkMapMemory(m_gpu.device(), m_uniformBuffersMemory[i], 0, size, 0, &m_uniformBuffersMapped[i]);
 
         }
+    }
+
+    // ── Instancing: SSBO de transforms ──────────────────────────────────────
+    // Capacidad inicial. No es un límite: ensureInstanceCapacity crece si la
+    // escena tiene más objetos. 1024 matrices = 64 KB por frame, lo que cubre
+    // sin realojar cualquier escena normal.
+    static constexpr uint32_t kInstanceInitialCapacity = 1024;
+
+    void Renderer::destroyInstanceBuffer(int frame)
+    {
+        if (m_instanceBuffers[frame] == VK_NULL_HANDLE) return;
+        // El mapeo persistente muere con la memoria; no hace falta unmap
+        // explícito, pero sí olvidar el puntero para no escribir en él si algo
+        // fallara entre el destroy y el create.
+        m_instanceMapped[frame] = nullptr;
+        vkDestroyBuffer(m_gpu.device(), m_instanceBuffers[frame], nullptr);
+        vkFreeMemory(m_gpu.device(), m_instanceMemory[frame], nullptr);
+        m_instanceBuffers[frame]  = VK_NULL_HANDLE;
+        m_instanceMemory[frame]   = VK_NULL_HANDLE;
+        m_instanceCapacity[frame] = 0;
+    }
+
+    void Renderer::createInstanceResources()
+    {
+        // Set 1: un solo storage buffer, solo lo lee el vertex shader
+        // (triangle.vert y shadow.vert).
+        VkDescriptorSetLayoutBinding binding{};
+        binding.binding         = 0;
+        binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        binding.descriptorCount = 1;
+        binding.stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
+
+        VkDescriptorSetLayoutCreateInfo dslInfo{};
+        dslInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dslInfo.bindingCount = 1;
+        dslInfo.pBindings    = &binding;
+        if (vkCreateDescriptorSetLayout(m_gpu.device(), &dslInfo, nullptr, &m_instanceDescLayout) != VK_SUCCESS)
+            throw std::runtime_error("failed to create instance descriptor set layout!");
+
+        // Pool propio y no m_descriptorPool: ese se dimensiona por objeto y solo
+        // tiene UNIFORM_BUFFER y COMBINED_IMAGE_SAMPLER. Aquí hacen falta
+        // exactamente MAX_FRAMES sets con un STORAGE_BUFFER cada uno, y los sets
+        // viven todo el proceso (no se liberan nunca).
+        VkDescriptorPoolSize poolSize{};
+        poolSize.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        poolSize.descriptorCount = MAX_FRAMES;
+
+        VkDescriptorPoolCreateInfo poolInfo{};
+        poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.poolSizeCount = 1;
+        poolInfo.pPoolSizes    = &poolSize;
+        poolInfo.maxSets       = MAX_FRAMES;
+        if (vkCreateDescriptorPool(m_gpu.device(), &poolInfo, nullptr, &m_instanceDescPool) != VK_SUCCESS)
+            throw std::runtime_error("failed to create instance descriptor pool!");
+
+        VkDescriptorSetLayout layouts[MAX_FRAMES] = { m_instanceDescLayout, m_instanceDescLayout };
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool     = m_instanceDescPool;
+        allocInfo.descriptorSetCount = MAX_FRAMES;
+        allocInfo.pSetLayouts        = layouts;
+        if (vkAllocateDescriptorSets(m_gpu.device(), &allocInfo, m_instanceDescSets) != VK_SUCCESS)
+            throw std::runtime_error("failed to allocate instance descriptor sets!");
+
+        // Los buffers de los DOS frames, no solo el actual: el descriptor set de
+        // cada frame tiene que apuntar a algo válido desde el primer draw.
+        const int saved = m_currentFrame;
+        for (int i = 0; i < MAX_FRAMES; i++)
+        {
+            m_currentFrame = i;
+            ensureInstanceCapacity(kInstanceInitialCapacity);
+        }
+        m_currentFrame = saved;
+    }
+
+    void Renderer::ensureInstanceCapacity(uint32_t matrices)
+    {
+        const int frame = m_currentFrame;
+        if (matrices <= m_instanceCapacity[frame]) return;
+
+        // Duplicar en vez de ajustar al pelo: instanciar un objeto por frame
+        // (scripts Lua) no debe recrear el buffer en cada uno.
+        uint32_t capacity = m_instanceCapacity[frame] ? m_instanceCapacity[frame] : kInstanceInitialCapacity;
+        while (capacity < matrices) capacity *= 2;
+
+        destroyInstanceBuffer(frame);
+
+        VkDeviceSize size = (VkDeviceSize)capacity * sizeof(glm::mat4);
+
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size        = size;
+        bufferInfo.usage       = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateBuffer(m_gpu.device(), &bufferInfo, nullptr, &m_instanceBuffers[frame]) != VK_SUCCESS)
+            throw std::runtime_error("failed to create instance buffer!");
+
+        VkMemoryRequirements memReq;
+        vkGetBufferMemoryRequirements(m_gpu.device(), m_instanceBuffers[frame], &memReq);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize  = memReq.size;
+        allocInfo.memoryTypeIndex = m_gpu.findMemoryType(memReq.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (vkAllocateMemory(m_gpu.device(), &allocInfo, nullptr, &m_instanceMemory[frame]) != VK_SUCCESS)
+            throw std::runtime_error("failed to allocate instance buffer memory!");
+        vkBindBufferMemory(m_gpu.device(), m_instanceBuffers[frame], m_instanceMemory[frame], 0);
+
+        // Mapeo persistente, como los uniform buffers: se escribe cada frame.
+        vkMapMemory(m_gpu.device(), m_instanceMemory[frame], 0, size, 0, &m_instanceMapped[frame]);
+        m_instanceCapacity[frame] = capacity;
+
+        VkDescriptorBufferInfo dbi{};
+        dbi.buffer = m_instanceBuffers[frame];
+        dbi.offset = 0;
+        dbi.range  = size;
+
+        VkWriteDescriptorSet write{};
+        write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet          = m_instanceDescSets[frame];
+        write.dstBinding      = 0;
+        write.descriptorCount = 1;
+        write.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo     = &dbi;
+        vkUpdateDescriptorSets(m_gpu.device(), 1, &write, 0, nullptr);
+    }
+
+    uint32_t Renderer::buildInstanceBatches(const BatchCandidate* candidates,
+                                            size_t                count,
+                                            glm::mat4*            outTransforms,
+                                            uint32_t              outCapacity,
+                                            uint32_t              firstInstanceBase,
+                                            std::vector<InstanceBatch>& outBatches)
+    {
+        outBatches.clear();
+        if (count == 0 || outCapacity == 0 || outTransforms == nullptr) return 0;
+
+        // Tabla sharedIndex -> posición en outBatches. Los sharedIndex son
+        // índices densos y pequeños de la caché, así que una tabla plana evita
+        // el hash de un unordered_map (que en escenas de miles de objetos se
+        // comía justo lo que este agrupado viene a ahorrar).
+        int maxShared = -1;
+        for (size_t i = 0; i < count; i++)
+            if (candidates[i].visible && candidates[i].sharedIndex > maxShared)
+                maxShared = candidates[i].sharedIndex;
+        if (maxShared < 0) return 0; // no hay nada visible
+        std::vector<int> slotOf((size_t)maxShared + 1, -1);
+
+        // Pasada 1: un grupo por sharedIndex, en orden de primera aparición.
+        for (size_t i = 0; i < count; i++)
+        {
+            const BatchCandidate& c = candidates[i];
+            if (!c.visible || c.sharedIndex < 0 || c.transform == nullptr) continue;
+            int& slot = slotOf[(size_t)c.sharedIndex];
+            if (slot < 0)
+            {
+                slot = (int)outBatches.size();
+                outBatches.push_back({ c.sharedIndex, 0, 0 });
+            }
+            outBatches[(size_t)slot].instanceCount++;
+        }
+
+        // Offsets contiguos. Si un grupo no cabe entero se recorta a lo que
+        // queda y los siguientes se quedan a cero: mejor perder objetos que
+        // escribir fuera del buffer.
+        uint32_t written = 0;
+        for (auto& b : outBatches)
+        {
+            const uint32_t room = outCapacity - written;
+            if (b.instanceCount > room) b.instanceCount = room;
+            b.firstInstance = firstInstanceBase + written;
+            written += b.instanceCount;
+        }
+
+        // Pasada 2: transforms contiguos por grupo, en el orden de los
+        // candidatos. cursor lleva cuántos se han escrito ya de cada grupo, que
+        // es también el hueco relativo dentro de su rango.
+        std::vector<uint32_t> cursor(outBatches.size(), 0);
+        for (size_t i = 0; i < count; i++)
+        {
+            const BatchCandidate& c = candidates[i];
+            if (!c.visible || c.sharedIndex < 0 || c.transform == nullptr) continue;
+            const size_t slot = (size_t)slotOf[(size_t)c.sharedIndex];
+            if (cursor[slot] >= outBatches[slot].instanceCount) continue; // grupo recortado
+            const uint32_t dst = (outBatches[slot].firstInstance - firstInstanceBase) + cursor[slot];
+            outTransforms[dst] = *c.transform;
+            cursor[slot]++;
+        }
+
+        // Los grupos que se quedaron sin sitio no deben llegar como draws de 0
+        // instancias.
+        outBatches.erase(std::remove_if(outBatches.begin(), outBatches.end(),
+                             [](const InstanceBatch& b) { return b.instanceCount == 0; }),
+                         outBatches.end());
+        return written;
     }
 
     void Renderer::createDescriptorPool()
@@ -1968,16 +2222,15 @@ namespace DonTopo {
         dynamicState.dynamicStateCount = 2;
         dynamicState.pDynamicStates    = dynStates;
 
-        VkPushConstantRange pushRange{};
-        pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-        pushRange.size       = sizeof(glm::mat4);
+        // Sin push constants: shadow.vert saca el model matrix del SSBO de
+        // instancias (set 1) por gl_InstanceIndex, igual que triangle.vert, y
+        // por este pass solo pasan objetos estáticos agrupados.
+        VkDescriptorSetLayout setLayouts[] = { m_descriptorSetLayout, m_instanceDescLayout };
 
         VkPipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        layoutInfo.setLayoutCount         = 1;
-        layoutInfo.pSetLayouts            = &m_descriptorSetLayout;
-        layoutInfo.pushConstantRangeCount = 1;
-        layoutInfo.pPushConstantRanges    = &pushRange;
+        layoutInfo.setLayoutCount         = 2;
+        layoutInfo.pSetLayouts            = setLayouts;
         if (vkCreatePipelineLayout(m_gpu.device(), &layoutInfo, nullptr, &m_shadowPipelineLayout) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create shadow pipeline layout!");
@@ -2038,28 +2291,47 @@ namespace DonTopo {
         const Frustum lightFrustum = cullByLight ? frustumFromViewProj(shadowLightSpaceMatrix())
                                                  : Frustum{};
 
+        // Mismas guardas por objeto que el pass principal, con el frustum de la
+        // luz. El agrupado es independiente del de la cámara: los conjuntos
+        // visibles no coinciden, así que cada pass escribe su propio rango del
+        // SSBO (este va primero, el de la escena detrás).
+        m_batchCandidates.clear();
+        m_batchCandidates.reserve(m_objects.size());
         for(auto& obj : m_objects)
         {
             const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
-            if (!gpu) continue; // borrado desde el editor
-            // Aún en vuelo: no debe proyectar sombra si todavía no es visible, o
-            // habría una sombra flotando sin objeto que la eche.
-            if (gpu->uploadTicket > m_lastCompletedTicket) continue;
+            // !gpu: borrado desde el editor. En vuelo: no debe proyectar sombra
+            // si todavía no es visible, o habría una sombra flotando sin objeto
+            // que la eche.
+            bool visible = gpu && gpu->uploadTicket <= m_lastCompletedTicket;
             // Fuera del volumen que cubre el shadow map: su sombra no cabría en
             // la textura de todos modos.
-            if (cullByLight && gpu->hasBounds &&
+            if (visible && cullByLight && gpu->hasBounds &&
                 !aabbVisible(lightFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
             {
-                continue;
+                visible = false;
             }
+            m_batchCandidates.push_back({ obj.sharedIndex, visible, &obj.transform });
+        }
+
+        const uint32_t instanceBase = m_instanceCursor;
+        glm::mat4* dst = (glm::mat4*)m_instanceMapped[m_currentFrame] + instanceBase;
+        m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
+            dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
+
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout,
+            1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
+
+        for (const InstanceBatch& batch : m_instanceBatches)
+        {
+            const SharedGpuMesh* gpu = m_sharedMeshes.get(batch.sharedIndex);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout, 0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
-            vkCmdPushConstants(cmd, m_shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &obj.transform);
 
             VkBuffer vb[] = { gpu->vertexBuffer };
             VkDeviceSize offsets[] = { 0 };
             vkCmdBindVertexBuffers(cmd, 0, 1, vb, offsets);
             vkCmdBindIndexBuffer(cmd, gpu->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(cmd, gpu->indexCount, 1, 0, 0, 0);
+            vkCmdDrawIndexed(cmd, gpu->indexCount, batch.instanceCount, 0, 0, batch.firstInstance);
         }
 
         vkCmdEndRenderPass(cmd);

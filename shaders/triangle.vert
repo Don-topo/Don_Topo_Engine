@@ -21,22 +21,42 @@ layout(set = 0, binding = 0) uniform UBO
     mat4 lightSpaceMatrix;
 } ubo;
 
+// Transforms por instancia, uno por frame-in-flight. Los objetos estaticos que
+// comparten malla+material se dibujan en un solo draw instanciado y cada
+// instancia coge su matriz de aqui por gl_InstanceIndex.
+layout(std430, set = 1, binding = 0) readonly buffer InstanceData
+{
+    mat4 models[];
+} instances;
+
+// Mismos tipos y offsets que el bloque de pbr.frag (las dos etapas del mismo
+// pipeline comparten el rango de push constants): mat4 + 2 float + vec2. El
+// hueco de esa vec2 era relleno; ahora su .x lleva el flag de instancing y su .y
+// sigue sin usarse, asi que ningun offset se ha movido y pbr.frag no cambia.
 layout(push_constant) uniform PushData
 {
-    mat4 transform;
+    mat4  transform;
+    float metallic;
+    float roughness;
+    vec2  flags;      // x: 1 = coger el model matrix del SSBO de instancias
 } push;
 
 void main()
 {
-    gl_Position = ubo.proj * ubo.view * push.transform * vec4(inPos, 1.0);
+    // useInstancing == 0 es la ruta skinned: comparte este vertex shader y este
+    // pipeline layout, dibuja una sola instancia y trae su matriz en el push
+    // constant, no en el SSBO.
+    mat4 model = push.flags.x != 0.0 ? instances.models[gl_InstanceIndex] : push.transform;
+
+    gl_Position = ubo.proj * ubo.view * model * vec4(inPos, 1.0);
     fragColor   = inColor;
     fragUV      = inUV;
-    fragNormal   = mat3(push.transform) * inNormal;
-    fragWorldPos = vec3(push.transform * vec4(inPos, 1.0));
-    vec3 T = normalize(mat3(push.transform) * inTangent);
-    vec3 N = normalize(mat3(push.transform) * inNormal);
+    fragNormal   = mat3(model) * inNormal;
+    fragWorldPos = vec3(model * vec4(inPos, 1.0));
+    vec3 T = normalize(mat3(model) * inTangent);
+    vec3 N = normalize(mat3(model) * inNormal);
     T = normalize(T - dot(T, N) * N);
     fragTangent   = T;
     fragBitangent = cross(N, T);
-    fragLightSpacePos = ubo.lightSpaceMatrix * push.transform * vec4(inPos, 1.0);
+    fragLightSpacePos = ubo.lightSpaceMatrix * model * vec4(inPos, 1.0);
 }
