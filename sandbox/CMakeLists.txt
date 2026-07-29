@@ -66,6 +66,37 @@ add_custom_command(TARGET Sandbox POST_BUILD
     COMMENT "Seeding default imgui.ini layout (if missing)"
 )
 
+# CRT de MSVC junto al ejecutable del editor, para que GameExporter pueda
+# meterlo app-local en el juego exportado (el paquete es una carpeta que se
+# copia: en la maquina del jugador no hay instalador que registre el VC++
+# Redistributable). Mismo patron que fmod.dll: primero al lado del .exe, y el
+# exportador lo recoge de ahi.
+#
+# Solo en Release: el CRT de depuracion no es redistribuible, asi que en Debug
+# no se copia nada y GameExporter avisa en su lugar. Se comprueba
+# CMAKE_BUILD_TYPE porque los presets del repo usan Ninja (single-config).
+#
+# _SKIP evita que esto añada reglas de install(); aqui solo interesa la lista de
+# DLL que resuelve InstallRequiredSystemLibraries — inventar rutas a
+# VC/Redist/... a mano se rompe con cada actualizacion de la toolchain.
+if(MSVC AND CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP ON)
+    include(InstallRequiredSystemLibraries)
+    if(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+        add_custom_command(TARGET Sandbox POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
+                $<TARGET_FILE_DIR:Sandbox>
+            COMMENT "Copying MSVC runtime DLLs to output (app-local CRT for exported games)"
+        )
+    else()
+        message(WARNING
+            "InstallRequiredSystemLibraries no encontro el CRT de MSVC: los juegos "
+            "exportados desde este build solo arrancaran donde ya este instalado el "
+            "Visual C++ Redistributable.")
+    endif()
+endif()
+
 # Copy FMOD runtime DLL next to the executable (Windows only)
 if(FMOD_FOUND AND WIN32)
     get_filename_component(_fmod_lib_dir "${FMOD_LIBRARY}" DIRECTORY)

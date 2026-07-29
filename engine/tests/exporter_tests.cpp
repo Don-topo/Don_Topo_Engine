@@ -659,6 +659,89 @@ static void test_debug_build_warns_about_crt(const fs::path& root)
     fs::remove_all(dest, ec);
 }
 
+// Un paquete Release tiene que llevarse el CRT de MSVC (VCRUNTIME140.dll,
+// MSVCP140.dll...) dentro: en una maquina sin Visual Studio ni el VC++
+// Redistributable el .exe no arranca. Las DLL se recogen de junto al editor
+// (aqui, del fixture que hace de projectRoot), igual que fmod.dll.
+//
+// Se comprueban las DOS ramas segun como se compilo el test, y en Debug la
+// exigencia es la contraria: NO copiar nada. El CRT de depuracion no es
+// redistribuible, asi que un Debug que lo copiara estaria repartiendo DLL que
+// Microsoft no permite redistribuir, y el aviso de Debug dejaria de tener
+// sentido.
+static void test_release_package_bundles_msvc_crt()
+{
+    std::error_code ec;
+    fs::path fixRoot = fs::temp_directory_path(ec) / "dt_exporter_msvccrt_fixture";
+    fs::remove_all(fixRoot, ec);
+    fs::create_directories(fixRoot / "assets" / "skybox", ec);
+    fs::create_directories(fixRoot / "shaders", ec);
+    for (const char* face : { "px", "nx", "py", "ny", "pz", "nz" })
+        std::ofstream(fixRoot / "assets" / "skybox" / (std::string(face) + ".png")) << "png";
+    std::ofstream(fixRoot / "shaders" / "triangle.vert.spv") << "spv";
+    std::ofstream(fixRoot / "DonTopoRuntime.exe") << "MZ";
+    // Las tres DLL del CRT con distinta capitalizacion: el filtro compara en
+    // minusculas y en Windows los nombres reales vienen con mayusculas.
+    std::ofstream(fixRoot / "MSVCP140.dll")      << "dll";
+    std::ofstream(fixRoot / "VCRUNTIME140.dll")  << "dll";
+    std::ofstream(fixRoot / "vcruntime140_1.dll") << "dll";
+    // Señuelos: una DLL que no es del CRT y un fichero cuyo nombre empieza
+    // igual pero no es .dll. Copiarlos meteria basura en el paquete.
+    std::ofstream(fixRoot / "otra.dll")          << "dll";
+    std::ofstream(fixRoot / "msvcp140.lib")      << "lib";
+
+    fs::path dest = fs::temp_directory_path(ec) / "dt_exporter_msvccrt_out";
+    fs::remove_all(dest, ec);
+
+    Scene scene;
+    ExportResult r = writeExportPackage({}, scene.toJson(), dest, "MiJuego",
+                                        fixRoot, fixRoot / "Scripts", fixRoot / "DonTopoRuntime.exe");
+    const fs::path pkg = dest / "MiJuego";
+    CHECK(r.ok);
+
+    // Base del paquete para este fixture: MiJuego.exe + 6 caras de skybox +
+    // 1 .spv + game.scene = 9 ficheros. En Release se suman las 3 DLL del CRT.
+#ifdef NDEBUG
+    CHECK(fs::exists(pkg / "MSVCP140.dll"));
+    CHECK(fs::exists(pkg / "VCRUNTIME140.dll"));
+    CHECK(fs::exists(pkg / "vcruntime140_1.dll"));
+    CHECK(!fs::exists(pkg / "otra.dll"));
+    CHECK(!fs::exists(pkg / "msvcp140.lib"));
+    CHECK(r.fileCount == 12);
+#else
+    CHECK(!fs::exists(pkg / "MSVCP140.dll"));
+    CHECK(!fs::exists(pkg / "VCRUNTIME140.dll"));
+    CHECK(!fs::exists(pkg / "vcruntime140_1.dll"));
+    CHECK(r.fileCount == 9);
+#endif
+
+    // Sin ninguna DLL del CRT al lado del editor: aviso en Release (no error,
+    // el resto del paquete es correcto) y silencio absoluto en Debug, donde no
+    // copiar el CRT es lo correcto y avisar seria ruido.
+    fs::remove(fixRoot / "MSVCP140.dll", ec);
+    fs::remove(fixRoot / "VCRUNTIME140.dll", ec);
+    fs::remove(fixRoot / "vcruntime140_1.dll", ec);
+    fs::remove_all(dest, ec);
+
+    ExportResult r2 = writeExportPackage({}, scene.toJson(), dest, "MiJuego",
+                                         fixRoot, fixRoot / "Scripts", fixRoot / "DonTopoRuntime.exe");
+    CHECK(r2.ok);
+    bool avisaCrt = std::any_of(r2.messages.begin(), r2.messages.end(), [](const std::string& m) {
+        return m.find("CRT de MSVC") != std::string::npos &&
+               m.find("junto al editor") != std::string::npos;
+    });
+#ifdef NDEBUG
+    CHECK(avisaCrt);
+    CHECK(r2.fileCount == 9);
+#else
+    CHECK(!avisaCrt);
+    CHECK(r2.fileCount == 9);
+#endif
+
+    fs::remove_all(fixRoot, ec);
+    fs::remove_all(dest, ec);
+}
+
 // exportGame aborta sin camara en la escena, antes de tocar disco: sin ella
 // el juego no podria renderizar y el fallo debe ocurrir aqui, no en un .exe
 // que abre una ventana negra.
@@ -732,6 +815,7 @@ int main()
     test_incomplete_skybox_marks_not_ok();
     test_zero_shaders_marks_not_ok();
     test_debug_build_warns_about_crt(root);
+    test_release_package_bundles_msvc_crt();
     test_exportGame_aborts_without_camera(root);
     test_exportGame_aborts_missing_asset(root);
 

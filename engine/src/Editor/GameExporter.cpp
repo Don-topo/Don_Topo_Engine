@@ -525,6 +525,55 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                              "arrancara hasta que copies esa DLL junto al .exe.");
 #endif
 
+    // El CRT de MSVC (VCRUNTIME140.dll, MSVCP140.dll y companeros) no esta en
+    // una maquina sin Visual Studio ni el VC++ Redistributable instalado: ahi
+    // el .exe muere antes de main con "falta VCRUNTIME140.dll". Mismo fallo
+    // invisible en local que el CRT de depuracion de abajo, y por el mismo
+    // motivo: el dev-box siempre cumple la precondicion que le falta al
+    // jugador.
+    //
+    // Las DLL viajan DENTRO del paquete (app-local) porque el paquete es una
+    // carpeta que se copia y ya: sin instalador no hay nadie que registre el
+    // redist en la maquina destino. Quien las deja junto al editor es el
+    // POST_BUILD de sandbox/CMakeLists.txt (via
+    // InstallRequiredSystemLibraries), asi que aqui solo hay que recogerlas de
+    // al lado, igual que fmod.dll.
+    //
+    // Se filtran por prefijo y no por una lista literal de nombres: el juego de
+    // DLL depende de la version de la toolchain (VCRUNTIME140_1.dll no existia
+    // en VS2015, MSVCP140_atomic_wait.dll llego con VS2019) y una lista fija se
+    // quedaria corta en silencio con la siguiente actualizacion de MSVC.
+    //
+    // Aviso y no error, mismo criterio que fmod.dll: el resto del paquete es
+    // correcto y se arregla copiando ficheros junto al .exe, sin re-exportar.
+#ifdef NDEBUG
+    {
+        int crtCopied = 0;
+        std::error_code cdec;
+        for (fs::directory_iterator it(projectRoot, cdec), end; !cdec && it != end; it.increment(cdec))
+        {
+            if (!it->is_regular_file()) continue;
+            std::string name = it->path().filename().string();
+            std::transform(name.begin(), name.end(), name.begin(),
+                           [](unsigned char c) { return (char)std::tolower(c); });
+            if (name.size() <= 4 || name.compare(name.size() - 4, 4, ".dll") != 0) continue;
+            if (name.rfind("msvcp140",    0) != 0 &&
+                name.rfind("vcruntime140", 0) != 0 &&
+                name.rfind("concrt140",    0) != 0) continue;
+            if (copyOne(it->path(), pkg / it->path().filename())) ++crtCopied;
+            else                                                  ok = false;
+        }
+        if (crtCopied == 0)
+            r.messages.push_back("Aviso: no se encontro ninguna DLL del CRT de MSVC "
+                                 "(VCRUNTIME140.dll, MSVCP140.dll...) junto al editor en " +
+                                 projectRoot.string() +
+                                 "; el juego exportado solo arrancara en maquinas que ya "
+                                 "tengan instalado el Visual C++ Redistributable. Vuelve a "
+                                 "configurar con configure-release.bat para que el build las "
+                                 "deje ahi.");
+    }
+#endif
+
     // Un binario Debug de MSVC enlaza el CRT de depuracion (ucrtbased.dll,
     // MSVCP140D.dll, VCRUNTIME140D.dll y companeros). Microsoft NO permite
     // redistribuir esas DLL y solo estan instaladas donde hay Visual Studio:
