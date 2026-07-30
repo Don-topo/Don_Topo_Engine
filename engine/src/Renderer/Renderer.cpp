@@ -345,6 +345,8 @@ namespace DonTopo {
         }
         vkDestroyPipeline(m_gpu.device(), m_pipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_wireframePipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_outlinePipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_outlineWirePipeline, nullptr);
         vkDestroyPipelineLayout(m_gpu.device(), m_pipelineLayout, nullptr);
         vkDestroyRenderPass(m_gpu.device(), m_renderPass, nullptr);
         for(VkImageView imageView : m_swapChainImageViews)
@@ -386,6 +388,8 @@ namespace DonTopo {
         vkDestroyFramebuffer(m_gpu.device(), m_shadowFramebuffer, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedGfxPipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedWireframePipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_skinnedOutlinePipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_skinnedOutlineWirePipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_shadowPipeline, nullptr);
         vkDestroyPipelineLayout(m_gpu.device(), m_shadowPipelineLayout, nullptr);
         vkDestroyRenderPass(m_gpu.device(), m_shadowRenderPass, nullptr);
@@ -993,6 +997,100 @@ namespace DonTopo {
         }            
     }
 
+    void Renderer::recordSelectionOutline(VkCommandBuffer cmd, const Frustum& camFrustum)
+    {
+        if (m_outlineStaticIndex < 0 && m_outlineSkinnedIndex < 0)
+            return;
+
+        // Grosor del casco relativo al tamaño del objeto en mundo: con un valor
+        // fijo, un objeto grande apenas mostraría borde y uno pequeño quedaría
+        // engullido por él.
+        constexpr float kOutlineFactor = 0.009f;
+        auto maxWorldScale = [](const glm::mat4& m)
+        {
+            return glm::max(glm::length(glm::vec3(m[0])),
+                   glm::max(glm::length(glm::vec3(m[1])), glm::length(glm::vec3(m[2]))));
+        };
+
+        if (m_outlineStaticIndex >= 0 && (size_t)m_outlineStaticIndex < m_objects.size())
+        {
+            const RenderObject&  obj = m_objects[m_outlineStaticIndex];
+            const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
+            // Mismas tres guardas que el bucle de dibujo, en el mismo orden:
+            // entrada borrada, upload en vuelo y frustum. Un objeto sin contorno
+            // porque está fuera de cámara es lo correcto — el objeto tampoco se
+            // ha dibujado.
+            bool visible = gpu && gpu->uploadTicket <= m_lastCompletedTicket;
+            if (visible && gpu->hasBounds &&
+                !aabbVisible(camFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
+            {
+                visible = false;
+            }
+
+            if (visible)
+            {
+                const glm::vec3 extent = gpu->aabbMax - gpu->aabbMin;
+                const float maxExtent  = glm::max(extent.x, glm::max(extent.y, extent.z));
+
+                PushData push;
+                push.transform = obj.transform;
+                // flags.x = 0: el outline dibuja UNA instancia con su matriz
+                // aquí, no por el SSBO — ni siquiera lo lee outline.vert.
+                push.flags.y = glm::max(maxExtent * maxWorldScale(obj.transform), 1.0f) * kOutlineFactor;
+
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    m_wireframeMode ? m_outlineWirePipeline : m_outlinePipeline);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
+                    0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
+                vkCmdPushConstants(cmd, m_pipelineLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0, sizeof(PushData), &push);
+                VkBuffer     vbs[]  = { gpu->vertexBuffer };
+                VkDeviceSize offs[] = { 0 };
+                vkCmdBindVertexBuffers(cmd, 0, 1, vbs, offs);
+                vkCmdBindIndexBuffer(cmd, gpu->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cmd, gpu->indexCount, 1, 0, 0, 0);
+            }
+        }
+
+        if (m_outlineSkinnedIndex >= 0 && (size_t)m_outlineSkinnedIndex < m_skinnedObjects.size())
+        {
+            // La visibilidad ya la decidió el culling del principio del frame:
+            // es la misma que gobernó el compute de skinning, así que si vale 0
+            // el buffer de salida ni siquiera se ha actualizado y dibujar el
+            // casco sacaría una pose vieja.
+            if (m_skinnedVisible[m_outlineSkinnedIndex])
+            {
+                const SkinnedRenderObject& sobj = m_skinnedObjects[m_outlineSkinnedIndex];
+                // matGfx vacío: no habría de dónde sacar el set 0, y el UBO que
+                // lee outline.vert vive ahí. Sin materiales no hay contorno.
+                if (sobj.outputVertexBuffer != VK_NULL_HANDLE && !sobj.matGfx.empty())
+                {
+                    PushData push;
+                    push.transform = sobj.transform;
+                    push.flags.y = glm::max(sobj.restMaxExtent * maxWorldScale(sobj.transform), 1.0f)
+                                   * kOutlineFactor;
+
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        m_wireframeMode ? m_skinnedOutlineWirePipeline : m_skinnedOutlinePipeline);
+                    // Un solo draw sobre todo el index buffer: los submeshes solo
+                    // existen para cambiar de material, y el contorno es de un
+                    // color plano.
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
+                        0, 1, &sobj.matGfx[0].descSets[m_currentFrame], 0, nullptr);
+                    vkCmdPushConstants(cmd, m_pipelineLayout,
+                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                        0, sizeof(PushData), &push);
+                    VkBuffer     vbs[]  = { sobj.outputVertexBuffer };
+                    VkDeviceSize offs[] = { 0 };
+                    vkCmdBindVertexBuffers(cmd, 0, 1, vbs, offs);
+                    vkCmdBindIndexBuffer(cmd, sobj.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                    vkCmdDrawIndexed(cmd, sobj.indexCount, 1, 0, 0, 0);
+                }
+            }
+        }
+    }
+
     void Renderer::recordCommandBuffer(uint32_t imageIndex)
     {
         VkCommandBufferBeginInfo beginInfo{};
@@ -1175,6 +1273,11 @@ namespace DonTopo {
                     }
                 }
             }
+
+            // Contorno del objeto seleccionado: después de toda la geometría
+            // (necesita el depth buffer completo para que el casco solo asome
+            // por el borde) y antes del skybox.
+            recordSelectionOutline(m_commandBuffers[m_currentFrame], camFrustum);
 
             // Proyección compartida por skybox y gizmos (mismo pass, misma
             // cámara que el culling de arriba). El Y-flip ya viene aplicado
@@ -1492,10 +1595,72 @@ namespace DonTopo {
             throw std::runtime_error("failed to create wireframe graphics pipeline!");
         }
 
+        // Pipeline del contorno de selección: mismo vertex input, mismo layout y
+        // mismo render pass que el de arriba; solo cambian los dos shaders y el
+        // culling, que pasa a descartar las caras FRONTALES. Las traseras del
+        // casco extruido quedan por detrás de la superficie del objeto, así que
+        // el depth test (LESS) solo deja pasar el reborde que sobresale de su
+        // silueta. depthWrite se queda en TRUE a propósito: ese reborde tiene que
+        // escribir profundidad o el skybox, que dibuja con LEQUAL donde nada
+        // escribió, lo taparía.
+        auto outlineVertCode = loadShaderFile("shaders/outline.vert.spv");
+        auto outlineFragCode = loadShaderFile("shaders/outline.frag.spv");
+        VkShaderModule outlineVertModule = createShaderModule(outlineVertCode);
+        VkShaderModule outlineFragModule = createShaderModule(outlineFragCode);
+
+        VkPipelineShaderStageCreateInfo outlineStages[2]{};
+        outlineStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        outlineStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+        outlineStages[0].module = outlineVertModule;
+        outlineStages[0].pName  = "main";
+        outlineStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        outlineStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+        outlineStages[1].module = outlineFragModule;
+        outlineStages[1].pName  = "main";
+
+        VkPipelineRasterizationStateCreateInfo outlineRasterizationInfo = rasterizationInfo;
+        outlineRasterizationInfo.cullMode = VK_CULL_MODE_FRONT_BIT;
+
+        // Vertex input propio: outline.vert solo lee posición y normal, y
+        // declarar los otros tres atributos haría saltar el warning
+        // "Vertex attribute at location N not consumed by vertex shader" de la
+        // capa de validación. Mismo binding y mismos offsets que arriba — solo
+        // se describen menos atributos, el buffer que se bindea es el mismo.
+        VkVertexInputAttributeDescription outlineAttrs[2]{};
+        outlineAttrs[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos) };
+        outlineAttrs[1] = { 3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal) };
+
+        VkPipelineVertexInputStateCreateInfo outlineVertexInput = vertexInput;
+        outlineVertexInput.vertexAttributeDescriptionCount = 2;
+        outlineVertexInput.pVertexAttributeDescriptions    = outlineAttrs;
+
+        VkGraphicsPipelineCreateInfo outlinePipelineInfo = pipelineInfo;
+        outlinePipelineInfo.pStages             = outlineStages;
+        outlinePipelineInfo.pRasterizationState = &outlineRasterizationInfo;
+        outlinePipelineInfo.pVertexInputState   = &outlineVertexInput;
+
+        if(vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &outlinePipelineInfo, nullptr, &m_outlinePipeline) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create outline graphics pipeline!");
+        }
+
+        VkPipelineRasterizationStateCreateInfo outlineWireRasterizationInfo = outlineRasterizationInfo;
+        outlineWireRasterizationInfo.polygonMode = VK_POLYGON_MODE_LINE;
+
+        VkGraphicsPipelineCreateInfo outlineWirePipelineInfo = outlinePipelineInfo;
+        outlineWirePipelineInfo.pRasterizationState = &outlineWireRasterizationInfo;
+
+        if(vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &outlineWirePipelineInfo, nullptr, &m_outlineWirePipeline) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create outline wireframe graphics pipeline!");
+        }
+
         // los módulos se destruyen al final de esta función — solo los necesita el pipeline
         vkDestroyShaderModule(m_gpu.device(), vertModule, nullptr);
         vkDestroyShaderModule(m_gpu.device(), fragModule, nullptr);
         vkDestroyShaderModule(m_gpu.device(), wireFragModule, nullptr);
+        vkDestroyShaderModule(m_gpu.device(), outlineVertModule, nullptr);
+        vkDestroyShaderModule(m_gpu.device(), outlineFragModule, nullptr);
         printf("pipeline OK\n"); fflush(stdout);
     }
 
@@ -2702,9 +2867,59 @@ namespace DonTopo {
             if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &wirePci, nullptr, &m_skinnedWireframePipeline) != VK_SUCCESS)
                 throw std::runtime_error("failed to create skinned wireframe pipeline!");
 
+            // Contorno de selección skinned: gemelo del estático de
+            // createPipeline (mismos shaders, cullMode FRONT), pero sobre este
+            // vertex input de stride 80. El buffer que lee es el de SALIDA del
+            // compute de skinning, así que el casco se extruye sobre la pose ya
+            // deformada de este frame, no sobre la de reposo.
+            auto outlineVertCode = loadShaderFile("shaders/outline.vert.spv");
+            auto outlineFragCode = loadShaderFile("shaders/outline.frag.spv");
+            auto outlineVertMod  = createShaderModule(outlineVertCode);
+            auto outlineFragMod  = createShaderModule(outlineFragCode);
+
+            VkPipelineShaderStageCreateInfo outlineStages[2]{};
+            outlineStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            outlineStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            outlineStages[0].module = outlineVertMod; outlineStages[0].pName = "main";
+            outlineStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            outlineStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            outlineStages[1].module = outlineFragMod; outlineStages[1].pName = "main";
+
+            VkPipelineRasterizationStateCreateInfo outlineRs = rs;
+            outlineRs.cullMode = VK_CULL_MODE_FRONT_BIT;
+
+            // Solo pos@0 y normal@48 de OutputVertex, por lo mismo que en
+            // createPipeline: outline.vert no consume color, uv ni tangent.
+            VkVertexInputAttributeDescription outlineAttrs[2]{};
+            outlineAttrs[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT,  0 };
+            outlineAttrs[1] = { 3, 0, VK_FORMAT_R32G32B32_SFLOAT, 48 };
+
+            VkPipelineVertexInputStateCreateInfo outlineVi = vi;
+            outlineVi.vertexAttributeDescriptionCount = 2;
+            outlineVi.pVertexAttributeDescriptions    = outlineAttrs;
+
+            VkGraphicsPipelineCreateInfo outlinePci = pci;
+            outlinePci.pStages             = outlineStages;
+            outlinePci.pRasterizationState = &outlineRs;
+            outlinePci.pVertexInputState   = &outlineVi;
+
+            if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &outlinePci, nullptr, &m_skinnedOutlinePipeline) != VK_SUCCESS)
+                throw std::runtime_error("failed to create skinned outline pipeline!");
+
+            VkPipelineRasterizationStateCreateInfo outlineWireRs = outlineRs;
+            outlineWireRs.polygonMode = VK_POLYGON_MODE_LINE;
+
+            VkGraphicsPipelineCreateInfo outlineWirePci = outlinePci;
+            outlineWirePci.pRasterizationState = &outlineWireRs;
+
+            if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &outlineWirePci, nullptr, &m_skinnedOutlineWirePipeline) != VK_SUCCESS)
+                throw std::runtime_error("failed to create skinned outline wireframe pipeline!");
+
             vkDestroyShaderModule(m_gpu.device(), vertMod, nullptr);
             vkDestroyShaderModule(m_gpu.device(), fragMod, nullptr);
             vkDestroyShaderModule(m_gpu.device(), wireFragMod, nullptr);
+            vkDestroyShaderModule(m_gpu.device(), outlineVertMod, nullptr);
+            vkDestroyShaderModule(m_gpu.device(), outlineFragMod, nullptr);
         }
     }
 
@@ -2802,6 +3017,24 @@ namespace DonTopo {
         // la malla y de sus clips, no de la pose ni del transform.
         obj.boundRadius    = skinnedBoundRadius(mesh);
         obj.hasBounds      = obj.boundRadius > 0.0f;
+        // Tamaño de la malla en reposo, SOLO pa escalar el grosor del contorno.
+        // No sirve boundRadius: esa cota vale para cualquier pose de cualquier
+        // clip y es holgada a propósito (un brazo que llegue lejos la infla
+        // varias veces por encima del cuerpo), así que usarla daba un borde
+        // desproporcionado justo en las mallas con animación.
+        obj.restMaxExtent = 0.0f;
+        if (!mesh.skinnedVertices.empty())
+        {
+            glm::vec3 bMin = glm::vec3(mesh.skinnedVertices[0].position);
+            glm::vec3 bMax = bMin;
+            for (const auto& v : mesh.skinnedVertices)
+            {
+                bMin = glm::min(bMin, glm::vec3(v.position));
+                bMax = glm::max(bMax, glm::vec3(v.position));
+            }
+            const glm::vec3 e = bMax - bMin;
+            obj.restMaxExtent = glm::max(e.x, glm::max(e.y, e.z));
+        }
 
         // --- Flatten keyframes de TODOS los clips a formato GPU ---
         // (packSkinnedClips vive fuera pa poder probarse sin un VkDevice)

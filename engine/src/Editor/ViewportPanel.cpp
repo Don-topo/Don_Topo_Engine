@@ -139,6 +139,18 @@ void ViewportPanel::drawCameraGizmo(EditorContext& ctx)
 
 void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, const glm::mat4& cameraView)
 {
+    // Contorno del objeto seleccionado. Se fija SIEMPRE y sin condiciones, aquí
+    // arriba: si se hiciera solo cuando hay selección, el Renderer se quedaría
+    // con el índice del objeto anterior al deseleccionar y lo seguiría
+    // resaltando. Un objeto sin malla no tiene índice de render (-1 en los dos
+    // campos), así que tampoco dibuja nada.
+    if (ctx.renderer)
+    {
+        ctx.renderer->setOutlineTarget(
+            ctx.selected ? ctx.selected->staticRenderIndex  : -1,
+            ctx.selected ? ctx.selected->skinnedRenderIndex : -1);
+    }
+
     // Veto de edición mientras el modal de carga está activo: el gizmo de
     // manipulación (ImGuizmo) mueve/rota/escala el objeto seleccionado, así que
     // se salta. drawCameraGizmo es solo debug-draw (no edita), se deja siempre.

@@ -61,6 +61,18 @@ namespace DonTopo {
             void notifyResize() { m_framebufferResized = true; }
             void setWireframeMode(bool enabled) { m_wireframeMode = enabled; }
             bool isWireframeMode() const { return m_wireframeMode; }
+            // Contorno de seleccion: indices del objeto resaltado en m_objects y
+            // en m_skinnedObjects (los mismos que guarda GameObject en
+            // staticRenderIndex/skinnedRenderIndex), -1 para "ninguno". Solo lo
+            // llama el editor, una vez por frame; el runtime no tiene seleccion
+            // y con el default (-1, -1) no se dibuja ningun contorno. El objeto
+            // resaltado sigue sujeto al mismo culling que el resto: fuera del
+            // frustum no se dibuja nada.
+            void setOutlineTarget(int staticIndex, int skinnedIndex)
+            {
+                m_outlineStaticIndex  = staticIndex;
+                m_outlineSkinnedIndex = skinnedIndex;
+            }
             // En headless no hay editor que pulse Play: el runtime arranca
             // jugando desde el frame 0. Esto es además lo que hace que
             // currentFrameCamera() elija el CameraComponent de la escena en
@@ -372,6 +384,12 @@ namespace DonTopo {
                 // nunca, que es el lado seguro.
                 float     boundRadius    = 0.0f;
                 bool      hasBounds      = false;
+                // Lado mayor de la AABB de la pose de REPOSO, en espacio local.
+                // Solo lo usa el grosor del contorno de selección, que es
+                // proporcional al tamaño del objeto: boundRadius no vale ahí
+                // porque acota todas las poses y sale varias veces mayor que la
+                // malla. 0 = malla sin vértices (el contorno cae a su mínimo).
+                float     restMaxExtent  = 0.0f;
                 // 0 = subido y visible. >0 = esperando a que la fence del batch
                 // con ese ticket señale. Sin esto, el objeto se dibujaría con
                 // sus texturas todavía en TRANSFER_DST_OPTIMAL.
@@ -388,6 +406,11 @@ namespace DonTopo {
             void createCommandBuffers();
             void createSyncObjects();
             void recordCommandBuffer(uint32_t imageIndex);
+            // Casco invertido del objeto seleccionado, al final del pass de
+            // escena y antes del skybox. camFrustum es el mismo del culling del
+            // frame: el objeto resaltado se vuelve a evaluar con el mismo
+            // criterio, no se le da paso libre. No-op si no hay seleccion.
+            void recordSelectionOutline(VkCommandBuffer cmd, const Frustum& camFrustum);
             void createPipeline();
             std::vector<char> loadShaderFile(const std::string& path);
             VkShaderModule createShaderModule(const std::vector<char>& code);
@@ -485,6 +508,22 @@ namespace DonTopo {
             VkPipelineLayout                m_pipelineLayout                    = VK_NULL_HANDLE;
             VkPipeline                      m_pipeline                          = VK_NULL_HANDLE;
             VkPipeline                      m_wireframePipeline                 = VK_NULL_HANDLE;
+            // Casco invertido del objeto seleccionado. Dos pipelines por el
+            // mismo motivo que los dos wireframe: el vertex input estatico
+            // (Vertex) y el skinned (OutputVertex) tienen stride distinto.
+            VkPipeline                      m_outlinePipeline                   = VK_NULL_HANDLE;
+            VkPipeline                      m_skinnedOutlinePipeline            = VK_NULL_HANDLE;
+            // Variante LINE de los dos anteriores, para cuando la escena se
+            // dibuja en wireframe: ahí el interior del objeto no escribe
+            // profundidad (solo lo hacen las aristas rasterizadas), así que un
+            // casco relleno pasaría el depth test entero y taparía el objeto de
+            // color plano en vez de bordearlo.
+            VkPipeline                      m_outlineWirePipeline               = VK_NULL_HANDLE;
+            VkPipeline                      m_skinnedOutlineWirePipeline        = VK_NULL_HANDLE;
+            // Objeto resaltado, -1 = ninguno. Solo los fija el editor
+            // (setOutlineTarget); en runtime se quedan en -1 para siempre.
+            int                             m_outlineStaticIndex                = -1;
+            int                             m_outlineSkinnedIndex               = -1;
             bool                            m_framebufferResized                = false;
             bool                            m_wireframeMode                     = false;
             bool                            m_headless                          = false;
