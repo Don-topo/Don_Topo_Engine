@@ -10,7 +10,7 @@ A Vulkan-based game engine written in C++20.
 - Normal maps + tangent space
 - Cubemap skybox (fullscreen quad, inverse view-projection)
 - Wireframe render mode
-- 3D spatial audio (FMOD): `AudioClipComponent` (loop, 3D/2D toggle)
+- 3D spatial audio (FMOD): `AudioClipComponent` (loop, 3D/2D toggle, per-channel volume and pitch), non-blocking clip loading
 - Dockable ImGui editor with offscreen viewport
 - Scene graph (hierarchical transforms), GameObject hierarchy panel (create/delete/rename, drag-drop reorder)
 - Basic shapes menu (Cube/Sphere/Plane/Capsule), Content Browser (asset browsing, rename/delete)
@@ -20,8 +20,12 @@ A Vulkan-based game engine written in C++20.
 - **Animator component**: Unity-style animation state graph (node = clip, link = transition; `bool`/`trigger`/`animation finished` conditions), edited in a node panel; instant-cut transitions (no blending), driven from Lua
 - Physics (PhysX): Box/Sphere/Capsule/Plane colliders (shape only) + `Rigidbody` (mass, gravity, drag, kinematic, 6-axis constraints, forces/impulses), raycasting
 - Scene serialization (JSON save/load, full GameObject tree incl. mesh/colliders/audio/scripts)
-- Play Mode (edit/play toggle, snapshot restore, physics gated to Play)
+- Play Mode (edit/play toggle, snapshot restore, physics gated to Play), undo/redo of editor actions
 - Log Console panel (edit-action history, live value editing)
+- **Frustum culling** in the main, shadow and skinned passes; skinned meshes bounded by a pose-independent sphere so no character can vanish mid-animation
+- **Draw batching**: objects sharing a mesh+material collapse into one instanced draw, and their GPU resources (buffers, textures, descriptor set) are deduplicated behind a refcounted cache
+- **Async asset loading**: worker thread pool (`JobSystem`), off-thread image decode, batched GPU uploads with deferred visibility and deferred destruction — no `vkDeviceWaitIdle` stalls on drop or scene load
+- **Export Game**: packages a standalone runtime (scene, assets, scripts, shaders, splash screen, FMOD and MSVC CRT DLLs) that links no editor code at all
 - **Lua scripting**: `ScriptComponent` (multiple per GameObject), Unity-style lifecycle (Awake/Start/Update/FixedUpdate/LateUpdate/OnDestroy), Entity/Transform/Scene/Input/Audio API, hot reload, auto-generated property UI
 - FBX / OBJ model loading (embedded textures supported)
 
@@ -32,12 +36,13 @@ A Vulkan-based game engine written in C++20.
 | Graphics | Vulkan | System SDK |
 | Window / Input | GLFW 3.4 | Auto-fetched |
 | Math | GLM 1.0.1 | Auto-fetched |
-| 3D Model loading | Assimp | Auto-fetched |
+| 3D Model loading | Assimp 5.3.1 | Auto-fetched |
 | Image loading | stb_image | Auto-fetched |
-| Editor UI | Dear ImGui | Auto-fetched |
+| Editor UI | Dear ImGui (`docking` branch) | Auto-fetched |
 | File dialog | ImGuiFileDialog | Auto-fetched |
 | Transform gizmo | ImGuizmo | Auto-fetched |
 | Node graph UI | imgui-node-editor (thedmd) | Auto-fetched |
+| Script code editor | ImGuiColorTextEdit | Auto-fetched |
 | Physics | NVIDIA PhysX 5.8.0 | Auto-fetched |
 | Audio | FMOD Studio (optional) | Manual install |
 | Scene serialization | nlohmann/json 3.11.3 | Auto-fetched |
@@ -54,7 +59,9 @@ A Vulkan-based game engine written in C++20.
 | MSVC | 2022+ | Required on Windows |
 | FMOD Studio API | Latest | Optional — audio disabled if not found |
 
-GLFW, GLM, Assimp, stb_image, ImGui, ImGuiFileDialog, ImGuizmo, imgui-node-editor, PhysX, nlohmann/json, Lua and sol2 are downloaded and built automatically by CMake.
+GLFW, GLM, Assimp, stb_image, ImGui, ImGuiFileDialog, ImGuizmo, ImGuiColorTextEdit,
+imgui-node-editor, PhysX, nlohmann/json, Lua and sol2 are downloaded and built automatically by
+CMake.
 
 ## Build (Windows)
 
@@ -95,30 +102,47 @@ exception — also pop up a message box, so the window never just disappears wit
 The editor (`Sandbox.exe`) keeps its console: run it from a terminal and its output stays there,
 while Lua `print()` goes to the editor's Log Console panel.
 
-Shaders are compiled from `shaders/*.{vert,frag,comp}` to SPIR-V automatically during build and copied to both the executable directory and `shaders/`.
+Shaders are compiled from `shaders/*.{vert,frag,comp}` to SPIR-V automatically during build and
+copied to both the executable directory and `shaders/`. The source list is globbed, so a brand-new
+shader needs a re-run of `configure.bat` before `build.bat` will see it.
+
+**Tests.** The suite is headless — no Vulkan device, no window — and builds as one executable per
+area under `build-ninja\engine\tests\`. There is no test framework and no CTest registration: each
+file is a `main` with asserts that returns non-zero on failure, so running them is just running them.
+
+```batch
+build.bat
+for %f in (build-ninja\engine\tests\dt_*_tests.exe) do @%f
+```
 
 ## Project Structure
 
-```
+```text
 Don_Topo_Engine/
 ├── assets/         # Runtime assets (models, textures, audio, skybox)
 ├── Scripts/        # Lua gameplay scripts (Scripts/<Name>.lua defines global table <Name>)
 ├── cmake/          # Custom Find modules (PhysX, Lua, FMOD)
 ├── docs/           # Design specs and implementation plans (superpowers/)
-├── engine/         # Core engine (static library: DonTopoEngine)
+├── engine/         # Two static libraries: DonTopoCore and DonTopoEditor
 │   ├── include/    # Public headers, mirroring the module layout (DonTopo/<Module>/)
 │   ├── src/        # Implementation, split into seven modules:
 │   │   ├── Core/       # Engine loop, Window, Input, Scene, GameObject, Camera
-│   │   ├── Renderer/   # Vulkan device, meshes, materials, model loading, skybox
+│   │   ├── Renderer/   # Vulkan device, meshes, materials, model loading, skybox, gizmos
 │   │   ├── Physics/    # PhysX integration, Rigidbody, Colliders/
 │   │   ├── Audio/      # FMOD wrapper, AudioClipComponent
 │   │   ├── Scripting/  # Lua/sol2 bindings, ScriptManager, syntax check
-│   │   ├── Editor/     # ImGui panels, gizmos, undo/redo
+│   │   ├── Editor/     # ImGui panels, undo/redo, game exporter  -> DonTopoEditor
 │   │   └── Files/      # Filesystem helpers
-│   └── tests/      # Headless unit tests (GoogleTest)
-├── sandbox/        # Test playground executable (Sandbox)
+│   └── tests/      # Headless unit tests (plain main + asserts), one executable per area
+├── runtime/        # Standalone game runtime (DonTopoRuntime) — links Core only
+├── sandbox/        # Editor executable / test playground (Sandbox)
 └── shaders/        # GLSL sources + compiled SPIR-V
 ```
+
+Everything outside `src/Editor/` builds into **`DonTopoCore`**; the panels, the undo stack, the
+exporter and the ImGui backends build into **`DonTopoEditor`**, which depends on Core and never
+the other way round. The renderer only ever sees the editor through a `UiLayer` interface, so
+`DonTopoRuntime` links Core alone and pulls in no ImGui symbols at all.
 
 ## Selection Outline
 
@@ -274,6 +298,7 @@ logged and the component is quarantined). See `Scripts/Rotator.lua` and `Scripts
 | Cascaded shadow maps | — |
 | PBR environment maps / IBL | — |
 | Post-processing | Bloom, SSAO, TAA |
+| Multi-backend RHI | DX12 / Vulkan / Metal, for Windows + Linux + macOS |
 
 ## License
 
