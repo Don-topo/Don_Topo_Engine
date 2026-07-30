@@ -5,6 +5,12 @@ namespace DonTopo
 {
     constexpr int MAX_LIGHTS = 4;
 
+    // Cascaded shadow maps: nº de cascadas del shadow map de la luz key. Tiene
+    // que valer lo mismo aquí, en el array del bloque UBO de los shaders y en
+    // las capas del texture array del shadow map: si se descuadra, std140
+    // desplaza en silencio todo lo que va detrás de lightSpaceMatrix.
+    constexpr int SHADOW_CASCADES = 4;
+
     struct Light
     {
         glm::vec4 position {0.0f, 0.0f, 0.0f, 0.0f};    // w unused
@@ -15,7 +21,11 @@ namespace DonTopo
     {
         glm::mat4   view;
         glm::mat4   proj;
-        glm::mat4   lightSpaceMatrix;
+        glm::mat4   lightSpaceMatrix[SHADOW_CASCADES];
+        // Distancia (view space, positiva) hasta la que llega cada cascada. La
+        // última es el alcance total de las sombras: más allá, el fragment
+        // shader devuelve "sin sombra" en vez de muestrear.
+        glm::vec4   cascadeSplits{0.0f};
         Light       lights[MAX_LIGHTS];
         glm::vec4   viewPos;
         int         numLights = 0;

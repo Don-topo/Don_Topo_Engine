@@ -6,17 +6,18 @@ layout(location = 2) in vec3 fragNormal;
 layout(location = 3) in vec3 fragWorldPos;
 layout(location = 4) in vec3 fragTangent;
 layout(location = 5) in vec3 fragBitangent;
-layout(location = 6) in vec4 fragLightSpacePos;
 
 layout(location = 0) out vec4 outColor;
 
 #define MAX_LIGHTS 4
+#define SHADOW_CASCADES 4
 struct Light { vec4 position; vec4 color; };
 
 layout(set = 0, binding = 0) uniform UBO {
     mat4  view;
     mat4  proj;
-    mat4  lightSpaceMatrix;
+    mat4  lightSpaceMatrix[SHADOW_CASCADES];
+    vec4  cascadeSplits;    // distancia (view space, positiva) hasta la que llega cada cascada
     Light lights[MAX_LIGHTS];
     vec4  viewPos;
     int   numLights;
@@ -24,10 +25,20 @@ layout(set = 0, binding = 0) uniform UBO {
 
 layout(set = 0, binding = 1) uniform sampler2D texSampler;
 layout(set = 0, binding = 2) uniform sampler2D normalMap;
-layout(set = 0, binding = 3) uniform sampler2DShadow shadowMap;
+layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadowMap;
 
-float computeShadow(vec4 lightSpacePos)
+// Misma seleccion y mismo PCF que pbr.frag; ver alli el porque de reproyectar
+// desde la posicion de mundo en vez de traerla del vertex shader.
+int selectCascade(float viewDepth)
 {
+    for (int i = 0; i < SHADOW_CASCADES; i++)
+        if (viewDepth <= ubo.cascadeSplits[i]) return i;
+    return -1;
+}
+
+float computeShadow(vec3 worldPos, int cascade)
+{
+    vec4 lightSpacePos = ubo.lightSpaceMatrix[cascade] * vec4(worldPos, 1.0);
     vec3 proj   = lightSpacePos.xyz / lightSpacePos.w;
     proj.xy     = proj.xy * 0.5 + 0.5;
     if(proj.z > 1.0 || proj.z < 0.0) return 1.0;
@@ -36,7 +47,7 @@ float computeShadow(vec4 lightSpacePos)
     float shadow = 0.0;
     for (int x = -1; x <= 1; x++)
         for (int y = -1; y <= 1; y++)
-            shadow += texture(shadowMap, vec3(proj.xy + vec2(x, y) * texelSize, proj.z));
+            shadow += texture(shadowMap, vec4(proj.xy + vec2(x, y) * texelSize, float(cascade), proj.z));
     return shadow / 9.0;
 }
 
@@ -48,7 +59,9 @@ void main()
 
     vec3 viewDir    = normalize(ubo.viewPos.xyz - fragWorldPos);
     vec3 texColor   = texture(texSampler, fragUV).rgb;
-    float shadow    = computeShadow(fragLightSpacePos);
+    float viewDepth = -(ubo.view * vec4(fragWorldPos, 1.0)).z;
+    int   cascade   = selectCascade(viewDepth);
+    float shadow    = cascade < 0 ? 1.0 : computeShadow(fragWorldPos, cascade);
 
     vec3 result = 0.1 * texColor; // ambient global
 

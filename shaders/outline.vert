@@ -14,11 +14,17 @@ layout(location = 0) in vec3 inPos;
 // consumir todos los atributos del binding.
 layout(location = 3) in vec3 inNormal;
 
+// El array de cascadas no se usa aqui, pero se declara igual que en los demas
+// shaders del set 0: si el bloque se quedara con una sola mat4, cualquier
+// miembro que se anadiera detras leeria de un offset distinto al que escribe
+// el UBO de C++.
+#define SHADOW_CASCADES 4
+
 layout(set = 0, binding = 0) uniform UBO
 {
     mat4 view;
     mat4 proj;
-    mat4 lightSpaceMatrix;
+    mat4 lightSpaceMatrix[SHADOW_CASCADES];
 } ubo;
 
 // Mismo layout que el bloque de triangle.vert/pbr.frag: mat4 + 2 float + vec2.

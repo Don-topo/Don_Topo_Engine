@@ -12,13 +12,16 @@ layout(location = 2) out vec3 fragNormal;
 layout(location = 3) out vec3 fragWorldPos;
 layout(location = 4) out vec3 fragTangent;
 layout(location = 5) out vec3 fragBitangent;
-layout(location = 6) out vec4 fragLightSpacePos;
+// No hay varying de posicion en espacio de luz: con cascadas harian falta N, y
+// el fragment shader ya reconstruye la que toca desde fragWorldPos.
+
+#define SHADOW_CASCADES 4
 
 layout(set = 0, binding = 0) uniform UBO
 {
     mat4 view;
     mat4 proj;
-    mat4 lightSpaceMatrix;
+    mat4 lightSpaceMatrix[SHADOW_CASCADES];
 } ubo;
 
 // Transforms por instancia, uno por frame-in-flight. Los objetos estaticos que
@@ -58,5 +61,4 @@ void main()
     T = normalize(T - dot(T, N) * N);
     fragTangent   = T;
     fragBitangent = cross(N, T);
-    fragLightSpacePos = ubo.lightSpaceMatrix * model * vec4(inPos, 1.0);
 }

@@ -6,17 +6,18 @@ layout(location = 2) in vec3 fragNormal;
 layout(location = 3) in vec3 fragWorldPos;
 layout(location = 4) in vec3 fragTangent;
 layout(location = 5) in vec3 fragBitangent;
-layout(location = 6) in vec4 fragLightSpacePos;
 
 layout(location = 0) out vec4 outColor;
 
 #define MAX_LIGHTS 4
+#define SHADOW_CASCADES 4
 struct Light { vec4 position; vec4 color; };
 
 layout(set = 0, binding = 0) uniform UBO {
     mat4  view;
     mat4  proj;
-    mat4  lightSpaceMatrix;
+    mat4  lightSpaceMatrix[SHADOW_CASCADES];
+    vec4  cascadeSplits;    // distancia (view space, positiva) hasta la que llega cada cascada
     Light lights[MAX_LIGHTS];
     vec4  viewPos;
     int   numLights;
@@ -24,7 +25,7 @@ layout(set = 0, binding = 0) uniform UBO {
 
 layout(set = 0, binding = 1) uniform sampler2D texSampler;
 layout(set = 0, binding = 2) uniform sampler2D normalMap;
-layout(set = 0, binding = 3) uniform sampler2DShadow shadowMap;
+layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadowMap;
 layout(set = 0, binding = 4) uniform sampler2D metallicRoughnessTex;
 
 layout(push_constant) uniform PushData {
@@ -36,16 +37,32 @@ layout(push_constant) uniform PushData {
 
 const float PI = 3.14159265359;
 
-float computeShadow(vec4 lightSpacePos)
+// Cascada que le toca a un fragmento por su profundidad en view space. Los
+// cortes vienen ya ordenados; el ultimo es el alcance total de las sombras.
+// -1 = mas alla de ese alcance, no hay mapa que muestrear.
+int selectCascade(float viewDepth)
 {
+    for (int i = 0; i < SHADOW_CASCADES; i++)
+        if (viewDepth <= ubo.cascadeSplits[i]) return i;
+    return -1;
+}
+
+float computeShadow(vec3 worldPos, int cascade)
+{
+    // Se reproyecta aqui en vez de traer N varyings del vertex shader: la
+    // cascada no se sabe hasta tener la profundidad del fragmento.
+    vec4 lightSpacePos = ubo.lightSpaceMatrix[cascade] * vec4(worldPos, 1.0);
     vec3 proj = lightSpacePos.xyz / lightSpacePos.w;
     proj.xy   = proj.xy * 0.5 + 0.5;
     if (proj.z > 1.0 || proj.z < 0.0) return 1.0;
     vec2 texelSize = 1.0 / vec2(2048.0);
     float shadow = 0.0;
+    // PCF 3x3 dentro de la capa de la cascada. Al indexar por capa y no por
+    // region de un atlas, los taps del borde no pueden caer en la cascada
+    // vecina: el sampler los recorta contra el borde de SU capa.
     for (int x = -1; x <= 1; x++)
         for (int y = -1; y <= 1; y++)
-            shadow += texture(shadowMap, vec3(proj.xy + vec2(x, y) * texelSize, proj.z));
+            shadow += texture(shadowMap, vec4(proj.xy + vec2(x, y) * texelSize, float(cascade), proj.z));
     return shadow / 9.0;
 }
 
@@ -74,8 +91,10 @@ void main()
 
     vec3 F0 = mix(vec3(0.04), albedo, metal);
 
-    float shadow = computeShadow(fragLightSpacePos);
-    vec3  Lo     = vec3(0.0);
+    float viewDepth = -(ubo.view * vec4(fragWorldPos, 1.0)).z;
+    int   cascade   = selectCascade(viewDepth);
+    float shadow    = cascade < 0 ? 1.0 : computeShadow(fragWorldPos, cascade);
+    vec3  Lo        = vec3(0.0);
 
     for (int i = 0; i < ubo.numLights; i++)
     {

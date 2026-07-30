@@ -2,11 +2,20 @@
 
 layout(location = 0) in vec3 inPos;
 
+#define SHADOW_CASCADES 4
+
 layout(set = 0, binding = 0) uniform UBO {
     mat4 view;
     mat4 proj;
-    mat4 lightSpaceMatrix;
+    mat4 lightSpaceMatrix[SHADOW_CASCADES];
 } ubo;
+
+// Que capa del texture array se esta grabando. Rango propio del pipeline de
+// sombras: no comparte pipeline layout con triangle/pbr/outline, asi que el
+// bloque PushData de esos no se toca.
+layout(push_constant) uniform ShadowPush {
+    uint cascade;
+} push;
 
 // Mismo SSBO por frame que triangle.vert (set 1, binding 0), pero con su propio
 // rango: el pass de sombras culea con el frustum de la LUZ, asi que el conjunto
@@ -20,5 +29,5 @@ layout(std430, set = 1, binding = 0) readonly buffer InstanceData
 
 void main()
 {
-    gl_Position = ubo.lightSpaceMatrix * instances.models[gl_InstanceIndex] * vec4(inPos, 1.0);
+    gl_Position = ubo.lightSpaceMatrix[push.cascade] * instances.models[gl_InstanceIndex] * vec4(inPos, 1.0);
 }

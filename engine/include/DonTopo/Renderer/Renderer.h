@@ -213,11 +213,14 @@ namespace DonTopo {
             // Devuelve 0 si no hay con qué acotar (sin huesos o sin vértices);
             // el llamante lo trata como "sin cota" y no culea.
             static float skinnedBoundRadius(const SkinnedMesh& mesh);
-            // Matriz de la luz que proyecta sombra. La comparten el UBO (para
-            // que el fragment shader muestree el shadow map) y el culling del
-            // pass de sombras: si las dos se calcularan por separado y una
-            // cambiara, se culearían objetos que el shadow map sí necesita.
-            glm::mat4 shadowLightSpaceMatrix() const;
+            // Matrices de luz de las N cascadas y sus distancias de corte. Las
+            // comparten el UBO (para que el fragment shader muestree el shadow
+            // map) y el culling del pass de sombras: si las dos se calcularan
+            // por separado y una cambiara, se culearían objetos que el shadow
+            // map sí necesita. Por eso se calculan UNA vez por frame en draw(),
+            // antes de updateUniformBuffer y de recordCommandBuffer, y los dos
+            // consumidores leen la caché de abajo.
+            void computeCascades();
 
             // ── Draw batching por instancing ─────────────────────────────────
             // Un draw instanciado: todas las instancias del rango
@@ -573,16 +576,25 @@ namespace DonTopo {
             Camera                          m_camera;
             std::vector<Light>              m_lights;
             
-            // Shadow Map
+            // Shadow Map (cascadas)
             static constexpr uint32_t       SHADOW_SIZE                         = 2048;
             VkImage                         m_shadowImage                       = VK_NULL_HANDLE;
             VkDeviceMemory                  m_shadowMemory                      = VK_NULL_HANDLE;
+            // Vista del array completo: es la que muestrea el fragment shader
+            // (sampler2DArrayShadow) y la que va en los descriptor sets.
             VkImageView                     m_shadowView                        = VK_NULL_HANDLE;
+            // Una vista de UNA capa por cascada. Solo existen para poder colgar
+            // un framebuffer de cada capa; nadie las muestrea.
+            VkImageView                     m_shadowLayerViews[SHADOW_CASCADES] {};
             VkSampler                       m_shadowSampler                     = VK_NULL_HANDLE;
             VkRenderPass                    m_shadowRenderPass                  = VK_NULL_HANDLE;
-            VkFramebuffer                   m_shadowFramebuffer                 = VK_NULL_HANDLE;
+            VkFramebuffer                   m_shadowFramebuffers[SHADOW_CASCADES] {};
             VkPipeline                      m_shadowPipeline                    = VK_NULL_HANDLE;
             VkPipelineLayout                m_shadowPipelineLayout              = VK_NULL_HANDLE;
+            // Caché por frame que rellena computeCascades(). Identidad y 0 si la
+            // escena no tiene luces: en ese caso el pass solo limpia las capas.
+            glm::mat4                       m_cascadeMatrices[SHADOW_CASCADES]  { glm::mat4(1.0f), glm::mat4(1.0f), glm::mat4(1.0f), glm::mat4(1.0f) };
+            glm::vec4                       m_cascadeSplits                     { 0.0f };
             // Compute pipelines
             VkPipeline            m_boneEvalPipeline      = VK_NULL_HANDLE;
             VkPipeline            m_boneHierarchyPipeline = VK_NULL_HANDLE;

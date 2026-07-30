@@ -262,6 +262,12 @@ namespace DonTopo {
         // del clic — un frame de tearing visible. El UBO está en memoria
         // host-mapeada: basta con escribirlo antes del vkQueueSubmit de más
         // abajo, no hace falta que sea lo primero del frame.
+        //
+        // Las cascadas se ajustan al frustum de la cámara, así que se calculan
+        // aquí, con la misma cámara ya estable, y ANTES de los dos que las
+        // consumen: updateUniformBuffer (que las copia al UBO) y
+        // recordCommandBuffer (que culea y graba el pass de sombras con ellas).
+        computeCascades();
         updateUniformBuffer(m_currentFrame);
 
         recordCommandBuffer(imageIndex);
@@ -383,9 +389,13 @@ namespace DonTopo {
         // Shadow Map
         vkDestroySampler(m_gpu.device(), m_shadowSampler, nullptr);
         vkDestroyImageView(m_gpu.device(), m_shadowView, nullptr);
+        for (int c = 0; c < SHADOW_CASCADES; c++)
+        {
+            vkDestroyImageView(m_gpu.device(), m_shadowLayerViews[c], nullptr);
+            vkDestroyFramebuffer(m_gpu.device(), m_shadowFramebuffers[c], nullptr);
+        }
         vkDestroyImage(m_gpu.device(), m_shadowImage, nullptr);
         vkFreeMemory(m_gpu.device(), m_shadowMemory, nullptr);
-        vkDestroyFramebuffer(m_gpu.device(), m_shadowFramebuffer, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedGfxPipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedWireframePipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedOutlinePipeline, nullptr);
@@ -677,15 +687,131 @@ namespace DonTopo {
         return std::isfinite(R) ? R : 0.0f;
     }
 
-    glm::mat4 Renderer::shadowLightSpaceMatrix() const
-    {
-        if (m_lights.empty()) return glm::mat4(1.0f);
+    // Reparto de los cortes entre cascadas: mezcla del logarítmico (que da
+    // resolución donde de verdad se ve, cerca) y el uniforme (que no deja la
+    // última cascada cubriendo casi todo el mundo). lambda=0.75 tira hacia el
+    // logarítmico, que es lo que se quiere con far grandes.
+    static constexpr float kCascadeLambda = 0.75f;
+    // Alcance máximo de las sombras. Un far de cámara de 5000 repartido entre 4
+    // cascadas dejaría la primera cubriendo cientos de unidades: a 2048² eso son
+    // sombras de bloques. Más allá de esta distancia no hay sombra, igual que
+    // antes no la había fuera de la ortográfica de ±350.
+    static constexpr float kShadowMaxDistance = 500.0f;
+    // Margen por detrás del volumen de cada cascada, en la dirección de la luz.
+    // Sin él, un objeto alto que queda fuera del frustum de la cámara pero cuya
+    // sombra sí cae dentro no se dibujaría en el shadow map.
+    static constexpr float kCasterMargin = 200.0f;
 
+    void Renderer::computeCascades()
+    {
+        for (int i = 0; i < SHADOW_CASCADES; i++) m_cascadeMatrices[i] = glm::mat4(1.0f);
+        m_cascadeSplits = glm::vec4(0.0f);
+        if (m_lights.empty()) return;
+
+        const FrameCamera fc = currentFrameCamera();
+
+        // Esquinas del frustum, desproyectando el cubo NDC. z va de 0 a 1 y no
+        // de -1 a 1 porque ese es el rango que Vulkan clipea: lo que se dibuja
+        // de verdad está siempre entre esos dos planos.
+        const glm::mat4 invViewProj = glm::inverse(fc.proj * fc.view);
+        glm::vec3 cornerNear[4], cornerFar[4];
+        const float ndcX[4] = { -1.0f,  1.0f,  1.0f, -1.0f };
+        const float ndcY[4] = { -1.0f, -1.0f,  1.0f,  1.0f };
+        for (int i = 0; i < 4; i++)
+        {
+            glm::vec4 pn = invViewProj * glm::vec4(ndcX[i], ndcY[i], 0.0f, 1.0f);
+            glm::vec4 pf = invViewProj * glm::vec4(ndcX[i], ndcY[i], 1.0f, 1.0f);
+            if (std::abs(pn.w) < 1e-8f || std::abs(pf.w) < 1e-8f) return;   // proyección degenerada
+            cornerNear[i] = glm::vec3(pn) / pn.w;
+            cornerFar[i]  = glm::vec3(pf) / pf.w;
+        }
+
+        // near/far REALES: la profundidad en view space de esos dos planos. No
+        // se sacan de los coeficientes de fc.proj a propósito — el editor
+        // construye su proyección con glm::perspective (z en [-1,1]) y el
+        // CameraComponent con *RH_ZO, así que los mismos coeficientes
+        // significan cosas distintas y la fórmula tendría que saber cuál está
+        // activa. Los planos z=0 y z=1, en cambio, son los mismos en los dos
+        // casos, y las 4 esquinas de cada uno están a profundidad constante.
+        const float camNear = -(fc.view * glm::vec4(cornerNear[0], 1.0f)).z;
+        const float camFar  = -(fc.view * glm::vec4(cornerFar[0],  1.0f)).z;
+        if (!std::isfinite(camNear) || !std::isfinite(camFar) ||
+            camNear <= 0.0f || camFar <= camNear)
+        {
+            return;
+        }
+
+        // Las esquinas ya están puestas con el far REAL (es el que define los
+        // rayos del frustum); el reparto de cascadas usa el far recortado.
+        const float shadowFar = std::min(camFar, kShadowMaxDistance);
+        if (shadowFar <= camNear) return;
+
+        // Luz direccional: la posición solo da la dirección, igual que antes
+        // (lookAt desde la luz hacia el origen).
         const glm::vec3 lightPos = glm::vec3(m_lights[0].position);
-        glm::mat4 lightView = glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-        glm::mat4 lightProj = glm::orthoRH_ZO(-350.0f, 350.0f, -350.0f, 350.0f, 1.0f, 2000.0f);
-        lightProj[1][1] *= -1.0f;
-        return lightProj * lightView;
+        const float     lightLen = glm::length(lightPos);
+        if (lightLen < 1e-6f) return;                       // luz en el origen: sin dirección
+        const glm::vec3 lightDir = -lightPos / lightLen;    // de la luz hacia la escena
+        const glm::vec3 up = std::abs(lightDir.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f)
+                                                          : glm::vec3(0.0f, 1.0f, 0.0f);
+        const glm::mat4 lightRot    = glm::lookAt(glm::vec3(0.0f), lightDir, up);
+        const glm::mat4 invLightRot = glm::inverse(lightRot);
+
+        float prevDist = camNear;
+        for (int c = 0; c < SHADOW_CASCADES; c++)
+        {
+            const float p         = (float)(c + 1) / (float)SHADOW_CASCADES;
+            const float logSplit  = camNear * std::pow(shadowFar / camNear, p);
+            const float uniSplit  = camNear + (shadowFar - camNear) * p;
+            const float dist      = kCascadeLambda * logSplit + (1.0f - kCascadeLambda) * uniSplit;
+            m_cascadeSplits[c]    = dist;
+
+            // Interpolar entre las esquinas cercana y lejana es exacto: la
+            // profundidad en view space varía linealmente a lo largo de ese
+            // segmento. Los factores se calculan contra el far REAL porque es el
+            // que sitúa cornerFar.
+            const float tNear = (prevDist - camNear) / (camFar - camNear);
+            const float tFar  = (dist     - camNear) / (camFar - camNear);
+
+            glm::vec3 corners[8];
+            for (int i = 0; i < 4; i++)
+            {
+                const glm::vec3 ray = cornerFar[i] - cornerNear[i];
+                corners[i]     = cornerNear[i] + ray * tNear;
+                corners[i + 4] = cornerNear[i] + ray * tFar;
+            }
+
+            // Esfera envolvente y no AABB: el radio no depende de hacia dónde
+            // mire la cámara, así que girar en el sitio no cambia el tamaño del
+            // volumen y las sombras no laten.
+            glm::vec3 center(0.0f);
+            for (const glm::vec3& v : corners) center += v;
+            center /= 8.0f;
+            float radius = 0.0f;
+            for (const glm::vec3& v : corners) radius = std::max(radius, glm::length(v - center));
+            // Cuantizar el radio evita que un cambio mínimo de la cámara mueva
+            // el borde del volumen y con él todos los téxeles.
+            radius = std::ceil(radius * 16.0f) / 16.0f;
+            if (radius < 1e-4f) radius = 1e-4f;
+
+            // Snap del centro a téxeles del shadow map, en el espacio de la luz.
+            // Sin esto, avanzar la cámara arrastra el volumen de forma continua
+            // y los bordes de sombra hierven.
+            const float unitsPerTexel = (2.0f * radius) / (float)SHADOW_SIZE;
+            glm::vec3 centerLS = glm::vec3(lightRot * glm::vec4(center, 1.0f));
+            centerLS.x = std::floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
+            centerLS.y = std::floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
+            center = glm::vec3(invLightRot * glm::vec4(centerLS, 1.0f));
+
+            const glm::mat4 lightView = glm::lookAt(center - lightDir * (radius + kCasterMargin),
+                                                    center, up);
+            glm::mat4 lightProj = glm::orthoRH_ZO(-radius, radius, -radius, radius,
+                                                  0.0f, 2.0f * radius + kCasterMargin);
+            lightProj[1][1] *= -1.0f;
+            m_cascadeMatrices[c] = lightProj * lightView;
+
+            prevDist = dist;
+        }
     }
 
     void Renderer::createSwapChain(Window& window)
@@ -1103,10 +1229,11 @@ namespace DonTopo {
         // SSBO de instancias del frame: se dimensiona ANTES de grabar nada,
         // porque crecerlo recrea el buffer y actualiza su descriptor set (aquí
         // es seguro: drawFrame ya esperó la fence de este frame). El peor caso
-        // es que todos los objetos sean visibles en los DOS passes, de ahí el
-        // factor 2. El cursor arranca a 0: sombras escriben delante, escena
-        // detrás.
-        ensureInstanceCapacity((uint32_t)m_objects.size() * 2);
+        // es que todos los objetos sean visibles en TODOS los passes: uno por
+        // cascada del shadow map más el de la escena, de ahí el factor
+        // SHADOW_CASCADES + 1. El cursor arranca a 0: las cascadas escriben
+        // delante (una detrás de otra), la escena al final.
+        ensureInstanceCapacity((uint32_t)m_objects.size() * (SHADOW_CASCADES + 1));
         m_instanceCursor = 0;
 
         // Cámara del frame: la usan el culling de los skinned (aquí abajo), el
@@ -2195,10 +2322,15 @@ namespace DonTopo {
         }
         
         ubo.viewPos  = glm::vec4(fc.eye, 1.0f);
-        if (!m_lights.empty())
+        // Las cascadas ya las calculó draw() para este frame. Copiarlas y no
+        // recalcularlas es lo que garantiza que el fragment shader muestree con
+        // exactamente las mismas matrices con las que se culeó y se grabó el
+        // pass de sombras.
+        for (int i = 0; i < SHADOW_CASCADES; i++)
         {
-            ubo.lightSpaceMatrix = shadowLightSpaceMatrix();
+            ubo.lightSpaceMatrix[i] = m_cascadeMatrices[i];
         }
+        ubo.cascadeSplits = m_cascadeSplits;
 
         memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));        
     }
@@ -2404,23 +2536,63 @@ namespace DonTopo {
 
     void Renderer::createShadowResources()
     {
-        // 1. Imagen depth para shadow map
-        m_res.createImage(SHADOW_SIZE, SHADOW_SIZE, VK_FORMAT_D32_SFLOAT, VK_IMAGE_TILING_OPTIMAL, 
-            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_shadowImage, m_shadowMemory);
+        // 1. Imagen depth para shadow map: un texture array con una capa por
+        // cascada. No usa m_res.createImage porque esa fija arrayLayers a 1 y
+        // la firma la comparten todas las texturas del motor.
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType     = VK_IMAGE_TYPE_2D;
+        imageInfo.format        = VK_FORMAT_D32_SFLOAT;
+        imageInfo.extent        = { SHADOW_SIZE, SHADOW_SIZE, 1 };
+        imageInfo.mipLevels     = 1;
+        imageInfo.arrayLayers   = SHADOW_CASCADES;
+        imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(m_gpu.device(), &imageInfo, nullptr, &m_shadowImage) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create shadow image!");
+        }
 
-        // 2. Image view (depth aspect)
+        VkMemoryRequirements memReq;
+        vkGetImageMemoryRequirements(m_gpu.device(), m_shadowImage, &memReq);
+        VkMemoryAllocateInfo memAlloc{};
+        memAlloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        memAlloc.allocationSize  = memReq.size;
+        memAlloc.memoryTypeIndex = m_gpu.findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(m_gpu.device(), &memAlloc, nullptr, &m_shadowMemory) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to allocate shadow image memory!");
+        }
+        vkBindImageMemory(m_gpu.device(), m_shadowImage, m_shadowMemory, 0);
+
+        // 2. Image views: una del array entero para muestrear, y una por capa
+        // para colgarle un framebuffer.
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType                          = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image                          = m_shadowImage;
-        viewInfo.viewType                       = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.viewType                       = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
         viewInfo.format                         = VK_FORMAT_D32_SFLOAT;
         viewInfo.subresourceRange.aspectMask    = VK_IMAGE_ASPECT_DEPTH_BIT;
-        viewInfo.subresourceRange.layerCount    = 1;
-        viewInfo.subresourceRange.levelCount    = 1;    
+        viewInfo.subresourceRange.layerCount    = SHADOW_CASCADES;
+        viewInfo.subresourceRange.levelCount    = 1;
         if(vkCreateImageView(m_gpu.device(), &viewInfo, nullptr, &m_shadowView) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create shadow image view!");
+        }
+
+        for (uint32_t c = 0; c < SHADOW_CASCADES; c++)
+        {
+            VkImageViewCreateInfo layerInfo = viewInfo;
+            layerInfo.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
+            layerInfo.subresourceRange.baseArrayLayer = c;
+            layerInfo.subresourceRange.layerCount     = 1;
+            if (vkCreateImageView(m_gpu.device(), &layerInfo, nullptr, &m_shadowLayerViews[c]) != VK_SUCCESS)
+            {
+                throw std::runtime_error("failed to create shadow layer view!");
+            }
         }
 
         // 3. Sampler de comparación (PCF listo)
@@ -2486,19 +2658,23 @@ namespace DonTopo {
             throw std::runtime_error("failed to create shadow render pass!");
         }
 
-         // 5. Framebuffer
-         VkFramebufferCreateInfo fbInfo{};
-        fbInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        fbInfo.renderPass      = m_shadowRenderPass;
-        fbInfo.attachmentCount = 1;
-        fbInfo.pAttachments    = &m_shadowView;
-        fbInfo.width           = SHADOW_SIZE;
-        fbInfo.height          = SHADOW_SIZE;
-        fbInfo.layers          = 1;
-        if (vkCreateFramebuffer(m_gpu.device(), &fbInfo, nullptr, &m_shadowFramebuffer) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create shadow framebuffer!");
-        }            
+         // 5. Framebuffers: uno por cascada, cada uno sobre su capa. Todos
+         // comparten el render pass (el formato del attachment es el mismo).
+         for (uint32_t c = 0; c < SHADOW_CASCADES; c++)
+         {
+            VkFramebufferCreateInfo fbInfo{};
+            fbInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            fbInfo.renderPass      = m_shadowRenderPass;
+            fbInfo.attachmentCount = 1;
+            fbInfo.pAttachments    = &m_shadowLayerViews[c];
+            fbInfo.width           = SHADOW_SIZE;
+            fbInfo.height          = SHADOW_SIZE;
+            fbInfo.layers          = 1;
+            if (vkCreateFramebuffer(m_gpu.device(), &fbInfo, nullptr, &m_shadowFramebuffers[c]) != VK_SUCCESS)
+            {
+                throw std::runtime_error("failed to create shadow framebuffer!");
+            }
+         }
 
         // 6. Pipeline (vertex-only, sin color attachments)
         auto vertCode = loadShaderFile("shaders/shadow.vert.spv");
@@ -2567,15 +2743,25 @@ namespace DonTopo {
         dynamicState.dynamicStateCount = 2;
         dynamicState.pDynamicStates    = dynStates;
 
-        // Sin push constants: shadow.vert saca el model matrix del SSBO de
-        // instancias (set 1) por gl_InstanceIndex, igual que triangle.vert, y
-        // por este pass solo pasan objetos estáticos agrupados.
+        // El model matrix NO va por push constant: shadow.vert lo saca del SSBO
+        // de instancias (set 1) por gl_InstanceIndex, igual que triangle.vert.
+        // El único push constant es el índice de cascada, que dice cuál de las
+        // matrices del UBO usar. Este layout es propio del pass de sombras y no
+        // lo comparte ningún otro pipeline, así que el rango de PushData que
+        // usan triangle/pbr/outline no se toca.
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pcr.offset     = 0;
+        pcr.size       = sizeof(uint32_t);
+
         VkDescriptorSetLayout setLayouts[] = { m_descriptorSetLayout, m_instanceDescLayout };
 
         VkPipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         layoutInfo.setLayoutCount         = 2;
         layoutInfo.pSetLayouts            = setLayouts;
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges    = &pcr;
         if (vkCreatePipelineLayout(m_gpu.device(), &layoutInfo, nullptr, &m_shadowPipelineLayout) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create shadow pipeline layout!");
@@ -2608,78 +2794,93 @@ namespace DonTopo {
         VkClearValue clearDepth{};
         clearDepth.depthStencil = { 1.0f, 0 };
 
-        VkRenderPassBeginInfo renderPassInfo{};
-        renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        renderPassInfo.renderPass        = m_shadowRenderPass;
-        renderPassInfo.framebuffer       = m_shadowFramebuffer;
-        renderPassInfo.renderArea.extent = { SHADOW_SIZE, SHADOW_SIZE };
-        renderPassInfo.clearValueCount   = 1;
-        renderPassInfo.pClearValues      = &clearDepth;
+        // Sin luces no hay matrices que extraer (computeCascades deja la
+        // identidad, cuyo frustum es el cubo unidad y culearía casi todo). Aun
+        // así hay que abrir los N render pass: son los que limpian las capas y
+        // las dejan en DEPTH_STENCIL_READ_ONLY_OPTIMAL, que es el layout que
+        // declaran los descriptor sets. Lo que se salta es la geometría, que
+        // nadie va a muestrear (numLights = 0 apaga el shadow en el shader).
+        const bool drawCasters = !m_lights.empty();
 
-        vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline);
-
-        
         VkViewport vp {0.0f, 0.0f, (float)SHADOW_SIZE, (float)SHADOW_SIZE, 0.0f, 1.0f};
         VkRect2D sc {{0,0}, {SHADOW_SIZE, SHADOW_SIZE}};
-        vkCmdSetViewport(cmd, 0, 1, &vp);
-        vkCmdSetScissor(cmd, 0, 1, &sc);
 
-        // Culling por el frustum de la LUZ, no por el de la cámara: un objeto
-        // que la cámara no ve puede seguir proyectando sombra sobre lo que sí
-        // se ve. Con el frustum de la cámara desaparecerían esas sombras.
-        //
-        // Sin luces no hay matriz que extraer (shadowLightSpaceMatrix devuelve
-        // la identidad, cuyo frustum es el cubo unidad y culearía casi todo):
-        // en ese caso se graba el pass entero como antes.
-        const bool    cullByLight  = !m_lights.empty();
-        const Frustum lightFrustum = cullByLight ? frustumFromViewProj(shadowLightSpaceMatrix())
-                                                 : Frustum{};
-
-        // Mismas guardas por objeto que el pass principal, con el frustum de la
-        // luz. El agrupado es independiente del de la cámara: los conjuntos
-        // visibles no coinciden, así que cada pass escribe su propio rango del
-        // SSBO (este va primero, el de la escena detrás).
-        m_batchCandidates.clear();
-        m_batchCandidates.reserve(m_objects.size());
-        for(auto& obj : m_objects)
+        for (uint32_t cascade = 0; cascade < SHADOW_CASCADES; cascade++)
         {
-            const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
-            // !gpu: borrado desde el editor. En vuelo: no debe proyectar sombra
-            // si todavía no es visible, o habría una sombra flotando sin objeto
-            // que la eche.
-            bool visible = gpu && gpu->uploadTicket <= m_lastCompletedTicket;
-            // Fuera del volumen que cubre el shadow map: su sombra no cabría en
-            // la textura de todos modos.
-            if (visible && cullByLight && gpu->hasBounds &&
-                !aabbVisible(lightFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
+            VkRenderPassBeginInfo renderPassInfo{};
+            renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            renderPassInfo.renderPass        = m_shadowRenderPass;
+            renderPassInfo.framebuffer       = m_shadowFramebuffers[cascade];
+            renderPassInfo.renderArea.extent = { SHADOW_SIZE, SHADOW_SIZE };
+            renderPassInfo.clearValueCount   = 1;
+            renderPassInfo.pClearValues      = &clearDepth;
+
+            vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            if (!drawCasters)
             {
-                visible = false;
+                vkCmdEndRenderPass(cmd);
+                continue;
             }
-            m_batchCandidates.push_back({ obj.sharedIndex, visible, &obj.transform });
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline);
+            vkCmdSetViewport(cmd, 0, 1, &vp);
+            vkCmdSetScissor(cmd, 0, 1, &sc);
+            vkCmdPushConstants(cmd, m_shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+                               0, sizeof(uint32_t), &cascade);
+
+            // Culling por el frustum de ESTA cascada, no por el de la cámara ni
+            // por el de la cascada mayor: un objeto que la cámara no ve puede
+            // seguir proyectando sombra sobre lo que sí se ve, y un objeto que
+            // cae en la cascada lejana no pinta nada en el mapa de la cercana.
+            const Frustum lightFrustum = frustumFromViewProj(m_cascadeMatrices[cascade]);
+
+            // Mismas guardas por objeto que el pass principal, con el frustum de
+            // la luz. El agrupado es independiente del de la cámara: los
+            // conjuntos visibles no coinciden, así que cada pass escribe su
+            // propio rango del SSBO (las cascadas van primero, una detrás de
+            // otra, y el de la escena al final).
+            m_batchCandidates.clear();
+            m_batchCandidates.reserve(m_objects.size());
+            for(auto& obj : m_objects)
+            {
+                const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
+                // !gpu: borrado desde el editor. En vuelo: no debe proyectar
+                // sombra si todavía no es visible, o habría una sombra flotando
+                // sin objeto que la eche.
+                bool visible = gpu && gpu->uploadTicket <= m_lastCompletedTicket;
+                // Fuera del volumen que cubre esta cascada: su sombra no cabría
+                // en la capa de todos modos.
+                if (visible && gpu->hasBounds &&
+                    !aabbVisible(lightFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
+                {
+                    visible = false;
+                }
+                m_batchCandidates.push_back({ obj.sharedIndex, visible, &obj.transform });
+            }
+
+            const uint32_t instanceBase = m_instanceCursor;
+            glm::mat4* dst = (glm::mat4*)m_instanceMapped[m_currentFrame] + instanceBase;
+            m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
+                dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
+
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout,
+                1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
+
+            for (const InstanceBatch& batch : m_instanceBatches)
+            {
+                const SharedGpuMesh* gpu = m_sharedMeshes.get(batch.sharedIndex);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout, 0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
+
+                VkBuffer vb[] = { gpu->vertexBuffer };
+                VkDeviceSize offsets[] = { 0 };
+                vkCmdBindVertexBuffers(cmd, 0, 1, vb, offsets);
+                vkCmdBindIndexBuffer(cmd, gpu->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cmd, gpu->indexCount, batch.instanceCount, 0, 0, batch.firstInstance);
+            }
+
+            vkCmdEndRenderPass(cmd);
         }
-
-        const uint32_t instanceBase = m_instanceCursor;
-        glm::mat4* dst = (glm::mat4*)m_instanceMapped[m_currentFrame] + instanceBase;
-        m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
-            dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
-
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout,
-            1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
-
-        for (const InstanceBatch& batch : m_instanceBatches)
-        {
-            const SharedGpuMesh* gpu = m_sharedMeshes.get(batch.sharedIndex);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout, 0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
-
-            VkBuffer vb[] = { gpu->vertexBuffer };
-            VkDeviceSize offsets[] = { 0 };
-            vkCmdBindVertexBuffers(cmd, 0, 1, vb, offsets);
-            vkCmdBindIndexBuffer(cmd, gpu->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(cmd, gpu->indexCount, batch.instanceCount, 0, 0, batch.firstInstance);
-        }
-
-        vkCmdEndRenderPass(cmd);
     }
 
     void Renderer::createComputePipelines()
