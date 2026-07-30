@@ -204,6 +204,24 @@ namespace DonTopo {
                                     const glm::vec3& localMin,
                                     const glm::vec3& localMax,
                                     const glm::mat4& model);
+            // Radio de una esfera centrada en el ORIGEN LOCAL del modelo que
+            // contiene la malla skinned en CUALQUIER pose de CUALQUIER clip. La
+            // AABB en reposo no vale: el compute deforma los vértices y un brazo
+            // levantado se sale de la caja, así que cullear con ella haría
+            // desaparecer al personaje — el peor fallo posible aquí.
+            //
+            // No evalúa ninguna pose: acota hueso a hueso con los valores
+            // EXTREMOS de las keys (alcance acumulado por la jerarquía × escala
+            // acumulada, más el radio de la nube de vértices que arrastra cada
+            // hueso medido en su propio espacio). Por eso la cota vale también
+            // para los tiempos interpolados: mix() no sale del segmento entre
+            // sus extremos y slerp() devuelve una rotación, que no cambia
+            // normas. Es holgada a propósito — falso positivo sí, falso
+            // negativo nunca.
+            //
+            // Devuelve 0 si no hay con qué acotar (sin huesos o sin vértices);
+            // el llamante lo trata como "sin cota" y no culea.
+            static float skinnedBoundRadius(const SkinnedMesh& mesh);
             // Matriz de la luz que proyecta sombra. La comparten el UBO (para
             // que el fragment shader muestree el shadow map) y el culling del
             // pass de sombras: si las dos se calcularan por separado y una
@@ -369,6 +387,12 @@ namespace DonTopo {
                 float     duration       = 0.0f;
                 float     ticksPerSecond = 24.0f;
                 glm::mat4 transform      {1.0f};
+                // Cota para el frustum culling: esfera centrada en el origen
+                // local, válida en toda pose (ver skinnedBoundRadius).
+                // hasBounds false = malla sin con qué acotar -> no se culea
+                // nunca, que es el lado seguro.
+                float     boundRadius    = 0.0f;
+                bool      hasBounds      = false;
                 // 0 = subido y visible. >0 = esperando a que la fence del batch
                 // con ese ticket señale. Sin esto, el objeto se dibujaría con
                 // sus texturas todavía en TRANSFER_DST_OPTIMAL.
@@ -512,6 +536,14 @@ namespace DonTopo {
             // dos veces por frame y no debe alojar nada en ese camino.
             std::vector<BatchCandidate>     m_batchCandidates;
             std::vector<InstanceBatch>      m_instanceBatches;
+            // Visibilidad de m_skinnedObjects de ESTE frame, en el mismo orden e
+            // indexada igual. Se calcula una sola vez al principio de
+            // recordCommandBuffer porque la leen dos sitios: el compute (que va
+            // primero en el command buffer) y el dibujo. Que compartan la misma
+            // decisión es lo que evita el pop: si el compute se saltara un
+            // objeto que luego SÍ se dibuja, su outputVertexBuffer conservaría
+            // la pose del último frame en que fue visible.
+            std::vector<uint8_t>            m_skinnedVisible;
             void createInstanceResources();
             // Asegura sitio para `matrices` en el buffer del frame actual. Se
             // llama al principio de recordCommandBuffer, con la fence del frame

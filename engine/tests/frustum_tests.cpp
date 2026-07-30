@@ -11,6 +11,8 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -156,6 +158,123 @@ static void test_planos_normalizados()
     }
 }
 
+// ── Cota de los objetos skinned ──────────────────────────────────────────────
+// Rig de dos huesos: la raíz en el origen y un "brazo" cuyo origen está en
+// (0,1,0). El único vértice CUELGA del brazo hacia abajo, en (0,0.5,0), así que
+// en reposo queda a 0.5 del origen del modelo. El clip gira el brazo 180°, que
+// lo lleva a (0,1.5,0): tres veces más lejos.
+//
+// Ese es exactamente el caso que hace desaparecer a un personaje si la cota se
+// saca de la malla en reposo, y por eso el rig se monta al revés de lo intuitivo
+// (el vértice hacia dentro, no hacia fuera).
+static const float kPi = 3.14159265358979f;
+
+static SkinnedMesh makeRigDeDosHuesos(bool conClip)
+{
+    SkinnedMesh mesh;
+    mesh.name = "rig";
+
+    Skeleton& skel = mesh.skeleton;
+    skel.names       = { "raiz", "brazo" };
+    skel.parentIndex = { -1, 0 };
+    skel.inverseBindPose = {
+        glm::mat4(1.0f),
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1.0f, 0.0f)) // brazo en (0,1,0)
+    };
+    skel.boneMap = { {"raiz", 0}, {"brazo", 1} };
+
+    SkinnedVertex v{};
+    v.position    = glm::vec4(0.0f, 0.5f, 0.0f, 1.0f);
+    v.boneIndices = glm::ivec4(1, 0, 0, 0);
+    v.boneWeights = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+    mesh.skinnedVertices = { v };
+
+    if (conClip)
+    {
+        BoneChannel ch{};
+        ch.boneIndex = 1;
+        ch.posKeys   = { {0.0f, glm::vec3(0.0f, 1.0f, 0.0f)}, {1.0f, glm::vec3(0.0f, 1.0f, 0.0f)} };
+        ch.scaleKeys = { {0.0f, glm::vec3(1.0f)},             {1.0f, glm::vec3(1.0f)} };
+        ch.rotKeys   = { {0.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f)},
+                         {1.0f, glm::angleAxis(kPi, glm::vec3(0.0f, 0.0f, 1.0f))} };
+
+        AnimationClip clip{};
+        clip.name           = "girar";
+        clip.duration       = 1.0f;
+        clip.ticksPerSecond = 1.0f;
+        clip.channels       = { ch };
+        mesh.animationClips = { clip };
+    }
+    return mesh;
+}
+
+// Ningún instante del clip -incluidos los INTERPOLADOS, que es donde muestrear
+// keyframes se quedaría corto- puede salirse de la cota.
+static void test_cota_skinned_cubre_toda_la_animacion()
+{
+    const SkinnedMesh mesh = makeRigDeDosHuesos(/*conClip=*/true);
+    const float R = Renderer::skinnedBoundRadius(mesh);
+
+    const glm::mat4 invBind = mesh.skeleton.inverseBindPose[1];
+    const glm::vec3 bind    = glm::vec3(mesh.skinnedVertices[0].position);
+    float maxReal = 0.0f;
+    for (int i = 0; i <= 64; i++)
+    {
+        const float t = (float)i / 64.0f;
+        // Lo que hacen bone_eval + bone_hierarchy para este rig: la raíz se
+        // queda en la identidad y el brazo gira slerpeando de 0 a 180°.
+        const glm::mat4 mundo = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 1.0f, 0.0f))
+                              * glm::mat4_cast(glm::angleAxis(kPi * t, glm::vec3(0.0f, 0.0f, 1.0f)));
+        const glm::vec3 p = glm::vec3(mundo * invBind * glm::vec4(bind, 1.0f));
+        maxReal = std::max(maxReal, glm::length(p));
+        CHECK(glm::length(p) <= R + 1e-4f);
+    }
+    // El barrido de arriba lo pasaría igual una cota absurdamente grande, así
+    // que se afirman los dos lados: que llega a la pose extrema (1.5, o sea que
+    // NO se sacó de la malla en reposo, que da 0.5) y que no se dispara.
+    CHECK(maxReal > 1.49f);
+    CHECK(R >= maxReal);
+    // 2.0 es el guardarraíl contra cotas infladas: acotar la escala del hueso
+    // con la norma de Frobenius en vez de con la espectral da 2.598 aquí, y en
+    // un esqueleto real se multiplica por cada nivel de la jerarquía.
+    CHECK(R < 2.0f);
+}
+
+// Sin clips, la pose es la de bind pose — pero la cota tiene que seguir contando
+// el offset del hueso respecto al origen del modelo (el bindLocal), no sólo el
+// radio de los vértices.
+static void test_cota_skinned_sin_clips()
+{
+    const SkinnedMesh mesh = makeRigDeDosHuesos(/*conClip=*/false);
+    const float R = Renderer::skinnedBoundRadius(mesh);
+    CHECK(std::fabs(R - 1.5f) < 1e-3f);
+}
+
+// Sin huesos o sin vértices no hay con qué acotar: 0 significa "no culees", que
+// es el lado seguro.
+static void test_cota_skinned_sin_nada()
+{
+    CHECK(Renderer::skinnedBoundRadius(SkinnedMesh{}) == 0.0f);
+
+    SkinnedMesh sinVertices = makeRigDeDosHuesos(true);
+    sinVertices.skinnedVertices.clear();
+    CHECK(Renderer::skinnedBoundRadius(sinVertices) == 0.0f);
+}
+
+// La cota es una esfera centrada en el ORIGEN LOCAL, así que el sitio lo pone
+// entero el transform del objeto — igual que con los estáticos.
+static void test_cota_skinned_se_culea_con_el_transform()
+{
+    const SkinnedMesh mesh = makeRigDeDosHuesos(/*conClip=*/true);
+    const float R = Renderer::skinnedBoundRadius(mesh);
+    const glm::vec3 cotaMin(-R), cotaMax(R);
+    const Renderer::Frustum f = Renderer::frustumFromViewProj(makeViewProj(true));
+
+    CHECK(Renderer::aabbVisible(f, cotaMin, cotaMax, at(0.0f, 0.0f, -50.0f)));
+    CHECK(!Renderer::aabbVisible(f, cotaMin, cotaMax, at(0.0f, 0.0f, 50.0f)));   // detrás
+    CHECK(!Renderer::aabbVisible(f, cotaMin, cotaMax, at(500.0f, 0.0f, -50.0f))); // al lado
+}
+
 int main()
 {
     test_dentro_y_fuera(/*zeroToOne=*/true);
@@ -164,6 +283,10 @@ int main()
     test_rotacion_y_escala();
     test_frustum_ortografico_de_la_luz();
     test_planos_normalizados();
+    test_cota_skinned_cubre_toda_la_animacion();
+    test_cota_skinned_sin_clips();
+    test_cota_skinned_sin_nada();
+    test_cota_skinned_se_culea_con_el_transform();
 
     if (g_failures == 0) std::printf("frustum_tests: OK\n");
     else                 std::printf("frustum_tests: %d FALLOS\n", g_failures);
