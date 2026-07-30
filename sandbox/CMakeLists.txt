@@ -3,9 +3,10 @@ add_executable(Sandbox
     Sandbox.rc
 )
 
+# DonTopoEditor arrastra DonTopoCore como PUBLIC.
 target_link_libraries(Sandbox
     PRIVATE
-        DonTopoEngine
+        DonTopoEditor
 )
 
 # Compilar shaders GLSL -> SPIR-V con glslc

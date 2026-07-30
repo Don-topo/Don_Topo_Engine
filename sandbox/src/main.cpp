@@ -14,7 +14,7 @@
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Scripting/ScriptManager.h"
-#include "DonTopo/Editor/Gizmos.h"
+#include "DonTopo/Renderer/Gizmos.h"
 #include "DonTopo/Editor/EditorUI.h"
 #include "DonTopo/Core/Input.h"
 #include <GLFW/glfw3.h>

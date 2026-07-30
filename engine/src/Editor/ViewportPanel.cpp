@@ -4,7 +4,7 @@
 #include "DonTopo/Core/Camera.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/Scene.h"
-#include "DonTopo/Editor/Gizmos.h"
+#include "DonTopo/Renderer/Gizmos.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"

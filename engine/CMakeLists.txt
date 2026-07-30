@@ -1,17 +1,10 @@
-add_library(DonTopoEngine STATIC
+# El motor, sin nada del editor. Es lo unico que enlaza el runtime: por eso
+# aqui no puede aparecer ninguna de las libs de ImGui ni ningun fuente de
+# src/Editor/.
+add_library(DonTopoCore STATIC
     src/Core/Engine.cpp
     src/Core/Window.cpp
     src/Renderer/Renderer.cpp
-    src/Editor/EditorUI.cpp
-    src/Editor/LoadingModal.cpp
-    src/Editor/LogPanel.cpp
-    src/Editor/ScenePanel.cpp
-    src/Editor/ViewportPanel.cpp
-    src/Editor/PropertiesPanel.cpp
-    src/Editor/ContentBrowserPanel.cpp
-    src/Editor/AnimatorPanel.cpp
-    src/Editor/Command.cpp
-    src/Editor/UndoManager.cpp
     src/Renderer/Skybox.cpp
     src/Renderer/SplashScreen.cpp
     src/Renderer/ModelLoader.cpp
@@ -47,45 +40,41 @@ add_library(DonTopoEngine STATIC
     src/Renderer/DeferredDelete.cpp
     src/Renderer/TransferBatch.cpp
     src/Renderer/AsyncAssetLoader.cpp
-    src/Editor/Gizmos.cpp
-    src/Editor/ScriptEditorPanel.cpp
-    src/Editor/GameExporter.cpp
+    # Gizmos vive en Core aunque solo lo pinte el editor: no depende de ImGui y
+    # lo graba el pass principal del Renderer, asi que dejarlo en Editor haria
+    # que Core dependiera del editor.
+    src/Renderer/Gizmos.cpp
     src/Scripting/LuaSyntaxCheck.cpp
     src/Scripting/LuaApiReference.cpp
 )
 
-target_include_directories(DonTopoEngine
+target_include_directories(DonTopoCore
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${stb_SOURCE_DIR}
 )
 
-target_link_libraries(DonTopoEngine
+target_link_libraries(DonTopoCore
     PUBLIC
         Vulkan::Vulkan
         glfw
         glm::glm
         assimp
-        imgui_backend
-        imgui_filedialog
-        imguizmo
-        imgui_texteditor
-        imgui_node_editor
         nlohmann_json::nlohmann_json
         sol2_lib
 )
 
 if(FMOD_FOUND)
-    target_link_libraries(DonTopoEngine PUBLIC FMOD::FMOD)
-    target_compile_definitions(DonTopoEngine PUBLIC DT_FMOD_ENABLED)
+    target_link_libraries(DonTopoCore PUBLIC FMOD::FMOD)
+    target_compile_definitions(DonTopoCore PUBLIC DT_FMOD_ENABLED)
 endif()
 
 if(PHYSX_FOUND)
-    target_link_libraries(DonTopoEngine PUBLIC PhysX::SDK)
-    target_compile_definitions(DonTopoEngine PUBLIC DT_PHYSX_ENABLED)
+    target_link_libraries(DonTopoCore PUBLIC PhysX::SDK)
+    target_compile_definitions(DonTopoCore PUBLIC DT_PHYSX_ENABLED)
 endif()
 
-target_compile_features(DonTopoEngine PUBLIC cxx_std_20)
+target_compile_features(DonTopoCore PUBLIC cxx_std_20)
 
 # ScriptBindings.cpp registra muchos usertypes de sol2 en una sola TU: el
 # volumen de plantillas generadas supera el límite de secciones de MSVC
@@ -93,5 +82,34 @@ target_compile_features(DonTopoEngine PUBLIC cxx_std_20)
 if(MSVC)
     set_source_files_properties(src/Scripting/ScriptBindings.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
 endif()
+
+# El editor: paneles, undo, exportador y el backend de ImGui. Depende de Core,
+# nunca al reves — el Renderer solo lo ve por la interfaz UiLayer.
+add_library(DonTopoEditor STATIC
+    src/Editor/EditorUI.cpp
+    src/Editor/LoadingModal.cpp
+    src/Editor/LogPanel.cpp
+    src/Editor/ScenePanel.cpp
+    src/Editor/ViewportPanel.cpp
+    src/Editor/PropertiesPanel.cpp
+    src/Editor/ContentBrowserPanel.cpp
+    src/Editor/AnimatorPanel.cpp
+    src/Editor/Command.cpp
+    src/Editor/UndoManager.cpp
+    src/Editor/ScriptEditorPanel.cpp
+    src/Editor/GameExporter.cpp
+)
+
+target_link_libraries(DonTopoEditor
+    PUBLIC
+        DonTopoCore
+        imgui_backend
+        imgui_filedialog
+        imguizmo
+        imgui_texteditor
+        imgui_node_editor
+)
+
+target_compile_features(DonTopoEditor PUBLIC cxx_std_20)
 
 add_subdirectory(tests)

@@ -1,8 +1,9 @@
 add_executable(DonTopoRuntime main.cpp)
 
+# Solo Core: el runtime no enlaza el editor ni, por tanto, ImGui.
 target_link_libraries(DonTopoRuntime
     PRIVATE
-        DonTopoEngine
+        DonTopoCore
 )
 
 target_compile_features(DonTopoRuntime PRIVATE cxx_std_20)

@@ -11,8 +11,9 @@ namespace DonTopo {
 
     // Todo lo que el Renderer necesita de la capa de UI, y nada más. Existe
     // para que el motor no dependa del editor: el Renderer llama a estos
-    // hooks sin saber que detrás hay ImGui ni paneles. En el runtime no hay
-    // implementación — el puntero se queda nulo y el pass de UI no se graba.
+    // hooks sin saber qué biblioteca de UI ni qué paneles hay detrás. En el
+    // runtime no hay implementación: el puntero se queda nulo y el pass de UI
+    // no se graba.
     class UiLayer {
         public:
             // Lo que el backend de UI necesita del Renderer para arrancar. Va

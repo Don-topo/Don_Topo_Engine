@@ -37,7 +37,7 @@ namespace DonTopo {
             Renderer& operator=(const Renderer&)    = delete;
             void init(Window& window, const std::vector<Mesh>& meshes);
             // Fase 1 del arranque: lo minimo para presentar (device, swapchain,
-            // render pass, framebuffers, command buffers, sync, ImGui). No crea
+            // render pass, framebuffers, command buffers, sync, capa de UI). No crea
             // pipelines de escena. La usa el runtime para poder dibujar el
             // splash antes de la carga pesada. init() la llama primero.
             void initPresentation(Window& window);
@@ -66,7 +66,7 @@ namespace DonTopo {
             // currentFrameCamera() elija el CameraComponent de la escena en
             // vez de la cámara de vuelo del editor.
             bool isPlaying() const;
-            // Modo runtime: ni ImGui ni paneles. Solo tiene efecto si se
+            // Modo runtime: ni UI ni paneles. Solo tiene efecto si se
             // llama ANTES de initPresentation() (o de init(), que la llama) —
             // createOffscreenImages y el arranque de la UI leen el flag
             // durante esa inicialización.
@@ -469,7 +469,7 @@ namespace DonTopo {
             std::vector<VkCommandBuffer>    m_commandBuffers;
             static constexpr int            MAX_FRAMES                          = 2;
 
-            // Offscreen render target (escena 3D → textura muestreada por ImGui)
+            // Offscreen render target (escena 3D → textura muestreada por la UI)
             VkRenderPass                    m_offscreenRenderPass               = VK_NULL_HANDLE;
             VkImage                         m_offscreenImage[MAX_FRAMES]        = {};
             VkDeviceMemory                  m_offscreenMemory[MAX_FRAMES]       = {};
