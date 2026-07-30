@@ -15,6 +15,7 @@ A Vulkan-based game engine written in C++20.
 - Scene graph (hierarchical transforms), GameObject hierarchy panel (create/delete/rename, drag-drop reorder)
 - Basic shapes menu (Cube/Sphere/Plane/Capsule), Content Browser (asset browsing, rename/delete)
 - ImGuizmo transform gizmo (translate/rotate/scale, camera-oriented axis gizmo), debug-draw gizmos, collider gizmos
+- **Selection outline**: the selected GameObject is traced with an orange contour in the viewport (see below)
 - **Camera component**: any GameObject can be the scene camera (perspective/orthographic, fov, near/far); frustum gizmo in edit mode, renders from it on Play
 - **Animator component**: Unity-style animation state graph (node = clip, link = transition; `bool`/`trigger`/`animation finished` conditions), edited in a node panel; instant-cut transitions (no blending), driven from Lua
 - Physics (PhysX): Box/Sphere/Capsule/Plane colliders (shape only) + `Rigidbody` (mass, gravity, drag, kinematic, 6-axis constraints, forces/impulses), raycasting
@@ -118,6 +119,37 @@ Don_Topo_Engine/
 ├── sandbox/        # Test playground executable (Sandbox)
 └── shaders/        # GLSL sources + compiled SPIR-V
 ```
+
+## Selection Outline
+
+Selecting a GameObject that carries a mesh — static or skinned — traces it with an orange
+contour in the viewport; deselecting clears it the same frame. Objects without a mesh (empties,
+cameras, pure collider nodes) get the usual axis gizmo but no outline, since there is no
+geometry to trace.
+
+The technique is an **inverted hull**: the mesh is redrawn extruded along its normals with
+front faces culled, after all scene geometry and before the skybox. Only the rim that falls
+outside the original silhouette survives — the rest of the hull lands behind the surface and
+the depth test discards it. Stencil was not an option here: the depth attachment is
+`D32_SFLOAT`, so a stencil buffer would have meant changing the format, the render pass, the
+framebuffer and the image.
+
+Being part of the normal scene pass, the outline obeys everything around it. It is hidden when
+another object occludes the selection, it is skipped entirely when the selection is outside the
+camera frustum (the same culling test the object itself went through, not a bypass), it follows
+the skinned pose of the current frame rather than the rest pose, and in **wireframe mode** the
+hull switches to line rasterisation — a filled hull would cover the object in flat colour there,
+since only the edges write depth.
+
+Outline thickness is proportional to the object's size in world space, so a crate and a
+character show a comparable border on screen. Orange is deliberate: collider gizmos are yellow,
+the camera frustum is cyan and the wireframe mode is green, so the selection never reads as one
+of those.
+
+The editor drives this through a single setter, `Renderer::setOutlineTarget`, called once per
+frame with the selection's render indices (or `-1`). It defaults to "nothing selected", which is
+what the exported runtime always sees — no outline is ever drawn there, and no editor code
+reaches the runtime path.
 
 ## Camera
 
