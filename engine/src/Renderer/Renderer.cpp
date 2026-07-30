@@ -1,4 +1,6 @@
 ﻿#include "DonTopo/Renderer/Renderer.h"
+#include "DonTopo/Editor/EditorUI.h"
+#include "DonTopo/Editor/Gizmos.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/CameraComponent.h"
@@ -19,9 +21,57 @@
 
 namespace DonTopo {
 
+    // Constructor y destructor fuera de línea: m_editorUI es un unique_ptr a
+    // tipo incompleto en el header, así que su construcción y su destrucción
+    // tienen que verse aquí, donde EditorUI ya está definido.
+    Renderer::Renderer()
+        : m_editorUI(std::make_unique<EditorUI>())
+    {
+    }
+
     Renderer::~Renderer()
     {
         shutdown();
+    }
+
+    // ─── Passthroughs al EditorUI ────────────────────────────────────────────────
+    // Estaban inline en el header; bajan aquí porque allí EditorUI ya no es un
+    // tipo completo.
+
+    bool Renderer::isViewportHovered() const { return m_editorUI->isViewportHovered(); }
+
+    // En headless no hay editor que pulse Play: el runtime arranca jugando
+    // desde el frame 0.
+    bool Renderer::isPlaying() const { return m_headless || m_editorUI->isPlaying(); }
+
+    void Renderer::setOnAxisSelected(std::function<void(const glm::vec3&)> cb)
+    {
+        m_editorUI->setOnAxisSelected(std::move(cb));
+    }
+
+    void Renderer::setPhysicsManager(PhysicsManager* physics) { m_editorUI->setPhysicsManager(physics); }
+
+    void Renderer::setAudioManager(AudioManager* audio) { m_editorUI->setAudioManager(audio); }
+
+    void Renderer::setScene(Scene* scene)
+    {
+        m_scene = scene;
+        m_editorUI->setScene(scene);
+    }
+
+    void Renderer::setScriptManager(ScriptManager* sm) { m_editorUI->setScriptManager(sm); }
+
+    void Renderer::pushEditorLog(const std::string& m) { m_editorUI->pushExternalLog(m); }
+
+    void Renderer::notifyGameObjectDestroyed(GameObject* node) { m_editorUI->onGameObjectDestroyed(node); }
+
+    void Renderer::focusSelected(Camera& camera) { m_editorUI->focusSelected(camera); }
+
+    void Renderer::setAssetLoader(AsyncAssetLoader* loader) { m_editorUI->setAssetLoader(loader); }
+
+    void Renderer::onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene)
+    {
+        m_editorUI->onAssetsLoaded(std::move(results), scene, *this);
     }
 
     void Renderer::init(Window& window, const std::vector<Mesh>& meshes)
@@ -242,7 +292,7 @@ namespace DonTopo {
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
 
-            m_editorUI.draw(m_offscreenDescSet[m_currentFrame], m_sceneRoot, m_viewMatrix);
+            m_editorUI->draw(m_offscreenDescSet[m_currentFrame], m_sceneRoot, m_viewMatrix);
 
             ImGui::Render();
         }
@@ -3038,8 +3088,8 @@ namespace DonTopo {
     void Renderer::setSceneRoot(GameObject* root)
     {
         m_sceneRoot = root;
-        m_editorUI.setOnDelete([this](GameObject* node) { removeGameObject(node); });
-        m_editorUI.setRenderer(this);
+        m_editorUI->setOnDelete([this](GameObject* node) { removeGameObject(node); });
+        m_editorUI->setRenderer(this);
     }
 
     void Renderer::flushPendingUploads()

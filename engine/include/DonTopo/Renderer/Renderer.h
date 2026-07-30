@@ -15,11 +15,10 @@
 #include "DonTopo/Renderer/DeferredDelete.h"
 #include "DonTopo/Renderer/TransferBatch.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
-#include "DonTopo/Editor/EditorUI.h"
 #include "DonTopo/Renderer/Skybox.h"
 #include "DonTopo/Renderer/SplashScreen.h"
-#include "DonTopo/Editor/Gizmos.h"
 #include <array>
+#include <functional>
 
 namespace DonTopo {
 
@@ -29,10 +28,13 @@ namespace DonTopo {
     class AudioManager;
     class Scene;
     class ScriptManager;
+    // Forward declaration: el editor entra por puntero para que este header
+    // no arrastre ImGui ni los paneles a todo el que dibuje.
+    class EditorUI;
 
     class Renderer {
-        public:                
-            Renderer()                              = default;
+        public:
+            Renderer();
             ~Renderer();
             Renderer(const Renderer&)               = delete;
             Renderer& operator=(const Renderer&)    = delete;
@@ -62,25 +64,25 @@ namespace DonTopo {
             void notifyResize() { m_framebufferResized = true; }
             void setWireframeMode(bool enabled) { m_wireframeMode = enabled; }
             bool isWireframeMode() const { return m_wireframeMode; }
-            bool isViewportHovered() const { return m_editorUI.isViewportHovered(); }
+            bool isViewportHovered() const;
             // En headless no hay editor que pulse Play: el runtime arranca
             // jugando desde el frame 0. Esto es además lo que hace que
             // currentFrameCamera() elija el CameraComponent de la escena en
             // vez de la cámara de vuelo del editor.
-            bool isPlaying() const { return m_headless || m_editorUI.isPlaying(); }
+            bool isPlaying() const;
             // Modo runtime: ni ImGui ni paneles. Solo tiene efecto si se
             // llama ANTES de initPresentation() (o de init(), que la llama) —
             // initImGui/createOffscreenImages leen el flag durante esa
             // inicialización.
             void setHeadless(bool headless) { m_headless = headless; }
             // Reenvía al axis gizmo del viewport; cb recibe el eje mundo clicado.
-            void setOnAxisSelected(std::function<void(const glm::vec3&)> cb) { m_editorUI.setOnAxisSelected(std::move(cb)); }
-            void setPhysicsManager(PhysicsManager* physics) { m_editorUI.setPhysicsManager(physics); }
-            void setAudioManager(AudioManager* audio) { m_editorUI.setAudioManager(audio); }
+            void setOnAxisSelected(std::function<void(const glm::vec3&)> cb);
+            void setPhysicsManager(PhysicsManager* physics);
+            void setAudioManager(AudioManager* audio);
             // Guarda la escena además del passthrough al EditorUI:
             // currentFrameCamera() necesita preguntarle por su cámara cada
             // frame (Scene::findCamera es la única fuente de verdad).
-            void setScene(Scene* scene) { m_scene = scene; m_editorUI.setScene(scene); }
+            void setScene(Scene* scene);
 
             // Aspect del render target. Público porque el gizmo de frustum
             // (ViewportPanel) tiene que usar EXACTAMENTE el mismo que usará la
@@ -93,24 +95,21 @@ namespace DonTopo {
             }
             // Passthrough al EditorUI embebido, mismo patrón que
             // setPhysicsManager/setAudioManager.
-            void setScriptManager(ScriptManager* sm) { m_editorUI.setScriptManager(sm); }
+            void setScriptManager(ScriptManager* sm);
             // Passthrough al EditorUI embebido — usado por el wiring de
             // main.cpp pa redirigir el log de ScriptManager al Log Console.
-            void pushEditorLog(const std::string& m) { m_editorUI.pushExternalLog(m); }
+            void pushEditorLog(const std::string& m);
             // Passthrough al EditorUI embebido — el destroy de Play (ScriptManager)
             // lo llama antes de liberar el GameObject para que el editor suelte su
             // selección si apunta al subárbol (evita puntero colgante -> crash).
-            void notifyGameObjectDestroyed(GameObject* node) { m_editorUI.onGameObjectDestroyed(node); }
-            void focusSelected(Camera& camera) { m_editorUI.focusSelected(camera); }
+            void notifyGameObjectDestroyed(GameObject* node);
+            void focusSelected(Camera& camera);
             // Passthrough al EditorUI embebido — el wiring de main.cpp le pasa el
             // loader asíncrono antes del bucle, y bombea sus resultados por frame.
-            void setAssetLoader(AsyncAssetLoader* loader) { m_editorUI.setAssetLoader(loader); }
+            void setAssetLoader(AsyncAssetLoader* loader);
             // Aplica los resultados del pump a la escena y cierra el batch (un
             // solo submit). Pasa *this como Renderer: el registro GPU vive aquí.
-            void onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene)
-            {
-                m_editorUI.onAssetsLoaded(std::move(results), scene, *this);
-            }
+            void onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene);
             void setSceneRoot(GameObject* root);
             // Libera mesh/skinnedMesh/texturas en GPU de node y todo su subárbol
             // (llamado por EditorUI justo antes de borrar el nodo del scene graph).
@@ -598,7 +597,7 @@ namespace DonTopo {
 
             DeferredDeleteQueue m_deferredDeletes;
 
-            EditorUI m_editorUI;
+            std::unique_ptr<EditorUI> m_editorUI;
             Skybox   m_skybox;
             SplashScreen m_splash;
             GameObject* m_sceneRoot = nullptr;
