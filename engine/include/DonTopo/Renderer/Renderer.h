@@ -15,10 +15,10 @@
 #include "DonTopo/Renderer/DeferredDelete.h"
 #include "DonTopo/Renderer/TransferBatch.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
+#include "DonTopo/Renderer/UiLayer.h"
 #include "DonTopo/Renderer/Skybox.h"
 #include "DonTopo/Renderer/SplashScreen.h"
 #include <array>
-#include <functional>
 
 namespace DonTopo {
 
@@ -28,13 +28,10 @@ namespace DonTopo {
     class AudioManager;
     class Scene;
     class ScriptManager;
-    // Forward declaration: el editor entra por puntero para que este header
-    // no arrastre ImGui ni los paneles a todo el que dibuje.
-    class EditorUI;
 
     class Renderer {
         public:
-            Renderer();
+            Renderer()                              = default;
             ~Renderer();
             Renderer(const Renderer&)               = delete;
             Renderer& operator=(const Renderer&)    = delete;
@@ -64,7 +61,6 @@ namespace DonTopo {
             void notifyResize() { m_framebufferResized = true; }
             void setWireframeMode(bool enabled) { m_wireframeMode = enabled; }
             bool isWireframeMode() const { return m_wireframeMode; }
-            bool isViewportHovered() const;
             // En headless no hay editor que pulse Play: el runtime arranca
             // jugando desde el frame 0. Esto es además lo que hace que
             // currentFrameCamera() elija el CameraComponent de la escena en
@@ -72,17 +68,18 @@ namespace DonTopo {
             bool isPlaying() const;
             // Modo runtime: ni ImGui ni paneles. Solo tiene efecto si se
             // llama ANTES de initPresentation() (o de init(), que la llama) —
-            // initImGui/createOffscreenImages leen el flag durante esa
-            // inicialización.
+            // createOffscreenImages y el arranque de la UI leen el flag
+            // durante esa inicialización.
             void setHeadless(bool headless) { m_headless = headless; }
-            // Reenvía al axis gizmo del viewport; cb recibe el eje mundo clicado.
-            void setOnAxisSelected(std::function<void(const glm::vec3&)> cb);
-            void setPhysicsManager(PhysicsManager* physics);
-            void setAudioManager(AudioManager* audio);
-            // Guarda la escena además del passthrough al EditorUI:
-            // currentFrameCamera() necesita preguntarle por su cámara cada
-            // frame (Scene::findCamera es la única fuente de verdad).
-            void setScene(Scene* scene);
+            // Capa de UI, no-propietaria: es el editor quien posee al Renderer
+            // y se registra aquí. nullptr (runtime) = no hay pass de UI.
+            // Debe fijarse ANTES de initPresentation(), que es quien la
+            // arranca.
+            void setUiLayer(UiLayer* ui) { m_ui = ui; }
+            // currentFrameCamera() necesita preguntarle a la escena por su
+            // cámara cada frame (Scene::findCamera es la única fuente de
+            // verdad).
+            void setScene(Scene* scene) { m_scene = scene; }
 
             // Aspect del render target. Público porque el gizmo de frustum
             // (ViewportPanel) tiene que usar EXACTAMENTE el mismo que usará la
@@ -93,24 +90,7 @@ namespace DonTopo {
                     ? (float)m_swapChainExtent.width / (float)m_swapChainExtent.height
                     : 1.0f;
             }
-            // Passthrough al EditorUI embebido, mismo patrón que
-            // setPhysicsManager/setAudioManager.
-            void setScriptManager(ScriptManager* sm);
-            // Passthrough al EditorUI embebido — usado por el wiring de
-            // main.cpp pa redirigir el log de ScriptManager al Log Console.
-            void pushEditorLog(const std::string& m);
-            // Passthrough al EditorUI embebido — el destroy de Play (ScriptManager)
-            // lo llama antes de liberar el GameObject para que el editor suelte su
-            // selección si apunta al subárbol (evita puntero colgante -> crash).
-            void notifyGameObjectDestroyed(GameObject* node);
-            void focusSelected(Camera& camera);
-            // Passthrough al EditorUI embebido — el wiring de main.cpp le pasa el
-            // loader asíncrono antes del bucle, y bombea sus resultados por frame.
-            void setAssetLoader(AsyncAssetLoader* loader);
-            // Aplica los resultados del pump a la escena y cierra el batch (un
-            // solo submit). Pasa *this como Renderer: el registro GPU vive aquí.
-            void onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene);
-            void setSceneRoot(GameObject* root);
+            void setSceneRoot(GameObject* root) { m_sceneRoot = root; }
             // Libera mesh/skinnedMesh/texturas en GPU de node y todo su subárbol
             // (llamado por EditorUI justo antes de borrar el nodo del scene graph).
             void removeGameObject(GameObject* node);
@@ -405,8 +385,6 @@ namespace DonTopo {
             void createFramebuffers();
             void createOffscreenImages();
             void destroyOffscreenImages();
-            void initImGui(GLFWwindow* window);
-            void shutdownImGui();
             void createCommandBuffers();
             void createSyncObjects();
             void recordCommandBuffer(uint32_t imageIndex);
@@ -500,8 +478,6 @@ namespace DonTopo {
             VkFramebuffer                   m_offscreenFramebuffer[MAX_FRAMES]  = {};
             VkDescriptorSet                 m_offscreenDescSet[MAX_FRAMES]      = {};
 
-            // ImGui
-            VkDescriptorPool                m_imguiDescPool                     = VK_NULL_HANDLE;
             VkSemaphore                     m_imageAvailable[MAX_FRAMES]        = {};
             std::vector<VkSemaphore>        m_renderFinished;
             VkFence                         m_inFlight[MAX_FRAMES]              = {};
@@ -597,7 +573,7 @@ namespace DonTopo {
 
             DeferredDeleteQueue m_deferredDeletes;
 
-            std::unique_ptr<EditorUI> m_editorUI;
+            UiLayer* m_ui = nullptr;
             Skybox   m_skybox;
             SplashScreen m_splash;
             GameObject* m_sceneRoot = nullptr;

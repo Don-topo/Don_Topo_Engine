@@ -11,24 +11,129 @@
 #include "DonTopo/Editor/ScriptEditorPanel.h"
 #include "DonTopo/Editor/GameExporter.h"
 #include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_vulkan.h>
 #include <ImGuiFileDialog.h>
 #include <cassert>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 
 namespace DonTopo {
 
 EditorUI::EditorUI()
     : m_sceneFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_exportDialog(std::make_unique<IGFD::FileDialog>())
+    , m_renderer(std::make_unique<Renderer>())
     , m_scriptEditor(std::make_unique<ScriptEditorPanel>())
 {
     m_scriptEditor->setLogCallback([this](const std::string& msg) { m_logPanel.push(msg); });
+    // El Renderer nos llamará de vuelta por aquí para el pass de UI. Se
+    // registra en el constructor porque tiene que estar puesto antes de
+    // initPresentation(), que es quien arranca la UI.
+    m_renderer->setUiLayer(this);
+    // Liberar los recursos GPU del subárbol justo antes de desengancharlo:
+    // lo hacía el Renderer al fijar la raíz de escena, y ahora que el dueño
+    // es el editor lo cablea él.
+    setOnDelete([this](GameObject* node) { m_renderer->removeGameObject(node); });
 }
 
 EditorUI::~EditorUI() = default;
+
+Renderer& EditorUI::renderer() { return *m_renderer; }
+
+// ─── UiLayer: backend de ImGui ───────────────────────────────────────────────
+
+void EditorUI::initUi(const InitInfo& info)
+{
+    m_uiDevice = info.device;
+
+    // Pool dedicado para ImGui (necesita FREE_DESCRIPTOR_SET_BIT).
+    // La API nueva (sept 2025) usa SAMPLER + SAMPLED_IMAGE separados en AddTexture().
+    VkDescriptorPoolSize poolSizes[3]{};
+    poolSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[0].descriptorCount = 16;
+    poolSizes[1].type            = VK_DESCRIPTOR_TYPE_SAMPLER;
+    poolSizes[1].descriptorCount = 16;
+    poolSizes[2].type            = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    poolSizes[2].descriptorCount = 16;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolInfo.maxSets       = 48;
+    poolInfo.poolSizeCount = 3;
+    poolInfo.pPoolSizes    = poolSizes;
+    if (vkCreateDescriptorPool(m_uiDevice, &poolInfo, nullptr, &m_uiDescPool) != VK_SUCCESS)
+        throw std::runtime_error("failed to create ImGui descriptor pool!");
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+
+    ImGui::StyleColorsDark();
+
+    // Sin instalar callbacks GLFW propios: ImGui los sondea en NewFrame
+    ImGui_ImplGlfw_InitForVulkan(info.window, false);
+
+    ImGui_ImplVulkan_InitInfo initInfo{};
+    initInfo.ApiVersion                       = VK_API_VERSION_1_0;
+    initInfo.Instance                         = info.instance;
+    initInfo.PhysicalDevice                   = info.physicalDevice;
+    initInfo.Device                           = info.device;
+    initInfo.QueueFamily                      = info.queueFamily;
+    initInfo.Queue                            = info.queue;
+    initInfo.DescriptorPool                   = m_uiDescPool;
+    initInfo.MinImageCount                    = 2;
+    initInfo.ImageCount                       = info.imageCount;
+    initInfo.PipelineInfoMain.RenderPass      = info.renderPass;
+    initInfo.PipelineInfoMain.MSAASamples     = VK_SAMPLE_COUNT_1_BIT;
+    ImGui_ImplVulkan_Init(&initInfo);
+
+    printf("ImGui init OK\n"); fflush(stdout);
+}
+
+void EditorUI::shutdownUi()
+{
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+    if (m_uiDescPool)
+    {
+        vkDestroyDescriptorPool(m_uiDevice, m_uiDescPool, nullptr);
+        m_uiDescPool = VK_NULL_HANDLE;
+    }
+}
+
+VkDescriptorSet EditorUI::registerUiTexture(VkSampler sampler, VkImageView view)
+{
+    return ImGui_ImplVulkan_AddTexture(sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
+void EditorUI::unregisterUiTexture(VkDescriptorSet set)
+{
+    ImGui_ImplVulkan_RemoveTexture(set);
+}
+
+void EditorUI::buildUiFrame(VkDescriptorSet viewportTexture, GameObject* sceneRoot,
+                            const glm::mat4& cameraView)
+{
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
+    draw(viewportTexture, sceneRoot, cameraView);
+
+    ImGui::Render();
+}
+
+void EditorUI::recordUi(VkCommandBuffer cmd)
+{
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+}
 
 void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView)
 {
@@ -43,7 +148,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
         m_selected,
         m_isPlaying,
         m_physics,
-        m_renderer,
+        m_renderer.get(),
         m_audio,
         m_scene,
         m_scriptManager,
@@ -326,7 +431,7 @@ void EditorUI::focusSelected(Camera& camera)
         m_selected,
         m_isPlaying,
         m_physics,
-        m_renderer,
+        m_renderer.get(),
         m_audio,
         m_scene,
         m_scriptManager,

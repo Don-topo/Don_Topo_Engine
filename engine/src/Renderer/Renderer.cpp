@@ -1,5 +1,4 @@
 ﻿#include "DonTopo/Renderer/Renderer.h"
-#include "DonTopo/Editor/EditorUI.h"
 #include "DonTopo/Editor/Gizmos.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Scene.h"
@@ -7,9 +6,6 @@
 #include <GLFW/glfw3.h>
 #include <stdexcept>
 #include "DonTopo/Core/Window.h"
-#include <imgui.h>
-#include <imgui_impl_glfw.h>
-#include <imgui_impl_vulkan.h>
 #include <algorithm>
 #include <fstream>
 #include "DonTopo/Renderer/Vertex.h"
@@ -21,58 +17,14 @@
 
 namespace DonTopo {
 
-    // Constructor y destructor fuera de línea: m_editorUI es un unique_ptr a
-    // tipo incompleto en el header, así que su construcción y su destrucción
-    // tienen que verse aquí, donde EditorUI ya está definido.
-    Renderer::Renderer()
-        : m_editorUI(std::make_unique<EditorUI>())
-    {
-    }
-
     Renderer::~Renderer()
     {
         shutdown();
     }
 
-    // ─── Passthroughs al EditorUI ────────────────────────────────────────────────
-    // Estaban inline en el header; bajan aquí porque allí EditorUI ya no es un
-    // tipo completo.
-
-    bool Renderer::isViewportHovered() const { return m_editorUI->isViewportHovered(); }
-
     // En headless no hay editor que pulse Play: el runtime arranca jugando
     // desde el frame 0.
-    bool Renderer::isPlaying() const { return m_headless || m_editorUI->isPlaying(); }
-
-    void Renderer::setOnAxisSelected(std::function<void(const glm::vec3&)> cb)
-    {
-        m_editorUI->setOnAxisSelected(std::move(cb));
-    }
-
-    void Renderer::setPhysicsManager(PhysicsManager* physics) { m_editorUI->setPhysicsManager(physics); }
-
-    void Renderer::setAudioManager(AudioManager* audio) { m_editorUI->setAudioManager(audio); }
-
-    void Renderer::setScene(Scene* scene)
-    {
-        m_scene = scene;
-        m_editorUI->setScene(scene);
-    }
-
-    void Renderer::setScriptManager(ScriptManager* sm) { m_editorUI->setScriptManager(sm); }
-
-    void Renderer::pushEditorLog(const std::string& m) { m_editorUI->pushExternalLog(m); }
-
-    void Renderer::notifyGameObjectDestroyed(GameObject* node) { m_editorUI->onGameObjectDestroyed(node); }
-
-    void Renderer::focusSelected(Camera& camera) { m_editorUI->focusSelected(camera); }
-
-    void Renderer::setAssetLoader(AsyncAssetLoader* loader) { m_editorUI->setAssetLoader(loader); }
-
-    void Renderer::onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene)
-    {
-        m_editorUI->onAssetsLoaded(std::move(results), scene, *this);
-    }
+    bool Renderer::isPlaying() const { return m_headless || (m_ui && m_ui->isPlaying()); }
 
     void Renderer::init(Window& window, const std::vector<Mesh>& meshes)
     {
@@ -96,7 +48,7 @@ namespace DonTopo {
 
         // Fase 1: lo minimo para poder presentar un frame (splash incluido).
         // El auto-fit de cámara y los recursos de escena (pipelines, shadow,
-        // compute, ImGui-descriptor-independientes como offscreen, mallas)
+        // compute, descriptores independientes de la UI como offscreen, mallas)
         // viven en initSceneResources porque dependen de `meshes` o de
         // recursos creados ahí mismo.
         m_gpu.init(window.getNativeWindow());
@@ -120,8 +72,20 @@ namespace DonTopo {
         // necesita m_renderPass + m_swapChainImages.size(); no depende de
         // nada de initSceneResources, así que se mueve aquí (antes vivía a
         // mitad del init original) para que el splash pueda dibujar con
-        // ImGui ya operativo si hiciera falta.
-        if (!m_headless) initImGui(window.getNativeWindow());
+        // la UI ya operativa si hiciera falta.
+        if (!m_headless && m_ui)
+        {
+            UiLayer::InitInfo info{};
+            info.window         = window.getNativeWindow();
+            info.instance       = m_gpu.instance();
+            info.physicalDevice = m_gpu.physicalDevice();
+            info.device         = m_gpu.device();
+            info.queueFamily    = m_gpu.graphicsFamily();
+            info.queue          = m_gpu.graphicsQueue();
+            info.imageCount     = (uint32_t)m_swapChainImages.size();
+            info.renderPass     = m_renderPass;
+            m_ui->initUi(info);
+        }
     }
 
     void Renderer::initSceneResources(const std::vector<Mesh>& meshes)
@@ -151,12 +115,12 @@ namespace DonTopo {
         createPipeline();
         createShadowResources();
         createComputePipelines();
-        // ImGui ya se inicializó en initPresentation. En editor,
-        // createOffscreenImages necesita ImGui inicializado (llama
-        // AddTexture); en headless no llama a ImGui, así que el orden con
-        // initImGui() no importa. Como initImGui corrió antes (fase 1) y
-        // esta llamada corre en fase 2, el orden ImGui→offscreen se
-        // conserva igual que en el init original.
+        // La capa de UI ya se inicializó en initPresentation. En editor,
+        // createOffscreenImages necesita que lo esté (llama a
+        // registerUiTexture); en headless no la llama, así que el orden no
+        // importa. Como initUi corrió antes (fase 1) y esta llamada corre en
+        // fase 2, el orden UI→offscreen se conserva igual que en el init
+        // original.
         createOffscreenImages();
 
         m_objects.resize(meshes.size());
@@ -175,7 +139,7 @@ namespace DonTopo {
         // Sobre el render pass del swapchain ya creado por initPresentation
         // (createRenderPass): color-only, un solo attachment (VK_FORMAT =
         // m_swapChainFormat, sin depth) — ver el comentario "solo color,
-        // usados por el pass ImGui" en createFramebuffers. El pipeline del
+        // usados por el pass de UI" en createFramebuffers. El pipeline del
         // splash (Task 3) se crea con pDepthStencilState = nullptr, que es
         // compatible con este render pass precisamente porque no tiene
         // attachment de depth/stencil. No lanza si el logo falta.
@@ -283,21 +247,13 @@ namespace DonTopo {
             throw std::runtime_error("failed to reset command buffer!");
         }
 
-        // ── Construir frame ImGui (antes de grabar el command buffer) ─────────────
-        // En headless no hay contexto ImGui que alimentar: el runtime blitea
+        // ── Construir frame de UI (antes de grabar el command buffer) ─────────────
+        // En headless no hay capa de UI que alimentar: el runtime blitea
         // la imagen offscreen directamente al swapchain (ver recordCommandBuffer).
-        if (!m_headless)
-        {
-            ImGui_ImplVulkan_NewFrame();
-            ImGui_ImplGlfw_NewFrame();
-            ImGui::NewFrame();
+        if (!m_headless && m_ui)
+            m_ui->buildUiFrame(m_offscreenDescSet[m_currentFrame], m_sceneRoot, m_viewMatrix);
 
-            m_editorUI->draw(m_offscreenDescSet[m_currentFrame], m_sceneRoot, m_viewMatrix);
-
-            ImGui::Render();
-        }
-
-        // Se muestrea AQUÍ, después de m_editorUI.draw() y no antes: ese draw()
+        // Se muestrea AQUÍ, después de buildUiFrame() y no antes: ese draw()
         // es quien puede voltear m_isPlaying (botones Play/Stop) o mutar la
         // escena (Add/Remove/Create Camera). currentFrameCamera() lee ambas
         // cosas, así que si se llamaba antes del draw(), el UBO (geometría
@@ -311,7 +267,7 @@ namespace DonTopo {
         recordCommandBuffer(imageIndex);
 
         // 4. Envía a la GPU
-        // En headless el pass 2 no dibuja ImGui: blitea la imagen offscreen al
+        // En headless el pass 2 no dibuja UI: blitea la imagen offscreen al
         // swapchain (recordCommandBuffer), así que el primer uso real de la
         // imagen adquirida ocurre en TRANSFER, no en COLOR_ATTACHMENT_OUTPUT.
         // Esperar el semáforo también en TRANSFER hace que esa ordenación sea
@@ -370,7 +326,7 @@ namespace DonTopo {
         m_deferredDeletes.flushAll(m_gpu.device());
 
         destroyOffscreenImages();
-        if (!m_headless) shutdownImGui();
+        if (!m_headless && m_ui) m_ui->shutdownUi();
         vkDestroyRenderPass(m_gpu.device(), m_offscreenRenderPass, nullptr);
         m_offscreenRenderPass = VK_NULL_HANDLE;
 
@@ -789,7 +745,7 @@ namespace DonTopo {
         createInfo.imageExtent = m_swapChainExtent;
         createInfo.imageArrayLayers = 1;
         // TRANSFER_DST: en modo headless la imagen offscreen se blitea aquí en
-        // vez de dibujarse ImGui encima. El flag va incondicional para que
+        // vez de dibujarse la UI encima. El flag va incondicional para que
         // editor y runtime compartan el mismo camino de creación de recursos.
         createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -847,7 +803,7 @@ namespace DonTopo {
         printf("Image View OK\n"); fflush(stdout);
     }
 
-    // Pass de escena 3D → offscreen (finalLayout=SHADER_READ para que ImGui lo muestree)
+    // Pass de escena 3D → offscreen (finalLayout=SHADER_READ para que la UI lo muestree)
     void Renderer::createOffscreenRenderPass()
     {
         VkAttachmentDescription colorAtt{};
@@ -884,7 +840,7 @@ namespace DonTopo {
         subpass.pColorAttachments       = &colorRef;
         subpass.pDepthStencilAttachment = &depthRef;
 
-        // Dependencias: garantizan que ImGui puede leer la textura cuando el pass acaba
+        // Dependencias: garantizan que la UI puede leer la textura cuando el pass acaba
         VkSubpassDependency deps[2]{};
         deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
         deps[0].dstSubpass    = 0;
@@ -918,7 +874,7 @@ namespace DonTopo {
         printf("offscreen render pass OK\n"); fflush(stdout);
     }
 
-    // Pass ImGui → swapchain (solo color, sin depth)
+    // Pass de UI → swapchain (solo color, sin depth)
     void Renderer::createRenderPass()
     {
         VkAttachmentDescription colorAtt{};
@@ -958,12 +914,12 @@ namespace DonTopo {
         rpInfo.pDependencies   = &dep;
 
         if (vkCreateRenderPass(m_gpu.device(), &rpInfo, nullptr, &m_renderPass) != VK_SUCCESS)
-            throw std::runtime_error("failed to create ImGui render pass!");
+            throw std::runtime_error("failed to create UI render pass!");
 
-        printf("ImGui render pass OK\n"); fflush(stdout);
+        printf("UI render pass OK\n"); fflush(stdout);
     }
 
-    // Framebuffers del swapchain: solo color, usados por el pass ImGui
+    // Framebuffers del swapchain: solo color, usados por el pass de UI
     void Renderer::createFramebuffers()
     {
         m_swapChainFramebuffers.resize(m_swapChainImageViews.size());
@@ -1241,7 +1197,7 @@ namespace DonTopo {
             vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
         }
 
-        // ── Pass 2: ImGui → swapchain ─────────────────────────────────────────────
+        // ── Pass 2: UI → swapchain ────────────────────────────────────────────────
         if (!m_headless)
         {
             VkClearValue clearColor{};
@@ -1257,7 +1213,7 @@ namespace DonTopo {
             rpInfo.pClearValues        = &clearColor;
 
             vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), m_commandBuffers[m_currentFrame]);
+            if (m_ui) m_ui->recordUi(m_commandBuffers[m_currentFrame]);
             vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
         }
         else
@@ -3085,13 +3041,6 @@ namespace DonTopo {
             m_skinnedObjects[index].transform = t;
     }
 
-    void Renderer::setSceneRoot(GameObject* root)
-    {
-        m_sceneRoot = root;
-        m_editorUI->setOnDelete([this](GameObject* node) { removeGameObject(node); });
-        m_editorUI->setRenderer(this);
-    }
-
     void Renderer::flushPendingUploads()
     {
         if (m_pendingBatch && !m_pendingBatch->empty())
@@ -3446,15 +3395,12 @@ namespace DonTopo {
             if (vkCreateFramebuffer(m_gpu.device(), &fbInfo, nullptr, &m_offscreenFramebuffer[i]) != VK_SUCCESS)
                 throw std::runtime_error("failed to create offscreen framebuffer!");
 
-            // Registrar la textura en ImGui para obtener el VkDescriptorSet.
-            // En headless nadie la muestrea: el descriptor set se queda nulo y
-            // destroyOffscreenImages ya comprueba antes de liberarlo.
-            if (!m_headless)
-            {
-                m_offscreenDescSet[i] = ImGui_ImplVulkan_AddTexture(
-                    m_offscreenSampler, m_offscreenView[i],
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            }
+            // Registrar la textura en la capa de UI para obtener el
+            // VkDescriptorSet. En headless nadie la muestrea: el descriptor
+            // set se queda nulo y destroyOffscreenImages ya comprueba antes
+            // de liberarlo.
+            if (!m_headless && m_ui)
+                m_offscreenDescSet[i] = m_ui->registerUiTexture(m_offscreenSampler, m_offscreenView[i]);
         }
         printf("offscreen images OK\n"); fflush(stdout);
     }
@@ -3463,9 +3409,9 @@ namespace DonTopo {
     {
         for (int i = 0; i < MAX_FRAMES; i++)
         {
-            if (m_offscreenDescSet[i])
+            if (m_offscreenDescSet[i] && m_ui)
             {
-                ImGui_ImplVulkan_RemoveTexture(m_offscreenDescSet[i]);
+                m_ui->unregisterUiTexture(m_offscreenDescSet[i]);
                 m_offscreenDescSet[i] = VK_NULL_HANDLE;
             }
             if (m_offscreenFramebuffer[i])
@@ -3493,68 +3439,6 @@ namespace DonTopo {
         {
             vkDestroySampler(m_gpu.device(), m_offscreenSampler, nullptr);
             m_offscreenSampler = VK_NULL_HANDLE;
-        }
-    }
-
-    // ─── ImGui init / shutdown ───────────────────────────────────────────────────
-
-    void Renderer::initImGui(GLFWwindow* window)
-    {
-        // Pool dedicado para ImGui (necesita FREE_DESCRIPTOR_SET_BIT).
-        // La API nueva (sept 2025) usa SAMPLER + SAMPLED_IMAGE separados en AddTexture().
-        VkDescriptorPoolSize poolSizes[3]{};
-        poolSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSizes[0].descriptorCount = 16;
-        poolSizes[1].type            = VK_DESCRIPTOR_TYPE_SAMPLER;
-        poolSizes[1].descriptorCount = 16;
-        poolSizes[2].type            = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        poolSizes[2].descriptorCount = 16;
-
-        VkDescriptorPoolCreateInfo poolInfo{};
-        poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        poolInfo.maxSets       = 48;
-        poolInfo.poolSizeCount = 3;
-        poolInfo.pPoolSizes    = poolSizes;
-        if (vkCreateDescriptorPool(m_gpu.device(), &poolInfo, nullptr, &m_imguiDescPool) != VK_SUCCESS)
-            throw std::runtime_error("failed to create ImGui descriptor pool!");
-
-        IMGUI_CHECKVERSION();
-        ImGui::CreateContext();
-        ImGuiIO& io = ImGui::GetIO();
-        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-
-        ImGui::StyleColorsDark();
-
-        // Sin instalar callbacks GLFW propios: ImGui los sondea en NewFrame
-        ImGui_ImplGlfw_InitForVulkan(window, false);
-
-        ImGui_ImplVulkan_InitInfo initInfo{};
-        initInfo.ApiVersion                       = VK_API_VERSION_1_0;
-        initInfo.Instance                         = m_gpu.instance();
-        initInfo.PhysicalDevice                   = m_gpu.physicalDevice();
-        initInfo.Device                           = m_gpu.device();
-        initInfo.QueueFamily                      = m_gpu.graphicsFamily();
-        initInfo.Queue                            = m_gpu.graphicsQueue();
-        initInfo.DescriptorPool                   = m_imguiDescPool;
-        initInfo.MinImageCount                    = 2;
-        initInfo.ImageCount                       = (uint32_t)m_swapChainImages.size();
-        initInfo.PipelineInfoMain.RenderPass      = m_renderPass;
-        initInfo.PipelineInfoMain.MSAASamples     = VK_SAMPLE_COUNT_1_BIT;
-        ImGui_ImplVulkan_Init(&initInfo);
-
-        printf("ImGui init OK\n"); fflush(stdout);
-    }
-
-    void Renderer::shutdownImGui()
-    {
-        ImGui_ImplVulkan_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
-        if (m_imguiDescPool)
-        {
-            vkDestroyDescriptorPool(m_gpu.device(), m_imguiDescPool, nullptr);
-            m_imguiDescPool = VK_NULL_HANDLE;
         }
     }
 

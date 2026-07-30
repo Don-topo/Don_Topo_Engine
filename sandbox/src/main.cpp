@@ -15,6 +15,7 @@
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Editor/Gizmos.h"
+#include "DonTopo/Editor/EditorUI.h"
 #include "DonTopo/Core/Input.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -35,7 +36,10 @@ int main()
         DonTopo::Window window;
         window.init(1280, 720, "Don Topo Engine", "assets/MainEngineLogo.png");
         DonTopo::Input::init(window.getNativeWindow());
-        DonTopo::Renderer renderer;
+        // El editor es el dueño del Renderer: se declara él y el resto del
+        // main sigue trabajando contra la referencia, igual que antes.
+        DonTopo::EditorUI  editor;
+        DonTopo::Renderer& renderer = editor.renderer();
 
         // scene.shutdown(physics, audio) libera explícitamente los colliders/
         // audioclips de la escena antes de destruir physics/audio (ver más abajo).
@@ -143,14 +147,15 @@ int main()
         renderer.init(window, meshes);
         renderer.setSceneRoot(&scene.getRoot());
         renderer.setScene(&scene);
-        renderer.setPhysicsManager(&physics);
-        renderer.setAudioManager(&audio);
+        editor.setScene(&scene);
+        editor.setPhysicsManager(&physics);
+        editor.setAudioManager(&audio);
 
         scriptManager.setScene(&scene);
         scriptManager.setPhysicsManager(&physics);
         scriptManager.setAudioManager(&audio);
-        scriptManager.setLogCallback([&renderer](const std::string& msg) {
-            renderer.pushEditorLog(msg);
+        scriptManager.setLogCallback([&editor](const std::string& msg) {
+            editor.pushExternalLog(msg);
         });
         scriptManager.setOnInstantiated([&renderer](DonTopo::GameObject* go) {
             go->traverse([&renderer](DonTopo::GameObject* n) {
@@ -159,11 +164,11 @@ int main()
                 else                n->staticRenderIndex  = renderer.addStaticMesh(*n->getMesh());
             });
         });
-        scriptManager.setOnDestroying([&renderer](DonTopo::GameObject* go) {
+        scriptManager.setOnDestroying([&renderer, &editor](DonTopo::GameObject* go) {
             // Suelta la selección del editor si apunta a go o su subtree ANTES de
             // liberar nada — si no, m_selected queda colgando y el editor crashea
             // al dibujar Properties/gizmo el frame siguiente.
-            renderer.notifyGameObjectDestroyed(go);
+            editor.onGameObjectDestroyed(go);
             // Libera GPU del subtree completo (estático + skinned).
             renderer.removeGameObject(go);
         });
@@ -186,9 +191,9 @@ int main()
             }
         }
         scriptManager.init(scriptsDir.string());
-        renderer.setScriptManager(&scriptManager);
+        editor.setScriptManager(&scriptManager);
 
-        renderer.setOnAxisSelected([&camera](const glm::vec3& axis) { camera.lookAlongAxis(axis); });
+        editor.setOnAxisSelected([&camera](const glm::vec3& axis) { camera.lookAlongAxis(axis); });
 
         renderer.initSkybox({
             "assets/skybox/px.png",  // +X
@@ -211,8 +216,8 @@ int main()
             { glm::vec4(-300.0f, 200.0f, -200.0f, 1.0f), glm::vec4(0.4f, 0.5f, 1.0f, 0.8f) },
         });
 
-        struct AppCtx { DonTopo::Camera* cam; DonTopo::Renderer* rnd; };
-        AppCtx ctx{ &camera, &renderer };
+        struct AppCtx { DonTopo::Camera* cam; DonTopo::Renderer* rnd; DonTopo::EditorUI* ed; };
+        AppCtx ctx{ &camera, &renderer, &editor };
         glfwSetWindowUserPointer(window.getNativeWindow(), &ctx);
 
         glfwSetFramebufferSizeCallback(window.getNativeWindow(), [](GLFWwindow* w, int, int) {
@@ -226,7 +231,7 @@ int main()
             double dx = x - lastX, dy = y - lastY;
             lastX = x; lastY = y;
             auto* ctx = static_cast<AppCtx*>(glfwGetWindowUserPointer(w));
-            if (ctx->rnd->isViewportHovered() &&
+            if (ctx->ed->isViewportHovered() &&
                 glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS)
             {
                 ctx->cam->processMouse((float)dx, (float)dy);
@@ -251,7 +256,7 @@ int main()
             if (key == GLFW_KEY_F && action == GLFW_PRESS && !ImGui::GetIO().WantTextInput)
             {
                 auto* ctx = static_cast<AppCtx*>(glfwGetWindowUserPointer(w));
-                ctx->rnd->focusSelected(*ctx->cam);
+                ctx->ed->focusSelected(*ctx->cam);
             }
         });
 
@@ -263,7 +268,7 @@ int main()
         DonTopo::JobSystem        jobSystem;
         jobSystem.start();
         DonTopo::AsyncAssetLoader assetLoader(jobSystem);
-        renderer.setAssetLoader(&assetLoader);
+        editor.setAssetLoader(&assetLoader);
 
         while (!window.shouldClose())
         {
@@ -275,7 +280,7 @@ int main()
             float dt = std::chrono::duration<float>(now - last).count();
             last = now;
 
-            if (renderer.isViewportHovered())
+            if (editor.isViewportHovered())
                 camera.update(window.getNativeWindow(), dt);
             renderer.setCamera(camera);
 
@@ -306,7 +311,7 @@ int main()
             // aplica los resultados y cierra el batch con UN solo
             // flushPendingUploads (así ~440 vkQueueWaitIdle se vuelven uno).
             renderer.tickDeferredDeletes();
-            renderer.onAssetsLoaded(assetLoader.pumpCompleted(2.0f), scene);
+            editor.onAssetsLoaded(assetLoader.pumpCompleted(2.0f), scene, renderer);
 
             // Recorrido en vivo (no la lista allNodes cacheada al arrancar): el
             // editor permite borrar GameObjects en tiempo real, así que un

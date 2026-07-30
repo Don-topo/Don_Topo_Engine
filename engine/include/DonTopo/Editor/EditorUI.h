@@ -17,6 +17,7 @@
 #include "DonTopo/Editor/AnimatorPanel.h"
 #include "DonTopo/Editor/LoadingModal.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
+#include "DonTopo/Renderer/UiLayer.h"
 
 namespace IGFD { class FileDialog; }
 
@@ -31,19 +32,37 @@ class Scene;
 class ScriptManager;
 class ScriptEditorPanel;
 
-class EditorUI {
+// El editor es el dueño del Renderer, y no al revés: así el motor no tiene
+// que conocer al editor. La relación se invierte también en el dibujo — el
+// Renderer llama de vuelta por la interfaz UiLayer, que esta clase implementa.
+class EditorUI : public UiLayer {
 public:
     EditorUI();
-    ~EditorUI();
+    ~EditorUI() override;
     EditorUI(const EditorUI&)            = delete;
     EditorUI& operator=(const EditorUI&) = delete;
+
+    // El Renderer que posee este editor. Es por donde main.cpp lo inicializa
+    // y dibuja: el ciclo de vida lo lleva el editor.
+    Renderer& renderer();
 
     void draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView);
 
     bool isViewportHovered() const { return m_viewportPanel.isHovered(); }
 
+    // ── UiLayer ──────────────────────────────────────────────────────────────
+    // El backend de ImGui (contexto, pool de descriptores y los dos _Impl_)
+    // vive aquí porque es un detalle del editor, no del motor.
+    void initUi(const InitInfo& info) override;
+    void shutdownUi() override;
+    VkDescriptorSet registerUiTexture(VkSampler sampler, VkImageView view) override;
+    void unregisterUiTexture(VkDescriptorSet set) override;
+    void buildUiFrame(VkDescriptorSet viewportTexture, GameObject* sceneRoot,
+                      const glm::mat4& cameraView) override;
+    void recordUi(VkCommandBuffer cmd) override;
+
     // true mientras Play Mode está activo (física + audio corriendo).
-    bool isPlaying() const { return m_isPlaying; }
+    bool isPlaying() const override { return m_isPlaying; }
 
     // Notificado justo antes de desenganchar node de su padre (node sigue
     // siendo válido y su subárbol completo también), para que el dueño
@@ -65,10 +84,6 @@ public:
     // para delegar el borrado diferido (ScenePanel::m_pendingDelete) en
     // Scene::removeGameObject en vez de mutar children a mano.
     void setScene(Scene* scene) { m_scene = scene; }
-    // Puntero no-propietario: Renderer es dueño de este EditorUI y se pasa a sí
-    // mismo desde setSceneRoot. Necesario para registrar el mesh GPU (addStaticMesh)
-    // al crear un shape desde el menú "Basic Shapes".
-    void setRenderer(Renderer* renderer) { m_renderer = renderer; }
     // Centra la cámara en m_selected (no-op si no hay selección). Usado por
     // el atajo de teclado "F" en main.cpp.
     void focusSelected(Camera& camera);
@@ -180,7 +195,9 @@ private:
     std::function<void(const glm::vec3&)> m_onAxisSelected;
 
     PhysicsManager* m_physics = nullptr;
-    Renderer*       m_renderer = nullptr;
+    // Propiedad: el editor construye el Renderer y lo mantiene vivo. unique_ptr
+    // a tipo incompleto — se construye y se destruye en el .cpp.
+    std::unique_ptr<Renderer> m_renderer;
     AudioManager*   m_audio = nullptr;
     Scene*          m_scene = nullptr;
     ScriptManager*  m_scriptManager = nullptr;
@@ -197,6 +214,11 @@ private:
     // Loader asíncrono no-propietario (vive en main.cpp). Lo rellena
     // setAssetLoader antes del bucle. nullptr => Load Scene cae a síncrono.
     AsyncAssetLoader* m_assetLoader = nullptr;
+
+    // Backend de ImGui. El device se guarda en initUi porque shutdownUi lo
+    // necesita para liberar el pool y ahí ya no hay InitInfo.
+    VkDescriptorPool m_uiDescPool = VK_NULL_HANDLE;
+    VkDevice         m_uiDevice   = VK_NULL_HANDLE;
 };
 
 } // namespace DonTopo

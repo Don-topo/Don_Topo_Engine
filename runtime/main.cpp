@@ -307,17 +307,12 @@ int main(int argc, char** argv)
 
         renderer.initSceneResources(meshes);
         pumpSplash(false, 0.0f);
-        // setSceneRoot/setPhysicsManager/setAudioManager (y más abajo
-        // setScriptManager) son passthroughs puros al EditorUI embebido del
-        // Renderer: en headless no dibujan nada ni cambian ningún cálculo. Se
-        // llaman igual, por simetría con sandbox/src/main.cpp, para que el
-        // siguiente lector no se pregunte si faltan a propósito. setScene es
-        // la excepción del grupo: currentFrameCamera() SÍ lo usa (findCamera()
-        // en Play), así que no vale quitarlo ni tratarlo como muerto.
+        // Solo lo que el Renderer usa de verdad: setSceneRoot (el árbol que
+        // recorre para dibujar) y setScene (currentFrameCamera() llama a
+        // findCamera() en Play). Los passthroughs de physics/audio/scripts que
+        // había aquí eran del editor, que en runtime no existe.
         renderer.setSceneRoot(&scene.getRoot());
         renderer.setScene(&scene);
-        renderer.setPhysicsManager(&physics);
-        renderer.setAudioManager(&audio);
 
         renderer.initSkybox({
             "assets/skybox/px.png",
@@ -381,7 +376,6 @@ int main(int argc, char** argv)
         // del editor, que la busca subiendo directorios hacia el repo.
         scriptManager.init("Scripts");
         pumpSplash(false, 0.0f);
-        renderer.setScriptManager(&scriptManager);
 
         glfwSetWindowUserPointer(window.getNativeWindow(), &renderer);
         glfwSetFramebufferSizeCallback(window.getNativeWindow(), [](GLFWwindow* w, int, int) {
