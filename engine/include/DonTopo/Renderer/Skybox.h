@@ -24,6 +24,12 @@ public:
 
     bool isInitialized() const { return m_pipeline != VK_NULL_HANDLE; }
 
+    // El cubemap de entorno es tambien la fuente del IBL: el Renderer lo
+    // muestrea desde sus compute shaders de precomputacion. Solo lectura; el
+    // ciclo de vida sigue siendo de esta clase.
+    VkImageView cubeView()    const { return m_view; }
+    VkSampler   cubeSampler() const { return m_sampler; }
+
 private:
     void loadCubemap(GpuDevice& gpu, const std::array<std::string, 6>& facePaths);
     void createDescriptors(GpuDevice& gpu);

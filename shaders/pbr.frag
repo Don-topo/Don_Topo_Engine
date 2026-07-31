@@ -21,12 +21,25 @@ layout(set = 0, binding = 0) uniform UBO {
     Light lights[MAX_LIGHTS];
     vec4  viewPos;
     int   numLights;
+    // Va en el hueco de padding que ya habia detras de numLights, asi que
+    // ningun offset anterior se mueve y los otros 4 shaders que declaran este
+    // bloque no necesitan cambiar.
+    float ambientIntensity;
 } ubo;
 
 layout(set = 0, binding = 1) uniform sampler2D texSampler;
 layout(set = 0, binding = 2) uniform sampler2D normalMap;
 layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadowMap;
 layout(set = 0, binding = 4) uniform sampler2D metallicRoughnessTex;
+// IBL. Los dos cubemaps existen SIEMPRE: sin skybox cargado llevan un ambiente
+// neutro constante, asi que aqui no hace falta ninguna rama.
+layout(set = 0, binding = 5) uniform samplerCube irradianceMap;
+layout(set = 0, binding = 6) uniform samplerCube prefilterMap;
+
+// Debe coincidir con Renderer::IBL_PREFILTER_MIPS. Va como #define y no en el
+// UBO a proposito: el bloque UBO esta declarado en 5 shaders y anadirle un
+// miembro desplazaria en silencio todo lo que va detras por std140.
+#define IBL_PREFILTER_MIPS 5
 
 layout(push_constant) uniform PushData {
     mat4  transform;
@@ -64,6 +77,26 @@ float computeShadow(vec3 worldPos, int cascade)
         for (int y = -1; y <= 1; y++)
             shadow += texture(shadowMap, vec4(proj.xy + vec2(x, y) * texelSize, float(cascade), proj.z));
     return shadow / 9.0;
+}
+
+// Fresnel de Schlick con el termino de rugosidad de Lazarov: sin el, una
+// superficie rugosa vista de canto devolveria kS = 1 y se quedaria sin difuso.
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float rough)
+{
+    return F0 + (max(vec3(1.0 - rough), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// Segunda mitad del split-sum (la integral del BRDF), en su forma analitica de
+// Karis. Sustituye a la LUT 2D de 512x512 con un error del orden del 1%, y
+// ahorra una imagen, un binding y un pass de precomputacion.
+vec3 envBRDFApprox(vec3 F0, float rough, float NdotV)
+{
+    const vec4 c0 = vec4(-1.0, -0.0275, -0.572,  0.022);
+    const vec4 c1 = vec4( 1.0,  0.0425,  1.040, -0.040);
+    vec4  r    = rough * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28 * NdotV)) * r.x + r.y;
+    vec2  ab   = vec2(-1.04, 1.04) * a004 + r.zw;
+    return F0 * ab.x + ab.y;
 }
 
 vec3 aces(vec3 x)
@@ -129,10 +162,24 @@ void main()
               * radiance * NdotL;
     }
 
-    float upFactor = N.y * 0.5 + 0.5;
-    vec3 skyColor    = vec3(0.10, 0.12, 0.15);
-    vec3 groundColor = vec3(0.05, 0.04, 0.03);
-    vec3 ambient = mix(groundColor, skyColor, upFactor) * albedo * ao;
+    // ── Ambiente: IBL ───────────────────────────────────────────────────────
+    float NdotVamb = max(dot(N, V), 0.0);
+    vec3  Famb     = fresnelSchlickRoughness(NdotVamb, F0, rough);
+    // Un metal no tiene difuso, y lo que refleja de especular no lo transmite.
+    vec3  kDamb    = (1.0 - Famb) * (1.0 - metal);
+
+    // El cubemap guarda ya E/PI, asi que el 1/PI del BRDF lambertiano no se
+    // vuelve a aplicar aqui.
+    vec3 diffuseIBL = texture(irradianceMap, N).rgb * albedo;
+
+    // La rugosidad elige el mip: el ultimo es el lobulo mas ancho.
+    vec3 R           = reflect(-V, N);
+    vec3 prefiltered = textureLod(prefilterMap, R, rough * float(IBL_PREFILTER_MIPS - 1)).rgb;
+    vec3 specularIBL = prefiltered * envBRDFApprox(F0, rough, NdotVamb);
+
+    // El multiplicador escala difuso y especular por igual: sube o baja el peso
+    // del entorno sin cambiar su color ni el balance entre los dos terminos.
+    vec3 ambient = (kDamb * diffuseIBL + specularIBL) * ao * ubo.ambientIntensity;
     vec3 color   = ambient + Lo;
 
     outColor = vec4(pow(aces(color), vec3(1.0 / 2.2)), 1.0);

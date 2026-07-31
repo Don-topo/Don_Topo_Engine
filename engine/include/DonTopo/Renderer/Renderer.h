@@ -132,6 +132,12 @@ namespace DonTopo {
                     m_objects[objectIndex].transform = transform;
             }
             void setLights(const std::vector<Light>& lights){ m_lights = lights; }
+
+            // Peso global del ambiente IBL. 1.0 = el entorno tal cual lo da el
+            // cubemap. Viaja por el UBO, asi que cambia en el frame siguiente
+            // sin recomputar nada.
+            void  setAmbientIntensity(float v) { m_ambientIntensity = v; }
+            float ambientIntensity() const     { return m_ambientIntensity; }
             // decoded: píxeles que el worker ya decodificó para este mesh (nullptr
             // en el camino síncrono). Encola todos los uploads en el batch del pump
             // actual y marca el objeto con el ticket vigente: no se dibuja hasta que
@@ -443,6 +449,12 @@ namespace DonTopo {
             void destroySharedGpuMesh(const SharedGpuMesh& gpu);
             void createShadowResources();
             void recordShadowPass(VkCommandBuffer cmd);
+            // Crea imagenes, vistas, sampler y pipelines del IBL y deja los dos
+            // cubemaps con un ambiente neutro. Se llama SIEMPRE en init().
+            void createIblResources();
+            // Rellena los dos cubemaps a partir del cubemap del skybox. No-op si
+            // no hay skybox cargado. Una sola vez, desde initSkybox().
+            void precomputeIbl();
             void createComputePipelines();
             void destroySkinnedRenderObject(SkinnedRenderObject& obj);
             // Cuerpo compartido por addSkinnedMesh y rebuildSkinnedMesh: crea
@@ -575,6 +587,7 @@ namespace DonTopo {
             glm::mat4                       m_viewMatrix{1.0f};
             Camera                          m_camera;
             std::vector<Light>              m_lights;
+            float                           m_ambientIntensity{1.0f};
             
             // Shadow Map (cascadas)
             static constexpr uint32_t       SHADOW_SIZE                         = 2048;
@@ -595,6 +608,42 @@ namespace DonTopo {
             // escena no tiene luces: en ese caso el pass solo limpia las capas.
             glm::mat4                       m_cascadeMatrices[SHADOW_CASCADES]  { glm::mat4(1.0f), glm::mat4(1.0f), glm::mat4(1.0f), glm::mat4(1.0f) };
             glm::vec4                       m_cascadeSplits                     { 0.0f };
+
+            // ── IBL ────────────────────────────────────────────────────────
+            // Dos cubemaps precomputados UNA vez sobre el cubemap del skybox:
+            // irradiancia (difuso) y entorno prefiltrado por rugosidad (mips).
+            // El termino BRDF no es una textura: pbr.frag usa la aproximacion
+            // analitica de Karis, asi que no hay LUT ni un tercer binding.
+            //
+            // Las imagenes se crean SIEMPRE en init(), con contenido neutro, y
+            // solo se rellenan de verdad si initSkybox() ha cargado un cubemap.
+            // Asi los descriptor sets nunca apuntan a un handle nulo y una
+            // escena sin skybox se ilumina con un ambiente plano en vez de
+            // reventar.
+            static constexpr uint32_t       IBL_IRRADIANCE_SIZE = 32;
+            static constexpr uint32_t       IBL_PREFILTER_SIZE  = 128;
+            // Si cambia, cambia tambien IBL_PREFILTER_MIPS en shaders/pbr.frag:
+            // ahi va como #define a proposito, pa no tocar el bloque UBO (que
+            // esta declarado en 5 shaders y std140 desplazaria en silencio).
+            static constexpr uint32_t       IBL_PREFILTER_MIPS  = 5;
+            VkImage                         m_iblIrradianceImage   = VK_NULL_HANDLE;
+            VkDeviceMemory                  m_iblIrradianceMemory  = VK_NULL_HANDLE;
+            // Vista CUBE pa muestrear desde pbr.frag; vista 2D_ARRAY pa que el
+            // compute pueda escribirla como storage image (un imageCube de
+            // escritura exigiria capacidades que no hacen falta).
+            VkImageView                     m_iblIrradianceView    = VK_NULL_HANDLE;
+            VkImageView                     m_iblIrradianceStore   = VK_NULL_HANDLE;
+            VkImage                         m_iblPrefilterImage    = VK_NULL_HANDLE;
+            VkDeviceMemory                  m_iblPrefilterMemory   = VK_NULL_HANDLE;
+            VkImageView                     m_iblPrefilterView     = VK_NULL_HANDLE;
+            VkImageView                     m_iblPrefilterStore[IBL_PREFILTER_MIPS] {};
+            VkSampler                       m_iblSampler           = VK_NULL_HANDLE;
+            VkDescriptorSetLayout           m_iblDescLayout        = VK_NULL_HANDLE;
+            VkDescriptorPool                m_iblDescPool          = VK_NULL_HANDLE;
+            VkPipelineLayout                m_iblPipelineLayout    = VK_NULL_HANDLE;
+            VkPipeline                      m_iblIrradiancePipeline = VK_NULL_HANDLE;
+            VkPipeline                      m_iblPrefilterPipeline  = VK_NULL_HANDLE;
+            struct IblPush { float roughness; uint32_t faceSize; };
             // Compute pipelines
             VkPipeline            m_boneEvalPipeline      = VK_NULL_HANDLE;
             VkPipeline            m_boneHierarchyPipeline = VK_NULL_HANDLE;

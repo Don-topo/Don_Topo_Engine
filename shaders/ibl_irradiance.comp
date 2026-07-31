@@ -1,0 +1,86 @@
+#version 450
+
+// Convolucion difusa del cubemap de entorno. Una invocacion por texel de la
+// cara; el resultado que se guarda NO es la irradiancia E, sino E/PI — o sea,
+// la media de radiancia. Asi pbr.frag hace `albedo * irradiance` a secas, sin
+// arrastrar el 1/PI del BRDF lambertiano.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform samplerCube envMap;
+// image2DArray y no imageCube: escribir un cubemap como storage image exige
+// capacidades que no hacen falta, y la imagen se crea CUBE_COMPATIBLE, asi que
+// la misma memoria se ve como array de 6 capas.
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray outCube;
+
+layout(push_constant) uniform Push {
+    float roughness;   // sin uso aqui; el layout lo comparten los dos shaders
+    uint  faceSize;
+} pc;
+
+const float PI = 3.14159265359;
+const uint  SAMPLE_COUNT = 2048u;
+
+// Direccion de mundo del texel (x, y) de la cara `face`, con u,v en [-1,1].
+// Es la inversa exacta del mapeo que usa el hardware al muestrear un samplerCube
+// (convencion de OpenGL/Vulkan), de modo que entrada y salida quedan alineadas.
+vec3 dirFromFace(uint face, vec2 uv)
+{
+    float u = uv.x;
+    float v = uv.y;
+    if (face == 0u) return vec3( 1.0,   -v,   -u);  // +X
+    if (face == 1u) return vec3(-1.0,   -v,    u);  // -X
+    if (face == 2u) return vec3(   u,  1.0,    v);  // +Y
+    if (face == 3u) return vec3(   u, -1.0,   -v);  // -Y
+    if (face == 4u) return vec3(   u,   -v,  1.0);  // +Z
+    return                 vec3(  -u,   -v, -1.0);  // -Z
+}
+
+// Van der Corput en base 2: la mitad de baja discrepancia de Hammersley.
+float radicalInverse(uint bits)
+{
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10;
+}
+
+vec2 hammersley(uint i, uint n)
+{
+    return vec2(float(i) / float(n), radicalInverse(i));
+}
+
+void main()
+{
+    uvec3 gid = gl_GlobalInvocationID;
+    if (gid.x >= pc.faceSize || gid.y >= pc.faceSize) return;
+
+    vec2 uv = (vec2(gid.xy) + 0.5) / float(pc.faceSize) * 2.0 - 1.0;
+    vec3 N  = normalize(dirFromFace(gid.z, uv));
+
+    // Base tangente arbitraria alrededor de N. El eje auxiliar se cambia cerca
+    // de los polos porque cross(N, up) degenera cuando son paralelos.
+    vec3 up      = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent = normalize(cross(up, N));
+    vec3 bitan   = cross(N, tangent);
+
+    // Muestreo por importancia con pdf = cos(theta)/PI: el estimador de
+    // E = integral(L * cos) sale como PI * media(L), y como lo que se guarda es
+    // E/PI, el resultado es la media de L a secas.
+    vec3 sum = vec3(0.0);
+    for (uint i = 0u; i < SAMPLE_COUNT; i++)
+    {
+        vec2  xi    = hammersley(i, SAMPLE_COUNT);
+        float phi   = 2.0 * PI * xi.x;
+        float cosT  = sqrt(1.0 - xi.y);   // xi.y = sin^2(theta)
+        float sinT  = sqrt(xi.y);
+        vec3  local = vec3(sinT * cos(phi), sinT * sin(phi), cosT);
+        vec3  L     = tangent * local.x + bitan * local.y + N * local.z;
+        sum += textureLod(envMap, L, 0.0).rgb;
+    }
+
+    vec3 irradiance = sum / float(SAMPLE_COUNT);
+    imageStore(outCube, ivec3(gid), vec4(irradiance, 1.0));
+}

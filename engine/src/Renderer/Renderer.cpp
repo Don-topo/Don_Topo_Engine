@@ -14,6 +14,7 @@
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include <limits>
 #include <cmath>
+#include <chrono>
 
 namespace DonTopo {
 
@@ -115,6 +116,10 @@ namespace DonTopo {
         createPipeline();
         createShadowResources();
         createComputePipelines();
+        // ANTES de createDescriptorSets: los sets de cada objeto escriben ya las
+        // vistas de los dos cubemaps del IBL (bindings 5 y 6). Aqui se crean con
+        // contenido neutro; initSkybox los rellenara si hay entorno.
+        createIblResources();
         // La capa de UI ya se inicializó en initPresentation. En editor,
         // createOffscreenImages necesita que lo esté (llama a
         // registerUiTexture); en headless no la llama, así que el orden no
@@ -396,6 +401,22 @@ namespace DonTopo {
         }
         vkDestroyImage(m_gpu.device(), m_shadowImage, nullptr);
         vkFreeMemory(m_gpu.device(), m_shadowMemory, nullptr);
+        // IBL
+        vkDestroyPipeline(m_gpu.device(), m_iblIrradiancePipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_iblPrefilterPipeline, nullptr);
+        vkDestroyPipelineLayout(m_gpu.device(), m_iblPipelineLayout, nullptr);
+        vkDestroyDescriptorPool(m_gpu.device(), m_iblDescPool, nullptr);
+        vkDestroyDescriptorSetLayout(m_gpu.device(), m_iblDescLayout, nullptr);
+        vkDestroySampler(m_gpu.device(), m_iblSampler, nullptr);
+        vkDestroyImageView(m_gpu.device(), m_iblIrradianceView, nullptr);
+        vkDestroyImageView(m_gpu.device(), m_iblIrradianceStore, nullptr);
+        vkDestroyImage(m_gpu.device(), m_iblIrradianceImage, nullptr);
+        vkFreeMemory(m_gpu.device(), m_iblIrradianceMemory, nullptr);
+        vkDestroyImageView(m_gpu.device(), m_iblPrefilterView, nullptr);
+        for (uint32_t m = 0; m < IBL_PREFILTER_MIPS; m++)
+            vkDestroyImageView(m_gpu.device(), m_iblPrefilterStore[m], nullptr);
+        vkDestroyImage(m_gpu.device(), m_iblPrefilterImage, nullptr);
+        vkFreeMemory(m_gpu.device(), m_iblPrefilterMemory, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedGfxPipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedWireframePipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedOutlinePipeline, nullptr);
@@ -431,6 +452,10 @@ namespace DonTopo {
     void Renderer::initSkybox(const std::array<std::string, 6>& facePaths)
     {
         m_skybox.init(m_gpu, m_offscreenRenderPass, m_swapChainFormat, facePaths);
+        // El cubemap recien cargado es la fuente del IBL. Una sola vez, aqui: es
+        // el punto por el que pasan tanto el editor como DonTopoRuntime, y no
+        // depende de nada del editor.
+        precomputeIbl();
     }
 
     void Renderer::setCamera(const Camera& camera)
@@ -1972,11 +1997,27 @@ namespace DonTopo {
         ormBinding.descriptorCount = 1;
         ormBinding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-        VkDescriptorSetLayoutBinding bindings[] = { uboBinding, samplerBinding, samplerNormal, shadowBinding, ormBinding };
+        // IBL: irradiancia (difuso) y entorno prefiltrado (especular). Los
+        // consume solo pbr.frag, pero el layout lo comparten los tres pipelines
+        // via m_pipelineLayout, asi que van aqui igual.
+        VkDescriptorSetLayoutBinding irradianceBinding{};
+        irradianceBinding.binding         = 5;
+        irradianceBinding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        irradianceBinding.descriptorCount = 1;
+        irradianceBinding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutBinding prefilterBinding{};
+        prefilterBinding.binding         = 6;
+        prefilterBinding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        prefilterBinding.descriptorCount = 1;
+        prefilterBinding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutBinding bindings[] = { uboBinding, samplerBinding, samplerNormal, shadowBinding, ormBinding,
+                                                    irradianceBinding, prefilterBinding };
 
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
         layoutInfo.sType            = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layoutInfo.bindingCount     = 5;
+        layoutInfo.bindingCount     = 7;
         layoutInfo.pBindings        = bindings;
 
         if(vkCreateDescriptorSetLayout(m_gpu.device(), &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -2216,7 +2257,7 @@ namespace DonTopo {
         poolSizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         poolSizes[0].descriptorCount = n;
         poolSizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSizes[1].descriptorCount = n * 4;   // diffuse + normal map + shadow + orm
+        poolSizes[1].descriptorCount = n * 6;   // diffuse + normal map + shadow + orm + irradiance + prefiltered
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -2282,7 +2323,19 @@ namespace DonTopo {
             ormInfo.imageView   = obj.ormView;
             ormInfo.sampler     = obj.ormSampler;
 
-            VkWriteDescriptorSet writes[5]{};
+            // IBL: los mismos dos cubemaps para todos los objetos. Existen desde
+            // init(), asi que estos writes valen aunque no haya skybox.
+            VkDescriptorImageInfo irradianceInfo{};
+            irradianceInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            irradianceInfo.imageView   = m_iblIrradianceView;
+            irradianceInfo.sampler     = m_iblSampler;
+
+            VkDescriptorImageInfo prefilterInfo{};
+            prefilterInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            prefilterInfo.imageView   = m_iblPrefilterView;
+            prefilterInfo.sampler     = m_iblSampler;
+
+            VkWriteDescriptorSet writes[7]{};
             writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[0].dstSet = obj.descriptorSets[i];
             writes[0].dstBinding = 0; writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             writes[0].descriptorCount = 1; writes[0].pBufferInfo = &bufferInfo;
@@ -2303,7 +2356,15 @@ namespace DonTopo {
             writes[4].dstBinding = 4; writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             writes[4].descriptorCount = 1; writes[4].pImageInfo = &ormInfo;
 
-            vkUpdateDescriptorSets(m_gpu.device(), 5, writes, 0, nullptr);
+            writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[5].dstSet = obj.descriptorSets[i];
+            writes[5].dstBinding = 5; writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[5].descriptorCount = 1; writes[5].pImageInfo = &irradianceInfo;
+
+            writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[6].dstSet = obj.descriptorSets[i];
+            writes[6].dstBinding = 6; writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[6].descriptorCount = 1; writes[6].pImageInfo = &prefilterInfo;
+
+            vkUpdateDescriptorSets(m_gpu.device(), 7, writes, 0, nullptr);
         }
     }
 
@@ -2315,7 +2376,8 @@ namespace DonTopo {
         UniformBufferObject ubo{};
         ubo.view = fc.view;
         ubo.proj = fc.proj;
-        ubo.numLights = std::min((int)m_lights.size(), MAX_LIGHTS);
+        ubo.numLights        = std::min((int)m_lights.size(), MAX_LIGHTS);
+        ubo.ambientIntensity = m_ambientIntensity;
         for(int i = 0; i < ubo.numLights; i++)
         {
             ubo.lights[i] = m_lights[i];
@@ -2883,6 +2945,335 @@ namespace DonTopo {
         }
     }
 
+    // ── IBL ─────────────────────────────────────────────────────────────────
+    // Formato de los dos cubemaps. R16G16B16A16_SFLOAT tiene soporte OBLIGATORIO
+    // como storage image en Vulkan, asi que no hace falta consultar
+    // vkGetPhysicalDeviceFormatProperties. Con 8 bits el especular prefiltrado
+    // se bandearia en las zonas de gradiente suave.
+    static constexpr VkFormat kIblFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+
+    void Renderer::createIblResources()
+    {
+        // 1. Las dos imagenes. No usan m_res.createImage: esa fija arrayLayers y
+        // mipLevels a 1, y aqui hacen falta 6 capas (y mips en el prefiltrado).
+        auto makeCube = [&](uint32_t size, uint32_t mips, VkImage& image, VkDeviceMemory& memory)
+        {
+            VkImageCreateInfo ci{};
+            ci.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ci.flags         = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+            ci.imageType     = VK_IMAGE_TYPE_2D;
+            ci.format        = kIblFormat;
+            ci.extent        = { size, size, 1 };
+            ci.mipLevels     = mips;
+            ci.arrayLayers   = 6;
+            ci.samples       = VK_SAMPLE_COUNT_1_BIT;
+            ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
+            // TRANSFER_DST es pa el clear neutro de mas abajo, no pa una copia.
+            ci.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT
+                             | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            ci.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+            ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            if (vkCreateImage(m_gpu.device(), &ci, nullptr, &image) != VK_SUCCESS)
+                throw std::runtime_error("failed to create IBL cubemap image!");
+
+            VkMemoryRequirements memReq;
+            vkGetImageMemoryRequirements(m_gpu.device(), image, &memReq);
+            VkMemoryAllocateInfo memAlloc{};
+            memAlloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            memAlloc.allocationSize  = memReq.size;
+            memAlloc.memoryTypeIndex = m_gpu.findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            if (vkAllocateMemory(m_gpu.device(), &memAlloc, nullptr, &memory) != VK_SUCCESS)
+                throw std::runtime_error("failed to allocate IBL cubemap memory!");
+            vkBindImageMemory(m_gpu.device(), image, memory, 0);
+        };
+
+        makeCube(IBL_IRRADIANCE_SIZE, 1,                  m_iblIrradianceImage, m_iblIrradianceMemory);
+        makeCube(IBL_PREFILTER_SIZE,  IBL_PREFILTER_MIPS, m_iblPrefilterImage,  m_iblPrefilterMemory);
+
+        // 2. Vistas. La CUBE es la que va en los descriptor sets de los objetos;
+        // las 2D_ARRAY solo existen pa que el compute las escriba como storage
+        // image, una por nivel de mip porque imageStore no elige nivel.
+        auto makeView = [&](VkImage image, VkImageViewType type, uint32_t baseMip, uint32_t mipCount, VkImageView& view)
+        {
+            VkImageViewCreateInfo vi{};
+            vi.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vi.image                           = image;
+            vi.viewType                        = type;
+            vi.format                          = kIblFormat;
+            vi.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+            vi.subresourceRange.baseMipLevel   = baseMip;
+            vi.subresourceRange.levelCount     = mipCount;
+            vi.subresourceRange.baseArrayLayer = 0;
+            vi.subresourceRange.layerCount     = 6;
+            if (vkCreateImageView(m_gpu.device(), &vi, nullptr, &view) != VK_SUCCESS)
+                throw std::runtime_error("failed to create IBL image view!");
+        };
+
+        makeView(m_iblIrradianceImage, VK_IMAGE_VIEW_TYPE_CUBE,     0, 1, m_iblIrradianceView);
+        makeView(m_iblIrradianceImage, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 0, 1, m_iblIrradianceStore);
+        makeView(m_iblPrefilterImage,  VK_IMAGE_VIEW_TYPE_CUBE,     0, IBL_PREFILTER_MIPS, m_iblPrefilterView);
+        for (uint32_t m = 0; m < IBL_PREFILTER_MIPS; m++)
+            makeView(m_iblPrefilterImage, VK_IMAGE_VIEW_TYPE_2D_ARRAY, m, 1, m_iblPrefilterStore[m]);
+
+        // 3. Sampler comun. maxLod cubre los mips del prefiltrado; la vista de
+        // irradiancia solo tiene un nivel, asi que ahi el LOD se recorta solo.
+        VkSamplerCreateInfo si{};
+        si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter    = VK_FILTER_LINEAR;
+        si.minFilter    = VK_FILTER_LINEAR;
+        si.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.maxLod       = (float)IBL_PREFILTER_MIPS;
+        if (vkCreateSampler(m_gpu.device(), &si, nullptr, &m_iblSampler) != VK_SUCCESS)
+            throw std::runtime_error("failed to create IBL sampler!");
+
+        // 4. Contenido neutro. Es lo que se ve si nunca se llama a initSkybox (o
+        // si el cubemap no carga): el mismo ambiente plano de antes, en vez de
+        // un descriptor apuntando a basura.
+        {
+            VkCommandBuffer cmd = m_gpu.beginOneTimeCommands();
+
+            VkImageMemoryBarrier b{};
+            b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            b.subresourceRange.layerCount = 6;
+
+            auto clearTo = [&](VkImage image, uint32_t mips, const VkClearColorValue& color)
+            {
+                b.image                       = image;
+                b.subresourceRange.levelCount = mips;
+
+                b.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                b.srcAccessMask = 0;
+                b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     0, 0, nullptr, 0, nullptr, 1, &b);
+
+                vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                     &color, 1, &b.subresourceRange);
+
+                b.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                b.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                     0, 0, nullptr, 0, nullptr, 1, &b);
+            };
+
+            // Los mismos numeros que tenia el ambiente hemisferico de pbr.frag:
+            // la media de cielo y suelo pal difuso, el cielo pal especular.
+            const VkClearColorValue irradianceNeutral{{ 0.075f, 0.080f, 0.090f, 1.0f }};
+            const VkClearColorValue prefilterNeutral {{ 0.100f, 0.120f, 0.150f, 1.0f }};
+            clearTo(m_iblIrradianceImage, 1,                  irradianceNeutral);
+            clearTo(m_iblPrefilterImage,  IBL_PREFILTER_MIPS, prefilterNeutral);
+
+            m_gpu.endOneTimeCommands(cmd);
+        }
+
+        // 5. Descriptor set layout, pool y pipelines de la precomputacion. Layout
+        // propio y no el de createComputePipelines: ese son 8 storage buffers.
+        VkDescriptorSetLayoutBinding iblBindings[2]{};
+        iblBindings[0].binding         = 0;
+        iblBindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        iblBindings[0].descriptorCount = 1;
+        iblBindings[0].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        iblBindings[1].binding         = 1;
+        iblBindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        iblBindings[1].descriptorCount = 1;
+        iblBindings[1].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+
+        VkDescriptorSetLayoutCreateInfo dsl{};
+        dsl.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dsl.bindingCount = 2;
+        dsl.pBindings    = iblBindings;
+        if (vkCreateDescriptorSetLayout(m_gpu.device(), &dsl, nullptr, &m_iblDescLayout) != VK_SUCCESS)
+            throw std::runtime_error("failed to create IBL descriptor set layout!");
+
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcr.offset     = 0;
+        pcr.size       = sizeof(IblPush);
+
+        VkPipelineLayoutCreateInfo pli{};
+        pli.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pli.setLayoutCount         = 1;
+        pli.pSetLayouts            = &m_iblDescLayout;
+        pli.pushConstantRangeCount = 1;
+        pli.pPushConstantRanges    = &pcr;
+        if (vkCreatePipelineLayout(m_gpu.device(), &pli, nullptr, &m_iblPipelineLayout) != VK_SUCCESS)
+            throw std::runtime_error("failed to create IBL pipeline layout!");
+
+        // Un set pa la irradiancia y uno por mip del prefiltrado: cada uno lleva
+        // una storage image distinta, asi que no se pueden reutilizar.
+        const uint32_t setCount = 1 + IBL_PREFILTER_MIPS;
+        VkDescriptorPoolSize iblSizes[2]{};
+        iblSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        iblSizes[0].descriptorCount = setCount;
+        iblSizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        iblSizes[1].descriptorCount = setCount;
+
+        VkDescriptorPoolCreateInfo dpi{};
+        dpi.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpi.poolSizeCount = 2;
+        dpi.pPoolSizes    = iblSizes;
+        dpi.maxSets       = setCount;
+        if (vkCreateDescriptorPool(m_gpu.device(), &dpi, nullptr, &m_iblDescPool) != VK_SUCCESS)
+            throw std::runtime_error("failed to create IBL descriptor pool!");
+
+        auto makeIblPipeline = [&](const std::string& spv, VkPipeline& pipeline)
+        {
+            auto code   = loadShaderFile(spv);
+            auto module = createShaderModule(code);
+
+            VkComputePipelineCreateInfo ci{};
+            ci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            ci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            ci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            ci.stage.module = module;
+            ci.stage.pName  = "main";
+            ci.layout       = m_iblPipelineLayout;
+            if (vkCreateComputePipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline) != VK_SUCCESS)
+                throw std::runtime_error("failed to create compute pipeline: " + spv);
+
+            vkDestroyShaderModule(m_gpu.device(), module, nullptr);
+        };
+
+        makeIblPipeline("shaders/ibl_irradiance.comp.spv", m_iblIrradiancePipeline);
+        makeIblPipeline("shaders/ibl_prefilter.comp.spv",  m_iblPrefilterPipeline);
+    }
+
+    void Renderer::precomputeIbl()
+    {
+        // Sin cubemap de entorno no hay nada que convolucionar: se quedan los
+        // valores neutros que dejo createIblResources.
+        if (!m_skybox.isInitialized()) return;
+
+        const auto t0 = std::chrono::steady_clock::now();
+
+        // Reset y no free: initSkybox podria llamarse otra vez (cambio de
+        // entorno) y los sets de la vez anterior ya no valen.
+        vkResetDescriptorPool(m_gpu.device(), m_iblDescPool, 0);
+
+        const uint32_t setCount = 1 + IBL_PREFILTER_MIPS;
+        std::vector<VkDescriptorSetLayout> layouts(setCount, m_iblDescLayout);
+        std::vector<VkDescriptorSet>       sets(setCount, VK_NULL_HANDLE);
+
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool     = m_iblDescPool;
+        ai.descriptorSetCount = setCount;
+        ai.pSetLayouts        = layouts.data();
+        if (vkAllocateDescriptorSets(m_gpu.device(), &ai, sets.data()) != VK_SUCCESS)
+            throw std::runtime_error("failed to allocate IBL descriptor sets!");
+
+        VkDescriptorImageInfo envInfo{};
+        envInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        envInfo.imageView   = m_skybox.cubeView();
+        envInfo.sampler     = m_skybox.cubeSampler();
+
+        // Los VkDescriptorImageInfo tienen que seguir vivos hasta el
+        // vkUpdateDescriptorSets, asi que el vector se dimensiona de golpe.
+        std::vector<VkDescriptorImageInfo>  storeInfos(setCount);
+        std::vector<VkWriteDescriptorSet>   writes;
+        writes.reserve(setCount * 2);
+        for (uint32_t s = 0; s < setCount; s++)
+        {
+            storeInfos[s].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            storeInfos[s].imageView   = (s == 0) ? m_iblIrradianceStore : m_iblPrefilterStore[s - 1];
+
+            VkWriteDescriptorSet src{};
+            src.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            src.dstSet          = sets[s];
+            src.dstBinding      = 0;
+            src.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            src.descriptorCount = 1;
+            src.pImageInfo      = &envInfo;
+            writes.push_back(src);
+
+            VkWriteDescriptorSet dst = src;
+            dst.dstBinding     = 1;
+            dst.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            dst.pImageInfo     = &storeInfos[s];
+            writes.push_back(dst);
+        }
+        vkUpdateDescriptorSets(m_gpu.device(), (uint32_t)writes.size(), writes.data(), 0, nullptr);
+
+        VkCommandBuffer cmd = m_gpu.beginOneTimeCommands();
+
+        VkImageMemoryBarrier barriers[2]{};
+        for (int i = 0; i < 2; i++)
+        {
+            barriers[i].sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barriers[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barriers[i].subresourceRange.layerCount = 6;
+        }
+        barriers[0].image = m_iblIrradianceImage;
+        barriers[0].subresourceRange.levelCount = 1;
+        barriers[1].image = m_iblPrefilterImage;
+        barriers[1].subresourceRange.levelCount = IBL_PREFILTER_MIPS;
+
+        // A GENERAL: es el unico layout que admite imageStore.
+        for (int i = 0; i < 2; i++)
+        {
+            barriers[i].oldLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barriers[i].newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            barriers[i].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            barriers[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        }
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 2, barriers);
+
+        // Irradiancia: una invocacion por texel, 6 capas en z.
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_iblIrradiancePipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_iblPipelineLayout,
+                                0, 1, &sets[0], 0, nullptr);
+        IblPush push{ 0.0f, IBL_IRRADIANCE_SIZE };
+        vkCmdPushConstants(cmd, m_iblPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+        const uint32_t irrGroups = (IBL_IRRADIANCE_SIZE + 7) / 8;
+        vkCmdDispatch(cmd, irrGroups, irrGroups, 6);
+
+        // Prefiltrado: un dispatch por mip. Escriben regiones disjuntas y nadie
+        // las lee entre medias, asi que no hacen falta barreras intermedias.
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_iblPrefilterPipeline);
+        for (uint32_t m = 0; m < IBL_PREFILTER_MIPS; m++)
+        {
+            const uint32_t mipSize = IBL_PREFILTER_SIZE >> m;
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_iblPipelineLayout,
+                                    0, 1, &sets[1 + m], 0, nullptr);
+            IblPush mipPush{ (float)m / (float)(IBL_PREFILTER_MIPS - 1), mipSize };
+            vkCmdPushConstants(cmd, m_iblPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(mipPush), &mipPush);
+            const uint32_t groups = (mipSize + 7) / 8;
+            vkCmdDispatch(cmd, groups, groups, 6);
+        }
+
+        for (int i = 0; i < 2; i++)
+        {
+            barriers[i].oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            barriers[i].newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barriers[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            barriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        }
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 2, barriers);
+
+        // Bloquea hasta que la cola termina, asi que el ms medido incluye la GPU.
+        m_gpu.endOneTimeCommands(cmd);
+
+        const double ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - t0).count();
+        printf("IBL precompute: %.2f ms (irradiance %ux%u, prefilter %ux%u x%u mips)\n",
+               ms, IBL_IRRADIANCE_SIZE, IBL_IRRADIANCE_SIZE,
+               IBL_PREFILTER_SIZE, IBL_PREFILTER_SIZE, IBL_PREFILTER_MIPS);
+        fflush(stdout);
+    }
+
     void Renderer::createComputePipelines()
     {
         // --- Descriptor set layout: 8 storage buffers ---
@@ -3379,7 +3770,17 @@ namespace DonTopo {
                 ormInfo.imageView   = mgfx.ormView;
                 ormInfo.sampler     = mgfx.ormSampler;
 
-                VkWriteDescriptorSet gw[5]{};
+                VkDescriptorImageInfo irrInfo{};
+                irrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                irrInfo.imageView   = m_iblIrradianceView;
+                irrInfo.sampler     = m_iblSampler;
+
+                VkDescriptorImageInfo preInfo{};
+                preInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                preInfo.imageView   = m_iblPrefilterView;
+                preInfo.sampler     = m_iblSampler;
+
+                VkWriteDescriptorSet gw[7]{};
                 gw[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 gw[0].dstSet = mgfx.descSets[fi]; gw[0].dstBinding = 0;
                 gw[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -3405,7 +3806,17 @@ namespace DonTopo {
                 gw[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 gw[4].descriptorCount = 1; gw[4].pImageInfo = &ormInfo;
 
-                vkUpdateDescriptorSets(m_gpu.device(), 5, gw, 0, nullptr);
+                gw[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                gw[5].dstSet = mgfx.descSets[fi]; gw[5].dstBinding = 5;
+                gw[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                gw[5].descriptorCount = 1; gw[5].pImageInfo = &irrInfo;
+
+                gw[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                gw[6].dstSet = mgfx.descSets[fi]; gw[6].dstBinding = 6;
+                gw[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                gw[6].descriptorCount = 1; gw[6].pImageInfo = &preInfo;
+
+                vkUpdateDescriptorSets(m_gpu.device(), 7, gw, 0, nullptr);
             }
         }
 

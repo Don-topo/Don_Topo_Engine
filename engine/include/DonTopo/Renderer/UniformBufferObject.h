@@ -29,7 +29,13 @@ namespace DonTopo
         Light       lights[MAX_LIGHTS];
         glm::vec4   viewPos;
         int         numLights = 0;
-        float       _pad[3]{};              // std140: alinear a 16 bytes tras el int
+        // Multiplicador global del ambiente (IBL). Ocupa el PRIMER hueco del
+        // padding que ya existía tras numLights, así que ni sizeof(UBO) ni el
+        // offset de ningún miembro anterior cambian: solo pbr.frag declara este
+        // campo, y los otros 4 shaders que comparten el bloque siguen viendo
+        // exactamente el mismo layout std140 que antes.
+        float       ambientIntensity = 1.0f;
+        float       _pad[2]{};              // std140: alinear a 16 bytes tras el int
     };
 
     /*

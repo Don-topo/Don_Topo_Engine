@@ -268,6 +268,16 @@ void EditorUI::drawMenuBar()
             ImGui::MenuItem("Content Browser", nullptr, m_contentBrowserPanel.GetOpenPtr());
             ImGui::MenuItem("Script Editor", nullptr, m_scriptEditor->GetOpenPtr());
             ImGui::MenuItem("Animator", nullptr, m_animatorPanel.GetOpenPtr());
+            ImGui::Separator();
+            // Peso del ambiente IBL. Ajuste de sesion: no se serializa en la
+            // escena, asi que al reabrir el editor vuelve a 1.0.
+            if (m_renderer)
+            {
+                float ambient = m_renderer->ambientIntensity();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("Ambient (IBL)", &ambient, 0.0f, 3.0f, "%.2f"))
+                    m_renderer->setAmbientIntensity(ambient);
+            }
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();

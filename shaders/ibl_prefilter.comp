@@ -1,0 +1,101 @@
+#version 450
+
+// Prefiltrado especular del cubemap de entorno: un mip por nivel de rugosidad.
+// Se dispara una vez por mip, con pc.roughness y pc.faceSize del mip en curso.
+// Aproximacion split-sum de Karis: se asume N = V = R, que es lo que permite
+// guardar el resultado indexado solo por direccion y rugosidad.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform samplerCube envMap;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray outCube;
+
+layout(push_constant) uniform Push {
+    float roughness;
+    uint  faceSize;
+} pc;
+
+const float PI = 3.14159265359;
+const uint  SAMPLE_COUNT = 256u;
+
+vec3 dirFromFace(uint face, vec2 uv)
+{
+    float u = uv.x;
+    float v = uv.y;
+    if (face == 0u) return vec3( 1.0,   -v,   -u);  // +X
+    if (face == 1u) return vec3(-1.0,   -v,    u);  // -X
+    if (face == 2u) return vec3(   u,  1.0,    v);  // +Y
+    if (face == 3u) return vec3(   u, -1.0,   -v);  // -Y
+    if (face == 4u) return vec3(   u,   -v,  1.0);  // +Z
+    return                 vec3(  -u,   -v, -1.0);  // -Z
+}
+
+float radicalInverse(uint bits)
+{
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10;
+}
+
+vec2 hammersley(uint i, uint n)
+{
+    return vec2(float(i) / float(n), radicalInverse(i));
+}
+
+// Half-vector muestreado segun la NDF GGX del mismo `rough` que usa pbr.frag
+// (a = rough*rough), pa que el prefiltrado y la luz directa coincidan.
+vec3 importanceSampleGGX(vec2 xi, vec3 N, float rough)
+{
+    float a        = rough * rough;
+    float phi      = 2.0 * PI * xi.x;
+    float cosTheta = sqrt((1.0 - xi.y) / (1.0 + (a * a - 1.0) * xi.y));
+    float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+
+    vec3 h = vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta);
+
+    vec3 up      = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent = normalize(cross(up, N));
+    vec3 bitan   = cross(N, tangent);
+    return normalize(tangent * h.x + bitan * h.y + N * h.z);
+}
+
+void main()
+{
+    uvec3 gid = gl_GlobalInvocationID;
+    if (gid.x >= pc.faceSize || gid.y >= pc.faceSize) return;
+
+    vec2 uv = (vec2(gid.xy) + 0.5) / float(pc.faceSize) * 2.0 - 1.0;
+    vec3 N  = normalize(dirFromFace(gid.z, uv));
+    vec3 R  = N;
+    vec3 V  = N;
+
+    // Mip 0 es rugosidad 0: el lobulo es un espejo y todas las muestras caen en
+    // la misma direccion. Copiarlo directo evita 256 fetches identicos.
+    if (pc.roughness <= 0.0)
+    {
+        imageStore(outCube, ivec3(gid), vec4(textureLod(envMap, R, 0.0).rgb, 1.0));
+        return;
+    }
+
+    vec3  sum    = vec3(0.0);
+    float weight = 0.0;
+    for (uint i = 0u; i < SAMPLE_COUNT; i++)
+    {
+        vec2 xi = hammersley(i, SAMPLE_COUNT);
+        vec3 H  = importanceSampleGGX(xi, N, pc.roughness);
+        vec3 L  = normalize(2.0 * dot(V, H) * H - V);
+
+        // Pesar por NdotL y descartar el hemisferio de atras: sin esto los
+        // lobulos anchos arrastran radiancia de detras de la superficie.
+        float NdotL = dot(N, L);
+        if (NdotL <= 0.0) continue;
+        sum    += textureLod(envMap, L, 0.0).rgb * NdotL;
+        weight += NdotL;
+    }
+
+    vec3 color = weight > 0.0 ? sum / weight : textureLod(envMap, R, 0.0).rgb;
+    imageStore(outCube, ivec3(gid), vec4(color, 1.0));
+}
