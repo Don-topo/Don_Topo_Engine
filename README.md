@@ -4,9 +4,11 @@ A Vulkan-based game engine written in C++20.
 
 ## Features
 
-- PBR rendering (Cook-Torrance GGX, ACES tonemapping)
+- PBR rendering (Cook-Torrance GGX) on an HDR pipeline: the scene is lit in linear float and only tonemapped (ACES + gamma) once, in the composition pass
+- **Image-based lighting**: the skybox cubemap is convolved on the GPU into an irradiance map (diffuse) and a roughness-prefiltered map (specular, Karis analytic BRDF), with a live `Ambient (IBL)` weight
+- **HDR bloom**: threshold with soft knee, mip chain of compute downsample/upsample passes, additive composition — `threshold`, `knee` and `intensity` are live editor sliders (see below)
 - GPU skeletal animation (compute shader skinning: bone eval → hierarchy → skinning)
-- Shadow mapping (PCF 3×3)
+- Cascaded shadow maps (4 cascades, PCF 3×3)
 - Normal maps + tangent space
 - Cubemap skybox (fullscreen quad, inverse view-projection)
 - Wireframe render mode
@@ -144,6 +146,34 @@ exporter and the ImGui backends build into **`DonTopoEditor`**, which depends on
 the other way round. The renderer only ever sees the editor through a `UiLayer` interface, so
 `DonTopoRuntime` links Core alone and pulls in no ImGui symbols at all.
 
+## HDR & Bloom
+
+The frame is rendered in three stages. The **scene pass** draws geometry and skybox into an
+`R16G16B16A16_SFLOAT` target and writes linear radiance with no clamping — material shaders do
+no tonemapping at all. A **compute chain** then extracts the bright parts and blurs them: the
+first downsample applies a threshold with a soft knee (a quadratic ramp instead of a hard cut,
+so a surface crossing the threshold fades in rather than popping as the camera moves), each
+level halves the resolution with a 13-tap filter, and the way back up adds each mip into the
+one above it with a 3×3 tent. Finally the **composition pass** samples the HDR scene, adds the
+bloom, and applies ACES + gamma — the single point in the engine where HDR becomes LDR — into
+the LDR image the editor viewport samples and the standalone runtime blits to the swapchain.
+
+The chain starts at half viewport resolution and runs 5 mips; it is recreated with the
+swapchain, so resizing never leaks it. Every level lives in `VK_IMAGE_LAYOUT_GENERAL` for the
+whole chain, which is valid both for `imageStore` and for sampling, so the passes are separated
+by plain memory barriers instead of layout transitions.
+
+`threshold`, `knee` and `intensity` are push constants of the bloom pipelines, not UBO fields,
+so they take effect on the next frame without recreating anything — the UBO block is declared in
+five shaders and adding a member there would silently shift everything behind it under std140.
+The **View** menu exposes the three as sliders plus the measured GPU cost (~0.2 ms at 1280×720,
+including composition and tonemap). With `intensity = 0` the image is identical to the one
+before the feature existed, which is the check that the tonemap was moved without drift.
+
+The selection outline and the gizmos are drawn **in the composition pass**, after the tonemap,
+so they keep their exact flat colours and never bloom. The skybox stays in the scene pass and is
+tonemapped with the rest — that is what lets a bright sky feed the bloom.
+
 ## Selection Outline
 
 Selecting a GameObject that carries a mesh — static or skinned — traces it with an orange
@@ -152,13 +182,15 @@ cameras, pure collider nodes) get the usual axis gizmo but no outline, since the
 geometry to trace.
 
 The technique is an **inverted hull**: the mesh is redrawn extruded along its normals with
-front faces culled, after all scene geometry and before the skybox. Only the rim that falls
+front faces culled, in the composition pass, against the depth buffer the scene pass left
+behind. It lives there and not in the scene pass so that the tonemap never touches it — its
+flat orange has to stay the same orange. Only the rim that falls
 outside the original silhouette survives — the rest of the hull lands behind the surface and
 the depth test discards it. Stencil was not an option here: the depth attachment is
 `D32_SFLOAT`, so a stencil buffer would have meant changing the format, the render pass, the
 framebuffer and the image.
 
-Being part of the normal scene pass, the outline obeys everything around it. It is hidden when
+Sharing the scene's depth buffer, the outline obeys everything around it. It is hidden when
 another object occludes the selection, it is skipped entirely when the selection is outside the
 camera frustum (the same culling test the object itself went through, not a bypass), it follows
 the skinned pose of the current frame rather than the rest pose, and in **wireframe mode** the
@@ -295,9 +327,7 @@ logged and the component is quarantined). See `Scripts/Rotator.lua` and `Scripts
 
 | System | Candidates |
 | --- | --- |
-| Cascaded shadow maps | — |
-| PBR environment maps / IBL | — |
-| Post-processing | Bloom, SSAO, TAA |
+| Post-processing | SSAO, TAA |
 | Multi-backend RHI | DX12 / Vulkan / Metal, for Windows + Linux + macOS |
 
 ## License

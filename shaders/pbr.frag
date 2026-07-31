@@ -99,11 +99,6 @@ vec3 envBRDFApprox(vec3 F0, float rough, float NdotV)
     return F0 * ab.x + ab.y;
 }
 
-vec3 aces(vec3 x)
-{
-    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
-}
-
 void main()
 {
     // TBN + normal map
@@ -182,5 +177,9 @@ void main()
     vec3 ambient = (kDamb * diffuseIBL + specularIBL) * ao * ubo.ambientIntensity;
     vec3 color   = ambient + Lo;
 
-    outColor = vec4(pow(aces(color), vec3(1.0 / 2.2)), 1.0);
+    // Sin tonemapear: el attachment de este pass es R16G16B16A16_SFLOAT y lo
+    // consume la cadena de bloom, que necesita el rango alto intacto. El ACES +
+    // gamma que habia aqui vive ahora en shaders/bloom_composite.frag, que es el
+    // unico sitio del motor donde HDR pasa a LDR.
+    outColor = vec4(color, 1.0);
 }

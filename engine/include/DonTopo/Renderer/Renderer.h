@@ -138,6 +138,21 @@ namespace DonTopo {
             // sin recomputar nada.
             void  setAmbientIntensity(float v) { m_ambientIntensity = v; }
             float ambientIntensity() const     { return m_ambientIntensity; }
+
+            // Bloom HDR. Los tres viajan por push constant de los pipelines del
+            // bloom (NO por el UBO: ahi solo quedaban 2 floats y el bloque esta
+            // declarado en 5 shaders), asi que cambian en el frame siguiente sin
+            // recrear nada. intensity = 0 deja la imagen exactamente igual que
+            // antes de la feature.
+            void  setBloomThreshold(float v) { m_bloomThreshold = v; }
+            float bloomThreshold() const     { return m_bloomThreshold; }
+            void  setBloomKnee(float v)      { m_bloomKnee = v; }
+            float bloomKnee() const          { return m_bloomKnee; }
+            void  setBloomIntensity(float v) { m_bloomIntensity = v; }
+            float bloomIntensity() const     { return m_bloomIntensity; }
+            // Coste GPU del bloom + composicion del ultimo frame ya resuelto, en
+            // ms. 0 si el dispositivo no soporta timestamps.
+            float bloomGpuMs() const         { return m_bloomGpuMs; }
             // decoded: píxeles que el worker ya decodificó para este mesh (nullptr
             // en el camino síncrono). Encola todos los uploads en el batch del pump
             // actual y marca el objeto con el ticket vigente: no se dibuja hasta que
@@ -408,10 +423,24 @@ namespace DonTopo {
             void createSwapChain(Window& window);
             void createImageViews();
             void createOffscreenRenderPass();
+            // Pass LDR que compone HDR + bloom, tonemapea y hospeda ademas el
+            // contorno de seleccion y los gizmos: esos dos tienen que quedarse
+            // FUERA del tonemap para seguir saliendo con su color plano de
+            // siempre, y por eso ya no se dibujan en el pass de escena.
+            void createCompositeRenderPass();
             void createRenderPass();
             void createFramebuffers();
             void createOffscreenImages();
             void destroyOffscreenImages();
+            // Cadena de mips del bloom + descriptor sets de los tres pasos. Va
+            // con el swapchain: la resolucion de partida es la mitad del viewport,
+            // asi que redimensionar la recrea entera (destroyBloomImages primero).
+            void createBloomImages();
+            void destroyBloomImages();
+            // Pipelines, layouts, sampler y pool del bloom. Independientes del
+            // tamano, se crean una sola vez en initSceneResources.
+            void createBloomPipelines();
+            void recordBloomPass(VkCommandBuffer cmd);
             void createCommandBuffers();
             void createSyncObjects();
             void recordCommandBuffer(uint32_t imageIndex);
@@ -507,7 +536,10 @@ namespace DonTopo {
             std::vector<VkCommandBuffer>    m_commandBuffers;
             static constexpr int            MAX_FRAMES                          = 2;
 
-            // Offscreen render target (escena 3D → textura muestreada por la UI)
+            // Offscreen render target (resultado LDR ya tonemapeado → textura
+            // muestreada por la UI, o blit directo al swapchain en headless).
+            // Sigue teniendo el formato del swapchain: la escena ya no se dibuja
+            // aqui, la escribe el pass de composicion.
             VkRenderPass                    m_offscreenRenderPass               = VK_NULL_HANDLE;
             VkImage                         m_offscreenImage[MAX_FRAMES]        = {};
             VkDeviceMemory                  m_offscreenMemory[MAX_FRAMES]       = {};
@@ -515,6 +547,74 @@ namespace DonTopo {
             VkSampler                       m_offscreenSampler                  = VK_NULL_HANDLE;
             VkFramebuffer                   m_offscreenFramebuffer[MAX_FRAMES]  = {};
             VkDescriptorSet                 m_offscreenDescSet[MAX_FRAMES]      = {};
+
+            // ── HDR + bloom ──────────────────────────────────────────────────
+            // Formato flotante del target de escena y de la cadena del bloom. El
+            // pass de escena tiene que salir en HDR sin recortar a [0,1] o el
+            // umbral del bloom no tendria nada por encima que extraer.
+            static constexpr VkFormat       kHdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+            // Target de la escena (lo que antes era m_offscreenImage).
+            VkImage                         m_hdrImage[MAX_FRAMES]              = {};
+            VkDeviceMemory                  m_hdrMemory[MAX_FRAMES]             = {};
+            VkImageView                     m_hdrView[MAX_FRAMES]               = {};
+
+            // Cadena de mips. Una por frame en vuelo: se escribe y se consume
+            // dentro del mismo command buffer, pero dos frames pueden solaparse.
+            static constexpr uint32_t       BLOOM_MIPS = 5;
+            VkImage                         m_bloomImage[MAX_FRAMES]            = {};
+            VkDeviceMemory                  m_bloomMemory[MAX_FRAMES]           = {};
+            // Una vista 2D por nivel: imageStore no elige mip, igual que en el
+            // prefiltrado del IBL. La misma vista hace de storage image y de
+            // textura muestreada — la imagen se queda en GENERAL toda la cadena,
+            // que es un layout valido para ambas cosas y ahorra el ping-pong.
+            VkImageView                     m_bloomMipView[MAX_FRAMES][BLOOM_MIPS] = {};
+            VkExtent2D                      m_bloomMipExtent[BLOOM_MIPS]        = {};
+            // Niveles realmente usados: un viewport pequeno no da para BLOOM_MIPS.
+            uint32_t                        m_bloomMipCount                     = 0;
+            VkSampler                       m_bloomSampler                      = VK_NULL_HANDLE;
+            VkDescriptorSetLayout           m_bloomDescLayout                   = VK_NULL_HANDLE;
+            VkDescriptorPool                m_bloomDescPool                     = VK_NULL_HANDLE;
+            VkPipelineLayout                m_bloomPipelineLayout               = VK_NULL_HANDLE;
+            VkPipeline                      m_bloomDownPipeline                 = VK_NULL_HANDLE;
+            VkPipeline                      m_bloomUpPipeline                   = VK_NULL_HANDLE;
+            VkDescriptorSet                 m_bloomDownSets[MAX_FRAMES][BLOOM_MIPS] = {};
+            VkDescriptorSet                 m_bloomUpSets[MAX_FRAMES][BLOOM_MIPS]   = {};
+            // Compartida por bloom_down.comp y bloom_up.comp: comparten pipeline
+            // layout, asi que declaran el mismo bloque aunque cada uno ignore
+            // parte de los campos.
+            struct BloomPush {
+                float    srcTexelX;
+                float    srcTexelY;
+                float    threshold;
+                float    knee;
+                float    radius;
+                int32_t  prefilter;
+            };
+
+            // Pass de composicion: HDR + bloom → tonemap → m_offscreenImage.
+            VkRenderPass                    m_compositeRenderPass               = VK_NULL_HANDLE;
+            VkFramebuffer                   m_compositeFramebuffer[MAX_FRAMES]  = {};
+            VkDescriptorSetLayout           m_compositeDescLayout               = VK_NULL_HANDLE;
+            VkDescriptorPool                m_compositeDescPool                 = VK_NULL_HANDLE;
+            VkDescriptorSet                 m_compositeSets[MAX_FRAMES]         = {};
+            VkPipelineLayout                m_compositePipelineLayout           = VK_NULL_HANDLE;
+            VkPipeline                      m_compositePipeline                 = VK_NULL_HANDLE;
+
+            float                           m_bloomThreshold                    = 1.0f;
+            float                           m_bloomKnee                         = 0.5f;
+            float                           m_bloomIntensity                    = 0.05f;
+            // Coste GPU medido con timestamps: dos por frame en vuelo, leidos el
+            // frame siguiente (la fence de ese frame ya senalizo, asi que el
+            // resultado esta disponible sin bloquear).
+            VkQueryPool                     m_bloomQueryPool                    = VK_NULL_HANDLE;
+            bool                            m_timestampsSupported               = false;
+            float                           m_timestampPeriod                   = 0.0f;
+            bool                            m_bloomQueryPending[MAX_FRAMES]     = {};
+            float                           m_bloomGpuMs                        = 0.0f;
+            // Frames medidos. Sirve para soltar UNA linea de coste ya en caliente
+            // (igual que "IBL precompute: ..."), en vez de ensuciar el log cada
+            // frame: el valor en vivo se ve en el menu View del editor.
+            uint32_t                        m_bloomMeasuredFrames               = 0;
 
             VkSemaphore                     m_imageAvailable[MAX_FRAMES]        = {};
             std::vector<VkSemaphore>        m_renderFinished;

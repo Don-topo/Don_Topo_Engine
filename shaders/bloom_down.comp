@@ -1,0 +1,70 @@
+#version 450
+
+// Un nivel de la cadena de downsample del bloom. El nivel 0 lee la imagen HDR
+// de la escena y aplica ademas el umbral con soft knee; los demas leen el mip
+// anterior de la propia cadena y solo filtran.
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D srcTex;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D dstImg;
+
+layout(push_constant) uniform Push {
+    vec2  srcTexel;   // 1 / tamano del nivel de ORIGEN
+    float threshold;
+    float knee;
+    float radius;     // solo lo usa bloom_up.comp; aqui se ignora
+    int   prefilter;  // != 0 solo en el nivel 0
+} push;
+
+// Curva de umbral con rodilla suave: por debajo de threshold-knee no pasa nada,
+// por encima de threshold+knee pasa el excedente completo, y en medio interpola
+// con una cuadratica en vez de un corte duro (un corte duro hace que un objeto
+// que cruza el umbral aparezca de golpe al moverse la camara).
+vec3 applyThreshold(vec3 c)
+{
+    float br   = max(c.r, max(c.g, c.b));
+    float soft = clamp(br - push.threshold + push.knee, 0.0, 2.0 * push.knee);
+    soft       = soft * soft / (4.0 * push.knee + 1e-4);
+    float w    = max(soft, br - push.threshold) / max(br, 1e-4);
+    return c * w;
+}
+
+vec3 tap(vec2 uv, vec2 off)
+{
+    return texture(srcTex, uv + off * push.srcTexel).rgb;
+}
+
+void main()
+{
+    ivec2 dstSize  = imageSize(dstImg);
+    ivec2 dstCoord = ivec2(gl_GlobalInvocationID.xy);
+    if (dstCoord.x >= dstSize.x || dstCoord.y >= dstSize.y) return;
+
+    vec2 uv = (vec2(dstCoord) + 0.5) / vec2(dstSize);
+
+    // Filtro de 13 taps (Jimenez, COD:AW). Los cuatro del centro pesan la mitad
+    // del total: es lo que evita el aliasing temporal que da un box 2x2 cuando
+    // la cadena baja varios niveles.
+    vec3 a = tap(uv, vec2(-2.0, -2.0));
+    vec3 b = tap(uv, vec2( 0.0, -2.0));
+    vec3 c = tap(uv, vec2( 2.0, -2.0));
+    vec3 d = tap(uv, vec2(-2.0,  0.0));
+    vec3 e = tap(uv, vec2( 0.0,  0.0));
+    vec3 f = tap(uv, vec2( 2.0,  0.0));
+    vec3 g = tap(uv, vec2(-2.0,  2.0));
+    vec3 h = tap(uv, vec2( 0.0,  2.0));
+    vec3 i = tap(uv, vec2( 2.0,  2.0));
+    vec3 j = tap(uv, vec2(-1.0, -1.0));
+    vec3 k = tap(uv, vec2( 1.0, -1.0));
+    vec3 l = tap(uv, vec2(-1.0,  1.0));
+    vec3 m = tap(uv, vec2( 1.0,  1.0));
+
+    vec3 color = e * 0.125
+               + (a + c + g + i) * 0.03125
+               + (b + d + f + h) * 0.0625
+               + (j + k + l + m) * 0.125;
+
+    if (push.prefilter != 0) color = applyThreshold(color);
+
+    imageStore(dstImg, dstCoord, vec4(max(color, vec3(0.0)), 1.0));
+}

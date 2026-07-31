@@ -1,0 +1,48 @@
+#version 450
+
+// Un nivel de la cadena de upsample: lee el mip N (ya filtrado) con un tent 3x3
+// y lo SUMA sobre el mip N-1, que ya contiene lo que dejo el downsample. Por eso
+// dstImg no es writeonly: hace falta imageLoad para acumular. El qualifier de
+// formato (rgba16f) es lo que permite leerla sin exigir
+// shaderStorageImageReadWithoutFormat.
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D srcTex;
+layout(set = 0, binding = 1, rgba16f) uniform image2D dstImg;
+
+layout(push_constant) uniform Push {
+    vec2  srcTexel;   // 1 / tamano del nivel de ORIGEN (el mip pequeno)
+    float threshold;  // sin uso aqui
+    float knee;       // sin uso aqui
+    float radius;     // separacion del tent, en texels del origen
+    int   prefilter;  // sin uso aqui
+} push;
+
+vec3 tap(vec2 uv, vec2 off)
+{
+    return texture(srcTex, uv + off * push.srcTexel * push.radius).rgb;
+}
+
+void main()
+{
+    ivec2 dstSize  = imageSize(dstImg);
+    ivec2 dstCoord = ivec2(gl_GlobalInvocationID.xy);
+    if (dstCoord.x >= dstSize.x || dstCoord.y >= dstSize.y) return;
+
+    vec2 uv = (vec2(dstCoord) + 0.5) / vec2(dstSize);
+
+    // Tent 3x3 (1 2 1 / 2 4 2 / 1 2 1) / 16.
+    vec3 sum = tap(uv, vec2(-1.0, -1.0)) * 1.0
+             + tap(uv, vec2( 0.0, -1.0)) * 2.0
+             + tap(uv, vec2( 1.0, -1.0)) * 1.0
+             + tap(uv, vec2(-1.0,  0.0)) * 2.0
+             + tap(uv, vec2( 0.0,  0.0)) * 4.0
+             + tap(uv, vec2( 1.0,  0.0)) * 2.0
+             + tap(uv, vec2(-1.0,  1.0)) * 1.0
+             + tap(uv, vec2( 0.0,  1.0)) * 2.0
+             + tap(uv, vec2( 1.0,  1.0)) * 1.0;
+    sum *= 1.0 / 16.0;
+
+    vec3 dst = imageLoad(dstImg, dstCoord).rgb;
+    imageStore(dstImg, dstCoord, vec4(dst + sum, 1.0));
+}

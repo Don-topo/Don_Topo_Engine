@@ -277,6 +277,26 @@ void EditorUI::drawMenuBar()
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("Ambient (IBL)", &ambient, 0.0f, 3.0f, "%.2f"))
                     m_renderer->setAmbientIntensity(ambient);
+
+                // Bloom. Mismo criterio que el ambiente: ajuste de sesion, no se
+                // serializa. Intensity 0 deja la imagen como antes del bloom.
+                ImGui::Separator();
+                float threshold = m_renderer->bloomThreshold();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("Bloom threshold", &threshold, 0.0f, 5.0f, "%.2f"))
+                    m_renderer->setBloomThreshold(threshold);
+
+                float knee = m_renderer->bloomKnee();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("Bloom knee", &knee, 0.0f, 1.0f, "%.2f"))
+                    m_renderer->setBloomKnee(knee);
+
+                float intensity = m_renderer->bloomIntensity();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("Bloom intensity", &intensity, 0.0f, 1.0f, "%.3f"))
+                    m_renderer->setBloomIntensity(intensity);
+
+                ImGui::Text("Bloom GPU: %.3f ms", m_renderer->bloomGpuMs());
             }
             ImGui::EndMenu();
         }
