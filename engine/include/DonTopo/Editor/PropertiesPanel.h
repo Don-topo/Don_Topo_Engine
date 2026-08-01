@@ -47,6 +47,10 @@ private:
     void drawCameraSection(EditorContext& ctx);
     void drawAnimatorSection(EditorContext& ctx);
     void drawMeshSection(EditorContext& ctx);
+    // Screen Space Reflections del objeto. No es un componente y no pasa por
+    // "Add": son dos campos del GameObject (como el transform), así que la
+    // sección aparece sobre cualquier objeto con malla.
+    void drawSsrSection(EditorContext& ctx);
     void drawMeshDialog(EditorContext& ctx);
     void drawAudioClipSection(EditorContext& ctx);
     void drawAudioClipDialog(EditorContext& ctx);
@@ -186,6 +190,13 @@ private:
     // y el siguiente commit llega para otro AudioClip, este id evita aplicar
     // un "before" que no le corresponde.
     uint64_t m_audioDragOwnerId = 0;
+
+    // SSR — mismo patrón de snapshot que los sliders de audio (SliderFloat, no
+    // DragFloat: salta al valor bajo el cursor en el mismo frame del click, así
+    // que el "before" se lee antes de dibujar el widget).
+    bool     m_ssrDragActive = false;
+    float    m_ssrDragBeforeIntensity = 0.5f;
+    uint64_t m_ssrDragOwnerId = 0;
 
     // Popup "Nuevo Script" — disparado desde Add > Script > Nuevo Script...
     // m_newScriptTarget se captura al abrir (ctx.selected puede cambiar con

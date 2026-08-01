@@ -332,6 +332,43 @@ void EditorUI::drawMenuBar()
                 ImGui::EndDisabled();
 
                 ImGui::Text("SSAO GPU: %.3f ms", m_renderer->ssaoGpuMs());
+
+                // SSR: interruptor global. La fuerza es POR GAMEOBJECT (panel
+                // Properties), asi que con esto puesto pero ningun objeto marcado
+                // tampoco se graba nada.
+                ImGui::Separator();
+                bool ssr = m_renderer->ssrEnabled();
+                if (ImGui::Checkbox("SSR", &ssr))
+                    m_renderer->setSsrEnabled(ssr);
+
+                ImGui::BeginDisabled(!ssr);
+                float ssrDist = m_renderer->ssrMaxDistance();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("SSR distance", &ssrDist, 0.5f, 50.0f, "%.1f"))
+                    m_renderer->setSsrMaxDistance(ssrDist);
+
+                float ssrThick = m_renderer->ssrThickness();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("SSR thickness", &ssrThick, 0.01f, 3.0f, "%.2f"))
+                    m_renderer->setSsrThickness(ssrThick);
+
+                int ssrSteps = m_renderer->ssrMaxSteps();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderInt("SSR steps", &ssrSteps, 8, 128))
+                    m_renderer->setSsrMaxSteps(ssrSteps);
+
+                float ssrEdge = m_renderer->ssrEdgeFade();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("SSR edge fade", &ssrEdge, 0.0f, 0.5f, "%.3f"))
+                    m_renderer->setSsrEdgeFade(ssrEdge);
+
+                float ssrInt = m_renderer->ssrIntensity();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("SSR intensity", &ssrInt, 0.0f, 2.0f, "%.2f"))
+                    m_renderer->setSsrIntensity(ssrInt);
+                ImGui::EndDisabled();
+
+                ImGui::Text("SSR GPU: %.3f ms", m_renderer->ssrGpuMs());
             }
             ImGui::EndMenu();
         }

@@ -484,7 +484,13 @@ int main(int argc, char** argv)
 
             scene.traverse([&](DonTopo::GameObject* go) {
                 if (go->staticRenderIndex >= 0)
+                {
                     renderer.setTransform(go->staticRenderIndex, go->worldTransform);
+                    // El runtime tiene que renderizar igual que el editor: mismo
+                    // sink, mismo sitio.
+                    renderer.setObjectSsr(go->staticRenderIndex,
+                                          go->ssrEnabled ? go->ssrIntensity : 0.0f);
+                }
 
                 if (go->skinnedRenderIndex >= 0)
                 {
@@ -500,6 +506,8 @@ int main(int argc, char** argv)
                         renderer.updateAnimation(go->skinnedRenderIndex, dt);
                     }
                     renderer.setSkinnedTransform(go->skinnedRenderIndex, go->worldTransform);
+                    renderer.setSkinnedSsr(go->skinnedRenderIndex,
+                                           go->ssrEnabled ? go->ssrIntensity : 0.0f);
                 }
             });
 

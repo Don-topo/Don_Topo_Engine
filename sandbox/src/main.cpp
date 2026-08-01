@@ -322,7 +322,14 @@ int main()
                     liveCube = go;
 
                 if (go->staticRenderIndex >= 0)
+                {
                     renderer.setTransform(go->staticRenderIndex, go->worldTransform);
+                    // Mismo sitio que el transform: es la única sincronización
+                    // por frame que ya cubre Play Mode, Undo/Redo y la carga de
+                    // escena sin caminos propios.
+                    renderer.setObjectSsr(go->staticRenderIndex,
+                                          go->ssrEnabled ? go->ssrIntensity : 0.0f);
+                }
 
                 if (go->skinnedRenderIndex >= 0)
                 {
@@ -346,6 +353,8 @@ int main()
                         renderer.updateAnimation(go->skinnedRenderIndex, dt);
                     }
                     renderer.setSkinnedTransform(go->skinnedRenderIndex, go->worldTransform);
+                    renderer.setSkinnedSsr(go->skinnedRenderIndex,
+                                           go->ssrEnabled ? go->ssrIntensity : 0.0f);
                 }
             });
 

@@ -131,6 +131,21 @@ namespace DonTopo {
                 if (objectIndex < m_objects.size())
                     m_objects[objectIndex].transform = transform;
             }
+            // Fuerza de SSR del objeto (0 = no refleja). Viaja hasta el post-pass
+            // por el alfa del attachment HDR, que pbr.frag escribe desde
+            // PushData::flags.y. Se sincroniza por frame junto al transform, igual
+            // que hace el runtime: asi Play Mode, Undo y la carga de escena no
+            // necesitan ningun camino propio.
+            void setObjectSsr(size_t objectIndex, float strength)
+            {
+                if (objectIndex < m_objects.size())
+                    m_objects[objectIndex].ssrStrength = strength;
+            }
+            void setSkinnedSsr(int index, float strength)
+            {
+                if (index >= 0 && index < (int)m_skinnedObjects.size())
+                    m_skinnedObjects[index].ssrStrength = strength;
+            }
             void setLights(const std::vector<Light>& lights){ m_lights = lights; }
 
             // Peso global del ambiente IBL. 1.0 = el entorno tal cual lo da el
@@ -174,6 +189,27 @@ namespace DonTopo {
             // Coste GPU del pre-pass + los dos dispatches, en ms. 0 si el efecto
             // esta apagado o el dispositivo no soporta timestamps.
             float ssaoGpuMs() const          { return m_ssaoGpuMs; }
+
+            // SSR (reflejos en espacio de pantalla). Interruptor global; ademas
+            // cada GameObject lleva su propia fuerza, y con el interruptor puesto
+            // pero NINGUN objeto marcado tampoco se graba nada. Los parametros
+            // viajan por push constant propia (SsrPush), no por el UBO.
+            void  setSsrEnabled(bool v)      { m_ssrEnabled = v; }
+            bool  ssrEnabled() const         { return m_ssrEnabled; }
+            void  setSsrMaxDistance(float v) { m_ssrMaxDistance = v; }
+            float ssrMaxDistance() const     { return m_ssrMaxDistance; }
+            void  setSsrThickness(float v)   { m_ssrThickness = v; }
+            float ssrThickness() const       { return m_ssrThickness; }
+            void  setSsrMaxSteps(int v)      { m_ssrMaxSteps = v; }
+            int   ssrMaxSteps() const        { return m_ssrMaxSteps; }
+            void  setSsrEdgeFade(float v)    { m_ssrEdgeFade = v; }
+            float ssrEdgeFade() const        { return m_ssrEdgeFade; }
+            void  setSsrIntensity(float v)   { m_ssrIntensity = v; }
+            float ssrIntensity() const       { return m_ssrIntensity; }
+            // Coste GPU del SSR en ms: los dos dispatches, mas el depth pre-pass
+            // cuando es el SSR quien lo pide (con el SSAO encendido ese pre-pass
+            // ya lo contabiliza ssaoGpuMs y aqui no se suma dos veces).
+            float ssrGpuMs() const           { return m_ssrGpuMs; }
             // decoded: píxeles que el worker ya decodificó para este mesh (nullptr
             // en el camino síncrono). Encola todos los uploads en el batch del pump
             // actual y marca el objeto con el ticket vigente: no se dibuja hasta que
@@ -273,6 +309,12 @@ namespace DonTopo {
                 int      sharedIndex   = -1;
                 uint32_t firstInstance = 0;
                 uint32_t instanceCount = 0;
+                // Fuerza de SSR común al grupo. Entra en la CLAVE de agrupado
+                // junto a sharedIndex: metallic y roughness ya viajaban por
+                // entrada compartida, así que dos objetos con la misma malla y
+                // distinta fuerza de SSR no pueden compartir push constants.
+                // Solo se parten en dos draws cuando los valores difieren.
+                float    ssrStrength   = 0.0f;
             };
             // Un objeto ya evaluado por el pass que lo va a dibujar. Las guardas
             // (entrada borrada, upload en vuelo) y el culling por AABB los
@@ -283,6 +325,10 @@ namespace DonTopo {
                 int              sharedIndex = -1;
                 bool             visible     = false;
                 const glm::mat4* transform   = nullptr;
+                // Los passes que no pintan color (sombras, depth pre-pass) lo
+                // dejan a 0: con un único valor el agrupado sale idéntico al de
+                // antes de la feature.
+                float            ssr         = 0.0f;
             };
             // Agrupa por sharedIndex los candidatos VISIBLES y deja sus
             // transforms contiguos por grupo en outTransforms (que apunta ya al
@@ -322,6 +368,9 @@ namespace DonTopo {
                 // "vertexBuffer == VK_NULL_HANDLE".
                 int             sharedIndex         = -1;
                 glm::mat4       transform{1.0f};
+                // 0 = no refleja. Lo sincroniza el bucle de la aplicación desde
+                // el GameObject, igual que el transform.
+                float           ssrStrength         = 0.0f;
             };
 
             struct SkinnedMatGfx {
@@ -415,6 +464,10 @@ namespace DonTopo {
                 // Texturas y descriptor sets por material
                 std::vector<SkinnedMatGfx>  matGfx;
                 std::vector<SubMeshDraw>    subMeshes;
+                // Fuerza de SSR del objeto, sincronizada desde el GameObject
+                // igual que el transform. La ruta skinned dibuja una instancia
+                // por submalla, así que aquí no hay agrupado que partir.
+                float          ssrStrength          = 0.0f;
                 // Estado de animación
                 float     animTime       = 0.0f;
                 // Índice del clip que se evalúa este frame. Sin blending solo se
@@ -477,6 +530,22 @@ namespace DonTopo {
             // alojados. Necesario tras recrear las imagenes con el swapchain: los
             // sets apuntarian a vistas destruidas.
             void refreshSsaoDescriptors();
+            // SSR. Mismo reparto que el SSAO: los pipelines una sola vez, las
+            // imagenes y los sets con el swapchain (colgados de
+            // createOffscreenImages/destroyOffscreenImages).
+            void createSsrPipelines();
+            void createSsrImages();
+            void destroySsrImages();
+            // Los dos dispatches (marcha + suma sobre el HDR). Va DESPUES del
+            // pass de escena -necesita el color ya iluminado- y ANTES del bloom,
+            // para que el reflejo pase por el umbral del bloom y por el tonemap
+            // como el resto de la imagen.
+            void recordSsrPass(VkCommandBuffer cmd, const glm::mat4& proj);
+            // true si hay algo que grabar: interruptor global puesto Y al menos
+            // un objeto visible con fuerza > 0. Con cualquiera de las dos cosas
+            // en falso no se graba ni un dispatch (ni se calcula multiplicando
+            // por cero), asi que el coste GPU cae a cero.
+            bool ssrActive() const;
             // Un solo write del binding 7 sobre `set`. La comparten
             // allocateObjectDescriptorSet, la ruta skinned y el refresh de arriba.
             void writeSsaoBinding(VkDescriptorSet set, int frameIndex);
@@ -722,6 +791,63 @@ namespace DonTopo {
             bool                            m_ssaoQueryPending[MAX_FRAMES]      = {};
             float                           m_ssaoGpuMs                         = 0.0f;
             uint32_t                        m_ssaoMeasuredFrames                = 0;
+
+            // ── SSR ──────────────────────────────────────────────────────────
+            // Reflejo aislado, a resolucion completa y en el MISMO formato que el
+            // HDR: ssr_resolve.comp lo suma sobre m_hdrImage y los dos son
+            // storage images con el mismo qualifier rgba16f.
+            VkImage                         m_ssrImage[MAX_FRAMES]              = {};
+            VkDeviceMemory                  m_ssrMemory[MAX_FRAMES]             = {};
+            VkImageView                     m_ssrView[MAX_FRAMES]               = {};
+            // LINEAR: a diferencia del SSAO, el impacto del rayo cae entre
+            // texeles y el color de la escena si tiene garantizado el filtrado
+            // lineal en R16G16B16A16_SFLOAT. La profundidad se muestrea con
+            // m_ssaoSampler (NEAREST), que es el que le corresponde a D32_SFLOAT.
+            VkSampler                       m_ssrSampler                        = VK_NULL_HANDLE;
+            // Un unico layout para los dos pipelines: ssr_resolve.comp declara el
+            // binding 1 y simplemente no lo lee.
+            VkDescriptorSetLayout           m_ssrDescLayout                     = VK_NULL_HANDLE;
+            VkDescriptorPool                m_ssrDescPool                       = VK_NULL_HANDLE;
+            VkPipelineLayout                m_ssrPipelineLayout                 = VK_NULL_HANDLE;
+            VkPipeline                      m_ssrPipeline                       = VK_NULL_HANDLE;
+            VkPipeline                      m_ssrResolvePipeline                = VK_NULL_HANDLE;
+            VkDescriptorSet                 m_ssrSets[MAX_FRAMES]               = {};
+            VkDescriptorSet                 m_ssrResolveSets[MAX_FRAMES]        = {};
+            // Compartida por ssr.comp y ssr_resolve.comp, que comparten pipeline
+            // layout. 48 bytes: los mismos campos y en el mismo orden que el
+            // bloque de los dos .comp.
+            struct SsrPush {
+                float   projP00;
+                float   projP11;
+                float   projP22;
+                float   projP32;
+                float   invResX;
+                float   invResY;
+                float   maxDistance;
+                float   thickness;
+                int32_t maxSteps;
+                int32_t refineSteps;
+                float   edgeFade;
+                float   intensity;
+            };
+            static_assert(sizeof(SsrPush) == 48, "SsrPush debe seguir en 48 bytes: los dos .comp declaran este layout");
+            bool                            m_ssrEnabled                        = false;
+            float                           m_ssrMaxDistance                    = 8.0f;
+            float                           m_ssrThickness                      = 0.5f;
+            int                             m_ssrMaxSteps                       = 32;
+            float                           m_ssrEdgeFade                       = 0.1f;
+            float                           m_ssrIntensity                      = 1.0f;
+            // Cuatro queries por frame: [0,1] el depth pre-pass cuando es el SSR
+            // quien lo pide, [2,3] los dos dispatches. Reutilizar las del SSAO o
+            // las del bloom mezclaria dos medidas.
+            VkQueryPool                     m_ssrQueryPool                      = VK_NULL_HANDLE;
+            bool                            m_ssrQueryPending[MAX_FRAMES]       = {};
+            // recordSsaoPass marca aqui que dejo escritos los timestamps [0,1] de
+            // este frame; recordSsrPass solo da la medida por buena si es asi (si
+            // no, el par no se habria escrito y la lectura daria NOT_READY).
+            bool                            m_ssrStampedPrepass                 = false;
+            float                           m_ssrGpuMs                          = 0.0f;
+            uint32_t                        m_ssrMeasuredFrames                 = 0;
 
             VkSemaphore                     m_imageAvailable[MAX_FRAMES]        = {};
             std::vector<VkSemaphore>        m_renderFinished;

@@ -356,6 +356,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
             drawCameraSection(ctx);
             drawAnimatorSection(ctx);
             drawMeshSection(ctx);
+            drawSsrSection(ctx);
             drawAudioClipSection(ctx);
             drawScriptsSection(ctx);
             drawAddComponentButton(ctx);
@@ -366,6 +367,74 @@ void PropertiesPanel::draw(EditorContext& ctx)
 
     drawMeshDialog(ctx);
     drawAudioClipDialog(ctx);
+}
+
+void PropertiesPanel::drawSsrSection(EditorContext& ctx)
+{
+    // Sin malla no hay superficie que refleje.
+    if (!ctx.selected->hasMesh()) return;
+
+    if (!ImGui::TreeNodeEx("Screen Space Reflections", ImGuiTreeNodeFlags_OpenOnArrow))
+        return;
+
+    Scene*         scene = ctx.scene;
+    const uint64_t id    = ctx.selected->id;
+
+    bool enabled = ctx.selected->ssrEnabled;
+    if (ImGui::Checkbox("Enable SSR", &enabled))
+    {
+        const bool before = ctx.selected->ssrEnabled;
+        ctx.selected->ssrEnabled = enabled;
+        ctx.pushLog("SSR de '" + ctx.selected->name + "' " +
+                    (enabled ? "activado" : "desactivado"));
+        if (scene && ctx.undo)
+        {
+            ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
+                "SSR de '" + ctx.selected->name + "'", before, enabled,
+                [scene, id](const bool& v) {
+                    if (GameObject* go = scene->findById(id)) go->ssrEnabled = v;
+                }));
+        }
+    }
+
+    ImGui::BeginDisabled(!ctx.selected->ssrEnabled);
+    // El "before" se lee ANTES de dibujar el slider: SliderFloat salta al valor
+    // bajo el cursor en el mismo frame del click, así que releerlo después daría
+    // ya el nuevo y el undo devolvería el valor del click, no el original.
+    const float beforeIntensity = ctx.selected->ssrIntensity;
+    float       intensity       = ctx.selected->ssrIntensity;
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+    // Reflectividad a incidencia normal: 1 = espejo desde cualquier ángulo,
+    // valores bajos reflejan sobre todo de canto (suelo pulido, agua).
+    if (ImGui::SliderFloat("Reflectivity", &intensity, 0.0f, 1.0f, "%.2f"))
+        ctx.selected->ssrIntensity = intensity;
+
+    if (ImGui::IsItemActivated())
+    {
+        m_ssrDragActive          = true;
+        m_ssrDragBeforeIntensity = beforeIntensity;
+        m_ssrDragOwnerId         = id;
+    }
+    // El id del dueño evita aplicar un "before" ajeno si el drag se interrumpió
+    // sin commit (p.ej. un Ctrl+Z a mitad de arrastre reconstruye el GameObject).
+    if (ImGui::IsItemDeactivatedAfterEdit() && m_ssrDragActive && m_ssrDragOwnerId == id)
+    {
+        m_ssrDragActive = false;
+        ctx.pushLog("Reflectivity de '" + ctx.selected->name + "' cambiado a " +
+                    std::to_string(ctx.selected->ssrIntensity));
+        if (scene && ctx.undo)
+        {
+            const float after = ctx.selected->ssrIntensity;
+            ctx.undo->push(std::make_unique<PropertyCommand<float>>(
+                "Reflectivity de '" + ctx.selected->name + "'", m_ssrDragBeforeIntensity, after,
+                [scene, id](const float& v) {
+                    if (GameObject* go = scene->findById(id)) go->ssrIntensity = v;
+                }));
+        }
+    }
+    ImGui::EndDisabled();
+
+    ImGui::TreePop();
 }
 
 void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)

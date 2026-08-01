@@ -7,6 +7,8 @@ A Vulkan-based game engine written in C++20.
 - PBR rendering (Cook-Torrance GGX) on an HDR pipeline: the scene is lit in linear float and only tonemapped (ACES + gamma) once, in the composition pass
 - **Image-based lighting**: the skybox cubemap is convolved on the GPU into an irradiance map (diffuse) and a roughness-prefiltered map (specular, Karis analytic BRDF), with a live `Ambient (IBL)` weight
 - **HDR bloom**: threshold with soft knee, mip chain of compute downsample/upsample passes, additive composition — `threshold`, `knee` and `intensity` are live editor sliders (see below)
+- **SSAO**: depth-only pre-pass + compute occlusion (16-sample hemisphere kernel, normals reconstructed from depth) and a blur, applied to the ambient term only; toggle plus `radius`/`bias`/`intensity`/`power` sliders (see below)
+- **Screen space reflections**: view-space ray march with binary refinement, added into the HDR target *before* bloom so reflections bloom and tonemap like everything else; enabled and weighted **per GameObject**, with a global switch and 5 sliders (see below)
 - GPU skeletal animation (compute shader skinning: bone eval → hierarchy → skinning)
 - Cascaded shadow maps (4 cascades, PCF 3×3)
 - Normal maps + tangent space
@@ -174,6 +176,68 @@ The selection outline and the gizmos are drawn **in the composition pass**, afte
 so they keep their exact flat colours and never bloom. The skybox stays in the scene pass and is
 tonemapped with the rest — that is what lets a bright sky feed the bloom.
 
+## Screen-Space Effects
+
+Two effects share one **depth-only pre-pass** that draws the whole scene into a sampled
+`D32_SFLOAT` image before the scene pass, with the same frustum culling and the same instanced
+batching as the real draw — occluding against geometry that is not actually drawn would be a
+visible artifact. It is recorded when SSAO **or** SSR needs it, and skipped entirely when neither
+does. Both effects reconstruct view-space position and a geometric normal from that depth alone
+(the normal comes from the smaller of the two depth slopes on each axis, so a pixel on a
+silhouette does not blend two surfaces), which is why neither needs a G-buffer, an extra
+attachment on the scene pass, or a new UBO member.
+
+### SSAO
+
+A compute shader traces 16 samples in a cosine-weighted hemisphere around each pixel, packed
+towards the origin where contact occlusion actually lives, with a per-pixel rotation so the
+kernel does not band; a second pass blurs the result. The AO multiplies the **ambient term only**
+— applying it to direct light would dim shadows the cascade maps already compute.
+
+The **View** menu carries a toggle plus `radius`, `bias`, `intensity` and `power`, all push
+constants, so they take effect the next frame. Turned off, neither the pre-pass nor the two
+dispatches are recorded: the AO map is cleared to 1.0 **once** (on creation and on switch-off)
+and `pbr.frag` multiplies by unity, so the image is identical to the one before the feature and
+the GPU cost is zero, not "computed and multiplied by zero".
+
+### SSR
+
+Reflections run **after the scene pass** — they need colour that is already lit — and write into
+the HDR target **before** the bloom chain, so a reflection blooms and goes through ACES exactly
+like the surface it mirrors. That takes two dispatches: `ssr.comp` marches the ray and writes an
+isolated reflection image, `ssr_resolve.comp` adds it into `m_hdrImage` texel by texel. They are
+split on purpose — the march samples *arbitrary* pixels of the scene colour, so writing into that
+same image would be a race; the resolve is strictly 1:1 and cannot be. The HDR image gained
+`STORAGE_BIT` and is put back into `SHADER_READ_ONLY_OPTIMAL` before bloom and composition read it.
+
+The ray marches in **view space**, reprojecting each step with the frame's four projection
+coefficients, and a 4-step binary search refines the last segment — with linear steps alone the
+hit lands up to a full step past the real contact and the reflection looks detached from the
+object. A hit fades out towards the screen border, with ray length, and as the ray turns back
+towards the camera (what it would reflect is behind the viewer, which is precisely what the
+screen does not contain). A ray that finds nothing contributes **nothing**: `pbr.frag` already
+adds the prefiltered cubemap for every pixel, so any fallback here would count the environment
+twice.
+
+Which surface reflects, and how much, is **per GameObject** (`Properties → Screen Space
+Reflections`: an `Enable SSR` checkbox and a `Reflectivity` slider, both serialised with the
+scene and honoured by the exported runtime). The value reaches the post-pass through the **alpha
+channel of the HDR target**, which `pbr.frag` writes from a spare push-constant slot — before
+this it was always 1.0 and nothing read it. Reflectivity acts as `F0` in a Schlick term, so 1.0
+is a mirror at any angle while low values only show up at grazing incidence, which is how a
+polished floor or water behaves. Because it is a push constant per shared entry — like `metallic`
+and `roughness` already were — it also enters the **instancing key**: two objects sharing a mesh
+but not a reflectivity are split into two draws, and nothing else about batching changes.
+
+The **View** menu has the global switch plus `distance`, `thickness`, `steps`, `edge fade` and
+`intensity`, and reports the measured GPU cost (~0.3 ms at 1280×720 with 32 steps, pre-pass
+included). With the switch off — or on with no object marked — not a single dispatch is recorded
+and the HDR image is left exactly as the scene pass produced it.
+
+Normals come from depth, not from an attachment, so the normal map's detail does not reach the
+reflection: polished metal with a normal map mirrors as if it were flat. And being screen-space,
+anything off-screen or hidden behind another object simply is not reflected.
+
 ## Selection Outline
 
 Selecting a GameObject that carries a mesh — static or skinned — traces it with an orange
@@ -327,7 +391,7 @@ logged and the component is quarantined). See `Scripts/Rotator.lua` and `Scripts
 
 | System | Candidates |
 | --- | --- |
-| Post-processing | SSAO, TAA |
+| Post-processing | TAA, motion blur, depth of field |
 | Multi-backend RHI | DX12 / Vulkan / Metal, for Windows + Linux + macOS |
 
 ## License

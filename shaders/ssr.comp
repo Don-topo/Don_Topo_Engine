@@ -1,0 +1,192 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Color de la escena YA iluminado y SIN tonemapear (m_hdrImage). El alfa NO es
+// opacidad: pbr.frag escribe ahi la fuerza de SSR del objeto (push.flags.y), que
+// es como la mascara por objeto llega hasta aqui sin un attachment extra.
+layout(set = 0, binding = 0) uniform sampler2D sceneTex;
+// Profundidad de TODA la escena, del mismo depth pre-pass que alimenta al SSAO.
+// NEAREST: el filtrado lineal sobre D32_SFLOAT no es obligatorio en Vulkan.
+layout(set = 0, binding = 1) uniform sampler2D depthTex;
+// Reflejo aislado. No se suma aqui sobre el HDR a proposito: este shader lee
+// pixeles ARBITRARIOS de sceneTex, asi que escribir en esa misma imagen seria
+// una carrera con las demas invocaciones. La suma la hace ssr_resolve.comp, que
+// es estrictamente 1:1.
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outSsr;
+
+// Propia de este pipeline, igual que SsaoPush: el bloque UBO esta declarado en 5
+// shaders y meterle un miembro desplazaria en silencio todo lo de detras por
+// std140, y PushData esta llena a 80 bytes exactos.
+layout(push_constant) uniform SsrPush {
+    // p00, p11, p22, p32 de la proyeccion EFECTIVA del frame (con el Y-flip de
+    // Vulkan ya dentro), la misma con la que se grabo el depth.
+    vec4  projParams;
+    vec2  invRes;
+    float maxDistance;   // alcance del rayo en unidades de view space
+    float thickness;     // grosor asumido de lo que hay en el depth buffer
+    int   maxSteps;
+    int   refineSteps;   // busqueda binaria sobre el ultimo tramo
+    float edgeFade;      // fraccion de pantalla donde el reflejo se desvanece
+    float intensity;     // multiplicador global
+} push;
+
+// Mismas dos funciones que ssao.comp, misma derivacion:
+// depth = (p22*z + p32) / -z  ->  z = p32 / (-depth - p22).
+float viewZ(float d)
+{
+    return push.projParams.w / (-d - push.projParams.z);
+}
+
+vec3 viewPos(vec2 uv, float d)
+{
+    float z   = viewZ(d);
+    vec2  ndc = uv * 2.0 - 1.0;
+    return vec3(ndc.x * (-z) / push.projParams.x,
+                ndc.y * (-z) / push.projParams.y,
+                z);
+}
+
+// view space -> uv del framebuffer. clip.w = -z.
+vec2 projectUv(vec3 p)
+{
+    vec2 clipXy = vec2(p.x * push.projParams.x, p.y * push.projParams.y);
+    return (clipXy / -p.z) * 0.5 + 0.5;
+}
+
+void main()
+{
+    ivec2 px   = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outSsr);
+    if (px.x >= size.x || px.y >= size.y) return;
+
+    imageStore(outSsr, px, vec4(0.0));
+
+    vec2 uv = (vec2(px) + 0.5) * push.invRes;
+
+    // Fondo (skybox o clear): no hay superficie que refleje, y la reconstruccion
+    // divide por cero justo ahi.
+    float d = texture(depthTex, uv).r;
+    if (d >= 1.0) return;
+
+    // Mascara por objeto. Cero = este pixel no refleja: se sale antes de marchar
+    // nada, que es lo que hace que una escena sin objetos marcados no cueste.
+    vec4  scene = texture(sceneTex, uv);
+    float mask  = scene.a;
+    if (mask <= 0.0) return;
+
+    vec3 P = viewPos(uv, d);
+
+    // Normal reconstruida del propio depth, exactamente igual que en ssao.comp:
+    // de los dos vecinos de cada eje se queda el que menos salto de profundidad
+    // tiene, que es el que sigue estando en la MISMA superficie. Con esto no hace
+    // falta un attachment de normales ni tocar los pipelines de geometria; el
+    // precio es que el detalle del normal map no llega hasta aqui, asi que un
+    // metal pulido con normal map refleja como espejo plano.
+    vec2 tx = vec2(push.invRes.x, 0.0);
+    vec2 ty = vec2(0.0, push.invRes.y);
+    vec3 pR = viewPos(uv + tx, texture(depthTex, uv + tx).r);
+    vec3 pL = viewPos(uv - tx, texture(depthTex, uv - tx).r);
+    vec3 pD = viewPos(uv + ty, texture(depthTex, uv + ty).r);
+    vec3 pU = viewPos(uv - ty, texture(depthTex, uv - ty).r);
+
+    vec3 dx = (abs(pR.z - P.z) < abs(P.z - pL.z)) ? (pR - P) : (P - pL);
+    vec3 dy = (abs(pD.z - P.z) < abs(P.z - pU.z)) ? (pD - P) : (P - pU);
+
+    vec3 N = cross(dx, dy);
+    if (dot(N, N) < 1e-12) return;
+    N = normalize(N);
+    // Una superficie visible tiene su normal geometrica mirando a la camara.
+    if (dot(N, P) > 0.0) N = -N;
+
+    // En view space la camara esta en el origen.
+    vec3 V = normalize(-P);
+    vec3 R = reflect(-V, N);
+
+    // Rayos que vuelven hacia la camara: lo que reflejarian esta DETRAS del
+    // observador, que es justo lo que la pantalla no contiene. Se apagan en vez
+    // de devolver el primer acierto espurio.
+    float towardCamera = clamp(dot(R, V), 0.0, 1.0);
+    float backFade     = 1.0 - towardCamera;
+    if (backFade <= 0.0) return;
+
+    // ── Marcha en view space, reproyectando cada paso ───────────────────────
+    int   steps    = max(push.maxSteps, 1);
+    float stepLen  = push.maxDistance / float(steps);
+    float hitT     = -1.0;
+    float prevT    = 0.0;
+    vec2  hitUv    = vec2(0.0);
+
+    for (int i = 1; i <= steps; i++)
+    {
+        float t = stepLen * float(i);
+        vec3  S = P + R * t;
+        if (S.z >= 0.0) break;                  // por delante del plano de camara
+
+        vec2 suv = projectUv(S);
+        if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) break;
+
+        float sd = texture(depthTex, suv).r;
+        if (sd >= 1.0) { prevT = t; continue; } // cielo: no es una superficie
+
+        // En view space RH la camara mira a -Z: mas cerca = z mayor. Si lo
+        // dibujado esta por delante de la muestra, el rayo la ha atravesado.
+        float diff = viewZ(sd) - S.z;
+        if (diff > 0.0 && diff < push.thickness)
+        {
+            hitT  = t;
+            hitUv = suv;
+            break;
+        }
+        prevT = t;
+    }
+
+    // Sin acierto no hay fallback propio: pbr.frag ya suma el especular del
+    // cubemap prefiltrado para TODOS los pixeles, asi que devolver algo aqui
+    // seria contar el entorno dos veces.
+    if (hitT < 0.0) return;
+
+    // ── Refinado: busqueda binaria en el tramo [prevT, hitT] ────────────────
+    // El paso lineal deja el impacto hasta un stepLen pasado del contacto real,
+    // que en un suelo se ve como el reflejo despegado del objeto.
+    float lo = prevT;
+    float hi = hitT;
+    for (int r = 0; r < push.refineSteps; r++)
+    {
+        float mid = (lo + hi) * 0.5;
+        vec3  S   = P + R * mid;
+        if (S.z >= 0.0) { hi = mid; continue; }
+
+        vec2 suv = projectUv(S);
+        if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) { hi = mid; continue; }
+
+        float sd = texture(depthTex, suv).r;
+        if (sd >= 1.0) { lo = mid; continue; }
+
+        float diff = viewZ(sd) - S.z;
+        if (diff > 0.0) { hi = mid; hitUv = suv; }
+        else            { lo = mid; }
+    }
+    hitT = hi;
+
+    // ── Atenuaciones ────────────────────────────────────────────────────────
+    // Borde de pantalla: el rayo sale del viewport y el reflejo se cortaria en
+    // seco contra el marco.
+    float fadeW = max(push.edgeFade, 1e-4);
+    vec2  edge  = smoothstep(vec2(0.0), vec2(fadeW), hitUv)
+                * smoothstep(vec2(0.0), vec2(fadeW), 1.0 - hitUv);
+    float edgeFade = edge.x * edge.y;
+
+    // Distancia: cuanto mas largo el rayo, menos fiable la informacion de
+    // pantalla; ademas evita el corte duro justo en maxDistance.
+    float distFade = 1.0 - clamp(hitT / max(push.maxDistance, 1e-4), 0.0, 1.0);
+
+    // Fresnel de Schlick con la mascara del objeto haciendo de F0: con la fuerza
+    // a 1 es espejo a cualquier angulo, y con valores bajos el reflejo sube al
+    // mirar de canto, que es como se comporta un suelo pulido o el agua.
+    float NdotV = max(dot(N, V), 0.0);
+    float F     = mask + (1.0 - mask) * pow(1.0 - NdotV, 5.0);
+
+    vec3 refl = texture(sceneTex, hitUv).rgb * F * edgeFade * distFade * backFade * push.intensity;
+    imageStore(outSsr, px, vec4(refl, 1.0));
+}

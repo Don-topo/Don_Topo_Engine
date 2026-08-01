@@ -1,0 +1,40 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Reflejo aislado que dejo ssr.comp.
+layout(set = 0, binding = 0) uniform sampler2D srcTex;
+// Sin usar aqui: el descriptor set layout es el MISMO que el de ssr.comp (un
+// solo layout, un solo pipeline layout, un solo pool), y este pipeline
+// simplemente no lee este binding.
+layout(set = 0, binding = 1) uniform sampler2D depthTex;
+// La escena HDR, esta vez como storage: se lee y se reescribe el MISMO texel, asi
+// que no hay carrera posible entre invocaciones. Va antes del bloom a proposito:
+// el reflejo tiene que pasar por el umbral del bloom y por el tonemap ACES igual
+// que el resto de la imagen.
+layout(set = 0, binding = 2, rgba16f) uniform image2D outHdr;
+
+layout(push_constant) uniform SsrPush {
+    vec4  projParams;
+    vec2  invRes;
+    float maxDistance;
+    float thickness;
+    int   maxSteps;
+    int   refineSteps;
+    float edgeFade;
+    float intensity;
+} push;
+
+void main()
+{
+    ivec2 px   = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outHdr);
+    if (px.x >= size.x || px.y >= size.y) return;
+
+    vec3 refl = texelFetch(srcTex, px, 0).rgb;
+    vec4 hdr  = imageLoad(outHdr, px);
+    // El alfa se conserva tal cual (lleva la mascara de SSR del objeto). Nadie lo
+    // lee despues de este punto, pero reescribirlo a otra cosa seria mentir sobre
+    // el contenido de la imagen.
+    imageStore(outHdr, px, vec4(hdr.rgb + refl, hdr.a));
+}

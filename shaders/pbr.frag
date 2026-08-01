@@ -49,7 +49,11 @@ layout(push_constant) uniform PushData {
     mat4  transform;
     float metallic;
     float roughness;
-    vec2  _pad;
+    // flags.x: ruta de instancing, la lee el vertex shader.
+    // flags.y: fuerza de SSR del objeto, que este shader vuelca al alfa del
+    // attachment HDR. Es el canal por el que la mascara por objeto llega al
+    // post-pass de reflejos sin un attachment nuevo ni un miembro en el UBO.
+    vec2  flags;
 } push;
 
 const float PI = 3.14159265359;
@@ -191,5 +195,9 @@ void main()
     // consume la cadena de bloom, que necesita el rango alto intacto. El ACES +
     // gamma que habia aqui vive ahora en shaders/bloom_composite.frag, que es el
     // unico sitio del motor donde HDR pasa a LDR.
-    outColor = vec4(color, 1.0);
+    // El alfa lleva la fuerza de SSR del objeto, no opacidad: ssr.comp lo lee
+    // como mascara por pixel. Antes de esta feature valia 1.0 y no lo leia nadie
+    // (bloom_composite.frag y bloom_down.comp solo usan .rgb), asi que con el SSR
+    // desactivado la imagen sale exactamente igual.
+    outColor = vec4(color, push.flags.y);
 }

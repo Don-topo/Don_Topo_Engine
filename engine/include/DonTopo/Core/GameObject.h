@@ -139,6 +139,16 @@ namespace DonTopo
             int staticRenderIndex  = -1;
             int skinnedRenderIndex = -1;
 
+            // Screen Space Reflections por objeto. No es un componente: son dos
+            // campos del propio GameObject, igual que el transform, porque lo que
+            // configuran es cómo se dibuja SU malla. ssrIntensity es la
+            // reflectividad a incidencia normal (F0 en ssr.comp): 1 = espejo,
+            // valores bajos reflejan sobre todo de canto. El Renderer los recibe
+            // por frame vía setObjectSsr/setSkinnedSsr, y con ssrEnabled a false
+            // el objeto no aporta máscara ninguna.
+            bool  ssrEnabled   = false;
+            float ssrIntensity = 0.5f;
+
         private:
             std::shared_ptr<Mesh> m_mesh;
             std::shared_ptr<BoxCollider> m_boxCollider;

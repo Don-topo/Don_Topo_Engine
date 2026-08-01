@@ -258,6 +258,11 @@ namespace
         j["id"] = node.id;
         j["name"] = node.name;
         j["localTransform"] = mat4ToJson(node.localTransform);
+        // SSR por objeto. Se guarda SIEMPRE (no dentro de un if) para que apagarlo
+        // sobre un objeto que lo tenía puesto quede grabado; en ficheros viejos no
+        // existe y nodeFromJson cae al default (apagado), que es como se veían.
+        j["ssrEnabled"]   = node.ssrEnabled;
+        j["ssrIntensity"] = node.ssrIntensity;
 
         if (node.hasMesh())
         {
@@ -606,6 +611,13 @@ namespace
         node->localTransform = jsonToMat4(j.value("localTransform", nlohmann::json::array()),
                                            warnings, "localTransform de '" + node->name + "'");
         node->worldTransform = parentWorld * node->localTransform;
+
+        node->ssrEnabled = j.value("ssrEnabled", false);
+        // La comparación al revés cubre también un NaN, que pasaría cualquier
+        // clamp escrito como min/max y acabaría multiplicando el color del
+        // reflejo por NaN.
+        const float ssrI   = j.value("ssrIntensity", 0.5f);
+        node->ssrIntensity = (ssrI >= 0.0f && ssrI <= 1.0f) ? ssrI : 0.5f;
 
         if (j.contains("mesh"))
         {
