@@ -297,6 +297,41 @@ void EditorUI::drawMenuBar()
                     m_renderer->setBloomIntensity(intensity);
 
                 ImGui::Text("Bloom GPU: %.3f ms", m_renderer->bloomGpuMs());
+
+                // SSAO. Mismo criterio que el ambiente y el bloom: ajuste de
+                // sesion, no se serializa. Apagado deja la imagen exactamente
+                // como antes de la feature y el coste GPU a cero.
+                ImGui::Separator();
+                bool ssao = m_renderer->ssaoEnabled();
+                if (ImGui::Checkbox("SSAO", &ssao))
+                    m_renderer->setSsaoEnabled(ssao);
+
+                // Los sliders no se ocultan con el efecto apagado: se dejan
+                // desactivados para que se vea que existen y con que valores
+                // arrancarian.
+                ImGui::BeginDisabled(!ssao);
+                float ssaoRadius = m_renderer->ssaoRadius();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("SSAO radius", &ssaoRadius, 0.05f, 2.0f, "%.2f"))
+                    m_renderer->setSsaoRadius(ssaoRadius);
+
+                float ssaoBias = m_renderer->ssaoBias();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("SSAO bias", &ssaoBias, 0.0f, 0.2f, "%.3f"))
+                    m_renderer->setSsaoBias(ssaoBias);
+
+                float ssaoIntensity = m_renderer->ssaoIntensity();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("SSAO intensity", &ssaoIntensity, 0.0f, 3.0f, "%.2f"))
+                    m_renderer->setSsaoIntensity(ssaoIntensity);
+
+                float ssaoPower = m_renderer->ssaoPower();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("SSAO power", &ssaoPower, 0.25f, 4.0f, "%.2f"))
+                    m_renderer->setSsaoPower(ssaoPower);
+                ImGui::EndDisabled();
+
+                ImGui::Text("SSAO GPU: %.3f ms", m_renderer->ssaoGpuMs());
             }
             ImGui::EndMenu();
         }

@@ -1,0 +1,154 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Profundidad de TODA la escena, escrita por el depth pre-pass de este mismo
+// frame. NEAREST: el filtrado lineal sobre D32_SFLOAT no es obligatorio en
+// Vulkan y aqui no aporta nada, cada tap quiere el texel exacto.
+layout(set = 0, binding = 0) uniform sampler2D depthTex;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D outAo;
+
+// Propia de este pipeline: el bloque UBO esta declarado en 5 shaders y meterle
+// un miembro desplazaria en silencio todo lo de detras por std140, y PushData
+// (la de pbr/triangle/outline) esta llena a 80 bytes exactos.
+layout(push_constant) uniform SsaoPush {
+    // p00, p11, p22, p32 de la proyeccion del frame. Con estos cuatro
+    // coeficientes se reconstruye la posicion en view space y se vuelve a
+    // proyectar, sin traer las dos matrices enteras.
+    vec4  projParams;
+    vec2  invRes;
+    float radius;
+    float bias;
+    float intensity;
+    float power;
+} push;
+
+#define SSAO_SAMPLES 16
+const float PI = 3.14159265359;
+
+// z en view space (negativo) a partir del depth [0,1] de Vulkan:
+// depth = (p22*z + p32) / -z  ->  z = p32 / (-depth - p22).
+float viewZ(float d)
+{
+    return push.projParams.w / (-d - push.projParams.z);
+}
+
+// uv en [0,1] sobre el framebuffer -> posicion en view space. El p11 que llega
+// es el de la proyeccion CON el Y-flip de Vulkan ya aplicado, el mismo con el
+// que se grabo el depth, asi que uv.y y ndc.y van en el mismo sentido.
+vec3 viewPos(vec2 uv, float d)
+{
+    float z   = viewZ(d);
+    vec2  ndc = uv * 2.0 - 1.0;
+    return vec3(ndc.x * (-z) / push.projParams.x,
+                ndc.y * (-z) / push.projParams.y,
+                z);
+}
+
+float hash1(float n)
+{
+    return fract(sin(n * 127.1) * 43758.5453123);
+}
+
+float hash2(vec2 p)
+{
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453123);
+}
+
+// Kernel procedural: hemisferio +Z con las muestras apinadas cerca del origen
+// (peso cuadratico), que es donde el AO de contacto tiene la senal. Va aqui y
+// no en un buffer nuevo porque es constante y cabe en unas pocas ALU.
+vec3 kernelSample(int i)
+{
+    float a = hash1(float(i) * 3.0 + 0.0) * 2.0 - 1.0;
+    float b = hash1(float(i) * 3.0 + 1.0) * 2.0 - 1.0;
+    float c = hash1(float(i) * 3.0 + 2.0);
+    vec3  v = normalize(vec3(a, b, max(c, 0.05)));
+    float t = float(i) / float(SSAO_SAMPLES);
+    return v * mix(0.1, 1.0, t * t);
+}
+
+void main()
+{
+    ivec2 px   = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outAo);
+    if (px.x >= size.x || px.y >= size.y) return;
+
+    vec2  uv = (vec2(px) + 0.5) * push.invRes;
+    float d  = texture(depthTex, uv).r;
+
+    // Fondo: sin geometria no hay nada que ocluir, y la reconstruccion divide
+    // por cero justo ahi.
+    if (d >= 1.0)
+    {
+        imageStore(outAo, px, vec4(1.0));
+        return;
+    }
+
+    vec3 P = viewPos(uv, d);
+
+    // Normal reconstruida del propio depth: de los dos vecinos de cada eje se
+    // queda el que menos salto de profundidad tiene, que es el que sigue estando
+    // en la MISMA superficie. Con la diferencia central a secas, un pixel al
+    // borde de una silueta mezclaria dos superficies y sacaria una normal que no
+    // existe. Asi no hace falta ningun attachment de normales ni tocar los
+    // pipelines de geometria.
+    vec2 tx = vec2(push.invRes.x, 0.0);
+    vec2 ty = vec2(0.0, push.invRes.y);
+    vec3 pR = viewPos(uv + tx, texture(depthTex, uv + tx).r);
+    vec3 pL = viewPos(uv - tx, texture(depthTex, uv - tx).r);
+    vec3 pD = viewPos(uv + ty, texture(depthTex, uv + ty).r);
+    vec3 pU = viewPos(uv - ty, texture(depthTex, uv - ty).r);
+
+    vec3 dx = (abs(pR.z - P.z) < abs(P.z - pL.z)) ? (pR - P) : (P - pL);
+    vec3 dy = (abs(pD.z - P.z) < abs(P.z - pU.z)) ? (pD - P) : (P - pU);
+
+    vec3 N = cross(dx, dy);
+    if (dot(N, N) < 1e-12)
+    {
+        imageStore(outAo, px, vec4(1.0));
+        return;
+    }
+    N = normalize(N);
+    // Una superficie visible tiene su normal geometrica mirando a la camara.
+    if (dot(N, P) > 0.0) N = -N;
+
+    // Rotacion distinta por pixel: sin ella los 16 rayos serian los mismos en
+    // toda la pantalla y el AO saldria en bandas. El blur de despues es el que
+    // convierte este ruido en gradiente.
+    float ang = hash2(vec2(px)) * 2.0 * PI;
+    vec3  rv  = vec3(cos(ang), sin(ang), 0.0);
+    vec3  T   = normalize(rv - N * dot(rv, N));
+    vec3  B   = cross(N, T);
+    mat3  TBN = mat3(T, B, N);
+
+    float occ = 0.0;
+    for (int i = 0; i < SSAO_SAMPLES; i++)
+    {
+        vec3 sp = P + (TBN * kernelSample(i)) * push.radius;
+        if (sp.z >= 0.0) continue;              // detras del plano de la camara
+
+        // Reproyeccion con los mismos coeficientes: clip.w = -z.
+        vec2 sclip = vec2(sp.x * push.projParams.x, sp.y * push.projParams.y);
+        vec2 suv   = (sclip / -sp.z) * 0.5 + 0.5;
+        if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) continue;
+
+        float sd = texture(depthTex, suv).r;
+        if (sd >= 1.0) continue;
+        float sceneZ = viewZ(sd);
+
+        // En view space RH la camara mira a -Z: mas cerca = z mayor. Si lo que
+        // hay dibujado esta por delante de la muestra, la muestra esta tapada.
+        if (sceneZ >= sp.z + push.bias)
+        {
+            // Un objeto muy lejano que cae en el mismo pixel no debe ocluir: sin
+            // esto, una pared del fondo oscureceria el borde de lo que tiene
+            // delante.
+            occ += smoothstep(0.0, 1.0, push.radius / max(abs(P.z - sceneZ), 1e-4));
+        }
+    }
+
+    float ao = 1.0 - (occ / float(SSAO_SAMPLES)) * push.intensity;
+    ao = pow(clamp(ao, 0.0, 1.0), max(push.power, 1e-3));
+    imageStore(outAo, px, vec4(ao));
+}

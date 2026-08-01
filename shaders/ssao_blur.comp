@@ -1,0 +1,34 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D aoTex;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D outAo;
+
+// Mismo bloque que ssao.comp: comparten pipeline layout, asi que el rango de
+// push constants tiene que coincidir. Aqui solo se usa invRes.
+layout(push_constant) uniform SsaoPush {
+    vec4  projParams;
+    vec2  invRes;
+    float radius;
+    float bias;
+    float intensity;
+    float power;
+} push;
+
+void main()
+{
+    ivec2 px   = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outAo);
+    if (px.x >= size.x || px.y >= size.y) return;
+
+    // Caja 4x4, que es justo el periodo del ruido de rotacion de ssao.comp: cada
+    // pixel del resultado promedia las 16 orientaciones y el patron desaparece
+    // por completo. Con una caja mas pequena quedaria el enrejado visible.
+    float sum = 0.0;
+    for (int y = -2; y <= 1; y++)
+        for (int x = -2; x <= 1; x++)
+            sum += texture(aoTex, (vec2(px) + 0.5 + vec2(x, y)) * push.invRes).r;
+
+    imageStore(outAo, px, vec4(sum / 16.0));
+}

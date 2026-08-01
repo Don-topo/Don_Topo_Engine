@@ -35,6 +35,10 @@ layout(set = 0, binding = 4) uniform sampler2D metallicRoughnessTex;
 // neutro constante, asi que aqui no hace falta ninguna rama.
 layout(set = 0, binding = 5) uniform samplerCube irradianceMap;
 layout(set = 0, binding = 6) uniform samplerCube prefilterMap;
+// SSAO del frame, a resolucion completa y ya emborronado. Existe SIEMPRE: con
+// el efecto apagado la imagen esta puesta a 1.0 y este shader multiplica por la
+// unidad, asi que no hace falta ninguna rama ni un miembro nuevo en el UBO.
+layout(set = 0, binding = 7) uniform sampler2D ssaoMap;
 
 // Debe coincidir con Renderer::IBL_PREFILTER_MIPS. Va como #define y no en el
 // UBO a proposito: el bloque UBO esta declarado en 5 shaders y anadirle un
@@ -174,7 +178,13 @@ void main()
 
     // El multiplicador escala difuso y especular por igual: sube o baja el peso
     // del entorno sin cambiar su color ni el balance entre los dos terminos.
-    vec3 ambient = (kDamb * diffuseIBL + specularIBL) * ao * ubo.ambientIntensity;
+    // El SSAO entra AQUI y no sobre el color final: es oclusion del entorno, y
+    // aplicarselo tambien a la luz directa apagaria sombras que ya calcula el
+    // shadow map. Se muestrea por coordenada de pantalla; el mapa es del tamano
+    // exacto del framebuffer, asi que la division es 1:1 y no hace falta llevar
+    // la resolucion en ningun sitio.
+    float ssao   = texture(ssaoMap, gl_FragCoord.xy / vec2(textureSize(ssaoMap, 0))).r;
+    vec3 ambient = (kDamb * diffuseIBL + specularIBL) * ao * ssao * ubo.ambientIntensity;
     vec3 color   = ambient + Lo;
 
     // Sin tonemapear: el attachment de este pass es R16G16B16A16_SFLOAT y lo

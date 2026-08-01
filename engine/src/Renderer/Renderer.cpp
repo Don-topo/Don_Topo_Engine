@@ -127,6 +127,10 @@ namespace DonTopo {
         // ANTES de createOffscreenImages: ahi se crea la cadena de mips, que
         // necesita el descriptor set layout y el pool del bloom ya montados.
         createBloomPipelines();
+        // ANTES de createOffscreenImages (que llama a createSsaoImages) y DESPUÉS
+        // de createShadowResources: el pipeline del depth pre-pass reutiliza
+        // m_shadowPipelineLayout, que se crea allí.
+        createSsaoPipelines();
         // La capa de UI ya se inicializó en initPresentation. En editor,
         // createOffscreenImages necesita que lo esté (llama a
         // registerUiTexture); en headless no la llama, así que el orden no
@@ -366,6 +370,24 @@ namespace DonTopo {
         {
             vkDestroyQueryPool(m_gpu.device(), m_bloomQueryPool, nullptr);
             m_bloomQueryPool = VK_NULL_HANDLE;
+        }
+        // SSAO. Las imagenes, vistas, framebuffers y sets se fueron con
+        // destroyOffscreenImages (llama a destroySsaoImages); aqui queda lo que
+        // no depende del tamano. El pipeline layout es el del pass de sombras y
+        // se destruye con el, mas abajo.
+        vkDestroyPipeline(m_gpu.device(), m_ssaoPipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_ssaoBlurPipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_ssaoDepthPipeline, nullptr);
+        vkDestroyPipelineLayout(m_gpu.device(), m_ssaoPipelineLayout, nullptr);
+        vkDestroyDescriptorPool(m_gpu.device(), m_ssaoDescPool, nullptr);
+        vkDestroyDescriptorSetLayout(m_gpu.device(), m_ssaoDescLayout, nullptr);
+        vkDestroySampler(m_gpu.device(), m_ssaoSampler, nullptr);
+        vkDestroyRenderPass(m_gpu.device(), m_ssaoDepthRenderPass, nullptr);
+        m_ssaoDepthRenderPass = VK_NULL_HANDLE;
+        if (m_ssaoQueryPool != VK_NULL_HANDLE)
+        {
+            vkDestroyQueryPool(m_gpu.device(), m_ssaoQueryPool, nullptr);
+            m_ssaoQueryPool = VK_NULL_HANDLE;
         }
 
         for(auto sem : m_renderFinished){
@@ -1390,7 +1412,9 @@ namespace DonTopo {
         // cascada del shadow map más el de la escena, de ahí el factor
         // SHADOW_CASCADES + 1. El cursor arranca a 0: las cascadas escriben
         // delante (una detrás de otra), la escena al final.
-        ensureInstanceCapacity((uint32_t)m_objects.size() * (SHADOW_CASCADES + 1));
+        // +2 y no +1: además del pass de escena, el depth pre-pass del SSAO
+        // escribe su propio tramo del SSBO con el conjunto visible de la cámara.
+        ensureInstanceCapacity((uint32_t)m_objects.size() * (SHADOW_CASCADES + 2));
         m_instanceCursor = 0;
 
         // Cámara del frame: la usan el culling de los skinned (aquí abajo), el
@@ -1426,6 +1450,10 @@ namespace DonTopo {
 
         recordComputePass(m_commandBuffers[m_currentFrame]);
         recordShadowPass(m_commandBuffers[m_currentFrame]);
+        // ANTES del pass de escena: pbr.frag necesita el AO ya resuelto, y el AO
+        // necesita la profundidad de TODA la escena. Por eso el depth pre-pass, y
+        // por eso va aquí y no después.
+        recordSsaoPass(m_commandBuffers[m_currentFrame], camFrustum, fc.proj);
 
         // ── Pass 1: escena 3D → offscreen ────────────────────────────────────────
         {
@@ -2223,12 +2251,21 @@ namespace DonTopo {
         prefilterBinding.descriptorCount = 1;
         prefilterBinding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+        // SSAO. Mismo criterio que los dos de arriba: solo lo lee pbr.frag, pero
+        // el layout lo comparten los pipelines estatico, wireframe, skinned y
+        // outline via m_pipelineLayout.
+        VkDescriptorSetLayoutBinding ssaoBinding{};
+        ssaoBinding.binding         = 7;
+        ssaoBinding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ssaoBinding.descriptorCount = 1;
+        ssaoBinding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+
         VkDescriptorSetLayoutBinding bindings[] = { uboBinding, samplerBinding, samplerNormal, shadowBinding, ormBinding,
-                                                    irradianceBinding, prefilterBinding };
+                                                    irradianceBinding, prefilterBinding, ssaoBinding };
 
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
         layoutInfo.sType            = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layoutInfo.bindingCount     = 7;
+        layoutInfo.bindingCount     = 8;
         layoutInfo.pBindings        = bindings;
 
         if(vkCreateDescriptorSetLayout(m_gpu.device(), &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -2468,7 +2505,7 @@ namespace DonTopo {
         poolSizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         poolSizes[0].descriptorCount = n;
         poolSizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSizes[1].descriptorCount = n * 6;   // diffuse + normal map + shadow + orm + irradiance + prefiltered
+        poolSizes[1].descriptorCount = n * 7;   // diffuse + normal map + shadow + orm + irradiance + prefiltered + ssao
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -2576,7 +2613,61 @@ namespace DonTopo {
             writes[6].descriptorCount = 1; writes[6].pImageInfo = &prefilterInfo;
 
             vkUpdateDescriptorSets(m_gpu.device(), 7, writes, 0, nullptr);
+
+            // Binding 7 (SSAO) aparte: es la única vista de este set que se
+            // destruye y se rehace al redimensionar, y refreshSsaoDescriptors
+            // vuelve a pasar por aquí con los mismos handles.
+            writeSsaoBinding(obj.descriptorSets[i], i);
         }
+    }
+
+    void Renderer::writeSsaoBinding(VkDescriptorSet set, int frameIndex)
+    {
+        // Sin imagen todavía (init temprano) no hay nada válido que escribir: el
+        // set se completa desde refreshSsaoDescriptors en cuanto exista.
+        if (m_ssaoBlurView[frameIndex] == VK_NULL_HANDLE) return;
+
+        VkDescriptorImageInfo info{};
+        // GENERAL y no SHADER_READ_ONLY: la misma imagen es storage image del
+        // compute y textura del pass de escena, igual que la cadena del bloom.
+        info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        info.imageView   = m_ssaoBlurView[frameIndex];
+        info.sampler     = m_ssaoSampler;
+
+        VkWriteDescriptorSet w{};
+        w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet          = set;
+        w.dstBinding      = 7;
+        w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.descriptorCount = 1;
+        w.pImageInfo      = &info;
+        vkUpdateDescriptorSets(m_gpu.device(), 1, &w, 0, nullptr);
+    }
+
+    void Renderer::refreshSsaoDescriptors()
+    {
+        for (int index : m_sharedMeshes.liveIndices())
+        {
+            SharedGpuMesh* gpu = m_sharedMeshes.get(index);
+            for (int i = 0; i < MAX_FRAMES; i++)
+                if (gpu->descriptorSets[i]) writeSsaoBinding(gpu->descriptorSets[i], i);
+        }
+        // Los skinned tienen sus propios sets del mismo layout, uno por material.
+        for (const SkinnedRenderObject& sobj : m_skinnedObjects)
+            for (const SkinnedMatGfx& mgfx : sobj.matGfx)
+                for (int i = 0; i < MAX_FRAMES; i++)
+                    if (mgfx.descSets[i]) writeSsaoBinding(mgfx.descSets[i], i);
+    }
+
+    void Renderer::setSsaoEnabled(bool v)
+    {
+        if (v == m_ssaoEnabled) return;
+        m_ssaoEnabled = v;
+        // Al apagar, el mapa se queda con el AO del último frame calculado y
+        // seguiría oscureciendo. Un clear a 1.0 por frame en vuelo lo devuelve a
+        // la identidad; a partir de ahí, cero trabajo.
+        if (!v)
+            for (int i = 0; i < MAX_FRAMES; i++) m_ssaoClearPending[i] = true;
     }
 
     void Renderer::updateUniformBuffer(uint32_t frameIndex)
@@ -4031,6 +4122,10 @@ namespace DonTopo {
                 gw[6].descriptorCount = 1; gw[6].pImageInfo = &preInfo;
 
                 vkUpdateDescriptorSets(m_gpu.device(), 7, gw, 0, nullptr);
+
+                // Binding 7 (SSAO), igual que en la ruta estática: va aparte
+                // porque su vista se rehace con el swapchain.
+                writeSsaoBinding(mgfx.descSets[fi], fi);
             }
         }
 
@@ -4486,12 +4581,16 @@ namespace DonTopo {
         // Depende de m_hdrView (los sets del primer downsample y de la
         // composicion lo referencian), asi que va despues del bucle.
         createBloomImages();
+        // Va con el swapchain igual que el bloom: sus tres imagenes son del
+        // tamano exacto del viewport.
+        createSsaoImages();
         printf("offscreen images OK\n"); fflush(stdout);
     }
 
     void Renderer::destroyOffscreenImages()
     {
         destroyBloomImages();
+        destroySsaoImages();
         for (int i = 0; i < MAX_FRAMES; i++)
         {
             if (m_offscreenDescSet[i] && m_ui)
@@ -5071,6 +5170,626 @@ namespace DonTopo {
         b.subresourceRange.levelCount   = 1;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                              0, 0, nullptr, 0, nullptr, 1, &b);
+    }
+
+    // ── SSAO ────────────────────────────────────────────────────────────────
+    void Renderer::createSsaoPipelines()
+    {
+        // NEAREST: ni D32_SFLOAT ni R32_SFLOAT tienen garantizado el filtrado
+        // lineal, y los dos shaders muestrean a texel exacto. CLAMP_TO_EDGE para
+        // que los taps del borde no traigan profundidad del lado opuesto.
+        VkSamplerCreateInfo si{};
+        si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter    = VK_FILTER_NEAREST;
+        si.minFilter    = VK_FILTER_NEAREST;
+        si.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        if (vkCreateSampler(m_gpu.device(), &si, nullptr, &m_ssaoSampler) != VK_SUCCESS)
+            throw std::runtime_error("failed to create ssao sampler!");
+
+        // --- Render pass del depth pre-pass (solo profundidad) ---------------
+        VkAttachmentDescription depthAtt{};
+        depthAtt.format         = VK_FORMAT_D32_SFLOAT;
+        depthAtt.samples        = VK_SAMPLE_COUNT_1_BIT;
+        depthAtt.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAtt.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+        depthAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAtt.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+        // READ_ONLY: en cuanto acaba el pass, el compute del SSAO la muestrea.
+        depthAtt.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+        VkAttachmentReference depthRef{};
+        depthRef.attachment = 0;
+        depthRef.layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.pDepthStencilAttachment = &depthRef;
+
+        VkSubpassDependency deps[2]{};
+        // Entrada: el compute del frame anterior en este mismo slot pudo estar
+        // leyendo esta imagen.
+        deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
+        deps[0].dstSubpass    = 0;
+        deps[0].srcStageMask  = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        deps[0].dstStageMask  = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        deps[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        // Salida: ssao.comp muestrea la profundidad recién escrita.
+        deps[1].srcSubpass    = 0;
+        deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
+        deps[1].srcStageMask  = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        deps[1].dstStageMask  = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        deps[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        VkRenderPassCreateInfo rpInfo{};
+        rpInfo.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rpInfo.attachmentCount = 1;
+        rpInfo.pAttachments    = &depthAtt;
+        rpInfo.subpassCount    = 1;
+        rpInfo.pSubpasses      = &subpass;
+        rpInfo.dependencyCount = 2;
+        rpInfo.pDependencies   = deps;
+        if (vkCreateRenderPass(m_gpu.device(), &rpInfo, nullptr, &m_ssaoDepthRenderPass) != VK_SUCCESS)
+            throw std::runtime_error("failed to create ssao depth render pass!");
+
+        // --- Pipeline del pre-pass (vertex-only, como el de sombras) ---------
+        auto vertCode = loadShaderFile("shaders/depth_prepass.vert.spv");
+        VkShaderModule vertModule = createShaderModule(vertCode);
+
+        VkPipelineShaderStageCreateInfo vertStage{};
+        vertStage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        vertStage.stage  = VK_SHADER_STAGE_VERTEX_BIT;
+        vertStage.module = vertModule;
+        vertStage.pName  = "main";
+
+        VkVertexInputBindingDescription bindingDesc{};
+        bindingDesc.binding   = 0;
+        bindingDesc.stride    = sizeof(Vertex);
+        bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+        VkVertexInputAttributeDescription attrDesc{};
+        attrDesc.binding  = 0;
+        attrDesc.location = 0;
+        attrDesc.format   = VK_FORMAT_R32G32B32_SFLOAT;
+        attrDesc.offset   = offsetof(Vertex, pos);
+
+        VkPipelineVertexInputStateCreateInfo vertexInput{};
+        vertexInput.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vertexInput.vertexBindingDescriptionCount   = 1;
+        vertexInput.pVertexBindingDescriptions      = &bindingDesc;
+        vertexInput.vertexAttributeDescriptionCount = 1;
+        vertexInput.pVertexAttributeDescriptions    = &attrDesc;
+
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+        inputAssembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        VkPipelineViewportStateCreateInfo viewportState{};
+        viewportState.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewportState.viewportCount = 1;
+        viewportState.scissorCount  = 1;
+
+        VkPipelineRasterizationStateCreateInfo rasterizer{};
+        rasterizer.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterizer.cullMode    = VK_CULL_MODE_NONE;
+        rasterizer.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rasterizer.lineWidth   = 1.0f;
+        // Sin depthBias, al reves que el pass de sombras: esta profundidad no se
+        // compara contra nada, se reconstruye a posicion. Un sesgo aqui movería
+        // la geometría en Z y el AO saldría despegado del contacto.
+
+        VkPipelineMultisampleStateCreateInfo multisampling{};
+        multisampling.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineDepthStencilStateCreateInfo depthStencil{};
+        depthStencil.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencil.depthTestEnable  = VK_TRUE;
+        depthStencil.depthWriteEnable = VK_TRUE;
+        depthStencil.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+        VkPipelineColorBlendStateCreateInfo colorBlend{};
+        colorBlend.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        colorBlend.attachmentCount = 0;
+
+        VkDynamicState dynStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+        VkPipelineDynamicStateCreateInfo dynamicState{};
+        dynamicState.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamicState.dynamicStateCount = 2;
+        dynamicState.pDynamicStates    = dynStates;
+
+        VkGraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.stageCount          = 1;
+        pipelineInfo.pStages             = &vertStage;
+        pipelineInfo.pVertexInputState   = &vertexInput;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState      = &viewportState;
+        pipelineInfo.pRasterizationState = &rasterizer;
+        pipelineInfo.pMultisampleState   = &multisampling;
+        pipelineInfo.pDepthStencilState  = &depthStencil;
+        pipelineInfo.pColorBlendState    = &colorBlend;
+        pipelineInfo.pDynamicState       = &dynamicState;
+        // Prestado del pass de sombras: mismos dos sets (objeto + SSBO de
+        // instancias) y mismo rango de push constants, que este shader no usa.
+        pipelineInfo.layout              = m_shadowPipelineLayout;
+        pipelineInfo.renderPass          = m_ssaoDepthRenderPass;
+        if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_ssaoDepthPipeline) != VK_SUCCESS)
+            throw std::runtime_error("failed to create ssao depth pipeline!");
+        vkDestroyShaderModule(m_gpu.device(), vertModule, nullptr);
+
+        // --- Compute: origen muestreado + destino como storage image ---------
+        VkDescriptorSetLayoutBinding ssaoBindings[2]{};
+        ssaoBindings[0].binding         = 0;
+        ssaoBindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ssaoBindings[0].descriptorCount = 1;
+        ssaoBindings[0].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        ssaoBindings[1].binding         = 1;
+        ssaoBindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        ssaoBindings[1].descriptorCount = 1;
+        ssaoBindings[1].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+
+        VkDescriptorSetLayoutCreateInfo dsl{};
+        dsl.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dsl.bindingCount = 2;
+        dsl.pBindings    = ssaoBindings;
+        if (vkCreateDescriptorSetLayout(m_gpu.device(), &dsl, nullptr, &m_ssaoDescLayout) != VK_SUCCESS)
+            throw std::runtime_error("failed to create ssao descriptor set layout!");
+
+        // Dos sets por frame: oclusion (depth → AO) y blur (AO → AO suavizado).
+        const uint32_t ssaoSets = MAX_FRAMES * 2;
+        VkDescriptorPoolSize ssaoSizes[2]{};
+        ssaoSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ssaoSizes[0].descriptorCount = ssaoSets;
+        ssaoSizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        ssaoSizes[1].descriptorCount = ssaoSets;
+
+        VkDescriptorPoolCreateInfo dpi{};
+        dpi.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpi.poolSizeCount = 2;
+        dpi.pPoolSizes    = ssaoSizes;
+        dpi.maxSets       = ssaoSets;
+        if (vkCreateDescriptorPool(m_gpu.device(), &dpi, nullptr, &m_ssaoDescPool) != VK_SUCCESS)
+            throw std::runtime_error("failed to create ssao descriptor pool!");
+
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcr.offset     = 0;
+        pcr.size       = sizeof(SsaoPush);
+
+        VkPipelineLayoutCreateInfo pli{};
+        pli.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pli.setLayoutCount         = 1;
+        pli.pSetLayouts            = &m_ssaoDescLayout;
+        pli.pushConstantRangeCount = 1;
+        pli.pPushConstantRanges    = &pcr;
+        if (vkCreatePipelineLayout(m_gpu.device(), &pli, nullptr, &m_ssaoPipelineLayout) != VK_SUCCESS)
+            throw std::runtime_error("failed to create ssao pipeline layout!");
+
+        auto makeSsaoPipeline = [&](const std::string& spv, VkPipeline& pipeline)
+        {
+            auto code   = loadShaderFile(spv);
+            auto module = createShaderModule(code);
+
+            VkComputePipelineCreateInfo ci{};
+            ci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            ci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            ci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            ci.stage.module = module;
+            ci.stage.pName  = "main";
+            ci.layout       = m_ssaoPipelineLayout;
+            if (vkCreateComputePipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline) != VK_SUCCESS)
+                throw std::runtime_error("failed to create compute pipeline: " + spv);
+
+            vkDestroyShaderModule(m_gpu.device(), module, nullptr);
+        };
+
+        makeSsaoPipeline("shaders/ssao.comp.spv",      m_ssaoPipeline);
+        makeSsaoPipeline("shaders/ssao_blur.comp.spv", m_ssaoBlurPipeline);
+
+        // Queries propias: m_timestampsSupported y m_timestampPeriod ya los
+        // resolvio createBloomPipelines, que corre antes.
+        if (m_timestampsSupported)
+        {
+            VkQueryPoolCreateInfo qpi{};
+            qpi.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            qpi.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+            qpi.queryCount = MAX_FRAMES * 2;
+            if (vkCreateQueryPool(m_gpu.device(), &qpi, nullptr, &m_ssaoQueryPool) != VK_SUCCESS)
+                throw std::runtime_error("failed to create ssao query pool!");
+        }
+
+        printf("ssao pipelines OK\n"); fflush(stdout);
+    }
+
+    void Renderer::createSsaoImages()
+    {
+        for (int f = 0; f < MAX_FRAMES; f++)
+        {
+            // Depth del pre-pass. SAMPLED ademas de ATTACHMENT: lo muestrea
+            // ssao.comp.
+            m_res.createImage(
+                m_swapChainExtent.width, m_swapChainExtent.height,
+                VK_FORMAT_D32_SFLOAT,
+                VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                m_ssaoDepthImage[f], m_ssaoDepthMemory[f]);
+
+            // Inline y no createTextureImageView: esa fija el aspecto a COLOR.
+            VkImageViewCreateInfo dvi{};
+            dvi.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            dvi.image                           = m_ssaoDepthImage[f];
+            dvi.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
+            dvi.format                          = VK_FORMAT_D32_SFLOAT;
+            dvi.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT;
+            dvi.subresourceRange.levelCount     = 1;
+            dvi.subresourceRange.layerCount     = 1;
+            if (vkCreateImageView(m_gpu.device(), &dvi, nullptr, &m_ssaoDepthView[f]) != VK_SUCCESS)
+                throw std::runtime_error("failed to create ssao depth view!");
+
+            VkFramebufferCreateInfo fbInfo{};
+            fbInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            fbInfo.renderPass      = m_ssaoDepthRenderPass;
+            fbInfo.attachmentCount = 1;
+            fbInfo.pAttachments    = &m_ssaoDepthView[f];
+            fbInfo.width           = m_swapChainExtent.width;
+            fbInfo.height          = m_swapChainExtent.height;
+            fbInfo.layers          = 1;
+            if (vkCreateFramebuffer(m_gpu.device(), &fbInfo, nullptr, &m_ssaoDepthFb[f]) != VK_SUCCESS)
+                throw std::runtime_error("failed to create ssao depth framebuffer!");
+
+            // AO crudo y AO emborronado. TRANSFER_DST en el segundo: con el
+            // efecto apagado se limpia a 1.0 en vez de calcularse.
+            m_res.createImage(
+                m_swapChainExtent.width, m_swapChainExtent.height,
+                kSsaoFormat, VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                m_ssaoImage[f], m_ssaoMemory[f]);
+            m_res.createTextureImageView(m_ssaoImage[f], m_ssaoView[f], kSsaoFormat);
+
+            m_res.createImage(
+                m_swapChainExtent.width, m_swapChainExtent.height,
+                kSsaoFormat, VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                m_ssaoBlurImage[f], m_ssaoBlurMemory[f]);
+            m_res.createTextureImageView(m_ssaoBlurImage[f], m_ssaoBlurView[f], kSsaoFormat);
+
+            // Recien creada: contenido indefinido y layout UNDEFINED. El clear la
+            // deja en 1.0 y en GENERAL, que es lo que declara el binding 7.
+            m_ssaoClearPending[f] = true;
+        }
+
+        // Los sets de la vez anterior apuntan a vistas ya destruidas: reset y no
+        // free, igual que en el bloom.
+        vkResetDescriptorPool(m_gpu.device(), m_ssaoDescPool, 0);
+
+        for (int f = 0; f < MAX_FRAMES; f++)
+        {
+            VkDescriptorSetLayout layouts[2] = { m_ssaoDescLayout, m_ssaoDescLayout };
+            VkDescriptorSet       sets[2]    = {};
+
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool     = m_ssaoDescPool;
+            ai.descriptorSetCount = 2;
+            ai.pSetLayouts        = layouts;
+            if (vkAllocateDescriptorSets(m_gpu.device(), &ai, sets) != VK_SUCCESS)
+                throw std::runtime_error("failed to allocate ssao descriptor sets!");
+
+            m_ssaoSets[f]     = sets[0];
+            m_ssaoBlurSets[f] = sets[1];
+
+            VkDescriptorImageInfo infos[4]{};
+            // Oclusion: lee el depth del pre-pass, escribe el AO crudo.
+            infos[0].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            infos[0].imageView   = m_ssaoDepthView[f];
+            infos[0].sampler     = m_ssaoSampler;
+            infos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            infos[1].imageView   = m_ssaoView[f];
+            // Blur: lee el AO crudo, escribe el que consume pbr.frag.
+            infos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            infos[2].imageView   = m_ssaoView[f];
+            infos[2].sampler     = m_ssaoSampler;
+            infos[3].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            infos[3].imageView   = m_ssaoBlurView[f];
+
+            VkWriteDescriptorSet writes[4]{};
+            for (int i = 0; i < 4; i++)
+            {
+                writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[i].dstSet          = (i < 2) ? m_ssaoSets[f] : m_ssaoBlurSets[f];
+                writes[i].dstBinding      = (uint32_t)(i % 2);
+                writes[i].descriptorType  = (i % 2 == 0) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                                                         : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                writes[i].descriptorCount = 1;
+                writes[i].pImageInfo      = &infos[i];
+            }
+            vkUpdateDescriptorSets(m_gpu.device(), 4, writes, 0, nullptr);
+        }
+
+        // Los sets por objeto guardan la vista vieja: hay que repasarlos. En el
+        // arranque no hay ninguno todavia y el bucle no hace nada.
+        refreshSsaoDescriptors();
+    }
+
+    void Renderer::destroySsaoImages()
+    {
+        for (int f = 0; f < MAX_FRAMES; f++)
+        {
+            if (m_ssaoDepthFb[f])
+            {
+                vkDestroyFramebuffer(m_gpu.device(), m_ssaoDepthFb[f], nullptr);
+                m_ssaoDepthFb[f] = VK_NULL_HANDLE;
+            }
+            if (m_ssaoDepthView[f])
+            {
+                vkDestroyImageView(m_gpu.device(), m_ssaoDepthView[f], nullptr);
+                m_ssaoDepthView[f] = VK_NULL_HANDLE;
+            }
+            if (m_ssaoDepthImage[f])
+            {
+                vkDestroyImage(m_gpu.device(), m_ssaoDepthImage[f], nullptr);
+                m_ssaoDepthImage[f] = VK_NULL_HANDLE;
+            }
+            if (m_ssaoDepthMemory[f])
+            {
+                vkFreeMemory(m_gpu.device(), m_ssaoDepthMemory[f], nullptr);
+                m_ssaoDepthMemory[f] = VK_NULL_HANDLE;
+            }
+            if (m_ssaoView[f])
+            {
+                vkDestroyImageView(m_gpu.device(), m_ssaoView[f], nullptr);
+                m_ssaoView[f] = VK_NULL_HANDLE;
+            }
+            if (m_ssaoImage[f])
+            {
+                vkDestroyImage(m_gpu.device(), m_ssaoImage[f], nullptr);
+                m_ssaoImage[f] = VK_NULL_HANDLE;
+            }
+            if (m_ssaoMemory[f])
+            {
+                vkFreeMemory(m_gpu.device(), m_ssaoMemory[f], nullptr);
+                m_ssaoMemory[f] = VK_NULL_HANDLE;
+            }
+            if (m_ssaoBlurView[f])
+            {
+                vkDestroyImageView(m_gpu.device(), m_ssaoBlurView[f], nullptr);
+                m_ssaoBlurView[f] = VK_NULL_HANDLE;
+            }
+            if (m_ssaoBlurImage[f])
+            {
+                vkDestroyImage(m_gpu.device(), m_ssaoBlurImage[f], nullptr);
+                m_ssaoBlurImage[f] = VK_NULL_HANDLE;
+            }
+            if (m_ssaoBlurMemory[f])
+            {
+                vkFreeMemory(m_gpu.device(), m_ssaoBlurMemory[f], nullptr);
+                m_ssaoBlurMemory[f] = VK_NULL_HANDLE;
+            }
+            m_ssaoSets[f]     = VK_NULL_HANDLE;
+            m_ssaoBlurSets[f] = VK_NULL_HANDLE;
+        }
+    }
+
+    void Renderer::recordSsaoPass(VkCommandBuffer cmd, const Frustum& camFrustum, const glm::mat4& proj)
+    {
+        // Viewport degenerado o recursos aun sin crear: nada que hacer.
+        if (m_ssaoBlurImage[m_currentFrame] == VK_NULL_HANDLE) return;
+
+        VkImageMemoryBarrier b{};
+        b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.baseMipLevel   = 0;
+        b.subresourceRange.levelCount     = 1;
+        b.subresourceRange.baseArrayLayer = 0;
+        b.subresourceRange.layerCount     = 1;
+
+        if (!m_ssaoEnabled)
+        {
+            m_ssaoGpuMs = 0.0f;
+            // Apagado: ni pre-pass ni dispatches. Solo queda dejar el mapa en la
+            // identidad, y eso pasa UNA vez por imagen (al crearla y al apagar el
+            // efecto), no cada frame.
+            if (!m_ssaoClearPending[m_currentFrame]) return;
+
+            b.image         = m_ssaoBlurImage[m_currentFrame];
+            b.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            b.srcAccessMask = 0;
+            b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+
+            VkClearColorValue white{};
+            white.float32[0] = 1.0f;
+            vkCmdClearColorImage(cmd, m_ssaoBlurImage[m_currentFrame], VK_IMAGE_LAYOUT_GENERAL,
+                                 &white, 1, &b.subresourceRange);
+
+            b.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+
+            m_ssaoClearPending[m_currentFrame] = false;
+            return;
+        }
+
+        // Timestamps del slot: se leen los de hace dos frames, cuya fence ya
+        // esperó drawFrame, así que no bloquean a nadie.
+        if (m_timestampsSupported && m_ssaoQueryPending[m_currentFrame])
+        {
+            uint64_t stamps[2] = {};
+            if (vkGetQueryPoolResults(m_gpu.device(), m_ssaoQueryPool, m_currentFrame * 2, 2,
+                                      sizeof(stamps), stamps, sizeof(uint64_t),
+                                      VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+            {
+                m_ssaoGpuMs = (float)((double)(stamps[1] - stamps[0]) * m_timestampPeriod * 1e-6);
+                if (++m_ssaoMeasuredFrames == 300)
+                {
+                    printf("ssao (depth pre-pass + 2 dispatches): %.3f ms (%ux%u)\n",
+                           m_ssaoGpuMs, m_swapChainExtent.width, m_swapChainExtent.height);
+                    fflush(stdout);
+                }
+            }
+        }
+        if (m_timestampsSupported)
+        {
+            vkCmdResetQueryPool(cmd, m_ssaoQueryPool, m_currentFrame * 2, 2);
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_ssaoQueryPool, m_currentFrame * 2);
+            m_ssaoQueryPending[m_currentFrame] = true;
+        }
+
+        // ── Depth pre-pass: la escena entera, solo profundidad ───────────────
+        {
+            VkClearValue clearDepth{};
+            clearDepth.depthStencil = { 1.0f, 0 };
+
+            VkRenderPassBeginInfo rpInfo{};
+            rpInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            rpInfo.renderPass        = m_ssaoDepthRenderPass;
+            rpInfo.framebuffer       = m_ssaoDepthFb[m_currentFrame];
+            rpInfo.renderArea.extent = m_swapChainExtent;
+            rpInfo.renderArea.offset = { 0, 0 };
+            rpInfo.clearValueCount   = 1;
+            rpInfo.pClearValues      = &clearDepth;
+
+            vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            VkViewport vp{};
+            vp.width    = (float)m_swapChainExtent.width;
+            vp.height   = (float)m_swapChainExtent.height;
+            vp.minDepth = 0.0f;
+            vp.maxDepth = 1.0f;
+            vkCmdSetViewport(cmd, 0, 1, &vp);
+
+            VkRect2D sc{};
+            sc.extent = m_swapChainExtent;
+            vkCmdSetScissor(cmd, 0, 1, &sc);
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ssaoDepthPipeline);
+
+            // Mismas guardas y mismo frustum que el pass de escena: si aquí
+            // entrara algo que allí no se dibuja, el AO oscurecería contra
+            // geometría invisible. Los skinned no entran, igual que en el pass de
+            // sombras: reciben AO pero no lo proyectan.
+            m_batchCandidates.clear();
+            m_batchCandidates.reserve(m_objects.size());
+            for (auto& obj : m_objects)
+            {
+                const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
+                bool visible = gpu && gpu->uploadTicket <= m_lastCompletedTicket;
+                if (visible && gpu->hasBounds &&
+                    !aabbVisible(camFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
+                {
+                    visible = false;
+                }
+                m_batchCandidates.push_back({ obj.sharedIndex, visible, &obj.transform });
+            }
+
+            // Tramo propio del SSBO, detrás del de las cascadas y delante del del
+            // pass de escena.
+            const uint32_t instanceBase = m_instanceCursor;
+            glm::mat4* dst = (glm::mat4*)m_instanceMapped[m_currentFrame] + instanceBase;
+            m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
+                dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
+
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout,
+                1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
+
+            for (const InstanceBatch& batch : m_instanceBatches)
+            {
+                const SharedGpuMesh* gpu = m_sharedMeshes.get(batch.sharedIndex);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout,
+                    0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
+
+                VkBuffer vb[] = { gpu->vertexBuffer };
+                VkDeviceSize offsets[] = { 0 };
+                vkCmdBindVertexBuffers(cmd, 0, 1, vb, offsets);
+                vkCmdBindIndexBuffer(cmd, gpu->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cmd, gpu->indexCount, batch.instanceCount, 0, 0, batch.firstInstance);
+            }
+
+            vkCmdEndRenderPass(cmd);
+        }
+
+        // ── Oclusión + blur ──────────────────────────────────────────────────
+        SsaoPush push{};
+        // Los cuatro coeficientes de la proyección EFECTIVA del frame, con el
+        // Y-flip de Vulkan ya dentro: es la misma con la que se acaba de grabar
+        // el depth, así que reconstruir y reproyectar es consistente.
+        push.projP00   = proj[0][0];
+        push.projP11   = proj[1][1];
+        push.projP22   = proj[2][2];
+        push.projP32   = proj[3][2];
+        push.invResX   = 1.0f / (float)m_swapChainExtent.width;
+        push.invResY   = 1.0f / (float)m_swapChainExtent.height;
+        push.radius    = m_ssaoRadius;
+        push.bias      = m_ssaoBias;
+        push.intensity = m_ssaoIntensity;
+        push.power     = m_ssaoPower;
+
+        // Las dos imágenes entran desde UNDEFINED: se reescriben enteras y el
+        // contenido del frame anterior no se reutiliza. GENERAL para las dos,
+        // que es el único layout válido a la vez para imageStore y para
+        // muestrear, igual que en la cadena del bloom.
+        VkImageMemoryBarrier toGeneral[2] = { b, b };
+        toGeneral[0].image         = m_ssaoImage[m_currentFrame];
+        toGeneral[1].image         = m_ssaoBlurImage[m_currentFrame];
+        for (int i = 0; i < 2; i++)
+        {
+            toGeneral[i].oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
+            toGeneral[i].newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            toGeneral[i].srcAccessMask = 0;
+            toGeneral[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        }
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 2, toGeneral);
+
+        const uint32_t gx = (m_swapChainExtent.width  + 7) / 8;
+        const uint32_t gy = (m_swapChainExtent.height + 7) / 8;
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_ssaoPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_ssaoPipelineLayout,
+                                0, 1, &m_ssaoSets[m_currentFrame], 0, nullptr);
+        vkCmdPushConstants(cmd, m_ssaoPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+        vkCmdDispatch(cmd, gx, gy, 1);
+
+        // Lo que acaba de escribir la oclusión lo lee el blur.
+        b.image         = m_ssaoImage[m_currentFrame];
+        b.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
+        b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &b);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_ssaoBlurPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_ssaoPipelineLayout,
+                                0, 1, &m_ssaoBlurSets[m_currentFrame], 0, nullptr);
+        vkCmdPushConstants(cmd, m_ssaoPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+        vkCmdDispatch(cmd, gx, gy, 1);
+
+        // Y el resultado lo lee pbr.frag en el pass de escena.
+        b.image         = m_ssaoBlurImage[m_currentFrame];
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &b);
+
+        if (m_timestampsSupported)
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_ssaoQueryPool, m_currentFrame * 2 + 1);
     }
 
 }

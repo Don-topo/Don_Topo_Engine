@@ -153,6 +153,27 @@ namespace DonTopo {
             // Coste GPU del bloom + composicion del ultimo frame ya resuelto, en
             // ms. 0 si el dispositivo no soporta timestamps.
             float bloomGpuMs() const         { return m_bloomGpuMs; }
+
+            // SSAO. Apagado por defecto: con el flag a false no se graba ni el
+            // depth pre-pass ni los dos dispatches, y el mapa de AO se deja a 1.0
+            // una sola vez, asi que la imagen es la misma que antes de la feature
+            // y el coste GPU cae a cero. Los cuatro parametros viajan por push
+            // constant del pipeline del SSAO (NO por el UBO: solo quedaban dos
+            // floats y el bloque esta declarado en 5 shaders), asi que cambian en
+            // el frame siguiente sin recrear nada.
+            void  setSsaoEnabled(bool v);
+            bool  ssaoEnabled() const        { return m_ssaoEnabled; }
+            void  setSsaoRadius(float v)     { m_ssaoRadius = v; }
+            float ssaoRadius() const         { return m_ssaoRadius; }
+            void  setSsaoBias(float v)       { m_ssaoBias = v; }
+            float ssaoBias() const           { return m_ssaoBias; }
+            void  setSsaoIntensity(float v)  { m_ssaoIntensity = v; }
+            float ssaoIntensity() const      { return m_ssaoIntensity; }
+            void  setSsaoPower(float v)      { m_ssaoPower = v; }
+            float ssaoPower() const          { return m_ssaoPower; }
+            // Coste GPU del pre-pass + los dos dispatches, en ms. 0 si el efecto
+            // esta apagado o el dispositivo no soporta timestamps.
+            float ssaoGpuMs() const          { return m_ssaoGpuMs; }
             // decoded: píxeles que el worker ya decodificó para este mesh (nullptr
             // en el camino síncrono). Encola todos los uploads en el batch del pump
             // actual y marca el objeto con el ticket vigente: no se dibuja hasta que
@@ -441,6 +462,24 @@ namespace DonTopo {
             // tamano, se crean una sola vez en initSceneResources.
             void createBloomPipelines();
             void recordBloomPass(VkCommandBuffer cmd);
+            // SSAO. createSsaoPipelines es independiente del tamano (una sola vez,
+            // junto al bloom); las imagenes y los sets van con el swapchain,
+            // colgados de createOffscreenImages/destroyOffscreenImages.
+            void createSsaoPipelines();
+            void createSsaoImages();
+            void destroySsaoImages();
+            // Depth pre-pass de la escena + los dos dispatches. camFrustum y fc
+            // son los MISMOS del frame: el pre-pass tiene que culear con el mismo
+            // criterio que el pass de escena o el AO oscureceria contra geometria
+            // que luego no se dibuja.
+            void recordSsaoPass(VkCommandBuffer cmd, const Frustum& camFrustum, const glm::mat4& proj);
+            // Reescribe el binding 7 (mapa de AO) de todos los descriptor sets ya
+            // alojados. Necesario tras recrear las imagenes con el swapchain: los
+            // sets apuntarian a vistas destruidas.
+            void refreshSsaoDescriptors();
+            // Un solo write del binding 7 sobre `set`. La comparten
+            // allocateObjectDescriptorSet, la ruta skinned y el refresh de arriba.
+            void writeSsaoBinding(VkDescriptorSet set, int frameIndex);
             void createCommandBuffers();
             void createSyncObjects();
             void recordCommandBuffer(uint32_t imageIndex);
@@ -615,6 +654,74 @@ namespace DonTopo {
             // (igual que "IBL precompute: ..."), en vez de ensuciar el log cada
             // frame: el valor en vivo se ve en el menu View del editor.
             uint32_t                        m_bloomMeasuredFrames               = 0;
+
+            // ── SSAO ─────────────────────────────────────────────────────────
+            // R32_SFLOAT y no R8: los formatos de un solo canal a 8 bits exigen
+            // shaderStorageImageExtendedFormats para hacer de storage image, y
+            // este es de los obligatorios en cualquier implementacion.
+            static constexpr VkFormat       kSsaoFormat = VK_FORMAT_R32_SFLOAT;
+            // Depth propio del pre-pass, SEPARADO de m_depthImage a proposito: ese
+            // lo comparten el pass de escena y el de composicion dentro del mismo
+            // framebuffer, y el contorno lo testea en
+            // DEPTH_STENCIL_ATTACHMENT_OPTIMAL. Con uno propio no hay que tocar ni
+            // su usage ni su layout ni el loadOp de nadie.
+            VkImage                         m_ssaoDepthImage[MAX_FRAMES]        = {};
+            VkDeviceMemory                  m_ssaoDepthMemory[MAX_FRAMES]       = {};
+            VkImageView                     m_ssaoDepthView[MAX_FRAMES]         = {};
+            VkFramebuffer                   m_ssaoDepthFb[MAX_FRAMES]           = {};
+            VkRenderPass                    m_ssaoDepthRenderPass               = VK_NULL_HANDLE;
+            // Reutiliza m_shadowPipelineLayout: mismos dos sets (objeto +
+            // instancias) y el mismo rango de push constants, que este pipeline
+            // simplemente no usa.
+            VkPipeline                      m_ssaoDepthPipeline                 = VK_NULL_HANDLE;
+            // Resolucion completa: asi pbr.frag muestrea 1:1 con gl_FragCoord y no
+            // hay que llevarle la escala a ningun sitio.
+            VkImage                         m_ssaoImage[MAX_FRAMES]             = {};
+            VkDeviceMemory                  m_ssaoMemory[MAX_FRAMES]            = {};
+            VkImageView                     m_ssaoView[MAX_FRAMES]              = {};
+            VkImage                         m_ssaoBlurImage[MAX_FRAMES]         = {};
+            VkDeviceMemory                  m_ssaoBlurMemory[MAX_FRAMES]        = {};
+            VkImageView                     m_ssaoBlurView[MAX_FRAMES]          = {};
+            // NEAREST: ni D32_SFLOAT ni R32_SFLOAT garantizan filtrado lineal, y
+            // todos los taps son a texel exacto.
+            VkSampler                       m_ssaoSampler                       = VK_NULL_HANDLE;
+            VkDescriptorSetLayout           m_ssaoDescLayout                    = VK_NULL_HANDLE;
+            VkDescriptorPool                m_ssaoDescPool                      = VK_NULL_HANDLE;
+            VkPipelineLayout                m_ssaoPipelineLayout                = VK_NULL_HANDLE;
+            VkPipeline                      m_ssaoPipeline                      = VK_NULL_HANDLE;
+            VkPipeline                      m_ssaoBlurPipeline                  = VK_NULL_HANDLE;
+            VkDescriptorSet                 m_ssaoSets[MAX_FRAMES]              = {};
+            VkDescriptorSet                 m_ssaoBlurSets[MAX_FRAMES]          = {};
+            // Compartida por ssao.comp y ssao_blur.comp, que comparten pipeline
+            // layout (el blur solo lee invRes).
+            struct SsaoPush {
+                float projP00;
+                float projP11;
+                float projP22;
+                float projP32;
+                float invResX;
+                float invResY;
+                float radius;
+                float bias;
+                float intensity;
+                float power;
+            };
+            bool                            m_ssaoEnabled                       = false;
+            float                           m_ssaoRadius                        = 0.5f;
+            float                           m_ssaoBias                          = 0.025f;
+            float                           m_ssaoIntensity                     = 1.0f;
+            float                           m_ssaoPower                         = 1.0f;
+            // Con el efecto apagado el mapa tiene que valer 1.0 (identidad) y
+            // ademas estar en GENERAL, que es el layout que declaran los
+            // descriptor sets. Un clear resuelve las dos cosas de golpe, y solo se
+            // graba cuando hay algo que limpiar: al crear las imagenes y al
+            // apagar el efecto. Fuera de eso, apagado = cero trabajo por frame.
+            bool                            m_ssaoClearPending[MAX_FRAMES]      = {};
+            // Queries propias: reutilizar las del bloom mezclaria dos medidas.
+            VkQueryPool                     m_ssaoQueryPool                     = VK_NULL_HANDLE;
+            bool                            m_ssaoQueryPending[MAX_FRAMES]      = {};
+            float                           m_ssaoGpuMs                         = 0.0f;
+            uint32_t                        m_ssaoMeasuredFrames                = 0;
 
             VkSemaphore                     m_imageAvailable[MAX_FRAMES]        = {};
             std::vector<VkSemaphore>        m_renderFinished;
