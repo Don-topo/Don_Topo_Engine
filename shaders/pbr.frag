@@ -40,6 +40,38 @@ layout(set = 0, binding = 6) uniform samplerCube prefilterMap;
 // unidad, asi que no hace falta ninguna rama ni un miembro nuevo en el UBO.
 layout(set = 0, binding = 7) uniform sampler2D ssaoMap;
 
+// ── Forward+ ────────────────────────────────────────────────────────────────
+// Set 2 propio y no bindings nuevos del set 0: el 0 solo tenia libre el 8 y
+// ampliarlo obligaria a reescribir el descriptor set de CADA objeto. Este set
+// es uno por frame y se bindea una vez por pass. Los buffers EXISTEN siempre,
+// tambien con Forward+ apagado: entonces fp.mode vale 0 y el bucle de abajo es
+// el de siempre sobre el UBO, sin leer ni una luz de aqui.
+struct FpLight
+{
+    vec4 posRadius;     // xyz mundo, w radio
+    vec4 color;         // rgb color, a intensidad
+    vec4 viewPosR;      // xyz view space, w radio (solo lo usa el culling)
+};
+
+layout(std430, set = 2, binding = 0) readonly buffer FpParamsBuf {
+    uint  mode;         // 0 off, 1 tiled, 2 clustered
+    uint  gridX;
+    uint  gridY;
+    uint  gridZ;
+    uint  tileSize;
+    uint  maxPerCell;
+    uint  numLights;
+    uint  pad0;
+    float zNear;
+    float zFar;
+    float sliceScale;
+    float sliceBias;
+} fp;
+
+layout(std430, set = 2, binding = 1) readonly buffer FpLightBuf { FpLight fpLights[];  };
+layout(std430, set = 2, binding = 2) readonly buffer FpGridBuf  { uvec2   fpCells[];   };
+layout(std430, set = 2, binding = 3) readonly buffer FpIndexBuf { uint    fpIndices[]; };
+
 // Debe coincidir con Renderer::IBL_PREFILTER_MIPS. Va como #define y no en el
 // UBO a proposito: el bloque UBO esta declarado en 5 shaders y anadirle un
 // miembro desplazaria en silencio todo lo que va detras por std140.
@@ -132,6 +164,13 @@ void main()
     float shadow    = cascade < 0 ? 1.0 : computeShadow(fragWorldPos, cascade);
     vec3  Lo        = vec3(0.0);
 
+    // Forward+ apagado: el bucle de siempre sobre las MAX_LIGHTS del UBO, sin
+    // atenuacion por distancia y sin tocar un solo buffer del set 2. Va copiado
+    // y no factorizado con el de abajo a proposito: mientras sean las mismas
+    // operaciones en el mismo orden, la imagen es identica a la de antes de esta
+    // feature hasta el ultimo bit.
+    if (fp.mode == 0u)
+    {
     for (int i = 0; i < ubo.numLights; i++)
     {
         vec3  L        = normalize(ubo.lights[i].position.xyz - fragWorldPos);
@@ -163,6 +202,73 @@ void main()
 
         Lo += s * (kD * albedo / PI + D * G * F / (4.0 * NdotV * NdotL + 0.0001))
               * radiance * NdotL;
+    }
+    }
+    else
+    {
+        // Celda de este fragmento. gl_FragCoord va en pixeles del target, que es
+        // la resolucion INTERNA — la misma con la que se dimensiono la rejilla.
+        uvec2 tile = uvec2(gl_FragCoord.xy) / fp.tileSize;
+        tile = min(tile, uvec2(fp.gridX - 1u, fp.gridY - 1u));
+
+        uint cell;
+        if (fp.mode == 1u)
+        {
+            cell = tile.y * fp.gridX + tile.x;
+        }
+        else
+        {
+            // Inverso exacto del reparto logaritmico de light_cull_clustered.comp.
+            float sl = log2(max(viewDepth, fp.zNear)) * fp.sliceScale + fp.sliceBias;
+            uint slice = uint(clamp(sl, 0.0, float(fp.gridZ - 1u)));
+            cell = (slice * fp.gridY + tile.y) * fp.gridX + tile.x;
+        }
+
+        uvec2 cellData = fpCells[cell];
+        for (uint c = 0u; c < cellData.y; c++)
+        {
+            uint  li = fpIndices[cellData.x + c];
+            vec3  lp = fpLights[li].posRadius.xyz;
+            float lr = fpLights[li].posRadius.w;
+
+            vec3  toL  = lp - fragWorldPos;
+            float dist = length(toL);
+            // Ventana por radio: fuera del radio da EXACTAMENTE 0, que es lo que
+            // hace que meter luces de mas en una celda no cambie el resultado —
+            // y por tanto que tiled y clustered, que culean con volumenes
+            // distintos, den la misma imagen.
+            float w   = clamp(1.0 - (dist * dist) / (lr * lr), 0.0, 1.0);
+            float att = w * w;
+
+            vec3  L        = toL / max(dist, 1e-4);
+            vec3  H        = normalize(V + L);
+            vec3  radiance = fpLights[li].color.rgb * fpLights[li].color.a;
+
+            float NdotL = max(dot(N, L), 0.0);
+            float NdotV = max(dot(N, V), 0.0);
+            float NdotH = max(dot(N, H), 0.0);
+            float HdotV = max(dot(H, V), 0.0);
+
+            float a  = rough * rough;
+            float a2 = a * a;
+            float d  = (NdotH * NdotH) * (a2 - 1.0) + 1.0;
+            float D  = a2 / (PI * d * d);
+
+            float r = rough + 1.0;
+            float k = (r * r) / 8.0;
+            float G = (NdotV / (NdotV * (1.0 - k) + k)) * (NdotL / (NdotL * (1.0 - k) + k));
+
+            vec3 F  = F0 + (1.0 - F0) * pow(clamp(1.0 - HdotV, 0.0, 1.0), 5.0);
+
+            vec3 kD = (1.0 - F) * (1.0 - metal);
+
+            // La luz 0 sigue siendo la que proyecta las cascadas, igual que en la
+            // rama de arriba: aqui se compara el indice GLOBAL, no el de la celda.
+            float s = (li == 0u) ? shadow : 1.0;
+
+            Lo += s * (kD * albedo / PI + D * G * F / (4.0 * NdotV * NdotL + 0.0001))
+                  * radiance * NdotL * att;
+        }
     }
 
     // ── Ambiente: IBL ───────────────────────────────────────────────────────

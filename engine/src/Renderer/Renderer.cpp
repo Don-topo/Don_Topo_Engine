@@ -127,6 +127,10 @@ namespace DonTopo {
         // layouts declaran m_instanceDescLayout como set 1.
         createInstanceResources();
         createDescriptorSetLayout();
+        // ANTES de createPipeline: el pipeline layout de escena declara
+        // m_fpDescLayout como set 2. Los buffers que SI dependen del tamano (la
+        // rejilla) los crea despues createFpBuffers, desde createOffscreenImages.
+        createFpPipelines();
         createPipeline();
         createShadowResources();
         createComputePipelines();
@@ -312,6 +316,13 @@ namespace DonTopo {
         // aquí, con la misma cámara ya estable, y ANTES de los dos que las
         // consumen: updateUniformBuffer (que las copia al UBO) y
         // recordCommandBuffer (que culea y graba el pass de sombras con ellas).
+        // Forward+: se congela AQUI, despues de buildUiFrame (que es quien puede
+        // haber cambiado el modo con el combo) y antes de los dos que lo
+        // consumen. Sin este punto unico, el bloque de parametros que lee
+        // pbr.frag y el dispatch que se graba podrian salir de modos distintos en
+        // el frame exacto del clic.
+        m_fpActiveMode = m_fpMode;
+
         computeCascades();
         updateUniformBuffer(m_currentFrame);
 
@@ -431,6 +442,30 @@ namespace DonTopo {
         {
             vkDestroyQueryPool(m_gpu.device(), m_ssrQueryPool, nullptr);
             m_ssrQueryPool = VK_NULL_HANDLE;
+        }
+
+        // Forward+: la rejilla y la lista de indices se fueron con
+        // destroyOffscreenImages; aqui queda lo que no depende del tamano. Los
+        // tres buffers mapeados en persistente no necesitan unmap: el mapeo muere
+        // con la memoria, igual que en el UBO y en el SSBO de instancias.
+        vkDestroyPipeline(m_gpu.device(), m_fpTiledPipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_fpClusteredPipeline, nullptr);
+        vkDestroyPipelineLayout(m_gpu.device(), m_fpPipelineLayout, nullptr);
+        vkDestroyDescriptorPool(m_gpu.device(), m_fpDescPool, nullptr);
+        vkDestroyDescriptorSetLayout(m_gpu.device(), m_fpDescLayout, nullptr);
+        for (int f = 0; f < MAX_FRAMES; f++)
+        {
+            vkDestroyBuffer(m_gpu.device(), m_fpParamsBuffer[f], nullptr);
+            vkFreeMemory(m_gpu.device(), m_fpParamsMemory[f], nullptr);
+            vkDestroyBuffer(m_gpu.device(), m_fpLightBuffer[f], nullptr);
+            vkFreeMemory(m_gpu.device(), m_fpLightMemory[f], nullptr);
+            vkDestroyBuffer(m_gpu.device(), m_fpStatsBuffer[f], nullptr);
+            vkFreeMemory(m_gpu.device(), m_fpStatsMemory[f], nullptr);
+        }
+        if (m_fpQueryPool != VK_NULL_HANDLE)
+        {
+            vkDestroyQueryPool(m_gpu.device(), m_fpQueryPool, nullptr);
+            m_fpQueryPool = VK_NULL_HANDLE;
         }
 
         // Anti-aliasing: las imagenes, los framebuffers y los sets se fueron con
@@ -1617,6 +1652,10 @@ namespace DonTopo {
         // necesita la profundidad de TODA la escena. Por eso el depth pre-pass, y
         // por eso va aquí y no después.
         recordSsaoPass(m_commandBuffers[m_currentFrame], camFrustum, fc.proj);
+        // Forward+: DETRAS del pre-pass (el tiled lee esa profundidad) y DELANTE
+        // del pass de escena, que es quien consume la rejilla de luces. En Off no
+        // graba ni un comando.
+        recordFpCullPass(m_commandBuffers[m_currentFrame], fc.proj);
 
         // ── Pass 1: escena 3D → offscreen ────────────────────────────────────────
         {
@@ -1690,6 +1729,17 @@ namespace DonTopo {
             // sigue bindeado y válido también para él.
             vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
                 m_pipelineLayout, 1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
+
+            // Forward+: uno por frame y comun a TODOS los draws del pass (estatico
+            // y skinned), asi que se bindea una sola vez aqui. Va DENTRO del pass
+            // de escena y no antes: el pass de sombras y el depth pre-pass usan
+            // m_shadowPipelineLayout, que solo declara dos sets, y bindear con el
+            // deja el set 2 sin definir.
+            if (m_fpSets[m_currentFrame] != VK_NULL_HANDLE)
+            {
+                vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    m_pipelineLayout, 2, 1, &m_fpSets[m_currentFrame], 0, nullptr);
+            }
 
             for (const InstanceBatch& batch : m_instanceBatches)
             {
@@ -2127,11 +2177,17 @@ namespace DonTopo {
         // pass. Este layout lo comparten el pipeline estático, el wireframe y el
         // skinned; el skinned no lee el set 1 (useInstancing = 0), pero al
         // compartir layout el set sigue bindeado y es válido.
-        VkDescriptorSetLayout setLayouts[] = { m_descriptorSetLayout, m_instanceDescLayout };
+        // Set 2: los buffers de Forward+ (parametros, luces, rejilla e indices).
+        // Uno por frame, se bindea una vez por pass. Set propio y no bindings
+        // nuevos del set 0 porque ese solo tenia libre el 8 y ampliarlo obligaria
+        // a reescribir el descriptor set de CADA objeto. Solo lo lee pbr.frag; el
+        // wireframe, el skinned y el outline comparten layout y no lo declaran,
+        // que es legal mientras no lo usen.
+        VkDescriptorSetLayout setLayouts[] = { m_descriptorSetLayout, m_instanceDescLayout, m_fpDescLayout };
 
         VkPipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.sType                    = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        layoutInfo.setLayoutCount           = 2;
+        layoutInfo.setLayoutCount           = 3;
         layoutInfo.pSetLayouts              = setLayouts;
         layoutInfo.pushConstantRangeCount   = 1;
         layoutInfo.pPushConstantRanges      = &pushRange;
@@ -2971,7 +3027,63 @@ namespace DonTopo {
         }
         ubo.cascadeSplits = m_cascadeSplits;
 
-        memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));        
+        memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));
+
+        // ── Forward+: bloque de parametros y lista de luces ──────────────────
+        // Se escribe SIEMPRE, tambien en Off: pbr.frag lee fp.mode de aqui para
+        // decidir por que rama va, y con 0 no toca ni un buffer mas.
+        if (m_fpParamsMapped[frameIndex])
+        {
+            uint32_t gx = 0, gy = 0, gz = 0, ts = 0;
+            fpGridDims(m_fpActiveMode, gx, gy, gz, ts);
+
+            // zNear/zFar salen de la propia proyeccion (RH_ZO): p22 = f/(n-f) y
+            // p32 = f*n/(n-f), asi que n = p32/p22 y f = p32/(p22+1). Es la unica
+            // forma de que la rejilla siga a la camara del CameraComponent en Play
+            // sin duplicar aqui los planos de la camara del editor.
+            const float p22 = fc.proj[2][2];
+            const float p32 = fc.proj[3][2];
+            const float zNear = (p22 != 0.0f) ? p32 / p22 : 0.1f;
+            const float zFar  = (p22 != -1.0f) ? p32 / (p22 + 1.0f) : 1000.0f;
+
+            const uint32_t count = (uint32_t)std::min<size_t>(m_lights.size(), kFpMaxLights);
+
+            FpParamsGpu fp{};
+            fp.mode       = (uint32_t)m_fpActiveMode;
+            fp.gridX      = gx;
+            fp.gridY      = gy;
+            fp.gridZ      = gz;
+            fp.tileSize   = ts;
+            fp.maxPerCell = kFpMaxPerCell;
+            fp.numLights  = count;
+            fp.zNear      = zNear;
+            fp.zFar       = zFar;
+            // Inverso del reparto logaritmico de light_cull_clustered.comp:
+            // slice = log2(z)*scale + bias.
+            const float logRatio = std::log2(std::max(zFar / zNear, 1.0001f));
+            fp.sliceScale = (float)gz / logRatio;
+            fp.sliceBias  = -std::log2(zNear) * fp.sliceScale;
+            memcpy(m_fpParamsMapped[frameIndex], &fp, sizeof(fp));
+
+            if (m_fpLightMapped[frameIndex] && count > 0)
+            {
+                FpLightGpu* dst = (FpLightGpu*)m_fpLightMapped[frameIndex];
+                for (uint32_t i = 0; i < count; i++)
+                {
+                    // El radio es el unico dato que Light no lleva: por luz si el
+                    // usuario lo ha dado, y si no el global. En el UBO no cabe sin
+                    // mover el layout std140 que declaran 5 shaders.
+                    const float radius = (i < m_lightRadii.size()) ? m_lightRadii[i] : m_fpLightRadius;
+                    const glm::vec3 wp = glm::vec3(m_lights[i].position);
+                    // La misma luz en view space, para que el culling no necesite
+                    // la matriz de vista ni la recalcule por celda.
+                    const glm::vec3 vp = glm::vec3(fc.view * glm::vec4(wp, 1.0f));
+                    dst[i].posRadius = glm::vec4(wp, radius);
+                    dst[i].color     = m_lights[i].color;
+                    dst[i].viewPosR  = glm::vec4(vp, radius);
+                }
+            }
+        }
     }
 
     void Renderer::createDepthResources()
@@ -4856,6 +4968,10 @@ namespace DonTopo {
         // m_ssaoDepthView, la profundidad del pre-pass. Sus tres imagenes van al
         // tamano interno del render, igual que el resto de targets intermedios.
         createSsaoImages();
+        // DETRAS de createSsaoImages: el descriptor set del culling referencia
+        // m_ssaoDepthView, que se acaba de crear ahi. La rejilla se dimensiona con
+        // m_renderExtent, igual que el resto de targets intermedios.
+        createFpBuffers();
         // ANTES de los framebuffers de escena y composicion: con MSAA sus
         // attachments de color son las imagenes multisample que se crean ahi.
         createAaImages();
@@ -4909,6 +5025,7 @@ namespace DonTopo {
     {
         destroyBloomImages();
         destroySsaoImages();
+        destroyFpBuffers();
         destroySsrImages();
         destroyAaImages();
         for (int i = 0; i < MAX_FRAMES; i++)
@@ -5919,7 +6036,11 @@ namespace DonTopo {
         // El TAA es el tercer cliente: reproyecta el frame anterior a partir de
         // esta misma profundidad, y la quiere SIN el jitter de subpixel, que es
         // justo como la graba este pre-pass (usa fc.proj, no la jittereada).
-        const bool ssrNeedsDepth = ssrActive() || m_aaActiveMode == AaMode::Taa;
+        // El cuarto cliente es el Forward+ tiled: reduce el maximo de profundidad
+        // de cada tile a partir de esta misma imagen. El clustered NO la necesita
+        // (su rejilla es analitica) y por eso no entra aqui.
+        const bool ssrNeedsDepth = ssrActive() || m_aaActiveMode == AaMode::Taa ||
+                                   m_fpActiveMode == FpMode::Tiled;
         m_ssrStampedPrepass = false;
 
         VkImageMemoryBarrier b{};
@@ -6149,6 +6270,353 @@ namespace DonTopo {
 
         if (m_timestampsSupported)
             vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_ssaoQueryPool, m_currentFrame * 2 + 1);
+    }
+
+    // ── Forward+ ────────────────────────────────────────────────────────────
+    void Renderer::fpGridDims(FpMode mode, uint32_t& gridX, uint32_t& gridY,
+                              uint32_t& gridZ, uint32_t& tileSize) const
+    {
+        // Con m_renderExtent y NO con m_swapChainExtent: con SSAA el render es
+        // mayor que la ventana, y dimensionar con el de la ventana dejaria a
+        // pbr.frag leyendo celdas fuera del buffer sin que la validacion diga
+        // nada (gl_FragCoord va en pixeles del target).
+        if (mode == FpMode::Clustered)
+        {
+            tileSize = kFpClusterTile;
+            gridZ    = kFpClusterSlices;
+        }
+        else
+        {
+            tileSize = kFpTileSize;
+            gridZ    = 1;
+        }
+        gridX = (m_renderExtent.width  + tileSize - 1) / tileSize;
+        gridY = (m_renderExtent.height + tileSize - 1) / tileSize;
+    }
+
+    void Renderer::createFpPipelines()
+    {
+        // Seis bindings. Los cuatro primeros los ve tambien pbr.frag (set 2); la
+        // profundidad y los contadores son solo del compute, y que el fragment
+        // shader no los declare es legal.
+        VkDescriptorSetLayoutBinding bindings[6]{};
+        for (uint32_t i = 0; i < 6; i++)
+        {
+            bindings[i].binding         = i;
+            bindings[i].descriptorType  = (i == 4) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                                                   : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[i].descriptorCount = 1;
+            bindings[i].stageFlags      = (i < 4) ? (VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
+                                                  : VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+
+        VkDescriptorSetLayoutCreateInfo dsl{};
+        dsl.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dsl.bindingCount = 6;
+        dsl.pBindings    = bindings;
+        if (vkCreateDescriptorSetLayout(m_gpu.device(), &dsl, nullptr, &m_fpDescLayout) != VK_SUCCESS)
+            throw std::runtime_error("failed to create forward+ descriptor set layout!");
+
+        VkDescriptorPoolSize sizes[2]{};
+        sizes[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        sizes[0].descriptorCount = MAX_FRAMES * 5;
+        sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        sizes[1].descriptorCount = MAX_FRAMES;
+
+        VkDescriptorPoolCreateInfo dpi{};
+        dpi.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpi.poolSizeCount = 2;
+        dpi.pPoolSizes    = sizes;
+        dpi.maxSets       = MAX_FRAMES;
+        if (vkCreateDescriptorPool(m_gpu.device(), &dpi, nullptr, &m_fpDescPool) != VK_SUCCESS)
+            throw std::runtime_error("failed to create forward+ descriptor pool!");
+
+        // El pipeline de culling declara el set en el indice 0; el de escena lo
+        // declara en el 2. Es el mismo VkDescriptorSet: un set encaja en
+        // cualquier indice mientras el VkDescriptorSetLayout coincida.
+        VkPushConstantRange pcr{};
+        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcr.offset     = 0;
+        pcr.size       = sizeof(FpPush);
+
+        VkPipelineLayoutCreateInfo pli{};
+        pli.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pli.setLayoutCount         = 1;
+        pli.pSetLayouts            = &m_fpDescLayout;
+        pli.pushConstantRangeCount = 1;
+        pli.pPushConstantRanges    = &pcr;
+        if (vkCreatePipelineLayout(m_gpu.device(), &pli, nullptr, &m_fpPipelineLayout) != VK_SUCCESS)
+            throw std::runtime_error("failed to create forward+ pipeline layout!");
+
+        auto makePipeline = [&](const std::string& spv, VkPipeline& pipeline)
+        {
+            auto code   = loadShaderFile(spv);
+            auto module = createShaderModule(code);
+
+            VkComputePipelineCreateInfo ci{};
+            ci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            ci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            ci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            ci.stage.module = module;
+            ci.stage.pName  = "main";
+            ci.layout       = m_fpPipelineLayout;
+            if (vkCreateComputePipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline) != VK_SUCCESS)
+                throw std::runtime_error("failed to create compute pipeline: " + spv);
+
+            vkDestroyShaderModule(m_gpu.device(), module, nullptr);
+        };
+
+        makePipeline("shaders/light_cull_tiled.comp.spv",     m_fpTiledPipeline);
+        makePipeline("shaders/light_cull_clustered.comp.spv", m_fpClusteredPipeline);
+
+        // Parametros, luces y contadores: no dependen del tamano, viven todo el
+        // proceso y se escriben desde la CPU cada frame (mapeo persistente, igual
+        // que el UBO). Los contadores ademas se LEEN: los escribe la GPU con
+        // atomicos y la CPU los recoge dos frames despues.
+        const VkMemoryPropertyFlags hostFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        for (int f = 0; f < MAX_FRAMES; f++)
+        {
+            m_res.createBuffer(sizeof(FpParamsGpu), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, hostFlags,
+                               m_fpParamsBuffer[f], m_fpParamsMemory[f]);
+            vkMapMemory(m_gpu.device(), m_fpParamsMemory[f], 0, sizeof(FpParamsGpu), 0, &m_fpParamsMapped[f]);
+            memset(m_fpParamsMapped[f], 0, sizeof(FpParamsGpu));
+
+            const VkDeviceSize lightSize = sizeof(FpLightGpu) * kFpMaxLights;
+            m_res.createBuffer(lightSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, hostFlags,
+                               m_fpLightBuffer[f], m_fpLightMemory[f]);
+            vkMapMemory(m_gpu.device(), m_fpLightMemory[f], 0, lightSize, 0, &m_fpLightMapped[f]);
+            memset(m_fpLightMapped[f], 0, (size_t)lightSize);
+
+            // 4 uint: [0] suma de luces asignadas, [1] celdas no vacias,
+            // [2] celdas desbordadas, [3] sin usar (alineacion).
+            m_res.createBuffer(sizeof(uint32_t) * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, hostFlags,
+                               m_fpStatsBuffer[f], m_fpStatsMemory[f]);
+            vkMapMemory(m_gpu.device(), m_fpStatsMemory[f], 0, sizeof(uint32_t) * 4, 0, &m_fpStatsMapped[f]);
+            memset(m_fpStatsMapped[f], 0, sizeof(uint32_t) * 4);
+        }
+
+        // Queries propias: mezclarlas con las del SSAO o las del AA juntaria dos
+        // medidas. Este pass corre ANTES que createBloomPipelines (el layout del
+        // pipeline de escena necesita el set de aqui), asi que el soporte de
+        // timestamps se resuelve aqui mismo en vez de heredarlo; son propiedades
+        // del device y el bloom volvera a leer exactamente lo mismo.
+        VkPhysicalDeviceProperties tsProps{};
+        vkGetPhysicalDeviceProperties(m_gpu.physicalDevice(), &tsProps);
+        m_timestampPeriod     = tsProps.limits.timestampPeriod;
+        m_timestampsSupported = tsProps.limits.timestampComputeAndGraphics && m_timestampPeriod > 0.0f;
+        if (m_timestampsSupported)
+        {
+            VkQueryPoolCreateInfo qpi{};
+            qpi.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            qpi.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+            qpi.queryCount = MAX_FRAMES * 2;
+            if (vkCreateQueryPool(m_gpu.device(), &qpi, nullptr, &m_fpQueryPool) != VK_SUCCESS)
+                throw std::runtime_error("failed to create forward+ query pool!");
+        }
+
+        printf("forward+ pipelines OK\n"); fflush(stdout);
+    }
+
+    void Renderer::createFpBuffers()
+    {
+        // Al MAYOR de las dos rejillas: asi cambiar de modo en caliente no
+        // recrea nada y no puede quedar un frame grabado con los buffers del modo
+        // anterior. La diferencia de memoria entre una y otra es despreciable al
+        // lado de tener dos juegos de buffers.
+        uint32_t gx = 0, gy = 0, gz = 0, ts = 0;
+        fpGridDims(FpMode::Tiled, gx, gy, gz, ts);
+        uint32_t maxCells = gx * gy * gz;
+        fpGridDims(FpMode::Clustered, gx, gy, gz, ts);
+        maxCells = std::max(maxCells, gx * gy * gz);
+        // Viewport degenerado: nada que dimensionar. El resto del frame ya se
+        // salta el pass entero.
+        if (maxCells == 0) return;
+
+        for (int f = 0; f < MAX_FRAMES; f++)
+        {
+            m_res.createBuffer((VkDeviceSize)maxCells * sizeof(uint32_t) * 2,
+                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                               m_fpGridBuffer[f], m_fpGridMemory[f]);
+            m_res.createBuffer((VkDeviceSize)maxCells * kFpMaxPerCell * sizeof(uint32_t),
+                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                               m_fpIndexBuffer[f], m_fpIndexMemory[f]);
+        }
+
+        // Los sets de la vez anterior apuntan a buffers ya destruidos: reset y no
+        // free, igual que en el bloom y en el SSAO.
+        vkResetDescriptorPool(m_gpu.device(), m_fpDescPool, 0);
+
+        for (int f = 0; f < MAX_FRAMES; f++)
+        {
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool     = m_fpDescPool;
+            ai.descriptorSetCount = 1;
+            ai.pSetLayouts        = &m_fpDescLayout;
+            if (vkAllocateDescriptorSets(m_gpu.device(), &ai, &m_fpSets[f]) != VK_SUCCESS)
+                throw std::runtime_error("failed to allocate forward+ descriptor set!");
+
+            VkDescriptorBufferInfo bufs[5]{};
+            bufs[0].buffer = m_fpParamsBuffer[f];
+            bufs[1].buffer = m_fpLightBuffer[f];
+            bufs[2].buffer = m_fpGridBuffer[f];
+            bufs[3].buffer = m_fpIndexBuffer[f];
+            bufs[4].buffer = m_fpStatsBuffer[f];
+            for (int i = 0; i < 5; i++) bufs[i].range = VK_WHOLE_SIZE;
+
+            // La profundidad del depth pre-pass, la misma que muestrea el SSAO, y
+            // con su mismo sampler NEAREST: es D32_SFLOAT y el culling la lee a
+            // texel exacto.
+            VkDescriptorImageInfo depthInfo{};
+            depthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            depthInfo.imageView   = m_ssaoDepthView[f];
+            depthInfo.sampler     = m_ssaoSampler;
+
+            VkWriteDescriptorSet writes[6]{};
+            for (int i = 0; i < 6; i++)
+            {
+                writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[i].dstSet          = m_fpSets[f];
+                writes[i].dstBinding      = (uint32_t)i;
+                writes[i].descriptorCount = 1;
+                writes[i].descriptorType  = (i == 4) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                                                     : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            }
+            writes[0].pBufferInfo = &bufs[0];
+            writes[1].pBufferInfo = &bufs[1];
+            writes[2].pBufferInfo = &bufs[2];
+            writes[3].pBufferInfo = &bufs[3];
+            writes[4].pImageInfo  = &depthInfo;
+            writes[5].pBufferInfo = &bufs[4];
+
+            vkUpdateDescriptorSets(m_gpu.device(), 6, writes, 0, nullptr);
+        }
+    }
+
+    void Renderer::destroyFpBuffers()
+    {
+        for (int f = 0; f < MAX_FRAMES; f++)
+        {
+            if (m_fpGridBuffer[f])
+            {
+                vkDestroyBuffer(m_gpu.device(), m_fpGridBuffer[f], nullptr);
+                m_fpGridBuffer[f] = VK_NULL_HANDLE;
+            }
+            if (m_fpGridMemory[f])
+            {
+                vkFreeMemory(m_gpu.device(), m_fpGridMemory[f], nullptr);
+                m_fpGridMemory[f] = VK_NULL_HANDLE;
+            }
+            if (m_fpIndexBuffer[f])
+            {
+                vkDestroyBuffer(m_gpu.device(), m_fpIndexBuffer[f], nullptr);
+                m_fpIndexBuffer[f] = VK_NULL_HANDLE;
+            }
+            if (m_fpIndexMemory[f])
+            {
+                vkFreeMemory(m_gpu.device(), m_fpIndexMemory[f], nullptr);
+                m_fpIndexMemory[f] = VK_NULL_HANDLE;
+            }
+            m_fpSets[f] = VK_NULL_HANDLE;
+        }
+    }
+
+    void Renderer::recordFpCullPass(VkCommandBuffer cmd, const glm::mat4& proj)
+    {
+        // Apagado: ni un comando. Es lo que hace que la imagen y el coste sean
+        // exactamente los de antes de la feature.
+        if (m_fpActiveMode == FpMode::Off) { m_fpGpuMs = 0.0f; return; }
+        if (m_fpSets[m_currentFrame] == VK_NULL_HANDLE) return;
+
+        // Contadores de hace dos frames en este mismo slot: su fence ya la espero
+        // drawFrame, asi que la lectura no bloquea. Se leen ANTES de ponerlos a
+        // cero para este frame.
+        if (m_fpStatsMapped[m_currentFrame])
+        {
+            const uint32_t* s = (const uint32_t*)m_fpStatsMapped[m_currentFrame];
+            m_fpAvgPerCell    = (s[1] > 0) ? (float)s[0] / (float)s[1] : 0.0f;
+            m_fpOverflowCells = s[2];
+            memset(m_fpStatsMapped[m_currentFrame], 0, sizeof(uint32_t) * 4);
+        }
+
+        if (m_timestampsSupported && m_fpQueryPending[m_currentFrame])
+        {
+            uint64_t stamps[2] = {};
+            if (vkGetQueryPoolResults(m_gpu.device(), m_fpQueryPool, m_currentFrame * 2, 2,
+                                      sizeof(stamps), stamps, sizeof(uint64_t),
+                                      VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+            {
+                m_fpGpuMs = (float)((double)(stamps[1] - stamps[0]) * m_timestampPeriod * 1e-6);
+                if (++m_fpMeasuredFrames == 300)
+                {
+                    printf("forward+ (%s): culling %.3f ms, %.1f luces/celda, %u celdas desbordadas (%ux%u interno)\n",
+                           m_fpActiveMode == FpMode::Tiled ? "tiled" : "clustered",
+                           m_fpGpuMs, m_fpAvgPerCell, m_fpOverflowCells,
+                           m_renderExtent.width, m_renderExtent.height);
+                    fflush(stdout);
+                }
+            }
+        }
+        if (m_timestampsSupported)
+        {
+            vkCmdResetQueryPool(cmd, m_fpQueryPool, m_currentFrame * 2, 2);
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_fpQueryPool, m_currentFrame * 2);
+            m_fpQueryPending[m_currentFrame] = true;
+        }
+
+        uint32_t gx = 0, gy = 0, gz = 0, ts = 0;
+        fpGridDims(m_fpActiveMode, gx, gy, gz, ts);
+
+        FpPush push{};
+        // La proyeccion EFECTIVA del frame, con el Y-flip de Vulkan dentro: es la
+        // misma con la que se grabo el depth pre-pass, asi que reconstruir
+        // profundidad y levantar los planos del tile es consistente.
+        push.p00     = proj[0][0];
+        push.p11     = proj[1][1];
+        push.p22     = proj[2][2];
+        push.p32     = proj[3][2];
+        push.screenW = m_renderExtent.width;
+        push.screenH = m_renderExtent.height;
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          m_fpActiveMode == FpMode::Tiled ? m_fpTiledPipeline : m_fpClusteredPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_fpPipelineLayout,
+                                0, 1, &m_fpSets[m_currentFrame], 0, nullptr);
+        vkCmdPushConstants(cmd, m_fpPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+
+        if (m_fpActiveMode == FpMode::Tiled)
+        {
+            // Un workgroup de 16x16 POR TILE: el shader lee un texel por
+            // invocacion para reducir el maximo de profundidad del tile.
+            vkCmdDispatch(cmd, gx, gy, 1);
+        }
+        else
+        {
+            // Una invocacion por cluster, en grupos de 4x4x4.
+            vkCmdDispatch(cmd, (gx + 3) / 4, (gy + 3) / 4, (gz + 3) / 4);
+        }
+
+        // La rejilla y la lista de indices las lee pbr.frag en el pass de escena.
+        VkMemoryBarrier mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 1, &mb, 0, nullptr, 0, nullptr);
+
+        // Y los contadores los lee la CPU dos frames despues.
+        VkMemoryBarrier hostMb{};
+        hostMb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        hostMb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        hostMb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                             0, 1, &hostMb, 0, nullptr, 0, nullptr);
+
+        if (m_timestampsSupported)
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_fpQueryPool, m_currentFrame * 2 + 1);
     }
 
     // ── SSR ─────────────────────────────────────────────────────────────────

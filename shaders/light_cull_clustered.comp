@@ -1,0 +1,122 @@
+#version 450
+
+// Forward+ CLUSTERED. Rejilla 3D sobre la resolucion INTERNA del render: tiles
+// de 64x64 pixeles en XY y 24 cortes en Z repartidos logaritmicamente entre
+// zNear y zFar. Una invocacion por cluster, sin reduccion ni memoria compartida:
+// no lee la profundidad de la escena, asi que no depende del depth pre-pass.
+//
+// El corte k va de zNear*(zFar/zNear)^(k/gridZ) a zNear*(zFar/zNear)^((k+1)/gridZ),
+// que es exactamente lo que invierte el sliceScale/sliceBias que usa pbr.frag
+// para decidir en que cluster cae un fragmento.
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+// Debe coincidir con Renderer::kFpMaxLights.
+#define FP_MAX_LIGHTS 256
+
+struct FpLight
+{
+    vec4 posRadius;     // xyz mundo, w radio
+    vec4 color;         // rgb color, a intensidad
+    vec4 viewPosR;      // xyz view space, w radio
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer FpParamsBuf {
+    uint  mode;
+    uint  gridX;
+    uint  gridY;
+    uint  gridZ;
+    uint  tileSize;
+    uint  maxPerCell;
+    uint  numLights;
+    uint  pad0;
+    float zNear;
+    float zFar;
+    float sliceScale;
+    float sliceBias;
+} fp;
+
+layout(std430, set = 0, binding = 1) readonly  buffer FpLightBuf { FpLight lights[]; };
+layout(std430, set = 0, binding = 2) writeonly buffer FpGridBuf  { uvec2   cells[];  };
+layout(std430, set = 0, binding = 3) writeonly buffer FpIndexBuf { uint    indices[]; };
+layout(set = 0, binding = 4) uniform sampler2D depthTex;    // declarado, no leido
+layout(std430, set = 0, binding = 5) buffer FpStatsBuf { uint stats[]; };
+
+layout(push_constant) uniform FpPush {
+    float p00;
+    float p11;
+    float p22;
+    float p32;
+    uint  screenW;
+    uint  screenH;
+    uint  pad0;
+    uint  pad1;
+} pc;
+
+void main()
+{
+    uvec3 cid = gl_GlobalInvocationID;
+    if (cid.x >= fp.gridX || cid.y >= fp.gridY || cid.z >= fp.gridZ) return;
+    uint cell = (cid.z * fp.gridY + cid.y) * fp.gridX + cid.x;
+
+    float ratio = fp.zFar / fp.zNear;
+    float zn = fp.zNear * pow(ratio, float(cid.z)        / float(fp.gridZ));
+    float zf = fp.zNear * pow(ratio, float(cid.z + 1u)   / float(fp.gridZ));
+
+    float ts  = float(fp.tileSize);
+    float x0  = float(cid.x) * ts;
+    float x1  = min(x0 + ts, float(pc.screenW));
+    float y0  = float(cid.y) * ts;
+    float y1  = min(y0 + ts, float(pc.screenH));
+
+    float nx0 = 2.0 * x0 / float(pc.screenW) - 1.0;
+    float nx1 = 2.0 * x1 / float(pc.screenW) - 1.0;
+    float ny0 = 2.0 * y0 / float(pc.screenH) - 1.0;
+    float ny1 = 2.0 * y1 / float(pc.screenH) - 1.0;
+
+    // x = k * viewDepth. p11 llega negativo (Y-flip en la proyeccion): min/max
+    // en vez de dar por hecho el orden.
+    float kxa  = nx0 / pc.p00;
+    float kxb  = nx1 / pc.p00;
+    float kya  = ny0 / pc.p11;
+    float kyb  = ny1 / pc.p11;
+    float kxLo = min(kxa, kxb), kxHi = max(kxa, kxb);
+    float kyLo = min(kya, kyb), kyHi = max(kya, kyb);
+
+    // AABB del cluster en view space: el rango de x/y se toma en los dos
+    // extremos de profundidad porque las k pueden ser negativas.
+    vec3 bmin = vec3(min(kxLo * zn, kxLo * zf), min(kyLo * zn, kyLo * zf), -zf);
+    vec3 bmax = vec3(max(kxHi * zn, kxHi * zf), max(kyHi * zn, kyHi * zf), -zn);
+
+    uint base  = cell * fp.maxPerCell;
+    uint count = 0u;
+    uint total = 0u;
+
+    // Recorrido ascendente: la lista sale en el mismo orden que la del tiled y
+    // el fragment shader suma los mismos terminos en el mismo orden.
+    for (uint i = 0u; i < fp.numLights; i++)
+    {
+        vec3  p = lights[i].viewPosR.xyz;
+        float r = lights[i].viewPosR.w;
+        vec3  q = clamp(p, bmin, bmax);
+        vec3  d = p - q;
+        if (dot(d, d) <= r * r)
+        {
+            total++;
+            if (count < fp.maxPerCell)
+            {
+                indices[base + count] = i;
+                count++;
+            }
+        }
+    }
+
+    cells[cell] = uvec2(base, count);
+
+    if (count > 0u)
+    {
+        atomicAdd(stats[0], count);
+        atomicAdd(stats[1], 1u);
+    }
+    if (total > fp.maxPerCell) atomicAdd(stats[2], 1u);
+}

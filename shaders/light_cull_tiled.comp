@@ -1,0 +1,167 @@
+#version 450
+
+// Forward+ TILED. Un workgroup por tile de 16x16 pixeles de la resolucion
+// INTERNA del render (m_renderExtent, que con SSAA no es la de la ventana).
+// Cada invocacion lee su texel del depth pre-pass que ya graba recordSsaoPass,
+// se reduce el maximo del tile y con el se recorta el plano lejano del frustum
+// del tile antes de probar las esferas de las luces.
+//
+// El plano CERCANO se queda en zNear a proposito, sin usar el minimo del tile:
+// el pre-pass no dibuja mallas skinned, asi que un personaje por delante de la
+// geometria estatica quedaria fuera del rango [min, max] y perderia luces. Con
+// [zNear, maxDelTile] la cota es correcta para TODO fragmento visible: uno
+// skinned visible esta por delante de la profundidad estatica de su texel, que
+// ya entra en el maximo.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// Debe coincidir con Renderer::kFpMaxLights.
+#define FP_MAX_LIGHTS 256
+#define FP_MASK_WORDS 8     // FP_MAX_LIGHTS / 32
+#define FP_THREADS    256   // local_size_x * local_size_y
+
+struct FpLight
+{
+    vec4 posRadius;     // xyz mundo, w radio
+    vec4 color;         // rgb color, a intensidad
+    vec4 viewPosR;      // xyz view space, w radio
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer FpParamsBuf {
+    uint  mode;
+    uint  gridX;
+    uint  gridY;
+    uint  gridZ;
+    uint  tileSize;
+    uint  maxPerCell;
+    uint  numLights;
+    uint  pad0;
+    float zNear;
+    float zFar;
+    float sliceScale;
+    float sliceBias;
+} fp;
+
+layout(std430, set = 0, binding = 1) readonly  buffer FpLightBuf { FpLight lights[]; };
+layout(std430, set = 0, binding = 2) writeonly buffer FpGridBuf  { uvec2   cells[];  };
+layout(std430, set = 0, binding = 3) writeonly buffer FpIndexBuf { uint    indices[]; };
+layout(set = 0, binding = 4) uniform sampler2D depthTex;
+layout(std430, set = 0, binding = 5) buffer FpStatsBuf { uint stats[]; };
+
+layout(push_constant) uniform FpPush {
+    float p00;
+    float p11;
+    float p22;
+    float p32;
+    uint  screenW;
+    uint  screenH;
+    uint  pad0;
+    uint  pad1;
+} pc;
+
+shared uint s_maxDepth;
+shared uint s_mask[FP_MASK_WORDS];
+
+// RH_ZO: d = (p22*z + p32) / -z  con z negativa en view space.
+float viewDepthFromZ(float d)
+{
+    return pc.p32 / (d + pc.p22);
+}
+
+void main()
+{
+    uint tileX = gl_WorkGroupID.x;
+    uint tileY = gl_WorkGroupID.y;
+    if (tileX >= fp.gridX || tileY >= fp.gridY) return;
+    uint cell = tileY * fp.gridX + tileX;
+
+    if (gl_LocalInvocationIndex == 0u) s_maxDepth = 0u;
+    if (gl_LocalInvocationIndex < uint(FP_MASK_WORDS)) s_mask[gl_LocalInvocationIndex] = 0u;
+    barrier();
+
+    ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+    if (texel.x < int(pc.screenW) && texel.y < int(pc.screenH))
+    {
+        float d  = texelFetch(depthTex, texel, 0).r;
+        float vd = clamp(viewDepthFromZ(d), fp.zNear, fp.zFar);
+        // Las profundidades son positivas: el orden de los float coincide con el
+        // de su patron de bits, asi que atomicMax sobre uint vale como maximo.
+        atomicMax(s_maxDepth, floatBitsToUint(vd));
+    }
+    barrier();
+
+    float tileFar = max(uintBitsToFloat(s_maxDepth), fp.zNear);
+
+    // Planos laterales del tile en view space. El tile va en pixeles de la
+    // resolucion interna; el ultimo de cada fila/columna puede salirse y se
+    // recorta a la pantalla.
+    float ts  = float(fp.tileSize);
+    float x0  = float(tileX) * ts;
+    float x1  = min(x0 + ts, float(pc.screenW));
+    float y0  = float(tileY) * ts;
+    float y1  = min(y0 + ts, float(pc.screenH));
+
+    float nx0 = 2.0 * x0 / float(pc.screenW) - 1.0;
+    float nx1 = 2.0 * x1 / float(pc.screenW) - 1.0;
+    float ny0 = 2.0 * y0 / float(pc.screenH) - 1.0;
+    float ny1 = 2.0 * y1 / float(pc.screenH) - 1.0;
+
+    // x = k * viewDepth con k = ndc / p00. p11 llega NEGATIVO (el Y-flip de
+    // Vulkan va en la proyeccion), asi que las dos k se ordenan con min/max en
+    // vez de darlas por ordenadas.
+    float kxa  = nx0 / pc.p00;
+    float kxb  = nx1 / pc.p00;
+    float kya  = ny0 / pc.p11;
+    float kyb  = ny1 / pc.p11;
+    float kxLo = min(kxa, kxb), kxHi = max(kxa, kxb);
+    float kyLo = min(kya, kyb), kyHi = max(kya, kyb);
+
+    // Con viewDepth = -z, "x >= kxLo*viewDepth" es "x + kxLo*z >= 0".
+    vec3 n0 = normalize(vec3( 1.0,  0.0,  kxLo));
+    vec3 n1 = normalize(vec3(-1.0,  0.0, -kxHi));
+    vec3 n2 = normalize(vec3( 0.0,  1.0,  kyLo));
+    vec3 n3 = normalize(vec3( 0.0, -1.0, -kyHi));
+
+    for (uint i = gl_LocalInvocationIndex; i < fp.numLights; i += uint(FP_THREADS))
+    {
+        vec3  c  = lights[i].viewPosR.xyz;
+        float r  = lights[i].viewPosR.w;
+        float vd = -c.z;
+        bool inside = (vd + r >= fp.zNear) && (vd - r <= tileFar)
+                   && (dot(n0, c) >= -r) && (dot(n1, c) >= -r)
+                   && (dot(n2, c) >= -r) && (dot(n3, c) >= -r);
+        if (inside) atomicOr(s_mask[i >> 5u], 1u << (i & 31u));
+    }
+    barrier();
+
+    // Una sola invocacion vuelca la mascara EN ORDEN ASCENDENTE de indice. Es lo
+    // que hace que la lista salga igual que la del clustered, y con ella la suma
+    // de luces del fragment shader: si se emitiera en el orden en que ganan los
+    // atomicos, las dos rutas sumarian los mismos terminos en distinto orden.
+    if (gl_LocalInvocationIndex == 0u)
+    {
+        uint base  = cell * fp.maxPerCell;
+        uint count = 0u;
+        uint total = 0u;
+        for (uint w = 0u; w < uint(FP_MASK_WORDS); w++)
+        {
+            uint bits = s_mask[w];
+            total += uint(bitCount(bits));
+            while (bits != 0u && count < fp.maxPerCell)
+            {
+                uint b = uint(findLSB(bits));
+                bits &= ~(1u << b);
+                indices[base + count] = (w << 5u) + b;
+                count++;
+            }
+        }
+        cells[cell] = uvec2(base, count);
+
+        if (count > 0u)
+        {
+            atomicAdd(stats[0], count);
+            atomicAdd(stats[1], 1u);
+        }
+        if (total > fp.maxPerCell) atomicAdd(stats[2], 1u);
+    }
+}

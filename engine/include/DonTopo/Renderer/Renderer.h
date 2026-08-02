@@ -270,6 +270,40 @@ namespace DonTopo {
             // es justo lo que lo hace util: es la referencia contra la que se
             // compara el sobrecoste real de SSAA y de MSAA.
             float renderGpuMs() const             { return m_renderGpuMs; }
+
+            // ── Forward+ ─────────────────────────────────────────────────────
+            // Culling de luces en GPU. Modos EXCLUYENTES. Off deja el frame
+            // exactamente como antes de la feature: ni un dispatch, y pbr.frag
+            // recorre las MAX_LIGHTS del UBO como siempre.
+            enum class FpMode : int
+            {
+                Off       = 0,
+                Tiled     = 1,  // rejilla 2D de tiles de 16x16 con el maximo de profundidad del tile
+                Clustered = 2,  // rejilla 3D de 64x64 pixeles x 24 cortes logaritmicos en Z
+            };
+            // Cambia en el frame SIGUIENTE y no recrea nada: los dos modos
+            // comparten buffers (dimensionados al mayor de las dos rejillas), asi
+            // que lo unico que cambia es lo que se graba y el bloque de
+            // parametros. El valor que manda durante un frame se congela en
+            // m_fpActiveMode justo despues de la UI.
+            void   setForwardPlusMode(FpMode mode) { m_fpMode = mode; }
+            FpMode forwardPlusMode() const         { return m_fpMode; }
+            // Radio por defecto de TODAS las luces que no traigan el suyo. Es el
+            // dato que el culling necesita y que Light no lleva: meterlo en el
+            // struct cambiaria el layout std140 del UBO, que declaran 5 shaders.
+            void  setForwardPlusLightRadius(float v) { m_fpLightRadius = v; }
+            float forwardPlusLightRadius() const     { return m_fpLightRadius; }
+            // Radio POR luz, en el mismo orden que setLights. Vacio (lo normal) =
+            // todas usan el radio global de arriba.
+            void setLightRadii(const std::vector<float>& radii) { m_lightRadii = radii; }
+            // Coste GPU del dispatch de culling, en ms. 0 en Off.
+            float forwardPlusGpuMs() const        { return m_fpGpuMs; }
+            // Media de luces por celda NO VACIA del ultimo frame ya resuelto, y
+            // numero de celdas que se pasaron del maximo por celda (esas si
+            // pierden luces: es la senal de que hace falta bajar el radio).
+            float forwardPlusAvgPerCell() const   { return m_fpAvgPerCell; }
+            uint32_t forwardPlusOverflowCells() const { return m_fpOverflowCells; }
+
             // decoded: píxeles que el worker ya decodificó para este mesh (nullptr
             // en el camino síncrono). Encola todos los uploads en el batch del pump
             // actual y marca el objeto con el ticket vigente: no se dibuja hasta que
@@ -648,6 +682,22 @@ namespace DonTopo {
             // estado dinamico. Los de sombras, depth pre-pass y resolucion no
             // entran: sus render passes se quedan siempre a una muestra.
             void recreateMsaaDependentPipelines();
+            // Forward+. Mismo reparto que el SSAO y el SSR: layout, pool,
+            // pipelines, queries y los buffers que NO dependen del tamano (luces,
+            // parametros, contadores) una sola vez en init; la rejilla y la lista
+            // de indices con el swapchain.
+            void createFpPipelines();
+            void createFpBuffers();
+            void destroyFpBuffers();
+            // El dispatch de culling del modo activo. Va DESPUES de recordSsaoPass
+            // (el tiled lee el depth pre-pass que graba ese) y ANTES del pass de
+            // escena, que es quien consume la rejilla. En Off no graba nada.
+            void recordFpCullPass(VkCommandBuffer cmd, const glm::mat4& proj);
+            // Dimensiones de la rejilla de un modo a la resolucion INTERNA actual.
+            // Un solo sitio: lo llaman el dimensionado de los buffers, el bloque de
+            // parametros y el dispatch, y si discreparan se leerian celdas fuera.
+            void fpGridDims(FpMode mode, uint32_t& gridX, uint32_t& gridY,
+                            uint32_t& gridZ, uint32_t& tileSize) const;
             void createCommandBuffers();
             void createSyncObjects();
             void recordCommandBuffer(uint32_t imageIndex);
@@ -1120,6 +1170,100 @@ namespace DonTopo {
             float                           m_aaGpuMs                           = 0.0f;
             float                           m_renderGpuMs                       = 0.0f;
             uint32_t                        m_aaMeasuredFrames                  = 0;
+
+            // ── Forward+ ─────────────────────────────────────────────────────
+            // Tope de luces que entran en el culling y, a la vez, ancho de la
+            // mascara de bits de light_cull_tiled.comp (256 / 32 = 8 palabras).
+            static constexpr uint32_t       kFpMaxLights                        = 256;
+            // Tope de luces por celda. Una celda que se pase PIERDE luces: por
+            // eso se cuentan aparte y se enseñan en la UI.
+            static constexpr uint32_t       kFpMaxPerCell                       = 64;
+            static constexpr uint32_t       kFpTileSize                         = 16;   // tiled
+            static constexpr uint32_t       kFpClusterTile                      = 64;   // clustered, XY
+            static constexpr uint32_t       kFpClusterSlices                    = 24;   // clustered, Z
+            // Modo PEDIDO (el que devuelve forwardPlusMode()) y modo CONGELADO
+            // del frame. Mismo motivo que en el AA: setForwardPlusMode se llama
+            // desde la UI, que se construye a mitad de drawFrame, y el bloque de
+            // parametros que lee pbr.frag se escribe una sola vez por frame. Sin
+            // esta separacion, un click podria dejar el frame con la rejilla de un
+            // modo y la lectura del otro.
+            FpMode                          m_fpMode                            = FpMode::Off;
+            FpMode                          m_fpActiveMode                      = FpMode::Off;
+            float                           m_fpLightRadius                     = 2000.0f;
+            std::vector<float>              m_lightRadii;
+            // Bloque de parametros tal cual lo declaran los dos .comp y pbr.frag.
+            // std430 con puros escalares de 4 bytes: los offsets son secuenciales.
+            struct FpParamsGpu {
+                uint32_t mode;
+                uint32_t gridX;
+                uint32_t gridY;
+                uint32_t gridZ;
+                uint32_t tileSize;
+                uint32_t maxPerCell;
+                uint32_t numLights;
+                uint32_t pad0;
+                float    zNear;
+                float    zFar;
+                float    sliceScale;
+                float    sliceBias;
+            };
+            static_assert(sizeof(FpParamsGpu) == 48, "FpParamsGpu debe seguir en 48 bytes: los dos .comp y pbr.frag declaran este layout");
+            // Una luz del SSBO. viewPosR es la MISMA luz en view space: la calcula
+            // la CPU para que el culling no necesite la matriz de vista.
+            struct FpLightGpu {
+                glm::vec4 posRadius;
+                glm::vec4 color;
+                glm::vec4 viewPosR;
+            };
+            static_assert(sizeof(FpLightGpu) == 48, "FpLightGpu debe seguir en 48 bytes: es el stride std430 del array de luces");
+            // Push constant compartida por los dos .comp.
+            struct FpPush {
+                float    p00;
+                float    p11;
+                float    p22;
+                float    p32;
+                uint32_t screenW;
+                uint32_t screenH;
+                uint32_t pad0;
+                uint32_t pad1;
+            };
+            static_assert(sizeof(FpPush) == 32, "FpPush debe seguir en 32 bytes: los dos .comp declaran este layout");
+            // Set propio (el 2 en el pipeline de escena, el 0 en el de culling: es
+            // el MISMO VkDescriptorSet, y un set vale en cualquier indice mientras
+            // el layout coincida). Seis bindings: params, luces, rejilla, indices,
+            // profundidad del pre-pass (solo compute) y contadores (solo compute).
+            VkDescriptorSetLayout           m_fpDescLayout                      = VK_NULL_HANDLE;
+            VkDescriptorPool                m_fpDescPool                        = VK_NULL_HANDLE;
+            VkPipelineLayout                m_fpPipelineLayout                  = VK_NULL_HANDLE;
+            VkPipeline                      m_fpTiledPipeline                   = VK_NULL_HANDLE;
+            VkPipeline                      m_fpClusteredPipeline               = VK_NULL_HANDLE;
+            VkDescriptorSet                 m_fpSets[MAX_FRAMES]                = {};
+            // Params, luces y contadores NO dependen del tamano: se crean una vez
+            // en createFpPipelines y viven hasta el shutdown. Mapeados en
+            // persistente, igual que el UBO.
+            VkBuffer                        m_fpParamsBuffer[MAX_FRAMES]        = {};
+            VkDeviceMemory                  m_fpParamsMemory[MAX_FRAMES]        = {};
+            void*                           m_fpParamsMapped[MAX_FRAMES]        = {};
+            VkBuffer                        m_fpLightBuffer[MAX_FRAMES]         = {};
+            VkDeviceMemory                  m_fpLightMemory[MAX_FRAMES]         = {};
+            void*                           m_fpLightMapped[MAX_FRAMES]         = {};
+            VkBuffer                        m_fpStatsBuffer[MAX_FRAMES]         = {};
+            VkDeviceMemory                  m_fpStatsMemory[MAX_FRAMES]         = {};
+            void*                           m_fpStatsMapped[MAX_FRAMES]         = {};
+            // Rejilla e indices SI dependen del tamano: van con el swapchain,
+            // colgados de createOffscreenImages/destroyOffscreenImages. Se
+            // dimensionan al MAYOR de las dos rejillas para que cambiar de modo no
+            // tenga que recrear nada.
+            VkBuffer                        m_fpGridBuffer[MAX_FRAMES]          = {};
+            VkDeviceMemory                  m_fpGridMemory[MAX_FRAMES]          = {};
+            VkBuffer                        m_fpIndexBuffer[MAX_FRAMES]         = {};
+            VkDeviceMemory                  m_fpIndexMemory[MAX_FRAMES]         = {};
+            VkQueryPool                     m_fpQueryPool                       = VK_NULL_HANDLE;
+            bool                            m_fpQueryPending[MAX_FRAMES]        = {};
+            float                           m_fpGpuMs                           = 0.0f;
+            float                           m_fpAvgPerCell                      = 0.0f;
+            uint32_t                        m_fpOverflowCells                   = 0;
+            uint32_t                        m_fpMeasuredFrames                  = 0;
 
             VkSemaphore                     m_imageAvailable[MAX_FRAMES]        = {};
             std::vector<VkSemaphore>        m_renderFinished;

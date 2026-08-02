@@ -459,6 +459,35 @@ void EditorUI::drawMenuBar()
                 // None sale el sobrecoste real del modo.
                 ImGui::Text("AA GPU: %.3f ms", m_renderer->aaGpuMs());
                 ImGui::Text("Render GPU: %.3f ms", m_renderer->renderGpuMs());
+
+                // Forward+. Modos EXCLUYENTES, igual que el AA: en Off no se
+                // graba ni un dispatch y pbr.frag recorre las luces del UBO como
+                // siempre. Ajuste de sesion, no se serializa: asi el runtime y el
+                // editor arrancan en el mismo modo y renderizan igual.
+                ImGui::Separator();
+                using FpMode = Renderer::FpMode;
+                const char* fpNames[] = { "Off", "Tiled", "Clustered" };
+                int fpCurrent = (int)m_renderer->forwardPlusMode();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::Combo("Forward+", &fpCurrent, fpNames, IM_ARRAYSIZE(fpNames)))
+                    m_renderer->setForwardPlusMode((FpMode)fpCurrent);
+
+                if (m_renderer->forwardPlusMode() != FpMode::Off)
+                {
+                    // El radio es lo que hace que el culling sirva de algo: con
+                    // uno enorme toda luz cae en toda celda y la lista se llena.
+                    float radius = m_renderer->forwardPlusLightRadius();
+                    ImGui::SetNextItemWidth(140.0f);
+                    if (ImGui::SliderFloat("Light radius", &radius, 50.0f, 5000.0f, "%.0f"))
+                        m_renderer->setForwardPlusLightRadius(radius);
+
+                    ImGui::Text("Forward+ GPU: %.3f ms", m_renderer->forwardPlusGpuMs());
+                    ImGui::Text("Luces/celda: %.1f", m_renderer->forwardPlusAvgPerCell());
+                    const uint32_t overflow = m_renderer->forwardPlusOverflowCells();
+                    if (overflow > 0)
+                        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                                           "%u celdas desbordadas (pierden luces)", overflow);
+                }
             }
             ImGui::EndMenu();
         }
