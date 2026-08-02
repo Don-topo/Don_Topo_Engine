@@ -170,6 +170,10 @@ void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, co
     m_hovered = ImGui::IsWindowHovered();
     ImVec2 vpPos  = ImGui::GetCursorScreenPos();
     ImVec2 vpSize = ImGui::GetContentRegionAvail();
+    // Se publica para que el Renderer renderice a ESTE tamaño exacto: así la
+    // imagen se dibuja 1:1 y no pasa por el reescalado de ImGui.
+    m_contentWidth  = (uint32_t)(vpSize.x > 0.0f ? vpSize.x : 0.0f);
+    m_contentHeight = (uint32_t)(vpSize.y > 0.0f ? vpSize.y : 0.0f);
     ImGui::Image((ImTextureID)(intptr_t)viewportTexture, vpSize);
 
     // Axis gizmo estilo Unity/Godot (esquina superior derecha): ejes mundo

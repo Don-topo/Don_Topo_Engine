@@ -15,8 +15,14 @@ public:
     Skybox& operator=(const Skybox&)  = delete;
 
     // facePaths: +X, -X, +Y, -Y, +Z, -Z
+    // samples: muestras del render pass de escena, impuestas por el modo de
+    // anti-aliasing del Renderer.
     void init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat,
-              const std::array<std::string, 6>& facePaths);
+              const std::array<std::string, 6>& facePaths,
+              VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
+    // Rehace SOLO el pipeline, para cuando el MSAA cambia el número de muestras:
+    // en Vulkan 1.0 rasterizationSamples no es estado dinámico.
+    void recreatePipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples);
     void shutdown(GpuDevice& gpu);
 
     // invViewProj = inverse(proj * mat4(mat3(view))) — sin traslación de cámara
@@ -33,7 +39,8 @@ public:
 private:
     void loadCubemap(GpuDevice& gpu, const std::array<std::string, 6>& facePaths);
     void createDescriptors(GpuDevice& gpu);
-    void createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat);
+    void createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat,
+                        VkSampleCountFlagBits samples);
 
     VkImage               m_image      = VK_NULL_HANDLE;
     VkDeviceMemory        m_memory     = VK_NULL_HANDLE;

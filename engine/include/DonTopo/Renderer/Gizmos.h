@@ -52,7 +52,13 @@ public:
 
     // Uso exclusivo de Renderer.
     // colorFormat: no usado (el renderPass ya lo lleva), se mantiene por simetría con Skybox::init.
-    static void init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat);
+    // samples: muestras del render pass en el que se dibujan (el de composición).
+    // Lo impone el modo de anti-aliasing del Renderer.
+    static void init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat,
+                     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
+    // Rehace SOLO el pipeline, para cuando el MSAA cambia el número de muestras:
+    // en Vulkan 1.0 rasterizationSamples no es estado dinámico.
+    static void recreatePipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples);
     static void shutdown(GpuDevice& gpu);
     static void draw(VkCommandBuffer cmd, const glm::mat4& viewProj, int frameIndex);
     static void clear();
@@ -73,7 +79,7 @@ private:
                 float angleStart, float angleEnd, int segments, const glm::vec3& color);
     void addBoxEdges(const std::array<glm::vec3, 8>& corners, const glm::vec3& color);
     void createBuffer(GpuDevice& gpu);
-    void createPipeline(GpuDevice& gpu, VkRenderPass renderPass);
+    void createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples);
 
     static constexpr uint32_t kMaxGizmoVertices = 65536;
 

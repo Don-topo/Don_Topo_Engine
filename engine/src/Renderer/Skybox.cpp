@@ -37,11 +37,22 @@ static VkShaderModule makeModule(VkDevice dev, const std::vector<char>& code)
 // ── public ────────────────────────────────────────────────────────────────────
 
 void Skybox::init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat,
-                  const std::array<std::string, 6>& facePaths)
+                  const std::array<std::string, 6>& facePaths,
+                  VkSampleCountFlagBits samples)
 {
     loadCubemap(gpu, facePaths);
     createDescriptors(gpu);
-    createPipeline(gpu, renderPass, colorFormat);
+    createPipeline(gpu, renderPass, colorFormat, samples);
+}
+
+void Skybox::recreatePipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples)
+{
+    // Sin cubemap cargado no hay nada que recrear: el skybox no está activo.
+    if (m_pipeline == VK_NULL_HANDLE) return;
+    vkDestroyPipeline(gpu.device(), m_pipeline, nullptr);
+    m_pipeline = VK_NULL_HANDLE;
+    // El formato sigue viniendo del render pass; se pasa por simetría con init.
+    createPipeline(gpu, renderPass, VK_FORMAT_UNDEFINED, samples);
 }
 
 void Skybox::shutdown(GpuDevice& gpu)
@@ -273,7 +284,8 @@ void Skybox::createDescriptors(GpuDevice& gpu)
     vkUpdateDescriptorSets(gpu.device(), 1, &w, 0, nullptr);
 }
 
-void Skybox::createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat)
+void Skybox::createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat,
+                            VkSampleCountFlagBits samples)
 {
     (void)colorFormat; // el renderPass ya tiene el formato correcto
 
@@ -315,7 +327,9 @@ void Skybox::createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkFormat co
 
     VkPipelineMultisampleStateCreateInfo ms{};
     ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    // Lo fija el modo de anti-aliasing del Renderer: el skybox se dibuja en el
+    // pass de escena y tiene que declarar las mismas muestras que él.
+    ms.rasterizationSamples = samples;
 
     // Depth: test LEQUAL (z=1.0 en far plane), sin escritura
     VkPipelineDepthStencilStateCreateInfo ds{};
@@ -352,7 +366,11 @@ void Skybox::createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkFormat co
     layoutCI.pSetLayouts            = &m_descLayout;
     layoutCI.pushConstantRangeCount = 1;
     layoutCI.pPushConstantRanges    = &push;
-    vkCreatePipelineLayout(gpu.device(), &layoutCI, nullptr, &m_pipeLayout);
+    // Al recrear el pipeline por un cambio de muestras (MSAA) el layout no
+    // cambia: volver a crearlo aquí dejaría huérfano el anterior, y eso solo se
+    // ve al cerrar, como un VkPipelineLayout sin destruir por cada cambio.
+    if (m_pipeLayout == VK_NULL_HANDLE)
+        vkCreatePipelineLayout(gpu.device(), &layoutCI, nullptr, &m_pipeLayout);
 
     VkGraphicsPipelineCreateInfo pCI{};
     pCI.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;

@@ -18,6 +18,14 @@ public:
     void focusSelected(EditorContext& ctx, Camera& camera);
     bool isHovered() const { return m_hovered; }
     bool* GetOpenPtr() { return &m_open; }
+    // Área de imagen del panel en píxeles, la del último draw(). El Renderer
+    // renderiza EXACTAMENTE a este tamaño: si renderizara al de la ventana,
+    // ImGui reescalaría la imagen al dibujarla y ese filtrado bilineal se
+    // comería el escalonado (y con él la diferencia entre modos de
+    // anti-aliasing), además de deformar la escena cuando el aspect del panel
+    // no coincide con el de la ventana. (0,0) mientras el panel esté cerrado.
+    uint32_t contentWidth()  const { return m_contentWidth; }
+    uint32_t contentHeight() const { return m_contentHeight; }
 
 private:
     void drawSelectionGizmo(EditorContext& ctx);
@@ -34,6 +42,8 @@ private:
 
     bool m_open = true;
     bool m_hovered = false;
+    uint32_t m_contentWidth  = 0;
+    uint32_t m_contentHeight = 0;
 };
 
 } // namespace DonTopo

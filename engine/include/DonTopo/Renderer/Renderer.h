@@ -98,10 +98,18 @@ namespace DonTopo {
             // proyección de Play, o dibujaría un encuadre que no se corresponde.
             float viewportAspect() const
             {
-                return m_swapChainExtent.height > 0
-                    ? (float)m_swapChainExtent.width / (float)m_swapChainExtent.height
-                    : 1.0f;
+                const VkExtent2D e = effectiveViewport();
+                return e.height > 0 ? (float)e.width / (float)e.height : 1.0f;
             }
+            // Tamano EXACTO del area de imagen del panel Viewport del editor, en
+            // pixeles. Lo llama el editor una vez por frame. Sin esto el render
+            // iria al tamano de la VENTANA y el panel lo reescalaria al dibujarlo:
+            // ese reescalado bilineal suaviza los bordes por su cuenta -se come
+            // el escalonado y con el la diferencia entre modos de anti-aliasing- y
+            // ademas deforma la imagen cuando el aspect del panel no coincide con
+            // el de la ventana. Cambiarlo recrea los targets, igual que un resize.
+            // El runtime no la llama nunca: ahi el destino es el swapchain entero.
+            void setViewportSize(uint32_t width, uint32_t height);
             void setSceneRoot(GameObject* root) { m_sceneRoot = root; }
             // Libera mesh/skinnedMesh/texturas en GPU de node y todo su subárbol
             // (llamado por EditorUI justo antes de borrar el nodo del scene graph).
@@ -210,6 +218,58 @@ namespace DonTopo {
             // cuando es el SSR quien lo pide (con el SSAO encendido ese pre-pass
             // ya lo contabiliza ssaoGpuMs y aqui no se suma dos veces).
             float ssrGpuMs() const           { return m_ssrGpuMs; }
+
+            // ── Anti-aliasing ────────────────────────────────────────────────
+            // Modos EXCLUYENTES: solo uno activo a la vez. None deja el frame
+            // exactamente como antes de la feature (ni un comando de mas).
+            enum class AaMode : int
+            {
+                None = 0,   // sin anti-aliasing
+                Fxaa = 1,   // filtro morfologico sobre la imagen LDR ya tonemapeada
+                Ssaa = 2,   // supersampling: se renderiza a mas resolucion y se baja
+                Msaa = 3,   // multisampling en el rasterizador (escena + composicion)
+                Taa  = 4,   // acumulacion temporal con jitter de subpixel
+            };
+            // Cambiar de modo puede exigir recrear recursos (SSAA cambia el tamano
+            // de TODOS los targets internos; MSAA, el numero de muestras de las
+            // imagenes, los render passes y los pipelines). Eso no se hace aqui:
+            // se marca y lo resuelve el primer drawFrame siguiente, con la GPU ya
+            // en reposo. Los parametros de cada modo, en cambio, viajan por push
+            // constant y surten efecto en el frame siguiente sin recrear nada.
+            void   setAaMode(AaMode mode);
+            AaMode aaMode() const                 { return m_aaMode; }
+            // FXAA
+            void  setFxaaSubpix(float v)          { m_fxaaSubpix = v; }
+            float fxaaSubpix() const              { return m_fxaaSubpix; }
+            void  setFxaaEdgeThreshold(float v)   { m_fxaaEdgeThreshold = v; }
+            float fxaaEdgeThreshold() const       { return m_fxaaEdgeThreshold; }
+            void  setFxaaEdgeThresholdMin(float v){ m_fxaaEdgeThresholdMin = v; }
+            float fxaaEdgeThresholdMin() const    { return m_fxaaEdgeThresholdMin; }
+            // SSAA: multiplicador de resolucion por eje. El coste crece con el
+            // CUADRADO, y el tamano se recorta a maxImageDimension2D del device.
+            void  setSsaaFactor(float v);
+            float ssaaFactor() const              { return m_ssaaFactor; }
+            // Muestras por pixel del MSAA. Se recorta a lo que soporte el device
+            // (framebufferColorSampleCounts & framebufferDepthSampleCounts).
+            void setMsaaSamples(int v);
+            int  msaaSamples() const              { return m_msaaSamples; }
+            int  maxMsaaSamples() const;
+            // TAA: peso del historial (0 = solo el frame actual, sin acumulacion)
+            // y amplitud del jitter de subpixel en pixeles.
+            void  setTaaFeedback(float v)         { m_taaFeedback = v; }
+            float taaFeedback() const             { return m_taaFeedback; }
+            void  setTaaJitterScale(float v)      { m_taaJitterScale = v; }
+            float taaJitterScale() const          { return m_taaJitterScale; }
+            // Coste GPU del pass PROPIO del modo activo (FXAA, resolve de SSAA,
+            // acumulacion del TAA). En None y en MSAA vale 0: MSAA no tiene pass
+            // propio, su coste esta repartido en la escena y en la composicion,
+            // y para verlo hay que mirar renderGpuMs().
+            float aaGpuMs() const                 { return m_aaGpuMs; }
+            // Coste GPU de TODO el render sin la UI: desde el pass de escena
+            // hasta el ultimo pass de post. Se mide SIEMPRE, tambien en None, que
+            // es justo lo que lo hace util: es la referencia contra la que se
+            // compara el sobrecoste real de SSAA y de MSAA.
+            float renderGpuMs() const             { return m_renderGpuMs; }
             // decoded: píxeles que el worker ya decodificó para este mesh (nullptr
             // en el camino síncrono). Encola todos los uploads en el batch del pump
             // actual y marca el objeto con el ticket vigente: no se dibuja hasta que
@@ -514,6 +574,10 @@ namespace DonTopo {
             // Pipelines, layouts, sampler y pool del bloom. Independientes del
             // tamano, se crean una sola vez en initSceneResources.
             void createBloomPipelines();
+            // Solo el pipeline del triangulo de composicion. Vive aparte porque
+            // el MSAA lo obliga a rehacerse (cambia rasterizationSamples y el
+            // render pass) sin tocar los layouts ni los pools del bloom.
+            void recreateCompositePipeline();
             void recordBloomPass(VkCommandBuffer cmd);
             // SSAO. createSsaoPipelines es independiente del tamano (una sola vez,
             // junto al bloom); las imagenes y los sets van con el swapchain,
@@ -549,6 +613,41 @@ namespace DonTopo {
             // Un solo write del binding 7 sobre `set`. La comparten
             // allocateObjectDescriptorSet, la ruta skinned y el refresh de arriba.
             void writeSsaoBinding(VkDescriptorSet set, int frameIndex);
+            // Anti-aliasing. El pass de resolucion es grafico (triangulo de
+            // pantalla completa) y no compute: el swapchain es B8G8R8A8_SRGB y
+            // Vulkan prohibe las storage images en formatos sRGB.
+            void createAaRenderPasses();
+            void createAaPipelines();
+            // Imagen intermedia, historial del TAA, targets multisample del MSAA,
+            // framebuffers y sets. Todo depende del tamano y del modo, asi que va
+            // colgado de createOffscreenImages/destroyOffscreenImages.
+            void createAaImages();
+            void destroyAaImages();
+            // Lee m_aaSrcImage (lo que escribio la composicion) y escribe
+            // m_offscreenImage con el pipeline del modo activo. En None y en MSAA
+            // no graba NADA: la composicion ya habra escrito directamente en
+            // m_offscreenImage.
+            void recordAaPass(VkCommandBuffer cmd);
+            // Reconstruye TODO lo que depende del modo, con la GPU en reposo:
+            // extent interno, imagenes, y -solo si cambia el numero de muestras-
+            // los render passes de escena y composicion y sus pipelines. Lo llama
+            // drawFrame cuando m_aaResourcesDirty esta puesto.
+            void rebuildAaResources();
+            // Recalcula m_renderExtent a partir del modo y del factor de SSAA,
+            // recortando a maxImageDimension2D. Devuelve true si cambio.
+            bool updateRenderExtent();
+            // true si el modo activo necesita que la composicion escriba en la
+            // imagen intermedia en vez de directamente en m_offscreenImage.
+            bool needsAaIntermediate() const;
+            // Las muestras que deben tener AHORA las imagenes y los pipelines:
+            // m_msaaSamples si el modo es Msaa, una si no.
+            VkSampleCountFlagBits targetSampleCount() const;
+            // Destruye y vuelve a crear los pipelines graficos que viven en el
+            // pass de escena y en el de composicion. Solo hace falta al cambiar
+            // el numero de muestras: en Vulkan 1.0 rasterizationSamples no es
+            // estado dinamico. Los de sombras, depth pre-pass y resolucion no
+            // entran: sus render passes se quedan siempre a una muestra.
+            void recreateMsaaDependentPipelines();
             void createCommandBuffers();
             void createSyncObjects();
             void recordCommandBuffer(uint32_t imageIndex);
@@ -848,6 +947,179 @@ namespace DonTopo {
             bool                            m_ssrStampedPrepass                 = false;
             float                           m_ssrGpuMs                          = 0.0f;
             uint32_t                        m_ssrMeasuredFrames                 = 0;
+
+            // ── Anti-aliasing ────────────────────────────────────────────────
+            // Modo PEDIDO: lo que ha elegido el usuario y lo que devuelve
+            // aaMode(). Puede ir un frame por delante de los recursos.
+            AaMode                          m_aaMode                            = AaMode::None;
+            // Modo CONSTRUIDO: el que corresponde a las imagenes, framebuffers y
+            // pipelines que existen AHORA MISMO. Es el que manda al grabar el
+            // frame. Los dos se separan porque setAaMode se llama desde la UI, y
+            // la UI se construye DESPUES del punto en el que se pueden recrear
+            // recursos: sin esta distincion, el frame del click se grabaria en el
+            // modo nuevo con los framebuffers del viejo (o sin ninguno).
+            AaMode                          m_aaActiveMode                      = AaMode::None;
+            // Lo marca setAaMode/setSsaaFactor/setMsaaSamples cuando el cambio
+            // toca recursos (tamano de los targets o numero de muestras). Lo
+            // consume drawFrame ANTES de grabar nada, con vkDeviceWaitIdle: en
+            // mitad de un frame en vuelo no se puede destruir una imagen.
+            bool                            m_aaResourcesDirty                  = false;
+            // Resolucion INTERNA del render. Igual a m_swapChainExtent salvo en
+            // SSAA, donde es m_swapChainExtent * m_ssaaFactor. Gobierna TODOS los
+            // targets intermedios (escena HDR, depth, SSAO, SSR, bloom, la imagen
+            // intermedia del AA) y sus viewports. m_swapChainExtent se queda para
+            // lo que de verdad tiene el tamano de la ventana: el swapchain, el
+            // pass de UI, el blit y m_offscreenImage.
+            VkExtent2D                      m_renderExtent                      = {};
+            // Tamano al que se PRESENTA la imagen: el del panel del editor, o el
+            // del swapchain cuando nadie lo ha fijado (runtime y headless). Es el
+            // tamano de m_offscreenImage y del pass de resolucion del AA.
+            // PEDIDO: lo ultimo que ha reportado el panel. Igual que con el modo,
+            // llega desde la UI y puede ir un frame por delante de los recursos.
+            VkExtent2D                      m_viewportExtent                    = {};
+            // CONSTRUIDO: el tamano con el que existen ahora las imagenes y los
+            // framebuffers. Es el que manda al grabar, y el unico que puede
+            // aparecer en un renderArea: pedir un area mayor que el framebuffer
+            // es invalido.
+            VkExtent2D                      m_viewportActive                    = {};
+            VkExtent2D effectiveViewport() const
+            {
+                return m_viewportActive.width > 0 && m_viewportActive.height > 0
+                     ? m_viewportActive : m_swapChainExtent;
+            }
+            // Destino ALTERNATIVO del pass de composicion cuando el modo activo
+            // necesita un pass de resolucion detras (FXAA, SSAA, TAA). Tiene el
+            // tamano de m_renderExtent, que en SSAA NO es el de la ventana. Con
+            // None y con MSAA no se usa: la composicion escribe directamente en
+            // m_offscreenImage, que es la que ve la UI y la que blitea el runtime.
+            VkImage                         m_aaSrcImage[MAX_FRAMES]            = {};
+            VkDeviceMemory                  m_aaSrcMemory[MAX_FRAMES]           = {};
+            VkImageView                     m_aaSrcView[MAX_FRAMES]             = {};
+            // Framebuffer del pass de COMPOSICION apuntando a m_aaSrcImage (mas
+            // el mismo depth compartido, que el contorno y los gizmos siguen
+            // necesitando cargado).
+            VkFramebuffer                   m_aaSrcFramebuffer[MAX_FRAMES]      = {};
+            // Pass de resolucion: solo color, sin depth, a tamano de VENTANA.
+            // Escribe en m_offscreenImage. Es donde corren FXAA, el downsample
+            // del SSAA y la acumulacion del TAA, cada uno con su pipeline.
+            VkRenderPass                    m_aaRenderPass                      = VK_NULL_HANDLE;
+            VkFramebuffer                   m_aaFramebuffer[MAX_FRAMES]         = {};
+            // Sampler propio: los tres modos necesitan filtrado LINEAL (muestrean
+            // entre texeles) y clamp en los bordes de la pantalla.
+            VkSampler                       m_aaSampler                         = VK_NULL_HANDLE;
+            // Un binding (la imagen intermedia): lo comparten FXAA y SSAA.
+            VkDescriptorSetLayout           m_aaDescLayout                      = VK_NULL_HANDLE;
+            VkDescriptorPool                m_aaDescPool                        = VK_NULL_HANDLE;
+            VkPipelineLayout                m_fxaaPipelineLayout                = VK_NULL_HANDLE;
+            VkPipeline                      m_fxaaPipeline                      = VK_NULL_HANDLE;
+            VkPipelineLayout                m_ssaaPipelineLayout                = VK_NULL_HANDLE;
+            VkPipeline                      m_ssaaPipeline                      = VK_NULL_HANDLE;
+            VkDescriptorSet                 m_aaSets[MAX_FRAMES]                = {};
+            // Layout declarado igual en fxaa.frag. Cambiar el orden o el tamano
+            // aqui sin tocar el shader no da ningun error: solo colores raros.
+            struct FxaaPush {
+                float invResX;
+                float invResY;
+                float subpix;
+                float edgeThreshold;
+                float edgeThresholdMin;
+            };
+            static_assert(sizeof(FxaaPush) == 20, "FxaaPush debe seguir en 20 bytes: fxaa.frag declara este layout");
+            // Valores del preset de calidad de PC de FXAA 3.11.
+            float                           m_fxaaSubpix                        = 0.75f;
+            float                           m_fxaaEdgeThreshold                 = 0.166f;
+            float                           m_fxaaEdgeThresholdMin              = 0.0833f;
+
+            // SSAA: mismo layout que declara ssaa_resolve.frag.
+            struct SsaaPush {
+                float invSrcX;      // 1/ancho de la imagen intermedia (la grande)
+                float invSrcY;
+                int32_t taps;       // muestras por eje del filtro de bajada
+            };
+            static_assert(sizeof(SsaaPush) == 12, "SsaaPush debe seguir en 12 bytes: ssaa_resolve.frag declara este layout");
+            float                           m_ssaaFactor                        = 2.0f;
+
+            // MSAA. m_msaaSamples es lo que PIDE el usuario; m_aaSampleCount es
+            // lo que esta construido ahora mismo en las imagenes, los render
+            // passes y los pipelines: los dos solo coinciden cuando el modo
+            // activo es Msaa y ya se ha reconstruido.
+            int                             m_msaaSamples                       = 4;
+            VkSampleCountFlagBits           m_aaSampleCount                     = VK_SAMPLE_COUNT_1_BIT;
+            // Color multisample de la escena: se RESUELVE sobre m_hdrImage al
+            // cerrar el pass, asi que el SSAO, el SSR, el bloom y la composicion
+            // siguen leyendo exactamente la misma imagen de una muestra que hoy.
+            // No lleva STORAGE: las storage images multisample exigen la feature
+            // shaderStorageImageMultisample, que no se pide.
+            VkImage                         m_msaaHdrImage[MAX_FRAMES]          = {};
+            VkDeviceMemory                  m_msaaHdrMemory[MAX_FRAMES]         = {};
+            VkImageView                     m_msaaHdrView[MAX_FRAMES]           = {};
+            // Color multisample de la composicion, con resolve sobre
+            // m_offscreenImage. Existe para que el contorno y los gizmos, que se
+            // dibujan en ese pass, tambien salgan suavizados: el depth que cargan
+            // es el multisample de la escena y no hay forma de resolverlo en
+            // Vulkan 1.0 (VK_KHR_depth_stencil_resolve es 1.2).
+            VkImage                         m_msaaLdrImage[MAX_FRAMES]          = {};
+            VkDeviceMemory                  m_msaaLdrMemory[MAX_FRAMES]         = {};
+            VkImageView                     m_msaaLdrView[MAX_FRAMES]           = {};
+
+            // TAA: historial de dos frames en ping-pong (se lee el del frame
+            // anterior y se escribe el de este) mas el pass de acumulacion.
+            VkImage                         m_taaHistoryImage[MAX_FRAMES]       = {};
+            VkDeviceMemory                  m_taaHistoryMemory[MAX_FRAMES]      = {};
+            VkImageView                     m_taaHistoryView[MAX_FRAMES]        = {};
+            VkFramebuffer                   m_taaHistoryFramebuffer[MAX_FRAMES] = {};
+            // Tres bindings: color de este frame, historial y profundidad.
+            VkDescriptorSetLayout           m_taaDescLayout                     = VK_NULL_HANDLE;
+            VkDescriptorPool                m_taaDescPool                       = VK_NULL_HANDLE;
+            VkPipelineLayout                m_taaPipelineLayout                 = VK_NULL_HANDLE;
+            VkPipeline                      m_taaPipeline                       = VK_NULL_HANDLE;
+            VkDescriptorSet                 m_taaSets[MAX_FRAMES]               = {};
+            // Pass que escribe en el historial. Identico al de resolucion salvo
+            // por el finalLayout, que aqui deja la imagen lista para MUESTREARLA
+            // el frame siguiente en vez de para presentarla.
+            VkRenderPass                    m_taaHistoryRenderPass              = VK_NULL_HANDLE;
+            // Layout que declara taa.frag. La reproyeccion viaja como UNA matriz
+            // (clip de este frame -> clip del anterior) en vez de dos: dos mat4
+            // mas el resto se saldrian de los 128 bytes garantizados.
+            struct TaaPush {
+                glm::mat4 reproject;
+                float     invResX;
+                float     invResY;
+                float     feedback;
+                int32_t   historyValid;
+            };
+            static_assert(sizeof(TaaPush) == 80, "TaaPush debe seguir en 80 bytes: taa.frag declara este layout");
+            float                           m_taaFeedback                       = 0.9f;
+            float                           m_taaJitterScale                    = 1.0f;
+            // Indice dentro de la secuencia de Halton del jitter de este frame.
+            uint32_t                        m_taaJitterIndex                    = 0;
+            // Jitter aplicado ESTE frame, en unidades de clip space. Lo necesita
+            // taa.frag para deshacerlo al reproyectar.
+            glm::vec2                       m_taaJitter                         = glm::vec2(0.0f);
+            // La proyeccion CON jitter de este frame. La escribe
+            // updateUniformBuffer (que corre antes de grabar) y la usa tambien el
+            // skybox: si el skybox se dibujara con la proyeccion sin jitter se
+            // desalinearia medio pixel de la geometria y el TAA lo veria como un
+            // borde en movimiento permanente.
+            glm::mat4                       m_taaJitteredProj                   = glm::mat4(1.0f);
+            // View-proj SIN jitter del frame anterior, para la reproyeccion. Y el
+            // flag de si ese historial sirve: tras un resize, un cambio de modo o
+            // el primer frame no hay nada valido que acumular.
+            glm::mat4                       m_taaPrevViewProj                   = glm::mat4(1.0f);
+            // La de ESTE frame, tambien sin jitter. La deja recordCommandBuffer y
+            // la consume recordAaPass, que corre despues dentro del mismo frame.
+            glm::mat4                       m_taaCurrViewProj                   = glm::mat4(1.0f);
+            bool                            m_taaHistoryValid                   = false;
+
+            // Queries propias: reutilizar las del bloom mezclaria el coste del
+            // tonemap con el del anti-aliasing. Dos pares por frame: [0,1] el
+            // pass propio del modo, [2,3] el render completo sin UI.
+            VkQueryPool                     m_aaQueryPool                       = VK_NULL_HANDLE;
+            bool                            m_aaQueryPending[MAX_FRAMES]        = {};
+            bool                            m_aaPassStamped[MAX_FRAMES]         = {};
+            float                           m_aaGpuMs                           = 0.0f;
+            float                           m_renderGpuMs                       = 0.0f;
+            uint32_t                        m_aaMeasuredFrames                  = 0;
 
             VkSemaphore                     m_imageAvailable[MAX_FRAMES]        = {};
             std::vector<VkSemaphore>        m_renderFinished;

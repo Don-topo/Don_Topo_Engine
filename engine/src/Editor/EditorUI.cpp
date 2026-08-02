@@ -169,6 +169,13 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     if (m_scenePanel.selectionWasDeletedThisFrame())
         m_propertiesPanel.invalidateCaches();
     m_viewportPanel.draw(ctx, viewportTexture, cameraView);
+    // El render va al tamaño EXACTO del área de imagen del panel. Sin esto se
+    // renderizaría al de la ventana y ImGui reescalaría al dibujar: ese filtrado
+    // se come el escalonado (los modos de anti-aliasing dejan de distinguirse) y
+    // deforma la escena si el aspect del panel no coincide con el de la ventana.
+    // El Renderer ignora los tamaños nulos y solo recrea cuando cambia de verdad.
+    if (m_renderer)
+        m_renderer->setViewportSize(m_viewportPanel.contentWidth(), m_viewportPanel.contentHeight());
     m_propertiesPanel.draw(ctx);
     m_logPanel.draw();
     drawSceneDialog();
@@ -369,6 +376,89 @@ void EditorUI::drawMenuBar()
                 ImGui::EndDisabled();
 
                 ImGui::Text("SSR GPU: %.3f ms", m_renderer->ssrGpuMs());
+
+                // Anti-aliasing. Modos EXCLUYENTES, cada uno con sus propios
+                // parametros. Mismo criterio que el resto: ajuste de sesion, no
+                // se serializa. En None no se graba ni un comando de mas y la
+                // imagen es identica a la de antes de la feature.
+                ImGui::Separator();
+                using AaMode = Renderer::AaMode;
+                const char* aaNames[] = { "None", "FXAA", "SSAA", "MSAA", "TAA" };
+                int aaCurrent = (int)m_renderer->aaMode();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::Combo("Anti-aliasing", &aaCurrent, aaNames, IM_ARRAYSIZE(aaNames)))
+                    m_renderer->setAaMode((AaMode)aaCurrent);
+
+                const AaMode aaMode = m_renderer->aaMode();
+
+                if (aaMode == AaMode::Fxaa)
+                {
+                    float fxaaSubpix = m_renderer->fxaaSubpix();
+                    ImGui::SetNextItemWidth(140.0f);
+                    if (ImGui::SliderFloat("FXAA subpixel", &fxaaSubpix, 0.0f, 1.0f, "%.2f"))
+                        m_renderer->setFxaaSubpix(fxaaSubpix);
+
+                    float fxaaEdge = m_renderer->fxaaEdgeThreshold();
+                    ImGui::SetNextItemWidth(140.0f);
+                    if (ImGui::SliderFloat("FXAA edge threshold", &fxaaEdge, 0.063f, 0.333f, "%.3f"))
+                        m_renderer->setFxaaEdgeThreshold(fxaaEdge);
+
+                    float fxaaEdgeMin = m_renderer->fxaaEdgeThresholdMin();
+                    ImGui::SetNextItemWidth(140.0f);
+                    if (ImGui::SliderFloat("FXAA edge min", &fxaaEdgeMin, 0.0312f, 0.0833f, "%.4f"))
+                        m_renderer->setFxaaEdgeThresholdMin(fxaaEdgeMin);
+                }
+                else if (aaMode == AaMode::Ssaa)
+                {
+                    // Cambiar el factor recrea TODOS los targets internos, asi
+                    // que se aplica al soltar el slider y no a cada pixel
+                    // arrastrado: reconstruir el render entero 60 veces por
+                    // segundo mientras se arrastra congelaria el editor.
+                    static float pendingFactor = m_renderer->ssaaFactor();
+                    if (!ImGui::IsAnyItemActive()) pendingFactor = m_renderer->ssaaFactor();
+                    ImGui::SetNextItemWidth(140.0f);
+                    ImGui::SliderFloat("SSAA factor", &pendingFactor, 1.25f, 2.0f, "%.2fx");
+                    if (ImGui::IsItemDeactivatedAfterEdit())
+                        m_renderer->setSsaaFactor(pendingFactor);
+                    ImGui::TextDisabled("%.2fx pixeles por frame", pendingFactor * pendingFactor);
+                }
+                else if (aaMode == AaMode::Msaa)
+                {
+                    const int maxSamples = m_renderer->maxMsaaSamples();
+                    int samples = m_renderer->msaaSamples();
+                    // Solo se ofrecen las cuentas que soporta el device para
+                    // color Y profundidad a la vez: el pass de escena usa las dos.
+                    for (int s = 2; s <= 8; s *= 2)
+                    {
+                        if (s > maxSamples) break;
+                        if (s > 2) ImGui::SameLine();
+                        char label[8];
+                        snprintf(label, sizeof(label), "%dx", s);
+                        if (ImGui::RadioButton(label, samples == s))
+                            m_renderer->setMsaaSamples(s);
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(max %dx)", maxSamples);
+                }
+                else if (aaMode == AaMode::Taa)
+                {
+                    float feedback = m_renderer->taaFeedback();
+                    ImGui::SetNextItemWidth(140.0f);
+                    if (ImGui::SliderFloat("TAA feedback", &feedback, 0.0f, 0.98f, "%.2f"))
+                        m_renderer->setTaaFeedback(feedback);
+
+                    float jitter = m_renderer->taaJitterScale();
+                    ImGui::SetNextItemWidth(140.0f);
+                    if (ImGui::SliderFloat("TAA jitter", &jitter, 0.0f, 2.0f, "%.2f"))
+                        m_renderer->setTaaJitterScale(jitter);
+                }
+
+                // El pass propio solo existe en FXAA, SSAA y TAA. El coste del
+                // MSAA y el del supersampling estan repartidos en el render, y
+                // por eso se muestra tambien el total: comparandolo con el de
+                // None sale el sobrecoste real del modo.
+                ImGui::Text("AA GPU: %.3f ms", m_renderer->aaGpuMs());
+                ImGui::Text("Render GPU: %.3f ms", m_renderer->renderGpuMs());
             }
             ImGui::EndMenu();
         }

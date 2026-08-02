@@ -94,7 +94,7 @@ void Gizmos::createBuffer(GpuDevice& gpu)
     }
 }
 
-void Gizmos::createPipeline(GpuDevice& gpu, VkRenderPass renderPass)
+void Gizmos::createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples)
 {
     auto vertCode = loadSpv("shaders/gizmo.vert.spv");
     auto fragCode = loadSpv("shaders/gizmo.frag.spv");
@@ -152,7 +152,9 @@ void Gizmos::createPipeline(GpuDevice& gpu, VkRenderPass renderPass)
 
     VkPipelineMultisampleStateCreateInfo ms{};
     ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    // Lo fija el modo de anti-aliasing del Renderer: los gizmos viven en el pass
+    // de composición y tienen que declarar las mismas muestras que él.
+    ms.rasterizationSamples = samples;
 
     VkPipelineDepthStencilStateCreateInfo ds{};
     ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
@@ -185,7 +187,10 @@ void Gizmos::createPipeline(GpuDevice& gpu, VkRenderPass renderPass)
     layoutCI.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutCI.pushConstantRangeCount = 1;
     layoutCI.pPushConstantRanges    = &push;
-    if (vkCreatePipelineLayout(gpu.device(), &layoutCI, nullptr, &m_pipeLayout) != VK_SUCCESS)
+    // Al recrear el pipeline por un cambio de muestras el layout no cambia:
+    // crearlo otra vez sería una fuga silenciosa.
+    if (m_pipeLayout == VK_NULL_HANDLE &&
+        vkCreatePipelineLayout(gpu.device(), &layoutCI, nullptr, &m_pipeLayout) != VK_SUCCESS)
         throw std::runtime_error("Gizmos: failed to create pipeline layout");
 
     VkGraphicsPipelineCreateInfo pCI{};
@@ -211,11 +216,24 @@ void Gizmos::createPipeline(GpuDevice& gpu, VkRenderPass renderPass)
     vkDestroyShaderModule(gpu.device(), fragMod, nullptr);
 }
 
-void Gizmos::init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat)
+void Gizmos::init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat,
+                  VkSampleCountFlagBits samples)
 {
     (void)colorFormat; // el renderPass ya tiene el formato correcto
     get().createBuffer(gpu);
-    get().createPipeline(gpu, renderPass);
+    get().createPipeline(gpu, renderPass, samples);
+}
+
+void Gizmos::recreatePipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples)
+{
+    // Solo el pipeline: el layout y los buffers de vértices no dependen ni del
+    // render pass ni del número de muestras.
+    if (get().m_pipeline != VK_NULL_HANDLE)
+    {
+        vkDestroyPipeline(gpu.device(), get().m_pipeline, nullptr);
+        get().m_pipeline = VK_NULL_HANDLE;
+    }
+    get().createPipeline(gpu, renderPass, samples);
 }
 
 void Gizmos::shutdown(GpuDevice& gpu)
