@@ -9,6 +9,9 @@ A Vulkan-based game engine written in C++20.
 - **HDR bloom**: threshold with soft knee, mip chain of compute downsample/upsample passes, additive composition — `threshold`, `knee` and `intensity` are live editor sliders (see below)
 - **SSAO**: depth-only pre-pass + compute occlusion (16-sample hemisphere kernel, normals reconstructed from depth) and a blur, applied to the ambient term only; toggle plus `radius`/`bias`/`intensity`/`power` sliders (see below)
 - **Screen space reflections**: view-space ray march with binary refinement, added into the HDR target *before* bloom so reflections bloom and tonemap like everything else; enabled and weighted **per GameObject**, with a global switch and 5 sliders (see below)
+- **Reflection probes**: placeable environment probes that capture the scene from their position into a cubemap and replace the global IBL for the objects inside their radius; baked on demand, never per frame (see below)
+- **Anti-aliasing**: `None` / `FXAA` / `SSAA` / `MSAA` / `TAA`, mutually exclusive and switchable at runtime from the View menu, each with its own resources rebuilt between frames
+- **Forward+ light culling**: `Off` / `Tiled` / `Clustered`, a compute pre-pass that bins lights into a screen grid so `pbr.frag` only iterates the ones that reach each pixel; `Off` records no commands and lights exactly as before
 - GPU skeletal animation (compute shader skinning: bone eval → hierarchy → skinning)
 - Cascaded shadow maps (4 cascades, PCF 3×3)
 - Normal maps + tangent space
@@ -238,6 +241,57 @@ Normals come from depth, not from an attachment, so the normal map's detail does
 reflection: polished metal with a normal map mirrors as if it were flat. And being screen-space,
 anything off-screen or hidden behind another object simply is not reflected.
 
+## Reflection Probes
+
+A **Reflection Probe** is a component on any GameObject (**Properties → Add → Reflection
+Probe**). It captures the environment from that GameObject's position and replaces the global
+IBL — both the irradiance map and the roughness-prefiltered map — for every object that falls
+inside its radius of influence. `Radius` and `Intensity` are serialised with the scene; the
+cubemap is not, it is rebaked.
+
+**The bake is an event, never a pass.** It does not record a single command into the frame's
+command buffer: it is its own set of submits, triggered by the **Bake** button, by **View →
+Bake All Reflection Probes**, or automatically when a probe has no valid capture yet (on
+creation and on scene load, so `DonTopoRuntime` renders the same image as the editor without
+anyone pressing anything). Auto-bake waits for the settings to stop moving, so dragging a
+slider costs one bake on release rather than one per frame. With probes already baked the
+per-frame GPU cost is identical to having none — measured at 0.77 ms with zero probes and
+0.78–0.87 ms with four, inside the run-to-run noise of the same binary.
+
+Each face is rendered by **reusing the existing scene pass**: same pipeline, same descriptor
+sets, same shadow maps and skybox, into a square `renderArea` of the offscreen framebuffer,
+then blitted into the cubemap layer. SSAO, SSR, bloom, AA, composition and UI are skipped —
+the capture is linear HDR — and Forward+ is forced to `Off` for the duration, since its light
+grid was culled against the frame's camera and not against these six faces. The convolution
+then runs the **same two compute shaders** as the global IBL. Cost: **~0.86 ms of GPU and
+1.05 MB per probe** (irradiance 32² + prefiltered 128²×5 mips, six faces, `rgba16f`), plus one
+128² capture cubemap shared by all probes and created only on the first bake.
+
+The probe's cubemap reaches `pbr.frag` by **rewriting bindings 5 and 6 of set 0** for the
+affected objects — the same single-binding-write pattern the SSAO map already used. Nothing
+else moves: no new descriptor set layout, no new UBO member (that block is declared in five
+shaders and std140 would silently shift everything behind it) and no room needed in `PushData`,
+which is 80 bytes exactly. `Intensity` is baked *into* the cubemap through a push constant of
+the two convolution shaders, which is why changing it triggers a rebake while changing the
+radius does not — the radius only decides who is affected.
+
+The capture is always taken with the **global IBL** bound, never with the probes' own cubemaps.
+Otherwise the scene would be photographed lit by the very probe being baked, and each bake would
+re-multiply light that already carried the intensity — the effect amplifying (or fading) bake
+after bake. Capturing against the global IBL makes the bake idempotent and independent of the
+order the probes are processed.
+
+Assignment is resolved by **nearest probe whose radius contains the object**, recomputed on the
+CPU and pushed to the GPU only when it actually changes; an object outside every radius, and a
+scene with no probes at all, keep the global IBL views they were given at allocation, so the
+image is identical to the one before the feature. Deleting a probe or loading another scene
+returns the affected objects to the global IBL *before* freeing the cubemaps, so no descriptor
+set is ever left pointing at a dead view.
+
+One deliberate limitation: the descriptor set is per **shared mesh**, not per GameObject. Two
+instances of the same mesh under different probes share a probe — the first one in traversal
+order wins. Splitting them would mean duplicating the sets and losing the instanced draw.
+
 ## Selection Outline
 
 Selecting a GameObject that carries a mesh — static or skinned — traces it with an orange
@@ -391,7 +445,7 @@ logged and the component is quarantined). See `Scripts/Rotator.lua` and `Scripts
 
 | System | Candidates |
 | --- | --- |
-| Post-processing | TAA, motion blur, depth of field |
+| Post-processing | Motion blur, depth of field |
 | Multi-backend RHI | DX12 / Vulkan / Metal, for Windows + Linux + macOS |
 
 ## License
