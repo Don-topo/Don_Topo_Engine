@@ -357,6 +357,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
             drawAnimatorSection(ctx);
             drawMeshSection(ctx);
             drawSsrSection(ctx);
+            drawReflectionProbeSection(ctx);
             drawAudioClipSection(ctx);
             drawScriptsSection(ctx);
             drawAddComponentButton(ctx);
@@ -433,6 +434,113 @@ void PropertiesPanel::drawSsrSection(EditorContext& ctx)
         }
     }
     ImGui::EndDisabled();
+
+    ImGui::TreePop();
+}
+
+void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
+{
+    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    if (!ctx.selected->hasReflectionProbe()) return;
+
+    if (!ImGui::TreeNodeEx("Reflection Probe", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen))
+        return;
+
+    Scene*                    scene = ctx.scene;
+    const uint64_t            id    = ctx.selected->id;
+    ReflectionProbeComponent* probe = ctx.selected->getReflectionProbe().get();
+
+    ImGui::TextWrapped("La sonda captura el entorno desde la posición de este objeto "
+                       "y sustituye al IBL global en lo que caiga dentro del radio.");
+
+    // Los "before" se leen ANTES de dibujar los sliders: SliderFloat salta al
+    // valor bajo el cursor en el mismo frame del click, así que releerlos
+    // después daría ya el nuevo y el undo devolvería el valor del click.
+    const float beforeRadius    = probe->getRadius();
+    const float beforeIntensity = probe->getIntensity();
+
+    float radius = beforeRadius;
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+    if (ImGui::SliderFloat("Radius", &radius, 1.0f, 5000.0f, "%.0f"))
+        probe->setRadius(radius);
+    if (ImGui::IsItemActivated())
+    {
+        m_probeDragActive   = true;
+        m_probeDragOwnerId  = id;
+        m_probeDragBefore   = beforeRadius;
+        m_probeDragIsRadius = true;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit() && m_probeDragActive &&
+        m_probeDragIsRadius && m_probeDragOwnerId == id)
+    {
+        m_probeDragActive = false;
+        const float after = probe->getRadius();
+        ctx.pushLog("Radius de la sonda de '" + ctx.selected->name + "' cambiado a " +
+                    std::to_string(after));
+        if (scene && ctx.undo)
+        {
+            ctx.undo->push(std::make_unique<PropertyCommand<float>>(
+                "Radius de la sonda de '" + ctx.selected->name + "'", m_probeDragBefore, after,
+                [scene, id](const float& v) {
+                    if (GameObject* go = scene->findById(id))
+                        if (go->hasReflectionProbe()) go->getReflectionProbe()->setRadius(v);
+                }));
+        }
+    }
+
+    float intensity = beforeIntensity;
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+    if (ImGui::SliderFloat("Intensity", &intensity, 0.0f, 4.0f, "%.2f"))
+        probe->setIntensity(intensity);
+    if (ImGui::IsItemActivated())
+    {
+        m_probeDragActive   = true;
+        m_probeDragOwnerId  = id;
+        m_probeDragBefore   = beforeIntensity;
+        m_probeDragIsRadius = false;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit() && m_probeDragActive &&
+        !m_probeDragIsRadius && m_probeDragOwnerId == id)
+    {
+        m_probeDragActive = false;
+        const float after = probe->getIntensity();
+        ctx.pushLog("Intensity de la sonda de '" + ctx.selected->name + "' cambiada a " +
+                    std::to_string(after));
+        if (scene && ctx.undo)
+        {
+            ctx.undo->push(std::make_unique<PropertyCommand<float>>(
+                "Intensity de la sonda de '" + ctx.selected->name + "'", m_probeDragBefore, after,
+                [scene, id](const float& v) {
+                    if (GameObject* go = scene->findById(id))
+                        if (go->hasReflectionProbe()) go->getReflectionProbe()->setIntensity(v);
+                }));
+        }
+    }
+
+    // El bake es un evento: el botón sólo ENCOLA. El Renderer lo ejecuta al
+    // principio del frame siguiente, que es donde puede esperar a la GPU.
+    if (ctx.renderer)
+    {
+        if (ImGui::Button("Bake"))
+        {
+            ctx.renderer->requestProbeBake(id);
+            ctx.pushLog("Bake de la sonda de '" + ctx.selected->name + "' encolado");
+        }
+        ImGui::SameLine();
+        const float ms = ctx.renderer->probeBakeMs(id);
+        if (ms < 0.0f) ImGui::TextUnformatted("sin bakear");
+        else           ImGui::Text("%.2f ms de GPU", ms);
+        ImGui::Text("Memoria: %.2f MB", (double)Renderer::probeMemoryBytes() / (1024.0 * 1024.0));
+    }
+
+    if (ImGui::Button("Remove Reflection Probe"))
+    {
+        ctx.selected->setReflectionProbe(nullptr);
+        m_probeDragActive = false;
+        ctx.pushLog("Componente Reflection Probe quitado de '" + ctx.selected->name + "'");
+        ImGui::TreePop();
+        return;
+    }
 
     ImGui::TreePop();
 }
@@ -1824,6 +1932,19 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         ImGui::EndDisabled();
         if (existingCamera && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Ya hay una cámara en la escena ('%s')", existingCamera->name.c_str());
+
+        // Reflection Probe: sin invariante de unicidad (caben las que quepan en
+        // memoria), así que el único gate es no añadir dos a un mismo objeto.
+        // Al añadirla, el Renderer la detecta en el frame siguiente, le crea sus
+        // cubemaps y la bakea una vez: no hace falta pulsar Bake para verla.
+        const bool alreadyHasProbe = ctx.selected->hasReflectionProbe();
+        ImGui::BeginDisabled(alreadyHasProbe);
+        if (ImGui::Selectable("Reflection Probe") && !alreadyHasProbe)
+        {
+            ctx.selected->setReflectionProbe(std::make_shared<ReflectionProbeComponent>());
+            ctx.pushLog("Componente Reflection Probe añadido a '" + ctx.selected->name + "'");
+        }
+        ImGui::EndDisabled();
 
         // Animator: solo tiene sentido sobre un mesh skinned (es quien trae los
         // clips). El gate pregunta al GameObject, no a un flag propio.

@@ -36,6 +36,7 @@ namespace
     using DonTopo::Rigidbody;
     using DonTopo::CameraComponent;
     using DonTopo::AnimatorComponent;
+    using DonTopo::ReflectionProbeComponent;
 
     // Forward declarations: animatorFromJson (más abajo) necesita estos
     // lectores tolerantes a JSON corrupto (definidos junto a jsonToMat4/
@@ -349,6 +350,16 @@ namespace
                             {"orthographicSize", c->getOrthographicSize()},
                             {"near", c->getNear()},
                             {"far", c->getFar()} };
+        }
+        if (node.hasReflectionProbe())
+        {
+            // Solo los ajustes: el cubemap bakeado NO se serializa (es un
+            // recurso GPU de ~1,1 MB por sonda). Al cargar la escena, el
+            // Renderer rehornea las sondas que no tienen captura, así que
+            // DonTopoRuntime acaba viendo exactamente lo mismo que el editor.
+            const auto& p = node.getReflectionProbe();
+            j["reflectionProbe"] = { {"radius", p->getRadius()},
+                                     {"intensity", p->getIntensity()} };
         }
         if (node.hasAnimator())
             j["animator"] = animatorToJson(*node.getAnimator());
@@ -940,6 +951,18 @@ namespace
             cam->setFov(readFloat(c, "fov", 45.0f, warnings, ctx));
             cam->setOrthographicSize(readFloat(c, "orthographicSize", 100.0f, warnings, ctx));
             node->setCameraComponent(cam);
+        }
+        // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
+        // y cargan igual (version sigue en 1). Sin este bloque no hay sonda, y
+        // sin sonda el objeto se ilumina con el IBL global de siempre.
+        if (j.contains("reflectionProbe"))
+        {
+            const auto& p = j["reflectionProbe"];
+            const std::string ctx = "reflectionProbe de '" + node->name + "'";
+            auto probe = std::make_shared<ReflectionProbeComponent>();
+            probe->setRadius(readFloat(p, "radius", 300.0f, warnings, ctx));
+            probe->setIntensity(readFloat(p, "intensity", 1.0f, warnings, ctx));
+            node->setReflectionProbe(probe);
         }
         // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
         // y cargan igual (version sigue en 1).

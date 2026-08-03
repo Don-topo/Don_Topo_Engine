@@ -51,6 +51,9 @@ private:
     // "Add": son dos campos del GameObject (como el transform), así que la
     // sección aparece sobre cualquier objeto con malla.
     void drawSsrSection(EditorContext& ctx);
+    // Reflection Probe. SÍ es un componente y SÍ pasa por "Add": la sección se
+    // esconde hasta que el usuario lo añade, igual que los colliders.
+    void drawReflectionProbeSection(EditorContext& ctx);
     void drawMeshDialog(EditorContext& ctx);
     void drawAudioClipSection(EditorContext& ctx);
     void drawAudioClipDialog(EditorContext& ctx);
@@ -78,6 +81,15 @@ private:
     // Rotation/Scale (primer IsItemActivated de la sesión) — "before" del
     // PropertyCommand<glm::mat4> que se empuja al confirmar (commit).
     glm::mat4   m_transformBeforeEdit{1.0f};
+
+    // Reflection Probe – drag de Radius/Intensity. Mismo patrón que SSR: el
+    // "before" se toma en IsItemActivated y el owner id evita aplicar un
+    // "before" ajeno si el drag se interrumpió sin commit.
+    bool     m_probeDragActive   = false;
+    uint64_t m_probeDragOwnerId  = 0;
+    float    m_probeDragBefore   = 0.0f;
+    // Cuál de los dos sliders está en drag (el "before" es un único float).
+    bool     m_probeDragIsRadius = false;
 
     // Box Collider – mismo patrón de cache que Transform: persiste entre
     // frames para que los DragFloat acumulen el delta del arrastre, y se

@@ -16,6 +16,11 @@ layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray outCube;
 layout(push_constant) uniform Push {
     float roughness;   // sin uso aqui; el layout lo comparten los dos shaders
     uint  faceSize;
+    // Peso del resultado. Vale 1.0 en el IBL global (imagen identica a antes de
+    // que existiera este campo) y la intensidad de la sonda cuando esto
+    // convoluciona la captura de una reflection probe: hornearla aqui es lo que
+    // permite tener intensidad POR sonda sin un campo nuevo en el bloque UBO.
+    float intensity;
 } pc;
 
 const float PI = 3.14159265359;
@@ -82,5 +87,5 @@ void main()
     }
 
     vec3 irradiance = sum / float(SAMPLE_COUNT);
-    imageStore(outCube, ivec3(gid), vec4(irradiance, 1.0));
+    imageStore(outCube, ivec3(gid), vec4(irradiance * pc.intensity, 1.0));
 }

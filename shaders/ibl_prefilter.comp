@@ -13,6 +13,9 @@ layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray outCube;
 layout(push_constant) uniform Push {
     float roughness;
     uint  faceSize;
+    // Mismo layout que ibl_irradiance.comp: 1.0 en el IBL global, intensidad de
+    // la sonda cuando esto prefiltra la captura de una reflection probe.
+    float intensity;
 } pc;
 
 const float PI = 3.14159265359;
@@ -76,7 +79,7 @@ void main()
     // la misma direccion. Copiarlo directo evita 256 fetches identicos.
     if (pc.roughness <= 0.0)
     {
-        imageStore(outCube, ivec3(gid), vec4(textureLod(envMap, R, 0.0).rgb, 1.0));
+        imageStore(outCube, ivec3(gid), vec4(textureLod(envMap, R, 0.0).rgb * pc.intensity, 1.0));
         return;
     }
 
@@ -97,5 +100,5 @@ void main()
     }
 
     vec3 color = weight > 0.0 ? sum / weight : textureLod(envMap, R, 0.0).rgb;
-    imageStore(outCube, ivec3(gid), vec4(color, 1.0));
+    imageStore(outCube, ivec3(gid), vec4(color * pc.intensity, 1.0));
 }

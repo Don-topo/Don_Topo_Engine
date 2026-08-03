@@ -14,6 +14,7 @@
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Core/ReflectionProbeComponent.h"
 
 namespace DonTopo
 {
@@ -111,6 +112,14 @@ namespace DonTopo
             const std::shared_ptr<AnimatorComponent>& getAnimator() const { return m_animator; }
             bool hasAnimator() const { return m_animator != nullptr; }
 
+            // Reflection Probe: sonda de entorno. Sin invariante de unicidad
+            // por escena (al contrario que la cámara): caben las que quepan en
+            // memoria, y el Renderer resuelve qué sonda ilumina cada objeto por
+            // radio de influencia.
+            void setReflectionProbe(std::shared_ptr<ReflectionProbeComponent> p) { m_reflectionProbe = std::move(p); }
+            const std::shared_ptr<ReflectionProbeComponent>& getReflectionProbe() const { return m_reflectionProbe; }
+            bool hasReflectionProbe() const { return m_reflectionProbe != nullptr; }
+
             // Scripts Lua — a diferencia del resto de slots, vector: se
             // permiten varios scripts por GameObject (incluso repetidos).
             void addScript(std::unique_ptr<ScriptComponent> script);
@@ -159,6 +168,7 @@ namespace DonTopo
             std::shared_ptr<AudioClipComponent> m_audioClip;
             std::shared_ptr<CameraComponent> m_cameraComponent;
             std::shared_ptr<AnimatorComponent> m_animator;
+            std::shared_ptr<ReflectionProbeComponent> m_reflectionProbe;
             std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
     };
 }

@@ -19,6 +19,7 @@
 #include "DonTopo/Renderer/Skybox.h"
 #include "DonTopo/Renderer/SplashScreen.h"
 #include <array>
+#include <unordered_map>
 
 namespace DonTopo {
 
@@ -161,6 +162,37 @@ namespace DonTopo {
             // sin recomputar nada.
             void  setAmbientIntensity(float v) { m_ambientIntensity = v; }
             float ambientIntensity() const     { return m_ambientIntensity; }
+
+            // ── Reflection probes ──────────────────────────────────────────
+            // La UI solo ENCOLA: el bake ocurre al principio de drawFrame, que
+            // es donde se puede esperar a que la GPU quede libre sin pillar el
+            // command buffer a medio grabar (mismo sitio que rebuildAaResources).
+            void requestProbeBake(uint64_t ownerId) { m_probeBakeQueue.push_back(ownerId); }
+            void requestProbeBakeAll()              { m_probeBakeAllQueued = true; }
+            // ms del ULTIMO bake (una sonda o la tanda entera), por timestamps.
+            float lastProbeBakeMs() const { return m_probeLastBakeMs; }
+            int   probeCount() const      { return (int)m_probes.size(); }
+            // Memoria GPU de las capturas persistentes de UNA sonda, en bytes.
+            // No cuenta el cubemap de captura, que es uno solo pa todas.
+            static constexpr uint64_t probeMemoryBytes()
+            {
+                // rgba16f = 8 bytes/texel, 6 caras. El prefiltrado suma sus mips
+                // (la serie 1 + 1/4 + 1/16 + ... truncada a IBL_PREFILTER_MIPS).
+                uint64_t pre = 0;
+                for (uint32_t m = 0; m < IBL_PREFILTER_MIPS; m++)
+                {
+                    const uint64_t s = IBL_PREFILTER_SIZE >> m;
+                    pre += s * s * 6ull * 8ull;
+                }
+                return (uint64_t)IBL_IRRADIANCE_SIZE * IBL_IRRADIANCE_SIZE * 6ull * 8ull + pre;
+            }
+            // ms del ultimo bake de UNA sonda concreta, o -1 si nunca se bakeo.
+            float probeBakeMs(uint64_t ownerId) const
+            {
+                for (const GpuProbe& p : m_probes)
+                    if (p.ownerId == ownerId) return p.baked ? p.bakeMs : -1.0f;
+                return -1.0f;
+            }
 
             // Bloom HDR. Los tres viajan por push constant de los pipelines del
             // bloom (NO por el UBO: ahi solo quedaban 2 floats y el bloque esta
@@ -1392,7 +1424,78 @@ namespace DonTopo {
             VkPipelineLayout                m_iblPipelineLayout    = VK_NULL_HANDLE;
             VkPipeline                      m_iblIrradiancePipeline = VK_NULL_HANDLE;
             VkPipeline                      m_iblPrefilterPipeline  = VK_NULL_HANDLE;
-            struct IblPush { float roughness; uint32_t faceSize; };
+            // intensity: peso que se hornea en el cubemap resultante. 1.0 en el
+            // IBL global (resultado identico al de antes de las sondas) y la
+            // intensidad de la probe cuando esto convoluciona su captura.
+            struct IblPush { float roughness; uint32_t faceSize; float intensity; };
+
+            // ── Reflection probes ──────────────────────────────────────────
+            // Sondas de entorno: capturan la escena desde su posicion en 6 caras
+            // y sustituyen al IBL global (bindings 5 y 6 del set 0) en los
+            // objetos que caen dentro de su radio. El bake es un EVENTO: no
+            // graba ni un comando en el command buffer del frame, asi que el
+            // coste GPU por frame con N sondas ya bakeadas es exactamente el
+            // mismo que con 0.
+            //
+            // Lado de captura: un solo cubemap COMPARTIDO por todas las sondas
+            // (es un intermedio del bake, no persiste), creado la primera vez
+            // que hay algo que bakear. Sin sondas no se crea y no gasta nada.
+            static constexpr uint32_t PROBE_FACE_SIZE = 128;
+            struct GpuProbe
+            {
+                uint64_t  ownerId  = 0;          // GameObject::id de la sonda
+                glm::vec3 position { 0.0f };
+                float     radius    = 0.0f;
+                float     intensity = 1.0f;
+                // Mismas dos imagenes que el IBL global, por sonda: irradiancia
+                // (1 mip) y entorno prefiltrado (IBL_PREFILTER_MIPS).
+                VkImage        irradianceImage  = VK_NULL_HANDLE;
+                VkDeviceMemory irradianceMemory = VK_NULL_HANDLE;
+                VkImageView    irradianceView   = VK_NULL_HANDLE;
+                VkImageView    irradianceStore  = VK_NULL_HANDLE;
+                VkImage        prefilterImage   = VK_NULL_HANDLE;
+                VkDeviceMemory prefilterMemory  = VK_NULL_HANDLE;
+                VkImageView    prefilterView    = VK_NULL_HANDLE;
+                VkImageView    prefilterStore[IBL_PREFILTER_MIPS] {};
+                bool           baked  = false;   // false: todavia con el neutro
+                float          bakeMs = 0.0f;    // ultimo bake, timestamps GPU
+                // Llamadas a syncReflectionProbes seguidas SIN cambios en los
+                // ajustes de la sonda. El auto-bake espera a que llegue a 1: sin
+                // esto, arrastrar el slider de Intensity dispararia un bake por
+                // frame (con su vkDeviceWaitIdle y sus 7 submits).
+                int            settleFrames = 0;
+            };
+            std::vector<GpuProbe>           m_probes;
+            VkImage                         m_probeCaptureImage  = VK_NULL_HANDLE;
+            VkDeviceMemory                  m_probeCaptureMemory = VK_NULL_HANDLE;
+            VkImageView                     m_probeCaptureView   = VK_NULL_HANDLE;
+            // 7 pares: uno por cara mas el de la convolucion. Se suman los
+            // deltas en vez de medir del primero al ultimo, que contaria tambien
+            // las esperas del host entre submits.
+            static constexpr uint32_t       PROBE_QUERY_COUNT = 14;
+            VkQueryPool                     m_probeQueryPool     = VK_NULL_HANDLE;
+            std::vector<uint64_t>           m_probeBakeQueue;
+            bool                            m_probeBakeAllQueued = false;
+            float                           m_probeLastBakeMs    = 0.0f;
+            // Asignacion resuelta: sharedIndex -> indice en m_probes (-1 = IBL
+            // global). Es la CACHE de lo ya escrito en los descriptor sets; solo
+            // se reescriben bindings cuando el mapa recalculado difiere de este.
+            std::unordered_map<int, int>    m_probeAssignShared;
+            std::vector<int>                m_probeAssignSkinned;
+            // El bake copia el UBO del frame 0 (luces, cascadas y su shadow map)
+            // y solo le sustituye view/proj: sin un frame previo ese buffer es
+            // basura, asi que las peticiones esperan.
+            bool                            m_uboWritten[MAX_FRAMES] {};
+
+            void  syncReflectionProbes();
+            void  createProbeCapture();
+            void  createProbeImages(GpuProbe& probe);
+            void  destroyProbeImages(GpuProbe& probe);
+            void  bakeProbe(GpuProbe& probe);
+            void  refreshProbeAssignment();
+            void  assignAllToGlobalIbl();
+            int   pickProbeFor(const glm::vec3& worldPos) const;
+            void  writeIblBindings(VkDescriptorSet set, VkImageView irradiance, VkImageView prefilter);
             // Compute pipelines
             VkPipeline            m_boneEvalPipeline      = VK_NULL_HANDLE;
             VkPipeline            m_boneHierarchyPipeline = VK_NULL_HANDLE;

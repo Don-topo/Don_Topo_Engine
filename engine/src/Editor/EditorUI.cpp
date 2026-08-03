@@ -285,6 +285,21 @@ void EditorUI::drawMenuBar()
                 if (ImGui::SliderFloat("Ambient (IBL)", &ambient, 0.0f, 3.0f, "%.2f"))
                     m_renderer->setAmbientIntensity(ambient);
 
+                // Reflection probes: control GLOBAL (rehornear la escena entera).
+                // El radio y la intensidad de cada sonda van en su Properties,
+                // que es donde se edita lo que es de un objeto. El bake solo se
+                // encola: lo ejecuta el Renderer al principio del frame
+                // siguiente, nunca como un pass del frame.
+                ImGui::Separator();
+                const int probes = m_renderer->probeCount();
+                ImGui::BeginDisabled(probes == 0);
+                if (ImGui::MenuItem("Bake All Reflection Probes"))
+                    m_renderer->requestProbeBakeAll();
+                ImGui::EndDisabled();
+                ImGui::Text("Sondas: %d  (%.2f MB c/u)", probes,
+                            (double)Renderer::probeMemoryBytes() / (1024.0 * 1024.0));
+                ImGui::Text("Ultimo bake: %.2f ms de GPU", m_renderer->lastProbeBakeMs());
+
                 // Bloom. Mismo criterio que el ambiente: ajuste de sesion, no se
                 // serializa. Intensity 0 deja la imagen como antes del bloom.
                 ImGui::Separator();
