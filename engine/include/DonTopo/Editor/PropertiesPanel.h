@@ -59,6 +59,10 @@ private:
     void drawLightSection(EditorContext& ctx);
     void drawMeshDialog(EditorContext& ctx);
     void drawAudioClipSection(EditorContext& ctx);
+    // Audio Listener: sección mínima (solo Enabled y quitar). Como mucho uno por
+    // escena — el gate de unicidad está en el popup "Add", contra
+    // Scene::findAudioListener.
+    void drawAudioListenerSection(EditorContext& ctx);
     void drawAudioClipDialog(EditorContext& ctx);
     void drawScriptsSection(EditorContext& ctx);
     void drawAddComponentButton(EditorContext& ctx);
@@ -211,6 +215,8 @@ private:
     bool     m_audioDragActive = false;
     float    m_audioDragBeforeVolume = 1.0f;
     float    m_audioDragBeforePitch  = 1.0f;
+    float    m_audioDragBeforeMinDistance = 1.0f;
+    float    m_audioDragBeforeMaxDistance = 100.0f;
     // Dueño del snapshot en curso: si el drag se interrumpe sin commit (p.ej.
     // Ctrl+Z a mitad de arrastre reconstruye/borra el GameObject seleccionado)
     // y el siguiente commit llega para otro AudioClip, este id evita aplicar

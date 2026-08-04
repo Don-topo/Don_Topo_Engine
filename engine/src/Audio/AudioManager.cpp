@@ -158,6 +158,25 @@ void AudioManager::setChannelPitch(int id, float pitch)
 #endif
 }
 
+void AudioManager::setSound3DMinMaxDistance(int id, float minDistance, float maxDistance)
+{
+#ifdef DT_FMOD_ENABLED
+    if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
+        id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
+    auto* snd = reinterpret_cast<FMOD::Sound*>(m_sounds[id]);
+    FMOD_MODE mode = 0; snd->getMode(&mode);
+    if (!(mode & FMOD_3D)) return;
+    snd->set3DMinMaxDistance(minDistance, maxDistance);
+    // El canal ya sonando se quedó con la distancia que tenía el sonido al
+    // arrancar: se le escribe también pa que mover el slider se oiga sin
+    // esperar al siguiente play.
+    if (FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]))
+        ch->set3DMinMaxDistance(minDistance, maxDistance);
+#else
+    (void)id; (void)minDistance; (void)maxDistance;
+#endif
+}
+
 void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, float pitch)
 {
 #ifdef DT_FMOD_ENABLED

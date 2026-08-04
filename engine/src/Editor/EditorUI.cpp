@@ -631,10 +631,19 @@ void EditorUI::drawToolbar()
                 m_exportDlgOpen = false;
             }
             if (m_scriptManager) m_scriptManager->onPlayStart();
-            m_scene->traverse([](GameObject* go) {
-                if (go->hasAudioClip() && go->getAudioClip()->getPlayOnAwake())
-                    go->getAudioClip()->play(glm::vec3(go->worldTransform[3]));
-            });
+            // Gate de reproducción: sin Audio Listener en la escena (o con el
+            // suyo deshabilitado) no suena ningún clip. Mismo gate que el
+            // runtime (runtime/main.cpp), y por la misma razón fuera de
+            // AudioManager/AudioClipComponent. Un solo aviso, no uno por clip.
+            GameObject* listenerGo = m_scene->findAudioListener();
+            const bool listenerActive = listenerGo && listenerGo->getAudioListener()->getEnabled();
+            if (!listenerActive)
+                m_logPanel.push("Sin Audio Listener en la escena: los AudioClip no se reproduciran");
+            else
+                m_scene->traverse([](GameObject* go) {
+                    if (go->hasAudioClip() && go->getAudioClip()->getPlayOnAwake())
+                        go->getAudioClip()->play(glm::vec3(go->worldTransform[3]));
+                });
             m_logPanel.push("Play Mode iniciado");
         }
     }

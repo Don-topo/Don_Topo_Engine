@@ -12,6 +12,7 @@
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
+#include "DonTopo/Audio/AudioListenerComponent.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/ReflectionProbeComponent.h"
@@ -97,6 +98,14 @@ namespace DonTopo
             const std::shared_ptr<AudioClipComponent>& getAudioClip() const { return m_audioClip; }
             bool hasAudioClip() const { return m_audioClip != nullptr; }
 
+            // Audio Listener: desde dónde se oye el audio 3D. Como mucho uno por
+            // escena, igual que la cámara — el invariante lo impone
+            // Scene::findAudioListener, no esta clase. La posición y los ejes
+            // salen del worldTransform, no del componente.
+            void setAudioListener(std::shared_ptr<AudioListenerComponent> l) { m_audioListener = std::move(l); }
+            const std::shared_ptr<AudioListenerComponent>& getAudioListener() const { return m_audioListener; }
+            bool hasAudioListener() const { return m_audioListener != nullptr; }
+
             // Cámara de juego: al dar a Play el Renderer renderiza desde este
             // GameObject (su worldTransform da posición y orientación). Como
             // mucho una por escena — el invariante lo impone Scene::findCamera,
@@ -175,6 +184,7 @@ namespace DonTopo
             std::shared_ptr<PlaneCollider> m_planeCollider;
             std::shared_ptr<Rigidbody> m_rigidbody;
             std::shared_ptr<AudioClipComponent> m_audioClip;
+            std::shared_ptr<AudioListenerComponent> m_audioListener;
             std::shared_ptr<CameraComponent> m_cameraComponent;
             std::shared_ptr<AnimatorComponent> m_animator;
             std::shared_ptr<ReflectionProbeComponent> m_reflectionProbe;

@@ -112,6 +112,38 @@ void ViewportPanel::drawSelectionGizmo(EditorContext& ctx)
         PlaneCollider* pc = ctx.selected->getPlaneCollider().get();
         Gizmos::drawWirePlane(ctx.selected->worldTransform, pc->getCenter(), kColliderColor);
     }
+
+    // Atenuación del AudioClip 3D: esfera interior (min, volumen pleno) y
+    // exterior (max, silencio). Solo del objeto seleccionado y solo si el clip
+    // es 3D — en 2D FMOD no atenúa por distancia y las esferas mentirían.
+    if (ctx.selected->hasAudioClip() && ctx.selected->getAudioClip()->getIs3D())
+    {
+        // Magenta: ni el amarillo de los colliders, ni el cian de la cámara, ni
+        // el naranja de las luces.
+        const glm::vec3 kAudioColor(1.0f, 0.2f, 0.8f);
+
+        // Base con los ejes NORMALIZADOS: las distancias de FMOD son unidades de
+        // mundo, así que la escala del GameObject no puede estirar las esferas
+        // (al revés que los colliders, que sí escalan con el objeto). Base
+        // degenerada (una escala a 0 desde Properties) -> identidad, pa no
+        // meter NaN en el vertex buffer del gizmo.
+        glm::mat4 basis(1.0f);
+        const glm::vec3 axes[3] = { glm::vec3(ctx.selected->worldTransform[0]),
+                                    glm::vec3(ctx.selected->worldTransform[1]),
+                                    glm::vec3(ctx.selected->worldTransform[2]) };
+        if (glm::length(axes[0]) >= 1e-6f && glm::length(axes[1]) >= 1e-6f &&
+            glm::length(axes[2]) >= 1e-6f)
+        {
+            basis[0] = glm::vec4(glm::normalize(axes[0]), 0.0f);
+            basis[1] = glm::vec4(glm::normalize(axes[1]), 0.0f);
+            basis[2] = glm::vec4(glm::normalize(axes[2]), 0.0f);
+        }
+        basis[3] = ctx.selected->worldTransform[3];
+
+        const AudioClipComponent& clip = *ctx.selected->getAudioClip();
+        Gizmos::drawWireSphere(basis, glm::vec3(0.0f), clip.getMinDistance(), kAudioColor);
+        Gizmos::drawWireSphere(basis, glm::vec3(0.0f), clip.getMaxDistance(), kAudioColor);
+    }
 }
 
 void ViewportPanel::drawCameraGizmo(EditorContext& ctx)

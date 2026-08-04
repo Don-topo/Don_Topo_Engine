@@ -43,6 +43,13 @@ public:
     void setChannelVolume(int soundId, float volume);
     void setChannelPitch (int soundId, float pitch);
 
+    // Atenuación 3D del sonido: por debajo de minDistance suena a volumen
+    // pleno, y de ahí a maxDistance va cayendo. Se escribe en el FMOD::Sound
+    // (vale pa las reproducciones futuras) Y en el canal vivo si lo hay, con la
+    // misma comprobación que los dos setters de arriba. No-op si el sonido no
+    // se cargó con FMOD_3D: en 2D no hay atenuación que ajustar.
+    void setSound3DMinMaxDistance(int soundId, float minDistance, float maxDistance);
+
     void playBGM(int bgmId);
     void stopBGM();
     void pauseBGM(bool paused);

@@ -38,6 +38,7 @@ namespace
     using DonTopo::AnimatorComponent;
     using DonTopo::ReflectionProbeComponent;
     using DonTopo::LightComponent;
+    using DonTopo::AudioListenerComponent;
     using DonTopo::LightType;
 
     // Forward declarations: animatorFromJson (más abajo) necesita estos
@@ -407,7 +408,15 @@ namespace
                                 {"is3D", clip->getIs3D()},
                                 {"playOnAwake", clip->getPlayOnAwake()},
                                 {"volume", clip->getVolume()},
-                                {"pitch", clip->getPitch()} };
+                                {"pitch", clip->getPitch()},
+                                {"minDistance", clip->getMinDistance()},
+                                {"maxDistance", clip->getMaxDistance()} };
+        }
+        if (node.hasAudioListener())
+        {
+            // Ni posición ni orientación: salen del worldTransform, que ya se
+            // serializa como localTransform del nodo.
+            j["audioListener"] = { {"enabled", node.getAudioListener()->getEnabled()} };
         }
         if (node.hasScripts())
         {
@@ -1053,10 +1062,26 @@ namespace
                 const std::string ctx = "audioClip de '" + node->name + "'";
                 clip->setVolume(readFloat(c, "volume", 1.0f, warnings, ctx));
                 clip->setPitch(readFloat(c, "pitch", 1.0f, warnings, ctx));
+                // Mismo criterio de compat: defaults del componente pa las
+                // escenas anteriores a estos dos campos. Max antes que min: los
+                // dos setters mantienen min <= max entre ellos, así que el
+                // segundo arrastra al primero y el par acaba siempre válido.
+                clip->setMaxDistance(readFloat(c, "maxDistance", 100.0f, warnings, ctx));
+                clip->setMinDistance(readFloat(c, "minDistance", 1.0f, warnings, ctx));
                 node->setAudioClip(std::move(clip));
             }
             // clip nullptr (asset roto/formato no soportado): node queda sin
             // audio, el resto de la escena sigue cargando.
+        }
+        // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
+        // y cargan igual (version sigue en 1). El invariante de uno por escena
+        // NO se impone aquí (nodeFromJson no ve el árbol entero): lo hace
+        // pruneExtraAudioListeners al final de fromJson.
+        if (j.contains("audioListener"))
+        {
+            auto listener = std::make_shared<AudioListenerComponent>();
+            listener->setEnabled(j["audioListener"].value("enabled", true));
+            node->setAudioListener(std::move(listener));
         }
         if (j.contains("scripts"))
         {
@@ -1208,6 +1233,20 @@ namespace DonTopo
         return const_cast<Scene*>(this)->findCamera();
     }
 
+    GameObject* Scene::findAudioListener()
+    {
+        GameObject* found = nullptr;
+        m_root.traverse([&](GameObject* n) {
+            if (!found && n->hasAudioListener()) found = n;
+        });
+        return found;
+    }
+
+    const GameObject* Scene::findAudioListener() const
+    {
+        return const_cast<Scene*>(this)->findAudioListener();
+    }
+
     void Scene::collapseWarnings()
     {
         std::vector<std::string> unicos;
@@ -1239,6 +1278,18 @@ namespace DonTopo
             m_warnings.push_back("Escena con más de una cámara: se descarta la de '" + n->name +
                                   "' (se conserva la de '" + first->name + "')");
             n->setCameraComponent(nullptr);
+        });
+    }
+
+    void Scene::pruneExtraAudioListeners()
+    {
+        GameObject* first = nullptr;
+        m_root.traverse([&](GameObject* n) {
+            if (!n->hasAudioListener()) return;
+            if (!first) { first = n; return; }
+            m_warnings.push_back("Escena con más de un Audio Listener: se descarta el de '" + n->name +
+                                  "' (se conserva el de '" + first->name + "')");
+            n->setAudioListener(nullptr);
         });
     }
 
@@ -1478,7 +1529,9 @@ namespace DonTopo
 
         // Tras reconstruir: el fichero puede traer dos cámaras (editado a mano).
         pruneExtraCameras();
-        collapseWarnings(); // después de pruneExtraCameras: también empuja avisos
+        // Igual que las cámaras: el fichero puede traer dos listeners.
+        pruneExtraAudioListeners();
+        collapseWarnings(); // después de los prune: también empujan avisos
         return true;
     }
 

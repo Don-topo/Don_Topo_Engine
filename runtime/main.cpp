@@ -422,10 +422,24 @@ int main(int argc, char** argv)
         // esto, un AudioClipComponent con playOnAwake activado suena al pulsar
         // Play en el editor pero sale mudo en el .exe exportado — el diseñador
         // lo activó confiando en lo que oyó, y aquí no hay ningún log que avise.
-        scene.traverse([](DonTopo::GameObject* go) {
-            if (go->hasAudioClip() && go->getAudioClip()->getPlayOnAwake())
-                go->getAudioClip()->play(glm::vec3(go->worldTransform[3]));
-        });
+        //
+        // Gate de reproducción: una escena sin Audio Listener (o con el suyo
+        // deshabilitado) no reproduce ningún clip. El gate vive aquí y en el
+        // editor, NUNCA dentro de AudioManager ni de AudioClipComponent: esas
+        // dos clases se prueban directamente y tienen que seguir sonando sin
+        // escena. Un solo aviso pa toda la escena, no uno por clip.
+        {
+            DonTopo::GameObject* listenerGo = scene.findAudioListener();
+            const bool listenerActive = listenerGo && listenerGo->getAudioListener()->getEnabled();
+            if (!listenerActive)
+                std::cerr << "Sin Audio Listener en la escena: los AudioClip no se reproduciran"
+                          << std::endl;
+            else
+                scene.traverse([](DonTopo::GameObject* go) {
+                    if (go->hasAudioClip() && go->getAudioClip()->getPlayOnAwake())
+                        go->getAudioClip()->play(glm::vec3(go->worldTransform[3]));
+                });
+        }
 
         while (!window.shouldClose())
         {
@@ -475,6 +489,22 @@ int main(int argc, char** argv)
                     listenerPos = glm::vec3(cam->worldTransform[3]);
                     listenerFwd = glm::normalize(-camFwdAxis);
                     listenerUp  = glm::normalize(camUpAxis);
+                }
+            }
+            // Audio Listener: si la escena tiene uno (y está habilitado), manda
+            // él y no la cámara — misma convención de ejes y mismo guard de base
+            // degenerada que el bloque de arriba. Sin listener se queda lo que
+            // resolvió la cámara, que es el fallback.
+            if (DonTopo::GameObject* lis = scene.findAudioListener())
+            {
+                const glm::vec3 lisFwdAxis = glm::vec3(lis->worldTransform[2]);
+                const glm::vec3 lisUpAxis  = glm::vec3(lis->worldTransform[1]);
+                if (lis->getAudioListener()->getEnabled() &&
+                    glm::length(lisFwdAxis) >= 1e-6f && glm::length(lisUpAxis) >= 1e-6f)
+                {
+                    listenerPos = glm::vec3(lis->worldTransform[3]);
+                    listenerFwd = glm::normalize(-lisFwdAxis);
+                    listenerUp  = glm::normalize(lisUpAxis);
                 }
             }
             audio.update(listenerPos, listenerFwd, listenerUp);

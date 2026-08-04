@@ -49,6 +49,14 @@ namespace DonTopo
             GameObject* findCamera();
             const GameObject* findCamera() const;
 
+            // Misma idea pa el invariante "como mucho un Audio Listener por
+            // escena": lo consultan el gate de "Add" de Properties, el gate de
+            // reproducción al entrar en Play y la resolución del listener que se
+            // le pasa a AudioManager::update cada frame. Pre-orden desde la raíz
+            // (gana el primero), nullptr si no hay ninguno.
+            GameObject* findAudioListener();
+            const GameObject* findAudioListener() const;
+
             // Avisos de la última operación que tuvo que corregir la escena
             // cargada (campos corruptos, varias cámaras, clips que ya no casan).
             // Core no conoce el Log Console: EditorUI los vuelca tras cargar. Se
@@ -164,6 +172,11 @@ namespace DonTopo
             // abre igual, con aviso, en vez de fallar la carga o quedar en un
             // estado donde findCamera() decide sobre una escena incoherente.
             void pruneExtraCameras();
+
+            // Lo mismo pal Audio Listener: se queda con el primero en pre-orden
+            // y le quita el componente al resto, dejando un aviso por objeto
+            // descartado. El GameObject se conserva.
+            void pruneExtraAudioListeners();
 
             // Colapsa los avisos repetidos de m_warnings in situ, conservando el
             // orden de primera aparición y añadiendo " (xN)" a los que salieron

@@ -293,7 +293,28 @@ int main()
 
             if (renderer.isPlaying())
             {
-                audio.update(camera.getPos(), camera.getFront(), camera.getUp());
+                // Audio Listener: si la escena tiene uno (y está habilitado), el
+                // audio 3D se oye desde ÉL y no desde la cámara del editor.
+                // Posición = columna 3 del worldTransform, forward = -Z local,
+                // up = +Y local (misma convención que la cámara y el runtime);
+                // con la base degenerada (escala 0) se cae a la cámara en vez de
+                // colar un NaN en FMOD, del que ya no se recupera.
+                glm::vec3 listenerPos = camera.getPos();
+                glm::vec3 listenerFwd = camera.getFront();
+                glm::vec3 listenerUp  = camera.getUp();
+                if (DonTopo::GameObject* lis = scene.findAudioListener())
+                {
+                    const glm::vec3 lisFwdAxis = glm::vec3(lis->worldTransform[2]);
+                    const glm::vec3 lisUpAxis  = glm::vec3(lis->worldTransform[1]);
+                    if (lis->getAudioListener()->getEnabled() &&
+                        glm::length(lisFwdAxis) >= 1e-6f && glm::length(lisUpAxis) >= 1e-6f)
+                    {
+                        listenerPos = glm::vec3(lis->worldTransform[3]);
+                        listenerFwd = glm::normalize(-lisFwdAxis);
+                        listenerUp  = glm::normalize(lisUpAxis);
+                    }
+                }
+                audio.update(listenerPos, listenerFwd, listenerUp);
                 physics.stepSimulation(dt);
                 scene.update(dt, physics);
                 scriptManager.update(dt);

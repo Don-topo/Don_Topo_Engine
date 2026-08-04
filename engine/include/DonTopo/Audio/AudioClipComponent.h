@@ -32,11 +32,20 @@ public:
     void setVolume(float volume);   // [0, 1]
     void setPitch (float pitch);    // [0.5, 2]
 
+    // Atenuación del clip 3D: a menos de minDistance del listener suena a
+    // volumen pleno, y de ahí hasta maxDistance va cayendo. Como volumen y
+    // pitch, no recargan el sonido. No hacen nada por FMOD si el clip es 2D
+    // (el valor sí se guarda: al marcar is3D se aplica sin perder lo editado).
+    void setMinDistance(float d);   // [0.1, 50]
+    void setMaxDistance(float d);   // [1, 1000], nunca por debajo de min
+
     bool getLoop() const  { return m_loop; }
     bool getIs3D() const  { return m_is3D; }
     const std::string& getPath() const { return m_path; }
     float getVolume() const { return m_volume; }
     float getPitch()  const { return m_pitch;  }
+    float getMinDistance() const { return m_minDistance; }
+    float getMaxDistance() const { return m_maxDistance; }
 
     // Si está activo, Play Mode llama play() automáticamente al entrar
     // (ver EditorUI::drawToolbar). No afecta al FMOD_MODE, no hace falta reload.
@@ -48,6 +57,10 @@ public:
 
 private:
     void reload();
+    // Empuja min/max al sonido FMOD. La llaman los dos setters, el constructor
+    // y reload(): un sonido recién creado arranca con el min/max por defecto de
+    // FMOD (1 / 10000), no con el de este componente.
+    void applyDistances();
 
     AudioManager* m_audio;
     std::string   m_path;
@@ -57,6 +70,10 @@ private:
     bool          m_playOnAwake = false;
     float         m_volume = 1.0f;
     float         m_pitch  = 1.0f;
+    // Defaults a la escala de este repo (primitivas de 50 unidades), no a los
+    // de FMOD.
+    float         m_minDistance = 1.0f;
+    float         m_maxDistance = 100.0f;
 };
 
 } // namespace DonTopo

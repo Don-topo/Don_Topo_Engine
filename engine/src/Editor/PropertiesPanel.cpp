@@ -360,6 +360,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
             drawReflectionProbeSection(ctx);
             drawLightSection(ctx);
             drawAudioClipSection(ctx);
+            drawAudioListenerSection(ctx);
             drawScriptsSection(ctx);
             drawAddComponentButton(ctx);
         }
@@ -544,6 +545,37 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
     }
 
     ImGui::TreePop();
+}
+
+void PropertiesPanel::drawAudioListenerSection(EditorContext& ctx)
+{
+    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    if (!ctx.selected->hasAudioListener()) return;
+
+    ImGui::Separator();
+    bool sectionOpen = ImGui::TreeNodeEx("Audio Listener",
+                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+    const bool removeClicked = ImGui::SmallButton("x##audioListener");
+
+    if (sectionOpen)
+    {
+        ImGui::TextWrapped("Desde aquí se oye el audio 3D de la escena. La posición y la "
+                           "orientación salen del Transform de este objeto (mira hacia su "
+                           "-Z local), no de campos propios. Como mucho uno por escena.");
+
+        bool enabled = ctx.selected->getAudioListener()->getEnabled();
+        if (ImGui::Checkbox("Enabled", &enabled))
+            ctx.selected->getAudioListener()->setEnabled(enabled);
+
+        ImGui::TreePop();
+    }
+
+    if (removeClicked)
+    {
+        ctx.selected->setAudioListener(nullptr);
+        ctx.pushLog("Componente Audio Listener quitado de '" + ctx.selected->name + "'");
+    }
 }
 
 void PropertiesPanel::drawLightSection(EditorContext& ctx)
@@ -1716,8 +1748,12 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             // clip->getVolume()/getPitch().
             const float volumeBefore = clip->getVolume();
             const float pitchBefore  = clip->getPitch();
-            float volume = volumeBefore;
-            float pitch  = pitchBefore;
+            const float minDistBefore = clip->getMinDistance();
+            const float maxDistBefore = clip->getMaxDistance();
+            float volume  = volumeBefore;
+            float pitch   = pitchBefore;
+            float minDist = minDistBefore;
+            float maxDist = maxDistBefore;
 
             const uint64_t clipOwnerId = ctx.selected->id;
             Scene* scene = ctx.scene;
@@ -1735,6 +1771,25 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             activated |= ImGui::IsItemActivated();
             committed |= ImGui::IsItemDeactivatedAfterEdit();
 
+            // Distancias de atenuación: solo tienen sentido en 3D (en 2D FMOD
+            // no atenúa por distancia), así que ni se dibujan con is3D
+            // desmarcado. El valor sigue guardado en el componente: al volver a
+            // marcar is3D reaparece lo que se hubiera editado.
+            if (is3D)
+            {
+                if (ImGui::SliderFloat("Min distance", &minDist, 0.1f, 50.0f, "%.2f"))
+                    clip->setMinDistance(minDist);
+                activated |= ImGui::IsItemActivated();
+                committed |= ImGui::IsItemDeactivatedAfterEdit();
+
+                if (ImGui::SliderFloat("Max distance", &maxDist, 1.0f, 1000.0f, "%.1f"))
+                    clip->setMaxDistance(maxDist);
+                activated |= ImGui::IsItemActivated();
+                // El clamp de max >= min lo hace el propio setter del
+                // componente (no la UI), así que al soltar ya está aplicado.
+                committed |= ImGui::IsItemDeactivatedAfterEdit();
+            }
+
             // Sin gate por m_audioDragActive: solo un widget de ImGui puede
             // tener ActiveId a la vez, así que el gate no aporta nada salvo
             // un bug: IsItemDeactivatedAfterEdit() exige edición real, y un
@@ -1743,10 +1798,12 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             // la siguiente edición —incluso en otro GameObject— reutilizaría.
             if (activated)
             {
-                m_audioDragActive       = true;
-                m_audioDragBeforeVolume = volumeBefore;
-                m_audioDragBeforePitch  = pitchBefore;
-                m_audioDragOwnerId      = clipOwnerId;
+                m_audioDragActive            = true;
+                m_audioDragBeforeVolume      = volumeBefore;
+                m_audioDragBeforePitch       = pitchBefore;
+                m_audioDragBeforeMinDistance = minDistBefore;
+                m_audioDragBeforeMaxDistance = maxDistBefore;
+                m_audioDragOwnerId           = clipOwnerId;
             }
 
             // Guarda de propietario: el ActiveId de un slider de ImGui se
@@ -1760,11 +1817,15 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             if (committed && m_audioDragActive && m_audioDragOwnerId == clipOwnerId)
             {
                 m_audioDragActive = false;
-                const AudioClipState before{ m_audioDragBeforeVolume, m_audioDragBeforePitch };
-                const AudioClipState after { clip->getVolume(), clip->getPitch() };
+                const AudioClipState before{ m_audioDragBeforeVolume, m_audioDragBeforePitch,
+                                             m_audioDragBeforeMinDistance, m_audioDragBeforeMaxDistance };
+                const AudioClipState after { clip->getVolume(), clip->getPitch(),
+                                             clip->getMinDistance(), clip->getMaxDistance() };
 
                 if (!nearlyEqualF(before.volume, after.volume) ||
-                    !nearlyEqualF(before.pitch,  after.pitch))
+                    !nearlyEqualF(before.pitch,  after.pitch)  ||
+                    !nearlyEqualF(before.minDistance, after.minDistance) ||
+                    !nearlyEqualF(before.maxDistance, after.maxDistance))
                 {
                     // Resuelve el GameObject por id en cada aplicación, nunca
                     // captura el puntero: sobrevive a un undo de Delete que
@@ -1774,6 +1835,11 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                         if (!go || !go->hasAudioClip()) return;
                         go->getAudioClip()->setVolume(s.volume);
                         go->getAudioClip()->setPitch(s.pitch);
+                        // Max antes que min: los dos setters mantienen
+                        // min <= max entre ellos, y en ese orden el par
+                        // restaurado no se pisa a sí mismo.
+                        go->getAudioClip()->setMaxDistance(s.maxDistance);
+                        go->getAudioClip()->setMinDistance(s.minDistance);
                     };
                     if (ctx.scene)
                         ctx.undo->push(std::make_unique<PropertyCommand<AudioClipState>>(
@@ -2063,6 +2129,21 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         if (ImGui::Selectable("Audio Clip") && !alreadyHasAudio)
             m_audioClipAddRequestedFor = ctx.selected;
         ImGui::EndDisabled();
+
+        // Audio Listener: como mucho uno por escena, mismo criterio que la
+        // cámara — el gate pregunta a Scene::findAudioListener, no a un flag
+        // propio, y el existente no se toca (ni se borra ni se roba).
+        GameObject* existingListener = ctx.scene ? ctx.scene->findAudioListener() : nullptr;
+        ImGui::BeginDisabled(existingListener != nullptr);
+        if (ImGui::Selectable("Audio Listener") && !existingListener)
+        {
+            ctx.selected->setAudioListener(std::make_shared<AudioListenerComponent>());
+            ctx.pushLog("Componente Audio Listener añadido a '" + ctx.selected->name + "'");
+        }
+        ImGui::EndDisabled();
+        if (existingListener && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Ya hay un Audio Listener en la escena ('%s'): quítalo de ahí "
+                              "antes de poner otro", existingListener->name.c_str());
 
         // Cámara: como mucho una por escena, y el gate pregunta a la única
         // fuente de verdad (Scene::findCamera), no a un flag propio. Deshabilitado

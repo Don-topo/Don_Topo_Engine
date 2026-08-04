@@ -19,7 +19,8 @@ A Vulkan-based game engine written in C++20.
 - Normal maps + tangent space
 - Cubemap skybox (fullscreen quad, inverse view-projection)
 - Wireframe render mode
-- 3D spatial audio (FMOD): `AudioClipComponent` (loop, 3D/2D toggle, per-channel volume and pitch), non-blocking clip loading
+- 3D spatial audio (FMOD): `AudioClipComponent` (loop, 3D/2D toggle, per-channel volume and pitch, 3D min/max attenuation distances with viewport gizmo), non-blocking clip loading
+- **Audio Listener component**: one per scene — its GameObject transform is where the scene is heard from (position, `-Z` forward, `+Y` up), falling back to the camera when absent; a scene with no listener plays no clips and says so once in the log
 - Dockable ImGui editor with offscreen viewport
 - Scene graph (hierarchical transforms), GameObject hierarchy panel (create/delete/rename, drag-drop reorder)
 - Basic shapes menu (Cube/Sphere/Plane/Capsule), Content Browser (asset browsing, rename/delete)
@@ -138,7 +139,7 @@ Don_Topo_Engine/
 │   │   ├── Core/       # Engine loop, Window, Input, Scene, GameObject, Camera
 │   │   ├── Renderer/   # Vulkan device, meshes, materials, model loading, skybox, gizmos
 │   │   ├── Physics/    # PhysX integration, Rigidbody, Colliders/
-│   │   ├── Audio/      # FMOD wrapper, AudioClipComponent
+│   │   ├── Audio/      # FMOD wrapper, AudioClipComponent, AudioListenerComponent
 │   │   ├── Scripting/  # Lua/sol2 bindings, ScriptManager, syntax check
 │   │   ├── Editor/     # ImGui panels, undo/redo, game exporter  -> DonTopoEditor
 │   │   └── Files/      # Filesystem helpers

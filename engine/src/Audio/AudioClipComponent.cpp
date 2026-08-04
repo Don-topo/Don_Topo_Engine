@@ -13,6 +13,7 @@ AudioClipComponent::AudioClipComponent(AudioManager* audio, std::string path, in
     , m_is3D(is3D)
     , m_loop(loop)
 {
+    applyDistances();
 }
 
 AudioClipComponent::~AudioClipComponent()
@@ -75,11 +76,40 @@ void AudioClipComponent::setPitch(float pitch)
     if (m_audio) m_audio->setChannelPitch(m_soundId, m_pitch);
 }
 
+void AudioClipComponent::setMinDistance(float d)
+{
+    // Mismo razonamiento que setVolume con el NaN: se rechaza antes del clamp.
+    if (!std::isfinite(d)) return;
+    m_minDistance = std::clamp(d, 0.1f, 50.0f);
+    // El invariante min <= max vive aquí, no en la UI: un .scene editado a mano
+    // tampoco puede instalar una atenuación invertida.
+    if (m_maxDistance < m_minDistance) m_maxDistance = m_minDistance;
+    applyDistances();
+}
+
+void AudioClipComponent::setMaxDistance(float d)
+{
+    if (!std::isfinite(d)) return;
+    m_maxDistance = std::clamp(d, 1.0f, 1000.0f);
+    if (m_maxDistance < m_minDistance) m_minDistance = m_maxDistance;
+    applyDistances();
+}
+
+void AudioClipComponent::applyDistances()
+{
+    // El no-op en 2D lo decide AudioManager mirando el FMOD_MODE del sonido:
+    // así el valor guardado aquí no se pierde al alternar is3D.
+    if (m_audio) m_audio->setSound3DMinMaxDistance(m_soundId, m_minDistance, m_maxDistance);
+}
+
 void AudioClipComponent::reload()
 {
     if (!m_audio) return;
     m_audio->unloadSound(m_soundId);
     m_soundId = m_audio->loadSound(m_path, m_is3D, m_loop);
+    // El sonido nuevo arranca con el min/max por defecto de FMOD: hay que
+    // reescribirle el del componente (importa al pasar de 2D a 3D).
+    applyDistances();
 }
 
 } // namespace DonTopo
