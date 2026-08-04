@@ -12,6 +12,7 @@
 #include "DonTopo/Renderer/Renderer.h"
 #include <imgui.h>
 #include <algorithm>
+#include <cmath>
 
 namespace DonTopo {
 
@@ -137,6 +138,96 @@ void ViewportPanel::drawCameraGizmo(EditorContext& ctx)
     Gizmos::drawFrustum(viewProj, kCameraGizmoColor, /*depthZeroToOne=*/true);
 }
 
+void ViewportPanel::drawLightGizmos(EditorContext& ctx)
+{
+    // El flag del menú View manda: cada Gizmos::drawX ya lo mira por dentro,
+    // pero comprobarlo aquí se ahorra el recorrido entero de la escena.
+    if (!ctx.scene || !Gizmos::isEnabled())
+        return;
+
+    // Naranja: ni el amarillo de los colliders ni el cian de la cámara.
+    const glm::vec3 kLightColor(1.0f, 0.8f, 0.2f);
+
+    ctx.scene->traverse([&](GameObject* go) {
+        if (!go->hasLight()) return;
+        const LightComponent& lc = *go->getLight();
+
+        // Misma base que usa Scene::collectLights pa mandar la luz al shader:
+        // posición en la columna 3 y -Z local como dirección. Los ejes van
+        // NORMALIZADOS — el gizmo mide en unidades de mundo, así que la escala
+        // del GameObject no debe estirarlo (al revés que los colliders, que sí
+        // escalan con el objeto).
+        const glm::vec3 pos   = glm::vec3(go->worldTransform[3]);
+        glm::vec3 right = glm::vec3(go->worldTransform[0]);
+        glm::vec3 up    = glm::vec3(go->worldTransform[1]);
+        glm::vec3 fwd   = -glm::vec3(go->worldTransform[2]);
+        // Base degenerada (una escala a 0 desde Properties): normalize daría
+        // NaN y el vertex buffer del gizmo se llenaría de basura.
+        if (glm::length(right) < 1e-6f || glm::length(up) < 1e-6f || glm::length(fwd) < 1e-6f)
+        {
+            right = glm::vec3(1.0f, 0.0f, 0.0f);
+            up    = glm::vec3(0.0f, 0.0f, 1.0f);
+            fwd   = glm::vec3(0.0f, -1.0f, 0.0f);
+        }
+        right = glm::normalize(right);
+        up    = glm::normalize(up);
+        fwd   = glm::normalize(fwd);
+
+        glm::mat4 basis(1.0f);
+        basis[0] = glm::vec4(right, 0.0f);
+        basis[1] = glm::vec4(up,    0.0f);
+        basis[2] = glm::vec4(-fwd,  0.0f);
+        basis[3] = glm::vec4(pos,   1.0f);
+
+        switch (lc.getType())
+        {
+            case LightType::Point:
+                Gizmos::drawWireSphere(basis, glm::vec3(0.0f), lc.getRange(), kLightColor);
+                break;
+
+            case LightType::Spot:
+            {
+                Gizmos::drawWireSphere(basis, glm::vec3(0.0f), lc.getRange(), kLightColor);
+                // Cuatro generatrices del cono exterior (arriba/abajo/izquierda/
+                // derecha): con el ángulo del borde, que es donde el spot se
+                // apaga del todo.
+                const float a = glm::radians(lc.getOuterAngle());
+                const float c = std::cos(a);
+                const float s = std::sin(a);
+                const glm::vec3 dirs[4] = {
+                    fwd * c + right * s, fwd * c - right * s,
+                    fwd * c + up    * s, fwd * c - up    * s,
+                };
+                for (const glm::vec3& d : dirs)
+                    Gizmos::drawRay(pos, d, lc.getRange(), kLightColor);
+                break;
+            }
+
+            case LightType::Directional:
+                // No tiene alcance: la longitud es solo pa verla, no significa
+                // hasta dónde llega (llega a todas partes).
+                Gizmos::drawRay(pos, fwd, 500.0f, kLightColor);
+                break;
+
+            case LightType::Area:
+            {
+                // drawWirePlane dibuja una rejilla de 10x10 unidades en el plano
+                // XZ de la matriz que se le pase, así que la base va montada pa
+                // que ese plano sea el del rectángulo (su normal es fwd) y
+                // escalada a ancho x alto.
+                glm::mat4 rect(1.0f);
+                rect[0] = glm::vec4(right * (lc.getAreaWidth()  / 10.0f), 0.0f);
+                rect[1] = glm::vec4(fwd,                                  0.0f);
+                rect[2] = glm::vec4(up    * (lc.getAreaHeight() / 10.0f), 0.0f);
+                rect[3] = glm::vec4(pos,                                  1.0f);
+                Gizmos::drawWirePlane(rect, glm::vec3(0.0f), kLightColor);
+                Gizmos::drawRay(pos, fwd, lc.getAreaWidth() * 0.5f, kLightColor);
+                break;
+            }
+        }
+    });
+}
+
 void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, const glm::mat4& cameraView)
 {
     // Contorno del objeto seleccionado. Se fija SIEMPRE y sin condiciones, aquí
@@ -157,6 +248,9 @@ void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, co
     if (!ctx.editingLocked)
         drawSelectionGizmo(ctx);
     drawCameraGizmo(ctx);
+    // También en Play: la luz sigue siendo un objeto de escena que hay que
+    // poder situar mientras corre el juego.
+    drawLightGizmos(ctx);
 
     if (!m_open)
     {

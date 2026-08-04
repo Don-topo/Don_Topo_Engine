@@ -35,6 +35,10 @@ private:
     // objeto, y repetirlos aquí daría dos juegos de ejes superpuestos de
     // distinta longitud.
     void drawCameraGizmo(EditorContext& ctx);
+    // Gizmo de TODAS las luces de la escena (no solo la seleccionada), en
+    // edición y en Play. Vive en el editor a propósito: es lo que garantiza que
+    // no salga en el juego exportado, que no compila este panel.
+    void drawLightGizmos(EditorContext& ctx);
     // Longitud de eje proporcional al bbox local del mesh de node (mitad
     // del eje más largo); si node no tiene mesh (o el mesh no tiene
     // vértices), valor fijo de repliegue.

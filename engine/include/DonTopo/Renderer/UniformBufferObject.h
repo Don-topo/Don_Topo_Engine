@@ -3,7 +3,7 @@
 
 namespace DonTopo 
 {
-    constexpr int MAX_LIGHTS = 4;
+    constexpr int MAX_LIGHTS = 16;
 
     // Cascaded shadow maps: nº de cascadas del shadow map de la luz key. Tiene
     // que valer lo mismo aquí, en el array del bloque UBO de los shaders y en
@@ -11,10 +11,21 @@ namespace DonTopo
     // desplaza en silencio todo lo que va detrás de lightSpaceMatrix.
     constexpr int SHADOW_CASCADES = 4;
 
+    // Tipo de luz. Va en direction.w (float) y no en un int aparte: std140
+    // alinearia el int a 16 bytes igual, asi que ocupar el hueco que la vec4 ya
+    // tenia libre sale gratis.
+    enum class LightType : int { Point = 0, Spot = 1, Directional = 2, Area = 3 };
+
     struct Light
     {
-        glm::vec4 position {0.0f, 0.0f, 0.0f, 0.0f};    // w unused
+        glm::vec4 position {0.0f, 0.0f, 0.0f, 0.0f};    // xyz mundo, w unused
         glm::vec4 color { 1.0f, 1.0f, 1.0f, 1.0f};      // rgb = color, a = intensity
+        // xyz = direccion normalizada (-Z local del GameObject), w = tipo
+        // (0 point, 1 spot, 2 directional, 3 area).
+        glm::vec4 direction {0.0f, -1.0f, 0.0f, 0.0f};
+        // x = range, y = cos(angulo interior), z = cos(angulo exterior),
+        // w = ancho del area.
+        glm::vec4 params {10.0f, 0.9f, 0.7f, 1.0f};
     };
 
     struct UniformBufferObject
@@ -39,7 +50,7 @@ namespace DonTopo
     };
 
     /*
-        (Light ocupa 2×vec4=32 bytes, ya alineado a 16. 
+        (Light ocupa 4×vec4=64 bytes, ya alineado a 16.
         El int numLights tras el array necesita padding de 12 
         bytes para que el siguiente miembro—si lo hubiera—respete std140; 
         aquí es el último campo así que el padding solo asegura sizeof(UBO) 

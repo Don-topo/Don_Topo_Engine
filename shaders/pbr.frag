@@ -9,9 +9,11 @@ layout(location = 5) in vec3 fragBitangent;
 
 layout(location = 0) out vec4 outColor;
 
-#define MAX_LIGHTS 4
+#define MAX_LIGHTS 16
 #define SHADOW_CASCADES 4
-struct Light { vec4 position; vec4 color; };
+// Mismo layout que DonTopo::Light. direction.w = tipo (0 point, 1 spot,
+// 2 directional, 3 area); params = (range, cos interior, cos exterior, ancho).
+struct Light { vec4 position; vec4 color; vec4 direction; vec4 params; };
 
 layout(set = 0, binding = 0) uniform UBO {
     mat4  view;
@@ -51,6 +53,8 @@ struct FpLight
     vec4 posRadius;     // xyz mundo, w radio
     vec4 color;         // rgb color, a intensidad
     vec4 viewPosR;      // xyz view space, w radio (solo lo usa el culling)
+    vec4 direction;     // xyz dir, w tipo (0 point, 1 spot, 2 directional, 3 area)
+    vec4 params;        // range, cos interior, cos exterior, ancho
 };
 
 layout(std430, set = 2, binding = 0) readonly buffer FpParamsBuf {
@@ -89,6 +93,41 @@ layout(push_constant) uniform PushData {
 } push;
 
 const float PI = 3.14159265359;
+
+// Direccion hacia la luz y atenuacion segun su tipo. La copia identica de esta
+// funcion vive en triangle.frag: si las dos dejan de coincidir, el mismo objeto
+// se ve distinto segun tenga o no material PBR.
+float lightSample(int i, vec3 worldPos, out vec3 L)
+{
+    int type = int(ubo.lights[i].direction.w + 0.5);
+
+    // Directional: sin posicion ni atenuacion, solo direccion.
+    if (type == 2)
+    {
+        L = normalize(-ubo.lights[i].direction.xyz);
+        return 1.0;
+    }
+
+    vec3  toL  = ubo.lights[i].position.xyz - worldPos;
+    float dist = length(toL);
+    L = toL / max(dist, 1e-4);
+
+    // El area se aproxima como un point de radio = ancho/2.
+    float range = (type == 3) ? max(ubo.lights[i].params.w * 0.5, 1e-4)
+                              : max(ubo.lights[i].params.x, 1e-4);
+    // Misma ventana por radio que la rama Forward+ de abajo: fuera del rango da
+    // EXACTAMENTE 0, asi que descartar la luz no cambia el resultado.
+    float w   = clamp(1.0 - (dist * dist) / (range * range), 0.0, 1.0);
+    float att = w * w;
+
+    // Spot: cono suave entre el coseno interior y el exterior.
+    if (type == 1)
+    {
+        float cosA = dot(normalize(ubo.lights[i].direction.xyz), -L);
+        att *= smoothstep(ubo.lights[i].params.z, ubo.lights[i].params.y, cosA);
+    }
+    return att;
+}
 
 // Cascada que le toca a un fragmento por su profundidad en view space. Los
 // cortes vienen ya ordenados; el ultimo es el alcance total de las sombras.
@@ -165,15 +204,17 @@ void main()
     vec3  Lo        = vec3(0.0);
 
     // Forward+ apagado: el bucle de siempre sobre las MAX_LIGHTS del UBO, sin
-    // atenuacion por distancia y sin tocar un solo buffer del set 2. Va copiado
-    // y no factorizado con el de abajo a proposito: mientras sean las mismas
-    // operaciones en el mismo orden, la imagen es identica a la de antes de esta
-    // feature hasta el ultimo bit.
+    // tocar un solo buffer del set 2. Va copiado y no factorizado con el de
+    // abajo a proposito: son las mismas operaciones en el mismo orden, y la
+    // unica diferencia es de donde sale cada luz.
     if (fp.mode == 0u)
     {
     for (int i = 0; i < ubo.numLights; i++)
     {
-        vec3  L        = normalize(ubo.lights[i].position.xyz - fragWorldPos);
+        vec3  L   = vec3(0.0);
+        float att = lightSample(i, fragWorldPos, L);
+        if (att <= 0.0) continue;
+
         vec3  H        = normalize(V + L);
         vec3  radiance = ubo.lights[i].color.rgb * ubo.lights[i].color.a;
 
@@ -200,7 +241,7 @@ void main()
 
         float s = (i == 0) ? shadow : 1.0;
 
-        Lo += s * (kD * albedo / PI + D * G * F / (4.0 * NdotV * NdotL + 0.0001))
+        Lo += att * s * (kD * albedo / PI + D * G * F / (4.0 * NdotV * NdotL + 0.0001))
               * radiance * NdotL;
     }
     }
@@ -230,6 +271,7 @@ void main()
             uint  li = fpIndices[cellData.x + c];
             vec3  lp = fpLights[li].posRadius.xyz;
             float lr = fpLights[li].posRadius.w;
+            int   lt = int(fpLights[li].direction.w + 0.5);
 
             vec3  toL  = lp - fragWorldPos;
             float dist = length(toL);
@@ -240,7 +282,23 @@ void main()
             float w   = clamp(1.0 - (dist * dist) / (lr * lr), 0.0, 1.0);
             float att = w * w;
 
-            vec3  L        = toL / max(dist, 1e-4);
+            vec3  L = toL / max(dist, 1e-4);
+
+            // Directional: sin posicion ni atenuacion. Va aparte del radio de
+            // arriba porque el binning la mete en TODAS las celdas.
+            if (lt == 2)
+            {
+                L   = normalize(-fpLights[li].direction.xyz);
+                att = 1.0;
+            }
+            else if (lt == 1)
+            {
+                // Spot: mismo cono suave que lightSample().
+                float cosA = dot(normalize(fpLights[li].direction.xyz), -L);
+                att *= smoothstep(fpLights[li].params.z, fpLights[li].params.y, cosA);
+            }
+            if (att <= 0.0) continue;
+
             vec3  H        = normalize(V + L);
             vec3  radiance = fpLights[li].color.rgb * fpLights[li].color.a;
 

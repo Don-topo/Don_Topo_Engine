@@ -211,10 +211,17 @@ int main()
                 go->skinnedRenderIndex = renderer.addSkinnedMesh(*go->getSkinnedMesh());
         }
 
-        renderer.setLights({
-            { glm::vec4(0.0f, 500.0f, 300.0f, 1.0f),    glm::vec4(1.0f, 0.95f, 0.8f, 1.0f) },
+        // Luces por defecto: las que se usan cuando la escena abierta no tiene
+        // ni un LightComponent. Las escenas del repo son de antes de que
+        // existiera el componente y sin esto el editor abriría a oscuras; en
+        // cuanto la escena aporta UNA luz, estas desaparecen y manda la escena.
+        const std::vector<DonTopo::Light> defaultLights = {
+            { glm::vec4(0.0f, 500.0f, 300.0f, 1.0f),     glm::vec4(1.0f, 0.95f, 0.8f, 1.0f) },
             { glm::vec4(-300.0f, 200.0f, -200.0f, 1.0f), glm::vec4(0.4f, 0.5f, 1.0f, 0.8f) },
-        });
+        };
+        std::vector<DonTopo::Light> frameLights;
+        std::vector<float>          frameLightRadii;
+        renderer.setLights(defaultLights);
 
         struct AppCtx { DonTopo::Camera* cam; DonTopo::Renderer* rnd; DonTopo::EditorUI* ed; };
         AppCtx ctx{ &camera, &renderer, &editor };
@@ -357,6 +364,22 @@ int main()
                                            go->ssrEnabled ? go->ssrIntensity : 0.0f);
                 }
             });
+
+            // Luces de la escena, después del traverse: los worldTransform del
+            // frame ya están propagados y de ellos salen posición y dirección.
+            // Va por frame y no en un evento porque mover el GameObject de una
+            // luz tiene que moverla en el acto, igual que el transform de una
+            // malla.
+            if (scene.collectLights(frameLights, frameLightRadii) > 0)
+            {
+                renderer.setLights(frameLights);
+                renderer.setLightRadii(frameLightRadii);
+            }
+            else
+            {
+                renderer.setLights(defaultLights);
+                renderer.setLightRadii({});
+            }
 
             // --- Gizmos: demo de depuración visual (bbox, ray, frustum) ---
             // Los ejes ya no se dibujan fijos aquí: ViewportPanel::drawSelectionGizmo()

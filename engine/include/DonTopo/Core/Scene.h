@@ -91,6 +91,23 @@ namespace DonTopo
             GameObject* cloneGameObject(GameObject* src, GameObject* parent,
                                         PhysicsManager& physics, AudioManager& audio);
 
+            // Recolecta las luces de la escena en el formato que come el
+            // Renderer (setLights/setLightRadii). Pre-orden desde la raíz, y se
+            // queda con las primeras MAX_LIGHTS: el resto se descarta EN
+            // SILENCIO — es un tope del bloque UBO, no un error de la escena.
+            //
+            // La posición y la dirección salen del worldTransform de cada
+            // GameObject (columna 3 y -Z local), así que hay que llamarlo
+            // DESPUÉS de propagar los transforms del frame. Devuelve cuántos
+            // GameObject con luz había en total, que es lo que permite al caller
+            // distinguir "escena sin luces" de "escena con más de las que caben".
+            //
+            // Core no conoce el Renderer: los dos setters los llama el caller
+            // (una escena sin luces no tiene por qué dejar el viewport a
+            // oscuras, y esa decisión es de quien monta el frame).
+            size_t collectLights(std::vector<Light>& outLights,
+                                 std::vector<float>& outRadii) const;
+
             template <typename Fn>
             void traverse(Fn fn) { m_root.traverse(fn); }
 

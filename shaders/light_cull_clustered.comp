@@ -19,6 +19,8 @@ struct FpLight
     vec4 posRadius;     // xyz mundo, w radio
     vec4 color;         // rgb color, a intensidad
     vec4 viewPosR;      // xyz view space, w radio
+    vec4 direction;     // xyz dir, w tipo (0 point, 1 spot, 2 directional, 3 area)
+    vec4 params;        // range, cos interior, cos exterior, ancho
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer FpParamsBuf {
@@ -100,7 +102,9 @@ void main()
         float r = lights[i].viewPosR.w;
         vec3  q = clamp(p, bmin, bmax);
         vec3  d = p - q;
-        if (dot(d, d) <= r * r)
+        // Una directional no tiene posicion ni alcance: ilumina TODO, asi que
+        // entra en cada cluster sin pasar por el AABB.
+        if (int(lights[i].direction.w + 0.5) == 2 || dot(d, d) <= r * r)
         {
             total++;
             if (count < fp.maxPerCell)

@@ -25,6 +25,8 @@ struct FpLight
     vec4 posRadius;     // xyz mundo, w radio
     vec4 color;         // rgb color, a intensidad
     vec4 viewPosR;      // xyz view space, w radio
+    vec4 direction;     // xyz dir, w tipo (0 point, 1 spot, 2 directional, 3 area)
+    vec4 params;        // range, cos interior, cos exterior, ancho
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer FpParamsBuf {
@@ -127,9 +129,12 @@ void main()
         vec3  c  = lights[i].viewPosR.xyz;
         float r  = lights[i].viewPosR.w;
         float vd = -c.z;
-        bool inside = (vd + r >= fp.zNear) && (vd - r <= tileFar)
+        // Una directional no tiene posicion ni alcance: ilumina TODO, asi que
+        // entra en cada tile sin pasar por los planos.
+        bool inside = (int(lights[i].direction.w + 0.5) == 2)
+                   || ((vd + r >= fp.zNear) && (vd - r <= tileFar)
                    && (dot(n0, c) >= -r) && (dot(n1, c) >= -r)
-                   && (dot(n2, c) >= -r) && (dot(n3, c) >= -r);
+                   && (dot(n2, c) >= -r) && (dot(n3, c) >= -r));
         if (inside) atomicOr(s_mask[i >> 5u], 1u << (i & 31u));
     }
     barrier();

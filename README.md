@@ -9,6 +9,7 @@ A Vulkan-based game engine written in C++20.
 - **HDR bloom**: threshold with soft knee, mip chain of compute downsample/upsample passes, additive composition — `threshold`, `knee` and `intensity` are live editor sliders (see below)
 - **SSAO**: depth-only pre-pass + compute occlusion (16-sample hemisphere kernel, normals reconstructed from depth) and a blur, applied to the ambient term only; toggle plus `radius`/`bias`/`intensity`/`power` sliders (see below)
 - **Screen space reflections**: view-space ray march with binary refinement, added into the HDR target *before* bloom so reflections bloom and tonemap like everything else; enabled and weighted **per GameObject**, with a global switch and 5 sliders (see below)
+- **Light component**: any GameObject can be a light — `Point` / `Spot` / `Directional` / `Area`, several of each per scene (16 reach the shader), position and direction taken from its transform, with a direction gizmo in the editor (see below)
 - **Reflection probes**: placeable environment probes that capture the scene from their position into a cubemap and replace the global IBL for the objects inside their radius; baked on demand, never per frame (see below)
 - **Anti-aliasing**: `None` / `FXAA` / `SSAA` / `MSAA` / `TAA`, mutually exclusive and switchable at runtime from the View menu, each with its own resources rebuilt between frames
 - **Forward+ light culling**: `Off` / `Tiled` / `Clustered`, a compute pre-pass that bins lights into a screen grid so `pbr.frag` only iterates the ones that reach each pixel; `Off` records no commands and lights exactly as before
@@ -240,6 +241,47 @@ and the HDR image is left exactly as the scene pass produced it.
 Normals come from depth, not from an attachment, so the normal map's detail does not reach the
 reflection: polished metal with a normal map mirrors as if it were flat. And being screen-space,
 anything off-screen or hidden behind another object simply is not reflected.
+
+## Lights
+
+Any GameObject can be a light — **Properties → Add → Light**. The component holds only what
+the light *is* (type, colour, intensity and the parameters of its shape); **where it is and
+where it points come from the GameObject's transform**: position is the transform's
+translation, direction is its **local −Z**, exactly like the camera. Moving or rotating the
+object moves the light, and there is no second source of truth to keep in sync.
+
+| Type | What it uses | Falloff |
+| --- | --- | --- |
+| `Point` | `Range` | smooth window, exactly 0 at `Range` |
+| `Spot` | `Range`, `Inner`/`Outer Angle` | point falloff × `smoothstep` between the two cone angles |
+| `Directional` | nothing else | none — same intensity everywhere, position ignored |
+| `Area` | `Area Width`, `Area Height` | approximated as a point of radius `Width / 2` |
+
+Properties shows **only the fields the selected type uses** — no area size on a spot light.
+The hidden values stay in the component and in the `.scene`, so switching type and back loses
+nothing. `Inner` and `Outer Angle` drag each other so the cone can never invert, and the clamp
+lives in the component rather than in the UI, so a hand-edited scene cannot install a
+degenerate light either. Everything is serialised under a `light` block that older scenes
+simply don't have (they load unchanged).
+
+**Several lights of each type per scene.** `Scene::collectLights()` walks the tree in pre-order
+every frame and hands the renderer the first `MAX_LIGHTS` (16) it finds; the rest are dropped
+silently — that is a limit of the UBO block, not an error in the scene. The block grew from two
+`vec4` per light to four (`direction` carries the type in its `w`, `params` carries range, the
+two cosines and the area width), which is why the shaders that declare it were all touched: in
+std140 a struct that changes size shifts everything behind it.
+
+Under **Forward+** the same data reaches the culling compute shaders, with one special case: a
+`Directional` light has neither position nor range, so it is marked visible in *every* tile and
+cluster instead of being tested against the volume. The radius used for binning is the same
+reach the fragment shader uses (`Range`, or `Width / 2` for an area light) — if they differed, a
+light would pop off as it crossed a tile edge.
+
+In the editor an **orange gizmo** shows each light: a wire sphere of its range for `Point`,
+that sphere plus the four edge generatrices of the cone for `Spot`, a long ray for
+`Directional`, and a width × height grid with its normal for `Area`. It is drawn in edit mode
+*and* in Play, and it lives in the editor's viewport panel — which is why the exported game,
+that links no editor code, can never show it.
 
 ## Reflection Probes
 

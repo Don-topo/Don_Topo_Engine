@@ -9,9 +9,11 @@ layout(location = 5) in vec3 fragBitangent;
 
 layout(location = 0) out vec4 outColor;
 
-#define MAX_LIGHTS 4
+#define MAX_LIGHTS 16
 #define SHADOW_CASCADES 4
-struct Light { vec4 position; vec4 color; };
+// Mismo layout que DonTopo::Light. direction.w = tipo (0 point, 1 spot,
+// 2 directional, 3 area); params = (range, cos interior, cos exterior, ancho).
+struct Light { vec4 position; vec4 color; vec4 direction; vec4 params; };
 
 layout(set = 0, binding = 0) uniform UBO {
     mat4  view;
@@ -26,6 +28,41 @@ layout(set = 0, binding = 0) uniform UBO {
 layout(set = 0, binding = 1) uniform sampler2D texSampler;
 layout(set = 0, binding = 2) uniform sampler2D normalMap;
 layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadowMap;
+
+// Direccion hacia la luz y atenuacion segun su tipo. Identica a la de pbr.frag:
+// si las dos dejan de coincidir, el mismo objeto se ve distinto segun tenga o no
+// material PBR.
+float lightSample(int i, vec3 worldPos, out vec3 L)
+{
+    int type = int(ubo.lights[i].direction.w + 0.5);
+
+    // Directional: sin posicion ni atenuacion, solo direccion.
+    if (type == 2)
+    {
+        L = normalize(-ubo.lights[i].direction.xyz);
+        return 1.0;
+    }
+
+    vec3  toL  = ubo.lights[i].position.xyz - worldPos;
+    float dist = length(toL);
+    L = toL / max(dist, 1e-4);
+
+    // El area se aproxima como un point de radio = ancho/2.
+    float range = (type == 3) ? max(ubo.lights[i].params.w * 0.5, 1e-4)
+                              : max(ubo.lights[i].params.x, 1e-4);
+    // Misma ventana por radio que el binning de Forward+: fuera del rango da
+    // EXACTAMENTE 0, que es lo que permite descartar la luz sin que se note.
+    float w   = clamp(1.0 - (dist * dist) / (range * range), 0.0, 1.0);
+    float att = w * w;
+
+    // Spot: cono suave entre el coseno interior y el exterior.
+    if (type == 1)
+    {
+        float cosA = dot(normalize(ubo.lights[i].direction.xyz), -L);
+        att *= smoothstep(ubo.lights[i].params.z, ubo.lights[i].params.y, cosA);
+    }
+    return att;
+}
 
 // Misma seleccion y mismo PCF que pbr.frag; ver alli el porque de reproyectar
 // desde la posicion de mundo en vez de traerla del vertex shader.
@@ -67,14 +104,17 @@ void main()
 
     for (int i = 0; i < ubo.numLights; i++)
     {
-        vec3 lightDir   = normalize(ubo.lights[i].position.xyz - fragWorldPos);
+        vec3  lightDir  = vec3(0.0);
+        float att       = lightSample(i, fragWorldPos, lightDir);
+        if (att <= 0.0) continue;
+
         float diff      = max(dot(norm, lightDir), 0.0);
         vec3 reflDir    = reflect(-lightDir, norm);
         float spec      = pow(max(dot(viewDir, reflDir), 0.0), 32.0);
         vec3 lightColor = ubo.lights[i].color.rgb * ubo.lights[i].color.a;
 
         float s = (i == 0) ? shadow : 1.0; // solo key light proyecta sombra
-        result += s * (diff * texColor * lightColor + 0.3 * spec * lightColor);
+        result += att * s * (diff * texColor * lightColor + 0.3 * spec * lightColor);
     }
 
     outColor = vec4(result, 1.0);

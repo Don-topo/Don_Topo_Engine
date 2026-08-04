@@ -15,6 +15,7 @@
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/ReflectionProbeComponent.h"
+#include "DonTopo/Core/LightComponent.h"
 
 namespace DonTopo
 {
@@ -120,6 +121,14 @@ namespace DonTopo
             const std::shared_ptr<ReflectionProbeComponent>& getReflectionProbe() const { return m_reflectionProbe; }
             bool hasReflectionProbe() const { return m_reflectionProbe != nullptr; }
 
+            // Luz. Tampoco tiene invariante de unicidad: caben varias del mismo
+            // tipo por escena, y es Scene quien se queda con las primeras
+            // MAX_LIGHTS al recolectarlas para el Renderer. La posición y la
+            // dirección salen del worldTransform, no del componente.
+            void setLight(std::shared_ptr<LightComponent> l) { m_light = std::move(l); }
+            const std::shared_ptr<LightComponent>& getLight() const { return m_light; }
+            bool hasLight() const { return m_light != nullptr; }
+
             // Scripts Lua — a diferencia del resto de slots, vector: se
             // permiten varios scripts por GameObject (incluso repetidos).
             void addScript(std::unique_ptr<ScriptComponent> script);
@@ -169,6 +178,7 @@ namespace DonTopo
             std::shared_ptr<CameraComponent> m_cameraComponent;
             std::shared_ptr<AnimatorComponent> m_animator;
             std::shared_ptr<ReflectionProbeComponent> m_reflectionProbe;
+            std::shared_ptr<LightComponent> m_light;
             std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
     };
 }

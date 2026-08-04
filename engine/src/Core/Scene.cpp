@@ -37,6 +37,8 @@ namespace
     using DonTopo::CameraComponent;
     using DonTopo::AnimatorComponent;
     using DonTopo::ReflectionProbeComponent;
+    using DonTopo::LightComponent;
+    using DonTopo::LightType;
 
     // Forward declarations: animatorFromJson (más abajo) necesita estos
     // lectores tolerantes a JSON corrupto (definidos junto a jsonToMat4/
@@ -66,6 +68,25 @@ namespace
     nlohmann::json vec3ToJson(const glm::vec3& v)
     {
         return nlohmann::json::array({ v.x, v.y, v.z });
+    }
+
+    const char* lightTypeToStr(LightType t)
+    {
+        switch (t)
+        {
+            case LightType::Spot:        return "spot";
+            case LightType::Directional: return "directional";
+            case LightType::Area:        return "area";
+            default:                     return "point";
+        }
+    }
+
+    LightType lightTypeFromStr(const std::string& s)
+    {
+        if (s == "spot")        return LightType::Spot;
+        if (s == "directional") return LightType::Directional;
+        if (s == "area")        return LightType::Area;
+        return LightType::Point;    // valor desconocido -> point
     }
 
     // Los enums van como string y no como int: legible en un .scene editado a
@@ -360,6 +381,21 @@ namespace
             const auto& p = node.getReflectionProbe();
             j["reflectionProbe"] = { {"radius", p->getRadius()},
                                      {"intensity", p->getIntensity()} };
+        }
+        if (node.hasLight())
+        {
+            // Ni posición ni dirección: las dos salen del worldTransform, que ya
+            // se serializa como localTransform del nodo. "type" como string y no
+            // como int del enum, mismo criterio que el "mode" de la cámara.
+            const auto& l = node.getLight();
+            j["light"] = { {"type", lightTypeToStr(l->getType())},
+                           {"color", vec3ToJson(l->getColor())},
+                           {"intensity", l->getIntensity()},
+                           {"range", l->getRange()},
+                           {"innerAngle", l->getInnerAngle()},
+                           {"outerAngle", l->getOuterAngle()},
+                           {"areaWidth", l->getAreaWidth()},
+                           {"areaHeight", l->getAreaHeight()} };
         }
         if (node.hasAnimator())
             j["animator"] = animatorToJson(*node.getAnimator());
@@ -965,6 +1001,28 @@ namespace
             node->setReflectionProbe(probe);
         }
         // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
+        // y cargan igual (version sigue en 1). Valor de "type" desconocido ->
+        // point.
+        if (j.contains("light"))
+        {
+            const auto& l = j["light"];
+            const std::string ctx = "light de '" + node->name + "'";
+            auto light = std::make_shared<LightComponent>();
+            light->setType(lightTypeFromStr(l.value("type", std::string("point"))));
+            light->setColor(jsonToVec3(l.value("color", nlohmann::json::array()),
+                                       warnings, ctx + ".color", glm::vec3(1.0f)));
+            light->setIntensity(readFloat(l, "intensity", 1.0f, warnings, ctx));
+            light->setRange(readFloat(l, "range", 300.0f, warnings, ctx));
+            // Los dos setters mantienen inner <= outer entre ellos, así que un
+            // .scene con el cono invertido acaba con un cono válido pase lo que
+            // pase (el segundo setter arrastra al primero).
+            light->setOuterAngle(readFloat(l, "outerAngle", 30.0f, warnings, ctx));
+            light->setInnerAngle(readFloat(l, "innerAngle", 20.0f, warnings, ctx));
+            light->setAreaWidth(readFloat(l, "areaWidth", 100.0f, warnings, ctx));
+            light->setAreaHeight(readFloat(l, "areaHeight", 100.0f, warnings, ctx));
+            node->setLight(light);
+        }
+        // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
         // y cargan igual (version sigue en 1).
         if (j.contains("animator"))
         {
@@ -1182,6 +1240,59 @@ namespace DonTopo
                                   "' (se conserva la de '" + first->name + "')");
             n->setCameraComponent(nullptr);
         });
+    }
+
+    size_t Scene::collectLights(std::vector<Light>& outLights, std::vector<float>& outRadii) const
+    {
+        outLights.clear();
+        outRadii.clear();
+        size_t total = 0;
+
+        const_cast<GameObject&>(m_root).traverse([&](GameObject* n) {
+            if (!n->hasLight()) return;
+            total++;
+            if (outLights.size() >= (size_t)MAX_LIGHTS) return;
+
+            const auto& lc = *n->getLight();
+
+            // Posición y dirección salen del transform, igual que la cámara: la
+            // columna 3 es la posición de mundo y -Z local es hacia dónde mira.
+            // Una escala 0 en el eje Z (el editor deja ponerla desde Properties)
+            // dejaría la dirección en NaN, así que ahí se cae a -Y en vez de
+            // propagar el NaN hasta el shader — mismo criterio que el listener
+            // de audio del runtime.
+            const glm::vec3 pos     = glm::vec3(n->worldTransform[3]);
+            const glm::vec3 zAxis   = glm::vec3(n->worldTransform[2]);
+            const glm::vec3 forward = (glm::length(zAxis) >= 1e-6f)
+                                          ? glm::normalize(-zAxis)
+                                          : glm::vec3(0.0f, -1.0f, 0.0f);
+
+            Light l{};
+            l.position  = glm::vec4(pos, 1.0f);
+            l.color     = glm::vec4(lc.getColor(), lc.getIntensity());
+            l.direction = glm::vec4(forward, (float)(int)lc.getType());
+            // Los ángulos viajan ya en coseno: el shader compara contra el
+            // coseno del ángulo con el eje, no vuelve a llamar a cos() por
+            // fragmento.
+            l.params = glm::vec4(lc.getRange(),
+                                 std::cos(glm::radians(lc.getInnerAngle())),
+                                 std::cos(glm::radians(lc.getOuterAngle())),
+                                 lc.getAreaWidth());
+
+            // El radio del binning de Forward+ tiene que ser EL MISMO alcance
+            // que usa el fragment shader, o una luz se apagaría de golpe al
+            // cruzar el borde de un tile. El area se aproxima como un point de
+            // radio ancho/2, igual que allí; la directional no se culea por
+            // radio (entra en todas las celdas), así que el suyo da igual.
+            const float radius = (lc.getType() == LightType::Area)
+                                     ? lc.getAreaWidth() * 0.5f
+                                     : lc.getRange();
+
+            outLights.push_back(l);
+            outRadii.push_back(radius);
+        });
+
+        return total;
     }
 
     nlohmann::json Scene::subtreeToJson(const GameObject* node) const

@@ -3123,6 +3123,8 @@ namespace DonTopo {
                     dst[i].posRadius = glm::vec4(wp, radius);
                     dst[i].color     = m_lights[i].color;
                     dst[i].viewPosR  = glm::vec4(vp, radius);
+                    dst[i].direction = m_lights[i].direction;
+                    dst[i].params    = m_lights[i].params;
                 }
             }
         }

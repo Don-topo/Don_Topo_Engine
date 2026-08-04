@@ -54,6 +54,9 @@ private:
     // Reflection Probe. SÍ es un componente y SÍ pasa por "Add": la sección se
     // esconde hasta que el usuario lo añade, igual que los colliders.
     void drawReflectionProbeSection(EditorContext& ctx);
+    // Light. También componente y también tras "Add": la sección no existe
+    // hasta que el usuario la añade, igual que los colliders.
+    void drawLightSection(EditorContext& ctx);
     void drawMeshDialog(EditorContext& ctx);
     void drawAudioClipSection(EditorContext& ctx);
     void drawAudioClipDialog(EditorContext& ctx);
@@ -90,6 +93,17 @@ private:
     float    m_probeDragBefore   = 0.0f;
     // Cuál de los dos sliders está en drag (el "before" es un único float).
     bool     m_probeDragIsRadius = false;
+
+    // Light – drag de los sliders (intensity/range/ángulos/tamaño del area).
+    // Mismo patrón que la sonda, pero con el campo en drag identificado por su
+    // etiqueta: son seis sliders y un bool no llega.
+    bool        m_lightDragActive  = false;
+    uint64_t    m_lightDragOwnerId = 0;
+    float       m_lightDragBefore  = 0.0f;
+    const char* m_lightDragField   = nullptr;
+    // El "before" del color no cabe en el float de arriba: ColorEdit3 abre un
+    // popup y el commit llega frames después de tocarlo.
+    glm::vec3   m_lightColorBefore {1.0f};
 
     // Box Collider – mismo patrón de cache que Transform: persiste entre
     // frames para que los DragFloat acumulen el delta del arrastre, y se

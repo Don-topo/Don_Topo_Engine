@@ -1264,8 +1264,14 @@ namespace DonTopo {
                 glm::vec4 posRadius;
                 glm::vec4 color;
                 glm::vec4 viewPosR;
+                // Los dos campos de tipo de DonTopo::Light. Sin ellos el
+                // fragment shader no sabria evaluar un spot ni una directional
+                // por la ruta Forward+, y el binning no podria dejar la
+                // directional siempre visible.
+                glm::vec4 direction;    // xyz dir, w tipo
+                glm::vec4 params;       // range, cos interior, cos exterior, ancho
             };
-            static_assert(sizeof(FpLightGpu) == 48, "FpLightGpu debe seguir en 48 bytes: es el stride std430 del array de luces");
+            static_assert(sizeof(FpLightGpu) == 80, "FpLightGpu debe seguir en 80 bytes: es el stride std430 del array de luces");
             // Push constant compartida por los dos .comp.
             struct FpPush {
                 float    p00;

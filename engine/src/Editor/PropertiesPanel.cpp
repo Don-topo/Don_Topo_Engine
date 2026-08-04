@@ -358,6 +358,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
             drawMeshSection(ctx);
             drawSsrSection(ctx);
             drawReflectionProbeSection(ctx);
+            drawLightSection(ctx);
             drawAudioClipSection(ctx);
             drawScriptsSection(ctx);
             drawAddComponentButton(ctx);
@@ -538,6 +539,159 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
         ctx.selected->setReflectionProbe(nullptr);
         m_probeDragActive = false;
         ctx.pushLog("Componente Reflection Probe quitado de '" + ctx.selected->name + "'");
+        ImGui::TreePop();
+        return;
+    }
+
+    ImGui::TreePop();
+}
+
+void PropertiesPanel::drawLightSection(EditorContext& ctx)
+{
+    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    if (!ctx.selected->hasLight()) return;
+
+    if (!ImGui::TreeNodeEx("Light", ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen))
+        return;
+
+    Scene*            scene = ctx.scene;
+    const uint64_t    id    = ctx.selected->id;
+    LightComponent*   light = ctx.selected->getLight().get();
+    const std::string owner = ctx.selected->name;
+
+    ImGui::TextWrapped("La posición y la dirección salen del Transform de este objeto "
+                       "(la luz apunta hacia su -Z local), no de campos propios.");
+
+    const char* kTypes[] = { "Point", "Spot", "Directional", "Area" };
+    int typeIdx = (int)light->getType();
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+    if (ImGui::Combo("Type", &typeIdx, kTypes, IM_ARRAYSIZE(kTypes)))
+    {
+        const int before = (int)light->getType();
+        light->setType((LightType)typeIdx);
+        ctx.pushLog("Tipo de la luz de '" + owner + "' cambiado a " + kTypes[typeIdx]);
+        if (scene && ctx.undo)
+        {
+            ctx.undo->push(std::make_unique<PropertyCommand<int>>(
+                "Tipo de la luz de '" + owner + "'", before, typeIdx,
+                [scene, id](const int& v) {
+                    if (GameObject* go = scene->findById(id))
+                        if (go->hasLight()) go->getLight()->setType((LightType)v);
+                }));
+        }
+    }
+
+    // El "before" se lee ANTES de dibujar: el picker cambia el valor en el mismo
+    // frame del click y releerlo después daría ya el nuevo.
+    const glm::vec3 beforeColor = light->getColor();
+    glm::vec3       color       = beforeColor;
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+    if (ImGui::ColorEdit3("Color", &color.x))
+        light->setColor(color);
+    if (ImGui::IsItemActivated())
+    {
+        m_lightColorBefore = beforeColor;
+        m_lightDragOwnerId = id;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit() && m_lightDragOwnerId == id)
+    {
+        const glm::vec3 after = light->getColor();
+        ctx.pushLog("Color de la luz de '" + owner + "' cambiado");
+        if (scene && ctx.undo)
+        {
+            ctx.undo->push(std::make_unique<PropertyCommand<glm::vec3>>(
+                "Color de la luz de '" + owner + "'", m_lightColorBefore, after,
+                [scene, id](const glm::vec3& v) {
+                    if (GameObject* go = scene->findById(id))
+                        if (go->hasLight()) go->getLight()->setColor(v);
+                }));
+        }
+    }
+
+    // Los seis escalares comparten el mismo baile de undo (leer el "before"
+    // antes de dibujar, abrir sesión en IsItemActivated, commitear en
+    // IsItemDeactivatedAfterEdit), así que va una vez aquí y no seis veces.
+    // El campo en drag se identifica por su etiqueta: un bool no llega pa seis.
+    auto floatSlider = [&](const char* label, float lo, float hi, const char* fmt,
+                           float (LightComponent::*getter)() const,
+                           void (LightComponent::*setter)(float))
+    {
+        const float before = (light->*getter)();
+        float       v      = before;
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+        if (ImGui::SliderFloat(label, &v, lo, hi, fmt))
+            (light->*setter)(v);
+        if (ImGui::IsItemActivated())
+        {
+            m_lightDragActive  = true;
+            m_lightDragOwnerId = id;
+            m_lightDragBefore  = before;
+            m_lightDragField   = label;
+        }
+        // El id del dueño y la etiqueta evitan aplicar un "before" ajeno si el
+        // drag se interrumpió sin commit (p.ej. un Ctrl+Z a mitad de arrastre).
+        if (ImGui::IsItemDeactivatedAfterEdit() && m_lightDragActive &&
+            m_lightDragOwnerId == id && m_lightDragField &&
+            std::strcmp(m_lightDragField, label) == 0)
+        {
+            m_lightDragActive = false;
+            const float after = (light->*getter)();
+            ctx.pushLog(std::string(label) + " de la luz de '" + owner + "' cambiado a " +
+                        std::to_string(after));
+            if (scene && ctx.undo)
+            {
+                ctx.undo->push(std::make_unique<PropertyCommand<float>>(
+                    std::string(label) + " de la luz de '" + owner + "'", m_lightDragBefore, after,
+                    [scene, id, setter](const float& x) {
+                        if (GameObject* go = scene->findById(id))
+                            if (go->hasLight()) ((*go->getLight()).*setter)(x);
+                    }));
+            }
+        }
+    };
+
+    floatSlider("Intensity", 0.0f, 20.0f, "%.2f",
+                &LightComponent::getIntensity, &LightComponent::setIntensity);
+
+    // Cada tipo enseña SOLO lo que usa: un cono no tiene tamaño de área y una
+    // directional no tiene alcance. Los campos que no salen siguen guardados en
+    // el componente (y en el .scene), así que cambiar de tipo y volver no
+    // pierde nada — se ocultan, no se resetean.
+    switch (light->getType())
+    {
+        case LightType::Point:
+            floatSlider("Range", 1.0f, 5000.0f, "%.0f",
+                        &LightComponent::getRange, &LightComponent::setRange);
+            break;
+
+        case LightType::Spot:
+            floatSlider("Range", 1.0f, 5000.0f, "%.0f",
+                        &LightComponent::getRange, &LightComponent::setRange);
+            floatSlider("Inner Angle", 0.0f, 89.9f, "%.1f",
+                        &LightComponent::getInnerAngle, &LightComponent::setInnerAngle);
+            floatSlider("Outer Angle", 0.0f, 89.9f, "%.1f",
+                        &LightComponent::getOuterAngle, &LightComponent::setOuterAngle);
+            ImGui::TextDisabled("El interior nunca pasa del exterior: se arrastran entre ellos.");
+            break;
+
+        case LightType::Directional:
+            ImGui::TextDisabled("Sin alcance: ilumina toda la escena en la dirección del -Z local.");
+            break;
+
+        case LightType::Area:
+            floatSlider("Area Width", 1.0f, 5000.0f, "%.0f",
+                        &LightComponent::getAreaWidth, &LightComponent::setAreaWidth);
+            floatSlider("Area Height", 1.0f, 5000.0f, "%.0f",
+                        &LightComponent::getAreaHeight, &LightComponent::setAreaHeight);
+            ImGui::TextDisabled("El alcance sale del ancho (Width/2), no del Range.");
+            break;
+    }
+
+    if (ImGui::Button("Remove Light"))
+    {
+        ctx.selected->setLight(nullptr);
+        m_lightDragActive = false;
+        ctx.pushLog("Componente Light quitado de '" + owner + "'");
         ImGui::TreePop();
         return;
     }
@@ -1943,6 +2097,18 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         {
             ctx.selected->setReflectionProbe(std::make_shared<ReflectionProbeComponent>());
             ctx.pushLog("Componente Reflection Probe añadido a '" + ctx.selected->name + "'");
+        }
+        ImGui::EndDisabled();
+
+        // Light: sin invariante de unicidad por escena (caben varias del mismo
+        // tipo), así que el único gate es no añadir dos al mismo objeto. Las
+        // primeras MAX_LIGHTS en orden de escena son las que llegan al shader.
+        const bool alreadyHasLight = ctx.selected->hasLight();
+        ImGui::BeginDisabled(alreadyHasLight);
+        if (ImGui::Selectable("Light") && !alreadyHasLight)
+        {
+            ctx.selected->setLight(std::make_shared<LightComponent>());
+            ctx.pushLog("Componente Light añadido a '" + ctx.selected->name + "'");
         }
         ImGui::EndDisabled();
 
