@@ -3049,7 +3049,7 @@ namespace DonTopo {
         // Con TAA sale jittereada; en cualquier otro modo es fc.proj tal cual.
         ubo.proj = m_taaJitteredProj;
         ubo.numLights        = std::min((int)m_lights.size(), MAX_LIGHTS);
-        ubo.ambientIntensity = m_ambientIntensity;
+        ubo.ambientIntensity = m_ambientEnabled ? m_ambientIntensity : 0.0f;
         for(int i = 0; i < ubo.numLights; i++)
         {
             ubo.lights[i] = m_lights[i];

@@ -162,6 +162,10 @@ namespace DonTopo {
             // sin recomputar nada.
             void  setAmbientIntensity(float v) { m_ambientIntensity = v; }
             float ambientIntensity() const     { return m_ambientIntensity; }
+            // Interruptor global: apagarlo NO destruye el IBL precomputado, solo
+            // manda 0 en el UBO. Se puede encender otra vez sin recomputar nada.
+            void  setAmbientEnabled(bool v) { m_ambientEnabled = v; }
+            bool  ambientEnabled() const    { return m_ambientEnabled; }
 
             // ── Reflection probes ──────────────────────────────────────────
             // La UI solo ENCOLA: el bake ocurre al principio de drawFrame, que
@@ -1383,6 +1387,7 @@ namespace DonTopo {
             Camera                          m_camera;
             std::vector<Light>              m_lights;
             float                           m_ambientIntensity{1.0f};
+            bool                            m_ambientEnabled{true};
             
             // Shadow Map (cascadas)
             static constexpr uint32_t       SHADOW_SIZE                         = 2048;

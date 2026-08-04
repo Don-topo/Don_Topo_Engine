@@ -280,10 +280,18 @@ void EditorUI::drawMenuBar()
             // escena, asi que al reabrir el editor vuelve a 1.0.
             if (m_renderer)
             {
+                bool ambientOn = m_renderer->ambientEnabled();
+                if (ImGui::Checkbox("Ambient (IBL)", &ambientOn))
+                    m_renderer->setAmbientEnabled(ambientOn);
+
+                // Igual que en el bloom: el slider no se oculta con el ambiente
+                // apagado, se deja desactivado.
+                ImGui::BeginDisabled(!ambientOn);
                 float ambient = m_renderer->ambientIntensity();
                 ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("Ambient (IBL)", &ambient, 0.0f, 3.0f, "%.2f"))
+                if (ImGui::SliderFloat("Ambient intensity", &ambient, 0.0f, 3.0f, "%.2f"))
                     m_renderer->setAmbientIntensity(ambient);
+                ImGui::EndDisabled();
 
                 // Reflection probes: control GLOBAL (rehornear la escena entera).
                 // El radio y la intensidad de cada sonda van en su Properties,
