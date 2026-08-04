@@ -408,6 +408,51 @@ void EditorUI::drawMenuBar()
 
                 ImGui::Text("SSR GPU: %.3f ms", m_renderer->ssrGpuMs());
 
+                // Niebla volumetrica: interruptor global, ajuste de sesion (no
+                // se serializa) igual que el bloom, el SSAO y el SSR. Apagada
+                // deja la imagen exactamente como antes de la feature y el coste
+                // GPU a cero.
+                ImGui::Separator();
+                bool fog = m_renderer->fogEnabled();
+                if (ImGui::Checkbox("Volumetric Fog", &fog))
+                    m_renderer->setFogEnabled(fog);
+
+                // Como en el SSAO y el SSR: los sliders no se ocultan con el
+                // efecto apagado, se dejan desactivados.
+                ImGui::BeginDisabled(!fog);
+                float fogDensity = m_renderer->fogDensity();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("Fog density", &fogDensity, 0.0f, 0.5f, "%.3f"))
+                    m_renderer->setFogDensity(fogDensity);
+
+                float fogFalloff = m_renderer->fogHeightFalloff();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("Fog height falloff", &fogFalloff, 0.0f, 0.5f, "%.3f"))
+                    m_renderer->setFogHeightFalloff(fogFalloff);
+
+                float fogBase = m_renderer->fogBaseHeight();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("Fog base height", &fogBase, -50.0f, 50.0f, "%.1f"))
+                    m_renderer->setFogBaseHeight(fogBase);
+
+                float fogG = m_renderer->fogAnisotropy();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("Fog anisotropy", &fogG, -0.95f, 0.95f, "%.2f"))
+                    m_renderer->setFogAnisotropy(fogG);
+
+                int fogSteps = m_renderer->fogSteps();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderInt("Fog steps", &fogSteps, 8, 128))
+                    m_renderer->setFogSteps(fogSteps);
+
+                glm::vec3 scatter = m_renderer->fogScatter();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::ColorEdit3("Fog scattering", &scatter.x))
+                    m_renderer->setFogScatter(scatter);
+                ImGui::EndDisabled();
+
+                ImGui::Text("Fog GPU: %.3f ms", m_renderer->fogGpuMs());
+
                 // Anti-aliasing. Modos EXCLUYENTES, cada uno con sus propios
                 // parametros. Mismo criterio que el resto: ajuste de sesion, no
                 // se serializa. En None no se graba ni un comando de mas y la

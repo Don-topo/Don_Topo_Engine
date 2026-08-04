@@ -1,0 +1,158 @@
+#version 450
+
+// Niebla volumetrica exponencial por altura con in-scattering de la luz key.
+// Corre DESPUES del pass de escena y del SSR y ANTES del bloom, para que la
+// contribucion florezca y tonemapee como el resto de la imagen.
+
+#define SHADOW_CASCADES 4
+#define PI 3.14159265359
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// El HDR offscreen (rgba16f) se lee y se reescribe IN SITU: cada invocacion
+// toca solo su propio pixel, asi que no hay carrera como la que obliga al SSR a
+// pasar por una imagen intermedia. El alfa NO es opacidad -pbr.frag guarda ahi
+// la fuerza de SSR del objeto- y por eso se copia tal cual.
+layout(set = 0, binding = 0, rgba16f) uniform image2D hdrImage;
+// Profundidad de TODA la escena, del mismo depth pre-pass que alimenta al SSAO
+// y al SSR. NEAREST: D32_SFLOAT no tiene garantizado el filtrado lineal.
+layout(set = 0, binding = 1) uniform sampler2D depthTex;
+// El bloque UBO del frame, declarado SOLO hasta cascadeSplits: los miembros que
+// van detras (lights, viewPos, numLights, ambientIntensity) no se usan aqui y
+// omitirlos no mueve ni un offset, porque std140 los coloca todos DESPUES. De
+// aqui salen la matriz de vista (profundidad en view space para elegir cascada)
+// y las cuatro matrices de la sombra de la luz key.
+layout(set = 0, binding = 2) uniform UBO {
+    mat4 view;
+    mat4 proj;
+    mat4 lightSpaceMatrix[SHADOW_CASCADES];
+    vec4 cascadeSplits;
+} ubo;
+layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadowMap;
+
+// Propia de este pipeline, igual que SsrPush y SsaoPush: el bloque UBO esta
+// declarado en 6 shaders y meterle un miembro desplazaria en silencio todo lo
+// de detras por std140. 128 bytes exactos, el minimo que Vulkan garantiza.
+layout(push_constant) uniform FogPush {
+    // inverse(proj * view) con la proyeccion EFECTIVA del frame (Y-flip de
+    // Vulkan ya dentro), la misma con la que se grabo el depth.
+    mat4 invViewProj;
+    vec4 camPosDensity;      // xyz = camara en mundo, w = densidad base
+    vec4 lightDirFalloff;    // xyz = direccion de la luz key (de la luz hacia
+                             // la escena), w = caida por altura
+    vec4 scatterBaseHeight;  // rgb = color de scattering YA multiplicado por el
+                             // color e intensidad de la luz key, a = altura de
+                             // referencia de la densidad
+    vec4 gStepsRes;          // x = anisotropia HG, y = pasos, zw = resolucion
+} push;
+
+// Cascada que le toca a un punto por su profundidad en view space, con el mismo
+// criterio que pbr.frag: los cortes vienen ordenados y el ultimo es el alcance
+// total. -1 = mas alla, no hay mapa que muestrear.
+int selectCascade(float viewDepth)
+{
+    for (int i = 0; i < SHADOW_CASCADES; i++)
+        if (viewDepth <= ubo.cascadeSplits[i]) return i;
+    return -1;
+}
+
+// Un solo tap, sin el PCF 3x3 de pbr.frag: aqui se muestrea N veces por pixel
+// (una por paso de marcha) y el ruido que deja un tap unico lo disuelve el
+// propio acumulado mas el dither.
+float shadowAt(vec3 worldPos)
+{
+    float viewDepth = -(ubo.view * vec4(worldPos, 1.0)).z;
+    int   cascade   = selectCascade(viewDepth);
+    if (cascade < 0) return 1.0;
+
+    vec4 lightSpacePos = ubo.lightSpaceMatrix[cascade] * vec4(worldPos, 1.0);
+    vec3 p = lightSpacePos.xyz / lightSpacePos.w;
+    p.xy   = p.xy * 0.5 + 0.5;
+    if (p.z > 1.0 || p.z < 0.0) return 1.0;
+    return texture(shadowMap, vec4(p.xy, float(cascade), p.z));
+}
+
+// Henyey-Greenstein. g > 0 = scattering hacia delante: halo alrededor de la
+// luz cuando se mira hacia ella.
+float phaseHG(float cosT, float g)
+{
+    float g2    = g * g;
+    float denom = 1.0 + g2 - 2.0 * g * cosT;
+    return (1.0 - g2) / (4.0 * PI * pow(max(denom, 1e-4), 1.5));
+}
+
+// Interleaved gradient noise: desplaza el primer paso de cada pixel una
+// fraccion distinta del paso. Sin esto la marcha con pocos pasos deja anillos
+// concentricos visibles (banding) en vez de niebla.
+float dither(vec2 px)
+{
+    return fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));
+}
+
+void main()
+{
+    ivec2 px   = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(hdrImage);
+    if (px.x >= size.x || px.y >= size.y) return;
+
+    vec2 uv = (vec2(px) + 0.5) / max(push.gStepsRes.zw, vec2(1.0));
+
+    // Punto final de la marcha: la superficie que hay en ese pixel. En el cielo
+    // (depth = 1) sale el plano lejano, que es lo correcto para una niebla de
+    // altura: el horizonte tambien se cubre.
+    float d    = texture(depthTex, uv).r;
+    vec4  clip = vec4(uv * 2.0 - 1.0, d, 1.0);
+    vec4  wpos = push.invViewProj * clip;
+    if (abs(wpos.w) < 1e-9) return;
+    vec3 endPos = wpos.xyz / wpos.w;
+
+    vec3  camPos  = push.camPosDensity.xyz;
+    vec3  seg     = endPos - camPos;
+    float rayLen  = length(seg);
+    if (rayLen < 1e-4) return;
+    vec3 rayDir = seg / rayLen;
+
+    float density     = push.camPosDensity.w;
+    vec3  lightDir    = push.lightDirFalloff.xyz;
+    float falloff     = push.lightDirFalloff.w;
+    vec3  scatterCol  = push.scatterBaseHeight.rgb;
+    float baseHeight  = push.scatterBaseHeight.a;
+    float g           = push.gStepsRes.x;
+    int   steps       = max(int(push.gStepsRes.y), 1);
+
+    // Angulo de scattering: la luz se propaga a lo largo de lightDir y sale
+    // hacia la camara, o sea en -rayDir. cos(theta) = dot(-rayDir, lightDir)
+    // cambiado de signo por la doble negacion.
+    float phase = phaseHG(-dot(rayDir, lightDir), clamp(g, -0.95, 0.95));
+
+    float stepLen = rayLen / float(steps);
+    float offset  = dither(vec2(px));
+
+    float transmittance = 1.0;
+    vec3  scattered     = vec3(0.0);
+
+    for (int i = 0; i < steps; i++)
+    {
+        vec3 p = camPos + rayDir * ((float(i) + offset) * stepLen);
+
+        // Exponencial por altura. El exponente se acota: por debajo de la
+        // altura de referencia crece sin limite y una camara muy baja daria
+        // inf * 0 = NaN en el acumulado.
+        float dens = density * exp(clamp(-(p.y - baseHeight) * falloff, -20.0, 20.0));
+        if (dens <= 0.0) continue;
+
+        // Beer-Lambert en el tramo, y la energia que se absorbe es exactamente
+        // la que puede dispersarse hacia la camara.
+        float stepTrans = exp(-dens * stepLen);
+        float absorbed  = 1.0 - stepTrans;
+
+        scattered     += transmittance * absorbed * scatterCol * phase * shadowAt(p);
+        transmittance *= stepTrans;
+
+        // Ya no llega nada de detras: el resto de la marcha no cambia el pixel.
+        if (transmittance < 1e-3) break;
+    }
+
+    vec4 hdr = imageLoad(hdrImage, px);
+    imageStore(hdrImage, px, vec4(hdr.rgb * transmittance + scattered, hdr.a));
+}

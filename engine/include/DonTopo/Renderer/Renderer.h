@@ -260,6 +260,28 @@ namespace DonTopo {
             // ya lo contabiliza ssaoGpuMs y aqui no se suma dos veces).
             float ssrGpuMs() const           { return m_ssrGpuMs; }
 
+            // Niebla volumetrica: exponencial por altura con in-scattering de
+            // la luz key. Interruptor global; apagado no graba ni un comando y
+            // la imagen sale identica. Los parametros viajan por push constant
+            // propia (FogPush), no por el UBO.
+            void  setFogEnabled(bool v)         { m_fogEnabled = v; }
+            bool  fogEnabled() const            { return m_fogEnabled; }
+            void  setFogDensity(float v)        { m_fogDensity = v; }
+            float fogDensity() const            { return m_fogDensity; }
+            void  setFogHeightFalloff(float v)  { m_fogHeightFalloff = v; }
+            float fogHeightFalloff() const      { return m_fogHeightFalloff; }
+            void  setFogBaseHeight(float v)     { m_fogBaseHeight = v; }
+            float fogBaseHeight() const         { return m_fogBaseHeight; }
+            void  setFogScatter(const glm::vec3& v) { m_fogScatter = v; }
+            const glm::vec3& fogScatter() const { return m_fogScatter; }
+            void  setFogAnisotropy(float v)     { m_fogAnisotropy = v; }
+            float fogAnisotropy() const         { return m_fogAnisotropy; }
+            void  setFogSteps(int v)            { m_fogSteps = v; }
+            int   fogSteps() const              { return m_fogSteps; }
+            // Coste GPU del dispatch de niebla en ms. 0 si esta apagada o el
+            // dispositivo no soporta timestamps.
+            float fogGpuMs() const              { return m_fogGpuMs; }
+
             // ── Anti-aliasing ────────────────────────────────────────────────
             // Modos EXCLUYENTES: solo uno activo a la vez. None deja el frame
             // exactamente como antes de la feature (ni un comando de mas).
@@ -689,6 +711,17 @@ namespace DonTopo {
             // en falso no se graba ni un dispatch (ni se calcula multiplicando
             // por cero), asi que el coste GPU cae a cero.
             bool ssrActive() const;
+            // Niebla volumetrica. Mismo reparto que el SSR: el pipeline una
+            // sola vez, los descriptor sets con el swapchain (referencian
+            // m_hdrView y m_ssaoDepthView, que se recrean con el).
+            void createFogPipelines();
+            void createFogSets();
+            void destroyFogSets();
+            // Un solo dispatch que reescribe el HDR in situ. Va DESPUES del
+            // pass de escena y del SSR -necesita el color ya iluminado y con
+            // los reflejos sumados- y ANTES del bloom, para que la niebla
+            // florezca y pase por el tonemap como el resto de la imagen.
+            void recordFogPass(VkCommandBuffer cmd, const glm::mat4& view, const glm::mat4& proj);
             // Un solo write del binding 7 sobre `set`. La comparten
             // allocateObjectDescriptorSet, la ruta skinned y el refresh de arriba.
             void writeSsaoBinding(VkDescriptorSet set, int frameIndex);
@@ -1047,6 +1080,40 @@ namespace DonTopo {
             bool                            m_ssrStampedPrepass                 = false;
             float                           m_ssrGpuMs                          = 0.0f;
             uint32_t                        m_ssrMeasuredFrames                 = 0;
+
+            // ── Niebla volumetrica ───────────────────────────────────────────
+            // Un solo pipeline y un set por frame: HDR como storage (se lee y
+            // se reescribe in situ), la profundidad del pre-pass, el UBO del
+            // frame (matrices de cascada) y el shadow map de la luz key.
+            VkDescriptorSetLayout           m_fogDescLayout                     = VK_NULL_HANDLE;
+            VkDescriptorPool                m_fogDescPool                       = VK_NULL_HANDLE;
+            VkPipelineLayout                m_fogPipelineLayout                 = VK_NULL_HANDLE;
+            VkPipeline                      m_fogPipeline                       = VK_NULL_HANDLE;
+            VkDescriptorSet                 m_fogSets[MAX_FRAMES]               = {};
+            // 128 bytes exactos -el minimo que Vulkan garantiza-: los mismos
+            // campos y en el mismo orden que el bloque de fog.comp.
+            struct FogPush {
+                glm::mat4 invViewProj;
+                glm::vec4 camPosDensity;
+                glm::vec4 lightDirFalloff;
+                glm::vec4 scatterBaseHeight;
+                glm::vec4 gStepsRes;
+            };
+            static_assert(sizeof(FogPush) == 128, "FogPush debe seguir en 128 bytes: fog.comp declara este layout");
+            bool                            m_fogEnabled                        = false;
+            float                           m_fogDensity                        = 0.02f;
+            float                           m_fogHeightFalloff                  = 0.02f;
+            float                           m_fogBaseHeight                     = 0.0f;
+            glm::vec3                       m_fogScatter                        {0.6f, 0.7f, 0.9f};
+            float                           m_fogAnisotropy                     = 0.6f;
+            int                             m_fogSteps                          = 32;
+            // Dos queries por frame que acotan el unico dispatch. El depth
+            // pre-pass NO entra aqui: ya lo miden el SSAO o el SSR cuando son
+            // ellos quienes lo piden.
+            VkQueryPool                     m_fogQueryPool                      = VK_NULL_HANDLE;
+            bool                            m_fogQueryPending[MAX_FRAMES]       = {};
+            float                           m_fogGpuMs                          = 0.0f;
+            uint32_t                        m_fogMeasuredFrames                 = 0;
 
             // ── Anti-aliasing ────────────────────────────────────────────────
             // Modo PEDIDO: lo que ha elegido el usuario y lo que devuelve

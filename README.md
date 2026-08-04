@@ -9,6 +9,7 @@ A Vulkan-based game engine written in C++20.
 - **HDR bloom**: threshold with soft knee, mip chain of compute downsample/upsample passes, additive composition — `threshold`, `knee` and `intensity` are live editor sliders (see below)
 - **SSAO**: depth-only pre-pass + compute occlusion (16-sample hemisphere kernel, normals reconstructed from depth) and a blur, applied to the ambient term only; toggle plus `radius`/`bias`/`intensity`/`power` sliders (see below)
 - **Screen space reflections**: view-space ray march with binary refinement, added into the HDR target *before* bloom so reflections bloom and tonemap like everything else; enabled and weighted **per GameObject**, with a global switch and 5 sliders (see below)
+- **Volumetric fog**: height-exponential fog ray-marched in a compute pass over the HDR target, with Henyey-Greenstein in-scattering from the key light and its cascaded shadows; global switch, off by default, and 6 sliders (see below)
 - **Light component**: any GameObject can be a light — `Point` / `Spot` / `Directional` / `Area`, several of each per scene (16 reach the shader), position and direction taken from its transform, with a direction gizmo in the editor (see below)
 - **Reflection probes**: placeable environment probes that capture the scene from their position into a cubemap and replace the global IBL for the objects inside their radius; baked on demand, never per frame (see below)
 - **Anti-aliasing**: `None` / `FXAA` / `SSAA` / `MSAA` / `TAA`, mutually exclusive and switchable at runtime from the View menu, each with its own resources rebuilt between frames
@@ -182,11 +183,12 @@ tonemapped with the rest — that is what lets a bright sky feed the bloom.
 
 ## Screen-Space Effects
 
-Two effects share one **depth-only pre-pass** that draws the whole scene into a sampled
+Several effects share one **depth-only pre-pass** that draws the whole scene into a sampled
 `D32_SFLOAT` image before the scene pass, with the same frustum culling and the same instanced
 batching as the real draw — occluding against geometry that is not actually drawn would be a
-visible artifact. It is recorded when SSAO **or** SSR needs it, and skipped entirely when neither
-does. Both effects reconstruct view-space position and a geometric normal from that depth alone
+visible artifact. It is recorded when SSAO, SSR, TAA, Forward+ tiled **or** the volumetric fog
+needs it, and skipped entirely when none does. SSAO and SSR reconstruct view-space position and a
+geometric normal from that depth alone
 (the normal comes from the smaller of the two depth slopes on each axis, so a pixel on a
 silhouette does not blend two surfaces), which is why neither needs a G-buffer, an extra
 attachment on the scene pass, or a new UBO member.
@@ -241,6 +243,39 @@ and the HDR image is left exactly as the scene pass produced it.
 Normals come from depth, not from an attachment, so the normal map's detail does not reach the
 reflection: polished metal with a normal map mirrors as if it were flat. And being screen-space,
 anything off-screen or hidden behind another object simply is not reflected.
+
+### Volumetric Fog
+
+A single compute dispatch (`fog.comp`) recorded **after** the scene pass and the SSR — it needs
+colour that is already lit and already has its reflections in — and **before** the bloom chain, so
+the in-scattering blooms and goes through ACES like everything else. Unlike SSR it rewrites
+`m_hdrImage` **in place**: every invocation touches only its own pixel, so there is no race and no
+intermediate image is needed. The alpha channel is copied untouched — it carries the object's SSR
+strength, not opacity.
+
+Each pixel reconstructs its world position from the pre-pass depth (sky included: at `depth = 1`
+that is the far plane, which is the right answer for height fog — the horizon fills in too) and
+marches `steps` samples between the camera and that point, each pixel offset by an interleaved
+gradient noise so few steps do not band into concentric rings. Density at a sample is
+`density · exp(-(y - baseHeight) · heightFalloff)`, transmittance follows Beer-Lambert per segment,
+and the energy each segment absorbs is exactly what can scatter towards the camera, weighted by a
+**Henyey-Greenstein** phase term (`anisotropy > 0` = forward scattering, the halo you see looking
+into the light) and by the **key light's cascaded shadow**, sampled with a single tap per step —
+the accumulation plus the dither dissolve the noise that one tap leaves, and `pbr.frag`'s 3×3 PCF
+would cost N times more here. That is what makes light shafts appear where geometry occludes the
+key light.
+
+The fog's parameters travel in a **128-byte push constant** of its own, never in the UBO — that
+block is declared by six shaders and one new member would silently shift everything behind it
+under `std140`. The key light's colour is folded into the scattering tint on the CPU because the
+push constant is already at the exact 128 bytes Vulkan guarantees. The shader binds the UBO
+declared only up to `cascadeSplits` (the members after it are laid out later, so omitting them
+moves no offset) to get the view matrix and the four cascade matrices.
+
+The **View** menu carries the global switch plus `density`, `height falloff`, `base height`,
+`anisotropy`, `steps` and the scattering colour, and reports the measured GPU cost. **Off by
+default**: with the switch off not a single dispatch, barrier or timestamp is recorded, `Fog GPU`
+reads `0.000 ms`, and the HDR image is left exactly as the scene pass and the SSR produced it.
 
 ## Lights
 
