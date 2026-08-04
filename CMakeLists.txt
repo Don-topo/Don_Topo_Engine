@@ -49,8 +49,10 @@ endif()
 FetchContent_Declare(
     stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
-    GIT_TAG        master
-    GIT_SHALLOW    TRUE
+    # Pineado a commit: con GIT_TAG de rama, cualquier configure re-descarga la
+    # dependencia y deja los .obj propios compilados contra headers viejos.
+    GIT_TAG        2c980bb59875b0d32144a71867fbdebb2f77cd20
+    GIT_SHALLOW    FALSE
 )
 FetchContent_MakeAvailable(stb)
 
@@ -71,11 +73,14 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(assimp)
 
 # ImGui — docking branch (DockSpace + editor UI over Vulkan/GLFW)
+# Pineado al commit de la rama docking en 2026-08-04 (v1.93.0 WIP): seguir la
+# rama hacía que un configure trajera una versión nueva y el editor abortara en
+# IMGUI_CHECKVERSION() contra los .obj propios sin recompilar.
 FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG        docking
-    GIT_SHALLOW    TRUE
+    GIT_TAG        11bd4e7731dbd8745a9eccacdaac837dd0d2a38b
+    GIT_SHALLOW    FALSE
 )
 FetchContent_MakeAvailable(imgui)
 
@@ -100,8 +105,8 @@ target_compile_features(imgui_backend PUBLIC cxx_std_17)
 FetchContent_Declare(
     ImGuiFileDialog
     GIT_REPOSITORY https://github.com/aiekick/ImGuiFileDialog.git
-    GIT_TAG        master
-    GIT_SHALLOW    TRUE
+    GIT_TAG        d0e97b2adc3d3452d72c750c7305dc0291acd052
+    GIT_SHALLOW    FALSE
 )
 FetchContent_GetProperties(ImGuiFileDialog)
 if(NOT imguifiledialog_POPULATED)
@@ -123,8 +128,8 @@ target_compile_features(imgui_filedialog PUBLIC cxx_std_17)
 FetchContent_Declare(
     ImGuizmo
     GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
-    GIT_TAG        master
-    GIT_SHALLOW    TRUE
+    GIT_TAG        5ab7676402ace03cdf930b2d972f59c7d03c6fa8
+    GIT_SHALLOW    FALSE
 )
 FetchContent_GetProperties(ImGuizmo)
 if(NOT imguizmo_POPULATED)
@@ -146,8 +151,8 @@ target_compile_features(imguizmo PUBLIC cxx_std_17)
 FetchContent_Declare(
     ImGuiColorTextEdit
     GIT_REPOSITORY https://github.com/BalazsJako/ImGuiColorTextEdit.git
-    GIT_TAG        master
-    GIT_SHALLOW    TRUE
+    GIT_TAG        ca2f9f1462e3b60e56351bc466acda448c5ea50d
+    GIT_SHALLOW    FALSE
 )
 FetchContent_GetProperties(ImGuiColorTextEdit)
 if(NOT imguicolortextedit_POPULATED)
@@ -169,8 +174,8 @@ target_compile_features(imgui_texteditor PUBLIC cxx_std_17)
 FetchContent_Declare(
     ImGuiNodeEditor
     GIT_REPOSITORY https://github.com/thedmd/imgui-node-editor.git
-    GIT_TAG        master
-    GIT_SHALLOW    TRUE
+    GIT_TAG        021aa0ea4da13fed864bafb2a92d4c5205076866
+    GIT_SHALLOW    FALSE
 )
 FetchContent_GetProperties(ImGuiNodeEditor)
 if(NOT imguinodeeditor_POPULATED)
