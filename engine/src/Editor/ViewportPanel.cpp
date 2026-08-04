@@ -11,10 +11,147 @@
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
 #include "DonTopo/Renderer/Renderer.h"
 #include <imgui.h>
+#include <ImGuizmo.h>
+#include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace DonTopo {
+
+namespace {
+
+// Bbox LOCAL del mesh de go, el mismo cálculo por vértices que ya usan
+// selectionAxisScale/focusSelected. false si go no tiene malla o la malla está
+// vacía: esos objetos no entran en el picking.
+//
+// Un SkinnedMesh deja Mesh::vertices VACÍO —su geometría vive en
+// skinnedVertices—, así que hay que mirar ahí o los personajes animados no se
+// podrían picar. Es la pose de bind: la animación la aplica el compute de
+// skinning en GPU y aquí no hay pose evaluada, igual que el culling de skinned
+// del Renderer, que también usa un bound de bind pose.
+bool localBounds(GameObject* go, glm::vec3& bMin, glm::vec3& bMax)
+{
+    if (!go->hasMesh())
+        return false;
+
+    if (const SkinnedMesh* skinned = go->getSkinnedMesh())
+    {
+        const auto& sv = skinned->skinnedVertices;
+        if (sv.empty())
+            return false;
+
+        bMin = glm::vec3(sv[0].position);
+        bMax = glm::vec3(sv[0].position);
+        for (const auto& v : sv)
+        {
+            bMin = glm::min(bMin, glm::vec3(v.position));
+            bMax = glm::max(bMax, glm::vec3(v.position));
+        }
+        return true;
+    }
+
+    const auto& vertices = go->getMesh()->vertices;
+    if (vertices.empty())
+        return false;
+
+    bMin = vertices[0].pos;
+    bMax = vertices[0].pos;
+    for (const auto& v : vertices)
+    {
+        bMin = glm::min(bMin, v.pos);
+        bMax = glm::max(bMax, v.pos);
+    }
+    return true;
+}
+
+// Esfera envolvente en mundo a partir del bbox local, escalada por la escala
+// máxima del worldTransform (el radio no puede depender del eje, así que manda
+// la mayor). Es SOLO el descarte rápido del picking: para una malla plana y
+// enorme —el suelo— la esfera es gigante y se traga a la cámara, así que quien
+// decide el impacto es rayAabbLocal, no esta.
+void worldBoundingSphere(GameObject* go, const glm::vec3& bMin, const glm::vec3& bMax,
+                         glm::vec3& center, float& radius)
+{
+    const glm::vec3 localCenter = (bMin + bMax) * 0.5f;
+    const float     localRadius = glm::length(bMax - localCenter);
+
+    const glm::vec3 worldScale(
+        glm::length(glm::vec3(go->worldTransform[0])),
+        glm::length(glm::vec3(go->worldTransform[1])),
+        glm::length(glm::vec3(go->worldTransform[2])));
+    const float maxWorldScale = glm::max(worldScale.x, glm::max(worldScale.y, worldScale.z));
+
+    center = glm::vec3(go->worldTransform * glm::vec4(localCenter, 1.0f));
+    radius = localRadius * maxWorldScale;
+}
+
+// Corte rayo/AABB en el espacio LOCAL del objeto (el rayo se lleva allí con la
+// inversa del worldTransform), que en mundo es la caja orientada del objeto.
+// Devuelve el punto de entrada en MUNDO: con escalas distintas por eje el t
+// local no es distancia, así que la comparación entre objetos se hace fuera,
+// con la distancia real a la cámara. La cara de entrada se ignora si la cámara
+// está dentro (t < 0 en el eje de entrada): entonces el impacto es el origen.
+bool rayAabbLocal(const glm::mat4& world, const glm::vec3& bMin, const glm::vec3& bMax,
+                  const glm::vec3& origin, const glm::vec3& dir, glm::vec3& hitWorld)
+{
+    const glm::mat4 inv = glm::inverse(world);
+    const glm::vec3 o   = glm::vec3(inv * glm::vec4(origin, 1.0f));
+    const glm::vec3 d   = glm::vec3(inv * glm::vec4(dir, 0.0f));
+
+    float tEnter = -std::numeric_limits<float>::infinity();
+    float tExit  =  std::numeric_limits<float>::infinity();
+
+    for (int i = 0; i < 3; ++i)
+    {
+        if (std::fabs(d[i]) < 1e-8f)
+        {
+            // Rayo paralelo a este par de planos: o está dentro de la franja o
+            // no corta nunca.
+            if (o[i] < bMin[i] || o[i] > bMax[i])
+                return false;
+            continue;
+        }
+        float t1 = (bMin[i] - o[i]) / d[i];
+        float t2 = (bMax[i] - o[i]) / d[i];
+        if (t1 > t2) std::swap(t1, t2);
+        tEnter = glm::max(tEnter, t1);
+        tExit  = glm::min(tExit,  t2);
+        if (tEnter > tExit)
+            return false;
+    }
+
+    if (tExit < 0.0f)
+        return false; // la caja entera queda detrás de la cámara
+
+    const float t = tEnter >= 0.0f ? tEnter : 0.0f; // cámara dentro de la caja
+    hitWorld = glm::vec3(world * glm::vec4(o + d * t, 1.0f));
+    return true;
+}
+
+// Corte rayo/esfera. dir NORMALIZADA, así que t sale en unidades de mundo y se
+// puede comparar entre objetos. Con la cámara dentro de la esfera devuelve
+// t = 0 (impacto en el propio origen): el objeto que envuelve a la cámara es
+// el más cercano posible, no uno detrás de ella.
+bool raySphere(const glm::vec3& origin, const glm::vec3& dir,
+               const glm::vec3& center, float radius, float& t)
+{
+    const glm::vec3 oc = origin - center;
+    const float b = glm::dot(oc, dir);
+    const float c = glm::dot(oc, oc) - radius * radius;
+    const float disc = b * b - c;
+    if (disc < 0.0f)
+        return false;
+
+    const float s  = std::sqrt(disc);
+    const float t0 = -b - s;
+    const float t1 = -b + s;
+    if (t0 >= 0.0f) { t = t0;   return true; }
+    if (t1 >= 0.0f) { t = 0.0f; return true; }
+    return false; // la esfera entera queda detrás de la cámara
+}
+
+} // namespace
 
 float ViewportPanel::selectionAxisScale(GameObject* node) const
 {
@@ -260,6 +397,94 @@ void ViewportPanel::drawLightGizmos(EditorContext& ctx)
     });
 }
 
+GameObject* ViewportPanel::pickObject(EditorContext& ctx, const glm::mat4& cameraView,
+                                      const glm::vec2& mousePx, const glm::vec2& imageSize) const
+{
+    if (!ctx.scene || imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return nullptr;
+
+    // Aspect del render target, el mismo que usa el Renderer para armar la
+    // proyección del frame (y que ya usa drawCameraGizmo); si el panel es lo
+    // que dicta ese tamaño, coincide con imageSize.
+    const float aspect = ctx.renderer ? ctx.renderer->viewportAspect()
+                                      : imageSize.x / imageSize.y;
+
+    // Cámara del frame, igual que Renderer::currentFrameCamera: en Play manda
+    // el CameraComponent de la escena (su projectionMatrix ya trae el Y-flip de
+    // Vulkan y z=[0,1]); en edición, la de vuelo del editor, cuya proyección es
+    // 45° fijos + Y-flip. El near/far del editor sale de un estado privado del
+    // Renderer, pero la DIRECCIÓN del rayo que pasa por un píxel no depende de
+    // los planos, solo de fov/aspect/Y-flip: por eso aquí valen unos genéricos.
+    glm::mat4 view = cameraView;
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 1000.0f);
+    proj[1][1] *= -1.0f; // Vulkan Y flip, igual que el Renderer
+    if (ctx.isPlaying)
+    {
+        if (GameObject* cam = ctx.scene->findCamera())
+        {
+            view = CameraComponent::viewFromWorld(cam->worldTransform);
+            proj = cam->getCameraComponent()->projectionMatrix(aspect);
+        }
+    }
+
+    // NDC del ratón dentro de la IMAGEN. Con el Y-flip dentro de la proyección,
+    // y = -1 es el borde SUPERIOR de la imagen, que es justo el sentido en el
+    // que crece el píxel del ratón: nada que invertir aquí.
+    const float ndcX = (mousePx.x / imageSize.x) * 2.0f - 1.0f;
+    const float ndcY = (mousePx.y / imageSize.y) * 2.0f - 1.0f;
+
+    const glm::mat4 invViewProj = glm::inverse(proj * view);
+    // z=1 es el plano lejano en las dos convenciones de profundidad (ZO de
+    // CameraComponent y [-1,1] de la proyección del editor), así que este punto
+    // vale para ambas sin reconstruir nada a mano.
+    const glm::vec4 farH = invViewProj * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+    if (std::fabs(farH.w) < 1e-9f)
+        return nullptr;
+
+    // El origen es la posición real de la cámara (inversa de la view), no el
+    // punto del plano cercano: así t es distancia a la cámara y comparar t
+    // entre objetos ordena de verdad por cercanía.
+    const glm::mat4 invView = glm::inverse(view);
+    const glm::vec3 origin  = glm::vec3(invView[3]);
+    const glm::vec3 target  = glm::vec3(farH) / farH.w;
+    const glm::vec3 delta   = target - origin;
+    if (glm::length(delta) < 1e-6f)
+        return nullptr;
+    const glm::vec3 dir = glm::normalize(delta);
+
+    GameObject* best     = nullptr;
+    float       bestDist = 0.0f;
+    // Pre-orden: GameObject::traverse visita el nodo y luego sus hijos. Entre
+    // dos impactos gana el más cercano a la cámara; el empate lo rompe el
+    // primero visitado.
+    ctx.scene->traverse([&](GameObject* go) {
+        glm::vec3 bMin, bMax;
+        if (!localBounds(go, bMin, bMax))
+            return;
+
+        // Descarte rápido por esfera; el impacto de verdad lo da la caja.
+        glm::vec3 center;
+        float     radius = 0.0f;
+        float     tSphere = 0.0f;
+        worldBoundingSphere(go, bMin, bMax, center, radius);
+        if (!raySphere(origin, dir, center, radius, tSphere))
+            return;
+
+        glm::vec3 hit;
+        if (!rayAabbLocal(go->worldTransform, bMin, bMax, origin, dir, hit))
+            return;
+
+        const float dist = glm::length(hit - origin);
+        if (!best || dist < bestDist)
+        {
+            best     = go;
+            bestDist = dist;
+        }
+    });
+
+    return best;
+}
+
 void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, const glm::mat4& cameraView)
 {
     // Contorno del objeto seleccionado. Se fija SIEMPRE y sin condiciones, aquí
@@ -301,6 +526,9 @@ void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, co
     m_contentWidth  = (uint32_t)(vpSize.x > 0.0f ? vpSize.x : 0.0f);
     m_contentHeight = (uint32_t)(vpSize.y > 0.0f ? vpSize.y : 0.0f);
     ImGui::Image((ImTextureID)(intptr_t)viewportTexture, vpSize);
+    // Hover de la IMAGEN, no de la ventana: con esto un popup o cualquier otra
+    // ventana por encima ya no cuenta como clic en la escena.
+    const bool imageHovered = ImGui::IsItemHovered();
 
     // Axis gizmo estilo Unity/Godot (esquina superior derecha): ejes mundo
     // proyectados por la rotación real de la cámara (parte 3x3 de la view
@@ -326,6 +554,7 @@ void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, co
 
     ImVec2 mouse = ImGui::GetIO().MousePos;
     bool clicked = m_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    bool axisBallClicked = false;
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     for (int i : order)
@@ -339,14 +568,34 @@ void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, co
         drawList->AddText(ImVec2(tip.x - textSize.x * 0.5f, tip.y - textSize.y * 0.5f),
                            IM_COL32(0, 0, 0, 255), axes[i].label);
 
-        if (clicked && ctx.onAxisSelected)
+        if (clicked)
         {
             float dx = mouse.x - tip.x, dy = mouse.y - tip.y;
             if (dx * dx + dy * dy <= ballRadius * ballRadius)
-                ctx.onAxisSelected(axes[i].world);
+            {
+                // Marca el clic como consumido por el gizmo de ejes: reorientar
+                // la cámara no debe además cambiar la selección.
+                axisBallClicked = true;
+                if (ctx.onAxisSelected)
+                    ctx.onAxisSelected(axes[i].world);
+            }
         }
     }
     drawList->AddCircleFilled(center, 3.0f, IM_COL32(200, 200, 200, 255));
+
+    // Selección por clic en la escena. Puertas, en este orden: el clic cae
+    // sobre la imagen (no sobre otra ventana ni sobre el gizmo de ejes), ningún
+    // widget de ImGui está activo (arrastre de slider, drag&drop...), el gizmo
+    // de manipulación no está encima ni en uso, y no hay modal de carga. Sin
+    // impacto, la selección se va a nullptr, igual que el clic en zona vacía
+    // del panel Scene.
+    const bool gizmoBusy = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
+    if (clicked && imageHovered && !axisBallClicked && !gizmoBusy &&
+        !ImGui::IsAnyItemActive() && !ctx.editingLocked)
+    {
+        const glm::vec2 mousePx(mouse.x - vpPos.x, mouse.y - vpPos.y);
+        ctx.selected = pickObject(ctx, cameraView, mousePx, glm::vec2(vpSize.x, vpSize.y));
+    }
 
     ImGui::End();
 }

@@ -26,6 +26,7 @@ A Vulkan-based game engine written in C++20.
 - Basic shapes menu (Cube/Sphere/Plane/Capsule), Content Browser (asset browsing, rename/delete)
 - ImGuizmo transform gizmo (translate/rotate/scale, camera-oriented axis gizmo), debug-draw gizmos, collider gizmos
 - **Selection outline**: the selected GameObject is traced with an orange contour in the viewport (see below)
+- **Click-to-select in the viewport**: left-clicking a mesh in the viewport selects it, clicking empty space clears the selection (CPU ray picking, see below)
 - **Camera component**: any GameObject can be the scene camera (perspective/orthographic, fov, near/far); frustum gizmo in edit mode, renders from it on Play
 - **Animator component**: Unity-style animation state graph (node = clip, link = transition; `bool`/`trigger`/`animation finished` conditions), edited in a node panel; instant-cut transitions (no blending), driven from Lua
 - Physics (PhysX): Box/Sphere/Capsule/Plane colliders (shape only) + `Rigidbody` (mass, gravity, drag, kinematic, 6-axis constraints, forces/impulses), raycasting
@@ -402,6 +403,33 @@ The editor drives this through a single setter, `Renderer::setOutlineTarget`, ca
 frame with the selection's render indices (or `-1`). It defaults to "nothing selected", which is
 what the exported runtime always sees — no outline is ever drawn there, and no editor code
 reaches the runtime path.
+
+## Viewport Picking
+
+Left-clicking inside the viewport selects whatever mesh is under the cursor; clicking empty
+space clears the selection. It is the same selection state the Scene panel writes
+(`EditorContext::selected`), so the outline, the axis gizmo and the Properties panel all follow
+in the same frame — the viewport does not keep a selection of its own.
+
+Picking is a **CPU ray cast**, not a GPU id buffer: no extra render pass, no readback, no frame
+of latency. The mouse position is taken relative to the **image rect** of the panel, not to the
+ImGui window, and unprojected with the very camera the frame was rendered with — the editor fly
+camera in edit mode, the scene `CameraComponent` on Play, Y-flip and Vulkan `z = [0, 1]`
+included. The ray starts at the camera position (inverse of the view matrix) and aims at the far
+plane, so the hit distance is a real world-space distance and the nearest object wins.
+
+Each object is tested in two steps. First its bounding sphere, as a cheap reject; then the slab
+test against its local AABB pushed through the transform — an oriented box in world space. The
+second step is not optional: a floor plane is huge and flat, its bounding sphere swallows the
+camera, and sphere-only picking would hand every click to the floor. Bounds come from the mesh
+vertices, and for a `SkinnedMesh` from `skinnedVertices` (bind pose, since the animated pose only
+exists on the GPU) — otherwise animated characters would never be pickable, their `Mesh::vertices`
+being empty by design.
+
+The click only picks when it is really a click on the scene: the image is hovered, no ImGui
+widget is active, no ImGuizmo handle is hovered or being dragged, the camera axis gizmo did not
+take the click, and no load modal is up. Dragging the transform gizmo therefore never changes the
+selection.
 
 ## Camera
 

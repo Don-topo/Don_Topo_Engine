@@ -43,6 +43,13 @@ private:
     // del eje más largo); si node no tiene mesh (o el mesh no tiene
     // vértices), valor fijo de repliegue.
     float selectionAxisScale(GameObject* node) const;
+    // Picking por rayo en CPU: desproyecta mousePx (píxeles RELATIVOS a la
+    // esquina superior izquierda de la imagen del viewport, no de la ventana
+    // ImGui) con la cámara del frame —la de vuelo del editor o la de la escena
+    // en Play— y devuelve el objeto con malla cuya esfera envolvente corta el
+    // rayo más cerca de la cámara. nullptr si no corta ninguna.
+    GameObject* pickObject(EditorContext& ctx, const glm::mat4& cameraView,
+                           const glm::vec2& mousePx, const glm::vec2& imageSize) const;
 
     bool m_open = true;
     bool m_hovered = false;
