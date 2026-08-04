@@ -303,6 +303,13 @@ void EditorUI::drawMenuBar()
                 // Bloom. Mismo criterio que el ambiente: ajuste de sesion, no se
                 // serializa. Intensity 0 deja la imagen como antes del bloom.
                 ImGui::Separator();
+                bool bloom = m_renderer->bloomEnabled();
+                if (ImGui::Checkbox("Bloom", &bloom))
+                    m_renderer->setBloomEnabled(bloom);
+
+                // Igual que en el SSAO y el SSR: los sliders no se ocultan con el
+                // efecto apagado, se dejan desactivados.
+                ImGui::BeginDisabled(!bloom);
                 float threshold = m_renderer->bloomThreshold();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("Bloom threshold", &threshold, 0.0f, 5.0f, "%.2f"))
@@ -317,6 +324,7 @@ void EditorUI::drawMenuBar()
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("Bloom intensity", &intensity, 0.0f, 1.0f, "%.3f"))
                     m_renderer->setBloomIntensity(intensity);
+                ImGui::EndDisabled();
 
                 ImGui::Text("Bloom GPU: %.3f ms", m_renderer->bloomGpuMs());
 

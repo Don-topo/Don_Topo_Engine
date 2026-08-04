@@ -199,6 +199,11 @@ namespace DonTopo {
             // declarado en 5 shaders), asi que cambian en el frame siguiente sin
             // recrear nada. intensity = 0 deja la imagen exactamente igual que
             // antes de la feature.
+            // Interruptor global: apagado no se graba ni un dispatch de la cadena
+            // de mips y la composicion suma bloom cero (el pass LDR NO se salta,
+            // que es tambien quien tonemapea).
+            void  setBloomEnabled(bool v);
+            bool  bloomEnabled() const       { return m_bloomEnabled; }
             void  setBloomThreshold(float v) { m_bloomThreshold = v; }
             float bloomThreshold() const     { return m_bloomThreshold; }
             void  setBloomKnee(float v)      { m_bloomKnee = v; }
@@ -645,6 +650,10 @@ namespace DonTopo {
             // render pass) sin tocar los layouts ni los pools del bloom.
             void recreateCompositePipeline();
             void recordBloomPass(VkCommandBuffer cmd);
+            // Con el bloom apagado la composicion sigue muestreando la cadena, asi
+            // que hay que dejarla en negro y en GENERAL. Pasa UNA vez por imagen
+            // (al crearla y al apagar el efecto), no cada frame.
+            void recordBloomClear(VkCommandBuffer cmd);
             // SSAO. createSsaoPipelines es independiente del tamano (una sola vez,
             // junto al bloom); las imagenes y los sets van con el swapchain,
             // colgados de createOffscreenImages/destroyOffscreenImages.
@@ -889,9 +898,14 @@ namespace DonTopo {
             VkPipelineLayout                m_compositePipelineLayout           = VK_NULL_HANDLE;
             VkPipeline                      m_compositePipeline                 = VK_NULL_HANDLE;
 
+            bool                            m_bloomEnabled                      = true;
             float                           m_bloomThreshold                    = 1.0f;
             float                           m_bloomKnee                         = 0.5f;
             float                           m_bloomIntensity                    = 0.05f;
+            // Cadena pendiente de dejar en negro (efecto recien apagado o imagenes
+            // recien creadas). Una por frame en vuelo: cada slot se limpia en su
+            // propio command buffer.
+            bool                            m_bloomClearPending[MAX_FRAMES]     = {};
             // Coste GPU medido con timestamps: dos por frame en vuelo, leidos el
             // frame siguiente (la fence de ese frame ya senalizo, asi que el
             // resultado esta disponible sin bloquear).

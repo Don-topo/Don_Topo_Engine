@@ -1870,34 +1870,46 @@ namespace DonTopo {
         {
             VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
 
-            // Lectura de los timestamps de hace dos frames en este mismo slot: la
-            // fence de m_currentFrame ya la esperó drawFrame, así que los
-            // resultados están sin bloquear a nadie.
-            if (m_timestampsSupported && m_bloomQueryPending[m_currentFrame])
+            if (m_bloomEnabled)
             {
-                uint64_t stamps[2] = {};
-                if (vkGetQueryPoolResults(m_gpu.device(), m_bloomQueryPool, m_currentFrame * 2, 2,
-                                          sizeof(stamps), stamps, sizeof(uint64_t),
-                                          VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+                // Lectura de los timestamps de hace dos frames en este mismo slot: la
+                // fence de m_currentFrame ya la esperó drawFrame, así que los
+                // resultados están sin bloquear a nadie.
+                if (m_timestampsSupported && m_bloomQueryPending[m_currentFrame])
                 {
-                    m_bloomGpuMs = (float)((double)(stamps[1] - stamps[0]) * m_timestampPeriod * 1e-6);
-                    if (++m_bloomMeasuredFrames == 300)
+                    uint64_t stamps[2] = {};
+                    if (vkGetQueryPoolResults(m_gpu.device(), m_bloomQueryPool, m_currentFrame * 2, 2,
+                                              sizeof(stamps), stamps, sizeof(uint64_t),
+                                              VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
                     {
-                        printf("bloom+composite: %.3f ms (%ux%u, %u mips)\n",
-                               m_bloomGpuMs, m_swapChainExtent.width, m_swapChainExtent.height,
-                               m_bloomMipCount);
-                        fflush(stdout);
+                        m_bloomGpuMs = (float)((double)(stamps[1] - stamps[0]) * m_timestampPeriod * 1e-6);
+                        if (++m_bloomMeasuredFrames == 300)
+                        {
+                            printf("bloom+composite: %.3f ms (%ux%u, %u mips)\n",
+                                   m_bloomGpuMs, m_swapChainExtent.width, m_swapChainExtent.height,
+                                   m_bloomMipCount);
+                            fflush(stdout);
+                        }
                     }
                 }
-            }
-            if (m_timestampsSupported)
-            {
-                vkCmdResetQueryPool(cmd, m_bloomQueryPool, m_currentFrame * 2, 2);
-                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_bloomQueryPool, m_currentFrame * 2);
-                m_bloomQueryPending[m_currentFrame] = true;
-            }
+                if (m_timestampsSupported)
+                {
+                    vkCmdResetQueryPool(cmd, m_bloomQueryPool, m_currentFrame * 2, 2);
+                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_bloomQueryPool, m_currentFrame * 2);
+                    m_bloomQueryPending[m_currentFrame] = true;
+                }
 
-            recordBloomPass(cmd);
+                recordBloomPass(cmd);
+            }
+            else
+            {
+                // Apagado: ni un dispatch de la cadena, y sin timestamps que medir.
+                // El slot deja de tener par pendiente para que al reencender no se
+                // lea una medida de antes del apagón.
+                m_bloomGpuMs = 0.0f;
+                m_bloomQueryPending[m_currentFrame] = false;
+                recordBloomClear(cmd);
+            }
 
             VkRenderPassBeginInfo rpInfo{};
             rpInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1927,9 +1939,10 @@ namespace DonTopo {
             scissor.extent = m_renderExtent;
             vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-            // Sin cadena de mips (viewport minúsculo) no hay nada que sumar: la
-            // intensidad se fuerza a 0 y queda solo el tonemap.
-            const float intensity = (m_bloomMipCount > 0) ? m_bloomIntensity : 0.0f;
+            // Sin cadena de mips (viewport minúsculo) o con el efecto apagado no
+            // hay nada que sumar: la intensidad se fuerza a 0 y queda solo el
+            // tonemap. El pass NO se puede saltar: es quien tonemapea.
+            const float intensity = (m_bloomEnabled && m_bloomMipCount > 0) ? m_bloomIntensity : 0.0f;
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipelineLayout,
                                     0, 1, &m_compositeSets[m_currentFrame], 0, nullptr);
@@ -1945,7 +1958,9 @@ namespace DonTopo {
 
             vkCmdEndRenderPass(cmd);
 
-            if (m_timestampsSupported)
+            // Solo con el bloom encendido: el par se abre arriba bajo la misma
+            // condición, y escribir aquí sin haber reseteado dejaría la query sucia.
+            if (m_timestampsSupported && m_bloomEnabled)
                 vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_bloomQueryPool, m_currentFrame * 2 + 1);
 
             // Anti-aliasing: lo ultimo de la cadena de post, sobre color LDR ya
@@ -6284,7 +6299,9 @@ namespace DonTopo {
             ci.arrayLayers   = 1;
             ci.samples       = VK_SAMPLE_COUNT_1_BIT;
             ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
-            ci.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+            // TRANSFER_DST: con el efecto apagado la cadena se limpia a negro en
+            // vez de calcularse, y la composicion la sigue muestreando.
+            ci.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
             ci.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
             ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             if (vkCreateImage(m_gpu.device(), &ci, nullptr, &m_bloomImage[f]) != VK_SUCCESS)
@@ -6315,6 +6332,11 @@ namespace DonTopo {
                 if (vkCreateImageView(m_gpu.device(), &vi, nullptr, &m_bloomMipView[f][m]) != VK_SUCCESS)
                     throw std::runtime_error("failed to create bloom mip view!");
             }
+
+            // Recien creada: contenido indefinido y layout UNDEFINED. Con el bloom
+            // encendido lo arregla recordBloomPass; apagado, el clear la deja en
+            // negro y en GENERAL, que es lo que declara el set de composicion.
+            m_bloomClearPending[f] = true;
         }
 
         // Los sets de la vez anterior apuntan a vistas ya destruidas: reset y no
@@ -6451,6 +6473,55 @@ namespace DonTopo {
             m_compositeSets[f] = VK_NULL_HANDLE;
         }
         m_bloomMipCount = 0;
+    }
+
+    void Renderer::setBloomEnabled(bool v)
+    {
+        if (v == m_bloomEnabled) return;
+        m_bloomEnabled = v;
+        // Al apagar, la cadena se queda con el bloom del último frame calculado y
+        // la composición la sigue muestreando (el shader multiplica siempre, y
+        // 0 * inf sería NaN). Un clear a negro por frame en vuelo la deja neutra;
+        // a partir de ahí, cero trabajo.
+        if (!v)
+            for (int i = 0; i < MAX_FRAMES; i++) m_bloomClearPending[i] = true;
+    }
+
+    void Renderer::recordBloomClear(VkCommandBuffer cmd)
+    {
+        if (m_bloomMipCount == 0 || !m_bloomClearPending[m_currentFrame]) return;
+
+        VkImageMemoryBarrier b{};
+        b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image               = m_bloomImage[m_currentFrame];
+        b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        b.subresourceRange.baseMipLevel   = 0;
+        // Toda la cadena, no solo el mip 0: así los niveles quedan en GENERAL de
+        // una vez y al reencender el bloom no hay layouts a medias.
+        b.subresourceRange.levelCount     = m_bloomMipCount;
+        b.subresourceRange.baseArrayLayer = 0;
+        b.subresourceRange.layerCount     = 1;
+
+        b.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcAccessMask = 0;
+        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &b);
+
+        VkClearColorValue black{};
+        vkCmdClearColorImage(cmd, m_bloomImage[m_currentFrame], VK_IMAGE_LAYOUT_GENERAL,
+                             &black, 1, &b.subresourceRange);
+
+        b.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &b);
+
+        m_bloomClearPending[m_currentFrame] = false;
     }
 
     void Renderer::recordBloomPass(VkCommandBuffer cmd)
