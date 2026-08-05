@@ -8,6 +8,7 @@
 #include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Files/FileManager.h"
 #include "DonTopo/Scripting/ScriptManager.h"
+#include "DonTopo/Scripting/ScriptBindings.h"
 #include "DonTopo/Editor/ScriptEditorPanel.h"
 #include "DonTopo/Editor/GameExporter.h"
 #include <imgui.h>
@@ -137,6 +138,23 @@ void EditorUI::recordUi(VkCommandBuffer cmd)
 
 void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView)
 {
+    // Drenaje del buzón de DonTopo.loadScene: aquí, al principio del frame de
+    // UI, ya se salió del tick de scripts (ScriptManager::update corre antes en
+    // el bucle de main), así que cargar no destruye el GameObject que pidió la
+    // carga. Misma ruta que el Load Scene del menú File.
+    if (std::string luaScenePath; ScriptBindings::takePendingSceneLoad(luaScenePath))
+    {
+        if (!m_isPlaying)
+            m_logPanel.push("DonTopo.loadScene ignorado: solo funciona en Play Mode");
+        else
+        {
+            loadSceneFile(luaScenePath);
+            // La escena vieja murió: el alive set de Lua guardaba sus punteros y
+            // los nuevos GameObject pueden reusar esas direcciones.
+            if (m_scriptManager) m_scriptManager->rebuildAliveSet();
+        }
+    }
+
     handleUndoRedoShortcut();
     drawMenuBar();
     drawToolbar();

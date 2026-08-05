@@ -12,6 +12,7 @@
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Scripting/ScriptManager.h"
+#include "DonTopo/Scripting/ScriptBindings.h"
 #include "DonTopo/Files/FileManager.h"
 #include "SplashDriver.h"
 
@@ -444,6 +445,36 @@ int main(int argc, char** argv)
         while (!window.shouldClose())
         {
             DonTopo::Input::update();
+
+            // Drenaje del buzón de DonTopo.loadScene, al principio del frame:
+            // los scripts del frame anterior ya terminaron su tick, así que
+            // destruir la escena aquí no mata al GameObject que pidió la carga.
+            // Mismo saneamiento que EditorUI::reloadSceneFromJson: soltar los
+            // recursos GPU del árbol viejo, resetear índices, cargar, y volver a
+            // registrar el árbol entero en el Renderer.
+            if (std::string luaScenePath; DonTopo::ScriptBindings::takePendingSceneLoad(luaScenePath))
+            {
+                for (auto& child : scene.getRoot().children)
+                {
+                    renderer.removeGameObject(child.get());
+                    child->traverse([](DonTopo::GameObject* go) {
+                        go->staticRenderIndex  = -1;
+                        go->skinnedRenderIndex = -1;
+                    });
+                }
+                bool luaLoaded = scene.load(luaScenePath, physics, audio);
+                renderer.registerGameObject(&scene.getRoot());
+                // Síncrono como el restore del editor: sin flush, los meshes del
+                // batch diferido no se verían hasta ~2 frames después y el
+                // árbol viejo ya no está (parpadeo).
+                renderer.flushUploadsAndWait();
+                renderer.setSceneRoot(&scene.getRoot());
+                // El alive set de Lua guardaba punteros de la escena vieja y los
+                // GameObject nuevos pueden reusar esas direcciones.
+                scriptManager.rebuildAliveSet();
+                std::cout << (luaLoaded ? "Escena cargada: " : "Error al cargar escena: ")
+                          << luaScenePath << std::endl;
+            }
 
             auto now = std::chrono::high_resolution_clock::now();
             static auto last = now;

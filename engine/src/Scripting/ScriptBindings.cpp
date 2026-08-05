@@ -12,6 +12,7 @@
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Files/FileManager.h"
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -28,6 +29,14 @@ namespace DonTopo::ScriptBindings
     {
         using DonTopo::GameObject;
         using DonTopo::LuaEntity;
+
+        // Buzón de DonTopo.loadScene (ver ScriptBindings.h). Una sola casilla:
+        // dos peticiones en el mismo frame -> gana la última. Vive aquí y no en
+        // ScriptManager porque el consumidor (EditorUI / runtime) solo necesita
+        // la ruta, no la VM. Un único hilo lo toca: el de los scripts y el del
+        // bucle de frame son el mismo.
+        std::string g_pendingSceneLoad;
+        bool        g_hasPendingSceneLoad = false;
 
         // Deref validado: entity muerta -> excepción C++ que sol2 convierte en
         // error Lua (capturado por la protected_function del callback).
@@ -155,6 +164,40 @@ namespace DonTopo::ScriptBindings
                         out += "?";
                 }
                 mgr.log("[Lua] " + out);
+            };
+        }
+
+        // DonTopo.loadScene(path) -> bool. NO carga: valida y encola (ver el
+        // buzón arriba). El bool es el resultado de la validación —fichero
+        // legible, JSON parseable, estructura de escena v1—, la misma que hace
+        // EditorUI::loadSceneFile antes de tocar GPU; el desenlace de la carga
+        // en sí llega un frame después y no puede devolverse aquí. Nada de
+        // excepciones hacia Lua: readJson ya devuelve optional.
+        void registerEngineTable(ScriptManager& mgr)
+        {
+            sol::state& lua = mgr.lua();
+            sol::table engine = lua.create_named_table("DonTopo");
+
+            engine["loadScene"] = [&mgr](const std::string& path) -> bool {
+                if (path.empty())
+                {
+                    mgr.log("[Lua][ERROR] DonTopo.loadScene: ruta vacía");
+                    return false;
+                }
+                auto parsed = FileManager::readJson(path);
+                bool structureOk = parsed.has_value() &&
+                                   parsed->contains("version") && (*parsed)["version"].is_number_integer() &&
+                                   (*parsed)["version"].get<int>() == 1 &&
+                                   parsed->contains("root") && (*parsed)["root"].is_object();
+                if (!structureOk)
+                {
+                    mgr.log("[Lua][ERROR] DonTopo.loadScene: no se pudo leer la escena '" + path + "'");
+                    return false;
+                }
+                // Última petición del frame gana: se pisa la anterior sin avisar.
+                g_pendingSceneLoad    = path;
+                g_hasPendingSceneLoad = true;
+                return true;
             };
         }
 
@@ -710,6 +753,15 @@ namespace DonTopo::ScriptBindings
         }
     } // namespace (anónimo)
 
+    bool takePendingSceneLoad(std::string& outPath)
+    {
+        if (!g_hasPendingSceneLoad) return false;
+        outPath = g_pendingSceneLoad;
+        g_pendingSceneLoad.clear();
+        g_hasPendingSceneLoad = false;
+        return true;
+    }
+
     void registerAll(ScriptManager& mgr)
     {
         registerVec3(mgr.lua());
@@ -719,5 +771,6 @@ namespace DonTopo::ScriptBindings
         registerComponents(mgr);
         registerEntity(mgr);
         registerScene(mgr);   // Task 7
+        registerEngineTable(mgr);
     }
 }

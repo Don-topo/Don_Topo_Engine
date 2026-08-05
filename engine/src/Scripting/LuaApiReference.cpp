@@ -87,6 +87,9 @@ const std::vector<std::string>& luaApiSymbols()
         // Scene
         "Scene.Find", "Scene.CreateGameObject", "Scene.Destroy", "Scene.Instantiate",
 
+        // Motor (cambio de escena en runtime)
+        "DonTopo.loadScene",
+
         // Vec3
         "Vec3.new",
     };

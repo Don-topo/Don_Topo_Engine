@@ -157,6 +157,41 @@ necesita resolución de colisión. Por eso un objeto puede disparar
 | `Scene.Destroy(entity)` | Encola destrucción (procesada al final del frame). Alias interno de `DestroyGameObject` |
 | `Scene.Instantiate(entity, parent?)` | Clona un GameObject (incl. sub-árbol, componentes, scripts); `Awake` se llama de inmediato, `Start` en el siguiente lifecycle update |
 
+## DonTopo — cambio de escena en runtime
+
+| Método | Descripción |
+| --- | --- |
+| `DonTopo.loadScene(path)` | Pide cargar la escena de `path` (fichero de Save Scene: `version: 1` + `root`). Devuelve `true` si la petición se encoló, `false` si la ruta está vacía, el fichero no existe, el JSON no parsea o la estructura no es de escena v1 (el motivo sale en el Log) |
+
+La carga **no ocurre en la llamada**: el binding solo deja la petición en un buzón
+y la ejecuta el dueño de la escena al frame siguiente, fuera del tick de scripts.
+Cargar en mitad de un `Update` destruiría el GameObject que está ejecutando ese
+mismo script. Consecuencias prácticas:
+
+- Tras llamar, la escena vieja **muere entera**, tu script incluido. Trátala como
+  la última línea útil: no toques `self` ni guardes referencias después.
+- El `bool` es el resultado de la **validación**, no de la carga. El desenlace de
+  la carga llega un frame más tarde y sale en el Log (`Escena cargada: ...` /
+  `Error al cargar escena: ...`).
+- Si un frame deja varias peticiones, **gana la última** y las demás se descartan.
+- Solo en **Play Mode**. En Edit Mode se ignora con un aviso en el Log Console.
+- La ruta es relativa al directorio de trabajo (la raíz del proyecto en el editor;
+  la carpeta del ejecutable en el juego exportado, que fija su CWD ahí).
+
+```lua
+function test:Update(dt)
+    if Input.IsKeyPressed(Key.R) then
+        if not DonTopo.loadScene("Scenes/Empty.json") then
+            Log.Error("Error loading scene")
+        end
+    end
+end
+```
+
+Ojo con las mayúsculas: la tabla es `DonTopo`. Escribir `Dontopo` da
+`attempt to index a nil value` y el componente queda con `hasError`, o sea sin
+recibir más callbacks hasta el hot reload o Stop.
+
 ## Globales
 
 | Función | Descripción |

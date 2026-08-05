@@ -37,7 +37,7 @@ A Vulkan-based game engine written in C++20.
 - **Draw batching**: objects sharing a mesh+material collapse into one instanced draw, and their GPU resources (buffers, textures, descriptor set) are deduplicated behind a refcounted cache
 - **Async asset loading**: worker thread pool (`JobSystem`), off-thread image decode, batched GPU uploads with deferred visibility and deferred destruction — no `vkDeviceWaitIdle` stalls on drop or scene load
 - **Export Game**: packages a standalone runtime (scene, assets, scripts, shaders, splash screen, FMOD and MSVC CRT DLLs) that links no editor code at all
-- **Lua scripting**: `ScriptComponent` (multiple per GameObject), Unity-style lifecycle (Awake/Start/Update/FixedUpdate/LateUpdate/OnDestroy), Entity/Transform/Scene/Input/Audio API, hot reload, auto-generated property UI
+- **Lua scripting**: `ScriptComponent` (multiple per GameObject), Unity-style lifecycle (Awake/Start/Update/FixedUpdate/LateUpdate/OnDestroy), Entity/Transform/Scene/Input/Audio API, runtime scene switching (`DonTopo.loadScene`), hot reload, auto-generated property UI
 - FBX / OBJ model loading (embedded textures supported)
 
 ## Tech Stack
@@ -540,9 +540,35 @@ function Rotator:LateUpdate() end
 function Rotator:OnDestroy() end
 ```
 
+### Scene switching from Lua
+
+`DonTopo.loadScene(path)` swaps the running scene for the one stored at `path`
+(a Save Scene file: `version: 1` + `root`), through the same load path the editor's
+**File → Load Scene** uses. It works in Play Mode and in the exported runtime.
+
+```lua
+function Menu:Update(dt)
+    if Input.IsKeyPressed(Key.R) then
+        if not DonTopo.loadScene("Scenes/Empty.json") then
+            Log.Error("Error loading scene")
+        end
+    end
+end
+```
+
+The call does **not** load anything itself: it validates the path and queues the
+request, and the scene's owner performs the load on the next frame, outside the
+script tick — loading mid-`Update` would destroy the very GameObject running that
+script. So the returned `bool` reports the *validation* (file readable, JSON
+parseable, v1 scene structure), not the load, whose outcome is logged one frame
+later. After the call the old scene is gone, your script included — treat it as the
+last useful line. Multiple requests in one frame: the last one wins. Outside Play
+Mode the request is ignored with a Log Console warning.
+
 API surface: `self.entity` (`GetTransform`, `GetComponent`/`AddComponent`/`RemoveComponent`,
 `GetParent`/`GetChildren`), `Transform` (position/rotation/scale, `Translate`/`Rotate`),
-`Scene` (`Find`/`CreateGameObject`/`Instantiate`/`Destroy`), `Input` (`IsKeyDown`/`IsKeyPressed`/
+`Scene` (`Find`/`CreateGameObject`/`Instantiate`/`Destroy`), `DonTopo.loadScene`,
+`Input` (`IsKeyDown`/`IsKeyPressed`/
 `IsKeyReleased`, `Key.*`), `Log.Info/Warn/Error` (+ `print`) routed to the Log Console. Scripts
 only run in Play Mode; a broken script never crashes the engine (compile/runtime errors are
 logged and the component is quarantined). See `Scripts/Rotator.lua` and `Scripts/Mover.lua`.
