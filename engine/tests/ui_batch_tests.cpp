@@ -16,9 +16,11 @@
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiSpriteBatch.h"
 #include "DonTopo/UI/UiTextureAtlas.h"
+#include "DonTopo/UI/UiWidgets.h"
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 using namespace DonTopo;
 
@@ -50,7 +52,7 @@ static void test_canvas_vacio_no_emite_nada()
 static void test_origen_arriba_izquierda()
 {
     UiCanvas canvas;
-    UiNode& panel = canvas.root().addChild("Panel");
+    UiElement& panel = canvas.root().add("Panel");
     panel.position = {0.0f, 0.0f};
     panel.size     = {37.0f, 53.0f};   // ancho != alto: distingue X de Y
 
@@ -83,12 +85,12 @@ static void test_origen_arriba_izquierda()
 static void test_transform_del_padre_se_acumula()
 {
     UiCanvas canvas;
-    UiNode& parent = canvas.root().addChild("Panel");
+    UiElement& parent = canvas.root().add("Panel");
     parent.position = {120.0f, 45.0f};
     parent.scale    = {2.0f, 3.0f};    // escalas distintas por eje
     parent.drawable = false;           // solo agrupa: el único quad es el hijo
 
-    UiNode& child = parent.addChild("Image");
+    UiElement& child = parent.add("Image");
     child.position = {10.0f, 20.0f};
     child.size     = {5.0f, 7.0f};
 
@@ -117,7 +119,7 @@ static void test_mismo_atlas_y_scissor_un_solo_lote()
     UiCanvas canvas;
     for (int i = 0; i < 2; ++i)
     {
-        UiNode& node = canvas.root().addChild("Image");
+        UiElement& node = canvas.root().add("Image");
         node.position = {17.0f + 60.0f * (float)i, 23.0f};
         node.size     = {25.0f, 40.0f};
         node.atlas    = &atlas;
@@ -147,13 +149,13 @@ static void test_cambiar_de_atlas_parte_el_lote()
     iconos.addSprite("llave", {8.0f, 4.0f, 16.0f, 8.0f});
 
     UiCanvas canvas;
-    UiNode& a = canvas.root().addChild("Image");
+    UiElement& a = canvas.root().add("Image");
     a.position = {17.0f, 23.0f};
     a.size     = {25.0f, 40.0f};
     a.atlas    = &hud;
     a.sprite   = "botella";
 
-    UiNode& b = canvas.root().addChild("Image");
+    UiElement& b = canvas.root().add("Image");
     b.position = {90.0f, 23.0f};
     b.size     = {16.0f, 8.0f};
     b.atlas    = &iconos;
@@ -184,14 +186,14 @@ static void test_cambiar_de_scissor_parte_el_lote()
 
     UiCanvas canvas;
 
-    UiNode& a = canvas.root().addChild("PanelIzquierdo");
+    UiElement& a = canvas.root().add("PanelIzquierdo");
     a.position     = {30.0f, 40.0f};
     a.size         = {120.0f, 70.0f};
     a.atlas        = &atlas;
     a.sprite       = "botella";
     a.clipChildren = true;
 
-    UiNode& b = canvas.root().addChild("PanelDerecho");
+    UiElement& b = canvas.root().add("PanelDerecho");
     b.position     = {300.0f, 210.0f};   // rect claramente distinto
     b.size         = {90.0f, 55.0f};
     b.atlas        = &atlas;
@@ -217,7 +219,7 @@ static void test_scissor_del_hijo_se_interseca_con_el_del_padre()
 {
     UiCanvas canvas;
 
-    UiNode& parent = canvas.root().addChild("Panel");
+    UiElement& parent = canvas.root().add("Panel");
     parent.position     = {100.0f, 50.0f};
     parent.size         = {200.0f, 80.0f};   // rect padre: x[100,300) y[50,130)
     parent.drawable     = false;
@@ -225,7 +227,7 @@ static void test_scissor_del_hijo_se_interseca_con_el_del_padre()
 
     // Hijo más ancho que el padre y desplazado a la izquierda: si el scissor se
     // reemplazase, saldría (50,60,300,40) y se vería fuera del panel.
-    UiNode& child = parent.addChild("Contenido");
+    UiElement& child = parent.add("Contenido");
     child.position     = {-50.0f, 10.0f};    // mundo: x[50,350) y[60,100)
     child.size         = {300.0f, 40.0f};
     child.clipChildren = true;
@@ -249,19 +251,19 @@ static void test_interseccion_vacia_no_emite_draw()
 {
     UiCanvas canvas;
 
-    UiNode& parent = canvas.root().addChild("Panel");
+    UiElement& parent = canvas.root().add("Panel");
     parent.position     = {100.0f, 50.0f};
     parent.size         = {200.0f, 80.0f};   // x[100,300)
     parent.drawable     = false;
     parent.clipChildren = true;
 
-    UiNode& child = parent.addChild("Fuera");
+    UiElement& child = parent.add("Fuera");
     child.position     = {400.0f, 10.0f};    // mundo x[500,560): sin solape
     child.size         = {60.0f, 30.0f};
     child.clipChildren = true;
 
     // Un nieto visible: si el corte no propagase, este se colaría.
-    UiNode& grandchild = child.addChild("Nieto");
+    UiElement& grandchild = child.add("Nieto");
     grandchild.position = {5.0f, 5.0f};
     grandchild.size     = {20.0f, 10.0f};
 
@@ -284,7 +286,7 @@ static void test_uvs_del_subrect_del_atlas()
     atlas.addSprite("botella", {50.0f, 10.0f, 25.0f, 40.0f});
 
     UiCanvas canvas;
-    UiNode& node = canvas.root().addChild("Image");
+    UiElement& node = canvas.root().add("Image");
     node.position = {17.0f, 23.0f};
     node.size     = {25.0f, 40.0f};
     node.atlas    = &atlas;
@@ -323,12 +325,12 @@ static void test_uvs_del_subrect_del_atlas()
 static void test_nodo_invisible_no_emite()
 {
     UiCanvas canvas;
-    UiNode& panel = canvas.root().addChild("Panel");
+    UiElement& panel = canvas.root().add("Panel");
     panel.position = {12.0f, 34.0f};
     panel.size     = {56.0f, 78.0f};
     panel.visible  = false;
 
-    UiNode& child = panel.addChild("Hijo");
+    UiElement& child = panel.add("Hijo");
     child.position = {3.0f, 4.0f};
     child.size     = {11.0f, 13.0f};
 
@@ -337,6 +339,108 @@ static void test_nodo_invisible_no_emite()
 
     CHECK(data.batches.empty());
     CHECK(data.vertices.empty());
+}
+
+// anchor cuenta sobre el rect DEL PADRE y pivot sobre el DEL PROPIO ELEMENTO.
+// Los dos son vec2 normalizados, así que un campo leído por el otro no daría
+// ningún error: los números están elegidos para que intercambiarlos falle.
+static void test_anchor_y_pivot_colocan_el_hijo()
+{
+    UiCanvas canvas;
+
+    UiElement& parent = canvas.root().add("Panel");
+    parent.position = {100.0f, 40.0f};
+    parent.size     = {200.0f, 120.0f};   // ancho != alto
+    parent.drawable = false;              // el único quad es el hijo
+
+    UiElement& child = parent.add("Image");
+    child.anchor   = {0.5f, 1.0f};        // centro-abajo del padre
+    child.pivot    = {0.5f, 0.5f};        // por su propio centro
+    child.position = {7.0f, -13.0f};      // desplazamiento desde el ancla
+    child.size     = {40.0f, 24.0f};
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(data.vertices.size() == 4);
+    if (data.vertices.size() != 4) return;
+
+    // x: 100 + 0.5*200 + 7 - 0.5*40 = 187
+    // y: 40  + 1.0*120 - 13 - 0.5*24 = 135
+    // Sin anchor saldría (107,27); sin pivot, (207,147); con anchor y pivot
+    // intercambiados, y = 63.
+    CHECK(nearly(data.vertices[0].pos.x, 187.0f));
+    CHECK(nearly(data.vertices[0].pos.y, 135.0f));
+    // El tamaño no lo tocan ni el ancla ni el pivote.
+    CHECK(nearly(data.vertices[2].pos.x, 227.0f));
+    CHECK(nearly(data.vertices[2].pos.y, 159.0f));
+}
+
+// La opacidad se ACUMULA por el árbol y acaba multiplicando el alfa del color
+// del vértice. Los tres factores son distintos: 0.5 * 0.25 * 0.8 = 0.1.
+static void test_opacity_se_acumula_en_el_alfa()
+{
+    UiCanvas canvas;
+
+    UiElement& parent = canvas.root().add("Panel");
+    parent.position = {10.0f, 20.0f};
+    parent.size     = {60.0f, 30.0f};
+    parent.opacity  = 0.5f;
+    parent.color    = {1.0f, 1.0f, 1.0f, 1.0f};
+
+    UiElement& child = parent.add("Image");
+    child.position = {5.0f, 6.0f};
+    child.size     = {12.0f, 14.0f};
+    child.opacity  = 0.25f;
+    child.color    = {1.0f, 1.0f, 1.0f, 0.8f};
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(data.vertices.size() == 8);
+    if (data.vertices.size() != 8) return;
+
+    // El padre solo lleva la suya: 1.0 * 0.5.
+    CHECK(nearly(data.vertices[0].color.a, 0.5f));
+    // El hijo, la del padre por la suya por el alfa de su color.
+    CHECK(nearly(data.vertices[4].color.a, 0.1f));
+    // El RGB no lo toca: solo el alfa.
+    CHECK(nearly(data.vertices[4].color.r, 1.0f));
+    // Y la opacidad NO parte el lote: no es estado del command buffer.
+    CHECK(data.batches.size() == 1);
+}
+
+// Un derivado se dibuja exactamente igual que la base — esta fase no le añade
+// comportamiento — pero se identifica por typeName() sin RTTI.
+static void test_widget_derivado_se_dibuja_como_la_base()
+{
+    UiCanvas canvas;
+
+    Image& img = canvas.root().add<Image>("Icono");
+    img.position = {31.0f, 43.0f};
+    img.size     = {17.0f, 29.0f};
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 4);
+    if (data.vertices.size() != 4) return;
+    CHECK(nearly(data.vertices[0].pos.x, 31.0f));
+    CHECK(nearly(data.vertices[0].pos.y, 43.0f));
+    CHECK(nearly(data.vertices[2].pos.x, 48.0f));
+    CHECK(nearly(data.vertices[2].pos.y, 72.0f));
+
+    // add<T> devuelve el tipo concreto, no la base, y cada tipo dice el suyo.
+    CHECK(std::strcmp(img.typeName(), "Image") == 0);
+    CHECK(std::strcmp(canvas.root().add<Button>("Aceptar").typeName(), "Button") == 0);
+    CHECK(std::strcmp(canvas.root().add<ScrollView>("Lista").typeName(), "ScrollView") == 0);
+    CHECK(std::strcmp(canvas.root().add("Suelto").typeName(), "UiElement") == 0);
+
+    // Y el árbol es dueño del derivado por la base: sin destructor virtual esto
+    // sería UB al vaciarlo.
+    canvas.clear();
+    CHECK(canvas.root().children().empty());
 }
 
 int main()
@@ -351,6 +455,9 @@ int main()
     test_interseccion_vacia_no_emite_draw();
     test_uvs_del_subrect_del_atlas();
     test_nodo_invisible_no_emite();
+    test_anchor_y_pivot_colocan_el_hijo();
+    test_opacity_se_acumula_en_el_alfa();
+    test_widget_derivado_se_dibuja_como_la_base();
 
     if (g_failures == 0) std::printf("ui_batch_tests: OK\n");
     else                 std::printf("ui_batch_tests: %d fallos\n", g_failures);

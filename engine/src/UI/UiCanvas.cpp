@@ -2,12 +2,6 @@
 
 namespace DonTopo
 {
-    UiNode& UiNode::addChild(std::string childName)
-    {
-        m_children.push_back(std::make_unique<UiNode>(std::move(childName)));
-        return *m_children.back();
-    }
-
     UiCanvas::UiCanvas()
     {
         // La raíz agrupa, no pinta: su rect es la pantalla entera y dibujarla

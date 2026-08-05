@@ -64,8 +64,8 @@ namespace DonTopo
             return s;
         }
 
-        void emitQuad(const UiNode& node, const glm::vec2& pos, const glm::vec2& size,
-                      const UiScissor& scissor, UiDrawData& out)
+        void emitQuad(const UiElement& node, const glm::vec2& pos, const glm::vec2& size,
+                      const UiScissor& scissor, float opacity, UiDrawData& out)
         {
             if (out.vertices.size() + 4 > kMaxVertices) return;
 
@@ -88,12 +88,17 @@ namespace DonTopo
 
             const uint16_t base = (uint16_t)out.vertices.size();
 
+            // La opacidad acumulada del árbol viaja POR VÉRTICE: así no parte el
+            // lote, que solo puede cambiar por atlas o por scissor.
+            glm::vec4 color = node.color;
+            color.a *= opacity;
+
             // Sentido horario en pantalla empezando arriba a la izquierda. El
             // vértice inferior tiene la Y MAYOR: +Y va hacia abajo.
-            out.vertices.push_back({{pos.x,          pos.y         }, {uv.u0, uv.v0}, node.color});
-            out.vertices.push_back({{pos.x + size.x, pos.y         }, {uv.u1, uv.v0}, node.color});
-            out.vertices.push_back({{pos.x + size.x, pos.y + size.y}, {uv.u1, uv.v1}, node.color});
-            out.vertices.push_back({{pos.x,          pos.y + size.y}, {uv.u0, uv.v1}, node.color});
+            out.vertices.push_back({{pos.x,          pos.y         }, {uv.u0, uv.v0}, color});
+            out.vertices.push_back({{pos.x + size.x, pos.y         }, {uv.u1, uv.v0}, color});
+            out.vertices.push_back({{pos.x + size.x, pos.y + size.y}, {uv.u1, uv.v1}, color});
+            out.vertices.push_back({{pos.x,          pos.y + size.y}, {uv.u0, uv.v1}, color});
 
             const uint16_t quad[6] = { (uint16_t)(base + 0), (uint16_t)(base + 1), (uint16_t)(base + 2),
                                        (uint16_t)(base + 2), (uint16_t)(base + 3), (uint16_t)(base + 0) };
@@ -101,14 +106,30 @@ namespace DonTopo
             out.batches.back().indexCount += 6;
         }
 
-        void emitNode(const UiNode& node, const glm::vec2& parentPos, const glm::vec2& parentScale,
-                      UiScissor scissor, UiDrawData& out)
+        void emitNode(const UiElement& node, const glm::vec2& parentPos, const glm::vec2& parentScale,
+                      const glm::vec2& parentSize, UiScissor scissor, float parentOpacity,
+                      UiDrawData& out)
         {
+            // enabled NO se mira aquí: es para el input, no para el dibujado.
             if (!node.visible) return;
 
-            const glm::vec2 worldPos   = parentPos + node.position * parentScale;
             const glm::vec2 worldScale = parentScale * node.scale;
             const glm::vec2 worldSize  = node.size * worldScale;
+
+            // anchor cuenta sobre el rect DEL PADRE y pivot sobre el PROPIO: con
+            // ambos a {0,0} sale exactamente parentPos + position * parentScale,
+            // que es lo que hacía antes. node.rotation se ignora a propósito.
+            const glm::vec2 worldPos = parentPos
+                                     + node.anchor * parentSize
+                                     + node.position * parentScale
+                                     - node.pivot * worldSize;
+
+            const float opacity = parentOpacity * node.opacity;
+
+            // Un contenedor sin tamaño (la raíz, o un grupo que solo agrupa) no
+            // define área de anclaje: sus hijos siguen anclando contra la del
+            // padre en vez de colapsar todos contra su esquina.
+            const glm::vec2 childArea = (worldSize.x > 0.0f && worldSize.y > 0.0f) ? worldSize : parentSize;
 
             if (node.clipChildren)
             {
@@ -119,10 +140,10 @@ namespace DonTopo
             }
 
             if (node.drawable && worldSize.x > 0.0f && worldSize.y > 0.0f)
-                emitQuad(node, worldPos, worldSize, scissor, out);
+                emitQuad(node, worldPos, worldSize, scissor, opacity, out);
 
             for (const auto& child : node.children())
-                emitNode(*child, worldPos, worldScale, scissor, out);
+                emitNode(*child, worldPos, worldScale, childArea, scissor, opacity, out);
         }
 
         std::vector<char> readSpv(const std::string& path)
@@ -159,7 +180,11 @@ namespace DonTopo
         full.width  = width;
         full.height = height;
 
-        emitNode(canvas.root(), glm::vec2(0.0f), glm::vec2(1.0f), full, out);
+        // El "padre" de la raíz es el render entero: es contra ese rect contra
+        // el que anclan los elementos de primer nivel.
+        const glm::vec2 screen{(float)width, (float)height};
+
+        emitNode(canvas.root(), glm::vec2(0.0f), glm::vec2(1.0f), screen, full, 1.0f, out);
     }
 
     // ── GPU ─────────────────────────────────────────────────────────────────
