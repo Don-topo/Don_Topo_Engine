@@ -133,6 +133,11 @@ private:
     // abre el modal de progreso. async == false (restore de Play->Stop y
     // cualquier ruta sin loader): carga síncrona, determinista, sin modal.
     bool reloadSceneFromJson(const nlohmann::json& j, bool async);
+    // Carga la escena del fichero path: valida la estructura del JSON, recarga
+    // la escena (async) y reporta el resultado por m_sceneIOError/Log. Ruta
+    // única de carga por fichero — la usan el Load Scene del menú File y el
+    // clic en un .json del Content Browser (ctx.requestLoadScene).
+    bool loadSceneFile(const std::string& path);
     // Export Game — drena el diálogo de carpeta destino y pinta los dos
     // popups modales (nombre y confirmación de sobrescritura). Se llama cada
     // frame desde draw(), igual que drawSceneDialog.
@@ -165,6 +170,14 @@ private:
     bool        m_sceneDlgIsSave = false;
     // Último error de guardado/carga de escena (vacío si ninguno pendiente).
     std::string m_sceneIOError;
+    // Fichero de la escena en memoria (último guardado o cargado con éxito).
+    // Vacío = escena que nunca se guardó: ctx.requestSaveScene tiene que pasar
+    // por el diálogo Save Scene en vez de escribir directamente.
+    std::string m_currentScenePath;
+    // Escena que hay que cargar en cuanto el diálogo Save Scene en vuelo
+    // confirme y guarde (el "Guardar" del modal del Content Browser sobre una
+    // escena sin fichero). Vacío = el diálogo no encadena ninguna carga.
+    std::string m_pendingSceneLoadAfterSave;
 
     // Export Game — instancia propia de diálogo por el mismo motivo que
     // m_sceneFileDialog: IGFD::FileDialog::Instance() no soporta diálogos

@@ -5,6 +5,7 @@ namespace DonTopo {
 void UndoManager::push(std::unique_ptr<ICommand> cmd)
 {
     m_redoStack.clear();
+    m_sceneDirty = true;
     m_undoStack.push_back(std::move(cmd));
     if (m_undoStack.size() > kMaxHistory)
         m_undoStack.pop_front();

@@ -58,6 +58,17 @@ struct EditorContext {
     // `if (!ctx.editingLocked)`. Default false: fuera de Load Scene todo se edita
     // como siempre (los tests headless lo dejan en su default).
     bool editingLocked = false;
+
+    // Carga la escena de disco en path por la misma ruta que el Load Scene del
+    // menú File (validación de JSON + reloadSceneFromJson + clear del undo).
+    // Mismo patrón que openScript/openAnimator: sólo lo rellena
+    // EditorUI::draw(), vacío por defecto en los tests headless.
+    std::function<void(const std::filesystem::path&)> requestLoadScene;
+    // Guarda la escena actual y, si el guardado sale bien, carga thenLoad (vacío
+    // = no cargar nada después). Si la escena nunca se guardó, abre el mismo
+    // diálogo Save Scene del menú File y encadena la carga a su confirmación;
+    // si el usuario lo cancela, no se carga nada.
+    std::function<void(const std::filesystem::path& thenLoad)> requestSaveScene;
 };
 
 } // namespace DonTopo

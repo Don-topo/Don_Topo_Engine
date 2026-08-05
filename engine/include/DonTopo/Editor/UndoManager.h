@@ -21,6 +21,13 @@ public:
     void redo();
     // Vacía ambos stacks — llamado en Load Scene y al entrar/salir de Play Mode.
     void clear();
+    // Escena con cambios sin guardar. Se marca en push() —el único punto por
+    // el que pasan todas las ediciones del editor— y se limpia con
+    // markSceneSaved() al guardar y al cargar una escena de disco. clear() NO
+    // lo toca: vaciar el historial al entrar/salir de Play Mode no convierte
+    // en guardadas las ediciones previas.
+    bool isSceneDirty() const { return m_sceneDirty; }
+    void markSceneSaved() { m_sceneDirty = false; }
     bool canUndo() const { return !m_undoStack.empty(); }
     bool canRedo() const { return !m_redoStack.empty(); }
     // Label del comando que acaba de deshacerse/rehacerse — solo válido
@@ -32,6 +39,7 @@ private:
     std::deque<std::unique_ptr<ICommand>> m_undoStack;
     std::deque<std::unique_ptr<ICommand>> m_redoStack;
     std::string m_lastLabel;
+    bool m_sceneDirty = false;
 };
 
 } // namespace DonTopo

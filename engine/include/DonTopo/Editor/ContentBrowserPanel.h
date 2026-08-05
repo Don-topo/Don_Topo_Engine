@@ -94,6 +94,21 @@ private:
     int                    m_assetDeleteAffectedCount = 0;
     bool                   m_openAssetDeletePopup = false;
     std::string            m_assetDeleteError;
+
+    // Doble clic en un .json del grid: cargar esa escena (doble y no simple,
+    // igual que las carpetas y los .lua — un clic simple ocurre al pasar por
+    // encima seleccionando y cargaría escenas sin querer). Si la actual tiene
+    // cambios sin guardar se pregunta antes con un modal de tres opciones.
+    enum class ScenePromptChoice { None, Save, Discard };
+    // Escena que se cargará (vacío = ninguna pendiente). Cancelar en el modal
+    // lo limpia y no se carga nada.
+    std::filesystem::path  m_sceneLoadTarget;
+    bool                   m_openScenePromptPopup = false;
+    // Decisión tomada dentro del popup. Se consume al principio del frame
+    // SIGUIENTE, fuera de todo Begin/BeginPopupModal: cargar una escena destruye
+    // el árbol de GameObjects y toca la GPU, y hacerlo desde dentro del popup
+    // sería reentrar en medio del propio dibujado del panel.
+    ScenePromptChoice      m_scenePromptChoice = ScenePromptChoice::None;
 };
 
 } // namespace DonTopo

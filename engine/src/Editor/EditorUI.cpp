@@ -160,6 +160,40 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
         [this]() { m_animatorPanel.open(); },
         m_assetLoader,
         m_loadingModal.active(),   // veta la edición mientras el modal carga
+        [this](const std::filesystem::path& p) {
+            // La guarda de Play Mode vive también aquí, no sólo en el panel:
+            // mismo motivo que en drawSceneDialog — quien de verdad carga es
+            // quien tiene que negarse.
+            if (m_isPlaying) return;
+            loadSceneFile(p.string());
+        },
+        [this](const std::filesystem::path& thenLoad) {
+            if (m_isPlaying) return;
+            if (m_currentScenePath.empty())
+            {
+                // Escena nunca guardada: mismo diálogo Save Scene del menú
+                // File, con la carga encadenada a su confirmación.
+                m_pendingSceneLoadAfterSave = thenLoad.string();
+                m_sceneDlgOpen   = true;
+                m_sceneDlgIsSave = true;
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode |
+                            ImGuiFileDialogFlags_ConfirmOverwrite;
+                m_sceneFileDialog->OpenDialog("SceneDlg", "Save Scene", ".json", cfg);
+                return;
+            }
+            bool saved = m_scene && m_scene->save(m_currentScenePath);
+            if (saved) m_undoHistory.markSceneSaved();
+            m_sceneIOError = saved ? "" : "No se pudo guardar la escena";
+            m_logPanel.push(saved ? ("Escena guardada: " + m_currentScenePath)
+                                  : ("Error al guardar escena: " + m_currentScenePath));
+            if (saved && !thenLoad.empty())
+                loadSceneFile(thenLoad.string());
+        },
     };
 
     m_scenePanel.draw(ctx, sceneRoot);
@@ -821,6 +855,33 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j, bool async)
     return loaded;
 }
 
+bool EditorUI::loadSceneFile(const std::string& path)
+{
+    // Valida la estructura básica del JSON ANTES de tocar GPU/Scene:
+    // rechaza un fichero top-level corrupto sin tocar nada (fast path, evita
+    // el churn de GPU de reloadSceneFromJson). No cubre malformación anidada
+    // — para eso, Scene::fromJson es atómico y reloadSceneFromJson cubre
+    // ambos desenlaces.
+    auto parsed = FileManager::readJson(path);
+    bool structureOk = parsed.has_value() &&
+                        parsed->contains("version") && (*parsed)["version"].is_number_integer() &&
+                        (*parsed)["version"].get<int>() == 1 &&
+                        parsed->contains("root") && (*parsed)["root"].is_object();
+
+    bool loaded = structureOk && reloadSceneFromJson(*parsed, /*async=*/true);
+    // markSceneSaved sólo aquí, no en reloadSceneFromJson: esa función también
+    // restaura el snapshot de Play->Stop, que devuelve la escena al estado
+    // previo al Play —con sus ediciones sin guardar— y no debe marcarla limpia.
+    if (loaded)
+    {
+        m_undoHistory.markSceneSaved();
+        m_currentScenePath = path;
+    }
+    m_sceneIOError = loaded ? "" : "No se pudo cargar la escena";
+    m_logPanel.push(loaded ? ("Escena cargada: " + path) : ("Error al cargar escena: " + path));
+    return loaded;
+}
+
 void EditorUI::drawSceneDialog()
 {
     // Mismo motivo que PropertiesPanel::drawMeshDialog/drawAudioClipDialog:
@@ -837,6 +898,7 @@ void EditorUI::drawSceneDialog()
     {
         m_sceneFileDialog->Close();
         m_sceneDlgOpen = false;
+        m_pendingSceneLoadAfterSave.clear();
         m_logPanel.push("Operación de escena cancelada: no se puede guardar ni cargar en Play Mode");
         return;
     }
@@ -848,30 +910,32 @@ void EditorUI::drawSceneDialog()
         if (m_sceneDlgIsSave)
         {
             bool saved   = m_scene && m_scene->save(path);
+            if (saved)
+            {
+                m_undoHistory.markSceneSaved();
+                m_currentScenePath = path;
+            }
             m_sceneIOError = saved ? "" : "No se pudo guardar la escena";
             m_logPanel.push(saved ? ("Escena guardada: " + path) : ("Error al guardar escena: " + path));
+
+            // Este Save venía del "Guardar" del modal del Content Browser sobre
+            // una escena sin fichero: encadena aquí la carga que quedó
+            // esperando. Si el guardado falló no se carga nada — perder los
+            // cambios es justo lo que el modal existe para evitar.
+            if (saved && !m_pendingSceneLoadAfterSave.empty())
+                loadSceneFile(m_pendingSceneLoadAfterSave);
         }
         else
         {
-            // Valida la estructura básica del JSON ANTES de tocar GPU/Scene:
-            // rechaza un fichero top-level corrupto sin tocar nada (fast
-            // path, evita el churn de GPU de reloadSceneFromJson). No cubre
-            // malformación anidada — para eso, Scene::fromJson es atómico y
-            // reloadSceneFromJson cubre ambos desenlaces.
-            auto parsed = FileManager::readJson(path);
-            bool structureOk = parsed.has_value() &&
-                                parsed->contains("version") && (*parsed)["version"].is_number_integer() &&
-                                (*parsed)["version"].get<int>() == 1 &&
-                                parsed->contains("root") && (*parsed)["root"].is_object();
-
-            bool loaded  = structureOk && reloadSceneFromJson(*parsed, /*async=*/true);
-            m_sceneIOError = loaded ? "" : "No se pudo cargar la escena";
-            m_logPanel.push(loaded ? ("Escena cargada: " + path) : ("Error al cargar escena: " + path));
+            loadSceneFile(path);
         }
     }
 
     m_sceneFileDialog->Close();
     m_sceneDlgOpen = false;
+    // Cancelar el diálogo (o un guardado fallido) descarta la carga
+    // encadenada: la escena actual sigue con sus cambios sin guardar.
+    m_pendingSceneLoadAfterSave.clear();
 }
 
 void EditorUI::drawExportDialog()

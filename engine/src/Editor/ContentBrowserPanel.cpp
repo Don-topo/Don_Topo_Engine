@@ -1,5 +1,6 @@
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/EditorContext.h"
+#include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Renderer/Renderer.h"
@@ -369,6 +370,25 @@ void ContentBrowserPanel::drawFolderTree(const std::filesystem::path& dir)
 void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
 {
     if (!m_open) return;
+
+    // Decisión del modal (o clic directo) del frame anterior: la carga ocurre
+    // aquí, fuera de cualquier popup y antes de abrir la ventana.
+    if (m_scenePromptChoice != ScenePromptChoice::None)
+    {
+        const std::filesystem::path target = m_sceneLoadTarget;
+        const ScenePromptChoice     choice = m_scenePromptChoice;
+        m_sceneLoadTarget.clear();
+        m_scenePromptChoice = ScenePromptChoice::None;
+        if (choice == ScenePromptChoice::Save)
+        {
+            if (ctx.requestSaveScene) ctx.requestSaveScene(target);
+        }
+        else if (ctx.requestLoadScene)
+        {
+            ctx.requestLoadScene(target);
+        }
+    }
+
     ImGui::Begin("Content Browser", &m_open);
     float totalWidth  = ImGui::GetContentRegionAvail().x;
     float totalHeight = ImGui::GetContentRegionAvail().y;
@@ -497,6 +517,31 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 ctx.openScript(path);
             }
 
+            if (!isDir && ext == ".json" && ImGui::IsItemHovered() &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+                if (ctx.isPlaying)
+                {
+                    // Misma razón que el Save/Load del toolbar: lo que hay en
+                    // memoria durante Play es estado de simulación, y cargar
+                    // otra escena dejaría al snapshot del Stop describiendo una
+                    // escena que ya no existe.
+                    if (ctx.pushLog)
+                        ctx.pushLog("Para el Play Mode para cargar una escena");
+                }
+                else
+                {
+                    m_sceneLoadTarget = path;
+                    // Sin cambios pendientes se carga directo (sin modal), pero
+                    // igualmente en el frame siguiente: recargar la escena en
+                    // mitad del bucle que recorre m_assets no.
+                    if (ctx.undo && ctx.undo->isSceneDirty())
+                        m_openScenePromptPopup = true;
+                    else
+                        m_scenePromptChoice = ScenePromptChoice::Discard;
+                }
+            }
+
             if (!isDir && kDraggableExt.count(ext) && ImGui::BeginDragDropSource())
             {
                 std::string fullPath = path.string();
@@ -522,6 +567,38 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             ImGui::PopID();
         }
         ImGui::Columns(1);
+
+        if (m_openScenePromptPopup)
+        {
+            ImGui::OpenPopup("Guardar cambios de escena");
+            m_openScenePromptPopup = false;
+        }
+        if (ImGui::BeginPopupModal("Guardar cambios de escena", nullptr,
+                                    ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::TextUnformatted("La escena actual tiene cambios sin guardar.");
+            ImGui::TextUnformatted("¿Guardar los cambios de la escena actual?");
+            ImGui::Text("Se cargará: %s", m_sceneLoadTarget.filename().string().c_str());
+            ImGui::Separator();
+            if (ImGui::Button("Guardar"))
+            {
+                m_scenePromptChoice = ScenePromptChoice::Save;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("No guardar"))
+            {
+                m_scenePromptChoice = ScenePromptChoice::Discard;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancelar"))
+            {
+                m_sceneLoadTarget.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
 
         if (m_openAssetRenamePopup)
         {
