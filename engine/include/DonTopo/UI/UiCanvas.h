@@ -27,6 +27,25 @@
 
 namespace DonTopo
 {
+    // Auto-layout: con un modo distinto de None el contenedor COLOCA a sus
+    // hijos y estos dejan de anclarse por su cuenta.
+    enum class UiLayoutMode
+    {
+        None,
+        Horizontal,
+        Vertical,
+        Grid
+    };
+
+    // Alineación en el eje TRANSVERSAL al del layout (la Y de un Horizontal y la
+    // X de un Vertical). El Grid no la usa: la celda ya fija las dos.
+    enum class UiCrossAlign
+    {
+        Start,
+        Center,
+        End
+    };
+
     class UiElement
     {
     public:
@@ -44,11 +63,48 @@ namespace DonTopo
         glm::vec2 scale{1.0f, 1.0f};
         glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
 
-        // Normalizados 0..1. anchor es el punto DEL PADRE desde el que cuenta
-        // position; pivot es el punto DE ESTE elemento que cae ahí. {0,0} y
-        // {0,0} = esquina superior izquierda contra esquina superior izquierda.
-        glm::vec2 anchor{0.0f, 0.0f};
+        // Normalizados 0..1 sobre el rect DEL PADRE. IGUALES en un eje = punto
+        // de ancla: position cuenta desde ahí y pivot es el punto DE ESTE
+        // elemento que cae encima ({0,0} y {0,0} = esquina superior izquierda
+        // contra esquina superior izquierda). DISTINTOS en un eje = ESTIRADO en
+        // ese eje: mandan los márgenes y se ignoran size y pivot de ese eje.
+        glm::vec2 anchorMin{0.0f, 0.0f};
+        glm::vec2 anchorMax{0.0f, 0.0f};
         glm::vec2 pivot{0.0f, 0.0f};
+
+        // Píxeles hacia DENTRO desde el borde correspondiente del padre. Solo
+        // los lee el eje estirado; en un eje anclado a un punto no pintan nada.
+        float marginLeft   = 0.0f;
+        float marginRight  = 0.0f;
+        float marginTop    = 0.0f;
+        float marginBottom = 0.0f;
+
+        // ── Auto-layout ─────────────────────────────────────────────────────
+        // Con mode != None este elemento coloca a sus hijos y de ellos se
+        // ignoran anchorMin/Max, márgenes y position. Horizontal y Vertical
+        // respetan el size del hijo (por su scale); Grid lo fuerza a cellSize.
+        UiLayoutMode layoutMode = UiLayoutMode::None;
+
+        float paddingLeft   = 0.0f;
+        float paddingRight  = 0.0f;
+        float paddingTop    = 0.0f;
+        float paddingBottom = 0.0f;
+
+        glm::vec2 spacing{0.0f, 0.0f};    // hueco entre celdas: .x entre columnas, .y entre filas
+        glm::vec2 cellSize{0.0f, 0.0f};   // solo Grid
+        uint32_t  columns = 0;            // solo Grid; 0 = las que quepan en el ancho
+
+        UiCrossAlign crossAlign = UiCrossAlign::Start;
+
+        // Este hijo NO ocupa hueco en el layout del padre: se ancla por su
+        // cuenta, como si el padre no tuviera layout.
+        bool ignoreLayout = false;
+
+        // Content size fitter: ese eje del size pasa a ser la extensión de los
+        // hijos COLOCADOS más el padding. Sin layoutMode no hay colocación, así
+        // que sin él no hacen nada.
+        bool fitWidth  = false;
+        bool fitHeight = false;
 
         // Radianes. SE ALMACENA PERO NO SE APLICA: un quad rotado obliga a
         // decidir qué scissor usa un clipChildren rotado, y eso es otra fase.

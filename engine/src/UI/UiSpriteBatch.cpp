@@ -106,23 +106,199 @@ namespace DonTopo
             out.batches.back().indexCount += 6;
         }
 
-        void emitNode(const UiElement& node, const glm::vec2& parentPos, const glm::vec2& parentScale,
-                      const glm::vec2& parentSize, UiScissor scissor, float parentOpacity,
-                      UiDrawData& out)
+        // ── Pase de medida ──────────────────────────────────────────────────
+        // Los content size fitters van de abajo arriba (el tamaño del padre sale
+        // de los hijos) y la colocación de arriba abajo, así que hacen falta dos
+        // pases. El árbol NO se muta: la medida vive en un vector local en
+        // pre-orden y la colocación lo indexa.
+        struct MeasuredNode
+        {
+            glm::vec2 size{0.0f, 0.0f};   // tamaño local ya resuelto (fitters aplicados)
+            // Nodos que ocupa este subárbol, este incluido. Es lo que permite
+            // saltar de un hijo al siguiente sin recorrerlo: emitNode sale antes
+            // por !visible y por scissor vacío, y con un cursor que solo avanza
+            // de uno en uno esas salidas desincronizarían todas las medidas.
+            uint32_t subtree = 1;
+        };
+
+        bool participatesInLayout(const UiElement& node)
+        {
+            return node.visible && !node.ignoreLayout;
+        }
+
+        // El hueco que ocupa un hijo dentro del layout de su padre, en unidades
+        // LOCALES del padre. Grid impone la celda y con ella se come el scale
+        // del hijo (si no, un scale distinto rompería la rejilla); Horizontal y
+        // Vertical respetan el tamaño del hijo ya escalado.
+        glm::vec2 layoutSlotSize(const UiElement& parent, const UiElement& child, const glm::vec2& childSize)
+        {
+            if (parent.layoutMode == UiLayoutMode::Grid) return parent.cellSize;
+            return childSize * child.scale;
+        }
+
+        // columns == 0 = las que quepan a lo ancho. Se mide contra node.size.x y
+        // NO contra el tamaño ya ajustado: con fitWidth serían mutuamente
+        // recursivos. Medida y colocación llaman a esto con los mismos datos.
+        uint32_t gridColumns(const UiElement& node, uint32_t count)
+        {
+            if (count == 0) return 1;
+            if (node.columns > 0) return std::min(node.columns, count);
+
+            const float inner = node.size.x - node.paddingLeft - node.paddingRight;
+            const float step  = node.cellSize.x + node.spacing.x;
+
+            uint32_t cols = 1;
+            if (step > 0.0f && inner > 0.0f)
+                cols = (uint32_t)std::max(1.0f, std::floor((inner + node.spacing.x) / step));
+            return std::min(cols, count);
+        }
+
+        void measureNode(const UiElement& node, std::vector<MeasuredNode>& out)
+        {
+            const size_t self = out.size();
+            out.push_back(MeasuredNode{});
+
+            // El contenido se acumula DURANTE la recursión: así no hace falta ni
+            // un vector de hijos por nodo, solo el de medidas.
+            float    mainSum  = 0.0f;
+            float    crossMax = 0.0f;
+            uint32_t laid     = 0;
+
+            for (const auto& child : node.children())
+            {
+                const size_t childIndex = out.size();
+                measureNode(*child, out);
+
+                if (node.layoutMode == UiLayoutMode::None) continue;
+                if (!participatesInLayout(*child)) continue;
+
+                const glm::vec2 slot = layoutSlotSize(node, *child, out[childIndex].size);
+                ++laid;
+                if (node.layoutMode == UiLayoutMode::Vertical)
+                {
+                    mainSum  += slot.y;
+                    crossMax  = std::max(crossMax, slot.x);
+                }
+                else if (node.layoutMode == UiLayoutMode::Horizontal)
+                {
+                    mainSum  += slot.x;
+                    crossMax  = std::max(crossMax, slot.y);
+                }
+            }
+
+            glm::vec2 size = node.size;
+
+            if (node.layoutMode != UiLayoutMode::None && (node.fitWidth || node.fitHeight))
+            {
+                const float gaps = laid > 1 ? (float)(laid - 1) : 0.0f;
+
+                glm::vec2 content{0.0f, 0.0f};
+                if (node.layoutMode == UiLayoutMode::Grid)
+                {
+                    const uint32_t cols = gridColumns(node, laid);
+                    const uint32_t rows = laid > 0 ? (laid + cols - 1) / cols : 0;
+                    if (laid > 0)
+                    {
+                        content.x = (float)cols * node.cellSize.x + (float)(cols - 1) * node.spacing.x;
+                        content.y = (float)rows * node.cellSize.y + (float)(rows - 1) * node.spacing.y;
+                    }
+                }
+                else if (node.layoutMode == UiLayoutMode::Horizontal)
+                {
+                    content.x = mainSum + gaps * node.spacing.x;
+                    content.y = crossMax;
+                }
+                else
+                {
+                    content.y = mainSum + gaps * node.spacing.y;
+                    content.x = crossMax;
+                }
+
+                if (node.fitWidth)  size.x = node.paddingLeft + content.x + node.paddingRight;
+                if (node.fitHeight) size.y = node.paddingTop  + content.y + node.paddingBottom;
+            }
+
+            out[self].size    = size;
+            out[self].subtree = (uint32_t)(out.size() - self);
+        }
+
+        // ── Pase de colocación ──────────────────────────────────────────────
+
+        // Rect ya resuelto por el layout del padre. Sin él, el nodo se coloca
+        // por sus anclas como siempre.
+        struct LayoutPlacement
+        {
+            bool      active = false;
+            glm::vec2 worldPos{0.0f, 0.0f};
+            glm::vec2 worldSize{0.0f, 0.0f};
+        };
+
+        float crossOffset(float inner, float slot, UiCrossAlign align)
+        {
+            if (align == UiCrossAlign::Center) return (inner - slot) * 0.5f;
+            if (align == UiCrossAlign::End)    return inner - slot;
+            return 0.0f;
+        }
+
+        void emitNode(const UiElement& node, uint32_t index, const std::vector<MeasuredNode>& measured,
+                      const glm::vec2& parentPos, const glm::vec2& parentScale,
+                      const glm::vec2& parentSize, const LayoutPlacement& placement,
+                      UiScissor scissor, float parentOpacity, UiDrawData& out)
         {
             // enabled NO se mira aquí: es para el input, no para el dibujado.
             if (!node.visible) return;
 
             const glm::vec2 worldScale = parentScale * node.scale;
-            const glm::vec2 worldSize  = node.size * worldScale;
+            const glm::vec2 localSize  = measured[index].size;
 
-            // anchor cuenta sobre el rect DEL PADRE y pivot sobre el PROPIO: con
-            // ambos a {0,0} sale exactamente parentPos + position * parentScale,
-            // que es lo que hacía antes. node.rotation se ignora a propósito.
-            const glm::vec2 worldPos = parentPos
-                                     + node.anchor * parentSize
-                                     + node.position * parentScale
-                                     - node.pivot * worldSize;
+            glm::vec2 worldPos{0.0f, 0.0f};
+            glm::vec2 worldSize = localSize * worldScale;
+
+            if (placement.active)
+            {
+                // Lo colocó el layout del padre: sus anclas, sus márgenes y su
+                // position no se leen.
+                worldPos  = placement.worldPos;
+                worldSize = placement.worldSize;
+            }
+            else
+            {
+                // Eje a eje. Con anchorMin == anchorMax sale exactamente la
+                // fórmula de siempre: ancla sobre el rect DEL PADRE, pivot sobre
+                // el PROPIO, y con todo a {0,0}, parentPos + position*parentScale.
+                // Con anchorMin != anchorMax el eje se ESTIRA y mandan los
+                // márgenes: size y pivot de ese eje no se leen.
+                // node.rotation se sigue ignorando a propósito.
+                if (node.anchorMin.x != node.anchorMax.x)
+                {
+                    const float x0 = parentPos.x + node.anchorMin.x * parentSize.x + node.marginLeft  * parentScale.x;
+                    const float x1 = parentPos.x + node.anchorMax.x * parentSize.x - node.marginRight * parentScale.x;
+                    worldPos.x  = x0;
+                    worldSize.x = x1 - x0;
+                }
+                else
+                {
+                    worldPos.x = parentPos.x
+                               + node.anchorMin.x * parentSize.x
+                               + node.position.x * parentScale.x
+                               - node.pivot.x * worldSize.x;
+                }
+
+                if (node.anchorMin.y != node.anchorMax.y)
+                {
+                    const float y0 = parentPos.y + node.anchorMin.y * parentSize.y + node.marginTop    * parentScale.y;
+                    const float y1 = parentPos.y + node.anchorMax.y * parentSize.y - node.marginBottom * parentScale.y;
+                    worldPos.y  = y0;
+                    worldSize.y = y1 - y0;
+                }
+                else
+                {
+                    worldPos.y = parentPos.y
+                               + node.anchorMin.y * parentSize.y
+                               + node.position.y * parentScale.y
+                               - node.pivot.y * worldSize.y;
+                }
+            }
 
             const float opacity = parentOpacity * node.opacity;
 
@@ -142,8 +318,86 @@ namespace DonTopo
             if (node.drawable && worldSize.x > 0.0f && worldSize.y > 0.0f)
                 emitQuad(node, worldPos, worldSize, scissor, opacity, out);
 
+            // El índice del primer hijo es el siguiente en pre-orden, y cada
+            // hermano está a un subárbol entero del anterior.
+            uint32_t childIndex = index + 1;
+
+            if (node.layoutMode == UiLayoutMode::None)
+            {
+                for (const auto& child : node.children())
+                {
+                    emitNode(*child, childIndex, measured, worldPos, worldScale, childArea,
+                             LayoutPlacement{}, scissor, opacity, out);
+                    childIndex += measured[childIndex].subtree;
+                }
+                return;
+            }
+
+            // El layout trabaja ya en píxeles de mundo: así un contenedor
+            // estirado o colocado por otro layout reparte sobre su rect real.
+            const glm::vec2 padMin{node.paddingLeft * worldScale.x, node.paddingTop * worldScale.y};
+            const glm::vec2 padMax{node.paddingRight * worldScale.x, node.paddingBottom * worldScale.y};
+            const glm::vec2 gap = node.spacing * worldScale;
+            const glm::vec2 origin = worldPos + padMin;
+            const glm::vec2 inner  = worldSize - padMin - padMax;
+
+            uint32_t laidCount = 0;
             for (const auto& child : node.children())
-                emitNode(*child, worldPos, worldScale, childArea, scissor, opacity, out);
+                if (participatesInLayout(*child)) ++laidCount;
+
+            const uint32_t cols = node.layoutMode == UiLayoutMode::Grid ? gridColumns(node, laidCount) : 1;
+
+            float    cursor    = 0.0f;   // avance en el eje principal, en píxeles de mundo
+            uint32_t laidIndex = 0;
+
+            for (const auto& child : node.children())
+            {
+                const uint32_t ci = childIndex;
+                childIndex += measured[ci].subtree;
+
+                if (!participatesInLayout(*child))
+                {
+                    // ignoreLayout se dibuja anclado como si el padre no tuviera
+                    // layout; el invisible ni se visita (pero su hueco en el
+                    // vector de medidas ya se ha saltado arriba).
+                    if (child->visible)
+                        emitNode(*child, ci, measured, worldPos, worldScale, childArea,
+                                 LayoutPlacement{}, scissor, opacity, out);
+                    continue;
+                }
+
+                const glm::vec2 slot = layoutSlotSize(node, *child, measured[ci].size) * worldScale;
+
+                LayoutPlacement placed{};
+                placed.active    = true;
+                placed.worldSize = slot;
+
+                if (node.layoutMode == UiLayoutMode::Horizontal)
+                {
+                    placed.worldPos.x = origin.x + cursor;
+                    placed.worldPos.y = origin.y + crossOffset(inner.y, slot.y, node.crossAlign);
+                    cursor += slot.x + gap.x;
+                }
+                else if (node.layoutMode == UiLayoutMode::Vertical)
+                {
+                    placed.worldPos.y = origin.y + cursor;
+                    placed.worldPos.x = origin.x + crossOffset(inner.x, slot.x, node.crossAlign);
+                    cursor += slot.y + gap.y;
+                }
+                else
+                {
+                    // Grid: la celda es uniforme, así que la posición sale de la
+                    // fila y la columna, no de un cursor acumulado.
+                    const uint32_t col = laidIndex % cols;
+                    const uint32_t row = laidIndex / cols;
+                    placed.worldPos.x = origin.x + (float)col * (slot.x + gap.x);
+                    placed.worldPos.y = origin.y + (float)row * (slot.y + gap.y);
+                }
+
+                ++laidIndex;
+                emitNode(*child, ci, measured, worldPos, worldScale, childArea,
+                         placed, scissor, opacity, out);
+            }
         }
 
         std::vector<char> readSpv(const std::string& path)
@@ -174,6 +428,9 @@ namespace DonTopo
 
     void UiSpriteBatch::build(const UiCanvas& canvas, uint32_t width, uint32_t height, UiDrawData& out)
     {
+        // Canvas vacío: ni se mide, ni se reserva el vector, ni se recorre nada.
+        if (canvas.root().children().empty()) return;
+
         UiScissor full{};
         full.x = 0;
         full.y = 0;
@@ -184,7 +441,12 @@ namespace DonTopo
         // el que anclan los elementos de primer nivel.
         const glm::vec2 screen{(float)width, (float)height};
 
-        emitNode(canvas.root(), glm::vec2(0.0f), glm::vec2(1.0f), screen, full, 1.0f, out);
+        // Medida bottom-up primero (resuelve los fitters), colocación después.
+        std::vector<MeasuredNode> measured;
+        measureNode(canvas.root(), measured);
+
+        emitNode(canvas.root(), 0, measured, glm::vec2(0.0f), glm::vec2(1.0f), screen,
+                 LayoutPlacement{}, full, 1.0f, out);
     }
 
     // ── GPU ─────────────────────────────────────────────────────────────────
