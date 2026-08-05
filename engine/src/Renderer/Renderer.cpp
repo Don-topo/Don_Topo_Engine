@@ -516,6 +516,11 @@ namespace DonTopo {
         vkDestroyRenderPass(m_gpu.device(), m_taaHistoryRenderPass, nullptr);
         m_aaRenderPass         = VK_NULL_HANDLE;
         m_taaHistoryRenderPass = VK_NULL_HANDLE;
+        if (m_perfQueryPool != VK_NULL_HANDLE)
+        {
+            vkDestroyQueryPool(m_gpu.device(), m_perfQueryPool, nullptr);
+            m_perfQueryPool = VK_NULL_HANDLE;
+        }
         if (m_aaQueryPool != VK_NULL_HANDLE)
         {
             vkDestroyQueryPool(m_gpu.device(), m_aaQueryPool, nullptr);
@@ -1597,6 +1602,24 @@ namespace DonTopo {
         }
     }
 
+    void Renderer::setPerfCaptureEnabled(bool on)
+    {
+        if (on == m_perfCapture) return;
+        m_perfCapture = on;
+        // Al apagar se invalidan los slots pendientes: sus queries no se van a
+        // volver a resetear, y leerlas al reabrir el panel devolveria basura del
+        // frame en que se cerro (o NOT_READY para siempre).
+        for (int f = 0; f < MAX_FRAMES; f++) m_perfQueryPending[f] = false;
+        if (!on)
+        {
+            m_shadowGpuMs   = 0.0f;
+            m_sceneGpuMs    = 0.0f;
+            m_statDrawCalls = 0;
+            m_statInstances = 0;
+            m_statCulled    = 0;
+        }
+    }
+
     void Renderer::recordCommandBuffer(uint32_t imageIndex)
     {
         VkCommandBufferBeginInfo beginInfo{};
@@ -1696,8 +1719,42 @@ namespace DonTopo {
                                 m_aaQueryPool, m_currentFrame * 4 + 2);
         }
 
+        // ── Medida del panel Performance ─────────────────────────────────────
+        // Solo si el panel esta abierto. La lectura es del slot de hace dos
+        // frames (la fence de este frame ya lo espero), sin WAIT_BIT: si el
+        // driver aun no las tiene se conserva el valor anterior y ya.
+        const bool perfStamp = m_timestampsSupported && m_perfCapture;
+        if (perfStamp && m_perfQueryPending[m_currentFrame])
+        {
+            uint64_t st[4] = {};
+            if (vkGetQueryPoolResults(m_gpu.device(), m_perfQueryPool, m_currentFrame * 4, 4,
+                                      sizeof(st), st, sizeof(uint64_t),
+                                      VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+            {
+                m_shadowGpuMs = (float)((double)(st[1] - st[0]) * m_timestampPeriod * 1e-6);
+                m_sceneGpuMs  = (float)((double)(st[3] - st[2]) * m_timestampPeriod * 1e-6);
+            }
+        }
+        if (perfStamp)
+        {
+            vkCmdResetQueryPool(m_commandBuffers[m_currentFrame], m_perfQueryPool, m_currentFrame * 4, 4);
+            m_statDrawCalls = 0;
+            m_statInstances = 0;
+            m_statCulled    = 0;
+        }
+
         recordComputePass(m_commandBuffers[m_currentFrame]);
+        if (perfStamp)
+        {
+            vkCmdWriteTimestamp(m_commandBuffers[m_currentFrame], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                m_perfQueryPool, m_currentFrame * 4);
+        }
         recordShadowPass(m_commandBuffers[m_currentFrame]);
+        if (perfStamp)
+        {
+            vkCmdWriteTimestamp(m_commandBuffers[m_currentFrame], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                m_perfQueryPool, m_currentFrame * 4 + 1);
+        }
         // ANTES del pass de escena: pbr.frag necesita el AO ya resuelto, y el AO
         // necesita la profundidad de TODA la escena. Por eso el depth pre-pass, y
         // por eso va aquí y no después.
@@ -1722,6 +1779,11 @@ namespace DonTopo {
             rpInfo.clearValueCount     = 2;
             rpInfo.pClearValues        = clearValues;
 
+            if (perfStamp)
+            {
+                vkCmdWriteTimestamp(m_commandBuffers[m_currentFrame], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                    m_perfQueryPool, m_currentFrame * 4 + 2);
+            }
             vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
             VkViewport viewport{};
@@ -1776,6 +1838,22 @@ namespace DonTopo {
             glm::mat4* dst = (glm::mat4*)m_instanceMapped[m_currentFrame] + instanceBase;
             m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
                 dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
+
+            // Contadores del panel Performance: se cuentan sobre los mismos
+            // candidatos que acaba de agrupar buildInstanceBatches, asi que
+            // reflejan exactamente lo que se va a dibujar abajo.
+            if (perfStamp)
+            {
+                for (const auto& cand : m_batchCandidates)
+                {
+                    if (!cand.visible) m_statCulled++;
+                }
+                m_statDrawCalls += (int)m_instanceBatches.size();
+                for (const InstanceBatch& b : m_instanceBatches)
+                {
+                    m_statInstances += (int)b.instanceCount;
+                }
+            }
 
             // Set 1 una sola vez para todo el pass: el SSBO no cambia entre
             // draws, y el pipeline skinned de abajo comparte layout, así que
@@ -1834,7 +1912,11 @@ namespace DonTopo {
                     // Borrado, en vuelo o fuera de cámara: la decisión ya la tomó
                     // el culling del principio del frame, la misma que decidió si
                     // se le despachaba el compute.
-                    if (!m_skinnedVisible[si]) continue;
+                    if (!m_skinnedVisible[si])
+                    {
+                        if (perfStamp) m_statCulled++;
+                        continue;
+                    }
                     SkinnedRenderObject& sobj = m_skinnedObjects[si];
                     // Checkbox "Visible" del componente Mesh. Va aquí y no en
                     // m_skinnedVisible porque ese flag también gobierna el
@@ -1864,6 +1946,7 @@ namespace DonTopo {
                             0, sizeof(PushData), &push);
                         vkCmdDrawIndexed(m_commandBuffers[m_currentFrame],
                             sm.indexCount, 1, sm.indexStart, 0, 0);
+                        if (perfStamp) { m_statDrawCalls++; m_statInstances++; }
                     }
                 }
             }
@@ -1891,6 +1974,15 @@ namespace DonTopo {
             }
 
             vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
+            if (perfStamp)
+            {
+                vkCmdWriteTimestamp(m_commandBuffers[m_currentFrame], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                    m_perfQueryPool, m_currentFrame * 4 + 3);
+                // Las cuatro estan escritas: el slot ya es legible dentro de dos
+                // frames. Si la captura se apaga antes, setPerfCaptureEnabled
+                // limpia el flag y no se lee un pool sin resetear.
+                m_perfQueryPending[m_currentFrame] = true;
+            }
         }
 
         // SSR: necesita el color de la escena YA iluminado, así que va DETRÁS del
@@ -8694,6 +8786,14 @@ namespace DonTopo {
             qpi.queryCount = MAX_FRAMES * 4;
             if (vkCreateQueryPool(m_gpu.device(), &qpi, nullptr, &m_aaQueryPool) != VK_SUCCESS)
                 throw std::runtime_error("failed to create aa query pool!");
+
+            // Pool del panel Performance: [0,1] sombras, [2,3] escena. Se crea
+            // aqui (y no en su propia funcion) porque este es el ultimo sitio
+            // del arranque donde m_timestampsSupported ya esta resuelto y el
+            // device sigue vivo. Con el panel cerrado no se usa ni una query.
+            qpi.queryCount = MAX_FRAMES * 4;
+            if (vkCreateQueryPool(m_gpu.device(), &qpi, nullptr, &m_perfQueryPool) != VK_SUCCESS)
+                throw std::runtime_error("failed to create perf query pool!");
         }
 
         printf("aa pipelines OK\n"); fflush(stdout);

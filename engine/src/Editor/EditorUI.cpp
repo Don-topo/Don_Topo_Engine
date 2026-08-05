@@ -235,6 +235,9 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
     m_contentBrowserPanel.draw(ctx, sceneRoot);
     m_scriptEditor->draw();
     m_animatorPanel.draw(ctx);
+    // Siempre, tambien cerrado: su draw() es quien apaga la captura de metricas
+    // del Renderer cuando el panel deja de estar visible.
+    m_performancePanel.draw(ctx);
 
     // Overlay de progreso: se actualiza con lo que aún queda por bombear y se
     // pinta por encima. draw() devuelve true solo el frame en que se pulsa
@@ -327,6 +330,7 @@ void EditorUI::drawMenuBar()
             ImGui::MenuItem("Content Browser", nullptr, m_contentBrowserPanel.GetOpenPtr());
             ImGui::MenuItem("Script Editor", nullptr, m_scriptEditor->GetOpenPtr());
             ImGui::MenuItem("Animator", nullptr, m_animatorPanel.GetOpenPtr());
+            ImGui::MenuItem("Performance", nullptr, m_performancePanel.GetOpenPtr());
             ImGui::Separator();
             // Peso del ambiente IBL. Ajuste de sesion: no se serializa en la
             // escena, asi que al reabrir el editor vuelve a 1.0.

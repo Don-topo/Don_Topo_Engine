@@ -94,6 +94,7 @@ add_library(DonTopoEditor STATIC
     src/Editor/PropertiesPanel.cpp
     src/Editor/ContentBrowserPanel.cpp
     src/Editor/AnimatorPanel.cpp
+    src/Editor/PerformancePanel.cpp
     src/Editor/Command.cpp
     src/Editor/UndoManager.cpp
     src/Editor/ScriptEditorPanel.cpp

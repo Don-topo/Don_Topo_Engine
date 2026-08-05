@@ -349,6 +349,24 @@ namespace DonTopo {
             // compara el sobrecoste real de SSAA y de MSAA.
             float renderGpuMs() const             { return m_renderGpuMs; }
 
+            // ── Instrumentacion del panel Performance (solo editor) ──────────
+            // Apagada por defecto: con el panel cerrado no se graba ni un
+            // timestamp mas de los que ya habia, ni se tocan los contadores.
+            // El panel la enciende mientras esta visible y la apaga al cerrarse.
+            void setPerfCaptureEnabled(bool on);
+            bool perfCaptureEnabled() const       { return m_perfCapture; }
+            // Coste GPU del pass de sombras y del pass de escena. Valen 0 hasta
+            // que la captura lleva dos frames encendida (se leen del frame N-2,
+            // que es el que ya espero la fence de este slot).
+            float shadowGpuMs() const             { return m_shadowGpuMs; }
+            float sceneGpuMs() const              { return m_sceneGpuMs; }
+            // Contadores del ultimo frame grabado con la captura encendida.
+            // "Culled" son los objetos estaticos + skinned que el frustum dejo
+            // fuera del pass de escena.
+            int   statDrawCalls() const           { return m_statDrawCalls; }
+            int   statInstances() const           { return m_statInstances; }
+            int   statCulled() const              { return m_statCulled; }
+
             // ── Forward+ ─────────────────────────────────────────────────────
             // Culling de luces en GPU. Modos EXCLUYENTES. Off deja el frame
             // exactamente como antes de la feature: ni un dispatch, y pbr.frag
@@ -1309,6 +1327,19 @@ namespace DonTopo {
             float                           m_aaGpuMs                           = 0.0f;
             float                           m_renderGpuMs                       = 0.0f;
             uint32_t                        m_aaMeasuredFrames                  = 0;
+
+            // ── Panel Performance ────────────────────────────────────────────
+            // Cuatro queries por frame en vuelo: [0,1] pass de sombras, [2,3]
+            // pass de escena. Solo se resetean y escriben si m_perfCapture, y
+            // los resultados se leen sin WAIT_BIT del slot de hace dos frames.
+            VkQueryPool                     m_perfQueryPool                     = VK_NULL_HANDLE;
+            bool                            m_perfQueryPending[MAX_FRAMES]      = {};
+            bool                            m_perfCapture                       = false;
+            float                           m_shadowGpuMs                       = 0.0f;
+            float                           m_sceneGpuMs                        = 0.0f;
+            int                             m_statDrawCalls                     = 0;
+            int                             m_statInstances                     = 0;
+            int                             m_statCulled                        = 0;
 
             // ── Forward+ ─────────────────────────────────────────────────────
             // Tope de luces que entran en el culling y, a la vez, ancho de la

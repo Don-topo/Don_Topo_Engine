@@ -15,6 +15,7 @@
 #include "DonTopo/Editor/PropertiesPanel.h"
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/AnimatorPanel.h"
+#include "DonTopo/Editor/PerformancePanel.h"
 #include "DonTopo/Editor/LoadingModal.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/UiLayer.h"
@@ -220,6 +221,7 @@ private:
     // el que incluya EditorUI.h — mismo patrón que m_sceneFileDialog.
     std::unique_ptr<ScriptEditorPanel> m_scriptEditor;
     AnimatorPanel m_animatorPanel;
+    PerformancePanel m_performancePanel;
 
     // Overlay de progreso de Load Scene. Solo lo activa reloadSceneFromJson en
     // la ruta asíncrona; el pump de main.cpp lo va actualizando cada frame.

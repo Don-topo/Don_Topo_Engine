@@ -34,6 +34,7 @@ A Vulkan-based game engine written in C++20.
 - Scene serialization (JSON save/load, full GameObject tree incl. mesh/colliders/audio/scripts)
 - Play Mode (edit/play toggle, snapshot restore, physics gated to Play), undo/redo of editor actions
 - Log Console panel (edit-action history, live value editing)
+- **Performance panel**: live framerate/frame-time graphs, GPU time per pass from Vulkan timestamp queries (read from frame `N-2`, never blocking), draw/instance/culled counters, and process RAM/CPU/VRAM — and it costs literally nothing while closed (see below)
 - **Frustum culling** in the main, shadow and skinned passes; skinned meshes bounded by a pose-independent sphere so no character can vanish mid-animation
 - **Draw batching**: objects sharing a mesh+material collapse into one instanced draw, and their GPU resources (buffers, textures, descriptor set) are deduplicated behind a refcounted cache
 - **Async asset loading**: worker thread pool (`JobSystem`), off-thread image decode, batched GPU uploads with deferred visibility and deferred destruction — no `vkDeviceWaitIdle` stalls on drop or scene load
@@ -526,6 +527,39 @@ The whole graph — nodes, canvas positions, links, conditions, parameters, per-
 the entry state — is saved in the scene file. Clips are referenced **by name**, so
 re-exporting the model with a clip renamed unlinks that state (it warns on load rather than
 silently pointing at the wrong animation).
+
+## Performance Panel
+
+Open it with **View → Performance**. It is an editor-only panel — nothing in it links into
+`DonTopoCore` or the exported runtime — and it monitors four things live:
+
+- **CPU**: framerate and frame time in ms, with a 120-sample history (`PlotLines` for the
+  frame time, `PlotHistogram` for the FPS).
+- **GPU per pass**: shadows, scene, AO, Forward+ culling, SSR, fog, bloom and anti-aliasing,
+  in ms and as a share of the total render time (everything but the UI pass).
+- **Draw counters**: draw calls, instances and culled objects of the scene pass (instanced
+  statics + skinned).
+- **Process**: RAM working set and peak, CPU usage of the process, and VRAM in use against
+  the budget the system grants it.
+
+The GPU times come from Vulkan timestamp queries written into the command buffer that is
+already being recorded — no extra pass, pipeline or render target. Results are read from the
+frame `N-2`, the slot whose fence this frame already waited on, and **without**
+`VK_QUERY_RESULT_WAIT_BIT`: nothing ever blocks a frame in flight, and there is no
+`vkDeviceWaitIdle` anywhere near it. The first two frames after opening the panel therefore
+show `--`, and so does any pass that is switched off.
+
+Closing the panel costs exactly nothing. `PerformancePanel::draw` calls
+`Renderer::setPerfCaptureEnabled(false)`, and with the capture off the renderer records no
+query reset, no timestamp and touches no counter — the frame is byte-for-byte the one it
+recorded before the feature existed. Pending query slots are invalidated on the way out, so
+reopening never reads a pool that was left unreset.
+
+RAM, CPU and VRAM are the expensive reads, so they are cached and refreshed at ~2 Hz rather
+than once per frame. VRAM comes from DXGI (`IDXGIAdapter3::QueryVideoMemoryInfo`, adapter 0),
+which reports the usage of *this process*: Vulkan cannot report it without
+`VK_EXT_memory_budget`, and enabling that extension would mean touching device creation in
+Core for a number only the editor displays.
 
 ## Lua Scripting
 
