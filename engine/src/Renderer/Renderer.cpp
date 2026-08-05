@@ -141,6 +141,9 @@ namespace DonTopo {
         // ANTES de createOffscreenImages: ahi se crea la cadena de mips, que
         // necesita el descriptor set layout y el pool del bloom ya montados.
         createBloomPipelines();
+        // UI de juego: mismo pass y mismas muestras que la composicion, que es
+        // donde se graban sus lotes (LDR, ya tonemapeado, encima de la escena).
+        m_uiBatch.init(m_gpu, m_res, m_compositeRenderPass, m_aaSampleCount);
         // ANTES de createOffscreenImages (que llama a createSsaoImages) y DESPUÉS
         // de createShadowResources: el pipeline del depth pre-pass reutiliza
         // m_shadowPipelineLayout, que se crea allí.
@@ -648,8 +651,26 @@ namespace DonTopo {
         m_skybox.shutdown(m_gpu);
         m_splash.shutdown(m_gpu);
         Gizmos::shutdown(m_gpu);
+        // Los atlas ANTES del batch: sus descriptor sets salen de su pool, y
+        // destruir el pool primero dejaria los handles colgando.
+        for (auto& atlas : m_uiAtlases) atlas->destroy(m_gpu);
+        m_uiAtlases.clear();
+        m_uiBatch.shutdown(m_gpu);
         printf("destroy render items OK\n"); fflush(stdout);
         m_gpu.shutdown();
+    }
+
+    UiTextureAtlas* Renderer::loadUiAtlas(const std::string& path)
+    {
+        auto atlas = std::make_unique<UiTextureAtlas>();
+        if (!atlas->loadFromFile(m_gpu, m_res, path)) return nullptr;
+        if (!m_uiBatch.registerAtlas(m_gpu, *atlas))
+        {
+            atlas->destroy(m_gpu);
+            return nullptr;
+        }
+        m_uiAtlases.push_back(std::move(atlas));
+        return m_uiAtlases.back().get();
     }
 
     void Renderer::initSkybox(const std::array<std::string, 6>& facePaths)
@@ -2087,6 +2108,12 @@ namespace DonTopo {
             // en el pass anterior, pero sin pasar por el tonemap ni por el bloom.
             recordSelectionOutline(cmd, camFrustum);
             Gizmos::draw(cmd, fc.proj * fc.view, m_currentFrame);
+
+            // UI de juego, lo ultimo del pass: va encima de la escena y de los
+            // gizmos, y por debajo de la UI del editor (que se graba en el pass
+            // del swapchain). Con el canvas vacio no se graba ni un comando.
+            m_uiCanvas.buildDrawData(m_renderExtent.width, m_renderExtent.height, m_uiDrawData);
+            m_uiBatch.record(m_gpu, cmd, m_uiDrawData, m_renderExtent, m_currentFrame);
 
             vkCmdEndRenderPass(cmd);
 
@@ -9302,6 +9329,9 @@ namespace DonTopo {
         // crea layouts y pools; aqui solo hace falta el pipeline, asi que se
         // rehace a mano con el mismo codigo que usa aquella.
         recreateCompositePipeline();
+        // Comparte pass con la composicion: si cambian las muestras, su pipeline
+        // deja de ser compatible igual que el de aquella.
+        m_uiBatch.recreatePipeline(m_gpu, m_compositeRenderPass, m_aaSampleCount);
 
         // Los dos que no viven en Renderer.cpp. El skybox se salta solo si no
         // hay cubemap cargado.

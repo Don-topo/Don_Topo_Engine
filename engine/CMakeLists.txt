@@ -44,6 +44,11 @@ add_library(DonTopoCore STATIC
     # lo graba el pass principal del Renderer, asi que dejarlo en Editor haria
     # que Core dependiera del editor.
     src/Renderer/Gizmos.cpp
+    # UI de juego (canvas 2D). Vive en Core, no en el editor: el runtime
+    # exportado dibuja el mismo canvas.
+    src/UI/UiCanvas.cpp
+    src/UI/UiSpriteBatch.cpp
+    src/UI/UiTextureAtlas.cpp
     src/Scripting/LuaSyntaxCheck.cpp
     src/Scripting/LuaApiReference.cpp
 )

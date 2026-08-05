@@ -18,6 +18,9 @@
 #include "DonTopo/Renderer/UiLayer.h"
 #include "DonTopo/Renderer/Skybox.h"
 #include "DonTopo/Renderer/SplashScreen.h"
+#include "DonTopo/UI/UiCanvas.h"
+#include "DonTopo/UI/UiSpriteBatch.h"
+#include "DonTopo/UI/UiTextureAtlas.h"
 #include <array>
 #include <unordered_map>
 
@@ -89,6 +92,17 @@ namespace DonTopo {
             // Debe fijarse ANTES de initPresentation(), que es quien la
             // arranca.
             void setUiLayer(UiLayer* ui) { m_ui = ui; }
+
+            // Canvas de la UI de JUEGO (no el editor). Se dibuja dentro del pass
+            // de composicion, encima de la escena y debajo de ImGui, y vacio no
+            // cuesta ni un comando. Devolver la referencia hace de getter y de
+            // setter: el arbol se monta sobre uiCanvas().root().
+            UiCanvas&       uiCanvas()       { return m_uiCanvas; }
+            const UiCanvas& uiCanvas() const { return m_uiCanvas; }
+            // Carga un atlas desde disco y le reserva su descriptor set. El
+            // Renderer es el dueno; devuelve nullptr si la imagen no se puede
+            // leer. Los sprites se anaden luego con addSprite.
+            UiTextureAtlas* loadUiAtlas(const std::string& path);
             // currentFrameCamera() necesita preguntarle a la escena por su
             // cámara cada frame (Scene::findCamera es la única fuente de
             // verdad).
@@ -1678,6 +1692,13 @@ namespace DonTopo {
             UiLayer* m_ui = nullptr;
             Skybox   m_skybox;
             SplashScreen m_splash;
+
+            // UI de juego. Vive en Core: el runtime exportado dibuja este mismo
+            // canvas dentro del pass de composicion, sin nada del editor.
+            UiCanvas      m_uiCanvas;
+            UiSpriteBatch m_uiBatch;
+            UiDrawData    m_uiDrawData;
+            std::vector<std::unique_ptr<UiTextureAtlas>> m_uiAtlases;
             GameObject* m_sceneRoot = nullptr;
             Scene* m_scene = nullptr;
     };
