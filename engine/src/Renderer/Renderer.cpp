@@ -619,6 +619,7 @@ namespace DonTopo {
         vkDestroyPipeline(m_gpu.device(), m_skinnedOutlinePipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedOutlineWirePipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_shadowPipeline, nullptr);
+        vkDestroyPipeline(m_gpu.device(), m_shadowSkinnedPipeline, nullptr);
         vkDestroyPipelineLayout(m_gpu.device(), m_shadowPipelineLayout, nullptr);
         vkDestroyRenderPass(m_gpu.device(), m_shadowRenderPass, nullptr);
         for (auto& obj : m_skinnedObjects)
@@ -3610,7 +3611,41 @@ namespace DonTopo {
         if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_shadowPipeline) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to create shadow pipeline!");
-        }            
+        }
+
+        // Variante para las mallas skinned. Todo el estado se copia del de
+        // arriba (mismo bias, mismo depth, mismas cascadas, mismo layout), así
+        // que la sombra de los estáticos no cambia. Lo único distinto es el
+        // vertex input.
+        //
+        // stride 80, no sizeof(SkinnedVertex): ese es el vértice de ENTRADA del
+        // compute (7×vec4, con índices y pesos de hueso). Lo que se dibuja aquí
+        // es su SALIDA, el OutputVertex de skinning.comp, que son 5×vec4 y lleva
+        // la posición en el primero. Es el mismo stride que declara el pipeline
+        // skinned del pass principal.
+        VkVertexInputBindingDescription skinnedBinding{};
+        skinnedBinding.binding   = 0;
+        skinnedBinding.stride    = 5 * (uint32_t)sizeof(glm::vec4);  // 80 bytes
+        skinnedBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+        // pos es un vec4 (std430 del compute); shadow.vert solo declara vec3, y
+        // leer 3 de los 4 floats es legal.
+        VkVertexInputAttributeDescription skinnedAttr{};
+        skinnedAttr.binding  = 0;
+        skinnedAttr.location = 0;
+        skinnedAttr.format   = VK_FORMAT_R32G32B32_SFLOAT;
+        skinnedAttr.offset   = 0;
+
+        VkPipelineVertexInputStateCreateInfo skinnedVertexInput = vertexInput;
+        skinnedVertexInput.pVertexBindingDescriptions   = &skinnedBinding;
+        skinnedVertexInput.pVertexAttributeDescriptions = &skinnedAttr;
+
+        VkGraphicsPipelineCreateInfo skinnedPipelineInfo = pipelineInfo;
+        skinnedPipelineInfo.pVertexInputState = &skinnedVertexInput;
+        if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &skinnedPipelineInfo, nullptr, &m_shadowSkinnedPipeline) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create skinned shadow pipeline!");
+        }
 
         vkDestroyShaderModule(m_gpu.device(), vertModule, nullptr);
     }
@@ -3703,6 +3738,57 @@ namespace DonTopo {
                 vkCmdBindVertexBuffers(cmd, 0, 1, vb, offsets);
                 vkCmdBindIndexBuffer(cmd, gpu->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
                 vkCmdDrawIndexed(cmd, gpu->indexCount, batch.instanceCount, 0, 0, batch.firstInstance);
+            }
+
+            // Skinned. recordComputePass corre justo antes en este mismo command
+            // buffer y deja outputVertexBuffer con la pose de ESTE frame y una
+            // barrera compute → VERTEX_INPUT, así que aquí ya se puede leer como
+            // vertex buffer. Mismo shader, mismo layout, mismo SSBO de
+            // instancias y misma matriz de cascada que los estáticos: lo único
+            // propio es el pipeline con el stride de SkinnedVertex.
+            bool skinnedBound = false;
+            for (size_t si = 0; si < m_skinnedObjects.size(); si++)
+            {
+                // Misma lista de visibles que consumió el compute: a un objeto
+                // al que no se le despachó skinning le quedaría la pose del
+                // último frame en que fue visible, así que su sombra sería
+                // falsa. Se paga que un personaje fuera de cámara no proyecte.
+                if (si >= m_skinnedVisible.size() || !m_skinnedVisible[si]) continue;
+                const SkinnedRenderObject& sobj = m_skinnedObjects[si];
+                if (sobj.outputVertexBuffer == VK_NULL_HANDLE || sobj.matGfx.empty()) continue;
+                // Sin sitio en el SSBO de instancias de este frame: mejor sin
+                // sombra que pisar el rango de otro pass.
+                if (m_instanceCursor >= m_instanceCapacity[m_currentFrame]) break;
+
+                // shadow.vert saca el model matrix del SSBO por gl_InstanceIndex:
+                // una entrada por objeto y un draw de una instancia apuntando a
+                // ella con firstInstance.
+                const uint32_t instanceIndex = m_instanceCursor++;
+                ((glm::mat4*)m_instanceMapped[m_currentFrame])[instanceIndex] = sobj.transform;
+
+                if (!skinnedBound)
+                {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowSkinnedPipeline);
+                    // El layout es el mismo, así que el push constant de la
+                    // cascada sobrevive al cambio de pipeline; se reescribe por
+                    // no depender de esa compatibilidad.
+                    vkCmdPushConstants(cmd, m_shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+                                       0, sizeof(uint32_t), &cascade);
+                    skinnedBound = true;
+                }
+
+                // Set 0 solo por el UBO de la cascada (binding 0): shadow.vert no
+                // muestrea nada, así que cualquier descriptor set del material
+                // sirve mientras sea del layout que declara el pipeline.
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout,
+                    0, 1, &sobj.matGfx[0].descSets[m_currentFrame], 0, nullptr);
+
+                VkBuffer svb[] = { sobj.outputVertexBuffer };
+                VkDeviceSize soffsets[] = { 0 };
+                vkCmdBindVertexBuffers(cmd, 0, 1, svb, soffsets);
+                vkCmdBindIndexBuffer(cmd, sobj.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                for (const auto& sm : sobj.subMeshes)
+                    vkCmdDrawIndexed(cmd, sm.indexCount, 1, sm.indexStart, 0, instanceIndex);
             }
 
             vkCmdEndRenderPass(cmd);

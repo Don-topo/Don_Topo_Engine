@@ -1476,6 +1476,11 @@ namespace DonTopo {
             VkRenderPass                    m_shadowRenderPass                  = VK_NULL_HANDLE;
             VkFramebuffer                   m_shadowFramebuffers[SHADOW_CASCADES] {};
             VkPipeline                      m_shadowPipeline                    = VK_NULL_HANDLE;
+            // Hermano del anterior para las mallas skinned: mismo shadow.vert,
+            // mismo layout, mismo render pass y mismo bias. Solo cambia el
+            // vertex input, porque lo que se dibuja es la salida del compute de
+            // skinning (5×vec4, stride 80) y el stride es estado de pipeline.
+            VkPipeline                      m_shadowSkinnedPipeline             = VK_NULL_HANDLE;
             VkPipelineLayout                m_shadowPipelineLayout              = VK_NULL_HANDLE;
             // Caché por frame que rellena computeCascades(). Identidad y 0 si la
             // escena no tiene luces: en ese caso el pass solo limpia las capas.
