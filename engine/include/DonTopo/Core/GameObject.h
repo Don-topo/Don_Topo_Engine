@@ -166,6 +166,12 @@ namespace DonTopo
             int staticRenderIndex  = -1;
             int skinnedRenderIndex = -1;
 
+            // Visibilidad del componente Mesh. false = la malla no se manda a la
+            // GPU: ni pass de escena, ni sombras, ni AO. Física, colisiones y
+            // selección en el viewport siguen igual. Llega al Renderer por frame
+            // vía setObjectMeshVisible/setSkinnedMeshVisible, igual que el SSR.
+            bool meshVisible = true;
+
             // Screen Space Reflections por objeto. No es un componente: son dos
             // campos del propio GameObject, igual que el transform, porque lo que
             // configuran es cómo se dibuja SU malla. ssrIntensity es la

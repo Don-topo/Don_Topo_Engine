@@ -290,7 +290,10 @@ namespace
         if (node.hasMesh())
         {
             const auto& mesh = node.getMesh();
-            nlohmann::json meshJson = { {"sourcePath", mesh->sourcePath}, {"name", mesh->name}, {"skinned", node.isSkinned()} };
+            // "visible" se guarda SIEMPRE: en ficheros viejos no existe y la
+            // carga cae al default true, que es como se veían.
+            nlohmann::json meshJson = { {"sourcePath", mesh->sourcePath}, {"name", mesh->name}, {"skinned", node.isSkinned()},
+                                        {"visible", node.meshVisible} };
             if (mesh->sourcePath.empty())
             {
                 // Procedural (Cube/Sphere/Plane/Capsule): no hay fichero de
@@ -679,6 +682,7 @@ namespace
         {
             std::string sourcePath = j["mesh"].value("sourcePath", "");
             std::string meshName   = j["mesh"].value("name", "");
+            node->meshVisible      = j["mesh"].value("visible", true);
             // El flag "skinned" se sigue GUARDANDO (dato informativo, y no
             // rompe ficheros viejos) pero ya no se lee: manda el fichero, en
             // carga igual que en import. Si no fuera así, las escenas guardadas

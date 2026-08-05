@@ -1618,6 +1618,28 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
         if (sectionOpen)
         {
             ImGui::Text("%s", ctx.selected->getMesh()->name.c_str());
+
+            // Solo el dibujado: oculto no llega a la GPU (ni escena, ni sombras,
+            // ni AO), pero física, colisiones y selección en el viewport siguen
+            // igual. Vale para estático y skinned, que comparten esta sección.
+            Scene*         meshScene = ctx.scene;
+            const uint64_t meshId    = ctx.selected->id;
+            bool           visible   = ctx.selected->meshVisible;
+            if (ImGui::Checkbox("Visible", &visible))
+            {
+                const bool before = ctx.selected->meshVisible;
+                ctx.selected->meshVisible = visible;
+                ctx.pushLog("Mesh de '" + ctx.selected->name + "' " +
+                            (visible ? "visible" : "oculto"));
+                if (meshScene && ctx.undo)
+                {
+                    ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
+                        "Visible de '" + ctx.selected->name + "'", before, visible,
+                        [meshScene, meshId](const bool& v) {
+                            if (GameObject* go = meshScene->findById(meshId)) go->meshVisible = v;
+                        }));
+                }
+            }
             ImGui::TreePop();
         }
 

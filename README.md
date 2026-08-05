@@ -25,6 +25,7 @@ A Vulkan-based game engine written in C++20.
 - Scene graph (hierarchical transforms), GameObject hierarchy panel (create/delete/rename, drag-drop reorder)
 - Basic shapes menu (Cube/Sphere/Plane/Capsule), Content Browser (asset browsing, rename/delete)
 - ImGuizmo transform gizmo (translate/rotate/scale, camera-oriented axis gizmo), debug-draw gizmos, collider gizmos
+- **Mesh visibility toggle**: a `Visible` checkbox on the Mesh component; unchecked, the mesh is submitted to no pass at all — no scene draw, no shadow, no AO, and no skinning dispatch — while physics, colliders, picking and scripting are untouched (see below)
 - **Selection outline**: the selected GameObject is traced with an orange contour in the viewport (see below)
 - **Click-to-select in the viewport**: left-clicking a mesh in the viewport selects it, clicking empty space clears the selection (CPU ray picking, see below)
 - **Camera component**: any GameObject can be the scene camera (perspective/orthographic, fov, near/far); frustum gizmo in edit mode, renders from it on Play
@@ -371,12 +372,36 @@ One deliberate limitation: the descriptor set is per **shared mesh**, not per Ga
 instances of the same mesh under different probes share a probe — the first one in traversal
 order wins. Splitting them would mean duplicating the sets and losing the instanced draw.
 
+## Mesh Visibility
+
+The Mesh component in the Properties panel carries a `Visible` checkbox, on by default. Unchecked,
+the mesh is not handed to the GPU in **any** pass: it disappears from the scene pass, stops casting
+shadows into the cascades, stops occluding in the SSAO pre-pass, and — if it is skinned — its
+skinning compute is not dispatched and `updateAnimation` freezes its clock, so the pose resumes
+where it left off instead of jumping forward when it is shown again. The selection outline is
+skipped too: with no skinning dispatch there is no pose to trace.
+
+Everything that is not drawing keeps running. Physics and colliders, click-to-select in the
+viewport, transform gizmos, audio and scripting all behave as if the mesh were on screen — an
+invisible trigger volume with a mesh attached still fires, and a script still finds its entity.
+
+The flag is a plain `bool` on the GameObject, next to the SSR fields, synced to the renderer once
+per frame alongside the transform. That is the same route the per-object SSR strength takes, so
+Play Mode, undo/redo and scene loading need no path of their own. It is serialized inside the
+`mesh` object of the scene JSON and defaults to `true`, so scenes saved before the feature load
+exactly as they looked. Toggling it pushes an undo entry like any other property.
+
+One thing the checkbox does *not* do is free GPU memory: the vertex buffers, textures and
+descriptor sets stay resident so re-showing the mesh costs nothing. Removing the component with
+the `x` button is still the way to release them.
+
 ## Selection Outline
 
 Selecting a GameObject that carries a mesh — static or skinned — traces it with an orange
 contour in the viewport; deselecting clears it the same frame. Objects without a mesh (empties,
 cameras, pure collider nodes) get the usual axis gizmo but no outline, since there is no
-geometry to trace.
+geometry to trace. A mesh with `Visible` unchecked gets none either: it is drawn in no pass, and
+for a skinned one the pose the outline would trace was never computed.
 
 The technique is an **inverted hull**: the mesh is redrawn extruded along its normals with
 front faces culled, in the composition pass, against the depth buffer the scene pass left

@@ -1519,11 +1519,11 @@ namespace DonTopo {
         {
             const RenderObject&  obj = m_objects[m_outlineStaticIndex];
             const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
-            // Mismas tres guardas que el bucle de dibujo, en el mismo orden:
-            // entrada borrada, upload en vuelo y frustum. Un objeto sin contorno
-            // porque está fuera de cámara es lo correcto — el objeto tampoco se
-            // ha dibujado.
-            bool visible = gpu && gpu->uploadTicket <= m_lastCompletedTicket;
+            // Mismas guardas que el bucle de dibujo, en el mismo orden: checkbox
+            // "Visible", entrada borrada, upload en vuelo y frustum. Un objeto
+            // sin contorno porque está fuera de cámara —u oculto— es lo correcto:
+            // el objeto tampoco se ha dibujado.
+            bool visible = obj.meshVisible && gpu && gpu->uploadTicket <= m_lastCompletedTicket;
             if (visible && gpu->hasBounds &&
                 !aabbVisible(camFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
             {
@@ -1562,7 +1562,10 @@ namespace DonTopo {
             // es la misma que gobernó el compute de skinning, así que si vale 0
             // el buffer de salida ni siquiera se ha actualizado y dibujar el
             // casco sacaría una pose vieja.
-            if (m_skinnedVisible[m_outlineSkinnedIndex])
+            // Con el checkbox "Visible" apagado pasa exactamente lo mismo: el
+            // compute no se despacha, así que no hay pose que dibujar.
+            if (m_skinnedVisible[m_outlineSkinnedIndex] &&
+                m_skinnedObjects[m_outlineSkinnedIndex].meshVisible)
             {
                 const SkinnedRenderObject& sobj = m_skinnedObjects[m_outlineSkinnedIndex];
                 // matGfx vacío: no habría de dónde sacar el set 0, y el UBO que
@@ -1746,7 +1749,10 @@ namespace DonTopo {
                 // último completado: todavía en vuelo, sus texturas siguen en
                 // TRANSFER_DST_OPTIMAL y samplearlas sería leer basura; aparece
                 // en cuanto la fence de su batch señale.
-                bool visible = gpu && gpu->uploadTicket <= m_lastCompletedTicket;
+                // obj.meshVisible: checkbox "Visible" del componente Mesh. Mismo
+                // filtro en los pases de sombra y de AO: oculto no llega a la GPU
+                // en ninguno, así que no proyecta sombra ni ocluye.
+                bool visible = obj.meshVisible && gpu && gpu->uploadTicket <= m_lastCompletedTicket;
                 // Fuera de cámara: no gasta ni slot en el SSBO. Los objetos sin
                 // AABB (mesh vacío) pasan siempre.
                 if (visible && gpu->hasBounds &&
@@ -1830,6 +1836,11 @@ namespace DonTopo {
                     // se le despachaba el compute.
                     if (!m_skinnedVisible[si]) continue;
                     SkinnedRenderObject& sobj = m_skinnedObjects[si];
+                    // Checkbox "Visible" del componente Mesh. Va aquí y no en
+                    // m_skinnedVisible porque ese flag también gobierna el
+                    // despacho del compute (que sigue corriendo: el contorno de
+                    // selección lee sus vértices) y el contorno mismo.
+                    if (!sobj.meshVisible) continue;
                     VkBuffer     vbs[]  = { sobj.outputVertexBuffer };
                     VkDeviceSize offs[] = { 0 };
                     vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vbs, offs);
@@ -3708,8 +3719,10 @@ namespace DonTopo {
                 const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
                 // !gpu: borrado desde el editor. En vuelo: no debe proyectar
                 // sombra si todavía no es visible, o habría una sombra flotando
-                // sin objeto que la eche.
-                bool visible = gpu && gpu->uploadTicket <= m_lastCompletedTicket;
+                // sin objeto que la eche. obj.meshVisible (checkbox "Visible"):
+                // un mesh oculto no se manda a la GPU en ningún pass, así que
+                // tampoco proyecta sombra.
+                bool visible = obj.meshVisible && gpu && gpu->uploadTicket <= m_lastCompletedTicket;
                 // Fuera del volumen que cubre esta cascada: su sombra no cabría
                 // en la capa de todos modos.
                 if (visible && gpu->hasBounds &&
@@ -3755,6 +3768,8 @@ namespace DonTopo {
                 // falsa. Se paga que un personaje fuera de cámara no proyecte.
                 if (si >= m_skinnedVisible.size() || !m_skinnedVisible[si]) continue;
                 const SkinnedRenderObject& sobj = m_skinnedObjects[si];
+                // Checkbox "Visible" del componente Mesh: oculto no proyecta.
+                if (!sobj.meshVisible) continue;
                 if (sobj.outputVertexBuffer == VK_NULL_HANDLE || sobj.matGfx.empty()) continue;
                 // Sin sitio en el SSBO de instancias de este frame: mejor sin
                 // sombra que pisar el rango de otro pass.
@@ -5636,6 +5651,9 @@ namespace DonTopo {
         if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
         auto& obj = m_skinnedObjects[index];
         if (obj.ticksPerSecond <= 0.0f || obj.duration <= 0.0f) return;
+        // Oculto: no se ve, así que su reloj tampoco corre. Al volver a marcarlo
+        // Visible reanuda donde se quedó en vez de saltar hacia delante.
+        if (!obj.meshVisible) return;
         obj.animTime += deltaTime * obj.ticksPerSecond;
         if (obj.animTime > obj.duration)
             obj.animTime = std::fmod(obj.animTime, obj.duration);
@@ -5912,6 +5930,11 @@ namespace DonTopo {
             // dibujara le dejaría la pose del último frame en que fue visible.
             if (i >= m_skinnedVisible.size() || !m_skinnedVisible[i]) continue;
             SkinnedRenderObject& obj = m_skinnedObjects[i];
+            // Checkbox "Visible" apagado: no se dibuja en ningún pass, así que
+            // skinearlo sería trabajo de GPU que nadie lee. La pose se queda
+            // congelada en la del último frame visible, igual que hace el culling
+            // con un personaje fuera de cámara.
+            if (!obj.meshVisible) continue;
             ComputePush push{};
             push.animTime    = obj.animTime;
             push.boneCount   = obj.boneCount;
@@ -7292,7 +7315,7 @@ namespace DonTopo {
             for (auto& obj : m_objects)
             {
                 const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
-                bool visible = gpu && gpu->uploadTicket <= m_lastCompletedTicket;
+                bool visible = obj.meshVisible && gpu && gpu->uploadTicket <= m_lastCompletedTicket;
                 if (visible && gpu->hasBounds &&
                     !aabbVisible(camFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
                 {

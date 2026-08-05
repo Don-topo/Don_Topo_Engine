@@ -551,10 +551,15 @@ int main(int argc, char** argv)
                     // sink, mismo sitio.
                     renderer.setObjectSsr(go->staticRenderIndex,
                                           go->ssrEnabled ? go->ssrIntensity : 0.0f);
+                    renderer.setObjectMeshVisible(go->staticRenderIndex, go->meshVisible);
                 }
 
                 if (go->skinnedRenderIndex >= 0)
                 {
+                    // Antes de tocar la animación: updateAnimation congela el
+                    // reloj de un mesh oculto, así que el flag tiene que estar ya
+                    // puesto o iría un frame por detrás.
+                    renderer.setSkinnedMeshVisible(go->skinnedRenderIndex, go->meshVisible);
                     if (const auto& anim = go->getAnimator())
                     {
                         anim->update(dt, /*playing=*/true);

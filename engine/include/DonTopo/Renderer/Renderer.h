@@ -155,6 +155,21 @@ namespace DonTopo {
                 if (index >= 0 && index < (int)m_skinnedObjects.size())
                     m_skinnedObjects[index].ssrStrength = strength;
             }
+            // Visibilidad del mesh (false = no se dibuja). Se sincroniza por frame
+            // junto al transform, igual que el SSR, así que Play Mode, Undo y la
+            // carga de escena no necesitan camino propio. La consumen los pases de
+            // escena, sombras y AO: oculto no se manda a la GPU en ninguno.
+            // Física, selección y contorno no la miran.
+            void setObjectMeshVisible(size_t objectIndex, bool visible)
+            {
+                if (objectIndex < m_objects.size())
+                    m_objects[objectIndex].meshVisible = visible;
+            }
+            void setSkinnedMeshVisible(int index, bool visible)
+            {
+                if (index >= 0 && index < (int)m_skinnedObjects.size())
+                    m_skinnedObjects[index].meshVisible = visible;
+            }
             void setLights(const std::vector<Light>& lights){ m_lights = lights; }
 
             // Peso global del ambiente IBL. 1.0 = el entorno tal cual lo da el
@@ -528,6 +543,9 @@ namespace DonTopo {
                 // 0 = no refleja. Lo sincroniza el bucle de la aplicación desde
                 // el GameObject, igual que el transform.
                 float           ssrStrength         = 0.0f;
+                // false = lo saltan los pases de escena, de sombras y de AO: el
+                // mesh no se manda a la GPU, así que tampoco proyecta ni ocluye.
+                bool            meshVisible         = true;
             };
 
             struct SkinnedMatGfx {
@@ -625,6 +643,10 @@ namespace DonTopo {
                 // igual que el transform. La ruta skinned dibuja una instancia
                 // por submalla, así que aquí no hay agrupado que partir.
                 float          ssrStrength          = 0.0f;
+                // false = lo saltan el pass de escena y el de sombras. El compute
+                // de skinning sí sigue corriendo: el contorno de selección lee
+                // sus vértices de salida.
+                bool           meshVisible          = true;
                 // Estado de animación
                 float     animTime       = 0.0f;
                 // Índice del clip que se evalúa este frame. Sin blending solo se
