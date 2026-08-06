@@ -61,6 +61,15 @@ namespace DonTopo
         // UVs no dependen de que nadie lo declare a mano. Los sprites se añaden
         // después con addSprite.
         bool loadFromFile(GpuDevice& gpu, GpuResources& res, const std::string& path);
+
+        // El mismo atlas pero desde píxeles RGBA8 YA en memoria: es lo que
+        // necesita una fuente, cuyo atlas se hornea en caliente y nunca existe
+        // como fichero. El formato es explícito y NO tiene un valor por defecto
+        // seguro para todos: un MSDF son distancias y en SRGB salen deformadas
+        // sin que la validación diga una palabra.
+        bool loadFromPixels(GpuDevice& gpu, GpuResources& res, const uint8_t* rgba,
+                            uint32_t width, uint32_t height, VkFormat format);
+
         void destroy(GpuDevice& gpu);
 
         VkImageView     view()          const { return m_view; }

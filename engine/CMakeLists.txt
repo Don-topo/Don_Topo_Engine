@@ -49,6 +49,7 @@ add_library(DonTopoCore STATIC
     src/UI/UiCanvas.cpp
     src/UI/UiSpriteBatch.cpp
     src/UI/UiTextureAtlas.cpp
+    src/UI/UiFont.cpp
     src/Scripting/LuaSyntaxCheck.cpp
     src/Scripting/LuaApiReference.cpp
 )
@@ -67,6 +68,11 @@ target_link_libraries(DonTopoCore
         assimp
         nlohmann_json::nlohmann_json
         sol2_lib
+    # Solo UiFont.cpp los ve: UiFont.h no expone ni un tipo de FreeType ni de
+    # msdfgen, así que nadie que use DonTopoCore hereda sus includes.
+    PRIVATE
+        freetype
+        msdfgen::msdfgen-core
 )
 
 if(FMOD_FOUND)

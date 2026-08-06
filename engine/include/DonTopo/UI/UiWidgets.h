@@ -13,8 +13,12 @@
 
 #include "DonTopo/UI/UiCanvas.h"
 
+#include <string>
+
 namespace DonTopo
 {
+    class UiFont;
+
     struct Panel : UiElement
     {
         using UiElement::UiElement;
@@ -27,10 +31,36 @@ namespace DonTopo
         const char* typeName() const override { return "Image"; }
     };
 
+    // El único con estado propio de momento: sin campos no habría nada que
+    // dibujar. Una sola línea, sin wrap, sin alineación y sin rich text: eso
+    // es otra fase.
     struct Text : UiElement
     {
         using UiElement::UiElement;
         const char* typeName() const override { return "Text"; }
+        const Text* asText() const override { return this; }
+
+        // Sin fuente el elemento vuelve a dibujarse como su base (quad de
+        // color): así un Text a medio configurar no desaparece en silencio.
+        const UiFont* font = nullptr;
+
+        std::string text;   // UTF-8; se decodifica a codepoints al emitir
+
+        // En píxeles de PANTALLA. No tiene por qué coincidir con el tamaño al
+        // que se horneó el atlas: de eso va el MSDF.
+        float fontSize = 16.0f;
+
+        // El color del relleno es UiElement::color.
+
+        // Grosor en píxeles de pantalla. A 0 no hay outline y el shader ni
+        // entra en esa rama.
+        float     outlineWidth = 0.0f;
+        glm::vec4 outlineColor{0.0f, 0.0f, 0.0f, 1.0f};
+
+        // Desplazamiento en píxeles. A {0,0} (o con alfa 0) no se emite ni un
+        // quad de sombra.
+        glm::vec2 shadowOffset{0.0f, 0.0f};
+        glm::vec4 shadowColor{0.0f, 0.0f, 0.0f, 0.5f};
     };
 
     struct Button : UiElement

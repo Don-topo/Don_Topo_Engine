@@ -14,6 +14,7 @@
 // Todos los valores son no neutros y distintos entre sí: con 0, 1 o valores
 // repetidos, un campo que nadie lee pasaría igual.
 #include "DonTopo/UI/UiCanvas.h"
+#include "DonTopo/UI/UiFont.h"
 #include "DonTopo/UI/UiLayout.h"
 #include "DonTopo/UI/UiSpriteBatch.h"
 #include "DonTopo/UI/UiTextureAtlas.h"
@@ -829,6 +830,318 @@ static void test_neutralidad_de_los_campos_nuevos()
     CHECK(nearly(data.vertices[2].pos.y, 126.0f));
 }
 
+// ── Texto ───────────────────────────────────────────────────────────────────
+// La fuente se rellena A MANO por la API pública de UiFont: sin TTF, sin
+// FreeType y sin Vulkan, así que el test es determinista y no depende de que
+// haya ningún fichero al lado del ejecutable.
+//
+// Todos los números son DISTINTOS entre sí a propósito: advance != alto,
+// bearing != 0 y != entre ejes, y kerning negativo y distinto por par. Con
+// valores neutros, ignorar el kerning o intercambiar bearing X e Y pasaría
+// igual.
+static constexpr float kBakeSize = 32.0f;
+
+static void makeTestFont(UiFont& font)
+{
+    font.setBakeSize(kBakeSize);
+    font.setPixelRange(4.0f);
+    font.setMetrics(24.0f, 8.0f, 40.0f);   // ascent, descent, lineHeight
+    font.atlas().setSize(128, 64);
+
+    UiGlyph a{};
+    a.rect     = {16.0f, 8.0f, 10.0f, 14.0f};
+    a.bearingX = 3.0f;
+    a.bearingY = 12.0f;
+    a.advance  = 21.0f;
+    font.addGlyph('A', a);
+
+    UiGlyph b{};
+    b.rect     = {40.0f, 24.0f, 9.0f, 18.0f};
+    b.bearingX = -2.0f;
+    b.bearingY = 17.0f;
+    b.advance  = 13.0f;
+    font.addGlyph('B', b);
+
+    UiGlyph c{};
+    c.rect     = {70.0f, 2.0f, 12.0f, 11.0f};
+    c.bearingX = 5.0f;
+    c.bearingY = 9.0f;
+    c.advance  = 27.0f;
+    font.addGlyph('C', c);
+
+    font.setKerning('A', 'B', -4.0f);
+    font.setKerning('B', 'C', -6.0f);
+}
+
+// Cursor: X del glyph n = X del n-1 + advance + kerning(n-1, n) + bearing.
+static void test_texto_avance_y_kerning_colocan_las_x()
+{
+    UiFont font;
+    makeTestFont(font);
+
+    UiCanvas canvas;
+    Text& label = canvas.root().add<Text>("Etiqueta");
+    label.position = {100.0f, 50.0f};
+    label.font     = &font;
+    label.text     = "ABC";
+    label.fontSize = kBakeSize;   // sin escala: los números son los del horneado
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 12);
+    if (data.vertices.size() != 12) return;
+
+    // El lote es el de la fuente, no el nulo del color plano.
+    CHECK(data.batches[0].atlas == &font.atlas());
+
+    // pluma 100 -> 'A' en 100+3
+    CHECK(nearly(data.vertices[0].pos.x, 103.0f));
+    // pluma 121, kerning A-B -4 -> 117 -> 'B' en 117-2
+    CHECK(nearly(data.vertices[4].pos.x, 115.0f));
+    // pluma 130, kerning B-C -6 -> 124 -> 'C' en 124+5
+    CHECK(nearly(data.vertices[8].pos.x, 129.0f));
+
+    // Y el ancho de cada quad sale de su rect, no del advance.
+    CHECK(nearly(data.vertices[1].pos.x - data.vertices[0].pos.x, 10.0f));
+    CHECK(nearly(data.vertices[5].pos.x - data.vertices[4].pos.x, 9.0f));
+    CHECK(nearly(data.vertices[9].pos.x - data.vertices[8].pos.x, 12.0f));
+}
+
+// El bearing separa la pluma del quad, y los dos ejes NO valen lo mismo:
+// intercambiarlos mueve los tres glyphs.
+static void test_texto_bearing_separa_el_quad_del_cursor()
+{
+    UiFont font;
+    makeTestFont(font);
+
+    UiCanvas canvas;
+    Text& label = canvas.root().add<Text>("Etiqueta");
+    label.position = {100.0f, 50.0f};
+    label.font     = &font;
+    label.text     = "ABC";
+    label.fontSize = kBakeSize;
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(data.vertices.size() == 12);
+    if (data.vertices.size() != 12) return;
+
+    // Línea base a un ascent del borde superior: 50 + 24 = 74. El borde
+    // superior de cada quad es baseline - bearingY (+Y va hacia ABAJO).
+    CHECK(nearly(data.vertices[0].pos.y, 62.0f));    // 74 - 12
+    CHECK(nearly(data.vertices[4].pos.y, 57.0f));    // 74 - 17
+    CHECK(nearly(data.vertices[8].pos.y, 65.0f));    // 74 -  9
+
+    // Y el alto sale del rect: 14, 18 y 11, ninguno igual a su advance.
+    CHECK(nearly(data.vertices[3].pos.y - data.vertices[0].pos.y, 14.0f));
+    CHECK(nearly(data.vertices[7].pos.y - data.vertices[4].pos.y, 18.0f));
+    CHECK(nearly(data.vertices[11].pos.y - data.vertices[8].pos.y, 11.0f));
+}
+
+// De esto va el MSDF: cambiar de tamaño escala el quad y el screenPxRange, y NO
+// toca ni una UV. Si hubiera que rehornear, las UVs cambiarían.
+static void test_texto_fontsize_escala_el_quad_pero_no_las_uvs()
+{
+    UiFont font;
+    makeTestFont(font);
+
+    UiCanvas horneado;
+    Text& base = horneado.root().add<Text>("Base");
+    base.position = {100.0f, 50.0f};
+    base.font     = &font;
+    base.text     = "A";
+    base.fontSize = kBakeSize;
+
+    UiDrawData dataBase;
+    horneado.buildDrawData(kW, kH, dataBase);
+
+    UiCanvas ampliado;
+    Text& grande = ampliado.root().add<Text>("Grande");
+    grande.position = {100.0f, 50.0f};
+    grande.font     = &font;
+    grande.text     = "A";
+    grande.fontSize = kBakeSize * 1.5f;   // 48 px
+
+    UiDrawData dataGrande;
+    ampliado.buildDrawData(kW, kH, dataGrande);
+
+    CHECK(dataBase.vertices.size() == 4);
+    CHECK(dataGrande.vertices.size() == 4);
+    if (dataBase.vertices.size() != 4 || dataGrande.vertices.size() != 4) return;
+
+    // Quad 1.5x: 10x14 -> 15x21, y la esquina se recoloca por el bearing ya
+    // escalado (100 + 3*1.5, 50 + 24*1.5 - 12*1.5).
+    CHECK(nearly(dataGrande.vertices[0].pos.x, 104.5f));
+    CHECK(nearly(dataGrande.vertices[0].pos.y, 68.0f));
+    CHECK(nearly(dataGrande.vertices[2].pos.x - dataGrande.vertices[0].pos.x, 15.0f));
+    CHECK(nearly(dataGrande.vertices[2].pos.y - dataGrande.vertices[0].pos.y, 21.0f));
+
+    // screenPxRange escalado igual: 4 -> 6.
+    CHECK(nearly(dataBase.vertices[0].params.y, 4.0f));
+    CHECK(nearly(dataGrande.vertices[0].params.y, 6.0f));
+
+    // Modo MSDF en los dos, y MISMAS UVs: 16/128, 8/64, 26/128, 22/64.
+    CHECK(nearly(dataBase.vertices[0].params.x, 1.0f));
+    CHECK(nearly(dataGrande.vertices[0].params.x, 1.0f));
+    for (size_t i = 0; i < 4; ++i)
+    {
+        CHECK(nearly(dataBase.vertices[i].uv.x, dataGrande.vertices[i].uv.x));
+        CHECK(nearly(dataBase.vertices[i].uv.y, dataGrande.vertices[i].uv.y));
+    }
+    CHECK(nearly(dataBase.vertices[0].uv.x, 0.125f));
+    CHECK(nearly(dataBase.vertices[0].uv.y, 0.125f));
+    CHECK(nearly(dataBase.vertices[2].uv.x, 26.0f / 128.0f));
+    CHECK(nearly(dataBase.vertices[2].uv.y, 22.0f / 64.0f));
+}
+
+// La sombra son quads EXTRA por delante, con el mismo atlas y el mismo scissor:
+// el doble de geometría, pero UN solo lote.
+static void test_texto_sombra_duplica_los_quads_en_un_solo_lote()
+{
+    UiFont font;
+    makeTestFont(font);
+
+    UiCanvas canvas;
+    Text& label = canvas.root().add<Text>("Etiqueta");
+    label.position     = {100.0f, 50.0f};
+    label.font         = &font;
+    label.text         = "AB";
+    label.fontSize     = kBakeSize;
+    label.shadowOffset = {3.0f, -5.0f};   // los dos ejes distintos y de signo distinto
+    label.shadowColor  = {0.0f, 0.0f, 0.0f, 0.5f};
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    // 2 glyphs x 2 pases.
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 16);
+    CHECK(data.indices.size() == 24);
+    if (data.vertices.size() != 16) return;
+
+    // La sombra va PRIMERO: los cuatro primeros quads son los desplazados.
+    CHECK(nearly(data.vertices[0].pos.x, 106.0f));   // 103 + 3
+    CHECK(nearly(data.vertices[0].pos.y, 57.0f));    //  62 - 5
+    CHECK(nearly(data.vertices[4].pos.x, 118.0f));   // 115 + 3
+    CHECK(nearly(data.vertices[4].pos.y, 52.0f));    //  57 - 5
+
+    // Y el texto detrás, sin desplazar.
+    CHECK(nearly(data.vertices[8].pos.x, 103.0f));
+    CHECK(nearly(data.vertices[8].pos.y, 62.0f));
+    CHECK(nearly(data.vertices[12].pos.x, 115.0f));
+    CHECK(nearly(data.vertices[12].pos.y, 57.0f));
+
+    // Color de sombra en los primeros y de relleno (blanco) en los últimos.
+    CHECK(nearly(data.vertices[0].color.a, 0.5f));
+    CHECK(nearly(data.vertices[8].color.a, 1.0f));
+
+    // La sombra usa las MISMAS UVs que su glyph: es el mismo atlas.
+    CHECK(nearly(data.vertices[0].uv.x, data.vertices[8].uv.x));
+    CHECK(nearly(data.vertices[0].uv.y, data.vertices[8].uv.y));
+
+    // Sin offset no hay pase de sombra.
+    label.shadowOffset = {0.0f, 0.0f};
+    UiDrawData sinSombra;
+    canvas.buildDrawData(kW, kH, sinSombra);
+    CHECK(sinSombra.vertices.size() == 8);
+    CHECK(sinSombra.batches.size() == 1);
+}
+
+// El outline viaja por vértice: ni parte el lote ni necesita otra textura.
+static void test_texto_outline_viaja_al_vertice_sin_partir_el_lote()
+{
+    UiFont font;
+    makeTestFont(font);
+
+    UiCanvas canvas;
+    Text& label = canvas.root().add<Text>("Etiqueta");
+    label.position     = {100.0f, 50.0f};
+    label.font         = &font;
+    label.text         = "ABC";
+    label.fontSize     = kBakeSize;
+    label.outlineWidth = 2.5f;
+    label.outlineColor = {0.25f, 0.5f, 0.75f, 1.0f};
+    label.shadowOffset = {3.0f, -5.0f};
+    label.shadowColor  = {0.0f, 0.0f, 0.0f, 0.5f};
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 24);
+    if (data.vertices.size() != 24) return;
+
+    // Los 12 primeros son la sombra: sin outline.
+    for (size_t i = 0; i < 12; ++i)
+        CHECK(nearly(data.vertices[i].params.z, 0.0f));
+
+    // Los 12 siguientes lo llevan, con su color en effect.
+    for (size_t i = 12; i < 24; ++i)
+    {
+        CHECK(nearly(data.vertices[i].params.z, 2.5f));
+        CHECK(nearly(data.vertices[i].effect.x, 0.25f));
+        CHECK(nearly(data.vertices[i].effect.y, 0.5f));
+        CHECK(nearly(data.vertices[i].effect.z, 0.75f));
+    }
+}
+
+// Neutralidad del texto: sin Text, o con un Text sin fuente, el batcher da lo
+// mismo que antes de esta fase y params.x se queda a 0 (modo sprite).
+static void test_neutralidad_del_texto()
+{
+    UiVertex fresh;
+    CHECK(nearly(fresh.params.x, 0.0f) && nearly(fresh.params.y, 0.0f));
+    CHECK(nearly(fresh.params.z, 0.0f) && nearly(fresh.effect.a, 0.0f));
+
+    // El mismo árbol de test_transform_del_padre_se_acumula, vértice a vértice.
+    UiCanvas canvas;
+    UiElement& parent = canvas.root().add("Panel");
+    parent.position = {120.0f, 45.0f};
+    parent.scale    = {2.0f, 3.0f};
+    parent.drawable = false;
+
+    UiElement& child = parent.add("Image");
+    child.position = {10.0f, 20.0f};
+    child.size     = {5.0f, 7.0f};
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 4);
+    if (data.vertices.size() != 4) return;
+    CHECK(nearly(data.vertices[0].pos.x, 140.0f));
+    CHECK(nearly(data.vertices[0].pos.y, 105.0f));
+    CHECK(nearly(data.vertices[2].pos.x, 150.0f));
+    CHECK(nearly(data.vertices[2].pos.y, 126.0f));
+    for (const UiVertex& v : data.vertices)
+    {
+        CHECK(nearly(v.params.x, 0.0f));
+        CHECK(nearly(v.params.y, 0.0f));
+        CHECK(nearly(v.params.z, 0.0f));
+        CHECK(nearly(v.effect.a, 0.0f));
+    }
+
+    // Un Text sin fuente vuelve a dibujarse como su base: un quad y nada más.
+    UiCanvas conTexto;
+    Text& label = conTexto.root().add<Text>("SinFuente");
+    label.position = {31.0f, 43.0f};
+    label.size     = {17.0f, 29.0f};
+    label.text     = "ABC";
+
+    UiDrawData plano;
+    conTexto.buildDrawData(kW, kH, plano);
+    CHECK(plano.batches.size() == 1);
+    CHECK(plano.vertices.size() == 4);
+    if (plano.vertices.size() != 4) return;
+    CHECK(nearly(plano.vertices[0].pos.x, 31.0f));
+    CHECK(nearly(plano.vertices[2].pos.y, 72.0f));
+    CHECK(nearly(plano.vertices[0].params.x, 0.0f));
+}
+
 int main()
 {
     test_canvas_vacio_no_emite_nada();
@@ -852,6 +1165,12 @@ int main()
     test_content_size_fitter_crece_hasta_los_hijos();
     test_hijo_invisible_no_desincroniza_la_medida();
     test_neutralidad_de_los_campos_nuevos();
+    test_texto_avance_y_kerning_colocan_las_x();
+    test_texto_bearing_separa_el_quad_del_cursor();
+    test_texto_fontsize_escala_el_quad_pero_no_las_uvs();
+    test_texto_sombra_duplica_los_quads_en_un_solo_lote();
+    test_texto_outline_viaja_al_vertice_sin_partir_el_lote();
+    test_neutralidad_del_texto();
 
     if (g_failures == 0) std::printf("ui_batch_tests: OK\n");
     else                 std::printf("ui_batch_tests: %d fallos\n", g_failures);

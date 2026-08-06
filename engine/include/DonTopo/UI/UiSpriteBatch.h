@@ -32,6 +32,17 @@ namespace DonTopo
         glm::vec2 pos{0.0f};
         glm::vec2 uv{0.0f};
         glm::vec4 color{1.0f};
+
+        // Todo lo que distingue un quad de texto de uno de sprite viaja POR
+        // VÉRTICE, no por pipeline ni por descriptor: así el texto cae en el
+        // mismo lote que el panel que tiene detrás.
+        //   params.x = modo: 0 = sprite/color plano, 1 = MSDF
+        //   params.y = screenPxRange YA escalado al tamaño de este quad
+        //   params.z = grosor del outline en píxeles de pantalla
+        //   effect   = color del outline (con la opacidad del árbol ya aplicada)
+        // Con params.x = 0 el shader hace literalmente lo de siempre.
+        glm::vec4 params{0.0f};
+        glm::vec4 effect{0.0f};
     };
 
     struct UiScissor

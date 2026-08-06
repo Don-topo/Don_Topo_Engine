@@ -240,6 +240,44 @@ target_compile_definitions(sol2_lib INTERFACE SOL_ALL_SAFETIES_ON=1)
 # PhysX SDK — física (compilado desde fuente, ver cmake/PhysX.cmake)
 include(cmake/PhysX.cmake)
 
+# FreeType — solo lo usa UiFont para sacar los contornos y las métricas de un
+# TTF al hornear el atlas de texto. Sin compresores ni HarfBuzz: nada de eso
+# hace falta para leer outlines y arrastraría dependencias propias.
+set(FT_DISABLE_ZLIB     ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_BZIP2    ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_PNG      ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_HARFBUZZ ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_BROTLI   ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    freetype
+    GIT_REPOSITORY https://github.com/freetype/freetype.git
+    GIT_TAG        VER-2-13-3
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(freetype)
+
+# msdfgen — campos de distancia multicanal (texto nítido a cualquier tamaño).
+# CORE_ONLY a propósito: su mitad "ext" hace find_package(Freetype REQUIRED),
+# que busca en el SISTEMA y aquí FreeType viene por FetchContent. El paso
+# contorno -> Shape lo hace UiFont con FT_Outline_Decompose, que es justo lo
+# que esa mitad aportaba.
+set(MSDFGEN_CORE_ONLY        ON  CACHE BOOL "" FORCE)
+set(MSDFGEN_USE_VCPKG        OFF CACHE BOOL "" FORCE)
+set(MSDFGEN_BUILD_STANDALONE OFF CACHE BOOL "" FORCE)
+set(MSDFGEN_INSTALL          OFF CACHE BOOL "" FORCE)
+set(MSDFGEN_USE_SKIA         OFF CACHE BOOL "" FORCE)
+set(MSDFGEN_USE_OPENMP       OFF CACHE BOOL "" FORCE)
+# Por defecto se compila con el CRT ESTÁTICO (/MTd) y el resto del proyecto va
+# con el dinámico: sin esto el link muere con trece LNK2038 de RuntimeLibrary.
+set(MSDFGEN_DYNAMIC_RUNTIME  ON  CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    msdfgen
+    GIT_REPOSITORY https://github.com/Chlumsky/msdfgen.git
+    GIT_TAG        v1.12
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(msdfgen)
+
 # Future dependencies go here:
 # FetchContent_Declare(gainput ...) # dedicated input
 

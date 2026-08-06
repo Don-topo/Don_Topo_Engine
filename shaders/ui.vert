@@ -7,6 +7,12 @@
 layout(location = 0) in vec2 inPos;
 layout(location = 1) in vec2 inUv;
 layout(location = 2) in vec4 inColor;
+// params.x = modo (0 = sprite/color plano, 1 = MSDF)
+// params.y = screenPxRange ya escalado al tamano de ESTE quad
+// params.z = grosor del outline en pixeles de pantalla
+// effect   = color del outline. Todo por vertice: asi el texto no parte el lote.
+layout(location = 3) in vec4 inParams;
+layout(location = 4) in vec4 inEffect;
 
 layout(push_constant) uniform Push {
     mat4 proj;
@@ -14,10 +20,14 @@ layout(push_constant) uniform Push {
 
 layout(location = 0) out vec2 vUv;
 layout(location = 1) out vec4 vColor;
+layout(location = 2) out vec4 vParams;
+layout(location = 3) out vec4 vEffect;
 
 void main()
 {
     gl_Position = pc.proj * vec4(inPos, 0.0, 1.0);
-    vUv    = inUv;
-    vColor = inColor;
+    vUv     = inUv;
+    vColor  = inColor;
+    vParams = inParams;
+    vEffect = inEffect;
 }

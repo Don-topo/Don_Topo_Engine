@@ -1,6 +1,8 @@
 #include "DonTopo/UI/UiSpriteBatch.h"
 
 #include "DonTopo/UI/UiCanvas.h"
+#include "DonTopo/UI/UiFont.h"
+#include "DonTopo/UI/UiWidgets.h"
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/GpuResources.h"
 
@@ -64,46 +66,146 @@ namespace DonTopo
             return s;
         }
 
-        void emitQuad(const UiElement& node, const glm::vec2& pos, const glm::vec2& size,
-                      const UiScissor& scissor, float opacity, UiDrawData& out)
+        // Un quad con TODO explícito: atlas, UVs, color y los dos vec4 de
+        // parámetros. El de texto no puede salir de node.sprite porque un glyph
+        // no tiene nombre, así que la regla de romper el lote vive aquí y solo
+        // aquí.
+        void emitRawQuad(const UiTextureAtlas* atlas, const glm::vec2& pos, const glm::vec2& size,
+                         const UiUvRect& uv, const glm::vec4& color,
+                         const glm::vec4& params, const glm::vec4& effect,
+                         const UiScissor& scissor, UiDrawData& out)
         {
             if (out.vertices.size() + 4 > kMaxVertices) return;
 
             // Un lote solo puede llevar UN atlas y UN scissor: cualquiera de los
-            // dos que cambie obliga a cerrar el actual y abrir otro.
+            // dos que cambie obliga a cerrar el actual y abrir otro. El modo, el
+            // outline y el color van por vértice justamente para NO aparecer
+            // aquí.
             if (out.batches.empty() ||
-                out.batches.back().atlas != node.atlas ||
+                out.batches.back().atlas != atlas ||
                 out.batches.back().scissor != scissor)
             {
                 UiBatch batch{};
-                batch.atlas      = node.atlas;
+                batch.atlas      = atlas;
                 batch.scissor    = scissor;
                 batch.firstIndex = (uint32_t)out.indices.size();
                 batch.indexCount = 0;
                 out.batches.push_back(batch);
             }
 
+            const uint16_t base = (uint16_t)out.vertices.size();
+
+            // Sentido horario en pantalla empezando arriba a la izquierda. El
+            // vértice inferior tiene la Y MAYOR: +Y va hacia abajo.
+            out.vertices.push_back({{pos.x,          pos.y         }, {uv.u0, uv.v0}, color, params, effect});
+            out.vertices.push_back({{pos.x + size.x, pos.y         }, {uv.u1, uv.v0}, color, params, effect});
+            out.vertices.push_back({{pos.x + size.x, pos.y + size.y}, {uv.u1, uv.v1}, color, params, effect});
+            out.vertices.push_back({{pos.x,          pos.y + size.y}, {uv.u0, uv.v1}, color, params, effect});
+
+            const uint16_t quad[6] = { (uint16_t)(base + 0), (uint16_t)(base + 1), (uint16_t)(base + 2),
+                                       (uint16_t)(base + 2), (uint16_t)(base + 3), (uint16_t)(base + 0) };
+            out.indices.insert(out.indices.end(), quad, quad + 6);
+            out.batches.back().indexCount += 6;
+        }
+
+        void emitQuad(const UiElement& node, const glm::vec2& pos, const glm::vec2& size,
+                      const UiScissor& scissor, float opacity, UiDrawData& out)
+        {
             UiUvRect uv{};
             if (node.atlas) uv = node.atlas->uvRect(node.sprite);
-
-            const uint16_t base = (uint16_t)out.vertices.size();
 
             // La opacidad acumulada del árbol viaja POR VÉRTICE: así no parte el
             // lote, que solo puede cambiar por atlas o por scissor.
             glm::vec4 color = node.color;
             color.a *= opacity;
 
-            // Sentido horario en pantalla empezando arriba a la izquierda. El
-            // vértice inferior tiene la Y MAYOR: +Y va hacia abajo.
-            out.vertices.push_back({{pos.x,          pos.y         }, {uv.u0, uv.v0}, color});
-            out.vertices.push_back({{pos.x + size.x, pos.y         }, {uv.u1, uv.v0}, color});
-            out.vertices.push_back({{pos.x + size.x, pos.y + size.y}, {uv.u1, uv.v1}, color});
-            out.vertices.push_back({{pos.x,          pos.y + size.y}, {uv.u0, uv.v1}, color});
+            // params.x = 0: el shader hace exactamente lo de siempre.
+            emitRawQuad(node.atlas, pos, size, uv, color,
+                        glm::vec4(0.0f), glm::vec4(0.0f), scissor, out);
+        }
 
-            const uint16_t quad[6] = { (uint16_t)(base + 0), (uint16_t)(base + 1), (uint16_t)(base + 2),
-                                       (uint16_t)(base + 2), (uint16_t)(base + 3), (uint16_t)(base + 0) };
-            out.indices.insert(out.indices.end(), quad, quad + 6);
-            out.batches.back().indexCount += 6;
+        // ── Texto ───────────────────────────────────────────────────────────
+        // Una línea, sin wrap y sin alineación. El rect del nodo solo aporta la
+        // esquina superior izquierda: la altura la manda la métrica de la fuente.
+        void emitText(const Text& text, const glm::vec2& worldPos, const glm::vec2& worldScale,
+                      const UiScissor& scissor, float opacity, UiDrawData& out)
+        {
+            const UiFont* font = text.font;
+
+            // fontSize/bakeSize: el atlas se horneó a UN tamaño y el resto sale
+            // de escalar el quad, que es de lo que va un MSDF.
+            const float unit = font->scaleFor(text.fontSize);
+            if (unit <= 0.0f) return;
+
+            const std::vector<uint32_t> codepoints = UiFont::decodeUtf8(text.text);
+            if (codepoints.empty()) return;
+
+            const glm::vec2 scale = glm::vec2(unit) * worldScale;
+
+            // El atlas de la fuente es la clave del lote, igual que cualquier
+            // otro: dos textos de la misma fuente caen en el mismo draw.
+            const UiTextureAtlas* atlas = &font->atlas();
+
+            glm::vec4 fill = text.color;
+            fill.a *= opacity;
+            glm::vec4 outline = text.outlineColor;
+            outline.a *= opacity;
+            glm::vec4 shadow = text.shadowColor;
+            shadow.a *= opacity;
+
+            const glm::vec2 shadowOffset = text.shadowOffset * worldScale;
+            const bool hasShadow = shadow.a > 0.0f &&
+                                   (text.shadowOffset.x != 0.0f || text.shadowOffset.y != 0.0f);
+
+            // screenPxRange: el rango del campo de distancia llevado al tamaño
+            // al que se va a dibujar. Sin esto el borde se difumina o se aliasa
+            // según el tamaño.
+            const float screenPxRange = font->pixelRange() * scale.y;
+
+            // La sombra es un pase ENTERO por delante: mismo atlas y mismo
+            // scissor, así que no parte el lote ni necesita otro pass.
+            for (int pass = hasShadow ? 0 : 1; pass < 2; ++pass)
+            {
+                const bool isShadow = (pass == 0);
+
+                // La línea base cae a un ascent del borde superior del rect.
+                glm::vec2 pen{worldPos.x, worldPos.y + font->ascent() * scale.y};
+                if (isShadow) pen += shadowOffset;
+
+                uint32_t previous = 0;
+
+                for (uint32_t codepoint : codepoints)
+                {
+                    const UiGlyph* glyph = font->findGlyph(codepoint);
+                    if (!glyph)
+                    {
+                        // Sin glyph no hay ni avance ni par de kerning que valga.
+                        previous = 0;
+                        continue;
+                    }
+
+                    if (previous != 0) pen.x += font->kerning(previous, codepoint) * scale.x;
+                    previous = codepoint;
+
+                    // Un espacio no tiene contorno: avanza el cursor y ya.
+                    if (glyph->rect.width > 0.0f && glyph->rect.height > 0.0f)
+                    {
+                        const glm::vec2 pos{pen.x + glyph->bearingX * scale.x,
+                                            pen.y - glyph->bearingY * scale.y};
+                        const glm::vec2 size{glyph->rect.width  * scale.x,
+                                             glyph->rect.height * scale.y};
+
+                        const glm::vec4 params{1.0f, screenPxRange,
+                                               isShadow ? 0.0f : text.outlineWidth, 0.0f};
+
+                        emitRawQuad(atlas, pos, size, font->glyphUv(*glyph),
+                                    isShadow ? shadow : fill, params,
+                                    isShadow ? glm::vec4(0.0f) : outline, scissor, out);
+                    }
+
+                    pen.x += glyph->advance * scale.x;
+                }
+            }
         }
 
         // ── Pase de medida ──────────────────────────────────────────────────
@@ -315,7 +417,16 @@ namespace DonTopo
                 if (scissor.empty()) return;
             }
 
-            if (node.drawable && worldSize.x > 0.0f && worldSize.y > 0.0f)
+            // Un Text con fuente dibuja sus glyphs EN VEZ de su propio quad: si
+            // no, cada texto arrastraría un rectángulo blanco detrás. Sin fuente
+            // (o sin nada que decir) vuelve a comportarse como su base, que es lo
+            // que hace que un Text a medio configurar no desaparezca en silencio.
+            const Text* text = node.asText();
+            const bool  drawsText = text && text->font && text->font->hasGlyphs() && !text->text.empty();
+
+            if (drawsText)
+                emitText(*text, worldPos, worldScale, scissor, opacity, out);
+            else if (node.drawable && worldSize.x > 0.0f && worldSize.y > 0.0f)
                 emitQuad(node, worldPos, worldSize, scissor, opacity, out);
 
             // El índice del primer hijo es el siguiente en pre-orden, y cada
@@ -564,7 +675,10 @@ namespace DonTopo
         bindingDesc.stride    = sizeof(UiVertex);
         bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-        VkVertexInputAttributeDescription attrs[3]{};
+        // Las cinco localizaciones tienen que decir LO MISMO que ui.vert: un
+        // desajuste de offset o de formato no da ni error ni aviso, solo
+        // basura en pantalla.
+        VkVertexInputAttributeDescription attrs[5]{};
         attrs[0].location = 0;
         attrs[0].binding  = 0;
         attrs[0].format   = VK_FORMAT_R32G32_SFLOAT;
@@ -577,12 +691,20 @@ namespace DonTopo
         attrs[2].binding  = 0;
         attrs[2].format   = VK_FORMAT_R32G32B32A32_SFLOAT;
         attrs[2].offset   = offsetof(UiVertex, color);
+        attrs[3].location = 3;
+        attrs[3].binding  = 0;
+        attrs[3].format   = VK_FORMAT_R32G32B32A32_SFLOAT;
+        attrs[3].offset   = offsetof(UiVertex, params);
+        attrs[4].location = 4;
+        attrs[4].binding  = 0;
+        attrs[4].format   = VK_FORMAT_R32G32B32A32_SFLOAT;
+        attrs[4].offset   = offsetof(UiVertex, effect);
 
         VkPipelineVertexInputStateCreateInfo vi{};
         vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vi.vertexBindingDescriptionCount   = 1;
         vi.pVertexBindingDescriptions      = &bindingDesc;
-        vi.vertexAttributeDescriptionCount = 3;
+        vi.vertexAttributeDescriptionCount = 5;
         vi.pVertexAttributeDescriptions    = attrs;
 
         VkPipelineInputAssemblyStateCreateInfo ia{};
