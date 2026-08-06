@@ -2167,6 +2167,594 @@ static void test_neutralidad_de_los_modos_de_imagen()
     CHECK(sameVertices(dc, db));
 }
 
+// ── Eventos ─────────────────────────────────────────────────────────────────
+// Todo esto es CPU pura: ni Vulkan, ni ventana, ni reloj. El tiempo entra por
+// UiInputState, así que la secuencia de eventos es la misma en cada ejecución.
+
+static const uint32_t kEvW = 800;
+static const uint32_t kEvH = 600;
+
+// El input REUTILIZA los rects del último buildDrawData: sin colocar el árbol no
+// hay nada que golpear, así que cada test de eventos empieza por aquí.
+static void colocar(UiCanvas& canvas)
+{
+    UiDrawData basura;
+    canvas.buildDrawData(kEvW, kEvH, basura);
+}
+
+// Un frame de ratón quieto, sin botones ni teclas.
+static UiInputState raton(float x, float y, float t)
+{
+    UiInputState in;
+    in.mousePos    = glm::vec2(x, y);
+    in.timeSeconds = t;
+    return in;
+}
+
+// Dos elementos SOLAPADOS: gana el que se dibuja después, que es el de abajo en
+// la lista de hijos y por tanto el de arriba en pantalla.
+static void test_eventos_hit_test_gana_el_de_arriba()
+{
+    UiCanvas canvas;
+
+    UiElement& abajo = canvas.root().add("abajo");
+    abajo.position = glm::vec2(40.0f, 30.0f);
+    abajo.size     = glm::vec2(200.0f, 80.0f);      // [40,240) x [30,110)
+
+    UiElement& arriba = canvas.root().add("arriba");
+    arriba.position = glm::vec2(100.0f, 50.0f);
+    arriba.size     = glm::vec2(140.0f, 60.0f);     // [100,240) x [50,110)
+
+    colocar(canvas);
+
+    // Zona compartida: manda el último dibujado.
+    CHECK(canvas.hitTest(glm::vec2(150.0f, 70.0f)) == &arriba);
+    // Solo del de abajo.
+    CHECK(canvas.hitTest(glm::vec2(50.0f, 40.0f)) == &abajo);
+    // Fuera de los dos: la raíz NO intercepta.
+    CHECK(canvas.hitTest(glm::vec2(700.0f, 500.0f)) == nullptr);
+
+    // raycastTarget apaga al elemento pero NO a sus hijos.
+    arriba.raycastTarget = false;
+    CHECK(canvas.hitTest(glm::vec2(150.0f, 70.0f)) == &abajo);
+
+    // Un rect de tamaño 0 no recibe nada.
+    UiElement& vacio = canvas.root().add("vacio");
+    vacio.position = glm::vec2(400.0f, 400.0f);
+    vacio.size     = glm::vec2(0.0f, 0.0f);
+    colocar(canvas);
+    CHECK(canvas.hitTest(glm::vec2(400.0f, 400.0f)) == nullptr);
+}
+
+// El scissor del padre recorta el hit test del hijo, no solo su dibujo.
+static void test_eventos_clip_recorta_el_hit_test()
+{
+    UiCanvas canvas;
+
+    UiElement& padre = canvas.root().add("padre");
+    padre.position     = glm::vec2(300.0f, 100.0f);
+    padre.size         = glm::vec2(100.0f, 60.0f);   // [300,400) x [100,160)
+    padre.clipChildren = true;
+
+    UiElement& hijo = padre.add("hijo");
+    hijo.size = glm::vec2(300.0f, 40.0f);            // [300,600) x [100,140), se sale
+
+    colocar(canvas);
+
+    // Dentro del recorte: llega al hijo.
+    CHECK(canvas.hitTest(glm::vec2(350.0f, 120.0f)) == &hijo);
+    // Dentro del RECT del hijo pero fuera del recorte del padre: nadie.
+    CHECK(canvas.hitTest(glm::vec2(450.0f, 120.0f)) == nullptr);
+    // Y el padre sigue recibiendo en la parte suya que el hijo no tapa.
+    CHECK(canvas.hitTest(glm::vec2(350.0f, 150.0f)) == &padre);
+}
+
+// Enter y Exit son DERIVADOS del hit de cada frame, y hovered es el estado.
+static void test_eventos_enter_exit_y_hovered()
+{
+    UiCanvas canvas;
+
+    UiElement& caja = canvas.root().add("caja");
+    caja.position = glm::vec2(120.0f, 90.0f);
+    caja.size     = glm::vec2(160.0f, 70.0f);        // [120,280) x [90,160)
+
+    colocar(canvas);
+
+    int entradas = 0, salidas = 0, movimientos = 0;
+    caja.onMouseEnter = [&](UiEvent&) { ++entradas; };
+    caja.onMouseExit  = [&](UiEvent&) { ++salidas; };
+    caja.onMouseMove  = [&](UiEvent&) { ++movimientos; };
+
+    canvas.updateInput(raton(10.0f, 10.0f, 0.0f));          // fuera
+    CHECK(entradas == 0);
+    CHECK(salidas == 0);
+    CHECK(caja.hovered == false);
+    CHECK(canvas.hovered() == nullptr);
+
+    canvas.updateInput(raton(130.0f, 100.0f, 0.1f));        // entra
+    CHECK(entradas == 1);
+    CHECK(caja.hovered == true);
+    CHECK(canvas.hovered() == &caja);
+    CHECK(movimientos == 1);
+
+    canvas.updateInput(raton(200.0f, 140.0f, 0.2f));        // se mueve DENTRO
+    CHECK(entradas == 1);                                   // no se repite
+    CHECK(salidas == 0);
+    CHECK(caja.hovered == true);
+    CHECK(movimientos == 2);
+
+    canvas.updateInput(raton(600.0f, 400.0f, 0.3f));        // sale
+    CHECK(salidas == 1);
+    CHECK(entradas == 1);
+    CHECK(caja.hovered == false);
+    CHECK(canvas.hovered() == nullptr);
+}
+
+// Click = Down y Up sobre el MISMO elemento.
+static void test_eventos_click_pide_el_mismo_elemento()
+{
+    UiCanvas canvas;
+    canvas.dragThreshold = 500.0f;   // aquí no queremos que nada sea arrastre
+
+    UiElement& a = canvas.root().add("a");
+    a.position = glm::vec2(40.0f, 30.0f);
+    a.size     = glm::vec2(120.0f, 50.0f);           // [40,160) x [30,80)
+
+    UiElement& b = canvas.root().add("b");
+    b.position = glm::vec2(300.0f, 200.0f);
+    b.size     = glm::vec2(90.0f, 140.0f);           // [300,390) x [200,340)
+
+    colocar(canvas);
+
+    int clicksA = 0, clicksB = 0, abajoA = 0, arribaB = 0;
+    a.onClick     = [&](UiEvent&) { ++clicksA; };
+    b.onClick     = [&](UiEvent&) { ++clicksB; };
+    a.onMouseDown = [&](UiEvent&) { ++abajoA; };
+    b.onMouseUp   = [&](UiEvent&) { ++arribaB; };
+
+    // Down y Up sobre A.
+    UiInputState in = raton(60.0f, 50.0f, 0.0f);
+    in.mouseDown[0] = true;
+    canvas.updateInput(in);
+    in.timeSeconds  = 0.02f;
+    in.mouseDown[0] = false;
+    canvas.updateInput(in);
+
+    CHECK(abajoA == 1);
+    CHECK(clicksA == 1);
+
+    // Down sobre A, Up sobre B: ni uno ni otro se llevan el click.
+    in = raton(60.0f, 50.0f, 0.5f);
+    in.mouseDown[0] = true;
+    canvas.updateInput(in);
+    in = raton(320.0f, 250.0f, 0.52f);
+    in.mouseDown[0] = false;
+    canvas.updateInput(in);
+
+    CHECK(clicksA == 1);        // sigue el de antes
+    CHECK(clicksB == 0);
+    CHECK(arribaB == 1);        // el MouseUp sí es del que está debajo del cursor
+}
+
+// Umbrales del canvas, y DISTINTOS entre sí: 0.25 s y 10 px.
+static void test_eventos_doble_click_por_tiempo_y_distancia()
+{
+    auto montar = [](UiCanvas& c, UiElement*& caja)
+    {
+        c.doubleClickTime     = 0.25f;
+        c.doubleClickDistance = 10.0f;
+        c.dragThreshold       = 40.0f;
+        caja = &c.root().add("caja");
+        caja->position = glm::vec2(100.0f, 100.0f);
+        caja->size     = glm::vec2(200.0f, 120.0f);   // [100,300) x [100,220)
+        colocar(c);
+    };
+
+    auto click = [](UiCanvas& c, float x, float y, float t)
+    {
+        UiInputState in = raton(x, y, t);
+        in.mouseDown[0] = true;
+        c.updateInput(in);
+        in.timeSeconds  = t + 0.01f;
+        in.mouseDown[0] = false;
+        c.updateInput(in);
+    };
+
+    // Dentro de los dos umbrales: sale el doble.
+    {
+        UiCanvas c;
+        UiElement* caja = nullptr;
+        montar(c, caja);
+        int simples = 0, dobles = 0;
+        caja->onClick       = [&](UiEvent&) { ++simples; };
+        caja->onDoubleClick = [&](UiEvent&) { ++dobles; };
+
+        click(c, 150.0f, 150.0f, 0.00f);
+        click(c, 153.0f, 152.0f, 0.12f);   // 3.6 px, 0.12 s
+
+        CHECK(simples == 2);               // el doble NO sustituye al segundo click
+        CHECK(dobles == 1);
+    }
+
+    // Pasado el tiempo: no.
+    {
+        UiCanvas c;
+        UiElement* caja = nullptr;
+        montar(c, caja);
+        int dobles = 0;
+        caja->onDoubleClick = [&](UiEvent&) { ++dobles; };
+
+        click(c, 150.0f, 150.0f, 0.00f);
+        click(c, 150.0f, 150.0f, 0.40f);   // 0.40 s > 0.25 s
+        CHECK(dobles == 0);
+    }
+
+    // Movido más allá de la distancia: tampoco, aunque llegue a tiempo.
+    {
+        UiCanvas c;
+        UiElement* caja = nullptr;
+        montar(c, caja);
+        int dobles = 0;
+        caja->onDoubleClick = [&](UiEvent&) { ++dobles; };
+
+        click(c, 150.0f, 150.0f, 0.00f);
+        click(c, 180.0f, 150.0f, 0.08f);   // 30 px > 10 px
+        CHECK(dobles == 0);
+    }
+}
+
+// Umbral de arrastre distinto del de doble click: 12 px.
+static void test_eventos_drag_umbral_y_destino_del_drop()
+{
+    UiCanvas canvas;
+    canvas.dragThreshold       = 12.0f;
+    canvas.doubleClickTime     = 0.25f;
+    canvas.doubleClickDistance = 10.0f;
+
+    UiElement& origen = canvas.root().add("origen");
+    origen.position = glm::vec2(40.0f, 30.0f);
+    origen.size     = glm::vec2(120.0f, 50.0f);      // [40,160) x [30,80)
+
+    UiElement& destino = canvas.root().add("destino");
+    destino.position = glm::vec2(300.0f, 200.0f);
+    destino.size     = glm::vec2(90.0f, 140.0f);     // [300,390) x [200,340)
+
+    colocar(canvas);
+
+    int begins = 0, drags = 0, ends = 0, clicks = 0;
+    int dropsOrigen = 0, dropsDestino = 0;
+    UiElement* fuente = nullptr;
+
+    origen.onDragBegin = [&](UiEvent&) { ++begins; };
+    origen.onDrag      = [&](UiEvent&) { ++drags; };
+    origen.onDragEnd   = [&](UiEvent&) { ++ends; };
+    origen.onClick     = [&](UiEvent&) { ++clicks; };
+    origen.onDrop      = [&](UiEvent&) { ++dropsOrigen; };
+    destino.onDrop     = [&](UiEvent& e) { ++dropsDestino; fuente = e.dragSource; };
+
+    // Por DEBAJO del umbral: no hay arrastre y sí hay click.
+    UiInputState in = raton(60.0f, 50.0f, 0.0f);
+    in.mouseDown[0] = true;
+    canvas.updateInput(in);
+    in = raton(66.0f, 54.0f, 0.02f);     // 7.2 px < 12
+    in.mouseDown[0] = true;
+    canvas.updateInput(in);
+    in.mouseDown[0] = false;
+    in.timeSeconds  = 0.04f;
+    canvas.updateInput(in);
+
+    CHECK(begins == 0);
+    CHECK(drags == 0);
+    CHECK(clicks == 1);
+
+    // Por ENCIMA del umbral: arrastre completo y NINGÚN click.
+    in = raton(60.0f, 50.0f, 1.0f);
+    in.mouseDown[0] = true;
+    canvas.updateInput(in);
+    in = raton(120.0f, 90.0f, 1.02f);    // muy por encima de 12 px
+    in.mouseDown[0] = true;
+    canvas.updateInput(in);
+    in = raton(320.0f, 250.0f, 1.04f);   // ya encima del destino
+    in.mouseDown[0] = true;
+    canvas.updateInput(in);
+    in.mouseDown[0] = false;
+    in.timeSeconds  = 1.06f;
+    canvas.updateInput(in);
+
+    CHECK(begins == 1);
+    CHECK(drags == 2);          // uno por frame movido con el botón abajo
+    CHECK(ends == 1);
+    CHECK(clicks == 1);         // el de antes: el arrastre NO añade otro
+    // El Drop es del elemento BAJO EL CURSOR al soltar, no del que lo empezó.
+    CHECK(dropsDestino == 1);
+    CHECK(dropsOrigen == 0);
+    CHECK(fuente == &origen);
+}
+
+// La rueda va al de debajo del cursor y sube al padre si el hijo no la consume.
+static void test_eventos_scroll_burbujea_hasta_el_padre()
+{
+    UiCanvas canvas;
+
+    UiElement& lista = canvas.root().add("lista");
+    lista.position = glm::vec2(200.0f, 60.0f);
+    lista.size     = glm::vec2(240.0f, 180.0f);
+
+    UiElement& fila = lista.add("fila");
+    fila.size = glm::vec2(240.0f, 30.0f);
+
+    colocar(canvas);
+
+    int enFila = 0, enLista = 0;
+    float recibido = 0.0f;
+    fila.onScroll  = [&](UiEvent&)   { ++enFila; };
+    lista.onScroll = [&](UiEvent& e) { ++enLista; recibido = e.scrollDelta; };
+
+    UiInputState in = raton(250.0f, 70.0f, 0.0f);   // encima de la fila
+    in.scrollDelta = -3.5f;
+    canvas.updateInput(in);
+
+    CHECK(enFila == 1);
+    CHECK(enLista == 1);            // burbujeó
+    CHECK(nearly(recibido, -3.5f));
+
+    // Sin rueda no se emite nada.
+    canvas.updateInput(raton(250.0f, 70.0f, 0.1f));
+    CHECK(enFila == 1);
+    CHECK(enLista == 1);
+}
+
+// consumed corta la burbuja: el padre no se entera.
+static void test_eventos_consumed_corta_la_burbuja()
+{
+    UiCanvas canvas;
+    canvas.dragThreshold = 500.0f;
+
+    UiElement& padre = canvas.root().add("padre");
+    padre.position = glm::vec2(150.0f, 120.0f);
+    padre.size     = glm::vec2(260.0f, 90.0f);
+
+    UiElement& hijo = padre.add("hijo");
+    hijo.size = glm::vec2(80.0f, 40.0f);
+
+    colocar(canvas);
+
+    int enHijo = 0, enPadre = 0;
+    bool consumir = true;
+    hijo.onClick  = [&](UiEvent& e) { ++enHijo; if (consumir) e.consumed = true; };
+    padre.onClick = [&](UiEvent&)   { ++enPadre; };
+
+    auto click = [&](float t)
+    {
+        UiInputState in = raton(170.0f, 130.0f, t);
+        in.mouseDown[0] = true;
+        canvas.updateInput(in);
+        in.mouseDown[0] = false;
+        in.timeSeconds  = t + 0.01f;
+        canvas.updateInput(in);
+    };
+
+    click(0.0f);
+    CHECK(enHijo == 1);
+    CHECK(enPadre == 0);        // consumido en el hijo
+
+    consumir = false;
+    click(1.0f);
+    CHECK(enHijo == 2);
+    CHECK(enPadre == 1);        // ahora sí sube
+}
+
+// Tab en pre-orden saltando lo no focusable y lo invisible; Escape suelta.
+static void test_eventos_foco_tab_y_escape()
+{
+    UiCanvas canvas;
+
+    UiElement& a = canvas.root().add("a");
+    a.position = glm::vec2(20.0f, 20.0f);
+    a.size     = glm::vec2(100.0f, 40.0f);
+    a.focusable = true;
+
+    UiElement& b = canvas.root().add("b");          // NO focusable
+    b.position = glm::vec2(20.0f, 80.0f);
+    b.size     = glm::vec2(100.0f, 40.0f);
+
+    UiElement& c = canvas.root().add("c");
+    c.position = glm::vec2(20.0f, 140.0f);
+    c.size     = glm::vec2(100.0f, 40.0f);
+    c.focusable = true;
+
+    UiElement& d = canvas.root().add("d");          // focusable pero INVISIBLE
+    d.position = glm::vec2(20.0f, 200.0f);
+    d.size     = glm::vec2(100.0f, 40.0f);
+    d.focusable = true;
+    d.visible   = false;
+
+    UiElement& e = canvas.root().add("e");
+    e.position = glm::vec2(20.0f, 260.0f);
+    e.size     = glm::vec2(100.0f, 40.0f);
+    e.focusable = true;
+
+    colocar(canvas);
+
+    // Blur del viejo ANTES que Focus del nuevo.
+    std::vector<int> orden;
+    a.onBlur  = [&](UiEvent&) { orden.push_back(1); };
+    c.onFocus = [&](UiEvent&) { orden.push_back(2); };
+
+    canvas.setFocus(&a);
+    CHECK(canvas.focused() == &a);
+    CHECK(a.focused == true);
+
+    auto tab = [&](bool shift, float t)
+    {
+        UiInputState in = raton(700.0f, 500.0f, t);   // lejos de todo
+        in.keys.push_back(UiKey::Tab);
+        in.shift = shift;
+        canvas.updateInput(in);
+    };
+
+    tab(false, 0.1f);
+    CHECK(canvas.focused() == &c);          // saltó a b, que no es focusable
+    CHECK(a.focused == false);
+    CHECK(orden.size() == 2);
+    CHECK(orden[0] == 1);                   // Blur
+    CHECK(orden[1] == 2);                   // Focus, después
+
+    tab(false, 0.2f);
+    CHECK(canvas.focused() == &e);          // saltó a d, invisible
+
+    tab(false, 0.3f);
+    CHECK(canvas.focused() == &a);          // da la vuelta
+
+    tab(true, 0.4f);
+    CHECK(canvas.focused() == &e);          // Shift+Tab va al revés
+
+    tab(true, 0.5f);
+    CHECK(canvas.focused() == &c);
+
+    // Escape suelta el foco.
+    UiInputState esc = raton(700.0f, 500.0f, 0.6f);
+    esc.keys.push_back(UiKey::Escape);
+    canvas.updateInput(esc);
+    CHECK(canvas.focused() == nullptr);
+    CHECK(c.focused == false);
+
+    // Un elemento que no es focusable no lo puede tomar.
+    canvas.setFocus(&b);
+    CHECK(canvas.focused() == nullptr);
+}
+
+// El teclado va SOLO al que tiene el foco. Sin foco no se emite ni un evento.
+static void test_eventos_teclado_solo_con_foco()
+{
+    UiCanvas canvas;
+
+    UiElement& campo = canvas.root().add("campo");
+    campo.position = glm::vec2(60.0f, 40.0f);
+    campo.size     = glm::vec2(220.0f, 36.0f);
+    campo.focusable = true;
+
+    UiElement& otro = canvas.root().add("otro");
+    otro.position = glm::vec2(60.0f, 120.0f);
+    otro.size     = glm::vec2(220.0f, 36.0f);
+    otro.focusable = true;
+
+    colocar(canvas);
+
+    int enCampo = 0, enOtro = 0;
+    std::vector<UiKey> vistas;
+    campo.onKeyDown = [&](UiEvent& ev) { ++enCampo; vistas.push_back(ev.key); };
+    otro.onKeyDown  = [&](UiEvent&)    { ++enOtro; };
+
+    // Sin foco: nada.
+    UiInputState in = raton(500.0f, 400.0f, 0.0f);
+    in.keys.push_back(UiKey::Enter);
+    in.keys.push_back(UiKey::Left);
+    canvas.updateInput(in);
+    CHECK(enCampo == 0);
+    CHECK(enOtro == 0);
+
+    canvas.setFocus(&campo);
+
+    in = raton(500.0f, 400.0f, 0.1f);
+    in.keys.push_back(UiKey::Enter);
+    in.keys.push_back(UiKey::Left);
+    in.keys.push_back(UiKey::Right);
+    in.keys.push_back(UiKey::Up);
+    in.keys.push_back(UiKey::Down);
+    canvas.updateInput(in);
+
+    CHECK(enCampo == 5);
+    CHECK(enOtro == 0);                     // solo el del foco
+    CHECK(vistas.size() == 5);
+    CHECK(vistas[0] == UiKey::Enter);
+    CHECK(vistas[1] == UiKey::Left);
+    CHECK(vistas[4] == UiKey::Down);
+
+    // Escape se ENTREGA como tecla y además suelta el foco.
+    in = raton(500.0f, 400.0f, 0.2f);
+    in.keys.push_back(UiKey::Escape);
+    canvas.updateInput(in);
+    CHECK(enCampo == 6);
+    CHECK(canvas.focused() == nullptr);
+
+    // Y ya sin foco vuelve a no llegar nada.
+    in = raton(500.0f, 400.0f, 0.3f);
+    in.keys.push_back(UiKey::Enter);
+    canvas.updateInput(in);
+    CHECK(enCampo == 6);
+}
+
+// Neutralidad: un canvas con handlers y con input procesado da EXACTAMENTE los
+// mismos vértices que uno idéntico que nunca vio un evento.
+static void test_neutralidad_de_los_eventos()
+{
+    UiTextureAtlas atlas = makeAtlas();
+
+    auto montar = [&](UiCanvas& c)
+    {
+        UiElement& panel = c.root().add("panel");
+        panel.position     = glm::vec2(70.0f, 45.0f);
+        panel.size         = glm::vec2(180.0f, 95.0f);
+        panel.color        = glm::vec4(0.2f, 0.6f, 0.9f, 1.0f);
+        panel.clipChildren = true;
+
+        UiElement& hijo = panel.add("hijo");
+        hijo.position = glm::vec2(10.0f, 12.0f);
+        hijo.size     = glm::vec2(60.0f, 25.0f);
+        hijo.atlas    = &atlas;
+        hijo.sprite   = "boton";
+    };
+
+    UiCanvas conEventos;
+    UiCanvas sinEventos;
+    montar(conEventos);
+    montar(sinEventos);
+
+    // Handlers en todo el árbol y un gesto completo: hover, click, arrastre,
+    // rueda, foco y teclado.
+    UiElement* panel = const_cast<UiElement*>(conEventos.root().children()[0].get());
+    UiElement* hijo  = const_cast<UiElement*>(panel->children()[0].get());
+    panel->focusable = true;
+    int golpes = 0;
+    panel->onClick     = [&](UiEvent&) { ++golpes; };
+    panel->onScroll    = [&](UiEvent&) { ++golpes; };
+    hijo->onMouseEnter = [&](UiEvent&) { ++golpes; };
+    hijo->onDragBegin  = [&](UiEvent&) { ++golpes; };
+
+    UiDrawData da;
+    conEventos.buildDrawData(kEvW, kEvH, da);
+
+    UiInputState in = raton(100.0f, 70.0f, 0.0f);
+    in.scrollDelta = 2.0f;
+    conEventos.updateInput(in);
+    in.mouseDown[0] = true;
+    in.scrollDelta  = 0.0f;
+    in.timeSeconds  = 0.05f;
+    conEventos.updateInput(in);
+    in = raton(220.0f, 120.0f, 0.10f);
+    in.mouseDown[0] = true;
+    conEventos.updateInput(in);
+    in.mouseDown[0] = false;
+    in.timeSeconds  = 0.15f;
+    conEventos.updateInput(in);
+    in = raton(100.0f, 70.0f, 0.20f);
+    in.keys.push_back(UiKey::Tab);
+    conEventos.updateInput(in);
+
+    CHECK(golpes > 0);          // el gesto sí hizo algo
+
+    UiDrawData db;
+    conEventos.buildDrawData(kEvW, kEvH, db);
+
+    UiDrawData dc;
+    sinEventos.buildDrawData(kEvW, kEvH, dc);
+
+    CHECK(!da.vertices.empty());
+    CHECK(sameVertices(da, db));    // procesar input no movió ni un vértice
+    CHECK(sameVertices(db, dc));    // y son los mismos que sin eventos
+}
+
 int main()
 {
     test_canvas_vacio_no_emite_nada();
@@ -2218,6 +2806,18 @@ int main()
     test_imagen_filled_recorta_pos_y_uv();
     test_imagen_filled_completo_es_normal();
     test_neutralidad_de_los_modos_de_imagen();
+
+    test_eventos_hit_test_gana_el_de_arriba();
+    test_eventos_clip_recorta_el_hit_test();
+    test_eventos_enter_exit_y_hovered();
+    test_eventos_click_pide_el_mismo_elemento();
+    test_eventos_doble_click_por_tiempo_y_distancia();
+    test_eventos_drag_umbral_y_destino_del_drop();
+    test_eventos_scroll_burbujea_hasta_el_padre();
+    test_eventos_consumed_corta_la_burbuja();
+    test_eventos_foco_tab_y_escape();
+    test_eventos_teclado_solo_con_foco();
+    test_neutralidad_de_los_eventos();
 
     if (g_failures == 0) std::printf("ui_batch_tests: OK\n");
     else                 std::printf("ui_batch_tests: %d fallos\n", g_failures);

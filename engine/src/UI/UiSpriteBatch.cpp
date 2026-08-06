@@ -1084,13 +1084,22 @@ namespace DonTopo
             return 0.0f;
         }
 
+        // Un subárbol que el emisor NO recorre (invisible, o recortado a cero) se
+        // queda sin rect resuelto. Marcarlo es lo que impide que el hit test del
+        // input siga usando el rect del frame anterior, que ya no significa nada.
+        void invalidateRects(const UiElement& node)
+        {
+            node.rectValid = false;
+            for (const auto& child : node.children()) invalidateRects(*child);
+        }
+
         void emitNode(const UiElement& node, uint32_t index, const std::vector<MeasuredNode>& measured,
                       const glm::vec2& parentPos, const glm::vec2& parentScale,
                       const glm::vec2& parentSize, const LayoutPlacement& placement,
                       UiScissor scissor, float parentOpacity, UiDrawData& out)
         {
             // enabled NO se mira aquí: es para el input, no para el dibujado.
-            if (!node.visible) return;
+            if (!node.visible) { invalidateRects(node); return; }
 
             const glm::vec2 worldScale = parentScale * node.scale;
             const glm::vec2 localSize  = measured[index].size;
@@ -1156,8 +1165,15 @@ namespace DonTopo
                 scissor = intersectScissor(scissor, scissorFromRect(worldPos, worldSize));
                 // Intersección vacía: ni este nodo ni ninguno de sus hijos puede
                 // verse, así que no se emite ni un draw con width/height 0.
-                if (scissor.empty()) return;
+                if (scissor.empty()) { invalidateRects(node); return; }
             }
+
+            // El rect ya está resuelto: se GUARDA para que el input lo reutilice
+            // sin recorrer el árbol otra vez. No altera ni un vértice ni un lote.
+            node.screenPos     = worldPos;
+            node.screenSize    = worldSize;
+            node.screenScissor = scissor;
+            node.rectValid     = true;
 
             // Un Text con fuente dibuja sus glyphs EN VEZ de su propio quad: si
             // no, cada texto arrastraría un rectángulo blanco detrás. Sin fuente
