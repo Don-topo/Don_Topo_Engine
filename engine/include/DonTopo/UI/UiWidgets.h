@@ -34,6 +34,27 @@ namespace DonTopo
     // El único con estado propio de momento: sin campos no habría nada que
     // dibujar. Una sola línea, sin wrap, sin alineación y sin rich text: eso
     // es otra fase.
+    // Alineación horizontal del bloque de texto DENTRO del ancho del rect del
+    // elemento. Justify reparte el sobrante entre los espacios de la línea y
+    // nunca toca la última ni una acabada en '\n': una línea suelta estirada a
+    // todo lo ancho se ve como un error, no como texto justificado.
+    enum class UiTextAlign
+    {
+        Left,
+        Center,
+        Right,
+        Justify
+    };
+
+    // Qué pasa con lo que no cabe en el rect. El recorte no es gratis (parte el
+    // lote por scissor), así que el modo por defecto es no recortar nada.
+    enum class UiTextOverflow
+    {
+        Overflow,   // se dibuja fuera del rect
+        Clip,       // scissor contra el propio rect
+        Ellipsis    // la última línea que cabe acaba en '…'
+    };
+
     struct Text : UiElement
     {
         using UiElement::UiElement;
@@ -61,6 +82,29 @@ namespace DonTopo
         // quad de sombra.
         glm::vec2 shadowOffset{0.0f, 0.0f};
         glm::vec4 shadowColor{0.0f, 0.0f, 0.0f, 0.5f};
+
+        // ── Rich text, alineación, wrap y overflow ──────────────────────────
+        // El texto SIEMPRE se parsea buscando tags: un tag malformado,
+        // desconocido o sin cerrar se dibuja como texto literal, así que un
+        // texto plano da exactamente lo mismo que antes de esta fase.
+        //   <color=#RRGGBB> <color=#RRGGBBAA> <size=N> <b> <i> y sus cierres.
+        // Anidan sobre una pila: el cierre restaura el estilo de fuera.
+        UiTextAlign    align    = UiTextAlign::Left;
+        UiTextOverflow overflow = UiTextOverflow::Overflow;
+
+        // Corta por palabras contra el ancho del rect; una palabra que no cabe
+        // ni sola se parte por glyph. Los '\n' del texto siempre cortan, con
+        // wrap o sin él.
+        bool wordWrap = false;
+
+        // <b> NO carga una segunda fuente: engorda el glyph por el MISMO canal
+        // que ya usa el outline, en fracción del tamaño del tramo (así una
+        // negrita a 12 px y otra a 48 px engordan lo mismo en proporción).
+        float boldStrength = 0.08f;
+
+        // <i> tampoco: es una cizalla del quad sobre la línea base. Es la
+        // tangente del ángulo, así que 0.25 son unos 14 grados.
+        float italicSkew = 0.25f;
     };
 
     struct Button : UiElement

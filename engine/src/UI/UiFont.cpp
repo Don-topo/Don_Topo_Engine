@@ -158,9 +158,11 @@ namespace DonTopo
         return fontSize / m_bakeSize;
     }
 
-    std::vector<uint32_t> UiFont::decodeUtf8(const std::string& text)
+    void UiFont::decodeUtf8(const std::string& text, std::vector<uint32_t>& out)
     {
-        std::vector<uint32_t> out;
+        // El vector es de quien llama y se REUTILIZA: el batcher decodifica cada
+        // texto en cada frame y no puede permitirse una asignacion por etiqueta.
+        out.clear();
         out.reserve(text.size());
 
         const unsigned char* p   = (const unsigned char*)text.data();
@@ -210,7 +212,12 @@ namespace DonTopo
             out.push_back(cp);
             p += extra + 1;
         }
+    }
 
+    std::vector<uint32_t> UiFont::decodeUtf8(const std::string& text)
+    {
+        std::vector<uint32_t> out;
+        decodeUtf8(text, out);
         return out;
     }
 

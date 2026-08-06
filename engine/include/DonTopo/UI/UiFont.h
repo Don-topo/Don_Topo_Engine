@@ -98,6 +98,10 @@ namespace DonTopo
         // UTF-8 -> codepoints. Los bytes inválidos dan U+FFFD en vez de
         // desincronizar el resto de la cadena.
         static std::vector<uint32_t> decodeUtf8(const std::string& text);
+        // Misma decodificacion sobre un vector REUTILIZADO: el batcher pasa por
+        // aqui cada frame, y la version que devuelve por valor asignaria uno
+        // nuevo por cada texto del canvas.
+        static void decodeUtf8(const std::string& text, std::vector<uint32_t>& out);
 
         // --- GPU ---------------------------------------------------------------
 

@@ -1142,6 +1142,555 @@ static void test_neutralidad_del_texto()
     CHECK(nearly(plano.vertices[0].params.x, 0.0f));
 }
 
+// Glyphs de relleno para los tests de tags literales: lo único que importa es
+// que TODOS los caracteres de la cadena tengan uno, para poder contar un quad
+// por carácter visible.
+static void addAsciiGlyphs(UiFont& font, const char* chars)
+{
+    UiGlyph g{};
+    g.rect     = {0.0f, 48.0f, 6.0f, 9.0f};
+    g.bearingX = 1.0f;
+    g.bearingY = 7.0f;
+    g.advance  = 8.0f;
+
+    for (const char* p = chars; *p != '\0'; ++p)
+        font.addGlyph((uint32_t)(unsigned char)*p, g);
+}
+
+// El espacio no tiene contorno (rect a 0): solo avanza. Es el que reparte
+// Justify y el que da los puntos de corte del wrap.
+static void addSpaceGlyph(UiFont& font, float advance)
+{
+    UiGlyph sp{};
+    sp.advance = advance;
+    font.addGlyph(' ', sp);
+}
+
+// <color> pinta SOLO su tramo y el cierre restaura el de fuera, anidado
+// incluido. Ni la posición ni el número de quads cambian por llevar tags.
+static void test_texto_color_por_tramos()
+{
+    UiFont font;
+    makeTestFont(font);
+
+    UiCanvas canvas;
+    Text& label = canvas.root().add<Text>("Etiqueta");
+    label.position = {100.0f, 50.0f};
+    label.font     = &font;
+    label.fontSize = kBakeSize;
+    label.color    = {0.2f, 0.4f, 0.6f, 1.0f};
+    label.text     = "A<color=#FF0000>B</color>C";
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    // Tres glyphs: los tags no dejan ni un quad.
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 12);
+    if (data.vertices.size() != 12) return;
+
+    // Y las X son EXACTAMENTE las del texto plano: 103, 115 y 129.
+    CHECK(nearly(data.vertices[0].pos.x, 103.0f));
+    CHECK(nearly(data.vertices[4].pos.x, 115.0f));
+    CHECK(nearly(data.vertices[8].pos.x, 129.0f));
+
+    CHECK(nearly(data.vertices[0].color.r, 0.2f) && nearly(data.vertices[0].color.b, 0.6f));
+    CHECK(nearly(data.vertices[4].color.r, 1.0f) && nearly(data.vertices[4].color.g, 0.0f));
+    CHECK(nearly(data.vertices[8].color.r, 0.2f) && nearly(data.vertices[8].color.b, 0.6f));
+
+    // Anidado: el cierre de dentro devuelve al rojo, no al color de fuera.
+    label.text = "A<color=#FF0000>B<color=#00FF80>C</color></color>";
+    UiDrawData anidado;
+    canvas.buildDrawData(kW, kH, anidado);
+    CHECK(anidado.vertices.size() == 12);
+    if (anidado.vertices.size() != 12) return;
+
+    CHECK(nearly(anidado.vertices[0].color.r, 0.2f));
+    CHECK(nearly(anidado.vertices[4].color.r, 1.0f) && nearly(anidado.vertices[4].color.g, 0.0f));
+    CHECK(nearly(anidado.vertices[8].color.g, 1.0f) && nearly(anidado.vertices[8].color.b, 128.0f / 255.0f));
+
+    // Y el alfa de 8 dígitos también llega.
+    label.text = "<color=#10203040>A</color>";
+    UiDrawData conAlfa;
+    canvas.buildDrawData(kW, kH, conAlfa);
+    CHECK(conAlfa.vertices.size() == 4);
+    if (conAlfa.vertices.size() != 4) return;
+    CHECK(nearly(conAlfa.vertices[0].color.a, 64.0f / 255.0f));
+}
+
+// <size> escala su tramo Y mueve el cursor de los siguientes: el avance y el
+// kerning también se escalan, no solo el quad.
+static void test_texto_size_escala_el_tramo_y_mueve_el_cursor()
+{
+    UiFont font;
+    makeTestFont(font);
+
+    UiCanvas canvas;
+    Text& label = canvas.root().add<Text>("Etiqueta");
+    label.position = {100.0f, 50.0f};
+    label.font     = &font;
+    label.fontSize = kBakeSize;
+    label.text     = "A<size=48>B</size>C";
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 12);
+    if (data.vertices.size() != 12) return;
+
+    // A a escala 1: como siempre.
+    CHECK(nearly(data.vertices[0].pos.x, 103.0f));
+    CHECK(nearly(data.vertices[0].pos.y, 62.0f));
+
+    // B a 48/32 = 1.5: pluma 121 + kerning -4*1.5 = 115, bearing -2*1.5.
+    CHECK(nearly(data.vertices[4].pos.x, 112.0f));
+    CHECK(nearly(data.vertices[4].pos.y, 74.0f - 17.0f * 1.5f));
+    CHECK(nearly(data.vertices[6].pos.x, 112.0f + 9.0f * 1.5f));
+    CHECK(nearly(data.vertices[6].pos.y, 74.0f - 17.0f * 1.5f + 18.0f * 1.5f));
+
+    // Y C vuelve a escala 1 PERO desde una pluma que arrastra el avance grande:
+    // 115 + 13*1.5 = 134.5, kerning -6, bearing +5.
+    CHECK(nearly(data.vertices[8].pos.x, 133.5f));
+    CHECK(nearly(data.vertices[8].pos.y, 65.0f));
+    CHECK(nearly(data.vertices[10].pos.x, 145.5f));
+
+    // El tamaño NO toca las UVs: es el mismo trozo de atlas.
+    CHECK(nearly(data.vertices[4].uv.x, 40.0f / 128.0f));
+    CHECK(nearly(data.vertices[4].uv.y, 24.0f / 64.0f));
+    CHECK(nearly(data.vertices[6].uv.x, 49.0f / 128.0f));
+    CHECK(nearly(data.vertices[6].uv.y, 42.0f / 64.0f));
+}
+
+// <b> engorda por el canal del outline y <i> cizalla el quad: ni una UV ni un
+// quad de diferencia con el texto plano.
+static void test_texto_negrita_y_cursiva_sin_tocar_uvs()
+{
+    UiFont font;
+    makeTestFont(font);
+
+    UiCanvas canvas;
+    Text& label = canvas.root().add<Text>("Etiqueta");
+    label.position = {100.0f, 50.0f};
+    label.font     = &font;
+    label.fontSize = kBakeSize;
+    label.color    = {0.9f, 0.8f, 0.7f, 1.0f};
+    label.text     = "ABC";
+
+    UiDrawData plano;
+    canvas.buildDrawData(kW, kH, plano);
+
+    label.text = "<b>A</b><i>B</i>C";
+    UiDrawData estilado;
+    canvas.buildDrawData(kW, kH, estilado);
+
+    CHECK(plano.vertices.size() == 12);
+    CHECK(estilado.vertices.size() == plano.vertices.size());
+    CHECK(estilado.batches.size() == 1);
+    if (estilado.vertices.size() != 12 || plano.vertices.size() != 12) return;
+
+    // Mismas UVs, vértice a vértice.
+    for (size_t i = 0; i < 12; ++i)
+    {
+        CHECK(nearly(estilado.vertices[i].uv.x, plano.vertices[i].uv.x));
+        CHECK(nearly(estilado.vertices[i].uv.y, plano.vertices[i].uv.y));
+    }
+
+    // A en negrita: grosor 0.08 * 32 y el "outline" del color del relleno.
+    for (size_t i = 0; i < 4; ++i)
+    {
+        CHECK(nearly(estilado.vertices[i].params.z, 2.56f));
+        CHECK(nearly(estilado.vertices[i].effect.x, 0.9f));
+        CHECK(nearly(estilado.vertices[i].effect.z, 0.7f));
+        CHECK(nearly(estilado.vertices[i].pos.x, plano.vertices[i].pos.x));
+    }
+
+    // B en cursiva: la línea base está en 74 y el quad va de 57 a 75, así que
+    // arriba se va +4.25 y abajo -0.25. El avance NO cambia.
+    CHECK(nearly(estilado.vertices[4].pos.x, 115.0f + 4.25f));
+    CHECK(nearly(estilado.vertices[5].pos.x, 115.0f + 9.0f + 4.25f));
+    CHECK(nearly(estilado.vertices[6].pos.x, 115.0f + 9.0f - 0.25f));
+    CHECK(nearly(estilado.vertices[7].pos.x, 115.0f - 0.25f));
+    CHECK(nearly(estilado.vertices[4].params.z, 0.0f));
+
+    // Y C, fuera de los dos tramos, exactamente donde estaba.
+    CHECK(nearly(estilado.vertices[8].pos.x, plano.vertices[8].pos.x));
+    CHECK(nearly(estilado.vertices[8].params.z, 0.0f));
+}
+
+// Lo que no se entiende se DIBUJA: un quad por carácter visible, ni uno menos.
+static void test_texto_tag_malformado_sale_literal()
+{
+    UiFont font;
+    makeTestFont(font);
+    addAsciiGlyphs(font, "<>/=#bcefilorsz");
+
+    UiCanvas canvas;
+    Text& label = canvas.root().add<Text>("Etiqueta");
+    label.position = {100.0f, 50.0f};
+    label.font     = &font;
+    label.fontSize = kBakeSize;
+
+    struct Caso { const char* texto; size_t visibles; };
+    const Caso casos[] = {
+        {"<colorr=#fff>", 13},   // tag desconocido
+        {"<size=>",        7},   // sin número
+        {"<b",             2},   // sin cerrar el '>'
+        {"</color>",       8},   // cierre huérfano
+        {"<color=#ff>",   11},   // hex de longitud imposible
+    };
+
+    for (const Caso& caso : casos)
+    {
+        label.text = caso.texto;
+        UiDrawData data;
+        canvas.buildDrawData(kW, kH, data);
+        CHECK(data.vertices.size() == caso.visibles * 4);
+        if (data.vertices.size() != caso.visibles * 4)
+            std::printf("       (texto \"%s\": %zu quads, esperados %zu)\n",
+                        caso.texto, data.vertices.size() / 4, caso.visibles);
+    }
+
+    // Y un '<' suelto en medio de texto normal no se come nada de lo de detrás.
+    label.text = "A<B";
+    UiDrawData suelto;
+    canvas.buildDrawData(kW, kH, suelto);
+    CHECK(suelto.vertices.size() == 12);
+}
+
+// La MISMA línea en tres X distintas, calculadas contra el ancho del rect.
+static void test_texto_alineacion_izquierda_centro_derecha()
+{
+    UiFont font;
+    makeTestFont(font);
+
+    UiCanvas canvas;
+    Text& label = canvas.root().add<Text>("Etiqueta");
+    label.position = {100.0f, 50.0f};
+    label.size     = {200.0f, 60.0f};   // ancho != alto a propósito
+    label.font     = &font;
+    label.fontSize = kBakeSize;
+    label.text     = "ABC";
+
+    // Ancho de la línea: 21 + (-4+13) + (-6+27) = 51.
+    UiDrawData izquierda;
+    label.align = UiTextAlign::Left;
+    canvas.buildDrawData(kW, kH, izquierda);
+
+    UiDrawData centro;
+    label.align = UiTextAlign::Center;
+    canvas.buildDrawData(kW, kH, centro);
+
+    UiDrawData derecha;
+    label.align = UiTextAlign::Right;
+    canvas.buildDrawData(kW, kH, derecha);
+
+    CHECK(izquierda.vertices.size() == 12);
+    CHECK(centro.vertices.size() == 12);
+    CHECK(derecha.vertices.size() == 12);
+    if (izquierda.vertices.size() != 12 || centro.vertices.size() != 12 || derecha.vertices.size() != 12) return;
+
+    CHECK(nearly(izquierda.vertices[0].pos.x, 103.0f));            // 100 + bearing 3
+    CHECK(nearly(centro.vertices[0].pos.x,    177.5f));            // 100 + (200-51)/2 + 3
+    CHECK(nearly(derecha.vertices[0].pos.x,   252.0f));            // 100 + 200-51 + 3
+
+    // La Y es la misma en los tres: alinear es SOLO en X.
+    CHECK(nearly(centro.vertices[0].pos.y, izquierda.vertices[0].pos.y));
+    CHECK(nearly(derecha.vertices[0].pos.y, izquierda.vertices[0].pos.y));
+
+    // Y el último glyph de la línea derecha acaba pegado al borde: 252 + ...
+    CHECK(nearly(derecha.vertices[8].pos.x, 278.0f));              // 249 + 21+9-6 + 5
+}
+
+// Justify reparte el sobrante entre los espacios, y NUNCA en la última línea ni
+// en una cortada por '\n'.
+static void test_texto_justify_no_toca_la_ultima_linea()
+{
+    UiFont font;
+    makeTestFont(font);
+    addSpaceGlyph(font, 7.0f);
+
+    UiCanvas canvas;
+    Text& label = canvas.root().add<Text>("Etiqueta");
+    label.position = {100.0f, 50.0f};
+    label.size     = {45.0f, 120.0f};
+    label.font     = &font;
+    label.fontSize = kBakeSize;
+    label.wordWrap = true;
+    label.align    = UiTextAlign::Justify;
+    label.text     = "A B C";
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    // Dos líneas: "A B" (21+7+13 = 41) y "C". El espacio no deja quad.
+    CHECK(data.vertices.size() == 12);
+    if (data.vertices.size() != 12) return;
+
+    // Sobrante 45-41 = 4 para UN espacio: B se va 4 px a la derecha.
+    CHECK(nearly(data.vertices[0].pos.x, 103.0f));
+    CHECK(nearly(data.vertices[4].pos.x, 130.0f));   // 100 + 21 + (7+4) - 2
+
+    // La última línea NO se justifica: C empieza pegada a la izquierda.
+    CHECK(nearly(data.vertices[8].pos.x, 105.0f));   // 100 + bearing 5
+    CHECK(nearly(data.vertices[8].pos.y, 105.0f));   // baseline 74 + 40 - bearingY 9
+
+    // Con Left, el mismo espacio vale 7 y B se queda en 126.
+    label.align = UiTextAlign::Left;
+    UiDrawData izquierda;
+    canvas.buildDrawData(kW, kH, izquierda);
+    CHECK(izquierda.vertices.size() == 12);
+    if (izquierda.vertices.size() != 12) return;
+    CHECK(nearly(izquierda.vertices[4].pos.x, 126.0f));
+
+    // Una línea cortada por '\n' tampoco se justifica, aunque le sobre sitio.
+    label.align    = UiTextAlign::Justify;
+    label.wordWrap = false;
+    label.size     = {200.0f, 120.0f};
+    label.text     = "A B\nC";
+    UiDrawData conSalto;
+    canvas.buildDrawData(kW, kH, conSalto);
+    CHECK(conSalto.vertices.size() == 12);
+    if (conSalto.vertices.size() != 12) return;
+    CHECK(nearly(conSalto.vertices[4].pos.x, 126.0f));
+    CHECK(nearly(conSalto.vertices[8].pos.y, 105.0f));   // y C en la segunda línea
+
+    // Y con espacios en las DOS líneas: ni la del '\n' ni la última se estiran,
+    // aunque a las dos les sobren 159 px. Sin esta pareja, quitar la guarda de
+    // "última línea" no lo notaría nadie: la última suele no tener espacios.
+    label.text = "A B\nA B";
+    UiDrawData dosLineas;
+    canvas.buildDrawData(kW, kH, dosLineas);
+    CHECK(dosLineas.vertices.size() == 16);
+    if (dosLineas.vertices.size() != 16) return;
+    CHECK(nearly(dosLineas.vertices[4].pos.x, 126.0f));    // B de la línea del '\n'
+    CHECK(nearly(dosLineas.vertices[12].pos.x, 126.0f));   // B de la ÚLTIMA línea
+    CHECK(nearly(dosLineas.vertices[12].pos.y, 97.0f));    // 114 - 17
+}
+
+// Wrap por palabras, y por glyph cuando una palabra no cabe ni sola.
+static void test_texto_word_wrap_por_palabras_y_por_glyph()
+{
+    UiFont font;
+    makeTestFont(font);
+    addSpaceGlyph(font, 7.0f);
+
+    UiCanvas canvas;
+    Text& label = canvas.root().add<Text>("Etiqueta");
+    label.position = {100.0f, 50.0f};
+    label.size     = {45.0f, 120.0f};
+    label.font     = &font;
+    label.fontSize = kBakeSize;
+    label.wordWrap = true;
+    label.text     = "A B C";
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(data.vertices.size() == 12);
+    if (data.vertices.size() != 12) return;
+
+    // "A B" arriba (misma línea base) y "C" abajo, un lineHeight más.
+    CHECK(nearly(data.vertices[0].pos.y, 62.0f));    // 74 - 12
+    CHECK(nearly(data.vertices[4].pos.y, 57.0f));    // 74 - 17
+    CHECK(nearly(data.vertices[8].pos.y, 105.0f));   // 114 - 9
+    CHECK(nearly(data.vertices[8].pos.x, 105.0f));
+
+    // Sin wrap, las tres van seguidas en una línea.
+    label.wordWrap = false;
+    UiDrawData seguido;
+    canvas.buildDrawData(kW, kH, seguido);
+    CHECK(seguido.vertices.size() == 12);
+    if (seguido.vertices.size() != 12) return;
+    CHECK(nearly(seguido.vertices[8].pos.y, 65.0f));   // 74 - 9, la misma línea
+
+    // Una palabra más ancha que el rect se parte por glyph: "ABC" son 51 contra
+    // un rect de 30, así que caben A y B (30) y C baja.
+    label.wordWrap = true;
+    label.size     = {30.0f, 120.0f};
+    label.text     = "ABC";
+    UiDrawData partida;
+    canvas.buildDrawData(kW, kH, partida);
+    CHECK(partida.vertices.size() == 12);
+    if (partida.vertices.size() != 12) return;
+    CHECK(nearly(partida.vertices[0].pos.x, 103.0f));
+    CHECK(nearly(partida.vertices[4].pos.x, 115.0f));
+    CHECK(nearly(partida.vertices[4].pos.y, 57.0f));
+    // C abre línea: sin kerning heredado y pegada a la izquierda del rect.
+    CHECK(nearly(partida.vertices[8].pos.x, 105.0f));
+    CHECK(nearly(partida.vertices[8].pos.y, 105.0f));
+}
+
+// Ellipsis recorta y remata; Clip recorta con el scissor; Overflow no hace nada.
+static void test_texto_overflow_ellipsis_clip_y_overflow()
+{
+    UiFont font;
+    makeTestFont(font);
+
+    UiGlyph puntos{};
+    puntos.rect     = {90.0f, 40.0f, 10.0f, 6.0f};
+    puntos.bearingX = 1.0f;
+    puntos.bearingY = 4.0f;
+    puntos.advance  = 12.0f;
+    font.addGlyph(0x2026, puntos);   // '…'
+
+    UiCanvas canvas;
+    Text& label = canvas.root().add<Text>("Etiqueta");
+    label.position = {100.0f, 50.0f};
+    label.size     = {40.0f, 60.0f};
+    label.font     = &font;
+    label.fontSize = kBakeSize;
+    label.text     = "ABC";
+
+    // Overflow: ni recorte ni puntos, y el scissor sigue siendo el de pantalla.
+    label.overflow = UiTextOverflow::Overflow;
+    UiDrawData libre;
+    canvas.buildDrawData(kW, kH, libre);
+    CHECK(libre.vertices.size() == 12);
+    CHECK(libre.batches.size() == 1);
+    if (libre.batches.empty()) return;
+    CHECK(libre.batches[0].scissor.width == kW && libre.batches[0].scissor.height == kH);
+
+    // Clip: los MISMOS quads, pero el lote sale recortado al rect.
+    label.overflow = UiTextOverflow::Clip;
+    UiDrawData recortado;
+    canvas.buildDrawData(kW, kH, recortado);
+    CHECK(recortado.vertices.size() == 12);
+    CHECK(recortado.batches.size() == 1);
+    if (recortado.batches.empty()) return;
+    CHECK(recortado.batches[0].scissor.x == 100 && recortado.batches[0].scissor.y == 50);
+    CHECK(recortado.batches[0].scissor.width == 40 && recortado.batches[0].scissor.height == 60);
+    for (size_t i = 0; i < recortado.vertices.size(); ++i)
+        CHECK(nearly(recortado.vertices[i].pos.x, libre.vertices[i].pos.x));
+
+    // Ellipsis: 51 + 12 no cabe en 40, así que caen C y B y queda "A…".
+    label.overflow = UiTextOverflow::Ellipsis;
+    UiDrawData cortado;
+    canvas.buildDrawData(kW, kH, cortado);
+    CHECK(cortado.vertices.size() == 8);
+    if (cortado.vertices.size() != 8) return;
+
+    CHECK(nearly(cortado.vertices[0].pos.x, 103.0f));
+    CHECK(nearly(cortado.vertices[4].pos.x, 122.0f));           // pluma 121 + bearing 1
+    CHECK(nearly(cortado.vertices[4].uv.x, 90.0f / 128.0f));    // y son las UVs del '…'
+    // Y el bloque no se sale del rect: 122 + 10 <= 140.
+    CHECK(cortado.vertices[5].pos.x <= 140.0f);
+
+    // Sin '…' en el atlas se cae a tres puntos.
+    UiFont conPuntos;
+    makeTestFont(conPuntos);
+    UiGlyph punto{};
+    punto.rect     = {100.0f, 50.0f, 3.0f, 3.0f};
+    punto.bearingX = 1.0f;
+    punto.bearingY = 3.0f;
+    punto.advance  = 5.0f;
+    conPuntos.addGlyph('.', punto);
+
+    label.font = &conPuntos;
+    UiDrawData fallback;
+    canvas.buildDrawData(kW, kH, fallback);
+    CHECK(fallback.vertices.size() == 16);   // A + tres puntos
+    if (fallback.vertices.size() != 16) return;
+    CHECK(nearly(fallback.vertices[4].pos.x, 122.0f));
+    CHECK(nearly(fallback.vertices[8].pos.x, 127.0f));
+    CHECK(nearly(fallback.vertices[12].pos.x, 132.0f));
+}
+
+// El bloque de texto medido alimenta el fitter, y desde ahí el layout del padre.
+static void test_texto_alimenta_el_content_size_fitter()
+{
+    UiFont font;
+    makeTestFont(font);
+
+    UiCanvas canvas;
+    UiElement& panel = canvas.root().add("Panel");
+    panel.position   = {60.0f, 30.0f};
+    panel.layoutMode = UiLayoutMode::Vertical;
+    panel.fitWidth   = true;
+    panel.fitHeight  = true;
+
+    Text& label     = panel.add<Text>("Etiqueta");
+    label.font      = &font;
+    label.fontSize  = kBakeSize;
+    label.text      = "ABC";
+    label.fitWidth  = true;
+    label.fitHeight = true;
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    // El quad del panel primero, los glyphs detrás.
+    CHECK(data.vertices.size() == 4 + 12);
+    if (data.vertices.size() != 16) return;
+
+    // Ancho = la línea (51) y alto = un lineHeight (40): ni uno ni otro salen
+    // del size del panel, que es {0,0}.
+    CHECK(nearly(data.vertices[0].pos.x, 60.0f));
+    CHECK(nearly(data.vertices[0].pos.y, 30.0f));
+    CHECK(nearly(data.vertices[2].pos.x, 111.0f));
+    CHECK(nearly(data.vertices[2].pos.y, 70.0f));
+
+    // Un texto más largo empuja el panel, que es de lo que va el fitter.
+    label.text = "ABCABC";
+    UiDrawData largo;
+    canvas.buildDrawData(kW, kH, largo);
+    CHECK(largo.vertices.size() == 4 + 24);
+    if (largo.vertices.size() != 28) return;
+    CHECK(largo.vertices[2].pos.x > data.vertices[2].pos.x);
+    CHECK(nearly(largo.vertices[2].pos.y, 70.0f));   // sigue siendo UNA línea
+}
+
+// Neutralidad: con los valores por defecto (Left, sin wrap, Overflow) el texto
+// plano da EXACTAMENTE los mismos vértices y lotes que la fase anterior.
+static void test_neutralidad_del_rich_text()
+{
+    UiFont font;
+    makeTestFont(font);
+
+    UiCanvas canvas;
+    Text& label = canvas.root().add<Text>("Etiqueta");
+    label.position     = {100.0f, 50.0f};
+    label.font         = &font;
+    label.text         = "ABC";
+    label.fontSize     = kBakeSize;
+    label.outlineWidth = 2.5f;
+    label.outlineColor = {0.25f, 0.5f, 0.75f, 1.0f};
+    label.shadowOffset = {3.0f, -5.0f};
+
+    UiDrawData porDefecto;
+    canvas.buildDrawData(kW, kH, porDefecto);
+
+    label.align    = UiTextAlign::Left;
+    label.wordWrap = false;
+    label.overflow = UiTextOverflow::Overflow;
+
+    UiDrawData explicito;
+    canvas.buildDrawData(kW, kH, explicito);
+
+    CHECK(porDefecto.vertices.size() == 24);
+    CHECK(explicito.vertices.size() == porDefecto.vertices.size());
+    CHECK(explicito.batches.size() == porDefecto.batches.size());
+    CHECK(explicito.batches.size() == 1);
+    if (explicito.vertices.size() != porDefecto.vertices.size()) return;
+
+    for (size_t i = 0; i < porDefecto.vertices.size(); ++i)
+    {
+        const UiVertex& a = porDefecto.vertices[i];
+        const UiVertex& b = explicito.vertices[i];
+        CHECK(nearly(a.pos.x, b.pos.x) && nearly(a.pos.y, b.pos.y));
+        CHECK(nearly(a.uv.x, b.uv.x) && nearly(a.uv.y, b.uv.y));
+        CHECK(nearly(a.color.a, b.color.a));
+        CHECK(nearly(a.params.y, b.params.y) && nearly(a.params.z, b.params.z));
+        CHECK(nearly(a.effect.x, b.effect.x));
+    }
+
+    // Los tres primeros quads siguen siendo la sombra, sin outline ni engorde.
+    for (size_t i = 0; i < 12; ++i)
+        CHECK(nearly(porDefecto.vertices[i].params.z, 0.0f));
+    for (size_t i = 12; i < 24; ++i)
+        CHECK(nearly(porDefecto.vertices[i].params.z, 2.5f));
+}
+
 int main()
 {
     test_canvas_vacio_no_emite_nada();
@@ -1171,6 +1720,17 @@ int main()
     test_texto_sombra_duplica_los_quads_en_un_solo_lote();
     test_texto_outline_viaja_al_vertice_sin_partir_el_lote();
     test_neutralidad_del_texto();
+
+    test_texto_color_por_tramos();
+    test_texto_size_escala_el_tramo_y_mueve_el_cursor();
+    test_texto_negrita_y_cursiva_sin_tocar_uvs();
+    test_texto_tag_malformado_sale_literal();
+    test_texto_alineacion_izquierda_centro_derecha();
+    test_texto_justify_no_toca_la_ultima_linea();
+    test_texto_word_wrap_por_palabras_y_por_glyph();
+    test_texto_overflow_ellipsis_clip_y_overflow();
+    test_texto_alimenta_el_content_size_fitter();
+    test_neutralidad_del_rich_text();
 
     if (g_failures == 0) std::printf("ui_batch_tests: OK\n");
     else                 std::printf("ui_batch_tests: %d fallos\n", g_failures);

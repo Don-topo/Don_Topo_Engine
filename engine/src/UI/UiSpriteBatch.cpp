@@ -70,10 +70,14 @@ namespace DonTopo
         // parámetros. El de texto no puede salir de node.sprite porque un glyph
         // no tiene nombre, así que la regla de romper el lote vive aquí y solo
         // aquí.
+        // dxTop/dxBottom desplazan en X el borde superior y el inferior: es la
+        // cizalla de la cursiva, que así no necesita ni matriz ni un vértice más
+        // ancho. A 0 el quad sale exactamente igual que siempre.
         void emitRawQuad(const UiTextureAtlas* atlas, const glm::vec2& pos, const glm::vec2& size,
                          const UiUvRect& uv, const glm::vec4& color,
                          const glm::vec4& params, const glm::vec4& effect,
-                         const UiScissor& scissor, UiDrawData& out)
+                         const UiScissor& scissor, UiDrawData& out,
+                         float dxTop = 0.0f, float dxBottom = 0.0f)
         {
             if (out.vertices.size() + 4 > kMaxVertices) return;
 
@@ -97,10 +101,10 @@ namespace DonTopo
 
             // Sentido horario en pantalla empezando arriba a la izquierda. El
             // vértice inferior tiene la Y MAYOR: +Y va hacia abajo.
-            out.vertices.push_back({{pos.x,          pos.y         }, {uv.u0, uv.v0}, color, params, effect});
-            out.vertices.push_back({{pos.x + size.x, pos.y         }, {uv.u1, uv.v0}, color, params, effect});
-            out.vertices.push_back({{pos.x + size.x, pos.y + size.y}, {uv.u1, uv.v1}, color, params, effect});
-            out.vertices.push_back({{pos.x,          pos.y + size.y}, {uv.u0, uv.v1}, color, params, effect});
+            out.vertices.push_back({{pos.x + dxTop,             pos.y         }, {uv.u0, uv.v0}, color, params, effect});
+            out.vertices.push_back({{pos.x + size.x + dxTop,    pos.y         }, {uv.u1, uv.v0}, color, params, effect});
+            out.vertices.push_back({{pos.x + size.x + dxBottom, pos.y + size.y}, {uv.u1, uv.v1}, color, params, effect});
+            out.vertices.push_back({{pos.x + dxBottom,          pos.y + size.y}, {uv.u0, uv.v1}, color, params, effect});
 
             const uint16_t quad[6] = { (uint16_t)(base + 0), (uint16_t)(base + 1), (uint16_t)(base + 2),
                                        (uint16_t)(base + 2), (uint16_t)(base + 3), (uint16_t)(base + 0) };
@@ -125,29 +129,515 @@ namespace DonTopo
         }
 
         // ── Texto ───────────────────────────────────────────────────────────
-        // Una línea, sin wrap y sin alineación. El rect del nodo solo aporta la
-        // esquina superior izquierda: la altura la manda la métrica de la fuente.
-        void emitText(const Text& text, const glm::vec2& worldPos, const glm::vec2& worldScale,
-                      const UiScissor& scissor, float opacity, UiDrawData& out)
+        // Todo el rich text se resuelve AQUÍ, en CPU: ni un shader ni un
+        // pipeline ni una fuente más. El parseo produce glyphs ya "planchados"
+        // (con su color, su escala y su avance en píxeles de mundo) y el corte
+        // de líneas trabaja sobre ese array, no sobre la cadena.
+
+        // Estilo vigente en un punto del texto. Es lo que la pila apila.
+        struct TextStyle
+        {
+            glm::vec4 color{1.0f};
+            float     sizePx = 16.0f;
+            bool      bold   = false;
+            bool      italic = false;
+        };
+
+        enum class TagKind
+        {
+            None,
+            Color,
+            Size,
+            Bold,
+            Italic
+        };
+
+        // Cada apertura guarda el estilo de FUERA: el cierre no "deshace" campo
+        // a campo, restaura el de antes entero. Así anidan sin sorpresas.
+        struct StyleEntry
+        {
+            TagKind   kind = TagKind::None;
+            TextStyle previous{};
+        };
+
+        // Un glyph ya resuelto. A partir de aquí no se vuelve a mirar ni la
+        // cadena ni la pila de estilos.
+        struct ShapedGlyph
+        {
+            const UiGlyph* glyph = nullptr;
+            glm::vec2 scale{1.0f, 1.0f};
+            glm::vec4 color{1.0f};
+            float     kern    = 0.0f;   // corrección ANTES de este glyph, en px de mundo
+            float     advance = 0.0f;   // en px de mundo
+            float     sizePx  = 0.0f;   // tamaño del tramo, para el grosor de la negrita
+            bool      bold    = false;
+            bool      italic  = false;
+            bool      space   = false;
+            bool      newline = false;  // '\n': ni se dibuja ni avanza, solo corta
+        };
+
+        struct TextLine
+        {
+            uint32_t first = 0;
+            uint32_t count = 0;   // ya SIN los espacios del final: no se dibujan ni se alinean
+            uint32_t spaces = 0;  // espacios interiores: los que reparte Justify
+            float    width = 0.0f;
+            bool     hardBreak = false;   // la cortó un '\n', así que Justify no la toca
+
+            // Los puntos suspensivos van al final de s.glyphs, no dentro de la
+            // línea: recortar la línea es mover un contador, no mover glyphs.
+            uint32_t ellipsisFirst = 0;
+            uint32_t ellipsisCount = 0;
+        };
+
+        struct TextScratch
+        {
+            std::vector<uint32_t>    cps;
+            std::vector<ShapedGlyph> glyphs;
+            std::vector<TextLine>    lines;
+            std::vector<StyleEntry>  stack;
+            glm::vec2                block{0.0f, 0.0f};
+        };
+
+        // El buffer REUTILIZADO entre frames. build() es estática, así que el
+        // "miembro" es este bloque por hilo: tras el primer frame ni el parseo
+        // ni el corte de líneas asignan nada.
+        TextScratch& textScratch()
+        {
+            static thread_local TextScratch s;
+            return s;
+        }
+
+        // Comparación ASCII sin distinguir mayúsculas contra un literal. El
+        // nombre del tag tiene que casar ENTERO: "colorr" no es "color".
+        bool tagIs(const std::vector<uint32_t>& cps, size_t first, size_t count, const char* name)
+        {
+            size_t i = 0;
+            for (; i < count && name[i] != '\0'; ++i)
+            {
+                uint32_t c = cps[first + i];
+                if (c >= 'A' && c <= 'Z') c += 32;
+                if (c != (uint32_t)name[i]) return false;
+            }
+            return i == count && name[i] == '\0';
+        }
+
+        // #RRGGBB o #RRGGBBAA. Cualquier otra longitud o un dígito que no sea
+        // hexadecimal = no es un color.
+        bool parseHexColor(const std::vector<uint32_t>& cps, size_t first, size_t count, glm::vec4& out)
+        {
+            if (count != 6 && count != 8) return false;
+
+            uint32_t nib[8] = {};
+            for (size_t i = 0; i < count; ++i)
+            {
+                const uint32_t c = cps[first + i];
+                if      (c >= '0' && c <= '9') nib[i] = c - '0';
+                else if (c >= 'a' && c <= 'f') nib[i] = c - 'a' + 10;
+                else if (c >= 'A' && c <= 'F') nib[i] = c - 'A' + 10;
+                else return false;
+            }
+
+            out.r = (float)(nib[0] * 16 + nib[1]) / 255.0f;
+            out.g = (float)(nib[2] * 16 + nib[3]) / 255.0f;
+            out.b = (float)(nib[4] * 16 + nib[5]) / 255.0f;
+            out.a = count == 8 ? (float)(nib[6] * 16 + nib[7]) / 255.0f : 1.0f;
+            return true;
+        }
+
+        // Decimal sin signo, con parte fraccionaria opcional. Sin dígitos o con
+        // basura detrás no hay número: "<size=>" es texto, no un tamaño 0 que
+        // haría desaparecer el tramo en silencio.
+        bool parseNumber(const std::vector<uint32_t>& cps, size_t first, size_t count, float& out)
+        {
+            if (count == 0) return false;
+
+            float  value  = 0.0f;
+            size_t i      = 0;
+            bool   digits = false;
+
+            for (; i < count && cps[first + i] >= '0' && cps[first + i] <= '9'; ++i)
+            {
+                value  = value * 10.0f + (float)(cps[first + i] - '0');
+                digits = true;
+            }
+
+            if (i < count && cps[first + i] == '.')
+            {
+                ++i;
+                for (float f = 0.1f; i < count && cps[first + i] >= '0' && cps[first + i] <= '9'; ++i, f *= 0.1f)
+                {
+                    value += f * (float)(cps[first + i] - '0');
+                    digits = true;
+                }
+            }
+
+            if (!digits || i != count || value <= 0.0f) return false;
+            out = value;
+            return true;
+        }
+
+        // Intenta leer un tag en 'at' (que apunta a un '<'). Devuelve cuántos
+        // codepoints consume, INCLUIDOS '<' y '>', o 0 si ahí no había un tag
+        // válido. Ese 0 es toda la regla: lo que no se entiende se dibuja.
+        size_t applyTag(const std::vector<uint32_t>& cps, size_t at,
+                        TextStyle& style, std::vector<StyleEntry>& stack)
+        {
+            // Un tag no puede ser infinito: sin '>' cerca, o con otro '<' por
+            // medio, esto era texto.
+            constexpr size_t kMaxTag = 32;
+
+            const size_t stop = std::min(cps.size(), at + 1 + kMaxTag);
+            size_t end = at + 1;
+            while (end < stop && cps[end] != '>')
+            {
+                if (cps[end] == '<') return 0;
+                ++end;
+            }
+            if (end >= stop || cps[end] != '>') return 0;
+
+            const size_t first    = at + 1;
+            const size_t count    = end - first;
+            const size_t consumed = end - at + 1;
+            if (count == 0) return 0;
+
+            if (cps[first] == '/')
+            {
+                TagKind kind = TagKind::None;
+                if      (tagIs(cps, first, count, "/color")) kind = TagKind::Color;
+                else if (tagIs(cps, first, count, "/size"))  kind = TagKind::Size;
+                else if (tagIs(cps, first, count, "/b"))     kind = TagKind::Bold;
+                else if (tagIs(cps, first, count, "/i"))     kind = TagKind::Italic;
+
+                // Un cierre huérfano o cruzado NO desapila a ciegas: sale como
+                // texto, que es lo único que no puede perder información.
+                if (kind == TagKind::None) return 0;
+                if (stack.empty() || stack.back().kind != kind) return 0;
+
+                style = stack.back().previous;
+                stack.pop_back();
+                return consumed;
+            }
+
+            if (tagIs(cps, first, count, "b"))
+            {
+                stack.push_back(StyleEntry{TagKind::Bold, style});
+                style.bold = true;
+                return consumed;
+            }
+            if (tagIs(cps, first, count, "i"))
+            {
+                stack.push_back(StyleEntry{TagKind::Italic, style});
+                style.italic = true;
+                return consumed;
+            }
+            if (count > 7 && tagIs(cps, first, 6, "color=") && cps[first + 6] == '#')
+            {
+                glm::vec4 color{};
+                // Se parsea ANTES de apilar: un color inválido no deja la pila
+                // tocada, así que el '</color>' de después tampoco casa.
+                if (!parseHexColor(cps, first + 7, count - 7, color)) return 0;
+                stack.push_back(StyleEntry{TagKind::Color, style});
+                style.color = color;
+                return consumed;
+            }
+            if (count > 5 && tagIs(cps, first, 5, "size="))
+            {
+                float sizePx = 0.0f;
+                if (!parseNumber(cps, first + 5, count - 5, sizePx)) return 0;
+                stack.push_back(StyleEntry{TagKind::Size, style});
+                style.sizePx = sizePx;
+                return consumed;
+            }
+
+            return 0;
+        }
+
+        // Cadena -> array de glyphs con estilo, ya en píxeles de mundo.
+        void shapeText(const Text& text, const glm::vec2& worldScale, TextScratch& s)
         {
             const UiFont* font = text.font;
 
-            // fontSize/bakeSize: el atlas se horneó a UN tamaño y el resto sale
-            // de escalar el quad, que es de lo que va un MSDF.
+            UiFont::decodeUtf8(text.text, s.cps);
+            s.glyphs.clear();
+            s.stack.clear();
+
+            TextStyle style{};
+            style.color  = text.color;
+            style.sizePx = text.fontSize;
+
+            uint32_t previous = 0;
+
+            for (size_t i = 0; i < s.cps.size(); )
+            {
+                const uint32_t cp = s.cps[i];
+
+                if (cp == '<')
+                {
+                    const size_t consumed = applyTag(s.cps, i, style, s.stack);
+                    if (consumed > 0)
+                    {
+                        i += consumed;
+                        continue;
+                    }
+                    // No era un tag: el '<' sigue siendo un carácter como otro.
+                }
+
+                ++i;
+
+                if (cp == '\n')
+                {
+                    ShapedGlyph brk{};
+                    brk.newline = true;
+                    s.glyphs.push_back(brk);
+                    previous = 0;
+                    continue;
+                }
+
+                const UiGlyph* glyph = font->findGlyph(cp);
+                if (!glyph)
+                {
+                    // Sin glyph no hay ni avance ni par de kerning que valga.
+                    previous = 0;
+                    continue;
+                }
+
+                // fontSize/bakeSize: el atlas se horneó a UN tamaño y el resto
+                // sale de escalar el quad, que es de lo que va un MSDF.
+                const float unit = font->scaleFor(style.sizePx);
+
+                ShapedGlyph g{};
+                g.glyph   = glyph;
+                g.scale   = glm::vec2(unit) * worldScale;
+                g.color   = style.color;
+                g.sizePx  = style.sizePx;
+                g.bold    = style.bold;
+                g.italic  = style.italic;
+                g.space   = (cp == ' ' || cp == '\t');
+                g.kern    = previous != 0 ? font->kerning(previous, cp) * g.scale.x : 0.0f;
+                g.advance = glyph->advance * g.scale.x;
+                s.glyphs.push_back(g);
+
+                previous = cp;
+            }
+        }
+
+        // Corta en líneas. Con availWidth <= 0 (un Text sin rect) no hay contra
+        // qué cortar: queda una sola línea por cada '\n', que es exactamente lo
+        // de la fase anterior.
+        void breakLines(const Text& text, float availWidth, TextScratch& s)
+        {
+            s.lines.clear();
+
+            const bool   wrap = text.wordWrap && availWidth > 0.0f;
+            const size_t n    = s.glyphs.size();
+
+            size_t   lineFirst     = 0;
+            float    lineWidth     = 0.0f;   // con los espacios del final incluidos
+            uint32_t spaces        = 0;
+            uint32_t trailing      = 0;      // espacios seguidos al final de la línea
+            float    trailingWidth = 0.0f;
+
+            // El kerning del PRIMER glyph de una línea no cuenta: su par se
+            // quedó en la línea de arriba.
+            auto glyphWidth = [&](size_t idx) {
+                return (idx == lineFirst ? 0.0f : s.glyphs[idx].kern) + s.glyphs[idx].advance;
+            };
+
+            auto closeLine = [&](size_t end, size_t next, bool hard) {
+                TextLine line{};
+                line.first     = (uint32_t)lineFirst;
+                line.count     = (uint32_t)(end - lineFirst) - trailing;
+                line.spaces    = spaces - trailing;
+                line.width     = lineWidth - trailingWidth;
+                line.hardBreak = hard;
+                s.lines.push_back(line);
+
+                lineFirst     = next;
+                lineWidth     = 0.0f;
+                spaces        = 0;
+                trailing      = 0;
+                trailingWidth = 0.0f;
+            };
+
+            size_t i = 0;
+            while (i < n)
+            {
+                if (s.glyphs[i].newline)
+                {
+                    closeLine(i, i + 1, true);
+                    ++i;
+                    continue;
+                }
+
+                if (s.glyphs[i].space)
+                {
+                    const float w = glyphWidth(i);
+                    lineWidth     += w;
+                    trailingWidth += w;
+                    ++spaces;
+                    ++trailing;
+                    ++i;
+                    continue;
+                }
+
+                // La palabra se mide ENTERA antes de decidir dónde va: es lo que
+                // distingue un wrap por palabras de uno por caracteres.
+                size_t wordEnd   = i;
+                float  wordWidth = 0.0f;
+                while (wordEnd < n && !s.glyphs[wordEnd].space && !s.glyphs[wordEnd].newline)
+                {
+                    wordWidth += (wordEnd == i ? 0.0f : s.glyphs[wordEnd].kern) + s.glyphs[wordEnd].advance;
+                    ++wordEnd;
+                }
+
+                const bool  atLineStart = (i == lineFirst);
+                const float lead        = atLineStart ? 0.0f : s.glyphs[i].kern;
+
+                if (wrap && !atLineStart && lineWidth + lead + wordWidth > availWidth)
+                {
+                    // La palabra entera baja. Se reevalúa sin avanzar: ya en
+                    // cabeza de línea puede seguir sin caber.
+                    closeLine(i, i, false);
+                    continue;
+                }
+
+                if (wrap && atLineStart && wordWidth > availWidth)
+                {
+                    // No cabe ni sola: se parte por glyph, con al menos uno por
+                    // línea (si no, un rect más estrecho que un glyph no
+                    // terminaría nunca).
+                    for (size_t k = i; k < wordEnd; ++k)
+                    {
+                        if (k > lineFirst && lineWidth + glyphWidth(k) > availWidth)
+                            closeLine(k, k, false);
+                        lineWidth += glyphWidth(k);   // recalculado: lineFirst pudo cambiar
+                    }
+                    trailing      = 0;
+                    trailingWidth = 0.0f;
+                    i = wordEnd;
+                    continue;
+                }
+
+                lineWidth    += lead + wordWidth;
+                trailing      = 0;
+                trailingWidth = 0.0f;
+                i = wordEnd;
+            }
+
+            // La última línea (o la única, aunque el texto esté vacío de glyphs
+            // dibujables) se cierra igual.
+            if (lineFirst < n || s.lines.empty()) closeLine(n, n, false);
+        }
+
+        // Recorta a las líneas que caben de alto y le pone '…' al final de la
+        // última. Sin ese glyph en el atlas se cae a "...", y sin ninguno de los
+        // dos se deja el texto tal cual antes que dibujar un hueco.
+        void applyEllipsis(const Text& text, const glm::vec2& worldScale,
+                           float availWidth, float availHeight, float lineStep, TextScratch& s)
+        {
+            if (text.overflow != UiTextOverflow::Ellipsis) return;
+            if (s.lines.empty() || availWidth <= 0.0f) return;
+
+            bool truncated = false;
+            if (availHeight > 0.0f && lineStep > 0.0f)
+            {
+                const size_t maxLines = (size_t)std::max(1.0f, std::floor(availHeight / lineStep));
+                if (s.lines.size() > maxLines)
+                {
+                    s.lines.resize(maxLines);
+                    truncated = true;
+                }
+            }
+
+            TextLine& last = s.lines.back();
+            if (!truncated && last.width <= availWidth) return;
+
+            const UiFont* font = text.font;
+            const float   unit = font->scaleFor(text.fontSize);
+
+            const UiGlyph* dots  = font->findGlyph(0x2026);   // '…'
+            const UiGlyph* point = dots ? nullptr : font->findGlyph('.');
+            if (!dots && !point) return;
+
+            const UiGlyph* mark   = dots ? dots : point;
+            const int      repeat = dots ? 1 : 3;
+            const glm::vec2 scale = glm::vec2(unit) * worldScale;
+            const float ellipsisWidth = mark->advance * scale.x * (float)repeat;
+
+            // Se quitan glyphs del final hasta que quepan los puntos. Puede
+            // quedarse en cero: más vale solo '…' que pasarse del rect.
+            while (last.count > 0 && last.width + ellipsisWidth > availWidth)
+            {
+                const uint32_t     idx = last.first + last.count - 1;
+                const ShapedGlyph& g   = s.glyphs[idx];
+                last.width -= (idx == last.first ? 0.0f : g.kern) + g.advance;
+                --last.count;
+            }
+
+            last.ellipsisFirst = (uint32_t)s.glyphs.size();
+            last.ellipsisCount = (uint32_t)repeat;
+            for (int r = 0; r < repeat; ++r)
+            {
+                ShapedGlyph g{};
+                g.glyph   = mark;
+                g.scale   = scale;
+                g.color   = text.color;
+                g.sizePx  = text.fontSize;
+                g.advance = mark->advance * scale.x;
+                s.glyphs.push_back(g);
+            }
+            last.width += ellipsisWidth;
+        }
+
+        // Parseo + corte + puntos suspensivos, y de paso el tamaño del bloque:
+        // ancho de la línea más larga y alto por lineHeight. Es lo mismo que
+        // consume el pase de medida y lo que emite el de dibujo.
+        void layoutText(const Text& text, const glm::vec2& worldScale,
+                        float availWidth, float availHeight, TextScratch& s)
+        {
+            shapeText(text, worldScale, s);
+            breakLines(text, availWidth, s);
+
+            const float lineStep = text.font->lineHeight() * text.font->scaleFor(text.fontSize) * worldScale.y;
+            applyEllipsis(text, worldScale, availWidth, availHeight, lineStep, s);
+
+            s.block = glm::vec2(0.0f);
+            for (const TextLine& line : s.lines) s.block.x = std::max(s.block.x, line.width);
+            s.block.y = (float)s.lines.size() * lineStep;
+        }
+
+        glm::vec2 measureTextBlock(const Text& text, float availWidth, float availHeight)
+        {
+            TextScratch& s = textScratch();
+            layoutText(text, glm::vec2(1.0f), availWidth, availHeight, s);
+            return s.block;
+        }
+
+        void emitText(const Text& text, const glm::vec2& worldPos, const glm::vec2& worldSize,
+                      const glm::vec2& worldScale, UiScissor scissor, float opacity, UiDrawData& out)
+        {
+            const UiFont* font = text.font;
+
             const float unit = font->scaleFor(text.fontSize);
             if (unit <= 0.0f) return;
 
-            const std::vector<uint32_t> codepoints = UiFont::decodeUtf8(text.text);
-            if (codepoints.empty()) return;
+            TextScratch& s = textScratch();
+            layoutText(text, worldScale, worldSize.x, worldSize.y, s);
+            if (s.glyphs.empty() || s.lines.empty()) return;
 
-            const glm::vec2 scale = glm::vec2(unit) * worldScale;
+            // Clip reutiliza el scissor de siempre, así que lo único que cuesta
+            // es partir el lote; Overflow no toca nada y no lo parte.
+            if (text.overflow == UiTextOverflow::Clip)
+            {
+                scissor = intersectScissor(scissor, scissorFromRect(worldPos, worldSize));
+                if (scissor.empty()) return;
+            }
 
             // El atlas de la fuente es la clave del lote, igual que cualquier
             // otro: dos textos de la misma fuente caen en el mismo draw.
             const UiTextureAtlas* atlas = &font->atlas();
 
-            glm::vec4 fill = text.color;
-            fill.a *= opacity;
             glm::vec4 outline = text.outlineColor;
             outline.a *= opacity;
             glm::vec4 shadow = text.shadowColor;
@@ -157,10 +647,8 @@ namespace DonTopo
             const bool hasShadow = shadow.a > 0.0f &&
                                    (text.shadowOffset.x != 0.0f || text.shadowOffset.y != 0.0f);
 
-            // screenPxRange: el rango del campo de distancia llevado al tamaño
-            // al que se va a dibujar. Sin esto el borde se difumina o se aliasa
-            // según el tamaño.
-            const float screenPxRange = font->pixelRange() * scale.y;
+            const float lineStep = font->lineHeight() * unit * worldScale.y;
+            const float avail    = worldSize.x;
 
             // La sombra es un pase ENTERO por delante: mismo atlas y mismo
             // scissor, así que no parte el lote ni necesita otro pass.
@@ -169,41 +657,92 @@ namespace DonTopo
                 const bool isShadow = (pass == 0);
 
                 // La línea base cae a un ascent del borde superior del rect.
-                glm::vec2 pen{worldPos.x, worldPos.y + font->ascent() * scale.y};
-                if (isShadow) pen += shadowOffset;
+                float baseline = worldPos.y + font->ascent() * unit * worldScale.y;
+                if (isShadow) baseline += shadowOffset.y;
 
-                uint32_t previous = 0;
-
-                for (uint32_t codepoint : codepoints)
+                for (size_t li = 0; li < s.lines.size(); ++li)
                 {
-                    const UiGlyph* glyph = font->findGlyph(codepoint);
-                    if (!glyph)
+                    const TextLine& line = s.lines[li];
+
+                    float startX       = worldPos.x;
+                    float extraPerSpace = 0.0f;
+
+                    if (avail > 0.0f)
                     {
-                        // Sin glyph no hay ni avance ni par de kerning que valga.
-                        previous = 0;
-                        continue;
+                        const bool isLast = (li + 1 == s.lines.size());
+                        if (text.align == UiTextAlign::Center)
+                            startX += (avail - line.width) * 0.5f;
+                        else if (text.align == UiTextAlign::Right)
+                            startX += avail - line.width;
+                        else if (text.align == UiTextAlign::Justify &&
+                                 !isLast && !line.hardBreak && line.spaces > 0 && line.width < avail)
+                            extraPerSpace = (avail - line.width) / (float)line.spaces;
+                    }
+                    if (isShadow) startX += shadowOffset.x;
+
+                    float pen = startX;
+
+                    // Parte 0 = la línea; parte 1 = los puntos suspensivos, que
+                    // viven al final del array.
+                    for (int part = 0; part < 2; ++part)
+                    {
+                        const uint32_t first = part == 0 ? line.first : line.ellipsisFirst;
+                        const uint32_t count = part == 0 ? line.count : line.ellipsisCount;
+
+                        for (uint32_t k = 0; k < count; ++k)
+                        {
+                            const ShapedGlyph& g = s.glyphs[first + k];
+                            if (part > 0 || k > 0) pen += g.kern;
+
+                            // Un espacio no tiene contorno: avanza el cursor y ya.
+                            if (g.glyph->rect.width > 0.0f && g.glyph->rect.height > 0.0f)
+                            {
+                                const glm::vec2 pos{pen + g.glyph->bearingX * g.scale.x,
+                                                    baseline - g.glyph->bearingY * g.scale.y};
+                                const glm::vec2 size{g.glyph->rect.width  * g.scale.x,
+                                                     g.glyph->rect.height * g.scale.y};
+
+                                // screenPxRange: el rango del campo de distancia
+                                // llevado al tamaño al que se va a dibujar.
+                                const float screenPxRange = font->pixelRange() * g.scale.y;
+
+                                // <b> engorda por el MISMO canal que el outline:
+                                // sin outline propio, el "borde" se pinta del
+                                // color del relleno y el glyph sale más gordo.
+                                const float bold = g.bold ? text.boldStrength * g.sizePx * worldScale.y : 0.0f;
+
+                                glm::vec4 fill = g.color;
+                                fill.a *= opacity;
+
+                                const glm::vec4 params{1.0f, screenPxRange,
+                                                       (isShadow ? 0.0f : text.outlineWidth) + bold, 0.0f};
+
+                                glm::vec4 effect = isShadow ? glm::vec4(0.0f) : outline;
+                                if (bold > 0.0f && (isShadow || text.outlineWidth <= 0.0f))
+                                    effect = isShadow ? shadow : fill;
+
+                                // <i> es una cizalla sobre la línea base: el
+                                // borde de arriba se va a la derecha y el de
+                                // abajo a la izquierda. Ni una UV cambia.
+                                float dxTop    = 0.0f;
+                                float dxBottom = 0.0f;
+                                if (g.italic)
+                                {
+                                    dxTop    = text.italicSkew * (baseline - pos.y);
+                                    dxBottom = text.italicSkew * (baseline - (pos.y + size.y));
+                                }
+
+                                emitRawQuad(atlas, pos, size, font->glyphUv(*g.glyph),
+                                            isShadow ? shadow : fill, params,
+                                            effect, scissor, out, dxTop, dxBottom);
+                            }
+
+                            pen += g.advance;
+                            if (part == 0 && g.space) pen += extraPerSpace;
+                        }
                     }
 
-                    if (previous != 0) pen.x += font->kerning(previous, codepoint) * scale.x;
-                    previous = codepoint;
-
-                    // Un espacio no tiene contorno: avanza el cursor y ya.
-                    if (glyph->rect.width > 0.0f && glyph->rect.height > 0.0f)
-                    {
-                        const glm::vec2 pos{pen.x + glyph->bearingX * scale.x,
-                                            pen.y - glyph->bearingY * scale.y};
-                        const glm::vec2 size{glyph->rect.width  * scale.x,
-                                             glyph->rect.height * scale.y};
-
-                        const glm::vec4 params{1.0f, screenPxRange,
-                                               isShadow ? 0.0f : text.outlineWidth, 0.0f};
-
-                        emitRawQuad(atlas, pos, size, font->glyphUv(*glyph),
-                                    isShadow ? shadow : fill, params,
-                                    isShadow ? glm::vec4(0.0f) : outline, scissor, out);
-                    }
-
-                    pen.x += glyph->advance * scale.x;
+                    baseline += lineStep;
                 }
             }
         }
@@ -290,7 +829,25 @@ namespace DonTopo
 
             glm::vec2 size = node.size;
 
-            if (node.layoutMode != UiLayoutMode::None && (node.fitWidth || node.fitHeight))
+            // El bloque de texto ES el contenido de un Text: el fitter crece
+            // hasta él igual que un contenedor crece hasta sus hijos, y desde ahí
+            // el layout del padre ya suma la medida como la de cualquier otro.
+            // Se mide contra node.size (no contra el ya ajustado) por lo mismo
+            // que gridColumns: con fitWidth serían mutuamente recursivos.
+            const Text* asText = node.asText();
+            const bool  fitsText = asText && asText->font && asText->font->hasGlyphs() &&
+                                   !asText->text.empty() && (node.fitWidth || node.fitHeight);
+
+            if (fitsText)
+            {
+                const glm::vec2 block = measureTextBlock(*asText,
+                                                         node.size.x - node.paddingLeft - node.paddingRight,
+                                                         node.size.y - node.paddingTop  - node.paddingBottom);
+
+                if (node.fitWidth)  size.x = node.paddingLeft + block.x + node.paddingRight;
+                if (node.fitHeight) size.y = node.paddingTop  + block.y + node.paddingBottom;
+            }
+            else if (node.layoutMode != UiLayoutMode::None && (node.fitWidth || node.fitHeight))
             {
                 const float gaps = laid > 1 ? (float)(laid - 1) : 0.0f;
 
@@ -425,7 +982,7 @@ namespace DonTopo
             const bool  drawsText = text && text->font && text->font->hasGlyphs() && !text->text.empty();
 
             if (drawsText)
-                emitText(*text, worldPos, worldScale, scissor, opacity, out);
+                emitText(*text, worldPos, worldSize, worldScale, scissor, opacity, out);
             else if (node.drawable && worldSize.x > 0.0f && worldSize.y > 0.0f)
                 emitQuad(node, worldPos, worldSize, scissor, opacity, out);
 
