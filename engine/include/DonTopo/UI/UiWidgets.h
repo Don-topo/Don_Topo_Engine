@@ -162,10 +162,80 @@ namespace DonTopo
         float italicSkew = 0.25f;
     };
 
+    // Los cinco estados de un botón. NO hay máquina de estados: el estado se
+    // DERIVA cada updateInput del que ya lleva el elemento (hovered, botón
+    // izquierdo abajo encima, focused) más interactable y selected, con una
+    // prioridad FIJA: Disabled > Pressed > Selected > Hover > Normal.
+    enum class UiButtonState
+    {
+        Normal,
+        Hover,
+        Pressed,
+        Disabled,
+        Selected
+    };
+
+    // Cómo se ve el cambio de estado. El botón NO toca el batcher: escribe en
+    // los campos que UiSpriteBatch ya lee (color y sprite), así que ninguna de
+    // las tres transiciones añade un quad, un lote ni un pipeline.
+    enum class UiButtonTransition
+    {
+        ColorTint,    // color = el del estado, en el acto
+        SpriteSwap,   // sprite = el del estado; mismo atlas, así que mismo lote
+        Animation     // color interpolado LINEALMENTE durante fadeDuration
+    };
+
     struct Button : UiElement
     {
         using UiElement::UiElement;
         const char* typeName() const override { return "Button"; }
+        Button*       asButton()       override { return this; }
+        const Button* asButton() const override { return this; }
+
+        // A false el botón sigue recibiendo hit test (para que Disabled se pinte
+        // al pasar por encima) pero NO emite Click ni DoubleClick.
+        bool interactable = true;
+
+        // Estado propio, del juego: un botón de una barra de pestañas sigue
+        // marcado con el ratón lejos. Se suma al foco: un focusable enfocado
+        // también cuenta como Selected.
+        bool selected = false;
+
+        UiButtonTransition transition = UiButtonTransition::ColorTint;
+
+        // Colores por estado. Campos, no constantes escondidas: cada botón los
+        // suyos. El de Normal es el que se restaura al volver a Normal, así que
+        // por defecto vale el mismo blanco que UiElement::color.
+        glm::vec4 normalColor{1.0f, 1.0f, 1.0f, 1.0f};
+        glm::vec4 hoverColor{1.0f, 1.0f, 1.0f, 1.0f};
+        glm::vec4 pressedColor{1.0f, 1.0f, 1.0f, 1.0f};
+        glm::vec4 disabledColor{1.0f, 1.0f, 1.0f, 1.0f};
+        glm::vec4 selectedColor{1.0f, 1.0f, 1.0f, 1.0f};
+
+        // Sprites por estado, nombres DEL MISMO atlas del elemento. Uno vacío
+        // deja el sprite como esté: un estado sin arte no borra el que había.
+        std::string normalSprite;
+        std::string hoverSprite;
+        std::string pressedSprite;
+        std::string disabledSprite;
+        std::string selectedSprite;
+
+        // Segundos del fundido de Animation. El tiempo ENTRA por
+        // UiInputState::timeSeconds: aquí no hay reloj, y por eso el fundido es
+        // reproducible en un test sin GUI. A <= 0 el color salta de golpe.
+        float fadeDuration = 0.1f;
+
+        // Estado resuelto por el último updateInput. Lectura: lo escribe el
+        // canvas, no el usuario.
+        UiButtonState state = UiButtonState::Normal;
+
+        // Interior del fundido: de qué color arrancó y cuándo. m_stateReady a
+        // false = el botón no ha visto todavía ni un updateInput, y el primero
+        // COLOCA el color del estado sin fundir (fundir desde el color de
+        // fábrica sería una animación que nadie ha pedido).
+        glm::vec4 fadeFrom{1.0f, 1.0f, 1.0f, 1.0f};
+        float     fadeStartTime = 0.0f;
+        bool      stateReady    = false;
     };
 
     struct Slider : UiElement

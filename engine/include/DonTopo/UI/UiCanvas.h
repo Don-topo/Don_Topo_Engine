@@ -30,6 +30,7 @@ namespace DonTopo
 {
     struct Text;
     struct Image;
+    struct Button;
     class  UiElement;
 
     // ── Eventos ─────────────────────────────────────────────────────────────
@@ -169,6 +170,11 @@ namespace DonTopo
         // Un Image puede emitir N quads (Tiled, Sliced, Filled), todos con el
         // MISMO atlas y el MISMO scissor, así que ninguno parte el lote.
         virtual const Image* asImage() const { return nullptr; }
+
+        // El Button NO lo mira el batcher: lo mira updateInput, que necesita
+        // ESCRIBIR en él (color, sprite, estado), de ahí la versión no const.
+        virtual Button*       asButton()       { return nullptr; }
+        virtual const Button* asButton() const { return nullptr; }
 
         std::string name;
 

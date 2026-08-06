@@ -1,4 +1,5 @@
 #include "DonTopo/UI/UiCanvas.h"
+#include "DonTopo/UI/UiWidgets.h"
 
 #include <cmath>
 
@@ -184,6 +185,120 @@ namespace DonTopo
         setFocus(order[next]);
     }
 
+    namespace
+    {
+        // Un botón no interactable sigue entrando en el hit test (si no, Disabled
+        // no se pintaría nunca al pasar por encima) pero se come el Click y el
+        // DoubleClick. Lo demás (Down, Up, Drag) sigue saliendo.
+        bool tragaElClick(const UiElement* element)
+        {
+            const Button* b = element ? element->asButton() : nullptr;
+            return b != nullptr && !b->interactable;
+        }
+
+        // Prioridad FIJA: Disabled > Pressed > Selected > Hover > Normal. Aquí
+        // no hay máquina de estados; se deriva entera cada frame de lo que ya
+        // lleva el elemento más interactable y selected.
+        UiButtonState estadoDe(const Button& b, const UiInputState& input)
+        {
+            if (!b.interactable)                    return UiButtonState::Disabled;
+            if (b.hovered && input.mouseDown[0])    return UiButtonState::Pressed;
+            if (b.selected || (b.focusable && b.focused)) return UiButtonState::Selected;
+            if (b.hovered)                          return UiButtonState::Hover;
+            return UiButtonState::Normal;
+        }
+
+        const glm::vec4& colorDe(const Button& b, UiButtonState s)
+        {
+            switch (s)
+            {
+                case UiButtonState::Hover:    return b.hoverColor;
+                case UiButtonState::Pressed:  return b.pressedColor;
+                case UiButtonState::Disabled: return b.disabledColor;
+                case UiButtonState::Selected: return b.selectedColor;
+                case UiButtonState::Normal:
+                default:                      return b.normalColor;
+            }
+        }
+
+        const std::string& spriteDe(const Button& b, UiButtonState s)
+        {
+            switch (s)
+            {
+                case UiButtonState::Hover:    return b.hoverSprite;
+                case UiButtonState::Pressed:  return b.pressedSprite;
+                case UiButtonState::Disabled: return b.disabledSprite;
+                case UiButtonState::Selected: return b.selectedSprite;
+                case UiButtonState::Normal:
+                default:                      return b.normalSprite;
+            }
+        }
+
+        void aplicaEstado(Button& b, const UiInputState& input)
+        {
+            const UiButtonState nuevo = estadoDe(b, input);
+
+            if (b.transition == UiButtonTransition::SpriteSwap)
+            {
+                b.state      = nuevo;
+                b.stateReady = true;
+                // Un estado sin arte NO borra el sprite que hubiera: deja el que
+                // está en vez de dejar el elemento sin dibujo.
+                const std::string& s = spriteDe(b, nuevo);
+                if (!s.empty()) b.sprite = s;
+                return;
+            }
+
+            const glm::vec4 destino = colorDe(b, nuevo);
+
+            if (b.transition == UiButtonTransition::ColorTint)
+            {
+                b.state      = nuevo;
+                b.stateReady = true;
+                b.color      = destino;
+                return;
+            }
+
+            // Animation: lineal, y el tiempo lo pone quien llama.
+            if (!b.stateReady)
+            {
+                // Primer updateInput del botón: COLOCA, no funde.
+                b.state         = nuevo;
+                b.stateReady    = true;
+                b.fadeFrom      = destino;
+                b.fadeStartTime = input.timeSeconds;
+                b.color         = destino;
+                return;
+            }
+
+            if (nuevo != b.state)
+            {
+                // Se arranca desde el color ACTUAL, no desde el del estado que
+                // se deja: cambiar de estado a mitad de fundido no da un salto.
+                b.fadeFrom      = b.color;
+                b.fadeStartTime = input.timeSeconds;
+                b.state         = nuevo;
+            }
+
+            float t = 1.0f;
+            if (b.fadeDuration > 0.0f)
+                t = (input.timeSeconds - b.fadeStartTime) / b.fadeDuration;
+
+            // El clamp es lo que impide que pasado el fundido el color siga de
+            // largo (y que un tiempo hacia atrás lo mande al otro lado).
+            if (t <= 0.0f)      b.color = b.fadeFrom;
+            else if (t >= 1.0f) b.color = destino;   // exacto, sin el error del mix
+            else                b.color = b.fadeFrom + (destino - b.fadeFrom) * t;
+        }
+
+        // Una sola pasada por el árbol, al final del updateInput.
+        void tickBotones(UiElement& element, const UiInputState& input)
+        {
+            if (Button* b = element.asButton()) aplicaEstado(*b, input);
+            for (const auto& hijo : element.children()) tickBotones(*hijo, input);
+        }
+    }
+
     void UiCanvas::updateInput(const UiInputState& input)
     {
         UiElement* hit = hitTest(input.mousePos);
@@ -344,7 +459,7 @@ namespace DonTopo
                 // El umbral se vuelve a mirar aquí y no solo en los frames con el
                 // botón mantenido: un gesto que baja y sube en dos frames seguidos
                 // no pasa por ninguno de esos, y 200 px de recorrido no son un click.
-                else if (source && hit == source &&
+                else if (source && hit == source && !tragaElClick(source) &&
                          distance2(input.mousePos, m_pressPos[b]) <= dragThreshold * dragThreshold)
                 {
                     UiEvent e = base;
@@ -419,5 +534,12 @@ namespace DonTopo
 
         m_lastMousePos = input.mousePos;
         m_hasLastMouse = true;
+
+        // ── Botones ─────────────────────────────────────────────────────────
+        // Lo ÚLTIMO: los estados se derivan del hover, el foco y el botón del
+        // ratón que acaban de quedar fijados arriba. Quien no llame a
+        // updateInput no ve ni un cambio: buildDrawData sigue dando los mismos
+        // vértices y los mismos lotes.
+        tickBotones(m_root, input);
     }
 }

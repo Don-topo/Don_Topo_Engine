@@ -2755,6 +2755,345 @@ static void test_neutralidad_de_los_eventos()
     CHECK(sameVertices(db, dc));    // y son los mismos que sin eventos
 }
 
+// ── Botones: 5 estados y 3 transiciones ─────────────────────────────────────
+// Cinco colores que NO se repiten: si la tabla de prioridad se equivoca de fila,
+// el color delata cuál eligió.
+static const glm::vec4 kNormal  {0.10f, 0.20f, 0.30f, 1.00f};
+static const glm::vec4 kHover   {0.40f, 0.50f, 0.60f, 0.90f};
+static const glm::vec4 kPressed {0.70f, 0.15f, 0.25f, 0.80f};
+static const glm::vec4 kDisabled{0.05f, 0.85f, 0.45f, 0.70f};
+static const glm::vec4 kSelected{0.90f, 0.35f, 0.55f, 0.60f};
+
+// Rect con ancho != alto: un cuadrado no distingue un eje cambiado del otro.
+static Button& montaBoton(UiCanvas& canvas, UiDrawData& data)
+{
+    Button& b = canvas.root().add<Button>("Aceptar");
+    b.position = glm::vec2(40.0f, 30.0f);
+    b.size     = glm::vec2(120.0f, 64.0f);
+
+    b.normalColor   = kNormal;
+    b.hoverColor    = kHover;
+    b.pressedColor  = kPressed;
+    b.disabledColor = kDisabled;
+    b.selectedColor = kSelected;
+    b.color         = kNormal;
+
+    // El input reutiliza los rects que deja el emisor: sin esto el hit test no
+    // encuentra a nadie.
+    canvas.buildDrawData(800, 600, data);
+    return b;
+}
+
+static UiInputState ratonBoton(float x, float y, float t, bool abajo)
+{
+    UiInputState in = raton(x, y, t);
+    in.mouseDown[0] = abajo;
+    return in;
+}
+
+// Disabled > Pressed > Selected > Hover > Normal, y en ESE orden.
+static void test_boton_prioridad_de_estados()
+{
+    UiCanvas   canvas;
+    UiDrawData data;
+    Button&    b = montaBoton(canvas, data);
+
+    const float dentroX = 100.0f, dentroY = 60.0f;   // dentro del rect
+    const float fueraX  = 700.0f, fueraY  = 500.0f;  // lejos de todo
+
+    canvas.updateInput(ratonBoton(fueraX, fueraY, 0.0f, false));
+    CHECK(b.state == UiButtonState::Normal);
+    CHECK(b.hovered == false);
+
+    canvas.updateInput(ratonBoton(dentroX, dentroY, 0.1f, false));
+    CHECK(b.hovered == true);
+    CHECK(b.state == UiButtonState::Hover);
+
+    // Hover y pressed a la vez: gana Pressed.
+    canvas.updateInput(ratonBoton(dentroX, dentroY, 0.2f, true));
+    CHECK(b.state == UiButtonState::Pressed);
+
+    // Selected gana a Hover...
+    canvas.updateInput(ratonBoton(dentroX, dentroY, 0.4f, false));
+    b.selected = true;
+    canvas.updateInput(ratonBoton(dentroX, dentroY, 0.5f, false));
+    CHECK(b.state == UiButtonState::Selected);
+
+    // ...y sigue ganando con el ratón fuera: es estado del juego, no del ratón.
+    canvas.updateInput(ratonBoton(fueraX, fueraY, 0.6f, false));
+    CHECK(b.state == UiButtonState::Selected);
+
+    // ...pero pierde con Pressed.
+    canvas.updateInput(ratonBoton(dentroX, dentroY, 0.7f, true));
+    CHECK(b.state == UiButtonState::Pressed);
+
+    // Disabled se lleva por delante a los cuatro.
+    b.interactable = false;
+    canvas.updateInput(ratonBoton(dentroX, dentroY, 0.8f, true));
+    CHECK(b.hovered == true);            // sigue recibiendo hit test
+    CHECK(b.state == UiButtonState::Disabled);
+
+    b.selected = false;
+    canvas.updateInput(ratonBoton(dentroX, dentroY, 0.9f, false));
+    CHECK(b.state == UiButtonState::Disabled);
+
+    b.interactable = true;
+    canvas.updateInput(ratonBoton(dentroX, dentroY, 1.0f, false));
+    CHECK(b.state == UiButtonState::Hover);
+}
+
+// ColorTint escribe en el MISMO campo que ya lee el batcher.
+static void test_boton_color_tint()
+{
+    UiCanvas   canvas;
+    UiDrawData data;
+    Button&    b = montaBoton(canvas, data);
+    b.transition = UiButtonTransition::ColorTint;
+
+    const glm::vec4 partida = b.color;
+
+    canvas.updateInput(ratonBoton(700.0f, 500.0f, 0.0f, false));
+    CHECK(b.color == kNormal);
+
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 0.1f, false));
+    CHECK(b.color == kHover);
+
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 0.2f, true));
+    CHECK(b.color == kPressed);
+
+    b.interactable = false;
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 0.3f, true));
+    CHECK(b.color == kDisabled);
+
+    b.interactable = true;
+    b.selected     = true;
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 0.4f, false));
+    CHECK(b.color == kSelected);
+
+    // Volver a Normal devuelve EXACTAMENTE el color de partida.
+    b.selected = false;
+    canvas.updateInput(ratonBoton(700.0f, 500.0f, 0.5f, false));
+    CHECK(b.state == UiButtonState::Normal);
+    CHECK(b.color == partida);
+
+    // Y el color acaba en el vértice, que es de lo que iba todo esto.
+    canvas.buildDrawData(800, 600, data);
+    CHECK(data.vertices.size() == 4);
+    CHECK(nearly(data.vertices[0].color.r, kNormal.r));
+    CHECK(nearly(data.vertices[0].color.g, kNormal.g));
+    CHECK(nearly(data.vertices[0].color.b, kNormal.b));
+}
+
+// SpriteSwap cambia el nombre del sprite, no el atlas: el lote no se parte.
+static void test_boton_sprite_swap_no_parte_el_lote()
+{
+    UiTextureAtlas atlas;
+    atlas.setSize(200, 100);
+    atlas.addSprite("boton_normal",   {0.0f,  0.0f,  40.0f, 20.0f});
+    atlas.addSprite("boton_hover",    {40.0f, 0.0f,  40.0f, 20.0f});
+    atlas.addSprite("boton_pressed",  {80.0f, 0.0f,  40.0f, 20.0f});
+    atlas.addSprite("boton_disabled", {0.0f,  20.0f, 40.0f, 20.0f});
+    atlas.addSprite("boton_selected", {40.0f, 20.0f, 40.0f, 20.0f});
+
+    UiCanvas   canvas;
+    UiDrawData data;
+    Button&    b = montaBoton(canvas, data);
+    b.transition     = UiButtonTransition::SpriteSwap;
+    b.atlas          = &atlas;
+    b.sprite         = "boton_normal";
+    b.normalSprite   = "boton_normal";
+    b.hoverSprite    = "boton_hover";
+    b.pressedSprite  = "boton_pressed";
+    b.disabledSprite = "boton_disabled";
+    b.selectedSprite = "boton_selected";
+
+    // Un vecino del MISMO atlas: si el swap partiera el lote se vería aquí.
+    UiElement& vecino = canvas.root().add("Fondo");
+    vecino.position = glm::vec2(300.0f, 200.0f);
+    vecino.size     = glm::vec2(90.0f, 45.0f);
+    vecino.atlas    = &atlas;
+    vecino.sprite   = "boton_normal";
+
+    canvas.buildDrawData(800, 600, data);
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 8);
+
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 0.1f, false));
+    CHECK(b.sprite == "boton_hover");
+    CHECK(b.color == kNormal);              // SpriteSwap NO toca el color
+
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 0.2f, true));
+    CHECK(b.sprite == "boton_pressed");
+
+    b.interactable = false;
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 0.3f, true));
+    CHECK(b.sprite == "boton_disabled");
+
+    b.interactable = true;
+    b.selected     = true;
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 0.4f, false));
+    CHECK(b.sprite == "boton_selected");
+
+    b.selected = false;
+    canvas.updateInput(ratonBoton(700.0f, 500.0f, 0.5f, false));
+    CHECK(b.sprite == "boton_normal");
+
+    // Mismo atlas = mismo lote, con el sprite que sea.
+    canvas.buildDrawData(800, 600, data);
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 8);
+    CHECK(data.batches[0].atlas == &atlas);
+}
+
+// Animation: lineal, con el tiempo que entra por UiInputState. Sin reloj.
+static void test_boton_animation_interpola_y_no_pasa_de_largo()
+{
+    UiCanvas   canvas;
+    UiDrawData data;
+    Button&    b = montaBoton(canvas, data);
+    b.transition   = UiButtonTransition::Animation;
+    // Ni 0.35 (doble click) ni 5 (drag). Y potencia de dos: los instantes del
+    // test caen EXACTOS en float, así que el "al final es exacto" mide el
+    // clamp, no el redondeo de una división.
+    b.fadeDuration = 0.25f;
+
+    // El primer updateInput COLOCA el color: no funde desde el de fábrica.
+    canvas.updateInput(ratonBoton(700.0f, 500.0f, 0.0f, false));
+    CHECK(b.state == UiButtonState::Normal);
+    CHECK(b.color == kNormal);
+
+    // Entra el ratón: el fundido arranca aquí, todavía sin avanzar.
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 1.00f, false));
+    CHECK(b.state == UiButtonState::Hover);
+    CHECK(b.color == kNormal);
+
+    // A mitad de fadeDuration, a mitad de camino.
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 1.125f, false));
+    CHECK(nearly(b.color.r, 0.5f * (kNormal.r + kHover.r)));
+    CHECK(nearly(b.color.g, 0.5f * (kNormal.g + kHover.g)));
+    CHECK(nearly(b.color.b, 0.5f * (kNormal.b + kHover.b)));
+    CHECK(nearly(b.color.a, 0.5f * (kNormal.a + kHover.a)));
+
+    // Un octavo más: tres cuartos de camino, lineal.
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 1.1875f, false));
+    CHECK(nearly(b.color.r, kNormal.r + 0.75f * (kHover.r - kNormal.r)));
+    CHECK(nearly(b.color.g, kNormal.g + 0.75f * (kHover.g - kNormal.g)));
+
+    // Al final, EXACTO.
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 1.25f, false));
+    CHECK(b.color == kHover);
+
+    // Y pasado el final no se pasa de largo por mucho tiempo que corra.
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 9.00f, false));
+    CHECK(b.color == kHover);
+
+    // Cortar un fundido a medias arranca desde el color ACTUAL, sin salto.
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 10.00f, true));   // → Pressed
+    CHECK(b.state == UiButtonState::Pressed);
+    CHECK(b.color == kHover);
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 10.125f, true));
+    CHECK(nearly(b.color.r, 0.5f * (kHover.r + kPressed.r)));
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 10.25f, true));
+    CHECK(b.color == kPressed);
+}
+
+// No interactable: sigue cambiando de estado con el ratón encima, pero ni Click
+// ni DoubleClick.
+static void test_boton_no_interactable_no_emite_click()
+{
+    UiCanvas   canvas;
+    UiDrawData data;
+    Button&    b = montaBoton(canvas, data);
+    b.interactable = false;
+
+    int clicks = 0, dobles = 0, abajo = 0;
+    b.onClick       = [&](UiEvent&) { ++clicks; };
+    b.onDoubleClick = [&](UiEvent&) { ++dobles; };
+    b.onMouseDown   = [&](UiEvent&) { ++abajo; };
+
+    auto clic = [&](float t)
+    {
+        canvas.updateInput(ratonBoton(100.0f, 60.0f, t, true));
+        canvas.updateInput(ratonBoton(100.0f, 60.0f, t + 0.01f, false));
+    };
+
+    clic(0.0f);
+    clic(0.10f);            // dentro del doubleClickTime (0.35)
+    CHECK(clicks == 0);
+    CHECK(dobles == 0);
+    CHECK(abajo == 2);      // el Down sí sale: solo se comen Click y DoubleClick
+    CHECK(b.hovered == true);
+    CHECK(b.state == UiButtonState::Disabled);
+
+    // Con el ratón fuera vuelve a Disabled (no a Normal): manda interactable.
+    canvas.updateInput(ratonBoton(700.0f, 500.0f, 0.5f, false));
+    CHECK(b.state == UiButtonState::Disabled);
+
+    // Y con interactable el mismo gesto sí da click: el gate es lo único que
+    // los estaba parando.
+    b.interactable = true;
+    clic(1.0f);
+    CHECK(clicks == 1);
+    CHECK(dobles == 0);
+    clic(1.10f);
+    CHECK(clicks == 2);
+    CHECK(dobles == 1);
+}
+
+// Sin updateInput un Button no mueve NI UN vértice: mismos bytes que un canvas
+// equivalente sin botones.
+static void test_neutralidad_de_los_botones()
+{
+    UiTextureAtlas atlas;
+    atlas.setSize(200, 100);
+    atlas.addSprite("boton_normal", {0.0f, 0.0f, 40.0f, 20.0f});
+    atlas.addSprite("boton_hover",  {40.0f, 0.0f, 40.0f, 20.0f});
+
+    UiCanvas conBoton;
+    {
+        Button& b = conBoton.root().add<Button>("Aceptar");
+        b.position       = glm::vec2(40.0f, 30.0f);
+        b.size           = glm::vec2(120.0f, 64.0f);
+        b.color          = kNormal;
+        b.atlas          = &atlas;
+        b.sprite         = "boton_normal";
+        b.transition     = UiButtonTransition::Animation;
+        b.fadeDuration   = 0.24f;
+        b.interactable   = false;
+        b.selected       = true;
+        b.normalColor    = kNormal;
+        b.hoverColor     = kHover;
+        b.pressedColor   = kPressed;
+        b.disabledColor  = kDisabled;
+        b.selectedColor  = kSelected;
+        b.normalSprite   = "boton_normal";
+        b.hoverSprite    = "boton_hover";
+    }
+
+    UiCanvas sinBoton;
+    {
+        UiElement& e = sinBoton.root().add("Aceptar");
+        e.position = glm::vec2(40.0f, 30.0f);
+        e.size     = glm::vec2(120.0f, 64.0f);
+        e.color    = kNormal;
+        e.atlas    = &atlas;
+        e.sprite   = "boton_normal";
+    }
+
+    UiDrawData a, c;
+    conBoton.buildDrawData(800, 600, a);
+    sinBoton.buildDrawData(800, 600, c);
+
+    CHECK(a.vertices.size() == c.vertices.size());
+    CHECK(a.indices.size() == c.indices.size());
+    CHECK(a.batches.size() == c.batches.size());
+    CHECK(!a.vertices.empty());
+    CHECK(std::memcmp(a.vertices.data(), c.vertices.data(),
+                      a.vertices.size() * sizeof(a.vertices[0])) == 0);
+    CHECK(std::memcmp(a.indices.data(), c.indices.data(),
+                      a.indices.size() * sizeof(a.indices[0])) == 0);
+}
+
 int main()
 {
     test_canvas_vacio_no_emite_nada();
@@ -2817,6 +3156,13 @@ int main()
     test_eventos_consumed_corta_la_burbuja();
     test_eventos_foco_tab_y_escape();
     test_eventos_teclado_solo_con_foco();
+
+    test_boton_prioridad_de_estados();
+    test_boton_color_tint();
+    test_boton_sprite_swap_no_parte_el_lote();
+    test_boton_animation_interpola_y_no_pasa_de_largo();
+    test_boton_no_interactable_no_emite_click();
+    test_neutralidad_de_los_botones();
     test_neutralidad_de_los_eventos();
 
     if (g_failures == 0) std::printf("ui_batch_tests: OK\n");
