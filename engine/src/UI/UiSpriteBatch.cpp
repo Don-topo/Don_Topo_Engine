@@ -112,6 +112,174 @@ namespace DonTopo
             out.batches.back().indexCount += 6;
         }
 
+        // ── Modos de dibujo del Image ───────────────────────────────────────
+        // Los cuatro se resuelven AQUÍ, en CPU, emitiendo N quads con el mismo
+        // atlas y el mismo scissor: por eso ninguno parte el lote y ninguno
+        // necesita una rama en el shader ni un campo en el vértice.
+
+        // Tamaño del sprite EN PÍXELES DEL ATLAS. Una textura suelta (un atlas
+        // sin ninguna entrada con ese nombre) mide lo que mide el atlas entero:
+        // es la misma regla que ya usa uvRect al caer a 0..1.
+        glm::vec2 spriteNativeSize(const UiElement& node)
+        {
+            if (!node.atlas) return {0.0f, 0.0f};
+            if (const UiSpriteRect* r = node.atlas->findSprite(node.sprite))
+                return {r->width, r->height};
+            return {(float)node.atlas->width(), (float)node.atlas->height()};
+        }
+
+        // Repite el sprite a su tamaño nativo. La fila y la columna del final NO
+        // se escalan: se recortan por UV, que es lo que distingue un tiling de un
+        // stretch con más pasos.
+        bool emitTiled(const UiElement& node, const Image& img,
+                       const glm::vec2& pos, const glm::vec2& size, const UiUvRect& uv,
+                       const glm::vec4& color, const UiScissor& scissor, UiDrawData& out)
+        {
+            const glm::vec2 tile = spriteNativeSize(node);
+            if (tile.x <= 0.0f || tile.y <= 0.0f) return false;
+
+            const double cols = std::ceil((double)size.x / (double)tile.x);
+            const double rows = std::ceil((double)size.y / (double)tile.y);
+            if (cols <= 0.0 || rows <= 0.0) return false;
+
+            // El tope se comprueba en double y ANTES de convertir: con un sprite
+            // de 2 px y un rect grande el producto se sale de un uint32.
+            if (cols * rows > (double)img.maxTiles) return false;
+
+            const float du = uv.u1 - uv.u0;
+            const float dv = uv.v1 - uv.v0;
+
+            for (uint32_t ry = 0; ry < (uint32_t)rows; ++ry)
+            {
+                const float y = (float)ry * tile.y;
+                const float h = std::min(tile.y, size.y - y);
+                if (h <= 0.0f) continue;
+
+                for (uint32_t rx = 0; rx < (uint32_t)cols; ++rx)
+                {
+                    const float x = (float)rx * tile.x;
+                    const float w = std::min(tile.x, size.x - x);
+                    if (w <= 0.0f) continue;
+
+                    UiUvRect cell{};
+                    cell.u0 = uv.u0;
+                    cell.v0 = uv.v0;
+                    cell.u1 = uv.u0 + du * (w / tile.x);
+                    cell.v1 = uv.v0 + dv * (h / tile.y);
+
+                    emitRawQuad(node.atlas, {pos.x + x, pos.y + y}, {w, h}, cell, color,
+                                glm::vec4(0.0f), glm::vec4(0.0f), scissor, out);
+                }
+            }
+            return true;
+        }
+
+        // 9-slice. Las esquinas salen SIEMPRE a su tamaño nativo, los bordes se
+        // estiran solo en su eje y el centro rellena el hueco. Si los bordes de
+        // un eje no caben en el rect se escalan los dos proporcionalmente: es la
+        // única forma de que no se solapen, y encoger es lo contrario de
+        // estirar una esquina.
+        bool emitSliced(const UiElement& node, const Image& img,
+                        const glm::vec2& pos, const glm::vec2& size, const UiUvRect& uv,
+                        const glm::vec4& color, const UiScissor& scissor, UiDrawData& out)
+        {
+            const glm::vec2 native = spriteNativeSize(node);
+            if (native.x <= 0.0f || native.y <= 0.0f) return false;
+
+            // Bordes en píxeles del sprite, acotados al propio sprite: unos
+            // bordes mayores que la textura darían UVs cruzadas.
+            float sl = std::max(0.0f, img.borderLeft);
+            float sr = std::max(0.0f, img.borderRight);
+            float st = std::max(0.0f, img.borderTop);
+            float sb = std::max(0.0f, img.borderBottom);
+
+            if (sl + sr > native.x && sl + sr > 0.0f)
+            {
+                const float k = native.x / (sl + sr);
+                sl *= k; sr *= k;
+            }
+            if (st + sb > native.y && st + sb > 0.0f)
+            {
+                const float k = native.y / (st + sb);
+                st *= k; sb *= k;
+            }
+
+            // Y ahora en píxeles de pantalla: el mismo valor, salvo que no quepa
+            // en el rect.
+            float gl = sl, gr = sr, gt = st, gb = sb;
+            if (gl + gr > size.x && gl + gr > 0.0f)
+            {
+                const float k = size.x / (gl + gr);
+                gl *= k; gr *= k;
+            }
+            if (gt + gb > size.y && gt + gb > 0.0f)
+            {
+                const float k = size.y / (gt + gb);
+                gt *= k; gb *= k;
+            }
+
+            const float du = uv.u1 - uv.u0;
+            const float dv = uv.v1 - uv.v0;
+
+            const float xs[3] = {pos.x, pos.x + gl, pos.x + size.x - gr};
+            const float ws[3] = {gl, size.x - gl - gr, gr};
+            const float ys[3] = {pos.y, pos.y + gt, pos.y + size.y - gb};
+            const float hs[3] = {gt, size.y - gt - gb, gb};
+
+            const float us[4] = {uv.u0, uv.u0 + du * (sl / native.x), uv.u1 - du * (sr / native.x), uv.u1};
+            const float vs[4] = {uv.v0, uv.v0 + dv * (st / native.y), uv.v1 - dv * (sb / native.y), uv.v1};
+
+            for (int row = 0; row < 3; ++row)
+            {
+                if (hs[row] <= 0.0f) continue;
+                for (int col = 0; col < 3; ++col)
+                {
+                    if (ws[col] <= 0.0f) continue;
+                    if (row == 1 && col == 1 && !img.fillCenter) continue;
+
+                    const UiUvRect cell{us[col], vs[row], us[col + 1], vs[row + 1]};
+                    emitRawQuad(node.atlas, {xs[col], ys[row]}, {ws[col], hs[row]}, cell, color,
+                                glm::vec4(0.0f), glm::vec4(0.0f), scissor, out);
+                }
+            }
+            return true;
+        }
+
+        // Recorta posición y UV A LA VEZ: el trozo visible enseña SU parte del
+        // sprite, no el sprite entero comprimido. A 1 devuelve false para que
+        // salga por el camino Normal y dé vértice a vértice lo mismo que antes.
+        bool emitFilled(const UiElement& node, const Image& img,
+                        const glm::vec2& pos, const glm::vec2& size, const UiUvRect& uv,
+                        const glm::vec4& color, const UiScissor& scissor, UiDrawData& out)
+        {
+            const float amount = std::min(1.0f, std::max(0.0f, img.fillAmount));
+            if (amount <= 0.0f) return true;    // manejado: ni un quad
+            if (amount >= 1.0f) return false;   // idéntico a Normal
+
+            glm::vec2 p = pos;
+            glm::vec2 s = size;
+            UiUvRect  r = uv;
+
+            if (img.fillDirection == UiFillDirection::Horizontal)
+            {
+                s.x = size.x * amount;
+                const float du = (uv.u1 - uv.u0) * amount;
+                if (img.fillOrigin == UiFillOrigin::Start) { r.u1 = uv.u0 + du; }
+                else                                      { p.x = pos.x + size.x - s.x; r.u0 = uv.u1 - du; }
+            }
+            else
+            {
+                s.y = size.y * amount;
+                const float dv = (uv.v1 - uv.v0) * amount;
+                if (img.fillOrigin == UiFillOrigin::Start) { r.v1 = uv.v0 + dv; }
+                else                                      { p.y = pos.y + size.y - s.y; r.v0 = uv.v1 - dv; }
+            }
+
+            emitRawQuad(node.atlas, p, s, r, color,
+                        glm::vec4(0.0f), glm::vec4(0.0f), scissor, out);
+            return true;
+        }
+
         void emitQuad(const UiElement& node, const glm::vec2& pos, const glm::vec2& size,
                       const UiScissor& scissor, float opacity, UiDrawData& out)
         {
@@ -122,6 +290,23 @@ namespace DonTopo
             // lote, que solo puede cambiar por atlas o por scissor.
             glm::vec4 color = node.color;
             color.a *= opacity;
+
+            // Los modos del Image son N quads del mismo lote. El que no puede
+            // resolverse (sin tamaño nativo, o con más tiles que el tope) cae a
+            // Normal en vez de desaparecer.
+            const Image* img = node.asImage();
+            if (img && img->mode != UiImageMode::Normal)
+            {
+                bool handled = false;
+                switch (img->mode)
+                {
+                    case UiImageMode::Tiled:  handled = emitTiled (node, *img, pos, size, uv, color, scissor, out); break;
+                    case UiImageMode::Sliced: handled = emitSliced(node, *img, pos, size, uv, color, scissor, out); break;
+                    case UiImageMode::Filled: handled = emitFilled(node, *img, pos, size, uv, color, scissor, out); break;
+                    default: break;
+                }
+                if (handled) return;
+            }
 
             // params.x = 0: el shader hace exactamente lo de siempre.
             emitRawQuad(node.atlas, pos, size, uv, color,

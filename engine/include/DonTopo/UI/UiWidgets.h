@@ -13,6 +13,7 @@
 
 #include "DonTopo/UI/UiCanvas.h"
 
+#include <cstdint>
 #include <string>
 
 namespace DonTopo
@@ -25,10 +26,64 @@ namespace DonTopo
         const char* typeName() const override { return "Panel"; }
     };
 
+    // Cómo se reparte el sprite dentro del rect del Image. Los cuatro modos se
+    // resuelven en CPU dentro del batcher (N quads del mismo atlas y el mismo
+    // scissor): ni un shader, ni un pipeline, ni un campo más en el vértice.
+    enum class UiImageMode
+    {
+        Normal,   // un quad, el sprite estirado al rect: exactamente lo de siempre
+        Tiled,    // el sprite repetido a su tamaño NATIVO, con la última fila/columna recortada por UV
+        Sliced,   // 9-slice: las esquinas no se estiran, los bordes solo en su eje
+        Filled    // solo una fracción del rect, recortando posición Y UV a la vez
+    };
+
+    // Eje del relleno del modo Filled. El radial queda fuera a propósito: pide
+    // geometría en abanico, y esto se resuelve con quads.
+    enum class UiFillDirection
+    {
+        Horizontal,
+        Vertical
+    };
+
+    // Desde qué extremo del eje crece el relleno. Start es izquierda en
+    // Horizontal y arriba en Vertical (la misma convención de +Y hacia abajo del
+    // canvas).
+    enum class UiFillOrigin
+    {
+        Start,
+        End
+    };
+
     struct Image : UiElement
     {
         using UiElement::UiElement;
         const char* typeName() const override { return "Image"; }
+        const Image* asImage() const override { return this; }
+
+        UiImageMode mode = UiImageMode::Normal;
+
+        // --- Sliced ------------------------------------------------------------
+        // Bordes en píxeles DEL SPRITE, no del rect: son los que definen dónde
+        // corta el 9-slice la textura, así que escalar el elemento no los mueve.
+        float borderLeft   = 0.0f;
+        float borderRight  = 0.0f;
+        float borderTop    = 0.0f;
+        float borderBottom = 0.0f;
+
+        // Sin centro salen 8 quads: es lo que quiere un marco que deja ver lo de
+        // detrás.
+        bool fillCenter = true;
+
+        // --- Tiled -------------------------------------------------------------
+        // Tope duro de quads del Image. Un rect grande con un sprite de 2 px
+        // pediría decenas de miles de quads y reventaría el buffer, así que
+        // pasado el tope el elemento se dibuja como Normal.
+        uint32_t maxTiles = 1024;
+
+        // --- Filled ------------------------------------------------------------
+        UiFillDirection fillDirection = UiFillDirection::Horizontal;
+        UiFillOrigin    fillOrigin    = UiFillOrigin::Start;
+        float           fillAmount    = 1.0f;   // 0..1; a 0 no se emite ni un quad
     };
 
     // El único con estado propio de momento: sin campos no habría nada que

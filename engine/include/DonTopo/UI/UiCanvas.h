@@ -28,6 +28,7 @@
 namespace DonTopo
 {
     struct Text;
+    struct Image;
 
     // Auto-layout: con un modo distinto de None el contenedor COLOCA a sus
     // hijos y estos dejan de anclarse por su cuenta.
@@ -58,10 +59,14 @@ namespace DonTopo
         // su literal y no hay nada más que mantener sincronizado.
         virtual const char* typeName() const { return "UiElement"; }
 
-        // Único widget que emite algo que NO es su propio quad. El batcher lo
+        // Widgets que emiten algo que NO es un único quad propio. El batcher los
         // pregunta por aquí, no con dynamic_cast: la identidad de tipo en este
         // árbol va sin RTTI, y un enum paralelo sería otra cosa que mantener.
         virtual const Text* asText() const { return nullptr; }
+
+        // Un Image puede emitir N quads (Tiled, Sliced, Filled), todos con el
+        // MISMO atlas y el MISMO scissor, así que ninguno parte el lote.
+        virtual const Image* asImage() const { return nullptr; }
 
         std::string name;
 

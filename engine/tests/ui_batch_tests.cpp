@@ -1691,6 +1691,482 @@ static void test_neutralidad_del_rich_text()
         CHECK(nearly(porDefecto.vertices[i].params.z, 2.5f));
 }
 
+// ── Imágenes: fuentes y modos de dibujo ─────────────────────────────────────
+// El atlas de todos estos tests: 200x100 con un sub-rect que NO empieza en el
+// origen y con proporciones distintas por eje.
+//   u: 50/200 = 0.25 -> 75/200 = 0.375   (du = 0.125)
+//   v: 10/100 = 0.10 -> 50/100 = 0.500   (dv = 0.400)
+// El sprite mide 25x40 en píxeles del atlas: ese es su tamaño NATIVO y es
+// distinto del rect de todos los elementos, así que un modo que se olvide de
+// él y use el rect da otros números.
+static UiTextureAtlas makeAtlas()
+{
+    UiTextureAtlas atlas;
+    atlas.setSize(200, 100);
+    atlas.addSprite("botella", {50.0f, 10.0f, 25.0f, 40.0f});
+    return atlas;
+}
+
+// Comparación EXACTA, campo a campo incluidos params y effect: la neutralidad
+// no es "parecido", es el mismo buffer.
+static bool sameVertices(const UiDrawData& a, const UiDrawData& b)
+{
+    if (a.vertices.size() != b.vertices.size()) return false;
+    if (a.indices.size()  != b.indices.size())  return false;
+    if (a.batches.size()  != b.batches.size())  return false;
+    if (a.vertices.empty()) return true;
+    return std::memcmp(a.vertices.data(), b.vertices.data(),
+                       a.vertices.size() * sizeof(UiVertex)) == 0;
+}
+
+// Una textura suelta es un atlas SIN entradas: el nombre no resuelve y las UVs
+// salen 0..1. Un solo quad, como cualquier drawable.
+static void test_imagen_textura_suelta_uv_0_1()
+{
+    UiTextureAtlas textura;
+    textura.setSize(128, 64);   // ancho != alto, y sin un solo addSprite
+
+    UiCanvas canvas;
+    Image& img = canvas.root().add<Image>("Fondo");
+    img.position = {17.0f, 23.0f};
+    img.size     = {90.0f, 37.0f};   // rect distinto del tamaño de la textura
+    img.atlas    = &textura;
+    img.sprite   = "no_registrado";
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 4);
+    if (data.vertices.size() != 4) return;
+
+    CHECK(nearly(data.vertices[0].uv.x, 0.0f) && nearly(data.vertices[0].uv.y, 0.0f));
+    CHECK(nearly(data.vertices[2].uv.x, 1.0f) && nearly(data.vertices[2].uv.y, 1.0f));
+    // Y el rect sigue siendo el del elemento, no el de la textura.
+    CHECK(nearly(data.vertices[2].pos.x, 107.0f));
+    CHECK(nearly(data.vertices[2].pos.y, 60.0f));
+}
+
+// Un sprite con nombre dentro de un atlas usa las UVs de SU sub-rect, no las
+// del atlas entero: con 0..1 saldrían los cuatro valores distintos.
+static void test_imagen_sprite_con_nombre_usa_su_subrect()
+{
+    UiTextureAtlas atlas = makeAtlas();
+
+    UiCanvas canvas;
+    Image& img = canvas.root().add<Image>("Botella");
+    img.position = {31.0f, 12.0f};
+    img.size     = {70.0f, 44.0f};   // ni 25x40 ni cuadrado
+    img.atlas    = &atlas;
+    img.sprite   = "botella";
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(data.vertices.size() == 4);
+    if (data.vertices.size() != 4) return;
+
+    CHECK(nearly(data.vertices[0].uv.x, 0.25f)  && nearly(data.vertices[0].uv.y, 0.10f));
+    CHECK(nearly(data.vertices[2].uv.x, 0.375f) && nearly(data.vertices[2].uv.y, 0.50f));
+    // El rect es el del elemento: el sprite se estira, que es lo que hace Normal.
+    CHECK(nearly(data.vertices[2].pos.x, 101.0f));
+    CHECK(nearly(data.vertices[2].pos.y, 56.0f));
+}
+
+// Dos Image del mismo atlas van en UN lote AUNQUE estén en modos distintos y
+// emitan un montón de quads: el modo se resuelve en CPU y no es estado del
+// draw. Con otro atlas, dos lotes.
+static void test_imagen_modos_no_parten_el_lote()
+{
+    UiTextureAtlas atlas = makeAtlas();
+
+    UiCanvas canvas;
+
+    Image& a = canvas.root().add<Image>("Tapiz");
+    a.position = {10.0f, 10.0f};
+    a.size     = {50.0f, 40.0f};        // 2 columnas x 1 fila de 25x40
+    a.atlas    = &atlas;
+    a.sprite   = "botella";
+    a.mode     = UiImageMode::Tiled;
+
+    Image& b = canvas.root().add<Image>("Marco");
+    b.position     = {100.0f, 10.0f};
+    b.size         = {60.0f, 50.0f};
+    b.atlas        = &atlas;
+    b.sprite       = "botella";
+    b.mode         = UiImageMode::Sliced;
+    b.borderLeft   = 4.0f;
+    b.borderRight  = 6.0f;
+    b.borderTop    = 3.0f;
+    b.borderBottom = 9.0f;
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    // 2 quads del tiled + 9 del sliced = 11.
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 44);
+    if (data.batches.size() != 1) return;
+    CHECK(data.batches[0].indexCount == 66);
+
+    // El mismo árbol pero con el segundo en otro atlas: dos lotes.
+    UiTextureAtlas otro;
+    otro.setSize(64, 32);
+    otro.addSprite("llave", {8.0f, 4.0f, 16.0f, 8.0f});
+    b.atlas  = &otro;
+    b.sprite = "llave";
+
+    UiDrawData split;
+    canvas.buildDrawData(kW, kH, split);
+
+    CHECK(split.batches.size() == 2);
+    if (split.batches.size() != 2) return;
+    CHECK(split.batches[0].atlas == &atlas);
+    CHECK(split.batches[1].atlas == &otro);
+    CHECK(split.batches[0].indexCount == 12);   // los 2 tiles
+}
+
+// Tiled: el sprite se repite a su tamaño NATIVO (25x40) y la última fila y la
+// última columna se RECORTAN por UV, no se escalan.
+// rect 60x90 -> ceil(60/25) = 3 columnas (25, 25, 10) y ceil(90/40) = 3 filas
+// (40, 40, 10) = 9 quads.
+static void test_imagen_tiled_cuenta_y_recorte_por_uv()
+{
+    UiTextureAtlas atlas = makeAtlas();
+
+    UiCanvas canvas;
+    Image& img = canvas.root().add<Image>("Tapiz");
+    img.position = {17.0f, 23.0f};
+    img.size     = {60.0f, 90.0f};
+    img.atlas    = &atlas;
+    img.sprite   = "botella";
+    img.mode     = UiImageMode::Tiled;
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 36);
+    if (data.vertices.size() != 36) return;
+
+    // Primer tile: tamaño nativo entero y UVs COMPLETAS del sprite.
+    CHECK(nearly(data.vertices[0].pos.x, 17.0f) && nearly(data.vertices[0].pos.y, 23.0f));
+    CHECK(nearly(data.vertices[2].pos.x, 42.0f) && nearly(data.vertices[2].pos.y, 63.0f));
+    CHECK(nearly(data.vertices[0].uv.x, 0.25f)  && nearly(data.vertices[0].uv.y, 0.10f));
+    CHECK(nearly(data.vertices[2].uv.x, 0.375f) && nearly(data.vertices[2].uv.y, 0.50f));
+
+    // Tile del medio de la primera fila: completo también, y desplazado 25 px.
+    CHECK(nearly(data.vertices[4].pos.x, 42.0f));
+    CHECK(nearly(data.vertices[6].pos.x, 67.0f));
+    CHECK(nearly(data.vertices[6].uv.x, 0.375f));
+
+    // Última columna (índice 2): 10 px de ancho, y la U cortada a 10/25 = 0.4
+    // del sub-rect -> 0.25 + 0.125*0.4 = 0.30. Escalar en vez de recortar
+    // dejaría 0.375 aquí.
+    CHECK(nearly(data.vertices[8].pos.x, 67.0f));
+    CHECK(nearly(data.vertices[10].pos.x, 77.0f));
+    CHECK(nearly(data.vertices[10].uv.x, 0.30f));
+    CHECK(nearly(data.vertices[10].uv.y, 0.50f));   // la fila 0 no se corta en V
+
+    // Última fila (índice 6): 10 px de alto, V cortada a 10/40 = 0.25 ->
+    // 0.1 + 0.4*0.25 = 0.20, y la U entera porque es la primera columna.
+    CHECK(nearly(data.vertices[24].pos.y, 103.0f));
+    CHECK(nearly(data.vertices[26].pos.y, 113.0f));
+    CHECK(nearly(data.vertices[26].uv.y, 0.20f));
+    CHECK(nearly(data.vertices[26].uv.x, 0.375f));
+
+    // La esquina (índice 8) se corta en los DOS ejes.
+    CHECK(nearly(data.vertices[34].pos.x, 77.0f) && nearly(data.vertices[34].pos.y, 113.0f));
+    CHECK(nearly(data.vertices[34].uv.x, 0.30f) && nearly(data.vertices[34].uv.y, 0.20f));
+}
+
+// Pasado el tope de quads el Image cae a Normal: un rect grande con un sprite
+// diminuto no puede llevarse el buffer por delante.
+static void test_imagen_tiled_tope_cae_a_normal()
+{
+    UiTextureAtlas atlas = makeAtlas();
+
+    UiCanvas canvas;
+    Image& img = canvas.root().add<Image>("Tapiz");
+    img.position = {17.0f, 23.0f};
+    img.size     = {60.0f, 90.0f};   // pediría 3x3 = 9 tiles
+    img.atlas    = &atlas;
+    img.sprite   = "botella";
+    img.mode     = UiImageMode::Tiled;
+    img.maxTiles = 4;
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    // Un solo quad estirado al rect entero, con el sub-rect completo.
+    CHECK(data.vertices.size() == 4);
+    if (data.vertices.size() != 4) return;
+    CHECK(nearly(data.vertices[2].pos.x, 77.0f) && nearly(data.vertices[2].pos.y, 113.0f));
+    CHECK(nearly(data.vertices[2].uv.x, 0.375f) && nearly(data.vertices[2].uv.y, 0.50f));
+}
+
+// Sliced: 9 quads. Bordes DISTINTOS los cuatro (4/6/3/9 px del sprite) para que
+// intercambiar dos cualesquiera falle.
+// rect 100x70 en (17,23):
+//   columnas x = 17 / 21 / 111  con anchos 4 / 90 / 6
+//   filas    y = 23 / 26 / 84   con altos  3 / 58 / 9
+//   u = 0.25 / 0.27 / 0.345 / 0.375   (4/25 y 6/25 del sub-rect)
+//   v = 0.10 / 0.13 / 0.410 / 0.500   (3/40 y 9/40)
+static void test_imagen_sliced_esquinas_bordes_y_centro()
+{
+    UiTextureAtlas atlas = makeAtlas();
+
+    UiCanvas canvas;
+    Image& img = canvas.root().add<Image>("Marco");
+    img.position     = {17.0f, 23.0f};
+    img.size         = {100.0f, 70.0f};
+    img.atlas        = &atlas;
+    img.sprite       = "botella";
+    img.mode         = UiImageMode::Sliced;
+    img.borderLeft   = 4.0f;
+    img.borderRight  = 6.0f;
+    img.borderTop    = 3.0f;
+    img.borderBottom = 9.0f;
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 36);
+    if (data.vertices.size() != 36) return;
+
+    // Esquina superior izquierda: 4x3, su tamaño NATIVO. Estirarla daría 100x70.
+    CHECK(nearly(data.vertices[0].pos.x, 17.0f) && nearly(data.vertices[0].pos.y, 23.0f));
+    CHECK(nearly(data.vertices[2].pos.x, 21.0f) && nearly(data.vertices[2].pos.y, 26.0f));
+    CHECK(nearly(data.vertices[0].uv.x, 0.25f)  && nearly(data.vertices[0].uv.y, 0.10f));
+    CHECK(nearly(data.vertices[2].uv.x, 0.27f)  && nearly(data.vertices[2].uv.y, 0.13f));
+
+    // Esquina superior derecha: 6x3 pegada al borde derecho.
+    CHECK(nearly(data.vertices[8].pos.x, 111.0f)  && nearly(data.vertices[8].pos.y, 23.0f));
+    CHECK(nearly(data.vertices[10].pos.x, 117.0f) && nearly(data.vertices[10].pos.y, 26.0f));
+    CHECK(nearly(data.vertices[8].uv.x, 0.345f)   && nearly(data.vertices[10].uv.x, 0.375f));
+
+    // Esquina inferior izquierda: 4x9.
+    CHECK(nearly(data.vertices[24].pos.x, 17.0f) && nearly(data.vertices[24].pos.y, 84.0f));
+    CHECK(nearly(data.vertices[26].pos.x, 21.0f) && nearly(data.vertices[26].pos.y, 93.0f));
+    CHECK(nearly(data.vertices[24].uv.y, 0.41f)  && nearly(data.vertices[26].uv.y, 0.50f));
+
+    // Esquina inferior derecha: 6x9, la única que toca las dos esquinas del UV.
+    CHECK(nearly(data.vertices[32].pos.x, 111.0f) && nearly(data.vertices[32].pos.y, 84.0f));
+    CHECK(nearly(data.vertices[34].pos.x, 117.0f) && nearly(data.vertices[34].pos.y, 93.0f));
+    CHECK(nearly(data.vertices[34].uv.x, 0.375f)  && nearly(data.vertices[34].uv.y, 0.50f));
+
+    // Borde superior: estirado solo en X (90 px), con el alto nativo del borde.
+    CHECK(nearly(data.vertices[4].pos.x, 21.0f)  && nearly(data.vertices[4].pos.y, 23.0f));
+    CHECK(nearly(data.vertices[6].pos.x, 111.0f) && nearly(data.vertices[6].pos.y, 26.0f));
+    CHECK(nearly(data.vertices[4].uv.x, 0.27f)   && nearly(data.vertices[6].uv.x, 0.345f));
+
+    // Borde izquierdo: estirado solo en Y (58 px), con el ancho nativo.
+    CHECK(nearly(data.vertices[12].pos.x, 17.0f) && nearly(data.vertices[12].pos.y, 26.0f));
+    CHECK(nearly(data.vertices[14].pos.x, 21.0f) && nearly(data.vertices[14].pos.y, 84.0f));
+
+    // Centro: cubre el hueco entero, 90x58, con el sub-rect interior.
+    CHECK(nearly(data.vertices[16].pos.x, 21.0f)  && nearly(data.vertices[16].pos.y, 26.0f));
+    CHECK(nearly(data.vertices[18].pos.x, 111.0f) && nearly(data.vertices[18].pos.y, 84.0f));
+    CHECK(nearly(data.vertices[16].uv.x, 0.27f)   && nearly(data.vertices[16].uv.y, 0.13f));
+    CHECK(nearly(data.vertices[18].uv.x, 0.345f)  && nearly(data.vertices[18].uv.y, 0.41f));
+
+    // Sin centro: 8 quads, y el quinto pasa a ser el borde derecho.
+    img.fillCenter = false;
+    UiDrawData sinCentro;
+    canvas.buildDrawData(kW, kH, sinCentro);
+
+    CHECK(sinCentro.batches.size() == 1);
+    CHECK(sinCentro.vertices.size() == 32);
+    if (sinCentro.vertices.size() != 32) return;
+    CHECK(nearly(sinCentro.vertices[16].pos.x, 111.0f));
+    CHECK(nearly(sinCentro.vertices[16].pos.y, 26.0f));
+}
+
+// Un rect más estrecho que la suma de bordes: los dos del eje se escalan
+// proporcionalmente (4 y 6 sobre 8 -> 3.2 y 4.8) en vez de solaparse, y la
+// columna del centro desaparece porque mide 0.
+static void test_imagen_sliced_bordes_mayores_que_el_rect()
+{
+    UiTextureAtlas atlas = makeAtlas();
+
+    UiCanvas canvas;
+    Image& img = canvas.root().add<Image>("Marco");
+    img.position     = {17.0f, 23.0f};
+    img.size         = {8.0f, 70.0f};   // 8 < 4+6, pero 70 > 3+9
+    img.atlas        = &atlas;
+    img.sprite       = "botella";
+    img.mode         = UiImageMode::Sliced;
+    img.borderLeft   = 4.0f;
+    img.borderRight  = 6.0f;
+    img.borderTop    = 3.0f;
+    img.borderBottom = 9.0f;
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    // 3 filas x 2 columnas: la del centro mide 0 y no se emite.
+    CHECK(data.vertices.size() == 24);
+    if (data.vertices.size() != 24) return;
+
+    // Izquierda: 8 * 4/10 = 3.2 -> acaba en 20.2.
+    CHECK(nearly(data.vertices[0].pos.x, 17.0f));
+    CHECK(nearly(data.vertices[2].pos.x, 20.2f));
+    // Derecha: 8 * 6/10 = 4.8 -> empieza EXACTAMENTE donde acaba la izquierda.
+    CHECK(nearly(data.vertices[4].pos.x, 20.2f));
+    CHECK(nearly(data.vertices[6].pos.x, 25.0f));
+    CHECK(data.vertices[4].pos.x >= data.vertices[2].pos.x);   // sin solape
+    // El eje Y sí cabe: los bordes ahí no se tocan.
+    CHECK(nearly(data.vertices[2].pos.y, 26.0f));
+    // Y las UVs NO se reescalan: siguen siendo las de los bordes del sprite.
+    CHECK(nearly(data.vertices[2].uv.x, 0.27f));
+    CHECK(nearly(data.vertices[4].uv.x, 0.345f));
+}
+
+// Filled: recorta la posición Y la UV a la vez. Con la UV entera el trozo
+// visible enseñaría el sprite comprimido en vez de su cuarta parte.
+// rect 80x44 en (17,23), fillAmount 0.25.
+static void test_imagen_filled_recorta_pos_y_uv()
+{
+    UiTextureAtlas atlas = makeAtlas();
+
+    UiCanvas canvas;
+    Image& img = canvas.root().add<Image>("Barra");
+    img.position   = {17.0f, 23.0f};
+    img.size       = {80.0f, 44.0f};
+    img.atlas      = &atlas;
+    img.sprite     = "botella";
+    img.mode       = UiImageMode::Filled;
+    img.fillAmount = 0.25f;
+
+    // Horizontal desde el principio: 80*0.25 = 20 px y u1 = 0.25 + 0.125*0.25.
+    UiDrawData hStart;
+    canvas.buildDrawData(kW, kH, hStart);
+    CHECK(hStart.vertices.size() == 4);
+    if (hStart.vertices.size() != 4) return;
+    CHECK(nearly(hStart.vertices[0].pos.x, 17.0f));
+    CHECK(nearly(hStart.vertices[2].pos.x, 37.0f));
+    CHECK(nearly(hStart.vertices[2].pos.y, 67.0f));          // la Y no la toca
+    CHECK(nearly(hStart.vertices[0].uv.x, 0.25f));
+    CHECK(nearly(hStart.vertices[2].uv.x, 0.28125f));
+    CHECK(nearly(hStart.vertices[2].uv.y, 0.50f));
+
+    // Origen opuesto: recorta por el OTRO lado, en posición y en UV.
+    img.fillOrigin = UiFillOrigin::End;
+    UiDrawData hEnd;
+    canvas.buildDrawData(kW, kH, hEnd);
+    CHECK(hEnd.vertices.size() == 4);
+    if (hEnd.vertices.size() != 4) return;
+    CHECK(nearly(hEnd.vertices[0].pos.x, 77.0f));
+    CHECK(nearly(hEnd.vertices[2].pos.x, 97.0f));
+    CHECK(nearly(hEnd.vertices[0].uv.x, 0.34375f));
+    CHECK(nearly(hEnd.vertices[2].uv.x, 0.375f));
+
+    // Vertical desde arriba: 44*0.25 = 11 px y v1 = 0.1 + 0.4*0.25 = 0.2.
+    img.fillDirection = UiFillDirection::Vertical;
+    img.fillOrigin    = UiFillOrigin::Start;
+    UiDrawData vStart;
+    canvas.buildDrawData(kW, kH, vStart);
+    CHECK(vStart.vertices.size() == 4);
+    if (vStart.vertices.size() != 4) return;
+    CHECK(nearly(vStart.vertices[0].pos.y, 23.0f));
+    CHECK(nearly(vStart.vertices[2].pos.y, 34.0f));
+    CHECK(nearly(vStart.vertices[2].pos.x, 97.0f));          // la X no la toca
+    CHECK(nearly(vStart.vertices[2].uv.y, 0.20f));
+
+    // Vertical desde abajo.
+    img.fillOrigin = UiFillOrigin::End;
+    UiDrawData vEnd;
+    canvas.buildDrawData(kW, kH, vEnd);
+    CHECK(vEnd.vertices.size() == 4);
+    if (vEnd.vertices.size() != 4) return;
+    CHECK(nearly(vEnd.vertices[0].pos.y, 56.0f));
+    CHECK(nearly(vEnd.vertices[2].pos.y, 67.0f));
+    CHECK(nearly(vEnd.vertices[0].uv.y, 0.40f));
+    CHECK(nearly(vEnd.vertices[2].uv.y, 0.50f));
+
+    // A 0 no se emite NADA: ni quad, ni lote.
+    img.fillAmount = 0.0f;
+    UiDrawData vacio;
+    canvas.buildDrawData(kW, kH, vacio);
+    CHECK(vacio.vertices.empty());
+    CHECK(vacio.batches.empty());
+}
+
+// A 1 el Filled tiene que dar EXACTAMENTE lo mismo que Normal, byte a byte.
+static void test_imagen_filled_completo_es_normal()
+{
+    UiTextureAtlas atlas = makeAtlas();
+
+    UiCanvas lleno;
+    Image& a = lleno.root().add<Image>("Barra");
+    a.position   = {17.0f, 23.0f};
+    a.size       = {80.0f, 44.0f};
+    a.atlas      = &atlas;
+    a.sprite     = "botella";
+    a.color      = {0.3f, 0.6f, 0.9f, 0.7f};
+    a.mode       = UiImageMode::Filled;
+    a.fillAmount = 1.0f;
+
+    UiCanvas normal;
+    Image& b = normal.root().add<Image>("Barra");
+    b.position = {17.0f, 23.0f};
+    b.size     = {80.0f, 44.0f};
+    b.atlas    = &atlas;
+    b.sprite   = "botella";
+    b.color    = {0.3f, 0.6f, 0.9f, 0.7f};
+
+    UiDrawData da, db;
+    lleno.buildDrawData(kW, kH, da);
+    normal.buildDrawData(kW, kH, db);
+
+    CHECK(da.vertices.size() == 4);
+    CHECK(sameVertices(da, db));
+}
+
+// Neutralidad: un Image en Normal da los MISMOS vértices que el drawable de
+// siempre. Si los campos nuevos tocaran algo, este memcmp lo caza.
+static void test_neutralidad_de_los_modos_de_imagen()
+{
+    UiTextureAtlas atlas = makeAtlas();
+
+    UiCanvas conImage;
+    Image& img = conImage.root().add<Image>("Icono");
+    img.position = {17.0f, 23.0f};
+    img.size     = {70.0f, 44.0f};
+    img.atlas    = &atlas;
+    img.sprite   = "botella";
+    img.color    = {0.3f, 0.6f, 0.9f, 0.7f};
+    img.opacity  = 0.5f;
+
+    UiCanvas base;
+    UiElement& node = base.root().add("Icono");
+    node.position = {17.0f, 23.0f};
+    node.size     = {70.0f, 44.0f};
+    node.atlas    = &atlas;
+    node.sprite   = "botella";
+    node.color    = {0.3f, 0.6f, 0.9f, 0.7f};
+    node.opacity  = 0.5f;
+
+    UiDrawData da, db;
+    conImage.buildDrawData(kW, kH, da);
+    base.buildDrawData(kW, kH, db);
+
+    CHECK(da.vertices.size() == 4);
+    CHECK(sameVertices(da, db));
+
+    // Y tocar los campos de los OTROS modos sin cambiar el modo tampoco mueve
+    // nada: un Normal no mira ni bordes ni fillAmount.
+    img.borderLeft = 4.0f;
+    img.borderTop  = 3.0f;
+    img.fillAmount = 0.25f;
+    img.maxTiles   = 2;
+
+    UiDrawData dc;
+    conImage.buildDrawData(kW, kH, dc);
+    CHECK(sameVertices(dc, db));
+}
+
 int main()
 {
     test_canvas_vacio_no_emite_nada();
@@ -1731,6 +2207,17 @@ int main()
     test_texto_overflow_ellipsis_clip_y_overflow();
     test_texto_alimenta_el_content_size_fitter();
     test_neutralidad_del_rich_text();
+
+    test_imagen_textura_suelta_uv_0_1();
+    test_imagen_sprite_con_nombre_usa_su_subrect();
+    test_imagen_modos_no_parten_el_lote();
+    test_imagen_tiled_cuenta_y_recorte_por_uv();
+    test_imagen_tiled_tope_cae_a_normal();
+    test_imagen_sliced_esquinas_bordes_y_centro();
+    test_imagen_sliced_bordes_mayores_que_el_rect();
+    test_imagen_filled_recorta_pos_y_uv();
+    test_imagen_filled_completo_es_normal();
+    test_neutralidad_de_los_modos_de_imagen();
 
     if (g_failures == 0) std::printf("ui_batch_tests: OK\n");
     else                 std::printf("ui_batch_tests: %d fallos\n", g_failures);
