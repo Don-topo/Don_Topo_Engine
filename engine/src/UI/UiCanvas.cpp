@@ -297,10 +297,134 @@ namespace DonTopo
             if (Button* b = element.asButton()) aplicaEstado(*b, input);
             for (const auto& hijo : element.children()) tickBotones(*hijo, input);
         }
+
+        // ── Curvas de animación ─────────────────────────────────────────────
+        // Funciones puras de t: mismo t, mismo valor, siempre. Los dos remates
+        // de los extremos NO son un clamp de conveniencia, son lo que garantiza
+        // f(0)=0 y f(1)=1 EXACTOS aunque la fórmula de dentro salga a
+        // 0.99999994 por el redondeo (Bounce y Elastic lo hacen).
+        float curvaAnim(UiAnimCurve curva, float t)
+        {
+            if (t <= 0.0f) return 0.0f;
+            if (t >= 1.0f) return 1.0f;
+
+            switch (curva)
+            {
+                case UiAnimCurve::EaseIn:
+                    return t * t;
+
+                case UiAnimCurve::EaseOut:
+                {
+                    const float u = 1.0f - t;
+                    return 1.0f - u * u;
+                }
+
+                case UiAnimCurve::Bounce:
+                {
+                    // Cuatro parábolas cada vez más pequeñas y más altas: no se
+                    // sale de [0,1], pero NO es monótona (ahí están los botes).
+                    const float n = 7.5625f;
+                    const float d = 2.75f;
+                    if (t < 1.0f / d) return n * t * t;
+                    if (t < 2.0f / d) { const float u = t - 1.5f   / d; return n * u * u + 0.75f; }
+                    if (t < 2.5f / d) { const float u = t - 2.25f  / d; return n * u * u + 0.9375f; }
+                    const float u = t - 2.625f / d;
+                    return n * u * u + 0.984375f;
+                }
+
+                case UiAnimCurve::Elastic:
+                {
+                    // Muelle amortiguado: SE PASA del destino y vuelve, así que
+                    // pasa de 1 a mitad de camino a propósito.
+                    const float c = 2.0f * 3.14159265358979323846f / 3.0f;
+                    return std::pow(2.0f, -10.0f * t) * std::sin((t * 10.0f - 0.75f) * c) + 1.0f;
+                }
+
+                case UiAnimCurve::Linear:
+                default:
+                    return t;
+            }
+        }
+
+        // Escribe la propiedad. Al rematar se copia animTo TAL CUAL: el lerp
+        // con t=1 deja 0.99999994 y la propiedad se quedaría a un pelo de su
+        // destino para siempre.
+        void aplicaAnim(UiElement& e, float k, bool remata)
+        {
+            const glm::vec4 v = remata ? e.animTo
+                                       : e.animFrom + (e.animTo - e.animFrom) * k;
+
+            switch (e.anim)
+            {
+                case UiAnim::Fade:     e.opacity  = v.x; break;
+                case UiAnim::Scale:    e.scale    = glm::vec2(v.x, v.y); break;
+                case UiAnim::Move:     e.position = glm::vec2(v.x, v.y); break;
+                case UiAnim::Rotation: e.rotation = v.x; break;
+                case UiAnim::Color:    e.color    = v; break;
+                case UiAnim::None:
+                default: break;
+            }
+        }
+
+        // Una sola pasada por el árbol con el delta del frame. Con animPlaying
+        // a false no se avanza NI se escribe: la propiedad se queda donde esté.
+        void tickAnimaciones(UiElement& e, float dt)
+        {
+            if (e.anim != UiAnim::None && e.animPlaying && e.animDuration > 0.0f)
+            {
+                e.animTime += dt;
+
+                float t      = 0.0f;
+                bool  remata = false;
+
+                switch (e.animLoop)
+                {
+                    case UiAnimLoop::Loop:
+                        // fmod y no restar la duración a mano: un salto de
+                        // tiempo de varias vueltas cae donde toca de una vez.
+                        t = std::fmod(e.animTime, e.animDuration) / e.animDuration;
+                        break;
+
+                    case UiAnimLoop::PingPong:
+                    {
+                        const float ciclo = e.animDuration * 2.0f;
+                        const float m     = std::fmod(e.animTime, ciclo);
+                        t = (m <= e.animDuration) ? m / e.animDuration
+                                                  : (ciclo - m) / e.animDuration;
+                        break;
+                    }
+
+                    case UiAnimLoop::Once:
+                    default:
+                        if (e.animTime >= e.animDuration)
+                        {
+                            e.animTime = e.animDuration;
+                            t          = 1.0f;
+                            remata     = true;
+                        }
+                        else t = e.animTime / e.animDuration;
+                        break;
+                }
+
+                aplicaAnim(e, curvaAnim(e.animCurve, t), remata);
+                if (remata) e.animPlaying = false;
+            }
+
+            for (const auto& hijo : e.children()) tickAnimaciones(*hijo, dt);
+        }
     }
 
     void UiCanvas::updateInput(const UiInputState& input)
     {
+        // Las animaciones, ANTES que nada: el reloj es el de aquí y el avance
+        // es el delta contra el frame anterior. Lo que escriban se ve en el
+        // siguiente buildDrawData, no en los rects de este frame (que son los
+        // que el hit test acaba de heredar del build anterior).
+        const float dtAnim = m_hasLastTime ? (input.timeSeconds - m_lastTime) : 0.0f;
+        m_lastTime    = input.timeSeconds;
+        m_hasLastTime = true;
+        tickAnimaciones(m_root, dtAnim);
+
         UiElement* hit = hitTest(input.mousePos);
 
         const glm::vec2 delta = m_hasLastMouse ? (input.mousePos - m_lastMousePos)

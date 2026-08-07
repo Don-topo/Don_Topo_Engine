@@ -3437,6 +3437,501 @@ static void test_mascara_neutral_sin_clip_children()
         CHECK(conRuido.batches[0].scissor == sinRuido.batches[0].scissor);
 }
 
+// ── Animaciones de propiedades ──────────────────────────────────────────────
+// Todo CPU: se avanza el reloj a mano y se mira lo que salió por los vértices.
+// El primer updateInput NUNCA adelanta (no hay frame anterior), así que todos
+// los tests arrancan con una llamada a t=0 y cuentan desde ahí.
+
+static void avanzaReloj(UiCanvas& cv, float t)
+{
+    UiInputState in{};
+    in.mousePos    = glm::vec2(-1000.0f, -1000.0f);   // lejos: sin hover que estorbe
+    in.timeSeconds = t;
+    cv.updateInput(in);
+}
+
+// Valor de la curva en t, medido POR EL CAMINO DE VERDAD: un Fade de 0 a 1
+// devuelve exactamente f(t) en opacity. PingPong y no Once a propósito: así en
+// t=1 manda la curva y no el remate a animTo.
+static float curvaEn(UiAnimCurve curva, float t01)
+{
+    const float dur = 2.5f;
+
+    UiCanvas cv;
+    UiElement& e = cv.root().add("c");
+    e.size = glm::vec2(40.0f, 25.0f);
+
+    e.anim         = UiAnim::Fade;
+    e.animCurve    = curva;
+    e.animFrom     = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    e.animTo       = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+    e.animDuration = dur;
+    e.animLoop     = UiAnimLoop::PingPong;
+    e.animPlaying  = true;
+
+    avanzaReloj(cv, 0.0f);
+    avanzaReloj(cv, t01 * dur);
+    return e.opacity;
+}
+
+static void test_anim_curvas_extremos_medio_y_desbordes()
+{
+    const UiAnimCurve todas[5] = { UiAnimCurve::Linear, UiAnimCurve::EaseIn,
+                                   UiAnimCurve::EaseOut, UiAnimCurve::Bounce,
+                                   UiAnimCurve::Elastic };
+
+    // Los extremos son EXACTOS, no "casi": una curva que cierre en 0.99999994
+    // deja la propiedad a un pelo de su destino para siempre.
+    float medio[5];
+    for (int i = 0; i < 5; ++i)
+    {
+        CHECK(curvaEn(todas[i], 0.0f) == 0.0f);
+        CHECK(curvaEn(todas[i], 1.0f) == 1.0f);
+        medio[i] = curvaEn(todas[i], 0.5f);
+    }
+
+    // Las cinco DISTINTAS en t=0.5: una curva copiada de otra se ve aquí.
+    for (int i = 0; i < 5; ++i)
+        for (int j = i + 1; j < 5; ++j)
+            CHECK(std::fabs(medio[i] - medio[j]) > 1e-3f);
+
+    CHECK(medio[1] < medio[0]);   // EaseIn por DEBAJO de Linear
+    CHECK(medio[2] > medio[0]);   // EaseOut por ENCIMA
+
+    // Bounce rebota: no es monótona (sube, se pasa y baja).
+    bool baja = false;
+    float previo = curvaEn(UiAnimCurve::Bounce, 0.0f);
+    for (int i = 1; i <= 50; ++i)
+    {
+        const float v = curvaEn(UiAnimCurve::Bounce, (float)i / 50.0f);
+        if (v < previo - 1e-4f) baja = true;
+        previo = v;
+    }
+    CHECK(baja);
+
+    // Elastic SE SALE de [0,1] por arriba a mitad de camino, y eso no se
+    // recorta: es lo que hace que la propiedad sobrepase y vuelva.
+    float maximo = 0.0f;
+    for (int i = 0; i <= 50; ++i)
+        maximo = std::fmax(maximo, curvaEn(UiAnimCurve::Elastic, (float)i / 50.0f));
+    CHECK(maximo > 1.0f);
+}
+
+static void test_anim_fade_mueve_el_alfa_y_no_la_posicion()
+{
+    UiCanvas cv;
+    UiElement& e = cv.root().add("f");
+    e.position = glm::vec2(70.0f, 45.0f);
+    e.size     = glm::vec2(120.0f, 34.0f);
+
+    // 0.04 -> 0.23 no es un par cualquiera: el lerp con k=1 NO devuelve 0.23
+    // exacto, así que el remate del final tiene que estar de verdad.
+    e.anim         = UiAnim::Fade;
+    e.animFrom     = glm::vec4(0.04f, 0.0f, 0.0f, 0.0f);
+    e.animTo       = glm::vec4(0.23f, 0.0f, 0.0f, 0.0f);
+    e.animDuration = 2.5f;
+    e.animPlaying  = true;
+
+    UiDrawData a, b;
+    avanzaReloj(cv, 0.0f);
+    cv.buildDrawData(kW, kH, a);
+    CHECK(a.vertices.size() == 4);
+    CHECK(nearly(a.vertices[0].color.a, 0.04f));
+
+    avanzaReloj(cv, 1.25f);       // mitad exacta de 2.5
+    cv.buildDrawData(kW, kH, b);
+    CHECK(nearly(b.vertices[0].color.a, 0.135f));   // 0.04 + 0.19*0.5
+
+    // Ni un vértice de sitio: Fade solo toca el alfa.
+    for (size_t i = 0; i < 4; ++i)
+    {
+        CHECK(a.vertices[i].pos.x == b.vertices[i].pos.x);
+        CHECK(a.vertices[i].pos.y == b.vertices[i].pos.y);
+    }
+}
+
+static void test_anim_move_mueve_la_posicion_y_no_el_tamano()
+{
+    UiCanvas cv;
+    UiElement& e = cv.root().add("m");
+    e.size = glm::vec2(120.0f, 34.0f);
+
+    // Los dos ejes cambian y los dos cambian de signo; y ninguno de los dos
+    // pares cae exacto por lerp, así que el remate se nota si falta.
+    e.anim         = UiAnim::Move;
+    e.animFrom     = glm::vec4(-90.0f, 33.7f, 0.0f, 0.0f);
+    e.animTo       = glm::vec4(8.3f, -25.9f, 0.0f, 0.0f);
+    e.animDuration = 2.5f;
+    e.animPlaying  = true;
+
+    UiDrawData a, b;
+    avanzaReloj(cv, 0.0f);
+    cv.buildDrawData(kW, kH, a);
+    CHECK(nearly(a.vertices[0].pos.x, -90.0f));
+    CHECK(nearly(a.vertices[0].pos.y,  33.7f));
+
+    avanzaReloj(cv, 2.5f);
+    cv.buildDrawData(kW, kH, b);
+    CHECK(e.position.x == 8.3f);      // animTo EXACTO
+    CHECK(e.position.y == -25.9f);
+    CHECK(nearly(b.vertices[0].pos.x,   8.3f));
+    CHECK(nearly(b.vertices[0].pos.y, -25.9f));
+
+    // El tamaño no lo toca nadie: ancho y alto siguen siendo los de siempre.
+    CHECK(nearly(a.vertices[1].pos.x - a.vertices[0].pos.x, 120.0f));
+    CHECK(nearly(b.vertices[1].pos.x - b.vertices[0].pos.x, 120.0f));
+    CHECK(nearly(a.vertices[2].pos.y - a.vertices[1].pos.y, 34.0f));
+    CHECK(nearly(b.vertices[2].pos.y - b.vertices[1].pos.y, 34.0f));
+}
+
+static void test_anim_scale_cambia_el_tamano_y_no_el_pivot()
+{
+    UiCanvas cv;
+    UiElement& e = cv.root().add("s");
+    e.position = glm::vec2(200.0f, 130.0f);
+    e.size     = glm::vec2(80.0f, 40.0f);
+    e.pivot    = glm::vec2(0.5f, 0.5f);
+
+    e.anim         = UiAnim::Scale;
+    e.animFrom     = glm::vec4(0.6f, 1.0f, 0.0f, 0.0f);
+    e.animTo       = glm::vec4(2.7f, 0.1f, 0.0f, 0.0f);
+    e.animDuration = 2.5f;
+    e.animPlaying  = true;
+
+    UiDrawData a, b;
+    avanzaReloj(cv, 0.0f);
+    cv.buildDrawData(kW, kH, a);
+    avanzaReloj(cv, 2.5f);
+    cv.buildDrawData(kW, kH, b);
+
+    CHECK(e.scale.x == 2.7f);
+    CHECK(e.scale.y == 0.1f);
+
+    CHECK(nearly(a.vertices[1].pos.x - a.vertices[0].pos.x,  48.0f));   // 80 * 0.6
+    CHECK(nearly(b.vertices[1].pos.x - b.vertices[0].pos.x, 216.0f));   // 80 * 2.7
+    CHECK(nearly(a.vertices[2].pos.y - a.vertices[1].pos.y,  40.0f));
+    CHECK(nearly(b.vertices[2].pos.y - b.vertices[1].pos.y,   4.0f));   // 40 * 0.1
+
+    // El pivot NO se mueve: escala alrededor de él, no arrastrándolo.
+    CHECK(nearly((a.vertices[0].pos.x + a.vertices[2].pos.x) * 0.5f,
+                 (b.vertices[0].pos.x + b.vertices[2].pos.x) * 0.5f));
+    CHECK(nearly((a.vertices[0].pos.y + a.vertices[2].pos.y) * 0.5f,
+                 (b.vertices[0].pos.y + b.vertices[2].pos.y) * 0.5f));
+}
+
+static void test_anim_color_mueve_los_cuatro_canales()
+{
+    UiCanvas cv;
+    UiElement& e = cv.root().add("c");
+    e.position = glm::vec2(15.0f, 90.0f);
+    e.size     = glm::vec2(140.0f, 55.0f);
+
+    // Los cuatro canales con valores DISTINTOS entre sí a los dos lados, y los
+    // cuatro pares elegidos de forma que el lerp no cierre exacto por su
+    // cuenta: si el remate desaparece, los cuatro CHECK de igualdad caen.
+    e.anim         = UiAnim::Color;
+    e.animFrom     = glm::vec4(0.04f, 0.02f, 0.01f, 0.05f);
+    e.animTo       = glm::vec4(0.17f, 0.10f, 0.05f, 0.12f);
+    e.animDuration = 2.5f;
+    e.animPlaying  = true;
+
+    UiDrawData a, b;
+    avanzaReloj(cv, 0.0f);
+    cv.buildDrawData(kW, kH, a);
+    avanzaReloj(cv, 2.5f);
+    cv.buildDrawData(kW, kH, b);
+
+    CHECK(nearly(a.vertices[0].color.r, 0.04f));
+    CHECK(nearly(a.vertices[0].color.g, 0.02f));
+    CHECK(nearly(a.vertices[0].color.b, 0.01f));
+    CHECK(nearly(a.vertices[0].color.a, 0.05f));
+
+    CHECK(e.color.r == 0.17f);   // animTo EXACTO, canal a canal
+    CHECK(e.color.g == 0.10f);
+    CHECK(e.color.b == 0.05f);
+    CHECK(e.color.a == 0.12f);
+    CHECK(nearly(b.vertices[0].color.r, 0.17f));
+    CHECK(nearly(b.vertices[0].color.g, 0.10f));
+    CHECK(nearly(b.vertices[0].color.b, 0.05f));
+    CHECK(nearly(b.vertices[0].color.a, 0.12f));
+
+    // Y ni un vértice de sitio.
+    CHECK(std::memcmp(&a.vertices[0].pos, &b.vertices[0].pos, sizeof(a.vertices[0].pos)) == 0);
+    CHECK(std::memcmp(&a.vertices[2].pos, &b.vertices[2].pos, sizeof(a.vertices[2].pos)) == 0);
+}
+
+static void test_anim_rotation_gira_las_esquinas_conservando_la_distancia()
+{
+    UiCanvas cv;
+    UiElement& e = cv.root().add("r");
+    e.position = glm::vec2(200.0f, 130.0f);
+    e.size     = glm::vec2(80.0f, 40.0f);
+    e.pivot    = glm::vec2(0.5f, 0.5f);
+
+    e.anim         = UiAnim::Rotation;
+    e.animFrom     = glm::vec4(0.18f, 0.0f, 0.0f, 0.0f);
+    e.animTo       = glm::vec4(1.32f, 0.0f, 0.0f, 0.0f);
+    e.animDuration = 2.5f;
+    e.animPlaying  = true;
+
+    UiDrawData a, b;
+    avanzaReloj(cv, 0.0f);
+    cv.buildDrawData(kW, kH, a);
+    avanzaReloj(cv, 2.5f);
+    cv.buildDrawData(kW, kH, b);
+
+    CHECK(e.rotation == 1.32f);
+
+    // Con rotación el quad deja de estar alineado a los ejes: los dos de
+    // arriba ya no comparten la Y.
+    CHECK(std::fabs(a.vertices[0].pos.y - a.vertices[1].pos.y) > 1e-3f);
+    CHECK(std::fabs(b.vertices[0].pos.y - b.vertices[1].pos.y) > 1e-3f);
+
+    // El pivot en mundo es la position: ahí está el centro de giro.
+    const glm::vec2 centro(200.0f, 130.0f);
+    bool alguna_se_movio = false;
+    for (size_t i = 0; i < 4; ++i)
+    {
+        const float d0 = std::sqrt((a.vertices[i].pos.x - centro.x) * (a.vertices[i].pos.x - centro.x) +
+                                   (a.vertices[i].pos.y - centro.y) * (a.vertices[i].pos.y - centro.y));
+        const float d1 = std::sqrt((b.vertices[i].pos.x - centro.x) * (b.vertices[i].pos.x - centro.x) +
+                                   (b.vertices[i].pos.y - centro.y) * (b.vertices[i].pos.y - centro.y));
+        CHECK(std::fabs(d0 - d1) < 1e-3f);
+        if (std::fabs(a.vertices[i].pos.x - b.vertices[i].pos.x) > 1e-3f) alguna_se_movio = true;
+    }
+    CHECK(alguna_se_movio);
+
+    // Gira, no se estira: la diagonal sigue midiendo lo mismo.
+    const float diag0 = std::sqrt((a.vertices[2].pos.x - a.vertices[0].pos.x) * (a.vertices[2].pos.x - a.vertices[0].pos.x) +
+                                  (a.vertices[2].pos.y - a.vertices[0].pos.y) * (a.vertices[2].pos.y - a.vertices[0].pos.y));
+    const float diag1 = std::sqrt((b.vertices[2].pos.x - b.vertices[0].pos.x) * (b.vertices[2].pos.x - b.vertices[0].pos.x) +
+                                  (b.vertices[2].pos.y - b.vertices[0].pos.y) * (b.vertices[2].pos.y - b.vertices[0].pos.y));
+    CHECK(std::fabs(diag0 - diag1) < 1e-3f);
+}
+
+// El mismo árbol animado, montado dos veces, para comparar bytes.
+static void montaAnimada(UiCanvas& cv)
+{
+    UiElement& e = cv.root().add("d");
+    e.position = glm::vec2(40.0f, 25.0f);
+    e.size     = glm::vec2(150.0f, 60.0f);
+
+    e.anim         = UiAnim::Move;
+    e.animCurve    = UiAnimCurve::Elastic;
+    e.animFrom     = glm::vec4(-30.0f, 45.0f, 0.0f, 0.0f);
+    e.animTo       = glm::vec4(60.0f, -20.0f, 0.0f, 0.0f);
+    e.animDuration = 2.5f;
+    e.animPlaying  = true;
+}
+
+static void test_anim_determinismo_por_tiempo_y_por_pasos()
+{
+    // Mismo instante pedido dos veces: los mismos bytes.
+    UiCanvas uno, otro;
+    montaAnimada(uno);
+    montaAnimada(otro);
+
+    avanzaReloj(uno, 0.0f);  avanzaReloj(uno, 1.5f);
+    avanzaReloj(otro, 0.0f); avanzaReloj(otro, 1.5f);
+
+    UiDrawData a, b;
+    uno.buildDrawData(kW, kH, a);
+    otro.buildDrawData(kW, kH, b);
+    CHECK(!a.vertices.empty());
+    CHECK(a.vertices.size() == b.vertices.size());
+    CHECK(std::memcmp(a.vertices.data(), b.vertices.data(),
+                      a.vertices.size() * sizeof(a.vertices[0])) == 0);
+
+    // De un salto o en cuatro pasos: da igual, porque lo que avanza es el
+    // DELTA y la suma de los cuatro es la misma.
+    UiCanvas salto, pasos;
+    montaAnimada(salto);
+    montaAnimada(pasos);
+
+    avanzaReloj(salto, 0.0f);
+    avanzaReloj(salto, 2.0f);
+
+    avanzaReloj(pasos, 0.0f);
+    avanzaReloj(pasos, 0.5f);
+    avanzaReloj(pasos, 1.0f);
+    avanzaReloj(pasos, 1.5f);
+    avanzaReloj(pasos, 2.0f);
+
+    UiDrawData c, d;
+    salto.buildDrawData(kW, kH, c);
+    pasos.buildDrawData(kW, kH, d);
+    CHECK(c.vertices.size() == d.vertices.size());
+    CHECK(std::memcmp(c.vertices.data(), d.vertices.data(),
+                      c.vertices.size() * sizeof(c.vertices[0])) == 0);
+}
+
+static void test_anim_once_loop_y_pingpong()
+{
+    // Once: remata en animTo EXACTO y se para.
+    UiCanvas cv;
+    UiElement& e = cv.root().add("once");
+    e.size         = glm::vec2(90.0f, 30.0f);
+    e.anim         = UiAnim::Fade;
+    e.animFrom     = glm::vec4(0.04f, 0.0f, 0.0f, 0.0f);
+    e.animTo       = glm::vec4(0.23f, 0.0f, 0.0f, 0.0f);
+    e.animDuration = 2.5f;
+    e.animPlaying  = true;
+
+    avanzaReloj(cv, 0.0f);
+    avanzaReloj(cv, 9.0f);            // muy pasado de largo
+    CHECK(e.opacity == 0.23f);
+    CHECK(e.animPlaying == false);
+    CHECK(e.animTime == 2.5f);        // no sigue creciendo
+
+    // Loop: a 3.0 con duración 2.5 está donde a 0.5, y sigue sonando.
+    UiCanvas lc, ref;
+    UiElement& l = lc.root().add("loop");
+    l.size         = glm::vec2(90.0f, 30.0f);
+    l.anim         = UiAnim::Fade;
+    l.animFrom     = glm::vec4(0.2f, 0.0f, 0.0f, 0.0f);
+    l.animTo       = glm::vec4(0.85f, 0.0f, 0.0f, 0.0f);
+    l.animDuration = 2.5f;
+    l.animLoop     = UiAnimLoop::Loop;
+    l.animPlaying  = true;
+
+    UiElement& r = ref.root().add("ref");
+    r.size         = l.size;
+    r.anim         = l.anim;
+    r.animFrom     = l.animFrom;
+    r.animTo       = l.animTo;
+    r.animDuration = l.animDuration;
+    r.animLoop     = l.animLoop;
+    r.animPlaying  = true;
+
+    avanzaReloj(lc, 0.0f);  avanzaReloj(lc, 3.0f);
+    avanzaReloj(ref, 0.0f); avanzaReloj(ref, 0.5f);
+    CHECK(l.opacity == r.opacity);
+    CHECK(l.animPlaying == true);
+    CHECK(l.opacity < 0.85f);          // ha reiniciado, no se ha quedado al final
+
+    // PingPong: a 3.75 vuelve por donde vino y coincide con la ida en 1.25.
+    UiCanvas pp, ida;
+    UiElement& p = pp.root().add("pp");
+    p.size         = glm::vec2(90.0f, 30.0f);
+    p.anim         = UiAnim::Fade;
+    p.animFrom     = glm::vec4(0.2f, 0.0f, 0.0f, 0.0f);
+    p.animTo       = glm::vec4(0.85f, 0.0f, 0.0f, 0.0f);
+    p.animDuration = 2.5f;
+    p.animLoop     = UiAnimLoop::PingPong;
+    p.animPlaying  = true;
+
+    UiElement& i = ida.root().add("ida");
+    i.size         = p.size;
+    i.anim         = p.anim;
+    i.animFrom     = p.animFrom;
+    i.animTo       = p.animTo;
+    i.animDuration = p.animDuration;
+    i.animLoop     = p.animLoop;
+    i.animPlaying  = true;
+
+    avanzaReloj(pp, 0.0f);  avanzaReloj(pp, 3.75f);
+    avanzaReloj(ida, 0.0f); avanzaReloj(ida, 1.25f);
+    CHECK(p.opacity == i.opacity);
+    CHECK(p.animPlaying == true);
+}
+
+static void test_anim_playing_false_congela()
+{
+    UiCanvas cv;
+    UiElement& e = cv.root().add("frio");
+    e.position = glm::vec2(40.0f, 25.0f);
+    e.size     = glm::vec2(150.0f, 60.0f);
+
+    e.anim         = UiAnim::Move;
+    e.animFrom     = glm::vec4(-30.0f, 45.0f, 0.0f, 0.0f);
+    e.animTo       = glm::vec4(60.0f, -20.0f, 0.0f, 0.0f);
+    e.animDuration = 2.5f;
+    e.animPlaying  = false;
+
+    UiDrawData a, b;
+    avanzaReloj(cv, 0.0f);
+    cv.buildDrawData(kW, kH, a);
+    avanzaReloj(cv, 4.0f);
+    cv.buildDrawData(kW, kH, b);
+
+    CHECK(e.animTime == 0.0f);
+    CHECK(e.position == glm::vec2(40.0f, 25.0f));   // sin tocar
+    CHECK(a.vertices.size() == b.vertices.size());
+    CHECK(std::memcmp(a.vertices.data(), b.vertices.data(),
+                      a.vertices.size() * sizeof(a.vertices[0])) == 0);
+}
+
+static void test_rotacion_cero_no_toca_ni_un_vertice()
+{
+    UiCanvas conCero, sinTocar;
+
+    UiElement& a = conCero.root().add("p");
+    a.position = glm::vec2(33.0f, 71.0f);
+    a.size     = glm::vec2(170.0f, 45.0f);
+    a.pivot    = glm::vec2(0.5f, 0.25f);
+    a.rotation = 0.0f;                       // explícito
+    UiElement& ah = a.add("h");
+    ah.position = glm::vec2(-12.0f, 18.0f);
+    ah.size     = glm::vec2(60.0f, 90.0f);
+    ah.rotation = 0.0f;
+
+    UiElement& b = sinTocar.root().add("p");
+    b.position = glm::vec2(33.0f, 71.0f);
+    b.size     = glm::vec2(170.0f, 45.0f);
+    b.pivot    = glm::vec2(0.5f, 0.25f);
+    UiElement& bh = b.add("h");
+    bh.position = glm::vec2(-12.0f, 18.0f);
+    bh.size     = glm::vec2(60.0f, 90.0f);
+
+    UiDrawData x, y;
+    conCero.buildDrawData(kW, kH, x);
+    sinTocar.buildDrawData(kW, kH, y);
+
+    CHECK(!x.vertices.empty());
+    CHECK(x.vertices.size() == y.vertices.size());
+    CHECK(x.batches.size()  == y.batches.size());
+    CHECK(std::memcmp(x.vertices.data(), y.vertices.data(),
+                      x.vertices.size() * sizeof(x.vertices[0])) == 0);
+}
+
+static void test_neutralidad_de_las_animaciones()
+{
+    // El de la izquierda tiene reloj (updateInput cada frame) pero ninguna
+    // animación; el de la derecha ni siquiera lo llama. Mismos bytes.
+    UiCanvas conReloj, sinReloj;
+
+    for (UiCanvas* cv : { &conReloj, &sinReloj })
+    {
+        UiElement& p = cv->root().add("p");
+        p.position     = glm::vec2(70.0f, 90.0f);
+        p.size         = glm::vec2(210.0f, 130.0f);
+        p.clipChildren = true;
+
+        UiElement& h = p.add("h");
+        h.position = glm::vec2(-15.0f, 25.0f);
+        h.size     = glm::vec2(180.0f, 60.0f);
+        h.color    = glm::vec4(0.4f, 0.6f, 0.8f, 0.9f);
+        h.opacity  = 0.7f;
+    }
+
+    avanzaReloj(conReloj, 0.0f);
+    avanzaReloj(conReloj, 1.7f);
+    avanzaReloj(conReloj, 4.2f);
+
+    UiDrawData a, b;
+    conReloj.buildDrawData(kW, kH, a);
+    sinReloj.buildDrawData(kW, kH, b);
+
+    CHECK(!a.vertices.empty());
+    CHECK(a.vertices.size() == b.vertices.size());
+    CHECK(a.indices.size()  == b.indices.size());
+    CHECK(a.batches.size()  == b.batches.size());
+    CHECK(std::memcmp(a.vertices.data(), b.vertices.data(),
+                      a.vertices.size() * sizeof(a.vertices[0])) == 0);
+    CHECK(std::memcmp(a.indices.data(), b.indices.data(),
+                      a.indices.size() * sizeof(a.indices[0])) == 0);
+}
+
 int main()
 {
     test_canvas_vacio_no_emite_nada();
@@ -3515,6 +4010,18 @@ int main()
     test_mascara_neutral_sin_clip_children();
     test_neutralidad_de_los_botones();
     test_neutralidad_de_los_eventos();
+
+    test_anim_curvas_extremos_medio_y_desbordes();
+    test_anim_fade_mueve_el_alfa_y_no_la_posicion();
+    test_anim_move_mueve_la_posicion_y_no_el_tamano();
+    test_anim_scale_cambia_el_tamano_y_no_el_pivot();
+    test_anim_color_mueve_los_cuatro_canales();
+    test_anim_rotation_gira_las_esquinas_conservando_la_distancia();
+    test_anim_determinismo_por_tiempo_y_por_pasos();
+    test_anim_once_loop_y_pingpong();
+    test_anim_playing_false_congela();
+    test_rotacion_cero_no_toca_ni_un_vertice();
+    test_neutralidad_de_las_animaciones();
 
     if (g_failures == 0) std::printf("ui_batch_tests: OK\n");
     else                 std::printf("ui_batch_tests: %d fallos\n", g_failures);

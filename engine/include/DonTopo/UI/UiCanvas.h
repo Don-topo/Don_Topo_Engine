@@ -152,6 +152,39 @@ namespace DonTopo
         End
     };
 
+    // ── Animación de propiedades ────────────────────────────────────────────
+    // Propiedad que anima el elemento. UNA a la vez: no es un sistema de
+    // pistas, es un campo. Fade escribe opacity, y NO hay un modo "Opacity"
+    // aparte: la opacidad SE ANIMA CON Fade.
+    enum class UiAnim
+    {
+        None,
+        Fade,       // opacity      <- animFrom.x .. animTo.x
+        Scale,      // scale        <- .xy
+        Move,       // position     <- .xy
+        Rotation,   // rotation     <- .x (radianes)
+        Color       // color        <- los 4 canales
+    };
+
+    // Todas son funciones PURAS de t en [0,1] con f(0)=0 y f(1)=1 exactos.
+    // Bounce y Elastic no son monótonas y Elastic se pasa de 1 a mitad de
+    // camino: eso es lo que hacen, no un fallo que haya que recortar.
+    enum class UiAnimCurve
+    {
+        Linear,
+        EaseIn,
+        EaseOut,
+        Bounce,
+        Elastic
+    };
+
+    enum class UiAnimLoop
+    {
+        Once,       // al llegar al final se queda en animTo y se para
+        Loop,       // vuelve a empezar en animFrom
+        PingPong    // vuelve por donde vino
+    };
+
     class UiElement
     {
     public:
@@ -226,8 +259,14 @@ namespace DonTopo
         bool fitWidth  = false;
         bool fitHeight = false;
 
-        // Radianes. SE ALMACENA PERO NO SE APLICA: un quad rotado obliga a
-        // decidir qué scissor usa un clipChildren rotado, y eso es otra fase.
+        // Radianes, en sentido horario en pantalla (+Y va hacia abajo). Rota
+        // las 4 esquinas de lo que emite ESTE elemento alrededor de su pivot;
+        // no se hereda a los descendientes.
+        // El scissor de clipChildren sigue siendo el AABB SIN rotar: la
+        // máscara de un elemento rotado recorta por su rectángulo derecho, que
+        // es lo único que un VkRect2D sabe expresar.
+        // A 0.0f no se toca ni una coordenada: los vértices salen bit a bit
+        // como salían antes de que la rotación se aplicara.
         float rotation = 0.0f;
 
         // Se multiplica por la del padre por todo el árbol y acaba en el alfa
@@ -270,6 +309,29 @@ namespace DonTopo
         // Apaga la máscara sin sacar el elemento del árbol: con false el nodo
         // se comporta como si no tuviera clipChildren.
         bool maskEnabled = true;
+
+        // ── Animación ───────────────────────────────────────────────────────
+        // Todo en CPU y determinista. Quien mueve esto es UiCanvas::updateInput
+        // y NADIE más: un canvas que no llama a updateInput no anima ni un
+        // píxel, y con anim a None estos campos no escriben nada, así que un
+        // árbol que no los toca sale con los mismos vértices de siempre.
+        UiAnim      anim      = UiAnim::None;
+        UiAnimCurve animCurve = UiAnimCurve::Linear;
+
+        // Un vec4 para las cinco propiedades: cubre los 4 canales de Color y le
+        // sobran componentes para las vec2 (Scale, Move) y para el float
+        // (Fade, Rotation). Lo que no lee el modo no se mira.
+        glm::vec4 animFrom{0.0f, 0.0f, 0.0f, 0.0f};
+        glm::vec4 animTo  {0.0f, 0.0f, 0.0f, 0.0f};
+
+        float      animDuration = 1.0f;             // segundos; <= 0 no avanza
+        UiAnimLoop animLoop     = UiAnimLoop::Once;
+        bool       animPlaying  = false;            // a false CONGELA: ni se avanza ni se escribe
+
+        // Segundos ya recorridos. Lo lleva updateInput sumando el DELTA entre
+        // frames de UiInputState::timeSeconds; no se acumula ningún dt de
+        // fuera, y por eso pedir el mismo instante dos veces da lo mismo.
+        float animTime = 0.0f;
 
         // ── Input ───────────────────────────────────────────────────────────
         // Nada de esto afecta al dibujado: quien no llame a UiCanvas::updateInput
@@ -410,5 +472,12 @@ namespace DonTopo
         UiElement* m_lastClickTarget = nullptr;
         glm::vec2  m_lastClickPos{0.0f, 0.0f};
         float      m_lastClickTime = 0.0f;
+
+        // Reloj de las animaciones. El avance es el DELTA contra el frame
+        // anterior; sin frame anterior (el primer updateInput) no hay avance,
+        // que es lo que impide que un timeSeconds grande de arranque se coma
+        // una animación entera en el primer frame.
+        float m_lastTime    = 0.0f;
+        bool  m_hasLastTime = false;
     };
 }

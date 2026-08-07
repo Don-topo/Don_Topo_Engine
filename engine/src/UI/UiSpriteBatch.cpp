@@ -73,6 +73,29 @@ namespace DonTopo
         // dxTop/dxBottom desplazan en X el borde superior y el inferior: es la
         // cizalla de la cursiva, que así no necesita ni matriz ni un vértice más
         // ancho. A 0 el quad sale exactamente igual que siempre.
+        // ── Rotación del quad ───────────────────────────────────────────────
+        // Estado de módulo y no un parámetro más: la rotación tiene que llegar
+        // a los N quads que emite un Image y a cada glyph de un Text sin
+        // ensuciar seis firmas. El build de la UI es de un solo hilo y
+        // determinista, y quien la enciende (emitNode) la deja como estaba
+        // antes de bajar a los hijos.
+        struct QuadRotation
+        {
+            bool      activa = false;
+            float     sen    = 0.0f;
+            float     cs     = 1.0f;
+            glm::vec2 centro{0.0f, 0.0f};
+        };
+
+        QuadRotation g_rot;
+
+        glm::vec2 rotaQuad(const glm::vec2& p)
+        {
+            const glm::vec2 d = p - g_rot.centro;
+            return {g_rot.centro.x + d.x * g_rot.cs  - d.y * g_rot.sen,
+                    g_rot.centro.y + d.x * g_rot.sen + d.y * g_rot.cs};
+        }
+
         void emitRawQuad(const UiTextureAtlas* atlas, const glm::vec2& pos, const glm::vec2& size,
                          const UiUvRect& uv, const glm::vec4& color,
                          const glm::vec4& params, const glm::vec4& effect,
@@ -99,12 +122,32 @@ namespace DonTopo
 
             const uint16_t base = (uint16_t)out.vertices.size();
 
+            const glm::vec2 esquina[4] = {
+                {pos.x + dxTop,             pos.y         },
+                {pos.x + size.x + dxTop,    pos.y         },
+                {pos.x + size.x + dxBottom, pos.y + size.y},
+                {pos.x + dxBottom,          pos.y + size.y}
+            };
+
+            // Sin rotación NO se toca ni una coordenada: girar por 0 pasaría
+            // igualmente por centro + (p - centro), y eso en coma flotante NO
+            // devuelve p exacto. Con la rama, un árbol sin rotation sale bit a
+            // bit como salía.
+            glm::vec2 v0 = esquina[0], v1 = esquina[1], v2 = esquina[2], v3 = esquina[3];
+            if (g_rot.activa)
+            {
+                v0 = rotaQuad(esquina[0]);
+                v1 = rotaQuad(esquina[1]);
+                v2 = rotaQuad(esquina[2]);
+                v3 = rotaQuad(esquina[3]);
+            }
+
             // Sentido horario en pantalla empezando arriba a la izquierda. El
             // vértice inferior tiene la Y MAYOR: +Y va hacia abajo.
-            out.vertices.push_back({{pos.x + dxTop,             pos.y         }, {uv.u0, uv.v0}, color, params, effect});
-            out.vertices.push_back({{pos.x + size.x + dxTop,    pos.y         }, {uv.u1, uv.v0}, color, params, effect});
-            out.vertices.push_back({{pos.x + size.x + dxBottom, pos.y + size.y}, {uv.u1, uv.v1}, color, params, effect});
-            out.vertices.push_back({{pos.x + dxBottom,          pos.y + size.y}, {uv.u0, uv.v1}, color, params, effect});
+            out.vertices.push_back({v0, {uv.u0, uv.v0}, color, params, effect});
+            out.vertices.push_back({v1, {uv.u1, uv.v0}, color, params, effect});
+            out.vertices.push_back({v2, {uv.u1, uv.v1}, color, params, effect});
+            out.vertices.push_back({v3, {uv.u0, uv.v1}, color, params, effect});
 
             const uint16_t quad[6] = { (uint16_t)(base + 0), (uint16_t)(base + 1), (uint16_t)(base + 2),
                                        (uint16_t)(base + 2), (uint16_t)(base + 3), (uint16_t)(base + 0) };
@@ -1206,10 +1249,24 @@ namespace DonTopo
             const Text* text = node.asText();
             const bool  drawsText = text && text->font && text->font->hasGlyphs() && !text->text.empty();
 
+            // La rotación vale para lo que emite ESTE nodo (su quad, sus N
+            // quads de Image o sus glyphs) y para nada más: los hijos vuelven
+            // al estado de antes, y el scissor de arriba es el AABB sin rotar.
+            const QuadRotation rotPrevia = g_rot;
+            if (node.rotation != 0.0f)
+            {
+                g_rot.activa = true;
+                g_rot.sen    = std::sin(node.rotation);
+                g_rot.cs     = std::cos(node.rotation);
+                g_rot.centro = worldPos + node.pivot * worldSize;
+            }
+
             if (drawsText)
                 emitText(*text, worldPos, worldSize, worldScale, selfScissor, opacity, out);
             else if (node.drawable && worldSize.x > 0.0f && worldSize.y > 0.0f)
                 emitQuad(node, worldPos, worldSize, selfScissor, opacity, out);
+
+            g_rot = rotPrevia;
 
             // Máscara vacía con maskSelf a false: el elemento ya se ha dibujado
             // entero, pero por su máscara no pasa ni un vértice de sus hijos.
