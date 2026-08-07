@@ -110,6 +110,88 @@ namespace DonTopo
                     g_rot.centro.y + d.x * g_rot.sen + d.y * g_rot.cs};
         }
 
+        // ── Caché por nodo ──────────────────────────────────────────────────
+        // Mientras g_rec apunta a un nodo, cada quad que salga se copia TAMBIÉN
+        // a su caché, troceado por (atlas, scissor) igual que los lotes. Nulo
+        // fuera de la emisión de un nodo, o sea siempre que la caché sirve.
+        const UiElement* g_rec = nullptr;
+
+        // Nodos que han reemitido en el build en curso.
+        uint32_t g_rebuilt = 0;
+
+        // Un quad recién emitido, tal cual, dentro de la caché del nodo activo.
+        // Los índices se guardan RELATIVOS al primer vértice del nodo.
+        void grabaQuad(const UiTextureAtlas* atlas, const UiScissor& scissor,
+                       const UiVertex* verts, const uint16_t* quad, uint16_t quadBase)
+        {
+            if (g_rec == nullptr) return;
+
+            auto& segs = g_rec->cacheSegments;
+            if (segs.empty() || segs.back().atlas != atlas || segs.back().scissor != scissor)
+            {
+                UiElement::CacheSegment seg{};
+                seg.atlas   = atlas;
+                seg.scissor = scissor;
+                segs.push_back(seg);
+            }
+
+            const uint16_t base = (uint16_t)g_rec->cacheVertices.size();
+            g_rec->cacheVertices.insert(g_rec->cacheVertices.end(), verts, verts + 4);
+            for (int i = 0; i < 6; ++i)
+                g_rec->cacheIndices.push_back((uint16_t)(base + (quad[i] - quadBase)));
+
+            segs.back().vertexCount += 4;
+            segs.back().indexCount  += 6;
+        }
+
+        // Vuelca la caché de un nodo limpio. Reabre lote con EL MISMO criterio
+        // que emitRawQuad y rebasa los índices sobre la base de destino: salen
+        // los mismos uint16 y el mismo corte de lotes que si se hubiera emitido.
+        void reproduceCache(const UiElement& node, UiDrawData& out)
+        {
+            size_t vRead = 0;
+            size_t iRead = 0;
+
+            for (const UiElement::CacheSegment& seg : node.cacheSegments)
+            {
+                // El mismo tope que emitRawQuad. Con la misma escena y el mismo
+                // orden no salta nunca; está para que no pueda salir un índice
+                // por encima de 65535 si algún día salta.
+                if (out.vertices.size() + seg.vertexCount > kMaxVertices) return;
+
+                if (out.batches.empty() ||
+                    out.batches.back().atlas != seg.atlas ||
+                    out.batches.back().scissor != seg.scissor)
+                {
+                    UiBatch batch{};
+                    batch.atlas      = seg.atlas;
+                    batch.scissor    = seg.scissor;
+                    batch.firstIndex = (uint32_t)out.indices.size();
+                    batch.indexCount = 0;
+                    out.batches.push_back(batch);
+                }
+
+                const uint16_t base = (uint16_t)out.vertices.size();
+                out.vertices.insert(out.vertices.end(),
+                                    node.cacheVertices.begin() + (ptrdiff_t)vRead,
+                                    node.cacheVertices.begin() + (ptrdiff_t)(vRead + seg.vertexCount));
+
+                for (uint32_t k = 0; k < seg.indexCount; ++k)
+                    out.indices.push_back((uint16_t)(base + node.cacheIndices[iRead + k]));
+
+                out.batches.back().indexCount += seg.indexCount;
+
+                vRead += seg.vertexCount;
+                iRead += seg.indexCount;
+            }
+        }
+
+        void ensuciaSubarbol(const UiElement& node)
+        {
+            node.dirty = UiElement::DirtyAll;
+            for (const auto& child : node.children()) ensuciaSubarbol(*child);
+        }
+
         void emitRawQuad(const UiTextureAtlas* atlas, const glm::vec2& pos, const glm::vec2& size,
                          const UiUvRect& uv, const glm::vec4& color,
                          const glm::vec4& params, const glm::vec4& effect,
@@ -167,6 +249,8 @@ namespace DonTopo
                                        (uint16_t)(base + 2), (uint16_t)(base + 3), (uint16_t)(base + 0) };
             out.indices.insert(out.indices.end(), quad, quad + 6);
             out.batches.back().indexCount += 6;
+
+            grabaQuad(atlas, scissor, out.vertices.data() + base, quad, base);
         }
 
         // ── Modos de dibujo del Image ───────────────────────────────────────
@@ -1150,14 +1234,14 @@ namespace DonTopo
             for (const auto& child : node.children()) invalidateRects(*child);
         }
 
-        void emitNode(const UiElement& node, uint32_t index, const std::vector<MeasuredNode>& measured,
-                      const glm::vec2& parentPos, const glm::vec2& parentScale,
-                      const glm::vec2& parentSize, const LayoutPlacement& placement,
-                      UiScissor scissor, float parentOpacity, UiDrawData& out)
+        // Resuelve la colocación del nodo y la deja EN SU CACHÉ. Es exactamente
+        // el cálculo que hacía emitNode en línea; sale aparte solo para poder
+        // saltárselo entero cuando ni Transform ni Layout están sucios.
+        void colocaNodo(const UiElement& node, uint32_t index, const std::vector<MeasuredNode>& measured,
+                        const glm::vec2& parentPos, const glm::vec2& parentScale,
+                        const glm::vec2& parentSize, const LayoutPlacement& placement,
+                        const UiScissor& scissor, float parentOpacity)
         {
-            // enabled NO se mira aquí: es para el input, no para el dibujado.
-            if (!node.visible) { invalidateRects(node); return; }
-
             const glm::vec2 worldScale = parentScale * node.scale;
             const glm::vec2 localSize  = measured[index].size;
 
@@ -1231,6 +1315,7 @@ namespace DonTopo
 
             UiScissor selfScissor  = scissor;
             UiScissor childScissor = scissor;
+            bool      culled       = false;
 
             if (node.clipChildren && node.maskEnabled)
             {
@@ -1250,9 +1335,53 @@ namespace DonTopo
                     // Intersección vacía: ni este nodo ni ninguno de sus hijos
                     // puede verse, así que no se emite ni un draw con
                     // width/height 0.
-                    if (selfScissor.empty()) { invalidateRects(node); return; }
+                    culled = selfScissor.empty();
                 }
             }
+
+            node.cacheWorldPos     = worldPos;
+            node.cacheWorldSize    = worldSize;
+            node.cacheWorldScale   = worldScale;
+            node.cacheChildArea    = childArea;
+            node.cacheScreenPos    = screenPos;
+            node.cacheScreenSize   = screenSize;
+            node.cacheSelfScissor  = selfScissor;
+            node.cacheChildScissor = childScissor;
+            node.cacheOpacity      = opacity;
+            node.cacheSelfCulled   = culled;
+            node.cacheGeomValid    = true;
+        }
+
+        void emitNode(const UiElement& node, uint32_t index, const std::vector<MeasuredNode>& measured,
+                      const glm::vec2& parentPos, const glm::vec2& parentScale,
+                      const glm::vec2& parentSize, const LayoutPlacement& placement,
+                      UiScissor scissor, float parentOpacity, UiDrawData& out)
+        {
+            // enabled NO se mira aquí: es para el input, no para el dibujado.
+            if (!node.visible) { invalidateRects(node); return; }
+
+            // Ni Transform ni Layout sucios quiere decir que tampoco lo están en
+            // ningún ancestro (los dos SUBEN y BAJAN), o sea que las entradas de
+            // la colocación son las MISMAS y volvería a salir bit a bit igual.
+            const bool geomFresca =
+                node.cacheGeomValid &&
+                (node.dirty & (UiElement::DirtyTransform | UiElement::DirtyLayout)) == 0;
+
+            if (!geomFresca)
+                colocaNodo(node, index, measured, parentPos, parentScale, parentSize,
+                           placement, scissor, parentOpacity);
+
+            const glm::vec2 worldPos    = node.cacheWorldPos;
+            const glm::vec2 worldScale  = node.cacheWorldScale;
+            const glm::vec2 worldSize   = node.cacheWorldSize;
+            const glm::vec2 childArea   = node.cacheChildArea;
+            const glm::vec2 screenPos   = node.cacheScreenPos;
+            const glm::vec2 screenSize  = node.cacheScreenSize;
+            const UiScissor selfScissor = node.cacheSelfScissor;
+            const float     opacity     = node.cacheOpacity;
+            UiScissor       childScissor = node.cacheChildScissor;
+
+            if (node.cacheSelfCulled) { invalidateRects(node); return; }
 
             // El rect ya está resuelto: se GUARDA para que el input lo reutilice
             // sin recorrer el árbol otra vez. No altera ni un vértice ni un lote.
@@ -1267,27 +1396,50 @@ namespace DonTopo
             // no, cada texto arrastraría un rectángulo blanco detrás. Sin fuente
             // (o sin nada que decir) vuelve a comportarse como su base, que es lo
             // que hace que un Text a medio configurar no desaparezca en silencio.
-            const Text* text = node.asText();
-            const bool  drawsText = text && text->font && text->font->hasGlyphs() && !text->text.empty();
-
-            // La rotación vale para lo que emite ESTE nodo (su quad, sus N
-            // quads de Image o sus glyphs) y para nada más: los hijos vuelven
-            // al estado de antes, y el scissor de arriba es el AABB sin rotar.
-            const QuadRotation rotPrevia = g_rot;
-            if (node.rotation != 0.0f)
+            // Aquí está TODO el ahorro. Un nodo sin ni un bit sucio emitió sus
+            // vértices desde las mismas entradas que ahora, así que se vuelcan
+            // tal cual en vez de medir glyphs o trocear un sliced otra vez. El
+            // recorrido del árbol no cambia: se salta el trabajo, no el nodo.
+            if (node.cacheValid && node.dirty == 0)
             {
-                g_rot.activa = true;
-                g_rot.sen    = std::sin(node.rotation);
-                g_rot.cs     = std::cos(node.rotation);
-                g_rot.centro = screenPos + node.pivot * screenSize;
+                reproduceCache(node, out);
+            }
+            else
+            {
+                node.cacheVertices.clear();
+                node.cacheIndices.clear();
+                node.cacheSegments.clear();
+
+                const Text* text = node.asText();
+                const bool  drawsText = text && text->font && text->font->hasGlyphs() && !text->text.empty();
+
+                // La rotación vale para lo que emite ESTE nodo (su quad, sus N
+                // quads de Image o sus glyphs) y para nada más: los hijos vuelven
+                // al estado de antes, y el scissor de arriba es el AABB sin rotar.
+                const QuadRotation rotPrevia = g_rot;
+                if (node.rotation != 0.0f)
+                {
+                    g_rot.activa = true;
+                    g_rot.sen    = std::sin(node.rotation);
+                    g_rot.cs     = std::cos(node.rotation);
+                    g_rot.centro = screenPos + node.pivot * screenSize;
+                }
+
+                g_rec = &node;
+                if (drawsText)
+                    emitText(*text, screenPos, screenSize, worldScale * g_xf.escala, selfScissor, opacity, out);
+                else if (node.drawable && worldSize.x > 0.0f && worldSize.y > 0.0f)
+                    emitQuad(node, screenPos, screenSize, selfScissor, opacity, out);
+                g_rec = nullptr;
+
+                g_rot = rotPrevia;
+
+                node.cacheValid = true;
+                ++node.rebuildCount;
+                ++g_rebuilt;
             }
 
-            if (drawsText)
-                emitText(*text, screenPos, screenSize, worldScale * g_xf.escala, selfScissor, opacity, out);
-            else if (node.drawable && worldSize.x > 0.0f && worldSize.y > 0.0f)
-                emitQuad(node, screenPos, screenSize, selfScissor, opacity, out);
-
-            g_rot = rotPrevia;
+            node.dirty = 0;
 
             // Máscara vacía con maskSelf a false: el elemento ya se ha dibujado
             // entero, pero por su máscara no pasa ni un vértice de sus hijos.
@@ -1500,9 +1652,28 @@ namespace DonTopo
         // llena de NaN. Cae a 1 y sigue.
         if (!std::isfinite(escala) || escala <= 0.0f) escala = 1.0f;
 
+        const glm::vec2 nuevoOrigen{x0, y0};
+        const glm::vec2 nuevaRef{uw / escala, uh / escala};
+
+        // Si cambia el tamaño del render, la escala, el origen o el área útil,
+        // se mueve la colocación de TODOS los nodos: no hay ni una caché que
+        // siga valiendo, así que se ensucia el árbol entero antes de recorrerlo.
+        if (canvas.m_lastWidth     != width  ||
+            canvas.m_lastHeight    != height ||
+            canvas.m_uiScale       != escala ||
+            canvas.m_uiOrigin      != nuevoOrigen ||
+            canvas.m_referenceSize != nuevaRef)
+        {
+            ensuciaSubarbol(canvas.root());
+        }
+
         canvas.m_uiScale       = escala;
-        canvas.m_uiOrigin      = {x0, y0};
-        canvas.m_referenceSize = {uw / escala, uh / escala};
+        canvas.m_uiOrigin      = nuevoOrigen;
+        canvas.m_referenceSize = nuevaRef;
+        canvas.m_lastWidth     = width;
+        canvas.m_lastHeight    = height;
+        canvas.m_rebuiltNodes  = 0;
+        g_rebuilt              = 0;
 
         // Canvas vacío: ni se mide, ni se reserva el vector, ni se recorre nada.
         // La resolución ya está resuelta, así que los getters valen igual.
@@ -1530,6 +1701,8 @@ namespace DonTopo
 
         emitNode(canvas.root(), 0, measured, glm::vec2(0.0f), glm::vec2(1.0f), screen,
                  LayoutPlacement{}, full, 1.0f, out);
+
+        canvas.m_rebuiltNodes = g_rebuilt;
 
         // Que no se quede encendida para el siguiente canvas ni para el hit test.
         g_xf = CanvasXform{};

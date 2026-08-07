@@ -1044,6 +1044,7 @@ static void test_texto_sombra_duplica_los_quads_en_un_solo_lote()
 
     // Sin offset no hay pase de sombra.
     label.shadowOffset = {0.0f, 0.0f};
+    label.markDirty(UiElement::DirtyAll);
     UiDrawData sinSombra;
     canvas.buildDrawData(kW, kH, sinSombra);
     CHECK(sinSombra.vertices.size() == 8);
@@ -1200,6 +1201,7 @@ static void test_texto_color_por_tramos()
 
     // Anidado: el cierre de dentro devuelve al rojo, no al color de fuera.
     label.text = "A<color=#FF0000>B<color=#00FF80>C</color></color>";
+    label.markDirty(UiElement::DirtyAll);
     UiDrawData anidado;
     canvas.buildDrawData(kW, kH, anidado);
     CHECK(anidado.vertices.size() == 12);
@@ -1211,6 +1213,7 @@ static void test_texto_color_por_tramos()
 
     // Y el alfa de 8 dígitos también llega.
     label.text = "<color=#10203040>A</color>";
+    label.markDirty(UiElement::DirtyAll);
     UiDrawData conAlfa;
     canvas.buildDrawData(kW, kH, conAlfa);
     CHECK(conAlfa.vertices.size() == 4);
@@ -1281,6 +1284,7 @@ static void test_texto_negrita_y_cursiva_sin_tocar_uvs()
     canvas.buildDrawData(kW, kH, plano);
 
     label.text = "<b>A</b><i>B</i>C";
+    label.markDirty(UiElement::DirtyAll);
     UiDrawData estilado;
     canvas.buildDrawData(kW, kH, estilado);
 
@@ -1343,6 +1347,7 @@ static void test_texto_tag_malformado_sale_literal()
     for (const Caso& caso : casos)
     {
         label.text = caso.texto;
+        label.markDirty(UiElement::DirtyAll);
         UiDrawData data;
         canvas.buildDrawData(kW, kH, data);
         CHECK(data.vertices.size() == caso.visibles * 4);
@@ -1353,6 +1358,7 @@ static void test_texto_tag_malformado_sale_literal()
 
     // Y un '<' suelto en medio de texto normal no se come nada de lo de detrás.
     label.text = "A<B";
+    label.markDirty(UiElement::DirtyAll);
     UiDrawData suelto;
     canvas.buildDrawData(kW, kH, suelto);
     CHECK(suelto.vertices.size() == 12);
@@ -1379,10 +1385,12 @@ static void test_texto_alineacion_izquierda_centro_derecha()
 
     UiDrawData centro;
     label.align = UiTextAlign::Center;
+    label.markDirty(UiElement::DirtyAll);
     canvas.buildDrawData(kW, kH, centro);
 
     UiDrawData derecha;
     label.align = UiTextAlign::Right;
+    label.markDirty(UiElement::DirtyAll);
     canvas.buildDrawData(kW, kH, derecha);
 
     CHECK(izquierda.vertices.size() == 12);
@@ -1437,6 +1445,7 @@ static void test_texto_justify_no_toca_la_ultima_linea()
 
     // Con Left, el mismo espacio vale 7 y B se queda en 126.
     label.align = UiTextAlign::Left;
+    label.markDirty(UiElement::DirtyAll);
     UiDrawData izquierda;
     canvas.buildDrawData(kW, kH, izquierda);
     CHECK(izquierda.vertices.size() == 12);
@@ -1448,6 +1457,7 @@ static void test_texto_justify_no_toca_la_ultima_linea()
     label.wordWrap = false;
     label.size     = {200.0f, 120.0f};
     label.text     = "A B\nC";
+    label.markDirty(UiElement::DirtyAll);
     UiDrawData conSalto;
     canvas.buildDrawData(kW, kH, conSalto);
     CHECK(conSalto.vertices.size() == 12);
@@ -1459,6 +1469,7 @@ static void test_texto_justify_no_toca_la_ultima_linea()
     // aunque a las dos les sobren 159 px. Sin esta pareja, quitar la guarda de
     // "última línea" no lo notaría nadie: la última suele no tener espacios.
     label.text = "A B\nA B";
+    label.markDirty(UiElement::DirtyAll);
     UiDrawData dosLineas;
     canvas.buildDrawData(kW, kH, dosLineas);
     CHECK(dosLineas.vertices.size() == 16);
@@ -1498,6 +1509,7 @@ static void test_texto_word_wrap_por_palabras_y_por_glyph()
 
     // Sin wrap, las tres van seguidas en una línea.
     label.wordWrap = false;
+    label.markDirty(UiElement::DirtyAll);
     UiDrawData seguido;
     canvas.buildDrawData(kW, kH, seguido);
     CHECK(seguido.vertices.size() == 12);
@@ -1509,6 +1521,7 @@ static void test_texto_word_wrap_por_palabras_y_por_glyph()
     label.wordWrap = true;
     label.size     = {30.0f, 120.0f};
     label.text     = "ABC";
+    label.markDirty(UiElement::DirtyAll);
     UiDrawData partida;
     canvas.buildDrawData(kW, kH, partida);
     CHECK(partida.vertices.size() == 12);
@@ -1553,6 +1566,7 @@ static void test_texto_overflow_ellipsis_clip_y_overflow()
 
     // Clip: los MISMOS quads, pero el lote sale recortado al rect.
     label.overflow = UiTextOverflow::Clip;
+    label.markDirty(UiElement::DirtyAll);
     UiDrawData recortado;
     canvas.buildDrawData(kW, kH, recortado);
     CHECK(recortado.vertices.size() == 12);
@@ -1565,6 +1579,7 @@ static void test_texto_overflow_ellipsis_clip_y_overflow()
 
     // Ellipsis: 51 + 12 no cabe en 40, así que caen C y B y queda "A…".
     label.overflow = UiTextOverflow::Ellipsis;
+    label.markDirty(UiElement::DirtyAll);
     UiDrawData cortado;
     canvas.buildDrawData(kW, kH, cortado);
     CHECK(cortado.vertices.size() == 8);
@@ -1587,6 +1602,7 @@ static void test_texto_overflow_ellipsis_clip_y_overflow()
     conPuntos.addGlyph('.', punto);
 
     label.font = &conPuntos;
+    label.markDirty(UiElement::DirtyAll);
     UiDrawData fallback;
     canvas.buildDrawData(kW, kH, fallback);
     CHECK(fallback.vertices.size() == 16);   // A + tres puntos
@@ -1632,6 +1648,7 @@ static void test_texto_alimenta_el_content_size_fitter()
 
     // Un texto más largo empuja el panel, que es de lo que va el fitter.
     label.text = "ABCABC";
+    label.markDirty(UiElement::DirtyAll);
     UiDrawData largo;
     canvas.buildDrawData(kW, kH, largo);
     CHECK(largo.vertices.size() == 4 + 24);
@@ -1815,6 +1832,7 @@ static void test_imagen_modos_no_parten_el_lote()
     otro.addSprite("llave", {8.0f, 4.0f, 16.0f, 8.0f});
     b.atlas  = &otro;
     b.sprite = "llave";
+    b.markDirty(UiElement::DirtyAll);
 
     UiDrawData split;
     canvas.buildDrawData(kW, kH, split);
@@ -1973,6 +1991,7 @@ static void test_imagen_sliced_esquinas_bordes_y_centro()
 
     // Sin centro: 8 quads, y el quinto pasa a ser el borde derecho.
     img.fillCenter = false;
+    img.markDirty(UiElement::DirtyAll);
     UiDrawData sinCentro;
     canvas.buildDrawData(kW, kH, sinCentro);
 
@@ -2053,6 +2072,7 @@ static void test_imagen_filled_recorta_pos_y_uv()
 
     // Origen opuesto: recorta por el OTRO lado, en posición y en UV.
     img.fillOrigin = UiFillOrigin::End;
+    img.markDirty(UiElement::DirtyAll);
     UiDrawData hEnd;
     canvas.buildDrawData(kW, kH, hEnd);
     CHECK(hEnd.vertices.size() == 4);
@@ -2065,6 +2085,7 @@ static void test_imagen_filled_recorta_pos_y_uv()
     // Vertical desde arriba: 44*0.25 = 11 px y v1 = 0.1 + 0.4*0.25 = 0.2.
     img.fillDirection = UiFillDirection::Vertical;
     img.fillOrigin    = UiFillOrigin::Start;
+    img.markDirty(UiElement::DirtyAll);
     UiDrawData vStart;
     canvas.buildDrawData(kW, kH, vStart);
     CHECK(vStart.vertices.size() == 4);
@@ -2076,6 +2097,7 @@ static void test_imagen_filled_recorta_pos_y_uv()
 
     // Vertical desde abajo.
     img.fillOrigin = UiFillOrigin::End;
+    img.markDirty(UiElement::DirtyAll);
     UiDrawData vEnd;
     canvas.buildDrawData(kW, kH, vEnd);
     CHECK(vEnd.vertices.size() == 4);
@@ -2087,6 +2109,7 @@ static void test_imagen_filled_recorta_pos_y_uv()
 
     // A 0 no se emite NADA: ni quad, ni lote.
     img.fillAmount = 0.0f;
+    img.markDirty(UiElement::DirtyAll);
     UiDrawData vacio;
     canvas.buildDrawData(kW, kH, vacio);
     CHECK(vacio.vertices.empty());
@@ -3193,6 +3216,7 @@ static void test_mascara_self_deja_fuera_al_propio_elemento()
     // Con maskSelf a true (el defecto) los dos van con la máscara y vuelve a
     // haber un solo lote.
     panel.maskSelf = true;
+    panel.markDirty(UiElement::DirtyAll);
     UiDrawData recortado;
     canvas.buildDrawData(kW, kH, recortado);
 
@@ -3290,6 +3314,7 @@ static void test_mascara_vacia_no_emite_ni_revienta()
 
     // Con maskSelf a true no se ve ni el panel, y aun así nada explota.
     panel.maskSelf = true;
+    panel.markDirty(UiElement::DirtyAll);
     UiDrawData nada;
     canvas.buildDrawData(kW, kH, nada);
     CHECK(nada.vertices.empty());
@@ -3331,6 +3356,7 @@ static void test_mascara_lotes_y_mask_enabled()
 
     // Apagada: los mismos lotes que un árbol equivalente sin clipChildren.
     panel.maskEnabled = false;
+    panel.markDirty(UiElement::DirtyAll);
     UiDrawData apagada;
     canvas.buildDrawData(kW, kH, apagada);
 
@@ -3389,6 +3415,7 @@ static void test_mascara_recorta_el_hit_test()
 
     // Con la máscara apagada, ese mismo punto sí lo alcanza.
     panel.maskEnabled = false;
+    panel.markDirty(UiElement::DirtyAll);
     colocar(canvas);
     CHECK(canvas.hitTest(glm::vec2(310.0f, 150.0f)) == &hijo);
 }
@@ -4659,8 +4686,370 @@ static void test_neutralidad_de_la_resolucion()
     }
 }
 
+// ── Caché de vértices y dirty flags ─────────────────────────────────────────
+// Todo lo de aquí se mide con los contadores del propio motor (rebuiltNodes del
+// canvas y rebuildCount por nodo), NUNCA con el reloj: el número sale igual en
+// cualquier máquina y en cualquier configuración.
+
+static size_t cuentaNodos(const UiElement& n)
+{
+    size_t total = 1;   // la raíz también se recorre y también emite
+    for (const auto& hijo : n.children()) total += cuentaNodos(*hijo);
+    return total;
+}
+
+// Byte a byte: vértices, índices y lotes. Sin tolerancias.
+static bool mismosBytes(const UiDrawData& a, const UiDrawData& b)
+{
+    if (a.vertices.size() != b.vertices.size()) return false;
+    if (a.indices.size()  != b.indices.size())  return false;
+    if (a.batches.size()  != b.batches.size())  return false;
+
+    if (!a.vertices.empty() &&
+        std::memcmp(a.vertices.data(), b.vertices.data(),
+                    a.vertices.size() * sizeof(a.vertices[0])) != 0) return false;
+    if (!a.indices.empty() &&
+        std::memcmp(a.indices.data(), b.indices.data(),
+                    a.indices.size() * sizeof(a.indices[0])) != 0) return false;
+
+    for (size_t i = 0; i < a.batches.size(); ++i)
+    {
+        if (a.batches[i].atlas != b.batches[i].atlas)             return false;
+        if (!(a.batches[i].scissor == b.batches[i].scissor))      return false;
+        if (a.batches[i].firstIndex != b.batches[i].firstIndex)   return false;
+        if (a.batches[i].indexCount != b.batches[i].indexCount)   return false;
+    }
+    return true;
+}
+
+// Un segundo build sin tocar NADA no reemite ni un nodo y da los mismos bytes.
+static void test_cache_segundo_build_no_reemite_nada()
+{
+    UiCanvas cv;
+    UiElement& panel = cv.root().add("panel");
+    panel.position = glm::vec2(40.0f, 25.0f);
+    panel.size     = glm::vec2(200.0f, 120.0f);
+
+    UiElement& a = panel.add("a");
+    a.position = glm::vec2(10.0f, 10.0f);
+    a.size     = glm::vec2(50.0f, 30.0f);
+    UiElement& b = panel.add("b");
+    b.position = glm::vec2(80.0f, 10.0f);
+    b.size     = glm::vec2(50.0f, 30.0f);
+
+    UiDrawData uno;
+    cv.buildDrawData(kW, kH, uno);
+    // Todo nace sucio: el primer build emite el árbol entero.
+    CHECK(cv.rebuiltNodes() == cuentaNodos(cv.root()));
+
+    UiDrawData dos;
+    cv.buildDrawData(kW, kH, dos);
+    CHECK(cv.rebuiltNodes() == 0);
+    CHECK(mismosBytes(uno, dos));
+    CHECK(!uno.vertices.empty());
+}
+
+// Mover una hoja reemite ESA hoja y su cadena de padres (Transform sube), pero
+// no a sus hermanos. Si Transform bajara también desde el padre, el hermano
+// caería con ella y este test lo cazaría.
+static void test_cache_mover_una_hoja_no_reemite_hermanos()
+{
+    UiCanvas cv;
+    UiElement& panel = cv.root().add("panel");
+    panel.position = glm::vec2(40.0f, 25.0f);
+    panel.size     = glm::vec2(200.0f, 120.0f);
+
+    UiElement& a = panel.add("a");
+    a.position = glm::vec2(10.0f, 10.0f);
+    a.size     = glm::vec2(50.0f, 30.0f);
+    UiElement& b = panel.add("b");
+    b.position = glm::vec2(80.0f, 10.0f);
+    b.size     = glm::vec2(50.0f, 30.0f);
+
+    UiDrawData d;
+    cv.buildDrawData(kW, kH, d);
+    cv.buildDrawData(kW, kH, d);
+    CHECK(cv.rebuiltNodes() == 0);
+
+    const uint32_t aAntes     = a.rebuildCount;
+    const uint32_t bAntes     = b.rebuildCount;
+    const uint32_t panelAntes = panel.rebuildCount;
+
+    a.position.x += 17.0f;
+    a.markDirty(UiElement::DirtyTransform);
+
+    UiDrawData movido;
+    cv.buildDrawData(kW, kH, movido);
+
+    CHECK(a.rebuildCount     == aAntes + 1);
+    CHECK(b.rebuildCount     == bAntes);         // el hermano NO se reemite
+    CHECK(panel.rebuildCount == panelAntes + 1); // el padre sí: Transform sube
+    CHECK(cv.rebuiltNodes()  == 3);              // raíz + panel + a
+
+    // Y el hermano sigue exactamente donde estaba, byte a byte.
+    if (movido.vertices.size() == d.vertices.size() && movido.vertices.size() >= 12)
+    {
+        CHECK(std::memcmp(&movido.vertices[8], &d.vertices[8], 4 * sizeof(UiVertex)) == 0);
+        CHECK(!nearly(movido.vertices[4].pos.x, d.vertices[4].pos.x));
+    }
+}
+
+// Cambiar el color marca SOLO Material: no sale del nodo y no recoloca nada. Se
+// comprueba de verdad moviendo al padre SIN marcarlo: si el rect se recalculara,
+// el hijo se iría con él.
+static void test_cache_color_es_material_y_no_recoloca()
+{
+    UiCanvas cv;
+    UiElement& panel = cv.root().add("panel");
+    panel.position = glm::vec2(40.0f, 25.0f);
+    panel.size     = glm::vec2(200.0f, 120.0f);
+
+    UiElement& hijo = panel.add("hijo");
+    hijo.position = glm::vec2(10.0f, 10.0f);
+    hijo.size     = glm::vec2(50.0f, 30.0f);
+
+    UiDrawData uno;
+    cv.buildDrawData(kW, kH, uno);
+    CHECK(uno.vertices.size() == 8);
+    if (uno.vertices.size() != 8) return;
+
+    const glm::vec2 rectAntes = hijo.screenPos;
+
+    // Escritura SIN marcar: por contrato no se ve. Está aquí justamente para
+    // que el rect del hijo cambiaría si alguien lo recalculase.
+    panel.position = glm::vec2(140.0f, 25.0f);
+
+    hijo.color = glm::vec4(0.25f, 0.5f, 0.75f, 1.0f);
+    hijo.markDirty(UiElement::DirtyMaterial);
+    CHECK((hijo.dirty & (UiElement::DirtyTransform | UiElement::DirtyLayout)) == 0);
+
+    UiDrawData dos;
+    cv.buildDrawData(kW, kH, dos);
+
+    CHECK(cv.rebuiltNodes() == 1);              // Material no sube ni baja
+    CHECK(hijo.screenPos.x == rectAntes.x);     // el rect NO se ha recalculado
+    CHECK(hijo.screenPos.y == rectAntes.y);
+    CHECK(dos.vertices.size() == 8);
+    if (dos.vertices.size() != 8) return;
+
+    // El panel, intacto; el hijo, mismo sitio y color nuevo.
+    CHECK(std::memcmp(dos.vertices.data(), uno.vertices.data(), 4 * sizeof(UiVertex)) == 0);
+    CHECK(dos.vertices[4].pos.x == uno.vertices[4].pos.x);
+    CHECK(dos.vertices[4].pos.y == uno.vertices[4].pos.y);
+    CHECK(nearly(dos.vertices[4].color.r, 0.25f));
+    CHECK(nearly(dos.vertices[4].color.b, 0.75f));
+}
+
+// Cambiar el tamaño de un padre con layout reemite a TODOS sus descendientes.
+// Un tío del otro lado del árbol no se entera.
+static void test_cache_layout_del_padre_baja_pero_no_cruza()
+{
+    UiCanvas cv;
+
+    UiElement& izq = cv.root().add("izq");
+    izq.position   = glm::vec2(20.0f, 20.0f);
+    izq.size       = glm::vec2(200.0f, 120.0f);
+    izq.layoutMode = UiLayoutMode::Vertical;
+    izq.spacing    = glm::vec2(0.0f, 5.0f);
+
+    UiElement& h1 = izq.add("h1");
+    h1.size = glm::vec2(60.0f, 20.0f);
+    UiElement& nieto = h1.add("nieto");
+    nieto.size = glm::vec2(10.0f, 10.0f);
+    UiElement& h2 = izq.add("h2");
+    h2.size = glm::vec2(60.0f, 20.0f);
+
+    UiElement& tio = cv.root().add("tio");
+    tio.position = glm::vec2(400.0f, 20.0f);
+    tio.size     = glm::vec2(80.0f, 40.0f);
+    UiElement& primo = tio.add("primo");
+    primo.size = glm::vec2(20.0f, 20.0f);
+
+    UiDrawData d;
+    cv.buildDrawData(kW, kH, d);
+    cv.buildDrawData(kW, kH, d);
+    CHECK(cv.rebuiltNodes() == 0);
+
+    const uint32_t h1Antes    = h1.rebuildCount;
+    const uint32_t nietoAntes = nieto.rebuildCount;
+    const uint32_t h2Antes    = h2.rebuildCount;
+    const uint32_t tioAntes   = tio.rebuildCount;
+    const uint32_t primoAntes = primo.rebuildCount;
+
+    izq.size = glm::vec2(200.0f, 200.0f);
+    izq.markDirty(UiElement::DirtyLayout);
+
+    cv.buildDrawData(kW, kH, d);
+
+    CHECK(h1.rebuildCount    == h1Antes + 1);
+    CHECK(nieto.rebuildCount == nietoAntes + 1);   // Layout BAJA hasta el nieto
+    CHECK(h2.rebuildCount    == h2Antes + 1);
+    CHECK(tio.rebuildCount   == tioAntes);         // y no cruza al otro lado
+    CHECK(primo.rebuildCount == primoAntes);
+    CHECK(cv.rebuiltNodes()  == 5);                // raíz + izq + h1 + nieto + h2
+}
+
+// Cambiar la resolución del render o la escala del canvas mueve la colocación de
+// todo el mundo: no queda ni una caché en pie.
+static void test_cache_resolucion_y_escala_reemiten_todo()
+{
+    UiCanvas cv;
+    UiElement& panel = cv.root().add("panel");
+    panel.position = glm::vec2(40.0f, 25.0f);
+    panel.size     = glm::vec2(200.0f, 120.0f);
+    UiElement& hijo = panel.add("hijo");
+    hijo.position = glm::vec2(10.0f, 10.0f);
+    hijo.size     = glm::vec2(50.0f, 30.0f);
+
+    const size_t nodos = cuentaNodos(cv.root());
+
+    UiDrawData d;
+    cv.buildDrawData(kW, kH, d);
+    cv.buildDrawData(kW, kH, d);
+    CHECK(cv.rebuiltNodes() == 0);
+
+    cv.buildDrawData(kW + 40, kH, d);
+    CHECK(cv.rebuiltNodes() == nodos);
+
+    cv.buildDrawData(kW + 40, kH, d);
+    CHECK(cv.rebuiltNodes() == 0);
+
+    // La escala del canvas no es un campo del árbol: nadie la marca y aun así
+    // tiene que invalidarlo todo.
+    cv.scaleFactor = 2.0f;
+    cv.buildDrawData(kW + 40, kH, d);
+    CHECK(cv.rebuiltNodes() == nodos);
+
+    cv.buildDrawData(kW + 40, kH, d);
+    CHECK(cv.rebuiltNodes() == 0);
+}
+
+// Una animación en curso ensucia su nodo en cada frame y NINGÚN otro. Color va
+// por Material, que no sube ni baja.
+static void test_cache_animacion_ensucia_solo_su_nodo()
+{
+    UiCanvas cv;
+    UiElement& a = cv.root().add("a");
+    a.position = glm::vec2(30.0f, 30.0f);
+    a.size     = glm::vec2(50.0f, 20.0f);
+    UiElement& b = cv.root().add("b");
+    b.position = glm::vec2(200.0f, 30.0f);
+    b.size     = glm::vec2(50.0f, 20.0f);
+
+    a.anim         = UiAnim::Color;
+    a.animFrom     = glm::vec4(0.1f, 0.2f, 0.3f, 1.0f);
+    a.animTo       = glm::vec4(0.9f, 0.8f, 0.7f, 1.0f);
+    a.animDuration = 4.0f;
+    a.animPlaying  = true;
+
+    UiDrawData d;
+    avanzaReloj(cv, 0.0f);
+    cv.buildDrawData(kW, kH, d);
+
+    const uint32_t bAntes = b.rebuildCount;
+
+    for (int i = 1; i <= 3; ++i)
+    {
+        const uint32_t aAntes = a.rebuildCount;
+        avanzaReloj(cv, (float)i * 0.5f);
+        cv.buildDrawData(kW, kH, d);
+
+        CHECK(cv.rebuiltNodes() == 1);
+        CHECK(a.rebuildCount == aAntes + 1);
+        CHECK(b.rebuildCount == bAntes);
+    }
+
+    // Y parada la animación, deja de ensuciar del todo.
+    a.animPlaying = false;
+    avanzaReloj(cv, 3.0f);
+    cv.buildDrawData(kW, kH, d);
+    CHECK(cv.rebuiltNodes() == 0);
+}
+
+static void montaEscenaCompleta(UiCanvas& cv, UiFont& font, UiTextureAtlas& atlas)
+{
+    UiElement& panel = cv.root().add("panel");
+    panel.position        = glm::vec2(40.0f, 25.0f);
+    panel.size            = glm::vec2(320.0f, 200.0f);
+    panel.clipChildren    = true;
+    panel.maskInsetLeft   = 6.0f;
+    panel.maskInsetTop    = 4.0f;
+    panel.maskInsetRight  = 8.0f;
+    panel.maskInsetBottom = 10.0f;
+
+    Text& label = panel.add<Text>("txt");
+    label.position = glm::vec2(10.0f, 10.0f);
+    label.size     = glm::vec2(200.0f, 60.0f);
+    label.font     = &font;
+    label.fontSize = kBakeSize;
+    label.text     = "ABC";
+
+    Image& marco = panel.add<Image>("marco");
+    marco.position     = glm::vec2(10.0f, 90.0f);
+    marco.size         = glm::vec2(120.0f, 70.0f);
+    marco.atlas        = &atlas;
+    marco.sprite       = "botella";
+    marco.mode         = UiImageMode::Sliced;
+    marco.borderLeft   = 4.0f;
+    marco.borderRight  = 6.0f;
+    marco.borderTop    = 3.0f;
+    marco.borderBottom = 9.0f;
+
+    Button& btn = panel.add<Button>("btn");
+    btn.position   = glm::vec2(150.0f, 90.0f);
+    btn.size       = glm::vec2(90.0f, 40.0f);
+    btn.transition = UiButtonTransition::ColorTint;
+    btn.hoverColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+}
+
+// Neutralidad: escena con texto, máscara, botón e imagen sliced. El canvas con
+// la caché en marcha da los MISMOS bytes y los mismos lotes que uno idéntico al
+// que se le ensucia el árbol entero a mano antes de cada build.
+static void test_cache_neutralidad_escena_completa()
+{
+    UiFont font;
+    makeTestFont(font);
+    UiTextureAtlas atlas = makeAtlas();
+
+    UiCanvas conCache;
+    UiCanvas sinCache;
+    // El MISMO font y el MISMO atlas en los dos: los lotes llevan el puntero.
+    montaEscenaCompleta(conCache, font, atlas);
+    montaEscenaCompleta(sinCache, font, atlas);
+
+    UiDrawData a, b;
+    for (int frame = 0; frame < 4; ++frame)
+    {
+        const float t = (float)frame * 0.25f;
+        conCache.updateInput(raton(200.0f, 150.0f, t));
+        sinCache.updateInput(raton(200.0f, 150.0f, t));
+
+        // Caché desactivada a mano: DirtyAll desde la raíz baja a todo el árbol.
+        sinCache.root().markDirty(UiElement::DirtyAll);
+
+        conCache.buildDrawData(kW, kH, a);
+        sinCache.buildDrawData(kW, kH, b);
+
+        CHECK(mismosBytes(a, b));
+        CHECK(sinCache.rebuiltNodes() == cuentaNodos(sinCache.root()));
+    }
+
+    CHECK(!a.vertices.empty());
+    CHECK(a.batches.size() >= 2);   // el texto va en otro atlas que la imagen
+
+    // Y con la escena ya quieta (el hover del botón ya asentado) el que tiene
+    // caché no reemite nada, que es de lo que iba todo esto.
+    conCache.updateInput(raton(200.0f, 150.0f, 1.0f));
+    conCache.buildDrawData(kW, kH, a);
+    CHECK(conCache.rebuiltNodes() == 0);
+}
+
 int main()
 {
+    // Sin buffer: si un test revienta a media tanda, lo ya impreso NO se pierde
+    // y se ve exactamente por dónde iba.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+
     test_canvas_vacio_no_emite_nada();
     test_origen_arriba_izquierda();
     test_transform_del_padre_se_acumula();
@@ -4769,6 +5158,14 @@ int main()
     test_resolucion_hit_test_en_pixeles();
     test_resolucion_determinismo();
     test_neutralidad_de_la_resolucion();
+
+    test_cache_segundo_build_no_reemite_nada();
+    test_cache_mover_una_hoja_no_reemite_hermanos();
+    test_cache_color_es_material_y_no_recoloca();
+    test_cache_layout_del_padre_baja_pero_no_cruza();
+    test_cache_resolucion_y_escala_reemiten_todo();
+    test_cache_animacion_ensucia_solo_su_nodo();
+    test_cache_neutralidad_escena_completa();
 
     if (g_failures == 0) std::printf("ui_batch_tests: OK\n");
     else                 std::printf("ui_batch_tests: %d fallos\n", g_failures);

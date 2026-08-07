@@ -121,6 +121,9 @@ namespace DonTopo
             m_uiScale       = 1.0f;
             m_uiOrigin      = {0.0f, 0.0f};
             m_referenceSize = {0.0f, 0.0f};
+            m_lastWidth     = 0;
+            m_lastHeight    = 0;
+            m_rebuiltNodes  = 0;
             invalidateSubtree(m_root);
             return;
         }
@@ -339,6 +342,16 @@ namespace DonTopo
             }
         }
 
+        // El botón se repinta cada frame, pero casi ningún frame CAMBIA de color:
+        // marcar solo cuando el valor es distinto es lo que impide que un canvas
+        // quieto con botones reemita el árbol entero por cada updateInput.
+        void escribeColor(Button& b, const glm::vec4& c)
+        {
+            if (b.color == c) return;
+            b.color = c;
+            b.markDirty(UiElement::DirtyMaterial);
+        }
+
         void aplicaEstado(Button& b, const UiInputState& input)
         {
             const UiButtonState nuevo = estadoDe(b, input);
@@ -350,7 +363,11 @@ namespace DonTopo
                 // Un estado sin arte NO borra el sprite que hubiera: deja el que
                 // está en vez de dejar el elemento sin dibujo.
                 const std::string& s = spriteDe(b, nuevo);
-                if (!s.empty()) b.sprite = s;
+                if (!s.empty() && b.sprite != s)
+                {
+                    b.sprite = s;
+                    b.markDirty(UiElement::DirtyMaterial);
+                }
                 return;
             }
 
@@ -360,7 +377,7 @@ namespace DonTopo
             {
                 b.state      = nuevo;
                 b.stateReady = true;
-                b.color      = destino;
+                escribeColor(b, destino);
                 return;
             }
 
@@ -372,7 +389,7 @@ namespace DonTopo
                 b.stateReady    = true;
                 b.fadeFrom      = destino;
                 b.fadeStartTime = input.timeSeconds;
-                b.color         = destino;
+                escribeColor(b, destino);
                 return;
             }
 
@@ -391,9 +408,9 @@ namespace DonTopo
 
             // El clamp es lo que impide que pasado el fundido el color siga de
             // largo (y que un tiempo hacia atrás lo mande al otro lado).
-            if (t <= 0.0f)      b.color = b.fadeFrom;
-            else if (t >= 1.0f) b.color = destino;   // exacto, sin el error del mix
-            else                b.color = b.fadeFrom + (destino - b.fadeFrom) * t;
+            if (t <= 0.0f)      escribeColor(b, b.fadeFrom);
+            else if (t >= 1.0f) escribeColor(b, destino);   // exacto, sin el error del mix
+            else                escribeColor(b, b.fadeFrom + (destino - b.fadeFrom) * t);
         }
 
         // Una sola pasada por el árbol, al final del updateInput.
@@ -461,11 +478,17 @@ namespace DonTopo
 
             switch (e.anim)
             {
-                case UiAnim::Fade:     e.opacity  = v.x; break;
-                case UiAnim::Scale:    e.scale    = glm::vec2(v.x, v.y); break;
-                case UiAnim::Move:     e.position = glm::vec2(v.x, v.y); break;
-                case UiAnim::Rotation: e.rotation = v.x; break;
-                case UiAnim::Color:    e.color    = v; break;
+                // Cada curva marca EXACTAMENTE lo que escribe. Fade entra en
+                // Transform y no en Material porque la opacidad se multiplica
+                // hacia abajo: si no bajase, los hijos se quedarían con el alfa
+                // del frame anterior.
+                case UiAnim::Fade:     e.opacity  = v.x;                  e.markDirty(UiElement::DirtyTransform); break;
+                case UiAnim::Scale:    e.scale    = glm::vec2(v.x, v.y);  e.markDirty(UiElement::DirtyTransform); break;
+                case UiAnim::Move:     e.position = glm::vec2(v.x, v.y);  e.markDirty(UiElement::DirtyTransform); break;
+                // La rotación solo gira los vértices que emite ESTE nodo (los
+                // hijos vuelven al estado de antes), así que no sale de él.
+                case UiAnim::Rotation: e.rotation = v.x;                  e.markDirty(UiElement::DirtyVertex);    break;
+                case UiAnim::Color:    e.color    = v;                    e.markDirty(UiElement::DirtyMaterial);  break;
                 case UiAnim::None:
                 default: break;
             }

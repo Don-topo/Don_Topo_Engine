@@ -386,6 +386,94 @@ namespace DonTopo
         mutable UiScissor screenScissor{};
         mutable bool      rectValid = false;
 
+        // ── Dirty flags ─────────────────────────────────────────────────────
+        // Qué ha cambiado en este nodo desde el último buildDrawData. Un nodo
+        // sin ni un bit encendido NO se vuelve a emitir: se copian tal cual los
+        // vértices que dejó la vez anterior. TODO nace sucio, así que un árbol
+        // recién montado se emite entero igual que siempre.
+        //
+        //   Transform  posición, escala, rotación heredada y OPACIDAD: todo lo
+        //              que mueve o atenúa también a los descendientes.
+        //   Layout     anclas, márgenes, padding, spacing, modo de layout,
+        //              tamaño, fitters: lo que recoloca el subárbol.
+        //   Material   color, sprite, atlas: solo cambia lo que este nodo pinta.
+        //   Vertex     la geometría del quad propio (rotación propia, insets del
+        //              sliced, texto): tampoco sale del nodo.
+        //
+        // Transform y Layout SUBEN por la cadena de padres (un hijo que crece
+        // puede cambiar la medida del padre con fitter) y BAJAN a todos los
+        // descendientes (mueven sus rects). Material y Vertex se quedan donde
+        // están. Esa asimetría es justo lo que hace que mover una hoja NO
+        // reemita a sus hermanos.
+        enum : uint32_t
+        {
+            DirtyTransform = 1u << 0,
+            DirtyLayout    = 1u << 1,
+            DirtyMaterial  = 1u << 2,
+            DirtyVertex    = 1u << 3,
+            DirtyAll       = DirtyTransform | DirtyLayout | DirtyMaterial | DirtyVertex
+        };
+
+        mutable uint32_t dirty = DirtyAll;
+
+        // ÚNICO modo de ensuciar. Los campos siguen siendo públicos y se tocan a
+        // pelo: quien los toque llama a esto justo después, con lo que ha tocado
+        // y nada más. Es const porque el emisor y el input trabajan sobre
+        // referencias const y el estado sucio no es estado observable del árbol.
+        void markDirty(uint32_t flags) const
+        {
+            dirty |= flags;
+
+            const uint32_t prop = flags & (DirtyTransform | DirtyLayout);
+            if (prop == 0) return;
+
+            // Arriba: solo la cadena de padres, sin volver a bajar por ellos (si
+            // bajara, mover una hoja ensuciaría a todos sus hermanos).
+            for (const UiElement* p = m_parent; p != nullptr; p = p->m_parent)
+                p->dirty |= prop;
+
+            markSubtreeDirty(prop);
+        }
+
+        // ── Caché de emisión ────────────────────────────────────────────────
+        // Lo que este nodo emitió en el último build, troceado en los mismos
+        // tramos (atlas + scissor) con los que se cortaron los lotes. Los
+        // índices van RELATIVOS al primer vértice del nodo: al recolocarlos se
+        // les suma la base de destino y salen los mismos uint16 de siempre.
+        struct CacheSegment
+        {
+            const UiTextureAtlas* atlas = nullptr;
+            UiScissor scissor{};
+            uint32_t  vertexCount = 0;
+            uint32_t  indexCount  = 0;
+        };
+
+        mutable std::vector<UiVertex>     cacheVertices;
+        mutable std::vector<uint16_t>     cacheIndices;
+        mutable std::vector<CacheSegment> cacheSegments;
+        mutable bool                      cacheValid = false;
+
+        // Colocación resuelta del nodo. Se reutiliza cuando ni Transform ni
+        // Layout están sucios: cambiar SOLO el color no vuelve a calcular ni un
+        // rect. Está en unidades de mundo (lo que ven los hijos) y en píxeles
+        // (lo que ve el emisor).
+        mutable glm::vec2 cacheWorldPos{0.0f, 0.0f};
+        mutable glm::vec2 cacheWorldSize{0.0f, 0.0f};
+        mutable glm::vec2 cacheWorldScale{1.0f, 1.0f};
+        mutable glm::vec2 cacheChildArea{0.0f, 0.0f};
+        mutable glm::vec2 cacheScreenPos{0.0f, 0.0f};
+        mutable glm::vec2 cacheScreenSize{0.0f, 0.0f};
+        mutable UiScissor cacheSelfScissor{};
+        mutable UiScissor cacheChildScissor{};
+        mutable float     cacheOpacity   = 1.0f;
+        mutable bool      cacheSelfCulled = false;   // máscara propia vacía
+        mutable bool      cacheGeomValid  = false;
+
+        // Cuántas veces ha REEMITIDO este nodo. Solo para medir: nadie lo lee
+        // dentro del motor. Sube en el build que reconstruye sus vértices y no
+        // en el que se los copia de la caché.
+        mutable uint32_t rebuildCount = 0;
+
         UiElement*       parent()       { return m_parent; }
         const UiElement* parent() const { return m_parent; }
 
@@ -400,14 +488,30 @@ namespace DonTopo
             // El padre se cablea AQUÍ y en ningún otro sitio: es lo que permite
             // que un evento burbujee sin que el canvas lleve un mapa aparte.
             m_children.back()->m_parent = this;
+            // Un hijo de más cambia la medida y el reparto del padre: sin esto
+            // el layout se quedaría con el del árbol anterior.
+            markDirty(DirtyLayout);
             return static_cast<T&>(*m_children.back());
         }
 
-        void clearChildren() { m_children.clear(); }
+        void clearChildren()
+        {
+            m_children.clear();
+            markDirty(DirtyLayout);
+        }
 
         const std::vector<std::unique_ptr<UiElement>>& children() const { return m_children; }
 
     private:
+        void markSubtreeDirty(uint32_t flags) const
+        {
+            for (const auto& child : m_children)
+            {
+                child->dirty |= flags;
+                child->markSubtreeDirty(flags);
+            }
+        }
+
         std::vector<std::unique_ptr<UiElement>> m_children;
         UiElement* m_parent = nullptr;   // nullptr solo en la raíz del canvas
     };
@@ -495,6 +599,11 @@ namespace DonTopo
         glm::vec2 uiOrigin()      const { return m_uiOrigin; }
         glm::vec2 referenceSize() const { return m_referenceSize; }
 
+        // Cuántos nodos REEMITIERON sus vértices en el último buildDrawData. Los
+        // demás se copiaron de su caché. Es la única medida honesta de lo que se
+        // está ahorrando: no depende del reloj ni de la máquina.
+        uint32_t rebuiltNodes() const { return m_rebuiltNodes; }
+
         // ── Input ───────────────────────────────────────────────────────────
         // ÚNICO punto de entrada. Va DESPUÉS del layout, o sea después de un
         // buildDrawData: reutiliza los rects que ese dejó en cada elemento y no
@@ -553,6 +662,13 @@ namespace DonTopo
         mutable float     m_uiScale = 1.0f;
         mutable glm::vec2 m_uiOrigin{0.0f, 0.0f};
         mutable glm::vec2 m_referenceSize{0.0f, 0.0f};
+
+        // Resolución del build anterior. Si cualquiera de estos cambia, la
+        // colocación de TODOS los nodos cambia y la caché entera sobra.
+        mutable uint32_t m_lastWidth  = 0;
+        mutable uint32_t m_lastHeight = 0;
+
+        mutable uint32_t m_rebuiltNodes = 0;
 
         // Estado del input entre frames. Todo puntero aquí apunta DENTRO de
         // m_root, así que clear() los tiene que soltar.
