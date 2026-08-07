@@ -116,6 +116,11 @@ namespace DonTopo
         {
             // Nada se colocó este frame: dejar los rects del anterior haría que
             // el input siguiera respondiendo sobre un canvas que ya no se dibuja.
+            // Por lo mismo la resolución vuelve a neutra: un uiScale viejo sobre
+            // un canvas que no se dibujó sería una mentira.
+            m_uiScale       = 1.0f;
+            m_uiOrigin      = {0.0f, 0.0f};
+            m_referenceSize = {0.0f, 0.0f};
             invalidateSubtree(m_root);
             return;
         }

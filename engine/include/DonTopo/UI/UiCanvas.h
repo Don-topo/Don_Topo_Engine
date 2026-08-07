@@ -424,6 +424,35 @@ namespace DonTopo
         Down
     };
 
+    // ── Resolución del canvas ───────────────────────────────────────────────
+    // Cómo se convierte el árbol (que se resuelve SIEMPRE en unidades de
+    // referencia) a los píxeles del render. Todo CPU y determinista: vale igual
+    // en el editor en Play y en el juego exportado.
+    enum class UiScaleMode : uint32_t
+    {
+        ConstantPixelSize,     // 1 unidad = 1 píxel (por scaleFactor)
+        ScaleWithScreenSize,   // la escala sale del área útil contra la referencia
+        ConstantPhysicalSize   // la escala sale del DPI
+    };
+
+    // Cómo se combinan el ratio en X y el ratio en Y en ScaleWithScreenSize.
+    enum class UiScreenMatch : uint32_t
+    {
+        MatchWidthOrHeight,   // lerp logarítmico entre los dos, por matchWidthOrHeight
+        Expand,               // el MENOR: nada se sale, pueden sobrar márgenes
+        Shrink                // el MAYOR: no sobra nada, puede salirse
+    };
+
+    // Insets del safe area, en PÍXELES REALES del render (no en unidades de
+    // referencia): quien los rellena los recibe así del SO.
+    struct UiSafeArea
+    {
+        float left   = 0.0f;
+        float top    = 0.0f;
+        float right  = 0.0f;
+        float bottom = 0.0f;
+    };
+
     class UiCanvas
     {
     public:
@@ -441,6 +470,30 @@ namespace DonTopo
         // width/height son el tamaño del render en píxeles: fijan el scissor
         // raíz y la ortográfica.
         void buildDrawData(uint32_t width, uint32_t height, UiDrawData& out) const;
+
+        // ── Resolución ──────────────────────────────────────────────────────
+        // El área útil sale SIEMPRE en este orden: (a) el render entero, (b) se
+        // le restan los insets del safe area, (c) si aspectRatio > 0 se recorta
+        // CENTRADO a esa relación. De ahí sale una escala ÚNICA y UNIFORME, y
+        // esa escala entra una sola vez, al pasar el rect de cada nodo de
+        // unidades de referencia a píxeles. El scissor raíz es el área útil:
+        // lo que cae en las barras o en el inset NO se dibuja.
+        UiScaleMode   scaleMode           = UiScaleMode::ConstantPixelSize;
+        float         scaleFactor         = 1.0f;               // multiplica a los tres modos
+        glm::vec2     referenceResolution{1920.0f, 1080.0f};    // ScaleWithScreenSize
+        UiScreenMatch screenMatch         = UiScreenMatch::MatchWidthOrHeight;
+        float         matchWidthOrHeight  = 0.5f;               // 0 = ancho, 1 = alto (se clampa)
+        float         screenDpi           = 0.0f;               // 0 = desconocido
+        float         fallbackDpi         = 96.0f;              // el que se usa si no se sabe
+        float         referenceDpi        = 96.0f;              // ConstantPhysicalSize
+        UiSafeArea    safeArea{};                               // en píxeles reales
+        float         aspectRatio         = 0.0f;               // 0 = apagado (16/9 = 1.777…)
+
+        // Lo que dejó el último buildDrawData. Solo lectura: para poder probarlo
+        // y para que el editor lo pueda enseñar algún día.
+        float     uiScale()       const { return m_uiScale; }
+        glm::vec2 uiOrigin()      const { return m_uiOrigin; }
+        glm::vec2 referenceSize() const { return m_referenceSize; }
 
         // ── Input ───────────────────────────────────────────────────────────
         // ÚNICO punto de entrada. Va DESPUÉS del layout, o sea después de un
@@ -485,11 +538,21 @@ namespace DonTopo
         UiElement* hitTest(const glm::vec2& point) const;
 
     private:
+        // El único que resuelve la escala es el emisor, y buildDrawData es
+        // const: por eso los tres resultados son mutable y él es amigo.
+        friend class UiSpriteBatch;
+
         void dispatch(UiElement* target, UiEvent& event, UiEventHandler UiElement::* slot) const;
         void moveFocus(int direction);
 
         UiElement m_root{"Canvas"};
         bool   m_visible = true;
+
+        // Resultado del último buildDrawData. Neutros mientras no haya habido
+        // ninguno: escala 1, sin desplazamiento y sin área.
+        mutable float     m_uiScale = 1.0f;
+        mutable glm::vec2 m_uiOrigin{0.0f, 0.0f};
+        mutable glm::vec2 m_referenceSize{0.0f, 0.0f};
 
         // Estado del input entre frames. Todo puntero aquí apunta DENTRO de
         // m_root, así que clear() los tiene que soltar.

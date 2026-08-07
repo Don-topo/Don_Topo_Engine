@@ -4239,6 +4239,426 @@ static void test_neutralidad_de_la_navegacion()
                       a.indices.size() * sizeof(a.indices[0])) == 0);
 }
 
+// ── Resolución del canvas ───────────────────────────────────────────────────
+// La referencia (1920x1080) NO es múltiplo exacto del render (800x480):
+// 800/1920 = 0,416666… y 480/1080 = 0,444444…, así que ningún ratio sale
+// redondo, los dos ejes dan números distintos y un eje cambiado por el otro se
+// nota. El panel tampoco es cuadrado ni está en el origen.
+static UiElement& montaResolucion(UiCanvas& canvas)
+{
+    UiElement& panel = canvas.root().add("Panel");
+    panel.position = {30.0f, 40.0f};
+    panel.size     = {200.0f, 100.0f};
+    return panel;
+}
+
+static glm::vec2 quadPos(const UiDrawData& d)
+{
+    return {d.vertices[0].pos.x, d.vertices[0].pos.y};
+}
+
+static glm::vec2 quadSize(const UiDrawData& d)
+{
+    return {d.vertices[2].pos.x - d.vertices[0].pos.x,
+            d.vertices[2].pos.y - d.vertices[0].pos.y};
+}
+
+// La escala multiplica el rect ENTERO (posición local incluida) pero no mueve
+// el origen: sin safe area ni aspect ratio el área útil sigue empezando en 0.
+static void test_resolucion_constant_pixel_size_escala_el_quad()
+{
+    UiCanvas canvas;
+    montaResolucion(canvas);
+    canvas.scaleMode   = UiScaleMode::ConstantPixelSize;
+    canvas.scaleFactor = 2.0f;
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(data.vertices.size() == 4);
+    if (data.vertices.size() != 4) return;
+
+    CHECK(nearly(canvas.uiScale(), 2.0f));
+    CHECK(nearly(canvas.uiOrigin().x, 0.0f));
+    CHECK(nearly(canvas.uiOrigin().y, 0.0f));
+    // El árbol se resuelve en unidades de referencia: con escala 2 el área útil
+    // mide la mitad en esas unidades.
+    CHECK(nearly(canvas.referenceSize().x, 400.0f));
+    CHECK(nearly(canvas.referenceSize().y, 240.0f));
+
+    // 30*2 = 60 ; 40*2 = 80. Sin escalar la posición saldría (30,40).
+    CHECK(nearly(quadPos(data).x, 60.0f));
+    CHECK(nearly(quadPos(data).y, 80.0f));
+    CHECK(nearly(quadSize(data).x, 400.0f));
+    CHECK(nearly(quadSize(data).y, 200.0f));
+
+    // Y el scissor raíz sigue siendo el render entero.
+    CHECK(data.batches.size() == 1);
+    if (data.batches.empty()) return;
+    CHECK(data.batches[0].scissor.x == 0 && data.batches[0].scissor.y == 0);
+    CHECK(data.batches[0].scissor.width == kW && data.batches[0].scissor.height == kH);
+}
+
+// match 0 sigue al ancho, match 1 al alto, y 0,5 cae ENTRE los dos. Con la
+// media aritmética el 0,5 saldría distinto del lerp logarítmico, así que el
+// número exacto también se comprueba.
+static void test_resolucion_scale_with_screen_size_match()
+{
+    const float rx = (float)kW / 1920.0f;   // 0,4166…
+    const float ry = (float)kH / 1080.0f;   // 0,4444…
+    CHECK(rx < ry);                         // si no, el test no distingue nada
+
+    struct Caso { UiScreenMatch modo; float match; float esperado; };
+    const Caso casos[] = {
+        {UiScreenMatch::MatchWidthOrHeight, 0.0f, rx},
+        {UiScreenMatch::MatchWidthOrHeight, 1.0f, ry},
+        {UiScreenMatch::MatchWidthOrHeight, 0.5f, std::sqrt(rx * ry)},
+        {UiScreenMatch::Expand,             0.5f, rx},   // el MENOR
+        {UiScreenMatch::Shrink,             0.5f, ry},   // el MAYOR
+    };
+
+    for (const Caso& c : casos)
+    {
+        UiCanvas canvas;
+        montaResolucion(canvas);
+        canvas.scaleMode           = UiScaleMode::ScaleWithScreenSize;
+        canvas.referenceResolution = {1920.0f, 1080.0f};
+        canvas.screenMatch         = c.modo;
+        canvas.matchWidthOrHeight  = c.match;
+
+        UiDrawData data;
+        canvas.buildDrawData(kW, kH, data);
+
+        CHECK(nearly(canvas.uiScale(), c.esperado));
+        CHECK(data.vertices.size() == 4);
+        if (data.vertices.size() != 4) continue;
+        CHECK(nearly(quadSize(data).x, 200.0f * c.esperado));
+        CHECK(nearly(quadSize(data).y, 100.0f * c.esperado));
+    }
+
+    // El 0,5 cae ESTRICTAMENTE entre los dos extremos, no encima de ninguno.
+    UiCanvas medio;
+    montaResolucion(medio);
+    medio.scaleMode          = UiScaleMode::ScaleWithScreenSize;
+    medio.matchWidthOrHeight = 0.5f;
+    UiDrawData data;
+    medio.buildDrawData(kW, kH, data);
+    CHECK(medio.uiScale() > rx && medio.uiScale() < ry);
+
+    // Y scaleFactor multiplica también a este modo.
+    medio.scaleFactor = 3.0f;
+    medio.buildDrawData(kW, kH, data);
+    CHECK(nearly(medio.uiScale(), std::sqrt(rx * ry) * 3.0f));
+}
+
+static void test_resolucion_constant_physical_size()
+{
+    // DPI del doble que el de referencia: escala 2.
+    UiCanvas doble;
+    montaResolucion(doble);
+    doble.scaleMode    = UiScaleMode::ConstantPhysicalSize;
+    doble.screenDpi    = 192.0f;
+    doble.referenceDpi = 96.0f;
+
+    UiDrawData data;
+    doble.buildDrawData(kW, kH, data);
+    CHECK(nearly(doble.uiScale(), 2.0f));
+    CHECK(data.vertices.size() == 4);
+    if (data.vertices.size() == 4) CHECK(nearly(quadSize(data).x, 400.0f));
+
+    // DPI desconocido: manda el fallback, y se pone a un valor que NO es el de
+    // referencia para que un fallback ignorado no pase igual.
+    UiCanvas desconocido;
+    montaResolucion(desconocido);
+    desconocido.scaleMode    = UiScaleMode::ConstantPhysicalSize;
+    desconocido.screenDpi    = 0.0f;
+    desconocido.fallbackDpi  = 120.0f;
+    desconocido.referenceDpi = 96.0f;
+    desconocido.buildDrawData(kW, kH, data);
+    CHECK(nearly(desconocido.uiScale(), 1.25f));
+
+    // DPI negativo: es "no se sabe" igual que el 0, cae al fallback por defecto
+    // (96, el mismo que la referencia) y da escala 1 sin NaN ni quad del revés.
+    UiCanvas negativo;
+    montaResolucion(negativo);
+    negativo.scaleMode = UiScaleMode::ConstantPhysicalSize;
+    negativo.screenDpi = -50.0f;
+    negativo.buildDrawData(kW, kH, data);
+    CHECK(nearly(negativo.uiScale(), 1.0f));
+    CHECK(data.vertices.size() == 4);
+    if (data.vertices.size() == 4)
+    {
+        CHECK(nearly(quadPos(data).x, 30.0f));
+        CHECK(quadSize(data).x > 0.0f);
+    }
+}
+
+// Los insets mueven el origen y encogen el área útil, y el scissor raíz deja
+// fuera lo que cae dentro del inset.
+static void test_resolucion_safe_area()
+{
+    UiCanvas canvas;
+    montaResolucion(canvas);
+    canvas.safeArea.left   = 40.0f;   // los cuatro distintos entre sí
+    canvas.safeArea.top    = 24.0f;
+    canvas.safeArea.right  = 16.0f;
+    canvas.safeArea.bottom = 8.0f;
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    CHECK(nearly(canvas.uiScale(), 1.0f));
+    CHECK(nearly(canvas.uiOrigin().x, 40.0f));
+    CHECK(nearly(canvas.uiOrigin().y, 24.0f));
+    CHECK(nearly(canvas.referenceSize().x, (float)kW - 56.0f));   // 800-40-16
+    CHECK(nearly(canvas.referenceSize().y, (float)kH - 32.0f));   // 480-24-8
+
+    CHECK(data.vertices.size() == 4);
+    if (data.vertices.size() != 4) return;
+    // El panel se desplaza con el origen, pero no cambia de tamaño.
+    CHECK(nearly(quadPos(data).x, 70.0f));    // 40 + 30
+    CHECK(nearly(quadPos(data).y, 64.0f));    // 24 + 40
+    CHECK(nearly(quadSize(data).x, 200.0f));
+
+    CHECK(!data.batches.empty());
+    if (data.batches.empty()) return;
+    const UiScissor& s = data.batches[0].scissor;
+    CHECK(s.x == 40 && s.y == 24);
+    CHECK(s.width == kW - 56 && s.height == kH - 32);
+
+    // Un elemento colocado en negativo cae DENTRO del inset: se emite, pero el
+    // scissor raíz lo deja fuera de la pantalla útil.
+    UiCanvas fuera;
+    UiElement& metido = fuera.root().add("Metido");
+    metido.position = {-35.0f, -20.0f};
+    metido.size     = {30.0f, 10.0f};
+    fuera.safeArea.left = 40.0f;
+    fuera.safeArea.top  = 24.0f;
+
+    UiDrawData d2;
+    fuera.buildDrawData(kW, kH, d2);
+    CHECK(d2.vertices.size() == 4);
+    CHECK(!d2.batches.empty());
+    if (d2.vertices.size() != 4 || d2.batches.empty()) return;
+    CHECK(nearly(quadPos(d2).x, 5.0f));    // 40 - 35
+    CHECK(nearly(quadPos(d2).y, 4.0f));    // 24 - 20
+    CHECK(d2.batches[0].scissor.x == 40 && d2.batches[0].scissor.y == 24);
+    // Entero por encima y por la izquierda del scissor: ni un píxel se ve.
+    CHECK(quadPos(d2).x + quadSize(d2).x <= (float)d2.batches[0].scissor.x);
+    CHECK(quadPos(d2).y + quadSize(d2).y <= (float)d2.batches[0].scissor.y);
+}
+
+// 16/9 en un render 4:3 mete barras ARRIBA y ABAJO; 1:1 en un render apaisado
+// las mete a los LADOS. En los dos casos el área útil queda centrada.
+static void test_resolucion_aspect_ratio()
+{
+    // 4:3 con 16/9 pedido: sobra alto.
+    UiCanvas letterbox;
+    montaResolucion(letterbox);
+    letterbox.aspectRatio = 16.0f / 9.0f;
+
+    UiDrawData data;
+    letterbox.buildDrawData(800, 600, data);
+
+    const float utilAlto = 800.0f * 9.0f / 16.0f;    // 450
+    CHECK(nearly(letterbox.uiOrigin().x, 0.0f));
+    CHECK(nearly(letterbox.uiOrigin().y, (600.0f - utilAlto) * 0.5f));   // 75
+    CHECK(nearly(letterbox.referenceSize().x, 800.0f));
+    CHECK(nearly(letterbox.referenceSize().y, utilAlto));
+    CHECK(!data.batches.empty());
+    if (!data.batches.empty())
+    {
+        CHECK(data.batches[0].scissor.x == 0 && data.batches[0].scissor.y == 75);
+        CHECK(data.batches[0].scissor.width == 800 && data.batches[0].scissor.height == 450);
+    }
+    CHECK(data.vertices.size() == 4);
+    if (data.vertices.size() == 4) CHECK(nearly(quadPos(data).y, 115.0f));   // 75 + 40
+
+    // Apaisado con 1:1 pedido: sobra ancho.
+    UiCanvas pillarbox;
+    montaResolucion(pillarbox);
+    pillarbox.aspectRatio = 1.0f;
+
+    UiDrawData d2;
+    pillarbox.buildDrawData(kW, kH, d2);
+
+    CHECK(nearly(pillarbox.uiOrigin().x, ((float)kW - (float)kH) * 0.5f));   // 160
+    CHECK(nearly(pillarbox.uiOrigin().y, 0.0f));
+    CHECK(nearly(pillarbox.referenceSize().x, (float)kH));
+    CHECK(nearly(pillarbox.referenceSize().y, (float)kH));
+    CHECK(!d2.batches.empty());
+    if (!d2.batches.empty())
+    {
+        CHECK(d2.batches[0].scissor.x == 160 && d2.batches[0].scissor.y == 0);
+        CHECK(d2.batches[0].scissor.width == kH && d2.batches[0].scissor.height == kH);
+    }
+    CHECK(d2.vertices.size() == 4);
+    if (d2.vertices.size() == 4) CHECK(nearly(quadPos(d2).x, 190.0f));   // 160 + 30
+
+    // Y el aspect ratio se aplica DESPUÉS del safe area: sobre el área ya
+    // recortada, no sobre el render entero.
+    UiCanvas encadenado;
+    montaResolucion(encadenado);
+    encadenado.safeArea.left = 200.0f;   // área útil 600x480
+    encadenado.aspectRatio   = 1.0f;     // recorta a 480x480, centrado en ella
+    UiDrawData d3;
+    encadenado.buildDrawData(kW, kH, d3);
+    CHECK(nearly(encadenado.uiOrigin().x, 200.0f + (600.0f - 480.0f) * 0.5f));   // 260
+    CHECK(nearly(encadenado.referenceSize().x, 480.0f));
+}
+
+// El MISMO elemento en unidades de referencia acaba en píxeles distintos según
+// la escala, y el hit test acierta con el punto en PÍXELES en los dos casos.
+static void test_resolucion_hit_test_en_pixeles()
+{
+    UiCanvas uno;
+    UiElement& pUno = montaResolucion(uno);
+    pUno.raycastTarget = true;
+    UiDrawData data;
+    uno.buildDrawData(kW, kH, data);
+
+    UiCanvas dos;
+    UiElement& pDos = montaResolucion(dos);
+    pDos.raycastTarget = true;
+    dos.scaleFactor = 2.0f;
+    UiDrawData d2;
+    dos.buildDrawData(kW, kH, d2);
+
+    // (100,60) está dentro del rect a escala 1 (30..230, 40..140) y FUERA a
+    // escala 2 (60..460, 80..280).
+    CHECK(uno.hitTest({100.0f, 60.0f}) == &pUno);
+    CHECK(dos.hitTest({100.0f, 60.0f}) == nullptr);
+
+    // (200,120) está dentro a escala 2 y también a escala 1: el punto que
+    // separa de verdad es el de arriba.
+    CHECK(dos.hitTest({200.0f, 120.0f}) == &pDos);
+
+    // (400,200): dentro a escala 2, fuera a escala 1.
+    CHECK(dos.hitTest({400.0f, 200.0f}) == &pDos);
+    CHECK(uno.hitTest({400.0f, 200.0f}) == nullptr);
+
+    // Con safe area el hit test se mueve con el origen.
+    UiCanvas movido;
+    UiElement& pMovido = montaResolucion(movido);
+    pMovido.raycastTarget = true;
+    movido.safeArea.left = 40.0f;
+    movido.safeArea.top  = 24.0f;
+    UiDrawData d3;
+    movido.buildDrawData(kW, kH, d3);
+    CHECK(movido.hitTest({100.0f, 60.0f}) == nullptr);          // ya no llega
+    CHECK(movido.hitTest({140.0f, 84.0f}) == &pMovido);         // 100+40, 60+24
+}
+
+// Dos builds seguidos con la misma configuración: los mismos bytes. Sin esto,
+// un estado de módulo que se quedara encendido de un build al siguiente pasaría
+// desapercibido.
+static void test_resolucion_determinismo()
+{
+    UiCanvas canvas;
+    montaResolucion(canvas);
+    canvas.scaleMode           = UiScaleMode::ScaleWithScreenSize;
+    canvas.matchWidthOrHeight  = 0.25f;
+    canvas.safeArea.left       = 17.0f;
+    canvas.safeArea.bottom     = 9.0f;
+    canvas.aspectRatio         = 4.0f / 3.0f;
+
+    UiDrawData a;
+    UiDrawData b;
+    canvas.buildDrawData(kW, kH, a);
+    const float escalaA = canvas.uiScale();
+    const glm::vec2 origenA = canvas.uiOrigin();
+    canvas.buildDrawData(kW, kH, b);
+
+    CHECK(escalaA == canvas.uiScale());
+    CHECK(origenA == canvas.uiOrigin());
+    CHECK(a.vertices.size() == b.vertices.size());
+    CHECK(a.indices.size()  == b.indices.size());
+    CHECK(a.batches.size()  == b.batches.size());
+    if (a.vertices.size() != b.vertices.size() || a.indices.size() != b.indices.size()) return;
+    CHECK(std::memcmp(a.vertices.data(), b.vertices.data(),
+                      a.vertices.size() * sizeof(a.vertices[0])) == 0);
+    CHECK(std::memcmp(a.indices.data(), b.indices.data(),
+                      a.indices.size() * sizeof(a.indices[0])) == 0);
+}
+
+// Con los valores por defecto no cambia NI UN BYTE: mismos vértices, mismos
+// índices y mismos lotes que antes de la feature. Es la condición que hace que
+// los tests de arriba sigan pasando sin tocar un solo valor esperado.
+static void test_neutralidad_de_la_resolucion()
+{
+    UiCanvas base;
+    UiElement& panel = base.root().add("Panel");
+    panel.position = {31.0f, 47.0f};
+    panel.size     = {123.0f, 57.0f};
+    UiElement& hijo = panel.add("Hijo");
+    hijo.position     = {5.0f, 9.0f};
+    hijo.size         = {40.0f, 20.0f};
+    panel.clipChildren = true;
+    panel.maskEnabled  = true;
+    panel.maskInsetLeft = 7.0f;
+    panel.maskInsetTop  = 3.0f;
+
+    UiDrawData antes;
+    base.buildDrawData(kW, kH, antes);
+
+    // Los defaults, escritos a mano: si alguno de ellos no fuera neutro, esto
+    // saldría distinto del canvas que no los ha tocado.
+    UiCanvas igual;
+    UiElement& panel2 = igual.root().add("Panel");
+    panel2.position = {31.0f, 47.0f};
+    panel2.size     = {123.0f, 57.0f};
+    UiElement& hijo2 = panel2.add("Hijo");
+    hijo2.position     = {5.0f, 9.0f};
+    hijo2.size         = {40.0f, 20.0f};
+    panel2.clipChildren = true;
+    panel2.maskEnabled  = true;
+    panel2.maskInsetLeft = 7.0f;
+    panel2.maskInsetTop  = 3.0f;
+
+    igual.scaleMode          = UiScaleMode::ConstantPixelSize;
+    igual.scaleFactor        = 1.0f;
+    igual.safeArea           = UiSafeArea{};
+    igual.aspectRatio        = 0.0f;
+
+    UiDrawData despues;
+    igual.buildDrawData(kW, kH, despues);
+
+    CHECK(antes.vertices.size() == despues.vertices.size());
+    CHECK(antes.indices.size()  == despues.indices.size());
+    CHECK(antes.batches.size()  == despues.batches.size());
+    if (antes.vertices.size() != despues.vertices.size()) return;
+    if (antes.indices.size()  != despues.indices.size())  return;
+    CHECK(std::memcmp(antes.vertices.data(), despues.vertices.data(),
+                      antes.vertices.size() * sizeof(antes.vertices[0])) == 0);
+    CHECK(std::memcmp(antes.indices.data(), despues.indices.data(),
+                      antes.indices.size() * sizeof(antes.indices[0])) == 0);
+
+    // Y la transformada por defecto es la identidad exacta, no "casi".
+    CHECK(base.uiScale() == 1.0f);
+    CHECK(base.uiOrigin() == glm::vec2(0.0f, 0.0f));
+    CHECK(base.referenceSize() == glm::vec2((float)kW, (float)kH));
+    // La máscara sigue cayendo EXACTAMENTE donde caía: la escala neutra no le
+    // mete un píxel de más ni de menos.
+    CHECK(!antes.batches.empty());
+    if (!antes.batches.empty())
+    {
+        CHECK(antes.batches[0].scissor.x == 38 && antes.batches[0].scissor.y == 50);
+        CHECK(antes.batches[0].scissor.width == 116 && antes.batches[0].scissor.height == 54);
+    }
+
+    // Y sin máscara de por medio, el scissor raíz sigue siendo el render entero.
+    UiCanvas raso;
+    raso.root().add("Panel").size = {50.0f, 20.0f};
+    UiDrawData rasoData;
+    raso.buildDrawData(kW, kH, rasoData);
+    CHECK(rasoData.batches.size() == 1);
+    if (rasoData.batches.size() == 1)
+    {
+        CHECK(rasoData.batches[0].scissor.x == 0 && rasoData.batches[0].scissor.y == 0);
+        CHECK(rasoData.batches[0].scissor.width == kW && rasoData.batches[0].scissor.height == kH);
+    }
+}
+
 int main()
 {
     test_canvas_vacio_no_emite_nada();
@@ -4340,6 +4760,15 @@ int main()
     test_nav_dispara_blur_y_focus_una_sola_vez();
     test_nav_determinismo_de_la_secuencia();
     test_neutralidad_de_la_navegacion();
+
+    test_resolucion_constant_pixel_size_escala_el_quad();
+    test_resolucion_scale_with_screen_size_match();
+    test_resolucion_constant_physical_size();
+    test_resolucion_safe_area();
+    test_resolucion_aspect_ratio();
+    test_resolucion_hit_test_en_pixeles();
+    test_resolucion_determinismo();
+    test_neutralidad_de_la_resolucion();
 
     if (g_failures == 0) std::printf("ui_batch_tests: OK\n");
     else                 std::printf("ui_batch_tests: %d fallos\n", g_failures);

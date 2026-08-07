@@ -89,6 +89,20 @@ namespace DonTopo
 
         QuadRotation g_rot;
 
+        // ── Resolución del canvas ───────────────────────────────────────────
+        // El árbol entero (layout, anclas, texto, animaciones) se resuelve en
+        // unidades de REFERENCIA y no sabe que esto existe. La escala y el
+        // origen entran UNA sola vez, al pasar el rect ya resuelto de cada nodo
+        // a píxeles del render. Estado de módulo por lo mismo que g_rot: el
+        // build de la UI es de un solo hilo y determinista.
+        struct CanvasXform
+        {
+            glm::vec2 origen{0.0f, 0.0f};
+            float     escala = 1.0f;
+        };
+
+        CanvasXform g_xf;
+
         glm::vec2 rotaQuad(const glm::vec2& p)
         {
             const glm::vec2 d = p - g_rot.centro;
@@ -1208,18 +1222,25 @@ namespace DonTopo
             // reemplazo, así que una máscara anidada solo puede recortar más).
             // Con maskSelf el propio elemento entra en ella; sin él solo sus
             // descendientes.
+            // ÚNICO punto donde entra la escala del canvas: de aquí para abajo
+            // se trabaja en píxeles del render, y de aquí para arriba (medida,
+            // layout, anclas, márgenes, padding) en unidades de referencia. Con
+            // escala 1 y origen {0,0} el float que sale es el MISMO bit a bit.
+            const glm::vec2 screenPos  = g_xf.origen + worldPos * g_xf.escala;
+            const glm::vec2 screenSize = worldSize * g_xf.escala;
+
             UiScissor selfScissor  = scissor;
             UiScissor childScissor = scissor;
 
             if (node.clipChildren && node.maskEnabled)
             {
-                const glm::vec2 maskPos {worldPos.x + node.maskInsetLeft,
-                                         worldPos.y + node.maskInsetTop};
+                const glm::vec2 maskPos {screenPos.x + node.maskInsetLeft * g_xf.escala,
+                                         screenPos.y + node.maskInsetTop  * g_xf.escala};
                 // Insets que se cruzan dejan tamaño <= 0 y scissorFromRect
                 // devuelve vacío: JAMÁS un width/height negativo, que en un
                 // VkRect2D es un crash.
-                const glm::vec2 maskSize{worldSize.x - node.maskInsetLeft - node.maskInsetRight,
-                                         worldSize.y - node.maskInsetTop  - node.maskInsetBottom};
+                const glm::vec2 maskSize{screenSize.x - node.maskInsetLeft * g_xf.escala - node.maskInsetRight  * g_xf.escala,
+                                         screenSize.y - node.maskInsetTop  * g_xf.escala - node.maskInsetBottom * g_xf.escala};
 
                 childScissor = intersectScissor(scissor, scissorFromRect(maskPos, maskSize));
 
@@ -1237,8 +1258,8 @@ namespace DonTopo
             // sin recorrer el árbol otra vez. No altera ni un vértice ni un lote.
             // Es el MISMO scissor con el que se dibuja el nodo, que es lo que
             // hace que el hit test respete la máscara sin código propio.
-            node.screenPos     = worldPos;
-            node.screenSize    = worldSize;
+            node.screenPos     = screenPos;
+            node.screenSize    = screenSize;
             node.screenScissor = selfScissor;
             node.rectValid     = true;
 
@@ -1258,13 +1279,13 @@ namespace DonTopo
                 g_rot.activa = true;
                 g_rot.sen    = std::sin(node.rotation);
                 g_rot.cs     = std::cos(node.rotation);
-                g_rot.centro = worldPos + node.pivot * worldSize;
+                g_rot.centro = screenPos + node.pivot * screenSize;
             }
 
             if (drawsText)
-                emitText(*text, worldPos, worldSize, worldScale, selfScissor, opacity, out);
+                emitText(*text, screenPos, screenSize, worldScale * g_xf.escala, selfScissor, opacity, out);
             else if (node.drawable && worldSize.x > 0.0f && worldSize.y > 0.0f)
-                emitQuad(node, worldPos, worldSize, selfScissor, opacity, out);
+                emitQuad(node, screenPos, screenSize, selfScissor, opacity, out);
 
             g_rot = rotPrevia;
 
@@ -1388,18 +1409,120 @@ namespace DonTopo
 
     void UiSpriteBatch::build(const UiCanvas& canvas, uint32_t width, uint32_t height, UiDrawData& out)
     {
+        // ── Área útil, en este orden y no en otro ───────────────────────────
+        // (a) el render entero.
+        float x0 = 0.0f;
+        float y0 = 0.0f;
+        float x1 = (float)width;
+        float y1 = (float)height;
+
+        // (b) los insets del safe area, en píxeles reales. Negativos se ignoran
+        // (agrandar el área útil por encima del render no significa nada) y unos
+        // insets que se cruzan dejan área 0, nunca un rect del revés.
+        if (canvas.safeArea.left   > 0.0f) x0 += canvas.safeArea.left;
+        if (canvas.safeArea.top    > 0.0f) y0 += canvas.safeArea.top;
+        if (canvas.safeArea.right  > 0.0f) x1 -= canvas.safeArea.right;
+        if (canvas.safeArea.bottom > 0.0f) y1 -= canvas.safeArea.bottom;
+        if (x1 < x0) x1 = x0;
+        if (y1 < y0) y1 = y0;
+
+        float uw = x1 - x0;
+        float uh = y1 - y0;
+
+        // (c) el aspect ratio, recortando CENTRADO. Lo que sobra son barras
+        // (letterbox si el área es más ancha de la cuenta, pillarbox si es más
+        // alta) y la UI no las ocupa.
+        const float ar = canvas.aspectRatio;
+        if (ar > 0.0f && std::isfinite(ar) && uw > 0.0f && uh > 0.0f)
+        {
+            if (uw > uh * ar)
+            {
+                const float nw = uh * ar;
+                x0 += (uw - nw) * 0.5f;
+                uw  = nw;
+            }
+            else
+            {
+                const float nh = uw / ar;
+                y0 += (uh - nh) * 0.5f;
+                uh  = nh;
+            }
+        }
+
+        // (d) una escala ÚNICA y UNIFORME, del área útil.
+        float escala = 1.0f;
+        switch (canvas.scaleMode)
+        {
+        case UiScaleMode::ScaleWithScreenSize:
+        {
+            const float refW = canvas.referenceResolution.x;
+            const float refH = canvas.referenceResolution.y;
+            if (refW > 0.0f && refH > 0.0f)
+            {
+                const float rx = uw / refW;
+                const float ry = uh / refH;
+
+                float m = canvas.matchWidthOrHeight;
+                if (!(m >= 0.0f)) m = 0.0f;    // pilla también el NaN
+                if (m > 1.0f)     m = 1.0f;
+
+                switch (canvas.screenMatch)
+                {
+                case UiScreenMatch::Expand: escala = (rx < ry) ? rx : ry; break;
+                case UiScreenMatch::Shrink: escala = (rx > ry) ? rx : ry; break;
+                case UiScreenMatch::MatchWidthOrHeight:
+                default:
+                    // Lerp LOGARÍTMICO: con m = 0 sigue al ancho, con m = 1 al
+                    // alto, y en medio cae entre los dos sin que un lado se
+                    // coma al otro (que es lo que pasa con la media aritmética).
+                    escala = std::pow(rx, 1.0f - m) * std::pow(ry, m);
+                    break;
+                }
+                escala *= canvas.scaleFactor;
+            }
+            break;
+        }
+        case UiScaleMode::ConstantPhysicalSize:
+        {
+            // screenDpi <= 0 es "no se sabe": el fallback evita que un SO que no
+            // lo reporte deje la UI a escala 0.
+            const float dpi = (canvas.screenDpi > 0.0f) ? canvas.screenDpi : canvas.fallbackDpi;
+            if (canvas.referenceDpi > 0.0f) escala = (dpi / canvas.referenceDpi) * canvas.scaleFactor;
+            break;
+        }
+        case UiScaleMode::ConstantPixelSize:
+        default:
+            escala = canvas.scaleFactor;
+            break;
+        }
+
+        // Una escala <= 0 o no finita no encoge la UI: la hace desaparecer o la
+        // llena de NaN. Cae a 1 y sigue.
+        if (!std::isfinite(escala) || escala <= 0.0f) escala = 1.0f;
+
+        canvas.m_uiScale       = escala;
+        canvas.m_uiOrigin      = {x0, y0};
+        canvas.m_referenceSize = {uw / escala, uh / escala};
+
         // Canvas vacío: ni se mide, ni se reserva el vector, ni se recorre nada.
+        // La resolución ya está resuelta, así que los getters valen igual.
         if (canvas.root().children().empty()) return;
 
-        UiScissor full{};
-        full.x = 0;
-        full.y = 0;
-        full.width  = width;
-        full.height = height;
+        // Área útil de 0 píxeles (safe area que se come el render entero): no
+        // hay dónde dibujar y los rects del frame anterior no pueden quedarse.
+        if (uw <= 0.0f || uh <= 0.0f) { invalidateRects(canvas.root()); return; }
 
-        // El "padre" de la raíz es el render entero: es contra ese rect contra
-        // el que anclan los elementos de primer nivel.
-        const glm::vec2 screen{(float)width, (float)height};
+        // El scissor raíz ES el área útil: lo que cae en las barras del aspect
+        // ratio o fuera del safe area no se dibuja. El hit test lee este mismo
+        // scissor, así que los eventos salen coherentes sin código propio.
+        const UiScissor full = scissorFromRect({x0, y0}, {uw, uh});
+
+        // El "padre" de la raíz es el área útil en unidades de REFERENCIA: los
+        // elementos de primer nivel anclan contra ese rect y no ven la escala.
+        const glm::vec2 screen = canvas.m_referenceSize;
+
+        g_xf.origen = {x0, y0};
+        g_xf.escala = escala;
 
         // Medida bottom-up primero (resuelve los fitters), colocación después.
         std::vector<MeasuredNode> measured;
@@ -1407,6 +1530,9 @@ namespace DonTopo
 
         emitNode(canvas.root(), 0, measured, glm::vec2(0.0f), glm::vec2(1.0f), screen,
                  LayoutPlacement{}, full, 1.0f, out);
+
+        // Que no se quede encendida para el siguiente canvas ni para el hit test.
+        g_xf = CanvasXform{};
     }
 
     // ── GPU ─────────────────────────────────────────────────────────────────
