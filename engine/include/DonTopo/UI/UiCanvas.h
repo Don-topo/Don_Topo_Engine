@@ -248,6 +248,29 @@ namespace DonTopo
         // padre, nunca un reemplazo.
         bool clipChildren = false;
 
+        // ── Máscara rectangular ─────────────────────────────────────────────
+        // Todo esto MODULA a clipChildren y nada más: sin clipChildren ninguno
+        // de estos campos hace absolutamente nada, así que un árbol que no los
+        // toca sale con los mismos vértices y los mismos lotes de siempre.
+
+        // Píxeles de pantalla que el rect de recorte se mete hacia DENTRO del
+        // rect del elemento, cada uno por su lado. Insets que se cruzan dan una
+        // máscara VACÍA (width/height a 0), nunca negativa.
+        float maskInsetLeft   = 0.0f;
+        float maskInsetRight  = 0.0f;
+        float maskInsetTop    = 0.0f;
+        float maskInsetBottom = 0.0f;
+
+        // A false el elemento se dibuja ENTERO con el scissor que heredó y la
+        // máscara solo recorta a sus descendientes: es lo que deja el marco de
+        // una ventana fuera de su propia máscara. A true (por defecto) el
+        // comportamiento es el de siempre: se recorta él también.
+        bool maskSelf = true;
+
+        // Apaga la máscara sin sacar el elemento del árbol: con false el nodo
+        // se comporta como si no tuviera clipChildren.
+        bool maskEnabled = true;
+
         // ── Input ───────────────────────────────────────────────────────────
         // Nada de esto afecta al dibujado: quien no llame a UiCanvas::updateInput
         // no ve ni un cambio en los vértices ni en los lotes.

@@ -3094,6 +3094,349 @@ static void test_neutralidad_de_los_botones()
                       a.indices.size() * sizeof(a.indices[0])) == 0);
 }
 
+// ── Máscaras rectangulares ──────────────────────────────────────────────────
+// La máscara es clipChildren + insets, y se compone SIEMPRE por intersección.
+// Todo lo que se comprueba aquí falla en silencio: un inset en el lado
+// equivocado recorta de más por un lado y de menos por el otro sin un solo
+// error de validación, y una máscara vacía que salga negativa es un VkRect2D
+// que revienta el driver, no un test rojo.
+
+// Ningún scissor puede salir negativo (en uint32_t eso es un valor gigante) ni
+// mayor que el render.
+static void scissorSano(const UiDrawData& data)
+{
+    for (const auto& b : data.batches)
+    {
+        CHECK(b.scissor.width  <= kW);
+        CHECK(b.scissor.height <= kH);
+        CHECK(b.scissor.x >= 0 && b.scissor.y >= 0);
+    }
+}
+
+// Los cuatro insets, cada uno en SU lado: x, y, width y alto se comprueban por
+// separado porque un inset cambiado de lado deja el área total igual.
+static void test_mascara_insets_cada_uno_en_su_lado()
+{
+    UiCanvas canvas;
+
+    UiElement& panel = canvas.root().add("panel");
+    panel.position     = glm::vec2(100.0f, 60.0f);
+    panel.size         = glm::vec2(240.0f, 150.0f);   // ancho != alto
+    panel.clipChildren = true;
+    panel.maskInsetLeft   = 7.0f;                     // los cuatro distintos
+    panel.maskInsetRight  = 13.0f;
+    panel.maskInsetTop    = 5.0f;
+    panel.maskInsetBottom = 21.0f;
+
+    // Se sale por los CUATRO lados y por distinta cantidad: 30 por la
+    // izquierda, 18 por arriba, 70 por la derecha y 92 por abajo.
+    UiElement& hijo = panel.add("hijo");
+    hijo.position = glm::vec2(-30.0f, -18.0f);
+    hijo.size     = glm::vec2(340.0f, 260.0f);
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    // 100+7 = 107 ; 60+5 = 65 ; 240-7-13 = 220 ; 150-5-21 = 124.
+    const UiScissor& s = panel.screenScissor;
+    CHECK(s.x == 107);
+    CHECK(s.y == 65);
+    CHECK(s.width  == 220);
+    CHECK(s.height == 124);
+
+    // El que se dibuja es exactamente ese, no otro calculado aparte.
+    CHECK(data.batches.size() == 1);
+    if (!data.batches.empty()) CHECK(data.batches[0].scissor == s);
+    // Y el hijo recortado hereda el mismo (mismo atlas + mismo scissor = 1 lote).
+    CHECK(hijo.screenScissor == s);
+    CHECK(data.vertices.size() == 8);
+    scissorSano(data);
+}
+
+// maskSelf = false: el marco de la ventana queda FUERA de su propia máscara.
+static void test_mascara_self_deja_fuera_al_propio_elemento()
+{
+    UiCanvas canvas;
+
+    UiElement& panel = canvas.root().add("panel");
+    panel.position     = glm::vec2(90.0f, 40.0f);
+    panel.size         = glm::vec2(260.0f, 130.0f);
+    panel.clipChildren = true;
+    panel.maskInsetLeft   = 11.0f;
+    panel.maskInsetRight  = 4.0f;
+    panel.maskInsetTop    = 9.0f;
+    panel.maskInsetBottom = 17.0f;
+    panel.maskSelf        = false;
+
+    UiElement& hijo = panel.add("hijo");
+    hijo.position = glm::vec2(-25.0f, -12.0f);
+    hijo.size     = glm::vec2(400.0f, 220.0f);
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    const UiScissor mascara{101, 49, 245, 104};       // 260-11-4 ; 130-9-17
+
+    // El panel sale con lo que HEREDÓ (la pantalla entera), el hijo con la
+    // máscara: dos scissors distintos, dos lotes.
+    CHECK(panel.screenScissor.x == 0 && panel.screenScissor.y == 0);
+    CHECK(panel.screenScissor.width == kW && panel.screenScissor.height == kH);
+    CHECK(hijo.screenScissor == mascara);
+    CHECK(data.batches.size() == 2);
+    if (data.batches.size() == 2)
+    {
+        CHECK(data.batches[0].scissor == panel.screenScissor);
+        CHECK(data.batches[1].scissor == mascara);
+    }
+    scissorSano(data);
+
+    // Con maskSelf a true (el defecto) los dos van con la máscara y vuelve a
+    // haber un solo lote.
+    panel.maskSelf = true;
+    UiDrawData recortado;
+    canvas.buildDrawData(kW, kH, recortado);
+
+    CHECK(panel.screenScissor == mascara);
+    CHECK(hijo.screenScissor  == mascara);
+    CHECK(recortado.batches.size() == 1);
+    scissorSano(recortado);
+}
+
+// Máscara dentro de máscara = INTERSECCIÓN. Una hija más grande que la madre no
+// la agranda: con reemplazo, la hija pintaría fuera de su padre.
+static void test_mascara_anidada_es_interseccion()
+{
+    UiCanvas canvas;
+
+    UiElement& madre = canvas.root().add("madre");
+    madre.position     = glm::vec2(120.0f, 70.0f);
+    madre.size         = glm::vec2(240.0f, 150.0f);   // [120,360) x [70,220)
+    madre.clipChildren = true;
+    madre.drawable     = false;
+
+    // Más grande que la madre por los cuatro lados: la intersección tiene que
+    // seguir siendo la de la madre, ni un píxel más.
+    UiElement& grande = madre.add("grande");
+    grande.position     = glm::vec2(-50.0f, -20.0f);
+    grande.size         = glm::vec2(400.0f, 300.0f);
+    grande.clipChildren = true;
+    grande.drawable     = false;
+
+    UiElement& nietoGrande = grande.add("nietoGrande");
+    nietoGrande.size = glm::vec2(500.0f, 400.0f);
+
+    // Y una máscara más pequeña dentro: manda ella.
+    UiElement& pequena = madre.add("pequena");
+    pequena.position     = glm::vec2(20.0f, 10.0f);   // [140,230) x [80,140)
+    pequena.size         = glm::vec2(90.0f, 60.0f);
+    pequena.clipChildren = true;
+    pequena.drawable     = false;
+    pequena.maskInsetLeft = 6.0f;                     // y encima con insets
+    pequena.maskInsetTop  = 3.0f;
+
+    UiElement& nietoPequeno = pequena.add("nietoPequeno");
+    nietoPequeno.size = glm::vec2(300.0f, 200.0f);
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    const UiScissor deLaMadre{120, 70, 240, 150};
+    CHECK(madre.screenScissor  == deLaMadre);
+    CHECK(grande.screenScissor == deLaMadre);
+    CHECK(nietoGrande.screenScissor == deLaMadre);
+
+    // 140+6 = 146 ; 80+3 = 83 ; 90-6 = 84 ; 60-3 = 57.
+    const UiScissor deLaPequena{146, 83, 84, 57};
+    CHECK(pequena.screenScissor      == deLaPequena);
+    CHECK(nietoPequeno.screenScissor == deLaPequena);
+    scissorSano(data);
+}
+
+// Insets que se cruzan: máscara vacía. Ni un vértice de los hijos, y NUNCA un
+// scissor con width o height negativos (en Vulkan eso es un crash, no un draw
+// vacío).
+static void test_mascara_vacia_no_emite_ni_revienta()
+{
+    UiCanvas canvas;
+
+    UiElement& panel = canvas.root().add("panel");
+    panel.position     = glm::vec2(150.0f, 80.0f);
+    panel.size         = glm::vec2(240.0f, 150.0f);
+    panel.clipChildren = true;
+    panel.maskInsetLeft  = 140.0f;                    // 140+130 > 240
+    panel.maskInsetRight = 130.0f;
+    panel.maskInsetTop   = 12.0f;
+    panel.maskInsetBottom = 9.0f;
+    panel.maskSelf       = false;                     // el marco sí se ve
+
+    UiElement& hijo = panel.add("hijo");
+    hijo.size = glm::vec2(200.0f, 120.0f);
+    UiElement& nieto = hijo.add("nieto");
+    nieto.size = glm::vec2(60.0f, 40.0f);
+
+    UiDrawData data;
+    canvas.buildDrawData(kW, kH, data);
+
+    // Solo el panel: los descendientes no emiten ni un vértice.
+    CHECK(data.vertices.size() == 4);
+    CHECK(data.indices.size() == 6);
+    CHECK(data.batches.size() == 1);
+    scissorSano(data);
+
+    // El elemento sigue vivo; los recortados quedan sin rect resuelto.
+    CHECK(panel.rectValid);
+    CHECK(!hijo.rectValid);
+    CHECK(!nieto.rectValid);
+
+    // Con maskSelf a true no se ve ni el panel, y aun así nada explota.
+    panel.maskSelf = true;
+    UiDrawData nada;
+    canvas.buildDrawData(kW, kH, nada);
+    CHECK(nada.vertices.empty());
+    CHECK(nada.batches.empty());
+    CHECK(!panel.rectValid);
+    scissorSano(nada);
+}
+
+// Dos hijos bajo la MISMA máscara y el mismo atlas = UN lote; y maskEnabled a
+// false devuelve exactamente los lotes de no tener máscara.
+static void test_mascara_lotes_y_mask_enabled()
+{
+    UiCanvas canvas;
+
+    UiElement& panel = canvas.root().add("panel");
+    panel.position     = glm::vec2(60.0f, 35.0f);
+    panel.size         = glm::vec2(300.0f, 180.0f);
+    panel.drawable     = false;
+    panel.clipChildren = true;
+    panel.maskInsetLeft   = 8.0f;
+    panel.maskInsetRight  = 3.0f;
+    panel.maskInsetTop    = 14.0f;
+    panel.maskInsetBottom = 6.0f;
+
+    UiElement& a = panel.add("a");
+    a.position = glm::vec2(10.0f, 20.0f);
+    a.size     = glm::vec2(70.0f, 45.0f);
+    UiElement& b = panel.add("b");
+    b.position = glm::vec2(-40.0f, 130.0f);           // se sale por dos lados
+    b.size     = glm::vec2(260.0f, 90.0f);
+
+    UiDrawData conMascara;
+    canvas.buildDrawData(kW, kH, conMascara);
+
+    CHECK(conMascara.batches.size() == 1);
+    CHECK(conMascara.vertices.size() == 8);
+    CHECK(a.screenScissor == b.screenScissor);
+    scissorSano(conMascara);
+
+    // Apagada: los mismos lotes que un árbol equivalente sin clipChildren.
+    panel.maskEnabled = false;
+    UiDrawData apagada;
+    canvas.buildDrawData(kW, kH, apagada);
+
+    UiCanvas limpio;
+    UiElement& panel2 = limpio.root().add("panel");
+    panel2.position = glm::vec2(60.0f, 35.0f);
+    panel2.size     = glm::vec2(300.0f, 180.0f);
+    panel2.drawable = false;
+    UiElement& a2 = panel2.add("a");
+    a2.position = glm::vec2(10.0f, 20.0f);
+    a2.size     = glm::vec2(70.0f, 45.0f);
+    UiElement& b2 = panel2.add("b");
+    b2.position = glm::vec2(-40.0f, 130.0f);
+    b2.size     = glm::vec2(260.0f, 90.0f);
+
+    UiDrawData sinMascara;
+    limpio.buildDrawData(kW, kH, sinMascara);
+
+    CHECK(apagada.batches.size() == sinMascara.batches.size());
+    CHECK(apagada.vertices.size() == sinMascara.vertices.size());
+    if (!apagada.batches.empty() && !sinMascara.batches.empty())
+        CHECK(apagada.batches[0].scissor == sinMascara.batches[0].scissor);
+    CHECK(!apagada.vertices.empty());
+    CHECK(std::memcmp(apagada.vertices.data(), sinMascara.vertices.data(),
+                      apagada.vertices.size() * sizeof(apagada.vertices[0])) == 0);
+}
+
+// La máscara recorta el hit test igual que el dibujo, sin código propio: el
+// input reutiliza el MISMO screenScissor con el que se dibujó.
+static void test_mascara_recorta_el_hit_test()
+{
+    UiCanvas canvas;
+
+    UiElement& panel = canvas.root().add("panel");
+    panel.position     = glm::vec2(300.0f, 100.0f);   // [300,500) x [100,220)
+    panel.size         = glm::vec2(200.0f, 120.0f);
+    panel.clipChildren = true;
+    panel.maskInsetLeft   = 40.0f;                    // máscara [340,490) x [120,190)
+    panel.maskInsetRight  = 10.0f;
+    panel.maskInsetTop    = 20.0f;
+    panel.maskInsetBottom = 30.0f;
+
+    UiElement& hijo = panel.add("hijo");
+    hijo.size = glm::vec2(200.0f, 120.0f);            // el rect entero del panel
+
+    colocar(canvas);
+
+    // Dentro de la máscara: llega al hijo.
+    CHECK(canvas.hitTest(glm::vec2(400.0f, 150.0f)) == &hijo);
+    // Dentro del RECT del hijo pero fuera de la máscara: nadie, por los cuatro
+    // lados.
+    CHECK(canvas.hitTest(glm::vec2(310.0f, 150.0f)) == nullptr);
+    CHECK(canvas.hitTest(glm::vec2(495.0f, 150.0f)) == nullptr);
+    CHECK(canvas.hitTest(glm::vec2(400.0f, 110.0f)) == nullptr);
+    CHECK(canvas.hitTest(glm::vec2(400.0f, 210.0f)) == nullptr);
+
+    // Con la máscara apagada, ese mismo punto sí lo alcanza.
+    panel.maskEnabled = false;
+    colocar(canvas);
+    CHECK(canvas.hitTest(glm::vec2(310.0f, 150.0f)) == &hijo);
+}
+
+// Sin clipChildren, los campos nuevos no hacen NADA: mismos bytes de vértices e
+// índices que un árbol montado sin tocarlos.
+static void test_mascara_neutral_sin_clip_children()
+{
+    UiCanvas conCampos;
+    UiElement& p = conCampos.root().add("p");
+    p.position = glm::vec2(70.0f, 90.0f);
+    p.size     = glm::vec2(210.0f, 130.0f);
+    p.maskInsetLeft   = 19.0f;                        // sin clipChildren: ruido
+    p.maskInsetRight  = 27.0f;
+    p.maskInsetTop    = 33.0f;
+    p.maskInsetBottom = 41.0f;
+    p.maskSelf    = false;
+    p.maskEnabled = false;
+    UiElement& h = p.add("h");
+    h.position = glm::vec2(-15.0f, 25.0f);
+    h.size     = glm::vec2(180.0f, 60.0f);
+    h.maskInsetTop = 12.0f;
+    h.maskSelf     = false;
+
+    UiCanvas limpio;
+    UiElement& p2 = limpio.root().add("p");
+    p2.position = glm::vec2(70.0f, 90.0f);
+    p2.size     = glm::vec2(210.0f, 130.0f);
+    UiElement& h2 = p2.add("h");
+    h2.position = glm::vec2(-15.0f, 25.0f);
+    h2.size     = glm::vec2(180.0f, 60.0f);
+
+    UiDrawData conRuido, sinRuido;
+    conCampos.buildDrawData(kW, kH, conRuido);
+    limpio.buildDrawData(kW, kH, sinRuido);
+
+    CHECK(conRuido.vertices.size() == sinRuido.vertices.size());
+    CHECK(conRuido.indices.size()  == sinRuido.indices.size());
+    CHECK(conRuido.batches.size()  == sinRuido.batches.size());
+    CHECK(!conRuido.vertices.empty());
+    CHECK(std::memcmp(conRuido.vertices.data(), sinRuido.vertices.data(),
+                      conRuido.vertices.size() * sizeof(conRuido.vertices[0])) == 0);
+    CHECK(std::memcmp(conRuido.indices.data(), sinRuido.indices.data(),
+                      conRuido.indices.size() * sizeof(conRuido.indices[0])) == 0);
+    if (!conRuido.batches.empty() && !sinRuido.batches.empty())
+        CHECK(conRuido.batches[0].scissor == sinRuido.batches[0].scissor);
+}
+
 int main()
 {
     test_canvas_vacio_no_emite_nada();
@@ -3162,6 +3505,14 @@ int main()
     test_boton_sprite_swap_no_parte_el_lote();
     test_boton_animation_interpola_y_no_pasa_de_largo();
     test_boton_no_interactable_no_emite_click();
+
+    test_mascara_insets_cada_uno_en_su_lado();
+    test_mascara_self_deja_fuera_al_propio_elemento();
+    test_mascara_anidada_es_interseccion();
+    test_mascara_vacia_no_emite_ni_revienta();
+    test_mascara_lotes_y_mask_enabled();
+    test_mascara_recorta_el_hit_test();
+    test_mascara_neutral_sin_clip_children();
     test_neutralidad_de_los_botones();
     test_neutralidad_de_los_eventos();
 

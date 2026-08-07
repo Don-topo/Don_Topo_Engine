@@ -1160,19 +1160,43 @@ namespace DonTopo
             // padre en vez de colapsar todos contra su esquina.
             const glm::vec2 childArea = (worldSize.x > 0.0f && worldSize.y > 0.0f) ? worldSize : parentSize;
 
-            if (node.clipChildren)
+            // La máscara: el rect del elemento metido hacia dentro por sus
+            // insets, INTERSECADO con lo que venía del padre (nunca un
+            // reemplazo, así que una máscara anidada solo puede recortar más).
+            // Con maskSelf el propio elemento entra en ella; sin él solo sus
+            // descendientes.
+            UiScissor selfScissor  = scissor;
+            UiScissor childScissor = scissor;
+
+            if (node.clipChildren && node.maskEnabled)
             {
-                scissor = intersectScissor(scissor, scissorFromRect(worldPos, worldSize));
-                // Intersección vacía: ni este nodo ni ninguno de sus hijos puede
-                // verse, así que no se emite ni un draw con width/height 0.
-                if (scissor.empty()) { invalidateRects(node); return; }
+                const glm::vec2 maskPos {worldPos.x + node.maskInsetLeft,
+                                         worldPos.y + node.maskInsetTop};
+                // Insets que se cruzan dejan tamaño <= 0 y scissorFromRect
+                // devuelve vacío: JAMÁS un width/height negativo, que en un
+                // VkRect2D es un crash.
+                const glm::vec2 maskSize{worldSize.x - node.maskInsetLeft - node.maskInsetRight,
+                                         worldSize.y - node.maskInsetTop  - node.maskInsetBottom};
+
+                childScissor = intersectScissor(scissor, scissorFromRect(maskPos, maskSize));
+
+                if (node.maskSelf)
+                {
+                    selfScissor = childScissor;
+                    // Intersección vacía: ni este nodo ni ninguno de sus hijos
+                    // puede verse, así que no se emite ni un draw con
+                    // width/height 0.
+                    if (selfScissor.empty()) { invalidateRects(node); return; }
+                }
             }
 
             // El rect ya está resuelto: se GUARDA para que el input lo reutilice
             // sin recorrer el árbol otra vez. No altera ni un vértice ni un lote.
+            // Es el MISMO scissor con el que se dibuja el nodo, que es lo que
+            // hace que el hit test respete la máscara sin código propio.
             node.screenPos     = worldPos;
             node.screenSize    = worldSize;
-            node.screenScissor = scissor;
+            node.screenScissor = selfScissor;
             node.rectValid     = true;
 
             // Un Text con fuente dibuja sus glyphs EN VEZ de su propio quad: si
@@ -1183,9 +1207,19 @@ namespace DonTopo
             const bool  drawsText = text && text->font && text->font->hasGlyphs() && !text->text.empty();
 
             if (drawsText)
-                emitText(*text, worldPos, worldSize, worldScale, scissor, opacity, out);
+                emitText(*text, worldPos, worldSize, worldScale, selfScissor, opacity, out);
             else if (node.drawable && worldSize.x > 0.0f && worldSize.y > 0.0f)
-                emitQuad(node, worldPos, worldSize, scissor, opacity, out);
+                emitQuad(node, worldPos, worldSize, selfScissor, opacity, out);
+
+            // Máscara vacía con maskSelf a false: el elemento ya se ha dibujado
+            // entero, pero por su máscara no pasa ni un vértice de sus hijos.
+            if (childScissor.empty())
+            {
+                for (const auto& child : node.children()) invalidateRects(*child);
+                return;
+            }
+
+            scissor = childScissor;
 
             // El índice del primer hijo es el siguiente en pre-orden, y cada
             // hermano está a un subárbol entero del anterior.
