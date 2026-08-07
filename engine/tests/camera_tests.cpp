@@ -13,6 +13,8 @@
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Editor/Command.h"
+#include "DonTopo/Editor/PropertiesPanel.h"
+#include "DonTopo/UI/CanvasComponent.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <vector>
@@ -557,6 +559,169 @@ static void test_camera_command_survives_missing_target()
     CHECK(scene.findCamera() == nullptr);
 }
 
+// ── Canvas ──────────────────────────────────────────────────────────────────
+// Los 10 campos con valores NO neutros y DISTINTOS entre sí: un default no
+// prueba que nadie los haya leído ni escrito.
+static void fillCanvas(CanvasComponent& c)
+{
+    c.scaleMode           = UiScaleMode::ConstantPhysicalSize;
+    c.scaleFactor         = 2.75f;
+    c.referenceResolution = glm::vec2(1280.5f, 720.25f);
+    c.screenMatch         = UiScreenMatch::Shrink;
+    c.matchWidthOrHeight  = 0.375f;
+    c.screenDpi           = 141.0f;
+    c.fallbackDpi         = 72.0f;
+    c.referenceDpi        = 110.0f;
+    c.safeArea            = { 11.0f, 22.0f, 33.0f, 44.0f };
+    c.aspectRatio         = 1.6f;
+}
+
+static void checkCanvasMatchesFilled(const CanvasComponent& c)
+{
+    CHECK(c.scaleMode == UiScaleMode::ConstantPhysicalSize);
+    CHECK(nearlyEqual(c.scaleFactor, 2.75f));
+    CHECK(nearlyEqual(c.referenceResolution.x, 1280.5f));
+    CHECK(nearlyEqual(c.referenceResolution.y, 720.25f));
+    CHECK(c.screenMatch == UiScreenMatch::Shrink);
+    CHECK(nearlyEqual(c.matchWidthOrHeight, 0.375f));
+    CHECK(nearlyEqual(c.screenDpi, 141.0f));
+    CHECK(nearlyEqual(c.fallbackDpi, 72.0f));
+    CHECK(nearlyEqual(c.referenceDpi, 110.0f));
+    CHECK(nearlyEqual(c.safeArea.left, 11.0f));
+    CHECK(nearlyEqual(c.safeArea.top, 22.0f));
+    CHECK(nearlyEqual(c.safeArea.right, 33.0f));
+    CHECK(nearlyEqual(c.safeArea.bottom, 44.0f));
+    CHECK(nearlyEqual(c.aspectRatio, 1.6f));
+}
+
+static void test_canvas_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("UI");
+    auto canvas = std::make_shared<CanvasComponent>();
+    fillCanvas(*canvas);
+    go->setCanvas(canvas);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findCanvas();
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "UI");
+    checkCanvasMatchesFilled(*found->getCanvas());
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Una escena guardada antes del componente carga igual: sin Canvas y sin avisos.
+static void test_scene_without_canvas_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    scene.addGameObject("Pelado");
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    CHECK(loaded.findCanvas() == nullptr);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Neutralidad: sin ningún Canvas el JSON no gana ni un byte, y añadir y quitar
+// el componente devuelve el dump EXACTO de partida.
+static void test_scene_without_canvas_serializes_identically()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    const std::string antes = scene.toJson().dump();
+    CHECK(antes.find("canvas") == std::string::npos);
+
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    CHECK(scene.toJson().dump() != antes);
+    go->setCanvas(nullptr);
+    CHECK(scene.toJson().dump() == antes);
+}
+
+// El gate de los componentes de UI: un GameObject solo los ofrece con Canvas.
+static void test_ui_components_need_canvas()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Normal");
+    CHECK(!PropertiesPanel::uiComponentsAvailable(go));
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    CHECK(PropertiesPanel::uiComponentsAvailable(go));
+    go->setCanvas(nullptr);
+    CHECK(!PropertiesPanel::uiComponentsAvailable(go));
+    CHECK(!PropertiesPanel::uiComponentsAvailable(nullptr));
+}
+
+// Add reversible, y el redo NO devuelve los campos a los defaults.
+static void test_canvas_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("UI");
+    CanvasComponent st;
+    fillCanvas(st);
+    CanvasComponentCommand cmd(scene, "Add Canvas", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasCanvas());
+    checkCanvasMatchesFilled(*go->getCanvas());
+    cmd.undo();
+    CHECK(!go->hasCanvas());
+    CHECK(scene.findCanvas() == nullptr);
+    cmd.execute();
+    CHECK(go->hasCanvas());
+    checkCanvasMatchesFilled(*go->getCanvas());
+}
+
+// Remove reversible: el undo devuelve el componente CON sus valores.
+static void test_canvas_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("UI");
+    auto canvas = std::make_shared<CanvasComponent>();
+    fillCanvas(*canvas);
+    go->setCanvas(canvas);
+
+    CanvasComponentCommand cmd(scene, "Remove Canvas", go->id, /*add=*/false, *canvas);
+    cmd.execute();
+    CHECK(!go->hasCanvas());
+    cmd.undo();
+    CHECK(go->hasCanvas());
+    checkCanvasMatchesFilled(*go->getCanvas());
+}
+
+// Editar un campo del Canvas también entra en el stack: el mismo
+// PropertyCommand<T> que arma la sección (resuelto por id, no por puntero) va y
+// vuelve, y no revive el componente si ya no está.
+static void test_canvas_property_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("UI");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    const uint64_t id = go->id;
+    Scene* sc = &scene;
+
+    auto applyAspect = [sc, id](const float& v) {
+        if (GameObject* g = sc->findById(id))
+            if (g->hasCanvas()) g->getCanvas()->aspectRatio = v;
+    };
+    PropertyCommand<float> cmd("Aspect Ratio", 0.0f, 1.6f, applyAspect);
+
+    cmd.execute();
+    CHECK(nearlyEqual(go->getCanvas()->aspectRatio, 1.6f));
+    cmd.undo();
+    CHECK(nearlyEqual(go->getCanvas()->aspectRatio, 0.0f));
+    cmd.execute();
+    CHECK(nearlyEqual(go->getCanvas()->aspectRatio, 1.6f));
+
+    // Sin componente el applier no hace nada (ni crashea ni lo resucita).
+    go->setCanvas(nullptr);
+    cmd.undo();
+    CHECK(!go->hasCanvas());
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -596,6 +761,14 @@ int main()
     test_camera_command_add_undo_redo();
     test_camera_command_remove();
     test_camera_command_survives_missing_target();
+
+    test_canvas_round_trip(pm, am);
+    test_scene_without_canvas_block_still_loads(pm, am);
+    test_scene_without_canvas_serializes_identically();
+    test_ui_components_need_canvas();
+    test_canvas_command_add_undo_redo();
+    test_canvas_command_remove();
+    test_canvas_property_command_undo_redo();
 
     am.shutdown();
     pm.shutdown();

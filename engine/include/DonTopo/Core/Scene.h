@@ -57,6 +57,14 @@ namespace DonTopo
             GameObject* findAudioListener();
             const GameObject* findAudioListener() const;
 
+            // Canvas de UI que se aplica al canvas vivo del Renderer. Aquí no
+            // hay invariante que imponer (caben varios en la escena), pero el
+            // UiCanvas del Renderer es uno solo: gana el primero en pre-orden.
+            // Lo consultan el bucle del editor y el del runtime exportado, cada
+            // frame, y el gizmo del área útil. nullptr si no hay ninguno.
+            GameObject* findCanvas();
+            const GameObject* findCanvas() const;
+
             // Avisos de la última operación que tuvo que corregir la escena
             // cargada (campos corruptos, varias cámaras, clips que ya no casan).
             // Core no conoce el Log Console: EditorUI los vuelca tras cargar. Se

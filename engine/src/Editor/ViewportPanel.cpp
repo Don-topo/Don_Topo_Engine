@@ -397,6 +397,35 @@ void ViewportPanel::drawLightGizmos(EditorContext& ctx)
     });
 }
 
+void ViewportPanel::drawCanvasGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                     const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasCanvas() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    // Lo que dejó el último buildDrawData del canvas vivo: origen en píxeles
+    // del render y tamaño del área útil = referencia * escala. Aquí no se
+    // vuelve a resolver nada.
+    const UiCanvas& canvas = ctx.renderer->uiCanvas();
+    const glm::vec2 origin = canvas.uiOrigin();
+    const glm::vec2 size   = canvas.referenceSize() * canvas.uiScale();
+    if (size.x <= 0.0f || size.y <= 0.0f)
+        return;
+
+    // El render va 1:1 con el panel (el propio panel dicta su tamaño), pero si
+    // alguna vez no coincidiera, el factor lo corrige en vez de mentir.
+    const glm::vec2 renderSize{ (float)ctx.renderer->renderWidth(),
+                                (float)ctx.renderer->renderHeight() };
+    const glm::vec2 k = (renderSize.x > 0.0f && renderSize.y > 0.0f)
+                        ? imageSize / renderSize : glm::vec2(1.0f);
+
+    const ImVec2 p0{ imagePos.x + origin.x * k.x, imagePos.y + origin.y * k.y };
+    const ImVec2 p1{ p0.x + size.x * k.x, p0.y + size.y * k.y };
+    ImGui::GetWindowDrawList()->AddRect(p0, p1, IM_COL32(80, 200, 255, 220), 0.0f, 0, 2.0f);
+}
+
 GameObject* ViewportPanel::pickObject(EditorContext& ctx, const glm::mat4& cameraView,
                                       const glm::vec2& mousePx, const glm::vec2& imageSize) const
 {
@@ -526,6 +555,9 @@ void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, co
     m_contentWidth  = (uint32_t)(vpSize.x > 0.0f ? vpSize.x : 0.0f);
     m_contentHeight = (uint32_t)(vpSize.y > 0.0f ? vpSize.y : 0.0f);
     ImGui::Image((ImTextureID)(intptr_t)viewportTexture, vpSize);
+    // Área útil del Canvas seleccionado, justo sobre la imagen: es 2D, así que
+    // va con el draw list de ImGui y no con Gizmos (que dibuja en el mundo).
+    drawCanvasGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     // Hover de la IMAGEN, no de la ventana: con esto un popup o cualquier otra
     // ventana por encima ya no cuenta como clic en la escena.
     const bool imageHovered = ImGui::IsItemHovered();

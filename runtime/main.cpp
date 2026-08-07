@@ -589,6 +589,12 @@ int main(int argc, char** argv)
             // nada, el flush es un no-op barato.
             renderer.tickDeferredDeletes();
             renderer.flushPendingUploads();
+
+            // Canvas de UI: misma regla que en el editor — la resolución sale
+            // del componente de la escena exportada, por frame.
+            if (DonTopo::GameObject* canvasGo = scene.findCanvas())
+                canvasGo->getCanvas()->applyTo(renderer.uiCanvas());
+
             renderer.drawFrame(window);
             window.pollEvents();
         }

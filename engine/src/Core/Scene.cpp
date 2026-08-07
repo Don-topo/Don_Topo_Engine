@@ -40,6 +40,9 @@ namespace
     using DonTopo::LightComponent;
     using DonTopo::AudioListenerComponent;
     using DonTopo::LightType;
+    using DonTopo::CanvasComponent;
+    using DonTopo::UiScaleMode;
+    using DonTopo::UiScreenMatch;
 
     // Forward declarations: animatorFromJson (más abajo) necesita estos
     // lectores tolerantes a JSON corrupto (definidos junto a jsonToMat4/
@@ -88,6 +91,40 @@ namespace
         if (s == "directional") return LightType::Directional;
         if (s == "area")        return LightType::Area;
         return LightType::Point;    // valor desconocido -> point
+    }
+
+    const char* uiScaleModeToStr(UiScaleMode m)
+    {
+        switch (m)
+        {
+            case UiScaleMode::ScaleWithScreenSize:  return "scaleWithScreenSize";
+            case UiScaleMode::ConstantPhysicalSize: return "constantPhysicalSize";
+            default:                                return "constantPixelSize";
+        }
+    }
+
+    UiScaleMode uiScaleModeFromStr(const std::string& s)
+    {
+        if (s == "scaleWithScreenSize")  return UiScaleMode::ScaleWithScreenSize;
+        if (s == "constantPhysicalSize") return UiScaleMode::ConstantPhysicalSize;
+        return UiScaleMode::ConstantPixelSize;  // valor desconocido -> el default
+    }
+
+    const char* uiScreenMatchToStr(UiScreenMatch m)
+    {
+        switch (m)
+        {
+            case UiScreenMatch::Expand: return "expand";
+            case UiScreenMatch::Shrink: return "shrink";
+            default:                    return "matchWidthOrHeight";
+        }
+    }
+
+    UiScreenMatch uiScreenMatchFromStr(const std::string& s)
+    {
+        if (s == "expand") return UiScreenMatch::Expand;
+        if (s == "shrink") return UiScreenMatch::Shrink;
+        return UiScreenMatch::MatchWidthOrHeight;   // valor desconocido -> el default
     }
 
     // Los enums van como string y no como int: legible en un .scene editado a
@@ -400,6 +437,24 @@ namespace
                            {"outerAngle", l->getOuterAngle()},
                            {"areaWidth", l->getAreaWidth()},
                            {"areaHeight", l->getAreaHeight()} };
+        }
+        if (node.hasCanvas())
+        {
+            const auto& c = node.getCanvas();
+            j["canvas"] = { {"scaleMode", uiScaleModeToStr(c->scaleMode)},
+                            {"scaleFactor", c->scaleFactor},
+                            {"referenceResolution", { {"x", c->referenceResolution.x},
+                                                      {"y", c->referenceResolution.y} }},
+                            {"screenMatch", uiScreenMatchToStr(c->screenMatch)},
+                            {"matchWidthOrHeight", c->matchWidthOrHeight},
+                            {"screenDpi", c->screenDpi},
+                            {"fallbackDpi", c->fallbackDpi},
+                            {"referenceDpi", c->referenceDpi},
+                            {"safeArea", { {"left", c->safeArea.left},
+                                           {"top", c->safeArea.top},
+                                           {"right", c->safeArea.right},
+                                           {"bottom", c->safeArea.bottom} }},
+                            {"aspectRatio", c->aspectRatio} };
         }
         if (node.hasAnimator())
             j["animator"] = animatorToJson(*node.getAnimator());
@@ -1035,6 +1090,35 @@ namespace
             light->setAreaHeight(readFloat(l, "areaHeight", 100.0f, warnings, ctx));
             node->setLight(light);
         }
+        // Bloque aditivo: una escena guardada antes del componente Canvas no
+        // trae la clave y carga igual, sin componente y sin avisos.
+        if (j.contains("canvas"))
+        {
+            const auto& c = j["canvas"];
+            const std::string ctx = "canvas de '" + node->name + "'";
+            auto canvas = std::make_shared<CanvasComponent>();
+            canvas->scaleMode = uiScaleModeFromStr(
+                c.value("scaleMode", std::string("constantPixelSize")));
+            canvas->scaleFactor = readFloat(c, "scaleFactor", 1.0f, warnings, ctx);
+            const nlohmann::json ref = c.value("referenceResolution", nlohmann::json::object());
+            canvas->referenceResolution.x = readFloat(ref, "x", 1920.0f, warnings,
+                                                      ctx + ".referenceResolution");
+            canvas->referenceResolution.y = readFloat(ref, "y", 1080.0f, warnings,
+                                                      ctx + ".referenceResolution");
+            canvas->screenMatch = uiScreenMatchFromStr(
+                c.value("screenMatch", std::string("matchWidthOrHeight")));
+            canvas->matchWidthOrHeight = readFloat(c, "matchWidthOrHeight", 0.5f, warnings, ctx);
+            canvas->screenDpi    = readFloat(c, "screenDpi", 0.0f, warnings, ctx);
+            canvas->fallbackDpi  = readFloat(c, "fallbackDpi", 96.0f, warnings, ctx);
+            canvas->referenceDpi = readFloat(c, "referenceDpi", 96.0f, warnings, ctx);
+            const nlohmann::json safe = c.value("safeArea", nlohmann::json::object());
+            canvas->safeArea.left   = readFloat(safe, "left", 0.0f, warnings, ctx + ".safeArea");
+            canvas->safeArea.top    = readFloat(safe, "top", 0.0f, warnings, ctx + ".safeArea");
+            canvas->safeArea.right  = readFloat(safe, "right", 0.0f, warnings, ctx + ".safeArea");
+            canvas->safeArea.bottom = readFloat(safe, "bottom", 0.0f, warnings, ctx + ".safeArea");
+            canvas->aspectRatio = readFloat(c, "aspectRatio", 0.0f, warnings, ctx);
+            node->setCanvas(std::move(canvas));
+        }
         // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
         // y cargan igual (version sigue en 1).
         if (j.contains("animator"))
@@ -1249,6 +1333,20 @@ namespace DonTopo
     const GameObject* Scene::findAudioListener() const
     {
         return const_cast<Scene*>(this)->findAudioListener();
+    }
+
+    GameObject* Scene::findCanvas()
+    {
+        GameObject* found = nullptr;
+        m_root.traverse([&](GameObject* n) {
+            if (!found && n->hasCanvas()) found = n;
+        });
+        return found;
+    }
+
+    const GameObject* Scene::findCanvas() const
+    {
+        return const_cast<Scene*>(this)->findCanvas();
     }
 
     void Scene::collapseWarnings()

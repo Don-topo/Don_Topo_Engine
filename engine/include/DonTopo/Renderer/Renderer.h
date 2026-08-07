@@ -116,6 +116,12 @@ namespace DonTopo {
                 const VkExtent2D e = effectiveViewport();
                 return e.height > 0 ? (float)e.width / (float)e.height : 1.0f;
             }
+            // Tamano en pixeles del render target, EL MISMO que se le pasa a
+            // UiCanvas::buildDrawData. Publico por el gizmo del area util del
+            // Canvas: los px que deja el canvas estan en este espacio y hay que
+            // pasarlos al de la imagen del panel (que con SSAA no coinciden).
+            uint32_t renderWidth()  const { return m_renderExtent.width; }
+            uint32_t renderHeight() const { return m_renderExtent.height; }
             // Tamano EXACTO del area de imagen del panel Viewport del editor, en
             // pixeles. Lo llama el editor una vez por frame. Sin esto el render
             // iria al tamano de la VENTANA y el panel lo reescalaria al dibujarlo:

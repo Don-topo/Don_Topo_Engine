@@ -361,6 +361,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
             drawLightSection(ctx);
             drawAudioClipSection(ctx);
             drawAudioListenerSection(ctx);
+            drawCanvasSection(ctx);
             drawScriptsSection(ctx);
             drawAddComponentButton(ctx);
         }
@@ -575,6 +576,191 @@ void PropertiesPanel::drawAudioListenerSection(EditorContext& ctx)
     {
         ctx.selected->setAudioListener(nullptr);
         ctx.pushLog("Componente Audio Listener quitado de '" + ctx.selected->name + "'");
+    }
+}
+
+void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
+{
+    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    if (!ctx.selected->hasCanvas()) return;
+
+    ImGui::Separator();
+    bool sectionOpen = ImGui::TreeNodeEx("Canvas",
+                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+    const bool removeClicked = ImGui::SmallButton("x##canvas");
+
+    Scene*            scene = ctx.scene;
+    const uint64_t    id    = ctx.selected->id;
+    const std::string owner = ctx.selected->name;
+
+    if (sectionOpen)
+    {
+        CanvasComponent* c = ctx.selected->getCanvas().get();
+        ImGui::TextWrapped("Raíz de la UI 2D. El área útil sale del render, menos los insets "
+                           "del safe area y recortada al aspect ratio; de ahí sale una escala "
+                           "única y uniforme para todo el árbol.");
+
+        // Los campos se alcanzan por un accessor sin captura (function pointer)
+        // y no por puntero a miembro: así los cuatro insets del safe area, que
+        // viven un nivel más adentro, usan el MISMO helper que el resto.
+        using FloatRef = float& (*)(CanvasComponent&);
+        using Vec2Ref  = glm::vec2& (*)(CanvasComponent&);
+        using EnumSet  = void (*)(CanvasComponent&, int);
+
+        // Los combos se commitean en el acto (un click = un cambio), igual que
+        // el Type de la luz.
+        auto comboEnum = [&](const char* label, int before, const char* const* items,
+                             int count, EnumSet apply)
+        {
+            int idx = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::Combo(label, &idx, items, count) && idx != before)
+            {
+                apply(*c, idx);
+                const std::string lbl = std::string(label) + " del canvas de '" + owner + "'";
+                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<int>>(
+                        lbl, before, idx,
+                        [scene, id, apply](const int& v) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasCanvas()) apply(*go->getCanvas(), v);
+                        }));
+            }
+        };
+
+        // Los escalares comparten el baile de siempre: el "before" se lee ANTES
+        // de dibujar, la sesión se abre en IsItemActivated y se commitea en
+        // IsItemDeactivatedAfterEdit, así un arrastre entero es UN paso de undo.
+        auto dragFloat = [&](const char* label, FloatRef acc, float speed,
+                             float lo, float hi, const char* fmt)
+        {
+            const float before = acc(*c);
+            float       v      = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+            if (ImGui::DragFloat(label, &v, speed, lo, hi, fmt))
+                acc(*c) = v;
+            if (ImGui::IsItemActivated())
+            {
+                m_canvasDragBefore  = before;
+                m_canvasDragOwnerId = id;
+                m_canvasDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_canvasDragOwnerId == id &&
+                m_canvasDragField == label)
+            {
+                const float after = acc(*c);
+                m_canvasDragField = nullptr;
+                if (after != m_canvasDragBefore)
+                {
+                    const std::string lbl = std::string(label) + " del canvas de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<float>>(
+                            lbl, m_canvasDragBefore, after,
+                            [scene, id, acc](const float& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasCanvas()) acc(*go->getCanvas()) = val;
+                            }));
+                }
+            }
+        };
+
+        auto dragVec2 = [&](const char* label, Vec2Ref acc, float speed,
+                            float lo, float hi, const char* fmt)
+        {
+            const glm::vec2 before = acc(*c);
+            glm::vec2       v      = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::DragFloat2(label, &v.x, speed, lo, hi, fmt))
+                acc(*c) = v;
+            if (ImGui::IsItemActivated())
+            {
+                m_canvasDragBefore2 = before;
+                m_canvasDragOwnerId = id;
+                m_canvasDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_canvasDragOwnerId == id &&
+                m_canvasDragField == label)
+            {
+                const glm::vec2 after = acc(*c);
+                m_canvasDragField = nullptr;
+                if (after != m_canvasDragBefore2)
+                {
+                    const std::string lbl = std::string(label) + " del canvas de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiada");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
+                            lbl, m_canvasDragBefore2, after,
+                            [scene, id, acc](const glm::vec2& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasCanvas()) acc(*go->getCanvas()) = val;
+                            }));
+                }
+            }
+        };
+
+        static const char* kModes[] = { "Constant Pixel Size", "Scale With Screen Size",
+                                        "Constant Physical Size" };
+        comboEnum("Scale Mode", (int)c->scaleMode, kModes, IM_ARRAYSIZE(kModes),
+                  +[](CanvasComponent& cc, int v) { cc.scaleMode = (UiScaleMode)v; });
+
+        dragFloat("Scale Factor",
+                  +[](CanvasComponent& cc) -> float& { return cc.scaleFactor; },
+                  0.01f, 0.0f, 100.0f, "%.3f");
+        dragVec2("Reference Resolution",
+                 +[](CanvasComponent& cc) -> glm::vec2& { return cc.referenceResolution; },
+                 1.0f, 0.0f, 16384.0f, "%.0f");
+
+        static const char* kMatches[] = { "Match Width Or Height", "Expand", "Shrink" };
+        comboEnum("Screen Match", (int)c->screenMatch, kMatches, IM_ARRAYSIZE(kMatches),
+                  +[](CanvasComponent& cc, int v) { cc.screenMatch = (UiScreenMatch)v; });
+
+        dragFloat("Match Width/Height",
+                  +[](CanvasComponent& cc) -> float& { return cc.matchWidthOrHeight; },
+                  0.01f, 0.0f, 1.0f, "%.2f");
+        dragFloat("Screen DPI",
+                  +[](CanvasComponent& cc) -> float& { return cc.screenDpi; },
+                  1.0f, 0.0f, 2000.0f, "%.1f");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = desconocido: se usa el Fallback DPI");
+        dragFloat("Fallback DPI",
+                  +[](CanvasComponent& cc) -> float& { return cc.fallbackDpi; },
+                  1.0f, 1.0f, 2000.0f, "%.1f");
+        dragFloat("Reference DPI",
+                  +[](CanvasComponent& cc) -> float& { return cc.referenceDpi; },
+                  1.0f, 1.0f, 2000.0f, "%.1f");
+
+        ImGui::Text("Safe Area (px reales)");
+        dragFloat("Left##safe",
+                  +[](CanvasComponent& cc) -> float& { return cc.safeArea.left; },
+                  1.0f, 0.0f, 8192.0f, "%.0f");
+        dragFloat("Top##safe",
+                  +[](CanvasComponent& cc) -> float& { return cc.safeArea.top; },
+                  1.0f, 0.0f, 8192.0f, "%.0f");
+        dragFloat("Right##safe",
+                  +[](CanvasComponent& cc) -> float& { return cc.safeArea.right; },
+                  1.0f, 0.0f, 8192.0f, "%.0f");
+        dragFloat("Bottom##safe",
+                  +[](CanvasComponent& cc) -> float& { return cc.safeArea.bottom; },
+                  1.0f, 0.0f, 8192.0f, "%.0f");
+
+        dragFloat("Aspect Ratio",
+                  +[](CanvasComponent& cc) -> float& { return cc.aspectRatio; },
+                  0.01f, 0.0f, 10.0f, "%.4f");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = apagado. 16/9 = 1.7778");
+
+        ImGui::TreePop();
+    }
+
+    if (removeClicked && ctx.scene && ctx.undo)
+    {
+        auto cmd = std::make_unique<CanvasComponentCommand>(
+            *ctx.scene, "Quitar Canvas de '" + ctx.selected->name + "'", ctx.selected->id,
+            /*add=*/false, *ctx.selected->getCanvas());
+        cmd->execute();
+        ctx.undo->push(std::move(cmd));
+        ctx.pushLog("Componente Canvas quitado de '" + ctx.selected->name + "'");
     }
 }
 
@@ -2166,6 +2352,33 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         if (existingListener && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Ya hay un Audio Listener en la escena ('%s'): quítalo de ahí "
                               "antes de poner otro", existingListener->name.c_str());
+
+        // Canvas: raíz de la UI 2D. Sin invariante de escena (caben varios),
+        // así que el único gate es no añadir dos al mismo objeto. Pasa por el
+        // stack de undo como la cámara: el estado de los 10 campos se conserva
+        // en un Add-undo-redo.
+        const bool alreadyHasCanvas = ctx.selected->hasCanvas();
+        ImGui::BeginDisabled(alreadyHasCanvas);
+        if (ImGui::Selectable("Canvas") && !alreadyHasCanvas && ctx.scene && ctx.undo)
+        {
+            auto cmd = std::make_unique<CanvasComponentCommand>(
+                *ctx.scene, "Añadir Canvas a '" + ctx.selected->name + "'", ctx.selected->id,
+                /*add=*/true, CanvasComponent{});
+            cmd->execute();
+            ctx.undo->push(std::move(cmd));
+            ctx.pushLog("Componente Canvas añadido a '" + ctx.selected->name + "'");
+        }
+        ImGui::EndDisabled();
+
+        // Componentes de UI: solo existen colgando de un Canvas, así que un
+        // GameObject sin Canvas ni los ve. La lista está vacía hasta que se
+        // implementen los widgets; el gate ya es el definitivo.
+        if (uiComponentsAvailable(ctx.selected))
+        {
+            ImGui::Separator();
+            ImGui::TextDisabled("UI");
+            // (aquí van los widgets de UI, uno por Selectable)
+        }
 
         // Cámara: como mucho una por escena, y el gate pregunta a la única
         // fuente de verdad (Scene::findCamera), no a un flag propio. Deshabilitado

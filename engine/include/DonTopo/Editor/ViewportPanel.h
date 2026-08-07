@@ -39,6 +39,12 @@ private:
     // edición y en Play. Vive en el editor a propósito: es lo que garantiza que
     // no salga en el juego exportado, que no compila este panel.
     void drawLightGizmos(EditorContext& ctx);
+    // Rectángulo del ÁREA ÚTIL del Canvas seleccionado, en 2D sobre la imagen
+    // del viewport (la UI es espacio de pantalla, no mundo: no pasa por
+    // Gizmos). El rect SALE del canvas vivo (uiOrigin/uiScale/referenceSize),
+    // no se recalcula aquí: safe area y aspect ratio ya vienen aplicados.
+    void drawCanvasGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                          const glm::vec2& imageSize);
     // Longitud de eje proporcional al bbox local del mesh de node (mitad
     // del eje más largo); si node no tiene mesh (o el mesh no tiene
     // vértices), valor fijo de repliegue.

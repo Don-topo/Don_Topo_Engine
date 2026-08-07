@@ -124,6 +124,25 @@ void CameraComponentCommand::apply(bool add)
     go->setCameraComponent(cam);
 }
 
+CanvasComponentCommand::CanvasComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                                bool add, CanvasComponent state)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(state) {}
+
+void CanvasComponentCommand::execute() { apply(m_add); }
+void CanvasComponentCommand::undo()    { apply(!m_add); }
+
+void CanvasComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setCanvas(nullptr);
+        return;
+    }
+    go->setCanvas(std::make_shared<CanvasComponent>(m_state));
+}
+
 AnimatorComponentCommand::AnimatorComponentCommand(Scene& scene, std::string label, uint64_t id,
                                                     bool add, AnimatorComponent state)
     : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}

@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 #include "DonTopo/Editor/UndoManager.h" // BoxColliderState, SphereColliderState, CapsuleColliderState, PlaneColliderState
 #include "DonTopo/Core/CameraComponent.h"
+#include "DonTopo/Core/GameObject.h" // uiComponentsAvailable necesita el tipo completo
 
 namespace IGFD { class FileDialog; }
 
@@ -38,6 +39,15 @@ public:
     // resincronizan solos vía sus propios cachedFor al perder el collider).
     void invalidateCaches();
 
+    // Un GameObject solo ofrece los componentes de UI si YA tiene Canvas: el
+    // Canvas es la raíz de la que cuelgan. Es la única fuente de verdad del
+    // gate (la usa el popup "Add"), y está aquí y no dentro del ImGui pa que
+    // se pueda probar sin GUI.
+    static bool uiComponentsAvailable(const GameObject* go)
+    {
+        return go && go->hasCanvas();
+    }
+
 private:
     void drawBoxColliderSection(EditorContext& ctx);
     void drawSphereColliderSection(EditorContext& ctx);
@@ -63,6 +73,9 @@ private:
     // escena — el gate de unicidad está en el popup "Add", contra
     // Scene::findAudioListener.
     void drawAudioListenerSection(EditorContext& ctx);
+    // Canvas: raíz de la UI 2D. Sección tras "Add" como los colliders, con los
+    // 10 campos de resolución que resuelve UiCanvas.
+    void drawCanvasSection(EditorContext& ctx);
     void drawAudioClipDialog(EditorContext& ctx);
     void drawScriptsSection(EditorContext& ctx);
     void drawAddComponentButton(EditorContext& ctx);
@@ -108,6 +121,15 @@ private:
     // El "before" del color no cabe en el float de arriba: ColorEdit3 abre un
     // popup y el commit llega frames después de tocarlo.
     glm::vec3   m_lightColorBefore {1.0f};
+
+    // Sesión de arrastre de los campos del Canvas, mismo baile que la luz: el
+    // valor de ANTES se congela en IsItemActivated y se commitea entero en
+    // IsItemDeactivatedAfterEdit, así un arrastre es UN paso de undo y no
+    // cientos. El campo se identifica por su etiqueta (un bool no llega pa 9).
+    uint64_t    m_canvasDragOwnerId  = 0;
+    const char* m_canvasDragField    = nullptr;
+    float       m_canvasDragBefore   = 0.0f;
+    glm::vec2   m_canvasDragBefore2 {0.0f};
 
     // Box Collider – mismo patrón de cache que Transform: persiste entre
     // frames para que los DragFloat acumulen el delta del arrastre, y se

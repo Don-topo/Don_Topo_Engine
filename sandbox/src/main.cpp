@@ -407,6 +407,13 @@ int main()
                 renderer.setLightRadii({});
             }
 
+            // Canvas de UI: la resolución sale del COMPONENTE de la escena, no
+            // de un canvas cableado aquí. Va por frame y no en un evento porque
+            // tocar un campo en Properties tiene que verse en el acto — también
+            // fuera de Play, que es cuando se pinta el gizmo del área útil.
+            if (DonTopo::GameObject* canvasGo = scene.findCanvas())
+                canvasGo->getCanvas()->applyTo(renderer.uiCanvas());
+
             // --- Gizmos: demo de depuración visual (bbox, ray, frustum) ---
             // Los ejes ya no se dibujan fijos aquí: ViewportPanel::drawSelectionGizmo()
             // los muestra automáticamente sobre cualquier GameObject seleccionado.

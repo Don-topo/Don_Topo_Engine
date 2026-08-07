@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/UI/CanvasComponent.h"
 
 namespace DonTopo {
 
@@ -183,6 +184,28 @@ private:
     uint64_t m_id;
     bool m_add;
     CameraState m_state;
+};
+
+// Add/Remove del CanvasComponent, mismo contrato que CameraComponentCommand:
+// resuelve el GameObject por id en cada execute()/undo() (nunca puntero crudo),
+// y m_state es una COPIA del componente entero (10 campos, todo POD) pa que un
+// Add-undo-redo no devuelva la resolución a los defaults.
+class CanvasComponentCommand : public ICommand {
+public:
+    CanvasComponentCommand(Scene& scene, std::string label, uint64_t id,
+                            bool add, CanvasComponent state);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(bool add);
+
+    Scene& m_scene;
+    std::string m_label;
+    uint64_t m_id;
+    bool m_add;
+    CanvasComponent m_state;
 };
 
 // Add/Remove del AnimatorComponent, mismo contrato que CameraComponentCommand:

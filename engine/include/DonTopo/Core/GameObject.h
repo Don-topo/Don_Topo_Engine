@@ -17,6 +17,7 @@
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/ReflectionProbeComponent.h"
 #include "DonTopo/Core/LightComponent.h"
+#include "DonTopo/UI/CanvasComponent.h"
 
 namespace DonTopo
 {
@@ -138,6 +139,15 @@ namespace DonTopo
             const std::shared_ptr<LightComponent>& getLight() const { return m_light; }
             bool hasLight() const { return m_light != nullptr; }
 
+            // Canvas: la raíz de la UI 2D. Sin invariante de unicidad por
+            // escena (como la luz, no como la cámara), pero el canvas VIVO es
+            // uno solo —el del Renderer—, así que quien dibuja aplica el
+            // primero en pre-orden (Scene::findCanvas). La posición no sale del
+            // worldTransform: la UI es espacio de pantalla.
+            void setCanvas(std::shared_ptr<CanvasComponent> c) { m_canvas = std::move(c); }
+            const std::shared_ptr<CanvasComponent>& getCanvas() const { return m_canvas; }
+            bool hasCanvas() const { return m_canvas != nullptr; }
+
             // Scripts Lua — a diferencia del resto de slots, vector: se
             // permiten varios scripts por GameObject (incluso repetidos).
             void addScript(std::unique_ptr<ScriptComponent> script);
@@ -195,6 +205,7 @@ namespace DonTopo
             std::shared_ptr<AnimatorComponent> m_animator;
             std::shared_ptr<ReflectionProbeComponent> m_reflectionProbe;
             std::shared_ptr<LightComponent> m_light;
+            std::shared_ptr<CanvasComponent> m_canvas;
             std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
     };
 }
