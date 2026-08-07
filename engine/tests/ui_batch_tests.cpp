@@ -3932,6 +3932,313 @@ static void test_neutralidad_de_las_animaciones()
                       a.indices.size() * sizeof(a.indices[0])) == 0);
 }
 
+// ── Navegación del foco (mando) ──────────────────────────────────────────────
+// Cuatro vecinos alrededor de uno central, con anchos != altos y sin formar
+// rejilla: los centros quedan desalineados a propósito para que la penalización
+// del eje transversal tenga algo que hacer.
+struct EscenaNav
+{
+    UiCanvas   canvas;
+    UiElement* medio  = nullptr;
+    UiElement* arriba = nullptr;
+    UiElement* abajo  = nullptr;
+    UiElement* izq    = nullptr;
+    UiElement* der    = nullptr;
+};
+
+static void montarNav(EscenaNav& e)
+{
+    auto nodo = [&](const char* nombre, glm::vec2 pos, glm::vec2 size) -> UiElement*
+    {
+        UiElement& n = e.canvas.root().add(nombre);
+        n.position   = pos;
+        n.size       = size;
+        n.focusable  = true;
+        return &n;
+    };
+
+    e.medio  = nodo("medio",  {300.0f, 300.0f}, {120.0f, 40.0f});   // centro (360, 320)
+    e.arriba = nodo("arriba", {300.0f, 150.0f}, {100.0f, 60.0f});   // centro (350, 180)
+    e.abajo  = nodo("abajo",  {320.0f, 420.0f}, { 90.0f, 50.0f});   // centro (365, 445)
+    e.izq    = nodo("izq",    {100.0f, 290.0f}, { 80.0f, 70.0f});   // centro (140, 325)
+    e.der    = nodo("der",    {520.0f, 310.0f}, {110.0f, 30.0f});   // centro (575, 325)
+
+    colocar(e.canvas);
+}
+
+// Next y Previous son el recorrido del Tab: pre-orden y CON vuelta.
+static void test_nav_next_y_previous_dan_la_vuelta()
+{
+    UiCanvas canvas;
+
+    auto nodo = [&](const char* nombre, glm::vec2 pos, glm::vec2 size, bool foco) -> UiElement&
+    {
+        UiElement& n = canvas.root().add(nombre);
+        n.position   = pos;
+        n.size       = size;
+        n.focusable  = foco;
+        return n;
+    };
+
+    UiElement& a     = nodo("a",     { 20.0f,  20.0f}, {120.0f, 40.0f}, true);
+    /*      */        nodo("sinFoco",{170.0f,  25.0f}, { 60.0f, 90.0f}, false);
+    UiElement& b     = nodo("b",     {200.0f,  90.0f}, { 80.0f, 60.0f}, true);
+    UiElement& oculto= nodo("oculto",{330.0f, 120.0f}, { 70.0f, 35.0f}, true);
+    UiElement& apaga = nodo("apagado",{40.0f, 200.0f}, {150.0f, 25.0f}, true);
+    UiElement& c     = nodo("c",     { 60.0f, 300.0f}, {140.0f, 50.0f}, true);
+
+    oculto.visible = false;
+    apaga.enabled  = false;
+
+    colocar(canvas);
+    canvas.setFocus(&a);
+
+    CHECK(canvas.navigate(UiNavDir::Next) == true);
+    CHECK(canvas.focused() == &b);
+    CHECK(canvas.navigate(UiNavDir::Next) == true);
+    CHECK(canvas.focused() == &c);          // se saltó el invisible y el apagado
+    CHECK(canvas.navigate(UiNavDir::Next) == true);
+    CHECK(canvas.focused() == &a);          // y dio la vuelta
+
+    // Previous es exactamente lo mismo en sentido contrario.
+    CHECK(canvas.navigate(UiNavDir::Previous) == true);
+    CHECK(canvas.focused() == &c);
+    CHECK(canvas.navigate(UiNavDir::Previous) == true);
+    CHECK(canvas.focused() == &b);
+    CHECK(canvas.navigate(UiNavDir::Previous) == true);
+    CHECK(canvas.focused() == &a);
+}
+
+// Los cuatro vecinos, cada uno por su lado. Y en Right y Down el candidato
+// alineado gana a otro que está MÁS CERCA pero en diagonal.
+static void test_nav_direccional_elige_al_vecino_de_ese_lado()
+{
+    EscenaNav e;
+    montarNav(e);
+
+    struct Caso { UiNavDir dir; UiElement** esperado; };
+    UiElement* arriba = e.arriba;
+    UiElement* abajo  = e.abajo;
+    UiElement* izq    = e.izq;
+    UiElement* der    = e.der;
+
+    const Caso casos[] = {
+        {UiNavDir::Up,    &arriba},
+        {UiNavDir::Down,  &abajo},
+        {UiNavDir::Left,  &izq},
+        {UiNavDir::Right, &der},
+    };
+
+    for (const Caso& caso : casos)
+    {
+        e.canvas.setFocus(e.medio);
+        CHECK(e.canvas.navigate(caso.dir) == true);
+        CHECK(e.canvas.focused() == *caso.esperado);
+    }
+}
+
+// Alineado a 160 px gana a un diagonal a 106 px: la distancia transversal pesa.
+static void test_nav_alineado_gana_al_diagonal_mas_cercano()
+{
+    UiCanvas canvas;
+
+    auto nodo = [&](const char* nombre, glm::vec2 pos, glm::vec2 size) -> UiElement&
+    {
+        UiElement& n = canvas.root().add(nombre);
+        n.position   = pos;
+        n.size       = size;
+        n.focusable  = true;
+        return n;
+    };
+
+    UiElement& medio    = nodo("medio",    {300.0f, 300.0f}, {120.0f, 40.0f});  // (360, 320)
+    UiElement& diagonal = nodo("diagonal", {390.0f, 210.0f}, { 80.0f, 60.0f});  // (430, 240)
+    UiElement& alineado = nodo("alineado", {460.0f, 290.0f}, {120.0f, 60.0f});  // (520, 320)
+
+    colocar(canvas);
+    canvas.setFocus(&medio);
+
+    CHECK(canvas.navigate(UiNavDir::Right) == true);
+    CHECK(canvas.focused() == &alineado);
+    CHECK(diagonal.focused == false);
+}
+
+// La direccional NO da la vuelta: sin nadie a ese lado el foco se queda.
+static void test_nav_sin_candidato_no_mueve_el_foco()
+{
+    EscenaNav e;
+    montarNav(e);
+
+    e.canvas.setFocus(e.arriba);                 // el de más arriba de todos
+    CHECK(e.canvas.navigate(UiNavDir::Up) == false);
+    CHECK(e.canvas.focused() == e.arriba);
+    CHECK(e.arriba->focused == true);
+}
+
+// Los overrides mandan sobre la geometría, incluso apuntando al contrario.
+static void test_nav_overrides_ganan_a_la_geometria()
+{
+    EscenaNav e;
+    montarNav(e);
+
+    e.medio->navUp   = e.abajo;                  // arriba lleva ABAJO
+    e.medio->navLeft = e.der;                    // izquierda lleva a la DERECHA
+
+    e.canvas.setFocus(e.medio);
+    CHECK(e.canvas.navigate(UiNavDir::Up) == true);
+    CHECK(e.canvas.focused() == e.abajo);
+
+    e.canvas.setFocus(e.medio);
+    CHECK(e.canvas.navigate(UiNavDir::Left) == true);
+    CHECK(e.canvas.focused() == e.der);
+
+    // Y sin override se sigue decidiendo por geometría.
+    e.canvas.setFocus(e.medio);
+    CHECK(e.canvas.navigate(UiNavDir::Down) == true);
+    CHECK(e.canvas.focused() == e.abajo);
+}
+
+// Sin foco previo se entra por el primer focusable del pre-orden, venga la
+// navegación de la dirección que venga.
+static void test_nav_sin_foco_toma_el_primero_en_preorden()
+{
+    UiCanvas canvas;
+
+    UiElement& tapa = canvas.root().add("tapa");   // primero del árbol, NO focusable
+    tapa.position   = {10.0f, 10.0f};
+    tapa.size       = {200.0f, 30.0f};
+
+    UiElement& primero = canvas.root().add("primero");
+    primero.position  = {10.0f, 60.0f};
+    primero.size      = {120.0f, 45.0f};
+    primero.focusable = true;
+
+    UiElement& otro = canvas.root().add("otro");
+    otro.position  = {10.0f, 130.0f};
+    otro.size      = {90.0f, 70.0f};
+    otro.focusable = true;
+
+    colocar(canvas);
+
+    CHECK(canvas.focused() == nullptr);
+    CHECK(canvas.navigate(UiNavDir::Down) == true);
+    CHECK(canvas.focused() == &primero);
+}
+
+// Sin buildDrawData no hay rects: la direccional no encuentra a nadie (igual
+// que el hit test) pero Next, que no mira geometría, sigue funcionando.
+static void test_nav_sin_build_draw_data_solo_falla_la_direccional()
+{
+    UiCanvas canvas;
+
+    UiElement& a = canvas.root().add("a");
+    a.position   = {20.0f, 20.0f};
+    a.size       = {120.0f, 40.0f};
+    a.focusable  = true;
+
+    UiElement& b = canvas.root().add("b");
+    b.position   = {300.0f, 25.0f};
+    b.size       = {80.0f, 60.0f};
+    b.focusable  = true;
+
+    canvas.setFocus(&a);                          // sin colocar(canvas)
+
+    CHECK(canvas.navigate(UiNavDir::Right) == false);
+    CHECK(canvas.focused() == &a);
+
+    CHECK(canvas.navigate(UiNavDir::Next) == true);
+    CHECK(canvas.focused() == &b);
+}
+
+// UNA vez cada uno, y en el que toca.
+static void test_nav_dispara_blur_y_focus_una_sola_vez()
+{
+    EscenaNav e;
+    montarNav(e);
+
+    int blurMedio = 0;
+    int focoMedio = 0;
+    int blurDer   = 0;
+    int focoDer   = 0;
+
+    e.canvas.setFocus(e.medio);                   // antes de cablear: no cuenta
+
+    e.medio->onBlur  = [&](UiEvent&) { ++blurMedio; };
+    e.medio->onFocus = [&](UiEvent&) { ++focoMedio; };
+    e.der->onBlur    = [&](UiEvent&) { ++blurDer; };
+    e.der->onFocus   = [&](UiEvent&) { ++focoDer; };
+
+    CHECK(e.canvas.navigate(UiNavDir::Right) == true);
+    CHECK(e.canvas.focused() == e.der);
+    CHECK(blurMedio == 1);
+    CHECK(focoDer   == 1);
+    CHECK(focoMedio == 0);
+    CHECK(blurDer   == 0);
+
+    // Un intento que no mueve el foco no dispara nada.
+    CHECK(e.canvas.navigate(UiNavDir::Right) == false);
+    CHECK(blurMedio == 1);
+    CHECK(focoDer   == 1);
+    CHECK(blurDer   == 0);
+}
+
+// La misma secuencia dos veces acaba en el mismo sitio.
+static void test_nav_determinismo_de_la_secuencia()
+{
+    EscenaNav e;
+    montarNav(e);
+
+    const UiNavDir secuencia[] = {
+        UiNavDir::Right, UiNavDir::Up, UiNavDir::Down, UiNavDir::Left,
+        UiNavDir::Next,  UiNavDir::Down, UiNavDir::Previous
+    };
+
+    auto correr = [&]() -> UiElement*
+    {
+        e.canvas.setFocus(e.medio);
+        for (UiNavDir dir : secuencia) e.canvas.navigate(dir);
+        return e.canvas.focused();
+    };
+
+    UiElement* primera = correr();
+    UiElement* segunda = correr();
+    CHECK(primera != nullptr);
+    CHECK(primera == segunda);
+}
+
+// Navegar NO toca el dibujado: mismos bytes de vértices e índices y mismos
+// lotes que un canvas idéntico al que nadie navegó.
+static void test_neutralidad_de_la_navegacion()
+{
+    EscenaNav navegado;
+    montarNav(navegado);
+    navegado.medio->navUp = navegado.abajo;
+    navegado.canvas.setFocus(navegado.medio);
+    navegado.canvas.navigate(UiNavDir::Right);
+    navegado.canvas.navigate(UiNavDir::Up);
+    navegado.canvas.navigate(UiNavDir::Next);
+    navegado.canvas.navigate(UiNavDir::Left);
+
+    EscenaNav quieto;
+    montarNav(quieto);
+
+    UiDrawData a;
+    UiDrawData b;
+    navegado.canvas.buildDrawData(kEvW, kEvH, a);
+    quieto.canvas.buildDrawData(kEvW, kEvH, b);
+
+    CHECK(a.vertices.size() == b.vertices.size());
+    CHECK(a.indices.size()  == b.indices.size());
+    CHECK(a.batches.size()  == b.batches.size());
+    if (a.vertices.size() != b.vertices.size()) return;
+    if (a.indices.size()  != b.indices.size())  return;
+
+    CHECK(std::memcmp(a.vertices.data(), b.vertices.data(),
+                      a.vertices.size() * sizeof(a.vertices[0])) == 0);
+    CHECK(std::memcmp(a.indices.data(), b.indices.data(),
+                      a.indices.size() * sizeof(a.indices[0])) == 0);
+}
+
 int main()
 {
     test_canvas_vacio_no_emite_nada();
@@ -4022,6 +4329,17 @@ int main()
     test_anim_playing_false_congela();
     test_rotacion_cero_no_toca_ni_un_vertice();
     test_neutralidad_de_las_animaciones();
+
+    test_nav_next_y_previous_dan_la_vuelta();
+    test_nav_direccional_elige_al_vecino_de_ese_lado();
+    test_nav_alineado_gana_al_diagonal_mas_cercano();
+    test_nav_sin_candidato_no_mueve_el_foco();
+    test_nav_overrides_ganan_a_la_geometria();
+    test_nav_sin_foco_toma_el_primero_en_preorden();
+    test_nav_sin_build_draw_data_solo_falla_la_direccional();
+    test_nav_dispara_blur_y_focus_una_sola_vez();
+    test_nav_determinismo_de_la_secuencia();
+    test_neutralidad_de_la_navegacion();
 
     if (g_failures == 0) std::printf("ui_batch_tests: OK\n");
     else                 std::printf("ui_batch_tests: %d fallos\n", g_failures);

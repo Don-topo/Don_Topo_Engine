@@ -274,7 +274,8 @@ namespace DonTopo
         float opacity = 1.0f;
 
         bool visible  = true;
-        // Para el input futuro: NO afecta al dibujado.
+        // Solo para el input: NO afecta al dibujado. Un elemento deshabilitado
+        // (y su subárbol) queda fuera del recorrido del foco y de la navegación.
         bool enabled  = true;
         // Un elemento puede ser solo un contenedor (agrupa y recorta) sin pintar.
         bool drawable = true;
@@ -349,6 +350,14 @@ namespace DonTopo
         bool hovered = false;
         bool focused = false;
 
+        // Overrides de la navegación direccional (mando). Nulos por defecto:
+        // manda la geometría. Puestos MANDAN sobre ella, aunque apunten al lado
+        // contrario. El destino tiene que ser focusable o el foco no se mueve.
+        UiElement* navUp    = nullptr;
+        UiElement* navDown  = nullptr;
+        UiElement* navLeft  = nullptr;
+        UiElement* navRight = nullptr;
+
         // Handlers. TODOS nulos por defecto: un canvas sin handlers no hace nada
         // al recibir input, solo mueve su estado interno.
         UiEventHandler onMouseMove;
@@ -403,6 +412,18 @@ namespace DonTopo
         UiElement* m_parent = nullptr;   // nullptr solo en la raíz del canvas
     };
 
+    // Direcciones de navegación del foco. Next/Previous recorren el árbol;
+    // las otras cuatro se resuelven por geometría.
+    enum class UiNavDir : uint32_t
+    {
+        Next,
+        Previous,
+        Left,
+        Right,
+        Up,
+        Down
+    };
+
     class UiCanvas
     {
     public:
@@ -442,6 +463,21 @@ namespace DonTopo
         // es soltar el foco).
         UiElement* focused() const { return m_focused; }
         void       setFocus(UiElement* element);
+
+        // Mueve el foco. Devuelve si CAMBIÓ. Aquí no entra ni el teclado ni el
+        // mando: quien los lea llama a esto. CPU pura y determinista, así que
+        // vale igual en el editor en Play y en el juego exportado.
+        //
+        // Next/Previous recorren el MISMO orden que el Tab (pre-orden del árbol,
+        // saltando lo no focusable, lo invisible y lo deshabilitado) y DAN LA
+        // VUELTA. Left/Right/Up/Down salen de los rects que dejó el último
+        // buildDrawData: sin un buildDrawData previo no hay geometría y la
+        // direccional no encuentra a nadie (igual que el hit test), mientras que
+        // Next/Previous siguen funcionando. La direccional NO da la vuelta.
+        //
+        // Sin foco previo, cualquier dirección entra por el primer focusable en
+        // pre-orden. Sin candidato el foco no se mueve y devuelve false.
+        bool navigate(UiNavDir dir);
 
         // Qué elemento cae bajo un punto, con las mismas reglas que usa el input:
         // pre-orden INVERSO (gana lo último dibujado), respetando visible, el

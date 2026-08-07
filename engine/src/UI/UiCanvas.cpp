@@ -60,13 +60,24 @@ namespace DonTopo
             for (const auto& child : node.children()) invalidateSubtree(*child);
         }
 
-        // Pre-orden normal, saltando subárboles invisibles ENTEROS: un contenedor
-        // oculto no esconde solo su rect, también a sus hijos focusables.
+        // Pre-orden normal, saltando subárboles invisibles o deshabilitados
+        // ENTEROS: un contenedor oculto (o apagado) no esconde solo su rect,
+        // también a sus hijos focusables.
         void collectFocusables(UiElement& node, std::vector<UiElement*>& out)
         {
-            if (!node.visible) return;
+            if (!node.visible || !node.enabled) return;
             if (node.focusable) out.push_back(&node);
             for (const auto& child : node.children()) collectFocusables(*child, out);
+        }
+
+        // Peso del eje TRANSVERSAL en la navegación direccional. Mayor que 1
+        // para que un vecino alineado gane a otro más cercano en diagonal, que
+        // es lo que espera quien navega con un mando.
+        constexpr float kNavCrossPenalty = 2.0f;
+
+        glm::vec2 rectCenter(const UiElement& node)
+        {
+            return node.screenPos + node.screenSize * 0.5f;
         }
 
         float distance2(const glm::vec2& a, const glm::vec2& b)
@@ -183,6 +194,95 @@ namespace DonTopo
         const size_t next = direction >= 0 ? (index + 1) % n
                                            : (index + n - 1) % n;
         setFocus(order[next]);
+    }
+
+    bool UiCanvas::navigate(UiNavDir dir)
+    {
+        UiElement* const previous = m_focused;
+
+        // Next/Previous NO tocan geometría: son el recorrido del Tab, tal cual.
+        if (dir == UiNavDir::Next || dir == UiNavDir::Previous)
+        {
+            moveFocus(dir == UiNavDir::Next ? 1 : -1);
+            return m_focused != previous;
+        }
+
+        // Sin foco previo no hay desde dónde medir: se entra por el primero del
+        // pre-orden, venga la navegación de la dirección que venga.
+        if (m_focused == nullptr)
+        {
+            std::vector<UiElement*> order;
+            collectFocusables(m_root, order);
+            if (order.empty()) return false;
+            setFocus(order.front());
+            return m_focused != previous;
+        }
+
+        // Override explícito: manda sobre la geometría, aunque apunte al lado
+        // contrario. Si el destino no es focusable, setFocus lo ignora y el foco
+        // se queda donde está (navigate devuelve false).
+        UiElement* forced = nullptr;
+        switch (dir)
+        {
+            case UiNavDir::Up:    forced = m_focused->navUp;    break;
+            case UiNavDir::Down:  forced = m_focused->navDown;  break;
+            case UiNavDir::Left:  forced = m_focused->navLeft;  break;
+            case UiNavDir::Right: forced = m_focused->navRight; break;
+            default: break;
+        }
+        if (forced != nullptr)
+        {
+            setFocus(forced);
+            return m_focused != previous;
+        }
+
+        // A partir de aquí todo sale de los rects del último buildDrawData. Sin
+        // él, el propio foco no está colocado y no hay nada que comparar.
+        if (!m_focused->rectValid) return false;
+
+        std::vector<UiElement*> order;
+        collectFocusables(m_root, order);
+
+        const glm::vec2 origin = rectCenter(*m_focused);
+
+        UiElement* best      = nullptr;
+        float      bestScore = 0.0f;
+        for (UiElement* candidate : order)
+        {
+            if (candidate == m_focused || !candidate->rectValid) continue;
+
+            const glm::vec2 d = rectCenter(*candidate) - origin;
+
+            // Y crece hacia ABAJO en pantalla: arriba es la Y menor.
+            float along = 0.0f;
+            float cross = 0.0f;
+            switch (dir)
+            {
+                case UiNavDir::Left:  along = -d.x; cross = std::fabs(d.y); break;
+                case UiNavDir::Right: along =  d.x; cross = std::fabs(d.y); break;
+                case UiNavDir::Up:    along = -d.y; cross = std::fabs(d.x); break;
+                case UiNavDir::Down:  along =  d.y; cross = std::fabs(d.x); break;
+                default: break;
+            }
+            // Su centro tiene que caer HACIA esa dirección; lo que queda en la
+            // perpendicular exacta (along == 0) no cuenta.
+            if (along <= 0.0f) continue;
+
+            const float score = along + kNavCrossPenalty * cross;
+            // Estrictamente menor, recorriendo en pre-orden: un empate perfecto
+            // lo gana el primero del árbol, no el que salga de un orden ajeno.
+            if (best == nullptr || score < bestScore)
+            {
+                best      = candidate;
+                bestScore = score;
+            }
+        }
+
+        // La direccional NO da la vuelta: sin candidato el foco se queda.
+        if (best == nullptr) return false;
+
+        setFocus(best);
+        return m_focused != previous;
     }
 
     namespace
