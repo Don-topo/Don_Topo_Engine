@@ -43,9 +43,13 @@ public:
     // Canvas es la raíz de la que cuelgan. Es la única fuente de verdad del
     // gate (la usa el popup "Add"), y está aquí y no dentro del ImGui pa que
     // se pueda probar sin GUI.
+    // Vale el Canvas del propio GameObject o el de CUALQUIER ancestro: un botón
+    // cuelga normalmente del Canvas, no es el Canvas.
     static bool uiComponentsAvailable(const GameObject* go)
     {
-        return go && go->hasCanvas();
+        for (const GameObject* n = go; n; n = n->parent)
+            if (n->hasCanvas()) return true;
+        return false;
     }
 
 private:
@@ -76,6 +80,7 @@ private:
     // Canvas: raíz de la UI 2D. Sección tras "Add" como los colliders, con los
     // 10 campos de resolución que resuelve UiCanvas.
     void drawCanvasSection(EditorContext& ctx);
+    void drawButtonSection(EditorContext& ctx);
     void drawAudioClipDialog(EditorContext& ctx);
     void drawScriptsSection(EditorContext& ctx);
     void drawAddComponentButton(EditorContext& ctx);
@@ -130,6 +135,16 @@ private:
     const char* m_canvasDragField    = nullptr;
     float       m_canvasDragBefore   = 0.0f;
     glm::vec2   m_canvasDragBefore2 {0.0f};
+
+    // Lo mismo para los campos del Button. Cuatro "before" porque el componente
+    // tiene las cuatro familias de campo (float, vec2, color y texto) y cada
+    // una commitea su propio PropertyCommand<T>.
+    uint64_t    m_buttonDragOwnerId = 0;
+    const char* m_buttonDragField   = nullptr;
+    float       m_buttonDragBefore  = 0.0f;
+    glm::vec2   m_buttonDragBefore2 {0.0f};
+    glm::vec4   m_buttonDragBefore4 {1.0f};
+    std::string m_buttonDragBeforeStr;
 
     // Box Collider – mismo patrón de cache que Transform: persiste entre
     // frames para que los DragFloat acumulen el delta del arrastre, y se

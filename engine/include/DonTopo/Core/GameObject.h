@@ -18,6 +18,7 @@
 #include "DonTopo/Core/ReflectionProbeComponent.h"
 #include "DonTopo/Core/LightComponent.h"
 #include "DonTopo/UI/CanvasComponent.h"
+#include "DonTopo/UI/ButtonComponent.h"
 
 namespace DonTopo
 {
@@ -148,6 +149,14 @@ namespace DonTopo
             const std::shared_ptr<CanvasComponent>& getCanvas() const { return m_canvas; }
             bool hasCanvas() const { return m_canvas != nullptr; }
 
+            // Button: un widget de la UI 2D. Solo tiene sentido colgando de un
+            // Canvas (el gate del editor es PropertiesPanel::uiComponentsAvailable),
+            // y como el Canvas, es SOLO DATOS: el nodo vivo lo monta quien dibuja
+            // con syncUiButtons(). Uno por GameObject, igual que la luz.
+            void setButton(std::shared_ptr<ButtonComponent> b) { m_button = std::move(b); }
+            const std::shared_ptr<ButtonComponent>& getButton() const { return m_button; }
+            bool hasButton() const { return m_button != nullptr; }
+
             // Scripts Lua — a diferencia del resto de slots, vector: se
             // permiten varios scripts por GameObject (incluso repetidos).
             void addScript(std::unique_ptr<ScriptComponent> script);
@@ -206,6 +215,7 @@ namespace DonTopo
             std::shared_ptr<ReflectionProbeComponent> m_reflectionProbe;
             std::shared_ptr<LightComponent> m_light;
             std::shared_ptr<CanvasComponent> m_canvas;
+            std::shared_ptr<ButtonComponent> m_button;
             std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
     };
 }

@@ -43,6 +43,9 @@ namespace
     using DonTopo::CanvasComponent;
     using DonTopo::UiScaleMode;
     using DonTopo::UiScreenMatch;
+    using DonTopo::ButtonComponent;
+    using DonTopo::UiButtonTransition;
+    using DonTopo::UiTextAlign;
 
     // Forward declarations: animatorFromJson (más abajo) necesita estos
     // lectores tolerantes a JSON corrupto (definidos junto a jsonToMat4/
@@ -125,6 +128,56 @@ namespace
         if (s == "expand") return UiScreenMatch::Expand;
         if (s == "shrink") return UiScreenMatch::Shrink;
         return UiScreenMatch::MatchWidthOrHeight;   // valor desconocido -> el default
+    }
+
+    const char* uiButtonTransitionToStr(UiButtonTransition t)
+    {
+        switch (t)
+        {
+            case UiButtonTransition::SpriteSwap: return "spriteSwap";
+            case UiButtonTransition::Animation:  return "animation";
+            default:                             return "colorTint";
+        }
+    }
+
+    UiButtonTransition uiButtonTransitionFromStr(const std::string& s)
+    {
+        if (s == "spriteSwap") return UiButtonTransition::SpriteSwap;
+        if (s == "animation")  return UiButtonTransition::Animation;
+        return UiButtonTransition::ColorTint;   // valor desconocido -> el default
+    }
+
+    const char* uiTextAlignToStr(UiTextAlign a)
+    {
+        switch (a)
+        {
+            case UiTextAlign::Center:  return "center";
+            case UiTextAlign::Right:   return "right";
+            case UiTextAlign::Justify: return "justify";
+            default:                   return "left";
+        }
+    }
+
+    UiTextAlign uiTextAlignFromStr(const std::string& s)
+    {
+        if (s == "center")  return UiTextAlign::Center;
+        if (s == "right")   return UiTextAlign::Right;
+        if (s == "justify") return UiTextAlign::Justify;
+        return UiTextAlign::Left;   // valor desconocido -> el default
+    }
+
+    // Los vectores del Button van como objeto con componentes nombradas, igual
+    // que referenceResolution y safeArea del canvas (y no como el array de
+    // vec3ToJson): un .scene editado a mano se lee mejor, y readFloat ya tolera
+    // un null por campo sin tumbar la carga entera.
+    nlohmann::json vec2ToJsonXY(const glm::vec2& v)
+    {
+        return { {"x", v.x}, {"y", v.y} };
+    }
+
+    nlohmann::json vec4ToJsonXYZW(const glm::vec4& v)
+    {
+        return { {"x", v.x}, {"y", v.y}, {"z", v.z}, {"w", v.w} };
     }
 
     // Los enums van como string y no como int: legible en un .scene editado a
@@ -456,6 +509,38 @@ namespace
                                            {"bottom", c->safeArea.bottom} }},
                             {"aspectRatio", c->aspectRatio} };
         }
+        if (node.hasButton())
+        {
+            const auto& b = node.getButton();
+            j["button"] = { {"anchorMin", vec2ToJsonXY(b->anchorMin)},
+                            {"anchorMax", vec2ToJsonXY(b->anchorMax)},
+                            {"pivot", vec2ToJsonXY(b->pivot)},
+                            {"position", vec2ToJsonXY(b->position)},
+                            {"size", vec2ToJsonXY(b->size)},
+                            {"color", vec4ToJsonXYZW(b->color)},
+                            {"visible", b->visible},
+                            {"atlasPath", b->atlasPath},
+                            {"sprite", b->sprite},
+                            {"interactable", b->interactable},
+                            {"selected", b->selected},
+                            {"transition", uiButtonTransitionToStr(b->transition)},
+                            {"normalColor", vec4ToJsonXYZW(b->normalColor)},
+                            {"hoverColor", vec4ToJsonXYZW(b->hoverColor)},
+                            {"pressedColor", vec4ToJsonXYZW(b->pressedColor)},
+                            {"disabledColor", vec4ToJsonXYZW(b->disabledColor)},
+                            {"selectedColor", vec4ToJsonXYZW(b->selectedColor)},
+                            {"normalSprite", b->normalSprite},
+                            {"hoverSprite", b->hoverSprite},
+                            {"pressedSprite", b->pressedSprite},
+                            {"disabledSprite", b->disabledSprite},
+                            {"selectedSprite", b->selectedSprite},
+                            {"fadeDuration", b->fadeDuration},
+                            {"text", b->text},
+                            {"fontPath", b->fontPath},
+                            {"fontSize", b->fontSize},
+                            {"textColor", vec4ToJsonXYZW(b->textColor)},
+                            {"textAlign", uiTextAlignToStr(b->textAlign)} };
+        }
         if (node.hasAnimator())
             j["animator"] = animatorToJson(*node.getAnimator());
         if (node.hasAudioClip())
@@ -579,6 +664,31 @@ namespace
             return def;
         }
         return f;
+    }
+
+    // Los dos vectores "con componentes nombradas" del Button. Cada componente
+    // pasa por readFloat, así que un null (NaN serializado) o un tipo raro cae
+    // al default y avisa en vez de tumbar la carga de la escena entera.
+    glm::vec2 readVec2XY(const nlohmann::json& j, const char* key, const glm::vec2& def,
+                          std::vector<std::string>* warnings, const std::string& contexto)
+    {
+        if (!j.contains(key) || !j[key].is_object()) return def;
+        const nlohmann::json& v = j[key];
+        const std::string ctx = contexto + "." + key;
+        return glm::vec2(readFloat(v, "x", def.x, warnings, ctx),
+                          readFloat(v, "y", def.y, warnings, ctx));
+    }
+
+    glm::vec4 readVec4XYZW(const nlohmann::json& j, const char* key, const glm::vec4& def,
+                            std::vector<std::string>* warnings, const std::string& contexto)
+    {
+        if (!j.contains(key) || !j[key].is_object()) return def;
+        const nlohmann::json& v = j[key];
+        const std::string ctx = contexto + "." + key;
+        return glm::vec4(readFloat(v, "x", def.x, warnings, ctx),
+                          readFloat(v, "y", def.y, warnings, ctx),
+                          readFloat(v, "z", def.z, warnings, ctx),
+                          readFloat(v, "w", def.w, warnings, ctx));
     }
 
     // Variante de readFloat para un ELEMENTO de un array JSON por índice (en
@@ -1118,6 +1228,62 @@ namespace
             canvas->safeArea.bottom = readFloat(safe, "bottom", 0.0f, warnings, ctx + ".safeArea");
             canvas->aspectRatio = readFloat(c, "aspectRatio", 0.0f, warnings, ctx);
             node->setCanvas(std::move(canvas));
+        }
+        // Bloque aditivo, misma regla que el canvas: una escena guardada antes
+        // del componente Button no trae la clave y se carga sin él ni un aviso.
+        if (j.contains("button"))
+        {
+            const auto& b = j["button"];
+            const std::string ctx = "button de '" + node->name + "'";
+            // Un bool o un string corrupto (null, o del tipo que no toca) cae al
+            // default en vez de lanzar: .value() sí lanza con un null, y un
+            // campo roto no puede tumbar la carga de la escena entera.
+            auto readBool = [&](const char* key, bool def) {
+                return (b.contains(key) && b[key].is_boolean()) ? b[key].get<bool>() : def;
+            };
+            auto readStr = [&](const char* key) {
+                return (b.contains(key) && b[key].is_string())
+                           ? b[key].get<std::string>() : std::string();
+            };
+            auto btn = std::make_shared<ButtonComponent>();
+            btn->anchorMin = readVec2XY(b, "anchorMin", glm::vec2(0.0f), warnings, ctx);
+            btn->anchorMax = readVec2XY(b, "anchorMax", glm::vec2(0.0f), warnings, ctx);
+            btn->pivot     = readVec2XY(b, "pivot", glm::vec2(0.0f), warnings, ctx);
+            btn->position  = readVec2XY(b, "position", glm::vec2(0.0f), warnings, ctx);
+            btn->size      = readVec2XY(b, "size", glm::vec2(160.0f, 40.0f), warnings, ctx);
+            btn->color     = readVec4XYZW(b, "color", glm::vec4(1.0f), warnings, ctx);
+            btn->visible   = readBool("visible", true);
+            btn->atlasPath = readStr("atlasPath");
+            btn->sprite    = readStr("sprite");
+
+            btn->interactable = readBool("interactable", true);
+            btn->selected     = readBool("selected", false);
+            btn->transition   = uiButtonTransitionFromStr(readStr("transition"));
+
+            btn->normalColor   = readVec4XYZW(b, "normalColor", glm::vec4(1.0f), warnings, ctx);
+            btn->hoverColor    = readVec4XYZW(b, "hoverColor", glm::vec4(1.0f), warnings, ctx);
+            btn->pressedColor  = readVec4XYZW(b, "pressedColor", glm::vec4(1.0f), warnings, ctx);
+            btn->disabledColor = readVec4XYZW(b, "disabledColor", glm::vec4(1.0f), warnings, ctx);
+            btn->selectedColor = readVec4XYZW(b, "selectedColor", glm::vec4(1.0f), warnings, ctx);
+
+            btn->normalSprite   = readStr("normalSprite");
+            btn->hoverSprite    = readStr("hoverSprite");
+            btn->pressedSprite  = readStr("pressedSprite");
+            btn->disabledSprite = readStr("disabledSprite");
+            btn->selectedSprite = readStr("selectedSprite");
+
+            btn->fadeDuration = readFloat(b, "fadeDuration", 0.1f, warnings, ctx);
+
+            btn->text      = readStr("text");
+            btn->fontPath  = readStr("fontPath");
+            btn->fontSize  = readFloat(b, "fontSize", 16.0f, warnings, ctx);
+            btn->textColor = readVec4XYZW(b, "textColor", glm::vec4(1.0f), warnings, ctx);
+            // Sin clave el default es Center (el del componente), no Left: por
+            // eso no basta con pasarle "" a uiTextAlignFromStr.
+            btn->textAlign = (b.contains("textAlign") && b["textAlign"].is_string())
+                                 ? uiTextAlignFromStr(b["textAlign"].get<std::string>())
+                                 : UiTextAlign::Center;
+            node->setButton(std::move(btn));
         }
         // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
         // y cargan igual (version sigue en 1).

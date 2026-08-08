@@ -263,6 +263,29 @@ std::vector<ExportAsset> collectSceneAssets(
         if (go->hasAudioClip())
             add(go->getAudioClip()->getPath());
 
+        if (go->hasButton())
+        {
+            const auto& b = go->getButton();
+            // Las rutas de la UI son las únicas que pueden venir RELATIVAS (se
+            // escriben a mano en el panel, y la de por defecto lo es siempre):
+            // resolverlas contra la raíz del proyecto es lo que las deja dentro
+            // del paquete en vez de en assets/_external, o directamente
+            // marcadas como inexistentes según desde dónde se lance el editor.
+            auto addUiPath = [&](const std::string& raw)
+            {
+                if (raw.empty()) return;
+                const fs::path p(raw);
+                add(p.is_absolute() ? raw : (projectRoot / p).string());
+            };
+            addUiPath(b->atlasPath);
+            // Un botón sin fuente propia dibuja su texto con la de por defecto,
+            // así que ESA es un asset del juego igual que cualquier otro: sin
+            // esto el paquete sale sin ella y el texto no aparece en ningún
+            // sitio salvo en la máquina que exportó.
+            if (!b->fontPath.empty())  addUiPath(b->fontPath);
+            else if (!b->text.empty()) addUiPath(kDefaultUiFontPath);
+        }
+
         for (const auto& s : go->getScripts())
         {
             auto it = scriptPaths.find(s->scriptName);
@@ -304,6 +327,16 @@ int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& 
     }
     if (node.contains("audioClip") && node["audioClip"].is_object())
         n += rewriteField(node["audioClip"], "path", sourceToPackage);
+
+    if (node.contains("button") && node["button"].is_object())
+    {
+        nlohmann::json& button = node["button"];
+        n += rewriteField(button, "atlasPath", sourceToPackage);
+        // fontPath vacía se queda vacía (rewriteField no toca una cadena
+        // vacía): el runtime volverá a caer en kDefaultUiFontPath, que dentro
+        // del paquete tiene la MISMA ruta relativa que en el proyecto.
+        n += rewriteField(button, "fontPath", sourceToPackage);
+    }
 
     if (node.contains("children") && node["children"].is_array())
         for (nlohmann::json& child : node["children"])

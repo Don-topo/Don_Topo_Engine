@@ -10,6 +10,7 @@
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
 #include "DonTopo/Renderer/Renderer.h"
+#include "DonTopo/UI/ButtonComponent.h"
 #include <imgui.h>
 #include <ImGuizmo.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -426,6 +427,83 @@ void ViewportPanel::drawCanvasGizmo(EditorContext& ctx, const glm::vec2& imagePo
     ImGui::GetWindowDrawList()->AddRect(p0, p1, IM_COL32(80, 200, 255, 220), 0.0f, 0, 2.0f);
 }
 
+// Nodo vivo del botón de un GameObject, o nullptr si no hay. Los botones son
+// hijos DIRECTOS de la raíz del canvas (los monta syncUiButtons), así que un
+// nivel basta y no hace falta recorrer el árbol entero.
+static const UiElement* findButtonNode(const UiCanvas& canvas, uint64_t ownerId)
+{
+    const std::string wanted = uiButtonNodeName(ownerId);
+    for (const auto& child : canvas.root().children())
+        if (child->name == wanted) return child.get();
+    return nullptr;
+}
+
+void ViewportPanel::drawButtonGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                     const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasButton() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    // El rect sale del nodo VIVO (lo que dejó el último buildDrawData), no de
+    // los campos del componente: así el gizmo ya trae aplicadas las anclas, la
+    // escala del canvas y el layout, sin recalcular nada aquí.
+    const UiCanvas& canvas = ctx.renderer->uiCanvas();
+    const UiElement* node = findButtonNode(canvas, ctx.selected->id);
+    if (!node || !node->rectValid) return;
+
+    const glm::vec2 renderSize{ (float)ctx.renderer->renderWidth(),
+                                (float)ctx.renderer->renderHeight() };
+    const glm::vec2 k = (renderSize.x > 0.0f && renderSize.y > 0.0f)
+                        ? imageSize / renderSize : glm::vec2(1.0f);
+
+    const ImVec2 p0{ imagePos.x + node->screenPos.x * k.x,
+                     imagePos.y + node->screenPos.y * k.y };
+    const ImVec2 p1{ p0.x + node->screenSize.x * k.x,
+                     p0.y + node->screenSize.y * k.y };
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRect(p0, p1, IM_COL32(255, 160, 40, 230), 0.0f, 0, 2.0f);
+
+    // Ejes desde el PIVOT, que es el punto respecto al que ancla y rota: X a la
+    // derecha y Y hacia ABAJO, que es el sentido de +Y en la UI (no el del
+    // mundo 3D). Solo dos ejes: un rect no tiene Z.
+    const ImVec2 pivot{ p0.x + node->pivot.x * (p1.x - p0.x),
+                        p0.y + node->pivot.y * (p1.y - p0.y) };
+    const float len = 34.0f;
+    dl->AddLine(pivot, ImVec2(pivot.x + len, pivot.y), IM_COL32(220, 60, 60, 255), 2.0f);
+    dl->AddLine(pivot, ImVec2(pivot.x, pivot.y + len), IM_COL32(70, 200, 70, 255), 2.0f);
+    dl->AddText(ImVec2(pivot.x + len + 2.0f, pivot.y - 7.0f), IM_COL32(220, 60, 60, 255), "X");
+    dl->AddText(ImVec2(pivot.x - 4.0f, pivot.y + len + 2.0f), IM_COL32(70, 200, 70, 255), "Y");
+    dl->AddCircleFilled(pivot, 3.0f, IM_COL32(255, 160, 40, 255));
+}
+
+GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mousePx,
+                                         const glm::vec2& imageSize) const
+{
+    if (!ctx.renderer || !ctx.scene || imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return nullptr;
+
+    const glm::vec2 renderSize{ (float)ctx.renderer->renderWidth(),
+                                (float)ctx.renderer->renderHeight() };
+    if (renderSize.x <= 0.0f || renderSize.y <= 0.0f) return nullptr;
+
+    // El hit test trabaja en píxeles de RENDER; el ratón llega en píxeles de la
+    // imagen. Van 1:1 salvo que el panel y el render se desincronicen un frame.
+    const glm::vec2 canvasPx = mousePx * (renderSize / imageSize);
+
+    const UiElement* hit = ctx.renderer->uiCanvas().hitTest(canvasPx);
+    if (!hit) return nullptr;
+
+    // El hit test devuelve el nodo más profundo, que puede ser la etiqueta: se
+    // sube hasta el primero que sea de un GameObject.
+    for (const UiElement* n = hit; n != nullptr; n = n->parent())
+        if (const uint64_t owner = uiButtonOwnerId(n->name))
+            return ctx.scene->findById(owner);
+    return nullptr;
+}
+
 GameObject* ViewportPanel::pickObject(EditorContext& ctx, const glm::mat4& cameraView,
                                       const glm::vec2& mousePx, const glm::vec2& imageSize) const
 {
@@ -558,9 +636,13 @@ void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, co
     // Área útil del Canvas seleccionado, justo sobre la imagen: es 2D, así que
     // va con el draw list de ImGui y no con Gizmos (que dibuja en el mundo).
     drawCanvasGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    drawButtonGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     // Hover de la IMAGEN, no de la ventana: con esto un popup o cualquier otra
     // ventana por encima ya no cuenta como clic en la escena.
     const bool imageHovered = ImGui::IsItemHovered();
+    // Se publica para el input de la UI de juego (sandbox/src/main.cpp).
+    m_imagePos     = glm::vec2(vpPos.x, vpPos.y);
+    m_imageHovered = imageHovered;
 
     // Axis gizmo estilo Unity/Godot (esquina superior derecha): ejes mundo
     // proyectados por la rotación real de la cámara (parte 3x3 de la view
@@ -626,7 +708,15 @@ void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, co
         !ImGui::IsAnyItemActive() && !ctx.editingLocked)
     {
         const glm::vec2 mousePx(mouse.x - vpPos.x, mouse.y - vpPos.y);
-        ctx.selected = pickObject(ctx, cameraView, mousePx, glm::vec2(vpSize.x, vpSize.y));
+        // La UI se dibuja ENCIMA de la escena, así que un clic sobre un widget
+        // es del widget y no de lo que haya detrás. Solo en edición: en Play el
+        // clic es del juego (lo consume el updateInput del canvas) y cambiar la
+        // selección desde el viewport sería pelearse con él.
+        GameObject* uiHit = ctx.isPlaying
+                            ? nullptr
+                            : pickUiObject(ctx, mousePx, glm::vec2(vpSize.x, vpSize.y));
+        ctx.selected = uiHit ? uiHit
+                             : pickObject(ctx, cameraView, mousePx, glm::vec2(vpSize.x, vpSize.y));
     }
 
     ImGui::End();

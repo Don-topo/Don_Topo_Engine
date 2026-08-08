@@ -277,6 +277,12 @@ int main()
         DonTopo::AsyncAssetLoader assetLoader(jobSystem);
         editor.setAssetLoader(&assetLoader);
 
+        // Estado del sync de widgets: vive FUERA del bucle porque es lo que
+        // permite actualizar los botones en sitio (sin recrear el árbol, que
+        // reiniciaría el fundido) y cachear atlas y fuentes por ruta.
+        DonTopo::UiButtonSyncCache uiButtonCache;
+        std::vector<std::pair<uint64_t, const DonTopo::ButtonComponent*>> uiButtons;
+
         while (!window.shouldClose())
         {
             DonTopo::Input::update();
@@ -413,6 +419,44 @@ int main()
             // fuera de Play, que es cuando se pinta el gizmo del área útil.
             if (DonTopo::GameObject* canvasGo = scene.findCanvas())
                 canvasGo->getCanvas()->applyTo(renderer.uiCanvas());
+
+            // Widgets: los ButtonComponent de la escena se vuelcan en el árbol
+            // vivo del canvas, por frame y por la misma razón que la resolución.
+            // Sin Canvas no hay UI: la lista va vacía y el sync limpia el árbol.
+            uiButtons.clear();
+            if (scene.findCanvas())
+                scene.traverse([&](DonTopo::GameObject* n) {
+                    if (n->hasButton()) uiButtons.emplace_back(n->id, n->getButton().get());
+                });
+            DonTopo::syncUiButtons(uiButtons, renderer.uiCanvas(), uiButtonCache, renderer);
+
+            // Input de la UI: sin esto el árbol no resuelve estados, así que los
+            // cinco colores del botón, el fundido y el Click no harían nada.
+            // El RATÓN solo entra en Play (como en Unity: en edición un botón no
+            // se ilumina al pasarle por encima), pero el tiempo entra siempre —
+            // así el estado Normal se aplica en cuanto se edita su color y se ve
+            // sin darle a Play. La imagen del viewport se dibuja 1:1 con el
+            // render, así que restarle su esquina al ratón ya da el píxel del
+            // canvas, sin escalar nada.
+            {
+                DonTopo::UiInputState uiInput;
+                if (editor.isPlaying() && editor.isViewportImageHovered())
+                {
+                    const ImVec2   m   = ImGui::GetIO().MousePos;
+                    const glm::vec2 org = editor.viewportImagePos();
+                    uiInput.mousePos     = glm::vec2(m.x - org.x, m.y - org.y);
+                    uiInput.mouseDown[0] = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+                    uiInput.mouseDown[1] = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+                    uiInput.mouseDown[2] = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+                }
+                else
+                {
+                    // Fuera de todo el canvas: ningún botón queda en Hover.
+                    uiInput.mousePos = glm::vec2(-1.0f, -1.0f);
+                }
+                uiInput.timeSeconds = (float)glfwGetTime();
+                renderer.uiCanvas().updateInput(uiInput);
+            }
 
             // --- Gizmos: demo de depuración visual (bbox, ray, frustum) ---
             // Los ejes ya no se dibujan fijos aquí: ViewportPanel::drawSelectionGizmo()

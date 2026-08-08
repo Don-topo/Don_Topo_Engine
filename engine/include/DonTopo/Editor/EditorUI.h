@@ -51,6 +51,11 @@ public:
 
     bool isViewportHovered() const { return m_viewportPanel.isHovered(); }
 
+    // Para alimentar el input de la UI de juego desde el bucle: esquina de la
+    // imagen del viewport y si el ratón está justo encima de ella.
+    glm::vec2 viewportImagePos()     const { return m_viewportPanel.imagePos(); }
+    bool      isViewportImageHovered() const { return m_viewportPanel.imageHovered(); }
+
     // ── UiLayer ──────────────────────────────────────────────────────────────
     // El backend de ImGui (contexto, pool de descriptores y los dos _Impl_)
     // vive aquí porque es un detalle del editor, no del motor.

@@ -362,6 +362,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
             drawAudioClipSection(ctx);
             drawAudioListenerSection(ctx);
             drawCanvasSection(ctx);
+            drawButtonSection(ctx);
             drawScriptsSection(ctx);
             drawAddComponentButton(ctx);
         }
@@ -761,6 +762,296 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
         cmd->execute();
         ctx.undo->push(std::move(cmd));
         ctx.pushLog("Componente Canvas quitado de '" + ctx.selected->name + "'");
+    }
+}
+
+void PropertiesPanel::drawButtonSection(EditorContext& ctx)
+{
+    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    if (!ctx.selected->hasButton()) return;
+
+    ImGui::Separator();
+    bool sectionOpen = ImGui::TreeNodeEx("Button",
+                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+    const bool removeClicked = ImGui::SmallButton("x##button");
+
+    Scene*            scene = ctx.scene;
+    const uint64_t    id    = ctx.selected->id;
+    const std::string owner = ctx.selected->name;
+
+    if (sectionOpen)
+    {
+        ButtonComponent* b = ctx.selected->getButton().get();
+        ImGui::TextWrapped("Widget de la UI 2D. Se dibuja en el árbol del Canvas de la escena, "
+                           "y el estado (Normal/Hover/Pressed/Disabled/Selected) lo resuelve el "
+                           "propio canvas con el ratón y el foco.");
+
+        // Mismos accessors sin captura (function pointer) que el Canvas: así los
+        // campos de dentro de una struct usan el MISMO helper que el resto.
+        using FloatRef = float&       (*)(ButtonComponent&);
+        using Vec2Ref  = glm::vec2&   (*)(ButtonComponent&);
+        using Vec4Ref  = glm::vec4&   (*)(ButtonComponent&);
+        using StrRef   = std::string& (*)(ButtonComponent&);
+        using BoolRef  = bool&        (*)(ButtonComponent&);
+        using EnumSet  = void         (*)(ButtonComponent&, int);
+
+        // Combos y checkbox se commitean en el acto: un click = un cambio.
+        auto comboEnum = [&](const char* label, int before, const char* const* items,
+                             int count, EnumSet apply)
+        {
+            int idx = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::Combo(label, &idx, items, count) && idx != before)
+            {
+                apply(*b, idx);
+                const std::string lbl = std::string(label) + " del botón de '" + owner + "'";
+                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<int>>(
+                        lbl, before, idx,
+                        [scene, id, apply](const int& v) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasButton()) apply(*go->getButton(), v);
+                        }));
+            }
+        };
+
+        auto checkBox = [&](const char* label, BoolRef acc)
+        {
+            const bool before = acc(*b);
+            bool       v      = before;
+            if (ImGui::Checkbox(label, &v) && v != before)
+            {
+                acc(*b) = v;
+                const std::string lbl = std::string(label) + " del botón de '" + owner + "'";
+                ctx.pushLog(lbl + (v ? " activado" : " desactivado"));
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
+                        lbl, before, v,
+                        [scene, id, acc](const bool& val) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasButton()) acc(*go->getButton()) = val;
+                        }));
+            }
+        };
+
+        // Los escalares comparten el baile de siempre: "before" leído ANTES de
+        // dibujar, sesión abierta en IsItemActivated y commit en
+        // IsItemDeactivatedAfterEdit, así un arrastre entero es UN paso de undo.
+        auto dragFloat = [&](const char* label, FloatRef acc, float speed,
+                             float lo, float hi, const char* fmt)
+        {
+            const float before = acc(*b);
+            float       v      = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+            if (ImGui::DragFloat(label, &v, speed, lo, hi, fmt))
+                acc(*b) = v;
+            if (ImGui::IsItemActivated())
+            {
+                m_buttonDragBefore  = before;
+                m_buttonDragOwnerId = id;
+                m_buttonDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_buttonDragOwnerId == id &&
+                m_buttonDragField == label)
+            {
+                const float after = acc(*b);
+                m_buttonDragField = nullptr;
+                if (after != m_buttonDragBefore)
+                {
+                    const std::string lbl = std::string(label) + " del botón de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<float>>(
+                            lbl, m_buttonDragBefore, after,
+                            [scene, id, acc](const float& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasButton()) acc(*go->getButton()) = val;
+                            }));
+                }
+            }
+        };
+
+        auto dragVec2 = [&](const char* label, Vec2Ref acc, float speed,
+                            float lo, float hi, const char* fmt)
+        {
+            const glm::vec2 before = acc(*b);
+            glm::vec2       v      = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::DragFloat2(label, &v.x, speed, lo, hi, fmt))
+                acc(*b) = v;
+            if (ImGui::IsItemActivated())
+            {
+                m_buttonDragBefore2 = before;
+                m_buttonDragOwnerId = id;
+                m_buttonDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_buttonDragOwnerId == id &&
+                m_buttonDragField == label)
+            {
+                const glm::vec2 after = acc(*b);
+                m_buttonDragField = nullptr;
+                if (after != m_buttonDragBefore2)
+                {
+                    const std::string lbl = std::string(label) + " del botón de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
+                            lbl, m_buttonDragBefore2, after,
+                            [scene, id, acc](const glm::vec2& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasButton()) acc(*go->getButton()) = val;
+                            }));
+                }
+            }
+        };
+
+        // Los colores llevan alfa (los cinco estados y el texto lo usan para
+        // desvanecer), así que ColorEdit4 y no 3.
+        auto colorEdit = [&](const char* label, Vec4Ref acc)
+        {
+            const glm::vec4 before = acc(*b);
+            glm::vec4       v      = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+            if (ImGui::ColorEdit4(label, &v.x))
+                acc(*b) = v;
+            if (ImGui::IsItemActivated())
+            {
+                m_buttonDragBefore4 = before;
+                m_buttonDragOwnerId = id;
+                m_buttonDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_buttonDragOwnerId == id &&
+                m_buttonDragField == label)
+            {
+                const glm::vec4 after = acc(*b);
+                m_buttonDragField = nullptr;
+                if (after != m_buttonDragBefore4)
+                {
+                    const std::string lbl = std::string(label) + " del botón de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
+                            lbl, m_buttonDragBefore4, after,
+                            [scene, id, acc](const glm::vec4& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasButton()) acc(*go->getButton()) = val;
+                            }));
+                }
+            }
+        };
+
+        // Un InputText entero (escribir y salir del campo) es UN paso de undo,
+        // no uno por tecla: mismo criterio que el arrastre de un DragFloat.
+        auto inputText = [&](const char* label, StrRef acc)
+        {
+            const std::string before = acc(*b);
+            char buf[512] = {};
+            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
+            if (ImGui::InputText(label, buf, sizeof(buf)))
+                acc(*b) = std::string(buf);
+            if (ImGui::IsItemActivated())
+            {
+                m_buttonDragBeforeStr = before;
+                m_buttonDragOwnerId   = id;
+                m_buttonDragField     = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_buttonDragOwnerId == id &&
+                m_buttonDragField == label)
+            {
+                const std::string after = acc(*b);
+                const std::string prev  = m_buttonDragBeforeStr;
+                m_buttonDragField = nullptr;
+                if (after != prev)
+                {
+                    const std::string lbl = std::string(label) + " del botón de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+                            lbl, prev, after,
+                            [scene, id, acc](const std::string& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasButton()) acc(*go->getButton()) = val;
+                            }));
+                }
+            }
+        };
+
+        ImGui::TextDisabled("Rect");
+        dragVec2("Anchor Min", +[](ButtonComponent& c) -> glm::vec2& { return c.anchorMin; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Anchor Max", +[](ButtonComponent& c) -> glm::vec2& { return c.anchorMax; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Pivot", +[](ButtonComponent& c) -> glm::vec2& { return c.pivot; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Position", +[](ButtonComponent& c) -> glm::vec2& { return c.position; },
+                 1.0f, -16384.0f, 16384.0f, "%.0f");
+        dragVec2("Size", +[](ButtonComponent& c) -> glm::vec2& { return c.size; },
+                 1.0f, 0.0f, 16384.0f, "%.0f");
+        colorEdit("Color", +[](ButtonComponent& c) -> glm::vec4& { return c.color; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Color base del quad. Con Transition = Color Tint o Animation lo\n"
+                              "sobrescribe el color del estado; solo manda con Sprite Swap.");
+        checkBox("Visible", +[](ButtonComponent& c) -> bool& { return c.visible; });
+
+        ImGui::TextDisabled("Sprite");
+        inputText("Atlas", +[](ButtonComponent& c) -> std::string& { return c.atlasPath; });
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Ruta de la imagen del atlas. Vacía = color plano");
+        inputText("Sprite", +[](ButtonComponent& c) -> std::string& { return c.sprite; });
+
+        ImGui::TextDisabled("Estados");
+        checkBox("Interactable", +[](ButtonComponent& c) -> bool& { return c.interactable; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("A false se pinta Disabled y no emite Click");
+        checkBox("Selected", +[](ButtonComponent& c) -> bool& { return c.selected; });
+
+        static const char* kTransitions[] = { "Color Tint", "Sprite Swap", "Animation" };
+        comboEnum("Transition", (int)b->transition, kTransitions, IM_ARRAYSIZE(kTransitions),
+                  +[](ButtonComponent& c, int v) { c.transition = (UiButtonTransition)v; });
+
+        ImGui::TextDisabled("Colores por estado (Color Tint / Animation)");
+        colorEdit("Normal##col",   +[](ButtonComponent& c) -> glm::vec4& { return c.normalColor; });
+        colorEdit("Hover##col",    +[](ButtonComponent& c) -> glm::vec4& { return c.hoverColor; });
+        colorEdit("Pressed##col",  +[](ButtonComponent& c) -> glm::vec4& { return c.pressedColor; });
+        colorEdit("Disabled##col", +[](ButtonComponent& c) -> glm::vec4& { return c.disabledColor; });
+        colorEdit("Selected##col", +[](ButtonComponent& c) -> glm::vec4& { return c.selectedColor; });
+
+        inputText("Normal##spr",   +[](ButtonComponent& c) -> std::string& { return c.normalSprite; });
+        inputText("Hover##spr",    +[](ButtonComponent& c) -> std::string& { return c.hoverSprite; });
+        inputText("Pressed##spr",  +[](ButtonComponent& c) -> std::string& { return c.pressedSprite; });
+        inputText("Disabled##spr", +[](ButtonComponent& c) -> std::string& { return c.disabledSprite; });
+        inputText("Selected##spr", +[](ButtonComponent& c) -> std::string& { return c.selectedSprite; });
+
+        dragFloat("Fade Duration", +[](ButtonComponent& c) -> float& { return c.fadeDuration; },
+                  0.01f, 0.0f, 10.0f, "%.3f");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Segundos del fundido de Animation. 0 = salto seco");
+
+        ImGui::TextDisabled("Texto");
+        inputText("Text", +[](ButtonComponent& c) -> std::string& { return c.text; });
+        inputText("Font", +[](ButtonComponent& c) -> std::string& { return c.fontPath; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Ruta del TTF. Vacía = la fuente del sistema (Segoe UI)");
+        dragFloat("Font Size", +[](ButtonComponent& c) -> float& { return c.fontSize; },
+                  0.5f, 1.0f, 512.0f, "%.1f");
+        colorEdit("Text Color", +[](ButtonComponent& c) -> glm::vec4& { return c.textColor; });
+
+        static const char* kAligns[] = { "Left", "Center", "Right", "Justify" };
+        comboEnum("Align", (int)b->textAlign, kAligns, IM_ARRAYSIZE(kAligns),
+                  +[](ButtonComponent& c, int v) { c.textAlign = (UiTextAlign)v; });
+
+        ImGui::TreePop();
+    }
+
+    if (removeClicked && ctx.scene && ctx.undo)
+    {
+        auto cmd = std::make_unique<ButtonComponentCommand>(
+            *ctx.scene, "Quitar Button de '" + ctx.selected->name + "'", ctx.selected->id,
+            /*add=*/false, *ctx.selected->getButton());
+        cmd->execute();
+        ctx.undo->push(std::move(cmd));
+        ctx.pushLog("Componente Button quitado de '" + ctx.selected->name + "'");
     }
 }
 
@@ -2377,7 +2668,17 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         {
             ImGui::Separator();
             ImGui::TextDisabled("UI");
-            // (aquí van los widgets de UI, uno por Selectable)
+            ImGui::BeginDisabled(ctx.selected->hasButton());
+            if (ImGui::Selectable("Button") && ctx.scene && ctx.undo)
+            {
+                auto cmd = std::make_unique<ButtonComponentCommand>(
+                    *ctx.scene, "Añadir Button a '" + ctx.selected->name + "'", ctx.selected->id,
+                    /*add=*/true, ButtonComponent{});
+                cmd->execute();
+                ctx.undo->push(std::move(cmd));
+                ctx.pushLog("Componente Button añadido a '" + ctx.selected->name + "'");
+            }
+            ImGui::EndDisabled();
         }
 
         // Cámara: como mucho una por escena, y el gate pregunta a la única

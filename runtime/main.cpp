@@ -442,6 +442,11 @@ int main(int argc, char** argv)
                 });
         }
 
+        // Estado del sync de widgets, igual que en el editor: fuera del bucle
+        // para actualizar en sitio y cachear atlas y fuentes por ruta.
+        DonTopo::UiButtonSyncCache uiButtonCache;
+        std::vector<std::pair<uint64_t, const DonTopo::ButtonComponent*>> uiButtons;
+
         while (!window.shouldClose())
         {
             DonTopo::Input::update();
@@ -594,6 +599,37 @@ int main(int argc, char** argv)
             // del componente de la escena exportada, por frame.
             if (DonTopo::GameObject* canvasGo = scene.findCanvas())
                 canvasGo->getCanvas()->applyTo(renderer.uiCanvas());
+
+            // Widgets: mismo volcado por frame que en el editor.
+            uiButtons.clear();
+            if (scene.findCanvas())
+                scene.traverse([&](DonTopo::GameObject* n) {
+                    if (n->hasButton()) uiButtons.emplace_back(n->id, n->getButton().get());
+                });
+            DonTopo::syncUiButtons(uiButtons, renderer.uiCanvas(), uiButtonCache, renderer);
+
+            // Input de la UI: sin esto el árbol no resuelve estados y los cinco
+            // colores del botón, el fundido y el Click no existen. El ratón está
+            // en píxeles de VENTANA y el canvas trabaja en píxeles de RENDER,
+            // que no tienen por qué coincidir (resolución interna distinta).
+            {
+                DonTopo::UiInputState uiInput;
+                double mx = 0.0, my = 0.0;
+                glfwGetCursorPos(window.getNativeWindow(), &mx, &my);
+                int ww = 0, wh = 0;
+                glfwGetWindowSize(window.getNativeWindow(), &ww, &wh);
+                const float sx = (ww > 0) ? (float)renderer.renderWidth()  / (float)ww : 1.0f;
+                const float sy = (wh > 0) ? (float)renderer.renderHeight() / (float)wh : 1.0f;
+                uiInput.mousePos = glm::vec2((float)mx * sx, (float)my * sy);
+                uiInput.mouseDown[0] =
+                    glfwGetMouseButton(window.getNativeWindow(), GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+                uiInput.mouseDown[1] =
+                    glfwGetMouseButton(window.getNativeWindow(), GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+                uiInput.mouseDown[2] =
+                    glfwGetMouseButton(window.getNativeWindow(), GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+                uiInput.timeSeconds = (float)glfwGetTime();
+                renderer.uiCanvas().updateInput(uiInput);
+            }
 
             renderer.drawFrame(window);
             window.pollEvents();

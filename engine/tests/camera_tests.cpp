@@ -15,6 +15,7 @@
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/PropertiesPanel.h"
 #include "DonTopo/UI/CanvasComponent.h"
+#include "DonTopo/UI/ButtonComponent.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <vector>
@@ -722,6 +723,416 @@ static void test_canvas_property_command_undo_redo()
     CHECK(!go->hasCanvas());
 }
 
+// ── Button ──────────────────────────────────────────────────────────────────
+// TODOS los campos con valores NO neutros y DISTINTOS entre sí (colores,
+// rutas, tamaños): un default no prueba que nadie los haya leído ni escrito, y
+// dos campos con el MISMO valor no detectan que se hayan cruzado.
+static void fillButton(ButtonComponent& b)
+{
+    b.anchorMin = glm::vec2(0.125f, 0.25f);
+    b.anchorMax = glm::vec2(0.75f, 0.875f);
+    b.pivot     = glm::vec2(0.375f, 0.625f);
+    b.position  = glm::vec2(12.5f, -34.25f);
+    b.size      = glm::vec2(222.5f, 48.75f);
+    b.color     = glm::vec4(0.1f, 0.2f, 0.3f, 0.4f);
+    b.visible   = false;
+    b.atlasPath = "assets/ui/atlas.png";
+    b.sprite    = "boton_base";
+
+    b.interactable = false;
+    b.selected     = true;
+    b.transition   = UiButtonTransition::Animation;
+
+    b.normalColor   = glm::vec4(0.11f, 0.12f, 0.13f, 0.14f);
+    b.hoverColor    = glm::vec4(0.21f, 0.22f, 0.23f, 0.24f);
+    b.pressedColor  = glm::vec4(0.31f, 0.32f, 0.33f, 0.34f);
+    b.disabledColor = glm::vec4(0.41f, 0.42f, 0.43f, 0.44f);
+    b.selectedColor = glm::vec4(0.51f, 0.52f, 0.53f, 0.54f);
+
+    b.normalSprite   = "spr_normal";
+    b.hoverSprite    = "spr_hover";
+    b.pressedSprite  = "spr_pressed";
+    b.disabledSprite = "spr_disabled";
+    b.selectedSprite = "spr_selected";
+
+    b.fadeDuration = 0.375f;
+
+    b.text      = "Aceptar";
+    b.fontPath  = "assets/fonts/roboto.ttf";
+    b.fontSize  = 27.5f;
+    b.textColor = glm::vec4(0.61f, 0.62f, 0.63f, 0.64f);
+    b.textAlign = UiTextAlign::Justify;
+}
+
+static void checkButtonMatchesFilled(const ButtonComponent& b)
+{
+    CHECK(nearlyEqual(b.anchorMin.x, 0.125f));
+    CHECK(nearlyEqual(b.anchorMin.y, 0.25f));
+    CHECK(nearlyEqual(b.anchorMax.x, 0.75f));
+    CHECK(nearlyEqual(b.anchorMax.y, 0.875f));
+    CHECK(nearlyEqual(b.pivot.x, 0.375f));
+    CHECK(nearlyEqual(b.pivot.y, 0.625f));
+    CHECK(nearlyEqual(b.position.x, 12.5f));
+    CHECK(nearlyEqual(b.position.y, -34.25f));
+    CHECK(nearlyEqual(b.size.x, 222.5f));
+    CHECK(nearlyEqual(b.size.y, 48.75f));
+    CHECK(nearlyEqual(b.color.r, 0.1f));
+    CHECK(nearlyEqual(b.color.g, 0.2f));
+    CHECK(nearlyEqual(b.color.b, 0.3f));
+    CHECK(nearlyEqual(b.color.a, 0.4f));
+    CHECK(b.visible == false);
+    CHECK(b.atlasPath == "assets/ui/atlas.png");
+    CHECK(b.sprite == "boton_base");
+
+    CHECK(b.interactable == false);
+    CHECK(b.selected == true);
+    CHECK(b.transition == UiButtonTransition::Animation);
+
+    CHECK(nearlyEqual(b.normalColor.r, 0.11f));
+    CHECK(nearlyEqual(b.normalColor.a, 0.14f));
+    CHECK(nearlyEqual(b.hoverColor.r, 0.21f));
+    CHECK(nearlyEqual(b.hoverColor.a, 0.24f));
+    CHECK(nearlyEqual(b.pressedColor.r, 0.31f));
+    CHECK(nearlyEqual(b.pressedColor.a, 0.34f));
+    CHECK(nearlyEqual(b.disabledColor.r, 0.41f));
+    CHECK(nearlyEqual(b.disabledColor.a, 0.44f));
+    CHECK(nearlyEqual(b.selectedColor.r, 0.51f));
+    CHECK(nearlyEqual(b.selectedColor.a, 0.54f));
+
+    CHECK(b.normalSprite == "spr_normal");
+    CHECK(b.hoverSprite == "spr_hover");
+    CHECK(b.pressedSprite == "spr_pressed");
+    CHECK(b.disabledSprite == "spr_disabled");
+    CHECK(b.selectedSprite == "spr_selected");
+
+    CHECK(nearlyEqual(b.fadeDuration, 0.375f));
+
+    CHECK(b.text == "Aceptar");
+    CHECK(b.fontPath == "assets/fonts/roboto.ttf");
+    CHECK(nearlyEqual(b.fontSize, 27.5f));
+    CHECK(nearlyEqual(b.textColor.r, 0.61f));
+    CHECK(nearlyEqual(b.textColor.a, 0.64f));
+    CHECK(b.textAlign == UiTextAlign::Justify);
+}
+
+static void test_button_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* go = scene.addGameObject("Aceptar", canvasGo);
+    auto button = std::make_shared<ButtonComponent>();
+    fillButton(*button);
+    go->setButton(button);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasButton()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "Aceptar");
+    checkButtonMatchesFilled(*found->getButton());
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Una escena guardada antes del componente carga igual: sin Button y sin avisos.
+static void test_scene_without_button_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool alguno = false;
+    loaded.traverse([&](GameObject* n) { if (n->hasButton()) alguno = true; });
+    CHECK(!alguno);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Neutralidad: sin ningún Button el JSON no gana ni un byte, y añadir y quitar
+// el componente devuelve el dump EXACTO de partida.
+static void test_scene_without_button_serializes_identically()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    const std::string antes = scene.toJson().dump();
+    CHECK(antes.find("button") == std::string::npos);
+
+    go->setButton(std::make_shared<ButtonComponent>());
+    CHECK(scene.toJson().dump() != antes);
+    go->setButton(nullptr);
+    CHECK(scene.toJson().dump() == antes);
+}
+
+// El gate también vale para un DESCENDIENTE del Canvas: un botón cuelga del
+// canvas, no es el canvas.
+static void test_ui_components_available_for_descendants()
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    GameObject* hijo     = scene.addGameObject("Boton", canvasGo);
+    GameObject* nieto    = scene.addGameObject("Icono", hijo);
+    CHECK(!PropertiesPanel::uiComponentsAvailable(hijo));
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+    CHECK(PropertiesPanel::uiComponentsAvailable(hijo));
+    CHECK(PropertiesPanel::uiComponentsAvailable(nieto));
+    // Un hermano del canvas (no descendiente) sigue sin verlos.
+    CHECK(!PropertiesPanel::uiComponentsAvailable(scene.addGameObject("Suelto")));
+}
+
+// Add reversible, y el redo NO devuelve los campos a los defaults.
+static void test_button_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Aceptar");
+    ButtonComponent st;
+    fillButton(st);
+    ButtonComponentCommand cmd(scene, "Add Button", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasButton());
+    checkButtonMatchesFilled(*go->getButton());
+    cmd.undo();
+    CHECK(!go->hasButton());
+    cmd.execute();
+    CHECK(go->hasButton());
+    checkButtonMatchesFilled(*go->getButton());
+}
+
+// Remove reversible: el undo devuelve el componente CON sus valores.
+static void test_button_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Aceptar");
+    auto button = std::make_shared<ButtonComponent>();
+    fillButton(*button);
+    go->setButton(button);
+
+    ButtonComponentCommand cmd(scene, "Remove Button", go->id, /*add=*/false, *button);
+    cmd.execute();
+    CHECK(!go->hasButton());
+    cmd.undo();
+    CHECK(go->hasButton());
+    checkButtonMatchesFilled(*go->getButton());
+}
+
+// Editar un campo del Button también entra en el stack: el mismo
+// PropertyCommand<T> que arma la sección (resuelto por id, no por puntero) va y
+// vuelve, y no revive el componente si ya no está.
+static void test_button_property_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Aceptar");
+    go->setButton(std::make_shared<ButtonComponent>());
+    const uint64_t id = go->id;
+    Scene* sc = &scene;
+
+    auto applyText = [sc, id](const std::string& v) {
+        if (GameObject* g = sc->findById(id))
+            if (g->hasButton()) g->getButton()->text = v;
+    };
+    PropertyCommand<std::string> cmd("Text", std::string(), std::string("Aceptar"), applyText);
+
+    cmd.execute();
+    CHECK(go->getButton()->text == "Aceptar");
+    cmd.undo();
+    CHECK(go->getButton()->text.empty());
+    cmd.execute();
+    CHECK(go->getButton()->text == "Aceptar");
+
+    // Sin componente el applier no hace nada (ni crashea ni lo resucita).
+    go->setButton(nullptr);
+    cmd.undo();
+    CHECK(!go->hasButton());
+}
+
+// ── Sync del Button contra el canvas vivo ───────────────────────────────────
+// Sin GPU: el loader falso devuelve nullptr, que es exactamente lo que devuelve
+// el Renderer con una ruta vacía. Lo que se prueba es la COLOCACIÓN, no la
+// textura.
+struct FakeUiLoader
+{
+    UiTextureAtlas* loadUiAtlas(const std::string&) { return nullptr; }
+    UiFont*         loadUiFont(const std::string&)  { return nullptr; }
+};
+
+// Editar un campo del componente tiene que verse en el siguiente frame. El
+// árbol cachea los vértices por nodo, así que un sync que escribe los campos y
+// no ensucia el nodo deja el botón clavado donde estaba.
+static void test_button_sync_moves_the_live_node()
+{
+    UiCanvas canvas;
+    UiButtonSyncCache cache;
+    FakeUiLoader loader;
+    ButtonComponent b;
+    b.position = glm::vec2(10.0f, 20.0f);
+    b.size     = glm::vec2(100.0f, 50.0f);
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &b} };
+    UiDrawData data;
+
+    syncUiButtons(lista, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 4);
+    if (data.vertices.size() != 4) return;
+    CHECK(nearlyEqual(data.vertices[0].pos.x, 10.0f));
+    CHECK(nearlyEqual(data.vertices[0].pos.y, 20.0f));
+
+    // Mismo botón, otra posición: el nodo vivo tiene que seguirla.
+    b.position = glm::vec2(300.0f, 120.0f);
+    syncUiButtons(lista, canvas, cache, loader);
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    CHECK(data.vertices.size() == 4);
+    if (data.vertices.size() != 4) return;
+    CHECK(nearlyEqual(data.vertices[0].pos.x, 300.0f));
+    CHECK(nearlyEqual(data.vertices[0].pos.y, 120.0f));
+}
+
+// Tocar la resolución del Canvas no puede hacer desaparecer el botón: el sync
+// del frame siguiente lo deja donde toca, escalado.
+static void test_button_survives_canvas_edit()
+{
+    UiCanvas canvas;
+    UiButtonSyncCache cache;
+    FakeUiLoader loader;
+    ButtonComponent b;
+    b.position = glm::vec2(10.0f, 20.0f);
+    b.size     = glm::vec2(100.0f, 50.0f);
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &b} };
+    UiDrawData data;
+    syncUiButtons(lista, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+    CHECK(data.batches.size() == 1);
+
+    // Lo que hace CanvasComponent::applyTo cuando el usuario toca el panel.
+    CanvasComponent cc;
+    cc.scaleFactor = 2.0f;
+    cc.applyTo(canvas);
+
+    syncUiButtons(lista, canvas, cache, loader);
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    CHECK(data.batches.size() == 1);
+    CHECK(data.vertices.size() == 4);
+    if (data.vertices.size() != 4) return;
+    CHECK(nearlyEqual(data.vertices[0].pos.x, 20.0f));   // 10 * escala 2
+    CHECK(nearlyEqual(data.vertices[0].pos.y, 40.0f));
+
+    // Y ningún ajuste razonable del canvas lo borra de la pantalla.
+    const UiScaleMode modos[] = { UiScaleMode::ConstantPixelSize,
+                                  UiScaleMode::ScaleWithScreenSize,
+                                  UiScaleMode::ConstantPhysicalSize };
+    for (UiScaleMode m : modos)
+    {
+        CanvasComponent otro;
+        otro.scaleMode = m;
+        otro.safeArea  = { 8.0f, 6.0f, 8.0f, 6.0f };
+        otro.applyTo(canvas);
+        syncUiButtons(lista, canvas, cache, loader);
+        data.clear();
+        canvas.buildDrawData(800, 480, data);
+        CHECK(data.batches.size() == 1);
+    }
+}
+
+// Un botón con texto y SIN fuente configurada sigue mostrando su etiqueta: el
+// sync le pone una fuente por defecto en vez de dejar el texto invisible.
+static void test_button_text_without_font_is_visible()
+{
+    UiCanvas canvas;
+    UiButtonSyncCache cache;
+    FakeUiLoader loader;
+    ButtonComponent b;
+    b.text = "Aceptar";
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &b} };
+    syncUiButtons(lista, canvas, cache, loader);
+
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().empty()) return;
+    const UiElement& node = *canvas.root().children()[0];
+    CHECK(node.children().size() == 1);   // la etiqueta existe aunque no haya fuente
+    if (node.children().empty()) return;
+    const Text* label = node.children()[0]->asText();
+    CHECK(label != nullptr);
+    if (label) CHECK(label->text == "Aceptar");
+}
+
+// Con el input alimentado, el color que se ve es el del ESTADO, no el color
+// base: es lo que hace que editar "Normal" en el panel se note.
+static void test_button_state_color_is_applied()
+{
+    UiCanvas canvas;
+    UiButtonSyncCache cache;
+    FakeUiLoader loader;
+    ButtonComponent b;
+    b.size        = glm::vec2(100.0f, 50.0f);
+    b.color       = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+    b.normalColor = glm::vec4(0.2f, 0.4f, 0.6f, 0.8f);
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &b} };
+    syncUiButtons(lista, canvas, cache, loader);
+    UiDrawData data;
+    canvas.buildDrawData(800, 480, data);   // coloca los rects: el hit test los lee
+
+    UiInputState in;
+    in.mousePos    = glm::vec2(-1.0f, -1.0f);   // el ratón, lejos: estado Normal
+    in.timeSeconds = 1.0f;
+    canvas.updateInput(in);
+
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().empty()) return;
+    const UiElement& node = *canvas.root().children()[0];
+    CHECK(nearlyEqual(node.color.r, 0.2f));
+    CHECK(nearlyEqual(node.color.g, 0.4f));
+    CHECK(nearlyEqual(node.color.b, 0.6f));
+    CHECK(nearlyEqual(node.color.a, 0.8f));
+}
+
+// Clic sobre un botón en el viewport: el hit test del canvas devuelve un nodo y
+// su nombre es lo único que ata el árbol de UI con la escena. Es la pieza pura
+// de ViewportPanel::pickUiObject (lo demás es ImGui).
+static void test_button_hit_test_maps_back_to_gameobject()
+{
+    CHECK(uiButtonOwnerId(uiButtonNodeName(42ull)) == 42ull);
+    CHECK(uiButtonOwnerId(uiButtonNodeName(42ull) + "/Label") == 42ull);
+    CHECK(uiButtonOwnerId("Cubo") == 0ull);
+    CHECK(uiButtonOwnerId("go:") == 0ull);
+    CHECK(uiButtonOwnerId("go:12ab") == 0ull);
+
+    UiCanvas canvas;
+    UiButtonSyncCache cache;
+    FakeUiLoader loader;
+    ButtonComponent a, b;
+    a.position = glm::vec2(0.0f, 0.0f);
+    a.size     = glm::vec2(100.0f, 40.0f);
+    b.position = glm::vec2(300.0f, 200.0f);
+    b.size     = glm::vec2(120.0f, 60.0f);
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &a}, {9ull, &b} };
+    syncUiButtons(lista, canvas, cache, loader);
+    UiDrawData data;
+    canvas.buildDrawData(800, 480, data);
+
+    const UiElement* hit = canvas.hitTest(glm::vec2(360.0f, 230.0f));   // centro del 9
+    CHECK(hit != nullptr);
+    if (hit) CHECK(uiButtonOwnerId(hit->name) == 9ull);
+
+    hit = canvas.hitTest(glm::vec2(50.0f, 20.0f));                      // centro del 7
+    CHECK(hit != nullptr);
+    if (hit) CHECK(uiButtonOwnerId(hit->name) == 7ull);
+
+    CHECK(canvas.hitTest(glm::vec2(700.0f, 400.0f)) == nullptr);        // hueco
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -769,6 +1180,19 @@ int main()
     test_canvas_command_add_undo_redo();
     test_canvas_command_remove();
     test_canvas_property_command_undo_redo();
+
+    test_button_round_trip(pm, am);
+    test_scene_without_button_block_still_loads(pm, am);
+    test_scene_without_button_serializes_identically();
+    test_ui_components_available_for_descendants();
+    test_button_command_add_undo_redo();
+    test_button_command_remove();
+    test_button_property_command_undo_redo();
+    test_button_sync_moves_the_live_node();
+    test_button_survives_canvas_edit();
+    test_button_text_without_font_is_visible();
+    test_button_state_color_is_applied();
+    test_button_hit_test_maps_back_to_gameobject();
 
     am.shutdown();
     pm.shutdown();

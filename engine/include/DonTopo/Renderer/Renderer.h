@@ -21,6 +21,7 @@
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiSpriteBatch.h"
 #include "DonTopo/UI/UiTextureAtlas.h"
+#include "DonTopo/UI/UiFont.h"
 #include <array>
 #include <unordered_map>
 
@@ -103,6 +104,12 @@ namespace DonTopo {
             // Renderer es el dueno; devuelve nullptr si la imagen no se puede
             // leer. Los sprites se anaden luego con addSprite.
             UiTextureAtlas* loadUiAtlas(const std::string& path);
+            // Igual que loadUiAtlas pero para un TTF: hornea el atlas MSDF, le
+            // reserva su descriptor set y devuelve nullptr si el fichero no se
+            // puede leer. El Renderer es el dueno de la fuente. Tampoco cachea
+            // por ruta — quien la pida repetidamente (el sync de los botones)
+            // lleva su propia cache, igual que con los atlas.
+            UiFont* loadUiFont(const std::string& path, float bakePx = 48.0f);
             // currentFrameCamera() necesita preguntarle a la escena por su
             // cámara cada frame (Scene::findCamera es la única fuente de
             // verdad).
@@ -1705,6 +1712,7 @@ namespace DonTopo {
             UiSpriteBatch m_uiBatch;
             UiDrawData    m_uiDrawData;
             std::vector<std::unique_ptr<UiTextureAtlas>> m_uiAtlases;
+            std::vector<std::unique_ptr<UiFont>>         m_uiFonts;
             GameObject* m_sceneRoot = nullptr;
             Scene* m_scene = nullptr;
     };

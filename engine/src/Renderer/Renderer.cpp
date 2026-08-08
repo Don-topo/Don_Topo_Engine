@@ -655,6 +655,8 @@ namespace DonTopo {
         // destruir el pool primero dejaria los handles colgando.
         for (auto& atlas : m_uiAtlases) atlas->destroy(m_gpu);
         m_uiAtlases.clear();
+        for (auto& font : m_uiFonts) font->destroy(m_gpu);
+        m_uiFonts.clear();
         m_uiBatch.shutdown(m_gpu);
         printf("destroy render items OK\n"); fflush(stdout);
         m_gpu.shutdown();
@@ -671,6 +673,21 @@ namespace DonTopo {
         }
         m_uiAtlases.push_back(std::move(atlas));
         return m_uiAtlases.back().get();
+    }
+
+    UiFont* Renderer::loadUiFont(const std::string& path, float bakePx)
+    {
+        auto font = std::make_unique<UiFont>();
+        if (!font->loadFromFile(m_gpu, m_res, path, bakePx)) return nullptr;
+        // La fuente CONTIENE su atlas, asi que el registro del descriptor es
+        // exactamente el mismo que el de un atlas de sprites.
+        if (!m_uiBatch.registerAtlas(m_gpu, font->atlas()))
+        {
+            font->destroy(m_gpu);
+            return nullptr;
+        }
+        m_uiFonts.push_back(std::move(font));
+        return m_uiFonts.back().get();
     }
 
     void Renderer::initSkybox(const std::array<std::string, 6>& facePaths)

@@ -13,6 +13,7 @@
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Scripting/ScriptComponent.h"
+#include "DonTopo/UI/ButtonComponent.h"
 
 #include <nlohmann/json.hpp>
 
@@ -45,6 +46,11 @@ static fs::path makeProjectFixture()
     std::ofstream(root / "assets" / "chars" / "enemy.fbx") << "fbx";
     std::ofstream(root / "assets" / "step.wav")            << "wav";
     std::ofstream(root / "Scripts" / "Player.lua")         << "-- lua";
+    std::ofstream(root / "assets" / "ui_atlas.png")        << "png";
+    // La fuente por defecto de la UI vive DENTRO del proyecto: el fixture la
+    // reproduce en su misma ruta relativa.
+    fs::create_directories((root / DonTopo::kDefaultUiFontPath).parent_path(), ec);
+    std::ofstream(root / DonTopo::kDefaultUiFontPath)      << "ttf";
     fs::path canon = fs::canonical(root, ec);
     return ec ? root : canon;
 }
@@ -89,6 +95,68 @@ static void test_collects_exactly_referenced(const fs::path& root)
     CHECK(std::find(pkg.begin(), pkg.end(), "assets/chars/enemy.fbx")  != pkg.end());
     CHECK(std::find(pkg.begin(), pkg.end(), "assets/step.wav")         != pkg.end());
     CHECK(std::find(pkg.begin(), pkg.end(), "Scripts/Player.lua")      != pkg.end());
+}
+
+// Un Button aporta su atlas y su fuente. Sin fuente propia, la que viaja es la
+// de por defecto: es la que dibujará el runtime, y sin ella el juego exportado
+// sale con los botones mudos.
+static void test_button_assets(const fs::path& root)
+{
+    const std::map<std::string, fs::path> noScripts;
+
+    {   // Sin texto no hay etiqueta que dibujar: ninguna fuente que copiar.
+        Scene scene;
+        auto* go = scene.addGameObject("mudo");
+        go->setButton(std::make_shared<ButtonComponent>());
+        CHECK(collectSceneAssets(scene, root, noScripts).empty());
+    }
+
+    {   // Con texto y sin fuente propia: la de por defecto, y con su ruta
+        // relativa del proyecto intacta dentro del paquete.
+        Scene scene;
+        auto* go = scene.addGameObject("aceptar");
+        auto b = std::make_shared<ButtonComponent>();
+        b->text = "Aceptar";
+        go->setButton(b);
+
+        std::vector<ExportAsset> assets = collectSceneAssets(scene, root, noScripts);
+        CHECK(assets.size() == 1);
+        if (assets.size() == 1)
+        {
+            CHECK(assets[0].packagePath == DonTopo::kDefaultUiFontPath);
+            CHECK(assets[0].existsOnDisk);
+        }
+    }
+
+    {   // Atlas propio + fuente propia: las suyas, y la de por defecto NO.
+        Scene scene;
+        auto* go = scene.addGameObject("skin");
+        auto b = std::make_shared<ButtonComponent>();
+        b->text      = "Jugar";
+        b->atlasPath = (root / "assets" / "ui_atlas.png").string();
+        b->fontPath  = (root / "assets" / "hero.fbx").string();   // vale cualquier fichero
+        go->setButton(b);
+
+        std::vector<ExportAsset> assets = collectSceneAssets(scene, root, noScripts);
+        CHECK(assets.size() == 2);
+        std::vector<std::string> pkg;
+        for (const ExportAsset& a : assets) pkg.push_back(a.packagePath);
+        CHECK(std::find(pkg.begin(), pkg.end(), "assets/ui_atlas.png") != pkg.end());
+        CHECK(std::find(pkg.begin(), pkg.end(), "assets/hero.fbx")     != pkg.end());
+        CHECK(std::find(pkg.begin(), pkg.end(), DonTopo::kDefaultUiFontPath) == pkg.end());
+
+        // Y el .scene sale apuntando a las rutas DEL PAQUETE, no a las del PC
+        // que exportó.
+        std::map<std::string, std::string> sourceToPackage;
+        for (const ExportAsset& a : assets)
+            sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
+
+        nlohmann::json j = scene.toJson();
+        CHECK(rewriteScenePaths(j, sourceToPackage) == 2);
+        const nlohmann::json& btn = j["root"]["children"][0]["button"];
+        CHECK(btn["atlasPath"] == "assets/ui_atlas.png");
+        CHECK(btn["fontPath"]  == "assets/hero.fbx");
+    }
 }
 
 // Mesh procedural (Cube/Sphere/Plane/Capsule): sourcePath vacío, geometría ya
@@ -797,6 +865,7 @@ int main()
     fs::path root = makeProjectFixture();
 
     test_collects_exactly_referenced(root);
+    test_button_assets(root);
     test_procedural_mesh_contributes_nothing(root);
     test_deduplicates_shared_mesh(root);
     test_animation_sources(root);

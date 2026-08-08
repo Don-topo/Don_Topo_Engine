@@ -2052,10 +2052,14 @@ namespace DonTopo
         std::memcpy(m_vertexMapped[frame], data.vertices.data(), data.vertices.size() * sizeof(UiVertex));
         std::memcpy(m_indexMapped[frame],  data.indices.data(),  data.indices.size()  * sizeof(uint16_t));
 
-        // top=0 y bottom=alto: (0,0) cae ARRIBA a la izquierda. RH_ZO porque
+        // bottom=0 y top=alto: (0,0) cae ARRIBA a la izquierda. Parece del revés
+        // y es justo lo contrario: en Vulkan el +Y de NDC va hacia ABAJO, así
+        // que la receta de OpenGL (top=0, bottom=alto) deja [1][1] negativo y
+        // dibuja la UI ENTERA espejada — invisible mientras solo hubo quads de
+        // color, evidente en cuanto se dibujó la primera letra. RH_ZO porque
         // Vulkan clipea z fuera de [0,1] y glm::ortho a secas da [-1,1].
         const glm::mat4 proj = glm::orthoRH_ZO(0.0f, (float)extent.width,
-                                               (float)extent.height, 0.0f,
+                                               0.0f, (float)extent.height,
                                                0.0f, 1.0f);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);

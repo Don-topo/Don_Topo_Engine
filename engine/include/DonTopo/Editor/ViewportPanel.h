@@ -27,6 +27,13 @@ public:
     uint32_t contentWidth()  const { return m_contentWidth; }
     uint32_t contentHeight() const { return m_contentHeight; }
 
+    // Esquina superior izquierda de la IMAGEN en coordenadas de pantalla, y si
+    // el ratón está sobre ella (no sobre la ventana: un popup por encima no
+    // cuenta). Como la imagen se dibuja 1:1 con el render, restarle esta
+    // esquina al ratón da directamente el píxel del canvas de UI.
+    glm::vec2 imagePos()     const { return m_imagePos; }
+    bool      imageHovered() const { return m_imageHovered; }
+
 private:
     void drawSelectionGizmo(EditorContext& ctx);
     // Wireframe del frustum de la cámara de la escena, siempre visible en
@@ -45,6 +52,17 @@ private:
     // no se recalcula aquí: safe area y aspect ratio ya vienen aplicados.
     void drawCanvasGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                           const glm::vec2& imageSize);
+    // Rect + ejes X/Y del Button seleccionado, en 2D sobre la imagen igual que
+    // el gizmo del Canvas. El rect sale del nodo VIVO del canvas (anclas y
+    // escala ya aplicadas), no de los campos del componente.
+    void drawButtonGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                          const glm::vec2& imageSize);
+    // Selección por clic de un widget de UI: hit test 2D del canvas, que manda
+    // sobre el raycast 3D porque la UI se dibuja ENCIMA de la escena. mousePx
+    // va en píxeles relativos a la esquina de la imagen, igual que en
+    // pickObject. nullptr si el clic no cae en ningún widget.
+    GameObject* pickUiObject(EditorContext& ctx, const glm::vec2& mousePx,
+                              const glm::vec2& imageSize) const;
     // Longitud de eje proporcional al bbox local del mesh de node (mitad
     // del eje más largo); si node no tiene mesh (o el mesh no tiene
     // vértices), valor fijo de repliegue.
@@ -59,6 +77,8 @@ private:
 
     bool m_open = true;
     bool m_hovered = false;
+    bool m_imageHovered = false;
+    glm::vec2 m_imagePos{0.0f};
     uint32_t m_contentWidth  = 0;
     uint32_t m_contentHeight = 0;
 };
