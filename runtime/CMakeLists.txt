@@ -29,3 +29,30 @@ add_custom_command(TARGET DonTopoRuntime POST_BUILD
         $<TARGET_FILE_DIR:Sandbox>/DonTopoRuntime.exe
     COMMENT "Copying DonTopoRuntime.exe next to the editor"
 )
+
+# Shaders y assets junto al binario del runtime, para poder EJECUTARLO desde su
+# propio directorio de build (probar una escena sin pasar por Export Game). El
+# runtime los busca relativos a su directorio de trabajo, y sin ellos ni
+# arranca: muere en el primer pipeline que no encuentra su .spv.
+#
+# El juego exportado no depende de esto — GameExporter copia shaders y assets al
+# paquete por su cuenta — pero el binario recien compilado sí, y hasta ahora no
+# los tenia (el CMakeLists de sandbox sí los copia; este no).
+#
+# El target Shaders lo define sandbox/CMakeLists.txt y compila a
+# ${CMAKE_BINARY_DIR}/spv; el add_subdirectory de sandbox va antes que el de
+# runtime en el CMakeLists raiz, asi que aqui ya existe. copy_directory (y no
+# copy_if_different) para que un .spv recompilado llegue siempre.
+add_dependencies(DonTopoRuntime Shaders)
+
+add_custom_command(TARGET DonTopoRuntime POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_FILE_DIR:DonTopoRuntime>/shaders
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_BINARY_DIR}/spv
+        $<TARGET_FILE_DIR:DonTopoRuntime>/shaders
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets
+        $<TARGET_FILE_DIR:DonTopoRuntime>/assets
+    COMMENT "Copying shaders and assets next to DonTopoRuntime"
+)
