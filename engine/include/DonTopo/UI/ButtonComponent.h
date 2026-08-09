@@ -1,4 +1,6 @@
 #pragma once
+#include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -28,6 +30,48 @@ namespace DonTopo
     // Las dos rutas (atlasPath, fontPath) son lo ÚNICO que no es un campo del
     // núcleo: el núcleo guarda punteros a recursos de GPU, que no se serializan.
     // Las resuelve el sync contra el Renderer, no el componente.
+    // Lo que un botón tiene EN VIVO y no se serializa: los callbacks que le haya
+    // enganchado un script y el estado que resolvió el último updateInput.
+    //
+    // Vive aquí y no en el nodo del canvas a propósito: el nodo lo destruye
+    // clearChildren() cada vez que syncUiWidgets reconstruye la raíz (o sea, al
+    // añadir o quitar CUALQUIER widget de la escena), así que un handler
+    // enganchado directamente al nodo desaparecería sin avisar. El dueño es el
+    // componente —que vive lo que vive el GameObject— y el sync se limita a
+    // reinstalar en el nodo un handler que apunta aquí con un weak_ptr.
+    //
+    // `state` es el camino de vuelta: el nodo lo escribe, el componente lo
+    // publica. Sin esto un script no podría leer el estado del botón, que solo
+    // existe en el árbol vivo.
+    struct UiButtonRuntime
+    {
+        std::function<void()> onClick;
+        std::function<void()> onDoubleClick;
+        UiButtonState         state = UiButtonState::Normal;
+    };
+
+    // El hueco del runtime dentro del componente. Es un tipo propio y no un
+    // shared_ptr suelto por las DOS reglas que tiene que romper respecto a la
+    // copia por defecto:
+    //   - copiar un componente (duplicar un GameObject, o la copia que el sync
+    //     guarda como snapshot) NO comparte los callbacks: cada copia estrena
+    //     los suyos, o el clon dispararía el callback del original;
+    //   - comparar dos componentes IGNORA este campo: el sync usa operator==
+    //     para saber si hay que volcar el nodo, y ni un callback ni el estado
+    //     vivo son datos que volcar.
+    struct UiCallbackSlot
+    {
+        std::shared_ptr<UiButtonRuntime> ptr = std::make_shared<UiButtonRuntime>();
+
+        UiCallbackSlot() = default;
+        UiCallbackSlot(const UiCallbackSlot&) {}
+        UiCallbackSlot& operator=(const UiCallbackSlot&) { return *this; }
+        UiCallbackSlot(UiCallbackSlot&&) = default;
+        UiCallbackSlot& operator=(UiCallbackSlot&&) = default;
+
+        bool operator==(const UiCallbackSlot&) const { return true; }
+    };
+
     class ButtonComponent
     {
         public:
@@ -72,6 +116,11 @@ namespace DonTopo
             float       fontSize = 16.0f;
             glm::vec4   textColor{1.0f, 1.0f, 1.0f, 1.0f};
             UiTextAlign textAlign = UiTextAlign::Center;
+
+            // --- Vivo (NO se serializa) ---------------------------------------
+            // Callbacks de script y estado resuelto. Fuera de toJson/fromJson,
+            // fuera de operator== y fuera de applyTo: no es un dato de la escena.
+            UiCallbackSlot callbacks;
 
             // Vuelca el rect y los estados en el botón vivo. NO toca ni el atlas
             // (es un puntero a GPU: lo resuelve el sync) ni los campos que

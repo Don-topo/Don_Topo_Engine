@@ -30,6 +30,12 @@ namespace ScriptBindings {
     // Devuelve true y rellena outPath si había petición pendiente (y la
     // consume); false si no había ninguna.
     bool takePendingSceneLoad(std::string& outPath);
+
+    // Vacía la tabla del lua_State donde viven las funciones Lua enganchadas a
+    // los botones. La llama ScriptManager::invalidateScriptCallbacks junto con
+    // el relevo de la época: la época deja mudos a los callbacks viejos y esto
+    // suelta las funciones para que el GC de Lua se las lleve.
+    void clearUiCallbacks(ScriptManager& mgr);
 }
 
 } // namespace DonTopo

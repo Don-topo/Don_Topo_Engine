@@ -75,6 +75,16 @@ public:
 
     void log(const std::string& msg) { if (m_log) m_log(msg); }
 
+    // Época de los callbacks que los scripts dejan enganchados FUERA del
+    // lua_State (hoy los de la UI, que viven en el ButtonComponent y pueden
+    // dispararse en cualquier frame). Quien guarda uno se queda este weak_ptr y
+    // NO llama a nada si ha expirado: expira cuando muere el ScriptManager —y
+    // con él el lua_State al que apuntaría la llamada— y cuando se recarga en
+    // caliente un script, porque el código y la instancia que registraron el
+    // callback ya no son los que corren. Volver a engancharlo es del script.
+    std::weak_ptr<char> callbackEpoch() const { return m_callbackEpoch; }
+    void invalidateScriptCallbacks();
+
     // true si go sigue en el árbol de la escena. Los bindings lo consultan
     // antes de deref: una entity destruida produce error Lua, nunca crash.
     bool isAlive(GameObject* go) const { return m_alive.count(go) > 0; }
@@ -144,6 +154,12 @@ private:
     std::vector<ScriptProp> detectProps(const sol::table& classTable);
 
     sol::state m_lua;
+
+    // Testigo de vida de los callbacks registrados desde Lua (ver
+    // callbackEpoch). Se declara DESPUÉS de m_lua a propósito: al destruir el
+    // manager se libera antes que el estado, así que ningún callback llega a
+    // ver un lua_State a medio cerrar.
+    std::shared_ptr<char> m_callbackEpoch = std::make_shared<char>(0);
     std::filesystem::path m_scriptsDir;
     std::map<std::string, ScriptClass> m_registry;
     // Último error de compilación por nombre de script (persiste aunque el

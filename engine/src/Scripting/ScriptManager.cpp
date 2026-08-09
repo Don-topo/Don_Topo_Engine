@@ -353,9 +353,21 @@ namespace DonTopo
         registerTriggerListeners();
     }
 
+    void ScriptManager::invalidateScriptCallbacks()
+    {
+        // Renovar el testigo deja fuera de juego a todos los callbacks ya
+        // registrados (los guardan como weak_ptr) SIN tocar el componente que
+        // los tiene: el std::function sigue ahí, pero no llama a nada.
+        m_callbackEpoch = std::make_shared<char>(0);
+        ScriptBindings::clearUiCallbacks(*this);
+    }
+
     void ScriptManager::onPlayStop()
     {
         clearTriggerListeners();
+        // Las instancias se destruyen a continuación: un callback que sobreviva
+        // al Stop llamaría a un método de un objeto que ya hizo OnDestroy.
+        invalidateScriptCallbacks();
         auto comps = collectComponents();
         for (auto* c : comps) callOnDestroy(*c);
         for (auto* c : comps)
@@ -476,6 +488,11 @@ namespace DonTopo
             m_registry[name].mtime = std::filesystem::last_write_time(path, ec);
             if (!loadScript(path))
                 continue;   // error logueado; instancias viejas siguen corriendo
+
+            // El código que registró los callbacks de UI ya no existe: los que
+            // quedaran enganchados apuntan a la clase vieja. Se invalidan aquí
+            // y los vuelve a enganchar el script recargado en su Start.
+            invalidateScriptCallbacks();
 
             if (!m_playing || !m_scene) continue;
             // El editor pudo borrar entities este mismo frame.

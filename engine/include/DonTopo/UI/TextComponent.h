@@ -235,7 +235,14 @@ namespace DonTopo
 
         if (rebuild)
         {
-            canvas.root().clearChildren();
+            // clear() y no root().clearChildren(): el canvas guarda punteros de
+            // estado a nodos concretos (el que tiene el ratón encima, el
+            // pulsado, el del foco, el del último click) y esos nodos son justo
+            // los que se acaban de destruir. clearChildren() los dejaba
+            // colgando, y el siguiente updateInput los desreferenciaba: si el
+            // asignador reutilizaba la dirección, el canvas se creía que el
+            // nodo NUEVO ya estaba hovered y no volvía a marcarlo.
+            canvas.clear();
             cache.buttonIds.clear();
             cache.buttonNodes.clear();
             cache.buttonLabels.clear();
@@ -263,6 +270,20 @@ namespace DonTopo
                 ButtonComponent nunca;
                 nunca.text = "\x01(sin volcar)";
                 cache.buttonPrev.push_back(nunca);
+
+                // Handlers de script. Se instalan AQUÍ, en el único sitio que
+                // crea nodos, porque clearChildren() se acaba de llevar por
+                // delante los del árbol anterior: el dueño del callback es el
+                // componente y el nodo solo tiene un weak_ptr a él, así que un
+                // botón que pierde su componente deja de disparar en vez de
+                // llamar a un objeto muerto.
+                std::weak_ptr<UiButtonRuntime> rt = entry.second->callbacks.ptr;
+                b.onClick = [rt](UiEvent&) {
+                    if (auto p = rt.lock(); p && p->onClick) p->onClick();
+                };
+                b.onDoubleClick = [rt](UiEvent&) {
+                    if (auto p = rt.lock(); p && p->onDoubleClick) p->onDoubleClick();
+                };
             }
 
             for (const auto& entry : bars)
@@ -297,6 +318,14 @@ namespace DonTopo
         for (size_t i = 0; i < buttons.size(); i++)
         {
             const ButtonComponent& src = *buttons[i].second;
+
+            // Camino de vuelta: el estado lo resuelve updateInput en el NODO, y
+            // sin publicarlo aquí un script no tendría forma de leerlo. Va antes
+            // del corte por "no ha cambiado" porque el estado cambia sin que
+            // cambie ni un campo del componente (basta pasar el ratón por
+            // encima), y copiarlo no ensucia el nodo.
+            if (auto rt = src.callbacks.ptr) rt->state = cache.buttonNodes[i]->state;
+
             if (src == cache.buttonPrev[i]) continue;   // nada que tocar este frame
 
             Button& b = *cache.buttonNodes[i];

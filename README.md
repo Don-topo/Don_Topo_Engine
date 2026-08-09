@@ -40,6 +40,7 @@ A Vulkan-based game engine written in C++20.
 - **Async asset loading**: worker thread pool (`JobSystem`), off-thread image decode, batched GPU uploads with deferred visibility and deferred destruction — no `vkDeviceWaitIdle` stalls on drop or scene load
 - **Export Game**: packages a standalone runtime (scene, assets, scripts, shaders, splash screen, FMOD and MSVC CRT DLLs) that links no editor code at all
 - **Lua scripting**: `ScriptComponent` (multiple per GameObject), Unity-style lifecycle (Awake/Start/Update/FixedUpdate/LateUpdate/OnDestroy), Entity/Transform/Scene/Input/Audio API, runtime scene switching (`DonTopo.loadScene`), hot reload, auto-generated property UI
+- **2D UI components**: `Canvas` (scale modes, reference resolution, safe area), `Button` (5 states, color-tint/sprite-swap/fade transitions, optional text label), `Text` (font, size, outline, shadow, align, wrap/overflow) and `ProgressBar` (value range, fill direction, background/fill sprites). They are **data-only** components of the scene: a single per-frame sync rebuilds/updates the live canvas tree from them, so what you see in Play and in the exported game comes from the scene, not from a hand-wired tree. Editable in Properties and **fully scriptable from Lua** — every field, plus `OnClick`/`OnDoubleClick` callbacks and the button state (see below)
 - FBX / OBJ model loading (embedded textures supported)
 
 ## Tech Stack
@@ -624,9 +625,65 @@ later. After the call the old scene is gone, your script included — treat it a
 last useful line. Multiple requests in one frame: the last one wins. Outside Play
 Mode the request is ignored with a Log Console warning.
 
+### UI from Lua
+
+The four UI components are reachable from any script, with the same reach as the
+Properties panel: read/write **every** field, add or remove the component, and —
+for `Button` — register Lua callbacks and read the resolved state.
+
+```lua
+-- Scripts/BotonDemo.lua
+BotonDemo = {}
+
+function BotonDemo:Start()
+    local b = self.entity:GetButton()          -- nil if the GameObject has none
+    if b == nil then return end
+
+    b.text = "Play"                            -- scalars/strings/bools/enums: properties
+    b:SetSize(220, 48)                         -- vectors: methods (Lua has no vec2/vec4)
+    b:SetNormalColor(0.1, 0.5, 0.9, 1)
+    b.transition = UiButtonTransition.Animation
+
+    b:OnClick(function() print("click!") end)
+    b:OnDoubleClick(function() print("double!") end)
+end
+
+function BotonDemo:Update(dt)
+    if self.entity:GetButton():GetState() == UiButtonState.Hover then
+        self.entity:GetProgressBar().value = 1.0
+    end
+end
+```
+
+`entity:GetCanvas()/GetButton()/GetText()/GetProgressBar()` return `nil` when the
+component is absent; `AddCanvas()/AddButton()/AddText()/AddProgressBar()` create it
+(returning the wrapper, and returning the existing one if it is already there) and
+`RemoveCanvas()/…` drop it. The same names also work through
+`GetComponent`/`AddComponent`/`RemoveComponent`. Enums travel as integer constant
+tables: `UiScaleMode`, `UiScreenMatch`, `UiTextAlign`, `UiTextOverflow`,
+`UiProgressFillDirection`, `UiButtonTransition`, `UiButtonState`.
+
+Setters always write to the **component**, never to the live canvas node — the
+per-frame sync dumps the component onto the node and would overwrite any direct
+write. Writing an atlas/font path loads nothing at that instant: resolving assets
+is the sync's job.
+
+Button callbacks are owned by the component, not by the canvas node, and the sync
+reinstalls them every time it rebuilds the canvas root (which happens whenever any
+widget is added to or removed from the scene) — so a handler registered once keeps
+firing. They are invalidated when the script is hot-reloaded and when Play stops:
+re-register in `Start`, which is where a reloaded script runs again. An error inside
+a callback is logged to the Log Console and never takes down the frame.
+
+In the editor the **mouse only reaches the UI in Play Mode and while the cursor is
+over the viewport image** (like Unity, a button does not light up in edit mode);
+coordinates are canvas pixels from the top-left corner of that image.
+
 API surface: `self.entity` (`GetTransform`, `GetComponent`/`AddComponent`/`RemoveComponent`,
+`GetCanvas`/`GetButton`/`GetText`/`GetProgressBar` + `Add*`/`Remove*`,
 `GetParent`/`GetChildren`), `Transform` (position/rotation/scale, `Translate`/`Rotate`),
-`Scene` (`Find`/`CreateGameObject`/`Instantiate`/`Destroy`), `DonTopo.loadScene`,
+`Scene` (`Find`/`CreateGameObject`/`Instantiate`/`Destroy`), UI (`Canvas`/`Button`/
+`Text`/`ProgressBar`, incl. button callbacks and state), `DonTopo.loadScene`,
 `Input` (`IsKeyDown`/`IsKeyPressed`/
 `IsKeyReleased`, `Key.*`), `Log.Info/Warn/Error` (+ `print`) routed to the Log Console. Scripts
 only run in Play Mode; a broken script never crashes the engine (compile/runtime errors are
