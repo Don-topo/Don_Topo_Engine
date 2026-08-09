@@ -51,6 +51,12 @@ const std::vector<std::string>& luaApiSymbols()
         "Entity.name", "Entity:IsValid", "Entity:GetTransform",
         "Entity:GetParent", "Entity:GetChildren", "Entity:GetComponent",
         "Entity:AddComponent", "Entity:RemoveComponent",
+        // UI: atajos con nombre para los cuatro componentes (registerUi).
+        // Los Get* devuelven nil si el componente no está.
+        "Entity:GetCanvas", "Entity:GetButton", "Entity:GetText", "Entity:GetProgressBar",
+        "Entity:AddCanvas", "Entity:AddButton", "Entity:AddText", "Entity:AddProgressBar",
+        "Entity:RemoveCanvas", "Entity:RemoveButton", "Entity:RemoveText",
+        "Entity:RemoveProgressBar",
 
         // Transform
         "Transform:GetPosition", "Transform:SetPosition",
@@ -83,6 +89,79 @@ const std::vector<std::string>& luaApiSymbols()
         "AudioClip:Play", "AudioClip:Stop", "AudioClip:SetLoop", "AudioClip:GetLoop",
         "AudioClip:SetVolume", "AudioClip:GetVolume", "AudioClip:SetPitch", "AudioClip:GetPitch",
         "AudioClip:SetIs3D", "AudioClip:GetIs3D",
+
+        // UI 2D — Canvas (Entity:GetCanvas / Entity:AddCanvas)
+        "Canvas.scaleMode", "Canvas.scaleFactor", "Canvas.screenMatch",
+        "Canvas.matchWidthOrHeight", "Canvas.screenDpi", "Canvas.fallbackDpi",
+        "Canvas.referenceDpi", "Canvas.aspectRatio",
+        "Canvas:GetReferenceResolution", "Canvas:SetReferenceResolution",
+        // SafeArea son cuatro insets sueltos: left, top, right, bottom.
+        "Canvas:GetSafeArea", "Canvas:SetSafeArea",
+
+        // UI 2D — Button (Entity:GetButton / Entity:AddButton)
+        "Button.visible", "Button.atlasPath", "Button.sprite",
+        "Button.interactable", "Button.selected", "Button.transition",
+        "Button.normalSprite", "Button.hoverSprite", "Button.pressedSprite",
+        "Button.disabledSprite", "Button.selectedSprite", "Button.fadeDuration",
+        "Button.text", "Button.fontPath", "Button.fontSize", "Button.textAlign",
+        "Button:GetAnchorMin", "Button:SetAnchorMin",
+        "Button:GetAnchorMax", "Button:SetAnchorMax",
+        "Button:GetPivot", "Button:SetPivot",
+        "Button:GetPosition", "Button:SetPosition",
+        "Button:GetSize", "Button:SetSize",
+        "Button:GetColor", "Button:SetColor",
+        "Button:GetNormalColor", "Button:SetNormalColor",
+        "Button:GetHoverColor", "Button:SetHoverColor",
+        "Button:GetPressedColor", "Button:SetPressedColor",
+        "Button:GetDisabledColor", "Button:SetDisabledColor",
+        "Button:GetSelectedColor", "Button:SetSelectedColor",
+        "Button:GetTextColor", "Button:SetTextColor",
+        // GetState devuelve un UiButtonState; OnClick/OnDoubleClick registran
+        // la función Lua que llama el canvas.
+        "Button:GetState", "Button:OnClick", "Button:OnDoubleClick",
+
+        // UI 2D — Text (Entity:GetText / Entity:AddText)
+        "Text.visible", "Text.text", "Text.fontPath", "Text.fontSize",
+        "Text.outlineWidth", "Text.align", "Text.overflow", "Text.wordWrap",
+        "Text.boldStrength", "Text.italicSkew",
+        "Text:GetAnchorMin", "Text:SetAnchorMin",
+        "Text:GetAnchorMax", "Text:SetAnchorMax",
+        "Text:GetPivot", "Text:SetPivot",
+        "Text:GetPosition", "Text:SetPosition",
+        "Text:GetSize", "Text:SetSize",
+        "Text:GetShadowOffset", "Text:SetShadowOffset",
+        "Text:GetColor", "Text:SetColor",
+        "Text:GetOutlineColor", "Text:SetOutlineColor",
+        "Text:GetShadowColor", "Text:SetShadowColor",
+
+        // UI 2D — ProgressBar (Entity:GetProgressBar / Entity:AddProgressBar)
+        "ProgressBar.visible", "ProgressBar.value", "ProgressBar.minValue",
+        "ProgressBar.maxValue", "ProgressBar.fillDirection",
+        "ProgressBar.atlasPath", "ProgressBar.backgroundPath", "ProgressBar.fillPath",
+        "ProgressBar:GetAnchorMin", "ProgressBar:SetAnchorMin",
+        "ProgressBar:GetAnchorMax", "ProgressBar:SetAnchorMax",
+        "ProgressBar:GetPivot", "ProgressBar:SetPivot",
+        "ProgressBar:GetPosition", "ProgressBar:SetPosition",
+        "ProgressBar:GetSize", "ProgressBar:SetSize",
+        "ProgressBar:GetColor", "ProgressBar:SetColor",
+        "ProgressBar:GetFillColor", "ProgressBar:SetFillColor",
+        // El 0..1 ya acotado que usa el sync para el rect del relleno.
+        "ProgressBar:GetNormalizedValue",
+
+        // UI 2D — enums (tablas de enteros que registra registerUi)
+        "UiScaleMode.ConstantPixelSize", "UiScaleMode.ScaleWithScreenSize",
+        "UiScaleMode.ConstantPhysicalSize",
+        "UiScreenMatch.MatchWidthOrHeight", "UiScreenMatch.Expand",
+        "UiScreenMatch.Shrink",
+        "UiTextAlign.Left", "UiTextAlign.Center", "UiTextAlign.Right",
+        "UiTextAlign.Justify",
+        "UiTextOverflow.Overflow", "UiTextOverflow.Clip", "UiTextOverflow.Ellipsis",
+        "UiProgressFillDirection.LeftToRight", "UiProgressFillDirection.RightToLeft",
+        "UiProgressFillDirection.BottomToTop", "UiProgressFillDirection.TopToBottom",
+        "UiButtonTransition.ColorTint", "UiButtonTransition.SpriteSwap",
+        "UiButtonTransition.Animation",
+        "UiButtonState.Normal", "UiButtonState.Hover", "UiButtonState.Pressed",
+        "UiButtonState.Disabled", "UiButtonState.Selected",
 
         // Scene
         "Scene.Find", "Scene.CreateGameObject", "Scene.Destroy", "Scene.Instantiate",

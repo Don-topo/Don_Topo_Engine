@@ -386,6 +386,15 @@ function BotonDemo:Start()
 end
 ```
 
+### Autocompletado en el Script Editor
+
+Toda esta API de UI está en la lista de identificadores del Script Editor: al
+teclear `Canvas.`, `Button:`, `Text.`, `ProgressBar:`, `Entity:Get`, o cualquiera
+de las siete tablas de enums (`UiScaleMode.`, `UiScreenMatch.`, `UiTextAlign.`,
+`UiTextOverflow.`, `UiProgressFillDirection.`, `UiButtonTransition.`,
+`UiButtonState.`) salen las sugerencias. Propiedades con `.`, métodos con `:`,
+igual que el resto de la lista.
+
 ## Ejemplos existentes
 
 `Scripts/Mover.lua` (Input + Transform), `Scripts/Rotator.lua` (rotación
