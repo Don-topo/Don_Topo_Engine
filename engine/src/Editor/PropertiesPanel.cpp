@@ -103,6 +103,7 @@ PropertiesPanel::PropertiesPanel()
     , m_fontFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_uiAtlasFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_textFontFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_barAtlasFileDialog(std::make_unique<IGFD::FileDialog>())
 {
 }
 
@@ -367,6 +368,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
             drawCanvasSection(ctx);
             drawButtonSection(ctx);
             drawTextSection(ctx);
+            drawProgressBarSection(ctx);
             drawScriptsSection(ctx);
             drawAddComponentButton(ctx);
         }
@@ -378,6 +380,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
     drawAudioClipDialog(ctx);
     drawButtonPathDialogs(ctx);
     drawTextPathDialog(ctx);
+    drawProgressBarPathDialog(ctx);
 }
 
 void PropertiesPanel::drawSsrSection(EditorContext& ctx)
@@ -1542,6 +1545,400 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
         cmd->execute();
         ctx.undo->push(std::move(cmd));
         ctx.pushLog("Componente Text quitado de '" + ctx.selected->name + "'");
+    }
+}
+
+namespace
+{
+    // Las tres rutas de imagen de la barra, en el mismo orden que el `field` que
+    // se pasea por el file dialog y por el drop. Un accessor sin captura para
+    // que el applier del undo (que sobrevive a la selección) no dependa de nada.
+    std::string& barImagePathRef(ProgressBarComponent& c, int field)
+    {
+        if (field == 1) return c.backgroundPath;
+        if (field == 2) return c.fillPath;
+        return c.atlasPath;
+    }
+
+    const char* barImageFieldLabel(int field)
+    {
+        if (field == 1) return "Imagen de fondo de la barra de '";
+        if (field == 2) return "Imagen de relleno de la barra de '";
+        return "Atlas de la barra de '";
+    }
+}
+
+void PropertiesPanel::setProgressBarImagePath(EditorContext& ctx, uint64_t ownerId, int field,
+                                               const std::string& path)
+{
+    // Mismo veto que el Button y el Text, y por el mismo sitio: aquí pasan el
+    // drop y el file dialog de las TRES cajas, así que el filtro solo hay que
+    // ponerlo una vez.
+    if (!isUiAtlasPath(path))
+    {
+        m_barPathError = "No es una imagen (.png .jpg .jpeg .bmp .tga): " +
+                         std::filesystem::path(path).filename().string();
+        ctx.pushLog(m_barPathError);
+        return;
+    }
+    m_barPathError.clear();
+
+    Scene* scene = ctx.scene;
+    if (!scene) return;
+    GameObject* go = scene->findById(ownerId);
+    if (!go || !go->hasProgressBar()) return;
+
+    ProgressBarComponent& p = *go->getProgressBar();
+    const std::string before = barImagePathRef(p, field);
+    if (before == path) return;
+
+    barImagePathRef(p, field) = path;
+
+    const std::string lbl = std::string(barImageFieldLabel(field)) + go->name + "'";
+    ctx.pushLog(lbl + " cambiada a " + path);
+    if (ctx.undo)
+        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+            lbl, before, path,
+            [scene, ownerId, field](const std::string& v) {
+                if (GameObject* g = scene->findById(ownerId))
+                    if (g->hasProgressBar())
+                        barImagePathRef(*g->getProgressBar(), field) = v;
+            }));
+}
+
+void PropertiesPanel::drawProgressBarPathDialog(EditorContext& ctx)
+{
+    // Sin condicionar a ctx.selected/hasProgressBar(): si no se drena aquí,
+    // cambiar de selección con el diálogo abierto deja el flag atascado.
+    if (m_barAtlasDlgOpen && m_barAtlasFileDialog->Display("BarImageDlg"))
+    {
+        if (m_barAtlasFileDialog->IsOk())
+            setProgressBarImagePath(ctx, m_barAtlasDlgOwner, m_barAtlasDlgField,
+                                    m_barAtlasFileDialog->GetFilePathName());
+        m_barAtlasFileDialog->Close();
+        m_barAtlasDlgOpen = false;
+    }
+}
+
+void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
+{
+    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    if (!ctx.selected->hasProgressBar()) return;
+
+    ImGui::Separator();
+    bool sectionOpen = ImGui::TreeNodeEx("Progress Bar",
+                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+    const bool removeClicked = ImGui::SmallButton("x##bar");
+
+    Scene*            scene = ctx.scene;
+    const uint64_t    id    = ctx.selected->id;
+    const std::string owner = ctx.selected->name;
+
+    if (sectionOpen)
+    {
+        ProgressBarComponent* p = ctx.selected->getProgressBar().get();
+        ImGui::TextWrapped("Barra de progreso de la UI 2D. Se dibuja en el árbol del Canvas "
+                           "como fondo + relleno; el relleno sale de value contra [min, max].");
+
+        // Los mismos accessors sin captura (function pointer) y el mismo baile
+        // de undo que las secciones del Button y del Text. Los labels llevan
+        // "##bar" porque un GameObject puede tener los tres componentes a la
+        // vez: dos widgets con el MISMO id de ImGui comparten estado.
+        using FloatRef = float&       (*)(ProgressBarComponent&);
+        using Vec2Ref  = glm::vec2&   (*)(ProgressBarComponent&);
+        using Vec4Ref  = glm::vec4&   (*)(ProgressBarComponent&);
+        using StrRef   = std::string& (*)(ProgressBarComponent&);
+        using BoolRef  = bool&        (*)(ProgressBarComponent&);
+        using EnumSet  = void         (*)(ProgressBarComponent&, int);
+
+        auto comboEnum = [&](const char* label, int before, const char* const* items,
+                             int count, EnumSet apply)
+        {
+            int idx = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::Combo(label, &idx, items, count) && idx != before)
+            {
+                apply(*p, idx);
+                const std::string lbl = std::string(label) + " de la barra de '" + owner + "'";
+                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<int>>(
+                        lbl, before, idx,
+                        [scene, id, apply](const int& v) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasProgressBar()) apply(*go->getProgressBar(), v);
+                        }));
+            }
+        };
+
+        auto checkBox = [&](const char* label, BoolRef acc)
+        {
+            const bool before = acc(*p);
+            bool       v      = before;
+            if (ImGui::Checkbox(label, &v) && v != before)
+            {
+                acc(*p) = v;
+                const std::string lbl = std::string(label) + " de la barra de '" + owner + "'";
+                ctx.pushLog(lbl + (v ? " activado" : " desactivado"));
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
+                        lbl, before, v,
+                        [scene, id, acc](const bool& val) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasProgressBar()) acc(*go->getProgressBar()) = val;
+                        }));
+            }
+        };
+
+        auto dragFloat = [&](const char* label, FloatRef acc, float speed,
+                             float lo, float hi, const char* fmt)
+        {
+            const float before = acc(*p);
+            float       v      = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+            if (ImGui::DragFloat(label, &v, speed, lo, hi, fmt))
+                acc(*p) = v;
+            if (ImGui::IsItemActivated())
+            {
+                m_barDragBefore  = before;
+                m_barDragOwnerId = id;
+                m_barDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_barDragOwnerId == id &&
+                m_barDragField == label)
+            {
+                const float after = acc(*p);
+                m_barDragField = nullptr;
+                if (after != m_barDragBefore)
+                {
+                    const std::string lbl = std::string(label) + " de la barra de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<float>>(
+                            lbl, m_barDragBefore, after,
+                            [scene, id, acc](const float& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasProgressBar()) acc(*go->getProgressBar()) = val;
+                            }));
+                }
+            }
+        };
+
+        auto dragVec2 = [&](const char* label, Vec2Ref acc, float speed,
+                            float lo, float hi, const char* fmt)
+        {
+            const glm::vec2 before = acc(*p);
+            glm::vec2       v      = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::DragFloat2(label, &v.x, speed, lo, hi, fmt))
+                acc(*p) = v;
+            if (ImGui::IsItemActivated())
+            {
+                m_barDragBefore2 = before;
+                m_barDragOwnerId = id;
+                m_barDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_barDragOwnerId == id &&
+                m_barDragField == label)
+            {
+                const glm::vec2 after = acc(*p);
+                m_barDragField = nullptr;
+                if (after != m_barDragBefore2)
+                {
+                    const std::string lbl = std::string(label) + " de la barra de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
+                            lbl, m_barDragBefore2, after,
+                            [scene, id, acc](const glm::vec2& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasProgressBar()) acc(*go->getProgressBar()) = val;
+                            }));
+                }
+            }
+        };
+
+        auto colorEdit = [&](const char* label, Vec4Ref acc)
+        {
+            const glm::vec4 before = acc(*p);
+            glm::vec4       v      = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+            if (ImGui::ColorEdit4(label, &v.x))
+                acc(*p) = v;
+            if (ImGui::IsItemActivated())
+            {
+                m_barDragBefore4 = before;
+                m_barDragOwnerId = id;
+                m_barDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_barDragOwnerId == id &&
+                m_barDragField == label)
+            {
+                const glm::vec4 after = acc(*p);
+                m_barDragField = nullptr;
+                if (after != m_barDragBefore4)
+                {
+                    const std::string lbl = std::string(label) + " de la barra de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
+                            lbl, m_barDragBefore4, after,
+                            [scene, id, acc](const glm::vec4& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasProgressBar()) acc(*go->getProgressBar()) = val;
+                            }));
+                }
+            }
+        };
+
+        auto inputText = [&](const char* label, StrRef acc)
+        {
+            const std::string before = acc(*p);
+            char buf[512] = {};
+            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
+            if (ImGui::InputText(label, buf, sizeof(buf)))
+                acc(*p) = std::string(buf);
+            if (ImGui::IsItemActivated())
+            {
+                m_barDragBeforeStr = before;
+                m_barDragOwnerId   = id;
+                m_barDragField     = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_barDragOwnerId == id &&
+                m_barDragField == label)
+            {
+                const std::string after = acc(*p);
+                const std::string prev  = m_barDragBeforeStr;
+                m_barDragField = nullptr;
+                if (after != prev)
+                {
+                    const std::string lbl = std::string(label) + " de la barra de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+                            lbl, prev, after,
+                            [scene, id, acc](const std::string& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasProgressBar()) acc(*go->getProgressBar()) = val;
+                            }));
+                }
+            }
+        };
+
+        ImGui::TextDisabled("Rect");
+        dragVec2("Anchor Min##bar",
+                 +[](ProgressBarComponent& c) -> glm::vec2& { return c.anchorMin; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Anchor Max##bar",
+                 +[](ProgressBarComponent& c) -> glm::vec2& { return c.anchorMax; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Pivot##bar", +[](ProgressBarComponent& c) -> glm::vec2& { return c.pivot; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Position##bar",
+                 +[](ProgressBarComponent& c) -> glm::vec2& { return c.position; },
+                 1.0f, -16384.0f, 16384.0f, "%.0f");
+        dragVec2("Size##bar", +[](ProgressBarComponent& c) -> glm::vec2& { return c.size; },
+                 1.0f, 0.0f, 16384.0f, "%.0f");
+        checkBox("Visible##bar", +[](ProgressBarComponent& c) -> bool& { return c.visible; });
+
+        ImGui::TextDisabled("Valor");
+        // Sin tope por min/max a propósito: el componente no clampa nada (lo
+        // normaliza el sync), y el rango puede venir de un script.
+        dragFloat("Value##bar", +[](ProgressBarComponent& c) -> float& { return c.value; },
+                  0.01f, -1e9f, 1e9f, "%.3f");
+        dragFloat("Min##bar", +[](ProgressBarComponent& c) -> float& { return c.minValue; },
+                  0.01f, -1e9f, 1e9f, "%.3f");
+        dragFloat("Max##bar", +[](ProgressBarComponent& c) -> float& { return c.maxValue; },
+                  0.01f, -1e9f, 1e9f, "%.3f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Con Max <= Min la barra sale vacía: no hay forma de repartir "
+                              "un intervalo vacío");
+
+        static const char* kDirs[] = { "Left To Right", "Right To Left",
+                                       "Bottom To Top", "Top To Bottom" };
+        comboEnum("Fill Direction##bar", (int)p->fillDirection, kDirs, IM_ARRAYSIZE(kDirs),
+                  +[](ProgressBarComponent& c, int v) {
+                      c.fillDirection = (UiProgressFillDirection)v;
+                  });
+
+        ImGui::TextDisabled("Colores");
+        colorEdit("Background Color##bar",
+                  +[](ProgressBarComponent& c) -> glm::vec4& { return c.color; });
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Color del FONDO (el rect entero)");
+        colorEdit("Fill Color##bar",
+                  +[](ProgressBarComponent& c) -> glm::vec4& { return c.fillColor; });
+
+        ImGui::TextDisabled("Imágenes");
+        // Una caja de asset por ruta, calcadas a la del Button: ruta escribible
+        // a mano, botón que abre el file dialog y zona de drop para el content
+        // browser. El veto por extensión está en setProgressBarImagePath, por
+        // donde pasan los tres campos y los dos caminos.
+        auto assetBox = [&](const char* label, int field, StrRef acc,
+                            const char* dropId, const char* tip)
+        {
+            inputText(label, acc);
+            if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            ImGui::SameLine();
+            // El id del botón sale del label, que ya es único por campo: dos
+            // botones con el mismo id compartirían el estado de pulsado.
+            if (ImGui::Button((std::string("Browse...##") + label).c_str()))
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                m_barAtlasDlgOwner = id;
+                m_barAtlasDlgField = field;
+                m_barAtlasDlgOpen  = true;
+                m_barAtlasFileDialog->OpenDialog("BarImageDlg", "Choose image",
+                                                 ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+            }
+
+            ImGui::BeginChild(dropId, ImVec2(0, 34), true);
+            ImGui::TextDisabled("Drop .png/.jpg here");
+            // Mismo veto de edición que el Button: con el modal de Load Scene
+            // activo no se aceptan drops nuevos.
+            if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
+            {
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+                    setProgressBarImagePath(ctx, id, field,
+                                            std::string(static_cast<const char*>(payload->Data)));
+                ImGui::EndDragDropTarget();
+            }
+            ImGui::EndChild();
+        };
+
+        assetBox("Atlas##bar", 0,
+                 +[](ProgressBarComponent& c) -> std::string& { return c.atlasPath; },
+                 "##DropZoneBarAtlas",
+                 "Imagen compartida: la usan las partes que no traigan la suya");
+        assetBox("Background Image##bar", 1,
+                 +[](ProgressBarComponent& c) -> std::string& { return c.backgroundPath; },
+                 "##DropZoneBarBg",
+                 "Vacía = el Atlas; y sin ninguno, un quad de Background Color");
+        assetBox("Fill Image##bar", 2,
+                 +[](ProgressBarComponent& c) -> std::string& { return c.fillPath; },
+                 "##DropZoneBarFill",
+                 "Vacía = el Atlas; y sin ninguno, un quad de Fill Color");
+
+        if (!m_barPathError.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_barPathError.c_str());
+
+        ImGui::TreePop();
+    }
+
+    if (removeClicked && ctx.scene && ctx.undo)
+    {
+        auto cmd = std::make_unique<ProgressBarComponentCommand>(
+            *ctx.scene, "Quitar Progress Bar de '" + ctx.selected->name + "'", ctx.selected->id,
+            /*add=*/false, *ctx.selected->getProgressBar());
+        cmd->execute();
+        ctx.undo->push(std::move(cmd));
+        ctx.pushLog("Componente Progress Bar quitado de '" + ctx.selected->name + "'");
     }
 }
 
@@ -3179,6 +3576,18 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
                 ctx.pushLog("Componente Text añadido a '" + ctx.selected->name + "'");
+            }
+            ImGui::EndDisabled();
+
+            ImGui::BeginDisabled(ctx.selected->hasProgressBar());
+            if (ImGui::Selectable("Progress Bar") && ctx.scene && ctx.undo)
+            {
+                auto cmd = std::make_unique<ProgressBarComponentCommand>(
+                    *ctx.scene, "Añadir Progress Bar a '" + ctx.selected->name + "'",
+                    ctx.selected->id, /*add=*/true, ProgressBarComponent{});
+                cmd->execute();
+                ctx.undo->push(std::move(cmd));
+                ctx.pushLog("Componente Progress Bar añadido a '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
         }

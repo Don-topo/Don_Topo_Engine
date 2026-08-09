@@ -181,6 +181,25 @@ void TextComponentCommand::apply(bool add)
     go->setText(std::make_shared<TextComponent>(m_state));
 }
 
+ProgressBarComponentCommand::ProgressBarComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                                          bool add, ProgressBarComponent state)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}
+
+void ProgressBarComponentCommand::execute() { apply(m_add); }
+void ProgressBarComponentCommand::undo()    { apply(!m_add); }
+
+void ProgressBarComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setProgressBar(nullptr);
+        return;
+    }
+    go->setProgressBar(std::make_shared<ProgressBarComponent>(m_state));
+}
+
 AnimatorComponentCommand::AnimatorComponentCommand(Scene& scene, std::string label, uint64_t id,
                                                     bool add, AnimatorComponent state)
     : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}

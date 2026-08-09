@@ -20,6 +20,7 @@
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
 #include "DonTopo/UI/TextComponent.h"
+#include "DonTopo/UI/ProgressBarComponent.h"
 
 namespace DonTopo
 {
@@ -167,6 +168,14 @@ namespace DonTopo
             const std::shared_ptr<TextComponent>& getText() const { return m_text; }
             bool hasText() const { return m_text != nullptr; }
 
+            // Barra de progreso de la UI 2D. Mismo contrato que el Text: SOLO
+            // DATOS, y el nodo vivo (fondo + relleno) lo monta syncUiWidgets().
+            // Compatible con Button y Text en el mismo GameObject: son nodos
+            // hermanos con prefijos de nombre distintos.
+            void setProgressBar(std::shared_ptr<ProgressBarComponent> p) { m_progressBar = std::move(p); }
+            const std::shared_ptr<ProgressBarComponent>& getProgressBar() const { return m_progressBar; }
+            bool hasProgressBar() const { return m_progressBar != nullptr; }
+
             // Scripts Lua — a diferencia del resto de slots, vector: se
             // permiten varios scripts por GameObject (incluso repetidos).
             void addScript(std::unique_ptr<ScriptComponent> script);
@@ -227,6 +236,7 @@ namespace DonTopo
             std::shared_ptr<CanvasComponent> m_canvas;
             std::shared_ptr<ButtonComponent> m_button;
             std::shared_ptr<TextComponent> m_text;
+            std::shared_ptr<ProgressBarComponent> m_progressBar;
             std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
     };
 }

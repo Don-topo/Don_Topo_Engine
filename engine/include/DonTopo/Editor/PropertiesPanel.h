@@ -133,6 +133,19 @@ private:
     // validando la extensión y dejando el cambio en el stack de undo. Punto
     // único por el que pasan el drop y el file dialog.
     void setTextFontPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
+    // ProgressBar: barra de progreso de la UI 2D. Sección tras "Add" como el
+    // Button y el Text, con el mismo rect, el valor y su rango, los dos colores
+    // y los dos sprites (del MISMO atlas).
+    void drawProgressBarSection(EditorContext& ctx);
+    // Drena el file dialog del atlas de la ProgressBar. Fuera de la sección y
+    // sin condicionar a la selección, por el mismo motivo que los del Button.
+    void drawProgressBarPathDialog(EditorContext& ctx);
+    // Escribe UNA de las tres rutas de imagen de la ProgressBar (field: 0 atlas,
+    // 1 fondo, 2 relleno) resolviendo el GameObject por id, validando la
+    // extensión y dejando el cambio en el stack de undo. Punto único por el que
+    // pasan el drop y el file dialog de las tres cajas.
+    void setProgressBarImagePath(EditorContext& ctx, uint64_t ownerId, int field,
+                                  const std::string& path);
     void drawAudioClipDialog(EditorContext& ctx);
     void drawScriptsSection(EditorContext& ctx);
     void drawAddComponentButton(EditorContext& ctx);
@@ -207,6 +220,16 @@ private:
     glm::vec2   m_textDragBefore2 {0.0f};
     glm::vec4   m_textDragBefore4 {1.0f};
     std::string m_textDragBeforeStr;
+
+    // Y lo mismo para los campos de la ProgressBar: propios y no compartidos con
+    // el Button ni con el Text, porque los TRES componentes pueden estar en el
+    // MISMO GameObject y un "before" compartido mezclaría los arrastres.
+    uint64_t    m_barDragOwnerId = 0;
+    const char* m_barDragField   = nullptr;
+    float       m_barDragBefore  = 0.0f;
+    glm::vec2   m_barDragBefore2 {0.0f};
+    glm::vec4   m_barDragBefore4 {1.0f};
+    std::string m_barDragBeforeStr;
 
     // Box Collider – mismo patrón de cache que Transform: persiste entre
     // frames para que los DragFloat acumulen el delta del arrastre, y se
@@ -323,6 +346,17 @@ private:
     uint64_t m_textFontDlgOwner = 0;
     std::unique_ptr<IGFD::FileDialog> m_textFontFileDialog;
     std::string m_textPathError;
+
+    // Imágenes de la ProgressBar. Instancia de diálogo propia y su propio id de
+    // dueño, por la misma razón que las del Button y la del Text. UNA sola
+    // instancia para las tres cajas (solo puede haber un diálogo abierto a la
+    // vez) más el campo que lo abrió: sin él, elegir un fichero escribiría
+    // siempre en el atlas.
+    bool     m_barAtlasDlgOpen  = false;
+    uint64_t m_barAtlasDlgOwner = 0;
+    int      m_barAtlasDlgField = 0;   // 0 atlas, 1 fondo, 2 relleno
+    std::unique_ptr<IGFD::FileDialog> m_barAtlasFileDialog;
+    std::string m_barPathError;
     // Mismo patrón que m_meshLoadError/m_meshAddRequestedFor pero para el
     // componente AudioClip.
     std::string m_audioLoadError;

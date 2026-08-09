@@ -286,6 +286,24 @@ std::vector<ExportAsset> collectSceneAssets(
             else if (!b->text.empty()) addUiPath(kDefaultUiFontPath);
         }
 
+        if (go->hasProgressBar())
+        {
+            const auto& p = go->getProgressBar();
+            // Misma resolución de rutas relativas que el Button, y las TRES: el
+            // fondo y el relleno pueden traer su propia imagen y solo caen en el
+            // atlas si no la traen. Sin fallback a ningún asset por defecto: una
+            // barra sin imágenes se dibuja con quads de color plano.
+            auto addUiPath = [&](const std::string& raw)
+            {
+                if (raw.empty()) return;
+                const fs::path candidata(raw);
+                add(candidata.is_absolute() ? raw : (projectRoot / candidata).string());
+            };
+            addUiPath(p->atlasPath);
+            addUiPath(p->backgroundPath);
+            addUiPath(p->fillPath);
+        }
+
         if (go->hasText())
         {
             const auto& t = go->getText();
@@ -360,6 +378,17 @@ int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& 
         // Misma regla que la del Button: una fontPath vacía se queda vacía y el
         // runtime vuelve a caer en kDefaultUiFontPath.
         n += rewriteField(node["text"], "fontPath", sourceToPackage);
+    }
+
+    if (node.contains("progressBar") && node["progressBar"].is_object())
+    {
+        // Las tres rutas de imagen. Una vacía se queda vacía (rewriteField no
+        // toca una cadena vacía): el runtime vuelve a caer en el atlas o en el
+        // quad de color, igual que en el editor.
+        nlohmann::json& bar = node["progressBar"];
+        n += rewriteField(bar, "atlasPath", sourceToPackage);
+        n += rewriteField(bar, "backgroundPath", sourceToPackage);
+        n += rewriteField(bar, "fillPath", sourceToPackage);
     }
 
     if (node.contains("children") && node["children"].is_array())

@@ -983,7 +983,7 @@ static void test_button_sync_moves_the_live_node()
     std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &b} };
     UiDrawData data;
 
-    syncUiWidgets(lista, {}, canvas, cache, loader);
+    syncUiWidgets(lista, {}, {}, canvas, cache, loader);
     canvas.buildDrawData(800, 480, data);
     CHECK(data.batches.size() == 1);
     CHECK(data.vertices.size() == 4);
@@ -993,7 +993,7 @@ static void test_button_sync_moves_the_live_node()
 
     // Mismo botón, otra posición: el nodo vivo tiene que seguirla.
     b.position = glm::vec2(300.0f, 120.0f);
-    syncUiWidgets(lista, {}, canvas, cache, loader);
+    syncUiWidgets(lista, {}, {}, canvas, cache, loader);
     data.clear();
     canvas.buildDrawData(800, 480, data);
     CHECK(data.vertices.size() == 4);
@@ -1015,7 +1015,7 @@ static void test_button_survives_canvas_edit()
 
     std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &b} };
     UiDrawData data;
-    syncUiWidgets(lista, {}, canvas, cache, loader);
+    syncUiWidgets(lista, {}, {}, canvas, cache, loader);
     canvas.buildDrawData(800, 480, data);
     CHECK(data.batches.size() == 1);
 
@@ -1024,7 +1024,7 @@ static void test_button_survives_canvas_edit()
     cc.scaleFactor = 2.0f;
     cc.applyTo(canvas);
 
-    syncUiWidgets(lista, {}, canvas, cache, loader);
+    syncUiWidgets(lista, {}, {}, canvas, cache, loader);
     data.clear();
     canvas.buildDrawData(800, 480, data);
     CHECK(data.batches.size() == 1);
@@ -1043,7 +1043,7 @@ static void test_button_survives_canvas_edit()
         otro.scaleMode = m;
         otro.safeArea  = { 8.0f, 6.0f, 8.0f, 6.0f };
         otro.applyTo(canvas);
-        syncUiWidgets(lista, {}, canvas, cache, loader);
+        syncUiWidgets(lista, {}, {}, canvas, cache, loader);
         data.clear();
         canvas.buildDrawData(800, 480, data);
         CHECK(data.batches.size() == 1);
@@ -1061,7 +1061,7 @@ static void test_button_text_without_font_is_visible()
     b.text = "Aceptar";
 
     std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &b} };
-    syncUiWidgets(lista, {}, canvas, cache, loader);
+    syncUiWidgets(lista, {}, {}, canvas, cache, loader);
 
     CHECK(canvas.root().children().size() == 1);
     if (canvas.root().children().empty()) return;
@@ -1086,7 +1086,7 @@ static void test_button_state_color_is_applied()
     b.normalColor = glm::vec4(0.2f, 0.4f, 0.6f, 0.8f);
 
     std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &b} };
-    syncUiWidgets(lista, {}, canvas, cache, loader);
+    syncUiWidgets(lista, {}, {}, canvas, cache, loader);
     UiDrawData data;
     canvas.buildDrawData(800, 480, data);   // coloca los rects: el hit test los lee
 
@@ -1125,7 +1125,7 @@ static void test_button_hit_test_maps_back_to_gameobject()
     b.size     = glm::vec2(120.0f, 60.0f);
 
     std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &a}, {9ull, &b} };
-    syncUiWidgets(lista, {}, canvas, cache, loader);
+    syncUiWidgets(lista, {}, {}, canvas, cache, loader);
     UiDrawData data;
     canvas.buildDrawData(800, 480, data);
 
@@ -1368,7 +1368,7 @@ static void test_text_sync_updates_the_live_node()
     std::vector<std::pair<uint64_t, const TextComponent*>> textos{ {9ull, &t} };
     UiDrawData data;
 
-    syncUiWidgets({}, textos, canvas, cache, loader);
+    syncUiWidgets({}, textos, {}, canvas, cache, loader);
     canvas.buildDrawData(800, 480, data);
 
     CHECK(canvas.root().children().size() == 1);
@@ -1388,7 +1388,7 @@ static void test_text_sync_updates_the_live_node()
     // seguirlos Y quedar sucio, o el canvas reusaría los vértices de antes.
     t.text     = "Dos";
     t.position = glm::vec2(300.0f, 120.0f);
-    syncUiWidgets({}, textos, canvas, cache, loader);
+    syncUiWidgets({}, textos, {}, canvas, cache, loader);
     CHECK(vivo->text == "Dos");
     CHECK(node.dirty != 0u);
 
@@ -1399,7 +1399,7 @@ static void test_text_sync_updates_the_live_node()
 
     // Y un frame sin cambios NO vuelve a ensuciar: ensuciar siempre tira la
     // caché de vértices del canvas entero cada frame.
-    syncUiWidgets({}, textos, canvas, cache, loader);
+    syncUiWidgets({}, textos, {}, canvas, cache, loader);
     CHECK(node.dirty == 0u);
 }
 
@@ -1424,7 +1424,7 @@ static void test_buttons_and_texts_coexist()
     std::vector<std::pair<uint64_t, const TextComponent*>>   textos{ {9ull, &t} };
 
     UiDrawData data;
-    syncUiWidgets(botones, textos, canvas, cache, loader);
+    syncUiWidgets(botones, textos, {}, canvas, cache, loader);
     canvas.buildDrawData(800, 480, data);
     CHECK(canvas.root().children().size() == 2);
     if (canvas.root().children().size() != 2) return;
@@ -1435,7 +1435,7 @@ static void test_buttons_and_texts_coexist()
 
     // Tocar SOLO el texto no borra el botón ni le tira sus vértices.
     t.text = "Otro";
-    syncUiWidgets(botones, textos, canvas, cache, loader);
+    syncUiWidgets(botones, textos, {}, canvas, cache, loader);
     CHECK(canvas.root().children().size() == 2);
     data.clear();
     canvas.buildDrawData(800, 480, data);
@@ -1445,7 +1445,7 @@ static void test_buttons_and_texts_coexist()
 
     // Y tocar SOLO el botón no borra el texto.
     b.position = glm::vec2(50.0f, 60.0f);
-    syncUiWidgets(botones, textos, canvas, cache, loader);
+    syncUiWidgets(botones, textos, {}, canvas, cache, loader);
     CHECK(canvas.root().children().size() == 2);
     if (canvas.root().children().size() != 2) return;
     const Text* vivo = canvas.root().children()[1]->asText();
@@ -1457,7 +1457,7 @@ static void test_buttons_and_texts_coexist()
     TextComponent t2;
     t2.text = "Pie";
     textos.emplace_back(11ull, &t2);
-    syncUiWidgets(botones, textos, canvas, cache, loader);
+    syncUiWidgets(botones, textos, {}, canvas, cache, loader);
     CHECK(canvas.root().children().size() == 3);
     data.clear();
     canvas.buildDrawData(800, 480, data);
@@ -1476,22 +1476,22 @@ static void test_text_without_content_loads_no_font()
     TextComponent t;   // sin texto, como lo deja "Add Component"
 
     std::vector<std::pair<uint64_t, const TextComponent*>> textos{ {9ull, &t} };
-    syncUiWidgets({}, textos, canvas, cache, loader);
+    syncUiWidgets({}, textos, {}, canvas, cache, loader);
     CHECK(loader.fontLoads == 0);
     CHECK(canvas.root().children().size() == 1);
 
     // Y varios frames más sin escribir nada tampoco la piden.
-    syncUiWidgets({}, textos, canvas, cache, loader);
-    syncUiWidgets({}, textos, canvas, cache, loader);
+    syncUiWidgets({}, textos, {}, canvas, cache, loader);
+    syncUiWidgets({}, textos, {}, canvas, cache, loader);
     CHECK(loader.fontLoads == 0);
 
     // La primera letra sí la carga, y solo esa vez: la caché por ruta es lo que
     // impide una carga por frame (y una fuga de memoria de GPU por frame).
     t.text = "H";
-    syncUiWidgets({}, textos, canvas, cache, loader);
+    syncUiWidgets({}, textos, {}, canvas, cache, loader);
     CHECK(loader.fontLoads == 1);
     t.text = "Ho";
-    syncUiWidgets({}, textos, canvas, cache, loader);
+    syncUiWidgets({}, textos, {}, canvas, cache, loader);
     CHECK(loader.fontLoads == 1);
 }
 
@@ -1507,6 +1507,464 @@ static void test_text_hit_test_maps_back_to_gameobject()
     // Los dos prefijos no se confunden entre sí.
     CHECK(uiTextOwnerId(uiButtonNodeName(42ull)) == 0ull);
     CHECK(uiButtonOwnerId(uiTextNodeName(42ull)) == 0ull);
+}
+
+// ── ProgressBar ─────────────────────────────────────────────────────────────
+// Todos los campos a valores NO neutros y DISTINTOS entre sí: con el default (o
+// con dos campos iguales) un round-trip pasa igual aunque fromJson se salte el
+// campo o lea la clave equivocada.
+static void fillBar(ProgressBarComponent& p)
+{
+    p.anchorMin = glm::vec2(0.125f, 0.25f);
+    p.anchorMax = glm::vec2(0.75f, 0.875f);
+    p.pivot     = glm::vec2(0.3125f, 0.40625f);
+    p.position  = glm::vec2(11.5f, -23.25f);
+    p.size      = glm::vec2(242.75f, 31.5f);
+    p.color     = glm::vec4(0.11f, 0.12f, 0.13f, 0.14f);
+    p.visible   = false;
+
+    p.value    = 37.5f;
+    p.minValue = -12.25f;
+    p.maxValue = 88.75f;
+
+    p.fillColor     = glm::vec4(0.21f, 0.22f, 0.23f, 0.24f);
+    p.fillDirection = UiProgressFillDirection::BottomToTop;
+
+    p.atlasPath      = "assets/ui/hud.png";
+    p.backgroundPath = "assets/ui/bar_bg.png";
+    p.fillPath       = "assets/ui/bar_fill.png";
+}
+
+static void checkBarMatchesFilled(const ProgressBarComponent& p)
+{
+    CHECK(nearlyEqual(p.anchorMin.x, 0.125f));
+    CHECK(nearlyEqual(p.anchorMin.y, 0.25f));
+    CHECK(nearlyEqual(p.anchorMax.x, 0.75f));
+    CHECK(nearlyEqual(p.anchorMax.y, 0.875f));
+    CHECK(nearlyEqual(p.pivot.x, 0.3125f));
+    CHECK(nearlyEqual(p.pivot.y, 0.40625f));
+    CHECK(nearlyEqual(p.position.x, 11.5f));
+    CHECK(nearlyEqual(p.position.y, -23.25f));
+    CHECK(nearlyEqual(p.size.x, 242.75f));
+    CHECK(nearlyEqual(p.size.y, 31.5f));
+    CHECK(nearlyEqual(p.color.r, 0.11f));
+    CHECK(nearlyEqual(p.color.g, 0.12f));
+    CHECK(nearlyEqual(p.color.b, 0.13f));
+    CHECK(nearlyEqual(p.color.a, 0.14f));
+    CHECK(p.visible == false);
+
+    CHECK(nearlyEqual(p.value, 37.5f));
+    CHECK(nearlyEqual(p.minValue, -12.25f));
+    CHECK(nearlyEqual(p.maxValue, 88.75f));
+
+    CHECK(nearlyEqual(p.fillColor.r, 0.21f));
+    CHECK(nearlyEqual(p.fillColor.g, 0.22f));
+    CHECK(nearlyEqual(p.fillColor.b, 0.23f));
+    CHECK(nearlyEqual(p.fillColor.a, 0.24f));
+    CHECK(p.fillDirection == UiProgressFillDirection::BottomToTop);
+
+    CHECK(p.atlasPath == "assets/ui/hud.png");
+    CHECK(p.backgroundPath == "assets/ui/bar_bg.png");
+    CHECK(p.fillPath == "assets/ui/bar_fill.png");
+}
+
+static void test_progress_bar_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* go = scene.addGameObject("Vida", canvasGo);
+    auto bar = std::make_shared<ProgressBarComponent>();
+    fillBar(*bar);
+    go->setProgressBar(bar);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasProgressBar()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "Vida");
+    checkBarMatchesFilled(*found->getProgressBar());
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Una escena guardada antes del componente carga igual: sin barra y sin avisos.
+static void test_scene_without_progress_bar_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool alguno = false;
+    loaded.traverse([&](GameObject* n) { if (n->hasProgressBar()) alguno = true; });
+    CHECK(!alguno);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Neutralidad: sin ninguna barra el JSON no gana ni un byte, y añadir y quitar el
+// componente devuelve el dump EXACTO de partida.
+static void test_scene_without_progress_bar_serializes_identically()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    const std::string antes = scene.toJson().dump();
+    CHECK(antes.find("\"progressBar\"") == std::string::npos);
+
+    go->setProgressBar(std::make_shared<ProgressBarComponent>());
+    CHECK(scene.toJson().dump() != antes);
+    go->setProgressBar(nullptr);
+    CHECK(scene.toJson().dump() == antes);
+}
+
+// Add reversible, y el redo NO devuelve los campos a los defaults.
+static void test_progress_bar_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Vida");
+    ProgressBarComponent st;
+    fillBar(st);
+    ProgressBarComponentCommand cmd(scene, "Add Progress Bar", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasProgressBar());
+    checkBarMatchesFilled(*go->getProgressBar());
+    cmd.undo();
+    CHECK(!go->hasProgressBar());
+    cmd.execute();
+    CHECK(go->hasProgressBar());
+    checkBarMatchesFilled(*go->getProgressBar());
+}
+
+// Remove reversible: el undo devuelve el componente CON sus valores.
+static void test_progress_bar_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Vida");
+    auto bar = std::make_shared<ProgressBarComponent>();
+    fillBar(*bar);
+    go->setProgressBar(bar);
+
+    ProgressBarComponentCommand cmd(scene, "Remove Progress Bar", go->id, /*add=*/false, *bar);
+    cmd.execute();
+    CHECK(!go->hasProgressBar());
+    cmd.undo();
+    CHECK(go->hasProgressBar());
+    checkBarMatchesFilled(*go->getProgressBar());
+}
+
+// Editar un campo de la barra también entra en el stack, con el mismo
+// PropertyCommand<T> que arma la sección (resuelto por id, no por puntero).
+static void test_progress_bar_property_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Vida");
+    go->setProgressBar(std::make_shared<ProgressBarComponent>());
+    const uint64_t id = go->id;
+    Scene* sc = &scene;
+
+    auto applyValue = [sc, id](const float& v) {
+        if (GameObject* g = sc->findById(id))
+            if (g->hasProgressBar()) g->getProgressBar()->value = v;
+    };
+    PropertyCommand<float> cmd("Value", 0.5f, 0.125f, applyValue);
+
+    cmd.execute();
+    CHECK(nearlyEqual(go->getProgressBar()->value, 0.125f));
+    cmd.undo();
+    CHECK(nearlyEqual(go->getProgressBar()->value, 0.5f));
+    cmd.execute();
+    CHECK(nearlyEqual(go->getProgressBar()->value, 0.125f));
+
+    // Sin componente el applier no hace nada (ni crashea ni lo resucita).
+    go->setProgressBar(nullptr);
+    cmd.undo();
+    CHECK(!go->hasProgressBar());
+}
+
+// Las cuatro direcciones al 25%: cada una da un rect DISTINTO y en el sitio
+// correcto (la Y del canvas crece hacia abajo). Y un valor fuera del rango no
+// puede salirse del fondo, que el componente no clampa nada por su cuenta.
+static void test_progress_bar_fill_directions()
+{
+    ProgressBarComponent p;
+    p.size     = glm::vec2(200.0f, 40.0f);
+    p.minValue = 0.0f;
+    p.maxValue = 100.0f;
+    p.value    = 25.0f;
+
+    glm::vec2 pos{0.0f};
+    glm::vec2 sz{0.0f};
+
+    p.fillDirection = UiProgressFillDirection::LeftToRight;
+    p.fillRect(pos, sz);
+    CHECK(nearlyEqual(pos.x, 0.0f));
+    CHECK(nearlyEqual(pos.y, 0.0f));
+    CHECK(nearlyEqual(sz.x, 50.0f));
+    CHECK(nearlyEqual(sz.y, 40.0f));
+
+    p.fillDirection = UiProgressFillDirection::RightToLeft;
+    p.fillRect(pos, sz);
+    CHECK(nearlyEqual(pos.x, 150.0f));
+    CHECK(nearlyEqual(pos.y, 0.0f));
+    CHECK(nearlyEqual(sz.x, 50.0f));
+    CHECK(nearlyEqual(sz.y, 40.0f));
+
+    p.fillDirection = UiProgressFillDirection::TopToBottom;
+    p.fillRect(pos, sz);
+    CHECK(nearlyEqual(pos.x, 0.0f));
+    CHECK(nearlyEqual(pos.y, 0.0f));
+    CHECK(nearlyEqual(sz.x, 200.0f));
+    CHECK(nearlyEqual(sz.y, 10.0f));
+
+    p.fillDirection = UiProgressFillDirection::BottomToTop;
+    p.fillRect(pos, sz);
+    CHECK(nearlyEqual(pos.x, 0.0f));
+    CHECK(nearlyEqual(pos.y, 30.0f));
+    CHECK(nearlyEqual(sz.x, 200.0f));
+    CHECK(nearlyEqual(sz.y, 10.0f));
+
+    // Fuera de rango por arriba: lleno, pero ni un píxel fuera del fondo.
+    p.value = 999.0f;
+    for (int d = 0; d < 4; d++)
+    {
+        p.fillDirection = (UiProgressFillDirection)d;
+        p.fillRect(pos, sz);
+        CHECK(pos.x >= 0.0f && pos.y >= 0.0f);
+        CHECK(pos.x + sz.x <= p.size.x + 1e-4f);
+        CHECK(pos.y + sz.y <= p.size.y + 1e-4f);
+    }
+    // Y por abajo: vacío, nunca negativo.
+    p.value = -999.0f;
+    for (int d = 0; d < 4; d++)
+    {
+        p.fillDirection = (UiProgressFillDirection)d;
+        p.fillRect(pos, sz);
+        CHECK(nearlyEqual(sz.x * sz.y, 0.0f));
+        CHECK(pos.x >= 0.0f && pos.y >= 0.0f);
+    }
+    // Rango degenerado: no hay forma de repartir un intervalo vacío.
+    p.value = 5.0f; p.minValue = 3.0f; p.maxValue = 3.0f;
+    CHECK(nearlyEqual(p.normalizedValue(), 0.0f));
+}
+
+// Editar el valor tiene que verse en el siguiente frame. El árbol cachea los
+// vértices por nodo, así que un sync que escribe los campos y no ensucia deja la
+// barra CLAVADA: es lo que cazan los dirty flags de aquí. Y ensuciar SIEMPRE
+// tiraría la caché del canvas entero cada frame, que es el otro fallo posible.
+static void test_progress_bar_sync_updates_the_live_node()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+    ProgressBarComponent p;
+    p.position = glm::vec2(10.0f, 20.0f);
+    p.size     = glm::vec2(200.0f, 40.0f);
+    p.value    = 0.5f;   // min 0, max 1
+
+    std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras{ {5ull, &p} };
+    UiDrawData data;
+
+    syncUiWidgets({}, {}, barras, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().empty()) return;
+    const UiElement& fondo = *canvas.root().children()[0];
+    CHECK(fondo.name == uiProgressBarNodeName(5ull));
+    CHECK(fondo.children().size() == 1);
+    if (fondo.children().empty()) return;
+    const UiElement& relleno = *fondo.children()[0];
+    CHECK(relleno.name == uiProgressBarNodeName(5ull) + "/Fill");
+
+    // Fondo entero + relleno a la mitad: dos quads.
+    CHECK(data.vertices.size() == 8);
+    CHECK(nearlyEqual(fondo.screenPos.x, 10.0f));
+    CHECK(nearlyEqual(fondo.screenPos.y, 20.0f));
+    CHECK(nearlyEqual(relleno.size.x, 100.0f));
+    CHECK(nearlyEqual(relleno.size.y, 40.0f));
+    // El emisor deja los nodos limpios: es la caché que el sync tiene que
+    // invalidar.
+    CHECK(fondo.dirty == 0u);
+    CHECK(relleno.dirty == 0u);
+
+    // Otro valor: el relleno cambia de tamaño Y los dos nodos quedan sucios, o
+    // el canvas reusaría los vértices de antes.
+    p.value = 0.25f;
+    syncUiWidgets({}, {}, barras, canvas, cache, loader);
+    CHECK(nearlyEqual(relleno.size.x, 50.0f));
+    CHECK(relleno.dirty != 0u);
+    CHECK(fondo.dirty != 0u);
+
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    CHECK(nearlyEqual(relleno.screenPos.x, 10.0f));
+    CHECK(nearlyEqual(relleno.screenPos.y, 20.0f));
+
+    // Con RightToLeft el relleno se pega al otro extremo, en pantalla y no solo
+    // en el rect local.
+    p.fillDirection = UiProgressFillDirection::RightToLeft;
+    syncUiWidgets({}, {}, barras, canvas, cache, loader);
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    CHECK(nearlyEqual(relleno.screenPos.x, 160.0f));   // 10 + 200*(1-0.25)
+
+    // Y un frame sin cambios NO vuelve a ensuciar: ensuciar siempre tira la
+    // caché de vértices del canvas entero cada frame.
+    syncUiWidgets({}, {}, barras, canvas, cache, loader);
+    CHECK(fondo.dirty == 0u);
+    CHECK(relleno.dirty == 0u);
+
+    // A valor 0 el relleno no emite quad (rect degenerado), pero el NODO sigue
+    // ahí: si apareciera y desapareciera cambiaría la forma del subárbol y
+    // obligaría a reconstruir la raíz al cruzar el cero.
+    p.value = 0.0f;
+    syncUiWidgets({}, {}, barras, canvas, cache, loader);
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    CHECK(fondo.children().size() == 1);
+    CHECK(data.vertices.size() == 4);
+}
+
+// La trampa: la raíz del canvas se reconstruye con clearChildren(), así que un
+// sync que solo conociera dos de los tres tipos borraría el tercero. Con los
+// TRES en la escena, ninguno se lleva por delante a los otros.
+static void test_all_three_ui_components_coexist()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    ButtonComponent b;
+    b.position = glm::vec2(0.0f, 0.0f);
+    b.size     = glm::vec2(100.0f, 40.0f);
+    TextComponent t;
+    t.text     = "Titulo";
+    t.position = glm::vec2(200.0f, 150.0f);
+    t.size     = glm::vec2(120.0f, 30.0f);
+    ProgressBarComponent p;
+    p.position = glm::vec2(300.0f, 300.0f);
+    p.size     = glm::vec2(200.0f, 20.0f);
+    p.value    = 0.5f;
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>>      botones{ {7ull, &b} };
+    std::vector<std::pair<uint64_t, const TextComponent*>>        textos { {9ull, &t} };
+    std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras { {5ull, &p} };
+
+    UiDrawData data;
+    syncUiWidgets(botones, textos, barras, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+    CHECK(canvas.root().children().size() == 3);
+    if (canvas.root().children().size() != 3) return;
+    CHECK(canvas.root().children()[0]->name == uiButtonNodeName(7ull));
+    CHECK(canvas.root().children()[1]->name == uiProgressBarNodeName(5ull));
+    CHECK(canvas.root().children()[2]->name == uiTextNodeName(9ull));
+    // Botón (1 quad) + barra (fondo y relleno) = 3; el texto sin fuente no pinta.
+    CHECK(data.vertices.size() == 12);
+
+    // Tocar SOLO la barra no borra al botón ni al texto.
+    p.value = 0.75f;
+    syncUiWidgets(botones, textos, barras, canvas, cache, loader);
+    CHECK(canvas.root().children().size() == 3);
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    CHECK(data.vertices.size() == 12);
+    CHECK(nearlyEqual(data.vertices[0].pos.x, 0.0f));
+    const Text* vivo = canvas.root().children()[2]->asText();
+    CHECK(vivo != nullptr);
+    if (vivo) CHECK(vivo->text == "Titulo");
+
+    // Y tocar SOLO el texto no toca la barra.
+    t.text = "Otro";
+    syncUiWidgets(botones, textos, barras, canvas, cache, loader);
+    CHECK(canvas.root().children().size() == 3);
+    const UiElement& fondo = *canvas.root().children()[1];
+    CHECK(fondo.children().size() == 1);
+    if (!fondo.children().empty())
+        CHECK(nearlyEqual(fondo.children()[0]->size.x, 150.0f));
+
+    // Una barra de más reconstruye la raíz: los tres tipos se remontan.
+    ProgressBarComponent p2;
+    p2.size  = glm::vec2(50.0f, 10.0f);
+    p2.value = 1.0f;
+    barras.emplace_back(11ull, &p2);
+    syncUiWidgets(botones, textos, barras, canvas, cache, loader);
+    CHECK(canvas.root().children().size() == 4);
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    CHECK(data.vertices.size() == 20);   // botón + 2 barras x 2 quads
+    CHECK(nearlyEqual(data.vertices[0].pos.x, 0.0f));   // el botón sigue ahí
+}
+
+// Una barra recién añadida no tiene ninguna imagen: no puede costar una carga,
+// que es síncrona (lectura + bake + subida a GPU) y se ve como un parón justo al
+// pulsar Add. Y luego, una carga por RUTA distinta y solo una: la caché por ruta
+// es lo que impide una carga (y una fuga de memoria de GPU) por frame.
+static void test_progress_bar_without_atlas_loads_nothing()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+    ProgressBarComponent p;   // sin imágenes, como lo deja "Add Component"
+
+    std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras{ {5ull, &p} };
+    syncUiWidgets({}, {}, barras, canvas, cache, loader);
+    CHECK(loader.atlasLoads == 0);
+    CHECK(canvas.root().children().size() == 1);
+
+    // Y varios frames más sin ruta tampoco la piden.
+    p.value = 0.9f;
+    syncUiWidgets({}, {}, barras, canvas, cache, loader);
+    syncUiWidgets({}, {}, barras, canvas, cache, loader);
+    CHECK(loader.atlasLoads == 0);
+
+    // Solo el atlas: una carga, y las dos partes tiran de ella (el fondo y el
+    // relleno caen en el atlas cuando no traen ruta propia).
+    p.atlasPath = "assets/ui/hud.png";
+    syncUiWidgets({}, {}, barras, canvas, cache, loader);
+    CHECK(loader.atlasLoads == 1);
+    p.value = 0.1f;
+    syncUiWidgets({}, {}, barras, canvas, cache, loader);
+    CHECK(loader.atlasLoads == 1);
+
+    // Dos rutas propias distintas: dos cargas más, una por fichero.
+    p.backgroundPath = "assets/ui/bar_bg.png";
+    p.fillPath       = "assets/ui/bar_fill.png";
+    syncUiWidgets({}, {}, barras, canvas, cache, loader);
+    CHECK(loader.atlasLoads == 3);
+
+    // Y el mismo fichero en las dos partes NO cuenta dos veces.
+    p.fillPath = "assets/ui/bar_bg.png";
+    syncUiWidgets({}, {}, barras, canvas, cache, loader);
+    CHECK(loader.atlasLoads == 3);
+
+    // Cambiar el valor con las tres rutas puestas tampoco recarga nada.
+    p.value = 0.4f;
+    syncUiWidgets({}, {}, barras, canvas, cache, loader);
+    CHECK(loader.atlasLoads == 3);
+}
+
+// Clic sobre una barra en el viewport: mismo camino que el del botón y el del
+// texto, y con los tres componentes en el MISMO GameObject los tres nombres
+// llevan a su id sin pisarse.
+static void test_progress_bar_hit_test_maps_back_to_gameobject()
+{
+    CHECK(uiProgressBarOwnerId(uiProgressBarNodeName(42ull)) == 42ull);
+    // El nodo del relleno cuelga de la barra: su nombre también lleva al dueño.
+    CHECK(uiProgressBarOwnerId(uiProgressBarNodeName(42ull) + "/Fill") == 42ull);
+    CHECK(uiProgressBarOwnerId("Cubo") == 0ull);
+    CHECK(uiProgressBarOwnerId("bar:") == 0ull);
+    CHECK(uiProgressBarOwnerId("bar:12ab") == 0ull);
+    // Los tres prefijos no se confunden entre sí.
+    CHECK(uiProgressBarOwnerId(uiButtonNodeName(42ull)) == 0ull);
+    CHECK(uiProgressBarOwnerId(uiTextNodeName(42ull)) == 0ull);
+    CHECK(uiButtonOwnerId(uiProgressBarNodeName(42ull)) == 0ull);
+    CHECK(uiTextOwnerId(uiProgressBarNodeName(42ull)) == 0ull);
 }
 
 int main()
@@ -1581,6 +2039,17 @@ int main()
     test_buttons_and_texts_coexist();
     test_text_without_content_loads_no_font();
     test_text_hit_test_maps_back_to_gameobject();
+    test_progress_bar_round_trip(pm, am);
+    test_scene_without_progress_bar_block_still_loads(pm, am);
+    test_scene_without_progress_bar_serializes_identically();
+    test_progress_bar_command_add_undo_redo();
+    test_progress_bar_command_remove();
+    test_progress_bar_property_command_undo_redo();
+    test_progress_bar_fill_directions();
+    test_progress_bar_sync_updates_the_live_node();
+    test_all_three_ui_components_coexist();
+    test_progress_bar_without_atlas_loads_nothing();
+    test_progress_bar_hit_test_maps_back_to_gameobject();
 
     am.shutdown();
     pm.shutdown();

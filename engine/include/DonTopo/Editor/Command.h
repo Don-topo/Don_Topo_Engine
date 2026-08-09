@@ -254,6 +254,28 @@ private:
     TextComponent m_state;
 };
 
+// Add/Remove del ProgressBarComponent, calcado de TextComponentCommand: resuelve
+// el GameObject por id en cada execute()/undo() (nunca puntero crudo), y m_state
+// es una COPIA del componente entero pa que un Add-undo-redo no devuelva el
+// valor, los colores ni las rutas de los sprites a los defaults.
+class ProgressBarComponentCommand : public ICommand {
+public:
+    ProgressBarComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                 bool add, ProgressBarComponent state);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(bool add);
+
+    Scene& m_scene;
+    std::string m_label;
+    uint64_t m_id;
+    bool m_add;
+    ProgressBarComponent m_state;
+};
+
 // Add/Remove del AnimatorComponent, mismo contrato que CameraComponentCommand:
 // resuelve el GameObject por id en cada execute()/undo() (nunca puntero crudo),
 // y m_state conserva el grafo pa que un Add-undo-redo no lo devuelva vacío.

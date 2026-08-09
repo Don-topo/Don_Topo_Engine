@@ -500,6 +500,19 @@ void ViewportPanel::drawTextGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                     imagePos, imageSize);
 }
 
+void ViewportPanel::drawProgressBarGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                          const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasProgressBar() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
+                                         uiProgressBarNodeName(ctx.selected->id)),
+                    imagePos, imageSize);
+}
+
 GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mousePx,
                                          const glm::vec2& imageSize) const
 {
@@ -524,6 +537,10 @@ GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mou
         if (const uint64_t owner = uiButtonOwnerId(n->name))
             return ctx.scene->findById(owner);
         if (const uint64_t owner = uiTextOwnerId(n->name))
+            return ctx.scene->findById(owner);
+        // El nodo del relleno ("bar:7/Fill") también devuelve su dueño, así que
+        // clicar dentro de la parte llena selecciona la barra igual.
+        if (const uint64_t owner = uiProgressBarOwnerId(n->name))
             return ctx.scene->findById(owner);
     }
     return nullptr;
@@ -663,6 +680,7 @@ void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, co
     drawCanvasGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawButtonGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawTextGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    drawProgressBarGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     // Hover de la IMAGEN, no de la ventana: con esto un popup o cualquier otra
     // ventana por encima ya no cuenta como clic en la escena.
     const bool imageHovered = ImGui::IsItemHovered();

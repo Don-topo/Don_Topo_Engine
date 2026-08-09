@@ -48,6 +48,8 @@ namespace
     using DonTopo::UiTextAlign;
     using DonTopo::TextComponent;
     using DonTopo::UiTextOverflow;
+    using DonTopo::ProgressBarComponent;
+    using DonTopo::UiProgressFillDirection;
 
     // Forward declarations: animatorFromJson (más abajo) necesita estos
     // lectores tolerantes a JSON corrupto (definidos junto a jsonToMat4/
@@ -183,6 +185,25 @@ namespace
         if (s == "clip")     return UiTextOverflow::Clip;
         if (s == "ellipsis") return UiTextOverflow::Ellipsis;
         return UiTextOverflow::Overflow;   // valor desconocido -> el default
+    }
+
+    const char* uiProgressFillDirectionToStr(UiProgressFillDirection d)
+    {
+        switch (d)
+        {
+            case UiProgressFillDirection::RightToLeft: return "rightToLeft";
+            case UiProgressFillDirection::BottomToTop: return "bottomToTop";
+            case UiProgressFillDirection::TopToBottom: return "topToBottom";
+            default:                                   return "leftToRight";
+        }
+    }
+
+    UiProgressFillDirection uiProgressFillDirectionFromStr(const std::string& s)
+    {
+        if (s == "rightToLeft") return UiProgressFillDirection::RightToLeft;
+        if (s == "bottomToTop") return UiProgressFillDirection::BottomToTop;
+        if (s == "topToBottom") return UiProgressFillDirection::TopToBottom;
+        return UiProgressFillDirection::LeftToRight;   // valor desconocido -> el default
     }
 
     // Los vectores del Button van como objeto con componentes nombradas, igual
@@ -582,6 +603,25 @@ namespace
                           {"wordWrap", t->wordWrap},
                           {"boldStrength", t->boldStrength},
                           {"italicSkew", t->italicSkew} };
+        }
+        if (node.hasProgressBar())
+        {
+            const auto& p = node.getProgressBar();
+            j["progressBar"] = { {"anchorMin", vec2ToJsonXY(p->anchorMin)},
+                                 {"anchorMax", vec2ToJsonXY(p->anchorMax)},
+                                 {"pivot", vec2ToJsonXY(p->pivot)},
+                                 {"position", vec2ToJsonXY(p->position)},
+                                 {"size", vec2ToJsonXY(p->size)},
+                                 {"color", vec4ToJsonXYZW(p->color)},
+                                 {"visible", p->visible},
+                                 {"value", p->value},
+                                 {"minValue", p->minValue},
+                                 {"maxValue", p->maxValue},
+                                 {"fillColor", vec4ToJsonXYZW(p->fillColor)},
+                                 {"fillDirection", uiProgressFillDirectionToStr(p->fillDirection)},
+                                 {"atlasPath", p->atlasPath},
+                                 {"backgroundPath", p->backgroundPath},
+                                 {"fillPath", p->fillPath} };
         }
         if (node.hasAnimator())
             j["animator"] = animatorToJson(*node.getAnimator());
@@ -1370,6 +1410,43 @@ namespace
             txt->boldStrength = readFloat(t, "boldStrength", 0.08f, warnings, ctx);
             txt->italicSkew   = readFloat(t, "italicSkew", 0.25f, warnings, ctx);
             node->setText(std::move(txt));
+        }
+        // Bloque aditivo, misma regla que el Button y el Text: una escena
+        // guardada antes del componente ProgressBar no trae la clave y se carga
+        // sin él ni un aviso.
+        if (j.contains("progressBar"))
+        {
+            const auto& p = j["progressBar"];
+            const std::string ctx = "progressBar de '" + node->name + "'";
+            auto readBool = [&](const char* key, bool def) {
+                return (p.contains(key) && p[key].is_boolean()) ? p[key].get<bool>() : def;
+            };
+            auto readStr = [&](const char* key) {
+                return (p.contains(key) && p[key].is_string())
+                           ? p[key].get<std::string>() : std::string();
+            };
+            auto bar = std::make_shared<ProgressBarComponent>();
+            bar->anchorMin = readVec2XY(p, "anchorMin", glm::vec2(0.0f), warnings, ctx);
+            bar->anchorMax = readVec2XY(p, "anchorMax", glm::vec2(0.0f), warnings, ctx);
+            bar->pivot     = readVec2XY(p, "pivot", glm::vec2(0.0f), warnings, ctx);
+            bar->position  = readVec2XY(p, "position", glm::vec2(0.0f), warnings, ctx);
+            bar->size      = readVec2XY(p, "size", glm::vec2(160.0f, 20.0f), warnings, ctx);
+            bar->color     = readVec4XYZW(p, "color", glm::vec4(0.2f, 0.2f, 0.2f, 1.0f),
+                                          warnings, ctx);
+            bar->visible   = readBool("visible", true);
+
+            bar->value    = readFloat(p, "value", 0.5f, warnings, ctx);
+            bar->minValue = readFloat(p, "minValue", 0.0f, warnings, ctx);
+            bar->maxValue = readFloat(p, "maxValue", 1.0f, warnings, ctx);
+
+            bar->fillColor = readVec4XYZW(p, "fillColor", glm::vec4(0.25f, 0.7f, 1.0f, 1.0f),
+                                          warnings, ctx);
+            bar->fillDirection = uiProgressFillDirectionFromStr(readStr("fillDirection"));
+
+            bar->atlasPath      = readStr("atlasPath");
+            bar->backgroundPath = readStr("backgroundPath");
+            bar->fillPath       = readStr("fillPath");
+            node->setProgressBar(std::move(bar));
         }
         // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
         // y cargan igual (version sigue en 1).

@@ -283,6 +283,7 @@ int main()
         DonTopo::UiWidgetSyncCache uiWidgetCache;
         std::vector<std::pair<uint64_t, const DonTopo::ButtonComponent*>> uiButtons;
         std::vector<std::pair<uint64_t, const DonTopo::TextComponent*>> uiTexts;
+        std::vector<std::pair<uint64_t, const DonTopo::ProgressBarComponent*>> uiBars;
 
         while (!window.shouldClose())
         {
@@ -426,14 +427,18 @@ int main()
             // Sin Canvas no hay UI: la lista va vacía y el sync limpia el árbol.
             uiButtons.clear();
             uiTexts.clear();
+            uiBars.clear();
             if (scene.findCanvas())
                 scene.traverse([&](DonTopo::GameObject* n) {
                     if (n->hasButton()) uiButtons.emplace_back(n->id, n->getButton().get());
                     if (n->hasText())   uiTexts.emplace_back(n->id, n->getText().get());
+                    if (n->hasProgressBar())
+                        uiBars.emplace_back(n->id, n->getProgressBar().get());
                 });
             // UN solo sync para todos los widgets: es el dueño de la raíz del
             // canvas, que se reconstruye entera con clearChildren().
-            DonTopo::syncUiWidgets(uiButtons, uiTexts, renderer.uiCanvas(), uiWidgetCache, renderer);
+            DonTopo::syncUiWidgets(uiButtons, uiTexts, uiBars, renderer.uiCanvas(),
+                                   uiWidgetCache, renderer);
 
             // Input de la UI: sin esto el árbol no resuelve estados, así que los
             // cinco colores del botón, el fundido y el Click no harían nada.

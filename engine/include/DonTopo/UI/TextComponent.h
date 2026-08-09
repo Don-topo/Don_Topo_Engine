@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/UI/ProgressBarComponent.h"
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiFont.h"
 #include "DonTopo/UI/UiTextureAtlas.h"
@@ -144,6 +145,7 @@ namespace DonTopo
         // y no los tamaños porque dos cambios que se compensan (uno fuera, otro
         // dentro) dejan el mismo tamaño.
         std::vector<uint64_t> buttonIds;
+        std::vector<uint64_t> barIds;
         std::vector<uint64_t> textIds;
 
         // Punteros a los nodos vivos, en el mismo orden que los ids. Son
@@ -152,13 +154,20 @@ namespace DonTopo
         std::vector<Button*> buttonNodes;
         std::vector<Text*>   buttonLabels;   // nullptr = ese botón no tiene etiqueta
         std::vector<Text*>   textNodes;
+        // La barra son SIEMPRE dos nodos: el fondo y el hijo del relleno. Que el
+        // del relleno exista aunque el valor sea 0 (con drawable a false) es lo
+        // que mantiene constante la FORMA del subárbol: si apareciera y
+        // desapareciera habría que reconstruir la raíz al cruzar el 0.
+        std::vector<ProgressBar*> barNodes;
+        std::vector<Panel*>       barFills;
 
         // Copia de lo que se volcó la última vez, en el mismo orden. Lo que no
         // ha cambiado no se vuelve a volcar NI se ensucia: escribir los campos
         // sin ensuciar deja el nodo clavado (el canvas se copia los vértices
         // cacheados), y ensuciar siempre tira la caché entera cada frame.
-        std::vector<ButtonComponent> buttonPrev;
-        std::vector<TextComponent>   textPrev;
+        std::vector<ButtonComponent>      buttonPrev;
+        std::vector<TextComponent>        textPrev;
+        std::vector<ProgressBarComponent> barPrev;
 
         // Recursos de GPU por ruta. Sin esta caché una ruta de atlas cargaría un
         // atlas NUEVO cada frame (Renderer::loadUiAtlas no cachea por ruta) y se
@@ -169,19 +178,21 @@ namespace DonTopo
         std::unordered_map<std::string, UiFont*>         fonts;
     };
 
-    // Vuelca los widgets de la escena en el canvas vivo. Las dos listas van en
+    // Vuelca los widgets de la escena en el canvas vivo. Las tres listas van en
     // orden de recorrido de la escena y traen el id de cada GameObject dueño.
     //
     // Loader es cualquier cosa con loadUiAtlas(path) y loadUiFont(path) — o sea
     // el Renderer. Es un template para no meter Renderer.h en un header de UI:
     // el componente no sabe de Vulkan.
     //
-    // Los botones se montan ANTES que los textos, así que un Text suelto que se
-    // solape con un botón se dibuja encima (mismo criterio que el orden de
-    // hermanos del árbol: el último manda).
+    // El orden de montaje es botones, barras y textos: el último hermano manda,
+    // así que un Text suelto que se solape con un botón o con una barra se
+    // dibuja encima (una barra con etiqueta es justo eso, dos componentes en el
+    // mismo GameObject).
     template <class Loader>
     inline void syncUiWidgets(const std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons,
                               const std::vector<std::pair<uint64_t, const TextComponent*>>& texts,
+                              const std::vector<std::pair<uint64_t, const ProgressBarComponent*>>& bars,
                               UiCanvas& canvas, UiWidgetSyncCache& cache, Loader& loader)
     {
         auto resolveAtlas = [&](const std::string& path) -> UiTextureAtlas*
@@ -205,11 +216,14 @@ namespace DonTopo
 
         // ¿Cambió el CONJUNTO de widgets? Solo entonces se reconstruye.
         bool rebuild = cache.buttonIds.size() != buttons.size() ||
-                       cache.textIds.size() != texts.size();
+                       cache.textIds.size() != texts.size() ||
+                       cache.barIds.size() != bars.size();
         for (size_t i = 0; !rebuild && i < buttons.size(); i++)
             if (cache.buttonIds[i] != buttons[i].first) rebuild = true;
         for (size_t i = 0; !rebuild && i < texts.size(); i++)
             if (cache.textIds[i] != texts[i].first) rebuild = true;
+        for (size_t i = 0; !rebuild && i < bars.size(); i++)
+            if (cache.barIds[i] != bars[i].first) rebuild = true;
 
         // Un botón que gana o pierde etiqueta (texto vacío <-> no vacío) cambia
         // la FORMA del subárbol, y eso también obliga a reconstruir.
@@ -229,6 +243,10 @@ namespace DonTopo
             cache.textIds.clear();
             cache.textNodes.clear();
             cache.textPrev.clear();
+            cache.barIds.clear();
+            cache.barNodes.clear();
+            cache.barFills.clear();
+            cache.barPrev.clear();
 
             for (const auto& entry : buttons)
             {
@@ -245,6 +263,24 @@ namespace DonTopo
                 ButtonComponent nunca;
                 nunca.text = "\x01(sin volcar)";
                 cache.buttonPrev.push_back(nunca);
+            }
+
+            for (const auto& entry : bars)
+            {
+                const std::string nombre = uiProgressBarNodeName(entry.first);
+                ProgressBar& p = canvas.root().add<ProgressBar>(nombre);
+                // El relleno es un hijo y no un hermano: así su rect se cuenta
+                // en píxeles desde la esquina del fondo y no hay que rehacer a
+                // mano las anclas ni la escala del canvas.
+                Panel& f = p.add<Panel>(nombre + "/Fill");
+                cache.barIds.push_back(entry.first);
+                cache.barNodes.push_back(&p);
+                cache.barFills.push_back(&f);
+                // Un componente que no puede ser igual a ninguno real fuerza el
+                // primer volcado, igual que con el Button.
+                ProgressBarComponent nunca;
+                nunca.backgroundPath = "\x01(sin volcar)";
+                cache.barPrev.push_back(nunca);
             }
 
             for (const auto& entry : texts)
@@ -285,6 +321,31 @@ namespace DonTopo
                 label->markDirty(UiElement::DirtyAll);
             }
             cache.buttonPrev[i] = src;
+        }
+
+        for (size_t i = 0; i < bars.size(); i++)
+        {
+            const ProgressBarComponent& src = *bars[i].second;
+            if (src == cache.barPrev[i]) continue;   // nada que tocar este frame
+
+            ProgressBar& p = *cache.barNodes[i];
+            Panel&       f = *cache.barFills[i];
+            src.applyTo(p);
+            // Cada parte con su imagen, y el atlas del componente como fallback
+            // de la que no tenga ruta propia. resolveAtlas cachea por RUTA, así
+            // que dos partes con el mismo fichero cuestan una sola carga — y con
+            // las rutas vacías ni se llama al loader (cargar un atlas es
+            // síncrono y en el frame del "Add Component" se nota como un parón).
+            UiTextureAtlas* comun = resolveAtlas(src.atlasPath);
+            p.atlas = src.backgroundPath.empty() ? comun : resolveAtlas(src.backgroundPath);
+            src.applyToFill(f);
+            f.atlas = src.fillPath.empty() ? comun : resolveAtlas(src.fillPath);
+            // Ensuciar es responsabilidad de quien escribe los campos. Los DOS
+            // nodos: el fondo puede haberse movido y el relleno cambia de rect
+            // con el valor. DirtyAll porque aquí se reescribe el nodo entero.
+            p.markDirty(UiElement::DirtyAll);
+            f.markDirty(UiElement::DirtyAll);
+            cache.barPrev[i] = src;
         }
 
         for (size_t i = 0; i < texts.size(); i++)

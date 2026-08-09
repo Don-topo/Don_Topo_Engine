@@ -447,6 +447,7 @@ int main(int argc, char** argv)
         DonTopo::UiWidgetSyncCache uiWidgetCache;
         std::vector<std::pair<uint64_t, const DonTopo::ButtonComponent*>> uiButtons;
         std::vector<std::pair<uint64_t, const DonTopo::TextComponent*>> uiTexts;
+        std::vector<std::pair<uint64_t, const DonTopo::ProgressBarComponent*>> uiBars;
 
         while (!window.shouldClose())
         {
@@ -604,12 +605,16 @@ int main(int argc, char** argv)
             // Widgets: mismo volcado por frame que en el editor.
             uiButtons.clear();
             uiTexts.clear();
+            uiBars.clear();
             if (scene.findCanvas())
                 scene.traverse([&](DonTopo::GameObject* n) {
                     if (n->hasButton()) uiButtons.emplace_back(n->id, n->getButton().get());
                     if (n->hasText())   uiTexts.emplace_back(n->id, n->getText().get());
+                    if (n->hasProgressBar())
+                        uiBars.emplace_back(n->id, n->getProgressBar().get());
                 });
-            DonTopo::syncUiWidgets(uiButtons, uiTexts, renderer.uiCanvas(), uiWidgetCache, renderer);
+            DonTopo::syncUiWidgets(uiButtons, uiTexts, uiBars, renderer.uiCanvas(),
+                                   uiWidgetCache, renderer);
 
             // Input de la UI: sin esto el árbol no resuelve estados y los cinco
             // colores del botón, el fundido y el Click no existen. El ratón está

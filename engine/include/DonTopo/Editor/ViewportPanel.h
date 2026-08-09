@@ -61,6 +61,11 @@ private:
     // otro prefijo), así que un GameObject con Button y Text pinta los dos.
     void drawTextGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                         const glm::vec2& imageSize);
+    // Y lo mismo para la ProgressBar seleccionada. El rect es el del FONDO (el
+    // nodo raíz de la barra), no el del relleno: el relleno se encoge con el
+    // valor y el gizmo mide el widget, no el dato.
+    void drawProgressBarGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                               const glm::vec2& imageSize);
     // Selección por clic de un widget de UI: hit test 2D del canvas, que manda
     // sobre el raycast 3D porque la UI se dibuja ENCIMA de la escena. mousePx
     // va en píxeles relativos a la esquina de la imagen, igual que en
