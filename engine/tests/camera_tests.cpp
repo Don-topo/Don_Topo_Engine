@@ -16,6 +16,7 @@
 #include "DonTopo/Editor/PropertiesPanel.h"
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/UI/TextComponent.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <vector>
@@ -957,8 +958,14 @@ static void test_button_property_command_undo_redo()
 // textura.
 struct FakeUiLoader
 {
-    UiTextureAtlas* loadUiAtlas(const std::string&) { return nullptr; }
-    UiFont*         loadUiFont(const std::string&)  { return nullptr; }
+    // Cuántas veces se ha pedido cada recurso. Cargar una fuente de verdad es
+    // FreeType + bake + subida a GPU: quién la pide y CUÁNDO es lo que se nota
+    // como un parón en el editor, así que se cuenta.
+    int atlasLoads = 0;
+    int fontLoads  = 0;
+
+    UiTextureAtlas* loadUiAtlas(const std::string&) { atlasLoads++; return nullptr; }
+    UiFont*         loadUiFont(const std::string&)  { fontLoads++;  return nullptr; }
 };
 
 // Editar un campo del componente tiene que verse en el siguiente frame. El
@@ -967,7 +974,7 @@ struct FakeUiLoader
 static void test_button_sync_moves_the_live_node()
 {
     UiCanvas canvas;
-    UiButtonSyncCache cache;
+    UiWidgetSyncCache cache;
     FakeUiLoader loader;
     ButtonComponent b;
     b.position = glm::vec2(10.0f, 20.0f);
@@ -976,7 +983,7 @@ static void test_button_sync_moves_the_live_node()
     std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &b} };
     UiDrawData data;
 
-    syncUiButtons(lista, canvas, cache, loader);
+    syncUiWidgets(lista, {}, canvas, cache, loader);
     canvas.buildDrawData(800, 480, data);
     CHECK(data.batches.size() == 1);
     CHECK(data.vertices.size() == 4);
@@ -986,7 +993,7 @@ static void test_button_sync_moves_the_live_node()
 
     // Mismo botón, otra posición: el nodo vivo tiene que seguirla.
     b.position = glm::vec2(300.0f, 120.0f);
-    syncUiButtons(lista, canvas, cache, loader);
+    syncUiWidgets(lista, {}, canvas, cache, loader);
     data.clear();
     canvas.buildDrawData(800, 480, data);
     CHECK(data.vertices.size() == 4);
@@ -1000,7 +1007,7 @@ static void test_button_sync_moves_the_live_node()
 static void test_button_survives_canvas_edit()
 {
     UiCanvas canvas;
-    UiButtonSyncCache cache;
+    UiWidgetSyncCache cache;
     FakeUiLoader loader;
     ButtonComponent b;
     b.position = glm::vec2(10.0f, 20.0f);
@@ -1008,7 +1015,7 @@ static void test_button_survives_canvas_edit()
 
     std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &b} };
     UiDrawData data;
-    syncUiButtons(lista, canvas, cache, loader);
+    syncUiWidgets(lista, {}, canvas, cache, loader);
     canvas.buildDrawData(800, 480, data);
     CHECK(data.batches.size() == 1);
 
@@ -1017,7 +1024,7 @@ static void test_button_survives_canvas_edit()
     cc.scaleFactor = 2.0f;
     cc.applyTo(canvas);
 
-    syncUiButtons(lista, canvas, cache, loader);
+    syncUiWidgets(lista, {}, canvas, cache, loader);
     data.clear();
     canvas.buildDrawData(800, 480, data);
     CHECK(data.batches.size() == 1);
@@ -1036,7 +1043,7 @@ static void test_button_survives_canvas_edit()
         otro.scaleMode = m;
         otro.safeArea  = { 8.0f, 6.0f, 8.0f, 6.0f };
         otro.applyTo(canvas);
-        syncUiButtons(lista, canvas, cache, loader);
+        syncUiWidgets(lista, {}, canvas, cache, loader);
         data.clear();
         canvas.buildDrawData(800, 480, data);
         CHECK(data.batches.size() == 1);
@@ -1048,13 +1055,13 @@ static void test_button_survives_canvas_edit()
 static void test_button_text_without_font_is_visible()
 {
     UiCanvas canvas;
-    UiButtonSyncCache cache;
+    UiWidgetSyncCache cache;
     FakeUiLoader loader;
     ButtonComponent b;
     b.text = "Aceptar";
 
     std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &b} };
-    syncUiButtons(lista, canvas, cache, loader);
+    syncUiWidgets(lista, {}, canvas, cache, loader);
 
     CHECK(canvas.root().children().size() == 1);
     if (canvas.root().children().empty()) return;
@@ -1071,7 +1078,7 @@ static void test_button_text_without_font_is_visible()
 static void test_button_state_color_is_applied()
 {
     UiCanvas canvas;
-    UiButtonSyncCache cache;
+    UiWidgetSyncCache cache;
     FakeUiLoader loader;
     ButtonComponent b;
     b.size        = glm::vec2(100.0f, 50.0f);
@@ -1079,7 +1086,7 @@ static void test_button_state_color_is_applied()
     b.normalColor = glm::vec4(0.2f, 0.4f, 0.6f, 0.8f);
 
     std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &b} };
-    syncUiButtons(lista, canvas, cache, loader);
+    syncUiWidgets(lista, {}, canvas, cache, loader);
     UiDrawData data;
     canvas.buildDrawData(800, 480, data);   // coloca los rects: el hit test los lee
 
@@ -1109,7 +1116,7 @@ static void test_button_hit_test_maps_back_to_gameobject()
     CHECK(uiButtonOwnerId("go:12ab") == 0ull);
 
     UiCanvas canvas;
-    UiButtonSyncCache cache;
+    UiWidgetSyncCache cache;
     FakeUiLoader loader;
     ButtonComponent a, b;
     a.position = glm::vec2(0.0f, 0.0f);
@@ -1118,7 +1125,7 @@ static void test_button_hit_test_maps_back_to_gameobject()
     b.size     = glm::vec2(120.0f, 60.0f);
 
     std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &a}, {9ull, &b} };
-    syncUiButtons(lista, canvas, cache, loader);
+    syncUiWidgets(lista, {}, canvas, cache, loader);
     UiDrawData data;
     canvas.buildDrawData(800, 480, data);
 
@@ -1152,6 +1159,354 @@ static void test_button_asset_path_filters()
     CHECK(PropertiesPanel::isUiAtlasPath("x.tga"));
     CHECK(!PropertiesPanel::isUiAtlasPath("assets/fuente.ttf"));
     CHECK(!PropertiesPanel::isUiAtlasPath("assets/audio.wav"));
+}
+
+// ── Text ────────────────────────────────────────────────────────────────────
+// TODOS los campos con valores NO neutros y DISTINTOS entre sí, mismo criterio
+// que fillButton: un default no prueba que nadie los haya leído ni escrito, y
+// dos campos con el MISMO valor no detectan que se hayan cruzado.
+static void fillText(TextComponent& t)
+{
+    t.anchorMin = glm::vec2(0.0625f, 0.1875f);
+    t.anchorMax = glm::vec2(0.6875f, 0.8125f);
+    t.pivot     = glm::vec2(0.4375f, 0.5625f);
+    t.position  = glm::vec2(7.25f, -19.5f);
+    t.size      = glm::vec2(301.5f, 77.25f);
+    t.color     = glm::vec4(0.05f, 0.15f, 0.25f, 0.35f);
+    t.visible   = false;
+
+    t.text     = "Hola <b>mundo</b>";
+    t.fontPath = "assets/fonts/inter.ttf";
+    t.fontSize = 33.5f;
+
+    t.outlineWidth = 2.75f;
+    t.outlineColor = glm::vec4(0.71f, 0.72f, 0.73f, 0.74f);
+    t.shadowOffset = glm::vec2(3.5f, -4.25f);
+    t.shadowColor  = glm::vec4(0.81f, 0.82f, 0.83f, 0.84f);
+
+    t.align    = UiTextAlign::Right;
+    t.overflow = UiTextOverflow::Ellipsis;
+    t.wordWrap = true;
+
+    t.boldStrength = 0.135f;
+    t.italicSkew   = -0.4375f;
+}
+
+static void checkTextMatchesFilled(const TextComponent& t)
+{
+    CHECK(nearlyEqual(t.anchorMin.x, 0.0625f));
+    CHECK(nearlyEqual(t.anchorMin.y, 0.1875f));
+    CHECK(nearlyEqual(t.anchorMax.x, 0.6875f));
+    CHECK(nearlyEqual(t.anchorMax.y, 0.8125f));
+    CHECK(nearlyEqual(t.pivot.x, 0.4375f));
+    CHECK(nearlyEqual(t.pivot.y, 0.5625f));
+    CHECK(nearlyEqual(t.position.x, 7.25f));
+    CHECK(nearlyEqual(t.position.y, -19.5f));
+    CHECK(nearlyEqual(t.size.x, 301.5f));
+    CHECK(nearlyEqual(t.size.y, 77.25f));
+    CHECK(nearlyEqual(t.color.r, 0.05f));
+    CHECK(nearlyEqual(t.color.g, 0.15f));
+    CHECK(nearlyEqual(t.color.b, 0.25f));
+    CHECK(nearlyEqual(t.color.a, 0.35f));
+    CHECK(t.visible == false);
+
+    CHECK(t.text == "Hola <b>mundo</b>");
+    CHECK(t.fontPath == "assets/fonts/inter.ttf");
+    CHECK(nearlyEqual(t.fontSize, 33.5f));
+
+    CHECK(nearlyEqual(t.outlineWidth, 2.75f));
+    CHECK(nearlyEqual(t.outlineColor.r, 0.71f));
+    CHECK(nearlyEqual(t.outlineColor.a, 0.74f));
+    CHECK(nearlyEqual(t.shadowOffset.x, 3.5f));
+    CHECK(nearlyEqual(t.shadowOffset.y, -4.25f));
+    CHECK(nearlyEqual(t.shadowColor.r, 0.81f));
+    CHECK(nearlyEqual(t.shadowColor.a, 0.84f));
+
+    CHECK(t.align == UiTextAlign::Right);
+    CHECK(t.overflow == UiTextOverflow::Ellipsis);
+    CHECK(t.wordWrap == true);
+
+    CHECK(nearlyEqual(t.boldStrength, 0.135f));
+    CHECK(nearlyEqual(t.italicSkew, -0.4375f));
+}
+
+static void test_text_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* go = scene.addGameObject("Titulo", canvasGo);
+    auto text = std::make_shared<TextComponent>();
+    fillText(*text);
+    go->setText(text);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasText()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "Titulo");
+    checkTextMatchesFilled(*found->getText());
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Una escena guardada antes del componente carga igual: sin Text y sin avisos.
+static void test_scene_without_text_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool alguno = false;
+    loaded.traverse([&](GameObject* n) { if (n->hasText()) alguno = true; });
+    CHECK(!alguno);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Neutralidad: sin ningún Text el JSON no gana ni un byte, y añadir y quitar el
+// componente devuelve el dump EXACTO de partida.
+static void test_scene_without_text_serializes_identically()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    const std::string antes = scene.toJson().dump();
+    CHECK(antes.find("\"text\"") == std::string::npos);
+
+    go->setText(std::make_shared<TextComponent>());
+    CHECK(scene.toJson().dump() != antes);
+    go->setText(nullptr);
+    CHECK(scene.toJson().dump() == antes);
+}
+
+// Add reversible, y el redo NO devuelve los campos a los defaults.
+static void test_text_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Titulo");
+    TextComponent st;
+    fillText(st);
+    TextComponentCommand cmd(scene, "Add Text", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasText());
+    checkTextMatchesFilled(*go->getText());
+    cmd.undo();
+    CHECK(!go->hasText());
+    cmd.execute();
+    CHECK(go->hasText());
+    checkTextMatchesFilled(*go->getText());
+}
+
+// Remove reversible: el undo devuelve el componente CON sus valores.
+static void test_text_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Titulo");
+    auto text = std::make_shared<TextComponent>();
+    fillText(*text);
+    go->setText(text);
+
+    TextComponentCommand cmd(scene, "Remove Text", go->id, /*add=*/false, *text);
+    cmd.execute();
+    CHECK(!go->hasText());
+    cmd.undo();
+    CHECK(go->hasText());
+    checkTextMatchesFilled(*go->getText());
+}
+
+// Editar un campo del Text también entra en el stack, con el mismo
+// PropertyCommand<T> que arma la sección (resuelto por id, no por puntero).
+static void test_text_property_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Titulo");
+    go->setText(std::make_shared<TextComponent>());
+    const uint64_t id = go->id;
+    Scene* sc = &scene;
+
+    auto applyText = [sc, id](const std::string& v) {
+        if (GameObject* g = sc->findById(id))
+            if (g->hasText()) g->getText()->text = v;
+    };
+    PropertyCommand<std::string> cmd("Text", std::string(), std::string("Titulo"), applyText);
+
+    cmd.execute();
+    CHECK(go->getText()->text == "Titulo");
+    cmd.undo();
+    CHECK(go->getText()->text.empty());
+    cmd.execute();
+    CHECK(go->getText()->text == "Titulo");
+
+    // Sin componente el applier no hace nada (ni crashea ni lo resucita).
+    go->setText(nullptr);
+    cmd.undo();
+    CHECK(!go->hasText());
+}
+
+// Editar un campo del componente tiene que verse en el siguiente frame. El árbol
+// cachea los vértices por nodo, así que un sync que escribe los campos y no
+// ensucia el nodo deja el texto CLAVADO: es lo que cazan los dirty flags de
+// aquí. Con el loader falso no hay fuente, y sin fuente no se emite ni un quad
+// (drawable = false), así que el rect se comprueba por screenPos y no por
+// vértices.
+static void test_text_sync_updates_the_live_node()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+    TextComponent t;
+    t.text     = "Uno";
+    t.position = glm::vec2(10.0f, 20.0f);
+    t.size     = glm::vec2(120.0f, 30.0f);
+
+    std::vector<std::pair<uint64_t, const TextComponent*>> textos{ {9ull, &t} };
+    UiDrawData data;
+
+    syncUiWidgets({}, textos, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().empty()) return;
+    const UiElement& node = *canvas.root().children()[0];
+    CHECK(node.name == uiTextNodeName(9ull));
+    const Text* vivo = node.asText();
+    CHECK(vivo != nullptr);
+    if (!vivo) return;
+    CHECK(vivo->text == "Uno");
+    CHECK(nearlyEqual(node.screenPos.x, 10.0f));
+    CHECK(nearlyEqual(node.screenPos.y, 20.0f));
+    // El emisor deja el nodo limpio: es la caché que el sync tiene que invalidar.
+    CHECK(node.dirty == 0u);
+
+    // Mismo Text, otro contenido y otra posición: el nodo vivo tiene que
+    // seguirlos Y quedar sucio, o el canvas reusaría los vértices de antes.
+    t.text     = "Dos";
+    t.position = glm::vec2(300.0f, 120.0f);
+    syncUiWidgets({}, textos, canvas, cache, loader);
+    CHECK(vivo->text == "Dos");
+    CHECK(node.dirty != 0u);
+
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    CHECK(nearlyEqual(node.screenPos.x, 300.0f));
+    CHECK(nearlyEqual(node.screenPos.y, 120.0f));
+
+    // Y un frame sin cambios NO vuelve a ensuciar: ensuciar siempre tira la
+    // caché de vértices del canvas entero cada frame.
+    syncUiWidgets({}, textos, canvas, cache, loader);
+    CHECK(node.dirty == 0u);
+}
+
+// La trampa: la raíz del canvas se reconstruye con clearChildren(), así que un
+// sync que solo conociera los botones borraría los textos (y al revés). Con los
+// dos en la escena, ninguno se lleva por delante al otro.
+static void test_buttons_and_texts_coexist()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    ButtonComponent b;
+    b.position = glm::vec2(0.0f, 0.0f);
+    b.size     = glm::vec2(100.0f, 40.0f);
+    TextComponent t;
+    t.text     = "Titulo";
+    t.position = glm::vec2(200.0f, 150.0f);
+    t.size     = glm::vec2(120.0f, 30.0f);
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>> botones{ {7ull, &b} };
+    std::vector<std::pair<uint64_t, const TextComponent*>>   textos{ {9ull, &t} };
+
+    UiDrawData data;
+    syncUiWidgets(botones, textos, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+    CHECK(canvas.root().children().size() == 2);
+    if (canvas.root().children().size() != 2) return;
+    CHECK(canvas.root().children()[0]->name == uiButtonNodeName(7ull));
+    CHECK(canvas.root().children()[1]->name == uiTextNodeName(9ull));
+    // El botón se dibuja (quad de color, sin atlas); el texto sin fuente no.
+    CHECK(data.vertices.size() == 4);
+
+    // Tocar SOLO el texto no borra el botón ni le tira sus vértices.
+    t.text = "Otro";
+    syncUiWidgets(botones, textos, canvas, cache, loader);
+    CHECK(canvas.root().children().size() == 2);
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    CHECK(data.vertices.size() == 4);
+    CHECK(nearlyEqual(data.vertices[0].pos.x, 0.0f));
+    CHECK(nearlyEqual(data.vertices[0].pos.y, 0.0f));
+
+    // Y tocar SOLO el botón no borra el texto.
+    b.position = glm::vec2(50.0f, 60.0f);
+    syncUiWidgets(botones, textos, canvas, cache, loader);
+    CHECK(canvas.root().children().size() == 2);
+    if (canvas.root().children().size() != 2) return;
+    const Text* vivo = canvas.root().children()[1]->asText();
+    CHECK(vivo != nullptr);
+    if (vivo) CHECK(vivo->text == "Otro");
+
+    // Un widget de más reconstruye la raíz: los dos tipos se remontan, no solo
+    // el que cambió de cuenta.
+    TextComponent t2;
+    t2.text = "Pie";
+    textos.emplace_back(11ull, &t2);
+    syncUiWidgets(botones, textos, canvas, cache, loader);
+    CHECK(canvas.root().children().size() == 3);
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    CHECK(data.vertices.size() == 4);   // el botón sigue ahí tras el rebuild
+    CHECK(nearlyEqual(data.vertices[0].pos.x, 50.0f));
+}
+
+// Un Text recién añadido está VACÍO: no puede costar una carga de fuente, que
+// es síncrona (FreeType + bake + GPU) y se ve como un parón justo al pulsar Add.
+// La fuente se paga cuando hay texto de verdad, y una sola vez por ruta.
+static void test_text_without_content_loads_no_font()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+    TextComponent t;   // sin texto, como lo deja "Add Component"
+
+    std::vector<std::pair<uint64_t, const TextComponent*>> textos{ {9ull, &t} };
+    syncUiWidgets({}, textos, canvas, cache, loader);
+    CHECK(loader.fontLoads == 0);
+    CHECK(canvas.root().children().size() == 1);
+
+    // Y varios frames más sin escribir nada tampoco la piden.
+    syncUiWidgets({}, textos, canvas, cache, loader);
+    syncUiWidgets({}, textos, canvas, cache, loader);
+    CHECK(loader.fontLoads == 0);
+
+    // La primera letra sí la carga, y solo esa vez: la caché por ruta es lo que
+    // impide una carga por frame (y una fuga de memoria de GPU por frame).
+    t.text = "H";
+    syncUiWidgets({}, textos, canvas, cache, loader);
+    CHECK(loader.fontLoads == 1);
+    t.text = "Ho";
+    syncUiWidgets({}, textos, canvas, cache, loader);
+    CHECK(loader.fontLoads == 1);
+}
+
+// Clic sobre un texto en el viewport: mismo camino que el del botón, y con los
+// dos componentes en el MISMO GameObject los dos nombres llevan a su id sin
+// pisarse.
+static void test_text_hit_test_maps_back_to_gameobject()
+{
+    CHECK(uiTextOwnerId(uiTextNodeName(42ull)) == 42ull);
+    CHECK(uiTextOwnerId("Cubo") == 0ull);
+    CHECK(uiTextOwnerId("txt:") == 0ull);
+    CHECK(uiTextOwnerId("txt:12ab") == 0ull);
+    // Los dos prefijos no se confunden entre sí.
+    CHECK(uiTextOwnerId(uiButtonNodeName(42ull)) == 0ull);
+    CHECK(uiButtonOwnerId(uiTextNodeName(42ull)) == 0ull);
 }
 
 int main()
@@ -1215,6 +1570,17 @@ int main()
     test_button_state_color_is_applied();
     test_button_hit_test_maps_back_to_gameobject();
     test_button_asset_path_filters();
+
+    test_text_round_trip(pm, am);
+    test_scene_without_text_block_still_loads(pm, am);
+    test_scene_without_text_serializes_identically();
+    test_text_command_add_undo_redo();
+    test_text_command_remove();
+    test_text_property_command_undo_redo();
+    test_text_sync_updates_the_live_node();
+    test_buttons_and_texts_coexist();
+    test_text_without_content_loads_no_font();
+    test_text_hit_test_maps_back_to_gameobject();
 
     am.shutdown();
     pm.shutdown();

@@ -15,7 +15,7 @@ namespace DonTopo
     // que CanvasComponent: SOLO DATOS. No guarda ni un UiElement ni el atlas ni
     // la fuente — el árbol vivo lo sigue teniendo el Renderer
     // (Renderer::uiCanvas()), y quien dibuja lo reconstruye/actualiza cada frame
-    // con syncUiButtons(). Así lo que se ve en Play y en el juego exportado sale
+    // con syncUiWidgets(). Así lo que se ve en Play y en el juego exportado sale
     // de la ESCENA y no de un árbol cableado a mano.
     //
     // Los nombres, los defaults y el significado son EXACTAMENTE los del núcleo:
@@ -188,133 +188,8 @@ namespace DonTopo
         return id;
     }
 
-    // Lo que el sync tiene que recordar ENTRE frames, todo junto y en manos de
-    // quien dibuja (una por bucle). Sin esto habría que recrear el árbol entero
-    // cada frame, que además de tirar la caché de vértices reiniciaría el
-    // fundido de cada botón en cada frame.
-    struct UiButtonSyncCache
-    {
-        // Firma del último frame: los ids de GameObject que había, EN ORDEN. Si
-        // cambia, el subárbol se reconstruye entero; si no, se actualiza en
-        // sitio. Se compara la lista completa y no el tamaño porque dos cambios
-        // que se compensan (uno fuera, otro dentro) dejan el mismo tamaño.
-        std::vector<uint64_t> ids;
-
-        // Punteros a los nodos vivos, en el mismo orden que ids. Son estables
-        // mientras nadie llame a clearChildren(): UiElement::add mueve los
-        // unique_ptr del vector, no los objetos apuntados.
-        std::vector<Button*> nodes;
-        std::vector<Text*>   labels;   // nullptr = ese botón no tiene etiqueta
-
-        // Copia de lo que se volcó la última vez, en el mismo orden. Lo que no
-        // ha cambiado no se vuelve a volcar NI se ensucia: escribir los campos
-        // sin ensuciar deja el botón clavado (el canvas se copia los vértices
-        // cacheados), y ensuciar siempre tira la caché entera cada frame.
-        std::vector<ButtonComponent> prev;
-
-        // Recursos de GPU por ruta. Sin esta caché una ruta de atlas cargaría un
-        // atlas NUEVO cada frame (Renderer::loadUiAtlas no cachea por ruta) y se
-        // comería la memoria de vídeo en segundos. Una ruta que falla se cachea
-        // como nullptr: reintentarla cada frame sería leer un fichero roto 60
-        // veces por segundo.
-        std::unordered_map<std::string, UiTextureAtlas*> atlases;
-        std::unordered_map<std::string, UiFont*>         fonts;
-    };
-
-    // Vuelca los ButtonComponent de la escena en el canvas vivo. `buttons` va en
-    // orden de recorrido de la escena y trae el id de cada GameObject dueño.
-    //
-    // Loader es cualquier cosa con loadUiAtlas(path) y loadUiFont(path) — o sea
-    // el Renderer. Es un template para no meter Renderer.h en un header de UI:
-    // el componente no sabe de Vulkan.
-    template <class Loader>
-    inline void syncUiButtons(const std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons,
-                              UiCanvas& canvas, UiButtonSyncCache& cache, Loader& loader)
-    {
-        auto resolveAtlas = [&](const std::string& path) -> UiTextureAtlas*
-        {
-            if (path.empty()) return nullptr;
-            auto it = cache.atlases.find(path);
-            if (it != cache.atlases.end()) return it->second;
-            UiTextureAtlas* atlas = loader.loadUiAtlas(path);
-            cache.atlases.emplace(path, atlas);
-            return atlas;
-        };
-        auto resolveFont = [&](const std::string& path) -> UiFont*
-        {
-            if (path.empty()) return nullptr;
-            auto it = cache.fonts.find(path);
-            if (it != cache.fonts.end()) return it->second;
-            UiFont* font = loader.loadUiFont(path);
-            cache.fonts.emplace(path, font);
-            return font;
-        };
-
-        // ¿Cambió el CONJUNTO de botones? Solo entonces se reconstruye.
-        bool rebuild = cache.ids.size() != buttons.size();
-        for (size_t i = 0; !rebuild && i < buttons.size(); i++)
-            if (cache.ids[i] != buttons[i].first) rebuild = true;
-
-        // Un botón que gana o pierde etiqueta (texto vacío <-> no vacío) cambia
-        // la FORMA del subárbol, y eso también obliga a reconstruir.
-        for (size_t i = 0; !rebuild && i < buttons.size(); i++)
-        {
-            const bool wantsLabel = !buttons[i].second->text.empty();
-            if (wantsLabel != (cache.labels[i] != nullptr)) rebuild = true;
-        }
-
-        if (rebuild)
-        {
-            canvas.root().clearChildren();
-            cache.ids.clear();
-            cache.nodes.clear();
-            cache.labels.clear();
-            cache.prev.clear();
-            for (const auto& entry : buttons)
-            {
-                const std::string nombre = uiButtonNodeName(entry.first);
-                Button& b = canvas.root().add<Button>(nombre);
-                cache.ids.push_back(entry.first);
-                cache.nodes.push_back(&b);
-                cache.labels.push_back(entry.second->text.empty()
-                                           ? nullptr
-                                           : &b.add<Text>(nombre + "/Label"));
-                // Un componente que no puede ser igual a ninguno real fuerza el
-                // primer volcado: un nodo recién creado ya nace sucio, pero los
-                // campos hay que escribirlos igual.
-                ButtonComponent nunca;
-                nunca.text = "\x01(sin volcar)";
-                cache.prev.push_back(nunca);
-            }
-        }
-
-        for (size_t i = 0; i < buttons.size(); i++)
-        {
-            const ButtonComponent& src = *buttons[i].second;
-            if (src == cache.prev[i]) continue;   // nada que tocar este frame
-
-            Button& b = *cache.nodes[i];
-            src.applyTo(b);
-            b.atlas = resolveAtlas(src.atlasPath);
-            // Los campos son públicos y se tocan a pelo, así que ensuciar es
-            // responsabilidad de quien escribe. DirtyAll y no un subconjunto:
-            // aquí se ha reescrito el nodo entero (rect, color, sprite y quad).
-            b.markDirty(UiElement::DirtyAll);
-
-            if (Text* label = cache.labels[i])
-            {
-                src.applyToLabel(*label);
-                // Sin ruta se usa la fuente por defecto: un texto que no se ve
-                // parece un bug del motor, no un campo sin rellenar.
-                label->font = resolveFont(src.fontPath.empty() ? std::string(kDefaultUiFontPath)
-                                                               : src.fontPath);
-                // Sin fuente el emisor dibujaría la etiqueta como el quad de su
-                // base, o sea un rectángulo liso TAPANDO el botón. Mejor no
-                // pintar nada y que se vea el botón.
-                label->drawable = (label->font != nullptr);
-                label->markDirty(UiElement::DirtyAll);
-            }
-            cache.prev[i] = src;
-        }
-    }
+    // El sync y su caché NO viven aquí: la raíz del canvas se reconstruye con
+    // clearChildren(), así que hay UN solo sync dueño de todos los widgets
+    // (syncUiWidgets en TextComponent.h). Dos syncs sobre la misma raíz se
+    // borrarían los nodos el uno al otro cada vez que uno reconstruyera.
 }

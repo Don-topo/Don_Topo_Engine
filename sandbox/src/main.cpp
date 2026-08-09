@@ -280,8 +280,9 @@ int main()
         // Estado del sync de widgets: vive FUERA del bucle porque es lo que
         // permite actualizar los botones en sitio (sin recrear el árbol, que
         // reiniciaría el fundido) y cachear atlas y fuentes por ruta.
-        DonTopo::UiButtonSyncCache uiButtonCache;
+        DonTopo::UiWidgetSyncCache uiWidgetCache;
         std::vector<std::pair<uint64_t, const DonTopo::ButtonComponent*>> uiButtons;
+        std::vector<std::pair<uint64_t, const DonTopo::TextComponent*>> uiTexts;
 
         while (!window.shouldClose())
         {
@@ -424,11 +425,15 @@ int main()
             // vivo del canvas, por frame y por la misma razón que la resolución.
             // Sin Canvas no hay UI: la lista va vacía y el sync limpia el árbol.
             uiButtons.clear();
+            uiTexts.clear();
             if (scene.findCanvas())
                 scene.traverse([&](DonTopo::GameObject* n) {
                     if (n->hasButton()) uiButtons.emplace_back(n->id, n->getButton().get());
+                    if (n->hasText())   uiTexts.emplace_back(n->id, n->getText().get());
                 });
-            DonTopo::syncUiButtons(uiButtons, renderer.uiCanvas(), uiButtonCache, renderer);
+            // UN solo sync para todos los widgets: es el dueño de la raíz del
+            // canvas, que se reconstruye entera con clearChildren().
+            DonTopo::syncUiWidgets(uiButtons, uiTexts, renderer.uiCanvas(), uiWidgetCache, renderer);
 
             // Input de la UI: sin esto el árbol no resuelve estados, así que los
             // cinco colores del botón, el fundido y el Click no harían nada.

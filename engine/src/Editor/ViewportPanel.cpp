@@ -11,6 +11,7 @@
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
 #include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/UI/TextComponent.h"
 #include <imgui.h>
 #include <ImGuizmo.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -427,30 +428,21 @@ void ViewportPanel::drawCanvasGizmo(EditorContext& ctx, const glm::vec2& imagePo
     ImGui::GetWindowDrawList()->AddRect(p0, p1, IM_COL32(80, 200, 255, 220), 0.0f, 0, 2.0f);
 }
 
-// Nodo vivo del botón de un GameObject, o nullptr si no hay. Los botones son
-// hijos DIRECTOS de la raíz del canvas (los monta syncUiButtons), así que un
+// Nodo vivo de un widget de un GameObject, o nullptr si no hay. Los widgets son
+// hijos DIRECTOS de la raíz del canvas (los monta syncUiWidgets), así que un
 // nivel basta y no hace falta recorrer el árbol entero.
-static const UiElement* findButtonNode(const UiCanvas& canvas, uint64_t ownerId)
+static const UiElement* findUiNodeNamed(const UiCanvas& canvas, const std::string& wanted)
 {
-    const std::string wanted = uiButtonNodeName(ownerId);
     for (const auto& child : canvas.root().children())
         if (child->name == wanted) return child.get();
     return nullptr;
 }
 
-void ViewportPanel::drawButtonGizmo(EditorContext& ctx, const glm::vec2& imagePos,
-                                     const glm::vec2& imageSize)
+// Rect + ejes del nodo vivo que se le pase. Compartido por el gizmo del Button y
+// el del Text: lo único que cambia entre los dos es de qué nodo salen.
+static void drawUiNodeGizmo(EditorContext& ctx, const UiElement* node,
+                            const glm::vec2& imagePos, const glm::vec2& imageSize)
 {
-    if (!ctx.selected || !ctx.selected->hasButton() || !ctx.renderer || !Gizmos::isEnabled())
-        return;
-    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
-        return;
-
-    // El rect sale del nodo VIVO (lo que dejó el último buildDrawData), no de
-    // los campos del componente: así el gizmo ya trae aplicadas las anclas, la
-    // escala del canvas y el layout, sin recalcular nada aquí.
-    const UiCanvas& canvas = ctx.renderer->uiCanvas();
-    const UiElement* node = findButtonNode(canvas, ctx.selected->id);
     if (!node || !node->rectValid) return;
 
     const glm::vec2 renderSize{ (float)ctx.renderer->renderWidth(),
@@ -479,6 +471,35 @@ void ViewportPanel::drawButtonGizmo(EditorContext& ctx, const glm::vec2& imagePo
     dl->AddCircleFilled(pivot, 3.0f, IM_COL32(255, 160, 40, 255));
 }
 
+void ViewportPanel::drawButtonGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                     const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasButton() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    // El rect sale del nodo VIVO (lo que dejó el último buildDrawData), no de
+    // los campos del componente: así el gizmo ya trae aplicadas las anclas, la
+    // escala del canvas y el layout, sin recalcular nada aquí.
+    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
+                                         uiButtonNodeName(ctx.selected->id)),
+                    imagePos, imageSize);
+}
+
+void ViewportPanel::drawTextGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                   const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasText() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
+                                         uiTextNodeName(ctx.selected->id)),
+                    imagePos, imageSize);
+}
+
 GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mousePx,
                                          const glm::vec2& imageSize) const
 {
@@ -499,8 +520,12 @@ GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mou
     // El hit test devuelve el nodo más profundo, que puede ser la etiqueta: se
     // sube hasta el primero que sea de un GameObject.
     for (const UiElement* n = hit; n != nullptr; n = n->parent())
+    {
         if (const uint64_t owner = uiButtonOwnerId(n->name))
             return ctx.scene->findById(owner);
+        if (const uint64_t owner = uiTextOwnerId(n->name))
+            return ctx.scene->findById(owner);
+    }
     return nullptr;
 }
 
@@ -637,6 +662,7 @@ void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, co
     // va con el draw list de ImGui y no con Gizmos (que dibuja en el mundo).
     drawCanvasGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawButtonGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    drawTextGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     // Hover de la IMAGEN, no de la ventana: con esto un popup o cualquier otra
     // ventana por encima ya no cuenta como clic en la escena.
     const bool imageHovered = ImGui::IsItemHovered();

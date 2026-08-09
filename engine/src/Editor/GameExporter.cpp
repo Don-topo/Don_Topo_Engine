@@ -286,6 +286,23 @@ std::vector<ExportAsset> collectSceneAssets(
             else if (!b->text.empty()) addUiPath(kDefaultUiFontPath);
         }
 
+        if (go->hasText())
+        {
+            const auto& t = go->getText();
+            // Misma resolución de rutas relativas y mismo fallback que el
+            // Button: un Text sin fuente propia dibuja con la de por defecto, y
+            // sin empaquetarla el texto no aparece fuera de la máquina que
+            // exportó.
+            auto addUiPath = [&](const std::string& raw)
+            {
+                if (raw.empty()) return;
+                const fs::path p(raw);
+                add(p.is_absolute() ? raw : (projectRoot / p).string());
+            };
+            if (!t->fontPath.empty())  addUiPath(t->fontPath);
+            else if (!t->text.empty()) addUiPath(kDefaultUiFontPath);
+        }
+
         for (const auto& s : go->getScripts())
         {
             auto it = scriptPaths.find(s->scriptName);
@@ -336,6 +353,13 @@ int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& 
         // vacía): el runtime volverá a caer en kDefaultUiFontPath, que dentro
         // del paquete tiene la MISMA ruta relativa que en el proyecto.
         n += rewriteField(button, "fontPath", sourceToPackage);
+    }
+
+    if (node.contains("text") && node["text"].is_object())
+    {
+        // Misma regla que la del Button: una fontPath vacía se queda vacía y el
+        // runtime vuelve a caer en kDefaultUiFontPath.
+        n += rewriteField(node["text"], "fontPath", sourceToPackage);
     }
 
     if (node.contains("children") && node["children"].is_array())

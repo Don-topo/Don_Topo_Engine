@@ -46,6 +46,8 @@ namespace
     using DonTopo::ButtonComponent;
     using DonTopo::UiButtonTransition;
     using DonTopo::UiTextAlign;
+    using DonTopo::TextComponent;
+    using DonTopo::UiTextOverflow;
 
     // Forward declarations: animatorFromJson (más abajo) necesita estos
     // lectores tolerantes a JSON corrupto (definidos junto a jsonToMat4/
@@ -164,6 +166,23 @@ namespace
         if (s == "right")   return UiTextAlign::Right;
         if (s == "justify") return UiTextAlign::Justify;
         return UiTextAlign::Left;   // valor desconocido -> el default
+    }
+
+    const char* uiTextOverflowToStr(UiTextOverflow o)
+    {
+        switch (o)
+        {
+            case UiTextOverflow::Clip:     return "clip";
+            case UiTextOverflow::Ellipsis: return "ellipsis";
+            default:                       return "overflow";
+        }
+    }
+
+    UiTextOverflow uiTextOverflowFromStr(const std::string& s)
+    {
+        if (s == "clip")     return UiTextOverflow::Clip;
+        if (s == "ellipsis") return UiTextOverflow::Ellipsis;
+        return UiTextOverflow::Overflow;   // valor desconocido -> el default
     }
 
     // Los vectores del Button van como objeto con componentes nombradas, igual
@@ -540,6 +559,29 @@ namespace
                             {"fontSize", b->fontSize},
                             {"textColor", vec4ToJsonXYZW(b->textColor)},
                             {"textAlign", uiTextAlignToStr(b->textAlign)} };
+        }
+        if (node.hasText())
+        {
+            const auto& t = node.getText();
+            j["text"] = { {"anchorMin", vec2ToJsonXY(t->anchorMin)},
+                          {"anchorMax", vec2ToJsonXY(t->anchorMax)},
+                          {"pivot", vec2ToJsonXY(t->pivot)},
+                          {"position", vec2ToJsonXY(t->position)},
+                          {"size", vec2ToJsonXY(t->size)},
+                          {"color", vec4ToJsonXYZW(t->color)},
+                          {"visible", t->visible},
+                          {"text", t->text},
+                          {"fontPath", t->fontPath},
+                          {"fontSize", t->fontSize},
+                          {"outlineWidth", t->outlineWidth},
+                          {"outlineColor", vec4ToJsonXYZW(t->outlineColor)},
+                          {"shadowOffset", vec2ToJsonXY(t->shadowOffset)},
+                          {"shadowColor", vec4ToJsonXYZW(t->shadowColor)},
+                          {"align", uiTextAlignToStr(t->align)},
+                          {"overflow", uiTextOverflowToStr(t->overflow)},
+                          {"wordWrap", t->wordWrap},
+                          {"boldStrength", t->boldStrength},
+                          {"italicSkew", t->italicSkew} };
         }
         if (node.hasAnimator())
             j["animator"] = animatorToJson(*node.getAnimator());
@@ -1284,6 +1326,50 @@ namespace
                                  ? uiTextAlignFromStr(b["textAlign"].get<std::string>())
                                  : UiTextAlign::Center;
             node->setButton(std::move(btn));
+        }
+        // Bloque aditivo, misma regla que el Button: una escena guardada antes
+        // del componente Text no trae la clave y se carga sin él ni un aviso.
+        if (j.contains("text"))
+        {
+            const auto& t = j["text"];
+            const std::string ctx = "text de '" + node->name + "'";
+            // Mismo criterio que el Button: un bool o un string corrupto cae al
+            // default en vez de lanzar, que un campo roto no puede tumbar la
+            // carga de la escena entera.
+            auto readBool = [&](const char* key, bool def) {
+                return (t.contains(key) && t[key].is_boolean()) ? t[key].get<bool>() : def;
+            };
+            auto readStr = [&](const char* key) {
+                return (t.contains(key) && t[key].is_string())
+                           ? t[key].get<std::string>() : std::string();
+            };
+            auto txt = std::make_shared<TextComponent>();
+            txt->anchorMin = readVec2XY(t, "anchorMin", glm::vec2(0.0f), warnings, ctx);
+            txt->anchorMax = readVec2XY(t, "anchorMax", glm::vec2(0.0f), warnings, ctx);
+            txt->pivot     = readVec2XY(t, "pivot", glm::vec2(0.0f), warnings, ctx);
+            txt->position  = readVec2XY(t, "position", glm::vec2(0.0f), warnings, ctx);
+            txt->size      = readVec2XY(t, "size", glm::vec2(160.0f, 40.0f), warnings, ctx);
+            txt->color     = readVec4XYZW(t, "color", glm::vec4(1.0f), warnings, ctx);
+            txt->visible   = readBool("visible", true);
+
+            txt->text     = readStr("text");
+            txt->fontPath = readStr("fontPath");
+            txt->fontSize = readFloat(t, "fontSize", 16.0f, warnings, ctx);
+
+            txt->outlineWidth = readFloat(t, "outlineWidth", 0.0f, warnings, ctx);
+            txt->outlineColor = readVec4XYZW(t, "outlineColor",
+                                             glm::vec4(0.0f, 0.0f, 0.0f, 1.0f), warnings, ctx);
+            txt->shadowOffset = readVec2XY(t, "shadowOffset", glm::vec2(0.0f), warnings, ctx);
+            txt->shadowColor  = readVec4XYZW(t, "shadowColor",
+                                             glm::vec4(0.0f, 0.0f, 0.0f, 0.5f), warnings, ctx);
+
+            txt->align    = uiTextAlignFromStr(readStr("align"));
+            txt->overflow = uiTextOverflowFromStr(readStr("overflow"));
+            txt->wordWrap = readBool("wordWrap", false);
+
+            txt->boldStrength = readFloat(t, "boldStrength", 0.08f, warnings, ctx);
+            txt->italicSkew   = readFloat(t, "italicSkew", 0.25f, warnings, ctx);
+            node->setText(std::move(txt));
         }
         // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
         // y cargan igual (version sigue en 1).

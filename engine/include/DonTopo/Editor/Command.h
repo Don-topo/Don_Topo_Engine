@@ -10,6 +10,7 @@
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/UI/TextComponent.h"
 
 namespace DonTopo {
 
@@ -229,6 +230,28 @@ private:
     uint64_t m_id;
     bool m_add;
     ButtonComponent m_state;
+};
+
+// Add/Remove del TextComponent, calcado de ButtonComponentCommand: resuelve el
+// GameObject por id en cada execute()/undo() (nunca puntero crudo), y m_state es
+// una COPIA del componente entero pa que un Add-undo-redo no devuelva el texto,
+// los colores ni la ruta de la fuente a los defaults.
+class TextComponentCommand : public ICommand {
+public:
+    TextComponentCommand(Scene& scene, std::string label, uint64_t id,
+                          bool add, TextComponent state);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(bool add);
+
+    Scene& m_scene;
+    std::string m_label;
+    uint64_t m_id;
+    bool m_add;
+    TextComponent m_state;
 };
 
 // Add/Remove del AnimatorComponent, mismo contrato que CameraComponentCommand:

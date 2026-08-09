@@ -444,8 +444,9 @@ int main(int argc, char** argv)
 
         // Estado del sync de widgets, igual que en el editor: fuera del bucle
         // para actualizar en sitio y cachear atlas y fuentes por ruta.
-        DonTopo::UiButtonSyncCache uiButtonCache;
+        DonTopo::UiWidgetSyncCache uiWidgetCache;
         std::vector<std::pair<uint64_t, const DonTopo::ButtonComponent*>> uiButtons;
+        std::vector<std::pair<uint64_t, const DonTopo::TextComponent*>> uiTexts;
 
         while (!window.shouldClose())
         {
@@ -602,11 +603,13 @@ int main(int argc, char** argv)
 
             // Widgets: mismo volcado por frame que en el editor.
             uiButtons.clear();
+            uiTexts.clear();
             if (scene.findCanvas())
                 scene.traverse([&](DonTopo::GameObject* n) {
                     if (n->hasButton()) uiButtons.emplace_back(n->id, n->getButton().get());
+                    if (n->hasText())   uiTexts.emplace_back(n->id, n->getText().get());
                 });
-            DonTopo::syncUiButtons(uiButtons, renderer.uiCanvas(), uiButtonCache, renderer);
+            DonTopo::syncUiWidgets(uiButtons, uiTexts, renderer.uiCanvas(), uiWidgetCache, renderer);
 
             // Input de la UI: sin esto el árbol no resuelve estados y los cinco
             // colores del botón, el fundido y el Click no existen. El ratón está

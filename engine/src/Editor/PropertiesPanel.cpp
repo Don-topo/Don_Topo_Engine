@@ -102,6 +102,7 @@ PropertiesPanel::PropertiesPanel()
     , m_audioFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_fontFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_uiAtlasFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_textFontFileDialog(std::make_unique<IGFD::FileDialog>())
 {
 }
 
@@ -365,6 +366,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
             drawAudioListenerSection(ctx);
             drawCanvasSection(ctx);
             drawButtonSection(ctx);
+            drawTextSection(ctx);
             drawScriptsSection(ctx);
             drawAddComponentButton(ctx);
         }
@@ -375,6 +377,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
     drawMeshDialog(ctx);
     drawAudioClipDialog(ctx);
     drawButtonPathDialogs(ctx);
+    drawTextPathDialog(ctx);
 }
 
 void PropertiesPanel::drawSsrSection(EditorContext& ctx)
@@ -1176,6 +1179,369 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
         cmd->execute();
         ctx.undo->push(std::move(cmd));
         ctx.pushLog("Componente Button quitado de '" + ctx.selected->name + "'");
+    }
+}
+
+void PropertiesPanel::setTextFontPath(EditorContext& ctx, uint64_t ownerId,
+                                       const std::string& path)
+{
+    // Mismo veto que el Button y por el mismo sitio: aquí pasan el drop y el
+    // file dialog, así que el filtro solo hay que ponerlo una vez.
+    if (!isUiFontPath(path))
+    {
+        m_textPathError = "No es una fuente (.ttf .otf .ttc): " +
+                          std::filesystem::path(path).filename().string();
+        ctx.pushLog(m_textPathError);
+        return;
+    }
+    m_textPathError.clear();
+
+    Scene* scene = ctx.scene;
+    if (!scene) return;
+    GameObject* go = scene->findById(ownerId);
+    if (!go || !go->hasText()) return;
+
+    TextComponent& t = *go->getText();
+    const std::string before = t.fontPath;
+    if (before == path) return;
+
+    t.fontPath = path;
+
+    const std::string lbl = "Fuente del texto de '" + go->name + "'";
+    ctx.pushLog(lbl + " cambiada a " + path);
+    if (ctx.undo)
+        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+            lbl, before, path,
+            [scene, ownerId](const std::string& v) {
+                if (GameObject* g = scene->findById(ownerId))
+                    if (g->hasText()) g->getText()->fontPath = v;
+            }));
+}
+
+void PropertiesPanel::drawTextPathDialog(EditorContext& ctx)
+{
+    // Sin condicionar a ctx.selected/hasText(): si no se drena aquí, cambiar de
+    // selección con el diálogo abierto deja el flag atascado en true.
+    if (m_textFontDlgOpen && m_textFontFileDialog->Display("TextFontDlg"))
+    {
+        if (m_textFontFileDialog->IsOk())
+            setTextFontPath(ctx, m_textFontDlgOwner, m_textFontFileDialog->GetFilePathName());
+        m_textFontFileDialog->Close();
+        m_textFontDlgOpen = false;
+    }
+}
+
+void PropertiesPanel::drawTextSection(EditorContext& ctx)
+{
+    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    if (!ctx.selected->hasText()) return;
+
+    ImGui::Separator();
+    bool sectionOpen = ImGui::TreeNodeEx("Text",
+                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+    const bool removeClicked = ImGui::SmallButton("x##text");
+
+    Scene*            scene = ctx.scene;
+    const uint64_t    id    = ctx.selected->id;
+    const std::string owner = ctx.selected->name;
+
+    if (sectionOpen)
+    {
+        TextComponent* t = ctx.selected->getText().get();
+        ImGui::TextWrapped("Etiqueta de la UI 2D. Se dibuja en el árbol del Canvas de la escena. "
+                           "El texto acepta tags de estilo: <color=#RRGGBB>, <size=N>, <b> y <i>.");
+
+        // Los mismos accessors sin captura (function pointer) y el mismo baile
+        // de undo que la sección del Button. Los labels llevan "##txt" porque un
+        // GameObject puede tener Button y Text a la vez: dos widgets con el
+        // MISMO id de ImGui en la misma ventana comparten estado.
+        using FloatRef = float&       (*)(TextComponent&);
+        using Vec2Ref  = glm::vec2&   (*)(TextComponent&);
+        using Vec4Ref  = glm::vec4&   (*)(TextComponent&);
+        using StrRef   = std::string& (*)(TextComponent&);
+        using BoolRef  = bool&        (*)(TextComponent&);
+        using EnumSet  = void         (*)(TextComponent&, int);
+
+        auto comboEnum = [&](const char* label, int before, const char* const* items,
+                             int count, EnumSet apply)
+        {
+            int idx = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::Combo(label, &idx, items, count) && idx != before)
+            {
+                apply(*t, idx);
+                const std::string lbl = std::string(label) + " del texto de '" + owner + "'";
+                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<int>>(
+                        lbl, before, idx,
+                        [scene, id, apply](const int& v) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasText()) apply(*go->getText(), v);
+                        }));
+            }
+        };
+
+        auto checkBox = [&](const char* label, BoolRef acc)
+        {
+            const bool before = acc(*t);
+            bool       v      = before;
+            if (ImGui::Checkbox(label, &v) && v != before)
+            {
+                acc(*t) = v;
+                const std::string lbl = std::string(label) + " del texto de '" + owner + "'";
+                ctx.pushLog(lbl + (v ? " activado" : " desactivado"));
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
+                        lbl, before, v,
+                        [scene, id, acc](const bool& val) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasText()) acc(*go->getText()) = val;
+                        }));
+            }
+        };
+
+        auto dragFloat = [&](const char* label, FloatRef acc, float speed,
+                             float lo, float hi, const char* fmt)
+        {
+            const float before = acc(*t);
+            float       v      = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+            if (ImGui::DragFloat(label, &v, speed, lo, hi, fmt))
+                acc(*t) = v;
+            if (ImGui::IsItemActivated())
+            {
+                m_textDragBefore  = before;
+                m_textDragOwnerId = id;
+                m_textDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_textDragOwnerId == id &&
+                m_textDragField == label)
+            {
+                const float after = acc(*t);
+                m_textDragField = nullptr;
+                if (after != m_textDragBefore)
+                {
+                    const std::string lbl = std::string(label) + " del texto de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<float>>(
+                            lbl, m_textDragBefore, after,
+                            [scene, id, acc](const float& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasText()) acc(*go->getText()) = val;
+                            }));
+                }
+            }
+        };
+
+        auto dragVec2 = [&](const char* label, Vec2Ref acc, float speed,
+                            float lo, float hi, const char* fmt)
+        {
+            const glm::vec2 before = acc(*t);
+            glm::vec2       v      = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::DragFloat2(label, &v.x, speed, lo, hi, fmt))
+                acc(*t) = v;
+            if (ImGui::IsItemActivated())
+            {
+                m_textDragBefore2 = before;
+                m_textDragOwnerId = id;
+                m_textDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_textDragOwnerId == id &&
+                m_textDragField == label)
+            {
+                const glm::vec2 after = acc(*t);
+                m_textDragField = nullptr;
+                if (after != m_textDragBefore2)
+                {
+                    const std::string lbl = std::string(label) + " del texto de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
+                            lbl, m_textDragBefore2, after,
+                            [scene, id, acc](const glm::vec2& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasText()) acc(*go->getText()) = val;
+                            }));
+                }
+            }
+        };
+
+        auto colorEdit = [&](const char* label, Vec4Ref acc)
+        {
+            const glm::vec4 before = acc(*t);
+            glm::vec4       v      = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+            if (ImGui::ColorEdit4(label, &v.x))
+                acc(*t) = v;
+            if (ImGui::IsItemActivated())
+            {
+                m_textDragBefore4 = before;
+                m_textDragOwnerId = id;
+                m_textDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_textDragOwnerId == id &&
+                m_textDragField == label)
+            {
+                const glm::vec4 after = acc(*t);
+                m_textDragField = nullptr;
+                if (after != m_textDragBefore4)
+                {
+                    const std::string lbl = std::string(label) + " del texto de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
+                            lbl, m_textDragBefore4, after,
+                            [scene, id, acc](const glm::vec4& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasText()) acc(*go->getText()) = val;
+                            }));
+                }
+            }
+        };
+
+        auto inputText = [&](const char* label, StrRef acc)
+        {
+            const std::string before = acc(*t);
+            char buf[512] = {};
+            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
+            if (ImGui::InputText(label, buf, sizeof(buf)))
+                acc(*t) = std::string(buf);
+            if (ImGui::IsItemActivated())
+            {
+                m_textDragBeforeStr = before;
+                m_textDragOwnerId   = id;
+                m_textDragField     = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_textDragOwnerId == id &&
+                m_textDragField == label)
+            {
+                const std::string after = acc(*t);
+                const std::string prev  = m_textDragBeforeStr;
+                m_textDragField = nullptr;
+                if (after != prev)
+                {
+                    const std::string lbl = std::string(label) + " del texto de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+                            lbl, prev, after,
+                            [scene, id, acc](const std::string& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasText()) acc(*go->getText()) = val;
+                            }));
+                }
+            }
+        };
+
+        ImGui::TextDisabled("Rect");
+        dragVec2("Anchor Min##txt", +[](TextComponent& c) -> glm::vec2& { return c.anchorMin; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Anchor Max##txt", +[](TextComponent& c) -> glm::vec2& { return c.anchorMax; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Pivot##txt", +[](TextComponent& c) -> glm::vec2& { return c.pivot; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Position##txt", +[](TextComponent& c) -> glm::vec2& { return c.position; },
+                 1.0f, -16384.0f, 16384.0f, "%.0f");
+        dragVec2("Size##txt", +[](TextComponent& c) -> glm::vec2& { return c.size; },
+                 1.0f, 0.0f, 16384.0f, "%.0f");
+        checkBox("Visible##txt", +[](TextComponent& c) -> bool& { return c.visible; });
+
+        ImGui::TextDisabled("Texto");
+        inputText("Text##txt", +[](TextComponent& c) -> std::string& { return c.text; });
+
+        // Caja de asset calcada a la del Button: ruta escribible a mano, botón
+        // que abre el file dialog y zona de drop para el content browser. El
+        // veto por extensión está en setTextFontPath, por donde pasan los dos.
+        inputText("Font##txt", +[](TextComponent& c) -> std::string& { return c.fontPath; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Vacía = la fuente por defecto del proyecto");
+        ImGui::SameLine();
+        if (ImGui::Button("Browse...##txtfont"))
+        {
+            IGFD::FileDialogConfig cfg;
+            cfg.path  = "assets";
+            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                        ImGuiFileDialogFlags_HideColumnDate |
+                        ImGuiFileDialogFlags_DisableThumbnailMode |
+                        ImGuiFileDialogFlags_DisablePlaceMode;
+            m_textFontDlgOwner = id;
+            m_textFontDlgOpen  = true;
+            m_textFontFileDialog->OpenDialog("TextFontDlg", "Choose font", ".ttf,.otf,.ttc", cfg);
+        }
+
+        ImGui::BeginChild("##DropZoneTextFont", ImVec2(0, 34), true);
+        ImGui::TextDisabled("Drop .ttf/.otf here");
+        // Mismo veto de edición que el Button: con el modal de Load Scene activo
+        // no se aceptan drops nuevos.
+        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+                setTextFontPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
+            ImGui::EndDragDropTarget();
+        }
+        ImGui::EndChild();
+
+        if (!m_textPathError.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_textPathError.c_str());
+
+        dragFloat("Font Size##txt", +[](TextComponent& c) -> float& { return c.fontSize; },
+                  0.5f, 1.0f, 512.0f, "%.1f");
+        colorEdit("Color##txt", +[](TextComponent& c) -> glm::vec4& { return c.color; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Color del relleno del glyph");
+
+        static const char* kAligns[] = { "Left", "Center", "Right", "Justify" };
+        comboEnum("Align##txt", (int)t->align, kAligns, IM_ARRAYSIZE(kAligns),
+                  +[](TextComponent& c, int v) { c.align = (UiTextAlign)v; });
+
+        static const char* kOverflows[] = { "Overflow", "Clip", "Ellipsis" };
+        comboEnum("Overflow##txt", (int)t->overflow, kOverflows, IM_ARRAYSIZE(kOverflows),
+                  +[](TextComponent& c, int v) { c.overflow = (UiTextOverflow)v; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Qué pasa con lo que no cabe en el rect. Clip parte el lote por scissor");
+
+        checkBox("Word Wrap##txt", +[](TextComponent& c) -> bool& { return c.wordWrap; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Corta por palabras contra el ancho del rect. Los '\\n' cortan siempre");
+
+        ImGui::TextDisabled("Contorno");
+        dragFloat("Outline Width##txt", +[](TextComponent& c) -> float& { return c.outlineWidth; },
+                  0.05f, 0.0f, 32.0f, "%.2f");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Píxeles de pantalla. 0 = sin contorno");
+        colorEdit("Outline Color##txt",
+                  +[](TextComponent& c) -> glm::vec4& { return c.outlineColor; });
+
+        ImGui::TextDisabled("Sombra");
+        dragVec2("Shadow Offset##txt",
+                 +[](TextComponent& c) -> glm::vec2& { return c.shadowOffset; },
+                 0.25f, -64.0f, 64.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Píxeles. A {0,0} (o con alfa 0) no se emite ni un quad de sombra");
+        colorEdit("Shadow Color##txt",
+                  +[](TextComponent& c) -> glm::vec4& { return c.shadowColor; });
+
+        ImGui::TextDisabled("Estilo de los tags <b> e <i>");
+        dragFloat("Bold Strength##txt", +[](TextComponent& c) -> float& { return c.boldStrength; },
+                  0.01f, 0.0f, 1.0f, "%.3f");
+        dragFloat("Italic Skew##txt", +[](TextComponent& c) -> float& { return c.italicSkew; },
+                  0.01f, -1.0f, 1.0f, "%.3f");
+
+        ImGui::TreePop();
+    }
+
+    if (removeClicked && ctx.scene && ctx.undo)
+    {
+        auto cmd = std::make_unique<TextComponentCommand>(
+            *ctx.scene, "Quitar Text de '" + ctx.selected->name + "'", ctx.selected->id,
+            /*add=*/false, *ctx.selected->getText());
+        cmd->execute();
+        ctx.undo->push(std::move(cmd));
+        ctx.pushLog("Componente Text quitado de '" + ctx.selected->name + "'");
     }
 }
 
@@ -2801,6 +3167,18 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
                 ctx.pushLog("Componente Button añadido a '" + ctx.selected->name + "'");
+            }
+            ImGui::EndDisabled();
+
+            ImGui::BeginDisabled(ctx.selected->hasText());
+            if (ImGui::Selectable("Text") && ctx.scene && ctx.undo)
+            {
+                auto cmd = std::make_unique<TextComponentCommand>(
+                    *ctx.scene, "Añadir Text a '" + ctx.selected->name + "'", ctx.selected->id,
+                    /*add=*/true, TextComponent{});
+                cmd->execute();
+                ctx.undo->push(std::move(cmd));
+                ctx.pushLog("Componente Text añadido a '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
         }

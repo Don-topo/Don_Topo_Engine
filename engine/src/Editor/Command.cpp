@@ -162,6 +162,25 @@ void ButtonComponentCommand::apply(bool add)
     go->setButton(std::make_shared<ButtonComponent>(m_state));
 }
 
+TextComponentCommand::TextComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                            bool add, TextComponent state)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}
+
+void TextComponentCommand::execute() { apply(m_add); }
+void TextComponentCommand::undo()    { apply(!m_add); }
+
+void TextComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setText(nullptr);
+        return;
+    }
+    go->setText(std::make_shared<TextComponent>(m_state));
+}
+
 AnimatorComponentCommand::AnimatorComponentCommand(Scene& scene, std::string label, uint64_t id,
                                                     bool add, AnimatorComponent state)
     : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}

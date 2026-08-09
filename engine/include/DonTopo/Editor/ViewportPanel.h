@@ -57,6 +57,10 @@ private:
     // escala ya aplicadas), no de los campos del componente.
     void drawButtonGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                           const glm::vec2& imageSize);
+    // Lo mismo para el Text seleccionado. Es otro nodo del canvas (nombre con
+    // otro prefijo), así que un GameObject con Button y Text pinta los dos.
+    void drawTextGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                        const glm::vec2& imageSize);
     // Selección por clic de un widget de UI: hit test 2D del canvas, que manda
     // sobre el raycast 3D porque la UI se dibuja ENCIMA de la escena. mousePx
     // va en píxeles relativos a la esquina de la imagen, igual que en

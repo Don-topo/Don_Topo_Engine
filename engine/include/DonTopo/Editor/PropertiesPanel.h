@@ -123,6 +123,16 @@ private:
     // cualquier otro origen futuro.
     void setButtonAssetPath(EditorContext& ctx, uint64_t ownerId, bool isFont,
                              const std::string& path);
+    // Text: etiqueta de la UI 2D. Sección tras "Add" como el Button, con el
+    // mismo rect y TODOS los campos de Text (contorno, sombra, wrap y overflow).
+    void drawTextSection(EditorContext& ctx);
+    // Drena el file dialog de la fuente del Text. Fuera de la sección y sin
+    // condicionar a la selección, por el mismo motivo que drawButtonPathDialogs.
+    void drawTextPathDialog(EditorContext& ctx);
+    // Escribe la ruta de la fuente del Text resolviendo el GameObject por id,
+    // validando la extensión y dejando el cambio en el stack de undo. Punto
+    // único por el que pasan el drop y el file dialog.
+    void setTextFontPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
     void drawAudioClipDialog(EditorContext& ctx);
     void drawScriptsSection(EditorContext& ctx);
     void drawAddComponentButton(EditorContext& ctx);
@@ -187,6 +197,16 @@ private:
     glm::vec2   m_buttonDragBefore2 {0.0f};
     glm::vec4   m_buttonDragBefore4 {1.0f};
     std::string m_buttonDragBeforeStr;
+
+    // Y lo mismo para los campos del Text: propios y no compartidos con el
+    // Button porque los dos componentes pueden estar en el MISMO GameObject, y
+    // un "before" compartido mezclaría los dos arrastres.
+    uint64_t    m_textDragOwnerId = 0;
+    const char* m_textDragField   = nullptr;
+    float       m_textDragBefore  = 0.0f;
+    glm::vec2   m_textDragBefore2 {0.0f};
+    glm::vec4   m_textDragBefore4 {1.0f};
+    std::string m_textDragBeforeStr;
 
     // Box Collider – mismo patrón de cache que Transform: persiste entre
     // frames para que los DragFloat acumulen el delta del arrastre, y se
@@ -296,6 +316,13 @@ private:
     // Último rechazo por extensión, para poder decir POR QUÉ no se aceptó el
     // fichero en vez de tragárselo en silencio. Se limpia al acertar.
     std::string m_buttonPathError;
+
+    // Fuente del Text. Instancia de diálogo propia (nunca compartida con la del
+    // Button) y su propio id de dueño, por la misma razón que las del Button.
+    bool     m_textFontDlgOpen  = false;
+    uint64_t m_textFontDlgOwner = 0;
+    std::unique_ptr<IGFD::FileDialog> m_textFontFileDialog;
+    std::string m_textPathError;
     // Mismo patrón que m_meshLoadError/m_meshAddRequestedFor pero para el
     // componente AudioClip.
     std::string m_audioLoadError;
