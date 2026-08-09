@@ -170,6 +170,14 @@ namespace DonTopo
                 t.color     = textColor;
                 t.align     = textAlign;
                 t.visible   = visible;
+
+                // Y NO intercepta el ratón. El hit test prueba a los hijos
+                // antes que al padre, así que una etiqueta que cubre el rect
+                // entero se quedaría con el hover y el botón no saldría nunca
+                // de Normal: los cinco colores de estado no harían nada. El
+                // click sí funcionaría (los eventos burbujean del hijo al
+                // padre), que es lo que hace el fallo tan difícil de ver.
+                t.raycastTarget = false;
             }
 
             // El sync lo usa para saber si hay algo que volcar: sin esto habría

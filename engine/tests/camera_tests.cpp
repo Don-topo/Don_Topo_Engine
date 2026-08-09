@@ -1104,6 +1104,42 @@ static void test_button_state_color_is_applied()
     CHECK(nearlyEqual(node.color.a, 0.8f));
 }
 
+// Un botón CON etiqueta sigue viendo el ratón. La etiqueta es un hijo Text
+// anclado al rect ENTERO del botón, y el hit test prueba a los hijos primero:
+// si interceptara el ratón, el hover se marcaría en ella y el botón se quedaría
+// en Normal para siempre. Es un fallo difícil de ver porque el CLICK sí
+// funciona (los eventos burbujean del hijo al padre): lo único que se rompe son
+// los cinco colores de estado.
+static void test_button_with_label_still_hovers()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+    ButtonComponent b;
+    b.size        = glm::vec2(100.0f, 50.0f);
+    b.text        = "Jugar";            // <- con etiqueta
+    b.normalColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+    b.hoverColor  = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>> lista{ {7ull, &b} };
+    syncUiWidgets(lista, {}, {}, canvas, cache, loader);
+    UiDrawData data;
+    canvas.buildDrawData(800, 480, data);
+
+    UiInputState in;
+    in.mousePos    = glm::vec2(20.0f, 20.0f);   // dentro del botón Y de su etiqueta
+    in.timeSeconds = 1.0f;
+    canvas.updateInput(in);
+
+    CHECK(cache.buttonNodes.size() == 1);
+    CHECK(cache.buttonLabels.size() == 1 && cache.buttonLabels[0] != nullptr);
+    if (cache.buttonNodes.size() != 1) return;
+    CHECK(cache.buttonNodes[0]->hovered);
+    CHECK(cache.buttonNodes[0]->state == UiButtonState::Hover);
+    CHECK(nearlyEqual(cache.buttonNodes[0]->color.r, 1.0f));
+    CHECK(nearlyEqual(cache.buttonNodes[0]->color.g, 0.0f));
+}
+
 // Clic sobre un botón en el viewport: el hit test del canvas devuelve un nodo y
 // su nombre es lo único que ata el árbol de UI con la escena. Es la pieza pura
 // de ViewportPanel::pickUiObject (lo demás es ImGui).
@@ -2026,6 +2062,7 @@ int main()
     test_button_survives_canvas_edit();
     test_button_text_without_font_is_visible();
     test_button_state_color_is_applied();
+    test_button_with_label_still_hovers();
     test_button_hit_test_maps_back_to_gameobject();
     test_button_asset_path_filters();
 
