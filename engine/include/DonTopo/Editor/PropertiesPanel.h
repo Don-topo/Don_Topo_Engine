@@ -52,7 +52,40 @@ public:
         return false;
     }
 
+    // Qué acepta cada caja de asset del Button: las de fuente son las que abre
+    // FreeType (UiFont::loadFromFile) y las de atlas las que lee stb_image
+    // (UiTextureAtlas::loadFromFile). Aquí y no dentro del ImGui para poder
+    // probarlas sin GUI, igual que uiComponentsAvailable. La comparación es en
+    // minúsculas: del content browser puede llegar un ".PNG".
+    static bool isUiFontPath(const std::string& path)
+    {
+        static const char* const kExts[] = { ".ttf", ".otf", ".ttc" };
+        return hasExtension(path, kExts, sizeof(kExts) / sizeof(kExts[0]));
+    }
+
+    static bool isUiAtlasPath(const std::string& path)
+    {
+        static const char* const kExts[] = { ".png", ".jpg", ".jpeg", ".bmp", ".tga" };
+        return hasExtension(path, kExts, sizeof(kExts) / sizeof(kExts[0]));
+    }
+
 private:
+    static bool hasExtension(const std::string& path, const char* const* exts, size_t count)
+    {
+        const size_t dot = path.find_last_of('.');
+        if (dot == std::string::npos) return false;
+        // Un punto que quede ANTES del último separador es de un directorio
+        // ("C:/mis.cosas/fuente"), no una extensión.
+        const size_t sep = path.find_last_of("/\\");
+        if (sep != std::string::npos && dot < sep) return false;
+        std::string ext = path.substr(dot);
+        for (char& c : ext)
+            if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        for (size_t i = 0; i < count; i++)
+            if (ext == exts[i]) return true;
+        return false;
+    }
+
     void drawBoxColliderSection(EditorContext& ctx);
     void drawSphereColliderSection(EditorContext& ctx);
     void drawCapsuleColliderSection(EditorContext& ctx);
@@ -81,6 +114,15 @@ private:
     // 10 campos de resolución que resuelve UiCanvas.
     void drawCanvasSection(EditorContext& ctx);
     void drawButtonSection(EditorContext& ctx);
+    // Drena los file dialogs de las rutas del Button. Fuera de la sección y sin
+    // condicionar a la selección, igual que drawMeshDialog.
+    void drawButtonPathDialogs(EditorContext& ctx);
+    // Escribe una ruta de asset del Button (fuente o atlas) resolviendo el
+    // GameObject por id, validando la extensión y dejando el cambio en el stack
+    // de undo. Es el punto único por el que pasan el drop, el file dialog y
+    // cualquier otro origen futuro.
+    void setButtonAssetPath(EditorContext& ctx, uint64_t ownerId, bool isFont,
+                             const std::string& path);
     void drawAudioClipDialog(EditorContext& ctx);
     void drawScriptsSection(EditorContext& ctx);
     void drawAddComponentButton(EditorContext& ctx);
@@ -237,6 +279,23 @@ private:
     // con m_meshFileDialog.
     bool m_audioDlgOpen = false;
     std::unique_ptr<IGFD::FileDialog> m_audioFileDialog;
+
+    // Rutas del Button (fuente y atlas). Misma razón que m_meshFileDialog para
+    // tener instancia propia por diálogo, nunca compartida. El id del dueño se
+    // guarda al abrir: el diálogo se drena fuera de la sección y para entonces
+    // la selección puede haber cambiado, así que resolver por id (y no por
+    // ctx.selected) es lo que impide escribir la ruta en otro GameObject.
+    bool     m_fontDlgOpen  = false;
+    uint64_t m_fontDlgOwner = 0;
+    std::unique_ptr<IGFD::FileDialog> m_fontFileDialog;
+
+    bool     m_uiAtlasDlgOpen  = false;
+    uint64_t m_uiAtlasDlgOwner = 0;
+    std::unique_ptr<IGFD::FileDialog> m_uiAtlasFileDialog;
+
+    // Último rechazo por extensión, para poder decir POR QUÉ no se aceptó el
+    // fichero en vez de tragárselo en silencio. Se limpia al acertar.
+    std::string m_buttonPathError;
     // Mismo patrón que m_meshLoadError/m_meshAddRequestedFor pero para el
     // componente AudioClip.
     std::string m_audioLoadError;

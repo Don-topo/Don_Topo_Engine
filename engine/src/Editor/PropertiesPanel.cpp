@@ -100,6 +100,8 @@ namespace DonTopo {
 PropertiesPanel::PropertiesPanel()
     : m_meshFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_audioFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_fontFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_uiAtlasFileDialog(std::make_unique<IGFD::FileDialog>())
 {
 }
 
@@ -372,6 +374,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
 
     drawMeshDialog(ctx);
     drawAudioClipDialog(ctx);
+    drawButtonPathDialogs(ctx);
 }
 
 void PropertiesPanel::drawSsrSection(EditorContext& ctx)
@@ -765,6 +768,73 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
     }
 }
 
+void PropertiesPanel::setButtonAssetPath(EditorContext& ctx, uint64_t ownerId, bool isFont,
+                                          const std::string& path)
+{
+    if (path.empty()) return;
+
+    // El filtro del file dialog ya restringe, pero un drop llega con lo que sea:
+    // el veto vive AQUÍ, en el punto por el que pasan todos los orígenes, y no
+    // repetido en cada caja.
+    if (!(isFont ? isUiFontPath(path) : isUiAtlasPath(path)))
+    {
+        m_buttonPathError = std::string("No es ") +
+                            (isFont ? "una fuente (.ttf .otf .ttc): "
+                                    : "una imagen (.png .jpg .jpeg .bmp .tga): ") +
+                            std::filesystem::path(path).filename().string();
+        ctx.pushLog(m_buttonPathError);
+        return;
+    }
+    m_buttonPathError.clear();
+
+    Scene* scene = ctx.scene;
+    if (!scene) return;
+    GameObject* go = scene->findById(ownerId);
+    if (!go || !go->hasButton()) return;
+
+    ButtonComponent& b = *go->getButton();
+    const std::string before = isFont ? b.fontPath : b.atlasPath;
+    if (before == path) return;
+
+    (isFont ? b.fontPath : b.atlasPath) = path;
+
+    const std::string lbl = std::string(isFont ? "Fuente" : "Atlas") +
+                            " del botón de '" + go->name + "'";
+    ctx.pushLog(lbl + " cambiada a " + path);
+    if (ctx.undo)
+        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+            lbl, before, path,
+            [scene, ownerId, isFont](const std::string& v) {
+                if (GameObject* g = scene->findById(ownerId))
+                    if (g->hasButton())
+                        (isFont ? g->getButton()->fontPath : g->getButton()->atlasPath) = v;
+            }));
+}
+
+void PropertiesPanel::drawButtonPathDialogs(EditorContext& ctx)
+{
+    // Sin condicionar a ctx.selected/hasButton(): si no se drenan aquí, cambiar
+    // de selección con el diálogo abierto deja el flag atascado en true para
+    // siempre (mismo motivo que drawMeshDialog).
+    if (m_fontDlgOpen && m_fontFileDialog->Display("ButtonFontDlg"))
+    {
+        if (m_fontFileDialog->IsOk())
+            setButtonAssetPath(ctx, m_fontDlgOwner, /*isFont=*/true,
+                                m_fontFileDialog->GetFilePathName());
+        m_fontFileDialog->Close();
+        m_fontDlgOpen = false;
+    }
+
+    if (m_uiAtlasDlgOpen && m_uiAtlasFileDialog->Display("ButtonAtlasDlg"))
+    {
+        if (m_uiAtlasFileDialog->IsOk())
+            setButtonAssetPath(ctx, m_uiAtlasDlgOwner, /*isFont=*/false,
+                                m_uiAtlasFileDialog->GetFilePathName());
+        m_uiAtlasFileDialog->Close();
+        m_uiAtlasDlgOpen = false;
+    }
+}
+
 void PropertiesPanel::drawButtonSection(EditorContext& ctx)
 {
     // Add-gate: sin el componente no hay sección, igual que los colliders.
@@ -996,9 +1066,57 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
                               "sobrescribe el color del estado; solo manda con Sprite Swap.");
         checkBox("Visible", +[](ButtonComponent& c) -> bool& { return c.visible; });
 
+        // Caja de asset calcada a la del Mesh: ruta escribible a mano, botón que
+        // abre el file dialog y zona de drop para el content browser. El veto
+        // por extensión no está aquí sino en setButtonAssetPath, que es por
+        // donde pasan los dos orígenes.
+        auto assetBox = [&](const char* label, bool isFont, StrRef acc,
+                            const char* dlgKey, const char* dlgTitle, const char* filters,
+                            const char* hint)
+        {
+            inputText(label, acc);
+            ImGui::SameLine();
+            if (ImGui::Button((std::string("Browse...##") + label).c_str()))
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                if (isFont)
+                {
+                    m_fontDlgOwner = id;
+                    m_fontDlgOpen  = true;
+                    m_fontFileDialog->OpenDialog(dlgKey, dlgTitle, filters, cfg);
+                }
+                else
+                {
+                    m_uiAtlasDlgOwner = id;
+                    m_uiAtlasDlgOpen  = true;
+                    m_uiAtlasFileDialog->OpenDialog(dlgKey, dlgTitle, filters, cfg);
+                }
+            }
+
+            ImGui::BeginChild((std::string("##DropZone") + label).c_str(), ImVec2(0, 34), true);
+            ImGui::TextDisabled("%s", hint);
+            // Mismo veto de edición que el Mesh: con el modal de Load Scene
+            // activo no se aceptan drops nuevos.
+            if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
+            {
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+                    setButtonAssetPath(ctx, id, isFont,
+                                        std::string(static_cast<const char*>(payload->Data)));
+                ImGui::EndDragDropTarget();
+            }
+            ImGui::EndChild();
+        };
+
         ImGui::TextDisabled("Sprite");
-        inputText("Atlas", +[](ButtonComponent& c) -> std::string& { return c.atlasPath; });
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Ruta de la imagen del atlas. Vacía = color plano");
+        assetBox("Atlas", /*isFont=*/false,
+                 +[](ButtonComponent& c) -> std::string& { return c.atlasPath; },
+                 "ButtonAtlasDlg", "Choose atlas", ".png,.jpg,.jpeg,.bmp,.tga",
+                 "Drop .png/.jpg/.bmp/.tga here");
         inputText("Sprite", +[](ButtonComponent& c) -> std::string& { return c.sprite; });
 
         ImGui::TextDisabled("Estados");
@@ -1030,9 +1148,15 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
 
         ImGui::TextDisabled("Texto");
         inputText("Text", +[](ButtonComponent& c) -> std::string& { return c.text; });
-        inputText("Font", +[](ButtonComponent& c) -> std::string& { return c.fontPath; });
+        assetBox("Font", /*isFont=*/true,
+                 +[](ButtonComponent& c) -> std::string& { return c.fontPath; },
+                 "ButtonFontDlg", "Choose font", ".ttf,.otf,.ttc",
+                 "Drop .ttf/.otf here");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Ruta del TTF. Vacía = la fuente del sistema (Segoe UI)");
+            ImGui::SetTooltip("Vacía = la fuente por defecto del proyecto");
+
+        if (!m_buttonPathError.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_buttonPathError.c_str());
         dragFloat("Font Size", +[](ButtonComponent& c) -> float& { return c.fontSize; },
                   0.5f, 1.0f, 512.0f, "%.1f");
         colorEdit("Text Color", +[](ButtonComponent& c) -> glm::vec4& { return c.textColor; });

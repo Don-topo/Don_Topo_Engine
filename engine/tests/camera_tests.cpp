@@ -1133,6 +1133,27 @@ static void test_button_hit_test_maps_back_to_gameobject()
     CHECK(canvas.hitTest(glm::vec2(700.0f, 400.0f)) == nullptr);        // hueco
 }
 
+// Las cajas de asset del Button vetan por extensión: la de fuentes NO traga una
+// imagen ni al revés. Es el mismo filtro para el drop y para el file dialog.
+static void test_button_asset_path_filters()
+{
+    CHECK(PropertiesPanel::isUiFontPath("assets/DancingScript-VariableFont_wght.ttf"));
+    CHECK(PropertiesPanel::isUiFontPath("C:/fuentes/algo.OTF"));   // mayúsculas
+    CHECK(PropertiesPanel::isUiFontPath("a.ttc"));
+    CHECK(!PropertiesPanel::isUiFontPath("assets/ui_atlas.png"));
+    CHECK(!PropertiesPanel::isUiFontPath("assets/hero.fbx"));
+    CHECK(!PropertiesPanel::isUiFontPath("sinextension"));
+    CHECK(!PropertiesPanel::isUiFontPath(""));
+    // Un punto del DIRECTORIO no es una extensión.
+    CHECK(!PropertiesPanel::isUiFontPath("C:/mis.fuentes/archivo"));
+
+    CHECK(PropertiesPanel::isUiAtlasPath("assets/ui_atlas.png"));
+    CHECK(PropertiesPanel::isUiAtlasPath("x.JPEG"));
+    CHECK(PropertiesPanel::isUiAtlasPath("x.tga"));
+    CHECK(!PropertiesPanel::isUiAtlasPath("assets/fuente.ttf"));
+    CHECK(!PropertiesPanel::isUiAtlasPath("assets/audio.wav"));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -1193,6 +1214,7 @@ int main()
     test_button_text_without_font_is_visible();
     test_button_state_color_is_applied();
     test_button_hit_test_maps_back_to_gameobject();
+    test_button_asset_path_filters();
 
     am.shutdown();
     pm.shutdown();
