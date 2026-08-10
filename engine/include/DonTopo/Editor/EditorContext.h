@@ -33,6 +33,15 @@ struct EditorContext {
     UndoManager*    undo          = nullptr;
 
     std::function<void(const std::string&)>   pushLog;
+    // Igual que pushLog pero etiquetando la línea con un módulo ("Renderer",
+    // "Physics", ...), que el Log Console pinta como chip de color. Viaja por
+    // el mismo callback de un argumento —el panel decodifica el prefijo
+    // "[Modulo] "—, así que los callers de pushLog no cambian.
+    void logModule(const std::string& module, const std::string& message) const
+    {
+        if (pushLog)
+            pushLog("[" + module + "] " + message);
+    }
     std::function<void(GameObject*)>          onDelete;
     std::function<void(const glm::vec3&)>     onAxisSelected;
     // Abre path en el Script Editor (EditorUI::m_scriptEditor, fuera del
