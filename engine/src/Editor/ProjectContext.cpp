@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <fstream>
+#include <utility>
 #include <system_error>
 
 #ifdef _WIN32
@@ -48,7 +50,274 @@ fs::path executableDir()
     return ec ? fs::path{} : cwd;
 }
 
+// Claves de la visibilidad de panel, en el orden del enum Panel. Son parte del
+// formato en disco: renombrar una pierde el ajuste guardado de ese panel.
+const char* const kPanelKeys[ProjectContext::ViewSettings::PanelCount] = {
+    "scene", "viewport", "properties", "log", "contentBrowser",
+    "scriptEditor", "animator", "performance", "inputActions"};
+
+// Lectores tolerantes: la clave que falta, o que trae otro tipo, devuelve el
+// default sin lanzar. Es lo que hace que un "settings" a medias siga abriendo.
+bool readBoolField(const nlohmann::json& j, const char* key, bool def)
+{
+    const auto it = j.find(key);
+    return (it != j.end() && it->is_boolean()) ? it->get<bool>() : def;
+}
+
+float readFloatField(const nlohmann::json& j, const char* key, float def)
+{
+    const auto it = j.find(key);
+    if (it == j.end() || !it->is_number())
+        return def;
+    const double v = it->get<double>();
+    // Un NaN/inf colado en el fichero llegaria tal cual a un uniform del
+    // Renderer: fuera antes de salir de aqui.
+    return std::isfinite(v) ? static_cast<float>(v) : def;
+}
+
+int readIntField(const nlohmann::json& j, const char* key, int def)
+{
+    const auto it = j.find(key);
+    if (it == j.end() || !it->is_number_integer())
+        return def;
+    return it->get<int>();
+}
+
+std::string readStringField(const nlohmann::json& j, const char* key, const std::string& def)
+{
+    const auto it = j.find(key);
+    return (it != j.end() && it->is_string()) ? it->get<std::string>() : def;
+}
+
+// Seccion "settings" de un proyecto recien creado: solo lo que la feature fija
+// (todos los efectos apagados). Los parametros se dejan FUERA a proposito, para
+// que al abrir el proyecto se queden con el default del Renderer.
+nlohmann::json defaultSettingsJson()
+{
+    const ProjectContext::ViewSettings def;
+    nlohmann::json s;
+    s["version"] = ProjectContext::kSettingsVersion;
+    s["ambient"] = def.ambient;
+    s["bloom"]   = def.bloom;
+    s["ssao"]    = def.ssao;
+    s["ssr"]     = def.ssr;
+    s["fog"]     = def.fog;
+    s["aaMode"]  = def.aaMode;
+    s["fpMode"]  = def.fpMode;
+    return s;
+}
+
+nlohmann::json settingsToJson(const ProjectContext::ViewSettings& s)
+{
+    nlohmann::json j;
+    j["version"] = ProjectContext::kSettingsVersion;
+
+    j["ambient"] = s.ambient;
+    j["bloom"]   = s.bloom;
+    j["ssao"]    = s.ssao;
+    j["ssr"]     = s.ssr;
+    j["fog"]     = s.fog;
+    j["aaMode"]  = s.aaMode;
+    j["fpMode"]  = s.fpMode;
+
+    j["ambientIntensity"] = s.ambientIntensity;
+    j["bloomThreshold"]   = s.bloomThreshold;
+    j["bloomKnee"]        = s.bloomKnee;
+    j["bloomIntensity"]   = s.bloomIntensity;
+    j["ssaoRadius"]       = s.ssaoRadius;
+    j["ssaoBias"]         = s.ssaoBias;
+    j["ssaoIntensity"]    = s.ssaoIntensity;
+    j["ssaoPower"]        = s.ssaoPower;
+    j["ssrMaxDistance"]   = s.ssrMaxDistance;
+    j["ssrThickness"]     = s.ssrThickness;
+    j["ssrMaxSteps"]      = s.ssrMaxSteps;
+    j["ssrEdgeFade"]      = s.ssrEdgeFade;
+    j["ssrIntensity"]     = s.ssrIntensity;
+    j["fogDensity"]       = s.fogDensity;
+    j["fogHeightFalloff"] = s.fogHeightFalloff;
+    j["fogBaseHeight"]    = s.fogBaseHeight;
+    j["fogAnisotropy"]    = s.fogAnisotropy;
+    j["fogSteps"]         = s.fogSteps;
+    j["fogScatter"]       = {s.fogScatter[0], s.fogScatter[1], s.fogScatter[2]};
+    j["fxaaSubpix"]            = s.fxaaSubpix;
+    j["fxaaEdgeThreshold"]     = s.fxaaEdgeThreshold;
+    j["fxaaEdgeThresholdMin"]  = s.fxaaEdgeThresholdMin;
+    j["ssaaFactor"]       = s.ssaaFactor;
+    j["msaaSamples"]      = s.msaaSamples;
+    j["taaFeedback"]      = s.taaFeedback;
+    j["taaJitterScale"]   = s.taaJitterScale;
+    j["fpLightRadius"]    = s.fpLightRadius;
+
+    // Un panel sin dato (-1) no se escribe: el fichero no miente sobre lo que
+    // nadie ha decidido todavia.
+    nlohmann::json panels = nlohmann::json::object();
+    for (int i = 0; i < ProjectContext::ViewSettings::PanelCount; ++i) {
+        if (s.panelOpen[i] >= 0)
+            panels[kPanelKeys[i]] = (s.panelOpen[i] != 0);
+    }
+    j["panels"] = panels;
+    return j;
+}
+
 } // namespace
+
+ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projectDir, const ViewSettings& base)
+{
+    // Los PARAMETROS heredan de `base` (el estado actual del Renderer); los
+    // ENABLES y los combos NO: su default es el de ViewSettings —todo apagado—
+    // aunque el Renderer venga con otra cosa.
+    const ViewSettings def;
+    ViewSettings       s = base;
+    s.ambient    = def.ambient;
+    s.bloom      = def.bloom;
+    s.ssao       = def.ssao;
+    s.ssr        = def.ssr;
+    s.fog        = def.fog;
+    s.aaMode     = def.aaMode;
+    s.fpMode     = def.fpMode;
+    s.loadFailed = false;
+    s.unknownEnum.clear();
+    for (int i = 0; i < ViewSettings::PanelCount; ++i)
+        s.panelOpen[i] = -1;
+
+    std::ifstream in(projectDir / "project.json");
+    if (!in.is_open())
+        return s; // proyecto sin fichero: defaults, y no es un error que reportar.
+
+    nlohmann::json j;
+    try {
+        in >> j;
+    } catch (const std::exception&) {
+        s.loadFailed = true; // project.json roto o truncado: defaults.
+        return s;
+    }
+
+    if (!j.is_object() || !j.contains("settings"))
+        return s; // proyecto de antes de esta feature: defaults, sin queja.
+
+    const nlohmann::json& v = j["settings"];
+    if (!v.is_object()) {
+        s.loadFailed = true; // "settings" existe pero no es un objeto.
+        return s;
+    }
+
+    s.ambient = readBoolField(v, "ambient", s.ambient);
+    s.bloom   = readBoolField(v, "bloom", s.bloom);
+    s.ssao    = readBoolField(v, "ssao", s.ssao);
+    s.ssr     = readBoolField(v, "ssr", s.ssr);
+    s.fog     = readBoolField(v, "fog", s.fog);
+    s.aaMode  = readStringField(v, "aaMode", s.aaMode);
+    s.fpMode  = readStringField(v, "fpMode", s.fpMode);
+
+    s.ambientIntensity = readFloatField(v, "ambientIntensity", s.ambientIntensity);
+    s.bloomThreshold   = readFloatField(v, "bloomThreshold", s.bloomThreshold);
+    s.bloomKnee        = readFloatField(v, "bloomKnee", s.bloomKnee);
+    s.bloomIntensity   = readFloatField(v, "bloomIntensity", s.bloomIntensity);
+    s.ssaoRadius       = readFloatField(v, "ssaoRadius", s.ssaoRadius);
+    s.ssaoBias         = readFloatField(v, "ssaoBias", s.ssaoBias);
+    s.ssaoIntensity    = readFloatField(v, "ssaoIntensity", s.ssaoIntensity);
+    s.ssaoPower        = readFloatField(v, "ssaoPower", s.ssaoPower);
+    s.ssrMaxDistance   = readFloatField(v, "ssrMaxDistance", s.ssrMaxDistance);
+    s.ssrThickness     = readFloatField(v, "ssrThickness", s.ssrThickness);
+    s.ssrMaxSteps      = readIntField(v, "ssrMaxSteps", s.ssrMaxSteps);
+    s.ssrEdgeFade      = readFloatField(v, "ssrEdgeFade", s.ssrEdgeFade);
+    s.ssrIntensity     = readFloatField(v, "ssrIntensity", s.ssrIntensity);
+    s.fogDensity       = readFloatField(v, "fogDensity", s.fogDensity);
+    s.fogHeightFalloff = readFloatField(v, "fogHeightFalloff", s.fogHeightFalloff);
+    s.fogBaseHeight    = readFloatField(v, "fogBaseHeight", s.fogBaseHeight);
+    s.fogAnisotropy    = readFloatField(v, "fogAnisotropy", s.fogAnisotropy);
+    s.fogSteps         = readIntField(v, "fogSteps", s.fogSteps);
+    {
+        const auto it = v.find("fogScatter");
+        if (it != v.end() && it->is_array() && it->size() == 3) {
+            for (int i = 0; i < 3; ++i) {
+                const nlohmann::json& c = (*it)[i];
+                if (c.is_number()) {
+                    const double x = c.get<double>();
+                    if (std::isfinite(x))
+                        s.fogScatter[i] = static_cast<float>(x);
+                }
+            }
+        }
+    }
+    s.fxaaSubpix           = readFloatField(v, "fxaaSubpix", s.fxaaSubpix);
+    s.fxaaEdgeThreshold    = readFloatField(v, "fxaaEdgeThreshold", s.fxaaEdgeThreshold);
+    s.fxaaEdgeThresholdMin = readFloatField(v, "fxaaEdgeThresholdMin", s.fxaaEdgeThresholdMin);
+    s.ssaaFactor           = readFloatField(v, "ssaaFactor", s.ssaaFactor);
+    s.msaaSamples          = readIntField(v, "msaaSamples", s.msaaSamples);
+    s.taaFeedback          = readFloatField(v, "taaFeedback", s.taaFeedback);
+    s.taaJitterScale       = readFloatField(v, "taaJitterScale", s.taaJitterScale);
+    s.fpLightRadius        = readFloatField(v, "fpLightRadius", s.fpLightRadius);
+
+    const auto panels = v.find("panels");
+    if (panels != v.end() && panels->is_object()) {
+        for (int i = 0; i < ViewSettings::PanelCount; ++i) {
+            const auto p = panels->find(kPanelKeys[i]);
+            if (p != panels->end() && p->is_boolean())
+                s.panelOpen[i] = p->get<bool>() ? 1 : 0;
+        }
+    }
+
+    return s;
+}
+
+bool ProjectContext::writeSettings(const fs::path& projectDir, const ViewSettings& settings)
+{
+    if (projectDir.empty())
+        return false;
+
+    const fs::path file = projectDir / "project.json";
+
+    // Se parte del fichero que ya hay: guardar los ajustes no puede perder el
+    // name ni la version, que son la identidad del proyecto.
+    nlohmann::json j = nlohmann::json::object();
+    {
+        std::ifstream in(file);
+        if (in.is_open()) {
+            try {
+                nlohmann::json parsed;
+                in >> parsed;
+                if (parsed.is_object())
+                    j = std::move(parsed);
+            } catch (const std::exception&) {
+                // Ilegible: se reconstruye lo minimo mas abajo en vez de
+                // propagar el fallo, que dejaria el proyecto sin poder guardar.
+            }
+        }
+    }
+    if (!j.contains("name") || !j["name"].is_string())
+        j["name"] = readProjectName(projectDir);
+    if (!j.contains("version") || !j["version"].is_string())
+        j["version"] = kProjectVersion;
+
+    j["settings"] = settingsToJson(settings);
+
+    // Temporal en la MISMA carpeta (rename atomico solo dentro del volumen) y
+    // rename encima: un fallo a mitad no puede truncar el project.json.
+    const fs::path tmp = projectDir / "project.json.tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out.is_open())
+            return false;
+        out << j.dump(4);
+        out.flush();
+        if (!out.good()) {
+            out.close();
+            std::error_code rmEc;
+            fs::remove(tmp, rmEc);
+            return false;
+        }
+    }
+
+    std::error_code ec;
+    fs::rename(tmp, file, ec);
+    if (ec) {
+        std::error_code rmEc;
+        fs::remove(tmp, rmEc);
+        return false;
+    }
+    return true;
+}
 
 ProjectContext::ProjectContext(const fs::path& root)
 {
@@ -257,6 +526,8 @@ bool ProjectContext::create(const std::string& name, fs::path& outDir, std::stri
     nlohmann::json j;
     j["name"]    = name;
     j["version"] = kProjectVersion;
+    // Proyecto nuevo: todos los efectos apagados desde el primer arranque.
+    j["settings"] = defaultSettingsJson();
 
     std::ofstream out(dir / "project.json");
     if (!out.is_open()) {

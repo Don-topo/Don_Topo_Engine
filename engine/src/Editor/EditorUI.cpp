@@ -136,6 +136,224 @@ void EditorUI::recordUi(VkCommandBuffer cmd)
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
 }
 
+namespace {
+
+// Nombres de los modos que se guardan en el project.json. Son los MISMOS
+// literales que ofrecen los combos del menú View (aaNames/fpNames): el ajuste
+// se persiste por nombre, así que reordenar o insertar una opción en el array
+// no cambia lo que ya hay guardado.
+const char* aaModeName(Renderer::AaMode mode)
+{
+    switch (mode)
+    {
+        case Renderer::AaMode::Fxaa: return "FXAA";
+        case Renderer::AaMode::Ssaa: return "SSAA";
+        case Renderer::AaMode::Msaa: return "MSAA";
+        case Renderer::AaMode::Taa:  return "TAA";
+        default:                     return "None";
+    }
+}
+
+// ok = false si el nombre no es ninguno de los de hoy (fichero de una versión
+// futura, o editado a mano): el caller se cae al default y lo deja en el Log.
+Renderer::AaMode aaModeFromName(const std::string& name, bool& ok)
+{
+    ok = true;
+    if (name == "None") return Renderer::AaMode::None;
+    if (name == "FXAA") return Renderer::AaMode::Fxaa;
+    if (name == "SSAA") return Renderer::AaMode::Ssaa;
+    if (name == "MSAA") return Renderer::AaMode::Msaa;
+    if (name == "TAA")  return Renderer::AaMode::Taa;
+    ok = false;
+    return Renderer::AaMode::None;
+}
+
+const char* fpModeName(Renderer::FpMode mode)
+{
+    switch (mode)
+    {
+        case Renderer::FpMode::Tiled:     return "Tiled";
+        case Renderer::FpMode::Clustered: return "Clustered";
+        default:                          return "Off";
+    }
+}
+
+Renderer::FpMode fpModeFromName(const std::string& name, bool& ok)
+{
+    ok = true;
+    if (name == "Off")       return Renderer::FpMode::Off;
+    if (name == "Tiled")     return Renderer::FpMode::Tiled;
+    if (name == "Clustered") return Renderer::FpMode::Clustered;
+    ok = false;
+    return Renderer::FpMode::Off;
+}
+
+} // namespace
+
+ProjectContext::ViewSettings EditorUI::currentSettings()
+{
+    ProjectContext::ViewSettings s;
+    if (m_renderer)
+    {
+        s.ambient = m_renderer->ambientEnabled();
+        s.bloom   = m_renderer->bloomEnabled();
+        s.ssao    = m_renderer->ssaoEnabled();
+        s.ssr     = m_renderer->ssrEnabled();
+        s.fog     = m_renderer->fogEnabled();
+        s.aaMode  = aaModeName(m_renderer->aaMode());
+        s.fpMode  = fpModeName(m_renderer->forwardPlusMode());
+
+        s.ambientIntensity = m_renderer->ambientIntensity();
+        s.bloomThreshold   = m_renderer->bloomThreshold();
+        s.bloomKnee        = m_renderer->bloomKnee();
+        s.bloomIntensity   = m_renderer->bloomIntensity();
+        s.ssaoRadius       = m_renderer->ssaoRadius();
+        s.ssaoBias         = m_renderer->ssaoBias();
+        s.ssaoIntensity    = m_renderer->ssaoIntensity();
+        s.ssaoPower        = m_renderer->ssaoPower();
+        s.ssrMaxDistance   = m_renderer->ssrMaxDistance();
+        s.ssrThickness     = m_renderer->ssrThickness();
+        s.ssrMaxSteps      = m_renderer->ssrMaxSteps();
+        s.ssrEdgeFade      = m_renderer->ssrEdgeFade();
+        s.ssrIntensity     = m_renderer->ssrIntensity();
+        s.fogDensity       = m_renderer->fogDensity();
+        s.fogHeightFalloff = m_renderer->fogHeightFalloff();
+        s.fogBaseHeight    = m_renderer->fogBaseHeight();
+        s.fogAnisotropy    = m_renderer->fogAnisotropy();
+        s.fogSteps         = m_renderer->fogSteps();
+        const glm::vec3 scatter = m_renderer->fogScatter();
+        s.fogScatter[0] = scatter.x;
+        s.fogScatter[1] = scatter.y;
+        s.fogScatter[2] = scatter.z;
+        s.fxaaSubpix           = m_renderer->fxaaSubpix();
+        s.fxaaEdgeThreshold    = m_renderer->fxaaEdgeThreshold();
+        s.fxaaEdgeThresholdMin = m_renderer->fxaaEdgeThresholdMin();
+        s.ssaaFactor           = m_renderer->ssaaFactor();
+        s.msaaSamples          = m_renderer->msaaSamples();
+        s.taaFeedback          = m_renderer->taaFeedback();
+        s.taaJitterScale       = m_renderer->taaJitterScale();
+        s.fpLightRadius        = m_renderer->forwardPlusLightRadius();
+    }
+
+    using VS = ProjectContext::ViewSettings;
+    auto flag = [](bool* open) { return (open && *open) ? 1 : 0; };
+    s.panelOpen[VS::PanelScene]          = flag(m_scenePanel.GetOpenPtr());
+    s.panelOpen[VS::PanelViewport]       = flag(m_viewportPanel.GetOpenPtr());
+    s.panelOpen[VS::PanelProperties]     = flag(m_propertiesPanel.GetOpenPtr());
+    s.panelOpen[VS::PanelLog]            = flag(m_logPanel.GetOpenPtr());
+    s.panelOpen[VS::PanelContentBrowser] = flag(m_contentBrowserPanel.GetOpenPtr());
+    s.panelOpen[VS::PanelScriptEditor]   = flag(m_scriptEditor ? m_scriptEditor->GetOpenPtr() : nullptr);
+    s.panelOpen[VS::PanelAnimator]       = flag(m_animatorPanel.GetOpenPtr());
+    s.panelOpen[VS::PanelPerformance]    = flag(m_performancePanel.GetOpenPtr());
+    s.panelOpen[VS::PanelInputActions]   = flag(m_inputActionsPanel.GetOpenPtr());
+    return s;
+}
+
+void EditorUI::applyProjectSettings()
+{
+    if (m_project == m_appliedProject)
+        return;
+    // El Renderer hace falta para aplicar: sin él se reintenta el frame
+    // siguiente en vez de dar el proyecto por aplicado.
+    if (!m_renderer)
+        return;
+
+    m_appliedProject = m_project;
+    if (!m_project || !m_project->valid())
+        return; // tests headless / arranque previo al selector: como siempre.
+
+    // La base son los valores de AHORA del Renderer: cada parámetro que el
+    // project.json no traiga se queda con el default del Renderer. Los enables
+    // no: readSettings los fuerza a apagado cuando faltan.
+    const ProjectContext::ViewSettings s =
+        ProjectContext::readSettings(m_project->root(), currentSettings());
+
+    if (s.loadFailed)
+        m_logPanel.push("Ajustes del proyecto ilegibles: se abren los efectos apagados");
+
+    m_renderer->setAmbientEnabled(s.ambient);
+    m_renderer->setAmbientIntensity(s.ambientIntensity);
+
+    m_renderer->setBloomEnabled(s.bloom);
+    m_renderer->setBloomThreshold(s.bloomThreshold);
+    m_renderer->setBloomKnee(s.bloomKnee);
+    m_renderer->setBloomIntensity(s.bloomIntensity);
+
+    m_renderer->setSsaoEnabled(s.ssao);
+    m_renderer->setSsaoRadius(s.ssaoRadius);
+    m_renderer->setSsaoBias(s.ssaoBias);
+    m_renderer->setSsaoIntensity(s.ssaoIntensity);
+    m_renderer->setSsaoPower(s.ssaoPower);
+
+    m_renderer->setSsrEnabled(s.ssr);
+    m_renderer->setSsrMaxDistance(s.ssrMaxDistance);
+    m_renderer->setSsrThickness(s.ssrThickness);
+    m_renderer->setSsrMaxSteps(s.ssrMaxSteps);
+    m_renderer->setSsrEdgeFade(s.ssrEdgeFade);
+    m_renderer->setSsrIntensity(s.ssrIntensity);
+
+    m_renderer->setFogEnabled(s.fog);
+    m_renderer->setFogDensity(s.fogDensity);
+    m_renderer->setFogHeightFalloff(s.fogHeightFalloff);
+    m_renderer->setFogBaseHeight(s.fogBaseHeight);
+    m_renderer->setFogAnisotropy(s.fogAnisotropy);
+    m_renderer->setFogSteps(s.fogSteps);
+    m_renderer->setFogScatter(glm::vec3(s.fogScatter[0], s.fogScatter[1], s.fogScatter[2]));
+
+    m_renderer->setFxaaSubpix(s.fxaaSubpix);
+    m_renderer->setFxaaEdgeThreshold(s.fxaaEdgeThreshold);
+    m_renderer->setFxaaEdgeThresholdMin(s.fxaaEdgeThresholdMin);
+    m_renderer->setSsaaFactor(s.ssaaFactor);
+    // El número de muestras guardado puede no existir en ESTA GPU (proyecto
+    // traído de otra máquina): se recorta a lo que soporta el device.
+    const int maxSamples = m_renderer->maxMsaaSamples();
+    m_renderer->setMsaaSamples(std::clamp(s.msaaSamples, 1, maxSamples > 0 ? maxSamples : 1));
+    m_renderer->setTaaFeedback(s.taaFeedback);
+    m_renderer->setTaaJitterScale(s.taaJitterScale);
+
+    // Los modos, los últimos: cambiarlos recrea targets, y así se hace una sola
+    // vez con los parámetros ya puestos.
+    bool aaOk = true;
+    const Renderer::AaMode aa = aaModeFromName(s.aaMode, aaOk);
+    if (!aaOk)
+        m_logPanel.push("Modo de anti-aliasing desconocido en el proyecto ('" + s.aaMode + "'): se usa None");
+    m_renderer->setAaMode(aa);
+
+    bool fpOk = true;
+    const Renderer::FpMode fp = fpModeFromName(s.fpMode, fpOk);
+    if (!fpOk)
+        m_logPanel.push("Modo de Forward+ desconocido en el proyecto ('" + s.fpMode + "'): se usa Off");
+    m_renderer->setForwardPlusMode(fp);
+    m_renderer->setForwardPlusLightRadius(s.fpLightRadius);
+
+    // Visibilidad de panel: el project.json manda sobre imgui.ini en QUÉ paneles
+    // están abiertos; el layout (docking, tamaños) lo sigue llevando imgui.ini.
+    // Un panel sin dato guardado (-1) se queda como esté.
+    using VS = ProjectContext::ViewSettings;
+    auto applyPanel = [&](int index, bool* open) {
+        if (open && s.panelOpen[index] >= 0)
+            *open = (s.panelOpen[index] != 0);
+    };
+    applyPanel(VS::PanelScene,          m_scenePanel.GetOpenPtr());
+    applyPanel(VS::PanelViewport,       m_viewportPanel.GetOpenPtr());
+    applyPanel(VS::PanelProperties,     m_propertiesPanel.GetOpenPtr());
+    applyPanel(VS::PanelLog,            m_logPanel.GetOpenPtr());
+    applyPanel(VS::PanelContentBrowser, m_contentBrowserPanel.GetOpenPtr());
+    applyPanel(VS::PanelScriptEditor,   m_scriptEditor ? m_scriptEditor->GetOpenPtr() : nullptr);
+    applyPanel(VS::PanelAnimator,       m_animatorPanel.GetOpenPtr());
+    applyPanel(VS::PanelPerformance,    m_performancePanel.GetOpenPtr());
+    applyPanel(VS::PanelInputActions,   m_inputActionsPanel.GetOpenPtr());
+}
+
+void EditorUI::saveProjectSettings()
+{
+    if (!m_project || !m_project->valid())
+        return; // sin proyecto abierto esto no corre: comportamiento de antes.
+
+    if (!ProjectContext::writeSettings(m_project->root(), currentSettings()))
+        m_logPanel.push("No se pudieron guardar los ajustes en el project.json");
+}
+
 void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView)
 {
     // Selector de proyecto: primer estado del bucle. Se lleva el frame entero —
@@ -148,6 +366,11 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
             m_projectSelector = nullptr;
         return;
     }
+
+    // Ajustes del menú View del proyecto abierto: se vuelcan al Renderer y a la
+    // visibilidad de paneles en el primer frame tras elegir proyecto. No-op el
+    // resto de frames y sin proyecto.
+    applyProjectSettings();
 
     // Drenaje del buzón de DonTopo.loadScene: aquí, al principio del frame de
     // UI, ya se salió del tick de scripts (ScriptManager::update corre antes en
@@ -355,15 +578,21 @@ void EditorUI::drawMenuBar()
         }
         if (ImGui::BeginMenu("View"))
         {
-            ImGui::MenuItem("Scene", nullptr, m_scenePanel.GetOpenPtr());
-            ImGui::MenuItem("Viewport", nullptr, m_viewportPanel.GetOpenPtr());
-            ImGui::MenuItem("Properties", nullptr, m_propertiesPanel.GetOpenPtr());
-            ImGui::MenuItem("Log", nullptr, m_logPanel.GetOpenPtr());
-            ImGui::MenuItem("Content Browser", nullptr, m_contentBrowserPanel.GetOpenPtr());
-            ImGui::MenuItem("Script Editor", nullptr, m_scriptEditor->GetOpenPtr());
-            ImGui::MenuItem("Animator", nullptr, m_animatorPanel.GetOpenPtr());
-            ImGui::MenuItem("Performance", nullptr, m_performancePanel.GetOpenPtr());
-            ImGui::MenuItem("Input Actions", nullptr, m_inputActionsPanel.GetOpenPtr());
+            // La visibilidad de los paneles tambien es ajuste del proyecto: el
+            // MenuItem es un checkbox, asi que se guarda en el mismo frame del
+            // click. El LAYOUT (docking, tamanos) lo sigue llevando imgui.ini.
+            bool panelToggled = false;
+            panelToggled |= ImGui::MenuItem("Scene", nullptr, m_scenePanel.GetOpenPtr());
+            panelToggled |= ImGui::MenuItem("Viewport", nullptr, m_viewportPanel.GetOpenPtr());
+            panelToggled |= ImGui::MenuItem("Properties", nullptr, m_propertiesPanel.GetOpenPtr());
+            panelToggled |= ImGui::MenuItem("Log", nullptr, m_logPanel.GetOpenPtr());
+            panelToggled |= ImGui::MenuItem("Content Browser", nullptr, m_contentBrowserPanel.GetOpenPtr());
+            panelToggled |= ImGui::MenuItem("Script Editor", nullptr, m_scriptEditor->GetOpenPtr());
+            panelToggled |= ImGui::MenuItem("Animator", nullptr, m_animatorPanel.GetOpenPtr());
+            panelToggled |= ImGui::MenuItem("Performance", nullptr, m_performancePanel.GetOpenPtr());
+            panelToggled |= ImGui::MenuItem("Input Actions", nullptr, m_inputActionsPanel.GetOpenPtr());
+            if (panelToggled)
+                saveProjectSettings();
             ImGui::Separator();
             // Peso del ambiente IBL. Ajuste de sesion: no se serializa en la
             // escena, asi que al reabrir el editor vuelve a 1.0.
@@ -371,7 +600,10 @@ void EditorUI::drawMenuBar()
             {
                 bool ambientOn = m_renderer->ambientEnabled();
                 if (ImGui::Checkbox("Ambient (IBL)", &ambientOn))
+                {
                     m_renderer->setAmbientEnabled(ambientOn);
+                    saveProjectSettings();
+                }
 
                 // Igual que en el bloom: el slider no se oculta con el ambiente
                 // apagado, se deja desactivado.
@@ -380,6 +612,9 @@ void EditorUI::drawMenuBar()
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("Ambient intensity", &ambient, 0.0f, 3.0f, "%.2f"))
                     m_renderer->setAmbientIntensity(ambient);
+                // Se guarda al SOLTAR: arrastrar de punta a punta escribe una
+                // vez, no una por frame. Mismo criterio en todos los sliders.
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
                 ImGui::EndDisabled();
 
                 // Reflection probes: control GLOBAL (rehornear la escena entera).
@@ -402,7 +637,10 @@ void EditorUI::drawMenuBar()
                 ImGui::Separator();
                 bool bloom = m_renderer->bloomEnabled();
                 if (ImGui::Checkbox("Bloom", &bloom))
+                {
                     m_renderer->setBloomEnabled(bloom);
+                    saveProjectSettings();
+                }
 
                 // Igual que en el SSAO y el SSR: los sliders no se ocultan con el
                 // efecto apagado, se dejan desactivados.
@@ -411,16 +649,19 @@ void EditorUI::drawMenuBar()
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("Bloom threshold", &threshold, 0.0f, 5.0f, "%.2f"))
                     m_renderer->setBloomThreshold(threshold);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                 float knee = m_renderer->bloomKnee();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("Bloom knee", &knee, 0.0f, 1.0f, "%.2f"))
                     m_renderer->setBloomKnee(knee);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                 float intensity = m_renderer->bloomIntensity();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("Bloom intensity", &intensity, 0.0f, 1.0f, "%.3f"))
                     m_renderer->setBloomIntensity(intensity);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
                 ImGui::EndDisabled();
 
                 ImGui::Text("Bloom GPU: %.3f ms", m_renderer->bloomGpuMs());
@@ -431,7 +672,10 @@ void EditorUI::drawMenuBar()
                 ImGui::Separator();
                 bool ssao = m_renderer->ssaoEnabled();
                 if (ImGui::Checkbox("SSAO", &ssao))
+                {
                     m_renderer->setSsaoEnabled(ssao);
+                    saveProjectSettings();
+                }
 
                 // Los sliders no se ocultan con el efecto apagado: se dejan
                 // desactivados para que se vea que existen y con que valores
@@ -441,21 +685,25 @@ void EditorUI::drawMenuBar()
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("SSAO radius", &ssaoRadius, 0.05f, 2.0f, "%.2f"))
                     m_renderer->setSsaoRadius(ssaoRadius);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                 float ssaoBias = m_renderer->ssaoBias();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("SSAO bias", &ssaoBias, 0.0f, 0.2f, "%.3f"))
                     m_renderer->setSsaoBias(ssaoBias);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                 float ssaoIntensity = m_renderer->ssaoIntensity();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("SSAO intensity", &ssaoIntensity, 0.0f, 3.0f, "%.2f"))
                     m_renderer->setSsaoIntensity(ssaoIntensity);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                 float ssaoPower = m_renderer->ssaoPower();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("SSAO power", &ssaoPower, 0.25f, 4.0f, "%.2f"))
                     m_renderer->setSsaoPower(ssaoPower);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
                 ImGui::EndDisabled();
 
                 ImGui::Text("SSAO GPU: %.3f ms", m_renderer->ssaoGpuMs());
@@ -466,33 +714,41 @@ void EditorUI::drawMenuBar()
                 ImGui::Separator();
                 bool ssr = m_renderer->ssrEnabled();
                 if (ImGui::Checkbox("SSR", &ssr))
+                {
                     m_renderer->setSsrEnabled(ssr);
+                    saveProjectSettings();
+                }
 
                 ImGui::BeginDisabled(!ssr);
                 float ssrDist = m_renderer->ssrMaxDistance();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("SSR distance", &ssrDist, 0.5f, 50.0f, "%.1f"))
                     m_renderer->setSsrMaxDistance(ssrDist);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                 float ssrThick = m_renderer->ssrThickness();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("SSR thickness", &ssrThick, 0.01f, 3.0f, "%.2f"))
                     m_renderer->setSsrThickness(ssrThick);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                 int ssrSteps = m_renderer->ssrMaxSteps();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderInt("SSR steps", &ssrSteps, 8, 128))
                     m_renderer->setSsrMaxSteps(ssrSteps);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                 float ssrEdge = m_renderer->ssrEdgeFade();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("SSR edge fade", &ssrEdge, 0.0f, 0.5f, "%.3f"))
                     m_renderer->setSsrEdgeFade(ssrEdge);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                 float ssrInt = m_renderer->ssrIntensity();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("SSR intensity", &ssrInt, 0.0f, 2.0f, "%.2f"))
                     m_renderer->setSsrIntensity(ssrInt);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
                 ImGui::EndDisabled();
 
                 ImGui::Text("SSR GPU: %.3f ms", m_renderer->ssrGpuMs());
@@ -504,7 +760,10 @@ void EditorUI::drawMenuBar()
                 ImGui::Separator();
                 bool fog = m_renderer->fogEnabled();
                 if (ImGui::Checkbox("Volumetric Fog", &fog))
+                {
                     m_renderer->setFogEnabled(fog);
+                    saveProjectSettings();
+                }
 
                 // Como en el SSAO y el SSR: los sliders no se ocultan con el
                 // efecto apagado, se dejan desactivados.
@@ -513,31 +772,37 @@ void EditorUI::drawMenuBar()
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("Fog density", &fogDensity, 0.0f, 0.5f, "%.3f"))
                     m_renderer->setFogDensity(fogDensity);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                 float fogFalloff = m_renderer->fogHeightFalloff();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("Fog height falloff", &fogFalloff, 0.0f, 0.5f, "%.3f"))
                     m_renderer->setFogHeightFalloff(fogFalloff);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                 float fogBase = m_renderer->fogBaseHeight();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("Fog base height", &fogBase, -50.0f, 50.0f, "%.1f"))
                     m_renderer->setFogBaseHeight(fogBase);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                 float fogG = m_renderer->fogAnisotropy();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("Fog anisotropy", &fogG, -0.95f, 0.95f, "%.2f"))
                     m_renderer->setFogAnisotropy(fogG);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                 int fogSteps = m_renderer->fogSteps();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderInt("Fog steps", &fogSteps, 8, 128))
                     m_renderer->setFogSteps(fogSteps);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                 glm::vec3 scatter = m_renderer->fogScatter();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::ColorEdit3("Fog scattering", &scatter.x))
                     m_renderer->setFogScatter(scatter);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
                 ImGui::EndDisabled();
 
                 ImGui::Text("Fog GPU: %.3f ms", m_renderer->fogGpuMs());
@@ -552,7 +817,12 @@ void EditorUI::drawMenuBar()
                 int aaCurrent = (int)m_renderer->aaMode();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::Combo("Anti-aliasing", &aaCurrent, aaNames, IM_ARRAYSIZE(aaNames)))
+                {
                     m_renderer->setAaMode((AaMode)aaCurrent);
+                    // Se guarda el NOMBRE del modo, no este indice: ver
+                    // aaModeName() al principio del fichero.
+                    saveProjectSettings();
+                }
 
                 const AaMode aaMode = m_renderer->aaMode();
 
@@ -562,16 +832,19 @@ void EditorUI::drawMenuBar()
                     ImGui::SetNextItemWidth(140.0f);
                     if (ImGui::SliderFloat("FXAA subpixel", &fxaaSubpix, 0.0f, 1.0f, "%.2f"))
                         m_renderer->setFxaaSubpix(fxaaSubpix);
+                    if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                     float fxaaEdge = m_renderer->fxaaEdgeThreshold();
                     ImGui::SetNextItemWidth(140.0f);
                     if (ImGui::SliderFloat("FXAA edge threshold", &fxaaEdge, 0.063f, 0.333f, "%.3f"))
                         m_renderer->setFxaaEdgeThreshold(fxaaEdge);
+                    if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                     float fxaaEdgeMin = m_renderer->fxaaEdgeThresholdMin();
                     ImGui::SetNextItemWidth(140.0f);
                     if (ImGui::SliderFloat("FXAA edge min", &fxaaEdgeMin, 0.0312f, 0.0833f, "%.4f"))
                         m_renderer->setFxaaEdgeThresholdMin(fxaaEdgeMin);
+                    if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
                 }
                 else if (aaMode == AaMode::Ssaa)
                 {
@@ -584,7 +857,10 @@ void EditorUI::drawMenuBar()
                     ImGui::SetNextItemWidth(140.0f);
                     ImGui::SliderFloat("SSAA factor", &pendingFactor, 1.25f, 2.0f, "%.2fx");
                     if (ImGui::IsItemDeactivatedAfterEdit())
+                    {
                         m_renderer->setSsaaFactor(pendingFactor);
+                        saveProjectSettings();
+                    }
                     ImGui::TextDisabled("%.2fx pixeles por frame", pendingFactor * pendingFactor);
                 }
                 else if (aaMode == AaMode::Msaa)
@@ -600,7 +876,10 @@ void EditorUI::drawMenuBar()
                         char label[8];
                         snprintf(label, sizeof(label), "%dx", s);
                         if (ImGui::RadioButton(label, samples == s))
+                        {
                             m_renderer->setMsaaSamples(s);
+                            saveProjectSettings();
+                        }
                     }
                     ImGui::SameLine();
                     ImGui::TextDisabled("(max %dx)", maxSamples);
@@ -611,11 +890,13 @@ void EditorUI::drawMenuBar()
                     ImGui::SetNextItemWidth(140.0f);
                     if (ImGui::SliderFloat("TAA feedback", &feedback, 0.0f, 0.98f, "%.2f"))
                         m_renderer->setTaaFeedback(feedback);
+                    if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                     float jitter = m_renderer->taaJitterScale();
                     ImGui::SetNextItemWidth(140.0f);
                     if (ImGui::SliderFloat("TAA jitter", &jitter, 0.0f, 2.0f, "%.2f"))
                         m_renderer->setTaaJitterScale(jitter);
+                    if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
                 }
 
                 // El pass propio solo existe en FXAA, SSAA y TAA. El coste del
@@ -635,7 +916,10 @@ void EditorUI::drawMenuBar()
                 int fpCurrent = (int)m_renderer->forwardPlusMode();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::Combo("Forward+", &fpCurrent, fpNames, IM_ARRAYSIZE(fpNames)))
+                {
                     m_renderer->setForwardPlusMode((FpMode)fpCurrent);
+                    saveProjectSettings();
+                }
 
                 if (m_renderer->forwardPlusMode() != FpMode::Off)
                 {
@@ -645,6 +929,7 @@ void EditorUI::drawMenuBar()
                     ImGui::SetNextItemWidth(140.0f);
                     if (ImGui::SliderFloat("Light radius", &radius, 50.0f, 5000.0f, "%.0f"))
                         m_renderer->setForwardPlusLightRadius(radius);
+                    if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
 
                     ImGui::Text("Forward+ GPU: %.3f ms", m_renderer->forwardPlusGpuMs());
                     ImGui::Text("Luces/celda: %.1f", m_renderer->forwardPlusAvgPerCell());

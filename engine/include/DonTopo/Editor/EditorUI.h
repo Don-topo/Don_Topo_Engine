@@ -155,6 +155,19 @@ private:
     // selector) deja pasar todo, que es como se comportaba el editor antes. Si
     // lo rechaza, deja la línea en el Log y el caller devuelve sin tocar disco.
     bool projectAllows(const std::filesystem::path& path, const char* what);
+    // --- Ajustes del menú View persistidos por proyecto -------------------
+    // Foto del estado actual: los efectos se leen del Renderer y la visibilidad
+    // de los 9 paneles de sus GetOpenPtr(). El Renderer es la única fuente de
+    // verdad, así que no hay copia que mantener sincronizada control a control.
+    ProjectContext::ViewSettings currentSettings();
+    // Vuelca al Renderer y a los paneles los ajustes del proyecto recién
+    // abierto. Se llama cada frame desde draw() y sólo hace algo cuando
+    // m_project cambia. Sin proyecto (tests headless) no toca nada.
+    void applyProjectSettings();
+    // Escribe currentSettings() en el project.json. La llaman los controles del
+    // menú View al TERMINAR el cambio (click de checkbox/combo, o el
+    // IsItemDeactivatedAfterEdit de un slider), nunca por frame de arrastre.
+    void saveProjectSettings();
     // Limpia GPU de la escena actual, reemplaza su contenido con j (vía
     // Scene::fromJson) y re-registra GPU (estático + skinned) de lo que
     // quede — tanto si fromJson tuvo éxito (árbol nuevo) como si falló
@@ -271,6 +284,9 @@ private:
     // se comportan igual que antes de que existiera el concepto.
     std::function<bool()>  m_projectSelector;
     const ProjectContext*  m_project = nullptr;
+    // Último proyecto cuyos ajustes del menú View ya se aplicaron. Distinto de
+    // m_project => toca aplicar (una vez por apertura de proyecto).
+    const ProjectContext*  m_appliedProject = nullptr;
 
     // Backend de ImGui. El device se guarda en initUi porque shutdownUi lo
     // necesita para liberar el pool y ahí ya no hay InitInfo.
