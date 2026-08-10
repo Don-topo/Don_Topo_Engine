@@ -5,6 +5,9 @@
 #include "DonTopo/Core/Window.h"
 #include "DonTopo/Renderer/Cube.h"
 #include "DonTopo/Renderer/Mesh.h"
+#include "DonTopo/Renderer/ModelLoader.h"
+#include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include "DonTopo/Renderer/Vertex.h"
 
 #include <windows.h>
@@ -27,6 +30,7 @@
 #include <GLFW/glfw3native.h>
 
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
@@ -86,6 +90,20 @@ struct PushData {
     glm::vec2 flags;  // x: 1 = coger el model del SSBO de instancias
 };
 static_assert(sizeof(PushData) == 80, "PushData debe ocupar 80 bytes (20 root constants)");
+
+// Push constants de los tres compute de animación. Los tres comparten bloque de
+// 16 bytes; en bone_hierarchy y skinning el cuarto campo no se lee.
+struct ComputePush {
+    float    animTime;
+    uint32_t boneCount;
+    uint32_t vertexCount;
+    uint32_t clipBase;  // activeClip * boneCount
+};
+static_assert(sizeof(ComputePush) == 16, "ComputePush debe ocupar 16 bytes");
+
+// Stride del vértice que escribe skinning.comp: 5 vec4 (pos, color, uv, normal,
+// tangent). No hay struct C++ equivalente en el motor, se usa el tamaño literal.
+constexpr UINT kSkinnedOutputStride = 5 * sizeof(glm::vec4);
 
 // Los constant buffers se enlazan con la dirección alineada a 256 bytes.
 constexpr UINT64 kCbvAlignment = 256;
@@ -200,6 +218,41 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12DescriptorHeap> dsvHeap;
     D3D12MA::Allocation*         depthAllocation = nullptr;
 
+    // ── Personaje animado por compute ───────────────────────────────────────
+    // Tres pases encadenados, los mismos que el camino Vulkan:
+    //   bone_eval      claves de animación -> transformaciones locales
+    //   bone_hierarchy locales + jerarquía -> matrices finales de hueso
+    //   skinning       vértices + matrices -> vértices ya deformados
+    ComPtr<ID3D12RootSignature> boneEvalRootSignature;
+    ComPtr<ID3D12RootSignature> boneHierarchyRootSignature;
+    ComPtr<ID3D12RootSignature> skinningRootSignature;
+    ComPtr<ID3D12PipelineState> boneEvalPipeline;
+    ComPtr<ID3D12PipelineState> boneHierarchyPipeline;
+    ComPtr<ID3D12PipelineState> skinningPipeline;
+    ComPtr<ID3D12PipelineState> skinnedMeshPipeline;
+
+    D3D12MA::Allocation* posKeysAllocation    = nullptr;
+    D3D12MA::Allocation* rotKeysAllocation    = nullptr;
+    D3D12MA::Allocation* scaleKeysAllocation  = nullptr;
+    D3D12MA::Allocation* boneInfosAllocation  = nullptr;
+    D3D12MA::Allocation* inputVertsAllocation = nullptr;
+    D3D12MA::Allocation* localXformsAllocation = nullptr;
+    D3D12MA::Allocation* finalBonesAllocation  = nullptr;
+    D3D12MA::Allocation* outputVertsAllocation = nullptr;
+    D3D12MA::Allocation* skinnedIndexAllocation = nullptr;
+
+    D3D12_VERTEX_BUFFER_VIEW skinnedVertexBufferView{};
+    D3D12_INDEX_BUFFER_VIEW  skinnedIndexBufferView{};
+    UINT                     skinnedIndexCount = 0;
+    uint32_t                 boneCount         = 0;
+    uint32_t                 skinnedVertexCount = 0;
+    uint32_t                 clipBase          = 0;
+    float                    animTime          = 0.0f;
+    float                    animDuration      = 0.0f;
+    bool                     hasSkinnedMesh    = false;
+    LARGE_INTEGER            lastTick{};
+    LARGE_INTEGER            tickFrequency{};
+
     ComPtr<ID3D12DescriptorHeap> rtvHeap;
     UINT                         rtvSize = 0;
 
@@ -254,6 +307,14 @@ struct D3D12Renderer::Impl {
     void createMeshResources();
     void createDepthBuffer();
     void updateSceneUbo();
+
+    // Crea un buffer vacío en VRAM con acceso de escritura desordenada, que es
+    // lo que necesitan los destinos de los tres compute.
+    D3D12MA::Allocation* createStorageBuffer(UINT64 size, D3D12_RESOURCE_STATES initialState);
+
+    void createSkinningPipelines();
+    void createSkinnedResources();
+    void recordSkinning();  // los tres dispatch, con sus barreras
 
     // Matriz de cámara del frame. Se recalcula en cada resize porque el aspecto
     // depende del tamaño de la ventana.
@@ -916,6 +977,303 @@ void D3D12Renderer::Impl::updateSceneUbo()
     std::memcpy(sceneUboMapped[frameIndex], &ubo, sizeof(ubo));
 }
 
+D3D12MA::Allocation* D3D12Renderer::Impl::createStorageBuffer(UINT64 size,
+                                                              D3D12_RESOURCE_STATES initialState)
+{
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width            = size;
+    desc.Height           = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels        = 1;
+    desc.Format           = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    D3D12MA::ALLOCATION_DESC allocDesc{};
+    allocDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+    D3D12MA::Allocation* allocation = nullptr;
+    throwIfFailed(allocator->CreateResource(&allocDesc, &desc, initialState, nullptr, &allocation,
+                                            IID_NULL, nullptr),
+                  "D3D12MA::Allocator::CreateResource(storage)");
+    return allocation;
+}
+
+void D3D12Renderer::Impl::createSkinningPipelines()
+{
+    // Una root signature por pase, con EXACTAMENTE los registros que declara
+    // cada shader. Todos los buffers son ByteAddressBuffer, así que van como
+    // root descriptors y no hacen falta tablas ni heaps.
+    //
+    // Ojo con los recursos que cambian de vista entre pases: localXforms es u4
+    // cuando bone_eval lo escribe y t4 cuando bone_hierarchy lo lee; finalBones
+    // es u5 al escribirse y t5 al leerse. Es el mismo buffer.
+    struct Slot {
+        D3D12_ROOT_PARAMETER_TYPE type;
+        UINT                      shaderRegister;
+    };
+
+    auto buildRootSignature = [&](const std::vector<Slot>& slots,
+                                  ComPtr<ID3D12RootSignature>& out, const char* what) {
+        std::vector<D3D12_ROOT_PARAMETER> params;
+        params.reserve(slots.size() + 1);
+
+        // Los push constants van SIEMPRE en b0, que es donde DXC coloca el
+        // cbuffer del bloque push_constant al no llevar registro explícito.
+        D3D12_ROOT_PARAMETER pushParam{};
+        pushParam.ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        pushParam.Constants.ShaderRegister = 0;
+        pushParam.Constants.Num32BitValues = sizeof(ComputePush) / 4;
+        params.push_back(pushParam);
+
+        for (const Slot& slot : slots) {
+            D3D12_ROOT_PARAMETER param{};
+            param.ParameterType             = slot.type;
+            param.Descriptor.ShaderRegister = slot.shaderRegister;
+            params.push_back(param);
+        }
+
+        D3D12_ROOT_SIGNATURE_DESC desc{};
+        desc.NumParameters = static_cast<UINT>(params.size());
+        desc.pParameters   = params.data();
+        desc.Flags         = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+        ComPtr<ID3DBlob> serialized;
+        ComPtr<ID3DBlob> errorBlob;
+        HRESULT hr = D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized,
+                                                 &errorBlob);
+        if (FAILED(hr)) {
+            std::string detail;
+            if (errorBlob)
+                detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
+                              errorBlob->GetBufferSize());
+            throw std::runtime_error(std::string("D3D12: root signature de ") + what +
+                                     " (HRESULT " + hresultToString(hr) + ") " + detail);
+        }
+        throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                                  serialized->GetBufferSize(), IID_PPV_ARGS(&out)),
+                      "ID3D12Device::CreateRootSignature(compute)");
+    };
+
+    using RT = D3D12_ROOT_PARAMETER_TYPE;
+    // bone_eval: lee claves y huesos (t0..t3), escribe transformaciones locales (u4)
+    buildRootSignature({{RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 0},
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 1},
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 2},
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 3},
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_UAV, 4}},
+                       boneEvalRootSignature, "bone_eval");
+    // bone_hierarchy: lee huesos y locales (t3, t4), escribe matrices finales (u5)
+    buildRootSignature({{RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 3},
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 4},
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_UAV, 5}},
+                       boneHierarchyRootSignature, "bone_hierarchy");
+    // skinning: lee matrices y vértices (t5, t6), escribe vértices deformados (u7)
+    buildRootSignature({{RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 5},
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 6},
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_UAV, 7}},
+                       skinningRootSignature, "skinning");
+
+    auto buildComputePipeline = [&](const char* dxilPath, ID3D12RootSignature* rootSignature,
+                                    ComPtr<ID3D12PipelineState>& out) {
+        const std::vector<char> shader = readBinaryFile(dxilPath);
+        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+        desc.pRootSignature = rootSignature;
+        desc.CS             = {shader.data(), shader.size()};
+        throwIfFailed(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&out)),
+                      "ID3D12Device::CreateComputePipelineState");
+    };
+
+    buildComputePipeline("shaders/bone_eval.comp.dxil", boneEvalRootSignature.Get(),
+                         boneEvalPipeline);
+    buildComputePipeline("shaders/bone_hierarchy.comp.dxil", boneHierarchyRootSignature.Get(),
+                         boneHierarchyPipeline);
+    buildComputePipeline("shaders/skinning.comp.dxil", skinningRootSignature.Get(),
+                         skinningPipeline);
+
+    // Pipeline gráfico del personaje: MISMO triangle.vert/frag que el cubo, pero
+    // el vertex buffer es la salida del compute, que va en vec4 alineados (5 x
+    // vec4 = 80 B) en vez del Vertex empaquetado del motor.
+    const std::vector<char> vertexShader = readBinaryFile("shaders/triangle.vert.dxil");
+    const std::vector<char> pixelShader  = readBinaryFile("shaders/triangle.frag.dxil");
+
+    const D3D12_INPUT_ELEMENT_DESC skinnedLayout[] = {
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 1, DXGI_FORMAT_R32G32B32_FLOAT, 0, 16,
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 2, DXGI_FORMAT_R32G32_FLOAT, 0, 32,
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 3, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48,
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 4, DXGI_FORMAT_R32G32B32_FLOAT, 0, 64,
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    };
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature        = meshRootSignature.Get();
+    psoDesc.VS                    = {vertexShader.data(), vertexShader.size()};
+    psoDesc.PS                    = {pixelShader.data(), pixelShader.size()};
+    psoDesc.InputLayout           = {skinnedLayout, _countof(skinnedLayout)};
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets      = 1;
+    psoDesc.RTVFormats[0]         = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleDesc.Count      = 1;
+    psoDesc.SampleMask            = UINT_MAX;
+
+    psoDesc.RasterizerState.FillMode              = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode              = D3D12_CULL_MODE_BACK;
+    psoDesc.RasterizerState.DepthClipEnable       = TRUE;
+    psoDesc.RasterizerState.FrontCounterClockwise = TRUE;
+
+    for (auto& rt : psoDesc.BlendState.RenderTarget)
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+    psoDesc.DepthStencilState.DepthEnable    = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+
+    throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc,
+                                                      IID_PPV_ARGS(&skinnedMeshPipeline)),
+                  "ID3D12Device::CreateGraphicsPipelineState(skinned)");
+}
+
+void D3D12Renderer::Impl::createSkinnedResources()
+{
+    // Se carga con el MISMO ModelLoader que usa el editor: si el FBX no está,
+    // el backend sigue funcionando sin personaje en vez de abortar.
+    SkinnedMesh mesh;
+    try {
+        mesh = ModelLoader::loadSkinned("assets/animatedCharacter/Maw J Laygo.fbx");
+    } catch (const std::exception&) {
+        return;
+    }
+
+    if (mesh.skinnedVertices.empty() || mesh.skeleton.names.empty() || mesh.indices.empty())
+        return;
+
+    boneCount          = static_cast<uint32_t>(mesh.skeleton.names.size());
+    skinnedVertexCount = static_cast<uint32_t>(mesh.skinnedVertices.size());
+
+    const PackedClips packed = packSkinnedClips(mesh);
+    if (packed.boneInfos.empty())
+        return;
+
+    // El clip 0 es el que se reproduce. boneInfos va en layout [clip][hueso],
+    // así que el offset del clip activo es clip * boneCount.
+    clipBase     = 0;
+    animDuration = mesh.animationClips.empty() ? 0.0f : mesh.animationClips[0].duration;
+
+    posKeysAllocation   = uploadBuffer(packed.pos.data(), packed.pos.size() * sizeof(GpuPosKey),
+                                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    rotKeysAllocation   = uploadBuffer(packed.rot.data(), packed.rot.size() * sizeof(GpuRotKey),
+                                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    scaleKeysAllocation = uploadBuffer(packed.scale.data(), packed.scale.size() * sizeof(GpuPosKey),
+                                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    boneInfosAllocation = uploadBuffer(packed.boneInfos.data(),
+                                       packed.boneInfos.size() * sizeof(GpuBoneInfo),
+                                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    inputVertsAllocation =
+        uploadBuffer(mesh.skinnedVertices.data(), mesh.skinnedVertices.size() * sizeof(SkinnedVertex),
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    localXformsAllocation = createStorageBuffer(static_cast<UINT64>(boneCount) * sizeof(glm::mat4),
+                                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    finalBonesAllocation  = createStorageBuffer(static_cast<UINT64>(boneCount) * sizeof(glm::mat4),
+                                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    outputVertsAllocation = createStorageBuffer(
+        static_cast<UINT64>(skinnedVertexCount) * kSkinnedOutputStride,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    skinnedIndexAllocation = uploadBuffer(mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t),
+                                          D3D12_RESOURCE_STATE_INDEX_BUFFER);
+
+    skinnedVertexBufferView.BufferLocation = outputVertsAllocation->GetResource()->GetGPUVirtualAddress();
+    skinnedVertexBufferView.SizeInBytes    = skinnedVertexCount * kSkinnedOutputStride;
+    skinnedVertexBufferView.StrideInBytes  = kSkinnedOutputStride;
+
+    skinnedIndexBufferView.BufferLocation = skinnedIndexAllocation->GetResource()->GetGPUVirtualAddress();
+    skinnedIndexBufferView.SizeInBytes    = static_cast<UINT>(mesh.indices.size() * sizeof(uint32_t));
+    skinnedIndexBufferView.Format         = DXGI_FORMAT_R32_UINT;
+    skinnedIndexCount                     = static_cast<UINT>(mesh.indices.size());
+
+    QueryPerformanceFrequency(&tickFrequency);
+    QueryPerformanceCounter(&lastTick);
+    hasSkinnedMesh = true;
+}
+
+void D3D12Renderer::Impl::recordSkinning()
+{
+    ComputePush push{};
+    push.animTime    = animTime;
+    push.boneCount   = boneCount;
+    push.vertexCount = skinnedVertexCount;
+    push.clipBase    = clipBase;
+
+    const D3D12_GPU_VIRTUAL_ADDRESS posKeys     = posKeysAllocation->GetResource()->GetGPUVirtualAddress();
+    const D3D12_GPU_VIRTUAL_ADDRESS rotKeys     = rotKeysAllocation->GetResource()->GetGPUVirtualAddress();
+    const D3D12_GPU_VIRTUAL_ADDRESS scaleKeys   = scaleKeysAllocation->GetResource()->GetGPUVirtualAddress();
+    const D3D12_GPU_VIRTUAL_ADDRESS boneInfos   = boneInfosAllocation->GetResource()->GetGPUVirtualAddress();
+    const D3D12_GPU_VIRTUAL_ADDRESS localXforms = localXformsAllocation->GetResource()->GetGPUVirtualAddress();
+    const D3D12_GPU_VIRTUAL_ADDRESS finalBones  = finalBonesAllocation->GetResource()->GetGPUVirtualAddress();
+    const D3D12_GPU_VIRTUAL_ADDRESS inputVerts  = inputVertsAllocation->GetResource()->GetGPUVirtualAddress();
+    const D3D12_GPU_VIRTUAL_ADDRESS outputVerts = outputVertsAllocation->GetResource()->GetGPUVirtualAddress();
+
+    // Barrera de UAV, no de transición: los pases no cambian de estado, solo
+    // hay que garantizar que lo escrito por uno lo vea el siguiente.
+    auto uavBarrier = [&](ID3D12Resource* resource) {
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        barrier.UAV.pResource = resource;
+        commandList->ResourceBarrier(1, &barrier);
+    };
+
+    // 1) Claves de animación -> transformaciones locales. Un hilo por hueso.
+    commandList->SetComputeRootSignature(boneEvalRootSignature.Get());
+    commandList->SetPipelineState(boneEvalPipeline.Get());
+    commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
+    commandList->SetComputeRootShaderResourceView(1, posKeys);
+    commandList->SetComputeRootShaderResourceView(2, rotKeys);
+    commandList->SetComputeRootShaderResourceView(3, scaleKeys);
+    commandList->SetComputeRootShaderResourceView(4, boneInfos);
+    commandList->SetComputeRootUnorderedAccessView(5, localXforms);
+    commandList->Dispatch((boneCount + 63) / 64, 1, 1);
+    uavBarrier(localXformsAllocation->GetResource());
+
+    // 2) Jerarquía: acumula padre a hijo. Un SOLO hilo a propósito — depende
+    // de que el padre ya esté resuelto, y el orden topológico lo garantiza.
+    commandList->SetComputeRootSignature(boneHierarchyRootSignature.Get());
+    commandList->SetPipelineState(boneHierarchyPipeline.Get());
+    commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
+    commandList->SetComputeRootShaderResourceView(1, boneInfos);
+    commandList->SetComputeRootShaderResourceView(2, localXforms);
+    commandList->SetComputeRootUnorderedAccessView(3, finalBones);
+    commandList->Dispatch(1, 1, 1);
+    uavBarrier(finalBonesAllocation->GetResource());
+
+    // 3) Deformación de los vértices. Un hilo por vértice.
+    commandList->SetComputeRootSignature(skinningRootSignature.Get());
+    commandList->SetPipelineState(skinningPipeline.Get());
+    commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
+    commandList->SetComputeRootShaderResourceView(1, finalBones);
+    commandList->SetComputeRootShaderResourceView(2, inputVerts);
+    commandList->SetComputeRootUnorderedAccessView(3, outputVerts);
+    commandList->Dispatch((skinnedVertexCount + 63) / 64, 1, 1);
+
+    // De escritura por compute a entrada del ensamblador de vértices: aquí sí
+    // cambia el uso del buffer, así que hace falta transición.
+    D3D12_RESOURCE_BARRIER toVertexBuffer{};
+    toVertexBuffer.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toVertexBuffer.Transition.pResource   = outputVertsAllocation->GetResource();
+    toVertexBuffer.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    toVertexBuffer.Transition.StateAfter  = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+    toVertexBuffer.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toVertexBuffer);
+}
+
 void D3D12Renderer::Impl::updateViewProj()
 {
     const float aspect = (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
@@ -1105,6 +1463,8 @@ void D3D12Renderer::init(Window& window)
     d.createGridGeometry();
     d.createMeshPipeline();
     d.createMeshResources();
+    d.createSkinningPipelines();
+    d.createSkinnedResources();
     d.updateViewProj();
 
     d.initialized = true;
@@ -1126,6 +1486,23 @@ void D3D12Renderer::drawFrame()
         return;
     if (FAILED(d.commandList->Reset(allocator, nullptr)))
         return;
+
+    // Los tres compute van ANTES de abrir el render target: escriben el vertex
+    // buffer que el pase gráfico va a leer este mismo frame.
+    if (d.hasSkinnedMesh) {
+        LARGE_INTEGER now{};
+        QueryPerformanceCounter(&now);
+        const double elapsed = d.tickFrequency.QuadPart > 0
+                                   ? static_cast<double>(now.QuadPart - d.lastTick.QuadPart) /
+                                         static_cast<double>(d.tickFrequency.QuadPart)
+                                   : 0.0;
+        d.lastTick = now;
+        d.animTime += static_cast<float>(elapsed);
+        if (d.animDuration > 0.0f && d.animTime > d.animDuration)
+            d.animTime = std::fmod(d.animTime, d.animDuration);
+
+        d.recordSkinning();
+    }
 
     D3D12_RESOURCE_BARRIER toRenderTarget{};
     toRenderTarget.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1186,6 +1563,36 @@ void D3D12Renderer::drawFrame()
         d.commandList->DrawIndexedInstanced(d.meshIndexCount, 1, 0, 0, 0);
     }
 
+    // Personaje: mismos shaders y misma root signature que el cubo, pero el
+    // vertex buffer es lo que acaba de escribir el compute.
+    if (d.hasSkinnedMesh && d.skinnedMeshPipeline) {
+        d.commandList->SetPipelineState(d.skinnedMeshPipeline.Get());
+        d.commandList->SetGraphicsRootSignature(d.meshRootSignature.Get());
+        d.commandList->SetGraphicsRootConstantBufferView(
+            0, d.sceneUboAllocations[d.frameIndex]->GetResource()->GetGPUVirtualAddress());
+
+        PushData push{};
+        // Los FBX del personaje vienen en centímetros; sin reescalar mediría
+        // cien veces la rejilla. flags.x = 0: el model sale de aquí, no del
+        // buffer de instancias, que es la ruta que usa el motor para skinned.
+        push.transform = glm::scale(glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f)),
+                                    glm::vec3(0.02f));
+        push.metallic  = 0.0f;
+        push.roughness = 0.7f;
+        push.flags     = glm::vec2(0.0f, 0.0f);
+        d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
+
+        d.commandList->SetGraphicsRootDescriptorTable(
+            2, d.srvHeap->GetGPUDescriptorHandleForHeapStart());
+        d.commandList->SetGraphicsRootShaderResourceView(
+            3, d.instanceAllocation->GetResource()->GetGPUVirtualAddress());
+
+        d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        d.commandList->IASetVertexBuffers(0, 1, &d.skinnedVertexBufferView);
+        d.commandList->IASetIndexBuffer(&d.skinnedIndexBufferView);
+        d.commandList->DrawIndexedInstanced(d.skinnedIndexCount, 1, 0, 0, 0);
+    }
+
     if (d.gizmoPipeline && d.gridVertexCount > 0) {
         d.commandList->SetPipelineState(d.gizmoPipeline.Get());
         d.commandList->SetGraphicsRootSignature(d.rootSignature.Get());
@@ -1196,6 +1603,19 @@ void D3D12Renderer::drawFrame()
         d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
         d.commandList->IASetVertexBuffers(0, 1, &d.gridVertexBufferView);
         d.commandList->DrawInstanced(d.gridVertexCount, 1, 0, 0);
+    }
+
+    // El buffer de vértices deformados vuelve a acceso desordenado: el frame
+    // siguiente lo reescribe el compute, y tiene que encontrarlo como lo dejó
+    // el anterior o la transición de ida partiría de un estado que no es.
+    if (d.hasSkinnedMesh) {
+        D3D12_RESOURCE_BARRIER backToUav{};
+        backToUav.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        backToUav.Transition.pResource   = d.outputVertsAllocation->GetResource();
+        backToUav.Transition.StateBefore = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+        backToUav.Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        backToUav.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        d.commandList->ResourceBarrier(1, &backToUav);
     }
 
     D3D12_RESOURCE_BARRIER toPresent = toRenderTarget;
@@ -1348,7 +1768,11 @@ void D3D12Renderer::shutdown()
     for (auto** allocation : {&d.meshVertexAllocation, &d.meshIndexAllocation,
                               &d.instanceAllocation, &d.baseColorAllocation,
                               &d.normalMapAllocation, &d.shadowMapAllocation,
-                              &d.depthAllocation}) {
+                              &d.depthAllocation, &d.posKeysAllocation, &d.rotKeysAllocation,
+                              &d.scaleKeysAllocation, &d.boneInfosAllocation,
+                              &d.inputVertsAllocation, &d.localXformsAllocation,
+                              &d.finalBonesAllocation, &d.outputVertsAllocation,
+                              &d.skinnedIndexAllocation}) {
         if (*allocation) {
             (*allocation)->Release();
             *allocation = nullptr;
@@ -1357,6 +1781,19 @@ void D3D12Renderer::shutdown()
     d.meshVertexBufferView = {};
     d.meshIndexBufferView  = {};
     d.meshIndexCount       = 0;
+
+    d.skinnedVertexBufferView = {};
+    d.skinnedIndexBufferView  = {};
+    d.skinnedIndexCount       = 0;
+    d.hasSkinnedMesh          = false;
+
+    d.skinnedMeshPipeline.Reset();
+    d.skinningPipeline.Reset();
+    d.boneHierarchyPipeline.Reset();
+    d.boneEvalPipeline.Reset();
+    d.skinningRootSignature.Reset();
+    d.boneHierarchyRootSignature.Reset();
+    d.boneEvalRootSignature.Reset();
 
     d.srvHeap.Reset();
     d.dsvHeap.Reset();
