@@ -138,6 +138,16 @@ namespace DonTopo {
             // el de la ventana. Cambiarlo recrea los targets, igual que un resize.
             // El runtime no la llama nunca: ahi el destino es el swapchain entero.
             void setViewportSize(uint32_t width, uint32_t height);
+            // Recalcula el encuadre de referencia de la escena (centro y tamaño) a
+            // partir de lo que hay AHORA en GPU, no de las mallas que recibió
+            // init(). Importa porque de m_cameraDistance salen el near y el far de
+            // la proyección del editor (near = d*0.001, far = d*3): sin esto una
+            // escena cargada después del arranque se dibuja con el rango de otra
+            // —la de arranque—, y lo que se sale de ese far (el skybox el primero)
+            // se recorta. La llama el editor al cargar escena y cuando aterrizan
+            // los assets asíncronos; el runtime no la llama nunca. Si no hay nada
+            // que acotar (escena vacía) conserva el rango vigente.
+            void refitCameraRange();
             void setSceneRoot(GameObject* root) { m_sceneRoot = root; }
             // Libera mesh/skinnedMesh/texturas en GPU de node y todo su subárbol
             // (llamado por EditorUI justo antes de borrar el nodo del scene graph).

@@ -286,6 +286,12 @@ void EditorUI::onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, Ren
     // Un solo submit para todos los uploads de este pump. Es lo que convierte
     // ~440 vkQueueWaitIdle (uno por objeto) en uno.
     renderer.flushPendingUploads();
+
+    // Las mallas de una carga async llegan DESPUÉS de reloadSceneFromJson, así
+    // que el rango de cámara que se recalculó allí no las incluía: se rehace con
+    // la escena ya completa. Sin esto, una escena grande cargada de disco se
+    // dibujaría con el near/far de lo que hubiera antes.
+    renderer.refitCameraRange();
 }
 
 void EditorUI::onGameObjectDestroyed(GameObject* node)
@@ -898,6 +904,13 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j, bool async)
         // meshes de fichero), así que no aparece un modal vacío.
         if (async && m_assetLoader)
             m_loadingModal.begin(m_assetLoader->pending());
+
+        // La escena que se acaba de montar manda sobre el near/far del editor:
+        // hasta aquí seguían siendo los de las mallas que se le pasaron a
+        // Renderer::init en el arranque. En la ruta async esto solo ve los meshes
+        // ya presentes; onAssetsLoaded lo repite cuando aterriza el resto.
+        if (m_renderer)
+            m_renderer->refitCameraRange();
     }
     m_undoHistory.clear();
 

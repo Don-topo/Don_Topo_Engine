@@ -70,7 +70,20 @@ int main()
         // y ya no se cargan: en cuanto se elige proyecto esta escena se
         // reemplaza entera por la del proyecto (EditorUI::openProjectScene), así
         // que cargarlos era trabajo que se tiraba a la basura.
-        auto cubeMesh = std::make_shared<DonTopo::Mesh>(DonTopo::Cube::create(50.0f));
+        // El tamaño de este suelo NO es decorativo: renderer.init() saca de él
+        // m_cameraDistance (= maxDim * 1.2) y de ahí salen el near y el far de la
+        // proyección del editor (near = d*0.001, far = d*3). Con solo el cubo de
+        // 50 el far caía a ~180 y, con la cámara en z=300, el skybox se recortaba.
+        // Los 1000 son los mismos que tenía el suelo de la demo, así que el
+        // encuadre y el skybox se ven igual que antes.
+        auto floorMesh = std::make_shared<DonTopo::Mesh>(DonTopo::Plane::create(1000.0f, 0.0f));
+        auto cubeMesh  = std::make_shared<DonTopo::Mesh>(DonTopo::Cube::create(50.0f));
+
+        auto* floorNode = scene.addGameObject("floor");
+        floorNode->setMesh(floorMesh);
+        floorNode->setBoxCollider(physics.createBoxColliderComponent(
+            glm::vec3(500.0f, 0.5f, 500.0f), glm::vec3(0.0f),
+            glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -0.5f, 0.0f)), /*dynamic=*/false));
 
         auto* cube = scene.addGameObject("cube");
         cube->setMesh(cubeMesh);

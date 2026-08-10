@@ -103,6 +103,59 @@ namespace DonTopo {
         }
     }
 
+    void Renderer::refitCameraRange()
+    {
+        // Suelo del rango: una escena diminuta (o con todo en el mismo punto)
+        // daría far ~0 y no se vería ni el skybox. 200 deja far=600, que cubre de
+        // sobra la cámara con la que abre el editor (z=300 mirando al origen), y
+        // near=0.2, que no recorta props pequeños.
+        constexpr float kMinCameraDistance = 200.0f;
+
+        glm::vec3 bMin( std::numeric_limits<float>::max());
+        glm::vec3 bMax(-std::numeric_limits<float>::max());
+        bool      any = false;
+
+        for (const RenderObject& obj : m_objects)
+        {
+            const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
+            if (!gpu || !gpu->hasBounds) continue;
+
+            // Las 8 esquinas de la AABB local llevadas a mundo: con el objeto
+            // rotado o escalado, la caja alineada a ejes de la malla ya no acota.
+            for (int c = 0; c < 8; ++c)
+            {
+                const glm::vec3 corner((c & 1) ? gpu->aabbMax.x : gpu->aabbMin.x,
+                                       (c & 2) ? gpu->aabbMax.y : gpu->aabbMin.y,
+                                       (c & 4) ? gpu->aabbMax.z : gpu->aabbMin.z);
+                const glm::vec3 world = glm::vec3(obj.transform * glm::vec4(corner, 1.0f));
+                bMin = glm::min(bMin, world);
+                bMax = glm::max(bMax, world);
+            }
+            any = true;
+        }
+
+        for (const SkinnedRenderObject& obj : m_skinnedObjects)
+        {
+            if (!obj.hasBounds) continue;
+            // La cota de un skinned es una esfera en local (vale para toda pose):
+            // se toma su centro en mundo y el radio sin escalar. Aproximado a
+            // propósito — esto solo fija near/far, no culea nada.
+            const glm::vec3 center(obj.transform[3]);
+            bMin = glm::min(bMin, center - glm::vec3(obj.boundRadius));
+            bMax = glm::max(bMax, center + glm::vec3(obj.boundRadius));
+            any = true;
+        }
+
+        // Nada acotable: conserva el rango vigente en vez de dejarlo en infinitos.
+        // Es lo que pasa con la escena vacía de un proyecto recién creado.
+        if (!any) return;
+
+        m_cameraTarget = (bMin + bMax) * 0.5f;
+        const float maxDim =
+            glm::max(bMax.x - bMin.x, glm::max(bMax.y - bMin.y, bMax.z - bMin.z));
+        m_cameraDistance = glm::max(maxDim * 1.2f, kMinCameraDistance);
+    }
+
     void Renderer::initSceneResources(const std::vector<Mesh>& meshes)
     {
         // Auto-fit camera to mesh bounding box (necesita `meshes`; por eso
