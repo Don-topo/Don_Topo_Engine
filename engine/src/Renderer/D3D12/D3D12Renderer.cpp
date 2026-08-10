@@ -6,6 +6,7 @@
 #include "DonTopo/Renderer/Cube.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/ModelLoader.h"
+#include "DonTopo/Renderer/Plane.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include "DonTopo/Renderer/Vertex.h"
@@ -100,6 +101,15 @@ struct ComputePush {
     uint32_t clipBase;  // activeClip * boneCount
 };
 static_assert(sizeof(ComputePush) == 16, "ComputePush debe ocupar 16 bytes");
+
+// Sombras en cascada. Mismos valores que el camino Vulkan
+// (Renderer.cpp:1016-1025): sin ellos las cascadas cortan a otras distancias y
+// las sombras no coinciden entre backends.
+constexpr int   kShadowCascades    = 4;
+constexpr UINT  kShadowMapSize     = 2048;
+constexpr float kCascadeLambda     = 0.75f;
+constexpr float kShadowMaxDistance = 500.0f;
+constexpr float kCasterMargin      = 200.0f;
 
 // Stride del vértice que escribe skinning.comp: 5 vec4 (pos, color, uv, normal,
 // tangent). No hay struct C++ equivalente en el motor, se usa el tamaño literal.
@@ -253,6 +263,31 @@ struct D3D12Renderer::Impl {
     LARGE_INTEGER            lastTick{};
     LARGE_INTEGER            tickFrequency{};
 
+    // ── Suelo sólido ────────────────────────────────────────────────────────
+    // La rejilla son líneas y no recibe sombra: hace falta una superficie de
+    // verdad para que se vea algo proyectado.
+    D3D12MA::Allocation*     groundVertexAllocation = nullptr;
+    D3D12MA::Allocation*     groundIndexAllocation  = nullptr;
+    D3D12MA::Allocation*     groundInstanceAllocation = nullptr;
+    D3D12MA::Allocation*     characterInstanceAllocation = nullptr;
+    D3D12_VERTEX_BUFFER_VIEW groundVertexBufferView{};
+    D3D12_INDEX_BUFFER_VIEW  groundIndexBufferView{};
+    UINT                     groundIndexCount = 0;
+
+    // ── Sombras en cascada ──────────────────────────────────────────────────
+    ComPtr<ID3D12RootSignature> shadowRootSignature;
+    ComPtr<ID3D12PipelineState> shadowPipeline;         // vértices del motor (56 B)
+    ComPtr<ID3D12PipelineState> shadowSkinnedPipeline;  // salida del compute (80 B)
+    ComPtr<ID3D12DescriptorHeap> shadowDsvHeap;         // un DSV por cascada
+    D3D12MA::Allocation*         shadowMapArrayAllocation = nullptr;
+    UINT                         dsvSize = 0;
+
+    glm::mat4 cascadeMatrices[kShadowCascades]{};
+    glm::vec4 cascadeSplits{0.0f};
+    // Dirección de la luz: la misma que se escribe en el UBO. La posición solo
+    // sirve para orientar, igual que en computeCascades.
+    glm::vec3 lightDirection{-0.4f, -1.0f, -0.5f};
+
     ComPtr<ID3D12DescriptorHeap> rtvHeap;
     UINT                         rtvSize = 0;
 
@@ -315,6 +350,10 @@ struct D3D12Renderer::Impl {
     void createSkinningPipelines();
     void createSkinnedResources();
     void recordSkinning();  // los tres dispatch, con sus barreras
+
+    void createShadowResources();
+    void computeCascades();   // reparte el frustum y saca una matriz por cascada
+    void recordShadowPasses();
 
     // Matriz de cámara del frame. Se recalcula en cada resize porque el aspecto
     // depende del tamaño de la ventana.
@@ -955,17 +994,17 @@ void D3D12Renderer::Impl::updateSceneUbo()
     // lo compensa ahí; D3D12 usa la misma orientación que OpenGL, así que aquí
     // NO se invierte.
 
-    // Sin cascadas: todos los splits a cero hacen que selectCascade devuelva -1
-    // y el shader se salte el muestreo de sombras.
-    ubo.cascadeSplits = glm::vec4(0.0f);
-    for (auto& matrix : ubo.lightSpaceMatrix)
-        matrix = glm::mat4(1.0f);
+    ubo.cascadeSplits = cascadeSplits;
+    for (int i = 0; i < kShadowCascades; ++i)
+        ubo.lightSpaceMatrix[i] = cascadeMatrices[i];
 
     // Una direccional (tipo 2), que es lo que el shader trata sin atenuación.
-    ubo.numLights            = 1;
-    ubo.lights[0].direction[0] = -0.4f;
-    ubo.lights[0].direction[1] = -1.0f;
-    ubo.lights[0].direction[2] = -0.5f;
+    // La dirección tiene que ser LA MISMA con la que se calcularon las
+    // cascadas, o la sombra caería en un sitio y la luz vendría de otro.
+    ubo.numLights              = 1;
+    ubo.lights[0].direction[0] = lightDirection.x;
+    ubo.lights[0].direction[1] = lightDirection.y;
+    ubo.lights[0].direction[2] = lightDirection.z;
     ubo.lights[0].direction[3] = 2.0f;  // directional
     ubo.lights[0].color[0]     = 1.0f;
     ubo.lights[0].color[1]     = 0.98f;
@@ -1274,6 +1313,335 @@ void D3D12Renderer::Impl::recordSkinning()
     commandList->ResourceBarrier(1, &toVertexBuffer);
 }
 
+void D3D12Renderer::Impl::createShadowResources()
+{
+    // Suelo: la malla del propio motor, la misma que usa el editor.
+    // Un pelo por debajo de y=0, que es donde vive la rejilla: en el mismo
+    // plano se pelean por la profundidad y las líneas salen punteadas.
+    const Mesh ground = Plane::create(200.0f, -0.02f, glm::vec3(0.55f, 0.55f, 0.58f), 20.0f);
+
+    groundVertexAllocation = uploadBuffer(ground.vertices.data(),
+                                          ground.vertices.size() * sizeof(Vertex),
+                                          D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    groundVertexBufferView.BufferLocation = groundVertexAllocation->GetResource()->GetGPUVirtualAddress();
+    groundVertexBufferView.SizeInBytes    = static_cast<UINT>(ground.vertices.size() * sizeof(Vertex));
+    groundVertexBufferView.StrideInBytes  = sizeof(Vertex);
+
+    groundIndexAllocation = uploadBuffer(ground.indices.data(),
+                                         ground.indices.size() * sizeof(uint32_t),
+                                         D3D12_RESOURCE_STATE_INDEX_BUFFER);
+    groundIndexBufferView.BufferLocation = groundIndexAllocation->GetResource()->GetGPUVirtualAddress();
+    groundIndexBufferView.SizeInBytes    = static_cast<UINT>(ground.indices.size() * sizeof(uint32_t));
+    groundIndexBufferView.Format         = DXGI_FORMAT_R32_UINT;
+    groundIndexCount                     = static_cast<UINT>(ground.indices.size());
+
+    // shadow.vert SIEMPRE saca el model del buffer de instancias, incluso para
+    // objetos que en el pase principal usan el push constant. Por eso cada
+    // objeto necesita el suyo, con la MISMA transformación que se usa al
+    // dibujarlo: si difieren, la sombra cae donde no está el objeto.
+    const glm::mat4 groundModel = glm::mat4(1.0f);
+    groundInstanceAllocation = uploadBuffer(&groundModel, sizeof(groundModel),
+                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    const glm::mat4 characterModel =
+        glm::scale(glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f)), glm::vec3(0.02f));
+    characterInstanceAllocation = uploadBuffer(&characterModel, sizeof(characterModel),
+                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    // Mapa de sombras: un array de profundidad, una capa por cascada.
+    D3D12_RESOURCE_DESC shadowDesc{};
+    shadowDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    shadowDesc.Width            = kShadowMapSize;
+    shadowDesc.Height           = kShadowMapSize;
+    shadowDesc.DepthOrArraySize = kShadowCascades;
+    shadowDesc.MipLevels        = 1;
+    // TYPELESS porque el mismo recurso se ve de dos formas: como profundidad
+    // al grabarlo (D32_FLOAT) y como textura al muestrearlo (R32_FLOAT).
+    shadowDesc.Format           = DXGI_FORMAT_R32_TYPELESS;
+    shadowDesc.SampleDesc.Count = 1;
+    shadowDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+    D3D12_CLEAR_VALUE shadowClear{};
+    shadowClear.Format             = DXGI_FORMAT_D32_FLOAT;
+    shadowClear.DepthStencil.Depth = 1.0f;
+
+    D3D12MA::ALLOCATION_DESC defaultDesc{};
+    defaultDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+    throwIfFailed(allocator->CreateResource(&defaultDesc, &shadowDesc,
+                                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                            &shadowClear, &shadowMapArrayAllocation, IID_NULL,
+                                            nullptr),
+                  "D3D12MA::Allocator::CreateResource(shadow map)");
+
+    D3D12_DESCRIPTOR_HEAP_DESC shadowDsvHeapDesc{};
+    shadowDsvHeapDesc.NumDescriptors = kShadowCascades;
+    shadowDsvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    throwIfFailed(device->CreateDescriptorHeap(&shadowDsvHeapDesc, IID_PPV_ARGS(&shadowDsvHeap)),
+                  "ID3D12Device::CreateDescriptorHeap(shadow DSV)");
+    dsvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+
+    // Un DSV por capa: cada cascada se graba por separado.
+    for (int cascade = 0; cascade < kShadowCascades; ++cascade) {
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+        dsvDesc.Format                         = DXGI_FORMAT_D32_FLOAT;
+        dsvDesc.ViewDimension                  = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+        dsvDesc.Texture2DArray.FirstArraySlice = cascade;
+        dsvDesc.Texture2DArray.ArraySize       = 1;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = shadowDsvHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(cascade) * dsvSize;
+        device->CreateDepthStencilView(shadowMapArrayAllocation->GetResource(), &dsvDesc, handle);
+    }
+
+    // El SRV va en el hueco t3, encima del array 1x1 de relleno que ocupaba ese
+    // sitio: a partir de aquí el shader muestrea sombras de verdad.
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format                         = DXGI_FORMAT_R32_FLOAT;
+    srvDesc.ViewDimension                  = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    srvDesc.Shader4ComponentMapping        = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2DArray.MipLevels       = 1;
+    srvDesc.Texture2DArray.ArraySize       = kShadowCascades;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE srvHandle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+    srvHandle.ptr += static_cast<SIZE_T>(2) * srvSize;
+    device->CreateShaderResourceView(shadowMapArrayAllocation->GetResource(), &srvDesc, srvHandle);
+
+    // Root signature del pase de sombras: el MISMO UBO en b0 (los offsets de
+    // view/proj/lightSpaceMatrix coinciden con los de triangle), el índice de
+    // cascada como root constant y el buffer de instancias.
+    D3D12_ROOT_PARAMETER params[3]{};
+    params[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    params[0].Descriptor.ShaderRegister = 0;
+    params[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
+
+    params[1].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[1].Constants.ShaderRegister = 1;
+    params[1].Constants.Num32BitValues = 1;  // uint cascade
+    params[1].ShaderVisibility         = D3D12_SHADER_VISIBILITY_VERTEX;
+
+    params[2].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    params[2].Descriptor.ShaderRegister = 0;
+    params[2].Descriptor.RegisterSpace  = 1;
+    params[2].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
+
+    D3D12_ROOT_SIGNATURE_DESC rootDesc{};
+    rootDesc.NumParameters = _countof(params);
+    rootDesc.pParameters   = params;
+    rootDesc.Flags         = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> serialized;
+    ComPtr<ID3DBlob> errorBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized,
+                                             &errorBlob);
+    if (FAILED(hr)) {
+        std::string detail;
+        if (errorBlob)
+            detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
+                          errorBlob->GetBufferSize());
+        throw std::runtime_error("D3D12: root signature de sombras (HRESULT " +
+                                 hresultToString(hr) + ") " + detail);
+    }
+    throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                              serialized->GetBufferSize(),
+                                              IID_PPV_ARGS(&shadowRootSignature)),
+                  "ID3D12Device::CreateRootSignature(sombras)");
+
+    const std::vector<char> shadowVs = readBinaryFile("shaders/shadow.vert.dxil");
+
+    // Dos PSO porque hay dos formatos de vértice: el del motor y el que escribe
+    // el compute de skinning. shadow.vert solo lee la posición, así que basta
+    // con un elemento, pero el stride tiene que ser el que toca.
+    auto buildShadowPipeline = [&](UINT stride, ComPtr<ID3D12PipelineState>& out) {
+        const D3D12_INPUT_ELEMENT_DESC layout[] = {
+            {"TEXCOORD", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
+             D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        };
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+        psoDesc.pRootSignature        = shadowRootSignature.Get();
+        psoDesc.VS                    = {shadowVs.data(), shadowVs.size()};
+        // Sin pixel shader: el pase solo escribe profundidad.
+        psoDesc.InputLayout           = {layout, _countof(layout)};
+        psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        psoDesc.NumRenderTargets      = 0;
+        psoDesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
+        psoDesc.SampleDesc.Count      = 1;
+        psoDesc.SampleMask            = UINT_MAX;
+
+        psoDesc.RasterizerState.FillMode              = D3D12_FILL_MODE_SOLID;
+        // Sin culling en el pase de sombras: descartar caras traseras deja sin
+        // proyectar los objetos que se ven por dentro y abre huecos.
+        psoDesc.RasterizerState.CullMode              = D3D12_CULL_MODE_NONE;
+        psoDesc.RasterizerState.DepthClipEnable       = TRUE;
+        psoDesc.RasterizerState.FrontCounterClockwise = TRUE;
+        // Sesgo de profundidad contra el acné de sombra: sin él, la superficie
+        // se sombrea a sí misma en bandas.
+        psoDesc.RasterizerState.DepthBias            = 2000;
+        psoDesc.RasterizerState.SlopeScaledDepthBias = 2.0f;
+
+        psoDesc.DepthStencilState.DepthEnable    = TRUE;
+        psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+
+        (void)stride;  // el stride va en la vista del vertex buffer, no en el PSO
+        throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&out)),
+                      "ID3D12Device::CreateGraphicsPipelineState(sombras)");
+    };
+
+    buildShadowPipeline(sizeof(Vertex), shadowPipeline);
+    buildShadowPipeline(kSkinnedOutputStride, shadowSkinnedPipeline);
+}
+
+void D3D12Renderer::Impl::computeCascades()
+{
+    for (auto& matrix : cascadeMatrices)
+        matrix = glm::mat4(1.0f);
+    cascadeSplits = glm::vec4(0.0f);
+
+    const float aspect = (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
+    const glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(60.0f), aspect, 0.1f, 500.0f);
+    const glm::mat4 view = glm::lookAtRH(glm::vec3(6.0f, 4.5f, 8.0f), glm::vec3(0.0f, 0.5f, 0.0f),
+                                         glm::vec3(0.0f, 1.0f, 0.0f));
+
+    // Esquinas del frustum desproyectando el cubo NDC. z de 0 a 1, que es el
+    // rango que clipea D3D12 (y también Vulkan).
+    const glm::mat4 invViewProj = glm::inverse(proj * view);
+    glm::vec3       cornerNear[4], cornerFar[4];
+    const float     ndcX[4] = {-1.0f, 1.0f, 1.0f, -1.0f};
+    const float     ndcY[4] = {-1.0f, -1.0f, 1.0f, 1.0f};
+    for (int i = 0; i < 4; ++i) {
+        const glm::vec4 pn = invViewProj * glm::vec4(ndcX[i], ndcY[i], 0.0f, 1.0f);
+        const glm::vec4 pf = invViewProj * glm::vec4(ndcX[i], ndcY[i], 1.0f, 1.0f);
+        if (std::abs(pn.w) < 1e-8f || std::abs(pf.w) < 1e-8f)
+            return;
+        cornerNear[i] = glm::vec3(pn) / pn.w;
+        cornerFar[i]  = glm::vec3(pf) / pf.w;
+    }
+
+    const float camNear = -(view * glm::vec4(cornerNear[0], 1.0f)).z;
+    const float camFar  = -(view * glm::vec4(cornerFar[0], 1.0f)).z;
+    if (!std::isfinite(camNear) || !std::isfinite(camFar) || camNear <= 0.0f || camFar <= camNear)
+        return;
+
+    const float shadowFar = (std::min)(camFar, kShadowMaxDistance);
+    if (shadowFar <= camNear)
+        return;
+
+    const glm::vec3 lightDir = glm::normalize(lightDirection);
+    const glm::vec3 up = std::abs(lightDir.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f)
+                                                      : glm::vec3(0.0f, 1.0f, 0.0f);
+    const glm::mat4 lightRot    = glm::lookAt(glm::vec3(0.0f), lightDir, up);
+    const glm::mat4 invLightRot = glm::inverse(lightRot);
+
+    float prevDist = camNear;
+    for (int c = 0; c < kShadowCascades; ++c) {
+        const float p        = static_cast<float>(c + 1) / static_cast<float>(kShadowCascades);
+        const float logSplit = camNear * std::pow(shadowFar / camNear, p);
+        const float uniSplit = camNear + (shadowFar - camNear) * p;
+        const float dist     = kCascadeLambda * logSplit + (1.0f - kCascadeLambda) * uniSplit;
+        cascadeSplits[c]     = dist;
+
+        const float tNear = (prevDist - camNear) / (camFar - camNear);
+        const float tFar  = (dist - camNear) / (camFar - camNear);
+
+        glm::vec3 corners[8];
+        for (int i = 0; i < 4; ++i) {
+            const glm::vec3 ray = cornerFar[i] - cornerNear[i];
+            corners[i]          = cornerNear[i] + ray * tNear;
+            corners[i + 4]      = cornerNear[i] + ray * tFar;
+        }
+
+        // Esfera envolvente y no AABB: el radio no depende de hacia dónde mire
+        // la cámara, así que girar en el sitio no hace latir las sombras.
+        glm::vec3 center(0.0f);
+        for (const glm::vec3& v : corners)
+            center += v;
+        center /= 8.0f;
+        float radius = 0.0f;
+        for (const glm::vec3& v : corners)
+            radius = (std::max)(radius, glm::length(v - center));
+        radius = std::ceil(radius * 16.0f) / 16.0f;
+        if (radius < 1e-4f)
+            radius = 1e-4f;
+
+        // Snap del centro a téxeles: sin esto los bordes de sombra hierven al
+        // mover la cámara.
+        const float unitsPerTexel = (2.0f * radius) / static_cast<float>(kShadowMapSize);
+        glm::vec3   centerLS      = glm::vec3(lightRot * glm::vec4(center, 1.0f));
+        centerLS.x = std::floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
+        centerLS.y = std::floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
+        center     = glm::vec3(invLightRot * glm::vec4(centerLS, 1.0f));
+
+        const glm::mat4 lightView =
+            glm::lookAt(center - lightDir * (radius + kCasterMargin), center, up);
+        const glm::mat4 lightProj =
+            glm::orthoRH_ZO(-radius, radius, -radius, radius, 0.0f, 2.0f * radius + kCasterMargin);
+        // El camino Vulkan hace aquí lightProj[1][1] *= -1. En D3D12 NO: es la
+        // misma inversión del eje Y que ya no se aplica a la proyección de
+        // cámara, y repetirla dejaría las sombras del revés.
+        cascadeMatrices[c] = lightProj * lightView;
+
+        prevDist = dist;
+    }
+}
+
+void D3D12Renderer::Impl::recordShadowPasses()
+{
+    D3D12_RESOURCE_BARRIER toDepthWrite{};
+    toDepthWrite.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toDepthWrite.Transition.pResource   = shadowMapArrayAllocation->GetResource();
+    toDepthWrite.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    toDepthWrite.Transition.StateAfter  = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    toDepthWrite.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toDepthWrite);
+
+    D3D12_VIEWPORT shadowViewport{};
+    shadowViewport.Width    = static_cast<float>(kShadowMapSize);
+    shadowViewport.Height   = static_cast<float>(kShadowMapSize);
+    shadowViewport.MaxDepth = 1.0f;
+    const D3D12_RECT shadowScissor{0, 0, static_cast<LONG>(kShadowMapSize),
+                                   static_cast<LONG>(kShadowMapSize)};
+
+    commandList->SetGraphicsRootSignature(shadowRootSignature.Get());
+    commandList->SetGraphicsRootConstantBufferView(
+        0, sceneUboAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress());
+    commandList->RSSetViewports(1, &shadowViewport);
+    commandList->RSSetScissorRects(1, &shadowScissor);
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    for (UINT cascade = 0; cascade < kShadowCascades; ++cascade) {
+        D3D12_CPU_DESCRIPTOR_HANDLE dsv = shadowDsvHeap->GetCPUDescriptorHandleForHeapStart();
+        dsv.ptr += static_cast<SIZE_T>(cascade) * dsvSize;
+
+        commandList->OMSetRenderTargets(0, nullptr, FALSE, &dsv);
+        commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+        commandList->SetGraphicsRoot32BitConstants(1, 1, &cascade, 0);
+
+        // El suelo no se mete en el mapa: es el receptor, y meterlo solo
+        // añadiría su propia superficie como oclusor de sí misma.
+        commandList->SetPipelineState(shadowPipeline.Get());
+        commandList->SetGraphicsRootShaderResourceView(
+            2, instanceAllocation->GetResource()->GetGPUVirtualAddress());
+        commandList->IASetVertexBuffers(0, 1, &meshVertexBufferView);
+        commandList->IASetIndexBuffer(&meshIndexBufferView);
+        commandList->DrawIndexedInstanced(meshIndexCount, 1, 0, 0, 0);
+
+        if (hasSkinnedMesh) {
+            commandList->SetPipelineState(shadowSkinnedPipeline.Get());
+            commandList->SetGraphicsRootShaderResourceView(
+                2, characterInstanceAllocation->GetResource()->GetGPUVirtualAddress());
+            commandList->IASetVertexBuffers(0, 1, &skinnedVertexBufferView);
+            commandList->IASetIndexBuffer(&skinnedIndexBufferView);
+            commandList->DrawIndexedInstanced(skinnedIndexCount, 1, 0, 0, 0);
+        }
+    }
+
+    D3D12_RESOURCE_BARRIER toShaderResource = toDepthWrite;
+    toShaderResource.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    toShaderResource.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    commandList->ResourceBarrier(1, &toShaderResource);
+}
+
 void D3D12Renderer::Impl::updateViewProj()
 {
     const float aspect = (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
@@ -1465,6 +1833,11 @@ void D3D12Renderer::init(Window& window)
     d.createMeshResources();
     d.createSkinningPipelines();
     d.createSkinnedResources();
+    // Las sombras van al final: su SRV pisa el array de relleno que dejó
+    // createMeshResources en el hueco t3, y necesita el buffer de instancias
+    // del cubo ya creado.
+    d.createShadowResources();
+    d.computeCascades();
     d.updateViewProj();
 
     d.initialized = true;
@@ -1504,6 +1877,15 @@ void D3D12Renderer::drawFrame()
         d.recordSkinning();
     }
 
+    // El UBO se escribe una vez por frame y lo leen los dos pases: el de
+    // sombras necesita lightSpaceMatrix, el principal todo lo demás.
+    d.updateSceneUbo();
+
+    // Sombras antes del pase principal: triangle.frag muestrea el mapa que se
+    // graba aquí.
+    if (d.shadowPipeline)
+        d.recordShadowPasses();
+
     D3D12_RESOURCE_BARRIER toRenderTarget{};
     toRenderTarget.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     toRenderTarget.Transition.pResource   = d.renderTargets[d.frameIndex].Get();
@@ -1533,8 +1915,6 @@ void D3D12Renderer::drawFrame()
     // La malla primero: escribe profundidad y así la rejilla que va detrás
     // queda tapada donde toca.
     if (d.meshPipeline && d.meshIndexCount > 0) {
-        d.updateSceneUbo();
-
         ID3D12DescriptorHeap* heaps[] = {d.srvHeap.Get()};
         d.commandList->SetDescriptorHeaps(1, heaps);
 
@@ -1561,6 +1941,16 @@ void D3D12Renderer::drawFrame()
         d.commandList->IASetVertexBuffers(0, 1, &d.meshVertexBufferView);
         d.commandList->IASetIndexBuffer(&d.meshIndexBufferView);
         d.commandList->DrawIndexedInstanced(d.meshIndexCount, 1, 0, 0, 0);
+
+        // Suelo: el receptor de las sombras. Mismo pipeline, otra malla y otra
+        // matriz de instancia.
+        if (d.groundIndexCount > 0) {
+            d.commandList->SetGraphicsRootShaderResourceView(
+                3, d.groundInstanceAllocation->GetResource()->GetGPUVirtualAddress());
+            d.commandList->IASetVertexBuffers(0, 1, &d.groundVertexBufferView);
+            d.commandList->IASetIndexBuffer(&d.groundIndexBufferView);
+            d.commandList->DrawIndexedInstanced(d.groundIndexCount, 1, 0, 0, 0);
+        }
     }
 
     // Personaje: mismos shaders y misma root signature que el cubo, pero el
@@ -1710,6 +2100,11 @@ void D3D12Renderer::Impl::applyPendingResize()
     // El aspecto de la proyección depende del tamaño: sin esto la rejilla se
     // deforma al estirar la ventana.
     updateViewProj();
+
+    // Y las cascadas se reparten sobre el frustum de la cámara, que acaba de
+    // cambiar de forma: sin recalcularlas, los volúmenes de sombra siguen
+    // ajustados al aspecto anterior.
+    computeCascades();
 }
 
 void D3D12Renderer::setClearColor(float r, float g, float b, float a)
@@ -1772,7 +2167,9 @@ void D3D12Renderer::shutdown()
                               &d.scaleKeysAllocation, &d.boneInfosAllocation,
                               &d.inputVertsAllocation, &d.localXformsAllocation,
                               &d.finalBonesAllocation, &d.outputVertsAllocation,
-                              &d.skinnedIndexAllocation}) {
+                              &d.skinnedIndexAllocation, &d.groundVertexAllocation,
+                              &d.groundIndexAllocation, &d.groundInstanceAllocation,
+                              &d.characterInstanceAllocation, &d.shadowMapArrayAllocation}) {
         if (*allocation) {
             (*allocation)->Release();
             *allocation = nullptr;
@@ -1786,6 +2183,15 @@ void D3D12Renderer::shutdown()
     d.skinnedIndexBufferView  = {};
     d.skinnedIndexCount       = 0;
     d.hasSkinnedMesh          = false;
+
+    d.groundVertexBufferView = {};
+    d.groundIndexBufferView  = {};
+    d.groundIndexCount       = 0;
+
+    d.shadowSkinnedPipeline.Reset();
+    d.shadowPipeline.Reset();
+    d.shadowRootSignature.Reset();
+    d.shadowDsvHeap.Reset();
 
     d.skinnedMeshPipeline.Reset();
     d.skinningPipeline.Reset();
