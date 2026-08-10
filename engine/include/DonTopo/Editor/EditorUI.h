@@ -15,6 +15,7 @@
 #include "DonTopo/Editor/PropertiesPanel.h"
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/AnimatorPanel.h"
+#include "DonTopo/Editor/InputActionsPanel.h"
 #include "DonTopo/Editor/PerformancePanel.h"
 #include "DonTopo/Editor/LoadingModal.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
@@ -227,6 +228,9 @@ private:
     std::unique_ptr<ScriptEditorPanel> m_scriptEditor;
     AnimatorPanel m_animatorPanel;
     PerformancePanel m_performancePanel;
+    // Mapa de acciones de input. Su constructor carga el JSON de persistencia,
+    // así que el panel ya viene con lo de la sesión anterior al abrirlo.
+    InputActionsPanel m_inputActionsPanel;
 
     // Overlay de progreso de Load Scene. Solo lo activa reloadSceneFromJson en
     // la ruta asíncrona; el pump de main.cpp lo va actualizando cada frame.
