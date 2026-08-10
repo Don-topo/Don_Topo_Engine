@@ -1,10 +1,15 @@
 #include "DonTopo/Editor/InputActionsPanel.h"
 
+#include "DonTopo/Core/Input.h"
+#include "DonTopo/Scripting/LuaApiReference.h"
+
+#include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 
 #include <cstring>
 #include <fstream>
+#include <utility>
 
 namespace DonTopo {
 
@@ -17,11 +22,120 @@ namespace {
 
     // Longitud máxima de nombre, la de los buffers del panel.
     constexpr size_t kNameCap = 63;
+
+    // ImGuiKey -> código GLFW. Vive aquí y no en Core porque Core no puede
+    // incluir <imgui.h> (split Core/Editor): el editor traduce al guardar y
+    // Core lee ya traducido. Devuelve false si la tecla no tiene equivalente
+    // GLFW (ruedas del ratón, teclas exóticas): ese binding se sigue pintando
+    // en el panel pero no llega al mapa de runtime.
+    bool toGlfw(int imguiKey, const char*& outDevice, int& outCode)
+    {
+        // Ratón: ImGui los mete en el mismo rango de ImGuiKey que las teclas.
+        if (imguiKey >= ImGuiKey_MouseLeft && imguiKey <= ImGuiKey_MouseX2)
+        {
+            outDevice = "mouse";
+            outCode   = imguiKey - ImGuiKey_MouseLeft;   // GLFW_MOUSE_BUTTON_LEFT == 0
+            return true;
+        }
+        // Mando: se persiste sin traducir (Core no tiene API de gamepad; ver
+        // Input::takeActionDiagnostics). El código es el propio ImGuiKey.
+        if (imguiKey >= ImGuiKey_GamepadStart && imguiKey <= ImGuiKey_GamepadRStickDown)
+        {
+            outDevice = "pad";
+            outCode   = imguiKey;
+            return true;
+        }
+
+        outDevice = "key";
+        // Rangos contiguos en ambos enums.
+        if (imguiKey >= ImGuiKey_0 && imguiKey <= ImGuiKey_9)
+        { outCode = GLFW_KEY_0 + (imguiKey - ImGuiKey_0); return true; }
+        if (imguiKey >= ImGuiKey_A && imguiKey <= ImGuiKey_Z)
+        { outCode = GLFW_KEY_A + (imguiKey - ImGuiKey_A); return true; }
+        if (imguiKey >= ImGuiKey_F1 && imguiKey <= ImGuiKey_F12)
+        { outCode = GLFW_KEY_F1 + (imguiKey - ImGuiKey_F1); return true; }
+        if (imguiKey >= ImGuiKey_Keypad0 && imguiKey <= ImGuiKey_Keypad9)
+        { outCode = GLFW_KEY_KP_0 + (imguiKey - ImGuiKey_Keypad0); return true; }
+
+        switch (imguiKey)
+        {
+            case ImGuiKey_Tab:          outCode = GLFW_KEY_TAB;            return true;
+            case ImGuiKey_LeftArrow:    outCode = GLFW_KEY_LEFT;           return true;
+            case ImGuiKey_RightArrow:   outCode = GLFW_KEY_RIGHT;          return true;
+            case ImGuiKey_UpArrow:      outCode = GLFW_KEY_UP;             return true;
+            case ImGuiKey_DownArrow:    outCode = GLFW_KEY_DOWN;           return true;
+            case ImGuiKey_PageUp:       outCode = GLFW_KEY_PAGE_UP;        return true;
+            case ImGuiKey_PageDown:     outCode = GLFW_KEY_PAGE_DOWN;      return true;
+            case ImGuiKey_Home:         outCode = GLFW_KEY_HOME;           return true;
+            case ImGuiKey_End:          outCode = GLFW_KEY_END;            return true;
+            case ImGuiKey_Insert:       outCode = GLFW_KEY_INSERT;         return true;
+            case ImGuiKey_Delete:       outCode = GLFW_KEY_DELETE;         return true;
+            case ImGuiKey_Backspace:    outCode = GLFW_KEY_BACKSPACE;      return true;
+            case ImGuiKey_Space:        outCode = GLFW_KEY_SPACE;          return true;
+            case ImGuiKey_Enter:        outCode = GLFW_KEY_ENTER;          return true;
+            case ImGuiKey_Escape:       outCode = GLFW_KEY_ESCAPE;         return true;
+            case ImGuiKey_LeftCtrl:     outCode = GLFW_KEY_LEFT_CONTROL;   return true;
+            case ImGuiKey_LeftShift:    outCode = GLFW_KEY_LEFT_SHIFT;     return true;
+            case ImGuiKey_LeftAlt:      outCode = GLFW_KEY_LEFT_ALT;       return true;
+            case ImGuiKey_LeftSuper:    outCode = GLFW_KEY_LEFT_SUPER;     return true;
+            case ImGuiKey_RightCtrl:    outCode = GLFW_KEY_RIGHT_CONTROL;  return true;
+            case ImGuiKey_RightShift:   outCode = GLFW_KEY_RIGHT_SHIFT;    return true;
+            case ImGuiKey_RightAlt:     outCode = GLFW_KEY_RIGHT_ALT;      return true;
+            case ImGuiKey_RightSuper:   outCode = GLFW_KEY_RIGHT_SUPER;    return true;
+            case ImGuiKey_Menu:         outCode = GLFW_KEY_MENU;           return true;
+            case ImGuiKey_Apostrophe:   outCode = GLFW_KEY_APOSTROPHE;     return true;
+            case ImGuiKey_Comma:        outCode = GLFW_KEY_COMMA;          return true;
+            case ImGuiKey_Minus:        outCode = GLFW_KEY_MINUS;          return true;
+            case ImGuiKey_Period:       outCode = GLFW_KEY_PERIOD;         return true;
+            case ImGuiKey_Slash:        outCode = GLFW_KEY_SLASH;          return true;
+            case ImGuiKey_Semicolon:    outCode = GLFW_KEY_SEMICOLON;      return true;
+            case ImGuiKey_Equal:        outCode = GLFW_KEY_EQUAL;          return true;
+            case ImGuiKey_LeftBracket:  outCode = GLFW_KEY_LEFT_BRACKET;   return true;
+            case ImGuiKey_Backslash:    outCode = GLFW_KEY_BACKSLASH;      return true;
+            case ImGuiKey_RightBracket: outCode = GLFW_KEY_RIGHT_BRACKET;  return true;
+            case ImGuiKey_GraveAccent:  outCode = GLFW_KEY_GRAVE_ACCENT;   return true;
+            case ImGuiKey_CapsLock:     outCode = GLFW_KEY_CAPS_LOCK;      return true;
+            case ImGuiKey_ScrollLock:   outCode = GLFW_KEY_SCROLL_LOCK;    return true;
+            case ImGuiKey_NumLock:      outCode = GLFW_KEY_NUM_LOCK;       return true;
+            case ImGuiKey_PrintScreen:  outCode = GLFW_KEY_PRINT_SCREEN;   return true;
+            case ImGuiKey_Pause:        outCode = GLFW_KEY_PAUSE;          return true;
+            case ImGuiKey_KeypadDecimal:  outCode = GLFW_KEY_KP_DECIMAL;   return true;
+            case ImGuiKey_KeypadDivide:   outCode = GLFW_KEY_KP_DIVIDE;    return true;
+            case ImGuiKey_KeypadMultiply: outCode = GLFW_KEY_KP_MULTIPLY;  return true;
+            case ImGuiKey_KeypadSubtract: outCode = GLFW_KEY_KP_SUBTRACT;  return true;
+            case ImGuiKey_KeypadAdd:      outCode = GLFW_KEY_KP_ADD;       return true;
+            case ImGuiKey_KeypadEnter:    outCode = GLFW_KEY_KP_ENTER;     return true;
+            case ImGuiKey_KeypadEqual:    outCode = GLFW_KEY_KP_EQUAL;     return true;
+            default: return false;
+        }
+    }
+
+    // Publica un snippet por acción y función en el autocomplete del Script
+    // Editor. Con la lista vacía, el popup queda exactamente como antes.
+    void publishAutocomplete(const std::vector<InputActionsPanel::Action>& actions)
+    {
+        std::vector<std::string> symbols;
+        symbols.reserve(actions.size() * 3);
+        for (const auto& a : actions)
+        {
+            symbols.push_back("Input.IsActionDown(\"" + a.name + "\")");
+            symbols.push_back("Input.IsActionPressed(\"" + a.name + "\")");
+            symbols.push_back("Input.IsActionReleased(\"" + a.name + "\")");
+        }
+        setLuaApiActionSymbols(std::move(symbols));
+    }
 }
 
 InputActionsPanel::InputActionsPanel()
 {
     load();
+    // Fichero anterior a las acciones en scripting (solo "bindings"): se
+    // reescribe una vez con la traducción a GLFW ya dentro. save() se encarga
+    // también de publicar el autocomplete y de refrescar el mapa de Core.
+    if (m_needsMigrationSave)
+        save();
+    else
+        publishAutocomplete(m_actions);
 }
 
 int InputActionsPanel::findAction(const std::string& name) const
@@ -68,6 +182,10 @@ bool InputActionsPanel::load()
                 a.bindings.push_back(key);
             }
         }
+        // El panel no lee "glfw" (su modelo son ImGuiKey y de ahí se regenera):
+        // solo mira si falta, para reescribir el fichero migrado una vez.
+        if (aj.find("glfw") == aj.end())
+            m_needsMigrationSave = true;
         m_actions.push_back(std::move(a));
     }
     return true;
@@ -77,11 +195,31 @@ void InputActionsPanel::save() const
 {
     nlohmann::json actions = nlohmann::json::array();
     for (const Action& a : m_actions)
-        actions.push_back({ {"name", a.name}, {"bindings", a.bindings} });
+    {
+        // "bindings" (ImGuiKey) se sigue escribiendo igual —es lo que pinta la
+        // UI y lo que lee la versión anterior del panel— y "glfw" se añade con
+        // la traducción que Core sí entiende.
+        nlohmann::json glfw = nlohmann::json::array();
+        for (int b : a.bindings)
+        {
+            const char* device = nullptr;
+            int code = 0;
+            if (toGlfw(b, device, code))
+                glfw.push_back({ {"device", device}, {"code", code} });
+        }
+        actions.push_back({ {"name", a.name}, {"bindings", a.bindings}, {"glfw", std::move(glfw)} });
+    }
 
-    std::ofstream file(kInputActionsFile);
-    if (!file.is_open()) return;   // disco de solo lectura: se pierde el guardado, no el editor
-    file << nlohmann::json{ {"actions", std::move(actions)} }.dump(2);
+    {
+        std::ofstream file(kInputActionsFile);
+        if (!file.is_open()) return;   // disco de solo lectura: se pierde el guardado, no el editor
+        file << nlohmann::json{ {"actions", std::move(actions)} }.dump(2);
+    }   // cerrado antes de que Core lo relea
+
+    // Core relee el mapa y el Script Editor recibe los snippets: una acción
+    // recién creada vale en el siguiente Play y se autocompleta sin reiniciar.
+    Input::reloadActions();
+    publishAutocomplete(m_actions);
 }
 
 int InputActionsPanel::pollFirstPressedKey() const

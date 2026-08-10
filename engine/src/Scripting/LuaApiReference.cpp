@@ -1,8 +1,14 @@
 #include "DonTopo/Scripting/LuaApiReference.h"
 
+#include <utility>
+
 namespace DonTopo {
 
-const std::vector<std::string>& luaApiSymbols()
+namespace {
+
+// Base estática: lo que registra ScriptBindings. Las acciones del panel Input
+// Actions no van aquí — cambian en caliente, las publica el editor.
+const std::vector<std::string>& baseSymbols()
 {
     static const std::vector<std::string> symbols = {
         // Keywords Lua
@@ -36,6 +42,10 @@ const std::vector<std::string>& luaApiSymbols()
         // Input / Key / MouseButton
         "Input.IsKeyDown", "Input.IsKeyPressed", "Input.IsKeyReleased",
         "Input.IsMouseButtonDown",
+        // Acciones con nombre del panel Input Actions. Los snippets con el
+        // nombre concreto de cada acción los publica el editor aparte
+        // (setLuaApiActionSymbols).
+        "Input.IsActionDown", "Input.IsActionPressed", "Input.IsActionReleased",
         "Key.Space", "Key.Enter", "Key.Escape", "Key.Tab",
         "Key.LeftShift", "Key.LeftControl",
         "Key.Up", "Key.Down", "Key.Left", "Key.Right",
@@ -173,6 +183,31 @@ const std::vector<std::string>& luaApiSymbols()
         "Vec3.new",
     };
     return symbols;
+}
+
+// Snippets por acción publicados por el editor; vacío en el runtime exportado.
+std::vector<std::string> g_actionSymbols;
+// base + dinámicas; se reconstruye solo cuando cambian las dinámicas.
+std::vector<std::string> g_combined;
+bool g_combinedDirty = true;
+
+} // namespace
+
+const std::vector<std::string>& luaApiSymbols()
+{
+    if (g_combinedDirty)
+    {
+        g_combined = baseSymbols();
+        g_combined.insert(g_combined.end(), g_actionSymbols.begin(), g_actionSymbols.end());
+        g_combinedDirty = false;
+    }
+    return g_combined;
+}
+
+void setLuaApiActionSymbols(std::vector<std::string> symbols)
+{
+    g_actionSymbols = std::move(symbols);
+    g_combinedDirty = true;
 }
 
 } // namespace DonTopo

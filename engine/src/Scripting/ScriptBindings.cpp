@@ -28,6 +28,7 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <set>
 #include <tuple>
 
 namespace DonTopo::ScriptBindings
@@ -212,13 +213,33 @@ namespace DonTopo::ScriptBindings
             };
         }
 
-        void registerInput(sol::state& lua)
+        void registerInput(ScriptManager& mgr)
         {
+            sol::state& lua = mgr.lua();
             sol::table input = lua.create_named_table("Input");
             input["IsKeyDown"]          = [](int k) { return Input::isKeyDown(k); };
             input["IsKeyPressed"]       = [](int k) { return Input::isKeyPressed(k); };
             input["IsKeyReleased"]      = [](int k) { return Input::isKeyReleased(k); };
             input["IsMouseButtonDown"]  = [](int b) { return Input::isMouseButtonDown(b); };
+
+            // Acciones con nombre del panel Input Actions. Un nombre desconocido
+            // devuelve false y avisa UNA vez por nombre y sesión: la llamada
+            // típica vive en Update() y un aviso por frame ahogaría el Log.
+            auto warned = std::make_shared<std::set<std::string>>();
+            auto known  = [&mgr, warned](const std::string& name) {
+                const bool ok = Input::hasAction(name);   // fuerza la carga perezosa del mapa
+                // Avisos de la carga (bindings de mando ignorados): la lista se
+                // vacía al leerla, así que salen una sola vez.
+                for (const std::string& d : Input::takeActionDiagnostics())
+                    mgr.log("[Lua][WARN] " + d);
+                if (!ok && warned->insert(name).second)
+                    mgr.log("[Lua][WARN] Input: no existe la accion '" + name +
+                            "' (definela en el panel Input Actions)");
+                return ok;
+            };
+            input["IsActionDown"]     = [known](const std::string& n) { return known(n) && Input::isActionDown(n); };
+            input["IsActionPressed"]  = [known](const std::string& n) { return known(n) && Input::isActionPressed(n); };
+            input["IsActionReleased"] = [known](const std::string& n) { return known(n) && Input::isActionReleased(n); };
 
             sol::table key = lua.create_named_table("Key");
             key["Space"]  = GLFW_KEY_SPACE;  key["Enter"] = GLFW_KEY_ENTER;
@@ -1219,7 +1240,7 @@ namespace DonTopo::ScriptBindings
     {
         registerVec3(mgr.lua());
         registerLog(mgr);
-        registerInput(mgr.lua());
+        registerInput(mgr);
         registerTransform(mgr);
         registerComponents(mgr);
         registerUi(mgr);      // antes que Entity: sus getters devuelven estos tipos

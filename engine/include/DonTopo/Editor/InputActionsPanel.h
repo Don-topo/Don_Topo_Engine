@@ -57,6 +57,10 @@ private:
     // Índice de la acción a la espera de binding, o -1 si no hay escucha.
     int  m_listeningIndex = -1;
 
+    // El fichero cargado venía sin el array "glfw" (anterior a las acciones en
+    // scripting): se reescribe una vez, migrado, nada más cargarlo.
+    bool m_needsMigrationSave = false;
+
     // Aviso mostrado en el propio panel (nombre duplicado, nombre vacío...).
     // Se limpia en cuanto la operación que lo provocó vuelve a intentarse.
     std::string m_warning;
