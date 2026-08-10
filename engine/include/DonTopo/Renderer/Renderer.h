@@ -35,6 +35,32 @@ namespace DonTopo {
     class ScriptManager;
 
     class Renderer {
+        // --- API de edicion (solo la consume DonTopoEditor) ---
+        //
+        // Tras el split Core/Editor la frontera es de build (dos targets), no
+        // de API: estos publicos siguen siendo alcanzables desde cualquier
+        // punto de Core aunque se diseñaron para el editor. Se listan aqui
+        // porque un futuro punto de extension saldria de esta lista, y porque
+        // el proximo lector necesita saber que NO son para el runtime:
+        //
+        //   setUiLayer                        inyeccion de la capa ImGui
+        //   setViewportSize / viewportAspect  el render va a un panel, no a la ventana
+        //   setOutlineTarget                  outline de la seleccion
+        //   removeMeshComponent               borrar un asset en uso desde el Content Browser
+        //   replaceStaticTextureWithMissing   idem, textura -> placeholder
+        //   rebuildSkinnedMesh                reimportar un FBX con el editor abierto
+        //   requestProbeBake / ...All         bakeo de probes (herramienta de autor)
+        //   setPerfCaptureEnabled             captura del PerformancePanel
+        //
+        // Lo que NO entra, aunque hoy solo lo llame el editor: los get/set de
+        // calidad grafica (bloom, fog, ssao, ssr, taa, msaa, ssaa, fxaa,
+        // forward+) y los contadores de stats. Un juego exportado tiene
+        // motivos legitimos para tocarlos desde su menu de opciones; capar ahi
+        // seria cerrar la puerta al caso de uso, no ordenar la frontera.
+        //
+        // Ojo con dos que la memoria del proyecto daba por solo-editor y no lo
+        // son: registerGameObject y flushUploadsAndWait los llama tambien
+        // runtime/main.cpp.
         public:
             Renderer()                              = default;
             ~Renderer();

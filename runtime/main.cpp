@@ -476,6 +476,11 @@ int main(int argc, char** argv)
                 // árbol viejo ya no está (parpadeo).
                 renderer.flushUploadsAndWait();
                 renderer.setSceneRoot(&scene.getRoot());
+                // El near/far salio de las mallas de la escena de arranque
+                // (initSceneResources): sin recalcularlo, una escena cargada por
+                // script mas grande se ve recortada — el skybox el primero.
+                // Mismo motivo por el que EditorUI lo llama al recargar.
+                renderer.refitCameraRange();
                 // El alive set de Lua guardaba punteros de la escena vieja y los
                 // GameObject nuevos pueden reusar esas direcciones.
                 scriptManager.rebuildAliveSet();
