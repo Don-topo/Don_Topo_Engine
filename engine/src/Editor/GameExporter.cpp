@@ -540,6 +540,21 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                  "; el juego exportado arrancara sin splash screen.");
     }
 
+    // Mapa de acciones del panel Input Actions: Input lo lee como
+    // "input_actions.json" relativo al CWD, así que va junto al .exe. Se coge
+    // del CWD del editor (es donde lo escribe el panel, junto al imgui.ini) y
+    // no de projectRoot. Faltar es AVISO: sin él las acciones quedan vacías y
+    // Input.IsActionDown devuelve false, pero el juego arranca igual.
+    {
+        const fs::path actions = fs::current_path() / "input_actions.json";
+        std::error_code aec;
+        if (fs::exists(actions, aec) && !aec)
+            ok = copyOne(actions, pkg / "input_actions.json") && ok;
+        else
+            r.messages.push_back("Aviso: no se encontro " + actions.string() +
+                                 "; el juego exportado no tendra acciones de input definidas.");
+    }
+
     // shaders/*.spv a la raíz del paquete: Renderer::createPipeline los abre
     // como "shaders/<nombre>.spv" relativo al CWD.
     //

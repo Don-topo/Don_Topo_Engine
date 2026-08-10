@@ -37,13 +37,30 @@ namespace {
             outCode   = imguiKey - ImGuiKey_MouseLeft;   // GLFW_MOUSE_BUTTON_LEFT == 0
             return true;
         }
-        // Mando: se persiste sin traducir (Core no tiene API de gamepad; ver
-        // Input::takeActionDiagnostics). El código es el propio ImGuiKey.
+        // Mando: solo los botones digitales tienen equivalente en GLFW. Los
+        // gatillos analógicos (L2/R2) y los sticks son ejes, no botones: se
+        // siguen viendo en el panel pero no llegan al mapa de runtime.
         if (imguiKey >= ImGuiKey_GamepadStart && imguiKey <= ImGuiKey_GamepadRStickDown)
         {
             outDevice = "pad";
-            outCode   = imguiKey;
-            return true;
+            switch (imguiKey)
+            {
+                case ImGuiKey_GamepadStart:     outCode = GLFW_GAMEPAD_BUTTON_START;         return true;
+                case ImGuiKey_GamepadBack:      outCode = GLFW_GAMEPAD_BUTTON_BACK;          return true;
+                case ImGuiKey_GamepadFaceDown:  outCode = GLFW_GAMEPAD_BUTTON_A;             return true;
+                case ImGuiKey_GamepadFaceRight: outCode = GLFW_GAMEPAD_BUTTON_B;             return true;
+                case ImGuiKey_GamepadFaceLeft:  outCode = GLFW_GAMEPAD_BUTTON_X;             return true;
+                case ImGuiKey_GamepadFaceUp:    outCode = GLFW_GAMEPAD_BUTTON_Y;             return true;
+                case ImGuiKey_GamepadDpadLeft:  outCode = GLFW_GAMEPAD_BUTTON_DPAD_LEFT;     return true;
+                case ImGuiKey_GamepadDpadRight: outCode = GLFW_GAMEPAD_BUTTON_DPAD_RIGHT;    return true;
+                case ImGuiKey_GamepadDpadUp:    outCode = GLFW_GAMEPAD_BUTTON_DPAD_UP;       return true;
+                case ImGuiKey_GamepadDpadDown:  outCode = GLFW_GAMEPAD_BUTTON_DPAD_DOWN;     return true;
+                case ImGuiKey_GamepadL1:        outCode = GLFW_GAMEPAD_BUTTON_LEFT_BUMPER;   return true;
+                case ImGuiKey_GamepadR1:        outCode = GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER;  return true;
+                case ImGuiKey_GamepadL3:        outCode = GLFW_GAMEPAD_BUTTON_LEFT_THUMB;    return true;
+                case ImGuiKey_GamepadR3:        outCode = GLFW_GAMEPAD_BUTTON_RIGHT_THUMB;   return true;
+                default: return false;   // L2/R2 y sticks: ejes, no botones
+            }
         }
 
         outDevice = "key";

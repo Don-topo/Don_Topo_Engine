@@ -18,6 +18,8 @@ namespace DonTopo
     std::array<bool, 349> Input::s_prev{};
     std::array<bool, 8>   Input::s_mCurr{};
     std::array<bool, 8>   Input::s_mPrev{};
+    std::array<bool, 15>  Input::s_padCurr{};
+    std::array<bool, 15>  Input::s_padPrev{};
 
     std::unordered_map<std::string, std::vector<ActionBinding>> Input::s_actions;
     bool Input::s_actionsLoaded = false;
@@ -35,6 +37,21 @@ namespace DonTopo
         s_mPrev = s_mCurr;
         for (int b = 0; b <= GLFW_MOUSE_BUTTON_LAST; ++b)
             s_mCurr[b] = glfwGetMouseButton(s_window, b) == GLFW_PRESS;
+
+        // Primer mando conectado con mapeo conocido. Sin mando, todo a false:
+        // desconectarlo a mitad de partida suelta los botones, no los deja
+        // pegados (y el frame siguiente da el flanco de subida).
+        s_padPrev = s_padCurr;
+        GLFWgamepadstate pad{};
+        if (glfwJoystickIsGamepad(GLFW_JOYSTICK_1) && glfwGetGamepadState(GLFW_JOYSTICK_1, &pad))
+        {
+            for (int b = 0; b <= GLFW_GAMEPAD_BUTTON_LAST; ++b)
+                s_padCurr[b] = pad.buttons[b] == GLFW_PRESS;
+        }
+        else
+        {
+            s_padCurr.fill(false);
+        }
     }
 
     bool Input::isKeyDown(int key)
@@ -84,7 +101,6 @@ namespace DonTopo
             // Solo "glfw": "bindings" son valores de ImGuiKey que Core no sabe
             // traducir. Una acción sin "glfw" existe pero no dispara nunca.
             std::vector<ActionBinding> bindings;
-            bool ignoredPad = false;
             auto glfwIt = aj.find("glfw");
             if (glfwIt != aj.end() && glfwIt->is_array())
             {
@@ -101,15 +117,11 @@ namespace DonTopo
                     b.code = codeIt->get<int>();
                     if (device == "key")        b.device = ActionDevice::Key;
                     else if (device == "mouse") b.device = ActionDevice::Mouse;
-                    else if (device == "pad")   { b.device = ActionDevice::Pad; ignoredPad = true; }
+                    else if (device == "pad")   b.device = ActionDevice::Pad;
                     else continue;
                     bindings.push_back(b);
                 }
             }
-
-            if (ignoredPad)
-                s_actionDiagnostics.push_back("[Input] accion '" + name +
-                    "': binding de mando ignorado (Input no tiene API de gamepad todavia)");
 
             s_actions[name] = std::move(bindings);
         }
@@ -144,7 +156,8 @@ namespace DonTopo
         {
             if (b.device == ActionDevice::Key && isKeyDown(b.code)) return true;
             if (b.device == ActionDevice::Mouse && isMouseButtonDown(b.code)) return true;
-            // Pad: se ignora en runtime (ver diagnostics).
+            if (b.device == ActionDevice::Pad && b.code >= 0 && b.code <= GLFW_GAMEPAD_BUTTON_LAST
+                && s_padCurr[b.code]) return true;
         }
         return false;
     }
@@ -159,6 +172,8 @@ namespace DonTopo
             if (b.device == ActionDevice::Key && isKeyPressed(b.code)) return true;
             if (b.device == ActionDevice::Mouse && b.code >= 0 && b.code <= GLFW_MOUSE_BUTTON_LAST
                 && s_mCurr[b.code] && !s_mPrev[b.code]) return true;
+            if (b.device == ActionDevice::Pad && b.code >= 0 && b.code <= GLFW_GAMEPAD_BUTTON_LAST
+                && s_padCurr[b.code] && !s_padPrev[b.code]) return true;
         }
         return false;
     }
@@ -173,6 +188,8 @@ namespace DonTopo
             if (b.device == ActionDevice::Key && isKeyReleased(b.code)) return true;
             if (b.device == ActionDevice::Mouse && b.code >= 0 && b.code <= GLFW_MOUSE_BUTTON_LAST
                 && !s_mCurr[b.code] && s_mPrev[b.code]) return true;
+            if (b.device == ActionDevice::Pad && b.code >= 0 && b.code <= GLFW_GAMEPAD_BUTTON_LAST
+                && !s_padCurr[b.code] && s_padPrev[b.code]) return true;
         }
         return false;
     }

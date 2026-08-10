@@ -61,6 +61,10 @@ private:
     // isMouseButtonDown consulta GLFW directo y no da flancos.
     static std::array<bool, 8> s_mCurr;
     static std::array<bool, 8> s_mPrev;
+    // GLFW_GAMEPAD_BUTTON_LAST+1 entradas, del primer mando conectado. Solo lo
+    // consumen las acciones: no hay API pública de gamepad todavía.
+    static std::array<bool, 15> s_padCurr;
+    static std::array<bool, 15> s_padPrev;
 
     static std::unordered_map<std::string, std::vector<ActionBinding>> s_actions;
     static bool s_actionsLoaded;
