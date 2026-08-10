@@ -31,9 +31,42 @@ foreach(SHADER ${GLSL_SOURCES})
         COMMENT "Compiling shader ${SHADER_NAME}"
     )
     list(APPEND SPV_FILES ${SPV_OUT})
+
+    # Rama DX12: SPIR-V -> HLSL (spirv-cross) -> DXIL (dxc). Cuelga del .spv, no
+    # del .glsl, para no compilar el GLSL dos veces y para que el HLSL sea
+    # siempre traducción de EXACTAMENTE el mismo SPIR-V que usa Vulkan.
+    #
+    # --shader-model 60 es el mínimo que mapea los descriptor sets de Vulkan a
+    # register spaces de HLSL (layout(set=N) -> space N); por debajo de 5.1 no
+    # hay spaces y la traducción de pbr.frag, con 8 sets, colisionaría.
+    if(DTE_ENABLE_D3D12)
+        get_filename_component(SHADER_EXT ${SHADER} EXT)
+        if(SHADER_EXT STREQUAL ".vert")
+            set(DXC_PROFILE vs_6_0)
+        elseif(SHADER_EXT STREQUAL ".frag")
+            set(DXC_PROFILE ps_6_0)
+        elseif(SHADER_EXT STREQUAL ".comp")
+            set(DXC_PROFILE cs_6_0)
+        else()
+            message(FATAL_ERROR "Extensión de shader sin perfil DXC: ${SHADER}")
+        endif()
+
+        set(HLSL_OUT "${CMAKE_BINARY_DIR}/hlsl/${SHADER_NAME}.hlsl")
+        set(DXIL_OUT "${CMAKE_BINARY_DIR}/dxil/${SHADER_NAME}.dxil")
+        add_custom_command(
+            OUTPUT  ${DXIL_OUT}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/hlsl
+            COMMAND ${SPIRV_CROSS} --hlsl --shader-model 60 ${SPV_OUT} --output ${HLSL_OUT}
+            COMMAND ${DXC} -T ${DXC_PROFILE} -E main ${HLSL_OUT} -Fo ${DXIL_OUT}
+            DEPENDS ${SPV_OUT}
+            BYPRODUCTS ${HLSL_OUT}
+            COMMENT "Translating shader ${SHADER_NAME} to DXIL (${DXC_PROFILE})"
+        )
+        list(APPEND DXIL_FILES ${DXIL_OUT})
+    endif()
 endforeach()
 
-add_custom_target(Shaders ALL DEPENDS ${SPV_FILES})
+add_custom_target(Shaders ALL DEPENDS ${SPV_FILES} ${DXIL_FILES})
 add_dependencies(Sandbox Shaders)
 
 # Copiar assets al lado del ejecutable
@@ -55,6 +88,21 @@ add_custom_command(TARGET Sandbox POST_BUILD
         ${CMAKE_SOURCE_DIR}/shaders
     COMMENT "Copying compiled shaders to output directory and project shaders/"
 )
+
+# Los .dxil van a los mismos dos sitios que los .spv, para que el backend DX12
+# encuentre sus shaders con las mismas rutas relativas al directorio de trabajo.
+if(DTE_ENABLE_D3D12)
+    add_custom_command(TARGET Sandbox POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUT_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_BINARY_DIR}/dxil
+            ${SHADER_OUT_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_BINARY_DIR}/dxil
+            ${CMAKE_SOURCE_DIR}/shaders
+        COMMENT "Copying compiled DXIL shaders to output directory and project shaders/"
+    )
+endif()
 
 # Sembrar imgui.ini por defecto (layout del editor) solo si el ejecutable
 # todavía no tiene uno propio — así un clone+build nuevo arranca con un

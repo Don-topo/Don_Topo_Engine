@@ -16,6 +16,7 @@ third_party/fmod/
 
 # Compiled shaders
 shaders/*.spv
+shaders/*.dxil
 
 # CMake generated (in build dir, already covered by build/ — listed explicitly
 # for in-source build users)

@@ -33,6 +33,48 @@ FetchContent_MakeAvailable(glm)
 # Vulkan SDK — install from https://vulkan.lunarg.com/sdk/home
 find_package(Vulkan REQUIRED)
 
+# ─── DirectX 12 ──────────────────────────────────────────────────────────────
+# Segundo backend de render, elegible por el usuario. Esto solo decide si se
+# COMPILA; Vulkan sigue siendo el camino por defecto en tiempo de ejecución.
+option(DTE_ENABLE_D3D12 "Compilar el backend de render DirectX 12 (solo Windows)" ON)
+
+if(DTE_ENABLE_D3D12 AND NOT WIN32)
+    message(STATUS "DTE_ENABLE_D3D12: desactivado — el backend DirectX 12 solo existe en Windows")
+    set(DTE_ENABLE_D3D12 OFF)
+endif()
+
+if(DTE_ENABLE_D3D12)
+    # d3d12 / dxgi / dxguid vienen con el Windows SDK que ya usa MSVC: no hay
+    # nada que descargar ni que buscar, basta con enlazarlas.
+
+    # Shaders para DX12: los .vert/.frag/.comp de shaders/ siguen siendo la
+    # ÚNICA fuente. spirv-cross traduce a HLSL el SPIR-V que ya genera glslc y
+    # dxc lo baja a DXIL. Los dos binarios vienen dentro del Vulkan SDK, así que
+    # esta ruta no añade ninguna dependencia externa.
+    find_program(SPIRV_CROSS spirv-cross HINTS $ENV{VULKAN_SDK}/Bin)
+    find_program(DXC dxc HINTS $ENV{VULKAN_SDK}/Bin)
+    if(NOT SPIRV_CROSS OR NOT DXC)
+        message(FATAL_ERROR
+            "DTE_ENABLE_D3D12=ON pero faltan las herramientas de shaders:\n"
+            "  spirv-cross: ${SPIRV_CROSS}\n"
+            "  dxc:         ${DXC}\n"
+            "Ambas se instalan con el Vulkan SDK (VULKAN_SDK/Bin). Para compilar "
+            "solo el backend Vulkan, reconfigura con -DDTE_ENABLE_D3D12=OFF.")
+    endif()
+
+    # D3D12MemoryAllocator — el equivalente de VulkanMemoryAllocator para DX12
+    # (suballocation sobre heaps). Sin él cada recurso sería un committed
+    # resource propio, con la alineación mínima de 64 KB por recurso.
+    set(D3D12MA_BUILD_SAMPLE OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        D3D12MemoryAllocator
+        GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator.git
+        GIT_TAG        v3.0.1
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(D3D12MemoryAllocator)
+endif()
+
 # FMOD SDK — install from https://www.fmod.com/download, set FMOD_DIR
 # Not REQUIRED here: FMOD may not be installed yet.
 # Pass -DFMOD_DIR=<install_root> to cmake or set the FMOD_DIR environment variable.

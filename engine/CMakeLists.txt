@@ -85,6 +85,17 @@ if(PHYSX_FOUND)
     target_compile_definitions(DonTopoCore PUBLIC DT_PHYSX_ENABLED)
 endif()
 
+# Backend DirectX 12. Las libs van PRIVATE porque ningún header público de
+# DonTopoCore incluye d3d12.h — mismo criterio que freetype/msdfgen. El define
+# sí es PUBLIC: el editor lo necesita para saber si puede ofrecer el backend.
+if(DTE_ENABLE_D3D12)
+    target_sources(DonTopoCore PRIVATE
+        src/Renderer/D3D12/D3D12Support.cpp
+    )
+    target_link_libraries(DonTopoCore PRIVATE d3d12 dxgi dxguid D3D12MemoryAllocator)
+    target_compile_definitions(DonTopoCore PUBLIC DT_D3D12_ENABLED)
+endif()
+
 target_compile_features(DonTopoCore PUBLIC cxx_std_20)
 
 # ScriptBindings.cpp registra muchos usertypes de sol2 en una sola TU: el

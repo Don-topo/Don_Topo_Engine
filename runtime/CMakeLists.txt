@@ -56,3 +56,14 @@ add_custom_command(TARGET DonTopoRuntime POST_BUILD
         $<TARGET_FILE_DIR:DonTopoRuntime>/assets
     COMMENT "Copying shaders and assets next to DonTopoRuntime"
 )
+
+# Mismos shaders, otra representación: el runtime arranca con el backend que
+# diga su configuración, así que necesita los DXIL al lado de los SPIR-V.
+if(DTE_ENABLE_D3D12)
+    add_custom_command(TARGET DonTopoRuntime POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_BINARY_DIR}/dxil
+            $<TARGET_FILE_DIR:DonTopoRuntime>/shaders
+        COMMENT "Copying DXIL shaders next to DonTopoRuntime"
+    )
+endif()
