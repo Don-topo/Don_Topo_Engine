@@ -193,6 +193,11 @@ Renderer::FpMode fpModeFromName(const std::string& name, bool& ok)
 ProjectContext::ViewSettings EditorUI::currentSettings()
 {
     ProjectContext::ViewSettings s;
+
+    // El backend NO sale del Renderer: es el que el usuario ha elegido para el
+    // próximo arranque, que puede no ser con el que corre este proceso.
+    s.renderBackend = renderBackendName(m_selectedBackend);
+
     if (m_renderer)
     {
         s.ambient = m_renderer->ambientEnabled();
@@ -325,6 +330,19 @@ void EditorUI::applyProjectSettings()
         m_logPanel.push("Modo de Forward+ desconocido en el proyecto ('" + s.fpMode + "'): se usa Off");
     m_renderer->setForwardPlusMode(fp);
     m_renderer->setForwardPlusLightRadius(s.fpLightRadius);
+
+    // Backend de render: se LEE pero no se aplica. El device de este proceso ya
+    // está creado —el selector de proyecto se dibuja sobre él—, así que lo único
+    // que se puede hacer es dejarlo elegido para el próximo arranque y avisar.
+    bool backendOk = true;
+    m_selectedBackend = renderBackendFromName(s.renderBackend, backendOk);
+    if (!backendOk)
+        m_logPanel.push("Backend de render desconocido en el proyecto ('" + s.renderBackend +
+                        "'): se usa Vulkan");
+    if (m_selectedBackend != m_activeBackend)
+        m_logPanel.push(std::string("Este proyecto pide el backend ") +
+                        renderBackendName(m_selectedBackend) + " y el editor está corriendo con " +
+                        renderBackendName(m_activeBackend) + ": reinicia para aplicarlo");
 
     // Visibilidad de panel: el project.json manda sobre imgui.ini en QUÉ paneles
     // están abiertos; el layout (docking, tamaños) lo sigue llevando imgui.ini.
@@ -939,6 +957,40 @@ void EditorUI::drawMenuBar()
                                            "%u celdas desbordadas (pierden luces)", overflow);
                 }
             }
+
+            // Backend de render. El único ajuste de este menú que NO se aplica
+            // al tocarlo: device, swapchain y todos los recursos de GPU cuelgan
+            // del backend, así que solo puede cambiar en el arranque. Se guarda
+            // en el project.json y el editor arranca con el del último proyecto
+            // abierto (ProjectContext::readLastProject).
+            //
+            // Se ofrecen SIEMPRE las dos opciones, aunque este build no traiga
+            // DX12 o la máquina no lo soporte: el aviso explica el motivo y el
+            // arranque se cae a Vulkan. Esconder la opción solo dejaría al
+            // usuario sin saber por qué no está.
+            ImGui::Separator();
+            const char* backendNames[] = { "Vulkan", "DirectX 12" };
+            int backendCurrent = (int)m_selectedBackend;
+            ImGui::SetNextItemWidth(140.0f);
+            if (ImGui::Combo("Render backend", &backendCurrent, backendNames,
+                             IM_ARRAYSIZE(backendNames)))
+            {
+                // Se guarda el NOMBRE, no este índice: ver renderBackendName().
+                m_selectedBackend = (RenderBackend)backendCurrent;
+                saveProjectSettings();
+                if (m_selectedBackend != m_activeBackend)
+                    m_logPanel.push(std::string("Backend de render cambiado a ") +
+                                    renderBackendName(m_selectedBackend) +
+                                    ": reinicia el editor para aplicarlo");
+            }
+
+            if (m_selectedBackend != m_activeBackend)
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                                   "Requiere reiniciar (ahora: %s)",
+                                   renderBackendName(m_activeBackend));
+            else
+                ImGui::TextDisabled("En uso: %s", renderBackendName(m_activeBackend));
+
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();

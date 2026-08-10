@@ -55,6 +55,10 @@ public:
         // no puede cambiar el ajuste guardado de nadie.
         std::string aaMode = "None";
         std::string fpMode = "Off";
+        // Backend de render. No se aplica al leerlo: el device ya está creado
+        // cuando se abre el proyecto, así que solo surte efecto en el arranque
+        // siguiente (ver readLastProject). Nombres en RenderBackend.h.
+        std::string renderBackend = "Vulkan";
 
         float ambientIntensity = 0.0f;
         float bloomThreshold   = 0.0f;
@@ -108,6 +112,26 @@ public:
 
     // Version de la propia seccion "settings", independiente de kProjectVersion.
     static constexpr const char* kSettingsVersion = "1.0";
+
+    // --- Estado del editor (editor.json, junto al ejecutable) -------------
+    //
+    // El backend de render se guarda POR PROYECTO, pero el Renderer se crea
+    // antes de que el usuario elija proyecto: al arrancar, el editor todavia no
+    // sabe de que project.json leerlo. Por eso recuerda aqui cual fue el ultimo
+    // proyecto abierto, y de ese saca el backend con el que arranca.
+    //
+    // Es estado del editor, no del proyecto: no viaja con el, no se exporta y
+    // perderlo solo significa volver a arrancar en Vulkan.
+
+    // Ruta del ultimo proyecto abierto. Vacia si no hay editor.json, si esta
+    // corrupto, o si la carpeta que apunta ya no existe (proyecto borrado o
+    // movido): en todos esos casos el arranque se cae a Vulkan sin quejarse.
+    static std::filesystem::path readLastProject();
+
+    // Recuerda `projectDir` como ultimo proyecto abierto. Misma escritura
+    // atomica que writeSettings (temporal + rename). Devuelve false sin tocar
+    // el fichero anterior si algo falla; nadie debe abortar por eso.
+    static bool writeLastProject(const std::filesystem::path& projectDir);
 
     ProjectContext() = default;
     explicit ProjectContext(const std::filesystem::path& root);

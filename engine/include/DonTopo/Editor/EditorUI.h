@@ -20,6 +20,7 @@
 #include "DonTopo/Editor/LoadingModal.h"
 #include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
+#include "DonTopo/Renderer/RenderBackend.h"
 #include "DonTopo/Renderer/UiLayer.h"
 
 namespace IGFD { class FileDialog; }
@@ -131,6 +132,11 @@ public:
     // Proyecto elegido, no-propietario (vive en main()). Viaja a los paneles por
     // EditorContext::project: es el que decide qué rutas se pueden leer/escribir.
     void setProject(const ProjectContext* project) { m_project = project; }
+
+    // Backend con el que ARRANCÓ este proceso, que main() ya resolvió antes de
+    // crear el Renderer. El combo del menú View lo compara con el elegido para
+    // saber si hace falta reiniciar; el editor nunca lo cambia en caliente.
+    void setActiveRenderBackend(RenderBackend backend) { m_activeBackend = backend; }
 
     // Abre la escena de arranque del proyecto (ProjectContext::kStartupScene), la
     // que create() deja hecha: vacía, así que al entrar solo se ve el skybox. Va
@@ -287,6 +293,13 @@ private:
     // Último proyecto cuyos ajustes del menú View ya se aplicaron. Distinto de
     // m_project => toca aplicar (una vez por apertura de proyecto).
     const ProjectContext*  m_appliedProject = nullptr;
+
+    // Backend de render. Dos valores a propósito, porque no tienen por qué
+    // coincidir: m_activeBackend es con el que se creó el device de ESTE
+    // proceso, y m_selectedBackend el que el proyecto pide para el PRÓXIMO
+    // arranque. Mientras difieran, el menú View enseña el aviso de reinicio.
+    RenderBackend m_activeBackend   = RenderBackend::Vulkan;
+    RenderBackend m_selectedBackend = RenderBackend::Vulkan;
 
     // Backend de ImGui. El device se guarda en initUi porque shutdownUi lo
     // necesita para liberar el pool y ahí ya no hay InitInfo.

@@ -4,6 +4,7 @@
 add_library(DonTopoCore STATIC
     src/Core/Engine.cpp
     src/Core/Window.cpp
+    src/Renderer/RenderBackend.cpp
     src/Renderer/Renderer.cpp
     src/Renderer/Skybox.cpp
     src/Renderer/SplashScreen.cpp

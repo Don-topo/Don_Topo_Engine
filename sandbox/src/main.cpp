@@ -42,6 +42,31 @@ int main()
         DonTopo::EditorUI  editor;
         DonTopo::Renderer& renderer = editor.renderer();
 
+        // Backend de render. Se decide AQUÍ, antes de crear nada de GPU, porque
+        // el device cuelga de él. El ajuste vive en el project.json, pero el
+        // proyecto todavía no se ha elegido (su selector se dibuja con ImGui, o
+        // sea con el Renderer ya en marcha): por eso se lee del último proyecto
+        // abierto, que es lo que recuerda editor.json.
+        //
+        // resolveRenderBackend nunca falla: lo que no se pueda arrancar se cae a
+        // Vulkan con un motivo, que se guarda para el Log en cuanto exista.
+        DonTopo::RenderBackend requestedBackend = DonTopo::RenderBackend::Vulkan;
+        const std::filesystem::path lastProject = DonTopo::ProjectContext::readLastProject();
+        if (!lastProject.empty())
+        {
+            const DonTopo::ProjectContext::ViewSettings last =
+                DonTopo::ProjectContext::readSettings(lastProject, {});
+            bool backendOk    = true;
+            requestedBackend  = DonTopo::renderBackendFromName(last.renderBackend, backendOk);
+            if (!backendOk)
+                requestedBackend = DonTopo::RenderBackend::Vulkan;
+        }
+
+        const DonTopo::BackendSelection backend = DonTopo::resolveRenderBackend(requestedBackend);
+        editor.setActiveRenderBackend(backend.backend);
+        if (backend.fellBack)
+            editor.pushExternalLog(backend.message);
+
         // scene.shutdown(physics, audio) libera explícitamente los colliders/
         // audioclips de la escena antes de destruir physics/audio (ver más abajo).
         // physics/audio se siguen declarando antes que scene como red de
@@ -381,6 +406,10 @@ int main()
             // A partir de aquí el editor arranca exactamente como siempre, ya
             // con el proyecto puesto: es lo único que cambia respecto a antes.
             editor.setProject(&project);
+            // Se recuerda para el PRÓXIMO arranque: es de este project.json de
+            // donde saldrá el backend de render. Si falla no se aborta nada —el
+            // único efecto es volver a arrancar en Vulkan.
+            DonTopo::ProjectContext::writeLastProject(chosen);
             // Y con SU escena, no con la de demo que se montó en el arranque:
             // en un proyecto recién creado está vacía, así que se entra viendo
             // solo el skybox.

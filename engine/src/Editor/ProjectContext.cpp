@@ -104,6 +104,7 @@ nlohmann::json defaultSettingsJson()
     s["fog"]     = def.fog;
     s["aaMode"]  = def.aaMode;
     s["fpMode"]  = def.fpMode;
+    s["renderBackend"] = def.renderBackend;
     return s;
 }
 
@@ -119,6 +120,7 @@ nlohmann::json settingsToJson(const ProjectContext::ViewSettings& s)
     j["fog"]     = s.fog;
     j["aaMode"]  = s.aaMode;
     j["fpMode"]  = s.fpMode;
+    j["renderBackend"] = s.renderBackend;
 
     j["ambientIntensity"] = s.ambientIntensity;
     j["bloomThreshold"]   = s.bloomThreshold;
@@ -175,6 +177,7 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
     s.fog        = def.fog;
     s.aaMode     = def.aaMode;
     s.fpMode     = def.fpMode;
+    s.renderBackend = def.renderBackend;
     s.loadFailed = false;
     s.unknownEnum.clear();
     for (int i = 0; i < ViewSettings::PanelCount; ++i)
@@ -208,6 +211,7 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
     s.fog     = readBoolField(v, "fog", s.fog);
     s.aaMode  = readStringField(v, "aaMode", s.aaMode);
     s.fpMode  = readStringField(v, "fpMode", s.fpMode);
+    s.renderBackend = readStringField(v, "renderBackend", s.renderBackend);
 
     s.ambientIntensity = readFloatField(v, "ambientIntensity", s.ambientIntensity);
     s.bloomThreshold   = readFloatField(v, "bloomThreshold", s.bloomThreshold);
@@ -295,6 +299,98 @@ bool ProjectContext::writeSettings(const fs::path& projectDir, const ViewSetting
     // Temporal en la MISMA carpeta (rename atomico solo dentro del volumen) y
     // rename encima: un fallo a mitad no puede truncar el project.json.
     const fs::path tmp = projectDir / "project.json.tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out.is_open())
+            return false;
+        out << j.dump(4);
+        out.flush();
+        if (!out.good()) {
+            out.close();
+            std::error_code rmEc;
+            fs::remove(tmp, rmEc);
+            return false;
+        }
+    }
+
+    std::error_code ec;
+    fs::rename(tmp, file, ec);
+    if (ec) {
+        std::error_code rmEc;
+        fs::remove(tmp, rmEc);
+        return false;
+    }
+    return true;
+}
+
+fs::path ProjectContext::readLastProject()
+{
+    const fs::path dir = executableDir();
+    if (dir.empty())
+        return {};
+
+    std::ifstream in(dir / "editor.json");
+    if (!in.is_open())
+        return {}; // primer arranque: no es un error.
+
+    nlohmann::json j;
+    try {
+        in >> j;
+    } catch (const std::exception&) {
+        return {}; // editor.json roto: se arranca como si no hubiera.
+    }
+
+    if (!j.is_object())
+        return {};
+    const auto it = j.find("lastProject");
+    if (it == j.end() || !it->is_string())
+        return {};
+
+    const std::string raw = it->get<std::string>();
+    if (raw.empty())
+        return {};
+
+    // El proyecto pudo borrarse o moverse entre dos arranques: una ruta muerta
+    // vale lo mismo que no tener dato.
+    fs::path        p = fs::path(raw);
+    std::error_code ec;
+    if (!fs::is_directory(p, ec) || ec)
+        return {};
+    return p;
+}
+
+bool ProjectContext::writeLastProject(const fs::path& projectDir)
+{
+    if (projectDir.empty())
+        return false;
+
+    const fs::path dir = executableDir();
+    if (dir.empty())
+        return false;
+    const fs::path file = dir / "editor.json";
+
+    // Igual que writeSettings: se parte de lo que ya hay, para no borrar
+    // cualquier otro estado del editor que llegue a este fichero mas adelante.
+    nlohmann::json j = nlohmann::json::object();
+    {
+        std::ifstream in(file);
+        if (in.is_open()) {
+            try {
+                nlohmann::json parsed;
+                in >> parsed;
+                if (parsed.is_object())
+                    j = std::move(parsed);
+            } catch (const std::exception&) {
+                // Ilegible: se reescribe entero en vez de dejar de guardar.
+            }
+        }
+    }
+
+    // generic_string() para que la ruta quede con '/' y sea legible a mano; el
+    // fs::path del lector acepta ambos separadores en Windows.
+    j["lastProject"] = projectDir.generic_string();
+
+    const fs::path tmp = dir / "editor.json.tmp";
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
         if (!out.is_open())
