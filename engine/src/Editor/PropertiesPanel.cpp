@@ -1,5 +1,6 @@
 #include "DonTopo/Editor/PropertiesPanel.h"
 #include "DonTopo/Editor/EditorContext.h"
+#include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
@@ -38,6 +39,32 @@
 #include <glm/gtx/euler_angles.hpp>
 
 namespace {
+
+// Guarda de los diálogos de asset de este panel (mesh, audio, fuente, atlas).
+// A diferencia del Content Browser —que ya no puede salir de la raíz del
+// proyecto— estos diálogos navegan por todo el disco, así que son la única vía
+// por la que un asset de OTRO proyecto podía entrar en la escena y acabar en el
+// paquete de export.
+//
+// Lo que se rechaza es exactamente eso: un asset que caiga dentro del workspace
+// `projects/` pero fuera del proyecto abierto. Lo de fuera del workspace (los
+// assets compartidos del repo: mallas, fuentes, audio) se sigue permitiendo,
+// mismo criterio que la carpeta Scripts/ o el skybox del motor. Sin proyecto
+// abierto (tests headless) pasa todo, como antes de que el concepto existiera.
+bool assetAllowed(const DonTopo::EditorContext& ctx, const std::filesystem::path& path)
+{
+    if (!ctx.project || !ctx.project->valid()) return true;
+    if (ctx.project->contains(path))           return true;
+
+    // El workspace lo crea el selector al arrancar, así que este contains()
+    // responde sobre una carpeta que existe; si aun así fallara, contains()
+    // devuelve false y el asset se trata como compartido, no como ajeno.
+    const DonTopo::ProjectContext workspace(DonTopo::ProjectContext::workspaceDir());
+    if (!workspace.contains(path)) return true;
+
+    ctx.logModule("Project", "Asset de otro proyecto, rechazado: " + path.string());
+    return false;
+}
 
 // 2 decimales — suficiente para leer el valor de un vistazo en el Log sin
 // líneas kilométricas; el panel Properties ya muestra 3 decimales para
@@ -824,7 +851,8 @@ void PropertiesPanel::drawButtonPathDialogs(EditorContext& ctx)
     // siempre (mismo motivo que drawMeshDialog).
     if (m_fontDlgOpen && m_fontFileDialog->Display("ButtonFontDlg"))
     {
-        if (m_fontFileDialog->IsOk())
+        if (m_fontFileDialog->IsOk() &&
+            assetAllowed(ctx, m_fontFileDialog->GetFilePathName()))
             setButtonAssetPath(ctx, m_fontDlgOwner, /*isFont=*/true,
                                 m_fontFileDialog->GetFilePathName());
         m_fontFileDialog->Close();
@@ -833,7 +861,8 @@ void PropertiesPanel::drawButtonPathDialogs(EditorContext& ctx)
 
     if (m_uiAtlasDlgOpen && m_uiAtlasFileDialog->Display("ButtonAtlasDlg"))
     {
-        if (m_uiAtlasFileDialog->IsOk())
+        if (m_uiAtlasFileDialog->IsOk() &&
+            assetAllowed(ctx, m_uiAtlasFileDialog->GetFilePathName()))
             setButtonAssetPath(ctx, m_uiAtlasDlgOwner, /*isFont=*/false,
                                 m_uiAtlasFileDialog->GetFilePathName());
         m_uiAtlasFileDialog->Close();
@@ -1227,7 +1256,8 @@ void PropertiesPanel::drawTextPathDialog(EditorContext& ctx)
     // selección con el diálogo abierto deja el flag atascado en true.
     if (m_textFontDlgOpen && m_textFontFileDialog->Display("TextFontDlg"))
     {
-        if (m_textFontFileDialog->IsOk())
+        if (m_textFontFileDialog->IsOk() &&
+            assetAllowed(ctx, m_textFontFileDialog->GetFilePathName()))
             setTextFontPath(ctx, m_textFontDlgOwner, m_textFontFileDialog->GetFilePathName());
         m_textFontFileDialog->Close();
         m_textFontDlgOpen = false;
@@ -1612,7 +1642,8 @@ void PropertiesPanel::drawProgressBarPathDialog(EditorContext& ctx)
     // cambiar de selección con el diálogo abierto deja el flag atascado.
     if (m_barAtlasDlgOpen && m_barAtlasFileDialog->Display("BarImageDlg"))
     {
-        if (m_barAtlasFileDialog->IsOk())
+        if (m_barAtlasFileDialog->IsOk() &&
+            assetAllowed(ctx, m_barAtlasFileDialog->GetFilePathName()))
             setProgressBarImagePath(ctx, m_barAtlasDlgOwner, m_barAtlasDlgField,
                                     m_barAtlasFileDialog->GetFilePathName());
         m_barAtlasFileDialog->Close();
@@ -3068,7 +3099,8 @@ void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
     // estado interno del diálogo de Audio ni viceversa.
     if (m_meshDlgOpen && m_meshFileDialog->Display("AddMeshDlg"))
     {
-        if (m_meshFileDialog->IsOk())
+        if (m_meshFileDialog->IsOk() &&
+            assetAllowed(ctx, m_meshFileDialog->GetFilePathName()))
             loadMeshForSelected(ctx, m_meshFileDialog->GetFilePathName());
         m_meshFileDialog->Close();
         m_meshDlgOpen = false;
@@ -3289,7 +3321,8 @@ void PropertiesPanel::drawAudioClipDialog(EditorContext& ctx)
     // drawMeshDialog).
     if (m_audioDlgOpen && m_audioFileDialog->Display("AddAudioDlg"))
     {
-        if (m_audioFileDialog->IsOk())
+        if (m_audioFileDialog->IsOk() &&
+            assetAllowed(ctx, m_audioFileDialog->GetFilePathName()))
             loadAudioClipForSelected(ctx, m_audioFileDialog->GetFilePathName());
         m_audioFileDialog->Close();
         m_audioDlgOpen = false;

@@ -1,5 +1,6 @@
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/EditorContext.h"
+#include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
@@ -393,6 +394,17 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
     float totalWidth  = ImGui::GetContentRegionAvail().x;
     float totalHeight = ImGui::GetContentRegionAvail().y;
     float leftWidth   = totalWidth * 0.38f;
+
+    // Raíz del browser: la carpeta del proyecto abierto. El árbol y la rejilla
+    // solo listan hijos de m_projectRoot y no hay botón de subir, así que fijar
+    // la raíz aquí es lo que impide ver —y arrastrar— assets de otro proyecto.
+    // Sin proyecto (tests headless) se cae al cwd, como antes de que el concepto
+    // existiera. Si la raíz cambia, el directorio actual vuelve a ella.
+    if (ctx.project && ctx.project->valid() && m_projectRoot != ctx.project->root())
+    {
+        m_projectRoot = ctx.project->root();
+        m_currentDir  = m_projectRoot.string();
+    }
 
     if (m_projectRoot.empty())
     {

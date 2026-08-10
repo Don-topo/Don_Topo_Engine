@@ -138,6 +138,17 @@ void EditorUI::recordUi(VkCommandBuffer cmd)
 
 void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView)
 {
+    // Selector de proyecto: primer estado del bucle. Se lleva el frame entero —
+    // ni menú, ni toolbar, ni dockspace, ni paneles— hasta que el callback
+    // devuelve true; entonces se suelta y el frame siguiente ya es el editor de
+    // siempre. Misma ventana, mismo device y misma sesión de ImGui.
+    if (m_projectSelector)
+    {
+        if (m_projectSelector())
+            m_projectSelector = nullptr;
+        return;
+    }
+
     // Drenaje del buzón de DonTopo.loadScene: aquí, al principio del frame de
     // UI, ya se salió del tick de scripts (ScriptManager::update corre antes en
     // el bucle de main), así que cargar no destruye el GameObject que pidió la
@@ -174,9 +185,22 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
         [this](const std::string& msg) { m_logPanel.push(msg); },
         m_onDelete,
         m_onAxisSelected,
-        [this](const std::filesystem::path& p) { m_scriptEditor->openFile(p); },
+        [this](const std::filesystem::path& p) {
+            // Los .lua registrados viven en la carpeta Scripts/ que vigila
+            // ScriptManager (la del repo, compartida como los assets del motor):
+            // esos se siguen abriendo igual. Lo que se rechaza es un .lua de OTRO
+            // proyecto — para eso vale contains() de un contexto ad-hoc sobre la
+            // carpeta de scripts, con el mismo fallo en cerrado.
+            const bool engineScripts =
+                m_scriptManager &&
+                ProjectContext(m_scriptManager->scriptsDirPath()).contains(p);
+            if (!engineScripts && !projectAllows(p, "Script"))
+                return;
+            m_scriptEditor->openFile(p);
+        },
         [this]() { m_animatorPanel.open(); },
         m_assetLoader,
+        m_project,                 // sandbox de rutas del proyecto abierto
         m_loadingModal.active(),   // veta la edición mientras el modal carga
         [this](const std::filesystem::path& p) {
             // La guarda de Play Mode vive también aquí, no sólo en el panel:
@@ -195,7 +219,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
                 m_sceneDlgOpen   = true;
                 m_sceneDlgIsSave = true;
                 IGFD::FileDialogConfig cfg;
-                cfg.path  = "assets";
+                cfg.path  = (m_project && m_project->valid()) ? m_project->root().string() : std::string("assets");
                 cfg.flags = ImGuiFileDialogFlags_HideColumnType |
                             ImGuiFileDialogFlags_HideColumnDate |
                             ImGuiFileDialogFlags_DisableThumbnailMode |
@@ -204,6 +228,7 @@ void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, cons
                 m_sceneFileDialog->OpenDialog("SceneDlg", "Save Scene", ".json", cfg);
                 return;
             }
+            if (!projectAllows(m_currentScenePath, "Escena")) return;
             bool saved = m_scene && m_scene->save(m_currentScenePath);
             if (saved) m_undoHistory.markSceneSaved();
             m_sceneIOError = saved ? "" : "No se pudo guardar la escena";
@@ -311,7 +336,7 @@ void EditorUI::drawMenuBar()
             if (ImGui::MenuItem("Export Game...", nullptr, false, m_scene != nullptr && !m_isPlaying))
             {
                 IGFD::FileDialogConfig cfg;
-                cfg.path  = ".";
+                cfg.path  = (m_project && m_project->valid()) ? m_project->root().string() : std::string(".");
                 cfg.flags = ImGuiFileDialogFlags_HideColumnType |
                             ImGuiFileDialogFlags_HideColumnDate |
                             ImGuiFileDialogFlags_DisableThumbnailMode |
@@ -730,7 +755,7 @@ void EditorUI::drawToolbar()
         m_sceneDlgOpen   = true;
         m_sceneDlgIsSave = true;
         IGFD::FileDialogConfig cfg;
-        cfg.path  = "assets";
+        cfg.path  = (m_project && m_project->valid()) ? m_project->root().string() : std::string("assets");
         cfg.flags = ImGuiFileDialogFlags_HideColumnType |
                     ImGuiFileDialogFlags_HideColumnDate |
                     ImGuiFileDialogFlags_DisableThumbnailMode |
@@ -747,7 +772,7 @@ void EditorUI::drawToolbar()
         m_sceneDlgOpen   = true;
         m_sceneDlgIsSave = false;
         IGFD::FileDialogConfig cfg;
-        cfg.path  = "assets";
+        cfg.path  = (m_project && m_project->valid()) ? m_project->root().string() : std::string("assets");
         cfg.flags = ImGuiFileDialogFlags_HideColumnType |
                     ImGuiFileDialogFlags_HideColumnDate |
                     ImGuiFileDialogFlags_DisableThumbnailMode |
@@ -879,8 +904,42 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j, bool async)
     return loaded;
 }
 
+bool EditorUI::openProjectScene()
+{
+    if (!m_project || !m_project->valid())
+        return false;
+
+    const std::filesystem::path scene = m_project->resolve(ProjectContext::kStartupScene);
+
+    std::error_code ec;
+    if (!std::filesystem::exists(scene, ec) || ec)
+    {
+        m_logPanel.push("[Project] El proyecto no tiene escena de arranque: " + scene.string());
+        return false;
+    }
+    return loadSceneFile(scene.string());
+}
+
+bool EditorUI::projectAllows(const std::filesystem::path& path, const char* what)
+{
+    if (!m_project || !m_project->valid())
+        return true; // sin proyecto abierto no hay sandbox: como siempre.
+    if (m_project->contains(path))
+        return true;
+
+    m_logPanel.push(std::string("[Project] ") + what + " fuera del proyecto, rechazado: " +
+                    path.string());
+    return false;
+}
+
 bool EditorUI::loadSceneFile(const std::string& path)
 {
+    // Sandbox del proyecto: una escena de otro proyecto (o de fuera del
+    // workspace) se rechaza aquí, que es por donde pasan TODAS las cargas —
+    // menú File, doble click en el Content Browser y DonTopo.loadScene de Lua.
+    if (!projectAllows(path, "Escena"))
+        return false;
+
     // Valida la estructura básica del JSON ANTES de tocar GPU/Scene:
     // rechaza un fichero top-level corrupto sin tocar nada (fast path, evita
     // el churn de GPU de reloadSceneFromJson). No cubre malformación anidada
@@ -933,6 +992,16 @@ void EditorUI::drawSceneDialog()
 
         if (m_sceneDlgIsSave)
         {
+            // Igual que en la carga: el destino tiene que caer dentro del
+            // proyecto. Se rechaza antes de escribir, así que el fichero de
+            // fuera ni se crea ni se pisa.
+            if (!projectAllows(path, "Escena"))
+            {
+                m_sceneFileDialog->Close();
+                m_sceneDlgOpen = false;
+                m_pendingSceneLoadAfterSave.clear();
+                return;
+            }
             bool saved   = m_scene && m_scene->save(path);
             if (saved)
             {
@@ -1105,6 +1174,12 @@ void EditorUI::runExport()
         return;
     }
 
+    // El paquete se escribe dentro del proyecto abierto: exportar sobre la
+    // carpeta de otro proyecto se rechaza aquí, antes de crear ni borrar nada.
+    // El FORMATO del paquete y lo que hace exportGame() no cambian.
+    if (!projectAllows(fs::path(m_exportDestDir) / m_exportNameBuffer, "Export"))
+        return;
+
     std::error_code ec;
     fs::path projectRoot = fs::current_path(ec);
     if (ec) projectRoot = ".";
@@ -1119,6 +1194,25 @@ void EditorUI::runExport()
     if (m_scriptManager)
         for (const auto& [name, cls] : m_scriptManager->getRegistry())
             scriptPaths[name] = cls.path;
+
+    // Aviso, NO bloqueo: el paquete se arma con lo que referencia la escena, y
+    // eso puede caer fuera del proyecto. Los assets compartidos del repo son
+    // legítimos y viajan como siempre; lo que interesa cantar es un asset de
+    // OTRO proyecto, que sí es una fuga. Se avisa y se exporta igual —dejarlo
+    // fuera del paquete daría un juego sin ese asset, que es peor.
+    if (m_project && m_project->valid())
+    {
+        const ProjectContext workspace(ProjectContext::workspaceDir());
+        for (const ExportAsset& a : collectSceneAssets(*m_scene, projectRoot, scriptPaths))
+        {
+            const fs::path src(a.sourcePath);
+            if (m_project->contains(src))
+                continue;
+            m_logPanel.push(std::string("[Project] Aviso: el export incluye un asset de ") +
+                            (workspace.contains(src) ? "OTRO proyecto: " : "fuera del proyecto: ") +
+                            a.sourcePath);
+        }
+    }
 
     ExportResult result = exportGame(*m_scene, scriptPaths, m_exportDestDir,
                                      m_exportNameBuffer, projectRoot, scriptsDir, runtimeExe);

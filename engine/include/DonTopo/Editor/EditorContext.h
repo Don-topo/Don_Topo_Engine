@@ -14,6 +14,7 @@ class Scene;
 class ScriptManager;
 class UndoManager;
 class AsyncAssetLoader;
+class ProjectContext;
 
 // Estado compartido entre los paneles del editor, construido de nuevo cada
 // frame dentro de EditorUI::draw() y pasado por referencia a cada
@@ -60,6 +61,13 @@ struct EditorContext {
     // el drop de FBX no encola nada (loadMeshForSelected es no-op). Lo rellena
     // EditorUI::draw() a partir de EditorUI::m_assetLoader.
     AsyncAssetLoader* assetLoader = nullptr;
+
+    // Proyecto abierto (vive en main(), no-propietario). Decide qué rutas puede
+    // leer o escribir un panel: todo lo del usuario —escenas, scripts, assets—
+    // pasa por project->contains() antes de tocar disco. nullptr en los tests
+    // headless y en cualquier ruta anterior al selector: sin proyecto no hay
+    // sandbox y el comportamiento es el de siempre.
+    const ProjectContext* project = nullptr;
 
     // true mientras el modal de carga está activo (Load Scene en vuelo). Veta la
     // edición —gizmo, reparent de jerarquía, drops de asset— pero NO el render:

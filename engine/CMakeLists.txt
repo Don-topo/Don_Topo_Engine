@@ -98,6 +98,7 @@ endif()
 # nunca al reves — el Renderer solo lo ve por la interfaz UiLayer.
 add_library(DonTopoEditor STATIC
     src/Editor/EditorUI.cpp
+    src/Editor/ProjectContext.cpp
     src/Editor/LoadingModal.cpp
     src/Editor/LogPanel.cpp
     src/Editor/ScenePanel.cpp

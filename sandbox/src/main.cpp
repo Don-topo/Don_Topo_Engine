@@ -16,6 +16,7 @@
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Renderer/Gizmos.h"
 #include "DonTopo/Editor/EditorUI.h"
+#include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Core/Input.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -61,36 +62,15 @@ int main()
 
         DonTopo::Scene scene;
 
-        auto soldierMesh = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load("assets/modelTexture.fbx"));
-        auto modelMesh    = std::make_shared<DonTopo::Mesh>(DonTopo::ModelLoader::load("assets/model.fbx"));
-
-        // Suelo (instancia de Plane), altura calculada a partir de soldier/model
-        float floorY = std::numeric_limits<float>::max();
-        for (auto* m : { soldierMesh.get(), modelMesh.get() })
-            for (auto& v : m->vertices)
-                floorY = std::min(floorY, v.pos.y);
-        auto floorMesh = std::make_shared<DonTopo::Mesh>(DonTopo::Plane::create(1000.0f, floorY));
-
-        // Cubo y esfera de prueba (sin textura -> placeholder checkerboard)
-        auto cubeMesh   = std::make_shared<DonTopo::Mesh>(DonTopo::Cube::create(50.0f));
-        auto sphereMesh = std::make_shared<DonTopo::Mesh>(DonTopo::Sphere::create(50.0f));
-
-        // Cargar modelo animado antes de init
-        auto soldierAnimMesh = std::make_shared<DonTopo::SkinnedMesh>(DonTopo::ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
-
-        auto* soldier = scene.addGameObject("soldier");
-        soldier->setMesh(soldierMesh);
-
-        auto* model = scene.addGameObject("model");
-        model->setMesh(modelMesh);
-        model->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(200.0f, 0.0f, 0.0f));
-
-        auto* floorNode = scene.addGameObject("floor");
-        floorNode->setMesh(floorMesh);
-
-        glm::mat4 floorColliderPose = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, floorY - 0.5f, 0.0f));
-        floorNode->setBoxCollider(physics.createBoxColliderComponent(
-            glm::vec3(500.0f, 0.5f, 500.0f), glm::vec3(0.0f), floorColliderPose, /*dynamic=*/false));
+        // Escena de arranque: solo lo que necesita el arranque, nada más.
+        // renderer.init() exige un `meshes` no vacío —de ahí saca el bbox del
+        // auto-fit, y con la lista vacía saldría en infinitos—, así que basta un
+        // cubo procedural, que no toca disco. Los tres FBX que cargaba la demo
+        // (modelTexture, model y modelAnimation) eran todo el coste de arranque
+        // y ya no se cargan: en cuanto se elige proyecto esta escena se
+        // reemplaza entera por la del proyecto (EditorUI::openProjectScene), así
+        // que cargarlos era trabajo que se tiraba a la basura.
+        auto cubeMesh = std::make_shared<DonTopo::Mesh>(DonTopo::Cube::create(50.0f));
 
         auto* cube = scene.addGameObject("cube");
         cube->setMesh(cubeMesh);
@@ -116,14 +96,6 @@ int main()
             std::cout << "[PhysX smoke test] raycast al cubo: " << (didHit ? "HIT" : "MISS") << std::endl;
         }
 #endif
-
-        auto* sphere = scene.addGameObject("sphere");
-        sphere->setMesh(sphereMesh);
-        sphere->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 50.0f, 200.0f));
-
-        auto* soldierAnim = scene.addGameObject("soldier_animado");
-        soldierAnim->setMesh(soldierAnimMesh);
-        soldierAnim->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(-200.0f, 0.0f, 0.0f));
 
         std::vector<DonTopo::GameObject*> allNodes;
         scene.traverse([&](DonTopo::GameObject* go) { allNodes.push_back(go); });
@@ -277,6 +249,132 @@ int main()
         DonTopo::AsyncAssetLoader assetLoader(jobSystem);
         editor.setAssetLoader(&assetLoader);
 
+        // ─── Selector de proyecto ────────────────────────────────────────────
+        // Primer estado del bucle de ImGui que ya existe: misma ventana, mismo
+        // device Vulkan y misma sesión de ImGui. Mientras esté activo, el bucle
+        // de abajo se salta TODO (scripts, cámara, escena, luces, UI) y solo
+        // presenta el frame del selector, así que el editor no aparece hasta
+        // elegir proyecto. `project` vive aquí, fuera del bucle: es lo que los
+        // paneles consultan durante toda la sesión.
+        DonTopo::ProjectContext project;
+        // Estado del selector: vive fuera del lambda (que lo captura por
+        // referencia) porque tiene que sobrevivir de un frame al siguiente.
+        std::vector<std::filesystem::path> projectEntries = DonTopo::ProjectContext::discover();
+        int                                projectPicked  = -1;
+        bool                               projectCreating = false;
+        char                               projectNewName[64] = {};
+        std::string                        projectCreateError;
+
+        editor.setProjectSelector([&]() -> bool {
+            const ImGuiViewport* vp = ImGui::GetMainViewport();
+            ImGui::SetNextWindowPos(vp->WorkPos);
+            ImGui::SetNextWindowSize(vp->WorkSize);
+            ImGui::Begin("##ProjectSelector", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+            ImGui::TextUnformatted("Don Topo Engine - Proyectos");
+            ImGui::TextDisabled("%s", DonTopo::ProjectContext::workspaceDir().string().c_str());
+            ImGui::Separator();
+
+            bool                  confirmed = false;
+            std::filesystem::path chosen;
+
+            ImGui::BeginChild("##ProjectList", ImVec2(0.0f, vp->WorkSize.y * 0.55f), true);
+            if (projectEntries.empty())
+                ImGui::TextDisabled("No hay ningun proyecto todavia: crea uno con 'Nuevo proyecto...'.");
+            for (int i = 0; i < (int)projectEntries.size(); ++i)
+            {
+                const std::string label = DonTopo::ProjectContext::readProjectName(projectEntries[i]) +
+                                          "###project" + std::to_string(i);
+                if (ImGui::Selectable(label.c_str(), projectPicked == i,
+                                      ImGuiSelectableFlags_AllowDoubleClick))
+                {
+                    projectPicked = i;
+                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                        confirmed = true;
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", projectEntries[i].filename().string().c_str());
+            }
+            ImGui::EndChild();
+
+            ImGui::BeginDisabled(projectPicked < 0);
+            if (ImGui::Button("Abrir proyecto", ImVec2(160.0f, 0.0f)))
+                confirmed = true;
+            ImGui::EndDisabled();
+
+            ImGui::SameLine();
+            if (ImGui::Button("Nuevo proyecto...", ImVec2(160.0f, 0.0f)))
+            {
+                projectCreating    = true;
+                projectNewName[0]  = '\0';
+                projectCreateError.clear();
+                ImGui::OpenPopup("Crear proyecto");
+            }
+
+            if (ImGui::BeginPopupModal("Crear proyecto", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::TextUnformatted("Nombre del proyecto:");
+                ImGui::SetNextItemWidth(320.0f);
+                const bool enter = ImGui::InputText("##NewProjectName", projectNewName,
+                                                    sizeof(projectNewName),
+                                                    ImGuiInputTextFlags_EnterReturnsTrue);
+
+                // El error se enseña AQUÍ, en el diálogo, y no se crea nada:
+                // nombre repetido (aunque cambien las mayúsculas), vacío, `..`,
+                // separadores de ruta o caracteres inválidos en Windows.
+                if (!projectCreateError.empty())
+                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", projectCreateError.c_str());
+
+                if (ImGui::Button("Crear", ImVec2(120.0f, 0.0f)) || enter)
+                {
+                    std::filesystem::path created;
+                    if (DonTopo::ProjectContext::create(projectNewName, created, projectCreateError))
+                    {
+                        // Refresca la lista y deja el proyecto nuevo seleccionado.
+                        projectEntries = DonTopo::ProjectContext::discover();
+                        projectPicked  = -1;
+                        for (int i = 0; i < (int)projectEntries.size(); ++i)
+                            if (projectEntries[i] == created)
+                                projectPicked = i;
+                        projectCreating = false;
+                        projectCreateError.clear();
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancelar", ImVec2(120.0f, 0.0f)))
+                {
+                    projectCreating = false;
+                    projectCreateError.clear();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+
+            if (confirmed && projectPicked >= 0 && projectPicked < (int)projectEntries.size())
+                chosen = projectEntries[projectPicked];
+
+            ImGui::End();
+
+            if (chosen.empty())
+                return false;
+
+            project = DonTopo::ProjectContext(chosen);
+            if (!project.valid())
+                return false;
+
+            // A partir de aquí el editor arranca exactamente como siempre, ya
+            // con el proyecto puesto: es lo único que cambia respecto a antes.
+            editor.setProject(&project);
+            // Y con SU escena, no con la de demo que se montó en el arranque:
+            // en un proyecto recién creado está vacía, así que se entra viendo
+            // solo el skybox.
+            editor.openProjectScene();
+            return true;
+        });
+
         // Estado del sync de widgets: vive FUERA del bucle porque es lo que
         // permite actualizar los botones en sitio (sin recrear el árbol, que
         // reiniciaría el fundido) y cachear atlas y fuentes por ruta.
@@ -288,6 +386,17 @@ int main()
         while (!window.shouldClose())
         {
             DonTopo::Input::update();
+
+            // Selector de proyecto activo: el frame se limita a presentarlo. Ni
+            // scripts, ni cámara, ni escena, ni luces, ni UI — nada de lo de
+            // abajo corre hasta que hay proyecto elegido.
+            if (editor.isProjectSelectorActive())
+            {
+                renderer.drawFrame(window);
+                window.pollEvents();
+                continue;
+            }
+
             scriptManager.pollChanges();
 
             auto now = std::chrono::high_resolution_clock::now();

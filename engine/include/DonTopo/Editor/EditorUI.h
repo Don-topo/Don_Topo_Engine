@@ -18,6 +18,7 @@
 #include "DonTopo/Editor/InputActionsPanel.h"
 #include "DonTopo/Editor/PerformancePanel.h"
 #include "DonTopo/Editor/LoadingModal.h"
+#include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/UiLayer.h"
 
@@ -118,6 +119,27 @@ public:
     // Load Scene se queda en la ruta síncrona.
     void setAssetLoader(AsyncAssetLoader* loader) { m_assetLoader = loader; }
 
+    // Selector de proyecto: primer estado del bucle de ImGui. Mientras haya un
+    // selector puesto, draw() le cede el frame ENTERO y no dibuja ni menú, ni
+    // toolbar, ni dockspace, ni panel alguno — el editor no aparece hasta que
+    // el callback devuelve true (proyecto elegido), y entonces se suelta y el
+    // frame siguiente ya es el editor de siempre. La UI del selector vive en
+    // main(): aquí solo se cede el turno.
+    void setProjectSelector(std::function<bool()> fn) { m_projectSelector = std::move(fn); }
+    bool isProjectSelectorActive() const { return static_cast<bool>(m_projectSelector); }
+
+    // Proyecto elegido, no-propietario (vive en main()). Viaja a los paneles por
+    // EditorContext::project: es el que decide qué rutas se pueden leer/escribir.
+    void setProject(const ProjectContext* project) { m_project = project; }
+
+    // Abre la escena de arranque del proyecto (ProjectContext::kStartupScene), la
+    // que create() deja hecha: vacía, así que al entrar solo se ve el skybox. Va
+    // por la MISMA ruta que el Load Scene del menú File, así que reemplaza lo que
+    // hubiera cargado (la escena de demo del arranque) y limpia el undo. Si el
+    // proyecto no tiene esa escena —uno creado antes de que existiera— no toca
+    // nada y deja una línea en el Log.
+    bool openProjectScene();
+
 private:
     static constexpr float kToolbarHeight = 30.0f;
     // Ctrl+Z/Ctrl+Y — no-op si !m_scene, si m_isPlaying, o si algún widget de
@@ -128,6 +150,11 @@ private:
     void drawToolbar();
     void drawDockSpace();
     void drawSceneDialog();
+    // Guarda del sandbox de rutas: true si `path` se puede leer/escribir con el
+    // proyecto abierto. Sin proyecto (tests headless, arranque previo al
+    // selector) deja pasar todo, que es como se comportaba el editor antes. Si
+    // lo rechaza, deja la línea en el Log y el caller devuelve sin tocar disco.
+    bool projectAllows(const std::filesystem::path& path, const char* what);
     // Limpia GPU de la escena actual, reemplaza su contenido con j (vía
     // Scene::fromJson) y re-registra GPU (estático + skinned) de lo que
     // quede — tanto si fromJson tuvo éxito (árbol nuevo) como si falló
@@ -238,6 +265,12 @@ private:
     // Loader asíncrono no-propietario (vive en main.cpp). Lo rellena
     // setAssetLoader antes del bucle. nullptr => Load Scene cae a síncrono.
     AsyncAssetLoader* m_assetLoader = nullptr;
+
+    // Ver setProjectSelector/setProject. Vacío/nullptr en los tests headless: sin
+    // selector el editor dibuja como siempre, y sin proyecto las guardas de ruta
+    // se comportan igual que antes de que existiera el concepto.
+    std::function<bool()>  m_projectSelector;
+    const ProjectContext*  m_project = nullptr;
 
     // Backend de ImGui. El device se guarda en initUi porque shutdownUi lo
     // necesita para liberar el pool y ahí ya no hay InitInfo.
