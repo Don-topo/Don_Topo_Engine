@@ -3,6 +3,9 @@
 #ifdef DT_D3D12_ENABLED
 
 #include "DonTopo/Core/Window.h"
+#include "DonTopo/Renderer/Cube.h"
+#include "DonTopo/Renderer/Mesh.h"
+#include "DonTopo/Renderer/Vertex.h"
 
 #include <windows.h>
 
@@ -43,6 +46,54 @@ struct GizmoVertex {
     float pos[3];
     float color[3];
 };
+
+// Bloque de luz del UBO. Mismo layout que DonTopo::Light y que el struct Light
+// de shaders/triangle.frag.
+struct ShaderLight {
+    float position[4];
+    float color[4];
+    float direction[4];  // .w = tipo: 0 point, 1 spot, 2 directional, 3 area
+    float params[4];     // range, cos interior, cos exterior, ancho
+};
+
+// El UBO de set 0 binding 0, con los offsets EXACTOS que spirv-cross generó al
+// traducirlo (packoffset c0/c4/c8/c24/c25/c89/c90). Los static_assert de abajo
+// son la única defensa real: un desajuste de offsets CPU/GPU no da error en
+// ninguna capa de validación, solo píxeles raros.
+struct SceneUbo {
+    glm::mat4   view;                    // c0
+    glm::mat4   proj;                    // c4
+    glm::mat4   lightSpaceMatrix[4];     // c8
+    glm::vec4   cascadeSplits;           // c24
+    ShaderLight lights[16];              // c25
+    glm::vec4   viewPos;                 // c89
+    int         numLights;               // c90
+};
+
+static_assert(offsetof(SceneUbo, view) == 0, "UBO: view debe ir en c0");
+static_assert(offsetof(SceneUbo, proj) == 64, "UBO: proj debe ir en c4");
+static_assert(offsetof(SceneUbo, lightSpaceMatrix) == 128, "UBO: lightSpaceMatrix debe ir en c8");
+static_assert(offsetof(SceneUbo, cascadeSplits) == 384, "UBO: cascadeSplits debe ir en c24");
+static_assert(offsetof(SceneUbo, lights) == 400, "UBO: lights debe ir en c25");
+static_assert(offsetof(SceneUbo, viewPos) == 1424, "UBO: viewPos debe ir en c89");
+static_assert(offsetof(SceneUbo, numLights) == 1440, "UBO: numLights debe ir en c90");
+
+// Push constants de triangle.vert/pbr.frag: mat4 + 2 float + vec2 = 80 bytes.
+struct PushData {
+    glm::mat4 transform;
+    float     metallic;
+    float     roughness;
+    glm::vec2 flags;  // x: 1 = coger el model del SSBO de instancias
+};
+static_assert(sizeof(PushData) == 80, "PushData debe ocupar 80 bytes (20 root constants)");
+
+// Los constant buffers se enlazan con la dirección alineada a 256 bytes.
+constexpr UINT64 kCbvAlignment = 256;
+
+UINT64 alignUp(UINT64 value, UINT64 alignment)
+{
+    return (value + alignment - 1) & ~(alignment - 1);
+}
 
 std::vector<char> readBinaryFile(const std::string& path)
 {
@@ -116,6 +167,39 @@ struct D3D12Renderer::Impl {
     D3D12_VERTEX_BUFFER_VIEW    gridVertexBufferView{};
     UINT                        gridVertexCount = 0;
 
+    // ── Malla con material: la ruta de triangle.vert/triangle.frag ──────────
+    ComPtr<ID3D12RootSignature> meshRootSignature;
+    ComPtr<ID3D12PipelineState> meshPipeline;
+
+    D3D12MA::Allocation*     meshVertexAllocation = nullptr;
+    D3D12MA::Allocation*     meshIndexAllocation  = nullptr;
+    D3D12_VERTEX_BUFFER_VIEW meshVertexBufferView{};
+    D3D12_INDEX_BUFFER_VIEW  meshIndexBufferView{};
+    UINT                     meshIndexCount = 0;
+
+    // Matrices por instancia (set 1, binding 0 en GLSL → t0 space1 en HLSL).
+    D3D12MA::Allocation* instanceAllocation = nullptr;
+
+    // UBO de escena: uno por frame en vuelo, mapeado de forma persistente. Sin
+    // separar por slot, escribirlo mientras la GPU lee el frame anterior daría
+    // una imagen a medio actualizar.
+    std::array<D3D12MA::Allocation*, kFrameCount> sceneUboAllocations{};
+    std::array<void*, kFrameCount>                sceneUboMapped{};
+
+    // Texturas del material. Hoy son 1x1 generadas: el cubo del motor es
+    // procedural y no trae ninguna, pero los shaders las exigen igual.
+    D3D12MA::Allocation* baseColorAllocation = nullptr;
+    D3D12MA::Allocation* normalMapAllocation = nullptr;
+    D3D12MA::Allocation* shadowMapAllocation = nullptr;
+
+    // t1, t2 y t3 de space0, en este orden.
+    ComPtr<ID3D12DescriptorHeap> srvHeap;
+    UINT                         srvSize = 0;
+
+    // Profundidad. Se recrea con la ventana.
+    ComPtr<ID3D12DescriptorHeap> dsvHeap;
+    D3D12MA::Allocation*         depthAllocation = nullptr;
+
     ComPtr<ID3D12DescriptorHeap> rtvHeap;
     UINT                         rtvSize = 0;
 
@@ -159,6 +243,17 @@ struct D3D12Renderer::Impl {
 
     void createGizmoPipeline();
     void createGridGeometry();
+
+    // Sube una textura 2D (o un array de slices 1x1) y le crea su SRV en el
+    // hueco `srvIndex` del heap.
+    D3D12MA::Allocation* uploadTexture(const void* pixels, UINT width, UINT height,
+                                       UINT arraySize, DXGI_FORMAT format,
+                                       UINT bytesPerPixel, UINT srvIndex);
+
+    void createMeshPipeline();
+    void createMeshResources();
+    void createDepthBuffer();
+    void updateSceneUbo();
 
     // Matriz de cámara del frame. Se recalcula en cada resize porque el aspecto
     // depende del tamaño de la ventana.
@@ -354,7 +449,7 @@ void D3D12Renderer::Impl::createGizmoPipeline()
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
     psoDesc.NumRenderTargets      = 1;
     psoDesc.RTVFormats[0]         = DXGI_FORMAT_R8G8B8A8_UNORM;
-    psoDesc.DSVFormat             = DXGI_FORMAT_UNKNOWN;  // sin profundidad todavía
+    psoDesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc.Count      = 1;
     psoDesc.SampleMask            = UINT_MAX;
 
@@ -366,8 +461,12 @@ void D3D12Renderer::Impl::createGizmoPipeline()
     for (auto& rt : psoDesc.BlendState.RenderTarget)
         rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
-    psoDesc.DepthStencilState.DepthEnable   = FALSE;
-    psoDesc.DepthStencilState.StencilEnable = FALSE;
+    // La rejilla sí se compara contra la profundidad: es el suelo, y lo que
+    // haya delante tiene que taparla.
+    psoDesc.DepthStencilState.DepthEnable    = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    psoDesc.DepthStencilState.StencilEnable  = FALSE;
 
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&gizmoPipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState");
@@ -408,16 +507,427 @@ void D3D12Renderer::Impl::createGridGeometry()
     gridVertexCount                     = static_cast<UINT>(vertices.size());
 }
 
+D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT width,
+                                                        UINT height, UINT arraySize,
+                                                        DXGI_FORMAT format, UINT bytesPerPixel,
+                                                        UINT srvIndex)
+{
+    D3D12_RESOURCE_DESC texDesc{};
+    texDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Width            = width;
+    texDesc.Height           = height;
+    texDesc.DepthOrArraySize = static_cast<UINT16>(arraySize);
+    texDesc.MipLevels        = 1;
+    texDesc.Format           = format;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+    D3D12MA::ALLOCATION_DESC defaultDesc{};
+    defaultDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+    D3D12MA::Allocation* destination = nullptr;
+    throwIfFailed(allocator->CreateResource(&defaultDesc, &texDesc,
+                                            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                            &destination, IID_NULL, nullptr),
+                  "D3D12MA::Allocator::CreateResource(textura)");
+
+    // El staging no se escribe fila a fila como en memoria: cada fila va
+    // alineada a D3D12_TEXTURE_DATA_PITCH_ALIGNMENT, y cada slice del array es
+    // un subrecurso propio con su footprint.
+    std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(arraySize);
+    std::vector<UINT>                               rowCounts(arraySize);
+    std::vector<UINT64>                             rowSizes(arraySize);
+    UINT64                                          stagingSize = 0;
+    device->GetCopyableFootprints(&texDesc, 0, arraySize, 0, footprints.data(), rowCounts.data(),
+                                  rowSizes.data(), &stagingSize);
+
+    D3D12_RESOURCE_DESC bufferDesc{};
+    bufferDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Width            = stagingSize;
+    bufferDesc.Height           = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels        = 1;
+    bufferDesc.Format           = DXGI_FORMAT_UNKNOWN;
+    bufferDesc.SampleDesc.Count = 1;
+    bufferDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    D3D12MA::ALLOCATION_DESC uploadDesc{};
+    uploadDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12MA::Allocation* staging = nullptr;
+    HRESULT hr = allocator->CreateResource(&uploadDesc, &bufferDesc,
+                                           D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                           &staging, IID_NULL, nullptr);
+    if (FAILED(hr)) {
+        destination->Release();
+        throwIfFailed(hr, "D3D12MA::Allocator::CreateResource(staging de textura)");
+    }
+
+    uint8_t*          mapped = nullptr;
+    const D3D12_RANGE noRead{0, 0};
+    hr = staging->GetResource()->Map(0, &noRead, reinterpret_cast<void**>(&mapped));
+    if (FAILED(hr)) {
+        staging->Release();
+        destination->Release();
+        throwIfFailed(hr, "ID3D12Resource::Map(staging de textura)");
+    }
+
+    const auto* source = static_cast<const uint8_t*>(pixels);
+    for (UINT slice = 0; slice < arraySize; ++slice) {
+        for (UINT row = 0; row < rowCounts[slice]; ++row) {
+            std::memcpy(mapped + footprints[slice].Offset +
+                            static_cast<UINT64>(row) * footprints[slice].Footprint.RowPitch,
+                        source + (static_cast<UINT64>(slice) * height + row) * width * bytesPerPixel,
+                        static_cast<size_t>(rowSizes[slice]));
+        }
+    }
+    staging->GetResource()->Unmap(0, nullptr);
+
+    throwIfFailed(allocators[frameIndex]->Reset(), "ID3D12CommandAllocator::Reset(textura)");
+    throwIfFailed(commandList->Reset(allocators[frameIndex].Get(), nullptr),
+                  "ID3D12GraphicsCommandList::Reset(textura)");
+
+    for (UINT slice = 0; slice < arraySize; ++slice) {
+        D3D12_TEXTURE_COPY_LOCATION dst{};
+        dst.pResource        = destination->GetResource();
+        dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        dst.SubresourceIndex = slice;
+
+        D3D12_TEXTURE_COPY_LOCATION src{};
+        src.pResource       = staging->GetResource();
+        src.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        src.PlacedFootprint = footprints[slice];
+
+        commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    }
+
+    D3D12_RESOURCE_BARRIER toShader{};
+    toShader.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toShader.Transition.pResource   = destination->GetResource();
+    toShader.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    toShader.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    toShader.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toShader);
+
+    throwIfFailed(commandList->Close(), "ID3D12GraphicsCommandList::Close(textura)");
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    queue->ExecuteCommandLists(1, lists);
+    waitForGpu();
+    staging->Release();
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format                  = format;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    if (arraySize > 1) {
+        srvDesc.ViewDimension                  = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+        srvDesc.Texture2DArray.MipLevels       = 1;
+        srvDesc.Texture2DArray.ArraySize       = arraySize;
+    } else {
+        srvDesc.ViewDimension       = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+    }
+
+    D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<SIZE_T>(srvIndex) * srvSize;
+    device->CreateShaderResourceView(destination->GetResource(), &srvDesc, handle);
+
+    return destination;
+}
+
+void D3D12Renderer::Impl::createDepthBuffer()
+{
+    if (depthAllocation) {
+        depthAllocation->Release();
+        depthAllocation = nullptr;
+    }
+
+    D3D12_RESOURCE_DESC depthDesc{};
+    depthDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    depthDesc.Width            = width;
+    depthDesc.Height           = height;
+    depthDesc.DepthOrArraySize = 1;
+    depthDesc.MipLevels        = 1;
+    depthDesc.Format           = DXGI_FORMAT_D32_FLOAT;
+    depthDesc.SampleDesc.Count = 1;
+    depthDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+    // El valor de limpieza va declarado: si el del ClearDepthStencilView no
+    // coincide con este, la capa de validación lo señala y la GPU pierde la
+    // ruta rápida de limpieza.
+    D3D12_CLEAR_VALUE clearValue{};
+    clearValue.Format               = DXGI_FORMAT_D32_FLOAT;
+    clearValue.DepthStencil.Depth   = 1.0f;
+
+    D3D12MA::ALLOCATION_DESC defaultDesc{};
+    defaultDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+    throwIfFailed(allocator->CreateResource(&defaultDesc, &depthDesc,
+                                            D3D12_RESOURCE_STATE_DEPTH_WRITE, &clearValue,
+                                            &depthAllocation, IID_NULL, nullptr),
+                  "D3D12MA::Allocator::CreateResource(depth)");
+
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+    dsvDesc.Format        = DXGI_FORMAT_D32_FLOAT;
+    dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+    device->CreateDepthStencilView(depthAllocation->GetResource(), &dsvDesc,
+                                   dsvHeap->GetCPUDescriptorHandleForHeapStart());
+}
+
+void D3D12Renderer::Impl::createMeshPipeline()
+{
+    // Root signature de triangle.vert/triangle.frag:
+    //   b0 space0  UBO de escena          -> root CBV
+    //   b1 space0  push constants         -> 20 root constants
+    //   t1..t3     base, normal, sombras  -> tabla de descriptores
+    //   t0 space1  matrices por instancia -> root SRV
+    // El UBO declara b0 explícitamente y el bloque de push constants no declara
+    // registro, así que DXC le asigna el siguiente libre: b1.
+    D3D12_DESCRIPTOR_RANGE textureRange{};
+    textureRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    textureRange.NumDescriptors     = 3;
+    textureRange.BaseShaderRegister = 1;  // t1, t2, t3
+    textureRange.RegisterSpace      = 0;
+    textureRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER params[4]{};
+    params[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    params[0].Descriptor.ShaderRegister = 0;
+    params[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+
+    params[1].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[1].Constants.ShaderRegister = 1;
+    params[1].Constants.Num32BitValues = sizeof(PushData) / 4;
+    params[1].ShaderVisibility         = D3D12_SHADER_VISIBILITY_ALL;
+
+    params[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[2].DescriptorTable.NumDescriptorRanges = 1;
+    params[2].DescriptorTable.pDescriptorRanges   = &textureRange;
+    params[2].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    params[3].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    params[3].Descriptor.ShaderRegister = 0;
+    params[3].Descriptor.RegisterSpace  = 1;
+    params[3].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
+
+    // Samplers estáticos: los shaders no eligen filtro ni wrap en tiempo de
+    // ejecución, así que no hace falta un heap de samplers ni descriptores.
+    D3D12_STATIC_SAMPLER_DESC samplers[3]{};
+    for (int i = 0; i < 2; ++i) {
+        samplers[i].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        samplers[i].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        samplers[i].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        samplers[i].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        samplers[i].MaxLOD           = D3D12_FLOAT32_MAX;
+        samplers[i].ShaderRegister   = 1 + i;  // s1, s2
+        samplers[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    }
+    // s3 es el del sampler2DArrayShadow: comparación, no filtrado normal.
+    samplers[2].Filter           = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    samplers[2].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[2].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[2].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[2].ComparisonFunc   = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    samplers[2].MaxLOD           = D3D12_FLOAT32_MAX;
+    samplers[2].ShaderRegister   = 3;
+    samplers[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_ROOT_SIGNATURE_DESC rootDesc{};
+    rootDesc.NumParameters     = _countof(params);
+    rootDesc.pParameters       = params;
+    rootDesc.NumStaticSamplers = _countof(samplers);
+    rootDesc.pStaticSamplers   = samplers;
+    rootDesc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> serialized;
+    ComPtr<ID3DBlob> errorBlob;
+    HRESULT hr = D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized,
+                                             &errorBlob);
+    if (FAILED(hr)) {
+        std::string detail;
+        if (errorBlob)
+            detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
+                          errorBlob->GetBufferSize());
+        throw std::runtime_error("D3D12: root signature de malla (HRESULT " +
+                                 hresultToString(hr) + ") " + detail);
+    }
+
+    throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                              serialized->GetBufferSize(),
+                                              IID_PPV_ARGS(&meshRootSignature)),
+                  "ID3D12Device::CreateRootSignature(malla)");
+
+    const std::vector<char> vertexShader = readBinaryFile("shaders/triangle.vert.dxil");
+    const std::vector<char> pixelShader  = readBinaryFile("shaders/triangle.frag.dxil");
+
+    // El orden y los offsets salen de DonTopo::Vertex; las semánticas, de cómo
+    // spirv-cross traduce layout(location = N).
+    const D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, pos),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 1, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, color),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 2, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(Vertex, uv),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 3, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, normal),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 4, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, tangent),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    };
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature        = meshRootSignature.Get();
+    psoDesc.VS                    = {vertexShader.data(), vertexShader.size()};
+    psoDesc.PS                    = {pixelShader.data(), pixelShader.size()};
+    psoDesc.InputLayout           = {inputLayout, _countof(inputLayout)};
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets      = 1;
+    psoDesc.RTVFormats[0]         = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleDesc.Count      = 1;
+    psoDesc.SampleMask            = UINT_MAX;
+
+    psoDesc.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode        = D3D12_CULL_MODE_BACK;
+    psoDesc.RasterizerState.DepthClipEnable = TRUE;
+    // El motor genera los triángulos con el criterio de Vulkan; en D3D12 el
+    // eje Y de pantalla va al revés, así que lo que allí es antihorario aquí
+    // se ve horario. Sin esto, el cubo se dibuja del revés y desaparece.
+    psoDesc.RasterizerState.FrontCounterClockwise = TRUE;
+
+    for (auto& rt : psoDesc.BlendState.RenderTarget)
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+    psoDesc.DepthStencilState.DepthEnable    = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+
+    throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&meshPipeline)),
+                  "ID3D12Device::CreateGraphicsPipelineState(malla)");
+}
+
+void D3D12Renderer::Impl::createMeshResources()
+{
+    // La malla es la del propio motor: mismo generador que usa el editor para
+    // las "Basic Shapes", con su Vertex y su orden de índices.
+    const Mesh cube = Cube::create(2.0f, glm::vec3(1.0f, 1.0f, 1.0f));
+
+    meshVertexAllocation = uploadBuffer(cube.vertices.data(), cube.vertices.size() * sizeof(Vertex),
+                                        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    meshVertexBufferView.BufferLocation = meshVertexAllocation->GetResource()->GetGPUVirtualAddress();
+    meshVertexBufferView.SizeInBytes    = static_cast<UINT>(cube.vertices.size() * sizeof(Vertex));
+    meshVertexBufferView.StrideInBytes  = sizeof(Vertex);
+
+    meshIndexAllocation = uploadBuffer(cube.indices.data(), cube.indices.size() * sizeof(uint32_t),
+                                       D3D12_RESOURCE_STATE_INDEX_BUFFER);
+    meshIndexBufferView.BufferLocation = meshIndexAllocation->GetResource()->GetGPUVirtualAddress();
+    meshIndexBufferView.SizeInBytes    = static_cast<UINT>(cube.indices.size() * sizeof(uint32_t));
+    meshIndexBufferView.Format         = DXGI_FORMAT_R32_UINT;
+    meshIndexCount                     = static_cast<UINT>(cube.indices.size());
+
+    // Una sola instancia, y a propósito NO con la identidad: sube el cubo una
+    // unidad para que se apoye sobre la rejilla en vez de quedar medio
+    // enterrado. Así la posición final demuestra que el shader leyó de verdad
+    // este buffer — con la identidad, un SSBO que no se lee daría exactamente
+    // la misma imagen que uno que sí.
+    const glm::mat4 instanceModel = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    instanceAllocation = uploadBuffer(&instanceModel, sizeof(instanceModel),
+                                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    // Heap de los tres SRV que pide el fragment shader.
+    D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc{};
+    srvHeapDesc.NumDescriptors = 3;
+    srvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    srvHeapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    throwIfFailed(device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&srvHeap)),
+                  "ID3D12Device::CreateDescriptorHeap(SRV)");
+    srvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    // Texturas 1x1: el cubo es procedural y no trae ninguna, pero los shaders
+    // las muestrean igual. Blanca para el color base y (0.5, 0.5, 1) para la
+    // normal, que es la normal sin perturbar.
+    const uint8_t white[4]      = {255, 255, 255, 255};
+    const uint8_t flatNormal[4] = {128, 128, 255, 255};
+    baseColorAllocation = uploadTexture(white, 1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, 4, 0);
+    normalMapAllocation = uploadTexture(flatNormal, 1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, 4, 1);
+
+    // Mapa de sombras: 1x1 por cascada a profundidad máxima. Con cascadeSplits
+    // a cero, selectCascade devuelve -1 y el shader ni lo muestrea; existe
+    // porque la root signature tiene que satisfacer el t3 que declara.
+    const float noShadow[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    shadowMapAllocation = uploadTexture(noShadow, 1, 1, 4, DXGI_FORMAT_R32_FLOAT, 4, 2);
+
+    // UBO por frame en vuelo, mapeado de forma persistente: se reescribe cada
+    // frame y desmapear/remapear no aporta nada.
+    D3D12_RESOURCE_DESC uboDesc{};
+    uboDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+    uboDesc.Width            = alignUp(sizeof(SceneUbo), kCbvAlignment);
+    uboDesc.Height           = 1;
+    uboDesc.DepthOrArraySize = 1;
+    uboDesc.MipLevels        = 1;
+    uboDesc.Format           = DXGI_FORMAT_UNKNOWN;
+    uboDesc.SampleDesc.Count = 1;
+    uboDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    D3D12MA::ALLOCATION_DESC uploadDesc{};
+    uploadDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+
+    for (UINT i = 0; i < kFrameCount; ++i) {
+        throwIfFailed(allocator->CreateResource(&uploadDesc, &uboDesc,
+                                                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                &sceneUboAllocations[i], IID_NULL, nullptr),
+                      "D3D12MA::Allocator::CreateResource(UBO)");
+        const D3D12_RANGE noRead{0, 0};
+        throwIfFailed(sceneUboAllocations[i]->GetResource()->Map(0, &noRead, &sceneUboMapped[i]),
+                      "ID3D12Resource::Map(UBO)");
+    }
+}
+
+void D3D12Renderer::Impl::updateSceneUbo()
+{
+    const float aspect = (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
+
+    SceneUbo ubo{};
+    ubo.view = glm::lookAtRH(glm::vec3(6.0f, 4.5f, 8.0f), glm::vec3(0.0f, 0.5f, 0.0f),
+                             glm::vec3(0.0f, 1.0f, 0.0f));
+    ubo.proj = glm::perspectiveRH_ZO(glm::radians(60.0f), aspect, 0.1f, 500.0f);
+    // Vulkan tiene el eje Y de pantalla invertido respecto a OpenGL y el motor
+    // lo compensa ahí; D3D12 usa la misma orientación que OpenGL, así que aquí
+    // NO se invierte.
+
+    // Sin cascadas: todos los splits a cero hacen que selectCascade devuelva -1
+    // y el shader se salte el muestreo de sombras.
+    ubo.cascadeSplits = glm::vec4(0.0f);
+    for (auto& matrix : ubo.lightSpaceMatrix)
+        matrix = glm::mat4(1.0f);
+
+    // Una direccional (tipo 2), que es lo que el shader trata sin atenuación.
+    ubo.numLights            = 1;
+    ubo.lights[0].direction[0] = -0.4f;
+    ubo.lights[0].direction[1] = -1.0f;
+    ubo.lights[0].direction[2] = -0.5f;
+    ubo.lights[0].direction[3] = 2.0f;  // directional
+    ubo.lights[0].color[0]     = 1.0f;
+    ubo.lights[0].color[1]     = 0.98f;
+    ubo.lights[0].color[2]     = 0.94f;
+    ubo.lights[0].color[3]     = 1.0f;  // intensidad
+
+    ubo.viewPos = glm::vec4(6.0f, 4.5f, 8.0f, 1.0f);
+
+    std::memcpy(sceneUboMapped[frameIndex], &ubo, sizeof(ubo));
+}
+
 void D3D12Renderer::Impl::updateViewProj()
 {
     const float aspect = (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
 
     // Perspective_RH_ZO, no perspective a secas: D3D12 clipea en z=[0,1] igual
     // que Vulkan, y con la convención de OpenGL se pierde la mitad cercana.
+    // MISMA cámara que updateSceneUbo: la rejilla y la malla tienen que
+    // compartir encuadre o el suelo no cae bajo el cubo.
     const glm::mat4 projection =
         glm::perspectiveRH_ZO(glm::radians(60.0f), aspect, 0.1f, 500.0f);
-    const glm::mat4 view = glm::lookAtRH(glm::vec3(14.0f, 10.0f, 18.0f),
-                                         glm::vec3(0.0f, 0.0f, 0.0f),
+    const glm::mat4 view = glm::lookAtRH(glm::vec3(6.0f, 4.5f, 8.0f),
+                                         glm::vec3(0.0f, 0.5f, 0.0f),
                                          glm::vec3(0.0f, 1.0f, 0.0f));
     viewProj = projection * view;
 }
@@ -584,8 +1094,17 @@ void D3D12Renderer::init(Window& window)
     throwIfFailed(D3D12MA::CreateAllocator(&allocatorDesc, &d.allocator),
                   "D3D12MA::CreateAllocator");
 
+    D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc{};
+    dsvHeapDesc.NumDescriptors = 1;
+    dsvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    throwIfFailed(d.device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&d.dsvHeap)),
+                  "ID3D12Device::CreateDescriptorHeap(DSV)");
+    d.createDepthBuffer();
+
     d.createGizmoPipeline();
     d.createGridGeometry();
+    d.createMeshPipeline();
+    d.createMeshResources();
     d.updateViewProj();
 
     d.initialized = true;
@@ -618,8 +1137,10 @@ void D3D12Renderer::drawFrame()
 
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = d.rtvHeap->GetCPUDescriptorHandleForHeapStart();
     rtv.ptr += static_cast<SIZE_T>(d.frameIndex) * d.rtvSize;
-    d.commandList->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    const D3D12_CPU_DESCRIPTOR_HANDLE dsv = d.dsvHeap->GetCPUDescriptorHandleForHeapStart();
+    d.commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
     d.commandList->ClearRenderTargetView(rtv, d.clearColor, 0, nullptr);
+    d.commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
     // Viewport y scissor se ponen cada frame: tras un resize el estado del
     // command list se reinicia y arrastrar el tamaño viejo recortaría la imagen.
@@ -631,6 +1152,39 @@ void D3D12Renderer::drawFrame()
 
     D3D12_RECT scissor{0, 0, static_cast<LONG>(d.width), static_cast<LONG>(d.height)};
     d.commandList->RSSetScissorRects(1, &scissor);
+
+    // La malla primero: escribe profundidad y así la rejilla que va detrás
+    // queda tapada donde toca.
+    if (d.meshPipeline && d.meshIndexCount > 0) {
+        d.updateSceneUbo();
+
+        ID3D12DescriptorHeap* heaps[] = {d.srvHeap.Get()};
+        d.commandList->SetDescriptorHeaps(1, heaps);
+
+        d.commandList->SetPipelineState(d.meshPipeline.Get());
+        d.commandList->SetGraphicsRootSignature(d.meshRootSignature.Get());
+        d.commandList->SetGraphicsRootConstantBufferView(
+            0, d.sceneUboAllocations[d.frameIndex]->GetResource()->GetGPUVirtualAddress());
+
+        PushData push{};
+        push.transform = glm::mat4(1.0f);
+        push.metallic  = 0.0f;
+        push.roughness = 0.6f;
+        // flags.x = 1: el model sale del buffer de instancias, que es la ruta
+        // que usa el motor para la geometría estática.
+        push.flags = glm::vec2(1.0f, 0.0f);
+        d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
+
+        d.commandList->SetGraphicsRootDescriptorTable(
+            2, d.srvHeap->GetGPUDescriptorHandleForHeapStart());
+        d.commandList->SetGraphicsRootShaderResourceView(
+            3, d.instanceAllocation->GetResource()->GetGPUVirtualAddress());
+
+        d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        d.commandList->IASetVertexBuffers(0, 1, &d.meshVertexBufferView);
+        d.commandList->IASetIndexBuffer(&d.meshIndexBufferView);
+        d.commandList->DrawIndexedInstanced(d.meshIndexCount, 1, 0, 0, 0);
+    }
 
     if (d.gizmoPipeline && d.gridVertexCount > 0) {
         d.commandList->SetPipelineState(d.gizmoPipeline.Get());
@@ -729,6 +1283,10 @@ void D3D12Renderer::Impl::applyPendingResize()
 
     createRenderTargetViews();
 
+    // El buffer de profundidad tiene el tamaño de la ventana: si no se recrea,
+    // el test se hace contra una superficie de otro tamaño.
+    createDepthBuffer();
+
     // El aspecto de la proyección depende del tamaño: sin esto la rejilla se
     // deforma al estirar la ventana.
     updateViewProj();
@@ -774,6 +1332,36 @@ void D3D12Renderer::shutdown()
     d.gridVertexBufferView = {};
     d.gridVertexCount      = 0;
 
+    // Los UBO están mapeados de forma persistente: se desmapean antes de
+    // soltar su allocation.
+    for (UINT i = 0; i < kFrameCount; ++i) {
+        if (d.sceneUboAllocations[i]) {
+            if (d.sceneUboMapped[i]) {
+                d.sceneUboAllocations[i]->GetResource()->Unmap(0, nullptr);
+                d.sceneUboMapped[i] = nullptr;
+            }
+            d.sceneUboAllocations[i]->Release();
+            d.sceneUboAllocations[i] = nullptr;
+        }
+    }
+
+    for (auto** allocation : {&d.meshVertexAllocation, &d.meshIndexAllocation,
+                              &d.instanceAllocation, &d.baseColorAllocation,
+                              &d.normalMapAllocation, &d.shadowMapAllocation,
+                              &d.depthAllocation}) {
+        if (*allocation) {
+            (*allocation)->Release();
+            *allocation = nullptr;
+        }
+    }
+    d.meshVertexBufferView = {};
+    d.meshIndexBufferView  = {};
+    d.meshIndexCount       = 0;
+
+    d.srvHeap.Reset();
+    d.dsvHeap.Reset();
+    d.meshPipeline.Reset();
+    d.meshRootSignature.Reset();
     d.gizmoPipeline.Reset();
     d.rootSignature.Reset();
 
