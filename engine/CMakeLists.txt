@@ -92,6 +92,7 @@ endif()
 if(DTE_ENABLE_D3D12)
     target_sources(DonTopoCore PRIVATE
         src/Renderer/D3D12/D3D12Support.cpp
+        src/Renderer/D3D12/D3D12Renderer.cpp
     )
     target_link_libraries(DonTopoCore PRIVATE d3d12 dxgi dxguid D3D12MemoryAllocator)
     target_compile_definitions(DonTopoCore PUBLIC DT_D3D12_ENABLED)

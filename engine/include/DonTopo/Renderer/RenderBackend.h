@@ -25,13 +25,17 @@ RenderBackend renderBackendFromName(const std::string& name, bool& ok);
 struct BackendSelection {
     RenderBackend backend  = RenderBackend::Vulkan;  // el que se puede arrancar
     bool          fellBack = false;                  // true si no es el pedido
-    std::string   message;                           // motivo; vacío si no hubo fallback
+    // Qué contarle al usuario. Va lleno en DOS casos distintos: cuando hubo
+    // fallback (fellBack, con el motivo) y cuando el backend elegido arranca
+    // pero con alcance limitado. El llamante lo enseña siempre que no esté
+    // vacío, sin mirar fellBack.
+    std::string   message;
 };
 
 // Resuelve el backend de arranque. NUNCA falla ni lanza: si el pedido no se
-// puede usar —build sin DX12, máquina sin adaptador capaz, backend todavía
-// incompleto— devuelve Vulkan y explica el motivo en `message`, que el llamante
-// debe enseñar al usuario. Esta es la única puerta por la que se elige backend.
+// puede usar —build sin DX12, máquina sin adaptador capaz— devuelve Vulkan y
+// explica el motivo en `message`. Esta es la única puerta por la que se elige
+// backend.
 BackendSelection resolveRenderBackend(RenderBackend requested);
 
 }  // namespace DonTopo

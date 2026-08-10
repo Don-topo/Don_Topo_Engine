@@ -17,6 +17,7 @@
 #include "DonTopo/Renderer/Gizmos.h"
 #include "DonTopo/Editor/EditorUI.h"
 #include "DonTopo/Editor/ProjectContext.h"
+#include "DonTopo/Renderer/D3D12/D3D12Renderer.h"
 #include "DonTopo/Core/Input.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -37,19 +38,15 @@ int main()
         DonTopo::Window window;
         window.init(1280, 720, "Don Topo Engine", "assets/MainEngineLogo.png");
         DonTopo::Input::init(window.getNativeWindow());
-        // El editor es el dueño del Renderer: se declara él y el resto del
-        // main sigue trabajando contra la referencia, igual que antes.
-        DonTopo::EditorUI  editor;
-        DonTopo::Renderer& renderer = editor.renderer();
 
-        // Backend de render. Se decide AQUÍ, antes de crear nada de GPU, porque
+        // Backend de render. Se decide AQUÍ, antes de crear NADA de GPU, porque
         // el device cuelga de él. El ajuste vive en el project.json, pero el
         // proyecto todavía no se ha elegido (su selector se dibuja con ImGui, o
-        // sea con el Renderer ya en marcha): por eso se lee del último proyecto
+        // sea con un Renderer ya en marcha): por eso se lee del último proyecto
         // abierto, que es lo que recuerda editor.json.
         //
         // resolveRenderBackend nunca falla: lo que no se pueda arrancar se cae a
-        // Vulkan con un motivo, que se guarda para el Log en cuanto exista.
+        // Vulkan con un motivo.
         DonTopo::RenderBackend requestedBackend = DonTopo::RenderBackend::Vulkan;
         const std::filesystem::path lastProject = DonTopo::ProjectContext::readLastProject();
         if (!lastProject.empty())
@@ -63,8 +60,49 @@ int main()
         }
 
         const DonTopo::BackendSelection backend = DonTopo::resolveRenderBackend(requestedBackend);
+
+#ifdef DT_D3D12_ENABLED
+        // Camino DirectX 12. Sale por aquí ANTES de construir el editor, la
+        // física, el audio o la escena: nada de eso sabe todavía dibujarse con
+        // este backend, y levantarlo para luego no usarlo solo serviría para
+        // arrastrar dependencias de Vulkan a un proceso que no lo va a abrir.
+        //
+        // Este bucle es el esqueleto que las fases siguientes van llenando
+        // hasta igualar al de Vulkan. Hoy presenta y procesa eventos.
+        if (backend.backend == DonTopo::RenderBackend::D3D12)
+        {
+            std::cout << backend.message << std::endl;
+
+            DonTopo::D3D12::D3D12Renderer d3d12;
+            d3d12.init(window);
+            std::cout << "D3D12: adaptador '" << d3d12.adapterName() << "'" << std::endl;
+
+            glfwSetWindowUserPointer(window.getNativeWindow(), &d3d12);
+            glfwSetFramebufferSizeCallback(
+                window.getNativeWindow(), [](GLFWwindow* w, int width, int height) {
+                    auto* r = static_cast<DonTopo::D3D12::D3D12Renderer*>(glfwGetWindowUserPointer(w));
+                    if (r)
+                        r->resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+                });
+
+            while (!window.shouldClose())
+            {
+                window.pollEvents();
+                d3d12.drawFrame();
+            }
+
+            d3d12.shutdown();
+            return 0;
+        }
+#endif
+
+        // El editor es el dueño del Renderer: se declara él y el resto del
+        // main sigue trabajando contra la referencia, igual que antes.
+        DonTopo::EditorUI  editor;
+        DonTopo::Renderer& renderer = editor.renderer();
+
         editor.setActiveRenderBackend(backend.backend);
-        if (backend.fellBack)
+        if (!backend.message.empty())
             editor.pushExternalLog(backend.message);
 
         // scene.shutdown(physics, audio) libera explícitamente los colliders/

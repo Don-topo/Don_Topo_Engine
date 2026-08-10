@@ -46,12 +46,14 @@ BackendSelection resolveRenderBackend(RenderBackend requested)
         return sel;
     }
 
-    // La máquina lo soporta, pero el backend todavía no dibuja: device,
-    // swapchain y pipelines llegan en fases posteriores. Se avisa y se arranca
-    // con Vulkan en vez de crear un renderer que no puede presentar nada.
-    sel.fellBack = true;
-    sel.message  = "DirectX 12 detectado (" + support.adapterName +
-                  ") pero el backend todavía no está implementado. Se arranca con Vulkan.";
+    // La máquina lo soporta: se arranca con él. El backend presenta, pero
+    // todavía no dibuja escena ni UI —eso llega en las fases siguientes—, así
+    // que el aviso NO es un fallback: es la advertencia de hasta dónde llega.
+    sel.backend  = RenderBackend::D3D12;
+    sel.fellBack = false;
+    sel.message  = "Backend DirectX 12 activo (" + support.adapterName +
+                  "). Alcance de hoy: presentación. Todavía no dibuja escena, "
+                  "gizmos ni interfaz; para trabajar, elige Vulkan.";
     return sel;
 #endif
 }
