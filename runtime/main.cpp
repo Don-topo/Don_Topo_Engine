@@ -9,6 +9,7 @@
 #include "DonTopo/Core/JobSystem.h"
 #include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
+#include "DonTopo/Renderer/RenderBackend.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Scripting/ScriptManager.h"
@@ -20,6 +21,7 @@
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -121,6 +123,59 @@ int main(int argc, char** argv)
         redirectStdioToLogFile();
 
         const std::string scenePath = (argc > 1) ? argv[1] : "game.scene";
+
+        // Backend de render elegido al exportar. Vive en game.cfg y no en
+        // game.scene: es configuracion de arranque, no parte de la escena.
+        // Un paquete sin game.cfg —exportado antes de que existiera— arranca
+        // con Vulkan, que es lo que hacia siempre.
+        {
+            DonTopo::RenderBackend requested = DonTopo::RenderBackend::Vulkan;
+            std::ifstream cfgIn(exeDir / "game.cfg");
+            if (cfgIn.is_open())
+            {
+                try
+                {
+                    nlohmann::json cfg;
+                    cfgIn >> cfg;
+                    if (cfg.is_object())
+                    {
+                        const auto it = cfg.find("renderBackend");
+                        if (it != cfg.end() && it->is_string())
+                        {
+                            bool ok  = true;
+                            requested = DonTopo::renderBackendFromName(it->get<std::string>(), ok);
+                            if (!ok)
+                            {
+                                std::cout << "game.cfg: backend de render desconocido, se usa Vulkan"
+                                          << std::endl;
+                                requested = DonTopo::RenderBackend::Vulkan;
+                            }
+                        }
+                    }
+                }
+                catch (const std::exception&)
+                {
+                    std::cout << "game.cfg ilegible: se usa Vulkan" << std::endl;
+                }
+            }
+
+            const DonTopo::BackendSelection sel = DonTopo::resolveRenderBackend(requested);
+            // std::cout y no printf: el runtime va sin consola y lo que
+            // redirige a game.log son los streams de C++, asi que un printf se
+            // perderia sin dejar rastro.
+            if (!sel.message.empty())
+                std::cout << sel.message << std::endl;
+
+            // El runtime todavia NO sabe dibujar una escena con DirectX 12: ese
+            // backend solo tiene la escena de prueba del editor. Se avisa y se
+            // sigue con Vulkan en vez de abrir una ventana que no pinta el juego.
+            if (sel.backend == DonTopo::RenderBackend::D3D12)
+            {
+                std::cout << "El runtime no soporta todavia DirectX 12 (no dibuja escenas del "
+                             "proyecto): el juego arranca con Vulkan."
+                          << std::endl;
+            }
+        }
 
         DonTopo::Engine engine;
         DonTopo::Window window;

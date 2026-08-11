@@ -6,6 +6,8 @@
 #include <vector>
 #include <nlohmann/json_fwd.hpp>
 
+#include "DonTopo/Renderer/RenderBackend.h"
+
 namespace DonTopo {
 
 class Scene;
@@ -105,13 +107,18 @@ ExportTargetState inspectExportTarget(const std::filesystem::path& pkg);
 // mirado. Con Missing/Empty/PriorPackage sí hace remove_all() + recreado, para
 // que el paquete no arrastre assets huérfanos de un export anterior (pedir
 // confirmación en el caso PriorPackage sigue siendo cosa de la UI).
+//
+// 'backend' solo decide lo que se escribe en game.cfg y si la ausencia de
+// .dxil se avisa: los shaders de los dos backends se copian siempre, para que
+// el paquete siga arrancando si alguien edita ese campo a mano.
 ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                 const nlohmann::json& rewrittenScene,
                                 const std::filesystem::path& destDir,
                                 const std::string& gameName,
                                 const std::filesystem::path& projectRoot,
                                 const std::filesystem::path& scriptsDir,
-                                const std::filesystem::path& runtimeExe);
+                                const std::filesystem::path& runtimeExe,
+                                RenderBackend backend = RenderBackend::Vulkan);
 
 // Export completo: valida, recolecta, reescribe y escribe el paquete.
 // Los mensajes para el usuario van en ExportResult::messages; el llamador
@@ -126,6 +133,7 @@ ExportResult exportGame(Scene& scene,
                         const std::string& gameName,
                         const std::filesystem::path& projectRoot,
                         const std::filesystem::path& scriptsDir,
-                        const std::filesystem::path& runtimeExe);
+                        const std::filesystem::path& runtimeExe,
+                        RenderBackend backend = RenderBackend::Vulkan);
 
 } // namespace DonTopo

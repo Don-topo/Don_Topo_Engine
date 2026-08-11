@@ -1446,6 +1446,19 @@ void EditorUI::drawExportDialog()
         else
             ImGui::Text("Paquete: %s", pkg.string().c_str());
 
+        // Backend con el que arrancará el juego. No tiene por qué ser el del
+        // editor: se exporta para la máquina del jugador, no para esta. Se
+        // guarda en el game.cfg del paquete, no en el project.json.
+        ImGui::Separator();
+        const char* exportBackendNames[] = { "Vulkan", "DirectX 12" };
+        ImGui::SetNextItemWidth(140.0f);
+        ImGui::Combo("Render backend", &m_exportBackend, exportBackendNames,
+                     IM_ARRAYSIZE(exportBackendNames));
+        if (m_exportBackend == (int)RenderBackend::D3D12)
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                               "El backend DirectX 12 todavia no dibuja escenas: el juego\n"
+                               "arrancara con Vulkan y lo dejara dicho en game.log.");
+
         ImGui::BeginDisabled(!canExport);
         if (ImGui::Button("Export"))
         {
@@ -1564,8 +1577,12 @@ void EditorUI::runExport()
         }
     }
 
+    const RenderBackend exportBackend = (m_exportBackend == (int)RenderBackend::D3D12)
+                                            ? RenderBackend::D3D12
+                                            : RenderBackend::Vulkan;
     ExportResult result = exportGame(*m_scene, scriptPaths, m_exportDestDir,
-                                     m_exportNameBuffer, projectRoot, scriptsDir, runtimeExe);
+                                     m_exportNameBuffer, projectRoot, scriptsDir, runtimeExe,
+                                     exportBackend);
     for (const std::string& msg : result.messages)
         m_logPanel.push(msg);
     if (!result.ok)

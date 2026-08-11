@@ -301,6 +301,12 @@ private:
     RenderBackend m_activeBackend   = RenderBackend::Vulkan;
     RenderBackend m_selectedBackend = RenderBackend::Vulkan;
 
+    // Backend del diálogo de Export Game, como índice del combo. Es INDEPENDIENTE
+    // de los dos de arriba: el juego se exporta para la máquina del jugador, que
+    // no tiene por qué usar el mismo backend que este editor. Ajuste de sesión,
+    // no se persiste en el project.json — el destino es el game.cfg del paquete.
+    int m_exportBackend = 0;
+
     // Backend de ImGui. El device se guarda en initUi porque shutdownUi lo
     // necesita para liberar el pool y ahí ya no hay InitInfo.
     VkDescriptorPool m_uiDescPool = VK_NULL_HANDLE;

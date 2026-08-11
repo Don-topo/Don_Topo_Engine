@@ -367,6 +367,8 @@ static void test_package_contents(const fs::path& root)
         std::ofstream(root / "assets" / "skybox" / (std::string(face) + ".png")) << "png";
     fs::create_directories(root / "shaders", ec);
     std::ofstream(root / "shaders" / "triangle.vert.spv") << "spv";
+    // Los .dxil del backend DirectX 12 viajan junto a los .spv.
+    std::ofstream(root / "shaders" / "triangle.vert.dxil") << "dxil";
     // Asset del proyecto que la escena NO referencia: no debe acabar copiado.
     std::ofstream(root / "assets" / "huerfano.fbx") << "fbx";
     // Runtime de mentira.
@@ -390,8 +392,12 @@ static void test_package_contents(const fs::path& root)
     fs::path dest = tempRoot / "dt_exporter_out";
     fs::remove_all(dest, ec);
 
+    // Se exporta pidiendo DirectX 12 a propósito, y no el valor por defecto:
+    // con Vulkan, un game.cfg que no se escribiera nunca daría exactamente el
+    // mismo resultado que uno escrito bien.
     ExportResult r = writeExportPackage(assets, scene.toJson(), dest, "MiJuego",
-                                        root, root / "Scripts", root / "DonTopoRuntime.exe");
+                                        root, root / "Scripts", root / "DonTopoRuntime.exe",
+                                        RenderBackend::D3D12);
 
     const fs::path pkg = dest / "MiJuego";
     CHECK(r.ok);
@@ -401,7 +407,24 @@ static void test_package_contents(const fs::path& root)
     CHECK(fs::exists(pkg / "assets" / "skybox" / "px.png"));
     CHECK(fs::exists(pkg / "assets" / "skybox" / "nz.png"));
     CHECK(fs::exists(pkg / "shaders" / "triangle.vert.spv"));
+    CHECK(fs::exists(pkg / "shaders" / "triangle.vert.dxil"));
     CHECK(fs::exists(pkg / "Scripts" / "Player.lua"));
+
+    // El backend elegido llega al paquete, y llega con el nombre que el runtime
+    // sabe leer.
+    CHECK(fs::exists(pkg / "game.cfg"));
+    {
+        std::ifstream  cfgIn(pkg / "game.cfg");
+        nlohmann::json cfg;
+        bool           parsed = false;
+        if (cfgIn.is_open())
+        {
+            try { cfgIn >> cfg; parsed = true; } catch (const std::exception&) {}
+        }
+        CHECK(parsed);
+        CHECK(parsed && cfg.is_object() && cfg.contains("renderBackend"));
+        CHECK(parsed && cfg.value("renderBackend", std::string{}) == "DirectX 12");
+    }
     // Criterio 3: el asset no referenciado se queda fuera.
     CHECK(!fs::exists(pkg / "assets" / "huerfano.fbx"));
 
@@ -412,11 +435,13 @@ static void test_package_contents(const fs::path& root)
     //   1  assets/hero.fbx        (único asset que la escena referencia)
     //   6  assets/skybox/*.png    (las 6 caras, hardcoded, van siempre)
     //   1  shaders/triangle.vert.spv (único .spv creado por este fixture)
+    //   1  shaders/triangle.vert.dxil (único .dxil creado por este fixture)
     //   1  Scripts/Player.lua     (único fichero bajo Scripts/ en el fixture)
     //   0  fmod.dll               (este fixture no lo crea)
     //   1  game.scene
-    //  = 11
-    CHECK(r.fileCount == 11);
+    //   1  game.cfg               (backend de arranque)
+    //  = 13
+    CHECK(r.fileCount == 13);
     CHECK(r.totalBytes > 0);
 
     // Hallazgo 1: totalBytes debe incluir también game.scene. Se comprueba
@@ -775,12 +800,13 @@ static void test_release_package_bundles_msvc_crt()
     CHECK(fs::exists(pkg / "vcruntime140_1.dll"));
     CHECK(!fs::exists(pkg / "otra.dll"));
     CHECK(!fs::exists(pkg / "msvcp140.lib"));
-    CHECK(r.fileCount == 12);
+    // +1 sobre lo que contaba antes de que existiera game.cfg.
+    CHECK(r.fileCount == 13);
 #else
     CHECK(!fs::exists(pkg / "MSVCP140.dll"));
     CHECK(!fs::exists(pkg / "VCRUNTIME140.dll"));
     CHECK(!fs::exists(pkg / "vcruntime140_1.dll"));
-    CHECK(r.fileCount == 9);
+    CHECK(r.fileCount == 10);
 #endif
 
     // Sin ninguna DLL del CRT al lado del editor: aviso en Release (no error,
@@ -800,10 +826,10 @@ static void test_release_package_bundles_msvc_crt()
     });
 #ifdef NDEBUG
     CHECK(avisaCrt);
-    CHECK(r2.fileCount == 9);
+    CHECK(r2.fileCount == 10);
 #else
     CHECK(!avisaCrt);
-    CHECK(r2.fileCount == 9);
+    CHECK(r2.fileCount == 10);
 #endif
 
     fs::remove_all(fixRoot, ec);

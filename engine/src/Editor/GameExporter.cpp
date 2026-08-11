@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <fstream>
 #include <system_error>
 
 namespace fs = std::filesystem;
@@ -415,7 +416,8 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                 const std::string& gameName,
                                 const fs::path& projectRoot,
                                 const fs::path& scriptsDir,
-                                const fs::path& runtimeExe)
+                                const fs::path& runtimeExe,
+                                RenderBackend backend)
 {
     ExportResult r;
     std::error_code ec;
@@ -581,6 +583,69 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         }
     }
 
+    // shaders/*.dxil junto a los .spv. Se copian SIEMPRE, no solo cuando el
+    // backend elegido es DirectX 12: son 35 ficheros pequenos y asi el paquete
+    // sigue arrancando si alguien cambia renderBackend en el game.cfg a mano.
+    //
+    // Su ausencia NO es error, al reves que con los .spv: un build hecho con
+    // DTE_ENABLE_D3D12=OFF no los genera, y ese paquete es perfectamente valido
+    // mientras se quede en Vulkan.
+    {
+        int dxilCopied = 0;
+        std::error_code dec;
+        for (fs::directory_iterator it(projectRoot / "shaders", dec), end; !dec && it != end; it.increment(dec))
+        {
+            if (it->path().extension() != ".dxil") continue;
+            if (copyOne(it->path(), pkg / "shaders" / it->path().filename())) ++dxilCopied;
+            else                                                             ok = false;
+        }
+        if (dxilCopied == 0 && backend == RenderBackend::D3D12)
+        {
+            r.messages.push_back("Aviso: se eligio DirectX 12 pero no hay ningun shader .dxil en " +
+                                 (projectRoot / "shaders").string() +
+                                 "; el juego exportado no podra usar ese backend.");
+        }
+    }
+
+    // game.cfg: configuracion de ARRANQUE del juego, separada de game.scene a
+    // proposito. Meter el backend en la escena obligaria a tocar el formato de
+    // escena y su versionado por un dato que no describe la escena.
+    {
+        nlohmann::json cfg;
+        cfg["renderBackend"] = renderBackendName(backend);
+
+        const fs::path cfgPath = pkg / "game.cfg";
+        std::ofstream  out(cfgPath, std::ios::binary | std::ios::trunc);
+        if (out.is_open())
+        {
+            out << cfg.dump(4);
+            out.flush();
+            if (out.good())
+            {
+                ++r.fileCount;
+                // Y sus bytes: el resumen del Log dice "N ficheros, K KB", y
+                // contar el fichero sin contar su tamaño descuadra el total.
+                out.close();
+                std::error_code sizeEc;
+                const auto      cfgSize = fs::file_size(cfgPath, sizeEc);
+                if (!sizeEc)
+                    r.totalBytes += cfgSize;
+            }
+            else
+            {
+                r.messages.push_back("No se pudo escribir " + cfgPath.string() +
+                                     "; el juego arrancara con Vulkan.");
+                ok = false;
+            }
+        }
+        else
+        {
+            r.messages.push_back("No se pudo crear " + cfgPath.string() +
+                                 "; el juego arrancara con Vulkan.");
+            ok = false;
+        }
+    }
+
     // Scripts/ entera: los .lua se referencian por nombre y pueden hacer
     // require entre ellos, así que filtrar por referencias los rompería.
     if (fs::exists(scriptsDir, ec))
@@ -726,7 +791,8 @@ ExportResult exportGame(Scene& scene,
                         const std::string& gameName,
                         const fs::path& projectRoot,
                         const fs::path& scriptsDir,
-                        const fs::path& runtimeExe)
+                        const fs::path& runtimeExe,
+                        RenderBackend backend)
 {
     ExportResult r;
 
@@ -778,7 +844,8 @@ ExportResult exportGame(Scene& scene,
     nlohmann::json sceneJson = scene.toJson();
     rewriteScenePaths(sceneJson, sourceToPackage);
 
-    return writeExportPackage(assets, sceneJson, destDir, gameName, projectRoot, scriptsDir, runtimeExe);
+    return writeExportPackage(assets, sceneJson, destDir, gameName, projectRoot, scriptsDir,
+                              runtimeExe, backend);
 }
 
 } // namespace DonTopo
