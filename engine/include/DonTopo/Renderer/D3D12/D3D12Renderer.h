@@ -2,6 +2,8 @@
 
 #ifdef DT_D3D12_ENABLED
 
+#include "DonTopo/Renderer/RendererState.h"
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -24,7 +26,11 @@ namespace D3D12 {
 // El estado de DX12 vive en un Impl oculto para que este header no arrastre
 // d3d12.h a todo el que incluya el motor; por eso las libs van PRIVATE en el
 // CMakeLists de DonTopoCore.
-class D3D12Renderer {
+// Hereda de RendererState igual que el Renderer de Vulkan: los parámetros de
+// bloom, niebla, SSAO, SSR y anti-aliasing son los mismos valores en los dos
+// backends, y tenerlos una sola vez es lo que permite que el mismo panel de
+// opciones sirva para ambos.
+class D3D12Renderer : public RendererState {
 public:
     D3D12Renderer();
     ~D3D12Renderer();

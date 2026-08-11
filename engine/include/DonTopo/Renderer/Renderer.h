@@ -9,6 +9,7 @@
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Renderer/UniformBufferObject.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Renderer/RendererState.h"
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/GpuResources.h"
 #include "DonTopo/Renderer/SharedGpuMesh.h"
@@ -34,7 +35,10 @@ namespace DonTopo {
     class Scene;
     class ScriptManager;
 
-    class Renderer {
+    // Los get/set del estado escalar de calidad y efectos (ambiente, bloom,
+    // SSAO, SSR, niebla, FXAA, TAA, Forward+) los pone RendererState: no
+    // dependen de Vulkan y los comparte el backend de DirectX 12.
+    class Renderer : public RendererState {
         // --- API de edicion (solo la consume DonTopoEditor) ---
         //
         // Tras el split Core/Editor la frontera es de build (dos targets), no
@@ -235,16 +239,6 @@ namespace DonTopo {
             }
             void setLights(const std::vector<Light>& lights){ m_lights = lights; }
 
-            // Peso global del ambiente IBL. 1.0 = el entorno tal cual lo da el
-            // cubemap. Viaja por el UBO, asi que cambia en el frame siguiente
-            // sin recomputar nada.
-            void  setAmbientIntensity(float v) { m_ambientIntensity = v; }
-            float ambientIntensity() const     { return m_ambientIntensity; }
-            // Interruptor global: apagarlo NO destruye el IBL precomputado, solo
-            // manda 0 en el UBO. Se puede encender otra vez sin recomputar nada.
-            void  setAmbientEnabled(bool v) { m_ambientEnabled = v; }
-            bool  ambientEnabled() const    { return m_ambientEnabled; }
-
             // ── Reflection probes ──────────────────────────────────────────
             // La UI solo ENCOLA: el bake ocurre al principio de drawFrame, que
             // es donde se puede esperar a que la GPU quede libre sin pillar el
@@ -276,22 +270,11 @@ namespace DonTopo {
                 return -1.0f;
             }
 
-            // Bloom HDR. Los tres viajan por push constant de los pipelines del
-            // bloom (NO por el UBO: ahi solo quedaban 2 floats y el bloque esta
-            // declarado en 5 shaders), asi que cambian en el frame siguiente sin
-            // recrear nada. intensity = 0 deja la imagen exactamente igual que
-            // antes de la feature.
             // Interruptor global: apagado no se graba ni un dispatch de la cadena
             // de mips y la composicion suma bloom cero (el pass LDR NO se salta,
             // que es tambien quien tonemapea).
             void  setBloomEnabled(bool v);
             bool  bloomEnabled() const       { return m_bloomEnabled; }
-            void  setBloomThreshold(float v) { m_bloomThreshold = v; }
-            float bloomThreshold() const     { return m_bloomThreshold; }
-            void  setBloomKnee(float v)      { m_bloomKnee = v; }
-            float bloomKnee() const          { return m_bloomKnee; }
-            void  setBloomIntensity(float v) { m_bloomIntensity = v; }
-            float bloomIntensity() const     { return m_bloomIntensity; }
             // Coste GPU del bloom + composicion del ultimo frame ya resuelto, en
             // ms. 0 si el dispositivo no soporta timestamps.
             float bloomGpuMs() const         { return m_bloomGpuMs; }
@@ -299,63 +282,18 @@ namespace DonTopo {
             // SSAO. Apagado por defecto: con el flag a false no se graba ni el
             // depth pre-pass ni los dos dispatches, y el mapa de AO se deja a 1.0
             // una sola vez, asi que la imagen es la misma que antes de la feature
-            // y el coste GPU cae a cero. Los cuatro parametros viajan por push
-            // constant del pipeline del SSAO (NO por el UBO: solo quedaban dos
-            // floats y el bloque esta declarado en 5 shaders), asi que cambian en
-            // el frame siguiente sin recrear nada.
+            // y el coste GPU cae a cero.
             void  setSsaoEnabled(bool v);
             bool  ssaoEnabled() const        { return m_ssaoEnabled; }
-            void  setSsaoRadius(float v)     { m_ssaoRadius = v; }
-            float ssaoRadius() const         { return m_ssaoRadius; }
-            void  setSsaoBias(float v)       { m_ssaoBias = v; }
-            float ssaoBias() const           { return m_ssaoBias; }
-            void  setSsaoIntensity(float v)  { m_ssaoIntensity = v; }
-            float ssaoIntensity() const      { return m_ssaoIntensity; }
-            void  setSsaoPower(float v)      { m_ssaoPower = v; }
-            float ssaoPower() const          { return m_ssaoPower; }
             // Coste GPU del pre-pass + los dos dispatches, en ms. 0 si el efecto
             // esta apagado o el dispositivo no soporta timestamps.
             float ssaoGpuMs() const          { return m_ssaoGpuMs; }
 
-            // SSR (reflejos en espacio de pantalla). Interruptor global; ademas
-            // cada GameObject lleva su propia fuerza, y con el interruptor puesto
-            // pero NINGUN objeto marcado tampoco se graba nada. Los parametros
-            // viajan por push constant propia (SsrPush), no por el UBO.
-            void  setSsrEnabled(bool v)      { m_ssrEnabled = v; }
-            bool  ssrEnabled() const         { return m_ssrEnabled; }
-            void  setSsrMaxDistance(float v) { m_ssrMaxDistance = v; }
-            float ssrMaxDistance() const     { return m_ssrMaxDistance; }
-            void  setSsrThickness(float v)   { m_ssrThickness = v; }
-            float ssrThickness() const       { return m_ssrThickness; }
-            void  setSsrMaxSteps(int v)      { m_ssrMaxSteps = v; }
-            int   ssrMaxSteps() const        { return m_ssrMaxSteps; }
-            void  setSsrEdgeFade(float v)    { m_ssrEdgeFade = v; }
-            float ssrEdgeFade() const        { return m_ssrEdgeFade; }
-            void  setSsrIntensity(float v)   { m_ssrIntensity = v; }
-            float ssrIntensity() const       { return m_ssrIntensity; }
             // Coste GPU del SSR en ms: los dos dispatches, mas el depth pre-pass
             // cuando es el SSR quien lo pide (con el SSAO encendido ese pre-pass
             // ya lo contabiliza ssaoGpuMs y aqui no se suma dos veces).
             float ssrGpuMs() const           { return m_ssrGpuMs; }
 
-            // Niebla volumetrica: exponencial por altura con in-scattering de
-            // la luz key. Interruptor global; apagado no graba ni un comando y
-            // la imagen sale identica. Los parametros viajan por push constant
-            // propia (FogPush), no por el UBO.
-            void  setFogEnabled(bool v)         { m_fogEnabled = v; }
-            bool  fogEnabled() const            { return m_fogEnabled; }
-            void  setFogDensity(float v)        { m_fogDensity = v; }
-            float fogDensity() const            { return m_fogDensity; }
-            void  setFogHeightFalloff(float v)  { m_fogHeightFalloff = v; }
-            float fogHeightFalloff() const      { return m_fogHeightFalloff; }
-            void  setFogBaseHeight(float v)     { m_fogBaseHeight = v; }
-            float fogBaseHeight() const         { return m_fogBaseHeight; }
-            void  setFogScatter(const glm::vec3& v) { m_fogScatter = v; }
-            const glm::vec3& fogScatter() const { return m_fogScatter; }
-            void  setFogAnisotropy(float v)     { m_fogAnisotropy = v; }
-            float fogAnisotropy() const         { return m_fogAnisotropy; }
-            void  setFogSteps(int v)            { m_fogSteps = v; }
-            int   fogSteps() const              { return m_fogSteps; }
             // Coste GPU del dispatch de niebla en ms. 0 si esta apagada o el
             // dispositivo no soporta timestamps.
             float fogGpuMs() const              { return m_fogGpuMs; }
@@ -379,13 +317,6 @@ namespace DonTopo {
             // constant y surten efecto en el frame siguiente sin recrear nada.
             void   setAaMode(AaMode mode);
             AaMode aaMode() const                 { return m_aaMode; }
-            // FXAA
-            void  setFxaaSubpix(float v)          { m_fxaaSubpix = v; }
-            float fxaaSubpix() const              { return m_fxaaSubpix; }
-            void  setFxaaEdgeThreshold(float v)   { m_fxaaEdgeThreshold = v; }
-            float fxaaEdgeThreshold() const       { return m_fxaaEdgeThreshold; }
-            void  setFxaaEdgeThresholdMin(float v){ m_fxaaEdgeThresholdMin = v; }
-            float fxaaEdgeThresholdMin() const    { return m_fxaaEdgeThresholdMin; }
             // SSAA: multiplicador de resolucion por eje. El coste crece con el
             // CUADRADO, y el tamano se recorta a maxImageDimension2D del device.
             void  setSsaaFactor(float v);
@@ -395,12 +326,6 @@ namespace DonTopo {
             void setMsaaSamples(int v);
             int  msaaSamples() const              { return m_msaaSamples; }
             int  maxMsaaSamples() const;
-            // TAA: peso del historial (0 = solo el frame actual, sin acumulacion)
-            // y amplitud del jitter de subpixel en pixeles.
-            void  setTaaFeedback(float v)         { m_taaFeedback = v; }
-            float taaFeedback() const             { return m_taaFeedback; }
-            void  setTaaJitterScale(float v)      { m_taaJitterScale = v; }
-            float taaJitterScale() const          { return m_taaJitterScale; }
             // Coste GPU del pass PROPIO del modo activo (FXAA, resolve de SSAA,
             // acumulacion del TAA). En None y en MSAA vale 0: MSAA no tiene pass
             // propio, su coste esta repartido en la escena y en la composicion,
@@ -431,27 +356,6 @@ namespace DonTopo {
             int   statCulled() const              { return m_statCulled; }
 
             // ── Forward+ ─────────────────────────────────────────────────────
-            // Culling de luces en GPU. Modos EXCLUYENTES. Off deja el frame
-            // exactamente como antes de la feature: ni un dispatch, y pbr.frag
-            // recorre las MAX_LIGHTS del UBO como siempre.
-            enum class FpMode : int
-            {
-                Off       = 0,
-                Tiled     = 1,  // rejilla 2D de tiles de 16x16 con el maximo de profundidad del tile
-                Clustered = 2,  // rejilla 3D de 64x64 pixeles x 24 cortes logaritmicos en Z
-            };
-            // Cambia en el frame SIGUIENTE y no recrea nada: los dos modos
-            // comparten buffers (dimensionados al mayor de las dos rejillas), asi
-            // que lo unico que cambia es lo que se graba y el bloque de
-            // parametros. El valor que manda durante un frame se congela en
-            // m_fpActiveMode justo despues de la UI.
-            void   setForwardPlusMode(FpMode mode) { m_fpMode = mode; }
-            FpMode forwardPlusMode() const         { return m_fpMode; }
-            // Radio por defecto de TODAS las luces que no traigan el suyo. Es el
-            // dato que el culling necesita y que Light no lleva: meterlo en el
-            // struct cambiaria el layout std140 del UBO, que declaran 5 shaders.
-            void  setForwardPlusLightRadius(float v) { m_fpLightRadius = v; }
-            float forwardPlusLightRadius() const     { return m_fpLightRadius; }
             // Radio POR luz, en el mismo orden que setLights. Vacio (lo normal) =
             // todas usan el radio global de arriba.
             void setLightRadii(const std::vector<float>& radii) { m_lightRadii = radii; }
@@ -1042,9 +946,6 @@ namespace DonTopo {
             VkPipeline                      m_compositePipeline                 = VK_NULL_HANDLE;
 
             bool                            m_bloomEnabled                      = true;
-            float                           m_bloomThreshold                    = 1.0f;
-            float                           m_bloomKnee                         = 0.5f;
-            float                           m_bloomIntensity                    = 0.05f;
             // Cadena pendiente de dejar en negro (efecto recien apagado o imagenes
             // recien creadas). Una por frame en vuelo: cada slot se limpia en su
             // propio command buffer.
@@ -1114,10 +1015,6 @@ namespace DonTopo {
                 float power;
             };
             bool                            m_ssaoEnabled                       = false;
-            float                           m_ssaoRadius                        = 0.5f;
-            float                           m_ssaoBias                          = 0.025f;
-            float                           m_ssaoIntensity                     = 1.0f;
-            float                           m_ssaoPower                         = 1.0f;
             // Con el efecto apagado el mapa tiene que valer 1.0 (identidad) y
             // ademas estar en GENERAL, que es el layout que declaran los
             // descriptor sets. Un clear resuelve las dos cosas de golpe, y solo se
@@ -1169,12 +1066,6 @@ namespace DonTopo {
                 float   intensity;
             };
             static_assert(sizeof(SsrPush) == 48, "SsrPush debe seguir en 48 bytes: los dos .comp declaran este layout");
-            bool                            m_ssrEnabled                        = false;
-            float                           m_ssrMaxDistance                    = 8.0f;
-            float                           m_ssrThickness                      = 0.5f;
-            int                             m_ssrMaxSteps                       = 32;
-            float                           m_ssrEdgeFade                       = 0.1f;
-            float                           m_ssrIntensity                      = 1.0f;
             // Cuatro queries por frame: [0,1] el depth pre-pass cuando es el SSR
             // quien lo pide, [2,3] los dos dispatches. Reutilizar las del SSAO o
             // las del bloom mezclaria dos medidas.
@@ -1206,13 +1097,6 @@ namespace DonTopo {
                 glm::vec4 gStepsRes;
             };
             static_assert(sizeof(FogPush) == 128, "FogPush debe seguir en 128 bytes: fog.comp declara este layout");
-            bool                            m_fogEnabled                        = false;
-            float                           m_fogDensity                        = 0.02f;
-            float                           m_fogHeightFalloff                  = 0.02f;
-            float                           m_fogBaseHeight                     = 0.0f;
-            glm::vec3                       m_fogScatter                        {0.6f, 0.7f, 0.9f};
-            float                           m_fogAnisotropy                     = 0.6f;
-            int                             m_fogSteps                          = 32;
             // Dos queries por frame que acotan el unico dispatch. El depth
             // pre-pass NO entra aqui: ya lo miden el SSAO o el SSR cuando son
             // ellos quienes lo piden.
@@ -1298,10 +1182,6 @@ namespace DonTopo {
                 float edgeThresholdMin;
             };
             static_assert(sizeof(FxaaPush) == 20, "FxaaPush debe seguir en 20 bytes: fxaa.frag declara este layout");
-            // Valores del preset de calidad de PC de FXAA 3.11.
-            float                           m_fxaaSubpix                        = 0.75f;
-            float                           m_fxaaEdgeThreshold                 = 0.166f;
-            float                           m_fxaaEdgeThresholdMin              = 0.0833f;
 
             // SSAA: mismo layout que declara ssaa_resolve.frag.
             struct SsaaPush {
@@ -1362,8 +1242,6 @@ namespace DonTopo {
                 int32_t   historyValid;
             };
             static_assert(sizeof(TaaPush) == 80, "TaaPush debe seguir en 80 bytes: taa.frag declara este layout");
-            float                           m_taaFeedback                       = 0.9f;
-            float                           m_taaJitterScale                    = 1.0f;
             // Indice dentro de la secuencia de Halton del jitter de este frame.
             uint32_t                        m_taaJitterIndex                    = 0;
             // Jitter aplicado ESTE frame, en unidades de clip space. Lo necesita
@@ -1423,9 +1301,7 @@ namespace DonTopo {
             // parametros que lee pbr.frag se escribe una sola vez por frame. Sin
             // esta separacion, un click podria dejar el frame con la rejilla de un
             // modo y la lectura del otro.
-            FpMode                          m_fpMode                            = FpMode::Off;
             FpMode                          m_fpActiveMode                      = FpMode::Off;
-            float                           m_fpLightRadius                     = 2000.0f;
             std::vector<float>              m_lightRadii;
             // Bloque de parametros tal cual lo declaran los dos .comp y pbr.frag.
             // std430 con puros escalares de 4 bytes: los offsets son secuenciales.
@@ -1578,9 +1454,7 @@ namespace DonTopo {
             glm::mat4                       m_viewMatrix{1.0f};
             Camera                          m_camera;
             std::vector<Light>              m_lights;
-            float                           m_ambientIntensity{1.0f};
-            bool                            m_ambientEnabled{true};
-            
+
             // Shadow Map (cascadas)
             static constexpr uint32_t       SHADOW_SIZE                         = 2048;
             VkImage                         m_shadowImage                       = VK_NULL_HANDLE;

@@ -359,14 +359,15 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12RootSignature> compositeRootSignature;
     ComPtr<ID3D12PipelineState> compositePipeline;
 
-    // Parámetros del bloom, los mismos defaults que el editor salvo la
-    // intensidad. Con 0,05 el efecto no se distingue de no tenerlo en una
-    // escena sin fuentes de luz brillantes, y con 0,6 lava la imagen entera;
-    // 0,15 se ve sin comerse el contraste.
-    float bloomThreshold = 1.0f;
-    float bloomKnee      = 0.5f;
-    float bloomRadius    = 1.0f;
-    float bloomIntensity = 0.15f;
+    // Estado de calidad y efectos compartido con el backend de Vulkan. Es el
+    // propio D3D12Renderer: el Impl no lo copia, lo consulta, para que un
+    // setBloomIntensity() desde fuera se vea en el frame siguiente sin
+    // sincronizar nada.
+    RendererState* state = nullptr;
+
+    // El radio del tent del bloom NO está en RendererState: el Renderer de
+    // Vulkan no lo expone como ajuste, así que sigue siendo local.
+    float bloomRadius = 1.0f;
 
     // ── Niebla y FXAA ───────────────────────────────────────────────────────
     // La niebla escribe SOBRE el target HDR antes del bloom; FXAA va al final,
@@ -377,17 +378,7 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12PipelineState> fxaaPipeline;
     D3D12MA::Allocation*        ldrAllocation = nullptr;
 
-    // Defaults del editor.
-    float fogDensity       = 0.02f;
-    float fogHeightFalloff = 0.02f;
-    float fogBaseHeight    = 0.0f;
-    float fogAnisotropy    = 0.6f;
-    int   fogSteps         = 32;
-    glm::vec3 fogScatter{0.6f, 0.7f, 0.9f};
-
-    float fxaaSubpix           = 0.75f;
-    float fxaaEdgeThreshold    = 0.166f;
-    float fxaaEdgeThresholdMin = 0.0833f;
+    // Los parámetros de niebla y FXAA también salen de RendererState.
 
     // Interfaz de usuario. La dibuja quien conoce ImGui, no este backend.
     std::function<void()> uiDrawCallback;
@@ -1934,12 +1925,12 @@ void D3D12Renderer::Impl::recordFog()
     // La misma proyección con la que se grabó la profundidad. En Vulkan aquí
     // entra su inversión de Y; en D3D12 no hay ninguna que meter.
     push.invViewProj      = glm::inverse(proj * view);
-    push.camPosDensity    = glm::vec4(camPos, fogDensity);
-    push.lightDirFalloff  = glm::vec4(glm::normalize(lightDirection), fogHeightFalloff);
+    push.camPosDensity    = glm::vec4(camPos, state->fogDensity());
+    push.lightDirFalloff  = glm::vec4(glm::normalize(lightDirection), state->fogHeightFalloff());
     // El scattering va YA multiplicado por el color y la intensidad de la luz.
-    push.scatterBaseHeight = glm::vec4(fogScatter * glm::vec3(1.0f, 0.98f, 0.94f) * 0.7f,
-                                       fogBaseHeight);
-    push.gStepsRes = glm::vec4(fogAnisotropy, static_cast<float>(fogSteps),
+    push.scatterBaseHeight = glm::vec4(state->fogScatter() * glm::vec3(1.0f, 0.98f, 0.94f) * 0.7f,
+                                       state->fogBaseHeight());
+    push.gStepsRes = glm::vec4(state->fogAnisotropy(), static_cast<float>(state->fogSteps()),
                                static_cast<float>(width), static_cast<float>(height));
 
     ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
@@ -2002,8 +1993,8 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
         BloomPush push{};
         push.srcTexel[0] = 1.0f / static_cast<float>(srcWidth);
         push.srcTexel[1] = 1.0f / static_cast<float>(srcHeight);
-        push.threshold   = bloomThreshold;
-        push.knee        = bloomKnee;
+        push.threshold   = state->bloomThreshold();
+        push.knee        = state->bloomKnee();
         push.radius      = bloomRadius;
         push.prefilter   = (level == 0) ? 1 : 0;
 
@@ -2026,8 +2017,8 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
         BloomPush push{};
         push.srcTexel[0] = 1.0f / static_cast<float>(bloomMipWidth[level + 1]);
         push.srcTexel[1] = 1.0f / static_cast<float>(bloomMipHeight[level + 1]);
-        push.threshold   = bloomThreshold;
-        push.knee        = bloomKnee;
+        push.threshold   = state->bloomThreshold();
+        push.knee        = state->bloomKnee();
         push.radius      = bloomRadius;
         push.prefilter   = 0;
 
@@ -2074,6 +2065,7 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     commandList->RSSetScissorRects(1, &scissor);
     commandList->SetPipelineState(compositePipeline.Get());
     commandList->SetGraphicsRootSignature(compositeRootSignature.Get());
+    const float bloomIntensity = state->bloomIntensity();
     commandList->SetGraphicsRoot32BitConstants(0, 1, &bloomIntensity, 0);
     commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(kSrvSceneHdr));
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -2087,9 +2079,9 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     FxaaPush fxaaPush{};
     fxaaPush.invRes[0]        = 1.0f / static_cast<float>(width);
     fxaaPush.invRes[1]        = 1.0f / static_cast<float>(height);
-    fxaaPush.subpix           = fxaaSubpix;
-    fxaaPush.edgeThreshold    = fxaaEdgeThreshold;
-    fxaaPush.edgeThresholdMin = fxaaEdgeThresholdMin;
+    fxaaPush.subpix           = state->fxaaSubpix();
+    fxaaPush.edgeThreshold    = state->fxaaEdgeThreshold();
+    fxaaPush.edgeThresholdMin = state->fxaaEdgeThresholdMin();
 
     commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
     commandList->SetPipelineState(fxaaPipeline.Get());
@@ -2465,7 +2457,19 @@ void D3D12Renderer::Impl::updateViewProj()
     viewProj = projection * view;
 }
 
-D3D12Renderer::D3D12Renderer() : m_impl(std::make_unique<Impl>()) {}
+D3D12Renderer::D3D12Renderer() : m_impl(std::make_unique<Impl>())
+{
+    // El Impl consulta el estado a través de este puntero en vez de copiarlo:
+    // así un setBloomIntensity() desde el editor se ve en el frame siguiente.
+    m_impl->state = this;
+
+    // La escena de prueba de este backend se enseña con los efectos puestos.
+    // RendererState los trae apagados —es el default del motor, pensado para
+    // que un proyecto nuevo arranque barato—, así que se encienden aquí y no
+    // se cambia ese default por debajo al Renderer de Vulkan.
+    setBloomIntensity(0.15f);
+    setFogEnabled(true);
+}
 
 D3D12Renderer::~D3D12Renderer()
 {
@@ -2830,7 +2834,9 @@ void D3D12Renderer::drawFrame()
 
     // Niebla ANTES del bloom: reescribe la escena, y lo que el bloom filtre
     // tiene que ser ya lo que se va a ver.
-    if (d.fogPipeline)
+    // Ahora que el interruptor vive en el estado compartido, se respeta: es el
+    // mismo que apaga la niebla en el menú View del editor.
+    if (d.fogPipeline && d.state->fogEnabled())
         d.recordFog();
 
     // Bloom, composición con tone mapping y FXAA hasta el backbuffer.
