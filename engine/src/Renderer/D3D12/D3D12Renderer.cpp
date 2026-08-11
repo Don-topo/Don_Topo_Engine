@@ -139,7 +139,29 @@ constexpr UINT kSrvShadowMap = 2;
 constexpr UINT kSrvSceneHdr  = 3;
 constexpr UINT kSrvBloomMip  = 4;                          // + nivel
 constexpr UINT kUavBloomMip  = kSrvBloomMip + kBloomMips;   // + nivel
-constexpr UINT kSrvHeapSize  = kUavBloomMip + kBloomMips;
+constexpr UINT kSrvDepth     = kUavBloomMip + kBloomMips;   // profundidad, para la niebla
+constexpr UINT kUavSceneHdr  = kSrvDepth + 1;               // la niebla escribe sobre la escena
+constexpr UINT kSrvLdr       = kUavSceneHdr + 1;            // salida de la composición, para FXAA
+constexpr UINT kSrvHeapSize  = kSrvLdr + 1;
+
+// Niebla volumétrica: push propio de 128 bytes.
+struct FogPush {
+    glm::mat4 invViewProj;
+    glm::vec4 camPosDensity;      // xyz = cámara en mundo, w = densidad base
+    glm::vec4 lightDirFalloff;    // xyz = dirección de la luz key, w = caída por altura
+    glm::vec4 scatterBaseHeight;  // rgb = scattering ya multiplicado por la luz, a = altura ref.
+    glm::vec4 gStepsRes;          // x = anisotropía, y = pasos, zw = resolución
+};
+static_assert(sizeof(FogPush) == 128, "FogPush debe ocupar 128 bytes");
+
+// FXAA: vec2 + 3 float = 20 bytes.
+struct FxaaPush {
+    float invRes[2];
+    float subpix;
+    float edgeThreshold;
+    float edgeThresholdMin;
+};
+static_assert(sizeof(FxaaPush) == 20, "FxaaPush debe ocupar 20 bytes");
 
 // Stride del vértice que escribe skinning.comp: 5 vec4 (pos, color, uv, normal,
 // tangent). No hay struct C++ equivalente en el motor, se usa el tamaño literal.
@@ -341,6 +363,27 @@ struct D3D12Renderer::Impl {
     float bloomRadius    = 1.0f;
     float bloomIntensity = 0.15f;
 
+    // ── Niebla y FXAA ───────────────────────────────────────────────────────
+    // La niebla escribe SOBRE el target HDR antes del bloom; FXAA va al final,
+    // sobre el resultado ya compuesto y en rango LDR.
+    ComPtr<ID3D12RootSignature> fogRootSignature;
+    ComPtr<ID3D12PipelineState> fogPipeline;
+    ComPtr<ID3D12RootSignature> fxaaRootSignature;
+    ComPtr<ID3D12PipelineState> fxaaPipeline;
+    D3D12MA::Allocation*        ldrAllocation = nullptr;
+
+    // Defaults del editor.
+    float fogDensity       = 0.02f;
+    float fogHeightFalloff = 0.02f;
+    float fogBaseHeight    = 0.0f;
+    float fogAnisotropy    = 0.6f;
+    int   fogSteps         = 32;
+    glm::vec3 fogScatter{0.6f, 0.7f, 0.9f};
+
+    float fxaaSubpix           = 0.75f;
+    float fxaaEdgeThreshold    = 0.166f;
+    float fxaaEdgeThresholdMin = 0.0833f;
+
     ComPtr<ID3D12DescriptorHeap> rtvHeap;
     UINT                         rtvSize = 0;
 
@@ -418,6 +461,8 @@ struct D3D12Renderer::Impl {
     void releaseHdrTargets();
     void createBloomPipelines();
     void recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv);
+    void createFogAndFxaaPipelines();
+    void recordFog();
 
     // Matriz de cámara del frame. Se recalcula en cada resize porque el aspecto
     // depende del tamaño de la ventana.
@@ -811,7 +856,10 @@ void D3D12Renderer::Impl::createDepthBuffer()
     depthDesc.Height           = height;
     depthDesc.DepthOrArraySize = 1;
     depthDesc.MipLevels        = 1;
-    depthDesc.Format           = DXGI_FORMAT_D32_FLOAT;
+    // TYPELESS y no D32_FLOAT: la niebla necesita LEER esta profundidad como
+    // textura, y el mismo recurso no puede declararse a la vez con formato de
+    // profundidad y de muestreo.
+    depthDesc.Format           = DXGI_FORMAT_R32_TYPELESS;
     depthDesc.SampleDesc.Count = 1;
     depthDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
@@ -835,6 +883,21 @@ void D3D12Renderer::Impl::createDepthBuffer()
     dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
     device->CreateDepthStencilView(depthAllocation->GetResource(), &dsvDesc,
                                    dsvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    // Vista de muestreo del mismo recurso, para la niebla. El heap todavía no
+    // existe en la primera llamada (init crea el depth antes que el heap): en
+    // ese caso la crea createHdrTargets, que corre después.
+    if (srvHeap) {
+        D3D12_SHADER_RESOURCE_VIEW_DESC depthSrv{};
+        depthSrv.Format                  = DXGI_FORMAT_R32_FLOAT;
+        depthSrv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        depthSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        depthSrv.Texture2D.MipLevels     = 1;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(kSrvDepth) * srvSize;
+        device->CreateShaderResourceView(depthAllocation->GetResource(), &depthSrv, handle);
+    }
 }
 
 void D3D12Renderer::Impl::createMeshPipeline()
@@ -1386,6 +1449,10 @@ void D3D12Renderer::Impl::releaseHdrTargets()
         hdrAllocation->Release();
         hdrAllocation = nullptr;
     }
+    if (ldrAllocation) {
+        ldrAllocation->Release();
+        ldrAllocation = nullptr;
+    }
     for (auto& mip : bloomMipAllocations) {
         if (mip) {
             mip->Release();
@@ -1408,7 +1475,10 @@ void D3D12Renderer::Impl::createHdrTargets()
     hdrDesc.MipLevels        = 1;
     hdrDesc.Format           = kHdrFormat;
     hdrDesc.SampleDesc.Count = 1;
-    hdrDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    // Render target para la escena y acceso desordenado para la niebla, que
+    // reescribe este mismo contenido antes de que lo lea el bloom.
+    hdrDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET |
+                    D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
     D3D12_CLEAR_VALUE hdrClear{};
     hdrClear.Format = kHdrFormat;
@@ -1435,6 +1505,52 @@ void D3D12Renderer::Impl::createHdrTargets()
     D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
     handle.ptr += static_cast<SIZE_T>(kSrvSceneHdr) * srvSize;
     device->CreateShaderResourceView(hdrAllocation->GetResource(), &hdrSrv, handle);
+
+    // Vista de escritura del mismo target, la que usa la niebla.
+    D3D12_UNORDERED_ACCESS_VIEW_DESC hdrUav{};
+    hdrUav.Format        = kHdrFormat;
+    hdrUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<SIZE_T>(kUavSceneHdr) * srvSize;
+    device->CreateUnorderedAccessView(hdrAllocation->GetResource(), nullptr, &hdrUav, handle);
+
+    // La profundidad se creó antes que el heap en el arranque, así que su vista
+    // de muestreo se registra aquí.
+    D3D12_SHADER_RESOURCE_VIEW_DESC depthSrv{};
+    depthSrv.Format                  = DXGI_FORMAT_R32_FLOAT;
+    depthSrv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+    depthSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    depthSrv.Texture2D.MipLevels     = 1;
+    handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<SIZE_T>(kSrvDepth) * srvSize;
+    device->CreateShaderResourceView(depthAllocation->GetResource(), &depthSrv, handle);
+
+    // Target LDR: lo escribe la composición y lo lee FXAA. Sin él, FXAA tendría
+    // que leer del backbuffer mientras escribe en él.
+    D3D12_RESOURCE_DESC ldrDesc = hdrDesc;
+    ldrDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    ldrDesc.Flags  = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+    D3D12_CLEAR_VALUE ldrClear{};
+    ldrClear.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    throwIfFailed(allocator->CreateResource(&defaultDesc, &ldrDesc,
+                                            D3D12_RESOURCE_STATE_RENDER_TARGET, &ldrClear,
+                                            &ldrAllocation, IID_NULL, nullptr),
+                  "D3D12MA::Allocator::CreateResource(LDR)");
+
+    D3D12_CPU_DESCRIPTOR_HANDLE ldrRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    ldrRtv.ptr += static_cast<SIZE_T>(kFrameCount + 1) * rtvSize;
+    device->CreateRenderTargetView(ldrAllocation->GetResource(), nullptr, ldrRtv);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC ldrSrv{};
+    ldrSrv.Format                  = DXGI_FORMAT_R8G8B8A8_UNORM;
+    ldrSrv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+    ldrSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    ldrSrv.Texture2D.MipLevels     = 1;
+    handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<SIZE_T>(kSrvLdr) * srvSize;
+    device->CreateShaderResourceView(ldrAllocation->GetResource(), &ldrSrv, handle);
 
     // Niveles del bloom: texturas independientes en vez de mips de un mismo
     // recurso. Cada una tiene un solo subrecurso, así que su estado se cambia
@@ -1621,6 +1737,222 @@ void D3D12Renderer::Impl::createBloomPipelines()
                   "ID3D12Device::CreateGraphicsPipelineState(composición)");
 }
 
+void D3D12Renderer::Impl::createFogAndFxaaPipelines()
+{
+    auto serializeAndCreate = [&](const D3D12_ROOT_SIGNATURE_DESC& desc,
+                                  ComPtr<ID3D12RootSignature>& out, const char* what) {
+        ComPtr<ID3DBlob> serialized;
+        ComPtr<ID3DBlob> errorBlob;
+        HRESULT hr = D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized,
+                                                 &errorBlob);
+        if (FAILED(hr)) {
+            std::string detail;
+            if (errorBlob)
+                detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
+                              errorBlob->GetBufferSize());
+            throw std::runtime_error(std::string("D3D12: root signature de ") + what + " (HRESULT " +
+                                     hresultToString(hr) + ") " + detail);
+        }
+        throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                                  serialized->GetBufferSize(), IID_PPV_ARGS(&out)),
+                      "ID3D12Device::CreateRootSignature");
+    };
+
+    // ── Niebla ──────────────────────────────────────────────────────────────
+    // u0 = escena (lectura y escritura), t1 = profundidad, t3 = sombras,
+    // b2 = el mismo UBO de escena. Su cbuffer solo declara hasta cascadeSplits,
+    // pero los offsets son los mismos, así que se enlaza el buffer entero.
+    D3D12_DESCRIPTOR_RANGE fogHdrRange{};
+    fogHdrRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    fogHdrRange.NumDescriptors     = 1;
+    fogHdrRange.BaseShaderRegister = 0;  // u0
+
+    D3D12_DESCRIPTOR_RANGE fogDepthRange{};
+    fogDepthRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    fogDepthRange.NumDescriptors     = 1;
+    fogDepthRange.BaseShaderRegister = 1;  // t1
+
+    D3D12_DESCRIPTOR_RANGE fogShadowRange{};
+    fogShadowRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    fogShadowRange.NumDescriptors     = 1;
+    fogShadowRange.BaseShaderRegister = 3;  // t3
+
+    D3D12_ROOT_PARAMETER fogParams[5]{};
+    fogParams[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    fogParams[0].Constants.ShaderRegister = 0;
+    fogParams[0].Constants.Num32BitValues = sizeof(FogPush) / 4;
+
+    fogParams[1].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    fogParams[1].Descriptor.ShaderRegister = 2;  // b2
+
+    fogParams[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    fogParams[2].DescriptorTable.NumDescriptorRanges = 1;
+    fogParams[2].DescriptorTable.pDescriptorRanges   = &fogHdrRange;
+
+    fogParams[3].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    fogParams[3].DescriptorTable.NumDescriptorRanges = 1;
+    fogParams[3].DescriptorTable.pDescriptorRanges   = &fogDepthRange;
+
+    fogParams[4].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    fogParams[4].DescriptorTable.NumDescriptorRanges = 1;
+    fogParams[4].DescriptorTable.pDescriptorRanges   = &fogShadowRange;
+
+    D3D12_STATIC_SAMPLER_DESC fogSamplers[2]{};
+    fogSamplers[0].Filter         = D3D12_FILTER_MIN_MAG_MIP_POINT;  // profundidad: sin filtrar
+    fogSamplers[0].AddressU       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    fogSamplers[0].AddressV       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    fogSamplers[0].AddressW       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    fogSamplers[0].MaxLOD         = D3D12_FLOAT32_MAX;
+    fogSamplers[0].ShaderRegister = 1;  // s1
+
+    fogSamplers[1].Filter         = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    fogSamplers[1].AddressU       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    fogSamplers[1].AddressV       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    fogSamplers[1].AddressW       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    fogSamplers[1].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    fogSamplers[1].MaxLOD         = D3D12_FLOAT32_MAX;
+    fogSamplers[1].ShaderRegister = 3;  // s3
+
+    D3D12_ROOT_SIGNATURE_DESC fogDesc{};
+    fogDesc.NumParameters     = _countof(fogParams);
+    fogDesc.pParameters       = fogParams;
+    fogDesc.NumStaticSamplers = _countof(fogSamplers);
+    fogDesc.pStaticSamplers   = fogSamplers;
+    serializeAndCreate(fogDesc, fogRootSignature, "niebla");
+
+    {
+        const std::vector<char>           shader = readBinaryFile("shaders/fog.comp.dxil");
+        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+        desc.pRootSignature = fogRootSignature.Get();
+        desc.CS             = {shader.data(), shader.size()};
+        throwIfFailed(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&fogPipeline)),
+                      "ID3D12Device::CreateComputePipelineState(niebla)");
+    }
+
+    // ── FXAA ────────────────────────────────────────────────────────────────
+    D3D12_DESCRIPTOR_RANGE fxaaRange{};
+    fxaaRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    fxaaRange.NumDescriptors     = 1;
+    fxaaRange.BaseShaderRegister = 0;  // t0
+
+    D3D12_ROOT_PARAMETER fxaaParams[2]{};
+    fxaaParams[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    fxaaParams[0].Constants.ShaderRegister = 0;
+    fxaaParams[0].Constants.Num32BitValues = sizeof(FxaaPush) / 4;
+    fxaaParams[0].ShaderVisibility         = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    fxaaParams[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    fxaaParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    fxaaParams[1].DescriptorTable.pDescriptorRanges   = &fxaaRange;
+    fxaaParams[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_STATIC_SAMPLER_DESC fxaaSampler{};
+    fxaaSampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    fxaaSampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    fxaaSampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    fxaaSampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    fxaaSampler.MaxLOD           = D3D12_FLOAT32_MAX;
+    fxaaSampler.ShaderRegister   = 0;
+    fxaaSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_ROOT_SIGNATURE_DESC fxaaDesc{};
+    fxaaDesc.NumParameters     = _countof(fxaaParams);
+    fxaaDesc.pParameters       = fxaaParams;
+    fxaaDesc.NumStaticSamplers = 1;
+    fxaaDesc.pStaticSamplers   = &fxaaSampler;
+    serializeAndCreate(fxaaDesc, fxaaRootSignature, "FXAA");
+
+    const std::vector<char> fullscreenVs = readBinaryFile("shaders/fullscreen.vert.dxil");
+    const std::vector<char> fxaaPs       = readBinaryFile("shaders/fxaa.frag.dxil");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature        = fxaaRootSignature.Get();
+    psoDesc.VS                    = {fullscreenVs.data(), fullscreenVs.size()};
+    psoDesc.PS                    = {fxaaPs.data(), fxaaPs.size()};
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets      = 1;
+    psoDesc.RTVFormats[0]         = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.DSVFormat             = DXGI_FORMAT_UNKNOWN;
+    psoDesc.SampleDesc.Count      = 1;
+    psoDesc.SampleMask            = UINT_MAX;
+
+    psoDesc.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.DepthClipEnable = TRUE;
+
+    for (auto& rt : psoDesc.BlendState.RenderTarget)
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+    psoDesc.DepthStencilState.DepthEnable   = FALSE;
+    psoDesc.DepthStencilState.StencilEnable = FALSE;
+
+    throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&fxaaPipeline)),
+                  "ID3D12Device::CreateGraphicsPipelineState(FXAA)");
+}
+
+void D3D12Renderer::Impl::recordFog()
+{
+    const D3D12_GPU_DESCRIPTOR_HANDLE heapStart = srvHeap->GetGPUDescriptorHandleForHeapStart();
+    auto gpuHandle = [&](UINT index) {
+        D3D12_GPU_DESCRIPTOR_HANDLE handle = heapStart;
+        handle.ptr += static_cast<UINT64>(index) * srvSize;
+        return handle;
+    };
+
+    auto transition = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES before,
+                          D3D12_RESOURCE_STATES after) {
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource   = resource;
+        barrier.Transition.StateBefore = before;
+        barrier.Transition.StateAfter  = after;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &barrier);
+    };
+
+    // La escena pasa a escritura desordenada y la profundidad a lectura.
+    transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    transition(depthAllocation->GetResource(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    const float     aspect = (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
+    const glm::mat4 proj   = glm::perspectiveRH_ZO(glm::radians(60.0f), aspect, 0.1f, 500.0f);
+    const glm::vec3 camPos(6.0f, 4.5f, 8.0f);
+    const glm::mat4 view = glm::lookAtRH(camPos, glm::vec3(0.0f, 0.5f, 0.0f),
+                                         glm::vec3(0.0f, 1.0f, 0.0f));
+
+    FogPush push{};
+    // La misma proyección con la que se grabó la profundidad. En Vulkan aquí
+    // entra su inversión de Y; en D3D12 no hay ninguna que meter.
+    push.invViewProj      = glm::inverse(proj * view);
+    push.camPosDensity    = glm::vec4(camPos, fogDensity);
+    push.lightDirFalloff  = glm::vec4(glm::normalize(lightDirection), fogHeightFalloff);
+    // El scattering va YA multiplicado por el color y la intensidad de la luz.
+    push.scatterBaseHeight = glm::vec4(fogScatter * glm::vec3(1.0f, 0.98f, 0.94f) * 0.7f,
+                                       fogBaseHeight);
+    push.gStepsRes = glm::vec4(fogAnisotropy, static_cast<float>(fogSteps),
+                               static_cast<float>(width), static_cast<float>(height));
+
+    ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(fogRootSignature.Get());
+    commandList->SetPipelineState(fogPipeline.Get());
+    commandList->SetComputeRoot32BitConstants(0, sizeof(FogPush) / 4, &push, 0);
+    commandList->SetComputeRootConstantBufferView(
+        1, sceneUboAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress());
+    commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavSceneHdr));
+    commandList->SetComputeRootDescriptorTable(3, gpuHandle(kSrvDepth));
+    commandList->SetComputeRootDescriptorTable(4, gpuHandle(kSrvShadowMap));
+    commandList->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
+
+    // Y se devuelven a lo que espera el resto del frame.
+    transition(depthAllocation->GetResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+               D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+               D3D12_RESOURCE_STATE_RENDER_TARGET);
+}
+
 void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv)
 {
     // El heap lo deja puesto el pase de escena, pero este pase no puede
@@ -1724,7 +2056,12 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     viewport.MaxDepth = 1.0f;
     const D3D12_RECT scissor{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
 
-    commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
+    // La composición NO va al backbuffer: va al target LDR, que es lo que lee
+    // FXAA después. Un pase no puede leer y escribir la misma imagen.
+    D3D12_CPU_DESCRIPTOR_HANDLE ldrRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    ldrRtv.ptr += static_cast<SIZE_T>(kFrameCount + 1) * rtvSize;
+
+    commandList->OMSetRenderTargets(1, &ldrRtv, FALSE, nullptr);
     commandList->RSSetViewports(1, &viewport);
     commandList->RSSetScissorRects(1, &scissor);
     commandList->SetPipelineState(compositePipeline.Get());
@@ -1734,6 +2071,27 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     // Sin vertex buffer: fullscreen.vert saca las tres posiciones del índice.
     commandList->DrawInstanced(3, 1, 0, 0);
+
+    // FXAA sobre el resultado ya compuesto, y de ahí al backbuffer.
+    transition(ldrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+    FxaaPush fxaaPush{};
+    fxaaPush.invRes[0]        = 1.0f / static_cast<float>(width);
+    fxaaPush.invRes[1]        = 1.0f / static_cast<float>(height);
+    fxaaPush.subpix           = fxaaSubpix;
+    fxaaPush.edgeThreshold    = fxaaEdgeThreshold;
+    fxaaPush.edgeThresholdMin = fxaaEdgeThresholdMin;
+
+    commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
+    commandList->SetPipelineState(fxaaPipeline.Get());
+    commandList->SetGraphicsRootSignature(fxaaRootSignature.Get());
+    commandList->SetGraphicsRoot32BitConstants(0, sizeof(FxaaPush) / 4, &fxaaPush, 0);
+    commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(kSrvLdr));
+    commandList->DrawInstanced(3, 1, 0, 0);
+
+    transition(ldrAllocation->GetResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+               D3D12_RESOURCE_STATE_RENDER_TARGET);
 
     // Todo vuelve al estado con el que arranca el frame siguiente.
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
@@ -2213,8 +2571,9 @@ void D3D12Renderer::init(Window& window)
     d.frameIndex = d.swapChain->GetCurrentBackBufferIndex();
 
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
-    // Los de la swapchain, más uno para el target HDR donde se dibuja la escena.
-    rtvHeapDesc.NumDescriptors = kFrameCount + 1;
+    // Los de la swapchain, más el target HDR de la escena y el LDR intermedio
+    // que la composición deja para FXAA.
+    rtvHeapDesc.NumDescriptors = kFrameCount + 2;
     rtvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     throwIfFailed(d.device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&d.rtvHeap)),
@@ -2277,6 +2636,7 @@ void D3D12Renderer::init(Window& window)
     // ya creado por createMeshResources.
     d.createHdrTargets();
     d.createBloomPipelines();
+    d.createFogAndFxaaPipelines();
     d.updateViewProj();
 
     d.initialized = true;
@@ -2453,7 +2813,12 @@ void D3D12Renderer::drawFrame()
         d.commandList->ResourceBarrier(1, &backToUav);
     }
 
-    // Bloom sobre la escena recién dibujada y composición al backbuffer.
+    // Niebla ANTES del bloom: reescribe la escena, y lo que el bloom filtre
+    // tiene que ser ya lo que se va a ver.
+    if (d.fogPipeline)
+        d.recordFog();
+
+    // Bloom, composición con tone mapping y FXAA hasta el backbuffer.
     if (d.compositePipeline)
         d.recordBloomAndComposite(backBufferRtv);
 
@@ -2643,6 +3008,10 @@ void D3D12Renderer::shutdown()
     d.groundIndexCount       = 0;
 
     d.releaseHdrTargets();
+    d.fxaaPipeline.Reset();
+    d.fxaaRootSignature.Reset();
+    d.fogPipeline.Reset();
+    d.fogRootSignature.Reset();
     d.compositePipeline.Reset();
     d.compositeRootSignature.Reset();
     d.bloomUpPipeline.Reset();
