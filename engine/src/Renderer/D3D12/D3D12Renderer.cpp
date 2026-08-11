@@ -2267,10 +2267,14 @@ void D3D12Renderer::Impl::createShadowResources()
         psoDesc.SampleDesc.Count      = 1;
         psoDesc.SampleMask            = UINT_MAX;
 
-        psoDesc.RasterizerState.FillMode              = D3D12_FILL_MODE_SOLID;
-        // Sin culling en el pase de sombras: descartar caras traseras deja sin
-        // proyectar los objetos que se ven por dentro y abre huecos.
-        psoDesc.RasterizerState.CullMode              = D3D12_CULL_MODE_NONE;
+        psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        // Se graban las caras TRASERAS, no las frontales. Es lo que evita que
+        // una superficie se sombree a sí misma: la cara que se ilumina no entra
+        // en el mapa, así que su profundidad no puede quedar por delante de sí
+        // misma. Con caras frontales o sin culling, un plano grande —el suelo de
+        // un proyecto -- sale entero en sombra por mucho sesgo que se le ponga.
+        // A cambio, una malla abierta de una sola cara no proyecta sombra.
+        psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
         psoDesc.RasterizerState.DepthClipEnable       = TRUE;
         psoDesc.RasterizerState.FrontCounterClockwise = TRUE;
         // Sesgo de profundidad contra el acné de sombra: sin él, la superficie
@@ -2839,9 +2843,11 @@ void D3D12Renderer::drawFrame()
             d.commandList->DrawIndexedInstanced(object.indexCount, 1, 0, 0, 0);
         }
 
-        // Suelo: el receptor de las sombras. No es parte de la escena, lo pone
-        // el backend como referencia visual junto a la rejilla.
-        if (d.groundIndexCount > 0) {
+        // Suelo: receptor de sombras y referencia visual, NO parte de la
+        // escena. Solo se dibuja cuando no hay geometría cargada: un proyecto
+        // suele traer su propio plano, y superponerle otro deja los dos
+        // peleándose por la profundidad y proyectándose sombra el uno al otro.
+        if (d.groundIndexCount > 0 && d.objects.empty()) {
             PushData groundPush{};
             groundPush.transform = glm::mat4(1.0f);
             groundPush.metallic  = 0.0f;

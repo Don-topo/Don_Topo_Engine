@@ -83,30 +83,80 @@ int main()
             d3d12.init(window);
             std::cout << "D3D12: adaptador '" << d3d12.adapterName() << "'" << std::endl;
 
-            // La geometría se mete DESDE FUERA con la API pública del backend,
-            // igual que hace el editor con el Renderer de Vulkan. Antes vivía
-            // dentro del propio backend, que es justo lo que impedía dibujar la
-            // escena de un proyecto.
+            // La escena del proyecto, cargada con el MISMO Scene::load que usa
+            // el editor. La geometría entra por la API pública del backend,
+            // igual que hace el editor con el Renderer de Vulkan.
+            //
+            // El orden de declaración está calcado del camino de Vulkan y por
+            // los mismos motivos: los colliders liberan actores sobre la
+            // PxScene y los AudioClip sueltan canales, así que la escena tiene
+            // que destruirse ANTES que physics y audio.
+            DonTopo::PhysicsManager d3dPhysics;
+            d3dPhysics.init();
+            DonTopo::AudioManager d3dAudio;
+            d3dAudio.init();
+            DonTopo::Scene d3dScene;
+
             {
-                const DonTopo::Mesh cube = DonTopo::Cube::create(2.0f);
-                const struct { glm::vec3 pos; float scale; } layout[] = {
-                    {{0.0f, 1.0f, 0.0f}, 1.0f},
-                    {{4.0f, 0.6f, -2.0f}, 0.6f},
-                    {{-4.5f, 1.6f, 1.0f}, 1.6f},
-                    {{2.0f, 0.4f, 4.0f}, 0.4f},
-                };
-                for (const auto& entry : layout)
+                const std::filesystem::path sceneFile =
+                    lastProject.empty() ? std::filesystem::path{}
+                                        : lastProject / "scenes" / "main.json";
+
+                bool loaded = false;
+                if (!sceneFile.empty() && std::filesystem::exists(sceneFile))
+                    loaded = d3dScene.load(sceneFile.string(), d3dPhysics, d3dAudio);
+
+                if (loaded)
                 {
-                    const int index = d3d12.addStaticMesh(cube);
-                    if (index < 0)
-                        continue;
-                    d3d12.setTransform(
-                        (size_t)index,
-                        glm::scale(glm::translate(glm::mat4(1.0f), entry.pos),
-                                   glm::vec3(entry.scale)));
+                    // Mismo criterio que el editor: cada nodo con malla estática
+                    // se sube y se queda con su índice de render, para poder
+                    // moverlo después.
+                    // Las matrices de mundo se derivan de la jerarquía una vez
+                    // cargada: sin esto, un hijo se subiría con la
+                    // transformación de su padre sin aplicar.
+                    d3dScene.getRoot().updateWorldTransforms();
+
+                    int added = 0;
+                    d3dScene.traverse([&](DonTopo::GameObject* node) {
+                        if (node == nullptr || !node->hasMesh() || node->isSkinned())
+                            return;
+                        const std::shared_ptr<DonTopo::Mesh> mesh = node->getMesh();
+                        if (!mesh)
+                            return;
+                        const int index = d3d12.addStaticMesh(*mesh);
+                        if (index < 0)
+                            return;
+                        node->staticRenderIndex = index;
+                        d3d12.setTransform(static_cast<size_t>(index), node->worldTransform);
+                        ++added;
+                    });
+                    std::cout << "D3D12: escena '" << sceneFile.string() << "' cargada, "
+                              << added << " mallas estaticas" << std::endl;
                 }
-                std::cout << "D3D12: " << d3d12.objectCount()
-                          << " mallas en la escena" << std::endl;
+                else
+                {
+                    // Sin proyecto o sin escena: unas cuantas cajas para que el
+                    // backend tenga algo que enseñar en vez de un suelo vacío.
+                    const DonTopo::Mesh cube = DonTopo::Cube::create(2.0f);
+                    const struct { glm::vec3 pos; float scale; } layout[] = {
+                        {{0.0f, 1.0f, 0.0f}, 1.0f},
+                        {{4.0f, 0.6f, -2.0f}, 0.6f},
+                        {{-4.5f, 1.6f, 1.0f}, 1.6f},
+                        {{2.0f, 0.4f, 4.0f}, 0.4f},
+                    };
+                    for (const auto& entry : layout)
+                    {
+                        const int index = d3d12.addStaticMesh(cube);
+                        if (index < 0)
+                            continue;
+                        d3d12.setTransform(
+                            (size_t)index,
+                            glm::scale(glm::translate(glm::mat4(1.0f), entry.pos),
+                                       glm::vec3(entry.scale)));
+                    }
+                    std::cout << "D3D12: sin escena de proyecto, " << d3d12.objectCount()
+                              << " cajas de muestra" << std::endl;
+                }
             }
 
             glfwSetWindowUserPointer(window.getNativeWindow(), &d3d12);
