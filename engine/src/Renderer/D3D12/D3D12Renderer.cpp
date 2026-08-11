@@ -256,11 +256,30 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12RootSignature> meshRootSignature;
     ComPtr<ID3D12PipelineState> meshPipeline;
 
-    D3D12MA::Allocation*     meshVertexAllocation = nullptr;
-    D3D12MA::Allocation*     meshIndexAllocation  = nullptr;
-    D3D12_VERTEX_BUFFER_VIEW meshVertexBufferView{};
-    D3D12_INDEX_BUFFER_VIEW  meshIndexBufferView{};
-    UINT                     meshIndexCount = 0;
+    // Geometría estática de la escena. Cada entrada es una malla subida a VRAM
+    // con su transformación; el índice que devuelve addStaticMesh es la
+    // posición en este vector, igual que en el Renderer de Vulkan.
+    struct StaticObject {
+        D3D12MA::Allocation*     vertexAllocation = nullptr;
+        D3D12MA::Allocation*     indexAllocation  = nullptr;
+        D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
+        D3D12_INDEX_BUFFER_VIEW  indexBufferView{};
+        UINT                     indexCount = 0;
+        glm::mat4                transform{1.0f};
+        bool                     meshVisible = true;
+    };
+    std::vector<StaticObject> objects;
+
+    // Matrices de la escena para el pase de sombras. shadow.vert saca el model
+    // del SSBO SIEMPRE —no tiene ruta de push constant—, así que hace falta un
+    // buffer con una matriz por objeto y dibujar cada uno con su
+    // StartInstanceLocation. Va en heap de subida y mapeado: se reescribe cada
+    // frame porque los transforms cambian.
+    D3D12MA::Allocation* sceneInstanceAllocation = nullptr;
+    void*                sceneInstanceMapped     = nullptr;
+    size_t               sceneInstanceCapacity   = 0;
+
+    void ensureSceneInstanceBuffer(size_t count);
 
     // Matrices por instancia (set 1, binding 0 en GLSL → t0 space1 en HLSL).
     D3D12MA::Allocation* instanceAllocation = nullptr;
@@ -1033,29 +1052,10 @@ void D3D12Renderer::Impl::createMeshPipeline()
 
 void D3D12Renderer::Impl::createMeshResources()
 {
-    // La malla es la del propio motor: mismo generador que usa el editor para
-    // las "Basic Shapes", con su Vertex y su orden de índices.
-    const Mesh cube = Cube::create(2.0f, glm::vec3(1.0f, 1.0f, 1.0f));
-
-    meshVertexAllocation = uploadBuffer(cube.vertices.data(), cube.vertices.size() * sizeof(Vertex),
-                                        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-    meshVertexBufferView.BufferLocation = meshVertexAllocation->GetResource()->GetGPUVirtualAddress();
-    meshVertexBufferView.SizeInBytes    = static_cast<UINT>(cube.vertices.size() * sizeof(Vertex));
-    meshVertexBufferView.StrideInBytes  = sizeof(Vertex);
-
-    meshIndexAllocation = uploadBuffer(cube.indices.data(), cube.indices.size() * sizeof(uint32_t),
-                                       D3D12_RESOURCE_STATE_INDEX_BUFFER);
-    meshIndexBufferView.BufferLocation = meshIndexAllocation->GetResource()->GetGPUVirtualAddress();
-    meshIndexBufferView.SizeInBytes    = static_cast<UINT>(cube.indices.size() * sizeof(uint32_t));
-    meshIndexBufferView.Format         = DXGI_FORMAT_R32_UINT;
-    meshIndexCount                     = static_cast<UINT>(cube.indices.size());
-
-    // Una sola instancia, y a propósito NO con la identidad: sube el cubo una
-    // unidad para que se apoye sobre la rejilla en vez de quedar medio
-    // enterrado. Así la posición final demuestra que el shader leyó de verdad
-    // este buffer — con la identidad, un SSBO que no se lee daría exactamente
-    // la misma imagen que uno que sí.
-    const glm::mat4 instanceModel = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    // Buffer de instancias con la identidad. La geometría de la escena usa el
+    // push constant para su transformación (flags.x = 0), pero el shader
+    // declara el SSBO igual y la root signature tiene que satisfacerlo.
+    const glm::mat4 instanceModel{1.0f};
     instanceAllocation = uploadBuffer(&instanceModel, sizeof(instanceModel),
                                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
@@ -2384,6 +2384,50 @@ void D3D12Renderer::Impl::computeCascades()
     }
 }
 
+void D3D12Renderer::Impl::ensureSceneInstanceBuffer(size_t count)
+{
+    if (count == 0 || count <= sceneInstanceCapacity)
+        return;
+
+    // Se crece por bloques para no rehacer el buffer cada vez que entra una
+    // malla al cargar una escena.
+    const size_t newCapacity = (std::max)(count, sceneInstanceCapacity * 2 + 64);
+
+    if (sceneInstanceAllocation) {
+        // Puede estar en uso por el frame anterior.
+        waitForGpu();
+        if (sceneInstanceMapped) {
+            sceneInstanceAllocation->GetResource()->Unmap(0, nullptr);
+            sceneInstanceMapped = nullptr;
+        }
+        sceneInstanceAllocation->Release();
+        sceneInstanceAllocation = nullptr;
+    }
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width            = newCapacity * sizeof(glm::mat4);
+    desc.Height           = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels        = 1;
+    desc.Format           = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    D3D12MA::ALLOCATION_DESC allocDesc{};
+    allocDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+
+    throwIfFailed(allocator->CreateResource(&allocDesc, &desc,
+                                            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                            &sceneInstanceAllocation, IID_NULL, nullptr),
+                  "D3D12MA::Allocator::CreateResource(instancias de escena)");
+
+    const D3D12_RANGE noRead{0, 0};
+    throwIfFailed(sceneInstanceAllocation->GetResource()->Map(0, &noRead, &sceneInstanceMapped),
+                  "ID3D12Resource::Map(instancias de escena)");
+    sceneInstanceCapacity = newCapacity;
+}
+
 void D3D12Renderer::Impl::recordShadowPasses()
 {
     D3D12_RESOURCE_BARRIER toDepthWrite{};
@@ -2418,12 +2462,24 @@ void D3D12Renderer::Impl::recordShadowPasses()
 
         // El suelo no se mete en el mapa: es el receptor, y meterlo solo
         // añadiría su propia superficie como oclusor de sí misma.
-        commandList->SetPipelineState(shadowPipeline.Get());
-        commandList->SetGraphicsRootShaderResourceView(
-            2, instanceAllocation->GetResource()->GetGPUVirtualAddress());
-        commandList->IASetVertexBuffers(0, 1, &meshVertexBufferView);
-        commandList->IASetIndexBuffer(&meshIndexBufferView);
-        commandList->DrawIndexedInstanced(meshIndexCount, 1, 0, 0, 0);
+        //
+        // Cada objeto se dibuja con su StartInstanceLocation apuntando a su
+        // matriz del buffer de escena, que es de donde shadow.vert la saca.
+        if (!objects.empty() && sceneInstanceAllocation) {
+            commandList->SetPipelineState(shadowPipeline.Get());
+            commandList->SetGraphicsRootShaderResourceView(
+                2, sceneInstanceAllocation->GetResource()->GetGPUVirtualAddress());
+
+            for (size_t i = 0; i < objects.size(); ++i) {
+                const StaticObject& object = objects[i];
+                if (!object.meshVisible || object.indexCount == 0)
+                    continue;
+                commandList->IASetVertexBuffers(0, 1, &object.vertexBufferView);
+                commandList->IASetIndexBuffer(&object.indexBufferView);
+                commandList->DrawIndexedInstanced(object.indexCount, 1, 0, 0,
+                                                  static_cast<UINT>(i));
+            }
+        }
 
         if (hasSkinnedMesh) {
             commandList->SetPipelineState(shadowSkinnedPipeline.Get());
@@ -2699,6 +2755,17 @@ void D3D12Renderer::drawFrame()
     // sombras necesita lightSpaceMatrix, el principal todo lo demás.
     d.updateSceneUbo();
 
+    // Y las matrices de la escena, que el pase de sombras lee del SSBO. Se
+    // reescriben enteras: mover un objeto no tiene por qué avisar al renderer.
+    if (!d.objects.empty()) {
+        d.ensureSceneInstanceBuffer(d.objects.size());
+        if (d.sceneInstanceMapped) {
+            auto* matrices = static_cast<glm::mat4*>(d.sceneInstanceMapped);
+            for (size_t i = 0; i < d.objects.size(); ++i)
+                matrices[i] = d.objects[i].transform;
+        }
+    }
+
     // Sombras antes del pase principal: triangle.frag muestrea el mapa que se
     // graba aquí.
     if (d.shadowPipeline)
@@ -2738,7 +2805,7 @@ void D3D12Renderer::drawFrame()
 
     // La malla primero: escribe profundidad y así la rejilla que va detrás
     // queda tapada donde toca.
-    if (d.meshPipeline && d.meshIndexCount > 0) {
+    if (d.meshPipeline) {
         ID3D12DescriptorHeap* heaps[] = {d.srvHeap.Get()};
         d.commandList->SetDescriptorHeaps(1, heaps);
 
@@ -2747,30 +2814,40 @@ void D3D12Renderer::drawFrame()
         d.commandList->SetGraphicsRootConstantBufferView(
             0, d.sceneUboAllocations[d.frameIndex]->GetResource()->GetGPUVirtualAddress());
 
-        PushData push{};
-        push.transform = glm::mat4(1.0f);
-        push.metallic  = 0.0f;
-        push.roughness = 0.6f;
-        // flags.x = 1: el model sale del buffer de instancias, que es la ruta
-        // que usa el motor para la geometría estática.
-        push.flags = glm::vec2(1.0f, 0.0f);
-        d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
-
         d.commandList->SetGraphicsRootDescriptorTable(
             2, d.srvHeap->GetGPUDescriptorHandleForHeapStart());
         d.commandList->SetGraphicsRootShaderResourceView(
             3, d.instanceAllocation->GetResource()->GetGPUVirtualAddress());
-
         d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        d.commandList->IASetVertexBuffers(0, 1, &d.meshVertexBufferView);
-        d.commandList->IASetIndexBuffer(&d.meshIndexBufferView);
-        d.commandList->DrawIndexedInstanced(d.meshIndexCount, 1, 0, 0, 0);
 
-        // Suelo: el receptor de las sombras. Mismo pipeline, otra malla y otra
-        // matriz de instancia.
+        // Geometría de la escena. Un draw por objeto con su transformación en
+        // el push constant (flags.x = 0): el instanciado por malla compartida
+        // es una optimización de otra fase.
+        for (const Impl::StaticObject& object : d.objects) {
+            if (!object.meshVisible || object.indexCount == 0)
+                continue;
+
+            PushData push{};
+            push.transform = object.transform;
+            push.metallic  = 0.0f;
+            push.roughness = 0.6f;
+            push.flags     = glm::vec2(0.0f, 0.0f);
+            d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
+
+            d.commandList->IASetVertexBuffers(0, 1, &object.vertexBufferView);
+            d.commandList->IASetIndexBuffer(&object.indexBufferView);
+            d.commandList->DrawIndexedInstanced(object.indexCount, 1, 0, 0, 0);
+        }
+
+        // Suelo: el receptor de las sombras. No es parte de la escena, lo pone
+        // el backend como referencia visual junto a la rejilla.
         if (d.groundIndexCount > 0) {
-            d.commandList->SetGraphicsRootShaderResourceView(
-                3, d.groundInstanceAllocation->GetResource()->GetGPUVirtualAddress());
+            PushData groundPush{};
+            groundPush.transform = glm::mat4(1.0f);
+            groundPush.metallic  = 0.0f;
+            groundPush.roughness = 0.9f;
+            groundPush.flags     = glm::vec2(0.0f, 0.0f);
+            d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &groundPush, 0);
             d.commandList->IASetVertexBuffers(0, 1, &d.groundVertexBufferView);
             d.commandList->IASetIndexBuffer(&d.groundIndexBufferView);
             d.commandList->DrawIndexedInstanced(d.groundIndexCount, 1, 0, 0, 0);
@@ -2960,6 +3037,70 @@ const std::string& D3D12Renderer::adapterName() const
     return m_impl->adapterName;
 }
 
+int D3D12Renderer::addStaticMesh(const Mesh& mesh)
+{
+    Impl& d = *m_impl;
+    if (!d.initialized || mesh.vertices.empty() || mesh.indices.empty())
+        return -1;
+
+    Impl::StaticObject object;
+    object.vertexAllocation =
+        d.uploadBuffer(mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex),
+                       D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    object.vertexBufferView.BufferLocation =
+        object.vertexAllocation->GetResource()->GetGPUVirtualAddress();
+    object.vertexBufferView.SizeInBytes   = static_cast<UINT>(mesh.vertices.size() * sizeof(Vertex));
+    object.vertexBufferView.StrideInBytes = sizeof(Vertex);
+
+    object.indexAllocation =
+        d.uploadBuffer(mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t),
+                       D3D12_RESOURCE_STATE_INDEX_BUFFER);
+    object.indexBufferView.BufferLocation =
+        object.indexAllocation->GetResource()->GetGPUVirtualAddress();
+    object.indexBufferView.SizeInBytes = static_cast<UINT>(mesh.indices.size() * sizeof(uint32_t));
+    object.indexBufferView.Format      = DXGI_FORMAT_R32_UINT;
+    object.indexCount                  = static_cast<UINT>(mesh.indices.size());
+
+    d.objects.push_back(object);
+    return static_cast<int>(d.objects.size() - 1);
+}
+
+void D3D12Renderer::setTransform(size_t objectIndex, const glm::mat4& transform)
+{
+    if (objectIndex < m_impl->objects.size())
+        m_impl->objects[objectIndex].transform = transform;
+}
+
+void D3D12Renderer::setObjectMeshVisible(size_t objectIndex, bool visible)
+{
+    if (objectIndex < m_impl->objects.size())
+        m_impl->objects[objectIndex].meshVisible = visible;
+}
+
+size_t D3D12Renderer::objectCount() const
+{
+    return m_impl->objects.size();
+}
+
+void D3D12Renderer::clearStaticMeshes()
+{
+    Impl& d = *m_impl;
+    if (d.objects.empty())
+        return;
+
+    // Los buffers pueden estar en uso por el último frame presentado: soltarlos
+    // con trabajo en vuelo es una corrupción silenciosa, no un error de la API.
+    d.waitForGpu();
+
+    for (Impl::StaticObject& object : d.objects) {
+        if (object.vertexAllocation)
+            object.vertexAllocation->Release();
+        if (object.indexAllocation)
+            object.indexAllocation->Release();
+    }
+    d.objects.clear();
+}
+
 void D3D12Renderer::waitIdle()
 {
     if (m_impl->initialized)
@@ -3064,8 +3205,26 @@ void D3D12Renderer::shutdown()
         }
     }
 
-    for (auto** allocation : {&d.meshVertexAllocation, &d.meshIndexAllocation,
-                              &d.instanceAllocation, &d.baseColorAllocation,
+    // Geometría de la escena, antes que el allocator.
+    for (Impl::StaticObject& object : d.objects) {
+        if (object.vertexAllocation)
+            object.vertexAllocation->Release();
+        if (object.indexAllocation)
+            object.indexAllocation->Release();
+    }
+    d.objects.clear();
+
+    if (d.sceneInstanceAllocation) {
+        if (d.sceneInstanceMapped) {
+            d.sceneInstanceAllocation->GetResource()->Unmap(0, nullptr);
+            d.sceneInstanceMapped = nullptr;
+        }
+        d.sceneInstanceAllocation->Release();
+        d.sceneInstanceAllocation = nullptr;
+        d.sceneInstanceCapacity   = 0;
+    }
+
+    for (auto** allocation : {&d.instanceAllocation, &d.baseColorAllocation,
                               &d.normalMapAllocation, &d.shadowMapAllocation,
                               &d.depthAllocation, &d.posKeysAllocation, &d.rotKeysAllocation,
                               &d.scaleKeysAllocation, &d.boneInfosAllocation,
@@ -3079,10 +3238,6 @@ void D3D12Renderer::shutdown()
             *allocation = nullptr;
         }
     }
-    d.meshVertexBufferView = {};
-    d.meshIndexBufferView  = {};
-    d.meshIndexCount       = 0;
-
     d.skinnedVertexBufferView = {};
     d.skinnedIndexBufferView  = {};
     d.skinnedIndexCount       = 0;

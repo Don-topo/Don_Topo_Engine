@@ -83,6 +83,32 @@ int main()
             d3d12.init(window);
             std::cout << "D3D12: adaptador '" << d3d12.adapterName() << "'" << std::endl;
 
+            // La geometría se mete DESDE FUERA con la API pública del backend,
+            // igual que hace el editor con el Renderer de Vulkan. Antes vivía
+            // dentro del propio backend, que es justo lo que impedía dibujar la
+            // escena de un proyecto.
+            {
+                const DonTopo::Mesh cube = DonTopo::Cube::create(2.0f);
+                const struct { glm::vec3 pos; float scale; } layout[] = {
+                    {{0.0f, 1.0f, 0.0f}, 1.0f},
+                    {{4.0f, 0.6f, -2.0f}, 0.6f},
+                    {{-4.5f, 1.6f, 1.0f}, 1.6f},
+                    {{2.0f, 0.4f, 4.0f}, 0.4f},
+                };
+                for (const auto& entry : layout)
+                {
+                    const int index = d3d12.addStaticMesh(cube);
+                    if (index < 0)
+                        continue;
+                    d3d12.setTransform(
+                        (size_t)index,
+                        glm::scale(glm::translate(glm::mat4(1.0f), entry.pos),
+                                   glm::vec3(entry.scale)));
+                }
+                std::cout << "D3D12: " << d3d12.objectCount()
+                          << " mallas en la escena" << std::endl;
+            }
+
             glfwSetWindowUserPointer(window.getNativeWindow(), &d3d12);
             glfwSetFramebufferSizeCallback(
                 window.getNativeWindow(), [](GLFWwindow* w, int width, int height) {

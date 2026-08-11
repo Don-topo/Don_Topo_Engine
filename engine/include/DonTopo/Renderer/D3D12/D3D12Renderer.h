@@ -4,6 +4,8 @@
 
 #include "DonTopo/Renderer/RendererState.h"
 
+#include <glm/glm.hpp>
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -12,6 +14,7 @@
 namespace DonTopo {
 
 class Window;
+struct Mesh;
 
 namespace D3D12 {
 
@@ -72,6 +75,23 @@ public:
     void resize(uint32_t width, uint32_t height);
 
     void setClearColor(float r, float g, float b, float a);
+
+    // --- Escena ----------------------------------------------------------
+    //
+    // Mismos nombres y misma semántica que el Renderer de Vulkan, para que
+    // quien construye la escena no tenga que saber con qué backend corre.
+
+    // Sube la malla a VRAM y devuelve su índice, que es el que hay que usar
+    // luego en setTransform/setObjectMeshVisible. -1 si la malla está vacía.
+    int addStaticMesh(const Mesh& mesh);
+
+    void setTransform(size_t objectIndex, const glm::mat4& transform);
+    void setObjectMeshVisible(size_t objectIndex, bool visible);
+    size_t objectCount() const;
+
+    // Suelta toda la geometría estática. Espera a la GPU antes de liberar:
+    // los buffers pueden estar en uso por el último frame presentado.
+    void clearStaticMeshes();
 
     // Descripción del adaptador con el que se creó el device. Vacía antes de
     // init(). Se usa para dejarlo en el Log.

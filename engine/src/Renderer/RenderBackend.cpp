@@ -52,8 +52,9 @@ BackendSelection resolveRenderBackend(RenderBackend requested)
     sel.backend  = RenderBackend::D3D12;
     sel.fellBack = false;
     sel.message  = "Backend DirectX 12 activo (" + support.adapterName +
-                  "). Alcance de hoy: presentación. Todavía no dibuja escena, "
-                  "gizmos ni interfaz; para trabajar, elige Vulkan.";
+                  "). Dibuja geometría, luz, sombras y post-procesado, pero "
+                  "todavía no carga la escena del proyecto ni el editor; para "
+                  "trabajar, elige Vulkan.";
     return sel;
 #endif
 }
