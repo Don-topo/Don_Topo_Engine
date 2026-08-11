@@ -12,7 +12,10 @@ struct EditorContext;
 // ejes/wireframe de collider sobre la selección activa.
 class ViewportPanel {
 public:
-    void draw(EditorContext& ctx, VkDescriptorSet viewportTexture, const glm::mat4& cameraView);
+    // viewportTexture es un handle opaco del backend activo (VkDescriptorSet
+    // con Vulkan, descriptor GPU con DirectX 12): solo se reenvía a
+    // ImGui::Image, que lo trata igual en los dos casos.
+    void draw(EditorContext& ctx, uint64_t viewportTexture, const glm::mat4& cameraView);
     // Centra la cámara en ctx.selected (no-op si no hay selección). Usado
     // por el atajo de teclado "F" en main.cpp vía EditorUI::focusSelected.
     void focusSelected(EditorContext& ctx, Camera& camera);

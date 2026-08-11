@@ -50,7 +50,10 @@ public:
     // y dibuja: el ciclo de vida lo lleva el editor.
     Renderer& renderer();
 
-    void draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView);
+    // viewportTexture es opaco: el backend que lo creó sabe qué es (un
+    // VkDescriptorSet o un descriptor GPU de D3D12) y aquí solo viaja hasta
+    // ImGui::Image, que lo trata igual en los dos casos.
+    void draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView);
 
     bool isViewportHovered() const { return m_viewportPanel.isHovered(); }
 
@@ -62,13 +65,13 @@ public:
     // ── UiLayer ──────────────────────────────────────────────────────────────
     // El backend de ImGui (contexto, pool de descriptores y los dos _Impl_)
     // vive aquí porque es un detalle del editor, no del motor.
-    void initUi(const InitInfo& info) override;
-    void shutdownUi() override;
-    VkDescriptorSet registerUiTexture(VkSampler sampler, VkImageView view) override;
-    void unregisterUiTexture(VkDescriptorSet set) override;
-    void buildUiFrame(VkDescriptorSet viewportTexture, GameObject* sceneRoot,
-                      const glm::mat4& cameraView) override;
-    void recordUi(VkCommandBuffer cmd) override;
+    void     initUi(const InitInfo& info) override;
+    void     shutdownUi() override;
+    uint64_t registerUiTexture(uint64_t sampler, uint64_t view) override;
+    void     unregisterUiTexture(uint64_t handle) override;
+    void     buildUiFrame(uint64_t viewportTexture, GameObject* sceneRoot,
+                          const glm::mat4& cameraView) override;
+    void     recordUi(void* commandList) override;
 
     // true mientras Play Mode está activo (física + audio corriendo).
     bool isPlaying() const override { return m_isPlaying; }

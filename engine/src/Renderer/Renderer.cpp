@@ -90,15 +90,18 @@ namespace DonTopo {
         // la UI ya operativa si hiciera falta.
         if (!m_headless && m_ui)
         {
+            // Los handles viajan como enteros: UiLayer ya no incluye vulkan.h,
+            // porque el mismo editor tiene que poder dibujarse con DirectX 12.
             UiLayer::InitInfo info{};
+            info.api            = UiLayer::GraphicsApi::Vulkan;
             info.window         = window.getNativeWindow();
-            info.instance       = m_gpu.instance();
-            info.physicalDevice = m_gpu.physicalDevice();
-            info.device         = m_gpu.device();
+            info.instance       = reinterpret_cast<uint64_t>(m_gpu.instance());
+            info.physicalDevice = reinterpret_cast<uint64_t>(m_gpu.physicalDevice());
+            info.device         = reinterpret_cast<uint64_t>(m_gpu.device());
             info.queueFamily    = m_gpu.graphicsFamily();
-            info.queue          = m_gpu.graphicsQueue();
+            info.queue          = reinterpret_cast<uint64_t>(m_gpu.graphicsQueue());
             info.imageCount     = (uint32_t)m_swapChainImages.size();
-            info.renderPass     = m_renderPass;
+            info.renderPass     = reinterpret_cast<uint64_t>(m_renderPass);
             m_ui->initUi(info);
         }
     }
@@ -2224,7 +2227,7 @@ namespace DonTopo {
             rpInfo.pClearValues        = &clearColor;
 
             vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-            if (m_ui) m_ui->recordUi(m_commandBuffers[m_currentFrame]);
+            if (m_ui) m_ui->recordUi(static_cast<void*>(m_commandBuffers[m_currentFrame]));
             vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
         }
         else
@@ -6238,7 +6241,9 @@ namespace DonTopo {
             // set se queda nulo y destroyOffscreenImages ya comprueba antes
             // de liberarlo.
             if (!m_headless && m_ui)
-                m_offscreenDescSet[i] = m_ui->registerUiTexture(m_offscreenSampler, m_offscreenView[i]);
+                m_offscreenDescSet[i] = m_ui->registerUiTexture(
+                    reinterpret_cast<uint64_t>(m_offscreenSampler),
+                    reinterpret_cast<uint64_t>(m_offscreenView[i]));
         }
 
         // ANTES de createAaImages: el descriptor set del TAA referencia
@@ -6315,7 +6320,7 @@ namespace DonTopo {
             if (m_offscreenDescSet[i] && m_ui)
             {
                 m_ui->unregisterUiTexture(m_offscreenDescSet[i]);
-                m_offscreenDescSet[i] = VK_NULL_HANDLE;
+                m_offscreenDescSet[i] = 0;
             }
             if (m_compositeFramebuffer[i])
             {

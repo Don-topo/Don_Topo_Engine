@@ -49,7 +49,10 @@ Renderer& EditorUI::renderer() { return *m_renderer; }
 
 void EditorUI::initUi(const InitInfo& info)
 {
-    m_uiDevice = info.device;
+    // Los handles llegan como enteros opacos (UiLayer no incluye vulkan.h para
+    // que el editor pueda dibujarse también con DirectX 12): aquí se recuperan
+    // sus tipos reales, que es donde de verdad se conocen.
+    m_uiDevice = reinterpret_cast<VkDevice>(info.device);
 
     // Pool dedicado para ImGui (necesita FREE_DESCRIPTOR_SET_BIT).
     // La API nueva (sept 2025) usa SAMPLER + SAMPLED_IMAGE separados en AddTexture().
@@ -82,15 +85,15 @@ void EditorUI::initUi(const InitInfo& info)
 
     ImGui_ImplVulkan_InitInfo initInfo{};
     initInfo.ApiVersion                       = VK_API_VERSION_1_0;
-    initInfo.Instance                         = info.instance;
-    initInfo.PhysicalDevice                   = info.physicalDevice;
-    initInfo.Device                           = info.device;
+    initInfo.Instance                         = reinterpret_cast<VkInstance>(info.instance);
+    initInfo.PhysicalDevice                   = reinterpret_cast<VkPhysicalDevice>(info.physicalDevice);
+    initInfo.Device                           = m_uiDevice;
     initInfo.QueueFamily                      = info.queueFamily;
-    initInfo.Queue                            = info.queue;
+    initInfo.Queue                            = reinterpret_cast<VkQueue>(info.queue);
     initInfo.DescriptorPool                   = m_uiDescPool;
     initInfo.MinImageCount                    = 2;
     initInfo.ImageCount                       = info.imageCount;
-    initInfo.PipelineInfoMain.RenderPass      = info.renderPass;
+    initInfo.PipelineInfoMain.RenderPass      = reinterpret_cast<VkRenderPass>(info.renderPass);
     initInfo.PipelineInfoMain.MSAASamples     = VK_SAMPLE_COUNT_1_BIT;
     ImGui_ImplVulkan_Init(&initInfo);
 
@@ -109,17 +112,20 @@ void EditorUI::shutdownUi()
     }
 }
 
-VkDescriptorSet EditorUI::registerUiTexture(VkSampler sampler, VkImageView view)
+uint64_t EditorUI::registerUiTexture(uint64_t sampler, uint64_t view)
 {
-    return ImGui_ImplVulkan_AddTexture(sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    const VkDescriptorSet set = ImGui_ImplVulkan_AddTexture(
+        reinterpret_cast<VkSampler>(sampler), reinterpret_cast<VkImageView>(view),
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    return reinterpret_cast<uint64_t>(set);
 }
 
-void EditorUI::unregisterUiTexture(VkDescriptorSet set)
+void EditorUI::unregisterUiTexture(uint64_t handle)
 {
-    ImGui_ImplVulkan_RemoveTexture(set);
+    ImGui_ImplVulkan_RemoveTexture(reinterpret_cast<VkDescriptorSet>(handle));
 }
 
-void EditorUI::buildUiFrame(VkDescriptorSet viewportTexture, GameObject* sceneRoot,
+void EditorUI::buildUiFrame(uint64_t viewportTexture, GameObject* sceneRoot,
                             const glm::mat4& cameraView)
 {
     ImGui_ImplVulkan_NewFrame();
@@ -131,9 +137,10 @@ void EditorUI::buildUiFrame(VkDescriptorSet viewportTexture, GameObject* sceneRo
     ImGui::Render();
 }
 
-void EditorUI::recordUi(VkCommandBuffer cmd)
+void EditorUI::recordUi(void* commandList)
 {
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(),
+                                    static_cast<VkCommandBuffer>(commandList));
 }
 
 namespace {
@@ -372,7 +379,7 @@ void EditorUI::saveProjectSettings()
         m_logPanel.push("No se pudieron guardar los ajustes en el project.json");
 }
 
-void EditorUI::draw(VkDescriptorSet viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView)
+void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::mat4& cameraView)
 {
     // Selector de proyecto: primer estado del bucle. Se lleva el frame entero —
     // ni menú, ni toolbar, ni dockspace, ni paneles— hasta que el callback

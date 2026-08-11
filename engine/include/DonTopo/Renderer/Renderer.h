@@ -984,7 +984,10 @@ namespace DonTopo {
             VkImageView                     m_offscreenView[MAX_FRAMES]         = {};
             VkSampler                       m_offscreenSampler                  = VK_NULL_HANDLE;
             VkFramebuffer                   m_offscreenFramebuffer[MAX_FRAMES]  = {};
-            VkDescriptorSet                 m_offscreenDescSet[MAX_FRAMES]      = {};
+            // Handle opaco de la UI, no un VkDescriptorSet: lo produce
+            // UiLayer::registerUiTexture y el Renderer solo lo guarda para
+            // devolvérselo. Es uint64_t porque ese contrato ya no conoce Vulkan.
+            uint64_t                        m_offscreenDescSet[MAX_FRAMES]      = {};
 
             // ── HDR + bloom ──────────────────────────────────────────────────
             // Formato flotante del target de escena y de la cadena del bloom. El

@@ -634,7 +634,7 @@ GameObject* ViewportPanel::pickObject(EditorContext& ctx, const glm::mat4& camer
     return best;
 }
 
-void ViewportPanel::draw(EditorContext& ctx, VkDescriptorSet viewportTexture, const glm::mat4& cameraView)
+void ViewportPanel::draw(EditorContext& ctx, uint64_t viewportTexture, const glm::mat4& cameraView)
 {
     // Contorno del objeto seleccionado. Se fija SIEMPRE y sin condiciones, aquí
     // arriba: si se hiciera solo cuando hay selección, el Renderer se quedaría
