@@ -142,7 +142,12 @@ constexpr UINT kUavBloomMip  = kSrvBloomMip + kBloomMips;   // + nivel
 constexpr UINT kSrvDepth     = kUavBloomMip + kBloomMips;   // profundidad, para la niebla
 constexpr UINT kUavSceneHdr  = kSrvDepth + 1;               // la niebla escribe sobre la escena
 constexpr UINT kSrvLdr       = kUavSceneHdr + 1;            // salida de la composición, para FXAA
-constexpr UINT kSrvHeapSize  = kSrvLdr + 1;
+// Rango reservado para ImGui. No basta con uno: desde la 1.92 su backend de
+// DX12 pide descriptores por su cuenta (uno por textura, no solo la fuente) a
+// través de los callbacks de reserva que se le pasan al inicializarlo.
+constexpr UINT kSrvImGui      = kSrvLdr + 1;
+constexpr UINT kImGuiReserved = 16;
+constexpr UINT kSrvHeapSize   = kSrvImGui + kImGuiReserved;
 
 // Niebla volumétrica: push propio de 128 bytes.
 struct FogPush {
@@ -383,6 +388,9 @@ struct D3D12Renderer::Impl {
     float fxaaSubpix           = 0.75f;
     float fxaaEdgeThreshold    = 0.166f;
     float fxaaEdgeThresholdMin = 0.0833f;
+
+    // Interfaz de usuario. La dibuja quien conoce ImGui, no este backend.
+    std::function<void()> uiDrawCallback;
 
     ComPtr<ID3D12DescriptorHeap> rtvHeap;
     UINT                         rtvSize = 0;
@@ -2093,6 +2101,13 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     transition(ldrAllocation->GetResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                D3D12_RESOURCE_STATE_RENDER_TARGET);
 
+    // La interfaz va encima de todo, sobre el backbuffer y sin post-procesado:
+    // suavizar los bordes del texto de la UI lo emborronaría.
+    if (uiDrawCallback) {
+        commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
+        uiDrawCallback();
+    }
+
     // Todo vuelve al estado con el que arranca el frame siguiente.
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
                D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -2937,6 +2952,70 @@ void D3D12Renderer::setClearColor(float r, float g, float b, float a)
 const std::string& D3D12Renderer::adapterName() const
 {
     return m_impl->adapterName;
+}
+
+void D3D12Renderer::waitIdle()
+{
+    if (m_impl->initialized)
+        m_impl->waitForGpu();
+}
+
+void D3D12Renderer::setUiDrawCallback(std::function<void()> callback)
+{
+    m_impl->uiDrawCallback = std::move(callback);
+}
+
+void* D3D12Renderer::nativeDevice() const
+{
+    return m_impl->device.Get();
+}
+
+void* D3D12Renderer::nativeCommandList() const
+{
+    return m_impl->commandList.Get();
+}
+
+void* D3D12Renderer::nativeQueue() const
+{
+    return m_impl->queue.Get();
+}
+
+void* D3D12Renderer::uiDescriptorHeap() const
+{
+    return m_impl->srvHeap.Get();
+}
+
+uint64_t D3D12Renderer::uiHeapStartCpu() const
+{
+    if (!m_impl->srvHeap)
+        return 0;
+    D3D12_CPU_DESCRIPTOR_HANDLE handle = m_impl->srvHeap->GetCPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<SIZE_T>(kSrvImGui) * m_impl->srvSize;
+    return handle.ptr;
+}
+
+uint64_t D3D12Renderer::uiHeapStartGpu() const
+{
+    if (!m_impl->srvHeap)
+        return 0;
+    D3D12_GPU_DESCRIPTOR_HANDLE handle = m_impl->srvHeap->GetGPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<UINT64>(kSrvImGui) * m_impl->srvSize;
+    return handle.ptr;
+}
+
+unsigned D3D12Renderer::uiDescriptorCount() const
+{
+    return kImGuiReserved;
+}
+
+unsigned D3D12Renderer::descriptorSize() const
+{
+    return m_impl->srvSize;
+}
+
+int D3D12Renderer::framesInFlight() const
+{
+    return static_cast<int>(kFrameCount);
 }
 
 void D3D12Renderer::shutdown()

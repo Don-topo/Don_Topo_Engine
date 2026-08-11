@@ -3,6 +3,7 @@
 #ifdef DT_D3D12_ENABLED
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -40,6 +41,12 @@ public:
     // llama, así que llamarla a mano antes no hace daño.
     void shutdown();
 
+    // Bloquea hasta que la GPU vacía todo lo enviado. Hace falta antes de
+    // liberar recursos que no son de este backend —los de ImGui, por ejemplo—:
+    // el último frame presentado sigue en vuelo, y soltar debajo sus buffers de
+    // vértices o su textura corrompe el trabajo en curso.
+    void waitIdle();
+
     // Un frame completo: espera el fence de este slot, graba el clear, ejecuta
     // y presenta.
     void drawFrame();
@@ -63,6 +70,31 @@ public:
     // Descripción del adaptador con el que se creó el device. Vacía antes de
     // init(). Se usa para dejarlo en el Log.
     const std::string& adapterName() const;
+
+    // --- Enganche de interfaz de usuario --------------------------------
+    //
+    // DonTopoCore no puede depender de ImGui (el runtime exportado lo enlaza y
+    // ahí no existe), así que el backend no dibuja la UI: expone lo justo para
+    // que quien sí conoce ImGui lo haga desde fuera. Los punteros se devuelven
+    // como void* a propósito, para no arrastrar d3d12.h a este header.
+
+    // Se invoca dentro del frame, con la lista de comandos abierta y el
+    // backbuffer ya como destino, justo después del último post-efecto.
+    void setUiDrawCallback(std::function<void()> callback);
+
+    void* nativeDevice() const;       // ID3D12Device*
+    void* nativeCommandList() const;  // ID3D12GraphicsCommandList*, solo válido dentro del callback
+    void* nativeQueue() const;        // ID3D12CommandQueue*
+    void* uiDescriptorHeap() const;   // ID3D12DescriptorHeap* con el rango reservado a la UI
+
+    // Primer descriptor del rango reservado, y cuántos hay. El backend de ImGui
+    // reserva por su cuenta según le hagan falta, así que necesita el rango
+    // entero y no solo el hueco de la fuente.
+    uint64_t uiHeapStartCpu() const;
+    uint64_t uiHeapStartGpu() const;
+    unsigned uiDescriptorCount() const;
+    unsigned descriptorSize() const;
+    int      framesInFlight() const;
 
 private:
     struct Impl;

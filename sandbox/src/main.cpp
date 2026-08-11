@@ -22,6 +22,12 @@
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
+#ifdef DT_D3D12_ENABLED
+#include <d3d12.h>
+#include <imgui_impl_dx12.h>
+#include <nlohmann/json.hpp>
+#include <fstream>
+#endif
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -85,12 +91,189 @@ int main()
                         r->resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
                 });
 
+            // ImGui sobre DX12. El backend de render no lo conoce —DonTopoCore
+            // no puede depender de ImGui porque el runtime exportado lo enlaza—,
+            // así que se monta aquí con los handles que expone.
+            IMGUI_CHECKVERSION();
+            ImGui::CreateContext();
+            ImGui::StyleColorsDark();
+            ImGui_ImplGlfw_InitForOther(window.getNativeWindow(), true);
+
+            // Reparto del rango de descriptores que el renderer tiene apartado.
+            // ImGui pide y devuelve por su cuenta, así que hace falta una lista
+            // de libres y no un simple contador.
+            struct UiDescriptorPool
+            {
+                uint64_t              cpuStart = 0;
+                uint64_t              gpuStart = 0;
+                unsigned              stride   = 0;
+                unsigned              capacity = 0;
+                unsigned              next     = 0;
+                std::vector<unsigned> released;
+            } uiPool;
+            uiPool.cpuStart = d3d12.uiHeapStartCpu();
+            uiPool.gpuStart = d3d12.uiHeapStartGpu();
+            uiPool.stride   = d3d12.descriptorSize();
+            uiPool.capacity = d3d12.uiDescriptorCount();
+
+            ImGui_ImplDX12_InitInfo uiInit = {};
+            uiInit.Device            = static_cast<ID3D12Device*>(d3d12.nativeDevice());
+            uiInit.CommandQueue      = static_cast<ID3D12CommandQueue*>(d3d12.nativeQueue());
+            uiInit.NumFramesInFlight = d3d12.framesInFlight();
+            uiInit.RTVFormat         = DXGI_FORMAT_R8G8B8A8_UNORM;
+            uiInit.DSVFormat         = DXGI_FORMAT_UNKNOWN;
+            uiInit.SrvDescriptorHeap = static_cast<ID3D12DescriptorHeap*>(d3d12.uiDescriptorHeap());
+            uiInit.UserData          = &uiPool;
+            uiInit.SrvDescriptorAllocFn = [](ImGui_ImplDX12_InitInfo* info,
+                                             D3D12_CPU_DESCRIPTOR_HANDLE* outCpu,
+                                             D3D12_GPU_DESCRIPTOR_HANDLE* outGpu) {
+                auto*    pool  = static_cast<UiDescriptorPool*>(info->UserData);
+                unsigned index = 0;
+                if (!pool->released.empty()) {
+                    index = pool->released.back();
+                    pool->released.pop_back();
+                } else {
+                    // Quedarse sin sitio aquí sería un fallo silencioso que
+                    // acabaría pisando descriptores de la escena.
+                    if (pool->next >= pool->capacity)
+                        throw std::runtime_error(
+                            "D3D12: ImGui pidio mas descriptores de los reservados");
+                    index = pool->next++;
+                }
+                outCpu->ptr = pool->cpuStart + static_cast<uint64_t>(index) * pool->stride;
+                outGpu->ptr = pool->gpuStart + static_cast<uint64_t>(index) * pool->stride;
+            };
+            uiInit.SrvDescriptorFreeFn = [](ImGui_ImplDX12_InitInfo* info,
+                                            D3D12_CPU_DESCRIPTOR_HANDLE cpu,
+                                            D3D12_GPU_DESCRIPTOR_HANDLE) {
+                auto* pool = static_cast<UiDescriptorPool*>(info->UserData);
+                if (pool->stride == 0 || cpu.ptr < pool->cpuStart)
+                    return;
+                pool->released.push_back(
+                    static_cast<unsigned>((cpu.ptr - pool->cpuStart) / pool->stride));
+            };
+            ImGui_ImplDX12_Init(&uiInit);
+
+            // Estado del panel. Arranca en DirectX 12 porque es con lo que se
+            // ha entrado.
+            int  uiBackendChoice = 1;
+            bool uiSavePending   = false;
+            std::string uiSaveResult;
+
+            d3d12.setUiDrawCallback([&]() {
+                ImGui_ImplDX12_RenderDrawData(
+                    ImGui::GetDrawData(),
+                    static_cast<ID3D12GraphicsCommandList*>(d3d12.nativeCommandList()));
+            });
+
             while (!window.shouldClose())
             {
                 window.pollEvents();
+
+                ImGui_ImplDX12_NewFrame();
+                ImGui_ImplGlfw_NewFrame();
+                ImGui::NewFrame();
+
+                ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSize(ImVec2(430.0f, 0.0f), ImGuiCond_FirstUseEver);
+                if (ImGui::Begin("Backend DirectX 12"))
+                {
+                    ImGui::Text("Adaptador: %s", d3d12.adapterName().c_str());
+                    ImGui::Text("%.1f FPS (%.3f ms/frame)", ImGui::GetIO().Framerate,
+                                1000.0f / ImGui::GetIO().Framerate);
+                    ImGui::Separator();
+
+                    ImGui::TextWrapped(
+                        "Este backend dibuja la escena de prueba, no el editor. Los paneles, "
+                        "la jerarquia, el inspector y el viewport solo existen con Vulkan.");
+                    ImGui::Spacing();
+                    ImGui::TextWrapped(
+                        "Implementado: presentacion, geometria con material, iluminacion "
+                        "directa, profundidad, skinning por compute, sombras en cascada, "
+                        "niebla, bloom con tone mapping y FXAA.");
+                    ImGui::TextWrapped(
+                        "Sin implementar: escena real del proyecto, camara navegable, SSAO, "
+                        "SSR, TAA, MSAA, IBL, skybox, gizmos, UI 2D y el editor completo.");
+
+                    ImGui::Separator();
+                    ImGui::TextWrapped(
+                        "Cambiar de backend requiere reiniciar. Este selector existe porque "
+                        "sin el no habria forma de volver a Vulkan: el combo del menu View "
+                        "vive en el editor, y el editor no se dibuja aqui.");
+
+                    const char* backendNames[] = {"Vulkan", "DirectX 12"};
+                    ImGui::SetNextItemWidth(160.0f);
+                    ImGui::Combo("Backend al reiniciar", &uiBackendChoice, backendNames,
+                                 IM_ARRAYSIZE(backendNames));
+
+                    if (ImGui::Button("Guardar en el proyecto", ImVec2(190.0f, 0.0f)))
+                        uiSavePending = true;
+
+                    if (!uiSaveResult.empty())
+                        ImGui::TextWrapped("%s", uiSaveResult.c_str());
+                }
+                ImGui::End();
+
+                if (uiSavePending)
+                {
+                    uiSavePending = false;
+                    // Se toca SOLO el campo del backend, releyendo y reescribiendo
+                    // el project.json tal cual: pasar por readSettings/writeSettings
+                    // reescribiria la seccion entera y un proyecto con ajustes a
+                    // medias perderia los que no estan en el fichero.
+                    if (lastProject.empty())
+                    {
+                        uiSaveResult = "No hay proyecto recordado: abre uno con Vulkan primero.";
+                    }
+                    else
+                    {
+                        const std::filesystem::path file = lastProject / "project.json";
+                        nlohmann::json               doc = nlohmann::json::object();
+                        {
+                            std::ifstream in(file);
+                            if (in.is_open())
+                            {
+                                try { in >> doc; } catch (const std::exception&) { doc = nlohmann::json::object(); }
+                            }
+                        }
+                        if (!doc.is_object())
+                            doc = nlohmann::json::object();
+                        if (!doc.contains("settings") || !doc["settings"].is_object())
+                            doc["settings"] = nlohmann::json::object();
+                        doc["settings"]["renderBackend"] =
+                            DonTopo::renderBackendName(uiBackendChoice == 0
+                                                           ? DonTopo::RenderBackend::Vulkan
+                                                           : DonTopo::RenderBackend::D3D12);
+
+                        std::ofstream out(file, std::ios::binary | std::ios::trunc);
+                        if (out.is_open())
+                        {
+                            out << doc.dump(4);
+                            out.flush();
+                            uiSaveResult = out.good()
+                                               ? "Guardado. Cierra y vuelve a abrir para aplicarlo."
+                                               : "No se pudo escribir el project.json.";
+                        }
+                        else
+                        {
+                            uiSaveResult = "No se pudo abrir el project.json para escribir.";
+                        }
+                    }
+                }
+
+                ImGui::Render();
                 d3d12.drawFrame();
             }
 
+            // ORDEN CRÍTICO. La GPU sigue con el último frame en vuelo al salir
+            // del bucle, y ese frame usa los buffers y la textura de ImGui.
+            // Apagar ImGui sin esperar antes se los quita a la GPU debajo, y el
+            // proceso muere al cerrar —con volcado de WER, pero sin que nada en
+            // pantalla lo delate, porque ya no queda frame que dibujar.
+            d3d12.waitIdle();
+            ImGui_ImplDX12_Shutdown();
+            ImGui_ImplGlfw_Shutdown();
+            ImGui::DestroyContext();
             d3d12.shutdown();
             return 0;
         }

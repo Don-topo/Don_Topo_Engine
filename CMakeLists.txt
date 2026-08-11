@@ -141,6 +141,14 @@ target_include_directories(imgui_backend PUBLIC
 target_link_libraries(imgui_backend PUBLIC Vulkan::Vulkan glfw)
 target_compile_features(imgui_backend PUBLIC cxx_std_17)
 
+# Backend DX12 de ImGui. Ya viene en el árbol de fuentes de ImGui, así que solo
+# hay que compilarlo; convive con el de Vulkan sin conflicto porque cada uno
+# define sus propios símbolos ImGui_Impl<API>_*.
+if(DTE_ENABLE_D3D12)
+    target_sources(imgui_backend PRIVATE ${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp)
+    target_link_libraries(imgui_backend PUBLIC d3d12 dxgi dxguid)
+endif()
+
 # ImGuiFileDialog — embedded file browser (NoDialog mode)
 # Usamos Populate (no MakeAvailable) para descargar fuentes sin ejecutar
 # el CMakeLists.txt de la librería, que busca imgui via find_package y falla.
