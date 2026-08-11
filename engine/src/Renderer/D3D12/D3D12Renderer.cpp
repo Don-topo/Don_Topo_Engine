@@ -111,6 +111,36 @@ constexpr float kCascadeLambda     = 0.75f;
 constexpr float kShadowMaxDistance = 500.0f;
 constexpr float kCasterMargin      = 200.0f;
 
+// Bloom: niveles de la cadena de reducción. Mismo número que usa el camino
+// Vulkan (su log dice "5 mips").
+constexpr int kBloomMips = 5;
+
+// Formato del target donde se dibuja la escena. Coma flotante y no UNORM: el
+// umbral del bloom solo tiene sentido si el color puede pasar de 1.0, que es
+// justo lo que un backbuffer normalizado recorta.
+constexpr DXGI_FORMAT kHdrFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+// Push compartido por bloom_down y bloom_up: vec2 + 3 float + int = 24 bytes.
+struct BloomPush {
+    float srcTexel[2];  // 1 / tamaño del nivel de ORIGEN
+    float threshold;
+    float knee;
+    float radius;    // solo lo usa el upsample
+    int   prefilter; // != 0 solo en el primer nivel del downsample
+};
+static_assert(sizeof(BloomPush) == 24, "BloomPush debe ocupar 24 bytes");
+
+// Reparto del heap de descriptores. Los tres primeros tienen que ir seguidos
+// porque el shader de malla los pide como t1..t3, y sceneHdr/bloomMip0 también
+// porque el de composición los pide como t0..t1.
+constexpr UINT kSrvBaseColor = 0;
+constexpr UINT kSrvNormalMap = 1;
+constexpr UINT kSrvShadowMap = 2;
+constexpr UINT kSrvSceneHdr  = 3;
+constexpr UINT kSrvBloomMip  = 4;                          // + nivel
+constexpr UINT kUavBloomMip  = kSrvBloomMip + kBloomMips;   // + nivel
+constexpr UINT kSrvHeapSize  = kUavBloomMip + kBloomMips;
+
 // Stride del vértice que escribe skinning.comp: 5 vec4 (pos, color, uv, normal,
 // tangent). No hay struct C++ equivalente en el motor, se usa el tamaño literal.
 constexpr UINT kSkinnedOutputStride = 5 * sizeof(glm::vec4);
@@ -288,6 +318,29 @@ struct D3D12Renderer::Impl {
     // sirve para orientar, igual que en computeCascades.
     glm::vec3 lightDirection{-0.4f, -1.0f, -0.5f};
 
+    // ── Escena fuera de pantalla y bloom ────────────────────────────────────
+    // La escena ya no va directa al backbuffer: se dibuja en un target HDR, el
+    // bloom trabaja sobre él y un pase de composición escribe el resultado.
+    D3D12MA::Allocation* hdrAllocation = nullptr;
+    D3D12MA::Allocation* bloomMipAllocations[kBloomMips]{};
+    UINT                 bloomMipWidth[kBloomMips]{};
+    UINT                 bloomMipHeight[kBloomMips]{};
+
+    ComPtr<ID3D12RootSignature> bloomRootSignature;
+    ComPtr<ID3D12PipelineState> bloomDownPipeline;
+    ComPtr<ID3D12PipelineState> bloomUpPipeline;
+    ComPtr<ID3D12RootSignature> compositeRootSignature;
+    ComPtr<ID3D12PipelineState> compositePipeline;
+
+    // Parámetros del bloom, los mismos defaults que el editor salvo la
+    // intensidad. Con 0,05 el efecto no se distingue de no tenerlo en una
+    // escena sin fuentes de luz brillantes, y con 0,6 lava la imagen entera;
+    // 0,15 se ve sin comerse el contraste.
+    float bloomThreshold = 1.0f;
+    float bloomKnee      = 0.5f;
+    float bloomRadius    = 1.0f;
+    float bloomIntensity = 0.15f;
+
     ComPtr<ID3D12DescriptorHeap> rtvHeap;
     UINT                         rtvSize = 0;
 
@@ -312,7 +365,11 @@ struct D3D12Renderer::Impl {
     UINT pendingHeight  = 0;
     bool resizePending  = false;
 
-    float       clearColor[4] = {0.10f, 0.10f, 0.12f, 1.0f};
+    // Color de fondo en espacio LINEAL, que es lo que espera el target HDR. El
+    // pase de composición le aplica ACES y gamma 2.2, así que un 0,10 de antes
+    // —cuando la escena iba directa al backbuffer— saldría ahora como un gris
+    // medio. Estos valores son los que dan en pantalla el fondo de siempre.
+    float       clearColor[4] = {0.02f, 0.02f, 0.025f, 1.0f};
     std::string adapterName;
     HWND        hwnd        = nullptr;
     bool        initialized = false;
@@ -354,6 +411,13 @@ struct D3D12Renderer::Impl {
     void createShadowResources();
     void computeCascades();   // reparte el frustum y saca una matriz por cascada
     void recordShadowPasses();
+
+    // Target HDR de la escena y niveles del bloom. Dependen del tamaño de la
+    // ventana, así que se rehacen en cada resize.
+    void createHdrTargets();
+    void releaseHdrTargets();
+    void createBloomPipelines();
+    void recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv);
 
     // Matriz de cámara del frame. Se recalcula en cada resize porque el aspecto
     // depende del tamaño de la ventana.
@@ -935,7 +999,7 @@ void D3D12Renderer::Impl::createMeshResources()
 
     // Heap de los tres SRV que pide el fragment shader.
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc{};
-    srvHeapDesc.NumDescriptors = 3;
+    srvHeapDesc.NumDescriptors = kSrvHeapSize;
     srvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srvHeapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     throwIfFailed(device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&srvHeap)),
@@ -1009,7 +1073,10 @@ void D3D12Renderer::Impl::updateSceneUbo()
     ubo.lights[0].color[0]     = 1.0f;
     ubo.lights[0].color[1]     = 0.98f;
     ubo.lights[0].color[2]     = 0.94f;
-    ubo.lights[0].color[3]     = 1.0f;  // intensidad
+    // Intensidad por debajo de 1: con albedo blanco y la luz a 1.0 la escena
+    // entera se planta en 1.0, y entonces el umbral del bloom deja pasar hasta
+    // el suelo y lava la imagen. Con 0,7 queda rango por debajo del umbral.
+    ubo.lights[0].color[3]     = 0.7f;
 
     ubo.viewPos = glm::vec4(6.0f, 4.5f, 8.0f, 1.0f);
 
@@ -1311,6 +1378,373 @@ void D3D12Renderer::Impl::recordSkinning()
     toVertexBuffer.Transition.StateAfter  = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
     toVertexBuffer.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     commandList->ResourceBarrier(1, &toVertexBuffer);
+}
+
+void D3D12Renderer::Impl::releaseHdrTargets()
+{
+    if (hdrAllocation) {
+        hdrAllocation->Release();
+        hdrAllocation = nullptr;
+    }
+    for (auto& mip : bloomMipAllocations) {
+        if (mip) {
+            mip->Release();
+            mip = nullptr;
+        }
+    }
+}
+
+void D3D12Renderer::Impl::createHdrTargets()
+{
+    releaseHdrTargets();
+
+    // Target de la escena, en coma flotante para que el umbral del bloom pueda
+    // distinguir lo que pasa de 1.0.
+    D3D12_RESOURCE_DESC hdrDesc{};
+    hdrDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    hdrDesc.Width            = width;
+    hdrDesc.Height           = height;
+    hdrDesc.DepthOrArraySize = 1;
+    hdrDesc.MipLevels        = 1;
+    hdrDesc.Format           = kHdrFormat;
+    hdrDesc.SampleDesc.Count = 1;
+    hdrDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+    D3D12_CLEAR_VALUE hdrClear{};
+    hdrClear.Format = kHdrFormat;
+    std::memcpy(hdrClear.Color, clearColor, sizeof(clearColor));
+
+    D3D12MA::ALLOCATION_DESC defaultDesc{};
+    defaultDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+    throwIfFailed(allocator->CreateResource(&defaultDesc, &hdrDesc,
+                                            D3D12_RESOURCE_STATE_RENDER_TARGET, &hdrClear,
+                                            &hdrAllocation, IID_NULL, nullptr),
+                  "D3D12MA::Allocator::CreateResource(HDR)");
+
+    // El RTV del target va detrás de los de la swapchain, en el mismo heap.
+    D3D12_CPU_DESCRIPTOR_HANDLE hdrRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    hdrRtv.ptr += static_cast<SIZE_T>(kFrameCount) * rtvSize;
+    device->CreateRenderTargetView(hdrAllocation->GetResource(), nullptr, hdrRtv);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC hdrSrv{};
+    hdrSrv.Format                  = kHdrFormat;
+    hdrSrv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+    hdrSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    hdrSrv.Texture2D.MipLevels     = 1;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<SIZE_T>(kSrvSceneHdr) * srvSize;
+    device->CreateShaderResourceView(hdrAllocation->GetResource(), &hdrSrv, handle);
+
+    // Niveles del bloom: texturas independientes en vez de mips de un mismo
+    // recurso. Cada una tiene un solo subrecurso, así que su estado se cambia
+    // de una pieza y no hay que llevar la cuenta por nivel.
+    for (int level = 0; level < kBloomMips; ++level) {
+        bloomMipWidth[level]  = (std::max)(1u, width >> (level + 1));
+        bloomMipHeight[level] = (std::max)(1u, height >> (level + 1));
+
+        D3D12_RESOURCE_DESC mipDesc{};
+        mipDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        mipDesc.Width            = bloomMipWidth[level];
+        mipDesc.Height           = bloomMipHeight[level];
+        mipDesc.DepthOrArraySize = 1;
+        mipDesc.MipLevels        = 1;
+        mipDesc.Format           = kHdrFormat;
+        mipDesc.SampleDesc.Count = 1;
+        mipDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        throwIfFailed(allocator->CreateResource(&defaultDesc, &mipDesc,
+                                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                &bloomMipAllocations[level], IID_NULL, nullptr),
+                      "D3D12MA::Allocator::CreateResource(bloom)");
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC mipSrv{};
+        mipSrv.Format                  = kHdrFormat;
+        mipSrv.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        mipSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        mipSrv.Texture2D.MipLevels     = 1;
+
+        handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(kSrvBloomMip + level) * srvSize;
+        device->CreateShaderResourceView(bloomMipAllocations[level]->GetResource(), &mipSrv, handle);
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC mipUav{};
+        mipUav.Format        = kHdrFormat;
+        mipUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+
+        handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(kUavBloomMip + level) * srvSize;
+        device->CreateUnorderedAccessView(bloomMipAllocations[level]->GetResource(), nullptr,
+                                          &mipUav, handle);
+    }
+}
+
+void D3D12Renderer::Impl::createBloomPipelines()
+{
+    // Los dos compute comparten firma: constantes, una textura de origen y una
+    // imagen de destino. Texture2D y RWTexture2D no pueden ir como root
+    // descriptors —solo los buffers pueden—, así que van en tablas.
+    D3D12_DESCRIPTOR_RANGE srcRange{};
+    srcRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srcRange.NumDescriptors     = 1;
+    srcRange.BaseShaderRegister = 0;  // t0
+
+    D3D12_DESCRIPTOR_RANGE dstRange{};
+    dstRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    dstRange.NumDescriptors     = 1;
+    dstRange.BaseShaderRegister = 1;  // u1
+
+    D3D12_ROOT_PARAMETER bloomParams[3]{};
+    bloomParams[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    bloomParams[0].Constants.ShaderRegister = 0;
+    bloomParams[0].Constants.Num32BitValues = sizeof(BloomPush) / 4;
+
+    bloomParams[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    bloomParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    bloomParams[1].DescriptorTable.pDescriptorRanges   = &srcRange;
+
+    bloomParams[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    bloomParams[2].DescriptorTable.NumDescriptorRanges = 1;
+    bloomParams[2].DescriptorTable.pDescriptorRanges   = &dstRange;
+
+    // Clamp en los bordes: con wrap, el filtro de 13 taps traería color del
+    // lado opuesto de la imagen y el bloom sangraría de un borde a otro.
+    D3D12_STATIC_SAMPLER_DESC bloomSampler{};
+    bloomSampler.Filter         = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    bloomSampler.AddressU       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    bloomSampler.AddressV       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    bloomSampler.AddressW       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    bloomSampler.MaxLOD         = D3D12_FLOAT32_MAX;
+    bloomSampler.ShaderRegister = 0;
+
+    auto serializeAndCreate = [&](const D3D12_ROOT_SIGNATURE_DESC& desc,
+                                  ComPtr<ID3D12RootSignature>& out, const char* what) {
+        ComPtr<ID3DBlob> serialized;
+        ComPtr<ID3DBlob> errorBlob;
+        HRESULT hr = D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized,
+                                                 &errorBlob);
+        if (FAILED(hr)) {
+            std::string detail;
+            if (errorBlob)
+                detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
+                              errorBlob->GetBufferSize());
+            throw std::runtime_error(std::string("D3D12: root signature de ") + what + " (HRESULT " +
+                                     hresultToString(hr) + ") " + detail);
+        }
+        throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                                  serialized->GetBufferSize(), IID_PPV_ARGS(&out)),
+                      "ID3D12Device::CreateRootSignature");
+    };
+
+    D3D12_ROOT_SIGNATURE_DESC bloomDesc{};
+    bloomDesc.NumParameters     = _countof(bloomParams);
+    bloomDesc.pParameters       = bloomParams;
+    bloomDesc.NumStaticSamplers = 1;
+    bloomDesc.pStaticSamplers   = &bloomSampler;
+    serializeAndCreate(bloomDesc, bloomRootSignature, "bloom");
+
+    auto buildComputePipeline = [&](const char* path, ComPtr<ID3D12PipelineState>& out) {
+        const std::vector<char>           shader = readBinaryFile(path);
+        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+        desc.pRootSignature = bloomRootSignature.Get();
+        desc.CS             = {shader.data(), shader.size()};
+        throwIfFailed(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&out)),
+                      "ID3D12Device::CreateComputePipelineState(bloom)");
+    };
+    buildComputePipeline("shaders/bloom_down.comp.dxil", bloomDownPipeline);
+    buildComputePipeline("shaders/bloom_up.comp.dxil", bloomUpPipeline);
+
+    // Composición: escena + bloom -> backbuffer. t0 y t1 tienen que caer en
+    // descriptores contiguos, y por eso sceneHdr y el nivel 0 del bloom están
+    // pegados en el heap.
+    D3D12_DESCRIPTOR_RANGE compositeRange{};
+    compositeRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    compositeRange.NumDescriptors     = 2;
+    compositeRange.BaseShaderRegister = 0;  // t0, t1
+
+    D3D12_ROOT_PARAMETER compositeParams[2]{};
+    compositeParams[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    compositeParams[0].Constants.ShaderRegister = 0;
+    compositeParams[0].Constants.Num32BitValues = 1;  // float intensity
+    compositeParams[0].ShaderVisibility         = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    compositeParams[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    compositeParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    compositeParams[1].DescriptorTable.pDescriptorRanges   = &compositeRange;
+    compositeParams[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_STATIC_SAMPLER_DESC compositeSamplers[2]{};
+    for (int i = 0; i < 2; ++i) {
+        compositeSamplers[i].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        compositeSamplers[i].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        compositeSamplers[i].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        compositeSamplers[i].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        compositeSamplers[i].MaxLOD           = D3D12_FLOAT32_MAX;
+        compositeSamplers[i].ShaderRegister   = i;
+        compositeSamplers[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    }
+
+    D3D12_ROOT_SIGNATURE_DESC compositeDesc{};
+    compositeDesc.NumParameters     = _countof(compositeParams);
+    compositeDesc.pParameters       = compositeParams;
+    compositeDesc.NumStaticSamplers = _countof(compositeSamplers);
+    compositeDesc.pStaticSamplers   = compositeSamplers;
+    serializeAndCreate(compositeDesc, compositeRootSignature, "composición");
+
+    // fullscreen.vert genera el triángulo desde el índice de vértice: sin
+    // vertex buffer y sin input layout.
+    const std::vector<char> fullscreenVs = readBinaryFile("shaders/fullscreen.vert.dxil");
+    const std::vector<char> compositePs  = readBinaryFile("shaders/bloom_composite.frag.dxil");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature        = compositeRootSignature.Get();
+    psoDesc.VS                    = {fullscreenVs.data(), fullscreenVs.size()};
+    psoDesc.PS                    = {compositePs.data(), compositePs.size()};
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets      = 1;
+    psoDesc.RTVFormats[0]         = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.DSVFormat             = DXGI_FORMAT_UNKNOWN;
+    psoDesc.SampleDesc.Count      = 1;
+    psoDesc.SampleMask            = UINT_MAX;
+
+    psoDesc.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.DepthClipEnable = TRUE;
+
+    for (auto& rt : psoDesc.BlendState.RenderTarget)
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+    psoDesc.DepthStencilState.DepthEnable   = FALSE;
+    psoDesc.DepthStencilState.StencilEnable = FALSE;
+
+    throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&compositePipeline)),
+                  "ID3D12Device::CreateGraphicsPipelineState(composición)");
+}
+
+void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv)
+{
+    // El heap lo deja puesto el pase de escena, pero este pase no puede
+    // depender de que ese se haya grabado.
+    ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+
+    const D3D12_GPU_DESCRIPTOR_HANDLE heapStart = srvHeap->GetGPUDescriptorHandleForHeapStart();
+    auto gpuHandle = [&](UINT index) {
+        D3D12_GPU_DESCRIPTOR_HANDLE handle = heapStart;
+        handle.ptr += static_cast<UINT64>(index) * srvSize;
+        return handle;
+    };
+
+    auto transition = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES before,
+                          D3D12_RESOURCE_STATES after) {
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource   = resource;
+        barrier.Transition.StateBefore  = before;
+        barrier.Transition.StateAfter   = after;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &barrier);
+    };
+
+    // La escena deja de ser destino de dibujo y pasa a leerse: primero por el
+    // compute del bloom, después por el pase de composición.
+    transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+               D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+
+    commandList->SetComputeRootSignature(bloomRootSignature.Get());
+
+    // Reducción. El primer nivel lee la escena y aplica el umbral; el resto
+    // solo filtra el nivel anterior.
+    for (int level = 0; level < kBloomMips; ++level) {
+        const UINT srcWidth  = (level == 0) ? width : bloomMipWidth[level - 1];
+        const UINT srcHeight = (level == 0) ? height : bloomMipHeight[level - 1];
+
+        BloomPush push{};
+        push.srcTexel[0] = 1.0f / static_cast<float>(srcWidth);
+        push.srcTexel[1] = 1.0f / static_cast<float>(srcHeight);
+        push.threshold   = bloomThreshold;
+        push.knee        = bloomKnee;
+        push.radius      = bloomRadius;
+        push.prefilter   = (level == 0) ? 1 : 0;
+
+        commandList->SetPipelineState(bloomDownPipeline.Get());
+        commandList->SetComputeRoot32BitConstants(0, sizeof(BloomPush) / 4, &push, 0);
+        commandList->SetComputeRootDescriptorTable(
+            1, gpuHandle(level == 0 ? kSrvSceneHdr : kSrvBloomMip + level - 1));
+        commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavBloomMip + level));
+        commandList->Dispatch((bloomMipWidth[level] + 7) / 8, (bloomMipHeight[level] + 7) / 8, 1);
+
+        // Este nivel pasa a ser origen del siguiente paso.
+        transition(bloomMipAllocations[level]->GetResource(),
+                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+
+    // Ampliación: cada nivel SUMA el de abajo sobre lo que ya tenía, así que el
+    // destino vuelve a acceso desordenado para poder leerse y escribirse.
+    for (int level = kBloomMips - 2; level >= 0; --level) {
+        BloomPush push{};
+        push.srcTexel[0] = 1.0f / static_cast<float>(bloomMipWidth[level + 1]);
+        push.srcTexel[1] = 1.0f / static_cast<float>(bloomMipHeight[level + 1]);
+        push.threshold   = bloomThreshold;
+        push.knee        = bloomKnee;
+        push.radius      = bloomRadius;
+        push.prefilter   = 0;
+
+        transition(bloomMipAllocations[level]->GetResource(),
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+        commandList->SetPipelineState(bloomUpPipeline.Get());
+        commandList->SetComputeRoot32BitConstants(0, sizeof(BloomPush) / 4, &push, 0);
+        commandList->SetComputeRootDescriptorTable(1, gpuHandle(kSrvBloomMip + level + 1));
+        commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavBloomMip + level));
+        commandList->Dispatch((bloomMipWidth[level] + 7) / 8, (bloomMipHeight[level] + 7) / 8, 1);
+
+        // Y vuelve a origen para el nivel siguiente (o para la composición, si
+        // este era el último).
+        transition(bloomMipAllocations[level]->GetResource(),
+                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                   level == 0 ? D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+                              : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
+
+    // Composición al backbuffer.
+    //
+    // Viewport de ALTURA NEGATIVA, y no es un truco gratuito: fullscreen.vert
+    // saca la uv de las mismas coordenadas que la posición (uv = ndc*0.5+0.5)
+    // dando por hecho que el NDC y=-1 es la fila de ARRIBA, que es como funciona
+    // Vulkan. En D3D12 y=-1 es la de abajo, así que el mismo shader deja la
+    // imagen del revés. Invertir el viewport lo corrige sin tocar un shader que
+    // comparten los dos backends.
+    D3D12_VIEWPORT viewport{};
+    viewport.TopLeftY = static_cast<float>(height);
+    viewport.Width    = static_cast<float>(width);
+    viewport.Height   = -static_cast<float>(height);
+    viewport.MaxDepth = 1.0f;
+    const D3D12_RECT scissor{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+
+    commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
+    commandList->RSSetViewports(1, &viewport);
+    commandList->RSSetScissorRects(1, &scissor);
+    commandList->SetPipelineState(compositePipeline.Get());
+    commandList->SetGraphicsRootSignature(compositeRootSignature.Get());
+    commandList->SetGraphicsRoot32BitConstants(0, 1, &bloomIntensity, 0);
+    commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(kSrvSceneHdr));
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    // Sin vertex buffer: fullscreen.vert saca las tres posiciones del índice.
+    commandList->DrawInstanced(3, 1, 0, 0);
+
+    // Todo vuelve al estado con el que arranca el frame siguiente.
+    transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+               D3D12_RESOURCE_STATE_RENDER_TARGET);
+    transition(bloomMipAllocations[0]->GetResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    for (int level = 1; level < kBloomMips; ++level) {
+        transition(bloomMipAllocations[level]->GetResource(),
+                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
 }
 
 void D3D12Renderer::Impl::createShadowResources()
@@ -1779,7 +2213,8 @@ void D3D12Renderer::init(Window& window)
     d.frameIndex = d.swapChain->GetCurrentBackBufferIndex();
 
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
-    rtvHeapDesc.NumDescriptors = kFrameCount;
+    // Los de la swapchain, más uno para el target HDR donde se dibuja la escena.
+    rtvHeapDesc.NumDescriptors = kFrameCount + 1;
     rtvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     throwIfFailed(d.device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&d.rtvHeap)),
@@ -1838,6 +2273,10 @@ void D3D12Renderer::init(Window& window)
     // del cubo ya creado.
     d.createShadowResources();
     d.computeCascades();
+    // El target HDR y los niveles del bloom necesitan el heap de descriptores
+    // ya creado por createMeshResources.
+    d.createHdrTargets();
+    d.createBloomPipelines();
     d.updateViewProj();
 
     d.initialized = true;
@@ -1894,8 +2333,14 @@ void D3D12Renderer::drawFrame()
     toRenderTarget.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     d.commandList->ResourceBarrier(1, &toRenderTarget);
 
+    D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv = d.rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    backBufferRtv.ptr += static_cast<SIZE_T>(d.frameIndex) * d.rtvSize;
+
+    // La escena NO se dibuja en el backbuffer: va al target HDR, que es el
+    // único sitio donde el umbral del bloom puede distinguir lo que pasa de
+    // 1.0. El backbuffer lo escribe después el pase de composición.
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = d.rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    rtv.ptr += static_cast<SIZE_T>(d.frameIndex) * d.rtvSize;
+    rtv.ptr += static_cast<SIZE_T>(kFrameCount) * d.rtvSize;
     const D3D12_CPU_DESCRIPTOR_HANDLE dsv = d.dsvHeap->GetCPUDescriptorHandleForHeapStart();
     d.commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
     d.commandList->ClearRenderTargetView(rtv, d.clearColor, 0, nullptr);
@@ -2008,6 +2453,10 @@ void D3D12Renderer::drawFrame()
         d.commandList->ResourceBarrier(1, &backToUav);
     }
 
+    // Bloom sobre la escena recién dibujada y composición al backbuffer.
+    if (d.compositePipeline)
+        d.recordBloomAndComposite(backBufferRtv);
+
     D3D12_RESOURCE_BARRIER toPresent = toRenderTarget;
     toPresent.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     toPresent.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
@@ -2096,6 +2545,11 @@ void D3D12Renderer::Impl::applyPendingResize()
     // El buffer de profundidad tiene el tamaño de la ventana: si no se recrea,
     // el test se hace contra una superficie de otro tamaño.
     createDepthBuffer();
+
+    // Y el target HDR con los niveles del bloom, por lo mismo. Solo si ya
+    // existían: en el primer arranque los crea init() después del resize.
+    if (hdrAllocation)
+        createHdrTargets();
 
     // El aspecto de la proyección depende del tamaño: sin esto la rejilla se
     // deforma al estirar la ventana.
@@ -2187,6 +2641,13 @@ void D3D12Renderer::shutdown()
     d.groundVertexBufferView = {};
     d.groundIndexBufferView  = {};
     d.groundIndexCount       = 0;
+
+    d.releaseHdrTargets();
+    d.compositePipeline.Reset();
+    d.compositeRootSignature.Reset();
+    d.bloomUpPipeline.Reset();
+    d.bloomDownPipeline.Reset();
+    d.bloomRootSignature.Reset();
 
     d.shadowSkinnedPipeline.Reset();
     d.shadowPipeline.Reset();
