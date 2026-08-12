@@ -153,6 +153,16 @@ public:
     // backbuffer ya como destino, justo después del último post-efecto.
     void setUiDrawCallback(std::function<void()> callback);
 
+    // Manda la escena ya compuesta a una textura en vez de al backbuffer, que
+    // pasa a llevar SOLO la interfaz. Es lo que necesita un viewport dentro de
+    // un panel: quien dibuja la UI recibe la escena como imagen.
+    void setRenderToTexture(bool enabled);
+
+    // Descriptor GPU de esa textura, listo para usarse como ImTextureID. 0 si
+    // todavía no hay imagen (antes de init). El heap es el mismo que se expone
+    // en uiDescriptorHeap(), así que el backend de ImGui ya lo tiene enlazado.
+    uint64_t viewportTexture() const;
+
     void* nativeDevice() const;       // ID3D12Device*
     void* nativeCommandList() const;  // ID3D12GraphicsCommandList*, solo válido dentro del callback
     void* nativeQueue() const;        // ID3D12CommandQueue*

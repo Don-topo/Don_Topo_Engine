@@ -303,6 +303,7 @@ int main()
             d3dCamera.moveSpeed = 8.0f;  // la rejilla mide 20: 50 la cruza en medio segundo
             d3d12.setCamera(d3dCamera.getViewMatrix(), d3dCamera.getPos(), d3dCamera.getFov());
 
+            bool   d3dViewportPanel = false;
             double d3dLastX = 0.0, d3dLastY = 0.0;
             bool   d3dLooking = false;
             auto   d3dLastFrame = std::chrono::high_resolution_clock::now();
@@ -370,6 +371,14 @@ int main()
                         // que soporte el device.
                         // Anti-aliasing: los modos que este backend sabe hacer.
                         // SSAA no esta, asi que no se ofrece.
+                        // Escena dentro de un panel en vez de a pantalla
+                        // completa: es el cimiento del viewport del editor.
+                        bool inPanel = d3dViewportPanel;
+                        if (ImGui::Checkbox("Escena en panel", &inPanel)) {
+                            d3dViewportPanel = inPanel;
+                            d3d12.setRenderToTexture(inPanel);
+                        }
+
                         bool wire = d3d12.isWireframeMode();
                         if (ImGui::Checkbox("Alambre", &wire))
                             d3d12.setWireframeMode(wire);
@@ -457,6 +466,23 @@ int main()
                             uiSaveResult = "No se pudo abrir el project.json para escribir.";
                         }
                     }
+                }
+
+                if (d3dViewportPanel) {
+                    // La escena, ya compuesta, como imagen de un panel. El
+                    // descriptor que devuelve el backend ES el ImTextureID que
+                    // espera su backend de ImGui.
+                    ImGui::SetNextWindowSize(ImVec2(720.0f, 440.0f), ImGuiCond_FirstUseEver);
+                    if (ImGui::Begin("Viewport")) {
+                        const uint64_t texture = d3d12.viewportTexture();
+                        if (texture != 0) {
+                            const ImVec2 size = ImGui::GetContentRegionAvail();
+                            // La textura es del tamaño de la ventana: el panel
+                            // la muestra escalada, sin recortarla.
+                            ImGui::Image(static_cast<ImTextureID>(texture), size);
+                        }
+                    }
+                    ImGui::End();
                 }
 
                 ImGui::Render();

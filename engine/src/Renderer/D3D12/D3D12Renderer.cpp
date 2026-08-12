@@ -289,7 +289,11 @@ constexpr UINT kSrvSsr = kUavSsr + 1;
 // del frame anterior y escribe la de este.
 constexpr UINT kSrvTaaHistory = kSrvSsr + 1;  // + índice (0 o 1)
 
-constexpr UINT kSrvHeapSize = kSrvTaaHistory + 2;
+// Imagen del viewport: la escena ya compuesta, cuando en vez de ir al
+// backbuffer tiene que acabar dentro de un panel de la interfaz.
+constexpr UINT kSrvViewport = kSrvTaaHistory + 2;
+
+constexpr UINT kSrvHeapSize = kSrvViewport + 1;
 
 // Push de ssao.comp y ssao_blur.comp: los dos comparten el bloque, así que el
 // rango de root constants tiene que ser el mismo para los dos pipelines.
@@ -698,6 +702,11 @@ struct D3D12Renderer::Impl {
     void ensureForwardPlusGrid(uint32_t cells);
     void updateForwardPlus();   // parámetros y luces del frame
     void recordForwardPlusCull();
+
+    // Destino alternativo del pase final. Con esto encendido el backbuffer solo
+    // lleva interfaz, y la escena viaja como textura a quien la dibuje.
+    D3D12MA::Allocation* viewportAllocation = nullptr;
+    bool                 renderToTexture    = false;
 
     ComPtr<ID3D12RootSignature> taaRootSignature;
     ComPtr<ID3D12PipelineState> taaPipeline;
@@ -2207,6 +2216,10 @@ void D3D12Renderer::Impl::recordSkinning()
 
 void D3D12Renderer::Impl::releaseHdrTargets()
 {
+    if (viewportAllocation) {
+        viewportAllocation->Release();
+        viewportAllocation = nullptr;
+    }
     for (auto* allocation : taaHistoryAllocations) {
         if (allocation)
             allocation->Release();
@@ -2351,6 +2364,36 @@ void D3D12Renderer::Impl::createHdrTargets()
         D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = dsvHeap->GetCPUDescriptorHandleForHeapStart();
         dsvHandle.ptr += dsvSize;
         device->CreateDepthStencilView(depthMsAllocation->GetResource(), &msDsv, dsvHandle);
+    }
+
+    {
+        // Imagen del viewport, del formato del backbuffer: es su sustituto.
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width            = width;
+        desc.Height           = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+        D3D12_CLEAR_VALUE clear{};
+        clear.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+        D3D12MA::ALLOCATION_DESC allocDesc{};
+        allocDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+        throwIfFailed(allocator->CreateResource(&allocDesc, &desc,
+                                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear,
+                                                &viewportAllocation, IID_NULL, nullptr),
+                      "D3D12MA::Allocator::CreateResource(viewport)");
+
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        rtv.ptr += static_cast<SIZE_T>(kFrameCount + 5) * rtvSize;
+        device->CreateRenderTargetView(viewportAllocation->GetResource(), nullptr, rtv);
+
+        createTexture2DSrv(viewportAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
+                           kSrvViewport);
     }
 
     // Historial del TAA: dos imágenes del formato de la composición, que es lo
@@ -4482,8 +4525,10 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
                D3D12_RESOURCE_STATE_RENDER_TARGET);
 
     // La interfaz va encima de todo, sobre el backbuffer y sin post-procesado:
-    // suavizar los bordes del texto de la UI lo emborronaría.
-    if (uiDrawCallback) {
+    // suavizar los bordes del texto de la UI lo emborronaría. Con la escena en
+    // textura la dibuja quien llama, DESPUÉS de que esa textura pase a lectura:
+    // aquí todavía es el destino del pase.
+    if (uiDrawCallback && !renderToTexture) {
         commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
         uiDrawCallback();
     }
@@ -5032,7 +5077,7 @@ void D3D12Renderer::init(Window& window)
     // que la composición deja para FXAA.
     // Los de la swapchain, el HDR, el LDR de la composición y el color
     // multimuestra del pase de escena cuando hay MSAA.
-    rtvHeapDesc.NumDescriptors = kFrameCount + 5;  // + las dos historias del TAA
+    rtvHeapDesc.NumDescriptors = kFrameCount + 6;  // + historias del TAA y viewport
     rtvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     throwIfFailed(d.device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&d.rtvHeap)),
@@ -5211,6 +5256,23 @@ void D3D12Renderer::drawFrame()
 
     D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv = d.rtvHeap->GetCPUDescriptorHandleForHeapStart();
     backBufferRtv.ptr += static_cast<SIZE_T>(d.frameIndex) * d.rtvSize;
+
+    // Con la escena en textura, el pase final escribe ahí y el backbuffer se
+    // queda para la interfaz, que es quien la dibujará dentro de su panel.
+    D3D12_CPU_DESCRIPTOR_HANDLE sceneRtv = backBufferRtv;
+    const bool toTexture = d.renderToTexture && d.viewportAllocation;
+    if (toTexture) {
+        sceneRtv = d.rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        sceneRtv.ptr += static_cast<SIZE_T>(kFrameCount + 5) * d.rtvSize;
+
+        D3D12_RESOURCE_BARRIER toTarget{};
+        toTarget.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toTarget.Transition.pResource   = d.viewportAllocation->GetResource();
+        toTarget.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        toTarget.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        toTarget.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        d.commandList->ResourceBarrier(1, &toTarget);
+    }
 
     // La escena NO se dibuja en el backbuffer: va al target HDR, que es el
     // único sitio donde el umbral del bloom puede distinguir lo que pasa de
@@ -5412,7 +5474,30 @@ void D3D12Renderer::drawFrame()
 
     // Bloom, composición con tone mapping y FXAA hasta el backbuffer.
     if (d.compositePipeline)
-        d.recordBloomAndComposite(backBufferRtv);
+        d.recordBloomAndComposite(sceneRtv);
+
+    if (toTexture) {
+        // Y a lectura, que es como la quiere la interfaz.
+        D3D12_RESOURCE_BARRIER toRead{};
+        toRead.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toRead.Transition.pResource   = d.viewportAllocation->GetResource();
+        toRead.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        toRead.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        toRead.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        d.commandList->ResourceBarrier(1, &toRead);
+
+        // El backbuffer no lo ha tocado nadie: se limpia para que la interfaz
+        // no dibuje sobre lo del frame anterior.
+        const float uiClear[4] = {0.05f, 0.05f, 0.06f, 1.0f};
+        d.commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
+        d.commandList->ClearRenderTargetView(backBufferRtv, uiClear, 0, nullptr);
+
+        if (d.uiDrawCallback) {
+            ID3D12DescriptorHeap* heaps[] = {d.srvHeap.Get()};
+            d.commandList->SetDescriptorHeaps(1, heaps);
+            d.uiDrawCallback();
+        }
+    }
 
     D3D12_RESOURCE_BARRIER toPresent = toRenderTarget;
     toPresent.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
@@ -5739,6 +5824,21 @@ void D3D12Renderer::waitIdle()
 {
     if (m_impl->initialized)
         m_impl->waitForGpu();
+}
+
+void D3D12Renderer::setRenderToTexture(bool enabled)
+{
+    m_impl->renderToTexture = enabled;
+}
+
+uint64_t D3D12Renderer::viewportTexture() const
+{
+    const Impl& d = *m_impl;
+    if (!d.viewportAllocation || !d.srvHeap)
+        return 0;
+    D3D12_GPU_DESCRIPTOR_HANDLE handle = d.srvHeap->GetGPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<UINT64>(kSrvViewport) * d.srvSize;
+    return handle.ptr;
 }
 
 void D3D12Renderer::setUiDrawCallback(std::function<void()> callback)
