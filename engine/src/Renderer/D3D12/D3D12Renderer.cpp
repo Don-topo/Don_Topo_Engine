@@ -162,7 +162,11 @@ constexpr UINT kSrvObjects     = kSrvImGui + kImGuiReserved;
 // tiene su material en el FBX y por tanto su propia terna.
 constexpr UINT kMaxSkinnedSlots = 16;
 constexpr UINT kSrvSkinned      = kSrvObjects + kMaxObjectSlots * 3;
-constexpr UINT kSrvHeapSize     = kSrvSkinned + kMaxSkinnedSlots * 3;
+
+// Cubemap del cielo: una sola vista, la del TextureCube que muestrea t0 de
+// skybox.frag.
+constexpr UINT kSrvSkybox   = kSrvSkinned + kMaxSkinnedSlots * 3;
+constexpr UINT kSrvHeapSize = kSrvSkybox + 1;
 
 // Niebla volumétrica: push propio de 128 bytes.
 struct FogPush {
@@ -396,6 +400,16 @@ struct D3D12Renderer::Impl {
     D3D12MA::Allocation* skinnedInstanceAllocation = nullptr;
     void*                skinnedInstanceMapped     = nullptr;
     size_t               skinnedInstanceCapacity   = 0;
+
+    // ── Cielo ───────────────────────────────────────────────────────────
+    ComPtr<ID3D12RootSignature> skyboxRootSignature;
+    ComPtr<ID3D12PipelineState> skyboxPipeline;
+    D3D12MA::Allocation*        skyboxAllocation = nullptr;
+
+    // Carga las seis caras y monta el cubemap. Silenciosa si falta alguna: el
+    // fondo se queda en el color de limpieza, que es lo que había antes.
+    void createSkyboxResources();
+    void recordSkybox();
 
     // ── Cámara ──────────────────────────────────────────────────────────
     // Un solo sitio: la rejilla, la malla, la niebla y el reparto de cascadas
@@ -2014,6 +2028,176 @@ void D3D12Renderer::Impl::createBloomPipelines()
                   "ID3D12Device::CreateGraphicsPipelineState(composición)");
 }
 
+void D3D12Renderer::Impl::createSkyboxResources()
+{
+    // Mismo orden de caras que el camino de Vulkan: +X, -X, +Y, -Y, +Z, -Z,
+    // que es el que espera un TextureCube por slice.
+    const char* facePaths[6] = {
+        "assets/skybox/px.png", "assets/skybox/nx.png", "assets/skybox/py.png",
+        "assets/skybox/ny.png", "assets/skybox/pz.png", "assets/skybox/nz.png",
+    };
+
+    int      faceWidth = 0, faceHeight = 0, channels = 0;
+    stbi_uc* faces[6] = {};
+    bool     ok       = true;
+    for (int i = 0; i < 6; ++i) {
+        int w = 0, h = 0;
+        faces[i] = stbi_load(facePaths[i], &w, &h, &channels, STBI_rgb_alpha);
+        if (!faces[i]) {
+            ok = false;
+            break;
+        }
+        if (i == 0) {
+            faceWidth  = w;
+            faceHeight = h;
+        } else if (w != faceWidth || h != faceHeight) {
+            // Un cubemap con caras de distinto tamaño no es un cubemap: el
+            // recurso es UNO con seis slices del mismo tamaño.
+            ok = false;
+            break;
+        }
+    }
+
+    if (ok && faceWidth > 0 && faceHeight > 0) {
+        // Las seis caras seguidas, que es como uploadTexture recorre el array.
+        const size_t         faceBytes = static_cast<size_t>(faceWidth) * faceHeight * 4;
+        std::vector<uint8_t> cube(faceBytes * 6);
+        for (int i = 0; i < 6; ++i)
+            std::memcpy(cube.data() + faceBytes * i, faces[i], faceBytes);
+
+        skyboxAllocation = uploadTexture(cube.data(), static_cast<UINT>(faceWidth),
+                                         static_cast<UINT>(faceHeight), 6,
+                                         DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, 4, kSrvSkybox);
+
+        // uploadTexture deja un SRV de array 2D; el shader declara TextureCube,
+        // y con la vista de array la dirección de muestreo no significa nada.
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format                  = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+        srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURECUBE;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.TextureCube.MipLevels   = 1;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(kSrvSkybox) * srvSize;
+        device->CreateShaderResourceView(skyboxAllocation->GetResource(), &srvDesc, handle);
+    }
+
+    for (stbi_uc* face : faces)
+        if (face)
+            stbi_image_free(face);
+
+    if (!skyboxAllocation)
+        return;
+
+    // Root signature: la invViewProj como root constants (b0) y el cubemap en
+    // una tabla (t0). El vertex shader no lee vértices —saca las tres esquinas
+    // del SV_VertexID—, así que no hay input layout.
+    D3D12_DESCRIPTOR_RANGE cubeRange{};
+    cubeRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    cubeRange.NumDescriptors     = 1;
+    cubeRange.BaseShaderRegister = 0;  // t0
+
+    D3D12_ROOT_PARAMETER params[2]{};
+    params[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[0].Constants.ShaderRegister = 0;  // b0
+    params[0].Constants.Num32BitValues = 16;
+    params[0].ShaderVisibility         = D3D12_SHADER_VISIBILITY_VERTEX;
+
+    params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable.NumDescriptorRanges = 1;
+    params[1].DescriptorTable.pDescriptorRanges   = &cubeRange;
+    params[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.MaxLOD           = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister   = 0;  // s0
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_ROOT_SIGNATURE_DESC rootDesc{};
+    rootDesc.NumParameters     = _countof(params);
+    rootDesc.pParameters       = params;
+    rootDesc.NumStaticSamplers = 1;
+    rootDesc.pStaticSamplers   = &sampler;
+
+    ComPtr<ID3DBlob> serialized;
+    ComPtr<ID3DBlob> errorBlob;
+    HRESULT          hr = D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                                      &serialized, &errorBlob);
+    if (FAILED(hr)) {
+        std::string detail;
+        if (errorBlob)
+            detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
+                          errorBlob->GetBufferSize());
+        throw std::runtime_error("D3D12: root signature del cielo (HRESULT " +
+                                 hresultToString(hr) + ") " + detail);
+    }
+    throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                              serialized->GetBufferSize(),
+                                              IID_PPV_ARGS(&skyboxRootSignature)),
+                  "ID3D12Device::CreateRootSignature(cielo)");
+
+    const std::vector<char> vertexShader = readBinaryFile("shaders/skybox.vert.dxil");
+    const std::vector<char> pixelShader  = readBinaryFile("shaders/skybox.frag.dxil");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature        = skyboxRootSignature.Get();
+    psoDesc.VS                    = {vertexShader.data(), vertexShader.size()};
+    psoDesc.PS                    = {pixelShader.data(), pixelShader.size()};
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets      = 1;
+    // El cielo va al target HDR, con la escena: así lo tonemapea la
+    // composición como todo lo demás y puede generar bloom.
+    psoDesc.RTVFormats[0]    = kHdrFormat;
+    psoDesc.DSVFormat        = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleDesc.Count = 1;
+    psoDesc.SampleMask       = UINT_MAX;
+
+    psoDesc.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.DepthClipEnable = TRUE;
+
+    for (auto& rt : psoDesc.BlendState.RenderTarget)
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+    // El triángulo sale con z = 1: se dibuja al final, solo donde no haya
+    // geometría, y NO escribe profundidad — la niebla lee ese buffer y un
+    // cielo a distancia máxima le haría teñir la pantalla entera.
+    psoDesc.DepthStencilState.DepthEnable    = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    psoDesc.DepthStencilState.StencilEnable  = FALSE;
+
+    throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&skyboxPipeline)),
+                  "ID3D12Device::CreateGraphicsPipelineState(cielo)");
+}
+
+void D3D12Renderer::Impl::recordSkybox()
+{
+    if (!skyboxPipeline)
+        return;
+
+    // La vista SIN traslación: el cielo no se acerca al andar, solo gira.
+    const glm::mat4 rotView     = glm::mat4(glm::mat3(cameraView));
+    const glm::mat4 invViewProj = glm::inverse(cameraProj() * rotView);
+
+    ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetPipelineState(skyboxPipeline.Get());
+    commandList->SetGraphicsRootSignature(skyboxRootSignature.Get());
+    commandList->SetGraphicsRoot32BitConstants(0, 16, &invViewProj[0][0], 0);
+
+    D3D12_GPU_DESCRIPTOR_HANDLE table = srvHeap->GetGPUDescriptorHandleForHeapStart();
+    table.ptr += static_cast<UINT64>(kSrvSkybox) * srvSize;
+    commandList->SetGraphicsRootDescriptorTable(1, table);
+
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList->DrawInstanced(3, 1, 0, 0);
+}
+
 void D3D12Renderer::Impl::createFogAndFxaaPipelines()
 {
     auto serializeAndCreate = [&](const D3D12_ROOT_SIGNATURE_DESC& desc,
@@ -2981,6 +3165,9 @@ void D3D12Renderer::init(Window& window)
     // ya creado por createMeshResources.
     d.createHdrTargets();
     d.createBloomPipelines();
+    // El cielo despues del heap y del target HDR: usa un hueco del primero y
+    // dibuja en el segundo.
+    d.createSkyboxResources();
     d.createFogAndFxaaPipelines();
     d.updateViewProj();
 
@@ -3186,6 +3373,11 @@ void D3D12Renderer::drawFrame()
             }
         }
     }
+
+    // El cielo al final de la geometria: se apoya en la profundidad ya escrita
+    // para salir solo donde no hay nada, y asi no paga sombreado por pixeles
+    // que va a tapar la escena.
+    d.recordSkybox();
 
     if (d.gizmoPipeline && d.gridVertexCount > 0) {
         d.commandList->SetPipelineState(d.gizmoPipeline.Get());
@@ -3625,7 +3817,7 @@ void D3D12Renderer::shutdown()
 
     for (auto** allocation : {&d.instanceAllocation, &d.baseColorAllocation,
                               &d.normalMapAllocation, &d.shadowMapAllocation,
-                              &d.depthAllocation, &d.groundVertexAllocation,
+                              &d.depthAllocation, &d.skyboxAllocation, &d.groundVertexAllocation,
                               &d.groundIndexAllocation, &d.groundInstanceAllocation,
                               &d.shadowMapArrayAllocation}) {
         if (*allocation) {
@@ -3648,6 +3840,9 @@ void D3D12Renderer::shutdown()
     d.groundVertexBufferView = {};
     d.groundIndexBufferView  = {};
     d.groundIndexCount       = 0;
+
+    d.skyboxPipeline.Reset();
+    d.skyboxRootSignature.Reset();
 
     d.releaseHdrTargets();
     d.fxaaPipeline.Reset();

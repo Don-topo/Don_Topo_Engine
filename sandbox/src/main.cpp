@@ -327,10 +327,10 @@ int main()
                     ImGui::TextWrapped(
                         "Implementado: presentacion, escena del proyecto con sus texturas, "
                         "personajes animados por compute, iluminacion directa, profundidad, "
-                        "sombras en cascada, niebla, bloom con tone mapping y FXAA.");
+                        "sombras en cascada, cielo, niebla, bloom con tone mapping y FXAA.");
                     ImGui::TextWrapped(
-                        "Sin implementar: SSAO, SSR, TAA, MSAA, IBL, skybox, gizmos, UI 2D "
-                        "y el editor completo.");
+                        "Sin implementar: SSAO, SSR, TAA, MSAA, IBL, gizmos, UI 2D y el "
+                        "editor completo.");
                     ImGui::Spacing();
                     ImGui::TextWrapped(
                         "Camara: WASD para moverse, Q/E para bajar y subir, boton derecho "
