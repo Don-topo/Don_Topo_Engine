@@ -564,6 +564,9 @@ struct D3D12Renderer::Impl {
     // Carga las seis caras y monta el cubemap. Silenciosa si falta alguna: el
     // fondo se queda en el color de limpieza, que es lo que había antes.
     void createSkyboxResources();
+    // Solo la root signature y el pipeline: se rehacen al cambiar de muestras,
+    // sin volver a cargar las seis caras.
+    void createSkyboxPipelineOnly();
     void recordSkybox();
 
     ComPtr<ID3D12RootSignature> iblRootSignature;
@@ -604,6 +607,43 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12PipelineState> ssrPipeline;
     ComPtr<ID3D12PipelineState> ssrResolvePipeline;
     D3D12MA::Allocation*        ssrAllocation = nullptr;
+
+    // Muestras CONSTRUIDAS ahora mismo en los targets y en los pipelines del
+    // pase de escena. Lo que pide el usuario vive en el estado compartido; los
+    // dos solo coinciden después de recrear, y eso pasa entre frames.
+    UINT sampleCount = 1;
+
+    // Color y profundidad multimuestra. Solo existen con MSAA activo: el pase
+    // de escena dibuja ahí y al cerrarlo se resuelve sobre el HDR de siempre,
+    // que es el que consumen el SSR, la niebla, el bloom y la composición.
+    D3D12MA::Allocation* hdrMsAllocation   = nullptr;
+    D3D12MA::Allocation* depthMsAllocation = nullptr;
+
+    // Muestras que pide el estado, ya validadas contra lo que soporta el
+    // device: 1 si el modo no es MSAA.
+    UINT desiredSampleCount() const;
+
+    // La profundidad que pueden LEER la niebla y los reflejos. Con MSAA la del
+    // pase de escena es multimuestra y no se muestrea como una textura normal,
+    // así que se usa la del pre-pase, que por eso se graba también cuando el
+    // SSAO está apagado.
+    ID3D12Resource* readableDepth() const
+    {
+        if (sampleCount > 1 && prepassDepthAllocation)
+            return prepassDepthAllocation->GetResource();
+        return depthAllocation ? depthAllocation->GetResource() : nullptr;
+    }
+    UINT readableDepthSrv() const
+    {
+        return (sampleCount > 1 && prepassDepthAllocation) ? kSrvPrepassDepth : kSrvDepth;
+    }
+    // Y en qué estado está fuera de esos pases: el del pre-pase lo deja su
+    // propio grabado, el de la escena vive en escritura de profundidad.
+    D3D12_RESOURCE_STATES readableDepthState() const
+    {
+        return D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    }
+    void applyPendingSampleCount();  // recrea targets y pipelines si cambió
 
     ComPtr<ID3D12RootSignature> fpCullRootSignature;
     ComPtr<ID3D12PipelineState> fpTiledPipeline;
@@ -1033,9 +1073,9 @@ void D3D12Renderer::Impl::createGizmoPipeline()
     psoDesc.InputLayout           = {inputLayout, _countof(inputLayout)};
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
     psoDesc.NumRenderTargets      = 1;
-    psoDesc.RTVFormats[0]         = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[0]         = kHdrFormat;
     psoDesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
-    psoDesc.SampleDesc.Count      = 1;
+    psoDesc.SampleDesc.Count      = sampleCount;
     psoDesc.SampleMask            = UINT_MAX;
 
     psoDesc.RasterizerState.FillMode              = D3D12_FILL_MODE_SOLID;
@@ -1513,9 +1553,9 @@ void D3D12Renderer::Impl::createMeshPipeline()
     psoDesc.InputLayout           = {inputLayout, _countof(inputLayout)};
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets      = 1;
-    psoDesc.RTVFormats[0]         = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[0]         = kHdrFormat;
     psoDesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
-    psoDesc.SampleDesc.Count      = 1;
+    psoDesc.SampleDesc.Count      = sampleCount;
     psoDesc.SampleMask            = UINT_MAX;
 
     psoDesc.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
@@ -1803,9 +1843,9 @@ void D3D12Renderer::Impl::createSkinningPipelines()
     psoDesc.InputLayout           = {skinnedLayout, _countof(skinnedLayout)};
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets      = 1;
-    psoDesc.RTVFormats[0]         = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[0]         = kHdrFormat;
     psoDesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
-    psoDesc.SampleDesc.Count      = 1;
+    psoDesc.SampleDesc.Count      = sampleCount;
     psoDesc.SampleMask            = UINT_MAX;
 
     psoDesc.RasterizerState.FillMode              = D3D12_FILL_MODE_SOLID;
@@ -2079,6 +2119,12 @@ void D3D12Renderer::Impl::recordSkinning()
 
 void D3D12Renderer::Impl::releaseHdrTargets()
 {
+    for (auto** allocation : {&hdrMsAllocation, &depthMsAllocation}) {
+        if (*allocation) {
+            (*allocation)->Release();
+            *allocation = nullptr;
+        }
+    }
     if (ssrAllocation) {
         ssrAllocation->Release();
         ssrAllocation = nullptr;
@@ -2163,6 +2209,54 @@ void D3D12Renderer::Impl::createHdrTargets()
     D3D12_CPU_DESCRIPTOR_HANDLE hdrRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
     hdrRtv.ptr += static_cast<SIZE_T>(kFrameCount) * rtvSize;
     device->CreateRenderTargetView(hdrAllocation->GetResource(), nullptr, hdrRtv);
+
+    if (sampleCount > 1) {
+        // Color y profundidad del pase de escena con MSAA. El resto de la
+        // cadena (SSR, niebla, bloom, composición) sigue leyendo los de una
+        // muestra: entre medias va un resolve.
+        D3D12_RESOURCE_DESC msDesc{};
+        msDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        msDesc.Width            = width;
+        msDesc.Height           = height;
+        msDesc.DepthOrArraySize = 1;
+        msDesc.MipLevels        = 1;
+        msDesc.Format           = kHdrFormat;
+        msDesc.SampleDesc.Count = sampleCount;
+        msDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+        D3D12_CLEAR_VALUE msClear{};
+        msClear.Format = kHdrFormat;
+
+        D3D12MA::ALLOCATION_DESC allocDesc{};
+        allocDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+        throwIfFailed(allocator->CreateResource(&allocDesc, &msDesc,
+                                                D3D12_RESOURCE_STATE_RENDER_TARGET, &msClear,
+                                                &hdrMsAllocation, IID_NULL, nullptr),
+                      "D3D12MA::Allocator::CreateResource(HDR multimuestra)");
+
+        D3D12_CPU_DESCRIPTOR_HANDLE msRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        msRtv.ptr += static_cast<SIZE_T>(kFrameCount + 2) * rtvSize;
+        device->CreateRenderTargetView(hdrMsAllocation->GetResource(), nullptr, msRtv);
+
+        msDesc.Format = DXGI_FORMAT_D32_FLOAT;
+        msDesc.Flags  = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+        D3D12_CLEAR_VALUE depthClear{};
+        depthClear.Format             = DXGI_FORMAT_D32_FLOAT;
+        depthClear.DepthStencil.Depth = 1.0f;
+        throwIfFailed(allocator->CreateResource(&allocDesc, &msDesc,
+                                                D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthClear,
+                                                &depthMsAllocation, IID_NULL, nullptr),
+                      "D3D12MA::Allocator::CreateResource(profundidad multimuestra)");
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC msDsv{};
+        msDsv.Format        = DXGI_FORMAT_D32_FLOAT;
+        msDsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DMS;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = dsvHeap->GetCPUDescriptorHandleForHeapStart();
+        dsvHandle.ptr += dsvSize;
+        device->CreateDepthStencilView(depthMsAllocation->GetResource(), &msDsv, dsvHandle);
+    }
 
     D3D12_SHADER_RESOURCE_VIEW_DESC hdrSrv{};
     hdrSrv.Format                  = kHdrFormat;
@@ -2751,6 +2845,14 @@ void D3D12Renderer::Impl::createSkyboxResources()
     if (!skyboxAllocation)
         return;
 
+    createSkyboxPipelineOnly();
+}
+
+void D3D12Renderer::Impl::createSkyboxPipelineOnly()
+{
+    if (!skyboxAllocation)
+        return;
+
     // Root signature: la invViewProj como root constants (b0) y el cubemap en
     // una tabla (t0). El vertex shader no lee vértices —saca las tres esquinas
     // del SV_VertexID—, así que no hay input layout.
@@ -2815,7 +2917,7 @@ void D3D12Renderer::Impl::createSkyboxResources()
     // composición como todo lo demás y puede generar bloom.
     psoDesc.RTVFormats[0]    = kHdrFormat;
     psoDesc.DSVFormat        = DXGI_FORMAT_D32_FLOAT;
-    psoDesc.SampleDesc.Count = 1;
+    psoDesc.SampleDesc.Count = sampleCount;
     psoDesc.SampleMask       = UINT_MAX;
 
     psoDesc.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
@@ -2835,6 +2937,47 @@ void D3D12Renderer::Impl::createSkyboxResources()
 
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&skyboxPipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(cielo)");
+}
+
+UINT D3D12Renderer::Impl::desiredSampleCount() const
+{
+    if (state->aaMode() != RendererState::AaMode::Msaa)
+        return 1;
+
+    // Lo que pida el usuario, recortado a lo que el device acepte para el
+    // formato de la escena: pedir 8 donde solo hay 4 no falla al crear la
+    // textura, falla al crear el pipeline, y ahí ya es tarde.
+    UINT wanted = static_cast<UINT>((std::max)(1, state->msaaSamples()));
+    while (wanted > 1) {
+        D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS levels{};
+        levels.Format      = kHdrFormat;
+        levels.SampleCount = wanted;
+        if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS, &levels,
+                                                  sizeof(levels))) &&
+            levels.NumQualityLevels > 0)
+            break;
+        wanted /= 2;
+    }
+    return wanted;
+}
+
+void D3D12Renderer::Impl::applyPendingSampleCount()
+{
+    const UINT wanted = desiredSampleCount();
+    if (wanted == sampleCount)
+        return;
+
+    // Cambia el número de muestras de los targets Y de todos los pipelines que
+    // dibujan en ellos: hay que esperar a que la GPU suelte los viejos.
+    waitForGpu();
+    sampleCount = wanted;
+
+    createHdrTargets();
+    createMeshPipeline();
+    createSkinningPipelines();
+    createGizmoPipeline();
+    createSkyboxPipelineOnly();
+
 }
 
 void D3D12Renderer::Impl::createForwardPlusPipelines()
@@ -3222,14 +3365,14 @@ void D3D12Renderer::Impl::recordSsr()
     // escena (la completa, no la del pre-pase) y el destino propio.
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    transition(depthAllocation->GetResource(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+    transition(readableDepth(), readableDepthState(),
                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
     commandList->SetComputeRootSignature(ssrRootSignature.Get());
     commandList->SetPipelineState(ssrPipeline.Get());
     commandList->SetComputeRoot32BitConstants(0, sizeof(SsrPush) / 4, &push, 0);
     commandList->SetComputeRootDescriptorTable(1, gpuHandle(kSrvSceneHdr));
-    commandList->SetComputeRootDescriptorTable(2, gpuHandle(kSrvDepth));
+    commandList->SetComputeRootDescriptorTable(2, gpuHandle(readableDepthSrv()));
     commandList->SetComputeRootDescriptorTable(3, gpuHandle(kUavSsr));
     commandList->Dispatch(groupsX, groupsY, 1);
 
@@ -3243,7 +3386,7 @@ void D3D12Renderer::Impl::recordSsr()
     commandList->SetPipelineState(ssrResolvePipeline.Get());
     commandList->SetComputeRoot32BitConstants(0, sizeof(SsrPush) / 4, &push, 0);
     commandList->SetComputeRootDescriptorTable(1, gpuHandle(kSrvSsr));
-    commandList->SetComputeRootDescriptorTable(2, gpuHandle(kSrvDepth));
+    commandList->SetComputeRootDescriptorTable(2, gpuHandle(readableDepthSrv()));
     commandList->SetComputeRootDescriptorTable(3, gpuHandle(kUavSceneHdr));
     commandList->Dispatch(groupsX, groupsY, 1);
 
@@ -3253,8 +3396,8 @@ void D3D12Renderer::Impl::recordSsr()
                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                D3D12_RESOURCE_STATE_RENDER_TARGET);
-    transition(depthAllocation->GetResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-               D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    transition(readableDepth(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+               readableDepthState());
 }
 
 void D3D12Renderer::Impl::createSsaoPipelines()
@@ -3490,7 +3633,18 @@ void D3D12Renderer::Impl::createSsaoTargets()
 
 void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
 {
-    if (!ssaoPipeline || !prepassDepthAllocation || !state->ssaoEnabled())
+    // La profundidad del pre-pase tiene cuatro clientes: la oclusión, el
+    // reparto de luces por tile, y —cuando la del pase de escena es
+    // multimuestra y no se puede muestrear— la niebla y los reflejos. Se graba
+    // si la quiere alguno; los dos dispatch de oclusión siguen atados al SSAO.
+    if (!prepassDepthAllocation)
+        return;
+
+    const bool wantsSsao = state->ssaoEnabled();
+    const bool wantsCull = state->forwardPlusMode() == RendererState::FpMode::Tiled;
+    const bool wantsMultisampleDepth = sampleCount > 1 &&
+                                       (state->fogEnabled() || state->ssrEnabled());
+    if (!wantsSsao && !wantsCull && !wantsMultisampleDepth)
         return;
 
     if (ssaoBlurNeedsUav) {
@@ -3548,6 +3702,11 @@ void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
             commandList->IASetIndexBuffer(&character.indexBufferView);
             commandList->DrawIndexedInstanced(character.indexCount, 1, 0, 0, static_cast<UINT>(i));
         }
+    }
+
+    if (!wantsSsao) {
+        // Solo hacía falta la profundidad: los demás la leen por su cuenta.
+        return;
     }
 
     // ── 2. Oclusión ───────────────────────────────────────────────────────
@@ -3865,13 +4024,13 @@ void D3D12Renderer::Impl::recordFog()
     commandList->SetComputeRootConstantBufferView(
         1, sceneUboAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress());
     commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavSceneHdr));
-    commandList->SetComputeRootDescriptorTable(3, gpuHandle(kSrvDepth));
+    commandList->SetComputeRootDescriptorTable(3, gpuHandle(readableDepthSrv()));
     commandList->SetComputeRootDescriptorTable(4, gpuHandle(kSrvShadowMap));
     commandList->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
 
     // Y se devuelven a lo que espera el resto del frame.
-    transition(depthAllocation->GetResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-               D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    transition(readableDepth(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+               readableDepthState());
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                D3D12_RESOURCE_STATE_RENDER_TARGET);
 }
@@ -4566,7 +4725,9 @@ void D3D12Renderer::init(Window& window)
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
     // Los de la swapchain, más el target HDR de la escena y el LDR intermedio
     // que la composición deja para FXAA.
-    rtvHeapDesc.NumDescriptors = kFrameCount + 2;
+    // Los de la swapchain, el HDR, el LDR de la composición y el color
+    // multimuestra del pase de escena cuando hay MSAA.
+    rtvHeapDesc.NumDescriptors = kFrameCount + 3;
     rtvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     throwIfFailed(d.device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&d.rtvHeap)),
@@ -4608,7 +4769,8 @@ void D3D12Renderer::init(Window& window)
                   "D3D12MA::CreateAllocator");
 
     D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc{};
-    dsvHeapDesc.NumDescriptors = 1;
+    // La profundidad de siempre y la multimuestra.
+    dsvHeapDesc.NumDescriptors = 2;
     dsvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
     throwIfFailed(d.device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&d.dsvHeap)),
                   "ID3D12Device::CreateDescriptorHeap(DSV)");
@@ -4660,6 +4822,10 @@ void D3D12Renderer::drawFrame()
     // ya estamos en el bucle principal, fuera del WindowProc, así que se puede
     // tocar DXGI y una excepción tiene por dónde salir.
     d.applyPendingResize();
+
+    // Y un cambio de anti-aliasing, que mueve targets y pipelines: aquí, entre
+    // frames, no en mitad de uno.
+    d.applyPendingSampleCount();
 
     ID3D12CommandAllocator* allocator = d.allocators[d.frameIndex].Get();
     if (FAILED(allocator->Reset()))
@@ -4743,9 +4909,15 @@ void D3D12Renderer::drawFrame()
     // La escena NO se dibuja en el backbuffer: va al target HDR, que es el
     // único sitio donde el umbral del bloom puede distinguir lo que pasa de
     // 1.0. El backbuffer lo escribe después el pase de composición.
+    // Con MSAA la escena se dibuja en el par multimuestra y se resuelve al
+    // cerrar el pase; sin él, directo al HDR de siempre.
+    const bool multisampled = d.sampleCount > 1 && d.hdrMsAllocation && d.depthMsAllocation;
+
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = d.rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    rtv.ptr += static_cast<SIZE_T>(kFrameCount) * d.rtvSize;
-    const D3D12_CPU_DESCRIPTOR_HANDLE dsv = d.dsvHeap->GetCPUDescriptorHandleForHeapStart();
+    rtv.ptr += static_cast<SIZE_T>(multisampled ? kFrameCount + 2 : kFrameCount) * d.rtvSize;
+    D3D12_CPU_DESCRIPTOR_HANDLE dsv = d.dsvHeap->GetCPUDescriptorHandleForHeapStart();
+    if (multisampled)
+        dsv.ptr += d.dsvSize;
     d.commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
     d.commandList->ClearRenderTargetView(rtv, d.clearColor, 0, nullptr);
     d.commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
@@ -4891,6 +5063,29 @@ void D3D12Renderer::drawFrame()
         backToUav.Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         backToUav.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         d.commandList->ResourceBarrier(1, &backToUav);
+    }
+
+    if (multisampled) {
+        // Multimuestra a una muestra: de aquí en adelante todo el post lee el
+        // HDR de siempre, que es el único que tiene UAV y vistas de lectura.
+        D3D12_RESOURCE_BARRIER toResolve[2]{};
+        toResolve[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toResolve[0].Transition.pResource   = d.hdrMsAllocation->GetResource();
+        toResolve[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        toResolve[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
+        toResolve[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+        toResolve[1]                      = toResolve[0];
+        toResolve[1].Transition.pResource = d.hdrAllocation->GetResource();
+        toResolve[1].Transition.StateAfter = D3D12_RESOURCE_STATE_RESOLVE_DEST;
+        d.commandList->ResourceBarrier(2, toResolve);
+
+        d.commandList->ResolveSubresource(d.hdrAllocation->GetResource(), 0,
+                                          d.hdrMsAllocation->GetResource(), 0, kHdrFormat);
+
+        for (int i = 0; i < 2; ++i)
+            std::swap(toResolve[i].Transition.StateBefore, toResolve[i].Transition.StateAfter);
+        d.commandList->ResourceBarrier(2, toResolve);
     }
 
     // Reflejos antes de la niebla: leen la escena tal cual salió del pase y le

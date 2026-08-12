@@ -122,6 +122,23 @@ namespace DonTopo {
             // Culling de luces en GPU. Modos EXCLUYENTES. Off deja el frame
             // exactamente como antes de la feature: ni un dispatch, y pbr.frag
             // recorre las MAX_LIGHTS del UBO como siempre.
+            // Anti-aliasing. El modo y las muestras de MSAA los pide el usuario
+            // desde el mismo panel para los dos backends; lo que cada uno tenga
+            // CONSTRUIDO ahora mismo (imágenes, pipelines) es cosa suya, porque
+            // cambiarlo exige recrear recursos con la GPU en reposo.
+            enum class AaMode : int
+            {
+                None = 0,
+                Fxaa = 1,
+                Ssaa = 2,
+                Msaa = 3,
+                Taa  = 4,
+            };
+            AaMode aaMode() const            { return m_aaMode; }
+            void   setAaModeFlag(AaMode m)   { m_aaMode = m; }
+            int    msaaSamples() const       { return m_msaaSamples; }
+            void   setMsaaSamplesFlag(int v) { m_msaaSamples = v; }
+
             enum class FpMode : int
             {
                 Off       = 0,
@@ -149,6 +166,8 @@ namespace DonTopo {
             float                           m_bloomKnee                         = 0.5f;
             float                           m_bloomIntensity                    = 0.05f;
 
+            AaMode                          m_aaMode                            = AaMode::None;
+            int                             m_msaaSamples                       = 4;
             bool                            m_ssaoEnabled                       = false;
             float                           m_ssaoRadius                        = 0.5f;
             float                           m_ssaoBias                          = 0.025f;

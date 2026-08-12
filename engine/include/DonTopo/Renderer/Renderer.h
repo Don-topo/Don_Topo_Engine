@@ -300,14 +300,11 @@ namespace DonTopo {
             // ── Anti-aliasing ────────────────────────────────────────────────
             // Modos EXCLUYENTES: solo uno activo a la vez. None deja el frame
             // exactamente como antes de la feature (ni un comando de mas).
-            enum class AaMode : int
-            {
-                None = 0,   // sin anti-aliasing
-                Fxaa = 1,   // filtro morfologico sobre la imagen LDR ya tonemapeada
-                Ssaa = 2,   // supersampling: se renderiza a mas resolucion y se baja
-                Msaa = 3,   // multisampling en el rasterizador (escena + composicion)
-                Taa  = 4,   // acumulacion temporal con jitter de subpixel
-            };
+            // El enum vive en RendererState: los dos backends leen el mismo
+            // modo. None sin anti-aliasing, Fxaa filtro morfologico sobre la LDR
+            // ya tonemapeada, Ssaa supersampling, Msaa multimuestra en el
+            // rasterizador y Taa acumulacion temporal con jitter de subpixel.
+            using AaMode = RendererState::AaMode;
             // Cambiar de modo puede exigir recrear recursos (SSAA cambia el tamano
             // de TODOS los targets internos; MSAA, el numero de muestras de las
             // imagenes, los render passes y los pipelines). Eso no se hace aqui:
@@ -315,7 +312,6 @@ namespace DonTopo {
             // en reposo. Los parametros de cada modo, en cambio, viajan por push
             // constant y surten efecto en el frame siguiente sin recrear nada.
             void   setAaMode(AaMode mode);
-            AaMode aaMode() const                 { return m_aaMode; }
             // SSAA: multiplicador de resolucion por eje. El coste crece con el
             // CUADRADO, y el tamano se recorta a maxImageDimension2D del device.
             void  setSsaaFactor(float v);
@@ -323,7 +319,6 @@ namespace DonTopo {
             // Muestras por pixel del MSAA. Se recorta a lo que soporte el device
             // (framebufferColorSampleCounts & framebufferDepthSampleCounts).
             void setMsaaSamples(int v);
-            int  msaaSamples() const              { return m_msaaSamples; }
             int  maxMsaaSamples() const;
             // Coste GPU del pass PROPIO del modo activo (FXAA, resolve de SSAA,
             // acumulacion del TAA). En None y en MSAA vale 0: MSAA no tiene pass
@@ -1106,7 +1101,6 @@ namespace DonTopo {
             // ── Anti-aliasing ────────────────────────────────────────────────
             // Modo PEDIDO: lo que ha elegido el usuario y lo que devuelve
             // aaMode(). Puede ir un frame por delante de los recursos.
-            AaMode                          m_aaMode                            = AaMode::None;
             // Modo CONSTRUIDO: el que corresponde a las imagenes, framebuffers y
             // pipelines que existen AHORA MISMO. Es el que manda al grabar el
             // frame. Los dos se separan porque setAaMode se llama desde la UI, y
@@ -1194,7 +1188,6 @@ namespace DonTopo {
             // lo que esta construido ahora mismo en las imagenes, los render
             // passes y los pipelines: los dos solo coinciden cuando el modo
             // activo es Msaa y ya se ha reconstruido.
-            int                             m_msaaSamples                       = 4;
             VkSampleCountFlagBits           m_aaSampleCount                     = VK_SAMPLE_COUNT_1_BIT;
             // Color multisample de la escena: se RESUELVE sobre m_hdrImage al
             // cerrar el pass, asi que el SSAO, el SSR, el bloom y la composicion

@@ -57,7 +57,7 @@ namespace DonTopo {
         // muestras del modo de AA activo entra en la creacion de los tres. Sin
         // esto un modo por defecto distinto de None se construiria a una muestra
         // y el MSAA no haria nada, en silencio.
-        m_aaActiveMode  = m_aaMode;
+        m_aaActiveMode  = aaMode();
         m_aaSampleCount = targetSampleCount();
         createSwapChain(window);
 
@@ -9280,8 +9280,8 @@ namespace DonTopo {
 
     void Renderer::setAaMode(AaMode mode)
     {
-        if (mode == m_aaMode) return;
-        m_aaMode = mode;
+        if (mode == aaMode()) return;
+        setAaModeFlag(mode);
         // Cualquier cambio de modo mueve recursos: el tamano interno (SSAA), el
         // numero de muestras (MSAA), o simplemente la existencia de la imagen
         // intermedia y del historial. Se reconstruye entero, que es barato de
@@ -9306,14 +9306,14 @@ namespace DonTopo {
         if (v == m_ssaaFactor) return;
         m_ssaaFactor = v;
         // Solo cambia el tamano de los targets cuando SSAA es el modo activo.
-        if (m_aaMode == AaMode::Ssaa) m_aaResourcesDirty = true;
+        if (aaMode() == AaMode::Ssaa) m_aaResourcesDirty = true;
     }
 
     void Renderer::setMsaaSamples(int v)
     {
-        if (v == m_msaaSamples) return;
-        m_msaaSamples = v;
-        if (m_aaMode == AaMode::Msaa) m_aaResourcesDirty = true;
+        if (v == msaaSamples()) return;
+        setMsaaSamplesFlag(v);
+        if (aaMode() == AaMode::Msaa) m_aaResourcesDirty = true;
     }
 
     int Renderer::maxMsaaSamples() const
@@ -9333,7 +9333,7 @@ namespace DonTopo {
     VkSampleCountFlagBits Renderer::targetSampleCount() const
     {
         if (m_aaActiveMode != AaMode::Msaa) return VK_SAMPLE_COUNT_1_BIT;
-        const int s = std::min(m_msaaSamples, maxMsaaSamples());
+        const int s = std::min(msaaSamples(), maxMsaaSamples());
         switch (s)
         {
         case 8:  return VK_SAMPLE_COUNT_8_BIT;
@@ -9422,7 +9422,7 @@ namespace DonTopo {
         // debajo (targetSampleCount, needsAaIntermediate, updateRenderExtent,
         // createAaImages) decide que crear mirando estos dos. A partir de aqui
         // coinciden hasta el proximo click o el proximo arrastre del panel.
-        m_aaActiveMode   = m_aaMode;
+        m_aaActiveMode   = aaMode();
         m_viewportActive = m_viewportExtent;
 
         // Nada de esto se puede tocar con trabajo en vuelo: son imagenes, render

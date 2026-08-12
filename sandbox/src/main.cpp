@@ -346,7 +346,7 @@ int main()
                         "sombras en cascada, cielo, IBL, materiales PBR, SSAO, SSR, niebla, bloom "
                         "con tone mapping y FXAA.");
                     ImGui::TextWrapped(
-                        "Sin implementar: TAA, MSAA, gizmos, UI 2D y el editor completo.");
+                        "Sin implementar: TAA, gizmos, UI 2D y el editor completo.");
                     ImGui::Spacing();
                     ImGui::TextWrapped(
                         "Camara: WASD para moverse, Q/E para bajar y subir, boton derecho "
@@ -366,6 +366,13 @@ int main()
 
                         // Forward+: mismo enum que el panel de calidad del
                         // editor, con los mismos tres estados.
+                        // MSAA: el numero de muestras lo recorta el backend a lo
+                        // que soporte el device.
+                        bool msaa = d3d12.aaMode() == DonTopo::RendererState::AaMode::Msaa;
+                        if (ImGui::Checkbox("MSAA 4x", &msaa))
+                            d3d12.setAaModeFlag(msaa ? DonTopo::RendererState::AaMode::Msaa
+                                                     : DonTopo::RendererState::AaMode::None);
+
                         int fp = static_cast<int>(d3d12.forwardPlusMode());
                         if (ImGui::Combo("Forward+", &fp, "Off Tiled Clustered "))
                             d3d12.setForwardPlusMode(
