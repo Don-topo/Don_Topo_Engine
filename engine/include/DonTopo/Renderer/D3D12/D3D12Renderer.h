@@ -135,6 +135,16 @@ public:
     // Renderer de Vulkan: es un sink, no avanza el tiempo.
     void setAnimationState(size_t index, uint32_t clipIndex, float animTime);
 
+    // Líneas de depuración de ESTE frame: colliders, ejes, rayos. El formato es
+    // el de DonTopo::GizmoVertex —posición y color, tres float cada uno, sin
+    // hueco entre ellos—, y se pasa como float suelto para no arrastrar aquí
+    // Gizmos.h, que incluye vulkan.h.
+    //
+    // Cada llamada REEMPLAZA lo enviado antes, y lo enviado no persiste al
+    // frame siguiente: quien las dibuja las vuelve a mandar cada vez, igual que
+    // con el Gizmos del camino de Vulkan.
+    void submitDebugLines(const float* vertices, size_t vertexCount);
+
     // Qué se dibuja con contorno de selección: índices de addStaticMesh y de
     // addSkinnedMesh, o -1 para ninguno. Se puede tener uno de cada.
     void setSelection(int staticIndex, int skinnedIndex);

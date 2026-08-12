@@ -445,6 +445,17 @@ struct D3D12Renderer::Impl {
     // normal y con las caras frontales descartadas, así que solo asoma el
     // reborde. Comparte root signature con la malla —outline.vert declara el
     // mismo UBO y el mismo push—, y por eso no necesita nada propio.
+    // Líneas de depuración del frame: colliders, ejes, rayos. Se envían desde
+    // fuera antes de dibujar y NO persisten al frame siguiente, igual que en el
+    // camino de Vulkan.
+    D3D12MA::Allocation*     debugLinesAllocation = nullptr;
+    void*                    debugLinesMapped     = nullptr;
+    size_t                   debugLinesCapacity   = 0;   // en vértices
+    UINT                     debugLineVertices    = 0;   // los de ESTE frame
+    D3D12_VERTEX_BUFFER_VIEW debugLinesView{};
+
+    void ensureDebugLineBuffer(size_t vertexCount);
+
     ComPtr<ID3D12PipelineState> outlinePipeline;
     ComPtr<ID3D12PipelineState> outlineSkinnedPipeline;
     int   selectedObject  = -1;   // índice en objects, -1 sin selección
@@ -1100,6 +1111,52 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadBuffer(const void* data, size_t 
 
     staging->Release();
     return destination;
+}
+
+void D3D12Renderer::Impl::ensureDebugLineBuffer(size_t vertexCount)
+{
+    if (vertexCount <= debugLinesCapacity)
+        return;
+
+    // Se crece por bloques: una escena con colliders visibles manda miles de
+    // vértices y el número sube y baja entre frames.
+    const size_t newCapacity = (std::max)(vertexCount, debugLinesCapacity * 2 + 1024);
+
+    if (debugLinesAllocation) {
+        // Puede estar en uso por el frame anterior.
+        waitForGpu();
+        if (debugLinesMapped) {
+            debugLinesAllocation->GetResource()->Unmap(0, nullptr);
+            debugLinesMapped = nullptr;
+        }
+        debugLinesAllocation->Release();
+        debugLinesAllocation = nullptr;
+    }
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width            = newCapacity * sizeof(GizmoVertex);
+    desc.Height           = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels        = 1;
+    desc.Format           = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    D3D12MA::ALLOCATION_DESC allocDesc{};
+    allocDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+    throwIfFailed(allocator->CreateResource(&allocDesc, &desc, D3D12_RESOURCE_STATE_GENERIC_READ,
+                                            nullptr, &debugLinesAllocation, IID_NULL, nullptr),
+                  "D3D12MA::Allocator::CreateResource(lineas de depuracion)");
+
+    const D3D12_RANGE noRead{0, 0};
+    throwIfFailed(debugLinesAllocation->GetResource()->Map(0, &noRead, &debugLinesMapped),
+                  "ID3D12Resource::Map(lineas de depuracion)");
+
+    debugLinesCapacity = newCapacity;
+    debugLinesView.BufferLocation = debugLinesAllocation->GetResource()->GetGPUVirtualAddress();
+    debugLinesView.SizeInBytes    = static_cast<UINT>(newCapacity * sizeof(GizmoVertex));
+    debugLinesView.StrideInBytes  = sizeof(GizmoVertex);
 }
 
 void D3D12Renderer::Impl::createGizmoPipeline()
@@ -5560,6 +5617,13 @@ void D3D12Renderer::drawFrame()
         d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
         d.commandList->IASetVertexBuffers(0, 1, &d.gridVertexBufferView);
         d.commandList->DrawInstanced(d.gridVertexCount, 1, 0, 0);
+
+        // Y las líneas que hayan mandado este frame: mismo pipeline, mismo
+        // formato de vértice y la misma viewProj ya enlazada.
+        if (d.debugLineVertices > 0 && d.debugLinesAllocation) {
+            d.commandList->IASetVertexBuffers(0, 1, &d.debugLinesView);
+            d.commandList->DrawInstanced(d.debugLineVertices, 1, 0, 0);
+        }
     }
 
     // El buffer de vértices deformados vuelve a acceso desordenado: el frame
@@ -5972,6 +6036,21 @@ void D3D12Renderer::waitIdle()
         m_impl->waitForGpu();
 }
 
+void D3D12Renderer::submitDebugLines(const float* vertices, size_t vertexCount)
+{
+    Impl& d = *m_impl;
+    d.debugLineVertices = 0;
+    if (!d.initialized || !vertices || vertexCount == 0)
+        return;
+
+    d.ensureDebugLineBuffer(vertexCount);
+    if (!d.debugLinesMapped)
+        return;
+
+    std::memcpy(d.debugLinesMapped, vertices, vertexCount * sizeof(GizmoVertex));
+    d.debugLineVertices = static_cast<UINT>(vertexCount);
+}
+
 void D3D12Renderer::setSelection(int staticIndex, int skinnedIndex)
 {
     m_impl->selectedObject  = staticIndex;
@@ -6144,6 +6223,17 @@ void D3D12Renderer::shutdown()
         }
     }
     d.releaseSkinnedObjects();
+
+    if (d.debugLinesAllocation) {
+        if (d.debugLinesMapped) {
+            d.debugLinesAllocation->GetResource()->Unmap(0, nullptr);
+            d.debugLinesMapped = nullptr;
+        }
+        d.debugLinesAllocation->Release();
+        d.debugLinesAllocation = nullptr;
+        d.debugLinesCapacity   = 0;
+        d.debugLineVertices    = 0;
+    }
 
     if (d.skinnedInstanceAllocation) {
         if (d.skinnedInstanceMapped) {
