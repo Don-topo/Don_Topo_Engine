@@ -81,6 +81,7 @@ int main()
 
             DonTopo::D3D12::D3D12Renderer d3d12;
             d3d12.init(window);
+
             std::cout << "D3D12: adaptador '" << d3d12.adapterName() << "'" << std::endl;
 
             // La escena del proyecto, cargada con el MISMO Scene::load que usa
@@ -337,15 +338,25 @@ int main()
                     ImGui::TextWrapped(
                         "Implementado: presentacion, escena del proyecto con sus texturas, "
                         "personajes animados por compute, iluminacion directa, profundidad, "
-                        "sombras en cascada, cielo, IBL, materiales PBR, niebla, bloom con "
-                        "tone mapping y FXAA.");
+                        "sombras en cascada, cielo, IBL, materiales PBR, SSAO, niebla, bloom "
+                        "con tone mapping y FXAA.");
                     ImGui::TextWrapped(
-                        "Sin implementar: SSAO, SSR, TAA, MSAA, Forward+, gizmos, UI 2D y el "
-                        "editor completo.");
+                        "Sin implementar: SSR, TAA, MSAA, Forward+, gizmos, UI 2D y el editor "
+                        "completo.");
                     ImGui::Spacing();
                     ImGui::TextWrapped(
                         "Camara: WASD para moverse, Q/E para bajar y subir, boton derecho "
                         "para mirar.");
+
+                    ImGui::Separator();
+                    {
+                        // Los efectos que ya funcionan aqui, para poder verlos
+                        // sin el editor: su estado vive en RendererState, el
+                        // mismo que usa el panel de calidad con Vulkan.
+                        bool ssao = d3d12.ssaoEnabled();
+                        if (ImGui::Checkbox("SSAO", &ssao))
+                            d3d12.setSsaoEnabledFlag(ssao);
+                    }
 
                     ImGui::Separator();
                     ImGui::TextWrapped(

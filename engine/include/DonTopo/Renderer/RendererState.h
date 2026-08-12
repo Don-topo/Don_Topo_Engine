@@ -47,6 +47,11 @@ namespace DonTopo {
             // SSAO (NO por el UBO: solo quedaban dos floats y el bloque esta
             // declarado en 5 shaders), asi que cambian en el frame siguiente
             // sin recrear nada.
+            // El interruptor, como los parámetros: el mismo panel enciende el
+            // efecto en los dos backends. Vulkan añade su propia lógica al
+            // apagarlo (dejar el mapa en la identidad), pero el valor vive aquí.
+            bool  ssaoEnabled() const        { return m_ssaoEnabled; }
+            void  setSsaoEnabledFlag(bool v) { m_ssaoEnabled = v; }
             void  setSsaoRadius(float v)     { m_ssaoRadius = v; }
             float ssaoRadius() const         { return m_ssaoRadius; }
             void  setSsaoBias(float v)       { m_ssaoBias = v; }
@@ -144,6 +149,7 @@ namespace DonTopo {
             float                           m_bloomKnee                         = 0.5f;
             float                           m_bloomIntensity                    = 0.05f;
 
+            bool                            m_ssaoEnabled                       = false;
             float                           m_ssaoRadius                        = 0.5f;
             float                           m_ssaoBias                          = 0.025f;
             float                           m_ssaoIntensity                     = 1.0f;

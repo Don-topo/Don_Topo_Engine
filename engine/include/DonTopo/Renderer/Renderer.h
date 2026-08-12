@@ -284,7 +284,6 @@ namespace DonTopo {
             // una sola vez, asi que la imagen es la misma que antes de la feature
             // y el coste GPU cae a cero.
             void  setSsaoEnabled(bool v);
-            bool  ssaoEnabled() const        { return m_ssaoEnabled; }
             // Coste GPU del pre-pass + los dos dispatches, en ms. 0 si el efecto
             // esta apagado o el dispositivo no soporta timestamps.
             float ssaoGpuMs() const          { return m_ssaoGpuMs; }
@@ -1014,7 +1013,6 @@ namespace DonTopo {
                 float intensity;
                 float power;
             };
-            bool                            m_ssaoEnabled                       = false;
             // Con el efecto apagado el mapa tiene que valer 1.0 (identidad) y
             // ademas estar en GENERAL, que es el layout que declaran los
             // descriptor sets. Un clear resuelve las dos cosas de golpe, y solo se

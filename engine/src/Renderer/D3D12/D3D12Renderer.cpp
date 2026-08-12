@@ -223,7 +223,28 @@ constexpr UINT kSrvSkybox   = kSrvSkinned + kMaxSkinnedSlots * kSrvPerObject;
 // hueco con las vistas de lectura que usa pbr.frag.
 constexpr UINT kUavIrradiance = kSrvSkybox + 1;
 constexpr UINT kUavPrefilter  = kUavIrradiance + 1;  // + mip
-constexpr UINT kSrvHeapSize   = kUavPrefilter + kIblPrefilterMips;
+
+// SSAO: la profundidad del pre-pase, el mapa crudo y el emborronado. El
+// resultado final lo leen los bloques por objeto en su hueco t7; estos son los
+// de la cadena que lo produce.
+constexpr UINT kSrvPrepassDepth = kUavPrefilter + kIblPrefilterMips;
+constexpr UINT kUavSsaoRaw      = kSrvPrepassDepth + 1;
+constexpr UINT kSrvSsaoRaw      = kUavSsaoRaw + 1;
+constexpr UINT kUavSsaoBlur     = kSrvSsaoRaw + 1;
+
+constexpr UINT kSrvHeapSize = kUavSsaoBlur + 1;
+
+// Push de ssao.comp y ssao_blur.comp: los dos comparten el bloque, así que el
+// rango de root constants tiene que ser el mismo para los dos pipelines.
+struct SsaoPush {
+    glm::vec4 projParams;  // p00, p11, p22, p32 de la proyección del frame
+    glm::vec2 invRes;
+    float     radius;
+    float     bias;
+    float     intensity;
+    float     power;
+};
+static_assert(sizeof(SsaoPush) == 40, "SsaoPush debe ocupar 40 bytes");
 
 // Niebla volumétrica: push propio de 128 bytes.
 struct FogPush {
@@ -506,6 +527,32 @@ struct D3D12Renderer::Impl {
     // Enlaza los cuatro root SRV de space2. Los tres pases que usan la root
     // signature de malla (estáticos, suelo y personajes) los necesitan.
     void bindForwardPlus();
+
+    // ── Oclusión ambiental en pantalla ──────────────────────────────────
+    // El pre-pase escribe SU profundidad, no la del pase de escena: los dos
+    // compute la leen como textura, y el pase de escena todavía no ha corrido
+    // cuando hace falta (pbr.frag consume el resultado).
+    ComPtr<ID3D12PipelineState> depthPrepassPipeline;         // vértices del motor
+    ComPtr<ID3D12PipelineState> depthPrepassSkinnedPipeline;  // salida del skinning
+    ComPtr<ID3D12RootSignature> depthPrepassRootSignature;
+    ComPtr<ID3D12DescriptorHeap> prepassDsvHeap;
+    D3D12MA::Allocation*         prepassDepthAllocation = nullptr;
+
+    ComPtr<ID3D12RootSignature> ssaoRootSignature;
+    ComPtr<ID3D12PipelineState> ssaoPipeline;
+    ComPtr<ID3D12PipelineState> ssaoBlurPipeline;
+    D3D12MA::Allocation*        ssaoRawAllocation  = nullptr;
+    D3D12MA::Allocation*        ssaoBlurAllocation = nullptr;
+
+    void createSsaoPipelines();
+    void createSsaoTargets();    // depende del tamaño: se rehace al redimensionar
+    void releaseSsaoTargets();
+    void recordDepthPrepassAndSsao();
+
+    // El emborronado se queda como recurso de lectura mientras el pase de
+    // escena lo muestrea; el frame siguiente tiene que devolverlo a escritura
+    // antes de volver a dispararlo.
+    bool ssaoBlurNeedsUav = false;
 
     // ── Luces ───────────────────────────────────────────────────────────
     // Las de la escena, tal cual las manda quien la carga. Vacío = ninguna
@@ -1183,7 +1230,13 @@ void D3D12Renderer::Impl::fillSharedSlots(UINT blockBase)
     if (prefilterAllocation)
         createCubeSrv(prefilterAllocation->GetResource(), kHdrFormat, prefilterMips,
                       blockBase + 5);
-    if (ssaoAllocation)
+    // El mapa de oclusión del frame si ya existe, y si no la 1x1 blanca. Las
+    // mallas se suben DESPUÉS de init, así que sin esto se quedaban con el
+    // relleno y el efecto no llegaba a verse por mucho que se calculara.
+    if (ssaoBlurAllocation)
+        createTexture2DSrv(ssaoBlurAllocation->GetResource(), DXGI_FORMAT_R32_FLOAT,
+                           blockBase + 6);
+    else if (ssaoAllocation)
         createTexture2DSrv(ssaoAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
                            blockBase + 6);
 }
@@ -2645,6 +2698,374 @@ void D3D12Renderer::Impl::createSkyboxResources()
                   "ID3D12Device::CreateGraphicsPipelineState(cielo)");
 }
 
+void D3D12Renderer::Impl::createSsaoPipelines()
+{
+    auto serialize = [&](const D3D12_ROOT_SIGNATURE_DESC& desc, ComPtr<ID3D12RootSignature>& out,
+                         const char* what) {
+        ComPtr<ID3DBlob> serialized;
+        ComPtr<ID3DBlob> errorBlob;
+        HRESULT          hr = D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                                          &serialized, &errorBlob);
+        if (FAILED(hr)) {
+            std::string detail;
+            if (errorBlob)
+                detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
+                              errorBlob->GetBufferSize());
+            throw std::runtime_error(std::string("D3D12: root signature de ") + what + " (HRESULT " +
+                                     hresultToString(hr) + ") " + detail);
+        }
+        throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                                  serialized->GetBufferSize(), IID_PPV_ARGS(&out)),
+                      "ID3D12Device::CreateRootSignature");
+    };
+
+    // ── Pre-pase de profundidad ───────────────────────────────────────────
+    // depth_prepass.vert declara el UBO recortado a view y proj —std140 los
+    // deja en los mismos offsets—, y saca el model del buffer de instancias.
+    {
+        D3D12_ROOT_PARAMETER params[2]{};
+        params[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        params[0].Descriptor.ShaderRegister = 0;
+        params[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
+
+        params[1].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        params[1].Descriptor.ShaderRegister = 0;
+        params[1].Descriptor.RegisterSpace  = 1;
+        params[1].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
+
+        D3D12_ROOT_SIGNATURE_DESC rootDesc{};
+        rootDesc.NumParameters = _countof(params);
+        rootDesc.pParameters   = params;
+        rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+        serialize(rootDesc, depthPrepassRootSignature, "pre-pase de profundidad");
+    }
+
+    const std::vector<char> prepassVs = readBinaryFile("shaders/depth_prepass.vert.dxil");
+
+    // Solo la posición: el shader no lee nada más, y así el mismo VS sirve para
+    // los vértices del motor y para los que escribe el skinning, que difieren
+    // en el tamaño de cada vértice pero no en dónde empieza.
+    D3D12_INPUT_ELEMENT_DESC positionOnly[] = {
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+         0},
+    };
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature                        = depthPrepassRootSignature.Get();
+    psoDesc.VS                                    = {prepassVs.data(), prepassVs.size()};
+    psoDesc.InputLayout                           = {positionOnly, _countof(positionOnly)};
+    psoDesc.PrimitiveTopologyType                 = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets                      = 0;
+    psoDesc.DSVFormat                             = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleDesc.Count                      = 1;
+    psoDesc.SampleMask                            = UINT_MAX;
+    psoDesc.RasterizerState.FillMode              = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode              = D3D12_CULL_MODE_BACK;
+    psoDesc.RasterizerState.FrontCounterClockwise = TRUE;
+    psoDesc.RasterizerState.DepthClipEnable       = TRUE;
+    psoDesc.DepthStencilState.DepthEnable         = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask      = D3D12_DEPTH_WRITE_MASK_ALL;
+    psoDesc.DepthStencilState.DepthFunc           = D3D12_COMPARISON_FUNC_LESS;
+
+    throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&depthPrepassPipeline)),
+                  "ID3D12Device::CreateGraphicsPipelineState(pre-pase)");
+    throwIfFailed(
+        device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&depthPrepassSkinnedPipeline)),
+        "ID3D12Device::CreateGraphicsPipelineState(pre-pase skinned)");
+
+    // ── Los dos compute ───────────────────────────────────────────────────
+    {
+        D3D12_DESCRIPTOR_RANGE inputRange{};
+        inputRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        inputRange.NumDescriptors     = 1;
+        inputRange.BaseShaderRegister = 0;  // t0
+
+        D3D12_DESCRIPTOR_RANGE outputRange{};
+        outputRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        outputRange.NumDescriptors     = 1;
+        outputRange.BaseShaderRegister = 1;  // u1
+
+        D3D12_ROOT_PARAMETER params[3]{};
+        params[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        params[0].Constants.ShaderRegister = 0;
+        params[0].Constants.Num32BitValues = sizeof(SsaoPush) / 4;
+
+        params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        params[1].DescriptorTable.NumDescriptorRanges = 1;
+        params[1].DescriptorTable.pDescriptorRanges   = &inputRange;
+
+        params[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        params[2].DescriptorTable.NumDescriptorRanges = 1;
+        params[2].DescriptorTable.pDescriptorRanges   = &outputRange;
+
+        // La profundidad se muestrea sin filtrar: interpolar dos profundidades
+        // de superficies distintas da un valor que no está en ninguna.
+        D3D12_STATIC_SAMPLER_DESC sampler{};
+        sampler.Filter         = D3D12_FILTER_MIN_MAG_MIP_POINT;
+        sampler.AddressU       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.AddressV       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.AddressW       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.MaxLOD         = D3D12_FLOAT32_MAX;
+        sampler.ShaderRegister = 0;  // s0
+
+        D3D12_ROOT_SIGNATURE_DESC rootDesc{};
+        rootDesc.NumParameters     = _countof(params);
+        rootDesc.pParameters       = params;
+        rootDesc.NumStaticSamplers = 1;
+        rootDesc.pStaticSamplers   = &sampler;
+        serialize(rootDesc, ssaoRootSignature, "SSAO");
+    }
+
+    auto buildCompute = [&](const char* path, ComPtr<ID3D12PipelineState>& out) {
+        const std::vector<char>           code = readBinaryFile(path);
+        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+        desc.pRootSignature = ssaoRootSignature.Get();
+        desc.CS             = {code.data(), code.size()};
+        throwIfFailed(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&out)),
+                      "ID3D12Device::CreateComputePipelineState(SSAO)");
+    };
+    buildCompute("shaders/ssao.comp.dxil", ssaoPipeline);
+    buildCompute("shaders/ssao_blur.comp.dxil", ssaoBlurPipeline);
+}
+
+void D3D12Renderer::Impl::releaseSsaoTargets()
+{
+    for (auto** allocation : {&prepassDepthAllocation, &ssaoRawAllocation, &ssaoBlurAllocation}) {
+        if (*allocation) {
+            (*allocation)->Release();
+            *allocation = nullptr;
+        }
+    }
+}
+
+void D3D12Renderer::Impl::createSsaoTargets()
+{
+    releaseSsaoTargets();
+
+    // Profundidad propia del pre-pase. TYPELESS porque el mismo recurso se
+    // escribe como profundidad y se lee como textura.
+    {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width            = width;
+        desc.Height           = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_R32_TYPELESS;
+        desc.SampleDesc.Count = 1;
+        desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+        D3D12_CLEAR_VALUE clearValue{};
+        clearValue.Format             = DXGI_FORMAT_D32_FLOAT;
+        clearValue.DepthStencil.Depth = 1.0f;
+
+        D3D12MA::ALLOCATION_DESC allocDesc{};
+        allocDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+        throwIfFailed(allocator->CreateResource(&allocDesc, &desc, D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                                                &clearValue, &prepassDepthAllocation, IID_NULL,
+                                                nullptr),
+                      "D3D12MA::Allocator::CreateResource(profundidad del pre-pase)");
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+        dsvDesc.Format        = DXGI_FORMAT_D32_FLOAT;
+        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        device->CreateDepthStencilView(prepassDepthAllocation->GetResource(), &dsvDesc,
+                                       prepassDsvHeap->GetCPUDescriptorHandleForHeapStart());
+
+        createTexture2DSrv(prepassDepthAllocation->GetResource(), DXGI_FORMAT_R32_FLOAT,
+                           kSrvPrepassDepth);
+    }
+
+    // Mapa crudo y emborronado, a resolución completa como en Vulkan: pbr.frag
+    // lo muestrea por coordenada de pantalla y da por hecho que es 1:1.
+    auto createAoTarget = [&](UINT uavIndex, int srvIndex) {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width            = width;
+        desc.Height           = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_R32_FLOAT;
+        desc.SampleDesc.Count = 1;
+        desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        D3D12MA::ALLOCATION_DESC allocDesc{};
+        allocDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+        D3D12MA::Allocation* allocation = nullptr;
+        throwIfFailed(allocator->CreateResource(&allocDesc, &desc,
+                                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                &allocation, IID_NULL, nullptr),
+                      "D3D12MA::Allocator::CreateResource(SSAO)");
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format        = DXGI_FORMAT_R32_FLOAT;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(uavIndex) * srvSize;
+        device->CreateUnorderedAccessView(allocation->GetResource(), nullptr, &uavDesc, handle);
+
+        if (srvIndex >= 0)
+            createTexture2DSrv(allocation->GetResource(), DXGI_FORMAT_R32_FLOAT,
+                               static_cast<UINT>(srvIndex));
+        return allocation;
+    };
+
+    ssaoRawAllocation  = createAoTarget(kUavSsaoRaw, kSrvSsaoRaw);
+    ssaoBlurAllocation = createAoTarget(kUavSsaoBlur, -1);
+
+    // El resultado pasa a ser lo que muestrea t7. La 1x1 blanca sigue existiendo
+    // para el arranque, pero a partir de aquí manda esta.
+    createTexture2DSrv(ssaoBlurAllocation->GetResource(), DXGI_FORMAT_R32_FLOAT, kSrvSsao);
+    for (const StaticObject& object : objects)
+        if (object.srvBase != kSrvBaseColor)
+            createTexture2DSrv(ssaoBlurAllocation->GetResource(), DXGI_FORMAT_R32_FLOAT,
+                               object.srvBase + 6);
+    for (const SkinnedObject& character : skinnedObjects)
+        for (const SkinnedSubMesh& sub : character.subMeshes)
+            if (sub.srvBase != kSrvBaseColor)
+                createTexture2DSrv(ssaoBlurAllocation->GetResource(), DXGI_FORMAT_R32_FLOAT,
+                                   sub.srvBase + 6);
+}
+
+void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
+{
+    if (!ssaoPipeline || !prepassDepthAllocation || !state->ssaoEnabled())
+        return;
+
+    if (ssaoBlurNeedsUav) {
+        D3D12_RESOURCE_BARRIER backToUav{};
+        backToUav.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        backToUav.Transition.pResource   = ssaoBlurAllocation->GetResource();
+        backToUav.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        backToUav.Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        backToUav.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &backToUav);
+        ssaoBlurNeedsUav = false;
+    }
+
+    // ── 1. Profundidad ────────────────────────────────────────────────────
+    D3D12_CPU_DESCRIPTOR_HANDLE dsv = prepassDsvHeap->GetCPUDescriptorHandleForHeapStart();
+    commandList->OMSetRenderTargets(0, nullptr, FALSE, &dsv);
+    commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+
+    D3D12_VIEWPORT viewport{};
+    viewport.Width    = static_cast<float>(width);
+    viewport.Height   = static_cast<float>(height);
+    viewport.MaxDepth = 1.0f;
+    commandList->RSSetViewports(1, &viewport);
+    D3D12_RECT scissor{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+    commandList->RSSetScissorRects(1, &scissor);
+
+    commandList->SetGraphicsRootSignature(depthPrepassRootSignature.Get());
+    commandList->SetGraphicsRootConstantBufferView(
+        0, sceneUboAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress());
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    if (!objects.empty() && sceneInstanceAllocation) {
+        commandList->SetPipelineState(depthPrepassPipeline.Get());
+        commandList->SetGraphicsRootShaderResourceView(
+            1, sceneInstanceAllocation->GetResource()->GetGPUVirtualAddress());
+        for (size_t i = 0; i < objects.size(); ++i) {
+            const StaticObject& object = objects[i];
+            if (!object.meshVisible || object.indexCount == 0)
+                continue;
+            commandList->IASetVertexBuffers(0, 1, &object.vertexBufferView);
+            commandList->IASetIndexBuffer(&object.indexBufferView);
+            commandList->DrawIndexedInstanced(object.indexCount, 1, 0, 0, static_cast<UINT>(i));
+        }
+    }
+
+    if (!skinnedObjects.empty() && skinnedInstanceAllocation) {
+        commandList->SetPipelineState(depthPrepassSkinnedPipeline.Get());
+        commandList->SetGraphicsRootShaderResourceView(
+            1, skinnedInstanceAllocation->GetResource()->GetGPUVirtualAddress());
+        for (size_t i = 0; i < skinnedObjects.size(); ++i) {
+            const SkinnedObject& character = skinnedObjects[i];
+            if (!character.visible || character.indexCount == 0)
+                continue;
+            commandList->IASetVertexBuffers(0, 1, &character.vertexBufferView);
+            commandList->IASetIndexBuffer(&character.indexBufferView);
+            commandList->DrawIndexedInstanced(character.indexCount, 1, 0, 0, static_cast<UINT>(i));
+        }
+    }
+
+    // ── 2. Oclusión ───────────────────────────────────────────────────────
+    D3D12_RESOURCE_BARRIER depthToRead{};
+    depthToRead.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    depthToRead.Transition.pResource   = prepassDepthAllocation->GetResource();
+    depthToRead.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    depthToRead.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    depthToRead.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &depthToRead);
+
+    ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(ssaoRootSignature.Get());
+
+    auto gpuHandle = [&](UINT index) {
+        D3D12_GPU_DESCRIPTOR_HANDLE handle = srvHeap->GetGPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<UINT64>(index) * srvSize;
+        return handle;
+    };
+
+    // Los cuatro coeficientes con los que el shader reconstruye la posición en
+    // view space, sacados de la proyección de ESTE frame.
+    const glm::mat4 proj = cameraProj();
+    SsaoPush        push{};
+    push.projParams = glm::vec4(proj[0][0], proj[1][1], proj[2][2], proj[3][2]);
+    push.invRes     = glm::vec2(1.0f / static_cast<float>(width), 1.0f / static_cast<float>(height));
+    push.radius     = state->ssaoRadius();
+    push.bias       = state->ssaoBias();
+    push.intensity  = state->ssaoIntensity();
+    push.power      = state->ssaoPower();
+
+    const UINT groupsX = (width + 7) / 8;
+    const UINT groupsY = (height + 7) / 8;
+
+    commandList->SetPipelineState(ssaoPipeline.Get());
+    commandList->SetComputeRoot32BitConstants(0, sizeof(SsaoPush) / 4, &push, 0);
+    commandList->SetComputeRootDescriptorTable(1, gpuHandle(kSrvPrepassDepth));
+    commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavSsaoRaw));
+    commandList->Dispatch(groupsX, groupsY, 1);
+
+    // El crudo pasa a entrada del blur.
+    D3D12_RESOURCE_BARRIER rawToRead{};
+    rawToRead.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    rawToRead.Transition.pResource   = ssaoRawAllocation->GetResource();
+    rawToRead.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    rawToRead.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    rawToRead.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &rawToRead);
+
+    commandList->SetPipelineState(ssaoBlurPipeline.Get());
+    commandList->SetComputeRoot32BitConstants(0, sizeof(SsaoPush) / 4, &push, 0);
+    commandList->SetComputeRootDescriptorTable(1, gpuHandle(kSrvSsaoRaw));
+    commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavSsaoBlur));
+    commandList->Dispatch(groupsX, groupsY, 1);
+
+    // Y a leerlo el pase de escena. Los tres vuelven a su estado de partida
+    // para que el frame siguiente encuentre lo mismo que este.
+    D3D12_RESOURCE_BARRIER toScene[3]{};
+    toScene[0] = rawToRead;
+    std::swap(toScene[0].Transition.StateBefore, toScene[0].Transition.StateAfter);
+
+    toScene[1].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toScene[1].Transition.pResource   = ssaoBlurAllocation->GetResource();
+    toScene[1].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    toScene[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    toScene[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+    toScene[2] = depthToRead;
+    std::swap(toScene[2].Transition.StateBefore, toScene[2].Transition.StateAfter);
+    commandList->ResourceBarrier(3, toScene);
+
+    // El emborronado se queda como lectura durante el pase de escena; el frame
+    // siguiente lo devuelve a escritura antes de volver a dispararlo.
+    ssaoBlurNeedsUav = true;
+}
+
 void D3D12Renderer::Impl::bindForwardPlus()
 {
     if (!fpParamsAllocation)
@@ -3640,6 +4061,14 @@ void D3D12Renderer::init(Window& window)
     d.createMeshPipeline();
     d.createMeshResources();
     d.createForwardPlusBuffers();
+    D3D12_DESCRIPTOR_HEAP_DESC prepassDsvDesc{};
+    prepassDsvDesc.NumDescriptors = 1;
+    prepassDsvDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    throwIfFailed(d.device->CreateDescriptorHeap(&prepassDsvDesc, IID_PPV_ARGS(&d.prepassDsvHeap)),
+                  "ID3D12Device::CreateDescriptorHeap(DSV del pre-pase)");
+    d.createSsaoPipelines();
+    d.createSsaoTargets();
+
     d.createSkinningPipelines();
     // Las sombras van al final: su SRV pisa el array de relleno que dejó
     // createMeshResources en el hueco t3, y necesita el buffer de instancias
@@ -3726,10 +4155,14 @@ void D3D12Renderer::drawFrame()
         }
     }
 
-    // Sombras antes del pase principal: triangle.frag muestrea el mapa que se
-    // graba aquí.
+    // Sombras antes del pase principal: pbr.frag muestrea el mapa que se graba
+    // aquí.
     if (d.shadowPipeline)
         d.recordShadowPasses();
+
+    // Y la oclusión, que necesita su propia profundidad y la produce con dos
+    // compute: pbr.frag la multiplica al ambiente en el pase siguiente.
+    d.recordDepthPrepassAndSsao();
 
     D3D12_RESOURCE_BARRIER toRenderTarget{};
     toRenderTarget.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -3999,6 +4432,12 @@ void D3D12Renderer::Impl::applyPendingResize()
     // existían: en el primer arranque los crea init() después del resize.
     if (hdrAllocation)
         createHdrTargets();
+
+    // Y los del SSAO, que también son del tamaño de la ventana.
+    if (ssaoRawAllocation) {
+        createSsaoTargets();
+        ssaoBlurNeedsUav = false;  // recién creado: ya está en escritura
+    }
 
     // El aspecto de la proyección depende del tamaño: sin esto la rejilla se
     // deforma al estirar la ventana.
@@ -4367,6 +4806,14 @@ void D3D12Renderer::shutdown()
 
     d.skyboxPipeline.Reset();
     d.skyboxRootSignature.Reset();
+    d.releaseSsaoTargets();
+    d.depthPrepassPipeline.Reset();
+    d.depthPrepassSkinnedPipeline.Reset();
+    d.depthPrepassRootSignature.Reset();
+    d.ssaoPipeline.Reset();
+    d.ssaoBlurPipeline.Reset();
+    d.ssaoRootSignature.Reset();
+    d.prepassDsvHeap.Reset();
     d.iblIrradiancePipeline.Reset();
     d.iblPrefilterPipeline.Reset();
     d.iblRootSignature.Reset();

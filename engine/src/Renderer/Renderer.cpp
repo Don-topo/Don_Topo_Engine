@@ -3223,8 +3223,8 @@ namespace DonTopo {
 
     void Renderer::setSsaoEnabled(bool v)
     {
-        if (v == m_ssaoEnabled) return;
-        m_ssaoEnabled = v;
+        if (v == ssaoEnabled()) return;
+        setSsaoEnabledFlag(v);
         // Al apagar, el mapa se queda con el AO del último frame calculado y
         // seguiría oscureciendo. Un clear a 1.0 por frame en vuelo lo devuelve a
         // la identidad; a partir de ahí, cero trabajo.
@@ -7375,7 +7375,7 @@ namespace DonTopo {
 
         // El SSR come del MISMO depth pre-pass: con el SSAO apagado pero el SSR
         // activo hay que grabarlo igual. Lo unico que se desacopla es esto; los
-        // dos dispatches de oclusion siguen atados a m_ssaoEnabled.
+        // dos dispatches de oclusion siguen atados a ssaoEnabled().
         // El TAA es el tercer cliente: reproyecta el frame anterior a partir de
         // esta misma profundidad, y la quiere SIN el jitter de subpixel, que es
         // justo como la graba este pre-pass (usa fc.proj, no la jittereada).
@@ -7400,7 +7400,7 @@ namespace DonTopo {
         b.subresourceRange.baseArrayLayer = 0;
         b.subresourceRange.layerCount     = 1;
 
-        if (!m_ssaoEnabled)
+        if (!ssaoEnabled())
         {
             m_ssaoGpuMs = 0.0f;
             // Apagado: ni oclusión ni blur. Solo queda dejar el mapa en la
@@ -7436,7 +7436,7 @@ namespace DonTopo {
 
         // Timestamps del slot: se leen los de hace dos frames, cuya fence ya
         // esperó drawFrame, así que no bloquean a nadie.
-        if (m_ssaoEnabled && m_timestampsSupported && m_ssaoQueryPending[m_currentFrame])
+        if (ssaoEnabled() && m_timestampsSupported && m_ssaoQueryPending[m_currentFrame])
         {
             uint64_t stamps[2] = {};
             if (vkGetQueryPoolResults(m_gpu.device(), m_ssaoQueryPool, m_currentFrame * 2, 2,
@@ -7452,7 +7452,7 @@ namespace DonTopo {
                 }
             }
         }
-        if (m_ssaoEnabled && m_timestampsSupported)
+        if (ssaoEnabled() && m_timestampsSupported)
         {
             vkCmdResetQueryPool(cmd, m_ssaoQueryPool, m_currentFrame * 2, 2);
             vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_ssaoQueryPool, m_currentFrame * 2);
@@ -7549,7 +7549,7 @@ namespace DonTopo {
 
         // El SSR solo quería la profundidad: sin SSAO no hay oclusión que
         // calcular ni mapa que escribir.
-        if (!m_ssaoEnabled) return;
+        if (!ssaoEnabled()) return;
 
         // ── Oclusión + blur ──────────────────────────────────────────────────
         SsaoPush push{};
@@ -8205,13 +8205,13 @@ namespace DonTopo {
                 // El pre-pass solo cuenta como coste del SSR cuando es el SSR
                 // quien lo pide: con el SSAO encendido ya sale en ssaoGpuMs y
                 // sumarlo aquí lo contaría dos veces.
-                const uint64_t prepass = m_ssaoEnabled ? 0 : (stamps[1] - stamps[0]);
+                const uint64_t prepass = ssaoEnabled() ? 0 : (stamps[1] - stamps[0]);
                 m_ssrGpuMs = (float)((double)(prepass + (stamps[3] - stamps[2]))
                                      * m_timestampPeriod * 1e-6);
                 if (++m_ssrMeasuredFrames == 300)
                 {
                     printf("ssr (marcha + suma%s): %.3f ms (%ux%u, %d pasos)\n",
-                           m_ssaoEnabled ? "" : " + depth pre-pass",
+                           ssaoEnabled() ? "" : " + depth pre-pass",
                            m_ssrGpuMs, m_swapChainExtent.width, m_swapChainExtent.height,
                            m_ssrMaxSteps);
                     fflush(stdout);
