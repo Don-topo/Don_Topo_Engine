@@ -854,6 +854,18 @@ struct D3D12Renderer::Impl {
     // Tamaño anotado por el callback de la ventana, pendiente de aplicar. Ver
     // el comentario de resize() en la cabecera: el trabajo de DXGI no puede
     // hacerse dentro del WindowProc.
+    // Tamaño de la swapchain, que es el de la ventana. width y height son el
+    // tamaño de RENDER: coinciden con este salvo cuando la escena va a un
+    // panel, y entonces mandan las medidas del panel.
+    UINT swapWidth  = 0;
+    UINT swapHeight = 0;
+
+    // Tamaño de render pedido desde fuera, pendiente de aplicar entre frames.
+    UINT pendingRenderWidth  = 0;
+    UINT pendingRenderHeight = 0;
+
+    void applyPendingRenderSize();
+
     UINT pendingWidth   = 0;
     UINT pendingHeight  = 0;
     bool resizePending  = false;
@@ -3130,6 +3142,30 @@ UINT D3D12Renderer::Impl::desiredSampleCount() const
     return wanted;
 }
 
+void D3D12Renderer::Impl::applyPendingRenderSize()
+{
+    const UINT wanted  = (renderToTexture && pendingRenderWidth > 0) ? pendingRenderWidth : swapWidth;
+    const UINT wantedH = (renderToTexture && pendingRenderHeight > 0) ? pendingRenderHeight : swapHeight;
+    if (wanted == 0 || wantedH == 0 || (wanted == width && wantedH == height))
+        return;
+
+    // Todo lo interno es de este tamaño: profundidad, escena, bloom, oclusión,
+    // historial y la imagen del panel. La swapchain NO se toca.
+    waitForGpu();
+    width  = wanted;
+    height = wantedH;
+
+    createDepthBuffer();
+    if (hdrAllocation)
+        createHdrTargets();
+    if (ssaoRawAllocation) {
+        createSsaoTargets();
+        ssaoBlurNeedsUav = false;
+    }
+    updateViewProj();
+    computeCascades();
+}
+
 void D3D12Renderer::Impl::applyPendingSampleCount()
 {
     const UINT wanted = desiredSampleCount();
@@ -4977,6 +5013,9 @@ void D3D12Renderer::init(Window& window)
     glfwGetFramebufferSize(glfwWindow, &fbWidth, &fbHeight);
     d.width  = static_cast<UINT>(fbWidth > 0 ? fbWidth : 1);
     d.height = static_cast<UINT>(fbHeight > 0 ? fbHeight : 1);
+    // Al arrancar, el render es del tamaño de la ventana: no hay panel todavía.
+    d.swapWidth  = d.width;
+    d.swapHeight = d.height;
 
     UINT factoryFlags = 0;
 #ifndef NDEBUG
@@ -5173,6 +5212,10 @@ void D3D12Renderer::drawFrame()
     // ya estamos en el bucle principal, fuera del WindowProc, así que se puede
     // tocar DXGI y una excepción tiene por dónde salir.
     d.applyPendingResize();
+
+    // Y un cambio de tamaño del panel, que mueve todo lo interno sin tocar la
+    // swapchain.
+    d.applyPendingRenderSize();
 
     // Y un cambio de anti-aliasing, que mueve targets y pipelines: aquí, entre
     // frames, no en mitad de uno.
@@ -5570,8 +5613,14 @@ void D3D12Renderer::Impl::applyPendingResize()
                                            DXGI_FORMAT_R8G8B8A8_UNORM, 0),
                   "IDXGISwapChain3::ResizeBuffers");
 
-    width      = pendingWidth;
-    height     = pendingHeight;
+    swapWidth  = pendingWidth;
+    swapHeight = pendingHeight;
+    // Sin panel, el render es del tamaño de la ventana. Con panel manda el
+    // panel, y redimensionar la ventana no tiene por qué moverlo.
+    if (!renderToTexture || pendingRenderWidth == 0) {
+        width  = pendingWidth;
+        height = pendingHeight;
+    }
     frameIndex = swapChain->GetCurrentBackBufferIndex();
 
     // ResizeBuffers puede devolver el índice a CUALQUIER slot, no al siguiente.
@@ -5829,6 +5878,17 @@ void D3D12Renderer::waitIdle()
 void D3D12Renderer::setRenderToTexture(bool enabled)
 {
     m_impl->renderToTexture = enabled;
+}
+
+void D3D12Renderer::setViewportSize(uint32_t width, uint32_t height)
+{
+    // Solo se anota: recrear targets exige la GPU en reposo, y eso lo hace
+    // drawFrame al empezar el siguiente. Un panel plegado da cero y se ignora,
+    // como el minimizado de la ventana.
+    if (width == 0 || height == 0)
+        return;
+    m_impl->pendingRenderWidth  = width;
+    m_impl->pendingRenderHeight = height;
 }
 
 uint64_t D3D12Renderer::viewportTexture() const

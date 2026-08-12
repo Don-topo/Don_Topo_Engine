@@ -158,6 +158,11 @@ public:
     // un panel: quien dibuja la UI recibe la escena como imagen.
     void setRenderToTexture(bool enabled);
 
+    // Tamaño al que se dibuja la escena cuando va a textura: el del panel que
+    // la muestra, para que salga 1:1 y no reescalada. Se anota y se aplica
+    // entre frames, como el resize de la ventana; 0 se ignora.
+    void setViewportSize(uint32_t width, uint32_t height);
+
     // Descriptor GPU de esa textura, listo para usarse como ImTextureID. 0 si
     // todavía no hay imagen (antes de init). El heap es el mismo que se expone
     // en uiDescriptorHeap(), así que el backend de ImGui ya lo tiene enlazado.

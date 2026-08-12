@@ -474,13 +474,16 @@ int main()
                     // espera su backend de ImGui.
                     ImGui::SetNextWindowSize(ImVec2(720.0f, 440.0f), ImGuiCond_FirstUseEver);
                     if (ImGui::Begin("Viewport")) {
+                        // El render se ajusta al panel: sin esto la imagen
+                        // saldria escalada, que es un remuestreo encubierto —
+                        // suaviza bordes y disimula lo que hace el AA.
+                        const ImVec2 size = ImGui::GetContentRegionAvail();
+                        d3d12.setViewportSize(static_cast<uint32_t>(size.x),
+                                              static_cast<uint32_t>(size.y));
+
                         const uint64_t texture = d3d12.viewportTexture();
-                        if (texture != 0) {
-                            const ImVec2 size = ImGui::GetContentRegionAvail();
-                            // La textura es del tamaño de la ventana: el panel
-                            // la muestra escalada, sin recortarla.
+                        if (texture != 0)
                             ImGui::Image(static_cast<ImTextureID>(texture), size);
-                        }
                     }
                     ImGui::End();
                 }
