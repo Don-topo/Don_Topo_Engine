@@ -271,6 +271,26 @@ private:
     std::function<void(GameObject*)> m_onDelete;
     std::function<void(const glm::vec3&)> m_onAxisSelected;
 
+    // Con qué API se arrancó la interfaz. Decide qué backend de ImGui se usa
+    // en cada punto: iniciar, empezar el frame, grabar y cerrar.
+    GraphicsApi m_api = GraphicsApi::Vulkan;
+
+#ifdef DT_D3D12_ENABLED
+    // Reparto del rango de descriptores que el backend cede a la interfaz.
+    // ImGui pide y suelta por su cuenta, así que hay que llevar la cuenta.
+    struct D3D12SrvPool {
+        uint64_t              cpuStart = 0;
+        uint64_t              gpuStart = 0;
+        uint32_t              stride   = 0;
+        uint32_t              capacity = 0;
+        uint32_t              next     = 0;
+        std::vector<unsigned> released;
+    };
+    D3D12SrvPool m_d3dSrvPool;
+
+    void initUiD3D12(const InitInfo& info);
+#endif
+
     PhysicsManager* m_physics = nullptr;
     // Propiedad: el editor mantiene vivo el backend que le dieron. unique_ptr a
     // tipo incompleto — se destruye en el .cpp.

@@ -1,4 +1,9 @@
 #include "DonTopo/Editor/EditorUI.h"
+
+#ifdef DT_D3D12_ENABLED
+#include <d3d12.h>
+#include <imgui_impl_dx12.h>
+#endif
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
@@ -30,14 +35,13 @@ EditorUI::EditorUI()
     , m_scriptEditor(std::make_unique<ScriptEditorPanel>())
 {
     m_scriptEditor->setLogCallback([this](const std::string& msg) { m_logPanel.push(msg); });
-    // El Renderer nos llamará de vuelta por aquí para el pass de UI. Se
-    // registra en el constructor porque tiene que estar puesto antes de
-    // initPresentation(), que es quien arranca la UI.
-    m_renderer->setUiLayer(this);
-    // Liberar los recursos GPU del subárbol justo antes de desengancharlo:
-    // lo hacía el Renderer al fijar la raíz de escena, y ahora que el dueño
-    // es el editor lo cablea él.
-    setOnDelete([this](GameObject* node) { m_renderer->removeGameObject(node); });
+    // Liberar los recursos GPU del subárbol justo antes de desengancharlo: lo
+    // hacía el Renderer al fijar la raíz de escena, y ahora lo cablea el
+    // editor. El lambda se ejecuta mucho después, con el backend ya puesto.
+    setOnDelete([this](GameObject* node) {
+        if (m_renderer)
+            m_renderer->removeGameObject(node);
+    });
 }
 
 EditorUI::~EditorUI() = default;
@@ -45,6 +49,13 @@ EditorUI::~EditorUI() = default;
 void EditorUI::setRenderer(std::unique_ptr<EditorRenderer> renderer)
 {
     m_renderer = std::move(renderer);
+
+    // El backend llama de vuelta por aquí para grabar el pase de interfaz.
+    // Tiene que quedar puesto ANTES de que arranque la presentación, y este es
+    // el primer momento en que hay backend al que decírselo: el editor ya no lo
+    // construye, se lo dan.
+    if (m_renderer)
+        m_renderer->setUiLayer(this);
 }
 
 EditorRenderer& EditorUI::renderer() { return *m_renderer; }
@@ -53,6 +64,15 @@ EditorRenderer& EditorUI::renderer() { return *m_renderer; }
 
 void EditorUI::initUi(const InitInfo& info)
 {
+    m_api = info.api;
+
+#ifdef DT_D3D12_ENABLED
+    if (info.api == GraphicsApi::D3D12) {
+        initUiD3D12(info);
+        return;
+    }
+#endif
+
     // Los handles llegan como enteros opacos (UiLayer no incluye vulkan.h para
     // que el editor pueda dibujarse también con DirectX 12): aquí se recuperan
     // sus tipos reales, que es donde de verdad se conocen.
@@ -106,6 +126,15 @@ void EditorUI::initUi(const InitInfo& info)
 
 void EditorUI::shutdownUi()
 {
+#ifdef DT_D3D12_ENABLED
+    if (m_api == GraphicsApi::D3D12) {
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        return;
+    }
+#endif
+
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
@@ -118,6 +147,16 @@ void EditorUI::shutdownUi()
 
 uint64_t EditorUI::registerUiTexture(uint64_t sampler, uint64_t view)
 {
+#ifdef DT_D3D12_ENABLED
+    if (m_api == GraphicsApi::D3D12) {
+        // En DirectX 12 la textura ya viene con su descriptor hecho: el backend
+        // lo creó en el heap que la interfaz comparte, y ese valor ES lo que
+        // ImGui::Image trata como identificador. No hay nada que registrar.
+        (void)view;
+        return sampler;
+    }
+#endif
+
     const VkDescriptorSet set = ImGui_ImplVulkan_AddTexture(
         reinterpret_cast<VkSampler>(sampler), reinterpret_cast<VkImageView>(view),
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -126,13 +165,26 @@ uint64_t EditorUI::registerUiTexture(uint64_t sampler, uint64_t view)
 
 void EditorUI::unregisterUiTexture(uint64_t handle)
 {
+#ifdef DT_D3D12_ENABLED
+    if (m_api == GraphicsApi::D3D12) {
+        // Nada que soltar: el descriptor es del backend, no de la interfaz.
+        (void)handle;
+        return;
+    }
+#endif
+
     ImGui_ImplVulkan_RemoveTexture(reinterpret_cast<VkDescriptorSet>(handle));
 }
 
 void EditorUI::buildUiFrame(uint64_t viewportTexture, GameObject* sceneRoot,
                             const glm::mat4& cameraView)
 {
-    ImGui_ImplVulkan_NewFrame();
+#ifdef DT_D3D12_ENABLED
+    if (m_api == GraphicsApi::D3D12)
+        ImGui_ImplDX12_NewFrame();
+    else
+#endif
+        ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
@@ -143,9 +195,79 @@ void EditorUI::buildUiFrame(uint64_t viewportTexture, GameObject* sceneRoot,
 
 void EditorUI::recordUi(void* commandList)
 {
+#ifdef DT_D3D12_ENABLED
+    if (m_api == GraphicsApi::D3D12) {
+        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(),
+                                      static_cast<ID3D12GraphicsCommandList*>(commandList));
+        return;
+    }
+#endif
+
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(),
                                     static_cast<VkCommandBuffer>(commandList));
 }
+
+#ifdef DT_D3D12_ENABLED
+void EditorUI::initUiD3D12(const InitInfo& info)
+{
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    ImGui::StyleColorsDark();
+
+    // InitForOther y no InitForVulkan: con DirectX 12 el backend de GLFW no
+    // tiene que preparar nada de la API gráfica, solo el input.
+    ImGui_ImplGlfw_InitForOther(info.window, false);
+
+    // El rango de descriptores que el backend reservó para la interfaz. Desde
+    // la 1.92 su backend de DX12 pide descriptores por su cuenta —uno por
+    // textura, no solo la fuente—, así que hay que repartírselos con estos dos
+    // callbacks en vez de darle uno fijo.
+    m_d3dSrvPool.cpuStart = info.d3dSrvCpuStart;
+    m_d3dSrvPool.gpuStart = info.d3dSrvGpuStart;
+    m_d3dSrvPool.stride   = info.d3dSrvStride;
+    m_d3dSrvPool.capacity = info.d3dSrvCount;
+    m_d3dSrvPool.next     = 0;
+    m_d3dSrvPool.released.clear();
+
+    ImGui_ImplDX12_InitInfo initInfo{};
+    initInfo.Device            = static_cast<ID3D12Device*>(info.d3dDevice);
+    initInfo.CommandQueue      = static_cast<ID3D12CommandQueue*>(info.d3dQueue);
+    initInfo.NumFramesInFlight = static_cast<int>(info.framesInFlight);
+    initInfo.RTVFormat         = static_cast<DXGI_FORMAT>(info.d3dRtvFormat);
+    initInfo.SrvDescriptorHeap = static_cast<ID3D12DescriptorHeap*>(info.d3dSrvHeap);
+    initInfo.UserData          = &m_d3dSrvPool;
+    initInfo.SrvDescriptorAllocFn = [](ImGui_ImplDX12_InitInfo* init,
+                                       D3D12_CPU_DESCRIPTOR_HANDLE* outCpu,
+                                       D3D12_GPU_DESCRIPTOR_HANDLE* outGpu) {
+        auto*    pool  = static_cast<D3D12SrvPool*>(init->UserData);
+        unsigned index = 0;
+        if (!pool->released.empty()) {
+            index = pool->released.back();
+            pool->released.pop_back();
+        } else {
+            // Quedarse sin sitio aquí sería un fallo silencioso que acabaría
+            // pisando descriptores de la escena.
+            if (pool->next >= pool->capacity)
+                throw std::runtime_error("EditorUI: ImGui pidio mas descriptores de los reservados");
+            index = pool->next++;
+        }
+        outCpu->ptr = pool->cpuStart + static_cast<uint64_t>(index) * pool->stride;
+        outGpu->ptr = pool->gpuStart + static_cast<uint64_t>(index) * pool->stride;
+    };
+    initInfo.SrvDescriptorFreeFn = [](ImGui_ImplDX12_InitInfo* init,
+                                      D3D12_CPU_DESCRIPTOR_HANDLE cpu,
+                                      D3D12_GPU_DESCRIPTOR_HANDLE) {
+        auto* pool = static_cast<D3D12SrvPool*>(init->UserData);
+        if (pool->stride == 0 || cpu.ptr < pool->cpuStart)
+            return;
+        pool->released.push_back(
+            static_cast<unsigned>((cpu.ptr - pool->cpuStart) / pool->stride));
+    };
+    ImGui_ImplDX12_Init(&initInfo);
+}
+#endif
 
 namespace {
 

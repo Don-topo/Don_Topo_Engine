@@ -152,7 +152,12 @@ int main()
         {
             std::cout << backend.message << std::endl;
 
-            DonTopo::D3D12::D3D12Renderer d3d12;
+            // El backend lo construye main y la propiedad acaba en el editor;
+            // la referencia al tipo concreto se guarda antes de moverlo, porque
+            // el ciclo de vida (init, drawFrame, shutdown) no está en la
+            // interfaz que consume el editor.
+            auto d3d12Owned = std::make_unique<DonTopo::D3D12::D3D12Renderer>();
+            DonTopo::D3D12::D3D12Renderer& d3d12 = *d3d12Owned;
             d3d12.init(window);
 
 
@@ -299,95 +304,48 @@ int main()
                         r->resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
                 });
 
-            // ImGui sobre DX12. El backend de render no lo conoce —DonTopoCore
-            // no puede depender de ImGui porque el runtime exportado lo enlaza—,
-            // así que se monta aquí con los handles que expone.
-            IMGUI_CHECKVERSION();
-            ImGui::CreateContext();
-            ImGui::StyleColorsDark();
-            ImGui_ImplGlfw_InitForOther(window.getNativeWindow(), true);
+            // El editor, con este backend detrás. A partir de aquí el camino
+            // es el mismo que con Vulkan: los paneles hablan con la interfaz.
+            DonTopo::EditorUI editor;
+            editor.setRenderer(std::move(d3d12Owned));
+            editor.setActiveRenderBackend(backend.backend);
+            if (!backend.message.empty())
+                editor.pushExternalLog(backend.message);
 
-            // Reparto del rango de descriptores que el renderer tiene apartado.
-            // ImGui pide y devuelve por su cuenta, así que hace falta una lista
-            // de libres y no un simple contador.
-            struct UiDescriptorPool
-            {
-                uint64_t              cpuStart = 0;
-                uint64_t              gpuStart = 0;
-                unsigned              stride   = 0;
-                unsigned              capacity = 0;
-                unsigned              next     = 0;
-                std::vector<unsigned> released;
-            } uiPool;
-            uiPool.cpuStart = d3d12.uiHeapStartCpu();
-            uiPool.gpuStart = d3d12.uiHeapStartGpu();
-            uiPool.stride   = d3d12.descriptorSize();
-            uiPool.capacity = d3d12.uiDescriptorCount();
+            DonTopo::UiLayer::InitInfo uiInfo{};
+            uiInfo.api            = DonTopo::UiLayer::GraphicsApi::D3D12;
+            uiInfo.window         = window.getNativeWindow();
+            uiInfo.d3dDevice      = d3d12.nativeDevice();
+            uiInfo.d3dQueue       = d3d12.nativeQueue();
+            uiInfo.d3dSrvHeap     = d3d12.uiDescriptorHeap();
+            uiInfo.d3dSrvCpuStart = d3d12.uiHeapStartCpu();
+            uiInfo.d3dSrvGpuStart = d3d12.uiHeapStartGpu();
+            uiInfo.d3dSrvCount    = d3d12.uiDescriptorCount();
+            uiInfo.d3dSrvStride   = d3d12.descriptorSize();
+            uiInfo.d3dRtvFormat   = DXGI_FORMAT_R8G8B8A8_UNORM;
+            uiInfo.framesInFlight = static_cast<uint32_t>(d3d12.framesInFlight());
+            editor.initUi(uiInfo);
 
-            ImGui_ImplDX12_InitInfo uiInit = {};
-            uiInit.Device            = static_cast<ID3D12Device*>(d3d12.nativeDevice());
-            uiInit.CommandQueue      = static_cast<ID3D12CommandQueue*>(d3d12.nativeQueue());
-            uiInit.NumFramesInFlight = d3d12.framesInFlight();
-            uiInit.RTVFormat         = DXGI_FORMAT_R8G8B8A8_UNORM;
-            uiInit.DSVFormat         = DXGI_FORMAT_UNKNOWN;
-            uiInit.SrvDescriptorHeap = static_cast<ID3D12DescriptorHeap*>(d3d12.uiDescriptorHeap());
-            uiInit.UserData          = &uiPool;
-            uiInit.SrvDescriptorAllocFn = [](ImGui_ImplDX12_InitInfo* info,
-                                             D3D12_CPU_DESCRIPTOR_HANDLE* outCpu,
-                                             D3D12_GPU_DESCRIPTOR_HANDLE* outGpu) {
-                auto*    pool  = static_cast<UiDescriptorPool*>(info->UserData);
-                unsigned index = 0;
-                if (!pool->released.empty()) {
-                    index = pool->released.back();
-                    pool->released.pop_back();
-                } else {
-                    // Quedarse sin sitio aquí sería un fallo silencioso que
-                    // acabaría pisando descriptores de la escena.
-                    if (pool->next >= pool->capacity)
-                        throw std::runtime_error(
-                            "D3D12: ImGui pidio mas descriptores de los reservados");
-                    index = pool->next++;
-                }
-                outCpu->ptr = pool->cpuStart + static_cast<uint64_t>(index) * pool->stride;
-                outGpu->ptr = pool->gpuStart + static_cast<uint64_t>(index) * pool->stride;
-            };
-            uiInit.SrvDescriptorFreeFn = [](ImGui_ImplDX12_InitInfo* info,
-                                            D3D12_CPU_DESCRIPTOR_HANDLE cpu,
-                                            D3D12_GPU_DESCRIPTOR_HANDLE) {
-                auto* pool = static_cast<UiDescriptorPool*>(info->UserData);
-                if (pool->stride == 0 || cpu.ptr < pool->cpuStart)
-                    return;
-                pool->released.push_back(
-                    static_cast<unsigned>((cpu.ptr - pool->cpuStart) / pool->stride));
-            };
-            ImGui_ImplDX12_Init(&uiInit);
+            // La escena va a una textura y el backbuffer se queda para la
+            // interfaz: es lo que necesita el viewport dentro de su panel.
+            d3d12.setUiLayer(&editor);
+            d3d12.setRenderToTexture(true);
 
-            // Estado del panel. Arranca en DirectX 12 porque es con lo que se
-            // ha entrado.
-            int  uiBackendChoice = 1;
-            bool uiSavePending   = false;
-            std::string uiSaveResult;
+            editor.setScene(&d3dScene);
+            editor.setPhysicsManager(&d3dPhysics);
+            editor.setAudioManager(&d3dAudio);
+            editor.pushExternalLog(
+                "DirectX 12: el editor corre sobre este backend. Sin UI 2D del juego, "
+                "sin gizmos de transformacion y sin sondas de reflexion todavia.");
 
-            // Cámara navegable: WASD/QE para moverse y boton derecho para
-            // mirar, igual que el viewport del editor. Sale de (6, 4.5, 8)
-            // mirando al origen, que es el encuadre fijo que tenia el backend.
+            // Cámara de vuelo, la misma que ya tenía este camino.
             DonTopo::Camera d3dCamera(glm::vec3(6.0f, 4.5f, 8.0f), -126.87f, -21.8f);
-            d3dCamera.moveSpeed = 8.0f;  // la rejilla mide 20: 50 la cruza en medio segundo
-            d3d12.setCamera(d3dCamera.getViewMatrix(), d3dCamera.getPos(), d3dCamera.getFov());
+            d3dCamera.moveSpeed = 8.0f;
+            d3d12.setCamera(d3dCamera);
 
-            bool   d3dViewportPanel = false;
-            // Lo seleccionado en el viewport: uno de los dos, o los dos a -1.
-            int    d3dPickedStatic  = -1;
-            int    d3dPickedSkinned = -1;
             double d3dLastX = 0.0, d3dLastY = 0.0;
-            bool   d3dLooking = false;
+            bool   d3dLooking   = false;
             auto   d3dLastFrame = std::chrono::high_resolution_clock::now();
-
-            d3d12.setUiDrawCallback([&]() {
-                ImGui_ImplDX12_RenderDrawData(
-                    ImGui::GetDrawData(),
-                    static_cast<ID3D12GraphicsCommandList*>(d3d12.nativeCommandList()));
-            });
 
             while (!window.shouldClose())
             {
@@ -398,239 +356,13 @@ int main()
                     std::chrono::duration<float>(d3dNow - d3dLastFrame).count();
                 d3dLastFrame = d3dNow;
 
-                ImGui_ImplDX12_NewFrame();
-                ImGui_ImplGlfw_NewFrame();
-                ImGui::NewFrame();
+                // La interfaz primero: es la que puede mover la escena, y el
+                // backend la lee justo después al grabar el frame.
+                editor.buildUiFrame(d3d12.viewportTexture(), &d3dScene.getRoot(),
+                                    d3dCamera.getViewMatrix());
 
-                ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_FirstUseEver);
-                ImGui::SetNextWindowSize(ImVec2(430.0f, 0.0f), ImGuiCond_FirstUseEver);
-                if (ImGui::Begin("Backend DirectX 12"))
-                {
-                    ImGui::Text("Adaptador: %s", d3d12.adapterName().c_str());
-                    ImGui::Text("%.1f FPS (%.3f ms/frame)", ImGui::GetIO().Framerate,
-                                1000.0f / ImGui::GetIO().Framerate);
-                    ImGui::Separator();
-
-                    ImGui::TextWrapped(
-                        "Este backend dibuja la escena del proyecto, no el editor. Los "
-                        "paneles, la jerarquia, el inspector y el viewport solo existen con "
-                        "Vulkan.");
-                    ImGui::Spacing();
-                    ImGui::TextWrapped(
-                        "Implementado: presentacion, escena del proyecto con sus texturas, "
-                        "personajes animados por compute, iluminacion directa, profundidad, "
-                        "sombras en cascada, cielo, IBL, materiales PBR, SSAO, SSR, niebla, bloom "
-                        "con tone mapping y FXAA.");
-                    ImGui::TextWrapped(
-                        "Sin implementar: gizmos de transformacion, UI 2D y el editor completo.");
-                    ImGui::Spacing();
-                    ImGui::TextWrapped(
-                        "Camara: WASD para moverse, Q/E para bajar y subir, boton derecho "
-                        "para mirar.");
-
-                    ImGui::Separator();
-                    {
-                        // Los efectos que ya funcionan aqui, para poder verlos
-                        // sin el editor: su estado vive en RendererState, el
-                        // mismo que usa el panel de calidad con Vulkan.
-                        bool ssao = d3d12.ssaoEnabled();
-                        if (ImGui::Checkbox("SSAO", &ssao))
-                            d3d12.setSsaoEnabledFlag(ssao);
-                        bool ssr = d3d12.ssrEnabled();
-                        if (ImGui::Checkbox("SSR", &ssr))
-                            d3d12.setSsrEnabled(ssr);
-
-                        // Forward+: mismo enum que el panel de calidad del
-                        // editor, con los mismos tres estados.
-                        // MSAA: el numero de muestras lo recorta el backend a lo
-                        // que soporte el device.
-                        // Anti-aliasing: los modos que este backend sabe hacer.
-                        // SSAA no esta, asi que no se ofrece.
-                        // Escena dentro de un panel en vez de a pantalla
-                        // completa: es el cimiento del viewport del editor.
-                        bool inPanel = d3dViewportPanel;
-                        if (ImGui::Checkbox("Escena en panel", &inPanel)) {
-                            d3dViewportPanel = inPanel;
-                            d3d12.setRenderToTexture(inPanel);
-                        }
-
-                        bool wire = d3d12.isWireframeMode();
-                        if (ImGui::Checkbox("Alambre", &wire))
-                            d3d12.setWireframeMode(wire);
-
-                        int aa = static_cast<int>(d3d12.aaMode());
-                        if (aa == 2) aa = 0;  // SSAA: aqui no existe
-                        const char* aaNames[] = {"Ninguno", "FXAA", "-", "MSAA", "TAA"};
-                        if (ImGui::BeginCombo("Anti-aliasing", aaNames[aa])) {
-                            for (int i = 0; i < 5; ++i) {
-                                if (i == 2) continue;
-                                if (ImGui::Selectable(aaNames[i], aa == i))
-                                    d3d12.setAaModeFlag(
-                                        static_cast<DonTopo::RendererState::AaMode>(i));
-                            }
-                            ImGui::EndCombo();
-                        }
-
-                        int fp = static_cast<int>(d3d12.forwardPlusMode());
-                        if (ImGui::Combo("Forward+", &fp, "Off\0Tiled\0Clustered\0"))
-                            d3d12.setForwardPlusMode(
-                                static_cast<DonTopo::RendererState::FpMode>(fp));
-                    }
-
-                    ImGui::Separator();
-                    ImGui::TextWrapped(
-                        "Cambiar de backend requiere reiniciar. Este selector existe porque "
-                        "sin el no habria forma de volver a Vulkan: el combo del menu View "
-                        "vive en el editor, y el editor no se dibuja aqui.");
-
-                    const char* backendNames[] = {"Vulkan", "DirectX 12"};
-                    ImGui::SetNextItemWidth(160.0f);
-                    ImGui::Combo("Backend al reiniciar", &uiBackendChoice, backendNames,
-                                 IM_ARRAYSIZE(backendNames));
-
-                    if (ImGui::Button("Guardar en el proyecto", ImVec2(190.0f, 0.0f)))
-                        uiSavePending = true;
-
-                    if (!uiSaveResult.empty())
-                        ImGui::TextWrapped("%s", uiSaveResult.c_str());
-                }
-                ImGui::End();
-
-                if (uiSavePending)
-                {
-                    uiSavePending = false;
-                    // Se toca SOLO el campo del backend, releyendo y reescribiendo
-                    // el project.json tal cual: pasar por readSettings/writeSettings
-                    // reescribiria la seccion entera y un proyecto con ajustes a
-                    // medias perderia los que no estan en el fichero.
-                    if (lastProject.empty())
-                    {
-                        uiSaveResult = "No hay proyecto recordado: abre uno con Vulkan primero.";
-                    }
-                    else
-                    {
-                        const std::filesystem::path file = lastProject / "project.json";
-                        nlohmann::json               doc = nlohmann::json::object();
-                        {
-                            std::ifstream in(file);
-                            if (in.is_open())
-                            {
-                                try { in >> doc; } catch (const std::exception&) { doc = nlohmann::json::object(); }
-                            }
-                        }
-                        if (!doc.is_object())
-                            doc = nlohmann::json::object();
-                        if (!doc.contains("settings") || !doc["settings"].is_object())
-                            doc["settings"] = nlohmann::json::object();
-                        doc["settings"]["renderBackend"] =
-                            DonTopo::renderBackendName(uiBackendChoice == 0
-                                                           ? DonTopo::RenderBackend::Vulkan
-                                                           : DonTopo::RenderBackend::D3D12);
-
-                        std::ofstream out(file, std::ios::binary | std::ios::trunc);
-                        if (out.is_open())
-                        {
-                            out << doc.dump(4);
-                            out.flush();
-                            uiSaveResult = out.good()
-                                               ? "Guardado. Cierra y vuelve a abrir para aplicarlo."
-                                               : "No se pudo escribir el project.json.";
-                        }
-                        else
-                        {
-                            uiSaveResult = "No se pudo abrir el project.json para escribir.";
-                        }
-                    }
-                }
-
-                if (d3dViewportPanel) {
-                    // La escena, ya compuesta, como imagen de un panel. El
-                    // descriptor que devuelve el backend ES el ImTextureID que
-                    // espera su backend de ImGui.
-                    ImGui::SetNextWindowSize(ImVec2(720.0f, 440.0f), ImGuiCond_FirstUseEver);
-                    if (ImGui::Begin("Viewport")) {
-                        // El render se ajusta al panel: sin esto la imagen
-                        // saldria escalada, que es un remuestreo encubierto —
-                        // suaviza bordes y disimula lo que hace el AA.
-                        const ImVec2 size = ImGui::GetContentRegionAvail();
-                        d3d12.setViewportSize(static_cast<uint32_t>(size.x),
-                                              static_cast<uint32_t>(size.y));
-
-                        const uint64_t texture = d3d12.viewportTexture();
-                        if (texture != 0) {
-                            const ImVec2 imagePos = ImGui::GetCursorScreenPos();
-                            ImGui::Image(static_cast<ImTextureID>(texture), size);
-
-                            // Clic izquierdo sobre la imagen: se desproyecta con
-                            // la matriz del frame y gana el objeto cuya esfera
-                            // corta el rayo más cerca.
-                            if (ImGui::IsItemHovered() &&
-                                ImGui::IsMouseClicked(ImGuiMouseButton_Left) && size.x > 0.0f &&
-                                size.y > 0.0f)
-                            {
-                                const ImVec2 mouse = ImGui::GetIO().MousePos;
-                                const glm::vec2 local(mouse.x - imagePos.x, mouse.y - imagePos.y);
-
-                                // A NDC. La Y de pantalla crece hacia abajo y la
-                                // de clip hacia arriba, de ahí el signo.
-                                const glm::vec2 ndc(2.0f * local.x / size.x - 1.0f,
-                                                    1.0f - 2.0f * local.y / size.y);
-
-                                const glm::mat4 invViewProj =
-                                    glm::inverse(d3d12.viewProjMatrix());
-                                // z = 1 es el plano lejano con la convención de
-                                // profundidad que usa el backend.
-                                // farPoint y no "far": windows.h todavía define
-                                // far y near como macros, herencia de los 16
-                                // bits, y cualquier variable con ese nombre
-                                // desaparece antes de compilar.
-                                const glm::vec4 farPoint =
-                                    invViewProj * glm::vec4(ndc, 1.0f, 1.0f);
-                                const glm::vec3 origin = d3dCamera.getPos();
-                                const glm::vec3 dir =
-                                    glm::normalize(glm::vec3(farPoint) / farPoint.w - origin);
-
-                                float bestDistance = (std::numeric_limits<float>::max)();
-                                d3dPickedStatic  = -1;
-                                d3dPickedSkinned = -1;
-
-                                d3dScene.traverse([&](DonTopo::GameObject* node) {
-                                    if (!node || !node->hasMesh())
-                                        return;
-                                    const DonTopo::Mesh* mesh =
-                                        node->isSkinned()
-                                            ? static_cast<const DonTopo::Mesh*>(
-                                                  node->getSkinnedMesh())
-                                            : node->getMesh().get();
-                                    if (!mesh)
-                                        return;
-
-                                    const float hit = raySphere(
-                                        origin, dir, worldBounds(*mesh, node->worldTransform));
-                                    if (hit < 0.0f || hit >= bestDistance)
-                                        return;
-
-                                    bestDistance = hit;
-                                    if (node->isSkinned()) {
-                                        d3dPickedSkinned = node->skinnedRenderIndex;
-                                        d3dPickedStatic  = -1;
-                                    } else {
-                                        d3dPickedStatic  = node->staticRenderIndex;
-                                        d3dPickedSkinned = -1;
-                                    }
-                                });
-
-                                d3d12.setSelection(d3dPickedStatic, d3dPickedSkinned);
-                            }
-                        }
-                    }
-                    ImGui::End();
-                }
-
-                ImGui::Render();
-
-                // La cámara despues de la UI: si el raton o el teclado los
-                // tiene ImGui, arrastrar por un panel no puede girar la vista.
+                // Cámara después de la interfaz, para que arrastrar por un
+                // panel no gire la vista.
                 {
                     GLFWwindow*    native = window.getNativeWindow();
                     const ImGuiIO& io     = ImGui::GetIO();
@@ -641,19 +373,12 @@ int main()
 
                     double mouseX = 0.0, mouseY = 0.0;
                     glfwGetCursorPos(native, &mouseX, &mouseY);
-
-                    if (rightDown)
-                    {
-                        // El primer frame solo ancla la posicion: sin esto el
-                        // delta seria la distancia desde donde estuviera el
-                        // cursor la ultima vez y la vista daria un salto.
+                    if (rightDown) {
                         if (d3dLooking)
                             d3dCamera.processMouse(static_cast<float>(mouseX - d3dLastX),
                                                    static_cast<float>(mouseY - d3dLastY));
                         d3dLooking = true;
-                    }
-                    else
-                    {
+                    } else {
                         d3dLooking = false;
                     }
                     d3dLastX = mouseX;
@@ -662,8 +387,7 @@ int main()
                     if (!io.WantCaptureKeyboard)
                         d3dCamera.update(native, d3dDelta);
 
-                    d3d12.setCamera(d3dCamera.getViewMatrix(), d3dCamera.getPos(),
-                                    d3dCamera.getFov());
+                    d3d12.setCamera(d3dCamera);
                 }
 
                 d3d12.drawFrame();
@@ -675,9 +399,7 @@ int main()
             // proceso muere al cerrar —con volcado de WER, pero sin que nada en
             // pantalla lo delate, porque ya no queda frame que dibujar.
             d3d12.waitIdle();
-            ImGui_ImplDX12_Shutdown();
-            ImGui_ImplGlfw_Shutdown();
-            ImGui::DestroyContext();
+            editor.shutdownUi();
             d3d12.shutdown();
             return 0;
         }
