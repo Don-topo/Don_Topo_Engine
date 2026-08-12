@@ -16,6 +16,7 @@ namespace DonTopo {
 class Window;
 struct Mesh;
 struct SkinnedMesh;
+struct Light;
 
 namespace D3D12 {
 
@@ -76,6 +77,16 @@ public:
     void resize(uint32_t width, uint32_t height);
 
     void setClearColor(float r, float g, float b, float a);
+
+    // Luces de la escena, en el mismo formato que el UBO de los shaders (hasta
+    // 16; el resto se descarta). Sin llamar a esto —o con count 0— el backend
+    // ilumina con una direccional propia, que es lo que da luz a la escena de
+    // arranque cuando no hay proyecto.
+    //
+    // La POSICIÓN de la primera manda además en el reparto de las cascadas de
+    // sombra, igual que en el Renderer de Vulkan: la sombra la proyecta siempre
+    // la luz 0, sea del tipo que sea.
+    void setLights(const Light* lights, size_t count);
 
     // Encuadre con el que se dibuja todo: escena, rejilla, niebla y el reparto
     // de las cascadas de sombra. `view` y `position` tienen que ser de la misma

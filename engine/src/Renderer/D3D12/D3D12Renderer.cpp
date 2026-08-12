@@ -507,6 +507,12 @@ struct D3D12Renderer::Impl {
     // signature de malla (estáticos, suelo y personajes) los necesitan.
     void bindForwardPlus();
 
+    // ── Luces ───────────────────────────────────────────────────────────
+    // Las de la escena, tal cual las manda quien la carga. Vacío = ninguna
+    // escena las ha puesto todavía, y entonces se usa la direccional de
+    // relleno del backend, que es lo que ilumina la escena de arranque.
+    std::vector<ShaderLight> sceneLights;
+
     // ── Cámara ──────────────────────────────────────────────────────────
     // Un solo sitio: la rejilla, la malla, la niebla y el reparto de cascadas
     // tenían cada uno su lookAt copiado, y bastaba con tocar uno para que el
@@ -1481,6 +1487,20 @@ void D3D12Renderer::Impl::updateSceneUbo()
     ubo.cascadeSplits = cascadeSplits;
     for (int i = 0; i < kShadowCascades; ++i)
         ubo.lightSpaceMatrix[i] = cascadeMatrices[i];
+
+    if (!sceneLights.empty()) {
+        // Las de la escena mandan: sin esto el backend iluminaba con su
+        // direccional de relleno y una escena con focos se veía a oscuras
+        // aunque los tuviera bien puestos.
+        const size_t count = (std::min)(sceneLights.size(), static_cast<size_t>(16));
+        std::memcpy(ubo.lights, sceneLights.data(), count * sizeof(ShaderLight));
+        ubo.numLights = static_cast<int>(count);
+
+        ubo.viewPos          = glm::vec4(cameraPos, 1.0f);
+        ubo.ambientIntensity = state->ambientIntensity();
+        std::memcpy(sceneUboMapped[frameIndex], &ubo, sizeof(ubo));
+        return;
+    }
 
     // Una direccional (tipo 2), que es lo que el shader trata sin atenuación.
     // La dirección tiene que ser LA MISMA con la que se calcularon las
@@ -4004,6 +4024,29 @@ void D3D12Renderer::setCamera(const glm::mat4& view, const glm::vec3& position, 
     // aquí seguirían cubriendo el volumen del encuadre anterior, y la sombra se
     // quedaría atrás al mover la vista.
     d.computeCascades();
+}
+
+void D3D12Renderer::setLights(const Light* lights, size_t count)
+{
+    Impl& d = *m_impl;
+    d.sceneLights.clear();
+    if (!lights || count == 0)
+        return;
+
+    count = (std::min)(count, static_cast<size_t>(16));
+    d.sceneLights.resize(count);
+    std::memcpy(d.sceneLights.data(), lights, count * sizeof(ShaderLight));
+
+    // La dirección de las cascadas sale de la POSICIÓN de la primera luz, del
+    // tipo que sea, igual que en el camino de Vulkan: la sombra en cascada la
+    // proyecta siempre la luz 0, y tomar su dirección de otro sitio la pondría
+    // donde no llega la luz.
+    const glm::vec3 first(d.sceneLights[0].position[0], d.sceneLights[0].position[1],
+                          d.sceneLights[0].position[2]);
+    if (glm::length(first) > 1e-6f) {
+        d.lightDirection = -glm::normalize(first);
+        d.computeCascades();
+    }
 }
 
 void D3D12Renderer::setClearColor(float r, float g, float b, float a)

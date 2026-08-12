@@ -147,6 +147,16 @@ int main()
                         d3d12.setTransform(static_cast<size_t>(index), node->worldTransform);
                         ++added;
                     });
+                    // Las luces de la escena, con sus transformaciones ya
+                    // derivadas: el backend traía una direccional de relleno, y
+                    // una escena iluminada solo con focos se veía a oscuras.
+                    {
+                        std::vector<DonTopo::Light> lights;
+                        std::vector<float>          radii;
+                        d3dScene.collectLights(lights, radii);
+                        d3d12.setLights(lights.data(), lights.size());
+                    }
+
                     std::cout << "D3D12: escena '" << sceneFile.string() << "' cargada, "
                               << added << " mallas estaticas y " << addedSkinned
                               << " personajes" << std::endl;
