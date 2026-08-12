@@ -46,15 +46,14 @@ BackendSelection resolveRenderBackend(RenderBackend requested)
         return sel;
     }
 
-    // La máquina lo soporta: se arranca con él. El backend presenta, pero
-    // todavía no dibuja escena ni UI —eso llega en las fases siguientes—, así
-    // que el aviso NO es un fallback: es la advertencia de hasta dónde llega.
+    // La máquina lo soporta: se arranca con él. El aviso NO es un fallback, es
+    // la advertencia de hasta dónde llega el backend hoy.
     sel.backend  = RenderBackend::D3D12;
     sel.fellBack = false;
     sel.message  = "Backend DirectX 12 activo (" + support.adapterName +
-                  "). Dibuja geometría, luz, sombras y post-procesado, pero "
-                  "todavía no carga la escena del proyecto ni el editor; para "
-                  "trabajar, elige Vulkan.";
+                  "). Corre el editor con la escena del proyecto, pero todavía "
+                  "no dibuja la UI 2D del juego ni las sondas de reflexión, y el "
+                  "juego exportado sigue arrancando con Vulkan.";
     return sel;
 #endif
 }

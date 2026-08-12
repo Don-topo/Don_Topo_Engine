@@ -182,117 +182,18 @@ int main()
             DonTopo::ScriptManager d3dScripts;
             DonTopo::Scene         d3dScene;
 
-            {
-                const std::filesystem::path sceneFile =
-                    lastProject.empty() ? std::filesystem::path{}
-                                        : lastProject / "scenes" / "main.json";
+            // El proyecto, que es de donde sale la escena y los ajustes. Vive
+            // aquí, fuera de todo, porque los paneles lo consultan durante toda
+            // la sesión.
+            DonTopo::ProjectContext d3dProject;
+            if (!lastProject.empty())
+                d3dProject = DonTopo::ProjectContext(lastProject);
 
-                bool loaded = false;
-                if (!sceneFile.empty() && std::filesystem::exists(sceneFile))
-                    loaded = d3dScene.load(sceneFile.string(), d3dPhysics, d3dAudio);
-
-                if (loaded)
-                {
-                    // Mismo criterio que el editor: cada nodo con malla estática
-                    // se sube y se queda con su índice de render, para poder
-                    // moverlo después.
-                    // Las matrices de mundo se derivan de la jerarquía una vez
-                    // cargada: sin esto, un hijo se subiría con la
-                    // transformación de su padre sin aplicar.
-                    d3dScene.getRoot().updateWorldTransforms();
-
-                    int added        = 0;
-                    int addedSkinned = 0;
-                    d3dScene.traverse([&](DonTopo::GameObject* node) {
-                        if (node == nullptr || !node->hasMesh())
-                            return;
-
-                        if (node->isSkinned())
-                        {
-                            const DonTopo::SkinnedMesh* skinned = node->getSkinnedMesh();
-                            if (!skinned)
-                                return;
-                            const int index = d3d12.addSkinnedMesh(*skinned);
-                            if (index < 0)
-                                return;
-                            node->skinnedRenderIndex = index;
-                            d3d12.setSkinnedTransform(index, node->worldTransform);
-                            d3d12.setSkinnedSsr(index,
-                                                node->ssrEnabled ? node->ssrIntensity : 0.0f);
-                            ++addedSkinned;
-                            return;
-                        }
-
-                        const std::shared_ptr<DonTopo::Mesh> mesh = node->getMesh();
-                        if (!mesh)
-                            return;
-                        const int index = d3d12.addStaticMesh(*mesh);
-                        if (index < 0)
-                            return;
-                        node->staticRenderIndex = index;
-                        d3d12.setTransform(static_cast<size_t>(index), node->worldTransform);
-                        d3d12.setObjectSsr(static_cast<size_t>(index),
-                                           node->ssrEnabled ? node->ssrIntensity : 0.0f);
-                        ++added;
-                    });
-                    // Las luces NO se mandan aquí: van por frame en el bucle,
-                    // que es lo que hace que moverlas se vea.
-
-                    std::cout << "D3D12: escena '" << sceneFile.string() << "' cargada, "
-                              << added << " mallas estaticas y " << addedSkinned
-                              << " personajes" << std::endl;
-
-                    // Sin personajes en la escena se carga el de pruebas del
-                    // repo: el skinning por compute es de lo poco que no se ve
-                    // en una escena estática, y dejarlo sin nada que enseñar
-                    // haría pasar por rota una ruta que funciona.
-                    if (addedSkinned == 0)
-                    {
-                        try {
-                            const DonTopo::SkinnedMesh demo = DonTopo::ModelLoader::loadSkinned(
-                                "assets/animatedCharacter/Maw J Laygo.fbx");
-                            const int index = d3d12.addSkinnedMesh(demo);
-                            if (index >= 0)
-                            {
-                                // El FBX viene en centímetros: sin reescalar
-                                // mediría cien veces la rejilla.
-                                d3d12.setSkinnedTransform(
-                                    static_cast<size_t>(index),
-                                    glm::scale(glm::translate(glm::mat4(1.0f),
-                                                              glm::vec3(-3.0f, 0.0f, 0.0f)),
-                                               glm::vec3(0.02f)));
-                            }
-                        } catch (const std::exception&) {
-                            // El repo puede no traer el FBX: no es motivo para
-                            // tumbar el arranque.
-                        }
-                    }
-                }
-                else
-                {
-                    // Sin proyecto o sin escena: unas cuantas cajas para que el
-                    // backend tenga algo que enseñar en vez de un suelo vacío.
-                    const DonTopo::Mesh cube = DonTopo::Cube::create(2.0f);
-                    const struct { glm::vec3 pos; float scale; } layout[] = {
-                        {{0.0f, 1.0f, 0.0f}, 1.0f},
-                        {{4.0f, 0.6f, -2.0f}, 0.6f},
-                        {{-4.5f, 1.6f, 1.0f}, 1.6f},
-                        {{2.0f, 0.4f, 4.0f}, 0.4f},
-                    };
-                    for (const auto& entry : layout)
-                    {
-                        const int index = d3d12.addStaticMesh(cube);
-                        if (index < 0)
-                            continue;
-                        d3d12.setTransform(
-                            (size_t)index,
-                            glm::scale(glm::translate(glm::mat4(1.0f), entry.pos),
-                                       glm::vec3(entry.scale)));
-                    }
-                    std::cout << "D3D12: sin escena de proyecto, " << d3d12.objectCount()
-                              << " cajas de muestra" << std::endl;
-                }
-            }
+            // JobSystem y carga asíncrona: sin esto Load Scene cae al camino
+            // síncrono y bloquea el frame entero mientras Assimp trabaja.
+            DonTopo::JobSystem d3dJobs;
+            d3dJobs.start();
+            DonTopo::AsyncAssetLoader d3dAssets(d3dJobs);
 
             glfwSetWindowUserPointer(window.getNativeWindow(), &d3d12);
             glfwSetFramebufferSizeCallback(
@@ -332,6 +233,7 @@ int main()
             editor.setScene(&d3dScene);
             editor.setPhysicsManager(&d3dPhysics);
             editor.setAudioManager(&d3dAudio);
+            editor.setAssetLoader(&d3dAssets);
 
             // Scripting, con el mismo cableado que el camino de Vulkan.
             d3dScripts.setScene(&d3dScene);
@@ -376,8 +278,49 @@ int main()
             d3dScripts.init(d3dScriptsDir.string());
             editor.setScriptManager(&d3dScripts);
             editor.pushExternalLog(
-                "DirectX 12: el editor corre sobre este backend. Sin UI 2D del juego, "
-                "sin gizmos de transformacion y sin sondas de reflexion todavia.");
+                "DirectX 12: el editor corre sobre este backend. Sin UI 2D del juego y sin "
+                "sondas de reflexion todavia.");
+
+            // La escena la abre el EDITOR, no este main: así pasa por el mismo
+            // sitio que el Load Scene del menú —con su sandbox de proyecto, su
+            // carga asíncrona y su registro de mallas— y los ajustes del
+            // project.json (anti-aliasing, bloom, niebla, Forward+, paneles) se
+            // aplican solos en el primer frame, que es lo que hace
+            // applyProjectSettings.
+            if (d3dProject.valid())
+            {
+                editor.setProject(&d3dProject);
+                if (editor.openProjectScene())
+                    std::cout << "D3D12: escena del proyecto abierta, " << d3d12.objectCount()
+                              << " mallas estaticas y " << d3d12.skinnedCount() << " personajes"
+                              << std::endl;
+                else
+                    std::cout << "D3D12: el proyecto no tiene escena de arranque" << std::endl;
+            }
+            else
+            {
+                // Sin proyecto: unas cajas para que el backend tenga algo que
+                // enseñar en vez de un suelo vacío.
+                const DonTopo::Mesh cube = DonTopo::Cube::create(2.0f);
+                const struct { glm::vec3 pos; float scale; } layout[] = {
+                    {{0.0f, 1.0f, 0.0f}, 1.0f},
+                    {{4.0f, 0.6f, -2.0f}, 0.6f},
+                    {{-4.5f, 1.6f, 1.0f}, 1.6f},
+                    {{2.0f, 0.4f, 4.0f}, 0.4f},
+                };
+                for (const auto& entry : layout)
+                {
+                    const int index = d3d12.addStaticMesh(cube);
+                    if (index < 0)
+                        continue;
+                    d3d12.setTransform(
+                        (size_t)index,
+                        glm::scale(glm::translate(glm::mat4(1.0f), entry.pos),
+                                   glm::vec3(entry.scale)));
+                }
+                std::cout << "D3D12: sin proyecto, " << d3d12.objectCount()
+                          << " cajas de muestra" << std::endl;
+            }
 
             // Cámara de vuelo, la misma que ya tenía este camino.
             DonTopo::Camera d3dCamera(glm::vec3(6.0f, 4.5f, 8.0f), -126.87f, -21.8f);
@@ -454,7 +397,13 @@ int main()
                     d3dScene.getRoot().updateWorldTransforms();
                 }
 
+                // tickDeferredDeletes primero, que libera lo borrado;
+                // onAssetsLoaded después, que aplica lo que acaba de llegar del
+                // loader y cierra el lote con un solo flush. Los dos ANTES del
+                // recorrido: un objeto cuyo mesh acaba de aterrizar tiene que
+                // estar ya registrado cuando se empujen los transform.
                 d3d12.tickDeferredDeletes();
+                editor.onAssetsLoaded(d3dAssets.pumpCompleted(2.0f), d3dScene, d3d12);
 
                 d3dScene.traverse([&](DonTopo::GameObject* go) {
                     if (go->staticRenderIndex >= 0)
@@ -561,6 +510,10 @@ int main()
             // pantalla lo delate, porque ya no queda frame que dibujar.
             d3d12.waitIdle();
             editor.shutdownUi();
+            // El JobSystem antes que el backend: un job a medias sigue tocando
+            // el loader y la escena, y pararlo después sería usarlos ya
+            // liberados.
+            d3dJobs.shutdown();
             d3d12.shutdown();
             return 0;
         }
