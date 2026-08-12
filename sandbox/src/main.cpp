@@ -346,7 +346,7 @@ int main()
                         "sombras en cascada, cielo, IBL, materiales PBR, SSAO, SSR, niebla, bloom "
                         "con tone mapping y FXAA.");
                     ImGui::TextWrapped(
-                        "Sin implementar: TAA, gizmos, UI 2D y el editor completo.");
+                        "Sin implementar: gizmos, UI 2D y el editor completo.");
                     ImGui::Spacing();
                     ImGui::TextWrapped(
                         "Camara: WASD para moverse, Q/E para bajar y subir, boton derecho "
@@ -368,10 +368,20 @@ int main()
                         // editor, con los mismos tres estados.
                         // MSAA: el numero de muestras lo recorta el backend a lo
                         // que soporte el device.
-                        bool msaa = d3d12.aaMode() == DonTopo::RendererState::AaMode::Msaa;
-                        if (ImGui::Checkbox("MSAA 4x", &msaa))
-                            d3d12.setAaModeFlag(msaa ? DonTopo::RendererState::AaMode::Msaa
-                                                     : DonTopo::RendererState::AaMode::None);
+                        // Anti-aliasing: los modos que este backend sabe hacer.
+                        // SSAA no esta, asi que no se ofrece.
+                        int aa = static_cast<int>(d3d12.aaMode());
+                        if (aa == 2) aa = 0;  // SSAA: aqui no existe
+                        const char* aaNames[] = {"Ninguno", "FXAA", "-", "MSAA", "TAA"};
+                        if (ImGui::BeginCombo("Anti-aliasing", aaNames[aa])) {
+                            for (int i = 0; i < 5; ++i) {
+                                if (i == 2) continue;
+                                if (ImGui::Selectable(aaNames[i], aa == i))
+                                    d3d12.setAaModeFlag(
+                                        static_cast<DonTopo::RendererState::AaMode>(i));
+                            }
+                            ImGui::EndCombo();
+                        }
 
                         int fp = static_cast<int>(d3d12.forwardPlusMode());
                         if (ImGui::Combo("Forward+", &fp, "Off Tiled Clustered "))

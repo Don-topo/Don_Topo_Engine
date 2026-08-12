@@ -134,6 +134,22 @@ inline uint16_t floatToHalf(float value)
     return static_cast<uint16_t>((negative ? 0x8000u : 0u) | (biased << 10) | mantissa);
 }
 
+// Secuencia de Halton en base b: la sucesión de baja discrepancia con la que el
+// TAA reparte las muestras dentro del píxel. Cubre el área mucho más
+// uniformemente que un aleatorio, que es lo que hace que el promedio temporal
+// converja a un supersampling de verdad.
+inline float halton(uint32_t index, uint32_t base)
+{
+    float result = 0.0f;
+    float f      = 1.0f;
+    while (index > 0) {
+        f      /= static_cast<float>(base);
+        result += f * static_cast<float>(index % base);
+        index  /= base;
+    }
+    return result;
+}
+
 // IBL. Mismos tamaños que el camino de Vulkan (Renderer.h): el prefiltrado
 // reparte la rugosidad entre sus mips, y pbr.frag lo da por hecho con un
 // #define propio.
@@ -269,7 +285,11 @@ constexpr UINT kUavSsaoBlur     = kSrvSsaoRaw + 1;
 constexpr UINT kUavSsr = kUavSsaoBlur + 1;
 constexpr UINT kSrvSsr = kUavSsr + 1;
 
-constexpr UINT kSrvHeapSize = kSrvSsr + 1;
+// Historial del TAA: dos imágenes que se alternan, porque el mismo pase lee la
+// del frame anterior y escribe la de este.
+constexpr UINT kSrvTaaHistory = kSrvSsr + 1;  // + índice (0 o 1)
+
+constexpr UINT kSrvHeapSize = kSrvTaaHistory + 2;
 
 // Push de ssao.comp y ssao_blur.comp: los dos comparten el bloque, así que el
 // rango de root constants tiene que ser el mismo para los dos pipelines.
@@ -296,6 +316,15 @@ struct SsrPush {
     float     intensity;
 };
 static_assert(sizeof(SsrPush) == 48, "SsrPush debe ocupar 48 bytes");
+
+// Push de taa.frag: la reproyección al frame anterior y el peso del historial.
+struct TaaPush {
+    glm::mat4 reproject;
+    glm::vec2 invRes;
+    float     feedback;
+    int32_t   historyValid;
+};
+static_assert(sizeof(TaaPush) == 80, "TaaPush debe ocupar 80 bytes");
 
 // Niebla volumétrica: push propio de 128 bytes.
 struct FogPush {
@@ -664,6 +693,23 @@ struct D3D12Renderer::Impl {
     void ensureForwardPlusGrid(uint32_t cells);
     void updateForwardPlus();   // parámetros y luces del frame
     void recordForwardPlusCull();
+
+    ComPtr<ID3D12RootSignature> taaRootSignature;
+    ComPtr<ID3D12PipelineState> taaPipeline;
+    std::array<D3D12MA::Allocation*, 2> taaHistoryAllocations{};
+
+    // Cuál de las dos historias se escribe este frame. La otra es la que se lee.
+    UINT      taaHistoryIndex = 0;
+    bool      taaHistoryValid = false;
+    uint32_t  taaJitterIndex  = 0;
+    glm::mat4 taaCurrViewProj{1.0f};
+    glm::mat4 taaPrevViewProj{1.0f};
+    // Proyección del frame CON el desplazamiento de subpíxel. Fuera de TAA es
+    // la de la cámara tal cual.
+    glm::mat4 taaJitteredProj{1.0f};
+
+    void createTaaPipeline();
+    void recordTaa(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv);
 
     void createSsrPipelines();
     void recordSsr();
@@ -1654,9 +1700,31 @@ void D3D12Renderer::Impl::createMeshResources()
 
 void D3D12Renderer::Impl::updateSceneUbo()
 {
+    // View-proj SIN jitter: es la que reproyecta el TAA y la que se compara con
+    // la del frame anterior.
+    taaPrevViewProj = taaCurrViewProj;
+    taaCurrViewProj = cameraProj() * cameraView;
+    taaJitteredProj = cameraProj();
+
+    if (state->aaMode() == RendererState::AaMode::Taa) {
+        // Halton(2,3) desplazado a [-0.5, 0.5] píxeles: 16 posiciones antes de
+        // repetir, suficientes para que el promedio sea estable y pocas para
+        // que el ciclo no se note al parar la cámara.
+        const glm::vec2 jitter(
+            (halton(taaJitterIndex + 1, 2) - 0.5f) * state->taaJitterScale(),
+            (halton(taaJitterIndex + 1, 3) - 0.5f) * state->taaJitterScale());
+        taaJitterIndex = (taaJitterIndex + 1) % 16;
+
+        // En clip space el ancho completo es 2, de ahí el factor. Va sobre la
+        // columna de la Z para que el desplazamiento sea constante en pantalla
+        // a cualquier profundidad.
+        taaJitteredProj[2][0] += 2.0f * jitter.x / static_cast<float>(width);
+        taaJitteredProj[2][1] += 2.0f * jitter.y / static_cast<float>(height);
+    }
+
     SceneUbo ubo{};
     ubo.view = cameraView;
-    ubo.proj = cameraProj();
+    ubo.proj = taaJitteredProj;
     // Vulkan tiene el eje Y de pantalla invertido respecto a OpenGL y el motor
     // lo compensa ahí; D3D12 usa la misma orientación que OpenGL, así que aquí
     // NO se invierte.
@@ -2119,6 +2187,13 @@ void D3D12Renderer::Impl::recordSkinning()
 
 void D3D12Renderer::Impl::releaseHdrTargets()
 {
+    for (auto* allocation : taaHistoryAllocations) {
+        if (allocation)
+            allocation->Release();
+    }
+    taaHistoryAllocations = {};
+    taaHistoryValid       = false;
+
     for (auto** allocation : {&hdrMsAllocation, &depthMsAllocation}) {
         if (*allocation) {
             (*allocation)->Release();
@@ -2256,6 +2331,37 @@ void D3D12Renderer::Impl::createHdrTargets()
         D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = dsvHeap->GetCPUDescriptorHandleForHeapStart();
         dsvHandle.ptr += dsvSize;
         device->CreateDepthStencilView(depthMsAllocation->GetResource(), &msDsv, dsvHandle);
+    }
+
+    // Historial del TAA: dos imágenes del formato de la composición, que es lo
+    // que el pase mezcla.
+    for (UINT i = 0; i < 2; ++i) {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width            = width;
+        desc.Height           = height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+        D3D12_CLEAR_VALUE clear{};
+        clear.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+        D3D12MA::ALLOCATION_DESC allocDesc{};
+        allocDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+        throwIfFailed(allocator->CreateResource(&allocDesc, &desc,
+                                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear,
+                                                &taaHistoryAllocations[i], IID_NULL, nullptr),
+                      "D3D12MA::Allocator::CreateResource(historial del TAA)");
+
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        rtv.ptr += static_cast<SIZE_T>(kFrameCount + 3 + i) * rtvSize;
+        device->CreateRenderTargetView(taaHistoryAllocations[i]->GetResource(), nullptr, rtv);
+
+        createTexture2DSrv(taaHistoryAllocations[i]->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
+                           kSrvTaaHistory + i);
     }
 
     D3D12_SHADER_RESOURCE_VIEW_DESC hdrSrv{};
@@ -3237,6 +3343,173 @@ void D3D12Renderer::Impl::recordForwardPlusCull()
     fpListsInPixelState = true;
 }
 
+void D3D12Renderer::Impl::createTaaPipeline()
+{
+    // t0 la imagen del frame, t1 el historial, t2 la profundidad. Cada una en
+    // su tabla: viven en huecos del heap que no son contiguos.
+    D3D12_DESCRIPTOR_RANGE ranges[3]{};
+    for (UINT i = 0; i < 3; ++i) {
+        ranges[i].RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        ranges[i].NumDescriptors     = 1;
+        ranges[i].BaseShaderRegister = i;
+    }
+
+    D3D12_ROOT_PARAMETER params[4]{};
+    params[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[0].Constants.ShaderRegister = 0;
+    params[0].Constants.Num32BitValues = sizeof(TaaPush) / 4;
+    for (UINT i = 0; i < 3; ++i) {
+        params[1 + i].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        params[1 + i].DescriptorTable.NumDescriptorRanges = 1;
+        params[1 + i].DescriptorTable.pDescriptorRanges   = &ranges[i];
+        params[1 + i].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+    }
+
+    // La imagen y el historial se filtran —la reproyección cae entre píxeles—;
+    // la profundidad no.
+    D3D12_STATIC_SAMPLER_DESC samplers[3]{};
+    for (UINT i = 0; i < 3; ++i) {
+        samplers[i].Filter = (i == 2) ? D3D12_FILTER_MIN_MAG_MIP_POINT
+                                      : D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        samplers[i].AddressU       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        samplers[i].AddressV       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        samplers[i].AddressW       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        samplers[i].MaxLOD         = D3D12_FLOAT32_MAX;
+        samplers[i].ShaderRegister = i;
+        samplers[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    }
+
+    D3D12_ROOT_SIGNATURE_DESC rootDesc{};
+    rootDesc.NumParameters     = _countof(params);
+    rootDesc.pParameters       = params;
+    rootDesc.NumStaticSamplers = _countof(samplers);
+    rootDesc.pStaticSamplers   = samplers;
+
+    ComPtr<ID3DBlob> serialized;
+    ComPtr<ID3DBlob> errorBlob;
+    HRESULT          hr = D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                                      &serialized, &errorBlob);
+    if (FAILED(hr)) {
+        std::string detail;
+        if (errorBlob)
+            detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
+                          errorBlob->GetBufferSize());
+        throw std::runtime_error("D3D12: root signature del TAA (HRESULT " + hresultToString(hr) +
+                                 ") " + detail);
+    }
+    throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                              serialized->GetBufferSize(),
+                                              IID_PPV_ARGS(&taaRootSignature)),
+                  "ID3D12Device::CreateRootSignature(TAA)");
+
+    const std::vector<char> vertexShader = readBinaryFile("shaders/fullscreen.vert.dxil");
+    const std::vector<char> pixelShader  = readBinaryFile("shaders/taa.frag.dxil");
+
+    // Dos destinos: el backbuffer y el historial de este frame, que es lo que
+    // leerá el siguiente. El shader escribe los dos en la misma pasada.
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature        = taaRootSignature.Get();
+    psoDesc.VS                    = {vertexShader.data(), vertexShader.size()};
+    psoDesc.PS                    = {pixelShader.data(), pixelShader.size()};
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets      = 2;
+    psoDesc.RTVFormats[0]         = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[1]         = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.DSVFormat             = DXGI_FORMAT_UNKNOWN;
+    psoDesc.SampleDesc.Count      = 1;
+    psoDesc.SampleMask            = UINT_MAX;
+
+    psoDesc.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.DepthClipEnable = TRUE;
+    for (auto& rt : psoDesc.BlendState.RenderTarget)
+        rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    psoDesc.DepthStencilState.DepthEnable   = FALSE;
+    psoDesc.DepthStencilState.StencilEnable = FALSE;
+
+    throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&taaPipeline)),
+                  "ID3D12Device::CreateGraphicsPipelineState(TAA)");
+}
+
+void D3D12Renderer::Impl::recordTaa(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv)
+{
+    if (!taaPipeline || !taaHistoryAllocations[0] || !taaHistoryAllocations[1])
+        return;
+
+    const UINT writeIndex = taaHistoryIndex;
+    const UINT readIndex  = 1 - taaHistoryIndex;
+
+    auto transition = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES before,
+                          D3D12_RESOURCE_STATES after) {
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource   = resource;
+        barrier.Transition.StateBefore = before;
+        barrier.Transition.StateAfter  = after;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &barrier);
+    };
+
+    transition(taaHistoryAllocations[writeIndex]->GetResource(),
+               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    transition(readableDepth(), readableDepthState(),
+               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE historyRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    historyRtv.ptr += static_cast<SIZE_T>(kFrameCount + 3 + writeIndex) * rtvSize;
+
+    const D3D12_CPU_DESCRIPTOR_HANDLE targets[2] = {backBufferRtv, historyRtv};
+    commandList->OMSetRenderTargets(2, targets, FALSE, nullptr);
+
+    // Altura negativa por lo mismo que la composición: fullscreen.vert saca la
+    // uv del NDC dando por hecho la orientación de Vulkan.
+    D3D12_VIEWPORT viewport{};
+    viewport.TopLeftY = static_cast<float>(height);
+    viewport.Width    = static_cast<float>(width);
+    viewport.Height   = -static_cast<float>(height);
+    viewport.MaxDepth = 1.0f;
+    const D3D12_RECT scissor{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+    commandList->RSSetViewports(1, &viewport);
+    commandList->RSSetScissorRects(1, &scissor);
+
+    ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetPipelineState(taaPipeline.Get());
+    commandList->SetGraphicsRootSignature(taaRootSignature.Get());
+
+    TaaPush push{};
+    // Del clip de ESTE frame al del anterior, las dos sin jitter: el
+    // desplazamiento de subpíxel es ruido de muestreo, no movimiento de cámara,
+    // y meterlo aquí arrastraría el historial.
+    push.reproject    = taaPrevViewProj * glm::inverse(taaCurrViewProj);
+    push.invRes       = glm::vec2(1.0f / static_cast<float>(width),
+                                  1.0f / static_cast<float>(height));
+    push.feedback     = state->taaFeedback();
+    push.historyValid = taaHistoryValid ? 1 : 0;
+    commandList->SetGraphicsRoot32BitConstants(0, sizeof(TaaPush) / 4, &push, 0);
+
+    auto gpuHandle = [&](UINT index) {
+        D3D12_GPU_DESCRIPTOR_HANDLE handle = srvHeap->GetGPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<UINT64>(index) * srvSize;
+        return handle;
+    };
+    commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(kSrvLdr));
+    commandList->SetGraphicsRootDescriptorTable(2, gpuHandle(kSrvTaaHistory + readIndex));
+    commandList->SetGraphicsRootDescriptorTable(3, gpuHandle(readableDepthSrv()));
+
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList->DrawInstanced(3, 1, 0, 0);
+
+    transition(taaHistoryAllocations[writeIndex]->GetResource(),
+               D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    transition(readableDepth(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+               readableDepthState());
+
+    // El historial de este frame es el que leerá el siguiente.
+    taaHistoryIndex = readIndex;
+    taaHistoryValid = true;
+}
+
 void D3D12Renderer::Impl::createSsrPipelines()
 {
     D3D12_DESCRIPTOR_RANGE sceneRange{};
@@ -4159,19 +4432,29 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     transition(ldrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-    FxaaPush fxaaPush{};
-    fxaaPush.invRes[0]        = 1.0f / static_cast<float>(width);
-    fxaaPush.invRes[1]        = 1.0f / static_cast<float>(height);
-    fxaaPush.subpix           = state->fxaaSubpix();
-    fxaaPush.edgeThreshold    = state->fxaaEdgeThreshold();
-    fxaaPush.edgeThresholdMin = state->fxaaEdgeThresholdMin();
+    if (state->aaMode() == RendererState::AaMode::Taa) {
+        // El TAA ocupa el sitio del FXAA: mezcla esta imagen con la del frame
+        // anterior y escribe a la vez el backbuffer y el historial siguiente.
+        recordTaa(backBufferRtv);
+    } else {
+        FxaaPush fxaaPush{};
+        fxaaPush.invRes[0]        = 1.0f / static_cast<float>(width);
+        fxaaPush.invRes[1]        = 1.0f / static_cast<float>(height);
+        fxaaPush.subpix           = state->fxaaSubpix();
+        fxaaPush.edgeThreshold    = state->fxaaEdgeThreshold();
+        fxaaPush.edgeThresholdMin = state->fxaaEdgeThresholdMin();
 
-    commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
-    commandList->SetPipelineState(fxaaPipeline.Get());
-    commandList->SetGraphicsRootSignature(fxaaRootSignature.Get());
-    commandList->SetGraphicsRoot32BitConstants(0, sizeof(FxaaPush) / 4, &fxaaPush, 0);
-    commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(kSrvLdr));
-    commandList->DrawInstanced(3, 1, 0, 0);
+        commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
+        commandList->SetPipelineState(fxaaPipeline.Get());
+        commandList->SetGraphicsRootSignature(fxaaRootSignature.Get());
+        commandList->SetGraphicsRoot32BitConstants(0, sizeof(FxaaPush) / 4, &fxaaPush, 0);
+        commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(kSrvLdr));
+        commandList->DrawInstanced(3, 1, 0, 0);
+
+        // Sin acumulación temporal el historial deja de valer: al volver a TAA
+        // hay que empezar de cero o el primer frame mezcla una imagen vieja.
+        taaHistoryValid = false;
+    }
 
     transition(ldrAllocation->GetResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -4727,7 +5010,7 @@ void D3D12Renderer::init(Window& window)
     // que la composición deja para FXAA.
     // Los de la swapchain, el HDR, el LDR de la composición y el color
     // multimuestra del pase de escena cuando hay MSAA.
-    rtvHeapDesc.NumDescriptors = kFrameCount + 3;
+    rtvHeapDesc.NumDescriptors = kFrameCount + 5;  // + las dos historias del TAA
     rtvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     throwIfFailed(d.device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&d.rtvHeap)),
@@ -4806,6 +5089,7 @@ void D3D12Renderer::init(Window& window)
     d.precomputeIbl();
     d.createFogAndFxaaPipelines();
     d.createSsrPipelines();
+    d.createTaaPipeline();
     d.createForwardPlusPipelines();
     d.updateViewProj();
 
@@ -5594,6 +5878,8 @@ void D3D12Renderer::shutdown()
         d.fpStatsAllocation->Release();
         d.fpStatsAllocation = nullptr;
     }
+    d.taaPipeline.Reset();
+    d.taaRootSignature.Reset();
     d.ssrPipeline.Reset();
     d.ssrResolvePipeline.Reset();
     d.ssrRootSignature.Reset();
