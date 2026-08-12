@@ -397,6 +397,25 @@ struct D3D12Renderer::Impl {
     void*                skinnedInstanceMapped     = nullptr;
     size_t               skinnedInstanceCapacity   = 0;
 
+    // ── Cámara ──────────────────────────────────────────────────────────
+    // Un solo sitio: la rejilla, la malla, la niebla y el reparto de cascadas
+    // tenían cada uno su lookAt copiado, y bastaba con tocar uno para que el
+    // suelo dejara de caer bajo los objetos.
+    glm::vec3 cameraPos{6.0f, 4.5f, 8.0f};
+    glm::mat4 cameraView =
+        glm::lookAtRH(glm::vec3(6.0f, 4.5f, 8.0f), glm::vec3(0.0f, 0.5f, 0.0f),
+                      glm::vec3(0.0f, 1.0f, 0.0f));
+    float cameraFovDeg = 60.0f;
+
+    // perspectiveRH_ZO, no perspective a secas: D3D12 clipea en z=[0,1] igual
+    // que Vulkan, y con la convención de OpenGL se pierde la mitad cercana.
+    glm::mat4 cameraProj() const
+    {
+        const float aspect =
+            (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
+        return glm::perspectiveRH_ZO(glm::radians(cameraFovDeg), aspect, 0.1f, 500.0f);
+    }
+
     void ensureSkinnedInstanceBuffer(size_t count);
 
     // Suelta los recursos GPU de todos los personajes. NO espera a la GPU: los
@@ -1259,12 +1278,9 @@ void D3D12Renderer::Impl::createMeshResources()
 
 void D3D12Renderer::Impl::updateSceneUbo()
 {
-    const float aspect = (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
-
     SceneUbo ubo{};
-    ubo.view = glm::lookAtRH(glm::vec3(6.0f, 4.5f, 8.0f), glm::vec3(0.0f, 0.5f, 0.0f),
-                             glm::vec3(0.0f, 1.0f, 0.0f));
-    ubo.proj = glm::perspectiveRH_ZO(glm::radians(60.0f), aspect, 0.1f, 500.0f);
+    ubo.view = cameraView;
+    ubo.proj = cameraProj();
     // Vulkan tiene el eje Y de pantalla invertido respecto a OpenGL y el motor
     // lo compensa ahí; D3D12 usa la misma orientación que OpenGL, así que aquí
     // NO se invierte.
@@ -2179,9 +2195,8 @@ void D3D12Renderer::Impl::recordFog()
 
     const float     aspect = (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
     const glm::mat4 proj   = glm::perspectiveRH_ZO(glm::radians(60.0f), aspect, 0.1f, 500.0f);
-    const glm::vec3 camPos(6.0f, 4.5f, 8.0f);
-    const glm::mat4 view = glm::lookAtRH(camPos, glm::vec3(0.0f, 0.5f, 0.0f),
-                                         glm::vec3(0.0f, 1.0f, 0.0f));
+    const glm::vec3  camPos = cameraPos;
+    const glm::mat4& view   = cameraView;
 
     FogPush push{};
     // La misma proyección con la que se grabó la profundidad. En Vulkan aquí
@@ -2559,10 +2574,8 @@ void D3D12Renderer::Impl::computeCascades()
         matrix = glm::mat4(1.0f);
     cascadeSplits = glm::vec4(0.0f);
 
-    const float aspect = (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
-    const glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(60.0f), aspect, 0.1f, 500.0f);
-    const glm::mat4 view = glm::lookAtRH(glm::vec3(6.0f, 4.5f, 8.0f), glm::vec3(0.0f, 0.5f, 0.0f),
-                                         glm::vec3(0.0f, 1.0f, 0.0f));
+    const glm::mat4  proj = cameraProj();
+    const glm::mat4& view = cameraView;
 
     // Esquinas del frustum desproyectando el cubo NDC. z de 0 a 1, que es el
     // rango que clipea D3D12 (y también Vulkan).
@@ -2768,18 +2781,7 @@ void D3D12Renderer::Impl::recordShadowPasses()
 
 void D3D12Renderer::Impl::updateViewProj()
 {
-    const float aspect = (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
-
-    // Perspective_RH_ZO, no perspective a secas: D3D12 clipea en z=[0,1] igual
-    // que Vulkan, y con la convención de OpenGL se pierde la mitad cercana.
-    // MISMA cámara que updateSceneUbo: la rejilla y la malla tienen que
-    // compartir encuadre o el suelo no cae bajo el cubo.
-    const glm::mat4 projection =
-        glm::perspectiveRH_ZO(glm::radians(60.0f), aspect, 0.1f, 500.0f);
-    const glm::mat4 view = glm::lookAtRH(glm::vec3(6.0f, 4.5f, 8.0f),
-                                         glm::vec3(0.0f, 0.5f, 0.0f),
-                                         glm::vec3(0.0f, 1.0f, 0.0f));
-    viewProj = projection * view;
+    viewProj = cameraProj() * cameraView;
 }
 
 D3D12Renderer::D3D12Renderer() : m_impl(std::make_unique<Impl>())
@@ -3325,6 +3327,22 @@ void D3D12Renderer::Impl::applyPendingResize()
     // cambiar de forma: sin recalcularlas, los volúmenes de sombra siguen
     // ajustados al aspecto anterior.
     computeCascades();
+}
+
+void D3D12Renderer::setCamera(const glm::mat4& view, const glm::vec3& position, float fovDegrees)
+{
+    Impl& d      = *m_impl;
+    d.cameraView = view;
+    d.cameraPos  = position;
+    if (fovDegrees > 0.0f)
+        d.cameraFovDeg = fovDegrees;
+
+    d.updateViewProj();
+
+    // Las cascadas se reparten sobre el frustum de la cámara: sin recalcularlas
+    // aquí seguirían cubriendo el volumen del encuadre anterior, y la sombra se
+    // quedaría atrás al mover la vista.
+    d.computeCascades();
 }
 
 void D3D12Renderer::setClearColor(float r, float g, float b, float a)

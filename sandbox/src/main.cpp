@@ -280,6 +280,17 @@ int main()
             bool uiSavePending   = false;
             std::string uiSaveResult;
 
+            // Cámara navegable: WASD/QE para moverse y boton derecho para
+            // mirar, igual que el viewport del editor. Sale de (6, 4.5, 8)
+            // mirando al origen, que es el encuadre fijo que tenia el backend.
+            DonTopo::Camera d3dCamera(glm::vec3(6.0f, 4.5f, 8.0f), -126.87f, -21.8f);
+            d3dCamera.moveSpeed = 8.0f;  // la rejilla mide 20: 50 la cruza en medio segundo
+            d3d12.setCamera(d3dCamera.getViewMatrix(), d3dCamera.getPos(), d3dCamera.getFov());
+
+            double d3dLastX = 0.0, d3dLastY = 0.0;
+            bool   d3dLooking = false;
+            auto   d3dLastFrame = std::chrono::high_resolution_clock::now();
+
             d3d12.setUiDrawCallback([&]() {
                 ImGui_ImplDX12_RenderDrawData(
                     ImGui::GetDrawData(),
@@ -289,6 +300,11 @@ int main()
             while (!window.shouldClose())
             {
                 window.pollEvents();
+
+                const auto  d3dNow = std::chrono::high_resolution_clock::now();
+                const float d3dDelta =
+                    std::chrono::duration<float>(d3dNow - d3dLastFrame).count();
+                d3dLastFrame = d3dNow;
 
                 ImGui_ImplDX12_NewFrame();
                 ImGui_ImplGlfw_NewFrame();
@@ -313,8 +329,12 @@ int main()
                         "personajes animados por compute, iluminacion directa, profundidad, "
                         "sombras en cascada, niebla, bloom con tone mapping y FXAA.");
                     ImGui::TextWrapped(
-                        "Sin implementar: camara navegable, SSAO, SSR, TAA, MSAA, IBL, "
-                        "skybox, gizmos, UI 2D y el editor completo.");
+                        "Sin implementar: SSAO, SSR, TAA, MSAA, IBL, skybox, gizmos, UI 2D "
+                        "y el editor completo.");
+                    ImGui::Spacing();
+                    ImGui::TextWrapped(
+                        "Camara: WASD para moverse, Q/E para bajar y subir, boton derecho "
+                        "para mirar.");
 
                     ImGui::Separator();
                     ImGui::TextWrapped(
@@ -383,6 +403,44 @@ int main()
                 }
 
                 ImGui::Render();
+
+                // La cámara despues de la UI: si el raton o el teclado los
+                // tiene ImGui, arrastrar por un panel no puede girar la vista.
+                {
+                    GLFWwindow*    native = window.getNativeWindow();
+                    const ImGuiIO& io     = ImGui::GetIO();
+
+                    const bool rightDown =
+                        !io.WantCaptureMouse &&
+                        glfwGetMouseButton(native, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+
+                    double mouseX = 0.0, mouseY = 0.0;
+                    glfwGetCursorPos(native, &mouseX, &mouseY);
+
+                    if (rightDown)
+                    {
+                        // El primer frame solo ancla la posicion: sin esto el
+                        // delta seria la distancia desde donde estuviera el
+                        // cursor la ultima vez y la vista daria un salto.
+                        if (d3dLooking)
+                            d3dCamera.processMouse(static_cast<float>(mouseX - d3dLastX),
+                                                   static_cast<float>(mouseY - d3dLastY));
+                        d3dLooking = true;
+                    }
+                    else
+                    {
+                        d3dLooking = false;
+                    }
+                    d3dLastX = mouseX;
+                    d3dLastY = mouseY;
+
+                    if (!io.WantCaptureKeyboard)
+                        d3dCamera.update(native, d3dDelta);
+
+                    d3d12.setCamera(d3dCamera.getViewMatrix(), d3dCamera.getPos(),
+                                    d3dCamera.getFov());
+                }
+
                 d3d12.drawFrame();
             }
 

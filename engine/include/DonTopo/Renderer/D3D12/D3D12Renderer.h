@@ -77,6 +77,15 @@ public:
 
     void setClearColor(float r, float g, float b, float a);
 
+    // Encuadre con el que se dibuja todo: escena, rejilla, niebla y el reparto
+    // de las cascadas de sombra. `view` y `position` tienen que ser de la misma
+    // cámara — la niebla desproyecta con una y sitúa el ojo con la otra.
+    // fovDegrees <= 0 conserva el que hubiera.
+    //
+    // Recalcula las cascadas, así que se llama cuando la cámara se mueve, no
+    // por frame incondicionalmente.
+    void setCamera(const glm::mat4& view, const glm::vec3& position, float fovDegrees = 0.0f);
+
     // --- Escena ----------------------------------------------------------
     //
     // Mismos nombres y misma semántica que el Renderer de Vulkan, para que
