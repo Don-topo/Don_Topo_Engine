@@ -37,78 +37,136 @@
 #include <PxPhysicsAPI.h>
 #endif
 
-#ifdef DT_D3D12_ENABLED
 namespace {
 
-// Esfera envolvente de una malla en espacio de MUNDO. La caja se calcula sobre
-// los vértices y se convierte en esfera: para elegir a qué objeto apunta un
-// clic basta con eso, y evita rotar la caja por cada candidato.
-struct BoundingSphere {
-    glm::vec3 center{0.0f};
-    float     radius = 0.0f;
+// ─── Selector de proyecto ────────────────────────────────────────────────────
+// Lo usan los dos backends: es UI de ImGui pura, no sabe con qué se dibuja.
+
+// Estado de la pantalla. Vive fuera de la función porque tiene que sobrevivir
+// de un frame al siguiente: qué proyecto está marcado y qué se escribió en el
+// diálogo de crear.
+struct ProjectSelectorState {
+    std::vector<std::filesystem::path> entries = DonTopo::ProjectContext::discover();
+    int                                picked  = -1;
+    char                               newName[64] = {};
+    std::string                        createError;
 };
 
-BoundingSphere worldBounds(const DonTopo::Mesh& mesh, const glm::mat4& transform)
+// Dibuja la pantalla y devuelve el proyecto elegido, o una ruta vacía mientras
+// no se haya elegido ninguno.
+std::filesystem::path drawProjectSelector(ProjectSelectorState& st)
 {
-    BoundingSphere sphere;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::Begin("##ProjectSelector", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    // Un SkinnedMesh deja vertices VACIO y guarda los suyos en skinnedVertices:
-    // preguntarle solo por el primero da una esfera de radio cero y ese objeto
-    // no se puede seleccionar nunca.
-    std::vector<glm::vec3> positions;
-    if (const auto* skinned = dynamic_cast<const DonTopo::SkinnedMesh*>(&mesh)) {
-        positions.reserve(skinned->skinnedVertices.size());
-        for (const DonTopo::SkinnedVertex& vertex : skinned->skinnedVertices)
-            positions.push_back(glm::vec3(vertex.position));
-    } else {
-        positions.reserve(mesh.vertices.size());
-        for (const DonTopo::Vertex& vertex : mesh.vertices)
-            positions.push_back(glm::vec3(vertex.pos));
+    ImGui::TextUnformatted("Don Topo Engine - Proyectos");
+    ImGui::TextDisabled("%s", DonTopo::ProjectContext::workspaceDir().string().c_str());
+    ImGui::Separator();
+
+    bool                  confirmed = false;
+    std::filesystem::path chosen;
+
+    ImGui::BeginChild("##ProjectList", ImVec2(0.0f, vp->WorkSize.y * 0.55f), true);
+    if (st.entries.empty())
+        ImGui::TextDisabled("No hay ningun proyecto todavia: crea uno con 'Nuevo proyecto...'.");
+    for (int i = 0; i < (int)st.entries.size(); ++i)
+    {
+        const std::string label = DonTopo::ProjectContext::readProjectName(st.entries[i]) +
+                                  "###project" + std::to_string(i);
+        if (ImGui::Selectable(label.c_str(), st.picked == i,
+                              ImGuiSelectableFlags_AllowDoubleClick))
+        {
+            st.picked = i;
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                confirmed = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", st.entries[i].filename().string().c_str());
+    }
+    ImGui::EndChild();
+
+    ImGui::BeginDisabled(st.picked < 0);
+    if (ImGui::Button("Abrir proyecto", ImVec2(160.0f, 0.0f)))
+        confirmed = true;
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (ImGui::Button("Nuevo proyecto...", ImVec2(160.0f, 0.0f)))
+    {
+        st.newName[0] = '\0';
+        st.createError.clear();
+        ImGui::OpenPopup("Crear proyecto");
     }
 
-    if (positions.empty())
-        return sphere;
+    if (ImGui::BeginPopupModal("Crear proyecto", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted("Nombre del proyecto:");
+        ImGui::SetNextItemWidth(320.0f);
+        const bool enter = ImGui::InputText("##NewProjectName", st.newName, sizeof(st.newName),
+                                            ImGuiInputTextFlags_EnterReturnsTrue);
 
-    glm::vec3 lo = positions[0];
-    glm::vec3 hi = lo;
-    for (const glm::vec3& position : positions) {
-        // Entre paréntesis: windows.h define min y max como macros, y sin esto
-        // el preprocesador se come la llamada.
-        // Entre paréntesis: windows.h define min y max como macros, y sin esto
-        // el preprocesador se come la llamada.
-        lo = (glm::min)(lo, position);
-        hi = (glm::max)(hi, position);
+        // El error se enseña AQUÍ, en el diálogo, y no se crea nada: nombre
+        // repetido (aunque cambien las mayúsculas), vacío, `..`, separadores de
+        // ruta o caracteres inválidos en Windows.
+        if (!st.createError.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", st.createError.c_str());
+
+        if (ImGui::Button("Crear", ImVec2(120.0f, 0.0f)) || enter)
+        {
+            std::filesystem::path created;
+            if (DonTopo::ProjectContext::create(st.newName, created, st.createError))
+            {
+                // Refresca la lista y deja el proyecto nuevo seleccionado.
+                st.entries = DonTopo::ProjectContext::discover();
+                st.picked  = -1;
+                for (int i = 0; i < (int)st.entries.size(); ++i)
+                    if (st.entries[i] == created)
+                        st.picked = i;
+                st.createError.clear();
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancelar", ImVec2(120.0f, 0.0f)))
+        {
+            st.createError.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 
-    const glm::vec3 localCenter = (lo + hi) * 0.5f;
-    sphere.center = glm::vec3(transform * glm::vec4(localCenter, 1.0f));
+    if (confirmed && st.picked >= 0 && st.picked < (int)st.entries.size())
+        chosen = st.entries[st.picked];
 
-    // El radio con la escala del transform ya aplicada: se mide sobre una
-    // esquina llevada a mundo, que es lo que la deforma de verdad.
-    const glm::vec3 worldCorner = glm::vec3(transform * glm::vec4(hi, 1.0f));
-    sphere.radius = glm::length(worldCorner - sphere.center);
-    return sphere;
+    ImGui::End();
+    return chosen;
 }
 
-// Distancia a la que el rayo corta la esfera, o -1 si no la corta o queda
-// detrás. Sin resolver la cuadrática entera: basta con el punto más cercano.
-float raySphere(const glm::vec3& origin, const glm::vec3& dir, const BoundingSphere& sphere)
+// Deja el editor con ese proyecto abierto. false = el proyecto no valía y el
+// selector sigue en pantalla.
+bool openChosenProject(DonTopo::EditorUI& editor, DonTopo::ProjectContext& project,
+                       const std::filesystem::path& chosen)
 {
-    const glm::vec3 toCenter = sphere.center - origin;
-    const float     along    = glm::dot(toCenter, dir);
-    if (along < 0.0f)
-        return -1.0f;
+    project = DonTopo::ProjectContext(chosen);
+    if (!project.valid())
+        return false;
 
-    const float distanceSq = glm::dot(toCenter, toCenter) - along * along;
-    const float radiusSq   = sphere.radius * sphere.radius;
-    if (distanceSq > radiusSq)
-        return -1.0f;
-
-    return along - std::sqrt(radiusSq - distanceSq);
+    editor.setProject(&project);
+    // Se recuerda para el PRÓXIMO arranque: es de este project.json de donde
+    // saldrá el backend de render. Si falla no se aborta nada —el único efecto
+    // es volver a arrancar en Vulkan.
+    DonTopo::ProjectContext::writeLastProject(chosen);
+    // Y con SU escena, no con la que se montó al arrancar: en un proyecto
+    // recién creado está vacía, así que se entra viendo solo el skybox.
+    editor.openProjectScene();
+    return true;
 }
 
 }  // namespace
-#endif
 
 int main()
 {
@@ -281,46 +339,21 @@ int main()
                 "DirectX 12: el editor corre sobre este backend. Sin UI 2D del juego y sin "
                 "sondas de reflexion todavia.");
 
-            // La escena la abre el EDITOR, no este main: así pasa por el mismo
-            // sitio que el Load Scene del menú —con su sandbox de proyecto, su
-            // carga asíncrona y su registro de mallas— y los ajustes del
-            // project.json (anti-aliasing, bloom, niebla, Forward+, paneles) se
-            // aplican solos en el primer frame, que es lo que hace
-            // applyProjectSettings.
-            if (d3dProject.valid())
-            {
-                editor.setProject(&d3dProject);
-                if (editor.openProjectScene())
-                    std::cout << "D3D12: escena del proyecto abierta, " << d3d12.objectCount()
-                              << " mallas estaticas y " << d3d12.skinnedCount() << " personajes"
-                              << std::endl;
-                else
-                    std::cout << "D3D12: el proyecto no tiene escena de arranque" << std::endl;
-            }
-            else
-            {
-                // Sin proyecto: unas cajas para que el backend tenga algo que
-                // enseñar en vez de un suelo vacío.
-                const DonTopo::Mesh cube = DonTopo::Cube::create(2.0f);
-                const struct { glm::vec3 pos; float scale; } layout[] = {
-                    {{0.0f, 1.0f, 0.0f}, 1.0f},
-                    {{4.0f, 0.6f, -2.0f}, 0.6f},
-                    {{-4.5f, 1.6f, 1.0f}, 1.6f},
-                    {{2.0f, 0.4f, 4.0f}, 0.4f},
-                };
-                for (const auto& entry : layout)
-                {
-                    const int index = d3d12.addStaticMesh(cube);
-                    if (index < 0)
-                        continue;
-                    d3d12.setTransform(
-                        (size_t)index,
-                        glm::scale(glm::translate(glm::mat4(1.0f), entry.pos),
-                                   glm::vec3(entry.scale)));
-                }
-                std::cout << "D3D12: sin proyecto, " << d3d12.objectCount()
-                          << " cajas de muestra" << std::endl;
-            }
+            // Selector de proyecto, el mismo que con Vulkan: mientras esté
+            // activo el bucle solo presenta su frame, así que el editor no
+            // aparece hasta elegir. Es quien abre la escena —por
+            // openProjectScene, la misma puerta que el Load Scene del menú— y
+            // quien deja puesto el ProjectContext del que salen los ajustes.
+            //
+            // El proyecto recordado NO se abre solo: de él salió el backend con
+            // el que se arrancó, pero elegir es del usuario.
+            ProjectSelectorState d3dProjectSelector;
+            editor.setProjectSelector([&]() -> bool {
+                const std::filesystem::path chosen = drawProjectSelector(d3dProjectSelector);
+                if (chosen.empty())
+                    return false;
+                return openChosenProject(editor, d3dProject, chosen);
+            });
 
             // Cámara de vuelo, la misma que ya tenía este camino.
             DonTopo::Camera d3dCamera(glm::vec3(6.0f, 4.5f, 8.0f), -126.87f, -21.8f);
@@ -349,6 +382,17 @@ int main()
                 const float d3dDelta =
                     std::chrono::duration<float>(d3dNow - d3dLastFrame).count();
                 d3dLastFrame = d3dNow;
+
+                // Selector en pantalla: ni escena, ni scripts, ni cámara. Solo
+                // su frame, que lo dibuja el propio editor dentro de
+                // buildUiFrame.
+                if (editor.isProjectSelectorActive())
+                {
+                    editor.buildUiFrame(d3d12.viewportTexture(), &d3dScene.getRoot(),
+                                        d3dCamera.getViewMatrix());
+                    d3d12.drawFrame();
+                    continue;
+                }
 
                 // Escena → backend, por frame y ANTES de la interfaz: es lo que
                 // hace que mover un objeto en Properties, ocultar una malla,
@@ -761,126 +805,13 @@ int main()
         // elegir proyecto. `project` vive aquí, fuera del bucle: es lo que los
         // paneles consultan durante toda la sesión.
         DonTopo::ProjectContext project;
-        // Estado del selector: vive fuera del lambda (que lo captura por
-        // referencia) porque tiene que sobrevivir de un frame al siguiente.
-        std::vector<std::filesystem::path> projectEntries = DonTopo::ProjectContext::discover();
-        int                                projectPicked  = -1;
-        bool                               projectCreating = false;
-        char                               projectNewName[64] = {};
-        std::string                        projectCreateError;
+        ProjectSelectorState    projectSelector;
 
         editor.setProjectSelector([&]() -> bool {
-            const ImGuiViewport* vp = ImGui::GetMainViewport();
-            ImGui::SetNextWindowPos(vp->WorkPos);
-            ImGui::SetNextWindowSize(vp->WorkSize);
-            ImGui::Begin("##ProjectSelector", nullptr,
-                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
-
-            ImGui::TextUnformatted("Don Topo Engine - Proyectos");
-            ImGui::TextDisabled("%s", DonTopo::ProjectContext::workspaceDir().string().c_str());
-            ImGui::Separator();
-
-            bool                  confirmed = false;
-            std::filesystem::path chosen;
-
-            ImGui::BeginChild("##ProjectList", ImVec2(0.0f, vp->WorkSize.y * 0.55f), true);
-            if (projectEntries.empty())
-                ImGui::TextDisabled("No hay ningun proyecto todavia: crea uno con 'Nuevo proyecto...'.");
-            for (int i = 0; i < (int)projectEntries.size(); ++i)
-            {
-                const std::string label = DonTopo::ProjectContext::readProjectName(projectEntries[i]) +
-                                          "###project" + std::to_string(i);
-                if (ImGui::Selectable(label.c_str(), projectPicked == i,
-                                      ImGuiSelectableFlags_AllowDoubleClick))
-                {
-                    projectPicked = i;
-                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                        confirmed = true;
-                }
-                ImGui::SameLine();
-                ImGui::TextDisabled("%s", projectEntries[i].filename().string().c_str());
-            }
-            ImGui::EndChild();
-
-            ImGui::BeginDisabled(projectPicked < 0);
-            if (ImGui::Button("Abrir proyecto", ImVec2(160.0f, 0.0f)))
-                confirmed = true;
-            ImGui::EndDisabled();
-
-            ImGui::SameLine();
-            if (ImGui::Button("Nuevo proyecto...", ImVec2(160.0f, 0.0f)))
-            {
-                projectCreating    = true;
-                projectNewName[0]  = '\0';
-                projectCreateError.clear();
-                ImGui::OpenPopup("Crear proyecto");
-            }
-
-            if (ImGui::BeginPopupModal("Crear proyecto", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-            {
-                ImGui::TextUnformatted("Nombre del proyecto:");
-                ImGui::SetNextItemWidth(320.0f);
-                const bool enter = ImGui::InputText("##NewProjectName", projectNewName,
-                                                    sizeof(projectNewName),
-                                                    ImGuiInputTextFlags_EnterReturnsTrue);
-
-                // El error se enseña AQUÍ, en el diálogo, y no se crea nada:
-                // nombre repetido (aunque cambien las mayúsculas), vacío, `..`,
-                // separadores de ruta o caracteres inválidos en Windows.
-                if (!projectCreateError.empty())
-                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", projectCreateError.c_str());
-
-                if (ImGui::Button("Crear", ImVec2(120.0f, 0.0f)) || enter)
-                {
-                    std::filesystem::path created;
-                    if (DonTopo::ProjectContext::create(projectNewName, created, projectCreateError))
-                    {
-                        // Refresca la lista y deja el proyecto nuevo seleccionado.
-                        projectEntries = DonTopo::ProjectContext::discover();
-                        projectPicked  = -1;
-                        for (int i = 0; i < (int)projectEntries.size(); ++i)
-                            if (projectEntries[i] == created)
-                                projectPicked = i;
-                        projectCreating = false;
-                        projectCreateError.clear();
-                        ImGui::CloseCurrentPopup();
-                    }
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Cancelar", ImVec2(120.0f, 0.0f)))
-                {
-                    projectCreating = false;
-                    projectCreateError.clear();
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndPopup();
-            }
-
-            if (confirmed && projectPicked >= 0 && projectPicked < (int)projectEntries.size())
-                chosen = projectEntries[projectPicked];
-
-            ImGui::End();
-
+            const std::filesystem::path chosen = drawProjectSelector(projectSelector);
             if (chosen.empty())
                 return false;
-
-            project = DonTopo::ProjectContext(chosen);
-            if (!project.valid())
-                return false;
-
-            // A partir de aquí el editor arranca exactamente como siempre, ya
-            // con el proyecto puesto: es lo único que cambia respecto a antes.
-            editor.setProject(&project);
-            // Se recuerda para el PRÓXIMO arranque: es de este project.json de
-            // donde saldrá el backend de render. Si falla no se aborta nada —el
-            // único efecto es volver a arrancar en Vulkan.
-            DonTopo::ProjectContext::writeLastProject(chosen);
-            // Y con SU escena, no con la de demo que se montó en el arranque:
-            // en un proyecto recién creado está vacía, así que se entra viendo
-            // solo el skybox.
-            editor.openProjectScene();
-            return true;
+            return openChosenProject(editor, project, chosen);
         });
 
         // Estado del sync de widgets: vive FUERA del bucle porque es lo que
