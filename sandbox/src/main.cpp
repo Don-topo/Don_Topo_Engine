@@ -206,10 +206,9 @@ int main()
                             if (index < 0)
                                 return;
                             node->skinnedRenderIndex = index;
-                            d3d12.setSkinnedTransform(static_cast<size_t>(index),
-                                                      node->worldTransform);
-                            d3d12.setSkinnedSsr(static_cast<size_t>(index), node->ssrEnabled,
-                                                node->ssrIntensity);
+                            d3d12.setSkinnedTransform(index, node->worldTransform);
+                            d3d12.setSkinnedSsr(index,
+                                                node->ssrEnabled ? node->ssrIntensity : 0.0f);
                             ++addedSkinned;
                             return;
                         }
@@ -222,8 +221,8 @@ int main()
                             return;
                         node->staticRenderIndex = index;
                         d3d12.setTransform(static_cast<size_t>(index), node->worldTransform);
-                        d3d12.setObjectSsr(static_cast<size_t>(index), node->ssrEnabled,
-                                           node->ssrIntensity);
+                        d3d12.setObjectSsr(static_cast<size_t>(index),
+                                           node->ssrEnabled ? node->ssrIntensity : 0.0f);
                         ++added;
                     });
                     // Las luces de la escena, con sus transformaciones ya

@@ -2,6 +2,7 @@
 
 #ifdef DT_D3D12_ENABLED
 
+#include "DonTopo/Core/Camera.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Window.h"
 #include "DonTopo/Renderer/Cube.h"
@@ -737,6 +738,11 @@ struct D3D12Renderer::Impl {
 
     // Capa de interfaz del editor, si la hay. No es propiedad de este backend.
     UiLayer* uiLayer = nullptr;
+
+    // La escena y su raíz, guardadas para quien las pregunte. Este backend no
+    // las recorre: la geometría entra por registerGameObject.
+    Scene*      scene     = nullptr;
+    GameObject* sceneRoot = nullptr;
 
     // Guardado para que el panel conserve el valor; este backend no dibuja a
     // más resolución todavía.
@@ -5950,16 +5956,65 @@ void D3D12Renderer::setTransform(size_t objectIndex, const glm::mat4& transform)
         m_impl->objects[objectIndex].transform = transform;
 }
 
-void D3D12Renderer::setObjectSsr(size_t objectIndex, bool enabled, float intensity)
+void D3D12Renderer::setObjectSsr(size_t objectIndex, float strength)
 {
     if (objectIndex < m_impl->objects.size())
-        m_impl->objects[objectIndex].ssrStrength = enabled ? intensity : 0.0f;
+        m_impl->objects[objectIndex].ssrStrength = strength;
 }
 
-void D3D12Renderer::setSkinnedSsr(size_t index, bool enabled, float intensity)
+void D3D12Renderer::setSkinnedSsr(int index, float strength)
 {
-    if (index < m_impl->skinnedObjects.size())
-        m_impl->skinnedObjects[index].ssrStrength = enabled ? intensity : 0.0f;
+    if (index >= 0 && static_cast<size_t>(index) < m_impl->skinnedObjects.size())
+        m_impl->skinnedObjects[index].ssrStrength = strength;
+}
+
+void D3D12Renderer::setScene(Scene* scene)
+{
+    m_impl->scene = scene;
+}
+
+void D3D12Renderer::setSceneRoot(GameObject* root)
+{
+    m_impl->sceneRoot = root;
+}
+
+void D3D12Renderer::setCamera(const Camera& camera)
+{
+    setCamera(camera.getViewMatrix(), camera.getPos(), camera.getFov());
+}
+
+void D3D12Renderer::setLights(const std::vector<Light>& lights)
+{
+    setLights(lights.data(), lights.size());
+}
+
+void D3D12Renderer::setLightRadii(const std::vector<float>& radii)
+{
+    // El reparto por celdas saca el radio del alcance de cada luz (params.x),
+    // así que esta lista no hace falta aquí. Se acepta para cumplir la
+    // interfaz y para que el día que se separen los dos valores haya un sitio
+    // donde recogerla.
+    (void)radii;
+}
+
+void D3D12Renderer::tickDeferredDeletes()
+{
+    // Nada pendiente: en este backend las liberaciones esperan a la GPU en el
+    // momento en que se piden.
+}
+
+void D3D12Renderer::updateAnimation(int index, float deltaTime)
+{
+    Impl& d = *m_impl;
+    if (index < 0 || static_cast<size_t>(index) >= d.skinnedObjects.size())
+        return;
+
+    // Avanza el reloj de ESE personaje y lo mantiene dentro del clip. El reloj
+    // interno del backend sigue existiendo para quien no llame aquí.
+    Impl::SkinnedObject& character = d.skinnedObjects[index];
+    character.animTime += deltaTime;
+    if (character.animDuration > 0.0f && character.animTime > character.animDuration)
+        character.animTime = std::fmod(character.animTime, character.animDuration);
 }
 
 void D3D12Renderer::setObjectMeshVisible(size_t objectIndex, bool visible)
@@ -5998,7 +6053,7 @@ void D3D12Renderer::clearStaticMeshes()
     d.objects.clear();
 }
 
-int D3D12Renderer::addSkinnedMesh(const SkinnedMesh& mesh)
+int D3D12Renderer::addSkinnedMesh(const SkinnedMesh& mesh, const std::vector<DecodedImage>*)
 {
     Impl& d = *m_impl;
     if (!d.initialized)
@@ -6006,22 +6061,22 @@ int D3D12Renderer::addSkinnedMesh(const SkinnedMesh& mesh)
     return d.createSkinnedObject(mesh);
 }
 
-void D3D12Renderer::setSkinnedTransform(size_t index, const glm::mat4& transform)
+void D3D12Renderer::setSkinnedTransform(int index, const glm::mat4& transform)
 {
-    if (index < m_impl->skinnedObjects.size())
+    if (index >= 0 && static_cast<size_t>(index) < m_impl->skinnedObjects.size())
         m_impl->skinnedObjects[index].transform = transform;
 }
 
-void D3D12Renderer::setSkinnedVisible(size_t index, bool visible)
+void D3D12Renderer::setSkinnedMeshVisible(int index, bool visible)
 {
-    if (index < m_impl->skinnedObjects.size())
+    if (index >= 0 && static_cast<size_t>(index) < m_impl->skinnedObjects.size())
         m_impl->skinnedObjects[index].visible = visible;
 }
 
-void D3D12Renderer::setAnimationState(size_t index, uint32_t clipIndex, float animTime)
+void D3D12Renderer::setAnimationState(int index, uint32_t clipIndex, float animTime)
 {
     Impl& d = *m_impl;
-    if (index >= d.skinnedObjects.size())
+    if (index < 0 || static_cast<size_t>(index) >= d.skinnedObjects.size())
         return;
     Impl::SkinnedObject& character = d.skinnedObjects[index];
     character.clipBase             = clipIndex * character.boneCount;
@@ -6133,8 +6188,8 @@ void D3D12Renderer::registerGameObject(GameObject* node)
             if (index < 0)
                 return;
             child->skinnedRenderIndex = index;
-            setSkinnedTransform(static_cast<size_t>(index), child->worldTransform);
-            setSkinnedSsr(static_cast<size_t>(index), child->ssrEnabled, child->ssrIntensity);
+            setSkinnedTransform(index, child->worldTransform);
+            setSkinnedSsr(index, child->ssrEnabled ? child->ssrIntensity : 0.0f);
             return;
         }
 
@@ -6146,7 +6201,7 @@ void D3D12Renderer::registerGameObject(GameObject* node)
             return;
         child->staticRenderIndex = index;
         setTransform(static_cast<size_t>(index), child->worldTransform);
-        setObjectSsr(static_cast<size_t>(index), child->ssrEnabled, child->ssrIntensity);
+        setObjectSsr(static_cast<size_t>(index), child->ssrEnabled ? child->ssrIntensity : 0.0f);
     });
 }
 
@@ -6166,7 +6221,7 @@ void D3D12Renderer::removeGameObject(GameObject* node)
             child->staticRenderIndex = -1;
         }
         if (child->skinnedRenderIndex >= 0) {
-            setSkinnedVisible(static_cast<size_t>(child->skinnedRenderIndex), false);
+            setSkinnedMeshVisible(child->skinnedRenderIndex, false);
             child->skinnedRenderIndex = -1;
         }
     });
@@ -6181,7 +6236,7 @@ void D3D12Renderer::removeMeshComponent(GameObject* node)
         node->staticRenderIndex = -1;
     }
     if (node->skinnedRenderIndex >= 0) {
-        setSkinnedVisible(static_cast<size_t>(node->skinnedRenderIndex), false);
+        setSkinnedMeshVisible(node->skinnedRenderIndex, false);
         node->skinnedRenderIndex = -1;
     }
 }

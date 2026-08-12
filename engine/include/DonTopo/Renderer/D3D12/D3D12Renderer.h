@@ -79,6 +79,23 @@ public:
 
     void setClearColor(float r, float g, float b, float a);
 
+    // La escena y su raíz. Este backend no las recorre por su cuenta —la
+    // geometría entra por registerGameObject—, pero las guarda para que quien
+    // se las dio pueda preguntárselas.
+    void setScene(Scene* scene) override;
+    void setSceneRoot(GameObject* root) override;
+
+    // Cámara del frame a partir de la del motor: view, posición y campo de
+    // visión salen de ella.
+    void setCamera(const Camera& camera) override;
+
+    void setLights(const std::vector<Light>& lights) override;
+    void setLightRadii(const std::vector<float>& radii) override;
+
+    // Aquí no hay borrados diferidos: las liberaciones esperan a la GPU en el
+    // momento. Se implementa para cumplir la interfaz.
+    void tickDeferredDeletes() override;
+
     // Luces de la escena, en el mismo formato que el UBO de los shaders (hasta
     // 16; el resto se descarta). Sin llamar a esto —o con count 0— el backend
     // ilumina con una direccional propia, que es lo que da luz a la escena de
@@ -111,13 +128,13 @@ public:
     int addStaticMesh(const Mesh& mesh,
                       const std::vector<DecodedImage>* decoded = nullptr) override;
 
-    void setTransform(size_t objectIndex, const glm::mat4& transform);
-    void setObjectMeshVisible(size_t objectIndex, bool visible);
+    void setTransform(size_t objectIndex, const glm::mat4& transform) override;
+    void setObjectMeshVisible(size_t objectIndex, bool visible) override;
 
     // Cuánto refleja este objeto. Sale al alfa de la escena, que es de donde lo
-    // lee el trazado de reflejos; a false o a cero, ese objeto no refleja nada.
-    void setObjectSsr(size_t objectIndex, bool enabled, float intensity);
-    void setSkinnedSsr(size_t index, bool enabled, float intensity);
+    // lee el trazado de reflejos; a cero, ese objeto no refleja nada.
+    void setObjectSsr(size_t objectIndex, float strength) override;
+    void setSkinnedSsr(int index, float strength) override;
     size_t objectCount() const;
 
     // Suelta toda la geometría estática. Espera a la GPU antes de liberar:
@@ -131,15 +148,17 @@ public:
     // La animación avanza sola con el reloj del backend, reproduciendo en
     // bucle el clip activo (el 0 al cargar). Quien tenga un Animator que la
     // calcule en CPU usa setAnimationState y no depende de ese reloj.
-    int addSkinnedMesh(const SkinnedMesh& mesh);
+    int addSkinnedMesh(const SkinnedMesh& mesh,
+                       const std::vector<DecodedImage>* decoded = nullptr) override;
     void rebuildSkinnedMesh(int index, const SkinnedMesh& mesh) override;
 
-    void setSkinnedTransform(size_t index, const glm::mat4& transform);
-    void setSkinnedVisible(size_t index, bool visible);
+    void setSkinnedTransform(int index, const glm::mat4& transform) override;
+    void setSkinnedMeshVisible(int index, bool visible) override;
 
     // Fija clip y tiempo ya calculados fuera. Mismo contrato que en el
     // Renderer de Vulkan: es un sink, no avanza el tiempo.
-    void setAnimationState(size_t index, uint32_t clipIndex, float animTime);
+    void setAnimationState(int index, uint32_t clipIndex, float animTime) override;
+    void updateAnimation(int index, float deltaTime) override;
 
     // Proyección por vista del frame, la misma con la que se dibuja: es lo que
     // necesita quien desproyecte un clic del viewport para saber a qué apunta.

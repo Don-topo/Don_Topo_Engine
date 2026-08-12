@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DonTopo/Renderer/RendererState.h"
+#include "DonTopo/Renderer/UniformBufferObject.h"
 
 #include <glm/glm.hpp>
 
@@ -9,7 +10,9 @@
 
 namespace DonTopo
 {
+    class Camera;
     class GameObject;
+    class Scene;
     class UiCanvas;
     class UiLayer;
     struct Mesh;
@@ -59,6 +62,36 @@ namespace DonTopo
 
             // Qué se dibuja con contorno; -1 en ambos para ninguno.
             virtual void setOutlineTarget(int staticIndex, int skinnedIndex) = 0;
+
+            // ── Escena del frame ────────────────────────────────────────────
+            // Lo que el bucle principal fija cada vuelta: con qué cámara se
+            // dibuja, qué luces hay y dónde está cada objeto.
+            virtual void setScene(Scene* scene)                   = 0;
+            virtual void setSceneRoot(GameObject* root)           = 0;
+            virtual void setCamera(const Camera& camera)          = 0;
+            virtual void setLights(const std::vector<Light>& lights) = 0;
+            // Radio de alcance por luz, en el mismo orden que setLights. Lo usa
+            // el reparto por celdas; vacío = el radio global.
+            virtual void setLightRadii(const std::vector<float>& radii) = 0;
+
+            virtual int  addSkinnedMesh(const SkinnedMesh& mesh,
+                                        const std::vector<DecodedImage>* decoded = nullptr) = 0;
+
+            virtual void setTransform(size_t objectIndex, const glm::mat4& transform) = 0;
+            virtual void setSkinnedTransform(int index, const glm::mat4& transform)   = 0;
+            virtual void setObjectMeshVisible(size_t objectIndex, bool visible)       = 0;
+            virtual void setSkinnedMeshVisible(int index, bool visible)               = 0;
+            // Cuánto refleja el objeto; 0 = nada.
+            virtual void setObjectSsr(size_t objectIndex, float strength) = 0;
+            virtual void setSkinnedSsr(int index, float strength)         = 0;
+
+            // Avanza el tiempo de animación de un personaje, o fija el que ya
+            // calculó un Animator en CPU.
+            virtual void updateAnimation(int index, float deltaTime)                    = 0;
+            virtual void setAnimationState(int index, uint32_t clipIndex, float animTime) = 0;
+
+            // Suelta lo que quedó pendiente de borrar cuando la GPU lo permita.
+            virtual void tickDeferredDeletes() = 0;
 
             // ── Viewport ────────────────────────────────────────────────────
             virtual void     setViewportSize(uint32_t width, uint32_t height) = 0;
