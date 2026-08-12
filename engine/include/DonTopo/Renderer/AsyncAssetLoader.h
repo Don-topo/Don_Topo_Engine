@@ -117,6 +117,7 @@ namespace DonTopo
 
     class Scene;
     class Renderer;
+    class EditorRenderer;
 
     // Aplica un resultado a la escena resolviendo por targetId sobre la escena
     // VIVA. Devuelve false si el GameObject ya no existe (borrado mientras
@@ -125,6 +126,6 @@ namespace DonTopo
     //
     // No llama a flushPendingUploads: el caller decide cuándo cerrar el batch,
     // porque el sentido de todo esto es agrupar N resultados en UN submit.
-    bool applyLoadedMesh(LoadedMesh& r, Scene& scene, Renderer& renderer,
+    bool applyLoadedMesh(LoadedMesh& r, Scene& scene, EditorRenderer& renderer,
                          std::string* outError);
 }

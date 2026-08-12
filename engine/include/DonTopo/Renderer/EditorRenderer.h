@@ -56,6 +56,10 @@ namespace DonTopo
             // Create, salir de Play).
             virtual void flushUploadsAndWait() = 0;
 
+            // Cierra el lote de subidas del frame sin esperar: lo que aterrice
+            // se verá en cuanto su fence señale.
+            virtual void flushPendingUploads() = 0;
+
             // Recalcula el rango de profundidad con lo que hay cargado. Sin
             // esto, cambiar la escena de arranque recorta el fondo.
             virtual void refitCameraRange() = 0;
@@ -117,6 +121,12 @@ namespace DonTopo
             virtual float ssaaFactor() const       = 0;
             virtual void  setSsaoEnabled(bool v)   = 0;
 
+            // El bloom se apaga soltando su cadena de imágenes, así que el
+            // interruptor tampoco puede ser un simple bool del estado.
+            // El getter ya lo da RendererState: aquí solo hace falta el
+            // interruptor, que es el que mueve recursos.
+            virtual void  setBloomEnabled(bool v)  = 0;
+
             // ── Sondas de reflexión ─────────────────────────────────────────
             virtual void  requestProbeBake(uint64_t ownerId) = 0;
             virtual void  requestProbeBakeAll()              = 0;
@@ -134,7 +144,15 @@ namespace DonTopo
             virtual float bloomGpuMs() const                  = 0;
             virtual float fogGpuMs() const                    = 0;
             virtual float aaGpuMs() const                     = 0;
+            virtual float sceneGpuMs() const                  = 0;
+            virtual float shadowGpuMs() const                 = 0;
             virtual float forwardPlusGpuMs() const            = 0;
+
+            // Cuentas del último frame: draws enviados, instancias dibujadas y
+            // objetos descartados por el frustum.
+            virtual int statDrawCalls() const = 0;
+            virtual int statInstances() const = 0;
+            virtual int statCulled() const    = 0;
             virtual float forwardPlusAvgPerCell() const       = 0;
             virtual uint32_t forwardPlusOverflowCells() const = 0;
     };

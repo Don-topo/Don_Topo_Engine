@@ -35,6 +35,11 @@ namespace DonTopo {
             // declarado en 5 shaders), asi que cambian en el frame siguiente sin
             // recrear nada. intensity = 0 deja la imagen exactamente igual que
             // antes de la feature.
+            // El interruptor, como los parámetros: el mismo panel enciende el
+            // efecto en los dos backends. Vulkan añade su propia lógica al
+            // apagarlo (suelta la cadena de imágenes), pero el valor vive aquí.
+            bool  bloomEnabled() const        { return m_bloomEnabled; }
+            void  setBloomEnabledFlag(bool v) { m_bloomEnabled = v; }
             void  setBloomThreshold(float v) { m_bloomThreshold = v; }
             float bloomThreshold() const     { return m_bloomThreshold; }
             void  setBloomKnee(float v)      { m_bloomKnee = v; }
@@ -174,6 +179,7 @@ namespace DonTopo {
             bool                            m_wireframeMode                     = false;
             AaMode                          m_aaMode                            = AaMode::None;
             int                             m_msaaSamples                       = 4;
+            bool                            m_bloomEnabled                      = true;
             bool                            m_ssaoEnabled                       = false;
             float                           m_ssaoRadius                        = 0.5f;
             float                           m_ssaoBias                          = 0.025f;

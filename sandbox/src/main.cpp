@@ -683,10 +683,15 @@ int main()
         }
 #endif
 
-        // El editor es el dueño del Renderer: se declara él y el resto del
-        // main sigue trabajando contra la referencia, igual que antes.
-        DonTopo::EditorUI  editor;
-        DonTopo::Renderer& renderer = editor.renderer();
+        // El backend lo construye main —que es quien sabe cuál toca— y la
+        // propiedad pasa al editor. La referencia al tipo concreto se guarda
+        // ANTES de moverlo: el ciclo de vida (init, drawFrame, shutdown) no
+        // está en la interfaz, y este camino es el de Vulkan.
+        DonTopo::EditorUI editor;
+
+        auto               vulkanRenderer = std::make_unique<DonTopo::Renderer>();
+        DonTopo::Renderer& renderer       = *vulkanRenderer;
+        editor.setRenderer(std::move(vulkanRenderer));
 
         editor.setActiveRenderBackend(backend.backend);
         if (!backend.message.empty())

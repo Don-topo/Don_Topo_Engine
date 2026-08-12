@@ -309,7 +309,7 @@ namespace DonTopo
         return m_readFileCount;
     }
 
-    bool applyLoadedMesh(LoadedMesh& r, Scene& scene, Renderer& renderer,
+    bool applyLoadedMesh(LoadedMesh& r, Scene& scene, EditorRenderer& renderer,
                          std::string* outError)
     {
         // Recorrido en vivo, no una lista cacheada: el editor permite borrar

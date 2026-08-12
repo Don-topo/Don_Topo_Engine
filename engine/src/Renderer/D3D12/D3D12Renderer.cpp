@@ -6270,6 +6270,16 @@ void D3D12Renderer::replaceStaticTextureWithMissing(int renderIndex, TextureSlot
     }
 }
 
+void D3D12Renderer::setBloomEnabled(bool v)
+{
+    setBloomEnabledFlag(v);
+}
+
+void D3D12Renderer::flushPendingUploads()
+{
+    // Nada pendiente: cada subida se envía y se espera en el momento.
+}
+
 void D3D12Renderer::flushUploadsAndWait()
 {
     m_impl->waitForGpu();
@@ -6385,7 +6395,12 @@ float    D3D12Renderer::ssrGpuMs() const { return 0.0f; }
 float    D3D12Renderer::bloomGpuMs() const { return 0.0f; }
 float    D3D12Renderer::fogGpuMs() const { return 0.0f; }
 float    D3D12Renderer::aaGpuMs() const { return 0.0f; }
+float    D3D12Renderer::sceneGpuMs() const { return 0.0f; }
+float    D3D12Renderer::shadowGpuMs() const { return 0.0f; }
 float    D3D12Renderer::forwardPlusGpuMs() const { return 0.0f; }
+int      D3D12Renderer::statDrawCalls() const { return 0; }
+int      D3D12Renderer::statInstances() const { return 0; }
+int      D3D12Renderer::statCulled() const { return 0; }
 float    D3D12Renderer::forwardPlusAvgPerCell() const { return 0.0f; }
 uint32_t D3D12Renderer::forwardPlusOverflowCells() const { return 0; }
 

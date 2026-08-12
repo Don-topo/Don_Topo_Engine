@@ -218,6 +218,13 @@ public:
     int   maxMsaaSamples() const override;
     void  setSsaoEnabled(bool v) override;
 
+    // El bloom aquí no suelta nada al apagarse: la cadena de imágenes vive con
+    // los demás targets. El interruptor es el del estado compartido.
+    void  setBloomEnabled(bool v) override;
+
+    // Sin lote de subidas: aquí cada una se envía y se espera al hacerla.
+    void  flushPendingUploads() override;
+
     // SSAA no está en este backend: se acepta el valor y se guarda, pero no
     // cambia la resolución de render. El panel lo enseña igual.
     void  setSsaaFactor(float v) override;
@@ -239,7 +246,14 @@ public:
     float    bloomGpuMs() const override;
     float    fogGpuMs() const override;
     float    aaGpuMs() const override;
+    float    sceneGpuMs() const override;
+    float    shadowGpuMs() const override;
     float    forwardPlusGpuMs() const override;
+
+    // Cuentas del frame: este backend todavía no las lleva.
+    int      statDrawCalls() const override;
+    int      statInstances() const override;
+    int      statCulled() const override;
     float    forwardPlusAvgPerCell() const override;
     uint32_t forwardPlusOverflowCells() const override;
 

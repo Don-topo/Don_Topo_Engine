@@ -16,6 +16,7 @@ namespace DonTopo {
 
 class Scene;
 class Renderer;
+class EditorRenderer;
 class PhysicsManager;
 class AudioManager;
 
@@ -118,7 +119,7 @@ private:
 // resolviendo tras un undo() de este comando.
 class DeleteGameObjectCommand : public ICommand {
 public:
-    DeleteGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio, Renderer& renderer,
+    DeleteGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio, EditorRenderer& renderer,
                              std::string label, uint64_t parentId, size_t index, nlohmann::json snapshot);
     void execute() override;
     void undo() override;
@@ -128,7 +129,7 @@ private:
     Scene& m_scene;
     PhysicsManager& m_physics;
     AudioManager& m_audio;
-    Renderer& m_renderer;
+    EditorRenderer& m_renderer;
     std::string m_label;
     uint64_t m_parentId;
     size_t m_index;
@@ -140,7 +141,7 @@ private:
 // justo después de crearlo (mismo formato que DeleteGameObjectCommand).
 class CreateGameObjectCommand : public ICommand {
 public:
-    CreateGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio, Renderer& renderer,
+    CreateGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio, EditorRenderer& renderer,
                              std::string label, uint64_t parentId, size_t index, nlohmann::json snapshot);
     void execute() override;
     void undo() override;
@@ -150,7 +151,7 @@ private:
     Scene& m_scene;
     PhysicsManager& m_physics;
     AudioManager& m_audio;
-    Renderer& m_renderer;
+    EditorRenderer& m_renderer;
     std::string m_label;
     uint64_t m_parentId;
     size_t m_index;
@@ -329,7 +330,7 @@ public:
     // filas con este mismo ordinal. 0 por defecto vale tanto para un Add real
     // (nada que desambiguar, la fuente nueva siempre va al final) como para el
     // undo de un Add.
-    AnimationSourceCommand(Scene& scene, Renderer* renderer, std::string label,
+    AnimationSourceCommand(Scene& scene, EditorRenderer* renderer, std::string label,
                             uint64_t id, bool add, std::string path,
                             std::vector<std::string> clipNames,
                             size_t pathOccurrence = 0);
@@ -342,7 +343,7 @@ private:
     void applyRemove();
 
     Scene& m_scene;
-    Renderer* m_renderer;
+    EditorRenderer* m_renderer;
     std::string m_label;
     uint64_t m_id;
     bool m_add;

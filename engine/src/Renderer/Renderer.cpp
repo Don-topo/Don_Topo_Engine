@@ -2096,7 +2096,7 @@ namespace DonTopo {
         {
             VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
 
-            if (m_bloomEnabled)
+            if (bloomEnabled())
             {
                 // Lectura de los timestamps de hace dos frames en este mismo slot: la
                 // fence de m_currentFrame ya la esperó drawFrame, así que los
@@ -2168,7 +2168,7 @@ namespace DonTopo {
             // Sin cadena de mips (viewport minúsculo) o con el efecto apagado no
             // hay nada que sumar: la intensidad se fuerza a 0 y queda solo el
             // tonemap. El pass NO se puede saltar: es quien tonemapea.
-            const float intensity = (m_bloomEnabled && m_bloomMipCount > 0) ? m_bloomIntensity : 0.0f;
+            const float intensity = (bloomEnabled() && m_bloomMipCount > 0) ? m_bloomIntensity : 0.0f;
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipelineLayout,
                                     0, 1, &m_compositeSets[m_currentFrame], 0, nullptr);
@@ -2192,7 +2192,7 @@ namespace DonTopo {
 
             // Solo con el bloom encendido: el par se abre arriba bajo la misma
             // condición, y escribir aquí sin haber reseteado dejaría la query sucia.
-            if (m_timestampsSupported && m_bloomEnabled)
+            if (m_timestampsSupported && bloomEnabled())
                 vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_bloomQueryPool, m_currentFrame * 2 + 1);
 
             // Anti-aliasing: lo ultimo de la cadena de post, sobre color LDR ya
@@ -6815,8 +6815,8 @@ namespace DonTopo {
 
     void Renderer::setBloomEnabled(bool v)
     {
-        if (v == m_bloomEnabled) return;
-        m_bloomEnabled = v;
+        if (v == bloomEnabled()) return;
+        setBloomEnabledFlag(v);
         // Al apagar, la cadena se queda con el bloom del último frame calculado y
         // la composición la sigue muestreando (el shader multiplica siempre, y
         // 0 * inf sería NaN). Un clear a negro por frame en vuelo la deja neutra;

@@ -178,7 +178,7 @@ void PerformancePanel::draw(EditorContext& ctx)
             ImGui::End();
             return;
         }
-        Renderer& r = *ctx.renderer;
+        EditorRenderer& r = *ctx.renderer;
 
         // Los tiempos GPU salen del frame N-2 (es el slot cuya fence ya esperó
         // este frame), así que los dos primeros frames tras abrir el panel

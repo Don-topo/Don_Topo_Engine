@@ -40,7 +40,7 @@ void ReparentCommand::moveTo(uint64_t parentId, size_t index)
 }
 
 DeleteGameObjectCommand::DeleteGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio,
-                                                  Renderer& renderer, std::string label,
+                                                  EditorRenderer& renderer, std::string label,
                                                   uint64_t parentId, size_t index, nlohmann::json snapshot)
     : m_scene(scene), m_physics(physics), m_audio(audio), m_renderer(renderer),
       m_label(std::move(label)), m_parentId(parentId), m_index(index), m_snapshot(std::move(snapshot)) {}
@@ -69,7 +69,7 @@ void DeleteGameObjectCommand::undo()
 }
 
 CreateGameObjectCommand::CreateGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio,
-                                                  Renderer& renderer, std::string label,
+                                                  EditorRenderer& renderer, std::string label,
                                                   uint64_t parentId, size_t index, nlohmann::json snapshot)
     : m_scene(scene), m_physics(physics), m_audio(audio), m_renderer(renderer),
       m_label(std::move(label)), m_parentId(parentId), m_index(index), m_snapshot(std::move(snapshot)) {}
@@ -219,7 +219,7 @@ void AnimatorComponentCommand::apply(bool add)
     go->setAnimator(std::make_shared<AnimatorComponent>(m_state));
 }
 
-AnimationSourceCommand::AnimationSourceCommand(Scene& scene, Renderer* renderer,
+AnimationSourceCommand::AnimationSourceCommand(Scene& scene, EditorRenderer* renderer,
                                                 std::string label, uint64_t id, bool add,
                                                 std::string path,
                                                 std::vector<std::string> clipNames,

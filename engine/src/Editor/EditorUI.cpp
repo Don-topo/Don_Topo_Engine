@@ -27,7 +27,6 @@ namespace DonTopo {
 EditorUI::EditorUI()
     : m_sceneFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_exportDialog(std::make_unique<IGFD::FileDialog>())
-    , m_renderer(std::make_unique<Renderer>())
     , m_scriptEditor(std::make_unique<ScriptEditorPanel>())
 {
     m_scriptEditor->setLogCallback([this](const std::string& msg) { m_logPanel.push(msg); });
@@ -43,7 +42,12 @@ EditorUI::EditorUI()
 
 EditorUI::~EditorUI() = default;
 
-Renderer& EditorUI::renderer() { return *m_renderer; }
+void EditorUI::setRenderer(std::unique_ptr<EditorRenderer> renderer)
+{
+    m_renderer = std::move(renderer);
+}
+
+EditorRenderer& EditorUI::renderer() { return *m_renderer; }
 
 // ─── UiLayer: backend de ImGui ───────────────────────────────────────────────
 
@@ -522,7 +526,7 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
         m_assetLoader->cancelAllPending();
 }
 
-void EditorUI::onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, Renderer& renderer)
+void EditorUI::onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, EditorRenderer& renderer)
 {
     for (auto& r : results)
     {

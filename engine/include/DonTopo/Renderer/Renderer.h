@@ -271,8 +271,7 @@ namespace DonTopo {
             // Interruptor global: apagado no se graba ni un dispatch de la cadena
             // de mips y la composicion suma bloom cero (el pass LDR NO se salta,
             // que es tambien quien tonemapea).
-            void  setBloomEnabled(bool v);
-            bool  bloomEnabled() const       { return m_bloomEnabled; }
+            void  setBloomEnabled(bool v) override;
             // Coste GPU del bloom + composicion del ultimo frame ya resuelto, en
             // ms. 0 si el dispositivo no soporta timestamps.
             float bloomGpuMs() const         { return m_bloomGpuMs; }
@@ -937,7 +936,6 @@ namespace DonTopo {
             VkPipelineLayout                m_compositePipelineLayout           = VK_NULL_HANDLE;
             VkPipeline                      m_compositePipeline                 = VK_NULL_HANDLE;
 
-            bool                            m_bloomEnabled                      = true;
             // Cadena pendiente de dejar en negro (efecto recien apagado o imagenes
             // recien creadas). Una por frame en vuelo: cada slot se limpia en su
             // propio command buffer.

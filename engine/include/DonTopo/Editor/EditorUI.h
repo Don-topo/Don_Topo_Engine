@@ -31,6 +31,7 @@ class GameObject;
 class PhysicsManager;
 class AudioManager;
 class Renderer;
+class EditorRenderer;
 class Camera;
 class Scene;
 class ScriptManager;
@@ -46,9 +47,16 @@ public:
     EditorUI(const EditorUI&)            = delete;
     EditorUI& operator=(const EditorUI&) = delete;
 
-    // El Renderer que posee este editor. Es por donde main.cpp lo inicializa
-    // y dibuja: el ciclo de vida lo lleva el editor.
-    Renderer& renderer();
+    // El backend que posee este editor. Quien lo construye sabe cuál es
+    // —Vulkan o DirectX 12— y le pasa la propiedad aquí; el editor solo lo usa
+    // por la interfaz, así que a partir de este punto le da igual.
+    //
+    // Hay que ponerlo ANTES de draw(): sin backend no hay paneles que dibujar.
+    void setRenderer(std::unique_ptr<EditorRenderer> renderer);
+
+    // El que se le puso. Referencia y no puntero: llamar aquí sin haberlo
+    // puesto es un error de montaje, no una situación que manejar.
+    EditorRenderer& renderer();
 
     // viewportTexture es opaco: el backend que lo creó sabe qué es (un
     // VkDescriptorSet o un descriptor GPU de D3D12) y aquí solo viaja hasta
@@ -117,7 +125,7 @@ public:
     // Aplica a la escena los resultados que devuelve AsyncAssetLoader::pumpCompleted
     // y cierra el batch con UN solo flushPendingUploads. Lo llama el pump por
     // frame de main.cpp.
-    void onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, Renderer& renderer);
+    void onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, EditorRenderer& renderer);
 
     // Lo rellena main() antes del bucle; sin él, los drops no encolan nada y
     // Load Scene se queda en la ruta síncrona.
@@ -264,9 +272,9 @@ private:
     std::function<void(const glm::vec3&)> m_onAxisSelected;
 
     PhysicsManager* m_physics = nullptr;
-    // Propiedad: el editor construye el Renderer y lo mantiene vivo. unique_ptr
-    // a tipo incompleto — se construye y se destruye en el .cpp.
-    std::unique_ptr<Renderer> m_renderer;
+    // Propiedad: el editor mantiene vivo el backend que le dieron. unique_ptr a
+    // tipo incompleto — se destruye en el .cpp.
+    std::unique_ptr<EditorRenderer> m_renderer;
     AudioManager*   m_audio = nullptr;
     Scene*          m_scene = nullptr;
     ScriptManager*  m_scriptManager = nullptr;
