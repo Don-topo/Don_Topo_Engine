@@ -9,6 +9,7 @@
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Renderer/UniformBufferObject.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Renderer/EditorRenderer.h"
 #include "DonTopo/Renderer/RendererState.h"
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/GpuResources.h"
@@ -38,7 +39,7 @@ namespace DonTopo {
     // Los get/set del estado escalar de calidad y efectos (ambiente, bloom,
     // SSAO, SSR, niebla, FXAA, TAA, Forward+) los pone RendererState: no
     // dependen de Vulkan y los comparte el backend de DirectX 12.
-    class Renderer : public RendererState {
+    class Renderer : public EditorRenderer {
         // --- API de edicion (solo la consume DonTopoEditor) ---
         //
         // Tras el split Core/Editor la frontera es de build (dos targets), no
@@ -190,7 +191,6 @@ namespace DonTopo {
             // Quita solo el componente Mesh de go (no borra el GameObject ni sus
             // otros componentes). No-op si go es nullptr o no tiene mesh.
             void removeMeshComponent(GameObject* go);
-            enum class TextureSlot { Diffuse, Normal, MetallicRoughness };
             // Sustituye la textura del slot indicado por el checkerboard
             // "missing" (mismo generador que createTextureImage usa cuando no
             // hay path/bytes). No-op si renderIndex está fuera de rango.

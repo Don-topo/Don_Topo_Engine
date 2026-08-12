@@ -10,6 +10,7 @@ class GameObject;
 class PhysicsManager;
 class AudioManager;
 class Renderer;
+class EditorRenderer;
 class Scene;
 class ScriptManager;
 class UndoManager;
@@ -27,7 +28,9 @@ struct EditorContext {
     bool&        isPlaying;
 
     PhysicsManager* physics       = nullptr;
-    Renderer*       renderer      = nullptr;
+    // La interfaz, no el Renderer de Vulkan: los paneles solo usan lo que
+    // cualquier backend puede dar.
+    EditorRenderer* renderer      = nullptr;
     AudioManager*   audio         = nullptr;
     Scene*          scene         = nullptr;
     ScriptManager*  scriptManager = nullptr;
