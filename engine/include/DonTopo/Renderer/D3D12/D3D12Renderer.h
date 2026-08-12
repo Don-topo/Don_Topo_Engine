@@ -108,6 +108,11 @@ public:
 
     void setTransform(size_t objectIndex, const glm::mat4& transform);
     void setObjectMeshVisible(size_t objectIndex, bool visible);
+
+    // Cuánto refleja este objeto. Sale al alfa de la escena, que es de donde lo
+    // lee el trazado de reflejos; a false o a cero, ese objeto no refleja nada.
+    void setObjectSsr(size_t objectIndex, bool enabled, float intensity);
+    void setSkinnedSsr(size_t index, bool enabled, float intensity);
     size_t objectCount() const;
 
     // Suelta toda la geometría estática. Espera a la GPU antes de liberar:

@@ -134,6 +134,8 @@ int main()
                             node->skinnedRenderIndex = index;
                             d3d12.setSkinnedTransform(static_cast<size_t>(index),
                                                       node->worldTransform);
+                            d3d12.setSkinnedSsr(static_cast<size_t>(index), node->ssrEnabled,
+                                                node->ssrIntensity);
                             ++addedSkinned;
                             return;
                         }
@@ -146,6 +148,8 @@ int main()
                             return;
                         node->staticRenderIndex = index;
                         d3d12.setTransform(static_cast<size_t>(index), node->worldTransform);
+                        d3d12.setObjectSsr(static_cast<size_t>(index), node->ssrEnabled,
+                                           node->ssrIntensity);
                         ++added;
                     });
                     // Las luces de la escena, con sus transformaciones ya
@@ -338,10 +342,10 @@ int main()
                     ImGui::TextWrapped(
                         "Implementado: presentacion, escena del proyecto con sus texturas, "
                         "personajes animados por compute, iluminacion directa, profundidad, "
-                        "sombras en cascada, cielo, IBL, materiales PBR, SSAO, niebla, bloom "
+                        "sombras en cascada, cielo, IBL, materiales PBR, SSAO, SSR, niebla, bloom "
                         "con tone mapping y FXAA.");
                     ImGui::TextWrapped(
-                        "Sin implementar: SSR, TAA, MSAA, Forward+, gizmos, UI 2D y el editor "
+                        "Sin implementar: TAA, MSAA, Forward+, gizmos, UI 2D y el editor "
                         "completo.");
                     ImGui::Spacing();
                     ImGui::TextWrapped(
@@ -356,6 +360,9 @@ int main()
                         bool ssao = d3d12.ssaoEnabled();
                         if (ImGui::Checkbox("SSAO", &ssao))
                             d3d12.setSsaoEnabledFlag(ssao);
+                        bool ssr = d3d12.ssrEnabled();
+                        if (ImGui::Checkbox("SSR", &ssr))
+                            d3d12.setSsrEnabled(ssr);
                     }
 
                     ImGui::Separator();

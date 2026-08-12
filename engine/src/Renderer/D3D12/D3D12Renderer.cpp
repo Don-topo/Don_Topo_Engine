@@ -232,7 +232,12 @@ constexpr UINT kUavSsaoRaw      = kSrvPrepassDepth + 1;
 constexpr UINT kSrvSsaoRaw      = kUavSsaoRaw + 1;
 constexpr UINT kUavSsaoBlur     = kSrvSsaoRaw + 1;
 
-constexpr UINT kSrvHeapSize = kUavSsaoBlur + 1;
+// Reflejos en pantalla: el destino del trazado, que luego el resolve suma
+// sobre la escena.
+constexpr UINT kUavSsr = kUavSsaoBlur + 1;
+constexpr UINT kSrvSsr = kUavSsr + 1;
+
+constexpr UINT kSrvHeapSize = kSrvSsr + 1;
 
 // Push de ssao.comp y ssao_blur.comp: los dos comparten el bloque, así que el
 // rango de root constants tiene que ser el mismo para los dos pipelines.
@@ -245,6 +250,20 @@ struct SsaoPush {
     float     power;
 };
 static_assert(sizeof(SsaoPush) == 40, "SsaoPush debe ocupar 40 bytes");
+
+// Push de ssr.comp y ssr_resolve.comp, que comparten bloque igual que los dos
+// del SSAO.
+struct SsrPush {
+    glm::vec4 projParams;
+    glm::vec2 invRes;
+    float     maxDistance;
+    float     thickness;
+    int32_t   maxSteps;
+    int32_t   refineSteps;  // búsqueda binaria sobre el último tramo
+    float     edgeFade;
+    float     intensity;
+};
+static_assert(sizeof(SsrPush) == 48, "SsrPush debe ocupar 48 bytes");
 
 // Niebla volumétrica: push propio de 128 bytes.
 struct FogPush {
@@ -376,6 +395,10 @@ struct D3D12Renderer::Impl {
         UINT  srvBase   = kSrvBaseColor;
         float metallic  = 0.0f;
         float roughness = 0.6f;
+
+        // Fuerza de reflejo del objeto. pbr.frag la vuelca al alfa de la
+        // escena, y de ahí la lee el trazado: a cero, ese píxel no refleja.
+        float ssrStrength = 0.0f;
     };
     std::vector<StaticObject> objects;
 
@@ -483,6 +506,7 @@ struct D3D12Renderer::Impl {
 
         glm::mat4 transform{1.0f};
         bool      visible = true;
+        float     ssrStrength = 0.0f;
 
         std::vector<SkinnedSubMesh>       subMeshes;
         std::vector<D3D12MA::Allocation*> textures;
@@ -543,6 +567,14 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12PipelineState> ssaoBlurPipeline;
     D3D12MA::Allocation*        ssaoRawAllocation  = nullptr;
     D3D12MA::Allocation*        ssaoBlurAllocation = nullptr;
+
+    ComPtr<ID3D12RootSignature> ssrRootSignature;
+    ComPtr<ID3D12PipelineState> ssrPipeline;
+    ComPtr<ID3D12PipelineState> ssrResolvePipeline;
+    D3D12MA::Allocation*        ssrAllocation = nullptr;
+
+    void createSsrPipelines();
+    void recordSsr();
 
     void createSsaoPipelines();
     void createSsaoTargets();    // depende del tamaño: se rehace al redimensionar
@@ -1995,6 +2027,10 @@ void D3D12Renderer::Impl::recordSkinning()
 
 void D3D12Renderer::Impl::releaseHdrTargets()
 {
+    if (ssrAllocation) {
+        ssrAllocation->Release();
+        ssrAllocation = nullptr;
+    }
     if (hdrAllocation) {
         hdrAllocation->Release();
         hdrAllocation = nullptr;
@@ -2014,6 +2050,36 @@ void D3D12Renderer::Impl::releaseHdrTargets()
 void D3D12Renderer::Impl::createHdrTargets()
 {
     releaseHdrTargets();
+
+    // Destino del trazado de reflejos: mismo formato y tamaño que la escena,
+    // porque lo que guarda es color de la escena reproyectado.
+    {
+        D3D12_RESOURCE_DESC ssrDesc{};
+        ssrDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        ssrDesc.Width            = width;
+        ssrDesc.Height           = height;
+        ssrDesc.DepthOrArraySize = 1;
+        ssrDesc.MipLevels        = 1;
+        ssrDesc.Format           = kHdrFormat;
+        ssrDesc.SampleDesc.Count = 1;
+        ssrDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        D3D12MA::ALLOCATION_DESC allocDesc{};
+        allocDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+        throwIfFailed(allocator->CreateResource(&allocDesc, &ssrDesc,
+                                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                &ssrAllocation, IID_NULL, nullptr),
+                      "D3D12MA::Allocator::CreateResource(SSR)");
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format        = kHdrFormat;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(kUavSsr) * srvSize;
+        device->CreateUnorderedAccessView(ssrAllocation->GetResource(), nullptr, &uavDesc, handle);
+
+        createTexture2DSrv(ssrAllocation->GetResource(), kHdrFormat, kSrvSsr);
+    }
 
     // Target de la escena, en coma flotante para que el umbral del bloom pueda
     // distinguir lo que pasa de 1.0.
@@ -2698,6 +2764,169 @@ void D3D12Renderer::Impl::createSkyboxResources()
                   "ID3D12Device::CreateGraphicsPipelineState(cielo)");
 }
 
+void D3D12Renderer::Impl::createSsrPipelines()
+{
+    D3D12_DESCRIPTOR_RANGE sceneRange{};
+    sceneRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    sceneRange.NumDescriptors     = 1;
+    sceneRange.BaseShaderRegister = 0;  // t0
+
+    D3D12_DESCRIPTOR_RANGE depthRange{};
+    depthRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    depthRange.NumDescriptors     = 1;
+    depthRange.BaseShaderRegister = 1;  // t1
+
+    D3D12_DESCRIPTOR_RANGE outputRange{};
+    outputRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    outputRange.NumDescriptors     = 1;
+    outputRange.BaseShaderRegister = 2;  // u2
+
+    D3D12_ROOT_PARAMETER params[4]{};
+    params[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[0].Constants.ShaderRegister = 0;
+    params[0].Constants.Num32BitValues = sizeof(SsrPush) / 4;
+
+    params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable.NumDescriptorRanges = 1;
+    params[1].DescriptorTable.pDescriptorRanges   = &sceneRange;
+
+    params[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[2].DescriptorTable.NumDescriptorRanges = 1;
+    params[2].DescriptorTable.pDescriptorRanges   = &depthRange;
+
+    params[3].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[3].DescriptorTable.NumDescriptorRanges = 1;
+    params[3].DescriptorTable.pDescriptorRanges   = &outputRange;
+
+    // s0 filtra —el rayo cae entre píxeles de la escena— y s1 no: interpolar
+    // dos profundidades de superficies distintas da un valor que no existe.
+    D3D12_STATIC_SAMPLER_DESC samplers[2]{};
+    samplers[0].Filter         = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samplers[1].Filter         = D3D12_FILTER_MIN_MAG_MIP_POINT;
+    for (int i = 0; i < 2; ++i) {
+        samplers[i].AddressU       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        samplers[i].AddressV       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        samplers[i].AddressW       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        samplers[i].MaxLOD         = D3D12_FLOAT32_MAX;
+        samplers[i].ShaderRegister = static_cast<UINT>(i);
+    }
+
+    D3D12_ROOT_SIGNATURE_DESC rootDesc{};
+    rootDesc.NumParameters     = _countof(params);
+    rootDesc.pParameters       = params;
+    rootDesc.NumStaticSamplers = _countof(samplers);
+    rootDesc.pStaticSamplers   = samplers;
+
+    ComPtr<ID3DBlob> serialized;
+    ComPtr<ID3DBlob> errorBlob;
+    HRESULT          hr = D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                                      &serialized, &errorBlob);
+    if (FAILED(hr)) {
+        std::string detail;
+        if (errorBlob)
+            detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
+                          errorBlob->GetBufferSize());
+        throw std::runtime_error("D3D12: root signature del SSR (HRESULT " + hresultToString(hr) +
+                                 ") " + detail);
+    }
+    throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                              serialized->GetBufferSize(),
+                                              IID_PPV_ARGS(&ssrRootSignature)),
+                  "ID3D12Device::CreateRootSignature(SSR)");
+
+    auto buildCompute = [&](const char* path, ComPtr<ID3D12PipelineState>& out) {
+        const std::vector<char>           code = readBinaryFile(path);
+        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+        desc.pRootSignature = ssrRootSignature.Get();
+        desc.CS             = {code.data(), code.size()};
+        throwIfFailed(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&out)),
+                      "ID3D12Device::CreateComputePipelineState(SSR)");
+    };
+    buildCompute("shaders/ssr.comp.dxil", ssrPipeline);
+    buildCompute("shaders/ssr_resolve.comp.dxil", ssrResolvePipeline);
+}
+
+void D3D12Renderer::Impl::recordSsr()
+{
+    if (!ssrPipeline || !ssrAllocation || !hdrAllocation)
+        return;
+
+    const D3D12_GPU_DESCRIPTOR_HANDLE heapStart = srvHeap->GetGPUDescriptorHandleForHeapStart();
+    auto gpuHandle = [&](UINT index) {
+        D3D12_GPU_DESCRIPTOR_HANDLE handle = heapStart;
+        handle.ptr += static_cast<UINT64>(index) * srvSize;
+        return handle;
+    };
+    auto transition = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES before,
+                          D3D12_RESOURCE_STATES after) {
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource   = resource;
+        barrier.Transition.StateBefore = before;
+        barrier.Transition.StateAfter  = after;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &barrier);
+    };
+
+    const glm::mat4 proj = cameraProj();
+    SsrPush         push{};
+    push.projParams  = glm::vec4(proj[0][0], proj[1][1], proj[2][2], proj[3][2]);
+    push.invRes      = glm::vec2(1.0f / static_cast<float>(width), 1.0f / static_cast<float>(height));
+    push.maxDistance = state->ssrMaxDistance();
+    push.thickness   = state->ssrThickness();
+    push.maxSteps    = state->ssrMaxSteps();
+    // El refinado no tiene ajuste propio en el estado compartido: son pasos de
+    // bisección sobre el último tramo, y con menos de cuatro el borde del
+    // reflejo se escalona.
+    push.refineSteps = 5;
+    push.edgeFade    = state->ssrEdgeFade();
+    push.intensity   = state->ssrIntensity();
+
+    const UINT groupsX = (width + 7) / 8;
+    const UINT groupsY = (height + 7) / 8;
+
+    ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+
+    // Trazado: la escena ya dibujada como textura, la profundidad del pase de
+    // escena (la completa, no la del pre-pase) y el destino propio.
+    transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    transition(depthAllocation->GetResource(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    commandList->SetComputeRootSignature(ssrRootSignature.Get());
+    commandList->SetPipelineState(ssrPipeline.Get());
+    commandList->SetComputeRoot32BitConstants(0, sizeof(SsrPush) / 4, &push, 0);
+    commandList->SetComputeRootDescriptorTable(1, gpuHandle(kSrvSceneHdr));
+    commandList->SetComputeRootDescriptorTable(2, gpuHandle(kSrvDepth));
+    commandList->SetComputeRootDescriptorTable(3, gpuHandle(kUavSsr));
+    commandList->Dispatch(groupsX, groupsY, 1);
+
+    // Resolve: el reflejo se suma sobre la escena, que vuelve a ser destino de
+    // escritura.
+    transition(ssrAllocation->GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    commandList->SetPipelineState(ssrResolvePipeline.Get());
+    commandList->SetComputeRoot32BitConstants(0, sizeof(SsrPush) / 4, &push, 0);
+    commandList->SetComputeRootDescriptorTable(1, gpuHandle(kSrvSsr));
+    commandList->SetComputeRootDescriptorTable(2, gpuHandle(kSrvDepth));
+    commandList->SetComputeRootDescriptorTable(3, gpuHandle(kUavSceneHdr));
+    commandList->Dispatch(groupsX, groupsY, 1);
+
+    // Y todo como estaba: la niebla, que va detrás, espera encontrar la escena
+    // como render target y la profundidad en escritura.
+    transition(ssrAllocation->GetResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+               D3D12_RESOURCE_STATE_RENDER_TARGET);
+    transition(depthAllocation->GetResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+               D3D12_RESOURCE_STATE_DEPTH_WRITE);
+}
+
 void D3D12Renderer::Impl::createSsaoPipelines()
 {
     auto serialize = [&](const D3D12_ROOT_SIGNATURE_DESC& desc, ComPtr<ID3D12RootSignature>& out,
@@ -3282,8 +3511,7 @@ void D3D12Renderer::Impl::recordFog()
     transition(depthAllocation->GetResource(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-    const float     aspect = (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
-    const glm::mat4 proj   = glm::perspectiveRH_ZO(glm::radians(60.0f), aspect, 0.1f, 500.0f);
+    const glm::mat4  proj   = cameraProj();
     const glm::vec3  camPos = cameraPos;
     const glm::mat4& view   = cameraView;
 
@@ -4085,6 +4313,7 @@ void D3D12Renderer::init(Window& window)
     // El IBL sale del cielo recién cargado, así que va detrás.
     d.precomputeIbl();
     d.createFogAndFxaaPipelines();
+    d.createSsrPipelines();
     d.updateViewProj();
 
     d.initialized = true;
@@ -4231,7 +4460,7 @@ void D3D12Renderer::drawFrame()
             push.transform = object.transform;
             push.metallic  = object.metallic;
             push.roughness = object.roughness;
-            push.flags     = glm::vec2(0.0f, 0.0f);
+            push.flags = glm::vec2(0.0f, d.state->ssrEnabled() ? object.ssrStrength : 0.0f);
             d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
 
             d.commandList->IASetVertexBuffers(0, 1, &object.vertexBufferView);
@@ -4278,7 +4507,7 @@ void D3D12Renderer::drawFrame()
             push.transform = character.transform;
             push.metallic  = 0.0f;
             push.roughness = 0.7f;
-            push.flags     = glm::vec2(0.0f, 0.0f);
+            push.flags = glm::vec2(0.0f, d.state->ssrEnabled() ? character.ssrStrength : 0.0f);
             d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
 
             d.commandList->IASetVertexBuffers(0, 1, &character.vertexBufferView);
@@ -4327,6 +4556,11 @@ void D3D12Renderer::drawFrame()
         backToUav.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         d.commandList->ResourceBarrier(1, &backToUav);
     }
+
+    // Reflejos antes de la niebla: leen la escena tal cual salió del pase y le
+    // suman lo reflejado; la niebla va después porque tiñe TODO lo que hay.
+    if (d.state->ssrEnabled())
+        d.recordSsr();
 
     // Niebla ANTES del bloom: reescribe la escena, y lo que el bloom filtre
     // tiene que ser ya lo que se va a ver.
@@ -4563,6 +4797,18 @@ void D3D12Renderer::setTransform(size_t objectIndex, const glm::mat4& transform)
 {
     if (objectIndex < m_impl->objects.size())
         m_impl->objects[objectIndex].transform = transform;
+}
+
+void D3D12Renderer::setObjectSsr(size_t objectIndex, bool enabled, float intensity)
+{
+    if (objectIndex < m_impl->objects.size())
+        m_impl->objects[objectIndex].ssrStrength = enabled ? intensity : 0.0f;
+}
+
+void D3D12Renderer::setSkinnedSsr(size_t index, bool enabled, float intensity)
+{
+    if (index < m_impl->skinnedObjects.size())
+        m_impl->skinnedObjects[index].ssrStrength = enabled ? intensity : 0.0f;
 }
 
 void D3D12Renderer::setObjectMeshVisible(size_t objectIndex, bool visible)
@@ -4810,6 +5056,9 @@ void D3D12Renderer::shutdown()
     d.depthPrepassPipeline.Reset();
     d.depthPrepassSkinnedPipeline.Reset();
     d.depthPrepassRootSignature.Reset();
+    d.ssrPipeline.Reset();
+    d.ssrResolvePipeline.Reset();
+    d.ssrRootSignature.Reset();
     d.ssaoPipeline.Reset();
     d.ssaoBlurPipeline.Reset();
     d.ssaoRootSignature.Reset();
