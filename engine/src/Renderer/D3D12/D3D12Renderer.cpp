@@ -2,6 +2,7 @@
 
 #ifdef DT_D3D12_ENABLED
 
+#include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Window.h"
 #include "DonTopo/Renderer/Cube.h"
 #include "DonTopo/Renderer/Mesh.h"
@@ -9,7 +10,9 @@
 #include "DonTopo/Renderer/Plane.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
+#include "DonTopo/Renderer/UiLayer.h"
 #include "DonTopo/Renderer/Vertex.h"
+#include "DonTopo/UI/UiCanvas.h"
 
 #include <windows.h>
 
@@ -726,6 +729,18 @@ struct D3D12Renderer::Impl {
     void ensureForwardPlusGrid(uint32_t cells);
     void updateForwardPlus();   // parámetros y luces del frame
     void recordForwardPlusCull();
+
+    // Árbol de la interfaz 2D del juego. Este backend todavía no la dibuja,
+    // pero el editor la edita igual: tenerlo aquí es lo que permite que lo
+    // haga sin preguntar con qué backend corre.
+    UiCanvas uiCanvas;
+
+    // Capa de interfaz del editor, si la hay. No es propiedad de este backend.
+    UiLayer* uiLayer = nullptr;
+
+    // Guardado para que el panel conserve el valor; este backend no dibuja a
+    // más resolución todavía.
+    float ssaaFactor = 2.0f;
 
     // Destino alternativo del pase final. Con esto encendido el backbuffer solo
     // lleva interfaz, y la escena viaja como textura a quien la dibuje.
@@ -5871,7 +5886,7 @@ const std::string& D3D12Renderer::adapterName() const
     return m_impl->adapterName;
 }
 
-int D3D12Renderer::addStaticMesh(const Mesh& mesh)
+int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImage>*)
 {
     Impl& d = *m_impl;
     if (!d.initialized || mesh.vertices.empty() || mesh.indices.empty())
@@ -6057,6 +6072,267 @@ glm::mat4 D3D12Renderer::viewProjMatrix() const
     // quiere la cámara, no el ruido de muestreo.
     return m_impl->cameraProj() * m_impl->cameraView;
 }
+
+void D3D12Renderer::rebuildSkinnedMesh(int index, const SkinnedMesh& mesh)
+{
+    Impl& d = *m_impl;
+    if (index < 0 || index >= static_cast<int>(d.skinnedObjects.size()))
+        return;
+
+    // Se conservan sitio, transformación y estado de animación: el índice de
+    // render del GameObject no puede moverse, y quien lo reconstruye —añadir o
+    // quitar clips— no espera que el personaje salte a la pose inicial.
+    const Impl::SkinnedObject previous = d.skinnedObjects[index];
+
+    const int created = d.createSkinnedObject(mesh);
+    if (created < 0)
+        return;
+
+    Impl::SkinnedObject rebuilt = d.skinnedObjects.back();
+    d.skinnedObjects.pop_back();
+
+    rebuilt.transform   = previous.transform;
+    rebuilt.visible     = previous.visible;
+    rebuilt.ssrStrength = previous.ssrStrength;
+    rebuilt.animTime    = previous.animTime;
+    rebuilt.clipBase    = previous.clipBase;
+
+    // Los recursos viejos pueden estar en uso por el último frame presentado.
+    d.waitForGpu();
+    Impl::SkinnedObject& slot = d.skinnedObjects[index];
+    for (D3D12MA::Allocation** allocation :
+         {&slot.posKeys, &slot.rotKeys, &slot.scaleKeys, &slot.boneInfos, &slot.inputVerts,
+          &slot.localXforms, &slot.finalBones, &slot.outputVerts, &slot.indices}) {
+        if (*allocation) {
+            (*allocation)->Release();
+            *allocation = nullptr;
+        }
+    }
+    for (D3D12MA::Allocation* texture : slot.textures)
+        if (texture)
+            texture->Release();
+    slot.textures.clear();
+
+    slot = std::move(rebuilt);
+}
+
+void D3D12Renderer::registerGameObject(GameObject* node)
+{
+    if (!node)
+        return;
+
+    node->traverse([this](GameObject* child) {
+        if (!child || !child->hasMesh())
+            return;
+
+        if (child->isSkinned()) {
+            const SkinnedMesh* skinned = child->getSkinnedMesh();
+            if (!skinned)
+                return;
+            const int index = addSkinnedMesh(*skinned);
+            if (index < 0)
+                return;
+            child->skinnedRenderIndex = index;
+            setSkinnedTransform(static_cast<size_t>(index), child->worldTransform);
+            setSkinnedSsr(static_cast<size_t>(index), child->ssrEnabled, child->ssrIntensity);
+            return;
+        }
+
+        const std::shared_ptr<Mesh> mesh = child->getMesh();
+        if (!mesh)
+            return;
+        const int index = addStaticMesh(*mesh);
+        if (index < 0)
+            return;
+        child->staticRenderIndex = index;
+        setTransform(static_cast<size_t>(index), child->worldTransform);
+        setObjectSsr(static_cast<size_t>(index), child->ssrEnabled, child->ssrIntensity);
+    });
+}
+
+void D3D12Renderer::removeGameObject(GameObject* node)
+{
+    if (!node)
+        return;
+
+    // Los huecos NO se compactan: los índices de render de los demás objetos
+    // están anotados en sus GameObject, y moverlos dejaría a todos apuntando a
+    // otra malla. El objeto se apaga y su sitio queda libre para nada.
+    node->traverse([this](GameObject* child) {
+        if (!child)
+            return;
+        if (child->staticRenderIndex >= 0) {
+            setObjectMeshVisible(static_cast<size_t>(child->staticRenderIndex), false);
+            child->staticRenderIndex = -1;
+        }
+        if (child->skinnedRenderIndex >= 0) {
+            setSkinnedVisible(static_cast<size_t>(child->skinnedRenderIndex), false);
+            child->skinnedRenderIndex = -1;
+        }
+    });
+}
+
+void D3D12Renderer::removeMeshComponent(GameObject* node)
+{
+    if (!node)
+        return;
+    if (node->staticRenderIndex >= 0) {
+        setObjectMeshVisible(static_cast<size_t>(node->staticRenderIndex), false);
+        node->staticRenderIndex = -1;
+    }
+    if (node->skinnedRenderIndex >= 0) {
+        setSkinnedVisible(static_cast<size_t>(node->skinnedRenderIndex), false);
+        node->skinnedRenderIndex = -1;
+    }
+}
+
+void D3D12Renderer::replaceStaticTextureWithMissing(int renderIndex, TextureSlot slot)
+{
+    Impl& d = *m_impl;
+    if (renderIndex < 0 || renderIndex >= static_cast<int>(d.objects.size()))
+        return;
+
+    const Impl::StaticObject& object = d.objects[renderIndex];
+    if (object.srvBase == kSrvBaseColor)
+        return;  // sin bloque propio: dibuja con los neutros globales
+
+    // El neutro que ya existe para cada hueco. No es el damero magenta del
+    // camino de Vulkan, pero deja el objeto visible en vez de con basura, que
+    // es lo que importa cuando una textura no se ha podido leer.
+    switch (slot) {
+        case TextureSlot::Diffuse:
+            d.createTexture2DSrv(d.baseColorAllocation->GetResource(),
+                                 DXGI_FORMAT_R8G8B8A8_UNORM, object.srvBase);
+            break;
+        case TextureSlot::Normal:
+            d.createTexture2DSrv(d.normalMapAllocation->GetResource(),
+                                 DXGI_FORMAT_R8G8B8A8_UNORM, object.srvBase + 1);
+            break;
+        case TextureSlot::MetallicRoughness:
+            d.createTexture2DSrv(d.metalRoughAllocation->GetResource(),
+                                 DXGI_FORMAT_R8G8B8A8_UNORM, object.srvBase + 3);
+            break;
+    }
+}
+
+void D3D12Renderer::flushUploadsAndWait()
+{
+    m_impl->waitForGpu();
+}
+
+void D3D12Renderer::refitCameraRange()
+{
+    // Nada que hacer: el rango de este backend es fijo (0.1 a 500) y no se
+    // deriva de lo que haya cargado.
+}
+
+void D3D12Renderer::setOutlineTarget(int staticIndex, int skinnedIndex)
+{
+    setSelection(staticIndex, skinnedIndex);
+}
+
+uint32_t D3D12Renderer::renderWidth() const
+{
+    return m_impl->width;
+}
+
+uint32_t D3D12Renderer::renderHeight() const
+{
+    return m_impl->height;
+}
+
+float D3D12Renderer::viewportAspect() const
+{
+    const Impl& d = *m_impl;
+    return (d.height > 0) ? static_cast<float>(d.width) / static_cast<float>(d.height) : 1.0f;
+}
+
+void D3D12Renderer::setUiLayer(UiLayer* ui)
+{
+    Impl& d  = *m_impl;
+    d.uiLayer = ui;
+
+    // La capa de interfaz se graba por el mismo hueco que ya existía para
+    // ImGui: quien la pone deja de tener que registrar el callback a mano.
+    if (!ui) {
+        setUiDrawCallback(nullptr);
+        return;
+    }
+    setUiDrawCallback([this]() {
+        if (m_impl->uiLayer)
+            m_impl->uiLayer->recordUi(m_impl->commandList.Get());
+    });
+}
+
+UiCanvas& D3D12Renderer::uiCanvas()
+{
+    return m_impl->uiCanvas;
+}
+
+void D3D12Renderer::setAaMode(AaMode mode)
+{
+    // Solo se anota: los targets y los pipelines los rehace el frame siguiente,
+    // con la GPU en reposo.
+    setAaModeFlag(mode);
+}
+
+void D3D12Renderer::setMsaaSamples(int v)
+{
+    setMsaaSamplesFlag(v);
+}
+
+int D3D12Renderer::maxMsaaSamples() const
+{
+    const Impl& d = *m_impl;
+    if (!d.device)
+        return 1;
+
+    int best = 1;
+    for (UINT samples = 2; samples <= 8; samples *= 2) {
+        D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS levels{};
+        levels.Format      = kHdrFormat;
+        levels.SampleCount = samples;
+        if (SUCCEEDED(d.device->CheckFeatureSupport(D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
+                                                    &levels, sizeof(levels))) &&
+            levels.NumQualityLevels > 0)
+            best = static_cast<int>(samples);
+    }
+    return best;
+}
+
+void D3D12Renderer::setSsaoEnabled(bool v)
+{
+    setSsaoEnabledFlag(v);
+}
+
+void D3D12Renderer::setSsaaFactor(float v)
+{
+    // Se guarda para que el panel conserve el valor, pero este backend no
+    // dibuja a más resolución: el modo SSAA no está implementado aquí.
+    m_impl->ssaaFactor = v;
+}
+
+float D3D12Renderer::ssaaFactor() const
+{
+    return m_impl->ssaaFactor;
+}
+
+void  D3D12Renderer::requestProbeBake(uint64_t) {}
+void  D3D12Renderer::requestProbeBakeAll() {}
+int   D3D12Renderer::probeCount() const { return 0; }
+float D3D12Renderer::lastProbeBakeMs() const { return 0.0f; }
+float D3D12Renderer::probeBakeMs(uint64_t) const { return 0.0f; }
+
+void     D3D12Renderer::setPerfCaptureEnabled(bool) {}
+float    D3D12Renderer::renderGpuMs() const { return 0.0f; }
+float    D3D12Renderer::ssaoGpuMs() const { return 0.0f; }
+float    D3D12Renderer::ssrGpuMs() const { return 0.0f; }
+float    D3D12Renderer::bloomGpuMs() const { return 0.0f; }
+float    D3D12Renderer::fogGpuMs() const { return 0.0f; }
+float    D3D12Renderer::aaGpuMs() const { return 0.0f; }
+float    D3D12Renderer::forwardPlusGpuMs() const { return 0.0f; }
+float    D3D12Renderer::forwardPlusAvgPerCell() const { return 0.0f; }
+uint32_t D3D12Renderer::forwardPlusOverflowCells() const { return 0; }
 
 void D3D12Renderer::setSelection(int staticIndex, int skinnedIndex)
 {

@@ -2,7 +2,7 @@
 
 #ifdef DT_D3D12_ENABLED
 
-#include "DonTopo/Renderer/RendererState.h"
+#include "DonTopo/Renderer/EditorRenderer.h"
 
 #include <glm/glm.hpp>
 
@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace DonTopo {
 
@@ -35,7 +36,7 @@ namespace D3D12 {
 // bloom, niebla, SSAO, SSR y anti-aliasing son los mismos valores en los dos
 // backends, y tenerlos una sola vez es lo que permite que el mismo panel de
 // opciones sirva para ambos.
-class D3D12Renderer : public RendererState {
+class D3D12Renderer : public EditorRenderer {
 public:
     D3D12Renderer();
     ~D3D12Renderer();
@@ -104,7 +105,11 @@ public:
 
     // Sube la malla a VRAM y devuelve su índice, que es el que hay que usar
     // luego en setTransform/setObjectMeshVisible. -1 si la malla está vacía.
-    int addStaticMesh(const Mesh& mesh);
+    //
+    // decoded se ignora: aquí las subidas son síncronas y la descompresión ya
+    // viene hecha dentro del propio Mesh.
+    int addStaticMesh(const Mesh& mesh,
+                      const std::vector<DecodedImage>* decoded = nullptr) override;
 
     void setTransform(size_t objectIndex, const glm::mat4& transform);
     void setObjectMeshVisible(size_t objectIndex, bool visible);
@@ -127,6 +132,7 @@ public:
     // bucle el clip activo (el 0 al cargar). Quien tenga un Animator que la
     // calcule en CPU usa setAnimationState y no depende de ese reloj.
     int addSkinnedMesh(const SkinnedMesh& mesh);
+    void rebuildSkinnedMesh(int index, const SkinnedMesh& mesh) override;
 
     void setSkinnedTransform(size_t index, const glm::mat4& transform);
     void setSkinnedVisible(size_t index, bool visible);
@@ -158,6 +164,66 @@ public:
     size_t skinnedCount() const;
     void   clearSkinnedMeshes();
 
+    // --- Lo que pide el editor ------------------------------------------
+    //
+    // Sube o suelta la geometría de un nodo y de sus hijos. Es la misma
+    // operación que hace el camino del sandbox a mano, con los índices de
+    // render anotados en el propio GameObject.
+    void registerGameObject(GameObject* node) override;
+    void removeGameObject(GameObject* node) override;
+    void removeMeshComponent(GameObject* node) override;
+
+    void replaceStaticTextureWithMissing(int renderIndex, TextureSlot slot) override;
+
+    // Las subidas de este backend son síncronas: basta con esperar a la GPU.
+    void flushUploadsAndWait() override;
+
+    // El rango de profundidad aquí es fijo (0.1 a 500), así que no hay nada que
+    // reajustar. Se implementa para cumplir la interfaz y para que quien la
+    // llame no tenga que preguntar con qué backend corre.
+    void refitCameraRange() override;
+
+    void setOutlineTarget(int staticIndex, int skinnedIndex) override;
+
+    uint32_t renderWidth() const override;
+    uint32_t renderHeight() const override;
+    float    viewportAspect() const override;
+
+    void      setUiLayer(UiLayer* ui) override;
+    UiCanvas& uiCanvas() override;
+
+    // Cambiar de modo o de muestras mueve targets y pipelines, y eso lo aplica
+    // el frame siguiente con la GPU en reposo.
+    void  setAaMode(AaMode mode) override;
+    void  setMsaaSamples(int v) override;
+    int   maxMsaaSamples() const override;
+    void  setSsaoEnabled(bool v) override;
+
+    // SSAA no está en este backend: se acepta el valor y se guarda, pero no
+    // cambia la resolución de render. El panel lo enseña igual.
+    void  setSsaaFactor(float v) override;
+    float ssaaFactor() const override;
+
+    // Sondas de reflexión: todavía no. Cero sondas y cero milisegundos, que es
+    // lo que el panel enseña.
+    void  requestProbeBake(uint64_t ownerId) override;
+    void  requestProbeBakeAll() override;
+    int   probeCount() const override;
+    float lastProbeBakeMs() const override;
+    float probeBakeMs(uint64_t ownerId) const override;
+
+    // Métricas por pase: sin consultas de tiempo en este backend todavía.
+    void     setPerfCaptureEnabled(bool on) override;
+    float    renderGpuMs() const override;
+    float    ssaoGpuMs() const override;
+    float    ssrGpuMs() const override;
+    float    bloomGpuMs() const override;
+    float    fogGpuMs() const override;
+    float    aaGpuMs() const override;
+    float    forwardPlusGpuMs() const override;
+    float    forwardPlusAvgPerCell() const override;
+    uint32_t forwardPlusOverflowCells() const override;
+
     // Descripción del adaptador con el que se creó el device. Vacía antes de
     // init(). Se usa para dejarlo en el Log.
     const std::string& adapterName() const;
@@ -181,7 +247,7 @@ public:
     // Tamaño al que se dibuja la escena cuando va a textura: el del panel que
     // la muestra, para que salga 1:1 y no reescalada. Se anota y se aplica
     // entre frames, como el resize de la ventana; 0 se ignora.
-    void setViewportSize(uint32_t width, uint32_t height);
+    void setViewportSize(uint32_t width, uint32_t height) override;
 
     // Descriptor GPU de esa textura, listo para usarse como ImTextureID. 0 si
     // todavía no hay imagen (antes de init). El heap es el mismo que se expone
