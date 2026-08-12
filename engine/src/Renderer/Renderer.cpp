@@ -1641,7 +1641,7 @@ namespace DonTopo {
                 push.flags.y = glm::max(maxExtent * maxWorldScale(obj.transform), 1.0f) * kOutlineFactor;
 
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    m_wireframeMode ? m_outlineWirePipeline : m_outlinePipeline);
+                    isWireframeMode() ? m_outlineWirePipeline : m_outlinePipeline);
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
                     0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
                 vkCmdPushConstants(cmd, m_pipelineLayout,
@@ -1677,7 +1677,7 @@ namespace DonTopo {
                                    * kOutlineFactor;
 
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        m_wireframeMode ? m_skinnedOutlineWirePipeline : m_skinnedOutlinePipeline);
+                        isWireframeMode() ? m_skinnedOutlineWirePipeline : m_skinnedOutlinePipeline);
                     // Un solo draw sobre todo el index buffer: los submeshes solo
                     // existen para cambiar de material, y el contorno es de un
                     // color plano.
@@ -1892,7 +1892,7 @@ namespace DonTopo {
             vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
 
             vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                m_wireframeMode ? m_wireframePipeline : m_pipeline);
+                isWireframeMode() ? m_wireframePipeline : m_pipeline);
             // Las guardas y el culling siguen siendo POR OBJETO: se resuelven
             // aquí, que es donde está la caché GPU, y el agrupado solo ve el
             // resultado en `visible`. Agrupar antes de cullear dibujaría de más.
@@ -1999,7 +1999,7 @@ namespace DonTopo {
             if (!m_skinnedObjects.empty())
             {
                 vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    m_wireframeMode ? m_skinnedWireframePipeline : m_skinnedGfxPipeline);
+                    isWireframeMode() ? m_skinnedWireframePipeline : m_skinnedGfxPipeline);
 
                 for (size_t si = 0; si < m_skinnedObjects.size(); si++)
                 {
@@ -2061,7 +2061,7 @@ namespace DonTopo {
 
             // Skybox — fullscreen quad, depth LEQUAL sin escritura (al final del pass).
             // Omitido en wireframe: el fondo ya es negro sólido (clearValue por defecto).
-            if (!m_wireframeMode && m_skybox.isInitialized()) {
+            if (!isWireframeMode() && m_skybox.isInitialized()) {
                 glm::mat4 rotView    = glm::mat4(glm::mat3(fc.view)); // sin traslación
                 glm::mat4 invViewProj = glm::inverse(proj * rotView);
                 m_skybox.draw(m_commandBuffers[m_currentFrame], invViewProj);

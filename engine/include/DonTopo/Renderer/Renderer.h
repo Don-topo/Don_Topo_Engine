@@ -94,8 +94,6 @@ namespace DonTopo {
             void shutdown();
             void setCamera(const Camera& camera);
             void notifyResize() { m_framebufferResized = true; }
-            void setWireframeMode(bool enabled) { m_wireframeMode = enabled; }
-            bool isWireframeMode() const { return m_wireframeMode; }
             // Contorno de seleccion: indices del objeto resaltado en m_objects y
             // en m_skinnedObjects (los mismos que guarda GameObject en
             // staticRenderIndex/skinnedRenderIndex), -1 para "ninguno". Solo lo
@@ -1398,7 +1396,6 @@ namespace DonTopo {
             int                             m_outlineStaticIndex                = -1;
             int                             m_outlineSkinnedIndex               = -1;
             bool                            m_framebufferResized                = false;
-            bool                            m_wireframeMode                     = false;
             bool                            m_headless                          = false;
             VkDescriptorSetLayout           m_descriptorSetLayout               = VK_NULL_HANDLE;
             VkBuffer                        m_uniformBuffers[MAX_FRAMES]        = {};

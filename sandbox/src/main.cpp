@@ -370,6 +370,10 @@ int main()
                         // que soporte el device.
                         // Anti-aliasing: los modos que este backend sabe hacer.
                         // SSAA no esta, asi que no se ofrece.
+                        bool wire = d3d12.isWireframeMode();
+                        if (ImGui::Checkbox("Alambre", &wire))
+                            d3d12.setWireframeMode(wire);
+
                         int aa = static_cast<int>(d3d12.aaMode());
                         if (aa == 2) aa = 0;  // SSAA: aqui no existe
                         const char* aaNames[] = {"Ninguno", "FXAA", "-", "MSAA", "TAA"};

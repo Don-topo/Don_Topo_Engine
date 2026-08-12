@@ -432,6 +432,10 @@ struct D3D12Renderer::Impl {
     // ── Malla con material: la ruta de triangle.vert/triangle.frag ──────────
     ComPtr<ID3D12RootSignature> meshRootSignature;
     ComPtr<ID3D12PipelineState> meshPipeline;
+    // Los mismos shaders y la misma root signature, pero rellenando solo las
+    // aristas. Se crean junto a los sólidos para no rehacer nada al cambiar de
+    // modo: el interruptor solo elige cuál se enlaza.
+    ComPtr<ID3D12PipelineState> meshWirePipeline;
 
     // Geometría estática de la escena. Cada entrada es una malla subida a VRAM
     // con su transformación; el índice que devuelve addStaticMesh es la
@@ -529,6 +533,7 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12PipelineState> boneHierarchyPipeline;
     ComPtr<ID3D12PipelineState> skinningPipeline;
     ComPtr<ID3D12PipelineState> skinnedMeshPipeline;
+    ComPtr<ID3D12PipelineState> skinnedMeshWirePipeline;
 
     // Submallas de un personaje: el FBX trae un material por trozo (cuerpo,
     // pelo, ropa…), y dibujarlo de una tirada obligaba a darles a todas la
@@ -1619,6 +1624,14 @@ void D3D12Renderer::Impl::createMeshPipeline()
     psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
 
+    // El de alambre, con lo único que cambia: el relleno. Sin cara trasera
+    // descartada, que en alambre esconde la mitad de las aristas.
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC wireDesc = psoDesc;
+    wireDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    wireDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    throwIfFailed(device->CreateGraphicsPipelineState(&wireDesc, IID_PPV_ARGS(&meshWirePipeline)),
+                  "ID3D12Device::CreateGraphicsPipelineState(malla en alambre)");
+
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&meshPipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(malla)");
 }
@@ -1931,6 +1944,13 @@ void D3D12Renderer::Impl::createSkinningPipelines()
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc,
                                                       IID_PPV_ARGS(&skinnedMeshPipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(skinned)");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC wireDesc = psoDesc;
+    wireDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    wireDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    throwIfFailed(device->CreateGraphicsPipelineState(&wireDesc,
+                                                      IID_PPV_ARGS(&skinnedMeshWirePipeline)),
+                  "ID3D12Device::CreateGraphicsPipelineState(skinned en alambre)");
 }
 
 int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
@@ -4073,7 +4093,9 @@ void D3D12Renderer::Impl::bindForwardPlus()
 
 void D3D12Renderer::Impl::recordSkybox()
 {
-    if (!skyboxPipeline)
+    // En alambre el cielo sobra: taparía la geometría que se quiere ver por
+    // dentro, y el camino de Vulkan también lo omite.
+    if (!skyboxPipeline || state->isWireframeMode())
         return;
 
     // La vista SIN traslación: el cielo no se acerca al andar, solo gira.
@@ -5223,7 +5245,9 @@ void D3D12Renderer::drawFrame()
         ID3D12DescriptorHeap* heaps[] = {d.srvHeap.Get()};
         d.commandList->SetDescriptorHeaps(1, heaps);
 
-        d.commandList->SetPipelineState(d.meshPipeline.Get());
+        const bool wireframe = d.state->isWireframeMode();
+        d.commandList->SetPipelineState(wireframe ? d.meshWirePipeline.Get()
+                                                  : d.meshPipeline.Get());
         d.commandList->SetGraphicsRootSignature(d.meshRootSignature.Get());
         d.commandList->SetGraphicsRootConstantBufferView(
             0, d.sceneUboAllocations[d.frameIndex]->GetResource()->GetGPUVirtualAddress());
@@ -5280,7 +5304,9 @@ void D3D12Renderer::drawFrame()
     // Personajes: mismos shaders y misma root signature que el cubo, pero el
     // vertex buffer es lo que acaba de escribir el compute.
     if (!d.skinnedObjects.empty() && d.skinnedMeshPipeline) {
-        d.commandList->SetPipelineState(d.skinnedMeshPipeline.Get());
+        d.commandList->SetPipelineState(d.state->isWireframeMode()
+                                            ? d.skinnedMeshWirePipeline.Get()
+                                            : d.skinnedMeshPipeline.Get());
         d.commandList->SetGraphicsRootSignature(d.meshRootSignature.Get());
         d.commandList->SetGraphicsRootConstantBufferView(
             0, d.sceneUboAllocations[d.frameIndex]->GetResource()->GetGPUVirtualAddress());
@@ -5878,6 +5904,8 @@ void D3D12Renderer::shutdown()
         d.fpStatsAllocation->Release();
         d.fpStatsAllocation = nullptr;
     }
+    d.meshWirePipeline.Reset();
+    d.skinnedMeshWirePipeline.Reset();
     d.taaPipeline.Reset();
     d.taaRootSignature.Reset();
     d.ssrPipeline.Reset();

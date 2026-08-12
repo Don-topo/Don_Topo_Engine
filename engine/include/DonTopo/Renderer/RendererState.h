@@ -134,6 +134,11 @@ namespace DonTopo {
                 Msaa = 3,
                 Taa  = 4,
             };
+            // Modo alambre: lo enciende el menú View del editor y vale para los
+            // dos backends, así que el valor vive aquí.
+            bool isWireframeMode() const        { return m_wireframeMode; }
+            void setWireframeMode(bool enabled) { m_wireframeMode = enabled; }
+
             AaMode aaMode() const            { return m_aaMode; }
             void   setAaModeFlag(AaMode m)   { m_aaMode = m; }
             int    msaaSamples() const       { return m_msaaSamples; }
@@ -166,6 +171,7 @@ namespace DonTopo {
             float                           m_bloomKnee                         = 0.5f;
             float                           m_bloomIntensity                    = 0.05f;
 
+            bool                            m_wireframeMode                     = false;
             AaMode                          m_aaMode                            = AaMode::None;
             int                             m_msaaSamples                       = 4;
             bool                            m_ssaoEnabled                       = false;
