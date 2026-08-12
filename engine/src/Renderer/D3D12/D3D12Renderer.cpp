@@ -5111,12 +5111,11 @@ D3D12Renderer::D3D12Renderer() : m_impl(std::make_unique<Impl>())
     // así un setBloomIntensity() desde el editor se ve en el frame siguiente.
     m_impl->state = this;
 
-    // La escena de prueba de este backend se enseña con los efectos puestos.
-    // RendererState los trae apagados —es el default del motor, pensado para
-    // que un proyecto nuevo arranque barato—, así que se encienden aquí y no
-    // se cambia ese default por debajo al Renderer de Vulkan.
-    setBloomIntensity(0.15f);
-    setFogEnabled(true);
+    // Aquí NO se enciende ningún efecto. Los encendía —niebla y un bloom más
+    // fuerte— cuando este backend tenía su propio bucle de prueba y quería
+    // enseñarlos; detrás del editor eso pisa lo que diga el proyecto, y una
+    // escena real con la niebla puesta y una sola luz lejana se ve NEGRA. El
+    // default del motor es el de RendererState, igual que para Vulkan.
 }
 
 D3D12Renderer::~D3D12Renderer()

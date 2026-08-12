@@ -364,11 +364,15 @@ int main()
                 // Cámara después de la interfaz, para que arrastrar por un
                 // panel no gire la vista.
                 {
-                    GLFWwindow*    native = window.getNativeWindow();
-                    const ImGuiIO& io     = ImGui::GetIO();
+                    GLFWwindow* native = window.getNativeWindow();
 
+                    // Sobre el panel de la escena, no "donde ImGui no capture":
+                    // el viewport ES una ventana de ImGui, así que
+                    // WantCaptureMouse vale true justo donde hay que girar la
+                    // vista y la cámara no se movía nunca. Mismo criterio que
+                    // el camino de Vulkan.
                     const bool rightDown =
-                        !io.WantCaptureMouse &&
+                        editor.isViewportHovered() &&
                         glfwGetMouseButton(native, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
 
                     double mouseX = 0.0, mouseY = 0.0;
@@ -384,7 +388,7 @@ int main()
                     d3dLastX = mouseX;
                     d3dLastY = mouseY;
 
-                    if (!io.WantCaptureKeyboard)
+                    if (editor.isViewportHovered())
                         d3dCamera.update(native, d3dDelta);
 
                     d3d12.setCamera(d3dCamera);

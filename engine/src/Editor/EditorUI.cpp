@@ -218,7 +218,16 @@ void EditorUI::initUiD3D12(const InitInfo& info)
 
     // InitForOther y no InitForVulkan: con DirectX 12 el backend de GLFW no
     // tiene que preparar nada de la API gráfica, solo el input.
-    ImGui_ImplGlfw_InitForOther(info.window, false);
+    //
+    // install_callbacks = true, al revés que en el camino de Vulkan: allí los
+    // instala main —necesita interceptar el cursor para el mouse-look— y le
+    // reenvía a ImGui botones, rueda, teclas y caracteres a mano. Aquí no los
+    // reenvía nadie, y con false ImGui solo recibe la POSICIÓN del ratón (la
+    // lee por su cuenta en NewFrame): ni un clic llega, así que no se puede
+    // seleccionar nada ni cambiar de pestaña. Los callbacks que ya hubiera
+    // puestos —el de tamaño del framebuffer— siguen llamándose: ImGui los
+    // guarda y encadena.
+    ImGui_ImplGlfw_InitForOther(info.window, true);
 
     // El rango de descriptores que el backend reservó para la interfaz. Desde
     // la 1.92 su backend de DX12 pide descriptores por su cuenta —uno por
