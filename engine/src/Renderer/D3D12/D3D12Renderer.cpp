@@ -141,6 +141,38 @@ constexpr UINT kIblIrradianceSize = 32;
 constexpr UINT kIblPrefilterSize  = 128;
 constexpr UINT kIblPrefilterMips  = 5;
 
+// Forward+. Mismos valores que Renderer.h: la rejilla, el tope por celda y el
+// de luces los dan por hecho los dos compute de culling y pbr.frag.
+constexpr uint32_t kFpMaxLights     = 256;
+constexpr uint32_t kFpMaxPerCell    = 64;
+constexpr uint32_t kFpTileSize      = 16;  // tiled
+constexpr uint32_t kFpClusterTile   = 64;  // clustered, XY
+constexpr uint32_t kFpClusterSlices = 24;  // clustered, Z
+
+// Una luz tal y como la quiere el culling: la misma que en el UBO más el radio
+// y su posición en view space, que es lo que evita recalcularla por celda.
+struct FpLightGpu {
+    glm::vec4 posRadius;
+    glm::vec4 color;
+    glm::vec4 viewPosR;
+    glm::vec4 direction;
+    glm::vec4 params;
+};
+
+// Bloque de parámetros que leen el culling y pbr.frag.
+struct FpParamsGpu {
+    uint32_t mode, gridX, gridY, gridZ;
+    uint32_t tileSize, maxPerCell, numLights, pad0;
+    float    zNear, zFar, sliceScale, sliceBias;
+};
+
+// Push del culling: los cuatro coeficientes de la proyección y el tamaño de
+// pantalla.
+struct FpPush {
+    float    p00, p11, p22, p32;
+    uint32_t screenW, screenH, pad0, pad1;
+};
+
 // Sombras en cascada. Mismos valores que el camino Vulkan
 // (Renderer.cpp:1016-1025): sin ellos las cascadas cortan a otras distancias y
 // las sombras no coinciden entre backends.
@@ -572,6 +604,26 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12PipelineState> ssrPipeline;
     ComPtr<ID3D12PipelineState> ssrResolvePipeline;
     D3D12MA::Allocation*        ssrAllocation = nullptr;
+
+    ComPtr<ID3D12RootSignature> fpCullRootSignature;
+    ComPtr<ID3D12PipelineState> fpTiledPipeline;
+    ComPtr<ID3D12PipelineState> fpClusteredPipeline;
+
+    // Los dos de entrada van mapeados: se reescriben cada frame con la cámara y
+    // las luces vivas. Los tres de salida los llena el culling en la GPU.
+    void*  fpParamsMapped = nullptr;
+    void*  fpLightsMapped = nullptr;
+    D3D12MA::Allocation* fpStatsAllocation = nullptr;
+    uint32_t fpCellCount = 0;  // celdas para las que están dimensionados los de salida
+
+    // Las listas se quedan como lectura mientras el pase de escena las consume;
+    // el frame siguiente las devuelve a escritura antes de rehacerlas.
+    bool fpListsInPixelState = false;
+
+    void createForwardPlusPipelines();
+    void ensureForwardPlusGrid(uint32_t cells);
+    void updateForwardPlus();   // parámetros y luces del frame
+    void recordForwardPlusCull();
 
     void createSsrPipelines();
     void recordSsr();
@@ -2597,24 +2649,45 @@ void D3D12Renderer::Impl::createForwardPlusBuffers()
     // Forward+ apagado: mode = 0 y una rejilla de una celda. pbr.frag lee mode
     // antes que nada y se queda con el bucle sobre las luces del UBO, pero los
     // cuatro buffers tienen que estar enlazados igual.
-    struct FpParams {
-        uint32_t mode, gridX, gridY, gridZ;
-        uint32_t tileSize, maxPerCell, numLights, pad0;
-        float    zNear, zFar, sliceScale, sliceBias;
-    };
-    const FpParams params{0, 1, 1, 1, 16, 1, 0, 0, 0.1f, 500.0f, 1.0f, 0.0f};
-    fpParamsAllocation = uploadBuffer(&params, sizeof(params),
-                                      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    // Parámetros y luces van en heap de subida y mapeados: se reescriben cada
+    // frame con la cámara y las luces vivas.
+    auto createMapped = [&](UINT64 bytes, D3D12MA::Allocation** allocation, void** mapped) {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width            = bytes;
+        desc.Height           = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
-    // Un elemento cada uno: un buffer de tamaño cero no se puede crear, y la
-    // GPU no va a leer de ellos con mode = 0.
-    const std::array<uint32_t, 20> zeros{};
-    fpLightsAllocation  = uploadBuffer(zeros.data(), zeros.size() * sizeof(uint32_t),
-                                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    fpCellsAllocation   = uploadBuffer(zeros.data(), 2 * sizeof(uint32_t),
-                                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    fpIndicesAllocation = uploadBuffer(zeros.data(), sizeof(uint32_t),
-                                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        D3D12MA::ALLOCATION_DESC allocDesc{};
+        allocDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+        throwIfFailed(allocator->CreateResource(&allocDesc, &desc,
+                                                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                allocation, IID_NULL, nullptr),
+                      "D3D12MA::Allocator::CreateResource(Forward+)");
+        const D3D12_RANGE noRead{0, 0};
+        throwIfFailed((*allocation)->GetResource()->Map(0, &noRead, mapped),
+                      "ID3D12Resource::Map(Forward+)");
+    };
+
+    createMapped(sizeof(FpParamsGpu), &fpParamsAllocation, &fpParamsMapped);
+    createMapped(sizeof(FpLightGpu) * kFpMaxLights, &fpLightsAllocation, &fpLightsMapped);
+
+    // Con Forward+ apagado no hay rejilla, pero los cuatro buffers tienen que
+    // estar enlazados igual: pbr.frag los declara sin rama. Una celda basta.
+    ensureForwardPlusGrid(1);
+
+    // Y el bloque, escrito ya en Off: pbr.frag lee mode antes que nada.
+    FpParamsGpu off{};
+    off.gridX = off.gridY = off.gridZ = 1;
+    off.tileSize   = kFpTileSize;
+    off.maxPerCell = kFpMaxPerCell;
+    off.zNear      = 0.1f;
+    off.zFar       = 500.0f;
+    std::memcpy(fpParamsMapped, &off, sizeof(off));
 }
 
 void D3D12Renderer::Impl::createSkyboxResources()
@@ -2762,6 +2835,263 @@ void D3D12Renderer::Impl::createSkyboxResources()
 
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&skyboxPipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(cielo)");
+}
+
+void D3D12Renderer::Impl::createForwardPlusPipelines()
+{
+    // t0 parámetros, t1 luces, u2 celdas, u3 índices, t4 profundidad, u5
+    // estadísticas. Los buffers van como root SRV/UAV —son ByteAddressBuffer y
+    // no necesitan descriptor— y la profundidad, que sí es textura, en tabla.
+    D3D12_DESCRIPTOR_RANGE depthRange{};
+    depthRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    depthRange.NumDescriptors     = 1;
+    depthRange.BaseShaderRegister = 4;  // t4
+
+    D3D12_ROOT_PARAMETER params[7]{};
+    params[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[0].Constants.ShaderRegister = 0;
+    params[0].Constants.Num32BitValues = sizeof(FpPush) / 4;
+
+    params[1].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    params[1].Descriptor.ShaderRegister = 0;  // t0
+    params[2].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    params[2].Descriptor.ShaderRegister = 1;  // t1
+    params[3].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_UAV;
+    params[3].Descriptor.ShaderRegister = 2;  // u2
+    params[4].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_UAV;
+    params[4].Descriptor.ShaderRegister = 3;  // u3
+    params[5].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_UAV;
+    params[5].Descriptor.ShaderRegister = 5;  // u5
+
+    params[6].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[6].DescriptorTable.NumDescriptorRanges = 1;
+    params[6].DescriptorTable.pDescriptorRanges   = &depthRange;
+
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter         = D3D12_FILTER_MIN_MAG_MIP_POINT;
+    sampler.AddressU       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.MaxLOD         = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister = 4;  // s4
+
+    D3D12_ROOT_SIGNATURE_DESC rootDesc{};
+    rootDesc.NumParameters     = _countof(params);
+    rootDesc.pParameters       = params;
+    rootDesc.NumStaticSamplers = 1;
+    rootDesc.pStaticSamplers   = &sampler;
+
+    ComPtr<ID3DBlob> serialized;
+    ComPtr<ID3DBlob> errorBlob;
+    HRESULT          hr = D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                                      &serialized, &errorBlob);
+    if (FAILED(hr)) {
+        std::string detail;
+        if (errorBlob)
+            detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
+                          errorBlob->GetBufferSize());
+        throw std::runtime_error("D3D12: root signature del culling (HRESULT " +
+                                 hresultToString(hr) + ") " + detail);
+    }
+    throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                              serialized->GetBufferSize(),
+                                              IID_PPV_ARGS(&fpCullRootSignature)),
+                  "ID3D12Device::CreateRootSignature(culling)");
+
+    auto buildCompute = [&](const char* path, ComPtr<ID3D12PipelineState>& out) {
+        const std::vector<char>           code = readBinaryFile(path);
+        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+        desc.pRootSignature = fpCullRootSignature.Get();
+        desc.CS             = {code.data(), code.size()};
+        throwIfFailed(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&out)),
+                      "ID3D12Device::CreateComputePipelineState(culling)");
+    };
+    buildCompute("shaders/light_cull_tiled.comp.dxil", fpTiledPipeline);
+    buildCompute("shaders/light_cull_clustered.comp.dxil", fpClusteredPipeline);
+}
+
+void D3D12Renderer::Impl::ensureForwardPlusGrid(uint32_t cells)
+{
+    if (cells == 0 || cells == fpCellCount)
+        return;
+
+    // Los de salida se rehacen: su tamaño depende de la rejilla, y la rejilla
+    // del tamaño de la ventana y del modo.
+    waitForGpu();
+    for (auto** allocation : {&fpCellsAllocation, &fpIndicesAllocation, &fpStatsAllocation}) {
+        if (*allocation) {
+            (*allocation)->Release();
+            *allocation = nullptr;
+        }
+    }
+
+    auto createStorage = [&](UINT64 bytes) {
+        return createStorageBuffer(bytes, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    };
+    fpCellsAllocation   = createStorage(static_cast<UINT64>(cells) * 2 * sizeof(uint32_t));
+    fpIndicesAllocation = createStorage(static_cast<UINT64>(cells) * kFpMaxPerCell * sizeof(uint32_t));
+    fpStatsAllocation   = createStorage(4 * sizeof(uint32_t));
+    fpCellCount         = cells;
+}
+
+void D3D12Renderer::Impl::updateForwardPlus()
+{
+    if (!fpParamsMapped)
+        return;
+
+    const RendererState::FpMode mode = state->forwardPlusMode();
+    const uint32_t tileSize = (mode == RendererState::FpMode::Clustered) ? kFpClusterTile : kFpTileSize;
+    const uint32_t gridZ    = (mode == RendererState::FpMode::Clustered) ? kFpClusterSlices : 1u;
+    const uint32_t gridX    = (width + tileSize - 1) / tileSize;
+    const uint32_t gridY    = (height + tileSize - 1) / tileSize;
+
+    ensureForwardPlusGrid(gridX * gridY * gridZ);
+
+    // zNear y zFar salen de la propia proyección (RH_ZO): p22 = f/(n-f) y
+    // p32 = f*n/(n-f). Sacarlos de ahí es lo que mantiene la rejilla pegada a
+    // la cámara que se esté usando, sin duplicar sus planos en otro sitio.
+    const glm::mat4 proj  = cameraProj();
+    const float     p22   = proj[2][2];
+    const float     p32   = proj[3][2];
+    const float     zNear = (p22 != 0.0f) ? p32 / p22 : 0.1f;
+    const float     zFar  = (p22 != -1.0f) ? p32 / (p22 + 1.0f) : 1000.0f;
+
+    const uint32_t count =
+        (std::min)(static_cast<uint32_t>(sceneLights.size()), kFpMaxLights);
+
+    FpParamsGpu fp{};
+    fp.mode       = static_cast<uint32_t>(mode);
+    fp.gridX      = gridX;
+    fp.gridY      = gridY;
+    fp.gridZ      = gridZ;
+    fp.tileSize   = tileSize;
+    fp.maxPerCell = kFpMaxPerCell;
+    fp.numLights  = count;
+    fp.zNear      = zNear;
+    fp.zFar       = zFar;
+    // Inverso del reparto logarítmico del culling clustered:
+    // slice = log2(z) * scale + bias.
+    const float logRatio = std::log2((std::max)(zFar / zNear, 1.0001f));
+    fp.sliceScale        = static_cast<float>(gridZ) / logRatio;
+    fp.sliceBias         = -std::log2(zNear) * fp.sliceScale;
+    std::memcpy(fpParamsMapped, &fp, sizeof(fp));
+
+    if (fpLightsMapped && count > 0) {
+        auto* dst = static_cast<FpLightGpu*>(fpLightsMapped);
+        for (uint32_t i = 0; i < count; ++i) {
+            const ShaderLight& light = sceneLights[i];
+            const glm::vec3    world(light.position[0], light.position[1], light.position[2]);
+            // El radio no viaja en la luz del UBO: se toma el alcance, que es lo
+            // que el editor ya edita por luz (params.x).
+            const float radius = light.params[0];
+            const glm::vec3 view = glm::vec3(cameraView * glm::vec4(world, 1.0f));
+
+            dst[i].posRadius = glm::vec4(world, radius);
+            dst[i].color     = glm::vec4(light.color[0], light.color[1], light.color[2],
+                                         light.color[3]);
+            dst[i].viewPosR  = glm::vec4(view, radius);
+            dst[i].direction = glm::vec4(light.direction[0], light.direction[1],
+                                         light.direction[2], light.direction[3]);
+            dst[i].params    = glm::vec4(light.params[0], light.params[1], light.params[2],
+                                         light.params[3]);
+        }
+    }
+}
+
+void D3D12Renderer::Impl::recordForwardPlusCull()
+{
+    const RendererState::FpMode mode = state->forwardPlusMode();
+    if (mode == RendererState::FpMode::Off || !fpCullRootSignature || !fpCellsAllocation)
+        return;
+
+    const bool clustered = (mode == RendererState::FpMode::Clustered);
+    const uint32_t tileSize = clustered ? kFpClusterTile : kFpTileSize;
+    const uint32_t gridX    = (width + tileSize - 1) / tileSize;
+    const uint32_t gridY    = (height + tileSize - 1) / tileSize;
+    const uint32_t gridZ    = clustered ? kFpClusterSlices : 1u;
+
+    // El tiled reduce la profundidad del tile: necesita la del pre-pase, que ya
+    // está grabada. El clustered no la lee, pero la declara igual.
+    const bool depthReady = prepassDepthAllocation != nullptr;
+    if (!clustered && !depthReady)
+        return;
+
+    if (fpListsInPixelState) {
+        D3D12_RESOURCE_BARRIER backToUav[2]{};
+        for (int i = 0; i < 2; ++i) {
+            backToUav[i].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            backToUav[i].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            backToUav[i].Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            backToUav[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        }
+        backToUav[0].Transition.pResource = fpCellsAllocation->GetResource();
+        backToUav[1].Transition.pResource = fpIndicesAllocation->GetResource();
+        commandList->ResourceBarrier(2, backToUav);
+        fpListsInPixelState = false;
+    }
+
+    D3D12_RESOURCE_BARRIER depthToRead{};
+    depthToRead.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    depthToRead.Transition.pResource   = prepassDepthAllocation->GetResource();
+    depthToRead.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    depthToRead.Transition.StateAfter  = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    depthToRead.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &depthToRead);
+
+    ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(fpCullRootSignature.Get());
+    commandList->SetPipelineState(clustered ? fpClusteredPipeline.Get() : fpTiledPipeline.Get());
+
+    const glm::mat4 proj = cameraProj();
+    FpPush          push{};
+    push.p00     = proj[0][0];
+    push.p11     = proj[1][1];
+    push.p22     = proj[2][2];
+    push.p32     = proj[3][2];
+    push.screenW = width;
+    push.screenH = height;
+    commandList->SetComputeRoot32BitConstants(0, sizeof(FpPush) / 4, &push, 0);
+
+    commandList->SetComputeRootShaderResourceView(
+        1, fpParamsAllocation->GetResource()->GetGPUVirtualAddress());
+    commandList->SetComputeRootShaderResourceView(
+        2, fpLightsAllocation->GetResource()->GetGPUVirtualAddress());
+    commandList->SetComputeRootUnorderedAccessView(
+        3, fpCellsAllocation->GetResource()->GetGPUVirtualAddress());
+    commandList->SetComputeRootUnorderedAccessView(
+        4, fpIndicesAllocation->GetResource()->GetGPUVirtualAddress());
+    commandList->SetComputeRootUnorderedAccessView(
+        5, fpStatsAllocation->GetResource()->GetGPUVirtualAddress());
+
+    D3D12_GPU_DESCRIPTOR_HANDLE depthTable = srvHeap->GetGPUDescriptorHandleForHeapStart();
+    depthTable.ptr += static_cast<UINT64>(kSrvPrepassDepth) * srvSize;
+    commandList->SetComputeRootDescriptorTable(6, depthTable);
+
+    // Un grupo por celda: el tiled tiene un hilo por píxel del tile (16x16) y el
+    // clustered reparte 4x4x4 celdas por grupo.
+    if (clustered)
+        commandList->Dispatch((gridX + 3) / 4, (gridY + 3) / 4, (gridZ + 3) / 4);
+    else
+        commandList->Dispatch(gridX, gridY, 1);
+
+    // Las listas pasan a lectura del pase de escena, y la profundidad vuelve a
+    // escritura para el frame siguiente.
+    D3D12_RESOURCE_BARRIER toScene[3]{};
+    toScene[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toScene[0].Transition.pResource   = fpCellsAllocation->GetResource();
+    toScene[0].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    toScene[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    toScene[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+    toScene[1]                      = toScene[0];
+    toScene[1].Transition.pResource = fpIndicesAllocation->GetResource();
+
+    toScene[2] = depthToRead;
+    std::swap(toScene[2].Transition.StateBefore, toScene[2].Transition.StateAfter);
+    commandList->ResourceBarrier(3, toScene);
+
+    fpListsInPixelState = true;
 }
 
 void D3D12Renderer::Impl::createSsrPipelines()
@@ -4314,6 +4644,7 @@ void D3D12Renderer::init(Window& window)
     d.precomputeIbl();
     d.createFogAndFxaaPipelines();
     d.createSsrPipelines();
+    d.createForwardPlusPipelines();
     d.updateViewProj();
 
     d.initialized = true;
@@ -4392,6 +4723,11 @@ void D3D12Renderer::drawFrame()
     // Y la oclusión, que necesita su propia profundidad y la produce con dos
     // compute: pbr.frag la multiplica al ambiente en el pase siguiente.
     d.recordDepthPrepassAndSsao();
+
+    // Reparto de luces por celda. Va detrás del pre-pase porque el modo tiled
+    // reduce la profundidad de cada tile a partir de él.
+    d.updateForwardPlus();
+    d.recordForwardPlusCull();
 
     D3D12_RESOURCE_BARRIER toRenderTarget{};
     toRenderTarget.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -5056,6 +5392,13 @@ void D3D12Renderer::shutdown()
     d.depthPrepassPipeline.Reset();
     d.depthPrepassSkinnedPipeline.Reset();
     d.depthPrepassRootSignature.Reset();
+    d.fpTiledPipeline.Reset();
+    d.fpClusteredPipeline.Reset();
+    d.fpCullRootSignature.Reset();
+    if (d.fpStatsAllocation) {
+        d.fpStatsAllocation->Release();
+        d.fpStatsAllocation = nullptr;
+    }
     d.ssrPipeline.Reset();
     d.ssrResolvePipeline.Reset();
     d.ssrRootSignature.Reset();

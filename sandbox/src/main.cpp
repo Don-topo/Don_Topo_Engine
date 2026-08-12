@@ -82,6 +82,7 @@ int main()
             DonTopo::D3D12::D3D12Renderer d3d12;
             d3d12.init(window);
 
+
             std::cout << "D3D12: adaptador '" << d3d12.adapterName() << "'" << std::endl;
 
             // La escena del proyecto, cargada con el MISMO Scene::load que usa
@@ -345,8 +346,7 @@ int main()
                         "sombras en cascada, cielo, IBL, materiales PBR, SSAO, SSR, niebla, bloom "
                         "con tone mapping y FXAA.");
                     ImGui::TextWrapped(
-                        "Sin implementar: TAA, MSAA, Forward+, gizmos, UI 2D y el editor "
-                        "completo.");
+                        "Sin implementar: TAA, MSAA, gizmos, UI 2D y el editor completo.");
                     ImGui::Spacing();
                     ImGui::TextWrapped(
                         "Camara: WASD para moverse, Q/E para bajar y subir, boton derecho "
@@ -363,6 +363,13 @@ int main()
                         bool ssr = d3d12.ssrEnabled();
                         if (ImGui::Checkbox("SSR", &ssr))
                             d3d12.setSsrEnabled(ssr);
+
+                        // Forward+: mismo enum que el panel de calidad del
+                        // editor, con los mismos tres estados.
+                        int fp = static_cast<int>(d3d12.forwardPlusMode());
+                        if (ImGui::Combo("Forward+", &fp, "Off Tiled Clustered "))
+                            d3d12.setForwardPlusMode(
+                                static_cast<DonTopo::RendererState::FpMode>(fp));
                     }
 
                     ImGui::Separator();
