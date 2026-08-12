@@ -116,10 +116,27 @@ int main()
                     // transformación de su padre sin aplicar.
                     d3dScene.getRoot().updateWorldTransforms();
 
-                    int added = 0;
+                    int added        = 0;
+                    int addedSkinned = 0;
                     d3dScene.traverse([&](DonTopo::GameObject* node) {
-                        if (node == nullptr || !node->hasMesh() || node->isSkinned())
+                        if (node == nullptr || !node->hasMesh())
                             return;
+
+                        if (node->isSkinned())
+                        {
+                            const DonTopo::SkinnedMesh* skinned = node->getSkinnedMesh();
+                            if (!skinned)
+                                return;
+                            const int index = d3d12.addSkinnedMesh(*skinned);
+                            if (index < 0)
+                                return;
+                            node->skinnedRenderIndex = index;
+                            d3d12.setSkinnedTransform(static_cast<size_t>(index),
+                                                      node->worldTransform);
+                            ++addedSkinned;
+                            return;
+                        }
+
                         const std::shared_ptr<DonTopo::Mesh> mesh = node->getMesh();
                         if (!mesh)
                             return;
@@ -131,7 +148,34 @@ int main()
                         ++added;
                     });
                     std::cout << "D3D12: escena '" << sceneFile.string() << "' cargada, "
-                              << added << " mallas estaticas" << std::endl;
+                              << added << " mallas estaticas y " << addedSkinned
+                              << " personajes" << std::endl;
+
+                    // Sin personajes en la escena se carga el de pruebas del
+                    // repo: el skinning por compute es de lo poco que no se ve
+                    // en una escena estática, y dejarlo sin nada que enseñar
+                    // haría pasar por rota una ruta que funciona.
+                    if (addedSkinned == 0)
+                    {
+                        try {
+                            const DonTopo::SkinnedMesh demo = DonTopo::ModelLoader::loadSkinned(
+                                "assets/animatedCharacter/Maw J Laygo.fbx");
+                            const int index = d3d12.addSkinnedMesh(demo);
+                            if (index >= 0)
+                            {
+                                // El FBX viene en centímetros: sin reescalar
+                                // mediría cien veces la rejilla.
+                                d3d12.setSkinnedTransform(
+                                    static_cast<size_t>(index),
+                                    glm::scale(glm::translate(glm::mat4(1.0f),
+                                                              glm::vec3(-3.0f, 0.0f, 0.0f)),
+                                               glm::vec3(0.02f)));
+                            }
+                        } catch (const std::exception&) {
+                            // El repo puede no traer el FBX: no es motivo para
+                            // tumbar el arranque.
+                        }
+                    }
                 }
                 else
                 {
@@ -260,16 +304,17 @@ int main()
                     ImGui::Separator();
 
                     ImGui::TextWrapped(
-                        "Este backend dibuja la escena de prueba, no el editor. Los paneles, "
-                        "la jerarquia, el inspector y el viewport solo existen con Vulkan.");
+                        "Este backend dibuja la escena del proyecto, no el editor. Los "
+                        "paneles, la jerarquia, el inspector y el viewport solo existen con "
+                        "Vulkan.");
                     ImGui::Spacing();
                     ImGui::TextWrapped(
-                        "Implementado: presentacion, geometria con material, iluminacion "
-                        "directa, profundidad, skinning por compute, sombras en cascada, "
-                        "niebla, bloom con tone mapping y FXAA.");
+                        "Implementado: presentacion, escena del proyecto con sus texturas, "
+                        "personajes animados por compute, iluminacion directa, profundidad, "
+                        "sombras en cascada, niebla, bloom con tone mapping y FXAA.");
                     ImGui::TextWrapped(
-                        "Sin implementar: escena real del proyecto, camara navegable, SSAO, "
-                        "SSR, TAA, MSAA, IBL, skybox, gizmos, UI 2D y el editor completo.");
+                        "Sin implementar: camara navegable, SSAO, SSR, TAA, MSAA, IBL, "
+                        "skybox, gizmos, UI 2D y el editor completo.");
 
                     ImGui::Separator();
                     ImGui::TextWrapped(

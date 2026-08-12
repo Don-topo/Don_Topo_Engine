@@ -15,6 +15,7 @@ namespace DonTopo {
 
 class Window;
 struct Mesh;
+struct SkinnedMesh;
 
 namespace D3D12 {
 
@@ -92,6 +93,25 @@ public:
     // Suelta toda la geometría estática. Espera a la GPU antes de liberar:
     // los buffers pueden estar en uso por el último frame presentado.
     void clearStaticMeshes();
+
+    // Sube un personaje animado: claves, esqueleto, vértices sin deformar y el
+    // buffer donde el compute escribe los ya deformados. -1 si la malla no
+    // trae esqueleto, vértices o clips.
+    //
+    // La animación avanza sola con el reloj del backend, reproduciendo en
+    // bucle el clip activo (el 0 al cargar). Quien tenga un Animator que la
+    // calcule en CPU usa setAnimationState y no depende de ese reloj.
+    int addSkinnedMesh(const SkinnedMesh& mesh);
+
+    void setSkinnedTransform(size_t index, const glm::mat4& transform);
+    void setSkinnedVisible(size_t index, bool visible);
+
+    // Fija clip y tiempo ya calculados fuera. Mismo contrato que en el
+    // Renderer de Vulkan: es un sink, no avanza el tiempo.
+    void setAnimationState(size_t index, uint32_t clipIndex, float animTime);
+
+    size_t skinnedCount() const;
+    void   clearSkinnedMeshes();
 
     // Descripción del adaptador con el que se creó el device. Vacía antes de
     // init(). Se usa para dejarlo en el Log.

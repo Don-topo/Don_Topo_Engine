@@ -343,38 +343,68 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12PipelineState> skinningPipeline;
     ComPtr<ID3D12PipelineState> skinnedMeshPipeline;
 
-    D3D12MA::Allocation* posKeysAllocation    = nullptr;
-    D3D12MA::Allocation* rotKeysAllocation    = nullptr;
-    D3D12MA::Allocation* scaleKeysAllocation  = nullptr;
-    D3D12MA::Allocation* boneInfosAllocation  = nullptr;
-    D3D12MA::Allocation* inputVertsAllocation = nullptr;
-    D3D12MA::Allocation* localXformsAllocation = nullptr;
-    D3D12MA::Allocation* finalBonesAllocation  = nullptr;
-    D3D12MA::Allocation* outputVertsAllocation = nullptr;
-    D3D12MA::Allocation* skinnedIndexAllocation = nullptr;
-
-    // Submallas del personaje: el FBX trae un material por trozo (cuerpo, pelo,
-    // ropa…), y dibujarlo de una tirada obligaba a darles a todas la misma
-    // textura. Un draw por rango con su terna.
+    // Submallas de un personaje: el FBX trae un material por trozo (cuerpo,
+    // pelo, ropa…), y dibujarlo de una tirada obligaba a darles a todas la
+    // misma textura. Un draw por rango con su terna.
     struct SkinnedSubMesh {
         UINT indexStart = 0;
         UINT indexCount = 0;
         UINT srvBase    = kSrvBaseColor;
     };
-    std::vector<SkinnedSubMesh>       skinnedSubMeshes;
-    std::vector<D3D12MA::Allocation*> skinnedTextures;
 
-    D3D12_VERTEX_BUFFER_VIEW skinnedVertexBufferView{};
-    D3D12_INDEX_BUFFER_VIEW  skinnedIndexBufferView{};
-    UINT                     skinnedIndexCount = 0;
-    uint32_t                 boneCount         = 0;
-    uint32_t                 skinnedVertexCount = 0;
-    uint32_t                 clipBase          = 0;
-    float                    animTime          = 0.0f;
-    float                    animDuration      = 0.0f;
-    bool                     hasSkinnedMesh    = false;
-    LARGE_INTEGER            lastTick{};
-    LARGE_INTEGER            tickFrequency{};
+    // Un personaje animado. Cada uno tiene su esqueleto, sus claves y su
+    // buffer de vértices deformados: el compute de skinning escribe ahí, y el
+    // pase gráfico lo lee como vertex buffer en el mismo frame.
+    struct SkinnedObject {
+        D3D12MA::Allocation* posKeys     = nullptr;
+        D3D12MA::Allocation* rotKeys     = nullptr;
+        D3D12MA::Allocation* scaleKeys   = nullptr;
+        D3D12MA::Allocation* boneInfos   = nullptr;
+        D3D12MA::Allocation* inputVerts  = nullptr;
+        D3D12MA::Allocation* localXforms = nullptr;
+        D3D12MA::Allocation* finalBones  = nullptr;
+        D3D12MA::Allocation* outputVerts = nullptr;
+        D3D12MA::Allocation* indices     = nullptr;
+
+        D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
+        D3D12_INDEX_BUFFER_VIEW  indexBufferView{};
+        UINT                     indexCount  = 0;
+        uint32_t                 boneCount   = 0;
+        uint32_t                 vertexCount = 0;
+
+        // boneInfos va en layout [clip][hueso]: el offset del clip activo es
+        // clip * boneCount.
+        uint32_t clipBase     = 0;
+        float    animTime     = 0.0f;
+        float    animDuration = 0.0f;
+
+        glm::mat4 transform{1.0f};
+        bool      visible = true;
+
+        std::vector<SkinnedSubMesh>       subMeshes;
+        std::vector<D3D12MA::Allocation*> textures;
+    };
+    std::vector<SkinnedObject> skinnedObjects;
+
+    // Huecos del rango skinned ya repartidos, en ternas. No se reaprovechan al
+    // borrar un objeto suelto porque los personajes se cargan de golpe con la
+    // escena; clearSkinnedMeshes lo devuelve a cero.
+    UINT nextSkinnedSlot = 0;
+
+    // Matrices de los personajes para el pase de sombras, por lo mismo que
+    // sceneInstanceAllocation: shadow.vert saca el model del SSBO siempre.
+    D3D12MA::Allocation* skinnedInstanceAllocation = nullptr;
+    void*                skinnedInstanceMapped     = nullptr;
+    size_t               skinnedInstanceCapacity   = 0;
+
+    void ensureSkinnedInstanceBuffer(size_t count);
+
+    // Suelta los recursos GPU de todos los personajes. NO espera a la GPU: los
+    // dos sitios que la llaman (shutdown y clearSkinnedMeshes) ya lo han hecho.
+    void releaseSkinnedObjects();
+
+    LARGE_INTEGER lastTick{};
+    LARGE_INTEGER tickFrequency{};
 
     // ── Suelo sólido ────────────────────────────────────────────────────────
     // La rejilla son líneas y no recibe sombra: hace falta una superficie de
@@ -382,7 +412,6 @@ struct D3D12Renderer::Impl {
     D3D12MA::Allocation*     groundVertexAllocation = nullptr;
     D3D12MA::Allocation*     groundIndexAllocation  = nullptr;
     D3D12MA::Allocation*     groundInstanceAllocation = nullptr;
-    D3D12MA::Allocation*     characterInstanceAllocation = nullptr;
     D3D12_VERTEX_BUFFER_VIEW groundVertexBufferView{};
     D3D12_INDEX_BUFFER_VIEW  groundIndexBufferView{};
     UINT                     groundIndexCount = 0;
@@ -518,8 +547,10 @@ struct D3D12Renderer::Impl {
     D3D12MA::Allocation* createStorageBuffer(UINT64 size, D3D12_RESOURCE_STATES initialState);
 
     void createSkinningPipelines();
-    void createSkinnedResources();
-    void recordSkinning();  // los tres dispatch, con sus barreras
+    // Sube un personaje y devuelve su índice en skinnedObjects, o -1 si la
+    // malla no tiene esqueleto, vértices o claves que evaluar.
+    int  createSkinnedObject(const SkinnedMesh& mesh);
+    void recordSkinning();  // los tres dispatch por personaje, con sus barreras
 
     void createShadowResources();
     void computeCascades();   // reparte el frustum y saca una matriz por cascada
@@ -1427,64 +1458,53 @@ void D3D12Renderer::Impl::createSkinningPipelines()
                   "ID3D12Device::CreateGraphicsPipelineState(skinned)");
 }
 
-void D3D12Renderer::Impl::createSkinnedResources()
+int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
 {
-    // Se carga con el MISMO ModelLoader que usa el editor: si el FBX no está,
-    // el backend sigue funcionando sin personaje en vez de abortar.
-    SkinnedMesh mesh;
-    try {
-        mesh = ModelLoader::loadSkinned("assets/animatedCharacter/Maw J Laygo.fbx");
-    } catch (const std::exception&) {
-        return;
-    }
-
     if (mesh.skinnedVertices.empty() || mesh.skeleton.names.empty() || mesh.indices.empty())
-        return;
-
-    boneCount          = static_cast<uint32_t>(mesh.skeleton.names.size());
-    skinnedVertexCount = static_cast<uint32_t>(mesh.skinnedVertices.size());
+        return -1;
 
     const PackedClips packed = packSkinnedClips(mesh);
     if (packed.boneInfos.empty())
-        return;
+        return -1;
 
-    // El clip 0 es el que se reproduce. boneInfos va en layout [clip][hueso],
-    // así que el offset del clip activo es clip * boneCount.
-    clipBase     = 0;
-    animDuration = mesh.animationClips.empty() ? 0.0f : mesh.animationClips[0].duration;
+    SkinnedObject object;
+    object.boneCount    = static_cast<uint32_t>(mesh.skeleton.names.size());
+    object.vertexCount  = static_cast<uint32_t>(mesh.skinnedVertices.size());
+    object.clipBase     = 0;
+    object.animDuration = mesh.animationClips.empty() ? 0.0f : mesh.animationClips[0].duration;
 
-    posKeysAllocation   = uploadBuffer(packed.pos.data(), packed.pos.size() * sizeof(GpuPosKey),
-                                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    rotKeysAllocation   = uploadBuffer(packed.rot.data(), packed.rot.size() * sizeof(GpuRotKey),
-                                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    scaleKeysAllocation = uploadBuffer(packed.scale.data(), packed.scale.size() * sizeof(GpuPosKey),
-                                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    boneInfosAllocation = uploadBuffer(packed.boneInfos.data(),
-                                       packed.boneInfos.size() * sizeof(GpuBoneInfo),
-                                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    inputVertsAllocation =
+    object.posKeys   = uploadBuffer(packed.pos.data(), packed.pos.size() * sizeof(GpuPosKey),
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    object.rotKeys   = uploadBuffer(packed.rot.data(), packed.rot.size() * sizeof(GpuRotKey),
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    object.scaleKeys = uploadBuffer(packed.scale.data(), packed.scale.size() * sizeof(GpuPosKey),
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    object.boneInfos = uploadBuffer(packed.boneInfos.data(),
+                                    packed.boneInfos.size() * sizeof(GpuBoneInfo),
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    object.inputVerts =
         uploadBuffer(mesh.skinnedVertices.data(), mesh.skinnedVertices.size() * sizeof(SkinnedVertex),
                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-    localXformsAllocation = createStorageBuffer(static_cast<UINT64>(boneCount) * sizeof(glm::mat4),
-                                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    finalBonesAllocation  = createStorageBuffer(static_cast<UINT64>(boneCount) * sizeof(glm::mat4),
-                                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    outputVertsAllocation = createStorageBuffer(
-        static_cast<UINT64>(skinnedVertexCount) * kSkinnedOutputStride,
+    object.localXforms = createStorageBuffer(static_cast<UINT64>(object.boneCount) * sizeof(glm::mat4),
+                                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    object.finalBones  = createStorageBuffer(static_cast<UINT64>(object.boneCount) * sizeof(glm::mat4),
+                                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    object.outputVerts = createStorageBuffer(
+        static_cast<UINT64>(object.vertexCount) * kSkinnedOutputStride,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-    skinnedIndexAllocation = uploadBuffer(mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t),
-                                          D3D12_RESOURCE_STATE_INDEX_BUFFER);
+    object.indices = uploadBuffer(mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t),
+                                  D3D12_RESOURCE_STATE_INDEX_BUFFER);
 
-    skinnedVertexBufferView.BufferLocation = outputVertsAllocation->GetResource()->GetGPUVirtualAddress();
-    skinnedVertexBufferView.SizeInBytes    = skinnedVertexCount * kSkinnedOutputStride;
-    skinnedVertexBufferView.StrideInBytes  = kSkinnedOutputStride;
+    object.vertexBufferView.BufferLocation = object.outputVerts->GetResource()->GetGPUVirtualAddress();
+    object.vertexBufferView.SizeInBytes    = object.vertexCount * kSkinnedOutputStride;
+    object.vertexBufferView.StrideInBytes  = kSkinnedOutputStride;
 
-    skinnedIndexBufferView.BufferLocation = skinnedIndexAllocation->GetResource()->GetGPUVirtualAddress();
-    skinnedIndexBufferView.SizeInBytes    = static_cast<UINT>(mesh.indices.size() * sizeof(uint32_t));
-    skinnedIndexBufferView.Format         = DXGI_FORMAT_R32_UINT;
-    skinnedIndexCount                     = static_cast<UINT>(mesh.indices.size());
+    object.indexBufferView.BufferLocation = object.indices->GetResource()->GetGPUVirtualAddress();
+    object.indexBufferView.SizeInBytes = static_cast<UINT>(mesh.indices.size() * sizeof(uint32_t));
+    object.indexBufferView.Format      = DXGI_FORMAT_R32_UINT;
+    object.indexCount                  = static_cast<UINT>(mesh.indices.size());
 
     // Materiales por submalla. Sin subMeshRanges (FBX de una sola pieza) se
     // toma el material del propio Mesh, que es lo que rellena ModelLoader.
@@ -1505,59 +1525,113 @@ void D3D12Renderer::Impl::createSkinnedResources()
         ranges.push_back({0, static_cast<uint32_t>(mesh.indices.size()), &mesh.material});
     }
 
-    for (size_t i = 0; i < ranges.size(); ++i) {
+    for (const RangeSrc& range : ranges) {
         SkinnedSubMesh sub;
-        sub.indexStart = ranges[i].start;
-        sub.indexCount = ranges[i].count;
+        sub.indexStart = range.start;
+        sub.indexCount = range.count;
 
-        if (i < kMaxSkinnedSlots) {
-            const UINT slot = kSrvSkinned + static_cast<UINT>(i) * 3;
-            sub.srvBase     = slot;
+        // Las ternas se reparten entre TODOS los personajes de la escena, no
+        // por personaje: pasado el tope, la submalla cae a la terna global.
+        if (nextSkinnedSlot < kMaxSkinnedSlots) {
+            const UINT slot = kSrvSkinned + nextSkinnedSlot * 3;
+            ++nextSkinnedSlot;
+            sub.srvBase = slot;
 
             D3D12MA::Allocation* base = uploadMaterialTexture(
-                ranges[i].material->texturePath, ranges[i].material->embeddedTexture, true, slot);
+                range.material->texturePath, range.material->embeddedTexture, true, slot);
             if (base)
-                skinnedTextures.push_back(base);
+                object.textures.push_back(base);
             else
                 createTexture2DSrv(baseColorAllocation->GetResource(),
                                    DXGI_FORMAT_R8G8B8A8_UNORM, slot);
 
-            D3D12MA::Allocation* normal =
-                uploadMaterialTexture(ranges[i].material->normalMapPath,
-                                      ranges[i].material->embeddedNormalMap, false, slot + 1);
+            D3D12MA::Allocation* normal = uploadMaterialTexture(
+                range.material->normalMapPath, range.material->embeddedNormalMap, false, slot + 1);
             if (normal)
-                skinnedTextures.push_back(normal);
+                object.textures.push_back(normal);
             else
                 createTexture2DSrv(normalMapAllocation->GetResource(),
                                    DXGI_FORMAT_R8G8B8A8_UNORM, slot + 1);
 
             createShadowMapSrv(slot + 2);
         }
-        skinnedSubMeshes.push_back(sub);
+        object.subMeshes.push_back(sub);
     }
 
-    QueryPerformanceFrequency(&tickFrequency);
-    QueryPerformanceCounter(&lastTick);
-    hasSkinnedMesh = true;
+    // El reloj de animación arranca con el primer personaje: hasta entonces no
+    // hay nada que avanzar, y dejarlo a cero daría un salto en el primer frame.
+    if (skinnedObjects.empty()) {
+        QueryPerformanceFrequency(&tickFrequency);
+        QueryPerformanceCounter(&lastTick);
+    }
+
+    skinnedObjects.push_back(std::move(object));
+    return static_cast<int>(skinnedObjects.size() - 1);
+}
+
+void D3D12Renderer::Impl::ensureSkinnedInstanceBuffer(size_t count)
+{
+    if (count == 0 || count <= skinnedInstanceCapacity)
+        return;
+
+    const size_t newCapacity = (std::max)(count, skinnedInstanceCapacity * 2 + 16);
+
+    if (skinnedInstanceAllocation) {
+        waitForGpu();
+        if (skinnedInstanceMapped) {
+            skinnedInstanceAllocation->GetResource()->Unmap(0, nullptr);
+            skinnedInstanceMapped = nullptr;
+        }
+        skinnedInstanceAllocation->Release();
+        skinnedInstanceAllocation = nullptr;
+    }
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width            = newCapacity * sizeof(glm::mat4);
+    desc.Height           = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels        = 1;
+    desc.Format           = DXGI_FORMAT_UNKNOWN;
+    desc.SampleDesc.Count = 1;
+    desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    D3D12MA::ALLOCATION_DESC allocDesc{};
+    allocDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+
+    throwIfFailed(allocator->CreateResource(&allocDesc, &desc, D3D12_RESOURCE_STATE_GENERIC_READ,
+                                            nullptr, &skinnedInstanceAllocation, IID_NULL, nullptr),
+                  "D3D12MA::Allocator::CreateResource(instancias de personajes)");
+
+    const D3D12_RANGE noRead{0, 0};
+    throwIfFailed(skinnedInstanceAllocation->GetResource()->Map(0, &noRead, &skinnedInstanceMapped),
+                  "ID3D12Resource::Map(instancias de personajes)");
+    skinnedInstanceCapacity = newCapacity;
+}
+
+void D3D12Renderer::Impl::releaseSkinnedObjects()
+{
+    for (SkinnedObject& character : skinnedObjects) {
+        for (D3D12MA::Allocation** allocation :
+             {&character.posKeys, &character.rotKeys, &character.scaleKeys, &character.boneInfos,
+              &character.inputVerts, &character.localXforms, &character.finalBones,
+              &character.outputVerts, &character.indices}) {
+            if (*allocation) {
+                (*allocation)->Release();
+                *allocation = nullptr;
+            }
+        }
+        for (D3D12MA::Allocation* texture : character.textures)
+            if (texture)
+                texture->Release();
+        character.textures.clear();
+    }
+    skinnedObjects.clear();
+    nextSkinnedSlot = 0;
 }
 
 void D3D12Renderer::Impl::recordSkinning()
 {
-    ComputePush push{};
-    push.animTime    = animTime;
-    push.boneCount   = boneCount;
-    push.vertexCount = skinnedVertexCount;
-    push.clipBase    = clipBase;
-
-    const D3D12_GPU_VIRTUAL_ADDRESS posKeys     = posKeysAllocation->GetResource()->GetGPUVirtualAddress();
-    const D3D12_GPU_VIRTUAL_ADDRESS rotKeys     = rotKeysAllocation->GetResource()->GetGPUVirtualAddress();
-    const D3D12_GPU_VIRTUAL_ADDRESS scaleKeys   = scaleKeysAllocation->GetResource()->GetGPUVirtualAddress();
-    const D3D12_GPU_VIRTUAL_ADDRESS boneInfos   = boneInfosAllocation->GetResource()->GetGPUVirtualAddress();
-    const D3D12_GPU_VIRTUAL_ADDRESS localXforms = localXformsAllocation->GetResource()->GetGPUVirtualAddress();
-    const D3D12_GPU_VIRTUAL_ADDRESS finalBones  = finalBonesAllocation->GetResource()->GetGPUVirtualAddress();
-    const D3D12_GPU_VIRTUAL_ADDRESS inputVerts  = inputVertsAllocation->GetResource()->GetGPUVirtualAddress();
-    const D3D12_GPU_VIRTUAL_ADDRESS outputVerts = outputVertsAllocation->GetResource()->GetGPUVirtualAddress();
-
     // Barrera de UAV, no de transición: los pases no cambian de estado, solo
     // hay que garantizar que lo escrito por uno lo vea el siguiente.
     auto uavBarrier = [&](ID3D12Resource* resource) {
@@ -1567,47 +1641,67 @@ void D3D12Renderer::Impl::recordSkinning()
         commandList->ResourceBarrier(1, &barrier);
     };
 
-    // 1) Claves de animación -> transformaciones locales. Un hilo por hueso.
-    commandList->SetComputeRootSignature(boneEvalRootSignature.Get());
-    commandList->SetPipelineState(boneEvalPipeline.Get());
-    commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
-    commandList->SetComputeRootShaderResourceView(1, posKeys);
-    commandList->SetComputeRootShaderResourceView(2, rotKeys);
-    commandList->SetComputeRootShaderResourceView(3, scaleKeys);
-    commandList->SetComputeRootShaderResourceView(4, boneInfos);
-    commandList->SetComputeRootUnorderedAccessView(5, localXforms);
-    commandList->Dispatch((boneCount + 63) / 64, 1, 1);
-    uavBarrier(localXformsAllocation->GetResource());
+    for (const SkinnedObject& object : skinnedObjects) {
+        if (object.vertexCount == 0)
+            continue;
 
-    // 2) Jerarquía: acumula padre a hijo. Un SOLO hilo a propósito — depende
-    // de que el padre ya esté resuelto, y el orden topológico lo garantiza.
-    commandList->SetComputeRootSignature(boneHierarchyRootSignature.Get());
-    commandList->SetPipelineState(boneHierarchyPipeline.Get());
-    commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
-    commandList->SetComputeRootShaderResourceView(1, boneInfos);
-    commandList->SetComputeRootShaderResourceView(2, localXforms);
-    commandList->SetComputeRootUnorderedAccessView(3, finalBones);
-    commandList->Dispatch(1, 1, 1);
-    uavBarrier(finalBonesAllocation->GetResource());
+        ComputePush push{};
+        push.animTime    = object.animTime;
+        push.boneCount   = object.boneCount;
+        push.vertexCount = object.vertexCount;
+        push.clipBase    = object.clipBase;
 
-    // 3) Deformación de los vértices. Un hilo por vértice.
-    commandList->SetComputeRootSignature(skinningRootSignature.Get());
-    commandList->SetPipelineState(skinningPipeline.Get());
-    commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
-    commandList->SetComputeRootShaderResourceView(1, finalBones);
-    commandList->SetComputeRootShaderResourceView(2, inputVerts);
-    commandList->SetComputeRootUnorderedAccessView(3, outputVerts);
-    commandList->Dispatch((skinnedVertexCount + 63) / 64, 1, 1);
+        const D3D12_GPU_VIRTUAL_ADDRESS posKeys     = object.posKeys->GetResource()->GetGPUVirtualAddress();
+        const D3D12_GPU_VIRTUAL_ADDRESS rotKeys     = object.rotKeys->GetResource()->GetGPUVirtualAddress();
+        const D3D12_GPU_VIRTUAL_ADDRESS scaleKeys   = object.scaleKeys->GetResource()->GetGPUVirtualAddress();
+        const D3D12_GPU_VIRTUAL_ADDRESS boneInfos   = object.boneInfos->GetResource()->GetGPUVirtualAddress();
+        const D3D12_GPU_VIRTUAL_ADDRESS localXforms = object.localXforms->GetResource()->GetGPUVirtualAddress();
+        const D3D12_GPU_VIRTUAL_ADDRESS finalBones  = object.finalBones->GetResource()->GetGPUVirtualAddress();
+        const D3D12_GPU_VIRTUAL_ADDRESS inputVerts  = object.inputVerts->GetResource()->GetGPUVirtualAddress();
+        const D3D12_GPU_VIRTUAL_ADDRESS outputVerts = object.outputVerts->GetResource()->GetGPUVirtualAddress();
 
-    // De escritura por compute a entrada del ensamblador de vértices: aquí sí
-    // cambia el uso del buffer, así que hace falta transición.
-    D3D12_RESOURCE_BARRIER toVertexBuffer{};
-    toVertexBuffer.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    toVertexBuffer.Transition.pResource   = outputVertsAllocation->GetResource();
-    toVertexBuffer.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    toVertexBuffer.Transition.StateAfter  = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
-    toVertexBuffer.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    commandList->ResourceBarrier(1, &toVertexBuffer);
+        // 1) Claves de animación -> transformaciones locales. Un hilo por hueso.
+        commandList->SetComputeRootSignature(boneEvalRootSignature.Get());
+        commandList->SetPipelineState(boneEvalPipeline.Get());
+        commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
+        commandList->SetComputeRootShaderResourceView(1, posKeys);
+        commandList->SetComputeRootShaderResourceView(2, rotKeys);
+        commandList->SetComputeRootShaderResourceView(3, scaleKeys);
+        commandList->SetComputeRootShaderResourceView(4, boneInfos);
+        commandList->SetComputeRootUnorderedAccessView(5, localXforms);
+        commandList->Dispatch((object.boneCount + 63) / 64, 1, 1);
+        uavBarrier(object.localXforms->GetResource());
+
+        // 2) Jerarquía: acumula padre a hijo. Un SOLO hilo a propósito — depende
+        // de que el padre ya esté resuelto, y el orden topológico lo garantiza.
+        commandList->SetComputeRootSignature(boneHierarchyRootSignature.Get());
+        commandList->SetPipelineState(boneHierarchyPipeline.Get());
+        commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
+        commandList->SetComputeRootShaderResourceView(1, boneInfos);
+        commandList->SetComputeRootShaderResourceView(2, localXforms);
+        commandList->SetComputeRootUnorderedAccessView(3, finalBones);
+        commandList->Dispatch(1, 1, 1);
+        uavBarrier(object.finalBones->GetResource());
+
+        // 3) Deformación de los vértices. Un hilo por vértice.
+        commandList->SetComputeRootSignature(skinningRootSignature.Get());
+        commandList->SetPipelineState(skinningPipeline.Get());
+        commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
+        commandList->SetComputeRootShaderResourceView(1, finalBones);
+        commandList->SetComputeRootShaderResourceView(2, inputVerts);
+        commandList->SetComputeRootUnorderedAccessView(3, outputVerts);
+        commandList->Dispatch((object.vertexCount + 63) / 64, 1, 1);
+
+        // De escritura por compute a entrada del ensamblador de vértices: aquí sí
+        // cambia el uso del buffer, así que hace falta transición.
+        D3D12_RESOURCE_BARRIER toVertexBuffer{};
+        toVertexBuffer.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toVertexBuffer.Transition.pResource   = object.outputVerts->GetResource();
+        toVertexBuffer.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        toVertexBuffer.Transition.StateAfter  = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+        toVertexBuffer.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &toVertexBuffer);
+    }
 }
 
 void D3D12Renderer::Impl::releaseHdrTargets()
@@ -2310,11 +2404,6 @@ void D3D12Renderer::Impl::createShadowResources()
     groundInstanceAllocation = uploadBuffer(&groundModel, sizeof(groundModel),
                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-    const glm::mat4 characterModel =
-        glm::scale(glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f)), glm::vec3(0.02f));
-    characterInstanceAllocation = uploadBuffer(&characterModel, sizeof(characterModel),
-                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
     // Mapa de sombras: un array de profundidad, una capa por cascada.
     D3D12_RESOURCE_DESC shadowDesc{};
     shadowDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -2369,9 +2458,10 @@ void D3D12Renderer::Impl::createShadowResources()
     for (const StaticObject& object : objects)
         if (object.srvBase != kSrvBaseColor)
             createShadowMapSrv(object.srvBase + 2);
-    for (const SkinnedSubMesh& sub : skinnedSubMeshes)
-        if (sub.srvBase != kSrvBaseColor)
-            createShadowMapSrv(sub.srvBase + 2);
+    for (const SkinnedObject& character : skinnedObjects)
+        for (const SkinnedSubMesh& sub : character.subMeshes)
+            if (sub.srvBase != kSrvBaseColor)
+                createShadowMapSrv(sub.srvBase + 2);
 
     // Root signature del pase de sombras: el MISMO UBO en b0 (los offsets de
     // view/proj/lightSpaceMatrix coinciden con los de triangle), el índice de
@@ -2653,13 +2743,20 @@ void D3D12Renderer::Impl::recordShadowPasses()
             }
         }
 
-        if (hasSkinnedMesh) {
+        if (!skinnedObjects.empty() && skinnedInstanceAllocation) {
             commandList->SetPipelineState(shadowSkinnedPipeline.Get());
             commandList->SetGraphicsRootShaderResourceView(
-                2, characterInstanceAllocation->GetResource()->GetGPUVirtualAddress());
-            commandList->IASetVertexBuffers(0, 1, &skinnedVertexBufferView);
-            commandList->IASetIndexBuffer(&skinnedIndexBufferView);
-            commandList->DrawIndexedInstanced(skinnedIndexCount, 1, 0, 0, 0);
+                2, skinnedInstanceAllocation->GetResource()->GetGPUVirtualAddress());
+
+            for (size_t i = 0; i < skinnedObjects.size(); ++i) {
+                const SkinnedObject& character = skinnedObjects[i];
+                if (!character.visible || character.indexCount == 0)
+                    continue;
+                commandList->IASetVertexBuffers(0, 1, &character.vertexBufferView);
+                commandList->IASetIndexBuffer(&character.indexBufferView);
+                commandList->DrawIndexedInstanced(character.indexCount, 1, 0, 0,
+                                                  static_cast<UINT>(i));
+            }
         }
     }
 
@@ -2873,7 +2970,6 @@ void D3D12Renderer::init(Window& window)
     d.createMeshPipeline();
     d.createMeshResources();
     d.createSkinningPipelines();
-    d.createSkinnedResources();
     // Las sombras van al final: su SRV pisa el array de relleno que dejó
     // createMeshResources en el hueco t3, y necesita el buffer de instancias
     // del cubo ya creado.
@@ -2908,7 +3004,7 @@ void D3D12Renderer::drawFrame()
 
     // Los tres compute van ANTES de abrir el render target: escriben el vertex
     // buffer que el pase gráfico va a leer este mismo frame.
-    if (d.hasSkinnedMesh) {
+    if (!d.skinnedObjects.empty()) {
         LARGE_INTEGER now{};
         QueryPerformanceCounter(&now);
         const double elapsed = d.tickFrequency.QuadPart > 0
@@ -2916,9 +3012,14 @@ void D3D12Renderer::drawFrame()
                                          static_cast<double>(d.tickFrequency.QuadPart)
                                    : 0.0;
         d.lastTick = now;
-        d.animTime += static_cast<float>(elapsed);
-        if (d.animDuration > 0.0f && d.animTime > d.animDuration)
-            d.animTime = std::fmod(d.animTime, d.animDuration);
+
+        // Cada personaje avanza en su propio ciclo: los clips no duran lo
+        // mismo, y un tiempo compartido haría saltar a los cortos.
+        for (Impl::SkinnedObject& character : d.skinnedObjects) {
+            character.animTime += static_cast<float>(elapsed);
+            if (character.animDuration > 0.0f && character.animTime > character.animDuration)
+                character.animTime = std::fmod(character.animTime, character.animDuration);
+        }
 
         d.recordSkinning();
     }
@@ -2935,6 +3036,17 @@ void D3D12Renderer::drawFrame()
             auto* matrices = static_cast<glm::mat4*>(d.sceneInstanceMapped);
             for (size_t i = 0; i < d.objects.size(); ++i)
                 matrices[i] = d.objects[i].transform;
+        }
+    }
+
+    // Lo mismo para los personajes: el pase de sombras los dibuja con
+    // StartInstanceLocation, y shadow.vert saca su model de este buffer.
+    if (!d.skinnedObjects.empty()) {
+        d.ensureSkinnedInstanceBuffer(d.skinnedObjects.size());
+        if (d.skinnedInstanceMapped) {
+            auto* matrices = static_cast<glm::mat4*>(d.skinnedInstanceMapped);
+            for (size_t i = 0; i < d.skinnedObjects.size(); ++i)
+                matrices[i] = d.skinnedObjects[i].transform;
         }
     }
 
@@ -3034,40 +3146,42 @@ void D3D12Renderer::drawFrame()
         }
     }
 
-    // Personaje: mismos shaders y misma root signature que el cubo, pero el
+    // Personajes: mismos shaders y misma root signature que el cubo, pero el
     // vertex buffer es lo que acaba de escribir el compute.
-    if (d.hasSkinnedMesh && d.skinnedMeshPipeline) {
+    if (!d.skinnedObjects.empty() && d.skinnedMeshPipeline) {
         d.commandList->SetPipelineState(d.skinnedMeshPipeline.Get());
         d.commandList->SetGraphicsRootSignature(d.meshRootSignature.Get());
         d.commandList->SetGraphicsRootConstantBufferView(
             0, d.sceneUboAllocations[d.frameIndex]->GetResource()->GetGPUVirtualAddress());
-
-        PushData push{};
-        // Los FBX del personaje vienen en centímetros; sin reescalar mediría
-        // cien veces la rejilla. flags.x = 0: el model sale de aquí, no del
-        // buffer de instancias, que es la ruta que usa el motor para skinned.
-        push.transform = glm::scale(glm::translate(glm::mat4(1.0f), glm::vec3(-3.0f, 0.0f, 0.0f)),
-                                    glm::vec3(0.02f));
-        push.metallic  = 0.0f;
-        push.roughness = 0.7f;
-        push.flags     = glm::vec2(0.0f, 0.0f);
-        d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
-
         d.commandList->SetGraphicsRootShaderResourceView(
             3, d.instanceAllocation->GetResource()->GetGPUVirtualAddress());
-
         d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        d.commandList->IASetVertexBuffers(0, 1, &d.skinnedVertexBufferView);
-        d.commandList->IASetIndexBuffer(&d.skinnedIndexBufferView);
 
-        // Un draw por submalla, cada una con la terna de su material.
-        for (const Impl::SkinnedSubMesh& sub : d.skinnedSubMeshes) {
-            if (sub.indexCount == 0)
+        for (const Impl::SkinnedObject& character : d.skinnedObjects) {
+            if (!character.visible || character.indexCount == 0)
                 continue;
-            D3D12_GPU_DESCRIPTOR_HANDLE table = d.srvHeap->GetGPUDescriptorHandleForHeapStart();
-            table.ptr += static_cast<UINT64>(sub.srvBase) * d.srvSize;
-            d.commandList->SetGraphicsRootDescriptorTable(2, table);
-            d.commandList->DrawIndexedInstanced(sub.indexCount, 1, sub.indexStart, 0, 0);
+
+            PushData push{};
+            // flags.x = 0: el model sale de aquí, no del buffer de instancias,
+            // que es la ruta que usa el motor para skinned.
+            push.transform = character.transform;
+            push.metallic  = 0.0f;
+            push.roughness = 0.7f;
+            push.flags     = glm::vec2(0.0f, 0.0f);
+            d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
+
+            d.commandList->IASetVertexBuffers(0, 1, &character.vertexBufferView);
+            d.commandList->IASetIndexBuffer(&character.indexBufferView);
+
+            // Un draw por submalla, cada una con la terna de su material.
+            for (const Impl::SkinnedSubMesh& sub : character.subMeshes) {
+                if (sub.indexCount == 0)
+                    continue;
+                D3D12_GPU_DESCRIPTOR_HANDLE table = d.srvHeap->GetGPUDescriptorHandleForHeapStart();
+                table.ptr += static_cast<UINT64>(sub.srvBase) * d.srvSize;
+                d.commandList->SetGraphicsRootDescriptorTable(2, table);
+                d.commandList->DrawIndexedInstanced(sub.indexCount, 1, sub.indexStart, 0, 0);
+            }
         }
     }
 
@@ -3086,10 +3200,12 @@ void D3D12Renderer::drawFrame()
     // El buffer de vértices deformados vuelve a acceso desordenado: el frame
     // siguiente lo reescribe el compute, y tiene que encontrarlo como lo dejó
     // el anterior o la transición de ida partiría de un estado que no es.
-    if (d.hasSkinnedMesh) {
+    for (const Impl::SkinnedObject& character : d.skinnedObjects) {
+        if (character.vertexCount == 0)
+            continue;
         D3D12_RESOURCE_BARRIER backToUav{};
         backToUav.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        backToUav.Transition.pResource   = d.outputVertsAllocation->GetResource();
+        backToUav.Transition.pResource   = character.outputVerts->GetResource();
         backToUav.Transition.StateBefore = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
         backToUav.Transition.StateAfter  = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         backToUav.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
@@ -3315,6 +3431,53 @@ void D3D12Renderer::clearStaticMeshes()
     d.objects.clear();
 }
 
+int D3D12Renderer::addSkinnedMesh(const SkinnedMesh& mesh)
+{
+    Impl& d = *m_impl;
+    if (!d.initialized)
+        return -1;
+    return d.createSkinnedObject(mesh);
+}
+
+void D3D12Renderer::setSkinnedTransform(size_t index, const glm::mat4& transform)
+{
+    if (index < m_impl->skinnedObjects.size())
+        m_impl->skinnedObjects[index].transform = transform;
+}
+
+void D3D12Renderer::setSkinnedVisible(size_t index, bool visible)
+{
+    if (index < m_impl->skinnedObjects.size())
+        m_impl->skinnedObjects[index].visible = visible;
+}
+
+void D3D12Renderer::setAnimationState(size_t index, uint32_t clipIndex, float animTime)
+{
+    Impl& d = *m_impl;
+    if (index >= d.skinnedObjects.size())
+        return;
+    Impl::SkinnedObject& character = d.skinnedObjects[index];
+    character.clipBase             = clipIndex * character.boneCount;
+    character.animTime             = animTime;
+}
+
+size_t D3D12Renderer::skinnedCount() const
+{
+    return m_impl->skinnedObjects.size();
+}
+
+void D3D12Renderer::clearSkinnedMeshes()
+{
+    Impl& d = *m_impl;
+    if (d.skinnedObjects.empty())
+        return;
+
+    // Sus buffers pueden estar en uso por el último frame presentado, y el de
+    // vértices deformados lo escribe el compute de ese mismo frame.
+    d.waitForGpu();
+    d.releaseSkinnedObjects();
+}
+
 void D3D12Renderer::waitIdle()
 {
     if (m_impl->initialized)
@@ -3444,28 +3607,25 @@ void D3D12Renderer::shutdown()
 
     for (auto** allocation : {&d.instanceAllocation, &d.baseColorAllocation,
                               &d.normalMapAllocation, &d.shadowMapAllocation,
-                              &d.depthAllocation, &d.posKeysAllocation, &d.rotKeysAllocation,
-                              &d.scaleKeysAllocation, &d.boneInfosAllocation,
-                              &d.inputVertsAllocation, &d.localXformsAllocation,
-                              &d.finalBonesAllocation, &d.outputVertsAllocation,
-                              &d.skinnedIndexAllocation, &d.groundVertexAllocation,
+                              &d.depthAllocation, &d.groundVertexAllocation,
                               &d.groundIndexAllocation, &d.groundInstanceAllocation,
-                              &d.characterInstanceAllocation, &d.shadowMapArrayAllocation}) {
+                              &d.shadowMapArrayAllocation}) {
         if (*allocation) {
             (*allocation)->Release();
             *allocation = nullptr;
         }
     }
-    for (D3D12MA::Allocation* texture : d.skinnedTextures)
-        if (texture)
-            texture->Release();
-    d.skinnedTextures.clear();
-    d.skinnedSubMeshes.clear();
+    d.releaseSkinnedObjects();
 
-    d.skinnedVertexBufferView = {};
-    d.skinnedIndexBufferView  = {};
-    d.skinnedIndexCount       = 0;
-    d.hasSkinnedMesh          = false;
+    if (d.skinnedInstanceAllocation) {
+        if (d.skinnedInstanceMapped) {
+            d.skinnedInstanceAllocation->GetResource()->Unmap(0, nullptr);
+            d.skinnedInstanceMapped = nullptr;
+        }
+        d.skinnedInstanceAllocation->Release();
+        d.skinnedInstanceAllocation = nullptr;
+        d.skinnedInstanceCapacity   = 0;
+    }
 
     d.groundVertexBufferView = {};
     d.groundIndexBufferView  = {};
