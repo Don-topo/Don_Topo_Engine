@@ -896,6 +896,37 @@ struct D3D12Renderer::Impl {
     std::array<UINT64, kFrameCount>    fenceValues{};
     HANDLE                             fenceEvent = nullptr;
 
+    // ─── Tiempos de GPU ──────────────────────────────────────────────────────
+    // Dos marcas por pase (entrada y salida) y un par más para el frame entero.
+    // El panel de rendimiento los pide uno a uno, así que se guardan por pase y
+    // no como un total.
+    enum TimestampSlot : UINT {
+        TsFrame       = 0,
+        TsShadow      = 2,
+        TsScene       = 4,
+        TsForwardPlus = 6,
+        TsSsao        = 8,
+        TsSsr         = 10,
+        TsFog         = 12,
+        TsBloom       = 14,
+        TsAa          = 16,
+        TsCount       = 18,
+    };
+    ComPtr<ID3D12QueryHeap> timestampHeap;
+    ComPtr<ID3D12Resource>  timestampReadback;
+    const UINT64*           timestampMapped   = nullptr;
+    UINT64                  timestampFreq     = 0;
+    std::array<float, TsCount / 2> gpuMs{};
+
+    void createTimestampResources();
+    void markTimestamp(UINT slot);
+    void readTimestamps();     // los del frame anterior, antes de sobrescribir
+    void resolveTimestamps();  // vuelca los de este frame al buffer de lectura
+
+    // Cuentas del frame, para el panel: se rellenan al grabar el pase principal.
+    int statDraws     = 0;
+    int statInstanced = 0;
+
     UINT frameIndex = 0;
     UINT width      = 0;
     UINT height     = 0;
@@ -1023,6 +1054,97 @@ void D3D12Renderer::Impl::waitForGpu()
             WaitForSingleObjectEx(fenceEvent, INFINITE, FALSE);
     }
     ++fenceValues[frameIndex];
+}
+
+void D3D12Renderer::Impl::createTimestampResources()
+{
+    // La frecuencia es de la COLA, no del device: es lo que convierte los ticks
+    // en segundos. Una cola de copia tendría otra distinta.
+    if (FAILED(queue->GetTimestampFrequency(&timestampFreq)) || timestampFreq == 0) {
+        // Sin reloj no hay medidas, pero tampoco hay motivo para no dibujar: el
+        // panel enseñará ceros.
+        timestampFreq = 0;
+        return;
+    }
+
+    D3D12_QUERY_HEAP_DESC heapDesc{};
+    heapDesc.Type  = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    heapDesc.Count = kFrameCount * TsCount;
+    if (FAILED(device->CreateQueryHeap(&heapDesc, IID_PPV_ARGS(&timestampHeap)))) {
+        timestampFreq = 0;
+        return;
+    }
+
+    // El destino del resolve va en un heap de lectura: es el único desde el que
+    // la CPU puede leer sin copia intermedia.
+    D3D12_HEAP_PROPERTIES readbackHeap{};
+    readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+
+    D3D12_RESOURCE_DESC bufferDesc{};
+    bufferDesc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Width            = static_cast<UINT64>(kFrameCount) * TsCount * sizeof(UINT64);
+    bufferDesc.Height           = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels        = 1;
+    bufferDesc.Format           = DXGI_FORMAT_UNKNOWN;
+    bufferDesc.SampleDesc.Count = 1;
+    bufferDesc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    if (FAILED(device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+                                               D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                               IID_PPV_ARGS(&timestampReadback)))) {
+        timestampHeap.Reset();
+        timestampFreq = 0;
+        return;
+    }
+
+    // Mapeado de una vez y para siempre: se lee cuando la fence del slot dice
+    // que la GPU ya escribió, así que no hace falta mapear y desmapear por
+    // frame.
+    void* mapped = nullptr;
+    if (FAILED(timestampReadback->Map(0, nullptr, &mapped))) {
+        timestampReadback.Reset();
+        timestampHeap.Reset();
+        timestampFreq = 0;
+        return;
+    }
+    timestampMapped = static_cast<const UINT64*>(mapped);
+}
+
+void D3D12Renderer::Impl::markTimestamp(UINT slot)
+{
+    if (!timestampHeap)
+        return;
+    commandList->EndQuery(timestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+                          frameIndex * TsCount + slot);
+}
+
+void D3D12Renderer::Impl::readTimestamps()
+{
+    if (!timestampMapped || timestampFreq == 0)
+        return;
+
+    // Este slot ya pasó por moveToNextFrame, que esperó su fence: lo que hay en
+    // el buffer es del último frame que lo usó, y está completo.
+    const UINT64* base    = timestampMapped + static_cast<size_t>(frameIndex) * TsCount;
+    const double  toMs    = 1000.0 / static_cast<double>(timestampFreq);
+
+    for (UINT pair = 0; pair < TsCount / 2; ++pair) {
+        const UINT64 begin = base[pair * 2];
+        const UINT64 end   = base[pair * 2 + 1];
+        gpuMs[pair] = (end > begin) ? static_cast<float>((end - begin) * toMs) : 0.0f;
+    }
+}
+
+void D3D12Renderer::Impl::resolveTimestamps()
+{
+    if (!timestampHeap || !timestampReadback)
+        return;
+
+    const UINT base = frameIndex * TsCount;
+    commandList->ResolveQueryData(timestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, base, TsCount,
+                                  timestampReadback.Get(),
+                                  static_cast<UINT64>(base) * sizeof(UINT64));
 }
 
 void D3D12Renderer::Impl::moveToNextFrame()
@@ -4666,6 +4788,7 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     transition(ldrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
+    markTimestamp(TsAa);
     if (state->aaMode() == RendererState::AaMode::Taa) {
         // El TAA ocupa el sitio del FXAA: mezcla esta imagen con la del frame
         // anterior y escribe a la vez el backbuffer y el historial siguiente.
@@ -4689,6 +4812,7 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
         // hay que empezar de cero o el primer frame mezcla una imagen vieja.
         taaHistoryValid = false;
     }
+    markTimestamp(TsAa + 1);
 
     transition(ldrAllocation->GetResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -5329,6 +5453,7 @@ void D3D12Renderer::init(Window& window)
     d.createSsrPipelines();
     d.createTaaPipeline();
     d.createForwardPlusPipelines();
+    d.createTimestampResources();
     d.updateViewProj();
 
     d.initialized = true;
@@ -5353,11 +5478,29 @@ void D3D12Renderer::drawFrame()
     // frames, no en mitad de uno.
     d.applyPendingSampleCount();
 
+    // Los tiempos que dejó la última vez que se usó este slot: moveToNextFrame
+    // ya esperó su fence, así que están completos. Se leen ANTES de grabar
+    // nada, porque el frame que empieza los va a sobrescribir.
+    d.readTimestamps();
+
     ID3D12CommandAllocator* allocator = d.allocators[d.frameIndex].Get();
     if (FAILED(allocator->Reset()))
         return;
     if (FAILED(d.commandList->Reset(allocator, nullptr)))
         return;
+
+    // TODAS las marcas al arranque del frame, y luego cada pase sobrescribe las
+    // suyas. El resolve copia el rango entero, así que una query que este frame
+    // no se escriba conservaría el tick de hace tres frames y daría una resta
+    // absurda —se vio un Forward+ de 735 ms con el modo apagado—. Escribiéndolas
+    // todas, un pase que no corre mide cero, que es la verdad.
+    for (UINT slot = 0; slot < Impl::TsCount; ++slot)
+        d.markTimestamp(slot);
+
+    // Las cuentas del frame anterior ya las ha leído el panel (la interfaz se
+    // construye antes de grabar), así que aquí se pueden reiniciar.
+    d.statDraws     = 0;
+    d.statInstanced = 0;
 
     // Los tres compute van ANTES de abrir el render target: escriben el vertex
     // buffer que el pase gráfico va a leer este mismo frame.
@@ -5414,17 +5557,24 @@ void D3D12Renderer::drawFrame()
 
     // Sombras antes del pase principal: pbr.frag muestrea el mapa que se graba
     // aquí.
-    if (d.shadowPipeline)
+    if (d.shadowPipeline) {
+        d.markTimestamp(Impl::TsShadow);
         d.recordShadowPasses();
+        d.markTimestamp(Impl::TsShadow + 1);
+    }
 
     // Y la oclusión, que necesita su propia profundidad y la produce con dos
     // compute: pbr.frag la multiplica al ambiente en el pase siguiente.
+    d.markTimestamp(Impl::TsSsao);
     d.recordDepthPrepassAndSsao();
+    d.markTimestamp(Impl::TsSsao + 1);
 
     // Reparto de luces por celda. Va detrás del pre-pase porque el modo tiled
     // reduce la profundidad de cada tile a partir de él.
     d.updateForwardPlus();
+    d.markTimestamp(Impl::TsForwardPlus);
     d.recordForwardPlusCull();
+    d.markTimestamp(Impl::TsForwardPlus + 1);
 
     D3D12_RESOURCE_BARRIER toRenderTarget{};
     toRenderTarget.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -5466,6 +5616,7 @@ void D3D12Renderer::drawFrame()
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = d.dsvHeap->GetCPUDescriptorHandleForHeapStart();
     if (multisampled)
         dsv.ptr += d.dsvSize;
+    d.markTimestamp(Impl::TsScene);
     d.commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
     d.commandList->ClearRenderTargetView(rtv, d.clearColor, 0, nullptr);
     d.commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
@@ -5524,6 +5675,8 @@ void D3D12Renderer::drawFrame()
             d.commandList->IASetVertexBuffers(0, 1, &object.vertexBufferView);
             d.commandList->IASetIndexBuffer(&object.indexBufferView);
             d.commandList->DrawIndexedInstanced(object.indexCount, 1, 0, 0, 0);
+            ++d.statDraws;
+            ++d.statInstanced;
         }
 
         // Suelo: receptor de sombras y referencia visual, NO parte de la
@@ -5540,6 +5693,8 @@ void D3D12Renderer::drawFrame()
             d.commandList->IASetVertexBuffers(0, 1, &d.groundVertexBufferView);
             d.commandList->IASetIndexBuffer(&d.groundIndexBufferView);
             d.commandList->DrawIndexedInstanced(d.groundIndexCount, 1, 0, 0, 0);
+            ++d.statDraws;
+            ++d.statInstanced;
         }
     }
 
@@ -5581,6 +5736,8 @@ void D3D12Renderer::drawFrame()
                 table.ptr += static_cast<UINT64>(sub.srvBase) * d.srvSize;
                 d.commandList->SetGraphicsRootDescriptorTable(2, table);
                 d.commandList->DrawIndexedInstanced(sub.indexCount, 1, sub.indexStart, 0, 0);
+                ++d.statDraws;
+                ++d.statInstanced;
             }
         }
     }
@@ -5655,6 +5812,8 @@ void D3D12Renderer::drawFrame()
         }
     }
 
+    d.markTimestamp(Impl::TsScene + 1);
+
     // El buffer de vértices deformados vuelve a acceso desordenado: el frame
     // siguiente lo reescribe el compute, y tiene que encontrarlo como lo dejó
     // el anterior o la transición de ida partiría de un estado que no es.
@@ -5695,19 +5854,29 @@ void D3D12Renderer::drawFrame()
 
     // Reflejos antes de la niebla: leen la escena tal cual salió del pase y le
     // suman lo reflejado; la niebla va después porque tiñe TODO lo que hay.
-    if (d.state->ssrEnabled())
+    if (d.state->ssrEnabled()) {
+        d.markTimestamp(Impl::TsSsr);
         d.recordSsr();
+        d.markTimestamp(Impl::TsSsr + 1);
+    }
 
     // Niebla ANTES del bloom: reescribe la escena, y lo que el bloom filtre
     // tiene que ser ya lo que se va a ver.
     // Ahora que el interruptor vive en el estado compartido, se respeta: es el
     // mismo que apaga la niebla en el menú View del editor.
-    if (d.fogPipeline && d.state->fogEnabled())
+    if (d.fogPipeline && d.state->fogEnabled()) {
+        d.markTimestamp(Impl::TsFog);
         d.recordFog();
+        d.markTimestamp(Impl::TsFog + 1);
+    }
 
-    // Bloom, composición con tone mapping y FXAA hasta el backbuffer.
-    if (d.compositePipeline)
+    // Bloom, composición con tone mapping y FXAA hasta el backbuffer. El
+    // anti-aliasing se cronometra dentro: TAA y FXAA van cosidos a este pase.
+    if (d.compositePipeline) {
+        d.markTimestamp(Impl::TsBloom);
         d.recordBloomAndComposite(sceneRtv);
+        d.markTimestamp(Impl::TsBloom + 1);
+    }
 
     if (toTexture) {
         // Y a lectura, que es como la quiere la interfaz.
@@ -5736,6 +5905,10 @@ void D3D12Renderer::drawFrame()
     toPresent.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     toPresent.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
     d.commandList->ResourceBarrier(1, &toPresent);
+
+    // La última marca y el volcado, ya con todo grabado.
+    d.markTimestamp(Impl::TsFrame + 1);
+    d.resolveTimestamps();
 
     if (FAILED(d.commandList->Close()))
         return;
@@ -6402,18 +6575,23 @@ float D3D12Renderer::lastProbeBakeMs() const { return 0.0f; }
 float D3D12Renderer::probeBakeMs(uint64_t) const { return 0.0f; }
 
 void     D3D12Renderer::setPerfCaptureEnabled(bool) {}
-float    D3D12Renderer::renderGpuMs() const { return 0.0f; }
-float    D3D12Renderer::ssaoGpuMs() const { return 0.0f; }
-float    D3D12Renderer::ssrGpuMs() const { return 0.0f; }
-float    D3D12Renderer::bloomGpuMs() const { return 0.0f; }
-float    D3D12Renderer::fogGpuMs() const { return 0.0f; }
-float    D3D12Renderer::aaGpuMs() const { return 0.0f; }
-float    D3D12Renderer::sceneGpuMs() const { return 0.0f; }
-float    D3D12Renderer::shadowGpuMs() const { return 0.0f; }
-float    D3D12Renderer::forwardPlusGpuMs() const { return 0.0f; }
-int      D3D12Renderer::statDrawCalls() const { return 0; }
-int      D3D12Renderer::statInstances() const { return 0; }
-int      D3D12Renderer::statCulled() const { return 0; }
+// Tiempos de GPU: los mide el par de marcas de cada pase, leídos con dos frames
+// de retraso —que es cuando la GPU ya ha terminado el que los escribió— igual
+// que en el camino de Vulkan.
+float D3D12Renderer::renderGpuMs() const { return m_impl->gpuMs[Impl::TsFrame / 2]; }
+float D3D12Renderer::ssaoGpuMs() const { return m_impl->gpuMs[Impl::TsSsao / 2]; }
+float D3D12Renderer::ssrGpuMs() const { return m_impl->gpuMs[Impl::TsSsr / 2]; }
+float D3D12Renderer::bloomGpuMs() const { return m_impl->gpuMs[Impl::TsBloom / 2]; }
+float D3D12Renderer::fogGpuMs() const { return m_impl->gpuMs[Impl::TsFog / 2]; }
+float D3D12Renderer::aaGpuMs() const { return m_impl->gpuMs[Impl::TsAa / 2]; }
+float D3D12Renderer::sceneGpuMs() const { return m_impl->gpuMs[Impl::TsScene / 2]; }
+float D3D12Renderer::shadowGpuMs() const { return m_impl->gpuMs[Impl::TsShadow / 2]; }
+float D3D12Renderer::forwardPlusGpuMs() const { return m_impl->gpuMs[Impl::TsForwardPlus / 2]; }
+int   D3D12Renderer::statDrawCalls() const { return m_impl->statDraws; }
+int   D3D12Renderer::statInstances() const { return m_impl->statInstanced; }
+// Descartados: cero de verdad, no "sin implementar". Este backend dibuja toda
+// la escena porque todavía no tiene frustum culling.
+int   D3D12Renderer::statCulled() const { return 0; }
 float    D3D12Renderer::forwardPlusAvgPerCell() const { return 0.0f; }
 uint32_t D3D12Renderer::forwardPlusOverflowCells() const { return 0; }
 
