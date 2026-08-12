@@ -74,6 +74,9 @@ struct SceneUbo {
     ShaderLight lights[16];              // c25
     glm::vec4   viewPos;                 // c89
     int         numLights;               // c90
+    // En el hueco de padding que ya había detrás de numLights, igual que en
+    // GLSL: ningún offset anterior se mueve.
+    float       ambientIntensity;
 };
 
 static_assert(offsetof(SceneUbo, view) == 0, "UBO: view debe ir en c0");
@@ -83,6 +86,8 @@ static_assert(offsetof(SceneUbo, cascadeSplits) == 384, "UBO: cascadeSplits debe
 static_assert(offsetof(SceneUbo, lights) == 400, "UBO: lights debe ir en c25");
 static_assert(offsetof(SceneUbo, viewPos) == 1424, "UBO: viewPos debe ir en c89");
 static_assert(offsetof(SceneUbo, numLights) == 1440, "UBO: numLights debe ir en c90");
+static_assert(offsetof(SceneUbo, ambientIntensity) == 1444,
+              "UBO: ambientIntensity va pegado a numLights");
 
 // Push constants de triangle.vert/pbr.frag: mat4 + 2 float + vec2 = 80 bytes.
 struct PushData {
@@ -102,6 +107,39 @@ struct ComputePush {
     uint32_t clipBase;  // activeClip * boneCount
 };
 static_assert(sizeof(ComputePush) == 16, "ComputePush debe ocupar 16 bytes");
+
+// Medio flotante a mano: los neutros del IBL son cuatro texels y no compensa
+// arrastrar DirectXMath por ellos. Vale para valores normales y pequeños, que
+// es lo único que se le pasa.
+inline uint16_t floatToHalf(float value)
+{
+    const bool  negative = value < 0.0f;
+    float       magnitude = negative ? -value : value;
+    if (!(magnitude > 0.0f))
+        return negative ? 0x8000u : 0u;
+
+    int exponent = 0;
+    while (magnitude >= 2.0f && exponent < 15) {
+        magnitude *= 0.5f;
+        ++exponent;
+    }
+    while (magnitude < 1.0f && exponent > -14) {
+        magnitude *= 2.0f;
+        --exponent;
+    }
+
+    const uint16_t biased  = static_cast<uint16_t>(exponent + 15);
+    const uint16_t mantissa =
+        static_cast<uint16_t>((magnitude - 1.0f) * 1024.0f + 0.5f) & 0x03FFu;
+    return static_cast<uint16_t>((negative ? 0x8000u : 0u) | (biased << 10) | mantissa);
+}
+
+// IBL. Mismos tamaños que el camino de Vulkan (Renderer.h): el prefiltrado
+// reparte la rugosidad entre sus mips, y pbr.frag lo da por hecho con un
+// #define propio.
+constexpr UINT kIblIrradianceSize = 32;
+constexpr UINT kIblPrefilterSize  = 128;
+constexpr UINT kIblPrefilterMips  = 5;
 
 // Sombras en cascada. Mismos valores que el camino Vulkan
 // (Renderer.cpp:1016-1025): sin ellos las cascadas cortan a otras distancias y
@@ -137,8 +175,16 @@ static_assert(sizeof(BloomPush) == 24, "BloomPush debe ocupar 24 bytes");
 constexpr UINT kSrvBaseColor = 0;
 constexpr UINT kSrvNormalMap = 1;
 constexpr UINT kSrvShadowMap = 2;
-constexpr UINT kSrvSceneHdr  = 3;
-constexpr UINT kSrvBloomMip  = 4;                          // + nivel
+// t4..t7 del bloque global. Son los neutros: metallic-roughness a blanco
+// (ao = 1 y los factores del push sin escalar), los dos cubemaps con un
+// ambiente plano y la oclusión a 1. pbr.frag los muestrea SIEMPRE, así que
+// tienen que existir aunque no haya ni material ni entorno ni SSAO.
+constexpr UINT kSrvMetalRough = 3;
+constexpr UINT kSrvIrradiance = 4;
+constexpr UINT kSrvPrefilter  = 5;
+constexpr UINT kSrvSsao       = 6;
+constexpr UINT kSrvSceneHdr   = 7;
+constexpr UINT kSrvBloomMip  = kSrvSceneHdr + 1;            // + nivel
 constexpr UINT kUavBloomMip  = kSrvBloomMip + kBloomMips;   // + nivel
 constexpr UINT kSrvDepth     = kUavBloomMip + kBloomMips;   // profundidad, para la niebla
 constexpr UINT kUavSceneHdr  = kSrvDepth + 1;               // la niebla escribe sobre la escena
@@ -149,24 +195,35 @@ constexpr UINT kSrvLdr       = kUavSceneHdr + 1;            // salida de la comp
 constexpr UINT kSrvImGui      = kSrvLdr + 1;
 constexpr UINT kImGuiReserved = 16;
 
-// Ternas por objeto de la escena. El shader de malla pide t1..t3 como UNA
-// tabla contigua, así que cada malla necesita sus tres huecos seguidos: color
-// base, normales y el array de sombras (esta última es la misma vista repetida
-// en todas las ternas — crear el SRV N veces es legal y evita partir la root
-// signature). Los objetos que pasen del tope se dibujan con la terna global,
-// que es exactamente lo que hacían todos antes de esta fase.
+// Bloque de descriptores por objeto. pbr.frag pide t1..t7 como UNA tabla
+// contigua, así que cada malla necesita sus siete huecos seguidos, en este
+// orden: color base, normales, sombras, metallic-roughness, irradiancia,
+// prefiltrado y oclusión de pantalla. Los cuatro últimos y el de sombras son
+// recursos compartidos: se les crea la vista otra vez dentro de cada bloque,
+// que es legal y evita partir la root signature (copiar descriptores desde un
+// heap visible al shader no lo permite la API).
+//
+// Los objetos que pasen del tope se dibujan con el bloque global, que lleva
+// los neutros: se ven planos, pero nunca se sale del heap.
+constexpr UINT kSrvPerObject   = 7;
 constexpr UINT kMaxObjectSlots = 512;
 constexpr UINT kSrvObjects     = kSrvImGui + kImGuiReserved;
 
 // Y otro tanto para la malla skinned, que se dibuja por submallas: cada una
-// tiene su material en el FBX y por tanto su propia terna.
+// tiene su material en el FBX y por tanto su propio bloque.
 constexpr UINT kMaxSkinnedSlots = 16;
-constexpr UINT kSrvSkinned      = kSrvObjects + kMaxObjectSlots * 3;
+constexpr UINT kSrvSkinned      = kSrvObjects + kMaxObjectSlots * kSrvPerObject;
 
 // Cubemap del cielo: una sola vista, la del TextureCube que muestrea t0 de
 // skybox.frag.
-constexpr UINT kSrvSkybox   = kSrvSkinned + kMaxSkinnedSlots * 3;
-constexpr UINT kSrvHeapSize = kSrvSkybox + 1;
+constexpr UINT kSrvSkybox   = kSrvSkinned + kMaxSkinnedSlots * kSrvPerObject;
+
+// Destinos de los dos compute de IBL: la irradiancia entera y un nivel del
+// prefiltrado por mip. Son de escritura, así que van como UAV y no comparten
+// hueco con las vistas de lectura que usa pbr.frag.
+constexpr UINT kUavIrradiance = kSrvSkybox + 1;
+constexpr UINT kUavPrefilter  = kUavIrradiance + 1;  // + mip
+constexpr UINT kSrvHeapSize   = kUavPrefilter + kIblPrefilterMips;
 
 // Niebla volumétrica: push propio de 128 bytes.
 struct FogPush {
@@ -290,8 +347,9 @@ struct D3D12Renderer::Impl {
         // Texturas propias del material, o nullptr si la malla no trae (o el
         // fichero no se pudo leer): en ese caso la terna apunta a las 1x1
         // globales y el objeto sale con color plano, como hasta ahora.
-        D3D12MA::Allocation* baseColorAllocation = nullptr;
-        D3D12MA::Allocation* normalMapAllocation = nullptr;
+        D3D12MA::Allocation* baseColorAllocation  = nullptr;
+        D3D12MA::Allocation* normalMapAllocation  = nullptr;
+        D3D12MA::Allocation* metalRoughAllocation = nullptr;
 
         // Primer hueco de su terna en el heap. kSrvBaseColor = la global.
         UINT  srvBase   = kSrvBaseColor;
@@ -326,7 +384,27 @@ struct D3D12Renderer::Impl {
     D3D12MA::Allocation* normalMapAllocation = nullptr;
     D3D12MA::Allocation* shadowMapAllocation = nullptr;
 
-    // t1, t2 y t3 de space0, en este orden.
+    // Neutros de t4..t7: existen siempre, y son lo que ve una malla sin
+    // material de metallic-roughness o una escena sin entorno.
+    D3D12MA::Allocation* metalRoughAllocation = nullptr;
+    D3D12MA::Allocation* irradianceAllocation = nullptr;
+    D3D12MA::Allocation* prefilterAllocation  = nullptr;
+    // Mips que tiene AHORA el prefiltrado: uno con el neutro, y los de verdad
+    // cuando lo genere el compute. Una vista que declare más mips de los que
+    // tiene el recurso es un descriptor inválido: no falla al crearla, se lleva
+    // el device por delante cuando algo lo usa.
+    UINT                 prefilterMips        = 1;
+    D3D12MA::Allocation* ssaoAllocation       = nullptr;
+
+    // Forward+ apagado, pero los cuatro buffers de space2 EXISTEN: pbr.frag los
+    // declara sin rama, y un root SRV a cero es una lectura fuera de recurso.
+    // Con mode = 0 el shader ni los mira, pero tienen que estar enlazados.
+    D3D12MA::Allocation* fpParamsAllocation  = nullptr;
+    D3D12MA::Allocation* fpLightsAllocation  = nullptr;
+    D3D12MA::Allocation* fpCellsAllocation   = nullptr;
+    D3D12MA::Allocation* fpIndicesAllocation = nullptr;
+
+    // t1..t7 de space0, en este orden.
     ComPtr<ID3D12DescriptorHeap> srvHeap;
     UINT                         srvSize = 0;
 
@@ -410,6 +488,24 @@ struct D3D12Renderer::Impl {
     // fondo se queda en el color de limpieza, que es lo que había antes.
     void createSkyboxResources();
     void recordSkybox();
+
+    ComPtr<ID3D12RootSignature> iblRootSignature;
+    ComPtr<ID3D12PipelineState> iblIrradiancePipeline;
+    ComPtr<ID3D12PipelineState> iblPrefilterPipeline;
+
+    // Convoluciona el cubemap del cielo en los dos mapas que consume pbr.frag:
+    // irradiancia para el difuso y prefiltrado por rugosidad para el especular.
+    // Sustituye a los neutros; sin cielo cargado no hace nada.
+    void precomputeIbl();
+
+    // Entorno plano para cuando no hay cubemap, y los cuatro buffers de
+    // Forward+ que pbr.frag declara sin rama.
+    void createNeutralIblCubes();
+    void createForwardPlusBuffers();
+
+    // Enlaza los cuatro root SRV de space2. Los tres pases que usan la root
+    // signature de malla (estáticos, suelo y personajes) los necesitan.
+    void bindForwardPlus();
 
     // ── Cámara ──────────────────────────────────────────────────────────
     // Un solo sitio: la rejilla, la malla, la niebla y el reparto de cascadas
@@ -567,8 +663,17 @@ struct D3D12Renderer::Impl {
     void createTexture2DSrv(ID3D12Resource* resource, DXGI_FORMAT format, UINT srvIndex);
 
     // Vista del array de cascadas (o de su relleno 1x1 mientras no exista) en
-    // el hueco dado. La terna de cada objeto necesita la suya.
+    // el hueco dado. El bloque de cada objeto necesita la suya.
     void createShadowMapSrv(UINT srvIndex);
+
+    // Vista de un cubemap ya subido en el hueco dado, con sus mips.
+    void createCubeSrv(ID3D12Resource* resource, DXGI_FORMAT format, UINT mipLevels,
+                       UINT srvIndex);
+
+    // Rellena t3..t7 de un bloque con los recursos compartidos: sombras,
+    // los dos cubemaps de entorno y la oclusión. Lo que cambia por objeto son
+    // t1 y t2, que los escribe quien lo sube.
+    void fillSharedSlots(UINT blockBase);
 
     void createMeshPipeline();
     void createMeshResources();
@@ -1043,6 +1148,40 @@ void D3D12Renderer::Impl::createShadowMapSrv(UINT srvIndex)
     device->CreateShaderResourceView(resource, &srvDesc, handle);
 }
 
+void D3D12Renderer::Impl::createCubeSrv(ID3D12Resource* resource, DXGI_FORMAT format,
+                                        UINT mipLevels, UINT srvIndex)
+{
+    if (!resource)
+        return;
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format                  = format;
+    srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURECUBE;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.TextureCube.MipLevels   = mipLevels;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<SIZE_T>(srvIndex) * srvSize;
+    device->CreateShaderResourceView(resource, &srvDesc, handle);
+}
+
+void D3D12Renderer::Impl::fillSharedSlots(UINT blockBase)
+{
+    createShadowMapSrv(blockBase + 2);
+
+    if (metalRoughAllocation)
+        createTexture2DSrv(metalRoughAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
+                           blockBase + 3);
+    if (irradianceAllocation)
+        createCubeSrv(irradianceAllocation->GetResource(), kHdrFormat, 1, blockBase + 4);
+    if (prefilterAllocation)
+        createCubeSrv(prefilterAllocation->GetResource(), kHdrFormat, prefilterMips,
+                      blockBase + 5);
+    if (ssaoAllocation)
+        createTexture2DSrv(ssaoAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
+                           blockBase + 6);
+}
+
 void D3D12Renderer::Impl::createDepthBuffer()
 {
     if (depthAllocation) {
@@ -1111,12 +1250,14 @@ void D3D12Renderer::Impl::createMeshPipeline()
     // registro, así que DXC le asigna el siguiente libre: b1.
     D3D12_DESCRIPTOR_RANGE textureRange{};
     textureRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    textureRange.NumDescriptors     = 3;
-    textureRange.BaseShaderRegister = 1;  // t1, t2, t3
+    textureRange.NumDescriptors     = kSrvPerObject;
+    textureRange.BaseShaderRegister = 1;  // t1..t7
     textureRange.RegisterSpace      = 0;
     textureRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER params[4]{};
+    // Forward+ vive en su propio space: cuatro ByteAddressBuffer que van como
+    // root SRV, sin tabla ni descriptores.
+    D3D12_ROOT_PARAMETER params[8]{};
     params[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor.ShaderRegister = 0;
     params[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
@@ -1136,27 +1277,48 @@ void D3D12Renderer::Impl::createMeshPipeline()
     params[3].Descriptor.RegisterSpace  = 1;
     params[3].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
 
+    for (UINT i = 0; i < 4; ++i) {
+        params[4 + i].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        params[4 + i].Descriptor.ShaderRegister = i;  // t0..t3 de space2
+        params[4 + i].Descriptor.RegisterSpace  = 2;
+        params[4 + i].ShaderVisibility          = D3D12_SHADER_VISIBILITY_PIXEL;
+    }
+
     // Samplers estáticos: los shaders no eligen filtro ni wrap en tiempo de
     // ejecución, así que no hace falta un heap de samplers ni descriptores.
-    D3D12_STATIC_SAMPLER_DESC samplers[3]{};
-    for (int i = 0; i < 2; ++i) {
+    // s1, s2 y s4: texturas de material, que se repiten con el UV. s5, s6 y s7
+    // van a borde fijo — un cubemap o un mapa de pantalla no se repiten.
+    D3D12_STATIC_SAMPLER_DESC samplers[7]{};
+    const UINT                wrapRegisters[3]  = {1, 2, 4};
+    const UINT                clampRegisters[3] = {5, 6, 7};
+    for (int i = 0; i < 3; ++i) {
         samplers[i].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
         samplers[i].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
         samplers[i].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
         samplers[i].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
         samplers[i].MaxLOD           = D3D12_FLOAT32_MAX;
-        samplers[i].ShaderRegister   = 1 + i;  // s1, s2
+        samplers[i].ShaderRegister   = wrapRegisters[i];
         samplers[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     }
+    for (int i = 0; i < 3; ++i) {
+        D3D12_STATIC_SAMPLER_DESC& sampler = samplers[3 + i];
+        sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.MaxLOD           = D3D12_FLOAT32_MAX;
+        sampler.ShaderRegister   = clampRegisters[i];
+        sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    }
     // s3 es el del sampler2DArrayShadow: comparación, no filtrado normal.
-    samplers[2].Filter           = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
-    samplers[2].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    samplers[2].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    samplers[2].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    samplers[2].ComparisonFunc   = D3D12_COMPARISON_FUNC_LESS_EQUAL;
-    samplers[2].MaxLOD           = D3D12_FLOAT32_MAX;
-    samplers[2].ShaderRegister   = 3;
-    samplers[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    samplers[6].Filter           = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    samplers[6].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[6].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[6].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[6].ComparisonFunc   = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    samplers[6].MaxLOD           = D3D12_FLOAT32_MAX;
+    samplers[6].ShaderRegister   = 3;
+    samplers[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC rootDesc{};
     rootDesc.NumParameters     = _countof(params);
@@ -1184,7 +1346,7 @@ void D3D12Renderer::Impl::createMeshPipeline()
                   "ID3D12Device::CreateRootSignature(malla)");
 
     const std::vector<char> vertexShader = readBinaryFile("shaders/triangle.vert.dxil");
-    const std::vector<char> pixelShader  = readBinaryFile("shaders/triangle.frag.dxil");
+    const std::vector<char> pixelShader  = readBinaryFile("shaders/pbr.frag.dxil");
 
     // El orden y los offsets salen de DonTopo::Vertex; las semánticas, de cómo
     // spirv-cross traduce layout(location = N).
@@ -1262,7 +1424,24 @@ void D3D12Renderer::Impl::createMeshResources()
     // a cero, selectCascade devuelve -1 y el shader ni lo muestrea; existe
     // porque la root signature tiene que satisfacer el t3 que declara.
     const float noShadow[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    shadowMapAllocation = uploadTexture(noShadow, 1, 1, 4, DXGI_FORMAT_R32_FLOAT, 4, 2);
+    shadowMapAllocation = uploadTexture(noShadow, 1, 1, 4, DXGI_FORMAT_R32_FLOAT, 4, kSrvShadowMap);
+
+    // t4: ORM sin textura. R = oclusión, G = rugosidad, B = metalicidad, y
+    // pbr.frag los multiplica por los factores del push: a 255 el material
+    // manda entero, que es lo que hacía el shader anterior.
+    const uint8_t neutralOrm[4] = {255, 255, 255, 255};
+    metalRoughAllocation =
+        uploadTexture(neutralOrm, 1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, 4, kSrvMetalRough);
+
+    // t7: oclusión de pantalla a 1. Con SSAO apagado el shader multiplica por
+    // la unidad y no hace falta ninguna rama.
+    const uint8_t noOcclusion[4] = {255, 255, 255, 255};
+    ssaoAllocation = uploadTexture(noOcclusion, 1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, 4, kSrvSsao);
+
+    // t5 y t6: entorno neutro, los mismos valores que deja el camino de Vulkan
+    // cuando no hay cubemap. Un ambiente plano ilumina de forma aburrida, pero
+    // sin ellos pbr.frag leería de un descriptor vacío.
+    createNeutralIblCubes();
 
     // UBO por frame en vuelo, mapeado de forma persistente: se reescribe cada
     // frame y desmapear/remapear no aporta nada.
@@ -1319,7 +1498,8 @@ void D3D12Renderer::Impl::updateSceneUbo()
     // el suelo y lava la imagen. Con 0,7 queda rango por debajo del umbral.
     ubo.lights[0].color[3]     = 0.7f;
 
-    ubo.viewPos = glm::vec4(6.0f, 4.5f, 8.0f, 1.0f);
+    ubo.viewPos          = glm::vec4(cameraPos, 1.0f);
+    ubo.ambientIntensity = state->ambientIntensity();
 
     std::memcpy(sceneUboMapped[frameIndex], &ubo, sizeof(ubo));
 }
@@ -1444,7 +1624,7 @@ void D3D12Renderer::Impl::createSkinningPipelines()
     // el vertex buffer es la salida del compute, que va en vec4 alineados (5 x
     // vec4 = 80 B) en vez del Vertex empaquetado del motor.
     const std::vector<char> vertexShader = readBinaryFile("shaders/triangle.vert.dxil");
-    const std::vector<char> pixelShader  = readBinaryFile("shaders/triangle.frag.dxil");
+    const std::vector<char> pixelShader  = readBinaryFile("shaders/pbr.frag.dxil");
 
     const D3D12_INPUT_ELEMENT_DESC skinnedLayout[] = {
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
@@ -1563,7 +1743,7 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
         // Las ternas se reparten entre TODOS los personajes de la escena, no
         // por personaje: pasado el tope, la submalla cae a la terna global.
         if (nextSkinnedSlot < kMaxSkinnedSlots) {
-            const UINT slot = kSrvSkinned + nextSkinnedSlot * 3;
+            const UINT slot = kSrvSkinned + nextSkinnedSlot * kSrvPerObject;
             ++nextSkinnedSlot;
             sub.srvBase = slot;
 
@@ -1583,7 +1763,13 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
                 createTexture2DSrv(normalMapAllocation->GetResource(),
                                    DXGI_FORMAT_R8G8B8A8_UNORM, slot + 1);
 
-            createShadowMapSrv(slot + 2);
+            fillSharedSlots(slot);
+
+            if (D3D12MA::Allocation* orm =
+                    uploadMaterialTexture(range.material->metallicRoughnessPath,
+                                          range.material->embeddedMetallicRoughness, false,
+                                          slot + 3))
+                object.textures.push_back(orm);
         }
         object.subMeshes.push_back(sub);
     }
@@ -2028,6 +2214,270 @@ void D3D12Renderer::Impl::createBloomPipelines()
                   "ID3D12Device::CreateGraphicsPipelineState(composición)");
 }
 
+void D3D12Renderer::Impl::createNeutralIblCubes()
+{
+    // Medio flotante, que es el formato del IBL de verdad: así el mismo hueco
+    // sirve luego para el resultado de los compute sin recrear la vista.
+    auto uploadNeutralCube = [&](const float rgb[3], UINT srvIndex) {
+        std::array<uint16_t, 4 * 6> texels{};
+        for (UINT face = 0; face < 6; ++face) {
+            texels[face * 4 + 0] = floatToHalf(rgb[0]);
+            texels[face * 4 + 1] = floatToHalf(rgb[1]);
+            texels[face * 4 + 2] = floatToHalf(rgb[2]);
+            texels[face * 4 + 3] = floatToHalf(1.0f);
+        }
+        D3D12MA::Allocation* allocation =
+            uploadTexture(texels.data(), 1, 1, 6, kHdrFormat, 8, srvIndex);
+        createCubeSrv(allocation->GetResource(), kHdrFormat, 1, srvIndex);
+        return allocation;
+    };
+
+    const float irradianceNeutral[3] = {0.075f, 0.080f, 0.090f};
+    const float prefilterNeutral[3]  = {0.100f, 0.120f, 0.150f};
+    irradianceAllocation = uploadNeutralCube(irradianceNeutral, kSrvIrradiance);
+    prefilterAllocation  = uploadNeutralCube(prefilterNeutral, kSrvPrefilter);
+}
+
+void D3D12Renderer::Impl::precomputeIbl()
+{
+    // Sin cielo no hay nada que convolucionar: se quedan los neutros.
+    if (!skyboxAllocation)
+        return;
+
+    // Los dos destinos, con el mismo formato que los neutros a los que
+    // sustituyen. CUBE lo da la vista, no el recurso: para el compute es un
+    // array de seis capas y para pbr.frag un TextureCube.
+    auto createCubeTarget = [&](UINT size, UINT mips) {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width            = size;
+        desc.Height           = size;
+        desc.DepthOrArraySize = 6;
+        desc.MipLevels        = static_cast<UINT16>(mips);
+        desc.Format           = kHdrFormat;
+        desc.SampleDesc.Count = 1;
+        desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        D3D12MA::ALLOCATION_DESC allocDesc{};
+        allocDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+        D3D12MA::Allocation* allocation = nullptr;
+        throwIfFailed(allocator->CreateResource(&allocDesc, &desc,
+                                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                &allocation, IID_NULL, nullptr),
+                      "D3D12MA::Allocator::CreateResource(IBL)");
+        return allocation;
+    };
+
+    if (irradianceAllocation) {
+        irradianceAllocation->Release();
+        irradianceAllocation = nullptr;
+    }
+    if (prefilterAllocation) {
+        prefilterAllocation->Release();
+        prefilterAllocation = nullptr;
+    }
+    irradianceAllocation = createCubeTarget(kIblIrradianceSize, 1);
+    prefilterAllocation  = createCubeTarget(kIblPrefilterSize, kIblPrefilterMips);
+    prefilterMips        = kIblPrefilterMips;
+
+    // Un UAV por destino: el de irradiancia cubre sus seis capas; el del
+    // prefiltrado va por mip, porque cada nivel es una rugosidad distinta y se
+    // dispara por separado.
+    auto createArrayUav = [&](ID3D12Resource* resource, UINT mip, UINT srvIndex) {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format                      = kHdrFormat;
+        uavDesc.ViewDimension               = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+        uavDesc.Texture2DArray.MipSlice     = mip;
+        uavDesc.Texture2DArray.ArraySize    = 6;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(srvIndex) * srvSize;
+        device->CreateUnorderedAccessView(resource, nullptr, &uavDesc, handle);
+    };
+
+    createArrayUav(irradianceAllocation->GetResource(), 0, kUavIrradiance);
+    for (UINT mip = 0; mip < kIblPrefilterMips; ++mip)
+        createArrayUav(prefilterAllocation->GetResource(), mip, kUavPrefilter + mip);
+
+    // Root signature común a los dos compute: el push de tres floats, el
+    // cubemap del cielo en t0 y el destino en u1.
+    if (!iblRootSignature) {
+        D3D12_DESCRIPTOR_RANGE envRange{};
+        envRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        envRange.NumDescriptors     = 1;
+        envRange.BaseShaderRegister = 0;  // t0
+
+        D3D12_DESCRIPTOR_RANGE outRange{};
+        outRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        outRange.NumDescriptors     = 1;
+        outRange.BaseShaderRegister = 1;  // u1
+
+        D3D12_ROOT_PARAMETER params[3]{};
+        params[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        params[0].Constants.ShaderRegister = 0;
+        params[0].Constants.Num32BitValues = 3;  // roughness, faceSize, intensity
+
+        params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        params[1].DescriptorTable.NumDescriptorRanges = 1;
+        params[1].DescriptorTable.pDescriptorRanges   = &envRange;
+
+        params[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        params[2].DescriptorTable.NumDescriptorRanges = 1;
+        params[2].DescriptorTable.pDescriptorRanges   = &outRange;
+
+        D3D12_STATIC_SAMPLER_DESC sampler{};
+        sampler.Filter         = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        sampler.AddressU       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.AddressV       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.AddressW       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.MaxLOD         = D3D12_FLOAT32_MAX;
+        sampler.ShaderRegister = 0;  // s0
+
+        D3D12_ROOT_SIGNATURE_DESC rootDesc{};
+        rootDesc.NumParameters     = _countof(params);
+        rootDesc.pParameters       = params;
+        rootDesc.NumStaticSamplers = 1;
+        rootDesc.pStaticSamplers   = &sampler;
+
+        ComPtr<ID3DBlob> serialized;
+        ComPtr<ID3DBlob> errorBlob;
+        HRESULT          hr = D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                                          &serialized, &errorBlob);
+        if (FAILED(hr)) {
+            std::string detail;
+            if (errorBlob)
+                detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
+                              errorBlob->GetBufferSize());
+            throw std::runtime_error("D3D12: root signature del IBL (HRESULT " +
+                                     hresultToString(hr) + ") " + detail);
+        }
+        throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                                  serialized->GetBufferSize(),
+                                                  IID_PPV_ARGS(&iblRootSignature)),
+                      "ID3D12Device::CreateRootSignature(IBL)");
+
+        auto buildCompute = [&](const char* path, ComPtr<ID3D12PipelineState>& out) {
+            const std::vector<char>           code = readBinaryFile(path);
+            D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+            desc.pRootSignature = iblRootSignature.Get();
+            desc.CS             = {code.data(), code.size()};
+            throwIfFailed(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&out)),
+                          "ID3D12Device::CreateComputePipelineState(IBL)");
+        };
+        buildCompute("shaders/ibl_irradiance.comp.dxil", iblIrradiancePipeline);
+        buildCompute("shaders/ibl_prefilter.comp.dxil", iblPrefilterPipeline);
+    }
+
+    // Se graba y se espera aquí mismo: esto corre una vez al cargar el cielo,
+    // no por frame, y el resto del init ya bloquea igual.
+    throwIfFailed(allocators[frameIndex]->Reset(), "ID3D12CommandAllocator::Reset(IBL)");
+    throwIfFailed(commandList->Reset(allocators[frameIndex].Get(), nullptr),
+                  "ID3D12GraphicsCommandList::Reset(IBL)");
+
+    ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(iblRootSignature.Get());
+
+    auto gpuHandle = [&](UINT index) {
+        D3D12_GPU_DESCRIPTOR_HANDLE handle = srvHeap->GetGPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<UINT64>(index) * srvSize;
+        return handle;
+    };
+
+    struct IblPush {
+        float    roughness;
+        uint32_t faceSize;
+        float    intensity;
+    };
+
+    // Irradiancia: un dispatch para las seis caras a la vez (z = cara).
+    {
+        const IblPush push{0.0f, kIblIrradianceSize, 1.0f};
+        commandList->SetPipelineState(iblIrradiancePipeline.Get());
+        commandList->SetComputeRoot32BitConstants(0, 3, &push, 0);
+        commandList->SetComputeRootDescriptorTable(1, gpuHandle(kSrvSkybox));
+        commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavIrradiance));
+        const UINT groups = (kIblIrradianceSize + 7) / 8;
+        commandList->Dispatch(groups, groups, 6);
+    }
+
+    // Prefiltrado: un dispatch por mip, con su rugosidad y su tamaño.
+    commandList->SetPipelineState(iblPrefilterPipeline.Get());
+    for (UINT mip = 0; mip < kIblPrefilterMips; ++mip) {
+        const UINT    size      = (std::max)(kIblPrefilterSize >> mip, 1u);
+        const float   roughness = static_cast<float>(mip) / static_cast<float>(kIblPrefilterMips - 1);
+        const IblPush push{roughness, size, 1.0f};
+        commandList->SetComputeRoot32BitConstants(0, 3, &push, 0);
+        commandList->SetComputeRootDescriptorTable(1, gpuHandle(kSrvSkybox));
+        commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavPrefilter + mip));
+        const UINT groups = (size + 7) / 8;
+        commandList->Dispatch(groups, groups, 6);
+    }
+
+    // De destino de escritura a textura de lectura: pbr.frag los muestrea en el
+    // pase de escena del mismo frame en adelante.
+    D3D12_RESOURCE_BARRIER toShader[2]{};
+    for (int i = 0; i < 2; ++i) {
+        toShader[i].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toShader[i].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        toShader[i].Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        toShader[i].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    }
+    toShader[0].Transition.pResource = irradianceAllocation->GetResource();
+    toShader[1].Transition.pResource = prefilterAllocation->GetResource();
+    commandList->ResourceBarrier(2, toShader);
+
+    throwIfFailed(commandList->Close(), "ID3D12GraphicsCommandList::Close(IBL)");
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    queue->ExecuteCommandLists(1, lists);
+    waitForGpu();
+
+    // Las vistas de lectura, ahora sobre los recursos nuevos: el bloque global
+    // y el de cada objeto ya cargado.
+    createCubeSrv(irradianceAllocation->GetResource(), kHdrFormat, 1, kSrvIrradiance);
+    createCubeSrv(prefilterAllocation->GetResource(), kHdrFormat, prefilterMips, kSrvPrefilter);
+    // Solo los dos huecos de entorno: rehacer el bloque entero pisaría el
+    // metallic-roughness propio de cada malla con el neutro.
+    auto refreshEnv = [&](UINT blockBase) {
+        createCubeSrv(irradianceAllocation->GetResource(), kHdrFormat, 1, blockBase + 4);
+        createCubeSrv(prefilterAllocation->GetResource(), kHdrFormat, prefilterMips,
+                      blockBase + 5);
+    };
+    for (const StaticObject& object : objects)
+        if (object.srvBase != kSrvBaseColor)
+            refreshEnv(object.srvBase);
+    for (const SkinnedObject& character : skinnedObjects)
+        for (const SkinnedSubMesh& sub : character.subMeshes)
+            if (sub.srvBase != kSrvBaseColor)
+                refreshEnv(sub.srvBase);
+}
+
+void D3D12Renderer::Impl::createForwardPlusBuffers()
+{
+    // Forward+ apagado: mode = 0 y una rejilla de una celda. pbr.frag lee mode
+    // antes que nada y se queda con el bucle sobre las luces del UBO, pero los
+    // cuatro buffers tienen que estar enlazados igual.
+    struct FpParams {
+        uint32_t mode, gridX, gridY, gridZ;
+        uint32_t tileSize, maxPerCell, numLights, pad0;
+        float    zNear, zFar, sliceScale, sliceBias;
+    };
+    const FpParams params{0, 1, 1, 1, 16, 1, 0, 0, 0.1f, 500.0f, 1.0f, 0.0f};
+    fpParamsAllocation = uploadBuffer(&params, sizeof(params),
+                                      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+    // Un elemento cada uno: un buffer de tamaño cero no se puede crear, y la
+    // GPU no va a leer de ellos con mode = 0.
+    const std::array<uint32_t, 20> zeros{};
+    fpLightsAllocation  = uploadBuffer(zeros.data(), zeros.size() * sizeof(uint32_t),
+                                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    fpCellsAllocation   = uploadBuffer(zeros.data(), 2 * sizeof(uint32_t),
+                                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    fpIndicesAllocation = uploadBuffer(zeros.data(), sizeof(uint32_t),
+                                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+}
+
 void D3D12Renderer::Impl::createSkyboxResources()
 {
     // Mismo orden de caras que el camino de Vulkan: +X, -X, +Y, -Y, +Z, -Z,
@@ -2173,6 +2623,20 @@ void D3D12Renderer::Impl::createSkyboxResources()
 
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&skyboxPipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(cielo)");
+}
+
+void D3D12Renderer::Impl::bindForwardPlus()
+{
+    if (!fpParamsAllocation)
+        return;
+    commandList->SetGraphicsRootShaderResourceView(
+        4, fpParamsAllocation->GetResource()->GetGPUVirtualAddress());
+    commandList->SetGraphicsRootShaderResourceView(
+        5, fpLightsAllocation->GetResource()->GetGPUVirtualAddress());
+    commandList->SetGraphicsRootShaderResourceView(
+        6, fpCellsAllocation->GetResource()->GetGPUVirtualAddress());
+    commandList->SetGraphicsRootShaderResourceView(
+        7, fpIndicesAllocation->GetResource()->GetGPUVirtualAddress());
 }
 
 void D3D12Renderer::Impl::recordSkybox()
@@ -3155,6 +3619,7 @@ void D3D12Renderer::init(Window& window)
     d.createGridGeometry();
     d.createMeshPipeline();
     d.createMeshResources();
+    d.createForwardPlusBuffers();
     d.createSkinningPipelines();
     // Las sombras van al final: su SRV pisa el array de relleno que dejó
     // createMeshResources en el hueco t3, y necesita el buffer de instancias
@@ -3168,6 +3633,8 @@ void D3D12Renderer::init(Window& window)
     // El cielo despues del heap y del target HDR: usa un hueco del primero y
     // dibuja en el segundo.
     d.createSkyboxResources();
+    // El IBL sale del cielo recién cargado, así que va detrás.
+    d.precomputeIbl();
     d.createFogAndFxaaPipelines();
     d.updateViewProj();
 
@@ -3291,6 +3758,7 @@ void D3D12Renderer::drawFrame()
             2, d.srvHeap->GetGPUDescriptorHandleForHeapStart());
         d.commandList->SetGraphicsRootShaderResourceView(
             3, d.instanceAllocation->GetResource()->GetGPUVirtualAddress());
+        d.bindForwardPlus();
         d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
         // Geometría de la escena. Un draw por objeto con su transformación en
@@ -3344,6 +3812,7 @@ void D3D12Renderer::drawFrame()
             0, d.sceneUboAllocations[d.frameIndex]->GetResource()->GetGPUVirtualAddress());
         d.commandList->SetGraphicsRootShaderResourceView(
             3, d.instanceAllocation->GetResource()->GetGPUVirtualAddress());
+        d.bindForwardPlus();
         d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
         for (const Impl::SkinnedObject& character : d.skinnedObjects) {
@@ -3579,7 +4048,7 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh)
     // Terna propia en el heap mientras queden huecos. Pasado el tope se queda
     // con la global: peor aspecto, pero nunca escribe fuera del heap.
     if (d.objects.size() < kMaxObjectSlots) {
-        const UINT slot = kSrvObjects + static_cast<UINT>(d.objects.size()) * 3;
+        const UINT slot = kSrvObjects + static_cast<UINT>(d.objects.size()) * kSrvPerObject;
         object.srvBase  = slot;
 
         object.baseColorAllocation = d.uploadMaterialTexture(
@@ -3594,7 +4063,14 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh)
             d.createTexture2DSrv(d.normalMapAllocation->GetResource(),
                                  DXGI_FORMAT_R8G8B8A8_UNORM, slot + 1);
 
-        d.createShadowMapSrv(slot + 2);
+        // t3..t7: sombras, entorno y oclusión, que son de todos.
+        d.fillSharedSlots(slot);
+
+        // Y encima, el ORM propio si el material lo trae: pisa el neutro que
+        // acaba de dejar fillSharedSlots.
+        object.metalRoughAllocation =
+            d.uploadMaterialTexture(mesh.material.metallicRoughnessPath,
+                                    mesh.material.embeddedMetallicRoughness, false, slot + 3);
     }
 
     d.objects.push_back(object);
@@ -3637,6 +4113,8 @@ void D3D12Renderer::clearStaticMeshes()
             object.baseColorAllocation->Release();
         if (object.normalMapAllocation)
             object.normalMapAllocation->Release();
+        if (object.metalRoughAllocation)
+            object.metalRoughAllocation->Release();
     }
     d.objects.clear();
 }
@@ -3817,7 +4295,10 @@ void D3D12Renderer::shutdown()
 
     for (auto** allocation : {&d.instanceAllocation, &d.baseColorAllocation,
                               &d.normalMapAllocation, &d.shadowMapAllocation,
-                              &d.depthAllocation, &d.skyboxAllocation, &d.groundVertexAllocation,
+                              &d.depthAllocation, &d.skyboxAllocation, &d.metalRoughAllocation,
+                              &d.irradianceAllocation, &d.prefilterAllocation, &d.ssaoAllocation,
+                              &d.fpParamsAllocation, &d.fpLightsAllocation, &d.fpCellsAllocation,
+                              &d.fpIndicesAllocation, &d.groundVertexAllocation,
                               &d.groundIndexAllocation, &d.groundInstanceAllocation,
                               &d.shadowMapArrayAllocation}) {
         if (*allocation) {
@@ -3843,6 +4324,9 @@ void D3D12Renderer::shutdown()
 
     d.skyboxPipeline.Reset();
     d.skyboxRootSignature.Reset();
+    d.iblIrradiancePipeline.Reset();
+    d.iblPrefilterPipeline.Reset();
+    d.iblRootSignature.Reset();
 
     d.releaseHdrTargets();
     d.fxaaPipeline.Reset();
