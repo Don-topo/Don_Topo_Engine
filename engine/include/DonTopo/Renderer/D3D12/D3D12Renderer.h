@@ -135,6 +135,12 @@ public:
     // Renderer de Vulkan: es un sink, no avanza el tiempo.
     void setAnimationState(size_t index, uint32_t clipIndex, float animTime);
 
+    // Qué se dibuja con contorno de selección: índices de addStaticMesh y de
+    // addSkinnedMesh, o -1 para ninguno. Se puede tener uno de cada.
+    void setSelection(int staticIndex, int skinnedIndex);
+    // Grosor de la extrusión del casco, en unidades de mundo.
+    void setOutlineWidth(float width);
+
     size_t skinnedCount() const;
     void   clearSkinnedMeshes();
 

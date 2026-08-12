@@ -441,6 +441,19 @@ struct D3D12Renderer::Impl {
     // modo: el interruptor solo elige cuál se enlaza.
     ComPtr<ID3D12PipelineState> meshWirePipeline;
 
+    // Casco invertido del objeto seleccionado: la misma malla extruida por su
+    // normal y con las caras frontales descartadas, así que solo asoma el
+    // reborde. Comparte root signature con la malla —outline.vert declara el
+    // mismo UBO y el mismo push—, y por eso no necesita nada propio.
+    ComPtr<ID3D12PipelineState> outlinePipeline;
+    ComPtr<ID3D12PipelineState> outlineSkinnedPipeline;
+    int   selectedObject  = -1;   // índice en objects, -1 sin selección
+    int   selectedSkinned = -1;   // índice en skinnedObjects
+    // En unidades de mundo: con mallas de detalle fino un casco grueso asoma
+    // también por las rendijas interiores y el contorno deja de leerse como
+    // silueta. 1 cm va bien para personajes de escala humana.
+    float outlineWidth    = 0.01f;
+
     // Geometría estática de la escena. Cada entrada es una malla subida a VRAM
     // con su transformación; el índice que devuelve addStaticMesh es la
     // posición en este vector, igual que en el Renderer de Vulkan.
@@ -1653,6 +1666,25 @@ void D3D12Renderer::Impl::createMeshPipeline()
     throwIfFailed(device->CreateGraphicsPipelineState(&wireDesc, IID_PPV_ARGS(&meshWirePipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(malla en alambre)");
 
+    // El contorno: mismos vértices, otro par de shaders y la cara CONTRARIA
+    // descartada.
+    {
+        const std::vector<char> outlineVs = readBinaryFile("shaders/outline.vert.dxil");
+        const std::vector<char> outlinePs = readBinaryFile("shaders/outline.frag.dxil");
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC outlineDesc = psoDesc;
+        outlineDesc.VS = {outlineVs.data(), outlineVs.size()};
+        outlineDesc.PS = {outlinePs.data(), outlinePs.size()};
+        outlineDesc.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
+        // LESS estricto y no LESS_EQUAL como la malla: el casco cae a la MISMA
+        // profundidad que la superficie en las zonas planas, y con el igual
+        // incluido pasaría el test y la taparía entera.
+        outlineDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+        throwIfFailed(device->CreateGraphicsPipelineState(&outlineDesc,
+                                                          IID_PPV_ARGS(&outlinePipeline)),
+                      "ID3D12Device::CreateGraphicsPipelineState(contorno)");
+    }
+
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&meshPipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(malla)");
 }
@@ -1972,6 +2004,25 @@ void D3D12Renderer::Impl::createSkinningPipelines()
     throwIfFailed(device->CreateGraphicsPipelineState(&wireDesc,
                                                       IID_PPV_ARGS(&skinnedMeshWirePipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(skinned en alambre)");
+
+    {
+        // El contorno del personaje va sobre los vértices que deja el skinning,
+        // así que hereda ESTE input layout y no el de la malla del motor.
+        const std::vector<char> outlineVs = readBinaryFile("shaders/outline.vert.dxil");
+        const std::vector<char> outlinePs = readBinaryFile("shaders/outline.frag.dxil");
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC outlineDesc = psoDesc;
+        outlineDesc.VS = {outlineVs.data(), outlineVs.size()};
+        outlineDesc.PS = {outlinePs.data(), outlinePs.size()};
+        outlineDesc.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
+        // LESS estricto y no LESS_EQUAL como la malla: el casco cae a la MISMA
+        // profundidad que la superficie en las zonas planas, y con el igual
+        // incluido pasaría el test y la taparía entera.
+        outlineDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+        throwIfFailed(device->CreateGraphicsPipelineState(&outlineDesc,
+                                                          IID_PPV_ARGS(&outlineSkinnedPipeline)),
+                      "ID3D12Device::CreateGraphicsPipelineState(contorno skinned)");
+    }
 }
 
 int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
@@ -5448,6 +5499,52 @@ void D3D12Renderer::drawFrame()
         }
     }
 
+    // Contorno de lo seleccionado, con la geometría ya dibujada: el casco solo
+    // asoma por donde el depth test lo deja pasar.
+    //
+    // Va en el pase de escena y no en el de composición como en Vulkan, así que
+    // el tone mapping le toca el naranja. Es el precio de no arrastrar aquí un
+    // segundo destino con profundidad; se sigue distinguiendo de sobra.
+    if (d.outlinePipeline) {
+        auto drawOutline = [&](ID3D12PipelineState* pipeline, const glm::mat4& transform,
+                               const D3D12_VERTEX_BUFFER_VIEW& vertexView,
+                               const D3D12_INDEX_BUFFER_VIEW& indexView, UINT indexCount) {
+            if (indexCount == 0)
+                return;
+            d.commandList->SetPipelineState(pipeline);
+            d.commandList->SetGraphicsRootSignature(d.meshRootSignature.Get());
+            d.commandList->SetGraphicsRootConstantBufferView(
+                0, d.sceneUboAllocations[d.frameIndex]->GetResource()->GetGPUVirtualAddress());
+
+            PushData push{};
+            push.transform = transform;
+            // flags.y lleva el grosor de la extrusión, que es el hueco que esa
+            // vec2 tenía libre.
+            push.flags = glm::vec2(0.0f, d.outlineWidth);
+            d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
+
+            d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            d.commandList->IASetVertexBuffers(0, 1, &vertexView);
+            d.commandList->IASetIndexBuffer(&indexView);
+            d.commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+        };
+
+        if (d.selectedObject >= 0 && d.selectedObject < static_cast<int>(d.objects.size())) {
+            const Impl::StaticObject& object = d.objects[d.selectedObject];
+            if (object.meshVisible)
+                drawOutline(d.outlinePipeline.Get(), object.transform, object.vertexBufferView,
+                            object.indexBufferView, object.indexCount);
+        }
+        if (d.selectedSkinned >= 0 &&
+            d.selectedSkinned < static_cast<int>(d.skinnedObjects.size())) {
+            const Impl::SkinnedObject& character = d.skinnedObjects[d.selectedSkinned];
+            if (character.visible)
+                drawOutline(d.outlineSkinnedPipeline.Get(), character.transform,
+                            character.vertexBufferView, character.indexBufferView,
+                            character.indexCount);
+        }
+    }
+
     // El cielo al final de la geometria: se apoya en la profundidad ya escrita
     // para salir solo donde no hay nada, y asi no paga sombreado por pixeles
     // que va a tapar la escena.
@@ -5875,6 +5972,17 @@ void D3D12Renderer::waitIdle()
         m_impl->waitForGpu();
 }
 
+void D3D12Renderer::setSelection(int staticIndex, int skinnedIndex)
+{
+    m_impl->selectedObject  = staticIndex;
+    m_impl->selectedSkinned = skinnedIndex;
+}
+
+void D3D12Renderer::setOutlineWidth(float width)
+{
+    m_impl->outlineWidth = width;
+}
+
 void D3D12Renderer::setRenderToTexture(bool enabled)
 {
     m_impl->renderToTexture = enabled;
@@ -6064,6 +6172,8 @@ void D3D12Renderer::shutdown()
         d.fpStatsAllocation->Release();
         d.fpStatsAllocation = nullptr;
     }
+    d.outlinePipeline.Reset();
+    d.outlineSkinnedPipeline.Reset();
     d.meshWirePipeline.Reset();
     d.skinnedMeshWirePipeline.Reset();
     d.taaPipeline.Reset();

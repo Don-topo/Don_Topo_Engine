@@ -347,7 +347,7 @@ int main()
                         "sombras en cascada, cielo, IBL, materiales PBR, SSAO, SSR, niebla, bloom "
                         "con tone mapping y FXAA.");
                     ImGui::TextWrapped(
-                        "Sin implementar: gizmos, UI 2D y el editor completo.");
+                        "Sin implementar: gizmos de transformacion, UI 2D y el editor completo.");
                     ImGui::Spacing();
                     ImGui::TextWrapped(
                         "Camara: WASD para moverse, Q/E para bajar y subir, boton derecho "
