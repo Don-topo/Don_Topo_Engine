@@ -18,6 +18,7 @@
 #include <wrl/client.h>
 
 #include <D3D12MemAlloc.h>
+#include <stb_image.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -147,7 +148,21 @@ constexpr UINT kSrvLdr       = kUavSceneHdr + 1;            // salida de la comp
 // través de los callbacks de reserva que se le pasan al inicializarlo.
 constexpr UINT kSrvImGui      = kSrvLdr + 1;
 constexpr UINT kImGuiReserved = 16;
-constexpr UINT kSrvHeapSize   = kSrvImGui + kImGuiReserved;
+
+// Ternas por objeto de la escena. El shader de malla pide t1..t3 como UNA
+// tabla contigua, así que cada malla necesita sus tres huecos seguidos: color
+// base, normales y el array de sombras (esta última es la misma vista repetida
+// en todas las ternas — crear el SRV N veces es legal y evita partir la root
+// signature). Los objetos que pasen del tope se dibujan con la terna global,
+// que es exactamente lo que hacían todos antes de esta fase.
+constexpr UINT kMaxObjectSlots = 512;
+constexpr UINT kSrvObjects     = kSrvImGui + kImGuiReserved;
+
+// Y otro tanto para la malla skinned, que se dibuja por submallas: cada una
+// tiene su material en el FBX y por tanto su propia terna.
+constexpr UINT kMaxSkinnedSlots = 16;
+constexpr UINT kSrvSkinned      = kSrvObjects + kMaxObjectSlots * 3;
+constexpr UINT kSrvHeapSize     = kSrvSkinned + kMaxSkinnedSlots * 3;
 
 // Niebla volumétrica: push propio de 128 bytes.
 struct FogPush {
@@ -267,6 +282,17 @@ struct D3D12Renderer::Impl {
         UINT                     indexCount = 0;
         glm::mat4                transform{1.0f};
         bool                     meshVisible = true;
+
+        // Texturas propias del material, o nullptr si la malla no trae (o el
+        // fichero no se pudo leer): en ese caso la terna apunta a las 1x1
+        // globales y el objeto sale con color plano, como hasta ahora.
+        D3D12MA::Allocation* baseColorAllocation = nullptr;
+        D3D12MA::Allocation* normalMapAllocation = nullptr;
+
+        // Primer hueco de su terna en el heap. kSrvBaseColor = la global.
+        UINT  srvBase   = kSrvBaseColor;
+        float metallic  = 0.0f;
+        float roughness = 0.6f;
     };
     std::vector<StaticObject> objects;
 
@@ -326,6 +352,17 @@ struct D3D12Renderer::Impl {
     D3D12MA::Allocation* finalBonesAllocation  = nullptr;
     D3D12MA::Allocation* outputVertsAllocation = nullptr;
     D3D12MA::Allocation* skinnedIndexAllocation = nullptr;
+
+    // Submallas del personaje: el FBX trae un material por trozo (cuerpo, pelo,
+    // ropa…), y dibujarlo de una tirada obligaba a darles a todas la misma
+    // textura. Un draw por rango con su terna.
+    struct SkinnedSubMesh {
+        UINT indexStart = 0;
+        UINT indexCount = 0;
+        UINT srvBase    = kSrvBaseColor;
+    };
+    std::vector<SkinnedSubMesh>       skinnedSubMeshes;
+    std::vector<D3D12MA::Allocation*> skinnedTextures;
 
     D3D12_VERTEX_BUFFER_VIEW skinnedVertexBufferView{};
     D3D12_INDEX_BUFFER_VIEW  skinnedIndexBufferView{};
@@ -455,6 +492,21 @@ struct D3D12Renderer::Impl {
     D3D12MA::Allocation* uploadTexture(const void* pixels, UINT width, UINT height,
                                        UINT arraySize, DXGI_FORMAT format,
                                        UINT bytesPerPixel, UINT srvIndex);
+
+    // Decodifica la textura del material (embebida o de fichero), la sube y le
+    // crea el SRV en `srvIndex`. nullptr si no hay textura o no se pudo leer:
+    // quien llama pone ahí la vista de la 1x1 global.
+    D3D12MA::Allocation* uploadMaterialTexture(const std::string& path,
+                                               const std::vector<uint8_t>& embedded, bool srgb,
+                                               UINT srvIndex);
+
+    // Vista de una textura 2D ya subida en un hueco cualquiera. Para repetir
+    // las 1x1 globales dentro de la terna de un objeto sin volver a subirlas.
+    void createTexture2DSrv(ID3D12Resource* resource, DXGI_FORMAT format, UINT srvIndex);
+
+    // Vista del array de cascadas (o de su relleno 1x1 mientras no exista) en
+    // el hueco dado. La terna de cada objeto necesita la suya.
+    void createShadowMapSrv(UINT srvIndex);
 
     void createMeshPipeline();
     void createMeshResources();
@@ -859,6 +911,72 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
     device->CreateShaderResourceView(destination->GetResource(), &srvDesc, handle);
 
     return destination;
+}
+
+D3D12MA::Allocation* D3D12Renderer::Impl::uploadMaterialTexture(
+    const std::string& path, const std::vector<uint8_t>& embedded, bool srgb, UINT srvIndex)
+{
+    int      w = 0, h = 0, channels = 0;
+    stbi_uc* pixels = nullptr;
+    if (!embedded.empty())
+        pixels = stbi_load_from_memory(embedded.data(), static_cast<int>(embedded.size()), &w, &h,
+                                       &channels, STBI_rgb_alpha);
+    else if (!path.empty())
+        pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+
+    if (!pixels)
+        return nullptr;
+
+    // sRGB para el color base y lineal para las normales: una normal
+    // interpretada como color se descodifica con gamma y apunta a otro sitio.
+    const DXGI_FORMAT format =
+        srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    D3D12MA::Allocation* allocation = nullptr;
+    try {
+        allocation = uploadTexture(pixels, static_cast<UINT>(w), static_cast<UINT>(h), 1, format, 4,
+                                   srvIndex);
+    } catch (...) {
+        stbi_image_free(pixels);
+        throw;
+    }
+    stbi_image_free(pixels);
+    return allocation;
+}
+
+void D3D12Renderer::Impl::createTexture2DSrv(ID3D12Resource* resource, DXGI_FORMAT format,
+                                             UINT srvIndex)
+{
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format                  = format;
+    srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels     = 1;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<SIZE_T>(srvIndex) * srvSize;
+    device->CreateShaderResourceView(resource, &srvDesc, handle);
+}
+
+void D3D12Renderer::Impl::createShadowMapSrv(UINT srvIndex)
+{
+    // El array de cascadas si ya existe; si no, el relleno 1x1, que se creó
+    // con las mismas cuatro slices y el mismo formato.
+    ID3D12Resource* resource = shadowMapArrayAllocation ? shadowMapArrayAllocation->GetResource()
+                                                        : shadowMapAllocation->GetResource();
+    if (!resource)
+        return;
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+    srvDesc.Format                   = DXGI_FORMAT_R32_FLOAT;
+    srvDesc.ViewDimension            = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    srvDesc.Shader4ComponentMapping  = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2DArray.MipLevels = 1;
+    srvDesc.Texture2DArray.ArraySize = kShadowCascades;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<SIZE_T>(srvIndex) * srvSize;
+    device->CreateShaderResourceView(resource, &srvDesc, handle);
 }
 
 void D3D12Renderer::Impl::createDepthBuffer()
@@ -1367,6 +1485,56 @@ void D3D12Renderer::Impl::createSkinnedResources()
     skinnedIndexBufferView.SizeInBytes    = static_cast<UINT>(mesh.indices.size() * sizeof(uint32_t));
     skinnedIndexBufferView.Format         = DXGI_FORMAT_R32_UINT;
     skinnedIndexCount                     = static_cast<UINT>(mesh.indices.size());
+
+    // Materiales por submalla. Sin subMeshRanges (FBX de una sola pieza) se
+    // toma el material del propio Mesh, que es lo que rellena ModelLoader.
+    struct RangeSrc {
+        uint32_t        start;
+        uint32_t        count;
+        const Material* material;
+    };
+    std::vector<RangeSrc> ranges;
+    if (!mesh.subMeshRanges.empty()) {
+        for (const SubMeshRange& range : mesh.subMeshRanges) {
+            const Material* material = range.materialIndex < mesh.materials.size()
+                                           ? &mesh.materials[range.materialIndex]
+                                           : &mesh.material;
+            ranges.push_back({range.indexStart, range.indexCount, material});
+        }
+    } else {
+        ranges.push_back({0, static_cast<uint32_t>(mesh.indices.size()), &mesh.material});
+    }
+
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        SkinnedSubMesh sub;
+        sub.indexStart = ranges[i].start;
+        sub.indexCount = ranges[i].count;
+
+        if (i < kMaxSkinnedSlots) {
+            const UINT slot = kSrvSkinned + static_cast<UINT>(i) * 3;
+            sub.srvBase     = slot;
+
+            D3D12MA::Allocation* base = uploadMaterialTexture(
+                ranges[i].material->texturePath, ranges[i].material->embeddedTexture, true, slot);
+            if (base)
+                skinnedTextures.push_back(base);
+            else
+                createTexture2DSrv(baseColorAllocation->GetResource(),
+                                   DXGI_FORMAT_R8G8B8A8_UNORM, slot);
+
+            D3D12MA::Allocation* normal =
+                uploadMaterialTexture(ranges[i].material->normalMapPath,
+                                      ranges[i].material->embeddedNormalMap, false, slot + 1);
+            if (normal)
+                skinnedTextures.push_back(normal);
+            else
+                createTexture2DSrv(normalMapAllocation->GetResource(),
+                                   DXGI_FORMAT_R8G8B8A8_UNORM, slot + 1);
+
+            createShadowMapSrv(slot + 2);
+        }
+        skinnedSubMeshes.push_back(sub);
+    }
 
     QueryPerformanceFrequency(&tickFrequency);
     QueryPerformanceCounter(&lastTick);
@@ -2194,16 +2362,16 @@ void D3D12Renderer::Impl::createShadowResources()
 
     // El SRV va en el hueco t3, encima del array 1x1 de relleno que ocupaba ese
     // sitio: a partir de aquí el shader muestrea sombras de verdad.
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-    srvDesc.Format                         = DXGI_FORMAT_R32_FLOAT;
-    srvDesc.ViewDimension                  = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
-    srvDesc.Shader4ComponentMapping        = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Texture2DArray.MipLevels       = 1;
-    srvDesc.Texture2DArray.ArraySize       = kShadowCascades;
+    createShadowMapSrv(kSrvShadowMap);
 
-    D3D12_CPU_DESCRIPTOR_HANDLE srvHandle = srvHeap->GetCPUDescriptorHandleForHeapStart();
-    srvHandle.ptr += static_cast<SIZE_T>(2) * srvSize;
-    device->CreateShaderResourceView(shadowMapArrayAllocation->GetResource(), &srvDesc, srvHandle);
+    // Y la misma vista en la terna de cada objeto ya cargado: si esto se
+    // rehiciera con escena en pantalla, sus t3 apuntarían al recurso viejo.
+    for (const StaticObject& object : objects)
+        if (object.srvBase != kSrvBaseColor)
+            createShadowMapSrv(object.srvBase + 2);
+    for (const SkinnedSubMesh& sub : skinnedSubMeshes)
+        if (sub.srvBase != kSrvBaseColor)
+            createShadowMapSrv(sub.srvBase + 2);
 
     // Root signature del pase de sombras: el MISMO UBO en b0 (los offsets de
     // view/proj/lightSpaceMatrix coinciden con los de triangle), el índice de
@@ -2831,10 +2999,16 @@ void D3D12Renderer::drawFrame()
             if (!object.meshVisible || object.indexCount == 0)
                 continue;
 
+            // Su terna de texturas. Va dentro del bucle porque cada malla
+            // tiene la suya; el suelo y la global se apañan con la de fuera.
+            D3D12_GPU_DESCRIPTOR_HANDLE table = d.srvHeap->GetGPUDescriptorHandleForHeapStart();
+            table.ptr += static_cast<UINT64>(object.srvBase) * d.srvSize;
+            d.commandList->SetGraphicsRootDescriptorTable(2, table);
+
             PushData push{};
             push.transform = object.transform;
-            push.metallic  = 0.0f;
-            push.roughness = 0.6f;
+            push.metallic  = object.metallic;
+            push.roughness = object.roughness;
             push.flags     = glm::vec2(0.0f, 0.0f);
             d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
 
@@ -2879,15 +3053,22 @@ void D3D12Renderer::drawFrame()
         push.flags     = glm::vec2(0.0f, 0.0f);
         d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
 
-        d.commandList->SetGraphicsRootDescriptorTable(
-            2, d.srvHeap->GetGPUDescriptorHandleForHeapStart());
         d.commandList->SetGraphicsRootShaderResourceView(
             3, d.instanceAllocation->GetResource()->GetGPUVirtualAddress());
 
         d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         d.commandList->IASetVertexBuffers(0, 1, &d.skinnedVertexBufferView);
         d.commandList->IASetIndexBuffer(&d.skinnedIndexBufferView);
-        d.commandList->DrawIndexedInstanced(d.skinnedIndexCount, 1, 0, 0, 0);
+
+        // Un draw por submalla, cada una con la terna de su material.
+        for (const Impl::SkinnedSubMesh& sub : d.skinnedSubMeshes) {
+            if (sub.indexCount == 0)
+                continue;
+            D3D12_GPU_DESCRIPTOR_HANDLE table = d.srvHeap->GetGPUDescriptorHandleForHeapStart();
+            table.ptr += static_cast<UINT64>(sub.srvBase) * d.srvSize;
+            d.commandList->SetGraphicsRootDescriptorTable(2, table);
+            d.commandList->DrawIndexedInstanced(sub.indexCount, 1, sub.indexStart, 0, 0);
+        }
     }
 
     if (d.gizmoPipeline && d.gridVertexCount > 0) {
@@ -3066,6 +3247,29 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh)
     object.indexBufferView.SizeInBytes = static_cast<UINT>(mesh.indices.size() * sizeof(uint32_t));
     object.indexBufferView.Format      = DXGI_FORMAT_R32_UINT;
     object.indexCount                  = static_cast<UINT>(mesh.indices.size());
+    object.metallic                    = mesh.material.metallic;
+    object.roughness                   = mesh.material.roughness;
+
+    // Terna propia en el heap mientras queden huecos. Pasado el tope se queda
+    // con la global: peor aspecto, pero nunca escribe fuera del heap.
+    if (d.objects.size() < kMaxObjectSlots) {
+        const UINT slot = kSrvObjects + static_cast<UINT>(d.objects.size()) * 3;
+        object.srvBase  = slot;
+
+        object.baseColorAllocation = d.uploadMaterialTexture(
+            mesh.material.texturePath, mesh.material.embeddedTexture, true, slot + 0);
+        if (!object.baseColorAllocation)
+            d.createTexture2DSrv(d.baseColorAllocation->GetResource(),
+                                 DXGI_FORMAT_R8G8B8A8_UNORM, slot + 0);
+
+        object.normalMapAllocation = d.uploadMaterialTexture(
+            mesh.material.normalMapPath, mesh.material.embeddedNormalMap, false, slot + 1);
+        if (!object.normalMapAllocation)
+            d.createTexture2DSrv(d.normalMapAllocation->GetResource(),
+                                 DXGI_FORMAT_R8G8B8A8_UNORM, slot + 1);
+
+        d.createShadowMapSrv(slot + 2);
+    }
 
     d.objects.push_back(object);
     return static_cast<int>(d.objects.size() - 1);
@@ -3103,6 +3307,10 @@ void D3D12Renderer::clearStaticMeshes()
             object.vertexAllocation->Release();
         if (object.indexAllocation)
             object.indexAllocation->Release();
+        if (object.baseColorAllocation)
+            object.baseColorAllocation->Release();
+        if (object.normalMapAllocation)
+            object.normalMapAllocation->Release();
     }
     d.objects.clear();
 }
@@ -3217,6 +3425,10 @@ void D3D12Renderer::shutdown()
             object.vertexAllocation->Release();
         if (object.indexAllocation)
             object.indexAllocation->Release();
+        if (object.baseColorAllocation)
+            object.baseColorAllocation->Release();
+        if (object.normalMapAllocation)
+            object.normalMapAllocation->Release();
     }
     d.objects.clear();
 
@@ -3244,6 +3456,12 @@ void D3D12Renderer::shutdown()
             *allocation = nullptr;
         }
     }
+    for (D3D12MA::Allocation* texture : d.skinnedTextures)
+        if (texture)
+            texture->Release();
+    d.skinnedTextures.clear();
+    d.skinnedSubMeshes.clear();
+
     d.skinnedVertexBufferView = {};
     d.skinnedIndexBufferView  = {};
     d.skinnedIndexCount       = 0;
