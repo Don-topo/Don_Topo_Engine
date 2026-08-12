@@ -6051,6 +6051,13 @@ void D3D12Renderer::submitDebugLines(const float* vertices, size_t vertexCount)
     d.debugLineVertices = static_cast<UINT>(vertexCount);
 }
 
+glm::mat4 D3D12Renderer::viewProjMatrix() const
+{
+    // La del frame, sin el desplazamiento del TAA: quien desproyecta un clic
+    // quiere la cámara, no el ruido de muestreo.
+    return m_impl->cameraProj() * m_impl->cameraView;
+}
+
 void D3D12Renderer::setSelection(int staticIndex, int skinnedIndex)
 {
     m_impl->selectedObject  = staticIndex;

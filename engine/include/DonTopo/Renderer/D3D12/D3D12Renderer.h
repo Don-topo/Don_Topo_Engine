@@ -135,6 +135,10 @@ public:
     // Renderer de Vulkan: es un sink, no avanza el tiempo.
     void setAnimationState(size_t index, uint32_t clipIndex, float animTime);
 
+    // Proyección por vista del frame, la misma con la que se dibuja: es lo que
+    // necesita quien desproyecte un clic del viewport para saber a qué apunta.
+    glm::mat4 viewProjMatrix() const;
+
     // Líneas de depuración de ESTE frame: colliders, ejes, rayos. El formato es
     // el de DonTopo::GizmoVertex —posición y color, tres float cada uno, sin
     // hueco entre ellos—, y se pasa como float suelto para no arrastrar aquí

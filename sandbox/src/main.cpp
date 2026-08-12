@@ -37,6 +37,79 @@
 #include <PxPhysicsAPI.h>
 #endif
 
+#ifdef DT_D3D12_ENABLED
+namespace {
+
+// Esfera envolvente de una malla en espacio de MUNDO. La caja se calcula sobre
+// los vértices y se convierte en esfera: para elegir a qué objeto apunta un
+// clic basta con eso, y evita rotar la caja por cada candidato.
+struct BoundingSphere {
+    glm::vec3 center{0.0f};
+    float     radius = 0.0f;
+};
+
+BoundingSphere worldBounds(const DonTopo::Mesh& mesh, const glm::mat4& transform)
+{
+    BoundingSphere sphere;
+
+    // Un SkinnedMesh deja vertices VACIO y guarda los suyos en skinnedVertices:
+    // preguntarle solo por el primero da una esfera de radio cero y ese objeto
+    // no se puede seleccionar nunca.
+    std::vector<glm::vec3> positions;
+    if (const auto* skinned = dynamic_cast<const DonTopo::SkinnedMesh*>(&mesh)) {
+        positions.reserve(skinned->skinnedVertices.size());
+        for (const DonTopo::SkinnedVertex& vertex : skinned->skinnedVertices)
+            positions.push_back(glm::vec3(vertex.position));
+    } else {
+        positions.reserve(mesh.vertices.size());
+        for (const DonTopo::Vertex& vertex : mesh.vertices)
+            positions.push_back(glm::vec3(vertex.pos));
+    }
+
+    if (positions.empty())
+        return sphere;
+
+    glm::vec3 lo = positions[0];
+    glm::vec3 hi = lo;
+    for (const glm::vec3& position : positions) {
+        // Entre paréntesis: windows.h define min y max como macros, y sin esto
+        // el preprocesador se come la llamada.
+        // Entre paréntesis: windows.h define min y max como macros, y sin esto
+        // el preprocesador se come la llamada.
+        lo = (glm::min)(lo, position);
+        hi = (glm::max)(hi, position);
+    }
+
+    const glm::vec3 localCenter = (lo + hi) * 0.5f;
+    sphere.center = glm::vec3(transform * glm::vec4(localCenter, 1.0f));
+
+    // El radio con la escala del transform ya aplicada: se mide sobre una
+    // esquina llevada a mundo, que es lo que la deforma de verdad.
+    const glm::vec3 worldCorner = glm::vec3(transform * glm::vec4(hi, 1.0f));
+    sphere.radius = glm::length(worldCorner - sphere.center);
+    return sphere;
+}
+
+// Distancia a la que el rayo corta la esfera, o -1 si no la corta o queda
+// detrás. Sin resolver la cuadrática entera: basta con el punto más cercano.
+float raySphere(const glm::vec3& origin, const glm::vec3& dir, const BoundingSphere& sphere)
+{
+    const glm::vec3 toCenter = sphere.center - origin;
+    const float     along    = glm::dot(toCenter, dir);
+    if (along < 0.0f)
+        return -1.0f;
+
+    const float distanceSq = glm::dot(toCenter, toCenter) - along * along;
+    const float radiusSq   = sphere.radius * sphere.radius;
+    if (distanceSq > radiusSq)
+        return -1.0f;
+
+    return along - std::sqrt(radiusSq - distanceSq);
+}
+
+}  // namespace
+#endif
+
 int main()
 {
     try {
@@ -304,6 +377,9 @@ int main()
             d3d12.setCamera(d3dCamera.getViewMatrix(), d3dCamera.getPos(), d3dCamera.getFov());
 
             bool   d3dViewportPanel = false;
+            // Lo seleccionado en el viewport: uno de los dos, o los dos a -1.
+            int    d3dPickedStatic  = -1;
+            int    d3dPickedSkinned = -1;
             double d3dLastX = 0.0, d3dLastY = 0.0;
             bool   d3dLooking = false;
             auto   d3dLastFrame = std::chrono::high_resolution_clock::now();
@@ -397,7 +473,7 @@ int main()
                         }
 
                         int fp = static_cast<int>(d3d12.forwardPlusMode());
-                        if (ImGui::Combo("Forward+", &fp, "Off Tiled Clustered "))
+                        if (ImGui::Combo("Forward+", &fp, "Off\0Tiled\0Clustered\0"))
                             d3d12.setForwardPlusMode(
                                 static_cast<DonTopo::RendererState::FpMode>(fp));
                     }
@@ -482,8 +558,72 @@ int main()
                                               static_cast<uint32_t>(size.y));
 
                         const uint64_t texture = d3d12.viewportTexture();
-                        if (texture != 0)
+                        if (texture != 0) {
+                            const ImVec2 imagePos = ImGui::GetCursorScreenPos();
                             ImGui::Image(static_cast<ImTextureID>(texture), size);
+
+                            // Clic izquierdo sobre la imagen: se desproyecta con
+                            // la matriz del frame y gana el objeto cuya esfera
+                            // corta el rayo más cerca.
+                            if (ImGui::IsItemHovered() &&
+                                ImGui::IsMouseClicked(ImGuiMouseButton_Left) && size.x > 0.0f &&
+                                size.y > 0.0f)
+                            {
+                                const ImVec2 mouse = ImGui::GetIO().MousePos;
+                                const glm::vec2 local(mouse.x - imagePos.x, mouse.y - imagePos.y);
+
+                                // A NDC. La Y de pantalla crece hacia abajo y la
+                                // de clip hacia arriba, de ahí el signo.
+                                const glm::vec2 ndc(2.0f * local.x / size.x - 1.0f,
+                                                    1.0f - 2.0f * local.y / size.y);
+
+                                const glm::mat4 invViewProj =
+                                    glm::inverse(d3d12.viewProjMatrix());
+                                // z = 1 es el plano lejano con la convención de
+                                // profundidad que usa el backend.
+                                // farPoint y no "far": windows.h todavía define
+                                // far y near como macros, herencia de los 16
+                                // bits, y cualquier variable con ese nombre
+                                // desaparece antes de compilar.
+                                const glm::vec4 farPoint =
+                                    invViewProj * glm::vec4(ndc, 1.0f, 1.0f);
+                                const glm::vec3 origin = d3dCamera.getPos();
+                                const glm::vec3 dir =
+                                    glm::normalize(glm::vec3(farPoint) / farPoint.w - origin);
+
+                                float bestDistance = (std::numeric_limits<float>::max)();
+                                d3dPickedStatic  = -1;
+                                d3dPickedSkinned = -1;
+
+                                d3dScene.traverse([&](DonTopo::GameObject* node) {
+                                    if (!node || !node->hasMesh())
+                                        return;
+                                    const DonTopo::Mesh* mesh =
+                                        node->isSkinned()
+                                            ? static_cast<const DonTopo::Mesh*>(
+                                                  node->getSkinnedMesh())
+                                            : node->getMesh().get();
+                                    if (!mesh)
+                                        return;
+
+                                    const float hit = raySphere(
+                                        origin, dir, worldBounds(*mesh, node->worldTransform));
+                                    if (hit < 0.0f || hit >= bestDistance)
+                                        return;
+
+                                    bestDistance = hit;
+                                    if (node->isSkinned()) {
+                                        d3dPickedSkinned = node->skinnedRenderIndex;
+                                        d3dPickedStatic  = -1;
+                                    } else {
+                                        d3dPickedStatic  = node->staticRenderIndex;
+                                        d3dPickedSkinned = -1;
+                                    }
+                                });
+
+                                d3d12.setSelection(d3dPickedStatic, d3dPickedSkinned);
+                            }
+                        }
                     }
                     ImGui::End();
                 }
