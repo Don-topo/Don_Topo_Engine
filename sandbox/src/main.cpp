@@ -230,15 +230,8 @@ int main()
                                            node->ssrEnabled ? node->ssrIntensity : 0.0f);
                         ++added;
                     });
-                    // Las luces de la escena, con sus transformaciones ya
-                    // derivadas: el backend traía una direccional de relleno, y
-                    // una escena iluminada solo con focos se veía a oscuras.
-                    {
-                        std::vector<DonTopo::Light> lights;
-                        std::vector<float>          radii;
-                        d3dScene.collectLights(lights, radii);
-                        d3d12.setLights(lights.data(), lights.size());
-                    }
+                    // Las luces NO se mandan aquí: van por frame en el bucle,
+                    // que es lo que hace que moverlas se vea.
 
                     std::cout << "D3D12: escena '" << sceneFile.string() << "' cargada, "
                               << added << " mallas estaticas y " << addedSkinned
@@ -347,6 +340,16 @@ int main()
             bool   d3dLooking   = false;
             auto   d3dLastFrame = std::chrono::high_resolution_clock::now();
 
+            // Luces: los buffers viven fuera del bucle para no reasignar por
+            // frame. Las de relleno son las mismas que usa el camino de Vulkan y
+            // solo salen si la escena no aporta ninguna.
+            const std::vector<DonTopo::Light> d3dDefaultLights = {
+                { glm::vec4(0.0f, 500.0f, 300.0f, 1.0f),     glm::vec4(1.0f, 0.95f, 0.8f, 1.0f) },
+                { glm::vec4(-300.0f, 200.0f, -200.0f, 1.0f), glm::vec4(0.4f, 0.5f, 1.0f, 0.8f) },
+            };
+            std::vector<DonTopo::Light> d3dLights;
+            std::vector<float>          d3dLightRadii;
+
             while (!window.shouldClose())
             {
                 window.pollEvents();
@@ -356,8 +359,78 @@ int main()
                     std::chrono::duration<float>(d3dNow - d3dLastFrame).count();
                 d3dLastFrame = d3dNow;
 
-                // La interfaz primero: es la que puede mover la escena, y el
-                // backend la lee justo después al grabar el frame.
+                // Escena → backend, por frame y ANTES de la interfaz: es lo que
+                // hace que mover un objeto en Properties, ocultar una malla,
+                // tocar sus reflejos o mover una luz se vean. Sin esto el
+                // backend se queda con lo que se le mandó al cargar y el editor
+                // se mira pero no se toca. Mismo recorrido que el camino de
+                // Vulkan, salvo la parte de Play —física y scripts— que este
+                // camino todavía no corre.
+                //
+                // Recorrido en vivo y no una lista cacheada: el editor puede
+                // borrar GameObjects, y un puntero guardado quedaría colgando.
+                d3dScene.getRoot().updateWorldTransforms();
+                d3d12.tickDeferredDeletes();
+
+                d3dScene.traverse([&](DonTopo::GameObject* go) {
+                    if (go->staticRenderIndex >= 0)
+                    {
+                        d3d12.setTransform(static_cast<size_t>(go->staticRenderIndex),
+                                           go->worldTransform);
+                        d3d12.setObjectSsr(static_cast<size_t>(go->staticRenderIndex),
+                                           go->ssrEnabled ? go->ssrIntensity : 0.0f);
+                        d3d12.setObjectMeshVisible(static_cast<size_t>(go->staticRenderIndex),
+                                                   go->meshVisible);
+                    }
+
+                    if (go->skinnedRenderIndex >= 0)
+                    {
+                        // La visibilidad antes de tocar la animación: el reloj de
+                        // un mesh oculto se congela, así que el flag tiene que
+                        // estar ya puesto o iría un frame por detrás.
+                        d3d12.setSkinnedMeshVisible(go->skinnedRenderIndex, go->meshVisible);
+                        if (const auto& anim = go->getAnimator())
+                        {
+                            // El Animator es el único dueño de animTime: evalúa
+                            // en CPU y el backend solo recibe el resultado. En
+                            // Edit el grafo no evalúa transiciones.
+                            // El estado de Play lo lleva el editor; el backend de
+                            // DirectX 12 no lo conoce.
+                            anim->update(d3dDelta, editor.isPlaying());
+                            d3d12.setAnimationState(go->skinnedRenderIndex,
+                                                    (uint32_t)anim->currentClipIndex(),
+                                                    anim->animTime());
+                        }
+                        else
+                        {
+                            d3d12.updateAnimation(go->skinnedRenderIndex, d3dDelta);
+                        }
+                        d3d12.setSkinnedTransform(go->skinnedRenderIndex, go->worldTransform);
+                        d3d12.setSkinnedSsr(go->skinnedRenderIndex,
+                                            go->ssrEnabled ? go->ssrIntensity : 0.0f);
+                    }
+                });
+
+                // Luces después del recorrido: sus worldTransform ya están
+                // propagados y de ahí salen posición y dirección. Por frame y no
+                // en un evento porque mover el GameObject de una luz tiene que
+                // moverla en el acto, igual que el transform de una malla.
+                if (d3dScene.collectLights(d3dLights, d3dLightRadii) > 0)
+                {
+                    d3d12.setLights(d3dLights);
+                    d3d12.setLightRadii(d3dLightRadii);
+                }
+                else
+                {
+                    // Sin una sola luz en la escena, las de relleno: las escenas
+                    // del repo son de antes del LightComponent y sin esto el
+                    // editor abriría a oscuras.
+                    d3d12.setLights(d3dDefaultLights);
+                    d3d12.setLightRadii({});
+                }
+
+                // La interfaz después: lo que se toque aquí lo recoge el
+                // recorrido del frame siguiente.
                 editor.buildUiFrame(d3d12.viewportTexture(), &d3dScene.getRoot(),
                                     d3dCamera.getViewMatrix());
 

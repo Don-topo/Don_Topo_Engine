@@ -601,6 +601,10 @@ struct D3D12Renderer::Impl {
         uint32_t clipBase     = 0;
         float    animTime     = 0.0f;
         float    animDuration = 0.0f;
+        // Quién manda en animTime. En cuanto alguien de fuera lo mueve
+        // —updateAnimation o setAnimationState— el backend deja de avanzarlo por
+        // su cuenta: los dos relojes sumando dejarían el clip al doble.
+        bool     externalClock = false;
 
         glm::mat4 transform{1.0f};
         bool      visible = true;
@@ -5369,6 +5373,11 @@ void D3D12Renderer::drawFrame()
         // Cada personaje avanza en su propio ciclo: los clips no duran lo
         // mismo, y un tiempo compartido haría saltar a los cortos.
         for (Impl::SkinnedObject& character : d.skinnedObjects) {
+            // Salvo los que lleva alguien de fuera: el editor avanza el reloj
+            // por frame desde el Animator del GameObject, y sumar aquí también
+            // los pondría al doble de velocidad.
+            if (character.externalClock)
+                continue;
             character.animTime += static_cast<float>(elapsed);
             if (character.animDuration > 0.0f && character.animTime > character.animDuration)
                 character.animTime = std::fmod(character.animTime, character.animDuration);
@@ -6009,8 +6018,10 @@ void D3D12Renderer::updateAnimation(int index, float deltaTime)
         return;
 
     // Avanza el reloj de ESE personaje y lo mantiene dentro del clip. El reloj
-    // interno del backend sigue existiendo para quien no llame aquí.
+    // interno del backend sigue existiendo para quien no llame aquí, pero para
+    // este personaje se apaga: mandan desde fuera.
     Impl::SkinnedObject& character = d.skinnedObjects[index];
+    character.externalClock        = true;
     character.animTime += deltaTime;
     if (character.animDuration > 0.0f && character.animTime > character.animDuration)
         character.animTime = std::fmod(character.animTime, character.animDuration);
@@ -6080,6 +6091,9 @@ void D3D12Renderer::setAnimationState(int index, uint32_t clipIndex, float animT
     Impl::SkinnedObject& character = d.skinnedObjects[index];
     character.clipBase             = clipIndex * character.boneCount;
     character.animTime             = animTime;
+    // El Animator del GameObject es el dueño del reloj: el backend no vuelve a
+    // sumarle tiempo por su cuenta.
+    character.externalClock = true;
 }
 
 size_t D3D12Renderer::skinnedCount() const
