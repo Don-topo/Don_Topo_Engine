@@ -175,7 +175,12 @@ int main()
             d3dPhysics.init();
             DonTopo::AudioManager d3dAudio;
             d3dAudio.init();
-            DonTopo::Scene d3dScene;
+            // Y el ScriptManager ANTES que la escena, tambien como en Vulkan:
+            // los ScriptComponent del árbol guardan sol::table cuyo destructor
+            // toca la VM de Lua, así que la escena tiene que morir antes que
+            // ella (la destrucción va al revés que la declaración).
+            DonTopo::ScriptManager d3dScripts;
+            DonTopo::Scene         d3dScene;
 
             {
                 const std::filesystem::path sceneFile =
@@ -327,6 +332,49 @@ int main()
             editor.setScene(&d3dScene);
             editor.setPhysicsManager(&d3dPhysics);
             editor.setAudioManager(&d3dAudio);
+
+            // Scripting, con el mismo cableado que el camino de Vulkan.
+            d3dScripts.setScene(&d3dScene);
+            d3dScripts.setPhysicsManager(&d3dPhysics);
+            d3dScripts.setAudioManager(&d3dAudio);
+            d3dScripts.setLogCallback(
+                [&editor](const std::string& msg) { editor.pushExternalLog(msg); });
+            d3dScripts.setOnInstantiated([&d3d12](DonTopo::GameObject* go) {
+                // Lo que instancia un script hay que subirlo a la GPU: si no,
+                // existe en la escena y no se dibuja.
+                go->traverse([&d3d12](DonTopo::GameObject* n) {
+                    if (!n->hasMesh())
+                        return;
+                    if (n->isSkinned())
+                        n->skinnedRenderIndex = d3d12.addSkinnedMesh(*n->getSkinnedMesh());
+                    else
+                        n->staticRenderIndex = d3d12.addStaticMesh(*n->getMesh());
+                });
+            });
+            d3dScripts.setOnDestroying([&d3d12, &editor](DonTopo::GameObject* go) {
+                // La selección primero: si el editor se queda apuntando a lo que
+                // se va a liberar, crashea al dibujar Properties el frame
+                // siguiente.
+                editor.onGameObjectDestroyed(go);
+                d3d12.removeGameObject(go);
+            });
+            // Scripts/ vive en la raíz del repo y no se copia junto al exe: el
+            // hot reload tiene que vigilar los .lua que edita el usuario.
+            std::filesystem::path d3dScriptsDir = "Scripts";
+            if (!std::filesystem::is_directory(d3dScriptsDir))
+            {
+                for (auto dir = std::filesystem::current_path(); dir != dir.parent_path();
+                     dir = dir.parent_path())
+                {
+                    if (std::filesystem::is_directory(dir / "Scripts"))
+                    {
+                        d3dScriptsDir = dir / "Scripts";
+                        break;
+                    }
+                }
+            }
+            d3dScripts.init(d3dScriptsDir.string());
+            editor.setScriptManager(&d3dScripts);
             editor.pushExternalLog(
                 "DirectX 12: el editor corre sobre este backend. Sin UI 2D del juego, "
                 "sin gizmos de transformacion y sin sondas de reflexion todavia.");
@@ -369,7 +417,43 @@ int main()
                 //
                 // Recorrido en vivo y no una lista cacheada: el editor puede
                 // borrar GameObjects, y un puntero guardado quedaría colgando.
-                d3dScene.getRoot().updateWorldTransforms();
+                d3dScripts.pollChanges();
+
+                if (editor.isPlaying())
+                {
+                    // El audio 3D se oye desde el Listener de la escena si lo
+                    // hay, y desde la cámara si no. Con la base degenerada
+                    // (escala 0) se cae a la cámara en vez de colar un NaN en
+                    // FMOD, del que ya no se recupera.
+                    glm::vec3 listenerPos = d3dCamera.getPos();
+                    glm::vec3 listenerFwd = d3dCamera.getFront();
+                    glm::vec3 listenerUp  = d3dCamera.getUp();
+                    if (DonTopo::GameObject* lis = d3dScene.findAudioListener())
+                    {
+                        const glm::vec3 fwdAxis = glm::vec3(lis->worldTransform[2]);
+                        const glm::vec3 upAxis  = glm::vec3(lis->worldTransform[1]);
+                        if (glm::length(fwdAxis) > 1e-6f && glm::length(upAxis) > 1e-6f)
+                        {
+                            listenerPos = glm::vec3(lis->worldTransform[3]);
+                            listenerFwd = glm::normalize(-fwdAxis);
+                            listenerUp  = glm::normalize(upAxis);
+                        }
+                    }
+                    d3dAudio.update(listenerPos, listenerFwd, listenerUp);
+                    d3dPhysics.stepSimulation(d3dDelta);
+                    d3dScene.update(d3dDelta, d3dPhysics);
+                    d3dScripts.update(d3dDelta);
+                }
+                else
+                {
+                    // Sin física corriendo, pero los transforms padre→hijo se
+                    // siguen propagando: Properties y los gizmos tienen que
+                    // funcionar en Edit. Scene::update haría esto y además
+                    // impondría la pose de PhysX sobre cada objeto con collider
+                    // dinámico, que es justo lo que impide editarlos.
+                    d3dScene.getRoot().updateWorldTransforms();
+                }
+
                 d3d12.tickDeferredDeletes();
 
                 d3dScene.traverse([&](DonTopo::GameObject* go) {
