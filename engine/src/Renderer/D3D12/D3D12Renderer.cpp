@@ -28,6 +28,9 @@
 #include <stb_image.h>
 
 #include <glm/glm.hpp>
+
+#include <chrono>
+#include <optional>
 #include <glm/gtc/matrix_transform.hpp>
 
 #ifndef NDEBUG
@@ -851,12 +854,20 @@ struct D3D12Renderer::Impl {
 
     // perspectiveRH_ZO, no perspective a secas: D3D12 clipea en z=[0,1] igual
     // que Vulkan, y con la convención de OpenGL se pierde la mitad cercana.
+    // Proyección con la que se dibuja. Durante el horneado de una sonda manda
+    // la de la cara —90°, cuadrada y con el rango largo—: es la única forma de
+    // que TODO lo que la usa (el UBO, la niebla, el cielo, el culling) vea la
+    // misma, sin pasarla por parámetro por media docena de funciones.
     glm::mat4 cameraProj() const
     {
+        if (probeFaceProj)
+            return *probeFaceProj;
+
         const float aspect =
             (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
         return glm::perspectiveRH_ZO(glm::radians(cameraFovDeg), aspect, 0.1f, 500.0f);
     }
+    std::optional<glm::mat4> probeFaceProj;
 
     void ensureSkinnedInstanceBuffer(size_t count);
 
@@ -1000,6 +1011,27 @@ struct D3D12Renderer::Impl {
     // las nuevas, suelta las que ya no están y refresca posición, radio e
     // intensidad. Por frame, y sale enseguida cuando no hay ninguna.
     void syncProbes();
+
+    // Los dos compute del IBL sobre una entrada y unos destinos cualesquiera:
+    // lo usa el cielo global y lo usa cada sonda.
+    void recordIblConvolution(UINT sourceSrv, UINT irradianceUav, UINT prefilterUav,
+                              float intensity);
+
+    // Captura la escena desde la sonda —seis caras— y convoluciona el resultado
+    // en sus dos cubemaps. Es un EVENTO, no un pase del frame: espera a la GPU,
+    // se toma su tiempo y deja la sonda marcada como horneada.
+    void bakeProbe(GpuProbe& probe);
+
+    // Profundidad propia del horneado: el buffer del frame tiene el tamaño del
+    // render y aquí las caras son de kProbeFaceSize.
+    D3D12MA::Allocation* probeDepthAllocation = nullptr;
+    void createProbeDepth();
+
+    // Peticiones pendientes: el editor pide hornear y se atiende en el frame
+    // siguiente, fuera de cualquier grabado a medias.
+    std::vector<uint64_t> probeBakeQueue;
+    bool                  probeBakeAllQueued = false;
+    float                 probeLastBakeMs    = 0.0f;
     D3D12MA::Allocation*        ldrAllocation = nullptr;
 
     // Los parámetros de niebla y FXAA también salen de RendererState.
@@ -3097,6 +3129,53 @@ void D3D12Renderer::Impl::createNeutralIblCubes()
     prefilterAllocation  = uploadNeutralCube(prefilterNeutral, kSrvPrefilter);
 }
 
+void D3D12Renderer::Impl::recordIblConvolution(UINT sourceSrv, UINT irradianceUav,
+                                               UINT prefilterUav, float intensity)
+{
+    if (!iblIrradiancePipeline || !iblPrefilterPipeline || !iblRootSignature)
+        return;
+
+    ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetComputeRootSignature(iblRootSignature.Get());
+
+    auto gpuHandle = [&](UINT index) {
+        D3D12_GPU_DESCRIPTOR_HANDLE handle = srvHeap->GetGPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<UINT64>(index) * srvSize;
+        return handle;
+    };
+
+    struct IblPush {
+        float    roughness;
+        uint32_t faceSize;
+        float    intensity;
+    };
+
+    // Irradiancia: un dispatch para las seis caras a la vez (z = cara).
+    {
+        const IblPush push{0.0f, kIblIrradianceSize, intensity};
+        commandList->SetPipelineState(iblIrradiancePipeline.Get());
+        commandList->SetComputeRoot32BitConstants(0, 3, &push, 0);
+        commandList->SetComputeRootDescriptorTable(1, gpuHandle(sourceSrv));
+        commandList->SetComputeRootDescriptorTable(2, gpuHandle(irradianceUav));
+        const UINT groups = (kIblIrradianceSize + 7) / 8;
+        commandList->Dispatch(groups, groups, 6);
+    }
+
+    // Prefiltrado: un dispatch por mip, con su rugosidad y su tamaño.
+    commandList->SetPipelineState(iblPrefilterPipeline.Get());
+    for (UINT mip = 0; mip < kIblPrefilterMips; ++mip) {
+        const UINT  size      = (std::max)(kIblPrefilterSize >> mip, 1u);
+        const float roughness = static_cast<float>(mip) / static_cast<float>(kIblPrefilterMips - 1);
+        const IblPush push{roughness, size, intensity};
+        commandList->SetComputeRoot32BitConstants(0, 3, &push, 0);
+        commandList->SetComputeRootDescriptorTable(1, gpuHandle(sourceSrv));
+        commandList->SetComputeRootDescriptorTable(2, gpuHandle(prefilterUav + mip));
+        const UINT groups = (size + 7) / 8;
+        commandList->Dispatch(groups, groups, 6);
+    }
+}
+
 void D3D12Renderer::Impl::precomputeIbl()
 {
     // Sin cielo no hay nada que convolucionar: se quedan los neutros.
@@ -3244,35 +3323,9 @@ void D3D12Renderer::Impl::precomputeIbl()
         return handle;
     };
 
-    struct IblPush {
-        float    roughness;
-        uint32_t faceSize;
-        float    intensity;
-    };
-
-    // Irradiancia: un dispatch para las seis caras a la vez (z = cara).
-    {
-        const IblPush push{0.0f, kIblIrradianceSize, 1.0f};
-        commandList->SetPipelineState(iblIrradiancePipeline.Get());
-        commandList->SetComputeRoot32BitConstants(0, 3, &push, 0);
-        commandList->SetComputeRootDescriptorTable(1, gpuHandle(kSrvSkybox));
-        commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavIrradiance));
-        const UINT groups = (kIblIrradianceSize + 7) / 8;
-        commandList->Dispatch(groups, groups, 6);
-    }
-
-    // Prefiltrado: un dispatch por mip, con su rugosidad y su tamaño.
-    commandList->SetPipelineState(iblPrefilterPipeline.Get());
-    for (UINT mip = 0; mip < kIblPrefilterMips; ++mip) {
-        const UINT    size      = (std::max)(kIblPrefilterSize >> mip, 1u);
-        const float   roughness = static_cast<float>(mip) / static_cast<float>(kIblPrefilterMips - 1);
-        const IblPush push{roughness, size, 1.0f};
-        commandList->SetComputeRoot32BitConstants(0, 3, &push, 0);
-        commandList->SetComputeRootDescriptorTable(1, gpuHandle(kSrvSkybox));
-        commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavPrefilter + mip));
-        const UINT groups = (size + 7) / 8;
-        commandList->Dispatch(groups, groups, 6);
-    }
+    // Los mismos dispatches que usa cada sonda: entrada, destinos e intensidad
+    // por parametro, y el resto identico.
+    recordIblConvolution(kSrvSkybox, kUavIrradiance, kUavPrefilter, 1.0f);
 
     // De destino de escritura a textura de lectura: pbr.frag los muestrea en el
     // pase de escena del mismo frame en adelante.
@@ -5063,6 +5116,196 @@ void D3D12Renderer::Impl::syncProbes()
             it->baked     = false;
         }
     }
+
+    // Peticiones de horneado. Se atienden AQUÍ, al principio del frame y antes
+    // de grabar nada, porque hornear reescribe la cámara y el UBO y espera a la
+    // GPU: a mitad de un frame sería grabar sobre lo ya grabado.
+    if (probeBakeAllQueued) {
+        for (GpuProbe& probe : probes)
+            probe.baked = false;
+        probeBakeAllQueued = false;
+    }
+    for (const uint64_t owner : probeBakeQueue) {
+        auto it = std::find_if(probes.begin(), probes.end(),
+                               [owner](const GpuProbe& p) { return p.ownerId == owner; });
+        if (it != probes.end())
+            it->baked = false;
+    }
+    probeBakeQueue.clear();
+
+    // Una por frame: seis pasadas de escena más la convolución es demasiado
+    // para hacerlo de golpe con varias sondas, y así el editor sigue
+    // respondiendo mientras se hornean.
+    for (GpuProbe& probe : probes) {
+        if (probe.baked)
+            continue;
+        bakeProbe(probe);
+        break;
+    }
+}
+
+void D3D12Renderer::Impl::createProbeDepth()
+{
+    if (probeDepthAllocation)
+        return;
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width            = kProbeFaceSize;
+    desc.Height           = kProbeFaceSize;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels        = 1;
+    desc.Format           = DXGI_FORMAT_D32_FLOAT;
+    desc.SampleDesc.Count = 1;
+    desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+    D3D12_CLEAR_VALUE clear{};
+    clear.Format             = DXGI_FORMAT_D32_FLOAT;
+    clear.DepthStencil.Depth = 1.0f;
+
+    D3D12MA::ALLOCATION_DESC allocDesc{};
+    allocDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+    if (FAILED(allocator->CreateResource(&allocDesc, &desc, D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                                         &clear, &probeDepthAllocation, IID_NULL, nullptr)))
+        return;
+
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+    dsvDesc.Format        = DXGI_FORMAT_D32_FLOAT;
+    dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE handle = dsvHeap->GetCPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<SIZE_T>(2) * dsvSize;  // 0 escena, 1 multimuestra, 2 sondas
+    device->CreateDepthStencilView(probeDepthAllocation->GetResource(), &dsvDesc, handle);
+}
+
+void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
+{
+    if (!probe.captureAllocation || !meshPipeline)
+        return;
+
+    createProbeDepth();
+    if (!probeDepthAllocation)
+        return;
+
+    // Esto no es un pase del frame: se graba en su propia lista y se espera. La
+    // captura reescribe el UBO de escena y la cámara, que el frame en vuelo
+    // está usando.
+    waitForGpu();
+
+    // Direcciones y "up" de las seis caras. Los up van NEGADOS respecto a la
+    // lista clásica de OpenGL y la proyección espeja X además de Y: dos espejos
+    // son una rotación, así que el sentido de las caras —y con él el descarte
+    // de caras traseras— se conserva y el cubemap sale con la orientación que
+    // espera el muestreo. Es lo mismo que hizo falta para el cielo.
+    static const glm::vec3 kDirs[6] = {
+        {1.0f, 0.0f, 0.0f},  {-1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+        {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f, 1.0f},  {0.0f, 0.0f, -1.0f},
+    };
+    static const glm::vec3 kUps[6] = {
+        {0.0f, -1.0f, 0.0f}, {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, -1.0f}, {0.0f, -1.0f, 0.0f}, {0.0f, -1.0f, 0.0f},
+    };
+
+    // Lo que se toca y hay que devolver: la cámara del frame y el tamaño de
+    // render, que el pase de geometría usa para el viewport y el culling.
+    const glm::mat4 savedView     = cameraView;
+    const glm::vec3 savedPos      = cameraPos;
+    const float     savedFov      = cameraFovDeg;
+    const glm::mat4 savedViewProj = viewProj;
+
+    // Un RTV por cara, en los seis huecos que el heap reserva al final.
+    const UINT kProbeRtvBase = kFrameCount + 6;
+    for (UINT face = 0; face < 6; ++face) {
+        D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
+        rtvDesc.Format                         = kHdrFormat;
+        rtvDesc.ViewDimension                  = D3D12_RTV_DIMENSION_TEXTURE2DARRAY;
+        rtvDesc.Texture2DArray.FirstArraySlice = face;
+        rtvDesc.Texture2DArray.ArraySize       = 1;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(kProbeRtvBase + face) * rtvSize;
+        device->CreateRenderTargetView(probe.captureAllocation->GetResource(), &rtvDesc, handle);
+    }
+
+    ID3D12CommandAllocator* allocator = allocators[frameIndex].Get();
+    if (FAILED(allocator->Reset()) || FAILED(commandList->Reset(allocator, nullptr)))
+        return;
+
+    auto transition = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES before,
+                          D3D12_RESOURCE_STATES after) {
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource   = resource;
+        barrier.Transition.StateBefore = before;
+        barrier.Transition.StateAfter  = after;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &barrier);
+    };
+
+    transition(probe.captureAllocation->GetResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+               D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE dsv = dsvHeap->GetCPUDescriptorHandleForHeapStart();
+    dsv.ptr += static_cast<SIZE_T>(2) * dsvSize;
+
+    for (UINT face = 0; face < 6; ++face) {
+        // 90° por cara y un rango generoso: la sonda ve toda la escena, no el
+        // encuadre del jugador.
+        cameraView       = glm::lookAtRH(probe.position, probe.position + kDirs[face], kUps[face]);
+        cameraPos        = probe.position;
+        cameraFovDeg = 90.0f;
+
+        glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(90.0f), 1.0f, 0.1f, 20000.0f);
+        proj[0][0] *= -1.0f;  // el espejo en X que compensa los "up" negados
+        proj[1][1] *= -1.0f;
+        probeFaceProj = proj;
+        viewProj      = proj * cameraView;
+
+        // El UBO con la vista de ESTA cara: es de donde pbr.frag saca la
+        // posición del ojo y la proyección. Las luces y las cascadas se dejan
+        // como están —el mapa de sombras que hay en la GPU es el de esas
+        // matrices, y recalcularlas aquí lo descuadraría.
+        updateSceneUbo();
+
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        rtv.ptr += static_cast<SIZE_T>(kProbeRtvBase + face) * rtvSize;
+
+        recordSceneGeometry(rtv, dsv, kProbeFaceSize, kProbeFaceSize);
+    }
+
+    transition(probe.captureAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+    // Y la convolución: los mismos dos compute del IBL global, pero leyendo la
+    // captura de esta sonda y escribiendo en sus cubemaps.
+    recordIblConvolution(probe.srvBase + kProbeCaptureSrv, probe.srvBase + kProbeIrradianceUav,
+                         probe.srvBase + kProbePrefilterUav, probe.intensity);
+
+    if (FAILED(commandList->Close()))
+        return;
+
+    const auto bakeStart = std::chrono::high_resolution_clock::now();
+
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    queue->ExecuteCommandLists(1, lists);
+    waitForGpu();
+
+    // Tiempo de pared, no de GPU: aquí se espera a que termine, así que la
+    // espera ES el coste, y es lo que interesa saber al que hornea.
+    probe.bakeMs = std::chrono::duration<float, std::milli>(
+                       std::chrono::high_resolution_clock::now() - bakeStart)
+                       .count();
+    probeLastBakeMs = probe.bakeMs;
+
+    // Y todo como estaba: el frame siguiente dibuja desde la cámara del jugador.
+    cameraView       = savedView;
+    cameraPos        = savedPos;
+    cameraFovDeg = savedFov;
+    viewProj         = savedViewProj;
+    probeFaceProj.reset();
+    updateSceneUbo();
+
+    probe.baked = true;
 }
 
 void D3D12Renderer::Impl::releaseProbe(GpuProbe& probe)
@@ -6062,7 +6305,8 @@ void D3D12Renderer::init(Window& window)
     // que la composición deja para FXAA.
     // Los de la swapchain, el HDR, el LDR de la composición y el color
     // multimuestra del pase de escena cuando hay MSAA.
-    rtvHeapDesc.NumDescriptors = kFrameCount + 6;  // + historias del TAA y viewport
+    // + historias del TAA, viewport y las seis caras del horneado de sondas.
+    rtvHeapDesc.NumDescriptors = kFrameCount + 6 + 6;
     rtvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     throwIfFailed(d.device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&d.rtvHeap)),
@@ -6105,7 +6349,7 @@ void D3D12Renderer::init(Window& window)
 
     D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc{};
     // La profundidad de siempre y la multimuestra.
-    dsvHeapDesc.NumDescriptors = 2;
+    dsvHeapDesc.NumDescriptors = 3;  // escena, escena multimuestra y caras de sonda
     dsvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
     throwIfFailed(d.device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&d.dsvHeap)),
                   "ID3D12Device::CreateDescriptorHeap(DSV)");
@@ -6397,6 +6641,11 @@ void D3D12Renderer::drawFrame()
     // nada, porque el frame que empieza los va a sobrescribir.
     d.readTimestamps();
 
+    // Sondas: altas, bajas y horneado. ANTES de abrir el frame, porque hornear
+    // graba en esta misma lista de comandos y espera a la GPU — con el frame a
+    // medias, el Reset del allocator falla y no se hornea nada, en silencio.
+    d.syncProbes();
+
     ID3D12CommandAllocator* allocator = d.allocators[d.frameIndex].Get();
     if (FAILED(allocator->Reset()))
         return;
@@ -6447,10 +6696,6 @@ void D3D12Renderer::drawFrame()
     // El UBO se escribe una vez por frame y lo leen los dos pases: el de
     // sombras necesita lightSpaceMatrix, el principal todo lo demás.
     d.updateSceneUbo();
-
-    // Sondas de la escena: altas, bajas y cambios de sitio. Antes de grabar
-    // nada, para que lo que se dibuje este frame ya use la lista buena.
-    d.syncProbes();
 
     // Y las matrices de la escena, que el pase de sombras lee del SSBO. Se
     // reescriben enteras: mover un objeto no tiene por qué avisar al renderer.
@@ -7377,11 +7622,24 @@ float D3D12Renderer::ssaaFactor() const
     return m_impl->ssaaFactor;
 }
 
-void  D3D12Renderer::requestProbeBake(uint64_t) {}
-void  D3D12Renderer::requestProbeBakeAll() {}
+void D3D12Renderer::requestProbeBake(uint64_t ownerId)
+{
+    // Solo se apunta: hornear reescribe la camara y espera a la GPU, asi que se
+    // hace al principio del frame siguiente y no en mitad de lo que sea que
+    // este haciendo quien llama.
+    m_impl->probeBakeQueue.push_back(ownerId);
+}
+
+void D3D12Renderer::requestProbeBakeAll() { m_impl->probeBakeAllQueued = true; }
 int   D3D12Renderer::probeCount() const { return static_cast<int>(m_impl->probes.size()); }
-float D3D12Renderer::lastProbeBakeMs() const { return 0.0f; }
-float D3D12Renderer::probeBakeMs(uint64_t) const { return 0.0f; }
+float D3D12Renderer::lastProbeBakeMs() const { return m_impl->probeLastBakeMs; }
+float D3D12Renderer::probeBakeMs(uint64_t ownerId) const
+{
+    for (const Impl::GpuProbe& probe : m_impl->probes)
+        if (probe.ownerId == ownerId)
+            return probe.bakeMs;
+    return 0.0f;
+}
 
 void     D3D12Renderer::setPerfCaptureEnabled(bool) {}
 // Tiempos de GPU: los mide el par de marcas de cada pase, leídos con dos frames
