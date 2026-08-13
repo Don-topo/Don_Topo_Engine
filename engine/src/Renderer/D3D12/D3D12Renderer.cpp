@@ -1032,6 +1032,21 @@ struct D3D12Renderer::Impl {
     std::vector<uint64_t> probeBakeQueue;
     bool                  probeBakeAllQueued = false;
     float                 probeLastBakeMs    = 0.0f;
+
+    // Qué sonda mira cada objeto, por su índice en `probes`; -1 = el IBL global.
+    // Se guarda para no reescribir descriptores en un frame en el que nada
+    // cambió, que es el caso normal.
+    std::vector<int> probeAssignStatic;
+    std::vector<int> probeAssignSkinned;
+
+    // La sonda que le toca a un punto del mundo: la más cercana de las que lo
+    // contienen. -1 si ninguna llega.
+    int  pickProbeFor(const glm::vec3& worldPos) const;
+    // Reescribe t4 y t5 de los bloques cuya sonda haya cambiado. Devuelve
+    // cuántos se tocaron.
+    int  refreshProbeAssignment();
+    // Deja t4/t5 de ese bloque apuntando a la sonda dada, o al IBL global.
+    void writeProbeSlots(UINT blockBase, int probeIndex);
     D3D12MA::Allocation*        ldrAllocation = nullptr;
 
     // Los parámetros de niebla y FXAA también salen de RendererState.
@@ -5063,6 +5078,21 @@ void D3D12Renderer::Impl::syncProbes()
             std::any_of(descs.begin(), descs.end(), [owner](const Desc& d) { return d.id == owner; });
         if (alive)
             continue;
+
+        // ANTES de soltar sus imágenes: devolver al entorno global TODO lo que
+        // la miraba. Si no, quedarían descriptores apuntando a memoria liberada
+        // —y un SRV colgante no da error al crearse: mata el device después, sin
+        // decir de qué—. Se reescriben todos porque al borrar del vector los
+        // índices de las demás se desplazan, así que la asignación entera deja
+        // de valer; el refresco de más abajo la recompone.
+        for (const StaticObject& object : objects)
+            writeProbeSlots(object.srvBase, -1);
+        for (const SkinnedObject& character : skinnedObjects)
+            for (const SkinnedSubMesh& sub : character.subMeshes)
+                writeProbeSlots(sub.srvBase, -1);
+        probeAssignStatic.assign(objects.size(), -1);
+        probeAssignSkinned.assign(skinnedObjects.size(), -1);
+
         releaseProbe(probes[i]);
         probes.erase(probes.begin() + static_cast<long>(i));
     }
@@ -5142,6 +5172,104 @@ void D3D12Renderer::Impl::syncProbes()
         bakeProbe(probe);
         break;
     }
+
+    // Y quién mira a quién. Detrás del horneado: una sonda recién horneada ya
+    // puede entrar, y una que se fue deja de estar en la lista.
+    refreshProbeAssignment();
+}
+
+int D3D12Renderer::Impl::pickProbeFor(const glm::vec3& worldPos) const
+{
+    // La más cercana de las que lo alcanzan. Sin sonda que llegue, -1: ese
+    // objeto se queda con el entorno global, que es lo que hacía siempre.
+    int   best         = -1;
+    float bestDistance = 0.0f;
+    for (size_t i = 0; i < probes.size(); ++i) {
+        // Una sonda sin hornear todavía tiene sus cubemaps en blanco: usarla
+        // apagaría el reflejo del objeto hasta que termine.
+        if (!probes[i].baked)
+            continue;
+        const float distance = glm::length(worldPos - probes[i].position);
+        if (distance > probes[i].radius)
+            continue;
+        if (best < 0 || distance < bestDistance) {
+            best         = static_cast<int>(i);
+            bestDistance = distance;
+        }
+    }
+    return best;
+}
+
+void D3D12Renderer::Impl::writeProbeSlots(UINT blockBase, int probeIndex)
+{
+    // t4 = irradiancia, t5 = prefiltrado. Mismos huecos que rellena
+    // fillSharedSlots; aquí solo se cambia a qué imagen apuntan.
+    if (probeIndex >= 0 && probeIndex < static_cast<int>(probes.size())) {
+        const GpuProbe& probe = probes[static_cast<size_t>(probeIndex)];
+        createCubeSrv(probe.irradianceAllocation->GetResource(), kHdrFormat, 1, blockBase + 4);
+        createCubeSrv(probe.prefilterAllocation->GetResource(), kHdrFormat, kIblPrefilterMips,
+                      blockBase + 5);
+        return;
+    }
+
+    if (irradianceAllocation)
+        createCubeSrv(irradianceAllocation->GetResource(), kHdrFormat, 1, blockBase + 4);
+    if (prefilterAllocation)
+        createCubeSrv(prefilterAllocation->GetResource(), kHdrFormat, prefilterMips, blockBase + 5);
+}
+
+int D3D12Renderer::Impl::refreshProbeAssignment()
+{
+    probeAssignStatic.resize(objects.size(), -1);
+    probeAssignSkinned.resize(skinnedObjects.size(), -1);
+
+    int changed = 0;
+
+    // Los descriptores que se van a reescribir pueden estar en uso por el frame
+    // en vuelo. Se espera UNA vez, y solo si de verdad hay algo que cambiar.
+    bool waited    = false;
+    auto ensureIdle = [&]() {
+        if (!waited) {
+            waitForGpu();
+            waited = true;
+        }
+    };
+
+    for (size_t i = 0; i < objects.size(); ++i) {
+        // El CENTRO del objeto en mundo, no su origen: una malla larga con el
+        // pivote fuera del radio se quedaría sin sonda por nada.
+        const StaticObject& object = objects[i];
+        const glm::vec3     center =
+            object.hasBounds ? glm::vec3(object.transform *
+                                     glm::vec4((object.aabbMin + object.aabbMax) * 0.5f, 1.0f))
+                             : glm::vec3(object.transform[3]);
+
+        const int wanted = pickProbeFor(center);
+        if (probeAssignStatic[i] == wanted)
+            continue;
+
+        ensureIdle();
+        probeAssignStatic[i] = wanted;
+        writeProbeSlots(object.srvBase, wanted);
+        ++changed;
+    }
+
+    for (size_t i = 0; i < skinnedObjects.size(); ++i) {
+        const SkinnedObject& character = skinnedObjects[i];
+        const int            wanted    = pickProbeFor(glm::vec3(character.transform[3]));
+        if (probeAssignSkinned[i] == wanted)
+            continue;
+
+        ensureIdle();
+        probeAssignSkinned[i] = wanted;
+        // Un personaje tiene un bloque por submalla y todas miran la misma
+        // sonda: el objeto es uno solo.
+        for (const SkinnedSubMesh& sub : character.subMeshes)
+            writeProbeSlots(sub.srvBase, wanted);
+        ++changed;
+    }
+
+    return changed;
 }
 
 void D3D12Renderer::Impl::createProbeDepth()

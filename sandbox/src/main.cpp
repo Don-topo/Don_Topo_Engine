@@ -288,6 +288,12 @@ int main()
             d3d12.setUiLayer(&editor);
             d3d12.setRenderToTexture(true);
 
+            // Al BACKEND también, no solo al editor: es de donde saca las
+            // sondas de reflexión de la escena. Sin esto no ve ninguna y no
+            // hornea nada, sin decir por qué.
+            d3d12.setScene(&d3dScene);
+            d3d12.setSceneRoot(&d3dScene.getRoot());
+
             editor.setScene(&d3dScene);
             editor.setPhysicsManager(&d3dPhysics);
             editor.setAudioManager(&d3dAudio);
