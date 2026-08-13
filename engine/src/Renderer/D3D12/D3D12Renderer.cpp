@@ -4,6 +4,8 @@
 
 #include "DonTopo/Core/Camera.h"
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/ReflectionProbeComponent.h"
+#include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/Window.h"
 #include "DonTopo/Renderer/Cube.h"
 #include "DonTopo/Renderer/Frustum.h"
@@ -162,6 +164,11 @@ constexpr UINT kIblIrradianceSize = 32;
 constexpr UINT kIblPrefilterSize  = 128;
 constexpr UINT kIblPrefilterMips  = 5;
 
+// Lado de cada cara al capturar una sonda. 128 es lo que usa el camino de
+// Vulkan: entra de sobra en el prefiltrado y seis caras a más resolución no se
+// notan en un reflejo, que ya va emborronado por la rugosidad.
+constexpr UINT kProbeFaceSize = 128;
+
 // Forward+. Mismos valores que Renderer.h: la rejilla, el tope por celda y el
 // de luces los dan por hecho los dos compute de culling y pbr.frag.
 constexpr uint32_t kFpMaxLights     = 256;
@@ -304,7 +311,23 @@ constexpr UINT kSrvViewport = kSrvTaaHistory + 2;
 constexpr UINT kSrvUiAtlas    = kSrvViewport + 1;
 constexpr UINT kMaxUiAtlases  = 16;
 
-constexpr UINT kSrvHeapSize = kSrvUiAtlas + kMaxUiAtlases;
+// ─── Sondas de reflexión ─────────────────────────────────────────────────────
+// Cada sonda tiene lo mismo que el IBL global —irradiancia y entorno
+// prefiltrado— más el cubemap donde se captura la escena antes de
+// convolucionarla. Ocho por escena: cada una ocupa ~1 MB entre las tres
+// imágenes, y pasado el tope los objetos se quedan con el IBL global, que es
+// degradarse, no fallar.
+constexpr UINT kMaxProbes = 8;
+
+// Huecos por sonda, en este orden: captura (SRV), irradiancia (SRV+UAV) y
+// prefiltrado (SRV + un UAV por mip, que cada nivel es una rugosidad distinta y
+// se dispara por separado).
+constexpr UINT kSrvPerProbe = 1                     // captura
+                            + 1 + 1                 // irradiancia: lectura y escritura
+                            + 1 + kIblPrefilterMips;// prefiltrado: lectura y un UAV por mip
+constexpr UINT kSrvProbes   = kSrvUiAtlas + kMaxUiAtlases;
+
+constexpr UINT kSrvHeapSize = kSrvProbes + kMaxProbes * kSrvPerProbe;
 
 // Push de ssao.comp y ssao_blur.comp: los dos comparten el bloque, así que el
 // rango de root constants tiene que ser el mismo para los dos pipelines.
@@ -938,6 +961,45 @@ struct D3D12Renderer::Impl {
     // Sube los píxeles que el atlas ya tiene cargados y le crea su SRV. false
     // si no hay hueco o la subida falla: el lote se dibujará con la 1x1 blanca.
     bool registerUiAtlas(UiTextureAtlas& atlas);
+
+    // ─── Sondas de reflexión ─────────────────────────────────────────────────
+    struct GpuProbe {
+        uint64_t  ownerId  = 0;   // GameObject::id de la sonda
+        glm::vec3 position{0.0f};
+        float     radius    = 0.0f;
+        float     intensity = 1.0f;
+
+        // Las tres imágenes: la captura de la escena y las dos que salen de
+        // convolucionarla, que son las que acaban en t4 y t5 de los objetos.
+        D3D12MA::Allocation* captureAllocation    = nullptr;
+        D3D12MA::Allocation* irradianceAllocation = nullptr;
+        D3D12MA::Allocation* prefilterAllocation  = nullptr;
+
+        // Primer hueco de su bloque en el heap. El resto sale de sumar, en el
+        // orden que fija kSrvPerProbe.
+        UINT srvBase = 0;
+
+        bool  baked  = false;  // false: todavía enseña el IBL global
+        float bakeMs = 0.0f;   // último horneado, medido con los timestamps
+    };
+    std::vector<GpuProbe> probes;
+
+    // Índices dentro del bloque de una sonda.
+    static constexpr UINT kProbeCaptureSrv    = 0;
+    static constexpr UINT kProbeIrradianceSrv = 1;
+    static constexpr UINT kProbeIrradianceUav = 2;
+    static constexpr UINT kProbePrefilterSrv  = 3;
+    static constexpr UINT kProbePrefilterUav  = 4;  // + mip
+
+    // Crea las tres imágenes de una sonda y sus vistas. false si no queda hueco
+    // en el heap o la GPU no da la memoria.
+    bool createProbeResources(GpuProbe& probe);
+    void releaseProbe(GpuProbe& probe);
+
+    // Reconcilia la lista con los ReflectionProbeComponent de la escena: crea
+    // las nuevas, suelta las que ya no están y refresca posición, radio e
+    // intensidad. Por frame, y sale enseguida cuando no hay ninguna.
+    void syncProbes();
     D3D12MA::Allocation*        ldrAllocation = nullptr;
 
     // Los parámetros de niebla y FXAA también salen de RendererState.
@@ -4834,6 +4896,192 @@ void D3D12Renderer::Impl::createUiPipeline()
                   "ID3D12Device::CreateGraphicsPipelineState(UI 2D)");
 }
 
+bool D3D12Renderer::Impl::createProbeResources(GpuProbe& probe)
+{
+    if (probe.srvBase == 0)
+        return false;
+
+    // Un cubemap: seis capas de una textura 2D. CUBE lo dice la VISTA, no el
+    // recurso —para el compute es un array y para pbr.frag un TextureCube—, y
+    // por eso la misma imagen sirve para las dos cosas.
+    auto createCube = [&](UINT size, UINT mips, D3D12_RESOURCE_STATES state,
+                          D3D12_RESOURCE_FLAGS flags) -> D3D12MA::Allocation* {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width            = size;
+        desc.Height           = size;
+        desc.DepthOrArraySize = 6;
+        desc.MipLevels        = static_cast<UINT16>(mips);
+        desc.Format           = kHdrFormat;
+        desc.SampleDesc.Count = 1;
+        desc.Flags            = flags;
+
+        D3D12MA::ALLOCATION_DESC allocDesc{};
+        allocDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+        D3D12MA::Allocation* allocation = nullptr;
+        if (FAILED(allocator->CreateResource(&allocDesc, &desc, state, nullptr, &allocation,
+                                             IID_NULL, nullptr)))
+            return nullptr;
+        return allocation;
+    };
+
+    // La captura es el destino de las seis pasadas de escena, así que nace como
+    // render target; las otras dos las escriben los compute.
+    probe.captureAllocation =
+        createCube(kProbeFaceSize, 1, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                   D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+    probe.irradianceAllocation =
+        createCube(kIblIrradianceSize, 1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                   D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    probe.prefilterAllocation =
+        createCube(kIblPrefilterSize, kIblPrefilterMips, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                   D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+    if (!probe.captureAllocation || !probe.irradianceAllocation || !probe.prefilterAllocation) {
+        releaseProbe(probe);
+        return false;
+    }
+
+    // Vistas de lectura: las tres como TextureCube, que es lo que muestrean el
+    // compute de convolución (la captura) y pbr.frag (las otras dos).
+    createCubeSrv(probe.captureAllocation->GetResource(), kHdrFormat, 1,
+                  probe.srvBase + kProbeCaptureSrv);
+    createCubeSrv(probe.irradianceAllocation->GetResource(), kHdrFormat, 1,
+                  probe.srvBase + kProbeIrradianceSrv);
+    createCubeSrv(probe.prefilterAllocation->GetResource(), kHdrFormat, kIblPrefilterMips,
+                  probe.srvBase + kProbePrefilterSrv);
+
+    // Y las de escritura, como array 2D: un UAV para la irradiancia y uno por
+    // mip del prefiltrado.
+    auto createArrayUav = [&](ID3D12Resource* resource, UINT mip, UINT index) {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format                   = kHdrFormat;
+        uavDesc.ViewDimension            = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+        uavDesc.Texture2DArray.MipSlice  = mip;
+        uavDesc.Texture2DArray.ArraySize = 6;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(index) * srvSize;
+        device->CreateUnorderedAccessView(resource, nullptr, &uavDesc, handle);
+    };
+
+    createArrayUav(probe.irradianceAllocation->GetResource(), 0,
+                   probe.srvBase + kProbeIrradianceUav);
+    for (UINT mip = 0; mip < kIblPrefilterMips; ++mip)
+        createArrayUav(probe.prefilterAllocation->GetResource(), mip,
+                       probe.srvBase + kProbePrefilterUav + mip);
+
+    probe.baked = false;
+    return true;
+}
+
+void D3D12Renderer::Impl::syncProbes()
+{
+    // Camino rápido: sin escena o sin sondas por ningún lado no se toca nada.
+    // Es el caso de todas las escenas que no las usan.
+    if (!scene && probes.empty())
+        return;
+
+    struct Desc {
+        uint64_t  id;
+        glm::vec3 position;
+        float     radius;
+        float     intensity;
+    };
+    std::vector<Desc> descs;
+    if (scene) {
+        scene->traverse([&](GameObject* go) {
+            if (!go || !go->hasReflectionProbe())
+                return;
+            const auto& probe = go->getReflectionProbe();
+            descs.push_back({go->id, glm::vec3(go->worldTransform[3]), probe->getRadius(),
+                             probe->getIntensity()});
+        });
+    }
+    if (descs.empty() && probes.empty())
+        return;
+
+    // Bajas: sondas cuyo GameObject ya no está. Se sueltan sus imágenes y su
+    // hueco del heap queda libre para la siguiente.
+    for (size_t i = probes.size(); i-- > 0;) {
+        const uint64_t owner = probes[i].ownerId;
+        const bool     alive =
+            std::any_of(descs.begin(), descs.end(), [owner](const Desc& d) { return d.id == owner; });
+        if (alive)
+            continue;
+        releaseProbe(probes[i]);
+        probes.erase(probes.begin() + static_cast<long>(i));
+    }
+
+    // Altas y actualizaciones.
+    for (const Desc& desc : descs) {
+        auto it = std::find_if(probes.begin(), probes.end(),
+                               [&desc](const GpuProbe& p) { return p.ownerId == desc.id; });
+        if (it == probes.end()) {
+            if (probes.size() >= kMaxProbes)
+                continue;  // pasado el tope, esos objetos se quedan con el IBL global
+
+            // El primer bloque LIBRE, no el que toque por tamaño de la lista:
+            // al borrar una sonda del medio el vector se compacta pero las
+            // demás conservan su bloque, así que contar sondas daría un hueco
+            // ya ocupado y las dos escribirían sobre los mismos descriptores.
+            UINT slot = kMaxProbes;
+            for (UINT candidate = 0; candidate < kMaxProbes; ++candidate) {
+                const UINT base = kSrvProbes + candidate * kSrvPerProbe;
+                const bool taken =
+                    std::any_of(probes.begin(), probes.end(),
+                                [base](const GpuProbe& p) { return p.srvBase == base; });
+                if (!taken) {
+                    slot = candidate;
+                    break;
+                }
+            }
+            if (slot >= kMaxProbes)
+                continue;
+
+            GpuProbe probe;
+            probe.ownerId = desc.id;
+            probe.srvBase = kSrvProbes + slot * kSrvPerProbe;
+            if (!createProbeResources(probe))
+                continue;
+
+            probe.position  = desc.position;
+            probe.radius    = desc.radius;
+            probe.intensity = desc.intensity;
+            probes.push_back(probe);
+            continue;
+        }
+
+        // Mover la sonda o cambiar su radio invalida lo horneado: lo que
+        // capturó era otra vista.
+        if (it->position != desc.position || it->radius != desc.radius ||
+            it->intensity != desc.intensity) {
+            it->position  = desc.position;
+            it->radius    = desc.radius;
+            it->intensity = desc.intensity;
+            it->baked     = false;
+        }
+    }
+}
+
+void D3D12Renderer::Impl::releaseProbe(GpuProbe& probe)
+{
+    // Sus imágenes pueden estar en el frame en vuelo: quitar una sonda es un
+    // evento raro (borrar el GameObject), así que esperar sale más barato que
+    // llevar una lista de borrado diferido.
+    waitForGpu();
+
+    for (D3D12MA::Allocation** allocation :
+         {&probe.captureAllocation, &probe.irradianceAllocation, &probe.prefilterAllocation}) {
+        if (*allocation) {
+            (*allocation)->Release();
+            *allocation = nullptr;
+        }
+    }
+    probe.baked = false;
+}
+
 bool D3D12Renderer::Impl::registerUiAtlas(UiTextureAtlas& atlas)
 {
     if (atlas.sourcePixels().empty() || atlas.width() == 0 || atlas.height() == 0)
@@ -6200,6 +6448,10 @@ void D3D12Renderer::drawFrame()
     // sombras necesita lightSpaceMatrix, el principal todo lo demás.
     d.updateSceneUbo();
 
+    // Sondas de la escena: altas, bajas y cambios de sitio. Antes de grabar
+    // nada, para que lo que se dibuje este frame ya use la lista buena.
+    d.syncProbes();
+
     // Y las matrices de la escena, que el pase de sombras lee del SSBO. Se
     // reescriben enteras: mover un objeto no tiene por qué avisar al renderer.
     if (!d.objects.empty()) {
@@ -7127,7 +7379,7 @@ float D3D12Renderer::ssaaFactor() const
 
 void  D3D12Renderer::requestProbeBake(uint64_t) {}
 void  D3D12Renderer::requestProbeBakeAll() {}
-int   D3D12Renderer::probeCount() const { return 0; }
+int   D3D12Renderer::probeCount() const { return static_cast<int>(m_impl->probes.size()); }
 float D3D12Renderer::lastProbeBakeMs() const { return 0.0f; }
 float D3D12Renderer::probeBakeMs(uint64_t) const { return 0.0f; }
 
@@ -7381,6 +7633,10 @@ void D3D12Renderer::shutdown()
     d.iblRootSignature.Reset();
 
     d.releaseHdrTargets();
+
+    for (Impl::GpuProbe& probe : d.probes)
+        d.releaseProbe(probe);
+    d.probes.clear();
 
     // Buffers de la UI 2D: van mapeados, así que primero Unmap.
     for (UINT i = 0; i < kFrameCount; ++i) {
