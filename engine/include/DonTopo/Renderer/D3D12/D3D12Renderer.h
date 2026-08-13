@@ -18,6 +18,8 @@ class Window;
 struct Mesh;
 struct SkinnedMesh;
 struct Light;
+class UiTextureAtlas;
+class UiFont;
 
 namespace D3D12 {
 
@@ -210,6 +212,12 @@ public:
 
     void      setUiLayer(UiLayer* ui) override;
     UiCanvas& uiCanvas() override;
+
+    // Atlas y fuentes de la UI 2D. Mismas firmas que en el camino de Vulkan: el
+    // sync de widgets las llama por plantilla, sin saber qué backend hay debajo.
+    // El dueño es el backend; quien las pide se queda solo con el puntero.
+    UiTextureAtlas* loadUiAtlas(const std::string& path);
+    UiFont*         loadUiFont(const std::string& path, float bakePx = 48.0f);
 
     // Cambiar de modo o de muestras mueve targets y pipelines, y eso lo aplica
     // el frame siguiente con la GPU en reposo.

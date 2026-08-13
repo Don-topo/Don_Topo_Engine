@@ -374,6 +374,14 @@ int main()
             std::vector<DonTopo::Light> d3dLights;
             std::vector<float>          d3dLightRadii;
 
+            // Sync de la UI 2D: la caché vive fuera del bucle porque es lo que
+            // permite actualizar los widgets en sitio —sin recrear el árbol, que
+            // reiniciaría el fundido— y cachear atlas y fuentes por ruta.
+            DonTopo::UiWidgetSyncCache d3dWidgetCache;
+            std::vector<std::pair<uint64_t, const DonTopo::ButtonComponent*>>      d3dButtons;
+            std::vector<std::pair<uint64_t, const DonTopo::TextComponent*>>        d3dTexts;
+            std::vector<std::pair<uint64_t, const DonTopo::ProgressBarComponent*>> d3dBars;
+
             while (!window.shouldClose())
             {
                 window.pollEvents();
@@ -504,6 +512,51 @@ int main()
                     // editor abriría a oscuras.
                     d3d12.setLights(d3dDefaultLights);
                     d3d12.setLightRadii({});
+                }
+
+                // UI 2D del juego: la resolución sale del COMPONENTE Canvas de
+                // la escena, y los widgets se vuelcan al árbol vivo por frame,
+                // por lo mismo que los transform —tocar un campo en Properties
+                // tiene que verse en el acto—. Sin Canvas la lista va vacía y el
+                // sync limpia el árbol.
+                if (DonTopo::GameObject* canvasGo = d3dScene.findCanvas())
+                    canvasGo->getCanvas()->applyTo(d3d12.uiCanvas());
+
+                d3dButtons.clear();
+                d3dTexts.clear();
+                d3dBars.clear();
+                if (d3dScene.findCanvas())
+                    d3dScene.traverse([&](DonTopo::GameObject* n) {
+                        if (n->hasButton()) d3dButtons.emplace_back(n->id, n->getButton().get());
+                        if (n->hasText())   d3dTexts.emplace_back(n->id, n->getText().get());
+                        if (n->hasProgressBar())
+                            d3dBars.emplace_back(n->id, n->getProgressBar().get());
+                    });
+
+                DonTopo::syncUiWidgets(d3dButtons, d3dTexts, d3dBars, d3d12.uiCanvas(),
+                                       d3dWidgetCache, d3d12);
+
+                // Input de la UI: sin esto el árbol no resuelve estados y los
+                // colores del botón, el fundido y el Click no harían nada. El
+                // ratón solo entra en Play; el tiempo entra siempre, para que un
+                // color recién editado se vea sin darle a Play.
+                {
+                    DonTopo::UiInputState uiInput;
+                    if (editor.isPlaying() && editor.isViewportImageHovered())
+                    {
+                        const ImVec2    m   = ImGui::GetIO().MousePos;
+                        const glm::vec2 org = editor.viewportImagePos();
+                        uiInput.mousePos     = glm::vec2(m.x - org.x, m.y - org.y);
+                        uiInput.mouseDown[0] = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+                        uiInput.mouseDown[1] = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+                        uiInput.mouseDown[2] = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+                    }
+                    else
+                    {
+                        uiInput.mousePos = glm::vec2(-1.0f, -1.0f);
+                    }
+                    uiInput.timeSeconds = (float)glfwGetTime();
+                    d3d12.uiCanvas().updateInput(uiInput);
                 }
 
                 // La interfaz después: lo que se toque aquí lo recoge el

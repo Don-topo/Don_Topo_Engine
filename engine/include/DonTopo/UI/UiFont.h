@@ -112,6 +112,12 @@ namespace DonTopo
                           float bakePx = 48.0f,
                           uint32_t firstCodepoint = 32, uint32_t lastCodepoint = 126);
 
+        // El horneado a secas: FreeType, MSDF, métricas y kerning, sin tocar la
+        // GPU. Deja los píxeles en el atlas (UiTextureAtlas::sourcePixels) para
+        // que los suba quien sepa hacerlo. loadFromFile es esto y la subida.
+        bool bakeFromFile(const std::string& path, float bakePx = 48.0f,
+                          uint32_t firstCodepoint = 32, uint32_t lastCodepoint = 126);
+
         void destroy(GpuDevice& gpu) { m_atlas.destroy(gpu); }
 
     private:

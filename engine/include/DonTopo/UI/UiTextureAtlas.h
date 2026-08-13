@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace DonTopo
 {
@@ -72,6 +73,22 @@ namespace DonTopo
 
         void destroy(GpuDevice& gpu);
 
+        // --- Datos de origen, sin API gráfica ----------------------------------
+        // Los píxeles con los que se cargó, para que CUALQUIER backend pueda
+        // subirlos: el de Vulkan lo hace en loadFromFile/loadFromPixels y el de
+        // DirectX 12 los lee de aquí. Se guardan siempre porque el atlas de una
+        // fuente se hornea en caliente y no existe como fichero al que volver.
+        const std::vector<uint8_t>& sourcePixels() const { return m_pixels; }
+        // true = el contenido es COLOR y va en una vista sRGB. false = son
+        // distancias (MSDF) y cualquier conversión las deforma sin avisar.
+        bool sourceIsSrgb() const { return m_srgb; }
+
+        // Carga los píxeles del fichero y el tamaño, sin tocar la GPU. Es lo que
+        // usa un backend que sube por su cuenta.
+        bool loadPixelsFromFile(const std::string& path);
+        // Los píxeles ya horneados (una fuente). Se queda con una copia.
+        void setSourcePixels(const uint8_t* rgba, uint32_t width, uint32_t height, bool srgb);
+
         VkImageView     view()          const { return m_view; }
         VkDescriptorSet descriptorSet() const { return m_descriptorSet; }
         void setDescriptorSet(VkDescriptorSet set) { m_descriptorSet = set; }
@@ -81,6 +98,10 @@ namespace DonTopo
         uint32_t m_width  = 0;
         uint32_t m_height = 0;
         std::unordered_map<std::string, UiSpriteRect> m_sprites;
+
+        // RGBA8, tal cual se cargó o se horneó. Ver sourcePixels().
+        std::vector<uint8_t> m_pixels;
+        bool                 m_srgb = true;
 
         VkImage         m_image         = VK_NULL_HANDLE;
         VkDeviceMemory  m_memory        = VK_NULL_HANDLE;

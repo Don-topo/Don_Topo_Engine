@@ -298,7 +298,13 @@ constexpr UINT kSrvTaaHistory = kSrvSsr + 1;  // + índice (0 o 1)
 // backbuffer tiene que acabar dentro de un panel de la interfaz.
 constexpr UINT kSrvViewport = kSrvTaaHistory + 2;
 
-constexpr UINT kSrvHeapSize = kSrvViewport + 1;
+// Atlas de la UI 2D: uno por sprite-sheet y uno por fuente. El tope es de
+// verdad —pasado él la UI se dibuja sin su textura, no se sale del heap— y con
+// 16 sobra para una interfaz de juego con varias fuentes.
+constexpr UINT kSrvUiAtlas    = kSrvViewport + 1;
+constexpr UINT kMaxUiAtlases  = 16;
+
+constexpr UINT kSrvHeapSize = kSrvUiAtlas + kMaxUiAtlases;
 
 // Push de ssao.comp y ssao_blur.comp: los dos comparten el bloque, así que el
 // rango de root constants tiene que ser el mismo para los dos pipelines.
@@ -914,6 +920,19 @@ struct D3D12Renderer::Impl {
     void createUiPipeline();
     void ensureUiBuffers(UINT vertexCount, UINT indexCount);
     void recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv);
+
+    // Atlas y fuentes de la UI. El backend es su dueño: los widgets solo
+    // guardan el puntero, que es también la clave con la que el lote dice qué
+    // textura quiere.
+    std::vector<std::unique_ptr<UiTextureAtlas>>          uiAtlases;
+    std::vector<std::unique_ptr<UiFont>>                  uiFonts;
+    std::unordered_map<const UiTextureAtlas*, UINT>       uiAtlasSrv;
+    std::vector<D3D12MA::Allocation*>                     uiAtlasTextures;
+    UINT                                                  uiNextAtlasSlot = 0;
+
+    // Sube los píxeles que el atlas ya tiene cargados y le crea su SRV. false
+    // si no hay hueco o la subida falla: el lote se dibujará con la 1x1 blanca.
+    bool registerUiAtlas(UiTextureAtlas& atlas);
     D3D12MA::Allocation*        ldrAllocation = nullptr;
 
     // Los parámetros de niebla y FXAA también salen de RendererState.
@@ -4806,6 +4825,32 @@ void D3D12Renderer::Impl::createUiPipeline()
                   "ID3D12Device::CreateGraphicsPipelineState(UI 2D)");
 }
 
+bool D3D12Renderer::Impl::registerUiAtlas(UiTextureAtlas& atlas)
+{
+    if (atlas.sourcePixels().empty() || atlas.width() == 0 || atlas.height() == 0)
+        return false;
+    if (uiNextAtlasSlot >= kMaxUiAtlases)
+        return false;
+
+    // El formato lo decide el CONTENIDO: un atlas de sprites es color y va en
+    // sRGB; el de una fuente son distancias y en sRGB saldría deformado sin que
+    // la validación diga una palabra.
+    const DXGI_FORMAT format = atlas.sourceIsSrgb() ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+                                                    : DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    const UINT slot = kSrvUiAtlas + uiNextAtlasSlot;
+    D3D12MA::Allocation* texture =
+        uploadTexture(atlas.sourcePixels().data(), atlas.width(), atlas.height(), 1, format, 4,
+                      slot);
+    if (!texture)
+        return false;
+
+    uiAtlasTextures.push_back(texture);
+    uiAtlasSrv[&atlas] = slot;
+    ++uiNextAtlasSlot;
+    return true;
+}
+
 void D3D12Renderer::Impl::ensureUiBuffers(UINT vertexCount, UINT indexCount)
 {
     auto grow = [&](D3D12MA::Allocation*& allocation, void*& mapped, UINT& capacity, UINT needed,
@@ -4927,11 +4972,6 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
         if (batch.indexCount == 0)
             continue;
 
-        // Los lotes con atlas todavía no se dibujan: falta subir sus texturas
-        // por este backend. Un panel de color plano no tiene atlas y sale ya.
-        if (batch.atlas != nullptr)
-            continue;
-
         // El recorte del nodo, en píxeles de pantalla. Un lote sin scissor
         // propio se recorta al viewport entero.
         D3D12_RECT scissor{0, 0, static_cast<LONG>(outWidth), static_cast<LONG>(outHeight)};
@@ -4943,9 +4983,18 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
         }
         commandList->RSSetScissorRects(1, &scissor);
 
-        // La 1x1 blanca: multiplicar por (1,1,1,1) deja el color del vértice tal
-        // cual, así que un panel plano no necesita ni pipeline aparte.
-        commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(kSrvBaseColor));
+        // Sin atlas, la 1x1 blanca: multiplicar por (1,1,1,1) deja el color del
+        // vértice tal cual, así que un panel plano no necesita ni pipeline
+        // aparte. Con atlas, el suyo; y si no llegó a subirse, otra vez la
+        // blanca —se verá el color plano en vez del sprite, pero no un
+        // descriptor de otro.
+        UINT srv = kSrvBaseColor;
+        if (batch.atlas) {
+            const auto it = uiAtlasSrv.find(batch.atlas);
+            if (it != uiAtlasSrv.end())
+                srv = it->second;
+        }
+        commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(srv));
         commandList->DrawIndexedInstanced(batch.indexCount, 1, batch.firstIndex, 0, 0);
     }
 }
@@ -6937,6 +6986,40 @@ void D3D12Renderer::setUiLayer(UiLayer* ui)
 UiCanvas& D3D12Renderer::uiCanvas()
 {
     return m_impl->uiCanvas;
+}
+
+UiTextureAtlas* D3D12Renderer::loadUiAtlas(const std::string& path)
+{
+    Impl& d = *m_impl;
+    if (!d.initialized)
+        return nullptr;
+
+    auto atlas = std::make_unique<UiTextureAtlas>();
+    if (!atlas->loadPixelsFromFile(path))
+        return nullptr;
+    if (!d.registerUiAtlas(*atlas))
+        return nullptr;
+
+    d.uiAtlases.push_back(std::move(atlas));
+    return d.uiAtlases.back().get();
+}
+
+UiFont* D3D12Renderer::loadUiFont(const std::string& path, float bakePx)
+{
+    Impl& d = *m_impl;
+    if (!d.initialized)
+        return nullptr;
+
+    auto font = std::make_unique<UiFont>();
+    // El horneado es CPU: FreeType y MSDF no saben de backends. Lo único propio
+    // es subir el atlas que sale de ahí.
+    if (!font->bakeFromFile(path, bakePx))
+        return nullptr;
+    if (!d.registerUiAtlas(font->atlas()))
+        return nullptr;
+
+    d.uiFonts.push_back(std::move(font));
+    return d.uiFonts.back().get();
 }
 
 void D3D12Renderer::setAaMode(AaMode mode)

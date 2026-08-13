@@ -34,6 +34,33 @@ namespace DonTopo
         return uv;
     }
 
+    bool UiTextureAtlas::loadPixelsFromFile(const std::string& path)
+    {
+        int      w = 0, h = 0, channels = 0;
+        stbi_uc* data = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+        if (!data || w <= 0 || h <= 0)
+        {
+            std::printf("[UI] atlas ilegible: %s\n", path.c_str());
+            if (data) stbi_image_free(data);
+            return false;
+        }
+
+        // Un atlas de sprites es COLOR: va en sRGB. El de una fuente no pasa por
+        // aquí, lo hornea UiFont y lo declara UNORM.
+        setSourcePixels(data, (uint32_t)w, (uint32_t)h, /*srgb=*/true);
+        stbi_image_free(data);
+        return true;
+    }
+
+    void UiTextureAtlas::setSourcePixels(const uint8_t* rgba, uint32_t width, uint32_t height,
+                                         bool srgb)
+    {
+        if (!rgba || width == 0 || height == 0) return;
+        m_pixels.assign(rgba, rgba + (size_t)width * height * 4);
+        m_srgb = srgb;
+        setSize(width, height);
+    }
+
     bool UiTextureAtlas::loadFromFile(GpuDevice& gpu, GpuResources& res, const std::string& path)
     {
         // El tamaño se lee ANTES de subir nada: sin él las UVs saldrían de un

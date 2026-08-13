@@ -221,8 +221,8 @@ namespace DonTopo
         return out;
     }
 
-    bool UiFont::loadFromFile(GpuDevice& gpu, GpuResources& res, const std::string& path,
-                              float bakePx, uint32_t firstCodepoint, uint32_t lastCodepoint)
+    bool UiFont::bakeFromFile(const std::string& path, float bakePx, uint32_t firstCodepoint,
+                              uint32_t lastCodepoint)
     {
         if (bakePx <= 0.0f || lastCodepoint < firstCodepoint) return false;
 
@@ -415,8 +415,18 @@ namespace DonTopo
         FT_Done_FreeType(library);
 
         // UNORM, NUNCA SRGB: el MSDF son distancias y el sampler tiene que
-        // devolverlas tal cual.
-        return m_atlas.loadFromPixels(gpu, res, pixels.data(), atlasSide, atlasSide,
-                                      VK_FORMAT_R8G8B8A8_UNORM);
+        // devolverlas tal cual. Aqui solo se guardan; sube quien pueda.
+        m_atlas.setSourcePixels(pixels.data(), atlasSide, atlasSide, /*srgb=*/false);
+        return true;
+    }
+
+    bool UiFont::loadFromFile(GpuDevice& gpu, GpuResources& res, const std::string& path,
+                              float bakePx, uint32_t firstCodepoint, uint32_t lastCodepoint)
+    {
+        if (!bakeFromFile(path, bakePx, firstCodepoint, lastCodepoint))
+            return false;
+
+        return m_atlas.loadFromPixels(gpu, res, m_atlas.sourcePixels().data(), m_atlas.width(),
+                                      m_atlas.height(), VK_FORMAT_R8G8B8A8_UNORM);
     }
 }
