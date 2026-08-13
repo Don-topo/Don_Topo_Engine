@@ -895,6 +895,25 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12PipelineState> fxaaPipeline;
     ComPtr<ID3D12RootSignature> ssaaRootSignature;
     ComPtr<ID3D12PipelineState> ssaaPipeline;
+
+    // ─── UI 2D del juego ─────────────────────────────────────────────────────
+    // Los quads los arma UiCanvas en CPU (buildDrawData, que no sabe de ninguna
+    // API) y aquí solo se suben y se dibujan. Un par de buffers por frame en
+    // vuelo, mapeados y con crecimiento por duplicación: el contenido cambia
+    // entero cada frame y no compensa un staging.
+    ComPtr<ID3D12RootSignature> uiRootSignature;
+    ComPtr<ID3D12PipelineState> uiPipeline;
+    UiDrawData                  uiDrawData;
+    std::array<D3D12MA::Allocation*, kFrameCount> uiVertexAllocations{};
+    std::array<void*, kFrameCount>                uiVertexMapped{};
+    std::array<UINT, kFrameCount>                 uiVertexCapacity{};
+    std::array<D3D12MA::Allocation*, kFrameCount> uiIndexAllocations{};
+    std::array<void*, kFrameCount>                uiIndexMapped{};
+    std::array<UINT, kFrameCount>                 uiIndexCapacity{};
+
+    void createUiPipeline();
+    void ensureUiBuffers(UINT vertexCount, UINT indexCount);
+    void recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv);
     D3D12MA::Allocation*        ldrAllocation = nullptr;
 
     // Los parámetros de niebla y FXAA también salen de RendererState.
@@ -4680,6 +4699,257 @@ void D3D12Renderer::Impl::createFogAndFxaaPipelines()
                   "ID3D12Device::CreateGraphicsPipelineState(SSAA)");
 }
 
+void D3D12Renderer::Impl::createUiPipeline()
+{
+    // Root signature: la ortográfica como root constants (b0) y el atlas en una
+    // tabla (t0). Todo lo demás —modo, grosor del contorno, colores— viaja por
+    // vértice, que es lo que permite que el texto caiga en el mismo lote que el
+    // panel que tiene detrás.
+    D3D12_DESCRIPTOR_RANGE atlasRange{};
+    atlasRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    atlasRange.NumDescriptors     = 1;
+    atlasRange.BaseShaderRegister = 0;  // t0
+
+    D3D12_ROOT_PARAMETER params[2]{};
+    params[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[0].Constants.ShaderRegister = 0;  // b0
+    params[0].Constants.Num32BitValues = 16;
+    params[0].ShaderVisibility         = D3D12_SHADER_VISIBILITY_VERTEX;
+
+    params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable.NumDescriptorRanges = 1;
+    params[1].DescriptorTable.pDescriptorRanges   = &atlasRange;
+    params[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.MaxLOD           = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister   = 0;  // s0
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_ROOT_SIGNATURE_DESC rootDesc{};
+    rootDesc.NumParameters     = _countof(params);
+    rootDesc.pParameters       = params;
+    rootDesc.NumStaticSamplers = 1;
+    rootDesc.pStaticSamplers   = &sampler;
+    rootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> serialized;
+    ComPtr<ID3DBlob> errorBlob;
+    if (FAILED(D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serialized,
+                                           &errorBlob)))
+        return;
+    if (FAILED(device->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                           serialized->GetBufferSize(),
+                                           IID_PPV_ARGS(&uiRootSignature))))
+        return;
+
+    const std::vector<char> vs = readBinaryFile("shaders/ui.vert.dxil");
+    const std::vector<char> ps = readBinaryFile("shaders/ui.frag.dxil");
+    if (vs.empty() || ps.empty())
+        return;
+
+    // El mismo UiVertex que arma el canvas: posición en píxeles, uv, color y los
+    // dos vec4 que llevan el modo y el contorno.
+    // Todas las semánticas son TEXCOORDn, incluida la posición: el HLSL sale de
+    // traducir el SPIR-V y spirv-cross nombra las entradas por su location, no
+    // por lo que signifiquen. Poner POSITION aquí crea el pipeline y deja el
+    // atributo sin enlazar.
+    const D3D12_INPUT_ELEMENT_DESC layout[] = {
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(UiVertex, pos),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(UiVertex, uv),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 2, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(UiVertex, color),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 3, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(UiVertex, params),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 4, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(UiVertex, effect),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    };
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature        = uiRootSignature.Get();
+    psoDesc.VS                    = {vs.data(), vs.size()};
+    psoDesc.PS                    = {ps.data(), ps.size()};
+    psoDesc.InputLayout           = {layout, _countof(layout)};
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets      = 1;
+    psoDesc.RTVFormats[0]         = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.DSVFormat             = DXGI_FORMAT_UNKNOWN;
+    psoDesc.SampleDesc.Count      = 1;
+    psoDesc.SampleMask            = UINT_MAX;
+
+    psoDesc.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.DepthClipEnable = TRUE;
+
+    // Alfa recto, no premultiplicado: el shader devuelve el color sin
+    // multiplicar por el alfa, igual que en Vulkan.
+    D3D12_RENDER_TARGET_BLEND_DESC& blend = psoDesc.BlendState.RenderTarget[0];
+    blend.BlendEnable           = TRUE;
+    blend.SrcBlend              = D3D12_BLEND_SRC_ALPHA;
+    blend.DestBlend             = D3D12_BLEND_INV_SRC_ALPHA;
+    blend.BlendOp               = D3D12_BLEND_OP_ADD;
+    blend.SrcBlendAlpha         = D3D12_BLEND_ONE;
+    blend.DestBlendAlpha        = D3D12_BLEND_INV_SRC_ALPHA;
+    blend.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
+    blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+    psoDesc.DepthStencilState.DepthEnable   = FALSE;
+    psoDesc.DepthStencilState.StencilEnable = FALSE;
+
+    throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&uiPipeline)),
+                  "ID3D12Device::CreateGraphicsPipelineState(UI 2D)");
+}
+
+void D3D12Renderer::Impl::ensureUiBuffers(UINT vertexCount, UINT indexCount)
+{
+    auto grow = [&](D3D12MA::Allocation*& allocation, void*& mapped, UINT& capacity, UINT needed,
+                    UINT stride) {
+        if (needed <= capacity && allocation)
+            return;
+
+        // Duplicando: reasignar cada frame por un vértice de más sería un
+        // create/destroy por frame.
+        UINT next = capacity ? capacity : 256;
+        while (next < needed)
+            next *= 2;
+
+        if (allocation) {
+            // Puede estar en uso por un frame anterior: crecer es raro (solo
+            // cuando la UI se complica), así que esperar sale más barato que
+            // llevar una lista de borrado diferido.
+            waitForGpu();
+            allocation->GetResource()->Unmap(0, nullptr);
+            allocation->Release();
+            allocation = nullptr;
+            mapped     = nullptr;
+        }
+
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width            = static_cast<UINT64>(next) * stride;
+        desc.Height           = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        D3D12MA::ALLOCATION_DESC allocDesc{};
+        allocDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+        if (FAILED(allocator->CreateResource(&allocDesc, &desc,
+                                             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                             &allocation, IID_NULL, nullptr)))
+            return;
+
+        if (FAILED(allocation->GetResource()->Map(0, nullptr, &mapped))) {
+            // Recién creado y sin usar: se puede soltar sin esperar a nadie.
+            allocation->Release();
+            allocation = nullptr;
+            return;
+        }
+        capacity = next;
+    };
+
+    grow(uiVertexAllocations[frameIndex], uiVertexMapped[frameIndex], uiVertexCapacity[frameIndex],
+         vertexCount, sizeof(UiVertex));
+    grow(uiIndexAllocations[frameIndex], uiIndexMapped[frameIndex], uiIndexCapacity[frameIndex],
+         indexCount, sizeof(uint16_t));
+}
+
+void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
+{
+    if (!uiPipeline)
+        return;
+
+    // Los quads, en CPU. Al tamaño de SALIDA: la UI se mide en píxeles de
+    // pantalla, no en los de render, que con SSAA son otros.
+    uiCanvas.buildDrawData(outWidth, outHeight, uiDrawData);
+
+    if (uiDrawData.empty() || uiDrawData.vertices.empty() || uiDrawData.indices.empty())
+        return;
+
+    ensureUiBuffers(static_cast<UINT>(uiDrawData.vertices.size()),
+                    static_cast<UINT>(uiDrawData.indices.size()));
+    if (!uiVertexMapped[frameIndex] || !uiIndexMapped[frameIndex])
+        return;
+
+    std::memcpy(uiVertexMapped[frameIndex], uiDrawData.vertices.data(),
+                uiDrawData.vertices.size() * sizeof(UiVertex));
+    std::memcpy(uiIndexMapped[frameIndex], uiDrawData.indices.data(),
+                uiDrawData.indices.size() * sizeof(uint16_t));
+
+    D3D12_VERTEX_BUFFER_VIEW vbv{};
+    vbv.BufferLocation = uiVertexAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress();
+    vbv.SizeInBytes    = static_cast<UINT>(uiDrawData.vertices.size() * sizeof(UiVertex));
+    vbv.StrideInBytes  = sizeof(UiVertex);
+
+    D3D12_INDEX_BUFFER_VIEW ibv{};
+    ibv.BufferLocation = uiIndexAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress();
+    ibv.SizeInBytes    = static_cast<UINT>(uiDrawData.indices.size() * sizeof(uint16_t));
+    ibv.Format         = DXGI_FORMAT_R16_UINT;
+
+    // Ortográfica en píxeles con el origen ARRIBA a la izquierda, que es como
+    // vienen las posiciones. Sin voltear nada más: el viewport de salida ya va
+    // con altura negativa en el resto de pases, así que aquí se pone recto.
+    const glm::mat4 proj = glm::orthoRH_ZO(0.0f, static_cast<float>(outWidth),
+                                           static_cast<float>(outHeight), 0.0f, -1.0f, 1.0f);
+
+    D3D12_VIEWPORT viewport{};
+    viewport.Width    = static_cast<float>(outWidth);
+    viewport.Height   = static_cast<float>(outHeight);
+    viewport.MaxDepth = 1.0f;
+
+    const D3D12_GPU_DESCRIPTOR_HANDLE heapStart = srvHeap->GetGPUDescriptorHandleForHeapStart();
+    auto gpuHandle = [&](UINT index) {
+        D3D12_GPU_DESCRIPTOR_HANDLE handle = heapStart;
+        handle.ptr += static_cast<UINT64>(index) * srvSize;
+        return handle;
+    };
+
+    ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->OMSetRenderTargets(1, &targetRtv, FALSE, nullptr);
+    commandList->RSSetViewports(1, &viewport);
+    commandList->SetPipelineState(uiPipeline.Get());
+    commandList->SetGraphicsRootSignature(uiRootSignature.Get());
+    commandList->SetGraphicsRoot32BitConstants(0, 16, &proj[0][0], 0);
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList->IASetVertexBuffers(0, 1, &vbv);
+    commandList->IASetIndexBuffer(&ibv);
+
+    for (const UiBatch& batch : uiDrawData.batches) {
+        if (batch.indexCount == 0)
+            continue;
+
+        // Los lotes con atlas todavía no se dibujan: falta subir sus texturas
+        // por este backend. Un panel de color plano no tiene atlas y sale ya.
+        if (batch.atlas != nullptr)
+            continue;
+
+        // El recorte del nodo, en píxeles de pantalla. Un lote sin scissor
+        // propio se recorta al viewport entero.
+        D3D12_RECT scissor{0, 0, static_cast<LONG>(outWidth), static_cast<LONG>(outHeight)};
+        if (!batch.scissor.empty()) {
+            scissor.left   = batch.scissor.x;
+            scissor.top    = batch.scissor.y;
+            scissor.right  = batch.scissor.x + static_cast<LONG>(batch.scissor.width);
+            scissor.bottom = batch.scissor.y + static_cast<LONG>(batch.scissor.height);
+        }
+        commandList->RSSetScissorRects(1, &scissor);
+
+        // La 1x1 blanca: multiplicar por (1,1,1,1) deja el color del vértice tal
+        // cual, así que un panel plano no necesita ni pipeline aparte.
+        commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(kSrvBaseColor));
+        commandList->DrawIndexedInstanced(batch.indexCount, 1, batch.firstIndex, 0, 0);
+    }
+}
+
 void D3D12Renderer::Impl::recordFog()
 {
     const D3D12_GPU_DESCRIPTOR_HANDLE heapStart = srvHeap->GetGPUDescriptorHandleForHeapStart();
@@ -4919,6 +5189,11 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
         taaHistoryValid = false;
     }
     markTimestamp(TsAa + 1);
+
+    // UI del juego, encima de la escena ya compuesta y por debajo de la del
+    // editor (que se graba después, sobre el backbuffer). Con el canvas vacío no
+    // graba ni un comando.
+    recordUiCanvas(backBufferRtv);
 
     transition(ldrAllocation->GetResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -5562,6 +5837,7 @@ void D3D12Renderer::init(Window& window)
     d.createSsrPipelines();
     d.createTaaPipeline();
     d.createForwardPlusPipelines();
+    d.createUiPipeline();
     d.createTimestampResources();
     d.updateViewProj();
 
@@ -6967,6 +7243,27 @@ void D3D12Renderer::shutdown()
     d.iblRootSignature.Reset();
 
     d.releaseHdrTargets();
+
+    // Buffers de la UI 2D: van mapeados, así que primero Unmap.
+    for (UINT i = 0; i < kFrameCount; ++i) {
+        if (d.uiVertexAllocations[i]) {
+            d.uiVertexAllocations[i]->GetResource()->Unmap(0, nullptr);
+            d.uiVertexAllocations[i]->Release();
+            d.uiVertexAllocations[i] = nullptr;
+            d.uiVertexMapped[i]      = nullptr;
+            d.uiVertexCapacity[i]    = 0;
+        }
+        if (d.uiIndexAllocations[i]) {
+            d.uiIndexAllocations[i]->GetResource()->Unmap(0, nullptr);
+            d.uiIndexAllocations[i]->Release();
+            d.uiIndexAllocations[i] = nullptr;
+            d.uiIndexMapped[i]      = nullptr;
+            d.uiIndexCapacity[i]    = 0;
+        }
+    }
+    d.uiPipeline.Reset();
+    d.uiRootSignature.Reset();
+
     d.fxaaPipeline.Reset();
     d.fxaaRootSignature.Reset();
     d.fogPipeline.Reset();
