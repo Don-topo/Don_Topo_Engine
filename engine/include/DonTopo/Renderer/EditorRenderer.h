@@ -5,7 +5,9 @@
 
 #include <glm/glm.hpp>
 
+#include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace DonTopo
@@ -14,7 +16,10 @@ namespace DonTopo
     class GameObject;
     class Scene;
     class UiCanvas;
+    class UiFont;
     class UiLayer;
+    class UiTextureAtlas;
+    class Window;
     struct Mesh;
     struct SkinnedMesh;
     struct DecodedImage;
@@ -35,6 +40,52 @@ namespace DonTopo
     {
         public:
             virtual ~EditorRenderer() = default;
+
+            // ── Ciclo de vida ───────────────────────────────────────────────
+            // Lo que necesita el RUNTIME para llevar un backend sin saber cuál
+            // es. NO son puros: llevan el comportamiento de "este backend no
+            // hace eso", que es lo correcto para un splash que no existe o para
+            // un backend que no distingue las dos fases de arranque. El editor
+            // no pasa por aquí — lo construye main, que sí sabe qué backend hay.
+            //
+            // Fase 1: poder presentar. Fase 2: lo que depende de las mallas
+            // (auto-fit de la cámara y recursos de escena). Un backend que lo
+            // haga todo de una vez implementa la primera y deja la segunda.
+            virtual void initPresentation(Window& window) { (void)window; }
+            virtual void initSceneResources(const std::vector<Mesh>& meshes) { (void)meshes; }
+            virtual void initSkybox(const std::array<std::string, 6>& facePaths) { (void)facePaths; }
+
+            // Sin ventana de editor: el que no monte ImGui por su cuenta no
+            // tiene nada que apagar.
+            virtual void setHeadless(bool headless) { (void)headless; }
+
+            // Splash de arranque. false = no hay, y quien llama sigue sin él en
+            // vez de quedarse esperando a un fundido que nunca llega.
+            virtual bool beginSplash(const std::string& logoPath) { (void)logoPath; return false; }
+            virtual void drawSplashFrame(float alpha) { (void)alpha; }
+
+            virtual void drawFrame(Window& window) { (void)window; }
+            virtual void notifyResize() {}
+            virtual void shutdown() {}
+
+            // ¿Queda algo por subir del camino asíncrono? El que sube síncrono
+            // no tiene cola y responde que no.
+            virtual bool hasPendingUploads() const { return false; }
+
+            // Atlas y fuentes de la UI 2D. El dueño es el backend; quien las
+            // pide se queda con el puntero. nullptr = no se pudo cargar, y el
+            // widget se dibuja con su color plano.
+            virtual UiTextureAtlas* loadUiAtlas(const std::string& path)
+            {
+                (void)path;
+                return nullptr;
+            }
+            virtual UiFont* loadUiFont(const std::string& path, float bakePx = 48.0f)
+            {
+                (void)path;
+                (void)bakePx;
+                return nullptr;
+            }
 
             // ── Escena ──────────────────────────────────────────────────────
             // Índice de render del objeto, o -1. decoded son los píxeles que un

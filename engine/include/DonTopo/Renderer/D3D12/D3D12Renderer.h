@@ -53,7 +53,17 @@ public:
 
     // Espera a que la GPU termine y libera todo. Idempotente: el destructor la
     // llama, así que llamarla a mano antes no hace daño.
-    void shutdown();
+    void shutdown() override;
+
+    // ── Ciclo de vida por la interfaz ────────────────────────────────────────
+    // Lo que el runtime llama sin saber qué backend hay. Este monta todo en
+    // init(), así que la fase 1 es esa misma llamada y la 2 se queda en subir
+    // las mallas; el cielo ya lo carga init por su cuenta.
+    void initPresentation(Window& window) override { init(window); }
+    void initSceneResources(const std::vector<Mesh>& meshes) override;
+    void drawFrame(Window& window) override;
+    void notifyResize() override;
+    void setHeadless(bool headless) override;
 
     // Bloquea hasta que la GPU vacía todo lo enviado. Hace falta antes de
     // liberar recursos que no son de este backend —los de ImGui, por ejemplo—:
@@ -216,8 +226,8 @@ public:
     // Atlas y fuentes de la UI 2D. Mismas firmas que en el camino de Vulkan: el
     // sync de widgets las llama por plantilla, sin saber qué backend hay debajo.
     // El dueño es el backend; quien las pide se queda solo con el puntero.
-    UiTextureAtlas* loadUiAtlas(const std::string& path);
-    UiFont*         loadUiFont(const std::string& path, float bakePx = 48.0f);
+    UiTextureAtlas* loadUiAtlas(const std::string& path) override;
+    UiFont*         loadUiFont(const std::string& path, float bakePx = 48.0f) override;
 
     // Cambiar de modo o de muestras mueve targets y pipelines, y eso lo aplica
     // el frame siguiente con la GPU en reposo.

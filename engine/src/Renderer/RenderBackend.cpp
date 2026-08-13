@@ -51,9 +51,8 @@ BackendSelection resolveRenderBackend(RenderBackend requested)
     sel.backend  = RenderBackend::D3D12;
     sel.fellBack = false;
     sel.message  = "Backend DirectX 12 activo (" + support.adapterName +
-                  "). Corre el editor con la escena del proyecto, pero todavía "
-                  "no dibuja la UI 2D del juego ni las sondas de reflexión, y el "
-                  "juego exportado sigue arrancando con Vulkan.";
+                  "). Corre el editor y el juego exportado; todavía sin sondas "
+                  "de reflexión ni instanciado de mallas repetidas.";
     return sel;
 #endif
 }

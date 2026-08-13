@@ -10,6 +10,11 @@
 #include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/RenderBackend.h"
+#include "DonTopo/Renderer/EditorRenderer.h"
+#ifdef DT_D3D12_ENABLED
+#include "DonTopo/Renderer/D3D12/D3D12Renderer.h"
+#endif
+#include <memory>
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Scripting/ScriptManager.h"
@@ -128,6 +133,10 @@ int main(int argc, char** argv)
         // game.scene: es configuracion de arranque, no parte de la escena.
         // Un paquete sin game.cfg —exportado antes de que existiera— arranca
         // con Vulkan, que es lo que hacia siempre.
+        //
+        // El resultado sale del bloque: es lo que decide que backend se
+        // construye mas abajo.
+        DonTopo::RenderBackend requestedBackend = DonTopo::RenderBackend::Vulkan;
         {
             DonTopo::RenderBackend requested = DonTopo::RenderBackend::Vulkan;
             std::ifstream cfgIn(exeDir / "game.cfg");
@@ -166,15 +175,9 @@ int main(int argc, char** argv)
             if (!sel.message.empty())
                 std::cout << sel.message << std::endl;
 
-            // El runtime todavia NO sabe dibujar una escena con DirectX 12: ese
-            // backend solo tiene la escena de prueba del editor. Se avisa y se
-            // sigue con Vulkan en vez de abrir una ventana que no pinta el juego.
-            if (sel.backend == DonTopo::RenderBackend::D3D12)
-            {
-                std::cout << "El runtime no soporta todavia DirectX 12 (no dibuja escenas del "
-                             "proyecto): el juego arranca con Vulkan."
-                          << std::endl;
-            }
+            // Lo que de verdad se puede arrancar, no lo que se pidio:
+            // resolveRenderBackend ya cayo a Vulkan si DirectX 12 no estaba.
+            requestedBackend = sel.backend;
         }
 
         DonTopo::Engine engine;
@@ -185,7 +188,17 @@ int main(int argc, char** argv)
         // initPresentation en levantar Vulkan — un flash blanco antes del logo.
         window.init(1280, 720, exeDir.stem().string().c_str(), nullptr, /*showOnInit=*/false);
         DonTopo::Input::init(window.getNativeWindow());
-        DonTopo::Renderer renderer;
+        // El backend, construido segun lo que pidio el proyecto. A partir de
+        // aqui todo el runtime habla con la interfaz: quien decide cual es, es
+        // esta linea y nadie mas.
+        std::unique_ptr<DonTopo::EditorRenderer> rendererOwned;
+#ifdef DT_D3D12_ENABLED
+        if (requestedBackend == DonTopo::RenderBackend::D3D12)
+            rendererOwned = std::make_unique<DonTopo::D3D12::D3D12Renderer>();
+#endif
+        if (!rendererOwned)
+            rendererOwned = std::make_unique<DonTopo::Renderer>();
+        DonTopo::EditorRenderer& renderer = *rendererOwned;
 
         // Orden de declaración calcado de sandbox/src/main.cpp:38-55, y por
         // los mismos motivos: los ScriptComponent guardan sol::table cuyo
@@ -435,7 +448,7 @@ int main(int argc, char** argv)
 
         glfwSetWindowUserPointer(window.getNativeWindow(), &renderer);
         glfwSetFramebufferSizeCallback(window.getNativeWindow(), [](GLFWwindow* w, int, int) {
-            static_cast<DonTopo::Renderer*>(glfwGetWindowUserPointer(w))->notifyResize();
+            static_cast<DonTopo::EditorRenderer*>(glfwGetWindowUserPointer(w))->notifyResize();
         });
         glfwSetKeyCallback(window.getNativeWindow(), [](GLFWwindow* w, int key, int, int action, int) {
             if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)

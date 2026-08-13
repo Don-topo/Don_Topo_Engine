@@ -985,6 +985,10 @@ struct D3D12Renderer::Impl {
     int statInstanced   = 0;
     int statCulledCount = 0;
 
+    // Sin editor delante: se apagan la rejilla y los gizmos, que son suyos. Lo
+    // enciende el runtime antes de arrancar.
+    bool headless = false;
+
     UINT frameIndex = 0;
     // Tamaño al que se DIBUJA la escena: profundidad, HDR, oclusión, bloom y el
     // LDR van a este. Con SSAA es un múltiplo del de salida.
@@ -6240,7 +6244,10 @@ void D3D12Renderer::drawFrame()
     // que va a tapar la escena.
     d.recordSkybox();
 
-    if (d.gizmoPipeline && d.gridVertexCount > 0) {
+    // La rejilla y las líneas de depuración son cosa del EDITOR: en un juego
+    // exportado no pintan nada, y salían igual porque este backend no miraba el
+    // modo headless.
+    if (d.gizmoPipeline && d.gridVertexCount > 0 && !d.headless) {
         d.commandList->SetPipelineState(d.gizmoPipeline.Get());
         d.commandList->SetGraphicsRootSignature(d.rootSignature.Get());
         // glm guarda la matriz en columnas y el HLSL traducido la declara
@@ -6986,6 +6993,35 @@ void D3D12Renderer::setUiLayer(UiLayer* ui)
 UiCanvas& D3D12Renderer::uiCanvas()
 {
     return m_impl->uiCanvas;
+}
+
+void D3D12Renderer::initSceneResources(const std::vector<Mesh>& meshes)
+{
+    // La fase 2 del arranque para este backend: subir lo que ya hay. El auto-fit
+    // de la cámara y los recursos que dependen del tamaño de la escena los
+    // resuelve init(), que aquí ya corrió.
+    for (const Mesh& mesh : meshes)
+        addStaticMesh(mesh);
+    refitCameraRange();
+}
+
+void D3D12Renderer::drawFrame(Window& window)
+{
+    // La ventana no hace falta: el tamaño llega por resize() desde su callback.
+    (void)window;
+    drawFrame();
+}
+
+void D3D12Renderer::setHeadless(bool headless)
+{
+    m_impl->headless = headless;
+}
+
+void D3D12Renderer::notifyResize()
+{
+    // Vulkan solo marca un flag porque su swapchain se recrea sola al fallar el
+    // present. Aquí el tamaño lo trae el callback de la ventana, que ya llama a
+    // resize(): no queda nada por hacer.
 }
 
 UiTextureAtlas* D3D12Renderer::loadUiAtlas(const std::string& path)
