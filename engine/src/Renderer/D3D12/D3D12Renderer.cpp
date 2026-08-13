@@ -6,6 +6,7 @@
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Window.h"
 #include "DonTopo/Renderer/Cube.h"
+#include "DonTopo/Renderer/Frustum.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/Plane.h"
@@ -496,6 +497,14 @@ struct D3D12Renderer::Impl {
         // Fuerza de reflejo del objeto. pbr.frag la vuelca al alfa de la
         // escena, y de ahí la lee el trazado: a cero, ese píxel no refleja.
         float ssrStrength = 0.0f;
+
+        // Caja envolvente en espacio LOCAL, para el frustum culling. Se calcula
+        // al subir la malla porque no depende de dónde esté el objeto. Una
+        // malla sin vértices no se puede acotar: hasBounds = false y entonces se
+        // dibuja siempre, que es el fallo seguro.
+        glm::vec3 aabbMin{0.0f};
+        glm::vec3 aabbMax{0.0f};
+        bool      hasBounds = false;
     };
     std::vector<StaticObject> objects;
 
@@ -924,8 +933,9 @@ struct D3D12Renderer::Impl {
     void resolveTimestamps();  // vuelca los de este frame al buffer de lectura
 
     // Cuentas del frame, para el panel: se rellenan al grabar el pase principal.
-    int statDraws     = 0;
-    int statInstanced = 0;
+    int statDraws       = 0;
+    int statInstanced   = 0;
+    int statCulledCount = 0;
 
     UINT frameIndex = 0;
     UINT width      = 0;
@@ -5499,8 +5509,9 @@ void D3D12Renderer::drawFrame()
 
     // Las cuentas del frame anterior ya las ha leído el panel (la interfaz se
     // construye antes de grabar), así que aquí se pueden reiniciar.
-    d.statDraws     = 0;
-    d.statInstanced = 0;
+    d.statDraws       = 0;
+    d.statInstanced   = 0;
+    d.statCulledCount = 0;
 
     // Los tres compute van ANTES de abrir el render target: escriben el vertex
     // buffer que el pase gráfico va a leer este mismo frame.
@@ -5655,9 +5666,21 @@ void D3D12Renderer::drawFrame()
         // Geometría de la escena. Un draw por objeto con su transformación en
         // el push constant (flags.x = 0): el instanciado por malla compartida
         // es una optimización de otra fase.
+        const Culling::Frustum cameraFrustum = Culling::frustumFromViewProj(d.viewProj);
+
         for (const Impl::StaticObject& object : d.objects) {
             if (!object.meshVisible || object.indexCount == 0)
                 continue;
+
+            // Fuera del encuadre: ni draw ni cambio de estado. El test es
+            // conservador —puede dejar pasar algo que no se ve, nunca quitar
+            // algo que sí—, y una malla sin caja se dibuja siempre.
+            if (object.hasBounds &&
+                !Culling::aabbVisible(cameraFrustum, object.aabbMin, object.aabbMax,
+                                      object.transform)) {
+                ++d.statCulledCount;
+                continue;
+            }
 
             // Su terna de texturas. Va dentro del bucle porque cada malla
             // tiene la suya; el suelo y la global se apañan con la de fuera.
@@ -6098,6 +6121,22 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
     object.indexCount                  = static_cast<UINT>(mesh.indices.size());
     object.metallic                    = mesh.material.metallic;
     object.roughness                   = mesh.material.roughness;
+
+    // Caja envolvente local, de una vez y para siempre: no depende del
+    // transform, así que moverlo o rotarlo no obliga a recalcularla.
+    {
+        // Paréntesis alrededor del nombre: windows.h define max como macro y
+        // sin ellos no compila.
+        glm::vec3 lo((std::numeric_limits<float>::max)());
+        glm::vec3 hi(std::numeric_limits<float>::lowest());
+        for (const Vertex& v : mesh.vertices) {
+            lo = (glm::min)(lo, v.pos);
+            hi = (glm::max)(hi, v.pos);
+        }
+        object.aabbMin   = lo;
+        object.aabbMax   = hi;
+        object.hasBounds = true;
+    }
 
     // Terna propia en el heap mientras queden huecos. Pasado el tope se queda
     // con la global: peor aspecto, pero nunca escribe fuera del heap.
@@ -6589,9 +6628,9 @@ float D3D12Renderer::shadowGpuMs() const { return m_impl->gpuMs[Impl::TsShadow /
 float D3D12Renderer::forwardPlusGpuMs() const { return m_impl->gpuMs[Impl::TsForwardPlus / 2]; }
 int   D3D12Renderer::statDrawCalls() const { return m_impl->statDraws; }
 int   D3D12Renderer::statInstances() const { return m_impl->statInstanced; }
-// Descartados: cero de verdad, no "sin implementar". Este backend dibuja toda
-// la escena porque todavía no tiene frustum culling.
-int   D3D12Renderer::statCulled() const { return 0; }
+// Objetos que el frustum dejó fuera este frame. Solo estáticos: los personajes
+// se dibujan siempre (ver el pase principal).
+int   D3D12Renderer::statCulled() const { return m_impl->statCulledCount; }
 float    D3D12Renderer::forwardPlusAvgPerCell() const { return 0.0f; }
 uint32_t D3D12Renderer::forwardPlusOverflowCells() const { return 0; }
 

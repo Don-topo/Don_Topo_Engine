@@ -10,6 +10,7 @@
 #include "DonTopo/Renderer/UniformBufferObject.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/EditorRenderer.h"
+#include "DonTopo/Renderer/Frustum.h"
 #include "DonTopo/Renderer/RendererState.h"
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/GpuResources.h"
@@ -399,24 +400,12 @@ namespace DonTopo {
             void setSkinnedTransform(int index, const glm::mat4& transform);
 
             // ── Frustum culling ──────────────────────────────────────────────
-            // Seis planos en espacio de mundo, con la normal apuntando HACIA
-            // DENTRO del volumen: un punto es visible si queda del lado
-            // positivo de los seis. Cada plano es (nx, ny, nz, d) con la normal
-            // normalizada, de forma que dot(n, p) + d es la distancia con signo.
-            struct Frustum {
-                glm::vec4 planes[6] = {};
-            };
-            // Extrae los planos de una matriz viewProj (Gribb-Hartmann). Asume
-            // el rango de profundidad de Vulkan z=[0,1] — el plano cercano sale
-            // de la fila 2 a secas, no de (fila3 + fila2) como en el convenio
-            // de OpenGL. Con matrices *RH_ZO (las que usa este motor, ver
-            // updateUniformBuffer) esto es lo correcto; con glm::perspective a
-            // secas culearía de más por el lado cercano.
+            // La geometría del culling vive en Renderer/Frustum.h desde que hay
+            // un segundo backend que la necesita; aquí quedan los alias y los
+            // envoltorios, que es por donde entran los tests y el resto de este
+            // fichero.
+            using Frustum = Culling::Frustum;
             static Frustum frustumFromViewProj(const glm::mat4& viewProj);
-            // AABB en espacio LOCAL del mesh + su transform a mundo. Devuelve
-            // false solo si la caja queda entera fuera de algún plano; es un
-            // test conservador (puede dar true de más en las esquinas del
-            // frustum, nunca false de menos, que sería un objeto desaparecido).
             static bool aabbVisible(const Frustum& frustum,
                                     const glm::vec3& localMin,
                                     const glm::vec3& localMax,
