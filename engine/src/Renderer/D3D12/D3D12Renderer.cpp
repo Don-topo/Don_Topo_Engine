@@ -354,6 +354,14 @@ struct FxaaPush {
 };
 static_assert(sizeof(FxaaPush) == 20, "FxaaPush debe ocupar 20 bytes");
 
+// Push de ssaa_resolve.frag: el inverso del tamaño de la imagen GRANDE (la
+// fuente) y cuántas muestras por eje hay que promediar.
+struct SsaaPush {
+    float invSrc[2];
+    int   taps;
+};
+static_assert(sizeof(SsaaPush) == 12, "SsaaPush debe ocupar 12 bytes");
+
 // Stride del vértice que escribe skinning.comp: 5 vec4 (pos, color, uv, normal,
 // tangent). No hay struct C++ equivalente en el motor, se usa el tamaño literal.
 constexpr UINT kSkinnedOutputStride = 5 * sizeof(glm::vec4);
@@ -885,6 +893,8 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12PipelineState> fogPipeline;
     ComPtr<ID3D12RootSignature> fxaaRootSignature;
     ComPtr<ID3D12PipelineState> fxaaPipeline;
+    ComPtr<ID3D12RootSignature> ssaaRootSignature;
+    ComPtr<ID3D12PipelineState> ssaaPipeline;
     D3D12MA::Allocation*        ldrAllocation = nullptr;
 
     // Los parámetros de niebla y FXAA también salen de RendererState.
@@ -938,8 +948,15 @@ struct D3D12Renderer::Impl {
     int statCulledCount = 0;
 
     UINT frameIndex = 0;
+    // Tamaño al que se DIBUJA la escena: profundidad, HDR, oclusión, bloom y el
+    // LDR van a este. Con SSAA es un múltiplo del de salida.
     UINT width      = 0;
     UINT height     = 0;
+    // Tamaño al que se ENTREGA la imagen: el backbuffer o la textura del panel.
+    // Sin SSAA coincide con el de render, y entonces el pase final es un blit
+    // con filtro; con SSAA es más pequeño y ese pase promedia.
+    UINT outWidth   = 0;
+    UINT outHeight  = 0;
 
     // Tamaño anotado por el callback de la ventana, pendiente de aplicar. Ver
     // el comentario de resize() en la cabecera: el trabajo de DXGI no puede
@@ -2644,11 +2661,13 @@ void D3D12Renderer::Impl::createHdrTargets()
     }
 
     {
-        // Imagen del viewport, del formato del backbuffer: es su sustituto.
+        // Imagen del viewport, del formato del backbuffer: es su sustituto. Va
+        // al tamaño de SALIDA, no al de render: con SSAA la escena se dibuja más
+        // grande y el pase de bajada la promedia hasta aquí.
         D3D12_RESOURCE_DESC desc{};
         desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        desc.Width            = width;
-        desc.Height           = height;
+        desc.Width            = outWidth;
+        desc.Height           = outHeight;
         desc.DepthOrArraySize = 1;
         desc.MipLevels        = 1;
         desc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -3409,16 +3428,35 @@ UINT D3D12Renderer::Impl::desiredSampleCount() const
 
 void D3D12Renderer::Impl::applyPendingRenderSize()
 {
-    const UINT wanted  = (renderToTexture && pendingRenderWidth > 0) ? pendingRenderWidth : swapWidth;
-    const UINT wantedH = (renderToTexture && pendingRenderHeight > 0) ? pendingRenderHeight : swapHeight;
-    if (wanted == 0 || wantedH == 0 || (wanted == width && wantedH == height))
+    const UINT wantedOut =
+        (renderToTexture && pendingRenderWidth > 0) ? pendingRenderWidth : swapWidth;
+    const UINT wantedOutH =
+        (renderToTexture && pendingRenderHeight > 0) ? pendingRenderHeight : swapHeight;
+    if (wantedOut == 0 || wantedOutH == 0)
         return;
 
-    // Todo lo interno es de este tamaño: profundidad, escena, bloom, oclusión,
-    // historial y la imagen del panel. La swapchain NO se toca.
+    // Y el tamaño de dibujo, que con SSAA es el de salida multiplicado por el
+    // factor. El tope de una textura 2D en D3D12 son 16384 por lado: pedir más
+    // no falla al crear el recurso, falla al usarlo.
+    UINT wanted  = wantedOut;
+    UINT wantedH = wantedOutH;
+    if (state->aaMode() == RendererState::AaMode::Ssaa && ssaaFactor > 1.0f) {
+        constexpr UINT kMaxTextureSide = 16384;
+        wanted  = (std::min)(static_cast<UINT>(std::lround(wantedOut * ssaaFactor)), kMaxTextureSide);
+        wantedH = (std::min)(static_cast<UINT>(std::lround(wantedOutH * ssaaFactor)), kMaxTextureSide);
+    }
+
+    if (wanted == width && wantedH == height && wantedOut == outWidth && wantedOutH == outHeight)
+        return;
+
+    // Todo lo interno es del tamaño de render: profundidad, escena, bloom,
+    // oclusión, historial y el LDR. La imagen del panel es la excepción —va al
+    // de salida— y la swapchain NO se toca.
     waitForGpu();
-    width  = wanted;
-    height = wantedH;
+    width     = wanted;
+    height    = wantedH;
+    outWidth  = wantedOut;
+    outHeight = wantedOutH;
 
     createDepthBuffer();
     if (hdrAllocation)
@@ -4611,6 +4649,35 @@ void D3D12Renderer::Impl::createFogAndFxaaPipelines()
 
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&fxaaPipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(FXAA)");
+
+    // Bajada del SSAA: misma forma que el FXAA —triángulo de pantalla completa
+    // leyendo la imagen ya compuesta— pero con otro push y otro shader. La
+    // fuente es más grande que el destino y el shader promedia la huella de
+    // cada píxel; el sampler no basta, que solo miraría los cuatro texeles del
+    // centro.
+    D3D12_ROOT_PARAMETER ssaaParams[2]{};
+    ssaaParams[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    ssaaParams[0].Constants.ShaderRegister = 0;
+    ssaaParams[0].Constants.Num32BitValues = sizeof(SsaaPush) / 4;
+    ssaaParams[0].ShaderVisibility         = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    ssaaParams[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    ssaaParams[1].DescriptorTable.NumDescriptorRanges = 1;
+    ssaaParams[1].DescriptorTable.pDescriptorRanges   = &fxaaRange;
+    ssaaParams[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_ROOT_SIGNATURE_DESC ssaaDesc{};
+    ssaaDesc.NumParameters     = _countof(ssaaParams);
+    ssaaDesc.pParameters       = ssaaParams;
+    ssaaDesc.NumStaticSamplers = 1;
+    ssaaDesc.pStaticSamplers   = &fxaaSampler;
+    serializeAndCreate(ssaaDesc, ssaaRootSignature, "SSAA");
+
+    const std::vector<char> ssaaPs = readBinaryFile("shaders/ssaa_resolve.frag.dxil");
+    psoDesc.pRootSignature         = ssaaRootSignature.Get();
+    psoDesc.PS                     = {ssaaPs.data(), ssaaPs.size()};
+    throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&ssaaPipeline)),
+                  "ID3D12Device::CreateGraphicsPipelineState(SSAA)");
 }
 
 void D3D12Renderer::Impl::recordFog()
@@ -4798,8 +4865,37 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     transition(ldrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
+    // El pase final escribe al destino, que puede ser MÁS PEQUEÑO que lo que se
+    // acaba de dibujar: con SSAA el viewport de salida es el del panel y el
+    // shader promedia. Sin SSAA los dos tamaños coinciden y esto es lo de antes.
+    D3D12_VIEWPORT outViewport{};
+    outViewport.TopLeftY = static_cast<float>(outHeight);
+    outViewport.Width    = static_cast<float>(outWidth);
+    outViewport.Height   = -static_cast<float>(outHeight);
+    outViewport.MaxDepth = 1.0f;
+    const D3D12_RECT outScissor{0, 0, static_cast<LONG>(outWidth), static_cast<LONG>(outHeight)};
+    commandList->RSSetViewports(1, &outViewport);
+    commandList->RSSetScissorRects(1, &outScissor);
+
     markTimestamp(TsAa);
-    if (state->aaMode() == RendererState::AaMode::Taa) {
+    if (state->aaMode() == RendererState::AaMode::Ssaa && ssaaPipeline) {
+        // Bajada por promedio: una muestra por texel de origen y por eje, que es
+        // lo que define el supersampling. A factor 2 son los cuatro texeles que
+        // caen dentro del píxel de destino.
+        SsaaPush ssaaPush{};
+        ssaaPush.invSrc[0] = 1.0f / static_cast<float>(width);
+        ssaaPush.invSrc[1] = 1.0f / static_cast<float>(height);
+        ssaaPush.taps      = (std::max)(1, static_cast<int>(std::lround(ssaaFactor)));
+
+        commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
+        commandList->SetPipelineState(ssaaPipeline.Get());
+        commandList->SetGraphicsRootSignature(ssaaRootSignature.Get());
+        commandList->SetGraphicsRoot32BitConstants(0, sizeof(SsaaPush) / 4, &ssaaPush, 0);
+        commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(kSrvLdr));
+        commandList->DrawInstanced(3, 1, 0, 0);
+
+        taaHistoryValid = false;
+    } else if (state->aaMode() == RendererState::AaMode::Taa) {
         // El TAA ocupa el sitio del FXAA: mezcla esta imagen con la del frame
         // anterior y escribe a la vez el backbuffer y el historial siguiente.
         recordTaa(backBufferRtv);
@@ -5279,9 +5375,12 @@ void D3D12Renderer::init(Window& window)
     glfwGetFramebufferSize(glfwWindow, &fbWidth, &fbHeight);
     d.width  = static_cast<UINT>(fbWidth > 0 ? fbWidth : 1);
     d.height = static_cast<UINT>(fbHeight > 0 ? fbHeight : 1);
-    // Al arrancar, el render es del tamaño de la ventana: no hay panel todavía.
+    // Al arrancar, el render es del tamaño de la ventana: no hay panel todavía,
+    // ni SSAA que multiplique nada.
     d.swapWidth  = d.width;
     d.swapHeight = d.height;
+    d.outWidth   = d.width;
+    d.outHeight  = d.height;
 
     UINT factoryFlags = 0;
 #ifndef NDEBUG
@@ -6002,10 +6101,15 @@ void D3D12Renderer::Impl::applyPendingResize()
     swapWidth  = pendingWidth;
     swapHeight = pendingHeight;
     // Sin panel, el render es del tamaño de la ventana. Con panel manda el
-    // panel, y redimensionar la ventana no tiene por qué moverlo.
+    // panel, y redimensionar la ventana no tiene por qué moverlo. El de render
+    // sale del de salida, que con SSAA no son el mismo: lo recalcula
+    // applyPendingRenderSize en el frame siguiente, aquí basta con dejar el de
+    // salida al día.
     if (!renderToTexture || pendingRenderWidth == 0) {
-        width  = pendingWidth;
-        height = pendingHeight;
+        outWidth  = pendingWidth;
+        outHeight = pendingHeight;
+        width     = pendingWidth;
+        height    = pendingHeight;
     }
     frameIndex = swapChain->GetCurrentBackBufferIndex();
 
