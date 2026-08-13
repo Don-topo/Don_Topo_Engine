@@ -1187,6 +1187,12 @@ struct D3D12Renderer::Impl {
     // t1 y t2, que los escribe quien lo sube.
     void fillSharedSlots(UINT blockBase);
 
+    // t7 de un bloque: el mapa de oclusion si el SSAO corre, la 1x1 blanca si
+    // no. Y el refresco de todos cuando el interruptor cambia.
+    void writeAoSlot(UINT blockBase);
+    void refreshAoSlots();
+    bool aoSlotsUseMap = false;
+
     void createMeshPipeline();
     void createMeshResources();
     void createDepthBuffer();
@@ -1826,15 +1832,47 @@ void D3D12Renderer::Impl::fillSharedSlots(UINT blockBase)
     if (prefilterAllocation)
         createCubeSrv(prefilterAllocation->GetResource(), kHdrFormat, prefilterMips,
                       blockBase + 5);
-    // El mapa de oclusión del frame si ya existe, y si no la 1x1 blanca. Las
-    // mallas se suben DESPUÉS de init, así que sin esto se quedaban con el
-    // relleno y el efecto no llegaba a verse por mucho que se calculara.
-    if (ssaoBlurAllocation)
+    writeAoSlot(blockBase);
+}
+
+void D3D12Renderer::Impl::writeAoSlot(UINT blockBase)
+{
+    // t7 = oclusión ambiental. Con el SSAO ENCENDIDO, el mapa del frame; con él
+    // apagado, la 1x1 blanca.
+    //
+    // Esto último no es cosmético: si el SSAO no corre, su mapa no se escribe
+    // NUNCA —una textura recién creada en D3D12 no está inicializada— y el
+    // shader multiplica el ambiente por lo que haya ahí, que es cero. El
+    // síntoma era que todo lo que no recibiera luz directa salía NEGRO, con el
+    // IBL bien calculado y subir la intensidad del ambiente sin efecto ninguno:
+    // cualquier cosa por cero sigue siendo cero.
+    const bool useMap = state->ssaoEnabled() && ssaoBlurAllocation != nullptr;
+    if (useMap) {
         createTexture2DSrv(ssaoBlurAllocation->GetResource(), DXGI_FORMAT_R32_FLOAT,
                            blockBase + 6);
-    else if (ssaoAllocation)
-        createTexture2DSrv(ssaoAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
+        return;
+    }
+    if (baseColorAllocation)
+        createTexture2DSrv(baseColorAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
                            blockBase + 6);
+}
+
+void D3D12Renderer::Impl::refreshAoSlots()
+{
+    const bool useMap = state->ssaoEnabled() && ssaoBlurAllocation != nullptr;
+    if (useMap == aoSlotsUseMap)
+        return;
+
+    // Los descriptores pueden estar en uso por el frame en vuelo.
+    waitForGpu();
+    aoSlotsUseMap = useMap;
+
+    for (const StaticObject& object : objects)
+        writeAoSlot(object.srvBase);
+    for (const SkinnedObject& character : skinnedObjects)
+        for (const SkinnedSubMesh& sub : character.subMeshes)
+            writeAoSlot(sub.srvBase);
+    writeAoSlot(kSrvBaseColor);
 }
 
 void D3D12Renderer::Impl::createDepthBuffer()
@@ -2195,7 +2233,7 @@ void D3D12Renderer::Impl::updateSceneUbo()
         ubo.numLights = static_cast<int>(count);
 
         ubo.viewPos          = glm::vec4(cameraPos, 1.0f);
-        ubo.ambientIntensity = state->ambientIntensity();
+        ubo.ambientIntensity = state->ambientEnabled() ? state->ambientIntensity() : 0.0f;
         std::memcpy(sceneUboMapped[frameIndex], &ubo, sizeof(ubo));
         return;
     }
@@ -2217,7 +2255,10 @@ void D3D12Renderer::Impl::updateSceneUbo()
     ubo.lights[0].color[3]     = 0.7f;
 
     ubo.viewPos          = glm::vec4(cameraPos, 1.0f);
-    ubo.ambientIntensity = state->ambientIntensity();
+    // Apagado = intensidad cero, igual que en el camino de Vulkan: el shader no
+    // tiene rama para el ambiente, y sin esto el interruptor "Ambient (IBL)" del
+    // menu View no hacia nada con este backend.
+    ubo.ambientIntensity = state->ambientEnabled() ? state->ambientIntensity() : 0.0f;
 
     std::memcpy(sceneUboMapped[frameIndex], &ubo, sizeof(ubo));
 }
@@ -3378,6 +3419,7 @@ void D3D12Renderer::Impl::precomputeIbl()
         for (const SkinnedSubMesh& sub : character.subMeshes)
             if (sub.srvBase != kSrvBaseColor)
                 refreshEnv(sub.srvBase);
+
 }
 
 void D3D12Renderer::Impl::createForwardPlusBuffers()
@@ -6773,6 +6815,9 @@ void D3D12Renderer::drawFrame()
     // graba en esta misma lista de comandos y espera a la GPU — con el frame a
     // medias, el Reset del allocator falla y no se hornea nada, en silencio.
     d.syncProbes();
+
+    // Y el hueco de oclusion, que depende del interruptor del SSAO.
+    d.refreshAoSlots();
 
     ID3D12CommandAllocator* allocator = d.allocators[d.frameIndex].Get();
     if (FAILED(allocator->Reset()))
