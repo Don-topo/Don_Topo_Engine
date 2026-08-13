@@ -917,6 +917,11 @@ struct D3D12Renderer::Impl {
     std::array<void*, kFrameCount>                uiIndexMapped{};
     std::array<UINT, kFrameCount>                 uiIndexCapacity{};
 
+    // El pase de geometría entero, para poder repetirlo desde otra cámara: es
+    // lo que necesita el horneado de una sonda de reflexión.
+    void recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv, D3D12_CPU_DESCRIPTOR_HANDLE dsv,
+                             UINT targetWidth, UINT targetHeight);
+
     void createUiPipeline();
     void ensureUiBuffers(UINT vertexCount, UINT indexCount);
     void recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv);
@@ -5897,6 +5902,229 @@ void D3D12Renderer::init(Window& window)
     d.initialized = true;
 }
 
+void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
+                                              D3D12_CPU_DESCRIPTOR_HANDLE dsv, UINT targetWidth,
+                                              UINT targetHeight)
+{
+    // TODO el pase de geometria: limpiar, mallas, personajes, contorno, cielo y
+    // las lineas del editor. Sale de drawFrame para poder repetirlo con otra
+    // camara y otro destino, que es lo que necesita el horneado de una sonda de
+    // reflexion: seis caras, la misma escena.
+    //
+    // Lo que NO entra: las marcas de tiempo (miden el pase del frame, no una
+    // cara) y el post-procesado, que va detras y sobre el target HDR.
+    commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+    commandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
+    commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+
+    // Viewport y scissor se ponen cada frame: tras un resize el estado del
+    // command list se reinicia y arrastrar el tamaño viejo recortaría la imagen.
+    D3D12_VIEWPORT viewport{};
+    viewport.Width    = static_cast<float>(targetWidth);
+    viewport.Height   = static_cast<float>(targetHeight);
+    viewport.MaxDepth = 1.0f;
+    commandList->RSSetViewports(1, &viewport);
+
+    D3D12_RECT scissor{0, 0, static_cast<LONG>(targetWidth), static_cast<LONG>(targetHeight)};
+    commandList->RSSetScissorRects(1, &scissor);
+
+    // La malla primero: escribe profundidad y así la rejilla que va detrás
+    // queda tapada donde toca.
+    if (meshPipeline) {
+        ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
+        commandList->SetDescriptorHeaps(1, heaps);
+
+        const bool wireframe = state->isWireframeMode();
+        commandList->SetPipelineState(wireframe ? meshWirePipeline.Get()
+                                                  : meshPipeline.Get());
+        commandList->SetGraphicsRootSignature(meshRootSignature.Get());
+        commandList->SetGraphicsRootConstantBufferView(
+            0, sceneUboAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress());
+
+        commandList->SetGraphicsRootDescriptorTable(
+            2, srvHeap->GetGPUDescriptorHandleForHeapStart());
+        commandList->SetGraphicsRootShaderResourceView(
+            3, instanceAllocation->GetResource()->GetGPUVirtualAddress());
+        bindForwardPlus();
+        commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        // Geometría de la escena. Un draw por objeto con su transformación en
+        // el push constant (flags.x = 0): el instanciado por malla compartida
+        // es una optimización de otra fase.
+        const Culling::Frustum cameraFrustum = Culling::frustumFromViewProj(viewProj);
+
+        for (const StaticObject& object : objects) {
+            if (!object.meshVisible || object.indexCount == 0)
+                continue;
+
+            // Fuera del encuadre: ni draw ni cambio de estado. El test es
+            // conservador —puede dejar pasar algo que no se ve, nunca quitar
+            // algo que sí—, y una malla sin caja se dibuja siempre.
+            if (object.hasBounds &&
+                !Culling::aabbVisible(cameraFrustum, object.aabbMin, object.aabbMax,
+                                      object.transform)) {
+                ++statCulledCount;
+                continue;
+            }
+
+            // Su terna de texturas. Va dentro del bucle porque cada malla
+            // tiene la suya; el suelo y la global se apañan con la de fuera.
+            D3D12_GPU_DESCRIPTOR_HANDLE table = srvHeap->GetGPUDescriptorHandleForHeapStart();
+            table.ptr += static_cast<UINT64>(object.srvBase) * srvSize;
+            commandList->SetGraphicsRootDescriptorTable(2, table);
+
+            PushData push{};
+            push.transform = object.transform;
+            push.metallic  = object.metallic;
+            push.roughness = object.roughness;
+            push.flags = glm::vec2(0.0f, state->ssrEnabled() ? object.ssrStrength : 0.0f);
+            commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
+
+            commandList->IASetVertexBuffers(0, 1, &object.vertexBufferView);
+            commandList->IASetIndexBuffer(&object.indexBufferView);
+            commandList->DrawIndexedInstanced(object.indexCount, 1, 0, 0, 0);
+            ++statDraws;
+            ++statInstanced;
+        }
+
+        // Suelo: receptor de sombras y referencia visual, NO parte de la
+        // escena. Solo se dibuja cuando no hay geometría cargada: un proyecto
+        // suele traer su propio plano, y superponerle otro deja los dos
+        // peleándose por la profundidad y proyectándose sombra el uno al otro.
+        if (groundIndexCount > 0 && objects.empty()) {
+            PushData groundPush{};
+            groundPush.transform = glm::mat4(1.0f);
+            groundPush.metallic  = 0.0f;
+            groundPush.roughness = 0.9f;
+            groundPush.flags     = glm::vec2(0.0f, 0.0f);
+            commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &groundPush, 0);
+            commandList->IASetVertexBuffers(0, 1, &groundVertexBufferView);
+            commandList->IASetIndexBuffer(&groundIndexBufferView);
+            commandList->DrawIndexedInstanced(groundIndexCount, 1, 0, 0, 0);
+            ++statDraws;
+            ++statInstanced;
+        }
+    }
+
+    // Personajes: mismos shaders y misma root signature que el cubo, pero el
+    // vertex buffer es lo que acaba de escribir el compute.
+    if (!skinnedObjects.empty() && skinnedMeshPipeline) {
+        commandList->SetPipelineState(state->isWireframeMode()
+                                            ? skinnedMeshWirePipeline.Get()
+                                            : skinnedMeshPipeline.Get());
+        commandList->SetGraphicsRootSignature(meshRootSignature.Get());
+        commandList->SetGraphicsRootConstantBufferView(
+            0, sceneUboAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress());
+        commandList->SetGraphicsRootShaderResourceView(
+            3, instanceAllocation->GetResource()->GetGPUVirtualAddress());
+        bindForwardPlus();
+        commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        for (const SkinnedObject& character : skinnedObjects) {
+            if (!character.visible || character.indexCount == 0)
+                continue;
+
+            PushData push{};
+            // flags.x = 0: el model sale de aquí, no del buffer de instancias,
+            // que es la ruta que usa el motor para skinne
+            push.transform = character.transform;
+            push.metallic  = 0.0f;
+            push.roughness = 0.7f;
+            push.flags = glm::vec2(0.0f, state->ssrEnabled() ? character.ssrStrength : 0.0f);
+            commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
+
+            commandList->IASetVertexBuffers(0, 1, &character.vertexBufferView);
+            commandList->IASetIndexBuffer(&character.indexBufferView);
+
+            // Un draw por submalla, cada una con la terna de su material.
+            for (const SkinnedSubMesh& sub : character.subMeshes) {
+                if (sub.indexCount == 0)
+                    continue;
+                D3D12_GPU_DESCRIPTOR_HANDLE table = srvHeap->GetGPUDescriptorHandleForHeapStart();
+                table.ptr += static_cast<UINT64>(sub.srvBase) * srvSize;
+                commandList->SetGraphicsRootDescriptorTable(2, table);
+                commandList->DrawIndexedInstanced(sub.indexCount, 1, sub.indexStart, 0, 0);
+                ++statDraws;
+                ++statInstanced;
+            }
+        }
+    }
+
+    // Contorno de lo seleccionado, con la geometría ya dibujada: el casco solo
+    // asoma por donde el depth test lo deja pasar.
+    //
+    // Va en el pase de escena y no en el de composición como en Vulkan, así que
+    // el tone mapping le toca el naranja. Es el precio de no arrastrar aquí un
+    // segundo destino con profundidad; se sigue distinguiendo de sobra.
+    if (outlinePipeline) {
+        auto drawOutline = [&](ID3D12PipelineState* pipeline, const glm::mat4& transform,
+                               const D3D12_VERTEX_BUFFER_VIEW& vertexView,
+                               const D3D12_INDEX_BUFFER_VIEW& indexView, UINT indexCount) {
+            if (indexCount == 0)
+                return;
+            commandList->SetPipelineState(pipeline);
+            commandList->SetGraphicsRootSignature(meshRootSignature.Get());
+            commandList->SetGraphicsRootConstantBufferView(
+                0, sceneUboAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress());
+
+            PushData push{};
+            push.transform = transform;
+            // flags.y lleva el grosor de la extrusión, que es el hueco que esa
+            // vec2 tenía libre.
+            push.flags = glm::vec2(0.0f, outlineWidth);
+            commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
+
+            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            commandList->IASetVertexBuffers(0, 1, &vertexView);
+            commandList->IASetIndexBuffer(&indexView);
+            commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+        };
+
+        if (selectedObject >= 0 && selectedObject < static_cast<int>(objects.size())) {
+            const StaticObject& object = objects[selectedObject];
+            if (object.meshVisible)
+                drawOutline(outlinePipeline.Get(), object.transform, object.vertexBufferView,
+                            object.indexBufferView, object.indexCount);
+        }
+        if (selectedSkinned >= 0 &&
+            selectedSkinned < static_cast<int>(skinnedObjects.size())) {
+            const SkinnedObject& character = skinnedObjects[selectedSkinned];
+            if (character.visible)
+                drawOutline(outlineSkinnedPipeline.Get(), character.transform,
+                            character.vertexBufferView, character.indexBufferView,
+                            character.indexCount);
+        }
+    }
+
+    // El cielo al final de la geometria: se apoya en la profundidad ya escrita
+    // para salir solo donde no hay nada, y asi no paga sombreado por pixeles
+    // que va a tapar la escena.
+    recordSkybox();
+
+    // La rejilla y las líneas de depuración son cosa del EDITOR: en un juego
+    // exportado no pintan nada, y salían igual porque este backend no miraba el
+    // modo headless.
+    if (gizmoPipeline && gridVertexCount > 0 && !headless) {
+        commandList->SetPipelineState(gizmoPipeline.Get());
+        commandList->SetGraphicsRootSignature(rootSignature.Get());
+        // glm guarda la matriz en columnas y el HLSL traducido la declara
+        // row_major: los 16 floats crudos se interpretan igual que en Vulkan,
+        // sin transponer.
+        commandList->SetGraphicsRoot32BitConstants(0, 16, &viewProj[0][0], 0);
+        commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+        commandList->IASetVertexBuffers(0, 1, &gridVertexBufferView);
+        commandList->DrawInstanced(gridVertexCount, 1, 0, 0);
+
+        // Y las líneas que hayan mandado este frame: mismo pipeline, mismo
+        // formato de vértice y la misma viewProj ya enlazada.
+        if (debugLineVertices > 0 && debugLinesAllocation) {
+            commandList->IASetVertexBuffers(0, 1, &debugLinesView);
+            commandList->DrawInstanced(debugLineVertices, 1, 0, 0);
+        }
+    }
+
+}
+
 void D3D12Renderer::drawFrame()
 {
     Impl& d = *m_impl;
@@ -6056,216 +6284,7 @@ void D3D12Renderer::drawFrame()
     if (multisampled)
         dsv.ptr += d.dsvSize;
     d.markTimestamp(Impl::TsScene);
-    d.commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
-    d.commandList->ClearRenderTargetView(rtv, d.clearColor, 0, nullptr);
-    d.commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
-
-    // Viewport y scissor se ponen cada frame: tras un resize el estado del
-    // command list se reinicia y arrastrar el tamaño viejo recortaría la imagen.
-    D3D12_VIEWPORT viewport{};
-    viewport.Width    = static_cast<float>(d.width);
-    viewport.Height   = static_cast<float>(d.height);
-    viewport.MaxDepth = 1.0f;
-    d.commandList->RSSetViewports(1, &viewport);
-
-    D3D12_RECT scissor{0, 0, static_cast<LONG>(d.width), static_cast<LONG>(d.height)};
-    d.commandList->RSSetScissorRects(1, &scissor);
-
-    // La malla primero: escribe profundidad y así la rejilla que va detrás
-    // queda tapada donde toca.
-    if (d.meshPipeline) {
-        ID3D12DescriptorHeap* heaps[] = {d.srvHeap.Get()};
-        d.commandList->SetDescriptorHeaps(1, heaps);
-
-        const bool wireframe = d.state->isWireframeMode();
-        d.commandList->SetPipelineState(wireframe ? d.meshWirePipeline.Get()
-                                                  : d.meshPipeline.Get());
-        d.commandList->SetGraphicsRootSignature(d.meshRootSignature.Get());
-        d.commandList->SetGraphicsRootConstantBufferView(
-            0, d.sceneUboAllocations[d.frameIndex]->GetResource()->GetGPUVirtualAddress());
-
-        d.commandList->SetGraphicsRootDescriptorTable(
-            2, d.srvHeap->GetGPUDescriptorHandleForHeapStart());
-        d.commandList->SetGraphicsRootShaderResourceView(
-            3, d.instanceAllocation->GetResource()->GetGPUVirtualAddress());
-        d.bindForwardPlus();
-        d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-        // Geometría de la escena. Un draw por objeto con su transformación en
-        // el push constant (flags.x = 0): el instanciado por malla compartida
-        // es una optimización de otra fase.
-        const Culling::Frustum cameraFrustum = Culling::frustumFromViewProj(d.viewProj);
-
-        for (const Impl::StaticObject& object : d.objects) {
-            if (!object.meshVisible || object.indexCount == 0)
-                continue;
-
-            // Fuera del encuadre: ni draw ni cambio de estado. El test es
-            // conservador —puede dejar pasar algo que no se ve, nunca quitar
-            // algo que sí—, y una malla sin caja se dibuja siempre.
-            if (object.hasBounds &&
-                !Culling::aabbVisible(cameraFrustum, object.aabbMin, object.aabbMax,
-                                      object.transform)) {
-                ++d.statCulledCount;
-                continue;
-            }
-
-            // Su terna de texturas. Va dentro del bucle porque cada malla
-            // tiene la suya; el suelo y la global se apañan con la de fuera.
-            D3D12_GPU_DESCRIPTOR_HANDLE table = d.srvHeap->GetGPUDescriptorHandleForHeapStart();
-            table.ptr += static_cast<UINT64>(object.srvBase) * d.srvSize;
-            d.commandList->SetGraphicsRootDescriptorTable(2, table);
-
-            PushData push{};
-            push.transform = object.transform;
-            push.metallic  = object.metallic;
-            push.roughness = object.roughness;
-            push.flags = glm::vec2(0.0f, d.state->ssrEnabled() ? object.ssrStrength : 0.0f);
-            d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
-
-            d.commandList->IASetVertexBuffers(0, 1, &object.vertexBufferView);
-            d.commandList->IASetIndexBuffer(&object.indexBufferView);
-            d.commandList->DrawIndexedInstanced(object.indexCount, 1, 0, 0, 0);
-            ++d.statDraws;
-            ++d.statInstanced;
-        }
-
-        // Suelo: receptor de sombras y referencia visual, NO parte de la
-        // escena. Solo se dibuja cuando no hay geometría cargada: un proyecto
-        // suele traer su propio plano, y superponerle otro deja los dos
-        // peleándose por la profundidad y proyectándose sombra el uno al otro.
-        if (d.groundIndexCount > 0 && d.objects.empty()) {
-            PushData groundPush{};
-            groundPush.transform = glm::mat4(1.0f);
-            groundPush.metallic  = 0.0f;
-            groundPush.roughness = 0.9f;
-            groundPush.flags     = glm::vec2(0.0f, 0.0f);
-            d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &groundPush, 0);
-            d.commandList->IASetVertexBuffers(0, 1, &d.groundVertexBufferView);
-            d.commandList->IASetIndexBuffer(&d.groundIndexBufferView);
-            d.commandList->DrawIndexedInstanced(d.groundIndexCount, 1, 0, 0, 0);
-            ++d.statDraws;
-            ++d.statInstanced;
-        }
-    }
-
-    // Personajes: mismos shaders y misma root signature que el cubo, pero el
-    // vertex buffer es lo que acaba de escribir el compute.
-    if (!d.skinnedObjects.empty() && d.skinnedMeshPipeline) {
-        d.commandList->SetPipelineState(d.state->isWireframeMode()
-                                            ? d.skinnedMeshWirePipeline.Get()
-                                            : d.skinnedMeshPipeline.Get());
-        d.commandList->SetGraphicsRootSignature(d.meshRootSignature.Get());
-        d.commandList->SetGraphicsRootConstantBufferView(
-            0, d.sceneUboAllocations[d.frameIndex]->GetResource()->GetGPUVirtualAddress());
-        d.commandList->SetGraphicsRootShaderResourceView(
-            3, d.instanceAllocation->GetResource()->GetGPUVirtualAddress());
-        d.bindForwardPlus();
-        d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-        for (const Impl::SkinnedObject& character : d.skinnedObjects) {
-            if (!character.visible || character.indexCount == 0)
-                continue;
-
-            PushData push{};
-            // flags.x = 0: el model sale de aquí, no del buffer de instancias,
-            // que es la ruta que usa el motor para skinned.
-            push.transform = character.transform;
-            push.metallic  = 0.0f;
-            push.roughness = 0.7f;
-            push.flags = glm::vec2(0.0f, d.state->ssrEnabled() ? character.ssrStrength : 0.0f);
-            d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
-
-            d.commandList->IASetVertexBuffers(0, 1, &character.vertexBufferView);
-            d.commandList->IASetIndexBuffer(&character.indexBufferView);
-
-            // Un draw por submalla, cada una con la terna de su material.
-            for (const Impl::SkinnedSubMesh& sub : character.subMeshes) {
-                if (sub.indexCount == 0)
-                    continue;
-                D3D12_GPU_DESCRIPTOR_HANDLE table = d.srvHeap->GetGPUDescriptorHandleForHeapStart();
-                table.ptr += static_cast<UINT64>(sub.srvBase) * d.srvSize;
-                d.commandList->SetGraphicsRootDescriptorTable(2, table);
-                d.commandList->DrawIndexedInstanced(sub.indexCount, 1, sub.indexStart, 0, 0);
-                ++d.statDraws;
-                ++d.statInstanced;
-            }
-        }
-    }
-
-    // Contorno de lo seleccionado, con la geometría ya dibujada: el casco solo
-    // asoma por donde el depth test lo deja pasar.
-    //
-    // Va en el pase de escena y no en el de composición como en Vulkan, así que
-    // el tone mapping le toca el naranja. Es el precio de no arrastrar aquí un
-    // segundo destino con profundidad; se sigue distinguiendo de sobra.
-    if (d.outlinePipeline) {
-        auto drawOutline = [&](ID3D12PipelineState* pipeline, const glm::mat4& transform,
-                               const D3D12_VERTEX_BUFFER_VIEW& vertexView,
-                               const D3D12_INDEX_BUFFER_VIEW& indexView, UINT indexCount) {
-            if (indexCount == 0)
-                return;
-            d.commandList->SetPipelineState(pipeline);
-            d.commandList->SetGraphicsRootSignature(d.meshRootSignature.Get());
-            d.commandList->SetGraphicsRootConstantBufferView(
-                0, d.sceneUboAllocations[d.frameIndex]->GetResource()->GetGPUVirtualAddress());
-
-            PushData push{};
-            push.transform = transform;
-            // flags.y lleva el grosor de la extrusión, que es el hueco que esa
-            // vec2 tenía libre.
-            push.flags = glm::vec2(0.0f, d.outlineWidth);
-            d.commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
-
-            d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            d.commandList->IASetVertexBuffers(0, 1, &vertexView);
-            d.commandList->IASetIndexBuffer(&indexView);
-            d.commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
-        };
-
-        if (d.selectedObject >= 0 && d.selectedObject < static_cast<int>(d.objects.size())) {
-            const Impl::StaticObject& object = d.objects[d.selectedObject];
-            if (object.meshVisible)
-                drawOutline(d.outlinePipeline.Get(), object.transform, object.vertexBufferView,
-                            object.indexBufferView, object.indexCount);
-        }
-        if (d.selectedSkinned >= 0 &&
-            d.selectedSkinned < static_cast<int>(d.skinnedObjects.size())) {
-            const Impl::SkinnedObject& character = d.skinnedObjects[d.selectedSkinned];
-            if (character.visible)
-                drawOutline(d.outlineSkinnedPipeline.Get(), character.transform,
-                            character.vertexBufferView, character.indexBufferView,
-                            character.indexCount);
-        }
-    }
-
-    // El cielo al final de la geometria: se apoya en la profundidad ya escrita
-    // para salir solo donde no hay nada, y asi no paga sombreado por pixeles
-    // que va a tapar la escena.
-    d.recordSkybox();
-
-    // La rejilla y las líneas de depuración son cosa del EDITOR: en un juego
-    // exportado no pintan nada, y salían igual porque este backend no miraba el
-    // modo headless.
-    if (d.gizmoPipeline && d.gridVertexCount > 0 && !d.headless) {
-        d.commandList->SetPipelineState(d.gizmoPipeline.Get());
-        d.commandList->SetGraphicsRootSignature(d.rootSignature.Get());
-        // glm guarda la matriz en columnas y el HLSL traducido la declara
-        // row_major: los 16 floats crudos se interpretan igual que en Vulkan,
-        // sin transponer.
-        d.commandList->SetGraphicsRoot32BitConstants(0, 16, &d.viewProj[0][0], 0);
-        d.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-        d.commandList->IASetVertexBuffers(0, 1, &d.gridVertexBufferView);
-        d.commandList->DrawInstanced(d.gridVertexCount, 1, 0, 0);
-
-        // Y las líneas que hayan mandado este frame: mismo pipeline, mismo
-        // formato de vértice y la misma viewProj ya enlazada.
-        if (d.debugLineVertices > 0 && d.debugLinesAllocation) {
-            d.commandList->IASetVertexBuffers(0, 1, &d.debugLinesView);
-            d.commandList->DrawInstanced(d.debugLineVertices, 1, 0, 0);
-        }
-    }
-
+    d.recordSceneGeometry(rtv, dsv, d.width, d.height);
     d.markTimestamp(Impl::TsScene + 1);
 
     // El buffer de vértices deformados vuelve a acceso desordenado: el frame
