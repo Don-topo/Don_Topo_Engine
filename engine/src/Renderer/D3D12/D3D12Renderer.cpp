@@ -4650,18 +4650,27 @@ void D3D12Renderer::Impl::createSsaoTargets()
     ssaoRawAllocation  = createAoTarget(kUavSsaoRaw, kSrvSsaoRaw);
     ssaoBlurAllocation = createAoTarget(kUavSsaoBlur, -1);
 
-    // El resultado pasa a ser lo que muestrea t7. La 1x1 blanca sigue existiendo
-    // para el arranque, pero a partir de aquí manda esta.
-    createTexture2DSrv(ssaoBlurAllocation->GetResource(), DXGI_FORMAT_R32_FLOAT, kSrvSsao);
+    // Y t7 de cada bloque, por writeAoSlot y NO apuntando al mapa a pelo: con el
+    // SSAO apagado ese mapa no se escribe nunca y vale cero, que multiplicado al
+    // ambiente lo apaga entero. Esto corre al arrancar y en CADA redimensionado,
+    // así que ponerlo a mano dejaba los bloques en un estado que no se
+    // correspondía con el interruptor.
+    //
+    // El bloque GLOBAL entra aquí: es el único que no pasa por fillSharedSlots,
+    // y es el que usa el suelo del motor —el que se dibuja cuando la escena no
+    // trae mallas—. Sin esto, ese suelo salía NEGRO tapando el cielo.
+    writeAoSlot(kSrvBaseColor);
     for (const StaticObject& object : objects)
         if (object.srvBase != kSrvBaseColor)
-            createTexture2DSrv(ssaoBlurAllocation->GetResource(), DXGI_FORMAT_R32_FLOAT,
-                               object.srvBase + 6);
+            writeAoSlot(object.srvBase);
     for (const SkinnedObject& character : skinnedObjects)
         for (const SkinnedSubMesh& sub : character.subMeshes)
             if (sub.srvBase != kSrvBaseColor)
-                createTexture2DSrv(ssaoBlurAllocation->GetResource(), DXGI_FORMAT_R32_FLOAT,
-                                   sub.srvBase + 6);
+                writeAoSlot(sub.srvBase);
+
+    // Y el estado que consulta refreshAoSlots para saber si hay algo que
+    // cambiar: sin esto se quedaría creyendo que los bloques dicen otra cosa.
+    aoSlotsUseMap = state->ssaoEnabled() && ssaoBlurAllocation != nullptr;
 }
 
 void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
