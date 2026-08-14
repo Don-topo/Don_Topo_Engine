@@ -1597,9 +1597,8 @@ void EditorUI::drawExportDialog()
         ImGui::Combo("Render backend", &m_exportBackend, exportBackendNames,
                      IM_ARRAYSIZE(exportBackendNames));
         if (m_exportBackend == (int)RenderBackend::D3D12)
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                               "El backend DirectX 12 todavia no dibuja escenas: el juego\n"
-                               "arrancara con Vulkan y lo dejara dicho en game.log.");
+            ImGui::TextDisabled("En una maquina sin DirectX 12 el juego arranca con\n"
+                                "Vulkan y lo deja dicho en game.log.");
 
         ImGui::BeginDisabled(!canExport);
         if (ImGui::Button("Export"))

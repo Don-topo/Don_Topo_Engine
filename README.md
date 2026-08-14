@@ -1,9 +1,11 @@
 # Don Topo Engine
 
-A Vulkan-based game engine written in C++20.
+A game engine written in C++20, with two interchangeable render backends: **Vulkan** and
+**DirectX 12**.
 
 ## Features
 
+- **Two render backends**: Vulkan and DirectX 12, picked per project and swapped on restart. They render the same scene from the same GLSL sources and reach the same feature set — the exported game carries whichever one you chose (see below)
 - PBR rendering (Cook-Torrance GGX) on an HDR pipeline: the scene is lit in linear float and only tonemapped (ACES + gamma) once, in the composition pass
 - **Image-based lighting**: the skybox cubemap is convolved on the GPU into an irradiance map (diffuse) and a roughness-prefiltered map (specular, Karis analytic BRDF), with a live `Ambient (IBL)` weight
 - **HDR bloom**: threshold with soft knee, mip chain of compute downsample/upsample passes, additive composition — `threshold`, `knee` and `intensity` are live editor sliders (see below)
@@ -34,9 +36,9 @@ A Vulkan-based game engine written in C++20.
 - Scene serialization (JSON save/load, full GameObject tree incl. mesh/colliders/audio/scripts)
 - Play Mode (edit/play toggle, snapshot restore, physics gated to Play), undo/redo of editor actions
 - Log Console panel (edit-action history, live value editing)
-- **Performance panel**: live framerate/frame-time graphs, GPU time per pass from Vulkan timestamp queries (read from frame `N-2`, never blocking), draw/instance/culled counters, and process RAM/CPU/VRAM — and it costs literally nothing while closed (see below)
+- **Performance panel**: live framerate/frame-time graphs, GPU time per pass from timestamp queries (read from frame `N-2`, never blocking), draw/instance/culled counters, and process RAM/CPU/VRAM — and it costs literally nothing while closed (see below)
 - **Frustum culling** in the main, shadow and skinned passes; skinned meshes bounded by a pose-independent sphere so no character can vanish mid-animation
-- **Draw batching**: objects sharing a mesh+material collapse into one instanced draw, and their GPU resources (buffers, textures, descriptor set) are deduplicated behind a refcounted cache
+- **Draw batching**: objects sharing a mesh+material collapse into one instanced draw, and their GPU resources (buffers, textures) are deduplicated by a content key so identical meshes are uploaded once — in both backends
 - **Async asset loading**: worker thread pool (`JobSystem`), off-thread image decode, batched GPU uploads with deferred visibility and deferred destruction — no `vkDeviceWaitIdle` stalls on drop or scene load
 - **Export Game**: packages a standalone runtime (scene, assets, scripts, shaders, splash screen, FMOD and MSVC CRT DLLs) that links no editor code at all
 - **Lua scripting**: `ScriptComponent` (multiple per GameObject), Unity-style lifecycle (Awake/Start/Update/FixedUpdate/LateUpdate/OnDestroy), Entity/Transform/Scene/Input/Audio API, runtime scene switching (`DonTopo.loadScene`), hot reload, auto-generated property UI
@@ -48,6 +50,8 @@ A Vulkan-based game engine written in C++20.
 | Component | Library | Source |
 | --- | --- | --- |
 | Graphics | Vulkan | System SDK |
+| Graphics (2nd backend) | Direct3D 12 | Windows SDK |
+| DX12 memory allocator | D3D12MemoryAllocator 3.0.1 | Auto-fetched |
 | Window / Input | GLFW 3.4 | Auto-fetched |
 | Math | GLM 1.0.1 | Auto-fetched |
 | 3D Model loading | Assimp 5.3.1 | Auto-fetched |
@@ -69,13 +73,17 @@ A Vulkan-based game engine written in C++20.
 | Tool | Version | Notes |
 | --- | --- | --- |
 | CMake | 3.25+ | Required |
-| Vulkan SDK | 1.3+ | Required — includes `glslc` shader compiler |
-| MSVC | 2022+ | Required on Windows |
+| Vulkan SDK | 1.3+ | Required — includes `glslc`, and also `spirv-cross` and `dxc` for the DX12 backend |
+| MSVC | 2022+ | Required on Windows — the Windows SDK it installs supplies `d3d12`/`dxgi` |
 | FMOD Studio API | Latest | Optional — audio disabled if not found |
 
 GLFW, GLM, Assimp, stb_image, ImGui, ImGuiFileDialog, ImGuizmo, ImGuiColorTextEdit,
-imgui-node-editor, PhysX, nlohmann/json, Lua and sol2 are downloaded and built automatically by
-CMake.
+imgui-node-editor, PhysX, nlohmann/json, Lua, sol2 and D3D12MemoryAllocator are downloaded and
+built automatically by CMake.
+
+The DirectX 12 backend is built by default on Windows (`DTE_ENABLE_D3D12=ON`) and forced off
+everywhere else. It needs no extra download — `spirv-cross` and `dxc` ship inside the Vulkan SDK
+you already have — but configure with `-DDTE_ENABLE_D3D12=OFF` to skip it and build Vulkan only.
 
 ## Build (Windows)
 
@@ -117,8 +125,10 @@ The editor (`Sandbox.exe`) keeps its console: run it from a terminal and its out
 while Lua `print()` goes to the editor's Log Console panel.
 
 Shaders are compiled from `shaders/*.{vert,frag,comp}` to SPIR-V automatically during build and
-copied to both the executable directory and `shaders/`. The source list is globbed, so a brand-new
-shader needs a re-run of `configure.bat` before `build.bat` will see it.
+copied to both the executable directory and `shaders/`. With the DX12 backend enabled each SPIR-V
+module is then translated to HLSL and lowered to DXIL in the same step (see below). The source
+list is globbed, so a brand-new shader needs a re-run of `configure.bat` before `build.bat` will
+see it.
 
 **Tests.** The suite is headless — no Vulkan device, no window — and builds as one executable per
 area under `build-ninja\engine\tests\`. There is no test framework and no CTest registration: each
@@ -142,6 +152,7 @@ Don_Topo_Engine/
 │   ├── src/        # Implementation, split into seven modules:
 │   │   ├── Core/       # Engine loop, Window, Input, Scene, GameObject, Camera
 │   │   ├── Renderer/   # Vulkan device, meshes, materials, model loading, skybox, gizmos
+│   │   │   └── D3D12/  # DirectX 12 backend (same feature set, own device/PSOs)
 │   │   ├── Physics/    # PhysX integration, Rigidbody, Colliders/
 │   │   ├── Audio/      # FMOD wrapper, AudioClipComponent, AudioListenerComponent
 │   │   ├── Scripting/  # Lua/sol2 bindings, ScriptManager, syntax check
@@ -157,6 +168,51 @@ Everything outside `src/Editor/` builds into **`DonTopoCore`**; the panels, the 
 exporter and the ImGui backends build into **`DonTopoEditor`**, which depends on Core and never
 the other way round. The renderer only ever sees the editor through a `UiLayer` interface, so
 `DonTopoRuntime` links Core alone and pulls in no ImGui symbols at all.
+
+## DirectX 12 Backend
+
+A second, complete render backend. It is chosen per project in **View → Render backend**, stored
+as a name in `project.json`, and applied on the next start — a device, its swapchain and every
+pipeline are built once at init, so nothing can swap them mid-run. **File → Export Game** has its
+own selector: what the packaged game starts with is written to `game.cfg`, and it need not match
+the editor you exported from. If a build was configured without DX12, or the machine cannot
+provide it, startup falls back to Vulkan and says why — in the Log Console for the editor, in
+`game.log` for the game.
+
+**One shader source, two APIs.** The `shaders/*.{vert,frag,comp}` GLSL files remain the only
+source. `glslc` produces the SPIR-V that Vulkan consumes; the DX12 branch hangs off *that same
+SPIR-V*, which `spirv-cross` translates to HLSL and `dxc` lowers to DXIL. Nothing is written
+twice, and the HLSL is by construction a translation of exactly the module Vulkan runs. Shader
+model 6.0 is the floor: below 5.1 there are no register spaces, and `pbr.frag` — which declares
+eight descriptor sets — would collide. One consequence worth knowing when reading the D3D12 input
+layouts: spirv-cross names vertex inputs by *location*, so every semantic comes out as
+`TEXCOORD`n, `POSITION` included.
+
+Feature parity with the Vulkan path: PBR and image-based lighting, cascaded shadows, SSAO, SSR,
+volumetric fog, bloom, the five anti-aliasing modes, Forward+ light culling, frustum culling,
+reflection probes, the 2D game UI, instanced draws of repeated meshes, per-pass GPU timings in
+the Performance panel (D3D12 timestamp queries, same read-from-`N-2` rule), and the exported
+runtime.
+
+Three places where the implementation differs rather than the result:
+
+- **Probe assignment is per GameObject**, not per shared mesh. Objects that share a mesh share
+  its buffers and textures but keep their own descriptor block, so two copies of the same crate
+  in two rooms reflect their own room. The instanced draw survives because objects only group
+  when their blocks say the same thing — the probe is part of the grouping key.
+- **A probe bake submits one command list per face.** The six faces share one scene constant
+  buffer, and D3D12 reads that memory when it *executes*, not when the command was recorded:
+  recorded back to back, all six faces would render with the sixth one's camera.
+- **Instanced draws offset the instance buffer view** instead of using
+  `StartInstanceLocation`. `gl_InstanceIndex` includes the base instance by specification;
+  `SV_InstanceID`, which spirv-cross translates it to, is not guaranteed to. Pointing the view at
+  the group's first matrix costs the same and does not depend on the driver.
+
+And two differences you can actually see. The **depth range is fixed at `0.1 … 500`**: a
+`CameraComponent`'s own near/far are ignored here, so a scene deeper than 500 units gets clipped
+where Vulkan would not. And the **selection outline is drawn inside the scene pass** rather than
+after the tonemap, so its orange goes through ACES — still unmistakable, but not the same flat
+orange the Vulkan viewport shows.
 
 ## HDR & Bloom
 
@@ -370,9 +426,12 @@ image is identical to the one before the feature. Deleting a probe or loading an
 returns the affected objects to the global IBL *before* freeing the cubemaps, so no descriptor
 set is ever left pointing at a dead view.
 
-One deliberate limitation: the descriptor set is per **shared mesh**, not per GameObject. Two
-instances of the same mesh under different probes share a probe — the first one in traversal
-order wins. Splitting them would mean duplicating the sets and losing the instanced draw.
+One deliberate limitation **of the Vulkan path**: the descriptor set is per **shared mesh**, not
+per GameObject. Two instances of the same mesh under different probes share a probe — the first
+one in traversal order wins. Splitting them would mean duplicating the sets and losing the
+instanced draw. The DirectX 12 backend does not have this limitation: there the descriptor block
+is per object and only the resources behind it are shared, so the probe is per GameObject and
+still groups into one draw (see above).
 
 ## Mesh Visibility
 
@@ -543,12 +602,15 @@ Open it with **View → Performance**. It is an editor-only panel — nothing in
 - **Process**: RAM working set and peak, CPU usage of the process, and VRAM in use against
   the budget the system grants it.
 
-The GPU times come from Vulkan timestamp queries written into the command buffer that is
+The GPU times come from timestamp queries written into the command buffer that is
 already being recorded — no extra pass, pipeline or render target. Results are read from the
 frame `N-2`, the slot whose fence this frame already waited on, and **without**
 `VK_QUERY_RESULT_WAIT_BIT`: nothing ever blocks a frame in flight, and there is no
 `vkDeviceWaitIdle` anywhere near it. The first two frames after opening the panel therefore
-show `--`, and so does any pass that is switched off.
+show `--`, and so does any pass that is switched off. The DirectX 12 backend feeds the same
+panel through its own query heap and readback buffer, with the same non-blocking rule; there
+every slot is written at the start of the frame, so a pass that did not run reads zero instead
+of keeping a stale tick from three frames ago.
 
 Closing the panel costs exactly nothing. `PerformancePanel::draw` calls
 `Renderer::setPerfCaptureEnabled(false)`, and with the capture off the renderer records no
@@ -694,7 +756,7 @@ logged and the component is quarantined). See `Scripts/Rotator.lua` and `Scripts
 | System | Candidates |
 | --- | --- |
 | Post-processing | Motion blur, depth of field |
-| Multi-backend RHI | DX12 / Vulkan / Metal, for Windows + Linux + macOS |
+| Platforms | Linux and macOS — the Vulkan backend already covers Linux on paper, but the window/build/tooling layer is Windows-only today; macOS would need a Metal backend |
 
 ## License
 
