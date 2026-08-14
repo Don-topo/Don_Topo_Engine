@@ -992,6 +992,13 @@ struct D3D12Renderer::Impl {
 
         bool  baked  = false;  // false: todavía enseña el IBL global
         float bakeMs = 0.0f;   // último horneado, medido con los timestamps
+
+        // El horneado se quedó a medias (la GPU rechazó una lista). Sin esto,
+        // "no horneada" haría que se reintentara en CADA frame, y cada intento
+        // espera a la GPU siete veces: un fallo permanente dejaría el editor a
+        // rastras. Se limpia cuando la sonda cambia, que es cuando vuelve a
+        // tener sentido intentarlo.
+        bool  bakeFailed = false;
     };
     std::vector<GpuProbe> probes;
 
@@ -5182,26 +5189,34 @@ void D3D12Renderer::Impl::syncProbes()
         // capturó era otra vista.
         if (it->position != desc.position || it->radius != desc.radius ||
             it->intensity != desc.intensity) {
-            it->position  = desc.position;
-            it->radius    = desc.radius;
-            it->intensity = desc.intensity;
-            it->baked     = false;
+            it->position   = desc.position;
+            it->radius     = desc.radius;
+            it->intensity  = desc.intensity;
+            it->baked      = false;
+            it->bakeFailed = false;
         }
     }
 
     // Peticiones de horneado. Se atienden AQUÍ, al principio del frame y antes
     // de grabar nada, porque hornear reescribe la cámara y el UBO y espera a la
     // GPU: a mitad de un frame sería grabar sobre lo ya grabado.
+    //
+    // Pedirlo a mano limpia también la marca de fallo: es la forma que tiene el
+    // usuario de decir "vuelve a intentarlo".
     if (probeBakeAllQueued) {
-        for (GpuProbe& probe : probes)
-            probe.baked = false;
+        for (GpuProbe& probe : probes) {
+            probe.baked      = false;
+            probe.bakeFailed = false;
+        }
         probeBakeAllQueued = false;
     }
     for (const uint64_t owner : probeBakeQueue) {
         auto it = std::find_if(probes.begin(), probes.end(),
                                [owner](const GpuProbe& p) { return p.ownerId == owner; });
-        if (it != probes.end())
-            it->baked = false;
+        if (it != probes.end()) {
+            it->baked      = false;
+            it->bakeFailed = false;
+        }
     }
     probeBakeQueue.clear();
 
@@ -5209,7 +5224,7 @@ void D3D12Renderer::Impl::syncProbes()
     // para hacerlo de golpe con varias sondas, y así el editor sigue
     // respondiendo mientras se hornean.
     for (GpuProbe& probe : probes) {
-        if (probe.baked)
+        if (probe.baked || probe.bakeFailed)
             continue;
         bakeProbe(probe);
         break;
@@ -5398,8 +5413,6 @@ void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
     }
 
     ID3D12CommandAllocator* allocator = allocators[frameIndex].Get();
-    if (FAILED(allocator->Reset()) || FAILED(commandList->Reset(allocator, nullptr)))
-        return;
 
     auto transition = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES before,
                           D3D12_RESOURCE_STATES after) {
@@ -5412,13 +5425,43 @@ void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
         commandList->ResourceBarrier(1, &barrier);
     };
 
-    transition(probe.captureAllocation->GetResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-               D3D12_RESOURCE_STATE_RENDER_TARGET);
+    auto beginList = [&]() {
+        return SUCCEEDED(allocator->Reset()) && SUCCEEDED(commandList->Reset(allocator, nullptr));
+    };
+    auto submitAndWait = [&]() {
+        if (FAILED(commandList->Close()))
+            return false;
+        ID3D12CommandList* lists[] = {commandList.Get()};
+        queue->ExecuteCommandLists(1, lists);
+        waitForGpu();
+        return true;
+    };
 
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = dsvHeap->GetCPUDescriptorHandleForHeapStart();
     dsv.ptr += static_cast<SIZE_T>(2) * dsvSize;
 
+    const auto bakeStart = std::chrono::high_resolution_clock::now();
+
+    // Una lista POR CARA, enviada y esperada antes de grabar la siguiente. Las
+    // seis comparten el UBO de escena —una sola dirección de constant buffer— y
+    // lo que la GPU lee es lo que haya en esa memoria cuando EJECUTA, no cuando
+    // se grabó: de corrido, las seis caras salían con la cámara de la última y
+    // el cubemap era seis copias de la misma vista. Vale igual para cualquier
+    // buffer por frame que se reescriba entre caras.
+    bool inRenderTarget = false;
+    bool facesOk        = true;
+
     for (UINT face = 0; face < 6; ++face) {
+        if (!beginList()) {
+            facesOk = false;
+            break;
+        }
+
+        if (face == 0)
+            transition(probe.captureAllocation->GetResource(),
+                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                       D3D12_RESOURCE_STATE_RENDER_TARGET);
+
         // 90° por cara y un rango generoso: la sonda ve toda la escena, no el
         // encuadre del jugador.
         cameraView       = glm::lookAtRH(probe.position, probe.position + kDirs[face], kUps[face]);
@@ -5441,24 +5484,31 @@ void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
         rtv.ptr += static_cast<SIZE_T>(kProbeRtvBase + face) * rtvSize;
 
         recordSceneGeometry(rtv, dsv, kProbeFaceSize, kProbeFaceSize);
+
+        if (!submitAndWait()) {
+            facesOk = false;
+            break;
+        }
+        inRenderTarget = true;
     }
 
-    transition(probe.captureAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
-               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    // La vuelta a lectura se graba aunque una cara haya fallado: dejar el
+    // cubemap en RENDER_TARGET descuadraría la barrera del siguiente horneado,
+    // que lo espera en PIXEL_SHADER_RESOURCE.
+    bool convolved = false;
+    if (inRenderTarget && beginList()) {
+        transition(probe.captureAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-    // Y la convolución: los mismos dos compute del IBL global, pero leyendo la
-    // captura de esta sonda y escribiendo en sus cubemaps.
-    recordIblConvolution(probe.srvBase + kProbeCaptureSrv, probe.srvBase + kProbeIrradianceUav,
-                         probe.srvBase + kProbePrefilterUav, probe.intensity);
+        // Y la convolución: los mismos dos compute del IBL global, pero leyendo
+        // la captura de esta sonda y escribiendo en sus cubemaps.
+        if (facesOk)
+            recordIblConvolution(probe.srvBase + kProbeCaptureSrv,
+                                 probe.srvBase + kProbeIrradianceUav,
+                                 probe.srvBase + kProbePrefilterUav, probe.intensity);
 
-    if (FAILED(commandList->Close()))
-        return;
-
-    const auto bakeStart = std::chrono::high_resolution_clock::now();
-
-    ID3D12CommandList* lists[] = {commandList.Get()};
-    queue->ExecuteCommandLists(1, lists);
-    waitForGpu();
+        convolved = submitAndWait() && facesOk;
+    }
 
     // Tiempo de pared, no de GPU: aquí se espera a que termine, así que la
     // espera ES el coste, y es lo que interesa saber al que hornea.
@@ -5475,7 +5525,11 @@ void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
     probeFaceProj.reset();
     updateSceneUbo();
 
-    probe.baked = true;
+    // Sin las seis caras y su convolución, la sonda NO queda horneada: marcarla
+    // igual la dejaría en la lista de candidatas con sus cubemaps a medias, y
+    // los objetos que le tocaran reflejarían eso.
+    probe.baked      = convolved;
+    probe.bakeFailed = !convolved;
 }
 
 void D3D12Renderer::Impl::releaseProbe(GpuProbe& probe)
