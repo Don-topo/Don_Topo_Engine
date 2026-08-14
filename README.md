@@ -191,10 +191,10 @@ layouts: spirv-cross names vertex inputs by *location*, so every semantic comes 
 Feature parity with the Vulkan path: PBR and image-based lighting, cascaded shadows, SSAO, SSR,
 volumetric fog, bloom, the five anti-aliasing modes, Forward+ light culling, frustum culling,
 reflection probes, the 2D game UI, instanced draws of repeated meshes, per-pass GPU timings in
-the Performance panel (D3D12 timestamp queries, same read-from-`N-2` rule), and the exported
-runtime.
+the Performance panel (D3D12 timestamp queries, same read-from-`N-2` rule), the scene
+`CameraComponent` on Play, and the exported runtime.
 
-Three places where the implementation differs rather than the result:
+Four places where the implementation differs rather than the result:
 
 - **Probe assignment is per GameObject**, not per shared mesh. Objects that share a mesh share
   its buffers and textures but keep their own descriptor block, so two copies of the same crate
@@ -207,12 +207,10 @@ Three places where the implementation differs rather than the result:
   `StartInstanceLocation`. `gl_InstanceIndex` includes the base instance by specification;
   `SV_InstanceID`, which spirv-cross translates it to, is not guaranteed to. Pointing the view at
   the group's first matrix costs the same and does not depend on the driver.
-
-And two differences you can actually see. The **depth range is fixed at `0.1 … 500`**: a
-`CameraComponent`'s own near/far are ignored here, so a scene deeper than 500 units gets clipped
-where Vulkan would not. And the **selection outline is drawn inside the scene pass** rather than
-after the tonemap, so its orange goes through ACES — still unmistakable, but not the same flat
-orange the Vulkan viewport shows.
+- **The selection outline needs the depth pre-pass under MSAA.** It is drawn over the LDR target,
+  after the tonemap, so its orange arrives flat; that target has one sample and the scene's depth
+  has N, so with MSAA the single-sample depth from the pre-pass is used instead — which is why
+  that pre-pass also runs when something is selected.
 
 ## HDR & Bloom
 
