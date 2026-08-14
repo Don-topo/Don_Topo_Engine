@@ -578,6 +578,15 @@ struct D3D12Renderer::Impl {
         // Solo el dueño libera. Un duplicado que soltara los buffers dejaría a
         // los demás dibujando con memoria liberada, y eso no lo avisa nadie.
         bool ownsGpu = true;
+        // Cuántos objetos vivos apuntan a ESTA malla. Solo lo lleva el dueño
+        // (los duplicados se quedan a 0). Hoy nadie borra objetos de uno en uno
+        // —removeGameObject los apaga, ver setObjectMeshVisible— así que el
+        // único que libera es clearStaticMeshes y se lo lleva todo; el contador
+        // está para que el día que aparezca un borrado suelto NO pueda soltar
+        // los buffers con duplicados todavía dibujándolos. La guarda vive en
+        // releaseStaticObject, que es quien borra, y no en una lista de sitios
+        // desde los que está permitido llamar.
+        int  sharedRefs = 0;
 
         // Grupo de dibujo: misma malla Y bloque de descriptores equivalente.
         // Los objetos de un grupo se pintan de un solo draw instanciado. -1
@@ -603,6 +612,12 @@ struct D3D12Renderer::Impl {
     std::vector<int> drawGroupRep;
     bool             drawGroupsDirty = true;
     void             rebuildDrawGroups();
+
+    // El ÚNICO sitio que suelta los recursos de un objeto estático. La decisión
+    // de si se puede o no vive aquí dentro, y no en una lista de llamantes
+    // autorizados: un duplicado nunca posee nada, y el dueño solo suelta cuando
+    // no queda nadie más apuntando a su malla. Devuelve si liberó.
+    bool releaseStaticObject(StaticObject& object);
 
     // Matrices por instancia de la escena. shadow.vert saca el model de aquí
     // SIEMPRE —no tiene ruta de push constant— y triangle.vert cuando el draw
@@ -762,9 +777,24 @@ struct D3D12Renderer::Impl {
 
     // Matrices de los personajes para el pase de sombras, por lo mismo que
     // sceneInstanceAllocation: shadow.vert saca el model del SSBO siempre.
-    D3D12MA::Allocation* skinnedInstanceAllocation = nullptr;
-    void*                skinnedInstanceMapped     = nullptr;
-    size_t               skinnedInstanceCapacity   = 0;
+    // Uno por frame en vuelo, por el mismo motivo que el de la escena: se
+    // reescribe desde CPU cada frame mientras la GPU puede seguir leyendo el
+    // anterior. Aquí el reparto es fijo (una matriz por personaje, en su
+    // índice), así que lo peor que daba el buffer único era una sombra con el
+    // transform de un frame antes; con un solo buffer eso no se puede ni
+    // detectar ni descartar, y cuesta lo mismo hacerlo bien.
+    std::array<D3D12MA::Allocation*, kFrameCount> skinnedInstanceAllocations{};
+    std::array<void*, kFrameCount>                skinnedInstanceMapped{};
+    std::array<size_t, kFrameCount>               skinnedInstanceCapacity{};
+
+    // Dirección de la matriz del personaje `index`. Igual que instanceAddress:
+    // se desplaza la vista en vez de mover la instancia base, que en HLSL no
+    // está garantizado que llegue a SV_InstanceID.
+    D3D12_GPU_VIRTUAL_ADDRESS skinnedInstanceAddress(size_t index) const
+    {
+        return skinnedInstanceAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress() +
+               static_cast<UINT64>(index) * sizeof(glm::mat4);
+    }
 
     // ── Cielo ───────────────────────────────────────────────────────────
     ComPtr<ID3D12RootSignature> skyboxRootSignature;
@@ -2711,19 +2741,19 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
 
 void D3D12Renderer::Impl::ensureSkinnedInstanceBuffer(size_t count)
 {
-    if (count == 0 || count <= skinnedInstanceCapacity)
+    if (count == 0 || count <= skinnedInstanceCapacity[frameIndex])
         return;
 
-    const size_t newCapacity = (std::max)(count, skinnedInstanceCapacity * 2 + 16);
+    const size_t newCapacity = (std::max)(count, skinnedInstanceCapacity[frameIndex] * 2 + 16);
 
-    if (skinnedInstanceAllocation) {
+    if (skinnedInstanceAllocations[frameIndex]) {
         waitForGpu();
-        if (skinnedInstanceMapped) {
-            skinnedInstanceAllocation->GetResource()->Unmap(0, nullptr);
-            skinnedInstanceMapped = nullptr;
+        if (skinnedInstanceMapped[frameIndex]) {
+            skinnedInstanceAllocations[frameIndex]->GetResource()->Unmap(0, nullptr);
+            skinnedInstanceMapped[frameIndex] = nullptr;
         }
-        skinnedInstanceAllocation->Release();
-        skinnedInstanceAllocation = nullptr;
+        skinnedInstanceAllocations[frameIndex]->Release();
+        skinnedInstanceAllocations[frameIndex] = nullptr;
     }
 
     D3D12_RESOURCE_DESC desc{};
@@ -2740,13 +2770,15 @@ void D3D12Renderer::Impl::ensureSkinnedInstanceBuffer(size_t count)
     allocDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
 
     throwIfFailed(allocator->CreateResource(&allocDesc, &desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-                                            nullptr, &skinnedInstanceAllocation, IID_NULL, nullptr),
+                                            nullptr, &skinnedInstanceAllocations[frameIndex],
+                                            IID_NULL, nullptr),
                   "D3D12MA::Allocator::CreateResource(instancias de personajes)");
 
     const D3D12_RANGE noRead{0, 0};
-    throwIfFailed(skinnedInstanceAllocation->GetResource()->Map(0, &noRead, &skinnedInstanceMapped),
+    throwIfFailed(skinnedInstanceAllocations[frameIndex]->GetResource()->Map(
+                      0, &noRead, &skinnedInstanceMapped[frameIndex]),
                   "ID3D12Resource::Map(instancias de personajes)");
-    skinnedInstanceCapacity = newCapacity;
+    skinnedInstanceCapacity[frameIndex] = newCapacity;
 }
 
 void D3D12Renderer::Impl::releaseSkinnedObjects()
@@ -4736,17 +4768,16 @@ void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
         }
     }
 
-    if (!skinnedObjects.empty() && skinnedInstanceAllocation) {
+    if (!skinnedObjects.empty() && skinnedInstanceAllocations[frameIndex]) {
         commandList->SetPipelineState(depthPrepassSkinnedPipeline.Get());
-        commandList->SetGraphicsRootShaderResourceView(
-            1, skinnedInstanceAllocation->GetResource()->GetGPUVirtualAddress());
         for (size_t i = 0; i < skinnedObjects.size(); ++i) {
             const SkinnedObject& character = skinnedObjects[i];
             if (!character.visible || character.indexCount == 0)
                 continue;
+            commandList->SetGraphicsRootShaderResourceView(1, skinnedInstanceAddress(i));
             commandList->IASetVertexBuffers(0, 1, &character.vertexBufferView);
             commandList->IASetIndexBuffer(&character.indexBufferView);
-            commandList->DrawIndexedInstanced(character.indexCount, 1, 0, 0, static_cast<UINT>(i));
+            commandList->DrawIndexedInstanced(character.indexCount, 1, 0, 0, 0);
         }
     }
 
@@ -5286,6 +5317,12 @@ void D3D12Renderer::Impl::syncProbes()
                 writeProbeSlots(sub.srvBase, -1);
         probeAssignStatic.assign(objects.size(), -1);
         probeAssignSkinned.assign(skinnedObjects.size(), -1);
+        // La sonda entra en la clave del grupo de dibujo, y aquí se reasigna a
+        // mano sin pasar por refreshProbeAssignment: sin esto los grupos se
+        // quedarían partidos por una sonda que ya no existe. No se ve mal
+        // —todos los bloques vuelven al IBL global, así que cada grupo sigue
+        // siendo coherente—, pero son draws de más para siempre.
+        drawGroupsDirty = true;
 
         releaseProbe(probes[i]);
         probes.erase(probes.begin() + static_cast<long>(i));
@@ -6470,6 +6507,36 @@ D3D12_GPU_VIRTUAL_ADDRESS D3D12Renderer::Impl::instanceAddress(uint32_t index) c
            static_cast<UINT64>(index) * sizeof(glm::mat4);
 }
 
+bool D3D12Renderer::Impl::releaseStaticObject(StaticObject& object)
+{
+    // Un duplicado lleva COPIAS de los handles del dueño: soltarlas liberaría
+    // dos veces el mismo recurso. Solo baja el recuento del dueño.
+    if (!object.ownsGpu) {
+        if (object.sharedMesh >= 0 && object.sharedMesh < static_cast<int>(objects.size()))
+            --objects[static_cast<size_t>(object.sharedMesh)].sharedRefs;
+        object.vertexAllocation     = nullptr;
+        object.indexAllocation      = nullptr;
+        object.baseColorAllocation  = nullptr;
+        object.normalMapAllocation  = nullptr;
+        object.metalRoughAllocation = nullptr;
+        return false;
+    }
+
+    // El dueño con duplicados vivos NO puede soltar: los dejaría dibujando con
+    // memoria liberada, que no lo avisa ni la capa de validación.
+    if (--object.sharedRefs > 0)
+        return false;
+
+    for (D3D12MA::Allocation** allocation :
+         {&object.vertexAllocation, &object.indexAllocation, &object.baseColorAllocation,
+          &object.normalMapAllocation, &object.metalRoughAllocation}) {
+        if (*allocation)
+            (*allocation)->Release();
+        *allocation = nullptr;
+    }
+    return true;
+}
+
 void D3D12Renderer::Impl::rebuildDrawGroups()
 {
     drawGroupRep.clear();
@@ -6582,19 +6649,17 @@ void D3D12Renderer::Impl::recordShadowPasses()
             }
         }
 
-        if (!skinnedObjects.empty() && skinnedInstanceAllocation) {
+        if (!skinnedObjects.empty() && skinnedInstanceAllocations[frameIndex]) {
             commandList->SetPipelineState(shadowSkinnedPipeline.Get());
-            commandList->SetGraphicsRootShaderResourceView(
-                2, skinnedInstanceAllocation->GetResource()->GetGPUVirtualAddress());
 
             for (size_t i = 0; i < skinnedObjects.size(); ++i) {
                 const SkinnedObject& character = skinnedObjects[i];
                 if (!character.visible || character.indexCount == 0)
                     continue;
+                commandList->SetGraphicsRootShaderResourceView(2, skinnedInstanceAddress(i));
                 commandList->IASetVertexBuffers(0, 1, &character.vertexBufferView);
                 commandList->IASetIndexBuffer(&character.indexBufferView);
-                commandList->DrawIndexedInstanced(character.indexCount, 1, 0, 0,
-                                                  static_cast<UINT>(i));
+                commandList->DrawIndexedInstanced(character.indexCount, 1, 0, 0, 0);
             }
         }
     }
@@ -7290,8 +7355,8 @@ void D3D12Renderer::drawFrame()
     // StartInstanceLocation, y shadow.vert saca su model de este buffer.
     if (!d.skinnedObjects.empty()) {
         d.ensureSkinnedInstanceBuffer(d.skinnedObjects.size());
-        if (d.skinnedInstanceMapped) {
-            auto* matrices = static_cast<glm::mat4*>(d.skinnedInstanceMapped);
+        if (d.skinnedInstanceMapped[d.frameIndex]) {
+            auto* matrices = static_cast<glm::mat4*>(d.skinnedInstanceMapped[d.frameIndex]);
             for (size_t i = 0; i < d.skinnedObjects.size(); ++i)
                 matrices[i] = d.skinnedObjects[i].transform;
         }
@@ -7643,7 +7708,8 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
                        found->second < static_cast<int>(d.objects.size());
 
     if (reusa) {
-        const Impl::StaticObject& owner = d.objects[static_cast<size_t>(found->second)];
+        Impl::StaticObject& owner = d.objects[static_cast<size_t>(found->second)];
+        ++owner.sharedRefs;
         object.vertexAllocation  = owner.vertexAllocation;
         object.indexAllocation   = owner.indexAllocation;
         object.vertexBufferView  = owner.vertexBufferView;
@@ -7693,6 +7759,7 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
 
         object.sharedMesh = static_cast<int>(d.objects.size());
         object.ownsGpu    = true;
+        object.sharedRefs = 1;  // él mismo
     }
 
     object.metallic  = mesh.material.metallic;
@@ -7852,22 +7919,14 @@ void D3D12Renderer::clearStaticMeshes()
     // con trabajo en vuelo es una corrupción silenciosa, no un error de la API.
     d.waitForGpu();
 
-    for (Impl::StaticObject& object : d.objects) {
-        // Los duplicados llevan COPIAS de los handles del dueño: soltarlas
-        // liberaría dos veces el mismo recurso.
-        if (!object.ownsGpu)
-            continue;
-        if (object.vertexAllocation)
-            object.vertexAllocation->Release();
-        if (object.indexAllocation)
-            object.indexAllocation->Release();
-        if (object.baseColorAllocation)
-            object.baseColorAllocation->Release();
-        if (object.normalMapAllocation)
-            object.normalMapAllocation->Release();
-        if (object.metalRoughAllocation)
-            object.metalRoughAllocation->Release();
-    }
+    // Se sueltan TODOS a la vez, así que primero se anula el recuento: la
+    // guarda de releaseStaticObject protege el borrado de UNO suelto, y aquí no
+    // queda nadie vivo que pueda seguir apuntando a estos buffers.
+    for (Impl::StaticObject& object : d.objects)
+        object.sharedRefs = object.ownsGpu ? 1 : 0;
+    for (Impl::StaticObject& object : d.objects)
+        d.releaseStaticObject(object);
+
     d.objects.clear();
     d.sharedMeshOwner.clear();
     d.drawGroupRep.clear();
@@ -8500,20 +8559,15 @@ void D3D12Renderer::shutdown()
         }
     }
 
-    // Geometría de la escena, antes que el allocator. Solo el dueño de cada
-    // malla compartida suelta: los duplicados llevan copias de sus handles.
-    for (Impl::StaticObject& object : d.objects) {
-        if (!object.ownsGpu)
-            continue;
-        if (object.vertexAllocation)
-            object.vertexAllocation->Release();
-        if (object.indexAllocation)
-            object.indexAllocation->Release();
-        if (object.baseColorAllocation)
-            object.baseColorAllocation->Release();
-        if (object.normalMapAllocation)
-            object.normalMapAllocation->Release();
-    }
+    // Geometría de la escena, antes que el allocator. Por la misma función que
+    // clearStaticMeshes, para que el criterio de quién suelta viva en un solo
+    // sitio; aquí se cierra todo, así que el recuento se anula antes. Este
+    // camino ADEMÁS soltaba el ORM, que clearStaticMeshes se dejaba.
+    for (Impl::StaticObject& object : d.objects)
+        object.sharedRefs = object.ownsGpu ? 1 : 0;
+    for (Impl::StaticObject& object : d.objects)
+        d.releaseStaticObject(object);
+
     d.objects.clear();
     d.sharedMeshOwner.clear();
     d.drawGroupRep.clear();
@@ -8556,14 +8610,16 @@ void D3D12Renderer::shutdown()
         d.debugLineVertices    = 0;
     }
 
-    if (d.skinnedInstanceAllocation) {
-        if (d.skinnedInstanceMapped) {
-            d.skinnedInstanceAllocation->GetResource()->Unmap(0, nullptr);
-            d.skinnedInstanceMapped = nullptr;
+    for (UINT i = 0; i < kFrameCount; ++i) {
+        if (!d.skinnedInstanceAllocations[i])
+            continue;
+        if (d.skinnedInstanceMapped[i]) {
+            d.skinnedInstanceAllocations[i]->GetResource()->Unmap(0, nullptr);
+            d.skinnedInstanceMapped[i] = nullptr;
         }
-        d.skinnedInstanceAllocation->Release();
-        d.skinnedInstanceAllocation = nullptr;
-        d.skinnedInstanceCapacity   = 0;
+        d.skinnedInstanceAllocations[i]->Release();
+        d.skinnedInstanceAllocations[i] = nullptr;
+        d.skinnedInstanceCapacity[i]    = 0;
     }
 
     d.groundVertexBufferView = {};
