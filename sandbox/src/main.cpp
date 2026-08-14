@@ -404,6 +404,10 @@ int main()
                 {
                     editor.buildUiFrame(d3d12.viewportTexture(), &d3dScene.getRoot(),
                                         d3dCamera.getViewMatrix());
+                    // Con el selector delante no se dibuja escena, pero el
+                    // singleton de gizmos es global: vaciarlo aquí también evita
+                    // que lo que quedara de antes se arrastre.
+                    DonTopo::Gizmos::clear();
                     d3d12.drawFrame();
                     continue;
                 }
@@ -601,6 +605,21 @@ int main()
                         d3dCamera.update(native, d3dDelta);
 
                     d3d12.setCamera(d3dCamera);
+                }
+
+                // Gizmos: los rellena el panel del viewport dentro de
+                // buildUiFrame (colliders, luces, frustum de la cámara, ejes de
+                // la selección) y aquí se suben al backend. En Vulkan de esto se
+                // encarga Renderer::drawFrame, que los lee del singleton y los
+                // limpia; este camino no pasaba por ahí, así que ni se dibujaban
+                // ni se vaciaban NUNCA: el vector crecía frame a frame hasta
+                // reventar kMaxGizmoVertices, y lo único que se veía era el
+                // aviso de "capacidad de 65536 vertices excedida".
+                {
+                    const auto& lineas = DonTopo::Gizmos::vertices();
+                    d3d12.submitDebugLines(
+                        lineas.empty() ? nullptr : &lineas[0].pos.x, lineas.size());
+                    DonTopo::Gizmos::clear();
                 }
 
                 d3d12.drawFrame();

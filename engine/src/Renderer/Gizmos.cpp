@@ -271,6 +271,11 @@ void Gizmos::clear()
     get().m_vertices.clear();
 }
 
+const std::vector<GizmoVertex>& Gizmos::vertices()
+{
+    return get().m_vertices;
+}
+
 void Gizmos::drawRay(const glm::vec3& origin, const glm::vec3& dir, float length, const glm::vec3& color)
 {
     if (!get().m_enabled) return;

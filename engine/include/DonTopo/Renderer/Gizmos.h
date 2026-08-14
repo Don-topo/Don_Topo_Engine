@@ -63,6 +63,14 @@ public:
     static void draw(VkCommandBuffer cmd, const glm::mat4& viewProj, int frameIndex);
     static void clear();
 
+    // Los vértices acumulados en este ciclo. Vulkan no lo necesita —draw() los
+    // lee del singleton— pero un backend que no sea Vulkan tiene que poder
+    // subirlos por su cuenta (D3D12Renderer::submitDebugLines). Quien los
+    // consuma es TAMBIÉN quien tiene que llamar a clear(): sin eso el vector
+    // crece frame tras frame hasta agotar kMaxGizmoVertices, y lo único que se
+    // ve es el aviso de capacidad.
+    static const std::vector<GizmoVertex>& vertices();
+
     // Debe coincidir con Renderer::MAX_FRAMES (comprobado con static_assert en Renderer.cpp).
     static constexpr int kFramesInFlight = 2;
 

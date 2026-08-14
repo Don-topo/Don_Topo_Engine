@@ -7214,7 +7214,14 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
     // La rejilla y las líneas de depuración son cosa del EDITOR: en un juego
     // exportado no pintan nada, y salían igual porque este backend no miraba el
     // modo headless.
-    if (gizmoPipeline && gridVertexCount > 0 && !headless) {
+    // La rejilla y las líneas de depuración comparten pipeline y formato de
+    // vértice, pero NO condición: antes las líneas colgaban del `if` de la
+    // rejilla, así que una escena sin rejilla se llevaba por delante también los
+    // gizmos del editor. Cada una con la suya.
+    const bool dibujaRejilla = gridVertexCount > 0;
+    const bool dibujaLineas  = debugLineVertices > 0 && debugLinesAllocation;
+
+    if (gizmoPipeline && !headless && (dibujaRejilla || dibujaLineas)) {
         commandList->SetPipelineState(gizmoPipeline.Get());
         commandList->SetGraphicsRootSignature(rootSignature.Get());
         // glm guarda la matriz en columnas y el HLSL traducido la declara
@@ -7222,12 +7229,16 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
         // sin transponer.
         commandList->SetGraphicsRoot32BitConstants(0, 16, &viewProj[0][0], 0);
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-        commandList->IASetVertexBuffers(0, 1, &gridVertexBufferView);
-        commandList->DrawInstanced(gridVertexCount, 1, 0, 0);
 
-        // Y las líneas que hayan mandado este frame: mismo pipeline, mismo
-        // formato de vértice y la misma viewProj ya enlazada.
-        if (debugLineVertices > 0 && debugLinesAllocation) {
+        if (dibujaRejilla) {
+            commandList->IASetVertexBuffers(0, 1, &gridVertexBufferView);
+            commandList->DrawInstanced(gridVertexCount, 1, 0, 0);
+        }
+
+        // Las que haya mandado este frame quien dibuja (en el editor,
+        // ViewportPanel a través de submitDebugLines): colliders, luces,
+        // frustum de la cámara y ejes de la selección.
+        if (dibujaLineas) {
             commandList->IASetVertexBuffers(0, 1, &debugLinesView);
             commandList->DrawInstanced(debugLineVertices, 1, 0, 0);
         }
