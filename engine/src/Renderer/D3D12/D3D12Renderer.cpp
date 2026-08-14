@@ -3,6 +3,7 @@
 #ifdef DT_D3D12_ENABLED
 
 #include "DonTopo/Core/Camera.h"
+#include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/ReflectionProbeComponent.h"
 #include "DonTopo/Core/Scene.h"
@@ -224,6 +225,10 @@ constexpr int kBloomMips = 5;
 // umbral del bloom solo tiene sentido si el color puede pasar de 1.0, que es
 // justo lo que un backbuffer normalizado recorta.
 constexpr DXGI_FORMAT kHdrFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+// Destino de la composición, ya con el tone mapping aplicado. De aquí lee el
+// pase final (FXAA/TAA/SSAA) para escribir el backbuffer.
+constexpr DXGI_FORMAT kLdrFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
 // Push compartido por bloom_down y bloom_up: vec2 + 3 float + int = 24 bytes.
 struct BloomPush {
@@ -506,6 +511,20 @@ struct D3D12Renderer::Impl {
 
     ComPtr<ID3D12PipelineState> outlinePipeline;
     ComPtr<ID3D12PipelineState> outlineSkinnedPipeline;
+    // Los mismos contra el target LDR, que es donde se dibuja el contorno: va
+    // DESPUÉS del tone mapping para que su naranja no pase por ACES. Los de
+    // arriba se quedan porque son los que fija el formato HDR y las muestras
+    // del pase de escena, de donde estos heredan todo lo demás.
+    ComPtr<ID3D12PipelineState> outlineLdrPipeline;
+    ComPtr<ID3D12PipelineState> outlineSkinnedLdrPipeline;
+
+    // Dibuja el casco invertido de lo seleccionado sobre el target LDR, con la
+    // profundidad de la escena para que solo asome por donde de verdad se ve.
+    void recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv);
+    // Si hay algo seleccionado que dibujar. Lo consulta el pre-pase: con MSAA,
+    // la profundidad del pase de escena es multimuestra y el contorno necesita
+    // una de una muestra, que es justo la que produce ese pre-pase.
+    bool hasOutlineSelection() const;
     int   selectedObject  = -1;   // índice en objects, -1 sin selección
     int   selectedSkinned = -1;   // índice en skinnedObjects
     // En unidades de mundo: con mallas de detalle fino un casco grueso asoma
@@ -924,22 +943,43 @@ struct D3D12Renderer::Impl {
                       glm::vec3(0.0f, 1.0f, 0.0f));
     float cameraFovDeg = 60.0f;
 
+    // Tamaño característico de la escena, del que salen near y far en edición
+    // (near = /1000, far = ×3), igual que en el camino de Vulkan. Lo recalcula
+    // refitCameraRange cuando cambia la geometría; antes de eso el rango estaba
+    // clavado a 0.1-500 y una escena más profunda se recortaba.
+    float cameraDistance = 200.0f;
+
     // perspectiveRH_ZO, no perspective a secas: D3D12 clipea en z=[0,1] igual
     // que Vulkan, y con la convención de OpenGL se pierde la mitad cercana.
-    // Proyección con la que se dibuja. Durante el horneado de una sonda manda
-    // la de la cara —90°, cuadrada y con el rango largo—: es la única forma de
-    // que TODO lo que la usa (el UBO, la niebla, el cielo, el culling) vea la
-    // misma, sin pasarla por parámetro por media docena de funciones.
+    // Proyección con la que se dibuja. Manda, por este orden:
+    //   1. la cara de una sonda que se está horneando —90°, cuadrada y con el
+    //      rango largo—, que tiene que verla TODO lo que dibuja esa cara;
+    //   2. el CameraComponent de la escena, mientras corre Play;
+    //   3. la de edición, con el fov que empuja el editor.
+    // Resolverlo aquí y no por parámetro es lo que hace que el UBO, la niebla,
+    // el cielo y el culling no puedan discrepar.
     glm::mat4 cameraProj() const
     {
         if (probeFaceProj)
             return *probeFaceProj;
+        if (sceneCameraProj)
+            return *sceneCameraProj;
 
-        const float aspect =
-            (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
-        return glm::perspectiveRH_ZO(glm::radians(cameraFovDeg), aspect, 0.1f, 500.0f);
+        return glm::perspectiveRH_ZO(glm::radians(cameraFovDeg), viewportAspectRatio(),
+                                     cameraDistance * 0.001f, cameraDistance * 3.0f);
+    }
+    float viewportAspectRatio() const
+    {
+        return (height > 0) ? static_cast<float>(width) / static_cast<float>(height) : 1.0f;
     }
     std::optional<glm::mat4> probeFaceProj;
+
+    // Proyección del CameraComponent, mientras manda. Se resuelve una vez por
+    // frame (resolveFrameCamera) y no en cada consulta: cameraProj() se llama
+    // una decena de veces por frame y buscar la cámara en el árbol cada vez
+    // sería recorrer la escena diez veces para nada.
+    std::optional<glm::mat4> sceneCameraProj;
+    void                     resolveFrameCamera();
 
     void ensureSkinnedInstanceBuffer(size_t count);
 
@@ -2187,6 +2227,17 @@ void D3D12Renderer::Impl::createMeshPipeline()
         throwIfFailed(device->CreateGraphicsPipelineState(&outlineDesc,
                                                           IID_PPV_ARGS(&outlinePipeline)),
                       "ID3D12Device::CreateGraphicsPipelineState(contorno)");
+
+        // El mismo, pero contra el target LDR: ahí es donde se dibuja de
+        // verdad, DESPUÉS del tone mapping, para que su naranja llegue plano en
+        // vez de pasar por ACES. Siempre una muestra —el LDR no es
+        // multimuestra— y sin escribir profundidad, que ya no es suya.
+        outlineDesc.RTVFormats[0]                       = kLdrFormat;
+        outlineDesc.SampleDesc.Count                    = 1;
+        outlineDesc.DepthStencilState.DepthWriteMask    = D3D12_DEPTH_WRITE_MASK_ZERO;
+        throwIfFailed(device->CreateGraphicsPipelineState(&outlineDesc,
+                                                          IID_PPV_ARGS(&outlineLdrPipeline)),
+                      "ID3D12Device::CreateGraphicsPipelineState(contorno sobre LDR)");
     }
 
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&meshPipeline)),
@@ -2529,6 +2580,15 @@ void D3D12Renderer::Impl::createSkinningPipelines()
         throwIfFailed(device->CreateGraphicsPipelineState(&outlineDesc,
                                                           IID_PPV_ARGS(&outlineSkinnedPipeline)),
                       "ID3D12Device::CreateGraphicsPipelineState(contorno skinned)");
+
+        // Variante sobre el target LDR, por lo mismo que la de la malla.
+        outlineDesc.RTVFormats[0]                    = kLdrFormat;
+        outlineDesc.SampleDesc.Count                 = 1;
+        outlineDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        throwIfFailed(
+            device->CreateGraphicsPipelineState(&outlineDesc,
+                                                IID_PPV_ARGS(&outlineSkinnedLdrPipeline)),
+            "ID3D12Device::CreateGraphicsPipelineState(contorno skinned sobre LDR)");
     }
 }
 
@@ -4615,8 +4675,12 @@ void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
 
     const bool wantsSsao = state->ssaoEnabled();
     const bool wantsCull = state->forwardPlusMode() == RendererState::FpMode::Tiled;
-    const bool wantsMultisampleDepth = sampleCount > 1 &&
-                                       (state->fogEnabled() || state->ssrEnabled());
+    // Con MSAA, el contorno de la selección también la necesita: la del pase de
+    // escena es multimuestra y no se puede emparejar con el target LDR sobre el
+    // que se dibuja.
+    const bool wantsMultisampleDepth =
+        sampleCount > 1 &&
+        (state->fogEnabled() || state->ssrEnabled() || hasOutlineSelection());
     if (!wantsSsao && !wantsCull && !wantsMultisampleDepth)
         return;
 
@@ -5980,6 +6044,13 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     // Sin vertex buffer: fullscreen.vert saca las tres posiciones del índice.
     commandList->DrawInstanced(3, 1, 0, 0);
 
+    // El contorno de lo seleccionado, aquí y no en el pase de escena: sobre la
+    // imagen ya tonemapeada su naranja llega plano, que es el que lo distingue
+    // del amarillo de los colliders y del cian del frustum. De paso deja de
+    // colarse en la captura de una sonda, que es geometría de la escena y no
+    // decoración del editor.
+    recordSelectionOutline(ldrRtv);
+
     // FXAA sobre el resultado ya compuesto, y de ahí al backbuffer.
     transition(ldrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -6530,6 +6601,42 @@ void D3D12Renderer::Impl::updateViewProj()
     viewProj = cameraProj() * cameraView;
 }
 
+void D3D12Renderer::Impl::resolveFrameCamera()
+{
+    // Por defecto manda la cámara de edición, que es la que empuja setCamera
+    // cada frame. Se limpia SIEMPRE: al parar Play la vista tiene que volver
+    // sola, sin guardar ni restaurar nada.
+    sceneCameraProj.reset();
+
+    // headless = juego exportado, que está SIEMPRE en Play y no tiene editor
+    // que le empuje una cámara: si no se resuelve aquí, se queda con la vista
+    // por defecto del backend y no mira nunca por la cámara de la escena.
+    // Misma regla que Renderer::isPlaying() en el camino de Vulkan.
+    const bool playing = headless || (uiLayer && uiLayer->isPlaying());
+    if (!playing || !scene)
+        return;
+
+    GameObject* cam = scene->findCamera();
+    if (!cam || !cam->hasCameraComponent())
+        return;
+
+    const auto& component = cam->getCameraComponent();
+
+    // projectionMatrix trae el Y flip de Vulkan cocinado dentro. Aquí sobra:
+    // este backend no invierte el eje (ver updateSceneUbo). Se deshace en vez
+    // de rehacer la matriz a mano para que ortográfica, near/far y fov sigan
+    // saliendo de un único sitio.
+    glm::mat4 proj = component->projectionMatrix(viewportAspectRatio());
+    proj[1][1] *= -1.0f;
+    sceneCameraProj = proj;
+
+    // La vista y el ojo también salen del componente. cameraView y cameraPos se
+    // pisan sin más: el editor los vuelve a empujar en el frame siguiente, así
+    // que no hay estado que restaurar.
+    cameraView = CameraComponent::viewFromWorld(cam->worldTransform);
+    cameraPos  = glm::vec3(cam->worldTransform[3]);
+}
+
 D3D12Renderer::D3D12Renderer() : m_impl(std::make_unique<Impl>())
 {
     // El Impl consulta el estado a través de este puntero en vez de copiarlo:
@@ -6761,6 +6868,94 @@ void D3D12Renderer::init(Window& window)
     d.initialized = true;
 }
 
+bool D3D12Renderer::Impl::hasOutlineSelection() const
+{
+    if (selectedObject >= 0 && selectedObject < static_cast<int>(objects.size()) &&
+        objects[static_cast<size_t>(selectedObject)].meshVisible &&
+        objects[static_cast<size_t>(selectedObject)].indexCount > 0)
+        return true;
+    if (selectedSkinned >= 0 && selectedSkinned < static_cast<int>(skinnedObjects.size()) &&
+        skinnedObjects[static_cast<size_t>(selectedSkinned)].visible &&
+        skinnedObjects[static_cast<size_t>(selectedSkinned)].indexCount > 0)
+        return true;
+    return false;
+}
+
+void D3D12Renderer::Impl::recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv)
+{
+    if (!outlineLdrPipeline || !hasOutlineSelection())
+        return;
+
+    // La profundidad de la escena, en una versión que se pueda emparejar con el
+    // target LDR: los dos tienen que coincidir en número de muestras. Sin MSAA
+    // vale la del pase de escena; con MSAA esa es multimuestra y se usa la del
+    // pre-pase, que por eso se graba también cuando hay algo seleccionado.
+    const bool multisampled = sampleCount > 1;
+    if (multisampled && !prepassDepthAllocation)
+        return;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE dsv =
+        multisampled ? prepassDsvHeap->GetCPUDescriptorHandleForHeapStart()
+                     : dsvHeap->GetCPUDescriptorHandleForHeapStart();
+
+    commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+
+    // Viewport SIN altura negativa, al revés que el de la composición: aquel lo
+    // invierte porque fullscreen.vert da por hecha la orientación de Vulkan,
+    // pero esto es geometría de verdad y sale igual que en el pase de escena.
+    D3D12_VIEWPORT viewport{};
+    viewport.Width    = static_cast<float>(width);
+    viewport.Height   = static_cast<float>(height);
+    viewport.MaxDepth = 1.0f;
+    const D3D12_RECT scissor{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+    commandList->RSSetViewports(1, &viewport);
+    commandList->RSSetScissorRects(1, &scissor);
+
+    commandList->SetGraphicsRootSignature(meshRootSignature.Get());
+    commandList->SetGraphicsRootConstantBufferView(
+        0, sceneUboAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress());
+    // outline.vert/frag solo miran el UBO y el push, pero la root signature
+    // declara los otros dos rangos: se dejan apuntando a algo válido en vez de
+    // a cero.
+    commandList->SetGraphicsRootDescriptorTable(2, srvHeap->GetGPUDescriptorHandleForHeapStart());
+    commandList->SetGraphicsRootShaderResourceView(
+        3, instanceAllocation->GetResource()->GetGPUVirtualAddress());
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    auto drawOutline = [&](ID3D12PipelineState* pipeline, const glm::mat4& transform,
+                           const D3D12_VERTEX_BUFFER_VIEW& vertexView,
+                           const D3D12_INDEX_BUFFER_VIEW& indexView, UINT indexCount) {
+        if (indexCount == 0)
+            return;
+        commandList->SetPipelineState(pipeline);
+
+        PushData push{};
+        push.transform = transform;
+        // flags.y lleva el grosor de la extrusión, que es el hueco que esa vec2
+        // tenía libre.
+        push.flags = glm::vec2(0.0f, outlineWidth);
+        commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
+
+        commandList->IASetVertexBuffers(0, 1, &vertexView);
+        commandList->IASetIndexBuffer(&indexView);
+        commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+    };
+
+    if (selectedObject >= 0 && selectedObject < static_cast<int>(objects.size())) {
+        const StaticObject& object = objects[static_cast<size_t>(selectedObject)];
+        if (object.meshVisible)
+            drawOutline(outlineLdrPipeline.Get(), object.transform, object.vertexBufferView,
+                        object.indexBufferView, object.indexCount);
+    }
+    if (selectedSkinned >= 0 && selectedSkinned < static_cast<int>(skinnedObjects.size())) {
+        const SkinnedObject& character = skinnedObjects[static_cast<size_t>(selectedSkinned)];
+        if (character.visible)
+            drawOutline(outlineSkinnedLdrPipeline.Get(), character.transform,
+                        character.vertexBufferView, character.indexBufferView,
+                        character.indexCount);
+    }
+}
+
 void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
                                               D3D12_CPU_DESCRIPTOR_HANDLE dsv, UINT targetWidth,
                                               UINT targetHeight)
@@ -6937,52 +7132,6 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
         }
     }
 
-    // Contorno de lo seleccionado, con la geometría ya dibujada: el casco solo
-    // asoma por donde el depth test lo deja pasar.
-    //
-    // Va en el pase de escena y no en el de composición como en Vulkan, así que
-    // el tone mapping le toca el naranja. Es el precio de no arrastrar aquí un
-    // segundo destino con profundidad; se sigue distinguiendo de sobra.
-    if (outlinePipeline) {
-        auto drawOutline = [&](ID3D12PipelineState* pipeline, const glm::mat4& transform,
-                               const D3D12_VERTEX_BUFFER_VIEW& vertexView,
-                               const D3D12_INDEX_BUFFER_VIEW& indexView, UINT indexCount) {
-            if (indexCount == 0)
-                return;
-            commandList->SetPipelineState(pipeline);
-            commandList->SetGraphicsRootSignature(meshRootSignature.Get());
-            commandList->SetGraphicsRootConstantBufferView(
-                0, sceneUboAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress());
-
-            PushData push{};
-            push.transform = transform;
-            // flags.y lleva el grosor de la extrusión, que es el hueco que esa
-            // vec2 tenía libre.
-            push.flags = glm::vec2(0.0f, outlineWidth);
-            commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
-
-            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            commandList->IASetVertexBuffers(0, 1, &vertexView);
-            commandList->IASetIndexBuffer(&indexView);
-            commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
-        };
-
-        if (selectedObject >= 0 && selectedObject < static_cast<int>(objects.size())) {
-            const StaticObject& object = objects[selectedObject];
-            if (object.meshVisible)
-                drawOutline(outlinePipeline.Get(), object.transform, object.vertexBufferView,
-                            object.indexBufferView, object.indexCount);
-        }
-        if (selectedSkinned >= 0 &&
-            selectedSkinned < static_cast<int>(skinnedObjects.size())) {
-            const SkinnedObject& character = skinnedObjects[selectedSkinned];
-            if (character.visible)
-                drawOutline(outlineSkinnedPipeline.Get(), character.transform,
-                            character.vertexBufferView, character.indexBufferView,
-                            character.indexCount);
-        }
-    }
-
     // El cielo al final de la geometria: se apoya en la profundidad ya escrita
     // para salir solo donde no hay nada, y asi no paga sombreado por pixeles
     // que va a tapar la escena.
@@ -7035,6 +7184,14 @@ void D3D12Renderer::drawFrame()
     // ya esperó su fence, así que están completos. Se leen ANTES de grabar
     // nada, porque el frame que empieza los va a sobrescribir.
     d.readTimestamps();
+
+    // Qué cámara manda este frame: la de edición o la de la escena si corre
+    // Play. Va antes que todo lo que dibuja o mide —las sondas hornean con el
+    // UBO, las cascadas se reparten sobre el frustum— porque cambia la
+    // proyección y con ella el culling y el rango de sombras.
+    d.resolveFrameCamera();
+    d.updateViewProj();
+    d.computeCascades();
 
     // Los grupos de dibujo y el buffer de instancias, ANTES que las sondas: el
     // horneado graba el pase de geometría seis veces, y ese pase agrupa y
@@ -7950,8 +8107,59 @@ void D3D12Renderer::flushUploadsAndWait()
 
 void D3D12Renderer::refitCameraRange()
 {
-    // Nada que hacer: el rango de este backend es fijo (0.1 a 500) y no se
-    // deriva de lo que haya cargado.
+    Impl& d = *m_impl;
+
+    // Suelo del rango: una escena diminuta (o con todo en el mismo punto) daría
+    // far ~0 y no se vería ni el cielo. 200 deja far=600 y near=0.2, que cubre
+    // la cámara con la que abre el editor sin recortar props pequeños. Mismo
+    // valor que el camino de Vulkan, para que las dos den el mismo encuadre.
+    constexpr float kMinCameraDistance = 200.0f;
+
+    // Paréntesis alrededor de min/max: windows.h los define como macro.
+    glm::vec3 lo((std::numeric_limits<float>::max)());
+    glm::vec3 hi(std::numeric_limits<float>::lowest());
+    bool      any = false;
+
+    for (const Impl::StaticObject& object : d.objects) {
+        if (!object.hasBounds)
+            continue;
+
+        // Las 8 esquinas de la AABB local llevadas a mundo: con el objeto
+        // rotado o escalado, la caja alineada a ejes de la malla ya no acota.
+        for (int c = 0; c < 8; ++c) {
+            const glm::vec3 corner((c & 1) ? object.aabbMax.x : object.aabbMin.x,
+                                   (c & 2) ? object.aabbMax.y : object.aabbMin.y,
+                                   (c & 4) ? object.aabbMax.z : object.aabbMin.z);
+            const glm::vec3 world = glm::vec3(object.transform * glm::vec4(corner, 1.0f));
+            lo = (glm::min)(lo, world);
+            hi = (glm::max)(hi, world);
+        }
+        any = true;
+    }
+
+    // De los personajes solo entra su origen: aquí no se guarda una cota de la
+    // pose como en Vulkan, y esto solo fija near/far — no culea nada. Sirve
+    // para que una escena que sea solo personajes no se quede sin rango.
+    for (const Impl::SkinnedObject& character : d.skinnedObjects) {
+        const glm::vec3 origin(character.transform[3]);
+        lo  = (glm::min)(lo, origin);
+        hi  = (glm::max)(hi, origin);
+        any = true;
+    }
+
+    // Nada acotable: conserva el rango vigente en vez de dejarlo en infinitos.
+    // Es lo que pasa con la escena vacía de un proyecto recién creado.
+    if (!any)
+        return;
+
+    const float maxDim = (glm::max)(hi.x - lo.x, (glm::max)(hi.y - lo.y, hi.z - lo.z));
+    d.cameraDistance   = (glm::max)(maxDim * 1.2f, kMinCameraDistance);
+
+    // El rango acaba de cambiar de forma: sin esto, las cascadas seguirían
+    // repartidas sobre el frustum anterior hasta el siguiente movimiento de
+    // cámara.
+    d.updateViewProj();
+    d.computeCascades();
 }
 
 void D3D12Renderer::setOutlineTarget(int staticIndex, int skinnedIndex)
@@ -8368,6 +8576,8 @@ void D3D12Renderer::shutdown()
     }
     d.outlinePipeline.Reset();
     d.outlineSkinnedPipeline.Reset();
+    d.outlineLdrPipeline.Reset();
+    d.outlineSkinnedLdrPipeline.Reset();
     d.meshWirePipeline.Reset();
     d.skinnedMeshWirePipeline.Reset();
     d.taaPipeline.Reset();
