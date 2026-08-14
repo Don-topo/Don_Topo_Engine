@@ -46,6 +46,7 @@ namespace
     using DonTopo::ButtonComponent;
     using DonTopo::UiButtonTransition;
     using DonTopo::UiTextAlign;
+    using DonTopo::UiTextVAlign;
     using DonTopo::TextComponent;
     using DonTopo::UiTextOverflow;
     using DonTopo::ProgressBarComponent;
@@ -168,6 +169,28 @@ namespace
         if (s == "right")   return UiTextAlign::Right;
         if (s == "justify") return UiTextAlign::Justify;
         return UiTextAlign::Left;   // valor desconocido -> el default
+    }
+
+    const char* uiTextVAlignToStr(UiTextVAlign a)
+    {
+        switch (a)
+        {
+            case UiTextVAlign::Middle: return "middle";
+            case UiTextVAlign::Bottom: return "bottom";
+            default:                   return "top";
+        }
+    }
+
+    // El default NO es el mismo para los dos que la usan: un Text suelto es
+    // "top" y la etiqueta de un botón "middle", así que se pasa por parámetro
+    // en vez de clavarlo aquí. Un fichero viejo no trae la clave y tiene que
+    // cargar exactamente como se veía.
+    UiTextVAlign uiTextVAlignFromStr(const std::string& s, UiTextVAlign porDefecto)
+    {
+        if (s == "top")    return UiTextVAlign::Top;
+        if (s == "middle") return UiTextVAlign::Middle;
+        if (s == "bottom") return UiTextVAlign::Bottom;
+        return porDefecto;
     }
 
     const char* uiTextOverflowToStr(UiTextOverflow o)
@@ -579,7 +602,8 @@ namespace
                             {"fontPath", b->fontPath},
                             {"fontSize", b->fontSize},
                             {"textColor", vec4ToJsonXYZW(b->textColor)},
-                            {"textAlign", uiTextAlignToStr(b->textAlign)} };
+                            {"textAlign", uiTextAlignToStr(b->textAlign)},
+                            {"textVAlign", uiTextVAlignToStr(b->textVAlign)} };
         }
         if (node.hasText())
         {
@@ -599,6 +623,7 @@ namespace
                           {"shadowOffset", vec2ToJsonXY(t->shadowOffset)},
                           {"shadowColor", vec4ToJsonXYZW(t->shadowColor)},
                           {"align", uiTextAlignToStr(t->align)},
+                          {"vAlign", uiTextVAlignToStr(t->vAlign)},
                           {"overflow", uiTextOverflowToStr(t->overflow)},
                           {"wordWrap", t->wordWrap},
                           {"boldStrength", t->boldStrength},
@@ -1365,6 +1390,13 @@ namespace
             btn->textAlign = (b.contains("textAlign") && b["textAlign"].is_string())
                                  ? uiTextAlignFromStr(b["textAlign"].get<std::string>())
                                  : UiTextAlign::Center;
+            // Igual: sin clave, el default del componente es Middle. Una escena
+            // guardada antes de que esto existiera pasa a tener la etiqueta
+            // centrada a lo alto, que es justo el arreglo.
+            btn->textVAlign =
+                (b.contains("textVAlign") && b["textVAlign"].is_string())
+                    ? uiTextVAlignFromStr(b["textVAlign"].get<std::string>(), UiTextVAlign::Middle)
+                    : UiTextVAlign::Middle;
             node->setButton(std::move(btn));
         }
         // Bloque aditivo, misma regla que el Button: una escena guardada antes
@@ -1404,6 +1436,7 @@ namespace
                                              glm::vec4(0.0f, 0.0f, 0.0f, 0.5f), warnings, ctx);
 
             txt->align    = uiTextAlignFromStr(readStr("align"));
+            txt->vAlign   = uiTextVAlignFromStr(readStr("vAlign"), UiTextVAlign::Top);
             txt->overflow = uiTextOverflowFromStr(readStr("overflow"));
             txt->wordWrap = readBool("wordWrap", false);
 

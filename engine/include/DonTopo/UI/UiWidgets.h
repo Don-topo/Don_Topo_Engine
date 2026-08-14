@@ -101,6 +101,18 @@ namespace DonTopo
         Justify
     };
 
+    // Dónde cae el BLOQUE de líneas dentro del rect, que es la otra mitad de
+    // UiTextAlign: aquella reparte cada línea a lo ancho y esta el bloque
+    // entero a lo alto. Por defecto `Top`, que es lo que hacía el emisor antes
+    // de que esto existiera (línea base a un ascent del borde de arriba), así
+    // que ningún texto ya colocado se mueve.
+    enum class UiTextVAlign
+    {
+        Top,
+        Middle,
+        Bottom
+    };
+
     // Qué pasa con lo que no cabe en el rect. El recorte no es gratis (parte el
     // lote por scissor), así que el modo por defecto es no recortar nada.
     enum class UiTextOverflow
@@ -145,6 +157,7 @@ namespace DonTopo
         //   <color=#RRGGBB> <color=#RRGGBBAA> <size=N> <b> <i> y sus cierres.
         // Anidan sobre una pila: el cierre restaura el estilo de fuera.
         UiTextAlign    align    = UiTextAlign::Left;
+        UiTextVAlign   vAlign   = UiTextVAlign::Top;
         UiTextOverflow overflow = UiTextOverflow::Overflow;
 
         // Corta por palabras contra el ancho del rect; una palabra que no cabe

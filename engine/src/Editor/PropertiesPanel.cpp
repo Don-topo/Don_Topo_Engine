@@ -1200,6 +1200,12 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
         comboEnum("Align", (int)b->textAlign, kAligns, IM_ARRAYSIZE(kAligns),
                   +[](ButtonComponent& c, int v) { c.textAlign = (UiTextAlign)v; });
 
+        static const char* kVAligns[] = { "Top", "Middle", "Bottom" };
+        comboEnum("V Align", (int)b->textVAlign, kVAligns, IM_ARRAYSIZE(kVAligns),
+                  +[](ButtonComponent& c, int v) { c.textVAlign = (UiTextVAlign)v; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Dónde cae la etiqueta a lo alto del botón");
+
         ImGui::TreePop();
     }
 
@@ -1531,6 +1537,12 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
         static const char* kAligns[] = { "Left", "Center", "Right", "Justify" };
         comboEnum("Align##txt", (int)t->align, kAligns, IM_ARRAYSIZE(kAligns),
                   +[](TextComponent& c, int v) { c.align = (UiTextAlign)v; });
+
+        static const char* kVAligns[] = { "Top", "Middle", "Bottom" };
+        comboEnum("V Align##txt", (int)t->vAlign, kVAligns, IM_ARRAYSIZE(kVAligns),
+                  +[](TextComponent& c, int v) { c.vAlign = (UiTextVAlign)v; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Dónde cae el bloque de líneas a lo alto del rect");
 
         static const char* kOverflows[] = { "Overflow", "Clip", "Ellipsis" };
         comboEnum("Overflow##txt", (int)t->overflow, kOverflows, IM_ARRAYSIZE(kOverflows),

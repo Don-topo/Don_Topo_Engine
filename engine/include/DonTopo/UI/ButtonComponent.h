@@ -116,6 +116,11 @@ namespace DonTopo
             float       fontSize = 16.0f;
             glm::vec4   textColor{1.0f, 1.0f, 1.0f, 1.0f};
             UiTextAlign textAlign = UiTextAlign::Center;
+            // A lo alto va CENTRADA por defecto, al revés que un Text suelto:
+            // una etiqueta pegada al borde de arriba del botón es lo que hacía
+            // que "textAlign: Center" no pareciera centrar nada. Sigue siendo
+            // elegible por si alguien quiere la etiqueta arriba o abajo.
+            UiTextVAlign textVAlign = UiTextVAlign::Middle;
 
             // --- Vivo (NO se serializa) ---------------------------------------
             // Callbacks de script y estado resuelto. Fuera de toJson/fromJson,
@@ -169,6 +174,7 @@ namespace DonTopo
                 t.fontSize  = fontSize;
                 t.color     = textColor;
                 t.align     = textAlign;
+                t.vAlign    = textVAlign;
                 t.visible   = visible;
 
                 // Y NO intercepta el ratón. El hit test prueba a los hijos
@@ -199,7 +205,8 @@ namespace DonTopo
                        selectedSprite == o.selectedSprite &&
                        fadeDuration == o.fadeDuration &&
                        text == o.text && fontPath == o.fontPath && fontSize == o.fontSize &&
-                       textColor == o.textColor && textAlign == o.textAlign;
+                       textColor == o.textColor && textAlign == o.textAlign &&
+                       textVAlign == o.textVAlign;
             }
             bool operator!=(const ButtonComponent& o) const { return !(*this == o); }
     };

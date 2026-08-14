@@ -976,14 +976,31 @@ namespace DonTopo
             const float lineStep = font->lineHeight() * unit * worldScale.y;
             const float avail    = worldSize.x;
 
+            // Desplazamiento vertical del BLOQUE entero. Con Top sale 0 y la
+            // línea base queda a un ascent del borde de arriba, que es lo que
+            // hacía esto antes de que existiera vAlign.
+            //
+            // El alto del bloque es el interlineado por línea; se usa ese y no
+            // la caja real de los glyphs a propósito, porque así "CENTRADO" y
+            // "centrado" quedan a la misma altura en vez de bailar según lleven
+            // mayúsculas o letras con cola.
+            float vOffset = 0.0f;
+            if (text.vAlign != UiTextVAlign::Top && worldSize.y > 0.0f)
+            {
+                const float blockHeight = lineStep * static_cast<float>(s.lines.size());
+                const float slack       = worldSize.y - blockHeight;
+                vOffset = (text.vAlign == UiTextVAlign::Middle) ? slack * 0.5f : slack;
+            }
+
             // La sombra es un pase ENTERO por delante: mismo atlas y mismo
             // scissor, así que no parte el lote ni necesita otro pass.
             for (int pass = hasShadow ? 0 : 1; pass < 2; ++pass)
             {
                 const bool isShadow = (pass == 0);
 
-                // La línea base cae a un ascent del borde superior del rect.
-                float baseline = worldPos.y + font->ascent() * unit * worldScale.y;
+                // La línea base cae a un ascent del borde superior del rect, más
+                // lo que desplace la alineación vertical del bloque.
+                float baseline = worldPos.y + vOffset + font->ascent() * unit * worldScale.y;
                 if (isShadow) baseline += shadowOffset.y;
 
                 for (size_t li = 0; li < s.lines.size(); ++li)

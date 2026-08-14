@@ -1410,6 +1410,60 @@ static void test_texto_alineacion_izquierda_centro_derecha()
     CHECK(nearly(derecha.vertices[8].pos.x, 278.0f));              // 249 + 21+9-6 + 5
 }
 
+// La otra mitad de la alineación: dónde cae el BLOQUE a lo alto del rect. Es lo
+// que hacía que un botón con align=Center no pareciera centrado — el texto salía
+// pegado al borde de arriba porque esto no existía.
+//
+// Se comprueba la Y de un glyph concreto y no "que cambie": un desplazamiento
+// del bloque en la dirección equivocada, o de la mitad de lo que toca, pasaría
+// igual un CHECK laxo. Y se comprueba que la X NO se mueve, que es lo que
+// separa esto de la alineación horizontal.
+static void test_texto_alineacion_vertical()
+{
+    UiFont font;
+    makeTestFont(font);
+
+    UiCanvas canvas;
+    Text& label = canvas.root().add<Text>("Etiqueta");
+    label.position = {100.0f, 50.0f};
+    label.size     = {200.0f, 60.0f};
+    label.font     = &font;
+    label.fontSize = kBakeSize;
+    label.text     = "ABC";   // una sola línea
+
+    UiDrawData arriba;
+    label.vAlign = UiTextVAlign::Top;
+    canvas.buildDrawData(kW, kH, arriba);
+
+    UiDrawData medio;
+    label.vAlign = UiTextVAlign::Middle;
+    label.markDirty(UiElement::DirtyAll);
+    canvas.buildDrawData(kW, kH, medio);
+
+    UiDrawData abajo;
+    label.vAlign = UiTextVAlign::Bottom;
+    label.markDirty(UiElement::DirtyAll);
+    canvas.buildDrawData(kW, kH, abajo);
+
+    CHECK(arriba.vertices.size() == 12);
+    CHECK(medio.vertices.size() == 12);
+    CHECK(abajo.vertices.size() == 12);
+    if (arriba.vertices.size() != 12 || medio.vertices.size() != 12 ||
+        abajo.vertices.size() != 12)
+        return;
+
+    // El hueco es el alto del rect menos UNA línea de interlineado.
+    const float sobra = 60.0f - font.lineHeight() * (kBakeSize / font.bakeSize());
+    CHECK(sobra > 0.0f);
+
+    CHECK(nearly(medio.vertices[0].pos.y, arriba.vertices[0].pos.y + sobra * 0.5f));
+    CHECK(nearly(abajo.vertices[0].pos.y, arriba.vertices[0].pos.y + sobra));
+
+    // Alinear a lo alto es SOLO en Y: la X no se toca.
+    CHECK(nearly(medio.vertices[0].pos.x, arriba.vertices[0].pos.x));
+    CHECK(nearly(abajo.vertices[0].pos.x, arriba.vertices[0].pos.x));
+}
+
 // Justify reparte el sobrante entre los espacios, y NUNCA en la última línea ni
 // en una cortada por '\n'.
 static void test_texto_justify_no_toca_la_ultima_linea()
@@ -5083,6 +5137,7 @@ int main()
     test_texto_negrita_y_cursiva_sin_tocar_uvs();
     test_texto_tag_malformado_sale_literal();
     test_texto_alineacion_izquierda_centro_derecha();
+    test_texto_alineacion_vertical();
     test_texto_justify_no_toca_la_ultima_linea();
     test_texto_word_wrap_por_palabras_y_por_glyph();
     test_texto_overflow_ellipsis_clip_y_overflow();

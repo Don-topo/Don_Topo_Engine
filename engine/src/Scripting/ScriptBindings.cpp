@@ -778,6 +778,8 @@ namespace DonTopo::ScriptBindings
                 "MatchWidthOrHeight", 0, "Expand", 1, "Shrink", 2);
             lua["UiTextAlign"] = lua.create_table_with(
                 "Left", 0, "Center", 1, "Right", 2, "Justify", 3);
+            lua["UiTextVAlign"] = lua.create_table_with(
+                "Top", 0, "Middle", 1, "Bottom", 2);
             lua["UiTextOverflow"] = lua.create_table_with(
                 "Overflow", 0, "Clip", 1, "Ellipsis", 2);
             lua["UiProgressFillDirection"] = lua.create_table_with(
@@ -832,6 +834,7 @@ namespace DonTopo::ScriptBindings
                 "fontPath",     uiProp(buttonOf, &ButtonComponent::fontPath),
                 "fontSize",     uiFloatProp(buttonOf, &ButtonComponent::fontSize, &mgr, "Button.fontSize"),
                 "textAlign",    uiEnumProp(buttonOf, &ButtonComponent::textAlign, 3),
+                "textVAlign",   uiEnumProp(buttonOf, &ButtonComponent::textVAlign, 2),
                 "GetAnchorMin", uiVec2Get(buttonOf, &ButtonComponent::anchorMin),
                 "SetAnchorMin", uiVec2Set(buttonOf, &ButtonComponent::anchorMin, &mgr, "Button.SetAnchorMin"),
                 "GetAnchorMax", uiVec2Get(buttonOf, &ButtonComponent::anchorMax),
@@ -877,6 +880,7 @@ namespace DonTopo::ScriptBindings
                 "fontSize",     uiFloatProp(textOf, &TextComponent::fontSize, &mgr, "Text.fontSize"),
                 "outlineWidth", uiFloatProp(textOf, &TextComponent::outlineWidth, &mgr, "Text.outlineWidth"),
                 "align",        uiEnumProp(textOf, &TextComponent::align, 3),
+                "vAlign",       uiEnumProp(textOf, &TextComponent::vAlign, 2),
                 "overflow",     uiEnumProp(textOf, &TextComponent::overflow, 2),
                 "wordWrap",     uiProp(textOf, &TextComponent::wordWrap),
                 "boldStrength", uiFloatProp(textOf, &TextComponent::boldStrength, &mgr, "Text.boldStrength"),

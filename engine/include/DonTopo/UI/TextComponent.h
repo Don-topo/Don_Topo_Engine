@@ -54,6 +54,7 @@ namespace DonTopo
             glm::vec4 shadowColor{0.0f, 0.0f, 0.0f, 0.5f};
 
             UiTextAlign    align    = UiTextAlign::Left;
+            UiTextVAlign   vAlign   = UiTextVAlign::Top;
             UiTextOverflow overflow = UiTextOverflow::Overflow;
             bool           wordWrap = false;
 
@@ -79,6 +80,7 @@ namespace DonTopo
                 t.shadowOffset = shadowOffset;
                 t.shadowColor  = shadowColor;
                 t.align        = align;
+                t.vAlign       = vAlign;
                 t.overflow     = overflow;
                 t.wordWrap     = wordWrap;
                 t.boldStrength = boldStrength;
@@ -96,7 +98,8 @@ namespace DonTopo
                        text == o.text && fontPath == o.fontPath && fontSize == o.fontSize &&
                        outlineWidth == o.outlineWidth && outlineColor == o.outlineColor &&
                        shadowOffset == o.shadowOffset && shadowColor == o.shadowColor &&
-                       align == o.align && overflow == o.overflow && wordWrap == o.wordWrap &&
+                       align == o.align && vAlign == o.vAlign &&
+                       overflow == o.overflow && wordWrap == o.wordWrap &&
                        boldStrength == o.boldStrength && italicSkew == o.italicSkew;
             }
             bool operator!=(const TextComponent& o) const { return !(*this == o); }
