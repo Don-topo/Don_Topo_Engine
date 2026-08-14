@@ -9,7 +9,9 @@
 #include "DonTopo/Core/Window.h"
 #include "DonTopo/Renderer/Cube.h"
 #include "DonTopo/Renderer/Frustum.h"
+#include "DonTopo/Renderer/InstanceBatching.h"
 #include "DonTopo/Renderer/Mesh.h"
+#include "DonTopo/Renderer/MeshKey.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/Plane.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
@@ -47,6 +49,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace DonTopo::D3D12 {
@@ -545,19 +548,88 @@ struct D3D12Renderer::Impl {
         glm::vec3 aabbMin{0.0f};
         glm::vec3 aabbMax{0.0f};
         bool      hasBounds = false;
+
+        // ── Malla compartida ────────────────────────────────────────────────
+        // Índice del objeto que SUBIÓ estos buffers y estas texturas. Cien
+        // cubos iguales apuntan todos al primero: los vertexBufferView de
+        // arriba son copias del suyo, no recursos propios. Sin esto, agrupar
+        // "por misma malla" agruparía cero objetos, porque cada uno tendría su
+        // propia copia en VRAM.
+        int  sharedMesh = -1;
+        // Solo el dueño libera. Un duplicado que soltara los buffers dejaría a
+        // los demás dibujando con memoria liberada, y eso no lo avisa nadie.
+        bool ownsGpu = true;
+
+        // Grupo de dibujo: misma malla Y bloque de descriptores equivalente.
+        // Los objetos de un grupo se pintan de un solo draw instanciado. -1
+        // mientras no se hayan reconstruido los grupos.
+        int  drawGroup = -1;
+
+        // Sube cada vez que a este objeto se le cambia una textura por el
+        // neutro de "no se pudo leer". Entra en la clave del grupo: dos objetos
+        // con la misma malla pero distinto relleno ya no ven lo mismo, así que
+        // no pueden compartir el draw.
+        uint32_t materialVariant = 0;
     };
     std::vector<StaticObject> objects;
 
-    // Matrices de la escena para el pase de sombras. shadow.vert saca el model
-    // del SSBO SIEMPRE —no tiene ruta de push constant—, así que hace falta un
-    // buffer con una matriz por objeto y dibujar cada uno con su
-    // StartInstanceLocation. Va en heap de subida y mapeado: se reescribe cada
-    // frame porque los transforms cambian.
-    D3D12MA::Allocation* sceneInstanceAllocation = nullptr;
-    void*                sceneInstanceMapped     = nullptr;
-    size_t               sceneInstanceCapacity   = 0;
+    // Clave de contenido -> objeto que subió esa malla. Es lo único que hace
+    // falta para deduplicar: aquí los objetos no se borran de uno en uno (borrar
+    // uno solo lo apaga, ver removeGameObject), así que no hay refcount que
+    // llevar; clearStaticMeshes se lo lleva todo por delante.
+    std::unordered_map<std::string, int> sharedMeshOwner;
+
+    // Un representante por grupo de dibujo: de él salen los buffers, la terna de
+    // descriptores y los factores PBR, que son iguales para todo el grupo.
+    std::vector<int> drawGroupRep;
+    bool             drawGroupsDirty = true;
+    void             rebuildDrawGroups();
+
+    // Matrices por instancia de la escena. shadow.vert saca el model de aquí
+    // SIEMPRE —no tiene ruta de push constant— y triangle.vert cuando el draw
+    // va instanciado. Va en heap de subida y mapeado: se reescribe cada frame
+    // porque los transforms cambian.
+    //
+    // UNO POR FRAME EN VUELO, y no uno solo: desde que el reparto lo decide el
+    // agrupado, el CONTENIDO cambia de frame a frame (el culling mueve a los
+    // objetos de tramo). Reescribir un único buffer mientras la GPU lee el
+    // frame anterior mezclaría los dos repartos, y el síntoma sería geometría
+    // apareciendo en el sitio de otra.
+    std::array<D3D12MA::Allocation*, kFrameCount> sceneInstanceAllocations{};
+    std::array<void*, kFrameCount>                sceneInstanceMapped{};
+    std::array<size_t, kFrameCount>               sceneInstanceCapacity{};
+
+    // El buffer va en dos tramos de este tamaño: el 0 para sombras y pre-pase
+    // (todo lo visible) y el 1 para el pase principal (lo que además pasa el
+    // frustum). Dos repartos distintos del mismo conjunto de objetos.
+    size_t instanceRegionStride = 0;
+    static constexpr uint32_t kInstanceRegionShadow = 0;
+    static constexpr uint32_t kInstanceRegionScene  = 1;
 
     void ensureSceneInstanceBuffer(size_t count);
+    // Dirección GPU de la matriz `index` del buffer de ESTE frame. Los draws
+    // instanciados apuntan el root SRV al principio del rango de su grupo y
+    // dibujan con StartInstanceLocation = 0, en vez de dejar la vista al
+    // principio del buffer y mover la instancia base.
+    //
+    // El motivo: el shader viene de GLSL, donde gl_InstanceIndex SÍ incluye la
+    // instancia base por especificación, y spirv-cross lo traduce a
+    // SV_InstanceID, donde eso no está garantizado igual. En la máquina en que
+    // se probó funciona de las dos formas —se comprobó comparando el render
+    // contra el camino por objeto— pero desplazar la vista cuesta lo mismo y no
+    // depende del driver.
+    D3D12_GPU_VIRTUAL_ADDRESS instanceAddress(uint32_t index) const;
+
+    // Candidatos y grupos del frame. Son miembros y no locales para no
+    // reasignar sus vectores en cada pase de cada frame.
+    std::vector<Batching::BatchCandidate> batchCandidates;
+    std::vector<Batching::InstanceBatch>  shadowBatches;
+    std::vector<Batching::InstanceBatch>  sceneBatches;
+
+    // Llena el tramo 0 con todo lo visible. Lo comparten el pase de sombras
+    // (que dibuja las cuatro cascadas del mismo reparto) y el pre-pase de
+    // profundidad, que ven el mismo conjunto.
+    void buildShadowBatches();
 
     // Matrices por instancia (set 1, binding 0 en GLSL → t0 space1 en HLSL).
     D3D12MA::Allocation* instanceAllocation = nullptr;
@@ -4577,17 +4649,17 @@ void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
         0, sceneUboAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress());
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    if (!objects.empty() && sceneInstanceAllocation) {
+    // Mismo reparto que el de sombras: los dos quieren todo lo visible.
+    if (!shadowBatches.empty() && sceneInstanceAllocations[frameIndex]) {
         commandList->SetPipelineState(depthPrepassPipeline.Get());
-        commandList->SetGraphicsRootShaderResourceView(
-            1, sceneInstanceAllocation->GetResource()->GetGPUVirtualAddress());
-        for (size_t i = 0; i < objects.size(); ++i) {
-            const StaticObject& object = objects[i];
-            if (!object.meshVisible || object.indexCount == 0)
-                continue;
-            commandList->IASetVertexBuffers(0, 1, &object.vertexBufferView);
-            commandList->IASetIndexBuffer(&object.indexBufferView);
-            commandList->DrawIndexedInstanced(object.indexCount, 1, 0, 0, static_cast<UINT>(i));
+        for (const Batching::InstanceBatch& batch : shadowBatches) {
+            const StaticObject& rep = objects[static_cast<size_t>(
+                drawGroupRep[static_cast<size_t>(batch.sharedIndex)])];
+            commandList->SetGraphicsRootShaderResourceView(1,
+                                                           instanceAddress(batch.firstInstance));
+            commandList->IASetVertexBuffers(0, 1, &rep.vertexBufferView);
+            commandList->IASetIndexBuffer(&rep.indexBufferView);
+            commandList->DrawIndexedInstanced(rep.indexCount, batch.instanceCount, 0, 0, 0);
         }
     }
 
@@ -5308,6 +5380,9 @@ int D3D12Renderer::Impl::refreshProbeAssignment()
         ensureIdle();
         probeAssignStatic[i] = wanted;
         writeProbeSlots(object.srvBase, wanted);
+        // La sonda entra en la clave del grupo de dibujo: dos objetos con la
+        // misma malla y distinta sonda ya no pueden compartir draw.
+        drawGroupsDirty = true;
         ++changed;
     }
 
@@ -5530,6 +5605,7 @@ void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
     // los objetos que le tocaran reflejarían eso.
     probe.baked      = convolved;
     probe.bakeFailed = !convolved;
+
 }
 
 void D3D12Renderer::Impl::releaseProbe(GpuProbe& probe)
@@ -6264,22 +6340,22 @@ void D3D12Renderer::Impl::computeCascades()
 
 void D3D12Renderer::Impl::ensureSceneInstanceBuffer(size_t count)
 {
-    if (count == 0 || count <= sceneInstanceCapacity)
+    if (count == 0 || count <= sceneInstanceCapacity[frameIndex])
         return;
 
     // Se crece por bloques para no rehacer el buffer cada vez que entra una
     // malla al cargar una escena.
-    const size_t newCapacity = (std::max)(count, sceneInstanceCapacity * 2 + 64);
+    const size_t newCapacity = (std::max)(count, sceneInstanceCapacity[frameIndex] * 2 + 64);
 
-    if (sceneInstanceAllocation) {
+    if (sceneInstanceAllocations[frameIndex]) {
         // Puede estar en uso por el frame anterior.
         waitForGpu();
-        if (sceneInstanceMapped) {
-            sceneInstanceAllocation->GetResource()->Unmap(0, nullptr);
-            sceneInstanceMapped = nullptr;
+        if (sceneInstanceMapped[frameIndex]) {
+            sceneInstanceAllocations[frameIndex]->GetResource()->Unmap(0, nullptr);
+            sceneInstanceMapped[frameIndex] = nullptr;
         }
-        sceneInstanceAllocation->Release();
-        sceneInstanceAllocation = nullptr;
+        sceneInstanceAllocations[frameIndex]->Release();
+        sceneInstanceAllocations[frameIndex] = nullptr;
     }
 
     D3D12_RESOURCE_DESC desc{};
@@ -6297,13 +6373,82 @@ void D3D12Renderer::Impl::ensureSceneInstanceBuffer(size_t count)
 
     throwIfFailed(allocator->CreateResource(&allocDesc, &desc,
                                             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                            &sceneInstanceAllocation, IID_NULL, nullptr),
+                                            &sceneInstanceAllocations[frameIndex], IID_NULL,
+                                            nullptr),
                   "D3D12MA::Allocator::CreateResource(instancias de escena)");
 
     const D3D12_RANGE noRead{0, 0};
-    throwIfFailed(sceneInstanceAllocation->GetResource()->Map(0, &noRead, &sceneInstanceMapped),
+    throwIfFailed(sceneInstanceAllocations[frameIndex]->GetResource()->Map(
+                      0, &noRead, &sceneInstanceMapped[frameIndex]),
                   "ID3D12Resource::Map(instancias de escena)");
-    sceneInstanceCapacity = newCapacity;
+    sceneInstanceCapacity[frameIndex] = newCapacity;
+}
+
+D3D12_GPU_VIRTUAL_ADDRESS D3D12Renderer::Impl::instanceAddress(uint32_t index) const
+{
+    return sceneInstanceAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress() +
+           static_cast<UINT64>(index) * sizeof(glm::mat4);
+}
+
+void D3D12Renderer::Impl::rebuildDrawGroups()
+{
+    drawGroupRep.clear();
+    drawGroupsDirty = false;
+    if (objects.empty())
+        return;
+
+    // La clave NO es solo la malla. Dos objetos que la comparten se pintan del
+    // mismo draw, y un draw enlaza UN bloque de descriptores: solo pueden ir
+    // juntos si el bloque de los dos dice lo mismo. Lo que puede diferir con la
+    // misma malla es la sonda de reflexión (t4/t5) y el relleno de una textura
+    // que no se pudo leer, así que los dos entran en la clave.
+    //
+    // El resto de lo por-objeto no hace falta aquí: metallic y roughness salen
+    // del material, que ya está en la clave de contenido de la malla, y la
+    // fuerza de SSR la parte el propio agrupado.
+    std::unordered_map<uint64_t, int> byKey;
+    byKey.reserve(objects.size());
+
+    for (size_t i = 0; i < objects.size(); ++i) {
+        StaticObject& object = objects[i];
+        const int     probe  = i < probeAssignStatic.size() ? probeAssignStatic[i] : -1;
+        const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(object.sharedMesh)) << 40) ^
+                             (static_cast<uint64_t>(static_cast<uint32_t>(probe + 1)) << 24) ^
+                             static_cast<uint64_t>(object.materialVariant);
+
+        auto found = byKey.find(key);
+        if (found != byKey.end()) {
+            object.drawGroup = found->second;
+            continue;
+        }
+
+        object.drawGroup = static_cast<int>(drawGroupRep.size());
+        byKey.emplace(key, object.drawGroup);
+        drawGroupRep.push_back(static_cast<int>(i));
+    }
+}
+
+void D3D12Renderer::Impl::buildShadowBatches()
+{
+    shadowBatches.clear();
+    if (objects.empty() || !sceneInstanceMapped[frameIndex])
+        return;
+
+    // Sin frustum: el pase de sombras dibuja las cuatro cascadas y el pre-pase
+    // cubre la pantalla entera, así que los dos quieren TODO lo visible. La
+    // fuerza de SSR se deja a 0 porque ninguno de los dos pinta color.
+    batchCandidates.clear();
+    batchCandidates.reserve(objects.size());
+    for (const StaticObject& object : objects)
+        batchCandidates.push_back({object.drawGroup,
+                                   object.meshVisible && object.indexCount > 0, &object.transform,
+                                   0.0f});
+
+    auto* matrices = static_cast<glm::mat4*>(sceneInstanceMapped[frameIndex]);
+    const uint32_t base = kInstanceRegionShadow * static_cast<uint32_t>(instanceRegionStride);
+    Batching::buildInstanceBatches(batchCandidates.data(), batchCandidates.size(), matrices + base,
+                                   static_cast<uint32_t>(instanceRegionStride), base,
+                                   shadowBatches);
 }
 
 void D3D12Renderer::Impl::recordShadowPasses()
@@ -6341,21 +6486,19 @@ void D3D12Renderer::Impl::recordShadowPasses()
         // El suelo no se mete en el mapa: es el receptor, y meterlo solo
         // añadiría su propia superficie como oclusor de sí misma.
         //
-        // Cada objeto se dibuja con su StartInstanceLocation apuntando a su
-        // matriz del buffer de escena, que es de donde shadow.vert la saca.
-        if (!objects.empty() && sceneInstanceAllocation) {
+        // Un draw por grupo de malla, con la vista de instancias apuntando al
+        // principio del rango del grupo: de ahí saca shadow.vert su model.
+        if (!shadowBatches.empty() && sceneInstanceAllocations[frameIndex]) {
             commandList->SetPipelineState(shadowPipeline.Get());
-            commandList->SetGraphicsRootShaderResourceView(
-                2, sceneInstanceAllocation->GetResource()->GetGPUVirtualAddress());
 
-            for (size_t i = 0; i < objects.size(); ++i) {
-                const StaticObject& object = objects[i];
-                if (!object.meshVisible || object.indexCount == 0)
-                    continue;
-                commandList->IASetVertexBuffers(0, 1, &object.vertexBufferView);
-                commandList->IASetIndexBuffer(&object.indexBufferView);
-                commandList->DrawIndexedInstanced(object.indexCount, 1, 0, 0,
-                                                  static_cast<UINT>(i));
+            for (const Batching::InstanceBatch& batch : shadowBatches) {
+                const StaticObject& rep = objects[static_cast<size_t>(
+                    drawGroupRep[static_cast<size_t>(batch.sharedIndex)])];
+                commandList->SetGraphicsRootShaderResourceView(
+                    2, instanceAddress(batch.firstInstance));
+                commandList->IASetVertexBuffers(0, 1, &rep.vertexBufferView);
+                commandList->IASetIndexBuffer(&rep.indexBufferView);
+                commandList->DrawIndexedInstanced(rep.indexCount, batch.instanceCount, 0, 0, 0);
             }
         }
 
@@ -6664,43 +6807,71 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
         bindForwardPlus();
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-        // Geometría de la escena. Un draw por objeto con su transformación en
-        // el push constant (flags.x = 0): el instanciado por malla compartida
-        // es una optimización de otra fase.
+        // Geometría de la escena, agrupada por malla compartida: N cubos
+        // iguales visibles salen de UN draw instanciado, y cada instancia coge
+        // su matriz del tramo del grupo (flags.x = 1). El culling sigue siendo
+        // por objeto —lo que decide es si el objeto entra o no en su grupo—.
+        //
+        // El reparto se rehace aquí y no una vez por frame porque esta función
+        // también graba las seis caras de una sonda, y cada una ve un conjunto
+        // distinto. Que se pueda reusar el mismo tramo es cosa de que cada cara
+        // se envía y se espera antes de grabar la siguiente.
         const Culling::Frustum cameraFrustum = Culling::frustumFromViewProj(viewProj);
 
+        batchCandidates.clear();
+        batchCandidates.reserve(objects.size());
         for (const StaticObject& object : objects) {
-            if (!object.meshVisible || object.indexCount == 0)
-                continue;
-
-            // Fuera del encuadre: ni draw ni cambio de estado. El test es
-            // conservador —puede dejar pasar algo que no se ve, nunca quitar
-            // algo que sí—, y una malla sin caja se dibuja siempre.
-            if (object.hasBounds &&
-                !Culling::aabbVisible(cameraFrustum, object.aabbMin, object.aabbMax,
-                                      object.transform)) {
+            // El test del frustum es conservador —puede dejar pasar algo que no
+            // se ve, nunca quitar algo que sí—, y una malla sin caja se dibuja
+            // siempre.
+            const bool dibujable = object.meshVisible && object.indexCount > 0;
+            const bool visible =
+                dibujable && (!object.hasBounds ||
+                              Culling::aabbVisible(cameraFrustum, object.aabbMin, object.aabbMax,
+                                                   object.transform));
+            if (dibujable && !visible)
                 ++statCulledCount;
-                continue;
-            }
 
-            // Su terna de texturas. Va dentro del bucle porque cada malla
-            // tiene la suya; el suelo y la global se apañan con la de fuera.
+            batchCandidates.push_back({object.drawGroup, visible, &object.transform,
+                                       state->ssrEnabled() ? object.ssrStrength : 0.0f});
+        }
+
+        const uint32_t sceneBase =
+            kInstanceRegionScene * static_cast<uint32_t>(instanceRegionStride);
+        sceneBatches.clear();
+        if (sceneInstanceMapped[frameIndex] && instanceRegionStride > 0) {
+            auto* matrices = static_cast<glm::mat4*>(sceneInstanceMapped[frameIndex]);
+            Batching::buildInstanceBatches(batchCandidates.data(), batchCandidates.size(),
+                                           matrices + sceneBase,
+                                           static_cast<uint32_t>(instanceRegionStride), sceneBase,
+                                           sceneBatches);
+        }
+
+        for (const Batching::InstanceBatch& batch : sceneBatches) {
+            const StaticObject& rep = objects[static_cast<size_t>(
+                drawGroupRep[static_cast<size_t>(batch.sharedIndex)])];
+
+            // La terna del representante vale para todo el grupo: comparten
+            // malla, material y sonda, que es justo lo que decide el grupo.
             D3D12_GPU_DESCRIPTOR_HANDLE table = srvHeap->GetGPUDescriptorHandleForHeapStart();
-            table.ptr += static_cast<UINT64>(object.srvBase) * srvSize;
+            table.ptr += static_cast<UINT64>(rep.srvBase) * srvSize;
             commandList->SetGraphicsRootDescriptorTable(2, table);
+            commandList->SetGraphicsRootShaderResourceView(3,
+                                                           instanceAddress(batch.firstInstance));
 
             PushData push{};
-            push.transform = object.transform;
-            push.metallic  = object.metallic;
-            push.roughness = object.roughness;
-            push.flags = glm::vec2(0.0f, state->ssrEnabled() ? object.ssrStrength : 0.0f);
+            // flags.x = 1: el model sale del buffer de instancias, uno por
+            // instancia. El transform del push constant no se mira.
+            push.metallic  = rep.metallic;
+            push.roughness = rep.roughness;
+            push.flags     = glm::vec2(1.0f, batch.ssrStrength);
             commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
 
-            commandList->IASetVertexBuffers(0, 1, &object.vertexBufferView);
-            commandList->IASetIndexBuffer(&object.indexBufferView);
-            commandList->DrawIndexedInstanced(object.indexCount, 1, 0, 0, 0);
+            commandList->IASetVertexBuffers(0, 1, &rep.vertexBufferView);
+            commandList->IASetIndexBuffer(&rep.indexBufferView);
+            commandList->DrawIndexedInstanced(rep.indexCount, batch.instanceCount, 0, 0, 0);
             ++statDraws;
-            ++statInstanced;
+            statInstanced += static_cast<int>(batch.instanceCount);
         }
 
         // Suelo: receptor de sombras y referencia visual, NO parte de la
@@ -6865,6 +7036,18 @@ void D3D12Renderer::drawFrame()
     // nada, porque el frame que empieza los va a sobrescribir.
     d.readTimestamps();
 
+    // Los grupos de dibujo y el buffer de instancias, ANTES que las sondas: el
+    // horneado graba el pase de geometría seis veces, y ese pase agrupa y
+    // escribe en este buffer. Sin esto, el primer horneado tras cargar una
+    // escena capturaba el cielo y nada más, porque los objetos aún no tenían
+    // grupo asignado.
+    if (!d.objects.empty()) {
+        if (d.drawGroupsDirty)
+            d.rebuildDrawGroups();
+        d.instanceRegionStride = d.objects.size();
+        d.ensureSceneInstanceBuffer(d.instanceRegionStride * 2);
+    }
+
     // Sondas: altas, bajas y horneado. ANTES de abrir el frame, porque hornear
     // graba en esta misma lista de comandos y espera a la GPU — con el frame a
     // medias, el Reset del allocator falla y no se hornea nada, en silencio.
@@ -6924,15 +7107,17 @@ void D3D12Renderer::drawFrame()
     // sombras necesita lightSpaceMatrix, el principal todo lo demás.
     d.updateSceneUbo();
 
-    // Y las matrices de la escena, que el pase de sombras lee del SSBO. Se
-    // reescriben enteras: mover un objeto no tiene por qué avisar al renderer.
+    // Y el reparto del tramo de sombras/pre-pase. Se reescribe entero: mover un
+    // objeto no tiene por qué avisar al renderer. Va aquí, con el frame ya
+    // abierto, porque el horneado de una sonda pudo cambiar la asignación de
+    // sondas y con ella los grupos.
     if (!d.objects.empty()) {
-        d.ensureSceneInstanceBuffer(d.objects.size());
-        if (d.sceneInstanceMapped) {
-            auto* matrices = static_cast<glm::mat4*>(d.sceneInstanceMapped);
-            for (size_t i = 0; i < d.objects.size(); ++i)
-                matrices[i] = d.objects[i].transform;
-        }
+        if (d.drawGroupsDirty)
+            d.rebuildDrawGroups();
+        d.buildShadowBatches();
+    } else {
+        d.shadowBatches.clear();
+        d.instanceRegionStride = 0;
     }
 
     // Lo mismo para los personajes: el pase de sombras los dibuja con
@@ -7282,28 +7467,52 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
         return -1;
 
     Impl::StaticObject object;
-    object.vertexAllocation =
-        d.uploadBuffer(mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex),
-                       D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-    object.vertexBufferView.BufferLocation =
-        object.vertexAllocation->GetResource()->GetGPUVirtualAddress();
-    object.vertexBufferView.SizeInBytes   = static_cast<UINT>(mesh.vertices.size() * sizeof(Vertex));
-    object.vertexBufferView.StrideInBytes = sizeof(Vertex);
 
-    object.indexAllocation =
-        d.uploadBuffer(mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t),
-                       D3D12_RESOURCE_STATE_INDEX_BUFFER);
-    object.indexBufferView.BufferLocation =
-        object.indexAllocation->GetResource()->GetGPUVirtualAddress();
-    object.indexBufferView.SizeInBytes = static_cast<UINT>(mesh.indices.size() * sizeof(uint32_t));
-    object.indexBufferView.Format      = DXGI_FORMAT_R32_UINT;
-    object.indexCount                  = static_cast<UINT>(mesh.indices.size());
-    object.metallic                    = mesh.material.metallic;
-    object.roughness                   = mesh.material.roughness;
+    // ¿Ya está esta misma malla con este mismo material en VRAM? La clave es de
+    // CONTENIDO, así que dos cubos creados por separado la comparten. El
+    // duplicado se queda con los handles del dueño y no sube ni un byte.
+    const std::string key   = makeSharedMeshKey(mesh);
+    auto              found = d.sharedMeshOwner.find(key);
+    const bool        reusa = found != d.sharedMeshOwner.end() &&
+                       found->second < static_cast<int>(d.objects.size());
 
-    // Caja envolvente local, de una vez y para siempre: no depende del
-    // transform, así que moverlo o rotarlo no obliga a recalcularla.
-    {
+    if (reusa) {
+        const Impl::StaticObject& owner = d.objects[static_cast<size_t>(found->second)];
+        object.vertexAllocation  = owner.vertexAllocation;
+        object.indexAllocation   = owner.indexAllocation;
+        object.vertexBufferView  = owner.vertexBufferView;
+        object.indexBufferView   = owner.indexBufferView;
+        object.indexCount        = owner.indexCount;
+        object.baseColorAllocation  = owner.baseColorAllocation;
+        object.normalMapAllocation  = owner.normalMapAllocation;
+        object.metalRoughAllocation = owner.metalRoughAllocation;
+        object.aabbMin    = owner.aabbMin;
+        object.aabbMax    = owner.aabbMax;
+        object.hasBounds  = owner.hasBounds;
+        object.sharedMesh = found->second;
+        object.ownsGpu    = false;
+    } else {
+        object.vertexAllocation =
+            d.uploadBuffer(mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex),
+                           D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        object.vertexBufferView.BufferLocation =
+            object.vertexAllocation->GetResource()->GetGPUVirtualAddress();
+        object.vertexBufferView.SizeInBytes =
+            static_cast<UINT>(mesh.vertices.size() * sizeof(Vertex));
+        object.vertexBufferView.StrideInBytes = sizeof(Vertex);
+
+        object.indexAllocation =
+            d.uploadBuffer(mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t),
+                           D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        object.indexBufferView.BufferLocation =
+            object.indexAllocation->GetResource()->GetGPUVirtualAddress();
+        object.indexBufferView.SizeInBytes =
+            static_cast<UINT>(mesh.indices.size() * sizeof(uint32_t));
+        object.indexBufferView.Format = DXGI_FORMAT_R32_UINT;
+        object.indexCount             = static_cast<UINT>(mesh.indices.size());
+
+        // Caja envolvente local, de una vez y para siempre: no depende del
+        // transform, así que moverlo o rotarlo no obliga a recalcularla.
         // Paréntesis alrededor del nombre: windows.h define max como macro y
         // sin ellos no compila.
         glm::vec3 lo((std::numeric_limits<float>::max)());
@@ -7315,37 +7524,75 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
         object.aabbMin   = lo;
         object.aabbMax   = hi;
         object.hasBounds = true;
+
+        object.sharedMesh = static_cast<int>(d.objects.size());
+        object.ownsGpu    = true;
     }
+
+    object.metallic  = mesh.material.metallic;
+    object.roughness = mesh.material.roughness;
 
     // Terna propia en el heap mientras queden huecos. Pasado el tope se queda
     // con la global: peor aspecto, pero nunca escribe fuera del heap.
+    //
+    // El bloque de descriptores NO se comparte aunque la malla sí: t4 y t5
+    // llevan la sonda de reflexión que le toca a ESTE objeto, y dos cubos
+    // iguales en dos habitaciones distintas reflejan cosas distintas. Lo que se
+    // comparte son los recursos a los que apuntan, que es donde está la memoria.
     if (d.objects.size() < kMaxObjectSlots) {
         const UINT slot = kSrvObjects + static_cast<UINT>(d.objects.size()) * kSrvPerObject;
         object.srvBase  = slot;
 
-        object.baseColorAllocation = d.uploadMaterialTexture(
-            mesh.material.texturePath, mesh.material.embeddedTexture, true, slot + 0);
-        if (!object.baseColorAllocation)
-            d.createTexture2DSrv(d.baseColorAllocation->GetResource(),
-                                 DXGI_FORMAT_R8G8B8A8_UNORM, slot + 0);
+        if (reusa) {
+            // Mismos recursos, vistas nuevas. Los formatos son los que eligió
+            // uploadMaterialTexture: sRGB para el color, lineal para el resto.
+            if (object.baseColorAllocation)
+                d.createTexture2DSrv(object.baseColorAllocation->GetResource(),
+                                     DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, slot + 0);
+            else
+                d.createTexture2DSrv(d.baseColorAllocation->GetResource(),
+                                     DXGI_FORMAT_R8G8B8A8_UNORM, slot + 0);
 
-        object.normalMapAllocation = d.uploadMaterialTexture(
-            mesh.material.normalMapPath, mesh.material.embeddedNormalMap, false, slot + 1);
-        if (!object.normalMapAllocation)
-            d.createTexture2DSrv(d.normalMapAllocation->GetResource(),
-                                 DXGI_FORMAT_R8G8B8A8_UNORM, slot + 1);
+            if (object.normalMapAllocation)
+                d.createTexture2DSrv(object.normalMapAllocation->GetResource(),
+                                     DXGI_FORMAT_R8G8B8A8_UNORM, slot + 1);
+            else
+                d.createTexture2DSrv(d.normalMapAllocation->GetResource(),
+                                     DXGI_FORMAT_R8G8B8A8_UNORM, slot + 1);
 
-        // t3..t7: sombras, entorno y oclusión, que son de todos.
-        d.fillSharedSlots(slot);
+            d.fillSharedSlots(slot);
 
-        // Y encima, el ORM propio si el material lo trae: pisa el neutro que
-        // acaba de dejar fillSharedSlots.
-        object.metalRoughAllocation =
-            d.uploadMaterialTexture(mesh.material.metallicRoughnessPath,
-                                    mesh.material.embeddedMetallicRoughness, false, slot + 3);
+            if (object.metalRoughAllocation)
+                d.createTexture2DSrv(object.metalRoughAllocation->GetResource(),
+                                     DXGI_FORMAT_R8G8B8A8_UNORM, slot + 3);
+        } else {
+            object.baseColorAllocation = d.uploadMaterialTexture(
+                mesh.material.texturePath, mesh.material.embeddedTexture, true, slot + 0);
+            if (!object.baseColorAllocation)
+                d.createTexture2DSrv(d.baseColorAllocation->GetResource(),
+                                     DXGI_FORMAT_R8G8B8A8_UNORM, slot + 0);
+
+            object.normalMapAllocation = d.uploadMaterialTexture(
+                mesh.material.normalMapPath, mesh.material.embeddedNormalMap, false, slot + 1);
+            if (!object.normalMapAllocation)
+                d.createTexture2DSrv(d.normalMapAllocation->GetResource(),
+                                     DXGI_FORMAT_R8G8B8A8_UNORM, slot + 1);
+
+            // t3..t7: sombras, entorno y oclusión, que son de todos.
+            d.fillSharedSlots(slot);
+
+            // Y encima, el ORM propio si el material lo trae: pisa el neutro que
+            // acaba de dejar fillSharedSlots.
+            object.metalRoughAllocation =
+                d.uploadMaterialTexture(mesh.material.metallicRoughnessPath,
+                                        mesh.material.embeddedMetallicRoughness, false, slot + 3);
+        }
     }
 
     d.objects.push_back(object);
+    if (!reusa)
+        d.sharedMeshOwner.emplace(key, static_cast<int>(d.objects.size() - 1));
+    d.drawGroupsDirty = true;
     return static_cast<int>(d.objects.size() - 1);
 }
 
@@ -7440,6 +7687,10 @@ void D3D12Renderer::clearStaticMeshes()
     d.waitForGpu();
 
     for (Impl::StaticObject& object : d.objects) {
+        // Los duplicados llevan COPIAS de los handles del dueño: soltarlas
+        // liberaría dos veces el mismo recurso.
+        if (!object.ownsGpu)
+            continue;
         if (object.vertexAllocation)
             object.vertexAllocation->Release();
         if (object.indexAllocation)
@@ -7452,6 +7703,9 @@ void D3D12Renderer::clearStaticMeshes()
             object.metalRoughAllocation->Release();
     }
     d.objects.clear();
+    d.sharedMeshOwner.clear();
+    d.drawGroupRep.clear();
+    d.drawGroupsDirty = true;
 }
 
 int D3D12Renderer::addSkinnedMesh(const SkinnedMesh& mesh, const std::vector<DecodedImage>*)
@@ -7651,9 +7905,14 @@ void D3D12Renderer::replaceStaticTextureWithMissing(int renderIndex, TextureSlot
     if (renderIndex < 0 || renderIndex >= static_cast<int>(d.objects.size()))
         return;
 
-    const Impl::StaticObject& object = d.objects[renderIndex];
+    Impl::StaticObject& object = d.objects[renderIndex];
     if (object.srvBase == kSrvBaseColor)
         return;  // sin bloque propio: dibuja con los neutros globales
+
+    // Su bloque deja de decir lo mismo que el de los que comparten esta malla,
+    // así que deja de poder compartir draw con ellos.
+    ++object.materialVariant;
+    d.drawGroupsDirty = true;
 
     // El neutro que ya existe para cada hueco. No es el damero magenta del
     // camino de Vulkan, pero deja el objeto visible en vez de con basura, que
@@ -8024,8 +8283,11 @@ void D3D12Renderer::shutdown()
         }
     }
 
-    // Geometría de la escena, antes que el allocator.
+    // Geometría de la escena, antes que el allocator. Solo el dueño de cada
+    // malla compartida suelta: los duplicados llevan copias de sus handles.
     for (Impl::StaticObject& object : d.objects) {
+        if (!object.ownsGpu)
+            continue;
         if (object.vertexAllocation)
             object.vertexAllocation->Release();
         if (object.indexAllocation)
@@ -8036,15 +8298,19 @@ void D3D12Renderer::shutdown()
             object.normalMapAllocation->Release();
     }
     d.objects.clear();
+    d.sharedMeshOwner.clear();
+    d.drawGroupRep.clear();
 
-    if (d.sceneInstanceAllocation) {
-        if (d.sceneInstanceMapped) {
-            d.sceneInstanceAllocation->GetResource()->Unmap(0, nullptr);
-            d.sceneInstanceMapped = nullptr;
+    for (UINT i = 0; i < kFrameCount; ++i) {
+        if (!d.sceneInstanceAllocations[i])
+            continue;
+        if (d.sceneInstanceMapped[i]) {
+            d.sceneInstanceAllocations[i]->GetResource()->Unmap(0, nullptr);
+            d.sceneInstanceMapped[i] = nullptr;
         }
-        d.sceneInstanceAllocation->Release();
-        d.sceneInstanceAllocation = nullptr;
-        d.sceneInstanceCapacity   = 0;
+        d.sceneInstanceAllocations[i]->Release();
+        d.sceneInstanceAllocations[i] = nullptr;
+        d.sceneInstanceCapacity[i]    = 0;
     }
 
     for (auto** allocation : {&d.instanceAllocation, &d.baseColorAllocation,

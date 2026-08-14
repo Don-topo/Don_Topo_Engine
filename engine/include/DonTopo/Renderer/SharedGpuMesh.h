@@ -1,4 +1,6 @@
 #pragma once
+#include "DonTopo/Renderer/MeshKey.h"
+
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 #include <cstdint>
@@ -59,13 +61,6 @@ namespace DonTopo
         // misma entrada antes del flush tiene que esperar igual.
         uint64_t        uploadTicket  = 0;
     };
-
-    // Clave de contenido: dos Mesh que produzcan la misma clave generan
-    // exactamente los mismos recursos GPU. Mezcla discriminantes exactos
-    // (tamaños, paths de textura, metallic/roughness) con un FNV-1a de los
-    // bytes de vértices, índices y texturas embebidas. El nombre del mesh y su
-    // sourcePath NO entran: no afectan a un solo byte de lo que sube a GPU.
-    std::string makeSharedMeshKey(const Mesh& mesh);
 
     // Tabla de recursos GPU compartidos con refcount. No conoce Vulkan más allá
     // de los handles: crear y destruir son callbacks del caller (el Renderer los

@@ -51,8 +51,7 @@ BackendSelection resolveRenderBackend(RenderBackend requested)
     sel.backend  = RenderBackend::D3D12;
     sel.fellBack = false;
     sel.message  = "Backend DirectX 12 activo (" + support.adapterName +
-                  "). Corre el editor y el juego exportado; todavía sin "
-                  "instanciado de mallas repetidas.";
+                  "). Corre el editor y el juego exportado.";
     return sel;
 #endif
 }
