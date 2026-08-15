@@ -52,6 +52,8 @@ namespace DonTopo {
             "MotionBlurPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
         static_assert(FogPass::kFramesInFlight == MAX_FRAMES,
             "FogPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
+        static_assert(SsrPass::kFramesInFlight == MAX_FRAMES,
+            "SsrPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
 
         // Fase 1: lo minimo para poder presentar un frame (splash incluido).
         // El auto-fit de cámara y los recursos de escena (pipelines, shadow,
@@ -213,7 +215,7 @@ namespace DonTopo {
         // Detrás del SSAO: comparte su sampler de profundidad (m_ssaoSampler) y
         // su depth pre-pass, y el pool de queries se apoya en el
         // m_timestampsSupported que resolvió el bloom.
-        createSsrPipelines();
+        m_ssrPass.createPipelines(ssrCtx());
         // Detras del SSR: come del MISMO depth pre-pass y del mismo sampler de
         // profundidad, y su pool de queries se apoya en el mismo
         // m_timestampsSupported.
@@ -518,17 +520,7 @@ namespace DonTopo {
 
         // SSR: las imagenes y los sets ya se fueron con destroyOffscreenImages;
         // aqui solo queda lo que es independiente del tamano.
-        vkDestroyPipeline(m_gpu.device(), m_ssrPipeline, nullptr);
-        vkDestroyPipeline(m_gpu.device(), m_ssrResolvePipeline, nullptr);
-        vkDestroyPipelineLayout(m_gpu.device(), m_ssrPipelineLayout, nullptr);
-        vkDestroyDescriptorPool(m_gpu.device(), m_ssrDescPool, nullptr);
-        vkDestroyDescriptorSetLayout(m_gpu.device(), m_ssrDescLayout, nullptr);
-        vkDestroySampler(m_gpu.device(), m_ssrSampler, nullptr);
-        if (m_ssrQueryPool != VK_NULL_HANDLE)
-        {
-            vkDestroyQueryPool(m_gpu.device(), m_ssrQueryPool, nullptr);
-            m_ssrQueryPool = VK_NULL_HANDLE;
-        }
+        m_ssrPass.destroyPipelines(ssrCtx());
 
         // Niebla volumetrica: no tiene imagen ni sampler propios (escribe dentro
         // del HDR y muestrea con el sampler del SSAO y el del shadow map), asi
@@ -2037,7 +2029,7 @@ namespace DonTopo {
         // para que el reflejo genere bloom y pase por el tonemap ACES igual que el
         // resto de la imagen. Con el efecto apagado no graba nada y el HDR se
         // queda exactamente como salió del render pass.
-        recordSsrPass(m_commandBuffers[m_currentFrame], fc.proj);
+        m_ssrPass.record(ssrCtx(), m_commandBuffers[m_currentFrame], fc.proj);
 
         // Niebla volumetrica: detrás del SSR (quiere el color ya iluminado y con
         // los reflejos dentro) y antes del bloom, para que el in-scattering
@@ -6189,7 +6181,7 @@ namespace DonTopo {
         createBloomImages();
         // Depende de m_hdrView (el set de la suma lo referencia) y de
         // m_ssaoDepthView (el de la marcha), asi que va detras de los dos.
-        createSsrImages();
+        m_ssrPass.createImages(ssrCtx());
         // Depende de m_hdrView y de m_ssaoDepthView igual que el SSR. En el
         // primer init sale por la guarda (el UBO aun no existe) y lo rehace el
         // final de init.
@@ -6204,7 +6196,7 @@ namespace DonTopo {
         destroyBloomImages();
         destroySsaoImages();
         destroyFpBuffers();
-        destroySsrImages();
+        m_ssrPass.destroyImages(ssrCtx());
         m_fogPass.destroySets();
         m_motionBlurPass.destroyImages(motionBlurCtx());
         destroyAaImages();
@@ -7282,7 +7274,7 @@ namespace DonTopo {
         // El sexto es el motion blur: reproyecta esta misma profundidad al frame
         // anterior para sacar la velocidad de cada pixel. Sin esto, encendido y
         // con todo lo demas apagado, leeria una imagen que nadie ha escrito.
-        const bool ssrNeedsDepth = ssrActive() || m_aaActiveMode == AaMode::Taa ||
+        const bool ssrNeedsDepth = m_ssrPass.active(ssrCtx()) || m_aaActiveMode == AaMode::Taa ||
                                    m_fpActiveMode == FpMode::Tiled || m_fogEnabled ||
                                    m_motionBlurPass.active(motionBlurCtx());
         m_ssrStampedPrepass = false;
@@ -7363,8 +7355,8 @@ namespace DonTopo {
         // cuatro nunca dé NOT_READY.
         if (ssrNeedsDepth && m_timestampsSupported)
         {
-            vkCmdResetQueryPool(cmd, m_ssrQueryPool, m_currentFrame * 4, 4);
-            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_ssrQueryPool, m_currentFrame * 4);
+            vkCmdResetQueryPool(cmd, m_ssrPass.queryPool(), m_currentFrame * 4, 4);
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_ssrPass.queryPool(), m_currentFrame * 4);
             m_ssrStampedPrepass = true;
         }
 
@@ -7442,7 +7434,7 @@ namespace DonTopo {
         }
 
         if (m_ssrStampedPrepass)
-            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_ssrQueryPool, m_currentFrame * 4 + 1);
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_ssrPass.queryPool(), m_currentFrame * 4 + 1);
 
         // El SSR solo quería la profundidad: sin SSAO no hay oclusión que
         // calcular ni mapa que escribir.
@@ -7864,15 +7856,10 @@ namespace DonTopo {
     }
 
     // ── SSR ─────────────────────────────────────────────────────────────────
-    bool Renderer::ssrActive() const
+    bool Renderer::anyObjectWithSsr() const
     {
-        if (!m_ssrEnabled) return false;
-        // Recursos aún sin crear (viewport degenerado): nada que grabar.
-        if (m_ssrImage[m_currentFrame] == VK_NULL_HANDLE) return false;
-        // Interruptor puesto pero ningún objeto marcado = ningún píxel con
-        // máscara: se salta el pass entero en vez de despachar y multiplicar por
-        // cero. Es un float por objeto, mucho menos que el culling que ya se hace
-        // en este mismo frame.
+        // El recorrido se queda aqui: m_objects y m_skinnedObjects son del
+        // Renderer, no del pase. SsrPass::active() recibe el resultado.
         for (const RenderObject& o : m_objects)
             if (o.ssrStrength > 0.0f) return true;
         for (const SkinnedRenderObject& o : m_skinnedObjects)
@@ -7880,339 +7867,14 @@ namespace DonTopo {
         return false;
     }
 
-    void Renderer::createSsrPipelines()
+    SsrPass::Context Renderer::ssrCtx()
     {
-        // LINEAR: el impacto del rayo cae entre texeles y R16G16B16A16_SFLOAT sí
-        // tiene garantizado el filtrado lineal. La profundidad NO se muestrea con
-        // este sampler sino con m_ssaoSampler (NEAREST), que es el que le
-        // corresponde a D32_SFLOAT. CLAMP_TO_EDGE para que un tap del borde no
-        // traiga color del lado opuesto de la pantalla.
-        VkSamplerCreateInfo si{};
-        si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        si.magFilter    = VK_FILTER_LINEAR;
-        si.minFilter    = VK_FILTER_LINEAR;
-        si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        si.borderColor  = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
-        if (vkCreateSampler(m_gpu.device(), &si, nullptr, &m_ssrSampler) != VK_SUCCESS)
-            throw std::runtime_error("failed to create ssr sampler!");
-
-        // Un solo layout para los dos pipelines: color muestreado, profundidad
-        // muestreada y destino como storage image. ssr_resolve.comp declara el
-        // binding 1 y no lo lee.
-        VkDescriptorSetLayoutBinding bindings[3]{};
-        for (int i = 0; i < 3; i++)
-        {
-            bindings[i].binding         = (uint32_t)i;
-            bindings[i].descriptorType  = (i < 2) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-                                                  : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[i].descriptorCount = 1;
-            bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-        }
-
-        VkDescriptorSetLayoutCreateInfo dsl{};
-        dsl.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dsl.bindingCount = 3;
-        dsl.pBindings    = bindings;
-        if (vkCreateDescriptorSetLayout(m_gpu.device(), &dsl, nullptr, &m_ssrDescLayout) != VK_SUCCESS)
-            throw std::runtime_error("failed to create ssr descriptor set layout!");
-
-        // Dos sets por frame: marcha (HDR + depth → reflejo) y suma (reflejo →
-        // HDR).
-        const uint32_t ssrSets = MAX_FRAMES * 2;
-        VkDescriptorPoolSize sizes[2]{};
-        sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = ssrSets * 2;
-        sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[1].descriptorCount = ssrSets;
-
-        VkDescriptorPoolCreateInfo dpi{};
-        dpi.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpi.poolSizeCount = 2;
-        dpi.pPoolSizes    = sizes;
-        dpi.maxSets       = ssrSets;
-        if (vkCreateDescriptorPool(m_gpu.device(), &dpi, nullptr, &m_ssrDescPool) != VK_SUCCESS)
-            throw std::runtime_error("failed to create ssr descriptor pool!");
-
-        VkPushConstantRange pcr{};
-        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        pcr.offset     = 0;
-        pcr.size       = sizeof(SsrPush);
-
-        VkPipelineLayoutCreateInfo pli{};
-        pli.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pli.setLayoutCount         = 1;
-        pli.pSetLayouts            = &m_ssrDescLayout;
-        pli.pushConstantRangeCount = 1;
-        pli.pPushConstantRanges    = &pcr;
-        if (vkCreatePipelineLayout(m_gpu.device(), &pli, nullptr, &m_ssrPipelineLayout) != VK_SUCCESS)
-            throw std::runtime_error("failed to create ssr pipeline layout!");
-
-        auto makeSsrPipeline = [&](const std::string& spv, VkPipeline& pipeline)
-        {
-            auto code   = loadShaderFile(spv);
-            auto module = createShaderModule(code);
-
-            VkComputePipelineCreateInfo ci{};
-            ci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            ci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            ci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            ci.stage.module = module;
-            ci.stage.pName  = "main";
-            ci.layout       = m_ssrPipelineLayout;
-            if (vkCreateComputePipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline) != VK_SUCCESS)
-                throw std::runtime_error("failed to create compute pipeline: " + spv);
-
-            vkDestroyShaderModule(m_gpu.device(), module, nullptr);
+        return SsrPass::Context{
+            m_gpu, m_res, *this, m_renderExtent, m_swapChainExtent, m_currentFrame,
+            kHdrFormat, m_hdrImage, m_hdrView, m_ssaoDepthView, m_ssaoSampler,
+            m_timestampsSupported, m_timestampPeriod,
+            anyObjectWithSsr(), m_ssrStampedPrepass
         };
-
-        makeSsrPipeline("shaders/ssr.comp.spv",         m_ssrPipeline);
-        makeSsrPipeline("shaders/ssr_resolve.comp.spv", m_ssrResolvePipeline);
-
-        // Cuatro por frame: [0,1] el depth pre-pass cuando lo pide el SSR, [2,3]
-        // los dos dispatches. m_timestampsSupported ya lo resolvió el bloom.
-        if (m_timestampsSupported)
-        {
-            VkQueryPoolCreateInfo qpi{};
-            qpi.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-            qpi.queryType  = VK_QUERY_TYPE_TIMESTAMP;
-            qpi.queryCount = MAX_FRAMES * 4;
-            if (vkCreateQueryPool(m_gpu.device(), &qpi, nullptr, &m_ssrQueryPool) != VK_SUCCESS)
-                throw std::runtime_error("failed to create ssr query pool!");
-        }
-
-        printf("ssr pipelines OK\n"); fflush(stdout);
-    }
-
-    void Renderer::createSsrImages()
-    {
-        for (int f = 0; f < MAX_FRAMES; f++)
-        {
-            // Mismo formato que el HDR: ssr_resolve.comp declara los dos con el
-            // qualifier rgba16f. Resolución completa, como el SSAO.
-            m_res.createImage(
-                m_renderExtent.width, m_renderExtent.height,
-                kHdrFormat, VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                m_ssrImage[f], m_ssrMemory[f]);
-            m_res.createTextureImageView(m_ssrImage[f], m_ssrView[f], kHdrFormat);
-        }
-
-        // Los sets de la vez anterior apuntan a vistas ya destruidas: reset y no
-        // free, igual que en el bloom y en el SSAO.
-        vkResetDescriptorPool(m_gpu.device(), m_ssrDescPool, 0);
-
-        for (int f = 0; f < MAX_FRAMES; f++)
-        {
-            VkDescriptorSetLayout layouts[2] = { m_ssrDescLayout, m_ssrDescLayout };
-            VkDescriptorSet       sets[2]    = {};
-
-            VkDescriptorSetAllocateInfo ai{};
-            ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            ai.descriptorPool     = m_ssrDescPool;
-            ai.descriptorSetCount = 2;
-            ai.pSetLayouts        = layouts;
-            if (vkAllocateDescriptorSets(m_gpu.device(), &ai, sets) != VK_SUCCESS)
-                throw std::runtime_error("failed to allocate ssr descriptor sets!");
-
-            m_ssrSets[f]        = sets[0];
-            m_ssrResolveSets[f] = sets[1];
-
-            VkDescriptorImageInfo infos[6]{};
-            // Marcha: color de la escena (sale del render pass en SHADER_READ_ONLY)
-            // + profundidad del pre-pass → reflejo.
-            infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            infos[0].imageView   = m_hdrView[f];
-            infos[0].sampler     = m_ssrSampler;
-            infos[1].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-            infos[1].imageView   = m_ssaoDepthView[f];
-            infos[1].sampler     = m_ssaoSampler;
-            infos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            infos[2].imageView   = m_ssrView[f];
-            // Suma: el reflejo (ya en GENERAL) → el HDR como storage. El binding 1
-            // se rellena con la misma profundidad aunque el shader no lo lea: un
-            // descriptor set no puede quedarse con un binding sin escribir.
-            infos[3].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            infos[3].imageView   = m_ssrView[f];
-            infos[3].sampler     = m_ssrSampler;
-            infos[4]             = infos[1];
-            infos[5].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            infos[5].imageView   = m_hdrView[f];
-
-            VkWriteDescriptorSet writes[6]{};
-            for (int i = 0; i < 6; i++)
-            {
-                writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[i].dstSet          = (i < 3) ? m_ssrSets[f] : m_ssrResolveSets[f];
-                writes[i].dstBinding      = (uint32_t)(i % 3);
-                writes[i].descriptorType  = (i % 3 == 2) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-                                                         : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[i].descriptorCount = 1;
-                writes[i].pImageInfo      = &infos[i];
-            }
-            vkUpdateDescriptorSets(m_gpu.device(), 6, writes, 0, nullptr);
-        }
-    }
-
-    void Renderer::destroySsrImages()
-    {
-        for (int f = 0; f < MAX_FRAMES; f++)
-        {
-            if (m_ssrView[f])
-            {
-                vkDestroyImageView(m_gpu.device(), m_ssrView[f], nullptr);
-                m_ssrView[f] = VK_NULL_HANDLE;
-            }
-            if (m_ssrImage[f])
-            {
-                vkDestroyImage(m_gpu.device(), m_ssrImage[f], nullptr);
-                m_ssrImage[f] = VK_NULL_HANDLE;
-            }
-            if (m_ssrMemory[f])
-            {
-                vkFreeMemory(m_gpu.device(), m_ssrMemory[f], nullptr);
-                m_ssrMemory[f] = VK_NULL_HANDLE;
-            }
-            m_ssrSets[f]        = VK_NULL_HANDLE;
-            m_ssrResolveSets[f] = VK_NULL_HANDLE;
-        }
-    }
-
-    void Renderer::recordSsrPass(VkCommandBuffer cmd, const glm::mat4& proj)
-    {
-        if (!ssrActive())
-        {
-            m_ssrGpuMs = 0.0f;
-            // Ni dispatches ni barreras: el HDR se queda tal y como lo dejó el
-            // pass de escena, en SHADER_READ_ONLY, que es justo lo que esperan el
-            // bloom y la composición. Imagen idéntica a la de antes del SSR.
-            return;
-        }
-
-        // Timestamps de hace dos frames en este mismo slot, ya señalados.
-        if (m_timestampsSupported && m_ssrQueryPending[m_currentFrame])
-        {
-            uint64_t stamps[4] = {};
-            if (vkGetQueryPoolResults(m_gpu.device(), m_ssrQueryPool, m_currentFrame * 4, 4,
-                                      sizeof(stamps), stamps, sizeof(uint64_t),
-                                      VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
-            {
-                // El pre-pass solo cuenta como coste del SSR cuando es el SSR
-                // quien lo pide: con el SSAO encendido ya sale en ssaoGpuMs y
-                // sumarlo aquí lo contaría dos veces.
-                const uint64_t prepass = ssaoEnabled() ? 0 : (stamps[1] - stamps[0]);
-                m_ssrGpuMs = (float)((double)(prepass + (stamps[3] - stamps[2]))
-                                     * m_timestampPeriod * 1e-6);
-                if (++m_ssrMeasuredFrames == 300)
-                {
-                    printf("ssr (marcha + suma%s): %.3f ms (%ux%u, %d pasos)\n",
-                           ssaoEnabled() ? "" : " + depth pre-pass",
-                           m_ssrGpuMs, m_swapChainExtent.width, m_swapChainExtent.height,
-                           m_ssrMaxSteps);
-                    fflush(stdout);
-                }
-            }
-        }
-        // Solo se da por bueno el frame en el que recordSsaoPass dejó escrito el
-        // par [0,1]: sin eso la lectura de los cuatro daría NOT_READY.
-        if (m_timestampsSupported && m_ssrStampedPrepass)
-        {
-            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_ssrQueryPool, m_currentFrame * 4 + 2);
-            m_ssrQueryPending[m_currentFrame] = true;
-        }
-        else
-        {
-            m_ssrQueryPending[m_currentFrame] = false;
-        }
-
-        SsrPush push{};
-        // Los mismos cuatro coeficientes que usa el SSAO, de la proyección
-        // EFECTIVA del frame (Y-flip incluido): es la que grabó el depth, así que
-        // reconstruir y reproyectar es consistente.
-        push.projP00     = proj[0][0];
-        push.projP11     = proj[1][1];
-        push.projP22     = proj[2][2];
-        push.projP32     = proj[3][2];
-        push.invResX     = 1.0f / (float)m_renderExtent.width;
-        push.invResY     = 1.0f / (float)m_renderExtent.height;
-        push.maxDistance = m_ssrMaxDistance;
-        push.thickness   = m_ssrThickness;
-        push.maxSteps    = (int32_t)m_ssrMaxSteps;
-        // Fijo y no configurable: cuatro bisecciones ya sitúan el impacto dentro
-        // de 1/16 de paso, y subirlo no cambia nada visible.
-        push.refineSteps = 4;
-        push.edgeFade    = m_ssrEdgeFade;
-        push.intensity   = m_ssrIntensity;
-
-        VkImageMemoryBarrier b{};
-        b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        b.subresourceRange.baseMipLevel   = 0;
-        b.subresourceRange.levelCount     = 1;
-        b.subresourceRange.baseArrayLayer = 0;
-        b.subresourceRange.layerCount     = 1;
-
-        // El reflejo entra desde UNDEFINED: se reescribe entero (ssr.comp empieza
-        // por poner el píxel a 0) y el contenido del frame anterior no se
-        // reutiliza.
-        b.image         = m_ssrImage[m_currentFrame];
-        b.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
-        b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
-        b.srcAccessMask = 0;
-        b.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &b);
-
-        const uint32_t gx = (m_renderExtent.width  + 7) / 8;
-        const uint32_t gy = (m_renderExtent.height + 7) / 8;
-
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_ssrPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_ssrPipelineLayout,
-                                0, 1, &m_ssrSets[m_currentFrame], 0, nullptr);
-        vkCmdPushConstants(cmd, m_ssrPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-        vkCmdDispatch(cmd, gx, gy, 1);
-
-        // Dos transiciones antes de la suma: el reflejo que se acaba de escribir
-        // pasa a leerse, y el HDR sale de SHADER_READ_ONLY (donde lo dejó el
-        // render pass, y desde donde acaba de leerlo la marcha) a GENERAL, que es
-        // el único layout válido para imageLoad/imageStore.
-        VkImageMemoryBarrier toResolve[2] = { b, b };
-        toResolve[0].image         = m_ssrImage[m_currentFrame];
-        toResolve[0].oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
-        toResolve[0].newLayout     = VK_IMAGE_LAYOUT_GENERAL;
-        toResolve[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        toResolve[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        toResolve[1].image         = m_hdrImage[m_currentFrame];
-        toResolve[1].oldLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        toResolve[1].newLayout     = VK_IMAGE_LAYOUT_GENERAL;
-        toResolve[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        toResolve[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 2, toResolve);
-
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_ssrResolvePipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_ssrPipelineLayout,
-                                0, 1, &m_ssrResolveSets[m_currentFrame], 0, nullptr);
-        vkCmdPushConstants(cmd, m_ssrPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-        vkCmdDispatch(cmd, gx, gy, 1);
-
-        // Y el HDR vuelve a SHADER_READ_ONLY, que es el layout que declaran los
-        // descriptor sets del bloom (compute) y de la composición (fragment).
-        b.image         = m_hdrImage[m_currentFrame];
-        b.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
-        b.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &b);
-
-        if (m_timestampsSupported && m_ssrQueryPending[m_currentFrame])
-            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_ssrQueryPool, m_currentFrame * 4 + 3);
     }
 
     // ── Niebla volumetrica ──────────────────────────────────────────────────
@@ -8232,7 +7894,7 @@ namespace DonTopo {
         return MotionBlurPass::Context{
             m_gpu, m_res, *this, m_renderExtent, m_currentFrame, kHdrFormat,
             m_hdrImage, m_hdrView, m_ssaoDepthView,
-            m_ssrSampler, m_ssaoSampler,
+            m_ssrPass.sampler(), m_ssaoSampler,
             m_taaCurrViewProj, m_taaPrevViewProj
         };
     }

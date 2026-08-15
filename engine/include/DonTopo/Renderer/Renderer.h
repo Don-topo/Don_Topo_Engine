@@ -23,6 +23,7 @@
 #include "DonTopo/Renderer/Skybox.h"
 #include "DonTopo/Renderer/SplashScreen.h"
 #include "DonTopo/Renderer/Passes/FogPass.h"
+#include "DonTopo/Renderer/Passes/SsrPass.h"
 #include "DonTopo/Renderer/Passes/MotionBlurPass.h"
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiSpriteBatch.h"
@@ -292,7 +293,7 @@ namespace DonTopo {
             // Coste GPU del SSR en ms: los dos dispatches, mas el depth pre-pass
             // cuando es el SSR quien lo pide (con el SSAO encendido ese pre-pass
             // ya lo contabiliza ssaoGpuMs y aqui no se suma dos veces).
-            float ssrGpuMs() const           { return m_ssrGpuMs; }
+            float ssrGpuMs() const           { return m_ssrPass.gpuMs(); }
 
             // Coste GPU del dispatch de niebla en ms. 0 si esta apagada o el
             // dispositivo no soporta timestamps.
@@ -649,19 +650,13 @@ namespace DonTopo {
             // SSR. Mismo reparto que el SSAO: los pipelines una sola vez, las
             // imagenes y los sets con el swapchain (colgados de
             // createOffscreenImages/destroyOffscreenImages).
-            void createSsrPipelines();
-            void createSsrImages();
-            void destroySsrImages();
-            // Los dos dispatches (marcha + suma sobre el HDR). Va DESPUES del
-            // pass de escena -necesita el color ya iluminado- y ANTES del bloom,
-            // para que el reflejo pase por el umbral del bloom y por el tonemap
-            // como el resto de la imagen.
-            void recordSsrPass(VkCommandBuffer cmd, const glm::mat4& proj);
-            // true si hay algo que grabar: interruptor global puesto Y al menos
-            // un objeto visible con fuerza > 0. Con cualquiera de las dos cosas
-            // en falso no se graba ni un dispatch (ni se calcula multiplicando
-            // por cero), asi que el coste GPU cae a cero.
-            bool ssrActive() const;
+            // El pase vive en SsrPass; esto solo arma el paquete de estado
+            // compartido que necesita para cada llamada.
+            SsrPass::Context ssrCtx();
+            // El recorrido de m_objects/m_skinnedObjects que decide si hay algo
+            // que reflejar: las listas son del Renderer, asi que el bucle se
+            // queda aqui y el resultado entra en el Context.
+            bool anyObjectWithSsr() const;
             // Niebla volumetrica. Mismo reparto que el SSR: el pipeline una
             // sola vez, los descriptor sets con el swapchain (referencian
             // m_hdrView y m_ssaoDepthView, que se recrean con el). El pase vive
@@ -970,55 +965,17 @@ namespace DonTopo {
             uint32_t                        m_ssaoMeasuredFrames                = 0;
 
             // ── SSR ──────────────────────────────────────────────────────────
-            // Reflejo aislado, a resolucion completa y en el MISMO formato que el
-            // HDR: ssr_resolve.comp lo suma sobre m_hdrImage y los dos son
-            // storage images con el mismo qualifier rgba16f.
-            VkImage                         m_ssrImage[MAX_FRAMES]              = {};
-            VkDeviceMemory                  m_ssrMemory[MAX_FRAMES]             = {};
-            VkImageView                     m_ssrView[MAX_FRAMES]               = {};
-            // LINEAR: a diferencia del SSAO, el impacto del rayo cae entre
-            // texeles y el color de la escena si tiene garantizado el filtrado
-            // lineal en R16G16B16A16_SFLOAT. La profundidad se muestrea con
-            // m_ssaoSampler (NEAREST), que es el que le corresponde a D32_SFLOAT.
-            VkSampler                       m_ssrSampler                        = VK_NULL_HANDLE;
-            // Un unico layout para los dos pipelines: ssr_resolve.comp declara el
-            // binding 1 y simplemente no lo lee.
-            VkDescriptorSetLayout           m_ssrDescLayout                     = VK_NULL_HANDLE;
-            VkDescriptorPool                m_ssrDescPool                       = VK_NULL_HANDLE;
-            VkPipelineLayout                m_ssrPipelineLayout                 = VK_NULL_HANDLE;
-            VkPipeline                      m_ssrPipeline                       = VK_NULL_HANDLE;
-            VkPipeline                      m_ssrResolvePipeline                = VK_NULL_HANDLE;
-            VkDescriptorSet                 m_ssrSets[MAX_FRAMES]               = {};
-            VkDescriptorSet                 m_ssrResolveSets[MAX_FRAMES]        = {};
-            // Compartida por ssr.comp y ssr_resolve.comp, que comparten pipeline
-            // layout. 48 bytes: los mismos campos y en el mismo orden que el
-            // bloque de los dos .comp.
-            struct SsrPush {
-                float   projP00;
-                float   projP11;
-                float   projP22;
-                float   projP32;
-                float   invResX;
-                float   invResY;
-                float   maxDistance;
-                float   thickness;
-                int32_t maxSteps;
-                int32_t refineSteps;
-                float   edgeFade;
-                float   intensity;
-            };
-            static_assert(sizeof(SsrPush) == 48, "SsrPush debe seguir en 48 bytes: los dos .comp declaran este layout");
-            // Cuatro queries por frame: [0,1] el depth pre-pass cuando es el SSR
-            // quien lo pide, [2,3] los dos dispatches. Reutilizar las del SSAO o
-            // las del bloom mezclaria dos medidas.
-            VkQueryPool                     m_ssrQueryPool                      = VK_NULL_HANDLE;
-            bool                            m_ssrQueryPending[MAX_FRAMES]       = {};
-            // recordSsaoPass marca aqui que dejo escritos los timestamps [0,1] de
-            // este frame; recordSsrPass solo da la medida por buena si es asi (si
-            // no, el par no se habria escrito y la lectura daria NOT_READY).
+            // Imagen del reflejo, sampler, pipelines, sets y queries son suyos;
+            // el Renderer solo lo posee y decide cuando crear, grabar y
+            // destruir. El sampler y el pool de queries salen por sus getters:
+            // los usan el motion blur y el depth pre-pass, que no son del pase.
+            SsrPass                         m_ssrPass;
+            // Se queda en el Renderer porque lo ESCRIBE el depth pre-pass
+            // (recordSsaoPass) y no el pase: marca que dejo escritos los
+            // timestamps [0,1] de este frame. SsrPass solo da la medida por
+            // buena si es asi (si no, el par no se habria escrito y la lectura
+            // daria NOT_READY).
             bool                            m_ssrStampedPrepass                 = false;
-            float                           m_ssrGpuMs                          = 0.0f;
-            uint32_t                        m_ssrMeasuredFrames                 = 0;
 
             // ── Niebla volumetrica ───────────────────────────────────────────
             // Pipeline, sets y queries de tiempo son suyos; el Renderer solo lo
