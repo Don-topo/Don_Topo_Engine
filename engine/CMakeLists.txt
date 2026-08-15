@@ -10,6 +10,7 @@ add_library(DonTopoCore STATIC
     src/Renderer/Passes/BloomPass.cpp
     src/Renderer/Passes/DepthPrepassPass.cpp
     src/Renderer/Passes/FogPass.cpp
+    src/Renderer/Passes/ForwardPlusPass.cpp
     src/Renderer/Passes/SsaoPass.cpp
     src/Renderer/Passes/SsrPass.cpp
     src/Renderer/Passes/MotionBlurPass.cpp
