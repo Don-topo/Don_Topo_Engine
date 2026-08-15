@@ -22,6 +22,7 @@
 #include "DonTopo/Renderer/UiLayer.h"
 #include "DonTopo/Renderer/Skybox.h"
 #include "DonTopo/Renderer/SplashScreen.h"
+#include "DonTopo/Renderer/Passes/FogPass.h"
 #include "DonTopo/Renderer/Passes/MotionBlurPass.h"
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiSpriteBatch.h"
@@ -295,7 +296,7 @@ namespace DonTopo {
 
             // Coste GPU del dispatch de niebla en ms. 0 si esta apagada o el
             // dispositivo no soporta timestamps.
-            float fogGpuMs() const              { return m_fogGpuMs; }
+            float fogGpuMs() const              { return m_fogPass.gpuMs(); }
 
             // ── Anti-aliasing ────────────────────────────────────────────────
             // Modos EXCLUYENTES: solo uno activo a la vez. None deja el frame
@@ -663,15 +664,10 @@ namespace DonTopo {
             bool ssrActive() const;
             // Niebla volumetrica. Mismo reparto que el SSR: el pipeline una
             // sola vez, los descriptor sets con el swapchain (referencian
-            // m_hdrView y m_ssaoDepthView, que se recrean con el).
-            void createFogPipelines();
-            void createFogSets();
-            void destroyFogSets();
-            // Un solo dispatch que reescribe el HDR in situ. Va DESPUES del
-            // pass de escena y del SSR -necesita el color ya iluminado y con
-            // los reflejos sumados- y ANTES del bloom, para que la niebla
-            // florezca y pase por el tonemap como el resto de la imagen.
-            void recordFogPass(VkCommandBuffer cmd, const glm::mat4& view, const glm::mat4& proj);
+            // m_hdrView y m_ssaoDepthView, que se recrean con el). El pase vive
+            // en FogPass; esto solo arma el paquete de estado compartido que
+            // necesita para cada llamada.
+            FogPass::Context fogCtx();
             // Motion blur de camara. Mismo reparto que el SSR: el pipeline una
             // sola vez, y las imagenes y los descriptor sets con el swapchain.
             // El pase vive en MotionBlurPass; esto solo arma el paquete de
@@ -1025,31 +1021,9 @@ namespace DonTopo {
             uint32_t                        m_ssrMeasuredFrames                 = 0;
 
             // ── Niebla volumetrica ───────────────────────────────────────────
-            // Un solo pipeline y un set por frame: HDR como storage (se lee y
-            // se reescribe in situ), la profundidad del pre-pass, el UBO del
-            // frame (matrices de cascada) y el shadow map de la luz key.
-            VkDescriptorSetLayout           m_fogDescLayout                     = VK_NULL_HANDLE;
-            VkDescriptorPool                m_fogDescPool                       = VK_NULL_HANDLE;
-            VkPipelineLayout                m_fogPipelineLayout                 = VK_NULL_HANDLE;
-            VkPipeline                      m_fogPipeline                       = VK_NULL_HANDLE;
-            VkDescriptorSet                 m_fogSets[MAX_FRAMES]               = {};
-            // 128 bytes exactos -el minimo que Vulkan garantiza-: los mismos
-            // campos y en el mismo orden que el bloque de fog.comp.
-            struct FogPush {
-                glm::mat4 invViewProj;
-                glm::vec4 camPosDensity;
-                glm::vec4 lightDirFalloff;
-                glm::vec4 scatterBaseHeight;
-                glm::vec4 gStepsRes;
-            };
-            static_assert(sizeof(FogPush) == 128, "FogPush debe seguir en 128 bytes: fog.comp declara este layout");
-            // Dos queries por frame que acotan el unico dispatch. El depth
-            // pre-pass NO entra aqui: ya lo miden el SSAO o el SSR cuando son
-            // ellos quienes lo piden.
-            VkQueryPool                     m_fogQueryPool                      = VK_NULL_HANDLE;
-            bool                            m_fogQueryPending[MAX_FRAMES]       = {};
-            float                           m_fogGpuMs                          = 0.0f;
-            uint32_t                        m_fogMeasuredFrames                 = 0;
+            // Pipeline, sets y queries de tiempo son suyos; el Renderer solo lo
+            // posee y decide cuando crear, grabar y destruir.
+            FogPass                         m_fogPass;
 
             // ── Motion blur ──────────────────────────────────────────────────
             // Imagenes, sets y pipeline son suyos; el Renderer solo lo posee y

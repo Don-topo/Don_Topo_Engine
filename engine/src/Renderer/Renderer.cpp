@@ -50,6 +50,8 @@ namespace DonTopo {
         // frame en vuelo sin poder ver MAX_FRAMES.
         static_assert(MotionBlurPass::kFramesInFlight == MAX_FRAMES,
             "MotionBlurPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
+        static_assert(FogPass::kFramesInFlight == MAX_FRAMES,
+            "FogPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
 
         // Fase 1: lo minimo para poder presentar un frame (splash incluido).
         // El auto-fit de cámara y los recursos de escena (pipelines, shadow,
@@ -215,7 +217,7 @@ namespace DonTopo {
         // Detras del SSR: come del MISMO depth pre-pass y del mismo sampler de
         // profundidad, y su pool de queries se apoya en el mismo
         // m_timestampsSupported.
-        createFogPipelines();
+        m_fogPass.createPipelines(fogCtx());
         // Detras de la niebla, y ANTES de createOffscreenImages: sus imagenes y
         // sus descriptor sets se crean con el swapchain y necesitan el layout y
         // el pool ya montados.
@@ -246,7 +248,7 @@ namespace DonTopo {
         // del frame, y en el init ese buffer todavia no existia cuando corrio
         // createOffscreenImages. En las recreaciones por swapchain ya existe y
         // los sets los rehace createOffscreenImages.
-        createFogSets();
+        m_fogPass.createSets(fogCtx());
     }
 
     bool Renderer::beginSplash(const std::string& logoPath)
@@ -531,15 +533,7 @@ namespace DonTopo {
         // Niebla volumetrica: no tiene imagen ni sampler propios (escribe dentro
         // del HDR y muestrea con el sampler del SSAO y el del shadow map), asi
         // que aqui esta todo lo suyo menos los sets.
-        vkDestroyPipeline(m_gpu.device(), m_fogPipeline, nullptr);
-        vkDestroyPipelineLayout(m_gpu.device(), m_fogPipelineLayout, nullptr);
-        vkDestroyDescriptorPool(m_gpu.device(), m_fogDescPool, nullptr);
-        vkDestroyDescriptorSetLayout(m_gpu.device(), m_fogDescLayout, nullptr);
-        if (m_fogQueryPool != VK_NULL_HANDLE)
-        {
-            vkDestroyQueryPool(m_gpu.device(), m_fogQueryPool, nullptr);
-            m_fogQueryPool = VK_NULL_HANDLE;
-        }
+        m_fogPass.destroyPipelines(fogCtx());
 
         // Motion blur: aqui lo que no depende del tamano. Las imagenes y los
         // sets se fueron con destroyImages.
@@ -2049,7 +2043,7 @@ namespace DonTopo {
         // los reflejos dentro) y antes del bloom, para que el in-scattering
         // florezca y pase por el tonemap ACES igual que el resto de la imagen.
         // Apagada no graba nada.
-        recordFogPass(m_commandBuffers[m_currentFrame], fc.view, fc.proj);
+        m_fogPass.record(fogCtx(), m_commandBuffers[m_currentFrame], fc.view, fc.proj);
 
         // Motion blur de cámara: detrás de la niebla (emborrona la imagen tal y
         // como se va a ver) y antes del bloom, para que la estela arrastre los
@@ -6199,7 +6193,7 @@ namespace DonTopo {
         // Depende de m_hdrView y de m_ssaoDepthView igual que el SSR. En el
         // primer init sale por la guarda (el UBO aun no existe) y lo rehace el
         // final de init.
-        createFogSets();
+        m_fogPass.createSets(fogCtx());
         // Depende de m_hdrView y de m_ssaoDepthView igual que el SSR.
         m_motionBlurPass.createImages(motionBlurCtx());
         printf("offscreen images OK\n"); fflush(stdout);
@@ -6211,7 +6205,7 @@ namespace DonTopo {
         destroySsaoImages();
         destroyFpBuffers();
         destroySsrImages();
-        destroyFogSets();
+        m_fogPass.destroySets();
         m_motionBlurPass.destroyImages(motionBlurCtx());
         destroyAaImages();
         for (int i = 0; i < MAX_FRAMES; i++)
@@ -8222,286 +8216,14 @@ namespace DonTopo {
     }
 
     // ── Niebla volumetrica ──────────────────────────────────────────────────
-    void Renderer::createFogPipelines()
+    FogPass::Context Renderer::fogCtx()
     {
-        // Cuatro bindings: HDR como storage (lectura + escritura in situ), la
-        // profundidad del pre-pass, el UBO del frame (matriz de vista, cortes y
-        // matrices de cascada) y el shadow map de la luz key.
-        VkDescriptorSetLayoutBinding bindings[4]{};
-        const VkDescriptorType types[4] = {
-            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        return FogPass::Context{
+            m_gpu, *this, m_renderExtent, m_currentFrame,
+            m_hdrImage, m_hdrView, m_ssaoDepthView, m_ssaoSampler,
+            m_uniformBuffers, m_shadowView, m_shadowSampler, m_lights,
+            m_timestampsSupported, m_timestampPeriod
         };
-        for (int i = 0; i < 4; i++)
-        {
-            bindings[i].binding         = (uint32_t)i;
-            bindings[i].descriptorType  = types[i];
-            bindings[i].descriptorCount = 1;
-            bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-        }
-
-        VkDescriptorSetLayoutCreateInfo dsl{};
-        dsl.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dsl.bindingCount = 4;
-        dsl.pBindings    = bindings;
-        if (vkCreateDescriptorSetLayout(m_gpu.device(), &dsl, nullptr, &m_fogDescLayout) != VK_SUCCESS)
-            throw std::runtime_error("failed to create fog descriptor set layout!");
-
-        VkDescriptorPoolSize sizes[3]{};
-        sizes[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[0].descriptorCount = MAX_FRAMES;
-        sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = MAX_FRAMES * 2;
-        sizes[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        sizes[2].descriptorCount = MAX_FRAMES;
-
-        VkDescriptorPoolCreateInfo dpi{};
-        dpi.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpi.poolSizeCount = 3;
-        dpi.pPoolSizes    = sizes;
-        dpi.maxSets       = MAX_FRAMES;
-        if (vkCreateDescriptorPool(m_gpu.device(), &dpi, nullptr, &m_fogDescPool) != VK_SUCCESS)
-            throw std::runtime_error("failed to create fog descriptor pool!");
-
-        VkPushConstantRange pcr{};
-        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        pcr.offset     = 0;
-        pcr.size       = sizeof(FogPush);
-
-        VkPipelineLayoutCreateInfo pli{};
-        pli.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pli.setLayoutCount         = 1;
-        pli.pSetLayouts            = &m_fogDescLayout;
-        pli.pushConstantRangeCount = 1;
-        pli.pPushConstantRanges    = &pcr;
-        if (vkCreatePipelineLayout(m_gpu.device(), &pli, nullptr, &m_fogPipelineLayout) != VK_SUCCESS)
-            throw std::runtime_error("failed to create fog pipeline layout!");
-
-        auto code   = loadShaderFile("shaders/fog.comp.spv");
-        auto module = createShaderModule(code);
-
-        VkComputePipelineCreateInfo ci{};
-        ci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        ci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        ci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        ci.stage.module = module;
-        ci.stage.pName  = "main";
-        ci.layout       = m_fogPipelineLayout;
-        if (vkCreateComputePipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &ci, nullptr, &m_fogPipeline) != VK_SUCCESS)
-            throw std::runtime_error("failed to create compute pipeline: shaders/fog.comp.spv");
-
-        vkDestroyShaderModule(m_gpu.device(), module, nullptr);
-
-        // Dos por frame, las que acotan el dispatch. m_timestampsSupported ya lo
-        // resolvio el bloom.
-        if (m_timestampsSupported)
-        {
-            VkQueryPoolCreateInfo qpi{};
-            qpi.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-            qpi.queryType  = VK_QUERY_TYPE_TIMESTAMP;
-            qpi.queryCount = MAX_FRAMES * 2;
-            if (vkCreateQueryPool(m_gpu.device(), &qpi, nullptr, &m_fogQueryPool) != VK_SUCCESS)
-                throw std::runtime_error("failed to create fog query pool!");
-        }
-
-        printf("fog pipeline OK\n"); fflush(stdout);
-    }
-
-    void Renderer::createFogSets()
-    {
-        // El UBO del frame es uno de los cuatro bindings y en el primer init
-        // todavia no existe cuando corre createOffscreenImages: ahi se sale sin
-        // hacer nada y el final de init vuelve a llamar.
-        if (m_uniformBuffers[0] == VK_NULL_HANDLE) return;
-
-        // La niebla no tiene imagen propia: escribe dentro del HDR. Lo unico que
-        // hay que rehacer con el swapchain son los sets, que referencian
-        // m_hdrView y m_ssaoDepthView. Reset y no free, igual que en el SSR.
-        vkResetDescriptorPool(m_gpu.device(), m_fogDescPool, 0);
-
-        for (int f = 0; f < MAX_FRAMES; f++)
-        {
-            VkDescriptorSetAllocateInfo ai{};
-            ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            ai.descriptorPool     = m_fogDescPool;
-            ai.descriptorSetCount = 1;
-            ai.pSetLayouts        = &m_fogDescLayout;
-            if (vkAllocateDescriptorSets(m_gpu.device(), &ai, &m_fogSets[f]) != VK_SUCCESS)
-                throw std::runtime_error("failed to allocate fog descriptor sets!");
-
-            VkDescriptorImageInfo hdrInfo{};
-            hdrInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            hdrInfo.imageView   = m_hdrView[f];
-
-            VkDescriptorImageInfo depthInfo{};
-            depthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-            depthInfo.imageView   = m_ssaoDepthView[f];
-            depthInfo.sampler     = m_ssaoSampler;
-
-            VkDescriptorBufferInfo uboInfo{};
-            uboInfo.buffer = m_uniformBuffers[f];
-            uboInfo.offset = 0;
-            uboInfo.range  = sizeof(UniformBufferObject);
-
-            // El mismo par vista+sampler que muestrea pbr.frag: comparador de
-            // profundidad incluido, que es lo que espera sampler2DArrayShadow.
-            VkDescriptorImageInfo shadowInfo{};
-            shadowInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-            shadowInfo.imageView   = m_shadowView;
-            shadowInfo.sampler     = m_shadowSampler;
-
-            VkWriteDescriptorSet writes[4]{};
-            for (int i = 0; i < 4; i++)
-            {
-                writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[i].dstSet          = m_fogSets[f];
-                writes[i].dstBinding      = (uint32_t)i;
-                writes[i].descriptorCount = 1;
-            }
-            writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            writes[0].pImageInfo     = &hdrInfo;
-            writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[1].pImageInfo     = &depthInfo;
-            writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            writes[2].pBufferInfo    = &uboInfo;
-            writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[3].pImageInfo     = &shadowInfo;
-
-            vkUpdateDescriptorSets(m_gpu.device(), 4, writes, 0, nullptr);
-        }
-    }
-
-    void Renderer::recordFogPass(VkCommandBuffer cmd, const glm::mat4& view, const glm::mat4& proj)
-    {
-        // Apagada (o sets aun sin alojar, viewport degenerado): ni dispatch, ni
-        // barreras, ni timestamps. El HDR se queda tal y como lo dejaron el pass
-        // de escena y el SSR, en SHADER_READ_ONLY, que es justo lo que esperan el
-        // bloom y la composicion. Imagen identica a la de antes de la feature.
-        if (!m_fogEnabled || m_fogSets[m_currentFrame] == VK_NULL_HANDLE)
-        {
-            m_fogGpuMs = 0.0f;
-            m_fogQueryPending[m_currentFrame] = false;
-            return;
-        }
-
-        // Timestamps de hace dos frames en este mismo slot, cuya fence ya esperó
-        // drawFrame, así que no bloquean a nadie.
-        if (m_timestampsSupported && m_fogQueryPending[m_currentFrame])
-        {
-            uint64_t stamps[2] = {};
-            if (vkGetQueryPoolResults(m_gpu.device(), m_fogQueryPool, m_currentFrame * 2, 2,
-                                      sizeof(stamps), stamps, sizeof(uint64_t),
-                                      VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
-            {
-                m_fogGpuMs = (float)((double)(stamps[1] - stamps[0]) * m_timestampPeriod * 1e-6);
-                if (++m_fogMeasuredFrames == 300)
-                {
-                    printf("fog (ray-marching): %.3f ms (%ux%u, %d pasos)\n",
-                           m_fogGpuMs, m_renderExtent.width, m_renderExtent.height, m_fogSteps);
-                    fflush(stdout);
-                }
-            }
-        }
-        if (m_timestampsSupported)
-        {
-            vkCmdResetQueryPool(cmd, m_fogQueryPool, m_currentFrame * 2, 2);
-            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_fogQueryPool, m_currentFrame * 2);
-            m_fogQueryPending[m_currentFrame] = true;
-        }
-
-        FogPush push{};
-        // La proyeccion EFECTIVA del frame (Y-flip de Vulkan dentro) por la
-        // vista: es la que grabo el depth, asi que desproyectar es consistente.
-        push.invViewProj = glm::inverse(proj * view);
-        // La cámara en mundo sale de la propia vista: la cuarta columna de su
-        // inversa. Así no hay que arrastrar un parámetro más hasta aquí.
-        const glm::vec3 camPos = glm::vec3(glm::inverse(view)[3]);
-        push.camPosDensity = glm::vec4(camPos, m_fogDensity);
-
-        // Luz key = la misma que alimenta las cascadas (m_lights[0]), y con el
-        // MISMO criterio que computeCascades: la posición solo da la dirección.
-        // Sin luces, dirección neutra y color negro: la niebla solo absorbe, que
-        // es lo correcto cuando no hay nada que disperse.
-        glm::vec3 lightDir(0.0f, -1.0f, 0.0f);
-        glm::vec3 lightColor(0.0f);
-        if (!m_lights.empty())
-        {
-            const glm::vec3 lightPos = glm::vec3(m_lights[0].position);
-            const float     lightLen = glm::length(lightPos);
-            if (lightLen > 1e-6f) lightDir = -lightPos / lightLen;
-            lightColor = glm::vec3(m_lights[0].color) * m_lights[0].color.a;
-        }
-        push.lightDirFalloff = glm::vec4(lightDir, m_fogHeightFalloff);
-        // El color de la luz key se pliega aquí sobre el tinte de la niebla: la
-        // push constant está en los 128 bytes exactos que Vulkan garantiza y no
-        // cabe un vec4 más.
-        push.scatterBaseHeight = glm::vec4(m_fogScatter * lightColor, m_fogBaseHeight);
-        push.gStepsRes = glm::vec4(m_fogAnisotropy, (float)m_fogSteps,
-                                   (float)m_renderExtent.width, (float)m_renderExtent.height);
-
-        // El HDR pasa a GENERAL, el único layout válido para imageLoad/imageStore.
-        VkImageMemoryBarrier toFog{};
-        toFog.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        toFog.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toFog.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toFog.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        toFog.subresourceRange.baseMipLevel   = 0;
-        toFog.subresourceRange.levelCount     = 1;
-        toFog.subresourceRange.baseArrayLayer = 0;
-        toFog.subresourceRange.layerCount     = 1;
-        toFog.image                           = m_hdrImage[m_currentFrame];
-        toFog.oldLayout                       = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        toFog.newLayout                       = VK_IMAGE_LAYOUT_GENERAL;
-        toFog.srcAccessMask                   = VK_ACCESS_SHADER_READ_BIT;
-        toFog.dstAccessMask                   = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-
-        // Y la profundidad del pre-pass y el shadow map se leen desde compute:
-        // los escribió el rasterizador, así que hace falta hacer visible esa
-        // escritura. Van por memory barrier y no por image barrier porque su
-        // layout NO cambia (los dos siguen en DEPTH_STENCIL_READ_ONLY).
-        VkMemoryBarrier mem{};
-        mem.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        mem.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        mem.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-        vkCmdPipelineBarrier(cmd,
-                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-                             | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT
-                             | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0, 1, &mem, 0, nullptr, 1, &toFog);
-
-        const uint32_t gx = (m_renderExtent.width  + 7) / 8;
-        const uint32_t gy = (m_renderExtent.height + 7) / 8;
-
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_fogPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_fogPipelineLayout,
-                                0, 1, &m_fogSets[m_currentFrame], 0, nullptr);
-        vkCmdPushConstants(cmd, m_fogPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-        vkCmdDispatch(cmd, gx, gy, 1);
-
-        // Y el HDR vuelve a SHADER_READ_ONLY, el layout que declaran los
-        // descriptor sets del bloom (compute) y de la composición (fragment).
-        toFog.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
-        toFog.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        toFog.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        toFog.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &toFog);
-
-        if (m_timestampsSupported && m_fogQueryPending[m_currentFrame])
-            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_fogQueryPool, m_currentFrame * 2 + 1);
-    }
-
-    void Renderer::destroyFogSets()
-    {
-        // Los sets mueren con el reset del pool que hace createFogSets; aqui
-        // solo se anulan los handles para que nadie los ate a vistas ya
-        // destruidas.
-        for (int f = 0; f < MAX_FRAMES; f++) m_fogSets[f] = VK_NULL_HANDLE;
     }
 
     // ── Motion blur ─────────────────────────────────────────────────────────
