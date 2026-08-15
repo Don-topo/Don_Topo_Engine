@@ -6,6 +6,8 @@ add_library(DonTopoCore STATIC
     src/Core/Window.cpp
     src/Renderer/RenderBackend.cpp
     src/Renderer/Renderer.cpp
+    # Pases del Renderer de Vulkan sacados a su propia clase.
+    src/Renderer/Passes/MotionBlurPass.cpp
     src/Renderer/Skybox.cpp
     src/Renderer/SplashScreen.cpp
     src/Renderer/ModelLoader.cpp

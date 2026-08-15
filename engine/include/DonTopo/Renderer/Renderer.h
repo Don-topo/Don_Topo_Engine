@@ -22,6 +22,7 @@
 #include "DonTopo/Renderer/UiLayer.h"
 #include "DonTopo/Renderer/Skybox.h"
 #include "DonTopo/Renderer/SplashScreen.h"
+#include "DonTopo/Renderer/Passes/MotionBlurPass.h"
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiSpriteBatch.h"
 #include "DonTopo/UI/UiTextureAtlas.h"
@@ -673,14 +674,9 @@ namespace DonTopo {
             void recordFogPass(VkCommandBuffer cmd, const glm::mat4& view, const glm::mat4& proj);
             // Motion blur de camara. Mismo reparto que el SSR: el pipeline una
             // sola vez, y las imagenes y los descriptor sets con el swapchain.
-            void createMotionBlurPipeline();
-            void createMotionBlurImages();
-            void destroyMotionBlurImages();
-            // Un dispatch a una imagen aparte mas la copia de vuelta. Va DESPUES
-            // de la niebla y ANTES del bloom: la estela arrastra los highlights
-            // y florece con ellos. Apagado no graba ni un comando.
-            void recordMotionBlurPass(VkCommandBuffer cmd);
-            bool motionBlurActive() const;
+            // El pase vive en MotionBlurPass; esto solo arma el paquete de
+            // estado compartido que necesita para cada llamada.
+            MotionBlurPass::Context motionBlurCtx();
             // Un solo write del binding 7 sobre `set`. La comparten
             // allocateObjectDescriptorSet, la ruta skinned y el refresh de arriba.
             void writeSsaoBinding(VkDescriptorSet set, int frameIndex);
@@ -1056,30 +1052,9 @@ namespace DonTopo {
             uint32_t                        m_fogMeasuredFrames                 = 0;
 
             // ── Motion blur ──────────────────────────────────────────────────
-            // Imagen intermedia del mismo formato y tamano que el HDR: el shader
-            // lee pixeles arbitrarios a lo largo de la velocidad, asi que no
-            // puede escribir sobre la imagen que muestrea. La copia de vuelta la
-            // hace un vkCmdCopyImage, no un segundo dispatch.
-            VkImage                         m_motionBlurImage[MAX_FRAMES]       = {};
-            VkDeviceMemory                  m_motionBlurMemory[MAX_FRAMES]      = {};
-            VkImageView                     m_motionBlurView[MAX_FRAMES]        = {};
-            VkDescriptorSetLayout           m_motionBlurDescLayout              = VK_NULL_HANDLE;
-            VkDescriptorPool                m_motionBlurDescPool                = VK_NULL_HANDLE;
-            VkPipelineLayout                m_motionBlurPipelineLayout          = VK_NULL_HANDLE;
-            VkPipeline                      m_motionBlurPipeline                = VK_NULL_HANDLE;
-            VkDescriptorSet                 m_motionBlurSets[MAX_FRAMES]        = {};
-            // Los mismos campos y en el mismo orden que el bloque de
-            // motion_blur.comp.
-            struct MotionBlurPush {
-                glm::mat4 reproject;
-                float     invResX;
-                float     invResY;
-                float     intensity;
-                float     maxRadius;
-                int32_t   samples;
-            };
-            static_assert(sizeof(MotionBlurPush) == 84,
-                          "MotionBlurPush debe seguir en 84 bytes: motion_blur.comp declara este layout");
+            // Imagenes, sets y pipeline son suyos; el Renderer solo lo posee y
+            // decide cuando crear, grabar y destruir.
+            MotionBlurPass                  m_motionBlurPass;
 
             // ── Anti-aliasing ────────────────────────────────────────────────
             // Modo PEDIDO: lo que ha elegido el usuario y lo que devuelve

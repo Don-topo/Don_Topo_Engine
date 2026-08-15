@@ -46,6 +46,10 @@ namespace DonTopo {
         // de a nivel de archivo.
         static_assert(Gizmos::kFramesInFlight == MAX_FRAMES,
             "Gizmos::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
+        // Mismo caso: MotionBlurPass dimensiona sus imagenes y sus sets por
+        // frame en vuelo sin poder ver MAX_FRAMES.
+        static_assert(MotionBlurPass::kFramesInFlight == MAX_FRAMES,
+            "MotionBlurPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
 
         // Fase 1: lo minimo para poder presentar un frame (splash incluido).
         // El auto-fit de cámara y los recursos de escena (pipelines, shadow,
@@ -215,7 +219,7 @@ namespace DonTopo {
         // Detras de la niebla, y ANTES de createOffscreenImages: sus imagenes y
         // sus descriptor sets se crean con el swapchain y necesitan el layout y
         // el pool ya montados.
-        createMotionBlurPipeline();
+        m_motionBlurPass.createPipeline(motionBlurCtx());
         // ANTES de createOffscreenImages (que llama a createAaImages): ahi se
         // alojan los descriptor sets del AA, que necesitan sus layouts y sus
         // pools ya montados. El pool de queries se apoya en el
@@ -538,11 +542,8 @@ namespace DonTopo {
         }
 
         // Motion blur: aqui lo que no depende del tamano. Las imagenes y los
-        // sets se fueron con destroyMotionBlurImages.
-        vkDestroyPipeline(m_gpu.device(), m_motionBlurPipeline, nullptr);
-        vkDestroyPipelineLayout(m_gpu.device(), m_motionBlurPipelineLayout, nullptr);
-        vkDestroyDescriptorPool(m_gpu.device(), m_motionBlurDescPool, nullptr);
-        vkDestroyDescriptorSetLayout(m_gpu.device(), m_motionBlurDescLayout, nullptr);
+        // sets se fueron con destroyImages.
+        m_motionBlurPass.destroyPipeline(motionBlurCtx());
 
         // Forward+: la rejilla y la lista de indices se fueron con
         // destroyOffscreenImages; aqui queda lo que no depende del tamano. Los
@@ -2053,7 +2054,7 @@ namespace DonTopo {
         // Motion blur de cámara: detrás de la niebla (emborrona la imagen tal y
         // como se va a ver) y antes del bloom, para que la estela arrastre los
         // highlights y florezca con ellos. Apagado no graba nada.
-        recordMotionBlurPass(m_commandBuffers[m_currentFrame]);
+        m_motionBlurPass.record(motionBlurCtx(), m_commandBuffers[m_currentFrame]);
 
         // ── Bloom + composición: HDR → tonemap → offscreen LDR ───────────────────
         {
@@ -6200,7 +6201,7 @@ namespace DonTopo {
         // final de init.
         createFogSets();
         // Depende de m_hdrView y de m_ssaoDepthView igual que el SSR.
-        createMotionBlurImages();
+        m_motionBlurPass.createImages(motionBlurCtx());
         printf("offscreen images OK\n"); fflush(stdout);
     }
 
@@ -6211,7 +6212,7 @@ namespace DonTopo {
         destroyFpBuffers();
         destroySsrImages();
         destroyFogSets();
-        destroyMotionBlurImages();
+        m_motionBlurPass.destroyImages(motionBlurCtx());
         destroyAaImages();
         for (int i = 0; i < MAX_FRAMES; i++)
         {
@@ -7289,7 +7290,7 @@ namespace DonTopo {
         // con todo lo demas apagado, leeria una imagen que nadie ha escrito.
         const bool ssrNeedsDepth = ssrActive() || m_aaActiveMode == AaMode::Taa ||
                                    m_fpActiveMode == FpMode::Tiled || m_fogEnabled ||
-                                   motionBlurActive();
+                                   m_motionBlurPass.active(motionBlurCtx());
         m_ssrStampedPrepass = false;
 
         VkImageMemoryBarrier b{};
@@ -8504,253 +8505,14 @@ namespace DonTopo {
     }
 
     // ── Motion blur ─────────────────────────────────────────────────────────
-    bool Renderer::motionBlurActive() const
+    MotionBlurPass::Context Renderer::motionBlurCtx()
     {
-        if (!m_motionBlurEnabled) return false;
-        // Recursos aún sin crear (viewport degenerado): nada que grabar.
-        if (m_motionBlurImage[m_currentFrame] == VK_NULL_HANDLE) return false;
-        // Menos de dos taps no promedia nada: el resultado sería el píxel central
-        // y la copia de vuelta escribiría la misma imagen con el coste de un
-        // dispatch entero.
-        return m_motionBlurSamples >= 2;
-    }
-
-    void Renderer::createMotionBlurPipeline()
-    {
-        // Tres bindings: la escena muestreada, la profundidad muestreada y la
-        // imagen intermedia como storage. No hay sampler propio: el color va con
-        // el del SSR (LINEAR + CLAMP_TO_EDGE, que es lo que quieren unos taps
-        // entre texeles y que no traigan color del borde opuesto) y la
-        // profundidad con el del SSAO (NEAREST, el que le toca a D32_SFLOAT).
-        VkDescriptorSetLayoutBinding bindings[3]{};
-        for (int i = 0; i < 3; i++)
-        {
-            bindings[i].binding         = (uint32_t)i;
-            bindings[i].descriptorType  = (i < 2) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-                                                  : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            bindings[i].descriptorCount = 1;
-            bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-        }
-
-        VkDescriptorSetLayoutCreateInfo dsl{};
-        dsl.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dsl.bindingCount = 3;
-        dsl.pBindings    = bindings;
-        if (vkCreateDescriptorSetLayout(m_gpu.device(), &dsl, nullptr, &m_motionBlurDescLayout) != VK_SUCCESS)
-            throw std::runtime_error("failed to create motion blur descriptor set layout!");
-
-        VkDescriptorPoolSize sizes[2]{};
-        sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = MAX_FRAMES * 2;
-        sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[1].descriptorCount = MAX_FRAMES;
-
-        VkDescriptorPoolCreateInfo dpi{};
-        dpi.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpi.poolSizeCount = 2;
-        dpi.pPoolSizes    = sizes;
-        dpi.maxSets       = MAX_FRAMES;
-        if (vkCreateDescriptorPool(m_gpu.device(), &dpi, nullptr, &m_motionBlurDescPool) != VK_SUCCESS)
-            throw std::runtime_error("failed to create motion blur descriptor pool!");
-
-        VkPushConstantRange pcr{};
-        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        pcr.offset     = 0;
-        pcr.size       = sizeof(MotionBlurPush);
-
-        VkPipelineLayoutCreateInfo pli{};
-        pli.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pli.setLayoutCount         = 1;
-        pli.pSetLayouts            = &m_motionBlurDescLayout;
-        pli.pushConstantRangeCount = 1;
-        pli.pPushConstantRanges    = &pcr;
-        if (vkCreatePipelineLayout(m_gpu.device(), &pli, nullptr, &m_motionBlurPipelineLayout) != VK_SUCCESS)
-            throw std::runtime_error("failed to create motion blur pipeline layout!");
-
-        auto code   = loadShaderFile("shaders/motion_blur.comp.spv");
-        auto module = createShaderModule(code);
-
-        VkComputePipelineCreateInfo ci{};
-        ci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        ci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        ci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-        ci.stage.module = module;
-        ci.stage.pName  = "main";
-        ci.layout       = m_motionBlurPipelineLayout;
-        if (vkCreateComputePipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &ci, nullptr, &m_motionBlurPipeline) != VK_SUCCESS)
-            throw std::runtime_error("failed to create compute pipeline: shaders/motion_blur.comp.spv");
-
-        vkDestroyShaderModule(m_gpu.device(), module, nullptr);
-
-        printf("motion blur pipeline OK\n"); fflush(stdout);
-    }
-
-    void Renderer::createMotionBlurImages()
-    {
-        for (int f = 0; f < MAX_FRAMES; f++)
-        {
-            // Mismo formato y tamaño que el HDR: es la copia emborronada de esa
-            // misma imagen, y vkCmdCopyImage exige formatos compatibles.
-            // TRANSFER_SRC porque de aquí sale esa copia.
-            m_res.createImage(
-                m_renderExtent.width, m_renderExtent.height,
-                kHdrFormat, VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                m_motionBlurImage[f], m_motionBlurMemory[f]);
-            m_res.createTextureImageView(m_motionBlurImage[f], m_motionBlurView[f], kHdrFormat);
-        }
-
-        // Los sets de la vez anterior apuntan a vistas ya destruidas: reset y no
-        // free, igual que en el bloom, el SSAO y el SSR.
-        vkResetDescriptorPool(m_gpu.device(), m_motionBlurDescPool, 0);
-
-        for (int f = 0; f < MAX_FRAMES; f++)
-        {
-            VkDescriptorSetAllocateInfo ai{};
-            ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            ai.descriptorPool     = m_motionBlurDescPool;
-            ai.descriptorSetCount = 1;
-            ai.pSetLayouts        = &m_motionBlurDescLayout;
-            if (vkAllocateDescriptorSets(m_gpu.device(), &ai, &m_motionBlurSets[f]) != VK_SUCCESS)
-                throw std::runtime_error("failed to allocate motion blur descriptor sets!");
-
-            VkDescriptorImageInfo infos[3]{};
-            // El HDR entra en SHADER_READ_ONLY: es donde lo dejan el render pass,
-            // el SSR y la niebla.
-            infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            infos[0].imageView   = m_hdrView[f];
-            infos[0].sampler     = m_ssrSampler;
-            infos[1].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-            infos[1].imageView   = m_ssaoDepthView[f];
-            infos[1].sampler     = m_ssaoSampler;
-            infos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            infos[2].imageView   = m_motionBlurView[f];
-
-            VkWriteDescriptorSet writes[3]{};
-            for (int i = 0; i < 3; i++)
-            {
-                writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[i].dstSet          = m_motionBlurSets[f];
-                writes[i].dstBinding      = (uint32_t)i;
-                writes[i].descriptorType  = (i == 2) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-                                                     : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[i].descriptorCount = 1;
-                writes[i].pImageInfo      = &infos[i];
-            }
-            vkUpdateDescriptorSets(m_gpu.device(), 3, writes, 0, nullptr);
-        }
-    }
-
-    void Renderer::destroyMotionBlurImages()
-    {
-        for (int f = 0; f < MAX_FRAMES; f++)
-        {
-            if (m_motionBlurView[f])
-            {
-                vkDestroyImageView(m_gpu.device(), m_motionBlurView[f], nullptr);
-                m_motionBlurView[f] = VK_NULL_HANDLE;
-            }
-            if (m_motionBlurImage[f])
-            {
-                vkDestroyImage(m_gpu.device(), m_motionBlurImage[f], nullptr);
-                m_motionBlurImage[f] = VK_NULL_HANDLE;
-            }
-            if (m_motionBlurMemory[f])
-            {
-                vkFreeMemory(m_gpu.device(), m_motionBlurMemory[f], nullptr);
-                m_motionBlurMemory[f] = VK_NULL_HANDLE;
-            }
-            m_motionBlurSets[f] = VK_NULL_HANDLE;
-        }
-    }
-
-    void Renderer::recordMotionBlurPass(VkCommandBuffer cmd)
-    {
-        if (!motionBlurActive() || m_motionBlurSets[m_currentFrame] == VK_NULL_HANDLE)
-        {
-            // Ni dispatch ni copia ni barreras: el HDR se queda tal y como lo
-            // dejaron el pass de escena, el SSR y la niebla, en SHADER_READ_ONLY,
-            // que es justo lo que esperan el bloom y la composición. Imagen
-            // idéntica a la de antes de esta feature.
-            return;
-        }
-
-        MotionBlurPush push{};
-        // La MISMA matriz que reproyecta el TAA: clip de este frame (sin jitter)
-        // → clip del anterior. m_taaCurrViewProj y m_taaPrevViewProj se
-        // actualizan todos los frames, esté el TAA activo o no.
-        push.reproject = m_taaPrevViewProj * glm::inverse(m_taaCurrViewProj);
-        push.invResX   = 1.0f / (float)m_renderExtent.width;
-        push.invResY   = 1.0f / (float)m_renderExtent.height;
-        push.intensity = m_motionBlurIntensity;
-        push.maxRadius = m_motionBlurMaxRadius;
-        push.samples   = (int32_t)m_motionBlurSamples;
-
-        VkImageMemoryBarrier b{};
-        b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        b.subresourceRange.baseMipLevel   = 0;
-        b.subresourceRange.levelCount     = 1;
-        b.subresourceRange.baseArrayLayer = 0;
-        b.subresourceRange.layerCount     = 1;
-
-        // La intermedia entra desde UNDEFINED: se reescribe entera (el shader
-        // escribe TODOS los píxeles, también los que no emborrona) y el contenido
-        // del frame anterior no se reutiliza.
-        b.image         = m_motionBlurImage[m_currentFrame];
-        b.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
-        b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
-        b.srcAccessMask = 0;
-        b.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &b);
-
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_motionBlurPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_motionBlurPipelineLayout,
-                                0, 1, &m_motionBlurSets[m_currentFrame], 0, nullptr);
-        vkCmdPushConstants(cmd, m_motionBlurPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-        vkCmdDispatch(cmd, (m_renderExtent.width + 7) / 8, (m_renderExtent.height + 7) / 8, 1);
-
-        // La copia de vuelta, y no un segundo dispatch: es una copia 1:1 de la
-        // imagen entera, que es lo que mejor hace el hardware. Las dos imágenes
-        // pasan a sus layouts de transferencia.
-        VkImageMemoryBarrier toCopy[2] = { b, b };
-        toCopy[0].image         = m_motionBlurImage[m_currentFrame];
-        toCopy[0].oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
-        toCopy[0].newLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        toCopy[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        toCopy[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        toCopy[1].image         = m_hdrImage[m_currentFrame];
-        toCopy[1].oldLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        toCopy[1].newLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        toCopy[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        toCopy[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             0, 0, nullptr, 0, nullptr, 2, toCopy);
-
-        VkImageCopy region{};
-        region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        region.srcSubresource.layerCount = 1;
-        region.dstSubresource            = region.srcSubresource;
-        region.extent                    = { m_renderExtent.width, m_renderExtent.height, 1 };
-        vkCmdCopyImage(cmd,
-                       m_motionBlurImage[m_currentFrame], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                       m_hdrImage[m_currentFrame],        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                       1, &region);
-
-        // Y el HDR vuelve a SHADER_READ_ONLY, que es el layout que declaran los
-        // descriptor sets del bloom (compute) y de la composición (fragment).
-        b.image         = m_hdrImage[m_currentFrame];
-        b.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &b);
+        return MotionBlurPass::Context{
+            m_gpu, m_res, *this, m_renderExtent, m_currentFrame, kHdrFormat,
+            m_hdrImage, m_hdrView, m_ssaoDepthView,
+            m_ssrSampler, m_ssaoSampler,
+            m_taaCurrViewProj, m_taaPrevViewProj
+        };
     }
 
     void Renderer::createAaRenderPasses()
