@@ -22,7 +22,9 @@
 #include "DonTopo/Renderer/UiLayer.h"
 #include "DonTopo/Renderer/Skybox.h"
 #include "DonTopo/Renderer/SplashScreen.h"
+#include "DonTopo/Renderer/Passes/DepthPrepassPass.h"
 #include "DonTopo/Renderer/Passes/FogPass.h"
+#include "DonTopo/Renderer/Passes/SsaoPass.h"
 #include "DonTopo/Renderer/Passes/SsrPass.h"
 #include "DonTopo/Renderer/Passes/MotionBlurPass.h"
 #include "DonTopo/UI/UiCanvas.h"
@@ -288,7 +290,7 @@ namespace DonTopo {
             void  setSsaoEnabled(bool v);
             // Coste GPU del pre-pass + los dos dispatches, en ms. 0 si el efecto
             // esta apagado o el dispositivo no soporta timestamps.
-            float ssaoGpuMs() const          { return m_ssaoGpuMs; }
+            float ssaoGpuMs() const          { return m_ssaoPass.gpuMs(); }
 
             // Coste GPU del SSR en ms: los dos dispatches, mas el depth pre-pass
             // cuando es el SSR quien lo pide (con el SSAO encendido ese pre-pass
@@ -632,12 +634,10 @@ namespace DonTopo {
             // que hay que dejarla en negro y en GENERAL. Pasa UNA vez por imagen
             // (al crearla y al apagar el efecto), no cada frame.
             void recordBloomClear(VkCommandBuffer cmd);
-            // SSAO. createSsaoPipelines es independiente del tamano (una sola vez,
-            // junto al bloom); las imagenes y los sets van con el swapchain,
-            // colgados de createOffscreenImages/destroyOffscreenImages.
-            void createSsaoPipelines();
-            void createSsaoImages();
-            void destroySsaoImages();
+            // SSAO y depth pre-pass. Los dos pases viven en sus clases; esto
+            // solo arma el paquete de estado compartido de cada uno.
+            SsaoPass::Context         ssaoCtx();
+            DepthPrepassPass::Context depthPrepassCtx();
             // Depth pre-pass de la escena + los dos dispatches. camFrustum y fc
             // son los MISMOS del frame: el pre-pass tiene que culear con el mismo
             // criterio que el pass de escena o el AO oscureceria contra geometria
@@ -901,68 +901,13 @@ namespace DonTopo {
             // frame: el valor en vivo se ve en el menu View del editor.
             uint32_t                        m_bloomMeasuredFrames               = 0;
 
-            // ── SSAO ─────────────────────────────────────────────────────────
-            // R32_SFLOAT y no R8: los formatos de un solo canal a 8 bits exigen
-            // shaderStorageImageExtendedFormats para hacer de storage image, y
-            // este es de los obligatorios en cualquier implementacion.
-            static constexpr VkFormat       kSsaoFormat = VK_FORMAT_R32_SFLOAT;
-            // Depth propio del pre-pass, SEPARADO de m_depthImage a proposito: ese
-            // lo comparten el pass de escena y el de composicion dentro del mismo
-            // framebuffer, y el contorno lo testea en
-            // DEPTH_STENCIL_ATTACHMENT_OPTIMAL. Con uno propio no hay que tocar ni
-            // su usage ni su layout ni el loadOp de nadie.
-            VkImage                         m_ssaoDepthImage[MAX_FRAMES]        = {};
-            VkDeviceMemory                  m_ssaoDepthMemory[MAX_FRAMES]       = {};
-            VkImageView                     m_ssaoDepthView[MAX_FRAMES]         = {};
-            VkFramebuffer                   m_ssaoDepthFb[MAX_FRAMES]           = {};
-            VkRenderPass                    m_ssaoDepthRenderPass               = VK_NULL_HANDLE;
-            // Reutiliza m_shadowPipelineLayout: mismos dos sets (objeto +
-            // instancias) y el mismo rango de push constants, que este pipeline
-            // simplemente no usa.
-            VkPipeline                      m_ssaoDepthPipeline                 = VK_NULL_HANDLE;
-            // Resolucion completa: asi pbr.frag muestrea 1:1 con gl_FragCoord y no
-            // hay que llevarle la escala a ningun sitio.
-            VkImage                         m_ssaoImage[MAX_FRAMES]             = {};
-            VkDeviceMemory                  m_ssaoMemory[MAX_FRAMES]            = {};
-            VkImageView                     m_ssaoView[MAX_FRAMES]              = {};
-            VkImage                         m_ssaoBlurImage[MAX_FRAMES]         = {};
-            VkDeviceMemory                  m_ssaoBlurMemory[MAX_FRAMES]        = {};
-            VkImageView                     m_ssaoBlurView[MAX_FRAMES]          = {};
-            // NEAREST: ni D32_SFLOAT ni R32_SFLOAT garantizan filtrado lineal, y
-            // todos los taps son a texel exacto.
-            VkSampler                       m_ssaoSampler                       = VK_NULL_HANDLE;
-            VkDescriptorSetLayout           m_ssaoDescLayout                    = VK_NULL_HANDLE;
-            VkDescriptorPool                m_ssaoDescPool                      = VK_NULL_HANDLE;
-            VkPipelineLayout                m_ssaoPipelineLayout                = VK_NULL_HANDLE;
-            VkPipeline                      m_ssaoPipeline                      = VK_NULL_HANDLE;
-            VkPipeline                      m_ssaoBlurPipeline                  = VK_NULL_HANDLE;
-            VkDescriptorSet                 m_ssaoSets[MAX_FRAMES]              = {};
-            VkDescriptorSet                 m_ssaoBlurSets[MAX_FRAMES]          = {};
-            // Compartida por ssao.comp y ssao_blur.comp, que comparten pipeline
-            // layout (el blur solo lee invRes).
-            struct SsaoPush {
-                float projP00;
-                float projP11;
-                float projP22;
-                float projP32;
-                float invResX;
-                float invResY;
-                float radius;
-                float bias;
-                float intensity;
-                float power;
-            };
-            // Con el efecto apagado el mapa tiene que valer 1.0 (identidad) y
-            // ademas estar en GENERAL, que es el layout que declaran los
-            // descriptor sets. Un clear resuelve las dos cosas de golpe, y solo se
-            // graba cuando hay algo que limpiar: al crear las imagenes y al
-            // apagar el efecto. Fuera de eso, apagado = cero trabajo por frame.
-            bool                            m_ssaoClearPending[MAX_FRAMES]      = {};
-            // Queries propias: reutilizar las del bloom mezclaria dos medidas.
-            VkQueryPool                     m_ssaoQueryPool                     = VK_NULL_HANDLE;
-            bool                            m_ssaoQueryPending[MAX_FRAMES]      = {};
-            float                           m_ssaoGpuMs                         = 0.0f;
-            uint32_t                        m_ssaoMeasuredFrames                = 0;
+            // ── SSAO + depth pre-pass ─────────────────────────────────
+            // La profundidad del pre-pass NO es del SSAO aunque naciera con
+            // el: la comparten el SSR, el TAA, el Forward+ tiled, la niebla y
+            // el motion blur. Por eso son dos clases, y el sampler NEAREST de
+            // esa profundidad sale por DepthPrepassPass::sampler().
+            DepthPrepassPass                m_depthPrepass;
+            SsaoPass                        m_ssaoPass;
 
             // ── SSR ──────────────────────────────────────────────────────────
             // Imagen del reflejo, sampler, pipelines, sets y queries son suyos;
