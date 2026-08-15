@@ -347,6 +347,7 @@ ProjectContext::ViewSettings EditorUI::currentSettings()
         s.ssao    = m_renderer->ssaoEnabled();
         s.ssr     = m_renderer->ssrEnabled();
         s.fog     = m_renderer->fogEnabled();
+        s.motionBlur = m_renderer->motionBlurEnabled();
         s.aaMode  = aaModeName(m_renderer->aaMode());
         s.fpMode  = fpModeName(m_renderer->forwardPlusMode());
 
@@ -372,6 +373,9 @@ ProjectContext::ViewSettings EditorUI::currentSettings()
         s.fogScatter[0] = scatter.x;
         s.fogScatter[1] = scatter.y;
         s.fogScatter[2] = scatter.z;
+        s.motionBlurIntensity = m_renderer->motionBlurIntensity();
+        s.motionBlurMaxRadius = m_renderer->motionBlurMaxRadius();
+        s.motionBlurSamples   = m_renderer->motionBlurSamples();
         s.fxaaSubpix           = m_renderer->fxaaSubpix();
         s.fxaaEdgeThreshold    = m_renderer->fxaaEdgeThreshold();
         s.fxaaEdgeThresholdMin = m_renderer->fxaaEdgeThresholdMin();
@@ -446,6 +450,11 @@ void EditorUI::applyProjectSettings()
     m_renderer->setFogAnisotropy(s.fogAnisotropy);
     m_renderer->setFogSteps(s.fogSteps);
     m_renderer->setFogScatter(glm::vec3(s.fogScatter[0], s.fogScatter[1], s.fogScatter[2]));
+
+    m_renderer->setMotionBlurEnabled(s.motionBlur);
+    m_renderer->setMotionBlurIntensity(s.motionBlurIntensity);
+    m_renderer->setMotionBlurMaxRadius(s.motionBlurMaxRadius);
+    m_renderer->setMotionBlurSamples(s.motionBlurSamples);
 
     m_renderer->setFxaaSubpix(s.fxaaSubpix);
     m_renderer->setFxaaEdgeThreshold(s.fxaaEdgeThreshold);
@@ -966,6 +975,41 @@ void EditorUI::drawMenuBar()
                 ImGui::EndDisabled();
 
                 ImGui::Text("Fog GPU: %.3f ms", m_renderer->fogGpuMs());
+
+                // Motion blur de camara. Apagado por defecto: sin el la imagen
+                // es exactamente la de antes de la feature y no se graba ni un
+                // dispatch. La velocidad sale de reproyectar la profundidad al
+                // frame anterior, asi que emborrona lo que mueve la CAMARA; un
+                // objeto que se mueve solo con la camara quieta no deja estela.
+                ImGui::Separator();
+                bool motionBlur = m_renderer->motionBlurEnabled();
+                if (ImGui::Checkbox("Motion Blur", &motionBlur))
+                {
+                    m_renderer->setMotionBlurEnabled(motionBlur);
+                    saveProjectSettings();
+                }
+
+                // Como en el SSAO, el SSR y la niebla: los sliders no se ocultan
+                // con el efecto apagado, se dejan desactivados.
+                ImGui::BeginDisabled(!motionBlur);
+                float mbIntensity = m_renderer->motionBlurIntensity();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("Motion blur intensity", &mbIntensity, 0.0f, 4.0f, "%.2f"))
+                    m_renderer->setMotionBlurIntensity(mbIntensity);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+
+                float mbRadius = m_renderer->motionBlurMaxRadius();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("Motion blur max radius", &mbRadius, 1.0f, 128.0f, "%.0f px"))
+                    m_renderer->setMotionBlurMaxRadius(mbRadius);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+
+                int mbSamples = m_renderer->motionBlurSamples();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderInt("Motion blur samples", &mbSamples, 2, 32))
+                    m_renderer->setMotionBlurSamples(mbSamples);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                ImGui::EndDisabled();
 
                 // Anti-aliasing. Modos EXCLUYENTES, cada uno con sus propios
                 // parametros. Mismo criterio que el resto: ajuste de sesion, no

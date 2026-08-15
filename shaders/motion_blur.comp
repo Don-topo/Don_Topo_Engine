@@ -1,0 +1,102 @@
+#version 450
+
+// Motion blur de CAMARA por reproyeccion. Corre despues de la niebla y antes
+// del bloom: la estela arrastra los highlights y florece con ellos, igual que
+// hace el SSR.
+//
+// La velocidad de cada pixel sale de la misma matriz que ya usa el TAA
+// (prevViewProj * inverse(currViewProj)) aplicada al depth del pre-pass. Eso
+// cubre el movimiento de la camara -traslacion y rotacion- que es el que genera
+// casi toda la estela visible. Los objetos que se mueven POR SI MISMOS no
+// aportan velocidad propia: haria falta un buffer de velocidad con la matriz
+// anterior de cada objeto (y los bones anteriores de las mallas skinned), que es
+// otro attachment en el pass de escena. Aqui no hay estado nuevo por objeto.
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// La escena HDR ya iluminada, como textura: este shader lee pixeles ARBITRARIOS
+// a lo largo de la velocidad, asi que no puede escribir en la misma imagen. El
+// alfa NO es opacidad -pbr.frag guarda ahi la fuerza de SSR del objeto- y por
+// eso se copia sin mezclar.
+layout(set = 0, binding = 0) uniform sampler2D sceneTex;
+// Profundidad de TODA la escena, del mismo depth pre-pass que alimenta al SSAO,
+// al SSR y al TAA. NEAREST: D32_SFLOAT no tiene garantizado el filtrado lineal.
+layout(set = 0, binding = 1) uniform sampler2D depthTex;
+// Destino: imagen intermedia del mismo formato y tamano que la escena. El
+// backend la copia de vuelta sobre el HDR cuando el pase termina.
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outImage;
+
+// Propia de este pipeline, igual que SsrPush y FogPush: el bloque UBO esta
+// declarado en varios shaders y meterle un miembro desplazaria en silencio todo
+// lo de detras por std140.
+layout(push_constant) uniform MotionBlurPush {
+    // Clip de ESTE frame (sin jitter) -> clip del anterior. Se calcula en la CPU
+    // como prevViewProj * inverse(currViewProj), exactamente igual que en el TAA.
+    mat4  reproject;
+    vec2  invRes;
+    float intensity;   // escala de la velocidad; 1.0 = desplazamiento de un frame
+    float maxRadius;   // tope de la estela en pixeles, para que un giro brusco no
+                       // barra media pantalla
+    int   samples;     // taps repartidos a lo largo de la velocidad
+} push;
+
+void main()
+{
+    ivec2 px   = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outImage);
+    if (px.x >= size.x || px.y >= size.y) return;
+
+    vec2 uv     = (vec2(px) + 0.5) * push.invRes;
+    vec4 center = texture(sceneTex, uv);
+
+    // Reproyeccion: de (uv, depth) de este frame a la uv que ocupaba ese mismo
+    // punto en el anterior. El depth viene del pre-pass, que se graba SIN jitter,
+    // asi que la posicion reconstruida es la geometrica.
+    float depth = texture(depthTex, uv).r;
+    vec4  clip  = vec4(uv * 2.0 - 1.0, depth, 1.0);
+    vec4  prev  = push.reproject * clip;
+
+    // w degenerada en el fondo lejano: no hay reproyeccion que valga, se deja el
+    // pixel tal cual en vez de dividir por casi cero.
+    if (abs(prev.w) < 1e-6)
+    {
+        imageStore(outImage, px, center);
+        return;
+    }
+
+    vec2 prevUv = (prev.xy / prev.w) * 0.5 + 0.5;
+
+    // Del pixel de ahora al de antes. El signo hace que la estela salga POR
+    // DETRAS del movimiento, que es donde el pixel estuvo.
+    vec2 velocity = (prevUv - uv) * push.intensity;
+
+    // Tope en pixeles. Sin esto un giro rapido de camara convierte la estela en
+    // un barrido de pantalla completa y el coste se dispara por cache.
+    vec2  velPx = velocity / max(push.invRes, vec2(1e-8));
+    float lenPx = length(velPx);
+    if (lenPx > push.maxRadius && lenPx > 1e-6)
+        velocity *= push.maxRadius / lenPx;
+
+    // Por debajo de medio pixel no hay nada que emborronar: el promedio daria el
+    // mismo color pero con N muestras de coste.
+    const int taps = max(push.samples, 1);
+    if (lenPx < 0.5 || taps < 2)
+    {
+        imageStore(outImage, px, center);
+        return;
+    }
+
+    // Muestreo uniforme CENTRADO en el pixel: la mitad de los taps caen donde el
+    // punto estuvo y la otra mitad donde va. Centrar evita que la imagen entera
+    // parezca desplazada hacia atras cuando la camara se mueve a velocidad
+    // constante.
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < taps; i++)
+    {
+        float t = float(i) / float(taps - 1) - 0.5;
+        sum += texture(sceneTex, uv + velocity * t).rgb;
+    }
+
+    // El alfa se conserva sin mezclar: lleva la mascara de SSR del objeto, que no
+    // es una magnitud que tenga sentido promediar entre pixeles distintos.
+    imageStore(outImage, px, vec4(sum / float(taps), center.a));
+}

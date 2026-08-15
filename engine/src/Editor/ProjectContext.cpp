@@ -102,6 +102,7 @@ nlohmann::json defaultSettingsJson()
     s["ssao"]    = def.ssao;
     s["ssr"]     = def.ssr;
     s["fog"]     = def.fog;
+    s["motionBlur"] = def.motionBlur;
     s["aaMode"]  = def.aaMode;
     s["fpMode"]  = def.fpMode;
     s["renderBackend"] = def.renderBackend;
@@ -118,6 +119,7 @@ nlohmann::json settingsToJson(const ProjectContext::ViewSettings& s)
     j["ssao"]    = s.ssao;
     j["ssr"]     = s.ssr;
     j["fog"]     = s.fog;
+    j["motionBlur"] = s.motionBlur;
     j["aaMode"]  = s.aaMode;
     j["fpMode"]  = s.fpMode;
     j["renderBackend"] = s.renderBackend;
@@ -141,6 +143,9 @@ nlohmann::json settingsToJson(const ProjectContext::ViewSettings& s)
     j["fogAnisotropy"]    = s.fogAnisotropy;
     j["fogSteps"]         = s.fogSteps;
     j["fogScatter"]       = {s.fogScatter[0], s.fogScatter[1], s.fogScatter[2]};
+    j["motionBlurIntensity"] = s.motionBlurIntensity;
+    j["motionBlurMaxRadius"] = s.motionBlurMaxRadius;
+    j["motionBlurSamples"]   = s.motionBlurSamples;
     j["fxaaSubpix"]            = s.fxaaSubpix;
     j["fxaaEdgeThreshold"]     = s.fxaaEdgeThreshold;
     j["fxaaEdgeThresholdMin"]  = s.fxaaEdgeThresholdMin;
@@ -175,6 +180,7 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
     s.ssao       = def.ssao;
     s.ssr        = def.ssr;
     s.fog        = def.fog;
+    s.motionBlur = def.motionBlur;
     s.aaMode     = def.aaMode;
     s.fpMode     = def.fpMode;
     s.renderBackend = def.renderBackend;
@@ -209,6 +215,7 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
     s.ssao    = readBoolField(v, "ssao", s.ssao);
     s.ssr     = readBoolField(v, "ssr", s.ssr);
     s.fog     = readBoolField(v, "fog", s.fog);
+    s.motionBlur = readBoolField(v, "motionBlur", s.motionBlur);
     s.aaMode  = readStringField(v, "aaMode", s.aaMode);
     s.fpMode  = readStringField(v, "fpMode", s.fpMode);
     s.renderBackend = readStringField(v, "renderBackend", s.renderBackend);
@@ -231,6 +238,9 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
     s.fogBaseHeight    = readFloatField(v, "fogBaseHeight", s.fogBaseHeight);
     s.fogAnisotropy    = readFloatField(v, "fogAnisotropy", s.fogAnisotropy);
     s.fogSteps         = readIntField(v, "fogSteps", s.fogSteps);
+    s.motionBlurIntensity = readFloatField(v, "motionBlurIntensity", s.motionBlurIntensity);
+    s.motionBlurMaxRadius = readFloatField(v, "motionBlurMaxRadius", s.motionBlurMaxRadius);
+    s.motionBlurSamples   = readIntField(v, "motionBlurSamples", s.motionBlurSamples);
     {
         const auto it = v.find("fogScatter");
         if (it != v.end() && it->is_array() && it->size() == 3) {

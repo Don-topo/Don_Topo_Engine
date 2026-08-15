@@ -308,9 +308,15 @@ constexpr UINT kUavSsaoBlur     = kSrvSsaoRaw + 1;
 constexpr UINT kUavSsr = kUavSsaoBlur + 1;
 constexpr UINT kSrvSsr = kUavSsr + 1;
 
+// Motion blur: destino del emborronado. El shader lee píxeles arbitrarios de la
+// escena a lo largo de la velocidad, así que no puede escribir sobre la imagen
+// que muestrea; de aquí sale la copia de vuelta. Solo UAV: la copia no necesita
+// vista.
+constexpr UINT kUavMotionBlur = kSrvSsr + 1;
+
 // Historial del TAA: dos imágenes que se alternan, porque el mismo pase lee la
 // del frame anterior y escribe la de este.
-constexpr UINT kSrvTaaHistory = kSrvSsr + 1;  // + índice (0 o 1)
+constexpr UINT kSrvTaaHistory = kUavMotionBlur + 1;  // + índice (0 o 1)
 
 // Imagen del viewport: la escena ya compuesta, cuando en vez de ir al
 // backbuffer tiene que acabar dentro de un panel de la interfaz.
@@ -374,6 +380,17 @@ struct TaaPush {
     int32_t   historyValid;
 };
 static_assert(sizeof(TaaPush) == 80, "TaaPush debe ocupar 80 bytes");
+
+// Push de motion_blur.comp: la misma reproyección que el TAA más los tres
+// ajustes del efecto.
+struct MotionBlurPush {
+    glm::mat4 reproject;
+    glm::vec2 invRes;
+    float     intensity;
+    float     maxRadius;  // tope de la estela, en píxeles
+    int32_t   samples;
+};
+static_assert(sizeof(MotionBlurPush) == 84, "MotionBlurPush debe ocupar 84 bytes");
 
 // Niebla volumétrica: push propio de 128 bytes.
 struct FogPush {
@@ -848,6 +865,10 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12PipelineState> ssrResolvePipeline;
     D3D12MA::Allocation*        ssrAllocation = nullptr;
 
+    ComPtr<ID3D12RootSignature> motionBlurRootSignature;
+    ComPtr<ID3D12PipelineState> motionBlurPipeline;
+    D3D12MA::Allocation*        motionBlurAllocation = nullptr;
+
     // Muestras CONSTRUIDAS ahora mismo en los targets y en los pipelines del
     // pase de escena. Lo que pide el usuario vive en el estado compartido; los
     // dos solo coinciden después de recrear, y eso pasa entre frames.
@@ -946,6 +967,11 @@ struct D3D12Renderer::Impl {
 
     void createSsrPipelines();
     void recordSsr();
+    void createMotionBlurPipeline();
+    void recordMotionBlur();
+    // Encendido, con recursos y con taps que promediar. Lo consultan el pase y
+    // el pre-pase de profundidad, que con MSAA es de donde sale el depth.
+    bool motionBlurActive() const;
 
     void createSsaoPipelines();
     void createSsaoTargets();    // depende del tamaño: se rehace al redimensionar
@@ -2899,6 +2925,10 @@ void D3D12Renderer::Impl::releaseHdrTargets()
         ssrAllocation->Release();
         ssrAllocation = nullptr;
     }
+    if (motionBlurAllocation) {
+        motionBlurAllocation->Release();
+        motionBlurAllocation = nullptr;
+    }
     if (hdrAllocation) {
         hdrAllocation->Release();
         hdrAllocation = nullptr;
@@ -2947,6 +2977,35 @@ void D3D12Renderer::Impl::createHdrTargets()
         device->CreateUnorderedAccessView(ssrAllocation->GetResource(), nullptr, &uavDesc, handle);
 
         createTexture2DSrv(ssrAllocation->GetResource(), kHdrFormat, kSrvSsr);
+    }
+
+    // Destino del motion blur: la misma escena emborronada, así que mismo
+    // formato y tamaño. No lleva SRV porque de aquí solo sale una CopyResource.
+    {
+        D3D12_RESOURCE_DESC blurDesc{};
+        blurDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        blurDesc.Width            = width;
+        blurDesc.Height           = height;
+        blurDesc.DepthOrArraySize = 1;
+        blurDesc.MipLevels        = 1;
+        blurDesc.Format           = kHdrFormat;
+        blurDesc.SampleDesc.Count = 1;
+        blurDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+        D3D12MA::ALLOCATION_DESC allocDesc{};
+        allocDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+        throwIfFailed(allocator->CreateResource(&allocDesc, &blurDesc,
+                                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                &motionBlurAllocation, IID_NULL, nullptr),
+                      "D3D12MA::Allocator::CreateResource(motion blur)");
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        uavDesc.Format        = kHdrFormat;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(kUavMotionBlur) * srvSize;
+        device->CreateUnorderedAccessView(motionBlurAllocation->GetResource(), nullptr, &uavDesc,
+                                          handle);
     }
 
     // Target de la escena, en coma flotante para que el umbral del bloom pueda
@@ -4465,6 +4524,164 @@ void D3D12Renderer::Impl::recordSsr()
                readableDepthState());
 }
 
+bool D3D12Renderer::Impl::motionBlurActive() const
+{
+    // Menos de dos taps no promedia nada: el resultado sería el píxel central y
+    // la copia de vuelta escribiría la misma imagen con el coste de un dispatch
+    // entero.
+    return state->motionBlurEnabled() && state->motionBlurSamples() >= 2;
+}
+
+void D3D12Renderer::Impl::createMotionBlurPipeline()
+{
+    // Mismo reparto que el SSR: la escena en t0, la profundidad en t1 y el
+    // destino en u2, que es como spirv-cross traduce los bindings 0, 1 y 2 del
+    // set 0.
+    D3D12_DESCRIPTOR_RANGE sceneRange{};
+    sceneRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    sceneRange.NumDescriptors     = 1;
+    sceneRange.BaseShaderRegister = 0;  // t0
+
+    D3D12_DESCRIPTOR_RANGE depthRange{};
+    depthRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    depthRange.NumDescriptors     = 1;
+    depthRange.BaseShaderRegister = 1;  // t1
+
+    D3D12_DESCRIPTOR_RANGE outputRange{};
+    outputRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    outputRange.NumDescriptors     = 1;
+    outputRange.BaseShaderRegister = 2;  // u2
+
+    D3D12_ROOT_PARAMETER params[4]{};
+    params[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[0].Constants.ShaderRegister = 0;
+    params[0].Constants.Num32BitValues = sizeof(MotionBlurPush) / 4;
+
+    params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable.NumDescriptorRanges = 1;
+    params[1].DescriptorTable.pDescriptorRanges   = &sceneRange;
+
+    params[2].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[2].DescriptorTable.NumDescriptorRanges = 1;
+    params[2].DescriptorTable.pDescriptorRanges   = &depthRange;
+
+    params[3].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[3].DescriptorTable.NumDescriptorRanges = 1;
+    params[3].DescriptorTable.pDescriptorRanges   = &outputRange;
+
+    // s0 filtra —los taps caen entre píxeles— y s1 no: interpolar dos
+    // profundidades de superficies distintas da un valor que no existe. CLAMP
+    // para que un tap del borde no traiga color del lado opuesto.
+    D3D12_STATIC_SAMPLER_DESC samplers[2]{};
+    samplers[0].Filter         = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samplers[1].Filter         = D3D12_FILTER_MIN_MAG_MIP_POINT;
+    for (int i = 0; i < 2; ++i) {
+        samplers[i].AddressU       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        samplers[i].AddressV       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        samplers[i].AddressW       = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        samplers[i].MaxLOD         = D3D12_FLOAT32_MAX;
+        samplers[i].ShaderRegister = static_cast<UINT>(i);
+    }
+
+    D3D12_ROOT_SIGNATURE_DESC rootDesc{};
+    rootDesc.NumParameters     = _countof(params);
+    rootDesc.pParameters       = params;
+    rootDesc.NumStaticSamplers = _countof(samplers);
+    rootDesc.pStaticSamplers   = samplers;
+
+    ComPtr<ID3DBlob> serialized;
+    ComPtr<ID3DBlob> errorBlob;
+    HRESULT          hr = D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                                      &serialized, &errorBlob);
+    if (FAILED(hr)) {
+        std::string detail;
+        if (errorBlob)
+            detail.assign(static_cast<const char*>(errorBlob->GetBufferPointer()),
+                          errorBlob->GetBufferSize());
+        throw std::runtime_error("D3D12: root signature del motion blur (HRESULT " +
+                                 hresultToString(hr) + ") " + detail);
+    }
+    throwIfFailed(device->CreateRootSignature(0, serialized->GetBufferPointer(),
+                                              serialized->GetBufferSize(),
+                                              IID_PPV_ARGS(&motionBlurRootSignature)),
+                  "ID3D12Device::CreateRootSignature(motion blur)");
+
+    const std::vector<char>           code = readBinaryFile("shaders/motion_blur.comp.dxil");
+    D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+    desc.pRootSignature = motionBlurRootSignature.Get();
+    desc.CS             = {code.data(), code.size()};
+    throwIfFailed(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&motionBlurPipeline)),
+                  "ID3D12Device::CreateComputePipelineState(motion blur)");
+}
+
+void D3D12Renderer::Impl::recordMotionBlur()
+{
+    if (!motionBlurPipeline || !motionBlurAllocation || !hdrAllocation)
+        return;
+
+    const D3D12_GPU_DESCRIPTOR_HANDLE heapStart = srvHeap->GetGPUDescriptorHandleForHeapStart();
+    auto gpuHandle = [&](UINT index) {
+        D3D12_GPU_DESCRIPTOR_HANDLE handle = heapStart;
+        handle.ptr += static_cast<UINT64>(index) * srvSize;
+        return handle;
+    };
+    auto transition = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES before,
+                          D3D12_RESOURCE_STATES after) {
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource   = resource;
+        barrier.Transition.StateBefore = before;
+        barrier.Transition.StateAfter  = after;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &barrier);
+    };
+
+    MotionBlurPush push{};
+    // La MISMA matriz que reproyecta el TAA: clip de este frame (sin jitter) →
+    // clip del anterior. Las dos view-proj se actualizan todos los frames, esté
+    // el TAA activo o no.
+    push.reproject = taaPrevViewProj * glm::inverse(taaCurrViewProj);
+    push.invRes    = glm::vec2(1.0f / static_cast<float>(width), 1.0f / static_cast<float>(height));
+    push.intensity = state->motionBlurIntensity();
+    push.maxRadius = state->motionBlurMaxRadius();
+    push.samples   = state->motionBlurSamples();
+
+    ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+
+    transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    transition(readableDepth(), readableDepthState(),
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    commandList->SetComputeRootSignature(motionBlurRootSignature.Get());
+    commandList->SetPipelineState(motionBlurPipeline.Get());
+    commandList->SetComputeRoot32BitConstants(0, sizeof(MotionBlurPush) / 4, &push, 0);
+    commandList->SetComputeRootDescriptorTable(1, gpuHandle(kSrvSceneHdr));
+    commandList->SetComputeRootDescriptorTable(2, gpuHandle(readableDepthSrv()));
+    commandList->SetComputeRootDescriptorTable(3, gpuHandle(kUavMotionBlur));
+    commandList->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
+
+    // La copia de vuelta, y no un segundo dispatch: es una copia 1:1 de la
+    // imagen entera, que es lo que mejor hace el hardware.
+    transition(motionBlurAllocation->GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+               D3D12_RESOURCE_STATE_COPY_SOURCE);
+    transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+               D3D12_RESOURCE_STATE_COPY_DEST);
+
+    commandList->CopyResource(hdrAllocation->GetResource(),
+                              motionBlurAllocation->GetResource());
+
+    // Y todo como estaba: el bloom espera encontrar la escena como render target
+    // y la profundidad en escritura.
+    transition(motionBlurAllocation->GetResource(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_COPY_DEST,
+               D3D12_RESOURCE_STATE_RENDER_TARGET);
+    transition(readableDepth(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+               readableDepthState());
+}
+
 void D3D12Renderer::Impl::createSsaoPipelines()
 {
     auto serialize = [&](const D3D12_ROOT_SIGNATURE_DESC& desc, ComPtr<ID3D12RootSignature>& out,
@@ -4719,9 +4936,12 @@ void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
     // Con MSAA, el contorno de la selección también la necesita: la del pase de
     // escena es multimuestra y no se puede emparejar con el target LDR sobre el
     // que se dibuja.
+    // El motion blur es el quinto cliente: reproyecta esta misma profundidad al
+    // frame anterior para sacar la velocidad de cada píxel.
     const bool wantsMultisampleDepth =
         sampleCount > 1 &&
-        (state->fogEnabled() || state->ssrEnabled() || hasOutlineSelection());
+        (state->fogEnabled() || state->ssrEnabled() || hasOutlineSelection() ||
+         motionBlurActive());
     if (!wantsSsao && !wantsCull && !wantsMultisampleDepth)
         return;
 
@@ -6933,6 +7153,7 @@ void D3D12Renderer::init(Window& window)
     d.precomputeIbl();
     d.createFogAndFxaaPipelines();
     d.createSsrPipelines();
+    d.createMotionBlurPipeline();
     d.createTaaPipeline();
     d.createForwardPlusPipelines();
     d.createUiPipeline();
@@ -7493,6 +7714,12 @@ void D3D12Renderer::drawFrame()
         d.recordFog();
         d.markTimestamp(Impl::TsFog + 1);
     }
+
+    // Motion blur detrás de la niebla y antes del bloom: emborrona la imagen tal
+    // y como se va a ver, y la estela arrastra los highlights para que florezcan
+    // con ellos. Apagado no graba ni un comando.
+    if (d.motionBlurActive())
+        d.recordMotionBlur();
 
     // Bloom, composición con tone mapping y FXAA hasta el backbuffer. El
     // anti-aliasing se cronometra dentro: TAA y FXAA van cosidos a este pase.
@@ -8661,6 +8888,8 @@ void D3D12Renderer::shutdown()
     d.ssrPipeline.Reset();
     d.ssrResolvePipeline.Reset();
     d.ssrRootSignature.Reset();
+    d.motionBlurPipeline.Reset();
+    d.motionBlurRootSignature.Reset();
     d.ssaoPipeline.Reset();
     d.ssaoBlurPipeline.Reset();
     d.ssaoRootSignature.Reset();

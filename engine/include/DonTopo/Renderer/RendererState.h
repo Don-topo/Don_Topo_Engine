@@ -104,6 +104,21 @@ namespace DonTopo {
             void  setFogSteps(int v)            { m_fogSteps = v; }
             int   fogSteps() const              { return m_fogSteps; }
 
+            // ── Motion blur ──────────────────────────────────────────────────
+            // Motion blur de camara por reproyeccion: la velocidad de cada pixel
+            // sale del depth mas la matriz del frame anterior, la misma que ya
+            // usa el TAA. Interruptor global; apagado no graba ni un dispatch y
+            // la imagen sale identica. Los parametros viajan por push constant
+            // propia (MotionBlurPush), no por el UBO.
+            void  setMotionBlurEnabled(bool v)     { m_motionBlurEnabled = v; }
+            bool  motionBlurEnabled() const        { return m_motionBlurEnabled; }
+            void  setMotionBlurIntensity(float v)  { m_motionBlurIntensity = v; }
+            float motionBlurIntensity() const      { return m_motionBlurIntensity; }
+            void  setMotionBlurMaxRadius(float v)  { m_motionBlurMaxRadius = v; }
+            float motionBlurMaxRadius() const      { return m_motionBlurMaxRadius; }
+            void  setMotionBlurSamples(int v)      { m_motionBlurSamples = v; }
+            int   motionBlurSamples() const        { return m_motionBlurSamples; }
+
             // ── Anti-aliasing ────────────────────────────────────────────────
             // Los parametros de cada modo viajan por push constant y surten
             // efecto en el frame siguiente sin recrear nada. El modo activo, en
@@ -192,6 +207,11 @@ namespace DonTopo {
             int                             m_ssrMaxSteps                       = 32;
             float                           m_ssrEdgeFade                       = 0.1f;
             float                           m_ssrIntensity                      = 1.0f;
+
+            bool                            m_motionBlurEnabled                 = false;
+            float                           m_motionBlurIntensity               = 1.0f;
+            float                           m_motionBlurMaxRadius               = 32.0f;
+            int                             m_motionBlurSamples                 = 12;
 
             bool                            m_fogEnabled                        = false;
             float                           m_fogDensity                        = 0.02f;

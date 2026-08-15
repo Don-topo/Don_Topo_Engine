@@ -51,6 +51,7 @@ public:
         bool        ssao    = false;
         bool        ssr     = false;
         bool        fog     = false;
+        bool        motionBlur = false;
         // Combos por NOMBRE, nunca por indice: reordenar el array de opciones
         // no puede cambiar el ajuste guardado de nadie.
         std::string aaMode = "None";
@@ -79,6 +80,9 @@ public:
         float fogAnisotropy    = 0.0f;
         int   fogSteps         = 0;
         float fogScatter[3]    = {0.0f, 0.0f, 0.0f};
+        float motionBlurIntensity = 0.0f;
+        float motionBlurMaxRadius = 0.0f;
+        int   motionBlurSamples   = 0;
         float fxaaSubpix       = 0.0f;
         float fxaaEdgeThreshold    = 0.0f;
         float fxaaEdgeThresholdMin = 0.0f;
