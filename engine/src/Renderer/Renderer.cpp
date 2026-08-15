@@ -493,17 +493,7 @@ namespace DonTopo {
         vkDestroyDescriptorSetLayout(m_gpu.device(), m_compositeDescLayout, nullptr);
         vkDestroyRenderPass(m_gpu.device(), m_compositeRenderPass, nullptr);
         m_compositeRenderPass = VK_NULL_HANDLE;
-        vkDestroyPipeline(m_gpu.device(), m_bloomDownPipeline, nullptr);
-        vkDestroyPipeline(m_gpu.device(), m_bloomUpPipeline, nullptr);
-        vkDestroyPipelineLayout(m_gpu.device(), m_bloomPipelineLayout, nullptr);
-        vkDestroyDescriptorPool(m_gpu.device(), m_bloomDescPool, nullptr);
-        vkDestroyDescriptorSetLayout(m_gpu.device(), m_bloomDescLayout, nullptr);
-        vkDestroySampler(m_gpu.device(), m_bloomSampler, nullptr);
-        if (m_bloomQueryPool != VK_NULL_HANDLE)
-        {
-            vkDestroyQueryPool(m_gpu.device(), m_bloomQueryPool, nullptr);
-            m_bloomQueryPool = VK_NULL_HANDLE;
-        }
+        m_bloomPass.destroyPipelines(bloomCtx());
         // SSAO. Las imagenes, vistas, framebuffers y sets se fueron con
         // destroyOffscreenImages (llama a destroySsaoImages); aqui queda lo que
         // no depende del tamano. El pipeline layout es el del pass de sombras y
@@ -2041,43 +2031,16 @@ namespace DonTopo {
 
             if (bloomEnabled())
             {
-                // Lectura de los timestamps de hace dos frames en este mismo slot: la
-                // fence de m_currentFrame ya la esperó drawFrame, así que los
-                // resultados están sin bloquear a nadie.
-                if (m_timestampsSupported && m_bloomQueryPending[m_currentFrame])
-                {
-                    uint64_t stamps[2] = {};
-                    if (vkGetQueryPoolResults(m_gpu.device(), m_bloomQueryPool, m_currentFrame * 2, 2,
-                                              sizeof(stamps), stamps, sizeof(uint64_t),
-                                              VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
-                    {
-                        m_bloomGpuMs = (float)((double)(stamps[1] - stamps[0]) * m_timestampPeriod * 1e-6);
-                        if (++m_bloomMeasuredFrames == 300)
-                        {
-                            printf("bloom+composite: %.3f ms (%ux%u, %u mips)\n",
-                                   m_bloomGpuMs, m_swapChainExtent.width, m_swapChainExtent.height,
-                                   m_bloomMipCount);
-                            fflush(stdout);
-                        }
-                    }
-                }
-                if (m_timestampsSupported)
-                {
-                    vkCmdResetQueryPool(cmd, m_bloomQueryPool, m_currentFrame * 2, 2);
-                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_bloomQueryPool, m_currentFrame * 2);
-                    m_bloomQueryPending[m_currentFrame] = true;
-                }
-
-                recordBloomPass(cmd);
+                m_bloomPass.beginQuery(bloomCtx(), cmd);
+                m_bloomPass.record(bloomCtx(), cmd);
             }
             else
             {
                 // Apagado: ni un dispatch de la cadena, y sin timestamps que medir.
                 // El slot deja de tener par pendiente para que al reencender no se
                 // lea una medida de antes del apagón.
-                m_bloomGpuMs = 0.0f;
-                m_bloomQueryPending[m_currentFrame] = false;
-                recordBloomClear(cmd);
+                m_bloomPass.skipQuery(bloomCtx());
+                m_bloomPass.recordClear(bloomCtx(), cmd);
             }
 
             VkRenderPassBeginInfo rpInfo{};
@@ -2111,7 +2074,7 @@ namespace DonTopo {
             // Sin cadena de mips (viewport minúsculo) o con el efecto apagado no
             // hay nada que sumar: la intensidad se fuerza a 0 y queda solo el
             // tonemap. El pass NO se puede saltar: es quien tonemapea.
-            const float intensity = (bloomEnabled() && m_bloomMipCount > 0) ? m_bloomIntensity : 0.0f;
+            const float intensity = (bloomEnabled() && m_bloomPass.mipCount() > 0) ? m_bloomIntensity : 0.0f;
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipelineLayout,
                                     0, 1, &m_compositeSets[m_currentFrame], 0, nullptr);
@@ -2136,7 +2099,7 @@ namespace DonTopo {
             // Solo con el bloom encendido: el par se abre arriba bajo la misma
             // condición, y escribir aquí sin haber reseteado dejaría la query sucia.
             if (m_timestampsSupported && bloomEnabled())
-                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_bloomQueryPool, m_currentFrame * 2 + 1);
+                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_bloomPass.queryPool(), m_currentFrame * 2 + 1);
 
             // Anti-aliasing: lo ultimo de la cadena de post, sobre color LDR ya
             // tonemapeado y con el contorno de seleccion y los gizmos ya dibujados
@@ -6253,91 +6216,26 @@ namespace DonTopo {
         }
     }
 
+    // El pase de bloom vive en BloomPass; lo que queda aqui es la COMPOSICION,
+    // que no es suya: suma el mip 0 sobre el HDR, tonemapea y ademas hospeda el
+    // contorno de seleccion, los gizmos y la UI de juego.
     void Renderer::createBloomPipelines()
     {
-        // Sampler comun de toda la cadena. CLAMP_TO_EDGE es obligatorio: con
-        // repeat, los taps del borde del filtro traerian el brillo del lado
-        // opuesto de la pantalla y se veria sangrar luz por los bordes.
-        VkSamplerCreateInfo si{};
-        si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        si.magFilter    = VK_FILTER_LINEAR;
-        si.minFilter    = VK_FILTER_LINEAR;
-        si.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        if (vkCreateSampler(m_gpu.device(), &si, nullptr, &m_bloomSampler) != VK_SUCCESS)
-            throw std::runtime_error("failed to create bloom sampler!");
+        // --- Medicion del coste GPU -----------------------------------------
+        // Propiedades del device que comparten todos los pases; se resuelven
+        // aqui porque el bloom es el primero que pide un pool de queries.
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(m_gpu.physicalDevice(), &props);
+        m_timestampPeriod     = props.limits.timestampPeriod;
+        m_timestampsSupported = props.limits.timestampComputeAndGraphics && m_timestampPeriod > 0.0f;
 
-        // --- Compute: origen muestreado + destino como storage image ---------
-        VkDescriptorSetLayoutBinding bloomBindings[2]{};
-        bloomBindings[0].binding         = 0;
-        bloomBindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bloomBindings[0].descriptorCount = 1;
-        bloomBindings[0].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-        bloomBindings[1].binding         = 1;
-        bloomBindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        bloomBindings[1].descriptorCount = 1;
-        bloomBindings[1].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        m_bloomPass.createPipelines(bloomCtx());
 
+        // El layout de la composicion reutilizaba el VkDescriptorSetLayoutCreateInfo
+        // del bloom: aqui hay que declararlo, con los mismos dos bindings.
         VkDescriptorSetLayoutCreateInfo dsl{};
         dsl.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         dsl.bindingCount = 2;
-        dsl.pBindings    = bloomBindings;
-        if (vkCreateDescriptorSetLayout(m_gpu.device(), &dsl, nullptr, &m_bloomDescLayout) != VK_SUCCESS)
-            throw std::runtime_error("failed to create bloom descriptor set layout!");
-
-        // Un set por nivel y por sentido (bajada y subida), por frame en vuelo:
-        // cada uno lleva un par origen/destino distinto y no se pueden reutilizar.
-        const uint32_t bloomSets = MAX_FRAMES * BLOOM_MIPS * 2;
-        VkDescriptorPoolSize bloomSizes[2]{};
-        bloomSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bloomSizes[0].descriptorCount = bloomSets;
-        bloomSizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        bloomSizes[1].descriptorCount = bloomSets;
-
-        VkDescriptorPoolCreateInfo dpi{};
-        dpi.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpi.poolSizeCount = 2;
-        dpi.pPoolSizes    = bloomSizes;
-        dpi.maxSets       = bloomSets;
-        if (vkCreateDescriptorPool(m_gpu.device(), &dpi, nullptr, &m_bloomDescPool) != VK_SUCCESS)
-            throw std::runtime_error("failed to create bloom descriptor pool!");
-
-        VkPushConstantRange bloomPcr{};
-        bloomPcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        bloomPcr.offset     = 0;
-        bloomPcr.size       = sizeof(BloomPush);
-
-        VkPipelineLayoutCreateInfo pli{};
-        pli.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pli.setLayoutCount         = 1;
-        pli.pSetLayouts            = &m_bloomDescLayout;
-        pli.pushConstantRangeCount = 1;
-        pli.pPushConstantRanges    = &bloomPcr;
-        if (vkCreatePipelineLayout(m_gpu.device(), &pli, nullptr, &m_bloomPipelineLayout) != VK_SUCCESS)
-            throw std::runtime_error("failed to create bloom pipeline layout!");
-
-        auto makeBloomPipeline = [&](const std::string& spv, VkPipeline& pipeline)
-        {
-            auto code   = loadShaderFile(spv);
-            auto module = createShaderModule(code);
-
-            VkComputePipelineCreateInfo ci{};
-            ci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            ci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            ci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            ci.stage.module = module;
-            ci.stage.pName  = "main";
-            ci.layout       = m_bloomPipelineLayout;
-            if (vkCreateComputePipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline) != VK_SUCCESS)
-                throw std::runtime_error("failed to create compute pipeline: " + spv);
-
-            vkDestroyShaderModule(m_gpu.device(), module, nullptr);
-        };
-
-        makeBloomPipeline("shaders/bloom_down.comp.spv", m_bloomDownPipeline);
-        makeBloomPipeline("shaders/bloom_up.comp.spv",   m_bloomUpPipeline);
 
         // --- Composicion: escena HDR + mip 0 del bloom -----------------------
         VkDescriptorSetLayoutBinding compBindings[2]{};
@@ -6379,21 +6277,6 @@ namespace DonTopo {
             throw std::runtime_error("failed to create composite pipeline layout!");
 
         recreateCompositePipeline();
-
-        // --- Medicion del coste GPU -----------------------------------------
-        VkPhysicalDeviceProperties props{};
-        vkGetPhysicalDeviceProperties(m_gpu.physicalDevice(), &props);
-        m_timestampPeriod     = props.limits.timestampPeriod;
-        m_timestampsSupported = props.limits.timestampComputeAndGraphics && m_timestampPeriod > 0.0f;
-        if (m_timestampsSupported)
-        {
-            VkQueryPoolCreateInfo qpi{};
-            qpi.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-            qpi.queryType  = VK_QUERY_TYPE_TIMESTAMP;
-            qpi.queryCount = MAX_FRAMES * 2;
-            if (vkCreateQueryPool(m_gpu.device(), &qpi, nullptr, &m_bloomQueryPool) != VK_SUCCESS)
-                throw std::runtime_error("failed to create bloom query pool!");
-        }
 
         printf("bloom pipelines OK\n"); fflush(stdout);
     }
@@ -6492,151 +6375,21 @@ namespace DonTopo {
 
     void Renderer::createBloomImages()
     {
-        // Cadena a media resolucion: el bloom es un desenfoque ancho, no aporta
-        // nada resolverlo a tamano completo y cuesta 4x.
-        uint32_t w = m_renderExtent.width  / 2;
-        uint32_t h = m_renderExtent.height / 2;
-        m_bloomMipCount = 0;
-        for (uint32_t m = 0; m < BLOOM_MIPS && w >= 2 && h >= 2; m++)
-        {
-            m_bloomMipExtent[m] = { w, h };
-            m_bloomMipCount++;
-            w = (w / 2 < 1) ? 1u : w / 2;
-            h = (h / 2 < 1) ? 1u : h / 2;
-        }
-        // Viewport diminuto (ventana casi cerrada): sin niveles no hay bloom que
-        // calcular. recordBloomPass y la composicion lo comprueban.
-        if (m_bloomMipCount == 0) return;
+        m_bloomPass.createImages(bloomCtx());
+        // Sin cadena (viewport diminuto) no hay mip 0 al que apuntar: los sets
+        // de composicion se quedan como estaban, igual que antes.
+        if (m_bloomPass.mipCount() == 0) return;
+        createCompositeSets();
+    }
 
-        for (int f = 0; f < MAX_FRAMES; f++)
-        {
-            // Inline y no m_res.createImage: esa fija mipLevels a 1.
-            VkImageCreateInfo ci{};
-            ci.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-            ci.imageType     = VK_IMAGE_TYPE_2D;
-            ci.format        = kHdrFormat;
-            ci.extent        = { m_bloomMipExtent[0].width, m_bloomMipExtent[0].height, 1 };
-            ci.mipLevels     = m_bloomMipCount;
-            ci.arrayLayers   = 1;
-            ci.samples       = VK_SAMPLE_COUNT_1_BIT;
-            ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
-            // TRANSFER_DST: con el efecto apagado la cadena se limpia a negro en
-            // vez de calcularse, y la composicion la sigue muestreando.
-            ci.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-            ci.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-            ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            if (vkCreateImage(m_gpu.device(), &ci, nullptr, &m_bloomImage[f]) != VK_SUCCESS)
-                throw std::runtime_error("failed to create bloom image!");
-
-            VkMemoryRequirements memReq;
-            vkGetImageMemoryRequirements(m_gpu.device(), m_bloomImage[f], &memReq);
-            VkMemoryAllocateInfo memAlloc{};
-            memAlloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            memAlloc.allocationSize  = memReq.size;
-            memAlloc.memoryTypeIndex = m_gpu.findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-            if (vkAllocateMemory(m_gpu.device(), &memAlloc, nullptr, &m_bloomMemory[f]) != VK_SUCCESS)
-                throw std::runtime_error("failed to allocate bloom memory!");
-            vkBindImageMemory(m_gpu.device(), m_bloomImage[f], m_bloomMemory[f], 0);
-
-            for (uint32_t m = 0; m < m_bloomMipCount; m++)
-            {
-                VkImageViewCreateInfo vi{};
-                vi.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-                vi.image                           = m_bloomImage[f];
-                vi.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
-                vi.format                          = kHdrFormat;
-                vi.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-                vi.subresourceRange.baseMipLevel   = m;
-                vi.subresourceRange.levelCount     = 1;
-                vi.subresourceRange.baseArrayLayer = 0;
-                vi.subresourceRange.layerCount     = 1;
-                if (vkCreateImageView(m_gpu.device(), &vi, nullptr, &m_bloomMipView[f][m]) != VK_SUCCESS)
-                    throw std::runtime_error("failed to create bloom mip view!");
-            }
-
-            // Recien creada: contenido indefinido y layout UNDEFINED. Con el bloom
-            // encendido lo arregla recordBloomPass; apagado, el clear la deja en
-            // negro y en GENERAL, que es lo que declara el set de composicion.
-            m_bloomClearPending[f] = true;
-        }
-
-        // Los sets de la vez anterior apuntan a vistas ya destruidas: reset y no
-        // free, igual que hace precomputeIbl al recargar el entorno.
-        vkResetDescriptorPool(m_gpu.device(), m_bloomDescPool, 0);
+    // Los dos bindings que lee bloom_composite.frag: la escena HDR y el mip 0 de
+    // la cadena del bloom. El sampler es el del bloom, que sirve para los dos.
+    void Renderer::createCompositeSets()
+    {
         vkResetDescriptorPool(m_gpu.device(), m_compositeDescPool, 0);
 
         for (int f = 0; f < MAX_FRAMES; f++)
         {
-            const uint32_t setCount = m_bloomMipCount * 2;
-            std::vector<VkDescriptorSetLayout> layouts(setCount, m_bloomDescLayout);
-            std::vector<VkDescriptorSet>       sets(setCount, VK_NULL_HANDLE);
-
-            VkDescriptorSetAllocateInfo ai{};
-            ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            ai.descriptorPool     = m_bloomDescPool;
-            ai.descriptorSetCount = setCount;
-            ai.pSetLayouts        = layouts.data();
-            if (vkAllocateDescriptorSets(m_gpu.device(), &ai, sets.data()) != VK_SUCCESS)
-                throw std::runtime_error("failed to allocate bloom descriptor sets!");
-
-            // Los VkDescriptorImageInfo tienen que seguir vivos hasta el
-            // vkUpdateDescriptorSets, asi que se dimensionan de golpe.
-            std::vector<VkDescriptorImageInfo> srcInfos(setCount);
-            std::vector<VkDescriptorImageInfo> dstInfos(setCount);
-            std::vector<VkWriteDescriptorSet>  writes;
-            writes.reserve(setCount * 2);
-
-            auto pushPair = [&](uint32_t slot, VkDescriptorSet set,
-                                VkImageView srcView, VkImageLayout srcLayout, VkImageView dstView)
-            {
-                srcInfos[slot].imageLayout = srcLayout;
-                srcInfos[slot].imageView   = srcView;
-                srcInfos[slot].sampler     = m_bloomSampler;
-                dstInfos[slot].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                dstInfos[slot].imageView   = dstView;
-
-                VkWriteDescriptorSet src{};
-                src.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                src.dstSet          = set;
-                src.dstBinding      = 0;
-                src.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                src.descriptorCount = 1;
-                src.pImageInfo      = &srcInfos[slot];
-                writes.push_back(src);
-
-                VkWriteDescriptorSet dst = src;
-                dst.dstBinding     = 1;
-                dst.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                dst.pImageInfo     = &dstInfos[slot];
-                writes.push_back(dst);
-            };
-
-            for (uint32_t m = 0; m < m_bloomMipCount; m++)
-            {
-                // Bajada: el nivel 0 lee la escena HDR (que sale del render pass
-                // en SHADER_READ_ONLY); los demas leen el mip anterior, que vive
-                // en GENERAL toda la cadena.
-                m_bloomDownSets[f][m] = sets[m];
-                pushPair(m, sets[m],
-                         m == 0 ? m_hdrView[f] : m_bloomMipView[f][m - 1],
-                         m == 0 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL,
-                         m_bloomMipView[f][m]);
-
-                // Subida: lee el nivel m y acumula sobre el m-1. El nivel 0 no
-                // tiene destino, asi que su set se queda sin usar.
-                m_bloomUpSets[f][m] = VK_NULL_HANDLE;
-                if (m > 0)
-                {
-                    const uint32_t slot = m_bloomMipCount + m;
-                    m_bloomUpSets[f][m] = sets[slot];
-                    pushPair(slot, sets[slot],
-                             m_bloomMipView[f][m], VK_IMAGE_LAYOUT_GENERAL,
-                             m_bloomMipView[f][m - 1]);
-                }
-            }
-            vkUpdateDescriptorSets(m_gpu.device(), (uint32_t)writes.size(), writes.data(), 0, nullptr);
-
-            // Set de composicion: escena HDR + mip 0 del bloom.
             VkDescriptorSetAllocateInfo cai{};
             cai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             cai.descriptorPool     = m_compositeDescPool;
@@ -6648,10 +6401,10 @@ namespace DonTopo {
             VkDescriptorImageInfo compInfos[2]{};
             compInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             compInfos[0].imageView   = m_hdrView[f];
-            compInfos[0].sampler     = m_bloomSampler;
+            compInfos[0].sampler     = m_bloomPass.sampler();
             compInfos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            compInfos[1].imageView   = m_bloomMipView[f][0];
-            compInfos[1].sampler     = m_bloomSampler;
+            compInfos[1].imageView   = m_bloomPass.mipView0(f);
+            compInfos[1].sampler     = m_bloomPass.sampler();
 
             VkWriteDescriptorSet compWrites[2]{};
             for (int b = 0; b < 2; b++)
@@ -6669,31 +6422,10 @@ namespace DonTopo {
 
     void Renderer::destroyBloomImages()
     {
-        for (int f = 0; f < MAX_FRAMES; f++)
-        {
-            for (uint32_t m = 0; m < BLOOM_MIPS; m++)
-            {
-                if (m_bloomMipView[f][m])
-                {
-                    vkDestroyImageView(m_gpu.device(), m_bloomMipView[f][m], nullptr);
-                    m_bloomMipView[f][m] = VK_NULL_HANDLE;
-                }
-                m_bloomDownSets[f][m] = VK_NULL_HANDLE;
-                m_bloomUpSets[f][m]   = VK_NULL_HANDLE;
-            }
-            if (m_bloomImage[f])
-            {
-                vkDestroyImage(m_gpu.device(), m_bloomImage[f], nullptr);
-                m_bloomImage[f] = VK_NULL_HANDLE;
-            }
-            if (m_bloomMemory[f])
-            {
-                vkFreeMemory(m_gpu.device(), m_bloomMemory[f], nullptr);
-                m_bloomMemory[f] = VK_NULL_HANDLE;
-            }
-            m_compositeSets[f] = VK_NULL_HANDLE;
-        }
-        m_bloomMipCount = 0;
+        m_bloomPass.destroyImages(bloomCtx());
+        // Los sets de composicion mueren con el reset del pool que hace
+        // createCompositeSets; aqui solo se anulan los handles.
+        for (int f = 0; f < MAX_FRAMES; f++) m_compositeSets[f] = VK_NULL_HANDLE;
     }
 
     void Renderer::setBloomEnabled(bool v)
@@ -6705,142 +6437,15 @@ namespace DonTopo {
         // 0 * inf sería NaN). Un clear a negro por frame en vuelo la deja neutra;
         // a partir de ahí, cero trabajo.
         if (!v)
-            for (int i = 0; i < MAX_FRAMES; i++) m_bloomClearPending[i] = true;
+            m_bloomPass.markClearPending();
     }
 
-    void Renderer::recordBloomClear(VkCommandBuffer cmd)
+    BloomPass::Context Renderer::bloomCtx()
     {
-        if (m_bloomMipCount == 0 || !m_bloomClearPending[m_currentFrame]) return;
-
-        VkImageMemoryBarrier b{};
-        b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.image               = m_bloomImage[m_currentFrame];
-        b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        b.subresourceRange.baseMipLevel   = 0;
-        // Toda la cadena, no solo el mip 0: así los niveles quedan en GENERAL de
-        // una vez y al reencender el bloom no hay layouts a medias.
-        b.subresourceRange.levelCount     = m_bloomMipCount;
-        b.subresourceRange.baseArrayLayer = 0;
-        b.subresourceRange.layerCount     = 1;
-
-        b.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
-        b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
-        b.srcAccessMask = 0;
-        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &b);
-
-        VkClearColorValue black{};
-        vkCmdClearColorImage(cmd, m_bloomImage[m_currentFrame], VK_IMAGE_LAYOUT_GENERAL,
-                             &black, 1, &b.subresourceRange);
-
-        b.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
-        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &b);
-
-        m_bloomClearPending[m_currentFrame] = false;
-    }
-
-    void Renderer::recordBloomPass(VkCommandBuffer cmd)
-    {
-        if (m_bloomMipCount == 0) return;
-
-        VkImageMemoryBarrier b{};
-        b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.image               = m_bloomImage[m_currentFrame];
-        b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        b.subresourceRange.baseArrayLayer = 0;
-        b.subresourceRange.layerCount     = 1;
-
-        // Toda la cadena vive en GENERAL: es el unico layout que admite
-        // imageStore y a la vez es valido para muestrear, asi que el ping-pong
-        // de layouts entre pasos se reduce a barreras de memoria. Se entra desde
-        // UNDEFINED porque el contenido del frame anterior no se reutiliza.
-        b.oldLayout                     = VK_IMAGE_LAYOUT_UNDEFINED;
-        b.newLayout                     = VK_IMAGE_LAYOUT_GENERAL;
-        b.srcAccessMask                 = 0;
-        b.dstAccessMask                 = VK_ACCESS_SHADER_WRITE_BIT;
-        b.subresourceRange.baseMipLevel = 0;
-        b.subresourceRange.levelCount   = m_bloomMipCount;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &b);
-
-        // Barrera entre pasos: lo que acaba de escribir un dispatch lo lee el
-        // siguiente. Se acota al mip implicado para no serializar de mas.
-        auto writeToRead = [&](uint32_t mip)
-        {
-            b.oldLayout                     = VK_IMAGE_LAYOUT_GENERAL;
-            b.newLayout                     = VK_IMAGE_LAYOUT_GENERAL;
-            b.srcAccessMask                 = VK_ACCESS_SHADER_WRITE_BIT;
-            // SHADER_WRITE ademas de READ: la subida hace imageLoad Y imageStore
-            // sobre el mismo nivel que escribio la bajada, asi que sin esto
-            // quedaria un write-after-write sin ordenar.
-            b.dstAccessMask                 = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-            b.subresourceRange.baseMipLevel = mip;
-            b.subresourceRange.levelCount   = 1;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &b);
+        return BloomPass::Context{
+            m_gpu, *this, m_renderExtent, m_swapChainExtent, m_currentFrame,
+            kHdrFormat, m_hdrView, m_timestampsSupported, m_timestampPeriod
         };
-
-        BloomPush push{};
-        push.threshold = m_bloomThreshold;
-        push.knee      = glm::max(m_bloomKnee, 1e-3f);
-        push.radius    = 1.0f;
-
-        // ── Bajada: HDR → mip 0 (con umbral) → mip 1 → ... ───────────────────
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_bloomDownPipeline);
-        for (uint32_t m = 0; m < m_bloomMipCount; m++)
-        {
-            const VkExtent2D src = (m == 0) ? m_renderExtent : m_bloomMipExtent[m - 1];
-            const VkExtent2D dst = m_bloomMipExtent[m];
-
-            push.srcTexelX = 1.0f / (float)src.width;
-            push.srcTexelY = 1.0f / (float)src.height;
-            push.prefilter = (m == 0) ? 1 : 0;
-
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_bloomPipelineLayout,
-                                    0, 1, &m_bloomDownSets[m_currentFrame][m], 0, nullptr);
-            vkCmdPushConstants(cmd, m_bloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-            vkCmdDispatch(cmd, (dst.width + 7) / 8, (dst.height + 7) / 8, 1);
-
-            if (m + 1 < m_bloomMipCount) writeToRead(m);
-        }
-
-        // ── Subida: cada mip se suma al de arriba con un tent 3x3 ────────────
-        push.prefilter = 0;
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_bloomUpPipeline);
-        for (uint32_t m = m_bloomMipCount - 1; m > 0; m--)
-        {
-            // El mip m acaba de escribirse (por la bajada si es el ultimo, por la
-            // iteracion anterior de esta subida si no) y ahora se lee.
-            writeToRead(m);
-
-            const VkExtent2D src = m_bloomMipExtent[m];
-            const VkExtent2D dst = m_bloomMipExtent[m - 1];
-            push.srcTexelX = 1.0f / (float)src.width;
-            push.srcTexelY = 1.0f / (float)src.height;
-
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_bloomPipelineLayout,
-                                    0, 1, &m_bloomUpSets[m_currentFrame][m], 0, nullptr);
-            vkCmdPushConstants(cmd, m_bloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-            vkCmdDispatch(cmd, (dst.width + 7) / 8, (dst.height + 7) / 8, 1);
-        }
-
-        // El mip 0 pasa a leerse desde el fragment shader de la composicion.
-        b.oldLayout                     = VK_IMAGE_LAYOUT_GENERAL;
-        b.newLayout                     = VK_IMAGE_LAYOUT_GENERAL;
-        b.srcAccessMask                 = VK_ACCESS_SHADER_WRITE_BIT;
-        b.dstAccessMask                 = VK_ACCESS_SHADER_READ_BIT;
-        b.subresourceRange.baseMipLevel = 0;
-        b.subresourceRange.levelCount   = 1;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &b);
     }
 
     // ── SSAO + depth pre-pass ───────────────────────────────────────────────

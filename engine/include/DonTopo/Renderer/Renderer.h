@@ -22,6 +22,7 @@
 #include "DonTopo/Renderer/UiLayer.h"
 #include "DonTopo/Renderer/Skybox.h"
 #include "DonTopo/Renderer/SplashScreen.h"
+#include "DonTopo/Renderer/Passes/BloomPass.h"
 #include "DonTopo/Renderer/Passes/DepthPrepassPass.h"
 #include "DonTopo/Renderer/Passes/FogPass.h"
 #include "DonTopo/Renderer/Passes/SsaoPass.h"
@@ -281,7 +282,7 @@ namespace DonTopo {
             void  setBloomEnabled(bool v) override;
             // Coste GPU del bloom + composicion del ultimo frame ya resuelto, en
             // ms. 0 si el dispositivo no soporta timestamps.
-            float bloomGpuMs() const         { return m_bloomGpuMs; }
+            float bloomGpuMs() const         { return m_bloomPass.gpuMs(); }
 
             // SSAO. Apagado por defecto: con el flag a false no se graba ni el
             // depth pre-pass ni los dos dispatches, y el mapa de AO se deja a 1.0
@@ -617,23 +618,24 @@ namespace DonTopo {
             void createFramebuffers();
             void createOffscreenImages();
             void destroyOffscreenImages();
+            // Los dos bindings de bloom_composite.frag (escena HDR + mip 0 del
+            // bloom). Van con el swapchain, igual que la cadena.
+            void createCompositeSets();
+            // El paquete de estado compartido que necesita BloomPass.
+            BloomPass::Context bloomCtx();
             // Cadena de mips del bloom + descriptor sets de los tres pasos. Va
             // con el swapchain: la resolucion de partida es la mitad del viewport,
             // asi que redimensionar la recrea entera (destroyBloomImages primero).
             void createBloomImages();
             void destroyBloomImages();
-            // Pipelines, layouts, sampler y pool del bloom. Independientes del
-            // tamano, se crean una sola vez en initSceneResources.
+            // El pipeline de la composicion y sus layouts, mas la resolucion del
+            // soporte de timestamps. Independientes del tamano, una sola vez en
+            // initSceneResources.
             void createBloomPipelines();
             // Solo el pipeline del triangulo de composicion. Vive aparte porque
             // el MSAA lo obliga a rehacerse (cambia rasterizationSamples y el
-            // render pass) sin tocar los layouts ni los pools del bloom.
+            // render pass) sin tocar los layouts ni los pools.
             void recreateCompositePipeline();
-            void recordBloomPass(VkCommandBuffer cmd);
-            // Con el bloom apagado la composicion sigue muestreando la cadena, asi
-            // que hay que dejarla en negro y en GENERAL. Pasa UNA vez por imagen
-            // (al crearla y al apagar el efecto), no cada frame.
-            void recordBloomClear(VkCommandBuffer cmd);
             // SSAO y depth pre-pass. Los dos pases viven en sus clases; esto
             // solo arma el paquete de estado compartido de cada uno.
             SsaoPass::Context         ssaoCtx();
@@ -842,38 +844,10 @@ namespace DonTopo {
             VkDeviceMemory                  m_hdrMemory[MAX_FRAMES]             = {};
             VkImageView                     m_hdrView[MAX_FRAMES]               = {};
 
-            // Cadena de mips. Una por frame en vuelo: se escribe y se consume
-            // dentro del mismo command buffer, pero dos frames pueden solaparse.
-            static constexpr uint32_t       BLOOM_MIPS = 5;
-            VkImage                         m_bloomImage[MAX_FRAMES]            = {};
-            VkDeviceMemory                  m_bloomMemory[MAX_FRAMES]           = {};
-            // Una vista 2D por nivel: imageStore no elige mip, igual que en el
-            // prefiltrado del IBL. La misma vista hace de storage image y de
-            // textura muestreada — la imagen se queda en GENERAL toda la cadena,
-            // que es un layout valido para ambas cosas y ahorra el ping-pong.
-            VkImageView                     m_bloomMipView[MAX_FRAMES][BLOOM_MIPS] = {};
-            VkExtent2D                      m_bloomMipExtent[BLOOM_MIPS]        = {};
-            // Niveles realmente usados: un viewport pequeno no da para BLOOM_MIPS.
-            uint32_t                        m_bloomMipCount                     = 0;
-            VkSampler                       m_bloomSampler                      = VK_NULL_HANDLE;
-            VkDescriptorSetLayout           m_bloomDescLayout                   = VK_NULL_HANDLE;
-            VkDescriptorPool                m_bloomDescPool                     = VK_NULL_HANDLE;
-            VkPipelineLayout                m_bloomPipelineLayout               = VK_NULL_HANDLE;
-            VkPipeline                      m_bloomDownPipeline                 = VK_NULL_HANDLE;
-            VkPipeline                      m_bloomUpPipeline                   = VK_NULL_HANDLE;
-            VkDescriptorSet                 m_bloomDownSets[MAX_FRAMES][BLOOM_MIPS] = {};
-            VkDescriptorSet                 m_bloomUpSets[MAX_FRAMES][BLOOM_MIPS]   = {};
-            // Compartida por bloom_down.comp y bloom_up.comp: comparten pipeline
-            // layout, asi que declaran el mismo bloque aunque cada uno ignore
-            // parte de los campos.
-            struct BloomPush {
-                float    srcTexelX;
-                float    srcTexelY;
-                float    threshold;
-                float    knee;
-                float    radius;
-                int32_t  prefilter;
-            };
+            // Cadena de mips del bloom: la tiene BloomPass entera. Su sampler y
+            // el mip 0 salen por sus getters, que es lo que necesita el set de
+            // composicion de aqui abajo.
+            BloomPass                       m_bloomPass;
 
             // Pass de composicion: HDR + bloom → tonemap → m_offscreenImage.
             VkRenderPass                    m_compositeRenderPass               = VK_NULL_HANDLE;
@@ -884,22 +858,11 @@ namespace DonTopo {
             VkPipelineLayout                m_compositePipelineLayout           = VK_NULL_HANDLE;
             VkPipeline                      m_compositePipeline                 = VK_NULL_HANDLE;
 
-            // Cadena pendiente de dejar en negro (efecto recien apagado o imagenes
-            // recien creadas). Una por frame en vuelo: cada slot se limpia en su
-            // propio command buffer.
-            bool                            m_bloomClearPending[MAX_FRAMES]     = {};
-            // Coste GPU medido con timestamps: dos por frame en vuelo, leidos el
-            // frame siguiente (la fence de ese frame ya senalizo, asi que el
-            // resultado esta disponible sin bloquear).
-            VkQueryPool                     m_bloomQueryPool                    = VK_NULL_HANDLE;
+            // Propiedades del device que comparten todos los pases con queries.
+            // Las resuelve createBloomPipelines, que es el primero en pedir un
+            // pool.
             bool                            m_timestampsSupported               = false;
             float                           m_timestampPeriod                   = 0.0f;
-            bool                            m_bloomQueryPending[MAX_FRAMES]     = {};
-            float                           m_bloomGpuMs                        = 0.0f;
-            // Frames medidos. Sirve para soltar UNA linea de coste ya en caliente
-            // (igual que "IBL precompute: ..."), en vez de ensuciar el log cada
-            // frame: el valor en vivo se ve en el menu View del editor.
-            uint32_t                        m_bloomMeasuredFrames               = 0;
 
             // ── SSAO + depth pre-pass ─────────────────────────────────
             // La profundidad del pre-pass NO es del SSAO aunque naciera con
