@@ -138,15 +138,17 @@ PropertiesPanel::~PropertiesPanel() = default;
 
 void PropertiesPanel::invalidateCaches()
 {
-    m_propsCachedFor = nullptr;
-    m_colliderCachedFor = nullptr;
-    // Un Undo/Redo de cámara muta el componente EN SITIO (el puntero no
-    // cambia), así que sin esto m_cameraCachedFor seguiría apuntando al mismo
-    // CameraComponent y drawCameraSection nunca refrescaría m_editCam* tras el
-    // undo: el panel se quedaría mostrando el valor deshecho, y el próximo
-    // drag de OTRO campo reaplicaría ese valor stale, resucitando el cambio
-    // que el usuario acababa de deshacer.
-    m_cameraCachedFor = nullptr;
+    // TODOS de una sentencia, y por eso están en una struct. Un Undo/Redo muta
+    // los componentes EN SITIO (el puntero no cambia), así que un cache que no
+    // se resetee deja su sección mostrando el valor deshecho, y el próximo drag
+    // de OTRO campo reaplica ese valor stale y resucita el cambio que el
+    // usuario acababa de deshacer.
+    //
+    // Esta función se escribía enumerando miembro a miembro y se quedó corta
+    // cuatro veces: el Undo no funcionaba en Sphere, Capsule ni Plane Collider
+    // ni en Rigidbody, y solo se arreglaba el que alguien reportaba. Añadir el
+    // puntero a EditCaches ya basta.
+    m_caches = EditCaches{};
 }
 
 void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, const std::string& path)
@@ -206,7 +208,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
         ImGui::Begin("Properties", &m_open);
         if (!ctx.selected)
         {
-            m_propsCachedFor = nullptr;
+            m_caches.props = nullptr;
         }
         else
         {
@@ -214,14 +216,14 @@ void PropertiesPanel::draw(EditorContext& ctx)
             // recompusiera desde localTransform en cada frame, un valor intermedio
             // inválido (p.ej. escala 0 mientras se teclea "0.5") se re-descompondría
             // y rompería posición/rotación de forma permanente.
-            if (m_propsCachedFor != ctx.selected)
+            if (m_caches.props != ctx.selected)
             {
                 glm::vec3 skew;
                 glm::vec4 perspective;
                 glm::quat orientation;
                 glm::decompose(ctx.selected->localTransform, m_editScale, orientation, m_editPosition, skew, perspective);
                 m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
-                m_propsCachedFor = ctx.selected;
+                m_caches.props = ctx.selected;
                 m_meshLoadError.clear();
                 m_audioLoadError.clear();
             }
@@ -2142,18 +2144,18 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
 {
     if (!ctx.selected->hasBoxCollider())
     {
-        m_colliderCachedFor = nullptr;
+        m_caches.box = nullptr;
         return;
     }
 
     BoxCollider* bc = ctx.selected->getBoxCollider().get();
 
-    if (m_colliderCachedFor != bc)
+    if (m_caches.box != bc)
     {
         m_editColliderCenter = bc->getCenter();
         m_editColliderSize   = bc->getHalfExtents() * 2.0f;
         m_editIsTrigger      = bc->isTrigger();
-        m_colliderCachedFor  = bc;
+        m_caches.box  = bc;
     }
     else if (ctx.selected->hasRigidbody() && !ctx.selected->getRigidbody()->getIsKinematic() && !m_colliderDragActive)
     {
@@ -2273,7 +2275,7 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
     if (removeClicked)
     {
         ctx.selected->setBoxCollider(nullptr);
-        m_colliderCachedFor = nullptr;
+        m_caches.box = nullptr;
         ctx.pushLog("Componente Box Collider quitado de '" + ctx.selected->name + "'");
     }
 }
@@ -2282,18 +2284,18 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
 {
     if (!ctx.selected->hasSphereCollider())
     {
-        m_sphereColliderCachedFor = nullptr;
+        m_caches.sphere = nullptr;
         return;
     }
 
     SphereCollider* sc = ctx.selected->getSphereCollider().get();
 
-    if (m_sphereColliderCachedFor != sc)
+    if (m_caches.sphere != sc)
     {
         m_editSphereCenter        = sc->getCenter();
         m_editSphereRadius        = sc->getRadius();
         m_editSphereIsTrigger     = sc->isTrigger();
-        m_sphereColliderCachedFor = sc;
+        m_caches.sphere = sc;
     }
     else if (ctx.selected->hasRigidbody() && !ctx.selected->getRigidbody()->getIsKinematic() && !m_sphereColliderDragActive)
     {
@@ -2400,7 +2402,7 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
     if (removeClicked)
     {
         ctx.selected->setSphereCollider(nullptr);
-        m_sphereColliderCachedFor = nullptr;
+        m_caches.sphere = nullptr;
         ctx.pushLog("Componente Sphere Collider quitado de '" + ctx.selected->name + "'");
     }
 }
@@ -2409,19 +2411,19 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
 {
     if (!ctx.selected->hasCapsuleCollider())
     {
-        m_capsuleColliderCachedFor = nullptr;
+        m_caches.capsule = nullptr;
         return;
     }
 
     CapsuleCollider* cc = ctx.selected->getCapsuleCollider().get();
 
-    if (m_capsuleColliderCachedFor != cc)
+    if (m_caches.capsule != cc)
     {
         m_editCapsuleCenter        = cc->getCenter();
         m_editCapsuleRadius        = cc->getRadius();
         m_editCapsuleHeight        = cc->getHalfHeight() * 2.0f;
         m_editCapsuleIsTrigger     = cc->isTrigger();
-        m_capsuleColliderCachedFor = cc;
+        m_caches.capsule = cc;
     }
     else if (ctx.selected->hasRigidbody() && !ctx.selected->getRigidbody()->getIsKinematic() && !m_capsuleColliderDragActive)
     {
@@ -2542,7 +2544,7 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
     if (removeClicked)
     {
         ctx.selected->setCapsuleCollider(nullptr);
-        m_capsuleColliderCachedFor = nullptr;
+        m_caches.capsule = nullptr;
         ctx.pushLog("Componente Capsule Collider quitado de '" + ctx.selected->name + "'");
     }
 }
@@ -2551,17 +2553,17 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
 {
     if (!ctx.selected->hasPlaneCollider())
     {
-        m_planeColliderCachedFor = nullptr;
+        m_caches.plane = nullptr;
         return;
     }
 
     PlaneCollider* pc = ctx.selected->getPlaneCollider().get();
 
-    if (m_planeColliderCachedFor != pc)
+    if (m_caches.plane != pc)
     {
         m_editPlaneCenter        = pc->getCenter();
         m_editPlaneIsTrigger     = pc->isTrigger();
-        m_planeColliderCachedFor = pc;
+        m_caches.plane = pc;
     }
 
     Scene* scene = ctx.scene;
@@ -2648,16 +2650,16 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
     if (removeClicked)
     {
         ctx.selected->setPlaneCollider(nullptr);
-        m_planeColliderCachedFor = nullptr;
+        m_caches.plane = nullptr;
         ctx.pushLog("Componente Plane Collider quitado de '" + ctx.selected->name + "'");
     }
 }
 
 void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
 {
-    if (!ctx.selected || !ctx.selected->hasRigidbody()) { m_rigidbodyCachedFor = nullptr; return; }
+    if (!ctx.selected || !ctx.selected->hasRigidbody()) { m_caches.rigidbody = nullptr; return; }
     Rigidbody* rb = ctx.selected->getRigidbody().get();
-    if (m_rigidbodyCachedFor != rb)
+    if (m_caches.rigidbody != rb)
     {
         m_editRbMass        = rb->getMass();
         m_editRbUseGravity  = rb->getUseGravity();
@@ -2665,7 +2667,7 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
         m_editRbDrag        = rb->getDrag();
         m_editRbAngularDrag = rb->getAngularDrag();
         m_editRbConstraints = rb->getConstraints();
-        m_rigidbodyCachedFor = rb;
+        m_caches.rigidbody = rb;
     }
 
     ImGui::Separator();
@@ -2798,7 +2800,7 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
         if (auto col = ctx.selected->anyCollider(); col && ctx.physics)
             ctx.physics->detachRigidbody(col);
         ctx.selected->setRigidbody(nullptr);
-        m_rigidbodyCachedFor = nullptr;
+        m_caches.rigidbody = nullptr;
         ctx.pushLog("Componente Rigidbody quitado de '" + ctx.selected->name + "'");
     }
 
@@ -2810,16 +2812,16 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
     // Oculta hasta que se pulse Add: la sección solo existe si el componente
     // existe, y el componente solo existe tras Add (mismo early-return que
     // drawRigidbodySection).
-    if (!ctx.selected || !ctx.selected->hasCameraComponent()) { m_cameraCachedFor = nullptr; return; }
+    if (!ctx.selected || !ctx.selected->hasCameraComponent()) { m_caches.camera = nullptr; return; }
     CameraComponent* cam = ctx.selected->getCameraComponent().get();
-    if (m_cameraCachedFor != cam)
+    if (m_caches.camera != cam)
     {
         m_editCamMode      = cam->getMode();
         m_editCamFov       = cam->getFov();
         m_editCamOrthoSize = cam->getOrthographicSize();
         m_editCamNear      = cam->getNear();
         m_editCamFar       = cam->getFar();
-        m_cameraCachedFor  = cam;
+        m_caches.camera  = cam;
     }
 
     ImGui::Separator();
@@ -2932,7 +2934,7 @@ void PropertiesPanel::drawCameraSection(EditorContext& ctx)
         // Remove no fuera deshacible, quitar la cámara sería una pérdida
         // irreversible.
         CameraState st = currentState();
-        m_cameraCachedFor = nullptr;
+        m_caches.camera = nullptr;
         ctx.pushLog("Componente Camera quitado de '" + ctx.selected->name + "'");
         if (ctx.scene && ctx.undo)
         {
@@ -3501,7 +3503,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                 ctx.selected->worldTransform, /*dynamic=*/false));
             // Owner opaco = GameObject, para que TriggerEvent.other lo resuelva.
             ctx.selected->getBoxCollider()->setOwner(ctx.selected);
-            m_colliderCachedFor = nullptr;
+            m_caches.box = nullptr;
             ctx.pushLog("Componente Box Collider añadido a '" + ctx.selected->name + "'");
         }
 
@@ -3510,7 +3512,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             ctx.selected->setSphereCollider(ctx.physics->createSphereColliderComponent(
                 25.0f, glm::vec3(0.0f), ctx.selected->worldTransform, /*dynamic=*/false));
             ctx.selected->getSphereCollider()->setOwner(ctx.selected);
-            m_sphereColliderCachedFor = nullptr;
+            m_caches.sphere = nullptr;
             ctx.pushLog("Componente Sphere Collider añadido a '" + ctx.selected->name + "'");
         }
 
@@ -3519,7 +3521,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             ctx.selected->setCapsuleCollider(ctx.physics->createCapsuleColliderComponent(
                 15.0f, 25.0f, glm::vec3(0.0f), ctx.selected->worldTransform, /*dynamic=*/false));
             ctx.selected->getCapsuleCollider()->setOwner(ctx.selected);
-            m_capsuleColliderCachedFor = nullptr;
+            m_caches.capsule = nullptr;
             ctx.pushLog("Componente Capsule Collider añadido a '" + ctx.selected->name + "'");
         }
 
@@ -3528,7 +3530,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
             ctx.selected->setPlaneCollider(ctx.physics->createPlaneColliderComponent(
                 glm::vec3(0.0f), ctx.selected->worldTransform));
             ctx.selected->getPlaneCollider()->setOwner(ctx.selected);
-            m_planeColliderCachedFor = nullptr;
+            m_caches.plane = nullptr;
             ctx.pushLog("Componente Plane Collider añadido a '" + ctx.selected->name + "'");
         }
 
@@ -3544,7 +3546,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                 ctx.selected->setRigidbody(rb);
                 if (auto col = ctx.selected->anyCollider())
                     ctx.physics->attachRigidbody(col, rb);
-                m_rigidbodyCachedFor = nullptr;
+                m_caches.rigidbody = nullptr;
                 ctx.pushLog("Componente Rigidbody añadido a '" + ctx.selected->name + "'");
             }
         }
@@ -3653,7 +3655,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                 *ctx.scene, "Añadir Camera a '" + ctx.selected->name + "'", ctx.selected->id, /*add=*/true, st);
             cmd->execute();
             ctx.undo->push(std::move(cmd));
-            m_cameraCachedFor = nullptr;
+            m_caches.camera = nullptr;
             ctx.pushLog("Componente Camera añadido a '" + ctx.selected->name + "'");
         }
         ImGui::EndDisabled();

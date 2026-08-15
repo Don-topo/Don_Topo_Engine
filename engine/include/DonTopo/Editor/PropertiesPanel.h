@@ -30,13 +30,11 @@ public:
 
     void draw(EditorContext& ctx);
     bool* GetOpenPtr() { return &m_open; }
-    // Invalida los caches de Transform y Box Collider cuando ScenePanel borra
-    // el nodo seleccionado (llamado desde EditorUI::draw() cuando
-    // ScenePanel::selectionWasDeletedThisFrame() es true), para no arrastrar
-    // punteros colgantes (GameObject/BoxCollider ya liberados) hasta la
-    // próxima selección real. Mismo alcance que el fix de Task 3 (solo
-    // Transform + Box Collider, no Sphere/Capsule/Plane — esos se
-    // resincronizan solos vía sus propios cachedFor al perder el collider).
+    // Olvida TODO lo que las secciones tengan cacheado. Dos llamantes:
+    //   - ScenePanel borró el nodo seleccionado: los punteros apuntan a
+    //     componentes ya liberados y no pueden sobrevivir al frame.
+    //   - Undo/Redo: mutan los componentes en sitio, así que la sección tiene
+    //     que volver a leerlos o se queda enseñando el valor deshecho.
     void invalidateCaches();
 
     // Un GameObject solo ofrece los componentes de UI si YA tiene Canvas: el
@@ -155,10 +153,32 @@ private:
 
     bool m_open = true;
 
+    // A QUIÉN pertenece lo que cada sección tiene cacheado. Cada sección
+    // re-sincroniza sus campos de edición cuando esto deja de coincidir con el
+    // componente que está pintando.
+    //
+    // Van TODOS juntos en una struct a propósito: invalidateCaches() los borra
+    // de una sentencia (`m_caches = {}`), así que una sección nueva queda
+    // cubierta por el hecho de declarar su puntero aquí. Enumerándolos a mano
+    // esta función se quedó corta CUATRO veces —sphere, capsule, plane y
+    // rigidbody—, y el síntoma es de los que no cantan: el Undo cambia el
+    // componente, la sección sigue enseñando el valor viejo, y el próximo drag
+    // de otro campo lo reaplica y resucita lo que se acababa de deshacer.
+    struct EditCaches
+    {
+        GameObject*      props     = nullptr;
+        BoxCollider*     box       = nullptr;
+        SphereCollider*  sphere    = nullptr;
+        CapsuleCollider* capsule   = nullptr;
+        PlaneCollider*   plane     = nullptr;
+        const void*      rigidbody = nullptr;
+        const void*      camera    = nullptr;
+    };
+    EditCaches m_caches;
+
     // Properties – cache de edición del nodo seleccionado (persiste entre
     // frames para que DragFloat pueda acumular el delta del arrastre; solo
     // se re-sincroniza con localTransform al cambiar de selección).
-    GameObject* m_propsCachedFor = nullptr;
     glm::vec3   m_editPosition{0.0f};
     glm::vec3   m_editRotationDeg{0.0f};
     glm::vec3   m_editScale{1.0f};
@@ -236,7 +256,6 @@ private:
     // resincroniza con el BoxCollider real al cambiar de selección o (si es
     // dinámico y no se está arrastrando) cada frame para reflejar cambios
     // externos de tamaño/gravedad.
-    BoxCollider* m_colliderCachedFor = nullptr;
     glm::vec3    m_editColliderCenter{0.0f};
     glm::vec3    m_editColliderSize{50.0f};
     bool         m_editIsTrigger = false;
@@ -246,7 +265,6 @@ private:
     BoxColliderState m_boxColliderBeforeEdit{};
 
     // Sphere Collider – mismo patrón de cache que Box Collider.
-    SphereCollider* m_sphereColliderCachedFor = nullptr;
     glm::vec3       m_editSphereCenter{0.0f};
     float           m_editSphereRadius{25.0f};
     bool            m_editSphereIsTrigger = false;
@@ -254,7 +272,6 @@ private:
     SphereColliderState m_sphereColliderBeforeEdit{};
 
     // Capsule Collider – mismo patrón de cache que Box Collider.
-    CapsuleCollider* m_capsuleColliderCachedFor = nullptr;
     glm::vec3        m_editCapsuleCenter{0.0f};
     float            m_editCapsuleRadius{15.0f};
     float            m_editCapsuleHeight{50.0f};
@@ -263,7 +280,6 @@ private:
     CapsuleColliderState m_capsuleColliderBeforeEdit{};
 
     // Plane Collider – solo Center (sin Size/Use Gravity, siempre estático).
-    PlaneCollider* m_planeColliderCachedFor = nullptr;
     glm::vec3      m_editPlaneCenter{0.0f};
     bool           m_editPlaneIsTrigger = false;
     bool           m_planeColliderDragActive = false;
@@ -273,7 +289,6 @@ private:
     // (mass/drag/angularDrag) usan begin/commit con m_rigidbodyBeforeEdit para
     // empujar un único PropertyCommand<RigidbodyState> al soltar; los checkbox
     // (gravity/kinematic/constraints) empujan comando inmediato.
-    const void*    m_rigidbodyCachedFor = nullptr;
     float          m_editRbMass = 1.0f;
     bool           m_editRbUseGravity = true;
     bool           m_editRbKinematic = false;
@@ -288,7 +303,6 @@ private:
     // near/far) usan begin/commit con m_cameraBeforeEdit pa empujar un único
     // PropertyCommand<CameraState> al soltar; el combo de modo empuja comando
     // inmediato.
-    const void* m_cameraCachedFor = nullptr;
     CameraComponent::ProjectionMode m_editCamMode = CameraComponent::ProjectionMode::Perspective;
     float       m_editCamFov = 45.0f;
     float       m_editCamOrthoSize = 100.0f;
