@@ -16,6 +16,7 @@
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/GpuResources.h"
 #include "DonTopo/Renderer/SharedGpuMesh.h"
+#include "DonTopo/Renderer/RenderObjects.h"
 #include "DonTopo/Renderer/DeferredDelete.h"
 #include "DonTopo/Renderer/TransferBatch.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
@@ -27,6 +28,10 @@
 #include "DonTopo/Renderer/Passes/DepthPrepassPass.h"
 #include "DonTopo/Renderer/Passes/FogPass.h"
 #include "DonTopo/Renderer/Passes/ForwardPlusPass.h"
+#include "DonTopo/Renderer/Passes/IblPass.h"
+#include "DonTopo/Renderer/Passes/ReflectionProbePass.h"
+#include "DonTopo/Renderer/Passes/ShadowPass.h"
+#include "DonTopo/Renderer/Passes/SkinningPass.h"
 #include "DonTopo/Renderer/Passes/SsaoPass.h"
 #include "DonTopo/Renderer/Passes/SsrPass.h"
 #include "DonTopo/Renderer/Passes/MotionBlurPass.h"
@@ -248,35 +253,24 @@ namespace DonTopo {
             void setLights(const std::vector<Light>& lights){ m_lights = lights; }
 
             // ── Reflection probes ──────────────────────────────────────────
-            // La UI solo ENCOLA: el bake ocurre al principio de drawFrame, que
-            // es donde se puede esperar a que la GPU quede libre sin pillar el
-            // command buffer a medio grabar (mismo sitio que rebuildAaResources).
-            void requestProbeBake(uint64_t ownerId) { m_probeBakeQueue.push_back(ownerId); }
-            void requestProbeBakeAll()              { m_probeBakeAllQueued = true; }
+            // Todo esto vive en ReflectionProbePass; aqui solo se delega para no
+            // mover la API que ve el editor. La UI solo ENCOLA: el bake ocurre
+            // al principio de drawFrame, que es donde se puede esperar a que la
+            // GPU quede libre sin pillar el command buffer a medio grabar
+            // (mismo sitio que rebuildAaResources).
+            void requestProbeBake(uint64_t ownerId) { m_probePass.requestBake(ownerId); }
+            void requestProbeBakeAll()              { m_probePass.requestBakeAll(); }
             // ms del ULTIMO bake (una sonda o la tanda entera), por timestamps.
-            float lastProbeBakeMs() const { return m_probeLastBakeMs; }
-            int   probeCount() const      { return (int)m_probes.size(); }
+            float lastProbeBakeMs() const { return m_probePass.lastBakeMs(); }
+            int   probeCount() const      { return m_probePass.count(); }
             // Memoria GPU de las capturas persistentes de UNA sonda, en bytes.
             // No cuenta el cubemap de captura, que es uno solo pa todas.
             static constexpr uint64_t probeMemoryBytes()
             {
-                // rgba16f = 8 bytes/texel, 6 caras. El prefiltrado suma sus mips
-                // (la serie 1 + 1/4 + 1/16 + ... truncada a IBL_PREFILTER_MIPS).
-                uint64_t pre = 0;
-                for (uint32_t m = 0; m < IBL_PREFILTER_MIPS; m++)
-                {
-                    const uint64_t s = IBL_PREFILTER_SIZE >> m;
-                    pre += s * s * 6ull * 8ull;
-                }
-                return (uint64_t)IBL_IRRADIANCE_SIZE * IBL_IRRADIANCE_SIZE * 6ull * 8ull + pre;
+                return ReflectionProbePass::probeMemoryBytes();
             }
             // ms del ultimo bake de UNA sonda concreta, o -1 si nunca se bakeo.
-            float probeBakeMs(uint64_t ownerId) const
-            {
-                for (const GpuProbe& p : m_probes)
-                    if (p.ownerId == ownerId) return p.baked ? p.bakeMs : -1.0f;
-                return -1.0f;
-            }
+            float probeBakeMs(uint64_t ownerId) const { return m_probePass.bakeMs(ownerId); }
 
             // Interruptor global: apagado no se graba ni un dispatch de la cadena
             // de mips y la composicion suma bloom cero (el pass LDR NO se salta,
@@ -437,15 +431,6 @@ namespace DonTopo {
             // Devuelve 0 si no hay con qué acotar (sin huesos o sin vértices);
             // el llamante lo trata como "sin cota" y no culea.
             static float skinnedBoundRadius(const SkinnedMesh& mesh);
-            // Matrices de luz de las N cascadas y sus distancias de corte. Las
-            // comparten el UBO (para que el fragment shader muestree el shadow
-            // map) y el culling del pass de sombras: si las dos se calcularan
-            // por separado y una cambiara, se culearían objetos que el shadow
-            // map sí necesita. Por eso se calculan UNA vez por frame en draw(),
-            // antes de updateUniformBuffer y de recordCommandBuffer, y los dos
-            // consumidores leen la caché de abajo.
-            void computeCascades();
-
             // ── Draw batching por instancing ─────────────────────────────────
             // El agrupado vive en Renderer/InstanceBatching.h desde que hay un
             // segundo backend que lo necesita, igual que el culling en
@@ -462,151 +447,12 @@ namespace DonTopo {
 
         private:
 
-            // Una instancia dibujable. Ya NO posee recursos GPU: buffers,
-            // texturas y descriptor set viven en la entrada compartida que
-            // apunta sharedIndex, y N objetos con la misma malla+material
-            // apuntan todos a la misma. Lo único por instancia es el transform
-            // (y el nombre, que es de depuración).
-            struct RenderObject
-            {
-                std::string     name;
-                // -1 = sin recursos (nunca construido, o ya liberado desde el
-                // editor). Es el chequeo que sustituye al viejo
-                // "vertexBuffer == VK_NULL_HANDLE".
-                int             sharedIndex         = -1;
-                glm::mat4       transform{1.0f};
-                // 0 = no refleja. Lo sincroniza el bucle de la aplicación desde
-                // el GameObject, igual que el transform.
-                float           ssrStrength         = 0.0f;
-                // false = lo saltan los pases de escena, de sombras y de AO: el
-                // mesh no se manda a la GPU, así que tampoco proyecta ni ocluye.
-                bool            meshVisible         = true;
-            };
-
-            struct SkinnedMatGfx {
-                VkImage         textureImage  = VK_NULL_HANDLE;
-                VkDeviceMemory  textureMem    = VK_NULL_HANDLE;
-                VkImageView     textureView   = VK_NULL_HANDLE;
-                VkSampler       sampler       = VK_NULL_HANDLE;
-                VkImage         normalImage   = VK_NULL_HANDLE;
-                VkDeviceMemory  normalMem     = VK_NULL_HANDLE;
-                VkImageView     normalView    = VK_NULL_HANDLE;
-                VkSampler       normalSampler = VK_NULL_HANDLE;
-                VkImage         ormImage      = VK_NULL_HANDLE;
-                VkDeviceMemory  ormMem        = VK_NULL_HANDLE;
-                VkImageView     ormView       = VK_NULL_HANDLE;
-                VkSampler       ormSampler    = VK_NULL_HANDLE;
-                float           metallic      = 0.0f;
-                float           roughness     = 0.5f;
-                VkDescriptorSet descSets[2]   = {};
-            };
-
-            struct SubMeshDraw {
-                uint32_t indexStart;
-                uint32_t indexCount;
-                uint32_t materialIndex;
-            };
-
-            // ABI compartida por los 3 compute shaders. 16 bytes, fijos: el 4º
-            // campo era un pad sin usar y ahora lleva el clipBase, así que
-            // ningún offset se ha movido.
-            struct ComputePush
-            {
-                float animTime;
-                uint32_t boneCount;
-                uint32_t vertexCount;
-                // activeClip * boneCount: índice base del bloque del clip activo
-                // dentro del SSBO de BoneInfos, que va en layout [clip][hueso].
-                // Solo lo lee bone_eval.comp; bone_hierarchy y skinning declaran
-                // este slot como "pad" y no lo tocan.
-                uint32_t clipBase;
-            };
-            static_assert(sizeof(ComputePush) == 16, "ComputePush debe seguir en 16 bytes: los 3 .comp declaran este layout");
-
-            struct PushData {
-                glm::mat4 transform{1.0f};
-                float     metallic  = 1.0f;
-                float     roughness = 1.0f;
-                // flags.x = 1: triangle.vert coge el model matrix del SSBO de
-                // instancias por gl_InstanceIndex (ruta estática, agrupada);
-                // 0: lo coge de `transform` (ruta skinned, que comparte este
-                // vertex shader y dibuja una instancia con su propia matriz).
-                // Es el viejo _pad reaprovechado: mismo tipo y offset, así que
-                // pbr.frag sigue declarando el bloque igual que siempre.
-                glm::vec2 flags{0.0f, 0.0f};
-            };
-            static_assert(sizeof(PushData) == 80, "PushData must be 80 bytes");
-
-            struct SkinnedRenderObject {
-                std::string    name;
-                // SSBOs estáticos
-                VkBuffer       keyframePosBuffer    = VK_NULL_HANDLE;
-                VkDeviceMemory keyframePosMemory    = VK_NULL_HANDLE;
-                VkBuffer       keyframeRotBuffer    = VK_NULL_HANDLE;
-                VkDeviceMemory keyframeRotMemory    = VK_NULL_HANDLE;
-                VkBuffer       keyframeScaleBuffer  = VK_NULL_HANDLE;
-                VkDeviceMemory keyframeScaleMemory  = VK_NULL_HANDLE;
-                VkBuffer       boneInfoBuffer       = VK_NULL_HANDLE;
-                VkDeviceMemory boneInfoMemory       = VK_NULL_HANDLE;
-                VkBuffer       inputVertexBuffer    = VK_NULL_HANDLE;
-                VkDeviceMemory inputVertexMemory    = VK_NULL_HANDLE;
-                // SSBOs dinámicos (escritos por compute)
-                VkBuffer       localTransformBuffer = VK_NULL_HANDLE;
-                VkDeviceMemory localTransformMemory = VK_NULL_HANDLE;
-                VkBuffer       finalBoneBuffer      = VK_NULL_HANDLE;
-                VkDeviceMemory finalBoneMemory      = VK_NULL_HANDLE;
-                // Output vertex buffer (usado también como VB en graphics)
-                VkBuffer       outputVertexBuffer   = VK_NULL_HANDLE;
-                VkDeviceMemory outputVertexMemory   = VK_NULL_HANDLE;
-                // Index buffer
-                VkBuffer       indexBuffer          = VK_NULL_HANDLE;
-                VkDeviceMemory indexMemory          = VK_NULL_HANDLE;
-                uint32_t       indexCount           = 0;
-                uint32_t       vertexCount          = 0;
-                uint32_t       boneCount            = 0;
-                // Nº de clips concatenados en los SSBOs de keyframes. Solo se usa
-                // pa clampar en setAnimationState (Task 3): un clipIndex fuera de
-                // rango haría que clipBase apuntara fuera del SSBO de BoneInfos y
-                // el compute leyera basura sin que nada avisara.
-                uint32_t       clipCount            = 1;
-                // Descriptor set de compute
-                VkDescriptorSet computeDescSet      = VK_NULL_HANDLE;
-                // Texturas y descriptor sets por material
-                std::vector<SkinnedMatGfx>  matGfx;
-                std::vector<SubMeshDraw>    subMeshes;
-                // Fuerza de SSR del objeto, sincronizada desde el GameObject
-                // igual que el transform. La ruta skinned dibuja una instancia
-                // por submalla, así que aquí no hay agrupado que partir.
-                float          ssrStrength          = 0.0f;
-                // false = lo saltan el pass de escena y el de sombras. El compute
-                // de skinning sí sigue corriendo: el contorno de selección lee
-                // sus vértices de salida.
-                bool           meshVisible          = true;
-                // Estado de animación
-                float     animTime       = 0.0f;
-                // Índice del clip que se evalúa este frame. Sin blending solo se
-                // evalúa uno: los demás residen en el SSBO y no se leen.
-                uint32_t  activeClip     = 0;
-                float     duration       = 0.0f;
-                float     ticksPerSecond = 24.0f;
-                glm::mat4 transform      {1.0f};
-                // Cota para el frustum culling: esfera centrada en el origen
-                // local, válida en toda pose (ver skinnedBoundRadius).
-                // hasBounds false = malla sin con qué acotar -> no se culea
-                // nunca, que es el lado seguro.
-                float     boundRadius    = 0.0f;
-                bool      hasBounds      = false;
-                // Lado mayor de la AABB de la pose de REPOSO, en espacio local.
-                // Solo lo usa el grosor del contorno de selección, que es
-                // proporcional al tamaño del objeto: boundRadius no vale ahí
-                // porque acota todas las poses y sale varias veces mayor que la
-                // malla. 0 = malla sin vértices (el contorno cae a su mínimo).
-                float     restMaxExtent  = 0.0f;
-                // 0 = subido y visible. >0 = esperando a que la fence del batch
-                // con ese ticket señale. Sin esto, el objeto se dibujaría con
-                // sus texturas todavía en TRANSFER_DST_OPTIMAL.
-                uint64_t  uploadTicket   = 0;
-            };
+            // RenderObject, SkinnedMatGfx, SubMeshDraw, PushData y
+            // SkinnedRenderObject viven en RenderObjects.h desde que el bake de
+            // las sondas salio a su propio pase: ReflectionProbePass los recibe
+            // por su Context para redibujar la escena, y meter este header
+            // dentro de un pase seria circular. Estan en el mismo namespace, asi
+            // que aqui se siguen nombrando sin calificar.
 
             void createSwapChain(Window& window);
             void createImageViews();
@@ -756,15 +602,28 @@ namespace DonTopo {
                                      const std::vector<DecodedImage>* decoded);
             void allocateObjectDescriptorSet(SharedGpuMesh& gpu);
             void destroySharedGpuMesh(const SharedGpuMesh& gpu);
-            void createShadowResources();
+            // El shadow map vive en ShadowPass; esto arma su paquete de estado
+            // compartido (los dos set layouts que declara shadow.vert).
+            ShadowPass::Context shadowCtx();
+            // Los DRAWS de las N cascadas: se quedan aqui porque salen de
+            // m_objects/m_skinnedObjects y del SSBO de instancias, cuyo cursor
+            // comparten este pass, el depth pre-pass y el de escena. El pase
+            // pone el render pass, el pipeline y el push del indice.
             void recordShadowPass(VkCommandBuffer cmd);
-            // Crea imagenes, vistas, sampler y pipelines del IBL y deja los dos
-            // cubemaps con un ambiente neutro. Se llama SIEMPRE en init().
-            void createIblResources();
-            // Rellena los dos cubemaps a partir del cubemap del skybox. No-op si
-            // no hay skybox cargado. Una sola vez, desde initSkybox().
-            void precomputeIbl();
-            void createComputePipelines();
+            // IBL global y sondas de reflexion. Los dos pases viven en sus
+            // clases; esto solo arma el paquete de estado compartido de cada
+            // uno. El del bake es largo a proposito: la captura REDIBUJA la
+            // escena, asi que necesita el pass offscreen entero y las listas de
+            // objetos, que son del Renderer y se quedan aqui.
+            IblPass::Context             iblCtx();
+            ReflectionProbePass::Context probeCtx();
+            // Los tres dispatches del skinning viven en SkinningPass; esto arma
+            // su paquete de estado compartido (las listas, que son del Renderer).
+            SkinningPass::Context skinningCtx();
+            // Los cuatro pipelines GRAFICOS de las mallas con huesos. Se quedan
+            // aqui porque dependen del numero de muestras de MSAA y del render
+            // pass de escena.
+            void createSkinnedGraphicsPipelines();
             void destroySkinnedRenderObject(SkinnedRenderObject& obj);
             // Cuerpo compartido por addSkinnedMesh y rebuildSkinnedMesh: crea
             // buffers, sube SSBOs, aloja descriptor sets y carga texturas sobre
@@ -772,7 +631,6 @@ namespace DonTopo {
             void initSkinnedRenderObject(SkinnedRenderObject& obj, const SkinnedMesh& mesh,
                                          TransferBatch* batch = nullptr,
                                          const std::vector<DecodedImage>* decoded = nullptr);
-            void recordComputePass(VkCommandBuffer cmd);
             void removeStaticObject(int index);
             void removeSkinnedObject(int index);
 
@@ -1068,146 +926,36 @@ namespace DonTopo {
             Camera                          m_camera;
             std::vector<Light>              m_lights;
 
-            // Shadow Map (cascadas)
-            static constexpr uint32_t       SHADOW_SIZE                         = 2048;
-            VkImage                         m_shadowImage                       = VK_NULL_HANDLE;
-            VkDeviceMemory                  m_shadowMemory                      = VK_NULL_HANDLE;
-            // Vista del array completo: es la que muestrea el fragment shader
-            // (sampler2DArrayShadow) y la que va en los descriptor sets.
-            VkImageView                     m_shadowView                        = VK_NULL_HANDLE;
-            // Una vista de UNA capa por cascada. Solo existen para poder colgar
-            // un framebuffer de cada capa; nadie las muestrea.
-            VkImageView                     m_shadowLayerViews[SHADOW_CASCADES] {};
-            VkSampler                       m_shadowSampler                     = VK_NULL_HANDLE;
-            VkRenderPass                    m_shadowRenderPass                  = VK_NULL_HANDLE;
-            VkFramebuffer                   m_shadowFramebuffers[SHADOW_CASCADES] {};
-            VkPipeline                      m_shadowPipeline                    = VK_NULL_HANDLE;
-            // Hermano del anterior para las mallas skinned: mismo shadow.vert,
-            // mismo layout, mismo render pass y mismo bias. Solo cambia el
-            // vertex input, porque lo que se dibuja es la salida del compute de
-            // skinning (5×vec4, stride 80) y el stride es estado de pipeline.
-            VkPipeline                      m_shadowSkinnedPipeline             = VK_NULL_HANDLE;
-            VkPipelineLayout                m_shadowPipelineLayout              = VK_NULL_HANDLE;
-            // Caché por frame que rellena computeCascades(). Identidad y 0 si la
-            // escena no tiene luces: en ese caso el pass solo limpia las capas.
-            glm::mat4                       m_cascadeMatrices[SHADOW_CASCADES]  { glm::mat4(1.0f), glm::mat4(1.0f), glm::mat4(1.0f), glm::mat4(1.0f) };
-            glm::vec4                       m_cascadeSplits                     { 0.0f };
+            // Shadow map de cascadas. El texture array, sus dos pipelines y el
+            // reparto de cascadas viven en ShadowPass; lo que el Renderer sigue
+            // necesitando de él son la vista y el sampler (binding 3 de cada
+            // descriptor set), su pipeline layout (que presta al depth
+            // pre-pass) y las matrices de cascada (que copia al UBO).
+            ShadowPass                      m_shadowPass;
 
-            // ── IBL ────────────────────────────────────────────────────────
-            // Dos cubemaps precomputados UNA vez sobre el cubemap del skybox:
-            // irradiancia (difuso) y entorno prefiltrado por rugosidad (mips).
-            // El termino BRDF no es una textura: pbr.frag usa la aproximacion
-            // analitica de Karis, asi que no hay LUT ni un tercer binding.
-            //
-            // Las imagenes se crean SIEMPRE en init(), con contenido neutro, y
-            // solo se rellenan de verdad si initSkybox() ha cargado un cubemap.
-            // Asi los descriptor sets nunca apuntan a un handle nulo y una
-            // escena sin skybox se ilumina con un ambiente plano en vez de
-            // reventar.
-            static constexpr uint32_t       IBL_IRRADIANCE_SIZE = 32;
-            static constexpr uint32_t       IBL_PREFILTER_SIZE  = 128;
-            // Si cambia, cambia tambien IBL_PREFILTER_MIPS en shaders/pbr.frag:
-            // ahi va como #define a proposito, pa no tocar el bloque UBO (que
-            // esta declarado en 5 shaders y std140 desplazaria en silencio).
-            static constexpr uint32_t       IBL_PREFILTER_MIPS  = 5;
-            VkImage                         m_iblIrradianceImage   = VK_NULL_HANDLE;
-            VkDeviceMemory                  m_iblIrradianceMemory  = VK_NULL_HANDLE;
-            // Vista CUBE pa muestrear desde pbr.frag; vista 2D_ARRAY pa que el
-            // compute pueda escribirla como storage image (un imageCube de
-            // escritura exigiria capacidades que no hacen falta).
-            VkImageView                     m_iblIrradianceView    = VK_NULL_HANDLE;
-            VkImageView                     m_iblIrradianceStore   = VK_NULL_HANDLE;
-            VkImage                         m_iblPrefilterImage    = VK_NULL_HANDLE;
-            VkDeviceMemory                  m_iblPrefilterMemory   = VK_NULL_HANDLE;
-            VkImageView                     m_iblPrefilterView     = VK_NULL_HANDLE;
-            VkImageView                     m_iblPrefilterStore[IBL_PREFILTER_MIPS] {};
-            VkSampler                       m_iblSampler           = VK_NULL_HANDLE;
-            VkDescriptorSetLayout           m_iblDescLayout        = VK_NULL_HANDLE;
-            VkDescriptorPool                m_iblDescPool          = VK_NULL_HANDLE;
-            VkPipelineLayout                m_iblPipelineLayout    = VK_NULL_HANDLE;
-            VkPipeline                      m_iblIrradiancePipeline = VK_NULL_HANDLE;
-            VkPipeline                      m_iblPrefilterPipeline  = VK_NULL_HANDLE;
-            // intensity: peso que se hornea en el cubemap resultante. 1.0 en el
-            // IBL global (resultado identico al de antes de las sondas) y la
-            // intensidad de la probe cuando esto convoluciona su captura.
-            struct IblPush { float roughness; uint32_t faceSize; float intensity; };
+            // ── IBL y sondas ───────────────────────────────────────────────
+            // Los dos cubemaps globales viven en IblPass y las sondas en
+            // ReflectionProbePass, que reusa sus pipelines de convolucion. Lo
+            // unico que el Renderer sigue necesitando de ellos son las dos
+            // vistas y el sampler del IBL global, que escribe en los bindings 5
+            // y 6 de cada descriptor set (allocateObjectDescriptorSet y la ruta
+            // skinned).
+            IblPass                         m_iblPass;
+            ReflectionProbePass             m_probePass;
 
-            // ── Reflection probes ──────────────────────────────────────────
-            // Sondas de entorno: capturan la escena desde su posicion en 6 caras
-            // y sustituyen al IBL global (bindings 5 y 6 del set 0) en los
-            // objetos que caen dentro de su radio. El bake es un EVENTO: no
-            // graba ni un comando en el command buffer del frame, asi que el
-            // coste GPU por frame con N sondas ya bakeadas es exactamente el
-            // mismo que con 0.
-            //
-            // Lado de captura: un solo cubemap COMPARTIDO por todas las sondas
-            // (es un intermedio del bake, no persiste), creado la primera vez
-            // que hay algo que bakear. Sin sondas no se crea y no gasta nada.
-            static constexpr uint32_t PROBE_FACE_SIZE = 128;
-            struct GpuProbe
-            {
-                uint64_t  ownerId  = 0;          // GameObject::id de la sonda
-                glm::vec3 position { 0.0f };
-                float     radius    = 0.0f;
-                float     intensity = 1.0f;
-                // Mismas dos imagenes que el IBL global, por sonda: irradiancia
-                // (1 mip) y entorno prefiltrado (IBL_PREFILTER_MIPS).
-                VkImage        irradianceImage  = VK_NULL_HANDLE;
-                VkDeviceMemory irradianceMemory = VK_NULL_HANDLE;
-                VkImageView    irradianceView   = VK_NULL_HANDLE;
-                VkImageView    irradianceStore  = VK_NULL_HANDLE;
-                VkImage        prefilterImage   = VK_NULL_HANDLE;
-                VkDeviceMemory prefilterMemory  = VK_NULL_HANDLE;
-                VkImageView    prefilterView    = VK_NULL_HANDLE;
-                VkImageView    prefilterStore[IBL_PREFILTER_MIPS] {};
-                bool           baked  = false;   // false: todavia con el neutro
-                float          bakeMs = 0.0f;    // ultimo bake, timestamps GPU
-                // Llamadas a syncReflectionProbes seguidas SIN cambios en los
-                // ajustes de la sonda. El auto-bake espera a que llegue a 1: sin
-                // esto, arrastrar el slider de Intensity dispararia un bake por
-                // frame (con su vkDeviceWaitIdle y sus 7 submits).
-                int            settleFrames = 0;
-            };
-            std::vector<GpuProbe>           m_probes;
-            VkImage                         m_probeCaptureImage  = VK_NULL_HANDLE;
-            VkDeviceMemory                  m_probeCaptureMemory = VK_NULL_HANDLE;
-            VkImageView                     m_probeCaptureView   = VK_NULL_HANDLE;
-            // 7 pares: uno por cara mas el de la convolucion. Se suman los
-            // deltas en vez de medir del primero al ultimo, que contaria tambien
-            // las esperas del host entre submits.
-            static constexpr uint32_t       PROBE_QUERY_COUNT = 14;
-            VkQueryPool                     m_probeQueryPool     = VK_NULL_HANDLE;
-            std::vector<uint64_t>           m_probeBakeQueue;
-            bool                            m_probeBakeAllQueued = false;
-            float                           m_probeLastBakeMs    = 0.0f;
-            // Asignacion resuelta: sharedIndex -> indice en m_probes (-1 = IBL
-            // global). Es la CACHE de lo ya escrito en los descriptor sets; solo
-            // se reescriben bindings cuando el mapa recalculado difiere de este.
-            std::unordered_map<int, int>    m_probeAssignShared;
-            std::vector<int>                m_probeAssignSkinned;
             // El bake copia el UBO del frame 0 (luces, cascadas y su shadow map)
             // y solo le sustituye view/proj: sin un frame previo ese buffer es
-            // basura, asi que las peticiones esperan.
+            // basura, asi que las peticiones esperan. Se queda aqui porque lo
+            // escribe updateUniformBuffer; el pase lo lee por su Context.
             bool                            m_uboWritten[MAX_FRAMES] {};
 
-            void  syncReflectionProbes();
-            void  createProbeCapture();
-            void  createProbeImages(GpuProbe& probe);
-            void  destroyProbeImages(GpuProbe& probe);
-            void  bakeProbe(GpuProbe& probe);
-            void  refreshProbeAssignment();
-            void  assignAllToGlobalIbl();
-            int   pickProbeFor(const glm::vec3& worldPos) const;
-            void  writeIblBindings(VkDescriptorSet set, VkImageView irradiance, VkImageView prefilter);
-            // Compute pipelines
-            VkPipeline            m_boneEvalPipeline      = VK_NULL_HANDLE;
-            VkPipeline            m_boneHierarchyPipeline = VK_NULL_HANDLE;
-            VkPipeline            m_skinningPipeline      = VK_NULL_HANDLE;
+            // Skinning por compute: los tres pipelines, su layout, su pool y sus
+            // descriptor sets viven en SkinningPass. De el salen tambien los
+            // sets de compute que aloja initSkinnedRenderObject.
+            SkinningPass          m_skinningPass;
+            // Los graficos, en cambio, se quedan: dependen del MSAA.
             VkPipeline            m_skinnedGfxPipeline        = VK_NULL_HANDLE;
             VkPipeline            m_skinnedWireframePipeline  = VK_NULL_HANDLE;
-            VkPipelineLayout      m_computePipelineLayout = VK_NULL_HANDLE;
-            VkDescriptorSetLayout m_computeDescLayout     = VK_NULL_HANDLE;
-            VkDescriptorPool      m_computeDescPool       = VK_NULL_HANDLE;
             std::vector<SkinnedRenderObject> m_skinnedObjects;
 
             std::vector<RenderObject> m_objects;

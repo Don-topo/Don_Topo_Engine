@@ -212,12 +212,13 @@ namespace DonTopo {
         }
         m_fpPass.createPipelines(fpCtx());
         createPipeline();
-        createShadowResources();
-        createComputePipelines();
+        m_shadowPass.createResources(shadowCtx());
+        m_skinningPass.createPipelines(skinningCtx());
+        createSkinnedGraphicsPipelines();
         // ANTES de createDescriptorSets: los sets de cada objeto escriben ya las
         // vistas de los dos cubemaps del IBL (bindings 5 y 6). Aqui se crean con
         // contenido neutro; initSkybox los rellenara si hay entorno.
-        createIblResources();
+        m_iblPass.createResources(iblCtx());
         // ANTES de createOffscreenImages: ahi se crea la cadena de mips, que
         // necesita el descriptor set layout y el pool del bloom ya montados.
         createBloomPipelines();
@@ -225,8 +226,8 @@ namespace DonTopo {
         // donde se graban sus lotes (LDR, ya tonemapeado, encima de la escena).
         m_uiBatch.init(m_gpu, m_res, m_compositeRenderPass, m_aaSampleCount);
         // ANTES de createOffscreenImages (que llama a createSsaoImages) y DESPUÉS
-        // de createShadowResources: el pipeline del depth pre-pass reutiliza
-        // m_shadowPipelineLayout, que se crea allí.
+        // de ShadowPass::createResources: el pipeline del depth pre-pass
+        // reutiliza el pipeline layout del pass de sombras, que se crea allí.
         m_depthPrepass.createRenderPassAndPipeline(depthPrepassCtx());
         m_ssaoPass.createPipelines(ssaoCtx());
         // Detrás del SSAO: comparte su sampler de profundidad (DepthPrepassPass) y
@@ -400,7 +401,7 @@ namespace DonTopo {
         // escena sale por el camino rapido sin tocar nada, y con sondas ya
         // bakeadas y quietas tampoco graba un solo comando: el coste GPU por
         // frame es identico en los tres casos.
-        syncReflectionProbes();
+        m_probePass.sync(probeCtx());
 
         // ── Construir frame de UI (antes de grabar el command buffer) ─────────────
         // En headless no hay capa de UI que alimentar: el runtime blitea
@@ -429,7 +430,12 @@ namespace DonTopo {
         // el frame exacto del clic.
         m_fpActiveMode = m_fpMode;
 
-        computeCascades();
+        // La camara del frame se muestrea aqui y no dentro del pase: es el mismo
+        // currentFrameCamera() que ve el culling del pass de sombras.
+        {
+            const FrameCamera cascadeCam = currentFrameCamera();
+            m_shadowPass.computeCascades(cascadeCam.view, cascadeCam.proj, m_lights);
+        }
         updateUniformBuffer(m_currentFrame);
 
         recordCommandBuffer(imageIndex);
@@ -598,56 +604,19 @@ namespace DonTopo {
         vkDestroyImageView(m_gpu.device(), m_depthImageView, nullptr);
         vkDestroyImage(m_gpu.device(), m_depthImage, nullptr);
         vkFreeMemory(m_gpu.device(), m_depthImageMemory, nullptr);
-        // Shadow Map
-        vkDestroySampler(m_gpu.device(), m_shadowSampler, nullptr);
-        vkDestroyImageView(m_gpu.device(), m_shadowView, nullptr);
-        for (int c = 0; c < SHADOW_CASCADES; c++)
-        {
-            vkDestroyImageView(m_gpu.device(), m_shadowLayerViews[c], nullptr);
-            vkDestroyFramebuffer(m_gpu.device(), m_shadowFramebuffers[c], nullptr);
-        }
-        vkDestroyImage(m_gpu.device(), m_shadowImage, nullptr);
-        vkFreeMemory(m_gpu.device(), m_shadowMemory, nullptr);
-        // IBL
-        vkDestroyPipeline(m_gpu.device(), m_iblIrradiancePipeline, nullptr);
-        vkDestroyPipeline(m_gpu.device(), m_iblPrefilterPipeline, nullptr);
-        vkDestroyPipelineLayout(m_gpu.device(), m_iblPipelineLayout, nullptr);
-        vkDestroyDescriptorPool(m_gpu.device(), m_iblDescPool, nullptr);
-        vkDestroyDescriptorSetLayout(m_gpu.device(), m_iblDescLayout, nullptr);
-        vkDestroySampler(m_gpu.device(), m_iblSampler, nullptr);
-        vkDestroyImageView(m_gpu.device(), m_iblIrradianceView, nullptr);
-        vkDestroyImageView(m_gpu.device(), m_iblIrradianceStore, nullptr);
-        vkDestroyImage(m_gpu.device(), m_iblIrradianceImage, nullptr);
-        vkFreeMemory(m_gpu.device(), m_iblIrradianceMemory, nullptr);
-        vkDestroyImageView(m_gpu.device(), m_iblPrefilterView, nullptr);
-        for (uint32_t m = 0; m < IBL_PREFILTER_MIPS; m++)
-            vkDestroyImageView(m_gpu.device(), m_iblPrefilterStore[m], nullptr);
-        vkDestroyImage(m_gpu.device(), m_iblPrefilterImage, nullptr);
-        vkFreeMemory(m_gpu.device(), m_iblPrefilterMemory, nullptr);
-        // Reflection probes. El cubemap de captura y el query pool solo existen
-        // si alguna vez se bakeo algo; las sondas, si la escena tenia alguna.
-        for (GpuProbe& probe : m_probes) destroyProbeImages(probe);
-        m_probes.clear();
-        if (m_probeCaptureView != VK_NULL_HANDLE)
-        {
-            vkDestroyImageView(m_gpu.device(), m_probeCaptureView, nullptr);
-            vkDestroyImage(m_gpu.device(), m_probeCaptureImage, nullptr);
-            vkFreeMemory(m_gpu.device(), m_probeCaptureMemory, nullptr);
-            m_probeCaptureView = VK_NULL_HANDLE;
-        }
-        if (m_probeQueryPool != VK_NULL_HANDLE)
-        {
-            vkDestroyQueryPool(m_gpu.device(), m_probeQueryPool, nullptr);
-            m_probeQueryPool = VK_NULL_HANDLE;
-        }
+        // Shadow map. El Context lleva los dos set layouts que ya se han
+        // destruido cuatro lineas mas arriba; destroyResources no los toca (un
+        // pipeline layout sobrevive a los set layouts con los que se creo).
+        m_shadowPass.destroyResources(shadowCtx());
+        // Las sondas ANTES del IBL global: destroy() de las sondas no toca los
+        // pipelines de convolucion, pero si el orden se invirtiera un futuro
+        // camino de limpieza con convolucion pendiente se quedaria sin ellos.
+        m_probePass.destroy(probeCtx());
+        m_iblPass.destroyResources(iblCtx());
         vkDestroyPipeline(m_gpu.device(), m_skinnedGfxPipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedWireframePipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedOutlinePipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedOutlineWirePipeline, nullptr);
-        vkDestroyPipeline(m_gpu.device(), m_shadowPipeline, nullptr);
-        vkDestroyPipeline(m_gpu.device(), m_shadowSkinnedPipeline, nullptr);
-        vkDestroyPipelineLayout(m_gpu.device(), m_shadowPipelineLayout, nullptr);
-        vkDestroyRenderPass(m_gpu.device(), m_shadowRenderPass, nullptr);
         for (auto& obj : m_skinnedObjects)
         {
             destroySkinnedRenderObject(obj);
@@ -657,15 +626,9 @@ namespace DonTopo {
         // Ahora sí: ya no queda ningún destroySkinnedRenderObject pendiente que
         // necesite liberar sets de m_descriptorPool.
         vkDestroyDescriptorPool(m_gpu.device(), m_descriptorPool, nullptr);
-        if (m_computeDescPool != VK_NULL_HANDLE)
-        {
-            vkDestroyDescriptorPool(m_gpu.device(), m_computeDescPool, nullptr);
-        }
-        vkDestroyPipeline(m_gpu.device(), m_boneEvalPipeline,      nullptr);
-        vkDestroyPipeline(m_gpu.device(), m_boneHierarchyPipeline, nullptr);
-        vkDestroyPipeline(m_gpu.device(), m_skinningPipeline,       nullptr);
-        vkDestroyPipelineLayout(m_gpu.device(), m_computePipelineLayout, nullptr);
-        vkDestroyDescriptorSetLayout(m_gpu.device(), m_computeDescLayout, nullptr);
+        // Igual que el de arriba: ya no queda ningun destroySkinnedRenderObject
+        // pendiente que necesite liberar sets del pool de compute.
+        m_skinningPass.destroyPipelines(skinningCtx());
         m_skybox.shutdown(m_gpu);
         m_splash.shutdown(m_gpu);
         Gizmos::shutdown(m_gpu);
@@ -717,7 +680,7 @@ namespace DonTopo {
         // El cubemap recien cargado es la fuente del IBL. Una sola vez, aqui: es
         // el punto por el que pasan tanto el editor como DonTopoRuntime, y no
         // depende de nada del editor.
-        precomputeIbl();
+        m_iblPass.precompute(iblCtx());
     }
 
     void Renderer::setCamera(const Camera& camera)
@@ -919,133 +882,6 @@ namespace DonTopo {
         // Un NaN o un infinito colados desde el modelo harían pasar el test de
         // culling de forma impredecible: mejor devolver "sin cota".
         return std::isfinite(R) ? R : 0.0f;
-    }
-
-    // Reparto de los cortes entre cascadas: mezcla del logarítmico (que da
-    // resolución donde de verdad se ve, cerca) y el uniforme (que no deja la
-    // última cascada cubriendo casi todo el mundo). lambda=0.75 tira hacia el
-    // logarítmico, que es lo que se quiere con far grandes.
-    static constexpr float kCascadeLambda = 0.75f;
-    // Alcance máximo de las sombras. Un far de cámara de 5000 repartido entre 4
-    // cascadas dejaría la primera cubriendo cientos de unidades: a 2048² eso son
-    // sombras de bloques. Más allá de esta distancia no hay sombra, igual que
-    // antes no la había fuera de la ortográfica de ±350.
-    static constexpr float kShadowMaxDistance = 500.0f;
-    // Margen por detrás del volumen de cada cascada, en la dirección de la luz.
-    // Sin él, un objeto alto que queda fuera del frustum de la cámara pero cuya
-    // sombra sí cae dentro no se dibujaría en el shadow map.
-    static constexpr float kCasterMargin = 200.0f;
-
-    void Renderer::computeCascades()
-    {
-        for (int i = 0; i < SHADOW_CASCADES; i++) m_cascadeMatrices[i] = glm::mat4(1.0f);
-        m_cascadeSplits = glm::vec4(0.0f);
-        if (m_lights.empty()) return;
-
-        const FrameCamera fc = currentFrameCamera();
-
-        // Esquinas del frustum, desproyectando el cubo NDC. z va de 0 a 1 y no
-        // de -1 a 1 porque ese es el rango que Vulkan clipea: lo que se dibuja
-        // de verdad está siempre entre esos dos planos.
-        const glm::mat4 invViewProj = glm::inverse(fc.proj * fc.view);
-        glm::vec3 cornerNear[4], cornerFar[4];
-        const float ndcX[4] = { -1.0f,  1.0f,  1.0f, -1.0f };
-        const float ndcY[4] = { -1.0f, -1.0f,  1.0f,  1.0f };
-        for (int i = 0; i < 4; i++)
-        {
-            glm::vec4 pn = invViewProj * glm::vec4(ndcX[i], ndcY[i], 0.0f, 1.0f);
-            glm::vec4 pf = invViewProj * glm::vec4(ndcX[i], ndcY[i], 1.0f, 1.0f);
-            if (std::abs(pn.w) < 1e-8f || std::abs(pf.w) < 1e-8f) return;   // proyección degenerada
-            cornerNear[i] = glm::vec3(pn) / pn.w;
-            cornerFar[i]  = glm::vec3(pf) / pf.w;
-        }
-
-        // near/far REALES: la profundidad en view space de esos dos planos. No
-        // se sacan de los coeficientes de fc.proj a propósito — el editor
-        // construye su proyección con glm::perspective (z en [-1,1]) y el
-        // CameraComponent con *RH_ZO, así que los mismos coeficientes
-        // significan cosas distintas y la fórmula tendría que saber cuál está
-        // activa. Los planos z=0 y z=1, en cambio, son los mismos en los dos
-        // casos, y las 4 esquinas de cada uno están a profundidad constante.
-        const float camNear = -(fc.view * glm::vec4(cornerNear[0], 1.0f)).z;
-        const float camFar  = -(fc.view * glm::vec4(cornerFar[0],  1.0f)).z;
-        if (!std::isfinite(camNear) || !std::isfinite(camFar) ||
-            camNear <= 0.0f || camFar <= camNear)
-        {
-            return;
-        }
-
-        // Las esquinas ya están puestas con el far REAL (es el que define los
-        // rayos del frustum); el reparto de cascadas usa el far recortado.
-        const float shadowFar = std::min(camFar, kShadowMaxDistance);
-        if (shadowFar <= camNear) return;
-
-        // Luz direccional: la posición solo da la dirección, igual que antes
-        // (lookAt desde la luz hacia el origen).
-        const glm::vec3 lightPos = glm::vec3(m_lights[0].position);
-        const float     lightLen = glm::length(lightPos);
-        if (lightLen < 1e-6f) return;                       // luz en el origen: sin dirección
-        const glm::vec3 lightDir = -lightPos / lightLen;    // de la luz hacia la escena
-        const glm::vec3 up = std::abs(lightDir.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f)
-                                                          : glm::vec3(0.0f, 1.0f, 0.0f);
-        const glm::mat4 lightRot    = glm::lookAt(glm::vec3(0.0f), lightDir, up);
-        const glm::mat4 invLightRot = glm::inverse(lightRot);
-
-        float prevDist = camNear;
-        for (int c = 0; c < SHADOW_CASCADES; c++)
-        {
-            const float p         = (float)(c + 1) / (float)SHADOW_CASCADES;
-            const float logSplit  = camNear * std::pow(shadowFar / camNear, p);
-            const float uniSplit  = camNear + (shadowFar - camNear) * p;
-            const float dist      = kCascadeLambda * logSplit + (1.0f - kCascadeLambda) * uniSplit;
-            m_cascadeSplits[c]    = dist;
-
-            // Interpolar entre las esquinas cercana y lejana es exacto: la
-            // profundidad en view space varía linealmente a lo largo de ese
-            // segmento. Los factores se calculan contra el far REAL porque es el
-            // que sitúa cornerFar.
-            const float tNear = (prevDist - camNear) / (camFar - camNear);
-            const float tFar  = (dist     - camNear) / (camFar - camNear);
-
-            glm::vec3 corners[8];
-            for (int i = 0; i < 4; i++)
-            {
-                const glm::vec3 ray = cornerFar[i] - cornerNear[i];
-                corners[i]     = cornerNear[i] + ray * tNear;
-                corners[i + 4] = cornerNear[i] + ray * tFar;
-            }
-
-            // Esfera envolvente y no AABB: el radio no depende de hacia dónde
-            // mire la cámara, así que girar en el sitio no cambia el tamaño del
-            // volumen y las sombras no laten.
-            glm::vec3 center(0.0f);
-            for (const glm::vec3& v : corners) center += v;
-            center /= 8.0f;
-            float radius = 0.0f;
-            for (const glm::vec3& v : corners) radius = std::max(radius, glm::length(v - center));
-            // Cuantizar el radio evita que un cambio mínimo de la cámara mueva
-            // el borde del volumen y con él todos los téxeles.
-            radius = std::ceil(radius * 16.0f) / 16.0f;
-            if (radius < 1e-4f) radius = 1e-4f;
-
-            // Snap del centro a téxeles del shadow map, en el espacio de la luz.
-            // Sin esto, avanzar la cámara arrastra el volumen de forma continua
-            // y los bordes de sombra hierven.
-            const float unitsPerTexel = (2.0f * radius) / (float)SHADOW_SIZE;
-            glm::vec3 centerLS = glm::vec3(lightRot * glm::vec4(center, 1.0f));
-            centerLS.x = std::floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
-            centerLS.y = std::floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
-            center = glm::vec3(invLightRot * glm::vec4(centerLS, 1.0f));
-
-            const glm::mat4 lightView = glm::lookAt(center - lightDir * (radius + kCasterMargin),
-                                                    center, up);
-            glm::mat4 lightProj = glm::orthoRH_ZO(-radius, radius, -radius, radius,
-                                                  0.0f, 2.0f * radius + kCasterMargin);
-            lightProj[1][1] *= -1.0f;
-            m_cascadeMatrices[c] = lightProj * lightView;
-
-            prevDist = dist;
-        }
     }
 
     void Renderer::createSwapChain(Window& window)
@@ -1746,7 +1582,7 @@ namespace DonTopo {
             m_statCulled    = 0;
         }
 
-        recordComputePass(m_commandBuffers[m_currentFrame]);
+        m_skinningPass.record(skinningCtx(), m_commandBuffers[m_currentFrame]);
         if (perfStamp)
         {
             vkCmdWriteTimestamp(m_commandBuffers[m_currentFrame], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
@@ -1867,8 +1703,8 @@ namespace DonTopo {
             // Forward+: uno por frame y comun a TODOS los draws del pass (estatico
             // y skinned), asi que se bindea una sola vez aqui. Va DENTRO del pass
             // de escena y no antes: el pass de sombras y el depth pre-pass usan
-            // m_shadowPipelineLayout, que solo declara dos sets, y bindear con el
-            // deja el set 2 sin definir.
+            // el pipeline layout de ShadowPass, que solo declara dos sets, y
+            // bindear con el deja el set 2 sin definir.
             const VkDescriptorSet fpSceneSet = m_fpPass.set(m_currentFrame);
             if (fpSceneSet != VK_NULL_HANDLE)
             {
@@ -2934,8 +2770,8 @@ namespace DonTopo {
 
             VkDescriptorImageInfo shadowInfo{};
             shadowInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-            shadowInfo.imageView   = m_shadowView;
-            shadowInfo.sampler     = m_shadowSampler;
+            shadowInfo.imageView   = m_shadowPass.view();
+            shadowInfo.sampler     = m_shadowPass.sampler();
 
             VkDescriptorImageInfo ormInfo{};
             ormInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -2946,13 +2782,13 @@ namespace DonTopo {
             // init(), asi que estos writes valen aunque no haya skybox.
             VkDescriptorImageInfo irradianceInfo{};
             irradianceInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            irradianceInfo.imageView   = m_iblIrradianceView;
-            irradianceInfo.sampler     = m_iblSampler;
+            irradianceInfo.imageView   = m_iblPass.irradianceView();
+            irradianceInfo.sampler     = m_iblPass.sampler();
 
             VkDescriptorImageInfo prefilterInfo{};
             prefilterInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            prefilterInfo.imageView   = m_iblPrefilterView;
-            prefilterInfo.sampler     = m_iblSampler;
+            prefilterInfo.imageView   = m_iblPass.prefilterView();
+            prefilterInfo.sampler     = m_iblPass.sampler();
 
             VkWriteDescriptorSet writes[7]{};
             writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[0].dstSet = obj.descriptorSets[i];
@@ -3093,9 +2929,9 @@ namespace DonTopo {
         // pass de sombras.
         for (int i = 0; i < SHADOW_CASCADES; i++)
         {
-            ubo.lightSpaceMatrix[i] = m_cascadeMatrices[i];
+            ubo.lightSpaceMatrix[i] = m_shadowPass.cascadeMatrix(i);
         }
-        ubo.cascadeSplits = m_cascadeSplits;
+        ubo.cascadeSplits = m_shadowPass.cascadeSplits();
 
         memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));
         // El bake de una reflection probe parte de este mismo buffer (luces y
@@ -3312,300 +3148,8 @@ namespace DonTopo {
             vkFreeDescriptorSets(m_gpu.device(), m_descriptorPool, MAX_FRAMES, obj.descriptorSets);
     }
 
-    void Renderer::createShadowResources()
-    {
-        // 1. Imagen depth para shadow map: un texture array con una capa por
-        // cascada. No usa m_res.createImage porque esa fija arrayLayers a 1 y
-        // la firma la comparten todas las texturas del motor.
-        VkImageCreateInfo imageInfo{};
-        imageInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        imageInfo.imageType     = VK_IMAGE_TYPE_2D;
-        imageInfo.format        = VK_FORMAT_D32_SFLOAT;
-        imageInfo.extent        = { SHADOW_SIZE, SHADOW_SIZE, 1 };
-        imageInfo.mipLevels     = 1;
-        imageInfo.arrayLayers   = SHADOW_CASCADES;
-        imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
-        imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        imageInfo.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        if (vkCreateImage(m_gpu.device(), &imageInfo, nullptr, &m_shadowImage) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create shadow image!");
-        }
-
-        VkMemoryRequirements memReq;
-        vkGetImageMemoryRequirements(m_gpu.device(), m_shadowImage, &memReq);
-        VkMemoryAllocateInfo memAlloc{};
-        memAlloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        memAlloc.allocationSize  = memReq.size;
-        memAlloc.memoryTypeIndex = m_gpu.findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        if (vkAllocateMemory(m_gpu.device(), &memAlloc, nullptr, &m_shadowMemory) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to allocate shadow image memory!");
-        }
-        vkBindImageMemory(m_gpu.device(), m_shadowImage, m_shadowMemory, 0);
-
-        // 2. Image views: una del array entero para muestrear, y una por capa
-        // para colgarle un framebuffer.
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType                          = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image                          = m_shadowImage;
-        viewInfo.viewType                       = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-        viewInfo.format                         = VK_FORMAT_D32_SFLOAT;
-        viewInfo.subresourceRange.aspectMask    = VK_IMAGE_ASPECT_DEPTH_BIT;
-        viewInfo.subresourceRange.layerCount    = SHADOW_CASCADES;
-        viewInfo.subresourceRange.levelCount    = 1;
-        if(vkCreateImageView(m_gpu.device(), &viewInfo, nullptr, &m_shadowView) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create shadow image view!");
-        }
-
-        for (uint32_t c = 0; c < SHADOW_CASCADES; c++)
-        {
-            VkImageViewCreateInfo layerInfo = viewInfo;
-            layerInfo.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
-            layerInfo.subresourceRange.baseArrayLayer = c;
-            layerInfo.subresourceRange.layerCount     = 1;
-            if (vkCreateImageView(m_gpu.device(), &layerInfo, nullptr, &m_shadowLayerViews[c]) != VK_SUCCESS)
-            {
-                throw std::runtime_error("failed to create shadow layer view!");
-            }
-        }
-
-        // 3. Sampler de comparación (PCF listo)
-        VkSamplerCreateInfo samplerInfo{};
-        samplerInfo.sType                   = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        samplerInfo.magFilter               = VK_FILTER_LINEAR;
-        samplerInfo.minFilter               = VK_FILTER_LINEAR;
-        samplerInfo.addressModeU            = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-        samplerInfo.addressModeV            = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-        samplerInfo.addressModeW            = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-        samplerInfo.borderColor             = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
-        samplerInfo.compareEnable           = VK_TRUE;
-        samplerInfo.compareOp               = VK_COMPARE_OP_LESS_OR_EQUAL;
-        samplerInfo.mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        if(vkCreateSampler(m_gpu.device(), &samplerInfo, nullptr, &m_shadowSampler) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create shadow sampler!");
-        }
-
-        // 4. Render pass depth-only
-        VkAttachmentDescription depthAttachment{};
-        depthAttachment.format         = VK_FORMAT_D32_SFLOAT;
-        depthAttachment.samples        = VK_SAMPLE_COUNT_1_BIT;
-        depthAttachment.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        depthAttachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-        depthAttachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        depthAttachment.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-        depthAttachment.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        
-        VkAttachmentReference depthAttachmentRef{0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
-
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.pDepthStencilAttachment = &depthAttachmentRef;
-
-        VkSubpassDependency dependencies[2]{};
-        dependencies[0].srcSubpass      = VK_SUBPASS_EXTERNAL;
-        dependencies[0].dstSubpass      = 0;
-        dependencies[0].srcStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        dependencies[0].dstStageMask    = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        dependencies[0].srcAccessMask   = VK_ACCESS_SHADER_READ_BIT;
-        dependencies[0].dstAccessMask   = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        dependencies[0].dependencyFlags  = VK_DEPENDENCY_BY_REGION_BIT;
-        dependencies[1].srcSubpass      = 0;
-        dependencies[1].dstSubpass      = VK_SUBPASS_EXTERNAL;
-        dependencies[1].srcStageMask    = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        dependencies[1].dstStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        dependencies[1].srcAccessMask   = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        dependencies[1].dstAccessMask   = VK_ACCESS_SHADER_READ_BIT;
-        dependencies[1].dependencyFlags  = VK_DEPENDENCY_BY_REGION_BIT;
-
-        VkRenderPassCreateInfo renderPassInfo{};
-        renderPassInfo.sType            = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        renderPassInfo.attachmentCount   = 1;
-        renderPassInfo.pAttachments      = &depthAttachment;
-        renderPassInfo.subpassCount      = 1;
-        renderPassInfo.pSubpasses        = &subpass;
-        renderPassInfo.dependencyCount   = 2;
-        renderPassInfo.pDependencies     = dependencies;
-        if(vkCreateRenderPass(m_gpu.device(), &renderPassInfo, nullptr, &m_shadowRenderPass) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create shadow render pass!");
-        }
-
-         // 5. Framebuffers: uno por cascada, cada uno sobre su capa. Todos
-         // comparten el render pass (el formato del attachment es el mismo).
-         for (uint32_t c = 0; c < SHADOW_CASCADES; c++)
-         {
-            VkFramebufferCreateInfo fbInfo{};
-            fbInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-            fbInfo.renderPass      = m_shadowRenderPass;
-            fbInfo.attachmentCount = 1;
-            fbInfo.pAttachments    = &m_shadowLayerViews[c];
-            fbInfo.width           = SHADOW_SIZE;
-            fbInfo.height          = SHADOW_SIZE;
-            fbInfo.layers          = 1;
-            if (vkCreateFramebuffer(m_gpu.device(), &fbInfo, nullptr, &m_shadowFramebuffers[c]) != VK_SUCCESS)
-            {
-                throw std::runtime_error("failed to create shadow framebuffer!");
-            }
-         }
-
-        // 6. Pipeline (vertex-only, sin color attachments)
-        auto vertCode = loadShaderFile("shaders/shadow.vert.spv");
-        VkShaderModule vertModule = createShaderModule(vertCode);
-
-        VkPipelineShaderStageCreateInfo vertStage{};
-        vertStage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        vertStage.stage  = VK_SHADER_STAGE_VERTEX_BIT;
-        vertStage.module = vertModule;
-        vertStage.pName  = "main";
-
-        VkVertexInputBindingDescription bindingDesc{};
-        bindingDesc.binding   = 0;
-        bindingDesc.stride    = sizeof(Vertex);
-        bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-        VkVertexInputAttributeDescription attrDesc{};
-        attrDesc.binding  = 0;
-        attrDesc.location = 0;
-        attrDesc.format   = VK_FORMAT_R32G32B32_SFLOAT;
-        attrDesc.offset   = offsetof(Vertex, pos);
-
-        VkPipelineVertexInputStateCreateInfo vertexInput{};
-        vertexInput.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-        vertexInput.vertexBindingDescriptionCount   = 1;
-        vertexInput.pVertexBindingDescriptions      = &bindingDesc;
-        vertexInput.vertexAttributeDescriptionCount = 1;
-        vertexInput.pVertexAttributeDescriptions    = &attrDesc;
-
-        VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-        inputAssembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-        VkPipelineViewportStateCreateInfo viewportState{};
-        viewportState.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-        viewportState.viewportCount = 1;
-        viewportState.scissorCount  = 1;
-
-        VkPipelineRasterizationStateCreateInfo rasterizer{};
-        rasterizer.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-        rasterizer.polygonMode             = VK_POLYGON_MODE_FILL;
-        rasterizer.cullMode                = VK_CULL_MODE_NONE;
-        rasterizer.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-        rasterizer.lineWidth               = 1.0f;
-        rasterizer.depthBiasEnable         = VK_TRUE;
-        rasterizer.depthBiasConstantFactor = 1.25f;
-        rasterizer.depthBiasSlopeFactor    = 1.75f;
-
-        VkPipelineMultisampleStateCreateInfo multisampling{};
-        multisampling.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-        VkPipelineDepthStencilStateCreateInfo depthStencil{};
-        depthStencil.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-        depthStencil.depthTestEnable  = VK_TRUE;
-        depthStencil.depthWriteEnable = VK_TRUE;
-        depthStencil.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
-
-        VkPipelineColorBlendStateCreateInfo colorBlend{};
-        colorBlend.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-        colorBlend.attachmentCount = 0; // sin color attachments
-
-        VkDynamicState dynStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-        VkPipelineDynamicStateCreateInfo dynamicState{};
-        dynamicState.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-        dynamicState.dynamicStateCount = 2;
-        dynamicState.pDynamicStates    = dynStates;
-
-        // El model matrix NO va por push constant: shadow.vert lo saca del SSBO
-        // de instancias (set 1) por gl_InstanceIndex, igual que triangle.vert.
-        // El único push constant es el índice de cascada, que dice cuál de las
-        // matrices del UBO usar. Este layout es propio del pass de sombras y no
-        // lo comparte ningún otro pipeline, así que el rango de PushData que
-        // usan triangle/pbr/outline no se toca.
-        VkPushConstantRange pcr{};
-        pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-        pcr.offset     = 0;
-        pcr.size       = sizeof(uint32_t);
-
-        VkDescriptorSetLayout setLayouts[] = { m_descriptorSetLayout, m_instanceDescLayout };
-
-        VkPipelineLayoutCreateInfo layoutInfo{};
-        layoutInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        layoutInfo.setLayoutCount         = 2;
-        layoutInfo.pSetLayouts            = setLayouts;
-        layoutInfo.pushConstantRangeCount = 1;
-        layoutInfo.pPushConstantRanges    = &pcr;
-        if (vkCreatePipelineLayout(m_gpu.device(), &layoutInfo, nullptr, &m_shadowPipelineLayout) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create shadow pipeline layout!");
-        }            
-
-        VkGraphicsPipelineCreateInfo pipelineInfo{};
-        pipelineInfo.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        pipelineInfo.stageCount          = 1;
-        pipelineInfo.pStages             = &vertStage;
-        pipelineInfo.pVertexInputState   = &vertexInput;
-        pipelineInfo.pInputAssemblyState = &inputAssembly;
-        pipelineInfo.pViewportState      = &viewportState;
-        pipelineInfo.pRasterizationState = &rasterizer;
-        pipelineInfo.pMultisampleState   = &multisampling;
-        pipelineInfo.pDepthStencilState  = &depthStencil;
-        pipelineInfo.pColorBlendState    = &colorBlend;
-        pipelineInfo.pDynamicState       = &dynamicState;
-        pipelineInfo.layout              = m_shadowPipelineLayout;
-        pipelineInfo.renderPass          = m_shadowRenderPass;
-        if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_shadowPipeline) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create shadow pipeline!");
-        }
-
-        // Variante para las mallas skinned. Todo el estado se copia del de
-        // arriba (mismo bias, mismo depth, mismas cascadas, mismo layout), así
-        // que la sombra de los estáticos no cambia. Lo único distinto es el
-        // vertex input.
-        //
-        // stride 80, no sizeof(SkinnedVertex): ese es el vértice de ENTRADA del
-        // compute (7×vec4, con índices y pesos de hueso). Lo que se dibuja aquí
-        // es su SALIDA, el OutputVertex de skinning.comp, que son 5×vec4 y lleva
-        // la posición en el primero. Es el mismo stride que declara el pipeline
-        // skinned del pass principal.
-        VkVertexInputBindingDescription skinnedBinding{};
-        skinnedBinding.binding   = 0;
-        skinnedBinding.stride    = 5 * (uint32_t)sizeof(glm::vec4);  // 80 bytes
-        skinnedBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-        // pos es un vec4 (std430 del compute); shadow.vert solo declara vec3, y
-        // leer 3 de los 4 floats es legal.
-        VkVertexInputAttributeDescription skinnedAttr{};
-        skinnedAttr.binding  = 0;
-        skinnedAttr.location = 0;
-        skinnedAttr.format   = VK_FORMAT_R32G32B32_SFLOAT;
-        skinnedAttr.offset   = 0;
-
-        VkPipelineVertexInputStateCreateInfo skinnedVertexInput = vertexInput;
-        skinnedVertexInput.pVertexBindingDescriptions   = &skinnedBinding;
-        skinnedVertexInput.pVertexAttributeDescriptions = &skinnedAttr;
-
-        VkGraphicsPipelineCreateInfo skinnedPipelineInfo = pipelineInfo;
-        skinnedPipelineInfo.pVertexInputState = &skinnedVertexInput;
-        if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &skinnedPipelineInfo, nullptr, &m_shadowSkinnedPipeline) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create skinned shadow pipeline!");
-        }
-
-        vkDestroyShaderModule(m_gpu.device(), vertModule, nullptr);
-    }
-
     void Renderer::recordShadowPass(VkCommandBuffer cmd)
     {
-        VkClearValue clearDepth{};
-        clearDepth.depthStencil = { 1.0f, 0 };
-
         // Sin luces no hay matrices que extraer (computeCascades deja la
         // identidad, cuyo frustum es el cubo unidad y culearía casi todo). Aun
         // así hay que abrir los N render pass: son los que limpian las capas y
@@ -3614,38 +3158,23 @@ namespace DonTopo {
         // nadie va a muestrear (numLights = 0 apaga el shadow en el shader).
         const bool drawCasters = !m_lights.empty();
 
-        VkViewport vp {0.0f, 0.0f, (float)SHADOW_SIZE, (float)SHADOW_SIZE, 0.0f, 1.0f};
-        VkRect2D sc {{0,0}, {SHADOW_SIZE, SHADOW_SIZE}};
-
         for (uint32_t cascade = 0; cascade < SHADOW_CASCADES; cascade++)
         {
-            VkRenderPassBeginInfo renderPassInfo{};
-            renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-            renderPassInfo.renderPass        = m_shadowRenderPass;
-            renderPassInfo.framebuffer       = m_shadowFramebuffers[cascade];
-            renderPassInfo.renderArea.extent = { SHADOW_SIZE, SHADOW_SIZE };
-            renderPassInfo.clearValueCount   = 1;
-            renderPassInfo.pClearValues      = &clearDepth;
-
-            vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+            // Render pass, viewport, scissor, pipeline y push del índice: del
+            // pase. Los draws de aquí abajo son del Renderer.
+            m_shadowPass.beginCascade(cmd, cascade);
 
             if (!drawCasters)
             {
-                vkCmdEndRenderPass(cmd);
+                m_shadowPass.endCascade(cmd);
                 continue;
             }
-
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline);
-            vkCmdSetViewport(cmd, 0, 1, &vp);
-            vkCmdSetScissor(cmd, 0, 1, &sc);
-            vkCmdPushConstants(cmd, m_shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
-                               0, sizeof(uint32_t), &cascade);
 
             // Culling por el frustum de ESTA cascada, no por el de la cámara ni
             // por el de la cascada mayor: un objeto que la cámara no ve puede
             // seguir proyectando sombra sobre lo que sí se ve, y un objeto que
             // cae en la cascada lejana no pinta nada en el mapa de la cercana.
-            const Frustum lightFrustum = frustumFromViewProj(m_cascadeMatrices[cascade]);
+            const Frustum lightFrustum = frustumFromViewProj(m_shadowPass.cascadeMatrix(cascade));
 
             // Mismas guardas por objeto que el pass principal, con el frustum de
             // la luz. El agrupado es independiente del de la cámara: los
@@ -3678,13 +3207,13 @@ namespace DonTopo {
             m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
                 dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
 
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout,
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPass.pipelineLayout(),
                 1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
 
             for (const InstanceBatch& batch : m_instanceBatches)
             {
                 const SharedGpuMesh* gpu = m_sharedMeshes.get(batch.sharedIndex);
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout, 0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPass.pipelineLayout(), 0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
 
                 VkBuffer vb[] = { gpu->vertexBuffer };
                 VkDeviceSize offsets[] = { 0 };
@@ -3693,7 +3222,7 @@ namespace DonTopo {
                 vkCmdDrawIndexed(cmd, gpu->indexCount, batch.instanceCount, 0, 0, batch.firstInstance);
             }
 
-            // Skinned. recordComputePass corre justo antes en este mismo command
+            // Skinned. SkinningPass::record corre justo antes en este mismo command
             // buffer y deja outputVertexBuffer con la pose de ESTE frame y una
             // barrera compute → VERTEX_INPUT, así que aquí ya se puede leer como
             // vertex buffer. Mismo shader, mismo layout, mismo SSBO de
@@ -3723,19 +3252,17 @@ namespace DonTopo {
 
                 if (!skinnedBound)
                 {
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowSkinnedPipeline);
                     // El layout es el mismo, así que el push constant de la
-                    // cascada sobrevive al cambio de pipeline; se reescribe por
-                    // no depender de esa compatibilidad.
-                    vkCmdPushConstants(cmd, m_shadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
-                                       0, sizeof(uint32_t), &cascade);
+                    // cascada sobrevive al cambio de pipeline; el pase lo
+                    // reescribe por no depender de esa compatibilidad.
+                    m_shadowPass.bindSkinnedPipeline(cmd, cascade);
                     skinnedBound = true;
                 }
 
                 // Set 0 solo por el UBO de la cascada (binding 0): shadow.vert no
                 // muestrea nada, así que cualquier descriptor set del material
                 // sirve mientras sea del layout que declara el pipeline.
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout,
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPass.pipelineLayout(),
                     0, 1, &sobj.matGfx[0].descSets[m_currentFrame], 0, nullptr);
 
                 VkBuffer svb[] = { sobj.outputVertexBuffer };
@@ -3746,1321 +3273,16 @@ namespace DonTopo {
                     vkCmdDrawIndexed(cmd, sm.indexCount, 1, sm.indexStart, 0, instanceIndex);
             }
 
-            vkCmdEndRenderPass(cmd);
+            m_shadowPass.endCascade(cmd);
         }
     }
 
-    // ── IBL ─────────────────────────────────────────────────────────────────
-    // Formato de los dos cubemaps. R16G16B16A16_SFLOAT tiene soporte OBLIGATORIO
-    // como storage image en Vulkan, asi que no hace falta consultar
-    // vkGetPhysicalDeviceFormatProperties. Con 8 bits el especular prefiltrado
-    // se bandearia en las zonas de gradiente suave.
-    static constexpr VkFormat kIblFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-
-    void Renderer::createIblResources()
+    // Los cuatro pipelines GRAFICOS de las mallas con huesos. Comparten
+    // shaders con los estaticos y solo cambian el vertex input (stride 80,
+    // la salida del compute de skinning). Se rehacen al cambiar el MSAA, que
+    // es lo que los separa de los tres compute de SkinningPass.
+    void Renderer::createSkinnedGraphicsPipelines()
     {
-        // 1. Las dos imagenes. No usan m_res.createImage: esa fija arrayLayers y
-        // mipLevels a 1, y aqui hacen falta 6 capas (y mips en el prefiltrado).
-        auto makeCube = [&](uint32_t size, uint32_t mips, VkImage& image, VkDeviceMemory& memory)
-        {
-            VkImageCreateInfo ci{};
-            ci.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-            ci.flags         = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-            ci.imageType     = VK_IMAGE_TYPE_2D;
-            ci.format        = kIblFormat;
-            ci.extent        = { size, size, 1 };
-            ci.mipLevels     = mips;
-            ci.arrayLayers   = 6;
-            ci.samples       = VK_SAMPLE_COUNT_1_BIT;
-            ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
-            // TRANSFER_DST es pa el clear neutro de mas abajo, no pa una copia.
-            ci.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT
-                             | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-            ci.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-            ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            if (vkCreateImage(m_gpu.device(), &ci, nullptr, &image) != VK_SUCCESS)
-                throw std::runtime_error("failed to create IBL cubemap image!");
-
-            VkMemoryRequirements memReq;
-            vkGetImageMemoryRequirements(m_gpu.device(), image, &memReq);
-            VkMemoryAllocateInfo memAlloc{};
-            memAlloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            memAlloc.allocationSize  = memReq.size;
-            memAlloc.memoryTypeIndex = m_gpu.findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-            if (vkAllocateMemory(m_gpu.device(), &memAlloc, nullptr, &memory) != VK_SUCCESS)
-                throw std::runtime_error("failed to allocate IBL cubemap memory!");
-            vkBindImageMemory(m_gpu.device(), image, memory, 0);
-        };
-
-        makeCube(IBL_IRRADIANCE_SIZE, 1,                  m_iblIrradianceImage, m_iblIrradianceMemory);
-        makeCube(IBL_PREFILTER_SIZE,  IBL_PREFILTER_MIPS, m_iblPrefilterImage,  m_iblPrefilterMemory);
-
-        // 2. Vistas. La CUBE es la que va en los descriptor sets de los objetos;
-        // las 2D_ARRAY solo existen pa que el compute las escriba como storage
-        // image, una por nivel de mip porque imageStore no elige nivel.
-        auto makeView = [&](VkImage image, VkImageViewType type, uint32_t baseMip, uint32_t mipCount, VkImageView& view)
-        {
-            VkImageViewCreateInfo vi{};
-            vi.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            vi.image                           = image;
-            vi.viewType                        = type;
-            vi.format                          = kIblFormat;
-            vi.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-            vi.subresourceRange.baseMipLevel   = baseMip;
-            vi.subresourceRange.levelCount     = mipCount;
-            vi.subresourceRange.baseArrayLayer = 0;
-            vi.subresourceRange.layerCount     = 6;
-            if (vkCreateImageView(m_gpu.device(), &vi, nullptr, &view) != VK_SUCCESS)
-                throw std::runtime_error("failed to create IBL image view!");
-        };
-
-        makeView(m_iblIrradianceImage, VK_IMAGE_VIEW_TYPE_CUBE,     0, 1, m_iblIrradianceView);
-        makeView(m_iblIrradianceImage, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 0, 1, m_iblIrradianceStore);
-        makeView(m_iblPrefilterImage,  VK_IMAGE_VIEW_TYPE_CUBE,     0, IBL_PREFILTER_MIPS, m_iblPrefilterView);
-        for (uint32_t m = 0; m < IBL_PREFILTER_MIPS; m++)
-            makeView(m_iblPrefilterImage, VK_IMAGE_VIEW_TYPE_2D_ARRAY, m, 1, m_iblPrefilterStore[m]);
-
-        // 3. Sampler comun. maxLod cubre los mips del prefiltrado; la vista de
-        // irradiancia solo tiene un nivel, asi que ahi el LOD se recorta solo.
-        VkSamplerCreateInfo si{};
-        si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        si.magFilter    = VK_FILTER_LINEAR;
-        si.minFilter    = VK_FILTER_LINEAR;
-        si.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        si.maxLod       = (float)IBL_PREFILTER_MIPS;
-        if (vkCreateSampler(m_gpu.device(), &si, nullptr, &m_iblSampler) != VK_SUCCESS)
-            throw std::runtime_error("failed to create IBL sampler!");
-
-        // 4. Contenido neutro. Es lo que se ve si nunca se llama a initSkybox (o
-        // si el cubemap no carga): el mismo ambiente plano de antes, en vez de
-        // un descriptor apuntando a basura.
-        {
-            VkCommandBuffer cmd = m_gpu.beginOneTimeCommands();
-
-            VkImageMemoryBarrier b{};
-            b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            b.subresourceRange.layerCount = 6;
-
-            auto clearTo = [&](VkImage image, uint32_t mips, const VkClearColorValue& color)
-            {
-                b.image                       = image;
-                b.subresourceRange.levelCount = mips;
-
-                b.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
-                b.newLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                b.srcAccessMask = 0;
-                b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                     0, 0, nullptr, 0, nullptr, 1, &b);
-
-                vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                     &color, 1, &b.subresourceRange);
-
-                b.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                b.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                     0, 0, nullptr, 0, nullptr, 1, &b);
-            };
-
-            // Los mismos numeros que tenia el ambiente hemisferico de pbr.frag:
-            // la media de cielo y suelo pal difuso, el cielo pal especular.
-            const VkClearColorValue irradianceNeutral{{ 0.075f, 0.080f, 0.090f, 1.0f }};
-            const VkClearColorValue prefilterNeutral {{ 0.100f, 0.120f, 0.150f, 1.0f }};
-            clearTo(m_iblIrradianceImage, 1,                  irradianceNeutral);
-            clearTo(m_iblPrefilterImage,  IBL_PREFILTER_MIPS, prefilterNeutral);
-
-            m_gpu.endOneTimeCommands(cmd);
-        }
-
-        // 5. Descriptor set layout, pool y pipelines de la precomputacion. Layout
-        // propio y no el de createComputePipelines: ese son 8 storage buffers.
-        VkDescriptorSetLayoutBinding iblBindings[2]{};
-        iblBindings[0].binding         = 0;
-        iblBindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        iblBindings[0].descriptorCount = 1;
-        iblBindings[0].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-        iblBindings[1].binding         = 1;
-        iblBindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        iblBindings[1].descriptorCount = 1;
-        iblBindings[1].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-
-        VkDescriptorSetLayoutCreateInfo dsl{};
-        dsl.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dsl.bindingCount = 2;
-        dsl.pBindings    = iblBindings;
-        if (vkCreateDescriptorSetLayout(m_gpu.device(), &dsl, nullptr, &m_iblDescLayout) != VK_SUCCESS)
-            throw std::runtime_error("failed to create IBL descriptor set layout!");
-
-        VkPushConstantRange pcr{};
-        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        pcr.offset     = 0;
-        pcr.size       = sizeof(IblPush);
-
-        VkPipelineLayoutCreateInfo pli{};
-        pli.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pli.setLayoutCount         = 1;
-        pli.pSetLayouts            = &m_iblDescLayout;
-        pli.pushConstantRangeCount = 1;
-        pli.pPushConstantRanges    = &pcr;
-        if (vkCreatePipelineLayout(m_gpu.device(), &pli, nullptr, &m_iblPipelineLayout) != VK_SUCCESS)
-            throw std::runtime_error("failed to create IBL pipeline layout!");
-
-        // Un set pa la irradiancia y uno por mip del prefiltrado: cada uno lleva
-        // una storage image distinta, asi que no se pueden reutilizar.
-        const uint32_t setCount = 1 + IBL_PREFILTER_MIPS;
-        VkDescriptorPoolSize iblSizes[2]{};
-        iblSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        iblSizes[0].descriptorCount = setCount;
-        iblSizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        iblSizes[1].descriptorCount = setCount;
-
-        VkDescriptorPoolCreateInfo dpi{};
-        dpi.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpi.poolSizeCount = 2;
-        dpi.pPoolSizes    = iblSizes;
-        dpi.maxSets       = setCount;
-        if (vkCreateDescriptorPool(m_gpu.device(), &dpi, nullptr, &m_iblDescPool) != VK_SUCCESS)
-            throw std::runtime_error("failed to create IBL descriptor pool!");
-
-        auto makeIblPipeline = [&](const std::string& spv, VkPipeline& pipeline)
-        {
-            auto code   = loadShaderFile(spv);
-            auto module = createShaderModule(code);
-
-            VkComputePipelineCreateInfo ci{};
-            ci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            ci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            ci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            ci.stage.module = module;
-            ci.stage.pName  = "main";
-            ci.layout       = m_iblPipelineLayout;
-            if (vkCreateComputePipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline) != VK_SUCCESS)
-                throw std::runtime_error("failed to create compute pipeline: " + spv);
-
-            vkDestroyShaderModule(m_gpu.device(), module, nullptr);
-        };
-
-        makeIblPipeline("shaders/ibl_irradiance.comp.spv", m_iblIrradiancePipeline);
-        makeIblPipeline("shaders/ibl_prefilter.comp.spv",  m_iblPrefilterPipeline);
-    }
-
-    void Renderer::precomputeIbl()
-    {
-        // Sin cubemap de entorno no hay nada que convolucionar: se quedan los
-        // valores neutros que dejo createIblResources.
-        if (!m_skybox.isInitialized()) return;
-
-        const auto t0 = std::chrono::steady_clock::now();
-
-        // Reset y no free: initSkybox podria llamarse otra vez (cambio de
-        // entorno) y los sets de la vez anterior ya no valen.
-        vkResetDescriptorPool(m_gpu.device(), m_iblDescPool, 0);
-
-        const uint32_t setCount = 1 + IBL_PREFILTER_MIPS;
-        std::vector<VkDescriptorSetLayout> layouts(setCount, m_iblDescLayout);
-        std::vector<VkDescriptorSet>       sets(setCount, VK_NULL_HANDLE);
-
-        VkDescriptorSetAllocateInfo ai{};
-        ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        ai.descriptorPool     = m_iblDescPool;
-        ai.descriptorSetCount = setCount;
-        ai.pSetLayouts        = layouts.data();
-        if (vkAllocateDescriptorSets(m_gpu.device(), &ai, sets.data()) != VK_SUCCESS)
-            throw std::runtime_error("failed to allocate IBL descriptor sets!");
-
-        VkDescriptorImageInfo envInfo{};
-        envInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        envInfo.imageView   = m_skybox.cubeView();
-        envInfo.sampler     = m_skybox.cubeSampler();
-
-        // Los VkDescriptorImageInfo tienen que seguir vivos hasta el
-        // vkUpdateDescriptorSets, asi que el vector se dimensiona de golpe.
-        std::vector<VkDescriptorImageInfo>  storeInfos(setCount);
-        std::vector<VkWriteDescriptorSet>   writes;
-        writes.reserve(setCount * 2);
-        for (uint32_t s = 0; s < setCount; s++)
-        {
-            storeInfos[s].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            storeInfos[s].imageView   = (s == 0) ? m_iblIrradianceStore : m_iblPrefilterStore[s - 1];
-
-            VkWriteDescriptorSet src{};
-            src.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            src.dstSet          = sets[s];
-            src.dstBinding      = 0;
-            src.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            src.descriptorCount = 1;
-            src.pImageInfo      = &envInfo;
-            writes.push_back(src);
-
-            VkWriteDescriptorSet dst = src;
-            dst.dstBinding     = 1;
-            dst.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            dst.pImageInfo     = &storeInfos[s];
-            writes.push_back(dst);
-        }
-        vkUpdateDescriptorSets(m_gpu.device(), (uint32_t)writes.size(), writes.data(), 0, nullptr);
-
-        VkCommandBuffer cmd = m_gpu.beginOneTimeCommands();
-
-        VkImageMemoryBarrier barriers[2]{};
-        for (int i = 0; i < 2; i++)
-        {
-            barriers[i].sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barriers[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            barriers[i].subresourceRange.layerCount = 6;
-        }
-        barriers[0].image = m_iblIrradianceImage;
-        barriers[0].subresourceRange.levelCount = 1;
-        barriers[1].image = m_iblPrefilterImage;
-        barriers[1].subresourceRange.levelCount = IBL_PREFILTER_MIPS;
-
-        // A GENERAL: es el unico layout que admite imageStore.
-        for (int i = 0; i < 2; i++)
-        {
-            barriers[i].oldLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            barriers[i].newLayout     = VK_IMAGE_LAYOUT_GENERAL;
-            barriers[i].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            barriers[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        }
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 2, barriers);
-
-        // Irradiancia: una invocacion por texel, 6 capas en z.
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_iblIrradiancePipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_iblPipelineLayout,
-                                0, 1, &sets[0], 0, nullptr);
-        // intensity 1.0: el IBL global no escala nada, asi que los dos cubemaps
-        // salen bit a bit como antes de que el push llevara ese campo.
-        IblPush push{ 0.0f, IBL_IRRADIANCE_SIZE, 1.0f };
-        vkCmdPushConstants(cmd, m_iblPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-        const uint32_t irrGroups = (IBL_IRRADIANCE_SIZE + 7) / 8;
-        vkCmdDispatch(cmd, irrGroups, irrGroups, 6);
-
-        // Prefiltrado: un dispatch por mip. Escriben regiones disjuntas y nadie
-        // las lee entre medias, asi que no hacen falta barreras intermedias.
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_iblPrefilterPipeline);
-        for (uint32_t m = 0; m < IBL_PREFILTER_MIPS; m++)
-        {
-            const uint32_t mipSize = IBL_PREFILTER_SIZE >> m;
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_iblPipelineLayout,
-                                    0, 1, &sets[1 + m], 0, nullptr);
-            IblPush mipPush{ (float)m / (float)(IBL_PREFILTER_MIPS - 1), mipSize, 1.0f };
-            vkCmdPushConstants(cmd, m_iblPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(mipPush), &mipPush);
-            const uint32_t groups = (mipSize + 7) / 8;
-            vkCmdDispatch(cmd, groups, groups, 6);
-        }
-
-        for (int i = 0; i < 2; i++)
-        {
-            barriers[i].oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
-            barriers[i].newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            barriers[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            barriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        }
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 2, barriers);
-
-        // Bloquea hasta que la cola termina, asi que el ms medido incluye la GPU.
-        m_gpu.endOneTimeCommands(cmd);
-
-        const double ms = std::chrono::duration<double, std::milli>(
-                              std::chrono::steady_clock::now() - t0).count();
-        printf("IBL precompute: %.2f ms (irradiance %ux%u, prefilter %ux%u x%u mips)\n",
-               ms, IBL_IRRADIANCE_SIZE, IBL_IRRADIANCE_SIZE,
-               IBL_PREFILTER_SIZE, IBL_PREFILTER_SIZE, IBL_PREFILTER_MIPS);
-        fflush(stdout);
-    }
-
-    // ── Reflection probes ───────────────────────────────────────────────────
-    // Nada de lo que hay aqui abajo graba un solo comando en el command buffer
-    // del frame: el bake son submits propios, disparados por un evento. Con las
-    // sondas ya bakeadas el frame cuesta exactamente lo mismo que con ninguna,
-    // porque lo unico que cambia son DOS descriptores (bindings 5 y 6 del set 0)
-    // que ya estaban ahi apuntando al IBL global.
-
-    void Renderer::createProbeCapture()
-    {
-        // Cubemap intermedio del bake, UNO solo pa todas las sondas: solo tiene
-        // que vivir entre el render de las 6 caras y la convolucion. Se crea la
-        // primera vez que hay algo que bakear, asi que una escena sin sondas no
-        // gasta ni un byte por esta feature.
-        VkImageCreateInfo ci{};
-        ci.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        ci.flags         = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-        ci.imageType     = VK_IMAGE_TYPE_2D;
-        ci.format        = kIblFormat;
-        ci.extent        = { PROBE_FACE_SIZE, PROBE_FACE_SIZE, 1 };
-        ci.mipLevels     = 1;
-        ci.arrayLayers   = 6;
-        ci.samples       = VK_SAMPLE_COUNT_1_BIT;
-        ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        // TRANSFER_DST: destino del blit desde m_hdrImage, una cara por submit.
-        ci.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        ci.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-        ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        if (vkCreateImage(m_gpu.device(), &ci, nullptr, &m_probeCaptureImage) != VK_SUCCESS)
-            throw std::runtime_error("failed to create probe capture cubemap!");
-
-        VkMemoryRequirements memReq;
-        vkGetImageMemoryRequirements(m_gpu.device(), m_probeCaptureImage, &memReq);
-        VkMemoryAllocateInfo memAlloc{};
-        memAlloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        memAlloc.allocationSize  = memReq.size;
-        memAlloc.memoryTypeIndex = m_gpu.findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        if (vkAllocateMemory(m_gpu.device(), &memAlloc, nullptr, &m_probeCaptureMemory) != VK_SUCCESS)
-            throw std::runtime_error("failed to allocate probe capture memory!");
-        vkBindImageMemory(m_gpu.device(), m_probeCaptureImage, m_probeCaptureMemory, 0);
-
-        VkImageViewCreateInfo vi{};
-        vi.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        vi.image                           = m_probeCaptureImage;
-        vi.viewType                        = VK_IMAGE_VIEW_TYPE_CUBE;
-        vi.format                          = kIblFormat;
-        vi.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        vi.subresourceRange.baseMipLevel   = 0;
-        vi.subresourceRange.levelCount     = 1;
-        vi.subresourceRange.baseArrayLayer = 0;
-        vi.subresourceRange.layerCount     = 6;
-        if (vkCreateImageView(m_gpu.device(), &vi, nullptr, &m_probeCaptureView) != VK_SUCCESS)
-            throw std::runtime_error("failed to create probe capture view!");
-
-        // Arranca en SHADER_READ_ONLY, que es el layout desde el que el bake la
-        // mueve a TRANSFER_DST y al que la devuelve. El contenido inicial da
-        // igual: el bake escribe las 6 caras antes de que nadie las lea.
-        {
-            VkCommandBuffer cmd = m_gpu.beginOneTimeCommands();
-            VkImageMemoryBarrier b{};
-            b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.image               = m_probeCaptureImage;
-            b.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
-            b.newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            b.srcAccessMask       = 0;
-            b.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
-            b.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6 };
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &b);
-            m_gpu.endOneTimeCommands(cmd);
-        }
-
-        // Query pool propio del bake: 7 pares (6 caras + convolucion). No se
-        // mezcla con el del AA ni con el del bloom, que se resetean por frame.
-        if (m_timestampsSupported && m_probeQueryPool == VK_NULL_HANDLE)
-        {
-            VkQueryPoolCreateInfo qi{};
-            qi.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-            qi.queryType  = VK_QUERY_TYPE_TIMESTAMP;
-            qi.queryCount = PROBE_QUERY_COUNT;
-            if (vkCreateQueryPool(m_gpu.device(), &qi, nullptr, &m_probeQueryPool) != VK_SUCCESS)
-                throw std::runtime_error("failed to create probe query pool!");
-        }
-    }
-
-    void Renderer::createProbeImages(GpuProbe& probe)
-    {
-        // Mismas dos imagenes que el IBL global (createIblResources), pero por
-        // sonda. m_res.createImage no vale: fija arrayLayers y mipLevels a 1.
-        auto makeCube = [&](uint32_t size, uint32_t mips, VkImage& image, VkDeviceMemory& memory)
-        {
-            VkImageCreateInfo ci{};
-            ci.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-            ci.flags         = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-            ci.imageType     = VK_IMAGE_TYPE_2D;
-            ci.format        = kIblFormat;
-            ci.extent        = { size, size, 1 };
-            ci.mipLevels     = mips;
-            ci.arrayLayers   = 6;
-            ci.samples       = VK_SAMPLE_COUNT_1_BIT;
-            ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
-            ci.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT
-                             | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-            ci.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-            ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            if (vkCreateImage(m_gpu.device(), &ci, nullptr, &image) != VK_SUCCESS)
-                throw std::runtime_error("failed to create probe cubemap image!");
-
-            VkMemoryRequirements memReq;
-            vkGetImageMemoryRequirements(m_gpu.device(), image, &memReq);
-            VkMemoryAllocateInfo memAlloc{};
-            memAlloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            memAlloc.allocationSize  = memReq.size;
-            memAlloc.memoryTypeIndex = m_gpu.findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-            if (vkAllocateMemory(m_gpu.device(), &memAlloc, nullptr, &memory) != VK_SUCCESS)
-                throw std::runtime_error("failed to allocate probe cubemap memory!");
-            vkBindImageMemory(m_gpu.device(), image, memory, 0);
-        };
-
-        makeCube(IBL_IRRADIANCE_SIZE, 1,                  probe.irradianceImage, probe.irradianceMemory);
-        makeCube(IBL_PREFILTER_SIZE,  IBL_PREFILTER_MIPS, probe.prefilterImage,  probe.prefilterMemory);
-
-        auto makeView = [&](VkImage image, VkImageViewType type, uint32_t baseMip, uint32_t mipCount, VkImageView& view)
-        {
-            VkImageViewCreateInfo vi{};
-            vi.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            vi.image                           = image;
-            vi.viewType                        = type;
-            vi.format                          = kIblFormat;
-            vi.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-            vi.subresourceRange.baseMipLevel   = baseMip;
-            vi.subresourceRange.levelCount     = mipCount;
-            vi.subresourceRange.baseArrayLayer = 0;
-            vi.subresourceRange.layerCount     = 6;
-            if (vkCreateImageView(m_gpu.device(), &vi, nullptr, &view) != VK_SUCCESS)
-                throw std::runtime_error("failed to create probe image view!");
-        };
-
-        makeView(probe.irradianceImage, VK_IMAGE_VIEW_TYPE_CUBE,     0, 1, probe.irradianceView);
-        makeView(probe.irradianceImage, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 0, 1, probe.irradianceStore);
-        makeView(probe.prefilterImage,  VK_IMAGE_VIEW_TYPE_CUBE,     0, IBL_PREFILTER_MIPS, probe.prefilterView);
-        for (uint32_t m = 0; m < IBL_PREFILTER_MIPS; m++)
-            makeView(probe.prefilterImage, VK_IMAGE_VIEW_TYPE_2D_ARRAY, m, 1, probe.prefilterStore[m]);
-
-        // Contenido neutro, por el mismo motivo que en createIblResources: entre
-        // que la sonda existe y que alguien pulsa Bake, sus vistas ya estan en
-        // descriptor sets y no pueden apuntar a memoria sin definir. Los mismos
-        // valores que el IBL neutro, asi que una sonda recien creada y sin
-        // bakear se ve igual que el ambiente plano de siempre.
-        {
-            VkCommandBuffer cmd = m_gpu.beginOneTimeCommands();
-
-            VkImageMemoryBarrier b{};
-            b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            b.subresourceRange.layerCount = 6;
-
-            auto clearTo = [&](VkImage image, uint32_t mips, const VkClearColorValue& color)
-            {
-                b.image                       = image;
-                b.subresourceRange.levelCount = mips;
-
-                b.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
-                b.newLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                b.srcAccessMask = 0;
-                b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                     0, 0, nullptr, 0, nullptr, 1, &b);
-
-                vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                     &color, 1, &b.subresourceRange);
-
-                b.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                b.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                     0, 0, nullptr, 0, nullptr, 1, &b);
-            };
-
-            const VkClearColorValue irradianceNeutral{{ 0.075f, 0.080f, 0.090f, 1.0f }};
-            const VkClearColorValue prefilterNeutral {{ 0.100f, 0.120f, 0.150f, 1.0f }};
-            clearTo(probe.irradianceImage, 1,                  irradianceNeutral);
-            clearTo(probe.prefilterImage,  IBL_PREFILTER_MIPS, prefilterNeutral);
-
-            m_gpu.endOneTimeCommands(cmd);
-        }
-    }
-
-    void Renderer::destroyProbeImages(GpuProbe& probe)
-    {
-        // El caller ya ha esperado a que la GPU quede libre y ha reescrito los
-        // bindings 5/6 que apuntaban aqui: al llegar a esta funcion ningun
-        // descriptor set referencia estas vistas.
-        vkDestroyImageView(m_gpu.device(), probe.irradianceView,  nullptr);
-        vkDestroyImageView(m_gpu.device(), probe.irradianceStore, nullptr);
-        vkDestroyImage(m_gpu.device(), probe.irradianceImage, nullptr);
-        vkFreeMemory(m_gpu.device(), probe.irradianceMemory, nullptr);
-        vkDestroyImageView(m_gpu.device(), probe.prefilterView, nullptr);
-        for (uint32_t m = 0; m < IBL_PREFILTER_MIPS; m++)
-            vkDestroyImageView(m_gpu.device(), probe.prefilterStore[m], nullptr);
-        vkDestroyImage(m_gpu.device(), probe.prefilterImage, nullptr);
-        vkFreeMemory(m_gpu.device(), probe.prefilterMemory, nullptr);
-        probe = GpuProbe{};
-    }
-
-    void Renderer::writeIblBindings(VkDescriptorSet set, VkImageView irradiance, VkImageView prefilter)
-    {
-        // Un write suelto sobre un set YA alojado, igual que writeSsaoBinding:
-        // reescribir los bindings 5 y 6 es lo unico que hace falta para que un
-        // objeto pase del IBL global a una sonda. Ni layout nuevo, ni miembro
-        // nuevo en el UBO, ni un indice en PushData (que esta a 80 bytes justos).
-        VkDescriptorImageInfo infos[2]{};
-        infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        infos[0].imageView   = irradiance;
-        infos[0].sampler     = m_iblSampler;
-        infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        infos[1].imageView   = prefilter;
-        infos[1].sampler     = m_iblSampler;
-
-        VkWriteDescriptorSet w[2]{};
-        for (int i = 0; i < 2; i++)
-        {
-            w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[i].dstSet          = set;
-            w[i].dstBinding      = 5 + i;
-            w[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            w[i].descriptorCount = 1;
-            w[i].pImageInfo      = &infos[i];
-        }
-        vkUpdateDescriptorSets(m_gpu.device(), 2, w, 0, nullptr);
-    }
-
-    int Renderer::pickProbeFor(const glm::vec3& worldPos) const
-    {
-        // La sonda MAS CERCANA cuyo radio contiene el punto. -1 = ninguna, y
-        // entonces el objeto se queda con el IBL global de siempre.
-        int   best     = -1;
-        float bestDist = 0.0f;
-        for (size_t i = 0; i < m_probes.size(); i++)
-        {
-            const float d = glm::length(worldPos - m_probes[i].position);
-            if (d > m_probes[i].radius) continue;
-            if (best < 0 || d < bestDist) { best = (int)i; bestDist = d; }
-        }
-        return best;
-    }
-
-    void Renderer::refreshProbeAssignment()
-    {
-        // Calcula la asignacion DESEADA y solo toca la GPU si difiere de la ya
-        // escrita. En regimen estacionario esto son unas cuantas restas de
-        // vectores en CPU y cero trabajo de GPU: ni un comando, ni un write.
-        std::unordered_map<int, int> wantShared;
-        for (const auto& obj : m_objects)
-        {
-            const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
-            if (!gpu) continue;
-            // El descriptor set es POR MALLA COMPARTIDA, no por GameObject: dos
-            // instancias de la misma malla bajo sondas distintas comparten
-            // sonda, y gana la del primer objeto del recorrido. Es el precio de
-            // no duplicar los sets (y con el, el instancing).
-            if (wantShared.find(obj.sharedIndex) != wantShared.end()) continue;
-            const glm::vec3 local  = gpu->hasBounds ? (gpu->aabbMin + gpu->aabbMax) * 0.5f : glm::vec3(0.0f);
-            const glm::vec3 center = glm::vec3(obj.transform * glm::vec4(local, 1.0f));
-            wantShared[obj.sharedIndex] = pickProbeFor(center);
-        }
-
-        std::vector<int> wantSkinned(m_skinnedObjects.size(), -1);
-        for (size_t i = 0; i < m_skinnedObjects.size(); i++)
-            wantSkinned[i] = pickProbeFor(glm::vec3(m_skinnedObjects[i].transform[3]));
-
-        if (wantShared == m_probeAssignShared && wantSkinned == m_probeAssignSkinned) return;
-
-        // Hay cambios: los sets pueden estar en uso por frames en vuelo.
-        vkDeviceWaitIdle(m_gpu.device());
-
-        auto viewsFor = [&](int probeIndex, VkImageView& irr, VkImageView& pre)
-        {
-            if (probeIndex < 0 || probeIndex >= (int)m_probes.size())
-            {
-                irr = m_iblIrradianceView;
-                pre = m_iblPrefilterView;
-            }
-            else
-            {
-                irr = m_probes[probeIndex].irradianceView;
-                pre = m_probes[probeIndex].prefilterView;
-            }
-        };
-
-        for (const auto& entry : wantShared)
-        {
-            auto prev = m_probeAssignShared.find(entry.first);
-            if (prev != m_probeAssignShared.end() && prev->second == entry.second) continue;
-            SharedGpuMesh* gpu = m_sharedMeshes.get(entry.first);
-            if (!gpu) continue;
-            VkImageView irr, pre;
-            viewsFor(entry.second, irr, pre);
-            for (int i = 0; i < MAX_FRAMES; i++)
-                if (gpu->descriptorSets[i]) writeIblBindings(gpu->descriptorSets[i], irr, pre);
-        }
-        // Mallas que YA NO estan en el mapa deseado (objeto borrado) no hace
-        // falta devolverlas al IBL global: sus sets se liberan con la malla.
-
-        for (size_t si = 0; si < m_skinnedObjects.size(); si++)
-        {
-            const int want = wantSkinned[si];
-            if (si < m_probeAssignSkinned.size() && m_probeAssignSkinned[si] == want) continue;
-            VkImageView irr, pre;
-            viewsFor(want, irr, pre);
-            for (const SkinnedMatGfx& mgfx : m_skinnedObjects[si].matGfx)
-                for (int i = 0; i < MAX_FRAMES; i++)
-                    if (mgfx.descSets[i]) writeIblBindings(mgfx.descSets[i], irr, pre);
-        }
-
-        m_probeAssignShared  = std::move(wantShared);
-        m_probeAssignSkinned = std::move(wantSkinned);
-    }
-
-    void Renderer::assignAllToGlobalIbl()
-    {
-        // Devuelve TODOS los objetos al IBL global. Se llama justo antes de una
-        // tanda de bakes y no es un detalle: la captura reusa el pass de escena,
-        // que ilumina cada objeto con lo que tenga en sus bindings 5/6. Si eso
-        // es el cubemap de la propia sonda, cada bake vuelve a capturar la luz
-        // que ya llevaba la intensidad aplicada y el efecto se amplifica bake a
-        // bake (o se apaga, con intensidades bajas). Capturando siempre con el
-        // IBL global el bake es idempotente y no depende del orden de las sondas.
-        if (m_probeAssignShared.empty() && m_probeAssignSkinned.empty()) return;
-
-        vkDeviceWaitIdle(m_gpu.device());
-        for (int index : m_sharedMeshes.liveIndices())
-        {
-            SharedGpuMesh* gpu = m_sharedMeshes.get(index);
-            for (int i = 0; i < MAX_FRAMES; i++)
-                if (gpu->descriptorSets[i])
-                    writeIblBindings(gpu->descriptorSets[i], m_iblIrradianceView, m_iblPrefilterView);
-        }
-        for (const SkinnedRenderObject& sobj : m_skinnedObjects)
-            for (const SkinnedMatGfx& mgfx : sobj.matGfx)
-                for (int i = 0; i < MAX_FRAMES; i++)
-                    if (mgfx.descSets[i])
-                        writeIblBindings(mgfx.descSets[i], m_iblIrradianceView, m_iblPrefilterView);
-
-        // Las caches quedan vacias a proposito: refreshProbeAssignment, al final
-        // de syncReflectionProbes, vuelve a escribir la asignacion real.
-        m_probeAssignShared.clear();
-        m_probeAssignSkinned.clear();
-    }
-
-    void Renderer::bakeProbe(GpuProbe& probe)
-    {
-        // Sin framebuffer de escena (init temprano) o sin el SSBO de instancias
-        // no hay contra que dibujar: la peticion se reintenta en otro frame.
-        if (m_offscreenFramebuffer[0] == VK_NULL_HANDLE) return;
-        if (m_instanceDescSets[0]     == VK_NULL_HANDLE) return;
-
-        if (m_probeCaptureImage == VK_NULL_HANDLE) createProbeCapture();
-
-        // Las 6 caras dibujan sobre m_hdrImage[0] y leen el UBO del frame 0, que
-        // pueden estar en vuelo. Esto es un evento, no un pass: se puede esperar.
-        vkDeviceWaitIdle(m_gpu.device());
-
-        const uint32_t faceRender = std::min(PROBE_FACE_SIZE,
-                                             std::min(m_renderExtent.width, m_renderExtent.height));
-        if (faceRender == 0) return;
-
-        // Base: el UBO del frame 0 TAL CUAL. Luces, matrices de cascada y splits
-        // se conservan a proposito — el shadow map que hay en la GPU es el de
-        // esas matrices, y recomputarlas aqui lo descuadraria.
-        UniformBufferObject ubo{};
-        memcpy(&ubo, m_uniformBuffersMapped[0], sizeof(ubo));
-        ubo.viewPos = glm::vec4(probe.position, 1.0f);
-
-        // Forward+ a Off durante la captura: su rejilla se culleo contra el
-        // frustum de la camara del frame, no contra estas 6 caras. mode 0 es el
-        // bucle clasico sobre las luces del UBO, con todas ellas. Se restaura al
-        // salir; el modo que la UI tiene pedido no se toca.
-        ForwardPlusPass::ParamsGpu savedFp{};
-        const bool restoreFp = m_fpPass.overrideModeOff(savedFp);
-
-        // Direcciones y "up" de las 6 caras. Los up son los OPUESTOS a los de la
-        // lista clasica de OpenGL, y la proyeccion invierte X ademas de la Y de
-        // Vulkan: dos espejos son una rotacion, asi que el winding (y con el, el
-        // face culling del pipeline) se conserva, y la cara sale con la
-        // orientacion que espera el muestreo de un samplerCube.
-        static const glm::vec3 kDirs[6] = {
-            {  1.0f,  0.0f,  0.0f }, { -1.0f,  0.0f,  0.0f },
-            {  0.0f,  1.0f,  0.0f }, {  0.0f, -1.0f,  0.0f },
-            {  0.0f,  0.0f,  1.0f }, {  0.0f,  0.0f, -1.0f },
-        };
-        static const glm::vec3 kUps[6] = {
-            {  0.0f,  1.0f,  0.0f }, {  0.0f,  1.0f,  0.0f },
-            {  0.0f,  0.0f, -1.0f }, {  0.0f,  0.0f,  1.0f },
-            {  0.0f,  1.0f,  0.0f }, {  0.0f,  1.0f,  0.0f },
-        };
-
-        VkImageMemoryBarrier b{};
-        b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-
-        for (uint32_t face = 0; face < 6; face++)
-        {
-            glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(90.0f), 1.0f,
-                                                   1.0f, 20000.0f);
-            proj[0][0] *= -1.0f;
-            proj[1][1] *= -1.0f;
-            ubo.view = glm::lookAtRH(probe.position, probe.position + kDirs[face], kUps[face]);
-            ubo.proj = proj;
-            memcpy(m_uniformBuffersMapped[0], &ubo, sizeof(ubo));
-
-            VkCommandBuffer cmd = m_gpu.beginOneTimeCommands();
-
-            if (m_timestampsSupported && m_probeQueryPool != VK_NULL_HANDLE)
-            {
-                // Reset unico de las 14 en el primer submit: los writes de los
-                // submits siguientes van detras en la misma cola.
-                if (face == 0) vkCmdResetQueryPool(cmd, m_probeQueryPool, 0, PROBE_QUERY_COUNT);
-                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_probeQueryPool, face * 2);
-            }
-
-            // El mapa de AO que hay en la GPU es el de la camara del frame: dejarlo
-            // hornearia oclusion de otro punto de vista dentro del cubemap. A 1.0
-            // = sin oclusion; el frame siguiente lo recalcula si el SSAO esta
-            // activo, y si no lo esta ya valia 1.0.
-            if (face == 0 && m_ssaoPass.blurImage(0) != VK_NULL_HANDLE)
-            {
-                // oldLayout UNDEFINED y no GENERAL: si el SSAO nunca ha corrido
-                // sobre este slot la imagen no se ha transicionado nunca, y los
-                // draws de aqui abajo la muestrean por el binding 7 (declarado
-                // GENERAL). Descartar el contenido no cuesta nada: se limpia.
-                VkImageMemoryBarrier ao{};
-                ao.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                ao.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                ao.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                ao.image               = m_ssaoPass.blurImage(0);
-                ao.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
-                ao.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
-                ao.srcAccessMask       = 0;
-                ao.dstAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
-                ao.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                     0, 0, nullptr, 0, nullptr, 1, &ao);
-
-                const VkClearColorValue white{{ 1.0f, 1.0f, 1.0f, 1.0f }};
-                vkCmdClearColorImage(cmd, m_ssaoPass.blurImage(0), VK_IMAGE_LAYOUT_GENERAL,
-                                     &white, 1, &ao.subresourceRange);
-
-                ao.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                ao.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                ao.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
-                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                     0, 0, nullptr, 0, nullptr, 1, &ao);
-            }
-
-            VkClearValue clearValues[2];
-            clearValues[0].color        = {0.0f, 0.0f, 0.0f, 1.0f};
-            clearValues[1].depthStencil = {1.0f, 0};
-
-            VkRenderPassBeginInfo rpInfo{};
-            rpInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-            rpInfo.renderPass        = m_offscreenRenderPass;
-            rpInfo.framebuffer       = m_offscreenFramebuffer[0];
-            // Cuadrada y en la esquina: el framebuffer es el del viewport (16:9
-            // con cualquier suerte) y una cara de cubemap tiene que salir de una
-            // proyeccion de aspecto 1. El resto del framebuffer ni se toca.
-            rpInfo.renderArea.offset = {0, 0};
-            rpInfo.renderArea.extent = { faceRender, faceRender };
-            rpInfo.clearValueCount   = 2;
-            rpInfo.pClearValues      = clearValues;
-            vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-            VkViewport viewport{};
-            viewport.width    = (float)faceRender;
-            viewport.height   = (float)faceRender;
-            viewport.minDepth = 0.0f;
-            viewport.maxDepth = 1.0f;
-            vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-            VkRect2D scissor{};
-            scissor.extent = { faceRender, faceRender };
-            vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-            // Pipeline de escena de siempre. El wireframe NO se respeta aqui a
-            // proposito: lo que se captura es el entorno iluminado, no la ayuda
-            // de edicion.
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
-            // Set 1: el SSBO de instancias sigue siendo obligatorio (el vertex
-            // shader lo declara), aunque aqui no se instancie nada.
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                m_pipelineLayout, 1, 1, &m_instanceDescSets[0], 0, nullptr);
-            const VkDescriptorSet fpBakeSet = m_fpPass.set(0);
-            if (fpBakeSet != VK_NULL_HANDLE)
-            {
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    m_pipelineLayout, 2, 1, &fpBakeSet, 0, nullptr);
-            }
-
-            for (const auto& obj : m_objects)
-            {
-                const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
-                if (!gpu || gpu->uploadTicket > m_lastCompletedTicket) continue;
-                if (!gpu->descriptorSets[0]) continue;
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    m_pipelineLayout, 0, 1, &gpu->descriptorSets[0], 0, nullptr);
-                PushData push;
-                // Sin instancing (flags.x = 0): la matriz va en el push, que es
-                // la ruta que ya usan los skinned. Asi el bake no toca el SSBO
-                // del frame ni su cursor.
-                push.transform = obj.transform;
-                push.metallic  = gpu->metallic;
-                push.roughness = gpu->roughness;
-                push.flags.x   = 0.0f;
-                // flags.y = 0: el alfa del HDR es la mascara de SSR y aqui no hay
-                // pass de SSR que la lea.
-                push.flags.y   = 0.0f;
-                vkCmdPushConstants(cmd, m_pipelineLayout,
-                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                    0, sizeof(PushData), &push);
-                VkBuffer vbs[]      = { gpu->vertexBuffer };
-                VkDeviceSize offs[] = { 0 };
-                vkCmdBindVertexBuffers(cmd, 0, 1, vbs, offs);
-                vkCmdBindIndexBuffer(cmd, gpu->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-                vkCmdDrawIndexed(cmd, gpu->indexCount, 1, 0, 0, 0);
-            }
-
-            if (!m_skinnedObjects.empty())
-            {
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skinnedGfxPipeline);
-                for (SkinnedRenderObject& sobj : m_skinnedObjects)
-                {
-                    if (sobj.outputVertexBuffer == VK_NULL_HANDLE) continue;
-                    if (sobj.uploadTicket > m_lastCompletedTicket) continue;
-                    VkBuffer     vbs[]  = { sobj.outputVertexBuffer };
-                    VkDeviceSize offs[] = { 0 };
-                    vkCmdBindVertexBuffers(cmd, 0, 1, vbs, offs);
-                    vkCmdBindIndexBuffer(cmd, sobj.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-                    for (auto& sm : sobj.subMeshes)
-                    {
-                        SkinnedMatGfx& mgfx = sobj.matGfx[sm.materialIndex];
-                        if (!mgfx.descSets[0]) continue;
-                        PushData push;
-                        push.transform = sobj.transform;
-                        push.metallic  = mgfx.metallic;
-                        push.roughness = mgfx.roughness;
-                        push.flags.y   = 0.0f;
-                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            m_pipelineLayout, 0, 1, &mgfx.descSets[0], 0, nullptr);
-                        vkCmdPushConstants(cmd, m_pipelineLayout,
-                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                            0, sizeof(PushData), &push);
-                        vkCmdDrawIndexed(cmd, sm.indexCount, 1, sm.indexStart, 0, 0);
-                    }
-                }
-            }
-
-            if (m_skybox.isInitialized())
-            {
-                glm::mat4 rotView     = glm::mat4(glm::mat3(ubo.view));
-                glm::mat4 invViewProj = glm::inverse(ubo.proj * rotView);
-                m_skybox.draw(cmd, invViewProj);
-            }
-
-            vkCmdEndRenderPass(cmd);
-
-            // ── Cara -> capa del cubemap de captura ──────────────────────────
-            // El pass deja m_hdrImage en SHADER_READ_ONLY (finalLayout del
-            // attachment de resolve, y del de color sin MSAA).
-            b.image            = m_hdrImage[0];
-            b.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-            b.oldLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            b.newLayout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            b.srcAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            b.dstAccessMask    = VK_ACCESS_TRANSFER_READ_BIT;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-
-            VkImageMemoryBarrier toDst = b;
-            toDst.image            = m_probeCaptureImage;
-            toDst.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, face, 1 };
-            toDst.oldLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            toDst.newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            toDst.srcAccessMask    = VK_ACCESS_SHADER_READ_BIT;
-            toDst.dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
-
-            // Blit y no copy: el render sale a faceRender (recortado por el
-            // tamano del viewport) y la cara del cubemap es siempre de
-            // PROBE_FACE_SIZE, asi que hay que escalar.
-            VkImageBlit blit{};
-            blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-            blit.srcOffsets[0]  = { 0, 0, 0 };
-            blit.srcOffsets[1]  = { (int32_t)faceRender, (int32_t)faceRender, 1 };
-            blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, face, 1 };
-            blit.dstOffsets[0]  = { 0, 0, 0 };
-            blit.dstOffsets[1]  = { (int32_t)PROBE_FACE_SIZE, (int32_t)PROBE_FACE_SIZE, 1 };
-            vkCmdBlitImage(cmd,
-                           m_hdrImage[0],         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           m_probeCaptureImage,   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                           1, &blit, VK_FILTER_LINEAR);
-
-            // De vuelta a los layouts de partida: m_hdrImage la lee el bloom y
-            // la composicion del frame siguiente, y la captura la lee el compute.
-            toDst.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            toDst.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            toDst.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            toDst.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
-
-            b.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            b.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            b.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-
-            if (m_timestampsSupported && m_probeQueryPool != VK_NULL_HANDLE)
-                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_probeQueryPool, face * 2 + 1);
-
-            // Bloquea hasta que la cola vacia: el UBO del frame 0 se reescribe
-            // en la vuelta siguiente y no puede pisarse un draw en vuelo.
-            m_gpu.endOneTimeCommands(cmd);
-        }
-
-        // ── Convolucion: los MISMOS dos compute del IBL global ──────────────
-        {
-            vkResetDescriptorPool(m_gpu.device(), m_iblDescPool, 0);
-
-            const uint32_t setCount = 1 + IBL_PREFILTER_MIPS;
-            std::vector<VkDescriptorSetLayout> layouts(setCount, m_iblDescLayout);
-            std::vector<VkDescriptorSet>       sets(setCount, VK_NULL_HANDLE);
-
-            VkDescriptorSetAllocateInfo ai{};
-            ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            ai.descriptorPool     = m_iblDescPool;
-            ai.descriptorSetCount = setCount;
-            ai.pSetLayouts        = layouts.data();
-            if (vkAllocateDescriptorSets(m_gpu.device(), &ai, sets.data()) != VK_SUCCESS)
-                throw std::runtime_error("failed to allocate probe descriptor sets!");
-
-            VkDescriptorImageInfo envInfo{};
-            envInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            envInfo.imageView   = m_probeCaptureView;
-            envInfo.sampler     = m_iblSampler;
-
-            std::vector<VkDescriptorImageInfo> storeInfos(setCount);
-            std::vector<VkWriteDescriptorSet>  writes;
-            writes.reserve(setCount * 2);
-            for (uint32_t s = 0; s < setCount; s++)
-            {
-                storeInfos[s].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                storeInfos[s].imageView   = (s == 0) ? probe.irradianceStore : probe.prefilterStore[s - 1];
-
-                VkWriteDescriptorSet src{};
-                src.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                src.dstSet          = sets[s];
-                src.dstBinding      = 0;
-                src.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                src.descriptorCount = 1;
-                src.pImageInfo      = &envInfo;
-                writes.push_back(src);
-
-                VkWriteDescriptorSet dst = src;
-                dst.dstBinding     = 1;
-                dst.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                dst.pImageInfo     = &storeInfos[s];
-                writes.push_back(dst);
-            }
-            vkUpdateDescriptorSets(m_gpu.device(), (uint32_t)writes.size(), writes.data(), 0, nullptr);
-
-            VkCommandBuffer cmd = m_gpu.beginOneTimeCommands();
-            if (m_timestampsSupported && m_probeQueryPool != VK_NULL_HANDLE)
-                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_probeQueryPool, 12);
-
-            VkImageMemoryBarrier conv[2]{};
-            for (int i = 0; i < 2; i++)
-            {
-                conv[i].sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                conv[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                conv[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                conv[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                conv[i].subresourceRange.layerCount = 6;
-            }
-            conv[0].image = probe.irradianceImage;
-            conv[0].subresourceRange.levelCount = 1;
-            conv[1].image = probe.prefilterImage;
-            conv[1].subresourceRange.levelCount = IBL_PREFILTER_MIPS;
-
-            for (int i = 0; i < 2; i++)
-            {
-                conv[i].oldLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                conv[i].newLayout     = VK_IMAGE_LAYOUT_GENERAL;
-                conv[i].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                conv[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            }
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 2, conv);
-
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_iblIrradiancePipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_iblPipelineLayout,
-                                    0, 1, &sets[0], 0, nullptr);
-            IblPush push{ 0.0f, IBL_IRRADIANCE_SIZE, probe.intensity };
-            vkCmdPushConstants(cmd, m_iblPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-            const uint32_t irrGroups = (IBL_IRRADIANCE_SIZE + 7) / 8;
-            vkCmdDispatch(cmd, irrGroups, irrGroups, 6);
-
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_iblPrefilterPipeline);
-            for (uint32_t m = 0; m < IBL_PREFILTER_MIPS; m++)
-            {
-                const uint32_t mipSize = IBL_PREFILTER_SIZE >> m;
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_iblPipelineLayout,
-                                        0, 1, &sets[1 + m], 0, nullptr);
-                IblPush mipPush{ (float)m / (float)(IBL_PREFILTER_MIPS - 1), mipSize, probe.intensity };
-                vkCmdPushConstants(cmd, m_iblPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(mipPush), &mipPush);
-                const uint32_t groups = (mipSize + 7) / 8;
-                vkCmdDispatch(cmd, groups, groups, 6);
-            }
-
-            for (int i = 0; i < 2; i++)
-            {
-                conv[i].oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
-                conv[i].newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                conv[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-                conv[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            }
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 2, conv);
-
-            if (m_timestampsSupported && m_probeQueryPool != VK_NULL_HANDLE)
-                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_probeQueryPool, 13);
-
-            m_gpu.endOneTimeCommands(cmd);
-        }
-
-        if (restoreFp) m_fpPass.restoreParams(savedFp);
-
-        // El UBO del frame 0 se queda con la ultima cara; updateUniformBuffer lo
-        // reescribe entero antes del proximo submit del frame, asi que no hace
-        // falta restaurarlo.
-
-        probe.baked  = true;
-        probe.bakeMs = 0.0f;
-        if (m_timestampsSupported && m_probeQueryPool != VK_NULL_HANDLE)
-        {
-            uint64_t stamps[PROBE_QUERY_COUNT] = {};
-            // WAIT_BIT y no polling: la cola ya esta vacia (endOneTimeCommands
-            // bloquea), asi que los 14 resultados estan listos.
-            if (vkGetQueryPoolResults(m_gpu.device(), m_probeQueryPool, 0, PROBE_QUERY_COUNT,
-                                      sizeof(stamps), stamps, sizeof(uint64_t),
-                                      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS)
-            {
-                // Suma de los 7 deltas y no ultimo-menos-primero: entre submits
-                // hay esperas del host que no son coste de GPU.
-                double total = 0.0;
-                for (uint32_t p = 0; p < PROBE_QUERY_COUNT / 2; p++)
-                    total += (double)(stamps[p * 2 + 1] - stamps[p * 2]) * m_timestampPeriod * 1e-6;
-                probe.bakeMs = (float)total;
-            }
-        }
-    }
-
-    void Renderer::syncReflectionProbes()
-    {
-        // Camino rapido: ni sondas en la escena ni nada que deshacer. Es el caso
-        // de TODAS las escenas de hoy, y sale de aqui sin tocar la GPU.
-        const bool nothingToDo = m_probes.empty() && m_probeAssignShared.empty()
-                              && m_probeAssignSkinned.empty() && m_probeBakeQueue.empty()
-                              && !m_probeBakeAllQueued;
-        if (!m_scene && nothingToDo) return;
-
-        // 1. Reconciliar la lista de sondas con la escena. Es lo unico que corre
-        //    por frame cuando hay sondas: un recorrido del arbol (el mismo que
-        //    ya hacen el gizmo y la fisica) y unas comparaciones de float.
-        struct Desc { uint64_t id; glm::vec3 pos; float radius; float intensity; };
-        std::vector<Desc> descs;
-        if (m_scene)
-        {
-            m_scene->traverse([&](GameObject* go) {
-                if (!go->hasReflectionProbe()) return;
-                const auto& p = go->getReflectionProbe();
-                descs.push_back({ go->id, glm::vec3(go->worldTransform[3]),
-                                  p->getRadius(), p->getIntensity() });
-            });
-        }
-        if (descs.empty() && nothingToDo) return;
-
-        // Bajas: sondas cuyo GameObject ya no esta (borrado o cambio de escena).
-        for (size_t i = m_probes.size(); i-- > 0; )
-        {
-            bool alive = false;
-            for (const Desc& d : descs) if (d.id == m_probes[i].ownerId) { alive = true; break; }
-            if (alive) continue;
-            // ANTES de destruir: devolver al IBL global todo lo que apuntaba a
-            // esta sonda, o quedarian descriptor sets con vistas muertas. Se
-            // borra de la lista primero para que pickProbeFor ya no la elija.
-            GpuProbe dying = m_probes[i];
-            m_probes.erase(m_probes.begin() + (long)i);
-            m_probeAssignShared.clear();     // fuerza la reescritura de todos
-            m_probeAssignSkinned.clear();
-            refreshProbeAssignment();
-            vkDeviceWaitIdle(m_gpu.device());
-            destroyProbeImages(dying);
-        }
-
-        // Altas y cambios de ajustes.
-        bool geometryChanged = false;
-        for (const Desc& d : descs)
-        {
-            GpuProbe* found = nullptr;
-            for (GpuProbe& p : m_probes) if (p.ownerId == d.id) { found = &p; break; }
-            if (!found)
-            {
-                GpuProbe fresh{};
-                fresh.ownerId = d.id;
-                createProbeImages(fresh);
-                m_probes.push_back(fresh);
-                found = &m_probes.back();
-                geometryChanged = true;
-            }
-            if (found->position != d.pos || found->radius != d.radius)
-                geometryChanged = true;
-            // Mover la sonda invalida lo capturado, y cambiar la intensidad
-            // invalida el cubemap convolucionado (la intensidad se hornea en
-            // el). El radio NO: solo cambia a quien afecta, no lo que se ve.
-            const bool dirty = (found->position != d.pos) || (found->intensity != d.intensity);
-            if (dirty) { found->baked = false; found->settleFrames = 0; }
-            else if (!found->baked) found->settleFrames++;
-            found->position  = d.pos;
-            found->radius    = d.radius;
-            found->intensity = d.intensity;
-        }
-        (void)geometryChanged;
-
-        // 2. Bakes. Sin un frame previo el UBO del slot 0 es basura (no lleva ni
-        //    luces ni las matrices del shadow map): las peticiones esperan.
-        if (m_uboWritten[0])
-        {
-            const bool bakeAll = m_probeBakeAllQueued;
-            m_probeBakeAllQueued = false;
-            std::vector<uint64_t> queue;
-            queue.swap(m_probeBakeQueue);
-
-            std::vector<GpuProbe*> toBake;
-            for (GpuProbe& p : m_probes)
-            {
-                if (bakeAll || std::find(queue.begin(), queue.end(), p.ownerId) != queue.end())
-                {
-                    toBake.push_back(&p);
-                    continue;
-                }
-                // Auto-bake de las que no tienen captura valida: es lo que hace
-                // que cargar una escena (o arrancar DonTopoRuntime) de la misma
-                // imagen que el editor sin pulsar nada. settleFrames espera a
-                // que los ajustes dejen de moverse, asi que arrastrar un slider
-                // no dispara un bake por frame: solo uno al soltar.
-                if (!p.baked && p.settleFrames >= 1) toBake.push_back(&p);
-            }
-
-            float total = 0.0f;
-            int   count = 0;
-            if (!toBake.empty())
-            {
-                // ANTES de capturar nada: si no, la escena se fotografia
-                // iluminada por las propias sondas y el efecto se realimenta.
-                assignAllToGlobalIbl();
-                for (GpuProbe* p : toBake)
-                {
-                    bakeProbe(*p);
-                    if (p->baked) { total += p->bakeMs; count++; }
-                }
-            }
-            if (count > 0)
-            {
-                m_probeLastBakeMs = total;
-                printf("reflection probes: bake de %d sonda(s) en %.2f ms de GPU "
-                       "(captura %ux%u x6, irradiancia %ux%u, prefiltrado %ux%u x%u mips, "
-                       "%.2f MB por sonda)\n",
-                       count, total, PROBE_FACE_SIZE, PROBE_FACE_SIZE,
-                       IBL_IRRADIANCE_SIZE, IBL_IRRADIANCE_SIZE,
-                       IBL_PREFILTER_SIZE, IBL_PREFILTER_SIZE, IBL_PREFILTER_MIPS,
-                       (double)probeMemoryBytes() / (1024.0 * 1024.0));
-                fflush(stdout);
-            }
-        }
-
-        // 3. Asignacion sonda->objeto. Sale sin escribir nada si no ha cambiado.
-        refreshProbeAssignment();
-    }
-
-    void Renderer::createComputePipelines()
-    {
-        // --- Descriptor set layout: 8 storage buffers ---
-        VkDescriptorSetLayoutBinding bindings[8]{};
-        for (uint32_t i = 0; i < 8; i++)
-        {
-            bindings[i].binding         = i;
-            bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[i].descriptorCount = 1;
-            bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-        }
-
-        VkDescriptorSetLayoutCreateInfo dslInfo{};
-        dslInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dslInfo.bindingCount = 8;
-        dslInfo.pBindings    = bindings;
-        // Guarda de idempotencia: recreateMsaaDependentPipelines vuelve a entrar
-        // aqui para rehacer los cuatro pipelines skinned del final con otro
-        // numero de muestras. Ni el layout, ni el pool, ni los descriptor sets ya
-        // alojados de las mallas dependen de eso: recrearlos seria una fuga y
-        // dejaria colgados los sets de todas las mallas skinned vivas.
-        if (m_computeDescLayout == VK_NULL_HANDLE &&
-            vkCreateDescriptorSetLayout(m_gpu.device(), &dslInfo, nullptr, &m_computeDescLayout) != VK_SUCCESS)
-            throw std::runtime_error("failed to create compute descriptor set layout!");
-
-        // --- Pipeline layout (1 set + push constant) ---
-        VkPushConstantRange pcr{};
-        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        pcr.offset     = 0;
-        pcr.size       = sizeof(ComputePush);
-
-        VkPipelineLayoutCreateInfo plInfo{};
-        plInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        plInfo.setLayoutCount         = 1;
-        plInfo.pSetLayouts            = &m_computeDescLayout;
-        plInfo.pushConstantRangeCount = 1;
-        plInfo.pPushConstantRanges    = &pcr;
-        if (m_computePipelineLayout == VK_NULL_HANDLE &&
-            vkCreatePipelineLayout(m_gpu.device(), &plInfo, nullptr, &m_computePipelineLayout) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create compute pipeline layout!");
-        }
-
-        // --- Descriptor pool: 8 SSBOs * 16 objetos max ---
-        VkDescriptorPoolSize ps{};
-        ps.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        ps.descriptorCount = 8 * 16;
-
-        VkDescriptorPoolCreateInfo poolInfo{};
-        poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.poolSizeCount = 1;
-        poolInfo.pPoolSizes    = &ps;
-        poolInfo.maxSets       = 16;
-        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        if (m_computeDescPool == VK_NULL_HANDLE &&
-            vkCreateDescriptorPool(m_gpu.device(), &poolInfo, nullptr, &m_computeDescPool) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create compute descriptor pool!");
-        }
-
-        // --- Crear los tres pipelines ---
-        auto makePipeline = [&](const std::string& spv, VkPipeline& pipeline)
-        {
-            auto code   = loadShaderFile(spv);
-            auto module = createShaderModule(code);
-
-            VkComputePipelineCreateInfo info{};
-            info.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            info.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            info.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            info.stage.module = module;
-            info.stage.pName  = "main";
-            info.layout       = m_computePipelineLayout;
-
-            if (vkCreateComputePipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &info, nullptr, &pipeline) != VK_SUCCESS)
-                throw std::runtime_error("failed to create compute pipeline: " + spv);
-
-            vkDestroyShaderModule(m_gpu.device(), module, nullptr);
-        };
-
-        makePipeline("shaders/bone_eval.comp.spv",      m_boneEvalPipeline);
-        makePipeline("shaders/bone_hierarchy.comp.spv", m_boneHierarchyPipeline);
-        makePipeline("shaders/skinning.comp.spv",       m_skinningPipeline);
-
          // --- Skinned graphics pipeline (stride=80, mismos shaders) ---
         {
             auto vertCode = loadShaderFile("shaders/triangle.vert.spv");
@@ -5268,7 +3490,7 @@ namespace DonTopo {
         // esto, reconstruir el objeto lo agotaría.
         if (obj.computeDescSet != VK_NULL_HANDLE)
         {
-            vkFreeDescriptorSets(m_gpu.device(), m_computeDescPool, 1, &obj.computeDescSet);
+            vkFreeDescriptorSets(m_gpu.device(), m_skinningPass.descPool(), 1, &obj.computeDescSet);
             obj.computeDescSet = VK_NULL_HANDLE;
         }
         for (auto& mgfx : obj.matGfx)
@@ -5385,9 +3607,10 @@ namespace DonTopo {
         // --- Compute descriptor set ---
         VkDescriptorSetAllocateInfo dsAlloc{};
         dsAlloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        dsAlloc.descriptorPool     = m_computeDescPool;
+        const VkDescriptorSetLayout computeLayout = m_skinningPass.descLayout();
+        dsAlloc.descriptorPool     = m_skinningPass.descPool();
         dsAlloc.descriptorSetCount = 1;
-        dsAlloc.pSetLayouts        = &m_computeDescLayout;
+        dsAlloc.pSetLayouts        = &computeLayout;
         if (vkAllocateDescriptorSets(m_gpu.device(), &dsAlloc, &obj.computeDescSet) != VK_SUCCESS)
             throw std::runtime_error("failed to allocate compute descriptor set!");
 
@@ -5478,8 +3701,8 @@ namespace DonTopo {
 
                 VkDescriptorImageInfo shdInfo{};
                 shdInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                shdInfo.imageView   = m_shadowView;
-                shdInfo.sampler     = m_shadowSampler;
+                shdInfo.imageView   = m_shadowPass.view();
+                shdInfo.sampler     = m_shadowPass.sampler();
 
                 VkDescriptorImageInfo ormInfo{};
                 ormInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -5488,13 +3711,13 @@ namespace DonTopo {
 
                 VkDescriptorImageInfo irrInfo{};
                 irrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                irrInfo.imageView   = m_iblIrradianceView;
-                irrInfo.sampler     = m_iblSampler;
+                irrInfo.imageView   = m_iblPass.irradianceView();
+                irrInfo.sampler     = m_iblPass.sampler();
 
                 VkDescriptorImageInfo preInfo{};
                 preInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                preInfo.imageView   = m_iblPrefilterView;
-                preInfo.sampler     = m_iblSampler;
+                preInfo.imageView   = m_iblPass.prefilterView();
+                preInfo.sampler     = m_iblPass.sampler();
 
                 VkWriteDescriptorSet gw[7]{};
                 gw[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -5835,92 +4058,6 @@ namespace DonTopo {
             write.pImageInfo      = &imageInfo;
 
             vkUpdateDescriptorSets(m_gpu.device(), 1, &write, 0, nullptr);
-        }
-    }
-
-    void Renderer::recordComputePass(VkCommandBuffer cmd)
-    {
-        if (m_skinnedObjects.empty()) return;
-
-        auto ssboBarrier = [](VkBuffer buf) {
-            VkBufferMemoryBarrier b{};
-            b.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-            b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            b.buffer        = buf;
-            b.offset        = 0;
-            b.size          = VK_WHOLE_SIZE;
-            return b;
-        };
-
-        for (size_t i = 0; i < m_skinnedObjects.size(); i++)
-        {
-            // Borrado desde el editor, aún en vuelo (despachar skinning sobre un
-            // SSBO cuyo batch no ha señalado sería un read-after-write que la
-            // validación de sync marca) o fuera de cámara: los tres casos los
-            // resolvió el culling del principio del frame, y el bucle de dibujo
-            // de más abajo lee ESA misma lista. Saltar aquí un objeto que sí se
-            // dibujara le dejaría la pose del último frame en que fue visible.
-            if (i >= m_skinnedVisible.size() || !m_skinnedVisible[i]) continue;
-            SkinnedRenderObject& obj = m_skinnedObjects[i];
-            // Checkbox "Visible" apagado: no se dibuja en ningún pass, así que
-            // skinearlo sería trabajo de GPU que nadie lee. La pose se queda
-            // congelada en la del último frame visible, igual que hace el culling
-            // con un personaje fuera de cámara.
-            if (!obj.meshVisible) continue;
-            ComputePush push{};
-            push.animTime    = obj.animTime;
-            push.boneCount   = obj.boneCount;
-            push.vertexCount = obj.vertexCount;
-            push.clipBase    = obj.activeClip * obj.boneCount;
-
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                m_computePipelineLayout, 0, 1, &obj.computeDescSet, 0, nullptr);
-
-            // --- Pass 1: bone_eval (local transforms) ---
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_boneEvalPipeline);
-            vkCmdPushConstants(cmd, m_computePipelineLayout,
-                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePush), &push);
-            vkCmdDispatch(cmd, (obj.boneCount + 63) / 64, 1, 1);
-
-            // Barrier: localTransform escrito → leído por bone_hierarchy
-            VkBufferMemoryBarrier b1 = ssboBarrier(obj.localTransformBuffer);
-            vkCmdPipelineBarrier(cmd,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0, 0, nullptr, 1, &b1, 0, nullptr);
-
-            // --- Pass 2: bone_hierarchy (world transforms + inverse bind pose) ---
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_boneHierarchyPipeline);
-            vkCmdPushConstants(cmd, m_computePipelineLayout,
-                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePush), &push);
-            vkCmdDispatch(cmd, 1, 1, 1);
-
-            // Barrier: finalBone escrito → leído por skinning
-            VkBufferMemoryBarrier b2 = ssboBarrier(obj.finalBoneBuffer);
-            vkCmdPipelineBarrier(cmd,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0, 0, nullptr, 1, &b2, 0, nullptr);
-
-            // --- Pass 3: skinning (output vertex buffer) ---
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_skinningPipeline);
-            vkCmdPushConstants(cmd, m_computePipelineLayout,
-                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePush), &push);
-            vkCmdDispatch(cmd, (obj.vertexCount + 63) / 64, 1, 1);
-
-            // Barrier: outputVertexBuffer escrito por compute → leído como VB en vertex shader
-            VkBufferMemoryBarrier b3{};
-            b3.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-            b3.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            b3.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-            b3.buffer        = obj.outputVertexBuffer;
-            b3.offset        = 0;
-            b3.size          = VK_WHOLE_SIZE;
-            vkCmdPipelineBarrier(cmd,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
-                0, 0, nullptr, 1, &b3, 0, nullptr);
         }
     }
 
@@ -6357,11 +4494,61 @@ namespace DonTopo {
         };
     }
 
+    // ── Skinning por compute ────────────────────────────────────────────────
+    SkinningPass::Context Renderer::skinningCtx()
+    {
+        // m_skinnedVisible es la MISMA lista que consume el bucle de dibujo: si
+        // el pase saltara un objeto que luego se dibuja, le quedaria la pose del
+        // ultimo frame en que fue visible.
+        return SkinningPass::Context{ m_gpu, m_skinnedObjects, m_skinnedVisible };
+    }
+
+    // ── Shadow map ──────────────────────────────────────────────────────────
+    ShadowPass::Context Renderer::shadowCtx()
+    {
+        // Los dos sets que declara shadow.vert. El pipeline layout que sale de
+        // ellos lo presta el pase al depth pre-pass, que declara los mismos.
+        return ShadowPass::Context{ m_gpu, m_descriptorSetLayout, m_instanceDescLayout };
+    }
+
+    // ── IBL global y sondas ─────────────────────────────────────────────────
+    IblPass::Context Renderer::iblCtx()
+    {
+        // Sin skybox cargado las dos vistas van nulas y precompute() se sale:
+        // los cubemaps se quedan con el ambiente neutro.
+        return IblPass::Context{
+            m_gpu,
+            m_skybox.isInitialized() ? m_skybox.cubeView()    : VK_NULL_HANDLE,
+            m_skybox.isInitialized() ? m_skybox.cubeSampler() : VK_NULL_HANDLE
+        };
+    }
+
+    // El unico Context largo del motor, y por un motivo: el bake REDIBUJA la
+    // escena. Todo lo que va aqui es del pass offscreen del frame (slot 0) y de
+    // las listas de objetos, que se quedan en el Renderer.
+    ReflectionProbePass::Context Renderer::probeCtx()
+    {
+        return ReflectionProbePass::Context{
+            m_gpu, m_scene, m_skybox,
+            m_iblPass.irradiancePipeline(), m_iblPass.prefilterPipeline(),
+            m_iblPass.pipelineLayout(),     m_iblPass.descPool(),
+            m_iblPass.descLayout(),         m_iblPass.sampler(),
+            m_iblPass.irradianceView(),     m_iblPass.prefilterView(),
+            m_renderExtent, m_offscreenRenderPass, m_offscreenFramebuffer[0],
+            m_hdrImage[0], m_pipeline, m_skinnedGfxPipeline, m_pipelineLayout,
+            m_instanceDescSets[0], m_uniformBuffersMapped[0], m_uboWritten[0],
+            m_fpPass,
+            m_objects, m_sharedMeshes, m_skinnedObjects, m_lastCompletedTicket,
+            m_ssaoPass.blurImage(0),
+            m_timestampsSupported, m_timestampPeriod
+        };
+    }
+
     // ── SSAO + depth pre-pass ───────────────────────────────────────────────
     DepthPrepassPass::Context Renderer::depthPrepassCtx()
     {
         return DepthPrepassPass::Context{
-            m_gpu, m_res, m_renderExtent, m_currentFrame, m_shadowPipelineLayout
+            m_gpu, m_res, m_renderExtent, m_currentFrame, m_shadowPass.pipelineLayout()
         };
     }
 
@@ -6452,13 +4639,13 @@ namespace DonTopo {
             m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
                 dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
 
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout,
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPass.pipelineLayout(),
                 1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
 
             for (const InstanceBatch& batch : m_instanceBatches)
             {
                 const SharedGpuMesh* gpu = m_sharedMeshes.get(batch.sharedIndex);
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipelineLayout,
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPass.pipelineLayout(),
                     0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
 
                 VkBuffer vb[] = { gpu->vertexBuffer };
@@ -6519,7 +4706,7 @@ namespace DonTopo {
         return FogPass::Context{
             m_gpu, *this, m_renderExtent, m_currentFrame,
             m_hdrImage, m_hdrView, m_depthPrepass.views(), m_depthPrepass.sampler(),
-            m_uniformBuffers, m_shadowView, m_shadowSampler, m_lights,
+            m_uniformBuffers, m_shadowPass.view(), m_shadowPass.sampler(), m_lights,
             m_timestampsSupported, m_timestampPeriod
         };
     }
@@ -6739,10 +4926,10 @@ namespace DonTopo {
             &m_skinnedGfxPipeline, &m_skinnedWireframePipeline,
             &m_skinnedOutlinePipeline, &m_skinnedOutlineWirePipeline,
             &m_compositePipeline,
-            // Los tres compute no dependen de las muestras, pero se van con
-            // ellos: createComputePipelines los rehace de una pasada y volver a
-            // crearlos encima del handle viejo si que seria una fuga.
-            &m_boneEvalPipeline, &m_boneHierarchyPipeline, &m_skinningPipeline,
+            // Los tres compute del skinning YA NO estan aqui: viven en
+            // SkinningPass, no dependen de las muestras y su creacion ya no va
+            // en la misma pasada que estos, asi que no hay que destruirlos ni
+            // rehacerlos al cambiar de MSAA.
         };
         for (VkPipeline* p : pipelines)
         {
@@ -6754,7 +4941,7 @@ namespace DonTopo {
         }
 
         createPipeline();
-        createComputePipelines();
+        createSkinnedGraphicsPipelines();
 
         // El pipeline de composicion vive en createBloomPipelines, que ademas
         // crea layouts y pools; aqui solo hace falta el pipeline, asi que se
