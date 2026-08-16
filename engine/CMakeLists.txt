@@ -22,6 +22,7 @@ add_library(DonTopoCore STATIC
     src/Renderer/Skybox.cpp
     src/Renderer/SplashScreen.cpp
     src/Renderer/ModelLoader.cpp
+    src/Renderer/SkinnedBounds.cpp
     src/Renderer/SkinnedMeshPacking.cpp
     src/Renderer/SkinnedMeshAnimations.cpp
     src/Renderer/Cube.cpp

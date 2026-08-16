@@ -11,6 +11,7 @@
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/EditorRenderer.h"
 #include "DonTopo/Renderer/Frustum.h"
+#include "DonTopo/Renderer/SkinnedBounds.h"
 #include "DonTopo/Renderer/InstanceBatching.h"
 #include "DonTopo/Renderer/RendererState.h"
 #include "DonTopo/Renderer/GpuDevice.h"
