@@ -10,11 +10,16 @@ namespace DonTopo {
 
 // Dispositivo de un binding de acción, ya traducido a códigos GLFW por el
 // editor: Core no puede hablar ImGuiKey (split Core/Editor).
-enum class ActionDevice { Key, Mouse, Pad };
+//
+// PadAxis son los sticks y los gatillos: en GLFW son ejes analógicos, no
+// botones, así que llevan su propio dispositivo y su propio espacio de códigos
+// (ver Input::padAxisCode).
+enum class ActionDevice { Key, Mouse, Pad, PadAxis };
 
 struct ActionBinding {
     ActionDevice device = ActionDevice::Key;
-    int          code   = -1;   // GLFW_KEY_* o GLFW_MOUSE_BUTTON_* según device
+    int          code   = -1;   // GLFW_KEY_*, GLFW_MOUSE_BUTTON_*, GLFW_GAMEPAD_BUTTON_*
+                                // o código de eje (PadAxis), según device
 };
 
 // Fachada estática sobre el teclado/ratón de GLFW con estado prev/curr por
@@ -39,6 +44,27 @@ public:
     // interfaz del editor.
     static bool isPadButtonDown(int button);
     static bool isPadButtonPressed(int button);   // solo el frame del flanco
+
+    // --- Ejes del mando (sticks y gatillos) como si fueran botones ---
+    // Una dirección de eje es un binding: "stick izquierdo hacia arriba" vale
+    // lo mismo que una tecla. El código empaqueta el eje y el signo, porque un
+    // binding solo lleva un int y las dos direcciones de un mismo eje son dos
+    // acciones distintas.
+    static constexpr int kPadAxisBindingCount = 12;   // (GLFW_GAMEPAD_AXIS_LAST+1) * 2
+    static constexpr int padAxisCode(int axis, bool negative)
+    { return axis * 2 + (negative ? 1 : 0); }
+    static constexpr int  padAxisIndex(int code)    { return code / 2; }
+    static constexpr bool padAxisNegative(int code) { return (code % 2) != 0; }
+
+    // Digitaliza un eje: valor crudo de GLFW + estado del frame anterior =>
+    // estado nuevo. Umbral con histéresis (0.5 activa, 0.4 suelta) para que un
+    // stick parado en el borde no dé un flanco por frame. Pública para poder
+    // probarla sin mando conectado. Los gatillos vienen en [-1, 1] con el
+    // reposo en -1 y se renormalizan aquí a [0, 1].
+    static bool padAxisActive(int code, float rawValue, bool wasActive);
+
+    static bool isPadAxisDown(int code);
+    static bool isPadAxisPressed(int code);   // solo el frame del flanco
 
     // --- Acciones con nombre (panel Input Actions del editor) ---
     // Una acción está activa si CUALQUIERA de sus bindings lo está (OR). El
@@ -72,6 +98,9 @@ private:
     // GLFW_GAMEPAD_BUTTON_LAST+1 entradas, del primer mando conectado.
     static std::array<bool, 15> s_padCurr;
     static std::array<bool, 15> s_padPrev;
+    // Ejes ya digitalizados; índice = código de padAxisCode().
+    static std::array<bool, kPadAxisBindingCount> s_axisCurr;
+    static std::array<bool, kPadAxisBindingCount> s_axisPrev;
 
     static std::unordered_map<std::string, std::vector<ActionBinding>> s_actions;
     static bool s_actionsLoaded;

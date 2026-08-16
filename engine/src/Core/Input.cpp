@@ -11,6 +11,18 @@ namespace DonTopo
     {
         // La misma ruta que usa InputActionsPanel (directorio de trabajo).
         const char* kInputActionsFile = "input_actions.json";
+
+        // Umbral de activación de un eje y umbral de suelta. Separados a
+        // propósito: con uno solo, un stick dejado justo en el límite alterna
+        // activo/inactivo y dispara un IsActionPressed por frame.
+        constexpr float kAxisPressThreshold   = 0.5f;
+        constexpr float kAxisReleaseThreshold = 0.4f;
+
+        bool isTriggerAxis(int axis)
+        {
+            return axis == GLFW_GAMEPAD_AXIS_LEFT_TRIGGER
+                || axis == GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER;
+        }
     }
 
     GLFWwindow* Input::s_window = nullptr;
@@ -20,6 +32,8 @@ namespace DonTopo
     std::array<bool, 8>   Input::s_mPrev{};
     std::array<bool, 15>  Input::s_padCurr{};
     std::array<bool, 15>  Input::s_padPrev{};
+    std::array<bool, Input::kPadAxisBindingCount> Input::s_axisCurr{};
+    std::array<bool, Input::kPadAxisBindingCount> Input::s_axisPrev{};
 
     std::unordered_map<std::string, std::vector<ActionBinding>> Input::s_actions;
     bool Input::s_actionsLoaded = false;
@@ -41,16 +55,22 @@ namespace DonTopo
         // Primer mando conectado con mapeo conocido. Sin mando, todo a false:
         // desconectarlo a mitad de partida suelta los botones, no los deja
         // pegados (y el frame siguiente da el flanco de subida).
-        s_padPrev = s_padCurr;
+        s_padPrev  = s_padCurr;
+        s_axisPrev = s_axisCurr;
         GLFWgamepadstate pad{};
         if (glfwJoystickIsGamepad(GLFW_JOYSTICK_1) && glfwGetGamepadState(GLFW_JOYSTICK_1, &pad))
         {
             for (int b = 0; b <= GLFW_GAMEPAD_BUTTON_LAST; ++b)
                 s_padCurr[b] = pad.buttons[b] == GLFW_PRESS;
+            // La histéresis mira el estado del frame anterior, de ahí s_axisPrev
+            // (s_axisCurr ya se está pisando en este mismo bucle).
+            for (int c = 0; c < kPadAxisBindingCount; ++c)
+                s_axisCurr[c] = padAxisActive(c, pad.axes[padAxisIndex(c)], s_axisPrev[c]);
         }
         else
         {
             s_padCurr.fill(false);
+            s_axisCurr.fill(false);
         }
     }
 
@@ -78,6 +98,39 @@ namespace DonTopo
     {
         return button >= 0 && button <= GLFW_GAMEPAD_BUTTON_LAST
             && s_padCurr[button] && !s_padPrev[button];
+    }
+
+    bool Input::padAxisActive(int code, float rawValue, bool wasActive)
+    {
+        if (code < 0 || code >= kPadAxisBindingCount) return false;
+
+        const int  axis     = padAxisIndex(code);
+        const bool negative = padAxisNegative(code);
+
+        float value = rawValue;
+        if (isTriggerAxis(axis))
+        {
+            // Un gatillo solo se aprieta hacia un lado: la dirección negativa
+            // no es bindeable y no puede activarse nunca.
+            if (negative) return false;
+            value = (rawValue + 1.0f) * 0.5f;   // [-1,1] en reposo -1 => [0,1]
+        }
+        else if (negative)
+        {
+            value = -value;   // el binding mira su lado del eje
+        }
+
+        return value > (wasActive ? kAxisReleaseThreshold : kAxisPressThreshold);
+    }
+
+    bool Input::isPadAxisDown(int code)
+    {
+        return code >= 0 && code < kPadAxisBindingCount && s_axisCurr[code];
+    }
+    bool Input::isPadAxisPressed(int code)
+    {
+        return code >= 0 && code < kPadAxisBindingCount
+            && s_axisCurr[code] && !s_axisPrev[code];
     }
 
     void Input::ensureActionsLoaded()
@@ -127,6 +180,13 @@ namespace DonTopo
                     if (device == "key")        b.device = ActionDevice::Key;
                     else if (device == "mouse") b.device = ActionDevice::Mouse;
                     else if (device == "pad")   b.device = ActionDevice::Pad;
+                    else if (device == "padaxis")
+                    {
+                        // Código fuera de rango (fichero de otra versión, edición
+                        // a mano): se descarta aquí y no en cada consulta.
+                        if (b.code < 0 || b.code >= kPadAxisBindingCount) continue;
+                        b.device = ActionDevice::PadAxis;
+                    }
                     else continue;
                     bindings.push_back(b);
                 }
@@ -167,6 +227,7 @@ namespace DonTopo
             if (b.device == ActionDevice::Mouse && isMouseButtonDown(b.code)) return true;
             if (b.device == ActionDevice::Pad && b.code >= 0 && b.code <= GLFW_GAMEPAD_BUTTON_LAST
                 && s_padCurr[b.code]) return true;
+            if (b.device == ActionDevice::PadAxis && isPadAxisDown(b.code)) return true;
         }
         return false;
     }
@@ -183,6 +244,7 @@ namespace DonTopo
                 && s_mCurr[b.code] && !s_mPrev[b.code]) return true;
             if (b.device == ActionDevice::Pad && b.code >= 0 && b.code <= GLFW_GAMEPAD_BUTTON_LAST
                 && s_padCurr[b.code] && !s_padPrev[b.code]) return true;
+            if (b.device == ActionDevice::PadAxis && isPadAxisPressed(b.code)) return true;
         }
         return false;
     }
@@ -199,6 +261,8 @@ namespace DonTopo
                 && !s_mCurr[b.code] && s_mPrev[b.code]) return true;
             if (b.device == ActionDevice::Pad && b.code >= 0 && b.code <= GLFW_GAMEPAD_BUTTON_LAST
                 && !s_padCurr[b.code] && s_padPrev[b.code]) return true;
+            if (b.device == ActionDevice::PadAxis && b.code >= 0 && b.code < kPadAxisBindingCount
+                && !s_axisCurr[b.code] && s_axisPrev[b.code]) return true;
         }
         return false;
     }

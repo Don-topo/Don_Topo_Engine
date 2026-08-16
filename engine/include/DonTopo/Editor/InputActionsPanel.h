@@ -5,7 +5,7 @@
 namespace DonTopo {
 
 // Ventana "Input Actions" — mapa de acciones con nombre a teclas, botones de
-// ratón y botones de mando.
+// ratón, botones de mando y direcciones de stick/gatillo.
 //
 // Panel propio y no un bloque de Properties porque el mapa es global al
 // proyecto, no de un GameObject: no hay selección de la que colgarlo.
@@ -37,15 +37,18 @@ public:
     // un desajuste entre la ida y la vuelta pinta un binding con un nombre y lo
     // dispara con otro botón, y eso no lo ve ninguna prueba de GUI.
 
-    // ImGuiKey -> dispositivo ("key"/"mouse"/"pad") y código GLFW. Devuelve
-    // false si no hay equivalente (ruedas del ratón, gatillos y sticks del
-    // mando, teclas exóticas): ese binding se sigue pintando en el panel pero
-    // no llega al mapa de runtime.
+    // ImGuiKey -> dispositivo ("key"/"mouse"/"pad"/"padaxis") y código GLFW.
+    // Devuelve false si no hay equivalente (ruedas del ratón, teclas exóticas):
+    // ese binding se sigue pintando en el panel pero no llega al mapa de
+    // runtime.
     static bool bindingToGlfw(int imguiKey, const char*& outDevice, int& outCode);
     // GLFW_GAMEPAD_BUTTON_* -> ImGuiKey, o -1 si el índice no es un botón. Es
     // la inversa de bindingToGlfw para el mando: el panel captura los botones
     // por GLFW (ver pollFirstPressedPadButton) y los guarda como ImGuiKey.
     static int padButtonToBinding(int glfwButton);
+    // Código de eje (Input::padAxisCode) -> ImGuiKey, o -1 si ese código no es
+    // bindeable (gatillo en negativo). Inversa de bindingToGlfw para "padaxis".
+    static int padAxisToBinding(int axisCode);
 
 private:
     bool load();   // devuelve false si no había fichero o no era legible
@@ -62,6 +65,10 @@ private:
     // pondría al mando a navegar toda la interfaz (en Play Mode, el botón de
     // saltar activaría además el widget con foco).
     int pollFirstPressedPadButton() const;
+    // Primera dirección de stick o gatillo cruzada este frame, ya traducida a
+    // ImGuiKey, o -1. Igual que la de botones: por Core, no por ImGui, que ni
+    // siquiera expone los ejes del mando como teclas.
+    int pollFirstPressedPadAxis() const;
 
     bool m_open = false;   // arranca cerrado: es un panel especializado
 

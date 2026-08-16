@@ -50,11 +50,38 @@ bool InputActionsPanel::bindingToGlfw(int imguiKey, const char*& outDevice, int&
         outCode   = imguiKey - ImGuiKey_MouseLeft;   // GLFW_MOUSE_BUTTON_LEFT == 0
         return true;
     }
-    // Mando: solo los botones digitales tienen equivalente en GLFW. Los
-    // gatillos analógicos (L2/R2) y los sticks son ejes, no botones: se
-    // siguen viendo en el panel pero no llegan al mapa de runtime.
+    // Mando. Los botones digitales van a "pad" con su GLFW_GAMEPAD_BUTTON_*;
+    // los gatillos (L2/R2) y las direcciones de stick son ejes en GLFW y van a
+    // "padaxis" con el código eje+signo de Input::padAxisCode. Ojo al signo del
+    // eje Y: en GLFW arriba es NEGATIVO.
     if (imguiKey >= ImGuiKey_GamepadStart && imguiKey <= ImGuiKey_GamepadRStickDown)
     {
+        outDevice = "padaxis";
+        switch (imguiKey)
+        {
+            case ImGuiKey_GamepadL2:
+                outCode = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_TRIGGER,  false); return true;
+            case ImGuiKey_GamepadR2:
+                outCode = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER, false); return true;
+            case ImGuiKey_GamepadLStickRight:
+                outCode = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_X,  false); return true;
+            case ImGuiKey_GamepadLStickLeft:
+                outCode = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_X,  true);  return true;
+            case ImGuiKey_GamepadLStickDown:
+                outCode = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_Y,  false); return true;
+            case ImGuiKey_GamepadLStickUp:
+                outCode = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_Y,  true);  return true;
+            case ImGuiKey_GamepadRStickRight:
+                outCode = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_X, false); return true;
+            case ImGuiKey_GamepadRStickLeft:
+                outCode = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_X, true);  return true;
+            case ImGuiKey_GamepadRStickDown:
+                outCode = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_Y, false); return true;
+            case ImGuiKey_GamepadRStickUp:
+                outCode = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_Y, true);  return true;
+            default: break;   // el resto son botones digitales
+        }
+
         outDevice = "pad";
         switch (imguiKey)
         {
@@ -72,7 +99,7 @@ bool InputActionsPanel::bindingToGlfw(int imguiKey, const char*& outDevice, int&
             case ImGuiKey_GamepadR1:        outCode = GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER;  return true;
             case ImGuiKey_GamepadL3:        outCode = GLFW_GAMEPAD_BUTTON_LEFT_THUMB;    return true;
             case ImGuiKey_GamepadR3:        outCode = GLFW_GAMEPAD_BUTTON_RIGHT_THUMB;   return true;
-            default: return false;   // L2/R2 y sticks: ejes, no botones
+            default: return false;   // hueco del enum de ImGui sin equivalente
         }
     }
 
@@ -164,6 +191,32 @@ int InputActionsPanel::padButtonToBinding(int glfwButton)
     }
 }
 
+int InputActionsPanel::padAxisToBinding(int code)
+{
+    if (code < 0 || code >= Input::kPadAxisBindingCount) return -1;
+
+    const int  axis     = Input::padAxisIndex(code);
+    const bool negative = Input::padAxisNegative(code);
+    switch (axis)
+    {
+        case GLFW_GAMEPAD_AXIS_LEFT_X:
+            return negative ? ImGuiKey_GamepadLStickLeft : ImGuiKey_GamepadLStickRight;
+        case GLFW_GAMEPAD_AXIS_LEFT_Y:
+            return negative ? ImGuiKey_GamepadLStickUp   : ImGuiKey_GamepadLStickDown;
+        case GLFW_GAMEPAD_AXIS_RIGHT_X:
+            return negative ? ImGuiKey_GamepadRStickLeft : ImGuiKey_GamepadRStickRight;
+        case GLFW_GAMEPAD_AXIS_RIGHT_Y:
+            return negative ? ImGuiKey_GamepadRStickUp   : ImGuiKey_GamepadRStickDown;
+        // Un gatillo solo se aprieta hacia un lado: su dirección negativa no es
+        // un binding.
+        case GLFW_GAMEPAD_AXIS_LEFT_TRIGGER:
+            return negative ? -1 : ImGuiKey_GamepadL2;
+        case GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER:
+            return negative ? -1 : ImGuiKey_GamepadR2;
+        default: return -1;
+    }
+}
+
 InputActionsPanel::InputActionsPanel()
 {
     load();
@@ -221,8 +274,20 @@ bool InputActionsPanel::load()
             }
         }
         // El panel no lee "glfw" (su modelo son ImGuiKey y de ahí se regenera):
-        // solo mira si falta, para reescribir el fichero migrado una vez.
-        if (aj.find("glfw") == aj.end())
+        // solo mira si lo que hay en disco coincide con lo que la traducción de
+        // AHORA produciría. No basta con mirar si el array falta: un fichero
+        // guardado por una versión con menos dispositivos traducibles (los
+        // sticks no llegaban al runtime) trae "glfw" pero incompleto, y esos
+        // bindings se quedarían pintados y muertos hasta tocar el panel.
+        size_t translatable = 0;
+        for (int b : a.bindings)
+        {
+            const char* device = nullptr;
+            int code = 0;
+            if (bindingToGlfw(b, device, code)) ++translatable;
+        }
+        auto glfwIt = aj.find("glfw");
+        if (glfwIt == aj.end() || !glfwIt->is_array() || glfwIt->size() != translatable)
             m_needsMigrationSave = true;
         m_actions.push_back(std::move(a));
     }
@@ -290,6 +355,17 @@ int InputActionsPanel::pollFirstPressedPadButton() const
     return -1;
 }
 
+int InputActionsPanel::pollFirstPressedPadAxis() const
+{
+    for (int c = 0; c < Input::kPadAxisBindingCount; ++c)
+    {
+        if (!Input::isPadAxisPressed(c)) continue;
+        const int key = padAxisToBinding(c);
+        if (key >= 0) return key;   // gatillo en negativo: no es bindeable
+    }
+    return -1;
+}
+
 void InputActionsPanel::draw()
 {
     // Coste cero con el panel cerrado, incluida la escucha: si el panel se
@@ -351,9 +427,11 @@ void InputActionsPanel::draw()
             {
                 // Teclado/ratón por ImGui; mando por Core. El orden importa
                 // poco (no se puede pulsar tecla y botón el mismo frame), pero
-                // el mando va después porque es el caso raro.
+                // el mando va después porque es el caso raro. Los ejes van los
+                // últimos: al empujar un stick es fácil rozar también su L3/R3.
                 int key = pollFirstPressedKey();
                 if (key < 0) key = pollFirstPressedPadButton();
+                if (key < 0) key = pollFirstPressedPadAxis();
                 if (key >= 0)
                 {
                     Action& a = m_actions[m_listeningIndex];
@@ -426,7 +504,7 @@ void InputActionsPanel::draw()
                 {
                     if (ImGui::Button("Cancel listen")) m_listeningIndex = -1;
                     ImGui::SameLine();
-                    ImGui::TextDisabled("Pulsa una tecla, boton de raton o de mando (Esc cancela)");
+                    ImGui::TextDisabled("Pulsa tecla, boton de raton, boton de mando, stick o gatillo (Esc cancela)");
                     // Sin mando reconocido no llega ningun boton: decirlo aqui
                     // evita que parezca que la escucha esta rota.
                     if (!glfwJoystickIsGamepad(GLFW_JOYSTICK_1))
