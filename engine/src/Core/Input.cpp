@@ -70,6 +70,15 @@ namespace DonTopo
     {
         return s_window && glfwGetMouseButton(s_window, button) == GLFW_PRESS;
     }
+    bool Input::isPadButtonDown(int button)
+    {
+        return button >= 0 && button <= GLFW_GAMEPAD_BUTTON_LAST && s_padCurr[button];
+    }
+    bool Input::isPadButtonPressed(int button)
+    {
+        return button >= 0 && button <= GLFW_GAMEPAD_BUTTON_LAST
+            && s_padCurr[button] && !s_padPrev[button];
+    }
 
     void Input::ensureActionsLoaded()
     {

@@ -32,6 +32,14 @@ public:
     static bool isKeyReleased(int key);  // solo el frame del flanco de subida
     static bool isMouseButtonDown(int button);
 
+    // --- Mando (primer mando conectado con mapeo conocido) ---
+    // Índice = GLFW_GAMEPAD_BUTTON_*. Sin mando conectado, siempre false. El
+    // panel Input Actions los usa para capturar bindings: ImGui no ve el mando
+    // salvo que se active NavEnableGamepad, y eso pondría al mando a navegar la
+    // interfaz del editor.
+    static bool isPadButtonDown(int button);
+    static bool isPadButtonPressed(int button);   // solo el frame del flanco
+
     // --- Acciones con nombre (panel Input Actions del editor) ---
     // Una acción está activa si CUALQUIERA de sus bindings lo está (OR). El
     // mapa se carga de input_actions.json la primera vez que se pregunta;
@@ -61,8 +69,7 @@ private:
     // isMouseButtonDown consulta GLFW directo y no da flancos.
     static std::array<bool, 8> s_mCurr;
     static std::array<bool, 8> s_mPrev;
-    // GLFW_GAMEPAD_BUTTON_LAST+1 entradas, del primer mando conectado. Solo lo
-    // consumen las acciones: no hay API pública de gamepad todavía.
+    // GLFW_GAMEPAD_BUTTON_LAST+1 entradas, del primer mando conectado.
     static std::array<bool, 15> s_padCurr;
     static std::array<bool, 15> s_padPrev;
 

@@ -23,110 +23,6 @@ namespace {
     // Longitud máxima de nombre, la de los buffers del panel.
     constexpr size_t kNameCap = 63;
 
-    // ImGuiKey -> código GLFW. Vive aquí y no en Core porque Core no puede
-    // incluir <imgui.h> (split Core/Editor): el editor traduce al guardar y
-    // Core lee ya traducido. Devuelve false si la tecla no tiene equivalente
-    // GLFW (ruedas del ratón, teclas exóticas): ese binding se sigue pintando
-    // en el panel pero no llega al mapa de runtime.
-    bool toGlfw(int imguiKey, const char*& outDevice, int& outCode)
-    {
-        // Ratón: ImGui los mete en el mismo rango de ImGuiKey que las teclas.
-        if (imguiKey >= ImGuiKey_MouseLeft && imguiKey <= ImGuiKey_MouseX2)
-        {
-            outDevice = "mouse";
-            outCode   = imguiKey - ImGuiKey_MouseLeft;   // GLFW_MOUSE_BUTTON_LEFT == 0
-            return true;
-        }
-        // Mando: solo los botones digitales tienen equivalente en GLFW. Los
-        // gatillos analógicos (L2/R2) y los sticks son ejes, no botones: se
-        // siguen viendo en el panel pero no llegan al mapa de runtime.
-        if (imguiKey >= ImGuiKey_GamepadStart && imguiKey <= ImGuiKey_GamepadRStickDown)
-        {
-            outDevice = "pad";
-            switch (imguiKey)
-            {
-                case ImGuiKey_GamepadStart:     outCode = GLFW_GAMEPAD_BUTTON_START;         return true;
-                case ImGuiKey_GamepadBack:      outCode = GLFW_GAMEPAD_BUTTON_BACK;          return true;
-                case ImGuiKey_GamepadFaceDown:  outCode = GLFW_GAMEPAD_BUTTON_A;             return true;
-                case ImGuiKey_GamepadFaceRight: outCode = GLFW_GAMEPAD_BUTTON_B;             return true;
-                case ImGuiKey_GamepadFaceLeft:  outCode = GLFW_GAMEPAD_BUTTON_X;             return true;
-                case ImGuiKey_GamepadFaceUp:    outCode = GLFW_GAMEPAD_BUTTON_Y;             return true;
-                case ImGuiKey_GamepadDpadLeft:  outCode = GLFW_GAMEPAD_BUTTON_DPAD_LEFT;     return true;
-                case ImGuiKey_GamepadDpadRight: outCode = GLFW_GAMEPAD_BUTTON_DPAD_RIGHT;    return true;
-                case ImGuiKey_GamepadDpadUp:    outCode = GLFW_GAMEPAD_BUTTON_DPAD_UP;       return true;
-                case ImGuiKey_GamepadDpadDown:  outCode = GLFW_GAMEPAD_BUTTON_DPAD_DOWN;     return true;
-                case ImGuiKey_GamepadL1:        outCode = GLFW_GAMEPAD_BUTTON_LEFT_BUMPER;   return true;
-                case ImGuiKey_GamepadR1:        outCode = GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER;  return true;
-                case ImGuiKey_GamepadL3:        outCode = GLFW_GAMEPAD_BUTTON_LEFT_THUMB;    return true;
-                case ImGuiKey_GamepadR3:        outCode = GLFW_GAMEPAD_BUTTON_RIGHT_THUMB;   return true;
-                default: return false;   // L2/R2 y sticks: ejes, no botones
-            }
-        }
-
-        outDevice = "key";
-        // Rangos contiguos en ambos enums.
-        if (imguiKey >= ImGuiKey_0 && imguiKey <= ImGuiKey_9)
-        { outCode = GLFW_KEY_0 + (imguiKey - ImGuiKey_0); return true; }
-        if (imguiKey >= ImGuiKey_A && imguiKey <= ImGuiKey_Z)
-        { outCode = GLFW_KEY_A + (imguiKey - ImGuiKey_A); return true; }
-        if (imguiKey >= ImGuiKey_F1 && imguiKey <= ImGuiKey_F12)
-        { outCode = GLFW_KEY_F1 + (imguiKey - ImGuiKey_F1); return true; }
-        if (imguiKey >= ImGuiKey_Keypad0 && imguiKey <= ImGuiKey_Keypad9)
-        { outCode = GLFW_KEY_KP_0 + (imguiKey - ImGuiKey_Keypad0); return true; }
-
-        switch (imguiKey)
-        {
-            case ImGuiKey_Tab:          outCode = GLFW_KEY_TAB;            return true;
-            case ImGuiKey_LeftArrow:    outCode = GLFW_KEY_LEFT;           return true;
-            case ImGuiKey_RightArrow:   outCode = GLFW_KEY_RIGHT;          return true;
-            case ImGuiKey_UpArrow:      outCode = GLFW_KEY_UP;             return true;
-            case ImGuiKey_DownArrow:    outCode = GLFW_KEY_DOWN;           return true;
-            case ImGuiKey_PageUp:       outCode = GLFW_KEY_PAGE_UP;        return true;
-            case ImGuiKey_PageDown:     outCode = GLFW_KEY_PAGE_DOWN;      return true;
-            case ImGuiKey_Home:         outCode = GLFW_KEY_HOME;           return true;
-            case ImGuiKey_End:          outCode = GLFW_KEY_END;            return true;
-            case ImGuiKey_Insert:       outCode = GLFW_KEY_INSERT;         return true;
-            case ImGuiKey_Delete:       outCode = GLFW_KEY_DELETE;         return true;
-            case ImGuiKey_Backspace:    outCode = GLFW_KEY_BACKSPACE;      return true;
-            case ImGuiKey_Space:        outCode = GLFW_KEY_SPACE;          return true;
-            case ImGuiKey_Enter:        outCode = GLFW_KEY_ENTER;          return true;
-            case ImGuiKey_Escape:       outCode = GLFW_KEY_ESCAPE;         return true;
-            case ImGuiKey_LeftCtrl:     outCode = GLFW_KEY_LEFT_CONTROL;   return true;
-            case ImGuiKey_LeftShift:    outCode = GLFW_KEY_LEFT_SHIFT;     return true;
-            case ImGuiKey_LeftAlt:      outCode = GLFW_KEY_LEFT_ALT;       return true;
-            case ImGuiKey_LeftSuper:    outCode = GLFW_KEY_LEFT_SUPER;     return true;
-            case ImGuiKey_RightCtrl:    outCode = GLFW_KEY_RIGHT_CONTROL;  return true;
-            case ImGuiKey_RightShift:   outCode = GLFW_KEY_RIGHT_SHIFT;    return true;
-            case ImGuiKey_RightAlt:     outCode = GLFW_KEY_RIGHT_ALT;      return true;
-            case ImGuiKey_RightSuper:   outCode = GLFW_KEY_RIGHT_SUPER;    return true;
-            case ImGuiKey_Menu:         outCode = GLFW_KEY_MENU;           return true;
-            case ImGuiKey_Apostrophe:   outCode = GLFW_KEY_APOSTROPHE;     return true;
-            case ImGuiKey_Comma:        outCode = GLFW_KEY_COMMA;          return true;
-            case ImGuiKey_Minus:        outCode = GLFW_KEY_MINUS;          return true;
-            case ImGuiKey_Period:       outCode = GLFW_KEY_PERIOD;         return true;
-            case ImGuiKey_Slash:        outCode = GLFW_KEY_SLASH;          return true;
-            case ImGuiKey_Semicolon:    outCode = GLFW_KEY_SEMICOLON;      return true;
-            case ImGuiKey_Equal:        outCode = GLFW_KEY_EQUAL;          return true;
-            case ImGuiKey_LeftBracket:  outCode = GLFW_KEY_LEFT_BRACKET;   return true;
-            case ImGuiKey_Backslash:    outCode = GLFW_KEY_BACKSLASH;      return true;
-            case ImGuiKey_RightBracket: outCode = GLFW_KEY_RIGHT_BRACKET;  return true;
-            case ImGuiKey_GraveAccent:  outCode = GLFW_KEY_GRAVE_ACCENT;   return true;
-            case ImGuiKey_CapsLock:     outCode = GLFW_KEY_CAPS_LOCK;      return true;
-            case ImGuiKey_ScrollLock:   outCode = GLFW_KEY_SCROLL_LOCK;    return true;
-            case ImGuiKey_NumLock:      outCode = GLFW_KEY_NUM_LOCK;       return true;
-            case ImGuiKey_PrintScreen:  outCode = GLFW_KEY_PRINT_SCREEN;   return true;
-            case ImGuiKey_Pause:        outCode = GLFW_KEY_PAUSE;          return true;
-            case ImGuiKey_KeypadDecimal:  outCode = GLFW_KEY_KP_DECIMAL;   return true;
-            case ImGuiKey_KeypadDivide:   outCode = GLFW_KEY_KP_DIVIDE;    return true;
-            case ImGuiKey_KeypadMultiply: outCode = GLFW_KEY_KP_MULTIPLY;  return true;
-            case ImGuiKey_KeypadSubtract: outCode = GLFW_KEY_KP_SUBTRACT;  return true;
-            case ImGuiKey_KeypadAdd:      outCode = GLFW_KEY_KP_ADD;       return true;
-            case ImGuiKey_KeypadEnter:    outCode = GLFW_KEY_KP_ENTER;     return true;
-            case ImGuiKey_KeypadEqual:    outCode = GLFW_KEY_KP_EQUAL;     return true;
-            default: return false;
-        }
-    }
-
     // Publica un snippet por acción y función en el autocomplete del Script
     // Editor. Con la lista vacía, el popup queda exactamente como antes.
     void publishAutocomplete(const std::vector<InputActionsPanel::Action>& actions)
@@ -140,6 +36,131 @@ namespace {
             symbols.push_back("Input.IsActionReleased(\"" + a.name + "\")");
         }
         setLuaApiActionSymbols(std::move(symbols));
+    }
+}
+
+// La traducción vive aquí y no en Core porque Core no puede incluir <imgui.h>
+// (split Core/Editor): el editor traduce al guardar y Core lee ya traducido.
+bool InputActionsPanel::bindingToGlfw(int imguiKey, const char*& outDevice, int& outCode)
+{
+    // Ratón: ImGui los mete en el mismo rango de ImGuiKey que las teclas.
+    if (imguiKey >= ImGuiKey_MouseLeft && imguiKey <= ImGuiKey_MouseX2)
+    {
+        outDevice = "mouse";
+        outCode   = imguiKey - ImGuiKey_MouseLeft;   // GLFW_MOUSE_BUTTON_LEFT == 0
+        return true;
+    }
+    // Mando: solo los botones digitales tienen equivalente en GLFW. Los
+    // gatillos analógicos (L2/R2) y los sticks son ejes, no botones: se
+    // siguen viendo en el panel pero no llegan al mapa de runtime.
+    if (imguiKey >= ImGuiKey_GamepadStart && imguiKey <= ImGuiKey_GamepadRStickDown)
+    {
+        outDevice = "pad";
+        switch (imguiKey)
+        {
+            case ImGuiKey_GamepadStart:     outCode = GLFW_GAMEPAD_BUTTON_START;         return true;
+            case ImGuiKey_GamepadBack:      outCode = GLFW_GAMEPAD_BUTTON_BACK;          return true;
+            case ImGuiKey_GamepadFaceDown:  outCode = GLFW_GAMEPAD_BUTTON_A;             return true;
+            case ImGuiKey_GamepadFaceRight: outCode = GLFW_GAMEPAD_BUTTON_B;             return true;
+            case ImGuiKey_GamepadFaceLeft:  outCode = GLFW_GAMEPAD_BUTTON_X;             return true;
+            case ImGuiKey_GamepadFaceUp:    outCode = GLFW_GAMEPAD_BUTTON_Y;             return true;
+            case ImGuiKey_GamepadDpadLeft:  outCode = GLFW_GAMEPAD_BUTTON_DPAD_LEFT;     return true;
+            case ImGuiKey_GamepadDpadRight: outCode = GLFW_GAMEPAD_BUTTON_DPAD_RIGHT;    return true;
+            case ImGuiKey_GamepadDpadUp:    outCode = GLFW_GAMEPAD_BUTTON_DPAD_UP;       return true;
+            case ImGuiKey_GamepadDpadDown:  outCode = GLFW_GAMEPAD_BUTTON_DPAD_DOWN;     return true;
+            case ImGuiKey_GamepadL1:        outCode = GLFW_GAMEPAD_BUTTON_LEFT_BUMPER;   return true;
+            case ImGuiKey_GamepadR1:        outCode = GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER;  return true;
+            case ImGuiKey_GamepadL3:        outCode = GLFW_GAMEPAD_BUTTON_LEFT_THUMB;    return true;
+            case ImGuiKey_GamepadR3:        outCode = GLFW_GAMEPAD_BUTTON_RIGHT_THUMB;   return true;
+            default: return false;   // L2/R2 y sticks: ejes, no botones
+        }
+    }
+
+    outDevice = "key";
+    // Rangos contiguos en ambos enums.
+    if (imguiKey >= ImGuiKey_0 && imguiKey <= ImGuiKey_9)
+    { outCode = GLFW_KEY_0 + (imguiKey - ImGuiKey_0); return true; }
+    if (imguiKey >= ImGuiKey_A && imguiKey <= ImGuiKey_Z)
+    { outCode = GLFW_KEY_A + (imguiKey - ImGuiKey_A); return true; }
+    if (imguiKey >= ImGuiKey_F1 && imguiKey <= ImGuiKey_F12)
+    { outCode = GLFW_KEY_F1 + (imguiKey - ImGuiKey_F1); return true; }
+    if (imguiKey >= ImGuiKey_Keypad0 && imguiKey <= ImGuiKey_Keypad9)
+    { outCode = GLFW_KEY_KP_0 + (imguiKey - ImGuiKey_Keypad0); return true; }
+
+    switch (imguiKey)
+    {
+        case ImGuiKey_Tab:          outCode = GLFW_KEY_TAB;            return true;
+        case ImGuiKey_LeftArrow:    outCode = GLFW_KEY_LEFT;           return true;
+        case ImGuiKey_RightArrow:   outCode = GLFW_KEY_RIGHT;          return true;
+        case ImGuiKey_UpArrow:      outCode = GLFW_KEY_UP;             return true;
+        case ImGuiKey_DownArrow:    outCode = GLFW_KEY_DOWN;           return true;
+        case ImGuiKey_PageUp:       outCode = GLFW_KEY_PAGE_UP;        return true;
+        case ImGuiKey_PageDown:     outCode = GLFW_KEY_PAGE_DOWN;      return true;
+        case ImGuiKey_Home:         outCode = GLFW_KEY_HOME;           return true;
+        case ImGuiKey_End:          outCode = GLFW_KEY_END;            return true;
+        case ImGuiKey_Insert:       outCode = GLFW_KEY_INSERT;         return true;
+        case ImGuiKey_Delete:       outCode = GLFW_KEY_DELETE;         return true;
+        case ImGuiKey_Backspace:    outCode = GLFW_KEY_BACKSPACE;      return true;
+        case ImGuiKey_Space:        outCode = GLFW_KEY_SPACE;          return true;
+        case ImGuiKey_Enter:        outCode = GLFW_KEY_ENTER;          return true;
+        case ImGuiKey_Escape:       outCode = GLFW_KEY_ESCAPE;         return true;
+        case ImGuiKey_LeftCtrl:     outCode = GLFW_KEY_LEFT_CONTROL;   return true;
+        case ImGuiKey_LeftShift:    outCode = GLFW_KEY_LEFT_SHIFT;     return true;
+        case ImGuiKey_LeftAlt:      outCode = GLFW_KEY_LEFT_ALT;       return true;
+        case ImGuiKey_LeftSuper:    outCode = GLFW_KEY_LEFT_SUPER;     return true;
+        case ImGuiKey_RightCtrl:    outCode = GLFW_KEY_RIGHT_CONTROL;  return true;
+        case ImGuiKey_RightShift:   outCode = GLFW_KEY_RIGHT_SHIFT;    return true;
+        case ImGuiKey_RightAlt:     outCode = GLFW_KEY_RIGHT_ALT;      return true;
+        case ImGuiKey_RightSuper:   outCode = GLFW_KEY_RIGHT_SUPER;    return true;
+        case ImGuiKey_Menu:         outCode = GLFW_KEY_MENU;           return true;
+        case ImGuiKey_Apostrophe:   outCode = GLFW_KEY_APOSTROPHE;     return true;
+        case ImGuiKey_Comma:        outCode = GLFW_KEY_COMMA;          return true;
+        case ImGuiKey_Minus:        outCode = GLFW_KEY_MINUS;          return true;
+        case ImGuiKey_Period:       outCode = GLFW_KEY_PERIOD;         return true;
+        case ImGuiKey_Slash:        outCode = GLFW_KEY_SLASH;          return true;
+        case ImGuiKey_Semicolon:    outCode = GLFW_KEY_SEMICOLON;      return true;
+        case ImGuiKey_Equal:        outCode = GLFW_KEY_EQUAL;          return true;
+        case ImGuiKey_LeftBracket:  outCode = GLFW_KEY_LEFT_BRACKET;   return true;
+        case ImGuiKey_Backslash:    outCode = GLFW_KEY_BACKSLASH;      return true;
+        case ImGuiKey_RightBracket: outCode = GLFW_KEY_RIGHT_BRACKET;  return true;
+        case ImGuiKey_GraveAccent:  outCode = GLFW_KEY_GRAVE_ACCENT;   return true;
+        case ImGuiKey_CapsLock:     outCode = GLFW_KEY_CAPS_LOCK;      return true;
+        case ImGuiKey_ScrollLock:   outCode = GLFW_KEY_SCROLL_LOCK;    return true;
+        case ImGuiKey_NumLock:      outCode = GLFW_KEY_NUM_LOCK;       return true;
+        case ImGuiKey_PrintScreen:  outCode = GLFW_KEY_PRINT_SCREEN;   return true;
+        case ImGuiKey_Pause:        outCode = GLFW_KEY_PAUSE;          return true;
+        case ImGuiKey_KeypadDecimal:  outCode = GLFW_KEY_KP_DECIMAL;   return true;
+        case ImGuiKey_KeypadDivide:   outCode = GLFW_KEY_KP_DIVIDE;    return true;
+        case ImGuiKey_KeypadMultiply: outCode = GLFW_KEY_KP_MULTIPLY;  return true;
+        case ImGuiKey_KeypadSubtract: outCode = GLFW_KEY_KP_SUBTRACT;  return true;
+        case ImGuiKey_KeypadAdd:      outCode = GLFW_KEY_KP_ADD;       return true;
+        case ImGuiKey_KeypadEnter:    outCode = GLFW_KEY_KP_ENTER;     return true;
+        case ImGuiKey_KeypadEqual:    outCode = GLFW_KEY_KP_EQUAL;     return true;
+        default: return false;
+    }
+}
+
+int InputActionsPanel::padButtonToBinding(int glfwButton)
+{
+    switch (glfwButton)
+    {
+        case GLFW_GAMEPAD_BUTTON_A:            return ImGuiKey_GamepadFaceDown;
+        case GLFW_GAMEPAD_BUTTON_B:            return ImGuiKey_GamepadFaceRight;
+        case GLFW_GAMEPAD_BUTTON_X:            return ImGuiKey_GamepadFaceLeft;
+        case GLFW_GAMEPAD_BUTTON_Y:            return ImGuiKey_GamepadFaceUp;
+        case GLFW_GAMEPAD_BUTTON_LEFT_BUMPER:  return ImGuiKey_GamepadL1;
+        case GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER: return ImGuiKey_GamepadR1;
+        case GLFW_GAMEPAD_BUTTON_BACK:         return ImGuiKey_GamepadBack;
+        case GLFW_GAMEPAD_BUTTON_START:        return ImGuiKey_GamepadStart;
+        // GLFW_GAMEPAD_BUTTON_GUIDE (el botón de Xbox/PS del centro): ImGui no
+        // tiene ImGuiKey para él, así que no se puede bindear.
+        case GLFW_GAMEPAD_BUTTON_LEFT_THUMB:   return ImGuiKey_GamepadL3;
+        case GLFW_GAMEPAD_BUTTON_RIGHT_THUMB:  return ImGuiKey_GamepadR3;
+        case GLFW_GAMEPAD_BUTTON_DPAD_UP:      return ImGuiKey_GamepadDpadUp;
+        case GLFW_GAMEPAD_BUTTON_DPAD_RIGHT:   return ImGuiKey_GamepadDpadRight;
+        case GLFW_GAMEPAD_BUTTON_DPAD_DOWN:    return ImGuiKey_GamepadDpadDown;
+        case GLFW_GAMEPAD_BUTTON_DPAD_LEFT:    return ImGuiKey_GamepadDpadLeft;
+        default: return -1;   // fuera de rango, o botón sin ImGuiKey
     }
 }
 
@@ -221,7 +242,7 @@ void InputActionsPanel::save() const
         {
             const char* device = nullptr;
             int code = 0;
-            if (toGlfw(b, device, code))
+            if (bindingToGlfw(b, device, code))
                 glfw.push_back({ {"device", device}, {"code", code} });
         }
         actions.push_back({ {"name", a.name}, {"bindings", a.bindings}, {"glfw", std::move(glfw)} });
@@ -251,6 +272,20 @@ int InputActionsPanel::pollFirstPressedKey() const
         if (!name || name[0] == '\0' || std::strcmp(name, "Unknown") == 0) continue;
         // repeat=false: una pulsación mantenida no debe encadenar bindings.
         if (ImGui::IsKeyPressed(key, false)) return k;
+    }
+    return -1;
+}
+
+int InputActionsPanel::pollFirstPressedPadButton() const
+{
+    // Core ya sondea el mando una vez por frame (Input::update, fuera del gate
+    // de Play) y guarda prev/curr, así que aquí hay flanco de bajada sin estado
+    // propio: mantener pulsado un botón no encadena bindings.
+    for (int b = 0; b <= GLFW_GAMEPAD_BUTTON_LAST; ++b)
+    {
+        if (!Input::isPadButtonPressed(b)) continue;
+        const int key = padButtonToBinding(b);
+        if (key >= 0) return key;   // GUIDE no tiene ImGuiKey: se ignora
     }
     return -1;
 }
@@ -314,7 +349,11 @@ void InputActionsPanel::draw()
             }
             else
             {
-                const int key = pollFirstPressedKey();
+                // Teclado/ratón por ImGui; mando por Core. El orden importa
+                // poco (no se puede pulsar tecla y botón el mismo frame), pero
+                // el mando va después porque es el caso raro.
+                int key = pollFirstPressedKey();
+                if (key < 0) key = pollFirstPressedPadButton();
                 if (key >= 0)
                 {
                     Action& a = m_actions[m_listeningIndex];
@@ -388,6 +427,13 @@ void InputActionsPanel::draw()
                     if (ImGui::Button("Cancel listen")) m_listeningIndex = -1;
                     ImGui::SameLine();
                     ImGui::TextDisabled("Pulsa una tecla, boton de raton o de mando (Esc cancela)");
+                    // Sin mando reconocido no llega ningun boton: decirlo aqui
+                    // evita que parezca que la escucha esta rota.
+                    if (!glfwJoystickIsGamepad(GLFW_JOYSTICK_1))
+                    {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("[sin mando]");
+                    }
                 }
                 else if (ImGui::Button("Add Binding"))
                 {

@@ -32,6 +32,21 @@ public:
         std::vector<int> bindings;
     };
 
+    // --- Traducción entre el modelo del panel (ImGuiKey) y lo que entiende
+    // Core (códigos GLFW). Públicas y estáticas para poder testearlas headless:
+    // un desajuste entre la ida y la vuelta pinta un binding con un nombre y lo
+    // dispara con otro botón, y eso no lo ve ninguna prueba de GUI.
+
+    // ImGuiKey -> dispositivo ("key"/"mouse"/"pad") y código GLFW. Devuelve
+    // false si no hay equivalente (ruedas del ratón, gatillos y sticks del
+    // mando, teclas exóticas): ese binding se sigue pintando en el panel pero
+    // no llega al mapa de runtime.
+    static bool bindingToGlfw(int imguiKey, const char*& outDevice, int& outCode);
+    // GLFW_GAMEPAD_BUTTON_* -> ImGuiKey, o -1 si el índice no es un botón. Es
+    // la inversa de bindingToGlfw para el mando: el panel captura los botones
+    // por GLFW (ver pollFirstPressedPadButton) y los guarda como ImGuiKey.
+    static int padButtonToBinding(int glfwButton);
+
 private:
     bool load();   // devuelve false si no había fichero o no era legible
     void save() const;
@@ -41,6 +56,12 @@ private:
     // Recorre el rango de ImGuiKey y devuelve la primera tecla/botón pulsado
     // este frame, o -1. Esc no se devuelve nunca: lo consume la cancelación.
     int pollFirstPressedKey() const;
+    // Primer botón de mando pulsado este frame, ya traducido a ImGuiKey, o -1.
+    // Va por Core (glfwGetGamepadState) y no por ImGui: el backend de GLFW solo
+    // alimenta las ImGuiKey_Gamepad* si el editor activa NavEnableGamepad, y eso
+    // pondría al mando a navegar toda la interfaz (en Play Mode, el botón de
+    // saltar activaría además el widget con foco).
+    int pollFirstPressedPadButton() const;
 
     bool m_open = false;   // arranca cerrado: es un panel especializado
 
