@@ -54,6 +54,8 @@ namespace DonTopo {
             "FogPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
         static_assert(SsrPass::kFramesInFlight == MAX_FRAMES,
             "SsrPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
+        static_assert(AaPass::kFramesInFlight == MAX_FRAMES,
+            "AaPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
         static_assert(SsaoPass::kFramesInFlight == MAX_FRAMES,
             "SsaoPass::kFramesInFlight debe coincidir con Renderer::MAX_FRAMES");
         static_assert(DepthPrepassPass::kFramesInFlight == MAX_FRAMES,
@@ -84,7 +86,7 @@ namespace DonTopo {
         // Passes del AA: solo dependen de m_swapChainFormat, igual que el de
         // composicion, asi que sobreviven a los resize (lo que se recrea son sus
         // imagenes y framebuffers, en createAaImages).
-        createAaRenderPasses();
+        m_aaPass.createRenderPasses(aaCtx());
         createRenderPass();
         createFramebuffers();
         // createCommandBuffers/createSyncObjects solo dependen del device y
@@ -243,7 +245,8 @@ namespace DonTopo {
         // alojan los descriptor sets del AA, que necesitan sus layouts y sus
         // pools ya montados. El pool de queries se apoya en el
         // m_timestampsSupported que resolvio el bloom.
-        createAaPipelines();
+        m_aaPass.createPipelines(aaCtx());
+        createAaQueryPools();
         // La capa de UI ya se inicializó en initPresentation. En editor,
         // createOffscreenImages necesita que lo esté (llama a
         // registerUiTexture); en headless no la llama, así que el orden no
@@ -533,21 +536,7 @@ namespace DonTopo {
         // Anti-aliasing: las imagenes, los framebuffers y los sets se fueron con
         // destroyOffscreenImages (llama a destroyAaImages); aqui queda lo que no
         // depende del tamano ni del modo.
-        vkDestroyPipeline(m_gpu.device(), m_fxaaPipeline, nullptr);
-        vkDestroyPipeline(m_gpu.device(), m_ssaaPipeline, nullptr);
-        vkDestroyPipeline(m_gpu.device(), m_taaPipeline, nullptr);
-        vkDestroyPipelineLayout(m_gpu.device(), m_fxaaPipelineLayout, nullptr);
-        vkDestroyPipelineLayout(m_gpu.device(), m_ssaaPipelineLayout, nullptr);
-        vkDestroyPipelineLayout(m_gpu.device(), m_taaPipelineLayout, nullptr);
-        vkDestroyDescriptorPool(m_gpu.device(), m_aaDescPool, nullptr);
-        vkDestroyDescriptorPool(m_gpu.device(), m_taaDescPool, nullptr);
-        vkDestroyDescriptorSetLayout(m_gpu.device(), m_aaDescLayout, nullptr);
-        vkDestroyDescriptorSetLayout(m_gpu.device(), m_taaDescLayout, nullptr);
-        vkDestroySampler(m_gpu.device(), m_aaSampler, nullptr);
-        vkDestroyRenderPass(m_gpu.device(), m_aaRenderPass, nullptr);
-        vkDestroyRenderPass(m_gpu.device(), m_taaHistoryRenderPass, nullptr);
-        m_aaRenderPass         = VK_NULL_HANDLE;
-        m_taaHistoryRenderPass = VK_NULL_HANDLE;
+        m_aaPass.destroyPipelinesAndRenderPasses(aaCtx());
         if (m_perfQueryPool != VK_NULL_HANDLE)
         {
             vkDestroyQueryPool(m_gpu.device(), m_perfQueryPool, nullptr);
@@ -1704,7 +1693,7 @@ namespace DonTopo {
             // escribirlo: en None y en MSAA no existe, y pedir las cuatro de
             // golpe devolveria NOT_READY para todas y se perderia tambien el
             // total de arriba.
-            if (m_aaPassStamped[m_currentFrame])
+            if (m_aaPass.passStamped(m_currentFrame))
             {
                 uint64_t stamps[2] = {};
                 if (vkGetQueryPoolResults(m_gpu.device(), m_aaQueryPool, m_currentFrame * 4, 2,
@@ -1978,7 +1967,7 @@ namespace DonTopo {
             // Con jitter cuando el modo es TAA: tiene que moverse EXACTAMENTE
             // igual que la geometría o el TAA vería un borde permanente entre
             // ambos. Fuera de TAA es fc.proj tal cual.
-            const glm::mat4 proj = m_taaJitteredProj;
+            const glm::mat4 proj = m_aaPass.jitteredProj();
 
             // Skybox — fullscreen quad, depth LEQUAL sin escritura (al final del pass).
             // Omitido en wireframe: el fondo ya es negro sólido (clearValue por defecto).
@@ -2044,7 +2033,7 @@ namespace DonTopo {
             // m_offscreenImage. En None y en MSAA escribe directamente en
             // m_offscreenImage, exactamente como antes de esta feature: mismo
             // render pass, mismos comandos.
-            rpInfo.framebuffer       = needsAaIntermediate() ? m_aaSrcFramebuffer[m_currentFrame]
+            rpInfo.framebuffer       = needsAaIntermediate() ? m_aaPass.compositeFramebuffer(m_currentFrame)
                                                              : m_compositeFramebuffer[m_currentFrame];
             rpInfo.renderArea.extent = m_renderExtent;
             rpInfo.renderArea.offset = {0, 0};
@@ -2098,7 +2087,7 @@ namespace DonTopo {
             // tonemapeado y con el contorno de seleccion y los gizmos ya dibujados
             // (asi que tambien se les suavizan los bordes, que es lo deseado: sus
             // lineas y el casco invertido son lo mas escalonado de la pantalla).
-            recordAaPass(cmd);
+            m_aaPass.record(aaCtx(), cmd);
 
             // Cierre de la medida del render completo, ya con el AA incluido. Es
             // la referencia con la que se compara el sobrecoste de SSAA y MSAA,
@@ -3084,29 +3073,12 @@ namespace DonTopo {
         // línea equivalente del final del pass del TAA se queda donde está y
         // escribe exactamente el mismo valor: con el TAA activo esto es
         // redundante, no un cambio.
-        m_taaPrevViewProj  = m_taaCurrViewProj;
-        m_taaCurrViewProj  = fc.proj * fc.view;
-        m_taaJitteredProj  = fc.proj;
-        if (m_aaActiveMode == AaMode::Taa)
-        {
-            // Halton(2,3) desplazado a [-0.5, 0.5] píxeles. 16 posiciones antes
-            // de repetir: suficiente para que el promedio sea estable y corto
-            // para que el ciclo no se note al parar la cámara.
-            m_taaJitter.x = (halton(m_taaJitterIndex + 1, 2) - 0.5f) * m_taaJitterScale;
-            m_taaJitter.y = (halton(m_taaJitterIndex + 1, 3) - 0.5f) * m_taaJitterScale;
-            m_taaJitterIndex = (m_taaJitterIndex + 1) % 16;
-
-            // Desplazamiento en clip space: el ancho completo del clip es 2, de
-            // ahí el factor. Se aplica sobre la columna de la Z para que el
-            // desplazamiento sea constante en pantalla a cualquier profundidad.
-            m_taaJitteredProj[2][0] += 2.0f * m_taaJitter.x / (float)m_renderExtent.width;
-            m_taaJitteredProj[2][1] += 2.0f * m_taaJitter.y / (float)m_renderExtent.height;
-        }
+        m_aaPass.updateFrameMatrices(aaCtx(), fc.view, fc.proj);
 
         UniformBufferObject ubo{};
         ubo.view = fc.view;
         // Con TAA sale jittereada; en cualquier otro modo es fc.proj tal cual.
-        ubo.proj = m_taaJitteredProj;
+        ubo.proj = m_aaPass.jitteredProj();
         ubo.numLights        = std::min((int)m_lights.size(), MAX_LIGHTS);
         ubo.ambientIntensity = m_ambientEnabled ? m_ambientIntensity : 0.0f;
         for(int i = 0; i < ubo.numLights; i++)
@@ -6033,7 +6005,8 @@ namespace DonTopo {
         m_fpPass.createBuffers(fpCtx());
         // ANTES de los framebuffers de escena y composicion: con MSAA sus
         // attachments de color son las imagenes multisample que se crean ahi.
-        createAaImages();
+        createMsaaImages();
+        m_aaPass.createImages(aaCtx());
 
         const bool msaa = (m_aaSampleCount != VK_SAMPLE_COUNT_1_BIT);
 
@@ -6095,7 +6068,8 @@ namespace DonTopo {
         m_ssrPass.destroyImages(ssrCtx());
         m_fogPass.destroySets();
         m_motionBlurPass.destroyImages(motionBlurCtx());
-        destroyAaImages();
+        m_aaPass.destroyImages(aaCtx());
+        destroyMsaaImages();
         for (int i = 0; i < MAX_FRAMES; i++)
         {
             if (m_offscreenDescSet[i] && m_ui)
@@ -6557,312 +6531,49 @@ namespace DonTopo {
             m_gpu, m_res, *this, m_renderExtent, m_currentFrame, kHdrFormat,
             m_hdrImage, m_hdrView, m_depthPrepass.views(),
             m_ssrPass.sampler(), m_depthPrepass.sampler(),
-            m_taaCurrViewProj, m_taaPrevViewProj
+            m_aaPass.currViewProj(), m_aaPass.prevViewProj()
         };
     }
 
-    void Renderer::createAaRenderPasses()
+    AaPass::Context Renderer::aaCtx()
     {
-        // Un solo attachment: m_offscreenImage, la de siempre. El triangulo la
-        // cubre entera, asi que no hay nada que cargar. Sin depth: el contorno y
-        // los gizmos ya se dibujaron en el pass de composicion, aguas arriba.
-        VkAttachmentDescription colorAtt{};
-        colorAtt.format         = m_swapChainFormat;
-        colorAtt.samples        = VK_SAMPLE_COUNT_1_BIT;
-        colorAtt.loadOp         = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        colorAtt.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-        colorAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        colorAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        colorAtt.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-        // El MISMO finalLayout que deja el pass de composicion cuando el FXAA
-        // esta apagado: encender o apagar el efecto en caliente no deja a
-        // m_offscreenImage en un layout distinto del que espera la UI o el blit.
-        colorAtt.finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        VkAttachmentReference colorRef{};
-        colorRef.attachment = 0;
-        colorRef.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = 1;
-        subpass.pColorAttachments    = &colorRef;
-
-        VkSubpassDependency deps[2]{};
-        // Entrada: espera a que el pass de composicion haya terminado de escribir
-        // la imagen intermedia, que es lo unico que muestrea este pass.
-        deps[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
-        deps[0].dstSubpass    = 0;
-        deps[0].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        deps[0].dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                              | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        deps[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        deps[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-        // Salida: la UI (o el blit headless) lee la imagen ya suavizada.
-        deps[1].srcSubpass      = 0;
-        deps[1].dstSubpass      = VK_SUBPASS_EXTERNAL;
-        deps[1].srcStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        deps[1].dstStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        deps[1].srcAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        deps[1].dstAccessMask   = VK_ACCESS_SHADER_READ_BIT;
-        deps[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-        VkRenderPassCreateInfo rpInfo{};
-        rpInfo.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        rpInfo.attachmentCount = 1;
-        rpInfo.pAttachments    = &colorAtt;
-        rpInfo.subpassCount    = 1;
-        rpInfo.pSubpasses      = &subpass;
-        rpInfo.dependencyCount = 2;
-        rpInfo.pDependencies   = deps;
-
-        if (vkCreateRenderPass(m_gpu.device(), &rpInfo, nullptr, &m_aaRenderPass) != VK_SUCCESS)
-            throw std::runtime_error("failed to create aa render pass!");
-
-        // --- Variante del TAA: dos attachments ------------------------------
-        // El mismo color va a la vez a m_offscreenImage (que se presenta) y al
-        // historial (que se muestrea el frame siguiente). Escribirlo una vez con
-        // dos targets ahorra un segundo pass entero sobre toda la pantalla.
-        VkAttachmentDescription taaAtts[2] = { colorAtt, colorAtt };
-        // El historial no se presenta: sale listo para que lo lea taa.frag.
-        taaAtts[1].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        VkAttachmentReference taaRefs[2]{};
-        taaRefs[0].attachment = 0;
-        taaRefs[0].layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        taaRefs[1].attachment = 1;
-        taaRefs[1].layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-        VkSubpassDescription taaSubpass{};
-        taaSubpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        taaSubpass.colorAttachmentCount = 2;
-        taaSubpass.pColorAttachments    = taaRefs;
-
-        VkRenderPassCreateInfo taaRpInfo = rpInfo;
-        taaRpInfo.attachmentCount = 2;
-        taaRpInfo.pAttachments    = taaAtts;
-        taaRpInfo.pSubpasses      = &taaSubpass;
-
-        if (vkCreateRenderPass(m_gpu.device(), &taaRpInfo, nullptr, &m_taaHistoryRenderPass) != VK_SUCCESS)
-            throw std::runtime_error("failed to create taa render pass!");
-
-        printf("aa render passes OK\n"); fflush(stdout);
+        return AaPass::Context{
+            m_gpu, m_res, *this, m_renderExtent, effectiveViewport(), m_currentFrame,
+            m_aaActiveMode, m_swapChainFormat, m_offscreenView, m_depthImageView,
+            m_compositeRenderPass, m_depthPrepass.views(), m_depthPrepass.sampler(),
+            m_aaQueryPool, m_timestampsSupported, m_ssaaFactor
+        };
     }
 
-    void Renderer::createAaPipelines()
+    // Los dos pools de timestamps que se crean con el AA. El del AA se queda
+    // aqui porque ademas cronometra el frame entero sin UI ([2,3]), y el del
+    // panel Performance porque este es el ultimo sitio del arranque donde
+    // m_timestampsSupported ya esta resuelto y el device sigue vivo.
+    void Renderer::createAaQueryPools()
     {
-        // Filtrado LINEAL: los tres modos muestrean entre texeles (FXAA a media
-        // distancia, SSAA en la rejilla de bajada, TAA en la uv reproyectada) y
-        // es de ahi de donde sale el suavizado. Con NEAREST no harian nada.
-        VkSamplerCreateInfo si{};
-        si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        si.magFilter    = VK_FILTER_LINEAR;
-        si.minFilter    = VK_FILTER_LINEAR;
-        si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        si.borderColor  = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
-        if (vkCreateSampler(m_gpu.device(), &si, nullptr, &m_aaSampler) != VK_SUCCESS)
-            throw std::runtime_error("failed to create aa sampler!");
+        if (!m_timestampsSupported) return;
 
-        // --- Layout de un binding: la imagen intermedia. FXAA y SSAA -------
-        VkDescriptorSetLayoutBinding binding{};
-        binding.binding         = 0;
-        binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        binding.descriptorCount = 1;
-        binding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkQueryPoolCreateInfo qpi{};
+        qpi.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        qpi.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+        qpi.queryCount = MAX_FRAMES * 4;
+        if (vkCreateQueryPool(m_gpu.device(), &qpi, nullptr, &m_aaQueryPool) != VK_SUCCESS)
+            throw std::runtime_error("failed to create aa query pool!");
 
-        VkDescriptorSetLayoutCreateInfo dsl{};
-        dsl.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dsl.bindingCount = 1;
-        dsl.pBindings    = &binding;
-        if (vkCreateDescriptorSetLayout(m_gpu.device(), &dsl, nullptr, &m_aaDescLayout) != VK_SUCCESS)
-            throw std::runtime_error("failed to create aa descriptor set layout!");
-
-        VkDescriptorPoolSize poolSize{};
-        poolSize.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSize.descriptorCount = MAX_FRAMES;
-
-        VkDescriptorPoolCreateInfo dpi{};
-        dpi.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpi.poolSizeCount = 1;
-        dpi.pPoolSizes    = &poolSize;
-        dpi.maxSets       = MAX_FRAMES;
-        if (vkCreateDescriptorPool(m_gpu.device(), &dpi, nullptr, &m_aaDescPool) != VK_SUCCESS)
-            throw std::runtime_error("failed to create aa descriptor pool!");
-
-        // --- Layout de tres bindings: color, historial y profundidad. TAA ---
-        VkDescriptorSetLayoutBinding taaBindings[3]{};
-        for (int i = 0; i < 3; i++)
-        {
-            taaBindings[i].binding         = (uint32_t)i;
-            taaBindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            taaBindings[i].descriptorCount = 1;
-            taaBindings[i].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
-        }
-        VkDescriptorSetLayoutCreateInfo taaDsl{};
-        taaDsl.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        taaDsl.bindingCount = 3;
-        taaDsl.pBindings    = taaBindings;
-        if (vkCreateDescriptorSetLayout(m_gpu.device(), &taaDsl, nullptr, &m_taaDescLayout) != VK_SUCCESS)
-            throw std::runtime_error("failed to create taa descriptor set layout!");
-
-        VkDescriptorPoolSize taaPoolSize{};
-        taaPoolSize.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        taaPoolSize.descriptorCount = MAX_FRAMES * 3;
-
-        VkDescriptorPoolCreateInfo taaDpi{};
-        taaDpi.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        taaDpi.poolSizeCount = 1;
-        taaDpi.pPoolSizes    = &taaPoolSize;
-        taaDpi.maxSets       = MAX_FRAMES;
-        if (vkCreateDescriptorPool(m_gpu.device(), &taaDpi, nullptr, &m_taaDescPool) != VK_SUCCESS)
-            throw std::runtime_error("failed to create taa descriptor pool!");
-
-        // Un pipeline layout por modo: las push constants no tienen el mismo
-        // tamano y el TAA ademas usa otro descriptor set layout.
-        auto makeLayout = [&](VkDescriptorSetLayout setLayout, uint32_t pushSize, VkPipelineLayout& out)
-        {
-            VkPushConstantRange pcr{};
-            pcr.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-            pcr.offset     = 0;
-            pcr.size       = pushSize;
-
-            VkPipelineLayoutCreateInfo pli{};
-            pli.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            pli.setLayoutCount         = 1;
-            pli.pSetLayouts            = &setLayout;
-            pli.pushConstantRangeCount = 1;
-            pli.pPushConstantRanges    = &pcr;
-            if (vkCreatePipelineLayout(m_gpu.device(), &pli, nullptr, &out) != VK_SUCCESS)
-                throw std::runtime_error("failed to create aa pipeline layout!");
-        };
-        makeLayout(m_aaDescLayout,  (uint32_t)sizeof(FxaaPush), m_fxaaPipelineLayout);
-        makeLayout(m_aaDescLayout,  (uint32_t)sizeof(SsaaPush), m_ssaaPipelineLayout);
-        makeLayout(m_taaDescLayout, (uint32_t)sizeof(TaaPush),  m_taaPipelineLayout);
-
-        // Mismo vertex shader que la composicion: el triangulo sale de
-        // gl_VertexIndex y saca la UV en location 0, que es justo lo que esperan
-        // los tres fragment shaders.
-        auto vertCode = loadShaderFile("shaders/fullscreen.vert.spv");
-        VkShaderModule vertModule = createShaderModule(vertCode);
-
-        VkPipelineShaderStageCreateInfo stages[2]{};
-        stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
-        stages[0].module = vertModule;
-        stages[0].pName  = "main";
-        stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
-        stages[1].pName  = "main";
-
-        VkPipelineVertexInputStateCreateInfo vi{};
-        vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-
-        VkPipelineInputAssemblyStateCreateInfo ia{};
-        ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-        VkPipelineViewportStateCreateInfo vp{};
-        vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-        vp.viewportCount = 1;
-        vp.scissorCount  = 1;
-
-        VkPipelineRasterizationStateCreateInfo rs{};
-        rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-        rs.polygonMode = VK_POLYGON_MODE_FILL;
-        rs.cullMode    = VK_CULL_MODE_NONE;
-        rs.lineWidth   = 1.0f;
-
-        VkPipelineMultisampleStateCreateInfo ms{};
-        ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-        // El TAA escribe en DOS attachments (pantalla + historial) y el estado de
-        // blending tiene que declarar uno por attachment o el pipeline es
-        // invalido, aunque los dos sean identicos.
-        VkPipelineColorBlendAttachmentState blend[2]{};
-        for (int i = 0; i < 2; i++)
-            blend[i].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-
-        VkPipelineColorBlendStateCreateInfo cb{};
-        cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-        cb.attachmentCount = 1;
-        cb.pAttachments    = blend;
-
-        VkDynamicState dynStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-        VkPipelineDynamicStateCreateInfo dyn{};
-        dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-        dyn.dynamicStateCount = 2;
-        dyn.pDynamicStates    = dynStates;
-
-        VkGraphicsPipelineCreateInfo pci{};
-        pci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        pci.stageCount          = 2;
-        pci.pStages             = stages;
-        pci.pVertexInputState   = &vi;
-        pci.pInputAssemblyState = &ia;
-        pci.pViewportState      = &vp;
-        pci.pRasterizationState = &rs;
-        pci.pMultisampleState   = &ms;
-        // Sin pDepthStencilState: ningun subpass de resolucion declara attachment
-        // de profundidad, asi que Vulkan permite (y espera) un puntero nulo.
-        pci.pDepthStencilState  = nullptr;
-        pci.pColorBlendState    = &cb;
-        pci.pDynamicState       = &dyn;
-        pci.subpass             = 0;
-
-        // Los tres pipelines comparten TODO el estado fijo: solo cambian el
-        // fragment shader, el pipeline layout y (en el TAA) el render pass y el
-        // numero de attachments.
-        auto makePipeline = [&](const char* spv, VkPipelineLayout layout,
-                                VkRenderPass pass, uint32_t attachments, VkPipeline& out)
-        {
-            auto code = loadShaderFile(spv);
-            VkShaderModule module = createShaderModule(code);
-            stages[1].module   = module;
-            cb.attachmentCount = attachments;
-            pci.layout         = layout;
-            pci.renderPass     = pass;
-            if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &pci, nullptr, &out) != VK_SUCCESS)
-                throw std::runtime_error(std::string("failed to create graphics pipeline: ") + spv);
-            vkDestroyShaderModule(m_gpu.device(), module, nullptr);
-        };
-
-        makePipeline("shaders/fxaa.frag.spv",         m_fxaaPipelineLayout, m_aaRenderPass,         1, m_fxaaPipeline);
-        makePipeline("shaders/ssaa_resolve.frag.spv", m_ssaaPipelineLayout, m_aaRenderPass,         1, m_ssaaPipeline);
-        makePipeline("shaders/taa.frag.spv",          m_taaPipelineLayout,  m_taaHistoryRenderPass, 2, m_taaPipeline);
-
-        vkDestroyShaderModule(m_gpu.device(), vertModule, nullptr);
-
-        // m_timestampsSupported y m_timestampPeriod los resolvio
-        // createBloomPipelines, que corre antes. Cuatro queries por frame: [0,1]
-        // el pass propio del modo, [2,3] el render completo sin UI.
-        if (m_timestampsSupported)
-        {
-            VkQueryPoolCreateInfo qpi{};
-            qpi.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-            qpi.queryType  = VK_QUERY_TYPE_TIMESTAMP;
-            qpi.queryCount = MAX_FRAMES * 4;
-            if (vkCreateQueryPool(m_gpu.device(), &qpi, nullptr, &m_aaQueryPool) != VK_SUCCESS)
-                throw std::runtime_error("failed to create aa query pool!");
-
-            // Pool del panel Performance: [0,1] sombras, [2,3] escena. Se crea
-            // aqui (y no en su propia funcion) porque este es el ultimo sitio
-            // del arranque donde m_timestampsSupported ya esta resuelto y el
-            // device sigue vivo. Con el panel cerrado no se usa ni una query.
-            qpi.queryCount = MAX_FRAMES * 4;
-            if (vkCreateQueryPool(m_gpu.device(), &qpi, nullptr, &m_perfQueryPool) != VK_SUCCESS)
-                throw std::runtime_error("failed to create perf query pool!");
-        }
-
-        printf("aa pipelines OK\n"); fflush(stdout);
+        // Pool del panel Performance: [0,1] sombras, [2,3] escena. Con el panel
+        // cerrado no se usa ni una query.
+        qpi.queryCount = MAX_FRAMES * 4;
+        if (vkCreateQueryPool(m_gpu.device(), &qpi, nullptr, &m_perfQueryPool) != VK_SUCCESS)
+            throw std::runtime_error("failed to create perf query pool!");
     }
 
-    void Renderer::createAaImages()
+    // Los targets multisample de la escena y de la composicion. NO son del pase
+    // de resolucion: el resolve del MSAA ocurre dentro de esos dos render
+    // passes, que son del Renderer.
+    void Renderer::createMsaaImages()
     {
+        if (m_aaActiveMode != AaMode::Msaa) return;
+
         // Imagen multisample: GpuResources::createImage fija samples = 1, asi que
         // estas dos van a mano. Ninguna se muestrea ni se blitea nunca: solo
         // sirven de attachment y se resuelven dentro del render pass.
@@ -6896,178 +6607,18 @@ namespace DonTopo {
             m_res.createTextureImageView(image, view, format);
         };
 
-        const bool msaa = (m_aaActiveMode == AaMode::Msaa);
-        const bool taa  = (m_aaActiveMode == AaMode::Taa);
-
         for (int f = 0; f < MAX_FRAMES; f++)
         {
-            if (msaa)
-            {
-                // Color multisample de la escena y de la composicion. Los dos se
-                // resuelven dentro de su render pass sobre las imagenes de una
-                // muestra de siempre, asi que nada de lo que hay detras (SSAO,
-                // SSR, bloom, UI, blit) se entera de que existen.
-                createMsImage(kHdrFormat,       m_msaaHdrImage[f], m_msaaHdrMemory[f], m_msaaHdrView[f]);
-                createMsImage(m_swapChainFormat, m_msaaLdrImage[f], m_msaaLdrMemory[f], m_msaaLdrView[f]);
-            }
-
-            if (!needsAaIntermediate()) continue;
-
-            // Destino alternativo de la composicion. Tiene el tamano INTERNO del
-            // render, que en SSAA no es el de la ventana. COLOR_ATTACHMENT porque
-            // es un target de render, SAMPLED porque el pass de resolucion lo lee.
-            m_res.createImage(
-                m_renderExtent.width, m_renderExtent.height,
-                m_swapChainFormat, VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                m_aaSrcImage[f], m_aaSrcMemory[f]);
-            m_res.createTextureImageView(m_aaSrcImage[f], m_aaSrcView[f], m_swapChainFormat);
-
-            // Framebuffer del pass de COMPOSICION apuntando aqui, con el mismo
-            // depth compartido que el framebuffer de siempre: el contorno y los
-            // gizmos siguen cargando la profundidad de la escena.
-            VkImageView compAtts[] = { m_aaSrcView[f], m_depthImageView };
-            VkFramebufferCreateInfo fbInfo{};
-            fbInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-            fbInfo.renderPass      = m_compositeRenderPass;
-            fbInfo.attachmentCount = 2;
-            fbInfo.pAttachments    = compAtts;
-            fbInfo.width           = m_renderExtent.width;
-            fbInfo.height          = m_renderExtent.height;
-            fbInfo.layers          = 1;
-            if (vkCreateFramebuffer(m_gpu.device(), &fbInfo, nullptr, &m_aaSrcFramebuffer[f]) != VK_SUCCESS)
-                throw std::runtime_error("failed to create aa source framebuffer!");
-
-            if (taa)
-            {
-                // Historial: mismo formato y tamano que la imagen que se
-                // presenta. TRANSFER_DST no se usa para copiar nada: es el
-                // requisito de la transicion inicial de layout de aqui abajo.
-                m_res.createImage(
-                    effectiveViewport().width, effectiveViewport().height,
-                    m_swapChainFormat, VK_IMAGE_TILING_OPTIMAL,
-                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                        VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                    m_taaHistoryImage[f], m_taaHistoryMemory[f]);
-                m_res.createTextureImageView(m_taaHistoryImage[f], m_taaHistoryView[f], m_swapChainFormat);
-
-                // El historial se MUESTREA antes de escribirse: el primer frame
-                // de cada slot (y el primero tras cada resize) lo lee todavia
-                // recien creado. taa.frag descarta ese contenido por
-                // historyValid, pero el descriptor lo declara en
-                // SHADER_READ_ONLY y la capa de validacion exige que la imagen
-                // este de verdad en ese layout, no en UNDEFINED. Se pasa por
-                // TRANSFER_DST porque es la unica cadena que admite
-                // transitionImageLayout; no se copia nada.
-                m_res.transitionImageLayout(m_taaHistoryImage[f],
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-                m_res.transitionImageLayout(m_taaHistoryImage[f],
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-                // Un solo pass escribe los dos: la imagen que se presenta y el
-                // historial que se leera el frame siguiente.
-                VkImageView taaAtts[] = { m_offscreenView[f], m_taaHistoryView[f] };
-                VkFramebufferCreateInfo taaFb = fbInfo;
-                taaFb.renderPass      = m_taaHistoryRenderPass;
-                taaFb.attachmentCount = 2;
-                taaFb.pAttachments    = taaAtts;
-                taaFb.width           = effectiveViewport().width;
-                taaFb.height          = effectiveViewport().height;
-                if (vkCreateFramebuffer(m_gpu.device(), &taaFb, nullptr, &m_taaHistoryFramebuffer[f]) != VK_SUCCESS)
-                    throw std::runtime_error("failed to create taa framebuffer!");
-            }
-            else
-            {
-                // Framebuffer del pass de resolucion: escribe en la offscreen de
-                // siempre, que es la que muestrea la UI y la que blitea el
-                // runtime headless. Va a tamano de VENTANA aunque la fuente sea
-                // mayor: eso es exactamente el downsample del SSAA.
-                VkFramebufferCreateInfo outFb = fbInfo;
-                outFb.renderPass      = m_aaRenderPass;
-                outFb.attachmentCount = 1;
-                outFb.pAttachments    = &m_offscreenView[f];
-                outFb.width           = effectiveViewport().width;
-                outFb.height          = effectiveViewport().height;
-                if (vkCreateFramebuffer(m_gpu.device(), &outFb, nullptr, &m_aaFramebuffer[f]) != VK_SUCCESS)
-                    throw std::runtime_error("failed to create aa framebuffer!");
-            }
-        }
-
-        if (!needsAaIntermediate()) return;
-
-        // Los sets de la vez anterior apuntan a vistas ya destruidas: reset y no
-        // free, igual que en el bloom, el SSAO y el SSR.
-        vkResetDescriptorPool(m_gpu.device(), m_aaDescPool, 0);
-        if (taa) vkResetDescriptorPool(m_gpu.device(), m_taaDescPool, 0);
-
-        for (int f = 0; f < MAX_FRAMES; f++)
-        {
-            if (taa)
-            {
-                VkDescriptorSetAllocateInfo ai{};
-                ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-                ai.descriptorPool     = m_taaDescPool;
-                ai.descriptorSetCount = 1;
-                ai.pSetLayouts        = &m_taaDescLayout;
-                if (vkAllocateDescriptorSets(m_gpu.device(), &ai, &m_taaSets[f]) != VK_SUCCESS)
-                    throw std::runtime_error("failed to allocate taa descriptor set!");
-
-                VkDescriptorImageInfo infos[3]{};
-                infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                infos[0].imageView   = m_aaSrcView[f];
-                infos[0].sampler     = m_aaSampler;
-                // El historial que se LEE es el del otro slot: el que escribio el
-                // frame anterior. Con MAX_FRAMES = 2 alternan solos.
-                infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                infos[1].imageView   = m_taaHistoryView[(f + 1) % MAX_FRAMES];
-                infos[1].sampler     = m_aaSampler;
-                // Profundidad del depth pre-pass, que ya sale en el layout de
-                // lectura y se graba sin jitter (es la geometrica).
-                infos[2].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-                infos[2].imageView   = m_depthPrepass.views()[f];
-                infos[2].sampler     = m_depthPrepass.sampler();
-
-                VkWriteDescriptorSet writes[3]{};
-                for (int i = 0; i < 3; i++)
-                {
-                    writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    writes[i].dstSet          = m_taaSets[f];
-                    writes[i].dstBinding      = (uint32_t)i;
-                    writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    writes[i].descriptorCount = 1;
-                    writes[i].pImageInfo      = &infos[i];
-                }
-                vkUpdateDescriptorSets(m_gpu.device(), 3, writes, 0, nullptr);
-                continue;
-            }
-
-            VkDescriptorSetAllocateInfo ai{};
-            ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            ai.descriptorPool     = m_aaDescPool;
-            ai.descriptorSetCount = 1;
-            ai.pSetLayouts        = &m_aaDescLayout;
-            if (vkAllocateDescriptorSets(m_gpu.device(), &ai, &m_aaSets[f]) != VK_SUCCESS)
-                throw std::runtime_error("failed to allocate aa descriptor set!");
-
-            VkDescriptorImageInfo info{};
-            info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            info.imageView   = m_aaSrcView[f];
-            info.sampler     = m_aaSampler;
-
-            VkWriteDescriptorSet write{};
-            write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet          = m_aaSets[f];
-            write.dstBinding      = 0;
-            write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.descriptorCount = 1;
-            write.pImageInfo      = &info;
-            vkUpdateDescriptorSets(m_gpu.device(), 1, &write, 0, nullptr);
+            // Color multisample de la escena y de la composicion. Los dos se
+            // resuelven dentro de su render pass sobre las imagenes de una
+            // muestra de siempre, asi que nada de lo que hay detras (SSAO,
+            // SSR, bloom, UI, blit) se entera de que existen.
+            createMsImage(kHdrFormat,        m_msaaHdrImage[f], m_msaaHdrMemory[f], m_msaaHdrView[f]);
+            createMsImage(m_swapChainFormat, m_msaaLdrImage[f], m_msaaLdrMemory[f], m_msaaLdrView[f]);
         }
     }
 
-    void Renderer::destroyAaImages()
+    void Renderer::destroyMsaaImages()
     {
         auto destroyImage = [&](VkImage& image, VkDeviceMemory& memory, VkImageView& view)
         {
@@ -7078,163 +6629,8 @@ namespace DonTopo {
 
         for (int f = 0; f < MAX_FRAMES; f++)
         {
-            if (m_aaFramebuffer[f])
-            {
-                vkDestroyFramebuffer(m_gpu.device(), m_aaFramebuffer[f], nullptr);
-                m_aaFramebuffer[f] = VK_NULL_HANDLE;
-            }
-            if (m_aaSrcFramebuffer[f])
-            {
-                vkDestroyFramebuffer(m_gpu.device(), m_aaSrcFramebuffer[f], nullptr);
-                m_aaSrcFramebuffer[f] = VK_NULL_HANDLE;
-            }
-            if (m_taaHistoryFramebuffer[f])
-            {
-                vkDestroyFramebuffer(m_gpu.device(), m_taaHistoryFramebuffer[f], nullptr);
-                m_taaHistoryFramebuffer[f] = VK_NULL_HANDLE;
-            }
-            destroyImage(m_aaSrcImage[f],      m_aaSrcMemory[f],      m_aaSrcView[f]);
-            destroyImage(m_taaHistoryImage[f], m_taaHistoryMemory[f], m_taaHistoryView[f]);
-            destroyImage(m_msaaHdrImage[f],    m_msaaHdrMemory[f],    m_msaaHdrView[f]);
-            destroyImage(m_msaaLdrImage[f],    m_msaaLdrMemory[f],    m_msaaLdrView[f]);
-            m_aaSets[f]  = VK_NULL_HANDLE;
-            m_taaSets[f] = VK_NULL_HANDLE;
-        }
-        // El historial que quede es de un tamano o un modo que ya no existe.
-        m_taaHistoryValid = false;
-    }
-
-    void Renderer::recordAaPass(VkCommandBuffer cmd)
-    {
-        if (!needsAaIntermediate())
-        {
-            // None y MSAA no tienen pass propio. En MSAA el resolve ocurre dentro
-            // del pass de composicion y su coste sale en renderGpuMs(); en None no
-            // hay ni un comando de mas: la composicion ya escribio directamente en
-            // m_offscreenImage y la dejo en SHADER_READ_ONLY, que es exactamente
-            // lo que esperan la UI y el blit headless.
-            m_aaGpuMs = 0.0f;
-            m_aaPassStamped[m_currentFrame] = false;
-            return;
-        }
-
-        const bool taa = (m_aaActiveMode == AaMode::Taa);
-        const VkFramebuffer fb = taa ? m_taaHistoryFramebuffer[m_currentFrame]
-                                     : m_aaFramebuffer[m_currentFrame];
-        // Red de seguridad: el modo activo y los recursos construidos van
-        // siempre a la par (m_aaActiveMode solo cambia dentro de
-        // rebuildAaResources), pero grabar un render pass con un framebuffer
-        // nulo mata el proceso. Si algun dia se vuelven a desincronizar, se
-        // pierde el anti-aliasing de un frame en vez de la aplicacion entera.
-        if (fb == VK_NULL_HANDLE)
-        {
-            m_aaGpuMs = 0.0f;
-            m_aaPassStamped[m_currentFrame] = false;
-            return;
-        }
-
-        if (m_timestampsSupported)
-        {
-            // El pool ya lo reseteo el arranque del frame: aqui solo se escribe.
-            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_aaQueryPool, m_currentFrame * 4);
-            m_aaPassStamped[m_currentFrame] = true;
-        }
-
-        VkRenderPassBeginInfo rpInfo{};
-        rpInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        rpInfo.renderPass        = taa ? m_taaHistoryRenderPass : m_aaRenderPass;
-        rpInfo.framebuffer       = fb;
-        // Tamano de VENTANA, no de render: este pass es justo el que baja de la
-        // resolucion interna a la de presentacion.
-        rpInfo.renderArea.extent = effectiveViewport();
-        rpInfo.renderArea.offset = {0, 0};
-        rpInfo.clearValueCount   = 0;   // los attachments son DONT_CARE
-
-        vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-        VkViewport viewport{};
-        viewport.width    = (float)effectiveViewport().width;
-        viewport.height   = (float)effectiveViewport().height;
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
-        vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-        VkRect2D scissor{};
-        scissor.extent = effectiveViewport();
-        vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-        switch (m_aaActiveMode)
-        {
-        case AaMode::Fxaa:
-        {
-            FxaaPush push{};
-            // invRes de la imagen que se MUESTREA. En FXAA la intermedia tiene el
-            // tamano de la ventana, pero se toma de m_renderExtent igualmente
-            // para que el shader no dependa de que ambos coincidan.
-            push.invResX          = 1.0f / (float)m_renderExtent.width;
-            push.invResY          = 1.0f / (float)m_renderExtent.height;
-            push.subpix           = m_fxaaSubpix;
-            push.edgeThreshold    = m_fxaaEdgeThreshold;
-            push.edgeThresholdMin = m_fxaaEdgeThresholdMin;
-
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_fxaaPipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_fxaaPipelineLayout,
-                                    0, 1, &m_aaSets[m_currentFrame], 0, nullptr);
-            vkCmdPushConstants(cmd, m_fxaaPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(push), &push);
-            break;
-        }
-        case AaMode::Ssaa:
-        {
-            SsaaPush push{};
-            push.invSrcX = 1.0f / (float)m_renderExtent.width;
-            push.invSrcY = 1.0f / (float)m_renderExtent.height;
-            // Una muestra por texel de origen y por eje: a factor 2 son los 4
-            // texeles que caen dentro del pixel de destino, que es exactamente el
-            // promedio que define el supersampling.
-            push.taps    = (int32_t)std::lround((double)m_ssaaFactor);
-            if (push.taps < 1) push.taps = 1;
-
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ssaaPipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ssaaPipelineLayout,
-                                    0, 1, &m_aaSets[m_currentFrame], 0, nullptr);
-            vkCmdPushConstants(cmd, m_ssaaPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(push), &push);
-            break;
-        }
-        default:   // AaMode::Taa
-        {
-            TaaPush push{};
-            // De clip de este frame a clip del anterior, los dos SIN jitter: es
-            // la transformacion geometrica pura, el jitter es ruido de muestreo y
-            // meterlo aqui desplazaria el historial medio pixel cada frame.
-            push.reproject    = m_taaPrevViewProj * glm::inverse(m_taaCurrViewProj);
-            push.invResX      = 1.0f / (float)effectiveViewport().width;
-            push.invResY      = 1.0f / (float)effectiveViewport().height;
-            push.feedback     = m_taaFeedback;
-            push.historyValid = m_taaHistoryValid ? 1 : 0;
-
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_taaPipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_taaPipelineLayout,
-                                    0, 1, &m_taaSets[m_currentFrame], 0, nullptr);
-            vkCmdPushConstants(cmd, m_taaPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(push), &push);
-            break;
-        }
-        }
-
-        vkCmdDraw(cmd, 3, 1, 0, 0);
-        vkCmdEndRenderPass(cmd);
-
-        if (m_timestampsSupported)
-            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_aaQueryPool, m_currentFrame * 4 + 1);
-
-        if (taa)
-        {
-            // A partir del segundo frame ya hay historial que acumular, y la
-            // view-proj de este frame pasa a ser la "anterior" del siguiente.
-            m_taaHistoryValid = true;
-            m_taaPrevViewProj = m_taaCurrViewProj;
+            destroyImage(m_msaaHdrImage[f], m_msaaHdrMemory[f], m_msaaHdrView[f]);
+            destroyImage(m_msaaLdrImage[f], m_msaaLdrMemory[f], m_msaaLdrView[f]);
         }
     }
 

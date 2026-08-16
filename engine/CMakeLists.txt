@@ -7,6 +7,7 @@ add_library(DonTopoCore STATIC
     src/Renderer/RenderBackend.cpp
     src/Renderer/Renderer.cpp
     # Pases del Renderer de Vulkan sacados a su propia clase.
+    src/Renderer/Passes/AaPass.cpp
     src/Renderer/Passes/BloomPass.cpp
     src/Renderer/Passes/DepthPrepassPass.cpp
     src/Renderer/Passes/FogPass.cpp

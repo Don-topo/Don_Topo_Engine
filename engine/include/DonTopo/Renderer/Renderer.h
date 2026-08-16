@@ -22,6 +22,7 @@
 #include "DonTopo/Renderer/UiLayer.h"
 #include "DonTopo/Renderer/Skybox.h"
 #include "DonTopo/Renderer/SplashScreen.h"
+#include "DonTopo/Renderer/Passes/AaPass.h"
 #include "DonTopo/Renderer/Passes/BloomPass.h"
 #include "DonTopo/Renderer/Passes/DepthPrepassPass.h"
 #include "DonTopo/Renderer/Passes/FogPass.h"
@@ -677,18 +678,14 @@ namespace DonTopo {
             // Anti-aliasing. El pass de resolucion es grafico (triangulo de
             // pantalla completa) y no compute: el swapchain es B8G8R8A8_SRGB y
             // Vulkan prohibe las storage images en formatos sRGB.
-            void createAaRenderPasses();
-            void createAaPipelines();
-            // Imagen intermedia, historial del TAA, targets multisample del MSAA,
-            // framebuffers y sets. Todo depende del tamano y del modo, asi que va
-            // colgado de createOffscreenImages/destroyOffscreenImages.
-            void createAaImages();
-            void destroyAaImages();
-            // Lee m_aaSrcImage (lo que escribio la composicion) y escribe
-            // m_offscreenImage con el pipeline del modo activo. En None y en MSAA
-            // no graba NADA: la composicion ya habra escrito directamente en
-            // m_offscreenImage.
-            void recordAaPass(VkCommandBuffer cmd);
+            // Anti-aliasing. El pase de RESOLUCION vive en AaPass; aqui quedan
+            // los dos pools de queries (el del AA mide ademas el frame entero)
+            // y los targets multisample, que son attachments de los render
+            // passes de escena y composicion.
+            AaPass::Context aaCtx();
+            void createAaQueryPools();
+            void createMsaaImages();
+            void destroyMsaaImages();
             // Reconstruye TODO lo que depende del modo, con la GPU en reposo:
             // extent interno, imagenes, y -solo si cambia el numero de muestras-
             // los render passes de escena y composicion y sus pipelines. Lo llama
@@ -933,52 +930,12 @@ namespace DonTopo {
                 return m_viewportActive.width > 0 && m_viewportActive.height > 0
                      ? m_viewportActive : m_swapChainExtent;
             }
-            // Destino ALTERNATIVO del pass de composicion cuando el modo activo
-            // necesita un pass de resolucion detras (FXAA, SSAA, TAA). Tiene el
-            // tamano de m_renderExtent, que en SSAA NO es el de la ventana. Con
-            // None y con MSAA no se usa: la composicion escribe directamente en
-            // m_offscreenImage, que es la que ve la UI y la que blitea el runtime.
-            VkImage                         m_aaSrcImage[MAX_FRAMES]            = {};
-            VkDeviceMemory                  m_aaSrcMemory[MAX_FRAMES]           = {};
-            VkImageView                     m_aaSrcView[MAX_FRAMES]             = {};
-            // Framebuffer del pass de COMPOSICION apuntando a m_aaSrcImage (mas
-            // el mismo depth compartido, que el contorno y los gizmos siguen
-            // necesitando cargado).
-            VkFramebuffer                   m_aaSrcFramebuffer[MAX_FRAMES]      = {};
-            // Pass de resolucion: solo color, sin depth, a tamano de VENTANA.
-            // Escribe en m_offscreenImage. Es donde corren FXAA, el downsample
-            // del SSAA y la acumulacion del TAA, cada uno con su pipeline.
-            VkRenderPass                    m_aaRenderPass                      = VK_NULL_HANDLE;
-            VkFramebuffer                   m_aaFramebuffer[MAX_FRAMES]         = {};
-            // Sampler propio: los tres modos necesitan filtrado LINEAL (muestrean
-            // entre texeles) y clamp en los bordes de la pantalla.
-            VkSampler                       m_aaSampler                         = VK_NULL_HANDLE;
-            // Un binding (la imagen intermedia): lo comparten FXAA y SSAA.
-            VkDescriptorSetLayout           m_aaDescLayout                      = VK_NULL_HANDLE;
-            VkDescriptorPool                m_aaDescPool                        = VK_NULL_HANDLE;
-            VkPipelineLayout                m_fxaaPipelineLayout                = VK_NULL_HANDLE;
-            VkPipeline                      m_fxaaPipeline                      = VK_NULL_HANDLE;
-            VkPipelineLayout                m_ssaaPipelineLayout                = VK_NULL_HANDLE;
-            VkPipeline                      m_ssaaPipeline                      = VK_NULL_HANDLE;
-            VkDescriptorSet                 m_aaSets[MAX_FRAMES]                = {};
-            // Layout declarado igual en fxaa.frag. Cambiar el orden o el tamano
-            // aqui sin tocar el shader no da ningun error: solo colores raros.
-            struct FxaaPush {
-                float invResX;
-                float invResY;
-                float subpix;
-                float edgeThreshold;
-                float edgeThresholdMin;
-            };
-            static_assert(sizeof(FxaaPush) == 20, "FxaaPush debe seguir en 20 bytes: fxaa.frag declara este layout");
+            // Imagen intermedia, historial del TAA, framebuffers, sets y los
+            // tres pipelines de resolucion: todo eso lo tiene AaPass. De el
+            // salen tambien el framebuffer alternativo de la composicion y las
+            // dos matrices view-proj que consume el motion blur.
+            AaPass                          m_aaPass;
 
-            // SSAA: mismo layout que declara ssaa_resolve.frag.
-            struct SsaaPush {
-                float invSrcX;      // 1/ancho de la imagen intermedia (la grande)
-                float invSrcY;
-                int32_t taps;       // muestras por eje del filtro de bajada
-            };
-            static_assert(sizeof(SsaaPush) == 12, "SsaaPush debe seguir en 12 bytes: ssaa_resolve.frag declara este layout");
             float                           m_ssaaFactor                        = 2.0f;
 
             // MSAA. m_msaaSamples es lo que PIDE el usuario; m_aaSampleCount es
@@ -1003,59 +960,11 @@ namespace DonTopo {
             VkDeviceMemory                  m_msaaLdrMemory[MAX_FRAMES]         = {};
             VkImageView                     m_msaaLdrView[MAX_FRAMES]           = {};
 
-            // TAA: historial de dos frames en ping-pong (se lee el del frame
-            // anterior y se escribe el de este) mas el pass de acumulacion.
-            VkImage                         m_taaHistoryImage[MAX_FRAMES]       = {};
-            VkDeviceMemory                  m_taaHistoryMemory[MAX_FRAMES]      = {};
-            VkImageView                     m_taaHistoryView[MAX_FRAMES]        = {};
-            VkFramebuffer                   m_taaHistoryFramebuffer[MAX_FRAMES] = {};
-            // Tres bindings: color de este frame, historial y profundidad.
-            VkDescriptorSetLayout           m_taaDescLayout                     = VK_NULL_HANDLE;
-            VkDescriptorPool                m_taaDescPool                       = VK_NULL_HANDLE;
-            VkPipelineLayout                m_taaPipelineLayout                 = VK_NULL_HANDLE;
-            VkPipeline                      m_taaPipeline                       = VK_NULL_HANDLE;
-            VkDescriptorSet                 m_taaSets[MAX_FRAMES]               = {};
-            // Pass que escribe en el historial. Identico al de resolucion salvo
-            // por el finalLayout, que aqui deja la imagen lista para MUESTREARLA
-            // el frame siguiente en vez de para presentarla.
-            VkRenderPass                    m_taaHistoryRenderPass              = VK_NULL_HANDLE;
-            // Layout que declara taa.frag. La reproyeccion viaja como UNA matriz
-            // (clip de este frame -> clip del anterior) en vez de dos: dos mat4
-            // mas el resto se saldrian de los 128 bytes garantizados.
-            struct TaaPush {
-                glm::mat4 reproject;
-                float     invResX;
-                float     invResY;
-                float     feedback;
-                int32_t   historyValid;
-            };
-            static_assert(sizeof(TaaPush) == 80, "TaaPush debe seguir en 80 bytes: taa.frag declara este layout");
-            // Indice dentro de la secuencia de Halton del jitter de este frame.
-            uint32_t                        m_taaJitterIndex                    = 0;
-            // Jitter aplicado ESTE frame, en unidades de clip space. Lo necesita
-            // taa.frag para deshacerlo al reproyectar.
-            glm::vec2                       m_taaJitter                         = glm::vec2(0.0f);
-            // La proyeccion CON jitter de este frame. La escribe
-            // updateUniformBuffer (que corre antes de grabar) y la usa tambien el
-            // skybox: si el skybox se dibujara con la proyeccion sin jitter se
-            // desalinearia medio pixel de la geometria y el TAA lo veria como un
-            // borde en movimiento permanente.
-            glm::mat4                       m_taaJitteredProj                   = glm::mat4(1.0f);
-            // View-proj SIN jitter del frame anterior, para la reproyeccion. Y el
-            // flag de si ese historial sirve: tras un resize, un cambio de modo o
-            // el primer frame no hay nada valido que acumular.
-            glm::mat4                       m_taaPrevViewProj                   = glm::mat4(1.0f);
-            // La de ESTE frame, tambien sin jitter. La deja recordCommandBuffer y
-            // la consume recordAaPass, que corre despues dentro del mismo frame.
-            glm::mat4                       m_taaCurrViewProj                   = glm::mat4(1.0f);
-            bool                            m_taaHistoryValid                   = false;
-
             // Queries propias: reutilizar las del bloom mezclaria el coste del
             // tonemap con el del anti-aliasing. Dos pares por frame: [0,1] el
             // pass propio del modo, [2,3] el render completo sin UI.
             VkQueryPool                     m_aaQueryPool                       = VK_NULL_HANDLE;
             bool                            m_aaQueryPending[MAX_FRAMES]        = {};
-            bool                            m_aaPassStamped[MAX_FRAMES]         = {};
             float                           m_aaGpuMs                           = 0.0f;
             float                           m_renderGpuMs                       = 0.0f;
             uint32_t                        m_aaMeasuredFrames                  = 0;
