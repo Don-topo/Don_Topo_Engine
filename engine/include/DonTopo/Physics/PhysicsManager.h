@@ -65,6 +65,15 @@ public:
 
 #ifdef DT_PHYSX_ENABLED
     bool raycast(const physx::PxVec3& origin, const physx::PxVec3& dir, float maxDistance, physx::PxRaycastBuffer& hit);
+
+    // Misma consulta con filtros: filterData elige qué actores se recorren
+    // (eSTATIC / eDYNAMIC) y filterCall descarta shapes una a una (triggers,
+    // actor a ignorar). Pide ePOSITION|eNORMAL, que es lo que consume el
+    // binding de Lua. Devuelve false sin tocar PhysX si aún no hay PxScene
+    // (fuera de Play).
+    bool raycast(const physx::PxVec3& origin, const physx::PxVec3& dir, float maxDistance,
+                 physx::PxRaycastBuffer& hit, const physx::PxQueryFilterData& filterData,
+                 physx::PxQueryFilterCallback* filterCall);
 #endif
 
 private:

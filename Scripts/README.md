@@ -160,6 +160,68 @@ necesita resolución de colisión. Por eso un objeto puede disparar
 | `Scene.Destroy(entity)` | Encola destrucción (procesada al final del frame). Alias interno de `DestroyGameObject` |
 | `Scene.Instantiate(entity, parent?)` | Clona un GameObject (incl. sub-árbol, componentes, scripts); `Awake` se llama de inmediato, `Start` en el siguiente lifecycle update |
 
+## Physics
+
+Consultas de rayo contra la escena de física. Solo hay escena de física en Play:
+fuera de Play `Raycast` devuelve `nil` y `RaycastHit` devuelve `false`.
+
+| Método | Descripción |
+| --- | --- |
+| `Physics.Raycast(origin, direction, maxDistance, options)` | Tabla con el impacto, o `nil` si no choca nada |
+| `Physics.RaycastHit(origin, direction, maxDistance, options)` | `true` / `false`; no construye la tabla del impacto |
+
+`origin` y `direction` son `Vec3`. `direction` se normaliza dentro, así que no
+hace falta pasarla unitaria; con longitud 0 la llamada devuelve `nil` sin
+consultar la física. `maxDistance` es opcional: ausente o `<= 0` usa el default
+de **1000**.
+
+`options` es una tabla opcional, y todos sus campos lo son:
+
+| Campo | Tipo | Default | Qué hace |
+| --- | --- | --- | --- |
+| `hitTriggers` | bool | `false` | Si los colliders con *Is Trigger* cuentan como impacto |
+| `static` | bool | `true` | Consultar los colliders sin Rigidbody (actores estáticos) |
+| `dynamic` | bool | `true` | Consultar los colliders con Rigidbody (actores dinámicos) |
+| `ignore` | Entity | — | GameObject a ignorar, para que un script no se choque consigo mismo |
+
+Con `static = false` y `dynamic = false` no queda nada que consultar: devuelve
+`nil` (o `false`) sin tocar la física.
+
+La tabla que devuelve `Raycast` trae exactamente estos campos:
+
+| Campo | Tipo | Descripción |
+| --- | --- | --- |
+| `entity` | Entity | GameObject impactado. `nil` si el collider no cuelga de ninguno |
+| `point` | Vec3 | Punto de impacto, en coordenadas de mundo |
+| `normal` | Vec3 | Normal de la superficie en el punto de impacto |
+| `distance` | number | Distancia desde `origin` hasta el impacto |
+
+Un argumento del tipo equivocado no tumba el script: la llamada devuelve `nil`
+(o `false`) y deja un aviso en el Log.
+
+```lua
+Disparo = {
+    alcance = 50
+}
+
+function Disparo:Update()
+    if not Input.IsKeyPressed(Key.Space) then return end
+
+    local origen = self.entity:GetTransform():GetWorldPosition()
+    -- Hacia delante en el mundo (+Z). Para disparar en la dirección en la que
+    -- mira el objeto, rota este Vec3 con su rotación.
+    local hit = Physics.Raycast(origen, Vec3(0, 0, 1), self.alcance,
+                                { ignore = self.entity })
+
+    if hit then
+        local quien = hit.entity and hit.entity.name or "algo sin GameObject"
+        Log.Info("Impacto en " .. quien .. " a " .. hit.distance .. " unidades")
+    else
+        Log.Info("Nada delante")
+    end
+end
+```
+
 ## DonTopo — cambio de escena en runtime
 
 | Método | Descripción |

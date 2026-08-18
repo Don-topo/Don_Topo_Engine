@@ -450,6 +450,19 @@ bool PhysicsManager::raycast(const PxVec3& origin, const PxVec3& dir, float maxD
 {
     return static_cast<PxScene*>(m_scene)->raycast(origin, dir, maxDistance, hit);
 }
+
+bool PhysicsManager::raycast(const PxVec3& origin, const PxVec3& dir, float maxDistance,
+                             PxRaycastBuffer& hit, const PxQueryFilterData& filterData,
+                             PxQueryFilterCallback* filterCall)
+{
+    // Sin escena (el editor fuera de Play no llama a init) no hay nada que
+    // consultar: false en vez de deref de nulo.
+    if (!m_scene) return false;
+    return static_cast<PxScene*>(m_scene)->raycast(
+        origin, dir, maxDistance, hit,
+        PxHitFlags(PxHitFlag::ePOSITION | PxHitFlag::eNORMAL),
+        filterData, filterCall);
+}
 #endif
 
 void PhysicsManager::stepSimulation(float dt)

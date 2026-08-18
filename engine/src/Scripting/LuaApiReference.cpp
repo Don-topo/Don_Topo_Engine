@@ -176,6 +176,13 @@ const std::vector<std::string>& baseSymbols()
         // Scene
         "Scene.Find", "Scene.CreateGameObject", "Scene.Destroy", "Scene.Instantiate",
 
+        // Physics — consultas de rayo (nil / false si no hay escena de física,
+        // es decir fuera de Play). Los nombres sueltos son los campos de la
+        // tabla 'options' y los de la tabla que devuelve Raycast.
+        "Physics.Raycast", "Physics.RaycastHit",
+        "hitTriggers", "static", "dynamic", "ignore",
+        "entity", "point", "normal", "distance",
+
         // Motor (cambio de escena en runtime)
         "DonTopo.loadScene",
 

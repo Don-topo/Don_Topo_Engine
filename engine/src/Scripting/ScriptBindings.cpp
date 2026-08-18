@@ -1147,6 +1147,223 @@ namespace DonTopo::ScriptBindings
                 });
         }
 
+#ifdef DT_PHYSX_ENABLED
+        // El GameObject detrás de un actor de PhysX: userData del actor =
+        // Collider* (lo pone PhysicsManager al crear el collider) y el owner del
+        // collider = GameObject* (lo pone Scene al deserializar / el editor al
+        // añadirlo). Mismo camino que usa TriggerDispatcher para los callbacks
+        // de trigger. nullptr si el actor no cuelga de ningún GameObject.
+        GameObject* actorOwner(const physx::PxRigidActor* actor)
+        {
+            if (!actor) return nullptr;
+            auto* col = static_cast<DonTopo::Collider*>(actor->userData);
+            return col ? static_cast<GameObject*>(col->getOwner()) : nullptr;
+        }
+
+        // Prefiltro de la consulta. Collider::applyTriggerFlag solo apaga
+        // eSIMULATION_SHAPE: la shape de un trigger conserva eSCENE_QUERY_SHAPE,
+        // así que sin este filtro un trigger bloquearía el rayo. Aquí se
+        // descarta también el actor del GameObject a ignorar.
+        class RaycastFilter : public physx::PxQueryFilterCallback
+        {
+        public:
+            RaycastFilter(bool hitTriggers, GameObject* ignore)
+                : m_hitTriggers(hitTriggers), m_ignore(ignore) {}
+
+            physx::PxQueryHitType::Enum preFilter(const physx::PxFilterData&,
+                                                  const physx::PxShape* shape,
+                                                  const physx::PxRigidActor* actor,
+                                                  physx::PxHitFlags&) override
+            {
+                if (!m_hitTriggers && shape &&
+                    (shape->getFlags() & physx::PxShapeFlag::eTRIGGER_SHAPE))
+                    return physx::PxQueryHitType::eNONE;
+                if (m_ignore && actorOwner(actor) == m_ignore)
+                    return physx::PxQueryHitType::eNONE;
+                return physx::PxQueryHitType::eBLOCK;
+            }
+
+            physx::PxQueryHitType::Enum postFilter(const physx::PxFilterData&,
+                                                   const physx::PxQueryHit&,
+                                                   const physx::PxShape*,
+                                                   const physx::PxRigidActor*) override
+            {
+                return physx::PxQueryHitType::eBLOCK;
+            }
+
+        private:
+            bool        m_hitTriggers;
+            GameObject* m_ignore;
+        };
+
+        // Argumentos ya validados de Physics.Raycast / Physics.RaycastHit.
+        struct RaycastArgs
+        {
+            glm::vec3   origin{ 0.0f };
+            glm::vec3   dir{ 0.0f, 0.0f, 1.0f };
+            float       maxDistance  = 1000.0f;
+            bool        hitTriggers  = false;
+            bool        queryStatic  = true;
+            bool        queryDynamic = true;
+            GameObject* ignore       = nullptr;
+        };
+
+        // Lee los argumentos a mano (sol::variadic_args, no parámetros tipados)
+        // porque un tipo equivocado tiene que devolver nil y un aviso, no la
+        // excepción de conversión de sol2 que tumbaría el script.
+        bool parseRaycastArgs(ScriptManager& mgr, const char* fn,
+                              sol::variadic_args va, RaycastArgs& out)
+        {
+            auto warn = [&mgr, fn](const std::string& m) {
+                mgr.log(std::string("[Lua][WARN] Physics.") + fn + ": " + m);
+            };
+            auto argAt = [&va](std::size_t i) {
+                return i < va.size() ? va[i].get<sol::object>() : sol::object();
+            };
+            auto given = [](const sol::object& o) {
+                return o.valid() && o.get_type() != sol::type::lua_nil;
+            };
+
+            const sol::object oOrigin = argAt(0);
+            const sol::object oDir    = argAt(1);
+            if (!oOrigin.is<glm::vec3>() || !oDir.is<glm::vec3>())
+            {
+                warn("origin y direction tienen que ser Vec3");
+                return false;
+            }
+            out.origin = oOrigin.as<glm::vec3>();
+            out.dir    = oDir.as<glm::vec3>();
+
+            const sol::object oMax = argAt(2);
+            if (given(oMax))
+            {
+                if (oMax.get_type() != sol::type::number)
+                {
+                    warn("maxDistance tiene que ser un numero");
+                    return false;
+                }
+                // Ausente o <= 0 -> se queda el default de 1000.
+                const float m = oMax.as<float>();
+                if (m > 0.0f) out.maxDistance = m;
+            }
+
+            const sol::object oOpts = argAt(3);
+            if (!given(oOpts)) return true;
+            if (oOpts.get_type() != sol::type::table)
+            {
+                warn("options tiene que ser una tabla");
+                return false;
+            }
+            sol::table opts = oOpts.as<sol::table>();
+
+            auto readBool = [&](const char* key, bool& dst) {
+                const sol::object v = opts[key];
+                if (!given(v)) return true;
+                if (v.get_type() != sol::type::boolean)
+                {
+                    warn(std::string(key) + " tiene que ser booleano");
+                    return false;
+                }
+                dst = v.as<bool>();
+                return true;
+            };
+            if (!readBool("hitTriggers", out.hitTriggers)) return false;
+            if (!readBool("static",      out.queryStatic)) return false;
+            if (!readBool("dynamic",     out.queryDynamic)) return false;
+
+            const sol::object oIgnore = opts["ignore"];
+            if (given(oIgnore))
+            {
+                if (!oIgnore.is<LuaEntity>())
+                {
+                    warn("ignore tiene que ser una Entity");
+                    return false;
+                }
+                const LuaEntity e = oIgnore.as<LuaEntity>();
+                if (!e.go || !e.mgr || !e.mgr->isAlive(e.go))
+                {
+                    warn("ignore apunta a una Entity destruida");
+                    return false;
+                }
+                out.ignore = e.go;
+            }
+            return true;
+        }
+
+        // Lanza la consulta. false = sin impacto, sin PhysicsManager (fuera de
+        // Play), dirección degenerada o filtro que no deja ningún actor: en
+        // todos esos casos no se toca PhysX y hit se queda sin escribir.
+        bool doRaycast(ScriptManager& mgr, const RaycastArgs& a, physx::PxRaycastBuffer& hit)
+        {
+            PhysicsManager* pm = mgr.physics();
+            if (!pm) return false;
+            if (!a.queryStatic && !a.queryDynamic) return false;
+            if (!std::isfinite(a.origin.x) || !std::isfinite(a.origin.y) || !std::isfinite(a.origin.z))
+                return false;
+
+            // PhysX exige dirección unitaria (con una sin normalizar la
+            // distancia sale escalada); longitud 0 o NaN -> nada que trazar.
+            const float len = glm::length(a.dir);
+            if (!std::isfinite(len) || len <= 0.0f) return false;
+            const glm::vec3 dir = a.dir / len;
+
+            physx::PxQueryFilterData filterData;
+            filterData.flags = physx::PxQueryFlag::ePREFILTER;
+            if (a.queryStatic)  filterData.flags |= physx::PxQueryFlag::eSTATIC;
+            if (a.queryDynamic) filterData.flags |= physx::PxQueryFlag::eDYNAMIC;
+
+            RaycastFilter filter(a.hitTriggers, a.ignore);
+            return pm->raycast(physx::PxVec3(a.origin.x, a.origin.y, a.origin.z),
+                               physx::PxVec3(dir.x, dir.y, dir.z),
+                               a.maxDistance, hit, filterData, &filter);
+        }
+#endif
+
+        void registerPhysics(DonTopo::ScriptManager& mgr)
+        {
+            sol::state& lua = mgr.lua();
+            sol::table physics = lua.create_named_table("Physics");
+
+            // Physics.Raycast(origin, direction, maxDistance, options) -> tabla
+            // { entity, point, normal, distance } o nil. entity es nil si el
+            // actor impactado no cuelga de ningún GameObject; el resto de
+            // campos vienen siempre.
+            physics["Raycast"] = [&mgr](sol::variadic_args va) -> sol::object {
+#ifdef DT_PHYSX_ENABLED
+                RaycastArgs args;
+                if (!parseRaycastArgs(mgr, "Raycast", va, args)) return sol::nil;
+
+                physx::PxRaycastBuffer hit;
+                if (!doRaycast(mgr, args, hit)) return sol::nil;
+
+                sol::table t = mgr.lua().create_table();
+                if (GameObject* go = actorOwner(hit.block.actor))
+                    t["entity"] = LuaEntity{ go, &mgr };
+                t["point"]    = glm::vec3(hit.block.position.x, hit.block.position.y, hit.block.position.z);
+                t["normal"]   = glm::vec3(hit.block.normal.x, hit.block.normal.y, hit.block.normal.z);
+                t["distance"] = hit.block.distance;
+                return sol::make_object(mgr.lua(), t);
+#else
+                (void)va;
+                return sol::nil;
+#endif
+            };
+
+            // Igual pero sin construir la tabla: para el "solo quiero saber si
+            // choca".
+            physics["RaycastHit"] = [&mgr](sol::variadic_args va) -> bool {
+#ifdef DT_PHYSX_ENABLED
+                RaycastArgs args;
+                if (!parseRaycastArgs(mgr, "RaycastHit", va, args)) return false;
+                physx::PxRaycastBuffer hit;
+                return doRaycast(mgr, args, hit);
+#else
+                (void)va;
+                return false;
+#endif
+            };
+        }
+
         void registerScene(DonTopo::ScriptManager& mgr)
         {
             sol::state& lua = mgr.lua();
@@ -1250,6 +1467,7 @@ namespace DonTopo::ScriptBindings
         registerUi(mgr);      // antes que Entity: sus getters devuelven estos tipos
         registerEntity(mgr);
         registerScene(mgr);   // Task 7
+        registerPhysics(mgr);
         registerEngineTable(mgr);
     }
 }

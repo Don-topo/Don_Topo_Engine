@@ -883,6 +883,239 @@ static void test_ui_cuatro_componentes_en_el_mismo_objeto(ScriptManager& sm)
     CHECK(cache.buttonLabels[0] != nullptr && cache.buttonLabels[0]->text == "Boton");
 }
 
+// ---------------------------------------------------------------------------
+// Physics.Raycast — la PxScene la comparte todo el fichero (una sola
+// PxFoundation por proceso, ver la cabecera): cada test monta sus colliders en
+// un Scene local y los suelta al salir.
+// ---------------------------------------------------------------------------
+
+// Esfera de radio 1 centrada en (0,2,10). El rayo (0,2,0)->+Z la toca a 9
+// unidades, en el punto (0,2,9) y con normal (0,0,-1): los tres campos con
+// valores distintos entre sí y ninguno neutro, así un hit relleno a ceros no
+// pasaría. El owner se pone a mano igual que hace Scene.cpp al deserializar.
+static GameObject* addDiana(Scene& scene, PhysicsManager& pm, const char* name,
+                            const glm::vec3& center, bool withOwner = true)
+{
+    GameObject* go = scene.addGameObject(name);
+    auto col = pm.createSphereColliderComponent(1.0f, center, go->worldTransform, /*dynamic=*/false);
+    if (withOwner) col->setOwner(go);
+    go->setSphereCollider(col);
+    return go;
+}
+
+static bool luaIsNil(ScriptManager& sm, const char* name)
+{
+    sol::object o = sm.lua()[name];
+    return !o.valid() || o.get_type() == sol::type::lua_nil;
+}
+
+static void test_raycast_campos_del_impacto(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    sm.rebuildAliveSet();
+
+    sm.lua().script("hit = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 100)");
+
+    sol::optional<sol::table> hit = sm.lua()["hit"];
+    CHECK(hit.has_value());
+    if (!hit) return;
+    CHECK(nearlyEqual((*hit)["distance"].get<float>(), 9.0f));
+    glm::vec3 p = (*hit)["point"].get<glm::vec3>();
+    glm::vec3 n = (*hit)["normal"].get<glm::vec3>();
+    CHECK(nearlyEqual(p.x, 0.0f) && nearlyEqual(p.y, 2.0f) && nearlyEqual(p.z, 9.0f));
+    CHECK(nearlyEqual(n.x, 0.0f) && nearlyEqual(n.y, 0.0f) && nearlyEqual(n.z, -1.0f));
+    LuaEntity e = (*hit)["entity"].get<LuaEntity>();
+    CHECK(e.go == go);
+}
+
+// La dirección se normaliza dentro: con (0,0,5) la distancia sigue siendo 9
+// (PhysX exige dir unitaria; sin normalizar sale escalada o directamente mal).
+static void test_raycast_normaliza_la_direccion(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    sm.rebuildAliveSet();
+
+    sm.lua().script("hit = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,5), 100)");
+    sol::optional<sol::table> hit = sm.lua()["hit"];
+    CHECK(hit.has_value());
+    if (!hit) return;
+    CHECK(nearlyEqual((*hit)["distance"].get<float>(), 9.0f));
+}
+
+// Dirección de longitud 0 -> nil sin tocar PhysX.
+static void test_raycast_direccion_cero(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    sm.rebuildAliveSet();
+
+    sm.lua().script("hit = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,0), 100)");
+    CHECK(luaIsNil(sm, "hit"));
+}
+
+// maxDistance ausente o <= 0 -> default 1000 (el impacto a 9 entra); un
+// maxDistance corto de verdad recorta.
+static void test_raycast_max_distance(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    sm.rebuildAliveSet();
+
+    sm.lua().script(
+        "sinArg   = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1))\n"
+        "negativo = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), -5)\n"
+        "corto    = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 5)\n");
+    CHECK(!luaIsNil(sm, "sinArg"));
+    CHECK(!luaIsNil(sm, "negativo"));
+    CHECK(luaIsNil(sm, "corto"));
+}
+
+// hitTriggers: por defecto un collider Is Trigger NO cuenta como impacto (PhysX
+// sí lo deja en las consultas de escena, lo descarta nuestro prefiltro).
+static void test_raycast_hit_triggers(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    pm.setTrigger(go->getSphereCollider(), true);
+    sm.rebuildAliveSet();
+
+    sm.lua().script(
+        "porDefecto  = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 100)\n"
+        "conTriggers = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 100, { hitTriggers = true })\n");
+    CHECK(luaIsNil(sm, "porDefecto"));
+    CHECK(!luaIsNil(sm, "conTriggers"));
+
+    pm.setTrigger(go->getSphereCollider(), false);
+}
+
+// static / dynamic: la diana es un PxRigidStatic, así que apagando 'static'
+// desaparece; apagando solo 'dynamic' sigue ahí; con los dos apagados, nil.
+static void test_raycast_filtro_static_dynamic(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    sm.rebuildAliveSet();
+
+    sm.lua().script(
+        "sinStatic  = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 100, { static = false })\n"
+        "sinDynamic = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 100, { dynamic = false })\n"
+        "ninguno    = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 100, { static = false, dynamic = false })\n");
+    CHECK(luaIsNil(sm, "sinStatic"));
+    CHECK(!luaIsNil(sm, "sinDynamic"));
+    CHECK(luaIsNil(sm, "ninguno"));
+}
+
+// ignore: la entidad que dispara no se choca consigo misma, pero ignorar a otra
+// no le quita el impacto.
+static void test_raycast_ignore(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* diana = addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    GameObject* otro  = scene.addGameObject("Otro");
+    sm.rebuildAliveSet();
+    sm.lua()["diana"] = LuaEntity{ diana, &sm };
+    sm.lua()["otro"]  = LuaEntity{ otro,  &sm };
+
+    sm.lua().script(
+        "ignorada   = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 100, { ignore = diana })\n"
+        "ignoraOtro = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 100, { ignore = otro })\n");
+    CHECK(luaIsNil(sm, "ignorada"));
+    CHECK(!luaIsNil(sm, "ignoraOtro"));
+}
+
+// Un argumento del tipo equivocado devuelve nil y avisa, pero NO tumba el
+// script: la línea siguiente se ejecuta.
+static void test_raycast_tipos_invalidos_no_tumban_el_script(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+
+    sm.lua().script(
+        "r1 = Physics.Raycast('hola', 3)\n"
+        "r2 = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 'lejos')\n"
+        "r3 = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 100, 'no soy tabla')\n"
+        "r4 = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 100, { ignore = 7 })\n"
+        "r5 = Physics.RaycastHit('hola')\n"
+        "siguio = true\n");
+    CHECK(luaIsNil(sm, "r1"));
+    CHECK(luaIsNil(sm, "r2"));
+    CHECK(luaIsNil(sm, "r3"));
+    CHECK(luaIsNil(sm, "r4"));
+    CHECK(sm.lua()["r5"].get<bool>() == false);
+    CHECK(sm.lua()["siguio"].get<bool>() == true);
+    CHECK(logContains(log, "WARN"));
+    CHECK(logContains(log, "Raycast"));
+    sm.setLogCallback(nullptr);
+}
+
+// Sin PhysicsManager (fuera de Play) -> nil, no excepción.
+static void test_raycast_sin_fisica(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    sm.rebuildAliveSet();
+
+    sm.setPhysicsManager(nullptr);
+    sm.lua().script(
+        "hit  = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 100)\n"
+        "toco = Physics.RaycastHit(Vec3(0,2,0), Vec3(0,0,1), 100)\n");
+    sm.setPhysicsManager(&pm);
+
+    CHECK(luaIsNil(sm, "hit"));
+    CHECK(sm.lua()["toco"].get<bool>() == false);
+}
+
+// Collider sin GameObject asociado: entity nil, el resto de campos llenos.
+static void test_raycast_actor_sin_gameobject(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f), /*withOwner=*/false);
+    sm.rebuildAliveSet();
+
+    sm.lua().script(
+        "hit = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 100)\n"
+        "sinEntity = (hit ~= nil) and (hit.entity == nil)\n");
+    sol::optional<sol::table> hit = sm.lua()["hit"];
+    CHECK(hit.has_value());
+    if (!hit) return;
+    CHECK(sm.lua()["sinEntity"].get<bool>() == true);
+    CHECK(nearlyEqual((*hit)["distance"].get<float>(), 9.0f));
+    CHECK(nearlyEqual((*hit)["point"].get<glm::vec3>().z, 9.0f));
+}
+
+// RaycastHit: solo el booleano, mismos filtros.
+static void test_raycast_hit_booleano(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    sm.rebuildAliveSet();
+
+    sm.lua().script(
+        "toca   = Physics.RaycastHit(Vec3(0,2,0), Vec3(0,0,1), 100)\n"
+        "noToca = Physics.RaycastHit(Vec3(0,2,0), Vec3(0,0,-1), 100)\n"
+        "corto  = Physics.RaycastHit(Vec3(0,2,0), Vec3(0,0,1), 5)\n");
+    CHECK(sm.lua()["toca"].get<bool>() == true);
+    CHECK(sm.lua()["noToca"].get<bool>() == false);
+    CHECK(sm.lua()["corto"].get<bool>() == false);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -914,6 +1147,18 @@ int main()
     test_ui_callback_no_invoca_estado_viejo(sm);
     test_ui_error_en_callback_no_tumba_el_tick(sm);
     test_ui_cuatro_componentes_en_el_mismo_objeto(sm);
+
+    test_raycast_campos_del_impacto(sm, pm);
+    test_raycast_normaliza_la_direccion(sm, pm);
+    test_raycast_direccion_cero(sm, pm);
+    test_raycast_max_distance(sm, pm);
+    test_raycast_hit_triggers(sm, pm);
+    test_raycast_filtro_static_dynamic(sm, pm);
+    test_raycast_ignore(sm, pm);
+    test_raycast_tipos_invalidos_no_tumban_el_script(sm, pm);
+    test_raycast_sin_fisica(sm, pm);
+    test_raycast_actor_sin_gameobject(sm, pm);
+    test_raycast_hit_booleano(sm, pm);
 
     am.shutdown();
     pm.shutdown();
