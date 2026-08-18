@@ -492,9 +492,16 @@ int main()
                             // El estado de Play lo lleva el editor; el backend de
                             // DirectX 12 no lo conoce.
                             anim->update(d3dDelta, editor.isPlaying());
-                            d3d12.setAnimationState(go->skinnedRenderIndex,
-                                                    (uint32_t)anim->currentClipIndex(),
-                                                    anim->animTime());
+                            // setAnimationBlend siempre: los pose* resuelven ya
+                            // el cross-fade y el blend por parámetro, y sin
+                            // ninguno de los dos el peso vale 1 y el backend ni
+                            // mira el segundo clip.
+                            d3d12.setAnimationBlend(go->skinnedRenderIndex,
+                                                    (uint32_t)anim->poseClipB(),
+                                                    anim->poseTimeB(),
+                                                    (uint32_t)anim->poseClipA(),
+                                                    anim->poseTimeA(),
+                                                    anim->poseWeight());
                         }
                         else
                         {
@@ -1008,9 +1015,16 @@ int main()
                         // estado de entrada); si no, las condiciones "animation
                         // finished" pasearían el grafo solo en el editor.
                         anim->update(dt, renderer.isPlaying());
-                        renderer.setAnimationState(go->skinnedRenderIndex,
-                                                    (uint32_t)anim->currentClipIndex(),
-                                                    anim->animTime());
+                        // setAnimationBlend siempre: los pose* resuelven ya el
+                        // cross-fade y el blend por parámetro, y sin ninguno de
+                        // los dos el peso vale 1 y el Renderer ni mira el
+                        // segundo clip.
+                        renderer.setAnimationBlend(go->skinnedRenderIndex,
+                                                    (uint32_t)anim->poseClipB(),
+                                                    anim->poseTimeB(),
+                                                    (uint32_t)anim->poseClipA(),
+                                                    anim->poseTimeA(),
+                                                    anim->poseWeight());
                     }
                     else
                     {

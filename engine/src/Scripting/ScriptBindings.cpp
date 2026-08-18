@@ -580,7 +580,18 @@ namespace DonTopo::ScriptBindings
                     anim->setFloat(n, v);
                 },
                 "GetFloat",   [animOf](const LuaAnimator& c, const std::string& n) { return animOf(c)->getFloat(n); },
-                "GetState",   [animOf](const LuaAnimator& c) { return animOf(c)->currentStateName(); });
+                "GetState",   [animOf](const LuaAnimator& c) { return animOf(c)->currentStateName(); },
+                // Cross-fade en curso. Son de LECTURA: la duración de la mezcla
+                // es autoría del grafo (se edita en el panel Animator), igual
+                // que las condiciones de una transición.
+                "IsBlending",     [animOf](const LuaAnimator& c) { return animOf(c)->blending(); },
+                "GetBlendWeight", [animOf](const LuaAnimator& c) { return animOf(c)->blendWeight(); },
+                "GetPreviousState", [animOf](const LuaAnimator& c) { return animOf(c)->previousStateName(); },
+                // El peso que acaba yendo a la GPU: el del cross-fade si hay
+                // uno en vuelo, si no el del blend por parámetro del estado, y
+                // 1 si no hay mezcla ninguna. El blend por parámetro se CONDUCE
+                // con SetFloat sobre su parámetro, así que aquí solo se lee.
+                "GetPoseWeight", [animOf](const LuaAnimator& c) { return animOf(c)->poseWeight(); });
         }
 
         // ── UI: Canvas, Button, Text y ProgressBar ──────────────────────────

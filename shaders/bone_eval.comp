@@ -30,6 +30,13 @@ layout(push_constant) uniform PC {
     // este mismo slot como "pad" y no lo leen: parentIndex e inverseBindPose
     // son iguales en todos los bloques, así que el del clip 0 les vale.
     uint  clipBase;
+    // Cross-fade: el clip que se apaga, su reloj y el peso de la mezcla.
+    // blendWeight >= 1 significa "sin mezcla" y ahorra la segunda evaluación
+    // entera. bone_hierarchy y skinning declaran estos cuatro slots como pad.
+    float prevAnimTime;
+    uint  prevClipBase;
+    float blendWeight;
+    uint  pad1;
 } push;
 
 vec4 slerpQ(vec4 a, vec4 b, float t)
@@ -59,28 +66,17 @@ mat4 trs(vec3 t, vec4 q, vec3 s)
     );
 }
 
-void main()
+// Muestrea el hueso descrito por info en el instante T. Sale por referencia
+// porque el cross-fade necesita las TRES componentes por separado para
+// mezclarlas antes de componer la matriz: mezclar dos matrices ya compuestas
+// interpola la rotación por sus columnas y deja poses torcidas en cuanto los
+// dos clips no miran casi al mismo sitio.
+void sampleBone(BoneInfo info, float T, out vec3 pos, out vec4 rot, out vec3 scl)
 {
-    uint bi = gl_GlobalInvocationID.x;
-    if (bi >= push.boneCount) return;
+    pos = vec3(0.0);
+    rot = vec4(0.0, 0.0, 0.0, 1.0);
+    scl = vec3(1.0);
 
-    BoneInfo info = boneInfos.data[push.clipBase + bi];
-    float T = push.animTime;
-
-    // Un clip no tiene por qué traer un canal por cada hueso del esqueleto. Del
-    // hueso del que no dice nada hay que conservar su local de bind pose: con la
-    // identidad se perdería su offset respecto al padre y colapsaría encima de
-    // él, llevándose por delante toda su cadena descendiente. Los huesos que SÍ
-    // tienen canal siguen por la interpolación de abajo — Assimp rellena los
-    // tres arrays de keys a todo hueso al que le da canal.
-    if (info.posCount == 0 && info.rotCount == 0 && info.scaleCount == 0)
-    {
-        localXforms.data[bi] = info.bindLocal;
-        return;
-    }
-
-    // Position
-    vec3 pos = vec3(0.0);
     if (info.posCount > 0)
     {
         int lo = info.posOffset, hi = info.posOffset + info.posCount - 1;
@@ -91,8 +87,6 @@ void main()
         pos = mix(posKeys.data[lo].value.xyz, posKeys.data[hi].value.xyz, f);
     }
 
-    // Rotation
-    vec4 rot = vec4(0.0, 0.0, 0.0, 1.0);
     if (info.rotCount > 0)
     {
         int lo = info.rotOffset, hi = info.rotOffset + info.rotCount - 1;
@@ -103,8 +97,6 @@ void main()
         rot = slerpQ(rotKeys.data[lo].quat, rotKeys.data[hi].quat, f);
     }
 
-    // Scale
-    vec3 scl = vec3(1.0);
     if (info.scaleCount > 0)
     {
         int lo = info.scaleOffset, hi = info.scaleOffset + info.scaleCount - 1;
@@ -114,6 +106,65 @@ void main()
         float f  = (t1 > t0) ? clamp((T - t0)/(t1 - t0), 0.0, 1.0) : 0.0;
         scl = mix(scaleKeys.data[lo].value.xyz, scaleKeys.data[hi].value.xyz, f);
     }
+}
 
-    localXforms.data[bi] = trs(pos, rot, scl);
+bool boneHasNoChannel(BoneInfo info)
+{
+    return info.posCount == 0 && info.rotCount == 0 && info.scaleCount == 0;
+}
+
+void main()
+{
+    uint bi = gl_GlobalInvocationID.x;
+    if (bi >= push.boneCount) return;
+
+    BoneInfo info = boneInfos.data[push.clipBase + bi];
+
+    // Sin cross-fade: el camino de siempre, una sola evaluación.
+    if (push.blendWeight >= 1.0)
+    {
+        // Un clip no tiene por qué traer un canal por cada hueso del esqueleto.
+        // Del hueso del que no dice nada hay que conservar su local de bind
+        // pose: con la identidad se perdería su offset respecto al padre y
+        // colapsaría encima de él, llevándose por delante toda su cadena
+        // descendiente. Los huesos que SÍ tienen canal siguen por la
+        // interpolación de sampleBone — Assimp rellena los tres arrays de keys
+        // a todo hueso al que le da canal.
+        if (boneHasNoChannel(info))
+        {
+            localXforms.data[bi] = info.bindLocal;
+            return;
+        }
+        vec3 pos, scl;
+        vec4 rot;
+        sampleBone(info, push.animTime, pos, rot, scl);
+        localXforms.data[bi] = trs(pos, rot, scl);
+        return;
+    }
+
+    // Cross-fade. El hueso del que NINGUNO de los dos clips dice nada conserva
+    // su bind local igual que en el camino sin mezcla (bindLocal es dato de
+    // esqueleto, idéntico en todos los bloques, así que vale el del activo).
+    //
+    // Si solo uno de los dos lo anima, el otro aporta TRS identidad: mezclar su
+    // bind local exigiría descomponer una mat4 en TRS dentro del shader. Es un
+    // caso de rigs mezclados (dos FBX con canales distintos), no del uso normal
+    // de dos clips del mismo personaje, donde Assimp da canal a los mismos
+    // huesos en los dos.
+    BoneInfo prevInfo = boneInfos.data[push.prevClipBase + bi];
+    if (boneHasNoChannel(info) && boneHasNoChannel(prevInfo))
+    {
+        localXforms.data[bi] = info.bindLocal;
+        return;
+    }
+
+    vec3 posA, sclA, posB, sclB;
+    vec4 rotA, rotB;
+    sampleBone(prevInfo, push.prevAnimTime, posA, rotA, sclA);
+    sampleBone(info,     push.animTime,     posB, rotB, sclB);
+
+    float w = clamp(push.blendWeight, 0.0, 1.0);
+    localXforms.data[bi] = trs(mix(posA, posB, w),
+                               slerpQ(rotA, rotB, w),
+                               mix(sclA, sclB, w));
 }

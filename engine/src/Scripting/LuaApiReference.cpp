@@ -93,7 +93,8 @@ const std::vector<std::string>& baseSymbols()
         // Animator (máquina de estados; GetComponent("Animator"))
         "Animator:SetBool", "Animator:GetBool", "Animator:SetTrigger",
         "Animator:SetInt", "Animator:GetInt", "Animator:SetFloat", "Animator:GetFloat",
-        "Animator:GetState",
+        "Animator:GetState", "Animator:IsBlending", "Animator:GetBlendWeight",
+        "Animator:GetPreviousState", "Animator:GetPoseWeight",
 
         // AudioClip
         "AudioClip:Play", "AudioClip:Stop", "AudioClip:SetLoop", "AudioClip:GetLoop",

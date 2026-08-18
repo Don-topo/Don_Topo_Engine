@@ -27,9 +27,8 @@ class GpuDevice;
 //    ultimo frame en que fue visible).
 class SkinningPass {
 public:
-    // ABI compartida por los 3 compute shaders. 16 bytes, fijos: el 4o campo
-    // era un pad sin usar y ahora lleva el clipBase, asi que ningun offset se
-    // ha movido.
+    // ABI compartida por los 3 compute shaders. 32 bytes: los 4 primeros campos
+    // no se han movido de sitio, los 4 del cross-fade se anadieron detras.
     struct Push
     {
         float    animTime;
@@ -40,8 +39,18 @@ public:
         // bone_eval.comp; bone_hierarchy y skinning declaran este slot como
         // "pad" y no lo tocan.
         uint32_t clipBase;
+        // --- Cross-fade ---
+        // Segundo clip de la mezcla y su reloj. Con blendWeight >= 1 bone_eval
+        // ni los mira, asi que el caso sin mezcla no paga la segunda
+        // evaluacion. Solo los lee bone_eval.comp.
+        float    prevAnimTime;
+        uint32_t prevClipBase;
+        // 0 = solo prevClip, 1 = solo el clip activo. El Animator manda 1
+        // cuando no hay cross-fade en vuelo.
+        float    blendWeight;
+        uint32_t pad;
     };
-    static_assert(sizeof(Push) == 16, "Push debe seguir en 16 bytes: los 3 .comp declaran este layout");
+    static_assert(sizeof(Push) == 32, "Push debe seguir en 32 bytes: los 3 .comp declaran este layout");
 
     struct Context {
         GpuDevice& gpu;

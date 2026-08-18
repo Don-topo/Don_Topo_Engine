@@ -232,6 +232,74 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         bool loop = states[i].loop;
         if (ImGui::Checkbox("loop", &loop))
             anim->statesMutable()[i].loop = loop;
+
+        // --- Blend por parámetro: segundo clip del estado ---
+        // El combo lista TODOS los clips de la malla (más "(ninguno)"), no solo
+        // los que ya usa el grafo: el motor admite cualquiera de ellos.
+        auto& stMut = anim->statesMutable()[i];
+        if (SkinnedMesh* mesh = go->getSkinnedMesh())
+        {
+            const std::string blendLabel = stMut.blendClipName.empty()
+                                           ? std::string("(ninguno)") : stMut.blendClipName;
+            ImGui::SetNextItemWidth(140.0f);
+            bool blendClipChanged = false;
+            if (ImGui::BeginCombo("blend", blendLabel.c_str()))
+            {
+                if (ImGui::Selectable("(ninguno)", stMut.blendClipName.empty()))
+                {
+                    stMut.blendClipName.clear();
+                    blendClipChanged = true;
+                }
+                for (const auto& c : mesh->animationClips)
+                {
+                    // Mezclar un clip consigo mismo no da nada nuevo, así que
+                    // el primario no se ofrece como segundo.
+                    if (c.name == stMut.clipName) continue;
+                    if (ImGui::Selectable(c.name.c_str(), c.name == stMut.blendClipName))
+                    {
+                        stMut.blendClipName = c.name;
+                        blendClipChanged    = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            // El índice y la duración del segundo clip los resuelve rebindClips
+            // por nombre; sin esto el estado quedaría con blendClipIndex a -1 y
+            // no mezclaría nada hasta recargar la escena. rebindClips y no
+            // bindClips: puede estar corriendo Play Mode y bindClips reiniciaría
+            // el grafo y los parámetros del usuario.
+            if (blendClipChanged)
+                anim->rebindClips(*mesh, nullptr);
+
+            if (!stMut.blendClipName.empty())
+            {
+                // Solo parámetros float: son los únicos que dan un peso
+                // continuo. Que la lista salga vacía es la pista de que hay que
+                // declarar uno abajo, en Parameters.
+                const std::string paramLabel = stMut.blendParam.empty()
+                                               ? std::string("(sin parametro)") : stMut.blendParam;
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::BeginCombo("by", paramLabel.c_str()))
+                {
+                    for (const auto& p : anim->parameters())
+                    {
+                        if (p.type != AnimatorComponent::ParamType::Float) continue;
+                        if (ImGui::Selectable(p.name.c_str(), p.name == stMut.blendParam))
+                            stMut.blendParam = p.name;
+                    }
+                    ImGui::EndCombo();
+                }
+
+                ImGui::SetNextItemWidth(60.0f);
+                ImGui::DragFloat("min", &stMut.blendMin, 0.01f);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(60.0f);
+                ImGui::DragFloat("max", &stMut.blendMax, 0.01f);
+
+                if (stMut.blendClipIndex < 0)
+                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "blend: clip no resuelto");
+            }
+        }
         ImGui::PopID();
 
         ImGui::EndGroup();
@@ -422,6 +490,19 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
     if (!ImGui::BeginPopup("conditions")) return;
 
     auto& tr = anim->transitionsMutable()[m_conditionsFor];
+
+    // Cross-fade de ESTA transición, en segundos. 0 = corte seco, que es lo que
+    // hacía el motor antes y lo que traen las escenas viejas.
+    ImGui::TextUnformatted("Transition");
+    ImGui::SetNextItemWidth(80);
+    ImGui::DragFloat("cross-fade (s)", &tr.duration, 0.01f, 0.0f, 10.0f, "%.2f");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Segundos de mezcla con el estado de origen. 0 = corte instantaneo.");
+    // DragFloat con min 0 ya lo impide al arrastrar, pero no al teclear un
+    // valor: un negativo dejaria blendWeight fuera de [0,1].
+    if (tr.duration < 0.0f) tr.duration = 0.0f;
+
+    ImGui::Separator();
     ImGui::TextUnformatted("Conditions (AND)");
     ImGui::Separator();
 

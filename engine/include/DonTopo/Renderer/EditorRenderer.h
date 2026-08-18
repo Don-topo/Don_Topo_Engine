@@ -144,6 +144,13 @@ namespace DonTopo
             // calculó un Animator en CPU.
             virtual void updateAnimation(int index, float deltaTime)                    = 0;
             virtual void setAnimationState(int index, uint32_t clipIndex, float animTime) = 0;
+            // Cross-fade: los DOS clips en vuelo y el peso de la mezcla.
+            // weight 0 = solo prevClip, 1 = solo clipIndex. Es un superconjunto
+            // de setAnimationState (que equivale a weight 1), pero se queda
+            // aparte para no tocar la firma que ya usan los objetos sin mezcla.
+            virtual void setAnimationBlend(int index, uint32_t clipIndex, float animTime,
+                                           uint32_t prevClipIndex, float prevAnimTime,
+                                           float weight) = 0;
 
             // Suelta lo que quedó pendiente de borrar cuando la GPU lo permita.
             virtual void tickDeferredDeletes() = 0;

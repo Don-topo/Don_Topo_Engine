@@ -114,13 +114,20 @@ static_assert(sizeof(PushData) == 80, "PushData debe ocupar 80 bytes (20 root co
 
 // Push constants de los tres compute de animación. Los tres comparten bloque de
 // 16 bytes; en bone_hierarchy y skinning el cuarto campo no se lee.
+// Espejo de SkinningPass::Push (Vulkan): los dos backends compilan LOS MISMOS
+// .comp, así que este bloque y aquél tienen que coincidir campo a campo.
 struct ComputePush {
     float    animTime;
     uint32_t boneCount;
     uint32_t vertexCount;
     uint32_t clipBase;  // activeClip * boneCount
+    // Cross-fade: segundo clip, su reloj y el peso. Solo los lee bone_eval.
+    float    prevAnimTime;
+    uint32_t prevClipBase;
+    float    blendWeight;
+    uint32_t pad;
 };
-static_assert(sizeof(ComputePush) == 16, "ComputePush debe ocupar 16 bytes");
+static_assert(sizeof(ComputePush) == 32, "ComputePush debe ocupar 32 bytes");
 
 // Medio flotante a mano: los neutros del IBL son cuatro texels y no compensa
 // arrastrar DirectXMath por ellos. Vale para valores normales y pequeños, que
@@ -773,6 +780,11 @@ struct D3D12Renderer::Impl {
         uint32_t clipBase     = 0;
         float    animTime     = 0.0f;
         float    animDuration = 0.0f;
+        // Cross-fade: el clip que se apaga y su propio reloj. Con blendWeight
+        // a 1 el compute no llega a mirarlos.
+        uint32_t prevClipBase = 0;
+        float    prevAnimTime = 0.0f;
+        float    blendWeight  = 1.0f;
         // Quién manda en animTime. En cuanto alguien de fuera lo mueve
         // —updateAnimation o setAnimationState— el backend deja de avanzarlo por
         // su cuenta: los dos relojes sumando dejarían el clip al doble.
@@ -2844,6 +2856,9 @@ void D3D12Renderer::Impl::recordSkinning()
             continue;
 
         ComputePush push{};
+        push.prevAnimTime = object.prevAnimTime;
+        push.prevClipBase = object.prevClipBase;
+        push.blendWeight  = object.blendWeight;
         push.animTime    = object.animTime;
         push.boneCount   = object.boneCount;
         push.vertexCount = object.vertexCount;
@@ -8199,9 +8214,25 @@ void D3D12Renderer::setAnimationState(int index, uint32_t clipIndex, float animT
     Impl::SkinnedObject& character = d.skinnedObjects[index];
     character.clipBase             = clipIndex * character.boneCount;
     character.animTime             = animTime;
+    // Un objeto que deja de mezclar vuelve a peso 1 o el compute seguiría
+    // leyendo el clip previo del frame anterior para siempre.
+    character.blendWeight          = 1.0f;
     // El Animator del GameObject es el dueño del reloj: el backend no vuelve a
     // sumarle tiempo por su cuenta.
     character.externalClock = true;
+}
+
+void D3D12Renderer::setAnimationBlend(int index, uint32_t clipIndex, float animTime,
+                                      uint32_t prevClipIndex, float prevAnimTime, float weight)
+{
+    setAnimationState(index, clipIndex, animTime);
+    Impl& d = *m_impl;
+    if (index < 0 || static_cast<size_t>(index) >= d.skinnedObjects.size())
+        return;
+    Impl::SkinnedObject& character = d.skinnedObjects[index];
+    character.prevClipBase         = prevClipIndex * character.boneCount;
+    character.prevAnimTime         = prevAnimTime;
+    character.blendWeight          = (weight < 0.0f) ? 0.0f : (weight > 1.0f ? 1.0f : weight);
 }
 
 size_t D3D12Renderer::skinnedCount() const

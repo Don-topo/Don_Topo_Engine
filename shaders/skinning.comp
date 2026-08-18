@@ -27,7 +27,13 @@ layout(push_constant) uniform PC {
     float animTime;
     uint  boneCount;
     uint  vertexCount;
+    // clipBase y los cuatro del cross-fade: solo los lee bone_eval.comp. Aquí
+    // se declaran para que el bloque tenga el mismo tamaño que SkinningPass::Push.
     uint  pad;
+    float pad1;
+    uint  pad2;
+    float pad3;
+    uint  pad4;
 } push;
 
 void main()

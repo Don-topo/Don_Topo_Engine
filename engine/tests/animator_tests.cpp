@@ -1871,6 +1871,578 @@ static void test_animation_finished_fires_on_zero_duration_state()
     CHECK(a.currentState() == 1);
 }
 
+// ── Cross-fade ───────────────────────────────────────────────────────────────
+//
+// Grafo mínimo de dos estados con una transición por bool, y la duración del
+// cross-fade como parámetro. Los dos clips tienen tps DISTINTOS (20 y 50) a
+// propósito: el reloj del estado que se apaga sigue corriendo con SU ritmo, así
+// que compartir un tps o congelar uno de los dos relojes se ve.
+static AnimatorComponent makeFadeGraph(float fadeSeconds)
+{
+    AnimatorComponent a;
+
+    AnimatorComponent::State from;
+    from.name = "From"; from.clipName = "From";
+    from.clipIndex = 0; from.duration = 40.0f; from.ticksPerSecond = 20.0f; from.loop = true;
+
+    AnimatorComponent::State to;
+    to.name = "To"; to.clipName = "To";
+    to.clipIndex = 1; to.duration = 100.0f; to.ticksPerSecond = 50.0f; to.loop = true;
+
+    a.addState(from);
+    a.addState(to);
+    a.setEntryState(0);
+    a.addParameter("go", AnimatorComponent::ParamType::Bool);
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    t.duration  = fadeSeconds;
+    t.conditions.push_back({ AnimatorComponent::ConditionType::Bool, "go", true });
+    a.addTransition(t);
+
+    a.reset();
+    return a;
+}
+
+// El peso sube de 0 a 1 a lo largo de la duración de la transición. Se
+// comprueban 0.3 y 0.7 (no 0 y 1: los dos extremos los devolvería igual una
+// implementación que no interpolara nada).
+static void test_crossfade_weight_ramps_over_duration()
+{
+    AnimatorComponent a = makeFadeGraph(0.5f);
+    a.setBool("go", true);
+    a.update(0.0f, true);                    // dispara la transición, sin avanzar
+
+    CHECK(a.currentState() == 1);
+    CHECK(a.blending());
+    CHECK(a.previousState() == 0);
+    CHECK(a.previousClipIndex() == 0);
+    // Justo al entrar el destino todavía no pesa nada
+    CHECK(nearlyEqual(a.blendWeight(), 0.0f));
+
+    a.update(0.15f, true);                   // 0.15 / 0.5
+    CHECK(a.blending());
+    CHECK(nearlyEqual(a.blendWeight(), 0.3f));
+
+    a.update(0.20f, true);                   // 0.35 / 0.5
+    CHECK(a.blending());
+    CHECK(nearlyEqual(a.blendWeight(), 0.7f));
+
+    // Pasado el final: se cierra la mezcla y el origen desaparece
+    a.update(0.20f, true);
+    CHECK(!a.blending());
+    CHECK(nearlyEqual(a.blendWeight(), 1.0f));
+    CHECK(a.previousState() == -1);
+    CHECK(a.previousClipIndex() == 0);       // degradado seguro, como currentClipIndex
+}
+
+// Durante la mezcla los DOS relojes corren, cada uno con el tps de su estado, y
+// el del origen respeta su propio loop.
+static void test_crossfade_advances_both_clocks()
+{
+    AnimatorComponent a = makeFadeGraph(1.0f);
+    a.setBool("go", true);
+    a.update(0.0f, true);
+    CHECK(a.currentState() == 1);
+    CHECK(nearlyEqual(a.animTime(), 0.0f));
+    CHECK(nearlyEqual(a.previousAnimTime(), 0.0f));
+
+    a.update(0.5f, true);
+    // Destino: 0.5 s * 50 tps = 25 ticks. Origen: 0.5 s * 20 tps = 10 ticks.
+    CHECK(nearlyEqual(a.animTime(), 25.0f));
+    CHECK(nearlyEqual(a.previousAnimTime(), 10.0f));
+    // Distintos entre sí: un reloj compartido pasaría los dos CHECK de arriba
+    // solo si los tps coincidieran, y no coinciden.
+    CHECK(!nearlyEqual(a.animTime(), a.previousAnimTime()));
+}
+
+// El origen respeta SU loop mientras se apaga: From dura 40 ticks a 20 tps = 2 s.
+static void test_crossfade_prev_clock_loops()
+{
+    AnimatorComponent a = makeFadeGraph(3.0f);
+    a.setBool("go", true);
+    a.update(0.0f, true);
+
+    a.update(2.5f, true);                    // 2.5 s * 20 tps = 50 ticks > 40
+    CHECK(a.blending());
+    CHECK(nearlyEqual(a.previousAnimTime(), 10.0f));   // fmod(50, 40)
+}
+
+// duration 0 (el default, y lo que trae toda escena anterior a esta feature):
+// corte seco, sin mezcla y sin estado previo. El comportamiento de siempre.
+static void test_crossfade_zero_duration_is_instant_cut()
+{
+    AnimatorComponent a = makeFadeGraph(0.0f);
+    a.setBool("go", true);
+    a.update(0.016f, true);
+
+    CHECK(a.currentState() == 1);
+    CHECK(!a.blending());
+    CHECK(nearlyEqual(a.blendWeight(), 1.0f));
+    CHECK(a.previousState() == -1);
+}
+
+// reset() limpia la mezcla en curso: si no, reeditar el grafo en el editor
+// dejaría al personaje mezclando contra un estado que ya no existe.
+static void test_crossfade_reset_clears_blend()
+{
+    AnimatorComponent a = makeFadeGraph(0.5f);
+    a.setBool("go", true);
+    a.update(0.1f, true);
+    CHECK(a.blending());
+
+    a.reset();
+    CHECK(!a.blending());
+    CHECK(a.previousState() == -1);
+    CHECK(nearlyEqual(a.blendWeight(), 1.0f));
+}
+
+// Réplica en CPU del bloque de mezcla de bone_eval.comp: evalúa el hueso i en
+// los DOS bloques de clip y mezcla componente a componente (lerp en posición y
+// escala, slerp en rotación) ANTES de componer la matriz. Mezclar las matrices
+// ya compuestas daría otra cosa distinta en cuanto haya rotación.
+static glm::mat4 evalLocalXformBlended(const PackedClips& p, size_t clipBaseA, size_t clipBaseB,
+                                       size_t i, float TA, float TB, float w)
+{
+    // Sin mezcla en curso el shader se ahorra la segunda evaluación entera.
+    if (w >= 1.0f) return evalLocalXform(p, clipBaseB, i, TB);
+    if (w <= 0.0f) return evalLocalXform(p, clipBaseA, i, TA);
+
+    const GpuBoneInfo& ia = p.boneInfos[clipBaseA + i];
+    const GpuBoneInfo& ib = p.boneInfos[clipBaseB + i];
+
+    // Un hueso sin canal se resuelve POR CLIP antes de mezclar: su aportación es
+    // su bind local, no la identidad.
+    const bool emptyA = (ia.posCount == 0 && ia.rotCount == 0 && ia.scaleCount == 0);
+    const bool emptyB = (ib.posCount == 0 && ib.rotCount == 0 && ib.scaleCount == 0);
+    if (emptyA && emptyB) return ia.bindLocal;
+
+    auto sample = [&](const GpuBoneInfo& info, float T, glm::vec3& pos, glm::vec4& rot, glm::vec3& scl)
+    {
+        pos = glm::vec3(0.0f);
+        rot = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        scl = glm::vec3(1.0f);
+        if (info.posCount == 0 && info.rotCount == 0 && info.scaleCount == 0)
+        {
+            // Descomponer bindLocal entero sería otra historia; en las fixtures
+            // de estos tests el hueso sin canal lo está en los dos clips y ya se
+            // ha resuelto arriba.
+            return;
+        }
+        if (info.posCount > 0)
+        {
+            int lo = info.posOffset, hi = info.posOffset + info.posCount - 1;
+            for (int k = info.posOffset; k < info.posOffset + info.posCount - 1; k++)
+                if (p.pos[(size_t)k + 1].timePad.x > T) { lo = k; hi = k + 1; break; }
+            const float t0 = p.pos[(size_t)lo].timePad.x, t1 = p.pos[(size_t)hi].timePad.x;
+            const float f  = (t1 > t0) ? glm::clamp((T - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
+            pos = glm::mix(glm::vec3(p.pos[(size_t)lo].value), glm::vec3(p.pos[(size_t)hi].value), f);
+        }
+        if (info.rotCount > 0)
+        {
+            int lo = info.rotOffset, hi = info.rotOffset + info.rotCount - 1;
+            for (int k = info.rotOffset; k < info.rotOffset + info.rotCount - 1; k++)
+                if (p.rot[(size_t)k + 1].timePad.x > T) { lo = k; hi = k + 1; break; }
+            const float t0 = p.rot[(size_t)lo].timePad.x, t1 = p.rot[(size_t)hi].timePad.x;
+            const float f  = (t1 > t0) ? glm::clamp((T - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
+            rot = slerpQ(p.rot[(size_t)lo].value, p.rot[(size_t)hi].value, f);
+        }
+        if (info.scaleCount > 0)
+        {
+            int lo = info.scaleOffset, hi = info.scaleOffset + info.scaleCount - 1;
+            for (int k = info.scaleOffset; k < info.scaleOffset + info.scaleCount - 1; k++)
+                if (p.scale[(size_t)k + 1].timePad.x > T) { lo = k; hi = k + 1; break; }
+            const float t0 = p.scale[(size_t)lo].timePad.x, t1 = p.scale[(size_t)hi].timePad.x;
+            const float f  = (t1 > t0) ? glm::clamp((T - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
+            scl = glm::mix(glm::vec3(p.scale[(size_t)lo].value), glm::vec3(p.scale[(size_t)hi].value), f);
+        }
+    };
+
+    glm::vec3 pa, sa, pb, sb;
+    glm::vec4 ra, rb;
+    sample(ia, TA, pa, ra, sa);
+    sample(ib, TB, pb, rb, sb);
+
+    const glm::vec3 pos = glm::mix(pa, pb, w);
+    const glm::vec4 rot = slerpQ(ra, rb, w);
+    const glm::vec3 scl = glm::mix(sa, sb, w);
+
+    glm::mat4 out = glm::mat4_cast(glm::quat(rot.w, rot.x, rot.y, rot.z));
+    out[0] *= scl.x;
+    out[1] *= scl.y;
+    out[2] *= scl.z;
+    out[3] = glm::vec4(pos, 1.0f);
+    return out;
+}
+
+// Malla de dos clips que colocan el mismo hueso en sitios MUY separados (x=0 y
+// x=10) y con escalas distintas (1 y 5), pa que una mezcla mal ponderada no se
+// confunda con ruido numérico.
+static SkinnedMesh makeTwoClipFixture()
+{
+    SkinnedMesh m;
+    m.skeleton.names           = { "root" };
+    m.skeleton.parentIndex     = { -1 };
+    m.skeleton.inverseBindPose = { glm::mat4(1.0f) };
+
+    const float posX[2]  = { 0.0f, 10.0f };
+    const float scale[2] = { 1.0f, 5.0f };
+    const char* names[2] = { "From", "To" };
+    const float dur[2]   = { 40.0f, 100.0f };
+    const float tps[2]   = { 20.0f, 50.0f };
+
+    for (int c = 0; c < 2; c++)
+    {
+        AnimationClip clip;
+        clip.name = names[c]; clip.duration = dur[c]; clip.ticksPerSecond = tps[c];
+
+        BoneChannel ch;
+        ch.boneIndex = 0;
+        // Dos keys con el MISMO valor: el clip es constante en el tiempo, así el
+        // test aísla la mezcla entre clips del muestreo dentro de un clip.
+        for (int k = 0; k < 2; k++)
+        {
+            ch.posKeys.push_back({ (float)k * dur[c], glm::vec3(posX[c], 0.0f, 0.0f) });
+            ch.rotKeys.push_back({ (float)k * dur[c], glm::quat(1.0f, 0.0f, 0.0f, 0.0f) });
+            ch.scaleKeys.push_back({ (float)k * dur[c], glm::vec3(scale[c]) });
+        }
+        clip.channels.push_back(ch);
+        m.animationClips.push_back(clip);
+    }
+    return m;
+}
+
+// El test que de verdad importa: la POSE que sale a la GPU está entre las dos,
+// en la proporción que dice el peso. Un cross-fade que devolviera siempre el
+// clip origen (o siempre el destino) pasa todos los tests de peso de arriba y
+// muere aquí.
+static void test_crossfade_pose_interpolates_between_clips()
+{
+    SkinnedMesh  mesh = makeTwoClipFixture();
+    PackedClips  p    = packSkinnedClips(mesh);
+    const size_t B    = mesh.skeleton.names.size();
+
+    AnimatorComponent a = makeFadeGraph(0.5f);
+    a.bindClips(mesh, nullptr);
+    CHECK(a.states()[0].clipIndex == 0);
+    CHECK(a.states()[1].clipIndex == 1);
+
+    a.setBool("go", true);
+    a.update(0.0f, true);
+    a.update(0.15f, true);                   // peso 0.3
+    CHECK(nearlyEqual(a.blendWeight(), 0.3f));
+
+    const glm::mat4 blended = evalLocalXformBlended(
+        p, (size_t)a.previousClipIndex() * B, (size_t)a.currentClipIndex() * B, 0,
+        a.previousAnimTime(), a.animTime(), a.blendWeight());
+
+    // mix(0, 10, 0.3) = 3 en posición; mix(1, 5, 0.3) = 2.2 en escala
+    CHECK(nearlyEqual(blended[3].x, 3.0f));
+    CHECK(nearlyEqual(blended[0].x, 2.2f));
+
+    // Y NO es ninguno de los dos extremos
+    const glm::mat4 onlyFrom = evalLocalXform(p, 0, 0, a.previousAnimTime());
+    const glm::mat4 onlyTo   = evalLocalXform(p, B, 0, a.animTime());
+    CHECK(!nearlyEqualMat(blended, onlyFrom));
+    CHECK(!nearlyEqualMat(blended, onlyTo));
+    CHECK(nearlyEqual(onlyFrom[3].x, 0.0f));
+    CHECK(nearlyEqual(onlyTo[3].x, 10.0f));
+
+    // Peso 0.7: la pose se ha movido HACIA el destino, no se ha quedado clavada
+    a.update(0.20f, true);
+    CHECK(nearlyEqual(a.blendWeight(), 0.7f));
+    const glm::mat4 later = evalLocalXformBlended(
+        p, (size_t)a.previousClipIndex() * B, (size_t)a.currentClipIndex() * B, 0,
+        a.previousAnimTime(), a.animTime(), a.blendWeight());
+    CHECK(nearlyEqual(later[3].x, 7.0f));
+    CHECK(later[3].x > blended[3].x);
+}
+
+// ── Blend por parámetro float ────────────────────────────────────────────────
+//
+// Un estado con dos clips: el suyo y blendClip, mezclados por el valor de un
+// parámetro float mapeado de [blendMin, blendMax] a [0, 1]. Los límites NO son
+// 0 y 1 a propósito (1.5 y 6.5): un mapeo que se olvidara del rango pasaría
+// desapercibido con 0..1.
+static AnimatorComponent makeBlendStateGraph()
+{
+    AnimatorComponent a;
+
+    AnimatorComponent::State s;
+    s.name = "Locomotion"; s.clipName = "From";
+    s.clipIndex = 0; s.duration = 40.0f; s.ticksPerSecond = 20.0f; s.loop = true;
+    s.blendClipName  = "To";
+    s.blendClipIndex = 1;
+    s.blendDuration  = 100.0f;
+    s.blendParam     = "speed";
+    s.blendMin       = 1.5f;
+    s.blendMax       = 6.5f;
+
+    a.addState(s);
+    a.setEntryState(0);
+    a.addParameter("speed", AnimatorComponent::ParamType::Float);
+    a.reset();
+    return a;
+}
+
+// El peso sale del parámetro, remapeado por [blendMin, blendMax] y clampado.
+static void test_blend_state_weight_from_float_param()
+{
+    AnimatorComponent a = makeBlendStateGraph();
+
+    // 1.5 + 0.3 * (6.5 - 1.5) = 3.0
+    a.setFloat("speed", 3.0f);
+    a.update(0.016f, true);
+    CHECK(nearlyEqual(a.poseWeight(), 0.3f));
+
+    // 1.5 + 0.7 * 5 = 5.0
+    a.setFloat("speed", 5.0f);
+    a.update(0.016f, true);
+    CHECK(nearlyEqual(a.poseWeight(), 0.7f));
+
+    // Fuera de rango por los dos lados: clamp, no extrapolación
+    a.setFloat("speed", -100.0f);
+    a.update(0.016f, true);
+    CHECK(nearlyEqual(a.poseWeight(), 0.0f));
+    a.setFloat("speed", 999.0f);
+    a.update(0.016f, true);
+    CHECK(nearlyEqual(a.poseWeight(), 1.0f));
+
+    // Y los dos clips que salen son los del estado, no dos veces el mismo
+    CHECK(a.poseClipA() == 0);
+    CHECK(a.poseClipB() == 1);
+}
+
+// Los dos clips se muestrean en la MISMA fase normalizada: si no, un walk de 40
+// ticks y un run de 100 se desincronizan y las piernas patinan.
+static void test_blend_state_syncs_normalized_phase()
+{
+    AnimatorComponent a = makeBlendStateGraph();
+    a.setFloat("speed", 4.0f);
+    a.update(0.5f, true);                    // 0.5 s * 20 tps = 10 ticks
+
+    CHECK(nearlyEqual(a.poseTimeA(), 10.0f));
+    // 10/40 = 25% del clip A -> 25% de los 100 ticks del clip B
+    CHECK(nearlyEqual(a.poseTimeB(), 25.0f));
+    CHECK(!nearlyEqual(a.poseTimeA(), a.poseTimeB()));
+}
+
+// Estado normal (sin blendClip): un solo clip, peso 1 y el par degenerado.
+// Es lo que hace toda escena anterior a esta feature.
+static void test_state_without_blend_clip_stays_single()
+{
+    AnimatorComponent a = makeFadeGraph(0.0f);
+    a.update(0.016f, true);
+
+    CHECK(nearlyEqual(a.poseWeight(), 1.0f));
+    CHECK(a.poseClipA() == a.poseClipB());
+    CHECK(nearlyEqual(a.poseTimeA(), a.poseTimeB()));
+}
+
+// Un cross-fade en vuelo manda sobre el blend del estado: solo hay dos clips en
+// el push constant, así que mientras dura la transición el par ES la transición.
+static void test_crossfade_takes_priority_over_blend_state()
+{
+    AnimatorComponent a;
+
+    AnimatorComponent::State idle;
+    idle.name = "Idle"; idle.clipName = "From";
+    idle.clipIndex = 0; idle.duration = 40.0f; idle.ticksPerSecond = 20.0f; idle.loop = true;
+
+    AnimatorComponent::State loco;
+    loco.name = "Locomotion"; loco.clipName = "From";
+    loco.clipIndex = 0; loco.duration = 40.0f; loco.ticksPerSecond = 20.0f; loco.loop = true;
+    loco.blendClipName = "To"; loco.blendClipIndex = 1; loco.blendDuration = 100.0f;
+    loco.blendParam = "speed"; loco.blendMin = 0.0f; loco.blendMax = 10.0f;
+
+    a.addState(idle);
+    a.addState(loco);
+    a.setEntryState(0);
+    a.addParameter("speed", AnimatorComponent::ParamType::Float);
+    a.addParameter("go",    AnimatorComponent::ParamType::Bool);
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 0.5f;
+    t.conditions.push_back({ AnimatorComponent::ConditionType::Bool, "go", true });
+    a.addTransition(t);
+    a.reset();
+
+    a.setFloat("speed", 8.0f);               // pediría peso 0.8 en el destino
+    a.setBool("go", true);
+    a.update(0.0f, true);
+    a.update(0.15f, true);                   // 0.3 de cross-fade
+
+    // Durante la mezcla el par es la transición, no el blend del estado
+    CHECK(a.blending());
+    CHECK(nearlyEqual(a.poseWeight(), 0.3f));
+    CHECK(a.poseClipA() == 0);               // clip del estado que se apaga
+    CHECK(a.poseClipB() == 0);               // clip PRIMARIO del destino
+
+    // Terminada la transición, el blend del estado vuelve a mandar
+    a.update(0.5f, true);
+    CHECK(!a.blending());
+    CHECK(nearlyEqual(a.poseWeight(), 0.8f));
+    CHECK(a.poseClipB() == 1);
+}
+
+// bindClips resuelve TAMBIÉN el segundo clip por nombre y cachea su duración.
+// Un blendClip que no exista deja el índice a -1, avisa, y el estado se comporta
+// como uno normal en vez de mezclar contra basura.
+static void test_bind_clips_resolves_blend_clip()
+{
+    SkinnedMesh mesh = makeTwoClipFixture();
+
+    AnimatorComponent a;
+    AnimatorComponent::State ok;
+    ok.name = "Ok"; ok.clipName = "From"; ok.blendClipName = "To";
+    AnimatorComponent::State bad;
+    bad.name = "Bad"; bad.clipName = "From"; bad.blendClipName = "NoExiste";
+    a.addState(ok);
+    a.addState(bad);
+
+    std::vector<std::string> warnings;
+    a.bindClips(mesh, &warnings);
+
+    CHECK(a.states()[0].blendClipIndex == 1);
+    CHECK(nearlyEqual(a.states()[0].blendDuration, 100.0f));
+    CHECK(a.states()[1].blendClipIndex == -1);
+    CHECK(warnings.size() == 1u);
+
+    // El estado con el blendClip roto no mezcla: peso 1, un solo clip
+    a.setEntryState(1);
+    a.update(0.016f, true);
+    CHECK(nearlyEqual(a.poseWeight(), 1.0f));
+    CHECK(a.poseClipA() == a.poseClipB());
+}
+
+// El de verdad: la POSE que sale está entre los dos clips en la proporción del
+// parámetro. Un blend que devolviera siempre el clip primario pasa los tests de
+// peso y muere aquí.
+static void test_blend_state_pose_interpolates_between_clips()
+{
+    SkinnedMesh  mesh = makeTwoClipFixture();
+    PackedClips  p    = packSkinnedClips(mesh);
+    const size_t B    = mesh.skeleton.names.size();
+
+    AnimatorComponent a = makeBlendStateGraph();
+    a.bindClips(mesh, nullptr);
+    CHECK(a.states()[0].clipIndex == 0);
+    CHECK(a.states()[0].blendClipIndex == 1);
+
+    a.setFloat("speed", 3.0f);               // peso 0.3
+    a.update(0.016f, true);
+    CHECK(nearlyEqual(a.poseWeight(), 0.3f));
+
+    const glm::mat4 blended = evalLocalXformBlended(
+        p, (size_t)a.poseClipA() * B, (size_t)a.poseClipB() * B, 0,
+        a.poseTimeA(), a.poseTimeB(), a.poseWeight());
+
+    // mix(0, 10, 0.3) = 3 en posición; mix(1, 5, 0.3) = 2.2 en escala
+    CHECK(nearlyEqual(blended[3].x, 3.0f));
+    CHECK(nearlyEqual(blended[0].x, 2.2f));
+
+    const glm::mat4 onlyPrimary = evalLocalXform(p, 0, 0, a.poseTimeA());
+    const glm::mat4 onlyBlend   = evalLocalXform(p, B, 0, a.poseTimeB());
+    CHECK(!nearlyEqualMat(blended, onlyPrimary));
+    CHECK(!nearlyEqualMat(blended, onlyBlend));
+
+    // Subir el parámetro mueve la pose HACIA el segundo clip
+    a.setFloat("speed", 5.0f);               // peso 0.7
+    a.update(0.016f, true);
+    const glm::mat4 later = evalLocalXformBlended(
+        p, (size_t)a.poseClipA() * B, (size_t)a.poseClipB() * B, 0,
+        a.poseTimeA(), a.poseTimeB(), a.poseWeight());
+    CHECK(nearlyEqual(later[3].x, 7.0f));
+    CHECK(later[3].x > blended[3].x);
+}
+
+// Repro del bug reportado: estado de entrada con loop=false que al terminar
+// pasa al siguiente por "animation finished", con cross-fade. El destino tiene
+// que ACABAR reproduciéndose: su clip a la salida y su reloj corriendo.
+static void test_finished_transition_reaches_destination()
+{
+    SkinnedMesh mesh = makeTwoClipFixture();   // clips "From" (40t@20) y "To" (100t@50)
+
+    AnimatorComponent a;
+    AnimatorComponent::State intro;
+    intro.name = "Intro"; intro.clipName = "From"; intro.loop = false;
+    AnimatorComponent::State idle;
+    idle.name = "Idle"; idle.clipName = "To"; idle.loop = true;
+    a.addState(intro);
+    a.addState(idle);
+    a.setEntryState(0);
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 0.3f;
+    t.conditions.push_back({ AnimatorComponent::ConditionType::AnimationFinished, "", true });
+    a.addTransition(t);
+
+    a.bindClips(mesh, nullptr);
+    CHECK(a.states()[0].clipIndex == 0);
+    CHECK(a.states()[1].clipIndex == 1);
+
+    // Intro dura 40 ticks a 20 tps = 2 s = 120 frames a 60 fps; el cross-fade
+    // son 0.3 s = 18 frames más. 180 deja margen de sobra para los dos.
+    for (int f = 0; f < 180; f++) a.update(1.0f / 60.0f, true);
+
+    CHECK(a.currentState() == 1);
+    // Terminado el cross-fade (0.3 s) el destino manda del todo
+    CHECK(!a.blending());
+    CHECK(a.poseClipA() == 1);
+    CHECK(a.poseClipB() == 1);
+    CHECK(nearlyEqual(a.poseWeight(), 1.0f));
+    // Y su reloj CORRE: la animación destino se reproduce, no se queda clavada
+    const float t0 = a.poseTimeB();
+    a.update(0.1f, true);
+    CHECK(a.poseTimeB() > t0);
+}
+
+// En Edit Mode el reloj corre igual (solo se saltan las transiciones), así que
+// un estado de entrada con loop=false llega a su final y deja m_finished a true
+// para siempre. Si al entrar en Play nadie resetea, la transición "animation
+// finished" dispara en el PRIMER frame y la animación de entrada no se ve.
+//
+// Este test fija el contrato que hace falta arriba: entrar en Play tiene que
+// llamar a reset() (lo hace EditorUI::drawToolbar en el botón Play).
+static void test_edit_mode_finished_leaks_into_play_without_reset()
+{
+    SkinnedMesh mesh = makeTwoClipFixture();
+
+    AnimatorComponent a;
+    AnimatorComponent::State intro;
+    intro.name = "Intro"; intro.clipName = "From"; intro.loop = false;
+    AnimatorComponent::State idle;
+    idle.name = "Idle"; idle.clipName = "To"; idle.loop = true;
+    a.addState(intro);
+    a.addState(idle);
+    a.setEntryState(0);
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    t.conditions.push_back({ AnimatorComponent::ConditionType::AnimationFinished, "", true });
+    a.addTransition(t);
+    a.bindClips(mesh, nullptr);
+
+    // 5 s en Edit Mode: Intro (2 s) ha terminado hace rato
+    for (int f = 0; f < 300; f++) a.update(1.0f / 60.0f, /*evaluateTransitions=*/false);
+    CHECK(a.currentState() == 0);
+    CHECK(a.finished());                       // la fuga
+
+    // Play SIN reset: la transición dispara en el primer frame, Intro no se ve
+    AnimatorComponent leaked = a;
+    leaked.update(1.0f / 60.0f, true);
+    CHECK(leaked.currentState() == 1);
+
+    // Play CON reset (lo que hace el editor): Intro se reproduce entera
+    a.reset();
+    CHECK(!a.finished());
+    CHECK(nearlyEqual(a.animTime(), 0.0f));
+    a.update(1.0f / 60.0f, true);
+    CHECK(a.currentState() == 0);              // sigue en Intro
+    for (int f = 0; f < 130; f++) a.update(1.0f / 60.0f, true);
+    CHECK(a.currentState() == 1);              // y transiciona cuando toca
+}
+
 // bindClips resuelve el clip por NOMBRE y cachea duration/ticksPerSecond. Un
 // nombre que no exista deja clipIndex a -1 y avisa: falla ruidoso, no silencioso.
 // loop NO se toca: es del usuario, no del FBX.
@@ -2773,6 +3345,187 @@ static void test_condition_without_compare_fields_loads(PhysicsManager& pm, Audi
     CHECK(nearlyEqual(lc.threshold, 0.0f));                     // default
 }
 
+// La duración del cross-fade sobrevive guardar -> cargar. Dos transiciones con
+// duraciones DISTINTAS y ninguna a 0: una sola constante compartida, o un valor
+// que no se leyera y cayera en el default, pasaría con un solo valor.
+static void test_crossfade_duration_survives_scene_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State idle; idle.name = "Idle"; idle.clipName = "ClipIdle";
+    AnimatorComponent::State run;  run.name  = "Run";  run.clipName  = "ClipRun";
+    a->addState(idle);
+    a->addState(run);
+    a->addParameter("running", AnimatorComponent::ParamType::Bool);
+
+    AnimatorComponent::Transition t0;
+    t0.fromState = 0; t0.toState = 1; t0.duration = 0.35f;
+    t0.conditions.push_back({ AnimatorComponent::ConditionType::Bool, "running", true });
+    a->addTransition(t0);
+
+    AnimatorComponent::Transition t1;
+    t1.fromState = 1; t1.toState = 0; t1.duration = 0.8f;
+    t1.conditions.push_back({ AnimatorComponent::ConditionType::Bool, "running", false });
+    a->addTransition(t1);
+
+    go->setAnimator(a);
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found || !found->hasAnimator()) return;
+
+    const auto& tr = found->getAnimator()->transitions();
+    CHECK(tr.size() == 2u);
+    CHECK(nearlyEqual(tr[0].duration, 0.35f));
+    CHECK(nearlyEqual(tr[1].duration, 0.8f));
+    CHECK(!nearlyEqual(tr[0].duration, tr[1].duration));
+}
+
+// Retrocompatibilidad: una escena guardada ANTES del cross-fade no lleva
+// "duration" en sus transiciones. Debe cargar con 0 (corte seco, el
+// comportamiento de siempre), sin warnings ni excepciones.
+static void test_transition_without_duration_field_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State idle; idle.name = "Idle"; idle.clipName = "ClipIdle";
+    AnimatorComponent::State run;  run.name  = "Run";  run.clipName  = "ClipRun";
+    a->addState(idle);
+    a->addState(run);
+    a->addParameter("running", AnimatorComponent::ParamType::Bool);
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 0.5f;
+    t.conditions.push_back({ AnimatorComponent::ConditionType::Bool, "running", true });
+    a->addTransition(t);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+
+    // Se borra el campo a mano: eso ES una escena vieja. El árbol es
+    // root["root"]["children"] (ver Scene::toJson).
+    bool stripped = false;
+    for (auto& node : j["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        node["animator"]["transitions"][0].erase("duration");
+        stripped = true;
+    }
+    CHECK(stripped);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    CHECK(loaded.lastWarnings().empty());
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found || !found->hasAnimator()) return;
+
+    CHECK(found->getAnimator()->transitions().size() == 1u);
+    CHECK(nearlyEqual(found->getAnimator()->transitions()[0].duration, 0.0f));
+}
+
+// El blend por parámetro sobrevive guardar -> cargar. Valores no neutros y
+// distintos entre sí: min 1.5 y max 6.5 (no 0/1), y un segundo estado SIN blend
+// para que un "se aplica a todos por igual" se vea.
+static void test_blend_state_survives_scene_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State loco;
+    loco.name = "Locomotion"; loco.clipName = "ClipWalk";
+    loco.blendClipName = "ClipRun";
+    loco.blendParam    = "speed";
+    loco.blendMin      = 1.5f;
+    loco.blendMax      = 6.5f;
+    AnimatorComponent::State idle;
+    idle.name = "Idle"; idle.clipName = "ClipIdle";
+    a->addState(loco);
+    a->addState(idle);
+    a->addParameter("speed", AnimatorComponent::ParamType::Float);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found || !found->hasAnimator()) return;
+
+    const auto& st = found->getAnimator()->states();
+    CHECK(st.size() == 2u);
+    CHECK(st[0].blendClipName == "ClipRun");
+    CHECK(st[0].blendParam    == "speed");
+    CHECK(nearlyEqual(st[0].blendMin, 1.5f));
+    CHECK(nearlyEqual(st[0].blendMax, 6.5f));
+    CHECK(!nearlyEqual(st[0].blendMin, st[0].blendMax));
+    // El estado sin blend sigue sin blend
+    CHECK(st[1].blendClipName.empty());
+    CHECK(st[1].blendParam.empty());
+}
+
+// Retrocompatibilidad: un estado guardado antes del blend no trae ninguno de
+// los cuatro campos y debe cargar como estado de un solo clip.
+static void test_state_without_blend_fields_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s;
+    s.name = "Locomotion"; s.clipName = "ClipWalk";
+    s.blendClipName = "ClipRun"; s.blendParam = "speed";
+    s.blendMin = 1.5f; s.blendMax = 6.5f;
+    a->addState(s);
+    a->addParameter("speed", AnimatorComponent::ParamType::Float);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+
+    // Se borran a mano los cuatro campos: eso ES un estado viejo.
+    bool stripped = false;
+    for (auto& node : j["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        auto& js = node["animator"]["states"][0];
+        js.erase("blendClip");
+        js.erase("blendParam");
+        js.erase("blendMin");
+        js.erase("blendMax");
+        stripped = true;
+    }
+    CHECK(stripped);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    CHECK(loaded.lastWarnings().empty());
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found || !found->hasAnimator()) return;
+
+    const auto& st = found->getAnimator()->states()[0];
+    CHECK(st.name == "Locomotion");
+    CHECK(st.clipName == "ClipWalk");
+    CHECK(st.blendClipName.empty());
+    CHECK(st.blendParam.empty());
+    // Y sin blendClip el estado no mezcla, pase lo que pase con min/max
+    found->getAnimator()->update(0.016f, true);
+    CHECK(nearlyEqual(found->getAnimator()->poseWeight(), 1.0f));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -2827,6 +3580,22 @@ int main()
     test_remove_numeric_parameter_cleans_conditions();
     test_animation_finished_fires_on_zero_duration_state();
 
+    test_crossfade_weight_ramps_over_duration();
+    test_crossfade_advances_both_clocks();
+    test_crossfade_prev_clock_loops();
+    test_crossfade_zero_duration_is_instant_cut();
+    test_crossfade_reset_clears_blend();
+    test_crossfade_pose_interpolates_between_clips();
+
+    test_blend_state_weight_from_float_param();
+    test_blend_state_syncs_normalized_phase();
+    test_state_without_blend_clip_stays_single();
+    test_crossfade_takes_priority_over_blend_state();
+    test_bind_clips_resolves_blend_clip();
+    test_blend_state_pose_interpolates_between_clips();
+    test_finished_transition_reaches_destination();
+    test_edit_mode_finished_leaks_into_play_without_reset();
+
     test_has_bones_detects_rigged_fbx();
     test_has_bones_rejects_unrigged_model();
     test_has_bones_survives_missing_file();
@@ -2844,6 +3613,10 @@ int main()
     test_scene_without_animator_block_loads(pm, am);
     test_numeric_graph_survives_scene_round_trip(pm, am);
     test_condition_without_compare_fields_loads(pm, am);
+    test_crossfade_duration_survives_scene_round_trip(pm, am);
+    test_transition_without_duration_field_loads(pm, am);
+    test_blend_state_survives_scene_round_trip(pm, am);
+    test_state_without_blend_fields_loads(pm, am);
     test_animation_sources_survive_scene_round_trip(pm, am);
     test_missing_animation_source_does_not_break_load(pm, am);
     test_missing_animation_source_warns_through_scene(pm, am);

@@ -161,10 +161,13 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
         // con un personaje fuera de cámara.
         if (!obj.meshVisible) continue;
         Push push{};
-        push.animTime    = obj.animTime;
-        push.boneCount   = obj.boneCount;
-        push.vertexCount = obj.vertexCount;
-        push.clipBase    = obj.activeClip * obj.boneCount;
+        push.animTime     = obj.animTime;
+        push.boneCount    = obj.boneCount;
+        push.vertexCount  = obj.vertexCount;
+        push.clipBase     = obj.activeClip * obj.boneCount;
+        push.prevAnimTime = obj.prevAnimTime;
+        push.prevClipBase = obj.prevClip * obj.boneCount;
+        push.blendWeight  = obj.blendWeight;
 
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
             m_pipelineLayout, 0, 1, &obj.computeDescSet, 0, nullptr);

@@ -177,17 +177,110 @@ namespace DonTopo
         return ci >= 0 ? ci : 0;
     }
 
+    int AnimatorComponent::previousClipIndex() const
+    {
+        if (m_prevState < 0 || m_prevState >= (int)m_states.size()) return 0;
+        const int ci = m_states[m_prevState].clipIndex;
+        return ci >= 0 ? ci : 0;
+    }
+
+    float AnimatorComponent::blendWeight() const
+    {
+        // Sin mezcla el destino pesa el 100%: así el consumidor no necesita
+        // preguntar antes si hay cross-fade o no.
+        if (m_prevState < 0 || m_blendDuration <= 0.0f) return 1.0f;
+        const float w = m_blendElapsed / m_blendDuration;
+        return w < 0.0f ? 0.0f : (w > 1.0f ? 1.0f : w);
+    }
+
     std::string AnimatorComponent::currentStateName() const
     {
         if (m_currentState < 0 || m_currentState >= (int)m_states.size()) return "";
         return m_states[m_currentState].name;
     }
 
+    bool AnimatorComponent::stateBlends(int stateIdx) const
+    {
+        if (stateIdx < 0 || stateIdx >= (int)m_states.size()) return false;
+        const State& st = m_states[stateIdx];
+        // blendClipIndex a -1 = el nombre no existe en la malla (bindClips ya
+        // avisó). Mezclar contra un índice inválido leería otro clip, o fuera
+        // del SSBO: el estado se comporta como uno normal y se ve el aviso.
+        if (st.blendClipName.empty() || st.blendClipIndex < 0) return false;
+        // Un parámetro no declarado devolvería 0.0f en getFloat y clavaría el
+        // peso en un extremo sin decir por qué; mejor no mezclar.
+        return hasParam(st.blendParam, ParamType::Float);
+    }
+
+    float AnimatorComponent::stateBlendWeight(int stateIdx) const
+    {
+        if (!stateBlends(stateIdx)) return 0.0f;
+        const State& st = m_states[stateIdx];
+        const float  span = st.blendMax - st.blendMin;
+        // Rango degenerado (el usuario dejó min == max): sin él no hay mapeo
+        // posible, así que el segundo clip no entra.
+        if (std::fabs(span) < 1e-6f) return 0.0f;
+        const float w = (getFloat(st.blendParam) - st.blendMin) / span;
+        return w < 0.0f ? 0.0f : (w > 1.0f ? 1.0f : w);
+    }
+
+    int AnimatorComponent::poseClipA() const
+    {
+        return blending() ? previousClipIndex() : currentClipIndex();
+    }
+
+    float AnimatorComponent::poseTimeA() const
+    {
+        return blending() ? m_prevAnimTime : m_animTime;
+    }
+
+    int AnimatorComponent::poseClipB() const
+    {
+        // Cross-fade: el destino aporta su clip PRIMARIO (solo caben dos clips).
+        if (blending()) return currentClipIndex();
+        if (!stateBlends(m_currentState)) return currentClipIndex();
+        return m_states[m_currentState].blendClipIndex;
+    }
+
+    float AnimatorComponent::poseTimeB() const
+    {
+        if (blending()) return m_animTime;
+        if (!stateBlends(m_currentState)) return m_animTime;
+
+        // Los dos clips se muestrean en la MISMA fase normalizada. Un walk de
+        // 40 ticks y un run de 100 mezclados por tiempo absoluto se
+        // desincronizan y las piernas patinan; por fase, el pie de apoyo de uno
+        // cae sobre el del otro.
+        const State& st = m_states[m_currentState];
+        if (st.duration <= 0.0f) return 0.0f;
+        return (m_animTime / st.duration) * st.blendDuration;
+    }
+
+    float AnimatorComponent::poseWeight() const
+    {
+        if (blending()) return blendWeight();
+        if (!stateBlends(m_currentState)) return 1.0f;
+        return stateBlendWeight(m_currentState);
+    }
+
+    std::string AnimatorComponent::previousStateName() const
+    {
+        if (m_prevState < 0 || m_prevState >= (int)m_states.size()) return "";
+        return m_states[m_prevState].name;
+    }
+
     void AnimatorComponent::reset()
     {
-        m_currentState = m_entryState;
-        m_animTime     = 0.0f;
-        m_finished     = false;
+        m_currentState  = m_entryState;
+        m_animTime      = 0.0f;
+        m_finished      = false;
+        // Corta cualquier cross-fade en vuelo: tras un reset el estado previo
+        // puede ni existir (el editor acaba de reeditar el grafo), y mezclar
+        // contra él dejaría una pose imposible o un índice fuera de rango.
+        m_prevState     = -1;
+        m_prevAnimTime  = 0.0f;
+        m_blendElapsed  = 0.0f;
+        m_blendDuration = 0.0f;
         for (auto& b : m_bools)    b.second = false;
         for (auto& t : m_triggers) t.second = false;
         for (auto& i : m_ints)     i.second = 0;
@@ -196,12 +289,33 @@ namespace DonTopo
 
     void AnimatorComponent::rebindClips(const SkinnedMesh& mesh, std::vector<std::string>* warnings)
     {
+        auto findClip = [&mesh](const std::string& name) {
+            for (size_t i = 0; i < mesh.animationClips.size(); i++)
+                if (mesh.animationClips[i].name == name) return (int)i;
+            return -1;
+        };
+
         for (auto& st : m_states)
         {
-            int found = -1;
-            for (size_t i = 0; i < mesh.animationClips.size(); i++)
-                if (mesh.animationClips[i].name == st.clipName) { found = (int)i; break; }
+            // El segundo clip del blend se resuelve SIEMPRE, aunque el primario
+            // falle: los dos avisos son independientes y ver solo uno de ellos
+            // mandaría a buscar al sitio equivocado.
+            if (st.blendClipName.empty())
+            {
+                st.blendClipIndex = -1;
+                st.blendDuration  = 0.0f;
+            }
+            else
+            {
+                const int b = findClip(st.blendClipName);
+                st.blendClipIndex = b;
+                st.blendDuration  = (b >= 0) ? mesh.animationClips[b].duration : 0.0f;
+                if (b < 0 && warnings)
+                    warnings->push_back("Animator: el estado '" + st.name + "' mezcla con el clip '" +
+                                        st.blendClipName + "', que no existe en el modelo");
+            }
 
+            const int found = findClip(st.clipName);
             if (found < 0)
             {
                 st.clipIndex = -1;
@@ -229,9 +343,12 @@ namespace DonTopo
         int changed = 0;
         for (auto& st : m_states)
         {
-            if (st.clipName != oldName) continue;
-            st.clipName = newName;
-            changed++;
+            // Un estado cuenta UNA vez aunque el rename le toque los dos clips:
+            // lo que se devuelve son estados afectados, no referencias.
+            bool touched = false;
+            if (st.clipName == oldName)      { st.clipName      = newName; touched = true; }
+            if (st.blendClipName == oldName) { st.blendClipName = newName; touched = true; }
+            if (touched) changed++;
         }
         return changed;
     }
@@ -279,34 +396,27 @@ namespace DonTopo
                 m_triggers[c.paramName] = false;
     }
 
-    void AnimatorComponent::update(float dt, bool evaluateTransitions)
+    void AnimatorComponent::advanceClock(const State& st, float& time, bool* finished, float dt)
     {
-        if (m_currentState < 0 || m_currentState >= (int)m_states.size())
-        {
-            m_currentState = m_entryState;
-            if (m_currentState < 0 || m_currentState >= (int)m_states.size()) return;
-        }
-
-        const State& st = m_states[m_currentState];
         if (st.duration > 0.0f && st.ticksPerSecond > 0.0f)
         {
-            m_animTime += dt * st.ticksPerSecond;
-            if (m_animTime >= st.duration)
+            time += dt * st.ticksPerSecond;
+            if (time >= st.duration)
             {
                 if (st.loop)
                 {
-                    m_animTime = std::fmod(m_animTime, st.duration);
+                    time = std::fmod(time, st.duration);
                 }
                 else
                 {
                     // Clavado en el último frame, y así se queda en los updates
                     // siguientes.
-                    m_animTime = st.duration;
-                    m_finished = true;
+                    time = st.duration;
+                    if (finished) *finished = true;
                 }
             }
         }
-        else
+        else if (finished)
         {
             // Un clip sin resolver (clipIndex == -1, duration a 0) o de
             // duración cero real nunca entraría en el bloque de arriba y
@@ -315,7 +425,39 @@ namespace DonTopo
             // duración 0 ya ha terminado en el instante en que entra, así que
             // se reafirma finished cada frame (igual que el clamp de arriba lo
             // reafirma en el último frame de un clip normal sin loop).
-            m_finished = true;
+            *finished = true;
+        }
+    }
+
+    void AnimatorComponent::update(float dt, bool evaluateTransitions)
+    {
+        if (m_currentState < 0 || m_currentState >= (int)m_states.size())
+        {
+            m_currentState = m_entryState;
+            if (m_currentState < 0 || m_currentState >= (int)m_states.size()) return;
+        }
+
+        advanceClock(m_states[m_currentState], m_animTime, &m_finished, dt);
+
+        // Cross-fade en curso: el estado que se apaga sigue animándose con SU
+        // ritmo y SU loop mientras dura la mezcla. Congelarlo daría un salto
+        // visible justo al empezar la transición, que es lo contrario de lo que
+        // el cross-fade viene a resolver.
+        if (m_prevState >= 0)
+        {
+            if (m_prevState < (int)m_states.size())
+                advanceClock(m_states[m_prevState], m_prevAnimTime, nullptr, dt);
+
+            m_blendElapsed += dt;
+            if (m_blendDuration <= 0.0f || m_blendElapsed >= m_blendDuration)
+            {
+                // Mezcla terminada: el destino se queda solo. A partir de aquí
+                // blendWeight() vuelve a valer 1 por el camino de siempre.
+                m_prevState     = -1;
+                m_prevAnimTime  = 0.0f;
+                m_blendElapsed  = 0.0f;
+                m_blendDuration = 0.0f;
+            }
         }
 
         if (!evaluateTransitions) return;
@@ -329,6 +471,28 @@ namespace DonTopo
             if (!conditionsMet(t)) continue;
 
             consumeTriggers(t);
+
+            if (t.duration > 0.0f)
+            {
+                // El estado que dejamos pasa a ser el que se apaga, con el
+                // tiempo que llevara. Si YA había una mezcla en vuelo se
+                // descarta: mezclar tres clips necesitaría un tercer bloque en
+                // el SSBO y en el push constant, así que la mezcla anterior se
+                // corta aquí (mismo criterio que Unity con su capa base).
+                m_prevState     = m_currentState;
+                m_prevAnimTime  = m_animTime;
+                m_blendElapsed  = 0.0f;
+                m_blendDuration = t.duration;
+            }
+            else
+            {
+                // Corte seco: ni estado previo ni mezcla, el camino de siempre.
+                m_prevState     = -1;
+                m_prevAnimTime  = 0.0f;
+                m_blendElapsed  = 0.0f;
+                m_blendDuration = 0.0f;
+            }
+
             m_currentState = t.toState;
             m_animTime     = 0.0f;
             m_finished     = false;

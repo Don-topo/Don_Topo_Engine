@@ -122,9 +122,15 @@ namespace DonTopo {
         bool           meshVisible          = true;
         // Estado de animación
         float     animTime       = 0.0f;
-        // Índice del clip que se evalúa este frame. Sin blending solo se
-        // evalúa uno: los demás residen en el SSBO y no se leen.
+        // Índice del clip que se evalúa este frame. Los demás residen en el
+        // SSBO y no se leen.
         uint32_t  activeClip     = 0;
+        // Cross-fade: el clip que se está apagando y su propio reloj. Con
+        // blendWeight a 1 el compute no llega a mirarlos, que es el estado en
+        // que queda todo objeto que no esté mezclando.
+        uint32_t  prevClip       = 0;
+        float     prevAnimTime   = 0.0f;
+        float     blendWeight    = 1.0f;
         float     duration       = 0.0f;
         float     ticksPerSecond = 24.0f;
         glm::mat4 transform      {1.0f};

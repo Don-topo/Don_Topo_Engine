@@ -3683,6 +3683,22 @@ namespace DonTopo {
         // fuera del SSBO de BoneInfos, y el compute leería basura en silencio.
         obj.activeClip = (clipIndex < obj.clipCount) ? clipIndex : 0;
         obj.animTime   = animTime;
+        // Un objeto que deja de mezclar tiene que volver a peso 1 o el compute
+        // seguiría leyendo el clip previo del frame anterior para siempre.
+        obj.blendWeight = 1.0f;
+    }
+
+    void Renderer::setAnimationBlend(int index, uint32_t clipIndex, float animTime,
+                                     uint32_t prevClipIndex, float prevAnimTime, float weight)
+    {
+        setAnimationState(index, clipIndex, animTime);
+        if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
+        auto& obj = m_skinnedObjects[index];
+        // Mismo clamp que el clip activo: el clip previo también indexa el SSBO
+        // de BoneInfos y un índice fuera de rango leería basura en silencio.
+        obj.prevClip     = (prevClipIndex < obj.clipCount) ? prevClipIndex : 0;
+        obj.prevAnimTime = prevAnimTime;
+        obj.blendWeight  = (weight < 0.0f) ? 0.0f : (weight > 1.0f ? 1.0f : weight);
     }
 
     void Renderer::setSkinnedTransform(int index, const glm::mat4& t)

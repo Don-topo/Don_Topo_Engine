@@ -170,6 +170,8 @@ public:
     // Fija clip y tiempo ya calculados fuera. Mismo contrato que en el
     // Renderer de Vulkan: es un sink, no avanza el tiempo.
     void setAnimationState(int index, uint32_t clipIndex, float animTime) override;
+    void setAnimationBlend(int index, uint32_t clipIndex, float animTime,
+                           uint32_t prevClipIndex, float prevAnimTime, float weight) override;
     void updateAnimation(int index, float deltaTime) override;
 
     // Proyección por vista del frame, la misma con la que se dibuja: es lo que

@@ -19,8 +19,11 @@ namespace DonTopo
     // calculados vía Renderer::setAnimationState. Partir el tiempo entre los dos
     // daría dos fuentes de verdad.
     //
-    // Sin blending: una transición es un corte instantáneo, y solo se evalúa un
-    // clip por frame.
+    // Cross-fade: una transición con duration > 0 mantiene vivo el estado que
+    // se apaga durante esos segundos, así que hay DOS relojes y dos clips en
+    // vuelo (currentClipIndex/animTime y previousClipIndex/previousAnimTime) más
+    // el peso de la mezcla. Con duration == 0 no hay estado previo y el
+    // comportamiento es el corte instantáneo de siempre.
     class AnimatorComponent
     {
         public:
@@ -53,6 +56,16 @@ namespace DonTopo
                 int toState   = -1;
                 // AND de todas: la transición dispara cuando se cumplen todas.
                 std::vector<Condition> conditions;
+                // Cross-fade, en SEGUNDOS reales (no ticks: los dos estados que
+                // se mezclan pueden tener ticksPerSecond distintos, así que un
+                // tiempo de mezcla en ticks no querría decir nada).
+                //
+                // 0 = corte instantáneo, que es lo que hacía el motor antes de
+                // que este campo existiera y lo que trae toda escena guardada
+                // sin él. Va AL FINAL del struct: los tests construyen
+                // Transition por miembros y las condiciones se serializan por
+                // nombre.
+                float duration = 0.0f;
             };
 
             struct State
@@ -71,6 +84,19 @@ namespace DonTopo
                 // el SkinnedMesh se reconstruye desde el FBX en cada carga y no
                 // se serializa, así que un loop guardado ahí se perdería.
                 bool        loop           = true;
+                // --- Blend por parámetro (dos clips en el mismo estado) ---
+                // Segundo clip de la mezcla, por NOMBRE igual que clipName.
+                // Vacío = estado de un solo clip, que es lo que hacía el motor
+                // antes de este campo y lo que traen las escenas viejas.
+                std::string blendClipName;
+                int         blendClipIndex = -1;   // lo resuelve rebindClips
+                float       blendDuration  = 0.0f; // ticks, cacheado del clip
+                // Parámetro float que manda en el peso, remapeado de
+                // [blendMin, blendMax] a [0, 1] y clampado. Vacío, o un
+                // parámetro no declarado, deja el peso a 0 (solo clipName).
+                std::string blendParam;
+                float       blendMin       = 0.0f;
+                float       blendMax       = 1.0f;
                 // Posición del nodo en el canvas del AnimatorPanel.
                 glm::vec2   editorPos{0.0f};
                 // Id estable pa el nodo del canvas del editor (AnimatorPanel), NO
@@ -152,8 +178,43 @@ namespace DonTopo
             int   currentClipIndex() const;
             float animTime()         const { return m_animTime; }   // ticks
             bool  finished()         const { return m_finished; }
+
+            // --- Cross-fade en curso ---
+            // El estado que se está apagando, -1 si no hay mezcla. Su reloj
+            // sigue corriendo (con SU ticksPerSecond y SU loop) mientras dura.
+            int   previousState()     const { return m_prevState; }
+            // Como currentClipIndex: cae a 0 si no hay estado previo o su clip
+            // no está resuelto. 0 es un índice válido del SSBO, así que el
+            // compute nunca lee fuera aunque el grafo esté a medias.
+            int   previousClipIndex() const;
+            float previousAnimTime()  const { return m_prevAnimTime; }   // ticks
+            // 0 = solo el estado previo, 1 = solo el actual. Vale 1 cuando no
+            // hay mezcla, que es justo lo que hace que el camino sin cross-fade
+            // no necesite un caso especial en ningún consumidor.
+            float blendWeight()       const;
+            bool  blending()          const { return m_prevState >= 0; }
+
+            // --- La pose que sale a la GPU ---
+            // Los cinco valores que consume el Renderer: dos clips, sus dos
+            // relojes y el peso (pose = mix(A, B, w)). Resuelven los DOS
+            // orígenes de mezcla que hay:
+            //   - cross-fade en vuelo: A = estado que se apaga, B = el nuevo.
+            //   - si no, estado con blendClip: A = su clip, B = su blendClip,
+            //     peso del parámetro float.
+            //   - ninguno de los dos: A == B y peso 1 (una sola evaluación).
+            // El cross-fade MANDA sobre el blend del estado: en el push
+            // constant solo caben dos clips, así que mientras dura la
+            // transición cada lado aporta su clip primario.
+            int   poseClipA() const;
+            float poseTimeA() const;   // ticks
+            int   poseClipB() const;
+            float poseTimeB() const;   // ticks
+            float poseWeight() const;
             // Nombre del estado actual, "" si el grafo está vacío. Lo consume Lua.
             std::string currentStateName() const;
+            // Nombre del estado que se está apagando en un cross-fade, "" si no
+            // hay mezcla. Lo consume Lua, igual que currentStateName.
+            std::string previousStateName() const;
 
             // Vuelve al estado de entrada, tiempo a 0, parámetros y triggers a
             // false. El Stop de Play no necesita llamarlo (reconstruye la escena
@@ -162,6 +223,17 @@ namespace DonTopo
 
         private:
             bool conditionsMet(const Transition& t) const;
+            // Avanza el reloj de un estado dt segundos, aplicando su loop. Lo
+            // usan el estado actual y el que se apaga durante un cross-fade:
+            // los dos tienen su propio ticksPerSecond y su propio loop, y
+            // duplicar el bucle dejaría que se desincronizaran. finished solo
+            // lo escribe el del estado actual (al previo ya no le importa).
+            static void advanceClock(const State& st, float& time, bool* finished, float dt);
+            // true si el estado tiene un segundo clip RESUELTO y un parámetro
+            // que existe: solo entonces hay mezcla que hacer.
+            bool  stateBlends(int stateIdx) const;
+            // Peso del blend del estado, ya remapeado y clampado.
+            float stateBlendWeight(int stateIdx) const;
             // Estático porque no toca estado: aísla los cuatro comparadores en
             // un sitio y sirve tanto a Int como a Float.
             template <typename T>
@@ -188,6 +260,13 @@ namespace DonTopo
             int                     m_currentState = -1;
             float                   m_animTime     = 0.0f;
             bool                    m_finished     = false;
+
+            // Cross-fade en curso. m_prevState a -1 significa "sin mezcla", y es
+            // el estado en el que queda todo con transiciones de duración 0.
+            int                     m_prevState     = -1;
+            float                   m_prevAnimTime  = 0.0f;
+            float                   m_blendElapsed  = 0.0f;
+            float                   m_blendDuration = 0.0f;
             std::unordered_map<std::string, bool> m_bools;
             std::unordered_map<std::string, bool> m_triggers;
             std::unordered_map<std::string, int>    m_ints;

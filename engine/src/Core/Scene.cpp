@@ -312,10 +312,22 @@ namespace
         {
             // El clip va por NOMBRE: el índice depende del orden de mAnimations
             // en el FBX, y reexportar el modelo lo baraja en silencio.
-            states.push_back({ {"name", s.name},
-                               {"clip", s.clipName},
-                               {"loop", s.loop},
-                               {"pos", nlohmann::json::array({ s.editorPos.x, s.editorPos.y })} });
+            nlohmann::json sj = { {"name", s.name},
+                                  {"clip", s.clipName},
+                                  {"loop", s.loop},
+                                  {"pos", nlohmann::json::array({ s.editorPos.x, s.editorPos.y })} };
+            // Blend por parámetro: solo si el estado lo usa. Emitirlo siempre
+            // llenaría de campos vacíos el .scene de cualquier grafo normal.
+            // blendClipIndex/blendDuration NO se guardan: son del FBX, los
+            // rellena bindClips igual que clipIndex.
+            if (!s.blendClipName.empty())
+            {
+                sj["blendClip"]  = s.blendClipName;
+                sj["blendParam"] = s.blendParam;
+                sj["blendMin"]   = s.blendMin;
+                sj["blendMax"]   = s.blendMax;
+            }
+            states.push_back(sj);
         }
 
         auto params = nlohmann::json::array();
@@ -344,7 +356,10 @@ namespace
             }
             // from/to son índices al array "states" de ESTE mismo JSON:
             // self-contained, sin depender de ningún asset externo.
-            transitions.push_back({ {"from", t.fromState}, {"to", t.toState}, {"conditions", conds} });
+            // "duration" es el cross-fade en segundos; 0 (corte seco) es lo que
+            // asume toda escena guardada antes de que el campo existiera.
+            transitions.push_back({ {"from", t.fromState}, {"to", t.toState},
+                                    {"duration", t.duration}, {"conditions", conds} });
         }
 
         return { {"entryState", a.entryState()},
@@ -377,6 +392,14 @@ namespace
                 st.name     = s.value("name", std::string());
                 st.clipName = s.value("clip", std::string());
                 st.loop     = s.value("loop", true);
+                // Ausentes en escenas anteriores al blend por parámetro: sin
+                // blendClip el estado es de un solo clip, como siempre.
+                st.blendClipName = s.value("blendClip", std::string());
+                st.blendParam    = s.value("blendParam", std::string());
+                st.blendMin      = readFloat(s, "blendMin", 0.0f, warnings,
+                                              "animator.state." + st.name);
+                st.blendMax      = readFloat(s, "blendMax", 1.0f, warnings,
+                                              "animator.state." + st.name);
                 if (s.contains("pos") && s["pos"].is_array() && s["pos"].size() == 2)
                     st.editorPos = glm::vec2(readArrayFloat(s["pos"], 0, 0.0f, warnings, "animator.state." + st.name + ".pos"),
                                               readArrayFloat(s["pos"], 1, 0.0f, warnings, "animator.state." + st.name + ".pos"));
@@ -393,6 +416,11 @@ namespace
                 AnimatorComponent::Transition tr;
                 tr.fromState = t.value("from", -1);
                 tr.toState   = t.value("to", -1);
+                // Ausente en escenas anteriores al cross-fade: 0 = corte seco,
+                // exactamente lo que hacían.
+                tr.duration  = readFloat(t, "duration", 0.0f, warnings,
+                                          "animator.transition[" + std::to_string(tr.fromState) +
+                                          "->" + std::to_string(tr.toState) + "]");
                 if (t.contains("conditions"))
                 {
                     for (const auto& c : t["conditions"])

@@ -311,6 +311,90 @@ function AudioTest:Update(dt)
 end
 ```
 
+## Animator
+
+`entity:GetComponent("Animator")`. Los parámetros no son propiedades: se
+declaran en el grafo (panel Animator) y se leen y escriben **por nombre**. Un
+nombre no declarado, o de otro tipo, se ignora en el setter y devuelve el valor
+neutro en el getter — nunca lanza.
+
+| Método | Descripción |
+| --- | --- |
+| `a:SetBool(n, v)` / `a:GetBool(n)` | Parámetro `bool` |
+| `a:SetTrigger(n)` | Arma un `trigger`; lo consume la transición que dispara |
+| `a:SetInt(n, v)` / `a:GetInt(n)` | Parámetro `int` |
+| `a:SetFloat(n, v)` / `a:GetFloat(n)` | Parámetro `float` (NaN/Inf se ignora con aviso) |
+| `a:GetState()` | Nombre del estado activo, `""` si el grafo está vacío |
+| `a:IsBlending()` | `true` mientras dura un cross-fade |
+| `a:GetBlendWeight()` | 0 = solo el estado que se apaga, 1 = solo el nuevo. Vale 1 si no hay mezcla |
+| `a:GetPreviousState()` | Nombre del estado que se apaga, `""` si no hay mezcla |
+| `a:GetPoseWeight()` | El peso que va de verdad a la GPU: el del cross-fade si lo hay, si no el del blend por parámetro, y 1 si no hay mezcla |
+
+### Cross-fade
+
+Cada transición tiene su **duración de mezcla en segundos**, que se edita en el
+panel Animator: clic derecho sobre el link → `cross-fade (s)`. Con 0 la
+transición es un corte instantáneo, que es el comportamiento de siempre y el que
+traen las escenas guardadas antes de que el campo existiera.
+
+Durante la mezcla los dos estados siguen animándose, cada uno con su propio
+`ticksPerSecond` y su propio loop, y la pose que llega a la GPU es la
+interpolación de los dos. Si una segunda transición dispara con una mezcla aún en
+vuelo, la anterior se corta: solo hay dos clips en juego a la vez.
+
+Los cuatro accesores de arriba son de **lectura**: la duración es autoría del
+grafo, igual que las condiciones de una transición.
+
+### Blend de dos clips por parámetro
+
+Un estado puede llevar **un segundo clip** y mezclarlo con el suyo según un
+parámetro `float` — el típico walk/run conducido por la velocidad. Se configura
+en el nodo del panel Animator: `blend` (el segundo clip), `by` (el parámetro
+float) y `min` / `max`, el rango del parámetro que se remapea a peso 0..1. Fuera
+de ese rango el peso se clampa, no extrapola.
+
+Desde Lua **se conduce con `SetFloat`** sobre ese parámetro; el peso resultante
+se lee con `GetPoseWeight()`.
+
+Los dos clips se muestrean en la **misma fase normalizada**, no en el mismo
+tiempo absoluto: un walk de 40 ticks y un run de 100 se quedarían desfasados y
+las piernas patinarían.
+
+Dos límites que conviene saber, porque en el push constant solo caben dos clips:
+
+- **Un cross-fade en vuelo manda sobre el blend del estado.** Mientras dura la
+  transición cada lado aporta su clip primario; el segundo clip vuelve a entrar
+  al terminar la mezcla.
+- Un `blend` cuyo clip no exista en el modelo, o un `by` no declarado, dejan el
+  estado como uno normal (un solo clip) en vez de mezclar contra basura.
+
+```lua
+Locomotion = {}
+
+function Locomotion:Update(dt)
+    local a = self.entity:GetComponent("Animator")
+    if not a then return end
+    local rb = self.entity:GetComponent("Rigidbody")
+    if not rb then return end
+    -- Vec3 no tiene Length(): la velocidad horizontal, a mano
+    local v = rb.velocity
+    -- El estado "Locomotion" mezcla Walk y Run con blendMin 1.5 / blendMax 6.5
+    a:SetFloat("speed", math.sqrt(v.x * v.x + v.z * v.z))
+end
+```
+
+```lua
+Fade = {}
+
+function Fade:Update(dt)
+    local a = self.entity:GetComponent("Animator")
+    if not a then return end
+    a:SetBool("running", Input.IsKeyDown(Key.W))
+    -- Silencia los pasos mientras el personaje aún está entrando en "Run"
+    if a:IsBlending() and a:GetBlendWeight() < 0.5 then return end
+end
+```
+
 ## UI — Canvas / Button / Text / ProgressBar
 
 Los cuatro se obtienen con `entity:GetCanvas()`, `entity:GetButton()`,

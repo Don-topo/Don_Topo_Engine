@@ -1226,6 +1226,22 @@ void EditorUI::drawToolbar()
             if (!m_scene->findCamera())
                 m_logPanel.push("No hay cámara en la escena; usando la del editor");
             m_isPlaying = true;
+            // Los Animator arrancan Play desde su estado de entrada, con el
+            // reloj a cero y los parámetros limpios.
+            //
+            // En Edit Mode el reloj SÍ corre (solo se saltan las transiciones,
+            // ver AnimatorComponent::update), así que un estado de entrada con
+            // loop=false llega a su final mientras el usuario edita y deja
+            // finished a true. Sin este reset, Play empezaría con esa marca ya
+            // puesta y una transición "animation finished" dispararía en el
+            // primer frame: la animación de entrada no llegaría a verse nunca.
+            // Con loop=true no se nota, porque un clip en bucle no termina.
+            //
+            // El Stop no necesita el simétrico: reconstruye la escena desde el
+            // snapshot JSON y bindClips ya termina en reset().
+            m_scene->traverse([](GameObject* go) {
+                if (go->hasAnimator()) go->getAnimator()->reset();
+            });
             // Un diálogo de Save/Load o de export abierto al arrancar Play se
             // queda huérfano: la operación ya no se ejecutaría, pero el
             // diálogo seguiría en pantalla hasta el Stop. Los dos son de IGFD

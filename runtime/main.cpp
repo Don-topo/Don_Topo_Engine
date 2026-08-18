@@ -643,9 +643,15 @@ int main(int argc, char** argv)
                     if (const auto& anim = go->getAnimator())
                     {
                         anim->update(dt, /*playing=*/true);
-                        renderer.setAnimationState(go->skinnedRenderIndex,
-                                                    (uint32_t)anim->currentClipIndex(),
-                                                    anim->animTime());
+                        // setAnimationBlend siempre: los pose* resuelven ya el
+                        // cross-fade y el blend por parámetro; sin ninguno de
+                        // los dos el peso vale 1 y el segundo clip ni se mira.
+                        renderer.setAnimationBlend(go->skinnedRenderIndex,
+                                                    (uint32_t)anim->poseClipB(),
+                                                    anim->poseTimeB(),
+                                                    (uint32_t)anim->poseClipA(),
+                                                    anim->poseTimeA(),
+                                                    anim->poseWeight());
                     }
                     else
                     {
