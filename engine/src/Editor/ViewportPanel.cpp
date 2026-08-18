@@ -442,15 +442,15 @@ static void drawUiNodeGizmo(EditorContext& ctx, const UiElement* node,
 {
     if (!node || !node->rectValid) return;
 
-    const glm::vec2 renderSize{ (float)ctx.renderer->renderWidth(),
-                                (float)ctx.renderer->renderHeight() };
-    const glm::vec2 k = (renderSize.x > 0.0f && renderSize.y > 0.0f)
-                        ? imageSize / renderSize : glm::vec2(1.0f);
-
-    const ImVec2 p0{ imagePos.x + node->screenPos.x * k.x,
-                     imagePos.y + node->screenPos.y * k.y };
-    const ImVec2 p1{ p0.x + node->screenSize.x * k.x,
-                     p0.y + node->screenSize.y * k.y };
+    // screenPos/screenSize los deja buildDrawData en píxeles de SALIDA, y la
+    // salida es esta misma imagen: van 1:1. Antes se escalaba por
+    // imagen/renderWidth (el render INTERNO) y con SSAA el recuadro salía a
+    // mitad de tamaño y en mitad de posición. Mismo criterio que
+    // drawCanvasAreaGizmo y que pickUiObject.
+    const ImVec2 p0{ imagePos.x + node->screenPos.x,
+                     imagePos.y + node->screenPos.y };
+    const ImVec2 p1{ p0.x + node->screenSize.x,
+                     p0.y + node->screenSize.y };
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRect(p0, p1, IM_COL32(255, 160, 40, 230), 0.0f, 0, 2.0f);
