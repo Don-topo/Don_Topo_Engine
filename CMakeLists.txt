@@ -290,6 +290,26 @@ target_compile_definitions(sol2_lib INTERFACE SOL_ALL_SAFETIES_ON=1)
 # PhysX SDK — física (compilado desde fuente, ver cmake/PhysX.cmake)
 include(cmake/PhysX.cmake)
 
+# FreeType y msdfgen se compilan OPTIMIZADOS aunque el proyecto vaya en Debug.
+# Medido con el mismo horneado (la fuente por defecto, 32 px): 15,2 s con ellos
+# sin optimizar contra 0,59 s con /O2. Ese parón se lo come el editor entero al
+# dibujar el primer texto, y no es un problema del motor: dentro de FreeType y
+# de msdfgen no se depura nunca. El motor sigue compilándose en Debug.
+#
+# /RTC1 y /Od tienen que SALIR, no basta con añadir /O2: /RTC1 con /O2 es un
+# error del compilador, y de /Od contra /O2 gana la última pero mejor no
+# depender de eso. /Zi se queda: se sigue pudiendo pisar el paso a paso.
+set(DT_FLAGS_C_DEBUG_ORIG   "${CMAKE_C_FLAGS_DEBUG}")
+set(DT_FLAGS_CXX_DEBUG_ORIG "${CMAKE_CXX_FLAGS_DEBUG}")
+if(MSVC)
+    foreach(dt_flagvar CMAKE_C_FLAGS_DEBUG CMAKE_CXX_FLAGS_DEBUG)
+        string(REPLACE "/RTC1" "" ${dt_flagvar} "${${dt_flagvar}}")
+        string(REPLACE "/Ob0"  "" ${dt_flagvar} "${${dt_flagvar}}")
+        string(REPLACE "/Od"   "" ${dt_flagvar} "${${dt_flagvar}}")
+        set(${dt_flagvar} "${${dt_flagvar}} /O2 /Ob2")
+    endforeach()
+endif()
+
 # FreeType — solo lo usa UiFont para sacar los contornos y las métricas de un
 # TTF al hornear el atlas de texto. Sin compresores ni HarfBuzz: nada de eso
 # hace falta para leer outlines y arrastraría dependencias propias.
@@ -327,6 +347,12 @@ FetchContent_Declare(
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(msdfgen)
+
+# Y se devuelven las flags de Debug tal y como estaban: TODO lo que venga
+# después (el motor, el editor, el runtime, los tests) se compila igual que
+# siempre, con /Od y /RTC1.
+set(CMAKE_C_FLAGS_DEBUG   "${DT_FLAGS_C_DEBUG_ORIG}")
+set(CMAKE_CXX_FLAGS_DEBUG "${DT_FLAGS_CXX_DEBUG_ORIG}")
 
 # Future dependencies go here:
 # FetchContent_Declare(gainput ...) # dedicated input

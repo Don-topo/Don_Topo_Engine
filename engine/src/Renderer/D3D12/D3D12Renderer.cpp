@@ -8621,7 +8621,7 @@ UiFont* D3D12Renderer::loadUiFont(const std::string& path, float bakePx)
     auto font = std::make_unique<UiFont>();
     // El horneado es CPU: FreeType y MSDF no saben de backends. Lo único propio
     // es subir el atlas que sale de ahí.
-    if (!font->bakeFromFile(path, bakePx))
+    if (!font->bakeFromFileCached(path, bakePx))
         return nullptr;
     if (!d.registerUiAtlas(font->atlas()))
         return nullptr;

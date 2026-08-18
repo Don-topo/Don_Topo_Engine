@@ -465,6 +465,11 @@ Los enums viajan como tablas de constantes enteras:
 | `t:GetOutlineColor/SetOutlineColor(r,g,b,a)` | Contorno |
 | `t:GetShadowOffset/SetShadowOffset(x,y)`, `t:GetShadowColor/SetShadowColor(r,g,b,a)` | Sombra (offset 0,0 = sin sombra) |
 
+El atlas de una fuente se hornea con ASCII, el suplemento Latin-1 completo
+(`á é í ó ú ü ñ Ñ ¿ ¡ « » º ª`), `…` y `€`. Un carácter fuera de eso —o que la
+fuente elegida no traiga— no se dibuja **ni deja hueco**: si falta una letra,
+mira primero si el TTF la tiene.
+
 ### ProgressBar
 
 | Propiedad / Método | Descripción |

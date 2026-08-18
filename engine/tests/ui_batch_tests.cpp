@@ -13,6 +13,7 @@
 //
 // Todos los valores son no neutros y distintos entre sí: con 0, 1 o valores
 // repetidos, un campo que nadie lee pasaría igual.
+#include "DonTopo/UI/ButtonComponent.h"   // kDefaultUiFontPath
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiFont.h"
 #include "DonTopo/UI/UiLayout.h"
@@ -23,6 +24,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 
 using namespace DonTopo;
 
@@ -5098,11 +5101,220 @@ static void test_cache_neutralidad_escena_completa()
     CHECK(conCache.rebuiltNodes() == 0);
 }
 
+// ── Horneado real de una fuente ─────────────────────────────────────────────
+// El único test que toca FreeType y el TTF del proyecto. No prueba el trazado
+// (eso es msdfgen): prueba QUÉ CODEPOINTS entran en el atlas por defecto, que
+// es lo que decide si un texto en español se ve entero. El fallo que caza es
+// MUDO: shapeText salta el codepoint sin glyph y no deja ni hueco ni caja, así
+// que "Año" sale "Ao" y no hay ni un log que lo diga.
+static void test_fuente_por_defecto_hornea_acentos()
+{
+    UiFont font;
+    // 32 px y no el default de 48: el atlas es más pequeño y el test más rápido;
+    // el rango horneado no depende del tamaño.
+    if (!font.bakeFromFile(kDefaultUiFontPath, 32.0f))
+    {
+        std::printf("FAIL: no se pudo hornear %s (cwd equivocado?)\n", kDefaultUiFontPath);
+        ++g_failures;
+        return;
+    }
+
+    // ASCII: lo que ya funcionaba tiene que seguir estando.
+    CHECK(font.findGlyph('A') != nullptr);
+    CHECK(font.findGlyph('z') != nullptr);
+    CHECK(font.findGlyph(' ') != nullptr);
+
+    // Latin-1: minúsculas y mayúsculas acentuadas, eñe y signos de apertura.
+    CHECK(font.findGlyph(0x00F1) != nullptr);   // ñ
+    CHECK(font.findGlyph(0x00D1) != nullptr);   // Ñ
+    CHECK(font.findGlyph(0x00E1) != nullptr);   // á
+    CHECK(font.findGlyph(0x00E9) != nullptr);   // é
+    CHECK(font.findGlyph(0x00ED) != nullptr);   // í
+    CHECK(font.findGlyph(0x00F3) != nullptr);   // ó
+    CHECK(font.findGlyph(0x00FA) != nullptr);   // ú
+    CHECK(font.findGlyph(0x00FC) != nullptr);   // ü
+    CHECK(font.findGlyph(0x00C1) != nullptr);   // Á
+    CHECK(font.findGlyph(0x00BF) != nullptr);   // ¿
+    CHECK(font.findGlyph(0x00A1) != nullptr);   // ¡
+
+    // Los puntos suspensivos de UiTextOverflow::Ellipsis: sin ellos se cae a
+    // "..." (tres quads en vez de uno) sin avisar.
+    CHECK(font.findGlyph(0x2026) != nullptr);
+
+    // Un codepoint que la fuente no trae NO se inventa: nada de cajas .notdef
+    // ocupando sitio en el atlas.
+    CHECK(font.findGlyph(0x4E2D) == nullptr);
+
+    // Y el atlas no se dispara por ampliar el rango.
+    CHECK(font.atlas().width() <= 2048);
+    CHECK(font.atlas().width() == font.atlas().height());
+    CHECK(font.hasGlyphs());
+}
+
+// El horneado reparte el MSDF de cada glyph entre varios hilos. El resultado NO
+// puede depender de cuántos: el empaquetado se decide ANTES y cada glyph escribe
+// en su rect. Este test compara el atlas paralelo con el secuencial BYTE A BYTE,
+// que es lo único que caza a la vez las dos formas de romperlo — que msdfgen
+// tuviera estado compartido, y que dos glyphs se pisaran el rect.
+//
+// Dos intentos con hilos: una carrera puede pasar por suerte una vez.
+static void test_fuente_paralela_da_el_mismo_atlas()
+{
+    UiFont seq;
+    // 24 px: lo que se compara es que el atlas salga igual, no la calidad, y a
+    // este tamaño la tanda entera cuesta segundos en vez de medio minuto con el
+    // heap de depuración.
+    if (!seq.bakeFromFile(kDefaultUiFontPath, 24.0f, defaultUiCodepointRanges(), 1))
+    {
+        std::printf("FAIL: no se pudo hornear %s en secuencial\n", kDefaultUiFontPath);
+        ++g_failures;
+        return;
+    }
+    const std::vector<uint8_t> esperado = seq.atlas().sourcePixels();
+    CHECK(!esperado.empty());
+
+    for (int intento = 0; intento < 2; ++intento)
+    {
+        UiFont par;
+        CHECK(par.bakeFromFile(kDefaultUiFontPath, 24.0f, defaultUiCodepointRanges(), 4));
+        CHECK(par.atlas().width()  == seq.atlas().width());
+        CHECK(par.atlas().height() == seq.atlas().height());
+        CHECK(par.atlas().sourcePixels() == esperado);
+
+        const UiGlyph* a = seq.findGlyph(0x00F1);   // ñ
+        const UiGlyph* b = par.findGlyph(0x00F1);
+        CHECK(a != nullptr && b != nullptr);
+        if (a && b)
+        {
+            CHECK(a->rect.x == b->rect.x);
+            CHECK(a->rect.y == b->rect.y);
+            CHECK(a->advance == b->advance);
+        }
+    }
+}
+
+// ── Caché en disco ──────────────────────────────────────────────────────────
+// Lo que se prueba es que la fuente que sale de la caché sea INDISTINGUIBLE de
+// la horneada: mismos píxeles byte a byte, mismas métricas. Si no lo fuera, el
+// texto cambiaría de aspecto entre el primer arranque y el segundo, que es la
+// clase de fallo que nadie atribuye a una caché.
+//
+// Y que cualquier problema con el fichero acabe en un horneado, nunca en basura.
+static const char* kCacheDirTest = ".dt-cache-test/fonts";
+
+static void test_cache_de_fuente_devuelve_lo_mismo_que_hornear()
+{
+    std::filesystem::remove_all(".dt-cache-test");
+    UiFont::setCacheDirectory(kCacheDirTest);
+
+    // Rango corto a propósito: la caché no sabe cuántos glyphs lleva, y así el
+    // test cuesta décimas en vez de segundos.
+    const std::vector<UiCodepointRange> rangos = { {65, 90}, {0x00F1, 0x00F1} };
+
+    UiFont horneada;
+    CHECK(horneada.bakeFromFileCached(kDefaultUiFontPath, 24.0f, rangos));
+
+    // Primera llamada: no había nada, así que tiene que haber DEJADO algo.
+    size_t ficheros = 0;
+    for (const auto& e : std::filesystem::directory_iterator(kCacheDirTest))
+        if (e.path().extension() == ".dtfont") ++ficheros;
+    CHECK(ficheros == 1);
+
+    UiFont cacheada;
+    CHECK(cacheada.bakeFromFileCached(kDefaultUiFontPath, 24.0f, rangos));
+
+    CHECK(cacheada.atlas().width()  == horneada.atlas().width());
+    CHECK(cacheada.atlas().height() == horneada.atlas().height());
+    CHECK(cacheada.atlas().sourcePixels() == horneada.atlas().sourcePixels());
+    CHECK(cacheada.atlas().sourceIsSrgb() == false);   // un MSDF no es color
+
+    CHECK(cacheada.bakeSize()   == horneada.bakeSize());
+    CHECK(cacheada.ascent()     == horneada.ascent());
+    CHECK(cacheada.descent()    == horneada.descent());
+    CHECK(cacheada.lineHeight() == horneada.lineHeight());
+
+    const UiGlyph* a = horneada.findGlyph(0x00F1);
+    const UiGlyph* b = cacheada.findGlyph(0x00F1);
+    CHECK(a != nullptr && b != nullptr);
+    if (a && b)
+    {
+        CHECK(a->rect.x == b->rect.x);
+        CHECK(a->rect.y == b->rect.y);
+        CHECK(a->rect.width == b->rect.width);
+        CHECK(a->bearingY == b->bearingY);
+        CHECK(a->advance == b->advance);
+    }
+
+    // Kerning: comparar un par a ciegas no prueba NADA si vale 0 en los dos (lo
+    // comprobó un sabotaje que vaciaba el mapa al guardar y no lo cazó nadie).
+    // Se busca un par con corrección real y solo ese se compara.
+    uint32_t izq = 0, der = 0;
+    for (uint32_t i = 65; i <= 90 && izq == 0; ++i)
+        for (uint32_t j = 65; j <= 90; ++j)
+            if (horneada.kerning(i, j) != 0.0f) { izq = i; der = j; break; }
+
+    if (izq != 0)
+    {
+        CHECK(cacheada.kerning(izq, der) == horneada.kerning(izq, der));
+        CHECK(cacheada.kerning(izq, der) != 0.0f);
+    }
+    else
+    {
+        // No es un fallo del motor: FreeType solo lee la tabla 'kern' clásica y
+        // las fuentes modernas llevan el kerning en GPOS. Queda dicho para que
+        // nadie lea este test como "el kerning va y está cubierto".
+        std::printf("[aviso] %s no trae tabla kern: el round-trip del kerning "
+                    "no queda cubierto por este test\n", kDefaultUiFontPath);
+    }
+
+    // Lo que NO se pidió sigue sin estar: la caché no inventa glyphs.
+    CHECK(cacheada.findGlyph('a') == nullptr);
+
+    // Otra configuración = otra entrada, no la de al lado reinterpretada.
+    UiFont otroTamano;
+    CHECK(otroTamano.bakeFromFileCached(kDefaultUiFontPath, 18.0f, rangos));
+    CHECK(otroTamano.bakeSize() == 18.0f);
+
+    // Una entrada corrupta se hornea, no se interpreta: se le machaca el magic.
+    std::filesystem::path victima;
+    for (const auto& e : std::filesystem::directory_iterator(kCacheDirTest))
+        if (e.path().extension() == ".dtfont" && std::filesystem::file_size(e.path()) > 100000)
+            victima = e.path();
+    if (!victima.empty())
+    {
+        {
+            std::fstream f(victima, std::ios::binary | std::ios::in | std::ios::out);
+            const uint32_t basura = 0xDEADBEEFu;
+            f.seekp(0);
+            f.write((const char*)&basura, sizeof(basura));
+        }
+        UiFont trasCorromper;
+        CHECK(trasCorromper.bakeFromFileCached(kDefaultUiFontPath, 24.0f, rangos));
+        CHECK(trasCorromper.atlas().sourcePixels() == horneada.atlas().sourcePixels());
+    }
+
+    // Con la caché apagada se hornea igual.
+    UiFont::setCacheDirectory("");
+    UiFont sinCache;
+    CHECK(sinCache.bakeFromFileCached(kDefaultUiFontPath, 24.0f, rangos));
+    CHECK(sinCache.atlas().sourcePixels() == horneada.atlas().sourcePixels());
+
+    std::filesystem::remove_all(".dt-cache-test");
+}
+
 int main()
 {
     // Sin buffer: si un test revienta a media tanda, lo ya impreso NO se pierde
     // y se ve exactamente por dónde iba.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
+
+    // Los tests hornean DE VERDAD: sin esto, el primero dejaría la caché puesta
+    // y el resto compararía ficheros en vez de horneados.
+    UiFont::setCacheDirectory("");
+
+    test_fuente_por_defecto_hornea_acentos();
+    test_fuente_paralela_da_el_mismo_atlas();
+    test_cache_de_fuente_devuelve_lo_mismo_que_hornear();
 
     test_canvas_vacio_no_emite_nada();
     test_origen_arriba_izquierda();

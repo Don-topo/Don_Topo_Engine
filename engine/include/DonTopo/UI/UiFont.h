@@ -29,6 +29,31 @@ namespace DonTopo
     class GpuDevice;
     class GpuResources;
 
+    // Tramo CERRADO de codepoints, [first, last]. Un codepoint suelto es
+    // first == last.
+    struct UiCodepointRange
+    {
+        uint32_t first = 0;
+        uint32_t last  = 0;
+    };
+
+    // Lo que se hornea cuando nadie pide otra cosa: ASCII imprimible, el
+    // suplemento Latin-1 entero (á é í ó ú ü ñ Ñ ¿ ¡ « » º ª) y dos sueltos, el
+    // '…' que pide UiTextOverflow::Ellipsis y el '€'. Los controles 127..159 se
+    // quedan fuera porque no tienen dibujo.
+    //
+    // Ampliar el rango es barato: un codepoint que la fuente NO trae ni se
+    // hornea ni ocupa sitio en el atlas. Y quedarse corto es caro y mudo —
+    // shapeText salta el codepoint sin glyph sin dejar ni hueco, así que "Año"
+    // sale "Ao" y no hay ni un log que lo cuente.
+    inline const std::vector<UiCodepointRange>& defaultUiCodepointRanges()
+    {
+        static const std::vector<UiCodepointRange> ranges = {
+            {32, 126}, {160, 255}, {0x2026, 0x2026}, {0x20AC, 0x20AC}
+        };
+        return ranges;
+    }
+
     // Todo en PÍXELES DEL TAMAÑO DE HORNEADO (bakeSize). Quien dibuja escala
     // por fontSize/bakeSize.
     struct UiGlyph
@@ -105,22 +130,58 @@ namespace DonTopo
 
         // --- GPU ---------------------------------------------------------------
 
-        // Hornea [firstCodepoint, lastCodepoint] del TTF a un atlas MSDF y lo
-        // sube. El atlas queda UNORM: un MSDF son distancias, y una vista SRGB
-        // las deforma sin dar ni un error de validación.
+        // Hornea los rangos de codepoints del TTF a un atlas MSDF y lo sube. El
+        // atlas queda UNORM: un MSDF son distancias, y una vista SRGB las
+        // deforma sin dar ni un error de validación.
         bool loadFromFile(GpuDevice& gpu, GpuResources& res, const std::string& path,
                           float bakePx = 48.0f,
-                          uint32_t firstCodepoint = 32, uint32_t lastCodepoint = 126);
+                          const std::vector<UiCodepointRange>& ranges = defaultUiCodepointRanges());
 
         // El horneado a secas: FreeType, MSDF, métricas y kerning, sin tocar la
         // GPU. Deja los píxeles en el atlas (UiTextureAtlas::sourcePixels) para
         // que los suba quien sepa hacerlo. loadFromFile es esto y la subida.
+        //
+        // threads reparte el MSDF de cada glyph, que es el 90% del coste y es
+        // independiente glyph a glyph: 0 = los hilos del hardware, 1 = la ruta
+        // secuencial. El resultado NO depende del número de hilos (el
+        // empaquetado se decide antes y cada glyph escribe en su rect), y eso es
+        // justo lo que compara el test byte a byte.
         bool bakeFromFile(const std::string& path, float bakePx = 48.0f,
-                          uint32_t firstCodepoint = 32, uint32_t lastCodepoint = 126);
+                          const std::vector<UiCodepointRange>& ranges = defaultUiCodepointRanges(),
+                          unsigned threads = 0);
+
+        // Lo mismo, pero pasando por una caché en DISCO: el atlas horneado se
+        // guarda tal cual y el siguiente arranque lo lee en milisegundos en vez
+        // de volver a pasar por FreeType y msdfgen. Es lo que usan los dos
+        // backends, porque el horneado es síncrono y el editor se para en seco
+        // la primera vez que un texto pide su fuente.
+        //
+        // La entrada vale mientras no cambien ni el TTF (tamaño y fecha), ni
+        // bakePx, ni pixelRange, ni los rangos. Cualquier problema con el
+        // fichero —que no esté, que sea de otra versión, que esté a medias o
+        // corrupto— se resuelve horneando: la caché NUNCA es la única fuente de
+        // verdad. Guardarla es best-effort; que falle no rompe el horneado.
+        bool bakeFromFileCached(const std::string& path, float bakePx = 48.0f,
+                                const std::vector<UiCodepointRange>& ranges = defaultUiCodepointRanges(),
+                                unsigned threads = 0);
+
+        // Dónde vive la caché, relativo al directorio de trabajo. Vacío = sin
+        // caché (los tests hornean de verdad). Un atlas ocupa el tamaño del
+        // bitmap RGBA, unos 4 MB a 1024x1024.
+        static void               setCacheDirectory(std::string dir);
+        static const std::string& cacheDirectory();
 
         void destroy(GpuDevice& gpu) { m_atlas.destroy(gpu); }
 
     private:
+        // Las dos mitades de la caché. Cargar deja la fuente lista (métricas,
+        // glyphs, kerning y píxeles del atlas); guardar escribe a un temporal y
+        // renombra, para que un cierre a medias no deje una entrada rota.
+        bool loadFromCache(const std::string& path, float bakePx,
+                           const std::vector<UiCodepointRange>& ranges);
+        bool saveToCache(const std::string& path, float bakePx,
+                         const std::vector<UiCodepointRange>& ranges) const;
+
         UiTextureAtlas m_atlas;
 
         float m_bakeSize   = 0.0f;

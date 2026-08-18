@@ -6,6 +6,10 @@ cmake-build-*/
 .cmake/
 out/
 
+# Atlas de fuente ya horneados (UiFont los rehace solos si no están)
+.dt-cache/
+.dt-cache-test/
+
 # Claude Code
 .claude/
 .superpowers/
