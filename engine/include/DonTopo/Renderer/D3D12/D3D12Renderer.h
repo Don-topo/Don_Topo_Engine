@@ -221,6 +221,8 @@ public:
 
     uint32_t renderWidth() const override;
     uint32_t renderHeight() const override;
+    uint32_t uiWidth() const override;
+    uint32_t uiHeight() const override;
     float    viewportAspect() const override;
 
     void      setUiLayer(UiLayer* ui) override;

@@ -1768,8 +1768,14 @@ namespace DonTopo {
             // UI de juego, lo ultimo del pass: va encima de la escena y de los
             // gizmos, y por debajo de la UI del editor (que se graba en el pass
             // del swapchain). Con el canvas vacio no se graba ni un comando.
-            m_uiCanvas.buildDrawData(m_renderExtent.width, m_renderExtent.height, m_uiDrawData);
-            m_uiBatch.record(m_gpu, cmd, m_uiDrawData, m_renderExtent, m_currentFrame);
+            // El canvas se resuelve en pixeles de SALIDA y no de render, igual
+            // que el backend de DirectX 12: con SSAA el render extent es el
+            // doble y la UI salia a la mitad de tamano (y el raton no caia donde
+            // se veia). El estirado al framebuffer lo hace la ortografica de
+            // record, que ya recibe los dos espacios.
+            const VkExtent2D uiExtent = effectiveViewport();
+            m_uiCanvas.buildDrawData(uiExtent.width, uiExtent.height, m_uiDrawData);
+            m_uiBatch.record(m_gpu, cmd, m_uiDrawData, uiExtent, m_renderExtent, m_currentFrame);
 
             vkCmdEndRenderPass(cmd);
 

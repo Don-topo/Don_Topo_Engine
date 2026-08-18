@@ -2057,12 +2057,13 @@ namespace DonTopo
     }
 
     void UiSpriteBatch::record(GpuDevice& gpu, VkCommandBuffer cmd, const UiDrawData& data,
-                               VkExtent2D extent, int frame)
+                               VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame)
     {
         // Canvas vacío = ni un comando, ni un buffer creado, ni un mapeo. Es la
         // condición que hace que la escena 3D salga EXACTAMENTE igual que antes.
         if (data.empty() || m_pipeline == VK_NULL_HANDLE) return;
-        if (extent.width == 0 || extent.height == 0) return;
+        if (canvasExtent.width == 0 || canvasExtent.height == 0) return;
+        if (fbExtent.width == 0 || fbExtent.height == 0) return;
 
         ensureBuffers(gpu, frame, (uint32_t)data.vertices.size(), (uint32_t)data.indices.size());
 
@@ -2075,9 +2076,20 @@ namespace DonTopo
         // dibuja la UI ENTERA espejada — invisible mientras solo hubo quads de
         // color, evidente en cuanto se dibujó la primera letra. RH_ZO porque
         // Vulkan clipea z fuera de [0,1] y glm::ortho a secas da [-1,1].
-        const glm::mat4 proj = glm::orthoRH_ZO(0.0f, (float)extent.width,
-                                               0.0f, (float)extent.height,
+        // Del ESPACIO DEL CANVAS (píxeles de salida), no del framebuffer: los
+        // vértices llegan en esos píxeles y el viewport ya estira el NDC al
+        // framebuffer entero. Con SSAA eso deja la UI supersampleada en vez de
+        // encogida a 1/factor, que es lo que salía al proyectar con el extent
+        // del render.
+        const glm::mat4 proj = glm::orthoRH_ZO(0.0f, (float)canvasExtent.width,
+                                               0.0f, (float)canvasExtent.height,
                                                0.0f, 1.0f);
+
+        // Los scissor SÍ van en píxeles del framebuffer: un VkRect2D no conoce
+        // otro espacio. Hacia fuera (floor/ceil) por lo mismo que
+        // scissorFromRect, y con los dos extents iguales el entero sale intacto.
+        const double sx = (double)fbExtent.width  / (double)canvasExtent.width;
+        const double sy = (double)fbExtent.height / (double)canvasExtent.height;
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
         vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &proj);
@@ -2090,11 +2102,24 @@ namespace DonTopo
         {
             if (batch.indexCount == 0 || batch.scissor.empty()) continue;
 
+            int64_t x0 = (int64_t)std::floor(batch.scissor.x * sx);
+            int64_t y0 = (int64_t)std::floor(batch.scissor.y * sy);
+            int64_t x1 = (int64_t)std::ceil((batch.scissor.x + (double)batch.scissor.width)  * sx);
+            int64_t y1 = (int64_t)std::ceil((batch.scissor.y + (double)batch.scissor.height) * sy);
+
+            // Recortado al framebuffer: un scissor que se sale es inválido, y
+            // el redondeo hacia fuera puede empujar el borde un píxel.
+            x0 = std::max<int64_t>(x0, 0);
+            y0 = std::max<int64_t>(y0, 0);
+            x1 = std::min<int64_t>(x1, fbExtent.width);
+            y1 = std::min<int64_t>(y1, fbExtent.height);
+            if (x1 <= x0 || y1 <= y0) continue;
+
             VkRect2D rect{};
-            rect.offset.x      = batch.scissor.x;
-            rect.offset.y      = batch.scissor.y;
-            rect.extent.width  = batch.scissor.width;
-            rect.extent.height = batch.scissor.height;
+            rect.offset.x      = (int32_t)x0;
+            rect.offset.y      = (int32_t)y0;
+            rect.extent.width  = (uint32_t)(x1 - x0);
+            rect.extent.height = (uint32_t)(y1 - y0);
             vkCmdSetScissor(cmd, 0, 1, &rect);
 
             VkDescriptorSet set = (batch.atlas && batch.atlas->descriptorSet() != VK_NULL_HANDLE)
@@ -2107,7 +2132,7 @@ namespace DonTopo
         // afectaría a lo que se grabe después en este mismo buffer.
         VkRect2D full{};
         full.offset = {0, 0};
-        full.extent = extent;
+        full.extent = fbExtent;
         vkCmdSetScissor(cmd, 0, 1, &full);
     }
 

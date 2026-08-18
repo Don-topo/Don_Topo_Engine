@@ -163,6 +163,11 @@ namespace DonTopo
             virtual void     setViewportSize(uint32_t width, uint32_t height) = 0;
             virtual uint32_t renderWidth() const                              = 0;
             virtual uint32_t renderHeight() const                             = 0;
+            // Tamano de SALIDA. Con SSAA no es el del render interno, y es el
+            // espacio en el que se resuelve el canvas de UI (buildDrawData) y en
+            // el que hay que meterle el raton a UiCanvas::updateInput.
+            virtual uint32_t uiWidth() const                                  = 0;
+            virtual uint32_t uiHeight() const                                 = 0;
             virtual float    viewportAspect() const                           = 0;
 
             // La capa de interfaz que dibuja encima. El backend la llama dentro

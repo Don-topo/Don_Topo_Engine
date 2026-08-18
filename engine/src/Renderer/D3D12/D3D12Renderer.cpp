@@ -8526,6 +8526,19 @@ uint32_t D3D12Renderer::renderHeight() const
     return m_impl->height;
 }
 
+// El tamaño de SALIDA, que es con el que recordUiCanvas construye el canvas.
+// Con SSAA `width`/`height` son mayores: usar aquéllos dejaría la UI y el ratón
+// en dos espacios distintos.
+uint32_t D3D12Renderer::uiWidth() const
+{
+    return m_impl->outWidth;
+}
+
+uint32_t D3D12Renderer::uiHeight() const
+{
+    return m_impl->outHeight;
+}
+
 float D3D12Renderer::viewportAspect() const
 {
     const Impl& d = *m_impl;

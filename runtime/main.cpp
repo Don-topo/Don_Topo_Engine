@@ -698,16 +698,19 @@ int main(int argc, char** argv)
 
             // Input de la UI: sin esto el árbol no resuelve estados y los cinco
             // colores del botón, el fundido y el Click no existen. El ratón está
-            // en píxeles de VENTANA y el canvas trabaja en píxeles de RENDER,
-            // que no tienen por qué coincidir (resolución interna distinta).
+            // en píxeles de VENTANA y el canvas trabaja en píxeles de SALIDA,
+            // que no tienen por qué coincidir (escalado de la ventana).
             {
                 DonTopo::UiInputState uiInput;
                 double mx = 0.0, my = 0.0;
                 glfwGetCursorPos(window.getNativeWindow(), &mx, &my);
                 int ww = 0, wh = 0;
                 glfwGetWindowSize(window.getNativeWindow(), &ww, &wh);
-                const float sx = (ww > 0) ? (float)renderer.renderWidth()  / (float)ww : 1.0f;
-                const float sy = (wh > 0) ? (float)renderer.renderHeight() / (float)wh : 1.0f;
+                // uiWidth/uiHeight y NO renderWidth/renderHeight: el canvas se
+                // resuelve en píxeles de SALIDA, que con SSAA no son los del
+                // render (el ratón caía al doble de lejos del cursor).
+                const float sx = (ww > 0) ? (float)renderer.uiWidth()  / (float)ww : 1.0f;
+                const float sy = (wh > 0) ? (float)renderer.uiHeight() / (float)wh : 1.0f;
                 uiInput.mousePos = glm::vec2((float)mx * sx, (float)my * sy);
                 uiInput.mouseDown[0] =
                     glfwGetMouseButton(window.getNativeWindow(), GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;

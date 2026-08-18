@@ -416,15 +416,12 @@ void ViewportPanel::drawCanvasGizmo(EditorContext& ctx, const glm::vec2& imagePo
     if (size.x <= 0.0f || size.y <= 0.0f)
         return;
 
-    // El render va 1:1 con el panel (el propio panel dicta su tamaño), pero si
-    // alguna vez no coincidiera, el factor lo corrige en vez de mentir.
-    const glm::vec2 renderSize{ (float)ctx.renderer->renderWidth(),
-                                (float)ctx.renderer->renderHeight() };
-    const glm::vec2 k = (renderSize.x > 0.0f && renderSize.y > 0.0f)
-                        ? imageSize / renderSize : glm::vec2(1.0f);
-
-    const ImVec2 p0{ imagePos.x + origin.x * k.x, imagePos.y + origin.y * k.y };
-    const ImVec2 p1{ p0.x + size.x * k.x, p0.y + size.y * k.y };
+    // El canvas se resuelve en píxeles de SALIDA, y la salida es exactamente
+    // esta imagen (el panel dicta su tamaño), así que van 1:1. Antes se dividía
+    // por renderWidth/renderHeight —el render INTERNO—, y con SSAA eso movía el
+    // recuadro a la mitad o al doble del área real.
+    const ImVec2 p0{ imagePos.x + origin.x, imagePos.y + origin.y };
+    const ImVec2 p1{ p0.x + size.x, p0.y + size.y };
     ImGui::GetWindowDrawList()->AddRect(p0, p1, IM_COL32(80, 200, 255, 220), 0.0f, 0, 2.0f);
 }
 
@@ -519,15 +516,12 @@ GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mou
     if (!ctx.renderer || !ctx.scene || imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return nullptr;
 
-    const glm::vec2 renderSize{ (float)ctx.renderer->renderWidth(),
-                                (float)ctx.renderer->renderHeight() };
-    if (renderSize.x <= 0.0f || renderSize.y <= 0.0f) return nullptr;
-
-    // El hit test trabaja en píxeles de RENDER; el ratón llega en píxeles de la
-    // imagen. Van 1:1 salvo que el panel y el render se desincronicen un frame.
-    const glm::vec2 canvasPx = mousePx * (renderSize / imageSize);
-
-    const UiElement* hit = ctx.renderer->uiCanvas().hitTest(canvasPx);
+    // El hit test trabaja en píxeles de SALIDA, y la salida es esta misma
+    // imagen: el ratón ya llega en ese espacio. Antes se multiplicaba por
+    // render/imagen (el render INTERNO), y con SSAA el clic caía al doble de
+    // lejos del cursor. Es el mismo espacio en el que el bucle del editor le
+    // pasa el ratón a UiCanvas::updateInput.
+    const UiElement* hit = ctx.renderer->uiCanvas().hitTest(mousePx);
     if (!hit) return nullptr;
 
     // El hit test devuelve el nodo más profundo, que puede ser la etiqueta: se

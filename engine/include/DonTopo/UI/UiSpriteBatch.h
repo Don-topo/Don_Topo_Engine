@@ -104,8 +104,14 @@ namespace DonTopo
         bool registerAtlas(GpuDevice& gpu, UiTextureAtlas& atlas);
 
         // Con datos vacíos no graba ni un comando ni toca ningún buffer.
+        //
+        // canvasExtent es el espacio en el que se CONSTRUYÓ el UiDrawData (los
+        // píxeles de salida, los mismos en los que llega el ratón) y fbExtent el
+        // del framebuffer que se graba. Con SSAA no coinciden: la ortográfica
+        // sale del primero y los scissor se escalan al segundo, que es el único
+        // espacio que entiende un VkRect2D. Iguales, sale lo de siempre.
         void record(GpuDevice& gpu, VkCommandBuffer cmd, const UiDrawData& data,
-                    VkExtent2D extent, int frame);
+                    VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame);
 
     private:
         void createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples);
