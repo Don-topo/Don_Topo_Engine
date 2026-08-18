@@ -233,6 +233,14 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         if (ImGui::Checkbox("loop", &loop))
             anim->statesMutable()[i].loop = loop;
 
+        // Bloqueo del movimiento de raíz: un clip que desplaza el modelo
+        // ("correr" exportado con desplazamiento) se reproduce en el sitio.
+        bool lockRoot = states[i].lockRootMotion;
+        if (ImGui::Checkbox("lock root motion", &lockRoot))
+            anim->statesMutable()[i].lockRootMotion = lockRoot;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Clava la traslacion del hueso raiz a su bind pose: el clip se reproduce en el sitio. La rotacion de la raiz y el resto de huesos animan igual.");
+
         // --- Blend por parámetro: segundo clip del estado ---
         // El combo lista TODOS los clips de la malla (más "(ninguno)"), no solo
         // los que ya usa el grafo: el motor admite cualquiera de ellos.

@@ -3684,12 +3684,16 @@ namespace DonTopo {
         obj.activeClip = (clipIndex < obj.clipCount) ? clipIndex : 0;
         obj.animTime   = animTime;
         // Un objeto que deja de mezclar tiene que volver a peso 1 o el compute
-        // seguiría leyendo el clip previo del frame anterior para siempre.
+        // seguiría leyendo el clip previo del frame anterior para siempre. Por
+        // lo mismo se suelta el bloqueo de raíz: quien lo quiera pasa por
+        // setAnimationBlend, que lo fija cada frame.
         obj.blendWeight = 1.0f;
+        obj.lockRootMotion = false;
     }
 
     void Renderer::setAnimationBlend(int index, uint32_t clipIndex, float animTime,
-                                     uint32_t prevClipIndex, float prevAnimTime, float weight)
+                                     uint32_t prevClipIndex, float prevAnimTime, float weight,
+                                     bool lockRootMotion)
     {
         setAnimationState(index, clipIndex, animTime);
         if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
@@ -3699,6 +3703,7 @@ namespace DonTopo {
         obj.prevClip     = (prevClipIndex < obj.clipCount) ? prevClipIndex : 0;
         obj.prevAnimTime = prevAnimTime;
         obj.blendWeight  = (weight < 0.0f) ? 0.0f : (weight > 1.0f ? 1.0f : weight);
+        obj.lockRootMotion = lockRootMotion;
     }
 
     void Renderer::setSkinnedTransform(int index, const glm::mat4& t)

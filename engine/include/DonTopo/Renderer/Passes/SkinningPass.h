@@ -48,7 +48,11 @@ public:
         // 0 = solo prevClip, 1 = solo el clip activo. El Animator manda 1
         // cuando no hay cross-fade en vuelo.
         float    blendWeight;
-        uint32_t pad;
+        // 1 = la traslacion del hueso raiz vuelve a la de su bind pose (clip
+        // que desplaza el modelo reproducido en el sitio). Ocupa el slot que
+        // antes era padding, asi que el bloque sigue en 32 bytes. Solo lo lee
+        // bone_eval.comp.
+        uint32_t lockRootMotion;
     };
     static_assert(sizeof(Push) == 32, "Push debe seguir en 32 bytes: los 3 .comp declaran este layout");
 

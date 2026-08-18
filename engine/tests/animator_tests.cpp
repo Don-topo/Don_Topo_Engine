@@ -1162,7 +1162,11 @@ static glm::vec4 slerpQ(glm::vec4 a, glm::vec4 b, float t)
 // bloque de clip que empieza en clipBase, evaluado en el instante T. Misma
 // búsqueda lineal del tramo y misma interpolación que el shader, para que lo
 // que se afirme en los tests sea lo que de verdad acaba calculando la GPU.
-static glm::mat4 evalLocalXform(const PackedClips& p, size_t clipBase, size_t i, float T)
+// lockRootMotion replica el override del hueso raíz: con el flag activo la
+// traslación del hueso sin padre vuelve a la de su bind pose (los tres ejes),
+// sin tocar rotación ni escala.
+static glm::mat4 evalLocalXform(const PackedClips& p, size_t clipBase, size_t i, float T,
+                                bool lockRootMotion = false)
 {
     const GpuBoneInfo& info = p.boneInfos[clipBase + i];
 
@@ -1208,6 +1212,9 @@ static glm::mat4 evalLocalXform(const PackedClips& p, size_t clipBase, size_t i,
     // trs(): rotación por cuaternión, columnas escaladas, traslación en la 4ª.
     // El shader guarda el cuaternión como (x,y,z,w) y glm::quat se construye
     // (w,x,y,z) — invertir esto daría una rotación distinta sin fallar nada.
+    if (lockRootMotion && info.parentIndex < 0)
+        pos = glm::vec3(info.bindLocal[3]);
+
     glm::mat4 out = glm::mat4_cast(glm::quat(rot.w, rot.x, rot.y, rot.z));
     out[0] *= scl.x;
     out[1] *= scl.y;
@@ -1219,14 +1226,15 @@ static glm::mat4 evalLocalXform(const PackedClips& p, size_t clipBase, size_t i,
 // Réplica en CPU de bone_hierarchy.comp: las dos pasadas, tal cual. Sirve pa
 // comprobar la matriz que acaba viendo skinning.comp sin necesitar un VkDevice.
 static std::vector<glm::mat4> runBoneHierarchy(const PackedClips& p, size_t clipBase,
-                                               size_t boneCount, float T)
+                                               size_t boneCount, float T,
+                                               bool lockRootMotion = false)
 {
     std::vector<glm::mat4> final(boneCount, glm::mat4(1.0f));
 
     // Pass 1: transformada de mundo (el orden topológico garantiza padre < hijo)
     for (size_t i = 0; i < boneCount; i++)
     {
-        const glm::mat4 local  = evalLocalXform(p, clipBase, i, T);
+        const glm::mat4 local  = evalLocalXform(p, clipBase, i, T, lockRootMotion);
         const int       parent = p.boneInfos[clipBase + i].parentIndex;
         final[i] = (parent < 0) ? local : final[(size_t)parent] * local;
     }
@@ -2002,11 +2010,12 @@ static void test_crossfade_reset_clears_blend()
 // escala, slerp en rotación) ANTES de componer la matriz. Mezclar las matrices
 // ya compuestas daría otra cosa distinta en cuanto haya rotación.
 static glm::mat4 evalLocalXformBlended(const PackedClips& p, size_t clipBaseA, size_t clipBaseB,
-                                       size_t i, float TA, float TB, float w)
+                                       size_t i, float TA, float TB, float w,
+                                       bool lockRootMotion = false)
 {
     // Sin mezcla en curso el shader se ahorra la segunda evaluación entera.
-    if (w >= 1.0f) return evalLocalXform(p, clipBaseB, i, TB);
-    if (w <= 0.0f) return evalLocalXform(p, clipBaseA, i, TA);
+    if (w >= 1.0f) return evalLocalXform(p, clipBaseB, i, TB, lockRootMotion);
+    if (w <= 0.0f) return evalLocalXform(p, clipBaseA, i, TA, lockRootMotion);
 
     const GpuBoneInfo& ia = p.boneInfos[clipBaseA + i];
     const GpuBoneInfo& ib = p.boneInfos[clipBaseB + i];
@@ -2063,9 +2072,14 @@ static glm::mat4 evalLocalXformBlended(const PackedClips& p, size_t clipBaseA, s
     sample(ia, TA, pa, ra, sa);
     sample(ib, TB, pb, rb, sb);
 
-    const glm::vec3 pos = glm::mix(pa, pb, w);
+    glm::vec3       pos = glm::mix(pa, pb, w);
     const glm::vec4 rot = slerpQ(ra, rb, w);
     const glm::vec3 scl = glm::mix(sa, sb, w);
+
+    // El override va DESPUÉS de mezclar: mezclar dos traslaciones y luego
+    // pisarla es lo mismo que hace el shader en su único punto de override.
+    if (lockRootMotion && ib.parentIndex < 0)
+        pos = glm::vec3(ib.bindLocal[3]);
 
     glm::mat4 out = glm::mat4_cast(glm::quat(rot.w, rot.x, rot.y, rot.z));
     out[0] *= scl.x;
@@ -3526,6 +3540,282 @@ static void test_state_without_blend_fields_loads(PhysicsManager& pm, AudioManag
     CHECK(nearlyEqual(found->getAnimator()->poseWeight(), 1.0f));
 }
 
+// ── Bloqueo del movimiento de raíz (lockRootMotion) ──────────────────────────
+//
+// Fixture de DOS huesos: la raíz se DESPLAZA de verdad (su bind pose está en
+// (1.5, -0.5, 0.25) y los clips la llevan a x=4 y x=10) y además rota; el hijo
+// también anima (su local se va en z: 4 y 7 según el clip). Sin el hijo, el
+// test no distinguiría "raíz bloqueada" de "no anima nada", y con la bind pose
+// de la raíz en el origen no distinguiría "traslación de bind pose" de "cero".
+static SkinnedMesh makeRootMotionFixture()
+{
+    SkinnedMesh m;
+    m.skeleton.names       = { "root", "child" };
+    m.skeleton.parentIndex = { -1, 0 };
+
+    glm::mat4 bindRoot(1.0f);
+    bindRoot[3] = glm::vec4(1.5f, -0.5f, 0.25f, 1.0f);
+    glm::mat4 bindChildLocal(1.0f);
+    bindChildLocal[3] = glm::vec4(0.0f, 2.0f, 0.0f, 1.0f);
+    m.skeleton.inverseBindPose = { glm::inverse(bindRoot),
+                                   glm::inverse(bindRoot * bindChildLocal) };
+
+    const float rootX[2]   = { 4.0f, 10.0f };
+    const float rootYaw[2] = { 90.0f, 30.0f };
+    const float childZ[2]  = { 4.0f, 7.0f };
+    const char* names[2]   = { "Walk", "Run" };
+    const float dur[2]     = { 40.0f, 100.0f };
+    const float tps[2]     = { 20.0f, 50.0f };
+
+    for (int c = 0; c < 2; c++)
+    {
+        AnimationClip clip;
+        clip.name = names[c]; clip.duration = dur[c]; clip.ticksPerSecond = tps[c];
+
+        BoneChannel root;  root.boneIndex  = 0;
+        BoneChannel child; child.boneIndex = 1;
+        // Dos keys con el MISMO valor: el clip es constante en el tiempo, así lo
+        // que se afirma aísla el bloqueo del muestreo dentro del clip.
+        for (int k = 0; k < 2; k++)
+        {
+            const float t = (float)k * dur[c];
+            root.posKeys.push_back({ t, glm::vec3(rootX[c], 0.0f, 0.0f) });
+            root.rotKeys.push_back({ t, glm::angleAxis(glm::radians(rootYaw[c]),
+                                                       glm::vec3(0.0f, 1.0f, 0.0f)) });
+            root.scaleKeys.push_back({ t, glm::vec3(1.0f) });
+            child.posKeys.push_back({ t, glm::vec3(0.0f, 2.0f, childZ[c]) });
+            child.rotKeys.push_back({ t, glm::quat(1.0f, 0.0f, 0.0f, 0.0f) });
+            child.scaleKeys.push_back({ t, glm::vec3(1.0f) });
+        }
+        clip.channels.push_back(root);
+        clip.channels.push_back(child);
+        m.animationClips.push_back(clip);
+    }
+    return m;
+}
+
+// Con el flag: la traslación local de la raíz es la de su bind pose EN LOS TRES
+// EJES, y su rotación sale intacta del clip.
+static void test_root_lock_pins_root_translation_to_bind_pose()
+{
+    SkinnedMesh  mesh = makeRootMotionFixture();
+    PackedClips  p    = packSkinnedClips(mesh);
+    const size_t B    = mesh.skeleton.names.size();
+    const size_t run  = 1 * B;   // clip "Run": la raíz se va a x=10
+
+    const glm::mat4 libre     = evalLocalXform(p, run, 0, 0.0f, false);
+    const glm::mat4 bloqueada = evalLocalXform(p, run, 0, 0.0f, true);
+    const glm::mat4 bind      = p.boneInfos[run].bindLocal;
+
+    CHECK(nearlyEqual(libre[3].x, 10.0f));
+    CHECK(nearlyEqual(bloqueada[3].x, bind[3].x));
+    CHECK(nearlyEqual(bloqueada[3].y, bind[3].y));
+    CHECK(nearlyEqual(bloqueada[3].z, bind[3].z));
+    // Y la bind pose NO es el origen: un override que escribiera vec3(0) muere aquí.
+    CHECK(nearlyEqual(bloqueada[3].x, 1.5f));
+    CHECK(nearlyEqual(bloqueada[3].y, -0.5f));
+    CHECK(nearlyEqual(bloqueada[3].z, 0.25f));
+
+    // Rotación y escala intactas: las tres primeras columnas son las mismas que
+    // sin el flag, y no son la identidad (30° en Y).
+    for (int c = 0; c < 3; c++)
+        for (int r = 0; r < 4; r++)
+            CHECK(nearlyEqual(bloqueada[c][r], libre[c][r]));
+    CHECK(!nearlyIdentity(glm::mat4(glm::mat3(bloqueada))));
+}
+
+// Con el flag: el hijo SIGUE moviéndose respecto a la raíz. Esto separa el
+// bloqueo de "se ha congelado el personaje entero".
+static void test_root_lock_keeps_child_animating()
+{
+    SkinnedMesh  mesh = makeRootMotionFixture();
+    PackedClips  p    = packSkinnedClips(mesh);
+    const size_t B    = mesh.skeleton.names.size();
+    const size_t walk = 0, run = 1 * B;
+
+    const glm::mat4 hijoRun  = evalLocalXform(p, run,  1, 0.0f, true);
+    const glm::mat4 hijoWalk = evalLocalXform(p, walk, 1, 0.0f, true);
+
+    // El hijo lo dice el clip, no el bloqueo: idéntico con y sin flag.
+    CHECK(nearlyEqualMat(hijoRun, evalLocalXform(p, run, 1, 0.0f, false)));
+    // Y se ha ido de su bind local (z=0), a un sitio distinto en cada clip.
+    CHECK(nearlyEqual(hijoRun[3].z,  7.0f));
+    CHECK(nearlyEqual(hijoWalk[3].z, 4.0f));
+    CHECK(!nearlyEqualMat(hijoRun, p.boneInfos[run + 1].bindLocal));
+
+    // Mientras, la raíz bloqueada está en el MISMO sitio en los dos clips.
+    CHECK(nearlyEqual(evalLocalXform(p, run,  0, 0.0f, true)[3].x,
+                      evalLocalXform(p, walk, 0, 0.0f, true)[3].x));
+
+    // Y la matriz de skinning del hijo no es la identidad: no está en bind pose.
+    const std::vector<glm::mat4> finales = runBoneHierarchy(p, run, B, 0.0f, true);
+    CHECK(!nearlyIdentity(finales[1]));
+}
+
+// Sin el flag, la raíz se desplaza: el comportamiento de siempre.
+static void test_root_motion_unlocked_still_translates()
+{
+    SkinnedMesh  mesh = makeRootMotionFixture();
+    PackedClips  p    = packSkinnedClips(mesh);
+    const size_t B    = mesh.skeleton.names.size();
+
+    CHECK(nearlyEqual(evalLocalXform(p, 0,     0, 0.0f)[3].x, 4.0f));
+    CHECK(nearlyEqual(evalLocalXform(p, 1 * B, 0, 0.0f)[3].x, 10.0f));
+    CHECK(!nearlyEqualMat(evalLocalXform(p, 1 * B, 0, 0.0f, false),
+                          evalLocalXform(p, 1 * B, 0, 0.0f, true)));
+}
+
+// Grafo de dos estados con cross-fade y flag configurable en cada uno.
+static AnimatorComponent makeRootLockFadeGraph(bool lockFrom, bool lockTo)
+{
+    AnimatorComponent a;
+
+    AnimatorComponent::State from;
+    from.name = "Walk"; from.clipName = "Walk";
+    from.clipIndex = 0; from.duration = 40.0f; from.ticksPerSecond = 20.0f;
+    from.lockRootMotion = lockFrom;
+
+    AnimatorComponent::State to;
+    to.name = "Run"; to.clipName = "Run";
+    to.clipIndex = 1; to.duration = 100.0f; to.ticksPerSecond = 50.0f;
+    to.lockRootMotion = lockTo;
+
+    a.addState(from);
+    a.addState(to);
+    a.setEntryState(0);
+    a.addParameter("go", AnimatorComponent::ParamType::Bool);
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 0.5f;
+    t.conditions.push_back({ AnimatorComponent::ConditionType::Bool, "go", true });
+    a.addTransition(t);
+
+    a.reset();
+    return a;
+}
+
+// Durante un cross-fade manda el estado DESTINO, en los dos sentidos.
+static void test_crossfade_root_lock_follows_destination_state()
+{
+    SkinnedMesh  mesh = makeRootMotionFixture();
+    PackedClips  p    = packSkinnedClips(mesh);
+    const size_t B    = mesh.skeleton.names.size();
+
+    // Origen libre -> destino bloqueado: el flag entra en cuanto arranca la mezcla.
+    AnimatorComponent a = makeRootLockFadeGraph(false, true);
+    a.bindClips(mesh, nullptr);
+    a.update(0.0f, true);
+    CHECK(!a.poseLockRootMotion());
+    a.setBool("go", true);
+    a.update(0.0f, true);
+    a.update(0.15f, true);
+    CHECK(nearlyEqual(a.blendWeight(), 0.3f));
+    CHECK(a.poseLockRootMotion());
+
+    const glm::mat4 mezclaLibre = evalLocalXformBlended(
+        p, (size_t)a.poseClipA() * B, (size_t)a.poseClipB() * B, 0,
+        a.poseTimeA(), a.poseTimeB(), a.poseWeight(), false);
+    const glm::mat4 mezclaBloqueada = evalLocalXformBlended(
+        p, (size_t)a.poseClipA() * B, (size_t)a.poseClipB() * B, 0,
+        a.poseTimeA(), a.poseTimeB(), a.poseWeight(), a.poseLockRootMotion());
+
+    // mix(4, 10, 0.3) = 5.8 sin bloqueo; con bloqueo, la traslación de bind pose.
+    CHECK(nearlyEqual(mezclaLibre[3].x, 5.8f));
+    CHECK(nearlyEqual(mezclaBloqueada[3].x, 1.5f));
+    CHECK(nearlyEqual(mezclaBloqueada[3].y, -0.5f));
+    CHECK(nearlyEqual(mezclaBloqueada[3].z, 0.25f));
+
+    // Origen bloqueado -> destino libre: el destino manda IGUAL, aunque el
+    // estado que se apaga esté bloqueado.
+    AnimatorComponent b = makeRootLockFadeGraph(true, false);
+    b.bindClips(mesh, nullptr);
+    b.update(0.0f, true);
+    CHECK(b.poseLockRootMotion());
+    b.setBool("go", true);
+    b.update(0.0f, true);
+    b.update(0.15f, true);
+    CHECK(b.blending());
+    CHECK(!b.poseLockRootMotion());
+}
+
+// Round-trip de escena con un estado bloqueado y otro no en el MISMO grafo.
+static void test_root_lock_survives_scene_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State run;
+    run.name = "Run"; run.clipName = "ClipRun"; run.lockRootMotion = true;
+    AnimatorComponent::State jump;
+    jump.name = "Jump"; jump.clipName = "ClipJump"; jump.lockRootMotion = false;
+    a->addState(run);
+    a->addState(jump);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+
+    // La clave solo se emite cuando es true: el estado libre no la trae.
+    bool checked = false;
+    for (auto& node : j["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        CHECK(node["animator"]["states"][0].contains("lockRootMotion"));
+        CHECK(!node["animator"]["states"][1].contains("lockRootMotion"));
+        checked = true;
+    }
+    CHECK(checked);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found || !found->hasAnimator()) return;
+
+    const auto& st = found->getAnimator()->states();
+    CHECK(st.size() == 2u);
+    CHECK(st[0].lockRootMotion);
+    CHECK(!st[1].lockRootMotion);
+}
+
+// Retrocompatibilidad: un estado guardado antes de esta feature no trae la clave
+// y tiene que cargar como false, sin avisos.
+static void test_state_without_lock_root_motion_field_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s;
+    s.name = "Run"; s.clipName = "ClipRun"; s.lockRootMotion = true;
+    a->addState(s);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+
+    bool stripped = false;
+    for (auto& node : j["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        node["animator"]["states"][0].erase("lockRootMotion");
+        stripped = true;
+    }
+    CHECK(stripped);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    CHECK(loaded.lastWarnings().empty());
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr);
+    if (!found || !found->hasAnimator()) return;
+
+    const auto& st = found->getAnimator()->states()[0];
+    CHECK(st.name == "Run");
+    CHECK(!st.lockRootMotion);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -3587,6 +3877,11 @@ int main()
     test_crossfade_reset_clears_blend();
     test_crossfade_pose_interpolates_between_clips();
 
+    test_root_lock_pins_root_translation_to_bind_pose();
+    test_root_lock_keeps_child_animating();
+    test_root_motion_unlocked_still_translates();
+    test_crossfade_root_lock_follows_destination_state();
+
     test_blend_state_weight_from_float_param();
     test_blend_state_syncs_normalized_phase();
     test_state_without_blend_clip_stays_single();
@@ -3617,6 +3912,8 @@ int main()
     test_transition_without_duration_field_loads(pm, am);
     test_blend_state_survives_scene_round_trip(pm, am);
     test_state_without_blend_fields_loads(pm, am);
+    test_root_lock_survives_scene_round_trip(pm, am);
+    test_state_without_lock_root_motion_field_loads(pm, am);
     test_animation_sources_survive_scene_round_trip(pm, am);
     test_missing_animation_source_does_not_break_load(pm, am);
     test_missing_animation_source_warns_through_scene(pm, am);

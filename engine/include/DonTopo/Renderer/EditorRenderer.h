@@ -148,9 +148,13 @@ namespace DonTopo
             // weight 0 = solo prevClip, 1 = solo clipIndex. Es un superconjunto
             // de setAnimationState (que equivale a weight 1), pero se queda
             // aparte para no tocar la firma que ya usan los objetos sin mezcla.
+            // lockRootMotion clava la traslación del hueso raíz a la de su bind
+            // pose (clip que desplaza el modelo reproducido en el sitio). Va al
+            // final y con default para que los callers que no lo usen sigan
+            // compilando tal cual.
             virtual void setAnimationBlend(int index, uint32_t clipIndex, float animTime,
                                            uint32_t prevClipIndex, float prevAnimTime,
-                                           float weight) = 0;
+                                           float weight, bool lockRootMotion = false) = 0;
 
             // Suelta lo que quedó pendiente de borrar cuando la GPU lo permita.
             virtual void tickDeferredDeletes() = 0;

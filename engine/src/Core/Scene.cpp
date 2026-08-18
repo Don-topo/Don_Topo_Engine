@@ -327,6 +327,10 @@ namespace
                 sj["blendMin"]   = s.blendMin;
                 sj["blendMax"]   = s.blendMax;
             }
+            // Bloqueo de raíz: solo si está puesto. Ausente = false, que es lo
+            // que traen todas las escenas anteriores a esta opción.
+            if (s.lockRootMotion)
+                sj["lockRootMotion"] = true;
             states.push_back(sj);
         }
 
@@ -400,6 +404,8 @@ namespace
                                               "animator.state." + st.name);
                 st.blendMax      = readFloat(s, "blendMax", 1.0f, warnings,
                                               "animator.state." + st.name);
+                // Ausente en toda escena anterior al bloqueo de raíz: false.
+                st.lockRootMotion = s.value("lockRootMotion", false);
                 if (s.contains("pos") && s["pos"].is_array() && s["pos"].size() == 2)
                     st.editorPos = glm::vec2(readArrayFloat(s["pos"], 0, 0.0f, warnings, "animator.state." + st.name + ".pos"),
                                               readArrayFloat(s["pos"], 1, 0.0f, warnings, "animator.state." + st.name + ".pos"));

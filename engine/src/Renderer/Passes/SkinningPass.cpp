@@ -168,6 +168,7 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
         push.prevAnimTime = obj.prevAnimTime;
         push.prevClipBase = obj.prevClip * obj.boneCount;
         push.blendWeight  = obj.blendWeight;
+        push.lockRootMotion = obj.lockRootMotion ? 1u : 0u;
 
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
             m_pipelineLayout, 0, 1, &obj.computeDescSet, 0, nullptr);

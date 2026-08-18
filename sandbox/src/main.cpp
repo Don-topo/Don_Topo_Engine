@@ -501,7 +501,8 @@ int main()
                                                     anim->poseTimeB(),
                                                     (uint32_t)anim->poseClipA(),
                                                     anim->poseTimeA(),
-                                                    anim->poseWeight());
+                                                    anim->poseWeight(),
+                                                    anim->poseLockRootMotion());
                         }
                         else
                         {
@@ -1024,7 +1025,8 @@ int main()
                                                     anim->poseTimeB(),
                                                     (uint32_t)anim->poseClipA(),
                                                     anim->poseTimeA(),
-                                                    anim->poseWeight());
+                                                    anim->poseWeight(),
+                                                    anim->poseLockRootMotion());
                     }
                     else
                     {

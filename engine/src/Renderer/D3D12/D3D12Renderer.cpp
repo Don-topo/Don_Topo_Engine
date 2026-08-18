@@ -125,7 +125,10 @@ struct ComputePush {
     float    prevAnimTime;
     uint32_t prevClipBase;
     float    blendWeight;
-    uint32_t pad;
+    // 1 = traslación del hueso raíz clavada a su bind pose. Ocupa el slot que
+    // antes era padding: el bloque sigue en 32 bytes y la root signature no
+    // cambia. Solo lo lee bone_eval.
+    uint32_t lockRootMotion;
 };
 static_assert(sizeof(ComputePush) == 32, "ComputePush debe ocupar 32 bytes");
 
@@ -785,6 +788,9 @@ struct D3D12Renderer::Impl {
         uint32_t prevClipBase = 0;
         float    prevAnimTime = 0.0f;
         float    blendWeight  = 1.0f;
+        // Bloqueo del movimiento de raíz (traslación del hueso raíz clavada a
+        // su bind pose). false = comportamiento de siempre.
+        bool     lockRootMotion = false;
         // Quién manda en animTime. En cuanto alguien de fuera lo mueve
         // —updateAnimation o setAnimationState— el backend deja de avanzarlo por
         // su cuenta: los dos relojes sumando dejarían el clip al doble.
@@ -2859,6 +2865,7 @@ void D3D12Renderer::Impl::recordSkinning()
         push.prevAnimTime = object.prevAnimTime;
         push.prevClipBase = object.prevClipBase;
         push.blendWeight  = object.blendWeight;
+        push.lockRootMotion = object.lockRootMotion ? 1u : 0u;
         push.animTime    = object.animTime;
         push.boneCount   = object.boneCount;
         push.vertexCount = object.vertexCount;
@@ -8217,13 +8224,17 @@ void D3D12Renderer::setAnimationState(int index, uint32_t clipIndex, float animT
     // Un objeto que deja de mezclar vuelve a peso 1 o el compute seguiría
     // leyendo el clip previo del frame anterior para siempre.
     character.blendWeight          = 1.0f;
+    // Y suelta el bloqueo de raíz por lo mismo: lo fija setAnimationBlend cada
+    // frame para quien lo quiera.
+    character.lockRootMotion       = false;
     // El Animator del GameObject es el dueño del reloj: el backend no vuelve a
     // sumarle tiempo por su cuenta.
     character.externalClock = true;
 }
 
 void D3D12Renderer::setAnimationBlend(int index, uint32_t clipIndex, float animTime,
-                                      uint32_t prevClipIndex, float prevAnimTime, float weight)
+                                      uint32_t prevClipIndex, float prevAnimTime, float weight,
+                                      bool lockRootMotion)
 {
     setAnimationState(index, clipIndex, animTime);
     Impl& d = *m_impl;
@@ -8233,6 +8244,7 @@ void D3D12Renderer::setAnimationBlend(int index, uint32_t clipIndex, float animT
     character.prevClipBase         = prevClipIndex * character.boneCount;
     character.prevAnimTime         = prevAnimTime;
     character.blendWeight          = (weight < 0.0f) ? 0.0f : (weight > 1.0f ? 1.0f : weight);
+    character.lockRootMotion       = lockRootMotion;
 }
 
 size_t D3D12Renderer::skinnedCount() const

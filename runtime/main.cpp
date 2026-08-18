@@ -651,7 +651,8 @@ int main(int argc, char** argv)
                                                     anim->poseTimeB(),
                                                     (uint32_t)anim->poseClipA(),
                                                     anim->poseTimeA(),
-                                                    anim->poseWeight());
+                                                    anim->poseWeight(),
+                                                    anim->poseLockRootMotion());
                     }
                     else
                     {

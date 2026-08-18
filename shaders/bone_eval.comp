@@ -36,7 +36,10 @@ layout(push_constant) uniform PC {
     float prevAnimTime;
     uint  prevClipBase;
     float blendWeight;
-    uint  pad1;
+    // 1 = la traslación del hueso raíz (parentIndex < 0) vuelve a la de su bind
+    // pose: un clip que desplaza el modelo se reproduce en el sitio. Rotación y
+    // escala intactas. bone_hierarchy y skinning declaran este slot como pad.
+    uint  lockRootMotion;
 } push;
 
 vec4 slerpQ(vec4 a, vec4 b, float t)
@@ -108,6 +111,16 @@ void sampleBone(BoneInfo info, float T, out vec3 pos, out vec4 rot, out vec3 scl
     }
 }
 
+// Único punto de override del bloqueo de raíz, compartido por el camino rápido
+// y el de mezcla: la posición ya calculada (o ya mezclada) se sustituye por la
+// traslación de bind pose del hueso raíz. Cualquier otro hueso sale tal cual.
+vec3 applyRootLock(BoneInfo info, vec3 pos)
+{
+    if (push.lockRootMotion != 0u && info.parentIndex < 0)
+        return info.bindLocal[3].xyz;
+    return pos;
+}
+
 bool boneHasNoChannel(BoneInfo info)
 {
     return info.posCount == 0 && info.rotCount == 0 && info.scaleCount == 0;
@@ -138,7 +151,7 @@ void main()
         vec3 pos, scl;
         vec4 rot;
         sampleBone(info, push.animTime, pos, rot, scl);
-        localXforms.data[bi] = trs(pos, rot, scl);
+        localXforms.data[bi] = trs(applyRootLock(info, pos), rot, scl);
         return;
     }
 
@@ -164,7 +177,7 @@ void main()
     sampleBone(info,     push.animTime,     posB, rotB, sclB);
 
     float w = clamp(push.blendWeight, 0.0, 1.0);
-    localXforms.data[bi] = trs(mix(posA, posB, w),
+    localXforms.data[bi] = trs(applyRootLock(info, mix(posA, posB, w)),
                                slerpQ(rotA, rotB, w),
                                mix(sclA, sclB, w));
 }

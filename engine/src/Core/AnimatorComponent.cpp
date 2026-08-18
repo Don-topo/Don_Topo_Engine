@@ -263,6 +263,14 @@ namespace DonTopo
         return stateBlendWeight(m_currentState);
     }
 
+    bool AnimatorComponent::poseLockRootMotion() const
+    {
+        // Durante un cross-fade manda el estado DESTINO, que ES m_currentState
+        // (el que aporta poseClipB): no hay caso especial que escribir.
+        if (m_currentState < 0 || m_currentState >= (int)m_states.size()) return false;
+        return m_states[m_currentState].lockRootMotion;
+    }
+
     std::string AnimatorComponent::previousStateName() const
     {
         if (m_prevState < 0 || m_prevState >= (int)m_states.size()) return "";

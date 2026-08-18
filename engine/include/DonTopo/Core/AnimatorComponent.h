@@ -106,6 +106,17 @@ namespace DonTopo
                 // nodo borrado en imgui-node-editor, que los cachea por id. NO se
                 // serializa (ver Scene.cpp): se regenera en addState al cargar.
                 int         editorId = -1;
+                // Bloqueo del movimiento de raíz: la traslación del hueso raíz
+                // (el de parentIndex < 0) vuelve a la de su bind pose en los
+                // TRES ejes, así que un clip que desplaza el modelo —un "correr"
+                // exportado con desplazamiento— se reproduce en el sitio. La
+                // rotación y la escala de la raíz NO se tocan, y el resto de
+                // huesos animan igual. Esto NO es root motion: el desplazamiento
+                // se descarta, no se traslada al GameObject.
+                //
+                // Va AL FINAL del struct y false es el comportamiento de
+                // siempre, que es lo que trae toda escena guardada sin él.
+                bool        lockRootMotion = false;
             };
 
             struct Parameter
@@ -210,6 +221,13 @@ namespace DonTopo
             int   poseClipB() const;
             float poseTimeB() const;   // ticks
             float poseWeight() const;
+            // Bloqueo del movimiento de raíz de la pose que sale a la GPU.
+            // Durante un cross-fade manda el estado DESTINO —el mismo que aporta
+            // poseClipB—: el push constant lleva UN solo flag para toda la
+            // mezcla, y el destino es el estado al que se está entrando, así que
+            // la pose acaba de acuerdo con él. Un origen bloqueado deja de serlo
+            // en cuanto arranca la transición hacia un estado que no lo está.
+            bool  poseLockRootMotion() const;
             // Nombre del estado actual, "" si el grafo está vacío. Lo consume Lua.
             std::string currentStateName() const;
             // Nombre del estado que se está apagando en un cross-fade, "" si no
