@@ -138,7 +138,17 @@ namespace DonTopo
                 b.pivot        = pivot;
                 b.position     = position;
                 b.size         = size;
-                b.color        = color;
+                // El tinte BASE, no el color que se pinta: ese lo resuelve el
+                // canvas multiplicando el del estado por este. Escribirlo en
+                // b.color no servía de nada — el primer updateInput lo pisaba, y
+                // por eso el campo "Color" del editor no hacía absolutamente
+                // nada en un botón.
+                b.baseColor    = color;
+                // Valor de partida para el frame anterior al primer updateInput:
+                // sin él, un botón recién creado se pinta blanco un frame. Sale
+                // del normalColor DEL COMPONENTE, que es el que se va a volcar
+                // unas líneas más abajo; el del nodo todavía es el de antes.
+                b.color        = color * normalColor;
                 b.visible      = visible;
                 b.sprite       = sprite;
 

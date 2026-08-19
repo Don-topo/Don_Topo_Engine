@@ -63,6 +63,7 @@ add_library(DonTopoCore STATIC
     # UI de juego (canvas 2D). Vive en Core, no en el editor: el runtime
     # exportado dibuja el mismo canvas.
     src/UI/UiCanvas.cpp
+    src/UI/UiInputBridge.cpp
     src/UI/UiSpriteBatch.cpp
     src/UI/UiTextureAtlas.cpp
     src/UI/UiFont.cpp

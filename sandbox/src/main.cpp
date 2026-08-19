@@ -19,6 +19,7 @@
 #include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Renderer/D3D12/D3D12Renderer.h"
 #include "DonTopo/Core/Input.h"
+#include "DonTopo/UI/UiInputBridge.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -568,11 +569,18 @@ int main()
                         uiInput.mouseDown[0] = ImGui::IsMouseDown(ImGuiMouseButton_Left);
                         uiInput.mouseDown[1] = ImGui::IsMouseDown(ImGuiMouseButton_Right);
                         uiInput.mouseDown[2] = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+                        // La rueda ya la lee ImGui, así que se le pide a él en
+                        // vez de duplicar un callback de GLFW.
+                        uiInput.scrollDelta = ImGui::GetIO().MouseWheel;
                     }
                     else
                     {
                         uiInput.mousePos = glm::vec2(-1.0f, -1.0f);
                     }
+                    // Teclado y mando SOLO en Play, igual que el ratón: en
+                    // edición, el Tab y las flechas son del editor.
+                    if (editor.isPlaying() && !ImGui::GetIO().WantCaptureKeyboard)
+                        DonTopo::fillUiInputKeys(uiInput);
                     uiInput.timeSeconds = (float)glfwGetTime();
                     d3d12.uiCanvas().updateInput(uiInput);
                 }
@@ -1100,12 +1108,19 @@ int main()
                     uiInput.mouseDown[0] = ImGui::IsMouseDown(ImGuiMouseButton_Left);
                     uiInput.mouseDown[1] = ImGui::IsMouseDown(ImGuiMouseButton_Right);
                     uiInput.mouseDown[2] = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+                    // La rueda ya la lee ImGui: se le pide a él en vez de
+                    // duplicar un callback de GLFW.
+                    uiInput.scrollDelta = ImGui::GetIO().MouseWheel;
                 }
                 else
                 {
                     // Fuera de todo el canvas: ningún botón queda en Hover.
                     uiInput.mousePos = glm::vec2(-1.0f, -1.0f);
                 }
+                // Teclado y mando SOLO en Play, igual que el ratón: en edición
+                // el Tab y las flechas son del editor, no del juego.
+                if (editor.isPlaying() && !ImGui::GetIO().WantCaptureKeyboard)
+                    DonTopo::fillUiInputKeys(uiInput);
                 uiInput.timeSeconds = (float)glfwGetTime();
                 renderer.uiCanvas().updateInput(uiInput);
             }

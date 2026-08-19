@@ -216,6 +216,14 @@ namespace DonTopo
 
         UiButtonTransition transition = UiButtonTransition::ColorTint;
 
+        // Tinte BASE del botón, sobre el que se multiplican los colores de
+        // estado. UiElement::color no sirve para esto: lo reescribe el canvas en
+        // cada updateInput con el color del estado, así que lo que pusiera ahí
+        // el usuario duraba hasta el primer frame de input y parecía que el
+        // campo no hacía nada. Blanco = neutro, o sea el comportamiento de
+        // siempre: el color que se ve es exactamente el del estado.
+        glm::vec4 baseColor{1.0f, 1.0f, 1.0f, 1.0f};
+
         // Colores por estado. Campos, no constantes escondidas: cada botón los
         // suyos. El de Normal es el que se restaura al volver a Normal, así que
         // por defecto vale el mismo blanco que UiElement::color.

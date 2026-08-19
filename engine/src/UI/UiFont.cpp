@@ -6,6 +6,10 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_OUTLINE_H
+// FT_Load_Sfnt_Table y los TTAG_*: es por donde se lee GPOS en crudo, que es
+// donde las fuentes modernas llevan el kerning.
+#include FT_TRUETYPE_TABLES_H
+#include FT_TRUETYPE_TAGS_H
 
 #include <msdfgen.h>
 
@@ -17,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <thread>
+#include <unordered_set>
 
 namespace DonTopo
 {
@@ -108,7 +113,10 @@ namespace DonTopo
         // La versión sube cada vez que cambie cualquier campo: una entrada de
         // otra versión se descarta y se vuelve a hornear, nunca se interpreta.
         constexpr uint32_t kCacheMagic   = 0x544E4644u;   // "DFNT"
-        constexpr uint32_t kCacheVersion = 1u;
+        // 2: el kerning pasó a salir también de GPOS. Una entrada de la v1 se
+        // horneó cuando el kerning de una fuente moderna era SIEMPRE cero, así
+        // que reutilizarla dejaría el texto sin kerning para siempre.
+        constexpr uint32_t kCacheVersion = 2u;
 
         // Topes de cordura al leer. Un fichero corrupto puede traer cualquier
         // número, y sin esto una reserva de gigabytes tumbaría el editor antes
@@ -177,6 +185,253 @@ namespace DonTopo
         bool getPod(std::istream& in, T& value)
         {
             return (bool)in.read((char*)&value, sizeof(T));
+        }
+
+        // ── Kerning de GPOS ──────────────────────────────────────────────────
+        // FT_Get_Kerning solo lee la tabla 'kern' CLÁSICA, y las fuentes
+        // modernas (la del proyecto incluida) llevan los pares en GPOS. Sin esto
+        // el kerning del motor existe, está probado y no se aplica jamás: todos
+        // los pares valen 0 y las letras salen sueltas.
+        //
+        // Se lee el subconjunto que cubre el kerning de verdad: la feature
+        // 'kern', sus lookups de tipo 2 (PairPos) en los dos formatos, y el
+        // tipo 9 (Extension) que los envuelve. Lo demás —marcas, cursivas,
+        // contextuales— no es kerning de pares y no se toca.
+        //
+        // Todo el parseo va por un lector con límites: una fuente rota o
+        // recortada tiene que dar cero pares, no leer fuera del buffer.
+        struct BeReader
+        {
+            const uint8_t* data = nullptr;
+            size_t         size = 0;
+
+            bool has(size_t off, size_t bytes) const { return off + bytes <= size; }
+            uint16_t u16(size_t off) const
+            {
+                if (!has(off, 2)) return 0;
+                return (uint16_t)((data[off] << 8) | data[off + 1]);
+            }
+            int16_t s16(size_t off) const { return (int16_t)u16(off); }
+            uint32_t u32(size_t off) const
+            {
+                if (!has(off, 4)) return 0;
+                return ((uint32_t)data[off] << 24) | ((uint32_t)data[off + 1] << 16) |
+                       ((uint32_t)data[off + 2] << 8) | (uint32_t)data[off + 3];
+            }
+        };
+
+        // Cuántos bytes ocupa un ValueRecord según su formato: es un mapa de
+        // bits y cada bit presente añade un int16.
+        int valueSize(uint16_t format)
+        {
+            int n = 0;
+            for (int bit = 0; bit < 8; ++bit)
+                if (format & (1u << bit)) ++n;
+            return n * 2;
+        }
+
+        // XAdvance del ValueRecord, que es lo único que este motor modela: un
+        // desplazamiento escalar en X entre dos glyphs. El bit 0x0004 es
+        // XAdvance y va tras XPlacement (0x0001) e YPlacement (0x0002).
+        int16_t valueXAdvance(const BeReader& r, size_t off, uint16_t format)
+        {
+            if (!(format & 0x0004)) return 0;
+            size_t cursor = off;
+            if (format & 0x0001) cursor += 2;
+            if (format & 0x0002) cursor += 2;
+            return r.s16(cursor);
+        }
+
+        // Glyphs cubiertos por una tabla Coverage, en ORDEN de índice de
+        // cobertura: es ese orden el que indexa los PairSets.
+        void readCoverage(const BeReader& r, size_t off, std::vector<uint16_t>& out)
+        {
+            out.clear();
+            const uint16_t format = r.u16(off);
+            if (format == 1)
+            {
+                const uint16_t count = r.u16(off + 2);
+                out.reserve(count);
+                for (uint16_t i = 0; i < count; ++i) out.push_back(r.u16(off + 4 + i * 2));
+            }
+            else if (format == 2)
+            {
+                const uint16_t ranges = r.u16(off + 2);
+                for (uint16_t i = 0; i < ranges; ++i)
+                {
+                    const size_t   rec   = off + 4 + i * 6;
+                    const uint16_t first = r.u16(rec);
+                    const uint16_t last  = r.u16(rec + 2);
+                    if (last < first) continue;
+                    // Un rango absurdo en una fuente rota podría pedir 65k
+                    // entradas por rango; el tope de glyphs reales lo acota.
+                    for (uint32_t g = first; g <= last; ++g) out.push_back((uint16_t)g);
+                }
+            }
+        }
+
+        // Clase de un glyph dentro de una ClassDef. La 0 es "el resto", que es
+        // una clase con todo el derecho a tener kerning propio.
+        uint16_t classOf(const BeReader& r, size_t off, uint16_t glyph)
+        {
+            const uint16_t format = r.u16(off);
+            if (format == 1)
+            {
+                const uint16_t start = r.u16(off + 2);
+                const uint16_t count = r.u16(off + 4);
+                if (glyph < start || glyph >= (uint32_t)start + count) return 0;
+                return r.u16(off + 6 + (glyph - start) * 2);
+            }
+            if (format == 2)
+            {
+                const uint16_t ranges = r.u16(off + 2);
+                for (uint16_t i = 0; i < ranges; ++i)
+                {
+                    const size_t rec = off + 4 + i * 6;
+                    if (glyph >= r.u16(rec) && glyph <= r.u16(rec + 2)) return r.u16(rec + 4);
+                }
+            }
+            return 0;
+        }
+
+        // Clave de un par de glyphs. Los índices son de la FUENTE, no
+        // codepoints: la traducción a codepoint la hace quien llama.
+        uint64_t pairKey(uint16_t left, uint16_t right)
+        {
+            return ((uint64_t)left << 16) | (uint64_t)right;
+        }
+
+        // Una subtabla PairPos, de los dos formatos. Solo se guardan los pares
+        // en los que AMBOS glyphs están horneados: el resto no se va a dibujar
+        // nunca y llenaría el mapa de entradas muertas.
+        void readPairPos(const BeReader& r, size_t off,
+                         const std::unordered_set<uint16_t>& wanted,
+                         std::unordered_map<uint64_t, int16_t>& out)
+        {
+            const uint16_t format = r.u16(off);
+            const uint16_t vf1    = r.u16(off + 4);
+            const uint16_t vf2    = r.u16(off + 6);
+            const int      v1Size = valueSize(vf1);
+            const int      v2Size = valueSize(vf2);
+
+            std::vector<uint16_t> coverage;
+            readCoverage(r, off + r.u16(off + 2), coverage);
+
+            if (format == 1)
+            {
+                const uint16_t pairSets = r.u16(off + 8);
+                const uint16_t total    = (uint16_t)std::min<size_t>(pairSets, coverage.size());
+                for (uint16_t i = 0; i < total; ++i)
+                {
+                    const uint16_t left = coverage[i];
+                    if (wanted.count(left) == 0) continue;
+
+                    const size_t   setOff = off + r.u16(off + 10 + i * 2);
+                    const uint16_t pairs  = r.u16(setOff);
+                    for (uint16_t p = 0; p < pairs; ++p)
+                    {
+                        const size_t   rec   = setOff + 2 + (size_t)p * (2 + v1Size + v2Size);
+                        const uint16_t right = r.u16(rec);
+                        if (wanted.count(right) == 0) continue;
+
+                        const int16_t adv = valueXAdvance(r, rec + 2, vf1);
+                        if (adv != 0) out[pairKey(left, right)] = adv;
+                    }
+                }
+                return;
+            }
+
+            if (format != 2) return;
+
+            const size_t   class1Off  = off + r.u16(off + 8);
+            const size_t   class2Off  = off + r.u16(off + 10);
+            const uint16_t class1Count = r.u16(off + 12);
+            const uint16_t class2Count = r.u16(off + 14);
+            if (class1Count == 0 || class2Count == 0) return;
+
+            const size_t recSize = (size_t)(v1Size + v2Size);
+            const size_t matrix  = off + 16;
+
+            // La clase de cada glyph se resuelve UNA vez: mirarla dentro del
+            // bucle de pares sería recorrer los rangos N² veces.
+            std::unordered_map<uint16_t, uint16_t> claseIzq, claseDer;
+            for (uint16_t g : wanted)
+            {
+                claseIzq[g] = classOf(r, class1Off, g);
+                claseDer[g] = classOf(r, class2Off, g);
+            }
+
+            // La cobertura decide QUÉ glyphs participan como primero del par;
+            // la clase 0 sí cuenta, pero solo para los cubiertos.
+            std::unordered_set<uint16_t> cubiertos(coverage.begin(), coverage.end());
+
+            for (uint16_t left : wanted)
+            {
+                if (cubiertos.count(left) == 0) continue;
+                const uint16_t c1 = claseIzq[left];
+                if (c1 >= class1Count) continue;
+
+                for (uint16_t right : wanted)
+                {
+                    const uint16_t c2 = claseDer[right];
+                    if (c2 >= class2Count) continue;
+
+                    const size_t  rec = matrix + ((size_t)c1 * class2Count + c2) * recSize;
+                    const int16_t adv = valueXAdvance(r, rec, vf1);
+                    if (adv != 0) out[pairKey(left, right)] = adv;
+                }
+            }
+        }
+
+        // Recorre la tabla GPOS entera y saca los pares de la feature 'kern'.
+        void collectGposKerning(const uint8_t* data, size_t size,
+                                const std::unordered_set<uint16_t>& wanted,
+                                std::unordered_map<uint64_t, int16_t>& out)
+        {
+            if (!data || size < 10 || wanted.empty()) return;
+
+            BeReader r{data, size};
+            const size_t featureList = r.u16(6);
+            const size_t lookupList  = r.u16(8);
+            if (featureList == 0 || lookupList == 0) return;
+
+            // Qué lookups usa 'kern'. Puede haber varias features con ese tag
+            // (una por script/idioma) y compartir lookups, así que se acumulan
+            // en un conjunto.
+            std::unordered_set<uint16_t> lookups;
+            const uint16_t featureCount = r.u16(featureList);
+            for (uint16_t i = 0; i < featureCount; ++i)
+            {
+                const size_t rec = featureList + 2 + (size_t)i * 6;
+                if (r.u32(rec) != 0x6B65726Eu) continue;   // 'kern'
+
+                const size_t   feat  = featureList + r.u16(rec + 4);
+                const uint16_t count = r.u16(feat + 2);
+                for (uint16_t j = 0; j < count; ++j) lookups.insert(r.u16(feat + 4 + j * 2));
+            }
+            if (lookups.empty()) return;
+
+            const uint16_t lookupCount = r.u16(lookupList);
+            for (uint16_t li : lookups)
+            {
+                if (li >= lookupCount) continue;
+                const size_t   lookup   = lookupList + r.u16(lookupList + 2 + (size_t)li * 2);
+                const uint16_t type     = r.u16(lookup);
+                const uint16_t subCount = r.u16(lookup + 4);
+
+                for (uint16_t s = 0; s < subCount; ++s)
+                {
+                    const size_t sub = lookup + r.u16(lookup + 6 + (size_t)s * 2);
+
+                    if (type == 2) { readPairPos(r, sub, wanted, out); continue; }
+
+                    // Tipo 9: envoltorio para saltar el límite de 16 bits de los
+                    // offsets. Dentro puede haber cualquier tipo; solo interesa
+                    // el 2, y NO se anida (el formato lo prohíbe).
+                    if (type == 9 && r.u16(sub) == 1 && r.u16(sub + 2) == 2)
+                        readPairPos(r, sub + r.u32(sub + 4), wanted, out);
+                }
+            }
         }
 
         struct BakedGlyph
@@ -731,22 +986,66 @@ namespace DonTopo
         for (const BakedGlyph& g : baked)
             m_glyphs[g.codepoint] = g.metrics;
 
+        // Índice de glyph -> codepoint, para traducir de vuelta lo que digan las
+        // tablas (que hablan de glyphs, no de caracteres). Se calcula una vez:
+        // el bucle de antes llamaba a FT_Get_Char_Index N² veces.
+        std::unordered_map<uint16_t, uint32_t> aCodepoint;
+        std::unordered_set<uint16_t>           indices;
+        aCodepoint.reserve(baked.size());
+        indices.reserve(baked.size());
+        for (const BakedGlyph& g : baked)
+        {
+            const FT_UInt gi = FT_Get_Char_Index(face, g.codepoint);
+            if (gi == 0 || gi > 0xFFFFu) continue;
+            // Un glyph puede tener varios codepoints (alias): se queda el
+            // PRIMERO, que con los rangos ordenados es el de menor valor.
+            aCodepoint.emplace((uint16_t)gi, g.codepoint);
+            indices.insert((uint16_t)gi);
+        }
+
+        // (a) La tabla 'kern' clásica, que es lo único que sabe leer FreeType.
         if (FT_HAS_KERNING(face))
         {
-            for (const BakedGlyph& l : baked)
+            for (uint16_t li : indices)
             {
-                const FT_UInt li = FT_Get_Char_Index(face, l.codepoint);
-                if (li == 0) continue;
-                for (const BakedGlyph& r : baked)
+                for (uint16_t ri : indices)
                 {
-                    const FT_UInt ri = FT_Get_Char_Index(face, r.codepoint);
-                    if (ri == 0) continue;
-
                     FT_Vector delta{};
                     if (FT_Get_Kerning(face, li, ri, FT_KERNING_DEFAULT, &delta) != 0) continue;
                     if (delta.x == 0) continue;   // el par ausente ya vale 0
+                    setKerning(aCodepoint[li], aCodepoint[ri], (float)((double)delta.x * kFt26_6));
+                }
+            }
+        }
 
-                    setKerning(l.codepoint, r.codepoint, (float)((double)delta.x * kFt26_6));
+        // (b) GPOS, que es donde lo llevan las fuentes modernas — la del propio
+        // proyecto entre ellas. Sin esto, FT_HAS_KERNING es false y el kerning
+        // del motor no se aplica jamás.
+        {
+            FT_ULong len = 0;
+            if (FT_Load_Sfnt_Table(face, TTAG_GPOS, 0, nullptr, &len) == 0 && len > 0)
+            {
+                std::vector<uint8_t> gpos((size_t)len);
+                if (FT_Load_Sfnt_Table(face, TTAG_GPOS, 0, gpos.data(), &len) == 0)
+                {
+                    std::unordered_map<uint64_t, int16_t> pares;
+                    collectGposKerning(gpos.data(), gpos.size(), indices, pares);
+
+                    for (const auto& entry : pares)
+                    {
+                        const uint16_t li = (uint16_t)(entry.first >> 16);
+                        const uint16_t ri = (uint16_t)(entry.first & 0xFFFFu);
+                        const auto itL = aCodepoint.find(li);
+                        const auto itR = aCodepoint.find(ri);
+                        if (itL == aCodepoint.end() || itR == aCodepoint.end()) continue;
+
+                        // De unidades de DISEÑO a píxeles de horneado: x_scale es
+                        // el 16.16 que FreeType fijó con FT_Set_Pixel_Sizes, y el
+                        // resultado sale en 26.6. Sin esta conversión el valor
+                        // saldría en cientos y separaría media palabra.
+                        const FT_Pos px = FT_MulFix(entry.second, face->size->metrics.x_scale);
+                        setKerning(itL->second, itR->second, (float)((double)px * kFt26_6));
+                    }
                 }
             }
         }

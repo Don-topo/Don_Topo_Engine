@@ -316,17 +316,23 @@ namespace DonTopo
             return UiButtonState::Normal;
         }
 
-        const glm::vec4& colorDe(const Button& b, UiButtonState s)
+        // El color del estado MULTIPLICADO por el tinte base del botón. Con la
+        // base en blanco (el default) sale el color del estado tal cual, o sea
+        // exactamente lo de siempre; con otra base, el mismo juego de cinco
+        // estados sirve para botones de colores distintos sin duplicarlos.
+        glm::vec4 colorDe(const Button& b, UiButtonState s)
         {
+            const glm::vec4* estado = &b.normalColor;
             switch (s)
             {
-                case UiButtonState::Hover:    return b.hoverColor;
-                case UiButtonState::Pressed:  return b.pressedColor;
-                case UiButtonState::Disabled: return b.disabledColor;
-                case UiButtonState::Selected: return b.selectedColor;
+                case UiButtonState::Hover:    estado = &b.hoverColor;    break;
+                case UiButtonState::Pressed:  estado = &b.pressedColor;  break;
+                case UiButtonState::Disabled: estado = &b.disabledColor; break;
+                case UiButtonState::Selected: estado = &b.selectedColor; break;
                 case UiButtonState::Normal:
-                default:                      return b.normalColor;
+                default:                      estado = &b.normalColor;   break;
             }
+            return *estado * b.baseColor;
         }
 
         const std::string& spriteDe(const Button& b, UiButtonState s)
@@ -777,11 +783,25 @@ namespace DonTopo
             e.key     = key;
             dispatch(target, e, &UiElement::onKeyDown);
 
-            // Las teclas se ENTREGAN tal cual; el canvas solo se reserva dos
-            // acciones propias, y las cede si alguien consumió la tecla.
+            // Las teclas se ENTREGAN tal cual; el canvas solo se reserva unas
+            // pocas acciones propias, y las cede si alguien consumió la tecla.
             if (e.consumed) continue;
-            if (key == UiKey::Tab)         moveFocus(input.shift ? -1 : 1);
-            else if (key == UiKey::Escape) setFocus(nullptr);
+            if (key == UiKey::Tab)         { moveFocus(input.shift ? -1 : 1); continue; }
+            if (key == UiKey::Escape)      { setFocus(nullptr); continue; }
+
+            // Flechas y Enter: es lo que hace jugable un menú con mando. Quien
+            // quiera las flechas para otra cosa las consume en su handler, o
+            // apaga keyboardNavigation.
+            if (!keyboardNavigation) continue;
+            switch (key)
+            {
+                case UiKey::Left:  navigate(UiNavDir::Left);  break;
+                case UiKey::Right: navigate(UiNavDir::Right); break;
+                case UiKey::Up:    navigate(UiNavDir::Up);    break;
+                case UiKey::Down:  navigate(UiNavDir::Down);  break;
+                case UiKey::Enter: submitFocused();           break;
+                default: break;
+            }
         }
 
         m_lastMousePos = input.mousePos;
@@ -793,5 +813,28 @@ namespace DonTopo
         // updateInput no ve ni un cambio: buildDrawData sigue dando los mismos
         // vértices y los mismos lotes.
         tickBotones(m_root, input);
+    }
+
+    bool UiCanvas::submitFocused()
+    {
+        UiElement* target = m_focused;
+        if (target == nullptr) return false;
+        // Las mismas reglas que se le aplican al ratón: lo que no se puede
+        // clicar con el cursor tampoco se activa con el mando.
+        if (!target->visible || !target->enabled) return false;
+        if (tragaElClick(target)) return false;
+
+        UiEvent e{};
+        e.type   = UiEventType::Click;
+        e.target = target;
+        e.button = UiMouseButton::Left;
+        e.time   = m_lastTime;
+        // El "cursor" es el centro del elemento: un handler que mire dónde le
+        // han pulsado recibe un punto que cae DENTRO, no un (0,0) que estaría
+        // en cualquier otro sitio de la pantalla.
+        if (target->rectValid) e.mousePos = target->screenPos + target->screenSize * 0.5f;
+
+        dispatch(target, e, &UiElement::onClick);
+        return true;
     }
 }

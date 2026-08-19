@@ -641,6 +641,22 @@ namespace DonTopo
         // pre-orden. Sin candidato el foco no se mueve y devuelve false.
         bool navigate(UiNavDir dir);
 
+        // ── Navegación por teclado y mando ──────────────────────────────────
+        // Con esto encendido, una tecla que NADIE haya consumido mueve el foco
+        // (flechas) o activa el elemento enfocado (Enter), igual que el Tab y el
+        // Escape ya hacían. Se apaga para un juego que quiera leer las flechas
+        // por su cuenta sin que el canvas se le adelante.
+        bool keyboardNavigation = true;
+
+        // Dispara el Click del elemento con foco, como si lo hubieran pulsado
+        // con el ratón encima. Es lo que permite jugar con MANDO: sin esto el
+        // foco se podía mover pero no se podía pulsar nada.
+        //
+        // Devuelve si llegó a emitirse. No lo hace sin foco, ni sobre un
+        // elemento invisible o deshabilitado, ni sobre un botón que no sea
+        // interactable — las mismas reglas que se le aplican al ratón.
+        bool submitFocused();
+
         // Qué elemento cae bajo un punto, con las mismas reglas que usa el input:
         // pre-orden INVERSO (gana lo último dibujado), respetando visible, el
         // scissor heredado y raycastTarget.

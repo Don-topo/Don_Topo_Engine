@@ -2721,6 +2721,12 @@ static void test_eventos_teclado_solo_con_foco()
 
     colocar(canvas);
 
+    // Lo que se prueba aquí es la ENTREGA de la tecla al foco, no la navegación:
+    // con ella encendida las flechas moverían el foco al otro focusable y el
+    // Escape del final ya no llegaría al mismo sitio. La navegación tiene su
+    // propio test.
+    canvas.keyboardNavigation = false;
+
     int enCampo = 0, enOtro = 0;
     std::vector<UiKey> vistas;
     campo.onKeyDown = [&](UiEvent& ev) { ++enCampo; vistas.push_back(ev.key); };
@@ -2763,6 +2769,88 @@ static void test_eventos_teclado_solo_con_foco()
     in.keys.push_back(UiKey::Enter);
     canvas.updateInput(in);
     CHECK(enCampo == 6);
+}
+
+// Flechas y Enter: es lo que hace jugable un menú con mando. Sin esto el foco se
+// podía mover por API pero ninguna tecla lo movía, y el elemento enfocado no se
+// podía activar de ninguna forma que no fuera el ratón.
+static void test_teclado_navega_y_activa_el_foco()
+{
+    UiCanvas canvas;
+    UiDrawData data;
+
+    // Dos botones en fila: la direccional se resuelve por geometría, así que
+    // hacen falta rects de verdad.
+    UiElement& fila = canvas.root().add<UiElement>("fila");
+    fila.size = glm::vec2(600.0f, 100.0f);
+    fila.drawable = false;
+
+    Button& izq = fila.add<Button>("izq");
+    izq.position = glm::vec2(0.0f, 0.0f);
+    izq.size     = glm::vec2(120.0f, 40.0f);
+    izq.focusable = true;
+
+    Button& der = fila.add<Button>("der");
+    der.position = glm::vec2(300.0f, 0.0f);
+    der.size     = glm::vec2(120.0f, 40.0f);
+    der.focusable = true;
+
+    canvas.buildDrawData(kW, kH, data);
+
+    int clicksIzq = 0, clicksDer = 0;
+    izq.onClick = [&](UiEvent&) { ++clicksIzq; };
+    der.onClick = [&](UiEvent&) { ++clicksDer; };
+
+    canvas.setFocus(&izq);
+
+    // Derecha mueve el foco al de la derecha.
+    UiInputState in = raton(-1.0f, -1.0f, 0.0f);
+    in.keys.push_back(UiKey::Right);
+    canvas.updateInput(in);
+    CHECK(canvas.focused() == &der);
+
+    // Enter lo ACTIVA: mismo efecto que un click del ratón encima.
+    in = raton(-1.0f, -1.0f, 0.1f);
+    in.keys.push_back(UiKey::Enter);
+    canvas.updateInput(in);
+    CHECK(clicksDer == 1);
+    CHECK(clicksIzq == 0);
+
+    // Izquierda vuelve.
+    in = raton(-1.0f, -1.0f, 0.2f);
+    in.keys.push_back(UiKey::Left);
+    canvas.updateInput(in);
+    CHECK(canvas.focused() == &izq);
+
+    // Un handler que CONSUME la tecla se queda con ella: el canvas no navega
+    // por encima de quien ya la ha usado.
+    izq.onKeyDown = [&](UiEvent& ev) { ev.consumed = true; };
+    in = raton(-1.0f, -1.0f, 0.3f);
+    in.keys.push_back(UiKey::Right);
+    canvas.updateInput(in);
+    CHECK(canvas.focused() == &izq);
+    izq.onKeyDown = nullptr;
+
+    // Un botón no interactable no se activa, igual que con el ratón.
+    izq.interactable = false;
+    in = raton(-1.0f, -1.0f, 0.4f);
+    in.keys.push_back(UiKey::Enter);
+    canvas.updateInput(in);
+    CHECK(clicksIzq == 0);
+    izq.interactable = true;
+
+    // Y submitFocused sin foco no dispara nada.
+    canvas.setFocus(nullptr);
+    CHECK(canvas.submitFocused() == false);
+    CHECK(clicksIzq == 0);
+
+    // Apagada, las flechas dejan de mover el foco (siguen llegando como KeyDown).
+    canvas.keyboardNavigation = false;
+    canvas.setFocus(&izq);
+    in = raton(-1.0f, -1.0f, 0.5f);
+    in.keys.push_back(UiKey::Right);
+    canvas.updateInput(in);
+    CHECK(canvas.focused() == &izq);
 }
 
 // Neutralidad: un canvas con handlers y con input procesado da EXACTAMENTE los
@@ -2965,6 +3053,43 @@ static void test_boton_color_tint()
 }
 
 // SpriteSwap cambia el nombre del sprite, no el atlas: el lote no se parte.
+// El tinte base multiplica al color del estado. Antes el campo `color` de un
+// botón no hacía NADA: el primer updateInput lo pisaba con el color del estado,
+// así que quien lo tocaba en el editor no veía ni un píxel de diferencia.
+static void test_boton_base_color_tinta_los_estados()
+{
+    UiCanvas   canvas;
+    UiDrawData data;
+    Button&    b = montaBoton(canvas, data);
+    b.transition = UiButtonTransition::ColorTint;
+
+    // Base no neutra y con los tres canales DISTINTOS: con un gris, una
+    // componente intercambiada pasaría desapercibida.
+    b.baseColor = glm::vec4(0.5f, 0.25f, 0.75f, 1.0f);
+
+    canvas.updateInput(ratonBoton(700.0f, 500.0f, 0.0f, false));
+    CHECK(nearly(b.color.r, kNormal.r * 0.5f));
+    CHECK(nearly(b.color.g, kNormal.g * 0.25f));
+    CHECK(nearly(b.color.b, kNormal.b * 0.75f));
+
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 0.1f, false));
+    CHECK(nearly(b.color.r, kHover.r * 0.5f));
+    CHECK(nearly(b.color.g, kHover.g * 0.25f));
+    CHECK(nearly(b.color.b, kHover.b * 0.75f));
+
+    // Y llega al vértice, que es lo único que se ve.
+    canvas.buildDrawData(800, 600, data);
+    CHECK(data.vertices.size() == 4);
+    CHECK(nearly(data.vertices[0].color.r, kHover.r * 0.5f));
+    CHECK(nearly(data.vertices[0].color.g, kHover.g * 0.25f));
+
+    // Neutralidad: base blanca = el color del estado tal cual, que es lo que
+    // hacía antes de que baseColor existiera.
+    b.baseColor = glm::vec4(1.0f);
+    canvas.updateInput(ratonBoton(100.0f, 60.0f, 0.2f, false));
+    CHECK(b.color == kHover);
+}
+
 static void test_boton_sprite_swap_no_parte_el_lote()
 {
     UiTextureAtlas atlas;
@@ -5193,6 +5318,40 @@ static void test_fuente_paralela_da_el_mismo_atlas()
     }
 }
 
+// El kerning de una fuente MODERNA. FreeType solo lee la tabla 'kern' clásica y
+// las fuentes de hoy llevan los pares en GPOS, así que UiFont::kerning devolvía
+// 0 para todo: el motor tenía kerning implementado, probado con fuentes de
+// mentira, y muerto con las de verdad.
+static void test_fuente_por_defecto_trae_kerning()
+{
+    UiFont font;
+    if (!font.bakeFromFile(kDefaultUiFontPath, 32.0f))
+    {
+        std::printf("FAIL: no se pudo hornear %s\n", kDefaultUiFontPath);
+        ++g_failures;
+        return;
+    }
+
+    // Al menos UN par con corrección: no se fija cuál porque eso es cosa del
+    // diseñador de la fuente, pero "ninguno en 26x26" solo puede querer decir
+    // que el kerning no se está leyendo.
+    int    pares = 0;
+    float  algunValor = 0.0f;
+    for (uint32_t a = 'A'; a <= 'Z'; ++a)
+        for (uint32_t b = 'A'; b <= 'Z'; ++b)
+            if (font.kerning(a, b) != 0.0f) { ++pares; algunValor = font.kerning(a, b); }
+
+    CHECK(pares > 0);
+    CHECK(algunValor != 0.0f);
+
+    // Y en píxeles de horneado, no en unidades de diseño: un valor de cientos
+    // significaría que falta la conversión y separaría las letras media palabra.
+    CHECK(std::fabs(algunValor) < 32.0f);
+
+    // Un par sin entrada sigue valiendo 0 exacto.
+    CHECK(font.kerning('A', 0x4E2D) == 0.0f);
+}
+
 // ── Caché en disco ──────────────────────────────────────────────────────────
 // Lo que se prueba es que la fuente que sale de la caché sea INDISTINGUIBLE de
 // la horneada: mismos píxeles byte a byte, mismas métricas. Si no lo fuera, el
@@ -5442,6 +5601,7 @@ int main()
 
     test_fuente_por_defecto_hornea_acentos();
     test_fuente_paralela_da_el_mismo_atlas();
+    test_fuente_por_defecto_trae_kerning();
     test_cache_de_fuente_devuelve_lo_mismo_que_hornear();
 
     test_sidecar_de_sprites_ida_y_vuelta();
@@ -5509,9 +5669,11 @@ int main()
     test_eventos_consumed_corta_la_burbuja();
     test_eventos_foco_tab_y_escape();
     test_eventos_teclado_solo_con_foco();
+    test_teclado_navega_y_activa_el_foco();
 
     test_boton_prioridad_de_estados();
     test_boton_color_tint();
+    test_boton_base_color_tinta_los_estados();
     test_boton_sprite_swap_no_parte_el_lote();
     test_boton_animation_interpola_y_no_pasa_de_largo();
     test_boton_no_interactable_no_emite_click();

@@ -11,6 +11,7 @@
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/RenderBackend.h"
 #include "DonTopo/Renderer/EditorRenderer.h"
+#include "DonTopo/UI/UiInputBridge.h"
 #ifdef DT_D3D12_ENABLED
 #include "DonTopo/Renderer/D3D12/D3D12Renderer.h"
 #endif
@@ -41,6 +42,16 @@
 #endif
 
 namespace {
+
+// Rueda del ratón acumulada entre frames. GLFW solo la da por callback (no hay
+// "estado actual" que consultar), así que se suma aquí y el bucle la consume:
+// leerla sin vaciarla dejaría el scroll pegado para siempre.
+float g_uiScroll = 0.0f;
+
+void onScroll(GLFWwindow*, double, double yoffset)
+{
+    g_uiScroll += (float)yoffset;
+}
 
 // Directorio del ejecutable. El paquete exportado usa rutas relativas
 // (assets/, shaders/, Scripts/), así que el runtime fija su CWD aquí: sin
@@ -188,6 +199,10 @@ int main(int argc, char** argv)
         // initPresentation en levantar Vulkan — un flash blanco antes del logo.
         window.init(1280, 720, exeDir.stem().string().c_str(), nullptr, /*showOnInit=*/false);
         DonTopo::Input::init(window.getNativeWindow());
+        // La rueda del ratón para la UI. Se registra DESPUÉS de Input::init por
+        // si algún día este registra el suyo: el último gana, y aquí el dueño
+        // de la rueda es el canvas.
+        glfwSetScrollCallback(window.getNativeWindow(), onScroll);
         // El backend, construido segun lo que pidio el proyecto. A partir de
         // aqui todo el runtime habla con la interfaz: quien decide cual es, es
         // esta linea y nadie mas.
@@ -718,6 +733,15 @@ int main(int argc, char** argv)
                     glfwGetMouseButton(window.getNativeWindow(), GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
                 uiInput.mouseDown[2] =
                     glfwGetMouseButton(window.getNativeWindow(), GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+                // Teclado y mando: el Tab, las flechas, el aceptar y el cancelar.
+                // Sin esto el foco y la navegación existían pero no había forma
+                // de moverlos, así que un juego de mando no podía usar un menú.
+                DonTopo::fillUiInputKeys(uiInput);
+                // La rueda la acumula el callback y se consume aquí: si se
+                // leyera sin vaciar, un solo golpe de rueda scrollearía para
+                // siempre.
+                uiInput.scrollDelta = g_uiScroll;
+                g_uiScroll = 0.0f;
                 uiInput.timeSeconds = (float)glfwGetTime();
                 renderer.uiCanvas().updateInput(uiInput);
             }
