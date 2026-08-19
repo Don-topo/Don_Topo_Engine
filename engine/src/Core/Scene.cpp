@@ -1745,6 +1745,49 @@ namespace DonTopo
         return const_cast<Scene*>(this)->findCanvas();
     }
 
+    void Scene::collectUiWidgets(
+        std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons,
+        std::vector<std::pair<uint64_t, const TextComponent*>>& texts,
+        std::vector<std::pair<uint64_t, const ProgressBarComponent*>>& bars,
+        std::vector<std::pair<uint64_t, uint64_t>>& parents) const
+    {
+        buttons.clear();
+        texts.clear();
+        bars.clear();
+        parents.clear();
+
+        // Recursión propia y no traverse(): hace falta arrastrar hacia abajo
+        // cuál es el ancestro con UI, y el traverse solo da el nodo.
+        struct Walker
+        {
+            std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons;
+            std::vector<std::pair<uint64_t, const TextComponent*>>&   texts;
+            std::vector<std::pair<uint64_t, const ProgressBarComponent*>>& bars;
+            std::vector<std::pair<uint64_t, uint64_t>>& parents;
+
+            void visit(const GameObject* node, uint64_t uiAncestor)
+            {
+                const bool tieneUi = node->hasButton() || node->hasText() || node->hasProgressBar();
+                if (tieneUi)
+                {
+                    if (node->hasButton())      buttons.emplace_back(node->id, node->getButton().get());
+                    if (node->hasProgressBar()) bars.emplace_back(node->id, node->getProgressBar().get());
+                    if (node->hasText())        texts.emplace_back(node->id, node->getText().get());
+                    parents.emplace_back(node->id, uiAncestor);
+                }
+
+                // Los hijos cuelgan de ESTE si aporta rect; si no, siguen
+                // colgando de quien lo aportaba más arriba.
+                const uint64_t paraLosHijos = tieneUi ? node->id : uiAncestor;
+                for (const auto& child : node->children) visit(child.get(), paraLosHijos);
+            }
+        };
+
+        Walker walker{buttons, texts, bars, parents};
+        // La raíz de la escena no es un widget: sus hijos arrancan sin ancestro.
+        for (const auto& child : m_root.children) walker.visit(child.get(), 0ull);
+    }
+
     void Scene::collapseWarnings()
     {
         std::vector<std::string> unicos;

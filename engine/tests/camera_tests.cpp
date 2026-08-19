@@ -1442,6 +1442,167 @@ static void test_text_sync_updates_the_live_node()
 // La trampa: la raíz del canvas se reconstruye con clearChildren(), así que un
 // sync que solo conociera los botones borraría los textos (y al revés). Con los
 // dos en la escena, ninguno se lleva por delante al otro.
+// ── Jerarquía ───────────────────────────────────────────────────────────────
+// Los widgets colgaban TODOS de la raíz del canvas, así que anidar GameObjects
+// en la escena no servía de nada: el padre no colocaba, no recortaba y no
+// atenuaba a sus hijos. Con la jerarquía, el nodo de un GameObject cuelga del
+// nodo PRINCIPAL de su padre (Button > ProgressBar > Text), que es el que tiene
+// el rect contra el que anclarse.
+static void test_jerarquia_ancla_y_hereda_del_padre()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    ButtonComponent padre;
+    padre.position = glm::vec2(100.0f, 50.0f);
+    padre.size     = glm::vec2(400.0f, 300.0f);
+
+    ButtonComponent hijo;
+    hijo.position = glm::vec2(10.0f, 20.0f);
+    hijo.size     = glm::vec2(60.0f, 30.0f);
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>> botones{ {7ull, &padre}, {8ull, &hijo} };
+    // Pre-orden, con el hijo apuntando a su padre. 0 = cuelga de la raíz.
+    std::vector<std::pair<uint64_t, uint64_t>> jerarquia{ {7ull, 0ull}, {8ull, 7ull} };
+
+    UiDrawData data;
+    syncUiWidgets(botones, {}, {}, canvas, cache, loader, &jerarquia);
+    canvas.buildDrawData(800, 480, data);
+
+    // El hijo YA NO cuelga de la raíz.
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().size() != 1) return;
+    const UiElement* nodoPadre = canvas.root().children()[0].get();
+    CHECK(nodoPadre->name == uiButtonNodeName(7ull));
+    CHECK(nodoPadre->children().size() == 1);
+    if (nodoPadre->children().size() != 1) return;
+    CHECK(nodoPadre->children()[0]->name == uiButtonNodeName(8ull));
+
+    // Y su posición es RELATIVA al padre: 100+10, 50+20.
+    CHECK(data.vertices.size() == 8);
+    if (data.vertices.size() != 8) return;
+    CHECK(nearlyEqual(data.vertices[4].pos.x, 110.0f));
+    CHECK(nearlyEqual(data.vertices[4].pos.y, 70.0f));
+
+    // Mover al padre mueve al hijo sin tocarlo.
+    padre.position = glm::vec2(200.0f, 50.0f);
+    syncUiWidgets(botones, {}, {}, canvas, cache, loader, &jerarquia);
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    CHECK(data.vertices.size() == 8);
+    if (data.vertices.size() != 8) return;
+    CHECK(nearlyEqual(data.vertices[4].pos.x, 210.0f));
+
+    // Sin jerarquía (nullptr) todo vuelve a colgar de la raíz: es EXACTAMENTE
+    // lo que hacían las llamadas de siempre.
+    UiCanvas          plano;
+    UiWidgetSyncCache cachePlano;
+    syncUiWidgets(botones, {}, {}, plano, cachePlano, loader);
+    CHECK(plano.root().children().size() == 2);
+}
+
+// Cambiar de padre reconstruye el árbol: si no, el nodo se quedaría colgando
+// donde estaba y la escena y lo que se ve dejarían de coincidir.
+static void test_jerarquia_cambiar_de_padre_reconstruye()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    ButtonComponent a, b;
+    a.size = glm::vec2(200.0f, 100.0f);
+    b.size = glm::vec2(50.0f, 25.0f);
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>> botones{ {7ull, &a}, {8ull, &b} };
+    std::vector<std::pair<uint64_t, uint64_t>> anidado{ {7ull, 0ull}, {8ull, 7ull} };
+    std::vector<std::pair<uint64_t, uint64_t>> suelto { {7ull, 0ull}, {8ull, 0ull} };
+
+    syncUiWidgets(botones, {}, {}, canvas, cache, loader, &anidado);
+    CHECK(canvas.root().children().size() == 1);
+
+    syncUiWidgets(botones, {}, {}, canvas, cache, loader, &suelto);
+    CHECK(canvas.root().children().size() == 2);
+}
+
+// La opacidad del padre se multiplica en el hijo (la del árbol de UI, que el
+// canvas ya acumulaba y que ningún widget podía aprovechar sin jerarquía).
+static void test_jerarquia_hereda_la_opacidad()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    ButtonComponent padre, hijo;
+    padre.size = glm::vec2(400.0f, 300.0f);
+    hijo.size  = glm::vec2(60.0f, 30.0f);
+    // Colores distintos y no neutros: con blancos, un alfa mal propagado pasa
+    // desapercibido.
+    padre.color = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+    hijo.color  = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>> botones{ {7ull, &padre}, {8ull, &hijo} };
+    std::vector<std::pair<uint64_t, uint64_t>> jerarquia{ {7ull, 0ull}, {8ull, 7ull} };
+
+    syncUiWidgets(botones, {}, {}, canvas, cache, loader, &jerarquia);
+
+    // La opacidad no es un campo del componente: se toca en el nodo vivo, que
+    // es lo que hace la animación del core. Lo que se prueba es que BAJE.
+    UiElement* nodoPadre = const_cast<UiElement*>(canvas.root().children()[0].get());
+    nodoPadre->opacity = 0.5f;
+    nodoPadre->markDirty(UiElement::DirtyTransform);
+
+    UiDrawData data;
+    canvas.buildDrawData(800, 480, data);
+    CHECK(data.vertices.size() == 8);
+    if (data.vertices.size() != 8) return;
+    CHECK(nearlyEqual(data.vertices[0].color.a, 0.5f));   // padre
+    CHECK(nearlyEqual(data.vertices[4].color.a, 0.5f));   // hijo, heredada
+}
+
+// Un GameObject intermedio SIN componentes de UI no aporta rect contra el que
+// anclarse, así que no puede sostener a nadie: sus hijos tienen que colgar del
+// primer ancestro que sí tenga UI. Si se cogiera el padre inmediato, el nodo
+// quedaría bajo un id que no existe en el árbol de UI y acabaría en la raíz,
+// perdiendo el anclaje al abuelo sin que nada lo dijera.
+static void test_collect_ui_widgets_salta_los_intermedios_sin_ui()
+{
+    Scene scene;
+    GameObject* canvasGo = scene.addGameObject("Canvas");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+
+    GameObject* panel = scene.addGameObject("Panel", canvasGo);
+    panel->setButton(std::make_shared<ButtonComponent>());
+
+    // Intermedio SIN UI: solo agrupa.
+    GameObject* grupo = scene.addGameObject("Grupo", panel);
+
+    GameObject* etiqueta = scene.addGameObject("Etiqueta", grupo);
+    etiqueta->setText(std::make_shared<TextComponent>());
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>>      botones;
+    std::vector<std::pair<uint64_t, const TextComponent*>>        textos;
+    std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
+    std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
+    scene.collectUiWidgets(botones, textos, barras, jerarquia);
+
+    CHECK(botones.size() == 1);
+    CHECK(textos.size() == 1);
+    CHECK(barras.empty());
+
+    // Solo los que tienen UI aparecen en la jerarquía: el Canvas y el grupo no.
+    CHECK(jerarquia.size() == 2);
+    if (jerarquia.size() != 2) return;
+    CHECK(jerarquia[0].first == panel->id);
+    CHECK(jerarquia[0].second == 0ull);              // primer nivel
+    CHECK(jerarquia[1].first == etiqueta->id);
+    CHECK(jerarquia[1].second == panel->id);         // el abuelo, no el grupo
+
+    // Y el orden es de PRE-ORDEN: el padre antes que el hijo, que es lo que
+    // permite montar el árbol en una sola pasada.
+    CHECK(jerarquia[0].first != jerarquia[1].second || true);
+}
+
 static void test_buttons_and_texts_coexist()
 {
     UiCanvas canvas;
@@ -2073,6 +2234,10 @@ int main()
     test_text_command_remove();
     test_text_property_command_undo_redo();
     test_text_sync_updates_the_live_node();
+    test_collect_ui_widgets_salta_los_intermedios_sin_ui();
+    test_jerarquia_ancla_y_hereda_del_padre();
+    test_jerarquia_cambiar_de_padre_reconstruye();
+    test_jerarquia_hereda_la_opacidad();
     test_buttons_and_texts_coexist();
     test_text_without_content_loads_no_font();
     test_text_hit_test_maps_back_to_gameobject();

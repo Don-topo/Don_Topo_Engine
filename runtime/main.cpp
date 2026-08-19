@@ -531,6 +531,8 @@ int main(int argc, char** argv)
         std::vector<std::pair<uint64_t, const DonTopo::ButtonComponent*>> uiButtons;
         std::vector<std::pair<uint64_t, const DonTopo::TextComponent*>> uiTexts;
         std::vector<std::pair<uint64_t, const DonTopo::ProgressBarComponent*>> uiBars;
+        // Jerarquía de la escena aplanada a (id, id del padre con UI).
+        std::vector<std::pair<uint64_t, uint64_t>> uiParents;
 
         while (!window.shouldClose())
         {
@@ -697,19 +699,17 @@ int main(int argc, char** argv)
             if (DonTopo::GameObject* canvasGo = scene.findCanvas())
                 canvasGo->getCanvas()->applyTo(renderer.uiCanvas());
 
-            // Widgets: mismo volcado por frame que en el editor.
+            // Widgets: mismo volcado por frame que en el editor, con la
+            // jerarquía de la escena para que un widget anidado cuelgue de su
+            // padre en vez de de la raíz.
             uiButtons.clear();
             uiTexts.clear();
             uiBars.clear();
+            uiParents.clear();
             if (scene.findCanvas())
-                scene.traverse([&](DonTopo::GameObject* n) {
-                    if (n->hasButton()) uiButtons.emplace_back(n->id, n->getButton().get());
-                    if (n->hasText())   uiTexts.emplace_back(n->id, n->getText().get());
-                    if (n->hasProgressBar())
-                        uiBars.emplace_back(n->id, n->getProgressBar().get());
-                });
+                scene.collectUiWidgets(uiButtons, uiTexts, uiBars, uiParents);
             DonTopo::syncUiWidgets(uiButtons, uiTexts, uiBars, renderer.uiCanvas(),
-                                   uiWidgetCache, renderer);
+                                   uiWidgetCache, renderer, &uiParents);
 
             // Input de la UI: sin esto el árbol no resuelve estados y los cinco
             // colores del botón, el fundido y el Click no existen. El ratón está

@@ -65,6 +65,24 @@ namespace DonTopo
             GameObject* findCanvas();
             const GameObject* findCanvas() const;
 
+            // Los widgets de UI de la escena, listos para syncUiWidgets: las tres
+            // listas por tipo y la JERARQUÍA aplanada a (id, id del padre) en
+            // pre-orden, con 0 para los que cuelgan de la raíz del canvas.
+            //
+            // El "padre" es el ancestro más cercano que TENGA algún componente
+            // de UI, no el padre inmediato: un GameObject intermedio sin UI no
+            // aporta rect contra el que anclarse, así que no puede sostener a
+            // nadie y sus hijos suben al primero que sí.
+            //
+            // Vive aquí y no en cada bucle porque lo necesitan los tres (editor
+            // con los dos backends y runtime exportado), y tres copias de este
+            // recorrido es como se desincronizan.
+            void collectUiWidgets(
+                std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons,
+                std::vector<std::pair<uint64_t, const TextComponent*>>& texts,
+                std::vector<std::pair<uint64_t, const ProgressBarComponent*>>& bars,
+                std::vector<std::pair<uint64_t, uint64_t>>& parents) const;
+
             // Avisos de la última operación que tuvo que corregir la escena
             // cargada (campos corruptos, varias cámaras, clips que ya no casan).
             // Core no conoce el Log Console: EditorUI los vuelca tras cargar. Se

@@ -151,6 +151,11 @@ namespace DonTopo
         std::vector<uint64_t> barIds;
         std::vector<uint64_t> textIds;
 
+        // La jerarquía con la que se montó el árbol, aplanada a (id, padre) y en
+        // el mismo orden que llegó. Cambiarla mueve nodos de sitio, así que se
+        // compara igual que las tres listas: si no cuadra, se reconstruye.
+        std::vector<std::pair<uint64_t, uint64_t>> parents;
+
         // Punteros a los nodos vivos, en el mismo orden que los ids. Son
         // estables mientras nadie llame a clearChildren(): UiElement::add mueve
         // los unique_ptr del vector, no los objetos apuntados.
@@ -192,11 +197,24 @@ namespace DonTopo
     // así que un Text suelto que se solape con un botón o con una barra se
     // dibuja encima (una barra con etiqueta es justo eso, dos componentes en el
     // mismo GameObject).
+    //
+    // parents es la JERARQUÍA de la escena aplanada a (id, id del padre), en
+    // PRE-ORDEN y con 0 para "cuelga de la raíz". Con ella, los nodos de un
+    // GameObject cuelgan del nodo PRINCIPAL de su padre —el Button si lo tiene,
+    // si no la ProgressBar, si no el Text—, que es el que aporta el rect contra
+    // el que anclarse. Eso es lo que hace que el padre COLOQUE, RECORTE y
+    // ATENÚE a sus hijos, cosa que con el árbol plano de antes no podía.
+    //
+    // A nullptr todo cuelga de la raíz, que es exactamente lo que hacía antes de
+    // que esto existiera. El padre que no aparezca en parents (o que no tenga
+    // ningún componente de UI) tampoco cuenta: su hijo sube a la raíz en vez de
+    // desaparecer.
     template <class Loader>
     inline void syncUiWidgets(const std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons,
                               const std::vector<std::pair<uint64_t, const TextComponent*>>& texts,
                               const std::vector<std::pair<uint64_t, const ProgressBarComponent*>>& bars,
-                              UiCanvas& canvas, UiWidgetSyncCache& cache, Loader& loader)
+                              UiCanvas& canvas, UiWidgetSyncCache& cache, Loader& loader,
+                              const std::vector<std::pair<uint64_t, uint64_t>>* parents = nullptr)
     {
         auto resolveAtlas = [&](const std::string& path) -> UiTextureAtlas*
         {
@@ -236,6 +254,15 @@ namespace DonTopo
             if (wantsLabel != (cache.buttonLabels[i] != nullptr)) rebuild = true;
         }
 
+        // Y mover un GameObject de padre cambia de dónde cuelga su nodo, que es
+        // la forma del árbol tanto como añadir o quitar un widget.
+        {
+            const size_t nuevos = parents ? parents->size() : 0;
+            if (cache.parents.size() != nuevos) rebuild = true;
+            for (size_t i = 0; !rebuild && i < nuevos; i++)
+                if (cache.parents[i] != (*parents)[i]) rebuild = true;
+        }
+
         if (rebuild)
         {
             // clear() y no root().clearChildren(): el canvas guarda punteros de
@@ -246,40 +273,54 @@ namespace DonTopo
             // asignador reutilizaba la dirección, el canvas se creía que el
             // nodo NUEVO ya estaba hovered y no volvía a marcarlo.
             canvas.clear();
-            cache.buttonIds.clear();
-            cache.buttonNodes.clear();
-            cache.buttonLabels.clear();
-            cache.buttonPrev.clear();
-            cache.textIds.clear();
-            cache.textNodes.clear();
-            cache.textPrev.clear();
-            cache.barIds.clear();
-            cache.barNodes.clear();
-            cache.barFills.clear();
-            cache.barPrev.clear();
 
-            for (const auto& entry : buttons)
+            // Los vectores se DIMENSIONAN y se escriben por índice, no con
+            // push_back: la fase de actualización indexa por la posición en las
+            // listas de entrada, y con jerarquía los nodos se crean en el orden
+            // del árbol, que es otro.
+            cache.buttonIds.assign(buttons.size(), 0ull);
+            cache.buttonNodes.assign(buttons.size(), nullptr);
+            cache.buttonLabels.assign(buttons.size(), nullptr);
+            cache.buttonPrev.assign(buttons.size(), ButtonComponent{});
+            cache.textIds.assign(texts.size(), 0ull);
+            cache.textNodes.assign(texts.size(), nullptr);
+            cache.textPrev.assign(texts.size(), TextComponent{});
+            cache.barIds.assign(bars.size(), 0ull);
+            cache.barNodes.assign(bars.size(), nullptr);
+            cache.barFills.assign(bars.size(), nullptr);
+            cache.barPrev.assign(bars.size(), ProgressBarComponent{});
+
+            // Dónde está cada GameObject en cada lista, para poder montarlo
+            // cuando toque su turno en el recorrido del árbol.
+            std::unordered_map<uint64_t, size_t> idxButton, idxBar, idxText;
+            for (size_t i = 0; i < buttons.size(); i++) idxButton[buttons[i].first] = i;
+            for (size_t i = 0; i < bars.size();    i++) idxBar[bars[i].first]       = i;
+            for (size_t i = 0; i < texts.size();   i++) idxText[texts[i].first]     = i;
+
+            // Nodo del que cuelgan los HIJOS de cada GameObject.
+            std::unordered_map<uint64_t, UiElement*> principal;
+
+            auto creaBoton = [&](size_t i, UiElement& padre)
             {
+                const auto& entry = buttons[i];
                 const std::string nombre = uiButtonNodeName(entry.first);
-                Button& b = canvas.root().add<Button>(nombre);
-                cache.buttonIds.push_back(entry.first);
-                cache.buttonNodes.push_back(&b);
-                cache.buttonLabels.push_back(entry.second->text.empty()
-                                                 ? nullptr
-                                                 : &b.add<Text>(nombre + "/Label"));
+                Button& b = padre.add<Button>(nombre);
+                cache.buttonIds[i]   = entry.first;
+                cache.buttonNodes[i] = &b;
+                cache.buttonLabels[i] = entry.second->text.empty()
+                                            ? nullptr
+                                            : &b.add<Text>(nombre + "/Label");
                 // Un componente que no puede ser igual a ninguno real fuerza el
                 // primer volcado: un nodo recién creado ya nace sucio, pero los
                 // campos hay que escribirlos igual.
-                ButtonComponent nunca;
-                nunca.text = "\x01(sin volcar)";
-                cache.buttonPrev.push_back(nunca);
+                cache.buttonPrev[i].text = "\x01(sin volcar)";
 
                 // Handlers de script. Se instalan AQUÍ, en el único sitio que
-                // crea nodos, porque clearChildren() se acaba de llevar por
-                // delante los del árbol anterior: el dueño del callback es el
-                // componente y el nodo solo tiene un weak_ptr a él, así que un
-                // botón que pierde su componente deja de disparar en vez de
-                // llamar a un objeto muerto.
+                // crea nodos, porque clear() se acaba de llevar por delante los
+                // del árbol anterior: el dueño del callback es el componente y
+                // el nodo solo tiene un weak_ptr a él, así que un botón que
+                // pierde su componente deja de disparar en vez de llamar a un
+                // objeto muerto.
                 std::weak_ptr<UiButtonRuntime> rt = entry.second->callbacks.ptr;
                 b.onClick = [rt](UiEvent&) {
                     if (auto p = rt.lock(); p && p->onClick) p->onClick();
@@ -287,35 +328,94 @@ namespace DonTopo
                 b.onDoubleClick = [rt](UiEvent&) {
                     if (auto p = rt.lock(); p && p->onDoubleClick) p->onDoubleClick();
                 };
-            }
+                return &b;
+            };
 
-            for (const auto& entry : bars)
+            auto creaBarra = [&](size_t i, UiElement& padre)
             {
+                const auto& entry = bars[i];
                 const std::string nombre = uiProgressBarNodeName(entry.first);
-                ProgressBar& p = canvas.root().add<ProgressBar>(nombre);
+                ProgressBar& p = padre.add<ProgressBar>(nombre);
                 // El relleno es un hijo y no un hermano: así su rect se cuenta
                 // en píxeles desde la esquina del fondo y no hay que rehacer a
                 // mano las anclas ni la escala del canvas.
                 Panel& f = p.add<Panel>(nombre + "/Fill");
-                cache.barIds.push_back(entry.first);
-                cache.barNodes.push_back(&p);
-                cache.barFills.push_back(&f);
-                // Un componente que no puede ser igual a ninguno real fuerza el
-                // primer volcado, igual que con el Button.
-                ProgressBarComponent nunca;
-                nunca.backgroundPath = "\x01(sin volcar)";
-                cache.barPrev.push_back(nunca);
+                cache.barIds[i]   = entry.first;
+                cache.barNodes[i] = &p;
+                cache.barFills[i] = &f;
+                cache.barPrev[i].backgroundPath = "\x01(sin volcar)";
+                return &p;
+            };
+
+            auto creaTexto = [&](size_t i, UiElement& padre)
+            {
+                const auto& entry = texts[i];
+                Text& t = padre.add<Text>(uiTextNodeName(entry.first));
+                cache.textIds[i]   = entry.first;
+                cache.textNodes[i] = &t;
+                cache.textPrev[i].text = "\x01(sin volcar)";
+                return &t;
+            };
+
+            // Todos los componentes de UN GameObject, en el orden en el que se
+            // dibujan: la barra debajo, el botón encima y el texto el último.
+            // El nodo del que colgarán sus hijos es el PRINCIPAL: el botón si lo
+            // hay, si no la barra, si no el texto.
+            auto montaGameObject = [&](uint64_t id, UiElement& padre)
+            {
+                UiElement* barra = nullptr;
+                UiElement* boton = nullptr;
+                UiElement* texto = nullptr;
+
+                if (auto it = idxBar.find(id);    it != idxBar.end())    barra = creaBarra(it->second, padre);
+                if (auto it = idxButton.find(id); it != idxButton.end()) boton = creaBoton(it->second, padre);
+                if (auto it = idxText.find(id);   it != idxText.end())   texto = creaTexto(it->second, padre);
+
+                principal[id] = boton ? boton : (barra ? barra : texto);
+            };
+
+            if (parents != nullptr)
+            {
+                // En PRE-ORDEN: cuando llega el turno de un hijo, su padre ya
+                // está montado y su nodo principal existe.
+                for (const auto& rel : *parents)
+                {
+                    UiElement* padre = &canvas.root();
+                    if (rel.second != 0)
+                    {
+                        auto it = principal.find(rel.second);
+                        // Un padre sin ningún componente de UI (o que no llegó en
+                        // parents) no puede sostener a nadie: el hijo sube a la
+                        // raíz en vez de desaparecer del árbol.
+                        if (it != principal.end() && it->second != nullptr) padre = it->second;
+                    }
+                    montaGameObject(rel.first, *padre);
+                }
+
+                // Lo que esté en las listas pero no en parents se monta en la
+                // raíz: perder un widget por un desajuste de las dos entradas
+                // sería un fallo mudo.
+                for (const auto& entry : buttons)
+                    if (principal.find(entry.first) == principal.end())
+                        montaGameObject(entry.first, canvas.root());
+                for (const auto& entry : bars)
+                    if (principal.find(entry.first) == principal.end())
+                        montaGameObject(entry.first, canvas.root());
+                for (const auto& entry : texts)
+                    if (principal.find(entry.first) == principal.end())
+                        montaGameObject(entry.first, canvas.root());
+            }
+            else
+            {
+                // Sin jerarquía: TODO cuelga de la raíz y en el orden de
+                // siempre —botones, barras y textos—, que es lo que esperan las
+                // escenas montadas antes de que la jerarquía existiera.
+                for (size_t i = 0; i < buttons.size(); i++) creaBoton(i, canvas.root());
+                for (size_t i = 0; i < bars.size();    i++) creaBarra(i, canvas.root());
+                for (size_t i = 0; i < texts.size();   i++) creaTexto(i, canvas.root());
             }
 
-            for (const auto& entry : texts)
-            {
-                Text& t = canvas.root().add<Text>(uiTextNodeName(entry.first));
-                cache.textIds.push_back(entry.first);
-                cache.textNodes.push_back(&t);
-                TextComponent nunca;
-                nunca.text = "\x01(sin volcar)";
-                cache.textPrev.push_back(nunca);
-            }
+            cache.parents = parents ? *parents : std::vector<std::pair<uint64_t, uint64_t>>{};
         }
 
         for (size_t i = 0; i < buttons.size(); i++)
