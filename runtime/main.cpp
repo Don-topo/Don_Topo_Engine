@@ -528,12 +528,9 @@ int main(int argc, char** argv)
         // Estado del sync de widgets, igual que en el editor: fuera del bucle
         // para actualizar en sitio y cachear atlas y fuentes por ruta.
         DonTopo::UiWidgetSyncCache uiWidgetCache;
-        std::vector<std::pair<uint64_t, const DonTopo::ButtonComponent*>> uiButtons;
-        std::vector<std::pair<uint64_t, const DonTopo::TextComponent*>> uiTexts;
-        std::vector<std::pair<uint64_t, const DonTopo::ProgressBarComponent*>> uiBars;
-        std::vector<std::pair<uint64_t, const DonTopo::LayoutComponent*>> uiLayouts;
-        // Jerarquía de la escena aplanada a (id, id del padre con UI).
-        std::vector<std::pair<uint64_t, uint64_t>> uiParents;
+        // Una lista por tipo de widget más la jerarquía de la escena aplanada a
+        // (id, id del padre con UI), todo dentro de UiWidgetLists.
+        DonTopo::UiWidgetLists uiWidgets;
 
         while (!window.shouldClose())
         {
@@ -703,15 +700,10 @@ int main(int argc, char** argv)
             // Widgets: mismo volcado por frame que en el editor, con la
             // jerarquía de la escena para que un widget anidado cuelgue de su
             // padre en vez de de la raíz.
-            uiButtons.clear();
-            uiTexts.clear();
-            uiBars.clear();
-            uiLayouts.clear();
-            uiParents.clear();
+            uiWidgets.clear();
             if (scene.findCanvas())
-                scene.collectUiWidgets(uiButtons, uiTexts, uiBars, uiLayouts, uiParents);
-            DonTopo::syncUiWidgets(uiButtons, uiTexts, uiBars, renderer.uiCanvas(),
-                                   uiWidgetCache, renderer, &uiParents, &uiLayouts);
+                scene.collectUiWidgets(uiWidgets);
+            DonTopo::syncUiWidgets(uiWidgets, renderer.uiCanvas(), uiWidgetCache, renderer);
 
             // Input de la UI: sin esto el árbol no resuelve estados y los cinco
             // colores del botón, el fundido y el Click no existen. El ratón está

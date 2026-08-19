@@ -219,6 +219,44 @@ void LayoutComponentCommand::apply(bool add)
     go->setLayout(std::make_shared<LayoutComponent>(m_state));
 }
 
+PanelComponentCommand::PanelComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                              bool add, PanelComponent state)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}
+
+void PanelComponentCommand::execute() { apply(m_add); }
+void PanelComponentCommand::undo()    { apply(!m_add); }
+
+void PanelComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setPanel(nullptr);
+        return;
+    }
+    go->setPanel(std::make_shared<PanelComponent>(m_state));
+}
+
+ImageComponentCommand::ImageComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                              bool add, ImageComponent state)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}
+
+void ImageComponentCommand::execute() { apply(m_add); }
+void ImageComponentCommand::undo()    { apply(!m_add); }
+
+void ImageComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setImage(nullptr);
+        return;
+    }
+    go->setImage(std::make_shared<ImageComponent>(m_state));
+}
+
 AnimatorComponentCommand::AnimatorComponentCommand(Scene& scene, std::string label, uint64_t id,
                                                     bool add, AnimatorComponent state)
     : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}

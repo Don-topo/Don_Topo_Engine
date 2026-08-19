@@ -75,6 +75,12 @@ private:
     // enseña dónde está su rect.
     void drawLayoutGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                           const glm::vec2& imageSize);
+    // Y los del Panel y el Image seleccionados. Mismo criterio que los demás: el
+    // rect sale del nodo VIVO, no de los campos del componente.
+    void drawPanelGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                         const glm::vec2& imageSize);
+    void drawImageGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                         const glm::vec2& imageSize);
     // Selección por clic de un widget de UI: hit test 2D del canvas, que manda
     // sobre el raycast 3D porque la UI se dibuja ENCIMA de la escena. mousePx
     // va en píxeles relativos a la esquina de la imagen, igual que en

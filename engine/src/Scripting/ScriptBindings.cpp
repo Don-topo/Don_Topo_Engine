@@ -16,6 +16,8 @@
 #include "DonTopo/UI/ButtonComponent.h"
 #include "DonTopo/UI/TextComponent.h"
 #include "DonTopo/UI/ProgressBarComponent.h"
+#include "DonTopo/UI/PanelComponent.h"
+#include "DonTopo/UI/ImageComponent.h"
 #include "DonTopo/Files/FileManager.h"
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -103,6 +105,8 @@ namespace DonTopo::ScriptBindings
         struct LuaText { LuaEntity e; };
         struct LuaProgressBar { LuaEntity e; };
         struct LuaLayout { LuaEntity e; };
+        struct LuaPanel { LuaEntity e; };
+        struct LuaImage { LuaEntity e; };
 
         // Descompone localTransform en T/R/S (grados pa Lua). La extracción de
         // ángulos usa extractEulerAngleXYZ — el inverso exacto del
@@ -637,6 +641,18 @@ namespace DonTopo::ScriptBindings
             if (!go->hasLayout()) throw std::runtime_error("El GameObject ya no tiene Layout");
             return go->getLayout().get();
         }
+        PanelComponent* panelOf(const LuaPanel& c)
+        {
+            GameObject* go = deref(c.e);
+            if (!go->hasPanel()) throw std::runtime_error("El GameObject ya no tiene Panel");
+            return go->getPanel().get();
+        }
+        ImageComponent* imageOf(const LuaImage& c)
+        {
+            GameObject* go = deref(c.e);
+            if (!go->hasImage()) throw std::runtime_error("El GameObject ya no tiene Image");
+            return go->getImage().get();
+        }
 
         // Fábricas de accesores. Son plantillas y no una lista de lambdas a mano
         // porque los cuatro componentes suman más de cien campos y escribir el
@@ -806,6 +822,12 @@ namespace DonTopo::ScriptBindings
                 "None", 0, "Horizontal", 1, "Vertical", 2, "Grid", 3);
             lua["UiCrossAlign"] = lua.create_table_with(
                 "Start", 0, "Center", 1, "End", 2);
+            lua["UiImageMode"] = lua.create_table_with(
+                "Normal", 0, "Tiled", 1, "Sliced", 2, "Filled", 3);
+            lua["UiFillDirection"] = lua.create_table_with(
+                "Horizontal", 0, "Vertical", 1);
+            lua["UiFillOrigin"] = lua.create_table_with(
+                "Start", 0, "End", 1);
             lua["UiButtonTransition"] = lua.create_table_with(
                 "ColorTint", 0, "SpriteSwap", 1, "Animation", 2);
             lua["UiButtonState"] = lua.create_table_with(
@@ -990,6 +1012,63 @@ namespace DonTopo::ScriptBindings
                 "SetSpacing",   uiVec2Set(layoutOf, &LayoutComponent::spacing, &mgr, "Layout.SetSpacing"),
                 "GetCellSize",  uiVec2Get(layoutOf, &LayoutComponent::cellSize),
                 "SetCellSize",  uiVec2Set(layoutOf, &LayoutComponent::cellSize, &mgr, "Layout.SetCellSize"));
+
+            // ── Panel ───────────────────────────────────────────────────────
+            // El rectángulo de fondo. Sin campos propios más allá del rect, el
+            // color y el sprite: el Panel del núcleo tampoco los tiene.
+            lua.new_usertype<LuaPanel>("Panel",
+                sol::no_constructor,
+                "visible",       uiProp(panelOf, &PanelComponent::visible),
+                "raycastTarget", uiProp(panelOf, &PanelComponent::raycastTarget),
+                "atlasPath",     uiProp(panelOf, &PanelComponent::atlasPath),
+                "sprite",        uiProp(panelOf, &PanelComponent::sprite),
+                "GetAnchorMin", uiVec2Get(panelOf, &PanelComponent::anchorMin),
+                "SetAnchorMin", uiVec2Set(panelOf, &PanelComponent::anchorMin, &mgr, "Panel.SetAnchorMin"),
+                "GetAnchorMax", uiVec2Get(panelOf, &PanelComponent::anchorMax),
+                "SetAnchorMax", uiVec2Set(panelOf, &PanelComponent::anchorMax, &mgr, "Panel.SetAnchorMax"),
+                "GetPivot",     uiVec2Get(panelOf, &PanelComponent::pivot),
+                "SetPivot",     uiVec2Set(panelOf, &PanelComponent::pivot, &mgr, "Panel.SetPivot"),
+                "GetPosition",  uiVec2Get(panelOf, &PanelComponent::position),
+                "SetPosition",  uiVec2Set(panelOf, &PanelComponent::position, &mgr, "Panel.SetPosition"),
+                "GetSize",      uiVec2Get(panelOf, &PanelComponent::size),
+                "SetSize",      uiVec2Set(panelOf, &PanelComponent::size, &mgr, "Panel.SetSize"),
+                "GetColor",     uiVec4Get(panelOf, &PanelComponent::color),
+                "SetColor",     uiVec4Set(panelOf, &PanelComponent::color, &mgr, "Panel.SetColor"));
+
+            // ── Image ───────────────────────────────────────────────────────
+            // Con los NUEVE campos propios del widget del núcleo: el modo, los
+            // cuatro bordes del 9-slice con su fillCenter, el tope de tiles y el
+            // bloque de Filled.
+            lua.new_usertype<LuaImage>("Image",
+                sol::no_constructor,
+                "visible",       uiProp(imageOf, &ImageComponent::visible),
+                "raycastTarget", uiProp(imageOf, &ImageComponent::raycastTarget),
+                "atlasPath",     uiProp(imageOf, &ImageComponent::atlasPath),
+                "sprite",        uiProp(imageOf, &ImageComponent::sprite),
+                "mode",          uiEnumProp(imageOf, &ImageComponent::mode, 3),
+                "borderLeft",    uiFloatProp(imageOf, &ImageComponent::borderLeft, &mgr, "Image.borderLeft"),
+                "borderRight",   uiFloatProp(imageOf, &ImageComponent::borderRight, &mgr, "Image.borderRight"),
+                "borderTop",     uiFloatProp(imageOf, &ImageComponent::borderTop, &mgr, "Image.borderTop"),
+                "borderBottom",  uiFloatProp(imageOf, &ImageComponent::borderBottom, &mgr, "Image.borderBottom"),
+                "fillCenter",    uiProp(imageOf, &ImageComponent::fillCenter),
+                // maxTiles es entero: sin el guardarraíl de NaN de uiFloatProp y
+                // sin decimales que redondear a espaldas del script.
+                "maxTiles",      uiProp(imageOf, &ImageComponent::maxTiles),
+                "fillDirection", uiEnumProp(imageOf, &ImageComponent::fillDirection, 1),
+                "fillOrigin",    uiEnumProp(imageOf, &ImageComponent::fillOrigin, 1),
+                "fillAmount",    uiFloatProp(imageOf, &ImageComponent::fillAmount, &mgr, "Image.fillAmount"),
+                "GetAnchorMin", uiVec2Get(imageOf, &ImageComponent::anchorMin),
+                "SetAnchorMin", uiVec2Set(imageOf, &ImageComponent::anchorMin, &mgr, "Image.SetAnchorMin"),
+                "GetAnchorMax", uiVec2Get(imageOf, &ImageComponent::anchorMax),
+                "SetAnchorMax", uiVec2Set(imageOf, &ImageComponent::anchorMax, &mgr, "Image.SetAnchorMax"),
+                "GetPivot",     uiVec2Get(imageOf, &ImageComponent::pivot),
+                "SetPivot",     uiVec2Set(imageOf, &ImageComponent::pivot, &mgr, "Image.SetPivot"),
+                "GetPosition",  uiVec2Get(imageOf, &ImageComponent::position),
+                "SetPosition",  uiVec2Set(imageOf, &ImageComponent::position, &mgr, "Image.SetPosition"),
+                "GetSize",      uiVec2Get(imageOf, &ImageComponent::size),
+                "SetSize",      uiVec2Set(imageOf, &ImageComponent::size, &mgr, "Image.SetSize"),
+                "GetColor",     uiVec4Get(imageOf, &ImageComponent::color),
+                "SetColor",     uiVec4Set(imageOf, &ImageComponent::color, &mgr, "Image.SetColor"));
         }
 
         void registerEntity(DonTopo::ScriptManager& mgr)
@@ -1034,6 +1113,16 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasLayout()) return sol::nil;
                     return sol::make_object(e.mgr->lua(), LuaLayout{e});
                 },
+                "GetPanel", [](const LuaEntity& e) -> sol::object {
+                    GameObject* go = deref(e);
+                    if (!go->hasPanel()) return sol::nil;
+                    return sol::make_object(e.mgr->lua(), LuaPanel{e});
+                },
+                "GetImage", [](const LuaEntity& e) -> sol::object {
+                    GameObject* go = deref(e);
+                    if (!go->hasImage()) return sol::nil;
+                    return sol::make_object(e.mgr->lua(), LuaImage{e});
+                },
                 "AddCanvas", [](const LuaEntity& e) {
                     GameObject* go = deref(e);
                     if (!go->hasCanvas()) go->setCanvas(std::make_shared<CanvasComponent>());
@@ -1059,11 +1148,23 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasLayout()) go->setLayout(std::make_shared<LayoutComponent>());
                     return LuaLayout{e};
                 },
+                "AddPanel", [](const LuaEntity& e) {
+                    GameObject* go = deref(e);
+                    if (!go->hasPanel()) go->setPanel(std::make_shared<PanelComponent>());
+                    return LuaPanel{e};
+                },
+                "AddImage", [](const LuaEntity& e) {
+                    GameObject* go = deref(e);
+                    if (!go->hasImage()) go->setImage(std::make_shared<ImageComponent>());
+                    return LuaImage{e};
+                },
                 "RemoveCanvas",      [](const LuaEntity& e) { deref(e)->setCanvas(nullptr); },
                 "RemoveButton",      [](const LuaEntity& e) { deref(e)->setButton(nullptr); },
                 "RemoveText",        [](const LuaEntity& e) { deref(e)->setText(nullptr); },
                 "RemoveProgressBar", [](const LuaEntity& e) { deref(e)->setProgressBar(nullptr); },
                 "RemoveLayout",      [](const LuaEntity& e) { deref(e)->setLayout(nullptr); },
+                "RemovePanel",       [](const LuaEntity& e) { deref(e)->setPanel(nullptr); },
+                "RemoveImage",       [](const LuaEntity& e) { deref(e)->setImage(nullptr); },
                 "GetParent", [](const LuaEntity& e) -> sol::object {
                     GameObject* go = deref(e);
                     if (!go->parent || !go->parent->parent) return sol::nil; // root no se expone
@@ -1092,6 +1193,8 @@ namespace DonTopo::ScriptBindings
                     if (name == "Text"            && go->hasText())            return sol::make_object(lua, LuaText{e});
                     if (name == "ProgressBar"     && go->hasProgressBar())     return sol::make_object(lua, LuaProgressBar{e});
                     if (name == "Layout"          && go->hasLayout())          return sol::make_object(lua, LuaLayout{e});
+                    if (name == "Panel"           && go->hasPanel())           return sol::make_object(lua, LuaPanel{e});
+                    if (name == "Image"           && go->hasImage())           return sol::make_object(lua, LuaImage{e});
                     if (name.rfind("Script:", 0) == 0)
                     {
                         const std::string scriptName = name.substr(7);
@@ -1176,6 +1279,16 @@ namespace DonTopo::ScriptBindings
                         if (!go->hasLayout()) go->setLayout(std::make_shared<LayoutComponent>());
                         return sol::make_object(lua, LuaLayout{e});
                     }
+                    if (name == "Panel")
+                    {
+                        if (!go->hasPanel()) go->setPanel(std::make_shared<PanelComponent>());
+                        return sol::make_object(lua, LuaPanel{e});
+                    }
+                    if (name == "Image")
+                    {
+                        if (!go->hasImage()) go->setImage(std::make_shared<ImageComponent>());
+                        return sol::make_object(lua, LuaImage{e});
+                    }
                     if (name.rfind("Script:", 0) == 0)
                     {
                         auto comp = std::make_unique<DonTopo::ScriptComponent>(name.substr(7), go);
@@ -1202,6 +1315,8 @@ namespace DonTopo::ScriptBindings
                     else if (name == "Text")            go->setText(nullptr);
                     else if (name == "ProgressBar")     go->setProgressBar(nullptr);
                     else if (name == "Layout")          go->setLayout(nullptr);
+                    else if (name == "Panel")           go->setPanel(nullptr);
+                    else if (name == "Image")           go->setImage(nullptr);
                     else if (name == "Rigidbody")
                     {
                         // Reconstruye el actor como static antes de soltar el Rigidbody.

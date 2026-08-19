@@ -6,7 +6,9 @@
 #include <vector>
 
 #include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/UI/ImageComponent.h"
 #include "DonTopo/UI/LayoutComponent.h"
+#include "DonTopo/UI/PanelComponent.h"
 #include "DonTopo/UI/ProgressBarComponent.h"
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiFont.h"
@@ -132,6 +134,41 @@ namespace DonTopo
         return id;
     }
 
+    // Los widgets de UI de una escena, una lista por tipo y la jerarquía
+    // aplanada. Lo rellena Scene::collectUiWidgets y lo consume syncUiWidgets.
+    //
+    // Una struct y no N parámetros sueltos porque los tipos de widget CRECEN:
+    // con una lista por parámetro, cada widget nuevo cambiaba la firma de las
+    // dos funciones y de sus ~76 puntos de llamada, y un parámetro opcional
+    // olvidado no daba error de compilación sino un widget que no aparecía.
+    // Aquí un campo nuevo no rompe a nadie, y lo que sí rompe (renombrar) lo
+    // caza el compilador.
+    struct UiWidgetLists
+    {
+        std::vector<std::pair<uint64_t, const ButtonComponent*>>      buttons;
+        std::vector<std::pair<uint64_t, const TextComponent*>>        texts;
+        std::vector<std::pair<uint64_t, const ProgressBarComponent*>> bars;
+        std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
+        std::vector<std::pair<uint64_t, const PanelComponent*>>       panels;
+        std::vector<std::pair<uint64_t, const ImageComponent*>>       images;
+
+        // La JERARQUÍA de la escena aplanada a (id, id del padre), en PRE-ORDEN
+        // y con 0 para "cuelga de la raíz". VACÍA = sin jerarquía: todo cuelga
+        // de la raíz, que es lo que hacía el sync antes de que existiera.
+        std::vector<std::pair<uint64_t, uint64_t>> parents;
+
+        void clear()
+        {
+            buttons.clear();
+            texts.clear();
+            bars.clear();
+            layouts.clear();
+            panels.clear();
+            images.clear();
+            parents.clear();
+        }
+    };
+
     // Lo que el sync tiene que recordar ENTRE frames, todo junto y en manos de
     // quien dibuja (una por bucle). Sin esto habría que recrear el árbol entero
     // cada frame, que además de tirar la caché de vértices reiniciaría el
@@ -152,6 +189,8 @@ namespace DonTopo
         std::vector<uint64_t> barIds;
         std::vector<uint64_t> textIds;
         std::vector<uint64_t> layoutIds;
+        std::vector<uint64_t> panelIds;
+        std::vector<uint64_t> imageIds;
 
         // La jerarquía con la que se montó el árbol, aplanada a (id, padre) y en
         // el mismo orden que llegó. Cambiarla mueve nodos de sitio, así que se
@@ -178,6 +217,10 @@ namespace DonTopo
         std::vector<UiElement*> layoutNodes;
         std::vector<char>       layoutOwnsRect;
 
+        // Panel e Image: un nodo cada uno, sin hijos propios.
+        std::vector<Panel*> panelNodes;
+        std::vector<Image*> imageNodes;
+
         // Copia de lo que se volcó la última vez, en el mismo orden. Lo que no
         // ha cambiado no se vuelve a volcar NI se ensucia: escribir los campos
         // sin ensuciar deja el nodo clavado (el canvas se copia los vértices
@@ -186,6 +229,8 @@ namespace DonTopo
         std::vector<TextComponent>        textPrev;
         std::vector<ProgressBarComponent> barPrev;
         std::vector<LayoutComponent>      layoutPrev;
+        std::vector<PanelComponent>       panelPrev;
+        std::vector<ImageComponent>       imagePrev;
 
         // Recursos de GPU por ruta. Sin esta caché una ruta de atlas cargaría un
         // atlas NUEVO cada frame (Renderer::loadUiAtlas no cachea por ruta) y se
@@ -196,43 +241,47 @@ namespace DonTopo
         std::unordered_map<std::string, UiFont*>         fonts;
     };
 
-    // Vuelca los widgets de la escena en el canvas vivo. Las tres listas van en
-    // orden de recorrido de la escena y traen el id de cada GameObject dueño.
+    // Vuelca los widgets de la escena en el canvas vivo. Las listas de
+    // UiWidgetLists van en orden de recorrido de la escena y traen el id de cada
+    // GameObject dueño.
     //
     // Loader es cualquier cosa con loadUiAtlas(path) y loadUiFont(path) — o sea
     // el Renderer. Es un template para no meter Renderer.h en un header de UI:
     // el componente no sabe de Vulkan.
     //
-    // El orden de montaje es botones, barras y textos: el último hermano manda,
-    // así que un Text suelto que se solape con un botón o con una barra se
-    // dibuja encima (una barra con etiqueta es justo eso, dos componentes en el
-    // mismo GameObject).
+    // El orden de montaje dentro de un GameObject es paneles, imágenes, barras,
+    // botones y textos: el último hermano manda, así que un Text suelto que se
+    // solape con un botón o con una barra se dibuja encima (una barra con
+    // etiqueta es justo eso, dos componentes en el mismo GameObject), y el Panel
+    // queda debajo de todo, que es lo que quiere un fondo.
     //
-    // parents es la JERARQUÍA de la escena aplanada a (id, id del padre), en
+    // w.parents es la JERARQUÍA de la escena aplanada a (id, id del padre), en
     // PRE-ORDEN y con 0 para "cuelga de la raíz". Con ella, los nodos de un
     // GameObject cuelgan del nodo PRINCIPAL de su padre —el Button si lo tiene,
-    // si no la ProgressBar, si no el Text—, que es el que aporta el rect contra
-    // el que anclarse. Eso es lo que hace que el padre COLOQUE, RECORTE y
-    // ATENÚE a sus hijos, cosa que con el árbol plano de antes no podía.
+    // si no la ProgressBar, si no el Image, si no el Panel, si no el Text—, que
+    // es el que aporta el rect contra el que anclarse. Eso es lo que hace que el
+    // padre COLOQUE, RECORTE y ATENÚE a sus hijos, cosa que con el árbol plano
+    // de antes no podía.
     //
-    // A nullptr todo cuelga de la raíz, que es exactamente lo que hacía antes de
+    // VACÍA, todo cuelga de la raíz, que es exactamente lo que hacía antes de
     // que esto existiera. El padre que no aparezca en parents (o que no tenga
     // ningún componente de UI) tampoco cuenta: su hijo sube a la raíz en vez de
     // desaparecer.
     template <class Loader>
-    inline void syncUiWidgets(const std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons,
-                              const std::vector<std::pair<uint64_t, const TextComponent*>>& texts,
-                              const std::vector<std::pair<uint64_t, const ProgressBarComponent*>>& bars,
-                              UiCanvas& canvas, UiWidgetSyncCache& cache, Loader& loader,
-                              const std::vector<std::pair<uint64_t, uint64_t>>* parents = nullptr,
-                              const std::vector<std::pair<uint64_t, const LayoutComponent*>>* layouts = nullptr)
+    inline void syncUiWidgets(const UiWidgetLists& w, UiCanvas& canvas,
+                              UiWidgetSyncCache& cache, Loader& loader)
     {
-        // Por puntero y al final, como parents, y no como una cuarta lista por
-        // valor: así las ~60 llamadas que ya existen (los tests, sobre todo)
-        // siguen compilando y significando lo mismo. A nullptr no hay ni un
-        // contenedor y el árbol sale idéntico al de antes de que esto existiera.
-        static const std::vector<std::pair<uint64_t, const LayoutComponent*>> kSinLayouts;
-        const auto& lays = layouts ? *layouts : kSinLayouts;
+        const auto& buttons = w.buttons;
+        const auto& texts   = w.texts;
+        const auto& bars    = w.bars;
+        const auto& lays    = w.layouts;
+        const auto& panels  = w.panels;
+        const auto& images  = w.images;
+        // Puntero y no referencia: vacía significa "sin jerarquía", que es un
+        // camino de montaje DISTINTO (todo a la raíz) y no una jerarquía de cero
+        // elementos.
+        const std::vector<std::pair<uint64_t, uint64_t>>* parents =
+            w.parents.empty() ? nullptr : &w.parents;
 
         auto resolveAtlas = [&](const std::string& path) -> UiTextureAtlas*
         {
@@ -257,7 +306,9 @@ namespace DonTopo
         bool rebuild = cache.buttonIds.size() != buttons.size() ||
                        cache.textIds.size() != texts.size() ||
                        cache.barIds.size() != bars.size() ||
-                       cache.layoutIds.size() != lays.size();
+                       cache.layoutIds.size() != lays.size() ||
+                       cache.panelIds.size() != panels.size() ||
+                       cache.imageIds.size() != images.size();
         for (size_t i = 0; !rebuild && i < buttons.size(); i++)
             if (cache.buttonIds[i] != buttons[i].first) rebuild = true;
         for (size_t i = 0; !rebuild && i < texts.size(); i++)
@@ -266,6 +317,10 @@ namespace DonTopo
             if (cache.barIds[i] != bars[i].first) rebuild = true;
         for (size_t i = 0; !rebuild && i < lays.size(); i++)
             if (cache.layoutIds[i] != lays[i].first) rebuild = true;
+        for (size_t i = 0; !rebuild && i < panels.size(); i++)
+            if (cache.panelIds[i] != panels[i].first) rebuild = true;
+        for (size_t i = 0; !rebuild && i < images.size(); i++)
+            if (cache.imageIds[i] != images[i].first) rebuild = true;
 
         // Un botón que gana o pierde etiqueta (texto vacío <-> no vacío) cambia
         // la FORMA del subárbol, y eso también obliga a reconstruir.
@@ -314,14 +369,23 @@ namespace DonTopo
             cache.layoutNodes.assign(lays.size(), nullptr);
             cache.layoutOwnsRect.assign(lays.size(), (char)0);
             cache.layoutPrev.assign(lays.size(), LayoutComponent{});
+            cache.panelIds.assign(panels.size(), 0ull);
+            cache.panelNodes.assign(panels.size(), nullptr);
+            cache.panelPrev.assign(panels.size(), PanelComponent{});
+            cache.imageIds.assign(images.size(), 0ull);
+            cache.imageNodes.assign(images.size(), nullptr);
+            cache.imagePrev.assign(images.size(), ImageComponent{});
 
             // Dónde está cada GameObject en cada lista, para poder montarlo
             // cuando toque su turno en el recorrido del árbol.
-            std::unordered_map<uint64_t, size_t> idxButton, idxBar, idxText, idxLayout;
+            std::unordered_map<uint64_t, size_t> idxButton, idxBar, idxText, idxLayout,
+                                                 idxPanel, idxImage;
             for (size_t i = 0; i < buttons.size(); i++) idxButton[buttons[i].first] = i;
             for (size_t i = 0; i < bars.size();    i++) idxBar[bars[i].first]       = i;
             for (size_t i = 0; i < texts.size();   i++) idxText[texts[i].first]     = i;
             for (size_t i = 0; i < lays.size();    i++) idxLayout[lays[i].first]    = i;
+            for (size_t i = 0; i < panels.size();  i++) idxPanel[panels[i].first]   = i;
+            for (size_t i = 0; i < images.size();  i++) idxImage[images[i].first]   = i;
 
             // Nodo del que cuelgan los HIJOS de cada GameObject.
             std::unordered_map<uint64_t, UiElement*> principal;
@@ -373,6 +437,29 @@ namespace DonTopo
                 return &p;
             };
 
+            auto creaPanel = [&](size_t i, UiElement& padre)
+            {
+                const auto& entry = panels[i];
+                Panel& p = padre.add<Panel>(uiPanelNodeName(entry.first));
+                cache.panelIds[i]   = entry.first;
+                cache.panelNodes[i] = &p;
+                // Un componente que no puede ser igual a ninguno real fuerza el
+                // primer volcado: un nodo recién creado ya nace sucio, pero los
+                // campos hay que escribirlos igual.
+                cache.panelPrev[i].sprite = "\x01(sin volcar)";
+                return &p;
+            };
+
+            auto creaImagen = [&](size_t i, UiElement& padre)
+            {
+                const auto& entry = images[i];
+                Image& im = padre.add<Image>(uiImageNodeName(entry.first));
+                cache.imageIds[i]   = entry.first;
+                cache.imageNodes[i] = &im;
+                cache.imagePrev[i].sprite = "\x01(sin volcar)";
+                return &im;
+            };
+
             auto creaTexto = [&](size_t i, UiElement& padre)
             {
                 const auto& entry = texts[i];
@@ -409,14 +496,17 @@ namespace DonTopo
             // hay, si no la barra, si no el texto.
             auto montaGameObject = [&](uint64_t id, UiElement& padre)
             {
-                UiElement* barra = nullptr;
-                UiElement* boton = nullptr;
-                UiElement* texto = nullptr;
-                UiElement* caja  = nullptr;
+                UiElement* panel  = nullptr;
+                UiElement* imagen = nullptr;
+                UiElement* barra  = nullptr;
+                UiElement* boton  = nullptr;
+                UiElement* texto  = nullptr;
+                UiElement* caja   = nullptr;
 
                 const auto itLayout = idxLayout.find(id);
                 const bool tieneWidget = idxBar.count(id) != 0 || idxButton.count(id) != 0 ||
-                                         idxText.count(id) != 0;
+                                         idxText.count(id) != 0 || idxPanel.count(id) != 0 ||
+                                         idxImage.count(id) != 0;
 
                 // El contenedor PRIMERO: es el que aporta el rect y del que
                 // colgarán los hijos. Solo cuando no hay ningún widget en el
@@ -424,11 +514,19 @@ namespace DonTopo
                 if (itLayout != idxLayout.end() && !tieneWidget)
                     caja = montaLayout(itLayout->second, id, padre, nullptr);
 
+                // De abajo arriba: el panel es el fondo, y el texto el que tiene
+                // que quedar encima de todo.
+                if (auto it = idxPanel.find(id);  it != idxPanel.end())  panel  = creaPanel(it->second, padre);
+                if (auto it = idxImage.find(id);  it != idxImage.end())  imagen = creaImagen(it->second, padre);
                 if (auto it = idxBar.find(id);    it != idxBar.end())    barra = creaBarra(it->second, padre);
                 if (auto it = idxButton.find(id); it != idxButton.end()) boton = creaBoton(it->second, padre);
                 if (auto it = idxText.find(id);   it != idxText.end())   texto = creaTexto(it->second, padre);
 
-                UiElement* princ = boton ? boton : (barra ? barra : (texto ? texto : caja));
+                UiElement* princ = boton ? boton
+                                         : (barra ? barra
+                                                  : (imagen ? imagen
+                                                            : (panel ? panel
+                                                                     : (texto ? texto : caja))));
                 principal[id] = princ;
 
                 // Con widget en el mismo GameObject, el layout escribe en el nodo
@@ -468,6 +566,12 @@ namespace DonTopo
                 for (const auto& entry : texts)
                     if (principal.find(entry.first) == principal.end())
                         montaGameObject(entry.first, canvas.root());
+                for (const auto& entry : panels)
+                    if (principal.find(entry.first) == principal.end())
+                        montaGameObject(entry.first, canvas.root());
+                for (const auto& entry : images)
+                    if (principal.find(entry.first) == principal.end())
+                        montaGameObject(entry.first, canvas.root());
                 for (const auto& entry : lays)
                     if (principal.find(entry.first) == principal.end())
                         montaGameObject(entry.first, canvas.root());
@@ -476,7 +580,11 @@ namespace DonTopo
             {
                 // Sin jerarquía: TODO cuelga de la raíz y en el orden de
                 // siempre —botones, barras y textos—, que es lo que esperan las
-                // escenas montadas antes de que la jerarquía existiera.
+                // escenas montadas antes de que la jerarquía existiera. Los
+                // paneles y las imágenes van DELANTE, que es donde va un fondo:
+                // no tienen orden heredado que respetar, son posteriores.
+                for (size_t i = 0; i < panels.size();  i++) creaPanel(i, canvas.root());
+                for (size_t i = 0; i < images.size();  i++) creaImagen(i, canvas.root());
                 for (size_t i = 0; i < buttons.size(); i++) creaBoton(i, canvas.root());
                 for (size_t i = 0; i < bars.size();    i++) creaBarra(i, canvas.root());
                 for (size_t i = 0; i < texts.size();   i++) creaTexto(i, canvas.root());
@@ -494,6 +602,10 @@ namespace DonTopo
                         compartido = cache.buttonNodes[it->second];
                     else if (auto itb = idxBar.find(id); itb != idxBar.end())
                         compartido = cache.barNodes[itb->second];
+                    else if (auto iti = idxImage.find(id); iti != idxImage.end())
+                        compartido = cache.imageNodes[iti->second];
+                    else if (auto itp = idxPanel.find(id); itp != idxPanel.end())
+                        compartido = cache.panelNodes[itp->second];
                     else if (auto itt = idxText.find(id); itt != idxText.end())
                         compartido = cache.textNodes[itt->second];
 
@@ -539,6 +651,32 @@ namespace DonTopo
                 label->markDirty(UiElement::DirtyAll);
             }
             cache.buttonPrev[i] = src;
+        }
+
+        for (size_t i = 0; i < panels.size(); i++)
+        {
+            const PanelComponent& src = *panels[i].second;
+            if (src == cache.panelPrev[i]) continue;   // nada que tocar este frame
+
+            Panel& p = *cache.panelNodes[i];
+            src.applyTo(p);
+            p.atlas = resolveAtlas(src.atlasPath);
+            // Ensuciar es responsabilidad de quien escribe los campos. DirtyAll
+            // porque aquí se reescribe el nodo entero (rect, color y sprite).
+            p.markDirty(UiElement::DirtyAll);
+            cache.panelPrev[i] = src;
+        }
+
+        for (size_t i = 0; i < images.size(); i++)
+        {
+            const ImageComponent& src = *images[i].second;
+            if (src == cache.imagePrev[i]) continue;
+
+            Image& im = *cache.imageNodes[i];
+            src.applyTo(im);
+            im.atlas = resolveAtlas(src.atlasPath);
+            im.markDirty(UiElement::DirtyAll);
+            cache.imagePrev[i] = src;
         }
 
         for (size_t i = 0; i < bars.size(); i++)

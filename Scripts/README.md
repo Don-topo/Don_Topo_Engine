@@ -116,12 +116,12 @@ Up/Down/Left/Right/A..Z/Num0..Num9`, `MouseButton.Left/Right/Middle`.
 | `entity:GetTransform()` | Devuelve `Transform` |
 | `entity:GetParent()` | `Entity` del padre, o `nil` si es raíz |
 | `entity:GetChildren()` | Tabla (array 1-based) de `Entity` hijos |
-| `entity:GetComponent(name)` | Devuelve el componente si existe, si no `nil`. `name`: `"BoxCollider"`, `"SphereCollider"`, `"CapsuleCollider"`, `"PlaneCollider"`, `"AudioClip"`, `"Rigidbody"`, `"Animator"`, `"Canvas"`, `"Button"`, `"Text"`, `"ProgressBar"`, `"Layout"`, o `"Script:<NombreClase>"` pa acceder a la instancia de otro script en el mismo GameObject |
+| `entity:GetComponent(name)` | Devuelve el componente si existe, si no `nil`. `name`: `"BoxCollider"`, `"SphereCollider"`, `"CapsuleCollider"`, `"PlaneCollider"`, `"AudioClip"`, `"Rigidbody"`, `"Animator"`, `"Canvas"`, `"Button"`, `"Text"`, `"ProgressBar"`, `"Layout"`, `"Panel"`, `"Image"`, o `"Script:<NombreClase>"` pa acceder a la instancia de otro script en el mismo GameObject |
 | `entity:AddComponent(name, arg?)` | Añade componente (mismos defaults que el botón Add del editor; colliders mutuamente excluyentes). `AudioClip` requiere `arg` = ruta del asset. Los cinco de UI no se excluyen entre sí y pedir uno que ya está devuelve el que hay. `"Script:<Nombre>"` añade el script (Awake/Start se disparan en el siguiente lifecycle update) |
 | `entity:RemoveComponent(name)` | Quita el componente (scripts se remueven diferido, al final del frame) |
-| `entity:GetCanvas()` / `GetButton()` / `GetText()` / `GetProgressBar()` / `GetLayout()` | El componente de UI, o `nil` si no lo tiene |
-| `entity:AddCanvas()` / `AddButton()` / `AddText()` / `AddProgressBar()` / `AddLayout()` | Lo crea con los valores por defecto del componente y devuelve el wrapper; si ya existe devuelve el que hay sin pisarlo |
-| `entity:RemoveCanvas()` / `RemoveButton()` / `RemoveText()` / `RemoveProgressBar()` / `RemoveLayout()` | Lo quita del GameObject |
+| `entity:GetCanvas()` / `GetButton()` / `GetText()` / `GetProgressBar()` / `GetLayout()` / `GetPanel()` / `GetImage()` | El componente de UI, o `nil` si no lo tiene |
+| `entity:AddCanvas()` / `AddButton()` / `AddText()` / `AddProgressBar()` / `AddLayout()` / `AddPanel()` / `AddImage()` | Lo crea con los valores por defecto del componente y devuelve el wrapper; si ya existe devuelve el que hay sin pisarlo |
+| `entity:RemoveCanvas()` / `RemoveButton()` / `RemoveText()` / `RemoveProgressBar()` / `RemoveLayout()` / `RemovePanel()` / `RemoveImage()` | Lo quita del GameObject |
 
 ## Transform
 
@@ -395,11 +395,11 @@ function Fade:Update(dt)
 end
 ```
 
-## UI — Canvas / Button / Text / ProgressBar / Layout
+## UI — Canvas / Button / Text / ProgressBar / Layout / Panel / Image
 
-Los cinco se obtienen con `entity:GetCanvas()`, `entity:GetButton()`,
-`entity:GetText()`, `entity:GetProgressBar()` y `entity:GetLayout()` (o
-`GetComponent("Button")`, etc.).
+Los siete se obtienen con `entity:GetCanvas()`, `entity:GetButton()`,
+`entity:GetText()`, `entity:GetProgressBar()`, `entity:GetLayout()`,
+`entity:GetPanel()` y `entity:GetImage()` (o `GetComponent("Button")`, etc.).
 Devuelven `nil` si el componente no está; el wrapper resuelve el componente **en
 cada acceso**, así que usarlo después de quitarlo da error de Lua, no memoria
 liberada.
@@ -420,6 +420,9 @@ Los enums viajan como tablas de constantes enteras:
 | `UiProgressFillDirection` | `LeftToRight`, `RightToLeft`, `BottomToTop`, `TopToBottom` |
 | `UiButtonTransition` | `ColorTint`, `SpriteSwap`, `Animation` |
 | `UiButtonState` | `Normal`, `Hover`, `Pressed`, `Disabled`, `Selected` |
+| `UiImageMode` | `Normal`, `Tiled`, `Sliced`, `Filled` |
+| `UiFillDirection` | `Horizontal`, `Vertical` |
+| `UiFillOrigin` | `Start`, `End` |
 
 ### Canvas
 
@@ -514,6 +517,53 @@ menu.mode = UiLayoutMode.Vertical
 menu.paddingLeft, menu.paddingTop = 12, 12
 menu:SetSpacing(0, 8)
 menu:SetSize(240, 300)
+```
+
+### Panel
+
+El rectángulo de fondo: sin atlas es un quad de color plano, con atlas el sprite
+estirado al rect. No tiene campos propios más allá del rect, el color y el
+sprite — el `Panel` del núcleo tampoco los tiene.
+
+| Propiedad / Método | Descripción |
+| --- | --- |
+| `p.visible` | Se dibuja o no |
+| `p.raycastTarget` | A `false` deja pasar el ratón a lo que tenga detrás. Un fondo a pantalla completa con esto a `true` se come **todos** los clics, y no hay nada que lo delate a la vista |
+| `p.atlasPath` | Imagen del panel. Vacía = color plano |
+| `p.sprite` | Nombre del sub-rect dentro del atlas. Vacío = la imagen entera |
+| `p:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
+| `p:GetColor/SetColor(r,g,b,a)` | Color (tinte si hay sprite) |
+
+### Image
+
+El sprite con sus cuatro modos de reparto dentro del rect. Los cuatro se
+resuelven en CPU dentro del batcher (N quads del mismo atlas y el mismo
+scissor): ni un shader ni un pipeline de más.
+
+| Propiedad / Método | Descripción |
+| --- | --- |
+| `i.visible` / `i.raycastTarget` | Igual que en el `Panel` |
+| `i.atlasPath` / `i.sprite` | Imagen y nombre del sub-rect |
+| `i.mode` | `UiImageMode.Normal` / `Tiled` / `Sliced` / `Filled` |
+| `i.borderLeft` / `borderRight` / `borderTop` / `borderBottom` | Solo `Sliced`. Píxeles **del sprite**, no del rect: escalar el elemento no los mueve |
+| `i.fillCenter` | Solo `Sliced`. A `false` salen 8 quads en vez de 9: es lo que quiere un marco que deja ver lo de detrás |
+| `i.maxTiles` | Solo `Tiled`. Tope duro de quads; pasado el tope el elemento se dibuja como `Normal` en vez de reventar el buffer de vértices |
+| `i.fillDirection` | Solo `Filled`. `UiFillDirection.Horizontal` / `Vertical` |
+| `i.fillOrigin` | Solo `Filled`. `UiFillOrigin.Start` / `End`. `Start` es izquierda en `Horizontal` y arriba en `Vertical` |
+| `i.fillAmount` | Solo `Filled`. `0..1`; a `0` no se emite ni un quad |
+| `i:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
+| `i:GetColor/SetColor(r,g,b,a)` | Tinte del sprite (se multiplica) |
+
+```lua
+-- Marco de 9-slice que no deforma las esquinas al estirarse
+local marco = self.entity:GetImage() or self.entity:AddImage()
+marco.atlasPath = "assets/ui/frames.png"
+marco.sprite = "ventana"
+marco.mode = UiImageMode.Sliced
+marco.borderLeft, marco.borderRight = 12, 12
+marco.borderTop, marco.borderBottom = 12, 12
+marco.fillCenter = false
+marco:SetSize(400, 260)
 ```
 
 ### Callbacks del Button: qué los mata y qué no

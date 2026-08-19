@@ -165,6 +165,22 @@ private:
     // componentes de UI, con el rect del contenedor, el modo y sus parámetros
     // (padding, spacing, celda, columnas), los fitters y el ignoreLayout.
     void drawLayoutSection(EditorContext& ctx);
+    // Panel: el rectángulo de fondo de la UI 2D. Sección tras "Add" como las
+    // otras, con el rect, el color, raycastTarget y el par atlas/sprite.
+    void drawPanelSection(EditorContext& ctx);
+    // Drena el file dialog del atlas del Panel. Fuera de la sección y por el
+    // mismo motivo que el de la ProgressBar: si no se drena siempre, cambiar de
+    // selección con el diálogo abierto deja el flag atascado.
+    void drawPanelPathDialog(EditorContext& ctx);
+    // Escribe la ruta del atlas del Panel (desde el diálogo o desde un drop),
+    // con el veto por extensión en un solo sitio.
+    void setPanelAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
+
+    // Image: el sprite de la UI 2D con sus cuatro modos. Mismo patrón que el
+    // Panel más el bloque propio del widget (bordes, tiles y Filled).
+    void drawImageSection(EditorContext& ctx);
+    void drawImagePathDialog(EditorContext& ctx);
+    void setImageAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
     void drawAudioClipDialog(EditorContext& ctx);
     void drawScriptsSection(EditorContext& ctx);
     void drawAddComponentButton(EditorContext& ctx);
@@ -278,6 +294,22 @@ private:
     const char* m_layoutDragField   = nullptr;
     float       m_layoutDragBefore  = 0.0f;
     glm::vec2   m_layoutDragBefore2 {0.0f};
+
+    // Y lo mismo para el Panel y para el Image, cada uno con el suyo: los dos
+    // caben en el mismo GameObject (y con el Button, el Text y la barra), así
+    // que un "before" compartido mezclaría arrastres de componentes distintos.
+    uint64_t    m_panelDragOwnerId = 0;
+    const char* m_panelDragField   = nullptr;
+    glm::vec2   m_panelDragBefore2 {0.0f};
+    glm::vec4   m_panelDragBefore4 {1.0f};
+    std::string m_panelDragBeforeStr;
+
+    uint64_t    m_imageDragOwnerId = 0;
+    const char* m_imageDragField   = nullptr;
+    float       m_imageDragBefore  = 0.0f;
+    glm::vec2   m_imageDragBefore2 {0.0f};
+    glm::vec4   m_imageDragBefore4 {1.0f};
+    std::string m_imageDragBeforeStr;
 
     // Box Collider – mismo patrón de cache que Transform: persiste entre
     // frames para que los DragFloat acumulen el delta del arrastre, y se
@@ -399,6 +431,18 @@ private:
     int      m_barAtlasDlgField = 0;   // 0 atlas, 1 fondo, 2 relleno
     std::unique_ptr<IGFD::FileDialog> m_barAtlasFileDialog;
     std::string m_barPathError;
+
+    // Atlas del Panel y del Image. Instancia de diálogo propia cada uno (nunca
+    // compartida) y su propio id de dueño, por la misma razón que las demás.
+    bool     m_panelAtlasDlgOpen  = false;
+    uint64_t m_panelAtlasDlgOwner = 0;
+    std::unique_ptr<IGFD::FileDialog> m_panelAtlasFileDialog;
+    std::string m_panelPathError;
+
+    bool     m_imageAtlasDlgOpen  = false;
+    uint64_t m_imageAtlasDlgOwner = 0;
+    std::unique_ptr<IGFD::FileDialog> m_imageAtlasFileDialog;
+    std::string m_imagePathError;
     // Mismo patrón que m_meshLoadError/m_meshAddRequestedFor pero para el
     // componente AudioClip.
     std::string m_audioLoadError;

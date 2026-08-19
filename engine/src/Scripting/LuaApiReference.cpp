@@ -67,6 +67,8 @@ const std::vector<std::string>& baseSymbols()
         "Entity:AddCanvas", "Entity:AddButton", "Entity:AddText", "Entity:AddProgressBar",
         "Entity:RemoveCanvas", "Entity:RemoveButton", "Entity:RemoveText",
         "Entity:RemoveProgressBar",
+        "Entity:GetPanel", "Entity:AddPanel", "Entity:RemovePanel",
+        "Entity:GetImage", "Entity:AddImage", "Entity:RemoveImage",
 
         // Transform
         "Transform:GetPosition", "Transform:SetPosition",
@@ -173,6 +175,27 @@ const std::vector<std::string>& baseSymbols()
         "Layout:GetSpacing", "Layout:SetSpacing",
         "Layout:GetCellSize", "Layout:SetCellSize",
 
+        // UI 2D — Panel (el rectángulo de fondo)
+        "Panel.visible", "Panel.raycastTarget", "Panel.atlasPath", "Panel.sprite",
+        "Panel:GetAnchorMin", "Panel:SetAnchorMin",
+        "Panel:GetAnchorMax", "Panel:SetAnchorMax",
+        "Panel:GetPivot", "Panel:SetPivot",
+        "Panel:GetPosition", "Panel:SetPosition",
+        "Panel:GetSize", "Panel:SetSize",
+        "Panel:GetColor", "Panel:SetColor",
+
+        // UI 2D — Image (sprite con Normal/Tiled/Sliced/Filled)
+        "Image.visible", "Image.raycastTarget", "Image.atlasPath", "Image.sprite",
+        "Image.mode", "Image.borderLeft", "Image.borderRight", "Image.borderTop",
+        "Image.borderBottom", "Image.fillCenter", "Image.maxTiles",
+        "Image.fillDirection", "Image.fillOrigin", "Image.fillAmount",
+        "Image:GetAnchorMin", "Image:SetAnchorMin",
+        "Image:GetAnchorMax", "Image:SetAnchorMax",
+        "Image:GetPivot", "Image:SetPivot",
+        "Image:GetPosition", "Image:SetPosition",
+        "Image:GetSize", "Image:SetSize",
+        "Image:GetColor", "Image:SetColor",
+
         // UI 2D — enums (tablas de enteros que registra registerUi)
         "UiScaleMode.ConstantPixelSize", "UiScaleMode.ScaleWithScreenSize",
         "UiScaleMode.ConstantPhysicalSize",
@@ -186,6 +209,10 @@ const std::vector<std::string>& baseSymbols()
         "UiLayoutMode.None", "UiLayoutMode.Horizontal", "UiLayoutMode.Vertical",
         "UiLayoutMode.Grid",
         "UiCrossAlign.Start", "UiCrossAlign.Center", "UiCrossAlign.End",
+        "UiImageMode.Normal", "UiImageMode.Tiled", "UiImageMode.Sliced",
+        "UiImageMode.Filled",
+        "UiFillDirection.Horizontal", "UiFillDirection.Vertical",
+        "UiFillOrigin.Start", "UiFillOrigin.End",
         "UiButtonTransition.ColorTint", "UiButtonTransition.SpriteSwap",
         "UiButtonTransition.Animation",
         "UiButtonState.Normal", "UiButtonState.Hover", "UiButtonState.Pressed",

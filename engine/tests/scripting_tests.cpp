@@ -32,7 +32,9 @@
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
 #include "DonTopo/UI/TextComponent.h"
+#include "DonTopo/UI/ImageComponent.h"
 #include "DonTopo/UI/LayoutComponent.h"
+#include "DonTopo/UI/PanelComponent.h"
 #include "DonTopo/UI/ProgressBarComponent.h"
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiSpriteBatch.h"
@@ -343,6 +345,29 @@ struct FakeUiLoader
     UiTextureAtlas* loadUiAtlas(const std::string&) { return nullptr; }
     UiFont*         loadUiFont(const std::string&)  { return nullptr; }
 };
+
+// Adaptador SOLO DE TESTS a la firma que syncUiWidgets tenía antes de que las
+// listas se agruparan en UiWidgetLists. Mismo apaño que en camera_tests.cpp: la
+// API de producción es UNA (la de la struct) y esto solo evita reescribir las
+// llamadas que prueban otra cosa. Las aridades no se solapan, así que ADL no
+// tiene nada que desempatar.
+template <class Loader>
+static void syncUiWidgets(
+    const std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons,
+    const std::vector<std::pair<uint64_t, const TextComponent*>>& texts,
+    const std::vector<std::pair<uint64_t, const ProgressBarComponent*>>& bars,
+    UiCanvas& canvas, UiWidgetSyncCache& cache, Loader& loader,
+    const std::vector<std::pair<uint64_t, uint64_t>>* parents = nullptr,
+    const std::vector<std::pair<uint64_t, const LayoutComponent*>>* layouts = nullptr)
+{
+    UiWidgetLists w;
+    w.buttons = buttons;
+    w.texts   = texts;
+    w.bars    = bars;
+    if (layouts) w.layouts = *layouts;
+    if (parents) w.parents = *parents;
+    DonTopo::syncUiWidgets(w, canvas, cache, loader);
+}
 
 // Un click completo sobre p: un frame de hover, uno con el botón abajo y otro
 // con el botón arriba. El hit test necesita rects, o sea un buildDrawData
@@ -693,6 +718,152 @@ static void test_ui_layout_desde_lua(ScriptManager& sm)
     CHECK(r2.valid());
     CHECK(sm.lua()["trasRemove"].get<bool>());
     CHECK(!go->hasLayout());
+}
+
+// El Panel desde Lua: mismo contrato que los otros componentes de UI (getter que
+// da nil sin componente, Add, campos, Remove). Valores no neutros y distintos
+// entre sí: un campo que el binding no escriba no puede pasar por el default.
+static void test_ui_panel_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Marco");
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        sinPanel = (e:GetPanel() == nil)
+
+        local p = e:AddPanel()
+        p.visible = false
+        p.raycastTarget = false
+        p.atlasPath = "assets/ui/frames.png"
+        p.sprite = "marco_dorado"
+        p:SetPosition(21, 23)
+        p:SetSize(410, 260)
+        p:SetAnchorMin(0.125, 0.25)
+        p:SetAnchorMax(0.75, 0.875)
+        p:SetPivot(0.3125, 0.40625)
+        p:SetColor(0.11, 0.12, 0.13, 0.14)
+
+        trasAdd = (e:GetPanel() ~= nil)
+        spriteLeido = p.sprite
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) return;
+
+    CHECK(sm.lua()["sinPanel"].get<bool>());
+    CHECK(sm.lua()["trasAdd"].get<bool>());
+    CHECK(go->hasPanel());
+    if (!go->hasPanel()) return;
+
+    const PanelComponent& p = *go->getPanel();
+    CHECK(p.visible == false);
+    CHECK(p.raycastTarget == false);
+    CHECK(p.atlasPath == "assets/ui/frames.png");
+    CHECK(p.sprite == "marco_dorado");
+    CHECK(nearlyEqual(p.position.x, 21.0f));
+    CHECK(nearlyEqual(p.position.y, 23.0f));
+    CHECK(nearlyEqual(p.size.x, 410.0f));
+    CHECK(nearlyEqual(p.size.y, 260.0f));
+    CHECK(nearlyEqual(p.anchorMin.x, 0.125f));
+    CHECK(nearlyEqual(p.anchorMin.y, 0.25f));
+    CHECK(nearlyEqual(p.anchorMax.x, 0.75f));
+    CHECK(nearlyEqual(p.anchorMax.y, 0.875f));
+    CHECK(nearlyEqual(p.pivot.x, 0.3125f));
+    CHECK(nearlyEqual(p.pivot.y, 0.40625f));
+    CHECK(nearlyEqual(p.color.r, 0.11f));
+    CHECK(nearlyEqual(p.color.a, 0.14f));
+
+    // Y el camino de vuelta: lo que Lua LEE es lo que hay en el componente.
+    CHECK(sm.lua()["spriteLeido"].get<std::string>() == "marco_dorado");
+
+    auto r2 = sm.lua().safe_script(R"(
+        e:RemovePanel()
+        trasRemove = (e:GetPanel() == nil)
+    )", sol::script_pass_on_error);
+    CHECK(r2.valid());
+    CHECK(sm.lua()["trasRemove"].get<bool>());
+    CHECK(!go->hasPanel());
+}
+
+// El Image desde Lua. Además del rect, los campos PROPIOS del widget del núcleo:
+// modo, bordes del 9-slice, tope de tiles y el bloque de Filled.
+static void test_ui_image_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Icono");
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        sinImage = (e:GetImage() == nil)
+
+        local i = e:AddImage()
+        i.visible = false
+        i.raycastTarget = false
+        i.atlasPath = "assets/ui/iconos.png"
+        i.sprite = "corazon"
+        i.mode = UiImageMode.Sliced
+        i.borderLeft = 3
+        i.borderRight = 5
+        i.borderTop = 7
+        i.borderBottom = 9
+        i.fillCenter = false
+        i.maxTiles = 777
+        i.fillDirection = UiFillDirection.Vertical
+        i.fillOrigin = UiFillOrigin.End
+        i.fillAmount = 0.375
+        i:SetPosition(31, 37)
+        i:SetSize(64, 48)
+
+        trasAdd = (e:GetImage() ~= nil)
+        modoLeido = i.mode
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) return;
+
+    CHECK(sm.lua()["sinImage"].get<bool>());
+    CHECK(sm.lua()["trasAdd"].get<bool>());
+    CHECK(go->hasImage());
+    if (!go->hasImage()) return;
+
+    const ImageComponent& im = *go->getImage();
+    CHECK(im.visible == false);
+    CHECK(im.raycastTarget == false);
+    CHECK(im.atlasPath == "assets/ui/iconos.png");
+    CHECK(im.sprite == "corazon");
+    CHECK(im.mode == UiImageMode::Sliced);
+    CHECK(nearlyEqual(im.borderLeft, 3.0f));
+    CHECK(nearlyEqual(im.borderRight, 5.0f));
+    CHECK(nearlyEqual(im.borderTop, 7.0f));
+    CHECK(nearlyEqual(im.borderBottom, 9.0f));
+    CHECK(im.fillCenter == false);
+    CHECK(im.maxTiles == 777u);
+    CHECK(im.fillDirection == UiFillDirection::Vertical);
+    CHECK(im.fillOrigin == UiFillOrigin::End);
+    CHECK(nearlyEqual(im.fillAmount, 0.375f));
+    CHECK(nearlyEqual(im.position.x, 31.0f));
+    CHECK(nearlyEqual(im.position.y, 37.0f));
+    CHECK(nearlyEqual(im.size.x, 64.0f));
+    CHECK(nearlyEqual(im.size.y, 48.0f));
+
+    CHECK(sm.lua()["modoLeido"].get<int>() == (int)UiImageMode::Sliced);
+
+    auto r2 = sm.lua().safe_script(R"(
+        e:RemoveImage()
+        trasRemove = (e:GetImage() == nil)
+    )", sol::script_pass_on_error);
+    CHECK(r2.valid());
+    CHECK(sm.lua()["trasRemove"].get<bool>());
+    CHECK(!go->hasImage());
 }
 
 // Lo que un script escribe en el COMPONENTE llega al nodo vivo en el siguiente
@@ -1225,6 +1396,8 @@ int main()
     test_ui_lua_escribe_todos_los_campos(sm);
     test_ui_getter_nil_add_y_remove(sm);
     test_ui_layout_desde_lua(sm);
+    test_ui_panel_desde_lua(sm);
+    test_ui_image_desde_lua(sm);
     test_ui_valor_de_lua_llega_al_nodo(sm);
     test_ui_click_sobrevive_a_la_reconstruccion(sm);
     test_ui_callback_no_invoca_estado_viejo(sm);

@@ -522,6 +522,32 @@ void ViewportPanel::drawProgressBarGizmo(EditorContext& ctx, const glm::vec2& im
                     imagePos, imageSize);
 }
 
+void ViewportPanel::drawPanelGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                    const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasPanel() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
+                                         uiPanelNodeName(ctx.selected->id)),
+                    imagePos, imageSize);
+}
+
+void ViewportPanel::drawImageGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                    const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasImage() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
+                                         uiImageNodeName(ctx.selected->id)),
+                    imagePos, imageSize);
+}
+
 void ViewportPanel::drawLayoutGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                                      const glm::vec2& imageSize)
 {
@@ -563,6 +589,14 @@ GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mou
         // El nodo del relleno ("bar:7/Fill") también devuelve su dueño, así que
         // clicar dentro de la parte llena selecciona la barra igual.
         if (const uint64_t owner = uiProgressBarOwnerId(n->name))
+            return ctx.scene->findById(owner);
+        if (const uint64_t owner = uiImageOwnerId(n->name))
+            return ctx.scene->findById(owner);
+        // El Panel el ÚLTIMO de los cinco: es el fondo, así que un widget encima
+        // suyo tiene que ganar el clic. Como el hit test devuelve el nodo más
+        // profundo y esto sube por los padres, el orden de aquí solo desempata
+        // entre nodos del MISMO GameObject.
+        if (const uint64_t owner = uiPanelOwnerId(n->name))
             return ctx.scene->findById(owner);
     }
     return nullptr;
@@ -704,6 +738,8 @@ void ViewportPanel::draw(EditorContext& ctx, uint64_t viewportTexture, const glm
     drawTextGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawProgressBarGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawLayoutGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    drawPanelGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    drawImageGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     // Hover de la IMAGEN, no de la ventana: con esto un popup o cualquier otra
     // ventana por encima ya no cuenta como clic en la escena.
     const bool imageHovered = ImGui::IsItemHovered();

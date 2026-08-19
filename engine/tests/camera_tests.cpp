@@ -16,7 +16,9 @@
 #include "DonTopo/Editor/PropertiesPanel.h"
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/UI/ImageComponent.h"
 #include "DonTopo/UI/LayoutComponent.h"
+#include "DonTopo/UI/PanelComponent.h"
 #include "DonTopo/UI/TextComponent.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -969,6 +971,33 @@ struct FakeUiLoader
     UiFont*         loadUiFont(const std::string&)  { fontLoads++;  return nullptr; }
 };
 
+// Adaptador SOLO DE TESTS a la firma que syncUiWidgets tenía antes de que las
+// listas se agruparan en UiWidgetLists. Está aquí y no en el motor a propósito:
+// la API de producción es UNA (la de la struct), y esto existe para no reescribir
+// las ~65 llamadas de este fichero, que prueban el montaje del árbol y no la
+// forma de pasarle las listas. Los tests nuevos llaman a la de verdad.
+//
+// Vive en el ámbito global y la de producción en DonTopo, así que las dos son
+// candidatas por ADL; no hay ambigüedad porque las aridades no se solapan (esta
+// pide seis argumentos como mínimo y aquella exactamente cuatro).
+template <class Loader>
+static void syncUiWidgets(
+    const std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons,
+    const std::vector<std::pair<uint64_t, const TextComponent*>>& texts,
+    const std::vector<std::pair<uint64_t, const ProgressBarComponent*>>& bars,
+    UiCanvas& canvas, UiWidgetSyncCache& cache, Loader& loader,
+    const std::vector<std::pair<uint64_t, uint64_t>>* parents = nullptr,
+    const std::vector<std::pair<uint64_t, const LayoutComponent*>>* layouts = nullptr)
+{
+    UiWidgetLists w;
+    w.buttons = buttons;
+    w.texts   = texts;
+    w.bars    = bars;
+    if (layouts) w.layouts = *layouts;
+    if (parents) w.parents = *parents;
+    DonTopo::syncUiWidgets(w, canvas, cache, loader);
+}
+
 // Editar un campo del componente tiene que verse en el siguiente frame. El
 // árbol cachea los vértices por nodo, así que un sync que escribe los campos y
 // no ensucia el nodo deja el botón clavado donde estaba.
@@ -1586,7 +1615,10 @@ static void test_collect_ui_widgets_salta_los_intermedios_sin_ui()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    scene.collectUiWidgets(botones, textos, barras, layouts, jerarquia);
+    UiWidgetLists lists;
+    scene.collectUiWidgets(lists);
+    botones = lists.buttons; textos = lists.texts; barras = lists.bars;
+    layouts = lists.layouts; jerarquia = lists.parents;
 
     CHECK(botones.size() == 1);
     CHECK(textos.size() == 1);
@@ -2210,7 +2242,10 @@ static void test_layout_container_places_children()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    scene.collectUiWidgets(botones, textos, barras, layouts, jerarquia);
+    UiWidgetLists lists;
+    scene.collectUiWidgets(lists);
+    botones = lists.buttons; textos = lists.texts; barras = lists.bars;
+    layouts = lists.layouts; jerarquia = lists.parents;
     CHECK(layouts.size() == 1);
 
     UiCanvas canvas;
@@ -2271,7 +2306,10 @@ static void test_layout_on_widget_uses_its_node()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    scene.collectUiWidgets(botones, textos, barras, layouts, jerarquia);
+    UiWidgetLists lists;
+    scene.collectUiWidgets(lists);
+    botones = lists.buttons; textos = lists.texts; barras = lists.bars;
+    layouts = lists.layouts; jerarquia = lists.parents;
 
     UiCanvas canvas;
     UiWidgetSyncCache cache;
@@ -2334,7 +2372,10 @@ static void test_layout_ignore_layout_child_keeps_its_anchor()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    scene.collectUiWidgets(botones, textos, barras, layouts, jerarquia);
+    UiWidgetLists lists;
+    scene.collectUiWidgets(lists);
+    botones = lists.buttons; textos = lists.texts; barras = lists.bars;
+    layouts = lists.layouts; jerarquia = lists.parents;
     CHECK(layouts.size() == 2);
 
     UiCanvas canvas;
@@ -2375,7 +2416,10 @@ static void test_collect_ui_widgets_incluye_los_layouts()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    scene.collectUiWidgets(botones, textos, barras, layouts, jerarquia);
+    UiWidgetLists lists;
+    scene.collectUiWidgets(lists);
+    botones = lists.buttons; textos = lists.texts; barras = lists.bars;
+    layouts = lists.layouts; jerarquia = lists.parents;
 
     CHECK(layouts.size() == 1);
     CHECK(botones.size() == 1);
@@ -2652,6 +2696,554 @@ static void test_layout_hit_test_maps_back_to_gameobject()
     CHECK(uiProgressBarOwnerId(uiLayoutNodeName(42ull)) == 0ull);
 }
 
+// ── Panel ───────────────────────────────────────────────────────────────────
+// El Panel del núcleo (UiWidgets.h) es un UiElement sin campos propios: es el
+// rectángulo de fondo con el que se montan marcos y grupos. El componente de
+// escena expone lo mismo que el resto —el rect, el color, la visibilidad y el
+// par atlas/sprite— más raycastTarget, que el núcleo sí tiene y que en un panel
+// de fondo es justo el campo que decide si se come los clics de lo de detrás.
+//
+// Valores NO neutros y DISTINTOS entre sí: con el default (o con dos campos
+// iguales) un round-trip pasa igual aunque fromJson se salte el campo o lea la
+// clave equivocada.
+static void fillPanel(PanelComponent& p)
+{
+    p.anchorMin = glm::vec2(0.0625f, 0.1875f);
+    p.anchorMax = glm::vec2(0.5625f, 0.8125f);
+    p.pivot     = glm::vec2(0.25f, 0.75f);
+    p.position  = glm::vec2(13.5f, -27.25f);
+    p.size      = glm::vec2(311.5f, 122.25f);
+    p.color     = glm::vec4(0.31f, 0.32f, 0.33f, 0.34f);
+    p.visible   = false;
+
+    p.raycastTarget = false;
+
+    p.atlasPath = "assets/ui/frames.png";
+    p.sprite    = "marco_dorado";
+}
+
+static void checkPanelMatchesFilled(const PanelComponent& p)
+{
+    CHECK(nearlyEqual(p.anchorMin.x, 0.0625f));
+    CHECK(nearlyEqual(p.anchorMin.y, 0.1875f));
+    CHECK(nearlyEqual(p.anchorMax.x, 0.5625f));
+    CHECK(nearlyEqual(p.anchorMax.y, 0.8125f));
+    CHECK(nearlyEqual(p.pivot.x, 0.25f));
+    CHECK(nearlyEqual(p.pivot.y, 0.75f));
+    CHECK(nearlyEqual(p.position.x, 13.5f));
+    CHECK(nearlyEqual(p.position.y, -27.25f));
+    CHECK(nearlyEqual(p.size.x, 311.5f));
+    CHECK(nearlyEqual(p.size.y, 122.25f));
+    CHECK(nearlyEqual(p.color.r, 0.31f));
+    CHECK(nearlyEqual(p.color.g, 0.32f));
+    CHECK(nearlyEqual(p.color.b, 0.33f));
+    CHECK(nearlyEqual(p.color.a, 0.34f));
+    CHECK(p.visible == false);
+    CHECK(p.raycastTarget == false);
+    CHECK(p.atlasPath == "assets/ui/frames.png");
+    CHECK(p.sprite == "marco_dorado");
+}
+
+static void test_panel_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* go = scene.addGameObject("Marco", canvasGo);
+    auto panel = std::make_shared<PanelComponent>();
+    fillPanel(*panel);
+    go->setPanel(panel);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasPanel()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "Marco");
+    checkPanelMatchesFilled(*found->getPanel());
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Una escena guardada antes del componente carga igual: sin panel y sin avisos.
+static void test_scene_without_panel_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool alguno = false;
+    loaded.traverse([&](GameObject* n) { if (n->hasPanel()) alguno = true; });
+    CHECK(!alguno);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Neutralidad: sin ningún panel el JSON no gana ni un byte, y añadir y quitar el
+// componente devuelve el dump EXACTO de partida.
+static void test_scene_without_panel_serializes_identically()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    const std::string antes = scene.toJson().dump();
+    CHECK(antes.find("\"panel\"") == std::string::npos);
+
+    go->setPanel(std::make_shared<PanelComponent>());
+    CHECK(scene.toJson().dump() != antes);
+    go->setPanel(nullptr);
+    CHECK(scene.toJson().dump() == antes);
+}
+
+// Add reversible, y el redo NO devuelve los campos a los defaults.
+static void test_panel_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Marco");
+    PanelComponent st;
+    fillPanel(st);
+    PanelComponentCommand cmd(scene, "Add Panel", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasPanel());
+    checkPanelMatchesFilled(*go->getPanel());
+    cmd.undo();
+    CHECK(!go->hasPanel());
+    cmd.execute();
+    CHECK(go->hasPanel());
+    checkPanelMatchesFilled(*go->getPanel());
+}
+
+// Remove reversible: el undo devuelve el componente CON sus valores.
+static void test_panel_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Marco");
+    auto panel = std::make_shared<PanelComponent>();
+    fillPanel(*panel);
+    go->setPanel(panel);
+
+    PanelComponentCommand cmd(scene, "Remove Panel", go->id, /*add=*/false, *panel);
+    cmd.execute();
+    CHECK(!go->hasPanel());
+    cmd.undo();
+    CHECK(go->hasPanel());
+    checkPanelMatchesFilled(*go->getPanel());
+}
+
+// Editar un campo del panel también entra en el stack, con el mismo
+// PropertyCommand<T> que arma la sección (resuelto por id, no por puntero).
+static void test_panel_property_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Marco");
+    go->setPanel(std::make_shared<PanelComponent>());
+    const uint64_t id = go->id;
+    Scene* sc = &scene;
+
+    auto applySize = [sc, id](const glm::vec2& v) {
+        if (GameObject* g = sc->findById(id))
+            if (g->hasPanel()) g->getPanel()->size = v;
+    };
+    PropertyCommand<glm::vec2> cmd("Size", glm::vec2(200.0f, 120.0f), glm::vec2(37.5f, 91.25f),
+                                   applySize);
+
+    cmd.execute();
+    CHECK(nearlyEqual(go->getPanel()->size.x, 37.5f));
+    CHECK(nearlyEqual(go->getPanel()->size.y, 91.25f));
+    cmd.undo();
+    CHECK(nearlyEqual(go->getPanel()->size.x, 200.0f));
+    cmd.execute();
+    CHECK(nearlyEqual(go->getPanel()->size.y, 91.25f));
+
+    // Sin componente el applier no hace nada (ni crashea ni lo resucita).
+    go->setPanel(nullptr);
+    cmd.undo();
+    CHECK(!go->hasPanel());
+}
+
+// El nodo vivo: nombre propio, rect volcado y, sobre todo, que un cambio del
+// componente ENSUCIE el nodo. Un sync que escribe los campos sin ensuciar deja
+// el panel clavado, porque el canvas se copia los vértices cacheados.
+static void test_panel_sync_updates_the_live_node()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    PanelComponent p;
+    p.position = glm::vec2(12.0f, 24.0f);
+    p.size     = glm::vec2(160.0f, 80.0f);
+    p.color    = glm::vec4(0.5f, 0.25f, 0.125f, 1.0f);
+
+    UiWidgetLists w;
+    w.panels.emplace_back(5ull, &p);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().empty()) return;
+    const UiElement& nodo = *canvas.root().children()[0];
+    CHECK(nodo.name == uiPanelNodeName(5ull));
+    CHECK(nodo.typeName() == std::string("Panel"));
+    CHECK(nearlyEqual(nodo.screenPos.x, 12.0f));
+    CHECK(nearlyEqual(nodo.screenPos.y, 24.0f));
+    CHECK(nearlyEqual(nodo.size.x, 160.0f));
+    CHECK(nearlyEqual(nodo.size.y, 80.0f));
+    CHECK(nearlyEqual(nodo.color.r, 0.5f));
+    CHECK(data.vertices.size() == 4);   // un quad
+    // El emisor deja el nodo limpio: es la caché que el sync tiene que invalidar.
+    CHECK(nodo.dirty == 0u);
+
+    // Mover el panel tiene que ensuciarlo, o el canvas reusaría los vértices.
+    p.position = glm::vec2(40.0f, 50.0f);
+    syncUiWidgets(w, canvas, cache, loader);
+    CHECK(nodo.dirty != 0u);
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    CHECK(nearlyEqual(nodo.screenPos.x, 40.0f));
+
+    // Y sin cambios NO se vuelve a ensuciar: ensuciar siempre tiraría la caché
+    // del canvas entero cada frame.
+    syncUiWidgets(w, canvas, cache, loader);
+    CHECK(nodo.dirty == 0u);
+
+    // raycastTarget viaja: sin él un panel de fondo se comería los clics de lo
+    // que tenga detrás y no habría forma de apagarlo desde la escena.
+    CHECK(nodo.raycastTarget == true);
+    p.raycastTarget = false;
+    syncUiWidgets(w, canvas, cache, loader);
+    CHECK(nodo.raycastTarget == false);
+}
+
+static void test_panel_hit_test_maps_back_to_gameobject()
+{
+    CHECK(uiPanelOwnerId(uiPanelNodeName(42ull)) == 42ull);
+    CHECK(uiPanelOwnerId("Cubo") == 0ull);
+    CHECK(uiPanelOwnerId("pnl:") == 0ull);
+    CHECK(uiPanelOwnerId("pnl:12ab") == 0ull);
+    // Los prefijos no se confunden entre sí.
+    CHECK(uiPanelOwnerId(uiButtonNodeName(42ull)) == 0ull);
+    CHECK(uiPanelOwnerId(uiTextNodeName(42ull)) == 0ull);
+    CHECK(uiPanelOwnerId(uiProgressBarNodeName(42ull)) == 0ull);
+    CHECK(uiPanelOwnerId(uiLayoutNodeName(42ull)) == 0ull);
+    CHECK(uiButtonOwnerId(uiPanelNodeName(42ull)) == 0ull);
+    CHECK(uiTextOwnerId(uiPanelNodeName(42ull)) == 0ull);
+    CHECK(uiProgressBarOwnerId(uiPanelNodeName(42ull)) == 0ull);
+    CHECK(uiLayoutOwnerId(uiPanelNodeName(42ull)) == 0ull);
+}
+
+// ── Image ───────────────────────────────────────────────────────────────────
+// El Image del núcleo SÍ tiene campos propios (modo, bordes del 9-slice, tope
+// de tiles y el bloque de Filled), y todos tienen que llegar al nodo: el
+// batcher los lee para emitir N quads.
+static void fillImage(ImageComponent& im)
+{
+    im.anchorMin = glm::vec2(0.09375f, 0.15625f);
+    im.anchorMax = glm::vec2(0.6875f, 0.9375f);
+    im.pivot     = glm::vec2(0.125f, 0.625f);
+    im.position  = glm::vec2(-17.75f, 29.5f);
+    im.size      = glm::vec2(97.25f, 143.5f);
+    im.color     = glm::vec4(0.41f, 0.42f, 0.43f, 0.44f);
+    im.visible   = false;
+
+    im.raycastTarget = false;
+
+    im.atlasPath = "assets/ui/iconos.png";
+    im.sprite    = "corazon";
+
+    im.mode = UiImageMode::Sliced;
+
+    im.borderLeft   = 3.5f;
+    im.borderRight  = 5.25f;
+    im.borderTop    = 7.75f;
+    im.borderBottom = 9.125f;
+    im.fillCenter   = false;
+
+    im.maxTiles = 777u;
+
+    im.fillDirection = UiFillDirection::Vertical;
+    im.fillOrigin    = UiFillOrigin::End;
+    im.fillAmount    = 0.375f;
+}
+
+static void checkImageMatchesFilled(const ImageComponent& im)
+{
+    CHECK(nearlyEqual(im.anchorMin.x, 0.09375f));
+    CHECK(nearlyEqual(im.anchorMin.y, 0.15625f));
+    CHECK(nearlyEqual(im.anchorMax.x, 0.6875f));
+    CHECK(nearlyEqual(im.anchorMax.y, 0.9375f));
+    CHECK(nearlyEqual(im.pivot.x, 0.125f));
+    CHECK(nearlyEqual(im.pivot.y, 0.625f));
+    CHECK(nearlyEqual(im.position.x, -17.75f));
+    CHECK(nearlyEqual(im.position.y, 29.5f));
+    CHECK(nearlyEqual(im.size.x, 97.25f));
+    CHECK(nearlyEqual(im.size.y, 143.5f));
+    CHECK(nearlyEqual(im.color.r, 0.41f));
+    CHECK(nearlyEqual(im.color.g, 0.42f));
+    CHECK(nearlyEqual(im.color.b, 0.43f));
+    CHECK(nearlyEqual(im.color.a, 0.44f));
+    CHECK(im.visible == false);
+    CHECK(im.raycastTarget == false);
+    CHECK(im.atlasPath == "assets/ui/iconos.png");
+    CHECK(im.sprite == "corazon");
+
+    CHECK(im.mode == UiImageMode::Sliced);
+    CHECK(nearlyEqual(im.borderLeft, 3.5f));
+    CHECK(nearlyEqual(im.borderRight, 5.25f));
+    CHECK(nearlyEqual(im.borderTop, 7.75f));
+    CHECK(nearlyEqual(im.borderBottom, 9.125f));
+    CHECK(im.fillCenter == false);
+    CHECK(im.maxTiles == 777u);
+    CHECK(im.fillDirection == UiFillDirection::Vertical);
+    CHECK(im.fillOrigin == UiFillOrigin::End);
+    CHECK(nearlyEqual(im.fillAmount, 0.375f));
+}
+
+static void test_image_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* go = scene.addGameObject("Icono", canvasGo);
+    auto img = std::make_shared<ImageComponent>();
+    fillImage(*img);
+    go->setImage(img);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasImage()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "Icono");
+    checkImageMatchesFilled(*found->getImage());
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_image_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool alguno = false;
+    loaded.traverse([&](GameObject* n) { if (n->hasImage()) alguno = true; });
+    CHECK(!alguno);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_image_serializes_identically()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    const std::string antes = scene.toJson().dump();
+    CHECK(antes.find("\"image\"") == std::string::npos);
+
+    go->setImage(std::make_shared<ImageComponent>());
+    CHECK(scene.toJson().dump() != antes);
+    go->setImage(nullptr);
+    CHECK(scene.toJson().dump() == antes);
+}
+
+static void test_image_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Icono");
+    ImageComponent st;
+    fillImage(st);
+    ImageComponentCommand cmd(scene, "Add Image", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasImage());
+    checkImageMatchesFilled(*go->getImage());
+    cmd.undo();
+    CHECK(!go->hasImage());
+    cmd.execute();
+    CHECK(go->hasImage());
+    checkImageMatchesFilled(*go->getImage());
+}
+
+static void test_image_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Icono");
+    auto img = std::make_shared<ImageComponent>();
+    fillImage(*img);
+    go->setImage(img);
+
+    ImageComponentCommand cmd(scene, "Remove Image", go->id, /*add=*/false, *img);
+    cmd.execute();
+    CHECK(!go->hasImage());
+    cmd.undo();
+    CHECK(go->hasImage());
+    checkImageMatchesFilled(*go->getImage());
+}
+
+static void test_image_property_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Icono");
+    go->setImage(std::make_shared<ImageComponent>());
+    const uint64_t id = go->id;
+    Scene* sc = &scene;
+
+    auto applyFill = [sc, id](const float& v) {
+        if (GameObject* g = sc->findById(id))
+            if (g->hasImage()) g->getImage()->fillAmount = v;
+    };
+    PropertyCommand<float> cmd("Fill Amount", 1.0f, 0.125f, applyFill);
+
+    cmd.execute();
+    CHECK(nearlyEqual(go->getImage()->fillAmount, 0.125f));
+    cmd.undo();
+    CHECK(nearlyEqual(go->getImage()->fillAmount, 1.0f));
+    cmd.execute();
+    CHECK(nearlyEqual(go->getImage()->fillAmount, 0.125f));
+
+    go->setImage(nullptr);
+    cmd.undo();
+    CHECK(!go->hasImage());
+}
+
+// Los campos PROPIOS del Image tienen que llegar al nodo vivo: el batcher los
+// lee de ahí para decidir cuántos quads emite. Un sync que solo volcara el rect
+// dejaría el modo, los bordes y el fillAmount en sus defaults y el Image se
+// dibujaría siempre como Normal sin que nada lo dijera.
+static void test_image_sync_updates_the_live_node()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    ImageComponent im;
+    fillImage(im);
+    im.visible = true;   // invisible no emite quads y aquí se mira el nodo
+
+    UiWidgetLists w;
+    w.images.emplace_back(7ull, &im);
+
+    syncUiWidgets(w, canvas, cache, loader);
+
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().empty()) return;
+    const UiElement& nodo = *canvas.root().children()[0];
+    CHECK(nodo.name == uiImageNodeName(7ull));
+    CHECK(nodo.typeName() == std::string("Image"));
+
+    const Image* img = nodo.asImage();
+    CHECK(img != nullptr);
+    if (!img) return;
+    CHECK(img->mode == UiImageMode::Sliced);
+    CHECK(nearlyEqual(img->borderLeft, 3.5f));
+    CHECK(nearlyEqual(img->borderRight, 5.25f));
+    CHECK(nearlyEqual(img->borderTop, 7.75f));
+    CHECK(nearlyEqual(img->borderBottom, 9.125f));
+    CHECK(img->fillCenter == false);
+    CHECK(img->maxTiles == 777u);
+    CHECK(img->fillDirection == UiFillDirection::Vertical);
+    CHECK(img->fillOrigin == UiFillOrigin::End);
+    CHECK(nearlyEqual(img->fillAmount, 0.375f));
+    CHECK(img->raycastTarget == false);
+    CHECK(img->sprite == "corazon");
+
+    // Y un cambio posterior ensucia el nodo.
+    UiDrawData data;
+    canvas.buildDrawData(800, 480, data);
+    CHECK(nodo.dirty == 0u);
+    im.fillAmount = 0.75f;
+    syncUiWidgets(w, canvas, cache, loader);
+    CHECK(nearlyEqual(img->fillAmount, 0.75f));
+    CHECK(nodo.dirty != 0u);
+}
+
+static void test_image_hit_test_maps_back_to_gameobject()
+{
+    CHECK(uiImageOwnerId(uiImageNodeName(42ull)) == 42ull);
+    CHECK(uiImageOwnerId("Cubo") == 0ull);
+    CHECK(uiImageOwnerId("img:") == 0ull);
+    CHECK(uiImageOwnerId("img:12ab") == 0ull);
+    CHECK(uiImageOwnerId(uiPanelNodeName(42ull)) == 0ull);
+    CHECK(uiPanelOwnerId(uiImageNodeName(42ull)) == 0ull);
+    CHECK(uiButtonOwnerId(uiImageNodeName(42ull)) == 0ull);
+    CHECK(uiTextOwnerId(uiImageNodeName(42ull)) == 0ull);
+}
+
+// collectUiWidgets tiene que ver los dos componentes nuevos y meterlos en la
+// jerarquía: un GameObject con Panel es un ancestro con rect válido, así que sus
+// hijos tienen que colgar de él y no subir a la raíz.
+static void test_collect_ui_widgets_incluye_panels_e_images()
+{
+    Scene scene;
+    GameObject* canvasGo = scene.addGameObject("Canvas");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+
+    GameObject* marco = scene.addGameObject("Marco", canvasGo);
+    marco->setPanel(std::make_shared<PanelComponent>());
+
+    GameObject* icono = scene.addGameObject("Icono", marco);
+    icono->setImage(std::make_shared<ImageComponent>());
+
+    UiWidgetLists w;
+    scene.collectUiWidgets(w);
+
+    CHECK(w.panels.size() == 1);
+    CHECK(w.images.size() == 1);
+    CHECK(w.buttons.empty());
+    CHECK(w.texts.empty());
+    CHECK(w.bars.empty());
+    CHECK(w.layouts.empty());
+    if (w.panels.size() != 1 || w.images.size() != 1) return;
+    CHECK(w.panels[0].first == marco->id);
+    CHECK(w.images[0].first == icono->id);
+
+    CHECK(w.parents.size() == 2);
+    if (w.parents.size() != 2) return;
+    CHECK(w.parents[0].first == marco->id);
+    CHECK(w.parents[0].second == 0ull);
+    CHECK(w.parents[1].first == icono->id);
+    CHECK(w.parents[1].second == marco->id);   // el Panel sostiene al Image
+}
+
+// Panel e Image en el MISMO GameObject: dos nodos hermanos con nombres
+// distintos, y el Image encima del Panel (el último hermano manda). Con el
+// mismo prefijo, el gizmo y el picking cogerían el que no toca.
+static void test_panel_and_image_coexist()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    PanelComponent p;
+    p.position = glm::vec2(0.0f, 0.0f);
+    p.size     = glm::vec2(300.0f, 200.0f);
+    ImageComponent im;
+    im.position = glm::vec2(10.0f, 10.0f);
+    im.size     = glm::vec2(64.0f, 64.0f);
+
+    UiWidgetLists w;
+    w.panels.emplace_back(9ull, &p);
+    w.images.emplace_back(9ull, &im);
+    w.parents.emplace_back(9ull, 0ull);
+
+    syncUiWidgets(w, canvas, cache, loader);
+
+    CHECK(canvas.root().children().size() == 2);
+    if (canvas.root().children().size() != 2) return;
+    CHECK(canvas.root().children()[0]->name == uiPanelNodeName(9ull));
+    CHECK(canvas.root().children()[1]->name == uiImageNodeName(9ull));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -2754,6 +3346,26 @@ int main()
     test_layout_command_add_undo_redo();
     test_layout_command_remove();
     test_layout_property_command_undo_redo();
+
+    test_panel_round_trip(pm, am);
+    test_scene_without_panel_block_still_loads(pm, am);
+    test_scene_without_panel_serializes_identically();
+    test_panel_command_add_undo_redo();
+    test_panel_command_remove();
+    test_panel_property_command_undo_redo();
+    test_panel_sync_updates_the_live_node();
+    test_panel_hit_test_maps_back_to_gameobject();
+
+    test_image_round_trip(pm, am);
+    test_scene_without_image_block_still_loads(pm, am);
+    test_scene_without_image_serializes_identically();
+    test_image_command_add_undo_redo();
+    test_image_command_remove();
+    test_image_property_command_undo_redo();
+    test_image_sync_updates_the_live_node();
+    test_image_hit_test_maps_back_to_gameobject();
+    test_collect_ui_widgets_incluye_panels_e_images();
+    test_panel_and_image_coexist();
 
     am.shutdown();
     pm.shutdown();

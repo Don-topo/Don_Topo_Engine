@@ -54,6 +54,11 @@ namespace
     using DonTopo::LayoutComponent;
     using DonTopo::UiLayoutMode;
     using DonTopo::UiCrossAlign;
+    using DonTopo::PanelComponent;
+    using DonTopo::ImageComponent;
+    using DonTopo::UiImageMode;
+    using DonTopo::UiFillDirection;
+    using DonTopo::UiFillOrigin;
 
     // Forward declarations: animatorFromJson (más abajo) necesita estos
     // lectores tolerantes a JSON corrupto (definidos junto a jsonToMat4/
@@ -230,6 +235,45 @@ namespace
         if (s == "bottomToTop") return UiProgressFillDirection::BottomToTop;
         if (s == "topToBottom") return UiProgressFillDirection::TopToBottom;
         return UiProgressFillDirection::LeftToRight;   // valor desconocido -> el default
+    }
+
+    const char* uiImageModeToStr(UiImageMode m)
+    {
+        switch (m)
+        {
+            case UiImageMode::Tiled:  return "tiled";
+            case UiImageMode::Sliced: return "sliced";
+            case UiImageMode::Filled: return "filled";
+            default:                  return "normal";
+        }
+    }
+
+    UiImageMode uiImageModeFromStr(const std::string& s)
+    {
+        if (s == "tiled")  return UiImageMode::Tiled;
+        if (s == "sliced") return UiImageMode::Sliced;
+        if (s == "filled") return UiImageMode::Filled;
+        return UiImageMode::Normal;   // valor desconocido -> el default
+    }
+
+    const char* uiFillDirectionToStr(UiFillDirection d)
+    {
+        return d == UiFillDirection::Vertical ? "vertical" : "horizontal";
+    }
+
+    UiFillDirection uiFillDirectionFromStr(const std::string& s)
+    {
+        return s == "vertical" ? UiFillDirection::Vertical : UiFillDirection::Horizontal;
+    }
+
+    const char* uiFillOriginToStr(UiFillOrigin o)
+    {
+        return o == UiFillOrigin::End ? "end" : "start";
+    }
+
+    UiFillOrigin uiFillOriginFromStr(const std::string& s)
+    {
+        return s == "end" ? UiFillOrigin::End : UiFillOrigin::Start;
     }
 
     const char* uiLayoutModeToStr(UiLayoutMode m)
@@ -720,6 +764,44 @@ namespace
                                  {"atlasPath", p->atlasPath},
                                  {"backgroundPath", p->backgroundPath},
                                  {"fillPath", p->fillPath} };
+        }
+        if (node.hasPanel())
+        {
+            const auto& p = node.getPanel();
+            j["panel"] = { {"anchorMin", vec2ToJsonXY(p->anchorMin)},
+                           {"anchorMax", vec2ToJsonXY(p->anchorMax)},
+                           {"pivot", vec2ToJsonXY(p->pivot)},
+                           {"position", vec2ToJsonXY(p->position)},
+                           {"size", vec2ToJsonXY(p->size)},
+                           {"color", vec4ToJsonXYZW(p->color)},
+                           {"visible", p->visible},
+                           {"raycastTarget", p->raycastTarget},
+                           {"atlasPath", p->atlasPath},
+                           {"sprite", p->sprite} };
+        }
+        if (node.hasImage())
+        {
+            const auto& im = node.getImage();
+            j["image"] = { {"anchorMin", vec2ToJsonXY(im->anchorMin)},
+                           {"anchorMax", vec2ToJsonXY(im->anchorMax)},
+                           {"pivot", vec2ToJsonXY(im->pivot)},
+                           {"position", vec2ToJsonXY(im->position)},
+                           {"size", vec2ToJsonXY(im->size)},
+                           {"color", vec4ToJsonXYZW(im->color)},
+                           {"visible", im->visible},
+                           {"raycastTarget", im->raycastTarget},
+                           {"atlasPath", im->atlasPath},
+                           {"sprite", im->sprite},
+                           {"mode", uiImageModeToStr(im->mode)},
+                           {"borderLeft", im->borderLeft},
+                           {"borderRight", im->borderRight},
+                           {"borderTop", im->borderTop},
+                           {"borderBottom", im->borderBottom},
+                           {"fillCenter", im->fillCenter},
+                           {"maxTiles", im->maxTiles},
+                           {"fillDirection", uiFillDirectionToStr(im->fillDirection)},
+                           {"fillOrigin", uiFillOriginToStr(im->fillOrigin)},
+                           {"fillAmount", im->fillAmount} };
         }
         if (node.hasLayout())
         {
@@ -1577,6 +1659,79 @@ namespace
             bar->fillPath       = readStr("fillPath");
             node->setProgressBar(std::move(bar));
         }
+        // Bloque aditivo, misma regla que los demás componentes de UI: una
+        // escena guardada antes del componente Panel no trae la clave y se carga
+        // sin él ni un aviso.
+        if (j.contains("panel"))
+        {
+            const auto& p = j["panel"];
+            const std::string ctx = "panel de '" + node->name + "'";
+            auto readBool = [&](const char* key, bool def) {
+                return (p.contains(key) && p[key].is_boolean()) ? p[key].get<bool>() : def;
+            };
+            auto readStr = [&](const char* key) {
+                return (p.contains(key) && p[key].is_string())
+                           ? p[key].get<std::string>() : std::string();
+            };
+            auto panel = std::make_shared<PanelComponent>();
+            panel->anchorMin = readVec2XY(p, "anchorMin", glm::vec2(0.0f), warnings, ctx);
+            panel->anchorMax = readVec2XY(p, "anchorMax", glm::vec2(0.0f), warnings, ctx);
+            panel->pivot     = readVec2XY(p, "pivot", glm::vec2(0.0f), warnings, ctx);
+            panel->position  = readVec2XY(p, "position", glm::vec2(0.0f), warnings, ctx);
+            panel->size      = readVec2XY(p, "size", glm::vec2(200.0f, 120.0f), warnings, ctx);
+            panel->color     = readVec4XYZW(p, "color", glm::vec4(1.0f), warnings, ctx);
+            panel->visible   = readBool("visible", true);
+
+            panel->raycastTarget = readBool("raycastTarget", true);
+
+            panel->atlasPath = readStr("atlasPath");
+            panel->sprite    = readStr("sprite");
+            node->setPanel(std::move(panel));
+        }
+        if (j.contains("image"))
+        {
+            const auto& im = j["image"];
+            const std::string ctx = "image de '" + node->name + "'";
+            auto readBool = [&](const char* key, bool def) {
+                return (im.contains(key) && im[key].is_boolean()) ? im[key].get<bool>() : def;
+            };
+            auto readStr = [&](const char* key) {
+                return (im.contains(key) && im[key].is_string())
+                           ? im[key].get<std::string>() : std::string();
+            };
+            auto img = std::make_shared<ImageComponent>();
+            img->anchorMin = readVec2XY(im, "anchorMin", glm::vec2(0.0f), warnings, ctx);
+            img->anchorMax = readVec2XY(im, "anchorMax", glm::vec2(0.0f), warnings, ctx);
+            img->pivot     = readVec2XY(im, "pivot", glm::vec2(0.0f), warnings, ctx);
+            img->position  = readVec2XY(im, "position", glm::vec2(0.0f), warnings, ctx);
+            img->size      = readVec2XY(im, "size", glm::vec2(100.0f), warnings, ctx);
+            img->color     = readVec4XYZW(im, "color", glm::vec4(1.0f), warnings, ctx);
+            img->visible   = readBool("visible", true);
+
+            img->raycastTarget = readBool("raycastTarget", true);
+
+            img->atlasPath = readStr("atlasPath");
+            img->sprite    = readStr("sprite");
+
+            img->mode = uiImageModeFromStr(readStr("mode"));
+
+            img->borderLeft   = readFloat(im, "borderLeft", 0.0f, warnings, ctx);
+            img->borderRight  = readFloat(im, "borderRight", 0.0f, warnings, ctx);
+            img->borderTop    = readFloat(im, "borderTop", 0.0f, warnings, ctx);
+            img->borderBottom = readFloat(im, "borderBottom", 0.0f, warnings, ctx);
+            img->fillCenter   = readBool("fillCenter", true);
+
+            // Sin negativos ni un tope absurdo: maxTiles acota los quads que
+            // puede emitir el batcher, y un JSON editado a mano con -1 daría una
+            // vuelta al uint32 y con ella un buffer de vértices reventado.
+            const float tiles = readFloat(im, "maxTiles", 1024.0f, warnings, ctx);
+            img->maxTiles = tiles > 0.0f ? (uint32_t)tiles : 0u;
+
+            img->fillDirection = uiFillDirectionFromStr(readStr("fillDirection"));
+            img->fillOrigin    = uiFillOriginFromStr(readStr("fillOrigin"));
+            img->fillAmount    = readFloat(im, "fillAmount", 1.0f, warnings, ctx);
+            node->setImage(std::move(img));
+        }
         if (j.contains("layout"))
         {
             const auto& l = j["layout"];
@@ -1849,28 +2004,15 @@ namespace DonTopo
         return const_cast<Scene*>(this)->findCanvas();
     }
 
-    void Scene::collectUiWidgets(
-        std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons,
-        std::vector<std::pair<uint64_t, const TextComponent*>>& texts,
-        std::vector<std::pair<uint64_t, const ProgressBarComponent*>>& bars,
-        std::vector<std::pair<uint64_t, const LayoutComponent*>>& layouts,
-        std::vector<std::pair<uint64_t, uint64_t>>& parents) const
+    void Scene::collectUiWidgets(UiWidgetLists& out) const
     {
-        buttons.clear();
-        texts.clear();
-        bars.clear();
-        layouts.clear();
-        parents.clear();
+        out.clear();
 
         // Recursión propia y no traverse(): hace falta arrastrar hacia abajo
         // cuál es el ancestro con UI, y el traverse solo da el nodo.
         struct Walker
         {
-            std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons;
-            std::vector<std::pair<uint64_t, const TextComponent*>>&   texts;
-            std::vector<std::pair<uint64_t, const ProgressBarComponent*>>& bars;
-            std::vector<std::pair<uint64_t, const LayoutComponent*>>& layouts;
-            std::vector<std::pair<uint64_t, uint64_t>>& parents;
+            UiWidgetLists& out;
 
             void visit(const GameObject* node, uint64_t uiAncestor)
             {
@@ -1878,14 +2020,17 @@ namespace DonTopo
                 // rect, y sin eso sus hijos subirian al ancestro de arriba y
                 // nadie los colocaria.
                 const bool tieneUi = node->hasButton() || node->hasText() ||
-                                     node->hasProgressBar() || node->hasLayout();
+                                     node->hasProgressBar() || node->hasLayout() ||
+                                     node->hasPanel() || node->hasImage();
                 if (tieneUi)
                 {
-                    if (node->hasButton())      buttons.emplace_back(node->id, node->getButton().get());
-                    if (node->hasProgressBar()) bars.emplace_back(node->id, node->getProgressBar().get());
-                    if (node->hasText())        texts.emplace_back(node->id, node->getText().get());
-                    if (node->hasLayout())      layouts.emplace_back(node->id, node->getLayout().get());
-                    parents.emplace_back(node->id, uiAncestor);
+                    if (node->hasPanel())       out.panels.emplace_back(node->id, node->getPanel().get());
+                    if (node->hasImage())       out.images.emplace_back(node->id, node->getImage().get());
+                    if (node->hasButton())      out.buttons.emplace_back(node->id, node->getButton().get());
+                    if (node->hasProgressBar()) out.bars.emplace_back(node->id, node->getProgressBar().get());
+                    if (node->hasText())        out.texts.emplace_back(node->id, node->getText().get());
+                    if (node->hasLayout())      out.layouts.emplace_back(node->id, node->getLayout().get());
+                    out.parents.emplace_back(node->id, uiAncestor);
                 }
 
                 // Los hijos cuelgan de ESTE si aporta rect; si no, siguen
@@ -1895,7 +2040,7 @@ namespace DonTopo
             }
         };
 
-        Walker walker{buttons, texts, bars, layouts, parents};
+        Walker walker{out};
         // La raíz de la escena no es un widget: sus hijos arrancan sin ancestro.
         for (const auto& child : m_root.children) walker.visit(child.get(), 0ull);
     }

@@ -19,7 +19,9 @@
 #include "DonTopo/Core/LightComponent.h"
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/UI/ImageComponent.h"
 #include "DonTopo/UI/LayoutComponent.h"
+#include "DonTopo/UI/PanelComponent.h"
 #include "DonTopo/UI/TextComponent.h"
 #include "DonTopo/UI/ProgressBarComponent.h"
 
@@ -177,6 +179,20 @@ namespace DonTopo
             const std::shared_ptr<ProgressBarComponent>& getProgressBar() const { return m_progressBar; }
             bool hasProgressBar() const { return m_progressBar != nullptr; }
 
+            // Panel: el rectángulo de fondo de la UI 2D. Mismo contrato que el
+            // resto — SOLO DATOS, y el nodo vivo lo monta syncUiWidgets(). Uno
+            // por GameObject, y compatible con los demás componentes de UI en el
+            // mismo objeto: son nodos hermanos con prefijos de nombre distintos.
+            void setPanel(std::shared_ptr<PanelComponent> p) { m_panel = std::move(p); }
+            const std::shared_ptr<PanelComponent>& getPanel() const { return m_panel; }
+            bool hasPanel() const { return m_panel != nullptr; }
+
+            // Image: un sprite de la UI 2D con sus cuatro modos de reparto
+            // (Normal, Tiled, Sliced, Filled). Mismo contrato que el Panel.
+            void setImage(std::shared_ptr<ImageComponent> i) { m_image = std::move(i); }
+            const std::shared_ptr<ImageComponent>& getImage() const { return m_image; }
+            bool hasImage() const { return m_image != nullptr; }
+
             // Auto-layout: coloca a los HIJOS de este GameObject, y con
             // ignoreLayout saca a este de la colocacion de su padre. Mismo
             // contrato que el resto: SOLO DATOS, y el nodo lo resuelve
@@ -249,6 +265,8 @@ namespace DonTopo
             std::shared_ptr<TextComponent> m_text;
             std::shared_ptr<ProgressBarComponent> m_progressBar;
             std::shared_ptr<LayoutComponent> m_layout;
+            std::shared_ptr<PanelComponent> m_panel;
+            std::shared_ptr<ImageComponent> m_image;
             std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
     };
 }
