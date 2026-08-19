@@ -161,6 +161,10 @@ private:
     // pasan el drop y el file dialog de las tres cajas.
     void setProgressBarImagePath(EditorContext& ctx, uint64_t ownerId, int field,
                                   const std::string& path);
+    // Layout: el auto-layout de la UI 2D. Sección tras "Add" como los otros tres
+    // componentes de UI, con el rect del contenedor, el modo y sus parámetros
+    // (padding, spacing, celda, columnas), los fitters y el ignoreLayout.
+    void drawLayoutSection(EditorContext& ctx);
     void drawAudioClipDialog(EditorContext& ctx);
     void drawScriptsSection(EditorContext& ctx);
     void drawAddComponentButton(EditorContext& ctx);
@@ -267,6 +271,13 @@ private:
     glm::vec2   m_barDragBefore2 {0.0f};
     glm::vec4   m_barDragBefore4 {1.0f};
     std::string m_barDragBeforeStr;
+
+    // Y lo mismo para los campos del Layout, por el mismo motivo: el contenedor
+    // puede convivir con los otros tres componentes en el mismo GameObject.
+    uint64_t    m_layoutDragOwnerId = 0;
+    const char* m_layoutDragField   = nullptr;
+    float       m_layoutDragBefore  = 0.0f;
+    glm::vec2   m_layoutDragBefore2 {0.0f};
 
     // Box Collider – mismo patrón de cache que Transform: persiste entre
     // frames para que los DragFloat acumulen el delta del arrastre, y se

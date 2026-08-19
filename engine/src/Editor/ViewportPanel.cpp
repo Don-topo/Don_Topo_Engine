@@ -522,6 +522,22 @@ void ViewportPanel::drawProgressBarGizmo(EditorContext& ctx, const glm::vec2& im
                     imagePos, imageSize);
 }
 
+void ViewportPanel::drawLayoutGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                     const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasLayout() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    // Con otro componente de UI en el mismo GameObject, el layout NO tiene nodo
+    // propio: escribe en el de aquel, que ya pinta su gizmo. Dibujar otro encima
+    // solo duplicaría las líneas.
+    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
+                                         uiLayoutNodeName(ctx.selected->id)),
+                    imagePos, imageSize);
+}
+
 GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mousePx,
                                          const glm::vec2& imageSize) const
 {
@@ -687,6 +703,7 @@ void ViewportPanel::draw(EditorContext& ctx, uint64_t viewportTexture, const glm
     drawButtonGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawTextGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawProgressBarGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    drawLayoutGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     // Hover de la IMAGEN, no de la ventana: con esto un popup o cualquier otra
     // ventana por encima ya no cuenta como clic en la escena.
     const bool imageHovered = ImGui::IsItemHovered();

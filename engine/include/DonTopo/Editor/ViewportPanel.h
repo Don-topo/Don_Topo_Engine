@@ -69,6 +69,12 @@ private:
     // valor y el gizmo mide el widget, no el dato.
     void drawProgressBarGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                                const glm::vec2& imageSize);
+    // Y el del contenedor de Layout, que es el ÚNICO que no se puede clicar en
+    // el viewport (no es raycastTarget: un grupo que no pinta no debe comerse
+    // los clics). Se selecciona desde el Hierarchy, y este gizmo es lo único que
+    // enseña dónde está su rect.
+    void drawLayoutGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                          const glm::vec2& imageSize);
     // Selección por clic de un widget de UI: hit test 2D del canvas, que manda
     // sobre el raycast 3D porque la UI se dibuja ENCIMA de la escena. mousePx
     // va en píxeles relativos a la esquina de la imagen, igual que en

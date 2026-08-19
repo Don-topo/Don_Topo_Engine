@@ -159,6 +159,20 @@ const std::vector<std::string>& baseSymbols()
         // El 0..1 ya acotado que usa el sync para el rect del relleno.
         "ProgressBar:GetNormalizedValue",
 
+        // UI 2D — Layout (el contenedor que coloca a los hijos)
+        "Layout.visible", "Layout.mode", "Layout.crossAlign",
+        "Layout.paddingLeft", "Layout.paddingRight", "Layout.paddingTop",
+        "Layout.paddingBottom", "Layout.columns",
+        "Layout.fitWidth", "Layout.fitHeight",
+        "Layout.ignoreLayout", "Layout.clipChildren",
+        "Layout:GetPosition", "Layout:SetPosition",
+        "Layout:GetSize", "Layout:SetSize",
+        "Layout:GetAnchorMin", "Layout:SetAnchorMin",
+        "Layout:GetAnchorMax", "Layout:SetAnchorMax",
+        "Layout:GetPivot", "Layout:SetPivot",
+        "Layout:GetSpacing", "Layout:SetSpacing",
+        "Layout:GetCellSize", "Layout:SetCellSize",
+
         // UI 2D — enums (tablas de enteros que registra registerUi)
         "UiScaleMode.ConstantPixelSize", "UiScaleMode.ScaleWithScreenSize",
         "UiScaleMode.ConstantPhysicalSize",
@@ -169,6 +183,9 @@ const std::vector<std::string>& baseSymbols()
         "UiTextOverflow.Overflow", "UiTextOverflow.Clip", "UiTextOverflow.Ellipsis",
         "UiProgressFillDirection.LeftToRight", "UiProgressFillDirection.RightToLeft",
         "UiProgressFillDirection.BottomToTop", "UiProgressFillDirection.TopToBottom",
+        "UiLayoutMode.None", "UiLayoutMode.Horizontal", "UiLayoutMode.Vertical",
+        "UiLayoutMode.Grid",
+        "UiCrossAlign.Start", "UiCrossAlign.Center", "UiCrossAlign.End",
         "UiButtonTransition.ColorTint", "UiButtonTransition.SpriteSwap",
         "UiButtonTransition.Animation",
         "UiButtonState.Normal", "UiButtonState.Hover", "UiButtonState.Pressed",

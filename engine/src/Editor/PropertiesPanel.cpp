@@ -398,6 +398,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
             drawButtonSection(ctx);
             drawTextSection(ctx);
             drawProgressBarSection(ctx);
+            drawLayoutSection(ctx);
             drawScriptsSection(ctx);
             drawAddComponentButton(ctx);
         }
@@ -2072,6 +2073,279 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
     }
 }
 
+void PropertiesPanel::drawLayoutSection(EditorContext& ctx)
+{
+    // Add-gate: sin el componente no hay sección, igual que los colliders.
+    if (!ctx.selected->hasLayout()) return;
+
+    ImGui::Separator();
+    bool sectionOpen = ImGui::TreeNodeEx("Layout",
+                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+    const bool removeClicked = ImGui::SmallButton("x##layout");
+
+    Scene*            scene = ctx.scene;
+    const uint64_t    id    = ctx.selected->id;
+    const std::string owner = ctx.selected->name;
+
+    if (sectionOpen)
+    {
+        LayoutComponent* l = ctx.selected->getLayout().get();
+        // El rect solo es suyo cuando no hay otro componente de UI en el objeto:
+        // con uno, el rect lo manda aquel y estos campos no se leen. Se DICE en
+        // vez de esconderlos: el editor no capa lo que el motor soporta.
+        const bool ownsRect = !ctx.selected->hasButton() && !ctx.selected->hasText() &&
+                              !ctx.selected->hasProgressBar();
+
+        ImGui::TextWrapped("Auto-layout de la UI 2D: coloca a los HIJOS de este objeto. Sin "
+                           "otro componente de UI aquí, el contenedor es un rect propio que "
+                           "agrupa y recorta sin dibujarse.");
+
+        // Mismos accessors sin captura (function pointer) y mismo baile de undo
+        // que las secciones del Button, el Text y la ProgressBar. Los labels
+        // llevan "##layout" porque un GameObject puede tener los cuatro
+        // componentes a la vez: dos widgets con el MISMO id de ImGui comparten
+        // estado.
+        using FloatRef = float&     (*)(LayoutComponent&);
+        using Vec2Ref  = glm::vec2& (*)(LayoutComponent&);
+        using BoolRef  = bool&      (*)(LayoutComponent&);
+        using EnumSet  = void       (*)(LayoutComponent&, int);
+
+        auto comboEnum = [&](const char* label, int before, const char* const* items,
+                             int count, EnumSet apply)
+        {
+            int idx = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::Combo(label, &idx, items, count) && idx != before)
+            {
+                apply(*l, idx);
+                const std::string lbl = std::string(label) + " del layout de '" + owner + "'";
+                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<int>>(
+                        lbl, before, idx,
+                        [scene, id, apply](const int& v) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasLayout()) apply(*go->getLayout(), v);
+                        }));
+            }
+        };
+
+        auto checkBox = [&](const char* label, BoolRef acc)
+        {
+            const bool before = acc(*l);
+            bool       v      = before;
+            if (ImGui::Checkbox(label, &v) && v != before)
+            {
+                acc(*l) = v;
+                const std::string lbl = std::string(label) + " del layout de '" + owner + "'";
+                ctx.pushLog(lbl + (v ? " activado" : " desactivado"));
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
+                        lbl, before, v,
+                        [scene, id, acc](const bool& val) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasLayout()) acc(*go->getLayout()) = val;
+                        }));
+            }
+        };
+
+        auto dragFloat = [&](const char* label, FloatRef acc, float speed,
+                             float lo, float hi, const char* fmt)
+        {
+            const float before = acc(*l);
+            float       v      = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+            if (ImGui::DragFloat(label, &v, speed, lo, hi, fmt))
+                acc(*l) = v;
+            if (ImGui::IsItemActivated())
+            {
+                m_layoutDragBefore  = before;
+                m_layoutDragOwnerId = id;
+                m_layoutDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_layoutDragOwnerId == id &&
+                m_layoutDragField == label)
+            {
+                const float after = acc(*l);
+                m_layoutDragField = nullptr;
+                if (after != m_layoutDragBefore)
+                {
+                    const std::string lbl = std::string(label) + " del layout de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<float>>(
+                            lbl, m_layoutDragBefore, after,
+                            [scene, id, acc](const float& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasLayout()) acc(*go->getLayout()) = val;
+                            }));
+                }
+            }
+        };
+
+        auto dragVec2 = [&](const char* label, Vec2Ref acc, float speed,
+                            float lo, float hi, const char* fmt)
+        {
+            const glm::vec2 before = acc(*l);
+            glm::vec2       v      = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::DragFloat2(label, &v.x, speed, lo, hi, fmt))
+                acc(*l) = v;
+            if (ImGui::IsItemActivated())
+            {
+                m_layoutDragBefore2 = before;
+                m_layoutDragOwnerId = id;
+                m_layoutDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_layoutDragOwnerId == id &&
+                m_layoutDragField == label)
+            {
+                const glm::vec2 after = acc(*l);
+                m_layoutDragField = nullptr;
+                if (after != m_layoutDragBefore2)
+                {
+                    const std::string lbl = std::string(label) + " del layout de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
+                            lbl, m_layoutDragBefore2, after,
+                            [scene, id, acc](const glm::vec2& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasLayout()) acc(*go->getLayout()) = val;
+                            }));
+                }
+            }
+        };
+
+        // Las columnas son un ENTERO, no un float con formato: un DragInt evita
+        // que 3,4 columnas lleguen a la rejilla por el camino del redondeo.
+        auto dragColumns = [&](const char* label)
+        {
+            const int before = (int)l->columns;
+            int       v      = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+            if (ImGui::DragInt(label, &v, 0.1f, 0, 512))
+                l->columns = (uint32_t)(v < 0 ? 0 : v);
+            if (ImGui::IsItemActivated())
+            {
+                m_layoutDragBefore  = (float)before;
+                m_layoutDragOwnerId = id;
+                m_layoutDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_layoutDragOwnerId == id &&
+                m_layoutDragField == label)
+            {
+                const int after = (int)l->columns;
+                m_layoutDragField = nullptr;
+                if (after != (int)m_layoutDragBefore)
+                {
+                    const std::string lbl = std::string(label) + " del layout de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<int>>(
+                            lbl, (int)m_layoutDragBefore, after,
+                            [scene, id](const int& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasLayout())
+                                        go->getLayout()->columns = (uint32_t)(val < 0 ? 0 : val);
+                            }));
+                }
+            }
+        };
+
+        static const char* kModos[] = { "None", "Horizontal", "Vertical", "Grid" };
+        comboEnum("Mode##layout", (int)l->mode, kModos, IM_ARRAYSIZE(kModos),
+                  +[](LayoutComponent& c, int v) { c.mode = (UiLayoutMode)v; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("None = solo agrupa y recorta; los hijos se anclan por su cuenta");
+
+        ImGui::TextDisabled("Rect del contenedor");
+        if (!ownsRect)
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
+                               "El rect lo manda el otro componente de UI de este objeto");
+        dragVec2("Anchor Min##layout",
+                 +[](LayoutComponent& c) -> glm::vec2& { return c.anchorMin; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Anchor Max##layout",
+                 +[](LayoutComponent& c) -> glm::vec2& { return c.anchorMax; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Pivot##layout", +[](LayoutComponent& c) -> glm::vec2& { return c.pivot; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Position##layout",
+                 +[](LayoutComponent& c) -> glm::vec2& { return c.position; },
+                 1.0f, -16384.0f, 16384.0f, "%.0f");
+        dragVec2("Size##layout", +[](LayoutComponent& c) -> glm::vec2& { return c.size; },
+                 1.0f, 0.0f, 16384.0f, "%.0f");
+        checkBox("Visible##layout", +[](LayoutComponent& c) -> bool& { return c.visible; });
+
+        ImGui::TextDisabled("Padding");
+        dragFloat("Left##layout", +[](LayoutComponent& c) -> float& { return c.paddingLeft; },
+                  1.0f, 0.0f, 16384.0f, "%.0f");
+        dragFloat("Right##layout", +[](LayoutComponent& c) -> float& { return c.paddingRight; },
+                  1.0f, 0.0f, 16384.0f, "%.0f");
+        dragFloat("Top##layout", +[](LayoutComponent& c) -> float& { return c.paddingTop; },
+                  1.0f, 0.0f, 16384.0f, "%.0f");
+        dragFloat("Bottom##layout", +[](LayoutComponent& c) -> float& { return c.paddingBottom; },
+                  1.0f, 0.0f, 16384.0f, "%.0f");
+
+        ImGui::TextDisabled("Colocación");
+        dragVec2("Spacing##layout", +[](LayoutComponent& c) -> glm::vec2& { return c.spacing; },
+                 1.0f, -16384.0f, 16384.0f, "%.0f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("X entre columnas, Y entre filas");
+
+        static const char* kAlin[] = { "Start", "Center", "End" };
+        comboEnum("Cross Align##layout", (int)l->crossAlign, kAlin, IM_ARRAYSIZE(kAlin),
+                  +[](LayoutComponent& c, int v) { c.crossAlign = (UiCrossAlign)v; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Alineación en el eje TRANSVERSAL. El Grid no la usa: la celda "
+                              "ya fija los dos ejes");
+
+        // Los dos campos de la rejilla se enseñan siempre, deshabilitados fuera
+        // de Grid: esconderlos cambiaría la FORMA del panel al tocar el modo, y
+        // eso es justo lo que hace que un campo parezca perdido.
+        const bool esGrid = l->mode == UiLayoutMode::Grid;
+        if (!esGrid) ImGui::BeginDisabled();
+        dragVec2("Cell Size##layout", +[](LayoutComponent& c) -> glm::vec2& { return c.cellSize; },
+                 1.0f, 0.0f, 16384.0f, "%.0f");
+        dragColumns("Columns##layout");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("0 = las que quepan en el ancho del contenedor");
+        if (!esGrid) ImGui::EndDisabled();
+
+        ImGui::TextDisabled("Content size fitter");
+        checkBox("Fit Width##layout", +[](LayoutComponent& c) -> bool& { return c.fitWidth; });
+        checkBox("Fit Height##layout", +[](LayoutComponent& c) -> bool& { return c.fitHeight; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Ese eje del Size pasa a ser la extensión de los hijos colocados "
+                              "más el padding");
+
+        ImGui::TextDisabled("Este objeto dentro del layout de su padre");
+        checkBox("Ignore Layout##layout",
+                 +[](LayoutComponent& c) -> bool& { return c.ignoreLayout; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Se ancla por su cuenta y NO ocupa hueco en el layout del padre");
+        checkBox("Clip Children##layout",
+                 +[](LayoutComponent& c) -> bool& { return c.clipChildren; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Recorta a los descendientes contra este rect (se INTERSECA con "
+                              "el recorte que venga del padre)");
+
+        ImGui::TreePop();
+    }
+
+    if (removeClicked && ctx.scene && ctx.undo)
+    {
+        auto cmd = std::make_unique<LayoutComponentCommand>(
+            *ctx.scene, "Quitar Layout de '" + ctx.selected->name + "'", ctx.selected->id,
+            /*add=*/false, *ctx.selected->getLayout());
+        cmd->execute();
+        ctx.undo->push(std::move(cmd));
+        ctx.pushLog("Componente Layout quitado de '" + ctx.selected->name + "'");
+    }
+}
+
 void PropertiesPanel::drawLightSection(EditorContext& ctx)
 {
     // Add-gate: sin el componente no hay sección, igual que los colliders.
@@ -3720,6 +3994,21 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
                 ctx.pushLog("Componente Progress Bar añadido a '" + ctx.selected->name + "'");
+            }
+            ImGui::EndDisabled();
+
+            // Layout: el único de los cuatro que no dibuja nada. Sin otro
+            // componente de UI en el objeto monta su propio contenedor, así que
+            // también vale en un GameObject pelado que solo agrupe.
+            ImGui::BeginDisabled(ctx.selected->hasLayout());
+            if (ImGui::Selectable("Layout") && ctx.scene && ctx.undo)
+            {
+                auto cmd = std::make_unique<LayoutComponentCommand>(
+                    *ctx.scene, "Añadir Layout a '" + ctx.selected->name + "'",
+                    ctx.selected->id, /*add=*/true, LayoutComponent{});
+                cmd->execute();
+                ctx.undo->push(std::move(cmd));
+                ctx.pushLog("Componente Layout añadido a '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
         }

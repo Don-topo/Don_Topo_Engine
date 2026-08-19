@@ -116,12 +116,12 @@ Up/Down/Left/Right/A..Z/Num0..Num9`, `MouseButton.Left/Right/Middle`.
 | `entity:GetTransform()` | Devuelve `Transform` |
 | `entity:GetParent()` | `Entity` del padre, o `nil` si es raíz |
 | `entity:GetChildren()` | Tabla (array 1-based) de `Entity` hijos |
-| `entity:GetComponent(name)` | Devuelve el componente si existe, si no `nil`. `name`: `"BoxCollider"`, `"SphereCollider"`, `"CapsuleCollider"`, `"PlaneCollider"`, `"AudioClip"`, `"Rigidbody"`, `"Animator"`, `"Canvas"`, `"Button"`, `"Text"`, `"ProgressBar"`, o `"Script:<NombreClase>"` pa acceder a la instancia de otro script en el mismo GameObject |
-| `entity:AddComponent(name, arg?)` | Añade componente (mismos defaults que el botón Add del editor; colliders mutuamente excluyentes). `AudioClip` requiere `arg` = ruta del asset. Los cuatro de UI no se excluyen entre sí y pedir uno que ya está devuelve el que hay. `"Script:<Nombre>"` añade el script (Awake/Start se disparan en el siguiente lifecycle update) |
+| `entity:GetComponent(name)` | Devuelve el componente si existe, si no `nil`. `name`: `"BoxCollider"`, `"SphereCollider"`, `"CapsuleCollider"`, `"PlaneCollider"`, `"AudioClip"`, `"Rigidbody"`, `"Animator"`, `"Canvas"`, `"Button"`, `"Text"`, `"ProgressBar"`, `"Layout"`, o `"Script:<NombreClase>"` pa acceder a la instancia de otro script en el mismo GameObject |
+| `entity:AddComponent(name, arg?)` | Añade componente (mismos defaults que el botón Add del editor; colliders mutuamente excluyentes). `AudioClip` requiere `arg` = ruta del asset. Los cinco de UI no se excluyen entre sí y pedir uno que ya está devuelve el que hay. `"Script:<Nombre>"` añade el script (Awake/Start se disparan en el siguiente lifecycle update) |
 | `entity:RemoveComponent(name)` | Quita el componente (scripts se remueven diferido, al final del frame) |
-| `entity:GetCanvas()` / `GetButton()` / `GetText()` / `GetProgressBar()` | El componente de UI, o `nil` si no lo tiene |
-| `entity:AddCanvas()` / `AddButton()` / `AddText()` / `AddProgressBar()` | Lo crea con los valores por defecto del componente y devuelve el wrapper; si ya existe devuelve el que hay sin pisarlo |
-| `entity:RemoveCanvas()` / `RemoveButton()` / `RemoveText()` / `RemoveProgressBar()` | Lo quita del GameObject |
+| `entity:GetCanvas()` / `GetButton()` / `GetText()` / `GetProgressBar()` / `GetLayout()` | El componente de UI, o `nil` si no lo tiene |
+| `entity:AddCanvas()` / `AddButton()` / `AddText()` / `AddProgressBar()` / `AddLayout()` | Lo crea con los valores por defecto del componente y devuelve el wrapper; si ya existe devuelve el que hay sin pisarlo |
+| `entity:RemoveCanvas()` / `RemoveButton()` / `RemoveText()` / `RemoveProgressBar()` / `RemoveLayout()` | Lo quita del GameObject |
 
 ## Transform
 
@@ -395,10 +395,11 @@ function Fade:Update(dt)
 end
 ```
 
-## UI — Canvas / Button / Text / ProgressBar
+## UI — Canvas / Button / Text / ProgressBar / Layout
 
-Los cuatro se obtienen con `entity:GetCanvas()`, `entity:GetButton()`,
-`entity:GetText()` y `entity:GetProgressBar()` (o `GetComponent("Button")`, etc.).
+Los cinco se obtienen con `entity:GetCanvas()`, `entity:GetButton()`,
+`entity:GetText()`, `entity:GetProgressBar()` y `entity:GetLayout()` (o
+`GetComponent("Button")`, etc.).
 Devuelven `nil` si el componente no está; el wrapper resuelve el componente **en
 cada acceso**, así que usarlo después de quitarlo da error de Lua, no memoria
 liberada.
@@ -482,6 +483,38 @@ mira primero si el TTF la tiene.
 | `p:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
 | `p:GetColor/SetColor(r,g,b,a)` / `p:GetFillColor/SetFillColor(r,g,b,a)` | Color del fondo y del relleno |
 | `p:GetNormalizedValue()` | El `0..1` ya acotado que usa el dibujado (rango degenerado = 0) |
+
+### Layout
+
+Coloca a los **hijos** del GameObject. No dibuja nada: sin otro componente de UI
+en el objeto, monta un contenedor propio (un rect que agrupa y recorta); con un
+`Button`, `Text` o `ProgressBar` al lado, escribe sobre el nodo de aquel y el
+**rect lo manda aquel** (`position`, `size`, anclas y pivote de aquí no se leen).
+
+Tampoco recibe clics: un grupo que no pinta no puede comerse el ratón de lo que
+tenga detrás. En el editor se selecciona desde el Hierarchy.
+
+| Propiedad / Método | Descripción |
+| --- | --- |
+| `l.mode` | `UiLayoutMode.None` / `Horizontal` / `Vertical` / `Grid`. `None` = solo agrupa y recorta |
+| `l.crossAlign` | `UiCrossAlign.Start` / `Center` / `End`. Eje TRANSVERSAL; el `Grid` no la usa |
+| `l.paddingLeft` / `paddingRight` / `paddingTop` / `paddingBottom` | Margen interior del contenedor |
+| `l.columns` | Solo `Grid`. `0` = las que quepan en el ancho |
+| `l.fitWidth` / `l.fitHeight` | Content size fitter: ese eje del `Size` pasa a ser la extensión de los hijos + padding |
+| `l.ignoreLayout` | Este objeto se ancla por su cuenta y NO ocupa hueco en el layout de su padre |
+| `l.clipChildren` | Recorta a los descendientes contra este rect (se **interseca** con el recorte del padre) |
+| `l.visible` | Se resuelve o no (un contenedor invisible esconde su subárbol) |
+| `l:GetSpacing/SetSpacing(x,y)` | Hueco entre celdas: `x` entre columnas, `y` entre filas |
+| `l:GetCellSize/SetCellSize(x,y)` | Solo `Grid`: la celda, que se le impone a cada hijo |
+| `l:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect del contenedor (solo si es suyo) |
+
+```lua
+local menu = self.entity:GetLayout() or self.entity:AddLayout()
+menu.mode = UiLayoutMode.Vertical
+menu.paddingLeft, menu.paddingTop = 12, 12
+menu:SetSpacing(0, 8)
+menu:SetSize(240, 300)
+```
 
 ### Callbacks del Button: qué los mata y qué no
 

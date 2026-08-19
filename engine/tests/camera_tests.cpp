@@ -16,6 +16,7 @@
 #include "DonTopo/Editor/PropertiesPanel.h"
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/UI/LayoutComponent.h"
 #include "DonTopo/UI/TextComponent.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -1583,8 +1584,9 @@ static void test_collect_ui_widgets_salta_los_intermedios_sin_ui()
     std::vector<std::pair<uint64_t, const ButtonComponent*>>      botones;
     std::vector<std::pair<uint64_t, const TextComponent*>>        textos;
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
+    std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    scene.collectUiWidgets(botones, textos, barras, jerarquia);
+    scene.collectUiWidgets(botones, textos, barras, layouts, jerarquia);
 
     CHECK(botones.size() == 1);
     CHECK(textos.size() == 1);
@@ -2164,6 +2166,492 @@ static void test_progress_bar_hit_test_maps_back_to_gameobject()
     CHECK(uiTextOwnerId(uiProgressBarNodeName(42ull)) == 0ull);
 }
 
+// ── Layout ──────────────────────────────────────────────────────────────────
+// El solver de auto-layout ya vivía en UiElement (layoutMode, padding, spacing,
+// celda); lo que no había era forma de usarlo desde la escena. Lo que se prueba
+// aquí es justo la capa nueva: que un GameObject SIN otro componente de UI monte
+// un contenedor propio, que con otro componente NO monte uno de más, y que los
+// campos lleguen al nodo que toca. La aritmética del solver ya la cubre
+// ui_batch_tests.
+
+// Un contenedor vacío coloca a sus hijos y NO se dibuja: es un rect, no un
+// widget. Las posiciones de los hijos son deliberadamente absurdas: si el layout
+// no las pisara, el test lo vería.
+static void test_layout_container_places_children()
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+
+    GameObject* menu = scene.addGameObject("Menu", canvasGo);
+    auto layout = std::make_shared<LayoutComponent>();
+    layout->mode        = UiLayoutMode::Vertical;
+    layout->position    = glm::vec2(30.0f, 40.0f);
+    layout->size        = glm::vec2(300.0f, 200.0f);
+    layout->paddingLeft = 7.0f;
+    layout->paddingTop  = 5.0f;
+    layout->spacing     = glm::vec2(9.0f, 12.0f);   // .x != .y: distingue los ejes
+    menu->setLayout(layout);
+
+    GameObject* uno = scene.addGameObject("Uno", menu);
+    auto a = std::make_shared<ButtonComponent>();
+    a->size     = glm::vec2(100.0f, 40.0f);
+    a->position = glm::vec2(999.0f, 999.0f);   // la manda el layout, no el hijo
+    uno->setButton(a);
+
+    GameObject* dos = scene.addGameObject("Dos", menu);
+    auto b = std::make_shared<ButtonComponent>();
+    b->size     = glm::vec2(80.0f, 30.0f);
+    b->position = glm::vec2(-500.0f, -500.0f);
+    dos->setButton(b);
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>>      botones;
+    std::vector<std::pair<uint64_t, const TextComponent*>>        textos;
+    std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
+    std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
+    std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
+    scene.collectUiWidgets(botones, textos, barras, layouts, jerarquia);
+    CHECK(layouts.size() == 1);
+
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+    syncUiWidgets(botones, textos, barras, canvas, cache, loader, &jerarquia, &layouts);
+
+    // Un contenedor por GameObject y ni uno más: el menú cuelga de la raíz y los
+    // dos botones de él.
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().size() != 1) return;
+    CHECK(canvas.root().children()[0]->name == uiLayoutNodeName(menu->id));
+    CHECK(canvas.root().children()[0]->children().size() == 2);
+
+    UiDrawData data;
+    canvas.buildDrawData(800, 480, data);
+
+    // El contenedor no pinta: dos botones, cuatro vértices cada uno.
+    CHECK(data.vertices.size() == 8);
+    if (data.vertices.size() != 8) return;
+
+    // origen = posición + padding = (30+7, 40+5)
+    CHECK(nearlyEqual(data.vertices[0].pos.x, 37.0f));
+    CHECK(nearlyEqual(data.vertices[0].pos.y, 45.0f));
+    // El segundo baja el alto del primero MÁS el spacing en Y (no el de X).
+    CHECK(nearlyEqual(data.vertices[4].pos.x, 37.0f));
+    CHECK(nearlyEqual(data.vertices[4].pos.y, 97.0f));
+}
+
+// Con otro componente de UI en el mismo GameObject el layout NO monta contenedor:
+// escribe sus campos en el nodo que ya hay. Un panel de más sería un rect
+// invisible entre el widget y sus hijos, y las anclas dejarían de cuadrar.
+static void test_layout_on_widget_uses_its_node()
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+
+    GameObject* barra = scene.addGameObject("Barra", canvasGo);
+    auto fondo = std::make_shared<ButtonComponent>();
+    fondo->position = glm::vec2(10.0f, 20.0f);
+    fondo->size     = glm::vec2(200.0f, 100.0f);
+    barra->setButton(fondo);
+    auto layout = std::make_shared<LayoutComponent>();
+    layout->mode        = UiLayoutMode::Horizontal;
+    layout->paddingLeft = 6.0f;
+    layout->paddingTop  = 4.0f;
+    barra->setLayout(layout);
+
+    GameObject* icono = scene.addGameObject("Icono", barra);
+    auto ib = std::make_shared<ButtonComponent>();
+    ib->size     = glm::vec2(30.0f, 30.0f);
+    ib->position = glm::vec2(500.0f, 500.0f);
+    icono->setButton(ib);
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>>      botones;
+    std::vector<std::pair<uint64_t, const TextComponent*>>        textos;
+    std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
+    std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
+    std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
+    scene.collectUiWidgets(botones, textos, barras, layouts, jerarquia);
+
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+    syncUiWidgets(botones, textos, barras, canvas, cache, loader, &jerarquia, &layouts);
+
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().size() != 1) return;
+    // El nodo del GameObject sigue siendo el del botón, no un contenedor nuevo.
+    CHECK(canvas.root().children()[0]->name == uiButtonNodeName(barra->id));
+    CHECK(canvas.root().children()[0]->children().size() == 1);
+
+    UiDrawData data;
+    canvas.buildDrawData(800, 480, data);
+    CHECK(data.vertices.size() == 8);
+    if (data.vertices.size() != 8) return;
+    CHECK(nearlyEqual(data.vertices[0].pos.x, 10.0f));
+    CHECK(nearlyEqual(data.vertices[0].pos.y, 20.0f));
+    // El hijo, colocado por el layout del botón: esquina + padding.
+    CHECK(nearlyEqual(data.vertices[4].pos.x, 16.0f));
+    CHECK(nearlyEqual(data.vertices[4].pos.y, 24.0f));
+}
+
+// ignoreLayout es lo que un Unity resuelve con un LayoutElement aparte: aquí va
+// en el mismo componente. El hijo que lo pone se ancla por su cuenta y NO ocupa
+// hueco, así que el siguiente arranca en el origen del contenedor.
+static void test_layout_ignore_layout_child_keeps_its_anchor()
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+
+    GameObject* menu = scene.addGameObject("Menu", canvasGo);
+    auto layout = std::make_shared<LayoutComponent>();
+    layout->mode = UiLayoutMode::Vertical;
+    layout->size = glm::vec2(300.0f, 200.0f);
+    menu->setLayout(layout);
+
+    // Suelto: botón + layout en el MISMO GameObject solo para el ignoreLayout.
+    GameObject* suelto = scene.addGameObject("Suelto", menu);
+    auto sb = std::make_shared<ButtonComponent>();
+    sb->size     = glm::vec2(100.0f, 40.0f);
+    sb->position = glm::vec2(250.0f, 150.0f);
+    suelto->setButton(sb);
+    auto suelta = std::make_shared<LayoutComponent>();
+    suelta->mode         = UiLayoutMode::None;
+    suelta->ignoreLayout = true;
+    suelto->setLayout(suelta);
+
+    GameObject* colocado = scene.addGameObject("Colocado", menu);
+    auto cb = std::make_shared<ButtonComponent>();
+    cb->size = glm::vec2(80.0f, 30.0f);
+    // No neutra: si el layout no lo colocara, el test vería esta posición en vez
+    // del origen del contenedor.
+    cb->position = glm::vec2(77.0f, 88.0f);
+    colocado->setButton(cb);
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>>      botones;
+    std::vector<std::pair<uint64_t, const TextComponent*>>        textos;
+    std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
+    std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
+    std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
+    scene.collectUiWidgets(botones, textos, barras, layouts, jerarquia);
+    CHECK(layouts.size() == 2);
+
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+    syncUiWidgets(botones, textos, barras, canvas, cache, loader, &jerarquia, &layouts);
+
+    UiDrawData data;
+    canvas.buildDrawData(800, 480, data);
+    CHECK(data.vertices.size() == 8);
+    if (data.vertices.size() != 8) return;
+
+    // El suelto, en su propia posición dentro del contenedor.
+    CHECK(nearlyEqual(data.vertices[0].pos.x, 250.0f));
+    CHECK(nearlyEqual(data.vertices[0].pos.y, 150.0f));
+    // Y el colocado arranca arriba del todo: el suelto no le comió el hueco.
+    CHECK(nearlyEqual(data.vertices[4].pos.x, 0.0f));
+    CHECK(nearlyEqual(data.vertices[4].pos.y, 0.0f));
+}
+
+// Un contenedor SÍ aporta rect, así que sostiene a sus hijos en la jerarquía
+// igual que un botón. Sin esto, sus hijos subirían a la raíz y el layout no
+// colocaría a nadie.
+static void test_collect_ui_widgets_incluye_los_layouts()
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+
+    GameObject* menu = scene.addGameObject("Menu", canvasGo);
+    menu->setLayout(std::make_shared<LayoutComponent>());
+
+    GameObject* boton = scene.addGameObject("Boton", menu);
+    boton->setButton(std::make_shared<ButtonComponent>());
+
+    std::vector<std::pair<uint64_t, const ButtonComponent*>>      botones;
+    std::vector<std::pair<uint64_t, const TextComponent*>>        textos;
+    std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
+    std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
+    std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
+    scene.collectUiWidgets(botones, textos, barras, layouts, jerarquia);
+
+    CHECK(layouts.size() == 1);
+    CHECK(botones.size() == 1);
+    if (layouts.size() != 1 || botones.size() != 1) return;
+    CHECK(layouts[0].first == menu->id);
+
+    CHECK(jerarquia.size() == 2);
+    if (jerarquia.size() != 2) return;
+    CHECK(jerarquia[0].first == menu->id);
+    CHECK(jerarquia[0].second == 0ull);
+    CHECK(jerarquia[1].first == boton->id);
+    CHECK(jerarquia[1].second == menu->id);   // el contenedor, no el canvas
+}
+
+// Sin jerarquía (el camino de las escenas viejas) el contenedor sigue montándose
+// en la raíz: perderlo dejaría la escena sin el rect que agrupa.
+static void test_layout_sin_jerarquia_monta_en_la_raiz()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    LayoutComponent l;
+    l.position = glm::vec2(12.0f, 34.0f);
+    l.size     = glm::vec2(56.0f, 78.0f);
+    std::vector<std::pair<uint64_t, const LayoutComponent*>> layouts{ {21ull, &l} };
+
+    syncUiWidgets({}, {}, {}, canvas, cache, loader, nullptr, &layouts);
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().size() != 1) return;
+    CHECK(canvas.root().children()[0]->name == uiLayoutNodeName(21ull));
+    // Y no dibuja: un contenedor es un rect, no un quad de color.
+    UiDrawData data;
+    canvas.buildDrawData(800, 480, data);
+    CHECK(data.vertices.empty());
+}
+
+// Valores no neutros y DISTINTOS entre sí: con ceros, unos o repetidos, un
+// campo que la serialización no escribe pasaría igual (el default lo taparía).
+static void fillLayout(LayoutComponent& l)
+{
+    l.anchorMin = glm::vec2(0.0625f, 0.1875f);
+    l.anchorMax = glm::vec2(0.6875f, 0.9375f);
+    l.pivot     = glm::vec2(0.28125f, 0.34375f);
+    l.position  = glm::vec2(13.5f, -27.25f);
+    l.size      = glm::vec2(321.75f, 213.5f);
+    l.visible   = false;
+
+    l.mode = UiLayoutMode::Grid;
+
+    l.paddingLeft   = 3.25f;
+    l.paddingRight  = 5.75f;
+    l.paddingTop    = 7.125f;
+    l.paddingBottom = 9.375f;
+
+    l.spacing  = glm::vec2(11.5f, 13.25f);
+    l.cellSize = glm::vec2(64.75f, 48.125f);
+    l.columns  = 7;
+
+    l.crossAlign = UiCrossAlign::End;
+
+    l.fitWidth  = true;
+    l.fitHeight = true;
+
+    l.ignoreLayout = true;
+    l.clipChildren = true;
+}
+
+static void checkLayoutMatchesFilled(const LayoutComponent& l)
+{
+    CHECK(nearlyEqual(l.anchorMin.x, 0.0625f));
+    CHECK(nearlyEqual(l.anchorMin.y, 0.1875f));
+    CHECK(nearlyEqual(l.anchorMax.x, 0.6875f));
+    CHECK(nearlyEqual(l.anchorMax.y, 0.9375f));
+    CHECK(nearlyEqual(l.pivot.x, 0.28125f));
+    CHECK(nearlyEqual(l.pivot.y, 0.34375f));
+    CHECK(nearlyEqual(l.position.x, 13.5f));
+    CHECK(nearlyEqual(l.position.y, -27.25f));
+    CHECK(nearlyEqual(l.size.x, 321.75f));
+    CHECK(nearlyEqual(l.size.y, 213.5f));
+    CHECK(l.visible == false);
+
+    CHECK(l.mode == UiLayoutMode::Grid);
+
+    CHECK(nearlyEqual(l.paddingLeft, 3.25f));
+    CHECK(nearlyEqual(l.paddingRight, 5.75f));
+    CHECK(nearlyEqual(l.paddingTop, 7.125f));
+    CHECK(nearlyEqual(l.paddingBottom, 9.375f));
+
+    CHECK(nearlyEqual(l.spacing.x, 11.5f));
+    CHECK(nearlyEqual(l.spacing.y, 13.25f));
+    CHECK(nearlyEqual(l.cellSize.x, 64.75f));
+    CHECK(nearlyEqual(l.cellSize.y, 48.125f));
+    CHECK(l.columns == 7u);
+
+    CHECK(l.crossAlign == UiCrossAlign::End);
+
+    CHECK(l.fitWidth == true);
+    CHECK(l.fitHeight == true);
+
+    CHECK(l.ignoreLayout == true);
+    CHECK(l.clipChildren == true);
+}
+
+static void test_layout_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* go = scene.addGameObject("Menu", canvasGo);
+    auto layout = std::make_shared<LayoutComponent>();
+    fillLayout(*layout);
+    go->setLayout(layout);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasLayout()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "Menu");
+    checkLayoutMatchesFilled(*found->getLayout());
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Una escena guardada antes del componente carga igual: sin Layout y sin avisos.
+static void test_scene_without_layout_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool alguno = false;
+    loaded.traverse([&](GameObject* n) { if (n->hasLayout()) alguno = true; });
+    CHECK(!alguno);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Neutralidad: sin ningún Layout el JSON no gana ni un byte, y añadir y quitar
+// el componente devuelve el dump EXACTO de partida.
+static void test_scene_without_layout_serializes_identically()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    const std::string antes = scene.toJson().dump();
+
+    auto layout = std::make_shared<LayoutComponent>();
+    fillLayout(*layout);
+    go->setLayout(layout);
+    CHECK(scene.toJson().dump() != antes);
+
+    go->setLayout(nullptr);
+    CHECK(scene.toJson().dump() == antes);
+}
+
+static void test_layout_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Menu");
+    LayoutComponent st;
+    fillLayout(st);
+    LayoutComponentCommand cmd(scene, "Add Layout", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasLayout());
+    checkLayoutMatchesFilled(*go->getLayout());
+    cmd.undo();
+    CHECK(!go->hasLayout());
+    cmd.execute();
+    CHECK(go->hasLayout());
+    checkLayoutMatchesFilled(*go->getLayout());
+}
+
+// Remove reversible: el undo devuelve el componente CON sus valores.
+static void test_layout_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Menu");
+    auto layout = std::make_shared<LayoutComponent>();
+    fillLayout(*layout);
+    go->setLayout(layout);
+
+    LayoutComponentCommand cmd(scene, "Remove Layout", go->id, /*add=*/false, *layout);
+    cmd.execute();
+    CHECK(!go->hasLayout());
+    cmd.undo();
+    CHECK(go->hasLayout());
+    checkLayoutMatchesFilled(*go->getLayout());
+}
+
+// Editar un campo del contenedor también entra en el stack, con el mismo
+// PropertyCommand<T> que arma la sección (resuelto por id, no por puntero).
+static void test_layout_property_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Menu");
+    go->setLayout(std::make_shared<LayoutComponent>());
+    const uint64_t id = go->id;
+    Scene* sc = &scene;
+
+    auto applySpacing = [sc, id](const glm::vec2& v) {
+        if (GameObject* g = sc->findById(id))
+            if (g->hasLayout()) g->getLayout()->spacing = v;
+    };
+    PropertyCommand<glm::vec2> cmd("Spacing", glm::vec2(0.0f, 0.0f), glm::vec2(4.5f, 6.25f),
+                                   applySpacing);
+
+    cmd.execute();
+    CHECK(nearlyEqual(go->getLayout()->spacing.x, 4.5f));
+    CHECK(nearlyEqual(go->getLayout()->spacing.y, 6.25f));
+    cmd.undo();
+    CHECK(nearlyEqual(go->getLayout()->spacing.x, 0.0f));
+    cmd.execute();
+    CHECK(nearlyEqual(go->getLayout()->spacing.y, 6.25f));
+
+    // Sin componente el applier no hace nada (ni crashea ni lo resucita).
+    go->setLayout(nullptr);
+    cmd.undo();
+    CHECK(!go->hasLayout());
+}
+
+// Un contenedor no dibuja, así que tampoco puede COMERSE los clics: el hit test
+// lo tiene que atravesar. Si fuera raycastTarget, un grupo que solo coloca
+// dejaría muerto lo que tuviera detrás, y sin pintar nada no habría forma de ver
+// por qué.
+static void test_layout_container_no_se_come_los_clics()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    LayoutComponent l;
+    l.mode     = UiLayoutMode::None;   // sin colocar: el hijo se queda en su sitio
+    l.position = glm::vec2(0.0f, 0.0f);
+    l.size     = glm::vec2(400.0f, 300.0f);
+    std::vector<std::pair<uint64_t, const LayoutComponent*>> layouts{ {31ull, &l} };
+
+    ButtonComponent b;
+    b.position = glm::vec2(10.0f, 10.0f);
+    b.size     = glm::vec2(50.0f, 20.0f);
+    std::vector<std::pair<uint64_t, const ButtonComponent*>> botones{ {32ull, &b} };
+    // El botón cuelga del contenedor.
+    std::vector<std::pair<uint64_t, uint64_t>> jerarquia{ {31ull, 0ull}, {32ull, 31ull} };
+
+    syncUiWidgets(botones, {}, {}, canvas, cache, loader, &jerarquia, &layouts);
+    UiDrawData data;
+    canvas.buildDrawData(800, 480, data);
+
+    // Dentro del botón: lo coge él.
+    const UiElement* enBoton = canvas.hitTest(glm::vec2(20.0f, 15.0f));
+    CHECK(enBoton != nullptr);
+    if (enBoton) CHECK(uiButtonOwnerId(enBoton->name) == 32ull);
+
+    // Dentro del contenedor pero FUERA del botón: no lo coge nadie.
+    CHECK(canvas.hitTest(glm::vec2(300.0f, 250.0f)) == nullptr);
+}
+
+// El nombre del nodo lleva de vuelta al GameObject (clic en el viewport), y no
+// se confunde con los otros tres prefijos.
+static void test_layout_hit_test_maps_back_to_gameobject()
+{
+    CHECK(uiLayoutOwnerId(uiLayoutNodeName(42ull)) == 42ull);
+    CHECK(uiLayoutOwnerId("Cubo") == 0ull);
+    CHECK(uiLayoutOwnerId(uiButtonNodeName(42ull)) == 0ull);
+    CHECK(uiLayoutOwnerId(uiTextNodeName(42ull)) == 0ull);
+    CHECK(uiLayoutOwnerId(uiProgressBarNodeName(42ull)) == 0ull);
+    CHECK(uiButtonOwnerId(uiLayoutNodeName(42ull)) == 0ull);
+    CHECK(uiTextOwnerId(uiLayoutNodeName(42ull)) == 0ull);
+    CHECK(uiProgressBarOwnerId(uiLayoutNodeName(42ull)) == 0ull);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -2252,6 +2740,20 @@ int main()
     test_all_three_ui_components_coexist();
     test_progress_bar_without_atlas_loads_nothing();
     test_progress_bar_hit_test_maps_back_to_gameobject();
+
+    test_layout_container_places_children();
+    test_layout_on_widget_uses_its_node();
+    test_layout_ignore_layout_child_keeps_its_anchor();
+    test_collect_ui_widgets_incluye_los_layouts();
+    test_layout_sin_jerarquia_monta_en_la_raiz();
+    test_layout_container_no_se_come_los_clics();
+    test_layout_hit_test_maps_back_to_gameobject();
+    test_layout_round_trip(pm, am);
+    test_scene_without_layout_block_still_loads(pm, am);
+    test_scene_without_layout_serializes_identically();
+    test_layout_command_add_undo_redo();
+    test_layout_command_remove();
+    test_layout_property_command_undo_redo();
 
     am.shutdown();
     pm.shutdown();

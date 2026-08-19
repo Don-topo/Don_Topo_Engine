@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/UI/LayoutComponent.h"
 #include "DonTopo/UI/ProgressBarComponent.h"
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiFont.h"
@@ -150,6 +151,7 @@ namespace DonTopo
         std::vector<uint64_t> buttonIds;
         std::vector<uint64_t> barIds;
         std::vector<uint64_t> textIds;
+        std::vector<uint64_t> layoutIds;
 
         // La jerarquía con la que se montó el árbol, aplanada a (id, padre) y en
         // el mismo orden que llegó. Cambiarla mueve nodos de sitio, así que se
@@ -169,6 +171,13 @@ namespace DonTopo
         std::vector<ProgressBar*> barNodes;
         std::vector<Panel*>       barFills;
 
+        // El nodo al que escribe cada layout: su contenedor propio si el
+        // GameObject no tiene ningún otro componente de UI, y si no el nodo de
+        // aquel. Con layoutOwnsRect a false ese nodo tiene OTRO dueño, así que
+        // de aquí solo salen los campos de layout y nunca el rect.
+        std::vector<UiElement*> layoutNodes;
+        std::vector<char>       layoutOwnsRect;
+
         // Copia de lo que se volcó la última vez, en el mismo orden. Lo que no
         // ha cambiado no se vuelve a volcar NI se ensucia: escribir los campos
         // sin ensuciar deja el nodo clavado (el canvas se copia los vértices
@@ -176,6 +185,7 @@ namespace DonTopo
         std::vector<ButtonComponent>      buttonPrev;
         std::vector<TextComponent>        textPrev;
         std::vector<ProgressBarComponent> barPrev;
+        std::vector<LayoutComponent>      layoutPrev;
 
         // Recursos de GPU por ruta. Sin esta caché una ruta de atlas cargaría un
         // atlas NUEVO cada frame (Renderer::loadUiAtlas no cachea por ruta) y se
@@ -214,8 +224,16 @@ namespace DonTopo
                               const std::vector<std::pair<uint64_t, const TextComponent*>>& texts,
                               const std::vector<std::pair<uint64_t, const ProgressBarComponent*>>& bars,
                               UiCanvas& canvas, UiWidgetSyncCache& cache, Loader& loader,
-                              const std::vector<std::pair<uint64_t, uint64_t>>* parents = nullptr)
+                              const std::vector<std::pair<uint64_t, uint64_t>>* parents = nullptr,
+                              const std::vector<std::pair<uint64_t, const LayoutComponent*>>* layouts = nullptr)
     {
+        // Por puntero y al final, como parents, y no como una cuarta lista por
+        // valor: así las ~60 llamadas que ya existen (los tests, sobre todo)
+        // siguen compilando y significando lo mismo. A nullptr no hay ni un
+        // contenedor y el árbol sale idéntico al de antes de que esto existiera.
+        static const std::vector<std::pair<uint64_t, const LayoutComponent*>> kSinLayouts;
+        const auto& lays = layouts ? *layouts : kSinLayouts;
+
         auto resolveAtlas = [&](const std::string& path) -> UiTextureAtlas*
         {
             if (path.empty()) return nullptr;
@@ -238,13 +256,16 @@ namespace DonTopo
         // ¿Cambió el CONJUNTO de widgets? Solo entonces se reconstruye.
         bool rebuild = cache.buttonIds.size() != buttons.size() ||
                        cache.textIds.size() != texts.size() ||
-                       cache.barIds.size() != bars.size();
+                       cache.barIds.size() != bars.size() ||
+                       cache.layoutIds.size() != lays.size();
         for (size_t i = 0; !rebuild && i < buttons.size(); i++)
             if (cache.buttonIds[i] != buttons[i].first) rebuild = true;
         for (size_t i = 0; !rebuild && i < texts.size(); i++)
             if (cache.textIds[i] != texts[i].first) rebuild = true;
         for (size_t i = 0; !rebuild && i < bars.size(); i++)
             if (cache.barIds[i] != bars[i].first) rebuild = true;
+        for (size_t i = 0; !rebuild && i < lays.size(); i++)
+            if (cache.layoutIds[i] != lays[i].first) rebuild = true;
 
         // Un botón que gana o pierde etiqueta (texto vacío <-> no vacío) cambia
         // la FORMA del subárbol, y eso también obliga a reconstruir.
@@ -289,13 +310,18 @@ namespace DonTopo
             cache.barNodes.assign(bars.size(), nullptr);
             cache.barFills.assign(bars.size(), nullptr);
             cache.barPrev.assign(bars.size(), ProgressBarComponent{});
+            cache.layoutIds.assign(lays.size(), 0ull);
+            cache.layoutNodes.assign(lays.size(), nullptr);
+            cache.layoutOwnsRect.assign(lays.size(), (char)0);
+            cache.layoutPrev.assign(lays.size(), LayoutComponent{});
 
             // Dónde está cada GameObject en cada lista, para poder montarlo
             // cuando toque su turno en el recorrido del árbol.
-            std::unordered_map<uint64_t, size_t> idxButton, idxBar, idxText;
+            std::unordered_map<uint64_t, size_t> idxButton, idxBar, idxText, idxLayout;
             for (size_t i = 0; i < buttons.size(); i++) idxButton[buttons[i].first] = i;
             for (size_t i = 0; i < bars.size();    i++) idxBar[bars[i].first]       = i;
             for (size_t i = 0; i < texts.size();   i++) idxText[texts[i].first]     = i;
+            for (size_t i = 0; i < lays.size();    i++) idxLayout[lays[i].first]    = i;
 
             // Nodo del que cuelgan los HIJOS de cada GameObject.
             std::unordered_map<uint64_t, UiElement*> principal;
@@ -357,6 +383,26 @@ namespace DonTopo
                 return &t;
             };
 
+            // El layout de un GameObject: si no hay otro componente de UI monta
+            // un contenedor propio (no dibujable) y ese pasa a ser su nodo; si lo
+            // hay, se limita a apuntar al de aquel y NO monta nada. `compartido`
+            // es justo ese nodo ajeno, o nullptr.
+            auto montaLayout = [&](size_t i, uint64_t id, UiElement& padre,
+                                   UiElement* compartido) -> UiElement*
+            {
+                UiElement* destino = compartido;
+                if (destino == nullptr)
+                    destino = &padre.add<Panel>(uiLayoutNodeName(id));
+
+                cache.layoutIds[i]       = id;
+                cache.layoutNodes[i]     = destino;
+                cache.layoutOwnsRect[i]  = compartido == nullptr ? (char)1 : (char)0;
+                // Un componente que no puede ser igual a ninguno real fuerza el
+                // primer volcado, igual que en el botón y en la barra.
+                cache.layoutPrev[i].columns = 0xFFFFFFFFu;
+                return compartido == nullptr ? destino : nullptr;
+            };
+
             // Todos los componentes de UN GameObject, en el orden en el que se
             // dibujan: la barra debajo, el botón encima y el texto el último.
             // El nodo del que colgarán sus hijos es el PRINCIPAL: el botón si lo
@@ -366,12 +412,30 @@ namespace DonTopo
                 UiElement* barra = nullptr;
                 UiElement* boton = nullptr;
                 UiElement* texto = nullptr;
+                UiElement* caja  = nullptr;
+
+                const auto itLayout = idxLayout.find(id);
+                const bool tieneWidget = idxBar.count(id) != 0 || idxButton.count(id) != 0 ||
+                                         idxText.count(id) != 0;
+
+                // El contenedor PRIMERO: es el que aporta el rect y del que
+                // colgarán los hijos. Solo cuando no hay ningún widget en el
+                // mismo GameObject — con uno, el rect ya tiene dueño.
+                if (itLayout != idxLayout.end() && !tieneWidget)
+                    caja = montaLayout(itLayout->second, id, padre, nullptr);
 
                 if (auto it = idxBar.find(id);    it != idxBar.end())    barra = creaBarra(it->second, padre);
                 if (auto it = idxButton.find(id); it != idxButton.end()) boton = creaBoton(it->second, padre);
                 if (auto it = idxText.find(id);   it != idxText.end())   texto = creaTexto(it->second, padre);
 
-                principal[id] = boton ? boton : (barra ? barra : texto);
+                UiElement* princ = boton ? boton : (barra ? barra : (texto ? texto : caja));
+                principal[id] = princ;
+
+                // Con widget en el mismo GameObject, el layout escribe en el nodo
+                // principal de aquel: sus hijos ya cuelgan de ahí, así que es el
+                // que tiene que colocarlos.
+                if (itLayout != idxLayout.end() && tieneWidget)
+                    montaLayout(itLayout->second, id, padre, princ);
             };
 
             if (parents != nullptr)
@@ -404,6 +468,9 @@ namespace DonTopo
                 for (const auto& entry : texts)
                     if (principal.find(entry.first) == principal.end())
                         montaGameObject(entry.first, canvas.root());
+                for (const auto& entry : lays)
+                    if (principal.find(entry.first) == principal.end())
+                        montaGameObject(entry.first, canvas.root());
             }
             else
             {
@@ -413,6 +480,25 @@ namespace DonTopo
                 for (size_t i = 0; i < buttons.size(); i++) creaBoton(i, canvas.root());
                 for (size_t i = 0; i < bars.size();    i++) creaBarra(i, canvas.root());
                 for (size_t i = 0; i < texts.size();   i++) creaTexto(i, canvas.root());
+
+                // Sin jerarquía nada cuelga de nadie, así que el contenedor no
+                // coloca a ningún hijo; se monta igual porque el resto del
+                // sistema (gizmo, picking, el volcado de abajo) cuenta con que su
+                // nodo existe. Compartiendo GameObject con un widget, el layout
+                // apunta al nodo de aquel, como en el camino con jerarquía.
+                for (size_t i = 0; i < lays.size(); i++)
+                {
+                    const uint64_t id = lays[i].first;
+                    UiElement* compartido = nullptr;
+                    if (auto it = idxButton.find(id); it != idxButton.end())
+                        compartido = cache.buttonNodes[it->second];
+                    else if (auto itb = idxBar.find(id); itb != idxBar.end())
+                        compartido = cache.barNodes[itb->second];
+                    else if (auto itt = idxText.find(id); itt != idxText.end())
+                        compartido = cache.textNodes[itt->second];
+
+                    montaLayout(i, id, canvas.root(), compartido);
+                }
             }
 
             cache.parents = parents ? *parents : std::vector<std::pair<uint64_t, uint64_t>>{};
@@ -501,6 +587,23 @@ namespace DonTopo
             t.drawable = (t.font != nullptr);
             t.markDirty(UiElement::DirtyAll);
             cache.textPrev[i] = src;
+        }
+
+        // El layout va el ÚLTIMO: cuando comparte nodo con un widget, aquel ya
+        // ha reescrito su rect este frame y esto solo añade los campos de
+        // colocación encima. Al revés, un botón que cambia de color borraría el
+        // layout hasta el siguiente cambio del componente.
+        for (size_t i = 0; i < lays.size(); i++)
+        {
+            const LayoutComponent& src = *lays[i].second;
+            if (src == cache.layoutPrev[i]) continue;
+
+            UiElement& e = *cache.layoutNodes[i];
+            src.applyTo(e, cache.layoutOwnsRect[i] != 0);
+            // DirtyAll y no solo DirtyLayout: con rect propio aquí se ha
+            // reescrito el nodo entero.
+            e.markDirty(UiElement::DirtyAll);
+            cache.layoutPrev[i] = src;
         }
     }
 }

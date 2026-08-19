@@ -19,6 +19,7 @@
 #include "DonTopo/Core/LightComponent.h"
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/UI/LayoutComponent.h"
 #include "DonTopo/UI/TextComponent.h"
 #include "DonTopo/UI/ProgressBarComponent.h"
 
@@ -176,6 +177,16 @@ namespace DonTopo
             const std::shared_ptr<ProgressBarComponent>& getProgressBar() const { return m_progressBar; }
             bool hasProgressBar() const { return m_progressBar != nullptr; }
 
+            // Auto-layout: coloca a los HIJOS de este GameObject, y con
+            // ignoreLayout saca a este de la colocacion de su padre. Mismo
+            // contrato que el resto: SOLO DATOS, y el nodo lo resuelve
+            // syncUiWidgets(). Sin ningun otro componente de UI en el objeto, el
+            // sync le monta un contenedor propio (no dibujable); con el, escribe
+            // los campos de layout en el nodo de aquel.
+            void setLayout(std::shared_ptr<LayoutComponent> l) { m_layout = std::move(l); }
+            const std::shared_ptr<LayoutComponent>& getLayout() const { return m_layout; }
+            bool hasLayout() const { return m_layout != nullptr; }
+
             // Scripts Lua — a diferencia del resto de slots, vector: se
             // permiten varios scripts por GameObject (incluso repetidos).
             void addScript(std::unique_ptr<ScriptComponent> script);
@@ -237,6 +248,7 @@ namespace DonTopo
             std::shared_ptr<ButtonComponent> m_button;
             std::shared_ptr<TextComponent> m_text;
             std::shared_ptr<ProgressBarComponent> m_progressBar;
+            std::shared_ptr<LayoutComponent> m_layout;
             std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
     };
 }

@@ -42,7 +42,7 @@ A game engine written in C++20, with two interchangeable render backends: **Vulk
 - **Async asset loading**: worker thread pool (`JobSystem`), off-thread image decode, batched GPU uploads with deferred visibility and deferred destruction — no `vkDeviceWaitIdle` stalls on drop or scene load
 - **Export Game**: packages a standalone runtime (scene, assets, scripts, shaders, splash screen, FMOD and MSVC CRT DLLs) that links no editor code at all
 - **Lua scripting**: `ScriptComponent` (multiple per GameObject), Unity-style lifecycle (Awake/Start/Update/FixedUpdate/LateUpdate/OnDestroy), Entity/Transform/Scene/Input/Audio API, runtime scene switching (`DonTopo.loadScene`), hot reload, auto-generated property UI
-- **2D UI components**: `Canvas` (scale modes, reference resolution, safe area), `Button` (5 states, color-tint/sprite-swap/fade transitions, optional text label), `Text` (font, size, outline, shadow, align, wrap/overflow) and `ProgressBar` (value range, fill direction, background/fill sprites). They are **data-only** components of the scene: a single per-frame sync rebuilds/updates the live canvas tree from them, so what you see in Play and in the exported game comes from the scene, not from a hand-wired tree. Editable in Properties and **fully scriptable from Lua** — every field, plus `OnClick`/`OnDoubleClick` callbacks and the button state (see below)
+- **2D UI components**: `Canvas` (scale modes, reference resolution, safe area), `Button` (5 states, color-tint/sprite-swap/fade transitions, optional text label), `Text` (font, size, outline, shadow, align, wrap/overflow) `ProgressBar` (value range, fill direction, background/fill sprites) and `Layout` (horizontal/vertical/grid auto-layout with padding, spacing, cell size, cross-axis alignment, content-size fitters and per-child `ignoreLayout`; on a GameObject with no other UI component it builds its own non-drawing container that groups, places and clips). They are **data-only** components of the scene: a single per-frame sync rebuilds/updates the live canvas tree from them, so what you see in Play and in the exported game comes from the scene, not from a hand-wired tree. Editable in Properties and **fully scriptable from Lua** — every field, plus `OnClick`/`OnDoubleClick` callbacks and the button state (see below)
 - FBX / OBJ model loading (embedded textures supported)
 
 ## Tech Stack
@@ -715,13 +715,14 @@ function BotonDemo:Update(dt)
 end
 ```
 
-`entity:GetCanvas()/GetButton()/GetText()/GetProgressBar()` return `nil` when the
-component is absent; `AddCanvas()/AddButton()/AddText()/AddProgressBar()` create it
+`entity:GetCanvas()/GetButton()/GetText()/GetProgressBar()/GetLayout()` return `nil`
+when the component is absent; `AddCanvas()/AddButton()/AddText()/AddProgressBar()/AddLayout()` create it
 (returning the wrapper, and returning the existing one if it is already there) and
 `RemoveCanvas()/…` drop it. The same names also work through
 `GetComponent`/`AddComponent`/`RemoveComponent`. Enums travel as integer constant
 tables: `UiScaleMode`, `UiScreenMatch`, `UiTextAlign`, `UiTextOverflow`,
-`UiProgressFillDirection`, `UiButtonTransition`, `UiButtonState`.
+`UiProgressFillDirection`, `UiButtonTransition`, `UiButtonState`, `UiLayoutMode`,
+`UiCrossAlign`.
 
 Setters always write to the **component**, never to the live canvas node — the
 per-frame sync dumps the component onto the node and would overwrite any direct
@@ -740,10 +741,10 @@ over the viewport image** (like Unity, a button does not light up in edit mode);
 coordinates are canvas pixels from the top-left corner of that image.
 
 API surface: `self.entity` (`GetTransform`, `GetComponent`/`AddComponent`/`RemoveComponent`,
-`GetCanvas`/`GetButton`/`GetText`/`GetProgressBar` + `Add*`/`Remove*`,
+`GetCanvas`/`GetButton`/`GetText`/`GetProgressBar`/`GetLayout` + `Add*`/`Remove*`,
 `GetParent`/`GetChildren`), `Transform` (position/rotation/scale, `Translate`/`Rotate`),
 `Scene` (`Find`/`CreateGameObject`/`Instantiate`/`Destroy`), UI (`Canvas`/`Button`/
-`Text`/`ProgressBar`, incl. button callbacks and state), `DonTopo.loadScene`,
+`Text`/`ProgressBar`/`Layout`, incl. button callbacks and state), `DonTopo.loadScene`,
 `Input` (`IsKeyDown`/`IsKeyPressed`/
 `IsKeyReleased`, `Key.*`), `Log.Info/Warn/Error` (+ `print`) routed to the Log Console. Scripts
 only run in Play Mode; a broken script never crashes the engine (compile/runtime errors are

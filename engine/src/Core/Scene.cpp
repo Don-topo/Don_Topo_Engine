@@ -51,6 +51,9 @@ namespace
     using DonTopo::UiTextOverflow;
     using DonTopo::ProgressBarComponent;
     using DonTopo::UiProgressFillDirection;
+    using DonTopo::LayoutComponent;
+    using DonTopo::UiLayoutMode;
+    using DonTopo::UiCrossAlign;
 
     // Forward declarations: animatorFromJson (más abajo) necesita estos
     // lectores tolerantes a JSON corrupto (definidos junto a jsonToMat4/
@@ -227,6 +230,42 @@ namespace
         if (s == "bottomToTop") return UiProgressFillDirection::BottomToTop;
         if (s == "topToBottom") return UiProgressFillDirection::TopToBottom;
         return UiProgressFillDirection::LeftToRight;   // valor desconocido -> el default
+    }
+
+    const char* uiLayoutModeToStr(UiLayoutMode m)
+    {
+        switch (m)
+        {
+            case UiLayoutMode::Horizontal: return "horizontal";
+            case UiLayoutMode::Grid:       return "grid";
+            case UiLayoutMode::None:       return "none";
+            default:                       return "vertical";
+        }
+    }
+
+    UiLayoutMode uiLayoutModeFromStr(const std::string& s)
+    {
+        if (s == "horizontal") return UiLayoutMode::Horizontal;
+        if (s == "grid")       return UiLayoutMode::Grid;
+        if (s == "none")       return UiLayoutMode::None;
+        return UiLayoutMode::Vertical;   // valor desconocido -> el default
+    }
+
+    const char* uiCrossAlignToStr(UiCrossAlign a)
+    {
+        switch (a)
+        {
+            case UiCrossAlign::Center: return "center";
+            case UiCrossAlign::End:    return "end";
+            default:                   return "start";
+        }
+    }
+
+    UiCrossAlign uiCrossAlignFromStr(const std::string& s)
+    {
+        if (s == "center") return UiCrossAlign::Center;
+        if (s == "end")    return UiCrossAlign::End;
+        return UiCrossAlign::Start;   // valor desconocido -> el default
     }
 
     // Los vectores del Button van como objeto con componentes nombradas, igual
@@ -681,6 +720,29 @@ namespace
                                  {"atlasPath", p->atlasPath},
                                  {"backgroundPath", p->backgroundPath},
                                  {"fillPath", p->fillPath} };
+        }
+        if (node.hasLayout())
+        {
+            const auto& l = node.getLayout();
+            j["layout"] = { {"anchorMin", vec2ToJsonXY(l->anchorMin)},
+                            {"anchorMax", vec2ToJsonXY(l->anchorMax)},
+                            {"pivot", vec2ToJsonXY(l->pivot)},
+                            {"position", vec2ToJsonXY(l->position)},
+                            {"size", vec2ToJsonXY(l->size)},
+                            {"visible", l->visible},
+                            {"mode", uiLayoutModeToStr(l->mode)},
+                            {"paddingLeft", l->paddingLeft},
+                            {"paddingRight", l->paddingRight},
+                            {"paddingTop", l->paddingTop},
+                            {"paddingBottom", l->paddingBottom},
+                            {"spacing", vec2ToJsonXY(l->spacing)},
+                            {"cellSize", vec2ToJsonXY(l->cellSize)},
+                            {"columns", l->columns},
+                            {"crossAlign", uiCrossAlignToStr(l->crossAlign)},
+                            {"fitWidth", l->fitWidth},
+                            {"fitHeight", l->fitHeight},
+                            {"ignoreLayout", l->ignoreLayout},
+                            {"clipChildren", l->clipChildren} };
         }
         if (node.hasAnimator())
             j["animator"] = animatorToJson(*node.getAnimator());
@@ -1515,6 +1577,48 @@ namespace
             bar->fillPath       = readStr("fillPath");
             node->setProgressBar(std::move(bar));
         }
+        if (j.contains("layout"))
+        {
+            const auto& l = j["layout"];
+            const std::string ctx = "layout de '" + node->name + "'";
+            auto readBool = [&](const char* key, bool def) {
+                return (l.contains(key) && l[key].is_boolean()) ? l[key].get<bool>() : def;
+            };
+            auto readStr = [&](const char* key) {
+                return (l.contains(key) && l[key].is_string())
+                           ? l[key].get<std::string>() : std::string();
+            };
+            auto layout = std::make_shared<LayoutComponent>();
+            layout->anchorMin = readVec2XY(l, "anchorMin", glm::vec2(0.0f), warnings, ctx);
+            layout->anchorMax = readVec2XY(l, "anchorMax", glm::vec2(0.0f), warnings, ctx);
+            layout->pivot     = readVec2XY(l, "pivot", glm::vec2(0.0f), warnings, ctx);
+            layout->position  = readVec2XY(l, "position", glm::vec2(0.0f), warnings, ctx);
+            layout->size      = readVec2XY(l, "size", glm::vec2(200.0f, 200.0f), warnings, ctx);
+            layout->visible   = readBool("visible", true);
+
+            layout->mode = uiLayoutModeFromStr(readStr("mode"));
+
+            layout->paddingLeft   = readFloat(l, "paddingLeft", 0.0f, warnings, ctx);
+            layout->paddingRight  = readFloat(l, "paddingRight", 0.0f, warnings, ctx);
+            layout->paddingTop    = readFloat(l, "paddingTop", 0.0f, warnings, ctx);
+            layout->paddingBottom = readFloat(l, "paddingBottom", 0.0f, warnings, ctx);
+
+            layout->spacing  = readVec2XY(l, "spacing", glm::vec2(0.0f), warnings, ctx);
+            layout->cellSize = readVec2XY(l, "cellSize", glm::vec2(100.0f), warnings, ctx);
+            // Sin negativos: columns es el número de columnas de la rejilla, y un
+            // JSON editado a mano con -1 daría una vuelta al uint32.
+            const float cols = readFloat(l, "columns", 0.0f, warnings, ctx);
+            layout->columns = cols > 0.0f ? (uint32_t)cols : 0u;
+
+            layout->crossAlign = uiCrossAlignFromStr(readStr("crossAlign"));
+
+            layout->fitWidth  = readBool("fitWidth", false);
+            layout->fitHeight = readBool("fitHeight", false);
+
+            layout->ignoreLayout = readBool("ignoreLayout", false);
+            layout->clipChildren = readBool("clipChildren", false);
+            node->setLayout(std::move(layout));
+        }
         // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
         // y cargan igual (version sigue en 1).
         if (j.contains("animator"))
@@ -1749,11 +1853,13 @@ namespace DonTopo
         std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons,
         std::vector<std::pair<uint64_t, const TextComponent*>>& texts,
         std::vector<std::pair<uint64_t, const ProgressBarComponent*>>& bars,
+        std::vector<std::pair<uint64_t, const LayoutComponent*>>& layouts,
         std::vector<std::pair<uint64_t, uint64_t>>& parents) const
     {
         buttons.clear();
         texts.clear();
         bars.clear();
+        layouts.clear();
         parents.clear();
 
         // Recursión propia y no traverse(): hace falta arrastrar hacia abajo
@@ -1763,16 +1869,22 @@ namespace DonTopo
             std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons;
             std::vector<std::pair<uint64_t, const TextComponent*>>&   texts;
             std::vector<std::pair<uint64_t, const ProgressBarComponent*>>& bars;
+            std::vector<std::pair<uint64_t, const LayoutComponent*>>& layouts;
             std::vector<std::pair<uint64_t, uint64_t>>& parents;
 
             void visit(const GameObject* node, uint64_t uiAncestor)
             {
-                const bool tieneUi = node->hasButton() || node->hasText() || node->hasProgressBar();
+                // El contenedor de layout cuenta como UI aunque no pinte: aporta
+                // rect, y sin eso sus hijos subirian al ancestro de arriba y
+                // nadie los colocaria.
+                const bool tieneUi = node->hasButton() || node->hasText() ||
+                                     node->hasProgressBar() || node->hasLayout();
                 if (tieneUi)
                 {
                     if (node->hasButton())      buttons.emplace_back(node->id, node->getButton().get());
                     if (node->hasProgressBar()) bars.emplace_back(node->id, node->getProgressBar().get());
                     if (node->hasText())        texts.emplace_back(node->id, node->getText().get());
+                    if (node->hasLayout())      layouts.emplace_back(node->id, node->getLayout().get());
                     parents.emplace_back(node->id, uiAncestor);
                 }
 
@@ -1783,7 +1895,7 @@ namespace DonTopo
             }
         };
 
-        Walker walker{buttons, texts, bars, parents};
+        Walker walker{buttons, texts, bars, layouts, parents};
         // La raíz de la escena no es un widget: sus hijos arrancan sin ancestro.
         for (const auto& child : m_root.children) walker.visit(child.get(), 0ull);
     }

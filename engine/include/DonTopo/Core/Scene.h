@@ -65,9 +65,9 @@ namespace DonTopo
             GameObject* findCanvas();
             const GameObject* findCanvas() const;
 
-            // Los widgets de UI de la escena, listos para syncUiWidgets: las tres
-            // listas por tipo y la JERARQUÍA aplanada a (id, id del padre) en
-            // pre-orden, con 0 para los que cuelgan de la raíz del canvas.
+            // Los widgets de UI de la escena, listos para syncUiWidgets: las
+            // cuatro listas por tipo y la JERARQUÍA aplanada a (id, id del padre)
+            // en pre-orden, con 0 para los que cuelgan de la raíz del canvas.
             //
             // El "padre" es el ancestro más cercano que TENGA algún componente
             // de UI, no el padre inmediato: un GameObject intermedio sin UI no
@@ -81,6 +81,7 @@ namespace DonTopo
                 std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons,
                 std::vector<std::pair<uint64_t, const TextComponent*>>& texts,
                 std::vector<std::pair<uint64_t, const ProgressBarComponent*>>& bars,
+                std::vector<std::pair<uint64_t, const LayoutComponent*>>& layouts,
                 std::vector<std::pair<uint64_t, uint64_t>>& parents) const;
 
             // Avisos de la última operación que tuvo que corregir la escena

@@ -388,6 +388,7 @@ int main()
             std::vector<std::pair<uint64_t, const DonTopo::ButtonComponent*>>      d3dButtons;
             std::vector<std::pair<uint64_t, const DonTopo::TextComponent*>>        d3dTexts;
             std::vector<std::pair<uint64_t, const DonTopo::ProgressBarComponent*>> d3dBars;
+            std::vector<std::pair<uint64_t, const DonTopo::LayoutComponent*>>      d3dLayouts;
             std::vector<std::pair<uint64_t, uint64_t>>                             d3dParents;
 
             while (!window.shouldClose())
@@ -545,14 +546,15 @@ int main()
                 d3dButtons.clear();
                 d3dTexts.clear();
                 d3dBars.clear();
+                d3dLayouts.clear();
                 d3dParents.clear();
                 // Con la jerarquía de la escena: un widget anidado cuelga del
                 // nodo de su padre, que es quien lo coloca y lo recorta.
                 if (d3dScene.findCanvas())
-                    d3dScene.collectUiWidgets(d3dButtons, d3dTexts, d3dBars, d3dParents);
+                    d3dScene.collectUiWidgets(d3dButtons, d3dTexts, d3dBars, d3dLayouts, d3dParents);
 
                 DonTopo::syncUiWidgets(d3dButtons, d3dTexts, d3dBars, d3d12.uiCanvas(),
-                                       d3dWidgetCache, d3d12, &d3dParents);
+                                       d3dWidgetCache, d3d12, &d3dParents, &d3dLayouts);
 
                 // Input de la UI: sin esto el árbol no resuelve estados y los
                 // colores del botón, el fundido y el Click no harían nada. El
@@ -914,6 +916,7 @@ int main()
         std::vector<std::pair<uint64_t, const DonTopo::ButtonComponent*>> uiButtons;
         std::vector<std::pair<uint64_t, const DonTopo::TextComponent*>> uiTexts;
         std::vector<std::pair<uint64_t, const DonTopo::ProgressBarComponent*>> uiBars;
+        std::vector<std::pair<uint64_t, const DonTopo::LayoutComponent*>>      uiLayouts;
         std::vector<std::pair<uint64_t, uint64_t>>                             uiParents;
 
         while (!window.shouldClose())
@@ -1078,15 +1081,16 @@ int main()
             uiButtons.clear();
             uiTexts.clear();
             uiBars.clear();
+            uiLayouts.clear();
             uiParents.clear();
             // Con la jerarquía de la escena: un widget anidado cuelga del nodo
             // de su padre, que es quien lo coloca y lo recorta.
             if (scene.findCanvas())
-                scene.collectUiWidgets(uiButtons, uiTexts, uiBars, uiParents);
+                scene.collectUiWidgets(uiButtons, uiTexts, uiBars, uiLayouts, uiParents);
             // UN solo sync para todos los widgets: es el dueño de la raíz del
             // canvas, que se reconstruye entera con clear().
             DonTopo::syncUiWidgets(uiButtons, uiTexts, uiBars, renderer.uiCanvas(),
-                                   uiWidgetCache, renderer, &uiParents);
+                                   uiWidgetCache, renderer, &uiParents, &uiLayouts);
 
             // Input de la UI: sin esto el árbol no resuelve estados, así que los
             // cinco colores del botón, el fundido y el Click no harían nada.

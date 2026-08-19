@@ -277,6 +277,28 @@ private:
     ProgressBarComponent m_state;
 };
 
+// Add/Remove del LayoutComponent, calcado de ProgressBarComponentCommand:
+// resuelve el GameObject por id en cada execute()/undo() (nunca puntero crudo),
+// y m_state es una COPIA del componente entero pa que un Add-undo-redo no
+// devuelva el modo, el padding ni la celda a los defaults.
+class LayoutComponentCommand : public ICommand {
+public:
+    LayoutComponentCommand(Scene& scene, std::string label, uint64_t id,
+                            bool add, LayoutComponent state);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(bool add);
+
+    Scene& m_scene;
+    std::string m_label;
+    uint64_t m_id;
+    bool m_add;
+    LayoutComponent m_state;
+};
+
 // Add/Remove del AnimatorComponent, mismo contrato que CameraComponentCommand:
 // resuelve el GameObject por id en cada execute()/undo() (nunca puntero crudo),
 // y m_state conserva el grafo pa que un Add-undo-redo no lo devuelva vacío.

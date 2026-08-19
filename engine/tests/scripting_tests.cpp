@@ -32,6 +32,7 @@
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
 #include "DonTopo/UI/TextComponent.h"
+#include "DonTopo/UI/LayoutComponent.h"
 #include "DonTopo/UI/ProgressBarComponent.h"
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiSpriteBatch.h"
@@ -613,6 +614,87 @@ static void test_ui_getter_nil_add_y_remove(ScriptManager& sm)
     CHECK(sm.lua()["mensajeTrasRemove"].get<std::string>().find("Button") != std::string::npos);
 }
 
+// El Layout desde Lua: el mismo contrato que los otros tres componentes de UI
+// (getter que da nil sin componente, Add, campos, Remove). Los valores son no
+// neutros y distintos entre sí para que un campo que el binding no escriba no
+// pueda pasar por el default.
+static void test_ui_layout_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Menu");
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        sinLayout = (e:GetLayout() == nil)
+
+        local l = e:AddLayout()
+        l.mode = UiLayoutMode.Grid
+        l.crossAlign = UiCrossAlign.End
+        l.paddingLeft = 3
+        l.paddingRight = 5
+        l.paddingTop = 7
+        l.paddingBottom = 9
+        l.columns = 4
+        l.fitWidth = true
+        l.fitHeight = true
+        l.ignoreLayout = true
+        l.clipChildren = true
+        l.visible = false
+        l:SetPosition(11, 13)
+        l:SetSize(320, 240)
+        l:SetSpacing(17, 19)
+        l:SetCellSize(64, 48)
+
+        trasAdd = (e:GetLayout() ~= nil)
+        modoLeido = l.mode
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) return;
+
+    CHECK(sm.lua()["sinLayout"].get<bool>());
+    CHECK(sm.lua()["trasAdd"].get<bool>());
+    CHECK(go->hasLayout());
+    if (!go->hasLayout()) return;
+
+    const LayoutComponent& l = *go->getLayout();
+    CHECK(l.mode == UiLayoutMode::Grid);
+    CHECK(l.crossAlign == UiCrossAlign::End);
+    CHECK(nearlyEqual(l.paddingLeft, 3.0f));
+    CHECK(nearlyEqual(l.paddingRight, 5.0f));
+    CHECK(nearlyEqual(l.paddingTop, 7.0f));
+    CHECK(nearlyEqual(l.paddingBottom, 9.0f));
+    CHECK(l.columns == 4u);
+    CHECK(l.fitWidth == true);
+    CHECK(l.fitHeight == true);
+    CHECK(l.ignoreLayout == true);
+    CHECK(l.clipChildren == true);
+    CHECK(l.visible == false);
+    CHECK(nearlyEqual(l.position.x, 11.0f));
+    CHECK(nearlyEqual(l.position.y, 13.0f));
+    CHECK(nearlyEqual(l.size.x, 320.0f));
+    CHECK(nearlyEqual(l.size.y, 240.0f));
+    CHECK(nearlyEqual(l.spacing.x, 17.0f));
+    CHECK(nearlyEqual(l.spacing.y, 19.0f));
+    CHECK(nearlyEqual(l.cellSize.x, 64.0f));
+    CHECK(nearlyEqual(l.cellSize.y, 48.0f));
+
+    // Y el camino de vuelta: lo que Lua LEE es lo que hay en el componente.
+    CHECK(sm.lua()["modoLeido"].get<int>() == (int)UiLayoutMode::Grid);
+
+    auto r2 = sm.lua().safe_script(R"(
+        e:RemoveLayout()
+        trasRemove = (e:GetLayout() == nil)
+    )", sol::script_pass_on_error);
+    CHECK(r2.valid());
+    CHECK(sm.lua()["trasRemove"].get<bool>());
+    CHECK(!go->hasLayout());
+}
+
 // Lo que un script escribe en el COMPONENTE llega al nodo vivo en el siguiente
 // syncUiWidgets. Es la razón de que los setters no toquen el nodo: el sync lo
 // vuelca solo.
@@ -1142,6 +1224,7 @@ int main()
     test_syntax_error_line_is_out_of_document();
     test_ui_lua_escribe_todos_los_campos(sm);
     test_ui_getter_nil_add_y_remove(sm);
+    test_ui_layout_desde_lua(sm);
     test_ui_valor_de_lua_llega_al_nodo(sm);
     test_ui_click_sobrevive_a_la_reconstruccion(sm);
     test_ui_callback_no_invoca_estado_viejo(sm);

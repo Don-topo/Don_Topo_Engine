@@ -531,6 +531,7 @@ int main(int argc, char** argv)
         std::vector<std::pair<uint64_t, const DonTopo::ButtonComponent*>> uiButtons;
         std::vector<std::pair<uint64_t, const DonTopo::TextComponent*>> uiTexts;
         std::vector<std::pair<uint64_t, const DonTopo::ProgressBarComponent*>> uiBars;
+        std::vector<std::pair<uint64_t, const DonTopo::LayoutComponent*>> uiLayouts;
         // Jerarquía de la escena aplanada a (id, id del padre con UI).
         std::vector<std::pair<uint64_t, uint64_t>> uiParents;
 
@@ -705,11 +706,12 @@ int main(int argc, char** argv)
             uiButtons.clear();
             uiTexts.clear();
             uiBars.clear();
+            uiLayouts.clear();
             uiParents.clear();
             if (scene.findCanvas())
-                scene.collectUiWidgets(uiButtons, uiTexts, uiBars, uiParents);
+                scene.collectUiWidgets(uiButtons, uiTexts, uiBars, uiLayouts, uiParents);
             DonTopo::syncUiWidgets(uiButtons, uiTexts, uiBars, renderer.uiCanvas(),
-                                   uiWidgetCache, renderer, &uiParents);
+                                   uiWidgetCache, renderer, &uiParents, &uiLayouts);
 
             // Input de la UI: sin esto el árbol no resuelve estados y los cinco
             // colores del botón, el fundido y el Click no existen. El ratón está
