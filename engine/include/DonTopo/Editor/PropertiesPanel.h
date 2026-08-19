@@ -181,6 +181,36 @@ private:
     void drawImageSection(EditorContext& ctx);
     void drawImagePathDialog(EditorContext& ctx);
     void setImageAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
+
+    // Slider: widget INTERACTIVO de la UI 2D. Seccion tras "Add" como el resto.
+    void drawSliderSection(EditorContext& ctx);
+    // Drena el file dialog del atlas del Slider, fuera de la seccion por lo mismo
+    // que los demas: si no se drena siempre, cambiar de seleccion con el dialogo
+    // abierto deja el flag atascado.
+    void drawSliderPathDialog(EditorContext& ctx);
+    void setSliderAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
+    // Checkbox: widget INTERACTIVO de la UI 2D. Seccion tras "Add" como el resto.
+    void drawCheckboxSection(EditorContext& ctx);
+    // Drena el file dialog del atlas del Checkbox, fuera de la seccion por lo mismo
+    // que los demas: si no se drena siempre, cambiar de seleccion con el dialogo
+    // abierto deja el flag atascado.
+    void drawCheckboxPathDialog(EditorContext& ctx);
+    void setCheckboxAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
+    // Toggle: widget INTERACTIVO de la UI 2D. Seccion tras "Add" como el resto.
+    void drawToggleSection(EditorContext& ctx);
+    // Drena el file dialog del atlas del Toggle, fuera de la seccion por lo mismo
+    // que los demas: si no se drena siempre, cambiar de seleccion con el dialogo
+    // abierto deja el flag atascado.
+    void drawTogglePathDialog(EditorContext& ctx);
+    void setToggleAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
+    // Scrollbar: widget INTERACTIVO de la UI 2D. Seccion tras "Add" como el resto.
+    void drawScrollbarSection(EditorContext& ctx);
+    // Drena el file dialog del atlas del Scrollbar, fuera de la seccion por lo mismo
+    // que los demas: si no se drena siempre, cambiar de seleccion con el dialogo
+    // abierto deja el flag atascado.
+    void drawScrollbarPathDialog(EditorContext& ctx);
+    void setScrollbarAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
+
     void drawAudioClipDialog(EditorContext& ctx);
     void drawScriptsSection(EditorContext& ctx);
     void drawAddComponentButton(EditorContext& ctx);
@@ -303,6 +333,37 @@ private:
     glm::vec2   m_panelDragBefore2 {0.0f};
     glm::vec4   m_panelDragBefore4 {1.0f};
     std::string m_panelDragBeforeStr;
+
+    // Y uno propio para cada widget interactivo, por lo mismo: todos caben en
+    // el mismo GameObject y un "before" compartido mezclaria arrastres.
+
+    uint64_t    m_sliderDragOwnerId = 0;
+    const char* m_sliderDragField   = nullptr;
+    float       m_sliderDragBefore  = 0.0f;
+    glm::vec2   m_sliderDragBefore2 {0.0f};
+    glm::vec4   m_sliderDragBefore4 {1.0f};
+    std::string m_sliderDragBeforeStr;
+
+    uint64_t    m_checkboxDragOwnerId = 0;
+    const char* m_checkboxDragField   = nullptr;
+    float       m_checkboxDragBefore  = 0.0f;
+    glm::vec2   m_checkboxDragBefore2 {0.0f};
+    glm::vec4   m_checkboxDragBefore4 {1.0f};
+    std::string m_checkboxDragBeforeStr;
+
+    uint64_t    m_toggleDragOwnerId = 0;
+    const char* m_toggleDragField   = nullptr;
+    float       m_toggleDragBefore  = 0.0f;
+    glm::vec2   m_toggleDragBefore2 {0.0f};
+    glm::vec4   m_toggleDragBefore4 {1.0f};
+    std::string m_toggleDragBeforeStr;
+
+    uint64_t    m_scrollbarDragOwnerId = 0;
+    const char* m_scrollbarDragField   = nullptr;
+    float       m_scrollbarDragBefore  = 0.0f;
+    glm::vec2   m_scrollbarDragBefore2 {0.0f};
+    glm::vec4   m_scrollbarDragBefore4 {1.0f};
+    std::string m_scrollbarDragBeforeStr;
 
     uint64_t    m_imageDragOwnerId = 0;
     const char* m_imageDragField   = nullptr;
@@ -438,6 +499,28 @@ private:
     uint64_t m_panelAtlasDlgOwner = 0;
     std::unique_ptr<IGFD::FileDialog> m_panelAtlasFileDialog;
     std::string m_panelPathError;
+
+    // Atlas de los cuatro interactivos: instancia de dialogo propia cada uno.
+
+    bool     m_sliderAtlasDlgOpen  = false;
+    uint64_t m_sliderAtlasDlgOwner = 0;
+    std::unique_ptr<IGFD::FileDialog> m_sliderAtlasFileDialog;
+    std::string m_sliderPathError;
+
+    bool     m_checkboxAtlasDlgOpen  = false;
+    uint64_t m_checkboxAtlasDlgOwner = 0;
+    std::unique_ptr<IGFD::FileDialog> m_checkboxAtlasFileDialog;
+    std::string m_checkboxPathError;
+
+    bool     m_toggleAtlasDlgOpen  = false;
+    uint64_t m_toggleAtlasDlgOwner = 0;
+    std::unique_ptr<IGFD::FileDialog> m_toggleAtlasFileDialog;
+    std::string m_togglePathError;
+
+    bool     m_scrollbarAtlasDlgOpen  = false;
+    uint64_t m_scrollbarAtlasDlgOwner = 0;
+    std::unique_ptr<IGFD::FileDialog> m_scrollbarAtlasFileDialog;
+    std::string m_scrollbarPathError;
 
     bool     m_imageAtlasDlgOpen  = false;
     uint64_t m_imageAtlasDlgOwner = 0;

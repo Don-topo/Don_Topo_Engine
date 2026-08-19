@@ -19,6 +19,10 @@
 #include "DonTopo/UI/ImageComponent.h"
 #include "DonTopo/UI/LayoutComponent.h"
 #include "DonTopo/UI/PanelComponent.h"
+#include "DonTopo/UI/SliderComponent.h"
+#include "DonTopo/UI/CheckboxComponent.h"
+#include "DonTopo/UI/ToggleComponent.h"
+#include "DonTopo/UI/ScrollbarComponent.h"
 #include "DonTopo/UI/TextComponent.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -980,6 +984,27 @@ struct FakeUiLoader
 // Vive en el ámbito global y la de producción en DonTopo, así que las dos son
 // candidatas por ADL; no hay ambigüedad porque las aridades no se solapan (esta
 // pide seis argumentos como mínimo y aquella exactamente cuatro).
+
+// Un click completo sobre p: un frame de hover, uno con el boton abajo y otro
+// con el boton arriba. El hit test necesita rects, o sea un buildDrawData
+// previo. Los tiempos se separan entre clicks para no cruzar el umbral del
+// doble click sin querer.
+static void clickEnCanvas(UiCanvas& canvas, glm::vec2 p, float t0)
+{
+    UiInputState in;
+    in.mousePos    = p;
+    in.timeSeconds = t0;
+    canvas.updateInput(in);
+
+    in.mouseDown[0] = true;
+    in.timeSeconds  = t0 + 0.016f;
+    canvas.updateInput(in);
+
+    in.mouseDown[0] = false;
+    in.timeSeconds  = t0 + 0.032f;
+    canvas.updateInput(in);
+}
+
 template <class Loader>
 static void syncUiWidgets(
     const std::vector<std::pair<uint64_t, const ButtonComponent*>>& buttons,
@@ -3244,6 +3269,1290 @@ static void test_panel_and_image_coexist()
     CHECK(canvas.root().children()[1]->name == uiImageNodeName(9ull));
 }
 
+// ── Slider ──────────────────────────────────────────────────────────────────
+// El Slider del núcleo es un stub sin campos, así que el widget se monta por
+// COMPOSICIÓN igual que la ProgressBar: la pista es el nodo raíz y de ella
+// cuelgan el relleno y el asa. La diferencia con la barra es que este SÍ recibe
+// input: arrastrar el asa escribe en el componente, que es lo que serializa el
+// editor y lo que lee un script.
+//
+// Valores NO neutros y DISTINTOS entre sí, por lo de siempre.
+static void fillSlider(SliderComponent& s)
+{
+    s.anchorMin = glm::vec2(0.03125f, 0.21875f);
+    s.anchorMax = glm::vec2(0.53125f, 0.71875f);
+    s.pivot     = glm::vec2(0.375f, 0.5625f);
+    s.position  = glm::vec2(19.5f, -31.25f);
+    s.size      = glm::vec2(273.5f, 27.25f);
+    s.color     = glm::vec4(0.51f, 0.52f, 0.53f, 0.54f);
+    s.visible   = false;
+
+    s.interactable = false;
+
+    s.value    = 21.5f;
+    s.minValue = -8.25f;
+    s.maxValue = 63.75f;
+    s.wholeNumbers = true;
+
+    s.direction = UiSliderDirection::BottomToTop;
+
+    s.fillColor   = glm::vec4(0.61f, 0.62f, 0.63f, 0.64f);
+    s.handleColor = glm::vec4(0.71f, 0.72f, 0.73f, 0.74f);
+    s.handleSize  = 33.5f;
+
+    s.atlasPath         = "assets/ui/hud.png";
+    s.backgroundSprite  = "pista";
+    s.fillSprite        = "relleno";
+    s.handleSprite      = "asa";
+}
+
+static void checkSliderMatchesFilled(const SliderComponent& s)
+{
+    CHECK(nearlyEqual(s.anchorMin.x, 0.03125f));
+    CHECK(nearlyEqual(s.anchorMin.y, 0.21875f));
+    CHECK(nearlyEqual(s.anchorMax.x, 0.53125f));
+    CHECK(nearlyEqual(s.anchorMax.y, 0.71875f));
+    CHECK(nearlyEqual(s.pivot.x, 0.375f));
+    CHECK(nearlyEqual(s.pivot.y, 0.5625f));
+    CHECK(nearlyEqual(s.position.x, 19.5f));
+    CHECK(nearlyEqual(s.position.y, -31.25f));
+    CHECK(nearlyEqual(s.size.x, 273.5f));
+    CHECK(nearlyEqual(s.size.y, 27.25f));
+    CHECK(nearlyEqual(s.color.r, 0.51f));
+    CHECK(nearlyEqual(s.color.a, 0.54f));
+    CHECK(s.visible == false);
+    CHECK(s.interactable == false);
+
+    CHECK(nearlyEqual(s.value, 21.5f));
+    CHECK(nearlyEqual(s.minValue, -8.25f));
+    CHECK(nearlyEqual(s.maxValue, 63.75f));
+    CHECK(s.wholeNumbers == true);
+    CHECK(s.direction == UiSliderDirection::BottomToTop);
+
+    CHECK(nearlyEqual(s.fillColor.r, 0.61f));
+    CHECK(nearlyEqual(s.fillColor.a, 0.64f));
+    CHECK(nearlyEqual(s.handleColor.r, 0.71f));
+    CHECK(nearlyEqual(s.handleColor.a, 0.74f));
+    CHECK(nearlyEqual(s.handleSize, 33.5f));
+
+    CHECK(s.atlasPath == "assets/ui/hud.png");
+    CHECK(s.backgroundSprite == "pista");
+    CHECK(s.fillSprite == "relleno");
+    CHECK(s.handleSprite == "asa");
+}
+
+static void test_slider_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* go = scene.addGameObject("Volumen", canvasGo);
+    auto sl = std::make_shared<SliderComponent>();
+    fillSlider(*sl);
+    go->setSlider(sl);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasSlider()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "Volumen");
+    checkSliderMatchesFilled(*found->getSlider());
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_slider_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool alguno = false;
+    loaded.traverse([&](GameObject* n) { if (n->hasSlider()) alguno = true; });
+    CHECK(!alguno);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_slider_serializes_identically()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    const std::string antes = scene.toJson().dump();
+    CHECK(antes.find("\"slider\"") == std::string::npos);
+
+    go->setSlider(std::make_shared<SliderComponent>());
+    CHECK(scene.toJson().dump() != antes);
+    go->setSlider(nullptr);
+    CHECK(scene.toJson().dump() == antes);
+}
+
+static void test_slider_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Volumen");
+    SliderComponent st;
+    fillSlider(st);
+    SliderComponentCommand cmd(scene, "Add Slider", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasSlider());
+    checkSliderMatchesFilled(*go->getSlider());
+    cmd.undo();
+    CHECK(!go->hasSlider());
+    cmd.execute();
+    CHECK(go->hasSlider());
+    checkSliderMatchesFilled(*go->getSlider());
+}
+
+static void test_slider_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Volumen");
+    auto sl = std::make_shared<SliderComponent>();
+    fillSlider(*sl);
+    go->setSlider(sl);
+
+    SliderComponentCommand cmd(scene, "Remove Slider", go->id, /*add=*/false, *sl);
+    cmd.execute();
+    CHECK(!go->hasSlider());
+    cmd.undo();
+    CHECK(go->hasSlider());
+    checkSliderMatchesFilled(*go->getSlider());
+}
+
+static void test_slider_property_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Volumen");
+    go->setSlider(std::make_shared<SliderComponent>());
+    const uint64_t id = go->id;
+    Scene* sc = &scene;
+
+    auto applyValue = [sc, id](const float& v) {
+        if (GameObject* g = sc->findById(id))
+            if (g->hasSlider()) g->getSlider()->value = v;
+    };
+    PropertyCommand<float> cmd("Value", 0.5f, 0.125f, applyValue);
+
+    cmd.execute();
+    CHECK(nearlyEqual(go->getSlider()->value, 0.125f));
+    cmd.undo();
+    CHECK(nearlyEqual(go->getSlider()->value, 0.5f));
+    cmd.execute();
+    CHECK(nearlyEqual(go->getSlider()->value, 0.125f));
+
+    go->setSlider(nullptr);
+    cmd.undo();
+    CHECK(!go->hasSlider());
+}
+
+// El asa NO se sale de la pista por ninguno de los dos extremos: a t=0 su borde
+// pega con el principio y a t=1 con el final. Sin descontar handleSize del
+// recorrido, la mitad del asa se saldría del rect en cada punta y no habría nada
+// que lo dijera —el asa se dibuja igual—.
+static void test_slider_handle_stays_inside_the_track()
+{
+    SliderComponent s;
+    s.size       = glm::vec2(200.0f, 20.0f);
+    s.handleSize = 40.0f;
+    s.minValue   = 0.0f;
+    s.maxValue   = 1.0f;
+
+    glm::vec2 pos{0.0f}, sz{0.0f};
+
+    s.value = 0.0f;
+    s.handleRect(pos, sz);
+    CHECK(nearlyEqual(pos.x, 0.0f));
+    CHECK(nearlyEqual(sz.x, 40.0f));
+
+    s.value = 1.0f;
+    s.handleRect(pos, sz);
+    CHECK(nearlyEqual(pos.x, 160.0f));     // 200 - 40
+    CHECK(nearlyEqual(pos.x + sz.x, 200.0f));
+
+    s.value = 0.5f;
+    s.handleRect(pos, sz);
+    CHECK(nearlyEqual(pos.x, 80.0f));      // (200 - 40) * 0.5
+
+    // Y con el eje invertido, el mismo recorrido del otro lado.
+    s.direction = UiSliderDirection::RightToLeft;
+    s.value     = 0.0f;
+    s.handleRect(pos, sz);
+    CHECK(nearlyEqual(pos.x, 160.0f));
+    s.value = 1.0f;
+    s.handleRect(pos, sz);
+    CHECK(nearlyEqual(pos.x, 0.0f));
+
+    // Vertical: la Y del canvas crece hacia ABAJO, así que BottomToTop a 1 pega
+    // el asa ARRIBA (y=0).
+    s.direction  = UiSliderDirection::BottomToTop;
+    s.size       = glm::vec2(20.0f, 200.0f);
+    s.handleSize = 40.0f;
+    s.value      = 1.0f;
+    s.handleRect(pos, sz);
+    CHECK(nearlyEqual(pos.y, 0.0f));
+    CHECK(nearlyEqual(sz.y, 40.0f));
+    s.value = 0.0f;
+    s.handleRect(pos, sz);
+    CHECK(nearlyEqual(pos.y, 160.0f));
+}
+
+// wholeNumbers redondea el valor QUE SE ESCRIBE, no el que se muestra: si solo
+// redondeara al dibujar, el componente guardaría 3,7 y el script leería 3,7
+// mientras el asa se enseña en 4.
+static void test_slider_whole_numbers_snaps_the_value()
+{
+    SliderComponent s;
+    s.minValue = 0.0f;
+    s.maxValue = 10.0f;
+
+    CHECK(nearlyEqual(s.valueFromNormalized(0.37f), 3.7f));
+
+    s.wholeNumbers = true;
+    CHECK(nearlyEqual(s.valueFromNormalized(0.37f), 4.0f));
+    CHECK(nearlyEqual(s.valueFromNormalized(0.34f), 3.0f));
+    // Los extremos siguen siendo exactos.
+    CHECK(nearlyEqual(s.valueFromNormalized(0.0f), 0.0f));
+    CHECK(nearlyEqual(s.valueFromNormalized(1.0f), 10.0f));
+
+    // Un rango degenerado no puede repartir nada: devuelve el mínimo y no un NaN.
+    s.maxValue = s.minValue;
+    CHECK(nearlyEqual(s.valueFromNormalized(0.5f), 0.0f));
+    CHECK(nearlyEqual(s.normalizedValue(), 0.0f));
+}
+
+static void test_slider_sync_builds_track_fill_and_handle()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    SliderComponent s;
+    s.position   = glm::vec2(10.0f, 20.0f);
+    s.size       = glm::vec2(200.0f, 20.0f);
+    s.handleSize = 40.0f;
+    s.value      = 0.5f;   // min 0, max 1
+
+    UiWidgetLists w;
+    w.sliders.emplace_back(5ull, &s);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().empty()) return;
+    const UiElement& pista = *canvas.root().children()[0];
+    CHECK(pista.name == uiSliderNodeName(5ull));
+    CHECK(pista.typeName() == std::string("Slider"));
+    CHECK(pista.children().size() == 2);
+    if (pista.children().size() != 2) return;
+    const UiElement& relleno = *pista.children()[0];
+    const UiElement& asa     = *pista.children()[1];
+    CHECK(relleno.name == uiSliderNodeName(5ull) + "/Fill");
+    CHECK(asa.name == uiSliderNodeName(5ull) + "/Handle");
+
+    // El relleno llega hasta el CENTRO del asa, que es donde marca el valor.
+    CHECK(nearlyEqual(relleno.size.x, 100.0f));
+    CHECK(nearlyEqual(asa.size.x, 40.0f));
+    CHECK(nearlyEqual(asa.position.x, 80.0f));
+
+    // El asa NO puede comerse el clic de la pista: el hit test devuelve el nodo
+    // más profundo, y si el asa fuera raycastTarget el arrastre que empieza
+    // encima de ella no llegaría al handler de la pista.
+    CHECK(asa.raycastTarget == false);
+    CHECK(relleno.raycastTarget == false);
+
+    // El emisor deja los nodos limpios: es la caché que el sync tiene que
+    // invalidar cuando cambia el valor.
+    CHECK(pista.dirty == 0u);
+    s.value = 0.25f;
+    syncUiWidgets(w, canvas, cache, loader);
+    CHECK(nearlyEqual(asa.position.x, 40.0f));
+    CHECK(pista.dirty != 0u);
+    CHECK(asa.dirty != 0u);
+}
+
+// La razón de ser del widget: arrastrar escribe en el COMPONENTE. Si el valor se
+// quedara en el nodo, el editor no lo vería, no se serializaría y un script
+// leería el valor de antes del arrastre.
+static void test_slider_drag_writes_the_component_value()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    SliderComponent s;
+    s.position   = glm::vec2(0.0f, 0.0f);
+    s.size       = glm::vec2(200.0f, 20.0f);
+    s.handleSize = 0.0f;   // sin asa el recorrido es el rect entero: 1 px = 0.5%
+    s.minValue   = 0.0f;
+    s.maxValue   = 100.0f;
+    s.value      = 0.0f;
+
+    // El camino de vuelta a Lua: el mismo runtime que usa el Button.
+    float ultimoAviso = -1.0f;
+    int   avisos      = 0;
+    s.callbacks.ptr->onValueChanged = [&](float v) { ultimoAviso = v; avisos++; };
+
+    UiWidgetLists w;
+    w.sliders.emplace_back(5ull, &s);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    // Un Down a 3/4 de la pista pone el valor ahí mismo (como Unity: la pista
+    // entera es zona de clic, no solo el asa).
+    UiInputState in;
+    in.mousePos    = glm::vec2(150.0f, 10.0f);
+    in.timeSeconds = 0.0f;
+    canvas.updateInput(in);
+    in.mouseDown[0] = true;
+    in.timeSeconds  = 0.016f;
+    canvas.updateInput(in);
+
+    CHECK(nearlyEqual(s.value, 75.0f));
+    CHECK(avisos == 1);
+    CHECK(nearlyEqual(ultimoAviso, 75.0f));
+
+    // Y arrastrando sigue el ratón, también fuera del rect (acotado a la pista).
+    in.mousePos    = glm::vec2(50.0f, 10.0f);
+    in.timeSeconds = 0.032f;
+    canvas.updateInput(in);
+    CHECK(nearlyEqual(s.value, 25.0f));
+
+    in.mousePos    = glm::vec2(-500.0f, 10.0f);
+    in.timeSeconds = 0.048f;
+    canvas.updateInput(in);
+    CHECK(nearlyEqual(s.value, 0.0f));
+
+    in.mousePos    = glm::vec2(9999.0f, 10.0f);
+    in.timeSeconds = 0.064f;
+    canvas.updateInput(in);
+    CHECK(nearlyEqual(s.value, 100.0f));
+}
+
+// Un slider no interactable se dibuja pero NO se deja mover: es el modo "solo
+// lectura" que un HUD necesita para enseñar un valor sin que el jugador lo toque.
+static void test_slider_not_interactable_ignores_the_mouse()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    SliderComponent s;
+    s.size         = glm::vec2(200.0f, 20.0f);
+    s.handleSize   = 0.0f;
+    s.maxValue     = 100.0f;
+    s.value        = 42.0f;
+    s.interactable = false;
+
+    UiWidgetLists w;
+    w.sliders.emplace_back(5ull, &s);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    UiInputState in;
+    in.mousePos    = glm::vec2(150.0f, 10.0f);
+    in.timeSeconds = 0.0f;
+    canvas.updateInput(in);
+    in.mouseDown[0] = true;
+    in.timeSeconds  = 0.016f;
+    canvas.updateInput(in);
+
+    CHECK(nearlyEqual(s.value, 42.0f));
+}
+
+static void test_slider_hit_test_maps_back_to_gameobject()
+{
+    CHECK(uiSliderOwnerId(uiSliderNodeName(42ull)) == 42ull);
+    // Los nodos hijos también devuelven a su dueño: arrastrar el asa selecciona
+    // el slider, no nada.
+    CHECK(uiSliderOwnerId(uiSliderNodeName(42ull) + "/Handle") == 42ull);
+    CHECK(uiSliderOwnerId(uiSliderNodeName(42ull) + "/Fill") == 42ull);
+    CHECK(uiSliderOwnerId("Cubo") == 0ull);
+    CHECK(uiSliderOwnerId("sld:") == 0ull);
+    CHECK(uiSliderOwnerId("sld:12ab") == 0ull);
+    CHECK(uiSliderOwnerId(uiPanelNodeName(42ull)) == 0ull);
+    CHECK(uiPanelOwnerId(uiSliderNodeName(42ull)) == 0ull);
+    CHECK(uiProgressBarOwnerId(uiSliderNodeName(42ull)) == 0ull);
+}
+
+
+// ── Checkbox ────────────────────────────────────────────────────────────────
+// Stub sin campos en el núcleo, igual que el Slider: la caja es el nodo raíz y
+// la marca cuelga de ella. Es el widget más simple de los interactivos — un
+// click y un bool—, así que aquí se prueba sobre todo que el click LLEGUE al
+// componente y no se quede en el nodo.
+static void fillCheckbox(CheckboxComponent& c)
+{
+    c.anchorMin = glm::vec2(0.0625f, 0.3125f);
+    c.anchorMax = glm::vec2(0.4375f, 0.6875f);
+    c.pivot     = glm::vec2(0.1875f, 0.8125f);
+    c.position  = glm::vec2(23.5f, -41.25f);
+    c.size      = glm::vec2(37.75f, 39.5f);
+    c.color     = glm::vec4(0.15f, 0.16f, 0.17f, 0.18f);
+    c.visible   = false;
+
+    c.interactable = false;
+    c.isOn         = true;
+
+    c.checkColor   = glm::vec4(0.25f, 0.26f, 0.27f, 0.28f);
+    c.checkPadding = 5.25f;
+
+    c.atlasPath        = "assets/ui/widgets.png";
+    c.backgroundSprite = "casilla";
+    c.checkmarkSprite  = "tick";
+}
+
+static void checkCheckboxMatchesFilled(const CheckboxComponent& c)
+{
+    CHECK(nearlyEqual(c.anchorMin.x, 0.0625f));
+    CHECK(nearlyEqual(c.anchorMin.y, 0.3125f));
+    CHECK(nearlyEqual(c.anchorMax.x, 0.4375f));
+    CHECK(nearlyEqual(c.anchorMax.y, 0.6875f));
+    CHECK(nearlyEqual(c.pivot.x, 0.1875f));
+    CHECK(nearlyEqual(c.pivot.y, 0.8125f));
+    CHECK(nearlyEqual(c.position.x, 23.5f));
+    CHECK(nearlyEqual(c.position.y, -41.25f));
+    CHECK(nearlyEqual(c.size.x, 37.75f));
+    CHECK(nearlyEqual(c.size.y, 39.5f));
+    CHECK(nearlyEqual(c.color.r, 0.15f));
+    CHECK(nearlyEqual(c.color.a, 0.18f));
+    CHECK(c.visible == false);
+    CHECK(c.interactable == false);
+    CHECK(c.isOn == true);
+    CHECK(nearlyEqual(c.checkColor.r, 0.25f));
+    CHECK(nearlyEqual(c.checkColor.a, 0.28f));
+    CHECK(nearlyEqual(c.checkPadding, 5.25f));
+    CHECK(c.atlasPath == "assets/ui/widgets.png");
+    CHECK(c.backgroundSprite == "casilla");
+    CHECK(c.checkmarkSprite == "tick");
+}
+
+static void test_checkbox_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* go = scene.addGameObject("Subtitulos", canvasGo);
+    auto cb = std::make_shared<CheckboxComponent>();
+    fillCheckbox(*cb);
+    go->setCheckbox(cb);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasCheckbox()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "Subtitulos");
+    checkCheckboxMatchesFilled(*found->getCheckbox());
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_checkbox_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool alguno = false;
+    loaded.traverse([&](GameObject* n) { if (n->hasCheckbox()) alguno = true; });
+    CHECK(!alguno);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_checkbox_serializes_identically()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    const std::string antes = scene.toJson().dump();
+    CHECK(antes.find("\"checkbox\"") == std::string::npos);
+
+    go->setCheckbox(std::make_shared<CheckboxComponent>());
+    CHECK(scene.toJson().dump() != antes);
+    go->setCheckbox(nullptr);
+    CHECK(scene.toJson().dump() == antes);
+}
+
+static void test_checkbox_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Subtitulos");
+    CheckboxComponent st;
+    fillCheckbox(st);
+    CheckboxComponentCommand cmd(scene, "Add Checkbox", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasCheckbox());
+    checkCheckboxMatchesFilled(*go->getCheckbox());
+    cmd.undo();
+    CHECK(!go->hasCheckbox());
+    cmd.execute();
+    CHECK(go->hasCheckbox());
+    checkCheckboxMatchesFilled(*go->getCheckbox());
+}
+
+static void test_checkbox_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Subtitulos");
+    auto cb = std::make_shared<CheckboxComponent>();
+    fillCheckbox(*cb);
+    go->setCheckbox(cb);
+
+    CheckboxComponentCommand cmd(scene, "Remove Checkbox", go->id, /*add=*/false, *cb);
+    cmd.execute();
+    CHECK(!go->hasCheckbox());
+    cmd.undo();
+    CHECK(go->hasCheckbox());
+    checkCheckboxMatchesFilled(*go->getCheckbox());
+}
+
+static void test_checkbox_property_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Subtitulos");
+    go->setCheckbox(std::make_shared<CheckboxComponent>());
+    const uint64_t id = go->id;
+    Scene* sc = &scene;
+
+    auto applyOn = [sc, id](const bool& v) {
+        if (GameObject* g = sc->findById(id))
+            if (g->hasCheckbox()) g->getCheckbox()->isOn = v;
+    };
+    PropertyCommand<bool> cmd("Is On", false, true, applyOn);
+
+    cmd.execute();
+    CHECK(go->getCheckbox()->isOn == true);
+    cmd.undo();
+    CHECK(go->getCheckbox()->isOn == false);
+
+    go->setCheckbox(nullptr);
+    cmd.execute();
+    CHECK(!go->hasCheckbox());
+}
+
+// La marca se mete hacia DENTRO de la caja por los cuatro lados. Un padding que
+// se pasa no puede dar un rect negativo: la marca desaparece, que es lo peor que
+// puede pasar, y no un quad del revés.
+static void test_checkbox_check_rect_respects_padding()
+{
+    CheckboxComponent c;
+    c.size         = glm::vec2(40.0f, 40.0f);
+    c.checkPadding = 8.0f;
+
+    glm::vec2 pos{0.0f}, sz{0.0f};
+    c.checkRect(pos, sz);
+    CHECK(nearlyEqual(pos.x, 8.0f));
+    CHECK(nearlyEqual(pos.y, 8.0f));
+    CHECK(nearlyEqual(sz.x, 24.0f));
+    CHECK(nearlyEqual(sz.y, 24.0f));
+
+    c.checkPadding = 50.0f;
+    c.checkRect(pos, sz);
+    CHECK(sz.x >= 0.0f);
+    CHECK(sz.y >= 0.0f);
+    CHECK(nearlyEqual(sz.x, 0.0f));
+}
+
+static void test_checkbox_sync_builds_box_and_check()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    CheckboxComponent c;
+    c.position     = glm::vec2(5.0f, 6.0f);
+    c.size         = glm::vec2(40.0f, 40.0f);
+    c.checkPadding = 8.0f;
+    c.isOn         = false;
+
+    UiWidgetLists w;
+    w.checkboxes.emplace_back(5ull, &c);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().empty()) return;
+    const UiElement& caja = *canvas.root().children()[0];
+    CHECK(caja.name == uiCheckboxNodeName(5ull));
+    CHECK(caja.typeName() == std::string("Checkbox"));
+    CHECK(caja.children().size() == 1);
+    if (caja.children().empty()) return;
+    const UiElement& marca = *caja.children()[0];
+    CHECK(marca.name == uiCheckboxNodeName(5ull) + "/Check");
+
+    // Apagado: la marca EXISTE (la forma del subárbol no cambia) pero no se
+    // dibuja. Si el nodo apareciera y desapareciera habría que reconstruir la
+    // raíz del canvas en cada click.
+    CHECK(marca.drawable == false);
+    CHECK(data.vertices.size() == 4);   // solo la caja
+
+    c.isOn = true;
+    syncUiWidgets(w, canvas, cache, loader);
+    CHECK(marca.drawable == true);
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    CHECK(data.vertices.size() == 8);   // caja + marca
+    CHECK(nearlyEqual(marca.size.x, 24.0f));
+    // La marca tampoco puede comerse el click de la caja.
+    CHECK(marca.raycastTarget == false);
+}
+
+static void test_checkbox_click_toggles_the_component()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    CheckboxComponent c;
+    c.position = glm::vec2(0.0f, 0.0f);
+    c.size     = glm::vec2(40.0f, 40.0f);
+    c.isOn     = false;
+
+    bool ultimoAviso = false;
+    int  avisos      = 0;
+    c.callbacks.ptr->onValueChanged = [&](bool v) { ultimoAviso = v; avisos++; };
+
+    UiWidgetLists w;
+    w.checkboxes.emplace_back(5ull, &c);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    clickEnCanvas(canvas, glm::vec2(20.0f, 20.0f), 0.0f);
+    CHECK(c.isOn == true);
+    CHECK(avisos == 1);
+    CHECK(ultimoAviso == true);
+
+    // Y el segundo click lo apaga: es un interruptor, no un botón de encender.
+    clickEnCanvas(canvas, glm::vec2(20.0f, 20.0f), 5.0f);
+    CHECK(c.isOn == false);
+    CHECK(avisos == 2);
+
+    // No interactable: se dibuja pero el click no lo mueve.
+    c.interactable = false;
+    syncUiWidgets(w, canvas, cache, loader);
+    clickEnCanvas(canvas, glm::vec2(20.0f, 20.0f), 10.0f);
+    CHECK(c.isOn == false);
+    CHECK(avisos == 2);
+}
+
+static void test_checkbox_hit_test_maps_back_to_gameobject()
+{
+    CHECK(uiCheckboxOwnerId(uiCheckboxNodeName(42ull)) == 42ull);
+    CHECK(uiCheckboxOwnerId(uiCheckboxNodeName(42ull) + "/Check") == 42ull);
+    CHECK(uiCheckboxOwnerId("Cubo") == 0ull);
+    CHECK(uiCheckboxOwnerId("chk:") == 0ull);
+    CHECK(uiCheckboxOwnerId("chk:12ab") == 0ull);
+    CHECK(uiCheckboxOwnerId(uiSliderNodeName(42ull)) == 0ull);
+    CHECK(uiSliderOwnerId(uiCheckboxNodeName(42ull)) == 0ull);
+}
+
+// ── Toggle ──────────────────────────────────────────────────────────────────
+// El interruptor deslizante: mismo dato que el Checkbox (un bool) pero otra
+// forma de enseñarlo — el mando se mueve de un extremo al otro y la pista cambia
+// de color. Por eso son dos componentes y no uno con un enum de estilo: son dos
+// conjuntos de campos distintos (padding de la marca vs. tamaño del mando).
+static void fillToggle(ToggleComponent& t)
+{
+    t.anchorMin = glm::vec2(0.09375f, 0.34375f);
+    t.anchorMax = glm::vec2(0.46875f, 0.65625f);
+    t.pivot     = glm::vec2(0.21875f, 0.78125f);
+    t.position  = glm::vec2(27.5f, -43.25f);
+    t.size      = glm::vec2(71.75f, 33.5f);
+    t.visible   = false;
+
+    t.interactable = false;
+    t.isOn         = true;
+
+    t.offColor  = glm::vec4(0.35f, 0.36f, 0.37f, 0.38f);
+    t.onColor   = glm::vec4(0.45f, 0.46f, 0.47f, 0.48f);
+    t.knobColor = glm::vec4(0.55f, 0.56f, 0.57f, 0.58f);
+
+    t.knobSize    = 25.25f;
+    t.knobPadding = 3.75f;
+
+    t.atlasPath        = "assets/ui/widgets.png";
+    t.backgroundSprite = "riel";
+    t.knobSprite       = "mando";
+}
+
+static void checkToggleMatchesFilled(const ToggleComponent& t)
+{
+    CHECK(nearlyEqual(t.anchorMin.x, 0.09375f));
+    CHECK(nearlyEqual(t.anchorMin.y, 0.34375f));
+    CHECK(nearlyEqual(t.anchorMax.x, 0.46875f));
+    CHECK(nearlyEqual(t.anchorMax.y, 0.65625f));
+    CHECK(nearlyEqual(t.pivot.x, 0.21875f));
+    CHECK(nearlyEqual(t.pivot.y, 0.78125f));
+    CHECK(nearlyEqual(t.position.x, 27.5f));
+    CHECK(nearlyEqual(t.position.y, -43.25f));
+    CHECK(nearlyEqual(t.size.x, 71.75f));
+    CHECK(nearlyEqual(t.size.y, 33.5f));
+    CHECK(t.visible == false);
+    CHECK(t.interactable == false);
+    CHECK(t.isOn == true);
+    CHECK(nearlyEqual(t.offColor.r, 0.35f));
+    CHECK(nearlyEqual(t.offColor.a, 0.38f));
+    CHECK(nearlyEqual(t.onColor.r, 0.45f));
+    CHECK(nearlyEqual(t.onColor.a, 0.48f));
+    CHECK(nearlyEqual(t.knobColor.r, 0.55f));
+    CHECK(nearlyEqual(t.knobColor.a, 0.58f));
+    CHECK(nearlyEqual(t.knobSize, 25.25f));
+    CHECK(nearlyEqual(t.knobPadding, 3.75f));
+    CHECK(t.atlasPath == "assets/ui/widgets.png");
+    CHECK(t.backgroundSprite == "riel");
+    CHECK(t.knobSprite == "mando");
+}
+
+static void test_toggle_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* go = scene.addGameObject("Vsync", canvasGo);
+    auto tg = std::make_shared<ToggleComponent>();
+    fillToggle(*tg);
+    go->setToggle(tg);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasToggle()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "Vsync");
+    checkToggleMatchesFilled(*found->getToggle());
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_toggle_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool alguno = false;
+    loaded.traverse([&](GameObject* n) { if (n->hasToggle()) alguno = true; });
+    CHECK(!alguno);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_toggle_serializes_identically()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    const std::string antes = scene.toJson().dump();
+    CHECK(antes.find("\"toggle\"") == std::string::npos);
+
+    go->setToggle(std::make_shared<ToggleComponent>());
+    CHECK(scene.toJson().dump() != antes);
+    go->setToggle(nullptr);
+    CHECK(scene.toJson().dump() == antes);
+}
+
+static void test_toggle_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Vsync");
+    ToggleComponent st;
+    fillToggle(st);
+    ToggleComponentCommand cmd(scene, "Add Toggle", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasToggle());
+    checkToggleMatchesFilled(*go->getToggle());
+    cmd.undo();
+    CHECK(!go->hasToggle());
+    cmd.execute();
+    CHECK(go->hasToggle());
+    checkToggleMatchesFilled(*go->getToggle());
+}
+
+static void test_toggle_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Vsync");
+    auto tg = std::make_shared<ToggleComponent>();
+    fillToggle(*tg);
+    go->setToggle(tg);
+
+    ToggleComponentCommand cmd(scene, "Remove Toggle", go->id, /*add=*/false, *tg);
+    cmd.execute();
+    CHECK(!go->hasToggle());
+    cmd.undo();
+    CHECK(go->hasToggle());
+    checkToggleMatchesFilled(*go->getToggle());
+}
+
+static void test_toggle_property_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Vsync");
+    go->setToggle(std::make_shared<ToggleComponent>());
+    const uint64_t id = go->id;
+    Scene* sc = &scene;
+
+    auto applyKnob = [sc, id](const float& v) {
+        if (GameObject* g = sc->findById(id))
+            if (g->hasToggle()) g->getToggle()->knobSize = v;
+    };
+    PropertyCommand<float> cmd("Knob Size", 20.0f, 7.5f, applyKnob);
+
+    cmd.execute();
+    CHECK(nearlyEqual(go->getToggle()->knobSize, 7.5f));
+    cmd.undo();
+    CHECK(nearlyEqual(go->getToggle()->knobSize, 20.0f));
+
+    go->setToggle(nullptr);
+    cmd.execute();
+    CHECK(!go->hasToggle());
+}
+
+// El mando va pegado a un extremo o al otro, siempre dentro del padding, y NUNCA
+// se sale de la pista aunque el tamaño pedido no quepa.
+static void test_toggle_knob_rect_moves_end_to_end()
+{
+    ToggleComponent t;
+    t.size        = glm::vec2(80.0f, 40.0f);
+    t.knobSize    = 30.0f;
+    t.knobPadding = 5.0f;
+
+    glm::vec2 pos{0.0f}, sz{0.0f};
+
+    t.isOn = false;
+    t.knobRect(pos, sz);
+    CHECK(nearlyEqual(pos.x, 5.0f));
+    CHECK(nearlyEqual(pos.y, 5.0f));
+    CHECK(nearlyEqual(sz.x, 30.0f));
+    CHECK(nearlyEqual(sz.y, 30.0f));   // alto de la pista menos el padding
+
+    t.isOn = true;
+    t.knobRect(pos, sz);
+    CHECK(nearlyEqual(pos.x, 45.0f));            // 80 - 5 - 30
+    CHECK(nearlyEqual(pos.x + sz.x, 75.0f));     // no se sale del padding
+
+    // Un mando más grande que la pista se acota a lo que queda entre paddings,
+    // en vez de asomar por el borde.
+    t.knobSize = 500.0f;
+    t.isOn     = true;
+    t.knobRect(pos, sz);
+    CHECK(nearlyEqual(sz.x, 70.0f));
+    CHECK(nearlyEqual(pos.x, 5.0f));
+}
+
+static void test_toggle_sync_builds_track_and_knob()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    ToggleComponent t;
+    t.position    = glm::vec2(0.0f, 0.0f);
+    t.size        = glm::vec2(80.0f, 40.0f);
+    t.knobSize    = 30.0f;
+    t.knobPadding = 5.0f;
+    t.isOn        = false;
+    t.offColor    = glm::vec4(0.1f, 0.1f, 0.1f, 1.0f);
+    t.onColor     = glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);
+
+    UiWidgetLists w;
+    w.toggles.emplace_back(5ull, &t);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().empty()) return;
+    const UiElement& pista = *canvas.root().children()[0];
+    CHECK(pista.name == uiToggleNodeName(5ull));
+    CHECK(pista.typeName() == std::string("Toggle"));
+    CHECK(pista.children().size() == 1);
+    if (pista.children().empty()) return;
+    const UiElement& mando = *pista.children()[0];
+    CHECK(mando.name == uiToggleNodeName(5ull) + "/Knob");
+    CHECK(mando.raycastTarget == false);
+
+    // Apagado: color de "off" y mando a la izquierda.
+    CHECK(nearlyEqual(pista.color.r, 0.1f));
+    CHECK(nearlyEqual(mando.position.x, 5.0f));
+
+    // Encendido: los dos cambian, y el nodo queda sucio o el canvas reusaría los
+    // vértices de antes.
+    t.isOn = true;
+    syncUiWidgets(w, canvas, cache, loader);
+    CHECK(nearlyEqual(pista.color.r, 0.9f));
+    CHECK(nearlyEqual(mando.position.x, 45.0f));
+    CHECK(pista.dirty != 0u);
+    CHECK(mando.dirty != 0u);
+}
+
+static void test_toggle_click_flips_the_component()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    ToggleComponent t;
+    t.size = glm::vec2(80.0f, 40.0f);
+    t.isOn = false;
+
+    int avisos = 0;
+    t.callbacks.ptr->onValueChanged = [&](bool) { avisos++; };
+
+    UiWidgetLists w;
+    w.toggles.emplace_back(5ull, &t);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    clickEnCanvas(canvas, glm::vec2(40.0f, 20.0f), 0.0f);
+    CHECK(t.isOn == true);
+    CHECK(avisos == 1);
+
+    clickEnCanvas(canvas, glm::vec2(40.0f, 20.0f), 5.0f);
+    CHECK(t.isOn == false);
+    CHECK(avisos == 2);
+
+    t.interactable = false;
+    syncUiWidgets(w, canvas, cache, loader);
+    clickEnCanvas(canvas, glm::vec2(40.0f, 20.0f), 10.0f);
+    CHECK(t.isOn == false);
+    CHECK(avisos == 2);
+}
+
+static void test_toggle_hit_test_maps_back_to_gameobject()
+{
+    CHECK(uiToggleOwnerId(uiToggleNodeName(42ull)) == 42ull);
+    CHECK(uiToggleOwnerId(uiToggleNodeName(42ull) + "/Knob") == 42ull);
+    CHECK(uiToggleOwnerId("Cubo") == 0ull);
+    CHECK(uiToggleOwnerId("tgl:") == 0ull);
+    CHECK(uiToggleOwnerId("tgl:12ab") == 0ull);
+    CHECK(uiToggleOwnerId(uiCheckboxNodeName(42ull)) == 0ull);
+    CHECK(uiCheckboxOwnerId(uiToggleNodeName(42ull)) == 0ull);
+}
+
+// ── Scrollbar ───────────────────────────────────────────────────────────────
+// Como el Slider pero con el asa de tamaño VARIABLE (la fracción visible del
+// contenido) y con el valor siempre en 0..1: no tiene rango propio porque quien
+// lo interpreta es el ScrollView, no la barra.
+static void fillScrollbar(ScrollbarComponent& s)
+{
+    s.anchorMin = glm::vec2(0.125f, 0.375f);
+    s.anchorMax = glm::vec2(0.5f, 0.625f);
+    s.pivot     = glm::vec2(0.25f, 0.6875f);
+    s.position  = glm::vec2(29.5f, -47.25f);
+    s.size      = glm::vec2(17.75f, 213.5f);
+    s.color     = glm::vec4(0.19f, 0.29f, 0.39f, 0.49f);
+    s.visible   = false;
+
+    s.interactable = false;
+
+    s.value          = 0.625f;
+    s.handleFraction = 0.375f;
+    s.direction      = UiScrollbarDirection::BottomToTop;
+    s.numberOfSteps  = 7u;
+
+    s.handleColor = glm::vec4(0.59f, 0.69f, 0.79f, 0.89f);
+
+    s.atlasPath        = "assets/ui/widgets.png";
+    s.backgroundSprite = "canal";
+    s.handleSprite     = "pulgar";
+}
+
+static void checkScrollbarMatchesFilled(const ScrollbarComponent& s)
+{
+    CHECK(nearlyEqual(s.anchorMin.x, 0.125f));
+    CHECK(nearlyEqual(s.anchorMin.y, 0.375f));
+    CHECK(nearlyEqual(s.anchorMax.x, 0.5f));
+    CHECK(nearlyEqual(s.anchorMax.y, 0.625f));
+    CHECK(nearlyEqual(s.pivot.x, 0.25f));
+    CHECK(nearlyEqual(s.pivot.y, 0.6875f));
+    CHECK(nearlyEqual(s.position.x, 29.5f));
+    CHECK(nearlyEqual(s.position.y, -47.25f));
+    CHECK(nearlyEqual(s.size.x, 17.75f));
+    CHECK(nearlyEqual(s.size.y, 213.5f));
+    CHECK(nearlyEqual(s.color.r, 0.19f));
+    CHECK(nearlyEqual(s.color.a, 0.49f));
+    CHECK(s.visible == false);
+    CHECK(s.interactable == false);
+    CHECK(nearlyEqual(s.value, 0.625f));
+    CHECK(nearlyEqual(s.handleFraction, 0.375f));
+    CHECK(s.direction == UiScrollbarDirection::BottomToTop);
+    CHECK(s.numberOfSteps == 7u);
+    CHECK(nearlyEqual(s.handleColor.r, 0.59f));
+    CHECK(nearlyEqual(s.handleColor.a, 0.89f));
+    CHECK(s.atlasPath == "assets/ui/widgets.png");
+    CHECK(s.backgroundSprite == "canal");
+    CHECK(s.handleSprite == "pulgar");
+}
+
+static void test_scrollbar_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* go = scene.addGameObject("BarraLateral", canvasGo);
+    auto sb = std::make_shared<ScrollbarComponent>();
+    fillScrollbar(*sb);
+    go->setScrollbar(sb);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasScrollbar()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "BarraLateral");
+    checkScrollbarMatchesFilled(*found->getScrollbar());
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_scrollbar_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool alguno = false;
+    loaded.traverse([&](GameObject* n) { if (n->hasScrollbar()) alguno = true; });
+    CHECK(!alguno);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_scrollbar_serializes_identically()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    const std::string antes = scene.toJson().dump();
+    CHECK(antes.find("\"scrollbar\"") == std::string::npos);
+
+    go->setScrollbar(std::make_shared<ScrollbarComponent>());
+    CHECK(scene.toJson().dump() != antes);
+    go->setScrollbar(nullptr);
+    CHECK(scene.toJson().dump() == antes);
+}
+
+static void test_scrollbar_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("BarraLateral");
+    ScrollbarComponent st;
+    fillScrollbar(st);
+    ScrollbarComponentCommand cmd(scene, "Add Scrollbar", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasScrollbar());
+    checkScrollbarMatchesFilled(*go->getScrollbar());
+    cmd.undo();
+    CHECK(!go->hasScrollbar());
+    cmd.execute();
+    CHECK(go->hasScrollbar());
+    checkScrollbarMatchesFilled(*go->getScrollbar());
+}
+
+static void test_scrollbar_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("BarraLateral");
+    auto sb = std::make_shared<ScrollbarComponent>();
+    fillScrollbar(*sb);
+    go->setScrollbar(sb);
+
+    ScrollbarComponentCommand cmd(scene, "Remove Scrollbar", go->id, /*add=*/false, *sb);
+    cmd.execute();
+    CHECK(!go->hasScrollbar());
+    cmd.undo();
+    CHECK(go->hasScrollbar());
+    checkScrollbarMatchesFilled(*go->getScrollbar());
+}
+
+static void test_scrollbar_property_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("BarraLateral");
+    go->setScrollbar(std::make_shared<ScrollbarComponent>());
+    const uint64_t id = go->id;
+    Scene* sc = &scene;
+
+    auto applyFrac = [sc, id](const float& v) {
+        if (GameObject* g = sc->findById(id))
+            if (g->hasScrollbar()) g->getScrollbar()->handleFraction = v;
+    };
+    PropertyCommand<float> cmd("Handle Fraction", 0.25f, 0.8125f, applyFrac);
+
+    cmd.execute();
+    CHECK(nearlyEqual(go->getScrollbar()->handleFraction, 0.8125f));
+    cmd.undo();
+    CHECK(nearlyEqual(go->getScrollbar()->handleFraction, 0.25f));
+
+    go->setScrollbar(nullptr);
+    cmd.execute();
+    CHECK(!go->hasScrollbar());
+}
+
+// El asa ocupa su fracción del canal y recorre lo que le queda, sin salirse.
+static void test_scrollbar_handle_rect_and_steps()
+{
+    ScrollbarComponent s;
+    s.direction      = UiScrollbarDirection::LeftToRight;
+    s.size           = glm::vec2(200.0f, 20.0f);
+    s.handleFraction = 0.25f;
+
+    glm::vec2 pos{0.0f}, sz{0.0f};
+
+    s.value = 0.0f;
+    s.handleRect(pos, sz);
+    CHECK(nearlyEqual(sz.x, 50.0f));
+    CHECK(nearlyEqual(pos.x, 0.0f));
+
+    s.value = 1.0f;
+    s.handleRect(pos, sz);
+    CHECK(nearlyEqual(pos.x, 150.0f));
+    CHECK(nearlyEqual(pos.x + sz.x, 200.0f));
+
+    s.value = 0.5f;
+    s.handleRect(pos, sz);
+    CHECK(nearlyEqual(pos.x, 75.0f));
+
+    // Vertical TopToBottom: el valor crece hacia abajo, que es lo natural de una
+    // barra lateral (0 = arriba del todo).
+    s.direction      = UiScrollbarDirection::TopToBottom;
+    s.size           = glm::vec2(20.0f, 200.0f);
+    s.handleFraction = 0.5f;
+    s.value          = 0.0f;
+    s.handleRect(pos, sz);
+    CHECK(nearlyEqual(pos.y, 0.0f));
+    CHECK(nearlyEqual(sz.y, 100.0f));
+    s.value = 1.0f;
+    s.handleRect(pos, sz);
+    CHECK(nearlyEqual(pos.y, 100.0f));
+
+    // numberOfSteps engancha el valor a posiciones discretas. Con 5 pasos hay 5
+    // paradas (0, 0.25, 0.5, 0.75, 1), como en Unity.
+    ScrollbarComponent d;
+    d.numberOfSteps = 5u;
+    CHECK(nearlyEqual(d.snapValue(0.3f), 0.25f));
+    CHECK(nearlyEqual(d.snapValue(0.6f), 0.5f));
+    CHECK(nearlyEqual(d.snapValue(0.99f), 1.0f));
+    // 0 y 1 pasos = continuo: enganchar a un solo sitio dejaría la barra muerta.
+    d.numberOfSteps = 0u;
+    CHECK(nearlyEqual(d.snapValue(0.3f), 0.3f));
+    d.numberOfSteps = 1u;
+    CHECK(nearlyEqual(d.snapValue(0.3f), 0.3f));
+}
+
+static void test_scrollbar_drag_and_wheel_write_the_component()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    ScrollbarComponent s;
+    s.direction      = UiScrollbarDirection::LeftToRight;
+    s.position       = glm::vec2(0.0f, 0.0f);
+    s.size           = glm::vec2(200.0f, 20.0f);
+    s.handleFraction = 0.0f;   // sin asa el recorrido es el canal entero
+    s.value          = 0.0f;
+
+    float ultimo = -1.0f;
+    int   avisos = 0;
+    s.callbacks.ptr->onValueChanged = [&](float v) { ultimo = v; avisos++; };
+
+    UiWidgetLists w;
+    w.scrollbars.emplace_back(5ull, &s);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    const UiElement& canal = *canvas.root().children()[0];
+    CHECK(canal.name == uiScrollbarNodeName(5ull));
+    CHECK(canal.typeName() == std::string("Scrollbar"));
+
+    UiInputState in;
+    in.mousePos    = glm::vec2(150.0f, 10.0f);
+    in.timeSeconds = 0.0f;
+    canvas.updateInput(in);
+    in.mouseDown[0] = true;
+    in.timeSeconds  = 0.016f;
+    canvas.updateInput(in);
+
+    CHECK(nearlyEqual(s.value, 0.75f));
+    CHECK(avisos == 1);
+    CHECK(nearlyEqual(ultimo, 0.75f));
+
+    in.mouseDown[0] = false;
+    in.timeSeconds  = 0.032f;
+    canvas.updateInput(in);
+
+    // La rueda también mueve la barra: sin esto, una lista con scrollbar solo se
+    // podría mover arrastrando, que no es lo que espera nadie.
+    in.scrollDelta = 1.0f;     // + hacia arriba = hacia el principio
+    in.timeSeconds = 0.048f;
+    canvas.updateInput(in);
+    CHECK(s.value < 0.75f);
+    const float trasRueda = s.value;
+
+    in.scrollDelta = -1.0f;
+    in.timeSeconds = 0.064f;
+    canvas.updateInput(in);
+    CHECK(s.value > trasRueda);
+
+    // Y no se sale de [0,1] por mucho que se insista.
+    for (int i = 0; i < 50; i++)
+    {
+        in.scrollDelta = -1.0f;
+        in.timeSeconds += 0.016f;
+        canvas.updateInput(in);
+    }
+    CHECK(nearlyEqual(s.value, 1.0f));
+}
+
+static void test_scrollbar_hit_test_maps_back_to_gameobject()
+{
+    CHECK(uiScrollbarOwnerId(uiScrollbarNodeName(42ull)) == 42ull);
+    CHECK(uiScrollbarOwnerId(uiScrollbarNodeName(42ull) + "/Handle") == 42ull);
+    CHECK(uiScrollbarOwnerId("Cubo") == 0ull);
+    CHECK(uiScrollbarOwnerId("scr:") == 0ull);
+    CHECK(uiScrollbarOwnerId("scr:12ab") == 0ull);
+    CHECK(uiScrollbarOwnerId(uiSliderNodeName(42ull)) == 0ull);
+    CHECK(uiSliderOwnerId(uiScrollbarNodeName(42ull)) == 0ull);
+    CHECK(uiToggleOwnerId(uiScrollbarNodeName(42ull)) == 0ull);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -3366,6 +4675,51 @@ int main()
     test_image_hit_test_maps_back_to_gameobject();
     test_collect_ui_widgets_incluye_panels_e_images();
     test_panel_and_image_coexist();
+
+    test_slider_round_trip(pm, am);
+    test_scene_without_slider_block_still_loads(pm, am);
+    test_scene_without_slider_serializes_identically();
+    test_slider_command_add_undo_redo();
+    test_slider_command_remove();
+    test_slider_property_command_undo_redo();
+    test_slider_handle_stays_inside_the_track();
+    test_slider_whole_numbers_snaps_the_value();
+    test_slider_sync_builds_track_fill_and_handle();
+    test_slider_drag_writes_the_component_value();
+    test_slider_not_interactable_ignores_the_mouse();
+    test_slider_hit_test_maps_back_to_gameobject();
+    test_checkbox_round_trip(pm, am);
+    test_scene_without_checkbox_block_still_loads(pm, am);
+    test_scene_without_checkbox_serializes_identically();
+    test_checkbox_command_add_undo_redo();
+    test_checkbox_command_remove();
+    test_checkbox_property_command_undo_redo();
+    test_checkbox_check_rect_respects_padding();
+    test_checkbox_sync_builds_box_and_check();
+    test_checkbox_click_toggles_the_component();
+    test_checkbox_hit_test_maps_back_to_gameobject();
+
+    test_toggle_round_trip(pm, am);
+    test_scene_without_toggle_block_still_loads(pm, am);
+    test_scene_without_toggle_serializes_identically();
+    test_toggle_command_add_undo_redo();
+    test_toggle_command_remove();
+    test_toggle_property_command_undo_redo();
+    test_toggle_knob_rect_moves_end_to_end();
+    test_toggle_sync_builds_track_and_knob();
+    test_toggle_click_flips_the_component();
+    test_toggle_hit_test_maps_back_to_gameobject();
+
+    test_scrollbar_round_trip(pm, am);
+    test_scene_without_scrollbar_block_still_loads(pm, am);
+    test_scene_without_scrollbar_serializes_identically();
+    test_scrollbar_command_add_undo_redo();
+    test_scrollbar_command_remove();
+    test_scrollbar_property_command_undo_redo();
+    test_scrollbar_handle_rect_and_steps();
+    test_scrollbar_drag_and_wheel_write_the_component();
+    test_scrollbar_hit_test_maps_back_to_gameobject();
+
 
     am.shutdown();
     pm.shutdown();

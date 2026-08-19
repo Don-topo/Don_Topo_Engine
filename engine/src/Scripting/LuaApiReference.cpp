@@ -61,7 +61,7 @@ const std::vector<std::string>& baseSymbols()
         "Entity.name", "Entity:IsValid", "Entity:GetTransform",
         "Entity:GetParent", "Entity:GetChildren", "Entity:GetComponent",
         "Entity:AddComponent", "Entity:RemoveComponent",
-        // UI: atajos con nombre para los cuatro componentes (registerUi).
+        // UI: atajos con nombre para cada componente de UI (registerUi).
         // Los Get* devuelven nil si el componente no está.
         "Entity:GetCanvas", "Entity:GetButton", "Entity:GetText", "Entity:GetProgressBar",
         "Entity:AddCanvas", "Entity:AddButton", "Entity:AddText", "Entity:AddProgressBar",
@@ -69,6 +69,10 @@ const std::vector<std::string>& baseSymbols()
         "Entity:RemoveProgressBar",
         "Entity:GetPanel", "Entity:AddPanel", "Entity:RemovePanel",
         "Entity:GetImage", "Entity:AddImage", "Entity:RemoveImage",
+        "Entity:GetSlider", "Entity:AddSlider", "Entity:RemoveSlider",
+        "Entity:GetCheckbox", "Entity:AddCheckbox", "Entity:RemoveCheckbox",
+        "Entity:GetToggle", "Entity:AddToggle", "Entity:RemoveToggle",
+        "Entity:GetScrollbar", "Entity:AddScrollbar", "Entity:RemoveScrollbar",
 
         // Transform
         "Transform:GetPosition", "Transform:SetPosition",
@@ -175,6 +179,63 @@ const std::vector<std::string>& baseSymbols()
         "Layout:GetSpacing", "Layout:SetSpacing",
         "Layout:GetCellSize", "Layout:SetCellSize",
 
+
+        // UI 2D — Slider (widget interactivo)
+        "Slider.visible", "Slider.interactable", "Slider.value",
+        "Slider.minValue", "Slider.maxValue", "Slider.wholeNumbers",
+        "Slider.direction", "Slider.handleSize", "Slider.atlasPath",
+        "Slider.backgroundSprite", "Slider.fillSprite", "Slider.handleSprite",
+        "Slider:GetAnchorMin", "Slider:SetAnchorMin",
+        "Slider:GetAnchorMax", "Slider:SetAnchorMax",
+        "Slider:GetPivot", "Slider:SetPivot",
+        "Slider:GetPosition", "Slider:SetPosition",
+        "Slider:GetSize", "Slider:SetSize",
+        "Slider:GetColor", "Slider:SetColor",
+        "Slider:GetFillColor", "Slider:SetFillColor",
+        "Slider:GetHandleColor", "Slider:SetHandleColor",
+        "Slider:GetNormalizedValue", "Slider:OnValueChanged",
+
+        // UI 2D — Checkbox (widget interactivo)
+        "Checkbox.visible", "Checkbox.interactable", "Checkbox.isOn",
+        "Checkbox.checkPadding", "Checkbox.atlasPath",
+        "Checkbox.backgroundSprite", "Checkbox.checkmarkSprite",
+        "Checkbox:GetAnchorMin", "Checkbox:SetAnchorMin",
+        "Checkbox:GetAnchorMax", "Checkbox:SetAnchorMax",
+        "Checkbox:GetPivot", "Checkbox:SetPivot",
+        "Checkbox:GetPosition", "Checkbox:SetPosition",
+        "Checkbox:GetSize", "Checkbox:SetSize",
+        "Checkbox:GetColor", "Checkbox:SetColor",
+        "Checkbox:GetCheckColor", "Checkbox:SetCheckColor",
+        "Checkbox:OnValueChanged",
+
+        // UI 2D — Toggle (widget interactivo)
+        "Toggle.visible", "Toggle.interactable", "Toggle.isOn",
+        "Toggle.knobSize", "Toggle.knobPadding", "Toggle.atlasPath",
+        "Toggle.backgroundSprite", "Toggle.knobSprite",
+        "Toggle:GetAnchorMin", "Toggle:SetAnchorMin",
+        "Toggle:GetAnchorMax", "Toggle:SetAnchorMax",
+        "Toggle:GetPivot", "Toggle:SetPivot",
+        "Toggle:GetPosition", "Toggle:SetPosition",
+        "Toggle:GetSize", "Toggle:SetSize",
+        "Toggle:GetOffColor", "Toggle:SetOffColor",
+        "Toggle:GetOnColor", "Toggle:SetOnColor",
+        "Toggle:GetKnobColor", "Toggle:SetKnobColor",
+        "Toggle:OnValueChanged",
+
+        // UI 2D — Scrollbar (widget interactivo)
+        "Scrollbar.visible", "Scrollbar.interactable", "Scrollbar.value",
+        "Scrollbar.handleFraction", "Scrollbar.direction",
+        "Scrollbar.numberOfSteps", "Scrollbar.scrollStep",
+        "Scrollbar.atlasPath", "Scrollbar.backgroundSprite", "Scrollbar.handleSprite",
+        "Scrollbar:GetAnchorMin", "Scrollbar:SetAnchorMin",
+        "Scrollbar:GetAnchorMax", "Scrollbar:SetAnchorMax",
+        "Scrollbar:GetPivot", "Scrollbar:SetPivot",
+        "Scrollbar:GetPosition", "Scrollbar:SetPosition",
+        "Scrollbar:GetSize", "Scrollbar:SetSize",
+        "Scrollbar:GetColor", "Scrollbar:SetColor",
+        "Scrollbar:GetHandleColor", "Scrollbar:SetHandleColor",
+        "Scrollbar:SnapValue", "Scrollbar:OnValueChanged",
+
         // UI 2D — Panel (el rectángulo de fondo)
         "Panel.visible", "Panel.raycastTarget", "Panel.atlasPath", "Panel.sprite",
         "Panel:GetAnchorMin", "Panel:SetAnchorMin",
@@ -213,6 +274,10 @@ const std::vector<std::string>& baseSymbols()
         "UiImageMode.Filled",
         "UiFillDirection.Horizontal", "UiFillDirection.Vertical",
         "UiFillOrigin.Start", "UiFillOrigin.End",
+        "UiSliderDirection.LeftToRight", "UiSliderDirection.RightToLeft",
+        "UiSliderDirection.BottomToTop", "UiSliderDirection.TopToBottom",
+        "UiScrollbarDirection.LeftToRight", "UiScrollbarDirection.RightToLeft",
+        "UiScrollbarDirection.TopToBottom", "UiScrollbarDirection.BottomToTop",
         "UiButtonTransition.ColorTint", "UiButtonTransition.SpriteSwap",
         "UiButtonTransition.Animation",
         "UiButtonState.Normal", "UiButtonState.Hover", "UiButtonState.Pressed",

@@ -59,6 +59,12 @@ namespace
     using DonTopo::UiImageMode;
     using DonTopo::UiFillDirection;
     using DonTopo::UiFillOrigin;
+    using DonTopo::SliderComponent;
+    using DonTopo::UiSliderDirection;
+    using DonTopo::CheckboxComponent;
+    using DonTopo::ToggleComponent;
+    using DonTopo::ScrollbarComponent;
+    using DonTopo::UiScrollbarDirection;
 
     // Forward declarations: animatorFromJson (más abajo) necesita estos
     // lectores tolerantes a JSON corrupto (definidos junto a jsonToMat4/
@@ -235,6 +241,44 @@ namespace
         if (s == "bottomToTop") return UiProgressFillDirection::BottomToTop;
         if (s == "topToBottom") return UiProgressFillDirection::TopToBottom;
         return UiProgressFillDirection::LeftToRight;   // valor desconocido -> el default
+    }
+
+    const char* uiScrollbarDirectionToStr(UiScrollbarDirection d)
+    {
+        switch (d)
+        {
+            case UiScrollbarDirection::LeftToRight: return "leftToRight";
+            case UiScrollbarDirection::RightToLeft: return "rightToLeft";
+            case UiScrollbarDirection::BottomToTop: return "bottomToTop";
+            default:                                return "topToBottom";
+        }
+    }
+
+    UiScrollbarDirection uiScrollbarDirectionFromStr(const std::string& s)
+    {
+        if (s == "leftToRight") return UiScrollbarDirection::LeftToRight;
+        if (s == "rightToLeft") return UiScrollbarDirection::RightToLeft;
+        if (s == "bottomToTop") return UiScrollbarDirection::BottomToTop;
+        return UiScrollbarDirection::TopToBottom;   // valor desconocido -> el default
+    }
+
+    const char* uiSliderDirectionToStr(UiSliderDirection d)
+    {
+        switch (d)
+        {
+            case UiSliderDirection::RightToLeft: return "rightToLeft";
+            case UiSliderDirection::BottomToTop: return "bottomToTop";
+            case UiSliderDirection::TopToBottom: return "topToBottom";
+            default:                             return "leftToRight";
+        }
+    }
+
+    UiSliderDirection uiSliderDirectionFromStr(const std::string& s)
+    {
+        if (s == "rightToLeft") return UiSliderDirection::RightToLeft;
+        if (s == "bottomToTop") return UiSliderDirection::BottomToTop;
+        if (s == "topToBottom") return UiSliderDirection::TopToBottom;
+        return UiSliderDirection::LeftToRight;   // valor desconocido -> el default
     }
 
     const char* uiImageModeToStr(UiImageMode m)
@@ -802,6 +846,89 @@ namespace
                            {"fillDirection", uiFillDirectionToStr(im->fillDirection)},
                            {"fillOrigin", uiFillOriginToStr(im->fillOrigin)},
                            {"fillAmount", im->fillAmount} };
+        }
+        if (node.hasSlider())
+        {
+            const auto& s = node.getSlider();
+            j["slider"] = { {"anchorMin", vec2ToJsonXY(s->anchorMin)},
+                            {"anchorMax", vec2ToJsonXY(s->anchorMax)},
+                            {"pivot", vec2ToJsonXY(s->pivot)},
+                            {"position", vec2ToJsonXY(s->position)},
+                            {"size", vec2ToJsonXY(s->size)},
+                            {"color", vec4ToJsonXYZW(s->color)},
+                            {"visible", s->visible},
+                            {"interactable", s->interactable},
+                            {"value", s->value},
+                            {"minValue", s->minValue},
+                            {"maxValue", s->maxValue},
+                            {"wholeNumbers", s->wholeNumbers},
+                            {"direction", uiSliderDirectionToStr(s->direction)},
+                            {"fillColor", vec4ToJsonXYZW(s->fillColor)},
+                            {"handleColor", vec4ToJsonXYZW(s->handleColor)},
+                            {"handleSize", s->handleSize},
+                            {"atlasPath", s->atlasPath},
+                            {"backgroundSprite", s->backgroundSprite},
+                            {"fillSprite", s->fillSprite},
+                            {"handleSprite", s->handleSprite} };
+        }
+        if (node.hasCheckbox())
+        {
+            const auto& c = node.getCheckbox();
+            j["checkbox"] = { {"anchorMin", vec2ToJsonXY(c->anchorMin)},
+                              {"anchorMax", vec2ToJsonXY(c->anchorMax)},
+                              {"pivot", vec2ToJsonXY(c->pivot)},
+                              {"position", vec2ToJsonXY(c->position)},
+                              {"size", vec2ToJsonXY(c->size)},
+                              {"color", vec4ToJsonXYZW(c->color)},
+                              {"visible", c->visible},
+                              {"interactable", c->interactable},
+                              {"isOn", c->isOn},
+                              {"checkColor", vec4ToJsonXYZW(c->checkColor)},
+                              {"checkPadding", c->checkPadding},
+                              {"atlasPath", c->atlasPath},
+                              {"backgroundSprite", c->backgroundSprite},
+                              {"checkmarkSprite", c->checkmarkSprite} };
+        }
+        if (node.hasToggle())
+        {
+            const auto& t = node.getToggle();
+            j["toggle"] = { {"anchorMin", vec2ToJsonXY(t->anchorMin)},
+                            {"anchorMax", vec2ToJsonXY(t->anchorMax)},
+                            {"pivot", vec2ToJsonXY(t->pivot)},
+                            {"position", vec2ToJsonXY(t->position)},
+                            {"size", vec2ToJsonXY(t->size)},
+                            {"visible", t->visible},
+                            {"interactable", t->interactable},
+                            {"isOn", t->isOn},
+                            {"offColor", vec4ToJsonXYZW(t->offColor)},
+                            {"onColor", vec4ToJsonXYZW(t->onColor)},
+                            {"knobColor", vec4ToJsonXYZW(t->knobColor)},
+                            {"knobSize", t->knobSize},
+                            {"knobPadding", t->knobPadding},
+                            {"atlasPath", t->atlasPath},
+                            {"backgroundSprite", t->backgroundSprite},
+                            {"knobSprite", t->knobSprite} };
+        }
+        if (node.hasScrollbar())
+        {
+            const auto& s = node.getScrollbar();
+            j["scrollbar"] = { {"anchorMin", vec2ToJsonXY(s->anchorMin)},
+                               {"anchorMax", vec2ToJsonXY(s->anchorMax)},
+                               {"pivot", vec2ToJsonXY(s->pivot)},
+                               {"position", vec2ToJsonXY(s->position)},
+                               {"size", vec2ToJsonXY(s->size)},
+                               {"color", vec4ToJsonXYZW(s->color)},
+                               {"visible", s->visible},
+                               {"interactable", s->interactable},
+                               {"value", s->value},
+                               {"handleFraction", s->handleFraction},
+                               {"direction", uiScrollbarDirectionToStr(s->direction)},
+                               {"numberOfSteps", s->numberOfSteps},
+                               {"handleColor", vec4ToJsonXYZW(s->handleColor)},
+                               {"scrollStep", s->scrollStep},
+                               {"atlasPath", s->atlasPath},
+                               {"backgroundSprite", s->backgroundSprite},
+                               {"handleSprite", s->handleSprite} };
         }
         if (node.hasLayout())
         {
@@ -1732,6 +1859,156 @@ namespace
             img->fillAmount    = readFloat(im, "fillAmount", 1.0f, warnings, ctx);
             node->setImage(std::move(img));
         }
+        // Bloque aditivo, misma regla que los demas componentes de UI: una
+        // escena guardada antes del componente Slider no trae la clave y se
+        // carga sin el ni un aviso.
+        if (j.contains("slider"))
+        {
+            const auto& sl = j["slider"];
+            const std::string ctx = "slider de '" + node->name + "'";
+            auto readBool = [&](const char* key, bool def) {
+                return (sl.contains(key) && sl[key].is_boolean()) ? sl[key].get<bool>() : def;
+            };
+            auto readStr = [&](const char* key) {
+                return (sl.contains(key) && sl[key].is_string())
+                           ? sl[key].get<std::string>() : std::string();
+            };
+            auto slider = std::make_shared<SliderComponent>();
+            slider->anchorMin = readVec2XY(sl, "anchorMin", glm::vec2(0.0f), warnings, ctx);
+            slider->anchorMax = readVec2XY(sl, "anchorMax", glm::vec2(0.0f), warnings, ctx);
+            slider->pivot     = readVec2XY(sl, "pivot", glm::vec2(0.0f), warnings, ctx);
+            slider->position  = readVec2XY(sl, "position", glm::vec2(0.0f), warnings, ctx);
+            slider->size      = readVec2XY(sl, "size", glm::vec2(200.0f, 20.0f), warnings, ctx);
+            slider->color     = readVec4XYZW(sl, "color", glm::vec4(0.2f, 0.2f, 0.2f, 1.0f),
+                                             warnings, ctx);
+            slider->visible      = readBool("visible", true);
+            slider->interactable = readBool("interactable", true);
+
+            slider->value    = readFloat(sl, "value", 0.0f, warnings, ctx);
+            slider->minValue = readFloat(sl, "minValue", 0.0f, warnings, ctx);
+            slider->maxValue = readFloat(sl, "maxValue", 1.0f, warnings, ctx);
+            slider->wholeNumbers = readBool("wholeNumbers", false);
+
+            slider->direction = uiSliderDirectionFromStr(readStr("direction"));
+
+            slider->fillColor   = readVec4XYZW(sl, "fillColor", glm::vec4(0.25f, 0.7f, 1.0f, 1.0f),
+                                               warnings, ctx);
+            slider->handleColor = readVec4XYZW(sl, "handleColor", glm::vec4(1.0f), warnings, ctx);
+            slider->handleSize  = readFloat(sl, "handleSize", 20.0f, warnings, ctx);
+
+            slider->atlasPath        = readStr("atlasPath");
+            slider->backgroundSprite = readStr("backgroundSprite");
+            slider->fillSprite       = readStr("fillSprite");
+            slider->handleSprite     = readStr("handleSprite");
+            node->setSlider(std::move(slider));
+        }
+        // Bloque aditivo, misma regla que los demas componentes de UI.
+        if (j.contains("checkbox"))
+        {
+            const auto& cb = j["checkbox"];
+            const std::string ctx = "checkbox de '" + node->name + "'";
+            auto readBool = [&](const char* key, bool def) {
+                return (cb.contains(key) && cb[key].is_boolean()) ? cb[key].get<bool>() : def;
+            };
+            auto readStr = [&](const char* key) {
+                return (cb.contains(key) && cb[key].is_string())
+                           ? cb[key].get<std::string>() : std::string();
+            };
+            auto chk = std::make_shared<CheckboxComponent>();
+            chk->anchorMin = readVec2XY(cb, "anchorMin", glm::vec2(0.0f), warnings, ctx);
+            chk->anchorMax = readVec2XY(cb, "anchorMax", glm::vec2(0.0f), warnings, ctx);
+            chk->pivot     = readVec2XY(cb, "pivot", glm::vec2(0.0f), warnings, ctx);
+            chk->position  = readVec2XY(cb, "position", glm::vec2(0.0f), warnings, ctx);
+            chk->size      = readVec2XY(cb, "size", glm::vec2(24.0f), warnings, ctx);
+            chk->color     = readVec4XYZW(cb, "color", glm::vec4(0.2f, 0.2f, 0.2f, 1.0f),
+                                          warnings, ctx);
+            chk->visible      = readBool("visible", true);
+            chk->interactable = readBool("interactable", true);
+            chk->isOn         = readBool("isOn", false);
+
+            chk->checkColor   = readVec4XYZW(cb, "checkColor", glm::vec4(1.0f), warnings, ctx);
+            chk->checkPadding = readFloat(cb, "checkPadding", 4.0f, warnings, ctx);
+
+            chk->atlasPath        = readStr("atlasPath");
+            chk->backgroundSprite = readStr("backgroundSprite");
+            chk->checkmarkSprite  = readStr("checkmarkSprite");
+            node->setCheckbox(std::move(chk));
+        }
+        if (j.contains("toggle"))
+        {
+            const auto& tg = j["toggle"];
+            const std::string ctx = "toggle de '" + node->name + "'";
+            auto readBool = [&](const char* key, bool def) {
+                return (tg.contains(key) && tg[key].is_boolean()) ? tg[key].get<bool>() : def;
+            };
+            auto readStr = [&](const char* key) {
+                return (tg.contains(key) && tg[key].is_string())
+                           ? tg[key].get<std::string>() : std::string();
+            };
+            auto tog = std::make_shared<ToggleComponent>();
+            tog->anchorMin = readVec2XY(tg, "anchorMin", glm::vec2(0.0f), warnings, ctx);
+            tog->anchorMax = readVec2XY(tg, "anchorMax", glm::vec2(0.0f), warnings, ctx);
+            tog->pivot     = readVec2XY(tg, "pivot", glm::vec2(0.0f), warnings, ctx);
+            tog->position  = readVec2XY(tg, "position", glm::vec2(0.0f), warnings, ctx);
+            tog->size      = readVec2XY(tg, "size", glm::vec2(56.0f, 28.0f), warnings, ctx);
+            tog->visible      = readBool("visible", true);
+            tog->interactable = readBool("interactable", true);
+            tog->isOn         = readBool("isOn", false);
+
+            tog->offColor  = readVec4XYZW(tg, "offColor", glm::vec4(0.3f, 0.3f, 0.3f, 1.0f),
+                                          warnings, ctx);
+            tog->onColor   = readVec4XYZW(tg, "onColor", glm::vec4(0.25f, 0.7f, 1.0f, 1.0f),
+                                          warnings, ctx);
+            tog->knobColor = readVec4XYZW(tg, "knobColor", glm::vec4(1.0f), warnings, ctx);
+
+            tog->knobSize    = readFloat(tg, "knobSize", 20.0f, warnings, ctx);
+            tog->knobPadding = readFloat(tg, "knobPadding", 4.0f, warnings, ctx);
+
+            tog->atlasPath        = readStr("atlasPath");
+            tog->backgroundSprite = readStr("backgroundSprite");
+            tog->knobSprite       = readStr("knobSprite");
+            node->setToggle(std::move(tog));
+        }
+        if (j.contains("scrollbar"))
+        {
+            const auto& sb = j["scrollbar"];
+            const std::string ctx = "scrollbar de '" + node->name + "'";
+            auto readBool = [&](const char* key, bool def) {
+                return (sb.contains(key) && sb[key].is_boolean()) ? sb[key].get<bool>() : def;
+            };
+            auto readStr = [&](const char* key) {
+                return (sb.contains(key) && sb[key].is_string())
+                           ? sb[key].get<std::string>() : std::string();
+            };
+            auto scr = std::make_shared<ScrollbarComponent>();
+            scr->anchorMin = readVec2XY(sb, "anchorMin", glm::vec2(0.0f), warnings, ctx);
+            scr->anchorMax = readVec2XY(sb, "anchorMax", glm::vec2(0.0f), warnings, ctx);
+            scr->pivot     = readVec2XY(sb, "pivot", glm::vec2(0.0f), warnings, ctx);
+            scr->position  = readVec2XY(sb, "position", glm::vec2(0.0f), warnings, ctx);
+            scr->size      = readVec2XY(sb, "size", glm::vec2(20.0f, 200.0f), warnings, ctx);
+            scr->color     = readVec4XYZW(sb, "color", glm::vec4(0.15f, 0.15f, 0.15f, 1.0f),
+                                          warnings, ctx);
+            scr->visible      = readBool("visible", true);
+            scr->interactable = readBool("interactable", true);
+
+            scr->value          = readFloat(sb, "value", 0.0f, warnings, ctx);
+            scr->handleFraction = readFloat(sb, "handleFraction", 0.25f, warnings, ctx);
+            scr->direction      = uiScrollbarDirectionFromStr(readStr("direction"));
+
+            // Sin negativos: numberOfSteps es un contador, y un JSON editado a
+            // mano con -1 daria una vuelta al uint32.
+            const float pasos = readFloat(sb, "numberOfSteps", 0.0f, warnings, ctx);
+            scr->numberOfSteps = pasos > 0.0f ? (uint32_t)pasos : 0u;
+
+            scr->handleColor = readVec4XYZW(sb, "handleColor", glm::vec4(0.6f, 0.6f, 0.6f, 1.0f),
+                                            warnings, ctx);
+            scr->scrollStep  = readFloat(sb, "scrollStep", 0.1f, warnings, ctx);
+
+            scr->atlasPath        = readStr("atlasPath");
+            scr->backgroundSprite = readStr("backgroundSprite");
+            scr->handleSprite     = readStr("handleSprite");
+            node->setScrollbar(std::move(scr));
+        }
         if (j.contains("layout"))
         {
             const auto& l = j["layout"];
@@ -2021,11 +2298,17 @@ namespace DonTopo
                 // nadie los colocaria.
                 const bool tieneUi = node->hasButton() || node->hasText() ||
                                      node->hasProgressBar() || node->hasLayout() ||
-                                     node->hasPanel() || node->hasImage();
+                                     node->hasPanel() || node->hasImage() ||
+                                     node->hasSlider() || node->hasCheckbox() ||
+                                     node->hasToggle() || node->hasScrollbar();
                 if (tieneUi)
                 {
                     if (node->hasPanel())       out.panels.emplace_back(node->id, node->getPanel().get());
                     if (node->hasImage())       out.images.emplace_back(node->id, node->getImage().get());
+                    if (node->hasSlider())      out.sliders.emplace_back(node->id, node->getSlider().get());
+                    if (node->hasScrollbar())   out.scrollbars.emplace_back(node->id, node->getScrollbar().get());
+                    if (node->hasToggle())      out.toggles.emplace_back(node->id, node->getToggle().get());
+                    if (node->hasCheckbox())    out.checkboxes.emplace_back(node->id, node->getCheckbox().get());
                     if (node->hasButton())      out.buttons.emplace_back(node->id, node->getButton().get());
                     if (node->hasProgressBar()) out.bars.emplace_back(node->id, node->getProgressBar().get());
                     if (node->hasText())        out.texts.emplace_back(node->id, node->getText().get());

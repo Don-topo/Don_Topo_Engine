@@ -18,6 +18,10 @@
 #include "DonTopo/UI/ProgressBarComponent.h"
 #include "DonTopo/UI/PanelComponent.h"
 #include "DonTopo/UI/ImageComponent.h"
+#include "DonTopo/UI/SliderComponent.h"
+#include "DonTopo/UI/CheckboxComponent.h"
+#include "DonTopo/UI/ToggleComponent.h"
+#include "DonTopo/UI/ScrollbarComponent.h"
 #include "DonTopo/Files/FileManager.h"
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -107,6 +111,10 @@ namespace DonTopo::ScriptBindings
         struct LuaLayout { LuaEntity e; };
         struct LuaPanel { LuaEntity e; };
         struct LuaImage { LuaEntity e; };
+        struct LuaSlider { LuaEntity e; };
+        struct LuaCheckbox { LuaEntity e; };
+        struct LuaToggle { LuaEntity e; };
+        struct LuaScrollbar { LuaEntity e; };
 
         // Descompone localTransform en T/R/S (grados pa Lua). La extracción de
         // ángulos usa extractEulerAngleXYZ — el inverso exacto del
@@ -653,6 +661,30 @@ namespace DonTopo::ScriptBindings
             if (!go->hasImage()) throw std::runtime_error("El GameObject ya no tiene Image");
             return go->getImage().get();
         }
+        SliderComponent* sliderOf(const LuaSlider& c)
+        {
+            GameObject* go = deref(c.e);
+            if (!go->hasSlider()) throw std::runtime_error("El GameObject ya no tiene Slider");
+            return go->getSlider().get();
+        }
+        CheckboxComponent* checkboxOf(const LuaCheckbox& c)
+        {
+            GameObject* go = deref(c.e);
+            if (!go->hasCheckbox()) throw std::runtime_error("El GameObject ya no tiene Checkbox");
+            return go->getCheckbox().get();
+        }
+        ToggleComponent* toggleOf(const LuaToggle& c)
+        {
+            GameObject* go = deref(c.e);
+            if (!go->hasToggle()) throw std::runtime_error("El GameObject ya no tiene Toggle");
+            return go->getToggle().get();
+        }
+        ScrollbarComponent* scrollbarOf(const LuaScrollbar& c)
+        {
+            GameObject* go = deref(c.e);
+            if (!go->hasScrollbar()) throw std::runtime_error("El GameObject ya no tiene Scrollbar");
+            return go->getScrollbar().get();
+        }
 
         // Fábricas de accesores. Son plantillas y no una lista de lambdas a mano
         // porque los cuatro componentes suman más de cien campos y escribir el
@@ -797,6 +829,50 @@ namespace DonTopo::ScriptBindings
             };
         }
 
+        // Igual que setUiCallback pero para los handlers que traen un VALOR (el
+        // nuevo del slider, del checkbox, del toggle, de la barra). Es una
+        // plantilla aparte y no una generalizacion de aquella porque el
+        // OnClick/OnDoubleClick del Button no lleva argumento y su firma no
+        // tiene por que cambiar.
+        template <class Arg>
+        void setUiValueCallback(ScriptManager& mgr, std::function<void(Arg)>& destino,
+                                const char* nombre, const sol::object& fn)
+        {
+            if (!fn.valid() || fn.get_type() != sol::type::function)
+            {
+                destino = nullptr;   // pasar nil (o cualquier otra cosa) lo quita
+                return;
+            }
+
+            sol::state_view lua(mgr.lua());
+            sol::table tabla = lua[kUiCallbackTable];
+            const long long clave = ++g_nextUiCallbackKey;
+            tabla[clave] = fn;
+
+            // Misma epoca que setUiCallback: es lo que impide llamar a un
+            // lua_State muerto tras destruir el ScriptManager o recargar en
+            // caliente. Se comprueba ANTES de tocar mgr.
+            std::weak_ptr<char> epoca = mgr.callbackEpoch();
+            ScriptManager* m = &mgr;
+            const std::string etiqueta = nombre;
+            destino = [m, clave, epoca, etiqueta](Arg v) {
+                if (epoca.expired()) return;
+
+                sol::state_view lua(m->lua());
+                sol::table tabla = lua[kUiCallbackTable];
+                sol::object f = tabla[clave];
+                if (f.get_type() != sol::type::function) return;
+
+                sol::protected_function pf = f;
+                sol::protected_function_result r = pf(v);
+                if (!r.valid())
+                {
+                    sol::error err = r;
+                    m->log(std::string("[Lua][ERROR] ") + etiqueta + ": " + err.what());
+                }
+            };
+        }
+
         void registerUi(DonTopo::ScriptManager& mgr)
         {
             sol::state& lua = mgr.lua();
@@ -822,6 +898,10 @@ namespace DonTopo::ScriptBindings
                 "None", 0, "Horizontal", 1, "Vertical", 2, "Grid", 3);
             lua["UiCrossAlign"] = lua.create_table_with(
                 "Start", 0, "Center", 1, "End", 2);
+            lua["UiSliderDirection"] = lua.create_table_with(
+                "LeftToRight", 0, "RightToLeft", 1, "BottomToTop", 2, "TopToBottom", 3);
+            lua["UiScrollbarDirection"] = lua.create_table_with(
+                "LeftToRight", 0, "RightToLeft", 1, "TopToBottom", 2, "BottomToTop", 3);
             lua["UiImageMode"] = lua.create_table_with(
                 "Normal", 0, "Tiled", 1, "Sliced", 2, "Filled", 3);
             lua["UiFillDirection"] = lua.create_table_with(
@@ -1069,6 +1149,151 @@ namespace DonTopo::ScriptBindings
                 "SetSize",      uiVec2Set(imageOf, &ImageComponent::size, &mgr, "Image.SetSize"),
                 "GetColor",     uiVec4Get(imageOf, &ImageComponent::color),
                 "SetColor",     uiVec4Set(imageOf, &ImageComponent::color, &mgr, "Image.SetColor"));
+
+            // ── Slider ──────────────────────────────────────────────────────
+            // El primero de los interactivos: lo que el jugador mueve se escribe
+            // en el COMPONENTE, asi que leer `value` aqui da el valor de verdad
+            // sin sondear el nodo del canvas.
+            lua.new_usertype<LuaSlider>("Slider",
+                sol::no_constructor,
+                "visible",          uiProp(sliderOf, &SliderComponent::visible),
+                "interactable",     uiProp(sliderOf, &SliderComponent::interactable),
+                "value",            uiFloatProp(sliderOf, &SliderComponent::value, &mgr, "Slider.value"),
+                "minValue",         uiFloatProp(sliderOf, &SliderComponent::minValue, &mgr, "Slider.minValue"),
+                "maxValue",         uiFloatProp(sliderOf, &SliderComponent::maxValue, &mgr, "Slider.maxValue"),
+                "wholeNumbers",     uiProp(sliderOf, &SliderComponent::wholeNumbers),
+                "direction",        uiEnumProp(sliderOf, &SliderComponent::direction, 3),
+                "handleSize",       uiFloatProp(sliderOf, &SliderComponent::handleSize, &mgr, "Slider.handleSize"),
+                "atlasPath",        uiProp(sliderOf, &SliderComponent::atlasPath),
+                "backgroundSprite", uiProp(sliderOf, &SliderComponent::backgroundSprite),
+                "fillSprite",       uiProp(sliderOf, &SliderComponent::fillSprite),
+                "handleSprite",     uiProp(sliderOf, &SliderComponent::handleSprite),
+                "GetAnchorMin", uiVec2Get(sliderOf, &SliderComponent::anchorMin),
+                "SetAnchorMin", uiVec2Set(sliderOf, &SliderComponent::anchorMin, &mgr, "Slider.SetAnchorMin"),
+                "GetAnchorMax", uiVec2Get(sliderOf, &SliderComponent::anchorMax),
+                "SetAnchorMax", uiVec2Set(sliderOf, &SliderComponent::anchorMax, &mgr, "Slider.SetAnchorMax"),
+                "GetPivot",     uiVec2Get(sliderOf, &SliderComponent::pivot),
+                "SetPivot",     uiVec2Set(sliderOf, &SliderComponent::pivot, &mgr, "Slider.SetPivot"),
+                "GetPosition",  uiVec2Get(sliderOf, &SliderComponent::position),
+                "SetPosition",  uiVec2Set(sliderOf, &SliderComponent::position, &mgr, "Slider.SetPosition"),
+                "GetSize",      uiVec2Get(sliderOf, &SliderComponent::size),
+                "SetSize",      uiVec2Set(sliderOf, &SliderComponent::size, &mgr, "Slider.SetSize"),
+                "GetColor",     uiVec4Get(sliderOf, &SliderComponent::color),
+                "SetColor",     uiVec4Set(sliderOf, &SliderComponent::color, &mgr, "Slider.SetColor"),
+                "GetFillColor", uiVec4Get(sliderOf, &SliderComponent::fillColor),
+                "SetFillColor", uiVec4Set(sliderOf, &SliderComponent::fillColor, &mgr, "Slider.SetFillColor"),
+                "GetHandleColor", uiVec4Get(sliderOf, &SliderComponent::handleColor),
+                "SetHandleColor", uiVec4Set(sliderOf, &SliderComponent::handleColor, &mgr, "Slider.SetHandleColor"),
+                // Lo mismo que normalizedValue() en C++: el 0..1 ya acotado.
+                "GetNormalizedValue", [](const LuaSlider& s) {
+                    return sliderOf(s)->normalizedValue();
+                },
+                "OnValueChanged", [&mgr](const LuaSlider& s, sol::object fn) {
+                    setUiValueCallback<float>(mgr, sliderOf(s)->callbacks.ptr->onValueChanged,
+                                              "Slider.OnValueChanged", fn);
+                });
+
+            // ── Checkbox ────────────────────────────────────────────────────
+            lua.new_usertype<LuaCheckbox>("Checkbox",
+                sol::no_constructor,
+                "visible",          uiProp(checkboxOf, &CheckboxComponent::visible),
+                "interactable",     uiProp(checkboxOf, &CheckboxComponent::interactable),
+                "isOn",             uiProp(checkboxOf, &CheckboxComponent::isOn),
+                "checkPadding",     uiFloatProp(checkboxOf, &CheckboxComponent::checkPadding, &mgr, "Checkbox.checkPadding"),
+                "atlasPath",        uiProp(checkboxOf, &CheckboxComponent::atlasPath),
+                "backgroundSprite", uiProp(checkboxOf, &CheckboxComponent::backgroundSprite),
+                "checkmarkSprite",  uiProp(checkboxOf, &CheckboxComponent::checkmarkSprite),
+                "GetAnchorMin", uiVec2Get(checkboxOf, &CheckboxComponent::anchorMin),
+                "SetAnchorMin", uiVec2Set(checkboxOf, &CheckboxComponent::anchorMin, &mgr, "Checkbox.SetAnchorMin"),
+                "GetAnchorMax", uiVec2Get(checkboxOf, &CheckboxComponent::anchorMax),
+                "SetAnchorMax", uiVec2Set(checkboxOf, &CheckboxComponent::anchorMax, &mgr, "Checkbox.SetAnchorMax"),
+                "GetPivot",     uiVec2Get(checkboxOf, &CheckboxComponent::pivot),
+                "SetPivot",     uiVec2Set(checkboxOf, &CheckboxComponent::pivot, &mgr, "Checkbox.SetPivot"),
+                "GetPosition",  uiVec2Get(checkboxOf, &CheckboxComponent::position),
+                "SetPosition",  uiVec2Set(checkboxOf, &CheckboxComponent::position, &mgr, "Checkbox.SetPosition"),
+                "GetSize",      uiVec2Get(checkboxOf, &CheckboxComponent::size),
+                "SetSize",      uiVec2Set(checkboxOf, &CheckboxComponent::size, &mgr, "Checkbox.SetSize"),
+                "GetColor",     uiVec4Get(checkboxOf, &CheckboxComponent::color),
+                "SetColor",     uiVec4Set(checkboxOf, &CheckboxComponent::color, &mgr, "Checkbox.SetColor"),
+                "GetCheckColor", uiVec4Get(checkboxOf, &CheckboxComponent::checkColor),
+                "SetCheckColor", uiVec4Set(checkboxOf, &CheckboxComponent::checkColor, &mgr, "Checkbox.SetCheckColor"),
+                "OnValueChanged", [&mgr](const LuaCheckbox& c, sol::object fn) {
+                    setUiValueCallback<bool>(mgr, checkboxOf(c)->callbacks.ptr->onValueChanged,
+                                             "Checkbox.OnValueChanged", fn);
+                });
+
+            // ── Toggle ──────────────────────────────────────────────────────
+            // Sin `color`: la pista la pinta el sync con offColor u onColor segun
+            // el estado, asi que un campo de color suelto seria uno que el primer
+            // volcado pisa y que parece no hacer nada.
+            lua.new_usertype<LuaToggle>("Toggle",
+                sol::no_constructor,
+                "visible",          uiProp(toggleOf, &ToggleComponent::visible),
+                "interactable",     uiProp(toggleOf, &ToggleComponent::interactable),
+                "isOn",             uiProp(toggleOf, &ToggleComponent::isOn),
+                "knobSize",         uiFloatProp(toggleOf, &ToggleComponent::knobSize, &mgr, "Toggle.knobSize"),
+                "knobPadding",      uiFloatProp(toggleOf, &ToggleComponent::knobPadding, &mgr, "Toggle.knobPadding"),
+                "atlasPath",        uiProp(toggleOf, &ToggleComponent::atlasPath),
+                "backgroundSprite", uiProp(toggleOf, &ToggleComponent::backgroundSprite),
+                "knobSprite",       uiProp(toggleOf, &ToggleComponent::knobSprite),
+                "GetAnchorMin", uiVec2Get(toggleOf, &ToggleComponent::anchorMin),
+                "SetAnchorMin", uiVec2Set(toggleOf, &ToggleComponent::anchorMin, &mgr, "Toggle.SetAnchorMin"),
+                "GetAnchorMax", uiVec2Get(toggleOf, &ToggleComponent::anchorMax),
+                "SetAnchorMax", uiVec2Set(toggleOf, &ToggleComponent::anchorMax, &mgr, "Toggle.SetAnchorMax"),
+                "GetPivot",     uiVec2Get(toggleOf, &ToggleComponent::pivot),
+                "SetPivot",     uiVec2Set(toggleOf, &ToggleComponent::pivot, &mgr, "Toggle.SetPivot"),
+                "GetPosition",  uiVec2Get(toggleOf, &ToggleComponent::position),
+                "SetPosition",  uiVec2Set(toggleOf, &ToggleComponent::position, &mgr, "Toggle.SetPosition"),
+                "GetSize",      uiVec2Get(toggleOf, &ToggleComponent::size),
+                "SetSize",      uiVec2Set(toggleOf, &ToggleComponent::size, &mgr, "Toggle.SetSize"),
+                "GetOffColor",  uiVec4Get(toggleOf, &ToggleComponent::offColor),
+                "SetOffColor",  uiVec4Set(toggleOf, &ToggleComponent::offColor, &mgr, "Toggle.SetOffColor"),
+                "GetOnColor",   uiVec4Get(toggleOf, &ToggleComponent::onColor),
+                "SetOnColor",   uiVec4Set(toggleOf, &ToggleComponent::onColor, &mgr, "Toggle.SetOnColor"),
+                "GetKnobColor", uiVec4Get(toggleOf, &ToggleComponent::knobColor),
+                "SetKnobColor", uiVec4Set(toggleOf, &ToggleComponent::knobColor, &mgr, "Toggle.SetKnobColor"),
+                "OnValueChanged", [&mgr](const LuaToggle& t, sol::object fn) {
+                    setUiValueCallback<bool>(mgr, toggleOf(t)->callbacks.ptr->onValueChanged,
+                                             "Toggle.OnValueChanged", fn);
+                });
+
+            // ── Scrollbar ───────────────────────────────────────────────────
+            lua.new_usertype<LuaScrollbar>("Scrollbar",
+                sol::no_constructor,
+                "visible",          uiProp(scrollbarOf, &ScrollbarComponent::visible),
+                "interactable",     uiProp(scrollbarOf, &ScrollbarComponent::interactable),
+                "value",            uiFloatProp(scrollbarOf, &ScrollbarComponent::value, &mgr, "Scrollbar.value"),
+                "handleFraction",   uiFloatProp(scrollbarOf, &ScrollbarComponent::handleFraction, &mgr, "Scrollbar.handleFraction"),
+                "direction",        uiEnumProp(scrollbarOf, &ScrollbarComponent::direction, 3),
+                // numberOfSteps es entero: sin el guardarrail de NaN de
+                // uiFloatProp y sin decimales que redondear a espaldas del script.
+                "numberOfSteps",    uiProp(scrollbarOf, &ScrollbarComponent::numberOfSteps),
+                "scrollStep",       uiFloatProp(scrollbarOf, &ScrollbarComponent::scrollStep, &mgr, "Scrollbar.scrollStep"),
+                "atlasPath",        uiProp(scrollbarOf, &ScrollbarComponent::atlasPath),
+                "backgroundSprite", uiProp(scrollbarOf, &ScrollbarComponent::backgroundSprite),
+                "handleSprite",     uiProp(scrollbarOf, &ScrollbarComponent::handleSprite),
+                "GetAnchorMin", uiVec2Get(scrollbarOf, &ScrollbarComponent::anchorMin),
+                "SetAnchorMin", uiVec2Set(scrollbarOf, &ScrollbarComponent::anchorMin, &mgr, "Scrollbar.SetAnchorMin"),
+                "GetAnchorMax", uiVec2Get(scrollbarOf, &ScrollbarComponent::anchorMax),
+                "SetAnchorMax", uiVec2Set(scrollbarOf, &ScrollbarComponent::anchorMax, &mgr, "Scrollbar.SetAnchorMax"),
+                "GetPivot",     uiVec2Get(scrollbarOf, &ScrollbarComponent::pivot),
+                "SetPivot",     uiVec2Set(scrollbarOf, &ScrollbarComponent::pivot, &mgr, "Scrollbar.SetPivot"),
+                "GetPosition",  uiVec2Get(scrollbarOf, &ScrollbarComponent::position),
+                "SetPosition",  uiVec2Set(scrollbarOf, &ScrollbarComponent::position, &mgr, "Scrollbar.SetPosition"),
+                "GetSize",      uiVec2Get(scrollbarOf, &ScrollbarComponent::size),
+                "SetSize",      uiVec2Set(scrollbarOf, &ScrollbarComponent::size, &mgr, "Scrollbar.SetSize"),
+                "GetColor",     uiVec4Get(scrollbarOf, &ScrollbarComponent::color),
+                "SetColor",     uiVec4Set(scrollbarOf, &ScrollbarComponent::color, &mgr, "Scrollbar.SetColor"),
+                "GetHandleColor", uiVec4Get(scrollbarOf, &ScrollbarComponent::handleColor),
+                "SetHandleColor", uiVec4Set(scrollbarOf, &ScrollbarComponent::handleColor, &mgr, "Scrollbar.SetHandleColor"),
+                // El mismo enganche a paradas discretas que aplica el arrastre.
+                "SnapValue", [](const LuaScrollbar& s, float v) {
+                    return scrollbarOf(s)->snapValue(v);
+                },
+                "OnValueChanged", [&mgr](const LuaScrollbar& s, sol::object fn) {
+                    setUiValueCallback<float>(mgr, scrollbarOf(s)->callbacks.ptr->onValueChanged,
+                                              "Scrollbar.OnValueChanged", fn);
+                });
         }
 
         void registerEntity(DonTopo::ScriptManager& mgr)
@@ -1113,6 +1338,26 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasLayout()) return sol::nil;
                     return sol::make_object(e.mgr->lua(), LuaLayout{e});
                 },
+                "GetSlider", [](const LuaEntity& e) -> sol::object {
+                    GameObject* go = deref(e);
+                    if (!go->hasSlider()) return sol::nil;
+                    return sol::make_object(e.mgr->lua(), LuaSlider{e});
+                },
+                "GetCheckbox", [](const LuaEntity& e) -> sol::object {
+                    GameObject* go = deref(e);
+                    if (!go->hasCheckbox()) return sol::nil;
+                    return sol::make_object(e.mgr->lua(), LuaCheckbox{e});
+                },
+                "GetToggle", [](const LuaEntity& e) -> sol::object {
+                    GameObject* go = deref(e);
+                    if (!go->hasToggle()) return sol::nil;
+                    return sol::make_object(e.mgr->lua(), LuaToggle{e});
+                },
+                "GetScrollbar", [](const LuaEntity& e) -> sol::object {
+                    GameObject* go = deref(e);
+                    if (!go->hasScrollbar()) return sol::nil;
+                    return sol::make_object(e.mgr->lua(), LuaScrollbar{e});
+                },
                 "GetPanel", [](const LuaEntity& e) -> sol::object {
                     GameObject* go = deref(e);
                     if (!go->hasPanel()) return sol::nil;
@@ -1148,6 +1393,26 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasLayout()) go->setLayout(std::make_shared<LayoutComponent>());
                     return LuaLayout{e};
                 },
+                "AddSlider", [](const LuaEntity& e) {
+                    GameObject* go = deref(e);
+                    if (!go->hasSlider()) go->setSlider(std::make_shared<SliderComponent>());
+                    return LuaSlider{e};
+                },
+                "AddCheckbox", [](const LuaEntity& e) {
+                    GameObject* go = deref(e);
+                    if (!go->hasCheckbox()) go->setCheckbox(std::make_shared<CheckboxComponent>());
+                    return LuaCheckbox{e};
+                },
+                "AddToggle", [](const LuaEntity& e) {
+                    GameObject* go = deref(e);
+                    if (!go->hasToggle()) go->setToggle(std::make_shared<ToggleComponent>());
+                    return LuaToggle{e};
+                },
+                "AddScrollbar", [](const LuaEntity& e) {
+                    GameObject* go = deref(e);
+                    if (!go->hasScrollbar()) go->setScrollbar(std::make_shared<ScrollbarComponent>());
+                    return LuaScrollbar{e};
+                },
                 "AddPanel", [](const LuaEntity& e) {
                     GameObject* go = deref(e);
                     if (!go->hasPanel()) go->setPanel(std::make_shared<PanelComponent>());
@@ -1163,6 +1428,10 @@ namespace DonTopo::ScriptBindings
                 "RemoveText",        [](const LuaEntity& e) { deref(e)->setText(nullptr); },
                 "RemoveProgressBar", [](const LuaEntity& e) { deref(e)->setProgressBar(nullptr); },
                 "RemoveLayout",      [](const LuaEntity& e) { deref(e)->setLayout(nullptr); },
+                "RemoveSlider",      [](const LuaEntity& e) { deref(e)->setSlider(nullptr); },
+                "RemoveCheckbox",    [](const LuaEntity& e) { deref(e)->setCheckbox(nullptr); },
+                "RemoveToggle",      [](const LuaEntity& e) { deref(e)->setToggle(nullptr); },
+                "RemoveScrollbar",   [](const LuaEntity& e) { deref(e)->setScrollbar(nullptr); },
                 "RemovePanel",       [](const LuaEntity& e) { deref(e)->setPanel(nullptr); },
                 "RemoveImage",       [](const LuaEntity& e) { deref(e)->setImage(nullptr); },
                 "GetParent", [](const LuaEntity& e) -> sol::object {
@@ -1195,6 +1464,10 @@ namespace DonTopo::ScriptBindings
                     if (name == "Layout"          && go->hasLayout())          return sol::make_object(lua, LuaLayout{e});
                     if (name == "Panel"           && go->hasPanel())           return sol::make_object(lua, LuaPanel{e});
                     if (name == "Image"           && go->hasImage())           return sol::make_object(lua, LuaImage{e});
+                    if (name == "Slider"          && go->hasSlider())          return sol::make_object(lua, LuaSlider{e});
+                    if (name == "Checkbox"        && go->hasCheckbox())        return sol::make_object(lua, LuaCheckbox{e});
+                    if (name == "Toggle"          && go->hasToggle())          return sol::make_object(lua, LuaToggle{e});
+                    if (name == "Scrollbar"       && go->hasScrollbar())       return sol::make_object(lua, LuaScrollbar{e});
                     if (name.rfind("Script:", 0) == 0)
                     {
                         const std::string scriptName = name.substr(7);
@@ -1289,6 +1562,26 @@ namespace DonTopo::ScriptBindings
                         if (!go->hasImage()) go->setImage(std::make_shared<ImageComponent>());
                         return sol::make_object(lua, LuaImage{e});
                     }
+                    if (name == "Slider")
+                    {
+                        if (!go->hasSlider()) go->setSlider(std::make_shared<SliderComponent>());
+                        return sol::make_object(lua, LuaSlider{e});
+                    }
+                    if (name == "Checkbox")
+                    {
+                        if (!go->hasCheckbox()) go->setCheckbox(std::make_shared<CheckboxComponent>());
+                        return sol::make_object(lua, LuaCheckbox{e});
+                    }
+                    if (name == "Toggle")
+                    {
+                        if (!go->hasToggle()) go->setToggle(std::make_shared<ToggleComponent>());
+                        return sol::make_object(lua, LuaToggle{e});
+                    }
+                    if (name == "Scrollbar")
+                    {
+                        if (!go->hasScrollbar()) go->setScrollbar(std::make_shared<ScrollbarComponent>());
+                        return sol::make_object(lua, LuaScrollbar{e});
+                    }
                     if (name.rfind("Script:", 0) == 0)
                     {
                         auto comp = std::make_unique<DonTopo::ScriptComponent>(name.substr(7), go);
@@ -1317,6 +1610,10 @@ namespace DonTopo::ScriptBindings
                     else if (name == "Layout")          go->setLayout(nullptr);
                     else if (name == "Panel")           go->setPanel(nullptr);
                     else if (name == "Image")           go->setImage(nullptr);
+                    else if (name == "Slider")          go->setSlider(nullptr);
+                    else if (name == "Checkbox")        go->setCheckbox(nullptr);
+                    else if (name == "Toggle")          go->setToggle(nullptr);
+                    else if (name == "Scrollbar")       go->setScrollbar(nullptr);
                     else if (name == "Rigidbody")
                     {
                         // Reconstruye el actor como static antes de soltar el Rigidbody.

@@ -10,6 +10,10 @@
 #include "DonTopo/UI/LayoutComponent.h"
 #include "DonTopo/UI/PanelComponent.h"
 #include "DonTopo/UI/ProgressBarComponent.h"
+#include "DonTopo/UI/SliderComponent.h"
+#include "DonTopo/UI/CheckboxComponent.h"
+#include "DonTopo/UI/ToggleComponent.h"
+#include "DonTopo/UI/ScrollbarComponent.h"
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiFont.h"
 #include "DonTopo/UI/UiTextureAtlas.h"
@@ -151,6 +155,15 @@ namespace DonTopo
         std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
         std::vector<std::pair<uint64_t, const PanelComponent*>>       panels;
         std::vector<std::pair<uint64_t, const ImageComponent*>>       images;
+        // NO const, al reves que los demas: el slider es interactivo y sus
+        // handlers escriben `value` EN EL COMPONENTE (que es lo que se
+        // serializa y lo que lee el editor), no en el nodo del canvas.
+        std::vector<std::pair<uint64_t, SliderComponent*>>             sliders;
+        // Los tres tambien NO const, y por lo mismo: sus handlers escriben el
+        // valor EN EL COMPONENTE.
+        std::vector<std::pair<uint64_t, CheckboxComponent*>>           checkboxes;
+        std::vector<std::pair<uint64_t, ToggleComponent*>>             toggles;
+        std::vector<std::pair<uint64_t, ScrollbarComponent*>>          scrollbars;
 
         // La JERARQUÍA de la escena aplanada a (id, id del padre), en PRE-ORDEN
         // y con 0 para "cuelga de la raíz". VACÍA = sin jerarquía: todo cuelga
@@ -165,6 +178,10 @@ namespace DonTopo
             layouts.clear();
             panels.clear();
             images.clear();
+            sliders.clear();
+            checkboxes.clear();
+            toggles.clear();
+            scrollbars.clear();
             parents.clear();
         }
     };
@@ -191,6 +208,10 @@ namespace DonTopo
         std::vector<uint64_t> layoutIds;
         std::vector<uint64_t> panelIds;
         std::vector<uint64_t> imageIds;
+        std::vector<uint64_t> sliderIds;
+        std::vector<uint64_t> checkboxIds;
+        std::vector<uint64_t> toggleIds;
+        std::vector<uint64_t> scrollbarIds;
 
         // La jerarquía con la que se montó el árbol, aplanada a (id, padre) y en
         // el mismo orden que llegó. Cambiarla mueve nodos de sitio, así que se
@@ -221,6 +242,26 @@ namespace DonTopo
         std::vector<Panel*> panelNodes;
         std::vector<Image*> imageNodes;
 
+        // El slider son SIEMPRE tres nodos: la pista y sus hijos relleno y asa.
+        // Que los tres existan pase lo que pase con el valor es lo que mantiene
+        // constante la FORMA del subarbol (mismo motivo que el relleno de la
+        // ProgressBar): si aparecieran y desaparecieran habria que reconstruir
+        // la raiz al cruzar los extremos.
+        std::vector<Slider*>    sliderNodes;
+        std::vector<UiElement*> sliderFills;
+        std::vector<UiElement*> sliderHandles;
+
+        // Los otros tres interactivos son DOS nodos cada uno: el rect que recibe
+        // el raton y el hijo que ensena el estado (la marca, el mando, el asa).
+        // Que el hijo exista pase lo que pase con el valor es lo que mantiene
+        // constante la FORMA del subarbol.
+        std::vector<Checkbox*>  checkboxNodes;
+        std::vector<UiElement*> checkboxChecks;
+        std::vector<Toggle*>    toggleNodes;
+        std::vector<UiElement*> toggleKnobs;
+        std::vector<Scrollbar*> scrollbarNodes;
+        std::vector<UiElement*> scrollbarHandles;
+
         // Copia de lo que se volcó la última vez, en el mismo orden. Lo que no
         // ha cambiado no se vuelve a volcar NI se ensucia: escribir los campos
         // sin ensuciar deja el nodo clavado (el canvas se copia los vértices
@@ -231,6 +272,10 @@ namespace DonTopo
         std::vector<LayoutComponent>      layoutPrev;
         std::vector<PanelComponent>       panelPrev;
         std::vector<ImageComponent>       imagePrev;
+        std::vector<SliderComponent>      sliderPrev;
+        std::vector<CheckboxComponent>    checkboxPrev;
+        std::vector<ToggleComponent>      togglePrev;
+        std::vector<ScrollbarComponent>   scrollbarPrev;
 
         // Recursos de GPU por ruta. Sin esta caché una ruta de atlas cargaría un
         // atlas NUEVO cada frame (Renderer::loadUiAtlas no cachea por ruta) y se
@@ -277,6 +322,10 @@ namespace DonTopo
         const auto& lays    = w.layouts;
         const auto& panels  = w.panels;
         const auto& images  = w.images;
+        const auto& sliders    = w.sliders;
+        const auto& checkboxes = w.checkboxes;
+        const auto& toggles    = w.toggles;
+        const auto& scrollbars = w.scrollbars;
         // Puntero y no referencia: vacía significa "sin jerarquía", que es un
         // camino de montaje DISTINTO (todo a la raíz) y no una jerarquía de cero
         // elementos.
@@ -308,7 +357,11 @@ namespace DonTopo
                        cache.barIds.size() != bars.size() ||
                        cache.layoutIds.size() != lays.size() ||
                        cache.panelIds.size() != panels.size() ||
-                       cache.imageIds.size() != images.size();
+                       cache.imageIds.size() != images.size() ||
+                       cache.sliderIds.size() != sliders.size() ||
+                       cache.checkboxIds.size() != checkboxes.size() ||
+                       cache.toggleIds.size() != toggles.size() ||
+                       cache.scrollbarIds.size() != scrollbars.size();
         for (size_t i = 0; !rebuild && i < buttons.size(); i++)
             if (cache.buttonIds[i] != buttons[i].first) rebuild = true;
         for (size_t i = 0; !rebuild && i < texts.size(); i++)
@@ -321,6 +374,14 @@ namespace DonTopo
             if (cache.panelIds[i] != panels[i].first) rebuild = true;
         for (size_t i = 0; !rebuild && i < images.size(); i++)
             if (cache.imageIds[i] != images[i].first) rebuild = true;
+        for (size_t i = 0; !rebuild && i < sliders.size(); i++)
+            if (cache.sliderIds[i] != sliders[i].first) rebuild = true;
+        for (size_t i = 0; !rebuild && i < checkboxes.size(); i++)
+            if (cache.checkboxIds[i] != checkboxes[i].first) rebuild = true;
+        for (size_t i = 0; !rebuild && i < toggles.size(); i++)
+            if (cache.toggleIds[i] != toggles[i].first) rebuild = true;
+        for (size_t i = 0; !rebuild && i < scrollbars.size(); i++)
+            if (cache.scrollbarIds[i] != scrollbars[i].first) rebuild = true;
 
         // Un botón que gana o pierde etiqueta (texto vacío <-> no vacío) cambia
         // la FORMA del subárbol, y eso también obliga a reconstruir.
@@ -375,17 +436,39 @@ namespace DonTopo
             cache.imageIds.assign(images.size(), 0ull);
             cache.imageNodes.assign(images.size(), nullptr);
             cache.imagePrev.assign(images.size(), ImageComponent{});
+            cache.sliderIds.assign(sliders.size(), 0ull);
+            cache.sliderNodes.assign(sliders.size(), nullptr);
+            cache.sliderFills.assign(sliders.size(), nullptr);
+            cache.sliderHandles.assign(sliders.size(), nullptr);
+            cache.sliderPrev.assign(sliders.size(), SliderComponent{});
+            cache.checkboxIds.assign(checkboxes.size(), 0ull);
+            cache.checkboxNodes.assign(checkboxes.size(), nullptr);
+            cache.checkboxChecks.assign(checkboxes.size(), nullptr);
+            cache.checkboxPrev.assign(checkboxes.size(), CheckboxComponent{});
+            cache.toggleIds.assign(toggles.size(), 0ull);
+            cache.toggleNodes.assign(toggles.size(), nullptr);
+            cache.toggleKnobs.assign(toggles.size(), nullptr);
+            cache.togglePrev.assign(toggles.size(), ToggleComponent{});
+            cache.scrollbarIds.assign(scrollbars.size(), 0ull);
+            cache.scrollbarNodes.assign(scrollbars.size(), nullptr);
+            cache.scrollbarHandles.assign(scrollbars.size(), nullptr);
+            cache.scrollbarPrev.assign(scrollbars.size(), ScrollbarComponent{});
 
             // Dónde está cada GameObject en cada lista, para poder montarlo
             // cuando toque su turno en el recorrido del árbol.
             std::unordered_map<uint64_t, size_t> idxButton, idxBar, idxText, idxLayout,
-                                                 idxPanel, idxImage;
+                                                 idxPanel, idxImage, idxSlider,
+                                                 idxCheckbox, idxToggle, idxScrollbar;
             for (size_t i = 0; i < buttons.size(); i++) idxButton[buttons[i].first] = i;
             for (size_t i = 0; i < bars.size();    i++) idxBar[bars[i].first]       = i;
             for (size_t i = 0; i < texts.size();   i++) idxText[texts[i].first]     = i;
             for (size_t i = 0; i < lays.size();    i++) idxLayout[lays[i].first]    = i;
             for (size_t i = 0; i < panels.size();  i++) idxPanel[panels[i].first]   = i;
             for (size_t i = 0; i < images.size();  i++) idxImage[images[i].first]   = i;
+            for (size_t i = 0; i < sliders.size(); i++) idxSlider[sliders[i].first] = i;
+            for (size_t i = 0; i < checkboxes.size(); i++) idxCheckbox[checkboxes[i].first] = i;
+            for (size_t i = 0; i < toggles.size();    i++) idxToggle[toggles[i].first]      = i;
+            for (size_t i = 0; i < scrollbars.size(); i++) idxScrollbar[scrollbars[i].first] = i;
 
             // Nodo del que cuelgan los HIJOS de cada GameObject.
             std::unordered_map<uint64_t, UiElement*> principal;
@@ -460,6 +543,152 @@ namespace DonTopo
                 return &im;
             };
 
+            auto creaSlider = [&](size_t i, UiElement& padre)
+            {
+                const auto& entry = sliders[i];
+                const std::string nombre = uiSliderNodeName(entry.first);
+                Slider& s = padre.add<Slider>(nombre);
+                // Relleno y asa como HIJOS y no hermanos: así sus rects se
+                // cuentan en píxeles desde la esquina de la pista y no hay que
+                // rehacer a mano las anclas ni la escala del canvas.
+                Panel& f = s.add<Panel>(nombre + "/Fill");
+                Panel& h = s.add<Panel>(nombre + "/Handle");
+                cache.sliderIds[i]     = entry.first;
+                cache.sliderNodes[i]   = &s;
+                cache.sliderFills[i]   = &f;
+                cache.sliderHandles[i] = &h;
+                cache.sliderPrev[i].backgroundSprite = "\x01(sin volcar)";
+
+                // Input. Se instala AQUÍ, en el único sitio que crea nodos,
+                // porque clear() se acaba de llevar por delante los del árbol
+                // anterior. El weak_ptr es al runtime del COMPONENTE: si el
+                // componente muere, el handler deja de escribir en vez de tocar
+                // un objeto muerto. `pista` sí puede ser un puntero crudo — el
+                // handler es un miembro DE ESE NODO y muere con él.
+                std::weak_ptr<UiSliderRuntime> rt = entry.second->callbacks.ptr;
+                auto desdeElRaton = [rt, pista = &s](UiEvent& e)
+                {
+                    auto p = rt.lock();
+                    if (!p || !p->owner) return;
+                    SliderComponent& c = *p->owner;
+                    if (!c.interactable) return;
+                    // Sin rect resuelto (nodo invisible o recortado a cero) no
+                    // hay nada contra lo que medir el ratón.
+                    if (!pista->rectValid) return;
+
+                    const glm::vec2 local = e.mousePos - pista->screenPos;
+                    const float t  = c.normalizedFromLocal(local, pista->screenSize);
+                    const float nv = c.valueFromNormalized(t);
+                    if (nv == c.value) return;
+                    c.value = nv;
+                    if (p->onValueChanged) p->onValueChanged(nv);
+                };
+                // Down Y Drag: la pista entera es zona de clic (como en Unity),
+                // no solo el asa, y el arrastre sigue al ratón aunque salga del
+                // rect (el canvas mantiene el destino del botón pulsado).
+                s.onMouseDown = desdeElRaton;
+                s.onDrag      = desdeElRaton;
+                return &s;
+            };
+
+            auto creaCheckbox = [&](size_t i, UiElement& padre)
+            {
+                const auto& entry = checkboxes[i];
+                const std::string nombre = uiCheckboxNodeName(entry.first);
+                Checkbox& c = padre.add<Checkbox>(nombre);
+                Panel&    m = c.add<Panel>(nombre + "/Check");
+                cache.checkboxIds[i]    = entry.first;
+                cache.checkboxNodes[i]  = &c;
+                cache.checkboxChecks[i] = &m;
+                cache.checkboxPrev[i].backgroundSprite = "\x01(sin volcar)";
+
+                std::weak_ptr<UiCheckboxRuntime> rt = entry.second->callbacks.ptr;
+                c.onClick = [rt](UiEvent&)
+                {
+                    auto p = rt.lock();
+                    if (!p || !p->owner) return;
+                    CheckboxComponent& comp = *p->owner;
+                    if (!comp.interactable) return;
+                    comp.isOn = !comp.isOn;
+                    if (p->onValueChanged) p->onValueChanged(comp.isOn);
+                };
+                return &c;
+            };
+
+            auto creaToggle = [&](size_t i, UiElement& padre)
+            {
+                const auto& entry = toggles[i];
+                const std::string nombre = uiToggleNodeName(entry.first);
+                Toggle& t = padre.add<Toggle>(nombre);
+                Panel&  k = t.add<Panel>(nombre + "/Knob");
+                cache.toggleIds[i]   = entry.first;
+                cache.toggleNodes[i] = &t;
+                cache.toggleKnobs[i] = &k;
+                cache.togglePrev[i].backgroundSprite = "\x01(sin volcar)";
+
+                std::weak_ptr<UiToggleRuntime> rt = entry.second->callbacks.ptr;
+                t.onClick = [rt](UiEvent&)
+                {
+                    auto p = rt.lock();
+                    if (!p || !p->owner) return;
+                    ToggleComponent& comp = *p->owner;
+                    if (!comp.interactable) return;
+                    comp.isOn = !comp.isOn;
+                    if (p->onValueChanged) p->onValueChanged(comp.isOn);
+                };
+                return &t;
+            };
+
+            auto creaScrollbar = [&](size_t i, UiElement& padre)
+            {
+                const auto& entry = scrollbars[i];
+                const std::string nombre = uiScrollbarNodeName(entry.first);
+                Scrollbar& s = padre.add<Scrollbar>(nombre);
+                Panel&     h = s.add<Panel>(nombre + "/Handle");
+                cache.scrollbarIds[i]     = entry.first;
+                cache.scrollbarNodes[i]   = &s;
+                cache.scrollbarHandles[i] = &h;
+                cache.scrollbarPrev[i].backgroundSprite = "\x01(sin volcar)";
+
+                std::weak_ptr<UiScrollbarRuntime> rt = entry.second->callbacks.ptr;
+                auto desdeElRaton = [rt, canal = &s](UiEvent& e)
+                {
+                    auto p = rt.lock();
+                    if (!p || !p->owner) return;
+                    ScrollbarComponent& comp = *p->owner;
+                    if (!comp.interactable || !canal->rectValid) return;
+
+                    const glm::vec2 local = e.mousePos - canal->screenPos;
+                    const float nv = comp.valueFromLocal(local, canal->screenSize);
+                    if (nv == comp.value) return;
+                    comp.value = nv;
+                    if (p->onValueChanged) p->onValueChanged(nv);
+                };
+                s.onMouseDown = desdeElRaton;
+                s.onDrag      = desdeElRaton;
+
+                // La rueda tambien mueve la barra: sin esto, una lista con
+                // scrollbar solo se podria mover arrastrando, que no es lo que
+                // espera nadie. + es hacia el principio (rueda hacia arriba).
+                s.onScroll = [rt](UiEvent& e)
+                {
+                    auto p = rt.lock();
+                    if (!p || !p->owner) return;
+                    ScrollbarComponent& comp = *p->owner;
+                    if (!comp.interactable || e.scrollDelta == 0.0f) return;
+
+                    const float nv = comp.snapValue(comp.value - e.scrollDelta * comp.scrollStep);
+                    if (nv == comp.value) return;
+                    comp.value = nv;
+                    if (p->onValueChanged) p->onValueChanged(nv);
+                    // Consumido: si sigue burbujeando, un ScrollView que la
+                    // contenga se desplazaria a la vez y el contenido saltaria el
+                    // doble por muesca.
+                    e.consumed = true;
+                };
+                return &s;
+            };
+
             auto creaTexto = [&](size_t i, UiElement& padre)
             {
                 const auto& entry = texts[i];
@@ -498,6 +727,10 @@ namespace DonTopo
             {
                 UiElement* panel  = nullptr;
                 UiElement* imagen = nullptr;
+                UiElement* deslid = nullptr;
+                UiElement* casill = nullptr;
+                UiElement* interr = nullptr;
+                UiElement* scroll = nullptr;
                 UiElement* barra  = nullptr;
                 UiElement* boton  = nullptr;
                 UiElement* texto  = nullptr;
@@ -506,7 +739,9 @@ namespace DonTopo
                 const auto itLayout = idxLayout.find(id);
                 const bool tieneWidget = idxBar.count(id) != 0 || idxButton.count(id) != 0 ||
                                          idxText.count(id) != 0 || idxPanel.count(id) != 0 ||
-                                         idxImage.count(id) != 0;
+                                         idxImage.count(id) != 0 || idxSlider.count(id) != 0 ||
+                                         idxCheckbox.count(id) != 0 || idxToggle.count(id) != 0 ||
+                                         idxScrollbar.count(id) != 0;
 
                 // El contenedor PRIMERO: es el que aporta el rect y del que
                 // colgarán los hijos. Solo cuando no hay ningún widget en el
@@ -518,15 +753,26 @@ namespace DonTopo
                 // que quedar encima de todo.
                 if (auto it = idxPanel.find(id);  it != idxPanel.end())  panel  = creaPanel(it->second, padre);
                 if (auto it = idxImage.find(id);  it != idxImage.end())  imagen = creaImagen(it->second, padre);
+                if (auto it = idxSlider.find(id); it != idxSlider.end()) deslid = creaSlider(it->second, padre);
+                if (auto it = idxScrollbar.find(id); it != idxScrollbar.end()) scroll = creaScrollbar(it->second, padre);
+                if (auto it = idxToggle.find(id);   it != idxToggle.end())   interr = creaToggle(it->second, padre);
+                if (auto it = idxCheckbox.find(id); it != idxCheckbox.end()) casill = creaCheckbox(it->second, padre);
                 if (auto it = idxBar.find(id);    it != idxBar.end())    barra = creaBarra(it->second, padre);
                 if (auto it = idxButton.find(id); it != idxButton.end()) boton = creaBoton(it->second, padre);
                 if (auto it = idxText.find(id);   it != idxText.end())   texto = creaTexto(it->second, padre);
 
-                UiElement* princ = boton ? boton
-                                         : (barra ? barra
-                                                  : (imagen ? imagen
-                                                            : (panel ? panel
-                                                                     : (texto ? texto : caja))));
+                // El PRINCIPAL es el que aporta el rect del que colgaran los
+                // hijos: gana el widget interactivo, y el Panel (que es fondo)
+                // pierde contra todos.
+                UiElement* princ = boton  ? boton
+                                 : deslid ? deslid
+                                 : scroll ? scroll
+                                 : interr ? interr
+                                 : casill ? casill
+                                 : barra  ? barra
+                                 : imagen ? imagen
+                                 : panel  ? panel
+                                 : (texto ? texto : caja);
                 principal[id] = princ;
 
                 // Con widget en el mismo GameObject, el layout escribe en el nodo
@@ -572,6 +818,18 @@ namespace DonTopo
                 for (const auto& entry : images)
                     if (principal.find(entry.first) == principal.end())
                         montaGameObject(entry.first, canvas.root());
+                for (const auto& entry : sliders)
+                    if (principal.find(entry.first) == principal.end())
+                        montaGameObject(entry.first, canvas.root());
+                for (const auto& entry : checkboxes)
+                    if (principal.find(entry.first) == principal.end())
+                        montaGameObject(entry.first, canvas.root());
+                for (const auto& entry : toggles)
+                    if (principal.find(entry.first) == principal.end())
+                        montaGameObject(entry.first, canvas.root());
+                for (const auto& entry : scrollbars)
+                    if (principal.find(entry.first) == principal.end())
+                        montaGameObject(entry.first, canvas.root());
                 for (const auto& entry : lays)
                     if (principal.find(entry.first) == principal.end())
                         montaGameObject(entry.first, canvas.root());
@@ -585,6 +843,10 @@ namespace DonTopo
                 // no tienen orden heredado que respetar, son posteriores.
                 for (size_t i = 0; i < panels.size();  i++) creaPanel(i, canvas.root());
                 for (size_t i = 0; i < images.size();  i++) creaImagen(i, canvas.root());
+                for (size_t i = 0; i < sliders.size(); i++) creaSlider(i, canvas.root());
+                for (size_t i = 0; i < scrollbars.size(); i++) creaScrollbar(i, canvas.root());
+                for (size_t i = 0; i < toggles.size();    i++) creaToggle(i, canvas.root());
+                for (size_t i = 0; i < checkboxes.size(); i++) creaCheckbox(i, canvas.root());
                 for (size_t i = 0; i < buttons.size(); i++) creaBoton(i, canvas.root());
                 for (size_t i = 0; i < bars.size();    i++) creaBarra(i, canvas.root());
                 for (size_t i = 0; i < texts.size();   i++) creaTexto(i, canvas.root());
@@ -602,6 +864,14 @@ namespace DonTopo
                         compartido = cache.buttonNodes[it->second];
                     else if (auto itb = idxBar.find(id); itb != idxBar.end())
                         compartido = cache.barNodes[itb->second];
+                    else if (auto its = idxSlider.find(id); its != idxSlider.end())
+                        compartido = cache.sliderNodes[its->second];
+                    else if (auto itsb = idxScrollbar.find(id); itsb != idxScrollbar.end())
+                        compartido = cache.scrollbarNodes[itsb->second];
+                    else if (auto ittg = idxToggle.find(id); ittg != idxToggle.end())
+                        compartido = cache.toggleNodes[ittg->second];
+                    else if (auto itck = idxCheckbox.find(id); itck != idxCheckbox.end())
+                        compartido = cache.checkboxNodes[itck->second];
                     else if (auto iti = idxImage.find(id); iti != idxImage.end())
                         compartido = cache.imageNodes[iti->second];
                     else if (auto itp = idxPanel.find(id); itp != idxPanel.end())
@@ -677,6 +947,96 @@ namespace DonTopo
             im.atlas = resolveAtlas(src.atlasPath);
             im.markDirty(UiElement::DirtyAll);
             cache.imagePrev[i] = src;
+        }
+
+        for (size_t i = 0; i < sliders.size(); i++)
+        {
+            SliderComponent& src = *sliders[i].second;
+
+            // El dueño se reapunta SIEMPRE, cambie o no el componente: es por
+            // donde el handler del nodo escribe el valor, y va antes del corte
+            // por "no ha cambiado" porque un componente que no cambia es
+            // justamente el caso en el que sigue haciendo falta.
+            if (auto rt = src.callbacks.ptr) rt->owner = &src;
+
+            if (src == cache.sliderPrev[i]) continue;   // nada que tocar este frame
+
+            Slider&    s = *cache.sliderNodes[i];
+            UiElement& f = *cache.sliderFills[i];
+            UiElement& h = *cache.sliderHandles[i];
+            src.applyTo(s);
+            src.applyToFill(f);
+            src.applyToHandle(h);
+            // UN solo atlas para las tres partes: los sprites son nombres de
+            // sub-rect dentro de él, así que una carga y no tres.
+            UiTextureAtlas* atlas = resolveAtlas(src.atlasPath);
+            s.atlas = atlas;
+            f.atlas = atlas;
+            h.atlas = atlas;
+            // Ensuciar es responsabilidad de quien escribe los campos. Los TRES
+            // nodos: la pista puede haberse movido, y el relleno y el asa cambian
+            // de rect con el valor.
+            s.markDirty(UiElement::DirtyAll);
+            f.markDirty(UiElement::DirtyAll);
+            h.markDirty(UiElement::DirtyAll);
+            cache.sliderPrev[i] = src;
+        }
+
+        for (size_t i = 0; i < checkboxes.size(); i++)
+        {
+            CheckboxComponent& src = *checkboxes[i].second;
+            // El dueno se reapunta SIEMPRE, cambie o no el componente: es por
+            // donde el handler del nodo escribe, y un componente que no cambia es
+            // justamente el caso en el que sigue haciendo falta.
+            if (auto rt = src.callbacks.ptr) rt->owner = &src;
+            if (src == cache.checkboxPrev[i]) continue;
+
+            Checkbox&  c = *cache.checkboxNodes[i];
+            UiElement& m = *cache.checkboxChecks[i];
+            src.applyTo(c);
+            src.applyToCheck(m);
+            UiTextureAtlas* atlas = resolveAtlas(src.atlasPath);
+            c.atlas = atlas;
+            m.atlas = atlas;
+            c.markDirty(UiElement::DirtyAll);
+            m.markDirty(UiElement::DirtyAll);
+            cache.checkboxPrev[i] = src;
+        }
+
+        for (size_t i = 0; i < toggles.size(); i++)
+        {
+            ToggleComponent& src = *toggles[i].second;
+            if (auto rt = src.callbacks.ptr) rt->owner = &src;
+            if (src == cache.togglePrev[i]) continue;
+
+            Toggle&    t = *cache.toggleNodes[i];
+            UiElement& k = *cache.toggleKnobs[i];
+            src.applyTo(t);
+            src.applyToKnob(k);
+            UiTextureAtlas* atlas = resolveAtlas(src.atlasPath);
+            t.atlas = atlas;
+            k.atlas = atlas;
+            t.markDirty(UiElement::DirtyAll);
+            k.markDirty(UiElement::DirtyAll);
+            cache.togglePrev[i] = src;
+        }
+
+        for (size_t i = 0; i < scrollbars.size(); i++)
+        {
+            ScrollbarComponent& src = *scrollbars[i].second;
+            if (auto rt = src.callbacks.ptr) rt->owner = &src;
+            if (src == cache.scrollbarPrev[i]) continue;
+
+            Scrollbar& s = *cache.scrollbarNodes[i];
+            UiElement& h = *cache.scrollbarHandles[i];
+            src.applyTo(s);
+            src.applyToHandle(h);
+            UiTextureAtlas* atlas = resolveAtlas(src.atlasPath);
+            s.atlas = atlas;
+            h.atlas = atlas;
+            s.markDirty(UiElement::DirtyAll);
+            h.markDirty(UiElement::DirtyAll);
+            cache.scrollbarPrev[i] = src;
         }
 
         for (size_t i = 0; i < bars.size(); i++)

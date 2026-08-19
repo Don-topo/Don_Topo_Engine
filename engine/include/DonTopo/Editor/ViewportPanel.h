@@ -77,6 +77,16 @@ private:
                           const glm::vec2& imageSize);
     // Y los del Panel y el Image seleccionados. Mismo criterio que los demás: el
     // rect sale del nodo VIVO, no de los campos del componente.
+    // Y los de los cuatro widgets interactivos. Mismo criterio que los demas:
+    // el rect sale del nodo VIVO, no de los campos del componente.
+    void drawSliderGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                       const glm::vec2& imageSize);
+    void drawCheckboxGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                       const glm::vec2& imageSize);
+    void drawToggleGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                       const glm::vec2& imageSize);
+    void drawScrollbarGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                       const glm::vec2& imageSize);
     void drawPanelGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                          const glm::vec2& imageSize);
     void drawImageGizmo(EditorContext& ctx, const glm::vec2& imagePos,

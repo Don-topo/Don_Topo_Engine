@@ -257,6 +257,82 @@ void ImageComponentCommand::apply(bool add)
     go->setImage(std::make_shared<ImageComponent>(m_state));
 }
 
+SliderComponentCommand::SliderComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                                bool add, SliderComponent state)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}
+
+void SliderComponentCommand::execute() { apply(m_add); }
+void SliderComponentCommand::undo()    { apply(!m_add); }
+
+void SliderComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setSlider(nullptr);
+        return;
+    }
+    go->setSlider(std::make_shared<SliderComponent>(m_state));
+}
+
+CheckboxComponentCommand::CheckboxComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                                bool add, CheckboxComponent state)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}
+
+void CheckboxComponentCommand::execute() { apply(m_add); }
+void CheckboxComponentCommand::undo()    { apply(!m_add); }
+
+void CheckboxComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setCheckbox(nullptr);
+        return;
+    }
+    go->setCheckbox(std::make_shared<CheckboxComponent>(m_state));
+}
+
+ToggleComponentCommand::ToggleComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                                bool add, ToggleComponent state)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}
+
+void ToggleComponentCommand::execute() { apply(m_add); }
+void ToggleComponentCommand::undo()    { apply(!m_add); }
+
+void ToggleComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setToggle(nullptr);
+        return;
+    }
+    go->setToggle(std::make_shared<ToggleComponent>(m_state));
+}
+
+ScrollbarComponentCommand::ScrollbarComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                                bool add, ScrollbarComponent state)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}
+
+void ScrollbarComponentCommand::execute() { apply(m_add); }
+void ScrollbarComponentCommand::undo()    { apply(!m_add); }
+
+void ScrollbarComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setScrollbar(nullptr);
+        return;
+    }
+    go->setScrollbar(std::make_shared<ScrollbarComponent>(m_state));
+}
+
 AnimatorComponentCommand::AnimatorComponentCommand(Scene& scene, std::string label, uint64_t id,
                                                     bool add, AnimatorComponent state)
     : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}

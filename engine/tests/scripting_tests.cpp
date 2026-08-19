@@ -35,6 +35,10 @@
 #include "DonTopo/UI/ImageComponent.h"
 #include "DonTopo/UI/LayoutComponent.h"
 #include "DonTopo/UI/PanelComponent.h"
+#include "DonTopo/UI/SliderComponent.h"
+#include "DonTopo/UI/CheckboxComponent.h"
+#include "DonTopo/UI/ToggleComponent.h"
+#include "DonTopo/UI/ScrollbarComponent.h"
 #include "DonTopo/UI/ProgressBarComponent.h"
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiSpriteBatch.h"
@@ -866,6 +870,343 @@ static void test_ui_image_desde_lua(ScriptManager& sm)
     CHECK(!go->hasImage());
 }
 
+
+// Los cuatro widgets interactivos del segundo lote desde Lua: mismo contrato que
+// los demás (getter que da nil sin componente, Add, campos, Remove) más el
+// camino que solo tienen ellos: OnValueChanged, que es como un script se entera
+// de que el jugador ha movido algo.
+//
+// Valores no neutros y distintos entre sí, por lo de siempre.
+static void test_ui_slider_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Volumen");
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        sinSlider = (e:GetSlider() == nil)
+
+        local s = e:AddSlider()
+        s.visible = false
+        s.interactable = false
+        s.value = 30
+        s.minValue = -10
+        s.maxValue = 90
+        s.wholeNumbers = true
+        s.direction = UiSliderDirection.BottomToTop
+        s.handleSize = 33
+        s.atlasPath = "assets/ui/hud.png"
+        s.backgroundSprite = "pista"
+        s.fillSprite = "relleno"
+        s.handleSprite = "asa"
+        s:SetPosition(19, 23)
+        s:SetSize(273, 27)
+        s:SetColor(0.11, 0.12, 0.13, 0.14)
+        s:SetFillColor(0.21, 0.22, 0.23, 0.24)
+        s:SetHandleColor(0.31, 0.32, 0.33, 0.34)
+
+        trasAdd = (e:GetSlider() ~= nil)
+        normalizado = s:GetNormalizedValue()
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) return;
+
+    CHECK(sm.lua()["sinSlider"].get<bool>());
+    CHECK(sm.lua()["trasAdd"].get<bool>());
+    CHECK(go->hasSlider());
+    if (!go->hasSlider()) return;
+
+    const SliderComponent& s = *go->getSlider();
+    CHECK(s.visible == false);
+    CHECK(s.interactable == false);
+    CHECK(nearlyEqual(s.value, 30.0f));
+    CHECK(nearlyEqual(s.minValue, -10.0f));
+    CHECK(nearlyEqual(s.maxValue, 90.0f));
+    CHECK(s.wholeNumbers == true);
+    CHECK(s.direction == UiSliderDirection::BottomToTop);
+    CHECK(nearlyEqual(s.handleSize, 33.0f));
+    CHECK(s.atlasPath == "assets/ui/hud.png");
+    CHECK(s.backgroundSprite == "pista");
+    CHECK(s.fillSprite == "relleno");
+    CHECK(s.handleSprite == "asa");
+    CHECK(nearlyEqual(s.position.x, 19.0f));
+    CHECK(nearlyEqual(s.size.y, 27.0f));
+    CHECK(nearlyEqual(s.color.r, 0.11f));
+    CHECK(nearlyEqual(s.fillColor.g, 0.22f));
+    CHECK(nearlyEqual(s.handleColor.b, 0.33f));
+
+    // El camino de vuelta: (30 - -10) / (90 - -10) = 0.4
+    CHECK(nearlyEqual(sm.lua()["normalizado"].get<float>(), 0.4f));
+
+    auto r2 = sm.lua().safe_script(R"(
+        e:RemoveSlider()
+        trasRemove = (e:GetSlider() == nil)
+    )", sol::script_pass_on_error);
+    CHECK(r2.valid());
+    CHECK(sm.lua()["trasRemove"].get<bool>());
+    CHECK(!go->hasSlider());
+}
+
+// OnValueChanged es lo que distingue a estos widgets de los que solo se pintan:
+// el script se entera de que el jugador ha movido algo SIN sondear el valor cada
+// frame. El callback lo dispara el nodo vivo, así que hace falta un sync y un
+// buildDrawData antes de tocar nada.
+static void test_ui_slider_callback_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Volumen");
+    go->setSlider(std::make_shared<SliderComponent>());
+    go->getSlider()->position   = glm::vec2(0.0f, 0.0f);
+    go->getSlider()->size       = glm::vec2(200.0f, 20.0f);
+    go->getSlider()->handleSize = 0.0f;
+    go->getSlider()->minValue   = 0.0f;
+    go->getSlider()->maxValue   = 100.0f;
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        avisos = 0
+        ultimo = -1
+        e:GetSlider():OnValueChanged(function(v) avisos = avisos + 1; ultimo = v end)
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) return;
+
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+    UiWidgetLists w;
+    w.sliders.emplace_back(go->id, go->getSlider().get());
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    UiInputState in;
+    in.mousePos    = glm::vec2(150.0f, 10.0f);
+    in.timeSeconds = 0.0f;
+    canvas.updateInput(in);
+    in.mouseDown[0] = true;
+    in.timeSeconds  = 0.016f;
+    canvas.updateInput(in);
+
+    CHECK(nearlyEqual(go->getSlider()->value, 75.0f));
+    CHECK(sm.lua()["avisos"].get<int>() == 1);
+    CHECK(nearlyEqual(sm.lua()["ultimo"].get<float>(), 75.0f));
+
+    // Pasar nil lo quita: el siguiente movimiento no avisa a nadie.
+    auto r2 = sm.lua().safe_script("e:GetSlider():OnValueChanged(nil)",
+                                   sol::script_pass_on_error);
+    CHECK(r2.valid());
+    in.mousePos    = glm::vec2(50.0f, 10.0f);
+    in.timeSeconds = 0.032f;
+    canvas.updateInput(in);
+    CHECK(nearlyEqual(go->getSlider()->value, 25.0f));
+    CHECK(sm.lua()["avisos"].get<int>() == 1);
+}
+
+static void test_ui_checkbox_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Subtitulos");
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        sinCheckbox = (e:GetCheckbox() == nil)
+
+        local c = e:AddCheckbox()
+        c.visible = false
+        c.interactable = false
+        c.isOn = true
+        c.checkPadding = 5
+        c.atlasPath = "assets/ui/widgets.png"
+        c.backgroundSprite = "casilla"
+        c.checkmarkSprite = "tick"
+        c:SetPosition(23, 29)
+        c:SetSize(37, 39)
+        c:SetColor(0.15, 0.16, 0.17, 0.18)
+        c:SetCheckColor(0.25, 0.26, 0.27, 0.28)
+
+        trasAdd = (e:GetCheckbox() ~= nil)
+        onLeido = c.isOn
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) return;
+
+    CHECK(sm.lua()["sinCheckbox"].get<bool>());
+    CHECK(sm.lua()["trasAdd"].get<bool>());
+    CHECK(go->hasCheckbox());
+    if (!go->hasCheckbox()) return;
+
+    const CheckboxComponent& c = *go->getCheckbox();
+    CHECK(c.visible == false);
+    CHECK(c.interactable == false);
+    CHECK(c.isOn == true);
+    CHECK(nearlyEqual(c.checkPadding, 5.0f));
+    CHECK(c.atlasPath == "assets/ui/widgets.png");
+    CHECK(c.backgroundSprite == "casilla");
+    CHECK(c.checkmarkSprite == "tick");
+    CHECK(nearlyEqual(c.position.x, 23.0f));
+    CHECK(nearlyEqual(c.size.y, 39.0f));
+    CHECK(nearlyEqual(c.color.r, 0.15f));
+    CHECK(nearlyEqual(c.checkColor.g, 0.26f));
+    CHECK(sm.lua()["onLeido"].get<bool>() == true);
+
+    auto r2 = sm.lua().safe_script(R"(
+        e:RemoveCheckbox()
+        trasRemove = (e:GetCheckbox() == nil)
+    )", sol::script_pass_on_error);
+    CHECK(r2.valid());
+    CHECK(sm.lua()["trasRemove"].get<bool>());
+    CHECK(!go->hasCheckbox());
+}
+
+static void test_ui_toggle_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Vsync");
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        sinToggle = (e:GetToggle() == nil)
+
+        local t = e:AddToggle()
+        t.visible = false
+        t.interactable = false
+        t.isOn = true
+        t.knobSize = 25
+        t.knobPadding = 3
+        t.atlasPath = "assets/ui/widgets.png"
+        t.backgroundSprite = "riel"
+        t.knobSprite = "mando"
+        t:SetPosition(27, 31)
+        t:SetSize(71, 33)
+        t:SetOffColor(0.35, 0.36, 0.37, 0.38)
+        t:SetOnColor(0.45, 0.46, 0.47, 0.48)
+        t:SetKnobColor(0.55, 0.56, 0.57, 0.58)
+
+        trasAdd = (e:GetToggle() ~= nil)
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) return;
+
+    CHECK(sm.lua()["sinToggle"].get<bool>());
+    CHECK(sm.lua()["trasAdd"].get<bool>());
+    CHECK(go->hasToggle());
+    if (!go->hasToggle()) return;
+
+    const ToggleComponent& t = *go->getToggle();
+    CHECK(t.visible == false);
+    CHECK(t.interactable == false);
+    CHECK(t.isOn == true);
+    CHECK(nearlyEqual(t.knobSize, 25.0f));
+    CHECK(nearlyEqual(t.knobPadding, 3.0f));
+    CHECK(t.atlasPath == "assets/ui/widgets.png");
+    CHECK(t.backgroundSprite == "riel");
+    CHECK(t.knobSprite == "mando");
+    CHECK(nearlyEqual(t.position.x, 27.0f));
+    CHECK(nearlyEqual(t.size.y, 33.0f));
+    CHECK(nearlyEqual(t.offColor.r, 0.35f));
+    CHECK(nearlyEqual(t.onColor.g, 0.46f));
+    CHECK(nearlyEqual(t.knobColor.b, 0.57f));
+
+    auto r2 = sm.lua().safe_script(R"(
+        e:RemoveToggle()
+        trasRemove = (e:GetToggle() == nil)
+    )", sol::script_pass_on_error);
+    CHECK(r2.valid());
+    CHECK(sm.lua()["trasRemove"].get<bool>());
+    CHECK(!go->hasToggle());
+}
+
+static void test_ui_scrollbar_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("BarraLateral");
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        sinScrollbar = (e:GetScrollbar() == nil)
+
+        local s = e:AddScrollbar()
+        s.visible = false
+        s.interactable = false
+        s.value = 0.625
+        s.handleFraction = 0.375
+        s.direction = UiScrollbarDirection.BottomToTop
+        s.numberOfSteps = 7
+        s.scrollStep = 0.0625
+        s.atlasPath = "assets/ui/widgets.png"
+        s.backgroundSprite = "canal"
+        s.handleSprite = "pulgar"
+        s:SetPosition(29, 33)
+        s:SetSize(17, 213)
+        s:SetColor(0.19, 0.29, 0.39, 0.49)
+        s:SetHandleColor(0.59, 0.69, 0.79, 0.89)
+
+        trasAdd = (e:GetScrollbar() ~= nil)
+        pegado = s:SnapValue(0.3)
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) return;
+
+    CHECK(sm.lua()["sinScrollbar"].get<bool>());
+    CHECK(sm.lua()["trasAdd"].get<bool>());
+    CHECK(go->hasScrollbar());
+    if (!go->hasScrollbar()) return;
+
+    const ScrollbarComponent& s = *go->getScrollbar();
+    CHECK(s.visible == false);
+    CHECK(s.interactable == false);
+    CHECK(nearlyEqual(s.value, 0.625f));
+    CHECK(nearlyEqual(s.handleFraction, 0.375f));
+    CHECK(s.direction == UiScrollbarDirection::BottomToTop);
+    CHECK(s.numberOfSteps == 7u);
+    CHECK(nearlyEqual(s.scrollStep, 0.0625f));
+    CHECK(s.atlasPath == "assets/ui/widgets.png");
+    CHECK(s.backgroundSprite == "canal");
+    CHECK(s.handleSprite == "pulgar");
+    CHECK(nearlyEqual(s.position.x, 29.0f));
+    CHECK(nearlyEqual(s.size.y, 213.0f));
+    CHECK(nearlyEqual(s.color.r, 0.19f));
+    CHECK(nearlyEqual(s.handleColor.g, 0.69f));
+
+    // 7 pasos = 6 tramos: la parada más cercana a 0.3 es 2/6 = 0.3333...
+    CHECK(nearlyEqual(sm.lua()["pegado"].get<float>(), 1.0f / 3.0f));
+
+    auto r2 = sm.lua().safe_script(R"(
+        e:RemoveScrollbar()
+        trasRemove = (e:GetScrollbar() == nil)
+    )", sol::script_pass_on_error);
+    CHECK(r2.valid());
+    CHECK(sm.lua()["trasRemove"].get<bool>());
+    CHECK(!go->hasScrollbar());
+}
+
 // Lo que un script escribe en el COMPONENTE llega al nodo vivo en el siguiente
 // syncUiWidgets. Es la razón de que los setters no toquen el nodo: el sync lo
 // vuelca solo.
@@ -1398,6 +1739,11 @@ int main()
     test_ui_layout_desde_lua(sm);
     test_ui_panel_desde_lua(sm);
     test_ui_image_desde_lua(sm);
+    test_ui_slider_desde_lua(sm);
+    test_ui_slider_callback_desde_lua(sm);
+    test_ui_checkbox_desde_lua(sm);
+    test_ui_toggle_desde_lua(sm);
+    test_ui_scrollbar_desde_lua(sm);
     test_ui_valor_de_lua_llega_al_nodo(sm);
     test_ui_click_sobrevive_a_la_reconstruccion(sm);
     test_ui_callback_no_invoca_estado_viejo(sm);

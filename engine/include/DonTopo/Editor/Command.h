@@ -342,6 +342,92 @@ private:
     ImageComponent m_state;
 };
 
+// Add/Remove del SliderComponent, mismo patron: m_state es una COPIA del
+// componente entero pa que un Add-undo-redo no devuelva el valor, el rango ni
+// los colores a los defaults. La copia ESTRENA callbacks (UiSliderCallbackSlot
+// no los copia), asi que un undo no revive el handler de un script muerto.
+class SliderComponentCommand : public ICommand {
+public:
+    SliderComponentCommand(Scene& scene, std::string label, uint64_t id,
+                           bool add, SliderComponent state);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(bool add);
+
+    Scene& m_scene;
+    std::string m_label;
+    uint64_t m_id;
+    bool m_add;
+    SliderComponent m_state;
+};
+
+// Add/Remove del CheckboxComponent, mismo patron que los demas: m_state es una COPIA
+// del componente entero pa que un Add-undo-redo no devuelva sus campos a los
+// defaults, y la copia ESTRENA callbacks (el slot no los copia) asi que un undo
+// no revive el handler de un script muerto.
+class CheckboxComponentCommand : public ICommand {
+public:
+    CheckboxComponentCommand(Scene& scene, std::string label, uint64_t id,
+                        bool add, CheckboxComponent state);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(bool add);
+
+    Scene& m_scene;
+    std::string m_label;
+    uint64_t m_id;
+    bool m_add;
+    CheckboxComponent m_state;
+};
+// Add/Remove del ToggleComponent, mismo patron que los demas: m_state es una COPIA
+// del componente entero pa que un Add-undo-redo no devuelva sus campos a los
+// defaults, y la copia ESTRENA callbacks (el slot no los copia) asi que un undo
+// no revive el handler de un script muerto.
+class ToggleComponentCommand : public ICommand {
+public:
+    ToggleComponentCommand(Scene& scene, std::string label, uint64_t id,
+                        bool add, ToggleComponent state);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(bool add);
+
+    Scene& m_scene;
+    std::string m_label;
+    uint64_t m_id;
+    bool m_add;
+    ToggleComponent m_state;
+};
+// Add/Remove del ScrollbarComponent, mismo patron que los demas: m_state es una COPIA
+// del componente entero pa que un Add-undo-redo no devuelva sus campos a los
+// defaults, y la copia ESTRENA callbacks (el slot no los copia) asi que un undo
+// no revive el handler de un script muerto.
+class ScrollbarComponentCommand : public ICommand {
+public:
+    ScrollbarComponentCommand(Scene& scene, std::string label, uint64_t id,
+                        bool add, ScrollbarComponent state);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(bool add);
+
+    Scene& m_scene;
+    std::string m_label;
+    uint64_t m_id;
+    bool m_add;
+    ScrollbarComponent m_state;
+};
+
 // Add/Remove del AnimatorComponent, mismo contrato que CameraComponentCommand:
 // resuelve el GameObject por id en cada execute()/undo() (nunca puntero crudo),
 // y m_state conserva el grafo pa que un Add-undo-redo no lo devuelva vacío.

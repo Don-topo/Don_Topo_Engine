@@ -116,12 +116,12 @@ Up/Down/Left/Right/A..Z/Num0..Num9`, `MouseButton.Left/Right/Middle`.
 | `entity:GetTransform()` | Devuelve `Transform` |
 | `entity:GetParent()` | `Entity` del padre, o `nil` si es raíz |
 | `entity:GetChildren()` | Tabla (array 1-based) de `Entity` hijos |
-| `entity:GetComponent(name)` | Devuelve el componente si existe, si no `nil`. `name`: `"BoxCollider"`, `"SphereCollider"`, `"CapsuleCollider"`, `"PlaneCollider"`, `"AudioClip"`, `"Rigidbody"`, `"Animator"`, `"Canvas"`, `"Button"`, `"Text"`, `"ProgressBar"`, `"Layout"`, `"Panel"`, `"Image"`, o `"Script:<NombreClase>"` pa acceder a la instancia de otro script en el mismo GameObject |
-| `entity:AddComponent(name, arg?)` | Añade componente (mismos defaults que el botón Add del editor; colliders mutuamente excluyentes). `AudioClip` requiere `arg` = ruta del asset. Los cinco de UI no se excluyen entre sí y pedir uno que ya está devuelve el que hay. `"Script:<Nombre>"` añade el script (Awake/Start se disparan en el siguiente lifecycle update) |
+| `entity:GetComponent(name)` | Devuelve el componente si existe, si no `nil`. `name`: `"BoxCollider"`, `"SphereCollider"`, `"CapsuleCollider"`, `"PlaneCollider"`, `"AudioClip"`, `"Rigidbody"`, `"Animator"`, `"Canvas"`, `"Button"`, `"Text"`, `"ProgressBar"`, `"Layout"`, `"Panel"`, `"Image"`, `"Slider"`, `"Checkbox"`, `"Toggle"`, `"Scrollbar"`, o `"Script:<NombreClase>"` pa acceder a la instancia de otro script en el mismo GameObject |
+| `entity:AddComponent(name, arg?)` | Añade componente (mismos defaults que el botón Add del editor; colliders mutuamente excluyentes). `AudioClip` requiere `arg` = ruta del asset. Los de UI no se excluyen entre sí (caben todos en el mismo GameObject) y pedir uno que ya está devuelve el que hay. `"Script:<Nombre>"` añade el script (Awake/Start se disparan en el siguiente lifecycle update) |
 | `entity:RemoveComponent(name)` | Quita el componente (scripts se remueven diferido, al final del frame) |
-| `entity:GetCanvas()` / `GetButton()` / `GetText()` / `GetProgressBar()` / `GetLayout()` / `GetPanel()` / `GetImage()` | El componente de UI, o `nil` si no lo tiene |
-| `entity:AddCanvas()` / `AddButton()` / `AddText()` / `AddProgressBar()` / `AddLayout()` / `AddPanel()` / `AddImage()` | Lo crea con los valores por defecto del componente y devuelve el wrapper; si ya existe devuelve el que hay sin pisarlo |
-| `entity:RemoveCanvas()` / `RemoveButton()` / `RemoveText()` / `RemoveProgressBar()` / `RemoveLayout()` / `RemovePanel()` / `RemoveImage()` | Lo quita del GameObject |
+| `entity:GetCanvas()` / `GetButton()` / `GetText()` / `GetProgressBar()` / `GetLayout()` / `GetPanel()` / `GetImage()` / `GetSlider()` / `GetCheckbox()` / `GetToggle()` / `GetScrollbar()` | El componente de UI, o `nil` si no lo tiene |
+| `entity:AddCanvas()` / `AddButton()` / `AddText()` / `AddProgressBar()` / `AddLayout()` / `AddPanel()` / `AddImage()` / `AddSlider()` / `AddCheckbox()` / `AddToggle()` / `AddScrollbar()` | Lo crea con los valores por defecto del componente y devuelve el wrapper; si ya existe devuelve el que hay sin pisarlo |
+| `entity:RemoveCanvas()` / `RemoveButton()` / `RemoveText()` / `RemoveProgressBar()` / `RemoveLayout()` / `RemovePanel()` / `RemoveImage()` / `RemoveSlider()` / `RemoveCheckbox()` / `RemoveToggle()` / `RemoveScrollbar()` | Lo quita del GameObject |
 
 ## Transform
 
@@ -395,7 +395,7 @@ function Fade:Update(dt)
 end
 ```
 
-## UI — Canvas / Button / Text / ProgressBar / Layout / Panel / Image
+## UI — Canvas / Button / Text / ProgressBar / Layout / Panel / Image / Slider / Checkbox / Toggle / Scrollbar
 
 Los siete se obtienen con `entity:GetCanvas()`, `entity:GetButton()`,
 `entity:GetText()`, `entity:GetProgressBar()`, `entity:GetLayout()`,
@@ -423,6 +423,8 @@ Los enums viajan como tablas de constantes enteras:
 | `UiImageMode` | `Normal`, `Tiled`, `Sliced`, `Filled` |
 | `UiFillDirection` | `Horizontal`, `Vertical` |
 | `UiFillOrigin` | `Start`, `End` |
+| `UiSliderDirection` | `LeftToRight`, `RightToLeft`, `BottomToTop`, `TopToBottom` |
+| `UiScrollbarDirection` | `LeftToRight`, `RightToLeft`, `TopToBottom`, `BottomToTop` |
 
 ### Canvas
 
@@ -564,6 +566,106 @@ marco.borderLeft, marco.borderRight = 12, 12
 marco.borderTop, marco.borderBottom = 12, 12
 marco.fillCenter = false
 marco:SetSize(400, 260)
+```
+
+### Slider / Checkbox / Toggle / Scrollbar — los interactivos
+
+Los cuatro tienen algo que los demás no: **el jugador los mueve**, y lo que mueve
+se escribe **en el componente**, no en el nodo del canvas. O sea que leer
+`s.value` o `c.isOn` da el valor de verdad sin sondear nada, se serializa con la
+escena y se ve en el inspector mientras el juego corre.
+
+Los cuatro llevan `interactable` (a `false` se dibujan igual pero no se dejan
+tocar) y `OnValueChanged(fn)`, que llama a `fn` con el valor nuevo **solo cuando
+cambia**. Pasar `nil` lo quita. Igual que `Button:OnClick`, el dueño del callback
+es el componente, así que registrar una vez en `Start` basta: sobrevive a las
+reconstrucciones del árbol de UI.
+
+#### Slider
+
+| Propiedad / Método | Descripción |
+| --- | --- |
+| `s.value` / `s.minValue` / `s.maxValue` | El rango. Sin clamp al escribir a mano; el arrastre sí acota |
+| `s.wholeNumbers` | Redondea el valor que se **escribe**, no solo el que se dibuja |
+| `s.direction` | `UiSliderDirection.*` |
+| `s.handleSize` | Largo del asa **en el eje del recorrido**, en px. Se descuenta del recorrido para que no se salga por las puntas. A `0` el recorrido es el rect entero |
+| `s.interactable` / `s.visible` | |
+| `s.atlasPath` / `s.backgroundSprite` / `s.fillSprite` / `s.handleSprite` | Un atlas, tres nombres de sub-rect |
+| `s:GetColor/SetColor`, `GetFillColor/SetFillColor`, `GetHandleColor/SetHandleColor` | Pista, relleno y asa |
+| `s:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
+| `s:GetNormalizedValue()` | El `0..1` ya acotado (rango degenerado = 0) |
+| `s:OnValueChanged(fn)` | `fn(nuevoValor)` |
+
+La **pista entera** es zona de clic, no solo el asa: un click salta el valor a
+donde esté el cursor, como en Unity. El arrastre sigue al ratón aunque salga del
+rect.
+
+#### Checkbox
+
+| Propiedad / Método | Descripción |
+| --- | --- |
+| `c.isOn` | El valor. Un click lo invierte |
+| `c.checkPadding` | Px que la marca se mete hacia dentro de la caja por los cuatro lados. Uno que no cabe deja la marca a cero, nunca un rect del revés |
+| `c.interactable` / `c.visible` | |
+| `c.atlasPath` / `c.backgroundSprite` / `c.checkmarkSprite` | |
+| `c:GetColor/SetColor` / `c:GetCheckColor/SetCheckColor` | Caja y marca |
+| `c:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
+| `c:OnValueChanged(fn)` | `fn(nuevoValor)` |
+
+**No lleva etiqueta de texto**: el `Text` es su propio componente y cabe en el
+mismo GameObject (son nodos hermanos), así que meter aquí una copia de los campos
+del texto sería mantener dos.
+
+#### Toggle
+
+Guarda el mismo dato que el `Checkbox` (un bool) y aun así es otro componente:
+lo que cambia no es el dato sino los **campos** — la casilla tiene padding y
+color de marca, el interruptor tiene dos colores de pista y el tamaño del mando.
+
+| Propiedad / Método | Descripción |
+| --- | --- |
+| `t.isOn` | El valor. Un click lo invierte |
+| `t.knobSize` / `t.knobPadding` | El mando se acota a lo que quede entre paddings: uno más grande que la pista asomaría por el borde |
+| `t.interactable` / `t.visible` | |
+| `t.atlasPath` / `t.backgroundSprite` / `t.knobSprite` | |
+| `t:GetOffColor/SetOffColor` / `t:GetOnColor/SetOnColor` | La pista **no tiene un color suelto**: se pinta con uno u otro según el estado |
+| `t:GetKnobColor/SetKnobColor` | |
+| `t:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
+| `t:OnValueChanged(fn)` | `fn(nuevoValor)` |
+
+#### Scrollbar
+
+Se parece al `Slider` pero no es lo mismo: el asa tiene tamaño **variable** (la
+fracción del contenido que se ve) y el valor va siempre en `0..1` — no hay rango
+propio porque quien lo interpreta es lo que se desplaza, no la barra.
+
+| Propiedad / Método | Descripción |
+| --- | --- |
+| `s.value` | `0..1` |
+| `s.handleFraction` | Fracción del canal que ocupa el asa. `1` = el contenido cabe entero y no hay nada que desplazar |
+| `s.direction` | `UiScrollbarDirection.*` |
+| `s.numberOfSteps` | Paradas discretas. `0` y `1` = continuo: enganchar a una sola parada dejaría la barra muerta en un sitio |
+| `s.scrollStep` | Cuánto mueve la rueda por muesca, en fracción del recorrido |
+| `s.interactable` / `s.visible` | |
+| `s.atlasPath` / `s.backgroundSprite` / `s.handleSprite` | |
+| `s:GetColor/SetColor` / `s:GetHandleColor/SetHandleColor` | Canal y asa |
+| `s:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
+| `s:SnapValue(v)` | El mismo enganche a paradas que aplica el arrastre |
+| `s:OnValueChanged(fn)` | `fn(nuevoValor)` |
+
+La **rueda del ratón** encima de la barra también la mueve, y el evento se
+consume ahí: si siguiera burbujeando, un contenedor que la envolviera se
+desplazaría a la vez y el contenido saltaría el doble por muesca.
+
+```lua
+function Opciones:Start()
+    local vol = self.entity:GetSlider()
+    vol.minValue, vol.maxValue = 0, 100
+    vol.wholeNumbers = true
+    vol:OnValueChanged(function(v)
+        Log.Info("Volumen: " .. v)
+    end)
+end
 ```
 
 ### Callbacks del Button: qué los mata y qué no

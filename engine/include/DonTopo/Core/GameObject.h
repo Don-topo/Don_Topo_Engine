@@ -24,6 +24,10 @@
 #include "DonTopo/UI/PanelComponent.h"
 #include "DonTopo/UI/TextComponent.h"
 #include "DonTopo/UI/ProgressBarComponent.h"
+#include "DonTopo/UI/SliderComponent.h"
+#include "DonTopo/UI/CheckboxComponent.h"
+#include "DonTopo/UI/ToggleComponent.h"
+#include "DonTopo/UI/ScrollbarComponent.h"
 
 namespace DonTopo
 {
@@ -193,6 +197,33 @@ namespace DonTopo
             const std::shared_ptr<ImageComponent>& getImage() const { return m_image; }
             bool hasImage() const { return m_image != nullptr; }
 
+            // Slider: el widget de valor arrastrable de la UI 2D. Mismo
+            // contrato que el resto — SOLO DATOS —, con una diferencia: el nodo
+            // vivo tiene handlers de raton que ESCRIBEN `value` aqui, asi que el
+            // sync lo recibe por puntero no const.
+            void setSlider(std::shared_ptr<SliderComponent> s) { m_slider = std::move(s); }
+            const std::shared_ptr<SliderComponent>& getSlider() const { return m_slider; }
+            bool hasSlider() const { return m_slider != nullptr; }
+
+            // Checkbox: la casilla de verificacion. Como el Slider, su nodo
+            // vivo tiene un handler de click que escribe `isOn` AQUI, asi que el
+            // sync lo recibe por puntero no const.
+            void setCheckbox(std::shared_ptr<CheckboxComponent> c) { m_checkbox = std::move(c); }
+            const std::shared_ptr<CheckboxComponent>& getCheckbox() const { return m_checkbox; }
+            bool hasCheckbox() const { return m_checkbox != nullptr; }
+
+            // Toggle: el interruptor deslizante. Mismo dato que el Checkbox (un
+            // bool) pero otros campos, asi que otro componente.
+            void setToggle(std::shared_ptr<ToggleComponent> t) { m_toggle = std::move(t); }
+            const std::shared_ptr<ToggleComponent>& getToggle() const { return m_toggle; }
+            bool hasToggle() const { return m_toggle != nullptr; }
+
+            // Scrollbar: el canal con asa de tamano variable. Interactivo por
+            // arrastre Y por rueda, asi que tambien por puntero no const.
+            void setScrollbar(std::shared_ptr<ScrollbarComponent> s) { m_scrollbar = std::move(s); }
+            const std::shared_ptr<ScrollbarComponent>& getScrollbar() const { return m_scrollbar; }
+            bool hasScrollbar() const { return m_scrollbar != nullptr; }
+
             // Auto-layout: coloca a los HIJOS de este GameObject, y con
             // ignoreLayout saca a este de la colocacion de su padre. Mismo
             // contrato que el resto: SOLO DATOS, y el nodo lo resuelve
@@ -267,6 +298,10 @@ namespace DonTopo
             std::shared_ptr<LayoutComponent> m_layout;
             std::shared_ptr<PanelComponent> m_panel;
             std::shared_ptr<ImageComponent> m_image;
+            std::shared_ptr<SliderComponent> m_slider;
+            std::shared_ptr<CheckboxComponent> m_checkbox;
+            std::shared_ptr<ToggleComponent> m_toggle;
+            std::shared_ptr<ScrollbarComponent> m_scrollbar;
             std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
     };
 }

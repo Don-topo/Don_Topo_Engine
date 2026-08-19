@@ -522,6 +522,58 @@ void ViewportPanel::drawProgressBarGizmo(EditorContext& ctx, const glm::vec2& im
                     imagePos, imageSize);
 }
 
+void ViewportPanel::drawSliderGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                    const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasSlider() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
+                                         uiSliderNodeName(ctx.selected->id)),
+                    imagePos, imageSize);
+}
+
+void ViewportPanel::drawCheckboxGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                    const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasCheckbox() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
+                                         uiCheckboxNodeName(ctx.selected->id)),
+                    imagePos, imageSize);
+}
+
+void ViewportPanel::drawToggleGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                    const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasToggle() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
+                                         uiToggleNodeName(ctx.selected->id)),
+                    imagePos, imageSize);
+}
+
+void ViewportPanel::drawScrollbarGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                    const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasScrollbar() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
+                                         uiScrollbarNodeName(ctx.selected->id)),
+                    imagePos, imageSize);
+}
+
 void ViewportPanel::drawPanelGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                                     const glm::vec2& imageSize)
 {
@@ -589,6 +641,14 @@ GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mou
         // El nodo del relleno ("bar:7/Fill") también devuelve su dueño, así que
         // clicar dentro de la parte llena selecciona la barra igual.
         if (const uint64_t owner = uiProgressBarOwnerId(n->name))
+            return ctx.scene->findById(owner);
+        if (const uint64_t owner = uiSliderOwnerId(n->name))
+            return ctx.scene->findById(owner);
+        if (const uint64_t owner = uiScrollbarOwnerId(n->name))
+            return ctx.scene->findById(owner);
+        if (const uint64_t owner = uiToggleOwnerId(n->name))
+            return ctx.scene->findById(owner);
+        if (const uint64_t owner = uiCheckboxOwnerId(n->name))
             return ctx.scene->findById(owner);
         if (const uint64_t owner = uiImageOwnerId(n->name))
             return ctx.scene->findById(owner);
@@ -738,6 +798,10 @@ void ViewportPanel::draw(EditorContext& ctx, uint64_t viewportTexture, const glm
     drawTextGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawProgressBarGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawLayoutGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    drawSliderGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    drawCheckboxGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    drawToggleGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    drawScrollbarGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawPanelGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawImageGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     // Hover de la IMAGEN, no de la ventana: con esto un popup o cualquier otra
