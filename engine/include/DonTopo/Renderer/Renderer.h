@@ -471,6 +471,8 @@ namespace DonTopo {
             void createSwapChain(Window& window);
             void createImageViews();
             void createOffscreenRenderPass();
+            // Pass de la UI de juego sobre la imagen final ya anti-aliaseada.
+            void createUiRenderPass();
             // Pass LDR que compone HDR + bloom, tonemapea y hospeda ademas el
             // contorno de seleccion y los gizmos: esos dos tienen que quedarse
             // FUERA del tonemap para seguir saliendo con su color plano de
@@ -698,6 +700,21 @@ namespace DonTopo {
             VkImageView                     m_offscreenView[MAX_FRAMES]         = {};
             VkSampler                       m_offscreenSampler                  = VK_NULL_HANDLE;
             VkFramebuffer                   m_offscreenFramebuffer[MAX_FRAMES]  = {};
+
+            // ── Pass propio de la UI de juego ────────────────────────────────
+            // La UI se dibuja DESPUES del anti-aliasing, sobre la imagen final y
+            // a una muestra. Antes iba dentro del pass de composicion, o sea
+            // ANTES del AA: con FXAA el texto se suavizaba de mas y con TAA
+            // dejaba estela al moverse, mientras el backend de DirectX 12 -que
+            // la dibuja sobre el back buffer ya resuelto- salia limpio. Es
+            // ademas lo que hace que con SSAA la UI se dibuje una sola vez a la
+            // resolucion de salida en vez de supersamplearse para nada.
+            //
+            // loadOp LOAD y los dos layouts en SHADER_READ_ONLY: la imagen ya
+            // trae la escena resuelta y tiene que quedarse como estaba para el
+            // panel del editor y para el blit del runtime.
+            VkRenderPass                    m_uiRenderPass                      = VK_NULL_HANDLE;
+            VkFramebuffer                   m_uiFramebuffer[MAX_FRAMES]         = {};
             // Handle opaco de la UI, no un VkDescriptorSet: lo produce
             // UiLayer::registerUiTexture y el Renderer solo lo guarda para
             // devolvérselo. Es uint64_t porque ese contrato ya no conoce Vulkan.

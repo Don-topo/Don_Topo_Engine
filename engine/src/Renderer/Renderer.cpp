@@ -79,6 +79,7 @@ namespace DonTopo {
         createDepthResources();
         createOffscreenRenderPass();
         createCompositeRenderPass();
+        createUiRenderPass();
         // Los gizmos van en el pass de composicion, no en el de escena: ahi el
         // color ya esta tonemapeado y sus lineas salen exactamente con el color
         // plano que declaran, igual que antes del bloom.
@@ -224,7 +225,10 @@ namespace DonTopo {
         createBloomPipelines();
         // UI de juego: mismo pass y mismas muestras que la composicion, que es
         // donde se graban sus lotes (LDR, ya tonemapeado, encima de la escena).
-        m_uiBatch.init(m_gpu, m_res, m_compositeRenderPass, m_aaSampleCount);
+        // Pass propio y UNA muestra: la UI ya no va dentro de la composicion,
+        // asi que ni la toca el AA ni depende del numero de muestras de la
+        // escena (y por eso tampoco hay que recrear su pipeline al cambiar MSAA).
+        m_uiBatch.init(m_gpu, m_res, m_uiRenderPass, VK_SAMPLE_COUNT_1_BIT);
         // ANTES de createOffscreenImages (que llama a createSsaoImages) y DESPUÉS
         // de ShadowPass::createResources: el pipeline del depth pre-pass
         // reutiliza el pipeline layout del pass de sombras, que se crea allí.
@@ -512,6 +516,13 @@ namespace DonTopo {
         vkDestroyDescriptorSetLayout(m_gpu.device(), m_compositeDescLayout, nullptr);
         vkDestroyRenderPass(m_gpu.device(), m_compositeRenderPass, nullptr);
         m_compositeRenderPass = VK_NULL_HANDLE;
+        // El de la UI no depende del numero de muestras, asi que solo se
+        // destruye aqui, en el teardown de verdad.
+        if (m_uiRenderPass != VK_NULL_HANDLE)
+        {
+            vkDestroyRenderPass(m_gpu.device(), m_uiRenderPass, nullptr);
+            m_uiRenderPass = VK_NULL_HANDLE;
+        }
         m_bloomPass.destroyPipelines(bloomCtx());
         // SSAO. Las imagenes, vistas, framebuffers y sets se fueron con
         // destroyOffscreenImages (llama a destroySsaoImages); aqui queda lo que
@@ -998,6 +1009,58 @@ namespace DonTopo {
             throw std::runtime_error("failed to create offscreen render pass!");
 
         printf("offscreen render pass OK\n"); fflush(stdout);
+    }
+
+    void Renderer::createUiRenderPass()
+    {
+        // Un solo attachment: la imagen final LDR, con lo que ya haya dentro.
+        // Una muestra SIEMPRE, aunque la escena vaya con MSAA: aqui ya no hay
+        // geometria 3D que suavizar, y el propio AA ya ha resuelto.
+        VkAttachmentDescription colorAtt{};
+        colorAtt.format         = m_swapChainFormat;
+        colorAtt.samples        = VK_SAMPLE_COUNT_1_BIT;
+        // LOAD y no DONT_CARE: debajo de la UI esta la escena entera.
+        colorAtt.loadOp         = VK_ATTACHMENT_LOAD_OP_LOAD;
+        colorAtt.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        // Entra y sale en SHADER_READ_ONLY: es como la dejan los dos caminos
+        // que escriben antes (composicion sin AA, o el pass de resolucion) y
+        // como la esperan el panel del editor y el blit headless.
+        colorAtt.initialLayout  = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        colorAtt.finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkAttachmentReference colorRef{};
+        colorRef.attachment = 0;
+        colorRef.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments    = &colorRef;
+
+        // Lo de antes escribio color (composicion o resolucion del AA); esto
+        // vuelve a escribir sobre lo mismo, asi que la dependencia va de salida
+        // de color a salida de color.
+        VkSubpassDependency dep{};
+        dep.srcSubpass    = VK_SUBPASS_EXTERNAL;
+        dep.dstSubpass    = 0;
+        dep.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dep.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        VkRenderPassCreateInfo rpInfo{};
+        rpInfo.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rpInfo.attachmentCount = 1;
+        rpInfo.pAttachments    = &colorAtt;
+        rpInfo.subpassCount    = 1;
+        rpInfo.pSubpasses      = &subpass;
+        rpInfo.dependencyCount = 1;
+        rpInfo.pDependencies   = &dep;
+
+        if (vkCreateRenderPass(m_gpu.device(), &rpInfo, nullptr, &m_uiRenderPass) != VK_SUCCESS)
+            throw std::runtime_error("failed to create ui render pass!");
     }
 
     void Renderer::createCompositeRenderPass()
@@ -1792,18 +1855,6 @@ namespace DonTopo {
             recordSelectionOutline(cmd, camFrustum);
             Gizmos::draw(cmd, fc.proj * fc.view, m_currentFrame);
 
-            // UI de juego, lo ultimo del pass: va encima de la escena y de los
-            // gizmos, y por debajo de la UI del editor (que se graba en el pass
-            // del swapchain). Con el canvas vacio no se graba ni un comando.
-            // El canvas se resuelve en pixeles de SALIDA y no de render, igual
-            // que el backend de DirectX 12: con SSAA el render extent es el
-            // doble y la UI salia a la mitad de tamano (y el raton no caia donde
-            // se veia). El estirado al framebuffer lo hace la ortografica de
-            // record, que ya recibe los dos espacios.
-            const VkExtent2D uiExtent = effectiveViewport();
-            m_uiCanvas.buildDrawData(uiExtent.width, uiExtent.height, m_uiDrawData);
-            m_uiBatch.record(m_gpu, cmd, m_uiDrawData, uiExtent, m_renderExtent, m_currentFrame);
-
             vkCmdEndRenderPass(cmd);
 
             // Solo con el bloom encendido: el par se abre arriba bajo la misma
@@ -1816,6 +1867,44 @@ namespace DonTopo {
             // (asi que tambien se les suavizan los bordes, que es lo deseado: sus
             // lineas y el casco invertido son lo mas escalonado de la pantalla).
             m_aaPass.record(aaCtx(), cmd);
+
+            // ── UI de juego, ya sobre la imagen final ─────────────────────────
+            // Despues del AA a proposito: aqui el texto no lo suaviza el FXAA ni
+            // lo arrastra el historial del TAA, y con SSAA se dibuja UNA vez al
+            // tamano de salida en vez de supersamplearse. Es donde la dibuja
+            // tambien el backend de DirectX 12 (sobre el back buffer resuelto).
+            //
+            // Va por encima de la escena, del contorno de seleccion y de los
+            // gizmos, y por debajo de la interfaz del editor, que se graba en el
+            // pass del swapchain. Con el canvas vacio no se abre ni el pass.
+            const VkExtent2D uiExtent = effectiveViewport();
+            m_uiCanvas.buildDrawData(uiExtent.width, uiExtent.height, m_uiDrawData);
+            if (!m_uiDrawData.empty() && m_uiFramebuffer[m_currentFrame] != VK_NULL_HANDLE)
+            {
+                VkRenderPassBeginInfo uiRp{};
+                uiRp.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+                uiRp.renderPass        = m_uiRenderPass;
+                uiRp.framebuffer       = m_uiFramebuffer[m_currentFrame];
+                uiRp.renderArea.extent = uiExtent;
+                uiRp.renderArea.offset = {0, 0};
+                uiRp.clearValueCount   = 0;   // el attachment es LOAD
+
+                vkCmdBeginRenderPass(cmd, &uiRp, VK_SUBPASS_CONTENTS_INLINE);
+
+                // El viewport es estado dinamico y este pass es propio: hay que
+                // ponerlo, no se hereda del de composicion.
+                VkViewport vp{};
+                vp.width    = (float)uiExtent.width;
+                vp.height   = (float)uiExtent.height;
+                vp.minDepth = 0.0f;
+                vp.maxDepth = 1.0f;
+                vkCmdSetViewport(cmd, 0, 1, &vp);
+
+                // Canvas y framebuffer son ya el MISMO espacio (pixeles de
+                // salida): los scissor no se escalan.
+                m_uiBatch.record(m_gpu, cmd, m_uiDrawData, uiExtent, uiExtent, m_currentFrame);
+                vkCmdEndRenderPass(cmd);
+            }
 
             // Cierre de la medida del render completo, ya con el AA incluido. Es
             // la referencia con la que se compara el sobrecoste de SSAA y MSAA,
@@ -4006,6 +4095,19 @@ namespace DonTopo {
 
             m_res.createTextureImageView(m_offscreenImage[i], m_offscreenView[i], m_swapChainFormat);
 
+            // Framebuffer del pass de la UI: la MISMA imagen final, al tamano de
+            // salida. Se crea aqui porque muere y renace con ella.
+            VkFramebufferCreateInfo uiFb{};
+            uiFb.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            uiFb.renderPass      = m_uiRenderPass;
+            uiFb.attachmentCount = 1;
+            uiFb.pAttachments    = &m_offscreenView[i];
+            uiFb.width           = effectiveViewport().width;
+            uiFb.height          = effectiveViewport().height;
+            uiFb.layers          = 1;
+            if (vkCreateFramebuffer(m_gpu.device(), &uiFb, nullptr, &m_uiFramebuffer[i]) != VK_SUCCESS)
+                throw std::runtime_error("failed to create ui framebuffer!");
+
             // Imagen HDR de la escena: tamano INTERNO (que con SSAA es mayor que
             // el de la ventana), formato flotante. La leen el downsample del
             // bloom (compute) y la composicion (fragment). Con MSAA es el destino
@@ -4151,6 +4253,12 @@ namespace DonTopo {
             {
                 vkDestroyFramebuffer(m_gpu.device(), m_offscreenFramebuffer[i], nullptr);
                 m_offscreenFramebuffer[i] = VK_NULL_HANDLE;
+            }
+            // Antes que la vista que referencia.
+            if (m_uiFramebuffer[i])
+            {
+                vkDestroyFramebuffer(m_gpu.device(), m_uiFramebuffer[i], nullptr);
+                m_uiFramebuffer[i] = VK_NULL_HANDLE;
             }
             if (m_offscreenView[i])
             {
@@ -4860,9 +4968,8 @@ namespace DonTopo {
         // crea layouts y pools; aqui solo hace falta el pipeline, asi que se
         // rehace a mano con el mismo codigo que usa aquella.
         recreateCompositePipeline();
-        // Comparte pass con la composicion: si cambian las muestras, su pipeline
-        // deja de ser compatible igual que el de aquella.
-        m_uiBatch.recreatePipeline(m_gpu, m_compositeRenderPass, m_aaSampleCount);
+        // La UI NO se rehace aqui: tiene pass propio, a una muestra siempre, y
+        // el numero de muestras de la escena no le afecta.
 
         // Los dos que no viven en Renderer.cpp. El skybox se salta solo si no
         // hay cubemap cargado.
