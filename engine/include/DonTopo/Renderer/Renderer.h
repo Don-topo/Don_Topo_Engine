@@ -179,6 +179,7 @@ namespace DonTopo {
             // y quien le pasa el raton (runtime y editor) tiene que usarlo.
             uint32_t uiWidth()  const { return effectiveViewport().width; }
             uint32_t uiHeight() const { return effectiveViewport().height; }
+            uint64_t uiAtlasTextureId(const UiTextureAtlas* atlas) override;
             // Tamano EXACTO del area de imagen del panel Viewport del editor, en
             // pixeles. Lo llama el editor una vez por frame. Sin esto el render
             // iria al tamano de la VENTANA y el panel lo reescalaria al dibujarlo:
@@ -1000,6 +1001,16 @@ namespace DonTopo {
             UiDrawData    m_uiDrawData;
             std::vector<std::unique_ptr<UiTextureAtlas>> m_uiAtlases;
             std::vector<std::unique_ptr<UiFont>>         m_uiFonts;
+            // Por RUTA: la misma imagen pedida dos veces es el mismo atlas, no
+            // dos. Sin esto cada consulta del editor subia otra textura y otro
+            // descriptor set, y el pool de UiSpriteBatch son 32. Tambien es lo
+            // que deja al editor tocar los sprites del atlas que se esta
+            // dibujando en vez de los de una copia suya.
+            std::unordered_map<std::string, UiTextureAtlas*> m_uiAtlasByPath;
+            // Handle de ImGui por atlas, cacheado: ImGui_ImplVulkan_AddTexture
+            // reserva un descriptor set POR LLAMADA, y llamarlo cada frame se
+            // come el pool del editor en segundos.
+            std::unordered_map<const UiTextureAtlas*, uint64_t> m_uiAtlasImGuiId;
             GameObject* m_sceneRoot = nullptr;
             Scene* m_scene = nullptr;
     };

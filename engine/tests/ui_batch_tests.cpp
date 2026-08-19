@@ -5302,6 +5302,134 @@ static void test_cache_de_fuente_devuelve_lo_mismo_que_hornear()
     std::filesystem::remove_all(".dt-cache-test");
 }
 
+// ── Sidecar de sprites ──────────────────────────────────────────────────────
+// Los sub-rects de un atlas viven en un JSON junto a la imagen. Lo que se prueba
+// es el viaje de ida y vuelta y, sobre todo, que un sidecar que no se puede leer
+// NO deje el atlas a medias: con media lista el widget dibuja la imagen entera
+// en vez de su sprite, y eso parece un problema de arte, no de carga.
+static const char* kSidecarDir = ".dt-sprites-test";
+
+static void test_sidecar_de_sprites_ida_y_vuelta()
+{
+    std::filesystem::remove_all(kSidecarDir);
+    std::filesystem::create_directories(kSidecarDir);
+    const std::string ruta = std::string(kSidecarDir) + "/botones.sprites.json";
+
+    UiTextureAtlas origen;
+    origen.setSize(256, 128);
+    // Valores no neutros y distintos entre sí: con ceros o repetidos, una x
+    // escrita en el hueco de la y pasaría desapercibida.
+    origen.addSprite("btn_normal",  UiSpriteRect{ 3.0f,  5.0f, 64.0f, 32.0f});
+    origen.addSprite("btn_hover",   UiSpriteRect{70.0f, 11.0f, 48.0f, 24.0f});
+    origen.addSprite("btn_pressed", UiSpriteRect{130.0f, 17.0f, 40.0f, 20.0f});
+    CHECK(origen.saveSprites(ruta));
+    CHECK(std::filesystem::exists(ruta));
+
+    UiTextureAtlas destino;
+    destino.setSize(256, 128);
+    CHECK(destino.loadSprites(ruta));
+    CHECK(destino.spriteCount() == 3);
+
+    const UiSpriteRect* r = destino.findSprite("btn_hover");
+    CHECK(r != nullptr);
+    if (r)
+    {
+        CHECK(nearly(r->x, 70.0f));
+        CHECK(nearly(r->y, 11.0f));
+        CHECK(nearly(r->width, 48.0f));
+        CHECK(nearly(r->height, 24.0f));
+    }
+
+    // Y las UVs que salen de ahí son las del sub-rect, no las del atlas entero:
+    // es lo único que ve el batcher.
+    const UiUvRect uv = destino.uvRect("btn_hover");
+    CHECK(nearly(uv.u0, 70.0f / 256.0f));
+    CHECK(nearly(uv.v0, 11.0f / 128.0f));
+    CHECK(nearly(uv.u1, (70.0f + 48.0f) / 256.0f));
+    CHECK(nearly(uv.v1, (11.0f + 24.0f) / 128.0f));
+
+    // Nombres ordenados y estables: el combo del editor los indexa.
+    const std::vector<std::string> nombres = destino.spriteNames();
+    CHECK(nombres.size() == 3);
+    if (nombres.size() == 3)
+    {
+        CHECK(nombres[0] == "btn_hover");
+        CHECK(nombres[1] == "btn_normal");
+        CHECK(nombres[2] == "btn_pressed");
+    }
+
+    // Cargar REEMPLAZA: un sprite que ya no está en el fichero no sobrevive.
+    destino.addSprite("sobra", UiSpriteRect{1.0f, 2.0f, 3.0f, 4.0f});
+    CHECK(destino.loadSprites(ruta));
+    CHECK(destino.hasSprite("sobra") == false);
+    CHECK(destino.spriteCount() == 3);
+
+    std::filesystem::remove_all(kSidecarDir);
+}
+
+static void test_sidecar_ruta_derivada_de_la_imagen()
+{
+    CHECK(UiTextureAtlas::spriteSheetPathFor("assets/ui/botones.png") ==
+          "assets/ui/botones.sprites.json");
+    // Mayúsculas y otras extensiones: se corta por el último punto, no por ".png".
+    CHECK(UiTextureAtlas::spriteSheetPathFor("a/b/HOJA.PNG") == "a/b/HOJA.sprites.json");
+    CHECK(UiTextureAtlas::spriteSheetPathFor("x.tga") == "x.sprites.json");
+    // Sin extensión no hay nada que quitar.
+    CHECK(UiTextureAtlas::spriteSheetPathFor("sinpunto") == "sinpunto.sprites.json");
+    // Un punto en un DIRECTORIO no es la extensión del fichero.
+    CHECK(UiTextureAtlas::spriteSheetPathFor("v1.2/hoja.png") == "v1.2/hoja.sprites.json");
+}
+
+static void test_sidecar_roto_no_deja_el_atlas_a_medias()
+{
+    std::filesystem::remove_all(kSidecarDir);
+    std::filesystem::create_directories(kSidecarDir);
+
+    UiTextureAtlas atlas;
+    atlas.setSize(64, 64);
+    atlas.addSprite("bueno", UiSpriteRect{7.0f, 9.0f, 11.0f, 13.0f});
+
+    // (a) No existe.
+    CHECK(atlas.loadSprites(std::string(kSidecarDir) + "/no-existe.sprites.json") == false);
+    CHECK(atlas.spriteCount() == 1);
+    CHECK(atlas.hasSprite("bueno"));
+
+    // (b) No es JSON.
+    const std::string basura = std::string(kSidecarDir) + "/basura.sprites.json";
+    { std::ofstream f(basura); f << "{{{ esto no es json"; }
+    CHECK(atlas.loadSprites(basura) == false);
+    CHECK(atlas.hasSprite("bueno"));
+
+    // (c) Es JSON pero no tiene la raíz esperada.
+    const std::string ajeno = std::string(kSidecarDir) + "/ajeno.sprites.json";
+    { std::ofstream f(ajeno); f << R"({"otracosa": 42})"; }
+    CHECK(atlas.loadSprites(ajeno) == false);
+    CHECK(atlas.hasSprite("bueno"));
+
+    // (d) Entradas sueltas inválidas: se saltan, el resto entra. Un rect de área
+    // 0 daría UVs degeneradas y un quad invisible sin ningún error.
+    const std::string mixto = std::string(kSidecarDir) + "/mixto.sprites.json";
+    {
+        std::ofstream f(mixto);
+        f << R"({"sprites": {
+                   "vale":     {"x": 2, "y": 4, "w": 8,  "h": 6},
+                   "ancho0":   {"x": 0, "y": 0, "w": 0,  "h": 6},
+                   "alto0":    {"x": 0, "y": 0, "w": 8,  "h": 0},
+                   "negativo": {"x": 0, "y": 0, "w": -8, "h": 6},
+                   "tambien":  {"x": 20, "y": 24, "w": 12, "h": 10}
+                 }})";
+    }
+    CHECK(atlas.loadSprites(mixto));
+    CHECK(atlas.spriteCount() == 2);
+    CHECK(atlas.hasSprite("vale"));
+    CHECK(atlas.hasSprite("tambien"));
+    CHECK(atlas.hasSprite("ancho0") == false);
+    CHECK(atlas.hasSprite("alto0") == false);
+    CHECK(atlas.hasSprite("negativo") == false);
+
+    std::filesystem::remove_all(kSidecarDir);
+}
+
 int main()
 {
     // Sin buffer: si un test revienta a media tanda, lo ya impreso NO se pierde
@@ -5315,6 +5443,10 @@ int main()
     test_fuente_por_defecto_hornea_acentos();
     test_fuente_paralela_da_el_mismo_atlas();
     test_cache_de_fuente_devuelve_lo_mismo_que_hornear();
+
+    test_sidecar_de_sprites_ida_y_vuelta();
+    test_sidecar_ruta_derivada_de_la_imagen();
+    test_sidecar_roto_no_deja_el_atlas_a_medias();
 
     test_canvas_vacio_no_emite_nada();
     test_origen_arriba_izquierda();

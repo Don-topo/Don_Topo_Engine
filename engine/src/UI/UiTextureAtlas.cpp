@@ -5,8 +5,13 @@
 
 #include <stb_image.h>
 
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 
 namespace DonTopo
 {
@@ -14,6 +19,110 @@ namespace DonTopo
     {
         auto it = m_sprites.find(name);
         return it == m_sprites.end() ? nullptr : &it->second;
+    }
+
+    std::vector<std::string> UiTextureAtlas::spriteNames() const
+    {
+        std::vector<std::string> names;
+        names.reserve(m_sprites.size());
+        for (const auto& entry : m_sprites) names.push_back(entry.first);
+        std::sort(names.begin(), names.end());
+        return names;
+    }
+
+    std::string UiTextureAtlas::spriteSheetPathFor(const std::string& imagePath)
+    {
+        // El punto tiene que ser POSTERIOR al último separador: en
+        // "v1.2/hoja.png" el primer punto es de un directorio, y cortar por él
+        // dejaría el sidecar en otro sitio.
+        const size_t slash = imagePath.find_last_of("/\\");
+        const size_t dot   = imagePath.find_last_of('.');
+
+        const bool tieneExtension = dot != std::string::npos &&
+                                    (slash == std::string::npos || dot > slash);
+
+        const std::string base = tieneExtension ? imagePath.substr(0, dot) : imagePath;
+        return base + ".sprites.json";
+    }
+
+    bool UiTextureAtlas::loadSprites(const std::string& jsonPath)
+    {
+        std::ifstream in(jsonPath);
+        if (!in) return false;
+
+        nlohmann::json j;
+        try
+        {
+            in >> j;
+        }
+        catch (const std::exception&)
+        {
+            std::printf("[UI] sidecar de sprites ilegible: %s\n", jsonPath.c_str());
+            return false;
+        }
+
+        if (!j.is_object() || !j.contains("sprites") || !j["sprites"].is_object())
+        {
+            std::printf("[UI] sidecar sin bloque 'sprites': %s\n", jsonPath.c_str());
+            return false;
+        }
+
+        // Se monta aparte y se cambia al final: si algo revienta a mitad, el
+        // atlas se queda con los sprites que ya tenía en vez de con una lista
+        // trunca, que dibujaría la imagen entera y parecería un fallo de arte.
+        std::unordered_map<std::string, UiSpriteRect> leidos;
+
+        for (const auto& entry : j["sprites"].items())
+        {
+            const std::string& name = entry.key();
+            const auto&        v    = entry.value();
+            if (name.empty() || !v.is_object()) continue;
+
+            UiSpriteRect rect{};
+            rect.x      = v.value("x", 0.0f);
+            rect.y      = v.value("y", 0.0f);
+            rect.width  = v.value("w", 0.0f);
+            rect.height = v.value("h", 0.0f);
+
+            // Un rect de área nula o negativa da UVs degeneradas y un quad
+            // invisible, sin un solo error por ningún lado: fuera.
+            if (!(rect.width > 0.0f) || !(rect.height > 0.0f))
+            {
+                std::printf("[UI] sprite '%s' con tamano invalido en %s: se ignora\n",
+                            name.c_str(), jsonPath.c_str());
+                continue;
+            }
+
+            leidos[name] = rect;
+        }
+
+        m_sprites = std::move(leidos);
+        return true;
+    }
+
+    bool UiTextureAtlas::saveSprites(const std::string& jsonPath) const
+    {
+        std::error_code ec;
+        const std::filesystem::path file(jsonPath);
+        if (file.has_parent_path()) std::filesystem::create_directories(file.parent_path(), ec);
+
+        nlohmann::json sprites = nlohmann::json::object();
+        // Ordenados por nombre: así el fichero no cambia de orden entre
+        // guardados y el diff enseña lo que de verdad se ha tocado.
+        for (const std::string& name : spriteNames())
+        {
+            const UiSpriteRect& r = m_sprites.at(name);
+            sprites[name] = { {"x", r.x}, {"y", r.y}, {"w", r.width}, {"h", r.height} };
+        }
+
+        nlohmann::json j;
+        j["version"] = 1;
+        j["sprites"] = std::move(sprites);
+
+        std::ofstream out(jsonPath, std::ios::trunc);
+        if (!out) return false;
+        out << j.dump(2) << "\n";
+        return (bool)out;
     }
 
     UiUvRect UiTextureAtlas::uvRect(const std::string& name) const

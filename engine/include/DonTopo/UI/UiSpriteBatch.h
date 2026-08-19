@@ -103,6 +103,11 @@ namespace DonTopo
         // dibujaría con el set de otro, que es un fallo mudo.
         bool registerAtlas(GpuDevice& gpu, UiTextureAtlas& atlas);
 
+        // El sampler con el que se muestrean los atlas. Lo necesita el editor
+        // para enseñar uno en un ImGui::Image: la vista la tiene el atlas, pero
+        // el sampler es de aquí.
+        VkSampler sampler() const { return m_sampler; }
+
         // Con datos vacíos no graba ni un comando ni toca ningún buffer.
         //
         // canvasExtent es el espacio en el que se CONSTRUYÓ el UiDrawData (los

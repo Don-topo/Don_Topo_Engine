@@ -15,6 +15,7 @@
 #include "DonTopo/Editor/PropertiesPanel.h"
 #include "DonTopo/Editor/ContentBrowserPanel.h"
 #include "DonTopo/Editor/AnimatorPanel.h"
+#include "DonTopo/Editor/SpriteEditorPanel.h"
 #include "DonTopo/Editor/InputActionsPanel.h"
 #include "DonTopo/Editor/PerformancePanel.h"
 #include "DonTopo/Editor/LoadingModal.h"
@@ -304,6 +305,12 @@ private:
     // el que incluya EditorUI.h — mismo patrón que m_sceneFileDialog.
     std::unique_ptr<ScriptEditorPanel> m_scriptEditor;
     AnimatorPanel m_animatorPanel;
+    // Editor de sub-rects de un atlas. Se abre desde el campo Atlas de un
+    // Button, y la petición llega DIFERIDA: quien la pide (PropertiesPanel) lo
+    // hace mientras se está construyendo el EditorContext, que es justo lo que
+    // el panel necesita para abrir la imagen.
+    SpriteEditorPanel m_spriteEditor;
+    std::string       m_pendingSpriteAtlas;
     PerformancePanel m_performancePanel;
     // Mapa de acciones de input. Su constructor carga el JSON de persistencia,
     // así que el panel ya viene con lo de la sesión anterior al abrirlo.

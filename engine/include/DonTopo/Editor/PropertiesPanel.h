@@ -29,6 +29,11 @@ public:
     PropertiesPanel& operator=(const PropertiesPanel&) = delete;
 
     void draw(EditorContext& ctx);
+
+    // Tira la caché de nombres de sprite. La llama quien toque un sidecar por
+    // fuera (el editor de sprites): sin esto los combos siguen enseñando la
+    // lista con la que se abrió la sección.
+    void invalidateSpriteNames() { m_spriteNamesValid = false; }
     bool* GetOpenPtr() { return &m_open; }
     // Olvida TODO lo que las secciones tengan cacheado. Dos llamantes:
     //   - ScenePanel borró el nodo seleccionado: los punteros apuntan a
@@ -121,6 +126,18 @@ private:
     // cualquier otro origen futuro.
     void setButtonAssetPath(EditorContext& ctx, uint64_t ownerId, bool isFont,
                              const std::string& path);
+    // Nombres de sprite del atlas de una ruta, para poder ELEGIRLOS en vez de
+    // escribirlos a ciegas. Se consultan al renderer (que cachea el atlas por
+    // ruta) y se guardan aquí: sin esta caché, una ruta que no existe se
+    // intentaría abrir en cada frame que la sección esté visible.
+    //
+    // La lista se refresca sola al cambiar de ruta. Quien toque el sidecar por
+    // fuera —el editor de sprites— tiene que llamar a invalidateSpriteNames().
+    const std::vector<std::string>& spriteNamesFor(EditorContext& ctx, const std::string& atlasPath);
+
+    std::string              m_spriteNamesPath;      // ruta de la que salió la lista
+    std::vector<std::string> m_spriteNames;
+    bool                     m_spriteNamesValid = false;
     // Text: etiqueta de la UI 2D. Sección tras "Add" como el Button, con el
     // mismo rect y TODOS los campos de Text (contorno, sombra, wrap y overflow).
     void drawTextSection(EditorContext& ctx);

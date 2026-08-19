@@ -445,6 +445,7 @@ Los enums viajan como tablas de constantes enteras:
 | `b.normalSprite` / `hoverSprite` / `pressedSprite` / `disabledSprite` / `selectedSprite` | Nombres dentro del MISMO atlas |
 | `b.fadeDuration` | Segundos del fundido de `Animation` |
 | `b.text` / `b.fontPath` / `b.fontSize` / `b.textAlign` | Etiqueta (hijo `Text` que monta el sync); `fontPath` vacío = fuente por defecto |
+| `b.sprite`, `b.normalSprite`, … | **Nombre de un sub-rect del atlas**, no una ruta. Los define el Sprite Editor del editor y viven en `<atlas>.sprites.json`; un nombre que no esté en ese fichero dibuja la imagen entera |
 | `b:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect, en píxeles y anclas normalizadas |
 | `b:GetColor/SetColor(r,g,b,a)` | Color base |
 | `b:GetNormalColor/SetNormalColor`, `GetHoverColor/SetHoverColor`, `GetPressedColor/SetPressedColor`, `GetDisabledColor/SetDisabledColor`, `GetSelectedColor/SetSelectedColor` | Los 5 colores de estado |

@@ -591,6 +591,10 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
             m_scriptEditor->openFile(p);
         },
         [this]() { m_animatorPanel.open(); },
+        // Diferida: quien la pide lo hace MIENTRAS se construye este ctx, y el
+        // panel necesita el ctx (el renderer) para abrir la imagen.
+        [this](const std::string& atlasPath) { m_pendingSpriteAtlas = atlasPath; },
+        [this]() { m_propertiesPanel.invalidateSpriteNames(); },
         m_assetLoader,
         m_project,                 // sandbox de rutas del proyecto abierto
         m_loadingModal.active(),   // veta la edición mientras el modal carga
@@ -652,6 +656,14 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
     m_contentBrowserPanel.draw(ctx, sceneRoot);
     m_scriptEditor->draw();
     m_animatorPanel.draw(ctx);
+    // La petición de abrir el editor de sprites se atiende AQUÍ, con el ctx ya
+    // montado; el panel necesita el renderer para cargar la imagen.
+    if (!m_pendingSpriteAtlas.empty())
+    {
+        m_spriteEditor.open(ctx, m_pendingSpriteAtlas);
+        m_pendingSpriteAtlas.clear();
+    }
+    m_spriteEditor.draw(ctx);
     // Siempre, tambien cerrado: su draw() es quien apaga la captura de metricas
     // del Renderer cuando el panel deja de estar visible.
     m_performancePanel.draw(ctx);
@@ -758,6 +770,10 @@ void EditorUI::drawMenuBar()
             panelToggled |= ImGui::MenuItem("Content Browser", nullptr, m_contentBrowserPanel.GetOpenPtr());
             panelToggled |= ImGui::MenuItem("Script Editor", nullptr, m_scriptEditor->GetOpenPtr());
             panelToggled |= ImGui::MenuItem("Animator", nullptr, m_animatorPanel.GetOpenPtr());
+            // Sin persistir en los ajustes del proyecto a propósito: se abre
+            // para trocear un atlas concreto y se cierra, no es un panel de los
+            // que uno quiere encontrarse abiertos al arrancar.
+            ImGui::MenuItem("Sprite Editor", nullptr, m_spriteEditor.GetOpenPtr());
             panelToggled |= ImGui::MenuItem("Performance", nullptr, m_performancePanel.GetOpenPtr());
             panelToggled |= ImGui::MenuItem("Input Actions", nullptr, m_inputActionsPanel.GetOpenPtr());
             if (panelToggled)

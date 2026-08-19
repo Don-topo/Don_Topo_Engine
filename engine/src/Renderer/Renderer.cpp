@@ -636,6 +636,10 @@ namespace DonTopo {
         // destruir el pool primero dejaria los handles colgando.
         for (auto& atlas : m_uiAtlases) atlas->destroy(m_gpu);
         m_uiAtlases.clear();
+        // Punteros a lo que se acaba de destruir: fuera antes de que nadie los
+        // pueda volver a pedir.
+        m_uiAtlasByPath.clear();
+        m_uiAtlasImGuiId.clear();
         for (auto& font : m_uiFonts) font->destroy(m_gpu);
         m_uiFonts.clear();
         m_uiBatch.shutdown(m_gpu);
@@ -645,15 +649,38 @@ namespace DonTopo {
 
     UiTextureAtlas* Renderer::loadUiAtlas(const std::string& path)
     {
+        // La misma ruta dos veces es el mismo atlas: el editor lo consulta para
+        // enseñar sus sprites y el sync lo pide cada vez que cambia un widget.
+        if (auto it = m_uiAtlasByPath.find(path); it != m_uiAtlasByPath.end())
+            return it->second;
+
         auto atlas = std::make_unique<UiTextureAtlas>();
         if (!atlas->loadFromFile(m_gpu, m_res, path)) return nullptr;
+        // Sub-rects, si los hay: sin sidecar el atlas se usa entero, que es lo
+        // que hacia siempre. No es un fallo que no este.
+        atlas->loadSprites(UiTextureAtlas::spriteSheetPathFor(path));
         if (!m_uiBatch.registerAtlas(m_gpu, *atlas))
         {
             atlas->destroy(m_gpu);
             return nullptr;
         }
         m_uiAtlases.push_back(std::move(atlas));
+        m_uiAtlasByPath[path] = m_uiAtlases.back().get();
         return m_uiAtlases.back().get();
+    }
+
+    uint64_t Renderer::uiAtlasTextureId(const UiTextureAtlas* atlas)
+    {
+        // Sin editor no hay a quién registrarla, y sin vista no hay nada subido.
+        if (!atlas || !m_ui || atlas->view() == VK_NULL_HANDLE) return 0;
+
+        if (auto it = m_uiAtlasImGuiId.find(atlas); it != m_uiAtlasImGuiId.end())
+            return it->second;
+
+        const uint64_t id = m_ui->registerUiTexture((uint64_t)m_uiBatch.sampler(),
+                                                    (uint64_t)atlas->view());
+        m_uiAtlasImGuiId[atlas] = id;
+        return id;
     }
 
     UiFont* Renderer::loadUiFont(const std::string& path, float bakePx)

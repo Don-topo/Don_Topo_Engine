@@ -51,6 +51,32 @@ namespace DonTopo
         void addSprite(const std::string& name, const UiSpriteRect& rect) { m_sprites[name] = rect; }
         bool hasSprite(const std::string& name) const { return m_sprites.count(name) != 0; }
         const UiSpriteRect* findSprite(const std::string& name) const;
+        bool removeSprite(const std::string& name) { return m_sprites.erase(name) != 0; }
+        void clearSprites() { m_sprites.clear(); }
+        size_t spriteCount() const { return m_sprites.size(); }
+
+        // Los nombres registrados, ORDENADOS alfabéticamente. El mapa no tiene
+        // orden y el editor los pinta en un combo: una lista que baila de un
+        // frame a otro es inusable, y el índice seleccionado dejaría de
+        // significar lo mismo entre dos frames.
+        std::vector<std::string> spriteNames() const;
+
+        // --- Sidecar de sprites ------------------------------------------------
+        // Los sub-rects viven JUNTO a la imagen y no dentro de la escena: un
+        // atlas troceado una vez sirve para todos los widgets que lo usen, y dos
+        // escenas distintas no pueden discrepar sobre dónde está cada sprite.
+        //
+        // "assets/ui/botones.png" -> "assets/ui/botones.sprites.json".
+        static std::string spriteSheetPathFor(const std::string& imagePath);
+
+        // Carga (y REEMPLAZA) los sprites del atlas. Sin fichero, con JSON roto
+        // o con una raíz que no es la esperada devuelve false y NO toca los que
+        // ya hubiera: media lista es peor que ninguna, porque el widget dibuja
+        // el atlas entero en vez de su sprite y parece un problema de arte.
+        // Las entradas sueltas que no valen (sin nombre, o de área 0) se saltan.
+        bool loadSprites(const std::string& jsonPath);
+        // Escribe el sidecar entero, creando los directorios que falten.
+        bool saveSprites(const std::string& jsonPath) const;
 
         // UVs del sprite. Sin sprite (o con un atlas de tamaño 0) devuelve el
         // rect completo: una textura suelta se usa igual que un atlas de un

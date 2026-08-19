@@ -803,6 +803,27 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
     }
 }
 
+const std::vector<std::string>& PropertiesPanel::spriteNamesFor(EditorContext& ctx,
+                                                                const std::string& atlasPath)
+{
+    if (m_spriteNamesValid && m_spriteNamesPath == atlasPath) return m_spriteNames;
+
+    m_spriteNamesPath  = atlasPath;
+    m_spriteNamesValid = true;
+    m_spriteNames.clear();
+
+    if (atlasPath.empty() || !ctx.renderer) return m_spriteNames;
+
+    // loadUiAtlas cachea por ruta, así que esto NO carga una segunda copia del
+    // atlas que ya está dibujándose: devuelve ese mismo. Y si la ruta no vale,
+    // el resultado (lista vacía) se queda cacheado hasta que cambie la ruta, en
+    // vez de reintentar el fichero en cada frame.
+    if (const UiTextureAtlas* atlas = ctx.renderer->loadUiAtlas(atlasPath))
+        m_spriteNames = atlas->spriteNames();
+
+    return m_spriteNames;
+}
+
 void PropertiesPanel::setButtonAssetPath(EditorContext& ctx, uint64_t ownerId, bool isFont,
                                           const std::string& path)
 {
@@ -1086,6 +1107,63 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
             }
         };
 
+        // Un sprite es un NOMBRE dentro del atlas, no texto libre. Con sidecar
+        // (<atlas>.sprites.json) se elige de la lista; sin él se cae al campo de
+        // texto de siempre, que sigue valiendo para un atlas troceado a mano y
+        // para una escena que ya traía un nombre escrito.
+        auto spriteField = [&](const char* label, StrRef acc)
+        {
+            const std::vector<std::string>& nombres = spriteNamesFor(ctx, b->atlasPath);
+            if (nombres.empty()) { inputText(label, acc); return; }
+
+            const std::string before = acc(*b);
+
+            // El vacío es "(imagen entera)": un atlas sin sprite se dibuja
+            // completo, que es lo que hace UiTextureAtlas::uvRect sin nombre.
+            std::vector<const char*> items;
+            items.reserve(nombres.size() + 2);
+            items.push_back("(imagen entera)");
+            for (const std::string& n : nombres) items.push_back(n.c_str());
+
+            int current = 0;
+            for (size_t i = 0; i < nombres.size(); ++i)
+                if (nombres[i] == before) { current = (int)i + 1; break; }
+
+            // Un nombre que ya no está en el atlas NO se pierde ni se corrige
+            // solo: se enseña al final marcado, y el componente sigue diciendo
+            // lo que decía hasta que el usuario elija otra cosa.
+            std::string huerfano;
+            if (current == 0 && !before.empty())
+            {
+                huerfano = before + "  (no esta en el atlas)";
+                items.push_back(huerfano.c_str());
+                current = (int)items.size() - 1;
+            }
+
+            int idx = current;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
+            if (ImGui::Combo(label, &idx, items.data(), (int)items.size()) && idx != current)
+            {
+                // El huérfano no es un destino: elegirlo deja el valor como está.
+                const std::string after = (idx == 0)                    ? std::string()
+                                        : (idx <= (int)nombres.size())  ? nombres[(size_t)idx - 1]
+                                                                        : before;
+                if (after != before)
+                {
+                    acc(*b) = after;
+                    const std::string lbl = std::string(label) + " del botón de '" + owner + "'";
+                    ctx.pushLog(lbl + " cambiado a '" + after + "'");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+                            lbl, before, after,
+                            [scene, id, acc](const std::string& val) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasButton()) acc(*go->getButton()) = val;
+                            }));
+                }
+            }
+        };
+
         ImGui::TextDisabled("Rect");
         dragVec2("Anchor Min", +[](ButtonComponent& c) -> glm::vec2& { return c.anchorMin; },
                  0.01f, 0.0f, 1.0f, "%.3f");
@@ -1154,7 +1232,14 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
                  +[](ButtonComponent& c) -> std::string& { return c.atlasPath; },
                  "ButtonAtlasDlg", "Choose atlas", ".png,.jpg,.jpeg,.bmp,.tga",
                  "Drop .png/.jpg/.bmp/.tga here");
-        inputText("Sprite", +[](ButtonComponent& c) -> std::string& { return c.sprite; });
+        // Sin atlas no hay nada que trocear, y el botón deshabilitado dice por
+        // qué mejor que su ausencia.
+        ImGui::BeginDisabled(b->atlasPath.empty() || !ctx.openSpriteEditor);
+        if (ImGui::Button("Editar sprites...")) ctx.openSpriteEditor(b->atlasPath);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered() && b->atlasPath.empty())
+            ImGui::SetTooltip("Primero elige un atlas");
+        spriteField("Sprite", +[](ButtonComponent& c) -> std::string& { return c.sprite; });
 
         ImGui::TextDisabled("Estados");
         checkBox("Interactable", +[](ButtonComponent& c) -> bool& { return c.interactable; });
@@ -1173,11 +1258,11 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
         colorEdit("Disabled##col", +[](ButtonComponent& c) -> glm::vec4& { return c.disabledColor; });
         colorEdit("Selected##col", +[](ButtonComponent& c) -> glm::vec4& { return c.selectedColor; });
 
-        inputText("Normal##spr",   +[](ButtonComponent& c) -> std::string& { return c.normalSprite; });
-        inputText("Hover##spr",    +[](ButtonComponent& c) -> std::string& { return c.hoverSprite; });
-        inputText("Pressed##spr",  +[](ButtonComponent& c) -> std::string& { return c.pressedSprite; });
-        inputText("Disabled##spr", +[](ButtonComponent& c) -> std::string& { return c.disabledSprite; });
-        inputText("Selected##spr", +[](ButtonComponent& c) -> std::string& { return c.selectedSprite; });
+        spriteField("Normal##spr",   +[](ButtonComponent& c) -> std::string& { return c.normalSprite; });
+        spriteField("Hover##spr",    +[](ButtonComponent& c) -> std::string& { return c.hoverSprite; });
+        spriteField("Pressed##spr",  +[](ButtonComponent& c) -> std::string& { return c.pressedSprite; });
+        spriteField("Disabled##spr", +[](ButtonComponent& c) -> std::string& { return c.disabledSprite; });
+        spriteField("Selected##spr", +[](ButtonComponent& c) -> std::string& { return c.selectedSprite; });
 
         dragFloat("Fade Duration", +[](ButtonComponent& c) -> float& { return c.fadeDuration; },
                   0.01f, 0.0f, 10.0f, "%.3f");

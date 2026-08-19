@@ -168,6 +168,14 @@ namespace DonTopo
             // el que hay que meterle el raton a UiCanvas::updateInput.
             virtual uint32_t uiWidth() const                                  = 0;
             virtual uint32_t uiHeight() const                                 = 0;
+
+            // Identificador de un atlas ya cargado PARA LA INTERFAZ (lo que
+            // ImGui::Image entiende por textura), o 0 si ese atlas no está
+            // subido. Lo pide el editor de sprites, que necesita enseñar la
+            // imagen sobre la que se dibujan los sub-rects. El valor lo fabrica
+            // cada backend a su manera y se cachea: registrar la misma textura
+            // en cada frame agota el pool de descriptores en segundos.
+            virtual uint64_t uiAtlasTextureId(const UiTextureAtlas* atlas)    = 0;
             virtual float    viewportAspect() const                           = 0;
 
             // La capa de interfaz que dibuja encima. El backend la llama dentro

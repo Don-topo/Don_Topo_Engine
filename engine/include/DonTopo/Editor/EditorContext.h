@@ -59,6 +59,13 @@ struct EditorContext {
     // PropertiesPanel — mismo caso y mismo patrón que openScript). Vacío por
     // defecto: solo lo rellena EditorUI::draw().
     std::function<void()> openAnimator;
+    // Abre el editor de sprites sobre esa imagen (EditorUI::m_spriteEditor,
+    // fuera del alcance de PropertiesPanel — mismo patrón que openAnimator).
+    std::function<void(const std::string&)> openSpriteEditor;
+    // Alguien ha cambiado los sub-rects de un atlas. Lo usa PropertiesPanel para
+    // tirar su caché de nombres: sin esto los combos siguen enseñando la lista
+    // anterior hasta cambiar de ruta. Vacío por defecto.
+    std::function<void()> onSpritesChanged;
 
     // Loader de assets asíncrono (vive en main.cpp, no-propietario). Sin él,
     // el drop de FBX no encola nada (loadMeshForSelected es no-op). Lo rellena

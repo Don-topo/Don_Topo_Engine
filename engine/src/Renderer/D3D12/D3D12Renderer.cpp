@@ -1151,6 +1151,10 @@ struct D3D12Renderer::Impl {
     // textura quiere.
     std::vector<std::unique_ptr<UiTextureAtlas>>          uiAtlases;
     std::vector<std::unique_ptr<UiFont>>                  uiFonts;
+    // Por RUTA: la misma imagen pedida dos veces es el mismo atlas, y así el
+    // editor toca los sprites del atlas que se está dibujando, no los de una
+    // copia. Mismo criterio que el backend de Vulkan.
+    std::unordered_map<std::string, UiTextureAtlas*>      uiAtlasByPath;
     std::unordered_map<const UiTextureAtlas*, UINT>       uiAtlasSrv;
     std::vector<D3D12MA::Allocation*>                     uiAtlasTextures;
     UINT                                                  uiNextAtlasSlot = 0;
@@ -8602,14 +8606,38 @@ UiTextureAtlas* D3D12Renderer::loadUiAtlas(const std::string& path)
     if (!d.initialized)
         return nullptr;
 
+    if (auto it = d.uiAtlasByPath.find(path); it != d.uiAtlasByPath.end())
+        return it->second;
+
     auto atlas = std::make_unique<UiTextureAtlas>();
     if (!atlas->loadPixelsFromFile(path))
         return nullptr;
+    // Sub-rects, si los hay: mismo sidecar y mismas reglas que en Vulkan.
+    atlas->loadSprites(UiTextureAtlas::spriteSheetPathFor(path));
     if (!d.registerUiAtlas(*atlas))
         return nullptr;
 
     d.uiAtlases.push_back(std::move(atlas));
+    d.uiAtlasByPath[path] = d.uiAtlases.back().get();
     return d.uiAtlases.back().get();
+}
+
+uint64_t D3D12Renderer::uiAtlasTextureId(const UiTextureAtlas* atlas)
+{
+    Impl& d = *m_impl;
+    if (!atlas || !d.srvHeap)
+        return 0;
+
+    // El SRV ya existe: lo creó registerUiAtlas en el heap que la interfaz
+    // comparte con el backend, y su handle de GPU ES lo que ImGui entiende por
+    // textura (mismo criterio que EditorUI::registerUiTexture en D3D12).
+    const auto it = d.uiAtlasSrv.find(atlas);
+    if (it == d.uiAtlasSrv.end())
+        return 0;
+
+    D3D12_GPU_DESCRIPTOR_HANDLE handle = d.srvHeap->GetGPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<UINT64>(it->second) * d.srvSize;
+    return handle.ptr;
 }
 
 UiFont* D3D12Renderer::loadUiFont(const std::string& path, float bakePx)
