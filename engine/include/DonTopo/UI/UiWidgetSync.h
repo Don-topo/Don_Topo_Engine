@@ -3,7 +3,9 @@
 // vivo del canvas. Vivía en TextComponent.h por accidente histórico: el primer
 // widget que la necesitó fue el Text, y se quedó ahí. No tiene nada que ver con
 // el componente de texto.
+#include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -229,6 +231,80 @@ namespace DonTopo
         std::unordered_map<std::string, UiTextureAtlas*> atlases;
         std::unordered_map<std::string, UiFont*>         fonts;
     };
+
+    // Un canvas VIVO del Renderer: su árbol, su caché de sync y lo que hay que
+    // saber para dibujarlo. Uno por CanvasComponent de la escena.
+    struct UiCanvasSlot
+    {
+        uint64_t           ownerId = 0;
+        UiCanvas           canvas;
+        UiWidgetSyncCache  cache;
+        UiDrawData         drawData;
+        UiCanvasRenderMode mode = UiCanvasRenderMode::ScreenSpace;
+        glm::mat4          model{1.0f};
+        bool               depthTest = true;
+        // Distancia al ojo, para ordenar los de mundo de lejos a cerca.
+        float              viewDepth = 0.0f;
+    };
+
+    // Reordena `slots` para que casen uno a uno con `bindings`, emparejando por
+    // ownerId. Los slots que sobreviven CONSERVAN su árbol y su caché: sin esto,
+    // reordenar los canvas en la jerarquía reconstruiría árboles que no han
+    // cambiado, y eso se ve como un parpadeo.
+    inline void matchUiCanvasSlots(const std::vector<UiCanvasBinding>& bindings,
+                                   std::vector<std::unique_ptr<UiCanvasSlot>>& slots)
+    {
+        std::vector<std::unique_ptr<UiCanvasSlot>> nuevos;
+        nuevos.reserve(bindings.size());
+
+        for (const UiCanvasBinding& b : bindings)
+        {
+            auto it = std::find_if(slots.begin(), slots.end(),
+                [&](const std::unique_ptr<UiCanvasSlot>& s) {
+                    return s && s->ownerId == b.ownerId;
+                });
+
+            if (it != slots.end())
+            {
+                nuevos.push_back(std::move(*it));   // se lleva árbol y caché
+            }
+            else
+            {
+                auto s = std::make_unique<UiCanvasSlot>();
+                s->ownerId = b.ownerId;
+                nuevos.push_back(std::move(s));
+            }
+        }
+        // Lo que quede en `slots` es de canvas que ya no están: se destruye al
+        // salir del scope, y con ello su árbol y su caché.
+        slots = std::move(nuevos);
+    }
+
+    // Los canvas de MUNDO en orden de pintado: de lejos a cerca. Van con alpha,
+    // así que pintarlos al revés mezcla mal. Contra la geometría manda el depth
+    // buffer; entre ellos, manda esto.
+    //
+    // Los de PANTALLA no entran: esos van en su propio pase, sin profundidad y en
+    // el orden del árbol.
+    inline void sortWorldCanvasesBackToFront(
+        const std::vector<std::unique_ptr<UiCanvasSlot>>& slots,
+        const glm::mat4& view, std::vector<UiCanvasSlot*>& out)
+    {
+        out.clear();
+        for (const auto& s : slots)
+        {
+            if (!s || s->mode != UiCanvasRenderMode::World) continue;
+            const glm::vec3 pos = glm::vec3(s->model[3]);
+            // +z hacia delante: la vista deja el ojo mirando a -Z, así que se
+            // niega para que "más grande" signifique "más lejos".
+            s->viewDepth = -(view * glm::vec4(pos, 1.0f)).z;
+            out.push_back(s.get());
+        }
+        std::sort(out.begin(), out.end(),
+                  [](const UiCanvasSlot* a, const UiCanvasSlot* b) {
+                      return a->viewDepth > b->viewDepth;   // lejos primero
+                  });
+    }
 
     // Vuelca los widgets de la escena en el canvas vivo. Las listas de
     // UiWidgetLists van en orden de recorrido de la escena y traen el id de cada

@@ -5979,6 +5979,73 @@ static void test_scroll_view_hit_test_maps_back_to_gameobject()
     CHECK(uiScrollbarOwnerId(uiScrollViewNodeName(42ull)) == 0ull);
 }
 
+// Los slots se emparejan por ownerId, NO por indice. Reordenar los canvas en la
+// jerarquia (o borrar uno de en medio) no puede resetear la cache del que no se
+// ha movido: si lo hiciera, mover un enemigo reconstruiria su barra de vida
+// entera y se veria como un parpadeo.
+static void test_ui_slots_se_emparejan_por_owner_id()
+{
+    std::vector<std::unique_ptr<UiCanvasSlot>> slots;
+    CanvasComponent c;
+
+    std::vector<UiCanvasBinding> b(2);
+    b[0].ownerId = 7ull;  b[0].canvas = &c;
+    b[1].ownerId = 9ull;  b[1].canvas = &c;
+    matchUiCanvasSlots(b, slots);
+    CHECK(slots.size() == 2);
+    if (slots.size() != 2) return;
+    const UiCanvas* arbol7 = &slots[0]->canvas;
+    const UiCanvas* arbol9 = &slots[1]->canvas;
+    CHECK(slots[0]->ownerId == 7ull);
+    CHECK(slots[1]->ownerId == 9ull);
+
+    // Se INVIERTE el orden: cada slot tiene que seguir a SU dueno, con su arbol.
+    std::vector<UiCanvasBinding> b2(2);
+    b2[0].ownerId = 9ull; b2[0].canvas = &c;
+    b2[1].ownerId = 7ull; b2[1].canvas = &c;
+    matchUiCanvasSlots(b2, slots);
+    CHECK(slots.size() == 2);
+    if (slots.size() != 2) return;
+    CHECK(slots[0]->ownerId == 9ull);
+    CHECK(slots[1]->ownerId == 7ull);
+    CHECK(&slots[0]->canvas == arbol9);
+    CHECK(&slots[1]->canvas == arbol7);
+
+    // Y uno que desaparece se lleva su slot; uno nuevo estrena el suyo.
+    std::vector<UiCanvasBinding> b3(1);
+    b3[0].ownerId = 42ull; b3[0].canvas = &c;
+    matchUiCanvasSlots(b3, slots);
+    CHECK(slots.size() == 1);
+    if (slots.empty()) return;
+    CHECK(slots[0]->ownerId == 42ull);
+}
+
+// Y el orden de pintado de los canvas de MUNDO: de lejos a cerca. Van con alpha,
+// asi que pintarlos al reves mezcla mal y se ve como un halo. Contra la
+// geometria manda el depth; entre ellos, manda esto.
+static void test_world_canvases_se_ordenan_de_lejos_a_cerca()
+{
+    std::vector<std::unique_ptr<UiCanvasSlot>> slots;
+    for (float z : { -2.0f, -10.0f, -6.0f })
+    {
+        auto s = std::make_unique<UiCanvasSlot>();
+        s->mode  = UiCanvasRenderMode::World;
+        s->model = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, z));
+        slots.push_back(std::move(s));
+    }
+
+    // Camara en el origen mirando a -Z: el de z = -10 es el mas lejano.
+    const glm::mat4 vista(1.0f);
+    std::vector<UiCanvasSlot*> orden;
+    sortWorldCanvasesBackToFront(slots, vista, orden);
+
+    CHECK(orden.size() == 3);
+    if (orden.size() != 3) return;
+    CHECK(nearlyEqual(orden[0]->model[3].z, -10.0f));
+    CHECK(nearlyEqual(orden[1]->model[3].z, -6.0f));
+    CHECK(nearlyEqual(orden[2]->model[3].z, -2.0f));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -6190,7 +6257,8 @@ int main()
     test_scroll_view_wheel_moves_the_component();
     test_scroll_view_hit_test_maps_back_to_gameobject();
 
-
+    test_ui_slots_se_emparejan_por_owner_id();
+    test_world_canvases_se_ordenan_de_lejos_a_cerca();
 
 
     am.shutdown();
