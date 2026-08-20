@@ -539,10 +539,13 @@ int main(int argc, char** argv)
         // Una lista por tipo de widget más la jerarquía de la escena aplanada a
         // (id, id del padre con UI), todo dentro de UiWidgetLists.
         DonTopo::UiWidgetLists uiWidgets;
-        // Compat temporal: la escena ya agrupa por canvas
-        // (Scene::collectCanvases), pero este bucle solo dibuja UNO — el
-        // primero en pre-orden, igual que antes. Dibujar todos los canvas de la
-        // escena es trabajo del renderer world-space, aún pendiente.
+        // SHIM TEMPORAL — lo sustituye syncUiCanvases (Task 5 del plan del canvas de
+        // mundo). Se queda con el PRIMER canvas y nada mas: los widgets de cualquier
+        // otro canvas de la escena NO SE DIBUJAN. Antes si se dibujaban (el
+        // collectUiWidgets viejo recogia todo el arbol sin mirar de que canvas colgaba,
+        // mal anclado pero visible), asi que esto es una regresion a proposito y
+        // acotada: CanvasComponent no tiene invariante de unicidad, o sea que una
+        // escena con dos canvas hermanos es legal y hoy perderia el segundo.
         std::vector<DonTopo::UiCanvasBinding> uiCanvases;
 
         while (!window.shouldClose())
