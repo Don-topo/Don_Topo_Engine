@@ -6,8 +6,6 @@
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/GpuResources.h"
 
-#include <glm/ext/matrix_clip_space.hpp>
-
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -2075,6 +2073,7 @@ namespace DonTopo
     }
 
     void UiSpriteBatch::record(GpuDevice& gpu, VkCommandBuffer cmd, const UiDrawData& data,
+                               const glm::mat4& transform,
                                VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame)
     {
         (void)gpu;   // el crecimiento del buffer ya lo resolvió beginFrame()
@@ -2106,21 +2105,6 @@ namespace DonTopo
         std::memcpy(static_cast<uint16_t*>(m_indexMapped[frame]) + indexBase,
                     data.indices.data(), data.indices.size() * sizeof(uint16_t));
 
-        // bottom=0 y top=alto: (0,0) cae ARRIBA a la izquierda. Parece del revés
-        // y es justo lo contrario: en Vulkan el +Y de NDC va hacia ABAJO, así
-        // que la receta de OpenGL (top=0, bottom=alto) deja [1][1] negativo y
-        // dibuja la UI ENTERA espejada — invisible mientras solo hubo quads de
-        // color, evidente en cuanto se dibujó la primera letra. RH_ZO porque
-        // Vulkan clipea z fuera de [0,1] y glm::ortho a secas da [-1,1].
-        // Del ESPACIO DEL CANVAS (píxeles de salida), no del framebuffer: los
-        // vértices llegan en esos píxeles y el viewport ya estira el NDC al
-        // framebuffer entero. Con SSAA eso deja la UI supersampleada en vez de
-        // encogida a 1/factor, que es lo que salía al proyectar con el extent
-        // del render.
-        const glm::mat4 proj = glm::orthoRH_ZO(0.0f, (float)canvasExtent.width,
-                                               0.0f, (float)canvasExtent.height,
-                                               0.0f, 1.0f);
-
         // Los scissor SÍ van en píxeles del framebuffer: un VkRect2D no conoce
         // otro espacio. Hacia fuera (floor/ceil) por lo mismo que
         // scissorFromRect, y con los dos extents iguales el entero sale intacto.
@@ -2128,7 +2112,7 @@ namespace DonTopo
         const double sy = (double)fbExtent.height / (double)canvasExtent.height;
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
-        vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &proj);
+        vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &transform);
 
         // El offset de bind es el de ESTE canvas dentro del buffer compartido
         // del frame: con él ya aplicado, los índices del batch (batch.firstIndex

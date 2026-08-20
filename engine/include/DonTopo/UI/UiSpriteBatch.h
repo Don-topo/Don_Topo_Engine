@@ -170,7 +170,13 @@ namespace DonTopo
         // el cursor que dejó beginFrame) y no siempre en el offset 0: con un
         // solo canvas por frame daba igual, pero con N, bindear siempre en 0
         // haría que cada llamada pisara los vértices de la anterior.
+        //
+        // transform es proj*view*model ya multiplicada: para un canvas de
+        // pantalla es la ortográfica de siempre, y para uno de mundo (tarea
+        // posterior) llevará también la cámara y la matriz del canvas. Quien
+        // llama decide cuál es; record() ya no calcula ninguna.
         void record(GpuDevice& gpu, VkCommandBuffer cmd, const UiDrawData& data,
+                    const glm::mat4& transform,
                     VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame);
 
     private:

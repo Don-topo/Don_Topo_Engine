@@ -1150,7 +1150,11 @@ struct D3D12Renderer::Impl {
 
     void createUiPipeline();
     void ensureUiBuffers(UINT vertexCount, UINT indexCount);
-    void recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv);
+    // transform es proj*view*model ya multiplicada: para los canvas de pantalla
+    // de hoy es la ortográfica de siempre (la calcula quien llama), y para uno
+    // de mundo (tarea posterior) llevará también la cámara y la matriz del
+    // canvas.
+    void recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, const glm::mat4& transform);
 
     // Atlas y fuentes de la UI. El backend es su dueño: los widgets solo
     // guardan el puntero, que es también la clave con la que el lote dice qué
@@ -6069,7 +6073,7 @@ void D3D12Renderer::Impl::ensureUiBuffers(UINT vertexCount, UINT indexCount)
          indexCount, sizeof(uint16_t));
 }
 
-void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
+void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, const glm::mat4& transform)
 {
     if (!uiPipeline)
         return;
@@ -6096,12 +6100,6 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
     if (!uiVertexMapped[frameIndex] || !uiIndexMapped[frameIndex])
         return;
 
-    // Ortográfica en píxeles con el origen ARRIBA a la izquierda, que es como
-    // vienen las posiciones. Sin voltear nada más: el viewport de salida ya va
-    // con altura negativa en el resto de pases, así que aquí se pone recto.
-    const glm::mat4 proj = glm::orthoRH_ZO(0.0f, static_cast<float>(outWidth),
-                                           static_cast<float>(outHeight), 0.0f, -1.0f, 1.0f);
-
     D3D12_VIEWPORT viewport{};
     viewport.Width    = static_cast<float>(outWidth);
     viewport.Height   = static_cast<float>(outHeight);
@@ -6120,7 +6118,7 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
     commandList->RSSetViewports(1, &viewport);
     commandList->SetPipelineState(uiPipeline.Get());
     commandList->SetGraphicsRootSignature(uiRootSignature.Get());
-    commandList->SetGraphicsRoot32BitConstants(0, 16, &proj[0][0], 0);
+    commandList->SetGraphicsRoot32BitConstants(0, 16, &transform[0][0], 0);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     // Sub-asignación DENTRO del mismo buffer: cada canvas escribe a partir de
@@ -6457,7 +6455,13 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     // UI del juego, encima de la escena ya compuesta y por debajo de la del
     // editor (que se graba después, sobre el backbuffer). Con el canvas vacío no
     // graba ni un comando.
-    recordUiCanvas(backBufferRtv);
+    //
+    // Ortográfica en píxeles con el origen ARRIBA a la izquierda, que es como
+    // vienen las posiciones. Sin voltear nada más: el viewport de salida ya va
+    // con altura negativa en el resto de pases, así que aquí se pone recto.
+    const glm::mat4 uiProj = glm::orthoRH_ZO(0.0f, static_cast<float>(outWidth),
+                                             static_cast<float>(outHeight), 0.0f, -1.0f, 1.0f);
+    recordUiCanvas(backBufferRtv, uiProj);
 
     transition(ldrAllocation->GetResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                D3D12_RESOURCE_STATE_RENDER_TARGET);

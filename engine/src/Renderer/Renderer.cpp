@@ -1965,12 +1965,27 @@ namespace DonTopo {
 
                 m_uiBatch.beginFrame(m_gpu, m_currentFrame, uiTotalVertices, uiTotalIndices);
 
+                // bottom=0 y top=alto: (0,0) cae ARRIBA a la izquierda. Parece del revés
+                // y es justo lo contrario: en Vulkan el +Y de NDC va hacia ABAJO, así
+                // que la receta de OpenGL (top=0, bottom=alto) deja [1][1] negativo y
+                // dibuja la UI ENTERA espejada — invisible mientras solo hubo quads de
+                // color, evidente en cuanto se dibujó la primera letra. RH_ZO porque
+                // Vulkan clipea z fuera de [0,1] y glm::ortho a secas da [-1,1].
+                // Del ESPACIO DEL CANVAS (píxeles de salida), no del framebuffer: los
+                // vértices llegan en esos píxeles y el viewport ya estira el NDC al
+                // framebuffer entero. Con SSAA eso deja la UI supersampleada en vez de
+                // encogida a 1/factor, que es lo que salía al proyectar con el extent
+                // del render.
+                const glm::mat4 uiProj = glm::orthoRH_ZO(0.0f, (float)uiExtent.width,
+                                                         0.0f, (float)uiExtent.height,
+                                                         0.0f, 1.0f);
+
                 // Canvas y framebuffer son ya el MISMO espacio (pixeles de
                 // salida): los scissor no se escalan.
                 for (auto& s : m_uiSlots)
                 {
                     if (!s || s->mode != UiCanvasRenderMode::ScreenSpace) continue;
-                    m_uiBatch.record(m_gpu, cmd, s->drawData, uiExtent, uiExtent, m_currentFrame);
+                    m_uiBatch.record(m_gpu, cmd, s->drawData, uiProj, uiExtent, uiExtent, m_currentFrame);
                 }
                 vkCmdEndRenderPass(cmd);
             }
