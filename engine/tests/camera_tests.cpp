@@ -6034,6 +6034,21 @@ static void test_world_canvases_se_ordenan_de_lejos_a_cerca()
         slots.push_back(std::move(s));
     }
 
+    // Un cuarto slot de PANTALLA, con una z que caeria EN MEDIO del orden si
+    // el filtro de modo se colara: entre el de -10 y el de -2. Si alguien
+    // borra el "continue" (o invierte la condicion) del filtro de
+    // sortWorldCanvasesBackToFront, este slot no solo cambia el tamano de
+    // `orden`, tambien se cuela en medio y descuadra el orden esperado — el
+    // test falla por dos sitios a la vez, no solo por el tamano.
+    UiCanvasSlot* pantalla = nullptr;
+    {
+        auto s = std::make_unique<UiCanvasSlot>();
+        s->mode  = UiCanvasRenderMode::ScreenSpace;
+        s->model = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -4.0f));
+        pantalla = s.get();
+        slots.push_back(std::move(s));
+    }
+
     // Camara en el origen mirando a -Z: el de z = -10 es el mas lejano.
     const glm::mat4 vista(1.0f);
     std::vector<UiCanvasSlot*> orden;
@@ -6044,6 +6059,11 @@ static void test_world_canvases_se_ordenan_de_lejos_a_cerca()
     CHECK(nearlyEqual(orden[0]->model[3].z, -10.0f));
     CHECK(nearlyEqual(orden[1]->model[3].z, -6.0f));
     CHECK(nearlyEqual(orden[2]->model[3].z, -2.0f));
+
+    // El de pantalla no debe aparecer en absoluto en la lista de mundo.
+    CHECK(orden[0] != pantalla);
+    CHECK(orden[1] != pantalla);
+    CHECK(orden[2] != pantalla);
 }
 
 int main()
