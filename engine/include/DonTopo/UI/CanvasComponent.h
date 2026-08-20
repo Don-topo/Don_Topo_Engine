@@ -1,6 +1,9 @@
 #pragma once
 #include "DonTopo/UI/UiCanvas.h"
 
+#include <glm/geometric.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
 namespace DonTopo
 {
     // Dónde se dibuja el canvas. ScreenSpace es lo de siempre: una ortográfica en
@@ -89,4 +92,70 @@ namespace DonTopo
                 canvas.aspectRatio         = aspectRatio;
             }
     };
+
+    // Matriz de MODELO de un canvas de mundo: de píxeles del canvas a unidades
+    // del mundo. Función libre y no método a propósito — necesita la vista de la
+    // cámara para el billboard, y el componente no tiene por qué saber de
+    // cámaras. Aquí y no en el Renderer para poder probarla sin GPU.
+    //
+    // El canvas crece hacia ABAJO y el mundo hacia ARRIBA, así que la Y va
+    // NEGADA. Y el canvas se centra en el objeto: su píxel (w/2, h/2) cae
+    // exactamente en la posición del GameObject.
+    inline glm::mat4 uiWorldCanvasMatrix(const CanvasComponent& c, glm::vec2 canvasSize,
+                                         const glm::mat4& worldTransform, const glm::mat4& view)
+    {
+        const float s = c.worldScale;
+
+        // Base del objeto: su transform, o una que mire a la cámara si hay
+        // billboard. La POSICIÓN siempre sale del transform; lo que el billboard
+        // sustituye es la rotación (y con ella la escala del objeto, que en un
+        // canvas encarado no significa nada).
+        glm::mat4 base = worldTransform;
+        if (c.billboard != UiBillboard::None)
+        {
+            const glm::vec3 pos = glm::vec3(worldTransform[3]);
+
+            // Los ejes de la CÁMARA salen de la inversa de la vista: las filas de
+            // la parte rotacional de `view` son sus ejes en el mundo.
+            const glm::vec3 camDerecha = glm::vec3(view[0][0], view[1][0], view[2][0]);
+            const glm::vec3 camArriba  = glm::vec3(view[0][1], view[1][1], view[2][1]);
+            const glm::vec3 camAtras   = glm::vec3(view[0][2], view[1][2], view[2][2]);
+
+            glm::vec3 derecha, arriba, adelante;
+            if (c.billboard == UiBillboard::Full)
+            {
+                derecha  = camDerecha;
+                arriba   = camArriba;
+                adelante = camAtras;
+            }
+            else   // YawOnly: gira solo alrededor de la vertical del MUNDO
+            {
+                arriba = glm::vec3(0.0f, 1.0f, 0.0f);
+                // Proyectar el "hacia atrás" de la cámara sobre el plano
+                // horizontal. Mirando en vertical justa el vector se anula: en ese
+                // caso vale cualquier orientación, y se coge una fija en vez de
+                // normalizar un cero (que daría NaN y borraría el canvas entero).
+                glm::vec3 plano(camAtras.x, 0.0f, camAtras.z);
+                const float largo2 = glm::dot(plano, plano);
+                adelante = (largo2 > 1e-8f) ? plano * glm::inversesqrt(largo2)
+                                            : glm::vec3(0.0f, 0.0f, 1.0f);
+                derecha  = glm::normalize(glm::cross(arriba, adelante));
+            }
+
+            base = glm::mat4(1.0f);
+            base[0] = glm::vec4(derecha,  0.0f);
+            base[1] = glm::vec4(arriba,   0.0f);
+            base[2] = glm::vec4(adelante, 0.0f);
+            base[3] = glm::vec4(pos,      1.0f);
+        }
+
+        // Píxeles -> unidades, con la Y negada, y centrado.
+        glm::mat4 local(1.0f);
+        local[0][0] =  s;
+        local[1][1] = -s;
+        local[2][2] =  s;
+        local[3]    = glm::vec4(-canvasSize.x * 0.5f * s, canvasSize.y * 0.5f * s, 0.0f, 1.0f);
+
+        return base * local;
+    }
 }

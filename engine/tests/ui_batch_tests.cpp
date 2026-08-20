@@ -14,12 +14,15 @@
 // Todos los valores son no neutros y distintos entre sí: con 0, 1 o valores
 // repetidos, un campo que nadie lee pasaría igual.
 #include "DonTopo/UI/ButtonComponent.h"   // kDefaultUiFontPath
+#include "DonTopo/UI/CanvasComponent.h"   // uiWorldCanvasMatrix
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiFont.h"
 #include "DonTopo/UI/UiLayout.h"
 #include "DonTopo/UI/UiSpriteBatch.h"
 #include "DonTopo/UI/UiTextureAtlas.h"
 #include "DonTopo/UI/UiWidgets.h"
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -5589,6 +5592,105 @@ static void test_sidecar_roto_no_deja_el_atlas_a_medias()
     std::filesystem::remove_all(kSidecarDir);
 }
 
+// ── Canvas de mundo ─────────────────────────────────────────────────────────
+// La matriz de un canvas de mundo. Tres cosas que fallan EN SILENCIO: que el
+// canvas quede centrado en el objeto (si no, aparece desplazado media pantalla),
+// que la Y esté VOLTEADA (el canvas crece hacia abajo y el mundo hacia arriba: un
+// signo de más pinta el cartel boca abajo) y que la escala sea unidades por
+// pixel y no al revés.
+static void test_world_canvas_matrix_centra_y_voltea_la_y()
+{
+    CanvasComponent c;
+    c.renderMode = UiCanvasRenderMode::World;
+    c.worldScale = 0.001f;
+    c.billboard  = UiBillboard::None;
+
+    const glm::vec2 tam(1920.0f, 1080.0f);
+    const glm::mat4 mundo = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 5.0f, -3.0f));
+    const glm::mat4 vista(1.0f);
+
+    const glm::mat4 m = uiWorldCanvasMatrix(c, tam, mundo, vista);
+
+    // El CENTRO del canvas (960, 540) cae en la posicion del GameObject.
+    const glm::vec4 centro = m * glm::vec4(960.0f, 540.0f, 0.0f, 1.0f);
+    CHECK(nearly(centro.x, 10.0f));
+    CHECK(nearly(centro.y, 5.0f));
+    CHECK(nearly(centro.z, -3.0f));
+
+    // La esquina (0,0) del canvas es la de ARRIBA a la izquierda, asi que en el
+    // mundo cae a la izquierda y ARRIBA del centro.
+    const glm::vec4 sup = m * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    CHECK(nearly(sup.x, 10.0f - 0.96f));
+    CHECK(nearly(sup.y, 5.0f + 0.54f));
+
+    // Y la (w,h) abajo a la derecha.
+    const glm::vec4 inf = m * glm::vec4(1920.0f, 1080.0f, 0.0f, 1.0f);
+    CHECK(nearly(inf.x, 10.0f + 0.96f));
+    CHECK(nearly(inf.y, 5.0f - 0.54f));
+
+    // El tamano total: 1.92 x 1.08 unidades.
+    CHECK(nearly(inf.x - sup.x, 1.92f));
+    CHECK(nearly(sup.y - inf.y, 1.08f));
+}
+
+// worldScale es unidades por PIXEL: doblarlo dobla el cartel.
+static void test_world_canvas_matrix_escala()
+{
+    CanvasComponent c;
+    c.renderMode = UiCanvasRenderMode::World;
+    c.worldScale = 0.002f;
+
+    const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 50.0f),
+                                            glm::mat4(1.0f), glm::mat4(1.0f));
+    const glm::vec4 a = m * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    const glm::vec4 b = m * glm::vec4(100.0f, 0.0f, 0.0f, 1.0f);
+    CHECK(nearly(b.x - a.x, 0.2f));
+}
+
+// Billboard. La camara mira desde +Z hacia el origen; el canvas esta en el
+// origen con una rotacion cualquiera que el billboard tiene que PISAR.
+static void test_world_canvas_matrix_billboard()
+{
+    CanvasComponent c;
+    c.renderMode = UiCanvasRenderMode::World;
+    c.worldScale = 0.001f;
+
+    // Rotacion absurda del objeto: si el billboard no la pisa, se nota.
+    glm::mat4 mundo = glm::rotate(glm::mat4(1.0f), 1.1f, glm::vec3(0.3f, 0.5f, 0.8f));
+
+    // Camara en (0, 4, 6) mirando al origen: mira hacia abajo y hacia -Z.
+    const glm::mat4 vista = glm::lookAt(glm::vec3(0.0f, 4.0f, 6.0f),
+                                        glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+
+    // Sin billboard la rotacion del objeto manda: el eje X del canvas NO es el
+    // (1,0,0) del mundo.
+    c.billboard = UiBillboard::None;
+    {
+        const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 100.0f), mundo, vista);
+        const glm::vec3 ejeX = glm::normalize(glm::vec3(m[0]));
+        CHECK(!nearly(ejeX.x, 1.0f));
+    }
+
+    // YawOnly: el eje VERTICAL del canvas sigue siendo el del mundo (no se
+    // tumba al mirar desde arriba), que es lo que quiere una barra de vida.
+    c.billboard = UiBillboard::YawOnly;
+    {
+        const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 100.0f), mundo, vista);
+        const glm::vec3 ejeY = glm::normalize(glm::vec3(m[1]));
+        CHECK(nearly(ejeY.x, 0.0f));
+        CHECK(nearly(std::fabs(ejeY.y), 1.0f));
+        CHECK(nearly(ejeY.z, 0.0f));
+    }
+
+    // Full: encara la camara del todo, asi que el eje Y del canvas SE INCLINA.
+    c.billboard = UiBillboard::Full;
+    {
+        const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 100.0f), mundo, vista);
+        const glm::vec3 ejeY = glm::normalize(glm::vec3(m[1]));
+        CHECK(!nearly(std::fabs(ejeY.y), 1.0f));
+    }
+}
+
 int main()
 {
     // Sin buffer: si un test revienta a media tanda, lo ya impreso NO se pierde
@@ -5727,6 +5829,10 @@ int main()
     test_cache_resolucion_y_escala_reemiten_todo();
     test_cache_animacion_ensucia_solo_su_nodo();
     test_cache_neutralidad_escena_completa();
+
+    test_world_canvas_matrix_centra_y_voltea_la_y();
+    test_world_canvas_matrix_escala();
+    test_world_canvas_matrix_billboard();
 
     if (g_failures == 0) std::printf("ui_batch_tests: OK\n");
     else                 std::printf("ui_batch_tests: %d fallos\n", g_failures);
