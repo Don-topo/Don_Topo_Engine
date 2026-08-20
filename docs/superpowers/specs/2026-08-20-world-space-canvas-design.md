@@ -199,6 +199,20 @@ glm::mat4 uiWorldCanvasMatrix(const CanvasComponent&, glm::vec2 canvasSize,
                               const glm::mat4& worldTransform, const glm::mat4& view);
 ```
 
+### El target de la escena es HDR LINEAL, no sRGB
+
+Descubierto al escribir el plan, no estaba en el diseño original. El pase de UI
+de hoy escribe sobre un `B8G8R8A8_SRGB`, donde el hardware hace la conversión al
+escribir. El pase de escena (`m_offscreenRenderPass`) es **HDR lineal**
+(`kHdrFormat`), así que el MISMO color escrito ahí sale lavado.
+
+Las variantes de mundo del shader tienen que **convertir sRGB→lineal al
+escribir**. Se resuelve con una constante de especialización (o un flag en el
+push constant que ya existe), sin duplicar el shader.
+
+Sin esto la UI de mundo se ve, pero con los colores mal — y es justo el tipo de
+fallo que ninguna capa de validación reporta.
+
 ### SSAA
 
 El canvas de pantalla se construye en píxeles de SALIDA, como hoy. Uno de mundo
