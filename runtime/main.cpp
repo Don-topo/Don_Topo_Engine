@@ -539,6 +539,11 @@ int main(int argc, char** argv)
         // Una lista por tipo de widget más la jerarquía de la escena aplanada a
         // (id, id del padre con UI), todo dentro de UiWidgetLists.
         DonTopo::UiWidgetLists uiWidgets;
+        // Compat temporal: la escena ya agrupa por canvas
+        // (Scene::collectCanvases), pero este bucle solo dibuja UNO — el
+        // primero en pre-orden, igual que antes. Dibujar todos los canvas de la
+        // escena es trabajo del renderer world-space, aún pendiente.
+        std::vector<DonTopo::UiCanvasBinding> uiCanvases;
 
         while (!window.shouldClose())
         {
@@ -708,9 +713,10 @@ int main(int argc, char** argv)
             // Widgets: mismo volcado por frame que en el editor, con la
             // jerarquía de la escena para que un widget anidado cuelgue de su
             // padre en vez de de la raíz.
-            uiWidgets.clear();
+            uiCanvases.clear();
             if (scene.findCanvas())
-                scene.collectUiWidgets(uiWidgets);
+                scene.collectCanvases(uiCanvases);
+            uiWidgets = uiCanvases.empty() ? DonTopo::UiWidgetLists{} : uiCanvases[0].widgets;
             DonTopo::syncUiWidgets(uiWidgets, renderer.uiCanvas(), uiWidgetCache, renderer);
 
             // Input de la UI: sin esto el árbol no resuelve estados y los cinco

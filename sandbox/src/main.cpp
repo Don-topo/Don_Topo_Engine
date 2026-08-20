@@ -386,6 +386,11 @@ int main()
             // reiniciaría el fundido— y cachear atlas y fuentes por ruta.
             DonTopo::UiWidgetSyncCache d3dWidgetCache;
             DonTopo::UiWidgetLists d3dWidgets;
+            // Compat temporal: la escena ya agrupa por canvas
+            // (Scene::collectCanvases), pero este bucle solo dibuja UNO — el
+            // primero en pre-orden, igual que antes. Dibujar todos los canvas de
+            // la escena es trabajo del renderer world-space, aún pendiente.
+            std::vector<DonTopo::UiCanvasBinding> d3dCanvases;
 
             while (!window.shouldClose())
             {
@@ -539,11 +544,12 @@ int main()
                 if (DonTopo::GameObject* canvasGo = d3dScene.findCanvas())
                     canvasGo->getCanvas()->applyTo(d3d12.uiCanvas());
 
-                d3dWidgets.clear();
                 // Con la jerarquía de la escena: un widget anidado cuelga del
                 // nodo de su padre, que es quien lo coloca y lo recorta.
+                d3dCanvases.clear();
                 if (d3dScene.findCanvas())
-                    d3dScene.collectUiWidgets(d3dWidgets);
+                    d3dScene.collectCanvases(d3dCanvases);
+                d3dWidgets = d3dCanvases.empty() ? DonTopo::UiWidgetLists{} : d3dCanvases[0].widgets;
 
                 DonTopo::syncUiWidgets(d3dWidgets, d3d12.uiCanvas(), d3dWidgetCache, d3d12);
 
@@ -917,6 +923,11 @@ int main()
         // reiniciaría el fundido) y cachear atlas y fuentes por ruta.
         DonTopo::UiWidgetSyncCache uiWidgetCache;
         DonTopo::UiWidgetLists uiWidgets;
+        // Compat temporal: la escena ya agrupa por canvas
+        // (Scene::collectCanvases), pero este bucle solo dibuja UNO — el
+        // primero en pre-orden, igual que antes. Dibujar todos los canvas de la
+        // escena es trabajo del renderer world-space, aún pendiente.
+        std::vector<DonTopo::UiCanvasBinding> uiCanvases;
 
         while (!window.shouldClose())
         {
@@ -1077,11 +1088,12 @@ int main()
             // Widgets: los ButtonComponent de la escena se vuelcan en el árbol
             // vivo del canvas, por frame y por la misma razón que la resolución.
             // Sin Canvas no hay UI: la lista va vacía y el sync limpia el árbol.
-            uiWidgets.clear();
             // Con la jerarquía de la escena: un widget anidado cuelga del nodo
             // de su padre, que es quien lo coloca y lo recorta.
+            uiCanvases.clear();
             if (scene.findCanvas())
-                scene.collectUiWidgets(uiWidgets);
+                scene.collectCanvases(uiCanvases);
+            uiWidgets = uiCanvases.empty() ? DonTopo::UiWidgetLists{} : uiCanvases[0].widgets;
             // UN solo sync para todos los widgets: es el dueño de la raíz del
             // canvas, que se reconstruye entera con clear().
             DonTopo::syncUiWidgets(uiWidgets, renderer.uiCanvas(), uiWidgetCache, renderer);

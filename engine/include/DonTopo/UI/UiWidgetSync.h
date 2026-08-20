@@ -9,7 +9,10 @@
 #include <utility>
 #include <vector>
 
+#include <glm/glm.hpp>
+
 #include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/CheckboxComponent.h"
 #include "DonTopo/UI/DropdownComponent.h"
 #include "DonTopo/UI/ImageComponent.h"
@@ -81,6 +84,22 @@ namespace DonTopo
             scrollViews.clear();
             parents.clear();
         }
+    };
+
+    // Un canvas de la escena con TODO lo que le cuelga. Es lo que
+    // Scene::collectCanvases produce y lo que el Renderer consume.
+    //
+    // Los widgets van agrupados POR CANVAS y no en un saco común: con un solo
+    // canvas daba igual, pero con dos, meterlos todos en el primero pinta el menú
+    // de pausa encima del HUD sin que nada lo diga.
+    struct UiCanvasBinding
+    {
+        uint64_t               ownerId = 0;         // GameObject del Canvas
+        const CanvasComponent* canvas  = nullptr;
+        // Del GameObject del canvas. Solo lo lee el modo World; en pantalla no
+        // significa nada (la UI de pantalla no está en el mundo).
+        glm::mat4               worldTransform{1.0f};
+        UiWidgetLists           widgets;
     };
 
     // Lo que el sync tiene que recordar ENTRE frames, todo junto y en manos de

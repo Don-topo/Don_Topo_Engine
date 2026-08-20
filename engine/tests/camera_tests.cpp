@@ -1697,8 +1697,10 @@ static void test_collect_ui_widgets_salta_los_intermedios_sin_ui()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    UiWidgetLists lists;
-    scene.collectUiWidgets(lists);
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    static const UiWidgetLists kVacio;
+    const UiWidgetLists& lists = bindings.empty() ? kVacio : bindings[0].widgets;
     botones = lists.buttons; textos = lists.texts; barras = lists.bars;
     layouts = lists.layouts; jerarquia = lists.parents;
 
@@ -1717,6 +1719,114 @@ static void test_collect_ui_widgets_salta_los_intermedios_sin_ui()
     // Y el orden es de PRE-ORDEN: el padre antes que el hijo, que es lo que
     // permite montar el árbol en una sola pasada.
     CHECK(jerarquia[0].first != jerarquia[1].second || true);
+}
+
+// Cada widget va al canvas del que cuelga, no a un saco comun. Con un solo
+// canvas esto daba igual; con dos, meterlos todos en el primero pinta la UI del
+// menu de pausa encima del HUD y nada lo dice.
+static void test_collect_canvases_agrupa_por_canvas()
+{
+    Scene scene;
+    GameObject* hud = scene.addGameObject("HUD");
+    hud->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* vida = scene.addGameObject("Vida", hud);
+    vida->setProgressBar(std::make_shared<ProgressBarComponent>());
+
+    GameObject* menu = scene.addGameObject("Menu");
+    menu->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* jugar = scene.addGameObject("Jugar", menu);
+    jugar->setButton(std::make_shared<ButtonComponent>());
+    GameObject* salir = scene.addGameObject("Salir", menu);
+    salir->setButton(std::make_shared<ButtonComponent>());
+
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+
+    CHECK(bindings.size() == 2);
+    if (bindings.size() != 2) return;
+    CHECK(bindings[0].ownerId == hud->id);
+    CHECK(bindings[0].widgets.bars.size() == 1);
+    CHECK(bindings[0].widgets.buttons.empty());
+    CHECK(bindings[1].ownerId == menu->id);
+    CHECK(bindings[1].widgets.buttons.size() == 2);
+    CHECK(bindings[1].widgets.bars.empty());
+}
+
+// Canvas dentro de canvas: gana el MAS CERCANO hacia arriba, sin reglas nuevas.
+static void test_collect_canvases_anidado_gana_el_mas_cercano()
+{
+    Scene scene;
+    GameObject* fuera = scene.addGameObject("Fuera");
+    fuera->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* deFuera = scene.addGameObject("DeFuera", fuera);
+    deFuera->setPanel(std::make_shared<PanelComponent>());
+
+    GameObject* dentro = scene.addGameObject("Dentro", fuera);
+    dentro->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* deDentro = scene.addGameObject("DeDentro", dentro);
+    deDentro->setPanel(std::make_shared<PanelComponent>());
+
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+
+    CHECK(bindings.size() == 2);
+    if (bindings.size() != 2) return;
+    CHECK(bindings[0].ownerId == fuera->id);
+    CHECK(bindings[0].widgets.panels.size() == 1);
+    if (bindings[0].widgets.panels.size() == 1)
+        CHECK(bindings[0].widgets.panels[0].first == deFuera->id);
+    CHECK(bindings[1].ownerId == dentro->id);
+    CHECK(bindings[1].widgets.panels.size() == 1);
+    if (bindings[1].widgets.panels.size() == 1)
+        CHECK(bindings[1].widgets.panels[0].first == deDentro->id);
+}
+
+// Un widget sin NINGUN canvas por encima no va a ninguna parte. Antes acababa
+// en el canvas unico aunque no colgara de el; ahora no se dibuja. Es un cambio
+// de comportamiento DELIBERADO: el editor ya lo impide (uiComponentsAvailable
+// exige un Canvas ancestro) y solo afecta a escenas hechas a mano.
+static void test_collect_canvases_ignora_los_huerfanos()
+{
+    Scene scene;
+    GameObject* suelto = scene.addGameObject("Suelto");
+    suelto->setButton(std::make_shared<ButtonComponent>());
+
+    GameObject* hud = scene.addGameObject("HUD");
+    hud->setCanvas(std::make_shared<CanvasComponent>());
+
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+
+    CHECK(bindings.size() == 1);
+    if (bindings.empty()) return;
+    CHECK(bindings[0].ownerId == hud->id);
+    CHECK(bindings[0].widgets.buttons.empty());
+}
+
+// La jerarquia de cada binding es la SUYA: los ids de padre apuntan dentro del
+// mismo canvas, y el primer nivel cuelga de 0 (la raiz de ESE canvas).
+static void test_collect_canvases_jerarquia_por_canvas()
+{
+    Scene scene;
+    GameObject* hud = scene.addGameObject("HUD");
+    hud->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* marco = scene.addGameObject("Marco", hud);
+    marco->setPanel(std::make_shared<PanelComponent>());
+    GameObject* icono = scene.addGameObject("Icono", marco);
+    icono->setImage(std::make_shared<ImageComponent>());
+
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    CHECK(bindings.size() == 1);
+    if (bindings.empty()) return;
+
+    const auto& p = bindings[0].widgets.parents;
+    CHECK(p.size() == 2);
+    if (p.size() != 2) return;
+    CHECK(p[0].first == marco->id);
+    CHECK(p[0].second == 0ull);          // primer nivel del canvas
+    CHECK(p[1].first == icono->id);
+    CHECK(p[1].second == marco->id);
 }
 
 static void test_buttons_and_texts_coexist()
@@ -2324,8 +2434,10 @@ static void test_layout_container_places_children()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    UiWidgetLists lists;
-    scene.collectUiWidgets(lists);
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    static const UiWidgetLists kVacio;
+    const UiWidgetLists& lists = bindings.empty() ? kVacio : bindings[0].widgets;
     botones = lists.buttons; textos = lists.texts; barras = lists.bars;
     layouts = lists.layouts; jerarquia = lists.parents;
     CHECK(layouts.size() == 1);
@@ -2388,8 +2500,10 @@ static void test_layout_on_widget_uses_its_node()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    UiWidgetLists lists;
-    scene.collectUiWidgets(lists);
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    static const UiWidgetLists kVacio;
+    const UiWidgetLists& lists = bindings.empty() ? kVacio : bindings[0].widgets;
     botones = lists.buttons; textos = lists.texts; barras = lists.bars;
     layouts = lists.layouts; jerarquia = lists.parents;
 
@@ -2454,8 +2568,10 @@ static void test_layout_ignore_layout_child_keeps_its_anchor()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    UiWidgetLists lists;
-    scene.collectUiWidgets(lists);
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    static const UiWidgetLists kVacio;
+    const UiWidgetLists& lists = bindings.empty() ? kVacio : bindings[0].widgets;
     botones = lists.buttons; textos = lists.texts; barras = lists.bars;
     layouts = lists.layouts; jerarquia = lists.parents;
     CHECK(layouts.size() == 2);
@@ -2498,8 +2614,10 @@ static void test_collect_ui_widgets_incluye_los_layouts()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    UiWidgetLists lists;
-    scene.collectUiWidgets(lists);
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    static const UiWidgetLists kVacio;
+    const UiWidgetLists& lists = bindings.empty() ? kVacio : bindings[0].widgets;
     botones = lists.buttons; textos = lists.texts; barras = lists.bars;
     layouts = lists.layouts; jerarquia = lists.parents;
 
@@ -3261,7 +3379,7 @@ static void test_image_hit_test_maps_back_to_gameobject()
     CHECK(uiTextOwnerId(uiImageNodeName(42ull)) == 0ull);
 }
 
-// collectUiWidgets tiene que ver los dos componentes nuevos y meterlos en la
+// collectCanvases tiene que ver los dos componentes nuevos y meterlos en la
 // jerarquía: un GameObject con Panel es un ancestro con rect válido, así que sus
 // hijos tienen que colgar de él y no subir a la raíz.
 static void test_collect_ui_widgets_incluye_panels_e_images()
@@ -3276,8 +3394,10 @@ static void test_collect_ui_widgets_incluye_panels_e_images()
     GameObject* icono = scene.addGameObject("Icono", marco);
     icono->setImage(std::make_shared<ImageComponent>());
 
-    UiWidgetLists w;
-    scene.collectUiWidgets(w);
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    static const UiWidgetLists kVacio;
+    const UiWidgetLists& w = bindings.empty() ? kVacio : bindings[0].widgets;
 
     CHECK(w.panels.size() == 1);
     CHECK(w.images.size() == 1);
@@ -5756,8 +5876,10 @@ static void test_scroll_view_children_hang_from_the_content()
     GameObject* fila = scene.addGameObject("Fila", vista);
     fila->setPanel(std::make_shared<PanelComponent>());
 
-    UiWidgetLists w;
-    scene.collectUiWidgets(w);
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    static const UiWidgetLists kVacio;
+    const UiWidgetLists& w = bindings.empty() ? kVacio : bindings[0].widgets;
     CHECK(w.scrollViews.size() == 1);
     CHECK(w.panels.size() == 1);
 
@@ -5930,6 +6052,10 @@ int main()
     test_text_property_command_undo_redo();
     test_text_sync_updates_the_live_node();
     test_collect_ui_widgets_salta_los_intermedios_sin_ui();
+    test_collect_canvases_agrupa_por_canvas();
+    test_collect_canvases_anidado_gana_el_mas_cercano();
+    test_collect_canvases_ignora_los_huerfanos();
+    test_collect_canvases_jerarquia_por_canvas();
     test_jerarquia_ancla_y_hereda_del_padre();
     test_jerarquia_cambiar_de_padre_reconstruye();
     test_jerarquia_hereda_la_opacidad();

@@ -65,19 +65,30 @@ namespace DonTopo
             GameObject* findCanvas();
             const GameObject* findCanvas() const;
 
-            // Los widgets de UI de la escena, listos para syncUiWidgets: una
-            // lista por tipo y la JERARQUÍA aplanada a (id, id del padre) en
-            // pre-orden, con 0 para los que cuelgan de la raíz del canvas.
+            // Cada canvas de la escena con SUS widgets, listos para
+            // syncUiWidgets: uno por CanvasComponent, con su propia
+            // UiWidgetLists (lista por tipo y JERARQUÍA aplanada a (id, id del
+            // padre) en pre-orden, con 0 para los que cuelgan de la raíz de ESE
+            // canvas). Antes había un único saco (collectUiWidgets) porque solo
+            // cabía un Canvas en la escena; con varios, meterlos todos junto
+            // pintaría el menú de pausa encima del HUD sin que nada lo dijera.
             //
-            // El "padre" es el ancestro más cercano que TENGA algún componente
-            // de UI, no el padre inmediato: un GameObject intermedio sin UI no
-            // aporta rect contra el que anclarse, así que no puede sostener a
-            // nadie y sus hijos suben al primero que sí.
+            // El "padre" de un widget es el ancestro más cercano DENTRO DEL
+            // MISMO CANVAS que TENGA algún componente de UI, no el padre
+            // inmediato: un GameObject intermedio sin UI no aporta rect contra
+            // el que anclarse, así que no puede sostener a nadie y sus hijos
+            // suben al primero que sí. Un Canvas anidado abre su propio binding
+            // y corta esa cadena: lo que cuelgue de él se ancla a SU raíz.
+            //
+            // Un widget sin ningún Canvas por encima no aparece en ningún
+            // binding: no se dibuja. El editor ya lo impide (uiComponentsAvailable
+            // exige un Canvas ancestro), así que esto solo pasa en escenas hechas
+            // a mano.
             //
             // Vive aquí y no en cada bucle porque lo necesitan los tres (editor
             // con los dos backends y runtime exportado), y tres copias de este
             // recorrido es como se desincronizan.
-            void collectUiWidgets(UiWidgetLists& out) const;
+            void collectCanvases(std::vector<UiCanvasBinding>& out) const;
 
             // Avisos de la última operación que tuvo que corregir la escena
             // cargada (campos corruptos, varias cámaras, clips que ya no casan).
