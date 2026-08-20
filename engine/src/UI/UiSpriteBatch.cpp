@@ -2059,11 +2059,13 @@ namespace DonTopo
     void UiSpriteBatch::beginFrame(GpuDevice& gpu, int frame, uint32_t totalVertices, uint32_t totalIndices)
     {
         // Se dimensiona contra el ACUMULADO de todos los canvas de pantalla de
-        // este frame, no contra el tamaño de uno solo: con lo segundo, el
+        // ESTE PASE, no contra el tamaño de uno solo: con lo segundo, el
         // primer canvas reservaría de sobra pero el segundo (o el tercero)
         // encontraría el buffer ya lleno y ensureBuffers lo recrearía A MITAD
         // del pase, invalidando el bind que el canvas anterior ya dejó grabado
-        // en el command buffer (apuntaría a un VkBuffer destruido).
+        // en el command buffer (apuntaría a un VkBuffer destruido). Contrato
+        // completo en el header: una vez por pase de UI abierto, antes de
+        // cualquier record() de ese pase.
         if (totalVertices > 0 || totalIndices > 0)
             ensureBuffers(gpu, frame, totalVertices, totalIndices);
 
@@ -2088,6 +2090,16 @@ namespace DonTopo
         // partir de donde dejó el anterior, no siempre en el offset 0.
         const uint32_t vertexBase = bumpUiCursor(m_frameVertexCursor[frame], (uint32_t)data.vertices.size());
         const uint32_t indexBase  = bumpUiCursor(m_frameIndexCursor[frame],  (uint32_t)data.indices.size());
+
+        // El cursor lo dimensiona beginFrame() con el total del PASE. Si
+        // alguien llama a record() sin él, o con un total corto (o dos veces
+        // seguidas sin que beginFrame() vuelva a reservar), esto escribiría
+        // FUERA de la memoria mapeada: una escritura de host que ninguna capa
+        // de validación ve. Mejor no dibujar ese canvas que corromper el
+        // buffer.
+        if (!uiCursorFits(vertexBase, (uint32_t)data.vertices.size(), m_vertexCapacity[frame]) ||
+            !uiCursorFits(indexBase,  (uint32_t)data.indices.size(),  m_indexCapacity[frame]))
+            return;
 
         std::memcpy(static_cast<UiVertex*>(m_vertexMapped[frame]) + vertexBase,
                     data.vertices.data(), data.vertices.size() * sizeof(UiVertex));

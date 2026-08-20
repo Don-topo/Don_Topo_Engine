@@ -76,6 +76,24 @@ namespace DonTopo
         return at;
     }
 
+    // Guarda de capacidad: ¿cabe [base, base+count) dentro de `capacity`?
+    // record() la comprueba antes de CADA memcpy. La invariante "beginFrame()
+    // se llamó este frame, exactamente una vez, con el total exacto" no la
+    // impone el tipo — hoy la sostiene que hay un único llamador (Renderer).
+    // En cuanto exista un segundo (los canvas de mundo, en el pase de escena,
+    // en otro bucle), un record() sin su beginFrame, uno llamado dos veces, o
+    // un total que se quedó corto, escribiría FUERA de la memoria mapeada:
+    // una escritura de HOST que ninguna capa de validación ve — no hay
+    // device lost, no hay error de Vulkan, solo corrupción silenciosa. Mejor
+    // no dibujar ese canvas que corromper el buffer. Suma en 64 bits porque
+    // `base + count` en 32 bits podría desbordar cerca de UINT32_MAX (nunca
+    // pasa con tamaños reales de UI, pero la guarda no depende de que nadie
+    // se acuerde de eso).
+    inline bool uiCursorFits(uint32_t base, uint32_t count, uint32_t capacity)
+    {
+        return (uint64_t)base + (uint64_t)count <= (uint64_t)capacity;
+    }
+
     struct UiBatch
     {
         // nullptr = textura blanca de 1x1 del propio UiSpriteBatch (paneles de
@@ -124,13 +142,20 @@ namespace DonTopo
         // el sampler es de aquí.
         VkSampler sampler() const { return m_sampler; }
 
-        // UNA vez por frame, ANTES de grabar el primer canvas: dimensiona los
-        // buffers del frame contra el ACUMULADO de todos los canvas de pantalla
-        // (no contra el de uno solo) y reinicia los cursores de sub-asignación
-        // a 0. Tiene que ir antes de CUALQUIER record() de este frame: si el
-        // buffer creciera a mitad de pase, el bind ya grabado de un canvas
-        // anterior apuntaría a un VkBuffer destruido (ensureBuffers recrea el
-        // handle al crecer). Con totales a 0 no toca nada.
+        // UNA vez por frame EN EL QUE SE ABRA EL PASE DE UI — no "una vez por
+        // frame" a secas: un frame sin ningún canvas de pantalla no abre el
+        // pase y no llama a esto, y eso es correcto (nadie va a record()
+        // tampoco). Lo que SÍ es obligatorio es que vaya ANTES de CUALQUIER
+        // record() de ese pase, y exactamente una vez por pase: dimensiona los
+        // buffers del frame contra el ACUMULADO de todos los canvas de
+        // pantalla (no contra el de uno solo) y reinicia los cursores de
+        // sub-asignación a 0. Si el buffer creciera a mitad de pase, el bind
+        // ya grabado de un canvas anterior apuntaría a un VkBuffer destruido
+        // (ensureBuffers recrea el handle al crecer) — y un record() sin su
+        // beginFrame, o un total corto, escribe fuera de la memoria mapeada
+        // sin que ninguna capa de validación lo vea (record() lo blinda con
+        // uiCursorFits, pero esa guarda solo evita la corrupción, no reemplaza
+        // llamar bien a esto). Con totales a 0 no toca nada.
         void beginFrame(GpuDevice& gpu, int frame, uint32_t totalVertices, uint32_t totalIndices);
 
         // Con datos vacíos no graba ni un comando ni toca ningún buffer.

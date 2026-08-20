@@ -6141,6 +6141,18 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
         const UINT vertexBase = bumpUiCursor(vertexCursor, static_cast<UINT>(data.vertices.size()));
         const UINT indexBase  = bumpUiCursor(indexCursor,  static_cast<UINT>(data.indices.size()));
 
+        // Mismo blindaje que el camino de Vulkan: el cursor lo dimensiona
+        // ensureUiBuffers() con el total del PASE (calculado arriba, sobre
+        // TODOS los canvas de pantalla). Aquí el cursor es local a esta
+        // función y se reinicia solo, así que hoy no puede desalinearse entre
+        // llamadas — pero si el total sumado más arriba no cuadrase con lo
+        // que de verdad se escribe aquí abajo, esto escribiría FUERA de la
+        // memoria mapeada sin que ninguna capa de validación lo vea. Mejor no
+        // dibujar ese canvas que corromper el buffer.
+        if (!uiCursorFits(vertexBase, static_cast<UINT>(data.vertices.size()), uiVertexCapacity[frameIndex]) ||
+            !uiCursorFits(indexBase,  static_cast<UINT>(data.indices.size()),  uiIndexCapacity[frameIndex]))
+            continue;
+
         std::memcpy(static_cast<UiVertex*>(uiVertexMapped[frameIndex]) + vertexBase,
                     data.vertices.data(), data.vertices.size() * sizeof(UiVertex));
         std::memcpy(static_cast<uint16_t*>(uiIndexMapped[frameIndex]) + indexBase,

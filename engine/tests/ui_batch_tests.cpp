@@ -80,6 +80,54 @@ static void test_ui_batch_offsets_se_acumulan_dentro_del_frame()
     CHECK(iCursor == 54);   // 15 + 33 + 6
 }
 
+// La guarda de capacidad que record() consulta antes de CADA memcpy.
+// beginFrame() dimensiona el buffer contra el total del PASE, pero esa
+// invariante — "se llamó este frame, una sola vez, con el total exacto" — no
+// la impone el tipo: hoy la sostiene que Renderer es el único llamador. En
+// cuanto exista un segundo (los canvas de mundo, que llegan en el pase de
+// escena, en otro bucle), un record() sin su beginFrame, uno llamado dos
+// veces, o un total que se quedó corto, escribiría FUERA de la memoria
+// mapeada — una escritura de HOST que ninguna capa de validación de Vulkan ni
+// de D3D12 ve: no hay device lost, no hay error, solo corrupción silenciosa.
+// uiCursorFits es la comprobación exacta que hace esa guarda posible sin GPU.
+static void test_ui_cursor_fits_guarda_la_capacidad_del_buffer()
+{
+    // El caso normal: el hueco [base, base+count) cae dentro de la capacidad
+    // que beginFrame() reservó para el pase completo.
+    CHECK(uiCursorFits(0, 10, 39));
+    CHECK(uiCursorFits(10, 25, 39));
+    CHECK(uiCursorFits(35, 4, 39));    // termina EXACTO en el borde: cabe
+
+    // Justo al límite: base+count == capacity es el último hueco válido.
+    CHECK(uiCursorFits(30, 9, 39));
+    // Un elemento de más se sale por uno: no cabe.
+    CHECK(!uiCursorFits(30, 10, 39));
+
+    // El caso que dispara el hallazgo: un total corto. Con los mismos tres
+    // canvas de tamaños 10/25/4 del test de arriba (offsets 0, 10 y 35) pero
+    // una capacidad reservada de solo 30 — como si un segundo llamador
+    // (los canvas de mundo, en otro bucle) hubiera calculado el acumulado del
+    // pase sin sumar el tercer canvas y beginFrame() hubiera reservado de
+    // menos:
+    const uint32_t capacidadCorta = 30;
+    CHECK(uiCursorFits(0, 10, capacidadCorta));     // el primero SÍ cabe
+    // El SEGUNDO ya no: 10+25 = 35 > 30. La guarda corta en cuanto el
+    // acumulado real se pasa de lo que reservó beginFrame(), no solo en el
+    // último canvas del pase.
+    CHECK(!uiCursorFits(10, 25, capacidadCorta));
+    CHECK(!uiCursorFits(35, 4, capacidadCorta));    // y el tercero, ni de lejos
+
+    // record() sin beginFrame() previo — capacidad en 0, el estado inicial de
+    // m_vertexCapacity/m_indexCapacity antes de la primera reserva: nada cabe,
+    // ni un canvas de "0 elementos" en un offset que no sea 0. Un canvas
+    // realmente vacío (0 elementos en base 0) sí cabe: no escribe nada, no
+    // hay nada que corromper, y record() ya lo descarta antes por
+    // data.empty().
+    CHECK(uiCursorFits(0, 0, 0));
+    CHECK(!uiCursorFits(0, 1, 0));
+    CHECK(!uiCursorFits(5, 1, 0));
+}
+
 // Un canvas sin nodos visibles no puede generar ni un lote: es la condición que
 // hace que la escena 3D salga exactamente igual que antes de esta feature.
 static void test_canvas_vacio_no_emite_nada()
@@ -5791,6 +5839,7 @@ int main()
     test_sidecar_roto_no_deja_el_atlas_a_medias();
 
     test_ui_batch_offsets_se_acumulan_dentro_del_frame();
+    test_ui_cursor_fits_guarda_la_capacidad_del_buffer();
 
     test_canvas_vacio_no_emite_nada();
     test_origen_arriba_izquierda();
