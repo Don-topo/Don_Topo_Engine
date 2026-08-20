@@ -43,6 +43,8 @@ namespace
     using DonTopo::CanvasComponent;
     using DonTopo::UiScaleMode;
     using DonTopo::UiScreenMatch;
+    using DonTopo::UiCanvasRenderMode;
+    using DonTopo::UiBillboard;
     using DonTopo::ButtonComponent;
     using DonTopo::UiButtonTransition;
     using DonTopo::UiTextAlign;
@@ -151,6 +153,33 @@ namespace
         if (s == "expand") return UiScreenMatch::Expand;
         if (s == "shrink") return UiScreenMatch::Shrink;
         return UiScreenMatch::MatchWidthOrHeight;   // valor desconocido -> el default
+    }
+
+    const char* uiCanvasRenderModeToStr(UiCanvasRenderMode m)
+    {
+        return m == UiCanvasRenderMode::World ? "world" : "screenSpace";
+    }
+
+    UiCanvasRenderMode uiCanvasRenderModeFromStr(const std::string& s)
+    {
+        return s == "world" ? UiCanvasRenderMode::World : UiCanvasRenderMode::ScreenSpace;
+    }
+
+    const char* uiBillboardToStr(UiBillboard b)
+    {
+        switch (b)
+        {
+            case UiBillboard::YawOnly: return "yawOnly";
+            case UiBillboard::Full:    return "full";
+            default:                   return "none";
+        }
+    }
+
+    UiBillboard uiBillboardFromStr(const std::string& s)
+    {
+        if (s == "yawOnly") return UiBillboard::YawOnly;
+        if (s == "full")    return UiBillboard::Full;
+        return UiBillboard::None;   // valor desconocido -> el default
     }
 
     const char* uiButtonTransitionToStr(UiButtonTransition t)
@@ -756,7 +785,11 @@ namespace
                                            {"top", c->safeArea.top},
                                            {"right", c->safeArea.right},
                                            {"bottom", c->safeArea.bottom} }},
-                            {"aspectRatio", c->aspectRatio} };
+                            {"aspectRatio", c->aspectRatio},
+                            {"renderMode", uiCanvasRenderModeToStr(c->renderMode)},
+                            {"worldScale", c->worldScale},
+                            {"billboard", uiBillboardToStr(c->billboard)},
+                            {"depthTest", c->depthTest} };
         }
         if (node.hasButton())
         {
@@ -1722,6 +1755,16 @@ namespace
         {
             const auto& c = j["canvas"];
             const std::string ctx = "canvas de '" + node->name + "'";
+            // Un bool o un string corrupto (null, o del tipo que no toca) cae al
+            // default en vez de lanzar: .value() sí lanza con un null, y un
+            // campo roto no puede tumbar la carga de la escena entera.
+            auto readBool = [&](const char* key, bool def) {
+                return (c.contains(key) && c[key].is_boolean()) ? c[key].get<bool>() : def;
+            };
+            auto readStr = [&](const char* key) {
+                return (c.contains(key) && c[key].is_string())
+                           ? c[key].get<std::string>() : std::string();
+            };
             auto canvas = std::make_shared<CanvasComponent>();
             canvas->scaleMode = uiScaleModeFromStr(
                 c.value("scaleMode", std::string("constantPixelSize")));
@@ -1743,6 +1786,10 @@ namespace
             canvas->safeArea.right  = readFloat(safe, "right", 0.0f, warnings, ctx + ".safeArea");
             canvas->safeArea.bottom = readFloat(safe, "bottom", 0.0f, warnings, ctx + ".safeArea");
             canvas->aspectRatio = readFloat(c, "aspectRatio", 0.0f, warnings, ctx);
+            canvas->renderMode = uiCanvasRenderModeFromStr(readStr("renderMode"));
+            canvas->worldScale = readFloat(c, "worldScale", 0.001f, warnings, ctx);
+            canvas->billboard  = uiBillboardFromStr(readStr("billboard"));
+            canvas->depthTest  = readBool("depthTest", true);
             node->setCanvas(std::move(canvas));
         }
         // Bloque aditivo, misma regla que el canvas: una escena guardada antes

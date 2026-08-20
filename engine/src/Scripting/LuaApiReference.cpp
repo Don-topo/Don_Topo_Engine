@@ -114,6 +114,7 @@ const std::vector<std::string>& baseSymbols()
         "Canvas.scaleMode", "Canvas.scaleFactor", "Canvas.screenMatch",
         "Canvas.matchWidthOrHeight", "Canvas.screenDpi", "Canvas.fallbackDpi",
         "Canvas.referenceDpi", "Canvas.aspectRatio",
+        "Canvas.renderMode", "Canvas.worldScale", "Canvas.billboard", "Canvas.depthTest",
         "Canvas:GetReferenceResolution", "Canvas:SetReferenceResolution",
         // SafeArea son cuatro insets sueltos: left, top, right, bottom.
         "Canvas:GetSafeArea", "Canvas:SetSafeArea",
@@ -322,6 +323,8 @@ const std::vector<std::string>& baseSymbols()
         "UiScaleMode.ConstantPhysicalSize",
         "UiScreenMatch.MatchWidthOrHeight", "UiScreenMatch.Expand",
         "UiScreenMatch.Shrink",
+        "UiCanvasRenderMode.ScreenSpace", "UiCanvasRenderMode.World",
+        "UiBillboard.None", "UiBillboard.YawOnly", "UiBillboard.Full",
         "UiTextAlign.Left", "UiTextAlign.Center", "UiTextAlign.Right",
         "UiTextAlign.Justify",
         "UiTextOverflow.Overflow", "UiTextOverflow.Clip", "UiTextOverflow.Ellipsis",

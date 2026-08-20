@@ -626,6 +626,60 @@ static void test_canvas_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(loaded.lastWarnings().empty());
 }
 
+// Los cuatro campos nuevos del Canvas, con valores NO neutros y distintos entre
+// sí: con los defaults, un fromJson que se saltara el campo pasaría igual.
+static void test_canvas_world_fields_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cartel");
+    auto c = std::make_shared<CanvasComponent>();
+    c->renderMode = UiCanvasRenderMode::World;
+    c->worldScale = 0.0234375f;
+    c->billboard  = UiBillboard::YawOnly;
+    c->depthTest  = false;
+    go->setCanvas(c);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(scene.toJson(), pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasCanvas()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->getCanvas()->renderMode == UiCanvasRenderMode::World);
+    CHECK(nearlyEqual(found->getCanvas()->worldScale, 0.0234375f));
+    CHECK(found->getCanvas()->billboard == UiBillboard::YawOnly);
+    CHECK(found->getCanvas()->depthTest == false);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Una escena guardada antes de estos campos carga con los defaults y sin avisos:
+// bloque aditivo, misma regla que todos los componentes de UI.
+static void test_canvas_without_world_fields_loads_with_defaults(PhysicsManager& pm,
+                                                                  AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Viejo");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+    // Se borran las claves nuevas para simular una escena antigua.
+    for (auto& n : j["root"]["children"])
+        if (n.contains("canvas"))
+            for (const char* k : { "renderMode", "worldScale", "billboard", "depthTest" })
+                n["canvas"].erase(k);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n2) { if (!found && n2->hasCanvas()) found = n2; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->getCanvas()->renderMode == UiCanvasRenderMode::ScreenSpace);
+    CHECK(nearlyEqual(found->getCanvas()->worldScale, 0.001f));
+    CHECK(found->getCanvas()->billboard == UiBillboard::None);
+    CHECK(found->getCanvas()->depthTest == true);
+    CHECK(loaded.lastWarnings().empty());
+}
+
 // Una escena guardada antes del componente carga igual: sin Canvas y sin avisos.
 static void test_scene_without_canvas_block_still_loads(PhysicsManager& pm, AudioManager& am)
 {
@@ -5850,6 +5904,8 @@ int main()
     test_canvas_command_add_undo_redo();
     test_canvas_command_remove();
     test_canvas_property_command_undo_redo();
+    test_canvas_world_fields_round_trip(pm, am);
+    test_canvas_without_world_fields_loads_with_defaults(pm, am);
 
     test_button_round_trip(pm, am);
     test_scene_without_button_block_still_loads(pm, am);

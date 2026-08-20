@@ -910,6 +910,8 @@ namespace DonTopo::ScriptBindings
                 "ConstantPixelSize", 0, "ScaleWithScreenSize", 1, "ConstantPhysicalSize", 2);
             lua["UiScreenMatch"] = lua.create_table_with(
                 "MatchWidthOrHeight", 0, "Expand", 1, "Shrink", 2);
+            lua["UiCanvasRenderMode"] = lua.create_table_with("ScreenSpace", 0, "World", 1);
+            lua["UiBillboard"] = lua.create_table_with("None", 0, "YawOnly", 1, "Full", 2);
             lua["UiTextAlign"] = lua.create_table_with(
                 "Left", 0, "Center", 1, "Right", 2, "Justify", 3);
             lua["UiTextVAlign"] = lua.create_table_with(
@@ -951,6 +953,10 @@ namespace DonTopo::ScriptBindings
                 "fallbackDpi",        uiFloatProp(canvasOf, &CanvasComponent::fallbackDpi, &mgr, "Canvas.fallbackDpi"),
                 "referenceDpi",       uiFloatProp(canvasOf, &CanvasComponent::referenceDpi, &mgr, "Canvas.referenceDpi"),
                 "aspectRatio",        uiFloatProp(canvasOf, &CanvasComponent::aspectRatio, &mgr, "Canvas.aspectRatio"),
+                "renderMode", uiEnumProp(canvasOf, &CanvasComponent::renderMode, 1),
+                "worldScale", uiFloatProp(canvasOf, &CanvasComponent::worldScale, &mgr, "Canvas.worldScale"),
+                "billboard",  uiEnumProp(canvasOf, &CanvasComponent::billboard, 2),
+                "depthTest",  uiProp(canvasOf, &CanvasComponent::depthTest),
                 "GetReferenceResolution", uiVec2Get(canvasOf, &CanvasComponent::referenceResolution),
                 "SetReferenceResolution", uiVec2Set(canvasOf, &CanvasComponent::referenceResolution, &mgr, "Canvas.SetReferenceResolution"),
                 // El safe area son cuatro insets sueltos (no un vec4): se pasan

@@ -428,6 +428,10 @@ static void test_ui_lua_escribe_todos_los_campos(ScriptManager& sm)
         c.aspectRatio = 1.75
         c:SetReferenceResolution(1280, 720)
         c:SetSafeArea(11, 12, 13, 14)
+        c.renderMode = UiCanvasRenderMode.World
+        c.worldScale = 0.0234375
+        c.billboard = UiBillboard.YawOnly
+        c.depthTest = false
 
         local b = e:GetButton()
         b.visible = false
@@ -503,6 +507,7 @@ static void test_ui_lua_escribe_todos_los_campos(ScriptManager& sm)
             align = t.align,
             valor = p.value,
             normalizado = p:GetNormalizedValue(),
+            modo = c.renderMode,
         }
         anchoRef, altoRef = c:GetReferenceResolution()
         bw, bh = b:GetSize()
@@ -525,6 +530,10 @@ static void test_ui_lua_escribe_todos_los_campos(ScriptManager& sm)
     CHECK(nearlyEqual(c.safeArea.top, 12.0f));
     CHECK(nearlyEqual(c.safeArea.right, 13.0f));
     CHECK(nearlyEqual(c.safeArea.bottom, 14.0f));
+    CHECK(c.renderMode == UiCanvasRenderMode::World);
+    CHECK(nearlyEqual(c.worldScale, 0.0234375f));
+    CHECK(c.billboard == UiBillboard::YawOnly);
+    CHECK(c.depthTest == false);
 
     const ButtonComponent& b = *go->getButton();
     CHECK(b.visible == false);
@@ -601,6 +610,7 @@ static void test_ui_lua_escribe_todos_los_campos(ScriptManager& sm)
     CHECK(sm.lua()["leidos"]["align"].get<int>() == (int)UiTextAlign::Justify);
     CHECK(nearlyEqual(sm.lua()["leidos"]["valor"].get<float>(), 7.0f));
     CHECK(nearlyEqual(sm.lua()["leidos"]["normalizado"].get<float>(), 0.5f));
+    CHECK(sm.lua()["leidos"]["modo"].get<int>() == (int)UiCanvasRenderMode::World);
     CHECK(nearlyEqual(sm.lua()["anchoRef"].get<float>(), 1280.0f));
     CHECK(nearlyEqual(sm.lua()["altoRef"].get<float>(), 720.0f));
     CHECK(nearlyEqual(sm.lua()["bw"].get<float>(), 210.0f));

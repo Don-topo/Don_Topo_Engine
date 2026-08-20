@@ -415,6 +415,8 @@ Los enums viajan como tablas de constantes enteras:
 | --- | --- |
 | `UiScaleMode` | `ConstantPixelSize`, `ScaleWithScreenSize`, `ConstantPhysicalSize` |
 | `UiScreenMatch` | `MatchWidthOrHeight`, `Expand`, `Shrink` |
+| `UiCanvasRenderMode` | `ScreenSpace`, `World` |
+| `UiBillboard` | `None`, `YawOnly`, `Full` |
 | `UiTextAlign` | `Left`, `Center`, `Right`, `Justify` |
 | `UiTextOverflow` | `Overflow`, `Clip`, `Ellipsis` |
 | `UiProgressFillDirection` | `LeftToRight`, `RightToLeft`, `BottomToTop`, `TopToBottom` |
@@ -439,6 +441,10 @@ Los enums viajan como tablas de constantes enteras:
 | `c.aspectRatio` | 0 = apagado |
 | `c:GetReferenceResolution()` / `c:SetReferenceResolution(w, h)` | Resolución de referencia |
 | `c:GetSafeArea()` / `c:SetSafeArea(l, t, r, b)` | Insets en píxeles reales |
+| `c.renderMode` | `UiCanvasRenderMode.*`. En `World` el canvas se coloca EN LA ESCENA y se ignoran `scaleMode`, `screenMatch`, `matchWidthOrHeight`, los tres DPI, `safeArea` y `aspectRatio` |
+| `c.worldScale` | Solo `World`. Unidades de mundo por PÍXEL de canvas |
+| `c.billboard` | Solo `World`. `UiBillboard.*`: `YawOnly` gira solo en la vertical, `Full` encara del todo a la cámara |
+| `c.depthTest` | Solo `World`. A `false` se dibuja siempre encima, atravesando paredes |
 
 ### Button
 
