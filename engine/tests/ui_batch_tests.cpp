@@ -5671,15 +5671,42 @@ static void test_world_canvas_matrix_billboard()
         CHECK(!nearly(ejeX.x, 1.0f));
     }
 
-    // YawOnly: el eje VERTICAL del canvas sigue siendo el del mundo (no se
-    // tumba al mirar desde arriba), que es lo que quiere una barra de vida.
+    // YawOnly: con la camara en (0,4,6) el acimut cae EXACTO en el eje Z del
+    // mundo (x=0): "girar el yaw de verdad" y "no hacer nada" darian la misma
+    // base por pura coincidencia de esa camara, y solo mirar ejeY no lo
+    // distingue (arriba es fijo (0,1,0) pase lo que pase con derecha/adelante).
+    // Se usa una camara con componente en X para que el acimut no coincida con
+    // ningun eje del mundo, y se comprueban a mano derecha (ejeX) y adelante
+    // (ejeZ) con sus valores EXACTOS, no solo "es distinto de".
+    const glm::mat4 vistaYaw = glm::lookAt(glm::vec3(5.0f, 4.0f, 6.0f),
+                                           glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     c.billboard = UiBillboard::YawOnly;
     {
-        const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 100.0f), mundo, vista);
+        const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 100.0f), mundo, vistaYaw);
+        const glm::vec3 ejeX = glm::normalize(glm::vec3(m[0]));
         const glm::vec3 ejeY = glm::normalize(glm::vec3(m[1]));
+        const glm::vec3 ejeZ = glm::normalize(glm::vec3(m[2]));
+
+        // arriba (ejeY) sigue siendo el del mundo: no se tumba al mirar desde
+        // arriba, que es lo que quiere una barra de vida.
         CHECK(nearly(ejeY.x, 0.0f));
         CHECK(nearly(std::fabs(ejeY.y), 1.0f));
         CHECK(nearly(ejeY.z, 0.0f));
+
+        // adelante (ejeZ) es la proyeccion horizontal de la camara (5,4,6)
+        // sobre el plano XZ, normalizada: (5,0,6)/sqrt(61). Y = 0 (el yaw no
+        // inclina) y X != 0: SI giro. Con la camara vieja (x=0) esto habria
+        // salido (0,0,1) por casualidad, igual que sin girar nada.
+        CHECK(nearly(ejeZ.x, 0.6401844f));
+        CHECK(nearly(ejeZ.y, 0.0f));
+        CHECK(nearly(ejeZ.z, 0.7682212f));
+
+        // derecha (ejeX) = arriba x adelante: perpendicular a ejeZ y con su
+        // propio valor exacto, distinto del (1,0,0) del mundo.
+        CHECK(nearly(ejeX.x, 0.7682212f));
+        CHECK(nearly(ejeX.y, 0.0f));
+        CHECK(nearly(ejeX.z, -0.6401844f));
+        CHECK(nearly(glm::dot(ejeX, ejeZ), 0.0f));
     }
 
     // Full: encara la camara del todo, asi que el eje Y del canvas SE INCLINA.
@@ -5688,6 +5715,21 @@ static void test_world_canvas_matrix_billboard()
         const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 100.0f), mundo, vista);
         const glm::vec3 ejeY = glm::normalize(glm::vec3(m[1]));
         CHECK(!nearly(std::fabs(ejeY.y), 1.0f));
+    }
+
+    // Guarda contra mirar en VERTICAL JUSTA: con la camara encima mirando
+    // hacia abajo, la proyeccion horizontal de "atras" se anula (largo2 ~ 0) y
+    // sin la guarda normalize(0,0,0) daria NaN, que se colaria en la matriz
+    // entera. Nadie ejercitaba esta rama antes: si un refactor la borra, esta
+    // es la unica comprobacion que se entera.
+    const glm::mat4 vistaVertical = glm::lookAt(glm::vec3(0.0f, 10.0f, 0.0f),
+                                                glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    c.billboard = UiBillboard::YawOnly;
+    {
+        const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 100.0f), mundo, vistaVertical);
+        for (int col = 0; col < 4; ++col)
+            for (int row = 0; row < 4; ++row)
+                CHECK(!std::isnan(m[col][row]));
     }
 }
 
