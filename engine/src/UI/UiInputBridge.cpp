@@ -22,6 +22,10 @@ namespace DonTopo
             { GLFW_KEY_ENTER,      UiKey::Enter  },
             { GLFW_KEY_KP_ENTER,   UiKey::Enter  },
             { GLFW_KEY_ESCAPE,     UiKey::Escape },
+            { GLFW_KEY_BACKSPACE,  UiKey::Backspace },
+            { GLFW_KEY_DELETE,     UiKey::Delete },
+            { GLFW_KEY_HOME,       UiKey::Home   },
+            { GLFW_KEY_END,        UiKey::End    },
             { GLFW_KEY_LEFT,       UiKey::Left   },
             { GLFW_KEY_RIGHT,      UiKey::Right  },
             { GLFW_KEY_UP,         UiKey::Up     },
@@ -37,6 +41,15 @@ namespace DonTopo
             { GLFW_GAMEPAD_BUTTON_B,          UiKey::Escape },
         };
 
+        // Caracteres acumulados desde el ultimo fillUiInputKeys. Un solo hilo:
+        // los callbacks de GLFW corren dentro de pollEvents, en el principal.
+        std::vector<uint32_t> g_chars;
+
+        // Tope duro. Nadie teclea 256 caracteres en un frame; si el buffer llega
+        // ahi es que quien llama no lo esta vaciando, y crecer sin limite
+        // convertiria un fallo de cableado en una fuga de memoria.
+        constexpr size_t kMaxChars = 256;
+
         void empuja(UiInputState& out, UiKey key)
         {
             // La misma tecla por dos vías (la cruceta y el stick, o los dos
@@ -48,8 +61,24 @@ namespace DonTopo
         }
     }
 
+    void pushUiInputChar(uint32_t codepoint)
+    {
+        if (g_chars.size() >= kMaxChars) return;
+        g_chars.push_back(codepoint);
+    }
+
+    void discardUiInputChars()
+    {
+        g_chars.clear();
+    }
+
     void fillUiInputKeys(UiInputState& out)
     {
+        // Los caracteres se MUEVEN y el acumulador queda vacio: si se leyeran
+        // sin vaciar, lo tecleado se repetiria en todos los frames siguientes.
+        out.chars.insert(out.chars.end(), g_chars.begin(), g_chars.end());
+        g_chars.clear();
+
         for (const Atajo& a : kTeclas)
             if (Input::isKeyPressed(a.glfwKey)) empuja(out, a.uiKey);
 

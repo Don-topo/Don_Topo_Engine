@@ -573,6 +573,11 @@ int main()
                     // edición, el Tab y las flechas son del editor.
                     if (editor.isPlaying() && !ImGui::GetIO().WantCaptureKeyboard)
                         DonTopo::fillUiInputKeys(uiInput);
+                    else
+                        // El gate del PUSH (WantTextInput) no es el mismo que este,
+                        // asi que un caracter puede haber entrado en un frame que no
+                        // se consume. Sin tirarlo, saldria en el siguiente que si.
+                        DonTopo::discardUiInputChars();
                     uiInput.timeSeconds = (float)glfwGetTime();
                     d3d12.uiCanvas().updateInput(uiInput);
                 }
@@ -860,6 +865,13 @@ int main()
         });
         glfwSetCharCallback(window.getNativeWindow(), [](GLFWwindow* w, unsigned int c) {
             ImGui_ImplGlfw_CharCallback(w, c);
+            // Al canvas del juego SOLO en Play y con ImGui sin foco de texto:
+            // el mismo gate que ya se le aplica al teclado unas lineas mas
+            // abajo. Sin esto, renombrar un GameObject en el Hierarchy tambien
+            // escribiria dentro del InputField de la escena.
+            auto* ctx = static_cast<AppCtx*>(glfwGetWindowUserPointer(w));
+            if (ctx && ctx->ed && ctx->ed->isPlaying() && !ImGui::GetIO().WantTextInput)
+                DonTopo::pushUiInputChar(c);
         });
 
         glfwSetKeyCallback(window.getNativeWindow(), [](GLFWwindow* w, int key, int scancode, int action, int mods) {
@@ -1105,6 +1117,10 @@ int main()
                 // el Tab y las flechas son del editor, no del juego.
                 if (editor.isPlaying() && !ImGui::GetIO().WantCaptureKeyboard)
                     DonTopo::fillUiInputKeys(uiInput);
+                else
+                    // Mismo motivo que en el camino de D3D12: los dos gates no
+                    // coinciden, y lo que no se consume no puede cruzar el frame.
+                    DonTopo::discardUiInputChars();
                 uiInput.timeSeconds = (float)glfwGetTime();
                 renderer.uiCanvas().updateInput(uiInput);
             }

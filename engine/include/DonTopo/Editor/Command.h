@@ -428,6 +428,70 @@ private:
     ScrollbarComponent m_state;
 };
 
+// Add/Remove del InputFieldComponent, mismo patron que los demas: m_state es una COPIA
+// del componente entero pa que un Add-undo-redo no devuelva sus campos a los
+// defaults, y la copia ESTRENA callbacks (el slot no los copia) asi que un undo
+// no revive el handler de un script muerto.
+class InputFieldComponentCommand : public ICommand {
+public:
+    InputFieldComponentCommand(Scene& scene, std::string label, uint64_t id,
+                        bool add, InputFieldComponent state);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(bool add);
+
+    Scene& m_scene;
+    std::string m_label;
+    uint64_t m_id;
+    bool m_add;
+    InputFieldComponent m_state;
+};
+// Add/Remove del DropdownComponent, mismo patron que los demas: m_state es una COPIA
+// del componente entero pa que un Add-undo-redo no devuelva sus campos a los
+// defaults, y la copia ESTRENA callbacks (el slot no los copia) asi que un undo
+// no revive el handler de un script muerto.
+class DropdownComponentCommand : public ICommand {
+public:
+    DropdownComponentCommand(Scene& scene, std::string label, uint64_t id,
+                        bool add, DropdownComponent state);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(bool add);
+
+    Scene& m_scene;
+    std::string m_label;
+    uint64_t m_id;
+    bool m_add;
+    DropdownComponent m_state;
+};
+// Add/Remove del ScrollViewComponent, mismo patron que los demas: m_state es una COPIA
+// del componente entero pa que un Add-undo-redo no devuelva sus campos a los
+// defaults, y la copia ESTRENA callbacks (el slot no los copia) asi que un undo
+// no revive el handler de un script muerto.
+class ScrollViewComponentCommand : public ICommand {
+public:
+    ScrollViewComponentCommand(Scene& scene, std::string label, uint64_t id,
+                        bool add, ScrollViewComponent state);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(bool add);
+
+    Scene& m_scene;
+    std::string m_label;
+    uint64_t m_id;
+    bool m_add;
+    ScrollViewComponent m_state;
+};
+
 // Add/Remove del AnimatorComponent, mismo contrato que CameraComponentCommand:
 // resuelve el GameObject por id en cada execute()/undo() (nunca puntero crudo),
 // y m_state conserva el grafo pa que un Add-undo-redo no lo devuelva vacío.

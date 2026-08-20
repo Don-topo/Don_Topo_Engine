@@ -183,6 +183,30 @@ private:
     void setImageAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
 
     // Slider: widget INTERACTIVO de la UI 2D. Seccion tras "Add" como el resto.
+    // InputField: widget de la UI 2D. Seccion tras "Add" como el resto.
+    void drawInputFieldSection(EditorContext& ctx);
+    // Drena los file dialogs del InputField. Fuera de la seccion por lo mismo que los
+    // demas: si no se drenan siempre, cambiar de seleccion con uno abierto deja
+    // el flag atascado.
+    void drawInputFieldPathDialog(EditorContext& ctx);
+    void setInputFieldAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
+    void setInputFieldFontPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
+    // Dropdown: widget de la UI 2D. Seccion tras "Add" como el resto.
+    void drawDropdownSection(EditorContext& ctx);
+    // Drena los file dialogs del Dropdown. Fuera de la seccion por lo mismo que los
+    // demas: si no se drenan siempre, cambiar de seleccion con uno abierto deja
+    // el flag atascado.
+    void drawDropdownPathDialog(EditorContext& ctx);
+    void setDropdownAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
+    void setDropdownFontPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
+    // ScrollView: widget de la UI 2D. Seccion tras "Add" como el resto.
+    void drawScrollViewSection(EditorContext& ctx);
+    // Drena los file dialogs del ScrollView. Fuera de la seccion por lo mismo que los
+    // demas: si no se drenan siempre, cambiar de seleccion con uno abierto deja
+    // el flag atascado.
+    void drawScrollViewPathDialog(EditorContext& ctx);
+    void setScrollViewAtlasPath(EditorContext& ctx, uint64_t ownerId, const std::string& path);
+
     void drawSliderSection(EditorContext& ctx);
     // Drena el file dialog del atlas del Slider, fuera de la seccion por lo mismo
     // que los demas: si no se drena siempre, cambiar de seleccion con el dialogo
@@ -336,6 +360,30 @@ private:
 
     // Y uno propio para cada widget interactivo, por lo mismo: todos caben en
     // el mismo GameObject y un "before" compartido mezclaria arrastres.
+
+    // Y uno propio para cada widget del tercer lote, por lo mismo que los
+    // demas: todos caben en el mismo GameObject.
+
+    uint64_t    m_inputFieldDragOwnerId = 0;
+    const char* m_inputFieldDragField   = nullptr;
+    float       m_inputFieldDragBefore  = 0.0f;
+    glm::vec2   m_inputFieldDragBefore2 {0.0f};
+    glm::vec4   m_inputFieldDragBefore4 {1.0f};
+    std::string m_inputFieldDragBeforeStr;
+
+    uint64_t    m_dropdownDragOwnerId = 0;
+    const char* m_dropdownDragField   = nullptr;
+    float       m_dropdownDragBefore  = 0.0f;
+    glm::vec2   m_dropdownDragBefore2 {0.0f};
+    glm::vec4   m_dropdownDragBefore4 {1.0f};
+    std::string m_dropdownDragBeforeStr;
+
+    uint64_t    m_scrollViewDragOwnerId = 0;
+    const char* m_scrollViewDragField   = nullptr;
+    float       m_scrollViewDragBefore  = 0.0f;
+    glm::vec2   m_scrollViewDragBefore2 {0.0f};
+    glm::vec4   m_scrollViewDragBefore4 {1.0f};
+    std::string m_scrollViewDragBeforeStr;
 
     uint64_t    m_sliderDragOwnerId = 0;
     const char* m_sliderDragField   = nullptr;
@@ -501,6 +549,29 @@ private:
     std::string m_panelPathError;
 
     // Atlas de los cuatro interactivos: instancia de dialogo propia cada uno.
+
+    // Atlas (y fuente donde la hay) de los widgets del tercer lote.
+
+    bool     m_inputFieldAtlasDlgOpen  = false;
+    uint64_t m_inputFieldAtlasDlgOwner = 0;
+    std::unique_ptr<IGFD::FileDialog> m_inputFieldAtlasFileDialog;
+    std::string m_inputFieldPathError;
+    bool     m_inputFieldFontDlgOpen  = false;
+    uint64_t m_inputFieldFontDlgOwner = 0;
+    std::unique_ptr<IGFD::FileDialog> m_inputFieldFontFileDialog;
+
+    bool     m_dropdownAtlasDlgOpen  = false;
+    uint64_t m_dropdownAtlasDlgOwner = 0;
+    std::unique_ptr<IGFD::FileDialog> m_dropdownAtlasFileDialog;
+    std::string m_dropdownPathError;
+    bool     m_dropdownFontDlgOpen  = false;
+    uint64_t m_dropdownFontDlgOwner = 0;
+    std::unique_ptr<IGFD::FileDialog> m_dropdownFontFileDialog;
+
+    bool     m_scrollViewAtlasDlgOpen  = false;
+    uint64_t m_scrollViewAtlasDlgOwner = 0;
+    std::unique_ptr<IGFD::FileDialog> m_scrollViewAtlasFileDialog;
+    std::string m_scrollViewPathError;
 
     bool     m_sliderAtlasDlgOpen  = false;
     uint64_t m_sliderAtlasDlgOwner = 0;

@@ -116,12 +116,12 @@ Up/Down/Left/Right/A..Z/Num0..Num9`, `MouseButton.Left/Right/Middle`.
 | `entity:GetTransform()` | Devuelve `Transform` |
 | `entity:GetParent()` | `Entity` del padre, o `nil` si es raíz |
 | `entity:GetChildren()` | Tabla (array 1-based) de `Entity` hijos |
-| `entity:GetComponent(name)` | Devuelve el componente si existe, si no `nil`. `name`: `"BoxCollider"`, `"SphereCollider"`, `"CapsuleCollider"`, `"PlaneCollider"`, `"AudioClip"`, `"Rigidbody"`, `"Animator"`, `"Canvas"`, `"Button"`, `"Text"`, `"ProgressBar"`, `"Layout"`, `"Panel"`, `"Image"`, `"Slider"`, `"Checkbox"`, `"Toggle"`, `"Scrollbar"`, o `"Script:<NombreClase>"` pa acceder a la instancia de otro script en el mismo GameObject |
+| `entity:GetComponent(name)` | Devuelve el componente si existe, si no `nil`. `name`: `"BoxCollider"`, `"SphereCollider"`, `"CapsuleCollider"`, `"PlaneCollider"`, `"AudioClip"`, `"Rigidbody"`, `"Animator"`, `"Canvas"`, `"Button"`, `"Text"`, `"ProgressBar"`, `"Layout"`, `"Panel"`, `"Image"`, `"Slider"`, `"Checkbox"`, `"Toggle"`, `"Scrollbar"`, `"InputField"`, `"Dropdown"`, `"ScrollView"`, o `"Script:<NombreClase>"` pa acceder a la instancia de otro script en el mismo GameObject |
 | `entity:AddComponent(name, arg?)` | Añade componente (mismos defaults que el botón Add del editor; colliders mutuamente excluyentes). `AudioClip` requiere `arg` = ruta del asset. Los de UI no se excluyen entre sí (caben todos en el mismo GameObject) y pedir uno que ya está devuelve el que hay. `"Script:<Nombre>"` añade el script (Awake/Start se disparan en el siguiente lifecycle update) |
 | `entity:RemoveComponent(name)` | Quita el componente (scripts se remueven diferido, al final del frame) |
-| `entity:GetCanvas()` / `GetButton()` / `GetText()` / `GetProgressBar()` / `GetLayout()` / `GetPanel()` / `GetImage()` / `GetSlider()` / `GetCheckbox()` / `GetToggle()` / `GetScrollbar()` | El componente de UI, o `nil` si no lo tiene |
-| `entity:AddCanvas()` / `AddButton()` / `AddText()` / `AddProgressBar()` / `AddLayout()` / `AddPanel()` / `AddImage()` / `AddSlider()` / `AddCheckbox()` / `AddToggle()` / `AddScrollbar()` | Lo crea con los valores por defecto del componente y devuelve el wrapper; si ya existe devuelve el que hay sin pisarlo |
-| `entity:RemoveCanvas()` / `RemoveButton()` / `RemoveText()` / `RemoveProgressBar()` / `RemoveLayout()` / `RemovePanel()` / `RemoveImage()` / `RemoveSlider()` / `RemoveCheckbox()` / `RemoveToggle()` / `RemoveScrollbar()` | Lo quita del GameObject |
+| `entity:GetCanvas()` / `GetButton()` / `GetText()` / `GetProgressBar()` / `GetLayout()` / `GetPanel()` / `GetImage()` / `GetSlider()` / `GetCheckbox()` / `GetToggle()` / `GetScrollbar()` / `GetInputField()` / `GetDropdown()` / `GetScrollView()` | El componente de UI, o `nil` si no lo tiene |
+| `entity:AddCanvas()` / `AddButton()` / `AddText()` / `AddProgressBar()` / `AddLayout()` / `AddPanel()` / `AddImage()` / `AddSlider()` / `AddCheckbox()` / `AddToggle()` / `AddScrollbar()` / `AddInputField()` / `AddDropdown()` / `AddScrollView()` | Lo crea con los valores por defecto del componente y devuelve el wrapper; si ya existe devuelve el que hay sin pisarlo |
+| `entity:RemoveCanvas()` / `RemoveButton()` / `RemoveText()` / `RemoveProgressBar()` / `RemoveLayout()` / `RemovePanel()` / `RemoveImage()` / `RemoveSlider()` / `RemoveCheckbox()` / `RemoveToggle()` / `RemoveScrollbar()` / `RemoveInputField()` / `RemoveDropdown()` / `RemoveScrollView()` | Lo quita del GameObject |
 
 ## Transform
 
@@ -395,7 +395,7 @@ function Fade:Update(dt)
 end
 ```
 
-## UI — Canvas / Button / Text / ProgressBar / Layout / Panel / Image / Slider / Checkbox / Toggle / Scrollbar
+## UI — Canvas / Button / Text / ProgressBar / Layout / Panel / Image / Slider / Checkbox / Toggle / Scrollbar / InputField / Dropdown / ScrollView
 
 Los siete se obtienen con `entity:GetCanvas()`, `entity:GetButton()`,
 `entity:GetText()`, `entity:GetProgressBar()`, `entity:GetLayout()`,
@@ -425,6 +425,7 @@ Los enums viajan como tablas de constantes enteras:
 | `UiFillOrigin` | `Start`, `End` |
 | `UiSliderDirection` | `LeftToRight`, `RightToLeft`, `BottomToTop`, `TopToBottom` |
 | `UiScrollbarDirection` | `LeftToRight`, `RightToLeft`, `TopToBottom`, `BottomToTop` |
+| `UiInputContentType` | `Standard`, `IntegerNumber`, `DecimalNumber`, `Alphanumeric`, `Password` |
 
 ### Canvas
 
@@ -665,6 +666,108 @@ function Opciones:Start()
     vol:OnValueChanged(function(v)
         Log.Info("Volumen: " .. v)
     end)
+end
+```
+
+### InputField / Dropdown / ScrollView
+
+#### InputField
+
+El único widget en el que escribe el **jugador**. Para que existiera hubo que
+darle al canvas algo que no tenía: un canal de **caracteres**. `UiKey` nombra
+teclas físicas con significado propio (`Tab`, `Enter`, flechas) y una `a` no es
+una de esas — sale del layout del teclado y de las muertas —, así que el core
+ganó `UiInputState.chars` y `UiElement::onTextInput`. Es infraestructura del
+canvas, no de este componente: cualquier cosa futura que reciba texto (una
+consola, un chat, un buscador) usa la misma.
+
+| Propiedad / Método | Descripción |
+| --- | --- |
+| `f.text` | El texto de verdad, en UTF-8. En `Password` se guarda **tal cual**: lo que cambia es lo que se enseña |
+| `f.placeholder` | Lo que se ve con el campo vacío, con su propio color |
+| `f.interactable` | A `false` ni siquiera toma el foco |
+| `f.readOnly` | Toma el foco y deja mover el cursor, pero no cambiar el texto |
+| `f.characterLimit` | Cuenta **caracteres**, no bytes. `0` = sin límite |
+| `f.contentType` | `UiInputContentType.*`. Filtra lo que se puede **teclear**, no lo que se dibuja |
+| `f.passwordChar` | Con qué se enmascara. Vacío cae al asterisco |
+| `f.fontPath` / `f.fontSize` / `f.align` / `f.padding` | |
+| `f.caretWidth` / `f.caretBlinkRate` | Segundos por medio ciclo; `0` = fijo |
+| `f.atlasPath` / `f.backgroundSprite` | |
+| `f:GetColor/SetColor`, `GetTextColor/SetTextColor`, `GetPlaceholderColor/SetPlaceholderColor`, `GetCaretColor/SetCaretColor` | |
+| `f:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
+| `f:GetDisplayText()` | Lo que se **dibuja**: el placeholder si está vacío, o la máscara si es `Password`. Nunca la contraseña |
+| `f:GetCaretPos()` / `f:SetCaretPos(n)` | Posición del cursor en **caracteres**, `0` = antes del primero. Se acota al escribirla |
+| `f:OnValueChanged(fn)` | `fn(textoNuevo)`, en cada tecla que cambia el texto |
+| `f:OnEndEdit(fn)` | `fn(texto)` al pulsar Enter o al perder el foco. Es donde valida un formulario, no en cada tecla |
+
+`Left` y `Right` mueven el cursor y **consumen** la tecla: si no, la navegación
+direccional del canvas se llevaría el foco a otro widget en mitad de una
+palabra. `Up` y `Down` no se consumen, así que se puede salir del campo con el
+mando.
+
+#### Dropdown
+
+El único cuyo subárbol **cambia de forma** con los datos: una opción más es un
+nodo más. Añadir o quitar opciones reconstruye el árbol de UI; abrir y cerrar
+no (la lista existe siempre y solo se apaga).
+
+| Propiedad / Método | Descripción |
+| --- | --- |
+| `d.value` | Índice **0-based** de la elegida, igual que en C++ y en el inspector |
+| `d.isOpen` | Estado vivo. **No se serializa**: una escena no puede abrirse con la lista tapando el menú |
+| `d.itemHeight` / `d.maxVisibleItems` | `0` = todas |
+| `d.interactable` / `d.visible` | |
+| `d.fontPath` / `d.fontSize` / `d.padding` | |
+| `d.atlasPath` / `d.backgroundSprite` / `d.arrowSprite` / `d.itemSprite` | |
+| `d:GetColor/SetColor`, `GetListColor/SetListColor`, `GetItemColor/SetItemColor`, `GetItemSelectedColor/SetItemSelectedColor`, `GetArrowColor/SetArrowColor`, `GetTextColor/SetTextColor` | |
+| `d:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
+| `d:GetOptionCount()` | Cuántas hay |
+| `d:GetOption(i)` | La opción `i`, con índice **1-based** (lo natural en Lua). Fuera de rango devuelve cadena vacía |
+| `d:GetSelectedLabel()` | El texto de la elegida, o vacío si el índice no apunta a ninguna |
+| `d:SetOptions(tabla)` | Reemplaza la lista. Lo que no sea cadena se descarta, entrada a entrada |
+| `d:AddOption(s)` / `d:ClearOptions()` | |
+| `d:OnValueChanged(fn)` | `fn(indice)` (0-based), solo cuando cambia |
+
+**Ojo con los dos índices**: `d.value` es 0-based (es el campo del componente) y
+`d:GetOption(i)` es 1-based (es una tabla de Lua). Para leer la elegida sin
+pensarlo, `d:GetSelectedLabel()`.
+
+#### ScrollView
+
+| Propiedad / Método | Descripción |
+| --- | --- |
+| `v.horizontal` / `v.vertical` | Un eje apagado no se mueve aunque el contenido sea más grande |
+| `v.scrollSensitivity` | **Píxeles** que mueve la rueda por muesca (no fracción: una lista de 50 filas y otra de 5 quieren el mismo recorrido por muesca) |
+| `v.visible` | |
+| `v.atlasPath` / `v.backgroundSprite` | |
+| `v:GetContentSize/SetContentSize(x,y)` | Tamaño del área desplazable. Es un **campo**, no algo medido de los hijos |
+| `v:GetNormalizedPosition/SetNormalizedPosition(x,y)` | `0` = principio, `1` = final, por eje |
+| `v:GetScrollRange()` | Cuánto se puede desplazar por eje, en píxeles. Un eje apagado da `0` |
+| `v:GetContentOffset()` | Dónde está el contenido dentro del viewport. Siempre `<= 0` |
+| `v:GetPosition/SetPosition`, `GetSize/SetSize`, ... | Rect del **viewport** |
+| `v:OnValueChanged(fn)` | `fn(x, y)` con la posición normalizada de los dos ejes |
+
+**Los hijos del GameObject cuelgan del contenido**, no del viewport: por eso
+desplazarse los arrastra. El viewport recorta (`clipChildren`), así que lo que
+se salga no se dibuja.
+
+**No tiene referencia a un Scrollbar.** Enlazarlos es una línea de script; una
+referencia entre componentes de la escena habría que serializarla y mantenerla
+viva en el clone, el undo y el borrado.
+
+```lua
+function Opciones:Start()
+    local barra = Scene.Find("BarraLateral"):GetScrollbar()
+    local lista = self.entity:GetScrollView()
+    barra:OnValueChanged(function(v)
+        local x = select(1, lista:GetNormalizedPosition())
+        lista:SetNormalizedPosition(x, v)
+    end)
+
+    local nombre = Scene.Find("CampoNombre"):GetInputField()
+    nombre.contentType = UiInputContentType.Alphanumeric
+    nombre.characterLimit = 16
+    nombre:OnEndEdit(function(t) Log.Info("Jugador: " .. t) end)
 end
 ```
 

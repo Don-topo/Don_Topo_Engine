@@ -131,6 +131,11 @@ PropertiesPanel::PropertiesPanel()
     , m_uiAtlasFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_textFontFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_barAtlasFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_inputFieldAtlasFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_inputFieldFontFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_dropdownAtlasFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_dropdownFontFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_scrollViewAtlasFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_sliderAtlasFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_checkboxAtlasFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_toggleAtlasFileDialog(std::make_unique<IGFD::FileDialog>())
@@ -410,6 +415,9 @@ void PropertiesPanel::draw(EditorContext& ctx)
             drawCheckboxSection(ctx);
             drawToggleSection(ctx);
             drawScrollbarSection(ctx);
+            drawInputFieldSection(ctx);
+            drawDropdownSection(ctx);
+            drawScrollViewSection(ctx);
             drawLayoutSection(ctx);
             drawScriptsSection(ctx);
             drawAddComponentButton(ctx);
@@ -429,6 +437,9 @@ void PropertiesPanel::draw(EditorContext& ctx)
     drawCheckboxPathDialog(ctx);
     drawTogglePathDialog(ctx);
     drawScrollbarPathDialog(ctx);
+    drawInputFieldPathDialog(ctx);
+    drawDropdownPathDialog(ctx);
+    drawScrollViewPathDialog(ctx);
 }
 
 void PropertiesPanel::drawSsrSection(EditorContext& ctx)
@@ -4796,6 +4807,1538 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
     }
 }
 
+
+void PropertiesPanel::setInputFieldAtlasPath(EditorContext& ctx, uint64_t ownerId,
+                                       const std::string& path)
+{
+    if (!isUiAtlasPath(path))
+    {
+        m_inputFieldPathError = "No es una imagen (.png .jpg .jpeg .bmp .tga): " +
+                         std::filesystem::path(path).filename().string();
+        ctx.pushLog(m_inputFieldPathError);
+        return;
+    }
+    m_inputFieldPathError.clear();
+
+    Scene* scene = ctx.scene;
+    if (!scene) return;
+    GameObject* go = scene->findById(ownerId);
+    if (!go || !go->hasInputField()) return;
+
+    InputFieldComponent& c = *go->getInputField();
+    const std::string before = c.atlasPath;
+    if (before == path) return;
+
+    c.atlasPath = path;
+
+    const std::string lbl = std::string("Atlas ") + "del campo de " + go->name + "'";
+    ctx.pushLog(lbl + " cambiado a " + path);
+    if (ctx.undo)
+        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+            lbl, before, path,
+            [scene, ownerId](const std::string& v) {
+                if (GameObject* g = scene->findById(ownerId))
+                    if (g->hasInputField()) g->getInputField()->atlasPath = v;
+            }));
+}
+
+void PropertiesPanel::setInputFieldFontPath(EditorContext& ctx, uint64_t ownerId,
+                                      const std::string& path)
+{
+    // Mismo veto y por el mismo sitio que el atlas: aqui pasan el drop y el file
+    // dialog, asi que el filtro va una sola vez.
+    if (!isUiFontPath(path))
+    {
+        m_inputFieldPathError = "No es una fuente (.ttf .otf .ttc): " +
+                         std::filesystem::path(path).filename().string();
+        ctx.pushLog(m_inputFieldPathError);
+        return;
+    }
+    m_inputFieldPathError.clear();
+
+    Scene* scene = ctx.scene;
+    if (!scene) return;
+    GameObject* go = scene->findById(ownerId);
+    if (!go || !go->hasInputField()) return;
+
+    InputFieldComponent& c = *go->getInputField();
+    const std::string before = c.fontPath;
+    if (before == path) return;
+
+    c.fontPath = path;
+
+    const std::string lbl = std::string("Fuente ") + "del campo de " + go->name + "'";
+    ctx.pushLog(lbl + " cambiada a " + path);
+    if (ctx.undo)
+        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+            lbl, before, path,
+            [scene, ownerId](const std::string& v) {
+                if (GameObject* g = scene->findById(ownerId))
+                    if (g->hasInputField()) g->getInputField()->fontPath = v;
+            }));
+}
+
+void PropertiesPanel::drawInputFieldPathDialog(EditorContext& ctx)
+{
+    // Sin condicionar a ctx.selected: si no se drena aqui, cambiar de seleccion
+    // con el dialogo abierto deja el flag atascado en true para siempre.
+    if (m_inputFieldAtlasDlgOpen && m_inputFieldAtlasFileDialog->Display("InputFieldAtlasDlg"))
+    {
+        if (m_inputFieldAtlasFileDialog->IsOk() &&
+            assetAllowed(ctx, m_inputFieldAtlasFileDialog->GetFilePathName()))
+            setInputFieldAtlasPath(ctx, m_inputFieldAtlasDlgOwner, m_inputFieldAtlasFileDialog->GetFilePathName());
+        m_inputFieldAtlasFileDialog->Close();
+        m_inputFieldAtlasDlgOpen = false;
+    }
+
+    if (m_inputFieldFontDlgOpen && m_inputFieldFontFileDialog->Display("InputFieldFontDlg"))
+    {
+        if (m_inputFieldFontFileDialog->IsOk() &&
+            assetAllowed(ctx, m_inputFieldFontFileDialog->GetFilePathName()))
+            setInputFieldFontPath(ctx, m_inputFieldFontDlgOwner, m_inputFieldFontFileDialog->GetFilePathName());
+        m_inputFieldFontFileDialog->Close();
+        m_inputFieldFontDlgOpen = false;
+    }
+}
+
+void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
+{
+    // Add-gate: sin el componente no hay seccion, igual que los colliders.
+    if (!ctx.selected->hasInputField()) return;
+
+    ImGui::Separator();
+    bool sectionOpen = ImGui::TreeNodeEx("Input Field",
+                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+    const bool removeClicked = ImGui::SmallButton("x##inputfield");
+
+    Scene*            scene = ctx.scene;
+    const uint64_t    id    = ctx.selected->id;
+    const std::string owner = ctx.selected->name;
+
+    if (sectionOpen)
+    {
+        InputFieldComponent* fld = ctx.selected->getInputField().get();
+        ImGui::TextWrapped("Campo de texto. Es el unico widget en el que escribe el JUGADOR: el canvas entrega los caracteres al elemento con foco y el handler los mete aqui.");
+
+        using FloatRef = float&       (*)(InputFieldComponent&);
+        using Vec2Ref  = glm::vec2&   (*)(InputFieldComponent&);
+        using Vec4Ref  = glm::vec4&   (*)(InputFieldComponent&);
+        using StrRef   = std::string& (*)(InputFieldComponent&);
+        using BoolRef  = bool&        (*)(InputFieldComponent&);
+        using EnumSet  = void         (*)(InputFieldComponent&, int);
+        (void)sizeof(EnumSet);   // no todos los widgets tienen enum
+
+        auto comboEnum = [&](const char* label, int before, const char* const* items,
+                             int count, EnumSet apply)
+        {
+            int idx = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::Combo(label, &idx, items, count) && idx != before)
+            {
+                apply(*fld, idx);
+                const std::string lbl = std::string(label) + " del campo de " + owner + "'";
+                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<int>>(
+                        lbl, before, idx,
+                        [scene, id, apply](const int& v) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasInputField()) apply(*go->getInputField(), v);
+                        }));
+            }
+        };
+        (void)comboEnum;
+
+        auto checkBox = [&](const char* label, BoolRef acc)
+        {
+            const bool before = acc(*fld);
+            bool       val    = before;
+            if (ImGui::Checkbox(label, &val) && val != before)
+            {
+                acc(*fld) = val;
+                const std::string lbl = std::string(label) + " del campo de " + owner + "'";
+                ctx.pushLog(lbl + (val ? " activado" : " desactivado"));
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
+                        lbl, before, val,
+                        [scene, id, acc](const bool& v) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasInputField()) acc(*go->getInputField()) = v;
+                        }));
+            }
+        };
+
+        // "before" leido ANTES de dibujar, sesion abierta en IsItemActivated y
+        // commit en IsItemDeactivatedAfterEdit: un arrastre entero es UN paso de
+        // undo, no uno por frame.
+        auto dragFloat = [&](const char* label, FloatRef acc, float speed,
+                             float lo, float hi, const char* fmt)
+        {
+            const float before = acc(*fld);
+            float       val    = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+            if (ImGui::DragFloat(label, &val, speed, lo, hi, fmt))
+                acc(*fld) = val;
+            if (ImGui::IsItemActivated())
+            {
+                m_inputFieldDragBefore  = before;
+                m_inputFieldDragOwnerId = id;
+                m_inputFieldDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_inputFieldDragOwnerId == id &&
+                m_inputFieldDragField == label)
+            {
+                const float after = acc(*fld);
+                m_inputFieldDragField = nullptr;
+                if (after != m_inputFieldDragBefore)
+                {
+                    const std::string lbl = std::string(label) + " del campo de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<float>>(
+                            lbl, m_inputFieldDragBefore, after,
+                            [scene, id, acc](const float& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasInputField()) acc(*go->getInputField()) = v;
+                            }));
+                }
+            }
+        };
+
+        auto dragVec2 = [&](const char* label, Vec2Ref acc, float speed,
+                            float lo, float hi, const char* fmt)
+        {
+            const glm::vec2 before = acc(*fld);
+            glm::vec2       val    = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::DragFloat2(label, &val.x, speed, lo, hi, fmt))
+                acc(*fld) = val;
+            if (ImGui::IsItemActivated())
+            {
+                m_inputFieldDragBefore2 = before;
+                m_inputFieldDragOwnerId = id;
+                m_inputFieldDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_inputFieldDragOwnerId == id &&
+                m_inputFieldDragField == label)
+            {
+                const glm::vec2 after = acc(*fld);
+                m_inputFieldDragField = nullptr;
+                if (after != m_inputFieldDragBefore2)
+                {
+                    const std::string lbl = std::string(label) + " del campo de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
+                            lbl, m_inputFieldDragBefore2, after,
+                            [scene, id, acc](const glm::vec2& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasInputField()) acc(*go->getInputField()) = v;
+                            }));
+                }
+            }
+        };
+
+        auto colorEdit = [&](const char* label, Vec4Ref acc)
+        {
+            const glm::vec4 before = acc(*fld);
+            glm::vec4       val    = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+            if (ImGui::ColorEdit4(label, &val.x))
+                acc(*fld) = val;
+            if (ImGui::IsItemActivated())
+            {
+                m_inputFieldDragBefore4 = before;
+                m_inputFieldDragOwnerId = id;
+                m_inputFieldDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_inputFieldDragOwnerId == id &&
+                m_inputFieldDragField == label)
+            {
+                const glm::vec4 after = acc(*fld);
+                m_inputFieldDragField = nullptr;
+                if (after != m_inputFieldDragBefore4)
+                {
+                    const std::string lbl = std::string(label) + " del campo de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
+                            lbl, m_inputFieldDragBefore4, after,
+                            [scene, id, acc](const glm::vec4& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasInputField()) acc(*go->getInputField()) = v;
+                            }));
+                }
+            }
+        };
+
+        // Un InputText entero (escribir y salir del campo) es UN paso de undo,
+        // no uno por tecla: mismo criterio que el arrastre de un DragFloat.
+        auto inputText = [&](const char* label, StrRef acc)
+        {
+            const std::string before = acc(*fld);
+            char buf[512] = {};
+            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
+            if (ImGui::InputText(label, buf, sizeof(buf)))
+                acc(*fld) = std::string(buf);
+            if (ImGui::IsItemActivated())
+            {
+                m_inputFieldDragBeforeStr = before;
+                m_inputFieldDragOwnerId   = id;
+                m_inputFieldDragField     = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_inputFieldDragOwnerId == id &&
+                m_inputFieldDragField == label)
+            {
+                const std::string after = acc(*fld);
+                const std::string prev  = m_inputFieldDragBeforeStr;
+                m_inputFieldDragField = nullptr;
+                if (after != prev)
+                {
+                    const std::string lbl = std::string(label) + " del campo de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+                            lbl, prev, after,
+                            [scene, id, acc](const std::string& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasInputField()) acc(*go->getInputField()) = v;
+                            }));
+                }
+            }
+        };
+
+        // Un sprite es un NOMBRE dentro del atlas, no texto libre. Con sidecar
+        // (<atlas>.sprites.json) se elige de la lista; sin el se cae al campo de
+        // texto, que sigue valiendo para un atlas troceado a mano.
+        auto spriteField = [&](const char* label, StrRef acc)
+        {
+            const std::vector<std::string>& nombres = spriteNamesFor(ctx, fld->atlasPath);
+            if (nombres.empty()) { inputText(label, acc); return; }
+
+            const std::string before = acc(*fld);
+
+            std::vector<const char*> items;
+            items.reserve(nombres.size() + 2);
+            items.push_back("(imagen entera)");
+            for (const std::string& n : nombres) items.push_back(n.c_str());
+
+            int current = 0;
+            for (size_t i = 0; i < nombres.size(); ++i)
+                if (nombres[i] == before) { current = (int)i + 1; break; }
+
+            std::string huerfano;
+            if (current == 0 && !before.empty())
+            {
+                huerfano = before + "  (no esta en el atlas)";
+                items.push_back(huerfano.c_str());
+                current = (int)items.size() - 1;
+            }
+
+            int idx = current;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
+            if (ImGui::Combo(label, &idx, items.data(), (int)items.size()) && idx != current)
+            {
+                const std::string after = (idx == 0)                   ? std::string()
+                                        : (idx <= (int)nombres.size()) ? nombres[(size_t)idx - 1]
+                                                                       : before;
+                if (after != before)
+                {
+                    acc(*fld) = after;
+                    const std::string lbl = std::string(label) + " del campo de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado a '" + after + "'");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+                            lbl, before, after,
+                            [scene, id, acc](const std::string& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasInputField()) acc(*go->getInputField()) = v;
+                            }));
+                }
+            }
+        };
+        (void)spriteField;
+
+        ImGui::TextDisabled("Rect");
+        dragVec2("Anchor Min##inputfield", +[](InputFieldComponent& c) -> glm::vec2& { return c.anchorMin; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Anchor Max##inputfield", +[](InputFieldComponent& c) -> glm::vec2& { return c.anchorMax; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Pivot##inputfield", +[](InputFieldComponent& c) -> glm::vec2& { return c.pivot; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Position##inputfield", +[](InputFieldComponent& c) -> glm::vec2& { return c.position; },
+                 1.0f, -16384.0f, 16384.0f, "%.0f");
+        dragVec2("Size##inputfield", +[](InputFieldComponent& c) -> glm::vec2& { return c.size; },
+                 1.0f, 0.0f, 16384.0f, "%.0f");
+        colorEdit("Box Color##inputfield", +[](InputFieldComponent& c) -> glm::vec4& { return c.color; });
+        checkBox("Visible##inputfield", +[](InputFieldComponent& c) -> bool& { return c.visible; });
+        checkBox("Interactable##inputfield", +[](InputFieldComponent& c) -> bool& { return c.interactable; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("A false ni siquiera toma el foco");
+        checkBox("Read Only##inputfield", +[](InputFieldComponent& c) -> bool& { return c.readOnly; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Toma el foco y deja mover el cursor, pero no cambiar el texto");
+
+        ImGui::TextDisabled("Texto");
+        inputText("Text##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.text; });
+        inputText("Placeholder##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.placeholder; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Lo que se ensena con el campo VACIO, con su propio color");
+        dragFloat("Font Size##inputfield", +[](InputFieldComponent& c) -> float& { return c.fontSize; },
+                  0.5f, 1.0f, 512.0f, "%.1f");
+        colorEdit("Text Color##inputfield", +[](InputFieldComponent& c) -> glm::vec4& { return c.textColor; });
+        colorEdit("Placeholder Color##inputfield", +[](InputFieldComponent& c) -> glm::vec4& { return c.placeholderColor; });
+
+        static const char* kInputAligns[] = { "Left", "Center", "Right", "Justify" };
+        comboEnum("Align##inputfield", (int)fld->align, kInputAligns, IM_ARRAYSIZE(kInputAligns),
+                  +[](InputFieldComponent& c, int v) { c.align = (UiTextAlign)v; });
+        dragFloat("Padding##inputfield", +[](InputFieldComponent& c) -> float& { return c.padding; },
+                  0.5f, 0.0f, 4096.0f, "%.1f");
+
+        ImGui::TextDisabled("Filtro");
+        {
+            // characterLimit es un uint32 y no hay dragUint: se edita como entero
+            // con el mismo baile de undo que los demas.
+            const int before = (int)fld->characterLimit;
+            int       val    = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+            if (ImGui::DragInt("Character Limit##inputfield", &val, 0.25f, 0, 65536))
+                fld->characterLimit = (uint32_t)(val < 0 ? 0 : val);
+            if (ImGui::IsItemActivated())
+            {
+                m_inputFieldDragBefore  = (float)before;
+                m_inputFieldDragOwnerId = id;
+                m_inputFieldDragField   = "Character Limit##inputfield";
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_inputFieldDragOwnerId == id &&
+                m_inputFieldDragField == std::string("Character Limit##inputfield"))
+            {
+                const int after = (int)fld->characterLimit;
+                m_inputFieldDragField = nullptr;
+                if (after != (int)m_inputFieldDragBefore)
+                {
+                    const std::string lbl = "Character Limit del campo de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<int>>(
+                            lbl, (int)m_inputFieldDragBefore, after,
+                            [scene, id](const int& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasInputField())
+                                        go->getInputField()->characterLimit = (uint32_t)(v < 0 ? 0 : v);
+                            }));
+                }
+            }
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Cuenta CARACTERES, no bytes. 0 = sin limite.");
+
+        static const char* kContentTypes[] = { "Standard", "Integer Number", "Decimal Number",
+                                                "Alphanumeric", "Password" };
+        comboEnum("Content Type##inputfield", (int)fld->contentType, kContentTypes,
+                  IM_ARRAYSIZE(kContentTypes),
+                  +[](InputFieldComponent& c, int v) { c.contentType = (UiInputContentType)v; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Filtra lo que se puede TECLEAR. Password guarda el texto tal\n"
+                              "cual y solo cambia lo que se ensena.");
+        inputText("Password Char##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.passwordChar; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Vacio cae al asterisco: un campo que no ensena NADA parece roto");
+
+        ImGui::TextDisabled("Cursor");
+        colorEdit("Caret Color##inputfield", +[](InputFieldComponent& c) -> glm::vec4& { return c.caretColor; });
+        dragFloat("Caret Width##inputfield", +[](InputFieldComponent& c) -> float& { return c.caretWidth; },
+                  0.1f, 0.0f, 64.0f, "%.2f");
+        dragFloat("Caret Blink Rate##inputfield", +[](InputFieldComponent& c) -> float& { return c.caretBlinkRate; },
+                  0.01f, 0.0f, 10.0f, "%.3f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Segundos por medio ciclo. 0 = fijo, sin parpadeo.");
+
+        ImGui::TextDisabled("Fuente");
+        inputText("Font##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.fontPath; });
+        ImGui::SameLine();
+        if (ImGui::Button("Browse...##inputfieldFont"))
+        {
+            IGFD::FileDialogConfig cfg;
+            cfg.path  = "assets";
+            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                        ImGuiFileDialogFlags_HideColumnDate |
+                        ImGuiFileDialogFlags_DisableThumbnailMode |
+                        ImGuiFileDialogFlags_DisablePlaceMode;
+            m_inputFieldFontDlgOwner = id;
+            m_inputFieldFontDlgOpen  = true;
+            m_inputFieldFontFileDialog->OpenDialog("InputFieldFontDlg", "Choose font", ".ttf,.otf,.ttc", cfg);
+        }
+        ImGui::BeginChild("##inputfieldFontDrop", ImVec2(0, 34), true);
+        ImGui::TextDisabled("Drop .ttf/.otf here");
+        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+                setInputFieldFontPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
+            ImGui::EndDragDropTarget();
+        }
+        ImGui::EndChild();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Vacia = la fuente por defecto del proyecto");
+
+        ImGui::TextDisabled("Sprites");
+        inputText("Atlas##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.atlasPath; });
+        ImGui::SameLine();
+        if (ImGui::Button("Browse...##inputfieldAtlas"))
+        {
+            IGFD::FileDialogConfig cfg;
+            cfg.path  = "assets";
+            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                        ImGuiFileDialogFlags_HideColumnDate |
+                        ImGuiFileDialogFlags_DisableThumbnailMode |
+                        ImGuiFileDialogFlags_DisablePlaceMode;
+            m_inputFieldAtlasDlgOwner = id;
+            m_inputFieldAtlasDlgOpen  = true;
+            m_inputFieldAtlasFileDialog->OpenDialog("InputFieldAtlasDlg", "Choose atlas",
+                                             ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+        }
+
+        ImGui::BeginChild("##inputfieldAtlasDrop", ImVec2(0, 34), true);
+        ImGui::TextDisabled("Drop .png/.jpg/.bmp/.tga here");
+        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+                setInputFieldAtlasPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
+            ImGui::EndDragDropTarget();
+        }
+        ImGui::EndChild();
+
+        ImGui::BeginDisabled(fld->atlasPath.empty() || !ctx.openSpriteEditor);
+        if (ImGui::Button("Editar sprites...##inputfield")) ctx.openSpriteEditor(fld->atlasPath);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered() && fld->atlasPath.empty())
+            ImGui::SetTooltip("Primero elige un atlas");
+        spriteField("Background##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.backgroundSprite; });
+
+        if (!m_inputFieldPathError.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_inputFieldPathError.c_str());
+
+        ImGui::TreePop();
+    }
+
+    if (removeClicked && ctx.scene && ctx.undo)
+    {
+        auto cmd = std::make_unique<InputFieldComponentCommand>(
+            *ctx.scene, "Quitar Input Field de '" + ctx.selected->name + "'", ctx.selected->id,
+            /*add=*/false, *ctx.selected->getInputField());
+        cmd->execute();
+        ctx.undo->push(std::move(cmd));
+        ctx.pushLog("Componente Input Field quitado de '" + ctx.selected->name + "'");
+    }
+}
+
+
+void PropertiesPanel::setDropdownAtlasPath(EditorContext& ctx, uint64_t ownerId,
+                                       const std::string& path)
+{
+    if (!isUiAtlasPath(path))
+    {
+        m_dropdownPathError = "No es una imagen (.png .jpg .jpeg .bmp .tga): " +
+                         std::filesystem::path(path).filename().string();
+        ctx.pushLog(m_dropdownPathError);
+        return;
+    }
+    m_dropdownPathError.clear();
+
+    Scene* scene = ctx.scene;
+    if (!scene) return;
+    GameObject* go = scene->findById(ownerId);
+    if (!go || !go->hasDropdown()) return;
+
+    DropdownComponent& c = *go->getDropdown();
+    const std::string before = c.atlasPath;
+    if (before == path) return;
+
+    c.atlasPath = path;
+
+    const std::string lbl = std::string("Atlas ") + "del desplegable de " + go->name + "'";
+    ctx.pushLog(lbl + " cambiado a " + path);
+    if (ctx.undo)
+        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+            lbl, before, path,
+            [scene, ownerId](const std::string& v) {
+                if (GameObject* g = scene->findById(ownerId))
+                    if (g->hasDropdown()) g->getDropdown()->atlasPath = v;
+            }));
+}
+
+void PropertiesPanel::setDropdownFontPath(EditorContext& ctx, uint64_t ownerId,
+                                      const std::string& path)
+{
+    // Mismo veto y por el mismo sitio que el atlas: aqui pasan el drop y el file
+    // dialog, asi que el filtro va una sola vez.
+    if (!isUiFontPath(path))
+    {
+        m_dropdownPathError = "No es una fuente (.ttf .otf .ttc): " +
+                         std::filesystem::path(path).filename().string();
+        ctx.pushLog(m_dropdownPathError);
+        return;
+    }
+    m_dropdownPathError.clear();
+
+    Scene* scene = ctx.scene;
+    if (!scene) return;
+    GameObject* go = scene->findById(ownerId);
+    if (!go || !go->hasDropdown()) return;
+
+    DropdownComponent& c = *go->getDropdown();
+    const std::string before = c.fontPath;
+    if (before == path) return;
+
+    c.fontPath = path;
+
+    const std::string lbl = std::string("Fuente ") + "del desplegable de " + go->name + "'";
+    ctx.pushLog(lbl + " cambiada a " + path);
+    if (ctx.undo)
+        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+            lbl, before, path,
+            [scene, ownerId](const std::string& v) {
+                if (GameObject* g = scene->findById(ownerId))
+                    if (g->hasDropdown()) g->getDropdown()->fontPath = v;
+            }));
+}
+
+void PropertiesPanel::drawDropdownPathDialog(EditorContext& ctx)
+{
+    // Sin condicionar a ctx.selected: si no se drena aqui, cambiar de seleccion
+    // con el dialogo abierto deja el flag atascado en true para siempre.
+    if (m_dropdownAtlasDlgOpen && m_dropdownAtlasFileDialog->Display("DropdownAtlasDlg"))
+    {
+        if (m_dropdownAtlasFileDialog->IsOk() &&
+            assetAllowed(ctx, m_dropdownAtlasFileDialog->GetFilePathName()))
+            setDropdownAtlasPath(ctx, m_dropdownAtlasDlgOwner, m_dropdownAtlasFileDialog->GetFilePathName());
+        m_dropdownAtlasFileDialog->Close();
+        m_dropdownAtlasDlgOpen = false;
+    }
+
+    if (m_dropdownFontDlgOpen && m_dropdownFontFileDialog->Display("DropdownFontDlg"))
+    {
+        if (m_dropdownFontFileDialog->IsOk() &&
+            assetAllowed(ctx, m_dropdownFontFileDialog->GetFilePathName()))
+            setDropdownFontPath(ctx, m_dropdownFontDlgOwner, m_dropdownFontFileDialog->GetFilePathName());
+        m_dropdownFontFileDialog->Close();
+        m_dropdownFontDlgOpen = false;
+    }
+}
+
+void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
+{
+    // Add-gate: sin el componente no hay seccion, igual que los colliders.
+    if (!ctx.selected->hasDropdown()) return;
+
+    ImGui::Separator();
+    bool sectionOpen = ImGui::TreeNodeEx("Dropdown",
+                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+    const bool removeClicked = ImGui::SmallButton("x##dropdown");
+
+    Scene*            scene = ctx.scene;
+    const uint64_t    id    = ctx.selected->id;
+    const std::string owner = ctx.selected->name;
+
+    if (sectionOpen)
+    {
+        DropdownComponent* dd = ctx.selected->getDropdown().get();
+        ImGui::TextWrapped("Desplegable. Anadir o quitar una opcion cambia la FORMA del arbol de UI, asi que el canvas se reconstruye; abrir y cerrar no.");
+
+        using FloatRef = float&       (*)(DropdownComponent&);
+        using Vec2Ref  = glm::vec2&   (*)(DropdownComponent&);
+        using Vec4Ref  = glm::vec4&   (*)(DropdownComponent&);
+        using StrRef   = std::string& (*)(DropdownComponent&);
+        using BoolRef  = bool&        (*)(DropdownComponent&);
+        using EnumSet  = void         (*)(DropdownComponent&, int);
+        (void)sizeof(EnumSet);   // no todos los widgets tienen enum
+
+        auto comboEnum = [&](const char* label, int before, const char* const* items,
+                             int count, EnumSet apply)
+        {
+            int idx = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::Combo(label, &idx, items, count) && idx != before)
+            {
+                apply(*dd, idx);
+                const std::string lbl = std::string(label) + " del desplegable de " + owner + "'";
+                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<int>>(
+                        lbl, before, idx,
+                        [scene, id, apply](const int& v) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasDropdown()) apply(*go->getDropdown(), v);
+                        }));
+            }
+        };
+        (void)comboEnum;
+
+        auto checkBox = [&](const char* label, BoolRef acc)
+        {
+            const bool before = acc(*dd);
+            bool       val    = before;
+            if (ImGui::Checkbox(label, &val) && val != before)
+            {
+                acc(*dd) = val;
+                const std::string lbl = std::string(label) + " del desplegable de " + owner + "'";
+                ctx.pushLog(lbl + (val ? " activado" : " desactivado"));
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
+                        lbl, before, val,
+                        [scene, id, acc](const bool& v) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasDropdown()) acc(*go->getDropdown()) = v;
+                        }));
+            }
+        };
+
+        // "before" leido ANTES de dibujar, sesion abierta en IsItemActivated y
+        // commit en IsItemDeactivatedAfterEdit: un arrastre entero es UN paso de
+        // undo, no uno por frame.
+        auto dragFloat = [&](const char* label, FloatRef acc, float speed,
+                             float lo, float hi, const char* fmt)
+        {
+            const float before = acc(*dd);
+            float       val    = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+            if (ImGui::DragFloat(label, &val, speed, lo, hi, fmt))
+                acc(*dd) = val;
+            if (ImGui::IsItemActivated())
+            {
+                m_dropdownDragBefore  = before;
+                m_dropdownDragOwnerId = id;
+                m_dropdownDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_dropdownDragOwnerId == id &&
+                m_dropdownDragField == label)
+            {
+                const float after = acc(*dd);
+                m_dropdownDragField = nullptr;
+                if (after != m_dropdownDragBefore)
+                {
+                    const std::string lbl = std::string(label) + " del desplegable de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<float>>(
+                            lbl, m_dropdownDragBefore, after,
+                            [scene, id, acc](const float& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasDropdown()) acc(*go->getDropdown()) = v;
+                            }));
+                }
+            }
+        };
+
+        auto dragVec2 = [&](const char* label, Vec2Ref acc, float speed,
+                            float lo, float hi, const char* fmt)
+        {
+            const glm::vec2 before = acc(*dd);
+            glm::vec2       val    = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::DragFloat2(label, &val.x, speed, lo, hi, fmt))
+                acc(*dd) = val;
+            if (ImGui::IsItemActivated())
+            {
+                m_dropdownDragBefore2 = before;
+                m_dropdownDragOwnerId = id;
+                m_dropdownDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_dropdownDragOwnerId == id &&
+                m_dropdownDragField == label)
+            {
+                const glm::vec2 after = acc(*dd);
+                m_dropdownDragField = nullptr;
+                if (after != m_dropdownDragBefore2)
+                {
+                    const std::string lbl = std::string(label) + " del desplegable de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
+                            lbl, m_dropdownDragBefore2, after,
+                            [scene, id, acc](const glm::vec2& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasDropdown()) acc(*go->getDropdown()) = v;
+                            }));
+                }
+            }
+        };
+
+        auto colorEdit = [&](const char* label, Vec4Ref acc)
+        {
+            const glm::vec4 before = acc(*dd);
+            glm::vec4       val    = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+            if (ImGui::ColorEdit4(label, &val.x))
+                acc(*dd) = val;
+            if (ImGui::IsItemActivated())
+            {
+                m_dropdownDragBefore4 = before;
+                m_dropdownDragOwnerId = id;
+                m_dropdownDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_dropdownDragOwnerId == id &&
+                m_dropdownDragField == label)
+            {
+                const glm::vec4 after = acc(*dd);
+                m_dropdownDragField = nullptr;
+                if (after != m_dropdownDragBefore4)
+                {
+                    const std::string lbl = std::string(label) + " del desplegable de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
+                            lbl, m_dropdownDragBefore4, after,
+                            [scene, id, acc](const glm::vec4& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasDropdown()) acc(*go->getDropdown()) = v;
+                            }));
+                }
+            }
+        };
+
+        // Un InputText entero (escribir y salir del campo) es UN paso de undo,
+        // no uno por tecla: mismo criterio que el arrastre de un DragFloat.
+        auto inputText = [&](const char* label, StrRef acc)
+        {
+            const std::string before = acc(*dd);
+            char buf[512] = {};
+            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
+            if (ImGui::InputText(label, buf, sizeof(buf)))
+                acc(*dd) = std::string(buf);
+            if (ImGui::IsItemActivated())
+            {
+                m_dropdownDragBeforeStr = before;
+                m_dropdownDragOwnerId   = id;
+                m_dropdownDragField     = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_dropdownDragOwnerId == id &&
+                m_dropdownDragField == label)
+            {
+                const std::string after = acc(*dd);
+                const std::string prev  = m_dropdownDragBeforeStr;
+                m_dropdownDragField = nullptr;
+                if (after != prev)
+                {
+                    const std::string lbl = std::string(label) + " del desplegable de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+                            lbl, prev, after,
+                            [scene, id, acc](const std::string& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasDropdown()) acc(*go->getDropdown()) = v;
+                            }));
+                }
+            }
+        };
+
+        // Un sprite es un NOMBRE dentro del atlas, no texto libre. Con sidecar
+        // (<atlas>.sprites.json) se elige de la lista; sin el se cae al campo de
+        // texto, que sigue valiendo para un atlas troceado a mano.
+        auto spriteField = [&](const char* label, StrRef acc)
+        {
+            const std::vector<std::string>& nombres = spriteNamesFor(ctx, dd->atlasPath);
+            if (nombres.empty()) { inputText(label, acc); return; }
+
+            const std::string before = acc(*dd);
+
+            std::vector<const char*> items;
+            items.reserve(nombres.size() + 2);
+            items.push_back("(imagen entera)");
+            for (const std::string& n : nombres) items.push_back(n.c_str());
+
+            int current = 0;
+            for (size_t i = 0; i < nombres.size(); ++i)
+                if (nombres[i] == before) { current = (int)i + 1; break; }
+
+            std::string huerfano;
+            if (current == 0 && !before.empty())
+            {
+                huerfano = before + "  (no esta en el atlas)";
+                items.push_back(huerfano.c_str());
+                current = (int)items.size() - 1;
+            }
+
+            int idx = current;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
+            if (ImGui::Combo(label, &idx, items.data(), (int)items.size()) && idx != current)
+            {
+                const std::string after = (idx == 0)                   ? std::string()
+                                        : (idx <= (int)nombres.size()) ? nombres[(size_t)idx - 1]
+                                                                       : before;
+                if (after != before)
+                {
+                    acc(*dd) = after;
+                    const std::string lbl = std::string(label) + " del desplegable de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado a '" + after + "'");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+                            lbl, before, after,
+                            [scene, id, acc](const std::string& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasDropdown()) acc(*go->getDropdown()) = v;
+                            }));
+                }
+            }
+        };
+        (void)spriteField;
+
+        ImGui::TextDisabled("Rect");
+        dragVec2("Anchor Min##dropdown", +[](DropdownComponent& c) -> glm::vec2& { return c.anchorMin; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Anchor Max##dropdown", +[](DropdownComponent& c) -> glm::vec2& { return c.anchorMax; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Pivot##dropdown", +[](DropdownComponent& c) -> glm::vec2& { return c.pivot; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Position##dropdown", +[](DropdownComponent& c) -> glm::vec2& { return c.position; },
+                 1.0f, -16384.0f, 16384.0f, "%.0f");
+        dragVec2("Size##dropdown", +[](DropdownComponent& c) -> glm::vec2& { return c.size; },
+                 1.0f, 0.0f, 16384.0f, "%.0f");
+        colorEdit("Box Color##dropdown", +[](DropdownComponent& c) -> glm::vec4& { return c.color; });
+        checkBox("Visible##dropdown", +[](DropdownComponent& c) -> bool& { return c.visible; });
+        checkBox("Interactable##dropdown", +[](DropdownComponent& c) -> bool& { return c.interactable; });
+
+        ImGui::TextDisabled("Opciones");
+        {
+            // La lista entera es UN paso de undo: anadir, quitar o renombrar
+            // empuja el vector completo. Por campo serian tres comandos para lo
+            // que el usuario vive como un cambio.
+            const std::vector<std::string> before = dd->options;
+            bool cambiada = false;
+
+            for (size_t k = 0; k < dd->options.size(); k++)
+            {
+                ImGui::PushID((int)k);
+                char buf[256] = {};
+                strncpy_s(buf, dd->options[k].c_str(), sizeof(buf) - 1);
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14);
+                if (ImGui::InputText("##opt", buf, sizeof(buf)))
+                {
+                    dd->options[k] = std::string(buf);
+                    // El renombrado NO se commitea por tecla: se empuja al salir
+                    // del campo, igual que cualquier otro InputText.
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit()) cambiada = true;
+                ImGui::SameLine();
+                if (ImGui::SmallButton("x"))
+                {
+                    dd->options.erase(dd->options.begin() + (long)k);
+                    // Quitar la opcion elegida deja el valor apuntando a otra:
+                    // se acota aqui para que el combo no ensene vacio.
+                    if (dd->value >= (int)dd->options.size())
+                        dd->value = (int)dd->options.size() - 1;
+                    if (dd->value < 0) dd->value = 0;
+                    cambiada = true;
+                    ImGui::PopID();
+                    break;
+                }
+                ImGui::PopID();
+            }
+
+            if (ImGui::Button("Anadir opcion##dropdown"))
+            {
+                dd->options.push_back("Opcion " + std::to_string(dd->options.size() + 1));
+                cambiada = true;
+            }
+
+            if (cambiada && scene && ctx.undo && dd->options != before)
+            {
+                const std::string lbl = std::string("Opciones ") + "del desplegable de " + owner + "'";
+                ctx.pushLog(lbl + " cambiadas");
+                ctx.undo->push(std::make_unique<PropertyCommand<std::vector<std::string>>>(
+                    lbl, before, dd->options,
+                    [scene, id](const std::vector<std::string>& v) {
+                        if (GameObject* go = scene->findById(id))
+                            if (go->hasDropdown())
+                            {
+                                go->getDropdown()->options = v;
+                                // El indice tambien se acota al deshacer: una
+                                // lista mas corta no puede dejarlo fuera.
+                                int& val = go->getDropdown()->value;
+                                if (val >= (int)v.size()) val = (int)v.size() - 1;
+                                if (val < 0) val = 0;
+                            }
+                    }));
+            }
+        }
+
+        {
+            // El valor es el INDICE 0-based, igual que en C++ y en Lua.
+            const int before = dd->value;
+            int       val    = before;
+            const int maxIdx = dd->options.empty() ? 0 : (int)dd->options.size() - 1;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+            if (ImGui::DragInt("Value##dropdown", &val, 0.1f, 0, maxIdx))
+                dd->value = val;
+            if (ImGui::IsItemActivated())
+            {
+                m_dropdownDragBefore  = (float)before;
+                m_dropdownDragOwnerId = id;
+                m_dropdownDragField   = "Value##dropdown";
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_dropdownDragOwnerId == id &&
+                m_dropdownDragField == std::string("Value##dropdown"))
+            {
+                const int after = dd->value;
+                m_dropdownDragField = nullptr;
+                if (after != (int)m_dropdownDragBefore)
+                {
+                    const std::string lbl = "Value del desplegable de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<int>>(
+                            lbl, (int)m_dropdownDragBefore, after,
+                            [scene, id](const int& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasDropdown()) go->getDropdown()->value = v;
+                            }));
+                }
+            }
+        }
+        if (!dd->selectedLabel().empty())
+            ImGui::TextDisabled("Elegida: %s", dd->selectedLabel().c_str());
+        else if (!dd->options.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+                               "El indice no apunta a ninguna opcion");
+
+        ImGui::TextDisabled("Lista");
+        dragFloat("Item Height##dropdown", +[](DropdownComponent& c) -> float& { return c.itemHeight; },
+                  0.5f, 0.0f, 4096.0f, "%.1f");
+        {
+            const int before = (int)dd->maxVisibleItems;
+            int       val    = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+            if (ImGui::DragInt("Max Visible Items##dropdown", &val, 0.25f, 0, 256))
+                dd->maxVisibleItems = (uint32_t)(val < 0 ? 0 : val);
+            if (ImGui::IsItemActivated())
+            {
+                m_dropdownDragBefore  = (float)before;
+                m_dropdownDragOwnerId = id;
+                m_dropdownDragField   = "Max Visible Items##dropdown";
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_dropdownDragOwnerId == id &&
+                m_dropdownDragField == std::string("Max Visible Items##dropdown"))
+            {
+                const int after = (int)dd->maxVisibleItems;
+                m_dropdownDragField = nullptr;
+                if (after != (int)m_dropdownDragBefore)
+                {
+                    const std::string lbl = "Max Visible Items del desplegable de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<int>>(
+                            lbl, (int)m_dropdownDragBefore, after,
+                            [scene, id](const int& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasDropdown())
+                                        go->getDropdown()->maxVisibleItems = (uint32_t)(v < 0 ? 0 : v);
+                            }));
+                }
+            }
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("0 = todas. Acota el alto de la lista para que un combo de\n"
+                              "cincuenta idiomas no ocupe tres pantallas.");
+
+        colorEdit("List Color##dropdown", +[](DropdownComponent& c) -> glm::vec4& { return c.listColor; });
+        colorEdit("Item Color##dropdown", +[](DropdownComponent& c) -> glm::vec4& { return c.itemColor; });
+        colorEdit("Item Selected##dropdown", +[](DropdownComponent& c) -> glm::vec4& { return c.itemSelectedColor; });
+        colorEdit("Arrow Color##dropdown", +[](DropdownComponent& c) -> glm::vec4& { return c.arrowColor; });
+
+        ImGui::TextDisabled("Texto");
+        dragFloat("Font Size##dropdown", +[](DropdownComponent& c) -> float& { return c.fontSize; },
+                  0.5f, 1.0f, 512.0f, "%.1f");
+        colorEdit("Text Color##dropdown", +[](DropdownComponent& c) -> glm::vec4& { return c.textColor; });
+        dragFloat("Padding##dropdown", +[](DropdownComponent& c) -> float& { return c.padding; },
+                  0.5f, 0.0f, 4096.0f, "%.1f");
+
+        ImGui::TextDisabled("Fuente");
+        inputText("Font##dropdown", +[](DropdownComponent& c) -> std::string& { return c.fontPath; });
+        ImGui::SameLine();
+        if (ImGui::Button("Browse...##dropdownFont"))
+        {
+            IGFD::FileDialogConfig cfg;
+            cfg.path  = "assets";
+            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                        ImGuiFileDialogFlags_HideColumnDate |
+                        ImGuiFileDialogFlags_DisableThumbnailMode |
+                        ImGuiFileDialogFlags_DisablePlaceMode;
+            m_dropdownFontDlgOwner = id;
+            m_dropdownFontDlgOpen  = true;
+            m_dropdownFontFileDialog->OpenDialog("DropdownFontDlg", "Choose font", ".ttf,.otf,.ttc", cfg);
+        }
+        ImGui::BeginChild("##dropdownFontDrop", ImVec2(0, 34), true);
+        ImGui::TextDisabled("Drop .ttf/.otf here");
+        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+                setDropdownFontPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
+            ImGui::EndDragDropTarget();
+        }
+        ImGui::EndChild();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Vacia = la fuente por defecto del proyecto");
+
+        ImGui::TextDisabled("Sprites");
+        inputText("Atlas##dropdown", +[](DropdownComponent& c) -> std::string& { return c.atlasPath; });
+        ImGui::SameLine();
+        if (ImGui::Button("Browse...##dropdownAtlas"))
+        {
+            IGFD::FileDialogConfig cfg;
+            cfg.path  = "assets";
+            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                        ImGuiFileDialogFlags_HideColumnDate |
+                        ImGuiFileDialogFlags_DisableThumbnailMode |
+                        ImGuiFileDialogFlags_DisablePlaceMode;
+            m_dropdownAtlasDlgOwner = id;
+            m_dropdownAtlasDlgOpen  = true;
+            m_dropdownAtlasFileDialog->OpenDialog("DropdownAtlasDlg", "Choose atlas",
+                                             ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+        }
+
+        ImGui::BeginChild("##dropdownAtlasDrop", ImVec2(0, 34), true);
+        ImGui::TextDisabled("Drop .png/.jpg/.bmp/.tga here");
+        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+                setDropdownAtlasPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
+            ImGui::EndDragDropTarget();
+        }
+        ImGui::EndChild();
+
+        ImGui::BeginDisabled(dd->atlasPath.empty() || !ctx.openSpriteEditor);
+        if (ImGui::Button("Editar sprites...##dropdown")) ctx.openSpriteEditor(dd->atlasPath);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered() && dd->atlasPath.empty())
+            ImGui::SetTooltip("Primero elige un atlas");
+        spriteField("Background##dropdown", +[](DropdownComponent& c) -> std::string& { return c.backgroundSprite; });
+        spriteField("Arrow##dropdown", +[](DropdownComponent& c) -> std::string& { return c.arrowSprite; });
+        spriteField("Item##dropdown", +[](DropdownComponent& c) -> std::string& { return c.itemSprite; });
+
+        if (!m_dropdownPathError.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_dropdownPathError.c_str());
+
+        ImGui::TreePop();
+    }
+
+    if (removeClicked && ctx.scene && ctx.undo)
+    {
+        auto cmd = std::make_unique<DropdownComponentCommand>(
+            *ctx.scene, "Quitar Dropdown de '" + ctx.selected->name + "'", ctx.selected->id,
+            /*add=*/false, *ctx.selected->getDropdown());
+        cmd->execute();
+        ctx.undo->push(std::move(cmd));
+        ctx.pushLog("Componente Dropdown quitado de '" + ctx.selected->name + "'");
+    }
+}
+
+
+void PropertiesPanel::setScrollViewAtlasPath(EditorContext& ctx, uint64_t ownerId,
+                                       const std::string& path)
+{
+    if (!isUiAtlasPath(path))
+    {
+        m_scrollViewPathError = "No es una imagen (.png .jpg .jpeg .bmp .tga): " +
+                         std::filesystem::path(path).filename().string();
+        ctx.pushLog(m_scrollViewPathError);
+        return;
+    }
+    m_scrollViewPathError.clear();
+
+    Scene* scene = ctx.scene;
+    if (!scene) return;
+    GameObject* go = scene->findById(ownerId);
+    if (!go || !go->hasScrollView()) return;
+
+    ScrollViewComponent& c = *go->getScrollView();
+    const std::string before = c.atlasPath;
+    if (before == path) return;
+
+    c.atlasPath = path;
+
+    const std::string lbl = std::string("Atlas ") + "de la vista de " + go->name + "'";
+    ctx.pushLog(lbl + " cambiado a " + path);
+    if (ctx.undo)
+        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+            lbl, before, path,
+            [scene, ownerId](const std::string& v) {
+                if (GameObject* g = scene->findById(ownerId))
+                    if (g->hasScrollView()) g->getScrollView()->atlasPath = v;
+            }));
+}
+
+void PropertiesPanel::drawScrollViewPathDialog(EditorContext& ctx)
+{
+    // Sin condicionar a ctx.selected: si no se drena aqui, cambiar de seleccion
+    // con el dialogo abierto deja el flag atascado en true para siempre.
+    if (m_scrollViewAtlasDlgOpen && m_scrollViewAtlasFileDialog->Display("ScrollViewAtlasDlg"))
+    {
+        if (m_scrollViewAtlasFileDialog->IsOk() &&
+            assetAllowed(ctx, m_scrollViewAtlasFileDialog->GetFilePathName()))
+            setScrollViewAtlasPath(ctx, m_scrollViewAtlasDlgOwner, m_scrollViewAtlasFileDialog->GetFilePathName());
+        m_scrollViewAtlasFileDialog->Close();
+        m_scrollViewAtlasDlgOpen = false;
+    }
+}
+
+void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
+{
+    // Add-gate: sin el componente no hay seccion, igual que los colliders.
+    if (!ctx.selected->hasScrollView()) return;
+
+    ImGui::Separator();
+    bool sectionOpen = ImGui::TreeNodeEx("Scroll View",
+                                         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+    const bool removeClicked = ImGui::SmallButton("x##scrollview");
+
+    Scene*            scene = ctx.scene;
+    const uint64_t    id    = ctx.selected->id;
+    const std::string owner = ctx.selected->name;
+
+    if (sectionOpen)
+    {
+        ScrollViewComponent* sv = ctx.selected->getScrollView().get();
+        ImGui::TextWrapped("Vista desplazable. Los HIJOS de este GameObject cuelgan de su contenido, no del viewport: por eso desplazarse los arrastra.");
+
+        using FloatRef = float&       (*)(ScrollViewComponent&);
+        using Vec2Ref  = glm::vec2&   (*)(ScrollViewComponent&);
+        using Vec4Ref  = glm::vec4&   (*)(ScrollViewComponent&);
+        using StrRef   = std::string& (*)(ScrollViewComponent&);
+        using BoolRef  = bool&        (*)(ScrollViewComponent&);
+        using EnumSet  = void         (*)(ScrollViewComponent&, int);
+        (void)sizeof(EnumSet);   // no todos los widgets tienen enum
+
+        auto comboEnum = [&](const char* label, int before, const char* const* items,
+                             int count, EnumSet apply)
+        {
+            int idx = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::Combo(label, &idx, items, count) && idx != before)
+            {
+                apply(*sv, idx);
+                const std::string lbl = std::string(label) + " de la vista de " + owner + "'";
+                ctx.pushLog(lbl + " cambiado a " + items[idx]);
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<int>>(
+                        lbl, before, idx,
+                        [scene, id, apply](const int& v) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasScrollView()) apply(*go->getScrollView(), v);
+                        }));
+            }
+        };
+        (void)comboEnum;
+
+        auto checkBox = [&](const char* label, BoolRef acc)
+        {
+            const bool before = acc(*sv);
+            bool       val    = before;
+            if (ImGui::Checkbox(label, &val) && val != before)
+            {
+                acc(*sv) = val;
+                const std::string lbl = std::string(label) + " de la vista de " + owner + "'";
+                ctx.pushLog(lbl + (val ? " activado" : " desactivado"));
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
+                        lbl, before, val,
+                        [scene, id, acc](const bool& v) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasScrollView()) acc(*go->getScrollView()) = v;
+                        }));
+            }
+        };
+
+        // "before" leido ANTES de dibujar, sesion abierta en IsItemActivated y
+        // commit en IsItemDeactivatedAfterEdit: un arrastre entero es UN paso de
+        // undo, no uno por frame.
+        auto dragFloat = [&](const char* label, FloatRef acc, float speed,
+                             float lo, float hi, const char* fmt)
+        {
+            const float before = acc(*sv);
+            float       val    = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
+            if (ImGui::DragFloat(label, &val, speed, lo, hi, fmt))
+                acc(*sv) = val;
+            if (ImGui::IsItemActivated())
+            {
+                m_scrollViewDragBefore  = before;
+                m_scrollViewDragOwnerId = id;
+                m_scrollViewDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_scrollViewDragOwnerId == id &&
+                m_scrollViewDragField == label)
+            {
+                const float after = acc(*sv);
+                m_scrollViewDragField = nullptr;
+                if (after != m_scrollViewDragBefore)
+                {
+                    const std::string lbl = std::string(label) + " de la vista de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<float>>(
+                            lbl, m_scrollViewDragBefore, after,
+                            [scene, id, acc](const float& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasScrollView()) acc(*go->getScrollView()) = v;
+                            }));
+                }
+            }
+        };
+
+        auto dragVec2 = [&](const char* label, Vec2Ref acc, float speed,
+                            float lo, float hi, const char* fmt)
+        {
+            const glm::vec2 before = acc(*sv);
+            glm::vec2       val    = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+            if (ImGui::DragFloat2(label, &val.x, speed, lo, hi, fmt))
+                acc(*sv) = val;
+            if (ImGui::IsItemActivated())
+            {
+                m_scrollViewDragBefore2 = before;
+                m_scrollViewDragOwnerId = id;
+                m_scrollViewDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_scrollViewDragOwnerId == id &&
+                m_scrollViewDragField == label)
+            {
+                const glm::vec2 after = acc(*sv);
+                m_scrollViewDragField = nullptr;
+                if (after != m_scrollViewDragBefore2)
+                {
+                    const std::string lbl = std::string(label) + " de la vista de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<glm::vec2>>(
+                            lbl, m_scrollViewDragBefore2, after,
+                            [scene, id, acc](const glm::vec2& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasScrollView()) acc(*go->getScrollView()) = v;
+                            }));
+                }
+            }
+        };
+
+        auto colorEdit = [&](const char* label, Vec4Ref acc)
+        {
+            const glm::vec4 before = acc(*sv);
+            glm::vec4       val    = before;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+            if (ImGui::ColorEdit4(label, &val.x))
+                acc(*sv) = val;
+            if (ImGui::IsItemActivated())
+            {
+                m_scrollViewDragBefore4 = before;
+                m_scrollViewDragOwnerId = id;
+                m_scrollViewDragField   = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_scrollViewDragOwnerId == id &&
+                m_scrollViewDragField == label)
+            {
+                const glm::vec4 after = acc(*sv);
+                m_scrollViewDragField = nullptr;
+                if (after != m_scrollViewDragBefore4)
+                {
+                    const std::string lbl = std::string(label) + " de la vista de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<glm::vec4>>(
+                            lbl, m_scrollViewDragBefore4, after,
+                            [scene, id, acc](const glm::vec4& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasScrollView()) acc(*go->getScrollView()) = v;
+                            }));
+                }
+            }
+        };
+
+        // Un InputText entero (escribir y salir del campo) es UN paso de undo,
+        // no uno por tecla: mismo criterio que el arrastre de un DragFloat.
+        auto inputText = [&](const char* label, StrRef acc)
+        {
+            const std::string before = acc(*sv);
+            char buf[512] = {};
+            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
+            if (ImGui::InputText(label, buf, sizeof(buf)))
+                acc(*sv) = std::string(buf);
+            if (ImGui::IsItemActivated())
+            {
+                m_scrollViewDragBeforeStr = before;
+                m_scrollViewDragOwnerId   = id;
+                m_scrollViewDragField     = label;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_scrollViewDragOwnerId == id &&
+                m_scrollViewDragField == label)
+            {
+                const std::string after = acc(*sv);
+                const std::string prev  = m_scrollViewDragBeforeStr;
+                m_scrollViewDragField = nullptr;
+                if (after != prev)
+                {
+                    const std::string lbl = std::string(label) + " de la vista de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+                            lbl, prev, after,
+                            [scene, id, acc](const std::string& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasScrollView()) acc(*go->getScrollView()) = v;
+                            }));
+                }
+            }
+        };
+
+        // Un sprite es un NOMBRE dentro del atlas, no texto libre. Con sidecar
+        // (<atlas>.sprites.json) se elige de la lista; sin el se cae al campo de
+        // texto, que sigue valiendo para un atlas troceado a mano.
+        auto spriteField = [&](const char* label, StrRef acc)
+        {
+            const std::vector<std::string>& nombres = spriteNamesFor(ctx, sv->atlasPath);
+            if (nombres.empty()) { inputText(label, acc); return; }
+
+            const std::string before = acc(*sv);
+
+            std::vector<const char*> items;
+            items.reserve(nombres.size() + 2);
+            items.push_back("(imagen entera)");
+            for (const std::string& n : nombres) items.push_back(n.c_str());
+
+            int current = 0;
+            for (size_t i = 0; i < nombres.size(); ++i)
+                if (nombres[i] == before) { current = (int)i + 1; break; }
+
+            std::string huerfano;
+            if (current == 0 && !before.empty())
+            {
+                huerfano = before + "  (no esta en el atlas)";
+                items.push_back(huerfano.c_str());
+                current = (int)items.size() - 1;
+            }
+
+            int idx = current;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
+            if (ImGui::Combo(label, &idx, items.data(), (int)items.size()) && idx != current)
+            {
+                const std::string after = (idx == 0)                   ? std::string()
+                                        : (idx <= (int)nombres.size()) ? nombres[(size_t)idx - 1]
+                                                                       : before;
+                if (after != before)
+                {
+                    acc(*sv) = after;
+                    const std::string lbl = std::string(label) + " de la vista de " + owner + "'";
+                    ctx.pushLog(lbl + " cambiado a '" + after + "'");
+                    if (scene && ctx.undo)
+                        ctx.undo->push(std::make_unique<PropertyCommand<std::string>>(
+                            lbl, before, after,
+                            [scene, id, acc](const std::string& v) {
+                                if (GameObject* go = scene->findById(id))
+                                    if (go->hasScrollView()) acc(*go->getScrollView()) = v;
+                            }));
+                }
+            }
+        };
+        (void)spriteField;
+
+        ImGui::TextDisabled("Rect (el VIEWPORT)");
+        dragVec2("Anchor Min##scrollview", +[](ScrollViewComponent& c) -> glm::vec2& { return c.anchorMin; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Anchor Max##scrollview", +[](ScrollViewComponent& c) -> glm::vec2& { return c.anchorMax; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Pivot##scrollview", +[](ScrollViewComponent& c) -> glm::vec2& { return c.pivot; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragVec2("Position##scrollview", +[](ScrollViewComponent& c) -> glm::vec2& { return c.position; },
+                 1.0f, -16384.0f, 16384.0f, "%.0f");
+        dragVec2("Size##scrollview", +[](ScrollViewComponent& c) -> glm::vec2& { return c.size; },
+                 1.0f, 0.0f, 16384.0f, "%.0f");
+        colorEdit("Color##scrollview", +[](ScrollViewComponent& c) -> glm::vec4& { return c.color; });
+        checkBox("Visible##scrollview", +[](ScrollViewComponent& c) -> bool& { return c.visible; });
+
+        ImGui::TextDisabled("Ejes y contenido");
+        checkBox("Horizontal##scrollview", +[](ScrollViewComponent& c) -> bool& { return c.horizontal; });
+        checkBox("Vertical##scrollview", +[](ScrollViewComponent& c) -> bool& { return c.vertical; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Un eje apagado no se mueve aunque el contenido sea mas grande");
+        dragVec2("Content Size##scrollview", +[](ScrollViewComponent& c) -> glm::vec2& { return c.contentSize; },
+                 1.0f, 0.0f, 65536.0f, "%.0f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Tamano del area desplazable. Es un CAMPO y no algo medido de los\n"
+                              "hijos: medir el subarbol cada frame acoplaria el scroll al layout.");
+        dragVec2("Normalized Pos##scrollview",
+                 +[](ScrollViewComponent& c) -> glm::vec2& { return c.normalizedPosition; },
+                 0.01f, 0.0f, 1.0f, "%.3f");
+        dragFloat("Scroll Sensitivity##scrollview",
+                  +[](ScrollViewComponent& c) -> float& { return c.scrollSensitivity; },
+                  1.0f, 0.0f, 4096.0f, "%.1f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Pixeles que mueve la rueda por muesca");
+
+        {
+            const glm::vec2 r = sv->scrollRange();
+            ImGui::TextDisabled("Recorrido: %.0f x %.0f px", r.x, r.y);
+            if (r.x <= 0.0f && r.y <= 0.0f)
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+                                   "El contenido cabe entero: no hay nada que desplazar");
+        }
+        ImGui::TextDisabled("Los hijos de este GameObject cuelgan del contenido, no del viewport.");
+
+        ImGui::TextDisabled("Sprites");
+        inputText("Atlas##scrollview", +[](ScrollViewComponent& c) -> std::string& { return c.atlasPath; });
+        ImGui::SameLine();
+        if (ImGui::Button("Browse...##scrollviewAtlas"))
+        {
+            IGFD::FileDialogConfig cfg;
+            cfg.path  = "assets";
+            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                        ImGuiFileDialogFlags_HideColumnDate |
+                        ImGuiFileDialogFlags_DisableThumbnailMode |
+                        ImGuiFileDialogFlags_DisablePlaceMode;
+            m_scrollViewAtlasDlgOwner = id;
+            m_scrollViewAtlasDlgOpen  = true;
+            m_scrollViewAtlasFileDialog->OpenDialog("ScrollViewAtlasDlg", "Choose atlas",
+                                             ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+        }
+
+        ImGui::BeginChild("##scrollviewAtlasDrop", ImVec2(0, 34), true);
+        ImGui::TextDisabled("Drop .png/.jpg/.bmp/.tga here");
+        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+                setScrollViewAtlasPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
+            ImGui::EndDragDropTarget();
+        }
+        ImGui::EndChild();
+
+        ImGui::BeginDisabled(sv->atlasPath.empty() || !ctx.openSpriteEditor);
+        if (ImGui::Button("Editar sprites...##scrollview")) ctx.openSpriteEditor(sv->atlasPath);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered() && sv->atlasPath.empty())
+            ImGui::SetTooltip("Primero elige un atlas");
+        spriteField("Background##scrollview", +[](ScrollViewComponent& c) -> std::string& { return c.backgroundSprite; });
+
+        if (!m_scrollViewPathError.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_scrollViewPathError.c_str());
+
+        ImGui::TreePop();
+    }
+
+    if (removeClicked && ctx.scene && ctx.undo)
+    {
+        auto cmd = std::make_unique<ScrollViewComponentCommand>(
+            *ctx.scene, "Quitar Scroll View de '" + ctx.selected->name + "'", ctx.selected->id,
+            /*add=*/false, *ctx.selected->getScrollView());
+        cmd->execute();
+        ctx.undo->push(std::move(cmd));
+        ctx.pushLog("Componente Scroll View quitado de '" + ctx.selected->name + "'");
+    }
+}
+
 void PropertiesPanel::drawLightSection(EditorContext& ctx)
 {
     // Add-gate: sin el componente no hay sección, igual que los colliders.
@@ -6505,6 +8048,42 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                 cmd->execute();
                 ctx.undo->push(std::move(cmd));
                 ctx.pushLog("Componente Scroll Bar anadido a '" + ctx.selected->name + "'");
+            }
+            ImGui::EndDisabled();
+
+            ImGui::BeginDisabled(ctx.selected->hasInputField());
+            if (ImGui::Selectable("Input Field") && ctx.scene && ctx.undo)
+            {
+                auto cmd = std::make_unique<InputFieldComponentCommand>(
+                    *ctx.scene, "Anadir Input Field a '" + ctx.selected->name + "'",
+                    ctx.selected->id, /*add=*/true, InputFieldComponent{});
+                cmd->execute();
+                ctx.undo->push(std::move(cmd));
+                ctx.pushLog("Componente Input Field anadido a '" + ctx.selected->name + "'");
+            }
+            ImGui::EndDisabled();
+
+            ImGui::BeginDisabled(ctx.selected->hasDropdown());
+            if (ImGui::Selectable("Dropdown") && ctx.scene && ctx.undo)
+            {
+                auto cmd = std::make_unique<DropdownComponentCommand>(
+                    *ctx.scene, "Anadir Dropdown a '" + ctx.selected->name + "'",
+                    ctx.selected->id, /*add=*/true, DropdownComponent{});
+                cmd->execute();
+                ctx.undo->push(std::move(cmd));
+                ctx.pushLog("Componente Dropdown anadido a '" + ctx.selected->name + "'");
+            }
+            ImGui::EndDisabled();
+
+            ImGui::BeginDisabled(ctx.selected->hasScrollView());
+            if (ImGui::Selectable("Scroll View") && ctx.scene && ctx.undo)
+            {
+                auto cmd = std::make_unique<ScrollViewComponentCommand>(
+                    *ctx.scene, "Anadir Scroll View a '" + ctx.selected->name + "'",
+                    ctx.selected->id, /*add=*/true, ScrollViewComponent{});
+                cmd->execute();
+                ctx.undo->push(std::move(cmd));
+                ctx.pushLog("Componente Scroll View anadido a '" + ctx.selected->name + "'");
             }
             ImGui::EndDisabled();
 

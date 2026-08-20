@@ -75,10 +75,19 @@ private:
     // enseña dónde está su rect.
     void drawLayoutGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                           const glm::vec2& imageSize);
-    // Y los del Panel y el Image seleccionados. Mismo criterio que los demás: el
-    // rect sale del nodo VIVO, no de los campos del componente.
-    // Y los de los cuatro widgets interactivos. Mismo criterio que los demas:
-    // el rect sale del nodo VIVO, no de los campos del componente.
+    // Y los del resto de widgets de UI. Mismo criterio que los de arriba: el
+    // rect sale del nodo VIVO, no de los campos del componente, asi que ya trae
+    // aplicadas las anclas, la escala del canvas y el layout.
+    //
+    // El del ScrollView mide el VIEWPORT (el nodo que recorta) y no el
+    // contenido: el contenido se mueve y es mas grande que la vista, asi que su
+    // rect no dice donde esta el widget.
+    void drawInputFieldGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                       const glm::vec2& imageSize);
+    void drawDropdownGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                       const glm::vec2& imageSize);
+    void drawScrollViewGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                       const glm::vec2& imageSize);
     void drawSliderGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                        const glm::vec2& imageSize);
     void drawCheckboxGizmo(EditorContext& ctx, const glm::vec2& imagePos,

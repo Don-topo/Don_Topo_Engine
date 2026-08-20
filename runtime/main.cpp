@@ -53,6 +53,13 @@ void onScroll(GLFWwindow*, double, double yoffset)
     g_uiScroll += (float)yoffset;
 }
 
+// Lo mismo con los caracteres: GLFW solo los da por callback. En el runtime no
+// hay editor con el que competir, asi que van siempre al canvas.
+void onChar(GLFWwindow*, unsigned int codepoint)
+{
+    DonTopo::pushUiInputChar(codepoint);
+}
+
 // Directorio del ejecutable. El paquete exportado usa rutas relativas
 // (assets/, shaders/, Scripts/), así que el runtime fija su CWD aquí: sin
 // esto, lanzar el juego desde otra carpeta no encontraría nada. Ojo: esto
@@ -203,6 +210,7 @@ int main(int argc, char** argv)
         // si algún día este registra el suyo: el último gana, y aquí el dueño
         // de la rueda es el canvas.
         glfwSetScrollCallback(window.getNativeWindow(), onScroll);
+        glfwSetCharCallback(window.getNativeWindow(), onChar);
         // El backend, construido segun lo que pidio el proyecto. A partir de
         // aqui todo el runtime habla con la interfaz: quien decide cual es, es
         // esta linea y nadie mas.

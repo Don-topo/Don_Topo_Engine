@@ -804,6 +804,26 @@ namespace DonTopo
             }
         }
 
+        // ── Texto ───────────────────────────────────────────────────────────
+        // DESPUES de las teclas y con la misma regla: solo al elemento con foco
+        // y burbujeando. Un caracter sin destino se descarta en vez de ir al
+        // primero que pase por ahi.
+        //
+        // Va aparte del bucle de teclas y no dentro porque las dos listas son
+        // independientes: un frame puede traer solo texto (escribir), solo
+        // teclas (Tab, Backspace) o las dos, y no hay forma de intercalarlas
+        // sin inventarse un orden que el caller no ha dado.
+        for (uint32_t cp : input.chars)
+        {
+            if (!m_focused) break;
+
+            UiEvent e   = base;
+            e.type      = UiEventType::TextInput;
+            e.target    = m_focused;
+            e.codepoint = cp;
+            dispatch(m_focused, e, &UiElement::onTextInput);
+        }
+
         m_lastMousePos = input.mousePos;
         m_hasLastMouse = true;
 

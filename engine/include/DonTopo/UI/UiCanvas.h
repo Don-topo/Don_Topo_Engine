@@ -57,7 +57,15 @@ namespace DonTopo
         Left,
         Right,
         Up,
-        Down
+        Down,
+
+        // Edicion de texto. Van al final a proposito: los valores de las de
+        // arriba no se mueven, asi que nada de lo ya guardado o mapeado cambia
+        // de significado.
+        Backspace,
+        Delete,
+        Home,
+        End
     };
 
     // Lo rellena el CALLER (GLFW, el editor, un test). El Core no conoce ni
@@ -71,6 +79,15 @@ namespace DonTopo
         // Teclas pulsadas ESTE frame (flanco, no sostenido): repetir una tecla
         // frame a frame es cosa del caller, no del canvas.
         std::vector<UiKey> keys;
+
+        // CARACTERES tecleados este frame, en codepoints Unicode y en orden.
+        // Es un canal APARTE de `keys` y no una tecla mas porque no son lo
+        // mismo: UiKey nombra teclas fisicas con significado propio (Tab,
+        // Enter, flechas), y una 'a' no es una tecla nombrada — sale del layout
+        // del teclado, de las muertas y del metodo de entrada, cosa que el core
+        // no sabe ni tiene por que saber. Lo rellena el caller (GLFW via
+        // UiInputBridge, el editor, un test), igual que la posicion del raton.
+        std::vector<uint32_t> chars;
 
         bool shift = false;
         bool ctrl  = false;
@@ -97,7 +114,10 @@ namespace DonTopo
         Scroll,
         Focus,
         Blur,
-        KeyDown
+        KeyDown,
+        // Un caracter tecleado. Distinto de KeyDown por lo mismo que `chars` es
+        // distinto de `keys`: aqui lo que llega es texto, no una tecla.
+        TextInput
     };
 
     struct UiEvent
@@ -116,6 +136,8 @@ namespace DonTopo
         float scrollDelta = 0.0f;
 
         UiKey key = UiKey::None;
+        // Solo lo rellena TextInput: el codepoint Unicode del caracter.
+        uint32_t codepoint = 0;
         bool  shift = false;
         bool  ctrl  = false;
         bool  alt   = false;
@@ -375,6 +397,7 @@ namespace DonTopo
         UiEventHandler onFocus;
         UiEventHandler onBlur;
         UiEventHandler onKeyDown;
+        UiEventHandler onTextInput;
 
         // ── Rect resuelto por el último buildDrawData ───────────────────────
         // El layout ya calcula estos tres valores por nodo; el input los REUSA
@@ -603,6 +626,13 @@ namespace DonTopo
         // demás se copiaron de su caché. Es la única medida honesta de lo que se
         // está ahorrando: no depende del reloj ni de la máquina.
         uint32_t rebuiltNodes() const { return m_rebuiltNodes; }
+
+        // El reloj del último updateInput. Lo necesita quien anime FUERA del
+        // canvas y tenga que ir a compás con lo que anima dentro: el parpadeo
+        // del cursor de un campo de texto es el primer caso. Tener un reloj
+        // propio ahí seria uno que se separa de este en cuanto los dos avancen
+        // por caminos distintos.
+        float lastTimeSeconds() const { return m_lastTime; }
 
         // ── Input ───────────────────────────────────────────────────────────
         // ÚNICO punto de entrada. Va DESPUÉS del layout, o sea después de un

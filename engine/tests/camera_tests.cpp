@@ -23,6 +23,9 @@
 #include "DonTopo/UI/CheckboxComponent.h"
 #include "DonTopo/UI/ToggleComponent.h"
 #include "DonTopo/UI/ScrollbarComponent.h"
+#include "DonTopo/UI/InputFieldComponent.h"
+#include "DonTopo/UI/DropdownComponent.h"
+#include "DonTopo/UI/ScrollViewComponent.h"
 #include "DonTopo/UI/TextComponent.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -4553,6 +4556,1253 @@ static void test_scrollbar_hit_test_maps_back_to_gameobject()
     CHECK(uiToggleOwnerId(uiScrollbarNodeName(42ull)) == 0ull);
 }
 
+
+// ── Entrada de texto en el canvas ───────────────────────────────────────────
+// El canvas ya tenia foco, recorrido con Tab, navegacion direccional y
+// onKeyDown; lo unico que le faltaba para poder escribir era el canal de
+// CARACTERES. UiKey nombra teclas (Tab, Enter, flechas...), y una 'a' no es una
+// tecla nombrada: es un codepoint, y depende del layout del teclado y de las
+// muertas, cosa que el core no sabe ni tiene por que saber. Por eso lo rellena
+// el caller (GLFW, el editor, un test), igual que la posicion del raton.
+static void test_canvas_entrega_el_texto_al_elemento_con_foco()
+{
+    UiCanvas canvas;
+    Panel& campo = canvas.root().add<Panel>("campo");
+    campo.size      = glm::vec2(100.0f, 20.0f);
+    campo.focusable = true;
+
+    std::string escrito;
+    campo.onTextInput = [&](UiEvent& e) { escrito += (char)e.codepoint; };
+
+    UiDrawData data;
+    canvas.buildDrawData(800, 480, data);
+
+    // Sin foco NO se entrega nada: un caracter suelto sin destino no puede ir
+    // al primero que pase por ahi.
+    UiInputState in;
+    in.chars = { 'N', 'o' };
+    canvas.updateInput(in);
+    CHECK(escrito.empty());
+
+    canvas.setFocus(&campo);
+    in.chars = { 'H', 'o', 'l', 'a' };
+    in.timeSeconds = 0.016f;
+    canvas.updateInput(in);
+    CHECK(escrito == "Hola");
+
+    // Y los codepoints viajan enteros, no truncados a un byte: el canal es
+    // uint32, asi que una 'n' con virgulilla llega de una pieza.
+    uint32_t ultimo = 0;
+    campo.onTextInput = [&](UiEvent& e) { ultimo = e.codepoint; };
+    in.chars = { 0x00F1u };   // n con virgulilla
+    in.timeSeconds = 0.032f;
+    canvas.updateInput(in);
+    CHECK(ultimo == 0x00F1u);
+}
+
+// Las cuatro teclas de edicion tenian que existir: sin Backspace no se puede
+// borrar, y con la navegacion comiendose las flechas no se puede mover el
+// cursor. El canvas ya cedia la tecla a quien la consumiera; esto comprueba que
+// SIGUE cediendola con las nuevas.
+static void test_canvas_cede_las_teclas_de_edicion_a_quien_las_consume()
+{
+    UiCanvas canvas;
+    Panel& a = canvas.root().add<Panel>("a");
+    a.size      = glm::vec2(100.0f, 20.0f);
+    a.position  = glm::vec2(0.0f, 0.0f);
+    a.focusable = true;
+    Panel& b = canvas.root().add<Panel>("b");
+    b.size      = glm::vec2(100.0f, 20.0f);
+    b.position  = glm::vec2(200.0f, 0.0f);
+    b.focusable = true;
+
+    std::vector<UiKey> recibidas;
+    a.onKeyDown = [&](UiEvent& e) {
+        recibidas.push_back(e.key);
+        // Left y Right son del cursor; Up y Down se dejan pasar para que la
+        // navegacion siga funcionando desde dentro del campo.
+        if (e.key == UiKey::Left || e.key == UiKey::Right) e.consumed = true;
+    };
+
+    UiDrawData data;
+    canvas.buildDrawData(800, 480, data);
+    canvas.setFocus(&a);
+
+    UiInputState in;
+    in.keys = { UiKey::Backspace, UiKey::Delete, UiKey::Home, UiKey::End };
+    canvas.updateInput(in);
+    CHECK(recibidas.size() == 4);
+    if (recibidas.size() != 4) return;
+    CHECK(recibidas[0] == UiKey::Backspace);
+    CHECK(recibidas[1] == UiKey::Delete);
+    CHECK(recibidas[2] == UiKey::Home);
+    CHECK(recibidas[3] == UiKey::End);
+
+    // Right consumida: el foco NO se va al de al lado.
+    in.keys = { UiKey::Right };
+    in.timeSeconds = 0.016f;
+    canvas.updateInput(in);
+    CHECK(canvas.focused() == &a);
+
+    // Y sin consumirla, la navegacion sigue viva: es lo que hace jugable un menu
+    // con mando, y no se puede haber roto por el camino.
+    a.onKeyDown = nullptr;
+    in.keys = { UiKey::Right };
+    in.timeSeconds = 0.032f;
+    canvas.updateInput(in);
+    CHECK(canvas.focused() == &b);
+}
+
+
+// ── InputField ──────────────────────────────────────────────────────────────
+// El unico widget que necesitaba algo que el core NO tenia: un canal de
+// caracteres. UiKey nombra teclas y una 'a' no es una tecla nombrada, asi que
+// hasta ahora no habia por donde entregarla. Con UiInputState::chars y
+// onTextInput ya se puede, y este componente es el primero que los usa.
+//
+// El cursor se cuenta en CODEPOINTS, no en bytes: con UTF-8, una 'n' con
+// virgulilla ocupa dos bytes y un cursor en bytes lo partiria por la mitad.
+static void fillInputField(InputFieldComponent& f)
+{
+    f.anchorMin = glm::vec2(0.03125f, 0.09375f);
+    f.anchorMax = glm::vec2(0.65625f, 0.84375f);
+    f.pivot     = glm::vec2(0.28125f, 0.71875f);
+    f.position  = glm::vec2(33.5f, -51.25f);
+    f.size      = glm::vec2(287.75f, 41.5f);
+    f.color     = glm::vec4(0.12f, 0.13f, 0.14f, 0.15f);
+    f.visible   = false;
+
+    f.interactable = false;
+    f.readOnly     = true;
+
+    f.text        = "Jugador1";
+    f.placeholder = "Tu nombre...";
+
+    f.fontPath         = "assets/fonts/mono.ttf";
+    f.fontSize         = 21.5f;
+    f.textColor        = glm::vec4(0.22f, 0.23f, 0.24f, 0.25f);
+    f.placeholderColor = glm::vec4(0.32f, 0.33f, 0.34f, 0.35f);
+    f.align            = UiTextAlign::Right;
+    f.padding          = 7.25f;
+
+    f.characterLimit = 12u;
+    f.contentType    = UiInputContentType::Password;
+    f.passwordChar   = "#";
+
+    f.caretColor     = glm::vec4(0.42f, 0.43f, 0.44f, 0.45f);
+    f.caretWidth     = 3.5f;
+    f.caretBlinkRate = 0.625f;
+
+    f.atlasPath        = "assets/ui/widgets.png";
+    f.backgroundSprite = "campo";
+}
+
+static void checkInputFieldMatchesFilled(const InputFieldComponent& f)
+{
+    CHECK(nearlyEqual(f.anchorMin.x, 0.03125f));
+    CHECK(nearlyEqual(f.anchorMax.y, 0.84375f));
+    CHECK(nearlyEqual(f.pivot.x, 0.28125f));
+    CHECK(nearlyEqual(f.position.x, 33.5f));
+    CHECK(nearlyEqual(f.position.y, -51.25f));
+    CHECK(nearlyEqual(f.size.x, 287.75f));
+    CHECK(nearlyEqual(f.size.y, 41.5f));
+    CHECK(nearlyEqual(f.color.r, 0.12f));
+    CHECK(nearlyEqual(f.color.a, 0.15f));
+    CHECK(f.visible == false);
+    CHECK(f.interactable == false);
+    CHECK(f.readOnly == true);
+    CHECK(f.text == "Jugador1");
+    CHECK(f.placeholder == "Tu nombre...");
+    CHECK(f.fontPath == "assets/fonts/mono.ttf");
+    CHECK(nearlyEqual(f.fontSize, 21.5f));
+    CHECK(nearlyEqual(f.textColor.r, 0.22f));
+    CHECK(nearlyEqual(f.placeholderColor.g, 0.33f));
+    CHECK(f.align == UiTextAlign::Right);
+    CHECK(nearlyEqual(f.padding, 7.25f));
+    CHECK(f.characterLimit == 12u);
+    CHECK(f.contentType == UiInputContentType::Password);
+    CHECK(f.passwordChar == "#");
+    CHECK(nearlyEqual(f.caretColor.b, 0.44f));
+    CHECK(nearlyEqual(f.caretWidth, 3.5f));
+    CHECK(nearlyEqual(f.caretBlinkRate, 0.625f));
+    CHECK(f.atlasPath == "assets/ui/widgets.png");
+    CHECK(f.backgroundSprite == "campo");
+}
+
+static void test_input_field_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* go = scene.addGameObject("Nombre", canvasGo);
+    auto f = std::make_shared<InputFieldComponent>();
+    fillInputField(*f);
+    go->setInputField(f);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasInputField()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "Nombre");
+    checkInputFieldMatchesFilled(*found->getInputField());
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_input_field_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool alguno = false;
+    loaded.traverse([&](GameObject* n) { if (n->hasInputField()) alguno = true; });
+    CHECK(!alguno);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_input_field_serializes_identically()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    const std::string antes = scene.toJson().dump();
+    CHECK(antes.find("\"inputField\"") == std::string::npos);
+
+    go->setInputField(std::make_shared<InputFieldComponent>());
+    CHECK(scene.toJson().dump() != antes);
+    go->setInputField(nullptr);
+    CHECK(scene.toJson().dump() == antes);
+}
+
+static void test_input_field_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Nombre");
+    InputFieldComponent st;
+    fillInputField(st);
+    InputFieldComponentCommand cmd(scene, "Add Input Field", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasInputField());
+    checkInputFieldMatchesFilled(*go->getInputField());
+    cmd.undo();
+    CHECK(!go->hasInputField());
+    cmd.execute();
+    CHECK(go->hasInputField());
+    checkInputFieldMatchesFilled(*go->getInputField());
+}
+
+static void test_input_field_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Nombre");
+    auto f = std::make_shared<InputFieldComponent>();
+    fillInputField(*f);
+    go->setInputField(f);
+
+    InputFieldComponentCommand cmd(scene, "Remove Input Field", go->id, /*add=*/false, *f);
+    cmd.execute();
+    CHECK(!go->hasInputField());
+    cmd.undo();
+    CHECK(go->hasInputField());
+    checkInputFieldMatchesFilled(*go->getInputField());
+}
+
+static void test_input_field_property_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Nombre");
+    go->setInputField(std::make_shared<InputFieldComponent>());
+    const uint64_t id = go->id;
+    Scene* sc = &scene;
+
+    auto applyText = [sc, id](const std::string& v) {
+        if (GameObject* g = sc->findById(id))
+            if (g->hasInputField()) g->getInputField()->text = v;
+    };
+    PropertyCommand<std::string> cmd("Text", std::string(), std::string("Hola"), applyText);
+
+    cmd.execute();
+    CHECK(go->getInputField()->text == "Hola");
+    cmd.undo();
+    CHECK(go->getInputField()->text.empty());
+
+    go->setInputField(nullptr);
+    cmd.execute();
+    CHECK(!go->hasInputField());
+}
+
+// El cursor se cuenta en CODEPOINTS y el texto se guarda en UTF-8. Un cursor en
+// bytes partiria una 'n' con virgulilla por la mitad y dejaria la cadena rota
+// sin que nada lo dijera.
+static void test_input_field_edits_by_codepoint_not_by_byte()
+{
+    InputFieldComponent f;
+    f.text     = "";
+    f.caretPos = 0;
+
+    CHECK(f.insertCodepoint('a'));
+    CHECK(f.insertCodepoint(0x00F1u));   // n con virgulilla: DOS bytes en UTF-8
+    CHECK(f.insertCodepoint('o'));
+    CHECK(f.text == "a\xC3\xB1o");
+    CHECK(f.caretPos == 3);              // tres CARACTERES, cuatro bytes
+    CHECK(f.codepointCount() == 3);
+
+    // Borrar hacia atras se lleva el caracter entero, no medio byte.
+    f.caretPos = 2;
+    CHECK(f.backspace());
+    CHECK(f.text == "ao");
+    CHECK(f.caretPos == 1);
+
+    // Y hacia delante, lo mismo.
+    f.text     = "a\xC3\xB1o";
+    f.caretPos = 1;
+    CHECK(f.deleteForward());
+    CHECK(f.text == "ao");
+    CHECK(f.caretPos == 1);
+
+    // En los extremos no hay nada que borrar y no pasa nada.
+    f.caretPos = 0;
+    CHECK(!f.backspace());
+    f.caretPos = f.codepointCount();
+    CHECK(!f.deleteForward());
+
+    // El cursor se mueve por caracteres y se acota a los extremos.
+    f.text     = "a\xC3\xB1o";
+    f.caretPos = 0;
+    f.moveCaret(1);
+    CHECK(f.caretPos == 1);
+    f.moveCaret(-5);
+    CHECK(f.caretPos == 0);
+    f.moveCaret(99);
+    CHECK(f.caretPos == 3);
+    f.caretHome();
+    CHECK(f.caretPos == 0);
+    f.caretEnd();
+    CHECK(f.caretPos == 3);
+}
+
+// El tipo de contenido filtra lo que se puede teclear, y el limite corta. Los
+// dos van en el sitio donde se ESCRIBE, no al dibujar: si solo filtraran la
+// pintura, el componente guardaria basura y un script la leeria.
+static void test_input_field_content_type_and_limit()
+{
+    InputFieldComponent f;
+
+    f.contentType = UiInputContentType::IntegerNumber;
+    CHECK(f.accepts('4'));
+    CHECK(!f.accepts('a'));
+    CHECK(!f.accepts('.'));
+    // El signo solo al principio: "1-2" no es un entero.
+    f.text = ""; f.caretPos = 0;
+    CHECK(f.accepts('-'));
+    f.text = "1"; f.caretPos = 1;
+    CHECK(!f.accepts('-'));
+
+    f.contentType = UiInputContentType::DecimalNumber;
+    f.text = ""; f.caretPos = 0;
+    CHECK(f.accepts('.'));
+    f.text = "1.5"; f.caretPos = 3;
+    CHECK(!f.accepts('.'));   // un solo separador decimal
+
+    f.contentType = UiInputContentType::Alphanumeric;
+    CHECK(f.accepts('a'));
+    CHECK(f.accepts('7'));
+    CHECK(!f.accepts(' '));
+
+    f.contentType = UiInputContentType::Standard;
+    CHECK(f.accepts(' '));
+    // Los de control NUNCA entran: un '\n' o un tabulador dentro de una linea
+    // no se ve y desplaza todo lo que venga detras.
+    CHECK(!f.accepts('\n'));
+    CHECK(!f.accepts('\t'));
+    CHECK(!f.accepts(0x7Fu));
+
+    // El limite cuenta CARACTERES, no bytes.
+    f.text           = "";
+    f.caretPos       = 0;
+    f.characterLimit = 3u;
+    CHECK(f.insertCodepoint('a'));
+    CHECK(f.insertCodepoint(0x00F1u));
+    CHECK(f.insertCodepoint('c'));
+    CHECK(!f.insertCodepoint('d'));   // lleno: tres caracteres, cuatro bytes
+    CHECK(f.codepointCount() == 3);
+
+    // 0 = sin limite.
+    f.characterLimit = 0u;
+    CHECK(f.insertCodepoint('d'));
+}
+
+// El Password no cambia el texto, cambia lo que se ENSEÑA. Guardar el
+// enmascarado seria perder la contraseña.
+static void test_input_field_password_and_placeholder()
+{
+    InputFieldComponent f;
+    f.text        = "secreto";
+    f.placeholder = "clave...";
+    f.contentType = UiInputContentType::Password;
+    f.passwordChar = "*";
+
+    CHECK(f.displayText() == "*******");
+    CHECK(f.text == "secreto");
+    CHECK(!f.isShowingPlaceholder());
+
+    // Con varios bytes por caracter, la mascara sigue teniendo un simbolo por
+    // CARACTER y no uno por byte.
+    f.text = "a\xC3\xB1o";
+    CHECK(f.displayText() == "***");
+
+    // Vacio: se enseña el placeholder, y con SU color (eso lo comprueba el sync).
+    f.text = "";
+    CHECK(f.isShowingPlaceholder());
+    CHECK(f.displayText() == "clave...");
+
+    // Sin placeholder y vacio no se dibuja nada.
+    f.placeholder = "";
+    CHECK(f.displayText().empty());
+
+    // Un passwordChar vacio cae al asterisco: un campo de contraseña que no
+    // enseña NADA parece roto.
+    f.text         = "abc";
+    f.passwordChar = "";
+    CHECK(f.displayText() == "***");
+}
+
+static void test_input_field_sync_builds_box_text_and_caret()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    InputFieldComponent f;
+    f.position = glm::vec2(10.0f, 20.0f);
+    f.size     = glm::vec2(200.0f, 30.0f);
+    f.text     = "abc";
+
+    UiWidgetLists w;
+    w.inputFields.emplace_back(5ull, &f);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().empty()) return;
+    const UiElement& caja = *canvas.root().children()[0];
+    CHECK(caja.name == uiInputFieldNodeName(5ull));
+    CHECK(caja.typeName() == std::string("InputField"));
+    // La caja TIENE que ser focusable o no hay donde escribir.
+    CHECK(caja.focusable == true);
+    CHECK(caja.children().size() == 2);
+    if (caja.children().size() != 2) return;
+    const UiElement& texto = *caja.children()[0];
+    const UiElement& caret = *caja.children()[1];
+    CHECK(texto.name == uiInputFieldNodeName(5ull) + "/Text");
+    CHECK(caret.name == uiInputFieldNodeName(5ull) + "/Caret");
+    CHECK(texto.raycastTarget == false);
+    CHECK(caret.raycastTarget == false);
+
+    // Sin foco el cursor NO se dibuja: un campo que parpadea sin estar activo
+    // es exactamente lo que hace creer que se puede escribir en el.
+    CHECK(caret.drawable == false);
+}
+
+// La razon de ser del canal de texto: teclear escribe en el COMPONENTE.
+static void test_input_field_typing_writes_the_component()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    InputFieldComponent f;
+    f.position = glm::vec2(0.0f, 0.0f);
+    f.size     = glm::vec2(200.0f, 30.0f);
+
+    std::string ultimo;
+    int         avisos = 0;
+    int         finales = 0;
+    f.callbacks.ptr->onValueChanged = [&](const std::string& v) { ultimo = v; avisos++; };
+    f.callbacks.ptr->onEndEdit      = [&](const std::string&)   { finales++; };
+
+    UiWidgetLists w;
+    w.inputFields.emplace_back(5ull, &f);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    // Un click enfoca el campo.
+    clickEnCanvas(canvas, glm::vec2(100.0f, 15.0f), 0.0f);
+    CHECK(canvas.focused() != nullptr);
+
+    UiInputState in;
+    in.mousePos    = glm::vec2(100.0f, 15.0f);
+    in.timeSeconds = 1.0f;
+    in.chars       = { 'H', 'o', 'l', 'a' };
+    canvas.updateInput(in);
+
+    CHECK(f.text == "Hola");
+    CHECK(f.caretPos == 4);
+    CHECK(avisos == 4);
+    CHECK(ultimo == "Hola");
+
+    // Backspace borra y Left mueve, sin dejar que la navegacion se coma la
+    // flecha (el campo la consume).
+    in.chars.clear();
+    in.keys = { UiKey::Backspace };
+    in.timeSeconds = 1.016f;
+    canvas.updateInput(in);
+    CHECK(f.text == "Hol");
+    CHECK(f.caretPos == 3);
+
+    in.keys = { UiKey::Left, UiKey::Left };
+    in.timeSeconds = 1.032f;
+    canvas.updateInput(in);
+    CHECK(f.caretPos == 1);
+    CHECK(canvas.focused() != nullptr);   // la flecha NO movio el foco
+
+    in.keys = { UiKey::Home };
+    in.timeSeconds = 1.048f;
+    canvas.updateInput(in);
+    CHECK(f.caretPos == 0);
+    in.keys = { UiKey::End };
+    in.timeSeconds = 1.064f;
+    canvas.updateInput(in);
+    CHECK(f.caretPos == 3);
+
+    // Enter cierra la edicion.
+    in.keys = { UiKey::Enter };
+    in.timeSeconds = 1.08f;
+    canvas.updateInput(in);
+    CHECK(finales == 1);
+
+    // readOnly: se puede enfocar y mover el cursor, pero no cambiar el texto.
+    f.readOnly = true;
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.setFocus(nullptr);
+    clickEnCanvas(canvas, glm::vec2(100.0f, 15.0f), 2.0f);
+    in.keys.clear();
+    in.chars = { 'X' };
+    in.timeSeconds = 3.0f;
+    canvas.updateInput(in);
+    CHECK(f.text == "Hol");
+
+    // Y no interactable no se enfoca siquiera.
+    f.readOnly     = false;
+    f.interactable = false;
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.setFocus(nullptr);
+    clickEnCanvas(canvas, glm::vec2(100.0f, 15.0f), 4.0f);
+    in.chars = { 'Y' };
+    in.timeSeconds = 5.0f;
+    canvas.updateInput(in);
+    CHECK(f.text == "Hol");
+}
+
+static void test_input_field_hit_test_maps_back_to_gameobject()
+{
+    CHECK(uiInputFieldOwnerId(uiInputFieldNodeName(42ull)) == 42ull);
+    CHECK(uiInputFieldOwnerId(uiInputFieldNodeName(42ull) + "/Caret") == 42ull);
+    CHECK(uiInputFieldOwnerId("Cubo") == 0ull);
+    CHECK(uiInputFieldOwnerId("inp:") == 0ull);
+    CHECK(uiInputFieldOwnerId("inp:12ab") == 0ull);
+    CHECK(uiInputFieldOwnerId(uiSliderNodeName(42ull)) == 0ull);
+    CHECK(uiSliderOwnerId(uiInputFieldNodeName(42ull)) == 0ull);
+}
+
+// ── Dropdown ────────────────────────────────────────────────────────────────
+// El unico widget cuyo subarbol CAMBIA DE FORMA con los datos: una opcion mas es
+// un nodo mas. Abrir y cerrar NO cambia la forma (la lista existe siempre y solo
+// se apaga), pero añadir o quitar opciones si, y eso obliga a reconstruir.
+static void fillDropdown(DropdownComponent& d)
+{
+    d.anchorMin = glm::vec2(0.15625f, 0.40625f);
+    d.anchorMax = glm::vec2(0.53125f, 0.59375f);
+    d.pivot     = glm::vec2(0.34375f, 0.65625f);
+    d.position  = glm::vec2(37.5f, -53.25f);
+    d.size      = glm::vec2(197.75f, 35.5f);
+    d.color     = glm::vec4(0.16f, 0.17f, 0.18f, 0.19f);
+    d.visible   = false;
+
+    d.interactable = false;
+
+    d.options = { "Bajo", "Medio", "Alto" };
+    d.value   = 2;
+
+    d.itemHeight      = 27.25f;
+    d.maxVisibleItems = 5u;
+
+    d.listColor         = glm::vec4(0.26f, 0.27f, 0.28f, 0.29f);
+    d.itemColor         = glm::vec4(0.36f, 0.37f, 0.38f, 0.39f);
+    d.itemSelectedColor = glm::vec4(0.46f, 0.47f, 0.48f, 0.49f);
+    d.arrowColor        = glm::vec4(0.56f, 0.57f, 0.58f, 0.59f);
+
+    d.fontPath  = "assets/fonts/ui.ttf";
+    d.fontSize  = 19.5f;
+    d.textColor = glm::vec4(0.66f, 0.67f, 0.68f, 0.69f);
+
+    d.atlasPath        = "assets/ui/widgets.png";
+    d.backgroundSprite = "combo";
+    d.arrowSprite      = "flecha";
+    d.itemSprite       = "fila";
+}
+
+static void checkDropdownMatchesFilled(const DropdownComponent& d)
+{
+    CHECK(nearlyEqual(d.anchorMin.x, 0.15625f));
+    CHECK(nearlyEqual(d.anchorMax.y, 0.59375f));
+    CHECK(nearlyEqual(d.pivot.y, 0.65625f));
+    CHECK(nearlyEqual(d.position.x, 37.5f));
+    CHECK(nearlyEqual(d.size.y, 35.5f));
+    CHECK(nearlyEqual(d.color.r, 0.16f));
+    CHECK(d.visible == false);
+    CHECK(d.interactable == false);
+    CHECK(d.options.size() == 3);
+    if (d.options.size() == 3)
+    {
+        CHECK(d.options[0] == "Bajo");
+        CHECK(d.options[1] == "Medio");
+        CHECK(d.options[2] == "Alto");
+    }
+    CHECK(d.value == 2);
+    CHECK(nearlyEqual(d.itemHeight, 27.25f));
+    CHECK(d.maxVisibleItems == 5u);
+    CHECK(nearlyEqual(d.listColor.g, 0.27f));
+    CHECK(nearlyEqual(d.itemColor.b, 0.38f));
+    CHECK(nearlyEqual(d.itemSelectedColor.a, 0.49f));
+    CHECK(nearlyEqual(d.arrowColor.r, 0.56f));
+    CHECK(d.fontPath == "assets/fonts/ui.ttf");
+    CHECK(nearlyEqual(d.fontSize, 19.5f));
+    CHECK(nearlyEqual(d.textColor.g, 0.67f));
+    CHECK(d.atlasPath == "assets/ui/widgets.png");
+    CHECK(d.backgroundSprite == "combo");
+    CHECK(d.arrowSprite == "flecha");
+    CHECK(d.itemSprite == "fila");
+}
+
+static void test_dropdown_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* go = scene.addGameObject("Calidad", canvasGo);
+    auto d = std::make_shared<DropdownComponent>();
+    fillDropdown(*d);
+    go->setDropdown(d);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasDropdown()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "Calidad");
+    checkDropdownMatchesFilled(*found->getDropdown());
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// isOpen es estado VIVO y no se guarda: una escena que se abriera con el combo
+// desplegado tendria una lista tapando el menu nada mas cargar.
+static void test_dropdown_open_state_is_not_serialized(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Calidad");
+    auto d = std::make_shared<DropdownComponent>();
+    d->options = { "A", "B" };
+    d->isOpen  = true;
+    go->setDropdown(d);
+
+    const std::string dump = scene.toJson().dump();
+    CHECK(dump.find("isOpen") == std::string::npos);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(scene.toJson(), pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasDropdown()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->getDropdown()->isOpen == false);
+}
+
+static void test_scene_without_dropdown_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool alguno = false;
+    loaded.traverse([&](GameObject* n) { if (n->hasDropdown()) alguno = true; });
+    CHECK(!alguno);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_dropdown_serializes_identically()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    const std::string antes = scene.toJson().dump();
+    CHECK(antes.find("\"dropdown\"") == std::string::npos);
+
+    go->setDropdown(std::make_shared<DropdownComponent>());
+    CHECK(scene.toJson().dump() != antes);
+    go->setDropdown(nullptr);
+    CHECK(scene.toJson().dump() == antes);
+}
+
+static void test_dropdown_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Calidad");
+    DropdownComponent st;
+    fillDropdown(st);
+    DropdownComponentCommand cmd(scene, "Add Dropdown", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasDropdown());
+    checkDropdownMatchesFilled(*go->getDropdown());
+    cmd.undo();
+    CHECK(!go->hasDropdown());
+    cmd.execute();
+    CHECK(go->hasDropdown());
+    checkDropdownMatchesFilled(*go->getDropdown());
+}
+
+static void test_dropdown_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Calidad");
+    auto d = std::make_shared<DropdownComponent>();
+    fillDropdown(*d);
+    go->setDropdown(d);
+
+    DropdownComponentCommand cmd(scene, "Remove Dropdown", go->id, /*add=*/false, *d);
+    cmd.execute();
+    CHECK(!go->hasDropdown());
+    cmd.undo();
+    CHECK(go->hasDropdown());
+    checkDropdownMatchesFilled(*go->getDropdown());
+}
+
+static void test_dropdown_property_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Calidad");
+    go->setDropdown(std::make_shared<DropdownComponent>());
+    const uint64_t id = go->id;
+    Scene* sc = &scene;
+
+    auto applyValue = [sc, id](const int& v) {
+        if (GameObject* g = sc->findById(id))
+            if (g->hasDropdown()) g->getDropdown()->value = v;
+    };
+    PropertyCommand<int> cmd("Value", 0, 3, applyValue);
+
+    cmd.execute();
+    CHECK(go->getDropdown()->value == 3);
+    cmd.undo();
+    CHECK(go->getDropdown()->value == 0);
+
+    go->setDropdown(nullptr);
+    cmd.execute();
+    CHECK(!go->hasDropdown());
+}
+
+// El valor NO se clampa al escribirlo (el componente no interpreta nada) pero
+// todo lo que lo LEE tiene que aguantar un indice fuera de rango: una escena
+// editada a mano con value 99 y dos opciones no puede reventar.
+static void test_dropdown_out_of_range_value_is_survivable()
+{
+    DropdownComponent d;
+    d.options = { "A", "B" };
+
+    d.value = 99;
+    CHECK(d.selectedLabel().empty());
+    d.value = -1;
+    CHECK(d.selectedLabel().empty());
+    d.value = 1;
+    CHECK(d.selectedLabel() == "B");
+
+    // Sin opciones tampoco.
+    d.options.clear();
+    d.value = 0;
+    CHECK(d.selectedLabel().empty());
+
+    // Alto de la lista: se enseñan como mucho maxVisibleItems filas.
+    d.options         = { "A", "B", "C", "D", "E" };
+    d.itemHeight      = 20.0f;
+    d.maxVisibleItems = 3u;
+    CHECK(nearlyEqual(d.listHeight(), 60.0f));
+    d.maxVisibleItems = 0u;   // 0 = todas
+    CHECK(nearlyEqual(d.listHeight(), 100.0f));
+}
+
+static void test_dropdown_sync_builds_label_arrow_and_items()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    DropdownComponent d;
+    d.position   = glm::vec2(0.0f, 0.0f);
+    d.size       = glm::vec2(160.0f, 30.0f);
+    d.options    = { "Bajo", "Medio", "Alto" };
+    d.value      = 1;
+    d.itemHeight = 20.0f;
+
+    UiWidgetLists w;
+    w.dropdowns.emplace_back(5ull, &d);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().empty()) return;
+    const UiElement& caja = *canvas.root().children()[0];
+    CHECK(caja.name == uiDropdownNodeName(5ull));
+    CHECK(caja.typeName() == std::string("Dropdown"));
+    // Etiqueta, flecha y lista.
+    CHECK(caja.children().size() == 3);
+    if (caja.children().size() != 3) return;
+    const UiElement& lista = *caja.children()[2];
+    CHECK(lista.name == uiDropdownNodeName(5ull) + "/List");
+    CHECK(lista.children().size() == 3);   // una fila por opcion
+
+    // Cerrada: la lista EXISTE pero no se ve. La forma del subarbol no cambia al
+    // abrir, asi que abrir no reconstruye el canvas entero.
+    CHECK(lista.visible == false);
+
+    d.isOpen = true;
+    syncUiWidgets(w, canvas, cache, loader);
+    CHECK(lista.visible == true);
+    CHECK(canvas.root().children()[0]->children().size() == 3);
+
+    // Cambiar el NUMERO de opciones si cambia la forma: hay que reconstruir, o
+    // la opcion nueva no tendria nodo y no se veria.
+    d.options.push_back("Ultra");
+    syncUiWidgets(w, canvas, cache, loader);
+    const UiElement& lista2 = *canvas.root().children()[0]->children()[2];
+    CHECK(lista2.children().size() == 4);
+}
+
+static void test_dropdown_click_opens_and_picks()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    DropdownComponent d;
+    d.position   = glm::vec2(0.0f, 0.0f);
+    d.size       = glm::vec2(160.0f, 30.0f);
+    d.options    = { "Bajo", "Medio", "Alto" };
+    d.value      = 0;
+    d.itemHeight = 20.0f;
+
+    int ultimo = -1;
+    int avisos = 0;
+    d.callbacks.ptr->onValueChanged = [&](int v) { ultimo = v; avisos++; };
+
+    UiWidgetLists w;
+    w.dropdowns.emplace_back(5ull, &d);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    // Click en la caja: se abre.
+    clickEnCanvas(canvas, glm::vec2(80.0f, 15.0f), 0.0f);
+    CHECK(d.isOpen == true);
+
+    // Hay que volver a sincronizar y a medir: la lista acaba de hacerse visible,
+    // asi que hasta ahora no tenia rect contra el que probar el raton.
+    syncUiWidgets(w, canvas, cache, loader);
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+
+    // Click en la segunda fila: la lista arranca justo debajo de la caja
+    // (y = 30) y cada fila mide 20, asi que la fila 1 va de 50 a 70.
+    clickEnCanvas(canvas, glm::vec2(80.0f, 60.0f), 5.0f);
+    CHECK(d.value == 1);
+    CHECK(avisos == 1);
+    CHECK(ultimo == 1);
+    CHECK(d.isOpen == false);   // elegir cierra
+
+    // No interactable: ni se abre.
+    d.interactable = false;
+    syncUiWidgets(w, canvas, cache, loader);
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    clickEnCanvas(canvas, glm::vec2(80.0f, 15.0f), 10.0f);
+    CHECK(d.isOpen == false);
+}
+
+static void test_dropdown_hit_test_maps_back_to_gameobject()
+{
+    CHECK(uiDropdownOwnerId(uiDropdownNodeName(42ull)) == 42ull);
+    CHECK(uiDropdownOwnerId(uiDropdownNodeName(42ull) + "/List") == 42ull);
+    CHECK(uiDropdownOwnerId("Cubo") == 0ull);
+    CHECK(uiDropdownOwnerId("drp:") == 0ull);
+    CHECK(uiDropdownOwnerId("drp:12ab") == 0ull);
+    CHECK(uiDropdownOwnerId(uiInputFieldNodeName(42ull)) == 0ull);
+    CHECK(uiInputFieldOwnerId(uiDropdownNodeName(42ull)) == 0ull);
+}
+
+// ── ScrollView ──────────────────────────────────────────────────────────────
+// El unico cuyo nodo PRINCIPAL no es el que recibe el raton: los hijos de la
+// escena cuelgan del Content, que es el que se mueve. Si colgaran del viewport,
+// el scroll no arrastraria nada.
+static void fillScrollView(ScrollViewComponent& s)
+{
+    s.anchorMin = glm::vec2(0.1875f, 0.4375f);
+    s.anchorMax = glm::vec2(0.5625f, 0.5625f);
+    s.pivot     = glm::vec2(0.40625f, 0.59375f);
+    s.position  = glm::vec2(41.5f, -57.25f);
+    s.size      = glm::vec2(311.75f, 217.5f);
+    s.color     = glm::vec4(0.17f, 0.18f, 0.19f, 0.21f);
+    s.visible   = false;
+
+    s.horizontal = true;
+    s.vertical   = false;
+
+    s.contentSize        = glm::vec2(613.5f, 941.25f);
+    s.normalizedPosition = glm::vec2(0.3125f, 0.6875f);
+    s.scrollSensitivity  = 43.5f;
+
+    s.atlasPath        = "assets/ui/widgets.png";
+    s.backgroundSprite = "marco";
+}
+
+static void checkScrollViewMatchesFilled(const ScrollViewComponent& s)
+{
+    CHECK(nearlyEqual(s.anchorMin.x, 0.1875f));
+    CHECK(nearlyEqual(s.anchorMax.y, 0.5625f));
+    CHECK(nearlyEqual(s.pivot.x, 0.40625f));
+    CHECK(nearlyEqual(s.position.y, -57.25f));
+    CHECK(nearlyEqual(s.size.x, 311.75f));
+    CHECK(nearlyEqual(s.color.a, 0.21f));
+    CHECK(s.visible == false);
+    CHECK(s.horizontal == true);
+    CHECK(s.vertical == false);
+    CHECK(nearlyEqual(s.contentSize.x, 613.5f));
+    CHECK(nearlyEqual(s.contentSize.y, 941.25f));
+    CHECK(nearlyEqual(s.normalizedPosition.x, 0.3125f));
+    CHECK(nearlyEqual(s.normalizedPosition.y, 0.6875f));
+    CHECK(nearlyEqual(s.scrollSensitivity, 43.5f));
+    CHECK(s.atlasPath == "assets/ui/widgets.png");
+    CHECK(s.backgroundSprite == "marco");
+}
+
+static void test_scroll_view_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* canvasGo = scene.addGameObject("UI");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* go = scene.addGameObject("Lista", canvasGo);
+    auto s = std::make_shared<ScrollViewComponent>();
+    fillScrollView(*s);
+    go->setScrollView(s);
+
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasScrollView()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->name == "Lista");
+    checkScrollViewMatchesFilled(*found->getScrollView());
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_scroll_view_block_still_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool alguno = false;
+    loaded.traverse([&](GameObject* n) { if (n->hasScrollView()) alguno = true; });
+    CHECK(!alguno);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+static void test_scene_without_scroll_view_serializes_identically()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Pelado");
+    const std::string antes = scene.toJson().dump();
+    CHECK(antes.find("\"scrollView\"") == std::string::npos);
+
+    go->setScrollView(std::make_shared<ScrollViewComponent>());
+    CHECK(scene.toJson().dump() != antes);
+    go->setScrollView(nullptr);
+    CHECK(scene.toJson().dump() == antes);
+}
+
+static void test_scroll_view_command_add_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Lista");
+    ScrollViewComponent st;
+    fillScrollView(st);
+    ScrollViewComponentCommand cmd(scene, "Add Scroll View", go->id, /*add=*/true, st);
+
+    cmd.execute();
+    CHECK(go->hasScrollView());
+    checkScrollViewMatchesFilled(*go->getScrollView());
+    cmd.undo();
+    CHECK(!go->hasScrollView());
+    cmd.execute();
+    CHECK(go->hasScrollView());
+    checkScrollViewMatchesFilled(*go->getScrollView());
+}
+
+static void test_scroll_view_command_remove()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Lista");
+    auto s = std::make_shared<ScrollViewComponent>();
+    fillScrollView(*s);
+    go->setScrollView(s);
+
+    ScrollViewComponentCommand cmd(scene, "Remove Scroll View", go->id, /*add=*/false, *s);
+    cmd.execute();
+    CHECK(!go->hasScrollView());
+    cmd.undo();
+    CHECK(go->hasScrollView());
+    checkScrollViewMatchesFilled(*go->getScrollView());
+}
+
+static void test_scroll_view_property_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Lista");
+    go->setScrollView(std::make_shared<ScrollViewComponent>());
+    const uint64_t id = go->id;
+    Scene* sc = &scene;
+
+    auto applyContent = [sc, id](const glm::vec2& v) {
+        if (GameObject* g = sc->findById(id))
+            if (g->hasScrollView()) g->getScrollView()->contentSize = v;
+    };
+    PropertyCommand<glm::vec2> cmd("Content Size", glm::vec2(200.0f, 400.0f),
+                                   glm::vec2(37.5f, 91.25f), applyContent);
+
+    cmd.execute();
+    CHECK(nearlyEqual(go->getScrollView()->contentSize.x, 37.5f));
+    cmd.undo();
+    CHECK(nearlyEqual(go->getScrollView()->contentSize.y, 400.0f));
+
+    go->setScrollView(nullptr);
+    cmd.execute();
+    CHECK(!go->hasScrollView());
+}
+
+// El desplazamiento del contenido sale del recorrido REAL: contenido menos
+// viewport. Con el contenido mas pequeño que el viewport no hay nada que
+// desplazar, y el offset tiene que ser 0 y no negativo — un contenido empujado
+// hacia dentro deja un hueco arriba que nadie ha pedido.
+static void test_scroll_view_content_offset()
+{
+    ScrollViewComponent s;
+    s.size        = glm::vec2(100.0f, 200.0f);
+    s.contentSize = glm::vec2(100.0f, 600.0f);
+    s.vertical    = true;
+    s.horizontal  = false;
+
+    CHECK(nearlyEqual(s.scrollRange().y, 400.0f));
+
+    s.normalizedPosition = glm::vec2(0.0f, 0.0f);
+    CHECK(nearlyEqual(s.contentOffset().y, 0.0f));
+    s.normalizedPosition = glm::vec2(0.0f, 1.0f);
+    CHECK(nearlyEqual(s.contentOffset().y, -400.0f));
+    s.normalizedPosition = glm::vec2(0.0f, 0.25f);
+    CHECK(nearlyEqual(s.contentOffset().y, -100.0f));
+
+    // Eje apagado: no se mueve aunque el contenido sea mas ancho.
+    s.contentSize        = glm::vec2(500.0f, 600.0f);
+    s.normalizedPosition = glm::vec2(1.0f, 0.0f);
+    CHECK(nearlyEqual(s.contentOffset().x, 0.0f));
+    s.horizontal = true;
+    CHECK(nearlyEqual(s.contentOffset().x, -400.0f));
+
+    // Contenido mas pequeño que el viewport: cero, nunca positivo.
+    s.contentSize        = glm::vec2(50.0f, 50.0f);
+    s.normalizedPosition = glm::vec2(1.0f, 1.0f);
+    CHECK(nearlyEqual(s.contentOffset().x, 0.0f));
+    CHECK(nearlyEqual(s.contentOffset().y, 0.0f));
+    CHECK(nearlyEqual(s.scrollRange().x, 0.0f));
+}
+
+static void test_scroll_view_sync_builds_viewport_and_content()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    ScrollViewComponent s;
+    s.position           = glm::vec2(10.0f, 20.0f);
+    s.size               = glm::vec2(100.0f, 200.0f);
+    s.contentSize        = glm::vec2(100.0f, 600.0f);
+    s.normalizedPosition = glm::vec2(0.0f, 0.5f);
+
+    UiWidgetLists w;
+    w.scrollViews.emplace_back(5ull, &s);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().empty()) return;
+    const UiElement& vista = *canvas.root().children()[0];
+    CHECK(vista.name == uiScrollViewNodeName(5ull));
+    CHECK(vista.typeName() == std::string("ScrollView"));
+    // Recorta a sus descendientes: es lo que hace que el contenido no se salga.
+    CHECK(vista.clipChildren == true);
+    CHECK(vista.children().size() == 1);
+    if (vista.children().empty()) return;
+    const UiElement& contenido = *vista.children()[0];
+    CHECK(contenido.name == uiScrollViewNodeName(5ull) + "/Content");
+    CHECK(nearlyEqual(contenido.size.y, 600.0f));
+    CHECK(nearlyEqual(contenido.position.y, -200.0f));   // (600-200) * 0.5
+    // El contenido NO recibe el raton: la rueda es del viewport.
+    CHECK(contenido.raycastTarget == false);
+}
+
+// Los hijos de la escena cuelgan del CONTENT, no del viewport: si colgaran del
+// viewport, moverse no los arrastraria y el scroll no serviria de nada.
+static void test_scroll_view_children_hang_from_the_content()
+{
+    Scene scene;
+    GameObject* canvasGo = scene.addGameObject("Canvas");
+    canvasGo->setCanvas(std::make_shared<CanvasComponent>());
+
+    GameObject* vista = scene.addGameObject("Lista", canvasGo);
+    auto sv = std::make_shared<ScrollViewComponent>();
+    sv->size        = glm::vec2(100.0f, 200.0f);
+    sv->contentSize = glm::vec2(100.0f, 600.0f);
+    vista->setScrollView(sv);
+
+    GameObject* fila = scene.addGameObject("Fila", vista);
+    fila->setPanel(std::make_shared<PanelComponent>());
+
+    UiWidgetLists w;
+    scene.collectUiWidgets(w);
+    CHECK(w.scrollViews.size() == 1);
+    CHECK(w.panels.size() == 1);
+
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+    syncUiWidgets(w, canvas, cache, loader);
+
+    CHECK(canvas.root().children().size() == 1);
+    if (canvas.root().children().empty()) return;
+    const UiElement& nodoVista = *canvas.root().children()[0];
+    CHECK(nodoVista.children().size() == 1);
+    if (nodoVista.children().empty()) return;
+    const UiElement& contenido = *nodoVista.children()[0];
+    CHECK(contenido.name == uiScrollViewNodeName(vista->id) + "/Content");
+    // La fila cuelga del CONTENT.
+    CHECK(contenido.children().size() == 1);
+    if (contenido.children().empty()) return;
+    CHECK(contenido.children()[0]->name == uiPanelNodeName(fila->id));
+}
+
+static void test_scroll_view_wheel_moves_the_component()
+{
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+
+    ScrollViewComponent s;
+    s.position          = glm::vec2(0.0f, 0.0f);
+    s.size              = glm::vec2(100.0f, 200.0f);
+    s.contentSize       = glm::vec2(100.0f, 600.0f);   // recorrido: 400 px
+    s.scrollSensitivity = 40.0f;                        // 40 px por muesca = 0.1
+
+    float ultimoY = -1.0f;
+    int   avisos  = 0;
+    s.callbacks.ptr->onValueChanged = [&](float, float y) { ultimoY = y; avisos++; };
+
+    UiWidgetLists w;
+    w.scrollViews.emplace_back(5ull, &s);
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+
+    UiInputState in;
+    in.mousePos    = glm::vec2(50.0f, 100.0f);
+    in.timeSeconds = 0.0f;
+    canvas.updateInput(in);
+
+    // Rueda hacia abajo (delta negativo) = bajar por la lista.
+    in.scrollDelta = -1.0f;
+    in.timeSeconds = 0.016f;
+    canvas.updateInput(in);
+    CHECK(nearlyEqual(s.normalizedPosition.y, 0.1f));
+    CHECK(avisos == 1);
+    CHECK(nearlyEqual(ultimoY, 0.1f));
+
+    // Y hacia arriba vuelve.
+    in.scrollDelta = 1.0f;
+    in.timeSeconds = 0.032f;
+    canvas.updateInput(in);
+    CHECK(nearlyEqual(s.normalizedPosition.y, 0.0f));
+
+    // No se sale de [0,1] por mucho que se insista.
+    for (int i = 0; i < 50; i++)
+    {
+        in.scrollDelta = -1.0f;
+        in.timeSeconds += 0.016f;
+        canvas.updateInput(in);
+    }
+    CHECK(nearlyEqual(s.normalizedPosition.y, 1.0f));
+
+    // Sin recorrido no se mueve NI avisa: un contenido que cabe entero no
+    // scrollea, y avisar de un cambio que no ha pasado haria trabajar a un
+    // script en balde en cada muesca.
+    s.contentSize = glm::vec2(100.0f, 100.0f);
+    syncUiWidgets(w, canvas, cache, loader);
+    data.clear();
+    canvas.buildDrawData(800, 480, data);
+    const int antes = avisos;
+    in.scrollDelta = -1.0f;
+    in.timeSeconds += 0.016f;
+    canvas.updateInput(in);
+    CHECK(avisos == antes);
+}
+
+static void test_scroll_view_hit_test_maps_back_to_gameobject()
+{
+    CHECK(uiScrollViewOwnerId(uiScrollViewNodeName(42ull)) == 42ull);
+    CHECK(uiScrollViewOwnerId(uiScrollViewNodeName(42ull) + "/Content") == 42ull);
+    CHECK(uiScrollViewOwnerId("Cubo") == 0ull);
+    CHECK(uiScrollViewOwnerId("scv:") == 0ull);
+    CHECK(uiScrollViewOwnerId("scv:12ab") == 0ull);
+    // "scv:" y "scr:" (Scrollbar) NO se confunden: comparten las tres primeras
+    // letras y son dos widgets distintos.
+    CHECK(uiScrollViewOwnerId(uiScrollbarNodeName(42ull)) == 0ull);
+    CHECK(uiScrollbarOwnerId(uiScrollViewNodeName(42ull)) == 0ull);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -4719,6 +5969,46 @@ int main()
     test_scrollbar_handle_rect_and_steps();
     test_scrollbar_drag_and_wheel_write_the_component();
     test_scrollbar_hit_test_maps_back_to_gameobject();
+    test_canvas_entrega_el_texto_al_elemento_con_foco();
+    test_canvas_cede_las_teclas_de_edicion_a_quien_las_consume();
+    test_input_field_round_trip(pm, am);
+    test_scene_without_input_field_block_still_loads(pm, am);
+    test_scene_without_input_field_serializes_identically();
+    test_input_field_command_add_undo_redo();
+    test_input_field_command_remove();
+    test_input_field_property_command_undo_redo();
+    test_input_field_edits_by_codepoint_not_by_byte();
+    test_input_field_content_type_and_limit();
+    test_input_field_password_and_placeholder();
+    test_input_field_sync_builds_box_text_and_caret();
+    test_input_field_typing_writes_the_component();
+    test_input_field_hit_test_maps_back_to_gameobject();
+
+    test_dropdown_round_trip(pm, am);
+    test_dropdown_open_state_is_not_serialized(pm, am);
+    test_scene_without_dropdown_block_still_loads(pm, am);
+    test_scene_without_dropdown_serializes_identically();
+    test_dropdown_command_add_undo_redo();
+    test_dropdown_command_remove();
+    test_dropdown_property_command_undo_redo();
+    test_dropdown_out_of_range_value_is_survivable();
+    test_dropdown_sync_builds_label_arrow_and_items();
+    test_dropdown_click_opens_and_picks();
+    test_dropdown_hit_test_maps_back_to_gameobject();
+
+    test_scroll_view_round_trip(pm, am);
+    test_scene_without_scroll_view_block_still_loads(pm, am);
+    test_scene_without_scroll_view_serializes_identically();
+    test_scroll_view_command_add_undo_redo();
+    test_scroll_view_command_remove();
+    test_scroll_view_property_command_undo_redo();
+    test_scroll_view_content_offset();
+    test_scroll_view_sync_builds_viewport_and_content();
+    test_scroll_view_children_hang_from_the_content();
+    test_scroll_view_wheel_moves_the_component();
+    test_scroll_view_hit_test_maps_back_to_gameobject();
+
+
 
 
     am.shutdown();

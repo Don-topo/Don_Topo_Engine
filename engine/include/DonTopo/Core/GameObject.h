@@ -28,6 +28,9 @@
 #include "DonTopo/UI/CheckboxComponent.h"
 #include "DonTopo/UI/ToggleComponent.h"
 #include "DonTopo/UI/ScrollbarComponent.h"
+#include "DonTopo/UI/InputFieldComponent.h"
+#include "DonTopo/UI/DropdownComponent.h"
+#include "DonTopo/UI/ScrollViewComponent.h"
 
 namespace DonTopo
 {
@@ -224,6 +227,26 @@ namespace DonTopo
             const std::shared_ptr<ScrollbarComponent>& getScrollbar() const { return m_scrollbar; }
             bool hasScrollbar() const { return m_scrollbar != nullptr; }
 
+            // InputField: el campo de texto. Interactivo y ademas el unico que
+            // recibe TECLADO, asi que el sync lo toma por puntero no const.
+            void setInputField(std::shared_ptr<InputFieldComponent> f) { m_inputField = std::move(f); }
+            const std::shared_ptr<InputFieldComponent>& getInputField() const { return m_inputField; }
+            bool hasInputField() const { return m_inputField != nullptr; }
+
+            // Dropdown: el desplegable. Su subarbol cambia de forma con el numero
+            // de opciones, cosa que el sync tiene en cuenta al decidir si
+            // reconstruye.
+            void setDropdown(std::shared_ptr<DropdownComponent> d) { m_dropdown = std::move(d); }
+            const std::shared_ptr<DropdownComponent>& getDropdown() const { return m_dropdown; }
+            bool hasDropdown() const { return m_dropdown != nullptr; }
+
+            // ScrollView: la vista desplazable. OJO: los hijos de este GameObject
+            // cuelgan de su nodo de CONTENIDO, no del viewport — si colgaran del
+            // viewport, desplazarse no los arrastraria.
+            void setScrollView(std::shared_ptr<ScrollViewComponent> s) { m_scrollView = std::move(s); }
+            const std::shared_ptr<ScrollViewComponent>& getScrollView() const { return m_scrollView; }
+            bool hasScrollView() const { return m_scrollView != nullptr; }
+
             // Auto-layout: coloca a los HIJOS de este GameObject, y con
             // ignoreLayout saca a este de la colocacion de su padre. Mismo
             // contrato que el resto: SOLO DATOS, y el nodo lo resuelve
@@ -302,6 +325,9 @@ namespace DonTopo
             std::shared_ptr<CheckboxComponent> m_checkbox;
             std::shared_ptr<ToggleComponent> m_toggle;
             std::shared_ptr<ScrollbarComponent> m_scrollbar;
+            std::shared_ptr<InputFieldComponent> m_inputField;
+            std::shared_ptr<DropdownComponent> m_dropdown;
+            std::shared_ptr<ScrollViewComponent> m_scrollView;
             std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
     };
 }

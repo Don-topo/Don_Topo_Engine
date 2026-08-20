@@ -22,6 +22,9 @@
 #include "DonTopo/UI/CheckboxComponent.h"
 #include "DonTopo/UI/ToggleComponent.h"
 #include "DonTopo/UI/ScrollbarComponent.h"
+#include "DonTopo/UI/InputFieldComponent.h"
+#include "DonTopo/UI/DropdownComponent.h"
+#include "DonTopo/UI/ScrollViewComponent.h"
 #include "DonTopo/Files/FileManager.h"
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -115,6 +118,9 @@ namespace DonTopo::ScriptBindings
         struct LuaCheckbox { LuaEntity e; };
         struct LuaToggle { LuaEntity e; };
         struct LuaScrollbar { LuaEntity e; };
+        struct LuaInputField { LuaEntity e; };
+        struct LuaDropdown { LuaEntity e; };
+        struct LuaScrollView { LuaEntity e; };
 
         // Descompone localTransform en T/R/S (grados pa Lua). La extracción de
         // ángulos usa extractEulerAngleXYZ — el inverso exacto del
@@ -685,6 +691,24 @@ namespace DonTopo::ScriptBindings
             if (!go->hasScrollbar()) throw std::runtime_error("El GameObject ya no tiene Scrollbar");
             return go->getScrollbar().get();
         }
+        InputFieldComponent* inputFieldOf(const LuaInputField& c)
+        {
+            GameObject* go = deref(c.e);
+            if (!go->hasInputField()) throw std::runtime_error("El GameObject ya no tiene InputField");
+            return go->getInputField().get();
+        }
+        DropdownComponent* dropdownOf(const LuaDropdown& c)
+        {
+            GameObject* go = deref(c.e);
+            if (!go->hasDropdown()) throw std::runtime_error("El GameObject ya no tiene Dropdown");
+            return go->getDropdown().get();
+        }
+        ScrollViewComponent* scrollViewOf(const LuaScrollView& c)
+        {
+            GameObject* go = deref(c.e);
+            if (!go->hasScrollView()) throw std::runtime_error("El GameObject ya no tiene ScrollView");
+            return go->getScrollView().get();
+        }
 
         // Fábricas de accesores. Son plantillas y no una lista de lambdas a mano
         // porque los cuatro componentes suman más de cien campos y escribir el
@@ -834,8 +858,8 @@ namespace DonTopo::ScriptBindings
         // plantilla aparte y no una generalizacion de aquella porque el
         // OnClick/OnDoubleClick del Button no lleva argumento y su firma no
         // tiene por que cambiar.
-        template <class Arg>
-        void setUiValueCallback(ScriptManager& mgr, std::function<void(Arg)>& destino,
+        template <class... Args>
+        void setUiValueCallback(ScriptManager& mgr, std::function<void(Args...)>& destino,
                                 const char* nombre, const sol::object& fn)
         {
             if (!fn.valid() || fn.get_type() != sol::type::function)
@@ -855,7 +879,7 @@ namespace DonTopo::ScriptBindings
             std::weak_ptr<char> epoca = mgr.callbackEpoch();
             ScriptManager* m = &mgr;
             const std::string etiqueta = nombre;
-            destino = [m, clave, epoca, etiqueta](Arg v) {
+            destino = [m, clave, epoca, etiqueta](Args... v) {
                 if (epoca.expired()) return;
 
                 sol::state_view lua(m->lua());
@@ -864,7 +888,7 @@ namespace DonTopo::ScriptBindings
                 if (f.get_type() != sol::type::function) return;
 
                 sol::protected_function pf = f;
-                sol::protected_function_result r = pf(v);
+                sol::protected_function_result r = pf(v...);
                 if (!r.valid())
                 {
                     sol::error err = r;
@@ -898,6 +922,9 @@ namespace DonTopo::ScriptBindings
                 "None", 0, "Horizontal", 1, "Vertical", 2, "Grid", 3);
             lua["UiCrossAlign"] = lua.create_table_with(
                 "Start", 0, "Center", 1, "End", 2);
+            lua["UiInputContentType"] = lua.create_table_with(
+                "Standard", 0, "IntegerNumber", 1, "DecimalNumber", 2,
+                "Alphanumeric", 3, "Password", 4);
             lua["UiSliderDirection"] = lua.create_table_with(
                 "LeftToRight", 0, "RightToLeft", 1, "BottomToTop", 2, "TopToBottom", 3);
             lua["UiScrollbarDirection"] = lua.create_table_with(
@@ -1294,6 +1321,198 @@ namespace DonTopo::ScriptBindings
                     setUiValueCallback<float>(mgr, scrollbarOf(s)->callbacks.ptr->onValueChanged,
                                               "Scrollbar.OnValueChanged", fn);
                 });
+
+            // ── InputField ──────────────────────────────────────────────────
+            // El unico en el que el JUGADOR escribe. `text` es el texto de
+            // verdad: en Password se guarda tal cual y solo cambia lo que se
+            // ENSENA, que es lo que devuelve GetDisplayText.
+            lua.new_usertype<LuaInputField>("InputField",
+                sol::no_constructor,
+                "visible",          uiProp(inputFieldOf, &InputFieldComponent::visible),
+                "interactable",     uiProp(inputFieldOf, &InputFieldComponent::interactable),
+                "readOnly",         uiProp(inputFieldOf, &InputFieldComponent::readOnly),
+                "text",             uiProp(inputFieldOf, &InputFieldComponent::text),
+                "placeholder",      uiProp(inputFieldOf, &InputFieldComponent::placeholder),
+                "fontPath",         uiProp(inputFieldOf, &InputFieldComponent::fontPath),
+                "fontSize",         uiFloatProp(inputFieldOf, &InputFieldComponent::fontSize, &mgr, "InputField.fontSize"),
+                "align",            uiEnumProp(inputFieldOf, &InputFieldComponent::align, 3),
+                "padding",          uiFloatProp(inputFieldOf, &InputFieldComponent::padding, &mgr, "InputField.padding"),
+                // characterLimit es entero: sin el guardarrail de NaN y sin
+                // decimales que redondear a espaldas del script.
+                "characterLimit",   uiProp(inputFieldOf, &InputFieldComponent::characterLimit),
+                "contentType",      uiEnumProp(inputFieldOf, &InputFieldComponent::contentType, 4),
+                "passwordChar",     uiProp(inputFieldOf, &InputFieldComponent::passwordChar),
+                "caretWidth",       uiFloatProp(inputFieldOf, &InputFieldComponent::caretWidth, &mgr, "InputField.caretWidth"),
+                "caretBlinkRate",   uiFloatProp(inputFieldOf, &InputFieldComponent::caretBlinkRate, &mgr, "InputField.caretBlinkRate"),
+                "atlasPath",        uiProp(inputFieldOf, &InputFieldComponent::atlasPath),
+                "backgroundSprite", uiProp(inputFieldOf, &InputFieldComponent::backgroundSprite),
+                "GetAnchorMin", uiVec2Get(inputFieldOf, &InputFieldComponent::anchorMin),
+                "SetAnchorMin", uiVec2Set(inputFieldOf, &InputFieldComponent::anchorMin, &mgr, "InputField.SetAnchorMin"),
+                "GetAnchorMax", uiVec2Get(inputFieldOf, &InputFieldComponent::anchorMax),
+                "SetAnchorMax", uiVec2Set(inputFieldOf, &InputFieldComponent::anchorMax, &mgr, "InputField.SetAnchorMax"),
+                "GetPivot",     uiVec2Get(inputFieldOf, &InputFieldComponent::pivot),
+                "SetPivot",     uiVec2Set(inputFieldOf, &InputFieldComponent::pivot, &mgr, "InputField.SetPivot"),
+                "GetPosition",  uiVec2Get(inputFieldOf, &InputFieldComponent::position),
+                "SetPosition",  uiVec2Set(inputFieldOf, &InputFieldComponent::position, &mgr, "InputField.SetPosition"),
+                "GetSize",      uiVec2Get(inputFieldOf, &InputFieldComponent::size),
+                "SetSize",      uiVec2Set(inputFieldOf, &InputFieldComponent::size, &mgr, "InputField.SetSize"),
+                "GetColor",     uiVec4Get(inputFieldOf, &InputFieldComponent::color),
+                "SetColor",     uiVec4Set(inputFieldOf, &InputFieldComponent::color, &mgr, "InputField.SetColor"),
+                "GetTextColor", uiVec4Get(inputFieldOf, &InputFieldComponent::textColor),
+                "SetTextColor", uiVec4Set(inputFieldOf, &InputFieldComponent::textColor, &mgr, "InputField.SetTextColor"),
+                "GetPlaceholderColor", uiVec4Get(inputFieldOf, &InputFieldComponent::placeholderColor),
+                "SetPlaceholderColor", uiVec4Set(inputFieldOf, &InputFieldComponent::placeholderColor, &mgr, "InputField.SetPlaceholderColor"),
+                "GetCaretColor", uiVec4Get(inputFieldOf, &InputFieldComponent::caretColor),
+                "SetCaretColor", uiVec4Set(inputFieldOf, &InputFieldComponent::caretColor, &mgr, "InputField.SetCaretColor"),
+                // Lo que se DIBUJA: el placeholder si esta vacio, o la mascara si
+                // es Password. Nunca la contrasena.
+                "GetDisplayText", [](const LuaInputField& f) {
+                    return inputFieldOf(f)->displayText();
+                },
+                // Posicion del cursor en CARACTERES (no en bytes), 0 = antes del
+                // primero. Se acota al escribirla: un cursor fuera del texto
+                // partiria la cadena en el siguiente borrado.
+                "GetCaretPos", [](const LuaInputField& f) {
+                    return inputFieldOf(f)->caretPos;
+                },
+                "SetCaretPos", [](const LuaInputField& f, int v) {
+                    InputFieldComponent* c = inputFieldOf(f);
+                    c->caretPos = 0;
+                    c->moveCaret(v);
+                },
+                "OnValueChanged", [&mgr](const LuaInputField& f, sol::object fn) {
+                    setUiValueCallback<const std::string&>(
+                        mgr, inputFieldOf(f)->callbacks.ptr->onValueChanged,
+                        "InputField.OnValueChanged", fn);
+                },
+                "OnEndEdit", [&mgr](const LuaInputField& f, sol::object fn) {
+                    setUiValueCallback<const std::string&>(
+                        mgr, inputFieldOf(f)->callbacks.ptr->onEndEdit,
+                        "InputField.OnEndEdit", fn);
+                });
+
+            // ── Dropdown ────────────────────────────────────────────────────
+            // Las opciones se leen y se escriben con indices 1-BASED, que es lo
+            // natural en Lua; `value` sigue siendo el indice 0-based del
+            // componente, igual que en C++ y que en el inspector.
+            lua.new_usertype<LuaDropdown>("Dropdown",
+                sol::no_constructor,
+                "visible",          uiProp(dropdownOf, &DropdownComponent::visible),
+                "interactable",     uiProp(dropdownOf, &DropdownComponent::interactable),
+                "value",            uiProp(dropdownOf, &DropdownComponent::value),
+                "isOpen",           uiProp(dropdownOf, &DropdownComponent::isOpen),
+                "itemHeight",       uiFloatProp(dropdownOf, &DropdownComponent::itemHeight, &mgr, "Dropdown.itemHeight"),
+                "maxVisibleItems",  uiProp(dropdownOf, &DropdownComponent::maxVisibleItems),
+                "fontPath",         uiProp(dropdownOf, &DropdownComponent::fontPath),
+                "fontSize",         uiFloatProp(dropdownOf, &DropdownComponent::fontSize, &mgr, "Dropdown.fontSize"),
+                "padding",          uiFloatProp(dropdownOf, &DropdownComponent::padding, &mgr, "Dropdown.padding"),
+                "atlasPath",        uiProp(dropdownOf, &DropdownComponent::atlasPath),
+                "backgroundSprite", uiProp(dropdownOf, &DropdownComponent::backgroundSprite),
+                "arrowSprite",      uiProp(dropdownOf, &DropdownComponent::arrowSprite),
+                "itemSprite",       uiProp(dropdownOf, &DropdownComponent::itemSprite),
+                "GetAnchorMin", uiVec2Get(dropdownOf, &DropdownComponent::anchorMin),
+                "SetAnchorMin", uiVec2Set(dropdownOf, &DropdownComponent::anchorMin, &mgr, "Dropdown.SetAnchorMin"),
+                "GetAnchorMax", uiVec2Get(dropdownOf, &DropdownComponent::anchorMax),
+                "SetAnchorMax", uiVec2Set(dropdownOf, &DropdownComponent::anchorMax, &mgr, "Dropdown.SetAnchorMax"),
+                "GetPivot",     uiVec2Get(dropdownOf, &DropdownComponent::pivot),
+                "SetPivot",     uiVec2Set(dropdownOf, &DropdownComponent::pivot, &mgr, "Dropdown.SetPivot"),
+                "GetPosition",  uiVec2Get(dropdownOf, &DropdownComponent::position),
+                "SetPosition",  uiVec2Set(dropdownOf, &DropdownComponent::position, &mgr, "Dropdown.SetPosition"),
+                "GetSize",      uiVec2Get(dropdownOf, &DropdownComponent::size),
+                "SetSize",      uiVec2Set(dropdownOf, &DropdownComponent::size, &mgr, "Dropdown.SetSize"),
+                "GetColor",     uiVec4Get(dropdownOf, &DropdownComponent::color),
+                "SetColor",     uiVec4Set(dropdownOf, &DropdownComponent::color, &mgr, "Dropdown.SetColor"),
+                "GetListColor", uiVec4Get(dropdownOf, &DropdownComponent::listColor),
+                "SetListColor", uiVec4Set(dropdownOf, &DropdownComponent::listColor, &mgr, "Dropdown.SetListColor"),
+                "GetItemColor", uiVec4Get(dropdownOf, &DropdownComponent::itemColor),
+                "SetItemColor", uiVec4Set(dropdownOf, &DropdownComponent::itemColor, &mgr, "Dropdown.SetItemColor"),
+                "GetItemSelectedColor", uiVec4Get(dropdownOf, &DropdownComponent::itemSelectedColor),
+                "SetItemSelectedColor", uiVec4Set(dropdownOf, &DropdownComponent::itemSelectedColor, &mgr, "Dropdown.SetItemSelectedColor"),
+                "GetArrowColor", uiVec4Get(dropdownOf, &DropdownComponent::arrowColor),
+                "SetArrowColor", uiVec4Set(dropdownOf, &DropdownComponent::arrowColor, &mgr, "Dropdown.SetArrowColor"),
+                "GetTextColor", uiVec4Get(dropdownOf, &DropdownComponent::textColor),
+                "SetTextColor", uiVec4Set(dropdownOf, &DropdownComponent::textColor, &mgr, "Dropdown.SetTextColor"),
+                "GetOptionCount", [](const LuaDropdown& d) {
+                    return (int)dropdownOf(d)->options.size();
+                },
+                // 1-based y fuera de rango devuelve cadena vacia: un indice malo
+                // no puede tumbar el script de un menu.
+                "GetOption", [](const LuaDropdown& d, int i) {
+                    DropdownComponent* c = dropdownOf(d);
+                    if (i < 1 || i > (int)c->options.size()) return std::string();
+                    return c->options[(size_t)(i - 1)];
+                },
+                "GetSelectedLabel", [](const LuaDropdown& d) {
+                    return dropdownOf(d)->selectedLabel();
+                },
+                // Reemplaza la lista entera. Lo que no sea cadena se DESCARTA en
+                // vez de tirar la tabla: perder el combo por una entrada mala
+                // seria peor que perder esa entrada.
+                "SetOptions", [](const LuaDropdown& d, sol::table t) {
+                    DropdownComponent* c = dropdownOf(d);
+                    c->options.clear();
+                    for (size_t i = 1; i <= t.size(); i++)
+                    {
+                        sol::object o = t[i];
+                        if (o.get_type() == sol::type::string)
+                            c->options.push_back(o.as<std::string>());
+                    }
+                },
+                "AddOption", [](const LuaDropdown& d, const std::string& s) {
+                    dropdownOf(d)->options.push_back(s);
+                },
+                "ClearOptions", [](const LuaDropdown& d) {
+                    dropdownOf(d)->options.clear();
+                },
+                "OnValueChanged", [&mgr](const LuaDropdown& d, sol::object fn) {
+                    setUiValueCallback<int>(mgr, dropdownOf(d)->callbacks.ptr->onValueChanged,
+                                            "Dropdown.OnValueChanged", fn);
+                });
+
+            // ── ScrollView ──────────────────────────────────────────────────
+            // Sin referencia a un Scrollbar: enlazarlos es una linea de script
+            // (barra:OnValueChanged -> vista:SetNormalizedPosition), y una
+            // referencia entre componentes de la escena habria que serializarla
+            // y mantenerla viva en el clone, el undo y el borrado.
+            lua.new_usertype<LuaScrollView>("ScrollView",
+                sol::no_constructor,
+                "visible",           uiProp(scrollViewOf, &ScrollViewComponent::visible),
+                "horizontal",        uiProp(scrollViewOf, &ScrollViewComponent::horizontal),
+                "vertical",          uiProp(scrollViewOf, &ScrollViewComponent::vertical),
+                "scrollSensitivity", uiFloatProp(scrollViewOf, &ScrollViewComponent::scrollSensitivity, &mgr, "ScrollView.scrollSensitivity"),
+                "atlasPath",         uiProp(scrollViewOf, &ScrollViewComponent::atlasPath),
+                "backgroundSprite",  uiProp(scrollViewOf, &ScrollViewComponent::backgroundSprite),
+                "GetAnchorMin", uiVec2Get(scrollViewOf, &ScrollViewComponent::anchorMin),
+                "SetAnchorMin", uiVec2Set(scrollViewOf, &ScrollViewComponent::anchorMin, &mgr, "ScrollView.SetAnchorMin"),
+                "GetAnchorMax", uiVec2Get(scrollViewOf, &ScrollViewComponent::anchorMax),
+                "SetAnchorMax", uiVec2Set(scrollViewOf, &ScrollViewComponent::anchorMax, &mgr, "ScrollView.SetAnchorMax"),
+                "GetPivot",     uiVec2Get(scrollViewOf, &ScrollViewComponent::pivot),
+                "SetPivot",     uiVec2Set(scrollViewOf, &ScrollViewComponent::pivot, &mgr, "ScrollView.SetPivot"),
+                "GetPosition",  uiVec2Get(scrollViewOf, &ScrollViewComponent::position),
+                "SetPosition",  uiVec2Set(scrollViewOf, &ScrollViewComponent::position, &mgr, "ScrollView.SetPosition"),
+                "GetSize",      uiVec2Get(scrollViewOf, &ScrollViewComponent::size),
+                "SetSize",      uiVec2Set(scrollViewOf, &ScrollViewComponent::size, &mgr, "ScrollView.SetSize"),
+                "GetColor",     uiVec4Get(scrollViewOf, &ScrollViewComponent::color),
+                "SetColor",     uiVec4Set(scrollViewOf, &ScrollViewComponent::color, &mgr, "ScrollView.SetColor"),
+                "GetContentSize", uiVec2Get(scrollViewOf, &ScrollViewComponent::contentSize),
+                "SetContentSize", uiVec2Set(scrollViewOf, &ScrollViewComponent::contentSize, &mgr, "ScrollView.SetContentSize"),
+                "GetNormalizedPosition", uiVec2Get(scrollViewOf, &ScrollViewComponent::normalizedPosition),
+                "SetNormalizedPosition", uiVec2Set(scrollViewOf, &ScrollViewComponent::normalizedPosition, &mgr, "ScrollView.SetNormalizedPosition"),
+                // Cuanto se puede desplazar por eje, en pixeles. Un eje apagado
+                // da 0 aunque el contenido sea mas grande.
+                "GetScrollRange", [](const LuaScrollView& v) {
+                    const glm::vec2 r = scrollViewOf(v)->scrollRange();
+                    return std::make_tuple(r.x, r.y);
+                },
+                "GetContentOffset", [](const LuaScrollView& v) {
+                    const glm::vec2 o = scrollViewOf(v)->contentOffset();
+                    return std::make_tuple(o.x, o.y);
+                },
+                "OnValueChanged", [&mgr](const LuaScrollView& v, sol::object fn) {
+                    setUiValueCallback<float, float>(
+                        mgr, scrollViewOf(v)->callbacks.ptr->onValueChanged,
+                        "ScrollView.OnValueChanged", fn);
+                });
         }
 
         void registerEntity(DonTopo::ScriptManager& mgr)
@@ -1337,6 +1556,21 @@ namespace DonTopo::ScriptBindings
                     GameObject* go = deref(e);
                     if (!go->hasLayout()) return sol::nil;
                     return sol::make_object(e.mgr->lua(), LuaLayout{e});
+                },
+                "GetInputField", [](const LuaEntity& e) -> sol::object {
+                    GameObject* go = deref(e);
+                    if (!go->hasInputField()) return sol::nil;
+                    return sol::make_object(e.mgr->lua(), LuaInputField{e});
+                },
+                "GetDropdown", [](const LuaEntity& e) -> sol::object {
+                    GameObject* go = deref(e);
+                    if (!go->hasDropdown()) return sol::nil;
+                    return sol::make_object(e.mgr->lua(), LuaDropdown{e});
+                },
+                "GetScrollView", [](const LuaEntity& e) -> sol::object {
+                    GameObject* go = deref(e);
+                    if (!go->hasScrollView()) return sol::nil;
+                    return sol::make_object(e.mgr->lua(), LuaScrollView{e});
                 },
                 "GetSlider", [](const LuaEntity& e) -> sol::object {
                     GameObject* go = deref(e);
@@ -1393,6 +1627,21 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasLayout()) go->setLayout(std::make_shared<LayoutComponent>());
                     return LuaLayout{e};
                 },
+                "AddInputField", [](const LuaEntity& e) {
+                    GameObject* go = deref(e);
+                    if (!go->hasInputField()) go->setInputField(std::make_shared<InputFieldComponent>());
+                    return LuaInputField{e};
+                },
+                "AddDropdown", [](const LuaEntity& e) {
+                    GameObject* go = deref(e);
+                    if (!go->hasDropdown()) go->setDropdown(std::make_shared<DropdownComponent>());
+                    return LuaDropdown{e};
+                },
+                "AddScrollView", [](const LuaEntity& e) {
+                    GameObject* go = deref(e);
+                    if (!go->hasScrollView()) go->setScrollView(std::make_shared<ScrollViewComponent>());
+                    return LuaScrollView{e};
+                },
                 "AddSlider", [](const LuaEntity& e) {
                     GameObject* go = deref(e);
                     if (!go->hasSlider()) go->setSlider(std::make_shared<SliderComponent>());
@@ -1428,6 +1677,9 @@ namespace DonTopo::ScriptBindings
                 "RemoveText",        [](const LuaEntity& e) { deref(e)->setText(nullptr); },
                 "RemoveProgressBar", [](const LuaEntity& e) { deref(e)->setProgressBar(nullptr); },
                 "RemoveLayout",      [](const LuaEntity& e) { deref(e)->setLayout(nullptr); },
+                "RemoveInputField",  [](const LuaEntity& e) { deref(e)->setInputField(nullptr); },
+                "RemoveDropdown",    [](const LuaEntity& e) { deref(e)->setDropdown(nullptr); },
+                "RemoveScrollView",  [](const LuaEntity& e) { deref(e)->setScrollView(nullptr); },
                 "RemoveSlider",      [](const LuaEntity& e) { deref(e)->setSlider(nullptr); },
                 "RemoveCheckbox",    [](const LuaEntity& e) { deref(e)->setCheckbox(nullptr); },
                 "RemoveToggle",      [](const LuaEntity& e) { deref(e)->setToggle(nullptr); },
@@ -1468,6 +1720,9 @@ namespace DonTopo::ScriptBindings
                     if (name == "Checkbox"        && go->hasCheckbox())        return sol::make_object(lua, LuaCheckbox{e});
                     if (name == "Toggle"          && go->hasToggle())          return sol::make_object(lua, LuaToggle{e});
                     if (name == "Scrollbar"       && go->hasScrollbar())       return sol::make_object(lua, LuaScrollbar{e});
+                    if (name == "InputField"      && go->hasInputField())      return sol::make_object(lua, LuaInputField{e});
+                    if (name == "Dropdown"        && go->hasDropdown())        return sol::make_object(lua, LuaDropdown{e});
+                    if (name == "ScrollView"      && go->hasScrollView())      return sol::make_object(lua, LuaScrollView{e});
                     if (name.rfind("Script:", 0) == 0)
                     {
                         const std::string scriptName = name.substr(7);
@@ -1582,6 +1837,21 @@ namespace DonTopo::ScriptBindings
                         if (!go->hasScrollbar()) go->setScrollbar(std::make_shared<ScrollbarComponent>());
                         return sol::make_object(lua, LuaScrollbar{e});
                     }
+                    if (name == "InputField")
+                    {
+                        if (!go->hasInputField()) go->setInputField(std::make_shared<InputFieldComponent>());
+                        return sol::make_object(lua, LuaInputField{e});
+                    }
+                    if (name == "Dropdown")
+                    {
+                        if (!go->hasDropdown()) go->setDropdown(std::make_shared<DropdownComponent>());
+                        return sol::make_object(lua, LuaDropdown{e});
+                    }
+                    if (name == "ScrollView")
+                    {
+                        if (!go->hasScrollView()) go->setScrollView(std::make_shared<ScrollViewComponent>());
+                        return sol::make_object(lua, LuaScrollView{e});
+                    }
                     if (name.rfind("Script:", 0) == 0)
                     {
                         auto comp = std::make_unique<DonTopo::ScriptComponent>(name.substr(7), go);
@@ -1614,6 +1884,9 @@ namespace DonTopo::ScriptBindings
                     else if (name == "Checkbox")        go->setCheckbox(nullptr);
                     else if (name == "Toggle")          go->setToggle(nullptr);
                     else if (name == "Scrollbar")       go->setScrollbar(nullptr);
+                    else if (name == "InputField")      go->setInputField(nullptr);
+                    else if (name == "Dropdown")        go->setDropdown(nullptr);
+                    else if (name == "ScrollView")      go->setScrollView(nullptr);
                     else if (name == "Rigidbody")
                     {
                         // Reconstruye el actor como static antes de soltar el Rigidbody.

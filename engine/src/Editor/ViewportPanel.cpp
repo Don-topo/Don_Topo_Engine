@@ -522,6 +522,45 @@ void ViewportPanel::drawProgressBarGizmo(EditorContext& ctx, const glm::vec2& im
                     imagePos, imageSize);
 }
 
+void ViewportPanel::drawInputFieldGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                    const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasInputField() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
+                                         uiInputFieldNodeName(ctx.selected->id)),
+                    imagePos, imageSize);
+}
+
+void ViewportPanel::drawDropdownGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                    const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasDropdown() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
+                                         uiDropdownNodeName(ctx.selected->id)),
+                    imagePos, imageSize);
+}
+
+void ViewportPanel::drawScrollViewGizmo(EditorContext& ctx, const glm::vec2& imagePos,
+                                    const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasScrollView() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
+                                         uiScrollViewNodeName(ctx.selected->id)),
+                    imagePos, imageSize);
+}
+
 void ViewportPanel::drawSliderGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                                     const glm::vec2& imageSize)
 {
@@ -642,6 +681,12 @@ GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mou
         // clicar dentro de la parte llena selecciona la barra igual.
         if (const uint64_t owner = uiProgressBarOwnerId(n->name))
             return ctx.scene->findById(owner);
+        if (const uint64_t owner = uiInputFieldOwnerId(n->name))
+            return ctx.scene->findById(owner);
+        // El Dropdown ANTES que el resto: sus filas son nodos profundos que
+        // solo el prefijo "drp:" sabe devolver a su dueno.
+        if (const uint64_t owner = uiDropdownOwnerId(n->name))
+            return ctx.scene->findById(owner);
         if (const uint64_t owner = uiSliderOwnerId(n->name))
             return ctx.scene->findById(owner);
         if (const uint64_t owner = uiScrollbarOwnerId(n->name))
@@ -657,6 +702,12 @@ GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mou
         // profundo y esto sube por los padres, el orden de aquí solo desempata
         // entre nodos del MISMO GameObject.
         if (const uint64_t owner = uiPanelOwnerId(n->name))
+            return ctx.scene->findById(owner);
+        // El ScrollView el ULTIMO: es un contenedor, y cualquier widget que
+        // lleve dentro tiene que ganarle el clic. Como el hit test devuelve el
+        // nodo mas profundo y esto sube por los padres, llegar aqui significa
+        // que no habia nada mas.
+        if (const uint64_t owner = uiScrollViewOwnerId(n->name))
             return ctx.scene->findById(owner);
     }
     return nullptr;
@@ -798,6 +849,9 @@ void ViewportPanel::draw(EditorContext& ctx, uint64_t viewportTexture, const glm
     drawTextGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawProgressBarGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawLayoutGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    drawInputFieldGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    drawDropdownGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    drawScrollViewGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawSliderGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawCheckboxGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawToggleGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));

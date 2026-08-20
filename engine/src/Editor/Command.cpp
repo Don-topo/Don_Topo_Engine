@@ -333,6 +333,63 @@ void ScrollbarComponentCommand::apply(bool add)
     go->setScrollbar(std::make_shared<ScrollbarComponent>(m_state));
 }
 
+InputFieldComponentCommand::InputFieldComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                                bool add, InputFieldComponent state)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}
+
+void InputFieldComponentCommand::execute() { apply(m_add); }
+void InputFieldComponentCommand::undo()    { apply(!m_add); }
+
+void InputFieldComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setInputField(nullptr);
+        return;
+    }
+    go->setInputField(std::make_shared<InputFieldComponent>(m_state));
+}
+
+DropdownComponentCommand::DropdownComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                                bool add, DropdownComponent state)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}
+
+void DropdownComponentCommand::execute() { apply(m_add); }
+void DropdownComponentCommand::undo()    { apply(!m_add); }
+
+void DropdownComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setDropdown(nullptr);
+        return;
+    }
+    go->setDropdown(std::make_shared<DropdownComponent>(m_state));
+}
+
+ScrollViewComponentCommand::ScrollViewComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                                bool add, ScrollViewComponent state)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}
+
+void ScrollViewComponentCommand::execute() { apply(m_add); }
+void ScrollViewComponentCommand::undo()    { apply(!m_add); }
+
+void ScrollViewComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setScrollView(nullptr);
+        return;
+    }
+    go->setScrollView(std::make_shared<ScrollViewComponent>(m_state));
+}
+
 AnimatorComponentCommand::AnimatorComponentCommand(Scene& scene, std::string label, uint64_t id,
                                                     bool add, AnimatorComponent state)
     : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_state(std::move(state)) {}

@@ -39,6 +39,9 @@
 #include "DonTopo/UI/CheckboxComponent.h"
 #include "DonTopo/UI/ToggleComponent.h"
 #include "DonTopo/UI/ScrollbarComponent.h"
+#include "DonTopo/UI/InputFieldComponent.h"
+#include "DonTopo/UI/DropdownComponent.h"
+#include "DonTopo/UI/ScrollViewComponent.h"
 #include "DonTopo/UI/ProgressBarComponent.h"
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiSpriteBatch.h"
@@ -1207,6 +1210,308 @@ static void test_ui_scrollbar_desde_lua(ScriptManager& sm)
     CHECK(!go->hasScrollbar());
 }
 
+
+// Los tres widgets del tercer lote desde Lua. El InputField es el que trae algo
+// que ninguno de los anteriores tenía: se puede escribir en él, así que aquí se
+// prueba también el camino completo — tecla del canvas -> componente -> script.
+static void test_ui_input_field_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Nombre");
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        sinCampo = (e:GetInputField() == nil)
+
+        local f = e:AddInputField()
+        f.visible = false
+        f.interactable = false
+        f.readOnly = true
+        f.text = "Jugador1"
+        f.placeholder = "Tu nombre..."
+        f.fontPath = "assets/fonts/mono.ttf"
+        f.fontSize = 21
+        f.align = UiTextAlign.Right
+        f.padding = 7
+        f.characterLimit = 12
+        f.contentType = UiInputContentType.Password
+        f.passwordChar = "#"
+        f.caretWidth = 3
+        f.caretBlinkRate = 0.625
+        f.atlasPath = "assets/ui/widgets.png"
+        f.backgroundSprite = "campo"
+        f:SetPosition(33, 37)
+        f:SetSize(287, 41)
+        f:SetColor(0.12, 0.13, 0.14, 0.15)
+        f:SetTextColor(0.22, 0.23, 0.24, 0.25)
+        f:SetPlaceholderColor(0.32, 0.33, 0.34, 0.35)
+        f:SetCaretColor(0.42, 0.43, 0.44, 0.45)
+
+        trasAdd = (e:GetInputField() ~= nil)
+        ensenado = f:GetDisplayText()
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) return;
+
+    CHECK(sm.lua()["sinCampo"].get<bool>());
+    CHECK(sm.lua()["trasAdd"].get<bool>());
+    CHECK(go->hasInputField());
+    if (!go->hasInputField()) return;
+
+    const InputFieldComponent& f = *go->getInputField();
+    CHECK(f.visible == false);
+    CHECK(f.interactable == false);
+    CHECK(f.readOnly == true);
+    CHECK(f.text == "Jugador1");
+    CHECK(f.placeholder == "Tu nombre...");
+    CHECK(f.fontPath == "assets/fonts/mono.ttf");
+    CHECK(nearlyEqual(f.fontSize, 21.0f));
+    CHECK(f.align == UiTextAlign::Right);
+    CHECK(nearlyEqual(f.padding, 7.0f));
+    CHECK(f.characterLimit == 12u);
+    CHECK(f.contentType == UiInputContentType::Password);
+    CHECK(f.passwordChar == "#");
+    CHECK(nearlyEqual(f.caretWidth, 3.0f));
+    CHECK(nearlyEqual(f.caretBlinkRate, 0.625f));
+    CHECK(f.atlasPath == "assets/ui/widgets.png");
+    CHECK(f.backgroundSprite == "campo");
+    CHECK(nearlyEqual(f.position.x, 33.0f));
+    CHECK(nearlyEqual(f.size.y, 41.0f));
+    CHECK(nearlyEqual(f.color.r, 0.12f));
+    CHECK(nearlyEqual(f.textColor.g, 0.23f));
+    CHECK(nearlyEqual(f.placeholderColor.b, 0.34f));
+    CHECK(nearlyEqual(f.caretColor.a, 0.45f));
+
+    // Password: lo que se enseña son ocho almohadillas, y el texto sigue entero.
+    CHECK(sm.lua()["ensenado"].get<std::string>() == "########");
+
+    auto r2 = sm.lua().safe_script(R"(
+        e:RemoveInputField()
+        trasRemove = (e:GetInputField() == nil)
+    )", sol::script_pass_on_error);
+    CHECK(r2.valid());
+    CHECK(sm.lua()["trasRemove"].get<bool>());
+    CHECK(!go->hasInputField());
+}
+
+// El camino entero: una tecla entra por el canvas, el handler del nodo la mete
+// en el componente y el script se entera por OnValueChanged. Es lo que el canal
+// de caracteres del core existe para permitir.
+static void test_ui_input_field_callback_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Nombre");
+    go->setInputField(std::make_shared<InputFieldComponent>());
+    go->getInputField()->position = glm::vec2(0.0f, 0.0f);
+    go->getInputField()->size     = glm::vec2(200.0f, 30.0f);
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        avisos = 0
+        ultimo = ""
+        finales = 0
+        local f = e:GetInputField()
+        f:OnValueChanged(function(t) avisos = avisos + 1; ultimo = t end)
+        f:OnEndEdit(function(t) finales = finales + 1 end)
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) return;
+
+    UiCanvas canvas;
+    UiWidgetSyncCache cache;
+    FakeUiLoader loader;
+    UiWidgetLists w;
+    w.inputFields.emplace_back(go->id, go->getInputField().get());
+    UiDrawData data;
+
+    syncUiWidgets(w, canvas, cache, loader);
+    canvas.buildDrawData(800, 480, data);
+    canvas.setFocus(canvas.root().children()[0].get());
+
+    UiInputState in;
+    in.mousePos    = glm::vec2(100.0f, 15.0f);
+    in.timeSeconds = 1.0f;
+    in.chars       = { 'H', 'i' };
+    canvas.updateInput(in);
+
+    CHECK(go->getInputField()->text == "Hi");
+    CHECK(sm.lua()["avisos"].get<int>() == 2);
+    CHECK(sm.lua()["ultimo"].get<std::string>() == "Hi");
+
+    in.chars.clear();
+    in.keys        = { UiKey::Enter };
+    in.timeSeconds = 1.016f;
+    canvas.updateInput(in);
+    CHECK(sm.lua()["finales"].get<int>() == 1);
+}
+
+static void test_ui_dropdown_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Calidad");
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        sinCombo = (e:GetDropdown() == nil)
+
+        local d = e:AddDropdown()
+        d.visible = false
+        d.interactable = false
+        d:SetOptions({ "Bajo", "Medio", "Alto" })
+        d.value = 2
+        d.itemHeight = 27
+        d.maxVisibleItems = 5
+        d.fontPath = "assets/fonts/ui.ttf"
+        d.fontSize = 19
+        d.padding = 5
+        d.atlasPath = "assets/ui/widgets.png"
+        d.backgroundSprite = "combo"
+        d.arrowSprite = "flecha"
+        d.itemSprite = "fila"
+        d:SetPosition(37, 39)
+        d:SetSize(197, 35)
+        d:SetColor(0.16, 0.17, 0.18, 0.19)
+        d:SetListColor(0.26, 0.27, 0.28, 0.29)
+        d:SetItemColor(0.36, 0.37, 0.38, 0.39)
+        d:SetItemSelectedColor(0.46, 0.47, 0.48, 0.49)
+        d:SetArrowColor(0.56, 0.57, 0.58, 0.59)
+        d:SetTextColor(0.66, 0.67, 0.68, 0.69)
+
+        trasAdd = (e:GetDropdown() ~= nil)
+        cuantas = d:GetOptionCount()
+        segunda = d:GetOption(2)
+        elegida = d:GetSelectedLabel()
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) return;
+
+    CHECK(sm.lua()["sinCombo"].get<bool>());
+    CHECK(sm.lua()["trasAdd"].get<bool>());
+    CHECK(go->hasDropdown());
+    if (!go->hasDropdown()) return;
+
+    const DropdownComponent& d = *go->getDropdown();
+    CHECK(d.visible == false);
+    CHECK(d.interactable == false);
+    CHECK(d.options.size() == 3);
+    CHECK(d.value == 2);
+    CHECK(nearlyEqual(d.itemHeight, 27.0f));
+    CHECK(d.maxVisibleItems == 5u);
+    CHECK(d.fontPath == "assets/fonts/ui.ttf");
+    CHECK(nearlyEqual(d.fontSize, 19.0f));
+    CHECK(nearlyEqual(d.padding, 5.0f));
+    CHECK(d.atlasPath == "assets/ui/widgets.png");
+    CHECK(d.backgroundSprite == "combo");
+    CHECK(d.arrowSprite == "flecha");
+    CHECK(d.itemSprite == "fila");
+    CHECK(nearlyEqual(d.position.x, 37.0f));
+    CHECK(nearlyEqual(d.size.y, 35.0f));
+    CHECK(nearlyEqual(d.color.r, 0.16f));
+    CHECK(nearlyEqual(d.listColor.g, 0.27f));
+    CHECK(nearlyEqual(d.itemColor.b, 0.38f));
+    CHECK(nearlyEqual(d.itemSelectedColor.a, 0.49f));
+    CHECK(nearlyEqual(d.arrowColor.r, 0.56f));
+    CHECK(nearlyEqual(d.textColor.g, 0.67f));
+
+    // Las opciones se leen desde Lua con índice 1-based, que es lo natural allí.
+    CHECK(sm.lua()["cuantas"].get<int>() == 3);
+    CHECK(sm.lua()["segunda"].get<std::string>() == "Medio");
+    CHECK(sm.lua()["elegida"].get<std::string>() == "Alto");
+
+    auto r2 = sm.lua().safe_script(R"(
+        e:RemoveDropdown()
+        trasRemove = (e:GetDropdown() == nil)
+    )", sol::script_pass_on_error);
+    CHECK(r2.valid());
+    CHECK(sm.lua()["trasRemove"].get<bool>());
+    CHECK(!go->hasDropdown());
+}
+
+static void test_ui_scroll_view_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Lista");
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        sinVista = (e:GetScrollView() == nil)
+
+        local v = e:AddScrollView()
+        v.visible = false
+        v.horizontal = true
+        v.vertical = false
+        v.scrollSensitivity = 43
+        v.atlasPath = "assets/ui/widgets.png"
+        v.backgroundSprite = "marco"
+        v:SetPosition(41, 43)
+        v:SetSize(311, 217)
+        v:SetColor(0.17, 0.18, 0.19, 0.21)
+        v:SetContentSize(613, 941)
+        v:SetNormalizedPosition(0.3125, 0.6875)
+
+        trasAdd = (e:GetScrollView() ~= nil)
+        rx, ry = v:GetScrollRange()
+        ox, oy = v:GetContentOffset()
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) return;
+
+    CHECK(sm.lua()["sinVista"].get<bool>());
+    CHECK(sm.lua()["trasAdd"].get<bool>());
+    CHECK(go->hasScrollView());
+    if (!go->hasScrollView()) return;
+
+    const ScrollViewComponent& v = *go->getScrollView();
+    CHECK(v.visible == false);
+    CHECK(v.horizontal == true);
+    CHECK(v.vertical == false);
+    CHECK(nearlyEqual(v.scrollSensitivity, 43.0f));
+    CHECK(v.atlasPath == "assets/ui/widgets.png");
+    CHECK(v.backgroundSprite == "marco");
+    CHECK(nearlyEqual(v.position.x, 41.0f));
+    CHECK(nearlyEqual(v.size.y, 217.0f));
+    CHECK(nearlyEqual(v.color.a, 0.21f));
+    CHECK(nearlyEqual(v.contentSize.x, 613.0f));
+    CHECK(nearlyEqual(v.contentSize.y, 941.0f));
+    CHECK(nearlyEqual(v.normalizedPosition.x, 0.3125f));
+    CHECK(nearlyEqual(v.normalizedPosition.y, 0.6875f));
+
+    // El eje vertical está APAGADO: su recorrido es 0 aunque el contenido sea
+    // más alto que la vista. El horizontal sí: 613 - 311 = 302.
+    CHECK(nearlyEqual(sm.lua()["rx"].get<float>(), 302.0f));
+    CHECK(nearlyEqual(sm.lua()["ry"].get<float>(), 0.0f));
+    CHECK(nearlyEqual(sm.lua()["ox"].get<float>(), -302.0f * 0.3125f));
+    CHECK(nearlyEqual(sm.lua()["oy"].get<float>(), 0.0f));
+
+    auto r2 = sm.lua().safe_script(R"(
+        e:RemoveScrollView()
+        trasRemove = (e:GetScrollView() == nil)
+    )", sol::script_pass_on_error);
+    CHECK(r2.valid());
+    CHECK(sm.lua()["trasRemove"].get<bool>());
+    CHECK(!go->hasScrollView());
+}
+
 // Lo que un script escribe en el COMPONENTE llega al nodo vivo en el siguiente
 // syncUiWidgets. Es la razón de que los setters no toquen el nodo: el sync lo
 // vuelca solo.
@@ -1744,6 +2049,10 @@ int main()
     test_ui_checkbox_desde_lua(sm);
     test_ui_toggle_desde_lua(sm);
     test_ui_scrollbar_desde_lua(sm);
+    test_ui_input_field_desde_lua(sm);
+    test_ui_input_field_callback_desde_lua(sm);
+    test_ui_dropdown_desde_lua(sm);
+    test_ui_scroll_view_desde_lua(sm);
     test_ui_valor_de_lua_llega_al_nodo(sm);
     test_ui_click_sobrevive_a_la_reconstruccion(sm);
     test_ui_callback_no_invoca_estado_viejo(sm);

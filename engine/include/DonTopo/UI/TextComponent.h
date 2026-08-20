@@ -14,6 +14,9 @@
 #include "DonTopo/UI/CheckboxComponent.h"
 #include "DonTopo/UI/ToggleComponent.h"
 #include "DonTopo/UI/ScrollbarComponent.h"
+#include "DonTopo/UI/InputFieldComponent.h"
+#include "DonTopo/UI/DropdownComponent.h"
+#include "DonTopo/UI/ScrollViewComponent.h"
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiFont.h"
 #include "DonTopo/UI/UiTextureAtlas.h"
@@ -164,6 +167,9 @@ namespace DonTopo
         std::vector<std::pair<uint64_t, CheckboxComponent*>>           checkboxes;
         std::vector<std::pair<uint64_t, ToggleComponent*>>             toggles;
         std::vector<std::pair<uint64_t, ScrollbarComponent*>>          scrollbars;
+        std::vector<std::pair<uint64_t, InputFieldComponent*>>         inputFields;
+        std::vector<std::pair<uint64_t, DropdownComponent*>>           dropdowns;
+        std::vector<std::pair<uint64_t, ScrollViewComponent*>>         scrollViews;
 
         // La JERARQUÍA de la escena aplanada a (id, id del padre), en PRE-ORDEN
         // y con 0 para "cuelga de la raíz". VACÍA = sin jerarquía: todo cuelga
@@ -182,6 +188,9 @@ namespace DonTopo
             checkboxes.clear();
             toggles.clear();
             scrollbars.clear();
+            inputFields.clear();
+            dropdowns.clear();
+            scrollViews.clear();
             parents.clear();
         }
     };
@@ -212,6 +221,9 @@ namespace DonTopo
         std::vector<uint64_t> checkboxIds;
         std::vector<uint64_t> toggleIds;
         std::vector<uint64_t> scrollbarIds;
+        std::vector<uint64_t> inputFieldIds;
+        std::vector<uint64_t> dropdownIds;
+        std::vector<uint64_t> scrollViewIds;
 
         // La jerarquía con la que se montó el árbol, aplanada a (id, padre) y en
         // el mismo orden que llegó. Cambiarla mueve nodos de sitio, así que se
@@ -262,6 +274,28 @@ namespace DonTopo
         std::vector<Scrollbar*> scrollbarNodes;
         std::vector<UiElement*> scrollbarHandles;
 
+        // El campo son tres nodos: la caja, el texto y el cursor.
+        std::vector<InputField*> inputFieldNodes;
+        std::vector<Text*>       inputFieldTexts;
+        std::vector<UiElement*>  inputFieldCarets;
+
+        // El desplegable son cuatro mas DOS por opcion (la fila y su etiqueta).
+        // Es el unico cuyo subarbol cambia de FORMA con los datos, asi que la
+        // cuenta de opciones con la que se monto se guarda para saber cuando hay
+        // que reconstruir.
+        std::vector<Dropdown*>   dropdownNodes;
+        std::vector<Text*>       dropdownLabels;
+        std::vector<UiElement*>  dropdownArrows;
+        std::vector<UiElement*>  dropdownLists;
+        std::vector<std::vector<UiElement*>> dropdownItems;
+        std::vector<std::vector<Text*>>      dropdownItemLabels;
+        std::vector<size_t>      dropdownOptionCounts;
+
+        // La vista son dos: el viewport (que recorta y recibe la rueda) y el
+        // contenido (que se mueve y del que cuelgan los hijos de la escena).
+        std::vector<ScrollView*> scrollViewNodes;
+        std::vector<UiElement*>  scrollViewContents;
+
         // Copia de lo que se volcó la última vez, en el mismo orden. Lo que no
         // ha cambiado no se vuelve a volcar NI se ensucia: escribir los campos
         // sin ensuciar deja el nodo clavado (el canvas se copia los vértices
@@ -276,6 +310,9 @@ namespace DonTopo
         std::vector<CheckboxComponent>    checkboxPrev;
         std::vector<ToggleComponent>      togglePrev;
         std::vector<ScrollbarComponent>   scrollbarPrev;
+        std::vector<InputFieldComponent>  inputFieldPrev;
+        std::vector<DropdownComponent>    dropdownPrev;
+        std::vector<ScrollViewComponent>  scrollViewPrev;
 
         // Recursos de GPU por ruta. Sin esta caché una ruta de atlas cargaría un
         // atlas NUEVO cada frame (Renderer::loadUiAtlas no cachea por ruta) y se
@@ -325,7 +362,10 @@ namespace DonTopo
         const auto& sliders    = w.sliders;
         const auto& checkboxes = w.checkboxes;
         const auto& toggles    = w.toggles;
-        const auto& scrollbars = w.scrollbars;
+        const auto& scrollbars  = w.scrollbars;
+        const auto& inputFields = w.inputFields;
+        const auto& dropdowns   = w.dropdowns;
+        const auto& scrollViews = w.scrollViews;
         // Puntero y no referencia: vacía significa "sin jerarquía", que es un
         // camino de montaje DISTINTO (todo a la raíz) y no una jerarquía de cero
         // elementos.
@@ -361,7 +401,10 @@ namespace DonTopo
                        cache.sliderIds.size() != sliders.size() ||
                        cache.checkboxIds.size() != checkboxes.size() ||
                        cache.toggleIds.size() != toggles.size() ||
-                       cache.scrollbarIds.size() != scrollbars.size();
+                       cache.scrollbarIds.size() != scrollbars.size() ||
+                       cache.inputFieldIds.size() != inputFields.size() ||
+                       cache.dropdownIds.size() != dropdowns.size() ||
+                       cache.scrollViewIds.size() != scrollViews.size();
         for (size_t i = 0; !rebuild && i < buttons.size(); i++)
             if (cache.buttonIds[i] != buttons[i].first) rebuild = true;
         for (size_t i = 0; !rebuild && i < texts.size(); i++)
@@ -382,6 +425,19 @@ namespace DonTopo
             if (cache.toggleIds[i] != toggles[i].first) rebuild = true;
         for (size_t i = 0; !rebuild && i < scrollbars.size(); i++)
             if (cache.scrollbarIds[i] != scrollbars[i].first) rebuild = true;
+        for (size_t i = 0; !rebuild && i < inputFields.size(); i++)
+            if (cache.inputFieldIds[i] != inputFields[i].first) rebuild = true;
+        for (size_t i = 0; !rebuild && i < dropdowns.size(); i++)
+            if (cache.dropdownIds[i] != dropdowns[i].first) rebuild = true;
+        for (size_t i = 0; !rebuild && i < scrollViews.size(); i++)
+            if (cache.scrollViewIds[i] != scrollViews[i].first) rebuild = true;
+
+        // Una OPCION mas en un desplegable es un NODO mas: eso es la forma del
+        // subarbol, igual que anadir un widget. Cambiar el TEXTO de una opcion no
+        // lo es, y por eso se compara la cuenta y no el contenido.
+        for (size_t i = 0; !rebuild && i < dropdowns.size(); i++)
+            if (cache.dropdownOptionCounts[i] != dropdowns[i].second->options.size())
+                rebuild = true;
 
         // Un botón que gana o pierde etiqueta (texto vacío <-> no vacío) cambia
         // la FORMA del subárbol, y eso también obliga a reconstruir.
@@ -453,12 +509,31 @@ namespace DonTopo
             cache.scrollbarNodes.assign(scrollbars.size(), nullptr);
             cache.scrollbarHandles.assign(scrollbars.size(), nullptr);
             cache.scrollbarPrev.assign(scrollbars.size(), ScrollbarComponent{});
+            cache.inputFieldIds.assign(inputFields.size(), 0ull);
+            cache.inputFieldNodes.assign(inputFields.size(), nullptr);
+            cache.inputFieldTexts.assign(inputFields.size(), nullptr);
+            cache.inputFieldCarets.assign(inputFields.size(), nullptr);
+            cache.inputFieldPrev.assign(inputFields.size(), InputFieldComponent{});
+            cache.dropdownIds.assign(dropdowns.size(), 0ull);
+            cache.dropdownNodes.assign(dropdowns.size(), nullptr);
+            cache.dropdownLabels.assign(dropdowns.size(), nullptr);
+            cache.dropdownArrows.assign(dropdowns.size(), nullptr);
+            cache.dropdownLists.assign(dropdowns.size(), nullptr);
+            cache.dropdownItems.assign(dropdowns.size(), {});
+            cache.dropdownItemLabels.assign(dropdowns.size(), {});
+            cache.dropdownOptionCounts.assign(dropdowns.size(), 0);
+            cache.dropdownPrev.assign(dropdowns.size(), DropdownComponent{});
+            cache.scrollViewIds.assign(scrollViews.size(), 0ull);
+            cache.scrollViewNodes.assign(scrollViews.size(), nullptr);
+            cache.scrollViewContents.assign(scrollViews.size(), nullptr);
+            cache.scrollViewPrev.assign(scrollViews.size(), ScrollViewComponent{});
 
             // Dónde está cada GameObject en cada lista, para poder montarlo
             // cuando toque su turno en el recorrido del árbol.
             std::unordered_map<uint64_t, size_t> idxButton, idxBar, idxText, idxLayout,
                                                  idxPanel, idxImage, idxSlider,
-                                                 idxCheckbox, idxToggle, idxScrollbar;
+                                                 idxCheckbox, idxToggle, idxScrollbar,
+                                                 idxInputField, idxDropdown, idxScrollView;
             for (size_t i = 0; i < buttons.size(); i++) idxButton[buttons[i].first] = i;
             for (size_t i = 0; i < bars.size();    i++) idxBar[bars[i].first]       = i;
             for (size_t i = 0; i < texts.size();   i++) idxText[texts[i].first]     = i;
@@ -469,6 +544,9 @@ namespace DonTopo
             for (size_t i = 0; i < checkboxes.size(); i++) idxCheckbox[checkboxes[i].first] = i;
             for (size_t i = 0; i < toggles.size();    i++) idxToggle[toggles[i].first]      = i;
             for (size_t i = 0; i < scrollbars.size(); i++) idxScrollbar[scrollbars[i].first] = i;
+            for (size_t i = 0; i < inputFields.size(); i++) idxInputField[inputFields[i].first] = i;
+            for (size_t i = 0; i < dropdowns.size();   i++) idxDropdown[dropdowns[i].first]     = i;
+            for (size_t i = 0; i < scrollViews.size(); i++) idxScrollView[scrollViews[i].first] = i;
 
             // Nodo del que cuelgan los HIJOS de cada GameObject.
             std::unordered_map<uint64_t, UiElement*> principal;
@@ -689,6 +767,186 @@ namespace DonTopo
                 return &s;
             };
 
+
+            auto creaInputField = [&](size_t i, UiElement& padre)
+            {
+                const auto& entry = inputFields[i];
+                const std::string nombre = uiInputFieldNodeName(entry.first);
+                InputField& f = padre.add<InputField>(nombre);
+                Text&       t = f.add<Text>(nombre + "/Text");
+                Panel&      c = f.add<Panel>(nombre + "/Caret");
+                cache.inputFieldIds[i]    = entry.first;
+                cache.inputFieldNodes[i]  = &f;
+                cache.inputFieldTexts[i]  = &t;
+                cache.inputFieldCarets[i] = &c;
+                cache.inputFieldPrev[i].placeholder = "\x01(sin volcar)";
+
+                std::weak_ptr<UiInputFieldRuntime> rt = entry.second->callbacks.ptr;
+
+                // Texto: el unico camino por el que entra un caracter. El canvas
+                // solo lo entrega al elemento con FOCO, asi que aqui no hace
+                // falta comprobar nada mas que el propio componente.
+                f.onTextInput = [rt](UiEvent& e)
+                {
+                    auto p = rt.lock();
+                    if (!p || !p->owner) return;
+                    InputFieldComponent& comp = *p->owner;
+                    if (!comp.interactable || comp.readOnly) return;
+                    if (!comp.insertCodepoint(e.codepoint)) return;
+                    if (p->onValueChanged) p->onValueChanged(comp.text);
+                };
+
+                // Teclas de edicion. Left/Right/Home/End/Backspace/Delete se
+                // CONSUMEN: si no, la navegacion direccional del canvas se
+                // llevaria el foco a otro widget en mitad de una palabra.
+                f.onKeyDown = [rt](UiEvent& e)
+                {
+                    auto p = rt.lock();
+                    if (!p || !p->owner) return;
+                    InputFieldComponent& comp = *p->owner;
+                    if (!comp.interactable) return;
+
+                    bool cambio = false;
+                    switch (e.key)
+                    {
+                        case UiKey::Backspace: cambio = comp.backspace();     e.consumed = true; break;
+                        case UiKey::Delete:    cambio = comp.deleteForward(); e.consumed = true; break;
+                        case UiKey::Left:      comp.moveCaret(-1);            e.consumed = true; break;
+                        case UiKey::Right:     comp.moveCaret(1);             e.consumed = true; break;
+                        case UiKey::Home:      comp.caretHome();              e.consumed = true; break;
+                        case UiKey::End:       comp.caretEnd();               e.consumed = true; break;
+                        case UiKey::Enter:
+                            // Enter NO se consume: cierra la edicion y deja que
+                            // el canvas siga con lo suyo (submitFocused), que es
+                            // lo que activa un boton de "Aceptar" con el mando.
+                            if (p->onEndEdit) p->onEndEdit(comp.text);
+                            break;
+                        default: break;
+                    }
+                    if (cambio && p->onValueChanged) p->onValueChanged(comp.text);
+                };
+
+                // Perder el foco tambien cierra la edicion: es cuando un
+                // formulario valida, y no todo el mundo pulsa Enter.
+                f.onBlur = [rt](UiEvent&)
+                {
+                    auto p = rt.lock();
+                    if (!p || !p->owner) return;
+                    if (p->onEndEdit) p->onEndEdit(p->owner->text);
+                };
+                return &f;
+            };
+
+            auto creaDropdown = [&](size_t i, UiElement& padre)
+            {
+                const auto& entry = dropdowns[i];
+                const std::string nombre = uiDropdownNodeName(entry.first);
+                Dropdown& d = padre.add<Dropdown>(nombre);
+                Text&     l = d.add<Text>(nombre + "/Label");
+                Panel&    a = d.add<Panel>(nombre + "/Arrow");
+                Panel&    li = d.add<Panel>(nombre + "/List");
+
+                cache.dropdownIds[i]    = entry.first;
+                cache.dropdownNodes[i]  = &d;
+                cache.dropdownLabels[i] = &l;
+                cache.dropdownArrows[i] = &a;
+                cache.dropdownLists[i]  = &li;
+                cache.dropdownItems[i].clear();
+                cache.dropdownItemLabels[i].clear();
+                cache.dropdownOptionCounts[i] = entry.second->options.size();
+                cache.dropdownPrev[i].backgroundSprite = "\x01(sin volcar)";
+
+                std::weak_ptr<UiDropdownRuntime> rt = entry.second->callbacks.ptr;
+
+                // La caja abre y cierra.
+                d.onClick = [rt](UiEvent&)
+                {
+                    auto p = rt.lock();
+                    if (!p || !p->owner) return;
+                    DropdownComponent& comp = *p->owner;
+                    if (!comp.interactable) return;
+                    comp.isOpen = !comp.isOpen;
+                };
+
+                // Una fila por opcion, cada una con su etiqueta. El indice se
+                // captura por valor: es lo que hace que cada fila sepa cual es
+                // sin buscarse a si misma en la lista.
+                for (size_t k = 0; k < entry.second->options.size(); k++)
+                {
+                    const std::string nf = nombre + "/List/Item" + std::to_string(k);
+                    Panel& fila = li.add<Panel>(nf);
+                    Text&  et   = fila.add<Text>(nf + "/Label");
+                    cache.dropdownItems[i].push_back(&fila);
+                    cache.dropdownItemLabels[i].push_back(&et);
+
+                    const int indice = (int)k;
+                    fila.onClick = [rt, indice](UiEvent& e)
+                    {
+                        auto p = rt.lock();
+                        if (!p || !p->owner) return;
+                        DropdownComponent& comp = *p->owner;
+                        if (!comp.interactable) return;
+                        // Elegir CIERRA, siempre: si no, la lista se quedaria
+                        // abierta tapando lo de debajo tras cada eleccion.
+                        comp.isOpen = false;
+                        if (comp.value == indice) { e.consumed = true; return; }
+                        comp.value = indice;
+                        if (p->onValueChanged) p->onValueChanged(indice);
+                        // Consumido: sin esto el click burbujea hasta la caja y
+                        // su onClick volveria a ABRIR la lista en el mismo frame.
+                        e.consumed = true;
+                    };
+                }
+                return &d;
+            };
+
+            auto creaScrollView = [&](size_t i, UiElement& padre)
+            {
+                const auto& entry = scrollViews[i];
+                const std::string nombre = uiScrollViewNodeName(entry.first);
+                ScrollView& v = padre.add<ScrollView>(nombre);
+                Panel&      c = v.add<Panel>(nombre + "/Content");
+                cache.scrollViewIds[i]      = entry.first;
+                cache.scrollViewNodes[i]    = &v;
+                cache.scrollViewContents[i] = &c;
+                cache.scrollViewPrev[i].backgroundSprite = "\x01(sin volcar)";
+
+                std::weak_ptr<UiScrollViewRuntime> rt = entry.second->callbacks.ptr;
+                v.onScroll = [rt](UiEvent& e)
+                {
+                    auto p = rt.lock();
+                    if (!p || !p->owner) return;
+                    ScrollViewComponent& comp = *p->owner;
+                    if (e.scrollDelta == 0.0f) return;
+
+                    const glm::vec2 rango = comp.scrollRange();
+                    // Sin recorrido no se mueve NI avisa: un contenido que cabe
+                    // entero no scrollea, y avisar de un cambio que no ha pasado
+                    // haria trabajar a un script en balde en cada muesca.
+                    const bool ejeY = comp.vertical && rango.y > 0.0f;
+                    const bool ejeX = !ejeY && comp.horizontal && rango.x > 0.0f;
+                    if (!ejeY && !ejeX) return;
+
+                    // La rueda hacia ARRIBA (delta positivo) sube por la lista, o
+                    // sea que baja la posicion normalizada.
+                    const float rangoEje = ejeY ? rango.y : rango.x;
+                    const float delta = -e.scrollDelta * comp.scrollSensitivity / rangoEje;
+
+                    glm::vec2 np = comp.normalizedPosition;
+                    float& eje = ejeY ? np.y : np.x;
+                    const float antes = std::clamp(eje, 0.0f, 1.0f);
+                    eje = std::clamp(antes + delta, 0.0f, 1.0f);
+                    if (eje == antes) return;
+
+                    comp.normalizedPosition = np;
+                    if (p->onValueChanged) p->onValueChanged(np.x, np.y);
+                    // Consumido: si burbujeara, una vista dentro de otra moveria
+                    // las dos con la misma muesca.
+                    e.consumed = true;
+                };
+                return &v;
+            };
+
             auto creaTexto = [&](size_t i, UiElement& padre)
             {
                 const auto& entry = texts[i];
@@ -728,6 +986,9 @@ namespace DonTopo
                 UiElement* panel  = nullptr;
                 UiElement* imagen = nullptr;
                 UiElement* deslid = nullptr;
+                UiElement* campo  = nullptr;
+                UiElement* combo  = nullptr;
+                UiElement* vista  = nullptr;
                 UiElement* casill = nullptr;
                 UiElement* interr = nullptr;
                 UiElement* scroll = nullptr;
@@ -741,7 +1002,8 @@ namespace DonTopo
                                          idxText.count(id) != 0 || idxPanel.count(id) != 0 ||
                                          idxImage.count(id) != 0 || idxSlider.count(id) != 0 ||
                                          idxCheckbox.count(id) != 0 || idxToggle.count(id) != 0 ||
-                                         idxScrollbar.count(id) != 0;
+                                         idxScrollbar.count(id) != 0 || idxInputField.count(id) != 0 ||
+                                         idxDropdown.count(id) != 0 || idxScrollView.count(id) != 0;
 
                 // El contenedor PRIMERO: es el que aporta el rect y del que
                 // colgarán los hijos. Solo cuando no hay ningún widget en el
@@ -753,7 +1015,10 @@ namespace DonTopo
                 // que quedar encima de todo.
                 if (auto it = idxPanel.find(id);  it != idxPanel.end())  panel  = creaPanel(it->second, padre);
                 if (auto it = idxImage.find(id);  it != idxImage.end())  imagen = creaImagen(it->second, padre);
+                if (auto it = idxScrollView.find(id); it != idxScrollView.end()) vista = creaScrollView(it->second, padre);
                 if (auto it = idxSlider.find(id); it != idxSlider.end()) deslid = creaSlider(it->second, padre);
+                if (auto it = idxInputField.find(id); it != idxInputField.end()) campo = creaInputField(it->second, padre);
+                if (auto it = idxDropdown.find(id);  it != idxDropdown.end())  combo = creaDropdown(it->second, padre);
                 if (auto it = idxScrollbar.find(id); it != idxScrollbar.end()) scroll = creaScrollbar(it->second, padre);
                 if (auto it = idxToggle.find(id);   it != idxToggle.end())   interr = creaToggle(it->second, padre);
                 if (auto it = idxCheckbox.find(id); it != idxCheckbox.end()) casill = creaCheckbox(it->second, padre);
@@ -765,6 +1030,8 @@ namespace DonTopo
                 // hijos: gana el widget interactivo, y el Panel (que es fondo)
                 // pierde contra todos.
                 UiElement* princ = boton  ? boton
+                                 : campo  ? campo
+                                 : combo  ? combo
                                  : deslid ? deslid
                                  : scroll ? scroll
                                  : interr ? interr
@@ -773,6 +1040,21 @@ namespace DonTopo
                                  : imagen ? imagen
                                  : panel  ? panel
                                  : (texto ? texto : caja);
+
+                // El ScrollView es la EXCEPCION: sus hijos cuelgan del CONTENIDO
+                // y no del viewport. Colgando del viewport, desplazarse no los
+                // arrastraria y el scroll no serviria de nada. Gana sobre
+                // cualquier otro widget del mismo GameObject: es el unico que
+                // tiene una opinion sobre donde va lo de dentro.
+                if (vista != nullptr)
+                {
+                    if (auto it = idxScrollView.find(id); it != idxScrollView.end())
+                        princ = cache.scrollViewContents[it->second];
+                }
+                else if (princ == nullptr)
+                {
+                    princ = vista;
+                }
                 principal[id] = princ;
 
                 // Con widget en el mismo GameObject, el layout escribe en el nodo
@@ -830,6 +1112,15 @@ namespace DonTopo
                 for (const auto& entry : scrollbars)
                     if (principal.find(entry.first) == principal.end())
                         montaGameObject(entry.first, canvas.root());
+                for (const auto& entry : inputFields)
+                    if (principal.find(entry.first) == principal.end())
+                        montaGameObject(entry.first, canvas.root());
+                for (const auto& entry : dropdowns)
+                    if (principal.find(entry.first) == principal.end())
+                        montaGameObject(entry.first, canvas.root());
+                for (const auto& entry : scrollViews)
+                    if (principal.find(entry.first) == principal.end())
+                        montaGameObject(entry.first, canvas.root());
                 for (const auto& entry : lays)
                     if (principal.find(entry.first) == principal.end())
                         montaGameObject(entry.first, canvas.root());
@@ -843,7 +1134,10 @@ namespace DonTopo
                 // no tienen orden heredado que respetar, son posteriores.
                 for (size_t i = 0; i < panels.size();  i++) creaPanel(i, canvas.root());
                 for (size_t i = 0; i < images.size();  i++) creaImagen(i, canvas.root());
+                for (size_t i = 0; i < scrollViews.size(); i++) creaScrollView(i, canvas.root());
                 for (size_t i = 0; i < sliders.size(); i++) creaSlider(i, canvas.root());
+                for (size_t i = 0; i < inputFields.size(); i++) creaInputField(i, canvas.root());
+                for (size_t i = 0; i < dropdowns.size();   i++) creaDropdown(i, canvas.root());
                 for (size_t i = 0; i < scrollbars.size(); i++) creaScrollbar(i, canvas.root());
                 for (size_t i = 0; i < toggles.size();    i++) creaToggle(i, canvas.root());
                 for (size_t i = 0; i < checkboxes.size(); i++) creaCheckbox(i, canvas.root());
@@ -866,6 +1160,12 @@ namespace DonTopo
                         compartido = cache.barNodes[itb->second];
                     else if (auto its = idxSlider.find(id); its != idxSlider.end())
                         compartido = cache.sliderNodes[its->second];
+                    else if (auto itif = idxInputField.find(id); itif != idxInputField.end())
+                        compartido = cache.inputFieldNodes[itif->second];
+                    else if (auto itdd = idxDropdown.find(id); itdd != idxDropdown.end())
+                        compartido = cache.dropdownNodes[itdd->second];
+                    else if (auto itsv = idxScrollView.find(id); itsv != idxScrollView.end())
+                        compartido = cache.scrollViewNodes[itsv->second];
                     else if (auto itsb = idxScrollbar.find(id); itsb != idxScrollbar.end())
                         compartido = cache.scrollbarNodes[itsb->second];
                     else if (auto ittg = idxToggle.find(id); ittg != idxToggle.end())
@@ -980,6 +1280,129 @@ namespace DonTopo
             f.markDirty(UiElement::DirtyAll);
             h.markDirty(UiElement::DirtyAll);
             cache.sliderPrev[i] = src;
+        }
+
+        for (size_t i = 0; i < inputFields.size(); i++)
+        {
+            InputFieldComponent& src = *inputFields[i].second;
+            if (auto rt = src.callbacks.ptr) rt->owner = &src;
+
+            InputField& f = *cache.inputFieldNodes[i];
+            Text&       t = *cache.inputFieldTexts[i];
+            UiElement&  c = *cache.inputFieldCarets[i];
+
+            // El cursor parpadea con el TIEMPO y el foco, que cambian sin que
+            // cambie ni un campo del componente: por eso esto va ANTES del corte
+            // por "no ha cambiado" y se compara aparte.
+            const bool enfocado = (canvas.focused() == &f);
+            const bool fase = src.caretBlinkRate > 0.0f
+                                  ? (((int)(canvas.lastTimeSeconds() / src.caretBlinkRate)) % 2) == 0
+                                  : true;
+            const bool verCaret = enfocado && fase && src.interactable;
+
+            const bool sinCambios = (src == cache.inputFieldPrev[i]) &&
+                                    (c.drawable == verCaret);
+            if (sinCambios) continue;
+
+            src.applyTo(f);
+            src.applyToText(t);
+            // La fuente se resuelve SOLO si hay algo que escribir: cargarla es
+            // FreeType + bake + subida a GPU, y un campo vacio sin placeholder no
+            // dibujaria ni un glyph con ella.
+            t.font = t.text.empty()
+                         ? nullptr
+                         : resolveFont(src.fontPath.empty() ? std::string(kDefaultUiFontPath)
+                                                            : src.fontPath);
+            t.drawable = (t.font != nullptr);
+
+            // El cursor se coloca MIDIENDO el prefijo con la fuente: sin esto
+            // habria que suponer que todas las letras miden lo mismo, y en una
+            // fuente proporcional el cursor acabaria lejos de donde se escribe.
+            float caretX = 0.0f;
+            if (t.font != nullptr)
+            {
+                const float escala = t.font->scaleFor(src.fontSize);
+                const std::vector<uint32_t> cps = UiFont::decodeUtf8(src.displayText());
+                const int hasta = std::clamp(src.caretPos, 0, (int)cps.size());
+                uint32_t anterior = 0;
+                for (int k = 0; k < hasta; k++)
+                {
+                    if (anterior != 0) caretX += t.font->kerning(anterior, cps[(size_t)k]) * escala;
+                    if (const UiGlyph* g = t.font->findGlyph(cps[(size_t)k]))
+                        caretX += g->advance * escala;
+                    anterior = cps[(size_t)k];
+                }
+            }
+            src.applyToCaret(c, caretX, verCaret);
+
+            UiTextureAtlas* atlas = resolveAtlas(src.atlasPath);
+            f.atlas = atlas;
+            f.markDirty(UiElement::DirtyAll);
+            t.markDirty(UiElement::DirtyAll);
+            c.markDirty(UiElement::DirtyAll);
+            cache.inputFieldPrev[i] = src;
+        }
+
+        for (size_t i = 0; i < dropdowns.size(); i++)
+        {
+            DropdownComponent& src = *dropdowns[i].second;
+            if (auto rt = src.callbacks.ptr) rt->owner = &src;
+            if (src == cache.dropdownPrev[i]) continue;
+
+            Dropdown&  d  = *cache.dropdownNodes[i];
+            Text&      l  = *cache.dropdownLabels[i];
+            UiElement& a  = *cache.dropdownArrows[i];
+            UiElement& li = *cache.dropdownLists[i];
+
+            src.applyTo(d);
+            src.applyToLabel(l);
+            src.applyToArrow(a);
+            src.applyToList(li);
+
+            UiFont* fuente = resolveFont(src.fontPath.empty() ? std::string(kDefaultUiFontPath)
+                                                              : src.fontPath);
+            l.font     = l.text.empty() ? nullptr : fuente;
+            l.drawable = (l.font != nullptr);
+
+            UiTextureAtlas* atlas = resolveAtlas(src.atlasPath);
+            d.atlas = atlas;
+            a.atlas = atlas;
+
+            d.markDirty(UiElement::DirtyAll);
+            l.markDirty(UiElement::DirtyAll);
+            a.markDirty(UiElement::DirtyAll);
+            li.markDirty(UiElement::DirtyAll);
+
+            // Las filas. El numero SIEMPRE cuadra: cambiarlo obliga a
+            // reconstruir, asi que aqui no hay que crear ni destruir nada.
+            for (size_t k = 0; k < cache.dropdownItems[i].size(); k++)
+            {
+                UiElement& fila = *cache.dropdownItems[i][k];
+                Text&      et   = *cache.dropdownItemLabels[i][k];
+                src.applyToItem(fila, et, (int)k);
+                fila.atlas = atlas;
+                et.font     = et.text.empty() ? nullptr : fuente;
+                et.drawable = (et.font != nullptr);
+                fila.markDirty(UiElement::DirtyAll);
+                et.markDirty(UiElement::DirtyAll);
+            }
+            cache.dropdownPrev[i] = src;
+        }
+
+        for (size_t i = 0; i < scrollViews.size(); i++)
+        {
+            ScrollViewComponent& src = *scrollViews[i].second;
+            if (auto rt = src.callbacks.ptr) rt->owner = &src;
+            if (src == cache.scrollViewPrev[i]) continue;
+
+            ScrollView& v = *cache.scrollViewNodes[i];
+            UiElement&  c = *cache.scrollViewContents[i];
+            src.applyTo(v);
+            src.applyToContent(c);
+            v.atlas = resolveAtlas(src.atlasPath);
+            v.markDirty(UiElement::DirtyAll);
+            c.markDirty(UiElement::DirtyAll);
+            cache.scrollViewPrev[i] = src;
         }
 
         for (size_t i = 0; i < checkboxes.size(); i++)

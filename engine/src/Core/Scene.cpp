@@ -65,6 +65,10 @@ namespace
     using DonTopo::ToggleComponent;
     using DonTopo::ScrollbarComponent;
     using DonTopo::UiScrollbarDirection;
+    using DonTopo::InputFieldComponent;
+    using DonTopo::UiInputContentType;
+    using DonTopo::DropdownComponent;
+    using DonTopo::ScrollViewComponent;
 
     // Forward declarations: animatorFromJson (más abajo) necesita estos
     // lectores tolerantes a JSON corrupto (definidos junto a jsonToMat4/
@@ -241,6 +245,27 @@ namespace
         if (s == "bottomToTop") return UiProgressFillDirection::BottomToTop;
         if (s == "topToBottom") return UiProgressFillDirection::TopToBottom;
         return UiProgressFillDirection::LeftToRight;   // valor desconocido -> el default
+    }
+
+    const char* uiInputContentTypeToStr(UiInputContentType t)
+    {
+        switch (t)
+        {
+            case UiInputContentType::IntegerNumber: return "integerNumber";
+            case UiInputContentType::DecimalNumber: return "decimalNumber";
+            case UiInputContentType::Alphanumeric:  return "alphanumeric";
+            case UiInputContentType::Password:      return "password";
+            default:                                return "standard";
+        }
+    }
+
+    UiInputContentType uiInputContentTypeFromStr(const std::string& s)
+    {
+        if (s == "integerNumber") return UiInputContentType::IntegerNumber;
+        if (s == "decimalNumber") return UiInputContentType::DecimalNumber;
+        if (s == "alphanumeric")  return UiInputContentType::Alphanumeric;
+        if (s == "password")      return UiInputContentType::Password;
+        return UiInputContentType::Standard;   // valor desconocido -> el default
     }
 
     const char* uiScrollbarDirectionToStr(UiScrollbarDirection d)
@@ -929,6 +954,85 @@ namespace
                                {"atlasPath", s->atlasPath},
                                {"backgroundSprite", s->backgroundSprite},
                                {"handleSprite", s->handleSprite} };
+        }
+        if (node.hasInputField())
+        {
+            const auto& f = node.getInputField();
+            // caretPos NO se guarda: es donde estaba el cursor en esa sesion, no
+            // un dato de la escena.
+            j["inputField"] = { {"anchorMin", vec2ToJsonXY(f->anchorMin)},
+                                {"anchorMax", vec2ToJsonXY(f->anchorMax)},
+                                {"pivot", vec2ToJsonXY(f->pivot)},
+                                {"position", vec2ToJsonXY(f->position)},
+                                {"size", vec2ToJsonXY(f->size)},
+                                {"color", vec4ToJsonXYZW(f->color)},
+                                {"visible", f->visible},
+                                {"interactable", f->interactable},
+                                {"readOnly", f->readOnly},
+                                {"text", f->text},
+                                {"placeholder", f->placeholder},
+                                {"fontPath", f->fontPath},
+                                {"fontSize", f->fontSize},
+                                {"textColor", vec4ToJsonXYZW(f->textColor)},
+                                {"placeholderColor", vec4ToJsonXYZW(f->placeholderColor)},
+                                {"align", uiTextAlignToStr(f->align)},
+                                {"padding", f->padding},
+                                {"characterLimit", f->characterLimit},
+                                {"contentType", uiInputContentTypeToStr(f->contentType)},
+                                {"passwordChar", f->passwordChar},
+                                {"caretColor", vec4ToJsonXYZW(f->caretColor)},
+                                {"caretWidth", f->caretWidth},
+                                {"caretBlinkRate", f->caretBlinkRate},
+                                {"atlasPath", f->atlasPath},
+                                {"backgroundSprite", f->backgroundSprite} };
+        }
+        if (node.hasDropdown())
+        {
+            const auto& d = node.getDropdown();
+            // isOpen NO se guarda: una escena que se abriera con la lista
+            // desplegada tendria un panel tapando el menu nada mas cargar.
+            j["dropdown"] = { {"anchorMin", vec2ToJsonXY(d->anchorMin)},
+                              {"anchorMax", vec2ToJsonXY(d->anchorMax)},
+                              {"pivot", vec2ToJsonXY(d->pivot)},
+                              {"position", vec2ToJsonXY(d->position)},
+                              {"size", vec2ToJsonXY(d->size)},
+                              {"color", vec4ToJsonXYZW(d->color)},
+                              {"visible", d->visible},
+                              {"interactable", d->interactable},
+                              {"options", d->options},
+                              {"value", d->value},
+                              {"itemHeight", d->itemHeight},
+                              {"maxVisibleItems", d->maxVisibleItems},
+                              {"listColor", vec4ToJsonXYZW(d->listColor)},
+                              {"itemColor", vec4ToJsonXYZW(d->itemColor)},
+                              {"itemSelectedColor", vec4ToJsonXYZW(d->itemSelectedColor)},
+                              {"arrowColor", vec4ToJsonXYZW(d->arrowColor)},
+                              {"fontPath", d->fontPath},
+                              {"fontSize", d->fontSize},
+                              {"textColor", vec4ToJsonXYZW(d->textColor)},
+                              {"padding", d->padding},
+                              {"atlasPath", d->atlasPath},
+                              {"backgroundSprite", d->backgroundSprite},
+                              {"arrowSprite", d->arrowSprite},
+                              {"itemSprite", d->itemSprite} };
+        }
+        if (node.hasScrollView())
+        {
+            const auto& v = node.getScrollView();
+            j["scrollView"] = { {"anchorMin", vec2ToJsonXY(v->anchorMin)},
+                                {"anchorMax", vec2ToJsonXY(v->anchorMax)},
+                                {"pivot", vec2ToJsonXY(v->pivot)},
+                                {"position", vec2ToJsonXY(v->position)},
+                                {"size", vec2ToJsonXY(v->size)},
+                                {"color", vec4ToJsonXYZW(v->color)},
+                                {"visible", v->visible},
+                                {"horizontal", v->horizontal},
+                                {"vertical", v->vertical},
+                                {"contentSize", vec2ToJsonXY(v->contentSize)},
+                                {"normalizedPosition", vec2ToJsonXY(v->normalizedPosition)},
+                                {"scrollSensitivity", v->scrollSensitivity},
+                                {"atlasPath", v->atlasPath},
+                                {"backgroundSprite", v->backgroundSprite} };
         }
         if (node.hasLayout())
         {
@@ -2009,6 +2113,144 @@ namespace
             scr->handleSprite     = readStr("handleSprite");
             node->setScrollbar(std::move(scr));
         }
+        // Bloque aditivo, misma regla que los demas componentes de UI.
+        if (j.contains("inputField"))
+        {
+            const auto& fj = j["inputField"];
+            const std::string ctx = "inputField de '" + node->name + "'";
+            auto readBool = [&](const char* key, bool def) {
+                return (fj.contains(key) && fj[key].is_boolean()) ? fj[key].get<bool>() : def;
+            };
+            auto readStr = [&](const char* key) {
+                return (fj.contains(key) && fj[key].is_string())
+                           ? fj[key].get<std::string>() : std::string();
+            };
+            auto f = std::make_shared<InputFieldComponent>();
+            f->anchorMin = readVec2XY(fj, "anchorMin", glm::vec2(0.0f), warnings, ctx);
+            f->anchorMax = readVec2XY(fj, "anchorMax", glm::vec2(0.0f), warnings, ctx);
+            f->pivot     = readVec2XY(fj, "pivot", glm::vec2(0.0f), warnings, ctx);
+            f->position  = readVec2XY(fj, "position", glm::vec2(0.0f), warnings, ctx);
+            f->size      = readVec2XY(fj, "size", glm::vec2(200.0f, 32.0f), warnings, ctx);
+            f->color     = readVec4XYZW(fj, "color", glm::vec4(0.15f, 0.15f, 0.15f, 1.0f),
+                                        warnings, ctx);
+            f->visible      = readBool("visible", true);
+            f->interactable = readBool("interactable", true);
+            f->readOnly     = readBool("readOnly", false);
+
+            f->text        = readStr("text");
+            f->placeholder = readStr("placeholder");
+            f->fontPath    = readStr("fontPath");
+            f->fontSize    = readFloat(fj, "fontSize", 16.0f, warnings, ctx);
+            f->textColor   = readVec4XYZW(fj, "textColor", glm::vec4(1.0f), warnings, ctx);
+            f->placeholderColor = readVec4XYZW(fj, "placeholderColor",
+                                               glm::vec4(0.6f, 0.6f, 0.6f, 1.0f), warnings, ctx);
+            f->align   = uiTextAlignFromStr(readStr("align"));
+            f->padding = readFloat(fj, "padding", 6.0f, warnings, ctx);
+
+            // Sin negativos: es un contador, y un JSON editado a mano con -1
+            // daria una vuelta al uint32 y con ella un limite absurdo.
+            const float lim = readFloat(fj, "characterLimit", 0.0f, warnings, ctx);
+            f->characterLimit = lim > 0.0f ? (uint32_t)lim : 0u;
+
+            f->contentType  = uiInputContentTypeFromStr(readStr("contentType"));
+            // Vacio en el JSON se respeta: displayText ya cae al asterisco.
+            f->passwordChar = (fj.contains("passwordChar") && fj["passwordChar"].is_string())
+                                  ? fj["passwordChar"].get<std::string>() : std::string("*");
+
+            f->caretColor     = readVec4XYZW(fj, "caretColor", glm::vec4(1.0f), warnings, ctx);
+            f->caretWidth     = readFloat(fj, "caretWidth", 1.0f, warnings, ctx);
+            f->caretBlinkRate = readFloat(fj, "caretBlinkRate", 0.5f, warnings, ctx);
+
+            f->atlasPath        = readStr("atlasPath");
+            f->backgroundSprite = readStr("backgroundSprite");
+            // El cursor arranca al final del texto cargado, que es donde lo
+            // espera cualquiera que pinche en un campo ya relleno.
+            f->caretEnd();
+            node->setInputField(std::move(f));
+        }
+        if (j.contains("dropdown"))
+        {
+            const auto& dj = j["dropdown"];
+            const std::string ctx = "dropdown de '" + node->name + "'";
+            auto readBool = [&](const char* key, bool def) {
+                return (dj.contains(key) && dj[key].is_boolean()) ? dj[key].get<bool>() : def;
+            };
+            auto readStr = [&](const char* key) {
+                return (dj.contains(key) && dj[key].is_string())
+                           ? dj[key].get<std::string>() : std::string();
+            };
+            auto d = std::make_shared<DropdownComponent>();
+            d->anchorMin = readVec2XY(dj, "anchorMin", glm::vec2(0.0f), warnings, ctx);
+            d->anchorMax = readVec2XY(dj, "anchorMax", glm::vec2(0.0f), warnings, ctx);
+            d->pivot     = readVec2XY(dj, "pivot", glm::vec2(0.0f), warnings, ctx);
+            d->position  = readVec2XY(dj, "position", glm::vec2(0.0f), warnings, ctx);
+            d->size      = readVec2XY(dj, "size", glm::vec2(200.0f, 32.0f), warnings, ctx);
+            d->color     = readVec4XYZW(dj, "color", glm::vec4(0.2f, 0.2f, 0.2f, 1.0f),
+                                        warnings, ctx);
+            d->visible      = readBool("visible", true);
+            d->interactable = readBool("interactable", true);
+
+            // Las opciones que no sean cadenas se DESCARTAN una a una en vez de
+            // tirar la lista entera: perder un combo por una entrada corrupta
+            // seria peor que perder esa entrada.
+            if (dj.contains("options") && dj["options"].is_array())
+                for (const auto& o : dj["options"])
+                    if (o.is_string()) d->options.push_back(o.get<std::string>());
+
+            d->value = (dj.contains("value") && dj["value"].is_number_integer())
+                           ? dj["value"].get<int>() : 0;
+
+            d->itemHeight = readFloat(dj, "itemHeight", 24.0f, warnings, ctx);
+            const float vis = readFloat(dj, "maxVisibleItems", 6.0f, warnings, ctx);
+            d->maxVisibleItems = vis > 0.0f ? (uint32_t)vis : 0u;
+
+            d->listColor         = readVec4XYZW(dj, "listColor", glm::vec4(0.12f, 0.12f, 0.12f, 1.0f), warnings, ctx);
+            d->itemColor         = readVec4XYZW(dj, "itemColor", glm::vec4(0.18f, 0.18f, 0.18f, 1.0f), warnings, ctx);
+            d->itemSelectedColor = readVec4XYZW(dj, "itemSelectedColor", glm::vec4(0.25f, 0.45f, 0.7f, 1.0f), warnings, ctx);
+            d->arrowColor        = readVec4XYZW(dj, "arrowColor", glm::vec4(1.0f), warnings, ctx);
+
+            d->fontPath  = readStr("fontPath");
+            d->fontSize  = readFloat(dj, "fontSize", 16.0f, warnings, ctx);
+            d->textColor = readVec4XYZW(dj, "textColor", glm::vec4(1.0f), warnings, ctx);
+            d->padding   = readFloat(dj, "padding", 6.0f, warnings, ctx);
+
+            d->atlasPath        = readStr("atlasPath");
+            d->backgroundSprite = readStr("backgroundSprite");
+            d->arrowSprite      = readStr("arrowSprite");
+            d->itemSprite       = readStr("itemSprite");
+            node->setDropdown(std::move(d));
+        }
+        if (j.contains("scrollView"))
+        {
+            const auto& vj = j["scrollView"];
+            const std::string ctx = "scrollView de '" + node->name + "'";
+            auto readBool = [&](const char* key, bool def) {
+                return (vj.contains(key) && vj[key].is_boolean()) ? vj[key].get<bool>() : def;
+            };
+            auto readStr = [&](const char* key) {
+                return (vj.contains(key) && vj[key].is_string())
+                           ? vj[key].get<std::string>() : std::string();
+            };
+            auto v = std::make_shared<ScrollViewComponent>();
+            v->anchorMin = readVec2XY(vj, "anchorMin", glm::vec2(0.0f), warnings, ctx);
+            v->anchorMax = readVec2XY(vj, "anchorMax", glm::vec2(0.0f), warnings, ctx);
+            v->pivot     = readVec2XY(vj, "pivot", glm::vec2(0.0f), warnings, ctx);
+            v->position  = readVec2XY(vj, "position", glm::vec2(0.0f), warnings, ctx);
+            v->size      = readVec2XY(vj, "size", glm::vec2(200.0f), warnings, ctx);
+            v->color     = readVec4XYZW(vj, "color", glm::vec4(0.1f, 0.1f, 0.1f, 1.0f),
+                                        warnings, ctx);
+            v->visible    = readBool("visible", true);
+            v->horizontal = readBool("horizontal", false);
+            v->vertical   = readBool("vertical", true);
+
+            v->contentSize        = readVec2XY(vj, "contentSize", glm::vec2(200.0f, 400.0f), warnings, ctx);
+            v->normalizedPosition = readVec2XY(vj, "normalizedPosition", glm::vec2(0.0f), warnings, ctx);
+            v->scrollSensitivity  = readFloat(vj, "scrollSensitivity", 40.0f, warnings, ctx);
+
+            v->atlasPath        = readStr("atlasPath");
+            v->backgroundSprite = readStr("backgroundSprite");
+            node->setScrollView(std::move(v));
+        }
         if (j.contains("layout"))
         {
             const auto& l = j["layout"];
@@ -2300,12 +2542,17 @@ namespace DonTopo
                                      node->hasProgressBar() || node->hasLayout() ||
                                      node->hasPanel() || node->hasImage() ||
                                      node->hasSlider() || node->hasCheckbox() ||
-                                     node->hasToggle() || node->hasScrollbar();
+                                     node->hasToggle() || node->hasScrollbar() ||
+                                     node->hasInputField() || node->hasDropdown() ||
+                                     node->hasScrollView();
                 if (tieneUi)
                 {
                     if (node->hasPanel())       out.panels.emplace_back(node->id, node->getPanel().get());
                     if (node->hasImage())       out.images.emplace_back(node->id, node->getImage().get());
+                    if (node->hasScrollView())  out.scrollViews.emplace_back(node->id, node->getScrollView().get());
                     if (node->hasSlider())      out.sliders.emplace_back(node->id, node->getSlider().get());
+                    if (node->hasInputField())  out.inputFields.emplace_back(node->id, node->getInputField().get());
+                    if (node->hasDropdown())    out.dropdowns.emplace_back(node->id, node->getDropdown().get());
                     if (node->hasScrollbar())   out.scrollbars.emplace_back(node->id, node->getScrollbar().get());
                     if (node->hasToggle())      out.toggles.emplace_back(node->id, node->getToggle().get());
                     if (node->hasCheckbox())    out.checkboxes.emplace_back(node->id, node->getCheckbox().get());
