@@ -42,6 +42,44 @@ static bool nearly(float a, float b) { return std::fabs(a - b) < 1e-4f; }
 static constexpr uint32_t kW = 800;
 static constexpr uint32_t kH = 480;
 
+// ── Sub-asignación del buffer del frame (N canvas, un solo VkBuffer) ───────
+// Con un canvas por frame, record() podía bindear siempre en el offset 0: no
+// había nadie más con quien pisarse. Con N, cada llamada tiene que escribir a
+// partir de donde dejó la anterior — si no, la GPU (que lee el buffer al
+// EJECUTAR, no al GRABAR) dibuja los N canvas con la geometría del ÚLTIMO, sin
+// que ninguna capa de validación lo diga. bumpUiCursor es la aritmética
+// exacta que usan beginFrame()/record(); se prueba aquí sin GPU porque con dos
+// canvas en pantalla el fallo no se puede verificar de otra forma hasta que el
+// bug ya esté puesto.
+static void test_ui_batch_offsets_se_acumulan_dentro_del_frame()
+{
+    // Tres tamaños de vértices y de índices bien distintos entre sí: con
+    // valores iguales, un offset calculado con el campo equivocado (vértices
+    // en vez de índices, o viceversa) daría el mismo número igualmente.
+    uint32_t vCursor = 0, iCursor = 0;
+
+    const uint32_t v0 = bumpUiCursor(vCursor, 10);
+    const uint32_t i0 = bumpUiCursor(iCursor, 15);
+    CHECK(v0 == 0);
+    CHECK(i0 == 0);
+
+    const uint32_t v1 = bumpUiCursor(vCursor, 25);
+    const uint32_t i1 = bumpUiCursor(iCursor, 33);
+    // El segundo canvas empieza justo donde terminó el primero.
+    CHECK(v1 == 10);
+    CHECK(i1 == 15);
+
+    const uint32_t v2 = bumpUiCursor(vCursor, 4);
+    const uint32_t i2 = bumpUiCursor(iCursor, 6);
+    CHECK(v2 == 35);   // 10 + 25
+    CHECK(i2 == 48);   // 15 + 33
+
+    // El cursor final es el ACUMULADO exacto: es el total contra el que
+    // beginFrame() tiene que dimensionar el buffer del frame.
+    CHECK(vCursor == 39);   // 10 + 25 + 4
+    CHECK(iCursor == 54);   // 15 + 33 + 6
+}
+
 // Un canvas sin nodos visibles no puede generar ni un lote: es la condición que
 // hace que la escena 3D salga exactamente igual que antes de esta feature.
 static void test_canvas_vacio_no_emite_nada()
@@ -5751,6 +5789,8 @@ int main()
     test_sidecar_de_sprites_ida_y_vuelta();
     test_sidecar_ruta_derivada_de_la_imagen();
     test_sidecar_roto_no_deja_el_atlas_a_medias();
+
+    test_ui_batch_offsets_se_acumulan_dentro_del_frame();
 
     test_canvas_vacio_no_emite_nada();
     test_origen_arriba_izquierda();

@@ -381,19 +381,10 @@ int main()
             std::vector<DonTopo::Light> d3dLights;
             std::vector<float>          d3dLightRadii;
 
-            // Sync de la UI 2D: la caché vive fuera del bucle porque es lo que
-            // permite actualizar los widgets en sitio —sin recrear el árbol, que
-            // reiniciaría el fundido— y cachear atlas y fuentes por ruta.
-            DonTopo::UiWidgetSyncCache d3dWidgetCache;
-            DonTopo::UiWidgetLists d3dWidgets;
-            // SHIM TEMPORAL — lo sustituye syncUiCanvases (Task 5 del plan del canvas de
-            // mundo). Se queda con el PRIMER canvas y nada mas: los widgets de cualquier
-            // otro canvas de la escena NO SE DIBUJAN. Antes si se dibujaban (el
-            // collectUiWidgets viejo recogia todo el arbol sin mirar de que canvas colgaba,
-            // mal anclado pero visible), asi que esto es una regresion a proposito y
-            // acotada: CanvasComponent no tiene invariante de unicidad, o sea que una
-            // escena con dos canvas hermanos es legal y hoy perderia el segundo.
-            std::vector<DonTopo::UiCanvasBinding> d3dCanvases;
+            // Empareja los canvas de la escena con sus slots del backend por
+            // ownerId (syncUiCanvases), fuera del bucle para no reasignar cada
+            // frame. La caché de sync de cada canvas vive DENTRO de su slot.
+            std::vector<DonTopo::UiCanvasBinding> d3dBindings;
 
             while (!window.shouldClose())
             {
@@ -539,22 +530,14 @@ int main()
                     d3d12.setLightRadii({});
                 }
 
-                // UI 2D del juego: la resolución sale del COMPONENTE Canvas de
-                // la escena, y los widgets se vuelcan al árbol vivo por frame,
-                // por lo mismo que los transform —tocar un campo en Properties
-                // tiene que verse en el acto—. Sin Canvas la lista va vacía y el
-                // sync limpia el árbol.
-                if (DonTopo::GameObject* canvasGo = d3dScene.findCanvas())
-                    canvasGo->getCanvas()->applyTo(d3d12.uiCanvas());
-
-                // Con la jerarquía de la escena: un widget anidado cuelga del
-                // nodo de su padre, que es quien lo coloca y lo recorta.
-                d3dCanvases.clear();
-                if (d3dScene.findCanvas())
-                    d3dScene.collectCanvases(d3dCanvases);
-                d3dWidgets = d3dCanvases.empty() ? DonTopo::UiWidgetLists{} : d3dCanvases[0].widgets;
-
-                DonTopo::syncUiWidgets(d3dWidgets, d3d12.uiCanvas(), d3dWidgetCache, d3d12);
+                // UI 2D del juego: resolución, widgets y jerarquía de CADA
+                // canvas de la escena, por frame —por lo mismo que los
+                // transform, tocar un campo en Properties tiene que verse en
+                // el acto—. Sin ningún Canvas la lista va vacía y el sync
+                // limpia el árbol.
+                d3dBindings.clear();
+                d3dScene.collectCanvases(d3dBindings);
+                d3d12.syncUiCanvases(d3dBindings);
 
                 // Input de la UI: sin esto el árbol no resuelve estados y los
                 // colores del botón, el fundido y el Click no harían nada. El
@@ -921,19 +904,11 @@ int main()
             return openChosenProject(editor, project, chosen);
         });
 
-        // Estado del sync de widgets: vive FUERA del bucle porque es lo que
-        // permite actualizar los botones en sitio (sin recrear el árbol, que
-        // reiniciaría el fundido) y cachear atlas y fuentes por ruta.
-        DonTopo::UiWidgetSyncCache uiWidgetCache;
-        DonTopo::UiWidgetLists uiWidgets;
-        // SHIM TEMPORAL — lo sustituye syncUiCanvases (Task 5 del plan del canvas de
-        // mundo). Se queda con el PRIMER canvas y nada mas: los widgets de cualquier
-        // otro canvas de la escena NO SE DIBUJAN. Antes si se dibujaban (el
-        // collectUiWidgets viejo recogia todo el arbol sin mirar de que canvas colgaba,
-        // mal anclado pero visible), asi que esto es una regresion a proposito y
-        // acotada: CanvasComponent no tiene invariante de unicidad, o sea que una
-        // escena con dos canvas hermanos es legal y hoy perderia el segundo.
-        std::vector<DonTopo::UiCanvasBinding> uiCanvases;
+        // Empareja los canvas de la escena con sus slots del Renderer por
+        // ownerId (Renderer::syncUiCanvases), fuera del bucle para no
+        // reasignar cada frame. La caché de sync de cada canvas vive DENTRO
+        // de su slot, en el Renderer: aquí ya no hace falta ninguna.
+        std::vector<DonTopo::UiCanvasBinding> uiBindings;
 
         while (!window.shouldClose())
         {
@@ -1084,25 +1059,15 @@ int main()
                 renderer.setLightRadii({});
             }
 
-            // Canvas de UI: la resolución sale del COMPONENTE de la escena, no
-            // de un canvas cableado aquí. Va por frame y no en un evento porque
-            // tocar un campo en Properties tiene que verse en el acto — también
-            // fuera de Play, que es cuando se pinta el gizmo del área útil.
-            if (DonTopo::GameObject* canvasGo = scene.findCanvas())
-                canvasGo->getCanvas()->applyTo(renderer.uiCanvas());
-
-            // Widgets: los ButtonComponent de la escena se vuelcan en el árbol
-            // vivo del canvas, por frame y por la misma razón que la resolución.
-            // Sin Canvas no hay UI: la lista va vacía y el sync limpia el árbol.
-            // Con la jerarquía de la escena: un widget anidado cuelga del nodo
-            // de su padre, que es quien lo coloca y lo recorta.
-            uiCanvases.clear();
-            if (scene.findCanvas())
-                scene.collectCanvases(uiCanvases);
-            uiWidgets = uiCanvases.empty() ? DonTopo::UiWidgetLists{} : uiCanvases[0].widgets;
-            // UN solo sync para todos los widgets: es el dueño de la raíz del
-            // canvas, que se reconstruye entera con clear().
-            DonTopo::syncUiWidgets(uiWidgets, renderer.uiCanvas(), uiWidgetCache, renderer);
+            // Canvas de UI: la resolución, los widgets y la jerarquía de CADA
+            // canvas de la escena salen de sus componentes, no de uno cableado
+            // aquí. Va por frame y no en un evento porque tocar un campo en
+            // Properties tiene que verse en el acto — también fuera de Play,
+            // que es cuando se pinta el gizmo del área útil. Sin ningún Canvas
+            // la lista va vacía y syncUiCanvases deja limpio lo que hubiera.
+            uiBindings.clear();
+            scene.collectCanvases(uiBindings);
+            renderer.syncUiCanvases(uiBindings);
 
             // Input de la UI: sin esto el árbol no resuelve estados, así que los
             // cinco colores del botón, el fundido y el Click no harían nada.

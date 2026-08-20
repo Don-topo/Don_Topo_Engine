@@ -709,6 +709,53 @@ namespace DonTopo {
         return m_uiFonts.back().get();
     }
 
+    void Renderer::syncUiCanvases(const std::vector<UiCanvasBinding>& bindings)
+    {
+        // Empareja por ownerId: los slots que sobreviven conservan su árbol y
+        // su caché, así que reordenar los canvas en la jerarquía no reconstruye
+        // lo que no ha cambiado (eso se vería como un parpadeo).
+        matchUiCanvasSlots(bindings, m_uiSlots);
+
+        for (size_t i = 0; i < bindings.size(); i++)
+        {
+            UiCanvasSlot& s = *m_uiSlots[i];
+            const UiCanvasBinding& b = bindings[i];
+            if (b.canvas) b.canvas->applyTo(s.canvas);
+            s.mode      = b.canvas ? b.canvas->renderMode : UiCanvasRenderMode::ScreenSpace;
+            s.depthTest = b.canvas ? b.canvas->depthTest  : true;
+            syncUiWidgets(b.widgets, s.canvas, s.cache, *this);
+        }
+    }
+
+    UiCanvas& Renderer::uiCanvas()
+    {
+        // El PRIMER canvas de pantalla, en el orden de la escena: es el mismo
+        // criterio que usaba el shim temporal (Task 4), así que un proyecto con
+        // un solo canvas de pantalla se ve exactamente igual que antes.
+        for (auto& s : m_uiSlots)
+            if (s && s->mode == UiCanvasRenderMode::ScreenSpace) return s->canvas;
+        return m_uiCanvasFallback;
+    }
+
+    const UiCanvas& Renderer::uiCanvas() const
+    {
+        for (const auto& s : m_uiSlots)
+            if (s && s->mode == UiCanvasRenderMode::ScreenSpace) return s->canvas;
+        return m_uiCanvasFallback;
+    }
+
+    const UiElement* Renderer::findUiNode(const std::string& name) const
+    {
+        // TODOS los canvas, no solo el de pantalla: un botón de un canvas de
+        // mundo también tiene que poder llevar gizmo en el editor.
+        for (const auto& s : m_uiSlots)
+        {
+            if (!s) continue;
+            if (const UiElement* n = findUiNodeIn(s->canvas.root(), name)) return n;
+        }
+        return nullptr;
+    }
+
     void Renderer::initSkybox(const std::array<std::string, 6>& facePaths)
     {
         // kHdrFormat: el skybox dibuja en el pass de escena, que desde el bloom
@@ -1877,9 +1924,25 @@ namespace DonTopo {
             // Va por encima de la escena, del contorno de seleccion y de los
             // gizmos, y por debajo de la interfaz del editor, que se graba en el
             // pass del swapchain. Con el canvas vacio no se abre ni el pass.
+            //
+            // Se construye el draw data de CADA slot de pantalla (los de mundo
+            // no van aqui: llegan en una tarea posterior) y se abre el pass si
+            // ALGUNO tiene algo, grabando uno por uno dentro del MISMO
+            // vkCmdBeginRenderPass. beginFrame() dimensiona el buffer del frame
+            // contra el ACUMULADO de todos antes de que ningun record() escriba
+            // nada: sin eso, el buffer podria crecer (y recrearse) a mitad del
+            // pass e invalidar el bind que un canvas anterior ya dejo grabado.
             const VkExtent2D uiExtent = effectiveViewport();
-            m_uiCanvas.buildDrawData(uiExtent.width, uiExtent.height, m_uiDrawData);
-            if (!m_uiDrawData.empty() && m_uiFramebuffer[m_currentFrame] != VK_NULL_HANDLE)
+            uint32_t uiTotalVertices = 0;
+            uint32_t uiTotalIndices  = 0;
+            for (auto& s : m_uiSlots)
+            {
+                if (!s || s->mode != UiCanvasRenderMode::ScreenSpace) continue;
+                s->canvas.buildDrawData(uiExtent.width, uiExtent.height, s->drawData);
+                uiTotalVertices += (uint32_t)s->drawData.vertices.size();
+                uiTotalIndices  += (uint32_t)s->drawData.indices.size();
+            }
+            if (uiTotalVertices > 0 && uiTotalIndices > 0 && m_uiFramebuffer[m_currentFrame] != VK_NULL_HANDLE)
             {
                 VkRenderPassBeginInfo uiRp{};
                 uiRp.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1900,9 +1963,15 @@ namespace DonTopo {
                 vp.maxDepth = 1.0f;
                 vkCmdSetViewport(cmd, 0, 1, &vp);
 
+                m_uiBatch.beginFrame(m_gpu, m_currentFrame, uiTotalVertices, uiTotalIndices);
+
                 // Canvas y framebuffer son ya el MISMO espacio (pixeles de
                 // salida): los scissor no se escalan.
-                m_uiBatch.record(m_gpu, cmd, m_uiDrawData, uiExtent, uiExtent, m_currentFrame);
+                for (auto& s : m_uiSlots)
+                {
+                    if (!s || s->mode != UiCanvasRenderMode::ScreenSpace) continue;
+                    m_uiBatch.record(m_gpu, cmd, s->drawData, uiExtent, uiExtent, m_currentFrame);
+                }
                 vkCmdEndRenderPass(cmd);
             }
 

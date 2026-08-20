@@ -60,6 +60,22 @@ namespace DonTopo
         bool operator!=(const UiScissor& o) const { return !(*this == o); }
     };
 
+    // Bump allocator puro: aparta `count` elementos a partir de `cursor`,
+    // avanza el cursor y devuelve DÓNDE empezaba. Es la aritmética que separa
+    // el offset de escritura de un canvas dentro del buffer COMPARTIDO del
+    // frame (N canvas, un solo VkBuffer). Sin esto — o bindeando siempre en el
+    // offset 0, que es lo que hacía con un canvas único — el draw de cada
+    // canvas pisa al anterior, y como la GPU lee el buffer al EJECUTAR y no al
+    // GRABAR, los N draws del frame salen todos con la geometría del ÚLTIMO,
+    // sin que ninguna capa de validación lo diga. Se extrae aparte y libre de
+    // Vulkan justo para poder probar esta cuenta sin GPU (ui_batch_tests.cpp).
+    inline uint32_t bumpUiCursor(uint32_t& cursor, uint32_t count)
+    {
+        const uint32_t at = cursor;
+        cursor += count;
+        return at;
+    }
+
     struct UiBatch
     {
         // nullptr = textura blanca de 1x1 del propio UiSpriteBatch (paneles de
@@ -108,6 +124,15 @@ namespace DonTopo
         // el sampler es de aquí.
         VkSampler sampler() const { return m_sampler; }
 
+        // UNA vez por frame, ANTES de grabar el primer canvas: dimensiona los
+        // buffers del frame contra el ACUMULADO de todos los canvas de pantalla
+        // (no contra el de uno solo) y reinicia los cursores de sub-asignación
+        // a 0. Tiene que ir antes de CUALQUIER record() de este frame: si el
+        // buffer creciera a mitad de pase, el bind ya grabado de un canvas
+        // anterior apuntaría a un VkBuffer destruido (ensureBuffers recrea el
+        // handle al crecer). Con totales a 0 no toca nada.
+        void beginFrame(GpuDevice& gpu, int frame, uint32_t totalVertices, uint32_t totalIndices);
+
         // Con datos vacíos no graba ni un comando ni toca ningún buffer.
         //
         // canvasExtent es el espacio en el que se CONSTRUYÓ el UiDrawData (los
@@ -115,6 +140,11 @@ namespace DonTopo
         // del framebuffer que se graba. Con SSAA no coinciden: la ortográfica
         // sale del primero y los scissor se escalan al segundo, que es el único
         // espacio que entiende un VkRect2D. Iguales, sale lo de siempre.
+        //
+        // Escribe en el SIGUIENTE hueco libre del buffer del frame (avanzando
+        // el cursor que dejó beginFrame) y no siempre en el offset 0: con un
+        // solo canvas por frame daba igual, pero con N, bindear siempre en 0
+        // haría que cada llamada pisara los vértices de la anterior.
         void record(GpuDevice& gpu, VkCommandBuffer cmd, const UiDrawData& data,
                     VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame);
 
@@ -149,5 +179,11 @@ namespace DonTopo
         VkDeviceMemory m_indexMemory[kFrames]   = {};
         void*          m_indexMapped[kFrames]   = {};
         uint32_t       m_indexCapacity[kFrames] = {};
+
+        // Cursores de sub-asignación DENTRO del buffer del frame en curso.
+        // beginFrame() los pone a 0; cada record() avanza el suyo con
+        // bumpUiCursor y escribe a partir de donde lo dejó el anterior.
+        uint32_t m_frameVertexCursor[kFrames] = {};
+        uint32_t m_frameIndexCursor[kFrames]  = {};
     };
 }

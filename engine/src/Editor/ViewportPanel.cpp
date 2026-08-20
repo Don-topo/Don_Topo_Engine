@@ -425,23 +425,11 @@ void ViewportPanel::drawCanvasGizmo(EditorContext& ctx, const glm::vec2& imagePo
     ImGui::GetWindowDrawList()->AddRect(p0, p1, IM_COL32(80, 200, 255, 220), 0.0f, 0, 2.0f);
 }
 
-// Nodo vivo de un widget de un GameObject, o nullptr si no hay. Los widgets son
-// hijos DIRECTOS de la raíz del canvas (los monta syncUiWidgets), así que un
-// nivel basta y no hace falta recorrer el árbol entero.
-static const UiElement* findUiNodeIn(const UiElement& node, const std::string& wanted)
-{
-    for (const auto& child : node.children())
-    {
-        if (child->name == wanted) return child.get();
-        if (const UiElement* hit = findUiNodeIn(*child, wanted)) return hit;
-    }
-    return nullptr;
-}
-
-// Recorrido COMPLETO y no solo los hijos de la raíz: desde que el sync respeta
-// la jerarquía de la escena, el nodo de un widget anidado cuelga del de su
-// padre, y buscarlo a un nivel dejaba sin gizmo a todo lo que no fuera de
-// primer nivel.
+// findUiNodeIn ahora vive en UiCanvas.h (función libre): la usan tanto el
+// Renderer (findUiNode, que recorre TODOS los canvas) como este panel. Este
+// envoltorio se queda solo porque los nueve gizmos de abajo le pasan un
+// UiCanvas y no un UiElement — cambiar eso es de otra tarea (el gizmo tiene
+// que buscar en el canvas de MUNDO correcto, no solo en el de pantalla).
 static const UiElement* findUiNodeNamed(const UiCanvas& canvas, const std::string& wanted)
 {
     return findUiNodeIn(canvas.root(), wanted);

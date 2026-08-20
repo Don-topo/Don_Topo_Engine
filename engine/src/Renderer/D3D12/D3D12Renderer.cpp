@@ -20,6 +20,7 @@
 #include "DonTopo/Renderer/UiLayer.h"
 #include "DonTopo/Renderer/Vertex.h"
 #include "DonTopo/UI/UiCanvas.h"
+#include "DonTopo/UI/UiWidgetSync.h"
 
 #include <windows.h>
 
@@ -944,10 +945,16 @@ struct D3D12Renderer::Impl {
     void updateForwardPlus();   // parámetros y luces del frame
     void recordForwardPlusCull();
 
-    // Árbol de la interfaz 2D del juego. Este backend todavía no la dibuja,
-    // pero el editor la edita igual: tenerlo aquí es lo que permite que lo
-    // haga sin preguntar con qué backend corre.
-    UiCanvas uiCanvas;
+    // Árbol de la interfaz 2D del juego, UNO por CanvasComponent de la
+    // escena — mismo esquema que el Renderer de Vulkan (UiCanvasSlot,
+    // emparejado por ownerId con matchUiCanvasSlots). El editor sigue
+    // editando el de pantalla vía uiCanvas() sin preguntar con qué backend
+    // corre.
+    std::vector<std::unique_ptr<UiCanvasSlot>> uiSlots;
+    // Repliegue de uiCanvas() sin ningún canvas de pantalla en la escena.
+    // Persistente y vacío: una referencia a un temporal dejaría al editor
+    // leyendo memoria muerta.
+    UiCanvas uiCanvasFallback;
 
     // Capa de interfaz del editor, si la hay. No es propiedad de este backend.
     UiLayer* uiLayer = nullptr;
@@ -1129,7 +1136,6 @@ struct D3D12Renderer::Impl {
     // entero cada frame y no compensa un staging.
     ComPtr<ID3D12RootSignature> uiRootSignature;
     ComPtr<ID3D12PipelineState> uiPipeline;
-    UiDrawData                  uiDrawData;
     std::array<D3D12MA::Allocation*, kFrameCount> uiVertexAllocations{};
     std::array<void*, kFrameCount>                uiVertexMapped{};
     std::array<UINT, kFrameCount>                 uiVertexCapacity{};
@@ -6068,32 +6074,27 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
     if (!uiPipeline)
         return;
 
-    // Los quads, en CPU. Al tamaño de SALIDA: la UI se mide en píxeles de
-    // pantalla, no en los de render, que con SSAA son otros.
-    uiCanvas.buildDrawData(outWidth, outHeight, uiDrawData);
-
-    if (uiDrawData.empty() || uiDrawData.vertices.empty() || uiDrawData.indices.empty())
+    // Los quads de CADA canvas de PANTALLA, en CPU. Al tamaño de SALIDA: la UI
+    // se mide en píxeles de pantalla, no en los de render, que con SSAA son
+    // otros. Los de MUNDO no entran aquí: llegan en una tarea posterior.
+    UINT totalVertices = 0;
+    UINT totalIndices  = 0;
+    for (auto& s : uiSlots)
+    {
+        if (!s || s->mode != UiCanvasRenderMode::ScreenSpace) continue;
+        s->canvas.buildDrawData(outWidth, outHeight, s->drawData);
+        totalVertices += static_cast<UINT>(s->drawData.vertices.size());
+        totalIndices  += static_cast<UINT>(s->drawData.indices.size());
+    }
+    if (totalVertices == 0 || totalIndices == 0)
         return;
 
-    ensureUiBuffers(static_cast<UINT>(uiDrawData.vertices.size()),
-                    static_cast<UINT>(uiDrawData.indices.size()));
+    // Se dimensiona contra el ACUMULADO de todos los canvas de pantalla del
+    // frame: con el tamaño de uno solo, el segundo (o el tercero) podría
+    // encontrar el buffer lleno a mitad de la grabación.
+    ensureUiBuffers(totalVertices, totalIndices);
     if (!uiVertexMapped[frameIndex] || !uiIndexMapped[frameIndex])
         return;
-
-    std::memcpy(uiVertexMapped[frameIndex], uiDrawData.vertices.data(),
-                uiDrawData.vertices.size() * sizeof(UiVertex));
-    std::memcpy(uiIndexMapped[frameIndex], uiDrawData.indices.data(),
-                uiDrawData.indices.size() * sizeof(uint16_t));
-
-    D3D12_VERTEX_BUFFER_VIEW vbv{};
-    vbv.BufferLocation = uiVertexAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress();
-    vbv.SizeInBytes    = static_cast<UINT>(uiDrawData.vertices.size() * sizeof(UiVertex));
-    vbv.StrideInBytes  = sizeof(UiVertex);
-
-    D3D12_INDEX_BUFFER_VIEW ibv{};
-    ibv.BufferLocation = uiIndexAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress();
-    ibv.SizeInBytes    = static_cast<UINT>(uiDrawData.indices.size() * sizeof(uint16_t));
-    ibv.Format         = DXGI_FORMAT_R16_UINT;
 
     // Ortográfica en píxeles con el origen ARRIBA a la izquierda, que es como
     // vienen las posiciones. Sin voltear nada más: el viewport de salida ya va
@@ -6121,37 +6122,76 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
     commandList->SetGraphicsRootSignature(uiRootSignature.Get());
     commandList->SetGraphicsRoot32BitConstants(0, 16, &proj[0][0], 0);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    commandList->IASetVertexBuffers(0, 1, &vbv);
-    commandList->IASetIndexBuffer(&ibv);
 
-    for (const UiBatch& batch : uiDrawData.batches) {
-        if (batch.indexCount == 0)
-            continue;
+    // Sub-asignación DENTRO del mismo buffer: cada canvas escribe a partir de
+    // donde dejó el anterior (bumpUiCursor) y bindea SU propia vista, con el
+    // offset ya metido en BufferLocation. Sin esto —o con las vistas
+    // arrancando siempre en el byte 0, que es lo que hacía con un canvas
+    // único— el segundo canvas pisaría los vértices del primero, y como la
+    // GPU lee el buffer al EJECUTAR el command list (no al grabarlo), los N
+    // draws saldrían todos con la geometría del ÚLTIMO.
+    UINT vertexCursor = 0;
+    UINT indexCursor  = 0;
+    for (auto& s : uiSlots)
+    {
+        if (!s || s->mode != UiCanvasRenderMode::ScreenSpace) continue;
+        const UiDrawData& data = s->drawData;
+        if (data.empty() || data.vertices.empty() || data.indices.empty()) continue;
 
-        // El recorte del nodo, en píxeles de pantalla. Un lote sin scissor
-        // propio se recorta al viewport entero.
-        D3D12_RECT scissor{0, 0, static_cast<LONG>(outWidth), static_cast<LONG>(outHeight)};
-        if (!batch.scissor.empty()) {
-            scissor.left   = batch.scissor.x;
-            scissor.top    = batch.scissor.y;
-            scissor.right  = batch.scissor.x + static_cast<LONG>(batch.scissor.width);
-            scissor.bottom = batch.scissor.y + static_cast<LONG>(batch.scissor.height);
+        const UINT vertexBase = bumpUiCursor(vertexCursor, static_cast<UINT>(data.vertices.size()));
+        const UINT indexBase  = bumpUiCursor(indexCursor,  static_cast<UINT>(data.indices.size()));
+
+        std::memcpy(static_cast<UiVertex*>(uiVertexMapped[frameIndex]) + vertexBase,
+                    data.vertices.data(), data.vertices.size() * sizeof(UiVertex));
+        std::memcpy(static_cast<uint16_t*>(uiIndexMapped[frameIndex]) + indexBase,
+                    data.indices.data(), data.indices.size() * sizeof(uint16_t));
+
+        D3D12_VERTEX_BUFFER_VIEW vbv{};
+        vbv.BufferLocation = uiVertexAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress()
+                           + static_cast<UINT64>(vertexBase) * sizeof(UiVertex);
+        vbv.SizeInBytes    = static_cast<UINT>(data.vertices.size() * sizeof(UiVertex));
+        vbv.StrideInBytes  = sizeof(UiVertex);
+
+        D3D12_INDEX_BUFFER_VIEW ibv{};
+        ibv.BufferLocation = uiIndexAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress()
+                           + static_cast<UINT64>(indexBase) * sizeof(uint16_t);
+        ibv.SizeInBytes    = static_cast<UINT>(data.indices.size() * sizeof(uint16_t));
+        ibv.Format         = DXGI_FORMAT_R16_UINT;
+
+        commandList->IASetVertexBuffers(0, 1, &vbv);
+        commandList->IASetIndexBuffer(&ibv);
+
+        for (const UiBatch& batch : data.batches) {
+            if (batch.indexCount == 0)
+                continue;
+
+            // El recorte del nodo, en píxeles de pantalla. Un lote sin scissor
+            // propio se recorta al viewport entero.
+            D3D12_RECT scissor{0, 0, static_cast<LONG>(outWidth), static_cast<LONG>(outHeight)};
+            if (!batch.scissor.empty()) {
+                scissor.left   = batch.scissor.x;
+                scissor.top    = batch.scissor.y;
+                scissor.right  = batch.scissor.x + static_cast<LONG>(batch.scissor.width);
+                scissor.bottom = batch.scissor.y + static_cast<LONG>(batch.scissor.height);
+            }
+            commandList->RSSetScissorRects(1, &scissor);
+
+            // Sin atlas, la 1x1 blanca: multiplicar por (1,1,1,1) deja el color del
+            // vértice tal cual, así que un panel plano no necesita ni pipeline
+            // aparte. Con atlas, el suyo; y si no llegó a subirse, otra vez la
+            // blanca —se verá el color plano en vez del sprite, pero no un
+            // descriptor de otro.
+            UINT srv = kSrvBaseColor;
+            if (batch.atlas) {
+                const auto it = uiAtlasSrv.find(batch.atlas);
+                if (it != uiAtlasSrv.end())
+                    srv = it->second;
+            }
+            commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(srv));
+            // firstIndex es LOCAL a este canvas: el offset ya lo aplicó la
+            // vista de índices de arriba.
+            commandList->DrawIndexedInstanced(batch.indexCount, 1, batch.firstIndex, 0, 0);
         }
-        commandList->RSSetScissorRects(1, &scissor);
-
-        // Sin atlas, la 1x1 blanca: multiplicar por (1,1,1,1) deja el color del
-        // vértice tal cual, así que un panel plano no necesita ni pipeline
-        // aparte. Con atlas, el suyo; y si no llegó a subirse, otra vez la
-        // blanca —se verá el color plano en vez del sprite, pero no un
-        // descriptor de otro.
-        UINT srv = kSrvBaseColor;
-        if (batch.atlas) {
-            const auto it = uiAtlasSrv.find(batch.atlas);
-            if (it != uiAtlasSrv.end())
-                srv = it->second;
-        }
-        commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(srv));
-        commandList->DrawIndexedInstanced(batch.indexCount, 1, batch.firstIndex, 0, 0);
     }
 }
 
@@ -8568,7 +8608,43 @@ void D3D12Renderer::setUiLayer(UiLayer* ui)
 
 UiCanvas& D3D12Renderer::uiCanvas()
 {
-    return m_impl->uiCanvas;
+    // El PRIMER canvas de pantalla, en el orden de la escena: mismo criterio
+    // que el Renderer de Vulkan, y el mismo que usaba el shim temporal (Task
+    // 4) cuando solo había un canvas.
+    for (auto& s : m_impl->uiSlots)
+        if (s && s->mode == UiCanvasRenderMode::ScreenSpace) return s->canvas;
+    return m_impl->uiCanvasFallback;
+}
+
+void D3D12Renderer::syncUiCanvases(const std::vector<UiCanvasBinding>& bindings)
+{
+    Impl& d = *m_impl;
+
+    // Empareja por ownerId: los slots que sobreviven conservan su árbol y su
+    // caché, así que reordenar los canvas en la jerarquía no reconstruye lo
+    // que no ha cambiado.
+    matchUiCanvasSlots(bindings, d.uiSlots);
+
+    for (size_t i = 0; i < bindings.size(); i++)
+    {
+        UiCanvasSlot& s = *d.uiSlots[i];
+        const UiCanvasBinding& b = bindings[i];
+        if (b.canvas) b.canvas->applyTo(s.canvas);
+        s.mode      = b.canvas ? b.canvas->renderMode : UiCanvasRenderMode::ScreenSpace;
+        s.depthTest = b.canvas ? b.canvas->depthTest  : true;
+        syncUiWidgets(b.widgets, s.canvas, s.cache, *this);
+    }
+}
+
+const UiElement* D3D12Renderer::findUiNode(const std::string& name) const
+{
+    // TODOS los canvas, no solo el de pantalla.
+    for (const auto& s : m_impl->uiSlots)
+    {
+        if (!s) continue;
+        if (const UiElement* n = findUiNodeIn(s->canvas.root(), name)) return n;
+    }
+    return nullptr;
 }
 
 void D3D12Renderer::initSceneResources(const std::vector<Mesh>& meshes)

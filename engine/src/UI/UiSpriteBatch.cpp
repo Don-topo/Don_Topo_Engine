@@ -2056,19 +2056,43 @@ namespace DonTopo
         m_indexCapacity[frame]  = 0;
     }
 
+    void UiSpriteBatch::beginFrame(GpuDevice& gpu, int frame, uint32_t totalVertices, uint32_t totalIndices)
+    {
+        // Se dimensiona contra el ACUMULADO de todos los canvas de pantalla de
+        // este frame, no contra el tamaño de uno solo: con lo segundo, el
+        // primer canvas reservaría de sobra pero el segundo (o el tercero)
+        // encontraría el buffer ya lleno y ensureBuffers lo recrearía A MITAD
+        // del pase, invalidando el bind que el canvas anterior ya dejó grabado
+        // en el command buffer (apuntaría a un VkBuffer destruido).
+        if (totalVertices > 0 || totalIndices > 0)
+            ensureBuffers(gpu, frame, totalVertices, totalIndices);
+
+        // Un frame nuevo empieza a repartir desde el principio del buffer.
+        m_frameVertexCursor[frame] = 0;
+        m_frameIndexCursor[frame]  = 0;
+    }
+
     void UiSpriteBatch::record(GpuDevice& gpu, VkCommandBuffer cmd, const UiDrawData& data,
                                VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame)
     {
+        (void)gpu;   // el crecimiento del buffer ya lo resolvió beginFrame()
+
         // Canvas vacío = ni un comando, ni un buffer creado, ni un mapeo. Es la
         // condición que hace que la escena 3D salga EXACTAMENTE igual que antes.
         if (data.empty() || m_pipeline == VK_NULL_HANDLE) return;
         if (canvasExtent.width == 0 || canvasExtent.height == 0) return;
         if (fbExtent.width == 0 || fbExtent.height == 0) return;
+        if (!m_vertexMapped[frame] || !m_indexMapped[frame]) return;
 
-        ensureBuffers(gpu, frame, (uint32_t)data.vertices.size(), (uint32_t)data.indices.size());
+        // Sub-asignación DENTRO del buffer del frame: cada canvas escribe a
+        // partir de donde dejó el anterior, no siempre en el offset 0.
+        const uint32_t vertexBase = bumpUiCursor(m_frameVertexCursor[frame], (uint32_t)data.vertices.size());
+        const uint32_t indexBase  = bumpUiCursor(m_frameIndexCursor[frame],  (uint32_t)data.indices.size());
 
-        std::memcpy(m_vertexMapped[frame], data.vertices.data(), data.vertices.size() * sizeof(UiVertex));
-        std::memcpy(m_indexMapped[frame],  data.indices.data(),  data.indices.size()  * sizeof(uint16_t));
+        std::memcpy(static_cast<UiVertex*>(m_vertexMapped[frame]) + vertexBase,
+                    data.vertices.data(), data.vertices.size() * sizeof(UiVertex));
+        std::memcpy(static_cast<uint16_t*>(m_indexMapped[frame]) + indexBase,
+                    data.indices.data(), data.indices.size() * sizeof(uint16_t));
 
         // bottom=0 y top=alto: (0,0) cae ARRIBA a la izquierda. Parece del revés
         // y es justo lo contrario: en Vulkan el +Y de NDC va hacia ABAJO, así
@@ -2094,9 +2118,13 @@ namespace DonTopo
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
         vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &proj);
 
-        VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &m_vertexBuffers[frame], &offset);
-        vkCmdBindIndexBuffer(cmd, m_indexBuffers[frame], 0, VK_INDEX_TYPE_UINT16);
+        // El offset de bind es el de ESTE canvas dentro del buffer compartido
+        // del frame: con él ya aplicado, los índices del batch (batch.firstIndex
+        // más abajo) se quedan LOCALES a este canvas, sin tocarlos.
+        const VkDeviceSize vertexOffset = (VkDeviceSize)vertexBase * sizeof(UiVertex);
+        const VkDeviceSize indexOffset  = (VkDeviceSize)indexBase  * sizeof(uint16_t);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &m_vertexBuffers[frame], &vertexOffset);
+        vkCmdBindIndexBuffer(cmd, m_indexBuffers[frame], indexOffset, VK_INDEX_TYPE_UINT16);
 
         for (const UiBatch& batch : data.batches)
         {

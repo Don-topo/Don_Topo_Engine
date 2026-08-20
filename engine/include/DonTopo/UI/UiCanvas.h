@@ -741,4 +741,25 @@ namespace DonTopo
         float m_lastTime    = 0.0f;
         bool  m_hasLastTime = false;
     };
+
+    // Nodo vivo por NOMBRE en TODO el subárbol de `node`, o nullptr si no hay
+    // ninguno. Recorrido COMPLETO y no solo los hijos directos: desde que el
+    // sync respeta la jerarquía de la escena, el nodo de un widget anidado
+    // cuelga del de su padre, y buscarlo a un solo nivel dejaría sin
+    // encontrar nada que no fuera de primer nivel.
+    //
+    // Vivía como función local (findUiNodeNamed) en ViewportPanel.cpp, que
+    // solo miraba el canvas de pantalla. Se mueve aquí, libre, para que la
+    // use también el Renderer (findUiNode, que recorre TODOS los canvas de
+    // la escena, no solo el de pantalla) sin que el editor y el motor tengan
+    // cada uno su copia.
+    inline const UiElement* findUiNodeIn(const UiElement& node, const std::string& wanted)
+    {
+        for (const auto& child : node.children())
+        {
+            if (child->name == wanted) return child.get();
+            if (const UiElement* hit = findUiNodeIn(*child, wanted)) return hit;
+        }
+        return nullptr;
+    }
 }

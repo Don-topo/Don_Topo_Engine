@@ -229,6 +229,12 @@ public:
     void      setUiLayer(UiLayer* ui) override;
     UiCanvas& uiCanvas() override;
 
+    // Monta el árbol vivo de CADA canvas de la escena. Mismo contrato que en
+    // el Renderer de Vulkan: uiCanvas() sigue devolviendo solo el de pantalla.
+    void syncUiCanvases(const std::vector<UiCanvasBinding>& bindings) override;
+    // Busca un nodo por nombre en TODOS los canvas, no solo en el de pantalla.
+    const UiElement* findUiNode(const std::string& name) const override;
+
     // Atlas y fuentes de la UI 2D. Mismas firmas que en el camino de Vulkan: el
     // sync de widgets las llama por plantilla, sin saber qué backend hay debajo.
     // El dueño es el backend; quien las pide se queda solo con el puntero.
