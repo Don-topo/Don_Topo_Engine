@@ -320,6 +320,45 @@ namespace DonTopo
                   });
     }
 
+    // Lo que hay que dimensionar para el frame de UI, contado sobre el drawData
+    // YA construido de cada slot.
+    struct UiFrameTotals
+    {
+        // TODOS los canvas del frame, de mundo Y de pantalla: comparten UN solo
+        // par de buffers, así que este es el total que hay que reservar.
+        uint32_t vertices = 0;
+        uint32_t indices  = 0;
+        // Solo los de PANTALLA: son los únicos que abren el pase de UI. Con el
+        // total del frame se abriría también con solo canvas de mundo vivos, y
+        // sería un pase entero sin un draw dentro.
+        uint32_t screenVertices = 0;
+        uint32_t screenIndices  = 0;
+    };
+
+    // La cuenta del frame de UI, sin GPU y en un solo sitio. Dimensionar con la
+    // mitad —solo los de pantalla, que es lo que hacía el backend de D3D12
+    // cuando no existían los de mundo— deja al resto fuera del buffer, y ahí la
+    // guarda uiCursorFits los descarta EN SILENCIO: ni un error, ni un aviso de
+    // ninguna capa de validación, ni un canvas en pantalla.
+    inline UiFrameTotals uiFrameTotals(const std::vector<std::unique_ptr<UiCanvasSlot>>& slots)
+    {
+        UiFrameTotals t;
+        for (const auto& s : slots)
+        {
+            if (!s) continue;
+            const uint32_t v = (uint32_t)s->drawData.vertices.size();
+            const uint32_t i = (uint32_t)s->drawData.indices.size();
+            t.vertices += v;
+            t.indices  += i;
+            if (s->mode == UiCanvasRenderMode::ScreenSpace)
+            {
+                t.screenVertices += v;
+                t.screenIndices  += i;
+            }
+        }
+        return t;
+    }
+
     // Vuelca los widgets de la escena en el canvas vivo. Las listas de
     // UiWidgetLists van en orden de recorrido de la escena y traen el id de cada
     // GameObject dueño.

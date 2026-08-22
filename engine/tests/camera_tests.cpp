@@ -6066,6 +6066,46 @@ static void test_world_canvases_se_ordenan_de_lejos_a_cerca()
     CHECK(orden[2] != pantalla);
 }
 
+// El buffer de la UI es UNO SOLO por frame y lo comparten los canvas de MUNDO
+// (que se graban en el pase de escena) con los de PANTALLA (que van despues, en
+// su propio pase). Dimensionarlo con el total de UNA de las dos mitades es el
+// fallo que no se ve: el que se queda fuera lo descarta la guarda uiCursorFits
+// EN SILENCIO — ni error, ni aviso de validacion, ni canvas en pantalla. Y la
+// cuenta de PANTALLA hace falta aparte porque es la que decide si el pase de UI
+// llega a abrirse.
+//
+// Los seis numeros son distintos entre si a proposito: con totales iguales, una
+// suma que cogiera el campo equivocado (indices por vertices, o el total por el
+// de pantalla) daria el mismo resultado igualmente.
+static void test_ui_frame_totals_suma_mundo_y_pantalla()
+{
+    std::vector<std::unique_ptr<UiCanvasSlot>> slots;
+
+    auto conDatos = [&](UiCanvasRenderMode modo, size_t vertices, size_t indices) {
+        auto s = std::make_unique<UiCanvasSlot>();
+        s->mode = modo;
+        s->drawData.vertices.resize(vertices);
+        s->drawData.indices.resize(indices);
+        slots.push_back(std::move(s));
+    };
+
+    conDatos(UiCanvasRenderMode::World,       5, 9);
+    conDatos(UiCanvasRenderMode::ScreenSpace, 3, 6);
+    conDatos(UiCanvasRenderMode::World,       11, 21);
+    // Un hueco vacio: matchUiCanvasSlots nunca los deja, pero la suma no puede
+    // depender de eso — un nullptr aqui reventaria antes de llegar a dibujar.
+    slots.push_back(nullptr);
+
+    const UiFrameTotals t = uiFrameTotals(slots);
+
+    // TODOS los canvas del frame: 5 + 3 + 11 y 9 + 6 + 21.
+    CHECK(t.vertices == 19u);
+    CHECK(t.indices  == 36u);
+    // Y solo los de PANTALLA.
+    CHECK(t.screenVertices == 3u);
+    CHECK(t.screenIndices  == 6u);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -6279,6 +6319,7 @@ int main()
 
     test_ui_slots_se_emparejan_por_owner_id();
     test_world_canvases_se_ordenan_de_lejos_a_cerca();
+    test_ui_frame_totals_suma_mundo_y_pantalla();
 
 
     am.shutdown();

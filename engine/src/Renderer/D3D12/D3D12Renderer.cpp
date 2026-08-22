@@ -1136,6 +1136,15 @@ struct D3D12Renderer::Impl {
     // entero cada frame y no compensa un staging.
     ComPtr<ID3D12RootSignature> uiRootSignature;
     ComPtr<ID3D12PipelineState> uiPipeline;
+
+    // Las DOS variantes de canvas de MUNDO. Comparten root signature, shaders y
+    // layout de vértice con la de pantalla; lo único que cambia es que dibujan
+    // en el target de la ESCENA (kHdrFormat + D32_FLOAT + sampleCount) y el test
+    // de profundidad: una para que una pared tape el cartel y otra para lo que
+    // va siempre encima, como una barra de vida.
+    ComPtr<ID3D12PipelineState> uiWorldPipelineDepth;    // lo tapa la geometría
+    ComPtr<ID3D12PipelineState> uiWorldPipelineNoDepth;  // siempre encima
+
     std::array<D3D12MA::Allocation*, kFrameCount> uiVertexAllocations{};
     std::array<void*, kFrameCount>                uiVertexMapped{};
     std::array<UINT, kFrameCount>                 uiVertexCapacity{};
@@ -1143,17 +1152,60 @@ struct D3D12Renderer::Impl {
     std::array<void*, kFrameCount>                uiIndexMapped{};
     std::array<UINT, kFrameCount>                 uiIndexCapacity{};
 
+    // Cursores de sub-asignación DENTRO del buffer del frame en curso. Son
+    // MIEMBROS y no locales de una función porque los comparten dos pases: los
+    // canvas de mundo se graban en el de escena y los de pantalla en el de
+    // composición, y el segundo tiene que seguir donde lo dejó el primero. Con
+    // un cursor local a cada uno, los de pantalla escribirían encima de los
+    // vértices de los de mundo — que la GPU todavía no ha leído, porque lee el
+    // buffer al EJECUTAR el command list, no al grabarlo. beginUiFrame() los
+    // pone a 0 una vez por frame.
+    UINT uiVertexCursor = 0;
+    UINT uiIndexCursor  = 0;
+    // Lo que dejó contado beginUiFrame() para los canvas de PANTALLA: son los
+    // únicos que graba recordUiCanvas(), y con 0 no hay nada que dibujar.
+    UINT uiScreenVertices = 0;
+    UINT uiScreenIndices  = 0;
+    // Los de mundo en orden de pintado, de lejos a cerca. Miembro y no local
+    // para no reasignar el vector cada frame.
+    std::vector<UiCanvasSlot*> uiWorldOrder;
+
     // El pase de geometría entero, para poder repetirlo desde otra cámara: es
     // lo que necesita el horneado de una sonda de reflexión.
     void recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv, D3D12_CPU_DESCRIPTOR_HANDLE dsv,
                              UINT targetWidth, UINT targetHeight);
 
     void createUiPipeline();
+    // Las dos variantes de mundo, contra el target de la ESCENA. Sirve también
+    // de "recreate": si ya había, las suelta antes de compilar las nuevas. Hay
+    // que llamarla CADA VEZ que cambia sampleCount, o el PSO queda compilado
+    // para un número de muestras que ya no es el del target — y eso en D3D12 se
+    // manifiesta como device lost, no como error de la capa de depuración.
+    void createUiWorldPipelines();
     void ensureUiBuffers(UINT vertexCount, UINT indexCount);
+
+    // UNA vez por frame, ANTES del pase de escena (que es donde se graban los
+    // canvas de mundo). Construye el draw data de TODOS los canvas, calcula la
+    // matriz de modelo de los de mundo, dimensiona el par de buffers con el
+    // total del frame entero y pone los cursores a 0. Ver el comentario de
+    // uiVertexCursor: partirlo en dos llamadas, una por pase, corrompe el
+    // buffer en silencio.
+    void beginUiFrame();
+
+    // Sub-asigna el hueco de este canvas en el buffer del frame, comprueba que
+    // cabe, copia y bindea las dos vistas. Devuelve false si no cabe: mejor no
+    // dibujar ese canvas que escribir FUERA de la memoria mapeada, que es una
+    // escritura de HOST que ninguna capa de validación ve. Uno solo para las dos
+    // rutas —mundo y pantalla— para que la guarda no pueda quedarse en una.
+    bool bindUiCanvasGeometry(const UiDrawData& data);
+
+    // Los canvas de MUNDO, al final del pase de escena: después de la geometría
+    // y del cielo, para que el depth ya escrito los ocluya.
+    void recordWorldCanvases(UINT targetWidth, UINT targetHeight);
+
     // transform es proj*view*model ya multiplicada: para los canvas de pantalla
-    // de hoy es la ortográfica de siempre (la calcula quien llama), y para uno
-    // de mundo (tarea posterior) llevará también la cámara y la matriz del
-    // canvas.
+    // es la ortográfica de siempre (la calcula quien llama), y para uno de
+    // mundo lleva también la cámara y la matriz del canvas.
     void recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, const glm::mat4& transform);
 
     // Atlas y fuentes de la UI. El backend es su dueño: los widgets solo
@@ -3970,7 +4022,13 @@ void D3D12Renderer::Impl::applyPendingSampleCount()
     createSkinningPipelines();
     createGizmoPipeline();
     createSkyboxPipelineOnly();
-
+    // Los canvas de MUNDO también dibujan en el target de la escena, así que sus
+    // dos PSO llevan su SampleDesc. Es la ÚNICA ruta de recreación que les
+    // afecta: un cambio de tamaño (applyPendingResize/applyPendingRenderSize)
+    // mueve los recursos pero no las muestras, y en D3D12 un PSO no está atado a
+    // ningún objeto de render pass. Olvidarla dejaría los dos compilados para
+    // otro número de muestras: device lost al usarlos, sin un solo aviso.
+    createUiWorldPipelines();
 }
 
 void D3D12Renderer::Impl::createForwardPlusPipelines()
@@ -5450,6 +5508,91 @@ void D3D12Renderer::Impl::createUiPipeline()
 
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&uiPipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(UI 2D)");
+
+    // Y las de mundo, que se apoyan en la root signature recién creada.
+    createUiWorldPipelines();
+}
+
+void D3D12Renderer::Impl::createUiWorldPipelines()
+{
+    // Sin root signature no hay contra qué compilar: pasa si createUiPipeline()
+    // se rindió antes (shaders que no están, serialización fallida). No es un
+    // error, es que este backend se queda sin UI.
+    if (!uiRootSignature)
+        return;
+
+    const std::vector<char> vs = readBinaryFile("shaders/ui.vert.dxil");
+    const std::vector<char> ps = readBinaryFile("shaders/ui.frag.dxil");
+    if (vs.empty() || ps.empty())
+        return;
+
+    // El MISMO layout de la de pantalla: los quads de un canvas de mundo salen
+    // del mismo buildDrawData, solo cambia la matriz que los proyecta.
+    const D3D12_INPUT_ELEMENT_DESC layout[] = {
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(UiVertex, pos),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(UiVertex, uv),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 2, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(UiVertex, color),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 3, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(UiVertex, params),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 4, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(UiVertex, effect),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    };
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature        = uiRootSignature.Get();
+    psoDesc.VS                    = {vs.data(), vs.size()};
+    psoDesc.PS                    = {ps.data(), ps.size()};
+    psoDesc.InputLayout           = {layout, _countof(layout)};
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets      = 1;
+    // Aquí está la diferencia con la de pantalla: el destino es el target de la
+    // ESCENA, que es HDR lineal, tiene profundidad y puede ser multimuestra. Un
+    // PSO con formatos o muestras que no casen con el target NO falla al
+    // crearse; se cae al usarlo.
+    psoDesc.RTVFormats[0]         = kHdrFormat;
+    psoDesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleDesc.Count      = sampleCount;
+    psoDesc.SampleMask            = UINT_MAX;
+
+    psoDesc.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
+    // Sin descarte de caras: un canvas de mundo se puede mirar por detrás, y con
+    // billboard apagado eso es lo normal al rodearlo.
+    psoDesc.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.DepthClipEnable = TRUE;
+
+    D3D12_RENDER_TARGET_BLEND_DESC& blend = psoDesc.BlendState.RenderTarget[0];
+    blend.BlendEnable           = TRUE;
+    blend.SrcBlend              = D3D12_BLEND_SRC_ALPHA;
+    blend.DestBlend             = D3D12_BLEND_INV_SRC_ALPHA;
+    blend.BlendOp               = D3D12_BLEND_OP_ADD;
+    blend.SrcBlendAlpha         = D3D12_BLEND_ONE;
+    blend.DestBlendAlpha        = D3D12_BLEND_INV_SRC_ALPHA;
+    blend.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
+    blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+    // La ESCRITURA de profundidad va apagada en las DOS variantes, a propósito:
+    // la UI va con alpha, y escribir depth haría que los quads de un mismo
+    // canvas se recortaran entre sí según el orden en que salieran del batcher.
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    psoDesc.DepthStencilState.StencilEnable  = FALSE;
+
+    // Se sueltan las viejas ANTES de compilar: esta función es también el
+    // "recreate" del cambio de muestras, y applyPendingSampleCount() ya esperó
+    // a que la GPU soltara los command lists que las usaban.
+    uiWorldPipelineDepth.Reset();
+    uiWorldPipelineNoDepth.Reset();
+
+    psoDesc.DepthStencilState.DepthEnable = TRUE;
+    throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&uiWorldPipelineDepth)),
+                  "ID3D12Device::CreateGraphicsPipelineState(UI mundo con depth)");
+
+    psoDesc.DepthStencilState.DepthEnable = FALSE;
+    throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&uiWorldPipelineNoDepth)),
+                  "ID3D12Device::CreateGraphicsPipelineState(UI mundo sin depth)");
 }
 
 bool D3D12Renderer::Impl::createProbeResources(GpuProbe& probe)
@@ -6080,30 +6223,208 @@ void D3D12Renderer::Impl::ensureUiBuffers(UINT vertexCount, UINT indexCount)
          indexCount, sizeof(uint16_t));
 }
 
+void D3D12Renderer::Impl::beginUiFrame()
+{
+    // El draw data de TODOS los canvas del frame, y el dimensionado del par de
+    // buffers, en UN solo sitio y ANTES del pase de escena. No está dentro de
+    // recordUiCanvas (que es donde vivía) porque los canvas de MUNDO se graban
+    // en el pase de ESCENA, que corre antes: si el buffer se dimensionara ahí,
+    // los de mundo llegarían con la capacidad del frame ANTERIOR (o 0) y la
+    // guarda de bindUiCanvasGeometry los descartaría EN SILENCIO. Y peor: si
+    // ensureUiBuffers tuviera que CRECER a mitad de frame, soltaría el recurso
+    // sobre el que los de mundo ya han grabado su vista y la GPU leería una
+    // dirección muerta al ejecutar.
+    uiVertexCursor   = 0;
+    uiIndexCursor    = 0;
+    uiScreenVertices = 0;
+    uiScreenIndices  = 0;
+    if (!uiPipeline)
+        return;
+
+    for (auto& s : uiSlots)
+    {
+        if (!s) continue;
+        if (s->mode == UiCanvasRenderMode::World)
+        {
+            // La matriz de MODELO, aquí y no en syncUiCanvases: necesita la
+            // vista de la cámara para el billboard, y syncUiCanvases no la
+            // tiene. Además cae ANTES de sortWorldCanvasesBackToFront, que
+            // ordena leyendo la posición de model[3] — calcularla ya en el
+            // grabado la dejaría a cero para el orden.
+            //
+            // En modo World el canvas NO se ajusta a ninguna pantalla: su
+            // espacio es su propia referenceResolution, que es lo que fija
+            // CanvasComponent::applyTo.
+            const glm::vec2 tam = s->canvas.referenceResolution;
+            s->model = uiWorldCanvasMatrix(s->component, tam, s->worldTransform, cameraView);
+            s->canvas.buildDrawData(static_cast<uint32_t>(tam.x), static_cast<uint32_t>(tam.y),
+                                    s->drawData);
+        }
+        else
+        {
+            // Los de pantalla, al tamaño de SALIDA: la UI se mide en píxeles de
+            // pantalla, no en los de render, que con SSAA son otros.
+            s->canvas.buildDrawData(outWidth, outHeight, s->drawData);
+        }
+    }
+
+    // La cuenta la hace la función libre de UiWidgetSync.h, que es la que está
+    // probada sin GPU (test_ui_frame_totals_suma_mundo_y_pantalla).
+    const UiFrameTotals totales = uiFrameTotals(uiSlots);
+    uiScreenVertices = totales.screenVertices;
+    uiScreenIndices  = totales.screenIndices;
+    if (totales.vertices == 0 || totales.indices == 0)
+        return;
+
+    ensureUiBuffers(totales.vertices, totales.indices);
+}
+
+bool D3D12Renderer::Impl::bindUiCanvasGeometry(const UiDrawData& data)
+{
+    if (!uiVertexMapped[frameIndex] || !uiIndexMapped[frameIndex])
+        return false;
+
+    // Sub-asignación DENTRO del mismo buffer: cada canvas escribe a partir de
+    // donde dejó el anterior (bumpUiCursor) y bindea SU propia vista, con el
+    // offset ya metido en BufferLocation. Sin esto —o con las vistas arrancando
+    // siempre en el byte 0, que es lo que hacía con un canvas único— el segundo
+    // canvas pisaría los vértices del primero, y como la GPU lee el buffer al
+    // EJECUTAR el command list (no al grabarlo), los N draws saldrían todos con
+    // la geometría del ÚLTIMO.
+    const UINT vertexCount = static_cast<UINT>(data.vertices.size());
+    const UINT indexCount  = static_cast<UINT>(data.indices.size());
+    const UINT vertexBase  = bumpUiCursor(uiVertexCursor, vertexCount);
+    const UINT indexBase   = bumpUiCursor(uiIndexCursor,  indexCount);
+
+    // El cursor lo dimensiona beginUiFrame() con el total de TODOS los canvas
+    // del frame. Si ese total no cuadrase con lo que de verdad se escribe aquí,
+    // esto escribiría FUERA de la memoria mapeada sin que ninguna capa de
+    // validación lo vea. Mejor no dibujar ese canvas que corromper el buffer.
+    if (!uiCursorFits(vertexBase, vertexCount, uiVertexCapacity[frameIndex]) ||
+        !uiCursorFits(indexBase,  indexCount,  uiIndexCapacity[frameIndex]))
+        return false;
+
+    std::memcpy(static_cast<UiVertex*>(uiVertexMapped[frameIndex]) + vertexBase,
+                data.vertices.data(), data.vertices.size() * sizeof(UiVertex));
+    std::memcpy(static_cast<uint16_t*>(uiIndexMapped[frameIndex]) + indexBase,
+                data.indices.data(), data.indices.size() * sizeof(uint16_t));
+
+    D3D12_VERTEX_BUFFER_VIEW vbv{};
+    vbv.BufferLocation = uiVertexAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress()
+                       + static_cast<UINT64>(vertexBase) * sizeof(UiVertex);
+    vbv.SizeInBytes    = static_cast<UINT>(data.vertices.size() * sizeof(UiVertex));
+    vbv.StrideInBytes  = sizeof(UiVertex);
+
+    D3D12_INDEX_BUFFER_VIEW ibv{};
+    ibv.BufferLocation = uiIndexAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress()
+                       + static_cast<UINT64>(indexBase) * sizeof(uint16_t);
+    ibv.SizeInBytes    = static_cast<UINT>(data.indices.size() * sizeof(uint16_t));
+    ibv.Format         = DXGI_FORMAT_R16_UINT;
+
+    commandList->IASetVertexBuffers(0, 1, &vbv);
+    commandList->IASetIndexBuffer(&ibv);
+    return true;
+}
+
+void D3D12Renderer::Impl::recordWorldCanvases(UINT targetWidth, UINT targetHeight)
+{
+    if (!uiWorldPipelineDepth || !uiWorldPipelineNoDepth)
+        return;
+
+    // El orden lo pone la función libre de UiWidgetSync.h, que es la que está
+    // probada sin GPU (test_world_canvases_se_ordenan_de_lejos_a_cerca). El draw
+    // data y la matriz de modelo ya están hechos, en beginUiFrame().
+    sortWorldCanvasesBackToFront(uiSlots, cameraView, uiWorldOrder);
+    if (uiWorldOrder.empty())
+        return;
+
+    const D3D12_GPU_DESCRIPTOR_HANDLE heapStart = srvHeap->GetGPUDescriptorHandleForHeapStart();
+    auto gpuHandle = [&](UINT index) {
+        D3D12_GPU_DESCRIPTOR_HANDLE handle = heapStart;
+        handle.ptr += static_cast<UINT64>(index) * srvSize;
+        return handle;
+    };
+
+    ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetGraphicsRootSignature(uiRootSignature.Get());
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    // El render target y el viewport ya son los del pase de escena: esta función
+    // se llama con la geometría y el cielo recién grabados y sin nada en medio
+    // que los cambie, así que la profundidad que hay escrita es la que tiene que
+    // ocluir. Lo que sí se repone es el scissor, porque el bucle de abajo NO lo
+    // toca (ver la limitación) y el pase de composición lo deja donde quiera.
+    D3D12_RECT scissor{0, 0, static_cast<LONG>(targetWidth), static_cast<LONG>(targetHeight)};
+    commandList->RSSetScissorRects(1, &scissor);
+
+    // LIMITACIÓN CONOCIDA, igual que en Vulkan: `clipChildren` no recorta en un
+    // canvas de mundo. El scissor del batcher está en píxeles de canvas y un
+    // D3D12_RECT solo entiende píxeles del target; en pantalla el mapeo es una
+    // escala, pero un canvas de mundo está PROYECTADO (puede salir rotado, en
+    // perspectiva o partido por el borde) y no hay rectángulo alineado a los
+    // ejes que lo represente. Recortar con el rect sin proyectar taparía trozos
+    // que sí se ven.
+    for (UiCanvasSlot* s : uiWorldOrder)
+    {
+        const UiDrawData& data = s->drawData;
+        if (data.empty() || data.vertices.empty() || data.indices.empty()) continue;
+        if (!bindUiCanvasGeometry(data)) continue;
+
+        // depthTest elige pipeline: true = lo tapa una pared; false = siempre
+        // encima. La ESCRITURA de profundidad va apagada en las dos.
+        commandList->SetPipelineState(s->depthTest ? uiWorldPipelineDepth.Get()
+                                                   : uiWorldPipelineNoDepth.Get());
+
+        // La matriz va como ROOT CONSTANTS, no en un buffer compartido: se queda
+        // grabada en el command list, así que cada canvas conserva la SUYA
+        // aunque la GPU no ejecute hasta mucho después. Con un CBV por frame
+        // reescrito entre draws, los N canvas saldrían todos con la matriz del
+        // ÚLTIMO — que es exactamente lo que pasó con las seis caras de una
+        // sonda, y el síntoma fue geometría AUSENTE, no matrices iguales.
+        // La proyección es la JITTEREADA, la misma que updateSceneUbo le da a la
+        // geometría: con TAA, un canvas de mundo sin jitter dejaría un borde
+        // permanente contra todo lo que sí lo lleva. Fuera de TAA,
+        // taaJitteredProj es cameraProj() tal cual y esto es viewProj.
+        const glm::mat4 mvp = taaJitteredProj * cameraView * s->model;
+        commandList->SetGraphicsRoot32BitConstants(0, 16, &mvp[0][0], 0);
+        // El dword 16 es linearOutput, y aquí va a 1: el destino es el target de
+        // la ESCENA, que es kHdrFormat (R16G16B16A16_FLOAT), o sea HDR LINEAL, y
+        // lo que se escriba ahí pasa después por bloom_composite (ACES +
+        // pow(1/2.2)). Sin deshacer la gamma aquí, un 0.5 acabaría en ~0.80 en
+        // pantalla: el cartel sale LAVADO y ninguna capa lo dice.
+        const UINT linearOutput = 1;
+        commandList->SetGraphicsRoot32BitConstants(0, 1, &linearOutput, 16);
+
+        for (const UiBatch& batch : data.batches) {
+            if (batch.indexCount == 0)
+                continue;
+
+            UINT srv = kSrvBaseColor;
+            if (batch.atlas) {
+                const auto it = uiAtlasSrv.find(batch.atlas);
+                if (it != uiAtlasSrv.end())
+                    srv = it->second;
+            }
+            commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(srv));
+            // firstIndex es LOCAL a este canvas: el offset ya lo aplicó la vista
+            // de índices de bindUiCanvasGeometry.
+            commandList->DrawIndexedInstanced(batch.indexCount, 1, batch.firstIndex, 0, 0);
+        }
+    }
+}
+
 void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, const glm::mat4& transform)
 {
     if (!uiPipeline)
         return;
 
-    // Los quads de CADA canvas de PANTALLA, en CPU. Al tamaño de SALIDA: la UI
-    // se mide en píxeles de pantalla, no en los de render, que con SSAA son
-    // otros. Los de MUNDO no entran aquí: llegan en una tarea posterior.
-    UINT totalVertices = 0;
-    UINT totalIndices  = 0;
-    for (auto& s : uiSlots)
-    {
-        if (!s || s->mode != UiCanvasRenderMode::ScreenSpace) continue;
-        s->canvas.buildDrawData(outWidth, outHeight, s->drawData);
-        totalVertices += static_cast<UINT>(s->drawData.vertices.size());
-        totalIndices  += static_cast<UINT>(s->drawData.indices.size());
-    }
-    if (totalVertices == 0 || totalIndices == 0)
+    // El draw data y el dimensionado del buffer ya están hechos: los hizo
+    // beginUiFrame(), antes del pase de escena. Aquí solo se graban los canvas
+    // de PANTALLA, que son los únicos de este pase; los de MUNDO ya se grabaron
+    // dentro del de escena, y sus vértices siguen en el mismo buffer sin leer.
+    if (uiScreenVertices == 0 || uiScreenIndices == 0)
         return;
-
-    // Se dimensiona contra el ACUMULADO de todos los canvas de pantalla del
-    // frame: con el tamaño de uno solo, el segundo (o el tercero) podría
-    // encontrar el buffer lleno a mitad de la grabación.
-    ensureUiBuffers(totalVertices, totalIndices);
     if (!uiVertexMapped[frameIndex] || !uiIndexMapped[frameIndex])
         return;
 
@@ -6126,63 +6447,26 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, 
     commandList->SetPipelineState(uiPipeline.Get());
     commandList->SetGraphicsRootSignature(uiRootSignature.Get());
     commandList->SetGraphicsRoot32BitConstants(0, 16, &transform[0][0], 0);
-    // El dword 16 es linearOutput. Este backend solo dibuja canvas de PANTALLA,
-    // sobre el back buffer ya tonemapeado y con formato SRGB, asi que va a 0:
-    // el hardware ya codifica al escribir. Si no se empujara, el pixel shader
-    // leeria un valor sin definir y el color saldria mal en cuanto no fuera 0.
+    // El dword 16 es linearOutput. Los canvas de PANTALLA se dibujan sobre el
+    // back buffer, que ya está tonemapeado y con la gamma aplicada por
+    // bloom_composite, así que va a 0: el número que se escribe aquí YA es el
+    // que se ve. Los de MUNDO van a 1 (ver recordWorldCanvases). Si no se
+    // empujara, el pixel shader leería un valor sin definir y el color saldría
+    // mal en cuanto no fuera 0.
     const UINT linearOutput = 0;
     commandList->SetGraphicsRoot32BitConstants(0, 1, &linearOutput, 16);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    // Sub-asignación DENTRO del mismo buffer: cada canvas escribe a partir de
-    // donde dejó el anterior (bumpUiCursor) y bindea SU propia vista, con el
-    // offset ya metido en BufferLocation. Sin esto —o con las vistas
-    // arrancando siempre en el byte 0, que es lo que hacía con un canvas
-    // único— el segundo canvas pisaría los vértices del primero, y como la
-    // GPU lee el buffer al EJECUTAR el command list (no al grabarlo), los N
-    // draws saldrían todos con la geometría del ÚLTIMO.
-    UINT vertexCursor = 0;
-    UINT indexCursor  = 0;
     for (auto& s : uiSlots)
     {
         if (!s || s->mode != UiCanvasRenderMode::ScreenSpace) continue;
         const UiDrawData& data = s->drawData;
         if (data.empty() || data.vertices.empty() || data.indices.empty()) continue;
 
-        const UINT vertexBase = bumpUiCursor(vertexCursor, static_cast<UINT>(data.vertices.size()));
-        const UINT indexBase  = bumpUiCursor(indexCursor,  static_cast<UINT>(data.indices.size()));
-
-        // Mismo blindaje que el camino de Vulkan: el cursor lo dimensiona
-        // ensureUiBuffers() con el total del PASE (calculado arriba, sobre
-        // TODOS los canvas de pantalla). Aquí el cursor es local a esta
-        // función y se reinicia solo, así que hoy no puede desalinearse entre
-        // llamadas — pero si el total sumado más arriba no cuadrase con lo
-        // que de verdad se escribe aquí abajo, esto escribiría FUERA de la
-        // memoria mapeada sin que ninguna capa de validación lo vea. Mejor no
-        // dibujar ese canvas que corromper el buffer.
-        if (!uiCursorFits(vertexBase, static_cast<UINT>(data.vertices.size()), uiVertexCapacity[frameIndex]) ||
-            !uiCursorFits(indexBase,  static_cast<UINT>(data.indices.size()),  uiIndexCapacity[frameIndex]))
-            continue;
-
-        std::memcpy(static_cast<UiVertex*>(uiVertexMapped[frameIndex]) + vertexBase,
-                    data.vertices.data(), data.vertices.size() * sizeof(UiVertex));
-        std::memcpy(static_cast<uint16_t*>(uiIndexMapped[frameIndex]) + indexBase,
-                    data.indices.data(), data.indices.size() * sizeof(uint16_t));
-
-        D3D12_VERTEX_BUFFER_VIEW vbv{};
-        vbv.BufferLocation = uiVertexAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress()
-                           + static_cast<UINT64>(vertexBase) * sizeof(UiVertex);
-        vbv.SizeInBytes    = static_cast<UINT>(data.vertices.size() * sizeof(UiVertex));
-        vbv.StrideInBytes  = sizeof(UiVertex);
-
-        D3D12_INDEX_BUFFER_VIEW ibv{};
-        ibv.BufferLocation = uiIndexAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress()
-                           + static_cast<UINT64>(indexBase) * sizeof(uint16_t);
-        ibv.SizeInBytes    = static_cast<UINT>(data.indices.size() * sizeof(uint16_t));
-        ibv.Format         = DXGI_FORMAT_R16_UINT;
-
-        commandList->IASetVertexBuffers(0, 1, &vbv);
-        commandList->IASetIndexBuffer(&ibv);
+        // Los cursores son MIEMBROS y siguen donde los dejaron los canvas de
+        // mundo en el pase de escena: sus vértices están en este mismo buffer y
+        // la GPU todavía no los ha leído (lee al EJECUTAR, no al grabar).
+        if (!bindUiCanvasGeometry(data)) continue;
 
         for (const UiBatch& batch : data.batches) {
             if (batch.indexCount == 0)
@@ -7750,8 +8034,22 @@ void D3D12Renderer::drawFrame()
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = d.dsvHeap->GetCPUDescriptorHandleForHeapStart();
     if (multisampled)
         dsv.ptr += d.dsvSize;
+    // El frame de UI, ANTES del pase de escena: es ahí donde se graban los
+    // canvas de MUNDO, y esta llamada es la que construye su draw data, calcula
+    // su matriz de modelo y dimensiona el buffer que comparten con los de
+    // pantalla. Una sola vez por frame — ver el comentario de uiVertexCursor.
+    // Va DETRÁS de resolveFrameCamera/updateViewProj porque la matriz de modelo
+    // necesita la vista del frame para el billboard, y DETRÁS del horneado de
+    // sondas para que ese no se lleve por delante el dimensionado.
+    d.beginUiFrame();
+
     d.markTimestamp(Impl::TsScene);
     d.recordSceneGeometry(rtv, dsv, d.width, d.height);
+    // Los canvas de mundo, al final del pase de escena: la geometría y el cielo
+    // ya han escrito profundidad, así que una pared delante los tapa. Aquí y no
+    // dentro de recordSceneGeometry a propósito: esa función la reusa el
+    // horneado de sondas, y una sonda no tiene que capturar la interfaz.
+    d.recordWorldCanvases(d.width, d.height);
     d.markTimestamp(Impl::TsScene + 1);
 
     // El buffer de vértices deformados vuelve a acceso desordenado: el frame
@@ -8661,6 +8959,13 @@ void D3D12Renderer::syncUiCanvases(const std::vector<UiCanvasBinding>& bindings)
         if (b.canvas) b.canvas->applyTo(s.canvas);
         s.mode      = b.canvas ? b.canvas->renderMode : UiCanvasRenderMode::ScreenSpace;
         s.depthTest = b.canvas ? b.canvas->depthTest  : true;
+        // Copia por valor de los ajustes de mundo y del transform del
+        // GameObject: la matriz de modelo se calcula al GRABAR (necesita la
+        // vista de la cámara para el billboard) y para entonces el binding ya no
+        // existe. Sin canvas se queda el componente por defecto, que no se llega
+        // a leer porque el modo será ScreenSpace.
+        if (b.canvas) s.component = *b.canvas;
+        s.worldTransform = b.worldTransform;
         syncUiWidgets(b.widgets, s.canvas, s.cache, *this);
     }
 }
@@ -9111,6 +9416,8 @@ void D3D12Renderer::shutdown()
         }
     }
     d.uiPipeline.Reset();
+    d.uiWorldPipelineDepth.Reset();
+    d.uiWorldPipelineNoDepth.Reset();
     d.uiRootSignature.Reset();
 
     d.fxaaPipeline.Reset();
