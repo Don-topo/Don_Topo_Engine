@@ -229,6 +229,12 @@ namespace DonTopo {
         // asi que ni la toca el AA ni depende del numero de muestras de la
         // escena (y por eso tampoco hay que recrear su pipeline al cambiar MSAA).
         m_uiBatch.init(m_gpu, m_res, m_uiRenderPass, VK_SAMPLE_COUNT_1_BIT);
+        // Los canvas de MUNDO no van en ese pass: se graban dentro del de
+        // ESCENA, con la perspectiva de la camara y tapados por la geometria.
+        // Sus dos variantes se compilan contra m_offscreenRenderPass y con SUS
+        // muestras, que no son las del pass de UI. Hay que rehacerlas cada vez
+        // que se recrea ese renderpass — ver recreateMsaaDependentPipelines().
+        m_uiBatch.initWorldPipelines(m_gpu, m_offscreenRenderPass, m_aaSampleCount);
         // ANTES de createOffscreenImages (que llama a createSsaoImages) y DESPUÉS
         // de ShadowPass::createResources: el pipeline del depth pre-pass
         // reutiliza el pipeline layout del pass de sombras, que se crea allí.
@@ -723,6 +729,13 @@ namespace DonTopo {
             if (b.canvas) b.canvas->applyTo(s.canvas);
             s.mode      = b.canvas ? b.canvas->renderMode : UiCanvasRenderMode::ScreenSpace;
             s.depthTest = b.canvas ? b.canvas->depthTest  : true;
+            // Copia por valor de los ajustes de mundo y del transform del
+            // GameObject: la matriz de modelo se calcula al GRABAR (necesita la
+            // vista de la camara para el billboard) y para entonces el binding
+            // ya no existe. Sin canvas se queda el componente por defecto, que
+            // no se llega a leer porque el modo sera ScreenSpace.
+            if (b.canvas) s.component = *b.canvas;
+            s.worldTransform = b.worldTransform;
             syncUiWidgets(b.widgets, s.canvas, s.cache, *this);
         }
     }
@@ -1599,6 +1612,58 @@ namespace DonTopo {
         // graba ni un comando.
         m_fpPass.record(fpCtx(), m_commandBuffers[m_currentFrame], fc.proj);
 
+        // ── UI: draw data de TODOS los canvas del frame, y beginFrame ───────────
+        // Aqui arriba y no dentro del pase de UI, que es donde vivia. El motivo
+        // es que los canvas de MUNDO se graban en el pase de ESCENA, que empieza
+        // tres lineas mas abajo: si beginFrame() siguiera en el pase de UI, los
+        // de mundo llamarian a record() ANTES de que nadie hubiera dimensionado
+        // el buffer ni reiniciado los cursores. La capacidad seria la del frame
+        // anterior (o 0) y la guarda uiCursorFits los descartaria EN SILENCIO —
+        // ni un error, ni un aviso de validacion, ni un canvas en pantalla.
+        //
+        // Y por eso el total tiene que ser el de TODOS los canvas del frame, de
+        // mundo y de pantalla: un solo buffer compartido, un solo beginFrame.
+        // Llamarlo otra vez para el pase de UI reiniciaria los cursores y los
+        // canvas de pantalla pisarian los vertices de los de mundo, que la GPU
+        // todavia no ha leido (lee el buffer al EJECUTAR, no al grabar).
+        //
+        // Construir el draw data aqui obliga a conocer ya el espacio de cada
+        // canvas, y se conoce: el de pantalla es effectiveViewport(), y el de
+        // mundo es su propia referenceResolution (en modo World el canvas no se
+        // ajusta a ninguna pantalla, lo fija CanvasComponent::applyTo).
+        const VkExtent2D uiExtent = effectiveViewport();
+        uint32_t uiTotalVertices = 0;
+        uint32_t uiTotalIndices  = 0;
+        // Los de PANTALLA aparte: son los unicos que abren el pase de UI. Con el
+        // total del frame se abriria tambien con solo canvas de mundo vivos, y
+        // seria un vkCmdBeginRenderPass sin un solo draw dentro.
+        uint32_t uiScreenVertices = 0;
+        uint32_t uiScreenIndices  = 0;
+        for (auto& s : m_uiSlots)
+        {
+            if (!s) continue;
+            if (s->mode == UiCanvasRenderMode::World)
+            {
+                // La matriz de MODELO, aqui y no en syncUiCanvases: necesita la
+                // vista de la camara para el billboard, y syncUiCanvases no la
+                // tiene. Aqui ademas cae ANTES de sortWorldCanvasesBackToFront,
+                // que ordena leyendo la posicion de model[3] — calcularla ya en
+                // el grabado la dejaria a cero para el orden.
+                const glm::vec2 tam = s->canvas.referenceResolution;
+                s->model = uiWorldCanvasMatrix(s->component, tam, s->worldTransform, fc.view);
+                s->canvas.buildDrawData((uint32_t)tam.x, (uint32_t)tam.y, s->drawData);
+            }
+            else
+            {
+                s->canvas.buildDrawData(uiExtent.width, uiExtent.height, s->drawData);
+                uiScreenVertices += (uint32_t)s->drawData.vertices.size();
+                uiScreenIndices  += (uint32_t)s->drawData.indices.size();
+            }
+            uiTotalVertices += (uint32_t)s->drawData.vertices.size();
+            uiTotalIndices  += (uint32_t)s->drawData.indices.size();
+        }
+        m_uiBatch.beginFrame(m_gpu, m_currentFrame, uiTotalVertices, uiTotalIndices);
+
         // ── Pass 1: escena 3D → offscreen ────────────────────────────────────────
         {
             VkClearValue clearValues[2];
@@ -1809,6 +1874,33 @@ namespace DonTopo {
                 m_skybox.draw(m_commandBuffers[m_currentFrame], invViewProj);
             }
 
+            // ── Canvas de MUNDO ──────────────────────────────────────────────
+            // Lo ultimo del pase, detras de la geometria y del skybox: van con
+            // alpha y tienen que mezclarse sobre lo que ya hay. Aqui —y no en el
+            // pase de UI— es lo que les da perspectiva y lo que hace que una
+            // pared los tape: el depth buffer de la escena esta cargado y la
+            // variante con depthTest lo lee (escribir no escribe ninguna).
+            //
+            // `proj` es la JITTEREADA (la misma que el skybox y que la
+            // geometria): con TAA, un canvas de mundo sin jitter dejaria un
+            // borde permanente contra todo lo que si lo lleva.
+            //
+            // El orden lo pone la funcion libre de UiWidgetSync.h, que es la
+            // que esta probada sin GPU (test_world_canvases_se_ordenan_de_lejos_a_cerca).
+            // El draw data y la matriz de modelo ya estan hechos arriba, antes
+            // del beginFrame.
+            sortWorldCanvasesBackToFront(m_uiSlots, fc.view, m_uiWorldOrder);
+            for (UiCanvasSlot* s : m_uiWorldOrder)
+            {
+                if (s->drawData.empty()) continue;
+                const glm::vec2 tam = s->canvas.referenceResolution;
+                const glm::mat4 mvp = proj * fc.view * s->model;
+                m_uiBatch.recordWorld(m_gpu, m_commandBuffers[m_currentFrame], s->drawData,
+                                      mvp, s->depthTest,
+                                      VkExtent2D{(uint32_t)tam.x, (uint32_t)tam.y},
+                                      m_renderExtent, m_currentFrame);
+            }
+
             vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
             if (perfStamp)
             {
@@ -1925,24 +2017,16 @@ namespace DonTopo {
             // gizmos, y por debajo de la interfaz del editor, que se graba en el
             // pass del swapchain. Con el canvas vacio no se abre ni el pass.
             //
-            // Se construye el draw data de CADA slot de pantalla (los de mundo
-            // no van aqui: llegan en una tarea posterior) y se abre el pass si
-            // ALGUNO tiene algo, grabando uno por uno dentro del MISMO
-            // vkCmdBeginRenderPass. beginFrame() dimensiona el buffer del frame
-            // contra el ACUMULADO de todos antes de que ningun record() escriba
-            // nada: sin eso, el buffer podria crecer (y recrearse) a mitad del
-            // pass e invalidar el bind que un canvas anterior ya dejo grabado.
-            const VkExtent2D uiExtent = effectiveViewport();
-            uint32_t uiTotalVertices = 0;
-            uint32_t uiTotalIndices  = 0;
-            for (auto& s : m_uiSlots)
-            {
-                if (!s || s->mode != UiCanvasRenderMode::ScreenSpace) continue;
-                s->canvas.buildDrawData(uiExtent.width, uiExtent.height, s->drawData);
-                uiTotalVertices += (uint32_t)s->drawData.vertices.size();
-                uiTotalIndices  += (uint32_t)s->drawData.indices.size();
-            }
-            if (uiTotalVertices > 0 && uiTotalIndices > 0 && m_uiFramebuffer[m_currentFrame] != VK_NULL_HANDLE)
+            // El draw data de TODOS los slots y el beginFrame() del batch ya
+            // estan hechos ARRIBA, antes del pase de escena: los canvas de mundo
+            // se graban alli y necesitan el buffer dimensionado y los cursores
+            // reiniciados antes que nadie. Aqui solo quedan los de PANTALLA, que
+            // se graban uno por uno dentro del MISMO vkCmdBeginRenderPass.
+            //
+            // La condicion de apertura son los de PANTALLA y solo ellos: con el
+            // total del frame, un proyecto con unicamente canvas de mundo
+            // abriria este pase para no grabar ni un draw dentro.
+            if (uiScreenVertices > 0 && uiScreenIndices > 0 && m_uiFramebuffer[m_currentFrame] != VK_NULL_HANDLE)
             {
                 VkRenderPassBeginInfo uiRp{};
                 uiRp.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1963,7 +2047,13 @@ namespace DonTopo {
                 vp.maxDepth = 1.0f;
                 vkCmdSetViewport(cmd, 0, 1, &vp);
 
-                m_uiBatch.beginFrame(m_gpu, m_currentFrame, uiTotalVertices, uiTotalIndices);
+                // Aqui NO va un beginFrame(). El del frame ya se llamo arriba,
+                // antes del pase de escena, con el total de mundo + pantalla.
+                // Llamarlo otra vez reiniciaria los cursores a 0 y los canvas de
+                // pantalla escribirian ENCIMA de los vertices de los de mundo,
+                // que la GPU todavia no ha leido (lee el buffer al EJECUTAR la
+                // lista, no al grabarla): los canvas de mundo saldrian con la
+                // geometria del de pantalla, sin un solo aviso de validacion.
 
                 // bottom=0 y top=alto: (0,0) cae ARRIBA a la izquierda. Parece del revés
                 // y es justo lo contrario: en Vulkan el +Y de NDC va hacia ABAJO, así
@@ -5052,8 +5142,18 @@ namespace DonTopo {
         // crea layouts y pools; aqui solo hace falta el pipeline, asi que se
         // rehace a mano con el mismo codigo que usa aquella.
         recreateCompositePipeline();
-        // La UI NO se rehace aqui: tiene pass propio, a una muestra siempre, y
-        // el numero de muestras de la escena no le afecta.
+        // La UI de PANTALLA no se rehace aqui: tiene pass propio, a una muestra
+        // siempre, y el numero de muestras de la escena no le afecta.
+        //
+        // La de MUNDO si, y es obligatorio: sus dos variantes estan compiladas
+        // contra m_offscreenRenderPass, que el llamante (rebuildAaResources)
+        // acaba de destruir y volver a crear con otro numero de muestras. Un
+        // pipeline que apunta a un VkRenderPass destruido NO da error de
+        // validacion — se manifiesta como device lost la primera vez que se usa.
+        // Esta es la UNICA ruta de recreacion: createOffscreenRenderPass() solo
+        // se llama en dos sitios (el init y ese bloque de rebuildAaResources), y
+        // recreateSwapChain no lo toca.
+        m_uiBatch.initWorldPipelines(m_gpu, m_offscreenRenderPass, m_aaSampleCount);
 
         // Los dos que no viven en Renderer.cpp. El skybox se salta solo si no
         // hay cubemap cargado.

@@ -243,6 +243,20 @@ namespace DonTopo
         UiCanvasRenderMode mode = UiCanvasRenderMode::ScreenSpace;
         glm::mat4          model{1.0f};
         bool               depthTest = true;
+
+        // Copia POR VALOR del componente y del transform de su GameObject. No
+        // un puntero al componente de la escena: el slot vive ENTRE frames y la
+        // escena puede haber borrado ese GameObject.
+        //
+        // Hacen falta porque la matriz de modelo (uiWorldCanvasMatrix) necesita
+        // la VISTA de la cámara para el billboard, y la vista solo se conoce en
+        // el momento de grabar, no en syncUiCanvases. Se copia el componente
+        // ENTERO y no solo worldScale/billboard a propósito: un campo de mundo
+        // nuevo en CanvasComponent llega solo, sin que nadie tenga que acordarse
+        // de añadirlo aquí (olvidarlo no daría error, solo un ajuste que no hace
+        // nada).
+        CanvasComponent    component{};
+        glm::mat4          worldTransform{1.0f};
         // Distancia al ojo, para ordenar los de mundo de lejos a cerca.
         float              viewDepth = 0.0f;
     };

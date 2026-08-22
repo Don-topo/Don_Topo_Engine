@@ -5349,11 +5349,18 @@ void D3D12Renderer::Impl::createUiPipeline()
     atlasRange.NumDescriptors     = 1;
     atlasRange.BaseShaderRegister = 0;  // t0
 
+    // 17 dwords y no 16, y visibilidad ALL y no VERTEX: el bloque de push
+    // constants de ui.vert/ui.frag lleva ahora, detras de la mat4, un
+    // `int linearOutput` que lee el PIXEL shader (deshace la gamma cuando el
+    // destino es HDR lineal, que es el caso de los canvas de mundo en el pase de
+    // escena). El HLSL sale de traducir ese mismo GLSL con spirv-cross, asi que
+    // el cbuffer b0 tiene 17 dwords y lo usan las dos etapas; dejarlo en
+    // 16/VERTEX romperia la creacion del PSO contra esta root signature.
     D3D12_ROOT_PARAMETER params[2]{};
     params[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[0].Constants.ShaderRegister = 0;  // b0
-    params[0].Constants.Num32BitValues = 16;
-    params[0].ShaderVisibility         = D3D12_SHADER_VISIBILITY_VERTEX;
+    params[0].Constants.Num32BitValues = 17;
+    params[0].ShaderVisibility         = D3D12_SHADER_VISIBILITY_ALL;
 
     params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     params[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -6119,6 +6126,12 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, 
     commandList->SetPipelineState(uiPipeline.Get());
     commandList->SetGraphicsRootSignature(uiRootSignature.Get());
     commandList->SetGraphicsRoot32BitConstants(0, 16, &transform[0][0], 0);
+    // El dword 16 es linearOutput. Este backend solo dibuja canvas de PANTALLA,
+    // sobre el back buffer ya tonemapeado y con formato SRGB, asi que va a 0:
+    // el hardware ya codifica al escribir. Si no se empujara, el pixel shader
+    // leeria un valor sin definir y el color saldria mal en cuanto no fuera 0.
+    const UINT linearOutput = 0;
+    commandList->SetGraphicsRoot32BitConstants(0, 1, &linearOutput, 16);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     // Sub-asignación DENTRO del mismo buffer: cada canvas escribe a partir de

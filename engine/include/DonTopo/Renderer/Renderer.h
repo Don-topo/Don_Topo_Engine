@@ -1040,6 +1040,11 @@ namespace DonTopo {
             // + record) para que cada canvas escriba en su propio hueco del
             // mismo VkBuffer en vez de pisar al anterior.
             std::vector<std::unique_ptr<UiCanvasSlot>> m_uiSlots;
+            // Los de MUNDO del frame, ya ordenados de lejos a cerca por
+            // sortWorldCanvasesBackToFront. Miembro y no local del bucle de
+            // grabado para no reasignar el vector en cada frame; lo limpia la
+            // propia funcion de orden.
+            std::vector<UiCanvasSlot*>                m_uiWorldOrder;
             // Repliegue de uiCanvas() cuando la escena no tiene ningún canvas de
             // pantalla. Persistente y vacío: devolver una referencia a un temporal
             // dejaría a los gizmos leyendo memoria muerta.
