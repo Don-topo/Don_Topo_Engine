@@ -713,6 +713,16 @@ static void drawUiNodeGizmo(EditorContext& ctx, const UiElement* node,
             }
             return;
         }
+
+        // worldCanvasMvp ha dicho que no y el canvas ES de mundo: la única vía
+        // que queda es una referenceResolution degenerada (alguna componente
+        // <= 0, y el dragVec2 de PropertiesPanel deja bajar a 0). En ese estado
+        // el canvas no dibuja nada y su propio gizmo tampoco. Caer a la rama de
+        // pantalla pintaría el rect pegado a la esquina del viewport y quieto
+        // mientras la cámara vuela, que es EXACTAMENTE el fallo que este camino
+        // existe para evitar. Sin gizmo es lo coherente.
+        if (canvasObj->getCanvas()->renderMode == UiCanvasRenderMode::World)
+            return;
     }
 
     // screenPos/screenSize los deja buildDrawData en píxeles de SALIDA, y la
