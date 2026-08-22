@@ -6397,7 +6397,18 @@ void D3D12Renderer::Impl::recordWorldCanvases(UINT targetWidth, UINT targetHeigh
         commandList->SetGraphicsRoot32BitConstants(0, 1, &linearOutput, 16);
 
         for (const UiBatch& batch : data.batches) {
-            if (batch.indexCount == 0)
+            // `scissor.empty()` TAMBIÉN descarta, igual que en Vulkan
+            // (UiSpriteBatch.cpp): un nodo con clipChildren cuyo rect de recorte
+            // se quedó a ancho o alto 0 —un ScrollView con el contenido
+            // desplazado del todo fuera— no emite NADA. Aquí no se puede aplicar
+            // el scissor por lote (el canvas está proyectado y no hay rect
+            // alineado a los ejes que lo represente, ver el comentario de
+            // arriba), pero un clip ya vacío sí se respeta: sin esta mitad, ese
+            // ScrollView se dibujaba ENTERO y sin recortar. Ojo: NO es el mismo
+            // caso que el camino de PANTALLA (recordUiCanvas), donde
+            // scissor.empty() significa "sin recorte propio" y cae al viewport
+            // entero — eso es de antes y ahí seguir.
+            if (batch.indexCount == 0 || batch.scissor.empty())
                 continue;
 
             UINT srv = kSrvBaseColor;
