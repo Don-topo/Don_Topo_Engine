@@ -889,15 +889,31 @@ namespace DonTopo
             for (UiCanvas* c : canvases)
                 if (c) { teclado = c; break; }
 
-        // Lo que recibe el que NO tiene el puntero: el ratón FUERA y los botones
-        // sueltos. Es lo que le limpia el hover (con su MouseExit y sus colores
-        // de vuelta a Normal) en vez de dejárselo pegado. El reloj se conserva:
-        // sus animaciones y el fundido de sus botones siguen corriendo.
+        // Lo que recibe el que NO tiene el puntero: el ratón FUERA. Es lo que le
+        // limpia el hover (con su MouseExit y sus colores de vuelta a Normal) en
+        // vez de dejárselo pegado. El reloj se conserva: sus animaciones y el
+        // fundido de sus botones siguen corriendo.
+        //
+        // Se miente sobre la POSICIÓN, y NO sobre los BOTONES. Es la diferencia
+        // entre limpiar el estado y falsearlo: la cuenta de flancos (`now && !was`)
+        // tiene que seguir siendo la de verdad o el canvas se pierde pulsaciones.
+        // Mentir aquí daba un CLIC FANTASMA, y encima con UN SOLO canvas: cuando
+        // nadie gana el puntero —el cursor sobre el fondo, sin widget debajo— el
+        // único canvas de la escena recibe esto, así que no veía el MouseDown; al
+        // entrar luego el cursor en un botón con el botón AÚN bajado, veía un
+        // flanco NUEVO, registraba el press ahí y al soltar emitía un Click que
+        // nadie pidió, robándole además el foco.
+        //
+        // Con los botones de verdad no hace falta ninguna guarda extra: el ratón
+        // está fuera, así que `hitTest` da nullptr y el press se registra sobre
+        // nullptr — no se despacha MouseDown, no se mueve el foco, y al soltar no
+        // hay Click porque el origen es nulo (sí MouseUp si el cursor está encima
+        // de algo, que es la semántica de siempre). Los colores tampoco cambian:
+        // `estadoDe` exige `hovered` para pintar Pressed. Y `pointerCaptured()`
+        // sigue en false para el perdedor, que es lo que impide que le robe el
+        // puntero al de encima en el paso 1.
         UiInputState fuera = input;
         fuera.mousePos     = uiPointerAway();
-        fuera.mouseDown[0] = false;
-        fuera.mouseDown[1] = false;
-        fuera.mouseDown[2] = false;
         fuera.scrollDelta  = 0.0f;
         fuera.keys.clear();
         fuera.chars.clear();

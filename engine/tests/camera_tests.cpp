@@ -6317,6 +6317,64 @@ static void test_el_teclado_va_al_canvas_con_foco_no_al_del_raton()
     CHECK(e.clicksAbajo  == 2);
 }
 
+// Clic FANTASMA: pulsar en el VACIO, arrastrar hasta encima de un boton y
+// soltar NO puede activarlo. La semantica de siempre es MouseUp SI, Click NO —
+// el Click pide que el Down y el Up caigan sobre el MISMO elemento.
+//
+// Y esto pasa con UN SOLO canvas, o sea en cualquier proyecto que ya exista: si
+// nadie gana el puntero (el cursor no esta sobre ningun widget) y al canvas se
+// le miente diciendo que no hay boton bajado, no ve el flanco de bajada del
+// fondo. Cuando el cursor entra luego en el boton con el boton AUN bajado, ve un
+// flanco NUEVO, registra un press sobre el, al soltar emite un Click que nadie
+// pidio y encima le roba el foco.
+//
+// Por eso el estado del que NO tiene el puntero miente sobre la POSICION del
+// raton (uiPointerAway) pero NO sobre los botones: con el raton fuera el hit
+// test ya da nullptr, asi que el press se registra sobre nullptr y no despacha
+// nada, y estadoDe no puede pintar Pressed sin hovered. Lo unico que hace falta
+// es que la cuenta de FLANCOS siga siendo la de verdad.
+static void test_no_hay_clic_fantasma_al_arrastrar_desde_el_vacio()
+{
+    DosCanvasSolapados e;
+    CHECK(e.nodoArriba != nullptr);
+    if (!e.nodoArriba) return;
+    // Focusable para que el robo de foco del clic fantasma sea observable.
+    e.nodoArriba->focusable = true;
+
+    int upsArriba = 0;
+    e.nodoArriba->onMouseUp = [&](UiEvent&) { upsArriba++; };
+
+    // UN SOLO canvas en la lista: el fallo no necesita un segundo canvas.
+    std::vector<UiCanvas*> soloUno{ &e.arriba };
+    UiInputState in;
+    float t = 0.0f;
+    auto frame = [&]() { t += 0.016f; in.timeSeconds = t; dispatchUiInput(soloUno, in); };
+
+    // Pulsa en una zona del canvas SIN ningun widget...
+    in.mousePos = glm::vec2(600.0f, 400.0f);
+    frame();
+    in.mouseDown[0] = true;
+    frame();
+    // ...arrastra hasta encima del boton con el boton AUN bajado...
+    in.mousePos = DosCanvasSolapados::solape();
+    frame();
+    // ...y suelta.
+    in.mouseDown[0] = false;
+    frame();
+
+    CHECK(e.clicksArriba == 0);             // el clic fantasma
+    CHECK(e.arriba.focused() == nullptr);   // y el foco que se lleva de paso
+    CHECK(upsArriba == 1);                  // el MouseUp SI llega, como siempre
+
+    // Control: un clic de VERDAD sobre el boton sigue contando. Sin esto, una
+    // implementacion que no emitiera ningun Click nunca pasaria igual de bien.
+    frame();
+    in.mouseDown[0] = true;  frame();
+    in.mouseDown[0] = false; frame();
+    CHECK(e.clicksArriba == 1);
+    CHECK(e.arriba.focused() == e.nodoArriba);
+}
+
 // El buffer de la UI es UNO SOLO por frame y lo comparten los canvas de MUNDO
 // (que se graban en el pase de escena) con los de PANTALLA (que van despues, en
 // su propio pase). Dimensionarlo con el total de UNA de las dos mitades es el
@@ -6851,6 +6909,7 @@ int main()
     test_el_canvas_de_abajo_no_se_queda_pegado_en_hover();
     test_la_captura_del_puntero_sobrevive_al_solape();
     test_el_teclado_va_al_canvas_con_foco_no_al_del_raton();
+    test_no_hay_clic_fantasma_al_arrastrar_desde_el_vacio();
 
     test_world_canvas_gizmo_proyecta_las_cuatro_esquinas();
     test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara();
