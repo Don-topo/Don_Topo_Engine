@@ -1885,6 +1885,25 @@ namespace DonTopo {
             // geometria): con TAA, un canvas de mundo sin jitter dejaria un
             // borde permanente contra todo lo que si lo lleva.
             //
+            // LIMITACION CONOCIDA — los post que reconstruyen posicion desde la
+            // profundidad tratan al canvas como la GEOMETRIA QUE TIENE DETRAS.
+            // Un canvas de mundo NO entra en el depth pre-pass (ese solo graba
+            // mallas) y NO escribe profundidad (depthWrite va apagado en las
+            // tres variantes, a proposito: la UI va con alpha). Asi que en el
+            // pixel que ocupa, el depth que leen los post es el de lo que hay
+            // detras. Los tres afectados, todos muestreando el mismo depthTex
+            // del pre-pass:
+            //   - fog.comp        -> un cartel cerca de la camara delante de una
+            //                        pared lejana recibe la niebla DE LA PARED:
+            //                        sale sobre-nublado.
+            //   - motion_blur.comp-> recibe los vectores de movimiento de la
+            //                        pared: arrastra al mover la camara.
+            //   - taa.frag        -> reproyecta con el depth de la pared.
+            // No se arregla aqui: meterlos en el pre-pass les daria oclusion de
+            // AO y romperia el alpha. Al verificar en GUI hay que mirar los
+            // colores con la NIEBLA APAGADA primero, o se confunde el
+            // sobre-nublado con un fallo de la conversion sRGB->lineal.
+            //
             // El orden lo pone la funcion libre de UiWidgetSync.h, que es la
             // que esta probada sin GPU (test_world_canvases_se_ordenan_de_lejos_a_cerca).
             // El draw data y la matriz de modelo ya estan hechos arriba, antes

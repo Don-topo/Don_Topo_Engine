@@ -199,6 +199,26 @@ glm::mat4 uiWorldCanvasMatrix(const CanvasComponent&, glm::vec2 canvasSize,
                               const glm::mat4& worldTransform, const glm::mat4& view);
 ```
 
+### Limitaciones conocidas del modo mundo
+
+Salieron al implementarlo (Task 7). Ninguna es un bug: son consecuencias del
+sitio donde se graba el canvas, y conviene que estén escritas antes de que
+alguien las descubra como si lo fueran.
+
+- **`clipChildren` NO recorta en un canvas de mundo.** El scissor del batcher va
+  en píxeles de canvas y hoy se mapea 1:1 al framebuffer; un canvas de mundo está
+  **proyectado** (puede salir rotado, en perspectiva o partido por el borde de la
+  pantalla) y no hay `VkRect2D` alineado a los ejes que lo represente. Los canvas
+  de mundo se graban con el scissor a todo el framebuffer. Lo que sí se sigue
+  respetando es un clip que ya se quedó vacío: ese nodo no emite nada.
+- **La niebla, el motion blur y el TAA tratan al canvas como la geometría que
+  tiene detrás.** No entra en el depth pre-pass (ese solo graba mallas) y no
+  escribe profundidad (`depthWrite` apagado en las tres variantes, porque la UI
+  va con alpha), así que `fog.comp`, `motion_blur.comp` y `taa.frag` —que
+  reconstruyen posición desde ese depth— leen la profundidad de lo que hay
+  detrás. Un cartel cerca de la cámara delante de una pared lejana sale
+  sobre-nublado y arrastra al mover la cámara.
+
 ### El target de la escena es HDR LINEAL, no sRGB
 
 Descubierto al escribir el plan, no estaba en el diseño original. El pase de UI

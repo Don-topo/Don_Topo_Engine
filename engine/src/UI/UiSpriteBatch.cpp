@@ -2093,14 +2093,16 @@ namespace DonTopo
 
     void UiSpriteBatch::beginFrame(GpuDevice& gpu, int frame, uint32_t totalVertices, uint32_t totalIndices)
     {
-        // Se dimensiona contra el ACUMULADO de todos los canvas de pantalla de
-        // ESTE PASE, no contra el tamaño de uno solo: con lo segundo, el
-        // primer canvas reservaría de sobra pero el segundo (o el tercero)
-        // encontraría el buffer ya lleno y ensureBuffers lo recrearía A MITAD
-        // del pase, invalidando el bind que el canvas anterior ya dejó grabado
-        // en el command buffer (apuntaría a un VkBuffer destruido). Contrato
-        // completo en el header: una vez por pase de UI abierto, antes de
-        // cualquier record() de ese pase.
+        // Se dimensiona contra el ACUMULADO de TODOS los canvas del FRAME —los
+        // de mundo, que se graban en el pase de escena, y los de pantalla, que
+        // se graban en el de UI—, no contra el tamaño de uno solo ni contra el
+        // de un pase: con cualquiera de esas dos, el primer canvas reservaría de
+        // sobra pero el siguiente encontraría el buffer ya lleno y ensureBuffers
+        // lo recrearía A MITAD del frame, invalidando el bind que un canvas
+        // anterior ya dejó grabado en el command buffer (apuntaría a un VkBuffer
+        // destruido). Contrato completo en el header: UNA vez por frame, antes
+        // del pase de ESCENA (que es donde cae el primer record del frame,
+        // porque corre antes que el de UI).
         if (totalVertices > 0 || totalIndices > 0)
             ensureBuffers(gpu, frame, totalVertices, totalIndices);
 
