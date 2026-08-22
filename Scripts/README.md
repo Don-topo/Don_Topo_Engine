@@ -466,6 +466,11 @@ Cuando dos se solapan hay que repartirlo, y el reparto es este:
   canvas a la vez: en cuanto otro lo coge, el anterior lo suelta. El Tab y las
   flechas dan la vuelta *dentro* del canvas que lo tiene y **no saltan** al
   siguiente canvas.
+- **Cambiarle `renderMode` a un canvas le suelta el input.** Ponerlo a `World`
+  lo saca del reparto (un canvas de mundo no se puede clicar), así que si se
+  hace a media pulsación se le sueltan el hover, la pulsación y el foco —con su
+  `MouseExit` y su `Blur`—, y no se queda con una captura huérfana que al volver
+  le robaría el ratón al canvas de encima.
 
 **Dos limitaciones del modo `World`.** No son bugs: salen del sitio donde se
 graba el canvas, y conviene tenerlas escritas antes de tropezar con ellas.
