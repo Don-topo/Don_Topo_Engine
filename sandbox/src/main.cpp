@@ -385,6 +385,9 @@ int main()
             // ownerId (syncUiCanvases), fuera del bucle para no reasignar cada
             // frame. La caché de sync de cada canvas vive DENTRO de su slot.
             std::vector<DonTopo::UiCanvasBinding> d3dBindings;
+            // Y los canvas de PANTALLA en orden de prioridad de input, tambien
+            // fuera del bucle: se rellena entero cada frame.
+            std::vector<DonTopo::UiCanvas*> d3dUiCanvases;
 
             while (!window.shouldClose())
             {
@@ -571,7 +574,11 @@ int main()
                         // se consume. Sin tirarlo, saldria en el siguiente que si.
                         DonTopo::discardUiInputChars();
                     uiInput.timeSeconds = (float)glfwGetTime();
-                    d3d12.uiCanvas().updateInput(uiInput);
+                    // A TODOS los canvas de pantalla, no solo al primero: ver
+                    // dispatchUiInput. Con uiCanvas() los botones de un segundo
+                    // canvas se dibujaban pero eran inertes.
+                    d3d12.screenUiCanvases(d3dUiCanvases);
+                    DonTopo::dispatchUiInput(d3dUiCanvases, uiInput);
                 }
 
                 // La interfaz después: lo que se toque aquí lo recoge el
@@ -909,6 +916,9 @@ int main()
         // reasignar cada frame. La caché de sync de cada canvas vive DENTRO
         // de su slot, en el Renderer: aquí ya no hace falta ninguna.
         std::vector<DonTopo::UiCanvasBinding> uiBindings;
+        // Y los canvas de PANTALLA en orden de prioridad de input, tambien
+        // fuera del bucle: se rellena entero cada frame.
+        std::vector<DonTopo::UiCanvas*> uiCanvases;
 
         while (!window.shouldClose())
         {
@@ -1105,7 +1115,10 @@ int main()
                     // coinciden, y lo que no se consume no puede cruzar el frame.
                     DonTopo::discardUiInputChars();
                 uiInput.timeSeconds = (float)glfwGetTime();
-                renderer.uiCanvas().updateInput(uiInput);
+                // A TODOS los canvas de pantalla, no solo al primero: ver
+                // dispatchUiInput.
+                renderer.screenUiCanvases(uiCanvases);
+                DonTopo::dispatchUiInput(uiCanvases, uiInput);
             }
 
             // --- Gizmos: demo de depuración visual (bbox, ray, frustum) ---

@@ -189,6 +189,17 @@ namespace DonTopo
             // igual.
             virtual UiCanvas& uiCanvas() = 0;
 
+            // TODOS los canvas de PANTALLA, en orden de PRIORIDAD DE INPUT: el
+            // de más arriba primero (el último que se dibuja). Es lo que hace
+            // falta para repartir el ratón y el teclado entre varios canvas con
+            // dispatchUiInput, y para que el clic del editor seleccione lo que
+            // el usuario ve ENCIMA.
+            //
+            // uiCanvas() no vale para eso: devuelve UNO solo (el primero de
+            // pantalla), y con él los botones de un segundo canvas se dibujan
+            // pero no tienen ni hover, ni colores de estado, ni Click.
+            virtual void screenUiCanvases(std::vector<UiCanvas*>& out) = 0;
+
             // Monta el árbol vivo de CADA canvas de la escena. Sustituye al
             // collect + syncUiWidgets que antes repetían los tres bucles
             // (runtime y sandbox x2) — tres copias de lo mismo es como se

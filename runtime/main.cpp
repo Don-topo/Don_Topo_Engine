@@ -538,6 +538,9 @@ int main(int argc, char** argv)
         // reasignar cada frame. La caché de sync de cada canvas vive DENTRO
         // de su slot, en el Renderer: aquí ya no hace falta ninguna.
         std::vector<DonTopo::UiCanvasBinding> uiBindings;
+        // Y los canvas de PANTALLA en orden de prioridad de input, tambien
+        // fuera del bucle por lo mismo: se rellena entero cada frame.
+        std::vector<DonTopo::UiCanvas*> uiCanvases;
 
         while (!window.shouldClose())
         {
@@ -739,7 +742,13 @@ int main(int argc, char** argv)
                 uiInput.scrollDelta = g_uiScroll;
                 g_uiScroll = 0.0f;
                 uiInput.timeSeconds = (float)glfwGetTime();
-                renderer.uiCanvas().updateInput(uiInput);
+                // A TODOS los canvas de pantalla, no solo al primero: con
+                // uiCanvas() los botones de un segundo canvas (un menu de pausa
+                // encima del HUD) se dibujaban pero no tenian ni hover, ni
+                // colores de estado, ni Click. dispatchUiInput reparte: el raton
+                // al de mas arriba que lo tenga debajo y los demas limpios.
+                renderer.screenUiCanvases(uiCanvases);
+                DonTopo::dispatchUiInput(uiCanvases, uiInput);
             }
 
             renderer.drawFrame(window);

@@ -320,6 +320,29 @@ namespace DonTopo
                   });
     }
 
+    // Los canvas de PANTALLA en orden de PRIORIDAD DE INPUT: el de más arriba
+    // primero. Arriba = el ÚLTIMO que se dibuja, porque el pase de UI recorre
+    // los slots en orden y cada canvas se pinta sobre el anterior. O sea: este
+    // orden es el de dibujado AL REVÉS, y no es un detalle estético — es lo que
+    // decide qué botón se lleva el clic cuando dos canvas se solapan, y tiene
+    // que ser el MISMO que use el editor para seleccionar clicando (si no, el
+    // clic seleccionaría un objeto distinto del que se ve encima).
+    //
+    // Los de MUNDO no entran: no se pueden clicar (limitación conocida, ver
+    // Scripts/README.md), así que meterlos aquí solo les robaría el puntero a
+    // los de pantalla.
+    inline void screenCanvasesTopFirst(const std::vector<std::unique_ptr<UiCanvasSlot>>& slots,
+                                       std::vector<UiCanvas*>& out)
+    {
+        out.clear();
+        for (auto it = slots.rbegin(); it != slots.rend(); ++it)
+        {
+            const std::unique_ptr<UiCanvasSlot>& s = *it;
+            if (!s || s->mode != UiCanvasRenderMode::ScreenSpace) continue;
+            out.push_back(&s->canvas);
+        }
+    }
+
     // Lo que hay que dimensionar para el frame de UI, contado sobre el drawData
     // YA construido de cada slot.
     struct UiFrameTotals

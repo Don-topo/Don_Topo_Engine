@@ -757,6 +757,15 @@ namespace DonTopo {
         return m_uiCanvasFallback;
     }
 
+    void Renderer::screenUiCanvases(std::vector<UiCanvas*>& out)
+    {
+        // El orden sale de la MISMA función libre que usa D3D12: el de más
+        // arriba primero, o sea el pase de UI (que recorre m_uiSlots en orden)
+        // al revés. Duplicar el criterio aquí es como los dos backends se
+        // desincronizan.
+        screenCanvasesTopFirst(m_uiSlots, out);
+    }
+
     const UiElement* Renderer::findUiNode(const std::string& name) const
     {
         // TODOS los canvas, no solo el de pantalla: un botón de un canvas de

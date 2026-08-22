@@ -857,4 +857,80 @@ namespace DonTopo
         dispatch(target, e, &UiElement::onClick);
         return true;
     }
+
+    void dispatchUiInput(const std::vector<UiCanvas*>& canvases, const UiInputState& input)
+    {
+        // ── Quién se lleva el RATÓN ─────────────────────────────────────────
+        // 1) La CAPTURA manda sobre el solape. Un botón bajado y sin soltar se
+        //    queda el puntero aunque el cursor se haya ido encima de otro
+        //    canvas: sin esto, arrastrar un slider que asome por debajo de otro
+        //    canvas corta el gesto justo al cruzar el borde, y el arrastre se
+        //    pierde sin un solo aviso.
+        UiCanvas* raton = nullptr;
+        for (UiCanvas* c : canvases)
+            if (c && c->pointerCaptured()) { raton = c; break; }
+
+        // 2) Sin captura, gana el de MÁS ARRIBA que tenga algo bajo el cursor.
+        //    `canvases` ya llega en ese orden (el último que se dibuja, primero),
+        //    así que aquí no se decide nada: se recorre.
+        if (!raton)
+            for (UiCanvas* c : canvases)
+                if (c && c->hitTest(input.mousePos)) { raton = c; break; }
+
+        // ── Quién se lleva el TECLADO ───────────────────────────────────────
+        // El FOCO, no el cursor: escribir en un campo de texto sigue llegando
+        // aunque el ratón se pasee por encima de otro canvas. Si nadie tiene
+        // foco van al de más arriba — hoy eso no se nota (updateInput ignora las
+        // teclas sin foco), pero deja la regla completa en vez de un hueco.
+        UiCanvas* teclado = nullptr;
+        for (UiCanvas* c : canvases)
+            if (c && c->focused()) { teclado = c; break; }
+        if (!teclado)
+            for (UiCanvas* c : canvases)
+                if (c) { teclado = c; break; }
+
+        // Lo que recibe el que NO tiene el puntero: el ratón FUERA y los botones
+        // sueltos. Es lo que le limpia el hover (con su MouseExit y sus colores
+        // de vuelta a Normal) en vez de dejárselo pegado. El reloj se conserva:
+        // sus animaciones y el fundido de sus botones siguen corriendo.
+        UiInputState fuera = input;
+        fuera.mousePos     = uiPointerAway();
+        fuera.mouseDown[0] = false;
+        fuera.mouseDown[1] = false;
+        fuera.mouseDown[2] = false;
+        fuera.scrollDelta  = 0.0f;
+        fuera.keys.clear();
+        fuera.chars.clear();
+
+        for (UiCanvas* c : canvases)
+        {
+            if (!c) continue;
+            UiInputState propio = (c == raton) ? input : fuera;
+            if (c == teclado)
+            {
+                propio.keys  = input.keys;
+                propio.chars = input.chars;
+            }
+            else
+            {
+                propio.keys.clear();
+                propio.chars.clear();
+            }
+            c->updateInput(propio);
+        }
+
+        // El foco se mueve al CLICAR, y solo puede estar en un canvas: en cuanto
+        // el que tiene el puntero coge foco, los demás lo sueltan. Sin esto se
+        // quedarían dos anillos de foco a la vez y el dueño del teclado sería el
+        // que decidiera el orden de la lista, no el que acaba de pulsar.
+        //
+        // Va DESPUÉS del bucle a propósito: el foco que hay que respetar es el
+        // que deja este frame, no el del anterior. Y se mira `focused()` en vez
+        // de "¿ha bajado un botón?" porque es lo mismo sin guardar estado entre
+        // frames: pinchar en algo NO focusable no roba el foco, exactamente
+        // igual que ya pasa dentro de un solo canvas.
+        if (raton && raton->focused())
+            for (UiCanvas* c : canvases)
+                if (c && c != raton) c->setFocus(nullptr);
+    }
 }

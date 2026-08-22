@@ -922,7 +922,21 @@ GameObject* ViewportPanel::pickUiObject(EditorContext& ctx, const glm::vec2& mou
     // render/imagen (el render INTERNO), y con SSAA el clic caía al doble de
     // lejos del cursor. Es el mismo espacio en el que el bucle del editor le
     // pasa el ratón a UiCanvas::updateInput.
-    const UiElement* hit = ctx.renderer->uiCanvas().hitTest(mousePx);
+    // TODOS los canvas de pantalla y en el MISMO orden de prioridad que el
+    // input (el de más arriba primero, ver dispatchUiInput): si aquí se probara
+    // otro orden, clicar en el viewport seleccionaría un objeto distinto del que
+    // el usuario ve encima, y el que sí responde al ratón en Play sería el otro.
+    // Con uiCanvas() —el PRIMER canvas de pantalla— un widget de un segundo
+    // canvas no se podía seleccionar clicando, sin un solo aviso.
+    std::vector<UiCanvas*> canvases;
+    ctx.renderer->screenUiCanvases(canvases);
+
+    const UiElement* hit = nullptr;
+    for (UiCanvas* c : canvases)
+    {
+        if (!c) continue;
+        if ((hit = c->hitTest(mousePx)) != nullptr) break;
+    }
     if (!hit) return nullptr;
 
     // El hit test devuelve el nodo más profundo, que puede ser la etiqueta: se

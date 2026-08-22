@@ -650,6 +650,17 @@ namespace DonTopo
         // Elemento bajo el cursor en el último updateInput.
         UiElement* hovered() const { return m_hovered; }
 
+        // ¿Hay un botón del ratón BAJADO sobre un elemento de este canvas y sin
+        // soltar todavía? Es la captura del puntero: mientras dure, el cursor
+        // puede irse fuera del widget (y hasta encima de OTRO canvas) sin que el
+        // arrastre se corte, que es como se comporta un slider de toda la vida.
+        // Lo lee dispatchUiInput para repartir el ratón entre varios canvas.
+        bool pointerCaptured() const
+        {
+            return m_pressTarget[0] != nullptr || m_pressTarget[1] != nullptr ||
+                   m_pressTarget[2] != nullptr;
+        }
+
         // Uno solo por canvas. setFocus emite Blur en el viejo y Focus en el
         // nuevo, EN ESE ORDEN. Ignora los que no son focusable (nullptr sí vale:
         // es soltar el foco).
@@ -741,6 +752,42 @@ namespace DonTopo
         float m_lastTime    = 0.0f;
         bool  m_hasLastTime = false;
     };
+
+    // Dónde se deja el ratón de un canvas que NO tiene el puntero este frame.
+    // Un punto que no cae dentro de ningún rect imaginable: el hit test de ese
+    // canvas devuelve nullptr y su hover se limpia solo, con su MouseExit y con
+    // sus colores de estado de vuelta a Normal. No vale con "no llamarle": un
+    // canvas al que se le deja de dar input se queda PEGADO en el último hover
+    // que vio, para siempre.
+    inline glm::vec2 uiPointerAway() { return glm::vec2(-1.0e6f, -1.0e6f); }
+
+    // Reparte UN estado de input entre TODOS los canvas de pantalla de la
+    // escena. `canvases` va en orden de PRIORIDAD: el de más arriba primero (o
+    // sea, el ÚLTIMO que se dibuja, que es el que el usuario ve encima).
+    //
+    // Llamar a updateInput con el mismo estado en los N canvas NO vale: dos
+    // canvas solapados dejarían LOS DOS un widget en hover y un clic activaría
+    // dos botones a la vez. El reparto es:
+    //
+    //   - RATÓN a UNO solo. Se lo queda el que tenga la captura del puntero
+    //     (un botón bajado sin soltar, o sea un arrastre en curso); si no hay
+    //     ninguno, el primero de la lista que tenga algo bajo el cursor. Los
+    //     demás reciben el ratón en uiPointerAway() y con los botones sueltos,
+    //     que es lo que les limpia el hover en vez de dejárselo pegado.
+    //   - TECLADO y MANDO a UNO solo, y NO tiene por qué ser el mismo: el foco
+    //     no lo mueve el cursor. Las teclas van al primer canvas de la lista
+    //     que TENGA foco, así que escribir en un campo de texto sigue llegando
+    //     aunque el ratón se pasee por encima de otro canvas. Si ninguno tiene
+    //     foco van al de más arriba (hoy eso no se nota: updateInput ignora las
+    //     teclas sin foco).
+    //   - El FOCO no salta solo entre canvas: se mueve al clicar. El Tab y las
+    //     flechas dan la vuelta DENTRO del canvas que lo tiene, como siempre.
+    //     Cuando el canvas que tiene el puntero coge foco, los demás lo sueltan,
+    //     que es lo que impide dos anillos de foco a la vez.
+    //
+    // Todos los canvas reciben updateInput, incluidos los que no ven nada: es
+    // ahí donde corren sus animaciones y el fundido de color de sus botones.
+    void dispatchUiInput(const std::vector<UiCanvas*>& canvases, const UiInputState& input);
 
     // Nodo vivo por NOMBRE en TODO el subárbol de `node`, o nullptr si no hay
     // ninguno. Recorrido COMPLETO y no solo los hijos directos: desde que el

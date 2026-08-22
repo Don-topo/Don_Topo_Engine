@@ -154,6 +154,10 @@ namespace DonTopo {
             UiCanvas&       uiCanvas() override;
             const UiCanvas& uiCanvas() const;
 
+            // TODOS los de pantalla, en orden de prioridad de input (el de mas
+            // arriba primero). Es lo que reparte el raton entre varios canvas.
+            void screenUiCanvases(std::vector<UiCanvas*>& out) override;
+
             // Monta el arbol vivo de CADA canvas de la escena, uno por
             // CanvasComponent. Sustituye al collect + syncUiWidgets que antes
             // repetian los tres bucles (runtime y sandbox x2).

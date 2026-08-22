@@ -6066,6 +6066,257 @@ static void test_world_canvases_se_ordenan_de_lejos_a_cerca()
     CHECK(orden[2] != pantalla);
 }
 
+// Y el orden de PRIORIDAD DE INPUT de los canvas de PANTALLA: el de mas arriba
+// primero, o sea el ULTIMO que se dibuja. El pase de UI recorre los slots en
+// orden y cada canvas pinta sobre el anterior, asi que la prioridad es el orden
+// de dibujado AL REVES. El slot de MUNDO va EN MEDIO a proposito: si alguien
+// borra el filtro de modo, no solo cambia el tamano de la lista — se cuela
+// entre los dos de pantalla y descuadra tambien la segunda posicion.
+static void test_canvas_de_pantalla_en_orden_de_prioridad()
+{
+    std::vector<std::unique_ptr<UiCanvasSlot>> slots;
+    for (auto par : { std::make_pair(7ull,  UiCanvasRenderMode::ScreenSpace),
+                      std::make_pair(8ull,  UiCanvasRenderMode::World),
+                      std::make_pair(9ull,  UiCanvasRenderMode::ScreenSpace) })
+    {
+        auto s = std::make_unique<UiCanvasSlot>();
+        s->ownerId = par.first;
+        s->mode    = par.second;
+        slots.push_back(std::move(s));
+    }
+
+    std::vector<UiCanvas*> orden;
+    screenCanvasesTopFirst(slots, orden);
+
+    CHECK(orden.size() == 2);
+    // Guardas por POSICION y no un `return` al primer fallo de tamano: si el
+    // filtro de modo se cae, el de mundo se cuela EN MEDIO y lo que hay que ver
+    // es que la segunda posicion tambien se descuadra, no solo el tamano.
+    // Identidad de PUNTERO, no el ownerId: es el arbol concreto que va a
+    // recibir el raton, y comparar ids dejaria pasar un emparejado por indice.
+    if (orden.size() >= 1) CHECK(orden[0] == &slots[2]->canvas);   // el ultimo dibujado, el primero en input
+    if (orden.size() >= 2) CHECK(orden[1] == &slots[0]->canvas);
+    if (orden.size() >= 1) CHECK(orden[0] != &slots[1]->canvas);   // el de mundo no entra
+    if (orden.size() >= 2) CHECK(orden[1] != &slots[1]->canvas);
+}
+
+// ── Reparto del input entre canvas de pantalla solapados ────────────────────
+// Dos canvas de pantalla, cada uno con SU boton, con los rects SOLAPADOS y con
+// valores distintos y no neutros entre si. Es el fixture de los cuatro tests de
+// abajo: el criterio de quien gana el puntero, la limpieza del que pierde, la
+// captura durante un arrastre y el reparto del teclado.
+struct DosCanvasSolapados
+{
+    UiCanvas          arriba;      // el ULTIMO que se dibuja = el de encima
+    UiCanvas          abajo;
+    UiWidgetSyncCache cacheArriba;
+    UiWidgetSyncCache cacheAbajo;
+    FakeUiLoader      loader;
+    ButtonComponent   compArriba;
+    ButtonComponent   compAbajo;
+    Button*           nodoArriba = nullptr;
+    Button*           nodoAbajo  = nullptr;
+
+    std::vector<UiCanvas*> orden;   // prioridad de input: arriba primero
+
+    int clicksArriba = 0;
+    int clicksAbajo  = 0;
+    int exitsAbajo   = 0;
+    int dragsAbajo   = 0;
+
+    UiInputState in;
+    float t = 0.0f;
+
+    // Dentro del boton de ARRIBA y del de ABAJO a la vez.
+    static glm::vec2 solape()    { return glm::vec2(150.0f, 150.0f); }
+    // Dentro del de ABAJO y fuera del de ARRIBA.
+    static glm::vec2 soloAbajo() { return glm::vec2(400.0f, 330.0f); }
+
+    DosCanvasSolapados()
+    {
+        // x[100,300] y[100,220]
+        compArriba.position    = glm::vec2(100.0f, 100.0f);
+        compArriba.size        = glm::vec2(200.0f, 120.0f);
+        compArriba.normalColor = glm::vec4(0.20f, 0.40f, 0.60f, 1.0f);
+        compArriba.hoverColor  = glm::vec4(0.90f, 0.10f, 0.30f, 1.0f);
+        // x[60,460] y[60,360] — contiene entero al de arriba y sobra por abajo
+        compAbajo.position     = glm::vec2(60.0f, 60.0f);
+        compAbajo.size         = glm::vec2(400.0f, 300.0f);
+        compAbajo.normalColor  = glm::vec4(0.05f, 0.70f, 0.25f, 1.0f);
+        compAbajo.hoverColor   = glm::vec4(0.15f, 0.35f, 0.85f, 1.0f);
+
+        std::vector<std::pair<uint64_t, const ButtonComponent*>> listaArriba{ {11ull, &compArriba} };
+        std::vector<std::pair<uint64_t, const ButtonComponent*>> listaAbajo { {22ull, &compAbajo}  };
+        syncUiWidgets(listaArriba, {}, {}, arriba, cacheArriba, loader);
+        syncUiWidgets(listaAbajo,  {}, {}, abajo,  cacheAbajo,  loader);
+
+        UiDrawData data;
+        arriba.buildDrawData(800, 480, data);   // coloca los rects: el hit test los lee
+        abajo .buildDrawData(800, 480, data);
+
+        nodoArriba = cacheArriba.buttonNodes.empty() ? nullptr : cacheArriba.buttonNodes[0];
+        nodoAbajo  = cacheAbajo .buttonNodes.empty() ? nullptr : cacheAbajo .buttonNodes[0];
+
+        compArriba.callbacks.ptr->onClick = [this] { clicksArriba++; };
+        compAbajo .callbacks.ptr->onClick = [this] { clicksAbajo++;  };
+        if (nodoAbajo)
+        {
+            nodoAbajo->onMouseExit = [this](UiEvent&) { exitsAbajo++; };
+            nodoAbajo->onDrag      = [this](UiEvent&) { dragsAbajo++; };
+        }
+
+        orden = { &arriba, &abajo };
+    }
+
+    // Un frame: avanza el reloj y reparte el estado actual entre los dos.
+    void frame()
+    {
+        t += 0.016f;
+        in.timeSeconds = t;
+        dispatchUiInput(orden, in);
+        in.keys.clear();
+        in.chars.clear();
+    }
+};
+
+// El de ENCIMA se lleva el puntero. Sin esto, dos canvas solapados dejan LOS
+// DOS un widget en hover y un clic activa dos botones a la vez.
+static void test_el_canvas_de_encima_se_lleva_el_puntero()
+{
+    DosCanvasSolapados e;
+    CHECK(e.nodoArriba != nullptr && e.nodoAbajo != nullptr);
+    if (!e.nodoArriba || !e.nodoAbajo) return;
+
+    e.in.mousePos = DosCanvasSolapados::solape();
+    e.frame();
+
+    CHECK(e.arriba.hovered() == e.nodoArriba);
+    CHECK(e.abajo.hovered()  == nullptr);
+    CHECK(e.nodoArriba->hovered);
+    CHECK(!e.nodoAbajo->hovered);
+    CHECK(e.nodoArriba->state == UiButtonState::Hover);
+    CHECK(e.nodoAbajo->state  == UiButtonState::Normal);
+
+    e.in.mouseDown[0] = true;
+    e.frame();
+    CHECK(e.nodoArriba->state == UiButtonState::Pressed);
+    CHECK(e.nodoAbajo->state  == UiButtonState::Normal);
+
+    e.in.mouseDown[0] = false;
+    e.frame();
+    CHECK(e.clicksArriba == 1);
+    CHECK(e.clicksAbajo  == 0);
+}
+
+// Y el que PIERDE el puntero tiene que quedar LIMPIO. Es la mitad que no se ve:
+// un canvas que tenia un boton en hover y deja de recibir input se queda PEGADO
+// en ese hover para siempre — el boton se ve iluminado y no responde a nada.
+// Por eso los que no ganan reciben un input con el raton FUERA, no ninguno.
+static void test_el_canvas_de_abajo_no_se_queda_pegado_en_hover()
+{
+    DosCanvasSolapados e;
+    CHECK(e.nodoArriba != nullptr && e.nodoAbajo != nullptr);
+    if (!e.nodoArriba || !e.nodoAbajo) return;
+
+    // Primero el raton donde SOLO llega el de abajo: se pone en hover.
+    e.in.mousePos = DosCanvasSolapados::soloAbajo();
+    e.frame();
+    CHECK(e.abajo.hovered()  == e.nodoAbajo);
+    CHECK(e.arriba.hovered() == nullptr);
+    CHECK(e.nodoAbajo->state == UiButtonState::Hover);
+    CHECK(e.exitsAbajo == 0);
+
+    // Y ahora a la zona solapada: gana el de arriba y el de abajo tiene que
+    // SOLTAR el hover, con su MouseExit y su color de vuelta a Normal.
+    e.in.mousePos = DosCanvasSolapados::solape();
+    e.frame();
+    CHECK(e.arriba.hovered() == e.nodoArriba);
+    CHECK(e.abajo.hovered()  == nullptr);
+    CHECK(!e.nodoAbajo->hovered);
+    CHECK(e.nodoAbajo->state == UiButtonState::Normal);
+    CHECK(e.exitsAbajo == 1);
+}
+
+// La captura del puntero sobrevive al solape: bajar el boton sobre un widget y
+// arrastrar por ENCIMA de otro canvas no corta el arrastre. Sin esto, un slider
+// que asome por debajo de otro canvas se queda a medias en cuanto el cursor
+// cruza el borde, y el gesto se pierde sin un solo aviso.
+static void test_la_captura_del_puntero_sobrevive_al_solape()
+{
+    DosCanvasSolapados e;
+    CHECK(e.nodoArriba != nullptr && e.nodoAbajo != nullptr);
+    if (!e.nodoArriba || !e.nodoAbajo) return;
+
+    e.in.mousePos = DosCanvasSolapados::soloAbajo();
+    e.frame();
+    e.in.mouseDown[0] = true;
+    e.frame();
+    CHECK(e.abajo.pointerCaptured());
+    CHECK(!e.arriba.pointerCaptured());
+
+    // Arrastra hasta la zona solapada con el boton MANTENIDO.
+    e.in.mousePos = DosCanvasSolapados::solape();
+    e.frame();
+    CHECK(e.abajo.pointerCaptured());        // sigue siendo suyo
+    CHECK(e.abajo.hovered() == e.nodoAbajo); // sigue viendo el raton
+    CHECK(e.arriba.hovered() == nullptr);    // el de encima NO se lo roba
+    CHECK(e.dragsAbajo >= 1);                // y el arrastre sigue vivo
+
+    // Al soltar, la captura se acaba y el de encima recupera el puntero.
+    e.in.mouseDown[0] = false;
+    e.frame();
+    CHECK(!e.abajo.pointerCaptured());
+    e.frame();
+    CHECK(e.arriba.hovered() == e.nodoArriba);
+    CHECK(e.abajo.hovered()  == nullptr);
+}
+
+// El teclado NO sigue al raton: sigue al FOCO. Escribir en un campo de un canvas
+// y pasar el cursor por encima de otro no tiene que desviar ni una tecla. Y el
+// foco se mueve al CLICAR, no al pasar por encima — y cuando se mueve, el canvas
+// que lo tenia lo suelta, o habria dos anillos de foco a la vez.
+static void test_el_teclado_va_al_canvas_con_foco_no_al_del_raton()
+{
+    DosCanvasSolapados e;
+    CHECK(e.nodoArriba != nullptr && e.nodoAbajo != nullptr);
+    if (!e.nodoArriba || !e.nodoAbajo) return;
+    e.nodoArriba->focusable = true;
+    e.nodoAbajo->focusable  = true;
+
+    // Clic donde solo llega el de abajo: coge el foco.
+    e.in.mousePos = DosCanvasSolapados::soloAbajo();
+    e.frame();
+    e.in.mouseDown[0] = true;  e.frame();
+    e.in.mouseDown[0] = false; e.frame();
+    CHECK(e.clicksAbajo == 1);
+    CHECK(e.abajo.focused()  == e.nodoAbajo);
+    CHECK(e.arriba.focused() == nullptr);
+
+    // El raton se va a la zona solapada — el PUNTERO cambia de canvas — y se
+    // pulsa Enter. La tecla tiene que ir al de ABAJO, que es el que tiene foco.
+    e.in.mousePos = DosCanvasSolapados::solape();
+    e.in.keys.push_back(UiKey::Enter);
+    e.frame();
+    CHECK(e.arriba.hovered() == e.nodoArriba);   // el puntero SI se movio
+    CHECK(e.abajo.hovered()  == nullptr);
+    CHECK(e.abajo.focused()  == e.nodoAbajo);    // el foco NO
+    CHECK(e.clicksAbajo  == 2);                  // 1 de raton + 1 de Enter
+    CHECK(e.clicksArriba == 0);
+
+    // Un clic en la zona solapada SI mueve el foco, y el de abajo lo suelta.
+    e.in.mouseDown[0] = true;  e.frame();
+    e.in.mouseDown[0] = false; e.frame();
+    CHECK(e.clicksArriba == 1);
+    CHECK(e.arriba.focused() == e.nodoArriba);
+    CHECK(e.abajo.focused()  == nullptr);
+
+    // Y desde aqui el Enter va al de arriba, no al de abajo.
+    e.in.keys.push_back(UiKey::Enter);
+    e.frame();
+    CHECK(e.clicksArriba == 2);
+    CHECK(e.clicksAbajo  == 2);
+}
+
 // El buffer de la UI es UNO SOLO por frame y lo comparten los canvas de MUNDO
 // (que se graban en el pase de escena) con los de PANTALLA (que van despues, en
 // su propio pase). Dimensionarlo con el total de UNA de las dos mitades es el
@@ -6595,6 +6846,11 @@ int main()
     test_ui_slots_se_emparejan_por_owner_id();
     test_world_canvases_se_ordenan_de_lejos_a_cerca();
     test_ui_frame_totals_suma_mundo_y_pantalla();
+    test_canvas_de_pantalla_en_orden_de_prioridad();
+    test_el_canvas_de_encima_se_lleva_el_puntero();
+    test_el_canvas_de_abajo_no_se_queda_pegado_en_hover();
+    test_la_captura_del_puntero_sobrevive_al_solape();
+    test_el_teclado_va_al_canvas_con_foco_no_al_del_raton();
 
     test_world_canvas_gizmo_proyecta_las_cuatro_esquinas();
     test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara();

@@ -229,6 +229,10 @@ public:
     void      setUiLayer(UiLayer* ui) override;
     UiCanvas& uiCanvas() override;
 
+    // TODOS los de pantalla, en orden de prioridad de input (el de más arriba
+    // primero). Mismo criterio y misma función libre que en Vulkan.
+    void screenUiCanvases(std::vector<UiCanvas*>& out) override;
+
     // Monta el árbol vivo de CADA canvas de la escena. Mismo contrato que en
     // el Renderer de Vulkan: uiCanvas() sigue devolviendo solo el de pantalla.
     void syncUiCanvases(const std::vector<UiCanvasBinding>& bindings) override;

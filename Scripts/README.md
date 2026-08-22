@@ -446,6 +446,27 @@ Los enums viajan como tablas de constantes enteras:
 | `c.billboard` | Solo `World`. `UiBillboard.*`: `YawOnly` gira solo en la vertical, `Full` encara del todo a la cámara |
 | `c.depthTest` | Solo `World`. A `false` se dibuja siempre encima, atravesando paredes |
 
+**Varios canvas de pantalla a la vez.** Una escena puede tener los que quiera
+(un HUD y un menú de pausa encima, por ejemplo) y **todos** reciben el input.
+Cuando dos se solapan hay que repartirlo, y el reparto es este:
+
+- **El ratón, a UNO solo:** el de **más arriba** que tenga algo bajo el cursor.
+  Arriba = el último que se dibuja, o sea el que va más abajo en la jerarquía de
+  la escena. Es el mismo criterio que usa el clic del viewport del editor para
+  seleccionar, así que se selecciona lo que se ve encima.
+- **Los de debajo NO se quedan pegados:** reciben el ratón *fuera*, así que
+  sueltan el hover, emiten su `MouseExit` y sus botones vuelven a `Normal`.
+  Siguen animando y fundiendo colores con normalidad.
+- **Un arrastre no se corta.** Mientras un botón del ratón siga bajado, el
+  canvas donde empezó conserva el puntero aunque el cursor pase por encima de
+  otro. Es lo que permite arrastrar un slider hasta el borde de la pantalla.
+- **El teclado y el mando siguen al FOCO, no al cursor:** van al canvas que
+  tiene el foco, así que escribir en un campo sigue llegando aunque el ratón se
+  pasee por otro canvas. El foco se mueve al **clicar**, y solo lo tiene un
+  canvas a la vez: en cuanto otro lo coge, el anterior lo suelta. El Tab y las
+  flechas dan la vuelta *dentro* del canvas que lo tiene y **no saltan** al
+  siguiente canvas.
+
 **Dos limitaciones del modo `World`.** No son bugs: salen del sitio donde se
 graba el canvas, y conviene tenerlas escritas antes de tropezar con ellas.
 

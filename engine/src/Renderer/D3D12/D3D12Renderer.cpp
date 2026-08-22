@@ -8943,6 +8943,13 @@ UiCanvas& D3D12Renderer::uiCanvas()
     return m_impl->uiCanvasFallback;
 }
 
+void D3D12Renderer::screenUiCanvases(std::vector<UiCanvas*>& out)
+{
+    // Misma función libre que Vulkan: el orden del pase de UI (que recorre
+    // uiSlots en orden) al revés, o sea el de más arriba primero.
+    screenCanvasesTopFirst(m_impl->uiSlots, out);
+}
+
 void D3D12Renderer::syncUiCanvases(const std::vector<UiCanvasBinding>& bindings)
 {
     Impl& d = *m_impl;
