@@ -6375,6 +6375,49 @@ static void test_no_hay_clic_fantasma_al_arrastrar_desde_el_vacio()
     CHECK(e.arriba.focused() == e.nodoArriba);
 }
 
+// Captura HUERFANA: un canvas que sale del reparto de input a media pulsacion
+// (un script que le pone renderMode = World, que es escribible desde Lua) nunca
+// ve el MouseUp y se queda con m_pressTarget. Al volver entraria con
+// pointerCaptured() en true SIN ningun boton bajado, se llevaria el raton en el
+// paso 1 de dispatchUiInput y le robaria el puntero al de encima, con un
+// MouseUp/Click que nadie pidio. Y de paso se quedaria PEGADO en su ultimo
+// hover, porque estando fuera de la lista dispatchUiInput ya no puede limpiarlo.
+static void test_soltar_el_input_no_deja_captura_huerfana()
+{
+    DosCanvasSolapados e;
+    CHECK(e.nodoArriba != nullptr && e.nodoAbajo != nullptr);
+    if (!e.nodoArriba || !e.nodoAbajo) return;
+    e.nodoAbajo->focusable = true;
+
+    // Baja el boton sobre el de ABAJO, en su zona exclusiva: coge captura,
+    // hover y foco.
+    e.in.mousePos = DosCanvasSolapados::soloAbajo();
+    e.frame();
+    e.in.mouseDown[0] = true;
+    e.frame();
+    CHECK(e.abajo.pointerCaptured());
+    CHECK(e.abajo.hovered() == e.nodoAbajo);
+    CHECK(e.abajo.focused() == e.nodoAbajo);
+    CHECK(e.exitsAbajo == 0);
+
+    // El script lo saca del reparto a media pulsacion.
+    e.abajo.releaseInput();
+    CHECK(!e.abajo.pointerCaptured());
+    CHECK(e.abajo.hovered() == nullptr);
+    CHECK(!e.nodoAbajo->hovered);
+    CHECK(e.abajo.focused() == nullptr);
+    CHECK(e.exitsAbajo == 1);            // con su MouseExit, no en silencio
+
+    // Y cuando vuelve, con el raton ya suelto y en la zona SOLAPADA, el de
+    // ENCIMA se lleva el puntero. Sin el soltado, la captura huerfana ganaba el
+    // paso 1 y se lo robaba.
+    e.in.mouseDown[0] = false;
+    e.in.mousePos     = DosCanvasSolapados::solape();
+    e.frame();
+    CHECK(e.arriba.hovered() == e.nodoArriba);
+    CHECK(e.abajo.hovered()  == nullptr);
+}
+
 // El buffer de la UI es UNO SOLO por frame y lo comparten los canvas de MUNDO
 // (que se graban en el pase de escena) con los de PANTALLA (que van despues, en
 // su propio pase). Dimensionarlo con el total de UNA de las dos mitades es el
@@ -6910,6 +6953,7 @@ int main()
     test_la_captura_del_puntero_sobrevive_al_solape();
     test_el_teclado_va_al_canvas_con_foco_no_al_del_raton();
     test_no_hay_clic_fantasma_al_arrastrar_desde_el_vacio();
+    test_soltar_el_input_no_deja_captura_huerfana();
 
     test_world_canvas_gizmo_proyecta_las_cuatro_esquinas();
     test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara();

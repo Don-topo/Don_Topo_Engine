@@ -727,7 +727,15 @@ namespace DonTopo {
             UiCanvasSlot& s = *m_uiSlots[i];
             const UiCanvasBinding& b = bindings[i];
             if (b.canvas) b.canvas->applyTo(s.canvas);
-            s.mode      = b.canvas ? b.canvas->renderMode : UiCanvasRenderMode::ScreenSpace;
+            const UiCanvasRenderMode modo =
+                b.canvas ? b.canvas->renderMode : UiCanvasRenderMode::ScreenSpace;
+            // Cambiar de modo mete o saca el canvas del reparto de input
+            // (screenCanvasesTopFirst filtra por ScreenSpace). Si se va a World a
+            // media pulsación —renderMode es escribible desde Lua— nunca ve el
+            // MouseUp y se queda con su captura y su hover: al volver le robaría
+            // el puntero al de encima durante un frame. releaseInput lo suelta.
+            if (modo != s.mode) s.canvas.releaseInput();
+            s.mode      = modo;
             s.depthTest = b.canvas ? b.canvas->depthTest  : true;
             // Copia por valor de los ajustes de mundo y del transform del
             // GameObject: la matriz de modelo se calcula al GRABAR (necesita la

@@ -858,6 +858,47 @@ namespace DonTopo
         return true;
     }
 
+    void UiCanvas::releaseInput()
+    {
+        // El hover, con su MouseExit: por el mismo motivo por el que se lo emite
+        // un input con el ratón fuera. Quien apague algo al salir tiene que
+        // enterarse, y "se quedó pegado en el último hover" es justo el fallo que
+        // dispatchUiInput evita para los que pierden el puntero — aquí no puede,
+        // porque el canvas ya no está en su lista.
+        if (m_hovered)
+        {
+            UiElement* previo = m_hovered;
+            previo->hovered   = false;
+            m_hovered         = nullptr;
+
+            UiEvent e{};
+            e.type     = UiEventType::MouseExit;
+            e.target   = previo;
+            e.mousePos = uiPointerAway();
+            e.time     = m_lastTime;
+            dispatch(previo, e, &UiElement::onMouseExit);
+        }
+
+        // La captura y el gesto a medias. Se baja también m_buttonDown: si se
+        // dejara a true, el frame en el que el canvas vuelva vería `!now && was`
+        // y emitiría el MouseUp de una pulsación que ya no existe.
+        for (int b = 0; b < 3; ++b)
+        {
+            m_pressTarget[b] = nullptr;
+            m_dragging[b]    = false;
+            m_buttonDown[b]  = false;
+        }
+        // Y un gesto cortado no puede ser la primera mitad de un doble click.
+        m_lastClickTarget = nullptr;
+
+        // El foco, con su Blur. Va por setFocus y no a mano para que el Blur
+        // salga por el mismo sitio que siempre. Sin esto, un canvas que vuelve
+        // con foco puede acabar siendo el dueño del teclado por delante del que
+        // el usuario acaba de pulsar, porque fuera de la lista dispatchUiInput
+        // tampoco pudo soltárselo.
+        setFocus(nullptr);
+    }
+
     void dispatchUiInput(const std::vector<UiCanvas*>& canvases, const UiInputState& input)
     {
         // ── Quién se lleva el RATÓN ─────────────────────────────────────────

@@ -661,6 +661,22 @@ namespace DonTopo
                    m_pressTarget[2] != nullptr;
         }
 
+        // Suelta el hover, la captura del puntero y el foco de este canvas, con
+        // su MouseExit y su Blur — igual que si el ratón se hubiera ido fuera y
+        // el foco a otra parte. NO toca el árbol ni las animaciones.
+        //
+        // Lo llama quien saca el canvas del reparto de input a media pulsación:
+        // hoy, cambiarle `renderMode` a World (es escribible desde Lua). Un
+        // canvas que se va con un botón bajado nunca ve el MouseUp y se queda con
+        // `m_pressTarget`: al volver entraría con pointerCaptured() en true SIN
+        // ningún botón bajado, se llevaría el ratón en el paso 1 de
+        // dispatchUiInput y emitiría un MouseUp/Click que nadie pidió. Y sin
+        // soltar el hover se quedaría además PEGADO en el último que vio, que es
+        // el mismo fallo que dispatchUiInput evita para los que pierden el
+        // puntero — aquí no puede evitarlo porque el canvas ya no está en su
+        // lista.
+        void releaseInput();
+
         // Uno solo por canvas. setFocus emite Blur en el viejo y Focus en el
         // nuevo, EN ESE ORDEN. Ignora los que no son focusable (nullptr sí vale:
         // es soltar el foco).

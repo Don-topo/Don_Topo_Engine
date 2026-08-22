@@ -8975,7 +8975,13 @@ void D3D12Renderer::syncUiCanvases(const std::vector<UiCanvasBinding>& bindings)
         UiCanvasSlot& s = *d.uiSlots[i];
         const UiCanvasBinding& b = bindings[i];
         if (b.canvas) b.canvas->applyTo(s.canvas);
-        s.mode      = b.canvas ? b.canvas->renderMode : UiCanvasRenderMode::ScreenSpace;
+        const UiCanvasRenderMode modo =
+            b.canvas ? b.canvas->renderMode : UiCanvasRenderMode::ScreenSpace;
+        // Mismo motivo que en el camino de Vulkan: cambiar de modo saca el canvas
+        // del reparto de input, y si se va a media pulsación se queda con una
+        // captura huérfana que al volver le roba el puntero al de encima.
+        if (modo != s.mode) s.canvas.releaseInput();
+        s.mode      = modo;
         s.depthTest = b.canvas ? b.canvas->depthTest  : true;
         // Copia por valor de los ajustes de mundo y del transform del
         // GameObject: la matriz de modelo se calcula al GRABAR (necesita la
