@@ -6120,6 +6120,7 @@ namespace DonTopo
     bool projectWorldCanvasCorners(const glm::mat4& mvp, const glm::vec2& canvasSize,
                                    const glm::vec2& imagePos, const glm::vec2& imageSize,
                                    glm::vec2 outCorners[4]);
+    const CanvasComponent* owningCanvasOf(const GameObject* go);
 }
 
 // La misma proyección que arma ViewportPanel::pickObject para la cámara de
@@ -6190,13 +6191,21 @@ static void test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara()
     c.referenceResolution = glm::vec2(200.0f, 100.0f);
 
     const glm::vec2 tam(200.0f, 100.0f);
-    // Casi de canto (80°) y a medio metro de la cámara: el borde izquierdo se
-    // va a z = +0.48 (w = -0.48) y el derecho se queda a z = -1.48 (w = +1.48).
-    // Dos esquinas delante y dos detrás — el caso REAL, no "todo detrás", que
-    // lo cazaría hasta un rechazo por el centro.
+    // Casi de canto (-80°) y a medio metro de la cámara. Las cuatro w salen
+    // +1.4848, -0.4848, -0.4848, +1.4848: dos esquinas delante y dos detrás — el
+    // caso REAL, no "todo detrás", que lo cazaría hasta un rechazo por el centro.
+    //
+    // El signo importa y NO es intercambiable con +80°. Con +80° la que rechaza
+    // es la esquina 0, la función sale en la primera vuelta sin haber escrito
+    // nada, y entonces una implementación que escribiera DIRECTO en outCorners
+    // pasaría este test igual: los centinelas de abajo no probarían nada. Con
+    // -80° la esquina 0 está DELANTE y la que rechaza es la 1, así que para
+    // cuando se descubre el problema ya hay una esquina calculada. Eso es lo
+    // que prueba el array intermedio de projectWorldCanvasCorners: nadie puede
+    // quedarse con una esquina nueva y tres viejas.
     const glm::mat4 mundo = glm::rotate(
         glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -0.5f)),
-        glm::radians(80.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::radians(-80.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     const glm::mat4 vista(1.0f);
 
     const glm::mat4 mvp = editorProjForTest(2.0f) * vista *
@@ -6208,7 +6217,9 @@ static void test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara()
                          glm::vec2(-15.0f, -16.0f), glm::vec2(-17.0f, -18.0f) };
     CHECK(!projectWorldCanvasCorners(mvp, tam, glm::vec2(37.0f, 91.0f),
                                      glm::vec2(800.0f, 400.0f), esq));
+    // El de la esquina 0 es el que muerde: es la que SÍ se llegó a calcular.
     CHECK(nearlyEqual(esq[0].x, -11.0f));
+    CHECK(nearlyEqual(esq[0].y, -12.0f));
     CHECK(nearlyEqual(esq[1].y, -14.0f));
     CHECK(nearlyEqual(esq[3].x, -17.0f));
 }
@@ -6238,6 +6249,65 @@ static void test_world_canvas_gizmo_acepta_fuera_de_encuadre_si_esta_delante()
     // La Y sí cae dentro: el canvas está a la altura de la cámara.
     CHECK(nearlyEqual(esq[0].y, 242.7157f, 0.02f));
     CHECK(nearlyEqual(esq[2].y, 339.2843f, 0.02f));
+}
+
+// A qué Canvas pertenece un widget: el ancestro MÁS CERCANO (o él mismo) que
+// tenga uno. Es la regla exacta de Scene::collectCanvases —un canvas anidado abre
+// binding propio y CORTA la cadena—, y de ella depende que el gizmo de un widget
+// sepa si su canvas es de mundo. Si el gizmo y el sync no usan el mismo criterio,
+// el gizmo decide por el canvas equivocado.
+//
+// Los dos canvas del test llevan valores DISTINTOS y no neutros (resolución y
+// worldScale) para poder afirmar CUÁL de los dos ha vuelto, no solo que no es
+// nulo: devolver el de fuera en vez del de dentro es justo el fallo a cazar.
+static void test_owning_canvas_es_el_ancestro_mas_cercano()
+{
+    GameObject raiz("Raiz");
+    raiz.setCanvas(std::make_shared<CanvasComponent>());
+    raiz.getCanvas()->renderMode          = UiCanvasRenderMode::ScreenSpace;
+    raiz.getCanvas()->referenceResolution = glm::vec2(1280.0f, 720.0f);
+    raiz.getCanvas()->worldScale          = 0.007f;
+
+    GameObject* canvasMundo = raiz.addChild("CanvasMundo");
+    canvasMundo->setCanvas(std::make_shared<CanvasComponent>());
+    canvasMundo->getCanvas()->renderMode          = UiCanvasRenderMode::World;
+    canvasMundo->getCanvas()->referenceResolution = glm::vec2(640.0f, 360.0f);
+    canvasMundo->getCanvas()->worldScale          = 0.003f;
+
+    GameObject* boton = canvasMundo->addChild("Boton");
+    boton->setButton(std::make_shared<ButtonComponent>());
+
+    // El de DENTRO, no el de fuera.
+    const CanvasComponent* delBoton = owningCanvasOf(boton);
+    CHECK(delBoton != nullptr);
+    if (delBoton)
+    {
+        CHECK(delBoton->renderMode == UiCanvasRenderMode::World);
+        CHECK(nearlyEqual(delBoton->worldScale, 0.003f));
+        CHECK(nearlyEqual(delBoton->referenceResolution.x, 640.0f));
+    }
+
+    // Un GameObject que ES el canvas se devuelve a sí mismo: el gizmo del propio
+    // Canvas se apoya en el mismo criterio.
+    CHECK(owningCanvasOf(canvasMundo) == canvasMundo->getCanvas().get());
+
+    // Y desde la raíz manda el de PANTALLA: sin esto, una implementación que
+    // subiera hasta el canvas más externo —o que se quedara con el último que
+    // vio— pasaría la comprobación de arriba igualmente.
+    const CanvasComponent* deLaRaiz = owningCanvasOf(&raiz);
+    CHECK(deLaRaiz != nullptr);
+    if (deLaRaiz)
+    {
+        CHECK(deLaRaiz->renderMode == UiCanvasRenderMode::ScreenSpace);
+        CHECK(nearlyEqual(deLaRaiz->worldScale, 0.007f));
+        CHECK(nearlyEqual(deLaRaiz->referenceResolution.x, 1280.0f));
+    }
+
+    // Sin canvas por encima no hay canvas: el editor lo impide, pero una escena
+    // hecha a mano puede traerlo y esto no puede deferenciar un nulo.
+    GameObject suelto("Suelto");
+    suelto.setButton(std::make_shared<ButtonComponent>());
+    CHECK(owningCanvasOf(&suelto) == nullptr);
 }
 
 int main()
@@ -6458,6 +6528,7 @@ int main()
     test_world_canvas_gizmo_proyecta_las_cuatro_esquinas();
     test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara();
     test_world_canvas_gizmo_acepta_fuera_de_encuadre_si_esta_delante();
+    test_owning_canvas_es_el_ancestro_mas_cercano();
 
 
     am.shutdown();

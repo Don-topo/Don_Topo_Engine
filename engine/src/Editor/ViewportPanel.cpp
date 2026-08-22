@@ -400,6 +400,23 @@ void ViewportPanel::drawLightGizmos(EditorContext& ctx)
     });
 }
 
+// El Canvas al que pertenece `go`: el ancestro MÁS CERCANO que tenga uno, y el
+// propio `go` cuenta. Es EXACTAMENTE la regla de Scene::collectCanvases (un
+// canvas anidado abre binding propio y CORTA la cadena de anclaje), así que el
+// gizmo mira el mismo canvas al que el sync manda el widget. nullptr si no
+// cuelga de ninguno: el editor lo impide (uiComponentsAvailable), pero una
+// escena hecha a mano puede traerlo.
+//
+// No es static a propósito, por lo mismo que projectWorldCanvasCorners:
+// dt_camera_tests la declara a mano para poder probar la regla sin GUI.
+const CanvasComponent* owningCanvasOf(const GameObject* go)
+{
+    for (const GameObject* n = go; n != nullptr; n = n->parent)
+        if (n->hasCanvas())
+            return n->getCanvas().get();
+    return nullptr;
+}
+
 // Proyecta las cuatro esquinas de un canvas de MUNDO a píxeles de la imagen del
 // viewport. `mvp` es proj·view·model —la misma cadena que graba el backend— y
 // las esquinas se dan en píxeles de CANVAS, que es el espacio del que parte
@@ -433,8 +450,11 @@ bool projectWorldCanvasCorners(const glm::mat4& mvp, const glm::vec2& canvasSize
         glm::vec2(0.0f,         canvasSize.y),
     };
 
-    // A un intermedio y no directo a outCorners: si la cuarta esquina rechaza,
-    // el caller no puede quedarse con tres esquinas nuevas y una vieja.
+    // A un intermedio y no directo a outCorners: si una esquina rechaza cuando
+    // ya se han calculado otras, el caller no puede quedarse con una mezcla de
+    // esquinas nuevas y viejas. Lo prueba
+    // test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara, cuyo fixture
+    // está montado a propósito para que la que rechace NO sea la primera.
     glm::vec2 px[4];
     for (int i = 0; i < 4; ++i)
     {
@@ -580,6 +600,33 @@ static void drawUiNodeGizmo(EditorContext& ctx, const UiElement* node,
                             const glm::vec2& imagePos, const glm::vec2& imageSize)
 {
     if (!node || !node->rectValid) return;
+
+    // LIMITACIÓN CONOCIDA: en un canvas de MUNDO este rect NO se puede dibujar
+    // aquí, y dibujarlo de todas formas sería peor que no dibujar nada.
+    //
+    // screenPos/screenSize los deja buildDrawData en el espacio en el que se
+    // construyó el canvas, y un canvas de mundo se construye a su
+    // referenceResolution (Renderer.cpp:1654, D3D12Renderer.cpp:6261) con
+    // applyTo forzando ConstantPixelSize y scaleFactor 1 — o sea uiScale = 1 y
+    // uiOrigin = (0,0). Son píxeles LOCALES DEL CANVAS, no de pantalla. Sumarlos
+    // a imagePos, como hace el código de abajo, pintaría el rect pegado a la
+    // esquina superior izquierda del viewport y COMPLETAMENTE QUIETO mientras la
+    // cámara vuela, aunque el cartel esté al otro lado de la escena o detrás de
+    // ella. Un gizmo que miente es peor que ninguno.
+    //
+    // Lo que falta para dibujarlo bien es la `view` de la cámara —la necesitan
+    // la proyección Y el billboard— y aquí no llega: los trece drawXGizmo están
+    // declarados en ViewportPanel.h y solo draw() la tiene. Documentado en
+    // Scripts/README.md junto a las otras dos limitaciones del modo mundo.
+    //
+    // Ojo: esto NO deja sin efecto el paso a EditorRenderer::findUiNode. Ese
+    // cambio arregla además el caso de un SEGUNDO canvas de PANTALLA, donde el
+    // rect sí va en píxeles de salida y el gizmo sale bien: uiCanvas() devuelve
+    // solo el PRIMERO (Renderer.cpp:743), así que sus widgets tampoco tenían
+    // gizmo antes.
+    if (const CanvasComponent* canvas = owningCanvasOf(ctx.selected))
+        if (canvas->renderMode == UiCanvasRenderMode::World)
+            return;
 
     // screenPos/screenSize los deja buildDrawData en píxeles de SALIDA, y la
     // salida es esta misma imagen: van 1:1. Antes se escalaba por
