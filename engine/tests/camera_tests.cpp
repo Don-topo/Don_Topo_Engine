@@ -6117,10 +6117,11 @@ static void test_ui_frame_totals_suma_mundo_y_pantalla()
 // dos fallos que no se ven: la esquina detrás de la cámara y la Y al revés.
 namespace DonTopo
 {
-    bool projectWorldCanvasCorners(const glm::mat4& mvp, const glm::vec2& canvasSize,
+    bool projectWorldCanvasCorners(const glm::mat4& mvp,
+                                   const glm::vec2& rectMin, const glm::vec2& rectMax,
                                    const glm::vec2& imagePos, const glm::vec2& imageSize,
                                    glm::vec2 outCorners[4]);
-    const CanvasComponent* owningCanvasOf(const GameObject* go);
+    const GameObject* owningCanvasObject(const GameObject* go);
 }
 
 // La misma proyección que arma ViewportPanel::pickObject para la cámara de
@@ -6162,7 +6163,7 @@ static void test_world_canvas_gizmo_proyecta_las_cuatro_esquinas()
                           uiWorldCanvasMatrix(c, tam, mundo, vista);
 
     glm::vec2 esq[4];
-    CHECK(projectWorldCanvasCorners(mvp, tam, imagenPos, imagenTam, esq));
+    CHECK(projectWorldCanvasCorners(mvp, glm::vec2(0.0f), tam, imagenPos, imagenTam, esq));
 
     // Orden: (0,0), (w,0), (w,h), (0,h) en píxeles de CANVAS. El (0,0) del
     // canvas es su esquina SUPERIOR izquierda —la Y del canvas crece hacia
@@ -6215,7 +6216,7 @@ static void test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara()
     // rechazar, se vería aquí.
     glm::vec2 esq[4] = { glm::vec2(-11.0f, -12.0f), glm::vec2(-13.0f, -14.0f),
                          glm::vec2(-15.0f, -16.0f), glm::vec2(-17.0f, -18.0f) };
-    CHECK(!projectWorldCanvasCorners(mvp, tam, glm::vec2(37.0f, 91.0f),
+    CHECK(!projectWorldCanvasCorners(mvp, glm::vec2(0.0f), tam, glm::vec2(37.0f, 91.0f),
                                      glm::vec2(800.0f, 400.0f), esq));
     // El de la esquina 0 es el que muerde: es la que SÍ se llegó a calcular.
     CHECK(nearlyEqual(esq[0].x, -11.0f));
@@ -6241,7 +6242,7 @@ static void test_world_canvas_gizmo_acepta_fuera_de_encuadre_si_esta_delante()
                           uiWorldCanvasMatrix(c, tam, mundo, vista);
 
     glm::vec2 esq[4];
-    CHECK(projectWorldCanvasCorners(mvp, tam, glm::vec2(37.0f, 91.0f),
+    CHECK(projectWorldCanvasCorners(mvp, glm::vec2(0.0f), tam, glm::vec2(37.0f, 91.0f),
                                     glm::vec2(800.0f, 400.0f), esq));
     // Muy a la derecha del borde derecho de la imagen (37 + 800 = 837).
     CHECK(nearlyEqual(esq[0].x, 2271.8023f, 0.05f));
@@ -6277,8 +6278,12 @@ static void test_owning_canvas_es_el_ancestro_mas_cercano()
     GameObject* boton = canvasMundo->addChild("Boton");
     boton->setButton(std::make_shared<ButtonComponent>());
 
-    // El de DENTRO, no el de fuera.
-    const CanvasComponent* delBoton = owningCanvasOf(boton);
+    // El de DENTRO, no el de fuera. Se devuelve el GameObject y no el componente
+    // porque el gizmo necesita ADEMAS su worldTransform para montar la matriz de
+    // modelo del canvas.
+    const GameObject* objBoton = owningCanvasObject(boton);
+    CHECK(objBoton == canvasMundo);
+    const CanvasComponent* delBoton = objBoton ? objBoton->getCanvas().get() : nullptr;
     CHECK(delBoton != nullptr);
     if (delBoton)
     {
@@ -6289,12 +6294,14 @@ static void test_owning_canvas_es_el_ancestro_mas_cercano()
 
     // Un GameObject que ES el canvas se devuelve a sí mismo: el gizmo del propio
     // Canvas se apoya en el mismo criterio.
-    CHECK(owningCanvasOf(canvasMundo) == canvasMundo->getCanvas().get());
+    CHECK(owningCanvasObject(canvasMundo) == canvasMundo);
 
     // Y desde la raíz manda el de PANTALLA: sin esto, una implementación que
     // subiera hasta el canvas más externo —o que se quedara con el último que
     // vio— pasaría la comprobación de arriba igualmente.
-    const CanvasComponent* deLaRaiz = owningCanvasOf(&raiz);
+    const GameObject* objRaiz = owningCanvasObject(&raiz);
+    CHECK(objRaiz == &raiz);
+    const CanvasComponent* deLaRaiz = objRaiz ? objRaiz->getCanvas().get() : nullptr;
     CHECK(deLaRaiz != nullptr);
     if (deLaRaiz)
     {
@@ -6307,7 +6314,71 @@ static void test_owning_canvas_es_el_ancestro_mas_cercano()
     // hecha a mano puede traerlo y esto no puede deferenciar un nulo.
     GameObject suelto("Suelto");
     suelto.setButton(std::make_shared<ButtonComponent>());
-    CHECK(owningCanvasOf(&suelto) == nullptr);
+    CHECK(owningCanvasObject(&suelto) == nullptr);
+}
+
+// El rect de un WIDGET dentro de un canvas de mundo, que es lo que hace falta
+// para su gizmo. Va por la MISMA función que el canvas entero: el canvas no es
+// más que el caso (0,0)-(w,h) de esto.
+//
+// La línea que este test protege es concretamente que el rect ENTRE por el
+// parámetro. El rect elegido, (40,25)-(140,60), no empieza en (0,0), no coincide
+// con el canvas y no está centrado en él ni en X ni en Y: una implementación que
+// ignorase los dos argumentos y proyectase el canvas entero daría las ocho
+// coordenadas del test de arriba, que distan más de 21 píxeles de estas — mil
+// veces la tolerancia. Con un rect que empezara en (0,0), o que fuera el canvas
+// entero, ese sabotaje pasaría de largo.
+static void test_world_canvas_gizmo_proyecta_el_rect_de_un_widget()
+{
+    CanvasComponent c;
+    c.renderMode          = UiCanvasRenderMode::World;
+    c.billboard           = UiBillboard::None;
+    c.worldScale          = 0.01f;
+    c.referenceResolution = glm::vec2(200.0f, 100.0f);
+
+    // Mismo canvas, misma cámara y misma imagen que
+    // test_world_canvas_gizmo_proyecta_las_cuatro_esquinas: lo ÚNICO que cambia
+    // es el rect, así que la diferencia entre los dos juegos de números no puede
+    // venir de ninguna otra cosa.
+    const glm::vec2 tam(200.0f, 100.0f);
+    const glm::mat4 mundo = glm::rotate(
+        glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(0.6f, -0.3f, -5.0f)),
+                    glm::radians(35.0f), glm::vec3(0.0f, 1.0f, 0.0f)),
+        glm::radians(20.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    const glm::mat4 vista(1.0f);
+    const glm::vec2 imagenPos(37.0f, 91.0f);
+    const glm::vec2 imagenTam(800.0f, 400.0f);
+
+    const glm::mat4 mvp = editorProjForTest(imagenTam.x / imagenTam.y) * vista *
+                          uiWorldCanvasMatrix(c, tam, mundo, vista);
+
+    // screenPos (40,25) y screenSize (100,35): en un canvas de mundo, lo que
+    // deja buildDrawData ya viene en píxeles LOCALES del canvas (escala 1 y
+    // origen (0,0)), así que entra tal cual.
+    const glm::vec2 rectMin(40.0f, 25.0f);
+    const glm::vec2 rectMax(140.0f, 60.0f);
+
+    glm::vec2 esq[4];
+    CHECK(projectWorldCanvasCorners(mvp, rectMin, rectMax, imagenPos, imagenTam, esq));
+
+    CHECK(nearlyEqual(esq[0].x, 453.5888f, 0.02f));
+    CHECK(nearlyEqual(esq[0].y, 297.8520f, 0.02f));
+    CHECK(nearlyEqual(esq[1].x, 528.4051f, 0.02f));
+    CHECK(nearlyEqual(esq[1].y, 297.0902f, 0.02f));
+    CHECK(nearlyEqual(esq[2].x, 520.3945f, 0.02f));
+    CHECK(nearlyEqual(esq[2].y, 327.1820f, 0.02f));
+    CHECK(nearlyEqual(esq[3].x, 446.1635f, 0.02f));
+    CHECK(nearlyEqual(esq[3].y, 331.6128f, 0.02f));
+
+    // Y el rect degenerado (min == max) da un punto: es como el gizmo saca el
+    // pivot proyectado, y sin esto una división por el tamaño del rect colada en
+    // la función no se vería.
+    glm::vec2 punto[4];
+    CHECK(projectWorldCanvasCorners(mvp, rectMin, rectMin, imagenPos, imagenTam, punto));
+    CHECK(nearlyEqual(punto[0].x, 453.5888f, 0.02f));
+    CHECK(nearlyEqual(punto[0].y, 297.8520f, 0.02f));
+    CHECK(nearlyEqual(punto[2].x, 453.5888f, 0.02f));
+    CHECK(nearlyEqual(punto[2].y, 297.8520f, 0.02f));
 }
 
 int main()
@@ -6528,6 +6599,7 @@ int main()
     test_world_canvas_gizmo_proyecta_las_cuatro_esquinas();
     test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara();
     test_world_canvas_gizmo_acepta_fuera_de_encuadre_si_esta_delante();
+    test_world_canvas_gizmo_proyecta_el_rect_de_un_widget();
     test_owning_canvas_es_el_ancestro_mas_cercano();
 
 

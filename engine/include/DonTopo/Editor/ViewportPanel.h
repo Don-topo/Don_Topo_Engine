@@ -119,6 +119,16 @@ private:
                            const glm::vec2& mousePx, const glm::vec2& imageSize) const;
 
     bool m_open = true;
+    // La `view` de la cámara con la que se dibujó el último frame. La rellena
+    // draw() nada más entrar, igual que ya rellena m_imagePos y m_contentWidth.
+    //
+    // Existe porque los gizmos de widget de un canvas de MUNDO tienen que
+    // PROYECTAR su rect, y proyectar pide la vista por partida doble: para la
+    // matriz de cámara y para el billboard del canvas. Los trece drawXGizmo la
+    // leen de aquí y se la pasan a drawUiNodeGizmo. Un parámetro en esas trece
+    // firmas sería lo mismo con más ruido; lo que NO vale es un estático de
+    // fichero, que dejaría el dato fuera del alcance del panel.
+    glm::mat4 m_cameraView{1.0f};
     bool m_hovered = false;
     bool m_imageHovered = false;
     glm::vec2 m_imagePos{0.0f};

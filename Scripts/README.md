@@ -446,7 +446,7 @@ Los enums viajan como tablas de constantes enteras:
 | `c.billboard` | Solo `World`. `UiBillboard.*`: `YawOnly` gira solo en la vertical, `Full` encara del todo a la cámara |
 | `c.depthTest` | Solo `World`. A `false` se dibuja siempre encima, atravesando paredes |
 
-**Tres limitaciones del modo `World`.** No son bugs: salen del sitio donde se
+**Dos limitaciones del modo `World`.** No son bugs: salen del sitio donde se
 graba el canvas, y conviene tenerlas escritas antes de tropezar con ellas.
 
 - **Un canvas de mundo NO se puede clicar**, ni en el juego ni en el viewport
@@ -456,16 +456,9 @@ graba el canvas, y conviene tenerlas escritas antes de tropezar con ellas.
   `Layout`. Al seleccionarlo, el editor pinta el cuadrilátero de su plano sobre
   el viewport —con una marca en su esquina (0,0)—, que es lo que enseña dónde
   está y con qué inclinación; si alguna de sus cuatro esquinas queda detrás de
-  la cámara, no se dibuja nada.
-- **Los widgets DENTRO de un canvas de mundo no pintan gizmo.** Se seleccionan
-  desde el Hierarchy y se editan con normalidad desde Properties, pero el
-  viewport no dibuja su rect ni sus ejes. El rect que deja el layout de un canvas
-  de mundo va en píxeles LOCALES del canvas, no de pantalla, y dibujarlo tal cual
-  pondría el recuadro en la esquina del viewport, quieto, mientras el cartel está
-  en otro sitio. Antes que un gizmo que miente, ninguno. La referencia visual
-  mientras tanto es el cuadrilátero del canvas que lo contiene. (En un canvas de
-  PANTALLA los gizmos de widget funcionan como siempre, también si la escena
-  tiene más de un canvas de pantalla.)
+  la cámara, no se dibuja nada. Los widgets de dentro se seleccionan igual, desde
+  el Hierarchy, y su gizmo también sale proyectado sobre el cartel, inclinado con
+  él y con los ejes X/Y del pivot en la orientación que tienen ahí.
 - **`clipChildren` NO recorta en un canvas de mundo.** El scissor va en píxeles
   de canvas y se mapea 1:1 al framebuffer; con el canvas proyectado no hay
   rectángulo alineado a los ejes que lo represente, así que los canvas de mundo
