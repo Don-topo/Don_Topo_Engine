@@ -343,6 +343,24 @@ namespace DonTopo
         }
     }
 
+    // El canvas de UN GameObject concreto, por ownerId, o nullptr si ese objeto
+    // no tiene canvas vivo. NO filtra por modo: el filtro es cosa de quien
+    // pregunta (el gizmo del canvas ya sale antes por su cuenta si es de mundo),
+    // y una búsqueda que se saltara los de mundo en silencio sería una trampa
+    // para el siguiente que la use.
+    //
+    // Hace falta porque uiCanvas() devuelve el PRIMER canvas de pantalla, no el
+    // del objeto que se pregunta: con él, el gizmo de un SEGUNDO canvas de
+    // pantalla pintaba el rect del primero — un gizmo que miente, que es peor
+    // que no dibujar nada.
+    inline const UiCanvas* findCanvasByOwner(
+        const std::vector<std::unique_ptr<UiCanvasSlot>>& slots, uint64_t ownerId)
+    {
+        for (const auto& s : slots)
+            if (s && s->ownerId == ownerId) return &s->canvas;
+        return nullptr;
+    }
+
     // Lo que hay que dimensionar para el frame de UI, contado sobre el drawData
     // YA construido de cada slot.
     struct UiFrameTotals

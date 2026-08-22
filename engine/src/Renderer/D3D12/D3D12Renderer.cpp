@@ -8961,6 +8961,12 @@ void D3D12Renderer::screenUiCanvases(std::vector<UiCanvas*>& out)
     screenCanvasesTopFirst(m_impl->uiSlots, out);
 }
 
+const UiCanvas* D3D12Renderer::uiCanvasOf(uint64_t ownerId) const
+{
+    // Misma funcion libre que Vulkan.
+    return findCanvasByOwner(m_impl->uiSlots, ownerId);
+}
+
 void D3D12Renderer::syncUiCanvases(const std::vector<UiCanvasBinding>& bindings)
 {
     Impl& d = *m_impl;

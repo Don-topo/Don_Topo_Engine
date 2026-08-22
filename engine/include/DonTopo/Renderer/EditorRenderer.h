@@ -200,6 +200,18 @@ namespace DonTopo
             // pero no tienen ni hover, ni colores de estado, ni Click.
             virtual void screenUiCanvases(std::vector<UiCanvas*>& out) = 0;
 
+            // El canvas de UN GameObject, por su id, o nullptr si no tiene. Lo
+            // usa el gizmo del canvas SELECCIONADO: `uiCanvas()` le daba el
+            // PRIMERO de pantalla, así que seleccionar un segundo canvas pintaba
+            // el rect del primero.
+            //
+            // Va aparte de screenUiCanvases y no dentro porque aquella alimenta a
+            // dispatchUiInput, cuya firma es del core de UI
+            // (`vector<UiCanvas*>`): meterle el ownerId obligaría a que el core
+            // conociera los tipos del Renderer, o a desempaquetar una segunda
+            // lista por frame en los tres bucles.
+            virtual const UiCanvas* uiCanvasOf(uint64_t ownerId) const = 0;
+
             // Monta el árbol vivo de CADA canvas de la escena. Sustituye al
             // collect + syncUiWidgets que antes repetían los tres bucles
             // (runtime y sandbox x2) — tres copias de lo mismo es como se

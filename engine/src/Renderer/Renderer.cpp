@@ -774,6 +774,12 @@ namespace DonTopo {
         screenCanvasesTopFirst(m_uiSlots, out);
     }
 
+    const UiCanvas* Renderer::uiCanvasOf(uint64_t ownerId) const
+    {
+        // Misma funcion libre que D3D12: un solo criterio de busqueda.
+        return findCanvasByOwner(m_uiSlots, ownerId);
+    }
+
     const UiElement* Renderer::findUiNode(const std::string& name) const
     {
         // TODOS los canvas, no solo el de pantalla: un botón de un canvas de

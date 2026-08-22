@@ -6375,6 +6375,35 @@ static void test_no_hay_clic_fantasma_al_arrastrar_desde_el_vacio()
     CHECK(e.arriba.focused() == e.nodoArriba);
 }
 
+// El canvas de UN GameObject concreto, por ownerId. Lo necesita el gizmo del
+// canvas SELECCIONADO: con uiCanvas() —el PRIMER canvas de pantalla— seleccionar
+// un SEGUNDO canvas de pantalla pintaba el rect del PRIMERO, o sea un gizmo que
+// miente. Con un solo canvas coinciden y no se nota, que es lo silencioso.
+static void test_canvas_por_owner_id()
+{
+    std::vector<std::unique_ptr<UiCanvasSlot>> slots;
+    for (auto par : { std::make_pair(7ull,  UiCanvasRenderMode::ScreenSpace),
+                      std::make_pair(8ull,  UiCanvasRenderMode::World),
+                      std::make_pair(9ull,  UiCanvasRenderMode::ScreenSpace) })
+    {
+        auto s = std::make_unique<UiCanvasSlot>();
+        s->ownerId = par.first;
+        s->mode    = par.second;
+        slots.push_back(std::move(s));
+    }
+
+    // Identidad de PUNTERO: es el arbol concreto cuyo uiOrigin/uiScale va a leer
+    // el gizmo. El 9 es el que caza el fallo — es el SEGUNDO de pantalla, o sea
+    // el que uiCanvas() nunca devolvia.
+    CHECK(findCanvasByOwner(slots, 9ull) == &slots[2]->canvas);
+    CHECK(findCanvasByOwner(slots, 7ull) == &slots[0]->canvas);
+    // Los de MUNDO tambien salen: el filtro de modo es de quien pregunta.
+    CHECK(findCanvasByOwner(slots, 8ull) == &slots[1]->canvas);
+    // Y un id que no esta devuelve NADA, no "el primero": el gizmo tiene que
+    // poder no dibujar en vez de dibujar el de otro.
+    CHECK(findCanvasByOwner(slots, 42ull) == nullptr);
+}
+
 // Captura HUERFANA: un canvas que sale del reparto de input a media pulsacion
 // (un script que le pone renderMode = World, que es escribible desde Lua) nunca
 // ve el MouseUp y se queda con m_pressTarget. Al volver entraria con
@@ -6954,6 +6983,7 @@ int main()
     test_el_teclado_va_al_canvas_con_foco_no_al_del_raton();
     test_no_hay_clic_fantasma_al_arrastrar_desde_el_vacio();
     test_soltar_el_input_no_deja_captura_huerfana();
+    test_canvas_por_owner_id();
 
     test_world_canvas_gizmo_proyecta_las_cuatro_esquinas();
     test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara();

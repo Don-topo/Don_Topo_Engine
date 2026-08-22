@@ -607,9 +607,17 @@ void ViewportPanel::drawCanvasGizmo(EditorContext& ctx, const glm::vec2& imagePo
     // Lo que dejó el último buildDrawData del canvas vivo: origen en píxeles
     // del render y tamaño del área útil = referencia * escala. Aquí no se
     // vuelve a resolver nada.
-    const UiCanvas& canvas = ctx.renderer->uiCanvas();
-    const glm::vec2 origin = canvas.uiOrigin();
-    const glm::vec2 size   = canvas.referenceSize() * canvas.uiScale();
+    // El canvas DEL OBJETO SELECCIONADO, no uiCanvas() —que es el PRIMERO de
+    // pantalla—: con aquel, seleccionar un SEGUNDO canvas de pantalla pintaba el
+    // rect del primero, o sea un gizmo que miente sobre dónde está lo que se ha
+    // seleccionado. Con un solo canvas coinciden, que es lo que lo hacía mudo.
+    // Sin canvas vivo (el sync todavía no ha corrido) no se dibuja nada, que es
+    // mejor que dibujar el de otro.
+    const UiCanvas* canvas = ctx.renderer->uiCanvasOf(ctx.selected->id);
+    if (!canvas)
+        return;
+    const glm::vec2 origin = canvas->uiOrigin();
+    const glm::vec2 size   = canvas->referenceSize() * canvas->uiScale();
     if (size.x <= 0.0f || size.y <= 0.0f)
         return;
 

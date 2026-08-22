@@ -233,6 +233,10 @@ public:
     // primero). Mismo criterio y misma función libre que en Vulkan.
     void screenUiCanvases(std::vector<UiCanvas*>& out) override;
 
+    // El canvas de un GameObject por su id (nullptr si no tiene). Misma
+    // funcion libre que en Vulkan.
+    const UiCanvas* uiCanvasOf(uint64_t ownerId) const override;
+
     // Monta el árbol vivo de CADA canvas de la escena. Mismo contrato que en
     // el Renderer de Vulkan: uiCanvas() sigue devolviendo solo el de pantalla.
     void syncUiCanvases(const std::vector<UiCanvasBinding>& bindings) override;
