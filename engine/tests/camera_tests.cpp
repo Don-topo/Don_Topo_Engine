@@ -6106,6 +6106,140 @@ static void test_ui_frame_totals_suma_mundo_y_pantalla()
     CHECK(t.screenIndices  == 6u);
 }
 
+// ── Gizmo del canvas de mundo (ViewportPanel) ───────────────────────────────
+//
+// La aritmética del gizmo del canvas de mundo: proyectar las cuatro esquinas y
+// pasarlas a píxeles de la imagen del viewport. Se declara aquí a mano porque
+// vive en engine/src/Editor/ViewportPanel.cpp, que es código de EDITOR y no
+// tiene header público que exportarla — este ejecutable enlaza DonTopoEditor,
+// así que el símbolo está. Lo demás del gizmo es ImGui puro (AddLine sobre un
+// draw list) y no se puede probar sin ventana; esto sí, y es donde están los
+// dos fallos que no se ven: la esquina detrás de la cámara y la Y al revés.
+namespace DonTopo
+{
+    bool projectWorldCanvasCorners(const glm::mat4& mvp, const glm::vec2& canvasSize,
+                                   const glm::vec2& imagePos, const glm::vec2& imageSize,
+                                   glm::vec2 outCorners[4]);
+}
+
+// La misma proyección que arma ViewportPanel::pickObject para la cámara de
+// EDICIÓN: 45° fijos + el Y-flip de Vulkan. Aquí explícita pa que el test no
+// dependa de ningún estado del Renderer.
+static glm::mat4 editorProjForTest(float aspect)
+{
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 1000.0f);
+    proj[1][1] *= -1.0f;
+    return proj;
+}
+
+// Un canvas de mundo INCLINADO en dos ejes, para que las cuatro esquinas caigan
+// en ocho números DISTINTOS entre sí: con el canvas de frente, izquierda y
+// derecha comparten X y arriba y abajo comparten Y, y una permutación de las
+// esquinas —o un eje espejado— pasaría igual.
+//
+// Los valores esperados están calculados fuera (proj·view·model a mano, en
+// doble precisión), no derivados de la propia función.
+static void test_world_canvas_gizmo_proyecta_las_cuatro_esquinas()
+{
+    CanvasComponent c;
+    c.renderMode          = UiCanvasRenderMode::World;
+    c.billboard           = UiBillboard::None;
+    c.worldScale          = 0.01f;                    // 200x100 px -> 2x1 unidades
+    c.referenceResolution = glm::vec2(200.0f, 100.0f);
+
+    const glm::vec2 tam(200.0f, 100.0f);
+    const glm::mat4 mundo = glm::rotate(
+        glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(0.6f, -0.3f, -5.0f)),
+                    glm::radians(35.0f), glm::vec3(0.0f, 1.0f, 0.0f)),
+        glm::radians(20.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    const glm::mat4 vista(1.0f);                      // cámara en el origen mirando a -Z
+
+    const glm::vec2 imagenPos(37.0f, 91.0f);          // no (0,0): el gizmo va en coords de PANTALLA
+    const glm::vec2 imagenTam(800.0f, 400.0f);
+
+    const glm::mat4 mvp = editorProjForTest(imagenTam.x / imagenTam.y) * vista *
+                          uiWorldCanvasMatrix(c, tam, mundo, vista);
+
+    glm::vec2 esq[4];
+    CHECK(projectWorldCanvasCorners(mvp, tam, imagenPos, imagenTam, esq));
+
+    // Orden: (0,0), (w,0), (w,h), (0,h) en píxeles de CANVAS. El (0,0) del
+    // canvas es su esquina SUPERIOR izquierda —la Y del canvas crece hacia
+    // abajo, y uiWorldCanvasMatrix la niega—, así que tiene que salir con la Y
+    // de imagen MÁS PEQUEÑA de las cuatro. Si alguien pone la Y de la imagen al
+    // revés, el cuadrilátero sigue siendo un cuadrilátero y solo esto lo caza.
+    CHECK(nearlyEqual(esq[0].x, 423.3624f, 0.02f));
+    CHECK(nearlyEqual(esq[0].y, 271.8673f, 0.02f));
+    CHECK(nearlyEqual(esq[1].x, 571.8282f, 0.02f));
+    CHECK(nearlyEqual(esq[1].y, 275.9068f, 0.02f));
+    CHECK(nearlyEqual(esq[2].x, 548.6389f, 0.02f));
+    CHECK(nearlyEqual(esq[2].y, 356.0572f, 0.02f));
+    CHECK(nearlyEqual(esq[3].x, 403.4565f, 0.02f));
+    CHECK(nearlyEqual(esq[3].y, 372.4002f, 0.02f));
+}
+
+// Una esquina con w <= 0 está DETRÁS del plano de la cámara: dividir por ese w
+// espeja el punto al otro lado y el cuadrilátero sale cruzado o disparado al
+// infinito, sin que nada en pantalla diga que es basura (ImGui no clipea, dibuja
+// lo que le den). El rechazo tiene que ser EXPLÍCITO.
+static void test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara()
+{
+    CanvasComponent c;
+    c.renderMode          = UiCanvasRenderMode::World;
+    c.worldScale          = 0.01f;
+    c.referenceResolution = glm::vec2(200.0f, 100.0f);
+
+    const glm::vec2 tam(200.0f, 100.0f);
+    // Casi de canto (80°) y a medio metro de la cámara: el borde izquierdo se
+    // va a z = +0.48 (w = -0.48) y el derecho se queda a z = -1.48 (w = +1.48).
+    // Dos esquinas delante y dos detrás — el caso REAL, no "todo detrás", que
+    // lo cazaría hasta un rechazo por el centro.
+    const glm::mat4 mundo = glm::rotate(
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -0.5f)),
+        glm::radians(80.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    const glm::mat4 vista(1.0f);
+
+    const glm::mat4 mvp = editorProjForTest(2.0f) * vista *
+                          uiWorldCanvasMatrix(c, tam, mundo, vista);
+
+    // Centinelas distintos entre sí: si la función escribiera algo antes de
+    // rechazar, se vería aquí.
+    glm::vec2 esq[4] = { glm::vec2(-11.0f, -12.0f), glm::vec2(-13.0f, -14.0f),
+                         glm::vec2(-15.0f, -16.0f), glm::vec2(-17.0f, -18.0f) };
+    CHECK(!projectWorldCanvasCorners(mvp, tam, glm::vec2(37.0f, 91.0f),
+                                     glm::vec2(800.0f, 400.0f), esq));
+    CHECK(nearlyEqual(esq[0].x, -11.0f));
+    CHECK(nearlyEqual(esq[1].y, -14.0f));
+    CHECK(nearlyEqual(esq[3].x, -17.0f));
+}
+
+// Y lo contrario: fuera del encuadre pero DELANTE se acepta. El criterio es el
+// signo de w, no que el rect quepa en la imagen — recortar aquí dejaría sin
+// gizmo a un canvas que asoma medio por el borde, que es cuando más se busca.
+static void test_world_canvas_gizmo_acepta_fuera_de_encuadre_si_esta_delante()
+{
+    CanvasComponent c;
+    c.renderMode          = UiCanvasRenderMode::World;
+    c.worldScale          = 0.01f;
+    c.referenceResolution = glm::vec2(200.0f, 100.0f);
+
+    const glm::vec2 tam(200.0f, 100.0f);
+    const glm::mat4 mundo = glm::translate(glm::mat4(1.0f), glm::vec3(20.0f, 0.0f, -5.0f));
+    const glm::mat4 vista(1.0f);
+    const glm::mat4 mvp = editorProjForTest(2.0f) * vista *
+                          uiWorldCanvasMatrix(c, tam, mundo, vista);
+
+    glm::vec2 esq[4];
+    CHECK(projectWorldCanvasCorners(mvp, tam, glm::vec2(37.0f, 91.0f),
+                                    glm::vec2(800.0f, 400.0f), esq));
+    // Muy a la derecha del borde derecho de la imagen (37 + 800 = 837).
+    CHECK(nearlyEqual(esq[0].x, 2271.8023f, 0.05f));
+    CHECK(nearlyEqual(esq[1].x, 2464.9394f, 0.05f));
+    // La Y sí cae dentro: el canvas está a la altura de la cámara.
+    CHECK(nearlyEqual(esq[0].y, 242.7157f, 0.02f));
+    CHECK(nearlyEqual(esq[2].y, 339.2843f, 0.02f));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -6320,6 +6454,10 @@ int main()
     test_ui_slots_se_emparejan_por_owner_id();
     test_world_canvases_se_ordenan_de_lejos_a_cerca();
     test_ui_frame_totals_suma_mundo_y_pantalla();
+
+    test_world_canvas_gizmo_proyecta_las_cuatro_esquinas();
+    test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara();
+    test_world_canvas_gizmo_acepta_fuera_de_encuadre_si_esta_delante();
 
 
     am.shutdown();

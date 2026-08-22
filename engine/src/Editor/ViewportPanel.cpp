@@ -12,6 +12,7 @@
 #include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/UI/ButtonComponent.h"
 #include "DonTopo/UI/TextComponent.h"
+#include "DonTopo/UI/CanvasComponent.h"   // uiWorldCanvasMatrix, UiCanvasRenderMode
 #include <imgui.h>
 #include <ImGuizmo.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -399,12 +400,149 @@ void ViewportPanel::drawLightGizmos(EditorContext& ctx)
     });
 }
 
+// Proyecta las cuatro esquinas de un canvas de MUNDO a píxeles de la imagen del
+// viewport. `mvp` es proj·view·model —la misma cadena que graba el backend— y
+// las esquinas se dan en píxeles de CANVAS, que es el espacio del que parte
+// uiWorldCanvasMatrix. Salen en el orden (0,0), (w,0), (w,h), (0,h); el (0,0)
+// del canvas es su esquina SUPERIOR izquierda, porque la Y del canvas crece
+// hacia abajo y uiWorldCanvasMatrix la niega.
+//
+// Devuelve false —y deja `outCorners` SIN TOCAR— si alguna esquina tiene w <= 0:
+// está detrás del plano de la cámara, y dividir por ese w la espeja al otro
+// lado. El cuadrilátero saldría cruzado o disparado al infinito y nada lo
+// diría, porque aquí no hay clipping de GPU que valga: es ImGui pintando las
+// líneas que le den. Por eso el rechazo es EXPLÍCITO. La comparación va como
+// !(w > 0) para que un NaN —matriz degenerada— caiga también del lado del
+// rechazo.
+//
+// Fuera del encuadre pero DELANTE sí se acepta: el criterio es el signo de w, no
+// que el rect quepa en la imagen. Recortar aquí dejaría sin gizmo justo al
+// canvas que asoma medio por el borde, que es cuando más se busca.
+//
+// No es static a propósito: es la única parte del gizmo que se puede probar sin
+// ventana, y dt_camera_tests la declara a mano para enlazarla (el editor no
+// tiene header público donde ponerla).
+bool projectWorldCanvasCorners(const glm::mat4& mvp, const glm::vec2& canvasSize,
+                               const glm::vec2& imagePos, const glm::vec2& imageSize,
+                               glm::vec2 outCorners[4])
+{
+    const glm::vec2 esquinas[4] = {
+        glm::vec2(0.0f,         0.0f),
+        glm::vec2(canvasSize.x, 0.0f),
+        glm::vec2(canvasSize.x, canvasSize.y),
+        glm::vec2(0.0f,         canvasSize.y),
+    };
+
+    // A un intermedio y no directo a outCorners: si la cuarta esquina rechaza,
+    // el caller no puede quedarse con tres esquinas nuevas y una vieja.
+    glm::vec2 px[4];
+    for (int i = 0; i < 4; ++i)
+    {
+        const glm::vec4 clip = mvp * glm::vec4(esquinas[i].x, esquinas[i].y, 0.0f, 1.0f);
+        if (!(clip.w > 0.0f))
+            return false;
+
+        // NDC -> píxel de la imagen. La Y va SIN invertir porque la proyección
+        // que se le pasa trae el Y-flip de Vulkan cocinado (ndc.y = -1 arriba),
+        // el mismo criterio que pickObject. En D3D12 la proyección del backend
+        // NO lleva ese flip y su NDC tiene +1 arriba: las dos inversiones se
+        // cancelan y el píxel sale idéntico. Es exactamente por lo que
+        // pickObject acierta en los dos backends con una sola fórmula.
+        const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+        px[i] = imagePos + glm::vec2((ndc.x * 0.5f + 0.5f) * imageSize.x,
+                                     (ndc.y * 0.5f + 0.5f) * imageSize.y);
+    }
+
+    for (int i = 0; i < 4; ++i)
+        outCorners[i] = px[i];
+    return true;
+}
+
+// Gizmo del canvas en modo MUNDO: el cuadrilátero de su plano, proyectado, que
+// es lo único que enseña dónde está y con qué inclinación. El rect 2D del área
+// útil que pinta drawCanvasGizmo no significa nada aquí.
+//
+// Función libre y no método porque necesita la `view` de la cámara —para el
+// billboard y para la proyección— y quien la tiene es draw(); meterla por el
+// parámetro de drawCanvasGizmo obligaría a tocar el header.
+static void drawWorldCanvasGizmo(EditorContext& ctx, const glm::mat4& cameraView,
+                                 const glm::vec2& imagePos, const glm::vec2& imageSize)
+{
+    if (!ctx.selected || !ctx.selected->hasCanvas() || !ctx.renderer || !Gizmos::isEnabled())
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    const CanvasComponent& c = *ctx.selected->getCanvas();
+    if (c.renderMode != UiCanvasRenderMode::World)
+        return;
+
+    // En modo World el área útil es EXACTAMENTE referenceResolution: applyTo no
+    // deja que scaleMode, el safe area ni el aspect ratio la toquen.
+    const glm::vec2 tam = c.referenceResolution;
+    if (tam.x <= 0.0f || tam.y <= 0.0f)
+        return;
+
+    // Cámara del frame, la misma receta que pickObject: en edición 45° fijos +
+    // el Y-flip de Vulkan; en Play manda el CameraComponent de la escena. El
+    // near/far NO entra en la cuenta —en una perspectiva solo toca la Z, x/y/w
+    // salen de fov y aspect—, así que los genéricos de aquí valen aunque el
+    // Renderer use m_cameraDistance.
+    //
+    // LIMITACIÓN CONOCIDA: el grabado usa la proyección JITTEREADA
+    // (taaJitteredProj en los dos backends) y aquí no hay forma de pedirla sin
+    // una virtual nueva en EditorRenderer. Con TAA encendido el gizmo puede
+    // quedar hasta medio píxel del cartel; sin TAA, taaJitteredProj es la
+    // proyección a secas y coinciden.
+    const float aspect = ctx.renderer->viewportAspect();
+    glm::mat4 view = cameraView;
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 1000.0f);
+    proj[1][1] *= -1.0f; // Vulkan Y flip, igual que el Renderer
+    if (ctx.isPlaying && ctx.scene)
+    {
+        if (GameObject* cam = ctx.scene->findCamera())
+        {
+            view = CameraComponent::viewFromWorld(cam->worldTransform);
+            proj = cam->getCameraComponent()->projectionMatrix(aspect);
+        }
+    }
+
+    // La MISMA matriz de modelo que el grabado, y con la MISMA `view`: el
+    // billboard sale de ella, así que darle otra separaría el gizmo del cartel
+    // en cuanto girase la cámara.
+    const glm::mat4 mvp =
+        proj * view * uiWorldCanvasMatrix(c, tam, ctx.selected->worldTransform, view);
+
+    glm::vec2 esq[4];
+    if (!projectWorldCanvasCorners(mvp, tam, imagePos, imageSize, esq))
+        return;
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 color = IM_COL32(80, 200, 255, 220);   // el mismo azul del gizmo 2D
+    for (int i = 0; i < 4; ++i)
+    {
+        const glm::vec2& a = esq[i];
+        const glm::vec2& b = esq[(i + 1) % 4];
+        dl->AddLine(ImVec2(a.x, a.y), ImVec2(b.x, b.y), color, 2.0f);
+    }
+    // Marca en la esquina (0,0) del canvas. Sin ella, un canvas visto POR
+    // DETRÁS pinta el mismo cuadrilátero y no hay manera de saber que está del
+    // revés.
+    dl->AddCircleFilled(ImVec2(esq[0].x, esq[0].y), 4.0f, color);
+}
+
 void ViewportPanel::drawCanvasGizmo(EditorContext& ctx, const glm::vec2& imagePos,
                                      const glm::vec2& imageSize)
 {
     if (!ctx.selected || !ctx.selected->hasCanvas() || !ctx.renderer || !Gizmos::isEnabled())
         return;
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    // Un canvas de MUNDO no tiene área útil en píxeles de pantalla que enseñar:
+    // de él se encarga drawWorldCanvasGizmo, que lo proyecta. Dibujar además el
+    // rect 2D pintaría un recuadro en un sitio que no tiene nada que ver.
+    if (ctx.selected->getCanvas()->renderMode == UiCanvasRenderMode::World)
         return;
 
     // Lo que dejó el último buildDrawData del canvas vivo: origen en píxeles
@@ -425,11 +563,12 @@ void ViewportPanel::drawCanvasGizmo(EditorContext& ctx, const glm::vec2& imagePo
     ImGui::GetWindowDrawList()->AddRect(p0, p1, IM_COL32(80, 200, 255, 220), 0.0f, 0, 2.0f);
 }
 
-// findUiNodeIn ahora vive en UiCanvas.h (función libre): la usan tanto el
-// Renderer (findUiNode, que recorre TODOS los canvas) como este panel. Este
-// envoltorio se queda solo porque los nueve gizmos de abajo le pasan un
-// UiCanvas y no un UiElement — cambiar eso es de otra tarea (el gizmo tiene
-// que buscar en el canvas de MUNDO correcto, no solo en el de pantalla).
+// SIN USO desde que los trece gizmos de widget de abajo pasaron por
+// EditorRenderer::findUiNode, que recorre TODOS los canvas y no solo el de
+// pantalla (este envoltorio solo miraba el que le dieran, así que un widget
+// dentro de un canvas de MUNDO se quedaba sin gizmo en silencio). Se deja
+// porque borrar símbolos no es de esta tarea; findUiNodeIn, lo que envuelve,
+// sigue vivo en UiCanvas.h y lo usa el Renderer.
 static const UiElement* findUiNodeNamed(const UiCanvas& canvas, const std::string& wanted)
 {
     return findUiNodeIn(canvas.root(), wanted);
@@ -479,8 +618,7 @@ void ViewportPanel::drawButtonGizmo(EditorContext& ctx, const glm::vec2& imagePo
     // El rect sale del nodo VIVO (lo que dejó el último buildDrawData), no de
     // los campos del componente: así el gizmo ya trae aplicadas las anclas, la
     // escala del canvas y el layout, sin recalcular nada aquí.
-    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
-                                         uiButtonNodeName(ctx.selected->id)),
+    drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiButtonNodeName(ctx.selected->id)),
                     imagePos, imageSize);
 }
 
@@ -492,8 +630,7 @@ void ViewportPanel::drawTextGizmo(EditorContext& ctx, const glm::vec2& imagePos,
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
-                                         uiTextNodeName(ctx.selected->id)),
+    drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiTextNodeName(ctx.selected->id)),
                     imagePos, imageSize);
 }
 
@@ -505,8 +642,7 @@ void ViewportPanel::drawProgressBarGizmo(EditorContext& ctx, const glm::vec2& im
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
-                                         uiProgressBarNodeName(ctx.selected->id)),
+    drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiProgressBarNodeName(ctx.selected->id)),
                     imagePos, imageSize);
 }
 
@@ -518,8 +654,7 @@ void ViewportPanel::drawInputFieldGizmo(EditorContext& ctx, const glm::vec2& ima
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
-                                         uiInputFieldNodeName(ctx.selected->id)),
+    drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiInputFieldNodeName(ctx.selected->id)),
                     imagePos, imageSize);
 }
 
@@ -531,8 +666,7 @@ void ViewportPanel::drawDropdownGizmo(EditorContext& ctx, const glm::vec2& image
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
-                                         uiDropdownNodeName(ctx.selected->id)),
+    drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiDropdownNodeName(ctx.selected->id)),
                     imagePos, imageSize);
 }
 
@@ -544,8 +678,7 @@ void ViewportPanel::drawScrollViewGizmo(EditorContext& ctx, const glm::vec2& ima
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
-                                         uiScrollViewNodeName(ctx.selected->id)),
+    drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiScrollViewNodeName(ctx.selected->id)),
                     imagePos, imageSize);
 }
 
@@ -557,8 +690,7 @@ void ViewportPanel::drawSliderGizmo(EditorContext& ctx, const glm::vec2& imagePo
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
-                                         uiSliderNodeName(ctx.selected->id)),
+    drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiSliderNodeName(ctx.selected->id)),
                     imagePos, imageSize);
 }
 
@@ -570,8 +702,7 @@ void ViewportPanel::drawCheckboxGizmo(EditorContext& ctx, const glm::vec2& image
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
-                                         uiCheckboxNodeName(ctx.selected->id)),
+    drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiCheckboxNodeName(ctx.selected->id)),
                     imagePos, imageSize);
 }
 
@@ -583,8 +714,7 @@ void ViewportPanel::drawToggleGizmo(EditorContext& ctx, const glm::vec2& imagePo
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
-                                         uiToggleNodeName(ctx.selected->id)),
+    drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiToggleNodeName(ctx.selected->id)),
                     imagePos, imageSize);
 }
 
@@ -596,8 +726,7 @@ void ViewportPanel::drawScrollbarGizmo(EditorContext& ctx, const glm::vec2& imag
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
-                                         uiScrollbarNodeName(ctx.selected->id)),
+    drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiScrollbarNodeName(ctx.selected->id)),
                     imagePos, imageSize);
 }
 
@@ -609,8 +738,7 @@ void ViewportPanel::drawPanelGizmo(EditorContext& ctx, const glm::vec2& imagePos
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
-                                         uiPanelNodeName(ctx.selected->id)),
+    drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiPanelNodeName(ctx.selected->id)),
                     imagePos, imageSize);
 }
 
@@ -622,8 +750,7 @@ void ViewportPanel::drawImageGizmo(EditorContext& ctx, const glm::vec2& imagePos
     if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
         return;
 
-    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
-                                         uiImageNodeName(ctx.selected->id)),
+    drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiImageNodeName(ctx.selected->id)),
                     imagePos, imageSize);
 }
 
@@ -638,8 +765,7 @@ void ViewportPanel::drawLayoutGizmo(EditorContext& ctx, const glm::vec2& imagePo
     // Con otro componente de UI en el mismo GameObject, el layout NO tiene nodo
     // propio: escribe en el de aquel, que ya pinta su gizmo. Dibujar otro encima
     // solo duplicaría las líneas.
-    drawUiNodeGizmo(ctx, findUiNodeNamed(ctx.renderer->uiCanvas(),
-                                         uiLayoutNodeName(ctx.selected->id)),
+    drawUiNodeGizmo(ctx, ctx.renderer->findUiNode(uiLayoutNodeName(ctx.selected->id)),
                     imagePos, imageSize);
 }
 
@@ -833,6 +959,11 @@ void ViewportPanel::draw(EditorContext& ctx, uint64_t viewportTexture, const glm
     // Área útil del Canvas seleccionado, justo sobre la imagen: es 2D, así que
     // va con el draw list de ImGui y no con Gizmos (que dibuja en el mundo).
     drawCanvasGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    // Y el del canvas de MUNDO, que es el mismo gizmo pero proyectado. Va por
+    // fuera de la clase porque necesita cameraView, que solo tiene draw():
+    // drawCanvasGizmo se aparta en cuanto ve renderMode == World.
+    drawWorldCanvasGizmo(ctx, cameraView, glm::vec2(vpPos.x, vpPos.y),
+                         glm::vec2(vpSize.x, vpSize.y));
     drawButtonGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawTextGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawProgressBarGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));

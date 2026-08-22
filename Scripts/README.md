@@ -446,6 +446,24 @@ Los enums viajan como tablas de constantes enteras:
 | `c.billboard` | Solo `World`. `UiBillboard.*`: `YawOnly` gira solo en la vertical, `Full` encara del todo a la cámara |
 | `c.depthTest` | Solo `World`. A `false` se dibuja siempre encima, atravesando paredes |
 
+**Dos limitaciones del modo `World`.** No son bugs: salen del sitio donde se
+graba el canvas, y conviene tenerlas escritas antes de tropezar con ellas.
+
+- **Un canvas de mundo NO se puede clicar**, ni en el juego ni en el viewport
+  del editor. El hit test de la UI trabaja en píxeles de pantalla y un canvas de
+  mundo está *proyectado*: puede salir rotado, en perspectiva o partido por el
+  borde. Se selecciona desde el Hierarchy, igual que el contenedor de un
+  `Layout`. Al seleccionarlo, el editor pinta el cuadrilátero de su plano sobre
+  el viewport —con una marca en su esquina (0,0)—, que es lo que enseña dónde
+  está y con qué inclinación; si alguna de sus cuatro esquinas queda detrás de
+  la cámara, no se dibuja nada. Los widgets de dentro sí tienen su gizmo, y
+  también se seleccionan desde el Hierarchy.
+- **`clipChildren` NO recorta en un canvas de mundo.** El scissor va en píxeles
+  de canvas y se mapea 1:1 al framebuffer; con el canvas proyectado no hay
+  rectángulo alineado a los ejes que lo represente, así que los canvas de mundo
+  se graban con el scissor a todo el framebuffer. Lo que sí se respeta es un
+  clip que ya se quedó vacío: ese nodo no emite nada.
+
 ### Button
 
 | Propiedad / Método | Descripción |
