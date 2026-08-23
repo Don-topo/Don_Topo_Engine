@@ -20,6 +20,7 @@
 #include "DonTopo/Renderer/UiLayer.h"
 #include "DonTopo/Renderer/Vertex.h"
 #include "DonTopo/UI/UiCanvas.h"
+#include "DonTopo/UI/UiWidgetSync.h"
 
 #include <windows.h>
 
@@ -46,7 +47,9 @@
 
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -470,14 +473,68 @@ std::string hresultToString(HRESULT hr)
     return buf;
 }
 
+// ─── Diagnóstico: log a FICHERO ──────────────────────────────────────────────
+// El editor se lanza desde el explorador y su stdout no lo ve nadie; la capa de
+// depuración de D3D12 escribe por OutputDebugString, que sin depurador tampoco
+// se ve. Todo lo de aquí va ADEMÁS a un fichero junto al ejecutable, que es lo
+// único que el usuario puede traer cuando lo que ve es "una ventana de error
+// sin mensaje".
+//
+// Es INSTRUMENTACIÓN: no cambia el comportamiento del render, solo cuenta lo
+// que pasa cuando algo va mal.
+std::ofstream& diagStream()
+{
+    // Estático de función: se abre la primera vez que alguien escribe y se
+    // cierra al salir del proceso. `app` y no `trunc`: si el editor se
+    // relanzara, el log de la sesión anterior sigue ahí.
+    static std::ofstream out("d3d12_diag.log", std::ios::out | std::ios::app);
+    return out;
+}
+
+void diagLog(const std::string& line)
+{
+    std::ofstream& out = diagStream();
+    if (!out)
+        return;
+    const auto ahora = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm tm{};
+    localtime_s(&tm, &ahora);
+    char sello[32] = {};
+    std::snprintf(sello, sizeof(sello), "%02d:%02d:%02d ", tm.tm_hour, tm.tm_min, tm.tm_sec);
+    // flush en cada línea: si el proceso muere a la siguiente instrucción, lo
+    // que se acaba de escribir tiene que estar YA en el disco.
+    out << sello << line << std::endl;
+    // Y también por la salida estándar, para quien sí tenga consola.
+    std::fputs((std::string(sello) + line + "\n").c_str(), stderr);
+}
+
+// Gancho al volcado de DRED. Lo instala Impl::init cuando el device existe, y
+// lo llama throwIfFailed —que es una función libre y no tiene device— cuando el
+// HRESULT que la aborta es una pérdida del dispositivo. Sin esto, el único
+// sitio que mira DXGI_ERROR_DEVICE_REMOVED sería el Present.
+void (*g_volcarDeviceRemoved)(const char*, HRESULT) = nullptr;
+
+bool esPerdidaDeDevice(HRESULT hr)
+{
+    return hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_HUNG ||
+           hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DRIVER_INTERNAL_ERROR ||
+           hr == DXGI_ERROR_INVALID_CALL;
+}
+
 // Todo fallo de creación aborta el init con el paso concreto que falló: un
 // device a medias no se puede usar y esconder el HRESULT solo mueve el crash
 // más adelante.
 void throwIfFailed(HRESULT hr, const char* step)
 {
-    if (FAILED(hr))
+    if (FAILED(hr)) {
+        // El volcado ANTES de lanzar: la excepción sube hasta main y de ahí a
+        // la terminación del proceso, y para entonces el device ya no está para
+        // que nadie le pregunte nada.
+        if (esPerdidaDeDevice(hr) && g_volcarDeviceRemoved)
+            g_volcarDeviceRemoved(step, hr);
         throw std::runtime_error(std::string("D3D12: ") + step + " falló (HRESULT " +
                                  hresultToString(hr) + ")");
+    }
 }
 
 std::string narrow(const wchar_t* wide)
@@ -944,10 +1001,16 @@ struct D3D12Renderer::Impl {
     void updateForwardPlus();   // parámetros y luces del frame
     void recordForwardPlusCull();
 
-    // Árbol de la interfaz 2D del juego. Este backend todavía no la dibuja,
-    // pero el editor la edita igual: tenerlo aquí es lo que permite que lo
-    // haga sin preguntar con qué backend corre.
-    UiCanvas uiCanvas;
+    // Árbol de la interfaz 2D del juego, UNO por CanvasComponent de la
+    // escena — mismo esquema que el Renderer de Vulkan (UiCanvasSlot,
+    // emparejado por ownerId con matchUiCanvasSlots). El editor sigue
+    // editando el de pantalla vía uiCanvas() sin preguntar con qué backend
+    // corre.
+    std::vector<std::unique_ptr<UiCanvasSlot>> uiSlots;
+    // Repliegue de uiCanvas() sin ningún canvas de pantalla en la escena.
+    // Persistente y vacío: una referencia a un temporal dejaría al editor
+    // leyendo memoria muerta.
+    UiCanvas uiCanvasFallback;
 
     // Capa de interfaz del editor, si la hay. No es propiedad de este backend.
     UiLayer* uiLayer = nullptr;
@@ -1129,7 +1192,15 @@ struct D3D12Renderer::Impl {
     // entero cada frame y no compensa un staging.
     ComPtr<ID3D12RootSignature> uiRootSignature;
     ComPtr<ID3D12PipelineState> uiPipeline;
-    UiDrawData                  uiDrawData;
+
+    // Las DOS variantes de canvas de MUNDO. Comparten root signature, shaders y
+    // layout de vértice con la de pantalla; lo único que cambia es que dibujan
+    // en el target de la ESCENA (kHdrFormat + D32_FLOAT + sampleCount) y el test
+    // de profundidad: una para que una pared tape el cartel y otra para lo que
+    // va siempre encima, como una barra de vida.
+    ComPtr<ID3D12PipelineState> uiWorldPipelineDepth;    // lo tapa la geometría
+    ComPtr<ID3D12PipelineState> uiWorldPipelineNoDepth;  // siempre encima
+
     std::array<D3D12MA::Allocation*, kFrameCount> uiVertexAllocations{};
     std::array<void*, kFrameCount>                uiVertexMapped{};
     std::array<UINT, kFrameCount>                 uiVertexCapacity{};
@@ -1137,14 +1208,61 @@ struct D3D12Renderer::Impl {
     std::array<void*, kFrameCount>                uiIndexMapped{};
     std::array<UINT, kFrameCount>                 uiIndexCapacity{};
 
+    // Cursores de sub-asignación DENTRO del buffer del frame en curso. Son
+    // MIEMBROS y no locales de una función porque los comparten dos pases: los
+    // canvas de mundo se graban en el de escena y los de pantalla en el de
+    // composición, y el segundo tiene que seguir donde lo dejó el primero. Con
+    // un cursor local a cada uno, los de pantalla escribirían encima de los
+    // vértices de los de mundo — que la GPU todavía no ha leído, porque lee el
+    // buffer al EJECUTAR el command list, no al grabarlo. beginUiFrame() los
+    // pone a 0 una vez por frame.
+    UINT uiVertexCursor = 0;
+    UINT uiIndexCursor  = 0;
+    // Lo que dejó contado beginUiFrame() para los canvas de PANTALLA: son los
+    // únicos que graba recordUiCanvas(), y con 0 no hay nada que dibujar.
+    UINT uiScreenVertices = 0;
+    UINT uiScreenIndices  = 0;
+    // Los de mundo en orden de pintado, de lejos a cerca. Miembro y no local
+    // para no reasignar el vector cada frame.
+    std::vector<UiCanvasSlot*> uiWorldOrder;
+
     // El pase de geometría entero, para poder repetirlo desde otra cámara: es
     // lo que necesita el horneado de una sonda de reflexión.
     void recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv, D3D12_CPU_DESCRIPTOR_HANDLE dsv,
                              UINT targetWidth, UINT targetHeight);
 
     void createUiPipeline();
+    // Las dos variantes de mundo, contra el target de la ESCENA. Sirve también
+    // de "recreate": si ya había, las suelta antes de compilar las nuevas. Hay
+    // que llamarla CADA VEZ que cambia sampleCount, o el PSO queda compilado
+    // para un número de muestras que ya no es el del target — y eso en D3D12 se
+    // manifiesta como device lost, no como error de la capa de depuración.
+    void createUiWorldPipelines();
     void ensureUiBuffers(UINT vertexCount, UINT indexCount);
-    void recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv);
+
+    // UNA vez por frame, ANTES del pase de escena (que es donde se graban los
+    // canvas de mundo). Construye el draw data de TODOS los canvas, calcula la
+    // matriz de modelo de los de mundo, dimensiona el par de buffers con el
+    // total del frame entero y pone los cursores a 0. Ver el comentario de
+    // uiVertexCursor: partirlo en dos llamadas, una por pase, corrompe el
+    // buffer en silencio.
+    void beginUiFrame();
+
+    // Sub-asigna el hueco de este canvas en el buffer del frame, comprueba que
+    // cabe, copia y bindea las dos vistas. Devuelve false si no cabe: mejor no
+    // dibujar ese canvas que escribir FUERA de la memoria mapeada, que es una
+    // escritura de HOST que ninguna capa de validación ve. Uno solo para las dos
+    // rutas —mundo y pantalla— para que la guarda no pueda quedarse en una.
+    bool bindUiCanvasGeometry(const UiDrawData& data);
+
+    // Los canvas de MUNDO, al final del pase de escena: después de la geometría
+    // y del cielo, para que el depth ya escrito los ocluya.
+    void recordWorldCanvases(UINT targetWidth, UINT targetHeight);
+
+    // transform es proj*view*model ya multiplicada: para los canvas de pantalla
+    // es la ortográfica de siempre (la calcula quien llama), y para uno de
+    // mundo lleva también la cámara y la matriz del canvas.
+    void recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, const glm::mat4& transform);
 
     // Atlas y fuentes de la UI. El backend es su dueño: los widgets solo
     // guardan el puntero, que es también la clave con la que el lote dice qué
@@ -1339,6 +1457,22 @@ struct D3D12Renderer::Impl {
     HWND        hwnd        = nullptr;
     bool        initialized = false;
 
+    // ─── Diagnóstico ─────────────────────────────────────────────────────────
+    // La cola de mensajes de la capa de depuración, para poder DRENARLA a
+    // fichero: por sí sola solo escribe por OutputDebugString.
+    ComPtr<ID3D12InfoQueue> infoQueue;
+    // El volcado de DRED se hace UNA vez: la pérdida del device la detectan
+    // varios sitios seguidos (Present, throwIfFailed, shutdown) y repetir el
+    // mismo listado de migas solo entierra el primero, que es el bueno.
+    bool deviceRemovedVolcado = false;
+
+    // Pasa a fichero lo que la capa de depuración haya acumulado desde la
+    // última vez, y vacía la cola.
+    void drainInfoQueue();
+    // Motivo de la pérdida + auto-breadcrumbs de DRED (qué operaciones completó
+    // la GPU y cuál se quedó a medias) + página fallida, si la hay.
+    void dumpDeviceRemoved(const char* donde, HRESULT hr);
+
     void waitForGpu();
     void moveToNextFrame();
     void createRenderTargetViews();
@@ -1424,6 +1558,192 @@ struct D3D12Renderer::Impl {
     void      updateViewProj();
 };
 
+namespace {
+
+#ifndef NDEBUG
+// Nombre legible de cada operación que DRED anota. Sin esto, las migas salen
+// como números y hay que ir al d3d12.h a traducirlas a mano. Va bajo la misma
+// guarda que las migas: en Release no se graban, así que no hay nada que
+// traducir y esto sería una función muerta.
+const char* nombreDeOperacion(D3D12_AUTO_BREADCRUMB_OP op)
+{
+    switch (op) {
+        case D3D12_AUTO_BREADCRUMB_OP_SETMARKER:                return "SetMarker";
+        case D3D12_AUTO_BREADCRUMB_OP_BEGINEVENT:               return "BeginEvent";
+        case D3D12_AUTO_BREADCRUMB_OP_ENDEVENT:                 return "EndEvent";
+        case D3D12_AUTO_BREADCRUMB_OP_DRAWINSTANCED:            return "DrawInstanced";
+        case D3D12_AUTO_BREADCRUMB_OP_DRAWINDEXEDINSTANCED:     return "DrawIndexedInstanced";
+        case D3D12_AUTO_BREADCRUMB_OP_EXECUTEINDIRECT:          return "ExecuteIndirect";
+        case D3D12_AUTO_BREADCRUMB_OP_DISPATCH:                 return "Dispatch";
+        case D3D12_AUTO_BREADCRUMB_OP_COPYBUFFERREGION:         return "CopyBufferRegion";
+        case D3D12_AUTO_BREADCRUMB_OP_COPYTEXTUREREGION:        return "CopyTextureRegion";
+        case D3D12_AUTO_BREADCRUMB_OP_COPYRESOURCE:             return "CopyResource";
+        case D3D12_AUTO_BREADCRUMB_OP_COPYTILES:                return "CopyTiles";
+        case D3D12_AUTO_BREADCRUMB_OP_RESOLVESUBRESOURCE:       return "ResolveSubresource";
+        case D3D12_AUTO_BREADCRUMB_OP_CLEARRENDERTARGETVIEW:    return "ClearRenderTargetView";
+        case D3D12_AUTO_BREADCRUMB_OP_CLEARUNORDEREDACCESSVIEW: return "ClearUnorderedAccessView";
+        case D3D12_AUTO_BREADCRUMB_OP_CLEARDEPTHSTENCILVIEW:    return "ClearDepthStencilView";
+        case D3D12_AUTO_BREADCRUMB_OP_RESOURCEBARRIER:          return "ResourceBarrier";
+        case D3D12_AUTO_BREADCRUMB_OP_EXECUTEBUNDLE:            return "ExecuteBundle";
+        case D3D12_AUTO_BREADCRUMB_OP_PRESENT:                  return "Present";
+        case D3D12_AUTO_BREADCRUMB_OP_RESOLVEQUERYDATA:         return "ResolveQueryData";
+        case D3D12_AUTO_BREADCRUMB_OP_BEGINSUBMISSION:          return "BeginSubmission";
+        case D3D12_AUTO_BREADCRUMB_OP_ENDSUBMISSION:            return "EndSubmission";
+        case D3D12_AUTO_BREADCRUMB_OP_WRITEBUFFERIMMEDIATE:     return "WriteBufferImmediate";
+        case D3D12_AUTO_BREADCRUMB_OP_SETPIPELINESTATE1:        return "SetPipelineState1";
+        case D3D12_AUTO_BREADCRUMB_OP_DISPATCHMESH:             return "DispatchMesh";
+        case D3D12_AUTO_BREADCRUMB_OP_BARRIER:                  return "Barrier";
+        case D3D12_AUTO_BREADCRUMB_OP_BEGIN_COMMAND_LIST:       return "BeginCommandList";
+        default:                                                return "Op";
+    }
+}
+#endif  // NDEBUG
+
+}  // namespace
+
+void D3D12Renderer::Impl::drainInfoQueue()
+{
+    if (!infoQueue)
+        return;
+
+    const UINT64 total = infoQueue->GetNumStoredMessages();
+    for (UINT64 i = 0; i < total; ++i) {
+        SIZE_T bytes = 0;
+        if (FAILED(infoQueue->GetMessage(i, nullptr, &bytes)) || bytes == 0)
+            continue;
+        std::vector<char> buffer(bytes);
+        auto* msg = reinterpret_cast<D3D12_MESSAGE*>(buffer.data());
+        if (FAILED(infoQueue->GetMessage(i, msg, &bytes)))
+            continue;
+        const char* gravedad = "INFO";
+        switch (msg->Severity) {
+            case D3D12_MESSAGE_SEVERITY_CORRUPTION: gravedad = "CORRUPCION"; break;
+            case D3D12_MESSAGE_SEVERITY_ERROR:      gravedad = "ERROR";      break;
+            case D3D12_MESSAGE_SEVERITY_WARNING:    gravedad = "AVISO";      break;
+            default: break;
+        }
+        diagLog(std::string("[capa ") + gravedad + " id=" + std::to_string(msg->ID) + "] " +
+                std::string(msg->pDescription, msg->DescriptionByteLength > 0
+                                                   ? msg->DescriptionByteLength - 1
+                                                   : 0));
+    }
+    if (total > 0)
+        infoQueue->ClearStoredMessages();
+}
+
+void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
+{
+    if (deviceRemovedVolcado)
+        return;
+    deviceRemovedVolcado = true;
+
+    diagLog("==================== DEVICE PERDIDO ====================");
+    diagLog(std::string("Detectado en: ") + (donde ? donde : "?") + "  HRESULT " +
+            hresultToString(hr));
+
+    if (!device) {
+        diagLog("No hay device al que preguntar.");
+        return;
+    }
+
+    const HRESULT motivo = device->GetDeviceRemovedReason();
+    diagLog(std::string("GetDeviceRemovedReason() = ") + hresultToString(motivo) + " (" +
+            (motivo == DXGI_ERROR_DEVICE_HUNG            ? "DEVICE_HUNG: la GPU no respondió (TDR)"
+             : motivo == DXGI_ERROR_DEVICE_REMOVED       ? "DEVICE_REMOVED"
+             : motivo == DXGI_ERROR_DEVICE_RESET         ? "DEVICE_RESET: reinicio del dispositivo"
+             : motivo == DXGI_ERROR_DRIVER_INTERNAL_ERROR ? "DRIVER_INTERNAL_ERROR"
+             : motivo == DXGI_ERROR_INVALID_CALL         ? "INVALID_CALL: la app pidió algo ilegal"
+             : motivo == S_OK                            ? "S_OK: el device NO está perdido"
+                                                         : "otro") +
+            ")");
+
+    // Lo que la capa de depuración tuviera guardado: suele explicar el porqué
+    // mucho mejor que las migas.
+    drainInfoQueue();
+
+    // El motivo de arriba y la cola de la capa salen en las DOS
+    // configuraciones: son baratos y es lo primero que uno quiere leer. Lo que
+    // cambia de una a otra son las migas, que en Release ni se graban.
+    ComPtr<ID3D12DeviceRemovedExtendedData1> dred1;
+    if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&dred1)))) {
+#ifndef NDEBUG
+        D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 migas{};
+        if (SUCCEEDED(dred1->GetAutoBreadcrumbsOutput1(&migas))) {
+            diagLog("--- Auto-breadcrumbs (DRED) ---");
+            const D3D12_AUTO_BREADCRUMB_NODE1* nodo = migas.pHeadAutoBreadcrumbNode;
+            int listas = 0;
+            for (; nodo != nullptr; nodo = nodo->pNext) {
+                const UINT total  = nodo->BreadcrumbCount;
+                const UINT hechas = nodo->pLastBreadcrumbValue ? *nodo->pLastBreadcrumbValue : 0;
+                // Una lista con TODAS las migas hechas terminó bien: no es la
+                // culpable y solo estorba en el log.
+                if (total == 0 || hechas == total)
+                    continue;
+                ++listas;
+                diagLog(std::string("Command list '") +
+                        (nodo->pCommandListDebugNameA ? nodo->pCommandListDebugNameA : "(sin nombre)") +
+                        "' en cola '" +
+                        (nodo->pCommandQueueDebugNameA ? nodo->pCommandQueueDebugNameA : "(sin nombre)") +
+                        "': completadas " + std::to_string(hechas) + " de " +
+                        std::to_string(total) + " operaciones.");
+                // Ventana alrededor del corte: lo justo para ver qué venía
+                // antes y qué se quedó sin ejecutar.
+                const UINT desde = hechas > 12 ? hechas - 12 : 0;
+                const UINT hasta = (hechas + 4 < total) ? hechas + 4 : total;
+                for (UINT i = desde; i < hasta; ++i) {
+                    const char* marca = (i < hechas) ? "  ok  " : (i == hechas ? " >>>> " : "  --  ");
+                    std::string linea = std::string(marca) + "[" + std::to_string(i) + "] " +
+                                        nombreDeOperacion(nodo->pCommandHistory[i]);
+                    // Contextos: los cuelga SetBreadcrumbContext, que este
+                    // backend no usa todavía, pero si algún día lo hace salen
+                    // aquí y dicen QUÉ canvas o QUÉ malla era.
+                    for (UINT c = 0; c < nodo->BreadcrumbContextsCount; ++c) {
+                        if (nodo->pBreadcrumbContexts[c].BreadcrumbIndex != i)
+                            continue;
+                        linea += "  ctx=" + narrow(nodo->pBreadcrumbContexts[c].pContextString);
+                    }
+                    diagLog(linea);
+                }
+            }
+            if (listas == 0)
+                diagLog("Ninguna command list quedó a medias: la GPU terminó todo lo enviado.");
+        } else {
+            diagLog("GetAutoBreadcrumbsOutput1 falló: DRED no llegó a activarse.");
+        }
+#else
+        // Sin migas, pero dicho en voz alta: quien lea este log en Release tiene
+        // que saber que la lista de operaciones NO falta por un fallo, sino
+        // porque no se graba (ver el comentario de init), y que reproducirlo en
+        // Debug le da el comando exacto.
+        diagLog("Auto-breadcrumbs no disponibles: en Release no se graban (cuestan un "
+                "WriteBufferImmediate por comando). Repetir esto en Debug da la "
+                "operación exacta que se quedó a medias.");
+#endif
+
+        // El fallo de página SÍ va en las dos: no cuesta por frame y es lo que
+        // dice qué objeto había —o acababa de morir— en la dirección que reventó.
+        D3D12_DRED_PAGE_FAULT_OUTPUT fallo{};
+        if (SUCCEEDED(dred1->GetPageFaultAllocationOutput(&fallo)) &&
+            fallo.PageFaultVA != 0) {
+            char va[32] = {};
+            std::snprintf(va, sizeof(va), "0x%llX",
+                          static_cast<unsigned long long>(fallo.PageFaultVA));
+            diagLog(std::string("--- Fallo de página en la VA de GPU ") + va + " ---");
+            auto listar = [](const char* titulo, const D3D12_DRED_ALLOCATION_NODE* n) {
+                for (int i = 0; n != nullptr && i < 8; n = n->pNext, ++i)
+                    diagLog(std::string(titulo) + ": " +
+                            (n->ObjectNameA ? n->ObjectNameA : "(sin nombre)"));
+            };
+            listar("  objeto VIVO en esa dirección", fallo.pHeadExistingAllocationNode);
+            listar("  objeto LIBERADO hace poco ahí", fallo.pHeadRecentFreedAllocationNode);
+        }
+    } else {
+        diagLog("El device no expone ID3D12DeviceRemovedExtendedData1: ni migas ni "
+                "fallo de página.");
+    }
+    diagLog("========================================================");
+}
+
 // Espera a que la GPU vacíe TODO lo enviado. Solo para resize y shutdown: por
 // frame se usa moveToNextFrame, que no serializa CPU y GPU.
 void D3D12Renderer::Impl::waitForGpu()
@@ -1436,8 +1756,20 @@ void D3D12Renderer::Impl::waitForGpu()
         return;
 
     if (fence->GetCompletedValue() < target) {
-        if (SUCCEEDED(fence->SetEventOnCompletion(target, fenceEvent)))
-            WaitForSingleObjectEx(fenceEvent, INFINITE, FALSE);
+        if (SUCCEEDED(fence->SetEventOnCompletion(target, fenceEvent))) {
+            // Se sigue esperando SIN LÍMITE —salir antes de tiempo soltaría
+            // recursos que la GPU todavía lee—, pero por tramos: si la GPU se
+            // cuelga (TDR), este fence no se señala jamás y el editor se queda
+            // tieso sin decir una palabra. Cada tramo que vence deja escrito el
+            // motivo. 5 s son dos veces el TDR por defecto (2 s).
+            while (WaitForSingleObjectEx(fenceEvent, 5000, FALSE) == WAIT_TIMEOUT) {
+                diagLog("waitForGpu: el fence sigue sin señalarse (esperado " +
+                        std::to_string(target) + ", completado " +
+                        std::to_string(fence->GetCompletedValue()) + ").");
+                dumpDeviceRemoved("waitForGpu (el fence no avanza)",
+                                  device ? device->GetDeviceRemovedReason() : E_FAIL);
+            }
+        }
     }
     ++fenceValues[frameIndex];
 }
@@ -1544,8 +1876,18 @@ void D3D12Renderer::Impl::moveToNextFrame()
     // Solo se espera si este slot todavía está en la GPU. Con triple buffer, lo
     // normal es que ya haya terminado y no se bloquee nada.
     if (fence->GetCompletedValue() < fenceValues[frameIndex]) {
-        if (SUCCEEDED(fence->SetEventOnCompletion(fenceValues[frameIndex], fenceEvent)))
-            WaitForSingleObjectEx(fenceEvent, INFINITE, FALSE);
+        if (SUCCEEDED(fence->SetEventOnCompletion(fenceValues[frameIndex], fenceEvent))) {
+            // Mismo tramo y mismo motivo que en waitForGpu: se espera igual de
+            // largo, pero un fence que no avanza deja rastro en vez de congelar
+            // el bucle de frame en silencio.
+            while (WaitForSingleObjectEx(fenceEvent, 5000, FALSE) == WAIT_TIMEOUT) {
+                diagLog("moveToNextFrame: el fence sigue sin señalarse (esperado " +
+                        std::to_string(fenceValues[frameIndex]) + ", completado " +
+                        std::to_string(fence->GetCompletedValue()) + ").");
+                dumpDeviceRemoved("moveToNextFrame (el fence no avanza)",
+                                  device ? device->GetDeviceRemovedReason() : E_FAIL);
+            }
+        }
     }
     fenceValues[frameIndex] = current + 1;
 }
@@ -3960,7 +4302,13 @@ void D3D12Renderer::Impl::applyPendingSampleCount()
     createSkinningPipelines();
     createGizmoPipeline();
     createSkyboxPipelineOnly();
-
+    // Los canvas de MUNDO también dibujan en el target de la escena, así que sus
+    // dos PSO llevan su SampleDesc. Es la ÚNICA ruta de recreación que les
+    // afecta: un cambio de tamaño (applyPendingResize/applyPendingRenderSize)
+    // mueve los recursos pero no las muestras, y en D3D12 un PSO no está atado a
+    // ningún objeto de render pass. Olvidarla dejaría los dos compilados para
+    // otro número de muestras: device lost al usarlos, sin un solo aviso.
+    createUiWorldPipelines();
 }
 
 void D3D12Renderer::Impl::createForwardPlusPipelines()
@@ -5339,11 +5687,18 @@ void D3D12Renderer::Impl::createUiPipeline()
     atlasRange.NumDescriptors     = 1;
     atlasRange.BaseShaderRegister = 0;  // t0
 
+    // 17 dwords y no 16, y visibilidad ALL y no VERTEX: el bloque de push
+    // constants de ui.vert/ui.frag lleva ahora, detras de la mat4, un
+    // `int linearOutput` que lee el PIXEL shader (deshace la gamma cuando el
+    // destino es HDR lineal, que es el caso de los canvas de mundo en el pase de
+    // escena). El HLSL sale de traducir ese mismo GLSL con spirv-cross, asi que
+    // el cbuffer b0 tiene 17 dwords y lo usan las dos etapas; dejarlo en
+    // 16/VERTEX romperia la creacion del PSO contra esta root signature.
     D3D12_ROOT_PARAMETER params[2]{};
     params[0].ParameterType            = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[0].Constants.ShaderRegister = 0;  // b0
-    params[0].Constants.Num32BitValues = 16;
-    params[0].ShaderVisibility         = D3D12_SHADER_VISIBILITY_VERTEX;
+    params[0].Constants.Num32BitValues = 17;
+    params[0].ShaderVisibility         = D3D12_SHADER_VISIBILITY_ALL;
 
     params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     params[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -5433,6 +5788,91 @@ void D3D12Renderer::Impl::createUiPipeline()
 
     throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&uiPipeline)),
                   "ID3D12Device::CreateGraphicsPipelineState(UI 2D)");
+
+    // Y las de mundo, que se apoyan en la root signature recién creada.
+    createUiWorldPipelines();
+}
+
+void D3D12Renderer::Impl::createUiWorldPipelines()
+{
+    // Sin root signature no hay contra qué compilar: pasa si createUiPipeline()
+    // se rindió antes (shaders que no están, serialización fallida). No es un
+    // error, es que este backend se queda sin UI.
+    if (!uiRootSignature)
+        return;
+
+    const std::vector<char> vs = readBinaryFile("shaders/ui.vert.dxil");
+    const std::vector<char> ps = readBinaryFile("shaders/ui.frag.dxil");
+    if (vs.empty() || ps.empty())
+        return;
+
+    // El MISMO layout de la de pantalla: los quads de un canvas de mundo salen
+    // del mismo buildDrawData, solo cambia la matriz que los proyecta.
+    const D3D12_INPUT_ELEMENT_DESC layout[] = {
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(UiVertex, pos),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(UiVertex, uv),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 2, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(UiVertex, color),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 3, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(UiVertex, params),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 4, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(UiVertex, effect),
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    };
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature        = uiRootSignature.Get();
+    psoDesc.VS                    = {vs.data(), vs.size()};
+    psoDesc.PS                    = {ps.data(), ps.size()};
+    psoDesc.InputLayout           = {layout, _countof(layout)};
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets      = 1;
+    // Aquí está la diferencia con la de pantalla: el destino es el target de la
+    // ESCENA, que es HDR lineal, tiene profundidad y puede ser multimuestra. Un
+    // PSO con formatos o muestras que no casen con el target NO falla al
+    // crearse; se cae al usarlo.
+    psoDesc.RTVFormats[0]         = kHdrFormat;
+    psoDesc.DSVFormat             = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleDesc.Count      = sampleCount;
+    psoDesc.SampleMask            = UINT_MAX;
+
+    psoDesc.RasterizerState.FillMode        = D3D12_FILL_MODE_SOLID;
+    // Sin descarte de caras: un canvas de mundo se puede mirar por detrás, y con
+    // billboard apagado eso es lo normal al rodearlo.
+    psoDesc.RasterizerState.CullMode        = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.DepthClipEnable = TRUE;
+
+    D3D12_RENDER_TARGET_BLEND_DESC& blend = psoDesc.BlendState.RenderTarget[0];
+    blend.BlendEnable           = TRUE;
+    blend.SrcBlend              = D3D12_BLEND_SRC_ALPHA;
+    blend.DestBlend             = D3D12_BLEND_INV_SRC_ALPHA;
+    blend.BlendOp               = D3D12_BLEND_OP_ADD;
+    blend.SrcBlendAlpha         = D3D12_BLEND_ONE;
+    blend.DestBlendAlpha        = D3D12_BLEND_INV_SRC_ALPHA;
+    blend.BlendOpAlpha          = D3D12_BLEND_OP_ADD;
+    blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+    // La ESCRITURA de profundidad va apagada en las DOS variantes, a propósito:
+    // la UI va con alpha, y escribir depth haría que los quads de un mismo
+    // canvas se recortaran entre sí según el orden en que salieran del batcher.
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    psoDesc.DepthStencilState.StencilEnable  = FALSE;
+
+    // Se sueltan las viejas ANTES de compilar: esta función es también el
+    // "recreate" del cambio de muestras, y applyPendingSampleCount() ya esperó
+    // a que la GPU soltara los command lists que las usaban.
+    uiWorldPipelineDepth.Reset();
+    uiWorldPipelineNoDepth.Reset();
+
+    psoDesc.DepthStencilState.DepthEnable = TRUE;
+    throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&uiWorldPipelineDepth)),
+                  "ID3D12Device::CreateGraphicsPipelineState(UI mundo con depth)");
+
+    psoDesc.DepthStencilState.DepthEnable = FALSE;
+    throwIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&uiWorldPipelineNoDepth)),
+                  "ID3D12Device::CreateGraphicsPipelineState(UI mundo sin depth)");
 }
 
 bool D3D12Renderer::Impl::createProbeResources(GpuProbe& probe)
@@ -6001,6 +6441,11 @@ bool D3D12Renderer::Impl::registerUiAtlas(UiTextureAtlas& atlas)
     if (!texture)
         return false;
 
+    // Nombre para que el JSON de D3D12MA (y ReportLiveObjects) lo distinga.
+    texture->SetName(L"UiAtlas");
+    diagLog("registerUiAtlas: atlas " + std::to_string(atlas.width()) + "x" +
+            std::to_string(atlas.height()) + " en el slot " + std::to_string(slot) +
+            (atlas.sourceIsSrgb() ? " (sRGB, sprites)" : " (lineal, fuente)"));
     uiAtlasTextures.push_back(texture);
     uiAtlasSrv[&atlas] = slot;
     ++uiNextAtlasSlot;
@@ -6063,43 +6508,221 @@ void D3D12Renderer::Impl::ensureUiBuffers(UINT vertexCount, UINT indexCount)
          indexCount, sizeof(uint16_t));
 }
 
-void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
+void D3D12Renderer::Impl::beginUiFrame()
+{
+    // El draw data de TODOS los canvas del frame, y el dimensionado del par de
+    // buffers, en UN solo sitio y ANTES del pase de escena. No está dentro de
+    // recordUiCanvas (que es donde vivía) porque los canvas de MUNDO se graban
+    // en el pase de ESCENA, que corre antes: si el buffer se dimensionara ahí,
+    // los de mundo llegarían con la capacidad del frame ANTERIOR (o 0) y la
+    // guarda de bindUiCanvasGeometry los descartaría EN SILENCIO. Y peor: si
+    // ensureUiBuffers tuviera que CRECER a mitad de frame, soltaría el recurso
+    // sobre el que los de mundo ya han grabado su vista y la GPU leería una
+    // dirección muerta al ejecutar.
+    uiVertexCursor   = 0;
+    uiIndexCursor    = 0;
+    uiScreenVertices = 0;
+    uiScreenIndices  = 0;
+    if (!uiPipeline)
+        return;
+
+    for (auto& s : uiSlots)
+    {
+        if (!s) continue;
+        if (s->mode == UiCanvasRenderMode::World)
+        {
+            // La matriz de MODELO, aquí y no en syncUiCanvases: necesita la
+            // vista de la cámara para el billboard, y syncUiCanvases no la
+            // tiene. Además cae ANTES de sortWorldCanvasesBackToFront, que
+            // ordena leyendo la posición de model[3] — calcularla ya en el
+            // grabado la dejaría a cero para el orden.
+            //
+            // En modo World el canvas NO se ajusta a ninguna pantalla: su
+            // espacio es su propia referenceResolution, que es lo que fija
+            // CanvasComponent::applyTo.
+            const glm::vec2 tam = s->canvas.referenceResolution;
+            s->model = uiWorldCanvasMatrix(s->component, tam, s->worldTransform, cameraView);
+            s->canvas.buildDrawData(static_cast<uint32_t>(tam.x), static_cast<uint32_t>(tam.y),
+                                    s->drawData);
+        }
+        else
+        {
+            // Los de pantalla, al tamaño de SALIDA: la UI se mide en píxeles de
+            // pantalla, no en los de render, que con SSAA son otros.
+            s->canvas.buildDrawData(outWidth, outHeight, s->drawData);
+        }
+    }
+
+    // La cuenta la hace la función libre de UiWidgetSync.h, que es la que está
+    // probada sin GPU (test_ui_frame_totals_suma_mundo_y_pantalla).
+    const UiFrameTotals totales = uiFrameTotals(uiSlots);
+    uiScreenVertices = totales.screenVertices;
+    uiScreenIndices  = totales.screenIndices;
+    if (totales.vertices == 0 || totales.indices == 0)
+        return;
+
+    ensureUiBuffers(totales.vertices, totales.indices);
+}
+
+bool D3D12Renderer::Impl::bindUiCanvasGeometry(const UiDrawData& data)
+{
+    if (!uiVertexMapped[frameIndex] || !uiIndexMapped[frameIndex])
+        return false;
+
+    // Sub-asignación DENTRO del mismo buffer: cada canvas escribe a partir de
+    // donde dejó el anterior (bumpUiCursor) y bindea SU propia vista, con el
+    // offset ya metido en BufferLocation. Sin esto —o con las vistas arrancando
+    // siempre en el byte 0, que es lo que hacía con un canvas único— el segundo
+    // canvas pisaría los vértices del primero, y como la GPU lee el buffer al
+    // EJECUTAR el command list (no al grabarlo), los N draws saldrían todos con
+    // la geometría del ÚLTIMO.
+    const UINT vertexCount = static_cast<UINT>(data.vertices.size());
+    const UINT indexCount  = static_cast<UINT>(data.indices.size());
+    const UINT vertexBase  = bumpUiCursor(uiVertexCursor, vertexCount);
+    const UINT indexBase   = bumpUiCursor(uiIndexCursor,  indexCount);
+
+    // El cursor lo dimensiona beginUiFrame() con el total de TODOS los canvas
+    // del frame. Si ese total no cuadrase con lo que de verdad se escribe aquí,
+    // esto escribiría FUERA de la memoria mapeada sin que ninguna capa de
+    // validación lo vea. Mejor no dibujar ese canvas que corromper el buffer.
+    if (!uiCursorFits(vertexBase, vertexCount, uiVertexCapacity[frameIndex]) ||
+        !uiCursorFits(indexBase,  indexCount,  uiIndexCapacity[frameIndex]))
+        return false;
+
+    std::memcpy(static_cast<UiVertex*>(uiVertexMapped[frameIndex]) + vertexBase,
+                data.vertices.data(), data.vertices.size() * sizeof(UiVertex));
+    std::memcpy(static_cast<uint16_t*>(uiIndexMapped[frameIndex]) + indexBase,
+                data.indices.data(), data.indices.size() * sizeof(uint16_t));
+
+    D3D12_VERTEX_BUFFER_VIEW vbv{};
+    vbv.BufferLocation = uiVertexAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress()
+                       + static_cast<UINT64>(vertexBase) * sizeof(UiVertex);
+    vbv.SizeInBytes    = static_cast<UINT>(data.vertices.size() * sizeof(UiVertex));
+    vbv.StrideInBytes  = sizeof(UiVertex);
+
+    D3D12_INDEX_BUFFER_VIEW ibv{};
+    ibv.BufferLocation = uiIndexAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress()
+                       + static_cast<UINT64>(indexBase) * sizeof(uint16_t);
+    ibv.SizeInBytes    = static_cast<UINT>(data.indices.size() * sizeof(uint16_t));
+    ibv.Format         = DXGI_FORMAT_R16_UINT;
+
+    commandList->IASetVertexBuffers(0, 1, &vbv);
+    commandList->IASetIndexBuffer(&ibv);
+    return true;
+}
+
+void D3D12Renderer::Impl::recordWorldCanvases(UINT targetWidth, UINT targetHeight)
+{
+    if (!uiWorldPipelineDepth || !uiWorldPipelineNoDepth)
+        return;
+
+    // El orden lo pone la función libre de UiWidgetSync.h, que es la que está
+    // probada sin GPU (test_world_canvases_se_ordenan_de_lejos_a_cerca). El draw
+    // data y la matriz de modelo ya están hechos, en beginUiFrame().
+    sortWorldCanvasesBackToFront(uiSlots, cameraView, uiWorldOrder);
+    if (uiWorldOrder.empty())
+        return;
+
+    const D3D12_GPU_DESCRIPTOR_HANDLE heapStart = srvHeap->GetGPUDescriptorHandleForHeapStart();
+    auto gpuHandle = [&](UINT index) {
+        D3D12_GPU_DESCRIPTOR_HANDLE handle = heapStart;
+        handle.ptr += static_cast<UINT64>(index) * srvSize;
+        return handle;
+    };
+
+    ID3D12DescriptorHeap* heaps[] = {srvHeap.Get()};
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetGraphicsRootSignature(uiRootSignature.Get());
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    // El render target y el viewport ya son los del pase de escena: esta función
+    // se llama con la geometría y el cielo recién grabados y sin nada en medio
+    // que los cambie, así que la profundidad que hay escrita es la que tiene que
+    // ocluir. Lo que sí se repone es el scissor, porque el bucle de abajo NO lo
+    // toca (ver la limitación) y el pase de composición lo deja donde quiera.
+    D3D12_RECT scissor{0, 0, static_cast<LONG>(targetWidth), static_cast<LONG>(targetHeight)};
+    commandList->RSSetScissorRects(1, &scissor);
+
+    // LIMITACIÓN CONOCIDA, igual que en Vulkan: `clipChildren` no recorta en un
+    // canvas de mundo. El scissor del batcher está en píxeles de canvas y un
+    // D3D12_RECT solo entiende píxeles del target; en pantalla el mapeo es una
+    // escala, pero un canvas de mundo está PROYECTADO (puede salir rotado, en
+    // perspectiva o partido por el borde) y no hay rectángulo alineado a los
+    // ejes que lo represente. Recortar con el rect sin proyectar taparía trozos
+    // que sí se ven.
+    for (UiCanvasSlot* s : uiWorldOrder)
+    {
+        const UiDrawData& data = s->drawData;
+        if (data.empty() || data.vertices.empty() || data.indices.empty()) continue;
+        if (!bindUiCanvasGeometry(data)) continue;
+
+        // depthTest elige pipeline: true = lo tapa una pared; false = siempre
+        // encima. La ESCRITURA de profundidad va apagada en las dos.
+        commandList->SetPipelineState(s->depthTest ? uiWorldPipelineDepth.Get()
+                                                   : uiWorldPipelineNoDepth.Get());
+
+        // La matriz va como ROOT CONSTANTS, no en un buffer compartido: se queda
+        // grabada en el command list, así que cada canvas conserva la SUYA
+        // aunque la GPU no ejecute hasta mucho después. Con un CBV por frame
+        // reescrito entre draws, los N canvas saldrían todos con la matriz del
+        // ÚLTIMO — que es exactamente lo que pasó con las seis caras de una
+        // sonda, y el síntoma fue geometría AUSENTE, no matrices iguales.
+        // La proyección es la JITTEREADA, la misma que updateSceneUbo le da a la
+        // geometría: con TAA, un canvas de mundo sin jitter dejaría un borde
+        // permanente contra todo lo que sí lo lleva. Fuera de TAA,
+        // taaJitteredProj es cameraProj() tal cual y esto es viewProj.
+        const glm::mat4 mvp = taaJitteredProj * cameraView * s->model;
+        commandList->SetGraphicsRoot32BitConstants(0, 16, &mvp[0][0], 0);
+        // El dword 16 es linearOutput, y aquí va a 1: el destino es el target de
+        // la ESCENA, que es kHdrFormat (R16G16B16A16_FLOAT), o sea HDR LINEAL, y
+        // lo que se escriba ahí pasa después por bloom_composite (ACES +
+        // pow(1/2.2)). Sin deshacer la gamma aquí, un 0.5 acabaría en ~0.80 en
+        // pantalla: el cartel sale LAVADO y ninguna capa lo dice.
+        const UINT linearOutput = 1;
+        commandList->SetGraphicsRoot32BitConstants(0, 1, &linearOutput, 16);
+
+        for (const UiBatch& batch : data.batches) {
+            // `scissor.empty()` TAMBIÉN descarta, igual que en Vulkan
+            // (UiSpriteBatch.cpp): un nodo con clipChildren cuyo rect de recorte
+            // se quedó a ancho o alto 0 —un ScrollView con el contenido
+            // desplazado del todo fuera— no emite NADA. Aquí no se puede aplicar
+            // el scissor por lote (el canvas está proyectado y no hay rect
+            // alineado a los ejes que lo represente, ver el comentario de
+            // arriba), pero un clip ya vacío sí se respeta: sin esta mitad, ese
+            // ScrollView se dibujaba ENTERO y sin recortar. Ojo: NO es el mismo
+            // caso que el camino de PANTALLA (recordUiCanvas), donde
+            // scissor.empty() significa "sin recorte propio" y cae al viewport
+            // entero — eso es de antes y ahí seguir.
+            if (batch.indexCount == 0 || batch.scissor.empty())
+                continue;
+
+            UINT srv = kSrvBaseColor;
+            if (batch.atlas) {
+                const auto it = uiAtlasSrv.find(batch.atlas);
+                if (it != uiAtlasSrv.end())
+                    srv = it->second;
+            }
+            commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(srv));
+            // firstIndex es LOCAL a este canvas: el offset ya lo aplicó la vista
+            // de índices de bindUiCanvasGeometry.
+            commandList->DrawIndexedInstanced(batch.indexCount, 1, batch.firstIndex, 0, 0);
+        }
+    }
+}
+
+void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, const glm::mat4& transform)
 {
     if (!uiPipeline)
         return;
 
-    // Los quads, en CPU. Al tamaño de SALIDA: la UI se mide en píxeles de
-    // pantalla, no en los de render, que con SSAA son otros.
-    uiCanvas.buildDrawData(outWidth, outHeight, uiDrawData);
-
-    if (uiDrawData.empty() || uiDrawData.vertices.empty() || uiDrawData.indices.empty())
+    // El draw data y el dimensionado del buffer ya están hechos: los hizo
+    // beginUiFrame(), antes del pase de escena. Aquí solo se graban los canvas
+    // de PANTALLA, que son los únicos de este pase; los de MUNDO ya se grabaron
+    // dentro del de escena, y sus vértices siguen en el mismo buffer sin leer.
+    if (uiScreenVertices == 0 || uiScreenIndices == 0)
         return;
-
-    ensureUiBuffers(static_cast<UINT>(uiDrawData.vertices.size()),
-                    static_cast<UINT>(uiDrawData.indices.size()));
     if (!uiVertexMapped[frameIndex] || !uiIndexMapped[frameIndex])
         return;
-
-    std::memcpy(uiVertexMapped[frameIndex], uiDrawData.vertices.data(),
-                uiDrawData.vertices.size() * sizeof(UiVertex));
-    std::memcpy(uiIndexMapped[frameIndex], uiDrawData.indices.data(),
-                uiDrawData.indices.size() * sizeof(uint16_t));
-
-    D3D12_VERTEX_BUFFER_VIEW vbv{};
-    vbv.BufferLocation = uiVertexAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress();
-    vbv.SizeInBytes    = static_cast<UINT>(uiDrawData.vertices.size() * sizeof(UiVertex));
-    vbv.StrideInBytes  = sizeof(UiVertex);
-
-    D3D12_INDEX_BUFFER_VIEW ibv{};
-    ibv.BufferLocation = uiIndexAllocations[frameIndex]->GetResource()->GetGPUVirtualAddress();
-    ibv.SizeInBytes    = static_cast<UINT>(uiDrawData.indices.size() * sizeof(uint16_t));
-    ibv.Format         = DXGI_FORMAT_R16_UINT;
-
-    // Ortográfica en píxeles con el origen ARRIBA a la izquierda, que es como
-    // vienen las posiciones. Sin voltear nada más: el viewport de salida ya va
-    // con altura negativa en el resto de pases, así que aquí se pone recto.
-    const glm::mat4 proj = glm::orthoRH_ZO(0.0f, static_cast<float>(outWidth),
-                                           static_cast<float>(outHeight), 0.0f, -1.0f, 1.0f);
 
     D3D12_VIEWPORT viewport{};
     viewport.Width    = static_cast<float>(outWidth);
@@ -6119,39 +6742,59 @@ void D3D12Renderer::Impl::recordUiCanvas(D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
     commandList->RSSetViewports(1, &viewport);
     commandList->SetPipelineState(uiPipeline.Get());
     commandList->SetGraphicsRootSignature(uiRootSignature.Get());
-    commandList->SetGraphicsRoot32BitConstants(0, 16, &proj[0][0], 0);
+    commandList->SetGraphicsRoot32BitConstants(0, 16, &transform[0][0], 0);
+    // El dword 16 es linearOutput. Los canvas de PANTALLA se dibujan sobre el
+    // back buffer, que ya está tonemapeado y con la gamma aplicada por
+    // bloom_composite, así que va a 0: el número que se escribe aquí YA es el
+    // que se ve. Los de MUNDO van a 1 (ver recordWorldCanvases). Si no se
+    // empujara, el pixel shader leería un valor sin definir y el color saldría
+    // mal en cuanto no fuera 0.
+    const UINT linearOutput = 0;
+    commandList->SetGraphicsRoot32BitConstants(0, 1, &linearOutput, 16);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    commandList->IASetVertexBuffers(0, 1, &vbv);
-    commandList->IASetIndexBuffer(&ibv);
 
-    for (const UiBatch& batch : uiDrawData.batches) {
-        if (batch.indexCount == 0)
-            continue;
+    for (auto& s : uiSlots)
+    {
+        if (!s || s->mode != UiCanvasRenderMode::ScreenSpace) continue;
+        const UiDrawData& data = s->drawData;
+        if (data.empty() || data.vertices.empty() || data.indices.empty()) continue;
 
-        // El recorte del nodo, en píxeles de pantalla. Un lote sin scissor
-        // propio se recorta al viewport entero.
-        D3D12_RECT scissor{0, 0, static_cast<LONG>(outWidth), static_cast<LONG>(outHeight)};
-        if (!batch.scissor.empty()) {
-            scissor.left   = batch.scissor.x;
-            scissor.top    = batch.scissor.y;
-            scissor.right  = batch.scissor.x + static_cast<LONG>(batch.scissor.width);
-            scissor.bottom = batch.scissor.y + static_cast<LONG>(batch.scissor.height);
+        // Los cursores son MIEMBROS y siguen donde los dejaron los canvas de
+        // mundo en el pase de escena: sus vértices están en este mismo buffer y
+        // la GPU todavía no los ha leído (lee al EJECUTAR, no al grabar).
+        if (!bindUiCanvasGeometry(data)) continue;
+
+        for (const UiBatch& batch : data.batches) {
+            if (batch.indexCount == 0)
+                continue;
+
+            // El recorte del nodo, en píxeles de pantalla. Un lote sin scissor
+            // propio se recorta al viewport entero.
+            D3D12_RECT scissor{0, 0, static_cast<LONG>(outWidth), static_cast<LONG>(outHeight)};
+            if (!batch.scissor.empty()) {
+                scissor.left   = batch.scissor.x;
+                scissor.top    = batch.scissor.y;
+                scissor.right  = batch.scissor.x + static_cast<LONG>(batch.scissor.width);
+                scissor.bottom = batch.scissor.y + static_cast<LONG>(batch.scissor.height);
+            }
+            commandList->RSSetScissorRects(1, &scissor);
+
+            // Sin atlas, la 1x1 blanca: multiplicar por (1,1,1,1) deja el color del
+            // vértice tal cual, así que un panel plano no necesita ni pipeline
+            // aparte. Con atlas, el suyo; y si no llegó a subirse, otra vez la
+            // blanca —se verá el color plano en vez del sprite, pero no un
+            // descriptor de otro.
+            UINT srv = kSrvBaseColor;
+            if (batch.atlas) {
+                const auto it = uiAtlasSrv.find(batch.atlas);
+                if (it != uiAtlasSrv.end())
+                    srv = it->second;
+            }
+            commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(srv));
+            // firstIndex es LOCAL a este canvas: el offset ya lo aplicó la
+            // vista de índices de arriba.
+            commandList->DrawIndexedInstanced(batch.indexCount, 1, batch.firstIndex, 0, 0);
         }
-        commandList->RSSetScissorRects(1, &scissor);
-
-        // Sin atlas, la 1x1 blanca: multiplicar por (1,1,1,1) deja el color del
-        // vértice tal cual, así que un panel plano no necesita ni pipeline
-        // aparte. Con atlas, el suyo; y si no llegó a subirse, otra vez la
-        // blanca —se verá el color plano en vez del sprite, pero no un
-        // descriptor de otro.
-        UINT srv = kSrvBaseColor;
-        if (batch.atlas) {
-            const auto it = uiAtlasSrv.find(batch.atlas);
-            if (it != uiAtlasSrv.end())
-                srv = it->second;
-        }
-        commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(srv));
-        commandList->DrawIndexedInstanced(batch.indexCount, 1, batch.firstIndex, 0, 0);
     }
 }
 
@@ -6405,7 +7048,13 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     // UI del juego, encima de la escena ya compuesta y por debajo de la del
     // editor (que se graba después, sobre el backbuffer). Con el canvas vacío no
     // graba ni un comando.
-    recordUiCanvas(backBufferRtv);
+    //
+    // Ortográfica en píxeles con el origen ARRIBA a la izquierda, que es como
+    // vienen las posiciones. Sin voltear nada más: el viewport de salida ya va
+    // con altura negativa en el resto de pases, así que aquí se pone recto.
+    const glm::mat4 uiProj = glm::orthoRH_ZO(0.0f, static_cast<float>(outWidth),
+                                             static_cast<float>(outHeight), 0.0f, -1.0f, 1.0f);
+    recordUiCanvas(backBufferRtv, uiProj);
 
     transition(ldrAllocation->GetResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -7014,6 +7663,42 @@ void D3D12Renderer::init(Window& window)
     }
 #endif
 
+    // DRED (Device Removed Extended Data). Es la única forma de saber QUÉ
+    // operación colgó a la GPU cuando el device se pierde, y no depende de la
+    // capa de depuración ni de las "Graphics Tools". Como la capa, hay que
+    // pedirlo ANTES de crear el device: es un ajuste de proceso que el device
+    // lee al nacer.
+    //
+    // Las dos mitades NO cuestan lo mismo y por eso no llevan la misma guarda:
+    //
+    //   - Los AUTO-BREADCRUMBS graban un WriteBufferImmediate por CADA comando
+    //     que se mete en la lista. Eso es coste por frame, en todos los frames,
+    //     y Release es la configuración desde la que se exporta el juego: van
+    //     solo en Debug. Si alguien viene dentro de seis meses a "arreglar"
+    //     esta guarda quitándola, que sepa lo que está pagando — y que para
+    //     perseguir un cuelgue de GPU basta con reproducirlo en Debug, donde
+    //     las migas SÍ están.
+    //   - El FALLO DE PÁGINA no graba nada por comando: solo hace que el
+    //     runtime recuerde el nombre de las allocations para poder decir qué
+    //     había en la dirección que reventó. Se queda encendido en las dos
+    //     configuraciones, porque es justo lo que uno quiere tener cuando el
+    //     cuelgue aparece en la máquina de un jugador y no hay segunda toma.
+    {
+        ComPtr<ID3D12DeviceRemovedExtendedDataSettings> dredSettings;
+        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dredSettings)))) {
+            dredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+#ifndef NDEBUG
+            dredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+            diagLog("DRED activado (auto-breadcrumbs + page fault).");
+#else
+            diagLog("DRED activado (solo page fault; las migas cuestan por frame "
+                    "y van solo en Debug).");
+#endif
+        } else {
+            diagLog("DRED NO disponible en este sistema.");
+        }
+    }
+
     throwIfFailed(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&d.factory)),
                   "CreateDXGIFactory2");
 
@@ -7064,6 +7749,23 @@ void D3D12Renderer::init(Window& window)
 
     throwIfFailed(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&d.device)),
                   "D3D12CreateDevice");
+
+    // La cola de mensajes de la capa de depuración, para poder drenarla a
+    // fichero: por sí sola escribe por OutputDebugString, que sin depurador no
+    // lo lee nadie. Solo existe si la capa está activa (Debug + Graphics
+    // Tools); si no, el QueryInterface falla y aquí no pasa nada.
+    if (SUCCEEDED(d.device->QueryInterface(IID_PPV_ARGS(&d.infoQueue))))
+        diagLog("Cola de mensajes de la capa de depuración redirigida a este fichero.");
+
+    // El gancho para throwIfFailed, que es una función libre y no tiene device.
+    // Va sobre una estática de traducción porque no hay más de un D3D12Renderer
+    // por proceso (el device cuelga de él y main crea uno).
+    static D3D12Renderer::Impl* impl = nullptr;
+    impl                             = &d;
+    g_volcarDeviceRemoved            = [](const char* donde, HRESULT hr) {
+        if (impl)
+            impl->dumpDeviceRemoved(donde, hr);
+    };
 
     D3D12_COMMAND_QUEUE_DESC queueDesc{};
     queueDesc.Type  = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -7119,6 +7821,10 @@ void D3D12Renderer::init(Window& window)
                                               d.allocators[d.frameIndex].Get(), nullptr,
                                               IID_PPV_ARGS(&d.commandList)),
                   "ID3D12Device::CreateCommandList");
+    // Nombres para que las migas de DRED digan de QUÉ lista y QUÉ cola habla,
+    // en vez de "(sin nombre)".
+    d.commandList->SetName(L"ListaPrincipal");
+    d.queue->SetName(L"ColaDirecta");
     // Se crea en estado abierto y drawFrame espera encontrarla cerrada.
     throwIfFailed(d.commandList->Close(), "ID3D12GraphicsCommandList::Close");
 
@@ -7681,8 +8387,22 @@ void D3D12Renderer::drawFrame()
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = d.dsvHeap->GetCPUDescriptorHandleForHeapStart();
     if (multisampled)
         dsv.ptr += d.dsvSize;
+    // El frame de UI, ANTES del pase de escena: es ahí donde se graban los
+    // canvas de MUNDO, y esta llamada es la que construye su draw data, calcula
+    // su matriz de modelo y dimensiona el buffer que comparten con los de
+    // pantalla. Una sola vez por frame — ver el comentario de uiVertexCursor.
+    // Va DETRÁS de resolveFrameCamera/updateViewProj porque la matriz de modelo
+    // necesita la vista del frame para el billboard, y DETRÁS del horneado de
+    // sondas para que ese no se lleve por delante el dimensionado.
+    d.beginUiFrame();
+
     d.markTimestamp(Impl::TsScene);
     d.recordSceneGeometry(rtv, dsv, d.width, d.height);
+    // Los canvas de mundo, al final del pase de escena: la geometría y el cielo
+    // ya han escrito profundidad, así que una pared delante los tapa. Aquí y no
+    // dentro de recordSceneGeometry a propósito: esa función la reusa el
+    // horneado de sondas, y una sonda no tiene que capturar la interfaz.
+    d.recordWorldCanvases(d.width, d.height);
     d.markTimestamp(Impl::TsScene + 1);
 
     // El buffer de vértices deformados vuelve a acceso desordenado: el frame
@@ -7796,9 +8516,17 @@ void D3D12Renderer::drawFrame()
     // Vsync (SyncInterval=1): mismo comportamiento que el camino Vulkan por
     // defecto, y evita quemar la GPU presentando un clear a miles de fps.
     const HRESULT presentHr = d.swapChain->Present(1, 0);
-    if (presentHr == DXGI_ERROR_DEVICE_REMOVED || presentHr == DXGI_ERROR_DEVICE_RESET)
+    if (presentHr == DXGI_ERROR_DEVICE_REMOVED || presentHr == DXGI_ERROR_DEVICE_RESET) {
+        // El volcado ANTES de lanzar: la excepción se lleva el proceso por
+        // delante y con él el device, que es a quien hay que preguntarle.
+        d.dumpDeviceRemoved("IDXGISwapChain3::Present", presentHr);
         throw std::runtime_error("D3D12: device perdido durante Present (HRESULT " +
                                  hresultToString(presentHr) + ")");
+    }
+
+    // Lo que la capa de depuración haya dicho en este frame, al fichero. Es una
+    // cola: si no se drena, se llena y empieza a descartar.
+    d.drainInfoQueue();
 
     d.moveToNextFrame();
 }
@@ -8568,7 +9296,69 @@ void D3D12Renderer::setUiLayer(UiLayer* ui)
 
 UiCanvas& D3D12Renderer::uiCanvas()
 {
-    return m_impl->uiCanvas;
+    // El PRIMER canvas de pantalla, en el orden de la escena: mismo criterio
+    // que el Renderer de Vulkan, y el mismo que usaba el shim temporal (Task
+    // 4) cuando solo había un canvas.
+    for (auto& s : m_impl->uiSlots)
+        if (s && s->mode == UiCanvasRenderMode::ScreenSpace) return s->canvas;
+    return m_impl->uiCanvasFallback;
+}
+
+void D3D12Renderer::screenUiCanvases(std::vector<UiCanvas*>& out)
+{
+    // Misma función libre que Vulkan: el orden del pase de UI (que recorre
+    // uiSlots en orden) al revés, o sea el de más arriba primero.
+    screenCanvasesTopFirst(m_impl->uiSlots, out);
+}
+
+const UiCanvas* D3D12Renderer::uiCanvasOf(uint64_t ownerId) const
+{
+    // Misma funcion libre que Vulkan.
+    return findCanvasByOwner(m_impl->uiSlots, ownerId);
+}
+
+void D3D12Renderer::syncUiCanvases(const std::vector<UiCanvasBinding>& bindings)
+{
+    Impl& d = *m_impl;
+
+    // Empareja por ownerId: los slots que sobreviven conservan su árbol y su
+    // caché, así que reordenar los canvas en la jerarquía no reconstruye lo
+    // que no ha cambiado.
+    matchUiCanvasSlots(bindings, d.uiSlots);
+
+    for (size_t i = 0; i < bindings.size(); i++)
+    {
+        UiCanvasSlot& s = *d.uiSlots[i];
+        const UiCanvasBinding& b = bindings[i];
+        if (b.canvas) b.canvas->applyTo(s.canvas);
+        const UiCanvasRenderMode modo =
+            b.canvas ? b.canvas->renderMode : UiCanvasRenderMode::ScreenSpace;
+        // Mismo motivo que en el camino de Vulkan: cambiar de modo saca el canvas
+        // del reparto de input, y si se va a media pulsación se queda con una
+        // captura huérfana que al volver le roba el puntero al de encima.
+        if (modo != s.mode) s.canvas.releaseInput();
+        s.mode      = modo;
+        s.depthTest = b.canvas ? b.canvas->depthTest  : true;
+        // Copia por valor de los ajustes de mundo y del transform del
+        // GameObject: la matriz de modelo se calcula al GRABAR (necesita la
+        // vista de la cámara para el billboard) y para entonces el binding ya no
+        // existe. Sin canvas se queda el componente por defecto, que no se llega
+        // a leer porque el modo será ScreenSpace.
+        if (b.canvas) s.component = *b.canvas;
+        s.worldTransform = b.worldTransform;
+        syncUiWidgets(b.widgets, s.canvas, s.cache, *this);
+    }
+}
+
+const UiElement* D3D12Renderer::findUiNode(const std::string& name) const
+{
+    // TODOS los canvas, no solo el de pantalla.
+    for (const auto& s : m_impl->uiSlots)
+    {
+        if (!s) continue;
+        if (const UiElement* n = findUiNodeIn(s->canvas.root(), name)) return n;
+    }
+    return nullptr;
 }
 
 void D3D12Renderer::initSceneResources(const std::vector<Mesh>& meshes)
@@ -8847,6 +9637,16 @@ void D3D12Renderer::shutdown()
     if (!d.initialized)
         return;
 
+    diagLog("shutdown(): empieza.");
+    // El estado del device ANTES de esperar a nadie: si ya está perdido, la
+    // espera de abajo no va a terminar nunca y el motivo hay que preguntarlo
+    // ahora, no después.
+    if (d.device) {
+        const HRESULT motivo = d.device->GetDeviceRemovedReason();
+        if (motivo != S_OK)
+            d.dumpDeviceRemoved("shutdown (device ya perdido al entrar)", motivo);
+    }
+
     // Nada se libera con trabajo en vuelo: soltar un render target que la GPU
     // todavía lee es una corrupción silenciosa, no un error de la API.
     d.waitForGpu();
@@ -9005,7 +9805,44 @@ void D3D12Renderer::shutdown()
             d.uiIndexCapacity[i]    = 0;
         }
     }
+    // Los atlas de UI —sprites y fuentes MSDF, que pasan por el mismo
+    // registerUiAtlas— van AQUÍ, con el resto de recursos suballocados y no al
+    // final: su D3D12MA::Allocation tenía que estar suelta antes de que
+    // allocator->Release() cerrase el allocator. No lo estaba, y D3D12MA hace
+    // assert() al destruirse con un bloque no vacío: en Debug eso es abort(),
+    // o sea el editor muriendo al CERRAR con un exit code 3 y una ventana de
+    // Windows, sin volcado y sin nada en el visor de eventos. Fallo
+    // PREEXISTENTE, de 545b9b8; el backend de Vulkan ya lo hacía bien
+    // (Renderer.cpp, m_uiAtlases -> destroy).
+    //
+    // Y ANTES de srvHeap.Reset(), por el mismo criterio con el que Vulkan
+    // suelta los atlas antes que su descriptor pool. Con una diferencia que
+    // conviene no confundir: en D3D12 un descriptor NO se destruye —no existe
+    // ninguna DestroyShaderResourceView, ni cuenta referencias sobre el
+    // recurso—, es memoria dentro del heap y muere con él. Así que aquí no
+    // hay hueco que devolver: lo único que hace falta es que la GPU esté
+    // parada, y de eso ya se encarga el waitForGpu() del principio.
+    for (D3D12MA::Allocation* atlas : d.uiAtlasTextures) {
+        if (atlas)
+            atlas->Release();
+    }
+    d.uiAtlasTextures.clear();
+    // Punteros y índices a lo que se acaba de soltar: fuera antes de que nadie
+    // los pueda volver a pedir. uiAtlasSrv es el equivalente exacto del
+    // m_uiAtlasImGuiId de Vulkan (es lo que lee uiAtlasTextureId), y
+    // uiNextAtlasSlot vuelve a cero para no repartir slots de un heap muerto.
+    d.uiAtlasSrv.clear();
+    d.uiAtlasByPath.clear();
+    // Los contenedores de CPU al final: en D3D12 ni UiTextureAtlas ni UiFont
+    // guardan nada de GPU (su destroy(GpuDevice&) es del camino de Vulkan),
+    // así que lo único que tenían de la GPU es la allocation recién soltada.
+    d.uiAtlases.clear();
+    d.uiFonts.clear();
+    d.uiNextAtlasSlot = 0;
+
     d.uiPipeline.Reset();
+    d.uiWorldPipelineDepth.Reset();
+    d.uiWorldPipelineNoDepth.Reset();
     d.uiRootSignature.Reset();
 
     d.fxaaPipeline.Reset();
@@ -9039,9 +9876,28 @@ void D3D12Renderer::shutdown()
     d.rootSignature.Reset();
 
     if (d.allocator) {
+        // Lo que quede vivo en el allocator JUSTO ANTES de soltarlo. D3D12MA
+        // hace assert() si algo sigue asignado, y un assert en Debug se lleva
+        // el proceso por delante con un simple "exit code 3": el JSON de aquí
+        // es lo único que dice QUÉ se quedó sin liberar.
+        WCHAR* stats = nullptr;
+        d.allocator->BuildStatsString(&stats, TRUE);
+        if (stats) {
+            diagLog("--- estado de D3D12MA antes de Release() ---");
+            diagLog(narrow(stats));
+            diagLog("--------------------------------------------");
+            d.allocator->FreeStatsString(stats);
+        }
         d.allocator->Release();
         d.allocator = nullptr;
     }
+
+    // Lo último que dijera la capa, antes de soltar la cola con el device.
+    d.drainInfoQueue();
+    d.infoQueue.Reset();
+    // El gancho apunta a este Impl: dejarlo puesto tras soltar el device sería
+    // preguntarle a un objeto medio muerto.
+    g_volcarDeviceRemoved = nullptr;
 
     for (auto& allocator : d.allocators)
         allocator.Reset();
@@ -9054,6 +9910,7 @@ void D3D12Renderer::shutdown()
     d.adapter.Reset();
     d.factory.Reset();
     d.initialized = false;
+    diagLog("shutdown(): terminado sin incidencias.");
 
 #ifndef NDEBUG
     // Con el device ya soltado, lo que siga vivo es una fuga nuestra. Sale por

@@ -16,6 +16,12 @@ layout(location = 4) in vec4 inEffect;
 
 layout(push_constant) uniform Push {
     mat4 proj;
+    // 0 = el destino es SRGB y el hardware convierte al escribir; 1 = el
+    // destino es HDR LINEAL (el pase de escena) y la conversion la hace a mano
+    // ui.frag. Aqui no se lee, pero el bloque tiene que ir DECLARADO IGUAL en
+    // las dos etapas: el push constant es UNO SOLO para vertex y fragment, y un
+    // desajuste de offsets entre ellas no da ni error ni aviso de validacion.
+    int linearOutput;
 } pc;
 
 layout(location = 0) out vec2 vUv;

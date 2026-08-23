@@ -14,12 +14,15 @@
 // Todos los valores son no neutros y distintos entre sí: con 0, 1 o valores
 // repetidos, un campo que nadie lee pasaría igual.
 #include "DonTopo/UI/ButtonComponent.h"   // kDefaultUiFontPath
+#include "DonTopo/UI/CanvasComponent.h"   // uiWorldCanvasMatrix
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiFont.h"
 #include "DonTopo/UI/UiLayout.h"
 #include "DonTopo/UI/UiSpriteBatch.h"
 #include "DonTopo/UI/UiTextureAtlas.h"
 #include "DonTopo/UI/UiWidgets.h"
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -38,6 +41,92 @@ static bool nearly(float a, float b) { return std::fabs(a - b) < 1e-4f; }
 // intercambiados podrían colarse.
 static constexpr uint32_t kW = 800;
 static constexpr uint32_t kH = 480;
+
+// ── Sub-asignación del buffer del frame (N canvas, un solo VkBuffer) ───────
+// Con un canvas por frame, record() podía bindear siempre en el offset 0: no
+// había nadie más con quien pisarse. Con N, cada llamada tiene que escribir a
+// partir de donde dejó la anterior — si no, la GPU (que lee el buffer al
+// EJECUTAR, no al GRABAR) dibuja los N canvas con la geometría del ÚLTIMO, sin
+// que ninguna capa de validación lo diga. bumpUiCursor es la aritmética
+// exacta que usan beginFrame()/record(); se prueba aquí sin GPU porque con dos
+// canvas en pantalla el fallo no se puede verificar de otra forma hasta que el
+// bug ya esté puesto.
+static void test_ui_batch_offsets_se_acumulan_dentro_del_frame()
+{
+    // Tres tamaños de vértices y de índices bien distintos entre sí: con
+    // valores iguales, un offset calculado con el campo equivocado (vértices
+    // en vez de índices, o viceversa) daría el mismo número igualmente.
+    uint32_t vCursor = 0, iCursor = 0;
+
+    const uint32_t v0 = bumpUiCursor(vCursor, 10);
+    const uint32_t i0 = bumpUiCursor(iCursor, 15);
+    CHECK(v0 == 0);
+    CHECK(i0 == 0);
+
+    const uint32_t v1 = bumpUiCursor(vCursor, 25);
+    const uint32_t i1 = bumpUiCursor(iCursor, 33);
+    // El segundo canvas empieza justo donde terminó el primero.
+    CHECK(v1 == 10);
+    CHECK(i1 == 15);
+
+    const uint32_t v2 = bumpUiCursor(vCursor, 4);
+    const uint32_t i2 = bumpUiCursor(iCursor, 6);
+    CHECK(v2 == 35);   // 10 + 25
+    CHECK(i2 == 48);   // 15 + 33
+
+    // El cursor final es el ACUMULADO exacto: es el total contra el que
+    // beginFrame() tiene que dimensionar el buffer del frame.
+    CHECK(vCursor == 39);   // 10 + 25 + 4
+    CHECK(iCursor == 54);   // 15 + 33 + 6
+}
+
+// La guarda de capacidad que record() consulta antes de CADA memcpy.
+// beginFrame() dimensiona el buffer contra el total del PASE, pero esa
+// invariante — "se llamó este frame, una sola vez, con el total exacto" — no
+// la impone el tipo: hoy la sostiene que Renderer es el único llamador. En
+// cuanto exista un segundo (los canvas de mundo, que llegan en el pase de
+// escena, en otro bucle), un record() sin su beginFrame, uno llamado dos
+// veces, o un total que se quedó corto, escribiría FUERA de la memoria
+// mapeada — una escritura de HOST que ninguna capa de validación de Vulkan ni
+// de D3D12 ve: no hay device lost, no hay error, solo corrupción silenciosa.
+// uiCursorFits es la comprobación exacta que hace esa guarda posible sin GPU.
+static void test_ui_cursor_fits_guarda_la_capacidad_del_buffer()
+{
+    // El caso normal: el hueco [base, base+count) cae dentro de la capacidad
+    // que beginFrame() reservó para el pase completo.
+    CHECK(uiCursorFits(0, 10, 39));
+    CHECK(uiCursorFits(10, 25, 39));
+    CHECK(uiCursorFits(35, 4, 39));    // termina EXACTO en el borde: cabe
+
+    // Justo al límite: base+count == capacity es el último hueco válido.
+    CHECK(uiCursorFits(30, 9, 39));
+    // Un elemento de más se sale por uno: no cabe.
+    CHECK(!uiCursorFits(30, 10, 39));
+
+    // El caso que dispara el hallazgo: un total corto. Con los mismos tres
+    // canvas de tamaños 10/25/4 del test de arriba (offsets 0, 10 y 35) pero
+    // una capacidad reservada de solo 30 — como si un segundo llamador
+    // (los canvas de mundo, en otro bucle) hubiera calculado el acumulado del
+    // pase sin sumar el tercer canvas y beginFrame() hubiera reservado de
+    // menos:
+    const uint32_t capacidadCorta = 30;
+    CHECK(uiCursorFits(0, 10, capacidadCorta));     // el primero SÍ cabe
+    // El SEGUNDO ya no: 10+25 = 35 > 30. La guarda corta en cuanto el
+    // acumulado real se pasa de lo que reservó beginFrame(), no solo en el
+    // último canvas del pase.
+    CHECK(!uiCursorFits(10, 25, capacidadCorta));
+    CHECK(!uiCursorFits(35, 4, capacidadCorta));    // y el tercero, ni de lejos
+
+    // record() sin beginFrame() previo — capacidad en 0, el estado inicial de
+    // m_vertexCapacity/m_indexCapacity antes de la primera reserva: nada cabe,
+    // ni un canvas de "0 elementos" en un offset que no sea 0. Un canvas
+    // realmente vacío (0 elementos en base 0) sí cabe: no escribe nada, no
+    // hay nada que corromper, y record() ya lo descarta antes por
+    // data.empty().
+    CHECK(uiCursorFits(0, 0, 0));
+    CHECK(!uiCursorFits(0, 1, 0));
+    CHECK(!uiCursorFits(5, 1, 0));
+}
 
 // Un canvas sin nodos visibles no puede generar ni un lote: es la condición que
 // hace que la escena 3D salga exactamente igual que antes de esta feature.
@@ -5589,6 +5678,147 @@ static void test_sidecar_roto_no_deja_el_atlas_a_medias()
     std::filesystem::remove_all(kSidecarDir);
 }
 
+// ── Canvas de mundo ─────────────────────────────────────────────────────────
+// La matriz de un canvas de mundo. Tres cosas que fallan EN SILENCIO: que el
+// canvas quede centrado en el objeto (si no, aparece desplazado media pantalla),
+// que la Y esté VOLTEADA (el canvas crece hacia abajo y el mundo hacia arriba: un
+// signo de más pinta el cartel boca abajo) y que la escala sea unidades por
+// pixel y no al revés.
+static void test_world_canvas_matrix_centra_y_voltea_la_y()
+{
+    CanvasComponent c;
+    c.renderMode = UiCanvasRenderMode::World;
+    c.worldScale = 0.001f;
+    c.billboard  = UiBillboard::None;
+
+    const glm::vec2 tam(1920.0f, 1080.0f);
+    const glm::mat4 mundo = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 5.0f, -3.0f));
+    const glm::mat4 vista(1.0f);
+
+    const glm::mat4 m = uiWorldCanvasMatrix(c, tam, mundo, vista);
+
+    // El CENTRO del canvas (960, 540) cae en la posicion del GameObject.
+    const glm::vec4 centro = m * glm::vec4(960.0f, 540.0f, 0.0f, 1.0f);
+    CHECK(nearly(centro.x, 10.0f));
+    CHECK(nearly(centro.y, 5.0f));
+    CHECK(nearly(centro.z, -3.0f));
+
+    // La esquina (0,0) del canvas es la de ARRIBA a la izquierda, asi que en el
+    // mundo cae a la izquierda y ARRIBA del centro.
+    const glm::vec4 sup = m * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    CHECK(nearly(sup.x, 10.0f - 0.96f));
+    CHECK(nearly(sup.y, 5.0f + 0.54f));
+
+    // Y la (w,h) abajo a la derecha.
+    const glm::vec4 inf = m * glm::vec4(1920.0f, 1080.0f, 0.0f, 1.0f);
+    CHECK(nearly(inf.x, 10.0f + 0.96f));
+    CHECK(nearly(inf.y, 5.0f - 0.54f));
+
+    // El tamano total: 1.92 x 1.08 unidades.
+    CHECK(nearly(inf.x - sup.x, 1.92f));
+    CHECK(nearly(sup.y - inf.y, 1.08f));
+}
+
+// worldScale es unidades por PIXEL: doblarlo dobla el cartel.
+static void test_world_canvas_matrix_escala()
+{
+    CanvasComponent c;
+    c.renderMode = UiCanvasRenderMode::World;
+    c.worldScale = 0.002f;
+
+    const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 50.0f),
+                                            glm::mat4(1.0f), glm::mat4(1.0f));
+    const glm::vec4 a = m * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    const glm::vec4 b = m * glm::vec4(100.0f, 0.0f, 0.0f, 1.0f);
+    CHECK(nearly(b.x - a.x, 0.2f));
+}
+
+// Billboard. La camara mira desde +Z hacia el origen; el canvas esta en el
+// origen con una rotacion cualquiera que el billboard tiene que PISAR.
+static void test_world_canvas_matrix_billboard()
+{
+    CanvasComponent c;
+    c.renderMode = UiCanvasRenderMode::World;
+    c.worldScale = 0.001f;
+
+    // Rotacion absurda del objeto: si el billboard no la pisa, se nota.
+    glm::mat4 mundo = glm::rotate(glm::mat4(1.0f), 1.1f, glm::vec3(0.3f, 0.5f, 0.8f));
+
+    // Camara en (0, 4, 6) mirando al origen: mira hacia abajo y hacia -Z.
+    const glm::mat4 vista = glm::lookAt(glm::vec3(0.0f, 4.0f, 6.0f),
+                                        glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+
+    // Sin billboard la rotacion del objeto manda: el eje X del canvas NO es el
+    // (1,0,0) del mundo.
+    c.billboard = UiBillboard::None;
+    {
+        const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 100.0f), mundo, vista);
+        const glm::vec3 ejeX = glm::normalize(glm::vec3(m[0]));
+        CHECK(!nearly(ejeX.x, 1.0f));
+    }
+
+    // YawOnly: con la camara en (0,4,6) el acimut cae EXACTO en el eje Z del
+    // mundo (x=0): "girar el yaw de verdad" y "no hacer nada" darian la misma
+    // base por pura coincidencia de esa camara, y solo mirar ejeY no lo
+    // distingue (arriba es fijo (0,1,0) pase lo que pase con derecha/adelante).
+    // Se usa una camara con componente en X para que el acimut no coincida con
+    // ningun eje del mundo, y se comprueban a mano derecha (ejeX) y adelante
+    // (ejeZ) con sus valores EXACTOS, no solo "es distinto de".
+    const glm::mat4 vistaYaw = glm::lookAt(glm::vec3(5.0f, 4.0f, 6.0f),
+                                           glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    c.billboard = UiBillboard::YawOnly;
+    {
+        const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 100.0f), mundo, vistaYaw);
+        const glm::vec3 ejeX = glm::normalize(glm::vec3(m[0]));
+        const glm::vec3 ejeY = glm::normalize(glm::vec3(m[1]));
+        const glm::vec3 ejeZ = glm::normalize(glm::vec3(m[2]));
+
+        // arriba (ejeY) sigue siendo el del mundo: no se tumba al mirar desde
+        // arriba, que es lo que quiere una barra de vida.
+        CHECK(nearly(ejeY.x, 0.0f));
+        CHECK(nearly(std::fabs(ejeY.y), 1.0f));
+        CHECK(nearly(ejeY.z, 0.0f));
+
+        // adelante (ejeZ) es la proyeccion horizontal de la camara (5,4,6)
+        // sobre el plano XZ, normalizada: (5,0,6)/sqrt(61). Y = 0 (el yaw no
+        // inclina) y X != 0: SI giro. Con la camara vieja (x=0) esto habria
+        // salido (0,0,1) por casualidad, igual que sin girar nada.
+        CHECK(nearly(ejeZ.x, 0.6401844f));
+        CHECK(nearly(ejeZ.y, 0.0f));
+        CHECK(nearly(ejeZ.z, 0.7682212f));
+
+        // derecha (ejeX) = arriba x adelante: perpendicular a ejeZ y con su
+        // propio valor exacto, distinto del (1,0,0) del mundo.
+        CHECK(nearly(ejeX.x, 0.7682212f));
+        CHECK(nearly(ejeX.y, 0.0f));
+        CHECK(nearly(ejeX.z, -0.6401844f));
+        CHECK(nearly(glm::dot(ejeX, ejeZ), 0.0f));
+    }
+
+    // Full: encara la camara del todo, asi que el eje Y del canvas SE INCLINA.
+    c.billboard = UiBillboard::Full;
+    {
+        const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 100.0f), mundo, vista);
+        const glm::vec3 ejeY = glm::normalize(glm::vec3(m[1]));
+        CHECK(!nearly(std::fabs(ejeY.y), 1.0f));
+    }
+
+    // Guarda contra mirar en VERTICAL JUSTA: con la camara encima mirando
+    // hacia abajo, la proyeccion horizontal de "atras" se anula (largo2 ~ 0) y
+    // sin la guarda normalize(0,0,0) daria NaN, que se colaria en la matriz
+    // entera. Nadie ejercitaba esta rama antes: si un refactor la borra, esta
+    // es la unica comprobacion que se entera.
+    const glm::mat4 vistaVertical = glm::lookAt(glm::vec3(0.0f, 10.0f, 0.0f),
+                                                glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    c.billboard = UiBillboard::YawOnly;
+    {
+        const glm::mat4 m = uiWorldCanvasMatrix(c, glm::vec2(100.0f, 100.0f), mundo, vistaVertical);
+        for (int col = 0; col < 4; ++col)
+            for (int row = 0; row < 4; ++row)
+                CHECK(!std::isnan(m[col][row]));
+    }
+}
+
 int main()
 {
     // Sin buffer: si un test revienta a media tanda, lo ya impreso NO se pierde
@@ -5607,6 +5837,9 @@ int main()
     test_sidecar_de_sprites_ida_y_vuelta();
     test_sidecar_ruta_derivada_de_la_imagen();
     test_sidecar_roto_no_deja_el_atlas_a_medias();
+
+    test_ui_batch_offsets_se_acumulan_dentro_del_frame();
+    test_ui_cursor_fits_guarda_la_capacidad_del_buffer();
 
     test_canvas_vacio_no_emite_nada();
     test_origen_arriba_izquierda();
@@ -5727,6 +5960,10 @@ int main()
     test_cache_resolucion_y_escala_reemiten_todo();
     test_cache_animacion_ensucia_solo_su_nodo();
     test_cache_neutralidad_escena_completa();
+
+    test_world_canvas_matrix_centra_y_voltea_la_y();
+    test_world_canvas_matrix_escala();
+    test_world_canvas_matrix_billboard();
 
     if (g_failures == 0) std::printf("ui_batch_tests: OK\n");
     else                 std::printf("ui_batch_tests: %d fallos\n", g_failures);

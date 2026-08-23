@@ -857,4 +857,137 @@ namespace DonTopo
         dispatch(target, e, &UiElement::onClick);
         return true;
     }
+
+    void UiCanvas::releaseInput()
+    {
+        // El hover, con su MouseExit: por el mismo motivo por el que se lo emite
+        // un input con el ratón fuera. Quien apague algo al salir tiene que
+        // enterarse, y "se quedó pegado en el último hover" es justo el fallo que
+        // dispatchUiInput evita para los que pierden el puntero — aquí no puede,
+        // porque el canvas ya no está en su lista.
+        if (m_hovered)
+        {
+            UiElement* previo = m_hovered;
+            previo->hovered   = false;
+            m_hovered         = nullptr;
+
+            UiEvent e{};
+            e.type     = UiEventType::MouseExit;
+            e.target   = previo;
+            e.mousePos = uiPointerAway();
+            e.time     = m_lastTime;
+            dispatch(previo, e, &UiElement::onMouseExit);
+        }
+
+        // La captura y el gesto a medias. Se baja también m_buttonDown: si se
+        // dejara a true, el frame en el que el canvas vuelva vería `!now && was`
+        // y emitiría el MouseUp de una pulsación que ya no existe.
+        for (int b = 0; b < 3; ++b)
+        {
+            m_pressTarget[b] = nullptr;
+            m_dragging[b]    = false;
+            m_buttonDown[b]  = false;
+        }
+        // Y un gesto cortado no puede ser la primera mitad de un doble click.
+        m_lastClickTarget = nullptr;
+
+        // El foco, con su Blur. Va por setFocus y no a mano para que el Blur
+        // salga por el mismo sitio que siempre. Sin esto, un canvas que vuelve
+        // con foco puede acabar siendo el dueño del teclado por delante del que
+        // el usuario acaba de pulsar, porque fuera de la lista dispatchUiInput
+        // tampoco pudo soltárselo.
+        setFocus(nullptr);
+    }
+
+    void dispatchUiInput(const std::vector<UiCanvas*>& canvases, const UiInputState& input)
+    {
+        // ── Quién se lleva el RATÓN ─────────────────────────────────────────
+        // 1) La CAPTURA manda sobre el solape. Un botón bajado y sin soltar se
+        //    queda el puntero aunque el cursor se haya ido encima de otro
+        //    canvas: sin esto, arrastrar un slider que asome por debajo de otro
+        //    canvas corta el gesto justo al cruzar el borde, y el arrastre se
+        //    pierde sin un solo aviso.
+        UiCanvas* raton = nullptr;
+        for (UiCanvas* c : canvases)
+            if (c && c->pointerCaptured()) { raton = c; break; }
+
+        // 2) Sin captura, gana el de MÁS ARRIBA que tenga algo bajo el cursor.
+        //    `canvases` ya llega en ese orden (el último que se dibuja, primero),
+        //    así que aquí no se decide nada: se recorre.
+        if (!raton)
+            for (UiCanvas* c : canvases)
+                if (c && c->hitTest(input.mousePos)) { raton = c; break; }
+
+        // ── Quién se lleva el TECLADO ───────────────────────────────────────
+        // El FOCO, no el cursor: escribir en un campo de texto sigue llegando
+        // aunque el ratón se pasee por encima de otro canvas. Si nadie tiene
+        // foco van al de más arriba — hoy eso no se nota (updateInput ignora las
+        // teclas sin foco), pero deja la regla completa en vez de un hueco.
+        UiCanvas* teclado = nullptr;
+        for (UiCanvas* c : canvases)
+            if (c && c->focused()) { teclado = c; break; }
+        if (!teclado)
+            for (UiCanvas* c : canvases)
+                if (c) { teclado = c; break; }
+
+        // Lo que recibe el que NO tiene el puntero: el ratón FUERA. Es lo que le
+        // limpia el hover (con su MouseExit y sus colores de vuelta a Normal) en
+        // vez de dejárselo pegado. El reloj se conserva: sus animaciones y el
+        // fundido de sus botones siguen corriendo.
+        //
+        // Se miente sobre la POSICIÓN, y NO sobre los BOTONES. Es la diferencia
+        // entre limpiar el estado y falsearlo: la cuenta de flancos (`now && !was`)
+        // tiene que seguir siendo la de verdad o el canvas se pierde pulsaciones.
+        // Mentir aquí daba un CLIC FANTASMA, y encima con UN SOLO canvas: cuando
+        // nadie gana el puntero —el cursor sobre el fondo, sin widget debajo— el
+        // único canvas de la escena recibe esto, así que no veía el MouseDown; al
+        // entrar luego el cursor en un botón con el botón AÚN bajado, veía un
+        // flanco NUEVO, registraba el press ahí y al soltar emitía un Click que
+        // nadie pidió, robándole además el foco.
+        //
+        // Con los botones de verdad no hace falta ninguna guarda extra: el ratón
+        // está fuera, así que `hitTest` da nullptr y el press se registra sobre
+        // nullptr — no se despacha MouseDown, no se mueve el foco, y al soltar no
+        // hay Click porque el origen es nulo (sí MouseUp si el cursor está encima
+        // de algo, que es la semántica de siempre). Los colores tampoco cambian:
+        // `estadoDe` exige `hovered` para pintar Pressed. Y `pointerCaptured()`
+        // sigue en false para el perdedor, que es lo que impide que le robe el
+        // puntero al de encima en el paso 1.
+        UiInputState fuera = input;
+        fuera.mousePos     = uiPointerAway();
+        fuera.scrollDelta  = 0.0f;
+        fuera.keys.clear();
+        fuera.chars.clear();
+
+        for (UiCanvas* c : canvases)
+        {
+            if (!c) continue;
+            UiInputState propio = (c == raton) ? input : fuera;
+            if (c == teclado)
+            {
+                propio.keys  = input.keys;
+                propio.chars = input.chars;
+            }
+            else
+            {
+                propio.keys.clear();
+                propio.chars.clear();
+            }
+            c->updateInput(propio);
+        }
+
+        // El foco se mueve al CLICAR, y solo puede estar en un canvas: en cuanto
+        // el que tiene el puntero coge foco, los demás lo sueltan. Sin esto se
+        // quedarían dos anillos de foco a la vez y el dueño del teclado sería el
+        // que decidiera el orden de la lista, no el que acaba de pulsar.
+        //
+        // Va DESPUÉS del bucle a propósito: el foco que hay que respetar es el
+        // que deja este frame, no el del anterior. Y se mira `focused()` en vez
+        // de "¿ha bajado un botón?" porque es lo mismo sin guardar estado entre
+        // frames: pinchar en algo NO focusable no roba el foco, exactamente
+        // igual que ya pasa dentro de un solo canvas.
+        if (raton && raton->focused())
+            for (UiCanvas* c : canvases)
+                if (c && c != raton) c->setFocus(nullptr);
+    }
 }

@@ -415,6 +415,8 @@ Los enums viajan como tablas de constantes enteras:
 | --- | --- |
 | `UiScaleMode` | `ConstantPixelSize`, `ScaleWithScreenSize`, `ConstantPhysicalSize` |
 | `UiScreenMatch` | `MatchWidthOrHeight`, `Expand`, `Shrink` |
+| `UiCanvasRenderMode` | `ScreenSpace`, `World` |
+| `UiBillboard` | `None`, `YawOnly`, `Full` |
 | `UiTextAlign` | `Left`, `Center`, `Right`, `Justify` |
 | `UiTextOverflow` | `Overflow`, `Clip`, `Ellipsis` |
 | `UiProgressFillDirection` | `LeftToRight`, `RightToLeft`, `BottomToTop`, `TopToBottom` |
@@ -439,6 +441,55 @@ Los enums viajan como tablas de constantes enteras:
 | `c.aspectRatio` | 0 = apagado |
 | `c:GetReferenceResolution()` / `c:SetReferenceResolution(w, h)` | Resolución de referencia |
 | `c:GetSafeArea()` / `c:SetSafeArea(l, t, r, b)` | Insets en píxeles reales |
+| `c.renderMode` | `UiCanvasRenderMode.*`. En `World` el canvas se coloca EN LA ESCENA y se ignoran `scaleMode`, `screenMatch`, `matchWidthOrHeight`, los tres DPI, `safeArea` y `aspectRatio` |
+| `c.worldScale` | Solo `World`. Unidades de mundo por PÍXEL de canvas |
+| `c.billboard` | Solo `World`. `UiBillboard.*`: `YawOnly` gira solo en la vertical, `Full` encara del todo a la cámara |
+| `c.depthTest` | Solo `World`. A `false` se dibuja siempre encima, atravesando paredes |
+
+**Varios canvas de pantalla a la vez.** Una escena puede tener los que quiera
+(un HUD y un menú de pausa encima, por ejemplo) y **todos** reciben el input.
+Cuando dos se solapan hay que repartirlo, y el reparto es este:
+
+- **El ratón, a UNO solo:** el de **más arriba** que tenga algo bajo el cursor.
+  Arriba = el último que se dibuja, o sea el que va más abajo en la jerarquía de
+  la escena. Es el mismo criterio que usa el clic del viewport del editor para
+  seleccionar, así que se selecciona lo que se ve encima.
+- **Los de debajo NO se quedan pegados:** reciben el ratón *fuera*, así que
+  sueltan el hover, emiten su `MouseExit` y sus botones vuelven a `Normal`.
+  Siguen animando y fundiendo colores con normalidad.
+- **Un arrastre no se corta.** Mientras un botón del ratón siga bajado, el
+  canvas donde empezó conserva el puntero aunque el cursor pase por encima de
+  otro. Es lo que permite arrastrar un slider hasta el borde de la pantalla.
+- **El teclado y el mando siguen al FOCO, no al cursor:** van al canvas que
+  tiene el foco, así que escribir en un campo sigue llegando aunque el ratón se
+  pasee por otro canvas. El foco se mueve al **clicar**, y solo lo tiene un
+  canvas a la vez: en cuanto otro lo coge, el anterior lo suelta. El Tab y las
+  flechas dan la vuelta *dentro* del canvas que lo tiene y **no saltan** al
+  siguiente canvas.
+- **Cambiarle `renderMode` a un canvas le suelta el input.** Ponerlo a `World`
+  lo saca del reparto (un canvas de mundo no se puede clicar), así que si se
+  hace a media pulsación se le sueltan el hover, la pulsación y el foco —con su
+  `MouseExit` y su `Blur`—, y no se queda con una captura huérfana que al volver
+  le robaría el ratón al canvas de encima.
+
+**Dos limitaciones del modo `World`.** No son bugs: salen del sitio donde se
+graba el canvas, y conviene tenerlas escritas antes de tropezar con ellas.
+
+- **Un canvas de mundo NO se puede clicar**, ni en el juego ni en el viewport
+  del editor. El hit test de la UI trabaja en píxeles de pantalla y un canvas de
+  mundo está *proyectado*: puede salir rotado, en perspectiva o partido por el
+  borde. Se selecciona desde el Hierarchy, igual que el contenedor de un
+  `Layout`. Al seleccionarlo, el editor pinta el cuadrilátero de su plano sobre
+  el viewport —con una marca en su esquina (0,0)—, que es lo que enseña dónde
+  está y con qué inclinación; si alguna de sus cuatro esquinas queda detrás de
+  la cámara, no se dibuja nada. Los widgets de dentro se seleccionan igual, desde
+  el Hierarchy, y su gizmo también sale proyectado sobre el cartel, inclinado con
+  él y con los ejes X/Y del pivot en la orientación que tienen ahí.
+- **`clipChildren` NO recorta en un canvas de mundo.** El scissor va en píxeles
+  de canvas y se mapea 1:1 al framebuffer; con el canvas proyectado no hay
+  rectángulo alineado a los ejes que lo represente, así que los canvas de mundo
+  se graban con el scissor a todo el framebuffer. Lo que sí se respeta es un
+  clip que ya se quedó vacío: ese nodo no emite nada.
 
 ### Button
 

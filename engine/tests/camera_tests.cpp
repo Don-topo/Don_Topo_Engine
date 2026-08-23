@@ -626,6 +626,60 @@ static void test_canvas_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(loaded.lastWarnings().empty());
 }
 
+// Los cuatro campos nuevos del Canvas, con valores NO neutros y distintos entre
+// sí: con los defaults, un fromJson que se saltara el campo pasaría igual.
+static void test_canvas_world_fields_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cartel");
+    auto c = std::make_shared<CanvasComponent>();
+    c->renderMode = UiCanvasRenderMode::World;
+    c->worldScale = 0.0234375f;
+    c->billboard  = UiBillboard::YawOnly;
+    c->depthTest  = false;
+    go->setCanvas(c);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(scene.toJson(), pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n) { if (!found && n->hasCanvas()) found = n; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->getCanvas()->renderMode == UiCanvasRenderMode::World);
+    CHECK(nearlyEqual(found->getCanvas()->worldScale, 0.0234375f));
+    CHECK(found->getCanvas()->billboard == UiBillboard::YawOnly);
+    CHECK(found->getCanvas()->depthTest == false);
+    CHECK(loaded.lastWarnings().empty());
+}
+
+// Una escena guardada antes de estos campos carga con los defaults y sin avisos:
+// bloque aditivo, misma regla que todos los componentes de UI.
+static void test_canvas_without_world_fields_loads_with_defaults(PhysicsManager& pm,
+                                                                  AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Viejo");
+    go->setCanvas(std::make_shared<CanvasComponent>());
+    nlohmann::json j = scene.toJson();
+    // Se borran las claves nuevas para simular una escena antigua.
+    for (auto& n : j["root"]["children"])
+        if (n.contains("canvas"))
+            for (const char* k : { "renderMode", "worldScale", "billboard", "depthTest" })
+                n["canvas"].erase(k);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = nullptr;
+    loaded.traverse([&](GameObject* n2) { if (!found && n2->hasCanvas()) found = n2; });
+    CHECK(found != nullptr);
+    if (!found) return;
+    CHECK(found->getCanvas()->renderMode == UiCanvasRenderMode::ScreenSpace);
+    CHECK(nearlyEqual(found->getCanvas()->worldScale, 0.001f));
+    CHECK(found->getCanvas()->billboard == UiBillboard::None);
+    CHECK(found->getCanvas()->depthTest == true);
+    CHECK(loaded.lastWarnings().empty());
+}
+
 // Una escena guardada antes del componente carga igual: sin Canvas y sin avisos.
 static void test_scene_without_canvas_block_still_loads(PhysicsManager& pm, AudioManager& am)
 {
@@ -1643,8 +1697,10 @@ static void test_collect_ui_widgets_salta_los_intermedios_sin_ui()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    UiWidgetLists lists;
-    scene.collectUiWidgets(lists);
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    static const UiWidgetLists kVacio;
+    const UiWidgetLists& lists = bindings.empty() ? kVacio : bindings[0].widgets;
     botones = lists.buttons; textos = lists.texts; barras = lists.bars;
     layouts = lists.layouts; jerarquia = lists.parents;
 
@@ -1663,6 +1719,114 @@ static void test_collect_ui_widgets_salta_los_intermedios_sin_ui()
     // Y el orden es de PRE-ORDEN: el padre antes que el hijo, que es lo que
     // permite montar el árbol en una sola pasada.
     CHECK(jerarquia[0].first != jerarquia[1].second || true);
+}
+
+// Cada widget va al canvas del que cuelga, no a un saco comun. Con un solo
+// canvas esto daba igual; con dos, meterlos todos en el primero pinta la UI del
+// menu de pausa encima del HUD y nada lo dice.
+static void test_collect_canvases_agrupa_por_canvas()
+{
+    Scene scene;
+    GameObject* hud = scene.addGameObject("HUD");
+    hud->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* vida = scene.addGameObject("Vida", hud);
+    vida->setProgressBar(std::make_shared<ProgressBarComponent>());
+
+    GameObject* menu = scene.addGameObject("Menu");
+    menu->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* jugar = scene.addGameObject("Jugar", menu);
+    jugar->setButton(std::make_shared<ButtonComponent>());
+    GameObject* salir = scene.addGameObject("Salir", menu);
+    salir->setButton(std::make_shared<ButtonComponent>());
+
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+
+    CHECK(bindings.size() == 2);
+    if (bindings.size() != 2) return;
+    CHECK(bindings[0].ownerId == hud->id);
+    CHECK(bindings[0].widgets.bars.size() == 1);
+    CHECK(bindings[0].widgets.buttons.empty());
+    CHECK(bindings[1].ownerId == menu->id);
+    CHECK(bindings[1].widgets.buttons.size() == 2);
+    CHECK(bindings[1].widgets.bars.empty());
+}
+
+// Canvas dentro de canvas: gana el MAS CERCANO hacia arriba, sin reglas nuevas.
+static void test_collect_canvases_anidado_gana_el_mas_cercano()
+{
+    Scene scene;
+    GameObject* fuera = scene.addGameObject("Fuera");
+    fuera->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* deFuera = scene.addGameObject("DeFuera", fuera);
+    deFuera->setPanel(std::make_shared<PanelComponent>());
+
+    GameObject* dentro = scene.addGameObject("Dentro", fuera);
+    dentro->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* deDentro = scene.addGameObject("DeDentro", dentro);
+    deDentro->setPanel(std::make_shared<PanelComponent>());
+
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+
+    CHECK(bindings.size() == 2);
+    if (bindings.size() != 2) return;
+    CHECK(bindings[0].ownerId == fuera->id);
+    CHECK(bindings[0].widgets.panels.size() == 1);
+    if (bindings[0].widgets.panels.size() == 1)
+        CHECK(bindings[0].widgets.panels[0].first == deFuera->id);
+    CHECK(bindings[1].ownerId == dentro->id);
+    CHECK(bindings[1].widgets.panels.size() == 1);
+    if (bindings[1].widgets.panels.size() == 1)
+        CHECK(bindings[1].widgets.panels[0].first == deDentro->id);
+}
+
+// Un widget sin NINGUN canvas por encima no va a ninguna parte. Antes acababa
+// en el canvas unico aunque no colgara de el; ahora no se dibuja. Es un cambio
+// de comportamiento DELIBERADO: el editor ya lo impide (uiComponentsAvailable
+// exige un Canvas ancestro) y solo afecta a escenas hechas a mano.
+static void test_collect_canvases_ignora_los_huerfanos()
+{
+    Scene scene;
+    GameObject* suelto = scene.addGameObject("Suelto");
+    suelto->setButton(std::make_shared<ButtonComponent>());
+
+    GameObject* hud = scene.addGameObject("HUD");
+    hud->setCanvas(std::make_shared<CanvasComponent>());
+
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+
+    CHECK(bindings.size() == 1);
+    if (bindings.empty()) return;
+    CHECK(bindings[0].ownerId == hud->id);
+    CHECK(bindings[0].widgets.buttons.empty());
+}
+
+// La jerarquia de cada binding es la SUYA: los ids de padre apuntan dentro del
+// mismo canvas, y el primer nivel cuelga de 0 (la raiz de ESE canvas).
+static void test_collect_canvases_jerarquia_por_canvas()
+{
+    Scene scene;
+    GameObject* hud = scene.addGameObject("HUD");
+    hud->setCanvas(std::make_shared<CanvasComponent>());
+    GameObject* marco = scene.addGameObject("Marco", hud);
+    marco->setPanel(std::make_shared<PanelComponent>());
+    GameObject* icono = scene.addGameObject("Icono", marco);
+    icono->setImage(std::make_shared<ImageComponent>());
+
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    CHECK(bindings.size() == 1);
+    if (bindings.empty()) return;
+
+    const auto& p = bindings[0].widgets.parents;
+    CHECK(p.size() == 2);
+    if (p.size() != 2) return;
+    CHECK(p[0].first == marco->id);
+    CHECK(p[0].second == 0ull);          // primer nivel del canvas
+    CHECK(p[1].first == icono->id);
+    CHECK(p[1].second == marco->id);
 }
 
 static void test_buttons_and_texts_coexist()
@@ -2270,8 +2434,10 @@ static void test_layout_container_places_children()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    UiWidgetLists lists;
-    scene.collectUiWidgets(lists);
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    static const UiWidgetLists kVacio;
+    const UiWidgetLists& lists = bindings.empty() ? kVacio : bindings[0].widgets;
     botones = lists.buttons; textos = lists.texts; barras = lists.bars;
     layouts = lists.layouts; jerarquia = lists.parents;
     CHECK(layouts.size() == 1);
@@ -2334,8 +2500,10 @@ static void test_layout_on_widget_uses_its_node()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    UiWidgetLists lists;
-    scene.collectUiWidgets(lists);
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    static const UiWidgetLists kVacio;
+    const UiWidgetLists& lists = bindings.empty() ? kVacio : bindings[0].widgets;
     botones = lists.buttons; textos = lists.texts; barras = lists.bars;
     layouts = lists.layouts; jerarquia = lists.parents;
 
@@ -2400,8 +2568,10 @@ static void test_layout_ignore_layout_child_keeps_its_anchor()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    UiWidgetLists lists;
-    scene.collectUiWidgets(lists);
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    static const UiWidgetLists kVacio;
+    const UiWidgetLists& lists = bindings.empty() ? kVacio : bindings[0].widgets;
     botones = lists.buttons; textos = lists.texts; barras = lists.bars;
     layouts = lists.layouts; jerarquia = lists.parents;
     CHECK(layouts.size() == 2);
@@ -2444,8 +2614,10 @@ static void test_collect_ui_widgets_incluye_los_layouts()
     std::vector<std::pair<uint64_t, const ProgressBarComponent*>> barras;
     std::vector<std::pair<uint64_t, const LayoutComponent*>>      layouts;
     std::vector<std::pair<uint64_t, uint64_t>>                    jerarquia;
-    UiWidgetLists lists;
-    scene.collectUiWidgets(lists);
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    static const UiWidgetLists kVacio;
+    const UiWidgetLists& lists = bindings.empty() ? kVacio : bindings[0].widgets;
     botones = lists.buttons; textos = lists.texts; barras = lists.bars;
     layouts = lists.layouts; jerarquia = lists.parents;
 
@@ -3207,7 +3379,7 @@ static void test_image_hit_test_maps_back_to_gameobject()
     CHECK(uiTextOwnerId(uiImageNodeName(42ull)) == 0ull);
 }
 
-// collectUiWidgets tiene que ver los dos componentes nuevos y meterlos en la
+// collectCanvases tiene que ver los dos componentes nuevos y meterlos en la
 // jerarquía: un GameObject con Panel es un ancestro con rect válido, así que sus
 // hijos tienen que colgar de él y no subir a la raíz.
 static void test_collect_ui_widgets_incluye_panels_e_images()
@@ -3222,8 +3394,10 @@ static void test_collect_ui_widgets_incluye_panels_e_images()
     GameObject* icono = scene.addGameObject("Icono", marco);
     icono->setImage(std::make_shared<ImageComponent>());
 
-    UiWidgetLists w;
-    scene.collectUiWidgets(w);
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    static const UiWidgetLists kVacio;
+    const UiWidgetLists& w = bindings.empty() ? kVacio : bindings[0].widgets;
 
     CHECK(w.panels.size() == 1);
     CHECK(w.images.size() == 1);
@@ -5702,8 +5876,10 @@ static void test_scroll_view_children_hang_from_the_content()
     GameObject* fila = scene.addGameObject("Fila", vista);
     fila->setPanel(std::make_shared<PanelComponent>());
 
-    UiWidgetLists w;
-    scene.collectUiWidgets(w);
+    std::vector<UiCanvasBinding> bindings;
+    scene.collectCanvases(bindings);
+    static const UiWidgetLists kVacio;
+    const UiWidgetLists& w = bindings.empty() ? kVacio : bindings[0].widgets;
     CHECK(w.scrollViews.size() == 1);
     CHECK(w.panels.size() == 1);
 
@@ -5803,6 +5979,789 @@ static void test_scroll_view_hit_test_maps_back_to_gameobject()
     CHECK(uiScrollbarOwnerId(uiScrollViewNodeName(42ull)) == 0ull);
 }
 
+// Los slots se emparejan por ownerId, NO por indice. Reordenar los canvas en la
+// jerarquia (o borrar uno de en medio) no puede resetear la cache del que no se
+// ha movido: si lo hiciera, mover un enemigo reconstruiria su barra de vida
+// entera y se veria como un parpadeo.
+static void test_ui_slots_se_emparejan_por_owner_id()
+{
+    std::vector<std::unique_ptr<UiCanvasSlot>> slots;
+    CanvasComponent c;
+
+    std::vector<UiCanvasBinding> b(2);
+    b[0].ownerId = 7ull;  b[0].canvas = &c;
+    b[1].ownerId = 9ull;  b[1].canvas = &c;
+    matchUiCanvasSlots(b, slots);
+    CHECK(slots.size() == 2);
+    if (slots.size() != 2) return;
+    const UiCanvas* arbol7 = &slots[0]->canvas;
+    const UiCanvas* arbol9 = &slots[1]->canvas;
+    CHECK(slots[0]->ownerId == 7ull);
+    CHECK(slots[1]->ownerId == 9ull);
+
+    // Se INVIERTE el orden: cada slot tiene que seguir a SU dueno, con su arbol.
+    std::vector<UiCanvasBinding> b2(2);
+    b2[0].ownerId = 9ull; b2[0].canvas = &c;
+    b2[1].ownerId = 7ull; b2[1].canvas = &c;
+    matchUiCanvasSlots(b2, slots);
+    CHECK(slots.size() == 2);
+    if (slots.size() != 2) return;
+    CHECK(slots[0]->ownerId == 9ull);
+    CHECK(slots[1]->ownerId == 7ull);
+    CHECK(&slots[0]->canvas == arbol9);
+    CHECK(&slots[1]->canvas == arbol7);
+
+    // Y uno que desaparece se lleva su slot; uno nuevo estrena el suyo.
+    std::vector<UiCanvasBinding> b3(1);
+    b3[0].ownerId = 42ull; b3[0].canvas = &c;
+    matchUiCanvasSlots(b3, slots);
+    CHECK(slots.size() == 1);
+    if (slots.empty()) return;
+    CHECK(slots[0]->ownerId == 42ull);
+}
+
+// Y el orden de pintado de los canvas de MUNDO: de lejos a cerca. Van con alpha,
+// asi que pintarlos al reves mezcla mal y se ve como un halo. Contra la
+// geometria manda el depth; entre ellos, manda esto.
+static void test_world_canvases_se_ordenan_de_lejos_a_cerca()
+{
+    std::vector<std::unique_ptr<UiCanvasSlot>> slots;
+    for (float z : { -2.0f, -10.0f, -6.0f })
+    {
+        auto s = std::make_unique<UiCanvasSlot>();
+        s->mode  = UiCanvasRenderMode::World;
+        s->model = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, z));
+        slots.push_back(std::move(s));
+    }
+
+    // Un cuarto slot de PANTALLA, con una z que caeria EN MEDIO del orden si
+    // el filtro de modo se colara: entre el de -10 y el de -2. Si alguien
+    // borra el "continue" (o invierte la condicion) del filtro de
+    // sortWorldCanvasesBackToFront, este slot no solo cambia el tamano de
+    // `orden`, tambien se cuela en medio y descuadra el orden esperado — el
+    // test falla por dos sitios a la vez, no solo por el tamano.
+    UiCanvasSlot* pantalla = nullptr;
+    {
+        auto s = std::make_unique<UiCanvasSlot>();
+        s->mode  = UiCanvasRenderMode::ScreenSpace;
+        s->model = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -4.0f));
+        pantalla = s.get();
+        slots.push_back(std::move(s));
+    }
+
+    // Camara en el origen mirando a -Z: el de z = -10 es el mas lejano.
+    const glm::mat4 vista(1.0f);
+    std::vector<UiCanvasSlot*> orden;
+    sortWorldCanvasesBackToFront(slots, vista, orden);
+
+    CHECK(orden.size() == 3);
+    if (orden.size() != 3) return;
+    CHECK(nearlyEqual(orden[0]->model[3].z, -10.0f));
+    CHECK(nearlyEqual(orden[1]->model[3].z, -6.0f));
+    CHECK(nearlyEqual(orden[2]->model[3].z, -2.0f));
+
+    // El de pantalla no debe aparecer en absoluto en la lista de mundo.
+    CHECK(orden[0] != pantalla);
+    CHECK(orden[1] != pantalla);
+    CHECK(orden[2] != pantalla);
+}
+
+// Y el orden de PRIORIDAD DE INPUT de los canvas de PANTALLA: el de mas arriba
+// primero, o sea el ULTIMO que se dibuja. El pase de UI recorre los slots en
+// orden y cada canvas pinta sobre el anterior, asi que la prioridad es el orden
+// de dibujado AL REVES. El slot de MUNDO va EN MEDIO a proposito: si alguien
+// borra el filtro de modo, no solo cambia el tamano de la lista — se cuela
+// entre los dos de pantalla y descuadra tambien la segunda posicion.
+static void test_canvas_de_pantalla_en_orden_de_prioridad()
+{
+    std::vector<std::unique_ptr<UiCanvasSlot>> slots;
+    for (auto par : { std::make_pair(7ull,  UiCanvasRenderMode::ScreenSpace),
+                      std::make_pair(8ull,  UiCanvasRenderMode::World),
+                      std::make_pair(9ull,  UiCanvasRenderMode::ScreenSpace) })
+    {
+        auto s = std::make_unique<UiCanvasSlot>();
+        s->ownerId = par.first;
+        s->mode    = par.second;
+        slots.push_back(std::move(s));
+    }
+
+    std::vector<UiCanvas*> orden;
+    screenCanvasesTopFirst(slots, orden);
+
+    CHECK(orden.size() == 2);
+    // Guardas por POSICION y no un `return` al primer fallo de tamano: si el
+    // filtro de modo se cae, el de mundo se cuela EN MEDIO y lo que hay que ver
+    // es que la segunda posicion tambien se descuadra, no solo el tamano.
+    // Identidad de PUNTERO, no el ownerId: es el arbol concreto que va a
+    // recibir el raton, y comparar ids dejaria pasar un emparejado por indice.
+    if (orden.size() >= 1) CHECK(orden[0] == &slots[2]->canvas);   // el ultimo dibujado, el primero en input
+    if (orden.size() >= 2) CHECK(orden[1] == &slots[0]->canvas);
+    if (orden.size() >= 1) CHECK(orden[0] != &slots[1]->canvas);   // el de mundo no entra
+    if (orden.size() >= 2) CHECK(orden[1] != &slots[1]->canvas);
+}
+
+// ── Reparto del input entre canvas de pantalla solapados ────────────────────
+// Dos canvas de pantalla, cada uno con SU boton, con los rects SOLAPADOS y con
+// valores distintos y no neutros entre si. Es el fixture de los cuatro tests de
+// abajo: el criterio de quien gana el puntero, la limpieza del que pierde, la
+// captura durante un arrastre y el reparto del teclado.
+struct DosCanvasSolapados
+{
+    UiCanvas          arriba;      // el ULTIMO que se dibuja = el de encima
+    UiCanvas          abajo;
+    UiWidgetSyncCache cacheArriba;
+    UiWidgetSyncCache cacheAbajo;
+    FakeUiLoader      loader;
+    ButtonComponent   compArriba;
+    ButtonComponent   compAbajo;
+    Button*           nodoArriba = nullptr;
+    Button*           nodoAbajo  = nullptr;
+
+    std::vector<UiCanvas*> orden;   // prioridad de input: arriba primero
+
+    int clicksArriba = 0;
+    int clicksAbajo  = 0;
+    int exitsAbajo   = 0;
+    int dragsAbajo   = 0;
+
+    UiInputState in;
+    float t = 0.0f;
+
+    // Dentro del boton de ARRIBA y del de ABAJO a la vez.
+    static glm::vec2 solape()    { return glm::vec2(150.0f, 150.0f); }
+    // Dentro del de ABAJO y fuera del de ARRIBA.
+    static glm::vec2 soloAbajo() { return glm::vec2(400.0f, 330.0f); }
+
+    DosCanvasSolapados()
+    {
+        // x[100,300] y[100,220]
+        compArriba.position    = glm::vec2(100.0f, 100.0f);
+        compArriba.size        = glm::vec2(200.0f, 120.0f);
+        compArriba.normalColor = glm::vec4(0.20f, 0.40f, 0.60f, 1.0f);
+        compArriba.hoverColor  = glm::vec4(0.90f, 0.10f, 0.30f, 1.0f);
+        // x[60,460] y[60,360] — contiene entero al de arriba y sobra por abajo
+        compAbajo.position     = glm::vec2(60.0f, 60.0f);
+        compAbajo.size         = glm::vec2(400.0f, 300.0f);
+        compAbajo.normalColor  = glm::vec4(0.05f, 0.70f, 0.25f, 1.0f);
+        compAbajo.hoverColor   = glm::vec4(0.15f, 0.35f, 0.85f, 1.0f);
+
+        std::vector<std::pair<uint64_t, const ButtonComponent*>> listaArriba{ {11ull, &compArriba} };
+        std::vector<std::pair<uint64_t, const ButtonComponent*>> listaAbajo { {22ull, &compAbajo}  };
+        syncUiWidgets(listaArriba, {}, {}, arriba, cacheArriba, loader);
+        syncUiWidgets(listaAbajo,  {}, {}, abajo,  cacheAbajo,  loader);
+
+        UiDrawData data;
+        arriba.buildDrawData(800, 480, data);   // coloca los rects: el hit test los lee
+        abajo .buildDrawData(800, 480, data);
+
+        nodoArriba = cacheArriba.buttonNodes.empty() ? nullptr : cacheArriba.buttonNodes[0];
+        nodoAbajo  = cacheAbajo .buttonNodes.empty() ? nullptr : cacheAbajo .buttonNodes[0];
+
+        compArriba.callbacks.ptr->onClick = [this] { clicksArriba++; };
+        compAbajo .callbacks.ptr->onClick = [this] { clicksAbajo++;  };
+        if (nodoAbajo)
+        {
+            nodoAbajo->onMouseExit = [this](UiEvent&) { exitsAbajo++; };
+            nodoAbajo->onDrag      = [this](UiEvent&) { dragsAbajo++; };
+        }
+
+        orden = { &arriba, &abajo };
+    }
+
+    // Un frame: avanza el reloj y reparte el estado actual entre los dos.
+    void frame()
+    {
+        t += 0.016f;
+        in.timeSeconds = t;
+        dispatchUiInput(orden, in);
+        in.keys.clear();
+        in.chars.clear();
+    }
+};
+
+// El de ENCIMA se lleva el puntero. Sin esto, dos canvas solapados dejan LOS
+// DOS un widget en hover y un clic activa dos botones a la vez.
+static void test_el_canvas_de_encima_se_lleva_el_puntero()
+{
+    DosCanvasSolapados e;
+    CHECK(e.nodoArriba != nullptr && e.nodoAbajo != nullptr);
+    if (!e.nodoArriba || !e.nodoAbajo) return;
+
+    e.in.mousePos = DosCanvasSolapados::solape();
+    e.frame();
+
+    CHECK(e.arriba.hovered() == e.nodoArriba);
+    CHECK(e.abajo.hovered()  == nullptr);
+    CHECK(e.nodoArriba->hovered);
+    CHECK(!e.nodoAbajo->hovered);
+    CHECK(e.nodoArriba->state == UiButtonState::Hover);
+    CHECK(e.nodoAbajo->state  == UiButtonState::Normal);
+
+    e.in.mouseDown[0] = true;
+    e.frame();
+    CHECK(e.nodoArriba->state == UiButtonState::Pressed);
+    CHECK(e.nodoAbajo->state  == UiButtonState::Normal);
+
+    e.in.mouseDown[0] = false;
+    e.frame();
+    CHECK(e.clicksArriba == 1);
+    CHECK(e.clicksAbajo  == 0);
+}
+
+// Y el que PIERDE el puntero tiene que quedar LIMPIO. Es la mitad que no se ve:
+// un canvas que tenia un boton en hover y deja de recibir input se queda PEGADO
+// en ese hover para siempre — el boton se ve iluminado y no responde a nada.
+// Por eso los que no ganan reciben un input con el raton FUERA, no ninguno.
+static void test_el_canvas_de_abajo_no_se_queda_pegado_en_hover()
+{
+    DosCanvasSolapados e;
+    CHECK(e.nodoArriba != nullptr && e.nodoAbajo != nullptr);
+    if (!e.nodoArriba || !e.nodoAbajo) return;
+
+    // Primero el raton donde SOLO llega el de abajo: se pone en hover.
+    e.in.mousePos = DosCanvasSolapados::soloAbajo();
+    e.frame();
+    CHECK(e.abajo.hovered()  == e.nodoAbajo);
+    CHECK(e.arriba.hovered() == nullptr);
+    CHECK(e.nodoAbajo->state == UiButtonState::Hover);
+    CHECK(e.exitsAbajo == 0);
+
+    // Y ahora a la zona solapada: gana el de arriba y el de abajo tiene que
+    // SOLTAR el hover, con su MouseExit y su color de vuelta a Normal.
+    e.in.mousePos = DosCanvasSolapados::solape();
+    e.frame();
+    CHECK(e.arriba.hovered() == e.nodoArriba);
+    CHECK(e.abajo.hovered()  == nullptr);
+    CHECK(!e.nodoAbajo->hovered);
+    CHECK(e.nodoAbajo->state == UiButtonState::Normal);
+    CHECK(e.exitsAbajo == 1);
+}
+
+// La captura del puntero sobrevive al solape: bajar el boton sobre un widget y
+// arrastrar por ENCIMA de otro canvas no corta el arrastre. Sin esto, un slider
+// que asome por debajo de otro canvas se queda a medias en cuanto el cursor
+// cruza el borde, y el gesto se pierde sin un solo aviso.
+static void test_la_captura_del_puntero_sobrevive_al_solape()
+{
+    DosCanvasSolapados e;
+    CHECK(e.nodoArriba != nullptr && e.nodoAbajo != nullptr);
+    if (!e.nodoArriba || !e.nodoAbajo) return;
+
+    e.in.mousePos = DosCanvasSolapados::soloAbajo();
+    e.frame();
+    e.in.mouseDown[0] = true;
+    e.frame();
+    CHECK(e.abajo.pointerCaptured());
+    CHECK(!e.arriba.pointerCaptured());
+
+    // Arrastra hasta la zona solapada con el boton MANTENIDO.
+    e.in.mousePos = DosCanvasSolapados::solape();
+    e.frame();
+    CHECK(e.abajo.pointerCaptured());        // sigue siendo suyo
+    CHECK(e.abajo.hovered() == e.nodoAbajo); // sigue viendo el raton
+    CHECK(e.arriba.hovered() == nullptr);    // el de encima NO se lo roba
+    CHECK(e.dragsAbajo >= 1);                // y el arrastre sigue vivo
+
+    // Al soltar, la captura se acaba y el de encima recupera el puntero.
+    e.in.mouseDown[0] = false;
+    e.frame();
+    CHECK(!e.abajo.pointerCaptured());
+    e.frame();
+    CHECK(e.arriba.hovered() == e.nodoArriba);
+    CHECK(e.abajo.hovered()  == nullptr);
+}
+
+// El teclado NO sigue al raton: sigue al FOCO. Escribir en un campo de un canvas
+// y pasar el cursor por encima de otro no tiene que desviar ni una tecla. Y el
+// foco se mueve al CLICAR, no al pasar por encima — y cuando se mueve, el canvas
+// que lo tenia lo suelta, o habria dos anillos de foco a la vez.
+static void test_el_teclado_va_al_canvas_con_foco_no_al_del_raton()
+{
+    DosCanvasSolapados e;
+    CHECK(e.nodoArriba != nullptr && e.nodoAbajo != nullptr);
+    if (!e.nodoArriba || !e.nodoAbajo) return;
+    e.nodoArriba->focusable = true;
+    e.nodoAbajo->focusable  = true;
+
+    // Clic donde solo llega el de abajo: coge el foco.
+    e.in.mousePos = DosCanvasSolapados::soloAbajo();
+    e.frame();
+    e.in.mouseDown[0] = true;  e.frame();
+    e.in.mouseDown[0] = false; e.frame();
+    CHECK(e.clicksAbajo == 1);
+    CHECK(e.abajo.focused()  == e.nodoAbajo);
+    CHECK(e.arriba.focused() == nullptr);
+
+    // El raton se va a la zona solapada — el PUNTERO cambia de canvas — y se
+    // pulsa Enter. La tecla tiene que ir al de ABAJO, que es el que tiene foco.
+    e.in.mousePos = DosCanvasSolapados::solape();
+    e.in.keys.push_back(UiKey::Enter);
+    e.frame();
+    CHECK(e.arriba.hovered() == e.nodoArriba);   // el puntero SI se movio
+    CHECK(e.abajo.hovered()  == nullptr);
+    CHECK(e.abajo.focused()  == e.nodoAbajo);    // el foco NO
+    CHECK(e.clicksAbajo  == 2);                  // 1 de raton + 1 de Enter
+    CHECK(e.clicksArriba == 0);
+
+    // Un clic en la zona solapada SI mueve el foco, y el de abajo lo suelta.
+    e.in.mouseDown[0] = true;  e.frame();
+    e.in.mouseDown[0] = false; e.frame();
+    CHECK(e.clicksArriba == 1);
+    CHECK(e.arriba.focused() == e.nodoArriba);
+    CHECK(e.abajo.focused()  == nullptr);
+
+    // Y desde aqui el Enter va al de arriba, no al de abajo.
+    e.in.keys.push_back(UiKey::Enter);
+    e.frame();
+    CHECK(e.clicksArriba == 2);
+    CHECK(e.clicksAbajo  == 2);
+}
+
+// Clic FANTASMA: pulsar en el VACIO, arrastrar hasta encima de un boton y
+// soltar NO puede activarlo. La semantica de siempre es MouseUp SI, Click NO —
+// el Click pide que el Down y el Up caigan sobre el MISMO elemento.
+//
+// Y esto pasa con UN SOLO canvas, o sea en cualquier proyecto que ya exista: si
+// nadie gana el puntero (el cursor no esta sobre ningun widget) y al canvas se
+// le miente diciendo que no hay boton bajado, no ve el flanco de bajada del
+// fondo. Cuando el cursor entra luego en el boton con el boton AUN bajado, ve un
+// flanco NUEVO, registra un press sobre el, al soltar emite un Click que nadie
+// pidio y encima le roba el foco.
+//
+// Por eso el estado del que NO tiene el puntero miente sobre la POSICION del
+// raton (uiPointerAway) pero NO sobre los botones: con el raton fuera el hit
+// test ya da nullptr, asi que el press se registra sobre nullptr y no despacha
+// nada, y estadoDe no puede pintar Pressed sin hovered. Lo unico que hace falta
+// es que la cuenta de FLANCOS siga siendo la de verdad.
+static void test_no_hay_clic_fantasma_al_arrastrar_desde_el_vacio()
+{
+    DosCanvasSolapados e;
+    CHECK(e.nodoArriba != nullptr);
+    if (!e.nodoArriba) return;
+    // Focusable para que el robo de foco del clic fantasma sea observable.
+    e.nodoArriba->focusable = true;
+
+    int upsArriba = 0;
+    e.nodoArriba->onMouseUp = [&](UiEvent&) { upsArriba++; };
+
+    // UN SOLO canvas en la lista: el fallo no necesita un segundo canvas.
+    std::vector<UiCanvas*> soloUno{ &e.arriba };
+    UiInputState in;
+    float t = 0.0f;
+    auto frame = [&]() { t += 0.016f; in.timeSeconds = t; dispatchUiInput(soloUno, in); };
+
+    // Pulsa en una zona del canvas SIN ningun widget...
+    in.mousePos = glm::vec2(600.0f, 400.0f);
+    frame();
+    in.mouseDown[0] = true;
+    frame();
+    // ...arrastra hasta encima del boton con el boton AUN bajado...
+    in.mousePos = DosCanvasSolapados::solape();
+    frame();
+    // ...y suelta.
+    in.mouseDown[0] = false;
+    frame();
+
+    CHECK(e.clicksArriba == 0);             // el clic fantasma
+    CHECK(e.arriba.focused() == nullptr);   // y el foco que se lleva de paso
+    CHECK(upsArriba == 1);                  // el MouseUp SI llega, como siempre
+
+    // Control: un clic de VERDAD sobre el boton sigue contando. Sin esto, una
+    // implementacion que no emitiera ningun Click nunca pasaria igual de bien.
+    frame();
+    in.mouseDown[0] = true;  frame();
+    in.mouseDown[0] = false; frame();
+    CHECK(e.clicksArriba == 1);
+    CHECK(e.arriba.focused() == e.nodoArriba);
+}
+
+// El canvas de UN GameObject concreto, por ownerId. Lo necesita el gizmo del
+// canvas SELECCIONADO: con uiCanvas() —el PRIMER canvas de pantalla— seleccionar
+// un SEGUNDO canvas de pantalla pintaba el rect del PRIMERO, o sea un gizmo que
+// miente. Con un solo canvas coinciden y no se nota, que es lo silencioso.
+static void test_canvas_por_owner_id()
+{
+    std::vector<std::unique_ptr<UiCanvasSlot>> slots;
+    for (auto par : { std::make_pair(7ull,  UiCanvasRenderMode::ScreenSpace),
+                      std::make_pair(8ull,  UiCanvasRenderMode::World),
+                      std::make_pair(9ull,  UiCanvasRenderMode::ScreenSpace) })
+    {
+        auto s = std::make_unique<UiCanvasSlot>();
+        s->ownerId = par.first;
+        s->mode    = par.second;
+        slots.push_back(std::move(s));
+    }
+
+    // Identidad de PUNTERO: es el arbol concreto cuyo uiOrigin/uiScale va a leer
+    // el gizmo. El 9 es el que caza el fallo — es el SEGUNDO de pantalla, o sea
+    // el que uiCanvas() nunca devolvia.
+    CHECK(findCanvasByOwner(slots, 9ull) == &slots[2]->canvas);
+    CHECK(findCanvasByOwner(slots, 7ull) == &slots[0]->canvas);
+    // Los de MUNDO tambien salen: el filtro de modo es de quien pregunta.
+    CHECK(findCanvasByOwner(slots, 8ull) == &slots[1]->canvas);
+    // Y un id que no esta devuelve NADA, no "el primero": el gizmo tiene que
+    // poder no dibujar en vez de dibujar el de otro.
+    CHECK(findCanvasByOwner(slots, 42ull) == nullptr);
+}
+
+// Captura HUERFANA: un canvas que sale del reparto de input a media pulsacion
+// (un script que le pone renderMode = World, que es escribible desde Lua) nunca
+// ve el MouseUp y se queda con m_pressTarget. Al volver entraria con
+// pointerCaptured() en true SIN ningun boton bajado, se llevaria el raton en el
+// paso 1 de dispatchUiInput y le robaria el puntero al de encima, con un
+// MouseUp/Click que nadie pidio. Y de paso se quedaria PEGADO en su ultimo
+// hover, porque estando fuera de la lista dispatchUiInput ya no puede limpiarlo.
+static void test_soltar_el_input_no_deja_captura_huerfana()
+{
+    DosCanvasSolapados e;
+    CHECK(e.nodoArriba != nullptr && e.nodoAbajo != nullptr);
+    if (!e.nodoArriba || !e.nodoAbajo) return;
+    e.nodoAbajo->focusable = true;
+
+    // Baja el boton sobre el de ABAJO, en su zona exclusiva: coge captura,
+    // hover y foco.
+    e.in.mousePos = DosCanvasSolapados::soloAbajo();
+    e.frame();
+    e.in.mouseDown[0] = true;
+    e.frame();
+    CHECK(e.abajo.pointerCaptured());
+    CHECK(e.abajo.hovered() == e.nodoAbajo);
+    CHECK(e.abajo.focused() == e.nodoAbajo);
+    CHECK(e.exitsAbajo == 0);
+
+    // El script lo saca del reparto a media pulsacion.
+    e.abajo.releaseInput();
+    CHECK(!e.abajo.pointerCaptured());
+    CHECK(e.abajo.hovered() == nullptr);
+    CHECK(!e.nodoAbajo->hovered);
+    CHECK(e.abajo.focused() == nullptr);
+    CHECK(e.exitsAbajo == 1);            // con su MouseExit, no en silencio
+
+    // Y cuando vuelve, con el raton ya suelto y en la zona SOLAPADA, el de
+    // ENCIMA se lleva el puntero. Sin el soltado, la captura huerfana ganaba el
+    // paso 1 y se lo robaba.
+    e.in.mouseDown[0] = false;
+    e.in.mousePos     = DosCanvasSolapados::solape();
+    e.frame();
+    CHECK(e.arriba.hovered() == e.nodoArriba);
+    CHECK(e.abajo.hovered()  == nullptr);
+}
+
+// El buffer de la UI es UNO SOLO por frame y lo comparten los canvas de MUNDO
+// (que se graban en el pase de escena) con los de PANTALLA (que van despues, en
+// su propio pase). Dimensionarlo con el total de UNA de las dos mitades es el
+// fallo que no se ve: el que se queda fuera lo descarta la guarda uiCursorFits
+// EN SILENCIO — ni error, ni aviso de validacion, ni canvas en pantalla. Y la
+// cuenta de PANTALLA hace falta aparte porque es la que decide si el pase de UI
+// llega a abrirse.
+//
+// Los seis numeros son distintos entre si a proposito: con totales iguales, una
+// suma que cogiera el campo equivocado (indices por vertices, o el total por el
+// de pantalla) daria el mismo resultado igualmente.
+static void test_ui_frame_totals_suma_mundo_y_pantalla()
+{
+    std::vector<std::unique_ptr<UiCanvasSlot>> slots;
+
+    auto conDatos = [&](UiCanvasRenderMode modo, size_t vertices, size_t indices) {
+        auto s = std::make_unique<UiCanvasSlot>();
+        s->mode = modo;
+        s->drawData.vertices.resize(vertices);
+        s->drawData.indices.resize(indices);
+        slots.push_back(std::move(s));
+    };
+
+    conDatos(UiCanvasRenderMode::World,       5, 9);
+    conDatos(UiCanvasRenderMode::ScreenSpace, 3, 6);
+    conDatos(UiCanvasRenderMode::World,       11, 21);
+    // Un hueco vacio: matchUiCanvasSlots nunca los deja, pero la suma no puede
+    // depender de eso — un nullptr aqui reventaria antes de llegar a dibujar.
+    slots.push_back(nullptr);
+
+    const UiFrameTotals t = uiFrameTotals(slots);
+
+    // TODOS los canvas del frame: 5 + 3 + 11 y 9 + 6 + 21.
+    CHECK(t.vertices == 19u);
+    CHECK(t.indices  == 36u);
+    // Y solo los de PANTALLA.
+    CHECK(t.screenVertices == 3u);
+    CHECK(t.screenIndices  == 6u);
+}
+
+// ── Gizmo del canvas de mundo (ViewportPanel) ───────────────────────────────
+//
+// La aritmética del gizmo del canvas de mundo: proyectar las cuatro esquinas y
+// pasarlas a píxeles de la imagen del viewport. Se declara aquí a mano porque
+// vive en engine/src/Editor/ViewportPanel.cpp, que es código de EDITOR y no
+// tiene header público que exportarla — este ejecutable enlaza DonTopoEditor,
+// así que el símbolo está. Lo demás del gizmo es ImGui puro (AddLine sobre un
+// draw list) y no se puede probar sin ventana; esto sí, y es donde están los
+// dos fallos que no se ven: la esquina detrás de la cámara y la Y al revés.
+namespace DonTopo
+{
+    bool projectWorldCanvasCorners(const glm::mat4& mvp,
+                                   const glm::vec2& rectMin, const glm::vec2& rectMax,
+                                   const glm::vec2& imagePos, const glm::vec2& imageSize,
+                                   glm::vec2 outCorners[4]);
+    const GameObject* owningCanvasObject(const GameObject* go);
+}
+
+// La misma proyección que arma ViewportPanel::pickObject para la cámara de
+// EDICIÓN: 45° fijos + el Y-flip de Vulkan. Aquí explícita pa que el test no
+// dependa de ningún estado del Renderer.
+static glm::mat4 editorProjForTest(float aspect)
+{
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 1000.0f);
+    proj[1][1] *= -1.0f;
+    return proj;
+}
+
+// Un canvas de mundo INCLINADO en dos ejes, para que las cuatro esquinas caigan
+// en ocho números DISTINTOS entre sí: con el canvas de frente, izquierda y
+// derecha comparten X y arriba y abajo comparten Y, y una permutación de las
+// esquinas —o un eje espejado— pasaría igual.
+//
+// Los valores esperados están calculados fuera (proj·view·model a mano, en
+// doble precisión), no derivados de la propia función.
+static void test_world_canvas_gizmo_proyecta_las_cuatro_esquinas()
+{
+    CanvasComponent c;
+    c.renderMode          = UiCanvasRenderMode::World;
+    c.billboard           = UiBillboard::None;
+    c.worldScale          = 0.01f;                    // 200x100 px -> 2x1 unidades
+    c.referenceResolution = glm::vec2(200.0f, 100.0f);
+
+    const glm::vec2 tam(200.0f, 100.0f);
+    const glm::mat4 mundo = glm::rotate(
+        glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(0.6f, -0.3f, -5.0f)),
+                    glm::radians(35.0f), glm::vec3(0.0f, 1.0f, 0.0f)),
+        glm::radians(20.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    const glm::mat4 vista(1.0f);                      // cámara en el origen mirando a -Z
+
+    const glm::vec2 imagenPos(37.0f, 91.0f);          // no (0,0): el gizmo va en coords de PANTALLA
+    const glm::vec2 imagenTam(800.0f, 400.0f);
+
+    const glm::mat4 mvp = editorProjForTest(imagenTam.x / imagenTam.y) * vista *
+                          uiWorldCanvasMatrix(c, tam, mundo, vista);
+
+    glm::vec2 esq[4];
+    CHECK(projectWorldCanvasCorners(mvp, glm::vec2(0.0f), tam, imagenPos, imagenTam, esq));
+
+    // Orden: (0,0), (w,0), (w,h), (0,h) en píxeles de CANVAS. El (0,0) del
+    // canvas es su esquina SUPERIOR izquierda —la Y del canvas crece hacia
+    // abajo, y uiWorldCanvasMatrix la niega—, así que tiene que salir con la Y
+    // de imagen MÁS PEQUEÑA de las cuatro. Si alguien pone la Y de la imagen al
+    // revés, el cuadrilátero sigue siendo un cuadrilátero y solo esto lo caza.
+    CHECK(nearlyEqual(esq[0].x, 423.3624f, 0.02f));
+    CHECK(nearlyEqual(esq[0].y, 271.8673f, 0.02f));
+    CHECK(nearlyEqual(esq[1].x, 571.8282f, 0.02f));
+    CHECK(nearlyEqual(esq[1].y, 275.9068f, 0.02f));
+    CHECK(nearlyEqual(esq[2].x, 548.6389f, 0.02f));
+    CHECK(nearlyEqual(esq[2].y, 356.0572f, 0.02f));
+    CHECK(nearlyEqual(esq[3].x, 403.4565f, 0.02f));
+    CHECK(nearlyEqual(esq[3].y, 372.4002f, 0.02f));
+}
+
+// Una esquina con w <= 0 está DETRÁS del plano de la cámara: dividir por ese w
+// espeja el punto al otro lado y el cuadrilátero sale cruzado o disparado al
+// infinito, sin que nada en pantalla diga que es basura (ImGui no clipea, dibuja
+// lo que le den). El rechazo tiene que ser EXPLÍCITO.
+static void test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara()
+{
+    CanvasComponent c;
+    c.renderMode          = UiCanvasRenderMode::World;
+    c.worldScale          = 0.01f;
+    c.referenceResolution = glm::vec2(200.0f, 100.0f);
+
+    const glm::vec2 tam(200.0f, 100.0f);
+    // Casi de canto (-80°) y a medio metro de la cámara. Las cuatro w salen
+    // +1.4848, -0.4848, -0.4848, +1.4848: dos esquinas delante y dos detrás — el
+    // caso REAL, no "todo detrás", que lo cazaría hasta un rechazo por el centro.
+    //
+    // El signo importa y NO es intercambiable con +80°. Con +80° la que rechaza
+    // es la esquina 0, la función sale en la primera vuelta sin haber escrito
+    // nada, y entonces una implementación que escribiera DIRECTO en outCorners
+    // pasaría este test igual: los centinelas de abajo no probarían nada. Con
+    // -80° la esquina 0 está DELANTE y la que rechaza es la 1, así que para
+    // cuando se descubre el problema ya hay una esquina calculada. Eso es lo
+    // que prueba el array intermedio de projectWorldCanvasCorners: nadie puede
+    // quedarse con una esquina nueva y tres viejas.
+    const glm::mat4 mundo = glm::rotate(
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -0.5f)),
+        glm::radians(-80.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    const glm::mat4 vista(1.0f);
+
+    const glm::mat4 mvp = editorProjForTest(2.0f) * vista *
+                          uiWorldCanvasMatrix(c, tam, mundo, vista);
+
+    // Centinelas distintos entre sí: si la función escribiera algo antes de
+    // rechazar, se vería aquí.
+    glm::vec2 esq[4] = { glm::vec2(-11.0f, -12.0f), glm::vec2(-13.0f, -14.0f),
+                         glm::vec2(-15.0f, -16.0f), glm::vec2(-17.0f, -18.0f) };
+    CHECK(!projectWorldCanvasCorners(mvp, glm::vec2(0.0f), tam, glm::vec2(37.0f, 91.0f),
+                                     glm::vec2(800.0f, 400.0f), esq));
+    // El de la esquina 0 es el que muerde: es la que SÍ se llegó a calcular.
+    CHECK(nearlyEqual(esq[0].x, -11.0f));
+    CHECK(nearlyEqual(esq[0].y, -12.0f));
+    CHECK(nearlyEqual(esq[1].y, -14.0f));
+    CHECK(nearlyEqual(esq[3].x, -17.0f));
+}
+
+// Y lo contrario: fuera del encuadre pero DELANTE se acepta. El criterio es el
+// signo de w, no que el rect quepa en la imagen — recortar aquí dejaría sin
+// gizmo a un canvas que asoma medio por el borde, que es cuando más se busca.
+static void test_world_canvas_gizmo_acepta_fuera_de_encuadre_si_esta_delante()
+{
+    CanvasComponent c;
+    c.renderMode          = UiCanvasRenderMode::World;
+    c.worldScale          = 0.01f;
+    c.referenceResolution = glm::vec2(200.0f, 100.0f);
+
+    const glm::vec2 tam(200.0f, 100.0f);
+    const glm::mat4 mundo = glm::translate(glm::mat4(1.0f), glm::vec3(20.0f, 0.0f, -5.0f));
+    const glm::mat4 vista(1.0f);
+    const glm::mat4 mvp = editorProjForTest(2.0f) * vista *
+                          uiWorldCanvasMatrix(c, tam, mundo, vista);
+
+    glm::vec2 esq[4];
+    CHECK(projectWorldCanvasCorners(mvp, glm::vec2(0.0f), tam, glm::vec2(37.0f, 91.0f),
+                                    glm::vec2(800.0f, 400.0f), esq));
+    // Muy a la derecha del borde derecho de la imagen (37 + 800 = 837).
+    CHECK(nearlyEqual(esq[0].x, 2271.8023f, 0.05f));
+    CHECK(nearlyEqual(esq[1].x, 2464.9394f, 0.05f));
+    // La Y sí cae dentro: el canvas está a la altura de la cámara.
+    CHECK(nearlyEqual(esq[0].y, 242.7157f, 0.02f));
+    CHECK(nearlyEqual(esq[2].y, 339.2843f, 0.02f));
+}
+
+// A qué Canvas pertenece un widget: el ancestro MÁS CERCANO (o él mismo) que
+// tenga uno. Es la regla exacta de Scene::collectCanvases —un canvas anidado abre
+// binding propio y CORTA la cadena—, y de ella depende que el gizmo de un widget
+// sepa si su canvas es de mundo. Si el gizmo y el sync no usan el mismo criterio,
+// el gizmo decide por el canvas equivocado.
+//
+// Los dos canvas del test llevan valores DISTINTOS y no neutros (resolución y
+// worldScale) para poder afirmar CUÁL de los dos ha vuelto, no solo que no es
+// nulo: devolver el de fuera en vez del de dentro es justo el fallo a cazar.
+static void test_owning_canvas_es_el_ancestro_mas_cercano()
+{
+    GameObject raiz("Raiz");
+    raiz.setCanvas(std::make_shared<CanvasComponent>());
+    raiz.getCanvas()->renderMode          = UiCanvasRenderMode::ScreenSpace;
+    raiz.getCanvas()->referenceResolution = glm::vec2(1280.0f, 720.0f);
+    raiz.getCanvas()->worldScale          = 0.007f;
+
+    GameObject* canvasMundo = raiz.addChild("CanvasMundo");
+    canvasMundo->setCanvas(std::make_shared<CanvasComponent>());
+    canvasMundo->getCanvas()->renderMode          = UiCanvasRenderMode::World;
+    canvasMundo->getCanvas()->referenceResolution = glm::vec2(640.0f, 360.0f);
+    canvasMundo->getCanvas()->worldScale          = 0.003f;
+
+    GameObject* boton = canvasMundo->addChild("Boton");
+    boton->setButton(std::make_shared<ButtonComponent>());
+
+    // El de DENTRO, no el de fuera. Se devuelve el GameObject y no el componente
+    // porque el gizmo necesita ADEMAS su worldTransform para montar la matriz de
+    // modelo del canvas.
+    const GameObject* objBoton = owningCanvasObject(boton);
+    CHECK(objBoton == canvasMundo);
+    const CanvasComponent* delBoton = objBoton ? objBoton->getCanvas().get() : nullptr;
+    CHECK(delBoton != nullptr);
+    if (delBoton)
+    {
+        CHECK(delBoton->renderMode == UiCanvasRenderMode::World);
+        CHECK(nearlyEqual(delBoton->worldScale, 0.003f));
+        CHECK(nearlyEqual(delBoton->referenceResolution.x, 640.0f));
+    }
+
+    // Un GameObject que ES el canvas se devuelve a sí mismo: el gizmo del propio
+    // Canvas se apoya en el mismo criterio.
+    CHECK(owningCanvasObject(canvasMundo) == canvasMundo);
+
+    // Y desde la raíz manda el de PANTALLA: sin esto, una implementación que
+    // subiera hasta el canvas más externo —o que se quedara con el último que
+    // vio— pasaría la comprobación de arriba igualmente.
+    const GameObject* objRaiz = owningCanvasObject(&raiz);
+    CHECK(objRaiz == &raiz);
+    const CanvasComponent* deLaRaiz = objRaiz ? objRaiz->getCanvas().get() : nullptr;
+    CHECK(deLaRaiz != nullptr);
+    if (deLaRaiz)
+    {
+        CHECK(deLaRaiz->renderMode == UiCanvasRenderMode::ScreenSpace);
+        CHECK(nearlyEqual(deLaRaiz->worldScale, 0.007f));
+        CHECK(nearlyEqual(deLaRaiz->referenceResolution.x, 1280.0f));
+    }
+
+    // Sin canvas por encima no hay canvas: el editor lo impide, pero una escena
+    // hecha a mano puede traerlo y esto no puede deferenciar un nulo.
+    GameObject suelto("Suelto");
+    suelto.setButton(std::make_shared<ButtonComponent>());
+    CHECK(owningCanvasObject(&suelto) == nullptr);
+}
+
+// El rect de un WIDGET dentro de un canvas de mundo, que es lo que hace falta
+// para su gizmo. Va por la MISMA función que el canvas entero: el canvas no es
+// más que el caso (0,0)-(w,h) de esto.
+//
+// La línea que este test protege es concretamente que el rect ENTRE por el
+// parámetro. El rect elegido, (40,25)-(140,60), no empieza en (0,0), no coincide
+// con el canvas y no está centrado en él ni en X ni en Y: una implementación que
+// ignorase los dos argumentos y proyectase el canvas entero daría las ocho
+// coordenadas del test de arriba, que distan más de 21 píxeles de estas — mil
+// veces la tolerancia. Con un rect que empezara en (0,0), o que fuera el canvas
+// entero, ese sabotaje pasaría de largo.
+static void test_world_canvas_gizmo_proyecta_el_rect_de_un_widget()
+{
+    CanvasComponent c;
+    c.renderMode          = UiCanvasRenderMode::World;
+    c.billboard           = UiBillboard::None;
+    c.worldScale          = 0.01f;
+    c.referenceResolution = glm::vec2(200.0f, 100.0f);
+
+    // Mismo canvas, misma cámara y misma imagen que
+    // test_world_canvas_gizmo_proyecta_las_cuatro_esquinas: lo ÚNICO que cambia
+    // es el rect, así que la diferencia entre los dos juegos de números no puede
+    // venir de ninguna otra cosa.
+    const glm::vec2 tam(200.0f, 100.0f);
+    const glm::mat4 mundo = glm::rotate(
+        glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(0.6f, -0.3f, -5.0f)),
+                    glm::radians(35.0f), glm::vec3(0.0f, 1.0f, 0.0f)),
+        glm::radians(20.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    const glm::mat4 vista(1.0f);
+    const glm::vec2 imagenPos(37.0f, 91.0f);
+    const glm::vec2 imagenTam(800.0f, 400.0f);
+
+    const glm::mat4 mvp = editorProjForTest(imagenTam.x / imagenTam.y) * vista *
+                          uiWorldCanvasMatrix(c, tam, mundo, vista);
+
+    // screenPos (40,25) y screenSize (100,35): en un canvas de mundo, lo que
+    // deja buildDrawData ya viene en píxeles LOCALES del canvas (escala 1 y
+    // origen (0,0)), así que entra tal cual.
+    const glm::vec2 rectMin(40.0f, 25.0f);
+    const glm::vec2 rectMax(140.0f, 60.0f);
+
+    glm::vec2 esq[4];
+    CHECK(projectWorldCanvasCorners(mvp, rectMin, rectMax, imagenPos, imagenTam, esq));
+
+    CHECK(nearlyEqual(esq[0].x, 453.5888f, 0.02f));
+    CHECK(nearlyEqual(esq[0].y, 297.8520f, 0.02f));
+    CHECK(nearlyEqual(esq[1].x, 528.4051f, 0.02f));
+    CHECK(nearlyEqual(esq[1].y, 297.0902f, 0.02f));
+    CHECK(nearlyEqual(esq[2].x, 520.3945f, 0.02f));
+    CHECK(nearlyEqual(esq[2].y, 327.1820f, 0.02f));
+    CHECK(nearlyEqual(esq[3].x, 446.1635f, 0.02f));
+    CHECK(nearlyEqual(esq[3].y, 331.6128f, 0.02f));
+
+    // Y el rect degenerado (min == max) da un punto: es como el gizmo saca el
+    // pivot proyectado, y sin esto una división por el tamaño del rect colada en
+    // la función no se vería.
+    glm::vec2 punto[4];
+    CHECK(projectWorldCanvasCorners(mvp, rectMin, rectMin, imagenPos, imagenTam, punto));
+    CHECK(nearlyEqual(punto[0].x, 453.5888f, 0.02f));
+    CHECK(nearlyEqual(punto[0].y, 297.8520f, 0.02f));
+    CHECK(nearlyEqual(punto[2].x, 453.5888f, 0.02f));
+    CHECK(nearlyEqual(punto[2].y, 297.8520f, 0.02f));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -5850,6 +6809,8 @@ int main()
     test_canvas_command_add_undo_redo();
     test_canvas_command_remove();
     test_canvas_property_command_undo_redo();
+    test_canvas_world_fields_round_trip(pm, am);
+    test_canvas_without_world_fields_loads_with_defaults(pm, am);
 
     test_button_round_trip(pm, am);
     test_scene_without_button_block_still_loads(pm, am);
@@ -5874,6 +6835,10 @@ int main()
     test_text_property_command_undo_redo();
     test_text_sync_updates_the_live_node();
     test_collect_ui_widgets_salta_los_intermedios_sin_ui();
+    test_collect_canvases_agrupa_por_canvas();
+    test_collect_canvases_anidado_gana_el_mas_cercano();
+    test_collect_canvases_ignora_los_huerfanos();
+    test_collect_canvases_jerarquia_por_canvas();
     test_jerarquia_ancla_y_hereda_del_padre();
     test_jerarquia_cambiar_de_padre_reconstruye();
     test_jerarquia_hereda_la_opacidad();
@@ -6008,7 +6973,23 @@ int main()
     test_scroll_view_wheel_moves_the_component();
     test_scroll_view_hit_test_maps_back_to_gameobject();
 
+    test_ui_slots_se_emparejan_por_owner_id();
+    test_world_canvases_se_ordenan_de_lejos_a_cerca();
+    test_ui_frame_totals_suma_mundo_y_pantalla();
+    test_canvas_de_pantalla_en_orden_de_prioridad();
+    test_el_canvas_de_encima_se_lleva_el_puntero();
+    test_el_canvas_de_abajo_no_se_queda_pegado_en_hover();
+    test_la_captura_del_puntero_sobrevive_al_solape();
+    test_el_teclado_va_al_canvas_con_foco_no_al_del_raton();
+    test_no_hay_clic_fantasma_al_arrastrar_desde_el_vacio();
+    test_soltar_el_input_no_deja_captura_huerfana();
+    test_canvas_por_owner_id();
 
+    test_world_canvas_gizmo_proyecta_las_cuatro_esquinas();
+    test_world_canvas_gizmo_rechaza_esquina_detras_de_la_camara();
+    test_world_canvas_gizmo_acepta_fuera_de_encuadre_si_esta_delante();
+    test_world_canvas_gizmo_proyecta_el_rect_de_un_widget();
+    test_owning_canvas_es_el_ancestro_mas_cercano();
 
 
     am.shutdown();

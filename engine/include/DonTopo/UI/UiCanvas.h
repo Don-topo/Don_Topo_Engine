@@ -650,6 +650,33 @@ namespace DonTopo
         // Elemento bajo el cursor en el último updateInput.
         UiElement* hovered() const { return m_hovered; }
 
+        // ¿Hay un botón del ratón BAJADO sobre un elemento de este canvas y sin
+        // soltar todavía? Es la captura del puntero: mientras dure, el cursor
+        // puede irse fuera del widget (y hasta encima de OTRO canvas) sin que el
+        // arrastre se corte, que es como se comporta un slider de toda la vida.
+        // Lo lee dispatchUiInput para repartir el ratón entre varios canvas.
+        bool pointerCaptured() const
+        {
+            return m_pressTarget[0] != nullptr || m_pressTarget[1] != nullptr ||
+                   m_pressTarget[2] != nullptr;
+        }
+
+        // Suelta el hover, la captura del puntero y el foco de este canvas, con
+        // su MouseExit y su Blur — igual que si el ratón se hubiera ido fuera y
+        // el foco a otra parte. NO toca el árbol ni las animaciones.
+        //
+        // Lo llama quien saca el canvas del reparto de input a media pulsación:
+        // hoy, cambiarle `renderMode` a World (es escribible desde Lua). Un
+        // canvas que se va con un botón bajado nunca ve el MouseUp y se queda con
+        // `m_pressTarget`: al volver entraría con pointerCaptured() en true SIN
+        // ningún botón bajado, se llevaría el ratón en el paso 1 de
+        // dispatchUiInput y emitiría un MouseUp/Click que nadie pidió. Y sin
+        // soltar el hover se quedaría además PEGADO en el último que vio, que es
+        // el mismo fallo que dispatchUiInput evita para los que pierden el
+        // puntero — aquí no puede evitarlo porque el canvas ya no está en su
+        // lista.
+        void releaseInput();
+
         // Uno solo por canvas. setFocus emite Blur en el viejo y Focus en el
         // nuevo, EN ESE ORDEN. Ignora los que no son focusable (nullptr sí vale:
         // es soltar el foco).
@@ -741,4 +768,61 @@ namespace DonTopo
         float m_lastTime    = 0.0f;
         bool  m_hasLastTime = false;
     };
+
+    // Dónde se deja el ratón de un canvas que NO tiene el puntero este frame.
+    // Un punto que no cae dentro de ningún rect imaginable: el hit test de ese
+    // canvas devuelve nullptr y su hover se limpia solo, con su MouseExit y con
+    // sus colores de estado de vuelta a Normal. No vale con "no llamarle": un
+    // canvas al que se le deja de dar input se queda PEGADO en el último hover
+    // que vio, para siempre.
+    inline glm::vec2 uiPointerAway() { return glm::vec2(-1.0e6f, -1.0e6f); }
+
+    // Reparte UN estado de input entre TODOS los canvas de pantalla de la
+    // escena. `canvases` va en orden de PRIORIDAD: el de más arriba primero (o
+    // sea, el ÚLTIMO que se dibuja, que es el que el usuario ve encima).
+    //
+    // Llamar a updateInput con el mismo estado en los N canvas NO vale: dos
+    // canvas solapados dejarían LOS DOS un widget en hover y un clic activaría
+    // dos botones a la vez. El reparto es:
+    //
+    //   - RATÓN a UNO solo. Se lo queda el que tenga la captura del puntero
+    //     (un botón bajado sin soltar, o sea un arrastre en curso); si no hay
+    //     ninguno, el primero de la lista que tenga algo bajo el cursor. Los
+    //     demás reciben el ratón en uiPointerAway() y con los botones sueltos,
+    //     que es lo que les limpia el hover en vez de dejárselo pegado.
+    //   - TECLADO y MANDO a UNO solo, y NO tiene por qué ser el mismo: el foco
+    //     no lo mueve el cursor. Las teclas van al primer canvas de la lista
+    //     que TENGA foco, así que escribir en un campo de texto sigue llegando
+    //     aunque el ratón se pasee por encima de otro canvas. Si ninguno tiene
+    //     foco van al de más arriba (hoy eso no se nota: updateInput ignora las
+    //     teclas sin foco).
+    //   - El FOCO no salta solo entre canvas: se mueve al clicar. El Tab y las
+    //     flechas dan la vuelta DENTRO del canvas que lo tiene, como siempre.
+    //     Cuando el canvas que tiene el puntero coge foco, los demás lo sueltan,
+    //     que es lo que impide dos anillos de foco a la vez.
+    //
+    // Todos los canvas reciben updateInput, incluidos los que no ven nada: es
+    // ahí donde corren sus animaciones y el fundido de color de sus botones.
+    void dispatchUiInput(const std::vector<UiCanvas*>& canvases, const UiInputState& input);
+
+    // Nodo vivo por NOMBRE en TODO el subárbol de `node`, o nullptr si no hay
+    // ninguno. Recorrido COMPLETO y no solo los hijos directos: desde que el
+    // sync respeta la jerarquía de la escena, el nodo de un widget anidado
+    // cuelga del de su padre, y buscarlo a un solo nivel dejaría sin
+    // encontrar nada que no fuera de primer nivel.
+    //
+    // Vivía como función local (findUiNodeNamed) en ViewportPanel.cpp, que
+    // solo miraba el canvas de pantalla. Se mueve aquí, libre, para que la
+    // use también el Renderer (findUiNode, que recorre TODOS los canvas de
+    // la escena, no solo el de pantalla) sin que el editor y el motor tengan
+    // cada uno su copia.
+    inline const UiElement* findUiNodeIn(const UiElement& node, const std::string& wanted)
+    {
+        for (const auto& child : node.children())
+        {
+            if (child->name == wanted) return child.get();
+            if (const UiElement* hit = findUiNodeIn(*child, wanted)) return hit;
+        }
+        return nullptr;
+    }
 }

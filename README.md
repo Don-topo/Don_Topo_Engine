@@ -42,7 +42,8 @@ A game engine written in C++20, with two interchangeable render backends: **Vulk
 - **Async asset loading**: worker thread pool (`JobSystem`), off-thread image decode, batched GPU uploads with deferred visibility and deferred destruction — no `vkDeviceWaitIdle` stalls on drop or scene load
 - **Export Game**: packages a standalone runtime (scene, assets, scripts, shaders, splash screen, FMOD and MSVC CRT DLLs) that links no editor code at all
 - **Lua scripting**: `ScriptComponent` (multiple per GameObject), Unity-style lifecycle (Awake/Start/Update/FixedUpdate/LateUpdate/OnDestroy), Entity/Transform/Scene/Input/Audio API, runtime scene switching (`DonTopo.loadScene`), hot reload, auto-generated property UI
-- **2D UI components**: `Canvas` (scale modes, reference resolution, safe area), `Button` (5 states, color-tint/sprite-swap/fade transitions, optional text label), `Text` (font, size, outline, shadow, align, wrap/overflow) `ProgressBar` (value range, fill direction, background/fill sprites) and `Layout` (horizontal/vertical/grid auto-layout with padding, spacing, cell size, cross-axis alignment, content-size fitters and per-child `ignoreLayout`; on a GameObject with no other UI component it builds its own non-drawing container that groups, places and clips). They are **data-only** components of the scene: a single per-frame sync rebuilds/updates the live canvas tree from them, so what you see in Play and in the exported game comes from the scene, not from a hand-wired tree. Editable in Properties and **fully scriptable from Lua** — every field, plus `OnClick`/`OnDoubleClick` callbacks and the button state (see below)
+- **UI components** (14): `Canvas` (scale modes, reference resolution, safe area), `Panel`, `Image` (simple/sliced/tiled/filled), `Text` (font, size, outline, shadow, align, wrap/overflow), `Button` (5 states, color-tint/sprite-swap/fade transitions, optional text label), `Slider`, `Checkbox`, `Toggle`, `Scrollbar`, `ProgressBar` (value range, fill direction, background/fill sprites), `InputField` (caret, content types), `Dropdown`, `ScrollView` and `Layout` (horizontal/vertical/grid auto-layout with padding, spacing, cell size, cross-axis alignment, content-size fitters and per-child `ignoreLayout`; on a GameObject with no other UI component it builds its own non-drawing container that groups, places and clips). They are **data-only** components of the scene: a single per-frame sync rebuilds/updates the live canvas tree from them, so what you see in Play and in the exported game comes from the scene, not from a hand-wired tree. Editable in Properties and **fully scriptable from Lua** — every field, plus `OnClick`/`OnDoubleClick` callbacks and the button state (see below)
+- **World-space canvases and multi-canvas**: a `Canvas` can render as a quad **inside the scene** instead of on the screen (`renderMode`, `worldScale`, `billboard` none/yaw-only/full, `depthTest`) — health bars over enemies, diegetic screens. World canvases are drawn in the scene pass, sorted back-to-front, so geometry occludes them; screen canvases stay on top as before. A scene can hold **any number of canvases**, each with its own tree; pointer input goes to the topmost one under the cursor, and a canvas that owns a press keeps it until release. Both backends. Three known limits: a world canvas cannot be clicked (select it from the Hierarchy), `clipChildren` does not clip on one, and fog/motion blur/TAA read the depth of whatever is *behind* it
 - FBX / OBJ model loading (embedded textures supported)
 
 ## Tech Stack
@@ -687,9 +688,9 @@ Mode the request is ignored with a Log Console warning.
 
 ### UI from Lua
 
-The four UI components are reachable from any script, with the same reach as the
+All fourteen UI components are reachable from any script, with the same reach as the
 Properties panel: read/write **every** field, add or remove the component, and —
-for `Button` — register Lua callbacks and read the resolved state.
+for the interactive ones — register Lua callbacks and read the resolved state.
 
 ```lua
 -- Scripts/BotonDemo.lua
@@ -715,14 +716,16 @@ function BotonDemo:Update(dt)
 end
 ```
 
-`entity:GetCanvas()/GetButton()/GetText()/GetProgressBar()/GetLayout()` return `nil`
-when the component is absent; `AddCanvas()/AddButton()/AddText()/AddProgressBar()/AddLayout()` create it
+`entity:GetCanvas()/GetPanel()/GetImage()/GetText()/GetButton()/GetSlider()/GetCheckbox()/GetToggle()/GetScrollbar()/GetProgressBar()/GetInputField()/GetDropdown()/GetScrollView()/GetLayout()`
+return `nil` when the component is absent; the matching `AddCanvas()/AddPanel()/…` create it
 (returning the wrapper, and returning the existing one if it is already there) and
 `RemoveCanvas()/…` drop it. The same names also work through
 `GetComponent`/`AddComponent`/`RemoveComponent`. Enums travel as integer constant
-tables: `UiScaleMode`, `UiScreenMatch`, `UiTextAlign`, `UiTextOverflow`,
-`UiProgressFillDirection`, `UiButtonTransition`, `UiButtonState`, `UiLayoutMode`,
-`UiCrossAlign`.
+tables: `UiScaleMode`, `UiScreenMatch`, `UiCanvasRenderMode`, `UiBillboard`,
+`UiTextAlign`, `UiTextVAlign`, `UiTextOverflow`, `UiImageMode`, `UiFillDirection`,
+`UiFillOrigin`, `UiProgressFillDirection`, `UiSliderDirection`,
+`UiScrollbarDirection`, `UiInputContentType`, `UiButtonTransition`,
+`UiButtonState`, `UiLayoutMode`, `UiCrossAlign`.
 
 Setters always write to the **component**, never to the live canvas node — the
 per-frame sync dumps the component onto the node and would overwrite any direct
@@ -738,13 +741,17 @@ a callback is logged to the Log Console and never takes down the frame.
 
 In the editor the **mouse only reaches the UI in Play Mode and while the cursor is
 over the viewport image** (like Unity, a button does not light up in edit mode);
-coordinates are canvas pixels from the top-left corner of that image.
+coordinates are canvas pixels from the top-left corner of that image. With several
+screen canvases, the pointer goes to the **topmost one under the cursor** (last drawn
+wins) and the rest are told the pointer is away, so nothing stays stuck in hover;
+keyboard and gamepad go to whichever canvas holds focus, not to the one under the
+mouse. World-space canvases take no pointer input at all.
 
 API surface: `self.entity` (`GetTransform`, `GetComponent`/`AddComponent`/`RemoveComponent`,
-`GetCanvas`/`GetButton`/`GetText`/`GetProgressBar`/`GetLayout` + `Add*`/`Remove*`,
+`GetCanvas`/`GetPanel`/`GetImage`/`GetText`/`GetButton`/`GetSlider`/`GetCheckbox`/`GetToggle`/`GetScrollbar`/`GetProgressBar`/`GetInputField`/`GetDropdown`/`GetScrollView`/`GetLayout` + `Add*`/`Remove*`,
 `GetParent`/`GetChildren`), `Transform` (position/rotation/scale, `Translate`/`Rotate`),
-`Scene` (`Find`/`CreateGameObject`/`Instantiate`/`Destroy`), UI (`Canvas`/`Button`/
-`Text`/`ProgressBar`/`Layout`, incl. button callbacks and state), `DonTopo.loadScene`,
+`Scene` (`Find`/`CreateGameObject`/`Instantiate`/`Destroy`), the 14 UI components
+(incl. widget callbacks and button state), `DonTopo.loadScene`,
 `Input` (`IsKeyDown`/`IsKeyPressed`/
 `IsKeyReleased`, `Key.*`), `Log.Info/Warn/Error` (+ `print`) routed to the Log Console. Scripts
 only run in Play Mode; a broken script never crashes the engine (compile/runtime errors are

@@ -16,6 +16,7 @@ namespace DonTopo
     class GameObject;
     class Scene;
     class UiCanvas;
+    class UiElement;
     class UiFont;
     class UiLayer;
     class UiTextureAtlas;
@@ -23,6 +24,7 @@ namespace DonTopo
     struct Mesh;
     struct SkinnedMesh;
     struct DecodedImage;
+    struct UiCanvasBinding;
 
     // Lo que el editor necesita de un backend de render, por encima de los
     // ajustes de calidad que ya comparten los dos (RendererState).
@@ -182,9 +184,45 @@ namespace DonTopo
             // del frame; el editor la fija una vez.
             virtual void setUiLayer(UiLayer* ui) = 0;
 
-            // Árbol de la interfaz 2D del juego. Un backend que todavía no la
-            // dibuje devuelve el suyo vacío: el editor lo edita igual.
+            // Árbol de la interfaz 2D del juego, el de PANTALLA. Un backend que
+            // todavía no la dibuje devuelve el suyo vacío: el editor lo edita
+            // igual.
             virtual UiCanvas& uiCanvas() = 0;
+
+            // TODOS los canvas de PANTALLA, en orden de PRIORIDAD DE INPUT: el
+            // de más arriba primero (el último que se dibuja). Es lo que hace
+            // falta para repartir el ratón y el teclado entre varios canvas con
+            // dispatchUiInput, y para que el clic del editor seleccione lo que
+            // el usuario ve ENCIMA.
+            //
+            // uiCanvas() no vale para eso: devuelve UNO solo (el primero de
+            // pantalla), y con él los botones de un segundo canvas se dibujan
+            // pero no tienen ni hover, ni colores de estado, ni Click.
+            virtual void screenUiCanvases(std::vector<UiCanvas*>& out) = 0;
+
+            // El canvas de UN GameObject, por su id, o nullptr si no tiene. Lo
+            // usa el gizmo del canvas SELECCIONADO: `uiCanvas()` le daba el
+            // PRIMERO de pantalla, así que seleccionar un segundo canvas pintaba
+            // el rect del primero.
+            //
+            // Va aparte de screenUiCanvases y no dentro porque aquella alimenta a
+            // dispatchUiInput, cuya firma es del core de UI
+            // (`vector<UiCanvas*>`): meterle el ownerId obligaría a que el core
+            // conociera los tipos del Renderer, o a desempaquetar una segunda
+            // lista por frame en los tres bucles.
+            virtual const UiCanvas* uiCanvasOf(uint64_t ownerId) const = 0;
+
+            // Monta el árbol vivo de CADA canvas de la escena. Sustituye al
+            // collect + syncUiWidgets que antes repetían los tres bucles
+            // (runtime y sandbox x2) — tres copias de lo mismo es como se
+            // desincronizan.
+            virtual void syncUiCanvases(const std::vector<UiCanvasBinding>& bindings) = 0;
+
+            // Busca un nodo por nombre en TODOS los canvas, no solo en el de
+            // pantalla. Lo usan los nueve gizmos de widget del editor: sin esto,
+            // un botón dentro de un canvas de mundo se quedaría sin gizmo y nada
+            // lo diría.
+            virtual const UiElement* findUiNode(const std::string& name) const = 0;
 
             // ── Anti-aliasing con recursos detrás ───────────────────────────
             // El modo y las muestras viven en RendererState, pero cambiarlos

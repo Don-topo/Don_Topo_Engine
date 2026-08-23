@@ -40,6 +40,7 @@
 #include "DonTopo/UI/UiSpriteBatch.h"
 #include "DonTopo/UI/UiTextureAtlas.h"
 #include "DonTopo/UI/UiFont.h"
+#include "DonTopo/UI/UiWidgetSync.h"
 #include <array>
 #include <unordered_map>
 
@@ -139,12 +140,37 @@ namespace DonTopo {
             // arranca.
             void setUiLayer(UiLayer* ui) { m_ui = ui; }
 
-            // Canvas de la UI de JUEGO (no el editor). Se dibuja dentro del pass
-            // de composicion, encima de la escena y debajo de ImGui, y vacio no
-            // cuesta ni un comando. Devolver la referencia hace de getter y de
-            // setter: el arbol se monta sobre uiCanvas().root().
-            UiCanvas&       uiCanvas()       { return m_uiCanvas; }
-            const UiCanvas& uiCanvas() const { return m_uiCanvas; }
+            // Canvas de la UI de JUEGO (no el editor), el de PANTALLA. Se dibuja
+            // dentro del pass de composicion, encima de la escena y debajo de
+            // ImGui, y vacio no cuesta ni un comando. Devolver la referencia hace
+            // de getter y de setter: el arbol se monta sobre uiCanvas().root().
+            //
+            // Con N canvas (Task 5 del canvas de mundo) esto ya no es un campo:
+            // busca el primer slot de pantalla entre m_uiSlots. Sin ninguno (la
+            // escena solo tiene canvas de mundo, o ninguno) cae a
+            // m_uiCanvasFallback, que es persistente y vacio — devolver la
+            // referencia a un temporal dejaria a los gizmos leyendo memoria
+            // muerta.
+            UiCanvas&       uiCanvas() override;
+            const UiCanvas& uiCanvas() const;
+
+            // TODOS los de pantalla, en orden de prioridad de input (el de mas
+            // arriba primero). Es lo que reparte el raton entre varios canvas.
+            void screenUiCanvases(std::vector<UiCanvas*>& out) override;
+
+            // El canvas de un GameObject por su id (nullptr si no tiene). Lo usa
+            // el gizmo del canvas seleccionado, que no puede tirar de uiCanvas().
+            const UiCanvas* uiCanvasOf(uint64_t ownerId) const override;
+
+            // Monta el arbol vivo de CADA canvas de la escena, uno por
+            // CanvasComponent. Sustituye al collect + syncUiWidgets que antes
+            // repetian los tres bucles (runtime y sandbox x2).
+            void syncUiCanvases(const std::vector<UiCanvasBinding>& bindings) override;
+
+            // Busca un nodo por nombre en TODOS los canvas, no solo en el de
+            // pantalla. Lo necesitan los gizmos de widget del editor: sin esto,
+            // un boton dentro de un canvas de mundo se quedaria sin gizmo.
+            const UiElement* findUiNode(const std::string& name) const override;
             // Carga un atlas desde disco y le reserva su descriptor set. El
             // Renderer es el dueno; devuelve nullptr si la imagen no se puede
             // leer. Los sprites se anaden luego con addSprite.
@@ -1011,11 +1037,27 @@ namespace DonTopo {
             Skybox   m_skybox;
             SplashScreen m_splash;
 
-            // UI de juego. Vive en Core: el runtime exportado dibuja este mismo
+            // UI de juego. Vive en Core: el runtime exportado dibuja estos mismos
             // canvas dentro del pass de composicion, sin nada del editor.
-            UiCanvas      m_uiCanvas;
+            //
+            // Uno por CanvasComponent de la escena — syncUiCanvases() los
+            // empareja por ownerId (matchUiCanvasSlots), así que reordenar los
+            // canvas en la jerarquía no resetea el árbol ni la caché del que no
+            // se ha movido. m_uiBatch es UNO SOLO y compartido: sus buffers de
+            // vértices/índices por frame se sub-asignan (UiSpriteBatch::beginFrame
+            // + record) para que cada canvas escriba en su propio hueco del
+            // mismo VkBuffer en vez de pisar al anterior.
+            std::vector<std::unique_ptr<UiCanvasSlot>> m_uiSlots;
+            // Los de MUNDO del frame, ya ordenados de lejos a cerca por
+            // sortWorldCanvasesBackToFront. Miembro y no local del bucle de
+            // grabado para no reasignar el vector en cada frame; lo limpia la
+            // propia funcion de orden.
+            std::vector<UiCanvasSlot*>                m_uiWorldOrder;
+            // Repliegue de uiCanvas() cuando la escena no tiene ningún canvas de
+            // pantalla. Persistente y vacío: devolver una referencia a un temporal
+            // dejaría a los gizmos leyendo memoria muerta.
+            UiCanvas      m_uiCanvasFallback;
             UiSpriteBatch m_uiBatch;
-            UiDrawData    m_uiDrawData;
             std::vector<std::unique_ptr<UiTextureAtlas>> m_uiAtlases;
             std::vector<std::unique_ptr<UiFont>>         m_uiFonts;
             // Por RUTA: la misma imagen pedida dos veces es el mismo atlas, no

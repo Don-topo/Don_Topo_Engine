@@ -6,8 +6,6 @@
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/GpuResources.h"
 
-#include <glm/ext/matrix_clip_space.hpp>
-
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -1790,10 +1788,13 @@ namespace DonTopo
         write.pImageInfo      = &imageInfo;
         vkUpdateDescriptorSets(gpu.device(), 1, &write, 0, nullptr);
 
+        // VERTEX | FRAGMENT: la mat4 la lee ui.vert y el flag linearOutput lo
+        // lee ui.frag, pero el bloque es UNO SOLO y el rango tiene que cubrir
+        // los dos miembros para las dos etapas.
         VkPushConstantRange pcr{};
-        pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         pcr.offset     = 0;
-        pcr.size       = sizeof(glm::mat4);
+        pcr.size       = kUiPushConstantSize;
 
         VkPipelineLayoutCreateInfo pli{};
         pli.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -1804,7 +1805,8 @@ namespace DonTopo
         if (vkCreatePipelineLayout(gpu.device(), &pli, nullptr, &m_layout) != VK_SUCCESS)
             throw std::runtime_error("failed to create ui pipeline layout!");
 
-        createPipeline(gpu, renderPass, samples);
+        // La de pantalla nunca testea profundidad: va encima de todo.
+        createPipeline(gpu, renderPass, samples, false, m_pipeline);
     }
 
     void UiSpriteBatch::recreatePipeline(GpuDevice& gpu, VkRenderPass renderPass,
@@ -1816,11 +1818,35 @@ namespace DonTopo
             vkDestroyPipeline(gpu.device(), m_pipeline, nullptr);
             m_pipeline = VK_NULL_HANDLE;
         }
-        createPipeline(gpu, renderPass, samples);
+        createPipeline(gpu, renderPass, samples, false, m_pipeline);
+    }
+
+    void UiSpriteBatch::initWorldPipelines(GpuDevice& gpu, VkRenderPass scenePass,
+                                           VkSampleCountFlagBits samples)
+    {
+        if (m_layout == VK_NULL_HANDLE) return;   // sin init (headless sin UI)
+
+        // Destruir primero: esta funcion es tambien el "recreate" del cambio de
+        // AA, y el llamante ya ha hecho vkDeviceWaitIdle antes de tocar el
+        // renderpass.
+        if (m_worldPipelineDepth != VK_NULL_HANDLE)
+        {
+            vkDestroyPipeline(gpu.device(), m_worldPipelineDepth, nullptr);
+            m_worldPipelineDepth = VK_NULL_HANDLE;
+        }
+        if (m_worldPipelineNoDepth != VK_NULL_HANDLE)
+        {
+            vkDestroyPipeline(gpu.device(), m_worldPipelineNoDepth, nullptr);
+            m_worldPipelineNoDepth = VK_NULL_HANDLE;
+        }
+
+        createPipeline(gpu, scenePass, samples, true,  m_worldPipelineDepth);
+        createPipeline(gpu, scenePass, samples, false, m_worldPipelineNoDepth);
     }
 
     void UiSpriteBatch::createPipeline(GpuDevice& gpu, VkRenderPass renderPass,
-                                       VkSampleCountFlagBits samples)
+                                       VkSampleCountFlagBits samples,
+                                       bool depthTest, VkPipeline& out)
     {
         VkShaderModule vert = makeModule(gpu.device(), readSpv("shaders/ui.vert.spv"));
         VkShaderModule frag = makeModule(gpu.device(), readSpv("shaders/ui.frag.spv"));
@@ -1891,18 +1917,27 @@ namespace DonTopo
 
         VkPipelineMultisampleStateCreateInfo ms{};
         ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        // Las mismas muestras que sus compañeros del pass de composición: con
-        // MSAA ese pass es multisample y un pipeline que declare 1 sample no
-        // sería compatible.
+        // Las mismas muestras que el pass contra el que se compila: el de UI va
+        // siempre a una, y el de ESCENA a las que diga el modo de AA. Un
+        // pipeline que declare otras no es compatible con su pass.
         ms.rasterizationSamples = samples;
 
-        // El pass de composición trae la profundidad de la escena cargada. La UI
-        // ni la lee ni la escribe: va siempre encima.
+        // depthTest apagado = la variante de pantalla (su pass no tiene nada que
+        // testear, va encima de todo) y la de mundo "siempre encima".
+        // Encendido = la de mundo ocluida, para que una pared tape el cartel.
+        //
+        // depthWrite SIEMPRE apagado en las TRES: la UI va con alpha, y escribir
+        // profundidad haria que los quads de un mismo canvas se recortaran entre
+        // si segun el orden en que salieran del batcher (el texto taparia el
+        // panel que tiene detras en vez de mezclarse con el).
+        //
+        // LESS_OR_EQUAL y no LESS: un canvas pegado a la superficie de una pared
+        // tiene que verse, no perder el empate contra ella.
         VkPipelineDepthStencilStateCreateInfo ds{};
         ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-        ds.depthTestEnable  = VK_FALSE;
+        ds.depthTestEnable  = depthTest ? VK_TRUE : VK_FALSE;
         ds.depthWriteEnable = VK_FALSE;
-        ds.depthCompareOp   = VK_COMPARE_OP_ALWAYS;
+        ds.depthCompareOp   = depthTest ? VK_COMPARE_OP_LESS_OR_EQUAL : VK_COMPARE_OP_ALWAYS;
 
         // Alpha recto (SRC_ALPHA / ONE_MINUS_SRC_ALPHA): el color del sprite NO
         // viene premultiplicado.
@@ -1944,7 +1979,7 @@ namespace DonTopo
         pci.renderPass          = renderPass;
         pci.subpass             = 0;
 
-        if (vkCreateGraphicsPipelines(gpu.device(), VK_NULL_HANDLE, 1, &pci, nullptr, &m_pipeline) != VK_SUCCESS)
+        if (vkCreateGraphicsPipelines(gpu.device(), VK_NULL_HANDLE, 1, &pci, nullptr, &out) != VK_SUCCESS)
             throw std::runtime_error("failed to create ui pipeline!");
 
         vkDestroyShaderModule(gpu.device(), vert, nullptr);
@@ -2056,34 +2091,86 @@ namespace DonTopo
         m_indexCapacity[frame]  = 0;
     }
 
+    void UiSpriteBatch::beginFrame(GpuDevice& gpu, int frame, uint32_t totalVertices, uint32_t totalIndices)
+    {
+        // Se dimensiona contra el ACUMULADO de TODOS los canvas del FRAME —los
+        // de mundo, que se graban en el pase de escena, y los de pantalla, que
+        // se graban en el de UI—, no contra el tamaño de uno solo ni contra el
+        // de un pase: con cualquiera de esas dos, el primer canvas reservaría de
+        // sobra pero el siguiente encontraría el buffer ya lleno y ensureBuffers
+        // lo recrearía A MITAD del frame, invalidando el bind que un canvas
+        // anterior ya dejó grabado en el command buffer (apuntaría a un VkBuffer
+        // destruido). Contrato completo en el header: UNA vez por frame, antes
+        // del pase de ESCENA (que es donde cae el primer record del frame,
+        // porque corre antes que el de UI).
+        if (totalVertices > 0 || totalIndices > 0)
+            ensureBuffers(gpu, frame, totalVertices, totalIndices);
+
+        // Un frame nuevo empieza a repartir desde el principio del buffer.
+        m_frameVertexCursor[frame] = 0;
+        m_frameIndexCursor[frame]  = 0;
+    }
+
     void UiSpriteBatch::record(GpuDevice& gpu, VkCommandBuffer cmd, const UiDrawData& data,
+                               const glm::mat4& transform,
                                VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame)
+    {
+        (void)gpu;   // el crecimiento del buffer ya lo resolvió beginFrame()
+
+        // linearOutput = false: el pase de UI escribe en un attachment SRGB y el
+        // hardware ya codifica al escribir. scissorCompleto = false: en pantalla
+        // el scissor del batcher SÍ vale, escalado al framebuffer.
+        recordInto(cmd, data, transform, m_pipeline, false, false,
+                   canvasExtent, fbExtent, frame);
+    }
+
+    void UiSpriteBatch::recordWorld(GpuDevice& gpu, VkCommandBuffer cmd, const UiDrawData& data,
+                                    const glm::mat4& transform, bool depthTest,
+                                    VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame)
+    {
+        (void)gpu;   // el crecimiento del buffer ya lo resolvió beginFrame()
+
+        const VkPipeline pipeline = depthTest ? m_worldPipelineDepth : m_worldPipelineNoDepth;
+
+        // linearOutput = true: el pase de escena es HDR LINEAL y ui.frag tiene
+        // que deshacer la gamma o el color sale lavado. scissorCompleto = true:
+        // el canvas está proyectado y el rect del batcher ya no lo representa
+        // (limitación conocida — clipChildren no recorta en modo mundo).
+        recordInto(cmd, data, transform, pipeline, true, true,
+                   canvasExtent, fbExtent, frame);
+    }
+
+    void UiSpriteBatch::recordInto(VkCommandBuffer cmd, const UiDrawData& data,
+                                   const glm::mat4& transform, VkPipeline pipeline,
+                                   bool linearOutput, bool scissorCompleto,
+                                   VkExtent2D canvasExtent, VkExtent2D fbExtent, int frame)
     {
         // Canvas vacío = ni un comando, ni un buffer creado, ni un mapeo. Es la
         // condición que hace que la escena 3D salga EXACTAMENTE igual que antes.
-        if (data.empty() || m_pipeline == VK_NULL_HANDLE) return;
+        if (data.empty() || pipeline == VK_NULL_HANDLE) return;
         if (canvasExtent.width == 0 || canvasExtent.height == 0) return;
         if (fbExtent.width == 0 || fbExtent.height == 0) return;
+        if (!m_vertexMapped[frame] || !m_indexMapped[frame]) return;
 
-        ensureBuffers(gpu, frame, (uint32_t)data.vertices.size(), (uint32_t)data.indices.size());
+        // Sub-asignación DENTRO del buffer del frame: cada canvas escribe a
+        // partir de donde dejó el anterior, no siempre en el offset 0.
+        const uint32_t vertexBase = bumpUiCursor(m_frameVertexCursor[frame], (uint32_t)data.vertices.size());
+        const uint32_t indexBase  = bumpUiCursor(m_frameIndexCursor[frame],  (uint32_t)data.indices.size());
 
-        std::memcpy(m_vertexMapped[frame], data.vertices.data(), data.vertices.size() * sizeof(UiVertex));
-        std::memcpy(m_indexMapped[frame],  data.indices.data(),  data.indices.size()  * sizeof(uint16_t));
+        // El cursor lo dimensiona beginFrame() con el total del PASE. Si
+        // alguien llama a record() sin él, o con un total corto (o dos veces
+        // seguidas sin que beginFrame() vuelva a reservar), esto escribiría
+        // FUERA de la memoria mapeada: una escritura de host que ninguna capa
+        // de validación ve. Mejor no dibujar ese canvas que corromper el
+        // buffer.
+        if (!uiCursorFits(vertexBase, (uint32_t)data.vertices.size(), m_vertexCapacity[frame]) ||
+            !uiCursorFits(indexBase,  (uint32_t)data.indices.size(),  m_indexCapacity[frame]))
+            return;
 
-        // bottom=0 y top=alto: (0,0) cae ARRIBA a la izquierda. Parece del revés
-        // y es justo lo contrario: en Vulkan el +Y de NDC va hacia ABAJO, así
-        // que la receta de OpenGL (top=0, bottom=alto) deja [1][1] negativo y
-        // dibuja la UI ENTERA espejada — invisible mientras solo hubo quads de
-        // color, evidente en cuanto se dibujó la primera letra. RH_ZO porque
-        // Vulkan clipea z fuera de [0,1] y glm::ortho a secas da [-1,1].
-        // Del ESPACIO DEL CANVAS (píxeles de salida), no del framebuffer: los
-        // vértices llegan en esos píxeles y el viewport ya estira el NDC al
-        // framebuffer entero. Con SSAA eso deja la UI supersampleada en vez de
-        // encogida a 1/factor, que es lo que salía al proyectar con el extent
-        // del render.
-        const glm::mat4 proj = glm::orthoRH_ZO(0.0f, (float)canvasExtent.width,
-                                               0.0f, (float)canvasExtent.height,
-                                               0.0f, 1.0f);
+        std::memcpy(static_cast<UiVertex*>(m_vertexMapped[frame]) + vertexBase,
+                    data.vertices.data(), data.vertices.size() * sizeof(UiVertex));
+        std::memcpy(static_cast<uint16_t*>(m_indexMapped[frame]) + indexBase,
+                    data.indices.data(), data.indices.size() * sizeof(uint16_t));
 
         // Los scissor SÍ van en píxeles del framebuffer: un VkRect2D no conoce
         // otro espacio. Hacia fuera (floor/ceil) por lo mismo que
@@ -2091,16 +2178,60 @@ namespace DonTopo
         const double sx = (double)fbExtent.width  / (double)canvasExtent.width;
         const double sy = (double)fbExtent.height / (double)canvasExtent.height;
 
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
-        vkCmdPushConstants(cmd, m_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &proj);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-        VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &m_vertexBuffers[frame], &offset);
-        vkCmdBindIndexBuffer(cmd, m_indexBuffers[frame], 0, VK_INDEX_TYPE_UINT16);
+        // Un solo bloque para las dos etapas, y se empujan EXACTAMENTE los
+        // kUiPushConstantSize bytes útiles: sizeof(UiPushConstants) mete 12
+        // bytes de relleno detrás (alineación de glm::mat4) que serían basura.
+        UiPushConstants pc{};
+        pc.transform    = transform;
+        pc.linearOutput = linearOutput ? 1 : 0;
+        vkCmdPushConstants(cmd, m_layout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, kUiPushConstantSize, &pc);
+
+        // El offset de bind es el de ESTE canvas dentro del buffer compartido
+        // del frame: con él ya aplicado, los índices del batch (batch.firstIndex
+        // más abajo) se quedan LOCALES a este canvas, sin tocarlos.
+        const VkDeviceSize vertexOffset = (VkDeviceSize)vertexBase * sizeof(UiVertex);
+        const VkDeviceSize indexOffset  = (VkDeviceSize)indexBase  * sizeof(uint16_t);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &m_vertexBuffers[frame], &vertexOffset);
+        vkCmdBindIndexBuffer(cmd, m_indexBuffers[frame], indexOffset, VK_INDEX_TYPE_UINT16);
+
+        // El rectángulo completo del framebuffer. Sirve de dos cosas: es el
+        // scissor de TODOS los lotes de un canvas de mundo, y es con lo que se
+        // deja el estado dinámico al salir en los dos casos.
+        VkRect2D full{};
+        full.offset = {0, 0};
+        full.extent = fbExtent;
+
+        // Canvas de MUNDO: un scissor y ya, fuera del bucle. El del batcher está
+        // en píxeles de canvas y aquí el canvas está PROYECTADO — puede salir
+        // rotado, en perspectiva o partido por el borde de la pantalla —, así
+        // que no hay VkRect2D alineado a los ejes que lo represente y aplicar el
+        // rect sin proyectar taparía trozos que sí se ven.
+        // LIMITACIÓN CONOCIDA: clipChildren no recorta en un canvas de mundo.
+        if (scissorCompleto)
+            vkCmdSetScissor(cmd, 0, 1, &full);
 
         for (const UiBatch& batch : data.batches)
         {
             if (batch.indexCount == 0 || batch.scissor.empty()) continue;
+
+            if (scissorCompleto)
+            {
+                // Sin recorte por lote: el scissor ya está puesto arriba. El
+                // lote sigue partiéndose por scissor en el batcher (es la clave
+                // de agrupado), solo que aquí todos los trozos se dibujan
+                // enteros. Ojo: `batch.scissor.empty()` de arriba SÍ se respeta
+                // — un nodo cuyo clip se quedó a cero no emite nada ni en
+                // pantalla ni en el mundo.
+                VkDescriptorSet set = (batch.atlas && batch.atlas->descriptorSet() != VK_NULL_HANDLE)
+                                    ? batch.atlas->descriptorSet() : m_whiteSet;
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 0, 1, &set, 0, nullptr);
+                vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.firstIndex, 0, 0);
+                continue;
+            }
 
             int64_t x0 = (int64_t)std::floor(batch.scissor.x * sx);
             int64_t y0 = (int64_t)std::floor(batch.scissor.y * sy);
@@ -2129,10 +2260,9 @@ namespace DonTopo
         }
 
         // El scissor es estado dinámico del command buffer: dejarlo recortado
-        // afectaría a lo que se grabe después en este mismo buffer.
-        VkRect2D full{};
-        full.offset = {0, 0};
-        full.extent = fbExtent;
+        // afectaría a lo que se grabe después en este mismo buffer. Y en el pase
+        // de ESCENA eso importa MÁS que en el de UI, porque detrás de un canvas
+        // de mundo todavía queda el resto del pase.
         vkCmdSetScissor(cmd, 0, 1, &full);
     }
 
@@ -2141,6 +2271,12 @@ namespace DonTopo
         for (int i = 0; i < kFrames; ++i) destroyBuffers(gpu, i);
 
         if (m_pipeline != VK_NULL_HANDLE)   vkDestroyPipeline(gpu.device(), m_pipeline, nullptr);
+        // Las dos de mundo: sin esto son una fuga que SOLO sale por
+        // vkDestroyDevice, o sea al cerrar y con el proceso ya medio muerto.
+        if (m_worldPipelineDepth != VK_NULL_HANDLE)
+            vkDestroyPipeline(gpu.device(), m_worldPipelineDepth, nullptr);
+        if (m_worldPipelineNoDepth != VK_NULL_HANDLE)
+            vkDestroyPipeline(gpu.device(), m_worldPipelineNoDepth, nullptr);
         if (m_layout != VK_NULL_HANDLE)     vkDestroyPipelineLayout(gpu.device(), m_layout, nullptr);
         if (m_whiteView != VK_NULL_HANDLE)  vkDestroyImageView(gpu.device(), m_whiteView, nullptr);
         if (m_whiteImage != VK_NULL_HANDLE) vkDestroyImage(gpu.device(), m_whiteImage, nullptr);
@@ -2151,7 +2287,9 @@ namespace DonTopo
         if (m_descPool != VK_NULL_HANDLE)   vkDestroyDescriptorPool(gpu.device(), m_descPool, nullptr);
         if (m_descLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(gpu.device(), m_descLayout, nullptr);
 
-        m_pipeline    = VK_NULL_HANDLE;
+        m_pipeline            = VK_NULL_HANDLE;
+        m_worldPipelineDepth   = VK_NULL_HANDLE;
+        m_worldPipelineNoDepth = VK_NULL_HANDLE;
         m_layout      = VK_NULL_HANDLE;
         m_whiteView   = VK_NULL_HANDLE;
         m_whiteImage  = VK_NULL_HANDLE;

@@ -533,12 +533,14 @@ int main(int argc, char** argv)
                 });
         }
 
-        // Estado del sync de widgets, igual que en el editor: fuera del bucle
-        // para actualizar en sitio y cachear atlas y fuentes por ruta.
-        DonTopo::UiWidgetSyncCache uiWidgetCache;
-        // Una lista por tipo de widget más la jerarquía de la escena aplanada a
-        // (id, id del padre con UI), todo dentro de UiWidgetLists.
-        DonTopo::UiWidgetLists uiWidgets;
+        // Empareja los canvas de la escena con sus slots del Renderer por
+        // ownerId (Renderer::syncUiCanvases), fuera del bucle para no
+        // reasignar cada frame. La caché de sync de cada canvas vive DENTRO
+        // de su slot, en el Renderer: aquí ya no hace falta ninguna.
+        std::vector<DonTopo::UiCanvasBinding> uiBindings;
+        // Y los canvas de PANTALLA en orden de prioridad de input, tambien
+        // fuera del bucle por lo mismo: se rellena entero cada frame.
+        std::vector<DonTopo::UiCanvas*> uiCanvases;
 
         while (!window.shouldClose())
         {
@@ -700,18 +702,13 @@ int main(int argc, char** argv)
             renderer.tickDeferredDeletes();
             renderer.flushPendingUploads();
 
-            // Canvas de UI: misma regla que en el editor — la resolución sale
-            // del componente de la escena exportada, por frame.
-            if (DonTopo::GameObject* canvasGo = scene.findCanvas())
-                canvasGo->getCanvas()->applyTo(renderer.uiCanvas());
-
-            // Widgets: mismo volcado por frame que en el editor, con la
-            // jerarquía de la escena para que un widget anidado cuelgue de su
-            // padre en vez de de la raíz.
-            uiWidgets.clear();
-            if (scene.findCanvas())
-                scene.collectUiWidgets(uiWidgets);
-            DonTopo::syncUiWidgets(uiWidgets, renderer.uiCanvas(), uiWidgetCache, renderer);
+            // Canvas de UI: resolución, widgets y jerarquía de CADA canvas de
+            // la escena, por frame — misma regla que en el editor. Sin ningún
+            // Canvas, collectCanvases devuelve la lista vacía y syncUiCanvases
+            // deja limpio lo que hubiera.
+            uiBindings.clear();
+            scene.collectCanvases(uiBindings);
+            renderer.syncUiCanvases(uiBindings);
 
             // Input de la UI: sin esto el árbol no resuelve estados y los cinco
             // colores del botón, el fundido y el Click no existen. El ratón está
@@ -745,7 +742,13 @@ int main(int argc, char** argv)
                 uiInput.scrollDelta = g_uiScroll;
                 g_uiScroll = 0.0f;
                 uiInput.timeSeconds = (float)glfwGetTime();
-                renderer.uiCanvas().updateInput(uiInput);
+                // A TODOS los canvas de pantalla, no solo al primero: con
+                // uiCanvas() los botones de un segundo canvas (un menu de pausa
+                // encima del HUD) se dibujaban pero no tenian ni hover, ni
+                // colores de estado, ni Click. dispatchUiInput reparte: el raton
+                // al de mas arriba que lo tenga debajo y los demas limpios.
+                renderer.screenUiCanvases(uiCanvases);
+                DonTopo::dispatchUiInput(uiCanvases, uiInput);
             }
 
             renderer.drawFrame(window);

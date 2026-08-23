@@ -770,6 +770,26 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
             }
         };
 
+        using BoolRef = bool& (*)(CanvasComponent&);
+        auto checkBox = [&](const char* label, BoolRef acc)
+        {
+            const bool before = acc(*c);
+            bool       val    = before;
+            if (ImGui::Checkbox(label, &val) && val != before)
+            {
+                acc(*c) = val;
+                const std::string lbl = std::string(label) + " del canvas de '" + owner + "'";
+                ctx.pushLog(lbl + (val ? " activado" : " desactivado"));
+                if (scene && ctx.undo)
+                    ctx.undo->push(std::make_unique<PropertyCommand<bool>>(
+                        lbl, before, val,
+                        [scene, id, acc](const bool& v) {
+                            if (GameObject* go = scene->findById(id))
+                                if (go->hasCanvas()) acc(*go->getCanvas()) = v;
+                        }));
+            }
+        };
+
         static const char* kModes[] = { "Constant Pixel Size", "Scale With Screen Size",
                                         "Constant Physical Size" };
         comboEnum("Scale Mode", (int)c->scaleMode, kModes, IM_ARRAYSIZE(kModes),
@@ -818,6 +838,32 @@ void PropertiesPanel::drawCanvasSection(EditorContext& ctx)
                   +[](CanvasComponent& cc) -> float& { return cc.aspectRatio; },
                   0.01f, 0.0f, 10.0f, "%.4f");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = apagado. 16/9 = 1.7778");
+
+        ImGui::TextDisabled("Modo");
+        static const char* kRenderModes[] = { "Screen Space", "World" };
+        comboEnum("Render Mode", (int)c->renderMode, kRenderModes, IM_ARRAYSIZE(kRenderModes),
+                  +[](CanvasComponent& x, int v) { x.renderMode = (UiCanvasRenderMode)v; });
+
+        if (c->renderMode == UiCanvasRenderMode::World)
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f),
+                               "En World se ignoran: Scale Mode, Screen Match, Match,\n"
+                               "los tres DPI, Safe Area y Aspect Ratio.");
+
+            dragFloat("World Scale", +[](CanvasComponent& x) -> float& { return x.worldScale; },
+                      0.0001f, 0.0f, 10.0f, "%.4f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Unidades de mundo por PIXEL de canvas.\n"
+                                  "Un canvas de 1920x1080 a 0.001 mide 1.92 x 1.08 unidades.");
+
+            static const char* kBillboards[] = { "None", "Yaw Only", "Full" };
+            comboEnum("Billboard", (int)c->billboard, kBillboards, IM_ARRAYSIZE(kBillboards),
+                      +[](CanvasComponent& x, int v) { x.billboard = (UiBillboard)v; });
+
+            checkBox("Depth Test", +[](CanvasComponent& x) -> bool& { return x.depthTest; });
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("A false se dibuja siempre encima, atravesando paredes");
+        }
 
         ImGui::TreePop();
     }
