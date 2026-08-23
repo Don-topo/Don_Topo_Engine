@@ -1560,8 +1560,11 @@ struct D3D12Renderer::Impl {
 
 namespace {
 
+#ifndef NDEBUG
 // Nombre legible de cada operación que DRED anota. Sin esto, las migas salen
-// como números y hay que ir al d3d12.h a traducirlas a mano.
+// como números y hay que ir al d3d12.h a traducirlas a mano. Va bajo la misma
+// guarda que las migas: en Release no se graban, así que no hay nada que
+// traducir y esto sería una función muerta.
 const char* nombreDeOperacion(D3D12_AUTO_BREADCRUMB_OP op)
 {
     switch (op) {
@@ -1594,6 +1597,7 @@ const char* nombreDeOperacion(D3D12_AUTO_BREADCRUMB_OP op)
         default:                                                return "Op";
     }
 }
+#endif  // NDEBUG
 
 }  // namespace
 
@@ -1657,8 +1661,12 @@ void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
     // mucho mejor que las migas.
     drainInfoQueue();
 
+    // El motivo de arriba y la cola de la capa salen en las DOS
+    // configuraciones: son baratos y es lo primero que uno quiere leer. Lo que
+    // cambia de una a otra son las migas, que en Release ni se graban.
     ComPtr<ID3D12DeviceRemovedExtendedData1> dred1;
     if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&dred1)))) {
+#ifndef NDEBUG
         D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 migas{};
         if (SUCCEEDED(dred1->GetAutoBreadcrumbsOutput1(&migas))) {
             diagLog("--- Auto-breadcrumbs (DRED) ---");
@@ -1702,7 +1710,18 @@ void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
         } else {
             diagLog("GetAutoBreadcrumbsOutput1 falló: DRED no llegó a activarse.");
         }
+#else
+        // Sin migas, pero dicho en voz alta: quien lea este log en Release tiene
+        // que saber que la lista de operaciones NO falta por un fallo, sino
+        // porque no se graba (ver el comentario de init), y que reproducirlo en
+        // Debug le da el comando exacto.
+        diagLog("Auto-breadcrumbs no disponibles: en Release no se graban (cuestan un "
+                "WriteBufferImmediate por comando). Repetir esto en Debug da la "
+                "operación exacta que se quedó a medias.");
+#endif
 
+        // El fallo de página SÍ va en las dos: no cuesta por frame y es lo que
+        // dice qué objeto había —o acababa de morir— en la dirección que reventó.
         D3D12_DRED_PAGE_FAULT_OUTPUT fallo{};
         if (SUCCEEDED(dred1->GetPageFaultAllocationOutput(&fallo)) &&
             fallo.PageFaultVA != 0) {
@@ -1719,7 +1738,8 @@ void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
             listar("  objeto LIBERADO hace poco ahí", fallo.pHeadRecentFreedAllocationNode);
         }
     } else {
-        diagLog("El device no expone ID3D12DeviceRemovedExtendedData1: sin migas.");
+        diagLog("El device no expone ID3D12DeviceRemovedExtendedData1: ni migas ni "
+                "fallo de página.");
     }
     diagLog("========================================================");
 }
@@ -7643,20 +7663,37 @@ void D3D12Renderer::init(Window& window)
     }
 #endif
 
-    // DRED (Device Removed Extended Data), TAMBIÉN en Release: es la única
-    // forma de saber QUÉ operación colgó a la GPU cuando el device se pierde, y
-    // no depende de la capa de depuración ni de las "Graphics Tools". Como la
-    // capa de depuración, hay que pedirlo ANTES de crear el device: es un
-    // ajuste de proceso que el device lee al nacer.
+    // DRED (Device Removed Extended Data). Es la única forma de saber QUÉ
+    // operación colgó a la GPU cuando el device se pierde, y no depende de la
+    // capa de depuración ni de las "Graphics Tools". Como la capa, hay que
+    // pedirlo ANTES de crear el device: es un ajuste de proceso que el device
+    // lee al nacer.
     //
-    // Las migas cuestan un WriteBufferImmediate por comando grabado, así que
-    // esto NO es gratis; se deja puesto mientras se persigue el cuelgue.
+    // Las dos mitades NO cuestan lo mismo y por eso no llevan la misma guarda:
+    //
+    //   - Los AUTO-BREADCRUMBS graban un WriteBufferImmediate por CADA comando
+    //     que se mete en la lista. Eso es coste por frame, en todos los frames,
+    //     y Release es la configuración desde la que se exporta el juego: van
+    //     solo en Debug. Si alguien viene dentro de seis meses a "arreglar"
+    //     esta guarda quitándola, que sepa lo que está pagando — y que para
+    //     perseguir un cuelgue de GPU basta con reproducirlo en Debug, donde
+    //     las migas SÍ están.
+    //   - El FALLO DE PÁGINA no graba nada por comando: solo hace que el
+    //     runtime recuerde el nombre de las allocations para poder decir qué
+    //     había en la dirección que reventó. Se queda encendido en las dos
+    //     configuraciones, porque es justo lo que uno quiere tener cuando el
+    //     cuelgue aparece en la máquina de un jugador y no hay segunda toma.
     {
         ComPtr<ID3D12DeviceRemovedExtendedDataSettings> dredSettings;
         if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dredSettings)))) {
-            dredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
             dredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+#ifndef NDEBUG
+            dredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
             diagLog("DRED activado (auto-breadcrumbs + page fault).");
+#else
+            diagLog("DRED activado (solo page fault; las migas cuestan por frame "
+                    "y van solo en Debug).");
+#endif
         } else {
             diagLog("DRED NO disponible en este sistema.");
         }
