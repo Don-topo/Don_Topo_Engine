@@ -9768,6 +9768,41 @@ void D3D12Renderer::shutdown()
             d.uiIndexCapacity[i]    = 0;
         }
     }
+    // Los atlas de UI —sprites y fuentes MSDF, que pasan por el mismo
+    // registerUiAtlas— van AQUÍ, con el resto de recursos suballocados y no al
+    // final: su D3D12MA::Allocation tenía que estar suelta antes de que
+    // allocator->Release() cerrase el allocator. No lo estaba, y D3D12MA hace
+    // assert() al destruirse con un bloque no vacío: en Debug eso es abort(),
+    // o sea el editor muriendo al CERRAR con un exit code 3 y una ventana de
+    // Windows, sin volcado y sin nada en el visor de eventos. Fallo
+    // PREEXISTENTE, de 545b9b8; el backend de Vulkan ya lo hacía bien
+    // (Renderer.cpp, m_uiAtlases -> destroy).
+    //
+    // Y ANTES de srvHeap.Reset(), por el mismo criterio con el que Vulkan
+    // suelta los atlas antes que su descriptor pool. Con una diferencia que
+    // conviene no confundir: en D3D12 un descriptor NO se destruye —no existe
+    // ninguna DestroyShaderResourceView, ni cuenta referencias sobre el
+    // recurso—, es memoria dentro del heap y muere con él. Así que aquí no
+    // hay hueco que devolver: lo único que hace falta es que la GPU esté
+    // parada, y de eso ya se encarga el waitForGpu() del principio.
+    for (D3D12MA::Allocation* atlas : d.uiAtlasTextures) {
+        if (atlas)
+            atlas->Release();
+    }
+    d.uiAtlasTextures.clear();
+    // Punteros y índices a lo que se acaba de soltar: fuera antes de que nadie
+    // los pueda volver a pedir. uiAtlasSrv es el equivalente exacto del
+    // m_uiAtlasImGuiId de Vulkan (es lo que lee uiAtlasTextureId), y
+    // uiNextAtlasSlot vuelve a cero para no repartir slots de un heap muerto.
+    d.uiAtlasSrv.clear();
+    d.uiAtlasByPath.clear();
+    // Los contenedores de CPU al final: en D3D12 ni UiTextureAtlas ni UiFont
+    // guardan nada de GPU (su destroy(GpuDevice&) es del camino de Vulkan),
+    // así que lo único que tenían de la GPU es la allocation recién soltada.
+    d.uiAtlases.clear();
+    d.uiFonts.clear();
+    d.uiNextAtlasSlot = 0;
+
     d.uiPipeline.Reset();
     d.uiWorldPipelineDepth.Reset();
     d.uiWorldPipelineNoDepth.Reset();
