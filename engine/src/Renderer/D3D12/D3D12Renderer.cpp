@@ -47,7 +47,9 @@
 
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -471,14 +473,68 @@ std::string hresultToString(HRESULT hr)
     return buf;
 }
 
+// ─── Diagnóstico: log a FICHERO ──────────────────────────────────────────────
+// El editor se lanza desde el explorador y su stdout no lo ve nadie; la capa de
+// depuración de D3D12 escribe por OutputDebugString, que sin depurador tampoco
+// se ve. Todo lo de aquí va ADEMÁS a un fichero junto al ejecutable, que es lo
+// único que el usuario puede traer cuando lo que ve es "una ventana de error
+// sin mensaje".
+//
+// Es INSTRUMENTACIÓN: no cambia el comportamiento del render, solo cuenta lo
+// que pasa cuando algo va mal.
+std::ofstream& diagStream()
+{
+    // Estático de función: se abre la primera vez que alguien escribe y se
+    // cierra al salir del proceso. `app` y no `trunc`: si el editor se
+    // relanzara, el log de la sesión anterior sigue ahí.
+    static std::ofstream out("d3d12_diag.log", std::ios::out | std::ios::app);
+    return out;
+}
+
+void diagLog(const std::string& line)
+{
+    std::ofstream& out = diagStream();
+    if (!out)
+        return;
+    const auto ahora = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm tm{};
+    localtime_s(&tm, &ahora);
+    char sello[32] = {};
+    std::snprintf(sello, sizeof(sello), "%02d:%02d:%02d ", tm.tm_hour, tm.tm_min, tm.tm_sec);
+    // flush en cada línea: si el proceso muere a la siguiente instrucción, lo
+    // que se acaba de escribir tiene que estar YA en el disco.
+    out << sello << line << std::endl;
+    // Y también por la salida estándar, para quien sí tenga consola.
+    std::fputs((std::string(sello) + line + "\n").c_str(), stderr);
+}
+
+// Gancho al volcado de DRED. Lo instala Impl::init cuando el device existe, y
+// lo llama throwIfFailed —que es una función libre y no tiene device— cuando el
+// HRESULT que la aborta es una pérdida del dispositivo. Sin esto, el único
+// sitio que mira DXGI_ERROR_DEVICE_REMOVED sería el Present.
+void (*g_volcarDeviceRemoved)(const char*, HRESULT) = nullptr;
+
+bool esPerdidaDeDevice(HRESULT hr)
+{
+    return hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_HUNG ||
+           hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DRIVER_INTERNAL_ERROR ||
+           hr == DXGI_ERROR_INVALID_CALL;
+}
+
 // Todo fallo de creación aborta el init con el paso concreto que falló: un
 // device a medias no se puede usar y esconder el HRESULT solo mueve el crash
 // más adelante.
 void throwIfFailed(HRESULT hr, const char* step)
 {
-    if (FAILED(hr))
+    if (FAILED(hr)) {
+        // El volcado ANTES de lanzar: la excepción sube hasta main y de ahí a
+        // la terminación del proceso, y para entonces el device ya no está para
+        // que nadie le pregunte nada.
+        if (esPerdidaDeDevice(hr) && g_volcarDeviceRemoved)
+            g_volcarDeviceRemoved(step, hr);
         throw std::runtime_error(std::string("D3D12: ") + step + " falló (HRESULT " +
                                  hresultToString(hr) + ")");
+    }
 }
 
 std::string narrow(const wchar_t* wide)
@@ -1401,6 +1457,22 @@ struct D3D12Renderer::Impl {
     HWND        hwnd        = nullptr;
     bool        initialized = false;
 
+    // ─── Diagnóstico ─────────────────────────────────────────────────────────
+    // La cola de mensajes de la capa de depuración, para poder DRENARLA a
+    // fichero: por sí sola solo escribe por OutputDebugString.
+    ComPtr<ID3D12InfoQueue> infoQueue;
+    // El volcado de DRED se hace UNA vez: la pérdida del device la detectan
+    // varios sitios seguidos (Present, throwIfFailed, shutdown) y repetir el
+    // mismo listado de migas solo entierra el primero, que es el bueno.
+    bool deviceRemovedVolcado = false;
+
+    // Pasa a fichero lo que la capa de depuración haya acumulado desde la
+    // última vez, y vacía la cola.
+    void drainInfoQueue();
+    // Motivo de la pérdida + auto-breadcrumbs de DRED (qué operaciones completó
+    // la GPU y cuál se quedó a medias) + página fallida, si la hay.
+    void dumpDeviceRemoved(const char* donde, HRESULT hr);
+
     void waitForGpu();
     void moveToNextFrame();
     void createRenderTargetViews();
@@ -1486,6 +1558,172 @@ struct D3D12Renderer::Impl {
     void      updateViewProj();
 };
 
+namespace {
+
+// Nombre legible de cada operación que DRED anota. Sin esto, las migas salen
+// como números y hay que ir al d3d12.h a traducirlas a mano.
+const char* nombreDeOperacion(D3D12_AUTO_BREADCRUMB_OP op)
+{
+    switch (op) {
+        case D3D12_AUTO_BREADCRUMB_OP_SETMARKER:                return "SetMarker";
+        case D3D12_AUTO_BREADCRUMB_OP_BEGINEVENT:               return "BeginEvent";
+        case D3D12_AUTO_BREADCRUMB_OP_ENDEVENT:                 return "EndEvent";
+        case D3D12_AUTO_BREADCRUMB_OP_DRAWINSTANCED:            return "DrawInstanced";
+        case D3D12_AUTO_BREADCRUMB_OP_DRAWINDEXEDINSTANCED:     return "DrawIndexedInstanced";
+        case D3D12_AUTO_BREADCRUMB_OP_EXECUTEINDIRECT:          return "ExecuteIndirect";
+        case D3D12_AUTO_BREADCRUMB_OP_DISPATCH:                 return "Dispatch";
+        case D3D12_AUTO_BREADCRUMB_OP_COPYBUFFERREGION:         return "CopyBufferRegion";
+        case D3D12_AUTO_BREADCRUMB_OP_COPYTEXTUREREGION:        return "CopyTextureRegion";
+        case D3D12_AUTO_BREADCRUMB_OP_COPYRESOURCE:             return "CopyResource";
+        case D3D12_AUTO_BREADCRUMB_OP_COPYTILES:                return "CopyTiles";
+        case D3D12_AUTO_BREADCRUMB_OP_RESOLVESUBRESOURCE:       return "ResolveSubresource";
+        case D3D12_AUTO_BREADCRUMB_OP_CLEARRENDERTARGETVIEW:    return "ClearRenderTargetView";
+        case D3D12_AUTO_BREADCRUMB_OP_CLEARUNORDEREDACCESSVIEW: return "ClearUnorderedAccessView";
+        case D3D12_AUTO_BREADCRUMB_OP_CLEARDEPTHSTENCILVIEW:    return "ClearDepthStencilView";
+        case D3D12_AUTO_BREADCRUMB_OP_RESOURCEBARRIER:          return "ResourceBarrier";
+        case D3D12_AUTO_BREADCRUMB_OP_EXECUTEBUNDLE:            return "ExecuteBundle";
+        case D3D12_AUTO_BREADCRUMB_OP_PRESENT:                  return "Present";
+        case D3D12_AUTO_BREADCRUMB_OP_RESOLVEQUERYDATA:         return "ResolveQueryData";
+        case D3D12_AUTO_BREADCRUMB_OP_BEGINSUBMISSION:          return "BeginSubmission";
+        case D3D12_AUTO_BREADCRUMB_OP_ENDSUBMISSION:            return "EndSubmission";
+        case D3D12_AUTO_BREADCRUMB_OP_WRITEBUFFERIMMEDIATE:     return "WriteBufferImmediate";
+        case D3D12_AUTO_BREADCRUMB_OP_SETPIPELINESTATE1:        return "SetPipelineState1";
+        case D3D12_AUTO_BREADCRUMB_OP_DISPATCHMESH:             return "DispatchMesh";
+        case D3D12_AUTO_BREADCRUMB_OP_BARRIER:                  return "Barrier";
+        case D3D12_AUTO_BREADCRUMB_OP_BEGIN_COMMAND_LIST:       return "BeginCommandList";
+        default:                                                return "Op";
+    }
+}
+
+}  // namespace
+
+void D3D12Renderer::Impl::drainInfoQueue()
+{
+    if (!infoQueue)
+        return;
+
+    const UINT64 total = infoQueue->GetNumStoredMessages();
+    for (UINT64 i = 0; i < total; ++i) {
+        SIZE_T bytes = 0;
+        if (FAILED(infoQueue->GetMessage(i, nullptr, &bytes)) || bytes == 0)
+            continue;
+        std::vector<char> buffer(bytes);
+        auto* msg = reinterpret_cast<D3D12_MESSAGE*>(buffer.data());
+        if (FAILED(infoQueue->GetMessage(i, msg, &bytes)))
+            continue;
+        const char* gravedad = "INFO";
+        switch (msg->Severity) {
+            case D3D12_MESSAGE_SEVERITY_CORRUPTION: gravedad = "CORRUPCION"; break;
+            case D3D12_MESSAGE_SEVERITY_ERROR:      gravedad = "ERROR";      break;
+            case D3D12_MESSAGE_SEVERITY_WARNING:    gravedad = "AVISO";      break;
+            default: break;
+        }
+        diagLog(std::string("[capa ") + gravedad + " id=" + std::to_string(msg->ID) + "] " +
+                std::string(msg->pDescription, msg->DescriptionByteLength > 0
+                                                   ? msg->DescriptionByteLength - 1
+                                                   : 0));
+    }
+    if (total > 0)
+        infoQueue->ClearStoredMessages();
+}
+
+void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
+{
+    if (deviceRemovedVolcado)
+        return;
+    deviceRemovedVolcado = true;
+
+    diagLog("==================== DEVICE PERDIDO ====================");
+    diagLog(std::string("Detectado en: ") + (donde ? donde : "?") + "  HRESULT " +
+            hresultToString(hr));
+
+    if (!device) {
+        diagLog("No hay device al que preguntar.");
+        return;
+    }
+
+    const HRESULT motivo = device->GetDeviceRemovedReason();
+    diagLog(std::string("GetDeviceRemovedReason() = ") + hresultToString(motivo) + " (" +
+            (motivo == DXGI_ERROR_DEVICE_HUNG            ? "DEVICE_HUNG: la GPU no respondió (TDR)"
+             : motivo == DXGI_ERROR_DEVICE_REMOVED       ? "DEVICE_REMOVED"
+             : motivo == DXGI_ERROR_DEVICE_RESET         ? "DEVICE_RESET: reinicio del dispositivo"
+             : motivo == DXGI_ERROR_DRIVER_INTERNAL_ERROR ? "DRIVER_INTERNAL_ERROR"
+             : motivo == DXGI_ERROR_INVALID_CALL         ? "INVALID_CALL: la app pidió algo ilegal"
+             : motivo == S_OK                            ? "S_OK: el device NO está perdido"
+                                                         : "otro") +
+            ")");
+
+    // Lo que la capa de depuración tuviera guardado: suele explicar el porqué
+    // mucho mejor que las migas.
+    drainInfoQueue();
+
+    ComPtr<ID3D12DeviceRemovedExtendedData1> dred1;
+    if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&dred1)))) {
+        D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 migas{};
+        if (SUCCEEDED(dred1->GetAutoBreadcrumbsOutput1(&migas))) {
+            diagLog("--- Auto-breadcrumbs (DRED) ---");
+            const D3D12_AUTO_BREADCRUMB_NODE1* nodo = migas.pHeadAutoBreadcrumbNode;
+            int listas = 0;
+            for (; nodo != nullptr; nodo = nodo->pNext) {
+                const UINT total  = nodo->BreadcrumbCount;
+                const UINT hechas = nodo->pLastBreadcrumbValue ? *nodo->pLastBreadcrumbValue : 0;
+                // Una lista con TODAS las migas hechas terminó bien: no es la
+                // culpable y solo estorba en el log.
+                if (total == 0 || hechas == total)
+                    continue;
+                ++listas;
+                diagLog(std::string("Command list '") +
+                        (nodo->pCommandListDebugNameA ? nodo->pCommandListDebugNameA : "(sin nombre)") +
+                        "' en cola '" +
+                        (nodo->pCommandQueueDebugNameA ? nodo->pCommandQueueDebugNameA : "(sin nombre)") +
+                        "': completadas " + std::to_string(hechas) + " de " +
+                        std::to_string(total) + " operaciones.");
+                // Ventana alrededor del corte: lo justo para ver qué venía
+                // antes y qué se quedó sin ejecutar.
+                const UINT desde = hechas > 12 ? hechas - 12 : 0;
+                const UINT hasta = (hechas + 4 < total) ? hechas + 4 : total;
+                for (UINT i = desde; i < hasta; ++i) {
+                    const char* marca = (i < hechas) ? "  ok  " : (i == hechas ? " >>>> " : "  --  ");
+                    std::string linea = std::string(marca) + "[" + std::to_string(i) + "] " +
+                                        nombreDeOperacion(nodo->pCommandHistory[i]);
+                    // Contextos: los cuelga SetBreadcrumbContext, que este
+                    // backend no usa todavía, pero si algún día lo hace salen
+                    // aquí y dicen QUÉ canvas o QUÉ malla era.
+                    for (UINT c = 0; c < nodo->BreadcrumbContextsCount; ++c) {
+                        if (nodo->pBreadcrumbContexts[c].BreadcrumbIndex != i)
+                            continue;
+                        linea += "  ctx=" + narrow(nodo->pBreadcrumbContexts[c].pContextString);
+                    }
+                    diagLog(linea);
+                }
+            }
+            if (listas == 0)
+                diagLog("Ninguna command list quedó a medias: la GPU terminó todo lo enviado.");
+        } else {
+            diagLog("GetAutoBreadcrumbsOutput1 falló: DRED no llegó a activarse.");
+        }
+
+        D3D12_DRED_PAGE_FAULT_OUTPUT fallo{};
+        if (SUCCEEDED(dred1->GetPageFaultAllocationOutput(&fallo)) &&
+            fallo.PageFaultVA != 0) {
+            char va[32] = {};
+            std::snprintf(va, sizeof(va), "0x%llX",
+                          static_cast<unsigned long long>(fallo.PageFaultVA));
+            diagLog(std::string("--- Fallo de página en la VA de GPU ") + va + " ---");
+            auto listar = [](const char* titulo, const D3D12_DRED_ALLOCATION_NODE* n) {
+                for (int i = 0; n != nullptr && i < 8; n = n->pNext, ++i)
+                    diagLog(std::string(titulo) + ": " +
+                            (n->ObjectNameA ? n->ObjectNameA : "(sin nombre)"));
+            };
+            listar("  objeto VIVO en esa dirección", fallo.pHeadExistingAllocationNode);
+            listar("  objeto LIBERADO hace poco ahí", fallo.pHeadRecentFreedAllocationNode);
+        }
+    } else {
+        diagLog("El device no expone ID3D12DeviceRemovedExtendedData1: sin migas.");
+    }
+    diagLog("========================================================");
+}
+
 // Espera a que la GPU vacíe TODO lo enviado. Solo para resize y shutdown: por
 // frame se usa moveToNextFrame, que no serializa CPU y GPU.
 void D3D12Renderer::Impl::waitForGpu()
@@ -1498,8 +1736,20 @@ void D3D12Renderer::Impl::waitForGpu()
         return;
 
     if (fence->GetCompletedValue() < target) {
-        if (SUCCEEDED(fence->SetEventOnCompletion(target, fenceEvent)))
-            WaitForSingleObjectEx(fenceEvent, INFINITE, FALSE);
+        if (SUCCEEDED(fence->SetEventOnCompletion(target, fenceEvent))) {
+            // Se sigue esperando SIN LÍMITE —salir antes de tiempo soltaría
+            // recursos que la GPU todavía lee—, pero por tramos: si la GPU se
+            // cuelga (TDR), este fence no se señala jamás y el editor se queda
+            // tieso sin decir una palabra. Cada tramo que vence deja escrito el
+            // motivo. 5 s son dos veces el TDR por defecto (2 s).
+            while (WaitForSingleObjectEx(fenceEvent, 5000, FALSE) == WAIT_TIMEOUT) {
+                diagLog("waitForGpu: el fence sigue sin señalarse (esperado " +
+                        std::to_string(target) + ", completado " +
+                        std::to_string(fence->GetCompletedValue()) + ").");
+                dumpDeviceRemoved("waitForGpu (el fence no avanza)",
+                                  device ? device->GetDeviceRemovedReason() : E_FAIL);
+            }
+        }
     }
     ++fenceValues[frameIndex];
 }
@@ -1606,8 +1856,18 @@ void D3D12Renderer::Impl::moveToNextFrame()
     // Solo se espera si este slot todavía está en la GPU. Con triple buffer, lo
     // normal es que ya haya terminado y no se bloquee nada.
     if (fence->GetCompletedValue() < fenceValues[frameIndex]) {
-        if (SUCCEEDED(fence->SetEventOnCompletion(fenceValues[frameIndex], fenceEvent)))
-            WaitForSingleObjectEx(fenceEvent, INFINITE, FALSE);
+        if (SUCCEEDED(fence->SetEventOnCompletion(fenceValues[frameIndex], fenceEvent))) {
+            // Mismo tramo y mismo motivo que en waitForGpu: se espera igual de
+            // largo, pero un fence que no avanza deja rastro en vez de congelar
+            // el bucle de frame en silencio.
+            while (WaitForSingleObjectEx(fenceEvent, 5000, FALSE) == WAIT_TIMEOUT) {
+                diagLog("moveToNextFrame: el fence sigue sin señalarse (esperado " +
+                        std::to_string(fenceValues[frameIndex]) + ", completado " +
+                        std::to_string(fence->GetCompletedValue()) + ").");
+                dumpDeviceRemoved("moveToNextFrame (el fence no avanza)",
+                                  device ? device->GetDeviceRemovedReason() : E_FAIL);
+            }
+        }
     }
     fenceValues[frameIndex] = current + 1;
 }
@@ -6161,6 +6421,11 @@ bool D3D12Renderer::Impl::registerUiAtlas(UiTextureAtlas& atlas)
     if (!texture)
         return false;
 
+    // Nombre para que el JSON de D3D12MA (y ReportLiveObjects) lo distinga.
+    texture->SetName(L"UiAtlas");
+    diagLog("registerUiAtlas: atlas " + std::to_string(atlas.width()) + "x" +
+            std::to_string(atlas.height()) + " en el slot " + std::to_string(slot) +
+            (atlas.sourceIsSrgb() ? " (sRGB, sprites)" : " (lineal, fuente)"));
     uiAtlasTextures.push_back(texture);
     uiAtlasSrv[&atlas] = slot;
     ++uiNextAtlasSlot;
@@ -7378,6 +7643,25 @@ void D3D12Renderer::init(Window& window)
     }
 #endif
 
+    // DRED (Device Removed Extended Data), TAMBIÉN en Release: es la única
+    // forma de saber QUÉ operación colgó a la GPU cuando el device se pierde, y
+    // no depende de la capa de depuración ni de las "Graphics Tools". Como la
+    // capa de depuración, hay que pedirlo ANTES de crear el device: es un
+    // ajuste de proceso que el device lee al nacer.
+    //
+    // Las migas cuestan un WriteBufferImmediate por comando grabado, así que
+    // esto NO es gratis; se deja puesto mientras se persigue el cuelgue.
+    {
+        ComPtr<ID3D12DeviceRemovedExtendedDataSettings> dredSettings;
+        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dredSettings)))) {
+            dredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+            dredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+            diagLog("DRED activado (auto-breadcrumbs + page fault).");
+        } else {
+            diagLog("DRED NO disponible en este sistema.");
+        }
+    }
+
     throwIfFailed(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&d.factory)),
                   "CreateDXGIFactory2");
 
@@ -7428,6 +7712,23 @@ void D3D12Renderer::init(Window& window)
 
     throwIfFailed(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&d.device)),
                   "D3D12CreateDevice");
+
+    // La cola de mensajes de la capa de depuración, para poder drenarla a
+    // fichero: por sí sola escribe por OutputDebugString, que sin depurador no
+    // lo lee nadie. Solo existe si la capa está activa (Debug + Graphics
+    // Tools); si no, el QueryInterface falla y aquí no pasa nada.
+    if (SUCCEEDED(d.device->QueryInterface(IID_PPV_ARGS(&d.infoQueue))))
+        diagLog("Cola de mensajes de la capa de depuración redirigida a este fichero.");
+
+    // El gancho para throwIfFailed, que es una función libre y no tiene device.
+    // Va sobre una estática de traducción porque no hay más de un D3D12Renderer
+    // por proceso (el device cuelga de él y main crea uno).
+    static D3D12Renderer::Impl* impl = nullptr;
+    impl                             = &d;
+    g_volcarDeviceRemoved            = [](const char* donde, HRESULT hr) {
+        if (impl)
+            impl->dumpDeviceRemoved(donde, hr);
+    };
 
     D3D12_COMMAND_QUEUE_DESC queueDesc{};
     queueDesc.Type  = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -7483,6 +7784,10 @@ void D3D12Renderer::init(Window& window)
                                               d.allocators[d.frameIndex].Get(), nullptr,
                                               IID_PPV_ARGS(&d.commandList)),
                   "ID3D12Device::CreateCommandList");
+    // Nombres para que las migas de DRED digan de QUÉ lista y QUÉ cola habla,
+    // en vez de "(sin nombre)".
+    d.commandList->SetName(L"ListaPrincipal");
+    d.queue->SetName(L"ColaDirecta");
     // Se crea en estado abierto y drawFrame espera encontrarla cerrada.
     throwIfFailed(d.commandList->Close(), "ID3D12GraphicsCommandList::Close");
 
@@ -8174,9 +8479,17 @@ void D3D12Renderer::drawFrame()
     // Vsync (SyncInterval=1): mismo comportamiento que el camino Vulkan por
     // defecto, y evita quemar la GPU presentando un clear a miles de fps.
     const HRESULT presentHr = d.swapChain->Present(1, 0);
-    if (presentHr == DXGI_ERROR_DEVICE_REMOVED || presentHr == DXGI_ERROR_DEVICE_RESET)
+    if (presentHr == DXGI_ERROR_DEVICE_REMOVED || presentHr == DXGI_ERROR_DEVICE_RESET) {
+        // El volcado ANTES de lanzar: la excepción se lleva el proceso por
+        // delante y con él el device, que es a quien hay que preguntarle.
+        d.dumpDeviceRemoved("IDXGISwapChain3::Present", presentHr);
         throw std::runtime_error("D3D12: device perdido durante Present (HRESULT " +
                                  hresultToString(presentHr) + ")");
+    }
+
+    // Lo que la capa de depuración haya dicho en este frame, al fichero. Es una
+    // cola: si no se drena, se llena y empieza a descartar.
+    d.drainInfoQueue();
 
     d.moveToNextFrame();
 }
@@ -9287,6 +9600,16 @@ void D3D12Renderer::shutdown()
     if (!d.initialized)
         return;
 
+    diagLog("shutdown(): empieza.");
+    // El estado del device ANTES de esperar a nadie: si ya está perdido, la
+    // espera de abajo no va a terminar nunca y el motivo hay que preguntarlo
+    // ahora, no después.
+    if (d.device) {
+        const HRESULT motivo = d.device->GetDeviceRemovedReason();
+        if (motivo != S_OK)
+            d.dumpDeviceRemoved("shutdown (device ya perdido al entrar)", motivo);
+    }
+
     // Nada se libera con trabajo en vuelo: soltar un render target que la GPU
     // todavía lee es una corrupción silenciosa, no un error de la API.
     d.waitForGpu();
@@ -9481,9 +9804,28 @@ void D3D12Renderer::shutdown()
     d.rootSignature.Reset();
 
     if (d.allocator) {
+        // Lo que quede vivo en el allocator JUSTO ANTES de soltarlo. D3D12MA
+        // hace assert() si algo sigue asignado, y un assert en Debug se lleva
+        // el proceso por delante con un simple "exit code 3": el JSON de aquí
+        // es lo único que dice QUÉ se quedó sin liberar.
+        WCHAR* stats = nullptr;
+        d.allocator->BuildStatsString(&stats, TRUE);
+        if (stats) {
+            diagLog("--- estado de D3D12MA antes de Release() ---");
+            diagLog(narrow(stats));
+            diagLog("--------------------------------------------");
+            d.allocator->FreeStatsString(stats);
+        }
         d.allocator->Release();
         d.allocator = nullptr;
     }
+
+    // Lo último que dijera la capa, antes de soltar la cola con el device.
+    d.drainInfoQueue();
+    d.infoQueue.Reset();
+    // El gancho apunta a este Impl: dejarlo puesto tras soltar el device sería
+    // preguntarle a un objeto medio muerto.
+    g_volcarDeviceRemoved = nullptr;
 
     for (auto& allocator : d.allocators)
         allocator.Reset();
@@ -9496,6 +9838,7 @@ void D3D12Renderer::shutdown()
     d.adapter.Reset();
     d.factory.Reset();
     d.initialized = false;
+    diagLog("shutdown(): terminado sin incidencias.");
 
 #ifndef NDEBUG
     // Con el device ya soltado, lo que siga vivo es una fuga nuestra. Sale por
