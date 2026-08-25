@@ -97,12 +97,24 @@ const std::vector<std::string>& baseSymbols()
         "SphereCollider.staticFriction", "SphereCollider.dynamicFriction", "SphereCollider.bounciness",
         "CapsuleCollider.staticFriction", "CapsuleCollider.dynamicFriction", "CapsuleCollider.bounciness",
         "PlaneCollider.staticFriction", "PlaneCollider.dynamicFriction", "PlaneCollider.bounciness",
+        // Is Trigger por collider (solapa sin colisionar y dispara OnTrigger*).
+        // El setter es no-op fuera de Play, donde no hay PhysicsManager.
+        "BoxCollider.isTrigger", "SphereCollider.isTrigger",
+        "CapsuleCollider.isTrigger", "PlaneCollider.isTrigger",
 
         // Rigidbody (dinámica estilo Unity; GetComponent("Rigidbody"))
         "Rigidbody.mass", "Rigidbody.useGravity", "Rigidbody.isKinematic",
         "Rigidbody.drag", "Rigidbody.angularDrag",
+        // Bitmask de ejes congelados: se compone con OR de las constantes de
+        // la tabla RigidbodyConstraints (de abajo).
+        "Rigidbody.constraints",
         "Rigidbody.velocity", "Rigidbody.angularVelocity",
         "Rigidbody:AddForce", "Rigidbody:AddTorque", "Rigidbody:AddImpulse",
+        "RigidbodyConstraints.None",
+        "RigidbodyConstraints.FreezePositionX", "RigidbodyConstraints.FreezePositionY",
+        "RigidbodyConstraints.FreezePositionZ",
+        "RigidbodyConstraints.FreezeRotationX", "RigidbodyConstraints.FreezeRotationY",
+        "RigidbodyConstraints.FreezeRotationZ",
 
         // Animator (máquina de estados; GetComponent("Animator"))
         "Animator:SetBool", "Animator:GetBool", "Animator:SetTrigger",

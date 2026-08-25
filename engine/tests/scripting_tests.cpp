@@ -2025,6 +2025,86 @@ static void test_raycast_hit_booleano(ScriptManager& sm, PhysicsManager& pm)
     CHECK(sm.lua()["corto"].get<bool>() == false);
 }
 
+// Rigidbody.constraints es un BITMASK, no un float: se compone desde Lua con
+// el OR bit a bit de 5.4 sobre la tabla RigidbodyConstraints. El test escribe
+// un valor DISTINTO del inicial (RB_None), lo lee de vuelta por la misma
+// propiedad y remata midiendo la simulación: con Freeze-Y puesto, el cuerpo no
+// cae aunque tenga gravedad. Sin el setter, el bitmask no llega al actor y la
+// última comprobación se pone roja.
+static void test_constraints_desde_lua(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Cuerpo");
+    auto rb = std::make_shared<Rigidbody>();
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/true);
+    pm.attachRigidbody(col, rb);
+    go->setRigidbody(rb);
+    sm.rebuildAliveSet();
+
+    CHECK(rb->getConstraints() == RB_None); // punto de partida, no lo que se prueba
+
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+    sm.lua().script(
+        "rb = e:GetComponent('Rigidbody')\n"
+        "rb.constraints = RigidbodyConstraints.FreezePositionY | RigidbodyConstraints.FreezeRotationX\n"
+        "leido = rb.constraints\n");
+
+    const uint32_t esperado = RB_FreezePositionY | RB_FreezeRotationX;
+    CHECK(sm.lua()["leido"].get<uint32_t>() == esperado);
+    CHECK(rb->getConstraints() == esperado);
+
+    // Con gravedad, el eje congelado se queda quieto.
+    const float y0 = col->getWorldTransform()[3].y;
+    for (int i = 0; i < 30; ++i) pm.stepSimulation(1.0f / 60.0f);
+    CHECK(std::fabs(col->getWorldTransform()[3].y - y0) < 0.001f);
+
+    // Bits que no existen en Rigidbody.h: se recortan contra la máscara en vez
+    // de lanzar (un OR de más no debe tumbar el script).
+    sm.lua().script("rb.constraints = 0xFFFFFFFF\n");
+    const uint32_t todos = RB_FreezePositionX | RB_FreezePositionY | RB_FreezePositionZ |
+                           RB_FreezeRotationX | RB_FreezeRotationY | RB_FreezeRotationZ;
+    CHECK(rb->getConstraints() == todos);
+}
+
+// Collider.isTrigger desde Lua. La lectura tiene que reflejar el cambio, pero
+// eso solo no prueba nada: lo que demuestra que el setter pasó de verdad por
+// PhysicsManager::setTrigger (flip de flags en PhysX) es que a partir de ahí
+// un cuerpo dinámico ATRAVIESA el suelo en vez de posarse encima.
+static void test_is_trigger_desde_lua(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* suelo = scene.addGameObject("Suelo");
+    auto piso = pm.createBoxColliderComponent(glm::vec3(50.0f, 0.5f, 50.0f), glm::vec3(0.0f),
+                                               glm::mat4(1.0f), /*dynamic=*/false);
+    suelo->setBoxCollider(piso);
+    sm.rebuildAliveSet();
+
+    CHECK(piso->isTrigger() == false);
+
+    sm.lua()["e"] = LuaEntity{ suelo, &sm };
+    sm.lua().script(
+        "bc = e:GetComponent('BoxCollider')\n"
+        "antes = bc.isTrigger\n"
+        "bc.isTrigger = true\n"
+        "despues = bc.isTrigger\n");
+
+    CHECK(sm.lua()["antes"].get<bool>() == false);
+    CHECK(sm.lua()["despues"].get<bool>() == true);
+    CHECK(piso->isTrigger() == true);
+
+    // Caída desde y=5 sobre un suelo que ya es trigger: solape sin colisión.
+    // Con el suelo sólido acabaría reposando en ~1,5.
+    auto rb  = std::make_shared<Rigidbody>();
+    auto caja = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f),
+                                               glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 5.0f, 0.0f)),
+                                               /*dynamic=*/true);
+    pm.attachRigidbody(caja, rb);
+    for (int i = 0; i < 120; ++i) pm.stepSimulation(1.0f / 60.0f);
+    CHECK(caja->getWorldTransform()[3].y < -3.0f);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -2080,6 +2160,9 @@ int main()
     test_raycast_sin_fisica(sm, pm);
     test_raycast_actor_sin_gameobject(sm, pm);
     test_raycast_hit_booleano(sm, pm);
+
+    test_constraints_desde_lua(sm, pm);
+    test_is_trigger_desde_lua(sm, pm);
 
     am.shutdown();
     pm.shutdown();

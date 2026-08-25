@@ -32,7 +32,7 @@ A game engine written in C++20, with two interchangeable render backends: **Vulk
 - **Click-to-select in the viewport**: left-clicking a mesh in the viewport selects it, clicking empty space clears the selection (CPU ray picking, see below)
 - **Camera component**: any GameObject can be the scene camera (perspective/orthographic, fov, near/far); frustum gizmo in edit mode, renders from it on Play
 - **Animator component**: Unity-style animation state graph (node = clip, link = transition; `bool`/`trigger`/`animation finished` conditions), edited in a node panel; instant-cut transitions (no blending), driven from Lua
-- Physics (PhysX): Box/Sphere/Capsule/Plane colliders (shape only) + `Rigidbody` (mass, gravity, drag, kinematic, 6-axis constraints, forces/impulses), raycasting
+- Physics (PhysX): Box/Sphere/Capsule/Plane colliders (shape, per-collider material — static/dynamic friction and bounciness — and `Is Trigger`) + `Rigidbody` (mass, gravity, drag, kinematic, 6-axis constraints, forces/impulses), raycasting. All of it editable in Properties and scriptable from Lua (see below)
 - Scene serialization (JSON save/load, full GameObject tree incl. mesh/colliders/audio/scripts)
 - Play Mode (edit/play toggle, snapshot restore, physics gated to Play), undo/redo of editor actions
 - Log Console panel (edit-action history, live value editing)
@@ -686,6 +686,54 @@ later. After the call the old scene is gone, your script included — treat it a
 last useful line. Multiple requests in one frame: the last one wins. Outside Play
 Mode the request is ignored with a Log Console warning.
 
+### Physics from Lua
+
+Colliders and `Rigidbody` are reached through `GetComponent` and expose the same
+fields the Properties panel edits.
+
+```lua
+-- Scripts/Caja.lua
+Caja = {}
+
+function Caja:Start()
+    local rb = self.entity:GetComponent("Rigidbody")
+    rb.mass       = 3.0
+    rb.useGravity = true
+    rb.drag       = 0.1
+    -- constraints is a bitmask: OR the RigidbodyConstraints constants
+    rb.constraints = RigidbodyConstraints.FreezePositionY | RigidbodyConstraints.FreezeRotationX
+
+    local col = self.entity:GetComponent("BoxCollider")
+    col.staticFriction  = 0.6     -- this collider's own PhysX material
+    col.dynamicFriction = 0.4
+    col.bounciness      = 0.9
+    col.isTrigger       = false   -- true = overlap without collision + OnTrigger* callbacks
+end
+
+function Caja:Update(dt)
+    self.entity:GetComponent("Rigidbody"):AddForce(0, 500 * dt, 0)
+end
+```
+
+`Rigidbody` properties: `mass`, `useGravity`, `isKinematic`, `drag`, `angularDrag`,
+`constraints`, `velocity`, `angularVelocity`; methods `AddForce`/`AddTorque`/`AddImpulse`
+(three loose floats, not a `Vec3`). `RigidbodyConstraints` is an integer constant table
+with `None`, `FreezePositionX/Y/Z` and `FreezeRotationX/Y/Z`; bits outside those six are
+masked away rather than raising, so an OR too many never takes down the script.
+
+The four colliders (`BoxCollider`, `SphereCollider`, `CapsuleCollider`, `PlaneCollider`)
+all carry `staticFriction`, `dynamicFriction` and `bounciness` — each collider owns its
+own PhysX material, so two objects in the same scene can slide and bounce differently —
+plus `isTrigger`. Shape stays on methods (`GetHalfExtents`/`SetHalfExtents`,
+`GetRadius`/`SetRadius`, `GetHalfHeight`/`SetHalfHeight`, `GetCenter`/`SetCenter`),
+since Lua has no vector type.
+
+Writing `isTrigger` goes through the PhysicsManager, not the collider alone, so the
+`OnTriggerEnter`/`OnTriggerStay`/`OnTriggerExit` bookkeeping stays in sync; outside Play
+Mode there is no live PhysX scene and the write is a silent no-op. `Physics.Raycast(origin,
+dir, maxDistance)` returns a table (`entity`, `point`, `normal`, `distance`) or `nil`, and
+`Physics.RaycastHit(...)` the boolean-only variant; both return `nil`/`false` outside Play.
+
 ### UI from Lua
 
 All fourteen UI components are reachable from any script, with the same reach as the
@@ -751,7 +799,9 @@ API surface: `self.entity` (`GetTransform`, `GetComponent`/`AddComponent`/`Remov
 `GetCanvas`/`GetPanel`/`GetImage`/`GetText`/`GetButton`/`GetSlider`/`GetCheckbox`/`GetToggle`/`GetScrollbar`/`GetProgressBar`/`GetInputField`/`GetDropdown`/`GetScrollView`/`GetLayout` + `Add*`/`Remove*`,
 `GetParent`/`GetChildren`), `Transform` (position/rotation/scale, `Translate`/`Rotate`),
 `Scene` (`Find`/`CreateGameObject`/`Instantiate`/`Destroy`), the 14 UI components
-(incl. widget callbacks and button state), `DonTopo.loadScene`,
+(incl. widget callbacks and button state), physics (the four colliders with shape,
+material and `isTrigger`, `Rigidbody` with `constraints` and forces, `Physics.Raycast`),
+`DonTopo.loadScene`,
 `Input` (`IsKeyDown`/`IsKeyPressed`/
 `IsKeyReleased`, `Key.*`), `Log.Info/Warn/Error` (+ `print`) routed to the Log Console. Scripts
 only run in Play Mode; a broken script never crashes the engine (compile/runtime errors are

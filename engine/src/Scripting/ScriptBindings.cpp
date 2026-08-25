@@ -408,6 +408,24 @@ namespace DonTopo::ScriptBindings
                         if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
                         if (!ensureFinite(mgr, "BoxCollider.bounciness", v)) return;
                         go->getBoxCollider()->setBounciness(v);
+                    }),
+                // Is Trigger. El setter NO toca el collider a pelo: pasa por
+                // PhysicsManager::setTrigger, que además del flip de flags da
+                // de alta/baja el collider en el registro de onTriggerStay.
+                // Fuera de Play no hay PhysicsManager (igual que en el raycast):
+                // no-op silencioso, no error de Lua.
+                "isTrigger", sol::property(
+                    [](const LuaBoxCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        return go->getBoxCollider()->isTrigger();
+                    },
+                    [&mgr](const LuaBoxCollider& c, bool v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        PhysicsManager* pm = mgr.physics();
+                        if (!pm) return;
+                        pm->setTrigger(go->getBoxCollider(), v);
                     }));
 
             lua.new_usertype<LuaSphereCollider>("SphereCollider",
@@ -470,6 +488,20 @@ namespace DonTopo::ScriptBindings
                         if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
                         if (!ensureFinite(mgr, "SphereCollider.bounciness", v)) return;
                         go->getSphereCollider()->setBounciness(v);
+                    }),
+                // Is Trigger; ver nota en BoxCollider.
+                "isTrigger", sol::property(
+                    [](const LuaSphereCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        return go->getSphereCollider()->isTrigger();
+                    },
+                    [&mgr](const LuaSphereCollider& c, bool v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        PhysicsManager* pm = mgr.physics();
+                        if (!pm) return;
+                        pm->setTrigger(go->getSphereCollider(), v);
                     }));
 
             lua.new_usertype<LuaCapsuleCollider>("CapsuleCollider",
@@ -543,6 +575,20 @@ namespace DonTopo::ScriptBindings
                         if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
                         if (!ensureFinite(mgr, "CapsuleCollider.bounciness", v)) return;
                         go->getCapsuleCollider()->setBounciness(v);
+                    }),
+                // Is Trigger; ver nota en BoxCollider.
+                "isTrigger", sol::property(
+                    [](const LuaCapsuleCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        return go->getCapsuleCollider()->isTrigger();
+                    },
+                    [&mgr](const LuaCapsuleCollider& c, bool v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        PhysicsManager* pm = mgr.physics();
+                        if (!pm) return;
+                        pm->setTrigger(go->getCapsuleCollider(), v);
                     }));
 
             lua.new_usertype<LuaPlaneCollider>("PlaneCollider",
@@ -594,6 +640,20 @@ namespace DonTopo::ScriptBindings
                         if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
                         if (!ensureFinite(mgr, "PlaneCollider.bounciness", v)) return;
                         go->getPlaneCollider()->setBounciness(v);
+                    }),
+                // Is Trigger; ver nota en BoxCollider.
+                "isTrigger", sol::property(
+                    [](const LuaPlaneCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        return go->getPlaneCollider()->isTrigger();
+                    },
+                    [&mgr](const LuaPlaneCollider& c, bool v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        PhysicsManager* pm = mgr.physics();
+                        if (!pm) return;
+                        pm->setTrigger(go->getPlaneCollider(), v);
                     }));
 
             lua.new_usertype<LuaAudioClip>("AudioClip",
@@ -656,8 +716,15 @@ namespace DonTopo::ScriptBindings
                 });
 
             // Rigidbody: dinámica estilo Unity. Propiedades (mass/useGravity/
-            // isKinematic/drag/angularDrag/velocity/angularVelocity) + métodos
-            // AddForce/AddTorque/AddImpulse. Se obtiene con GetComponent("Rigidbody").
+            // isKinematic/drag/angularDrag/constraints/velocity/angularVelocity)
+            // + métodos AddForce/AddTorque/AddImpulse. Se obtiene con
+            // GetComponent("Rigidbody").
+            //
+            // Los 6 bits válidos del bitmask de constraints (Rigidbody.h). Todo
+            // lo demás que llegue de Lua se recorta contra esta máscara.
+            constexpr uint32_t kRigidbodyConstraintsMask =
+                RB_FreezePositionX | RB_FreezePositionY | RB_FreezePositionZ |
+                RB_FreezeRotationX | RB_FreezeRotationY | RB_FreezeRotationZ;
             auto rbOf = [](const LuaRigidbody& c) -> Rigidbody* {
                 GameObject* go = deref(c.e);
                 if (!go->hasRigidbody()) throw std::runtime_error("El GameObject ya no tiene Rigidbody");
@@ -692,6 +759,16 @@ namespace DonTopo::ScriptBindings
                         if (!ensureFinite(mgr, "Rigidbody.angularDrag", v)) return;
                         rb->setAngularDrag(v);
                     }),
+                // constraints es un BITMASK (tabla RigidbodyConstraints), no un
+                // float: nada de ensureFinite aquí. Los bits que no están
+                // definidos en Rigidbody.h se enmascaran en silencio en vez de
+                // lanzar — un OR de más no debe tumbar el script.
+                "constraints", sol::property(
+                    [rbOf](const LuaRigidbody& c) { return rbOf(c)->getConstraints(); },
+                    [rbOf](const LuaRigidbody& c, uint32_t v) {
+                        Rigidbody* rb = rbOf(c);
+                        rb->setConstraints(v & kRigidbodyConstraintsMask);
+                    }),
                 "velocity", sol::property(
                     [rbOf](const LuaRigidbody& c) { return rbOf(c)->getVelocity(); },
                     [rbOf, &mgr](const LuaRigidbody& c, const glm::vec3& v) {
@@ -724,6 +801,18 @@ namespace DonTopo::ScriptBindings
                     if (!ensureFinite(mgr, "Rigidbody.AddImpulse", f)) return;
                     rb->addImpulse(f);
                 });
+
+            // Constantes del bitmask de Rigidbody.constraints. Se combinan con
+            // el OR bit a bit de Lua 5.3+ (rb.constraints = RigidbodyConstraints.
+            // FreezePositionX | RigidbodyConstraints.FreezeRotationY).
+            sol::table rbc = lua.create_named_table("RigidbodyConstraints");
+            rbc["None"]            = RB_None;
+            rbc["FreezePositionX"] = RB_FreezePositionX;
+            rbc["FreezePositionY"] = RB_FreezePositionY;
+            rbc["FreezePositionZ"] = RB_FreezePositionZ;
+            rbc["FreezeRotationX"] = RB_FreezeRotationX;
+            rbc["FreezeRotationY"] = RB_FreezeRotationY;
+            rbc["FreezeRotationZ"] = RB_FreezeRotationZ;
 
             // Animator: máquina de estados de animación. Se obtiene con
             // GetComponent("Animator"). Sin propiedades: los parámetros se
