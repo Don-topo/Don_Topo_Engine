@@ -92,6 +92,11 @@ const std::vector<std::string>& baseSymbols()
         "CapsuleCollider:GetHalfHeight", "CapsuleCollider:SetHalfHeight",
         "CapsuleCollider:GetCenter", "CapsuleCollider:SetCenter",
         "PlaneCollider:GetCenter", "PlaneCollider:SetCenter",
+        // Material de física por collider (propiedades, como en Rigidbody)
+        "BoxCollider.staticFriction", "BoxCollider.dynamicFriction", "BoxCollider.bounciness",
+        "SphereCollider.staticFriction", "SphereCollider.dynamicFriction", "SphereCollider.bounciness",
+        "CapsuleCollider.staticFriction", "CapsuleCollider.dynamicFriction", "CapsuleCollider.bounciness",
+        "PlaneCollider.staticFriction", "PlaneCollider.dynamicFriction", "PlaneCollider.bounciness",
 
         // Rigidbody (dinámica estilo Unity; GetComponent("Rigidbody"))
         "Rigidbody.mass", "Rigidbody.useGravity", "Rigidbody.isKinematic",

@@ -54,10 +54,17 @@ private:
 // Snapshots value-type pa cada tipo de collider — T de PropertyCommand<T>
 // en las secciones Box/Sphere/Capsule/Plane Collider del panel Properties.
 // La gravedad ya no vive en el collider (pasó al Rigidbody): ver RigidbodyState.
-struct BoxColliderState     { glm::vec3 center; glm::vec3 size; bool isTrigger; };
-struct SphereColliderState  { glm::vec3 center; float radius; bool isTrigger; };
-struct CapsuleColliderState { glm::vec3 center; float radius; float height; bool isTrigger; };
-struct PlaneColliderState   { glm::vec3 center; bool isTrigger; };
+// staticFriction/dynamicFriction/bounciness: material de física por collider.
+// Van en el snapshot para que el undo de la sección los cubra igual que
+// center/size; los defaults coinciden con los de Collider (0.5 / 0.5 / 0.1).
+struct BoxColliderState     { glm::vec3 center; glm::vec3 size; bool isTrigger;
+                              float staticFriction; float dynamicFriction; float bounciness; };
+struct SphereColliderState  { glm::vec3 center; float radius; bool isTrigger;
+                              float staticFriction; float dynamicFriction; float bounciness; };
+struct CapsuleColliderState { glm::vec3 center; float radius; float height; bool isTrigger;
+                              float staticFriction; float dynamicFriction; float bounciness; };
+struct PlaneColliderState   { glm::vec3 center; bool isTrigger;
+                              float staticFriction; float dynamicFriction; float bounciness; };
 
 // Snapshot value-type del Rigidbody — T de PropertyCommand<T> en la sección
 // Rigidbody del panel Properties.

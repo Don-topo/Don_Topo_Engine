@@ -40,6 +40,44 @@ void Collider::applyTriggerFlag(bool enabled)
 #endif
 }
 
+#ifdef DT_PHYSX_ENABLED
+namespace {
+// Devuelve el PxMaterial exclusivo de la shape (índice 0). PhysX admite N
+// materiales por shape (uno por triángulo en mallas), pero las 4 factorías
+// crean la shape con uno solo, así que el 0 es SIEMPRE el de este collider.
+PxMaterial* shapeMaterial(void* shapeHandle)
+{
+    auto* shape = static_cast<PxShape*>(shapeHandle);
+    if (!shape || shape->getNbMaterials() == 0) return nullptr;
+    PxMaterial* material = nullptr;
+    if (shape->getMaterials(&material, 1) != 1) return nullptr;
+    return material;
+}
+} // namespace
+#endif
+
+void Collider::setFriction(float staticF, float dynamicF)
+{
+    m_staticFriction  = staticF;
+    m_dynamicFriction = dynamicF;
+#ifdef DT_PHYSX_ENABLED
+    if (auto* material = shapeMaterial(triggerShape()))
+    {
+        material->setStaticFriction(staticF);
+        material->setDynamicFriction(dynamicF);
+    }
+#endif
+}
+
+void Collider::setBounciness(float restitution)
+{
+    m_restitution = restitution;
+#ifdef DT_PHYSX_ENABLED
+    if (auto* material = shapeMaterial(triggerShape()))
+        material->setRestitution(restitution);
+#endif
+}
+
 void Collider::addListener(ITriggerListener* listener)
 {
     if (!listener) return;

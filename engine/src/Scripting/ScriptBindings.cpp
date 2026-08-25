@@ -369,7 +369,46 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
                     if (!ensureFinite(mgr, "BoxCollider.SetCenter", ctr)) return;
                     go->getBoxCollider()->setCenter(ctr);
-                });
+                },
+                // Material de física del collider. Propiedades (no Get/Set)
+                // igual que en Rigidbody. Como en mass: deref + has ANTES del
+                // guard de finitud.
+                "staticFriction", sol::property(
+                    [](const LuaBoxCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        return go->getBoxCollider()->getStaticFriction();
+                    },
+                    [&mgr](const LuaBoxCollider& c, float v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        if (!ensureFinite(mgr, "BoxCollider.staticFriction", v)) return;
+                        go->getBoxCollider()->setFriction(v, go->getBoxCollider()->getDynamicFriction());
+                    }),
+                "dynamicFriction", sol::property(
+                    [](const LuaBoxCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        return go->getBoxCollider()->getDynamicFriction();
+                    },
+                    [&mgr](const LuaBoxCollider& c, float v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        if (!ensureFinite(mgr, "BoxCollider.dynamicFriction", v)) return;
+                        go->getBoxCollider()->setFriction(go->getBoxCollider()->getStaticFriction(), v);
+                    }),
+                "bounciness", sol::property(
+                    [](const LuaBoxCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        return go->getBoxCollider()->getBounciness();
+                    },
+                    [&mgr](const LuaBoxCollider& c, float v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        if (!ensureFinite(mgr, "BoxCollider.bounciness", v)) return;
+                        go->getBoxCollider()->setBounciness(v);
+                    }));
 
             lua.new_usertype<LuaSphereCollider>("SphereCollider",
                 sol::no_constructor,
@@ -394,7 +433,44 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
                     if (!ensureFinite(mgr, "SphereCollider.SetCenter", ctr)) return;
                     go->getSphereCollider()->setCenter(ctr);
-                });
+                },
+                // Material de física del collider; ver nota en BoxCollider.
+                "staticFriction", sol::property(
+                    [](const LuaSphereCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        return go->getSphereCollider()->getStaticFriction();
+                    },
+                    [&mgr](const LuaSphereCollider& c, float v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        if (!ensureFinite(mgr, "SphereCollider.staticFriction", v)) return;
+                        go->getSphereCollider()->setFriction(v, go->getSphereCollider()->getDynamicFriction());
+                    }),
+                "dynamicFriction", sol::property(
+                    [](const LuaSphereCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        return go->getSphereCollider()->getDynamicFriction();
+                    },
+                    [&mgr](const LuaSphereCollider& c, float v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        if (!ensureFinite(mgr, "SphereCollider.dynamicFriction", v)) return;
+                        go->getSphereCollider()->setFriction(go->getSphereCollider()->getStaticFriction(), v);
+                    }),
+                "bounciness", sol::property(
+                    [](const LuaSphereCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        return go->getSphereCollider()->getBounciness();
+                    },
+                    [&mgr](const LuaSphereCollider& c, float v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        if (!ensureFinite(mgr, "SphereCollider.bounciness", v)) return;
+                        go->getSphereCollider()->setBounciness(v);
+                    }));
 
             lua.new_usertype<LuaCapsuleCollider>("CapsuleCollider",
                 sol::no_constructor,
@@ -430,7 +506,44 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
                     if (!ensureFinite(mgr, "CapsuleCollider.SetCenter", ctr)) return;
                     go->getCapsuleCollider()->setCenter(ctr);
-                });
+                },
+                // Material de física del collider; ver nota en BoxCollider.
+                "staticFriction", sol::property(
+                    [](const LuaCapsuleCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        return go->getCapsuleCollider()->getStaticFriction();
+                    },
+                    [&mgr](const LuaCapsuleCollider& c, float v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        if (!ensureFinite(mgr, "CapsuleCollider.staticFriction", v)) return;
+                        go->getCapsuleCollider()->setFriction(v, go->getCapsuleCollider()->getDynamicFriction());
+                    }),
+                "dynamicFriction", sol::property(
+                    [](const LuaCapsuleCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        return go->getCapsuleCollider()->getDynamicFriction();
+                    },
+                    [&mgr](const LuaCapsuleCollider& c, float v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        if (!ensureFinite(mgr, "CapsuleCollider.dynamicFriction", v)) return;
+                        go->getCapsuleCollider()->setFriction(go->getCapsuleCollider()->getStaticFriction(), v);
+                    }),
+                "bounciness", sol::property(
+                    [](const LuaCapsuleCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        return go->getCapsuleCollider()->getBounciness();
+                    },
+                    [&mgr](const LuaCapsuleCollider& c, float v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        if (!ensureFinite(mgr, "CapsuleCollider.bounciness", v)) return;
+                        go->getCapsuleCollider()->setBounciness(v);
+                    }));
 
             lua.new_usertype<LuaPlaneCollider>("PlaneCollider",
                 sol::no_constructor,
@@ -444,7 +557,44 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
                     if (!ensureFinite(mgr, "PlaneCollider.SetCenter", ctr)) return;
                     go->getPlaneCollider()->setCenter(ctr);
-                });
+                },
+                // Material de física del collider; ver nota en BoxCollider.
+                "staticFriction", sol::property(
+                    [](const LuaPlaneCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        return go->getPlaneCollider()->getStaticFriction();
+                    },
+                    [&mgr](const LuaPlaneCollider& c, float v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        if (!ensureFinite(mgr, "PlaneCollider.staticFriction", v)) return;
+                        go->getPlaneCollider()->setFriction(v, go->getPlaneCollider()->getDynamicFriction());
+                    }),
+                "dynamicFriction", sol::property(
+                    [](const LuaPlaneCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        return go->getPlaneCollider()->getDynamicFriction();
+                    },
+                    [&mgr](const LuaPlaneCollider& c, float v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        if (!ensureFinite(mgr, "PlaneCollider.dynamicFriction", v)) return;
+                        go->getPlaneCollider()->setFriction(go->getPlaneCollider()->getStaticFriction(), v);
+                    }),
+                "bounciness", sol::property(
+                    [](const LuaPlaneCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        return go->getPlaneCollider()->getBounciness();
+                    },
+                    [&mgr](const LuaPlaneCollider& c, float v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        if (!ensureFinite(mgr, "PlaneCollider.bounciness", v)) return;
+                        go->getPlaneCollider()->setBounciness(v);
+                    }));
 
             lua.new_usertype<LuaAudioClip>("AudioClip",
                 sol::no_constructor,

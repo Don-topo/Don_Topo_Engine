@@ -6437,6 +6437,9 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
         m_editColliderCenter = bc->getCenter();
         m_editColliderSize   = bc->getHalfExtents() * 2.0f;
         m_editIsTrigger      = bc->isTrigger();
+        m_editColliderStaticFriction  = bc->getStaticFriction();
+        m_editColliderDynamicFriction = bc->getDynamicFriction();
+        m_editColliderBounciness      = bc->getBounciness();
         m_caches.box  = bc;
     }
     else if (ctx.selected->hasRigidbody() && !ctx.selected->getRigidbody()->getIsKinematic() && !m_colliderDragActive)
@@ -6455,6 +6458,8 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
         go->getBoxCollider()->setCenter(s.center);
         go->getBoxCollider()->setHalfExtents(s.size * 0.5f);
         if (physics) physics->setTrigger(go->getBoxCollider(), s.isTrigger);
+        go->getBoxCollider()->setFriction(s.staticFriction, s.dynamicFriction);
+        go->getBoxCollider()->setBounciness(s.bounciness);
     };
 
     ImGui::Separator();
@@ -6467,6 +6472,7 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
     bool activated = false;
     bool centerCommitted = false;
     bool sizeCommitted = false;
+    bool materialCommitted = false;
 
     if (sectionOpen)
     {
@@ -6510,6 +6516,25 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
         activated |= ImGui::IsItemActivated();
         sizeCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
+        // Material de física del collider. Mismo begin/commit que Center/Size:
+        // el snapshot se toma en IsItemActivated y el comando se empuja en
+        // IsItemDeactivatedAfterEdit, así un arrastre entero = un solo undo.
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Static Friction##c3", &m_editColliderStaticFriction, 0.01f, 0.0f, +FLT_MAX, "% .3f", ImGuiSliderFlags_AlwaysClamp);
+        dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
+        materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Dynamic Friction##c3", &m_editColliderDynamicFriction, 0.01f, 0.0f, +FLT_MAX, "% .3f", ImGuiSliderFlags_AlwaysClamp);
+        dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
+        materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Bounciness##c3", &m_editColliderBounciness, 0.01f, 0.0f, 1.0f, "% .3f", ImGuiSliderFlags_AlwaysClamp);
+        dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
+        materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+
         bool oldTrigger = m_editIsTrigger;
         if (ImGui::Checkbox("Is Trigger", &m_editIsTrigger))
         {
@@ -6519,8 +6544,10 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
                      "' (Box Collider) " + (m_editIsTrigger ? "activado" : "desactivado"));
             if (ctx.scene)
             {
-                BoxColliderState before{ m_editColliderCenter, m_editColliderSize, oldTrigger };
-                BoxColliderState after{ m_editColliderCenter, m_editColliderSize, m_editIsTrigger };
+                BoxColliderState before{ m_editColliderCenter, m_editColliderSize, oldTrigger,
+                                         m_editColliderStaticFriction, m_editColliderDynamicFriction, m_editColliderBounciness };
+                BoxColliderState after{ m_editColliderCenter, m_editColliderSize, m_editIsTrigger,
+                                        m_editColliderStaticFriction, m_editColliderDynamicFriction, m_editColliderBounciness };
                 ctx.undo->push(std::make_unique<PropertyCommand<BoxColliderState>>(
                     "Is Trigger de '" + ctx.selected->name + "' (Box Collider)", before, after, applyBoxState));
             }
@@ -6533,23 +6560,29 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
     m_colliderDragActive = dragActive;
 
     if (activated)
-        m_boxColliderBeforeEdit = BoxColliderState{ m_editColliderCenter, m_editColliderSize, m_editIsTrigger };
+        m_boxColliderBeforeEdit = BoxColliderState{ m_editColliderCenter, m_editColliderSize, m_editIsTrigger,
+                                                    m_editColliderStaticFriction, m_editColliderDynamicFriction, m_editColliderBounciness };
 
     if (centerCommitted)
         ctx.pushLog("Center de '" + ctx.selected->name + "' (Box Collider) cambiado a " + formatVec3(m_editColliderCenter));
     if (sizeCommitted)
         ctx.pushLog("Size de '" + ctx.selected->name + "' (Box Collider) cambiado a " + formatVec3(m_editColliderSize));
+    if (materialCommitted)
+        ctx.pushLog("Material de '" + ctx.selected->name + "' (Box Collider) cambiado");
 
     if (colliderChanged)
     {
         bc->setCenter(m_editColliderCenter);
         bc->setHalfExtents(m_editColliderSize * 0.5f);
+        bc->setFriction(m_editColliderStaticFriction, m_editColliderDynamicFriction);
+        bc->setBounciness(m_editColliderBounciness);
     }
 
-    if ((centerCommitted || sizeCommitted) && ctx.scene)
+    if ((centerCommitted || sizeCommitted || materialCommitted) && ctx.scene)
     {
         BoxColliderState before = m_boxColliderBeforeEdit;
-        BoxColliderState after{ m_editColliderCenter, m_editColliderSize, m_editIsTrigger };
+        BoxColliderState after{ m_editColliderCenter, m_editColliderSize, m_editIsTrigger,
+                                m_editColliderStaticFriction, m_editColliderDynamicFriction, m_editColliderBounciness };
         ctx.undo->push(std::make_unique<PropertyCommand<BoxColliderState>>(
             "Box Collider de '" + ctx.selected->name + "'", before, after, applyBoxState));
     }
@@ -6577,6 +6610,9 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
         m_editSphereCenter        = sc->getCenter();
         m_editSphereRadius        = sc->getRadius();
         m_editSphereIsTrigger     = sc->isTrigger();
+        m_editSphereStaticFriction  = sc->getStaticFriction();
+        m_editSphereDynamicFriction = sc->getDynamicFriction();
+        m_editSphereBounciness      = sc->getBounciness();
         m_caches.sphere = sc;
     }
     else if (ctx.selected->hasRigidbody() && !ctx.selected->getRigidbody()->getIsKinematic() && !m_sphereColliderDragActive)
@@ -6594,6 +6630,8 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
         go->getSphereCollider()->setCenter(s.center);
         go->getSphereCollider()->setRadius(s.radius);
         if (physics) physics->setTrigger(go->getSphereCollider(), s.isTrigger);
+        go->getSphereCollider()->setFriction(s.staticFriction, s.dynamicFriction);
+        go->getSphereCollider()->setBounciness(s.bounciness);
     };
 
     ImGui::Separator();
@@ -6606,6 +6644,7 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
     bool activated = false;
     bool centerCommitted = false;
     bool radiusCommitted = false;
+    bool materialCommitted = false;
 
     if (sectionOpen)
     {
@@ -6637,6 +6676,23 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
         activated |= ImGui::IsItemActivated();
         radiusCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
+        // Material de física del collider; mismo begin/commit que Center/Radius.
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Static Friction##s3", &m_editSphereStaticFriction, 0.01f, 0.0f, +FLT_MAX, "% .3f", ImGuiSliderFlags_AlwaysClamp);
+        dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
+        materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Dynamic Friction##s3", &m_editSphereDynamicFriction, 0.01f, 0.0f, +FLT_MAX, "% .3f", ImGuiSliderFlags_AlwaysClamp);
+        dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
+        materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Bounciness##s3", &m_editSphereBounciness, 0.01f, 0.0f, 1.0f, "% .3f", ImGuiSliderFlags_AlwaysClamp);
+        dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
+        materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+
         bool oldTrigger = m_editSphereIsTrigger;
         if (ImGui::Checkbox("Is Trigger", &m_editSphereIsTrigger))
         {
@@ -6646,8 +6702,10 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
                      "' (Sphere Collider) " + (m_editSphereIsTrigger ? "activado" : "desactivado"));
             if (ctx.scene)
             {
-                SphereColliderState before{ m_editSphereCenter, m_editSphereRadius, oldTrigger };
-                SphereColliderState after{ m_editSphereCenter, m_editSphereRadius, m_editSphereIsTrigger };
+                SphereColliderState before{ m_editSphereCenter, m_editSphereRadius, oldTrigger,
+                                            m_editSphereStaticFriction, m_editSphereDynamicFriction, m_editSphereBounciness };
+                SphereColliderState after{ m_editSphereCenter, m_editSphereRadius, m_editSphereIsTrigger,
+                                           m_editSphereStaticFriction, m_editSphereDynamicFriction, m_editSphereBounciness };
                 ctx.undo->push(std::make_unique<PropertyCommand<SphereColliderState>>(
                     "Is Trigger de '" + ctx.selected->name + "' (Sphere Collider)", before, after, applySphereState));
             }
@@ -6660,23 +6718,29 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
     m_sphereColliderDragActive = dragActive;
 
     if (activated)
-        m_sphereColliderBeforeEdit = SphereColliderState{ m_editSphereCenter, m_editSphereRadius, m_editSphereIsTrigger };
+        m_sphereColliderBeforeEdit = SphereColliderState{ m_editSphereCenter, m_editSphereRadius, m_editSphereIsTrigger,
+                                                          m_editSphereStaticFriction, m_editSphereDynamicFriction, m_editSphereBounciness };
 
     if (centerCommitted)
         ctx.pushLog("Center de '" + ctx.selected->name + "' (Sphere Collider) cambiado a " + formatVec3(m_editSphereCenter));
     if (radiusCommitted)
         ctx.pushLog("Radius de '" + ctx.selected->name + "' (Sphere Collider) cambiado a " + formatFloat(m_editSphereRadius));
+    if (materialCommitted)
+        ctx.pushLog("Material de '" + ctx.selected->name + "' (Sphere Collider) cambiado");
 
     if (colliderChanged)
     {
         sc->setCenter(m_editSphereCenter);
         sc->setRadius(m_editSphereRadius);
+        sc->setFriction(m_editSphereStaticFriction, m_editSphereDynamicFriction);
+        sc->setBounciness(m_editSphereBounciness);
     }
 
-    if ((centerCommitted || radiusCommitted) && ctx.scene)
+    if ((centerCommitted || radiusCommitted || materialCommitted) && ctx.scene)
     {
         SphereColliderState before = m_sphereColliderBeforeEdit;
-        SphereColliderState after{ m_editSphereCenter, m_editSphereRadius, m_editSphereIsTrigger };
+        SphereColliderState after{ m_editSphereCenter, m_editSphereRadius, m_editSphereIsTrigger,
+                                   m_editSphereStaticFriction, m_editSphereDynamicFriction, m_editSphereBounciness };
         ctx.undo->push(std::make_unique<PropertyCommand<SphereColliderState>>(
             "Sphere Collider de '" + ctx.selected->name + "'", before, after, applySphereState));
     }
@@ -6705,6 +6769,9 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
         m_editCapsuleRadius        = cc->getRadius();
         m_editCapsuleHeight        = cc->getHalfHeight() * 2.0f;
         m_editCapsuleIsTrigger     = cc->isTrigger();
+        m_editCapsuleStaticFriction  = cc->getStaticFriction();
+        m_editCapsuleDynamicFriction = cc->getDynamicFriction();
+        m_editCapsuleBounciness      = cc->getBounciness();
         m_caches.capsule = cc;
     }
     else if (ctx.selected->hasRigidbody() && !ctx.selected->getRigidbody()->getIsKinematic() && !m_capsuleColliderDragActive)
@@ -6724,6 +6791,8 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
         go->getCapsuleCollider()->setRadius(s.radius);
         go->getCapsuleCollider()->setHalfHeight(s.height * 0.5f);
         if (physics) physics->setTrigger(go->getCapsuleCollider(), s.isTrigger);
+        go->getCapsuleCollider()->setFriction(s.staticFriction, s.dynamicFriction);
+        go->getCapsuleCollider()->setBounciness(s.bounciness);
     };
 
     ImGui::Separator();
@@ -6737,6 +6806,7 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
     bool centerCommitted = false;
     bool radiusCommitted = false;
     bool heightCommitted = false;
+    bool materialCommitted = false;
 
     if (sectionOpen)
     {
@@ -6776,6 +6846,23 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
         activated |= ImGui::IsItemActivated();
         heightCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
+        // Material de física del collider; mismo begin/commit que Center/Radius.
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Static Friction##k4", &m_editCapsuleStaticFriction, 0.01f, 0.0f, +FLT_MAX, "% .3f", ImGuiSliderFlags_AlwaysClamp);
+        dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
+        materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Dynamic Friction##k4", &m_editCapsuleDynamicFriction, 0.01f, 0.0f, +FLT_MAX, "% .3f", ImGuiSliderFlags_AlwaysClamp);
+        dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
+        materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Bounciness##k4", &m_editCapsuleBounciness, 0.01f, 0.0f, 1.0f, "% .3f", ImGuiSliderFlags_AlwaysClamp);
+        dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
+        materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+
         bool oldTrigger = m_editCapsuleIsTrigger;
         if (ImGui::Checkbox("Is Trigger", &m_editCapsuleIsTrigger))
         {
@@ -6785,8 +6872,10 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
                      "' (Capsule Collider) " + (m_editCapsuleIsTrigger ? "activado" : "desactivado"));
             if (ctx.scene)
             {
-                CapsuleColliderState before{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, oldTrigger };
-                CapsuleColliderState after{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleIsTrigger };
+                CapsuleColliderState before{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, oldTrigger,
+                                             m_editCapsuleStaticFriction, m_editCapsuleDynamicFriction, m_editCapsuleBounciness };
+                CapsuleColliderState after{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleIsTrigger,
+                                            m_editCapsuleStaticFriction, m_editCapsuleDynamicFriction, m_editCapsuleBounciness };
                 ctx.undo->push(std::make_unique<PropertyCommand<CapsuleColliderState>>(
                     "Is Trigger de '" + ctx.selected->name + "' (Capsule Collider)", before, after, applyCapsuleState));
             }
@@ -6799,7 +6888,8 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
     m_capsuleColliderDragActive = dragActive;
 
     if (activated)
-        m_capsuleColliderBeforeEdit = CapsuleColliderState{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleIsTrigger };
+        m_capsuleColliderBeforeEdit = CapsuleColliderState{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleIsTrigger,
+                                                            m_editCapsuleStaticFriction, m_editCapsuleDynamicFriction, m_editCapsuleBounciness };
 
     if (centerCommitted)
         ctx.pushLog("Center de '" + ctx.selected->name + "' (Capsule Collider) cambiado a " + formatVec3(m_editCapsuleCenter));
@@ -6807,18 +6897,23 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
         ctx.pushLog("Radius de '" + ctx.selected->name + "' (Capsule Collider) cambiado a " + formatFloat(m_editCapsuleRadius));
     if (heightCommitted)
         ctx.pushLog("Height de '" + ctx.selected->name + "' (Capsule Collider) cambiado a " + formatFloat(m_editCapsuleHeight));
+    if (materialCommitted)
+        ctx.pushLog("Material de '" + ctx.selected->name + "' (Capsule Collider) cambiado");
 
     if (colliderChanged)
     {
         cc->setCenter(m_editCapsuleCenter);
         cc->setRadius(m_editCapsuleRadius);
         cc->setHalfHeight(m_editCapsuleHeight * 0.5f);
+        cc->setFriction(m_editCapsuleStaticFriction, m_editCapsuleDynamicFriction);
+        cc->setBounciness(m_editCapsuleBounciness);
     }
 
-    if ((centerCommitted || radiusCommitted || heightCommitted) && ctx.scene)
+    if ((centerCommitted || radiusCommitted || heightCommitted || materialCommitted) && ctx.scene)
     {
         CapsuleColliderState before = m_capsuleColliderBeforeEdit;
-        CapsuleColliderState after{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleIsTrigger };
+        CapsuleColliderState after{ m_editCapsuleCenter, m_editCapsuleRadius, m_editCapsuleHeight, m_editCapsuleIsTrigger,
+                                    m_editCapsuleStaticFriction, m_editCapsuleDynamicFriction, m_editCapsuleBounciness };
         ctx.undo->push(std::make_unique<PropertyCommand<CapsuleColliderState>>(
             "Capsule Collider de '" + ctx.selected->name + "'", before, after, applyCapsuleState));
     }
@@ -6845,6 +6940,9 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
     {
         m_editPlaneCenter        = pc->getCenter();
         m_editPlaneIsTrigger     = pc->isTrigger();
+        m_editPlaneStaticFriction  = pc->getStaticFriction();
+        m_editPlaneDynamicFriction = pc->getDynamicFriction();
+        m_editPlaneBounciness      = pc->getBounciness();
         m_caches.plane = pc;
     }
 
@@ -6856,6 +6954,8 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
         if (!go || !go->hasPlaneCollider()) return;
         go->getPlaneCollider()->setCenter(s.center);
         if (physics) physics->setTrigger(go->getPlaneCollider(), s.isTrigger);
+        go->getPlaneCollider()->setFriction(s.staticFriction, s.dynamicFriction);
+        go->getPlaneCollider()->setBounciness(s.bounciness);
     };
 
     ImGui::Separator();
@@ -6867,6 +6967,7 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
     bool dragActive = false;
     bool activated = false;
     bool centerCommitted = false;
+    bool materialCommitted = false;
 
     if (sectionOpen)
     {
@@ -6890,6 +6991,23 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
         activated |= ImGui::IsItemActivated();
         centerCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
+        // Material de física del collider; mismo begin/commit que Center.
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Static Friction##p2", &m_editPlaneStaticFriction, 0.01f, 0.0f, +FLT_MAX, "% .3f", ImGuiSliderFlags_AlwaysClamp);
+        dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
+        materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Dynamic Friction##p2", &m_editPlaneDynamicFriction, 0.01f, 0.0f, +FLT_MAX, "% .3f", ImGuiSliderFlags_AlwaysClamp);
+        dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
+        materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5);
+        colliderChanged |= ImGui::DragFloat("Bounciness##p2", &m_editPlaneBounciness, 0.01f, 0.0f, 1.0f, "% .3f", ImGuiSliderFlags_AlwaysClamp);
+        dragActive |= ImGui::IsItemActive();
+        activated |= ImGui::IsItemActivated();
+        materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+
         bool oldTrigger = m_editPlaneIsTrigger;
         if (ImGui::Checkbox("Is Trigger", &m_editPlaneIsTrigger))
         {
@@ -6899,8 +7017,10 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
                      "' (Plane Collider) " + (m_editPlaneIsTrigger ? "activado" : "desactivado"));
             if (ctx.scene)
             {
-                PlaneColliderState before{ m_editPlaneCenter, oldTrigger };
-                PlaneColliderState after{ m_editPlaneCenter, m_editPlaneIsTrigger };
+                PlaneColliderState before{ m_editPlaneCenter, oldTrigger,
+                                           m_editPlaneStaticFriction, m_editPlaneDynamicFriction, m_editPlaneBounciness };
+                PlaneColliderState after{ m_editPlaneCenter, m_editPlaneIsTrigger,
+                                          m_editPlaneStaticFriction, m_editPlaneDynamicFriction, m_editPlaneBounciness };
                 ctx.undo->push(std::make_unique<PropertyCommand<PlaneColliderState>>(
                     "Is Trigger de '" + ctx.selected->name + "' (Plane Collider)", before, after, applyPlaneState));
             }
@@ -6913,18 +7033,26 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
     m_planeColliderDragActive = dragActive;
 
     if (activated)
-        m_planeColliderBeforeEdit = PlaneColliderState{ m_editPlaneCenter, m_editPlaneIsTrigger };
+        m_planeColliderBeforeEdit = PlaneColliderState{ m_editPlaneCenter, m_editPlaneIsTrigger,
+                                                        m_editPlaneStaticFriction, m_editPlaneDynamicFriction, m_editPlaneBounciness };
 
     if (centerCommitted)
         ctx.pushLog("Center de '" + ctx.selected->name + "' (Plane Collider) cambiado a " + formatVec3(m_editPlaneCenter));
+    if (materialCommitted)
+        ctx.pushLog("Material de '" + ctx.selected->name + "' (Plane Collider) cambiado");
 
     if (colliderChanged)
+    {
         pc->setCenter(m_editPlaneCenter);
+        pc->setFriction(m_editPlaneStaticFriction, m_editPlaneDynamicFriction);
+        pc->setBounciness(m_editPlaneBounciness);
+    }
 
-    if (centerCommitted && ctx.scene)
+    if ((centerCommitted || materialCommitted) && ctx.scene)
     {
         PlaneColliderState before = m_planeColliderBeforeEdit;
-        PlaneColliderState after{ m_editPlaneCenter, m_editPlaneIsTrigger };
+        PlaneColliderState after{ m_editPlaneCenter, m_editPlaneIsTrigger,
+                                  m_editPlaneStaticFriction, m_editPlaneDynamicFriction, m_editPlaneBounciness };
         ctx.undo->push(std::make_unique<PropertyCommand<PlaneColliderState>>(
             "Plane Collider de '" + ctx.selected->name + "'", before, after, applyPlaneState));
     }

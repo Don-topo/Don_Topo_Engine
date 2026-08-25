@@ -9,9 +9,12 @@
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
+#include "DonTopo/Physics/Colliders/SphereCollider.h"
+#include "DonTopo/Physics/Colliders/PlaneCollider.h"
 #include "DonTopo/Physics/Colliders/Collider.h"
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -160,6 +163,118 @@ static void test_trigger_fires_when_trigger_has_rigidbody(PhysicsManager& pm)
     CHECK(entersWith(pm, /*trigger*/true, /*other*/false) > 0);
 }
 
+// --- Material de física por collider ----------------------------------------
+//
+// Cada collider tiene su propio PxMaterial (antes lo compartían todos), así que
+// dos esferas con restitution distinta deben rebotar distinto. El modo de
+// combinación de PhysX es eAVERAGE: la restitution efectiva del contacto es la
+// media entre la de la esfera y la del plano (0.1 por defecto).
+
+// Sigue el punto más bajo alcanzado y la altura máxima POSTERIOR a ese mínimo,
+// que es justo el ápice del primer rebote.
+struct BounceTrack {
+    float minY = 1e9f;
+    float apex = -1e9f;
+    void feed(float y) { if (y < minY) { minY = y; apex = y; } else if (y > apex) apex = y; }
+    float rise() const { return apex - minY; }
+};
+
+// Deja caer dos esferas (restitution 0.0 y 0.9) sobre un PlaneCollider y
+// devuelve cuánto rebotó cada una. Van separadas en X para que choquen sólo
+// contra el plano y no entre ellas.
+//
+// createDynamic=false crea las esferas como estáticas y las promociona con
+// attachRigidbody, lo que pasa por rebuildActor: ese camino re-adjunta la MISMA
+// shape al actor nuevo, y con ella su PxMaterial. Es la comprobación de que el
+// material sobrevive al rebuild MIRANDO LA SIMULACIÓN, no la copia en C++ que
+// devuelven los getters.
+static void dropTwoSpheres(PhysicsManager& pm, bool createDynamic,
+                            float& riseDead, float& riseBouncy)
+{
+    auto plane = pm.createPlaneColliderComponent(glm::vec3(0.0f), glm::mat4(1.0f));
+
+    auto rbDead   = std::make_shared<Rigidbody>();
+    auto rbBouncy = std::make_shared<Rigidbody>();
+
+    auto dead = pm.createSphereColliderComponent(
+        25.0f, glm::vec3(0.0f),
+        glm::translate(glm::mat4(1.0f), glm::vec3(-200.0f, 300.0f, 0.0f)), createDynamic);
+    dead->setBounciness(0.0f);
+    pm.attachRigidbody(dead, rbDead);
+
+    auto bouncy = pm.createSphereColliderComponent(
+        25.0f, glm::vec3(0.0f),
+        glm::translate(glm::mat4(1.0f), glm::vec3(200.0f, 300.0f, 0.0f)), createDynamic);
+    bouncy->setBounciness(0.9f);
+    pm.attachRigidbody(bouncy, rbBouncy);
+
+    BounceTrack tDead, tBouncy;
+    for (int i = 0; i < 240; ++i)
+    {
+        pm.stepSimulation(1.0f / 60.0f);
+        tDead.feed(dead->getWorldTransform()[3].y);
+        tBouncy.feed(bouncy->getWorldTransform()[3].y);
+    }
+    riseDead   = tDead.rise();
+    riseBouncy = tBouncy.rise();
+}
+
+// Dos esferas dinámicas con restitution distinta rebotan a alturas distintas.
+static void test_restitution_changes_bounce_height(PhysicsManager& pm)
+{
+    float riseDead = 0.0f, riseBouncy = 0.0f;
+    dropTwoSpheres(pm, /*createDynamic=*/true, riseDead, riseBouncy);
+    std::printf("  rebote: restitution 0.0 -> %.2f | restitution 0.9 -> %.2f\n", riseDead, riseBouncy);
+    // La "muerta" no rebota a cero: el modo de combinación es eAVERAGE, así que
+    // contra el plano (0.1 por defecto) le queda una restitution efectiva de
+    // 0.05. Lo que se fija aquí es que la elástica rebota un orden de magnitud
+    // más, no un valor absoluto exacto.
+    CHECK(riseBouncy > 20.0f);             // la elástica rebota de verdad
+    CHECK(riseDead < 15.0f);               // la muerta apenas despega
+    CHECK(riseBouncy > riseDead * 3.0f);   // y la diferencia es inequívoca
+}
+
+// setFriction/setBounciness devuelven lo escrito y sobreviven al attach/detach
+// de Rigidbody (que reconstruye el actor por dentro).
+static void test_material_survives_rebuild(PhysicsManager& pm)
+{
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f),
+                                              glm::mat4(1.0f), /*dynamic=*/false);
+    // Defaults recién creado: los mismos que tenía el PxMaterial global de
+    // antes, o sea lo que ve una escena guardada sin estos campos.
+    CHECK(std::fabs(col->getStaticFriction()  - 0.5f) < 1e-6f);
+    CHECK(std::fabs(col->getDynamicFriction() - 0.5f) < 1e-6f);
+    CHECK(std::fabs(col->getBounciness()      - 0.1f) < 1e-6f);
+
+    col->setFriction(0.31f, 0.22f);
+    col->setBounciness(0.77f);
+    CHECK(std::fabs(col->getStaticFriction()  - 0.31f) < 1e-6f);
+    CHECK(std::fabs(col->getDynamicFriction() - 0.22f) < 1e-6f);
+    CHECK(std::fabs(col->getBounciness()      - 0.77f) < 1e-6f);
+
+    auto rb = std::make_shared<Rigidbody>();
+    pm.attachRigidbody(col, rb);   // static -> dynamic (rebuildActor)
+    CHECK(std::fabs(col->getStaticFriction()  - 0.31f) < 1e-6f);
+    CHECK(std::fabs(col->getDynamicFriction() - 0.22f) < 1e-6f);
+    CHECK(std::fabs(col->getBounciness()      - 0.77f) < 1e-6f);
+
+    pm.detachRigidbody(col);       // dynamic -> static (rebuildActor otra vez)
+    CHECK(std::fabs(col->getStaticFriction()  - 0.31f) < 1e-6f);
+    CHECK(std::fabs(col->getDynamicFriction() - 0.22f) < 1e-6f);
+    CHECK(std::fabs(col->getBounciness()      - 0.77f) < 1e-6f);
+
+    // Los getters sólo leen la copia en C++: si rebuildActor perdiera el
+    // PxMaterial, seguirían diciendo lo correcto. Esto lo mide en la
+    // simulación — el bounciness se escribe ANTES del rebuild.
+    float riseDead = 0.0f, riseBouncy = 0.0f;
+    dropTwoSpheres(pm, /*createDynamic=*/false, riseDead, riseBouncy);
+    std::printf("  rebote tras rebuildActor: restitution 0.0 -> %.2f | restitution 0.9 -> %.2f\n",
+                riseDead, riseBouncy);
+    CHECK(riseBouncy > 20.0f);
+    CHECK(riseDead < 15.0f);
+    CHECK(riseBouncy > riseDead * 3.0f);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -172,6 +287,8 @@ int main()
     test_trigger_needs_a_rigidbody(pm);
     test_trigger_fires_when_other_has_rigidbody(pm);
     test_trigger_fires_when_trigger_has_rigidbody(pm);
+    test_restitution_changes_bounce_height(pm);
+    test_material_survives_rebuild(pm);
     pm.shutdown();
     if (g_failures == 0) std::printf("ALL PHYSICS TESTS PASSED\n");
     std::fflush(stdout);

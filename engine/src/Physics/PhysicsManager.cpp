@@ -22,6 +22,14 @@ namespace {
     PxDefaultAllocator      g_allocator;
     PxDefaultErrorCallback  g_errorCallback;
 
+    // Valores del PxMaterial que se crea por collider. Coinciden con los
+    // defaults de Collider (m_staticFriction/m_dynamicFriction/m_restitution) y
+    // con los del material global que compartían todos los colliders antes, así
+    // que una escena existente simula exactamente igual.
+    constexpr float kDefaultStaticFriction  = 0.5f;
+    constexpr float kDefaultDynamicFriction = 0.5f;
+    constexpr float kDefaultRestitution     = 0.1f;
+
     // Mismo truco usado en CapsuleCollider.cpp/PlaneCollider.cpp: PhysX
     // orienta PxCapsuleGeometry a lo largo de X y define la normal de
     // PxPlaneGeometry como el eje X local del shape. Esta rotación fija
@@ -139,9 +147,8 @@ void PhysicsManager::init()
     physxCheck(scene, "PxPhysics::createScene");
     m_scene = scene;
 
-    auto* material = physics->createMaterial(0.5f, 0.5f, 0.1f);
-    physxCheck(material, "PxPhysics::createMaterial");
-    m_material = material;
+    // Ya no hay material global: cada collider crea el suyo en su factoría
+    // (material de física por collider, ver kDefault* arriba).
 
     // Callback que recibe los pares de trigger y los reenvía a los colliders.
     auto* triggerCallback = new TriggerDispatcher();
@@ -159,7 +166,6 @@ void PhysicsManager::shutdown()
     if (m_dispatcher) { static_cast<PxDefaultCpuDispatcher*>(m_dispatcher)->release(); m_dispatcher = nullptr; }
     if (m_physics)    { static_cast<PxPhysics*>(m_physics)->release();  m_physics = nullptr; }
     if (m_foundation) { static_cast<PxFoundation*>(m_foundation)->release(); m_foundation = nullptr; }
-    m_material = nullptr; // liberado implícitamente por PxPhysics::release()
 #endif
 }
 
@@ -181,8 +187,16 @@ std::shared_ptr<BoxCollider> PhysicsManager::createBoxColliderComponent(
     );
 
     auto* physics = static_cast<PxPhysics*>(m_physics);
-    auto* material = static_cast<PxMaterial*>(m_material);
     auto* scene = static_cast<PxScene*>(m_scene);
+
+    // Material EXCLUSIVO de este collider (mismos valores que el global de
+    // antes, así ninguna escena cambia de comportamiento). Es refcounted: la
+    // shape se queda una referencia en createExclusiveShape, así que soltamos
+    // la nuestra justo después y el material muere con la shape.
+    PxMaterial* material = physics->createMaterial(kDefaultStaticFriction,
+                                                   kDefaultDynamicFriction,
+                                                   kDefaultRestitution);
+    physxCheck(material, "PxPhysics::createMaterial(box)");
 
     PxRigidActor* actor = dynamic
         ? static_cast<PxRigidActor*>(physics->createRigidDynamic(pose))
@@ -192,6 +206,7 @@ std::shared_ptr<BoxCollider> PhysicsManager::createBoxColliderComponent(
     PxBoxGeometry geometry(halfExtents.x, halfExtents.y, halfExtents.z);
     PxShape* shape = PxRigidActorExt::createExclusiveShape(*actor, geometry, *material);
     physxCheck(shape, "PxRigidActorExt::createExclusiveShape");
+    material->release();
     shape->setLocalPose(PxTransform(PxVec3(center.x, center.y, center.z)));
 
     if (dynamic)
@@ -238,8 +253,13 @@ std::shared_ptr<SphereCollider> PhysicsManager::createSphereColliderComponent(
     );
 
     auto* physics = static_cast<PxPhysics*>(m_physics);
-    auto* material = static_cast<PxMaterial*>(m_material);
     auto* scene = static_cast<PxScene*>(m_scene);
+
+    // Material exclusivo del collider; ver nota en createBoxColliderComponent.
+    PxMaterial* material = physics->createMaterial(kDefaultStaticFriction,
+                                                   kDefaultDynamicFriction,
+                                                   kDefaultRestitution);
+    physxCheck(material, "PxPhysics::createMaterial(sphere)");
 
     PxRigidActor* actor = dynamic
         ? static_cast<PxRigidActor*>(physics->createRigidDynamic(pose))
@@ -249,6 +269,7 @@ std::shared_ptr<SphereCollider> PhysicsManager::createSphereColliderComponent(
     PxSphereGeometry geometry(radius);
     PxShape* shape = PxRigidActorExt::createExclusiveShape(*actor, geometry, *material);
     physxCheck(shape, "PxRigidActorExt::createExclusiveShape");
+    material->release();
     shape->setLocalPose(PxTransform(PxVec3(center.x, center.y, center.z)));
 
     if (dynamic)
@@ -289,8 +310,13 @@ std::shared_ptr<CapsuleCollider> PhysicsManager::createCapsuleColliderComponent(
     );
 
     auto* physics = static_cast<PxPhysics*>(m_physics);
-    auto* material = static_cast<PxMaterial*>(m_material);
     auto* scene = static_cast<PxScene*>(m_scene);
+
+    // Material exclusivo del collider; ver nota en createBoxColliderComponent.
+    PxMaterial* material = physics->createMaterial(kDefaultStaticFriction,
+                                                   kDefaultDynamicFriction,
+                                                   kDefaultRestitution);
+    physxCheck(material, "PxPhysics::createMaterial(capsule)");
 
     PxRigidActor* actor = dynamic
         ? static_cast<PxRigidActor*>(physics->createRigidDynamic(pose))
@@ -300,6 +326,7 @@ std::shared_ptr<CapsuleCollider> PhysicsManager::createCapsuleColliderComponent(
     PxCapsuleGeometry geometry(radius, halfHeight);
     PxShape* shape = PxRigidActorExt::createExclusiveShape(*actor, geometry, *material);
     physxCheck(shape, "PxRigidActorExt::createExclusiveShape");
+    material->release();
     shape->setLocalPose(PxTransform(PxVec3(center.x, center.y, center.z), axisCorrection()));
 
     if (dynamic)
@@ -337,8 +364,13 @@ std::shared_ptr<PlaneCollider> PhysicsManager::createPlaneColliderComponent(
     );
 
     auto* physics = static_cast<PxPhysics*>(m_physics);
-    auto* material = static_cast<PxMaterial*>(m_material);
     auto* scene = static_cast<PxScene*>(m_scene);
+
+    // Material exclusivo del collider; ver nota en createBoxColliderComponent.
+    PxMaterial* material = physics->createMaterial(kDefaultStaticFriction,
+                                                   kDefaultDynamicFriction,
+                                                   kDefaultRestitution);
+    physxCheck(material, "PxPhysics::createMaterial(plane)");
 
     PxRigidDynamic* actor = physics->createRigidDynamic(pose);
     physxCheck(actor, "PxPhysics::createRigidDynamic");
@@ -353,6 +385,7 @@ std::shared_ptr<PlaneCollider> PhysicsManager::createPlaneColliderComponent(
     PxPlaneGeometry geometry;
     PxShape* shape = PxRigidActorExt::createExclusiveShape(*actor, geometry, *material);
     physxCheck(shape, "PxRigidActorExt::createExclusiveShape");
+    material->release();
     shape->setLocalPose(PxTransform(PxVec3(center.x, center.y, center.z), axisCorrection()));
 
     // Sin updateMassAndInertia: un plano no tiene volumen, PhysX no puede

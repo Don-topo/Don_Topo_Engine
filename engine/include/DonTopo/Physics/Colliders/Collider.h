@@ -62,6 +62,21 @@ public:
     void addListener(ITriggerListener* listener);
     void removeListener(ITriggerListener* listener);
 
+    // Material de física POR COLLIDER. Los defaults son los mismos que tenía el
+    // PxMaterial global anterior (0.5 / 0.5 / 0.1), así que una escena que no
+    // guarde estos campos simula exactamente igual que antes.
+    //
+    // Los setters escriben al PxMaterial de la shape (que es exclusivo de este
+    // collider: lo crea PhysicsManager en la factoría). Sin DT_PHYSX_ENABLED
+    // solo guardan el valor, para que el editor y la serialización funcionen
+    // igual en un build sin PhysX.
+    void setFriction(float staticF, float dynamicF);
+    void setBounciness(float restitution);
+
+    float getStaticFriction() const  { return m_staticFriction; }
+    float getDynamicFriction() const { return m_dynamicFriction; }
+    float getBounciness() const      { return m_restitution; }
+
     // Lo setea PhysicsManager al crear el collider, para que ~Collider pueda
     // avisar de su destrucción y purgarse de los overlaps de otros triggers.
     void setManager(PhysicsManager* manager) { m_manager = manager; }
@@ -103,6 +118,10 @@ protected:
 
 private:
     bool                           m_isTrigger = false;
+    // Defaults idénticos al PxMaterial global que había antes (0.5/0.5/0.1).
+    float                          m_staticFriction  = 0.5f;
+    float                          m_dynamicFriction = 0.5f;
+    float                          m_restitution     = 0.1f;
     void*                          m_owner     = nullptr;
     PhysicsManager*                m_manager   = nullptr;
     std::vector<ITriggerListener*> m_listeners;

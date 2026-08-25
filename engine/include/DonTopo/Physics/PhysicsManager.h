@@ -93,7 +93,6 @@ private:
     void* m_physics         = nullptr; // physx::PxPhysics*
     void* m_scene           = nullptr; // physx::PxScene*
     void* m_dispatcher      = nullptr; // physx::PxDefaultCpuDispatcher*
-    void* m_material        = nullptr; // physx::PxMaterial*
     void* m_triggerCallback = nullptr; // TriggerDispatcher* (PxSimulationEventCallback)
 #endif
 };

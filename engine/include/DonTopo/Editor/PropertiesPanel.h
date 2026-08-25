@@ -445,6 +445,10 @@ private:
     glm::vec3    m_editColliderCenter{0.0f};
     glm::vec3    m_editColliderSize{50.0f};
     bool         m_editIsTrigger = false;
+    // Material de física del collider (defaults iguales a los de Collider).
+    float        m_editColliderStaticFriction  = 0.5f;
+    float        m_editColliderDynamicFriction = 0.5f;
+    float        m_editColliderBounciness      = 0.1f;
     bool         m_colliderDragActive = false;
     // Snapshot tomado al iniciar un drag de Center/Size — "before" del
     // PropertyCommand<BoxColliderState> que se empuja al confirmar.
@@ -454,6 +458,9 @@ private:
     glm::vec3       m_editSphereCenter{0.0f};
     float           m_editSphereRadius{25.0f};
     bool            m_editSphereIsTrigger = false;
+    float           m_editSphereStaticFriction  = 0.5f;
+    float           m_editSphereDynamicFriction = 0.5f;
+    float           m_editSphereBounciness      = 0.1f;
     bool            m_sphereColliderDragActive = false;
     SphereColliderState m_sphereColliderBeforeEdit{};
 
@@ -462,12 +469,18 @@ private:
     float            m_editCapsuleRadius{15.0f};
     float            m_editCapsuleHeight{50.0f};
     bool             m_editCapsuleIsTrigger = false;
+    float            m_editCapsuleStaticFriction  = 0.5f;
+    float            m_editCapsuleDynamicFriction = 0.5f;
+    float            m_editCapsuleBounciness      = 0.1f;
     bool             m_capsuleColliderDragActive = false;
     CapsuleColliderState m_capsuleColliderBeforeEdit{};
 
     // Plane Collider – solo Center (sin Size/Use Gravity, siempre estático).
     glm::vec3      m_editPlaneCenter{0.0f};
     bool           m_editPlaneIsTrigger = false;
+    float          m_editPlaneStaticFriction  = 0.5f;
+    float          m_editPlaneDynamicFriction = 0.5f;
+    float          m_editPlaneBounciness      = 0.1f;
     bool           m_planeColliderDragActive = false;
     PlaneColliderState m_planeColliderBeforeEdit{};
 

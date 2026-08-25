@@ -699,14 +699,20 @@ namespace
             const auto& c = node.getBoxCollider();
             j["boxCollider"] = { {"halfExtents", vec3ToJson(c->getHalfExtents())},
                                   {"center", vec3ToJson(c->getCenter())},
-                                  {"isTrigger", c->isTrigger()} };
+                                  {"isTrigger", c->isTrigger()},
+                                  {"staticFriction", c->getStaticFriction()},
+                                  {"dynamicFriction", c->getDynamicFriction()},
+                                  {"bounciness", c->getBounciness()} };
         }
         if (node.hasSphereCollider())
         {
             const auto& c = node.getSphereCollider();
             j["sphereCollider"] = { {"radius", c->getRadius()},
                                      {"center", vec3ToJson(c->getCenter())},
-                                     {"isTrigger", c->isTrigger()} };
+                                     {"isTrigger", c->isTrigger()},
+                                     {"staticFriction", c->getStaticFriction()},
+                                     {"dynamicFriction", c->getDynamicFriction()},
+                                     {"bounciness", c->getBounciness()} };
         }
         if (node.hasCapsuleCollider())
         {
@@ -714,13 +720,19 @@ namespace
             j["capsuleCollider"] = { {"radius", c->getRadius()},
                                       {"halfHeight", c->getHalfHeight()},
                                       {"center", vec3ToJson(c->getCenter())},
-                                      {"isTrigger", c->isTrigger()} };
+                                      {"isTrigger", c->isTrigger()},
+                                      {"staticFriction", c->getStaticFriction()},
+                                      {"dynamicFriction", c->getDynamicFriction()},
+                                      {"bounciness", c->getBounciness()} };
         }
         if (node.hasPlaneCollider())
         {
             const auto& c = node.getPlaneCollider();
             j["planeCollider"] = { {"center", vec3ToJson(c->getCenter())},
-                                    {"isTrigger", c->isTrigger()} };
+                                    {"isTrigger", c->isTrigger()},
+                                    {"staticFriction", c->getStaticFriction()},
+                                    {"dynamicFriction", c->getDynamicFriction()},
+                                    {"bounciness", c->getBounciness()} };
         }
         if (node.hasRigidbody())
         {
@@ -1623,6 +1635,13 @@ namespace
                 node->worldTransform, /*dynamic=*/false));
             node->getBoxCollider()->setOwner(node);
             physics.setTrigger(node->getBoxCollider(), c.value("isTrigger", false));
+            // Material por collider. required=false: una escena guardada antes
+            // de este campo carga sin avisos y con los defaults de siempre
+            // (0.5 / 0.5 / 0.1), o sea con el mismo comportamiento que tenía.
+            node->getBoxCollider()->setFriction(
+                readFloat(c, "staticFriction",  0.5f, warnings, ctx),
+                readFloat(c, "dynamicFriction", 0.5f, warnings, ctx));
+            node->getBoxCollider()->setBounciness(readFloat(c, "bounciness", 0.1f, warnings, ctx));
         }
         if (j.contains("sphereCollider"))
         {
@@ -1634,6 +1653,10 @@ namespace
                 node->worldTransform, /*dynamic=*/false));
             node->getSphereCollider()->setOwner(node);
             physics.setTrigger(node->getSphereCollider(), c.value("isTrigger", false));
+            node->getSphereCollider()->setFriction(
+                readFloat(c, "staticFriction",  0.5f, warnings, ctx),
+                readFloat(c, "dynamicFriction", 0.5f, warnings, ctx));
+            node->getSphereCollider()->setBounciness(readFloat(c, "bounciness", 0.1f, warnings, ctx));
         }
         if (j.contains("capsuleCollider"))
         {
@@ -1646,15 +1669,24 @@ namespace
                 node->worldTransform, /*dynamic=*/false));
             node->getCapsuleCollider()->setOwner(node);
             physics.setTrigger(node->getCapsuleCollider(), c.value("isTrigger", false));
+            node->getCapsuleCollider()->setFriction(
+                readFloat(c, "staticFriction",  0.5f, warnings, ctx),
+                readFloat(c, "dynamicFriction", 0.5f, warnings, ctx));
+            node->getCapsuleCollider()->setBounciness(readFloat(c, "bounciness", 0.1f, warnings, ctx));
         }
         if (j.contains("planeCollider"))
         {
             const auto& c = j["planeCollider"];
+            const std::string ctx = "planeCollider de '" + node->name + "'";
             node->setPlaneCollider(physics.createPlaneColliderComponent(
-                jsonToVec3(c.value("center", nlohmann::json::array()), warnings, "planeCollider de '" + node->name + "'.center", glm::vec3(0.0f), true),
+                jsonToVec3(c.value("center", nlohmann::json::array()), warnings, ctx + ".center", glm::vec3(0.0f), true),
                 node->worldTransform));
             node->getPlaneCollider()->setOwner(node);
             physics.setTrigger(node->getPlaneCollider(), c.value("isTrigger", false));
+            node->getPlaneCollider()->setFriction(
+                readFloat(c, "staticFriction",  0.5f, warnings, ctx),
+                readFloat(c, "dynamicFriction", 0.5f, warnings, ctx));
+            node->getPlaneCollider()->setBounciness(readFloat(c, "bounciness", 0.1f, warnings, ctx));
         }
 
         // Rigidbody: bloque nuevo. Back-compat: escenas viejas guardaban
