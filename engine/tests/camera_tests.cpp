@@ -1307,6 +1307,12 @@ static void test_button_asset_path_filters()
     CHECK(PropertiesPanel::isUiAtlasPath("x.tga"));
     CHECK(!PropertiesPanel::isUiAtlasPath("assets/fuente.ttf"));
     CHECK(!PropertiesPanel::isUiAtlasPath("assets/audio.wav"));
+    // Desde que el Content Browser deja arrastrar imágenes y fuentes, CUALQUIER
+    // asset puede aterrizar en CUALQUIER caja: una malla sobre un atlas de UI es
+    // el caso que antes no podía darse (el .fbx era arrastrable, pero la caja de
+    // atlas no lo veía llegar porque el drag no salía del Content Browser).
+    CHECK(!PropertiesPanel::isUiAtlasPath("assets/hero.fbx"));
+    CHECK(!PropertiesPanel::isUiFontPath("assets/musica.mp3"));
 }
 
 // ── Text ────────────────────────────────────────────────────────────────────

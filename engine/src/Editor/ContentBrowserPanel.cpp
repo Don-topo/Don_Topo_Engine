@@ -479,7 +479,17 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
         int   cols  = std::max(1, (int)(paneW / cellW));
         ImGui::Columns(cols, "##AssetGrid", false);
 
-        static const std::set<std::string> kDraggableExt = {".fbx", ".wav", ".mp3", ".ogg", ".flac"};
+        // Todo lo que alguna zona de drop del editor sepa aceptar: mallas,
+        // audio, y las imágenes y fuentes de las cajas de asset de UI. La lista
+        // no filtra por destino a propósito —quién rechaza qué se decide en el
+        // que aplica el valor (loadMeshForSelected, loadAudioClipForSelected y
+        // los set*Path de PropertiesPanel, todos con su veto por extensión)—;
+        // aquí solo decide si el arrastre puede empezar.
+        static const std::set<std::string> kDraggableExt = {
+            ".fbx",
+            ".wav", ".mp3", ".ogg", ".flac",
+            ".png", ".jpg", ".jpeg", ".bmp", ".tga",
+            ".ttf", ".otf", ".ttc"};
 
         for (auto& path : m_assets) {
             std::error_code isDirEc;
