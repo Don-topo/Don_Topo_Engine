@@ -498,20 +498,65 @@ bool PhysicsManager::raycast(const PxVec3& origin, const PxVec3& dir, float maxD
 }
 #endif
 
+void PhysicsManager::setFixedDeltaTime(float dt)
+{
+    // Un paso <= 0 dejaría el bucle de sub-steps restando 0 al acumulador, o
+    // sumándole: cuelgue seguro. Se ignora y se conserva el valor anterior.
+    if (dt <= 0.0f) return;
+    m_fixedDeltaTime = dt;
+}
+
+void PhysicsManager::setMaxSubSteps(int steps)
+{
+    // Con 0 sub-steps la física no avanzaría nunca y el acumulador crecería
+    // hasta descartarse cada frame: mínimo uno.
+    m_maxSubSteps = (steps < 1) ? 1 : steps;
+}
+
 void PhysicsManager::stepSimulation(float dt)
 {
 #ifdef DT_PHYSX_ENABLED
-    // primer frame: dt=0 (last se inicializa == now), PxScene::simulate exige
-    // > 0. En fetchResults se despachan los Enter/Exit vía TriggerDispatcher.
-    if (dt > 0.0f)
+    // El dt real del frame sólo alimenta el acumulador; a PxScene::simulate
+    // siempre se le pasa m_fixedDeltaTime (ver el porqué en el header). dt <= 0
+    // se ignora: el primer frame llega con 0 (last se inicializa == now) y
+    // PxScene::simulate exige > 0. En fetchResults se despachan los Enter/Exit
+    // vía TriggerDispatcher.
+    if (dt > 0.0f) m_accumulator += dt;
+
+    // Margen para el error de coma flotante: 3 * (1.0f/60.0f) acumulado en
+    // float queda un pelo por debajo de sumar 1.0f/60.0f tres veces, y sin
+    // margen esa comparación se comería un sub-step (justo lo que rompe el
+    // determinismo que buscamos).
+    constexpr float kEpsilon = 1e-6f;
+
+    int steps = 0;
+    while (m_accumulator + kEpsilon >= m_fixedDeltaTime && steps < m_maxSubSteps)
     {
-        static_cast<PxScene*>(m_scene)->simulate(dt);
+        static_cast<PxScene*>(m_scene)->simulate(m_fixedDeltaTime);
         static_cast<PxScene*>(m_scene)->fetchResults(true);
+        m_accumulator -= m_fixedDeltaTime;
+        ++steps;
+
+        // Stay UNA VEZ POR SUB-STEP, dentro del bucle, para que Enter/Stay/Exit
+        // lleven la misma cadencia que la simulación (los Enter/Exit los emite
+        // fetchResults de este mismo sub-step). Consecuencia asumida: un frame
+        // lento emite varios Stay seguidos.
+        dispatchTriggerStay();
     }
+
+    // Si tras agotar los sub-steps aún sobra tiempo, se TIRA en vez de quedar a
+    // deber: acarrear la deuda tras un stall hace que los frames siguientes
+    // vayan siempre al máximo de sub-steps, tarden más, y acumulen más deuda
+    // todavía (espiral de la muerte).
+    if (m_accumulator + kEpsilon >= m_fixedDeltaTime) m_accumulator = 0.0f;
 #else
     (void)dt;
+    dispatchTriggerStay();
 #endif
+}
 
+void PhysicsManager::dispatchTriggerStay()
+{
     // Sintetiza onTriggerStay: PhysX solo da Enter/Exit, así que se recorren los
     // triggers vivos y se emite Stay por cada overlap actual. Los triggers
     // expirados (GameObject destruido) se podan al vuelo. Sin PhysX el registro

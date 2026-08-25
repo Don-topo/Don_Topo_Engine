@@ -333,6 +333,99 @@ static void test_material_survives_rebuild(PhysicsManager& pm)
     CHECK(riseBouncy > riseDead * 3.0f);
 }
 
+// --- Paso fijo con acumulador -----------------------------------------------
+
+// Deja el acumulador del PhysicsManager compartido a 0: un dt enorme agota los
+// sub-steps y el sobrante se descarta, así cada test arranca igual aunque el
+// anterior dejara un resto.
+static void flushAccumulator(PhysicsManager& pm) { pm.stepSimulation(1000.0f); }
+
+// Caída libre de un cuerpo nuevo tras `calls` llamadas de `dt` segundos.
+// El collider es local: al salir se lleva su actor, no interfiere con el resto.
+static float fallDistance(PhysicsManager& pm, int calls, float dt)
+{
+    auto rb  = std::make_shared<Rigidbody>();
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/true);
+    pm.attachRigidbody(col, rb);
+    float y0 = col->getWorldTransform()[3].y;
+    for (int i = 0; i < calls; ++i) pm.stepSimulation(dt);
+    return y0 - col->getWorldTransform()[3].y;
+}
+
+// Un frame de 3 pasos fijos avanza lo mismo que 3 frames de un paso.
+static void test_fixed_step_is_framerate_independent(PhysicsManager& pm)
+{
+    // El caller real pasa el dt medido del frame, no un múltiplo exacto en
+    // float del paso fijo: 3.0f/60.0f queda un pelo POR DEBAJO de sumar
+    // 1.0f/60.0f tres veces, y sin margen de redondeo el bucle se comería el
+    // tercer sub-step. Por eso el dt de abajo se escribe así y no como 3*fixed.
+    CHECK(std::fabs(pm.getFixedDeltaTime() - 1.0f / 60.0f) < 1e-9f);
+    const float fixed = 1.0f / 60.0f;
+    flushAccumulator(pm);
+    float three = fallDistance(pm, 3, fixed);
+    flushAccumulator(pm);
+    float once  = fallDistance(pm, 1, 3.0f / 60.0f);
+    std::printf("  determinismo: 3x1 paso -> %.6f | 1x3 pasos -> %.6f\n", three, once);
+    CHECK(std::fabs(three - once) < 1e-4f);
+    CHECK(three > 0.0f);
+}
+
+// Un dt gigante no simula más de maxSubSteps sub-steps (ni cuelga).
+static void test_giant_dt_clamped_to_max_substeps(PhysicsManager& pm)
+{
+    const float fixed = pm.getFixedDeltaTime();
+    const int   maxSs = pm.getMaxSubSteps();
+    flushAccumulator(pm);
+    float reference = fallDistance(pm, maxSs, fixed);  // exactamente maxSubSteps
+    flushAccumulator(pm);
+    float giant     = fallDistance(pm, 1, 5.0f);       // 300 sub-steps si no hay clamp
+    std::printf("  dt gigante: %d pasos -> %.6f | dt=5s -> %.6f\n", maxSs, reference, giant);
+    CHECK(std::fabs(giant - reference) < 1e-4f);
+}
+
+// Tras agotar los sub-steps el sobrante se tira: el frame siguiente vuelve a
+// costar un solo sub-step, no otra tanda entera de deuda pendiente.
+static void test_giant_dt_leaves_no_debt(PhysicsManager& pm)
+{
+    const float fixed = pm.getFixedDeltaTime();
+    const int   maxSs = pm.getMaxSubSteps();
+    flushAccumulator(pm);
+    float reference = fallDistance(pm, maxSs + 1, fixed);  // maxSubSteps + 1 sub-steps
+
+    flushAccumulator(pm);
+    auto rb  = std::make_shared<Rigidbody>();
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/true);
+    pm.attachRigidbody(col, rb);
+    float y0 = col->getWorldTransform()[3].y;
+    pm.stepSimulation(5.0f);    // maxSubSteps sub-steps, resto descartado
+    pm.stepSimulation(fixed);   // con deuda acarreada serían maxSubSteps más
+    float measured = y0 - col->getWorldTransform()[3].y;
+    std::printf("  sin deuda: %d pasos -> %.6f | 5s + 1 paso -> %.6f\n", maxSs + 1, reference, measured);
+    CHECK(std::fabs(measured - reference) < 1e-4f);
+}
+
+// Los setters rechazan lo que colgaría el bucle de sub-steps.
+static void test_fixed_step_setters_reject_bad_values(PhysicsManager& pm)
+{
+    const float originalDt    = pm.getFixedDeltaTime();
+    const int   originalSteps = pm.getMaxSubSteps();
+
+    pm.setFixedDeltaTime(0.0f);
+    CHECK(pm.getFixedDeltaTime() == originalDt);
+    pm.setFixedDeltaTime(-1.0f);
+    CHECK(pm.getFixedDeltaTime() == originalDt);
+    pm.setFixedDeltaTime(1.0f / 120.0f);            // válido: sí cambia
+    CHECK(std::fabs(pm.getFixedDeltaTime() - 1.0f / 120.0f) < 1e-9f);
+    pm.setFixedDeltaTime(originalDt);
+
+    pm.setMaxSubSteps(0);
+    CHECK(pm.getMaxSubSteps() == 1);
+    pm.setMaxSubSteps(-5);
+    CHECK(pm.getMaxSubSteps() == 1);
+    pm.setMaxSubSteps(originalSteps);
+    CHECK(pm.getMaxSubSteps() == originalSteps);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -349,6 +442,10 @@ int main()
     test_trigger_fires_when_trigger_has_rigidbody(pm);
     test_restitution_changes_bounce_height(pm);
     test_material_survives_rebuild(pm);
+    test_fixed_step_is_framerate_independent(pm);
+    test_giant_dt_clamped_to_max_substeps(pm);
+    test_giant_dt_leaves_no_debt(pm);
+    test_fixed_step_setters_reject_bad_values(pm);
     pm.shutdown();
     if (g_failures == 0) std::printf("ALL PHYSICS TESTS PASSED\n");
     std::fflush(stdout);

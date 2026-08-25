@@ -53,6 +53,18 @@ public:
 
     void stepSimulation(float dt);
 
+    // Paso fijo: el dt real del frame se acumula y se consume en trozos de
+    // m_fixedDeltaTime, así la simulación no depende del framerate.
+    // <= 0 se ignora (mantiene el valor anterior): un 0 colgaría el bucle
+    // que resta el paso del acumulador.
+    void  setFixedDeltaTime(float dt);
+    float getFixedDeltaTime() const { return m_fixedDeltaTime; }
+
+    // Techo de sub-steps por llamada; se clampea a >= 1 (con 0 la física no
+    // avanzaría nunca). Lo que sobre del acumulador tras agotarlos se tira.
+    void setMaxSubSteps(int steps);
+    int  getMaxSubSteps() const { return m_maxSubSteps; }
+
     // Marca/desmarca un collider como trigger: flip de flags PhysX
     // (Collider::applyTriggerFlag) + alta/baja en el registro que se recorre
     // cada frame para sintetizar onTriggerStay. Entry point público — lo
@@ -83,10 +95,24 @@ private:
     void* rebuildActor(const std::shared_ptr<Collider>& collider, bool dynamic);
 #endif
 
+    // Recorre m_triggerColliders emitiendo onTriggerStay y podando expirados.
+    // Se llama una vez por sub-step (ver stepSimulation).
+    void dispatchTriggerStay();
+
     // Triggers registrados (weak: los GameObjects poseen los colliders vía
     // shared_ptr). Se recorren cada frame para emitir onTriggerStay; los
     // expirados se podan al vuelo.
     std::vector<std::weak_ptr<Collider>> m_triggerColliders;
+
+    // Acumulador de tiempo del paso fijo. PxScene::simulate con el dt real del
+    // frame hace la física no determinista (el mismo escenario cae distinto a
+    // 60 y a 144 fps) y con un frame largo —carga de assets, breakpoint— el
+    // integrador da un salto enorme y los cuerpos se atraviesan. Guardando el
+    // sobrante y simulando siempre trozos de m_fixedDeltaTime, el resultado
+    // sólo depende del tiempo total transcurrido.
+    float m_fixedDeltaTime = 1.0f / 60.0f;
+    int   m_maxSubSteps    = 8;
+    float m_accumulator    = 0.0f;
 
 #ifdef DT_PHYSX_ENABLED
     void* m_foundation      = nullptr; // physx::PxFoundation*
