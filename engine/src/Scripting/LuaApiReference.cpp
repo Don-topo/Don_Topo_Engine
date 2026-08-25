@@ -115,6 +115,9 @@ const std::vector<std::string>& baseSymbols()
         "RigidbodyConstraints.FreezePositionZ",
         "RigidbodyConstraints.FreezeRotationX", "RigidbodyConstraints.FreezeRotationY",
         "RigidbodyConstraints.FreezeRotationZ",
+        // Modo opcional (4º argumento) de AddForce/AddTorque. Sin él, Force.
+        "ForceMode.Force", "ForceMode.Acceleration",
+        "ForceMode.Impulse", "ForceMode.VelocityChange",
 
         // Animator (máquina de estados; GetComponent("Animator"))
         "Animator:SetBool", "Animator:GetBool", "Animator:SetTrigger",

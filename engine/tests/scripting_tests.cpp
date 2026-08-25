@@ -2067,6 +2067,83 @@ static void test_constraints_desde_lua(ScriptManager& sm, PhysicsManager& pm)
     CHECK(rb->getConstraints() == todos);
 }
 
+// --- ForceMode desde Lua -----------------------------------------------------
+//
+// Monta un cuerpo sin gravedad con el Rigidbody expuesto en 'rb' y devuelve la
+// velocidad en X tras un paso de la simulación del script dado. El collider se
+// queda vivo dentro de la función (el actor PhysX lo posee él, no el
+// Rigidbody), así que se mide antes de salir.
+static float velocidadTrasScript(ScriptManager& sm, PhysicsManager& pm, const char* script)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Cuerpo");
+    auto rb = std::make_shared<Rigidbody>();
+    rb->setUseGravity(false);
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/true);
+    pm.attachRigidbody(col, rb);
+    go->setRigidbody(rb);
+    sm.rebuildAliveSet();
+
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+    sm.lua().script(script);
+    pm.stepSimulation(1.0f / 60.0f);
+    return rb->getVelocity().x;
+}
+
+// Retrocompatibilidad: la llamada de TRES argumentos sigue funcionando y sigue
+// significando ForceMode.Force. Y con el 4º argumento el resultado es otro:
+// VelocityChange escribe la velocidad de golpe (v = F) en vez de integrarla
+// durante el paso (v = F*dt/m), o sea 60× más con dt = 1/60.
+static void test_force_mode_desde_lua(ScriptManager& sm, PhysicsManager& pm)
+{
+    const float dt = 1.0f / 60.0f;
+    // Callback propio (el de otro test ya no es válido) y de paso comprueba que
+    // el camino feliz no avisa de nada.
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+
+    float vTresArgs = velocidadTrasScript(sm, pm, "e:GetComponent('Rigidbody'):AddForce(100, 0, 0)");
+    float vExplicito = velocidadTrasScript(sm, pm,
+        "e:GetComponent('Rigidbody'):AddForce(100, 0, 0, ForceMode.Force)");
+    float vVelCh = velocidadTrasScript(sm, pm,
+        "e:GetComponent('Rigidbody'):AddForce(100, 0, 0, ForceMode.VelocityChange)");
+    std::printf("  ForceMode Lua: 3 args -> %.4f | Force -> %.4f | VelocityChange -> %.4f\n",
+                vTresArgs, vExplicito, vVelCh);
+
+    CHECK(std::fabs(vTresArgs - 100.0f * dt) < 0.01f);   // igual que siempre
+    CHECK(std::fabs(vTresArgs - vExplicito) < 1e-5f);    // 3 args == ForceMode.Force
+    CHECK(std::fabs(vVelCh - 100.0f) < 0.01f);           // v de golpe
+    CHECK(vVelCh > vTresArgs * 10.0f);                   // inequívocamente distintos
+    CHECK(log.empty());
+}
+
+// Un modo fuera del rango [0,3] no lanza error de Lua: avisa por el Log y NO
+// aplica la fuerza (mismo contrato que un NaN en x,y,z).
+static void test_force_mode_fuera_de_rango(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Cuerpo");
+    auto rb = std::make_shared<Rigidbody>();
+    rb->setUseGravity(false);
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/true);
+    pm.attachRigidbody(col, rb);
+    go->setRigidbody(rb);
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    sm.lua().script("e:GetComponent('Rigidbody'):AddForce(1000, 0, 0, 99)");
+    for (int i = 0; i < 10; ++i) pm.stepSimulation(1.0f / 60.0f);
+
+    CHECK(nearlyEqual(rb->getVelocity().x, 0.0f));
+    CHECK(logContains(log, "AddForce"));
+    CHECK(logContains(log, "WARN"));
+}
+
 // Collider.isTrigger desde Lua. La lectura tiene que reflejar el cambio, pero
 // eso solo no prueba nada: lo que demuestra que el setter pasó de verdad por
 // PhysicsManager::setTrigger (flip de flags en PhysX) es que a partir de ahí
@@ -2162,6 +2239,8 @@ int main()
     test_raycast_hit_booleano(sm, pm);
 
     test_constraints_desde_lua(sm, pm);
+    test_force_mode_desde_lua(sm, pm);
+    test_force_mode_fuera_de_rango(sm, pm);
     test_is_trigger_desde_lua(sm, pm);
 
     am.shutdown();

@@ -77,6 +77,64 @@ static void test_add_impulse(PhysicsManager& pm)
     CHECK(rb->getVelocity().x > 0.0f);
 }
 
+// --- ForceMode ---------------------------------------------------------------
+//
+// Aplica el MISMO vector con dos modos distintos sobre dos cuerpos idénticos
+// (masa 1, sin gravedad, sin drag) y devuelve la velocidad tras UN paso.
+// Force integra durante el paso: v = F*dt/m. VelocityChange escribe la
+// velocidad de golpe: v = F. Con dt = 1/60 son 60× de diferencia, así que un
+// mapeo mal hecho no puede colarse por redondeo.
+static float velocityAfterOneStep(PhysicsManager& pm, ForceMode mode)
+{
+    auto rb = std::make_shared<Rigidbody>();
+    rb->setUseGravity(false);
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/true);
+    pm.attachRigidbody(col, rb);
+    CHECK(std::fabs(rb->getMass() - 1.0f) < 1e-6f); // la fórmula de abajo asume masa 1
+    rb->addForce(glm::vec3(100.0f, 0.0f, 0.0f), mode);
+    step(pm, 1, 1.0f / 60.0f);
+    return rb->getVelocity().x;
+}
+
+// Force vs VelocityChange con el mismo vector: la velocidad resultante difiere
+// en el factor dt esperado.
+static void test_force_mode_changes_magnitude(PhysicsManager& pm)
+{
+    const float dt = 1.0f / 60.0f;
+    float vForce  = velocityAfterOneStep(pm, ForceMode::Force);
+    float vVelCh  = velocityAfterOneStep(pm, ForceMode::VelocityChange);
+    std::printf("  ForceMode: Force -> %.4f | VelocityChange -> %.4f\n", vForce, vVelCh);
+    CHECK(std::fabs(vForce - 100.0f * dt) < 0.01f); // F*dt/m
+    CHECK(std::fabs(vVelCh - 100.0f)      < 0.01f); // v de golpe
+    CHECK(vVelCh > vForce * 10.0f);                 // inequívocamente distintos
+}
+
+// El modo por defecto es Force: addForce(v) sin modo == addForce(v, Force).
+// Sin esto, un default cambiado por descuido rompería en silencio todo el
+// código de tres argumentos que ya existe.
+static void test_force_mode_default_is_force(PhysicsManager& pm)
+{
+    // Separados en Z para que no se empujen entre ellos: dos cajas en el mismo
+    // origen se despenetran y contaminan la velocidad medida.
+    auto rbA = std::make_shared<Rigidbody>();
+    rbA->setUseGravity(false);
+    auto colA = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/true);
+    pm.attachRigidbody(colA, rbA);
+    rbA->addForce(glm::vec3(100.0f, 0.0f, 0.0f)); // sin modo
+
+    auto rbB = std::make_shared<Rigidbody>();
+    rbB->setUseGravity(false);
+    auto colB = pm.createBoxColliderComponent(
+        glm::vec3(1.0f), glm::vec3(0.0f),
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 100.0f)), /*dynamic=*/true);
+    pm.attachRigidbody(colB, rbB);
+    rbB->addForce(glm::vec3(100.0f, 0.0f, 0.0f), ForceMode::Force);
+
+    step(pm, 1, 1.0f / 60.0f);
+    CHECK(rbA->getVelocity().x > 0.0f); // que no sean iguales por ser ambas cero
+    CHECK(std::fabs(rbA->getVelocity().x - rbB->getVelocity().x) < 1e-5f);
+}
+
 // Rebuild static <-> dynamic conserva el shape. Tras detach el collider sigue
 // vivo y estático (no cae) y su geometría queda intacta.
 static void test_rebuild_preserves_shape(PhysicsManager& pm)
@@ -283,6 +341,8 @@ int main()
     test_kinematic_no_fall(pm);
     test_freeze_position_y(pm);
     test_add_impulse(pm);
+    test_force_mode_changes_magnitude(pm);
+    test_force_mode_default_is_force(pm);
     test_rebuild_preserves_shape(pm);
     test_trigger_needs_a_rigidbody(pm);
     test_trigger_fires_when_other_has_rigidbody(pm);

@@ -16,6 +16,18 @@ namespace {
         if (c & RB_FreezeRotationZ) f |= PxRigidDynamicLockFlag::eLOCK_ANGULAR_Z;
         return f;
     }
+
+    // ForceMode (Rigidbody.h) -> PxForceMode. Cualquier valor fuera del enum
+    // cae en eFORCE, que es el comportamiento histórico.
+    physx::PxForceMode::Enum toPxForceMode(DonTopo::ForceMode m) {
+        switch (m) {
+            case DonTopo::ForceMode::Acceleration:   return PxForceMode::eACCELERATION;
+            case DonTopo::ForceMode::Impulse:        return PxForceMode::eIMPULSE;
+            case DonTopo::ForceMode::VelocityChange: return PxForceMode::eVELOCITY_CHANGE;
+            case DonTopo::ForceMode::Force:
+            default:                                 return PxForceMode::eFORCE;
+        }
+    }
 }
 #endif
 
@@ -136,27 +148,29 @@ void Rigidbody::setAngularVelocity(const glm::vec3& v)
 #endif
 }
 
-void Rigidbody::addForce(const glm::vec3& f)
+void Rigidbody::addForce(const glm::vec3& f, ForceMode mode)
 {
 #ifdef DT_PHYSX_ENABLED
     if (!m_actor) return;
     auto* a = static_cast<PxRigidDynamic*>(m_actor);
     if (a->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC) return;
-    a->addForce(PxVec3(f.x, f.y, f.z), PxForceMode::eFORCE);
+    a->addForce(PxVec3(f.x, f.y, f.z), toPxForceMode(mode));
 #else
     (void)f;
+    (void)mode;
 #endif
 }
 
-void Rigidbody::addTorque(const glm::vec3& t)
+void Rigidbody::addTorque(const glm::vec3& t, ForceMode mode)
 {
 #ifdef DT_PHYSX_ENABLED
     if (!m_actor) return;
     auto* a = static_cast<PxRigidDynamic*>(m_actor);
     if (a->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC) return;
-    a->addTorque(PxVec3(t.x, t.y, t.z), PxForceMode::eFORCE);
+    a->addTorque(PxVec3(t.x, t.y, t.z), toPxForceMode(mode));
 #else
     (void)t;
+    (void)mode;
 #endif
 }
 

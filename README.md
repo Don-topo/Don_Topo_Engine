@@ -711,7 +711,10 @@ function Caja:Start()
 end
 
 function Caja:Update(dt)
-    self.entity:GetComponent("Rigidbody"):AddForce(0, 500 * dt, 0)
+    local rb = self.entity:GetComponent("Rigidbody")
+    rb:AddForce(0, 500 * dt, 0)
+    -- optional 4th argument: the force mode (defaults to ForceMode.Force)
+    rb:AddForce(0, 8, 0, ForceMode.VelocityChange)   -- instant jump, mass-independent
 end
 ```
 
@@ -720,6 +723,13 @@ end
 (three loose floats, not a `Vec3`). `RigidbodyConstraints` is an integer constant table
 with `None`, `FreezePositionX/Y/Z` and `FreezeRotationX/Y/Z`; bits outside those six are
 masked away rather than raising, so an OR too many never takes down the script.
+
+`AddForce` and `AddTorque` take an optional fourth argument, the force mode, from the
+`ForceMode` constant table: `Force` (continuous, mass- and dt-dependent — the default,
+so three-argument calls behave exactly as before), `Acceleration` (continuous, ignores
+mass), `Impulse` (instantaneous, mass-dependent — same as `AddImpulse`) and
+`VelocityChange` (instantaneous, ignores mass). A mode outside those four is warned
+about in the Log Console and the force is dropped, rather than raising.
 
 The four colliders (`BoxCollider`, `SphereCollider`, `CapsuleCollider`, `PlaneCollider`)
 all carry `staticFriction`, `dynamicFriction` and `bounciness` — each collider owns its

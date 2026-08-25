@@ -99,6 +99,30 @@ namespace DonTopo::ScriptBindings
             return false;
         }
 
+        // Modo de fuerza opcional de AddForce/AddTorque. Llega de Lua como un
+        // entero (tabla ForceMode) y se valida contra el rango del enum de
+        // Rigidbody.h. Fuera de rango NO lanza: mismo canal que ensureFinite —
+        // aviso por el Log Console y la llamada se ignora entera. Ausente
+        // (llamada de tres argumentos) es siempre válido y vale Force.
+        constexpr int kForceModeMax = static_cast<int>(ForceMode::VelocityChange);
+
+        bool ensureForceMode(ScriptManager& mgr, const char* metodo, const sol::optional<int>& mode)
+        {
+            if (!mode) return true;
+            if (*mode >= 0 && *mode <= kForceModeMax) return true;
+            mgr.log(std::string("[Lua][WARN] ") + metodo +
+                    ": ForceMode fuera de rango (" + std::to_string(*mode) +
+                    "), fuerza ignorada — usa la tabla ForceMode");
+            return false;
+        }
+
+        // Solo se llama tras un ensureForceMode en verde, así que el valor ya
+        // está dentro del enum.
+        ForceMode toForceMode(const sol::optional<int>& mode)
+        {
+            return mode ? static_cast<ForceMode>(*mode) : ForceMode::Force;
+        }
+
         struct LuaTransform { LuaEntity e; };
         struct LuaBoxCollider { LuaEntity e; };
         struct LuaSphereCollider { LuaEntity e; };
@@ -783,17 +807,24 @@ namespace DonTopo::ScriptBindings
                         if (!ensureFinite(mgr, "Rigidbody.angularVelocity", v)) return;
                         rb->setAngularVelocity(v);
                     }),
-                "AddForce",   [rbOf, &mgr](const LuaRigidbody& c, float x, float y, float z) {
+                // El 4º argumento (modo) es OPCIONAL: sin él se aplica
+                // ForceMode.Force, o sea lo mismo que hacían las llamadas de
+                // tres argumentos de siempre. Un modo fuera de rango se avisa
+                // por el Log y NO aplica fuerza, igual que un NaN: un índice
+                // mal calculado en un script no debe tumbar la partida.
+                "AddForce",   [rbOf, &mgr](const LuaRigidbody& c, float x, float y, float z, sol::optional<int> mode) {
                     Rigidbody* rb = rbOf(c);
                     glm::vec3 f(x, y, z);
                     if (!ensureFinite(mgr, "Rigidbody.AddForce", f)) return;
-                    rb->addForce(f);
+                    if (!ensureForceMode(mgr, "Rigidbody.AddForce", mode)) return;
+                    rb->addForce(f, toForceMode(mode));
                 },
-                "AddTorque",  [rbOf, &mgr](const LuaRigidbody& c, float x, float y, float z) {
+                "AddTorque",  [rbOf, &mgr](const LuaRigidbody& c, float x, float y, float z, sol::optional<int> mode) {
                     Rigidbody* rb = rbOf(c);
                     glm::vec3 t(x, y, z);
                     if (!ensureFinite(mgr, "Rigidbody.AddTorque", t)) return;
-                    rb->addTorque(t);
+                    if (!ensureForceMode(mgr, "Rigidbody.AddTorque", mode)) return;
+                    rb->addTorque(t, toForceMode(mode));
                 },
                 "AddImpulse", [rbOf, &mgr](const LuaRigidbody& c, float x, float y, float z) {
                     Rigidbody* rb = rbOf(c);
@@ -813,6 +844,14 @@ namespace DonTopo::ScriptBindings
             rbc["FreezeRotationX"] = RB_FreezeRotationX;
             rbc["FreezeRotationY"] = RB_FreezeRotationY;
             rbc["FreezeRotationZ"] = RB_FreezeRotationZ;
+
+            // Modos de AddForce/AddTorque (4º argumento opcional). Los valores
+            // son los índices del enum ForceMode de Rigidbody.h, en ese orden.
+            sol::table fm = lua.create_named_table("ForceMode");
+            fm["Force"]          = static_cast<int>(ForceMode::Force);
+            fm["Acceleration"]   = static_cast<int>(ForceMode::Acceleration);
+            fm["Impulse"]        = static_cast<int>(ForceMode::Impulse);
+            fm["VelocityChange"] = static_cast<int>(ForceMode::VelocityChange);
 
             // Animator: máquina de estados de animación. Se obtiene con
             // GetComponent("Animator"). Sin propiedades: los parámetros se

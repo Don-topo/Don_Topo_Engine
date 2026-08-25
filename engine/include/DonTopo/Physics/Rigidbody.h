@@ -16,6 +16,17 @@ enum RigidbodyConstraints : uint32_t {
     RB_FreezeRotationZ = 1u << 5,
 };
 
+// Modo de aplicación de fuerzas, estilo Unity. Se traduce a physx::PxForceMode
+// en Rigidbody.cpp: Force/Acceleration se integran durante el paso (dependen de
+// dt), Impulse/VelocityChange cambian la velocidad de golpe. Los dos de la
+// derecha (Acceleration/VelocityChange) IGNORAN la masa del cuerpo.
+enum class ForceMode {
+    Force,          // continua, dependiente de masa y dt (default, como antes)
+    Acceleration,   // continua, ignora la masa
+    Impulse,        // instantánea, dependiente de masa
+    VelocityChange, // instantánea, ignora la masa
+};
+
 // Componente de dinámica de cuerpo rígido (equivalente a Unity Rigidbody). NO
 // posee el actor PhysX: lo posee el Collider (mismo contrato de vida de
 // siempre). Este componente guarda un puntero NO-dueño al PxRigidDynamic y
@@ -54,9 +65,11 @@ public:
     void      setVelocity(const glm::vec3& v);
     glm::vec3 getAngularVelocity() const;
     void      setAngularVelocity(const glm::vec3& v);
-    void addForce(const glm::vec3& f);   // PxForceMode::eFORCE
-    void addTorque(const glm::vec3& t);  // PxForceMode::eFORCE
-    void addImpulse(const glm::vec3& f); // PxForceMode::eIMPULSE
+    // El modo es opcional y por defecto Force: las llamadas de un solo
+    // argumento se comportan exactamente igual que antes.
+    void addForce(const glm::vec3& f, ForceMode mode = ForceMode::Force);
+    void addTorque(const glm::vec3& t, ForceMode mode = ForceMode::Force);
+    void addImpulse(const glm::vec3& f); // azúcar de ForceMode::Impulse
 
 private:
     void* m_actor = nullptr; // physx::PxRigidDynamic* (no-dueño)
