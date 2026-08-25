@@ -212,6 +212,30 @@ void PropertiesPanel::loadAudioClipForSelected(EditorContext& ctx, const std::st
     ctx.pushLog("Componente Audio Clip añadido a '" + ctx.selected->name + "'");
 }
 
+void PropertiesPanel::drawAssetDropBox(EditorContext& ctx, const char* idSuffix,
+                                       const char* hint,
+                                       const std::function<void()>& onBrowse,
+                                       const std::function<void(const std::string&)>& onDrop)
+{
+    if (ImGui::Button((std::string("Browse...##") + idSuffix).c_str()))
+        onBrowse();
+
+    // Sin SameLine y con 40 px de alto: es el layout del Mesh, y las cajas de
+    // UI venían cada una con el suyo (ruta y botón en la misma línea, hijo de
+    // 34 px). Un único sitio del que salen las 16.
+    ImGui::BeginChild((std::string("##DropZone") + idSuffix).c_str(), ImVec2(0, 40), true);
+    ImGui::TextDisabled("%s", hint);
+    // Mismo veto de edición que el Mesh: con el modal de Load Scene activo no
+    // se aceptan drops nuevos.
+    if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
+            onDrop(std::string(static_cast<const char*>(payload->Data)));
+        ImGui::EndDragDropTarget();
+    }
+    ImGui::EndChild();
+}
+
 void PropertiesPanel::draw(EditorContext& ctx)
 {
     if (m_open)
@@ -1257,50 +1281,38 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
                               "sobrescribe el color del estado; solo manda con Sprite Swap.");
         checkBox("Visible", +[](ButtonComponent& c) -> bool& { return c.visible; });
 
-        // Caja de asset calcada a la del Mesh: ruta escribible a mano, botón que
-        // abre el file dialog y zona de drop para el content browser. El veto
-        // por extensión no está aquí sino en setButtonAssetPath, que es por
-        // donde pasan los dos orígenes.
+        // Ruta escribible a mano + la caja de asset común (drawAssetDropBox:
+        // botón y zona de drop, mismo layout que el Mesh). El veto por
+        // extensión no está aquí sino en setButtonAssetPath, que es por donde
+        // pasan los dos orígenes.
         auto assetBox = [&](const char* label, bool isFont, StrRef acc,
                             const char* dlgKey, const char* dlgTitle, const char* filters,
                             const char* hint)
         {
             inputText(label, acc);
-            ImGui::SameLine();
-            if (ImGui::Button((std::string("Browse...##") + label).c_str()))
-            {
-                IGFD::FileDialogConfig cfg;
-                cfg.path  = "assets";
-                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
-                            ImGuiFileDialogFlags_HideColumnDate |
-                            ImGuiFileDialogFlags_DisableThumbnailMode |
-                            ImGuiFileDialogFlags_DisablePlaceMode;
-                if (isFont)
+            drawAssetDropBox(ctx, label, hint,
+                [&]
                 {
-                    m_fontDlgOwner = id;
-                    m_fontDlgOpen  = true;
-                    m_fontFileDialog->OpenDialog(dlgKey, dlgTitle, filters, cfg);
-                }
-                else
-                {
-                    m_uiAtlasDlgOwner = id;
-                    m_uiAtlasDlgOpen  = true;
-                    m_uiAtlasFileDialog->OpenDialog(dlgKey, dlgTitle, filters, cfg);
-                }
-            }
-
-            ImGui::BeginChild((std::string("##DropZone") + label).c_str(), ImVec2(0, 34), true);
-            ImGui::TextDisabled("%s", hint);
-            // Mismo veto de edición que el Mesh: con el modal de Load Scene
-            // activo no se aceptan drops nuevos.
-            if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
-            {
-                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                    setButtonAssetPath(ctx, id, isFont,
-                                        std::string(static_cast<const char*>(payload->Data)));
-                ImGui::EndDragDropTarget();
-            }
-            ImGui::EndChild();
+                    IGFD::FileDialogConfig cfg;
+                    cfg.path  = "assets";
+                    cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                                ImGuiFileDialogFlags_HideColumnDate |
+                                ImGuiFileDialogFlags_DisableThumbnailMode |
+                                ImGuiFileDialogFlags_DisablePlaceMode;
+                    if (isFont)
+                    {
+                        m_fontDlgOwner = id;
+                        m_fontDlgOpen  = true;
+                        m_fontFileDialog->OpenDialog(dlgKey, dlgTitle, filters, cfg);
+                    }
+                    else
+                    {
+                        m_uiAtlasDlgOwner = id;
+                        m_uiAtlasDlgOpen  = true;
+                        m_uiAtlasFileDialog->OpenDialog(dlgKey, dlgTitle, filters, cfg);
+                    }
+                },
+                [&](const std::string& dropped) { setButtonAssetPath(ctx, id, isFont, dropped); });
         };
 
         ImGui::TextDisabled("Sprite");
@@ -1656,37 +1668,25 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
         ImGui::TextDisabled("Texto");
         inputText("Text##txt", +[](TextComponent& c) -> std::string& { return c.text; });
 
-        // Caja de asset calcada a la del Button: ruta escribible a mano, botón
-        // que abre el file dialog y zona de drop para el content browser. El
+        // Ruta escribible a mano + la caja de asset común (drawAssetDropBox). El
         // veto por extensión está en setTextFontPath, por donde pasan los dos.
         inputText("Font##txt", +[](TextComponent& c) -> std::string& { return c.fontPath; });
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Vacía = la fuente por defecto del proyecto");
-        ImGui::SameLine();
-        if (ImGui::Button("Browse...##txtfont"))
-        {
-            IGFD::FileDialogConfig cfg;
-            cfg.path  = "assets";
-            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
-                        ImGuiFileDialogFlags_HideColumnDate |
-                        ImGuiFileDialogFlags_DisableThumbnailMode |
-                        ImGuiFileDialogFlags_DisablePlaceMode;
-            m_textFontDlgOwner = id;
-            m_textFontDlgOpen  = true;
-            m_textFontFileDialog->OpenDialog("TextFontDlg", "Choose font", ".ttf,.otf,.ttc", cfg);
-        }
-
-        ImGui::BeginChild("##DropZoneTextFont", ImVec2(0, 34), true);
-        ImGui::TextDisabled("Drop .ttf/.otf here");
-        // Mismo veto de edición que el Button: con el modal de Load Scene activo
-        // no se aceptan drops nuevos.
-        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                setTextFontPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
-            ImGui::EndDragDropTarget();
-        }
-        ImGui::EndChild();
+        drawAssetDropBox(ctx, "txtfont", "Drop .ttf/.otf here",
+            [&]
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                m_textFontDlgOwner = id;
+                m_textFontDlgOpen  = true;
+                m_textFontFileDialog->OpenDialog("TextFontDlg", "Choose font", ".ttf,.otf,.ttc", cfg);
+            },
+            [&](const std::string& dropped) { setTextFontPath(ctx, id, dropped); });
 
         if (!m_textPathError.empty())
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_textPathError.c_str());
@@ -2077,58 +2077,49 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
                   +[](ProgressBarComponent& c) -> glm::vec4& { return c.fillColor; });
 
         ImGui::TextDisabled("Imágenes");
-        // Una caja de asset por ruta, calcadas a la del Button: ruta escribible
-        // a mano, botón que abre el file dialog y zona de drop para el content
-        // browser. El veto por extensión está en setProgressBarImagePath, por
-        // donde pasan los tres campos y los dos caminos.
+        // Una ruta escribible a mano por campo + la caja de asset común
+        // (drawAssetDropBox). El veto por extensión está en
+        // setProgressBarImagePath, por donde pasan los tres campos y los dos
+        // caminos.
         auto assetBox = [&](const char* label, int field, StrRef acc,
-                            const char* dropId, const char* tip)
+                            const char* idSuffix, const char* tip)
         {
             inputText(label, acc);
             if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
-            ImGui::SameLine();
-            // El id del botón sale del label, que ya es único por campo: dos
-            // botones con el mismo id compartirían el estado de pulsado.
-            if (ImGui::Button((std::string("Browse...##") + label).c_str()))
-            {
-                IGFD::FileDialogConfig cfg;
-                cfg.path  = "assets";
-                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
-                            ImGuiFileDialogFlags_HideColumnDate |
-                            ImGuiFileDialogFlags_DisableThumbnailMode |
-                            ImGuiFileDialogFlags_DisablePlaceMode;
-                m_barAtlasDlgOwner = id;
-                m_barAtlasDlgField = field;
-                m_barAtlasDlgOpen  = true;
-                m_barAtlasFileDialog->OpenDialog("BarImageDlg", "Choose image",
-                                                 ".png,.jpg,.jpeg,.bmp,.tga", cfg);
-            }
-
-            ImGui::BeginChild(dropId, ImVec2(0, 34), true);
-            ImGui::TextDisabled("Drop .png/.jpg here");
-            // Mismo veto de edición que el Button: con el modal de Load Scene
-            // activo no se aceptan drops nuevos.
-            if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
-            {
-                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                    setProgressBarImagePath(ctx, id, field,
-                                            std::string(static_cast<const char*>(payload->Data)));
-                ImGui::EndDragDropTarget();
-            }
-            ImGui::EndChild();
+            // El idSuffix es único por campo: dos cajas con el mismo id
+            // compartirían el estado de pulsado del botón.
+            drawAssetDropBox(ctx, idSuffix, "Drop .png/.jpg here",
+                [&]
+                {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.path  = "assets";
+                    cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                                ImGuiFileDialogFlags_HideColumnDate |
+                                ImGuiFileDialogFlags_DisableThumbnailMode |
+                                ImGuiFileDialogFlags_DisablePlaceMode;
+                    m_barAtlasDlgOwner = id;
+                    m_barAtlasDlgField = field;
+                    m_barAtlasDlgOpen  = true;
+                    m_barAtlasFileDialog->OpenDialog("BarImageDlg", "Choose image",
+                                                     ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+                },
+                [&](const std::string& dropped)
+                {
+                    setProgressBarImagePath(ctx, id, field, dropped);
+                });
         };
 
         assetBox("Atlas##bar", 0,
                  +[](ProgressBarComponent& c) -> std::string& { return c.atlasPath; },
-                 "##DropZoneBarAtlas",
+                 "barAtlas",
                  "Imagen compartida: la usan las partes que no traigan la suya");
         assetBox("Background Image##bar", 1,
                  +[](ProgressBarComponent& c) -> std::string& { return c.backgroundPath; },
-                 "##DropZoneBarBg",
+                 "barBg",
                  "Vacía = el Atlas; y sin ninguno, un quad de Background Color");
         assetBox("Fill Image##bar", 2,
                  +[](ProgressBarComponent& c) -> std::string& { return c.fillPath; },
-                 "##DropZoneBarFill",
+                 "barFill",
                  "Vacía = el Atlas; y sin ninguno, un quad de Fill Color");
 
         if (!m_barPathError.empty())
@@ -2700,32 +2691,21 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
 
         ImGui::TextDisabled("Sprite");
         inputText("Atlas##panel", +[](PanelComponent& c) -> std::string& { return c.atlasPath; });
-        ImGui::SameLine();
-        if (ImGui::Button("Browse...##panelAtlas"))
-        {
-            IGFD::FileDialogConfig cfg;
-            cfg.path  = "assets";
-            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
-                        ImGuiFileDialogFlags_HideColumnDate |
-                        ImGuiFileDialogFlags_DisableThumbnailMode |
-                        ImGuiFileDialogFlags_DisablePlaceMode;
-            m_panelAtlasDlgOwner = id;
-            m_panelAtlasDlgOpen  = true;
-            m_panelAtlasFileDialog->OpenDialog("PanelAtlasDlg", "Choose atlas",
-                                               ".png,.jpg,.jpeg,.bmp,.tga", cfg);
-        }
-
-        ImGui::BeginChild("##PanelAtlasDrop", ImVec2(0, 34), true);
-        ImGui::TextDisabled("Drop .png/.jpg/.bmp/.tga here");
-        // Mismo veto de edición que el Mesh: con el modal de Load Scene activo
-        // no se aceptan drops nuevos.
-        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                setPanelAtlasPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
-            ImGui::EndDragDropTarget();
-        }
-        ImGui::EndChild();
+        drawAssetDropBox(ctx, "panelAtlas", "Drop .png/.jpg/.bmp/.tga here",
+            [&]
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                m_panelAtlasDlgOwner = id;
+                m_panelAtlasDlgOpen  = true;
+                m_panelAtlasFileDialog->OpenDialog("PanelAtlasDlg", "Choose atlas",
+                                                   ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+            },
+            [&](const std::string& dropped) { setPanelAtlasPath(ctx, id, dropped); });
 
         // Sin atlas no hay nada que trocear, y el botón deshabilitado dice por
         // qué mejor que su ausencia.
@@ -3075,30 +3055,21 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
 
         ImGui::TextDisabled("Sprite");
         inputText("Atlas##image", +[](ImageComponent& c) -> std::string& { return c.atlasPath; });
-        ImGui::SameLine();
-        if (ImGui::Button("Browse...##imageAtlas"))
-        {
-            IGFD::FileDialogConfig cfg;
-            cfg.path  = "assets";
-            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
-                        ImGuiFileDialogFlags_HideColumnDate |
-                        ImGuiFileDialogFlags_DisableThumbnailMode |
-                        ImGuiFileDialogFlags_DisablePlaceMode;
-            m_imageAtlasDlgOwner = id;
-            m_imageAtlasDlgOpen  = true;
-            m_imageAtlasFileDialog->OpenDialog("ImageAtlasDlg", "Choose atlas",
-                                               ".png,.jpg,.jpeg,.bmp,.tga", cfg);
-        }
-
-        ImGui::BeginChild("##ImageAtlasDrop", ImVec2(0, 34), true);
-        ImGui::TextDisabled("Drop .png/.jpg/.bmp/.tga here");
-        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                setImageAtlasPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
-            ImGui::EndDragDropTarget();
-        }
-        ImGui::EndChild();
+        drawAssetDropBox(ctx, "imageAtlas", "Drop .png/.jpg/.bmp/.tga here",
+            [&]
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                m_imageAtlasDlgOwner = id;
+                m_imageAtlasDlgOpen  = true;
+                m_imageAtlasFileDialog->OpenDialog("ImageAtlasDlg", "Choose atlas",
+                                                   ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+            },
+            [&](const std::string& dropped) { setImageAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(im->atlasPath.empty() || !ctx.openSpriteEditor);
         if (ImGui::Button("Editar sprites...##image")) ctx.openSpriteEditor(im->atlasPath);
@@ -3568,32 +3539,21 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
 
         ImGui::TextDisabled("Sprites");
         inputText("Atlas##slider", +[](SliderComponent& c) -> std::string& { return c.atlasPath; });
-        ImGui::SameLine();
-        if (ImGui::Button("Browse...##sliderAtlas"))
-        {
-            IGFD::FileDialogConfig cfg;
-            cfg.path  = "assets";
-            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
-                        ImGuiFileDialogFlags_HideColumnDate |
-                        ImGuiFileDialogFlags_DisableThumbnailMode |
-                        ImGuiFileDialogFlags_DisablePlaceMode;
-            m_sliderAtlasDlgOwner = id;
-            m_sliderAtlasDlgOpen  = true;
-            m_sliderAtlasFileDialog->OpenDialog("SliderAtlasDlg", "Choose atlas",
-                                             ".png,.jpg,.jpeg,.bmp,.tga", cfg);
-        }
-
-        ImGui::BeginChild("##sliderAtlasDrop", ImVec2(0, 34), true);
-        ImGui::TextDisabled("Drop .png/.jpg/.bmp/.tga here");
-        // Mismo veto de edicion que el Mesh: con el modal de Load Scene activo no
-        // se aceptan drops nuevos.
-        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                setSliderAtlasPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
-            ImGui::EndDragDropTarget();
-        }
-        ImGui::EndChild();
+        drawAssetDropBox(ctx, "sliderAtlas", "Drop .png/.jpg/.bmp/.tga here",
+            [&]
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                m_sliderAtlasDlgOwner = id;
+                m_sliderAtlasDlgOpen  = true;
+                m_sliderAtlasFileDialog->OpenDialog("SliderAtlasDlg", "Choose atlas",
+                                                 ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+            },
+            [&](const std::string& dropped) { setSliderAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(sl->atlasPath.empty() || !ctx.openSpriteEditor);
         if (ImGui::Button("Editar sprites...##slider")) ctx.openSpriteEditor(sl->atlasPath);
@@ -3962,32 +3922,21 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
 
         ImGui::TextDisabled("Sprites");
         inputText("Atlas##checkbox", +[](CheckboxComponent& c) -> std::string& { return c.atlasPath; });
-        ImGui::SameLine();
-        if (ImGui::Button("Browse...##checkboxAtlas"))
-        {
-            IGFD::FileDialogConfig cfg;
-            cfg.path  = "assets";
-            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
-                        ImGuiFileDialogFlags_HideColumnDate |
-                        ImGuiFileDialogFlags_DisableThumbnailMode |
-                        ImGuiFileDialogFlags_DisablePlaceMode;
-            m_checkboxAtlasDlgOwner = id;
-            m_checkboxAtlasDlgOpen  = true;
-            m_checkboxAtlasFileDialog->OpenDialog("CheckboxAtlasDlg", "Choose atlas",
-                                             ".png,.jpg,.jpeg,.bmp,.tga", cfg);
-        }
-
-        ImGui::BeginChild("##checkboxAtlasDrop", ImVec2(0, 34), true);
-        ImGui::TextDisabled("Drop .png/.jpg/.bmp/.tga here");
-        // Mismo veto de edicion que el Mesh: con el modal de Load Scene activo no
-        // se aceptan drops nuevos.
-        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                setCheckboxAtlasPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
-            ImGui::EndDragDropTarget();
-        }
-        ImGui::EndChild();
+        drawAssetDropBox(ctx, "checkboxAtlas", "Drop .png/.jpg/.bmp/.tga here",
+            [&]
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                m_checkboxAtlasDlgOwner = id;
+                m_checkboxAtlasDlgOpen  = true;
+                m_checkboxAtlasFileDialog->OpenDialog("CheckboxAtlasDlg", "Choose atlas",
+                                                 ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+            },
+            [&](const std::string& dropped) { setCheckboxAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(cb->atlasPath.empty() || !ctx.openSpriteEditor);
         if (ImGui::Button("Editar sprites...##checkbox")) ctx.openSpriteEditor(cb->atlasPath);
@@ -4359,32 +4308,21 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
 
         ImGui::TextDisabled("Sprites");
         inputText("Atlas##toggle", +[](ToggleComponent& c) -> std::string& { return c.atlasPath; });
-        ImGui::SameLine();
-        if (ImGui::Button("Browse...##toggleAtlas"))
-        {
-            IGFD::FileDialogConfig cfg;
-            cfg.path  = "assets";
-            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
-                        ImGuiFileDialogFlags_HideColumnDate |
-                        ImGuiFileDialogFlags_DisableThumbnailMode |
-                        ImGuiFileDialogFlags_DisablePlaceMode;
-            m_toggleAtlasDlgOwner = id;
-            m_toggleAtlasDlgOpen  = true;
-            m_toggleAtlasFileDialog->OpenDialog("ToggleAtlasDlg", "Choose atlas",
-                                             ".png,.jpg,.jpeg,.bmp,.tga", cfg);
-        }
-
-        ImGui::BeginChild("##toggleAtlasDrop", ImVec2(0, 34), true);
-        ImGui::TextDisabled("Drop .png/.jpg/.bmp/.tga here");
-        // Mismo veto de edicion que el Mesh: con el modal de Load Scene activo no
-        // se aceptan drops nuevos.
-        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                setToggleAtlasPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
-            ImGui::EndDragDropTarget();
-        }
-        ImGui::EndChild();
+        drawAssetDropBox(ctx, "toggleAtlas", "Drop .png/.jpg/.bmp/.tga here",
+            [&]
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                m_toggleAtlasDlgOwner = id;
+                m_toggleAtlasDlgOpen  = true;
+                m_toggleAtlasFileDialog->OpenDialog("ToggleAtlasDlg", "Choose atlas",
+                                                 ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+            },
+            [&](const std::string& dropped) { setToggleAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(tg->atlasPath.empty() || !ctx.openSpriteEditor);
         if (ImGui::Button("Editar sprites...##toggle")) ctx.openSpriteEditor(tg->atlasPath);
@@ -4801,32 +4739,21 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
 
         ImGui::TextDisabled("Sprites");
         inputText("Atlas##scrollbar", +[](ScrollbarComponent& c) -> std::string& { return c.atlasPath; });
-        ImGui::SameLine();
-        if (ImGui::Button("Browse...##scrollbarAtlas"))
-        {
-            IGFD::FileDialogConfig cfg;
-            cfg.path  = "assets";
-            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
-                        ImGuiFileDialogFlags_HideColumnDate |
-                        ImGuiFileDialogFlags_DisableThumbnailMode |
-                        ImGuiFileDialogFlags_DisablePlaceMode;
-            m_scrollbarAtlasDlgOwner = id;
-            m_scrollbarAtlasDlgOpen  = true;
-            m_scrollbarAtlasFileDialog->OpenDialog("ScrollbarAtlasDlg", "Choose atlas",
-                                             ".png,.jpg,.jpeg,.bmp,.tga", cfg);
-        }
-
-        ImGui::BeginChild("##scrollbarAtlasDrop", ImVec2(0, 34), true);
-        ImGui::TextDisabled("Drop .png/.jpg/.bmp/.tga here");
-        // Mismo veto de edicion que el Mesh: con el modal de Load Scene activo no
-        // se aceptan drops nuevos.
-        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                setScrollbarAtlasPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
-            ImGui::EndDragDropTarget();
-        }
-        ImGui::EndChild();
+        drawAssetDropBox(ctx, "scrollbarAtlas", "Drop .png/.jpg/.bmp/.tga here",
+            [&]
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                m_scrollbarAtlasDlgOwner = id;
+                m_scrollbarAtlasDlgOpen  = true;
+                m_scrollbarAtlasFileDialog->OpenDialog("ScrollbarAtlasDlg", "Choose atlas",
+                                                 ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+            },
+            [&](const std::string& dropped) { setScrollbarAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(sb->atlasPath.empty() || !ctx.openSpriteEditor);
         if (ImGui::Button("Editar sprites...##scrollbar")) ctx.openSpriteEditor(sb->atlasPath);
@@ -5304,57 +5231,40 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
 
         ImGui::TextDisabled("Fuente");
         inputText("Font##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.fontPath; });
-        ImGui::SameLine();
-        if (ImGui::Button("Browse...##inputfieldFont"))
-        {
-            IGFD::FileDialogConfig cfg;
-            cfg.path  = "assets";
-            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
-                        ImGuiFileDialogFlags_HideColumnDate |
-                        ImGuiFileDialogFlags_DisableThumbnailMode |
-                        ImGuiFileDialogFlags_DisablePlaceMode;
-            m_inputFieldFontDlgOwner = id;
-            m_inputFieldFontDlgOpen  = true;
-            m_inputFieldFontFileDialog->OpenDialog("InputFieldFontDlg", "Choose font", ".ttf,.otf,.ttc", cfg);
-        }
-        ImGui::BeginChild("##inputfieldFontDrop", ImVec2(0, 34), true);
-        ImGui::TextDisabled("Drop .ttf/.otf here");
-        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                setInputFieldFontPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
-            ImGui::EndDragDropTarget();
-        }
-        ImGui::EndChild();
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Vacia = la fuente por defecto del proyecto");
+        drawAssetDropBox(ctx, "inputfieldFont", "Drop .ttf/.otf here",
+            [&]
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                m_inputFieldFontDlgOwner = id;
+                m_inputFieldFontDlgOpen  = true;
+                m_inputFieldFontFileDialog->OpenDialog("InputFieldFontDlg", "Choose font", ".ttf,.otf,.ttc", cfg);
+            },
+            [&](const std::string& dropped) { setInputFieldFontPath(ctx, id, dropped); });
 
         ImGui::TextDisabled("Sprites");
         inputText("Atlas##inputfield", +[](InputFieldComponent& c) -> std::string& { return c.atlasPath; });
-        ImGui::SameLine();
-        if (ImGui::Button("Browse...##inputfieldAtlas"))
-        {
-            IGFD::FileDialogConfig cfg;
-            cfg.path  = "assets";
-            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
-                        ImGuiFileDialogFlags_HideColumnDate |
-                        ImGuiFileDialogFlags_DisableThumbnailMode |
-                        ImGuiFileDialogFlags_DisablePlaceMode;
-            m_inputFieldAtlasDlgOwner = id;
-            m_inputFieldAtlasDlgOpen  = true;
-            m_inputFieldAtlasFileDialog->OpenDialog("InputFieldAtlasDlg", "Choose atlas",
-                                             ".png,.jpg,.jpeg,.bmp,.tga", cfg);
-        }
-
-        ImGui::BeginChild("##inputfieldAtlasDrop", ImVec2(0, 34), true);
-        ImGui::TextDisabled("Drop .png/.jpg/.bmp/.tga here");
-        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                setInputFieldAtlasPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
-            ImGui::EndDragDropTarget();
-        }
-        ImGui::EndChild();
+        drawAssetDropBox(ctx, "inputfieldAtlas", "Drop .png/.jpg/.bmp/.tga here",
+            [&]
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                m_inputFieldAtlasDlgOwner = id;
+                m_inputFieldAtlasDlgOpen  = true;
+                m_inputFieldAtlasFileDialog->OpenDialog("InputFieldAtlasDlg", "Choose atlas",
+                                                 ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+            },
+            [&](const std::string& dropped) { setInputFieldAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(fld->atlasPath.empty() || !ctx.openSpriteEditor);
         if (ImGui::Button("Editar sprites...##inputfield")) ctx.openSpriteEditor(fld->atlasPath);
@@ -5905,57 +5815,40 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
 
         ImGui::TextDisabled("Fuente");
         inputText("Font##dropdown", +[](DropdownComponent& c) -> std::string& { return c.fontPath; });
-        ImGui::SameLine();
-        if (ImGui::Button("Browse...##dropdownFont"))
-        {
-            IGFD::FileDialogConfig cfg;
-            cfg.path  = "assets";
-            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
-                        ImGuiFileDialogFlags_HideColumnDate |
-                        ImGuiFileDialogFlags_DisableThumbnailMode |
-                        ImGuiFileDialogFlags_DisablePlaceMode;
-            m_dropdownFontDlgOwner = id;
-            m_dropdownFontDlgOpen  = true;
-            m_dropdownFontFileDialog->OpenDialog("DropdownFontDlg", "Choose font", ".ttf,.otf,.ttc", cfg);
-        }
-        ImGui::BeginChild("##dropdownFontDrop", ImVec2(0, 34), true);
-        ImGui::TextDisabled("Drop .ttf/.otf here");
-        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                setDropdownFontPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
-            ImGui::EndDragDropTarget();
-        }
-        ImGui::EndChild();
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Vacia = la fuente por defecto del proyecto");
+        drawAssetDropBox(ctx, "dropdownFont", "Drop .ttf/.otf here",
+            [&]
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                m_dropdownFontDlgOwner = id;
+                m_dropdownFontDlgOpen  = true;
+                m_dropdownFontFileDialog->OpenDialog("DropdownFontDlg", "Choose font", ".ttf,.otf,.ttc", cfg);
+            },
+            [&](const std::string& dropped) { setDropdownFontPath(ctx, id, dropped); });
 
         ImGui::TextDisabled("Sprites");
         inputText("Atlas##dropdown", +[](DropdownComponent& c) -> std::string& { return c.atlasPath; });
-        ImGui::SameLine();
-        if (ImGui::Button("Browse...##dropdownAtlas"))
-        {
-            IGFD::FileDialogConfig cfg;
-            cfg.path  = "assets";
-            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
-                        ImGuiFileDialogFlags_HideColumnDate |
-                        ImGuiFileDialogFlags_DisableThumbnailMode |
-                        ImGuiFileDialogFlags_DisablePlaceMode;
-            m_dropdownAtlasDlgOwner = id;
-            m_dropdownAtlasDlgOpen  = true;
-            m_dropdownAtlasFileDialog->OpenDialog("DropdownAtlasDlg", "Choose atlas",
-                                             ".png,.jpg,.jpeg,.bmp,.tga", cfg);
-        }
-
-        ImGui::BeginChild("##dropdownAtlasDrop", ImVec2(0, 34), true);
-        ImGui::TextDisabled("Drop .png/.jpg/.bmp/.tga here");
-        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                setDropdownAtlasPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
-            ImGui::EndDragDropTarget();
-        }
-        ImGui::EndChild();
+        drawAssetDropBox(ctx, "dropdownAtlas", "Drop .png/.jpg/.bmp/.tga here",
+            [&]
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                m_dropdownAtlasDlgOwner = id;
+                m_dropdownAtlasDlgOpen  = true;
+                m_dropdownAtlasFileDialog->OpenDialog("DropdownAtlasDlg", "Choose atlas",
+                                                 ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+            },
+            [&](const std::string& dropped) { setDropdownAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(dd->atlasPath.empty() || !ctx.openSpriteEditor);
         if (ImGui::Button("Editar sprites...##dropdown")) ctx.openSpriteEditor(dd->atlasPath);
@@ -6336,30 +6229,21 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
 
         ImGui::TextDisabled("Sprites");
         inputText("Atlas##scrollview", +[](ScrollViewComponent& c) -> std::string& { return c.atlasPath; });
-        ImGui::SameLine();
-        if (ImGui::Button("Browse...##scrollviewAtlas"))
-        {
-            IGFD::FileDialogConfig cfg;
-            cfg.path  = "assets";
-            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
-                        ImGuiFileDialogFlags_HideColumnDate |
-                        ImGuiFileDialogFlags_DisableThumbnailMode |
-                        ImGuiFileDialogFlags_DisablePlaceMode;
-            m_scrollViewAtlasDlgOwner = id;
-            m_scrollViewAtlasDlgOpen  = true;
-            m_scrollViewAtlasFileDialog->OpenDialog("ScrollViewAtlasDlg", "Choose atlas",
-                                             ".png,.jpg,.jpeg,.bmp,.tga", cfg);
-        }
-
-        ImGui::BeginChild("##scrollviewAtlasDrop", ImVec2(0, 34), true);
-        ImGui::TextDisabled("Drop .png/.jpg/.bmp/.tga here");
-        if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-                setScrollViewAtlasPath(ctx, id, std::string(static_cast<const char*>(payload->Data)));
-            ImGui::EndDragDropTarget();
-        }
-        ImGui::EndChild();
+        drawAssetDropBox(ctx, "scrollviewAtlas", "Drop .png/.jpg/.bmp/.tga here",
+            [&]
+            {
+                IGFD::FileDialogConfig cfg;
+                cfg.path  = "assets";
+                cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_HideColumnDate |
+                            ImGuiFileDialogFlags_DisableThumbnailMode |
+                            ImGuiFileDialogFlags_DisablePlaceMode;
+                m_scrollViewAtlasDlgOwner = id;
+                m_scrollViewAtlasDlgOpen  = true;
+                m_scrollViewAtlasFileDialog->OpenDialog("ScrollViewAtlasDlg", "Choose atlas",
+                                                 ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+            },
+            [&](const std::string& dropped) { setScrollViewAtlasPath(ctx, id, dropped); });
 
         ImGui::BeginDisabled(sv->atlasPath.empty() || !ctx.openSpriteEditor);
         if (ImGui::Button("Editar sprites...##scrollview")) ctx.openSpriteEditor(sv->atlasPath);

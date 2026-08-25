@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <glm/glm.hpp>
@@ -88,6 +89,22 @@ private:
             if (ext == exts[i]) return true;
         return false;
     }
+
+    // Caja de asset de los componentes de UI, calcada a la del Mesh: botón
+    // "Browse..." y debajo la zona de drop de 40 px con su mensaje. La ruta
+    // editable a mano la dibuja el llamante justo ANTES de llamar aquí: cada
+    // sección tiene su propio inputText —con su accessor tipado, su undo y su
+    // tooltip— y meterlo en el helper obligaría a duplicar la etiqueta (la del
+    // Text de arriba y la que ImGui pinta a la derecha del campo).
+    //
+    // idSuffix identifica la caja: alimenta el id del botón y el del hijo, que
+    // tienen que ser únicos dentro del panel. onBrowse abre el file dialog del
+    // sitio (cada uno con su instancia, su owner y su flag) y onDrop aplica la
+    // ruta soltada; el veto por extensión sigue viviendo en los set*Path, que
+    // es por donde pasan los dos orígenes, no aquí.
+    void drawAssetDropBox(EditorContext& ctx, const char* idSuffix, const char* hint,
+                          const std::function<void()>& onBrowse,
+                          const std::function<void(const std::string&)>& onDrop);
 
     void drawBoxColliderSection(EditorContext& ctx);
     void drawSphereColliderSection(EditorContext& ctx);
