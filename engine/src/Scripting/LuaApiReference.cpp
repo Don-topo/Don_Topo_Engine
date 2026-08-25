@@ -375,7 +375,9 @@ const std::vector<std::string>& baseSymbols()
         // Physics — consultas de rayo (nil / false si no hay escena de física,
         // es decir fuera de Play). Los nombres sueltos son los campos de la
         // tabla 'options' y los de la tabla que devuelve Raycast.
-        "Physics.Raycast", "Physics.RaycastHit",
+        // RaycastAll devuelve un array de esas mismas tablas (vacío si no hay
+        // impactos, nunca nil), ordenado por distancia.
+        "Physics.Raycast", "Physics.RaycastAll", "Physics.RaycastHit",
         "hitTriggers", "static", "dynamic", "ignore",
         "entity", "point", "normal", "distance",
 

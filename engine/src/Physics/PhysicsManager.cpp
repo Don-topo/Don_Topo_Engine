@@ -496,6 +496,32 @@ bool PhysicsManager::raycast(const PxVec3& origin, const PxVec3& dir, float maxD
         PxHitFlags(PxHitFlag::ePOSITION | PxHitFlag::eNORMAL),
         filterData, filterCall);
 }
+
+bool PhysicsManager::raycastAll(const PxVec3& origin, const PxVec3& dir, float maxDistance,
+                                PxRaycastBuffer& hits, const PxQueryFilterData& filterData,
+                                PxQueryFilterCallback* filterCall)
+{
+    if (!m_scene) return false;
+
+    // eNO_BLOCK degrada a eTOUCH todo lo que el prefiltro marque como eBLOCK,
+    // así el rayo atraviesa el primer impacto y sigue recogiendo los demás.
+    PxQueryFilterData fd = filterData;
+    fd.flags |= PxQueryFlag::eNO_BLOCK;
+
+    const bool any = static_cast<PxScene*>(m_scene)->raycast(
+        origin, dir, maxDistance, hits,
+        PxHitFlags(PxHitFlag::ePOSITION | PxHitFlag::eNORMAL),
+        fd, filterCall);
+
+    // PhysX entrega los touches en el orden en que los encuentra el barrido
+    // espacial, no por distancia. Se ordena aquí (sobre el almacenamiento del
+    // propio buffer) para que el contrato valga para todos los callers.
+    if (hits.nbTouches > 1 && hits.touches)
+        std::sort(hits.touches, hits.touches + hits.nbTouches,
+                  [](const PxRaycastHit& a, const PxRaycastHit& b) { return a.distance < b.distance; });
+
+    return any;
+}
 #endif
 
 void PhysicsManager::setFixedDeltaTime(float dt)

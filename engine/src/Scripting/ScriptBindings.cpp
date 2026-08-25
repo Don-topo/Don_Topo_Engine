@@ -2360,6 +2360,52 @@ namespace DonTopo::ScriptBindings
                                physx::PxVec3(dir.x, dir.y, dir.z),
                                a.maxDistance, hit, filterData, &filter);
         }
+
+        // Techo de impactos de Physics.RaycastAll. PhysX trunca en silencio al
+        // llenarse el buffer (ver PxQueryReport.h: "Overflow does not trigger
+        // warnings or errors"), así que el binding lo detecta y avisa.
+        constexpr physx::PxU32 kRaycastAllMaxHits = 64;
+
+        // Misma consulta que doRaycast pero multi-hit; los touches salen
+        // ordenados por distancia (lo hace PhysicsManager::raycastAll).
+        bool doRaycastAll(ScriptManager& mgr, const RaycastArgs& a,
+                          physx::PxRaycastBufferN<kRaycastAllMaxHits>& hits)
+        {
+            PhysicsManager* pm = mgr.physics();
+            if (!pm) return false;
+            if (!a.queryStatic && !a.queryDynamic) return false;
+            if (!std::isfinite(a.origin.x) || !std::isfinite(a.origin.y) || !std::isfinite(a.origin.z))
+                return false;
+
+            const float len = glm::length(a.dir);
+            if (!std::isfinite(len) || len <= 0.0f) return false;
+            const glm::vec3 dir = a.dir / len;
+
+            physx::PxQueryFilterData filterData;
+            filterData.flags = physx::PxQueryFlag::ePREFILTER;
+            if (a.queryStatic)  filterData.flags |= physx::PxQueryFlag::eSTATIC;
+            if (a.queryDynamic) filterData.flags |= physx::PxQueryFlag::eDYNAMIC;
+
+            RaycastFilter filter(a.hitTriggers, a.ignore);
+            return pm->raycastAll(physx::PxVec3(a.origin.x, a.origin.y, a.origin.z),
+                                  physx::PxVec3(dir.x, dir.y, dir.z),
+                                  a.maxDistance, hits, filterData, &filter);
+        }
+
+        // Forma de tabla de un impacto: { entity, point, normal, distance }.
+        // La comparten Physics.Raycast (un solo hit) y Physics.RaycastAll (uno
+        // por elemento del array), así no pueden divergir. entity se omite si el
+        // actor no cuelga de ningún GameObject.
+        sol::table makeHitTable(ScriptManager& mgr, const physx::PxRaycastHit& hit)
+        {
+            sol::table t = mgr.lua().create_table();
+            if (GameObject* go = actorOwner(hit.actor))
+                t["entity"] = LuaEntity{ go, &mgr };
+            t["point"]    = glm::vec3(hit.position.x, hit.position.y, hit.position.z);
+            t["normal"]   = glm::vec3(hit.normal.x, hit.normal.y, hit.normal.z);
+            t["distance"] = hit.distance;
+            return t;
+        }
 #endif
 
         void registerPhysics(DonTopo::ScriptManager& mgr)
@@ -2379,17 +2425,44 @@ namespace DonTopo::ScriptBindings
                 physx::PxRaycastBuffer hit;
                 if (!doRaycast(mgr, args, hit)) return sol::nil;
 
-                sol::table t = mgr.lua().create_table();
-                if (GameObject* go = actorOwner(hit.block.actor))
-                    t["entity"] = LuaEntity{ go, &mgr };
-                t["point"]    = glm::vec3(hit.block.position.x, hit.block.position.y, hit.block.position.z);
-                t["normal"]   = glm::vec3(hit.block.normal.x, hit.block.normal.y, hit.block.normal.z);
-                t["distance"] = hit.block.distance;
-                return sol::make_object(mgr.lua(), t);
+                return sol::make_object(mgr.lua(), makeHitTable(mgr, hit.block));
 #else
                 (void)va;
                 return sol::nil;
 #endif
+            };
+
+            // Physics.RaycastAll(origin, direction, maxDistance, options) ->
+            // tabla-array 1-indexada de impactos, cada uno con la MISMA forma
+            // que devuelve Physics.Raycast, ordenados por distancia ascendente.
+            // Siempre devuelve una tabla: sin impactos (o con argumentos
+            // inválidos, que además avisan) sale vacía, nunca nil, así el
+            // caller puede hacer ipairs/# sin comprobar antes.
+            physics["RaycastAll"] = [&mgr](sol::variadic_args va) -> sol::object {
+                sol::table out = mgr.lua().create_table();
+#ifdef DT_PHYSX_ENABLED
+                RaycastArgs args;
+                if (!parseRaycastArgs(mgr, "RaycastAll", va, args))
+                    return sol::make_object(mgr.lua(), out);
+
+                physx::PxRaycastBufferN<kRaycastAllMaxHits> hits;
+                if (!doRaycastAll(mgr, args, hits))
+                    return sol::make_object(mgr.lua(), out);
+
+                for (physx::PxU32 i = 0; i < hits.getNbTouches(); ++i)
+                    out[i + 1] = makeHitTable(mgr, hits.getTouch(i));
+
+                // PhysX no avisa del desbordamiento: los impactos que no
+                // cupieron se pierden y encima los descartados son arbitrarios
+                // (el orden llega sin ordenar), no "los más lejanos".
+                if (hits.getNbTouches() >= hits.getMaxNbTouches())
+                    mgr.log("[Lua][WARN] Physics.RaycastAll: limite de " +
+                            std::to_string(kRaycastAllMaxHits) +
+                            " impactos alcanzado, hay resultados descartados");
+#else
+                (void)va;
+#endif
+                return sol::make_object(mgr.lua(), out);
             };
 
             // Igual pero sin construir la tabla: para el "solo quiero saber si

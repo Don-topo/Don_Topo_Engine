@@ -2025,6 +2025,174 @@ static void test_raycast_hit_booleano(ScriptManager& sm, PhysicsManager& pm)
     CHECK(sm.lua()["corto"].get<bool>() == false);
 }
 
+// ---------------------------------------------------------------------------
+// Physics.RaycastAll — mismas dianas, pero TRES en fila sobre el mismo rayo.
+// ---------------------------------------------------------------------------
+
+// Tres esferas a z=10/20/30: el rayo (0,2,0)->+Z las toca a 9, 19 y 29. Se
+// crean en orden INVERSO (la más lejana primero) a propósito: PhysX entrega los
+// touches en el orden del barrido espacial, no por distancia, así que un
+// RaycastAll sin ordenar tiene todas las papeletas de sacarlas al revés.
+static void test_raycast_all_ordenado_por_distancia(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* lejos  = addDiana(scene, pm, "Lejos",  glm::vec3(0.0f, 2.0f, 30.0f));
+    GameObject* medio  = addDiana(scene, pm, "Medio",  glm::vec3(0.0f, 2.0f, 20.0f));
+    GameObject* cerca  = addDiana(scene, pm, "Cerca",  glm::vec3(0.0f, 2.0f, 10.0f));
+    sm.rebuildAliveSet();
+
+    sm.lua().script(
+        "hits = Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100)\n"
+        "n = #hits\n");
+
+    CHECK(sm.lua()["n"].get<int>() == 3);
+    sol::optional<sol::table> hits = sm.lua()["hits"];
+    CHECK(hits.has_value());
+    if (!hits || sm.lua()["n"].get<int>() != 3) return;
+
+    // Orden estricto por distancia ascendente + la entidad que toca a cada una.
+    const float d1 = (*hits)[1]["distance"].get<float>();
+    const float d2 = (*hits)[2]["distance"].get<float>();
+    const float d3 = (*hits)[3]["distance"].get<float>();
+    CHECK(nearlyEqual(d1, 9.0f));
+    CHECK(nearlyEqual(d2, 19.0f));
+    CHECK(nearlyEqual(d3, 29.0f));
+    CHECK(d1 < d2 && d2 < d3);
+    CHECK((*hits)[1]["entity"].get<LuaEntity>().go == cerca);
+    CHECK((*hits)[2]["entity"].get<LuaEntity>().go == medio);
+    CHECK((*hits)[3]["entity"].get<LuaEntity>().go == lejos);
+}
+
+// Cada elemento lleva EXACTAMENTE los mismos campos (y valores) que devolvería
+// Physics.Raycast para ese impacto: se comparan uno contra otro, no contra
+// constantes, así el día que Raycast cambie de forma este test lo canta.
+static void test_raycast_all_misma_forma_que_raycast(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    sm.rebuildAliveSet();
+
+    sm.lua().script(
+        "uno   = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 100)\n"
+        "todos = Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100)\n"
+        "n = #todos\n");
+    CHECK(sm.lua()["n"].get<int>() == 1);
+    sol::optional<sol::table> uno = sm.lua()["uno"];
+    sol::optional<sol::table> todos = sm.lua()["todos"];
+    CHECK(uno.has_value() && todos.has_value());
+    if (!uno || !todos || sm.lua()["n"].get<int>() != 1) return;
+
+    sol::table primero = (*todos)[1];
+    CHECK(nearlyEqual(primero["distance"].get<float>(), (*uno)["distance"].get<float>()));
+    const glm::vec3 pA = primero["point"].get<glm::vec3>();
+    const glm::vec3 pB = (*uno)["point"].get<glm::vec3>();
+    const glm::vec3 nA = primero["normal"].get<glm::vec3>();
+    const glm::vec3 nB = (*uno)["normal"].get<glm::vec3>();
+    CHECK(nearlyEqual(pA.x, pB.x) && nearlyEqual(pA.y, pB.y) && nearlyEqual(pA.z, pB.z));
+    CHECK(nearlyEqual(nA.x, nB.x) && nearlyEqual(nA.y, nB.y) && nearlyEqual(nA.z, nB.z));
+    CHECK(primero["entity"].get<LuaEntity>().go == (*uno)["entity"].get<LuaEntity>().go);
+
+    // Y ningún campo de más: la tabla del hit tiene exactamente 4 claves.
+    sm.lua().script(
+        "claves = 0\n"
+        "for k, v in pairs(todos[1]) do claves = claves + 1 end\n");
+    CHECK(sm.lua()["claves"].get<int>() == 4);
+}
+
+// Sin impactos, sin física y con argumentos inválidos: SIEMPRE tabla (vacía),
+// nunca nil. Un nil aquí rompería el ipairs del caller.
+static void test_raycast_all_sin_impactos_devuelve_tabla_vacia(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+
+    sm.lua().script(
+        "alReves = Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,-1), 100)\n"
+        "corto   = Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 5)\n"
+        "malos   = Physics.RaycastAll('hola', 3)\n"
+        "esTabla = (type(alReves) == 'table') and (type(corto) == 'table') and (type(malos) == 'table')\n"
+        "vacias  = (#alReves == 0) and (#corto == 0) and (#malos == 0)\n"
+        "siguio  = true\n");
+
+    CHECK(sm.lua()["esTabla"].get<bool>() == true);
+    CHECK(sm.lua()["vacias"].get<bool>() == true);
+    CHECK(sm.lua()["siguio"].get<bool>() == true);
+    CHECK(logContains(log, "WARN"));
+    CHECK(logContains(log, "RaycastAll"));
+    sm.setLogCallback(nullptr);
+
+    // Fuera de Play (sin PhysicsManager) tampoco sale nil.
+    sm.setPhysicsManager(nullptr);
+    sm.lua().script(
+        "fuera = Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100)\n"
+        "fueraOk = (type(fuera) == 'table') and (#fuera == 0)\n");
+    sm.setPhysicsManager(&pm);
+    CHECK(sm.lua()["fueraOk"].get<bool>() == true);
+}
+
+// Los filtros de options valen igual que en Raycast: el trigger del medio solo
+// aparece con hitTriggers, y el ignore quita justo esa entidad de la lista.
+static void test_raycast_all_filtros(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* cerca = addDiana(scene, pm, "Cerca", glm::vec3(0.0f, 2.0f, 10.0f));
+    GameObject* medio = addDiana(scene, pm, "Medio", glm::vec3(0.0f, 2.0f, 20.0f));
+    addDiana(scene, pm, "Lejos", glm::vec3(0.0f, 2.0f, 30.0f));
+    pm.setTrigger(medio->getSphereCollider(), true);
+    sm.rebuildAliveSet();
+    sm.lua()["cerca"] = LuaEntity{ cerca, &sm };
+
+    sm.lua().script(
+        "porDefecto  = #Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100)\n"
+        "conTriggers = #Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100, { hitTriggers = true })\n"
+        "sinStatic   = #Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100, { static = false })\n"
+        "ignorando   = Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100, { ignore = cerca })\n"
+        "nIgnorando  = #ignorando\n");
+
+    CHECK(sm.lua()["porDefecto"].get<int>() == 2);   // el trigger no bloquea ni cuenta
+    CHECK(sm.lua()["conTriggers"].get<int>() == 3);
+    CHECK(sm.lua()["sinStatic"].get<int>() == 0);
+    CHECK(sm.lua()["nIgnorando"].get<int>() == 1);   // queda solo Lejos
+    if (sm.lua()["nIgnorando"].get<int>() == 1)
+    {
+        sol::table ign = sm.lua()["ignorando"];
+        CHECK(nearlyEqual(ign[1]["distance"].get<float>(), 29.0f));
+    }
+
+    pm.setTrigger(medio->getSphereCollider(), false);
+}
+
+// Physics.Raycast sigue parando en el PRIMER impacto: RaycastAll no puede
+// haberle contagiado el eNO_BLOCK (con él, 'block' se queda sin escribir y la
+// distancia saldría basura o el hit directamente nil).
+static void test_raycast_all_no_altera_raycast(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* cerca = addDiana(scene, pm, "Cerca", glm::vec3(0.0f, 2.0f, 10.0f));
+    addDiana(scene, pm, "Lejos", glm::vec3(0.0f, 2.0f, 30.0f));
+    sm.rebuildAliveSet();
+
+    sm.lua().script(
+        "todos = Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100)\n"
+        "uno   = Physics.Raycast(Vec3(0,2,0), Vec3(0,0,1), 100)\n"
+        "toca  = Physics.RaycastHit(Vec3(0,2,0), Vec3(0,0,1), 100)\n");
+    sol::optional<sol::table> uno = sm.lua()["uno"];
+    CHECK(uno.has_value());
+    if (!uno) return;
+    CHECK(nearlyEqual((*uno)["distance"].get<float>(), 9.0f));
+    CHECK((*uno)["entity"].get<LuaEntity>().go == cerca);
+    CHECK(sm.lua()["toca"].get<bool>() == true);
+}
+
 // Rigidbody.constraints es un BITMASK, no un float: se compone desde Lua con
 // el OR bit a bit de 5.4 sobre la tabla RigidbodyConstraints. El test escribe
 // un valor DISTINTO del inicial (RB_None), lo lee de vuelta por la misma
@@ -2237,6 +2405,11 @@ int main()
     test_raycast_sin_fisica(sm, pm);
     test_raycast_actor_sin_gameobject(sm, pm);
     test_raycast_hit_booleano(sm, pm);
+    test_raycast_all_ordenado_por_distancia(sm, pm);
+    test_raycast_all_misma_forma_que_raycast(sm, pm);
+    test_raycast_all_sin_impactos_devuelve_tabla_vacia(sm, pm);
+    test_raycast_all_filtros(sm, pm);
+    test_raycast_all_no_altera_raycast(sm, pm);
 
     test_constraints_desde_lua(sm, pm);
     test_force_mode_desde_lua(sm, pm);

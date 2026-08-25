@@ -86,6 +86,18 @@ public:
     bool raycast(const physx::PxVec3& origin, const physx::PxVec3& dir, float maxDistance,
                  physx::PxRaycastBuffer& hit, const physx::PxQueryFilterData& filterData,
                  physx::PxQueryFilterCallback* filterCall);
+
+    // Multi-hit: añade PxQueryFlag::eNO_BLOCK a filterData, así todo impacto se
+    // reporta como touch y la consulta no para en el primero. hits tiene que
+    // ser un PxRaycastBufferN<N> (el PxRaycastBuffer a secas no lleva
+    // almacenamiento de touches y solo recogería el bloqueante); los touches se
+    // devuelven ORDENADOS por distancia ascendente — PhysX los entrega sin
+    // orden. Si el buffer se llena, PhysX trunca en silencio: el caller lo
+    // detecta con getNbTouches() == getMaxNbTouches(). Mismos hit flags y misma
+    // guarda de escena ausente que raycast().
+    bool raycastAll(const physx::PxVec3& origin, const physx::PxVec3& dir, float maxDistance,
+                    physx::PxRaycastBuffer& hits, const physx::PxQueryFilterData& filterData,
+                    physx::PxQueryFilterCallback* filterCall);
 #endif
 
 private:

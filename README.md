@@ -744,6 +744,23 @@ Mode there is no live PhysX scene and the write is a silent no-op. `Physics.Rayc
 dir, maxDistance)` returns a table (`entity`, `point`, `normal`, `distance`) or `nil`, and
 `Physics.RaycastHit(...)` the boolean-only variant; both return `nil`/`false` outside Play.
 
+`Physics.RaycastAll(origin, dir, maxDistance, options)` is the multi-hit variant: instead of
+stopping at the first impact it collects **every** collider along the ray and returns a
+1-indexed array of hit tables, each with exactly the same shape as `Physics.Raycast`,
+**sorted by ascending `distance`**. It always returns a table — no hits (or outside Play,
+or bad arguments, which also log a warning) gives an **empty** table, never `nil`, so
+`#hits` and `ipairs` are always safe. It takes the same `options` as `Physics.Raycast`
+(`hitTriggers`, `static`, `dynamic`, `ignore`). The hit buffer holds at most **64** hits
+per call; if a ray crosses more, the extra ones are dropped (PhysX truncates arbitrarily,
+so what is dropped is *not* necessarily the farthest) and a `[Lua][WARN]` line is logged
+to the Log Console.
+
+```lua
+for i, hit in ipairs(Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100)) do
+    Log.Info(i .. ": " .. hit.entity.name .. " @ " .. hit.distance)  -- nearest first
+end
+```
+
 ### UI from Lua
 
 All fourteen UI components are reachable from any script, with the same reach as the
@@ -810,7 +827,7 @@ API surface: `self.entity` (`GetTransform`, `GetComponent`/`AddComponent`/`Remov
 `GetParent`/`GetChildren`), `Transform` (position/rotation/scale, `Translate`/`Rotate`),
 `Scene` (`Find`/`CreateGameObject`/`Instantiate`/`Destroy`), the 14 UI components
 (incl. widget callbacks and button state), physics (the four colliders with shape,
-material and `isTrigger`, `Rigidbody` with `constraints` and forces, `Physics.Raycast`),
+material and `isTrigger`, `Rigidbody` with `constraints` and forces, `Physics.Raycast`/`RaycastAll`),
 `DonTopo.loadScene`,
 `Input` (`IsKeyDown`/`IsKeyPressed`/
 `IsKeyReleased`, `Key.*`), `Log.Info/Warn/Error` (+ `print`) routed to the Log Console. Scripts
