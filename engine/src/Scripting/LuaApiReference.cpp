@@ -381,6 +381,12 @@ const std::vector<std::string>& baseSymbols()
         "hitTriggers", "static", "dynamic", "ignore",
         "entity", "point", "normal", "distance",
 
+        // Physics — barrido y solapes, mismos filtros ('options') que el rayo.
+        // SphereCast devuelve la misma tabla de impacto que Raycast; los dos
+        // Overlap devuelven un array de Entity (vacío si nada solapa, nunca
+        // nil): un solape no tiene punto, normal ni distancia.
+        "Physics.SphereCast", "Physics.OverlapSphere", "Physics.OverlapBox",
+
         // Motor (cambio de escena en runtime)
         "DonTopo.loadScene",
 

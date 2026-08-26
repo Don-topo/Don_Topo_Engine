@@ -2193,6 +2193,216 @@ static void test_raycast_all_no_altera_raycast(ScriptManager& sm, PhysicsManager
     CHECK(sm.lua()["toca"].get<bool>() == true);
 }
 
+// ---------------------------------------------------------------------------
+// Physics.SphereCast / OverlapSphere / OverlapBox — mismas dianas (esferas de
+// radio 1) y los mismos filtros de 'options' que el rayo.
+// ---------------------------------------------------------------------------
+
+// Devuelve la Entity que hay en out[i] (1-indexado) del array de un overlap, o
+// nullptr si no es una Entity viva.
+static GameObject* overlapAt(ScriptManager& sm, const char* name, int i)
+{
+    sol::optional<sol::table> t = sm.lua()[name];
+    if (!t) return nullptr;
+    sol::object o = (*t)[i];
+    if (!o.valid() || !o.is<LuaEntity>()) return nullptr;
+    return o.as<LuaEntity>().go;
+}
+
+// El sweep es el rayo CON GROSOR: desde (0,3.5,0) el rayo pasa 0.5 por encima
+// de la diana (centro y=2, radio 1) y no la toca, pero barriendo una esfera de
+// radio 0.8 sí. Con el radio ignorado (o a 0) el CHECK de 'gordo' se pone rojo.
+// De paso fija la forma de la tabla: los mismos cuatro campos que Raycast.
+static void test_sphere_cast_usa_el_radio(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    sm.rebuildAliveSet();
+
+    sm.lua().script(
+        "rayo  = Physics.Raycast(Vec3(0,3.5,0), Vec3(0,0,1), 100)\n"
+        "gordo = Physics.SphereCast(Vec3(0,3.5,0), Vec3(0,0,1), 0.8, 100)\n"
+        "fino  = Physics.SphereCast(Vec3(0,3.5,0), Vec3(0,0,1), 0.1, 100)\n"
+        "recto = Physics.SphereCast(Vec3(0,2,0), Vec3(0,0,1), 0.5, 100)\n");
+
+    CHECK(luaIsNil(sm, "rayo"));   // el rayo de grosor cero pasa de largo
+    CHECK(luaIsNil(sm, "fino"));   // y una esfera demasiado fina, también
+    CHECK(!luaIsNil(sm, "gordo")); // pero la gorda alcanza
+
+    sol::optional<sol::table> recto = sm.lua()["recto"];
+    CHECK(recto.has_value());
+    if (!recto) return;
+    // Centro a 10, radio de la diana 1, radio barrido 0.5 -> contacto a 8.5.
+    CHECK(nearlyEqual((*recto)["distance"].get<float>(), 8.5f));
+    glm::vec3 p = (*recto)["point"].get<glm::vec3>();
+    glm::vec3 n = (*recto)["normal"].get<glm::vec3>();
+    CHECK(nearlyEqual(p.z, 9.0f));                        // punto sobre la diana
+    CHECK(nearlyEqual(n.x, 0.0f) && nearlyEqual(n.z, -1.0f));
+    CHECK((*recto)["entity"].get<LuaEntity>().go == go);
+}
+
+// Barridos que no tocan: al revés, corto por maxDistance, y radio inválido
+// (0 o negativo -> nil con aviso, nunca geometría inválida a PhysX).
+static void test_sphere_cast_pasa_de_largo(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+
+    sm.lua().script(
+        "alReves  = Physics.SphereCast(Vec3(0,2,0), Vec3(0,0,-1), 0.5, 100)\n"
+        "corto    = Physics.SphereCast(Vec3(0,2,0), Vec3(0,0,1), 0.5, 5)\n"
+        "cero     = Physics.SphereCast(Vec3(0,2,0), Vec3(0,0,1), 0, 100)\n"
+        "negativo = Physics.SphereCast(Vec3(0,2,0), Vec3(0,0,1), -3, 100)\n"
+        "sinRadio = Physics.SphereCast(Vec3(0,2,0), Vec3(0,0,1))\n"
+        "malos    = Physics.SphereCast('hola', 3, 1, 100)\n"
+        "siguio   = true\n");
+
+    CHECK(luaIsNil(sm, "alReves"));
+    CHECK(luaIsNil(sm, "corto"));
+    CHECK(luaIsNil(sm, "cero"));
+    CHECK(luaIsNil(sm, "negativo"));
+    CHECK(luaIsNil(sm, "sinRadio"));
+    CHECK(luaIsNil(sm, "malos"));
+    CHECK(sm.lua()["siguio"].get<bool>() == true);
+    CHECK(logContains(log, "WARN"));
+    CHECK(logContains(log, "SphereCast"));
+    sm.setLogCallback(nullptr);
+}
+
+// 0, 1 y N solapes con la misma escena, cambiando sólo el radio. El caso N cae
+// si falta el eNO_BLOCK (la consulta cerraría en el primero) y el caso 0 fija
+// que sale tabla vacía, no nil.
+static void test_overlap_sphere_cero_uno_n(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* cerca = addDiana(scene, pm, "Cerca", glm::vec3(0.0f, 2.0f, 10.0f));
+    addDiana(scene, pm, "Medio", glm::vec3(0.0f, 2.0f, 20.0f));
+    addDiana(scene, pm, "Lejos", glm::vec3(0.0f, 2.0f, 30.0f));
+    // Cuarta diana DENTRO del radio de 'tres' pero sin GameObject detrás: hay
+    // cuatro solapes y sólo tres entidades que devolver, así que 'nTres' == 3
+    // fija que los actores huérfanos se omiten en vez de colar un nil (o de
+    // reventar) en el array.
+    addDiana(scene, pm, "Anonima", glm::vec3(0.0f, 2.0f, 21.0f), /*withOwner=*/false);
+    // Y 'Cerca' se lleva un SEGUNDO collider en el mismo sitio: dos shapes que
+    // solapan, un solo GameObject. 'nUno' == 1 fija que la entidad no sale
+    // duplicada en el array.
+    auto extra = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f, 2.0f, 10.0f),
+                                                glm::mat4(1.0f), /*dynamic=*/false);
+    extra->setOwner(cerca);
+    cerca->setBoxCollider(extra);
+    sm.rebuildAliveSet();
+
+    sm.lua().script(
+        "vacio  = Physics.OverlapSphere(Vec3(0,500,0), 2)\n"
+        "uno    = Physics.OverlapSphere(Vec3(0,2,10), 2)\n"
+        "tres   = Physics.OverlapSphere(Vec3(0,2,20), 15)\n"
+        // Sin radio: argumento ausente, tabla vacía y aviso (y NO un crash al
+        // mirarle el tipo a un sol::object sin lua_State).
+        "sinRadio = Physics.OverlapSphere(Vec3(0,2,10))\n"
+        "nVacio  = #vacio\n"
+        "nUno    = #uno\n"
+        "nTres   = #tres\n"
+        "nSinRadio = #sinRadio\n"
+        "esTabla = (type(vacio) == 'table')\n");
+
+    CHECK(sm.lua()["esTabla"].get<bool>() == true);
+    CHECK(sm.lua()["nSinRadio"].get<int>() == 0);
+    CHECK(sm.lua()["nVacio"].get<int>() == 0);
+    CHECK(sm.lua()["nUno"].get<int>() == 1);
+    CHECK(sm.lua()["nTres"].get<int>() == 3);
+    CHECK(overlapAt(sm, "uno", 1) == cerca);
+}
+
+// Los mismos filtros que el rayo: el trigger sólo aparece con hitTriggers, y
+// 'ignore' quita justo su GameObject de la lista.
+static void test_overlap_sphere_filtros(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* cerca = addDiana(scene, pm, "Cerca", glm::vec3(0.0f, 2.0f, 10.0f));
+    GameObject* medio = addDiana(scene, pm, "Medio", glm::vec3(0.0f, 2.0f, 20.0f));
+    GameObject* lejos = addDiana(scene, pm, "Lejos", glm::vec3(0.0f, 2.0f, 30.0f));
+    pm.setTrigger(medio->getSphereCollider(), true);
+    sm.rebuildAliveSet();
+    sm.lua()["cerca"] = LuaEntity{ cerca, &sm };
+
+    sm.lua().script(
+        "porDefecto  = Physics.OverlapSphere(Vec3(0,2,20), 15)\n"
+        "conTriggers = Physics.OverlapSphere(Vec3(0,2,20), 15, { hitTriggers = true })\n"
+        "sinStatic   = Physics.OverlapSphere(Vec3(0,2,20), 15, { static = false })\n"
+        "ignorando   = Physics.OverlapSphere(Vec3(0,2,20), 15, { ignore = cerca })\n"
+        "nPorDefecto = #porDefecto\n"
+        "nConTriggers= #conTriggers\n"
+        "nSinStatic  = #sinStatic\n"
+        "nIgnorando  = #ignorando\n");
+
+    CHECK(sm.lua()["nPorDefecto"].get<int>() == 2);   // el trigger no cuenta
+    CHECK(sm.lua()["nConTriggers"].get<int>() == 3);
+    CHECK(sm.lua()["nSinStatic"].get<int>() == 0);
+    CHECK(sm.lua()["nIgnorando"].get<int>() == 1);    // sin trigger y sin Cerca
+    CHECK(overlapAt(sm, "ignorando", 1) == lejos);
+
+    pm.setTrigger(medio->getSphereCollider(), false);
+}
+
+// La caja está ORIENTADA: larga en Z ve las tres dianas, girada 90° sobre Y no
+// ve ninguna. Y el tercer argumento se desambigua por tipo: una tabla es
+// 'options', no una rotación.
+static void test_overlap_box_rotacion_y_options(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    addDiana(scene, pm, "Cerca", glm::vec3(0.0f, 2.0f, 10.0f));
+    GameObject* medio = addDiana(scene, pm, "Medio", glm::vec3(0.0f, 2.0f, 20.0f));
+    addDiana(scene, pm, "Lejos", glm::vec3(0.0f, 2.0f, 30.0f));
+    pm.setTrigger(medio->getSphereCollider(), true);
+    sm.rebuildAliveSet();
+
+    sm.lua().script(
+        "larga    = #Physics.OverlapBox(Vec3(0,2,20), Vec3(1,1,15))\n"
+        "girada   = #Physics.OverlapBox(Vec3(0,2,20), Vec3(1,1,15), Vec3(0,90,0))\n"
+        "conOpts  = #Physics.OverlapBox(Vec3(0,2,20), Vec3(1,1,15), { hitTriggers = true })\n"
+        "rotYOpts = #Physics.OverlapBox(Vec3(0,2,20), Vec3(1,1,15), Vec3(0,0,0), { hitTriggers = true })\n"
+        "malos    = Physics.OverlapBox(Vec3(0,2,20), 7)\n"
+        "nMalos   = #malos\n");
+
+    CHECK(sm.lua()["larga"].get<int>() == 2);      // Cerca y Lejos (Medio es trigger)
+    CHECK(sm.lua()["girada"].get<int>() == 0);     // ahora la caja es larga en X
+    CHECK(sm.lua()["conOpts"].get<int>() == 3);    // tabla en 3ª posición = options
+    CHECK(sm.lua()["rotYOpts"].get<int>() == 3);
+    CHECK(sm.lua()["nMalos"].get<int>() == 0);     // argumentos inválidos -> tabla vacía
+
+    pm.setTrigger(medio->getSphereCollider(), false);
+}
+
+// Fuera de Play (sin PhysicsManager) las tres consultas devuelven lo mismo que
+// dentro pero vacío: nil el sweep, tabla vacía los overlaps. Nunca excepción.
+static void test_sweep_y_overlaps_sin_fisica(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    addDiana(scene, pm, "Diana", glm::vec3(0.0f, 2.0f, 10.0f));
+    sm.rebuildAliveSet();
+
+    sm.setPhysicsManager(nullptr);
+    sm.lua().script(
+        "sweep  = Physics.SphereCast(Vec3(0,2,0), Vec3(0,0,1), 1, 100)\n"
+        "nEsf   = #Physics.OverlapSphere(Vec3(0,2,10), 5)\n"
+        "nCaja  = #Physics.OverlapBox(Vec3(0,2,10), Vec3(5,5,5))\n");
+    sm.setPhysicsManager(&pm);
+
+    CHECK(luaIsNil(sm, "sweep"));
+    CHECK(sm.lua()["nEsf"].get<int>() == 0);
+    CHECK(sm.lua()["nCaja"].get<int>() == 0);
+}
+
 // Rigidbody.constraints es un BITMASK, no un float: se compone desde Lua con
 // el OR bit a bit de 5.4 sobre la tabla RigidbodyConstraints. El test escribe
 // un valor DISTINTO del inicial (RB_None), lo lee de vuelta por la misma
@@ -2410,6 +2620,12 @@ int main()
     test_raycast_all_sin_impactos_devuelve_tabla_vacia(sm, pm);
     test_raycast_all_filtros(sm, pm);
     test_raycast_all_no_altera_raycast(sm, pm);
+    test_sphere_cast_usa_el_radio(sm, pm);
+    test_sphere_cast_pasa_de_largo(sm, pm);
+    test_overlap_sphere_cero_uno_n(sm, pm);
+    test_overlap_sphere_filtros(sm, pm);
+    test_overlap_box_rotacion_y_options(sm, pm);
+    test_sweep_y_overlaps_sin_fisica(sm, pm);
 
     test_constraints_desde_lua(sm, pm);
     test_force_mode_desde_lua(sm, pm);

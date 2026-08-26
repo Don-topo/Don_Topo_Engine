@@ -33,12 +33,14 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/euler_angles.hpp>
+#include <algorithm>
 #include <stdexcept>
 #include <cmath>
 #include <functional>
 #include <memory>
 #include <set>
 #include <tuple>
+#include <vector>
 
 namespace DonTopo::ScriptBindings
 {
@@ -2251,21 +2253,80 @@ namespace DonTopo::ScriptBindings
             GameObject* ignore       = nullptr;
         };
 
+        // Warn/argAt/given: los comparten todos los parseos de consulta.
+        void queryWarn(ScriptManager& mgr, const char* fn, const std::string& m)
+        {
+            mgr.log(std::string("[Lua][WARN] Physics.") + fn + ": " + m);
+        }
+        sol::object queryArgAt(sol::variadic_args va, std::size_t i)
+        {
+            return i < va.size() ? va[i].get<sol::object>() : sol::object();
+        }
+        bool queryGiven(const sol::object& o)
+        {
+            return o.valid() && o.get_type() != sol::type::lua_nil;
+        }
+
+        // Tabla 'options' común a TODAS las consultas (raycast, sweep y
+        // overlap): { hitTriggers, static, dynamic, ignore }. Ausente o nil =>
+        // se quedan los defaults de RaycastArgs. Las consultas sin rayo
+        // (overlaps) sólo usan estos cuatro campos de la struct.
+        bool parseQueryOptions(ScriptManager& mgr, const char* fn,
+                               const sol::object& oOpts, RaycastArgs& out)
+        {
+            auto warn = [&mgr, fn](const std::string& m) { queryWarn(mgr, fn, m); };
+
+            if (!queryGiven(oOpts)) return true;
+            if (oOpts.get_type() != sol::type::table)
+            {
+                warn("options tiene que ser una tabla");
+                return false;
+            }
+            sol::table opts = oOpts.as<sol::table>();
+
+            auto readBool = [&](const char* key, bool& dst) {
+                const sol::object v = opts[key];
+                if (!queryGiven(v)) return true;
+                if (v.get_type() != sol::type::boolean)
+                {
+                    warn(std::string(key) + " tiene que ser booleano");
+                    return false;
+                }
+                dst = v.as<bool>();
+                return true;
+            };
+            if (!readBool("hitTriggers", out.hitTriggers)) return false;
+            if (!readBool("static",      out.queryStatic)) return false;
+            if (!readBool("dynamic",     out.queryDynamic)) return false;
+
+            const sol::object oIgnore = opts["ignore"];
+            if (queryGiven(oIgnore))
+            {
+                if (!oIgnore.is<LuaEntity>())
+                {
+                    warn("ignore tiene que ser una Entity");
+                    return false;
+                }
+                const LuaEntity e = oIgnore.as<LuaEntity>();
+                if (!e.go || !e.mgr || !e.mgr->isAlive(e.go))
+                {
+                    warn("ignore apunta a una Entity destruida");
+                    return false;
+                }
+                out.ignore = e.go;
+            }
+            return true;
+        }
+
         // Lee los argumentos a mano (sol::variadic_args, no parámetros tipados)
         // porque un tipo equivocado tiene que devolver nil y un aviso, no la
         // excepción de conversión de sol2 que tumbaría el script.
         bool parseRaycastArgs(ScriptManager& mgr, const char* fn,
                               sol::variadic_args va, RaycastArgs& out)
         {
-            auto warn = [&mgr, fn](const std::string& m) {
-                mgr.log(std::string("[Lua][WARN] Physics.") + fn + ": " + m);
-            };
-            auto argAt = [&va](std::size_t i) {
-                return i < va.size() ? va[i].get<sol::object>() : sol::object();
-            };
-            auto given = [](const sol::object& o) {
-                return o.valid() && o.get_type() != sol::type::lua_nil;
-            };
+            auto warn = [&mgr, fn](const std::string& m) { queryWarn(mgr, fn, m); };
+            auto argAt = [&va](std::size_t i) { return queryArgAt(va, i); };
+            auto given = [](const sol::object& o) { return queryGiven(o); };
 
             const sol::object oOrigin = argAt(0);
             const sol::object oDir    = argAt(1);
@@ -2290,47 +2351,7 @@ namespace DonTopo::ScriptBindings
                 if (m > 0.0f) out.maxDistance = m;
             }
 
-            const sol::object oOpts = argAt(3);
-            if (!given(oOpts)) return true;
-            if (oOpts.get_type() != sol::type::table)
-            {
-                warn("options tiene que ser una tabla");
-                return false;
-            }
-            sol::table opts = oOpts.as<sol::table>();
-
-            auto readBool = [&](const char* key, bool& dst) {
-                const sol::object v = opts[key];
-                if (!given(v)) return true;
-                if (v.get_type() != sol::type::boolean)
-                {
-                    warn(std::string(key) + " tiene que ser booleano");
-                    return false;
-                }
-                dst = v.as<bool>();
-                return true;
-            };
-            if (!readBool("hitTriggers", out.hitTriggers)) return false;
-            if (!readBool("static",      out.queryStatic)) return false;
-            if (!readBool("dynamic",     out.queryDynamic)) return false;
-
-            const sol::object oIgnore = opts["ignore"];
-            if (given(oIgnore))
-            {
-                if (!oIgnore.is<LuaEntity>())
-                {
-                    warn("ignore tiene que ser una Entity");
-                    return false;
-                }
-                const LuaEntity e = oIgnore.as<LuaEntity>();
-                if (!e.go || !e.mgr || !e.mgr->isAlive(e.go))
-                {
-                    warn("ignore apunta a una Entity destruida");
-                    return false;
-                }
-                out.ignore = e.go;
-            }
-            return true;
+            return parseQueryOptions(mgr, fn, argAt(3), out);
         }
 
         // Lanza la consulta. false = sin impacto, sin PhysicsManager (fuera de
@@ -2406,6 +2427,266 @@ namespace DonTopo::ScriptBindings
             t["distance"] = hit.distance;
             return t;
         }
+
+        // Filtros de la consulta comunes a sweeps y overlaps: los mismos que
+        // arma doRaycast (ePREFILTER + eSTATIC/eDYNAMIC según options).
+        physx::PxQueryFilterData queryFilterData(const RaycastArgs& a)
+        {
+            physx::PxQueryFilterData filterData;
+            filterData.flags = physx::PxQueryFlag::ePREFILTER;
+            if (a.queryStatic)  filterData.flags |= physx::PxQueryFlag::eSTATIC;
+            if (a.queryDynamic) filterData.flags |= physx::PxQueryFlag::eDYNAMIC;
+            return filterData;
+        }
+
+        bool finite3(const glm::vec3& v)
+        {
+            return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+        }
+
+        // Physics.SphereCast(origin, direction, radius, maxDistance [, options]).
+        // El radio va ANTES de maxDistance, así que el parseo del rayo no se
+        // puede reutilizar tal cual (los índices bailan); lo que sí se reutiliza
+        // es la tabla options.
+        bool parseSphereCastArgs(ScriptManager& mgr, sol::variadic_args va,
+                                 RaycastArgs& out, float& radius)
+        {
+            const char* fn = "SphereCast";
+            auto warn = [&mgr, fn](const std::string& m) { queryWarn(mgr, fn, m); };
+
+            const sol::object oOrigin = queryArgAt(va, 0);
+            const sol::object oDir    = queryArgAt(va, 1);
+            if (!oOrigin.is<glm::vec3>() || !oDir.is<glm::vec3>())
+            {
+                warn("origin y direction tienen que ser Vec3");
+                return false;
+            }
+            out.origin = oOrigin.as<glm::vec3>();
+            out.dir    = oDir.as<glm::vec3>();
+
+            // queryGiven ANTES de get_type: sobre un sol::object sin lua_State
+            // (argumento que no se pasó) get_type deref un puntero nulo.
+            const sol::object oRadius = queryArgAt(va, 2);
+            if (!queryGiven(oRadius) || oRadius.get_type() != sol::type::number)
+            {
+                warn("radius tiene que ser un numero");
+                return false;
+            }
+            // PxSphereGeometry con radio <= 0 (o NaN) es geometría inválida:
+            // PhysX se queja por su canal de errores y la consulta no vale.
+            const float r = oRadius.as<float>();
+            if (!std::isfinite(r) || r <= 0.0f)
+            {
+                warn("radius tiene que ser mayor que 0");
+                return false;
+            }
+            radius = r;
+
+            const sol::object oMax = queryArgAt(va, 3);
+            if (queryGiven(oMax))
+            {
+                if (oMax.get_type() != sol::type::number)
+                {
+                    warn("maxDistance tiene que ser un numero");
+                    return false;
+                }
+                const float m = oMax.as<float>();
+                if (m > 0.0f) out.maxDistance = m;
+            }
+
+            return parseQueryOptions(mgr, fn, queryArgAt(va, 4), out);
+        }
+
+        // Barrido de la esfera. Mismas salidas en falso que doRaycast (sin
+        // PhysicsManager, filtro que no deja actores, origen/dirección
+        // degenerados) y misma normalización de la dirección.
+        bool doSphereCast(ScriptManager& mgr, const RaycastArgs& a, float radius,
+                          physx::PxSweepBuffer& hit)
+        {
+            PhysicsManager* pm = mgr.physics();
+            if (!pm) return false;
+            if (!a.queryStatic && !a.queryDynamic) return false;
+            if (!finite3(a.origin)) return false;
+
+            const float len = glm::length(a.dir);
+            if (!std::isfinite(len) || len <= 0.0f) return false;
+            const glm::vec3 dir = a.dir / len;
+
+            physx::PxQueryFilterData filterData = queryFilterData(a);
+            RaycastFilter filter(a.hitTriggers, a.ignore);
+            return pm->sphereCast(physx::PxVec3(a.origin.x, a.origin.y, a.origin.z),
+                                  physx::PxVec3(dir.x, dir.y, dir.z),
+                                  radius, a.maxDistance, hit, filterData, &filter);
+        }
+
+        // La tabla de impacto de un sweep tiene los mismos campos que la de un
+        // raycast, pero PxSweepHit y PxRaycastHit son tipos distintos: se
+        // rellena aparte (mismos nombres y mismo orden a propósito).
+        sol::table makeSweepHitTable(ScriptManager& mgr, const physx::PxSweepHit& hit)
+        {
+            sol::table t = mgr.lua().create_table();
+            if (GameObject* go = actorOwner(hit.actor))
+                t["entity"] = LuaEntity{ go, &mgr };
+            t["point"]    = glm::vec3(hit.position.x, hit.position.y, hit.position.z);
+            t["normal"]   = glm::vec3(hit.normal.x, hit.normal.y, hit.normal.z);
+            t["distance"] = hit.distance;
+            return t;
+        }
+
+        // Techo de solapes de Physics.OverlapSphere / OverlapBox. Igual que
+        // kRaycastAllMaxHits: PhysX trunca en silencio al llenarse el buffer
+        // (PxQueryReport.h, "Overflow does not trigger warnings or errors"), así
+        // que el binding lo detecta con getNbTouches() == getMaxNbTouches().
+        constexpr physx::PxU32 kOverlapMaxHits = 64;
+
+        // Physics.OverlapSphere(center, radius [, options]).
+        bool parseOverlapSphereArgs(ScriptManager& mgr, sol::variadic_args va,
+                                    glm::vec3& center, float& radius, RaycastArgs& out)
+        {
+            const char* fn = "OverlapSphere";
+            auto warn = [&mgr, fn](const std::string& m) { queryWarn(mgr, fn, m); };
+
+            const sol::object oCenter = queryArgAt(va, 0);
+            if (!oCenter.is<glm::vec3>())
+            {
+                warn("center tiene que ser un Vec3");
+                return false;
+            }
+            center = oCenter.as<glm::vec3>();
+
+            const sol::object oRadius = queryArgAt(va, 1);
+            if (!queryGiven(oRadius) || oRadius.get_type() != sol::type::number)
+            {
+                warn("radius tiene que ser un numero");
+                return false;
+            }
+            const float r = oRadius.as<float>();
+            if (!std::isfinite(r) || r <= 0.0f)
+            {
+                warn("radius tiene que ser mayor que 0");
+                return false;
+            }
+            radius = r;
+
+            return parseQueryOptions(mgr, fn, queryArgAt(va, 2), out);
+        }
+
+        // Physics.OverlapBox(center, halfExtents [, rotation] [, options]).
+        // rotation son grados de Euler en un Vec3, misma convención que
+        // transform.rotation (eulerAngleXYZ). Como es opcional y va delante de
+        // options, el tercer argumento se desambigua por tipo: Vec3 => rotación,
+        // tabla => options.
+        bool parseOverlapBoxArgs(ScriptManager& mgr, sol::variadic_args va,
+                                 glm::vec3& center, glm::vec3& halfExtents,
+                                 glm::vec3& eulerDeg, RaycastArgs& out)
+        {
+            const char* fn = "OverlapBox";
+            auto warn = [&mgr, fn](const std::string& m) { queryWarn(mgr, fn, m); };
+
+            const sol::object oCenter = queryArgAt(va, 0);
+            const sol::object oHalf   = queryArgAt(va, 1);
+            if (!oCenter.is<glm::vec3>() || !oHalf.is<glm::vec3>())
+            {
+                warn("center y halfExtents tienen que ser Vec3");
+                return false;
+            }
+            center      = oCenter.as<glm::vec3>();
+            halfExtents = oHalf.as<glm::vec3>();
+            if (!finite3(halfExtents) ||
+                halfExtents.x <= 0.0f || halfExtents.y <= 0.0f || halfExtents.z <= 0.0f)
+            {
+                warn("halfExtents tiene que tener las tres componentes mayores que 0");
+                return false;
+            }
+
+            eulerDeg = glm::vec3(0.0f);
+            const sol::object oThird = queryArgAt(va, 2);
+            std::size_t optsIndex = 2;
+            if (queryGiven(oThird) && oThird.is<glm::vec3>())
+            {
+                eulerDeg = oThird.as<glm::vec3>();
+                if (!finite3(eulerDeg))
+                {
+                    warn("rotation tiene que ser finita");
+                    return false;
+                }
+                optsIndex = 3;
+            }
+
+            return parseQueryOptions(mgr, fn, queryArgAt(va, optsIndex), out);
+        }
+
+        bool doOverlapSphere(ScriptManager& mgr, const glm::vec3& center, float radius,
+                             const RaycastArgs& a,
+                             physx::PxOverlapBufferN<kOverlapMaxHits>& hits)
+        {
+            PhysicsManager* pm = mgr.physics();
+            if (!pm) return false;
+            if (!a.queryStatic && !a.queryDynamic) return false;
+            if (!finite3(center)) return false;
+
+            physx::PxQueryFilterData filterData = queryFilterData(a);
+            RaycastFilter filter(a.hitTriggers, a.ignore);
+            return pm->overlapSphere(physx::PxVec3(center.x, center.y, center.z),
+                                     radius, hits, filterData, &filter);
+        }
+
+        bool doOverlapBox(ScriptManager& mgr, const glm::vec3& center,
+                          const glm::vec3& halfExtents, const glm::vec3& eulerDeg,
+                          const RaycastArgs& a,
+                          physx::PxOverlapBufferN<kOverlapMaxHits>& hits)
+        {
+            PhysicsManager* pm = mgr.physics();
+            if (!pm) return false;
+            if (!a.queryStatic && !a.queryDynamic) return false;
+            if (!finite3(center)) return false;
+
+            // Misma composición que recomposeLocal (eulerAngleXYZ), para que
+            // pasarle transform.rotation de una entidad oriente la caja igual
+            // que está orientada esa entidad.
+            const glm::quat q(glm::quat_cast(glm::eulerAngleXYZ(glm::radians(eulerDeg.x),
+                                                                glm::radians(eulerDeg.y),
+                                                                glm::radians(eulerDeg.z))));
+
+            physx::PxQueryFilterData filterData = queryFilterData(a);
+            RaycastFilter filter(a.hitTriggers, a.ignore);
+            return pm->overlapBox(physx::PxVec3(center.x, center.y, center.z),
+                                  physx::PxVec3(halfExtents.x, halfExtents.y, halfExtents.z),
+                                  physx::PxQuat(q.x, q.y, q.z, q.w),
+                                  hits, filterData, &filter);
+        }
+
+        // Array 1-indexado de Entity con los solapes. Un overlap no tiene punto,
+        // normal ni distancia, así que no hay tabla de hit que devolver: sólo el
+        // GameObject. Los actores sin GameObject detrás se omiten (no hay nada
+        // que entregar a Lua) y un mismo GameObject sale UNA vez aunque solapen
+        // varias de sus shapes.
+        sol::table makeOverlapArray(ScriptManager& mgr,
+                                    const physx::PxOverlapBufferN<kOverlapMaxHits>& hits)
+        {
+            sol::table out = mgr.lua().create_table();
+            std::vector<GameObject*> seen;
+            int n = 0;
+            for (physx::PxU32 i = 0; i < hits.getNbTouches(); ++i)
+            {
+                GameObject* go = actorOwner(hits.getTouch(i).actor);
+                if (!go) continue;
+                if (std::find(seen.begin(), seen.end(), go) != seen.end()) continue;
+                seen.push_back(go);
+                out[++n] = LuaEntity{ go, &mgr };
+            }
+            return out;
+        }
+
+        // Aviso compartido por los dos overlaps al llenarse el buffer.
+        void warnOverlapOverflow(ScriptManager& mgr, const char* fn,
+                                 const physx::PxOverlapBufferN<kOverlapMaxHits>& hits)
+        {
+            if (hits.getNbTouches() >= hits.getMaxNbTouches())
+                mgr.log(std::string("[Lua][WARN] Physics.") + fn + ": limite de " +
+                        std::to_string(kOverlapMaxHits) +
+                        " solapes alcanzado, hay resultados descartados");
+        }
 #endif
 
         void registerPhysics(DonTopo::ScriptManager& mgr)
@@ -2476,6 +2757,78 @@ namespace DonTopo::ScriptBindings
 #else
                 (void)va;
                 return false;
+#endif
+            };
+
+            // Physics.SphereCast(origin, direction, radius, maxDistance,
+            // options) -> la MISMA tabla { entity, point, normal, distance } que
+            // Physics.Raycast, o nil si no toca nada. Es el raycast "con
+            // grosor": la esfera parte centrada en origin y barre a lo largo de
+            // direction. Si ya solapa algo en el origen, distance sale 0 y
+            // point/normal no significan nada (PhysX no calcula la separación
+            // sin eMTD).
+            physics["SphereCast"] = [&mgr](sol::variadic_args va) -> sol::object {
+#ifdef DT_PHYSX_ENABLED
+                RaycastArgs args;
+                float       radius = 0.0f;
+                if (!parseSphereCastArgs(mgr, va, args, radius)) return sol::nil;
+
+                physx::PxSweepBuffer hit;
+                if (!doSphereCast(mgr, args, radius, hit)) return sol::nil;
+
+                return sol::make_object(mgr.lua(), makeSweepHitTable(mgr, hit.block));
+#else
+                (void)va;
+                return sol::nil;
+#endif
+            };
+
+            // Physics.OverlapSphere(center, radius, options) -> tabla-array
+            // 1-indexada de Entity (NO de tablas de impacto: un solape no tiene
+            // punto, normal ni distancia). Vacía si no solapa nada o si los
+            // argumentos son inválidos, nunca nil.
+            physics["OverlapSphere"] = [&mgr](sol::variadic_args va) -> sol::object {
+#ifdef DT_PHYSX_ENABLED
+                RaycastArgs args;
+                glm::vec3   center{ 0.0f };
+                float       radius = 0.0f;
+                if (!parseOverlapSphereArgs(mgr, va, center, radius, args))
+                    return sol::make_object(mgr.lua(), mgr.lua().create_table());
+
+                physx::PxOverlapBufferN<kOverlapMaxHits> hits;
+                if (!doOverlapSphere(mgr, center, radius, args, hits))
+                    return sol::make_object(mgr.lua(), mgr.lua().create_table());
+
+                sol::table out = makeOverlapArray(mgr, hits);
+                warnOverlapOverflow(mgr, "OverlapSphere", hits);
+                return sol::make_object(mgr.lua(), out);
+#else
+                (void)va;
+                return sol::make_object(mgr.lua(), mgr.lua().create_table());
+#endif
+            };
+
+            // Physics.OverlapBox(center, halfExtents, rotation, options) ->
+            // igual que OverlapSphere pero con una caja orientada. rotation es
+            // opcional (Vec3 de grados Euler, misma convención que
+            // transform.rotation) y se distingue de options por el tipo.
+            physics["OverlapBox"] = [&mgr](sol::variadic_args va) -> sol::object {
+#ifdef DT_PHYSX_ENABLED
+                RaycastArgs args;
+                glm::vec3   center{ 0.0f }, halfExtents{ 0.0f }, eulerDeg{ 0.0f };
+                if (!parseOverlapBoxArgs(mgr, va, center, halfExtents, eulerDeg, args))
+                    return sol::make_object(mgr.lua(), mgr.lua().create_table());
+
+                physx::PxOverlapBufferN<kOverlapMaxHits> hits;
+                if (!doOverlapBox(mgr, center, halfExtents, eulerDeg, args, hits))
+                    return sol::make_object(mgr.lua(), mgr.lua().create_table());
+
+                sol::table out = makeOverlapArray(mgr, hits);
+                warnOverlapOverflow(mgr, "OverlapBox", hits);
+                return sol::make_object(mgr.lua(), out);
+#else
+                (void)va;
+                return sol::make_object(mgr.lua(), mgr.lua().create_table());
 #endif
             };
         }

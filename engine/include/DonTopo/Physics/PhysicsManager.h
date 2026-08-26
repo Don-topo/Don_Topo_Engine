@@ -98,6 +98,33 @@ public:
     bool raycastAll(const physx::PxVec3& origin, const physx::PxVec3& dir, float maxDistance,
                     physx::PxRaycastBuffer& hits, const physx::PxQueryFilterData& filterData,
                     physx::PxQueryFilterCallback* filterCall);
+
+    // Barrido de una esfera de radio 'radius' desde origin a lo largo de dir:
+    // el rayo "con grosor" que hace falta para mover un personaje sin que se
+    // cuele por las esquinas. Single-hit (el primero que bloquea), mismos hit
+    // flags que raycast() para que el binding devuelva la misma tabla. Si la
+    // esfera ya solapa algo en el origen, PhysX reporta distancia 0 y el punto/
+    // normal no son fiables (no se pide eMTD). Misma guarda de escena ausente.
+    bool sphereCast(const physx::PxVec3& origin, const physx::PxVec3& dir, float radius,
+                    float maxDistance, physx::PxSweepBuffer& hit,
+                    const physx::PxQueryFilterData& filterData,
+                    physx::PxQueryFilterCallback* filterCall);
+
+    // Qué shapes solapan una esfera estática en 'center'. Multi-hit: añade
+    // PxQueryFlag::eNO_BLOCK igual que raycastAll, si no el primer eBLOCK del
+    // prefiltro cerraría la consulta. hits tiene que ser un PxOverlapBufferN<N>;
+    // al llenarse, PhysX trunca en silencio (getNbTouches() ==
+    // getMaxNbTouches()). Sin orden: un overlap no tiene distancia.
+    bool overlapSphere(const physx::PxVec3& center, float radius,
+                       physx::PxOverlapBuffer& hits,
+                       const physx::PxQueryFilterData& filterData,
+                       physx::PxQueryFilterCallback* filterCall);
+
+    // Igual pero con una caja orientada (halfExtents + rotación del mundo).
+    bool overlapBox(const physx::PxVec3& center, const physx::PxVec3& halfExtents,
+                    const physx::PxQuat& rotation, physx::PxOverlapBuffer& hits,
+                    const physx::PxQueryFilterData& filterData,
+                    physx::PxQueryFilterCallback* filterCall);
 #endif
 
 private:

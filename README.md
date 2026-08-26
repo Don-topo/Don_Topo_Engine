@@ -761,6 +761,41 @@ for i, hit in ipairs(Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100)) do
 end
 ```
 
+Three more read-only scene queries take the **same `options` table** as the raycasts
+(`hitTriggers`, `static`, `dynamic`, `ignore`) and, like them, do nothing outside Play:
+
+| Query | Returns |
+| --- | --- |
+| `Physics.SphereCast(origin, direction, radius, maxDistance, options)` | one hit table `{ entity, point, normal, distance }` — exactly the shape `Physics.Raycast` returns — or `nil` |
+| `Physics.OverlapSphere(center, radius, options)` | 1-indexed array of `Entity` (empty table, never `nil`) |
+| `Physics.OverlapBox(center, halfExtents, rotation, options)` | 1-indexed array of `Entity` (empty table, never `nil`) |
+
+`SphereCast` is the raycast "with thickness": a sphere of `radius` starts centred on
+`origin` and sweeps along `direction`, so it catches what a zero-width ray slips past —
+the usual way to move a character without clipping corners. If the sphere already overlaps
+something at `origin`, PhysX reports `distance = 0` and `point`/`normal` are meaningless.
+
+The two `Overlap*` queries answer "what is inside this volume **right now**", so they
+return the `Entity` list directly, not hit tables: an overlap has no point, no normal and
+no distance. Each entity appears **once** even if several of its shapes overlap, actors
+with no GameObject behind them are skipped, and the order is PhysX's, not sorted. In
+`OverlapBox`, `rotation` is an optional `Vec3` of Euler degrees (same convention as
+`transform.rotation`) and is told apart from `options` by its type, so
+`Physics.OverlapBox(c, h, { hitTriggers = true })` works with no rotation. Both cap at
+**64** overlaps per call and log a `[Lua][WARN]` when the buffer fills, same as
+`RaycastAll`.
+
+```lua
+-- ¿hay suelo delante antes de saltar?
+local ground = Physics.SphereCast(self.entity.transform.position, Vec3(0,-1,0), 30, 200)
+if ground then Log.Info("suelo a " .. ground.distance) end
+
+-- todo lo que hay dentro del radio de la explosión
+for _, e in ipairs(Physics.OverlapSphere(Vec3(0,0,0), 250, { hitTriggers = true })) do
+    Log.Info("alcanzado: " .. e.name)
+end
+```
+
 ### UI from Lua
 
 All fourteen UI components are reachable from any script, with the same reach as the
@@ -827,7 +862,7 @@ API surface: `self.entity` (`GetTransform`, `GetComponent`/`AddComponent`/`Remov
 `GetParent`/`GetChildren`), `Transform` (position/rotation/scale, `Translate`/`Rotate`),
 `Scene` (`Find`/`CreateGameObject`/`Instantiate`/`Destroy`), the 14 UI components
 (incl. widget callbacks and button state), physics (the four colliders with shape,
-material and `isTrigger`, `Rigidbody` with `constraints` and forces, `Physics.Raycast`/`RaycastAll`),
+material and `isTrigger`, `Rigidbody` with `constraints` and forces, `Physics.Raycast`/`RaycastAll`/`SphereCast`/`OverlapSphere`/`OverlapBox`),
 `DonTopo.loadScene`,
 `Input` (`IsKeyDown`/`IsKeyPressed`/
 `IsKeyReleased`, `Key.*`), `Log.Info/Warn/Error` (+ `print`) routed to the Log Console. Scripts

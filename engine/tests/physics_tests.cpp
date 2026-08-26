@@ -426,6 +426,134 @@ static void test_fixed_step_setters_reject_bad_values(PhysicsManager& pm)
     CHECK(pm.getMaxSubSteps() == originalSteps);
 }
 
+// ---------------------------------------------------------------------------
+// Sweeps y overlaps (Physics.SphereCast / OverlapSphere / OverlapBox por
+// debajo). Consultas de sólo lectura: no hace falta simular ni un paso, basta
+// con que los actores estén en la escena.
+// ---------------------------------------------------------------------------
+
+// Prefiltro que acepta TODO devolviendo eBLOCK: exactamente lo que hace el
+// RaycastFilter del binding de Lua cuando la shape pasa los filtros. Sin él la
+// consulta no ejercería el eNO_BLOCK que mete overlapSphere/overlapBox (sin
+// prefiltro, PhysX ya reporta todos los solapes como touch y el test pasaría
+// aunque esa línea no existiera).
+class AcceptAllBlocking : public physx::PxQueryFilterCallback
+{
+public:
+    physx::PxQueryHitType::Enum preFilter(const physx::PxFilterData&,
+                                          const physx::PxShape*,
+                                          const physx::PxRigidActor*,
+                                          physx::PxHitFlags&) override
+    {
+        return physx::PxQueryHitType::eBLOCK;
+    }
+    physx::PxQueryHitType::Enum postFilter(const physx::PxFilterData&,
+                                           const physx::PxQueryHit&,
+                                           const physx::PxShape*,
+                                           const physx::PxRigidActor*) override
+    {
+        return physx::PxQueryHitType::eBLOCK;
+    }
+};
+
+static AcceptAllBlocking g_queryFilter;
+
+// Mismos flags que arma el binding: prefiltro + static + dynamic.
+static physx::PxQueryFilterData defaultQueryFilter()
+{
+    physx::PxQueryFilterData fd;
+    fd.flags = physx::PxQueryFlag::ePREFILTER | physx::PxQueryFlag::eSTATIC |
+               physx::PxQueryFlag::eDYNAMIC;
+    return fd;
+}
+
+// Un rayo de grosor cero pasa a 120 de una esfera de radio 100 (falla por 20),
+// pero barriendo una esfera de radio 50 sí la toca. Fija que el radio llega
+// hasta PhysX: con radius 0 el sweep se comportaría como el raycast y no
+// tocaría nada.
+static void test_sphere_cast_uses_the_radius(PhysicsManager& pm)
+{
+    auto diana = pm.createSphereColliderComponent(
+        100.0f, glm::vec3(0.0f),
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 500.0f)), /*dynamic=*/false);
+
+    physx::PxSweepBuffer gordo, fino;
+    const bool tocaGordo = pm.sphereCast(physx::PxVec3(0.0f, 120.0f, 0.0f),
+                                          physx::PxVec3(0.0f, 0.0f, 1.0f),
+                                          50.0f, 1000.0f, gordo, defaultQueryFilter(), &g_queryFilter);
+    const bool tocaFino  = pm.sphereCast(physx::PxVec3(0.0f, 120.0f, 0.0f),
+                                          physx::PxVec3(0.0f, 0.0f, 1.0f),
+                                          1.0f, 1000.0f, fino, defaultQueryFilter(), &g_queryFilter);
+    CHECK(tocaGordo == true);
+    CHECK(tocaFino == false);
+    // Contacto por delante de la esfera: menos de los 500 del centro.
+    if (tocaGordo) CHECK(gordo.block.distance > 0.0f && gordo.block.distance < 500.0f);
+}
+
+// Barrido que pasa de largo: misma esfera, dirección opuesta, y otro que se
+// queda corto por maxDistance.
+static void test_sphere_cast_miss(PhysicsManager& pm)
+{
+    auto diana = pm.createSphereColliderComponent(
+        100.0f, glm::vec3(0.0f),
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 500.0f)), /*dynamic=*/false);
+
+    physx::PxSweepBuffer alReves, corto, directo;
+    CHECK(pm.sphereCast(physx::PxVec3(0.0f), physx::PxVec3(0.0f, 0.0f, -1.0f),
+                        50.0f, 1000.0f, alReves, defaultQueryFilter(), &g_queryFilter) == false);
+    CHECK(pm.sphereCast(physx::PxVec3(0.0f), physx::PxVec3(0.0f, 0.0f, 1.0f),
+                        50.0f, 100.0f, corto, defaultQueryFilter(), &g_queryFilter) == false);
+    // Y el caso positivo de control: de frente sí toca, a 500-100-50 = 350.
+    CHECK(pm.sphereCast(physx::PxVec3(0.0f), physx::PxVec3(0.0f, 0.0f, 1.0f),
+                        50.0f, 1000.0f, directo, defaultQueryFilter(), &g_queryFilter) == true);
+    CHECK(std::fabs(directo.block.distance - 350.0f) < 1.0f);
+}
+
+// 0, 1 y N solapes con la misma escena, sólo cambiando el radio. El caso N es
+// el que se rompe si falta el eNO_BLOCK: sin él la consulta cierra en el primer
+// solape y devuelve 1.
+static void test_overlap_sphere_counts(PhysicsManager& pm)
+{
+    auto a = pm.createSphereColliderComponent(
+        50.0f, glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/false);
+    auto b = pm.createSphereColliderComponent(
+        50.0f, glm::vec3(0.0f),
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 300.0f)), /*dynamic=*/false);
+    auto c = pm.createSphereColliderComponent(
+        50.0f, glm::vec3(0.0f),
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 600.0f)), /*dynamic=*/false);
+
+    physx::PxOverlapBufferN<16> vacio, uno, tres;
+    pm.overlapSphere(physx::PxVec3(0.0f, 5000.0f, 0.0f), 10.0f, vacio, defaultQueryFilter(), &g_queryFilter);
+    pm.overlapSphere(physx::PxVec3(0.0f), 10.0f, uno, defaultQueryFilter(), &g_queryFilter);
+    pm.overlapSphere(physx::PxVec3(0.0f, 0.0f, 300.0f), 400.0f, tres, defaultQueryFilter(), &g_queryFilter);
+
+    CHECK(vacio.getNbTouches() == 0);
+    CHECK(uno.getNbTouches() == 1);
+    CHECK(tres.getNbTouches() == 3);
+}
+
+// La caja de overlap está ORIENTADA: una caja larga en Z ve la diana a z=300,
+// y la misma caja girada 90° sobre Y (larga en X) ya no. Sin pasar la rotación
+// a PhysX, las dos consultas darían 1.
+static void test_overlap_box_honours_rotation(PhysicsManager& pm)
+{
+    auto diana = pm.createSphereColliderComponent(
+        10.0f, glm::vec3(0.0f),
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 300.0f)), /*dynamic=*/false);
+
+    const physx::PxVec3 half(50.0f, 50.0f, 1000.0f);
+    physx::PxOverlapBufferN<16> alineada, girada;
+    pm.overlapBox(physx::PxVec3(0.0f), half, physx::PxQuat(physx::PxIdentity),
+                  alineada, defaultQueryFilter(), &g_queryFilter);
+    pm.overlapBox(physx::PxVec3(0.0f), half,
+                  physx::PxQuat(physx::PxHalfPi, physx::PxVec3(0.0f, 1.0f, 0.0f)),
+                  girada, defaultQueryFilter(), &g_queryFilter);
+
+    CHECK(alineada.getNbTouches() == 1);
+    CHECK(girada.getNbTouches() == 0);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -446,6 +574,10 @@ int main()
     test_giant_dt_clamped_to_max_substeps(pm);
     test_giant_dt_leaves_no_debt(pm);
     test_fixed_step_setters_reject_bad_values(pm);
+    test_sphere_cast_uses_the_radius(pm);
+    test_sphere_cast_miss(pm);
+    test_overlap_sphere_counts(pm);
+    test_overlap_box_honours_rotation(pm);
     pm.shutdown();
     if (g_failures == 0) std::printf("ALL PHYSICS TESTS PASSED\n");
     std::fflush(stdout);

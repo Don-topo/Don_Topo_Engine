@@ -522,6 +522,51 @@ bool PhysicsManager::raycastAll(const PxVec3& origin, const PxVec3& dir, float m
 
     return any;
 }
+
+bool PhysicsManager::sphereCast(const PxVec3& origin, const PxVec3& dir, float radius,
+                                float maxDistance, PxSweepBuffer& hit,
+                                const PxQueryFilterData& filterData,
+                                PxQueryFilterCallback* filterCall)
+{
+    if (!m_scene) return false;
+
+    // La geometría del barrido va en su propia pose; el origen del sweep es la
+    // posición inicial del centro de la esfera, no un punto sobre su
+    // superficie.
+    return static_cast<PxScene*>(m_scene)->sweep(
+        PxSphereGeometry(radius), PxTransform(origin), dir, maxDistance, hit,
+        PxHitFlags(PxHitFlag::ePOSITION | PxHitFlag::eNORMAL),
+        filterData, filterCall);
+}
+
+bool PhysicsManager::overlapSphere(const PxVec3& center, float radius, PxOverlapBuffer& hits,
+                                   const PxQueryFilterData& filterData,
+                                   PxQueryFilterCallback* filterCall)
+{
+    if (!m_scene) return false;
+
+    // Sin eNO_BLOCK el prefiltro (que devuelve eBLOCK) cerraría la consulta en
+    // el primer solape y sólo se reportaría uno.
+    PxQueryFilterData fd = filterData;
+    fd.flags |= PxQueryFlag::eNO_BLOCK;
+
+    return static_cast<PxScene*>(m_scene)->overlap(
+        PxSphereGeometry(radius), PxTransform(center), hits, fd, filterCall);
+}
+
+bool PhysicsManager::overlapBox(const PxVec3& center, const PxVec3& halfExtents,
+                                const PxQuat& rotation, PxOverlapBuffer& hits,
+                                const PxQueryFilterData& filterData,
+                                PxQueryFilterCallback* filterCall)
+{
+    if (!m_scene) return false;
+
+    PxQueryFilterData fd = filterData;
+    fd.flags |= PxQueryFlag::eNO_BLOCK;
+
+    return static_cast<PxScene*>(m_scene)->overlap(
+        PxBoxGeometry(halfExtents), PxTransform(center, rotation), hits, fd, filterCall);
+}
 #endif
 
 void PhysicsManager::setFixedDeltaTime(float dt)
