@@ -67,11 +67,56 @@ namespace {
             }
         }
 
+        // Pares NO-trigger que se tocan de verdad. Gemelo de onTrigger, con dos
+        // diferencias que vienen de PhysX, no de aquí:
+        //  - El Stay SÍ es nativo (eNOTIFY_TOUCH_PERSISTS), así que no hay que
+        //    sintetizarlo por frame como en los triggers.
+        //  - Una colisión no tiene lado "dueño": se notifica a LOS DOS
+        //    colliders, cada uno con el otro como `other` (igual que Unity).
+        // Los flags de notificación solo se piden para pares no-trigger (ver
+        // dtTriggerFilterShader), así que aquí nunca llega un trigger.
+        void onContact(const PxContactPairHeader& header,
+                       const PxContactPair* pairs, PxU32 count) override
+        {
+            // Actor borrado este frame: su userData ya cuelga.
+            if (header.flags & (PxContactPairHeaderFlag::eREMOVED_ACTOR_0 |
+                                PxContactPairHeaderFlag::eREMOVED_ACTOR_1))
+                return;
+
+            auto* colA = static_cast<DonTopo::Collider*>(header.actors[0]->userData);
+            auto* colB = static_cast<DonTopo::Collider*>(header.actors[1]->userData);
+            if (!colA || !colB) return;
+
+            for (PxU32 i = 0; i < count; ++i)
+            {
+                const PxContactPair& cp = pairs[i];
+                // Misma guarda que en onTrigger, a nivel de shape.
+                if (cp.flags & (PxContactPairFlag::eREMOVED_SHAPE_0 |
+                                PxContactPairFlag::eREMOVED_SHAPE_1))
+                    continue;
+
+                if (cp.events & PxPairFlag::eNOTIFY_TOUCH_FOUND)
+                {
+                    colA->dispatchCollisionEnter(colB);
+                    colB->dispatchCollisionEnter(colA);
+                }
+                else if (cp.events & PxPairFlag::eNOTIFY_TOUCH_PERSISTS)
+                {
+                    colA->dispatchCollisionStay(colB);
+                    colB->dispatchCollisionStay(colA);
+                }
+                else if (cp.events & PxPairFlag::eNOTIFY_TOUCH_LOST)
+                {
+                    colA->dispatchCollisionExit(colB);
+                    colB->dispatchCollisionExit(colA);
+                }
+            }
+        }
+
         // Resto de eventos de simulación: no usados.
         void onConstraintBreak(PxConstraintInfo*, PxU32) override {}
         void onWake(PxActor**, PxU32) override {}
         void onSleep(PxActor**, PxU32) override {}
-        void onContact(const PxContactPairHeader&, const PxContactPair*, PxU32) override {}
         void onAdvance(const PxRigidBody* const*, const PxTransform*, PxU32) override {}
     };
 
@@ -121,8 +166,30 @@ namespace {
         // (hasta 2^31) leería fuera de la tabla. Vaciándolo ve exactamente lo
         // mismo que veía antes de existir las capas —todo a cero—, que es lo que
         // preserva el comportamiento previo bit a bit.
-        return PxDefaultSimulationFilterShader(attr0, PxFilterData(), attr1, PxFilterData(),
-                                               pairFlags, constantBlock, constantBlockSize);
+        PxFilterFlags flags =
+            PxDefaultSimulationFilterShader(attr0, PxFilterData(), attr1, PxFilterData(),
+                                            pairFlags, constantBlock, constantBlockSize);
+
+        // Y sobre lo que decidiera el shader por defecto, se piden los avisos de
+        // contacto para OnCollisionEnter/Stay/Exit. Se hace DESPUÉS y solo si el
+        // par sobrevive: si el shader lo mató o lo suprimió, pairFlags no
+        // significa nada y añadirle bits no cambiaría el resultado, pero sí
+        // enmascararía el motivo al depurar.
+        //
+        // Solo llega aquí lo no-trigger: la rama de trigger de arriba retorna
+        // antes con eTRIGGER_DEFAULT intacto. Es a propósito — PhysX ni siquiera
+        // genera contactos para una shape marcada eTRIGGER_SHAPE, así que pedir
+        // eNOTIFY_TOUCH_* ahí sería ruido que nunca se dispara.
+        //
+        // Coste: PERSISTS hace que PhysX llame a onContact cada sub-step por cada
+        // par en contacto, incluso si nadie escucha. A cambio, el Stay es nativo
+        // y no hay que recorrer registros por frame como en los triggers.
+        if (!(flags & (PxFilterFlag::eKILL | PxFilterFlag::eSUPPRESS)))
+            pairFlags |= PxPairFlag::eNOTIFY_TOUCH_FOUND
+                       | PxPairFlag::eNOTIFY_TOUCH_LOST
+                       | PxPairFlag::eNOTIFY_TOUCH_PERSISTS;
+
+        return flags;
     }
 }
 

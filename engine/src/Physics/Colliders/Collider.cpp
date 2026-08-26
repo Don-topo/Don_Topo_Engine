@@ -100,6 +100,50 @@ void Collider::removeListener(ITriggerListener* listener)
                       m_listeners.end());
 }
 
+void Collider::addCollisionListener(ICollisionListener* listener)
+{
+    if (!listener) return;
+    if (std::find(m_collisionListeners.begin(), m_collisionListeners.end(), listener)
+        == m_collisionListeners.end())
+        m_collisionListeners.push_back(listener);
+}
+
+void Collider::removeCollisionListener(ICollisionListener* listener)
+{
+    m_collisionListeners.erase(
+        std::remove(m_collisionListeners.begin(), m_collisionListeners.end(), listener),
+        m_collisionListeners.end());
+}
+
+// Los tres dispatch de colisión recorren por ÍNDICE releyendo size(), no con
+// range-for: un listener puede desregistrarse (o registrar otro) dentro de su
+// propio callback, y eso invalida los iteradores de un range-for. Con índice, un
+// remove durante la iteración solo se salta el elemento que ocupó el hueco, que
+// es exactamente lo que pasa en Unity, en vez de ser UB.
+void Collider::dispatchCollisionEnter(Collider* other)
+{
+    if (!other) return;
+    CollisionEvent e{ other->getOwner(), other };
+    for (size_t i = 0; i < m_collisionListeners.size(); ++i)
+        m_collisionListeners[i]->onCollisionEnter(e);
+}
+
+void Collider::dispatchCollisionStay(Collider* other)
+{
+    if (!other) return;
+    CollisionEvent e{ other->getOwner(), other };
+    for (size_t i = 0; i < m_collisionListeners.size(); ++i)
+        m_collisionListeners[i]->onCollisionStay(e);
+}
+
+void Collider::dispatchCollisionExit(Collider* other)
+{
+    if (!other) return;
+    CollisionEvent e{ other->getOwner(), other };
+    for (size_t i = 0; i < m_collisionListeners.size(); ++i)
+        m_collisionListeners[i]->onCollisionExit(e);
+}
+
 void Collider::beginOverlap(Collider* other)
 {
     if (!other) return;

@@ -32,9 +32,12 @@ const std::vector<std::string>& baseSymbols()
         // y el motor los llama en Play Mode (ver ScriptManager). Awake/Start una
         // vez; Update/LateUpdate cada frame; FixedUpdate a paso fijo; OnDestroy
         // al destruir; OnTrigger* cuando otro collider entra/permanece/sale de
-        // un collider Is Trigger (reciben la Entity que lo provocó).
+        // un collider Is Trigger (reciben la Entity que lo provocó);
+        // OnCollision* lo mismo para colisiones DE VERDAD (ninguno de los dos
+        // colliders es trigger), en los dos objetos del par.
         "Awake", "Start", "Update", "FixedUpdate", "LateUpdate", "OnDestroy",
         "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit",
+        "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit",
 
         // Log
         "Log.Info", "Log.Warn", "Log.Error",

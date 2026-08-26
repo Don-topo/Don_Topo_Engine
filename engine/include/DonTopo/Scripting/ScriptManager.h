@@ -16,10 +16,16 @@ class GameObject;
 class PhysicsManager;
 class AudioManager;
 class Collider;
-class ScriptTriggerListener; // adapter ITriggerListener->cola (definido en .cpp)
+class ScriptTriggerListener;   // adapter ITriggerListener->cola (definido en .cpp)
+class ScriptCollisionListener; // adapter ICollisionListener->la MISMA cola
 
 // Fase de un evento de trigger encolado desde el módulo de física.
 enum class TriggerPhase { Enter, Stay, Exit };
+
+// Qué camino de física produjo el evento encolado. Trigger y colisión comparten
+// cola (mismo orden de llegada, mismo drenado, mismo modelo de reentrada); esto
+// es lo único que decide si se llama a OnTrigger* o a OnCollision*.
+enum class ContactKind { Trigger, Collision };
 
 // Una prop serializable detectada en la tabla clase de un script.
 struct ScriptProp {
@@ -104,6 +110,9 @@ public:
     // Llamado por el adapter ScriptTriggerListener (desde el paso de física)
     // para encolar un evento de trigger; se drena en update() del mismo frame.
     void onTriggerEvent(GameObject* owner, TriggerPhase phase, GameObject* other);
+    // Gemelo para pares no-trigger (adapter ScriptCollisionListener). Misma
+    // cola, mismo frame.
+    void onCollisionEvent(GameObject* owner, TriggerPhase phase, GameObject* other);
 
     void onPlayStart();
     void onPlayStop();
@@ -127,22 +136,35 @@ private:
     void callCallback(ScriptComponent& comp, const char* fn, const float* dt);
     // Variante para triggers: pasa la Entity `other` como argumento.
     void callTriggerCallback(ScriptComponent& comp, const char* fn, GameObject* other);
+    // Igual, pero comprueba en la instancia si el script define `fn` en vez de
+    // mirar un flag cacheado. Lo usan los OnCollision*: el sondeo cuesta un
+    // lookup de tabla, el mismo que ya hace callTriggerCallback para obtener la
+    // función, así que no hay lookup de más por evento despachado.
+    void callOptionalCallback(ScriptComponent& comp, const char* fn, GameObject* other);
 
-    // Registra un ScriptTriggerListener en el collider de cada GameObject que
-    // tenga uno (onPlayStart); los desregistra de los colliders vivos y limpia
-    // los adapters (onPlayStop). drainTriggerQueue despacha la cola a los
-    // callbacks OnTrigger* de los scripts del owner.
+    // Registra un ScriptTriggerListener Y un ScriptCollisionListener en el
+    // collider de cada GameObject que tenga uno (onPlayStart); los desregistra
+    // de los colliders vivos y limpia los adapters (onPlayStop).
+    // drainTriggerQueue despacha la cola a los callbacks OnTrigger*/OnCollision*
+    // de los scripts del owner.
     void registerTriggerListeners();
     void clearTriggerListeners();
     void drainTriggerQueue();
 
-    // Un evento de trigger pendiente de despachar a Lua.
-    struct QueuedTrigger { GameObject* owner; TriggerPhase phase; GameObject* other; };
+    // Un evento de física pendiente de despachar a Lua.
+    struct QueuedTrigger {
+        GameObject* owner;
+        TriggerPhase phase;
+        GameObject* other;
+        ContactKind kind = ContactKind::Trigger;
+    };
     std::vector<QueuedTrigger> m_triggerQueue;
     std::vector<std::unique_ptr<ScriptTriggerListener>> m_triggerListeners;
+    std::vector<std::unique_ptr<ScriptCollisionListener>> m_collisionListeners;
     // Colliders donde se registró un listener, para desregistrar en onPlayStop
     // (weak: un GameObject puede destruirse en Play y llevarse su collider).
     std::vector<std::weak_ptr<Collider>> m_triggerListenerColliders;
+    std::vector<std::weak_ptr<Collider>> m_collisionListenerColliders;
     // Todos los ScriptComponent vivos de la escena, en orden de traverse.
     std::vector<ScriptComponent*> collectComponents();
     static constexpr float kFixedStep = 1.0f / 60.0f;

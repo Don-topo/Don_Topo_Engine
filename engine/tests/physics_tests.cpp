@@ -740,6 +740,128 @@ static void test_add_and_remove_layers(PhysicsManager& pm)
     CHECK(pm.layerCount() == 1);
 }
 
+// --- Callbacks de colisión (pares no-trigger) --------------------------------
+//
+// Gemelos de los de trigger, pero por el camino de onContact. Diferencia clave:
+// el Stay es NATIVO (eNOTIFY_TOUCH_PERSISTS), no sintetizado por frame, así que
+// aquí se cuenta lo que emite PhysX tal cual.
+
+// Análogo a CountingListener, con las 3 fases.
+struct CountingCollisionListener : ICollisionListener {
+    int enters = 0;
+    int stays  = 0;
+    int exits  = 0;
+    void onCollisionEnter(const CollisionEvent&) override { ++enters; }
+    void onCollisionStay (const CollisionEvent&) override { ++stays;  }
+    void onCollisionExit (const CollisionEvent&) override { ++exits;  }
+};
+
+// Suelo estático a ras y caja dinámica 200 por encima, en las capas dadas. La
+// caja cae ~200 en 0,64 s, o sea que 60 sub-steps bastan para el impacto.
+static EscenaDeCapas montarImpacto(PhysicsManager& pm, int capaSuelo, int capaCaja)
+{
+    flushAccumulator(pm);
+    EscenaDeCapas e;
+    e.suelo = pm.createBoxColliderComponent(glm::vec3(500.0f, 10.0f, 500.0f), glm::vec3(0.0f),
+                                            glm::mat4(1.0f), /*dynamic=*/false);
+    e.suelo->setLayer(capaSuelo);
+
+    e.caja = pm.createBoxColliderComponent(
+        glm::vec3(10.0f), glm::vec3(0.0f),
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 200.0f, 0.0f)), /*dynamic=*/true);
+    e.caja->setLayer(capaCaja);
+    e.rb = std::make_shared<Rigidbody>();
+    pm.attachRigidbody(e.caja, e.rb);
+    return e;
+}
+
+// El ciclo completo sobre el MISMO par: Enter al tocar el suelo, Stay mientras
+// sigue apoyada, Exit al teletransportarla lejos.
+static void test_collision_enter_stay_exit(PhysicsManager& pm)
+{
+    EscenaDeCapas e = montarImpacto(pm, /*suelo=*/0, /*caja=*/0);
+    CountingCollisionListener l;
+    e.caja->addCollisionListener(&l);
+
+    step(pm, 90, 1.0f / 60.0f);   // cae, impacta y se queda apoyada
+    std::printf("  colision: enters=%d stays=%d exits=%d (tras el impacto)\n",
+                l.enters, l.stays, l.exits);
+    CHECK(l.enters > 0);   // TOUCH_FOUND
+    CHECK(l.stays  > 0);   // TOUCH_PERSISTS, mientras siguen en contacto
+    CHECK(l.exits == 0);   // todavía no se ha separado de nada
+
+    // Separar de golpe: setGlobalPose + autowake, PhysX rompe el par.
+    const int staysAntes = l.stays;
+    e.caja->teleport(glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 3000.0f, 0.0f)));
+    step(pm, 10, 1.0f / 60.0f);
+    std::printf("  colision: exits=%d tras separar (stays %d -> %d)\n",
+                l.exits, staysAntes, l.stays);
+    CHECK(l.exits > 0);              // TOUCH_LOST
+    CHECK(l.stays == staysAntes);    // y deja de haber contacto que persista
+
+    e.caja->removeCollisionListener(&l);
+}
+
+// La matriz de capas manda también en las colisiones: el par filtrado no genera
+// NI UN evento, y el mismo montaje con la celda abierta sí (control).
+static void test_collision_respects_layer_matrix(PhysicsManager& pm)
+{
+    pm.setLayerCollision(5, 6, false);
+    CountingCollisionListener filtrado;
+    {
+        EscenaDeCapas e = montarImpacto(pm, /*suelo=*/5, /*caja=*/6);
+        e.caja->addCollisionListener(&filtrado);
+        step(pm, 90, 1.0f / 60.0f);
+        e.caja->removeCollisionListener(&filtrado);
+        // Y de paso: sin par, la caja atraviesa el suelo.
+        CHECK(e.caja->getWorldTransform()[3].y < 0.0f);
+    }
+
+    pm.setLayerCollision(5, 6, true);
+    CountingCollisionListener abierto;
+    {
+        EscenaDeCapas e = montarImpacto(pm, /*suelo=*/5, /*caja=*/6);
+        e.caja->addCollisionListener(&abierto);
+        step(pm, 90, 1.0f / 60.0f);
+        e.caja->removeCollisionListener(&abierto);
+    }
+
+    std::printf("  colision con capas: filtrado -> %d/%d/%d | abierto -> %d/%d/%d\n",
+                filtrado.enters, filtrado.stays, filtrado.exits,
+                abierto.enters, abierto.stays, abierto.exits);
+    CHECK(filtrado.enters == 0);
+    CHECK(filtrado.stays  == 0);
+    CHECK(filtrado.exits  == 0);
+    CHECK(abierto.enters > 0);
+    CHECK(abierto.stays  > 0);
+}
+
+// Un trigger NO emite eventos de colisión: PhysX no genera contactos para una
+// shape eTRIGGER_SHAPE y el filter shader ni siquiera le pide eNOTIFY_TOUCH_*.
+// Lo que reciba, lo recibe por el camino de trigger (que sigue intacto).
+static void test_trigger_emits_no_collision_events(PhysicsManager& pm)
+{
+    EscenaDeCapas e = montarImpacto(pm, /*suelo=*/0, /*caja=*/0);
+    pm.setTrigger(e.suelo, true);
+
+    CountingCollisionListener colision;
+    CountingListener          trigger;
+    e.caja->addCollisionListener(&colision);
+    e.suelo->addListener(&trigger);
+
+    step(pm, 90, 1.0f / 60.0f);
+
+    e.caja->removeCollisionListener(&colision);
+    e.suelo->removeListener(&trigger);
+    pm.setTrigger(e.suelo, false);
+
+    std::printf("  suelo como trigger: colision=%d/%d/%d, trigger enters=%d\n",
+                colision.enters, colision.stays, colision.exits, trigger.enters);
+    CHECK(colision.enters == 0);
+    CHECK(colision.stays  == 0);
+    CHECK(trigger.enters > 0);   // control: el camino de trigger sigue vivo
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -769,6 +891,9 @@ int main()
     test_layer_reenabled_at_runtime_makes_contact(pm);
     test_trigger_respects_layer_matrix(pm);
     test_add_and_remove_layers(pm);
+    test_collision_enter_stay_exit(pm);
+    test_collision_respects_layer_matrix(pm);
+    test_trigger_emits_no_collision_events(pm);
     pm.shutdown();
     if (g_failures == 0) std::printf("ALL PHYSICS TESTS PASSED\n");
     std::fflush(stdout);

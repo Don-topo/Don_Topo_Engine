@@ -35,6 +35,34 @@ namespace DonTopo
         GameObject*    m_owner;
     };
 
+    // Gemelo del anterior para pares NO-trigger. Mismo owner, misma cola: lo
+    // único que cambia es que el evento se marca como ContactKind::Collision,
+    // así que hereda tal cual el modelo de reentrada (snapshot en
+    // drainTriggerQueue) y el orden respecto a Update.
+    class ScriptCollisionListener : public ICollisionListener
+    {
+    public:
+        ScriptCollisionListener(ScriptManager* mgr, GameObject* owner)
+            : m_mgr(mgr), m_owner(owner) {}
+
+        void onCollisionEnter(const CollisionEvent& e) override
+        {
+            m_mgr->onCollisionEvent(m_owner, TriggerPhase::Enter, static_cast<GameObject*>(e.other));
+        }
+        void onCollisionStay(const CollisionEvent& e) override
+        {
+            m_mgr->onCollisionEvent(m_owner, TriggerPhase::Stay, static_cast<GameObject*>(e.other));
+        }
+        void onCollisionExit(const CollisionEvent& e) override
+        {
+            m_mgr->onCollisionEvent(m_owner, TriggerPhase::Exit, static_cast<GameObject*>(e.other));
+        }
+
+    private:
+        ScriptManager* m_mgr;
+        GameObject*    m_owner;
+    };
+
     ScriptManager::ScriptManager()  = default;
     ScriptManager::~ScriptManager() = default;
 
@@ -248,6 +276,21 @@ namespace DonTopo
         }
     }
 
+    void ScriptManager::callOptionalCallback(ScriptComponent& comp, const char* fn, GameObject* other)
+    {
+        if (comp.hasError || !comp.instance.valid()) return;
+        sol::object entry = comp.instance[fn];
+        if (entry.get_type() != sol::type::function) return; // el script no lo define
+        sol::protected_function f = entry;
+        auto r = f(comp.instance, LuaEntity{ other, this });
+        if (!r.valid())
+        {
+            sol::error err = r;
+            log("Script '" + comp.scriptName + "' " + fn + ": " + std::string(err.what()));
+            comp.hasError = true;
+        }
+    }
+
     void ScriptManager::callOnDestroy(ScriptComponent& comp)
     {
         if (comp.hasOnDestroy) callCallback(comp, "OnDestroy", nullptr);
@@ -255,7 +298,12 @@ namespace DonTopo
 
     void ScriptManager::onTriggerEvent(GameObject* owner, TriggerPhase phase, GameObject* other)
     {
-        m_triggerQueue.push_back({ owner, phase, other });
+        m_triggerQueue.push_back({ owner, phase, other, ContactKind::Trigger });
+    }
+
+    void ScriptManager::onCollisionEvent(GameObject* owner, TriggerPhase phase, GameObject* other)
+    {
+        m_triggerQueue.push_back({ owner, phase, other, ContactKind::Collision });
     }
 
     void ScriptManager::registerTriggerListeners()
@@ -268,6 +316,14 @@ namespace DonTopo
             collider->addListener(listener.get());
             m_triggerListeners.push_back(std::move(listener));
             m_triggerListenerColliders.push_back(collider); // shared -> weak
+
+            // El mismo collider lleva los dos adapters: cuál dispara lo decide
+            // PhysX según sea trigger o no, y eso puede cambiar en mitad de
+            // Play (col.isTrigger desde Lua).
+            auto collisionListener = std::make_unique<ScriptCollisionListener>(this, go);
+            collider->addCollisionListener(collisionListener.get());
+            m_collisionListeners.push_back(std::move(collisionListener));
+            m_collisionListenerColliders.push_back(collider);
         });
     }
 
@@ -281,8 +337,15 @@ namespace DonTopo
             if (auto collider = m_triggerListenerColliders[i].lock())
                 collider->removeListener(m_triggerListeners[i].get());
         }
+        for (size_t i = 0; i < m_collisionListeners.size(); ++i)
+        {
+            if (auto collider = m_collisionListenerColliders[i].lock())
+                collider->removeCollisionListener(m_collisionListeners[i].get());
+        }
         m_triggerListeners.clear();
         m_triggerListenerColliders.clear();
+        m_collisionListeners.clear();
+        m_collisionListenerColliders.clear();
         m_triggerQueue.clear();
     }
 
@@ -305,6 +368,22 @@ namespace DonTopo
 
             for (ScriptComponent* s : scripts)
             {
+                if (t.kind == ContactKind::Collision)
+                {
+                    // Sin flag cacheado en ScriptComponent (ver
+                    // callOptionalCallback): el sondeo lo hace la propia
+                    // llamada.
+                    switch (t.phase)
+                    {
+                        case TriggerPhase::Enter:
+                            callOptionalCallback(*s, "OnCollisionEnter", t.other); break;
+                        case TriggerPhase::Stay:
+                            callOptionalCallback(*s, "OnCollisionStay", t.other); break;
+                        case TriggerPhase::Exit:
+                            callOptionalCallback(*s, "OnCollisionExit", t.other); break;
+                    }
+                    continue;
+                }
                 switch (t.phase)
                 {
                     case TriggerPhase::Enter:
@@ -406,9 +485,9 @@ namespace DonTopo
             c->started = true;
         }
 
-        // Triggers encolados por el paso de física de este frame
+        // Triggers y colisiones encolados por el paso de física de este frame
         // (physics.stepSimulation corre antes que scriptManager.update en el
-        // loop principal): OnTriggerEnter/Stay/Exit antes de Update, cercano al
+        // loop principal): OnTrigger*/OnCollision* antes de Update, cercano al
         // orden de Unity (callbacks de física preceden a Update).
         drainTriggerQueue();
 

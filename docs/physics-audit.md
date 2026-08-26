@@ -72,7 +72,7 @@ Fecha: 2026-08-25 · Alcance leído: `engine/include/DonTopo/Physics/**`, `engin
 | Aviso al manager en el dtor | Sí | `Collider.cpp:12-20` |
 | Pose polimórfica: `getWorldTransform` / `syncTransform` / `teleport` | Sí | `Collider.h:88-90` |
 | Limitación documentada: PhysX no reporta trigger↔trigger | Sí (documentada) | `Collider.h:39-40` |
-| Callbacks de colisión (no-trigger) | No: `onContact` vacío | `PhysicsManager.cpp:66` |
+| Callbacks de colisión (no-trigger) | Sí: `ICollisionListener` + `onContact` | `Collider.h:47-59`, `PhysicsManager.cpp:66-108` |
 
 ### 1.4 Los 4 colliders
 
@@ -204,7 +204,7 @@ Fecha: 2026-08-25 · Alcance leído: `engine/include/DonTopo/Physics/**`, `engin
 | `Physics.SphereCast` / `CapsuleCast` (sweeps) | No | ausente |
 | `Physics.OverlapSphere` / `OverlapBox` | No | ausente |
 | `OnTriggerEnter` / `Stay` / `Exit` | Sí (Stay sintetizado en CPU) | `Collider.cpp:56-83`, `PhysicsManager.cpp:482-492`; Lua `LuaApiReference.cpp:34-37` |
-| `OnCollisionEnter` / `Stay` / `Exit` | No: `onContact` vacío y sin `eNOTIFY_TOUCH_*` de contacto en el shader | `PhysicsManager.cpp:66,96-97` |
+| `OnCollisionEnter` / `Stay` / `Exit` | Sí (Stay NATIVO, `eNOTIFY_TOUCH_PERSISTS`) | `Collider.cpp:103-145`, `PhysicsManager.cpp:66-108,158-176`; Lua `LuaApiReference.cpp:38` |
 | Trigger↔trigger detectado | No (limitación de PhysX, documentada) | `Collider.h:39-40` |
 | Regla "al menos un Rigidbody" avisada al usuario | Sí | `PropertiesPanel.cpp:104-120`; tests `physics_tests.cpp:146-161` |
 | Joints (Fixed / Hinge / Spring / Configurable) | No | ausente |
@@ -246,10 +246,11 @@ Fecha: 2026-08-25 · Alcance leído: `engine/include/DonTopo/Physics/**`, `engin
    Toca: `PhysicsManager.cpp:87-98`, las 4 factorías (`:193,250,301,354`), `Collider.h` (layer), bindings y UI del collider.
    Sí afecta fuera: la matriz global necesita persistirse en los settings del proyecto.
 
-1. **Callbacks de colisión (`OnCollisionEnter/Stay/Exit`)**: implementar `onContact` y pedir `eNOTIFY_TOUCH_FOUND/LOST/PERSISTS` para pares no-trigger, con una interfaz gemela de `ITriggerListener`.
-   Toca: `PhysicsManager.cpp:66,96-97`, `Collider.h:24-30`, `Collider.cpp:56-83`.
-   No afecta al resto: mismo camino `userData → Collider → owner` que ya usan los triggers, y el coste de CPU sólo aparece si se activan las flags.
-
+1. ~~**Callbacks de colisión (`OnCollisionEnter/Stay/Exit`)**~~ — HECHO: `CollisionEvent` + `ICollisionListener` gemelos de los de trigger (`Collider.h`), `onContact` implementado en el dispatcher que ya existía (no hay un segundo `PxSimulationEventCallback`) y `eNOTIFY_TOUCH_FOUND/LOST/PERSISTS` pedidas en `dtTriggerFilterShader` **sólo** para pares no-trigger que sobrevivan al filtro de capas. El Stay es nativo de PhysX, no sintetizado como el de trigger, así que no hay registro ni recorrido por frame. En Lua: `OnCollisionEnter/Stay/Exit(other)` vía `ScriptCollisionListener`, que comparte cola con los triggers.
+   Toca: `PhysicsManager.cpp:66-108,158-176`, `Collider.h/.cpp`, `ScriptManager.h/.cpp`, `LuaApiReference.cpp`, README.
+   No afecta al resto: mismo camino `userData → Collider → owner` que ya usan los triggers; la rama de trigger del filter shader queda intacta. Coste asumido: con PERSISTS, PhysX llama a `onContact` por cada par en contacto y sub-step, aunque nadie escuche.
+   Verificado por sabotaje (`physics_tests.cpp`): quitar el filtro de capas, quitar la exclusión de triggers o no despachar el Exit hace fallar un test cada uno.
+xxx
 2. **CCD e interpolación por Rigidbody**: `eENABLE_CCD` en el cuerpo más `PxSceneFlag::eENABLE_CCD` en la escena; la interpolación como suavizado de la pose leída en `getWorldTransform`.
    Toca: `PhysicsManager.cpp:134-140` (sceneDesc), `Rigidbody.h/.cpp`, dos checkboxes en `PropertiesPanel.cpp:7028-7048`.
    No afecta al resto: la interpolación se resuelve dentro del collider, sin tocar el renderer.

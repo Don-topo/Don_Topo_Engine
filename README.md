@@ -771,7 +771,36 @@ is runtime/editor state and is not serialised with the scene.
 
 Writing `isTrigger` goes through the PhysicsManager, not the collider alone, so the
 `OnTriggerEnter`/`OnTriggerStay`/`OnTriggerExit` bookkeeping stays in sync; outside Play
-Mode there is no live PhysX scene and the write is a silent no-op. `Physics.Raycast(origin,
+Mode there is no live PhysX scene and the write is a silent no-op.
+
+### Collision callbacks
+
+`OnCollisionEnter`, `OnCollisionStay` and `OnCollisionExit` are the twins of the
+`OnTrigger*` callbacks for pairs that actually collide — that is, where **neither** collider
+is a trigger. They take the same single argument, the other `Entity`, and run at the same
+point in the frame (physics first, then `Update`).
+
+```lua
+function Bala:OnCollisionEnter(other)
+    Log.Info("hit " .. other.name)
+    DestroyGameObject(self.entity)
+end
+```
+
+Differences worth knowing:
+
+| | `OnTrigger*` | `OnCollision*` |
+| --- | --- | --- |
+| When | one collider has `isTrigger = true` | neither collider is a trigger |
+| Who gets called | the script on the **trigger's** object | the scripts on **both** objects |
+| Physical response | none, they pass through | PhysX resolves the impact |
+| `Stay` source | synthesised once per physics sub-step | native PhysX `TOUCH_PERSISTS` |
+
+The two are mutually exclusive per pair: a trigger generates no contacts at all, so marking
+`isTrigger = true` mid-play silently swaps which family of callbacks that collider gets.
+The collision layer matrix filters both alike — a pair turned off in
+`Physics.SetLayerCollision` produces neither. And the same "at least one Rigidbody" rule
+applies: two static colliders never form a pair, so neither family fires. `Physics.Raycast(origin,
 dir, maxDistance)` returns a table (`entity`, `point`, `normal`, `distance`) or `nil`, and
 `Physics.RaycastHit(...)` the boolean-only variant; both return `nil`/`false` outside Play.
 

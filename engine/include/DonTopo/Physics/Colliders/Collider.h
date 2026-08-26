@@ -29,6 +29,35 @@ public:
     virtual void onTriggerExit (const TriggerEvent&) {}
 };
 
+// Evento de COLISIÓN: el par no es trigger y PhysX lo resuelve de verdad
+// (impulsos, rebote). Mismos campos y misma semántica de `other` opaco que
+// TriggerEvent.
+//
+// NO lleva puntos de contacto a propósito: PhysX los da
+// (PxContactPair::extractContacts) pero exige pedir
+// eNOTIFY_CONTACT_POINTS en el filter shader, lo que copia el stream de
+// contactos de CADA par a memoria del callback. Hoy nadie en el motor
+// —scripting, editor, gameplay— consume posiciones de contacto, así que se
+// paga ese coste el día que haga falta.
+struct CollisionEvent {
+    void*     other         = nullptr;
+    Collider* otherCollider = nullptr;
+};
+
+// Gemelo de ITriggerListener para pares no-trigger. Métodos vacíos por
+// defecto, igual que allí.
+//
+// Diferencia con los triggers: aquí el Stay NO se sintetiza por frame. PhysX
+// emite eNOTIFY_TOUCH_PERSISTS de forma nativa en onContact mientras el
+// contacto siga vivo, así que no hace falta registro ni recorrido de overlaps.
+class ICollisionListener {
+public:
+    virtual ~ICollisionListener() = default;
+    virtual void onCollisionEnter(const CollisionEvent&) {}
+    virtual void onCollisionStay (const CollisionEvent&) {}
+    virtual void onCollisionExit (const CollisionEvent&) {}
+};
+
 // Base común de los 4 colliders (Box/Sphere/Capsule/Plane). Aporta el estado
 // de trigger, el owner opaco, los listeners y el set de overlaps.
 //
@@ -61,6 +90,13 @@ public:
 
     void addListener(ITriggerListener* listener);
     void removeListener(ITriggerListener* listener);
+
+    // Listeners de colisión (pares no-trigger). Lista aparte de la de
+    // triggers: un collider no puede ser las dos cosas a la vez, pero el mismo
+    // consumidor sí puede registrarse en ambas y no queremos que un evento de
+    // un tipo recorra los listeners del otro.
+    void addCollisionListener(ICollisionListener* listener);
+    void removeCollisionListener(ICollisionListener* listener);
 
     // Material de física POR COLLIDER. Los defaults son los mismos que tenía el
     // PxMaterial global anterior (0.5 / 0.5 / 0.1), así que una escena que no
@@ -121,6 +157,13 @@ public:
     void removeOverlapSilent(Collider* other); // limpieza sin disparar (destrucción del otro)
     void dispatchStay();                        // por frame: onTriggerStay de cada overlap vivo
 
+    // Colisiones, invocadas por el mismo dispatcher desde onContact. No hay
+    // bookkeeping que llevar: los tres los emite PhysX
+    // (eNOTIFY_TOUCH_FOUND/PERSISTS/LOST) y aquí solo se reparten.
+    void dispatchCollisionEnter(Collider* other);
+    void dispatchCollisionStay (Collider* other);
+    void dispatchCollisionExit (Collider* other);
+
 protected:
     // Devuelve physx::PxShape* del collider concreto, como void* para no filtrar
     // PhysX en este header (que llega hasta Core vía GameObject.h). Sin
@@ -137,6 +180,7 @@ private:
     void*                          m_owner     = nullptr;
     PhysicsManager*                m_manager   = nullptr;
     std::vector<ITriggerListener*> m_listeners;
+    std::vector<ICollisionListener*> m_collisionListeners;
     std::unordered_set<Collider*>  m_overlaps;
 };
 
