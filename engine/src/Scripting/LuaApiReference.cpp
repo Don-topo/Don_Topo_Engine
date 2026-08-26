@@ -101,6 +101,10 @@ const std::vector<std::string>& baseSymbols()
         // El setter es no-op fuera de Play, donde no hay PhysicsManager.
         "BoxCollider.isTrigger", "SphereCollider.isTrigger",
         "CapsuleCollider.isTrigger", "PlaneCollider.isTrigger",
+        // Capa de colisión por collider (0-31). Con quién colisiona cada capa lo
+        // dice la matriz global: Physics.SetLayerCollision / GetLayerCollision.
+        "BoxCollider.layer", "SphereCollider.layer",
+        "CapsuleCollider.layer", "PlaneCollider.layer",
 
         // Rigidbody (dinámica estilo Unity; GetComponent("Rigidbody"))
         "Rigidbody.mass", "Rigidbody.useGravity", "Rigidbody.isKinematic",
@@ -386,6 +390,10 @@ const std::vector<std::string>& baseSymbols()
         // Overlap devuelven un array de Entity (vacío si nada solapa, nunca
         // nil): un solape no tiene punto, normal ni distancia.
         "Physics.SphereCast", "Physics.OverlapSphere", "Physics.OverlapBox",
+
+        // Physics — matriz de capas de colisión (32x32, simétrica). Índice
+        // fuera de [0,31]: error de Lua.
+        "Physics.SetLayerCollision", "Physics.GetLayerCollision",
 
         // Motor (cambio de escena en runtime)
         "DonTopo.loadScene",

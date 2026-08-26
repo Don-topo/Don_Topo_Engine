@@ -97,11 +97,31 @@ namespace {
         PxFilterObjectAttributes attr1, PxFilterData fd1,
         PxPairFlags& pairFlags, const void* constantBlock, PxU32 constantBlockSize)
     {
+        // CAPAS, antes que nada: word0 = bit de la capa propia, word1 = máscara
+        // de capas con las que colisiona (lo escribe
+        // PhysicsManager::refreshColliderFilter). El par sólo sobrevive si CADA
+        // lado acepta al otro. Va delante de la rama de trigger a propósito: una
+        // capa filtrada tampoco debe disparar onTriggerEnter.
+        //
+        // eSUPPRESS, no eKILL: la matriz se puede reactivar en runtime y PhysX
+        // tiene que poder volver a formar el par (eKILL lo descartaría pa
+        // siempre). Con la matriz por defecto word1 es 0xFFFFFFFF y ningún par
+        // se suprime.
+        if ((fd0.word1 & fd1.word0) == 0 || (fd1.word1 & fd0.word0) == 0)
+            return PxFilterFlag::eSUPPRESS;
+
         if (PxFilterObjectIsTrigger(attr0) || PxFilterObjectIsTrigger(attr1)) {
             pairFlags = PxPairFlag::eTRIGGER_DEFAULT;
             return PxFilterFlag::eDEFAULT;
         }
-        return PxDefaultSimulationFilterShader(attr0, fd0, attr1, fd1,
+        // OJO: al shader por defecto se le pasa PxFilterData VACÍO a propósito,
+        // no el nuestro. PxDefaultSimulationFilterShader indexa su tabla interna
+        // de grupos con el word0 crudo (gCollisionTable[word0][word0], 32x32) y
+        // convierte word2/word3 en un PxGroupsMask; con nuestro word0 = 1<<capa
+        // (hasta 2^31) leería fuera de la tabla. Vaciándolo ve exactamente lo
+        // mismo que veía antes de existir las capas —todo a cero—, que es lo que
+        // preserva el comportamiento previo bit a bit.
+        return PxDefaultSimulationFilterShader(attr0, PxFilterData(), attr1, PxFilterData(),
                                                pairFlags, constantBlock, constantBlockSize);
     }
 }
@@ -220,6 +240,8 @@ std::shared_ptr<BoxCollider> PhysicsManager::createBoxColliderComponent(
 
     auto collider = std::make_shared<BoxCollider>(actor, shape, halfExtents, center);
     collider->setManager(this);
+    // Alta en el registro + PxFilterData inicial de su capa (la 0 por defecto).
+    registerCollider(collider);
     // userData del actor = Collider* base (upcast explícito para respetar
     // cualquier offset de la base); lo lee el TriggerDispatcher para saber
     // quién solapó a quién.
@@ -231,6 +253,7 @@ std::shared_ptr<BoxCollider> PhysicsManager::createBoxColliderComponent(
     (void)dynamic;
     auto collider = std::make_shared<BoxCollider>(nullptr, nullptr, halfExtents, center);
     collider->setManager(this);
+    registerCollider(collider);
     return collider;
 #endif
 }
@@ -279,6 +302,7 @@ std::shared_ptr<SphereCollider> PhysicsManager::createSphereColliderComponent(
 
     auto collider = std::make_shared<SphereCollider>(actor, shape, radius, center);
     collider->setManager(this);
+    registerCollider(collider);
     Collider* base = collider.get();
     actor->userData = base;
     return collider;
@@ -287,6 +311,7 @@ std::shared_ptr<SphereCollider> PhysicsManager::createSphereColliderComponent(
     (void)dynamic;
     auto collider = std::make_shared<SphereCollider>(nullptr, nullptr, radius, center);
     collider->setManager(this);
+    registerCollider(collider);
     return collider;
 #endif
 }
@@ -336,6 +361,7 @@ std::shared_ptr<CapsuleCollider> PhysicsManager::createCapsuleColliderComponent(
 
     auto collider = std::make_shared<CapsuleCollider>(actor, shape, radius, halfHeight, center);
     collider->setManager(this);
+    registerCollider(collider);
     Collider* base = collider.get();
     actor->userData = base;
     return collider;
@@ -344,6 +370,7 @@ std::shared_ptr<CapsuleCollider> PhysicsManager::createCapsuleColliderComponent(
     (void)dynamic;
     auto collider = std::make_shared<CapsuleCollider>(nullptr, nullptr, radius, halfHeight, center);
     collider->setManager(this);
+    registerCollider(collider);
     return collider;
 #endif
 }
@@ -396,6 +423,7 @@ std::shared_ptr<PlaneCollider> PhysicsManager::createPlaneColliderComponent(
 
     auto collider = std::make_shared<PlaneCollider>(actor, shape, center);
     collider->setManager(this);
+    registerCollider(collider);
     Collider* base = collider.get();
     actor->userData = base;
     return collider;
@@ -403,6 +431,7 @@ std::shared_ptr<PlaneCollider> PhysicsManager::createPlaneColliderComponent(
     (void)worldTransform;
     auto collider = std::make_shared<PlaneCollider>(nullptr, nullptr, center);
     collider->setManager(this);
+    registerCollider(collider);
     return collider;
 #endif
 }
@@ -474,6 +503,10 @@ void* PhysicsManager::rebuildActor(const std::shared_ptr<Collider>& collider, bo
     collider->setActorHandle(newActor);
     // Los flags de trigger viven en la shape (que sobrevivió), pero se re-asegura.
     if (wasTrigger) collider->applyTriggerFlag(true);
+    // El PxFilterData también vive en la shape, así que el swap de actor lo
+    // conserva; se reescribe igualmente pa que la capa siga siendo la fuente de
+    // la verdad aunque alguien toque la shape por otro camino.
+    refreshColliderFilter(collider.get());
     return newActor;
 }
 #endif
@@ -672,8 +705,167 @@ void PhysicsManager::setTrigger(const std::shared_ptr<Collider>& collider, bool 
     }
 }
 
+void PhysicsManager::registerCollider(const std::shared_ptr<Collider>& collider)
+{
+    if (!collider) return;
+    m_colliders.push_back(collider);
+    // Primer volcado del filtro: sin él la shape se quedaría con el
+    // PxFilterData a cero y el shader de capas suprimiría todos sus pares.
+    refreshColliderFilter(collider.get());
+}
+
+void PhysicsManager::refreshAllColliderFilters()
+{
+    for (auto it = m_colliders.begin(); it != m_colliders.end(); )
+    {
+        auto collider = it->lock();
+        if (!collider) { it = m_colliders.erase(it); continue; }
+        refreshColliderFilter(collider.get());
+        ++it;
+    }
+}
+
+void PhysicsManager::refreshColliderFilter(Collider* collider)
+{
+#ifdef DT_PHYSX_ENABLED
+    if (!collider) return;
+    auto* shape = static_cast<PxShape*>(collider->geometryShape());
+    if (!shape) return;
+    const int layer = collider->getLayer();
+    if (!isValidLayer(layer)) return;
+
+    // word2/word3 quedan a cero: no los usa ni este shader ni el de queries.
+    PxFilterData fd = shape->getSimulationFilterData();
+    fd.word0 = 1u << static_cast<uint32_t>(layer);
+    fd.word1 = m_layerMasks[static_cast<size_t>(layer)];
+    shape->setSimulationFilterData(fd);
+#else
+    (void)collider;
+#endif
+}
+
+void PhysicsManager::setLayerCollision(int a, int b, bool enabled)
+{
+    if (!isValidLayer(a) || !isValidLayer(b)) return;
+
+    const uint32_t bitA = 1u << static_cast<uint32_t>(a);
+    const uint32_t bitB = 1u << static_cast<uint32_t>(b);
+    if (enabled)
+    {
+        m_layerMasks[static_cast<size_t>(a)] |= bitB;
+        m_layerMasks[static_cast<size_t>(b)] |= bitA;
+    }
+    else
+    {
+        m_layerMasks[static_cast<size_t>(a)] &= ~bitB;
+        m_layerMasks[static_cast<size_t>(b)] &= ~bitA;
+    }
+
+    // La matriz es global pero el filtro está COPIADO en cada shape: sin este
+    // repaso el cambio no lo vería ningún collider ya creado.
+    refreshAllColliderFilters();
+}
+
+bool PhysicsManager::getLayerCollision(int a, int b) const
+{
+    if (!isValidLayer(a) || !isValidLayer(b)) return false;
+    return (m_layerMasks[static_cast<size_t>(a)] & (1u << static_cast<uint32_t>(b))) != 0;
+}
+
+int PhysicsManager::addLayer(const std::string& name)
+{
+    if (m_layerCount >= kLayerCount) return -1;
+    const int nueva = m_layerCount++;
+    // La fila estaba liberada: se deja "colisiona con todo", que es el default de
+    // una capa recién creada. Si la ocupó una capa borrada antes, removeLayer ya
+    // la dejó así.
+    m_layerNames[static_cast<size_t>(nueva)] = name;
+    return nueva;
+}
+
+bool PhysicsManager::removeLayer(int layer)
+{
+    // La 0 es la de respaldo: si se pudiera borrar, los colliders reasignados no
+    // tendrían adónde ir.
+    if (layer <= 0 || layer >= m_layerCount) return false;
+
+    // Colliders primero, con la numeración VIEJA todavía en pie: los de la capa
+    // que muere caen a la 0, los de encima bajan un puesto para que la lista no
+    // deje huecos.
+    for (auto it = m_colliders.begin(); it != m_colliders.end(); )
+    {
+        auto collider = it->lock();
+        if (!collider) { it = m_colliders.erase(it); continue; }
+        const int suya = collider->getLayer();
+        if (suya == layer)     collider->setLayer(0);
+        else if (suya > layer) collider->setLayer(suya - 1);
+        ++it;
+    }
+
+    // Matriz: quitar fila y columna 'layer'. Se hace sobre una copia booleana
+    // porque desplazar bits en sitio se pisa a sí mismo.
+    const int viejo = m_layerCount;
+    bool tabla[kLayerCount][kLayerCount];
+    for (int a = 0; a < viejo; ++a)
+        for (int b = 0; b < viejo; ++b)
+            tabla[a][b] = getLayerCollision(a, b);
+
+    for (int a = 0; a < viejo - 1; ++a)
+    {
+        const int origenA = (a >= layer) ? a + 1 : a;
+        uint32_t  fila    = 0xFFFFFFFFu; // los bits >= layerCount nuevo: sin filtrar
+        for (int b = 0; b < viejo - 1; ++b)
+        {
+            const int origenB = (b >= layer) ? b + 1 : b;
+            if (!tabla[origenA][origenB]) fila &= ~(1u << static_cast<uint32_t>(b));
+        }
+        m_layerMasks[static_cast<size_t>(a)] = fila;
+    }
+
+    // La última queda liberada: nombre vacío y sin filtros, lista pa que la
+    // reutilice el siguiente addLayer.
+    m_layerMasks[static_cast<size_t>(viejo - 1)] = 0xFFFFFFFFu;
+
+    for (int i = layer; i < viejo - 1; ++i)
+        m_layerNames[static_cast<size_t>(i)] = m_layerNames[static_cast<size_t>(i + 1)];
+    m_layerNames[static_cast<size_t>(viejo - 1)].clear();
+
+    m_layerCount = viejo - 1;
+
+    // Los colliders ya llevan su índice nuevo, pero su word1 salió de la matriz
+    // VIEJA: hay que reescribirlo con la compactada.
+    refreshAllColliderFilters();
+    return true;
+}
+
+void PhysicsManager::setLayerName(int layer, const std::string& name)
+{
+    if (!isValidLayer(layer)) return;
+    m_layerNames[static_cast<size_t>(layer)] = name;
+}
+
+std::string PhysicsManager::getLayerName(int layer) const
+{
+    if (!isValidLayer(layer)) return std::string();
+    return m_layerNames[static_cast<size_t>(layer)];
+}
+
+uint32_t PhysicsManager::layerMask(int layer) const
+{
+    if (!isValidLayer(layer)) return 0u;
+    return m_layerMasks[static_cast<size_t>(layer)];
+}
+
 void PhysicsManager::onColliderDestroyed(Collider* collider)
 {
+    // Poda del registro de capas: el que muere ya no bloquea su weak_ptr
+    // (refcount 0 durante ~Collider), así que sale aquí junto con cualquier otro
+    // expirado. Sin esto el vector crecería sin fin.
+    m_colliders.erase(
+        std::remove_if(m_colliders.begin(), m_colliders.end(),
+                       [](const std::weak_ptr<Collider>& w) { return w.expired(); }),
+        m_colliders.end());
+
     // El collider que muere puede estar en los overlaps de otros triggers:
     // se purga de todos para no dejar punteros colgantes en el próximo Stay.
     // Si el que muere era él mismo un trigger, su weak_ptr ya no bloquea

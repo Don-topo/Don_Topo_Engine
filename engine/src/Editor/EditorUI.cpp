@@ -25,9 +25,169 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <cstdio>
 #include <stdexcept>
 
 namespace DonTopo {
+
+namespace {
+// Ventana de capas de colisión abierta o no. Vive aquí y no en EditorUI porque
+// es estado de UI puro —qué ventana está visible—, no un ajuste del proyecto, y
+// el header del editor queda fuera del alcance de esta feature. Hay un solo
+// EditorUI por proceso.
+bool g_showLayerMatrix = false;
+
+// Capa que el usuario ha pedido borrar y espera confirmación; -1 = ninguna.
+// Borrar RENUMERA (ver PhysicsManager::removeLayer), así que no es un cambio
+// que se pueda deshacer con Ctrl+Z: se pregunta antes.
+int g_layerPendienteDeBorrar = -1;
+
+// Ventana de capas de colisión. Función libre y NO parte de drawMenuBar: si se
+// dibujara desde ahí saldría antes que el dockspace y ImGui no la dejaría
+// acoplar con el resto de paneles. La llama draw() justo después de
+// drawDockSpace().
+//
+// onChanged guarda los ajustes en el project.json (EditorUI::saveProjectSettings).
+void drawCollisionLayersWindow(DonTopo::PhysicsManager* physics,
+                               const std::function<void()>& onChanged)
+{
+    using DonTopo::PhysicsManager;
+    if (!g_showLayerMatrix) return;
+
+    ImGui::SetNextWindowSize(ImVec2(760.0f, 540.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Collision Layers", &g_showLayerMatrix))
+    {
+        if (!physics)
+        {
+            ImGui::TextDisabled("Sin PhysicsManager: no hay capas que editar.");
+            ImGui::End();
+            return;
+        }
+
+        ImGui::TextWrapped(
+            "Capas de colision del proyecto. La matriz es SIMETRICA: marcar (a,b) "
+            "marca tambien (b,a), por eso solo se dibuja la mitad superior. Todo "
+            "marcado = sin filtros, el comportamiento por defecto.");
+        ImGui::Separator();
+
+        const int total = physics->layerCount();
+
+        // --- Lista de capas: nombre + borrar --------------------------------
+        for (int i = 0; i < total; ++i)
+        {
+            ImGui::PushID(i);
+            ImGui::Text("%2d", i);
+            ImGui::SameLine();
+
+            char buf[64] = {};
+            std::snprintf(buf, sizeof(buf), "%s", physics->getLayerName(i).c_str());
+            ImGui::SetNextItemWidth(220.0f);
+            // Se escribe al manager en cada tecla (para que las etiquetas de la
+            // matriz y del collider se vean al vuelo) pero el project.json solo
+            // se guarda al CONFIRMAR: si no, se reescribiria letra a letra.
+            if (ImGui::InputText("##nombreCapa", buf, sizeof(buf)))
+                physics->setLayerName(i, buf);
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                onChanged();
+
+            ImGui::SameLine();
+            // La capa 0 es la de respaldo de los borrados: no se puede quitar.
+            ImGui::BeginDisabled(i == 0);
+            if (ImGui::SmallButton("x"))
+                g_layerPendienteDeBorrar = i;
+            ImGui::EndDisabled();
+            if (i == 0)
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(la capa por defecto no se borra)");
+            }
+            ImGui::PopID();
+        }
+
+        ImGui::BeginDisabled(total >= PhysicsManager::kLayerCount);
+        if (ImGui::Button("Add Layer"))
+        {
+            const int nueva = physics->addLayer("Layer " + std::to_string(total));
+            if (nueva >= 0) onChanged();
+        }
+        ImGui::EndDisabled();
+        if (total >= PhysicsManager::kLayerCount)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("maximo %d capas", PhysicsManager::kLayerCount);
+        }
+
+        // --- Confirmacion de borrado ----------------------------------------
+        if (g_layerPendienteDeBorrar > 0)
+            ImGui::OpenPopup("Borrar capa");
+        if (ImGui::BeginPopupModal("Borrar capa", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            const int capa = g_layerPendienteDeBorrar;
+            ImGui::Text("Borrar la capa %d (\"%s\")?", capa,
+                        capa > 0 ? physics->getLayerName(capa).c_str() : "");
+            ImGui::TextWrapped(
+                "Los colliders que la usaban pasaran a la capa 0, las capas de "
+                "encima bajaran un indice y la matriz perdera su fila y su "
+                "columna. NO se puede deshacer con Ctrl+Z.");
+            ImGui::Separator();
+            if (ImGui::Button("Borrar"))
+            {
+                if (physics->removeLayer(capa)) onChanged();
+                g_layerPendienteDeBorrar = -1;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancelar"))
+            {
+                g_layerPendienteDeBorrar = -1;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        // --- Matriz ---------------------------------------------------------
+        ImGui::Separator();
+        ImGui::BeginChild("matrizCapas", ImVec2(0.0f, 0.0f), false,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+
+        const float anchoEtiqueta = 200.0f;
+        const float anchoCelda    = ImGui::GetFrameHeight() + 6.0f;
+
+        ImGui::Dummy(ImVec2(1.0f, 1.0f));
+        for (int b = 0; b < total; ++b)
+        {
+            ImGui::SameLine(anchoEtiqueta + b * anchoCelda);
+            ImGui::Text("%d", b);
+        }
+
+        for (int a = 0; a < total; ++a)
+        {
+            const std::string nombre = physics->getLayerName(a);
+            const std::string fila =
+                std::to_string(a) + (nombre.empty() ? std::string() : ": " + nombre);
+            ImGui::TextUnformatted(fila.c_str());
+
+            // Solo b >= a: la celda simetrica la escribe setLayerCollision, y
+            // dibujar las dos daria dos controles para el mismo dato.
+            for (int b = a; b < total; ++b)
+            {
+                ImGui::SameLine(anchoEtiqueta + b * anchoCelda);
+                bool activo = physics->getLayerCollision(a, b);
+                ImGui::PushID(a * PhysicsManager::kLayerCount + b);
+                if (ImGui::Checkbox("##celda", &activo))
+                {
+                    physics->setLayerCollision(a, b, activo);
+                    onChanged();
+                }
+                ImGui::PopID();
+            }
+        }
+
+        ImGui::EndChild();
+    }
+    ImGui::End();
+}
+} // namespace
 
 EditorUI::EditorUI()
     : m_sceneFileDialog(std::make_unique<IGFD::FileDialog>())
@@ -386,6 +546,21 @@ ProjectContext::ViewSettings EditorUI::currentSettings()
         s.fpLightRadius        = m_renderer->forwardPlusLightRadius();
     }
 
+    // Capas de física: la fuente de la verdad es el PhysicsManager. Sin él
+    // (tests headless, arranque antes de crearlo) se quedan los defaults de
+    // ViewSettings, que son los mismos que los del manager.
+    static_assert(ProjectContext::ViewSettings::LayerCount == PhysicsManager::kLayerCount,
+                  "El project.json y el PhysicsManager tienen que contar las mismas capas");
+    if (m_physics)
+    {
+        s.layerActive = m_physics->layerCount();
+        for (int i = 0; i < PhysicsManager::kLayerCount; ++i)
+        {
+            s.layerNames[static_cast<size_t>(i)] = m_physics->getLayerName(i);
+            s.layerMasks[static_cast<size_t>(i)] = m_physics->layerMask(i);
+        }
+    }
+
     using VS = ProjectContext::ViewSettings;
     auto flag = [](bool* open) { return (open && *open) ? 1 : 0; };
     s.panelOpen[VS::PanelScene]          = flag(m_scenePanel.GetOpenPtr());
@@ -495,6 +670,28 @@ void EditorUI::applyProjectSettings()
                         renderBackendName(m_selectedBackend) + " y el editor está corriendo con " +
                         renderBackendName(m_activeBackend) + ": reinicia para aplicarlo");
 
+    // Capas de física: los nombres tal cual, y la matriz recorriendo sólo la
+    // mitad SUPERIOR (b >= a). setLayerCollision escribe ya las dos mitades, así
+    // que un project.json con la matriz asimétrica —editado a mano— queda
+    // simétrico en vez de pelearse consigo mismo celda a celda.
+    if (m_physics)
+    {
+        // Cuántas capas hay: se vacía a la 0 y se recrean, así el manager queda
+        // con las del proyecto y no con las del proyecto anterior.
+        while (m_physics->layerCount() > 1)
+            m_physics->removeLayer(m_physics->layerCount() - 1);
+        for (int i = 1; i < s.layerActive; ++i)
+            m_physics->addLayer(s.layerNames[static_cast<size_t>(i)]);
+
+        for (int i = 0; i < PhysicsManager::kLayerCount; ++i)
+            m_physics->setLayerName(i, s.layerNames[static_cast<size_t>(i)]);
+
+        for (int a = 0; a < PhysicsManager::kLayerCount; ++a)
+            for (int b = a; b < PhysicsManager::kLayerCount; ++b)
+                m_physics->setLayerCollision(
+                    a, b, (s.layerMasks[static_cast<size_t>(a)] & (1u << static_cast<uint32_t>(b))) != 0);
+    }
+
     // Visibilidad de panel: el project.json manda sobre imgui.ini en QUÉ paneles
     // están abiertos; el layout (docking, tamaños) lo sigue llevando imgui.ini.
     // Un panel sin dato guardado (-1) se queda como esté.
@@ -562,6 +759,8 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
     drawMenuBar();
     drawToolbar();
     drawDockSpace();
+    // Después del dockspace: una ventana dibujada antes no se puede acoplar.
+    drawCollisionLayersWindow(m_physics, [this] { saveProjectSettings(); });
 
     // Ctx único, construido una vez por frame y compartido por referencia
     // con todos los paneles (patrón fijado aquí para las tareas siguientes).
@@ -774,6 +973,9 @@ void EditorUI::drawMenuBar()
             // para trocear un atlas concreto y se cierra, no es un panel de los
             // que uno quiere encontrarse abiertos al arrancar.
             ImGui::MenuItem("Sprite Editor", nullptr, m_spriteEditor.GetOpenPtr());
+            // Misma razón que el Sprite Editor: se abre para tocar la matriz y
+            // se cierra, no es un panel que uno quiera abierto al arrancar.
+            ImGui::MenuItem("Collision Layers", nullptr, &g_showLayerMatrix);
             panelToggled |= ImGui::MenuItem("Performance", nullptr, m_performancePanel.GetOpenPtr());
             panelToggled |= ImGui::MenuItem("Input Actions", nullptr, m_inputActionsPanel.GetOpenPtr());
             if (panelToggled)
@@ -1197,6 +1399,7 @@ void EditorUI::drawMenuBar()
         }
         ImGui::EndMainMenuBar();
     }
+
 }
 
 void EditorUI::drawToolbar()

@@ -708,6 +708,10 @@ function Caja:Start()
     col.dynamicFriction = 0.4
     col.bounciness      = 0.9
     col.isTrigger       = false   -- true = overlap without collision + OnTrigger* callbacks
+    col.layer           = 3       -- collision layer, 0-31 (0 = "Default")
+
+    -- layers 3 and 7 stop colliding, scene-wide and both ways
+    Physics.SetLayerCollision(3, 7, false)
 end
 
 function Caja:Update(dt)
@@ -734,9 +738,36 @@ about in the Log Console and the force is dropped, rather than raising.
 The four colliders (`BoxCollider`, `SphereCollider`, `CapsuleCollider`, `PlaneCollider`)
 all carry `staticFriction`, `dynamicFriction` and `bounciness` — each collider owns its
 own PhysX material, so two objects in the same scene can slide and bounce differently —
-plus `isTrigger`. Shape stays on methods (`GetHalfExtents`/`SetHalfExtents`,
+plus `isTrigger` and `layer`. Shape stays on methods (`GetHalfExtents`/`SetHalfExtents`,
 `GetRadius`/`SetRadius`, `GetHalfHeight`/`SetHalfHeight`, `GetCenter`/`SetCenter`),
 since Lua has no vector type.
+
+`layer` is the collider's **collision layer**, an index into the project's layer list.
+Layer 0 is `"Default"` and always exists; the rest are **created on demand** from
+**View → Collision Layers** (`Add Layer`, rename inline, `x` to delete — with a
+confirmation, since deleting cannot be undone). Deleting a layer **compacts** the list:
+colliders using it fall back to layer 0, layers above it shift down one index, and the
+matrix loses that row and column. A script that hardcodes layer indices therefore points
+at a different layer after a deletion. The ceiling is **32** layers. Which layers actually
+collide is decided by a global, symmetric matrix:
+
+| Call | Does |
+| --- | --- |
+| `Physics.SetLayerCollision(a, b, enabled)` | turns the pair on/off, **both ways** — setting `(a,b)` also sets `(b,a)` |
+| `Physics.GetLayerCollision(a, b)` | `true` if layers `a` and `b` collide |
+
+The matrix starts **all `true`**, so a project that never touches it behaves exactly as
+before layers existed. A filtered pair produces neither contacts nor `OnTrigger*` events —
+the check runs before the trigger branch of the filter shader — and both the collider's
+`layer` and the matrix take effect **mid-play**: the underlying PhysX filter data of every
+live shape is rewritten on the spot. An index outside `0..31` **raises a Lua error** (it is
+not clamped: a silent clamp would leave the script filtering by a layer it never asked for).
+Lua accepts the full `0..31` range the core supports, even for layers not created in the
+editor yet; the Properties dropdown only offers the ones that exist.
+Outside Play Mode there is no PhysX scene, so `SetLayerCollision` is a no-op and
+`GetLayerCollision` answers `true`, the default matrix. Layer names and the matrix are
+saved per project in the `settings` section of `project.json`; the collider's own `layer`
+is runtime/editor state and is not serialised with the scene.
 
 Writing `isTrigger` goes through the PhysicsManager, not the collider alone, so the
 `OnTriggerEnter`/`OnTriggerStay`/`OnTriggerExit` bookkeeping stays in sync; outside Play

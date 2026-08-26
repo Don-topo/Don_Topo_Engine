@@ -163,6 +163,20 @@ nlohmann::json settingsToJson(const ProjectContext::ViewSettings& s)
             panels[kPanelKeys[i]] = (s.panelOpen[i] != 0);
     }
     j["panels"] = panels;
+
+    // Capas de física: los 32 nombres y las 32 máscaras SIEMPRE, aunque estén a
+    // su valor por defecto. La matriz es una foto completa: escribir sólo lo
+    // cambiado obligaría a adivinar al leer si un hueco es "no tocado" o
+    // "desactivado".
+    nlohmann::json names = nlohmann::json::array();
+    nlohmann::json masks = nlohmann::json::array();
+    for (int i = 0; i < ProjectContext::ViewSettings::LayerCount; ++i) {
+        names.push_back(s.layerNames[static_cast<size_t>(i)]);
+        masks.push_back(s.layerMasks[static_cast<size_t>(i)]);
+    }
+    j["layerNames"]     = names;
+    j["layerCollision"] = masks;
+    j["layerActive"]    = s.layerActive;
     return j;
 }
 
@@ -184,6 +198,12 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
     s.aaMode     = def.aaMode;
     s.fpMode     = def.fpMode;
     s.renderBackend = def.renderBackend;
+    // Las capas van con los ENABLES, no con los parámetros: ausentes o
+    // corruptas se caen al default (matriz sin filtros, sólo la 0 nombrada), no
+    // a lo que tenga cargado el PhysicsManager de la sesión anterior.
+    s.layerNames  = def.layerNames;
+    s.layerMasks  = def.layerMasks;
+    s.layerActive = def.layerActive;
     s.loadFailed = false;
     s.unknownEnum.clear();
     for (int i = 0; i < ViewSettings::PanelCount; ++i)
@@ -262,6 +282,40 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
     s.taaFeedback          = readFloatField(v, "taaFeedback", s.taaFeedback);
     s.taaJitterScale       = readFloatField(v, "taaJitterScale", s.taaJitterScale);
     s.fpLightRadius        = readFloatField(v, "fpLightRadius", s.fpLightRadius);
+
+    // Capas de física. Tolerante ELEMENTO A ELEMENTO: un array de otro tamaño,
+    // o con un hueco de otro tipo, deja ese índice con su default en vez de
+    // tirar la lectura entera. Nunca lanza.
+    {
+        const auto it = v.find("layerNames");
+        if (it != v.end() && it->is_array()) {
+            const size_t n = std::min<size_t>(it->size(), ViewSettings::LayerCount);
+            for (size_t i = 0; i < n; ++i)
+                if ((*it)[i].is_string())
+                    s.layerNames[i] = (*it)[i].get<std::string>();
+        }
+    }
+    {
+        const auto it = v.find("layerCollision");
+        if (it != v.end() && it->is_array()) {
+            const size_t n = std::min<size_t>(it->size(), ViewSettings::LayerCount);
+            for (size_t i = 0; i < n; ++i) {
+                const nlohmann::json& m = (*it)[i];
+                // Sin signo y dentro de 32 bits: un negativo o un numerazo
+                // truncarían en silencio al convertir, y una máscara truncada
+                // apagaría colisiones que nadie pidió apagar.
+                if (!m.is_number_unsigned()) continue;
+                const uint64_t raw = m.get<uint64_t>();
+                if (raw > 0xFFFFFFFFull) continue;
+                s.layerMasks[i] = static_cast<uint32_t>(raw);
+            }
+        }
+    }
+
+    // Cuántas capas hay creadas. Se clampea a [1, 32]: un 0 o un negativo del
+    // fichero dejaría la lista sin la capa Default, que existe siempre.
+    s.layerActive = std::clamp(readIntField(v, "layerActive", s.layerActive), 1,
+                               ViewSettings::LayerCount);
 
     const auto panels = v.find("panels");
     if (panels != v.end() && panels->is_object()) {

@@ -369,6 +369,19 @@ namespace DonTopo::ScriptBindings
                 });
         }
 
+        // Índice de capa de colisión válido, o error de Lua. Lo usan los cuatro
+        // colliders (.layer) y la matriz de Physics. Se lanza en vez de clampear
+        // a propósito: con un clamp el script creería estar filtrando por la
+        // capa que pidió cuando en realidad está en otra, y eso no se ve hasta
+        // que algo atraviesa algo.
+        void requireLayer(const char* what, int layer)
+        {
+            if (!DonTopo::PhysicsManager::isValidLayer(layer))
+                throw std::runtime_error(std::string(what) + ": capa fuera de rango (0-" +
+                                         std::to_string(DonTopo::PhysicsManager::kLayerCount - 1) +
+                                         "): " + std::to_string(layer));
+        }
+
         void registerComponents(ScriptManager& mgr)
         {
             sol::state& lua = mgr.lua();
@@ -434,6 +447,21 @@ namespace DonTopo::ScriptBindings
                         if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
                         if (!ensureFinite(mgr, "BoxCollider.bounciness", v)) return;
                         go->getBoxCollider()->setBounciness(v);
+                    }),
+                // Capa de colisión (0-31). Con quién colisiona la decide la
+                // matriz global (Physics.SetLayerCollision). El setter reescribe
+                // el filtro de la shape, así que vale también en mitad de Play.
+                "layer", sol::property(
+                    [](const LuaBoxCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        return go->getBoxCollider()->getLayer();
+                    },
+                    [](const LuaBoxCollider& c, int v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasBoxCollider()) throw std::runtime_error("El GameObject ya no tiene Box Collider");
+                        requireLayer("BoxCollider.layer", v);
+                        go->getBoxCollider()->setLayer(v);
                     }),
                 // Is Trigger. El setter NO toca el collider a pelo: pasa por
                 // PhysicsManager::setTrigger, que además del flip de flags da
@@ -514,6 +542,19 @@ namespace DonTopo::ScriptBindings
                         if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
                         if (!ensureFinite(mgr, "SphereCollider.bounciness", v)) return;
                         go->getSphereCollider()->setBounciness(v);
+                    }),
+                // Capa de colisión; ver nota en BoxCollider.
+                "layer", sol::property(
+                    [](const LuaSphereCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        return go->getSphereCollider()->getLayer();
+                    },
+                    [](const LuaSphereCollider& c, int v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasSphereCollider()) throw std::runtime_error("El GameObject ya no tiene Sphere Collider");
+                        requireLayer("SphereCollider.layer", v);
+                        go->getSphereCollider()->setLayer(v);
                     }),
                 // Is Trigger; ver nota en BoxCollider.
                 "isTrigger", sol::property(
@@ -602,6 +643,19 @@ namespace DonTopo::ScriptBindings
                         if (!ensureFinite(mgr, "CapsuleCollider.bounciness", v)) return;
                         go->getCapsuleCollider()->setBounciness(v);
                     }),
+                // Capa de colisión; ver nota en BoxCollider.
+                "layer", sol::property(
+                    [](const LuaCapsuleCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        return go->getCapsuleCollider()->getLayer();
+                    },
+                    [](const LuaCapsuleCollider& c, int v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasCapsuleCollider()) throw std::runtime_error("El GameObject ya no tiene Capsule Collider");
+                        requireLayer("CapsuleCollider.layer", v);
+                        go->getCapsuleCollider()->setLayer(v);
+                    }),
                 // Is Trigger; ver nota en BoxCollider.
                 "isTrigger", sol::property(
                     [](const LuaCapsuleCollider& c) {
@@ -666,6 +720,19 @@ namespace DonTopo::ScriptBindings
                         if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
                         if (!ensureFinite(mgr, "PlaneCollider.bounciness", v)) return;
                         go->getPlaneCollider()->setBounciness(v);
+                    }),
+                // Capa de colisión; ver nota en BoxCollider.
+                "layer", sol::property(
+                    [](const LuaPlaneCollider& c) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        return go->getPlaneCollider()->getLayer();
+                    },
+                    [](const LuaPlaneCollider& c, int v) {
+                        GameObject* go = deref(c.e);
+                        if (!go->hasPlaneCollider()) throw std::runtime_error("El GameObject ya no tiene Plane Collider");
+                        requireLayer("PlaneCollider.layer", v);
+                        go->getPlaneCollider()->setLayer(v);
                     }),
                 // Is Trigger; ver nota en BoxCollider.
                 "isTrigger", sol::property(
@@ -2830,6 +2897,30 @@ namespace DonTopo::ScriptBindings
                 (void)va;
                 return sol::make_object(mgr.lua(), mgr.lua().create_table());
 #endif
+            };
+
+            // Physics.SetLayerCollision(a, b, activo) / GetLayerCollision(a, b):
+            // matriz GLOBAL de 32x32, simétrica — activar (a,b) activa (b,a).
+            // El cambio se propaga a los colliders que ya estén en la escena, o
+            // sea que vale en mitad de una partida.
+            //
+            // Índice fuera de [0,31]: error de Lua (ver requireLayer). Fuera de
+            // Play no hay PhysicsManager: Set es no-op y Get devuelve true, que
+            // es lo que dice la matriz por defecto.
+            physics["SetLayerCollision"] = [&mgr](int a, int b, bool enabled) {
+                requireLayer("Physics.SetLayerCollision", a);
+                requireLayer("Physics.SetLayerCollision", b);
+                PhysicsManager* pm = mgr.physics();
+                if (!pm) return;
+                pm->setLayerCollision(a, b, enabled);
+            };
+
+            physics["GetLayerCollision"] = [&mgr](int a, int b) -> bool {
+                requireLayer("Physics.GetLayerCollision", a);
+                requireLayer("Physics.GetLayerCollision", b);
+                PhysicsManager* pm = mgr.physics();
+                if (!pm) return true;
+                return pm->getLayerCollision(a, b);
             };
         }
 

@@ -29,6 +29,7 @@
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Audio/AudioManager.h"
+#include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
 #include "DonTopo/UI/TextComponent.h"
@@ -53,8 +54,11 @@
 
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <vector>
 
 using namespace DonTopo;
@@ -2560,6 +2564,169 @@ static void test_is_trigger_desde_lua(ScriptManager& sm, PhysicsManager& pm)
     CHECK(caja->getWorldTransform()[3].y < -3.0f);
 }
 
+// --- Capas de colisión desde Lua --------------------------------------------
+
+// collider.layer va y vuelve, y el número llega al Collider de verdad (no se
+// queda en una copia del binding).
+static void test_layer_desde_lua(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Caja");
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f),
+                                             glm::mat4(1.0f), /*dynamic=*/false);
+    go->setBoxCollider(col);
+    sm.rebuildAliveSet();
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    sm.lua().script(
+        "bc = e:GetComponent('BoxCollider')\n"
+        "antes = bc.layer\n"
+        "bc.layer = 5\n"
+        "despues = bc.layer\n");
+
+    CHECK(sm.lua()["antes"].get<int>() == 0);
+    CHECK(sm.lua()["despues"].get<int>() == 5);
+    CHECK(col->getLayer() == 5);
+}
+
+// Índice fuera de [0,31]: error de Lua (no un clamp silencioso), y la capa se
+// queda como estaba. Se prueban los dos extremos.
+static void test_layer_fuera_de_rango_es_error(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Caja");
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f),
+                                             glm::mat4(1.0f), /*dynamic=*/false);
+    go->setBoxCollider(col);
+    sm.rebuildAliveSet();
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    sm.lua().script(
+        "bc = e:GetComponent('BoxCollider')\n"
+        "bc.layer = 3\n"
+        // tostring: si el pcall NO falla el segundo valor es nil, y leerlo como
+        // string desde C++ entra en panic de Lua y se lleva el proceso — el
+        // fallo hay que verlo como un CHECK, no como un aborto.
+        "okAlto, errAlto = pcall(function() bc.layer = 32 end)\n"
+        "okBajo, errBajo = pcall(function() bc.layer = -1 end)\n"
+        "errAlto = tostring(errAlto)\n");
+
+    CHECK(sm.lua()["okAlto"].get<bool>() == false);
+    CHECK(sm.lua()["okBajo"].get<bool>() == false);
+    CHECK(sm.lua()["errAlto"].get<std::string>().find("fuera de rango") != std::string::npos);
+    CHECK(col->getLayer() == 3); // ni el 32 ni el -1 han entrado
+}
+
+// La matriz desde Lua: apagar (6,7) se ve al leerla y llega al PhysicsManager;
+// los índices inválidos también son error aquí.
+static void test_matriz_de_capas_desde_lua(ScriptManager& sm, PhysicsManager& pm)
+{
+    sm.lua().script(
+        "antes = Physics.GetLayerCollision(6, 7)\n"
+        "Physics.SetLayerCollision(6, 7, false)\n"
+        "despues = Physics.GetLayerCollision(6, 7)\n"
+        "simetrico = Physics.GetLayerCollision(7, 6)\n"
+        "okSet = pcall(Physics.SetLayerCollision, 6, 99, false)\n"
+        "okGet = pcall(Physics.GetLayerCollision, -5, 0)\n");
+
+    CHECK(sm.lua()["antes"].get<bool>() == true);
+    CHECK(sm.lua()["despues"].get<bool>() == false);
+    CHECK(sm.lua()["simetrico"].get<bool>() == false); // la matriz es simétrica
+    CHECK(sm.lua()["okSet"].get<bool>() == false);
+    CHECK(sm.lua()["okGet"].get<bool>() == false);
+    CHECK(pm.getLayerCollision(6, 7) == false);        // ha llegado al manager
+
+    sm.lua().script("Physics.SetLayerCollision(6, 7, true)\n");
+    CHECK(pm.getLayerCollision(6, 7) == true);
+}
+
+// --- Persistencia de las capas en el project.json ----------------------------
+
+// Escribe un project.json de mentira en 'dir' con el contenido dado.
+static void escribirProjectJson(const std::filesystem::path& dir, const std::string& contenido)
+{
+    std::ofstream out(dir / "project.json", std::ios::binary | std::ios::trunc);
+    out << contenido;
+}
+
+// Guardar -> recargar devuelve nombres y matriz IDÉNTICOS. Es el round-trip
+// entero, pasando por disco.
+static void test_capas_round_trip_en_project_json()
+{
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "dt_capas_round_trip";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir, ec);
+
+    ProjectContext::ViewSettings s;
+    s.layerActive    = 8;            // 8 capas creadas de las 32 posibles
+    s.layerNames[3]  = "Enemigos";
+    s.layerNames[31] = "UI";
+    s.layerMasks[3] &= ~(1u << 7);   // (3,7) apagada, en las dos mitades
+    s.layerMasks[7] &= ~(1u << 3);
+    s.layerMasks[0] &= ~(1u << 0);   // una capa que ni consigo colisiona
+
+    CHECK(ProjectContext::writeSettings(dir, s));
+
+    const ProjectContext::ViewSettings leido =
+        ProjectContext::readSettings(dir, ProjectContext::ViewSettings{});
+
+    CHECK(!leido.loadFailed);
+    CHECK(leido.layerNames == s.layerNames);
+    CHECK(leido.layerMasks == s.layerMasks);
+    CHECK(leido.layerActive == 8);
+    CHECK(leido.layerNames[3] == "Enemigos");
+    CHECK((leido.layerMasks[3] & (1u << 7)) == 0u);
+
+    std::filesystem::remove_all(dir, ec);
+}
+
+// JSON ausente, ilegible o con las capas de otro tipo: DEFAULTS, nunca una
+// excepción ni una matriz a medias.
+static void test_capas_json_ausente_o_corrupto_da_defaults()
+{
+    const ProjectContext::ViewSettings def;
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "dt_capas_corrupto";
+    std::error_code ec;
+
+    // 1) Sin project.json.
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir, ec);
+    ProjectContext::ViewSettings s = ProjectContext::readSettings(dir, ProjectContext::ViewSettings{});
+    CHECK(s.layerMasks == def.layerMasks);
+    CHECK(s.layerNames == def.layerNames);
+
+    // 2) JSON truncado.
+    escribirProjectJson(dir, "{ \"settings\": { \"layerNames\": ");
+    s = ProjectContext::readSettings(dir, ProjectContext::ViewSettings{});
+    CHECK(s.loadFailed);
+    CHECK(s.layerMasks == def.layerMasks);
+    CHECK(s.layerNames == def.layerNames);
+
+    // 3) JSON válido pero con las capas de otro tipo, o con basura dentro del
+    //    array: cada hueco malo se cae a su default, el bueno sí entra.
+    escribirProjectJson(dir,
+        "{ \"name\": \"x\", \"settings\": {"
+        " \"layerNames\": \"no soy un array\","
+        " \"layerCollision\": [ -7, \"tampoco\", 8, 4294967296 ],"
+        " \"layerActive\": 0 } }");
+    s = ProjectContext::readSettings(dir, ProjectContext::ViewSettings{});
+    CHECK(!s.loadFailed);
+    CHECK(s.layerActive == 1);                   // el 0 se clampea: la Default existe siempre
+    CHECK(s.layerNames == def.layerNames);
+    CHECK(s.layerMasks[0] == def.layerMasks[0]); // negativo: ignorado
+    CHECK(s.layerMasks[1] == def.layerMasks[1]); // string: ignorado
+    CHECK(s.layerMasks[2] == 8u);                // el único válido
+    CHECK(s.layerMasks[3] == def.layerMasks[3]); // > 32 bits: ignorado
+    CHECK(s.layerMasks[4] == def.layerMasks[4]); // fuera del array: default
+
+    std::filesystem::remove_all(dir, ec);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -2631,6 +2798,11 @@ int main()
     test_force_mode_desde_lua(sm, pm);
     test_force_mode_fuera_de_rango(sm, pm);
     test_is_trigger_desde_lua(sm, pm);
+    test_layer_desde_lua(sm, pm);
+    test_layer_fuera_de_rango_es_error(sm, pm);
+    test_matriz_de_capas_desde_lua(sm, pm);
+    test_capas_round_trip_en_project_json();
+    test_capas_json_ausente_o_corrupto_da_defaults();
 
     am.shutdown();
     pm.shutdown();

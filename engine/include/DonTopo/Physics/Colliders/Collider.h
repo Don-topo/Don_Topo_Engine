@@ -77,6 +77,17 @@ public:
     float getDynamicFriction() const { return m_dynamicFriction; }
     float getBounciness() const      { return m_restitution; }
 
+    // Capa de colisión del collider (0-31, la 0 es "Default"). Con quién
+    // colisiona esa capa lo decide la matriz del PhysicsManager.
+    //
+    // El setter NO se limita a guardar el número: PhysX filtra por el
+    // PxFilterData de la shape, así que hay que reescribirlo
+    // (PhysicsManager::refreshColliderFilter). Un índice fuera de [0,31] se
+    // ignora y conserva la capa anterior — 1u<<32 es UB y una capa inventada no
+    // tiene fila en la matriz.
+    void setLayer(int layer);
+    int  getLayer() const { return m_layer; }
+
     // Lo setea PhysicsManager al crear el collider, para que ~Collider pueda
     // avisar de su destrucción y purgarse de los overlaps de otros triggers.
     void setManager(PhysicsManager* manager) { m_manager = manager; }
@@ -122,6 +133,7 @@ private:
     float                          m_staticFriction  = 0.5f;
     float                          m_dynamicFriction = 0.5f;
     float                          m_restitution     = 0.1f;
+    int                            m_layer     = 0; // "Default"
     void*                          m_owner     = nullptr;
     PhysicsManager*                m_manager   = nullptr;
     std::vector<ITriggerListener*> m_listeners;

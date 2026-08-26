@@ -1,4 +1,6 @@
 #pragma once
+#include <array>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -95,6 +97,32 @@ public:
         // Tri-estado: -1 = sin dato guardado, el panel se queda como este. Los
         // paneles NO entran en la regla de "todo apagado".
         int panelOpen[PanelCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1};
+
+        // --- Capas de colisión de física -------------------------------------
+        //
+        // Mismo índice que PhysicsManager (0-31), pero sin incluirlo: la
+        // dependencia va Editor -> Physics en el .cpp del editor, no en este
+        // header. La matriz viaja comprimida a una máscara por capa (bit b de
+        // layerMasks[a] = "a colisiona con b") y arranca ENTERA a unos, que es
+        // la matriz que no filtra nada — un proyecto sin estos campos abre
+        // exactamente como antes de la feature.
+        static constexpr int LayerCount = 32;
+
+        // Capas realmente creadas (el prefijo [0, layerActive) de los arrays de
+        // abajo). Siempre >= 1: la capa 0 ("Default") no se puede borrar.
+        int layerActive = 1;
+
+        std::array<std::string, LayerCount> layerNames = [] {
+            std::array<std::string, LayerCount> n;
+            n[0] = "Default";
+            return n;
+        }();
+
+        std::array<uint32_t, LayerCount> layerMasks = [] {
+            std::array<uint32_t, LayerCount> m{};
+            m.fill(0xFFFFFFFFu);
+            return m;
+        }();
 
         // Diagnostico de la ultima lectura, para el Log del editor. No se
         // serializa.

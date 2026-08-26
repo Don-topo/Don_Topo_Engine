@@ -554,6 +554,192 @@ static void test_overlap_box_honours_rotation(PhysicsManager& pm)
     CHECK(girada.getNbTouches() == 0);
 }
 
+// --- Capas de colisión -------------------------------------------------------
+//
+// La matriz arranca ENTERA a true y el PhysicsManager es compartido: cada test
+// toca sólo su celda y la restaura al salir, si no los tests de después
+// simularían con otra matriz. Se usan capas != 0 a propósito, para que los
+// colliders del resto de tests (todos en la capa 0) no se enteren.
+
+// Monta un suelo estático en la capa 'capaSuelo' y una caja dinámica en
+// 'capaCaja' a 1000 de altura. Devuelve las dos, vivas, pa poder tocar la
+// matriz con la escena YA construida.
+struct EscenaDeCapas {
+    std::shared_ptr<BoxCollider> suelo;
+    std::shared_ptr<BoxCollider> caja;
+    std::shared_ptr<Rigidbody>   rb;
+};
+
+static EscenaDeCapas montarEscenaDeCapas(PhysicsManager& pm, int capaSuelo, int capaCaja)
+{
+    flushAccumulator(pm);
+    EscenaDeCapas e;
+    e.suelo = pm.createBoxColliderComponent(glm::vec3(500.0f, 10.0f, 500.0f), glm::vec3(0.0f),
+                                            glm::mat4(1.0f), /*dynamic=*/false);
+    e.suelo->setLayer(capaSuelo);
+
+    e.caja = pm.createBoxColliderComponent(
+        glm::vec3(10.0f), glm::vec3(0.0f),
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 1000.0f, 0.0f)), /*dynamic=*/true);
+    e.caja->setLayer(capaCaja);
+    e.rb = std::make_shared<Rigidbody>();
+    pm.attachRigidbody(e.caja, e.rb);
+    return e;
+}
+
+// Con la celda (1,2) apagada el par ni se forma: la caja atraviesa el suelo.
+// La misma escena con la matriz por defecto la deja reposando encima (control:
+// test_layer_reenabled_at_runtime_makes_contact).
+static void test_layer_off_suppresses_contact(PhysicsManager& pm)
+{
+    pm.setLayerCollision(1, 2, false);
+    {
+        EscenaDeCapas e = montarEscenaDeCapas(pm, /*suelo=*/1, /*caja=*/2);
+        step(pm, 240, 1.0f / 60.0f);
+        const float y = e.caja->getWorldTransform()[3].y;
+        std::printf("  capas (1,2) off: y final = %.2f\n", y);
+        CHECK(y < -100.0f); // ha pasado de largo el suelo (que reposaría en 20)
+    }
+    pm.setLayerCollision(1, 2, true);
+}
+
+// Reactivar la celda EN RUNTIME, con las shapes ya creadas y cayendo, tiene que
+// devolver el contacto: es lo que fija que setLayerCollision reescriba el
+// PxFilterData de los colliders vivos y no sólo la matriz.
+static void test_layer_reenabled_at_runtime_makes_contact(PhysicsManager& pm)
+{
+    pm.setLayerCollision(1, 2, false);
+    {
+        EscenaDeCapas e = montarEscenaDeCapas(pm, /*suelo=*/1, /*caja=*/2);
+
+        // 0,2 s con la capa filtrada: cae ~20, sigue MUY por encima del suelo.
+        step(pm, 12, 1.0f / 60.0f);
+        const float yAntes = e.caja->getWorldTransform()[3].y;
+        CHECK(yAntes > 500.0f);
+
+        pm.setLayerCollision(1, 2, true);
+        step(pm, 240, 1.0f / 60.0f);
+        const float yDespues = e.caja->getWorldTransform()[3].y;
+        std::printf("  capas (1,2) on en runtime: y = %.2f -> %.2f\n", yAntes, yDespues);
+        CHECK(yDespues > 15.0f);  // reposa sobre el suelo (10 de suelo + 10 de media caja)
+        CHECK(yDespues < 25.0f);
+    }
+    pm.setLayerCollision(1, 2, true);
+}
+
+// Un trigger tampoco ve lo que la matriz filtra: la comprobación de capas va
+// ANTES de la rama de trigger del filter shader.
+static int entersWithLayers(PhysicsManager& pm, int capaTrigger, int capaOtro)
+{
+    auto trigger = pm.createBoxColliderComponent(glm::vec3(10.0f), glm::vec3(0.0f),
+                                                 glm::mat4(1.0f), /*dynamic=*/false);
+    trigger->setLayer(capaTrigger);
+    pm.setTrigger(trigger, true);
+
+    // El que entra lleva Rigidbody kinematic: es la combinación que SÍ dispara
+    // con la matriz por defecto (ver test_trigger_fires_when_other_has_rigidbody).
+    auto other = pm.createBoxColliderComponent(glm::vec3(5.0f), glm::vec3(0.0f),
+                                               glm::mat4(1.0f), /*dynamic=*/true);
+    other->setLayer(capaOtro);
+    auto rbO = std::make_shared<Rigidbody>();
+    pm.attachRigidbody(other, rbO);
+    rbO->setIsKinematic(true);
+
+    CountingListener listener;
+    trigger->addListener(&listener);
+    step(pm, 5, 1.0f / 60.0f);
+    trigger->removeListener(&listener);
+    pm.setTrigger(trigger, false);
+    return listener.enters;
+}
+
+static void test_trigger_respects_layer_matrix(PhysicsManager& pm)
+{
+    pm.setLayerCollision(3, 4, false);
+    const int filtrado = entersWithLayers(pm, /*trigger=*/3, /*otro=*/4);
+    pm.setLayerCollision(3, 4, true);
+    const int abierto = entersWithLayers(pm, /*trigger=*/3, /*otro=*/4);
+
+    std::printf("  trigger con capas: filtrado -> %d enters | abierto -> %d enters\n",
+                filtrado, abierto);
+    CHECK(filtrado == 0);
+    CHECK(abierto > 0);
+}
+
+// La matriz por defecto no filtra nada y los índices inválidos no revientan.
+static void test_layer_matrix_defaults_and_bounds(PhysicsManager& pm)
+{
+    for (int i = 0; i < PhysicsManager::kLayerCount; ++i)
+        CHECK(pm.layerMask(i) == 0xFFFFFFFFu);
+    CHECK(pm.getLayerCollision(0, 31));
+    CHECK(pm.getLayerName(0) == "Default");
+    CHECK(pm.getLayerName(1).empty());
+
+    // Fuera de rango: no-op, sin desbordar la matriz ni el shift.
+    pm.setLayerCollision(-1, 0, false);
+    pm.setLayerCollision(0, 32, false);
+    CHECK(pm.layerMask(0) == 0xFFFFFFFFu);
+    CHECK(!pm.getLayerCollision(-1, 0));
+    CHECK(pm.layerMask(32) == 0u);
+    CHECK(pm.getLayerName(32).empty());
+
+    // Y una capa inválida en el collider conserva la que tenía.
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f),
+                                             glm::mat4(1.0f), /*dynamic=*/false);
+    col->setLayer(7);
+    col->setLayer(99);
+    col->setLayer(-3);
+    CHECK(col->getLayer() == 7);
+}
+
+// Alta y baja de capas. Borrar COMPACTA: reasigna los colliders y desplaza la
+// matriz, que es lo que impide que la lista quede con huecos.
+static void test_add_and_remove_layers(PhysicsManager& pm)
+{
+    CHECK(pm.layerCount() == 1);          // solo "Default" al arrancar
+    CHECK(pm.addLayer("Suelo")   == 1);
+    CHECK(pm.addLayer("Enemigos") == 2);
+    CHECK(pm.addLayer("Balas")   == 3);
+    CHECK(pm.layerCount() == 4);
+
+    // La 0 no se borra; un índice que no existe tampoco.
+    CHECK(!pm.removeLayer(0));
+    CHECK(!pm.removeLayer(4));
+
+    // Matriz: se apaga (1,3) — que tras borrar la 2 pasará a ser (1,2).
+    pm.setLayerCollision(1, 3, false);
+
+    auto enLaQueMuere = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f),
+                                                      glm::mat4(1.0f), /*dynamic=*/false);
+    enLaQueMuere->setLayer(2);
+    auto porEncima = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f),
+                                                   glm::mat4(1.0f), /*dynamic=*/false);
+    porEncima->setLayer(3);
+
+    CHECK(pm.removeLayer(2));
+    CHECK(pm.layerCount() == 3);
+
+    // Los colliders: el de la capa muerta cae a la 0, el de encima baja uno.
+    CHECK(enLaQueMuere->getLayer() == 0);
+    CHECK(porEncima->getLayer() == 2);
+
+    // Nombres desplazados y el hueco liberado, vacío.
+    CHECK(pm.getLayerName(1) == "Suelo");
+    CHECK(pm.getLayerName(2) == "Balas");
+    CHECK(pm.getLayerName(3).empty());
+
+    // La celda apagada viaja con la capa: era (1,3), ahora es (1,2).
+    CHECK(!pm.getLayerCollision(1, 2));
+    CHECK(pm.getLayerCollision(1, 1));
+    // Y la capa liberada vuelve a "colisiona con todo".
+    CHECK(pm.layerMask(3) == 0xFFFFFFFFu);
+
+    // Restaurar pa los tests siguientes (el PhysicsManager es compartido).
+    pm.setLayerCollision(1, 2, true);
+    while (pm.layerCount() > 1) pm.removeLayer(pm.layerCount() - 1);
+    CHECK(pm.layerCount() == 1);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -578,6 +764,11 @@ int main()
     test_sphere_cast_miss(pm);
     test_overlap_sphere_counts(pm);
     test_overlap_box_honours_rotation(pm);
+    test_layer_matrix_defaults_and_bounds(pm);
+    test_layer_off_suppresses_contact(pm);
+    test_layer_reenabled_at_runtime_makes_contact(pm);
+    test_trigger_respects_layer_matrix(pm);
+    test_add_and_remove_layers(pm);
     pm.shutdown();
     if (g_failures == 0) std::printf("ALL PHYSICS TESTS PASSED\n");
     std::fflush(stdout);

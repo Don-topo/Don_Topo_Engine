@@ -78,6 +78,15 @@ void Collider::setBounciness(float restitution)
 #endif
 }
 
+void Collider::setLayer(int layer)
+{
+    if (!PhysicsManager::isValidLayer(layer)) return;
+    m_layer = layer;
+    // Guardar el número no filtra nada: quien decide es el PxFilterData de la
+    // shape, y eso lo reescribe el manager con la máscara de la capa nueva.
+    if (m_manager) m_manager->refreshColliderFilter(this);
+}
+
 void Collider::addListener(ITriggerListener* listener)
 {
     if (!listener) return;

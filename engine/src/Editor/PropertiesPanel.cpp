@@ -120,6 +120,67 @@ void drawTriggerRigidbodyHint(const DonTopo::GameObject* go, bool isTrigger)
                           "Añade un Rigidbody a este objeto o al que deba entrar.");
 }
 
+// Resolutores de collider por tipo. Punteros a función (sin capturas) para que
+// drawColliderLayerCombo los pueda meter en el lambda del Undo, que nunca debe
+// capturar un puntero crudo al collider: un Undo de Delete reconstruye el
+// GameObject y el viejo queda colgando.
+DonTopo::Collider* resolveBoxCollider(DonTopo::GameObject* go)
+{ return go->hasBoxCollider() ? go->getBoxCollider().get() : nullptr; }
+DonTopo::Collider* resolveSphereCollider(DonTopo::GameObject* go)
+{ return go->hasSphereCollider() ? go->getSphereCollider().get() : nullptr; }
+DonTopo::Collider* resolveCapsuleCollider(DonTopo::GameObject* go)
+{ return go->hasCapsuleCollider() ? go->getCapsuleCollider().get() : nullptr; }
+DonTopo::Collider* resolvePlaneCollider(DonTopo::GameObject* go)
+{ return go->hasPlaneCollider() ? go->getPlaneCollider().get() : nullptr; }
+
+// Desplegable de la capa de colisión, común a los 4 colliders. NO cachea el
+// valor en un miembro como los DragFloat de al lado: un combo confirma en el
+// mismo frame y no hay arrastre que proteger, así que se lee el collider vivo.
+// Se ofrecen las 32 capas que soporta el core, tengan nombre o no; los nombres
+// se editan en los ajustes del proyecto.
+void drawColliderLayerCombo(DonTopo::EditorContext& ctx, const char* label,
+                            const char* seccion, DonTopo::Collider* collider,
+                            DonTopo::Collider* (*resolve)(DonTopo::GameObject*))
+{
+    if (!collider || !ctx.selected) return;
+
+    // Solo las capas CREADAS en los ajustes del proyecto, no las 32 del techo.
+    // Si el collider quedó en una capa que ya no existe (no debería: removeLayer
+    // reasigna), se amplía la lista hasta ella para no mostrar un combo vacío.
+    const int creadas = ctx.physics ? ctx.physics->layerCount() : 1;
+    const int antes   = collider->getLayer();
+    const int total   = std::max(creadas, antes + 1);
+
+    std::string etiquetas[DonTopo::PhysicsManager::kLayerCount];
+    const char* items[DonTopo::PhysicsManager::kLayerCount];
+    for (int i = 0; i < total; ++i)
+    {
+        const std::string nombre = ctx.physics ? ctx.physics->getLayerName(i) : std::string();
+        etiquetas[i] = std::to_string(i) + (nombre.empty() ? std::string() : ": " + nombre);
+        items[i]     = etiquetas[i].c_str();
+    }
+
+    int capa = antes;
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+    if (!ImGui::Combo(label, &capa, items, total)) return;
+    if (capa == antes) return;
+
+    collider->setLayer(capa);
+    const std::string desc = std::string("Layer de '") + ctx.selected->name + "' (" + seccion + ")";
+    ctx.pushLog(desc + " cambiado a " + etiquetas[capa]);
+    if (!ctx.scene || !ctx.undo) return;
+
+    DonTopo::Scene* scene = ctx.scene;
+    const uint64_t  id    = ctx.selected->id;
+    ctx.undo->push(std::make_unique<DonTopo::PropertyCommand<int>>(
+        desc, antes, capa,
+        [scene, id, resolve](const int& c) {
+            DonTopo::GameObject* go = scene->findById(id);
+            if (!go) return;
+            if (DonTopo::Collider* col = resolve(go)) col->setLayer(c);
+        }));
+}
+
 } // namespace
 
 namespace DonTopo {
@@ -6535,6 +6596,8 @@ void PropertiesPanel::drawBoxColliderSection(EditorContext& ctx)
         activated |= ImGui::IsItemActivated();
         materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
+        drawColliderLayerCombo(ctx, "Layer##lb", "Box Collider", bc, resolveBoxCollider);
+
         bool oldTrigger = m_editIsTrigger;
         if (ImGui::Checkbox("Is Trigger", &m_editIsTrigger))
         {
@@ -6692,6 +6755,8 @@ void PropertiesPanel::drawSphereColliderSection(EditorContext& ctx)
         dragActive |= ImGui::IsItemActive();
         activated |= ImGui::IsItemActivated();
         materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+
+        drawColliderLayerCombo(ctx, "Layer##ls", "Sphere Collider", sc, resolveSphereCollider);
 
         bool oldTrigger = m_editSphereIsTrigger;
         if (ImGui::Checkbox("Is Trigger", &m_editSphereIsTrigger))
@@ -6863,6 +6928,8 @@ void PropertiesPanel::drawCapsuleColliderSection(EditorContext& ctx)
         activated |= ImGui::IsItemActivated();
         materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
 
+        drawColliderLayerCombo(ctx, "Layer##lc", "Capsule Collider", cc, resolveCapsuleCollider);
+
         bool oldTrigger = m_editCapsuleIsTrigger;
         if (ImGui::Checkbox("Is Trigger", &m_editCapsuleIsTrigger))
         {
@@ -7007,6 +7074,8 @@ void PropertiesPanel::drawPlaneColliderSection(EditorContext& ctx)
         dragActive |= ImGui::IsItemActive();
         activated |= ImGui::IsItemActivated();
         materialCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+
+        drawColliderLayerCombo(ctx, "Layer##lp", "Plane Collider", pc, resolvePlaneCollider);
 
         bool oldTrigger = m_editPlaneIsTrigger;
         if (ImGui::Checkbox("Is Trigger", &m_editPlaneIsTrigger))
