@@ -115,6 +115,10 @@ const std::vector<std::string>& baseSymbols()
         // Bitmask de ejes congelados: se compone con OR de las constantes de
         // la tabla RigidbodyConstraints (de abajo).
         "Rigidbody.constraints",
+        // Detección continua (contra el túnel de cuerpos rápidos) e
+        // interpolación visual de la pose entre pasos fijos. Ambas false por
+        // defecto e independientes entre sí.
+        "Rigidbody.ccd", "Rigidbody.interpolate",
         "Rigidbody.velocity", "Rigidbody.angularVelocity",
         "Rigidbody:AddForce", "Rigidbody:AddTorque", "Rigidbody:AddImpulse",
         "RigidbodyConstraints.None",

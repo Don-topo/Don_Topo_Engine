@@ -2449,6 +2449,72 @@ static void test_constraints_desde_lua(ScriptManager& sm, PhysicsManager& pm)
     CHECK(rb->getConstraints() == todos);
 }
 
+// Rigidbody.ccd y Rigidbody.interpolate desde Lua. No basta con leer de vuelta
+// lo escrito (eso lo daría un campo suelto que no llega a ningún sitio): el
+// test mira el flag que ve PhysX en el actor para ccd, y la pose que devuelve
+// getWorldTransform para interpolate. Independientes: encender una no toca la
+// otra.
+static void test_ccd_e_interpolate_desde_lua(ScriptManager& sm, PhysicsManager& pm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Cuerpo");
+    auto rb = std::make_shared<Rigidbody>();
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/true);
+    pm.attachRigidbody(col, rb);
+    go->setRigidbody(rb);
+    sm.rebuildAliveSet();
+
+    auto actorTieneCcd = [&col]() {
+        auto* actor = static_cast<physx::PxRigidActor*>(col->actorHandle());
+        auto* dyn   = actor ? actor->is<physx::PxRigidDynamic>() : nullptr;
+        return dyn && (dyn->getRigidBodyFlags() & physx::PxRigidBodyFlag::eENABLE_CCD);
+    };
+
+    // Punto de partida: los dos apagados, en C++ y en el actor.
+    CHECK(!rb->getCcd());
+    CHECK(!rb->getInterpolate());
+    CHECK(!actorTieneCcd());
+
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+    sm.lua().script(
+        "rb = e:GetComponent('Rigidbody')\n"
+        "ccd0 = rb.ccd\n"
+        "interp0 = rb.interpolate\n"
+        "rb.ccd = true\n");
+
+    CHECK(sm.lua()["ccd0"].get<bool>() == false);      // el getter lee el estado real
+    CHECK(sm.lua()["interp0"].get<bool>() == false);
+    CHECK(rb->getCcd());
+    CHECK(actorTieneCcd());                            // y el setter llega hasta PhysX
+    CHECK(!rb->getInterpolate());                      // independientes: ccd no encendió la otra
+
+    // Ahora interpolate: se comprueba MIRANDO LA POSE, no el getter. Con el
+    // acumulador a 0 tras un paso exacto, alpha vale 0 y lo visible es la pose
+    // PREVIA al sub-step, no la del actor.
+    sm.lua().script("rb.interpolate = true\nleido = rb.interpolate\n");
+    CHECK(sm.lua()["leido"].get<bool>() == true);
+    CHECK(rb->getInterpolate());
+
+    auto* actor = static_cast<physx::PxRigidActor*>(col->actorHandle());
+    pm.stepSimulation(1000.0f);                        // vacía el acumulador
+    // La referencia se lee del ACTOR, no de getWorldTransform: con la
+    // interpolación ya encendida, el getter devuelve la pose previa y compararse
+    // contra sí mismo no probaría nada.
+    const float yPartida = actor->getGlobalPose().p.y;
+    pm.stepSimulation(pm.getFixedDeltaTime());
+    const float yCrudo   = actor->getGlobalPose().p.y;
+    const float yVisible = col->getWorldTransform()[3].y;
+    CHECK(yCrudo < yPartida - 0.01f);                  // el actor cayó
+    CHECK(std::fabs(yVisible - yPartida) < 1e-3f);     // lo visible sigue en la pose previa
+    CHECK(std::fabs(yVisible - yCrudo) > 0.01f);       // o sea, NO es la pose cruda
+
+    // Apagar desde Lua devuelve el camino de siempre.
+    sm.lua().script("rb.ccd = false\nrb.interpolate = false\n");
+    CHECK(!actorTieneCcd());
+    CHECK(std::fabs(col->getWorldTransform()[3].y - actor->getGlobalPose().p.y) < 1e-4f);
+}
+
 // --- ForceMode desde Lua -----------------------------------------------------
 //
 // Monta un cuerpo sin gravedad con el Rigidbody expuesto en 'rb' y devuelve la
@@ -2795,6 +2861,7 @@ int main()
     test_sweep_y_overlaps_sin_fisica(sm, pm);
 
     test_constraints_desde_lua(sm, pm);
+    test_ccd_e_interpolate_desde_lua(sm, pm);
     test_force_mode_desde_lua(sm, pm);
     test_force_mode_fuera_de_rango(sm, pm);
     test_is_trigger_desde_lua(sm, pm);

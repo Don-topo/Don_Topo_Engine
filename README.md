@@ -723,10 +723,29 @@ end
 ```
 
 `Rigidbody` properties: `mass`, `useGravity`, `isKinematic`, `drag`, `angularDrag`,
-`constraints`, `velocity`, `angularVelocity`; methods `AddForce`/`AddTorque`/`AddImpulse`
+`constraints`, `ccd`, `interpolate`, `velocity`, `angularVelocity`; methods
+`AddForce`/`AddTorque`/`AddImpulse`
 (three loose floats, not a `Vec3`). `RigidbodyConstraints` is an integer constant table
 with `None`, `FreezePositionX/Y/Z` and `FreezeRotationX/Y/Z`; bits outside those six are
 masked away rather than raising, so an OR too many never takes down the script.
+
+`ccd` and `interpolate` are two independent booleans, both `false` by default, so no
+existing scene changes behaviour. `ccd` turns on continuous collision detection: PhysX
+sweeps the body's path within the fixed step instead of only testing start and end pose,
+which is what stops a fast projectile from tunnelling through thin geometry. It costs CPU
+and PhysX does not support it on kinematic bodies — setting it there keeps your intent
+but the flag only reaches the actor while the body is non-kinematic. `interpolate`
+smooths the *visible* pose between fixed steps (the render runs one physics step behind);
+it does not change the simulation at all, so raycasts, overlaps and triggers still see
+the real pose.
+
+```lua
+function Bala:Start()
+    local rb = self.entity:GetComponent("Rigidbody")
+    rb.ccd = true             -- fast projectile: do not tunnel through walls
+    rb.interpolate = true     -- and render it smoothly between fixed steps
+end
+```
 
 `AddForce` and `AddTorque` take an optional fourth argument, the force mode, from the
 `ForceMode` constant table: `Force` (continuous, mass- and dt-dependent — the default,

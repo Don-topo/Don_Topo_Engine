@@ -862,6 +862,15 @@ namespace DonTopo::ScriptBindings
                         Rigidbody* rb = rbOf(c);
                         rb->setConstraints(v & kRigidbodyConstraintsMask);
                     }),
+                // ccd/interpolate: dos booleanos independientes entre sí y
+                // apagados por defecto. Sin ensureFinite (no son floats) y sin
+                // enmascarar (no son bitmask): un bool de Lua es siempre válido.
+                "ccd", sol::property(
+                    [rbOf](const LuaRigidbody& c) { return rbOf(c)->getCcd(); },
+                    [rbOf](const LuaRigidbody& c, bool v) { rbOf(c)->setCcd(v); }),
+                "interpolate", sol::property(
+                    [rbOf](const LuaRigidbody& c) { return rbOf(c)->getInterpolate(); },
+                    [rbOf](const LuaRigidbody& c, bool v) { rbOf(c)->setInterpolate(v); }),
                 "velocity", sol::property(
                     [rbOf](const LuaRigidbody& c) { return rbOf(c)->getVelocity(); },
                     [rbOf, &mgr](const LuaRigidbody& c, const glm::vec3& v) {
