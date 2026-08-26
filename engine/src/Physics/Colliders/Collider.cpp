@@ -1,6 +1,8 @@
 #include "DonTopo/Physics/Colliders/Collider.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include <algorithm>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #ifdef DT_PHYSX_ENABLED
 #include <PxPhysicsAPI.h>
@@ -85,6 +87,48 @@ void Collider::setLayer(int layer)
     // Guardar el número no filtra nada: quien decide es el PxFilterData de la
     // shape, y eso lo reescribe el manager con la máscara de la capa nueva.
     if (m_manager) m_manager->refreshColliderFilter(this);
+}
+
+void Collider::setInterpolate(bool enabled)
+{
+    m_interpolate = enabled;
+    // Al apagarla se olvida la pose previa: si se vuelve a encender más tarde,
+    // mezclar contra una pose de hace mil frames daría un salto.
+    if (!enabled) m_hasPrevPose = false;
+}
+
+void Collider::capturePreviousPose()
+{
+    if (!m_interpolate) return;
+#ifdef DT_PHYSX_ENABLED
+    auto* actor = static_cast<PxRigidActor*>(actorHandle());
+    if (!actor) return;
+    const PxTransform pose = actor->getGlobalPose();
+    m_prevPosition = glm::vec3(pose.p.x, pose.p.y, pose.p.z);
+    m_prevRotation = glm::quat(pose.q.w, pose.q.x, pose.q.y, pose.q.z);
+    m_hasPrevPose  = true;
+#endif
+}
+
+void Collider::setInterpolationAlpha(float alpha)
+{
+    m_interpAlpha = alpha;
+}
+
+glm::mat4 Collider::blendWithPreviousPose(const glm::mat4& current) const
+{
+    if (!m_interpolate || !m_hasPrevPose) return current;
+
+    const glm::vec3 currentPosition(current[3]);
+    const glm::quat currentRotation = glm::quat_cast(current);
+
+    const glm::vec3 position = glm::mix(m_prevPosition, currentPosition, m_interpAlpha);
+    // slerp y no mix sobre el cuaternión: con rotaciones rápidas la mezcla
+    // lineal acorta el arco y la velocidad angular sale irregular. glm::slerp
+    // ya coge el camino corto (niega q2 si el producto escalar es negativo).
+    const glm::quat rotation = glm::slerp(m_prevRotation, currentRotation, m_interpAlpha);
+
+    return glm::translate(glm::mat4(1.0f), position) * glm::mat4_cast(rotation);
 }
 
 void Collider::addListener(ITriggerListener* listener)

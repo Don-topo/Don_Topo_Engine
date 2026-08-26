@@ -7146,6 +7146,8 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
         m_editRbDrag        = rb->getDrag();
         m_editRbAngularDrag = rb->getAngularDrag();
         m_editRbConstraints = rb->getConstraints();
+        m_editRbCcd         = rb->getCcd();
+        m_editRbInterpolate = rb->getInterpolate();
         m_caches.rigidbody = rb;
     }
 
@@ -7168,10 +7170,13 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
         rb2->setDrag(s.drag);
         rb2->setAngularDrag(s.angularDrag);
         rb2->setConstraints(s.constraints);
+        rb2->setCcd(s.ccd);
+        rb2->setInterpolate(s.interpolate);
     };
     auto currentState = [&]() {
         return RigidbodyState{ m_editRbMass, m_editRbUseGravity, m_editRbKinematic,
-                               m_editRbDrag, m_editRbAngularDrag, m_editRbConstraints };
+                               m_editRbDrag, m_editRbAngularDrag, m_editRbConstraints,
+                               m_editRbCcd, m_editRbInterpolate };
     };
 
     // --- Drag floats: snapshot al activar CUALQUIERA, comando al soltar
@@ -7191,7 +7196,8 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
         m_rigidbodyDragActive  = true;
         m_rigidbodyDragOwnerId = id;
         m_rigidbodyBeforeEdit  = RigidbodyState{ rb->getMass(), rb->getUseGravity(), rb->getIsKinematic(),
-                                                 rb->getDrag(), rb->getAngularDrag(), rb->getConstraints() };
+                                                 rb->getDrag(), rb->getAngularDrag(), rb->getConstraints(),
+                                                 rb->getCcd(), rb->getInterpolate() };
     };
     bool floatChanged = false;
     bool floatCommitted = false;
@@ -7243,6 +7249,36 @@ void PropertiesPanel::drawRigidbodySection(EditorContext& ctx)
                 ctx.undo->push(std::make_unique<PropertyCommand<RigidbodyState>>(
                     "Is Kinematic de '" + ctx.selected->name + "' (Rigidbody)", before, currentState(), applyRbState));
         }
+    }
+    {
+        RigidbodyState before = currentState();
+        if (ImGui::Checkbox("Collision Detection (CCD)", &m_editRbCcd))
+        {
+            applyRbState(currentState());
+            ctx.pushLog(std::string("CCD de '") + ctx.selected->name +
+                     "' (Rigidbody) " + (m_editRbCcd ? "activado" : "desactivado"));
+            if (ctx.scene)
+                ctx.undo->push(std::make_unique<PropertyCommand<RigidbodyState>>(
+                    "CCD de '" + ctx.selected->name + "' (Rigidbody)", before, currentState(), applyRbState));
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Detección continua: evita que un cuerpo rápido atraviese\n"
+                              "geometría fina. Cuesta CPU; PhysX la ignora en kinematic.");
+    }
+    {
+        RigidbodyState before = currentState();
+        if (ImGui::Checkbox("Interpolate", &m_editRbInterpolate))
+        {
+            applyRbState(currentState());
+            ctx.pushLog(std::string("Interpolate de '") + ctx.selected->name +
+                     "' (Rigidbody) " + (m_editRbInterpolate ? "activado" : "desactivado"));
+            if (ctx.scene)
+                ctx.undo->push(std::make_unique<PropertyCommand<RigidbodyState>>(
+                    "Interpolate de '" + ctx.selected->name + "' (Rigidbody)", before, currentState(), applyRbState));
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Suaviza la pose VISIBLE entre pasos fijos de física.\n"
+                              "No cambia la simulación: raycasts y triggers ven la pose real.");
     }
 
     // --- Constraints ---

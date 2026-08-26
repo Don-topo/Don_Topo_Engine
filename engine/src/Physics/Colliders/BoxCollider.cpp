@@ -85,7 +85,8 @@ glm::mat4 BoxCollider::getWorldTransform() const
     glm::quat rotation(pose.q.w, pose.q.x, pose.q.y, pose.q.z);
     glm::mat4 rotationMat = glm::mat4_cast(rotation);
 
-    return translation * rotationMat;
+    // Con interpolación apagada (default) devuelve la pose cruda del actor.
+    return blendWithPreviousPose(translation * rotationMat);
 #else
     return glm::mat4(1.0f);
 #endif

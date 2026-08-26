@@ -184,10 +184,17 @@ namespace {
         // Coste: PERSISTS hace que PhysX llame a onContact cada sub-step por cada
         // par en contacto, incluso si nadie escucha. A cambio, el Stay es nativo
         // y no hay que recorrer registros por frame como en los triggers.
+        //
+        // eDETECT_CCD_CONTACT va en el mismo lote: sin este bit en el par, el
+        // pase continuo de la escena NO se ejecuta para él y marcar el cuerpo
+        // con eENABLE_CCD no haría nada. Pedirlo aquí no activa CCD por sí solo
+        // —PhysX salta el barrido si ningún actor del par lleva el flag de
+        // cuerpo—, así que los pares de siempre siguen resolviéndose igual.
         if (!(flags & (PxFilterFlag::eKILL | PxFilterFlag::eSUPPRESS)))
             pairFlags |= PxPairFlag::eNOTIFY_TOUCH_FOUND
                        | PxPairFlag::eNOTIFY_TOUCH_LOST
-                       | PxPairFlag::eNOTIFY_TOUCH_PERSISTS;
+                       | PxPairFlag::eNOTIFY_TOUCH_PERSISTS
+                       | PxPairFlag::eDETECT_CCD_CONTACT;
 
         return flags;
     }
@@ -230,6 +237,12 @@ void PhysicsManager::init()
     sceneDesc.gravity       = PxVec3(0.0f, -981.0f, 0.0f);
     sceneDesc.cpuDispatcher = dispatcher;
     sceneDesc.filterShader  = dtTriggerFilterShader;
+    // CCD a nivel de ESCENA: requisito previo, no un interruptor global. PhysX
+    // exige el flag para reservar el pase de barrido continuo, pero ese pase
+    // sólo mira a los cuerpos que lleven además PxRigidBodyFlag::eENABLE_CCD
+    // (lo pone Rigidbody::setCcd, default OFF). Sin ningún cuerpo marcado el
+    // coste es nulo y la simulación es exactamente la de antes.
+    sceneDesc.flags |= PxSceneFlag::eENABLE_CCD;
     auto* scene = physics->createScene(sceneDesc);
     physxCheck(scene, "PxPhysics::createScene");
     m_scene = scene;
@@ -526,6 +539,10 @@ void PhysicsManager::detachRigidbody(const std::shared_ptr<Collider>& collider)
     void* actor = collider->actorHandle();
     if (actor && static_cast<PxRigidActor*>(actor)->is<PxRigidDynamic>())
         rebuildActor(collider, /*dynamic=*/false);
+    // Sin Rigidbody no hay nada que interpolar (la propiedad vive allí), y un
+    // static al que el editor mueva por el Transform no debe arrastrar la pose
+    // previa de cuando era dinámico.
+    collider->setInterpolate(false);
     // Nota: el Rigidbody que apuntaba a este collider conserva un m_actor que
     // ahora cuelga (el dynamic viejo fue liberado por rebuildActor). Contrato:
     // los callers (editor "Remove Rigidbody", Lua RemoveComponent) sueltan el
@@ -703,6 +720,12 @@ void PhysicsManager::stepSimulation(float dt)
     int steps = 0;
     while (m_accumulator + kEpsilon >= m_fixedDeltaTime && steps < m_maxSubSteps)
     {
+        // Pose de partida del sub-step, para los colliders que interpolan. Va
+        // ANTES de simulate: es la mitad "vieja" de la mezcla que hará
+        // getWorldTransform. No-op en los que no interpolan (el default).
+        for (auto& weak : m_colliders)
+            if (auto c = weak.lock()) c->capturePreviousPose();
+
         static_cast<PxScene*>(m_scene)->simulate(m_fixedDeltaTime);
         static_cast<PxScene*>(m_scene)->fetchResults(true);
         m_accumulator -= m_fixedDeltaTime;
@@ -720,6 +743,19 @@ void PhysicsManager::stepSimulation(float dt)
     // vayan siempre al máximo de sub-steps, tarden más, y acumulen más deuda
     // todavía (espiral de la muerte).
     if (m_accumulator + kEpsilon >= m_fixedDeltaTime) m_accumulator = 0.0f;
+
+    // Cuánto del siguiente paso fijo lleva ya consumido el tiempo real: es el
+    // alpha con el que los colliders que interpolan mezclan la pose previa con
+    // la actual. Se empuja también cuando no ha habido sub-step —ahí es
+    // justamente donde el alpha crece y el cuerpo sigue avanzando en pantalla
+    // en vez de quedarse clavado hasta el siguiente paso.
+    {
+        const float alpha = (m_fixedDeltaTime > 0.0f)
+            ? glm::clamp(m_accumulator / m_fixedDeltaTime, 0.0f, 1.0f)
+            : 1.0f;
+        for (auto& weak : m_colliders)
+            if (auto c = weak.lock()) c->setInterpolationAlpha(alpha);
+    }
 #else
     (void)dt;
     dispatchTriggerStay();

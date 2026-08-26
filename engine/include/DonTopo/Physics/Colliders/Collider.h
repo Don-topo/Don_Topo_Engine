@@ -2,6 +2,7 @@
 #include <vector>
 #include <unordered_set>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 namespace DonTopo {
 
@@ -124,6 +125,33 @@ public:
     void setLayer(int layer);
     int  getLayer() const { return m_layer; }
 
+    // --- Interpolación de la pose (Rigidbody.interpolate) --------------------
+    //
+    // La física corre a paso fijo y el render va al ritmo del frame: entre dos
+    // sub-steps la pose del actor NO cambia, y a 144 Hz con la física a 60 se
+    // ve a tirones. Con interpolación, getWorldTransform no devuelve la pose
+    // cruda del actor sino la mezcla entre la pose previa al último sub-step y
+    // la actual, según cuánto del siguiente paso lleve consumido el acumulador.
+    //
+    // Es puramente VISUAL: no toca lo que simula PhysX, así que un raycast o un
+    // trigger siguen viendo la pose real. Default OFF -> getWorldTransform
+    // devuelve exactamente lo de siempre.
+    //
+    // Lo enciende Rigidbody::setInterpolate (que llega hasta aquí por el
+    // userData del actor): la propiedad la expone el Rigidbody, la mecánica
+    // vive en el collider, que es quien tiene la pose.
+    void setInterpolate(bool enabled);
+    bool getInterpolate() const { return m_interpolate; }
+
+    // Guarda la pose del actor ANTES del sub-step; la llama
+    // PhysicsManager::stepSimulation una vez por sub-step. No-op si este
+    // collider no interpola.
+    void capturePreviousPose();
+
+    // Fracción [0,1] del paso fijo ya consumida. La empuja
+    // PhysicsManager::stepSimulation al final del frame.
+    void setInterpolationAlpha(float alpha);
+
     // Lo setea PhysicsManager al crear el collider, para que ~Collider pueda
     // avisar de su destrucción y purgarse de los overlaps de otros triggers.
     void setManager(PhysicsManager* manager) { m_manager = manager; }
@@ -165,6 +193,13 @@ public:
     void dispatchCollisionExit (Collider* other);
 
 protected:
+    // Mezcla `current` (la pose real del actor, que acaba de leer el collider
+    // concreto) con la pose previa capturada, usando el alpha del acumulador.
+    // Devuelve `current` tal cual si la interpolación está apagada o aún no hay
+    // pose previa. Lo llaman los getWorldTransform de los colliders con
+    // Rigidbody posible (box/sphere/capsule); el plano es siempre estático.
+    glm::mat4 blendWithPreviousPose(const glm::mat4& current) const;
+
     // Devuelve physx::PxShape* del collider concreto, como void* para no filtrar
     // PhysX en este header (que llega hasta Core vía GameObject.h). Sin
     // DT_PHYSX_ENABLED devuelve nullptr.
@@ -177,6 +212,13 @@ private:
     float                          m_dynamicFriction = 0.5f;
     float                          m_restitution     = 0.1f;
     int                            m_layer     = 0; // "Default"
+    // Interpolación visual. m_hasPrevPose evita mezclar contra una pose previa
+    // que nunca se capturó (el primer frame tras encenderla).
+    bool                           m_interpolate  = false;
+    bool                           m_hasPrevPose  = false;
+    float                          m_interpAlpha  = 1.0f;
+    glm::vec3                      m_prevPosition{0.0f};
+    glm::quat                      m_prevRotation{1.0f, 0.0f, 0.0f, 0.0f};
     void*                          m_owner     = nullptr;
     PhysicsManager*                m_manager   = nullptr;
     std::vector<ITriggerListener*> m_listeners;

@@ -494,6 +494,8 @@ private:
     float          m_editRbDrag = 0.0f;
     float          m_editRbAngularDrag = 0.05f;
     uint32_t       m_editRbConstraints = 0;
+    bool           m_editRbCcd = false;
+    bool           m_editRbInterpolate = false;
     bool           m_rigidbodyDragActive = false;
     uint64_t       m_rigidbodyDragOwnerId = 0;
     RigidbodyState m_rigidbodyBeforeEdit{};

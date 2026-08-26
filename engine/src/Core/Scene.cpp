@@ -742,7 +742,9 @@ namespace
                                {"isKinematic", rb->getIsKinematic()},
                                {"drag", rb->getDrag()},
                                {"angularDrag", rb->getAngularDrag()},
-                               {"constraints", rb->getConstraints()} };
+                               {"constraints", rb->getConstraints()},
+                               {"ccd", rb->getCcd()},
+                               {"interpolate", rb->getInterpolate()} };
         }
         if (node.hasCameraComponent())
         {
@@ -1711,6 +1713,12 @@ namespace
             rb->setDrag(readFloat(r, "drag", 0.0f, warnings, ctx));
             rb->setAngularDrag(readFloat(r, "angularDrag", 0.05f, warnings, ctx));
             rb->setConstraints(r.value("constraints", 0u));
+            // Campos aditivos: una escena guardada antes de existir cae al
+            // default false, que es el comportamiento de siempre. Se setean
+            // ANTES de attachRigidbody porque bindActor es quien los empuja al
+            // actor y al collider.
+            rb->setCcd(r.value("ccd", false));
+            rb->setInterpolate(r.value("interpolate", false));
             node->setRigidbody(rb);
             if (auto col = node->anyCollider()) physics.attachRigidbody(col, rb);
         }

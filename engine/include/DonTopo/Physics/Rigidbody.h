@@ -59,6 +59,29 @@ public:
     uint32_t getConstraints() const { return m_constraints; }
     void     setConstraints(uint32_t mask);
 
+    // CCD (Continuous Collision Detection). Con el paso fijo, un cuerpo rápido
+    // puede atravesar una pared fina en un solo sub-step: el test discreto
+    // compara poses inicial y final y entre ellas no hay nada. Con CCD, PhysX
+    // barre la trayectoria del cuerpo dentro del sub-step y detecta el impacto.
+    //
+    // Default OFF, como en Unity: cuesta tiempo de CPU y sólo hace falta en
+    // proyectiles / cuerpos muy rápidos. La escena ya nace con
+    // PxSceneFlag::eENABLE_CCD, pero eso sólo habilita el pase; sin este flag
+    // por cuerpo ningún actor lo usa y la simulación es la de siempre.
+    //
+    // PhysX no admite CCD en cuerpos kinematic (un kinematic no lo necesita: no
+    // lo mueve el solver). Marcarlo aquí guarda la intención y el flag se pone
+    // en el actor sólo mientras el cuerpo no sea kinematic.
+    bool getCcd() const { return m_ccd; }
+    void setCcd(bool enabled);
+
+    // Interpolación VISUAL de la pose entre pasos fijos. No la resuelve el
+    // Rigidbody: la aplica el Collider (que es quien tiene la pose y a quien se
+    // le pide getWorldTransform); aquí vive sólo la propiedad, que es lo que el
+    // usuario ve y lo que se serializa. Independiente de CCD.
+    bool getInterpolate() const { return m_interpolate; }
+    void setInterpolate(bool enabled);
+
     // Dinámica. Velocidad y fuerzas son no-op si el actor es kinematic (PhysX
     // las ignora / avisa); se guardan/aplican solo cuando tiene sentido.
     glm::vec3 getVelocity() const;
@@ -80,6 +103,8 @@ private:
     float    m_drag        = 0.0f;
     float    m_angularDrag = 0.05f; // default de Unity
     uint32_t m_constraints = RB_None;
+    bool     m_ccd         = false; // OFF: no cambia ninguna escena existente
+    bool     m_interpolate = false; // OFF: getWorldTransform da la pose cruda
 };
 
 } // namespace DonTopo

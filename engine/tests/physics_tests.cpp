@@ -862,6 +862,145 @@ static void test_trigger_emits_no_collision_events(PhysicsManager& pm)
     CHECK(trigger.enters > 0);   // control: el camino de trigger sigue vivo
 }
 
+// --- CCD e interpolación por Rigidbody ---------------------------------------
+
+// El flag eENABLE_CCD tal y como lo ve PhysX en el actor (no la copia en C++
+// del Rigidbody: eso lo devolvería getCcd() sin probar nada).
+static bool actorHasCcdFlag(const std::shared_ptr<Collider>& col)
+{
+    auto* actor = static_cast<physx::PxRigidActor*>(col->actorHandle());
+    auto* dyn   = actor ? actor->is<physx::PxRigidDynamic>() : nullptr;
+    return dyn && (dyn->getRigidBodyFlags() & physx::PxRigidBodyFlag::eENABLE_CCD);
+}
+
+// X de la pose CRUDA del actor, saltándose getWorldTransform: es la referencia
+// contra la que se compara la pose interpolada.
+static float rawActorX(const std::shared_ptr<Collider>& col)
+{
+    auto* actor = static_cast<physx::PxRigidActor*>(col->actorHandle());
+    return actor ? actor->getGlobalPose().p.x : 0.0f;
+}
+
+// setCcd escribe el flag en el actor de PhysX, y sólo cuando se pide.
+static void test_ccd_flag_reaches_the_actor(PhysicsManager& pm)
+{
+    auto rb  = std::make_shared<Rigidbody>();
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/true);
+    pm.attachRigidbody(col, rb);
+
+    // Default: apagado en el componente y en el actor (ninguna escena existente
+    // cambia de comportamiento).
+    CHECK(!rb->getCcd());
+    CHECK(!actorHasCcdFlag(col));
+
+    rb->setCcd(true);
+    CHECK(rb->getCcd());
+    CHECK(actorHasCcdFlag(col));
+
+    // PhysX no admite CCD en kinematic: el flag efectivo se cae solo...
+    rb->setIsKinematic(true);
+    CHECK(rb->getCcd());              // la intención del usuario se conserva
+    CHECK(!actorHasCcdFlag(col));     // pero el actor no lo lleva
+    // ...y vuelve al salir de kinematic.
+    rb->setIsKinematic(false);
+    CHECK(actorHasCcdFlag(col));
+
+    rb->setCcd(false);
+    CHECK(!actorHasCcdFlag(col));
+}
+
+// Cuánto atraviesa una esfera muy rápida un suelo fino, con y sin CCD. Devuelve
+// la Y final: por encima del suelo = parada, muy por debajo = túnel.
+static float dropFastSphereOnThinFloor(PhysicsManager& pm, bool ccd)
+{
+    flushAccumulator(pm);
+
+    // Suelo fino: 4 unidades de grosor (halfExtent Y = 2) y ancho de sobra.
+    auto floorCol = pm.createBoxColliderComponent(glm::vec3(500.0f, 2.0f, 500.0f), glm::vec3(0.0f),
+                                                   glm::mat4(1.0f), /*dynamic=*/false);
+
+    auto rb  = std::make_shared<Rigidbody>();
+    rb->setUseGravity(false);       // la velocidad la ponemos nosotros, sin acumular gravedad
+    rb->setCcd(ccd);
+    auto ball = pm.createSphereColliderComponent(
+        10.0f, glm::vec3(0.0f),
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 500.0f, 0.0f)), /*dynamic=*/true);
+    pm.attachRigidbody(ball, rb);
+    // 30000 u/s a 1/60 = 500 unidades por sub-step: el test discreto compara
+    // dos poses que caen a los dos lados del suelo y no ve nada entre ellas.
+    rb->setVelocity(glm::vec3(0.0f, -30000.0f, 0.0f));
+
+    for (int i = 0; i < 10; ++i) pm.stepSimulation(1.0f / 60.0f);
+    return ball->getWorldTransform()[3].y;
+}
+
+// Con CCD la esfera no atraviesa el suelo fino; sin CCD sí (control).
+static void test_ccd_prevents_tunneling(PhysicsManager& pm)
+{
+    float without = dropFastSphereOnThinFloor(pm, /*ccd=*/false);
+    float with    = dropFastSphereOnThinFloor(pm, /*ccd=*/true);
+    std::printf("  túnel: sin CCD y=%.1f | con CCD y=%.1f\n", without, with);
+    CHECK(without < -100.0f);   // control: sin CCD se cuela y sigue cayendo
+    CHECK(with    >   0.0f);    // con CCD se queda encima del suelo
+}
+
+// Con interpolate, getWorldTransform devuelve la mezcla pose_previa/pose_actual
+// según el alpha del acumulador, no la pose cruda del actor.
+static void test_interpolate_returns_intermediate_pose(PhysicsManager& pm)
+{
+    const float fixed = pm.getFixedDeltaTime();
+    flushAccumulator(pm);
+
+    auto rb = std::make_shared<Rigidbody>();
+    rb->setUseGravity(false);       // movimiento rectilíneo uniforme: la pose
+    rb->setInterpolate(true);       // intermedia esperada es exactamente la media
+    auto col = pm.createSphereColliderComponent(10.0f, glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/true);
+    pm.attachRigidbody(col, rb);
+    const float speed = 600.0f;     // unidades/s
+    rb->setVelocity(glm::vec3(speed, 0.0f, 0.0f));
+
+    // Un frame de exactamente un paso fijo: el acumulador queda a 0 -> alpha 0
+    // -> la pose visible es la PREVIA al sub-step (la interpolación va un paso
+    // por detrás, es su precio).
+    pm.stepSimulation(fixed);
+    const float rawAfterStep = rawActorX(col);
+    const float shownAtAlpha0 = col->getWorldTransform()[3].x;
+    CHECK(rawAfterStep > 5.0f);                             // el actor SÍ se movió
+    CHECK(std::fabs(shownAtAlpha0 - 0.0f) < 0.5f);          // lo visible sigue en el origen
+    CHECK(std::fabs(shownAtAlpha0 - rawAfterStep) > 5.0f);  // y NO es la pose cruda
+
+    // Medio paso más de tiempo real: no cabe otro sub-step, así que el actor no
+    // se mueve y sólo sube el alpha a 0.5 -> media exacta entre las dos poses.
+    pm.stepSimulation(fixed * 0.5f);
+    const float rawAfterHalf   = rawActorX(col);
+    const float shownAtAlphaHalf = col->getWorldTransform()[3].x;
+    const float expected = 0.5f * (0.0f + rawAfterHalf);
+    std::printf("  interpolación: crudo=%.3f | alpha=0 -> %.3f | alpha=0.5 -> %.3f (esperado %.3f)\n",
+                rawAfterHalf, shownAtAlpha0, shownAtAlphaHalf, expected);
+    CHECK(std::fabs(rawAfterHalf - rawAfterStep) < 1e-3f);  // el actor no avanzó
+    CHECK(std::fabs(shownAtAlphaHalf - expected) < 0.1f);
+}
+
+// Sin interpolate (el default), getWorldTransform devuelve la pose cruda: el
+// comportamiento de toda escena existente no cambia.
+static void test_interpolate_off_returns_raw_pose(PhysicsManager& pm)
+{
+    const float fixed = pm.getFixedDeltaTime();
+    flushAccumulator(pm);
+
+    auto rb = std::make_shared<Rigidbody>();
+    rb->setUseGravity(false);
+    auto col = pm.createSphereColliderComponent(10.0f, glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/true);
+    pm.attachRigidbody(col, rb);
+    CHECK(!rb->getInterpolate());
+    rb->setVelocity(glm::vec3(600.0f, 0.0f, 0.0f));
+
+    pm.stepSimulation(fixed);
+    pm.stepSimulation(fixed * 0.5f);   // alpha 0.5: si interpolara, se notaría
+    CHECK(std::fabs(col->getWorldTransform()[3].x - rawActorX(col)) < 1e-4f);
+    CHECK(rawActorX(col) > 5.0f);      // y el cuerpo se movió de verdad
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -894,6 +1033,10 @@ int main()
     test_collision_enter_stay_exit(pm);
     test_collision_respects_layer_matrix(pm);
     test_trigger_emits_no_collision_events(pm);
+    test_ccd_flag_reaches_the_actor(pm);
+    test_ccd_prevents_tunneling(pm);
+    test_interpolate_returns_intermediate_pose(pm);
+    test_interpolate_off_returns_raw_pose(pm);
     pm.shutdown();
     if (g_failures == 0) std::printf("ALL PHYSICS TESTS PASSED\n");
     std::fflush(stdout);

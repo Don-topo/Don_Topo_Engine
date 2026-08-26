@@ -75,6 +75,8 @@ struct RigidbodyState {
     float    drag;
     float    angularDrag;
     uint32_t constraints;
+    bool     ccd;
+    bool     interpolate;
 };
 
 // Snapshot value-type del AudioClipComponent — T de PropertyCommand<T> en la
