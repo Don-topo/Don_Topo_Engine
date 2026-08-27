@@ -2868,9 +2868,11 @@ namespace DonTopo
                 // del actor (T*R, sin escala) con la del GameObject normalizada
                 // (quitando escala) y sólo se teleporta si difieren.
                 glm::mat4 want = go->worldTransform;
+                glm::vec3 wantScale(1.0f);
                 for (int i = 0; i < 3; ++i)
                 {
                     float len = glm::length(glm::vec3(want[i]));
+                    wantScale[i] = len;
                     if (len > 1e-6f) want[i] = glm::vec4(glm::vec3(want[i]) / len, 0.0f);
                 }
                 want[3].w = 1.0f;
@@ -2883,6 +2885,19 @@ namespace DonTopo
                         if (d < 0.0f) d = -d;
                         if (d > 1e-4f) { changed = true; break; }
                     }
+                // La escala se compara APARTE: `have` es la pose del actor, que
+                // nunca la lleva (PxTransform no la admite), así que un cambio
+                // de sólo-escala no movería ni un bit del bucle de arriba y la
+                // geometría se quedaría con el tamaño del frame anterior.
+                // Se contrasta contra la que el collider tiene ya horneada.
+                // En valor absoluto: la geometría usa abs(escala) —un espejo no
+                // adelgaza la forma— y glm::decompose puede repartir los signos
+                // de otra manera en una matriz especular, lo que dejaría un
+                // desajuste permanente y un teleport por frame.
+                const glm::vec3 haveScale = col->getWorldScale();
+                for (int i = 0; i < 3 && !changed; ++i)
+                    if (std::fabs(std::fabs(wantScale[i]) - std::fabs(haveScale[i])) > 1e-4f)
+                        changed = true;
                 if (changed) col->teleport(go->worldTransform);
             }
         });

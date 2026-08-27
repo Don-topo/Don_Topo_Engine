@@ -28,6 +28,13 @@ public:
     // Medio-alto de la cápsula (distancia entre los centros de las dos
     // semiesferas; PxShape::setGeometry con nueva PxCapsuleGeometry).
     void setHalfHeight(float halfHeight);
+    // Escala del Transform del GameObject. PxTransform no admite escala, así
+    // que se hornea en la geometría: el radio va con el mayor de los dos ejes
+    // transversales (max(abs(x), abs(z)) — la cápsula está de pie en Y por la
+    // rotación de corrección) y el medio-alto con abs(y). m_radius/m_halfHeight
+    // —lo que ve el inspector y lo que se serializa— no cambian. Idempotente:
+    // con la misma escala no toca nada.
+    void setWorldScale(const glm::vec3& scale);
 
     glm::vec3 getCenter() const      { return m_center; }
     float     getRadius() const      { return m_radius; }
@@ -45,12 +52,17 @@ protected:
 
 private:
 #ifdef DT_PHYSX_ENABLED
+    // Sube a PhysX m_radius/m_halfHeight con m_worldScale ya aplicada.
+    // Requiere m_shape.
+    void applyScaledGeometry();
+
     void* m_actor = nullptr; // physx::PxRigidActor* (static o dynamic)
     void* m_shape = nullptr; // physx::PxShape*
 #endif
     float     m_radius;
     float     m_halfHeight;
     glm::vec3 m_center;
+    // m_worldScale vive en la base Collider; ver nota en BoxCollider.h.
 };
 
 } // namespace DonTopo

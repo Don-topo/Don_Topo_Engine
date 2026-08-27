@@ -6,6 +6,8 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
+#include <algorithm>
+#include <cmath>
 
 using namespace physx;
 
@@ -15,6 +17,38 @@ namespace {
     // cápsula "de pie" en el espacio local del actor. Constante: nunca
     // cambia, solo se recompone con distintas traslaciones (center).
     PxQuat axisCorrection() { return PxQuat(PxHalfPi, PxVec3(0.0f, 0.0f, 1.0f)); }
+
+    // Mínimo positivo: PhysX rechaza una PxCapsuleGeometry degenerada, y con
+    // escala 0 el producto daría exactamente eso.
+    constexpr float kMinDimension = 1e-4f;
+
+    float clampDimension(float v)
+    {
+        return v > kMinDimension ? v : kMinDimension;
+    }
+
+    // El radio no puede volverse elíptico: manda el mayor de los dos ejes
+    // transversales (X y Z; la altura va en Y por la corrección de eje). abs()
+    // porque una escala negativa es un espejo, no encoge la cápsula.
+    float scaledRadius(float radius, const glm::vec3& scale)
+    {
+        return clampDimension(radius * std::max(std::fabs(scale.x), std::fabs(scale.z)));
+    }
+
+    float scaledHalfHeight(float halfHeight, const glm::vec3& scale)
+    {
+        return clampDimension(halfHeight * std::fabs(scale.y));
+    }
+
+    // Tolerancia, no igualdad: glm::decompose devuelve 1±1e-7 en matrices con
+    // rotación, y ese ruido no debe reescribir la geometría de una escena sin
+    // escalar (con escala 1 no se llama nunca a setGeometry).
+    bool sameScale(const glm::vec3& a, const glm::vec3& b)
+    {
+        return std::fabs(a.x - b.x) < 1e-6f
+            && std::fabs(a.y - b.y) < 1e-6f
+            && std::fabs(a.z - b.z) < 1e-6f;
+    }
 }
 #endif
 
@@ -76,7 +110,7 @@ void CapsuleCollider::setRadius(float radius)
     m_radius = radius;
 #ifdef DT_PHYSX_ENABLED
     if (!m_shape) return;
-    static_cast<PxShape*>(m_shape)->setGeometry(PxCapsuleGeometry(radius, m_halfHeight));
+    applyScaledGeometry();
 #endif
 }
 
@@ -85,9 +119,30 @@ void CapsuleCollider::setHalfHeight(float halfHeight)
     m_halfHeight = halfHeight;
 #ifdef DT_PHYSX_ENABLED
     if (!m_shape) return;
-    static_cast<PxShape*>(m_shape)->setGeometry(PxCapsuleGeometry(m_radius, halfHeight));
+    applyScaledGeometry();
 #endif
 }
+
+void CapsuleCollider::setWorldScale(const glm::vec3& scale)
+{
+#ifdef DT_PHYSX_ENABLED
+    if (sameScale(scale, m_worldScale)) return;
+    m_worldScale = scale;
+    if (!m_shape) return;
+    applyScaledGeometry();
+#else
+    m_worldScale = scale;
+#endif
+}
+
+#ifdef DT_PHYSX_ENABLED
+void CapsuleCollider::applyScaledGeometry()
+{
+    static_cast<PxShape*>(m_shape)->setGeometry(PxCapsuleGeometry(
+        scaledRadius(m_radius, m_worldScale),
+        scaledHalfHeight(m_halfHeight, m_worldScale)));
+}
+#endif
 
 glm::mat4 CapsuleCollider::getWorldTransform() const
 {
@@ -122,6 +177,9 @@ void CapsuleCollider::syncTransform(const glm::mat4& worldTransform)
         PxVec3(translation.x, translation.y, translation.z),
         PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
     );
+    // La escala no cabe en la PxTransform: se hornea en la geometría. No-op si
+    // no cambió desde la última vez (el caso normal, escala 1).
+    setWorldScale(scale);
     auto* dyn = static_cast<PxRigidActor*>(m_actor)->is<PxRigidDynamic>();
     if (dyn && (dyn->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC))
         dyn->setKinematicTarget(pose);
@@ -146,6 +204,8 @@ void CapsuleCollider::teleport(const glm::mat4& worldTransform)
         PxVec3(translation.x, translation.y, translation.z),
         PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
     );
+
+    setWorldScale(scale); // ver nota en syncTransform
 
     auto* actor = static_cast<PxRigidActor*>(m_actor);
     actor->setGlobalPose(pose);

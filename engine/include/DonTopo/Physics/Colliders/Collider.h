@@ -168,6 +168,13 @@ public:
     // re-adjuntar la MISMA shape al nuevo actor tras el swap static<->dynamic.
     void* geometryShape() const { return triggerShape(); }
 
+    // Escala del Transform ya horneada en la geometría de la shape (PxTransform
+    // no admite escala). Quien la APLICA es el setWorldScale de cada collider
+    // concreto —cada forma la reparte a su manera—; aquí sólo se recuerda, para
+    // que quien empuja la pose (Scene::update) pueda ver que cambió sin
+    // ramificar por tipo. El plano la ignora: es infinito.
+    glm::vec3 getWorldScale() const { return m_worldScale; }
+
     // Mecánica de pose del actor, polimórfica: la recorre Scene::update sobre
     // el collider base (anyCollider) sin ramificar por tipo concreto. Cada
     // collider las implementa idénticas sobre su m_actor.
@@ -204,6 +211,11 @@ protected:
     // PhysX en este header (que llega hasta Core vía GameObject.h). Sin
     // DT_PHYSX_ENABLED devuelve nullptr.
     virtual void* triggerShape() const = 0;
+
+    // La escribe el setWorldScale de cada derivado justo antes de rehacer su
+    // geometría. Arranca en 1: una escena sin objetos escalados nunca llega a
+    // tocar la shape.
+    glm::vec3 m_worldScale{1.0f};
 
 private:
     bool                           m_isTrigger = false;

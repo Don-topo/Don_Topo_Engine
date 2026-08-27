@@ -6,8 +6,35 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
+#include <algorithm>
+#include <cmath>
 
 using namespace physx;
+
+namespace {
+    // Mínimo positivo del radio: PhysX rechaza una PxSphereGeometry degenerada,
+    // y con escala 0 el producto daría exactamente eso.
+    constexpr float kMinRadius = 1e-4f;
+
+    // Una esfera no puede deformarse en elipsoide: manda el eje mayor. abs()
+    // porque una escala negativa es un espejo, no encoge la esfera.
+    float scaledRadius(float radius, const glm::vec3& scale)
+    {
+        const float s = std::max({std::fabs(scale.x), std::fabs(scale.y), std::fabs(scale.z)});
+        const float v = radius * s;
+        return v > kMinRadius ? v : kMinRadius;
+    }
+
+    // Tolerancia, no igualdad: glm::decompose devuelve 1±1e-7 en matrices con
+    // rotación, y ese ruido no debe reescribir la geometría de una escena sin
+    // escalar (con escala 1 no se llama nunca a setGeometry).
+    bool sameScale(const glm::vec3& a, const glm::vec3& b)
+    {
+        return std::fabs(a.x - b.x) < 1e-6f
+            && std::fabs(a.y - b.y) < 1e-6f
+            && std::fabs(a.z - b.z) < 1e-6f;
+    }
+}
 #endif
 
 namespace DonTopo {
@@ -67,9 +94,29 @@ void SphereCollider::setRadius(float radius)
     m_radius = radius;
 #ifdef DT_PHYSX_ENABLED
     if (!m_shape) return;
-    static_cast<PxShape*>(m_shape)->setGeometry(PxSphereGeometry(radius));
+    applyScaledGeometry();
 #endif
 }
+
+void SphereCollider::setWorldScale(const glm::vec3& scale)
+{
+#ifdef DT_PHYSX_ENABLED
+    if (sameScale(scale, m_worldScale)) return;
+    m_worldScale = scale;
+    if (!m_shape) return;
+    applyScaledGeometry();
+#else
+    m_worldScale = scale;
+#endif
+}
+
+#ifdef DT_PHYSX_ENABLED
+void SphereCollider::applyScaledGeometry()
+{
+    static_cast<PxShape*>(m_shape)->setGeometry(
+        PxSphereGeometry(scaledRadius(m_radius, m_worldScale)));
+}
+#endif
 
 glm::mat4 SphereCollider::getWorldTransform() const
 {
@@ -104,6 +151,9 @@ void SphereCollider::syncTransform(const glm::mat4& worldTransform)
         PxVec3(translation.x, translation.y, translation.z),
         PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
     );
+    // La escala no cabe en la PxTransform: se hornea en la geometría. No-op si
+    // no cambió desde la última vez (el caso normal, escala 1).
+    setWorldScale(scale);
     auto* dyn = static_cast<PxRigidActor*>(m_actor)->is<PxRigidDynamic>();
     if (dyn && (dyn->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC))
         dyn->setKinematicTarget(pose);
@@ -128,6 +178,8 @@ void SphereCollider::teleport(const glm::mat4& worldTransform)
         PxVec3(translation.x, translation.y, translation.z),
         PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
     );
+
+    setWorldScale(scale); // ver nota en syncTransform
 
     auto* actor = static_cast<PxRigidActor*>(m_actor);
     actor->setGlobalPose(pose);

@@ -6,10 +6,12 @@
 // entre todos los tests: cada test crea sus colliders como locales, que al
 // salir de la función liberan su actor de la escena — así sólo hay un cuerpo
 // vivo a la vez y los tests no se interfieren.
+#include "DonTopo/Core/Scene.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
+#include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
 #include "DonTopo/Physics/Colliders/Collider.h"
 
@@ -1001,6 +1003,199 @@ static void test_interpolate_off_returns_raw_pose(PhysicsManager& pm)
     CHECK(rawActorX(col) > 5.0f);      // y el cuerpo se movió de verdad
 }
 
+// --- Escala del Transform ----------------------------------------------------
+// PxTransform no admite escala, así que la del GameObject se hornea en la
+// geometría de la shape. Estos helpers leen lo que acabó DE VERDAD en PhysX (no
+// el valor configurado del collider, que no debe cambiar nunca).
+static physx::PxVec3 shapeHalfExtents(const std::shared_ptr<Collider>& col)
+{
+    auto* shape = static_cast<physx::PxShape*>(col->geometryShape());
+    return static_cast<const physx::PxBoxGeometry&>(shape->getGeometry()).halfExtents;
+}
+
+static float shapeSphereRadius(const std::shared_ptr<Collider>& col)
+{
+    auto* shape = static_cast<physx::PxShape*>(col->geometryShape());
+    return static_cast<const physx::PxSphereGeometry&>(shape->getGeometry()).radius;
+}
+
+static physx::PxCapsuleGeometry shapeCapsule(const std::shared_ptr<Collider>& col)
+{
+    auto* shape = static_cast<physx::PxShape*>(col->geometryShape());
+    return static_cast<const physx::PxCapsuleGeometry&>(shape->getGeometry());
+}
+
+// Escala uniforme 2x en una caja: la geometría dobla en los tres ejes y el
+// tamaño configurado (lo que ve el inspector y se serializa) NO cambia.
+static void test_scale_uniform_box(PhysicsManager& pm)
+{
+    const glm::mat4 xform = glm::scale(glm::mat4(1.0f), glm::vec3(2.0f));
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f, 2.0f, 3.0f), glm::vec3(0.0f),
+                                             xform, /*dynamic=*/false);
+    const physx::PxVec3 he = shapeHalfExtents(col);
+    CHECK(std::fabs(he.x - 2.0f) < 1e-4f);
+    CHECK(std::fabs(he.y - 4.0f) < 1e-4f);
+    CHECK(std::fabs(he.z - 6.0f) < 1e-4f);
+    CHECK(col->getHalfExtents() == glm::vec3(1.0f, 2.0f, 3.0f));
+}
+
+// Escala uniforme 2x en una esfera: el radio dobla, m_radius no.
+static void test_scale_uniform_sphere(PhysicsManager& pm)
+{
+    const glm::mat4 xform = glm::scale(glm::mat4(1.0f), glm::vec3(2.0f));
+    auto col = pm.createSphereColliderComponent(10.0f, glm::vec3(0.0f), xform, /*dynamic=*/false);
+    CHECK(std::fabs(shapeSphereRadius(col) - 20.0f) < 1e-4f);
+    CHECK(col->getRadius() == 10.0f);
+}
+
+// Escala NO uniforme en una caja: cada eje va por su cuenta.
+static void test_scale_non_uniform_box(PhysicsManager& pm)
+{
+    const glm::mat4 xform = glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 3.0f, 4.0f));
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f),
+                                             xform, /*dynamic=*/false);
+    const physx::PxVec3 he = shapeHalfExtents(col);
+    CHECK(std::fabs(he.x - 2.0f) < 1e-4f);
+    CHECK(std::fabs(he.y - 3.0f) < 1e-4f);
+    CHECK(std::fabs(he.z - 4.0f) < 1e-4f);
+}
+
+// Espejo y escala cero. Se prueban por setWorldScale y no por una matriz: una
+// matriz con un eje a 0 es singular y glm::decompose saca de ella una rotación
+// con NaN que PhysX rechaza al crear el actor (problema aparte, anterior a
+// esto). Con escala negativa manda el valor absoluto —un espejo no adelgaza la
+// caja— y con 0 se acota a un mínimo positivo, porque PhysX rechaza extents <= 0.
+static void test_scale_mirror_and_zero_are_clamped(PhysicsManager& pm)
+{
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f),
+                                             glm::mat4(1.0f), /*dynamic=*/false);
+    col->setWorldScale(glm::vec3(-2.0f, 3.0f, 0.0f));
+    const physx::PxVec3 he = shapeHalfExtents(col);
+    CHECK(std::fabs(he.x - 2.0f) < 1e-4f);
+    CHECK(std::fabs(he.y - 3.0f) < 1e-4f);
+    CHECK(he.z > 0.0f && he.z < 1e-3f);
+}
+
+// Una esfera con escala no uniforme sigue siendo esfera: manda el eje mayor.
+// La cápsula reparte: radio con max(|x|,|z|), medio-alto con |y|.
+static void test_scale_non_uniform_sphere_and_capsule(PhysicsManager& pm)
+{
+    const glm::mat4 xform = glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 5.0f, 3.0f));
+    auto sph = pm.createSphereColliderComponent(10.0f, glm::vec3(0.0f), xform, /*dynamic=*/false);
+    CHECK(std::fabs(shapeSphereRadius(sph) - 50.0f) < 1e-4f);
+
+    auto cap = pm.createCapsuleColliderComponent(10.0f, 20.0f, glm::vec3(0.0f),
+                                                 xform, /*dynamic=*/false);
+    const physx::PxCapsuleGeometry g = shapeCapsule(cap);
+    CHECK(std::fabs(g.radius - 30.0f) < 1e-4f);      // max(|2|, |3|) = 3
+    CHECK(std::fabs(g.halfHeight - 100.0f) < 1e-4f); // |5| en Y
+    CHECK(cap->getRadius() == 10.0f && cap->getHalfHeight() == 20.0f);
+}
+
+// Escala 1: la geometría es EXACTAMENTE la configurada (igualdad, no
+// tolerancia). Es el guardián de "ninguna escena existente cambia".
+static void test_scale_one_is_identical(PhysicsManager& pm)
+{
+    auto box = pm.createBoxColliderComponent(glm::vec3(1.0f, 2.0f, 3.0f), glm::vec3(0.0f),
+                                             glm::mat4(1.0f), /*dynamic=*/false);
+    const physx::PxVec3 he = shapeHalfExtents(box);
+    CHECK(he.x == 1.0f && he.y == 2.0f && he.z == 3.0f);
+
+    auto sph = pm.createSphereColliderComponent(10.0f, glm::vec3(0.0f), glm::mat4(1.0f),
+                                                /*dynamic=*/false);
+    CHECK(shapeSphereRadius(sph) == 10.0f);
+
+    // Y una rotación pura tampoco la toca, aunque glm::decompose devuelva
+    // 1±1e-7 en sus ejes (la comparación de escala va con tolerancia).
+    const glm::mat4 rot = glm::rotate(glm::mat4(1.0f), 0.7f, glm::vec3(0.3f, 0.9f, 0.2f));
+    auto rotated = pm.createBoxColliderComponent(glm::vec3(1.0f, 2.0f, 3.0f), glm::vec3(0.0f),
+                                                 rot, /*dynamic=*/false);
+    const physx::PxVec3 rhe = shapeHalfExtents(rotated);
+    CHECK(rhe.x == 1.0f && rhe.y == 2.0f && rhe.z == 3.0f);
+
+    // Ni un ruido de escala por debajo de la tolerancia: comparar con == en vez
+    // de con tolerancia dejaría 1.0000005 de factor y la geometría cambiaría.
+    rotated->setWorldScale(glm::vec3(1.0f + 5e-7f));
+    const physx::PxVec3 nhe = shapeHalfExtents(rotated);
+    CHECK(nhe.x == 1.0f && nhe.y == 2.0f && nhe.z == 3.0f);
+}
+
+// La escala se re-aplica cuando cambia, no sólo al crear: el mismo camino que
+// ya empuja la pose (syncTransform) la lleva.
+static void test_scale_reapplied_on_change(PhysicsManager& pm)
+{
+    auto rb = std::make_shared<Rigidbody>();
+    rb->setIsKinematic(true);
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f),
+                                             glm::mat4(1.0f), /*dynamic=*/true);
+    pm.attachRigidbody(col, rb);
+    CHECK(shapeHalfExtents(col).x == 1.0f);
+
+    col->syncTransform(glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 2.0f, 2.0f)));
+    CHECK(std::fabs(shapeHalfExtents(col).x - 2.0f) < 1e-4f);
+
+    // Y de vuelta a 1: no se queda pegada al último valor.
+    col->syncTransform(glm::mat4(1.0f));
+    CHECK(shapeHalfExtents(col).x == 1.0f);
+}
+
+// El collider escalado colisiona con lo que su tamaño configurado no alcanzaría:
+// la escala llega a la simulación, no sólo al dato de la shape.
+static void test_scaled_box_actually_collides(PhysicsManager& pm)
+{
+    // Suelo estático fino en y=0, escalado 10x en X/Z (100 de medio-ancho).
+    auto floor = pm.createBoxColliderComponent(glm::vec3(10.0f, 1.0f, 10.0f), glm::vec3(0.0f),
+                                               glm::scale(glm::mat4(1.0f), glm::vec3(10.0f, 1.0f, 10.0f)),
+                                               /*dynamic=*/false);
+    // Cuerpo que cae a 50 en X: fuera del suelo sin escalar (10), dentro con ella.
+    auto rb  = std::make_shared<Rigidbody>();
+    auto body = pm.createSphereColliderComponent(5.0f, glm::vec3(0.0f),
+                                                 glm::translate(glm::mat4(1.0f), glm::vec3(50.0f, 40.0f, 0.0f)),
+                                                 /*dynamic=*/true);
+    pm.attachRigidbody(body, rb);
+    step(pm, 120, 1.0f / 60.0f);
+    CHECK(body->getWorldTransform()[3].y > 0.0f); // se quedó encima del suelo
+    (void)floor;
+}
+
+// Cambiar la escala DURANTE Play, sobre un collider sin Rigidbody, llega a
+// PhysX. Es el camino static de Scene::update, que decide si empujar la pose
+// comparando la del actor con la del GameObject NORMALIZADA (sin escala): sin
+// una comparación aparte de la escala, un cambio de sólo-escala no mueve un bit
+// de esa matriz y la geometría se queda con el tamaño del frame anterior.
+static void test_scale_change_during_play_reaches_physx(PhysicsManager& pm)
+{
+    Scene scene("escala");
+    GameObject* go = scene.addGameObject("caja");
+    go->localTransform = glm::mat4(1.0f);
+    go->updateWorldTransforms(glm::mat4(1.0f));
+
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f),
+                                             go->worldTransform, /*dynamic=*/false);
+    go->setBoxCollider(col);
+
+    scene.update(1.0f / 60.0f, pm);
+    CHECK(shapeHalfExtents(col).x == 1.0f); // sin tocar: escala 1
+
+    // Dos updates: el traverse lee worldTransform y la propagación
+    // local->world corre AL FINAL de update, así que el cambio entra en el
+    // frame siguiente (misma latencia que vería un script Lua).
+    go->localTransform = glm::scale(glm::mat4(1.0f), glm::vec3(3.0f));
+    scene.update(1.0f / 60.0f, pm);
+    scene.update(1.0f / 60.0f, pm);
+    CHECK(std::fabs(shapeHalfExtents(col).x - 3.0f) < 1e-4f);
+
+    // Y con la escala ya estable la geometría se queda quieta: no se re-escala
+    // sobre sí misma frame a frame. (Que ADEMÁS no se llame a teleport no se
+    // puede ver desde aquí: el collider no lleva cuenta de teletransportes.)
+    scene.update(1.0f / 60.0f, pm);
+    CHECK(std::fabs(shapeHalfExtents(col).x - 3.0f) < 1e-4f);
+
+    // El GameObject muere con la Scene; el collider lo sigue teniendo el
+    // shared_ptr local, que libera su actor al salir de la función.
+    go->setBoxCollider(nullptr);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -1037,6 +1232,15 @@ int main()
     test_ccd_prevents_tunneling(pm);
     test_interpolate_returns_intermediate_pose(pm);
     test_interpolate_off_returns_raw_pose(pm);
+    test_scale_uniform_box(pm);
+    test_scale_uniform_sphere(pm);
+    test_scale_non_uniform_box(pm);
+    test_scale_mirror_and_zero_are_clamped(pm);
+    test_scale_non_uniform_sphere_and_capsule(pm);
+    test_scale_one_is_identical(pm);
+    test_scale_reapplied_on_change(pm);
+    test_scaled_box_actually_collides(pm);
+    test_scale_change_during_play_reaches_physx(pm);
     pm.shutdown();
     if (g_failures == 0) std::printf("ALL PHYSICS TESTS PASSED\n");
     std::fflush(stdout);

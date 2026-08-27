@@ -319,6 +319,10 @@ std::shared_ptr<BoxCollider> PhysicsManager::createBoxColliderComponent(
     scene->addActor(*actor);
 
     auto collider = std::make_shared<BoxCollider>(actor, shape, halfExtents, center);
+    // La escala del Transform no cabe en la PxTransform del actor: se hornea en
+    // la geometría. La shape se creó con el tamaño configurado, así que con
+    // escala 1 esto no toca nada (setWorldScale sale antes de setGeometry).
+    collider->setWorldScale(scale);
     collider->setManager(this);
     // Alta en el registro + PxFilterData inicial de su capa (la 0 por defecto).
     registerCollider(collider);
@@ -381,6 +385,7 @@ std::shared_ptr<SphereCollider> PhysicsManager::createSphereColliderComponent(
     scene->addActor(*actor);
 
     auto collider = std::make_shared<SphereCollider>(actor, shape, radius, center);
+    collider->setWorldScale(scale); // ver nota en createBoxColliderComponent
     collider->setManager(this);
     registerCollider(collider);
     Collider* base = collider.get();
@@ -440,6 +445,7 @@ std::shared_ptr<CapsuleCollider> PhysicsManager::createCapsuleColliderComponent(
     scene->addActor(*actor);
 
     auto collider = std::make_shared<CapsuleCollider>(actor, shape, radius, halfHeight, center);
+    collider->setWorldScale(scale); // ver nota en createBoxColliderComponent
     collider->setManager(this);
     registerCollider(collider);
     Collider* base = collider.get();

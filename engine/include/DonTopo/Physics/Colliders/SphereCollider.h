@@ -24,6 +24,12 @@ public:
     void setCenter(const glm::vec3& center);
     // Radio de la esfera (PxShape::setGeometry con nueva PxSphereGeometry).
     void setRadius(float radius);
+    // Escala del Transform del GameObject. PxTransform no admite escala, así
+    // que se hornea en la geometría: una esfera no puede ser elipsoide, se usa
+    // el mayor de los tres ejes (radius * max(abs(x), abs(y), abs(z))), igual
+    // que hace Unity. m_radius —lo que ve el inspector y lo que se serializa—
+    // no cambia. Idempotente: con la misma escala no toca nada.
+    void setWorldScale(const glm::vec3& scale);
 
     glm::vec3 getCenter() const      { return m_center; }
     float     getRadius() const      { return m_radius; }
@@ -48,11 +54,15 @@ protected:
 
 private:
 #ifdef DT_PHYSX_ENABLED
+    // Sube a PhysX m_radius con m_worldScale ya aplicada. Requiere m_shape.
+    void applyScaledGeometry();
+
     void* m_actor = nullptr; // physx::PxRigidActor* (static o dynamic)
     void* m_shape = nullptr; // physx::PxShape*
 #endif
     float     m_radius;
     glm::vec3 m_center;
+    // m_worldScale vive en la base Collider; ver nota en BoxCollider.h.
 };
 
 } // namespace DonTopo

@@ -25,6 +25,11 @@ public:
     void setCenter(const glm::vec3& center);
     // Medio-tamaño de la caja (PxShape::setGeometry con nueva PxBoxGeometry).
     void setHalfExtents(const glm::vec3& halfExtents);
+    // Escala del Transform del GameObject. PxTransform no admite escala, así
+    // que se hornea en la geometría (halfExtents * abs(scale), componente a
+    // componente). m_halfExtents —lo que ve el inspector y lo que se
+    // serializa— no cambia. Idempotente: con la misma escala no toca nada.
+    void setWorldScale(const glm::vec3& scale);
 
     glm::vec3 getCenter() const       { return m_center; }
     glm::vec3 getHalfExtents() const  { return m_halfExtents; }
@@ -52,11 +57,16 @@ protected:
 
 private:
 #ifdef DT_PHYSX_ENABLED
+    // Sube a PhysX m_halfExtents con m_worldScale ya aplicada. Requiere m_shape.
+    void applyScaledGeometry();
+
     void* m_actor = nullptr; // physx::PxRigidActor* (static o dynamic)
     void* m_shape = nullptr; // physx::PxShape*
 #endif
     glm::vec3 m_halfExtents;
     glm::vec3 m_center;
+    // m_worldScale (la escala ya horneada) vive en la base Collider: Scene la
+    // consulta por el puntero base para saber si hay que re-aplicarla.
 };
 
 } // namespace DonTopo
