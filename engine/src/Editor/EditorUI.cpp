@@ -500,6 +500,17 @@ ProjectContext::ViewSettings EditorUI::currentSettings()
     // próximo arranque, que puede no ser con el que corre este proceso.
     s.renderBackend = renderBackendName(m_selectedBackend);
 
+    // Los volúmenes salen del AudioManager, que es la fuente de verdad (los
+    // guarda FMOD en los ChannelGroup). Sin audio se quedan los neutros del
+    // struct, así que abrir el editor en una máquina muda no escribe ceros en
+    // el project.json de nadie.
+    if (m_audio)
+    {
+        s.masterVolume = m_audio->getBusVolume(AudioBus::Master);
+        s.musicVolume  = m_audio->getBusVolume(AudioBus::Music);
+        s.sfxVolume    = m_audio->getBusVolume(AudioBus::Sfx);
+    }
+
     if (m_renderer)
     {
         s.ambient = m_renderer->ambientEnabled();
@@ -596,6 +607,15 @@ void EditorUI::applyProjectSettings()
 
     if (s.loadFailed)
         m_logPanel.push("Ajustes del proyecto ilegibles: se abren los efectos apagados");
+
+    // Audio primero: no depende del Renderer, y ponerlo aquí deja claro que
+    // comparte el mismo momento de aplicación que el resto de ajustes.
+    if (m_audio)
+    {
+        m_audio->setBusVolume(AudioBus::Master, s.masterVolume);
+        m_audio->setBusVolume(AudioBus::Music,  s.musicVolume);
+        m_audio->setBusVolume(AudioBus::Sfx,    s.sfxVolume);
+    }
 
     m_renderer->setAmbientEnabled(s.ambient);
     m_renderer->setAmbientIntensity(s.ambientIntensity);
@@ -731,6 +751,20 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
         if (m_projectSelector())
             m_projectSelector = nullptr;
         return;
+    }
+
+    // Fallos de carga de audio que FMOD ha detectado desde el frame anterior.
+    // Se drenan aquí, fuera de Play: un clip roto se ve al soltarlo, no al
+    // darle a Play. Con FMOD_NONBLOCKING el error no existe todavía cuando
+    // createSound retorna, así que este pump por frame es el ÚNICO sitio donde
+    // el fallo se puede observar. Cada sonido se reporta una sola vez.
+    if (m_audio)
+    {
+        m_audioFailures.clear();
+        m_audio->pollLoadFailures(m_audioFailures);
+        for (const auto& path : m_audioFailures)
+            m_logPanel.push("No se pudo cargar el audio '" + path +
+                             "': fichero ausente, formato no soportado o datos corruptos");
     }
 
     // Ajustes del menú View del proyecto abierto: se vuelcan al Renderer y a la
@@ -981,6 +1015,42 @@ void EditorUI::drawMenuBar()
             if (panelToggled)
                 saveProjectSettings();
             ImGui::Separator();
+
+            // Volumen por bus. Aquí y no en un panel propio: son tres sliders
+            // que se tocan una vez por proyecto, no algo que se quiera tener
+            // ocupando sitio en el dock. Se guardan en el project.json (a
+            // diferencia de los ajustes de sesión de más abajo), porque es el
+            // mando que el jugador espera que persista.
+            //
+            // El valor se lee del AudioManager en cada frame, no de una copia:
+            // así un SetMasterVolume desde Lua se ve reflejado aquí en vez de
+            // dejar la UI mintiendo.
+            if (m_audio)
+            {
+                // Sin dispositivo de audio los sliders se dibujan igual pero
+                // desactivados: esconderlos haría pensar que la feature no
+                // existe. Se explica en el tooltip.
+                ImGui::BeginDisabled(!m_audio->available());
+                struct BusRow { const char* label; AudioBus bus; };
+                const BusRow kRows[] = { { "Master Volume", AudioBus::Master },
+                                          { "Music Volume",  AudioBus::Music  },
+                                          { "SFX Volume",    AudioBus::Sfx    } };
+                for (const BusRow& row : kRows)
+                {
+                    float v = m_audio->getBusVolume(row.bus);
+                    if (ImGui::SliderFloat(row.label, &v, 0.0f, 1.0f, "%.2f"))
+                        m_audio->setBusVolume(row.bus, v);
+                    // Al soltar, no en cada píxel del arrastre: escribir el
+                    // project.json por frame sería un fichero por milisegundo.
+                    if (ImGui::IsItemDeactivatedAfterEdit())
+                        saveProjectSettings();
+                }
+                ImGui::EndDisabled();
+                if (!m_audio->available() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Sin dispositivo de audio en esta maquina: el editor "
+                                      "arranca mudo y estos mandos no tienen efecto");
+                ImGui::Separator();
+            }
             // Peso del ambiente IBL. Ajuste de sesion: no se serializa en la
             // escena, asi que al reabrir el editor vuelve a 1.0.
             if (m_renderer)
@@ -1478,19 +1548,27 @@ void EditorUI::drawToolbar()
                 m_exportDlgOpen = false;
             }
             if (m_scriptManager) m_scriptManager->onPlayStart();
-            // Gate de reproducción: sin Audio Listener en la escena (o con el
-            // suyo deshabilitado) no suena ningún clip. Mismo gate que el
-            // runtime (runtime/main.cpp), y por la misma razón fuera de
-            // AudioManager/AudioClipComponent. Un solo aviso, no uno por clip.
+            // Sin Audio Listener en la escena (o con el suyo deshabilitado) los
+            // clips suenan IGUAL: el audio 3D se oye entonces desde la cámara,
+            // el fallback que ya resuelven las tres rutas de host cada frame
+            // (sandbox/src/main.cpp, runtime/main.cpp). Aquí antes había un
+            // gate que se saltaba este barrido, pero solo cubría playOnAwake:
+            // ni AudioClip:Play de Lua (ScriptBindings.cpp) ni el botón Play
+            // del inspector (PropertiesPanel.cpp) lo consultaban, así que el
+            // aviso mentía —el clip se oía— y el "invariante" valía para una
+            // de las cuatro rutas de reproducción. Imponerlo de verdad exigía
+            // repetirlo en las cuatro, porque no puede vivir dentro de
+            // AudioManager/AudioClipComponent (esas dos se prueban sin escena).
+            // El aviso se queda, ahora informativo y cierto. Uno por Play, no
+            // uno por clip.
             GameObject* listenerGo = m_scene->findAudioListener();
             const bool listenerActive = listenerGo && listenerGo->getAudioListener()->getEnabled();
             if (!listenerActive)
-                m_logPanel.push("Sin Audio Listener en la escena: los AudioClip no se reproduciran");
-            else
-                m_scene->traverse([](GameObject* go) {
-                    if (go->hasAudioClip() && go->getAudioClip()->getPlayOnAwake())
-                        go->getAudioClip()->play(glm::vec3(go->worldTransform[3]));
-                });
+                m_logPanel.push("Sin Audio Listener en la escena: el audio 3D se oye desde la camara");
+            m_scene->traverse([](GameObject* go) {
+                if (go->hasAudioClip() && go->getAudioClip()->getPlayOnAwake())
+                    go->getAudioClip()->play(glm::vec3(go->worldTransform[3]));
+            });
             m_logPanel.push("Play Mode iniciado");
         }
     }

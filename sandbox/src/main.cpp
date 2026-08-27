@@ -425,27 +425,41 @@ int main()
                 // borrar GameObjects, y un puntero guardado quedaría colgando.
                 d3dScripts.pollChanges();
 
+                // Mismo criterio que el camino de Vulkan, y por los mismos
+                // motivos: en Play manda el Audio Listener de la escena si lo
+                // hay y está habilitado, en Edit Mode manda siempre la cámara
+                // del editor (la preview del inspector tiene que oírse desde
+                // donde mira el usuario). Con la base degenerada (escala 0) se
+                // cae a la cámara en vez de colar un NaN en FMOD, del que ya no
+                // se recupera.
+                glm::vec3 listenerPos = d3dCamera.getPos();
+                glm::vec3 listenerFwd = d3dCamera.getFront();
+                glm::vec3 listenerUp  = d3dCamera.getUp();
                 if (editor.isPlaying())
                 {
-                    // El audio 3D se oye desde el Listener de la escena si lo
-                    // hay, y desde la cámara si no. Con la base degenerada
-                    // (escala 0) se cae a la cámara en vez de colar un NaN en
-                    // FMOD, del que ya no se recupera.
-                    glm::vec3 listenerPos = d3dCamera.getPos();
-                    glm::vec3 listenerFwd = d3dCamera.getFront();
-                    glm::vec3 listenerUp  = d3dCamera.getUp();
                     if (DonTopo::GameObject* lis = d3dScene.findAudioListener())
                     {
                         const glm::vec3 fwdAxis = glm::vec3(lis->worldTransform[2]);
                         const glm::vec3 upAxis  = glm::vec3(lis->worldTransform[1]);
-                        if (glm::length(fwdAxis) > 1e-6f && glm::length(upAxis) > 1e-6f)
+                        // getEnabled() como en Vulkan: sin él, este camino
+                        // respetaba un listener deshabilitado y los dos
+                        // backends sonaban distinto con la misma escena.
+                        if (lis->getAudioListener()->getEnabled() &&
+                            glm::length(fwdAxis) > 1e-6f && glm::length(upAxis) > 1e-6f)
                         {
                             listenerPos = glm::vec3(lis->worldTransform[3]);
                             listenerFwd = glm::normalize(-fwdAxis);
                             listenerUp  = glm::normalize(upAxis);
                         }
                     }
-                    d3dAudio.update(listenerPos, listenerFwd, listenerUp);
+                }
+                // Fuera del gate de Play: ver el comentario del camino de Vulkan
+                // (es la única llamada a System::update() y a
+                // set3DListenerAttributes).
+                d3dAudio.update(listenerPos, listenerFwd, listenerUp);
+
+                if (editor.isPlaying())
+                {
                     d3dPhysics.stepSimulation(d3dDelta);
                     d3dScene.update(d3dDelta, d3dPhysics);
                     d3dScripts.update(d3dDelta);
@@ -458,6 +472,9 @@ int main()
                     // impondría la pose de PhysX sobre cada objeto con collider
                     // dinámico, que es justo lo que impide editarlos.
                     d3dScene.getRoot().updateWorldTransforms();
+                    // Igual que en el camino de Vulkan: la preview del
+                    // inspector sigue al objeto mientras se arrastra.
+                    d3dScene.updateAudioSpatial();
                 }
 
                 // tickDeferredDeletes primero, que libera lo borrado;
@@ -751,8 +768,6 @@ int main()
 
         DonTopo::Camera camera({0.0f, 90.0f, 300.0f});
 
-        //int bgm = audio.loadBGM("assets/audio.mp3");
-        //if (bgm >= 0) audio.playBGM(bgm);
 
         renderer.init(window, meshes);
         renderer.setSceneRoot(&scene.getRoot());
@@ -945,17 +960,24 @@ int main()
                 camera.update(window.getNativeWindow(), dt);
             renderer.setCamera(camera);
 
+            // Listener 3D. En Play, si la escena tiene un Audio Listener (y está
+            // habilitado), el audio 3D se oye desde ÉL: posición = columna 3 del
+            // worldTransform, forward = -Z local, up = +Y local (misma
+            // convención que la cámara y el runtime); con la base degenerada
+            // (escala 0) se cae a la cámara en vez de colar un NaN en FMOD, del
+            // que ya no se recupera.
+            //
+            // En Edit Mode manda SIEMPRE la cámara del editor, aunque la escena
+            // tenga listener: el botón Play del Audio Clip (PropertiesPanel) es
+            // una herramienta de edición y tiene que oírse desde donde el
+            // usuario está mirando. Con el listener de la escena mandando aquí,
+            // previsualizar un clip 3D de un objeto lejano daría silencio sin
+            // ninguna explicación.
+            glm::vec3 listenerPos = camera.getPos();
+            glm::vec3 listenerFwd = camera.getFront();
+            glm::vec3 listenerUp  = camera.getUp();
             if (renderer.isPlaying())
             {
-                // Audio Listener: si la escena tiene uno (y está habilitado), el
-                // audio 3D se oye desde ÉL y no desde la cámara del editor.
-                // Posición = columna 3 del worldTransform, forward = -Z local,
-                // up = +Y local (misma convención que la cámara y el runtime);
-                // con la base degenerada (escala 0) se cae a la cámara en vez de
-                // colar un NaN en FMOD, del que ya no se recupera.
-                glm::vec3 listenerPos = camera.getPos();
-                glm::vec3 listenerFwd = camera.getFront();
-                glm::vec3 listenerUp  = camera.getUp();
                 if (DonTopo::GameObject* lis = scene.findAudioListener())
                 {
                     const glm::vec3 lisFwdAxis = glm::vec3(lis->worldTransform[2]);
@@ -968,7 +990,17 @@ int main()
                         listenerUp  = glm::normalize(lisUpAxis);
                     }
                 }
-                audio.update(listenerPos, listenerFwd, listenerUp);
+            }
+            // FUERA del gate de Play, a propósito: AudioManager::update es lo
+            // único que llama a set3DListenerAttributes y a System::update(),
+            // así que dejándolo dentro el listener se quedaba donde lo dejó la
+            // última sesión de Play —o en el (0,0,0) mirando a -Z de fábrica de
+            // FMOD si nunca se entró— y la preview de un clip 3D sonaba atenuada
+            // o muda sin motivo aparente.
+            audio.update(listenerPos, listenerFwd, listenerUp);
+
+            if (renderer.isPlaying())
+            {
                 physics.stepSimulation(dt);
                 scene.update(dt, physics);
                 scriptManager.update(dt);
@@ -984,6 +1016,10 @@ int main()
                 // saltarnos scene.update() entero en Edit Mode, ese pull ya
                 // no ocurre.
                 scene.getRoot().updateWorldTransforms();
+                // Pero el seguimiento del audio 3D sí hace falta aquí: la
+                // preview del inspector puede estar sonando mientras el usuario
+                // arrastra el objeto con el gizmo. En Play lo hace scene.update.
+                scene.updateAudioSpatial();
             }
 
             // Pump por frame de la carga asíncrona, ANTES del traverse: los

@@ -87,6 +87,15 @@ namespace
     float readArrayFloat(const nlohmann::json& arr, size_t idx, float def,
                           std::vector<std::string>* warnings, const std::string& contexto,
                           bool required = false);
+    // Mismos criterios que readFloat, para los campos que nodeToJson escribe
+    // SIEMPRE y que hasta ahora se leían con .at() (una excepción ahí tumba la
+    // carga de la escena ENTERA por un solo campo).
+    bool readBool(const nlohmann::json& j, const char* key, bool def,
+                   std::vector<std::string>* warnings, const std::string& contexto,
+                   bool required = false);
+    std::string readString(const nlohmann::json& j, const char* key, const std::string& def,
+                            std::vector<std::string>* warnings, const std::string& contexto,
+                            bool required = false);
 
     nlohmann::json mat4ToJson(const glm::mat4& m)
     {
@@ -1110,6 +1119,10 @@ namespace
         {
             const auto& clip = node.getAudioClip();
             j["audioClip"] = { {"path", clip->getPath()},
+                                // Por nombre, no por índice del enum: reordenar
+                                // AudioBus no puede cambiar el bus guardado.
+                                {"bus", audioBusToStr(clip->getBus())},
+                                {"loadMode", audioLoadModeToStr(clip->getLoadMode())},
                                 {"loop", clip->getLoop()},
                                 {"is3D", clip->getIs3D()},
                                 {"playOnAwake", clip->getPlayOnAwake()},
@@ -1227,6 +1240,52 @@ namespace
             return def;
         }
         return f;
+    }
+
+    bool readBool(const nlohmann::json& j, const char* key, bool def,
+                   std::vector<std::string>* warnings, const std::string& contexto,
+                   bool required)
+    {
+        if (!j.contains(key))
+        {
+            if (required && warnings)
+                warnings->push_back(contexto + "." + key +
+                                     ": falta en la escena, se usa el valor por defecto");
+            return def;
+        }
+        const nlohmann::json& v = j[key];
+        if (!v.is_boolean())
+        {
+            if (warnings)
+                warnings->push_back(contexto + "." + key +
+                                     ": valor corrupto en la escena, se usa el valor por defecto");
+            return def;
+        }
+        return v.get<bool>();
+    }
+
+    // Cadena vacía como def sirve además de señal de "no hay valor usable": es
+    // lo que mira el bloque de audioClip para decidir si crear el componente.
+    std::string readString(const nlohmann::json& j, const char* key, const std::string& def,
+                            std::vector<std::string>* warnings, const std::string& contexto,
+                            bool required)
+    {
+        if (!j.contains(key))
+        {
+            if (required && warnings)
+                warnings->push_back(contexto + "." + key +
+                                     ": falta en la escena, se usa el valor por defecto");
+            return def;
+        }
+        const nlohmann::json& v = j[key];
+        if (!v.is_string())
+        {
+            if (warnings)
+                warnings->push_back(contexto + "." + key +
+                                     ": valor corrupto en la escena, se usa el valor por defecto");
+            return def;
+        }
+        return v.get<std::string>();
     }
 
     // Los dos vectores "con componentes nombradas" del Button. Cada componente
@@ -2396,19 +2455,74 @@ namespace
         if (j.contains("audioClip"))
         {
             const auto& c = j["audioClip"];
-            auto clip = audio.createAudioClipComponent(
-                c.at("path").get<std::string>(), c.at("is3D").get<bool>(), c.at("loop").get<bool>());
+            const std::string ctx = "audioClip de '" + node->name + "'";
+            // path/is3D/loop los escribe nodeToJson SIEMPRE, así que required
+            // = true: si faltan no es back-compat, es corrupción y hay que
+            // nombrarla. Antes se leían con .at(): un audioClip al que le
+            // faltara cualquiera de los tres lanzaba json::exception, la
+            // excepción subía hasta el catch de fromJson y se perdía la carga
+            // de la escena ENTERA por un campo — justo lo contrario del
+            // criterio que sigue el resto de este fichero.
+            std::string path = readString(c, "path", "", warnings, ctx, /*required=*/true);
+            // Misma whitelist que la ruta de UI. Un .scene editado a mano (o
+            // escrito por una herramienta) podía traer cualquier extensión, y
+            // como FMOD carga en diferido eso acababa en un clip mudo cuyo único
+            // síntoma era el silencio. Aquí se nombra el problema y se descarta
+            // el clip, dejando cargar el resto de la escena.
+            if (!path.empty())
+            {
+                std::string ext = std::filesystem::path(path).extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(),
+                               [](unsigned char ch) { return (char)std::tolower(ch); });
+                if (!DonTopo::isSupportedAudioExtension(ext))
+                {
+                    if (warnings)
+                        warnings->push_back(ctx + ".path: formato de audio no soportado ('" +
+                                             ext + "'), el clip se descarta");
+                    path.clear();
+                }
+            }
+            // Sin path no hay nada que cargar: el nodo se queda sin audio y el
+            // resto de la escena sigue. is3D/loop sí tienen default razonable
+            // (2D, sin bucle), que es además con el que crea los clips la UI.
+            auto clip = path.empty()
+                            ? nullptr
+                            : audio.createAudioClipComponent(
+                                  path,
+                                  readBool(c, "is3D", false, warnings, ctx, /*required=*/true),
+                                  readBool(c, "loop", false, warnings, ctx, /*required=*/true));
             if (clip)
             {
-                // .value() con default false: compat con escenas guardadas
-                // antes de que existiera este campo.
-                clip->setPlayOnAwake(c.value("playOnAwake", false));
-                // .value() con default: compat con escenas guardadas antes de
-                // que existieran estos campos. Con .at() reventaría toda
-                // escena anterior a la feature. readFloat además tolera un
-                // "null" (NaN serializado, ver el bloque de comentarios junto
-                // a jsonToMat4): antes, ese null hacía fallar fromJson entero.
-                const std::string ctx = "audioClip de '" + node->name + "'";
+                // Sin required: este campo llegó después, y una escena anterior
+                // que no lo traiga es back-compat legítima, no corrupción.
+                clip->setPlayOnAwake(readBool(c, "playOnAwake", false, warnings, ctx));
+                // El bus también llegó después: ausente = "sfx", que es por
+                // donde salía todo antes de que existieran los buses, así que
+                // una escena vieja suena igual. Un nombre que NO existe sí
+                // avisa: es corrupción o un proyecto de una versión más nueva,
+                // y caer a sfx en silencio dejaría un clip sonando por el bus
+                // equivocado sin ninguna pista.
+                const std::string busName = readString(c, "bus", "sfx", warnings, ctx);
+                DonTopo::AudioBus bus = DonTopo::AudioBus::Sfx;
+                if (!DonTopo::audioBusFromStr(busName, bus) && warnings)
+                    warnings->push_back(ctx + ".bus: valor desconocido '" + busName +
+                                         "', se usa 'sfx'");
+                clip->setBus(bus);
+                // Mismo criterio que el bus: ausente = "sample" (como se cargaba
+                // todo antes), nombre desconocido = aviso. OJO: setLoadMode
+                // RECARGA el sonido, asi que ponerlo despues de crear el clip
+                // cuesta una carga de mas; solo ocurre en escenas cuyo clip va
+                // en streaming, y evita que la factoria tenga que conocer todos
+                // los campos del componente.
+                const std::string loadModeName = readString(c, "loadMode", "sample", warnings, ctx);
+                DonTopo::AudioLoadMode loadMode = DonTopo::AudioLoadMode::Sample;
+                if (!DonTopo::audioLoadModeFromStr(loadModeName, loadMode) && warnings)
+                    warnings->push_back(ctx + ".loadMode: valor desconocido '" + loadModeName +
+                                         "', se usa 'sample'");
+                clip->setLoadMode(loadMode);
+                // Mismo criterio. readFloat además tolera un "null" (NaN
+                // serializado, ver el bloque de comentarios junto a jsonToMat4):
+                // antes, ese null hacía fallar fromJson entero.
                 clip->setVolume(readFloat(c, "volume", 1.0f, warnings, ctx));
                 clip->setPitch(readFloat(c, "pitch", 1.0f, warnings, ctx));
                 // Mismo criterio de compat: defaults del componente pa las
@@ -2907,7 +3021,20 @@ namespace DonTopo
         // así que updateWorldTransforms() solo necesita recalcular los nodos
         // sin collider (hijos de un padre cuyo worldTransform pudo cambiar).
         m_root.updateWorldTransforms();
+
+        // Después de que los transforms estén al día: si se hiciera antes, cada
+        // sonido iría un frame por detrás de su objeto.
+        updateAudioSpatial();
     }
+
+    void Scene::updateAudioSpatial()
+    {
+        m_root.traverse([](GameObject* go) {
+            if (go->hasAudioClip())
+                go->getAudioClip()->updateSpatial(glm::vec3(go->worldTransform[3]));
+        });
+    }
+
     void Scene::shutdown(PhysicsManager& /*physics*/, AudioManager& /*audio*/)
     {
         m_root.traverse([](GameObject* go) {

@@ -297,6 +297,10 @@ private:
     // tipo incompleto — se destruye en el .cpp.
     std::unique_ptr<EditorRenderer> m_renderer;
     AudioManager*   m_audio = nullptr;
+    // Buffer del pump de fallos de carga de audio (EditorUI::draw). Miembro y
+    // no local para no reasignar un vector en cada frame; se limpia antes de
+    // cada uso.
+    std::vector<std::string> m_audioFailures;
     Scene*          m_scene = nullptr;
     ScriptManager*  m_scriptManager = nullptr;
 

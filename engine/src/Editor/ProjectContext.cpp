@@ -125,6 +125,9 @@ nlohmann::json settingsToJson(const ProjectContext::ViewSettings& s)
     j["renderBackend"] = s.renderBackend;
 
     j["ambientIntensity"] = s.ambientIntensity;
+    j["masterVolume"] = s.masterVolume;
+    j["musicVolume"]  = s.musicVolume;
+    j["sfxVolume"]    = s.sfxVolume;
     j["bloomThreshold"]   = s.bloomThreshold;
     j["bloomKnee"]        = s.bloomKnee;
     j["bloomIntensity"]   = s.bloomIntensity;
@@ -241,6 +244,11 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
     s.renderBackend = readStringField(v, "renderBackend", s.renderBackend);
 
     s.ambientIntensity = readFloatField(v, "ambientIntensity", s.ambientIntensity);
+    // Los tres caen al valor de `base` si faltan, que es el neutro: un proyecto
+    // anterior a los buses abre sonando igual.
+    s.masterVolume = readFloatField(v, "masterVolume", s.masterVolume);
+    s.musicVolume  = readFloatField(v, "musicVolume",  s.musicVolume);
+    s.sfxVolume    = readFloatField(v, "sfxVolume",    s.sfxVolume);
     s.bloomThreshold   = readFloatField(v, "bloomThreshold", s.bloomThreshold);
     s.bloomKnee        = readFloatField(v, "bloomKnee", s.bloomKnee);
     s.bloomIntensity   = readFloatField(v, "bloomIntensity", s.bloomIntensity);

@@ -248,15 +248,53 @@ void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, const std::string&
     ctx.pushLog("Cargando '" + path + "'...");
 }
 
+// Snapshot y restauración del AudioClipComponent, en un solo sitio: los usan
+// los sliders (comando al soltar el arrastre), los checkboxes (comando
+// inmediato) y el Add/Remove del componente. Aquí arriba y no junto a
+// drawAudioClipSection porque loadAudioClipForSelected, que está justo debajo,
+// ya los necesita.
+static AudioClipState audioClipStateOf(const AudioClipComponent& clip)
+{
+    return AudioClipState{ clip.getVolume(), clip.getPitch(),
+                            clip.getMinDistance(), clip.getMaxDistance(),
+                            clip.getLoop(), clip.getIs3D(), clip.getPlayOnAwake(),
+                            clip.getBus(), clip.getLoadMode() };
+}
+
+// Resuelve el GameObject por id en cada aplicación, nunca captura el puntero:
+// así sobrevive a un undo de Delete que haya reconstruido el objeto entretanto.
+static void applyAudioClipState(Scene& scene, uint64_t ownerId, const AudioClipState& s)
+{
+    GameObject* go = scene.findById(ownerId);
+    if (!go || !go->hasAudioClip()) return;
+    auto& clip = go->getAudioClip();
+    // loop e is3D primero: recargan el sonido (van en el FMOD_MODE) y ese
+    // reload reaplica las distancias del componente, así que escribirlas antes
+    // sería trabajo tirado. Los dos setters son no-op si el valor no cambia.
+    clip->setLoop(s.loop);
+    clip->setIs3D(s.is3D);
+    clip->setPlayOnAwake(s.playOnAwake);
+    clip->setBus(s.bus);
+    // Recarga el sonido si cambia, como loop/is3D.
+    clip->setLoadMode(s.loadMode);
+    clip->setVolume(s.volume);
+    clip->setPitch(s.pitch);
+    // Max antes que min: los dos setters mantienen min <= max entre ellos.
+    clip->setMaxDistance(s.maxDistance);
+    clip->setMinDistance(s.minDistance);
+}
+
 void PropertiesPanel::loadAudioClipForSelected(EditorContext& ctx, const std::string& path)
 {
     if (!ctx.selected || !ctx.audio || ctx.selected->hasAudioClip())
         return;
 
+    // La lista vive en AudioBus.h, compartida con la carga de escena y con el
+    // AddComponent de Lua: antes estaba solo aquí y las otras rutas aceptaban
+    // cualquier extensión.
     std::string ext = std::filesystem::path(path).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    static const std::set<std::string> kValidExt = {".wav", ".mp3", ".ogg", ".flac"};
-    if (!kValidExt.count(ext))
+    if (!isSupportedAudioExtension(ext))
     {
         m_audioLoadError = "Formato no soportado: " + ext;
         return;
@@ -266,6 +304,25 @@ void PropertiesPanel::loadAudioClipForSelected(EditorContext& ctx, const std::st
     if (!clip)
     {
         m_audioLoadError = "No se pudo cargar el audio";
+        return;
+    }
+    // El alta pasa por el undo como el resto de componentes del panel. El
+    // estado es el del clip recién creado (todo por defecto): lo que hace útil
+    // el comando aquí no es conservar valores, es que el Ctrl+Z tras un drop
+    // accidental quite el componente en vez de no hacer nada.
+    if (ctx.scene && ctx.undo)
+    {
+        auto cmd = std::make_unique<AudioClipComponentCommand>(
+            *ctx.scene, *ctx.audio,
+            "Añadir Audio Clip a '" + ctx.selected->name + "'", ctx.selected->id,
+            /*add=*/true, path, audioClipStateOf(*clip));
+        // El componente ya está creado: se asigna aquí y el comando solo lo
+        // recrea si hace falta un redo. Crearlo dos veces cargaría el sonido
+        // dos veces.
+        ctx.selected->setAudioClip(std::move(clip));
+        ctx.undo->push(std::move(cmd));
+        m_audioLoadError.clear();
+        ctx.pushLog("Componente Audio Clip añadido a '" + ctx.selected->name + "'");
         return;
     }
     ctx.selected->setAudioClip(std::move(clip));
@@ -728,7 +785,21 @@ void PropertiesPanel::drawAudioListenerSection(EditorContext& ctx)
 
     if (removeClicked)
     {
-        ctx.selected->setAudioListener(nullptr);
+        // Con el enabled actual en el snapshot: quitar un listener DESHABILITADO
+        // y deshacer tiene que devolverlo deshabilitado, no habilitado.
+        if (ctx.scene && ctx.undo)
+        {
+            auto cmd = std::make_unique<AudioListenerComponentCommand>(
+                *ctx.scene, "Quitar Audio Listener de '" + ctx.selected->name + "'",
+                ctx.selected->id, /*add=*/false,
+                ctx.selected->getAudioListener()->getEnabled());
+            cmd->execute();
+            ctx.undo->push(std::move(cmd));
+        }
+        else
+        {
+            ctx.selected->setAudioListener(nullptr);
+        }
         ctx.pushLog("Componente Audio Listener quitado de '" + ctx.selected->name + "'");
     }
 }
@@ -7658,6 +7729,19 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             std::string fname = std::filesystem::path(clip->getPath()).filename().string();
             ImGui::Text("%s", fname.c_str());
 
+            // El fallo de carga no se conoce al añadir el clip: FMOD lee en su
+            // hilo (FMOD_NONBLOCKING) y el error aparece frames después, así
+            // que se consulta cada vez que se dibuja la sección en vez de
+            // cachearse. Sin esto, un asset roto se veía aquí igual que uno
+            // bueno y solo se notaba porque no sonaba nada.
+            if (clip->hasLoadError())
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "No se pudo cargar");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("'%s': fichero ausente, formato no soportado o datos corruptos",
+                                      clip->getPath().c_str());
+            }
+
             ImGui::BeginDisabled(ctx.audio == nullptr);
             if (ImGui::Button("Play"))
             {
@@ -7669,17 +7753,79 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 clip->stop();
             ImGui::EndDisabled();
 
+            // Los tres checkboxes comparten el mismo camino de undo que los
+            // sliders (un PropertyCommand<AudioClipState> con el estado entero),
+            // pero se comprometen al instante en vez de al soltar: un checkbox
+            // no tiene arrastre. Importa sobre todo en Loop e Is 3D, que
+            // RECARGAN el sonido (is3D/loop van en el FMOD_MODE) y cortan lo que
+            // estuviera sonando: sin undo, ese corte era irreversible.
+            const AudioClipState toggleBefore = audioClipStateOf(*clip);
+            bool toggled = false;
+
             bool loop = clip->getLoop();
             if (ImGui::Checkbox("Loop", &loop))
+            {
                 clip->setLoop(loop);
+                toggled = true;
+            }
 
             bool is3D = clip->getIs3D();
             if (ImGui::Checkbox("Is 3D?", &is3D))
+            {
                 clip->setIs3D(is3D);
+                toggled = true;
+            }
 
             bool playOnAwake = clip->getPlayOnAwake();
             if (ImGui::Checkbox("Play On Awake", &playOnAwake))
+            {
                 clip->setPlayOnAwake(playOnAwake);
+                toggled = true;
+            }
+
+            // Bus de salida. Comparte el camino de undo de los checkboxes (el
+            // mismo AudioClipState), porque también se compromete de golpe.
+            // El orden del array sigue al del enum AudioBus; lo que se guarda
+            // en la escena es el NOMBRE, así que reordenarlo aquí no rompe
+            // ningún proyecto.
+            const char* kBusNames[] = { "Master", "Music", "SFX" };
+            int busIdx = static_cast<int>(clip->getBus());
+            if (ImGui::Combo("Bus", &busIdx, kBusNames, IM_ARRAYSIZE(kBusNames)))
+            {
+                clip->setBus(static_cast<AudioBus>(busIdx));
+                toggled = true;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Grupo por el que sale el sonido. Master escala a los otros "
+                                  "dos.\nSolo afecta a la PROXIMA reproduccion: el grupo se "
+                                  "elige al arrancar la voz.");
+
+            // Modo de carga. A diferencia del bus, este SI recarga el sonido
+            // (va en el FMOD_MODE) y corta lo que estuviera sonando.
+            const char* kLoadModeNames[] = { "Sample (en RAM)", "Stream (del disco)" };
+            int loadModeIdx = static_cast<int>(clip->getLoadMode());
+            if (ImGui::Combo("Load Mode", &loadModeIdx, kLoadModeNames, IM_ARRAYSIZE(kLoadModeNames)))
+            {
+                clip->setLoadMode(static_cast<AudioLoadMode>(loadModeIdx));
+                toggled = true;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Sample: se descomprime entero en RAM. Arranca al instante y "
+                                  "admite varias voces a la vez.\nStream: se lee del disco sobre "
+                                  "la marcha, ocupa muy poca memoria, pero SOLO puede sonar una "
+                                  "vez a la vez.\nUsa Stream para musica y ambientes largos, "
+                                  "Sample para efectos.\nCambiarlo recarga el sonido y corta lo "
+                                  "que este sonando.");
+
+            if (toggled && ctx.scene && ctx.undo)
+            {
+                const uint64_t ownerId = ctx.selected->id;
+                Scene* sc = ctx.scene;
+                ctx.undo->push(std::make_unique<PropertyCommand<AudioClipState>>(
+                    "Audio Clip de '" + ctx.selected->name + "'",
+                    toggleBefore, audioClipStateOf(*clip),
+                    [sc, ownerId](const AudioClipState& s) { applyAudioClipState(*sc, ownerId, s); }));
+            }
 
             // --- Volume / Pitch: snapshot al activar cualquiera de los dos,
             // un solo comando al soltar. Los valores se escriben en vivo
@@ -7764,33 +7910,28 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             if (committed && m_audioDragActive && m_audioDragOwnerId == clipOwnerId)
             {
                 m_audioDragActive = false;
-                const AudioClipState before{ m_audioDragBeforeVolume, m_audioDragBeforePitch,
-                                             m_audioDragBeforeMinDistance, m_audioDragBeforeMaxDistance };
-                const AudioClipState after { clip->getVolume(), clip->getPitch(),
-                                             clip->getMinDistance(), clip->getMaxDistance() };
+                // Los tres bools del snapshot se toman del estado ACTUAL en las
+                // dos puntas: un arrastre de slider no los cambia, y así el
+                // undo del arrastre no revierte de rebote un checkbox que se
+                // hubiera tocado a mitad de camino.
+                AudioClipState before = audioClipStateOf(*clip);
+                before.volume      = m_audioDragBeforeVolume;
+                before.pitch       = m_audioDragBeforePitch;
+                before.minDistance = m_audioDragBeforeMinDistance;
+                before.maxDistance = m_audioDragBeforeMaxDistance;
+                const AudioClipState after = audioClipStateOf(*clip);
 
                 if (!nearlyEqualF(before.volume, after.volume) ||
                     !nearlyEqualF(before.pitch,  after.pitch)  ||
                     !nearlyEqualF(before.minDistance, after.minDistance) ||
                     !nearlyEqualF(before.maxDistance, after.maxDistance))
                 {
-                    // Resuelve el GameObject por id en cada aplicación, nunca
-                    // captura el puntero: sobrevive a un undo de Delete que
-                    // haya reconstruido el objeto entretanto.
-                    auto apply = [scene, clipOwnerId](const AudioClipState& s) {
-                        GameObject* go = scene->findById(clipOwnerId);
-                        if (!go || !go->hasAudioClip()) return;
-                        go->getAudioClip()->setVolume(s.volume);
-                        go->getAudioClip()->setPitch(s.pitch);
-                        // Max antes que min: los dos setters mantienen
-                        // min <= max entre ellos, y en ese orden el par
-                        // restaurado no se pisa a sí mismo.
-                        go->getAudioClip()->setMaxDistance(s.maxDistance);
-                        go->getAudioClip()->setMinDistance(s.minDistance);
-                    };
                     if (ctx.scene)
                         ctx.undo->push(std::make_unique<PropertyCommand<AudioClipState>>(
-                            "Audio Clip de '" + ctx.selected->name + "'", before, after, apply));
+                            "Audio Clip de '" + ctx.selected->name + "'", before, after,
+                            [scene, clipOwnerId](const AudioClipState& s) {
+                                applyAudioClipState(*scene, clipOwnerId, s);
+                            }));
                 }
             }
 
@@ -7799,7 +7940,22 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
 
         if (removeClicked)
         {
-            ctx.selected->setAudioClip(nullptr);
+            // Por el stack de undo, no a pelo: el snapshot se toma ANTES de
+            // soltar el componente, así el Ctrl+Z devuelve el clip con su
+            // volumen, pitch y distancias, no uno recién creado con defaults.
+            if (ctx.scene && ctx.undo && ctx.audio)
+            {
+                auto cmd = std::make_unique<AudioClipComponentCommand>(
+                    *ctx.scene, *ctx.audio,
+                    "Quitar Audio Clip de '" + ctx.selected->name + "'", ctx.selected->id,
+                    /*add=*/false, clip->getPath(), audioClipStateOf(*clip));
+                cmd->execute();
+                ctx.undo->push(std::move(cmd));
+            }
+            else
+            {
+                ctx.selected->setAudioClip(nullptr);
+            }
             // Vuelve a ocultar la sección tras quitar el clip — hay que
             // pulsar "Add > Audio Clip" de nuevo para reabrirla.
             m_audioClipAddRequestedFor = nullptr;
@@ -8085,7 +8241,18 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         ImGui::BeginDisabled(existingListener != nullptr);
         if (ImGui::Selectable("Audio Listener") && !existingListener)
         {
-            ctx.selected->setAudioListener(std::make_shared<AudioListenerComponent>());
+            if (ctx.scene && ctx.undo)
+            {
+                auto cmd = std::make_unique<AudioListenerComponentCommand>(
+                    *ctx.scene, "Añadir Audio Listener a '" + ctx.selected->name + "'",
+                    ctx.selected->id, /*add=*/true, /*enabled=*/true);
+                cmd->execute();
+                ctx.undo->push(std::move(cmd));
+            }
+            else
+            {
+                ctx.selected->setAudioListener(std::make_shared<AudioListenerComponent>());
+            }
             ctx.pushLog("Componente Audio Listener añadido a '" + ctx.selected->name + "'");
         }
         ImGui::EndDisabled();

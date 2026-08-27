@@ -761,6 +761,16 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
                     go->getAudioClip()->stop();
                 },
+                // Se SOLAPA con lo que ya suene, al revés que Play, que corta la
+                // voz anterior del mismo clip. Es lo que hace que dos pasos o
+                // dos disparos seguidos no se pisen. La voz que dispara queda
+                // fuera de alcance: Stop, SetVolume e IsPlaying no la ven, y no
+                // sigue al objeto. Para clips cortos, nunca para loops.
+                "PlayOneShot", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    go->getAudioClip()->playOneShot(glm::vec3(go->worldTransform[3]));
+                },
                 "SetLoop", [](const LuaAudioClip& c, bool l) {
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
@@ -806,6 +816,114 @@ namespace DonTopo::ScriptBindings
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
                     return go->getAudioClip()->getIs3D();
+                },
+                // Distancias de atenuación 3D. Estaban en el componente y en el
+                // Inspector desde el principio, pero no en Lua: un script no
+                // podía, por ejemplo, ensanchar el radio de un motor al acelerar.
+                // Como SetVolume/SetPitch, no recargan el sonido. El clamp y el
+                // invariante min <= max los impone el componente.
+                "SetMinDistance", [&mgr](const LuaAudioClip& c, float d) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!ensureFinite(mgr, "AudioClip.SetMinDistance", d)) return;
+                    go->getAudioClip()->setMinDistance(d);
+                },
+                "GetMinDistance", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return go->getAudioClip()->getMinDistance();
+                },
+                "SetMaxDistance", [&mgr](const LuaAudioClip& c, float d) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!ensureFinite(mgr, "AudioClip.SetMaxDistance", d)) return;
+                    go->getAudioClip()->setMaxDistance(d);
+                },
+                "GetMaxDistance", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return go->getAudioClip()->getMaxDistance();
+                },
+                "SetPlayOnAwake", [](const LuaAudioClip& c, bool b) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    go->getAudioClip()->setPlayOnAwake(b);
+                },
+                "GetPlayOnAwake", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return go->getAudioClip()->getPlayOnAwake();
+                },
+                // Bus por NOMBRE ("master"/"music"/"sfx"), no por índice: es lo
+                // mismo que se guarda en la escena, y un número mágico en un
+                // script sería ilegible. Un nombre desconocido avisa y no
+                // cambia nada, en vez de caer a un bus arbitrario.
+                "SetBus", [&mgr](const LuaAudioClip& c, const std::string& name) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    AudioBus bus;
+                    if (!audioBusFromStr(name, bus))
+                    {
+                        mgr.log("[Lua][WARN] AudioClip.SetBus: bus desconocido '" + name +
+                                 "' (usa 'master', 'music' o 'sfx'), se conserva el anterior");
+                        return;
+                    }
+                    go->getAudioClip()->setBus(bus);
+                },
+                "GetBus", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return std::string(audioBusToStr(go->getAudioClip()->getBus()));
+                },
+                // Modo de carga por nombre ("sample"/"stream"), como el bus.
+                // OJO: recarga el sonido y corta lo que suene. Es configuracion
+                // de arranque, no algo de llamar por frame.
+                "SetLoadMode", [&mgr](const LuaAudioClip& c, const std::string& name) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    AudioLoadMode mode;
+                    if (!audioLoadModeFromStr(name, mode))
+                    {
+                        mgr.log("[Lua][WARN] AudioClip.SetLoadMode: modo desconocido '" + name +
+                                 "' (usa 'sample' o 'stream'), se conserva el anterior");
+                        return;
+                    }
+                    go->getAudioClip()->setLoadMode(mode);
+                },
+                "GetLoadMode", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return std::string(audioLoadModeToStr(go->getAudioClip()->getLoadMode()));
+                },
+                "GetPath", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return go->getAudioClip()->getPath();
+                },
+                // Estado de la VOZ, no del componente. IsPlaying sigue el
+                // criterio de FMOD y de Unity: una voz pausada cuenta como
+                // sonando, y IsPaused es lo que las separa. Sin esto un script
+                // no tenía forma de esperar a que un sonido terminara.
+                "IsPlaying", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return go->getAudioClip()->isPlaying();
+                },
+                "IsPaused", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return go->getAudioClip()->isPaused();
+                },
+                // Pause conserva la posición de reproducción; Stop la tira.
+                "Pause", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    go->getAudioClip()->pause();
+                },
+                "Resume", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    go->getAudioClip()->resume();
                 });
 
             // Rigidbody: dinámica estilo Unity. Propiedades (mass/useGravity/
@@ -2127,6 +2245,19 @@ namespace DonTopo::ScriptBindings
                     }
                     if (name == "AudioClip" && !go->hasAudioClip() && mgr->audioManager() && arg)
                     {
+                        // Misma whitelist que el inspector y que la carga de
+                        // escena: sin ella, un path con cualquier extensión
+                        // creaba el componente igual y el fallo solo se notaba
+                        // como silencio (FMOD carga en diferido).
+                        std::string ext = std::filesystem::path(*arg).extension().string();
+                        std::transform(ext.begin(), ext.end(), ext.begin(),
+                                       [](unsigned char ch) { return (char)std::tolower(ch); });
+                        if (!isSupportedAudioExtension(ext))
+                        {
+                            mgr->log("[Lua][WARN] AddComponent(\"AudioClip\"): formato no soportado '" +
+                                      ext + "' (usa .wav, .mp3, .ogg o .flac)");
+                            return sol::nil;
+                        }
                         auto clip = mgr->audioManager()->createAudioClipComponent(*arg, false, false);
                         if (clip) { go->setAudioClip(std::move(clip)); return sol::make_object(lua, LuaAudioClip{e}); }
                     }
@@ -2768,6 +2899,44 @@ namespace DonTopo::ScriptBindings
         void registerPhysics(DonTopo::ScriptManager& mgr)
         {
             sol::state& lua = mgr.lua();
+            // Tabla global Audio: los mandos de volumen que el jugador espera
+            // en un menú de opciones. Existían en AudioManager desde el
+            // principio y no los llamaba NADIE — ni la UI ni los scripts—, así
+            // que un juego exportado no tenía forma de bajar el volumen.
+            //
+            // Se pasan por nombre de bus, igual que AudioClip:SetBus, para no
+            // tener dos vocabularios distintos para lo mismo.
+            sol::table audio = lua.create_named_table("Audio");
+
+            audio["SetBusVolume"] = [&mgr](const std::string& name, float v) {
+                AudioManager* am = mgr.audioManager();
+                if (!am) return;
+                AudioBus bus;
+                if (!audioBusFromStr(name, bus))
+                {
+                    mgr.log("[Lua][WARN] Audio.SetBusVolume: bus desconocido '" + name +
+                             "' (usa 'master', 'music' o 'sfx')");
+                    return;
+                }
+                // Mismo trato que los setters del clip: un NaN aquí dejaría el
+                // volumen del grupo inutilizable para el resto de la partida, y
+                // no hay ningún .scene donde se note para depurarlo después.
+                if (!ensureFinite(mgr, "Audio.SetBusVolume", v)) return;
+                am->setBusVolume(bus, std::clamp(v, 0.0f, 1.0f));
+            };
+
+            audio["GetBusVolume"] = [&mgr](const std::string& name) -> float {
+                AudioManager* am = mgr.audioManager();
+                if (!am) return 1.0f;
+                AudioBus bus;
+                if (!audioBusFromStr(name, bus))
+                {
+                    mgr.log("[Lua][WARN] Audio.GetBusVolume: bus desconocido '" + name + "'");
+                    return 1.0f;
+                }
+                return am->getBusVolume(bus);
+            };
+
             sol::table physics = lua.create_named_table("Physics");
 
             // Physics.Raycast(origin, direction, maxDistance, options) -> tabla

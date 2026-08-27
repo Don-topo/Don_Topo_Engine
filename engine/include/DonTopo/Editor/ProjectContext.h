@@ -94,6 +94,15 @@ public:
         float taaJitterScale   = 0.0f;
         float fpLightRadius    = 0.0f;
 
+        // --- Volumenes de audio por bus ---------------------------------------
+        //
+        // Neutros (1.0) a proposito, y NO entran en la regla de "todo apagado"
+        // que aplica a los efectos: un proyecto sin estos campos tiene que
+        // abrirse sonando igual que antes de la feature, no en silencio.
+        float masterVolume = 1.0f;
+        float musicVolume  = 1.0f;
+        float sfxVolume    = 1.0f;
+
         // Tri-estado: -1 = sin dato guardado, el panel se queda como este. Los
         // paneles NO entran en la regla de "todo apagado".
         int panelOpen[PanelCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1};

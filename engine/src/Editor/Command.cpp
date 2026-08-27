@@ -5,6 +5,8 @@
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
+#include "DonTopo/Audio/AudioClipComponent.h"
+#include "DonTopo/Audio/AudioListenerComponent.h"
 #include <algorithm>
 
 namespace DonTopo {
@@ -141,6 +143,63 @@ void CanvasComponentCommand::apply(bool add)
         return;
     }
     go->setCanvas(std::make_shared<CanvasComponent>(m_state));
+}
+
+AudioClipComponentCommand::AudioClipComponentCommand(Scene& scene, AudioManager& audio,
+                                                      std::string label, uint64_t id, bool add,
+                                                      std::string path, AudioClipState state)
+    : m_scene(scene), m_audio(audio), m_label(std::move(label)), m_id(id), m_add(add),
+      m_path(std::move(path)), m_state(state) {}
+
+void AudioClipComponentCommand::execute() { apply(m_add); }
+void AudioClipComponentCommand::undo()    { apply(!m_add); }
+
+void AudioClipComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setAudioClip(nullptr);
+        return;
+    }
+    // is3D y loop van horneados en el FMOD_MODE del sonido, así que se pasan a
+    // la factory en vez de asignarse después: hacerlo con los setters forzaría
+    // un reload inmediato del sonido recién creado.
+    auto clip = m_audio.createAudioClipComponent(m_path, m_state.is3D, m_state.loop);
+    // El asset pudo desaparecer del disco entre el Remove y el Ctrl+Z. El
+    // GameObject se queda sin clip en vez de con uno roto, que es lo mismo que
+    // hace Scene::fromJson en ese caso.
+    if (!clip) return;
+    clip->setPlayOnAwake(m_state.playOnAwake);
+    clip->setVolume(m_state.volume);
+    clip->setPitch(m_state.pitch);
+    // Max antes que min por el invariante min <= max de los setters, igual que
+    // en la carga de escena.
+    clip->setMaxDistance(m_state.maxDistance);
+    clip->setMinDistance(m_state.minDistance);
+    go->setAudioClip(std::move(clip));
+}
+
+AudioListenerComponentCommand::AudioListenerComponentCommand(Scene& scene, std::string label,
+                                                              uint64_t id, bool add, bool enabled)
+    : m_scene(scene), m_label(std::move(label)), m_id(id), m_add(add), m_enabled(enabled) {}
+
+void AudioListenerComponentCommand::execute() { apply(m_add); }
+void AudioListenerComponentCommand::undo()    { apply(!m_add); }
+
+void AudioListenerComponentCommand::apply(bool add)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go) return;
+    if (!add)
+    {
+        go->setAudioListener(nullptr);
+        return;
+    }
+    auto listener = std::make_shared<AudioListenerComponent>();
+    listener->setEnabled(m_enabled);
+    go->setAudioListener(std::move(listener));
 }
 
 ButtonComponentCommand::ButtonComponentCommand(Scene& scene, std::string label, uint64_t id,

@@ -12,9 +12,14 @@ namespace DonTopo
     // local), igual que CameraComponent y LightComponent — mover o rotar el
     // objeto mueve el listener.
     //
-    // Sin listener en la escena no suena ningún AudioClip: el gate vive en las
-    // rutas de reproducción (EditorUI al entrar en Play y el runtime), NO dentro
-    // de AudioManager ni de AudioClipComponent.
+    // Sin listener en la escena los AudioClip suenan IGUAL: el audio 3D se oye
+    // entonces desde la cámara, fallback que resuelven las rutas de host cada
+    // frame (sandbox/src/main.cpp, runtime/main.cpp), y el Log lo dice una vez
+    // al entrar en Play. No hay ningún gate que impida reproducir: lo hubo, pero
+    // solo cubría playOnAwake y ni AudioClip:Play de Lua ni el botón Play del
+    // inspector lo consultaban. Dentro de AudioManager/AudioClipComponent no
+    // puede vivir (esas dos se prueban sin escena), así que imponerlo obligaría
+    // a repetirlo en las cuatro rutas de reproducción.
     //
     // Header-only a propósito: solo lleva un bool, y así no hace falta añadir un
     // .cpp a la lista de fuentes de DonTopoCore.

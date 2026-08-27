@@ -20,7 +20,10 @@ target_link_libraries(dt_exporter_tests PRIVATE DonTopoEditor)
 target_compile_features(dt_exporter_tests PRIVATE cxx_std_20)
 
 add_executable(dt_audio_tests audio_tests.cpp)
-target_link_libraries(dt_audio_tests PRIVATE DonTopoCore)
+# DonTopoEditor y no DonTopoCore: los tests cubren tambien los comandos de undo
+# del panel Properties (AudioClipComponentCommand, AudioListenerComponentCommand),
+# que viven en la libreria del editor. Mismo enlace que dt_camera_tests.
+target_link_libraries(dt_audio_tests PRIVATE DonTopoEditor)
 target_compile_features(dt_audio_tests PRIVATE cxx_std_20)
 
 add_executable(dt_scripting_tests scripting_tests.cpp)

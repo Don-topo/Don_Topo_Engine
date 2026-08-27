@@ -136,10 +136,22 @@ const std::vector<std::string>& baseSymbols()
         "Animator:GetState", "Animator:IsBlending", "Animator:GetBlendWeight",
         "Animator:GetPreviousState", "Animator:GetPoseWeight",
 
-        // AudioClip
-        "AudioClip:Play", "AudioClip:Stop", "AudioClip:SetLoop", "AudioClip:GetLoop",
+        // AudioClip (GetComponent("AudioClip"))
+        "AudioClip:Play", "AudioClip:PlayOneShot", "AudioClip:Stop",
+        "AudioClip:Pause", "AudioClip:Resume",
+        "AudioClip:IsPlaying", "AudioClip:IsPaused",
+        "AudioClip:SetLoop", "AudioClip:GetLoop",
         "AudioClip:SetVolume", "AudioClip:GetVolume", "AudioClip:SetPitch", "AudioClip:GetPitch",
         "AudioClip:SetIs3D", "AudioClip:GetIs3D",
+        "AudioClip:SetMinDistance", "AudioClip:GetMinDistance",
+        "AudioClip:SetMaxDistance", "AudioClip:GetMaxDistance",
+        "AudioClip:SetPlayOnAwake", "AudioClip:GetPlayOnAwake",
+        "AudioClip:SetBus", "AudioClip:GetBus",
+        "AudioClip:SetLoadMode", "AudioClip:GetLoadMode",
+        "AudioClip:GetPath",
+
+        // Audio global (volumenes por bus: "master", "music", "sfx")
+        "Audio.SetBusVolume", "Audio.GetBusVolume",
 
         // UI 2D — Canvas (Entity:GetCanvas / Entity:AddCanvas)
         "Canvas.scaleMode", "Canvas.scaleFactor", "Canvas.screenMatch",

@@ -153,6 +153,13 @@ namespace DonTopo
             void traverse(Fn fn) { m_root.traverse(fn); }
 
             void update(float dt, PhysicsManager& physics);
+            // Empuja la posición de cada GameObject a la voz que tenga sonando,
+            // para que los AudioClip 3D sigan a su objeto. La llama Scene::update
+            // (Play) y las rutas de host en Edit Mode, que no pasan por update
+            // pero sí mueven objetos con el gizmo. Barata: los clips 2D salen en
+            // el primer if de AudioClipComponent::updateSpatial.
+            void updateAudioSpatial();
+
             void shutdown(PhysicsManager& physics, AudioManager& audio);
 
             // Serializa el árbol completo (transforms, mesh, colliders, audio

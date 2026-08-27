@@ -6,12 +6,14 @@
 
 namespace DonTopo {
 
-AudioClipComponent::AudioClipComponent(AudioManager* audio, std::string path, int soundId, bool is3D, bool loop)
+AudioClipComponent::AudioClipComponent(AudioManager* audio, std::string path, int soundId, bool is3D, bool loop,
+                                        AudioLoadMode loadMode)
     : m_audio(audio)
     , m_path(std::move(path))
     , m_soundId(soundId)
     , m_is3D(is3D)
     , m_loop(loop)
+    , m_loadMode(loadMode)
 {
     applyDistances();
 }
@@ -23,7 +25,13 @@ AudioClipComponent::~AudioClipComponent()
 
 void AudioClipComponent::play(const glm::vec3& worldPos)
 {
-    if (m_audio) m_audio->playSound(m_soundId, worldPos, m_volume, m_pitch);
+    // Las distancias viajan con la llamada, no se escriben en el FMOD::Sound:
+    // desde que el sonido se comparte entre clips (caché por path+modo),
+    // escribirlas allí le cambiaría el radio de atenuación a todos los objetos
+    // que usen el mismo fichero.
+    if (m_audio)
+        m_audio->playSound(m_soundId, worldPos, m_volume, m_pitch, m_bus,
+                           m_minDistance, m_maxDistance);
 }
 
 void AudioClipComponent::stop()
@@ -31,10 +39,62 @@ void AudioClipComponent::stop()
     if (m_audio) m_audio->stopSound(m_soundId);
 }
 
+void AudioClipComponent::playOneShot(const glm::vec3& worldPos)
+{
+    // Con distancias, como play(): la voz del one-shot no se guarda en ningún
+    // sitio, así que si no se las damos al arrancar se queda con las de fábrica
+    // de FMOD (1 / 10000) y un disparo 3D se oiría igual de fuerte a 900
+    // unidades que a 5.
+    if (m_audio)
+        m_audio->playSoundOneShot(m_soundId, worldPos, m_volume, m_pitch, m_bus,
+                                  m_minDistance, m_maxDistance);
+}
+
+bool AudioClipComponent::isPlaying() const
+{
+    return m_audio && m_audio->isSoundPlaying(m_soundId);
+}
+
+bool AudioClipComponent::isPaused() const
+{
+    return m_audio && m_audio->isSoundPaused(m_soundId);
+}
+
+void AudioClipComponent::pause()
+{
+    if (m_audio) m_audio->setSoundPaused(m_soundId, true);
+}
+
+void AudioClipComponent::resume()
+{
+    if (m_audio) m_audio->setSoundPaused(m_soundId, false);
+}
+
+void AudioClipComponent::updateSpatial(const glm::vec3& worldPos)
+{
+    // El gate por m_is3D es local (un bool), así que un clip 2D ni siquiera
+    // entra en AudioManager: esto se llama por frame y por cada clip de la
+    // escena, y la mayoría son 2D.
+    if (!m_audio || !m_is3D) return;
+    m_audio->setSoundPosition(m_soundId, worldPos);
+}
+
+bool AudioClipComponent::hasLoadError() const
+{
+    return m_audio && m_audio->getSoundState(m_soundId) == AudioManager::SoundLoadState::Failed;
+}
+
 void AudioClipComponent::setLoop(bool loop)
 {
     if (loop == m_loop) return;
     m_loop = loop;
+    reload();
+}
+
+void AudioClipComponent::setLoadMode(AudioLoadMode mode)
+{
+    if (mode == m_loadMode) return;
+    m_loadMode = mode;
     reload();
 }
 
@@ -106,7 +166,7 @@ void AudioClipComponent::reload()
 {
     if (!m_audio) return;
     m_audio->unloadSound(m_soundId);
-    m_soundId = m_audio->loadSound(m_path, m_is3D, m_loop);
+    m_soundId = m_audio->loadSound(m_path, m_is3D, m_loop, m_loadMode);
     // El sonido nuevo arranca con el min/max por defecto de FMOD: hay que
     // reescribirle el del componente (importa al pasar de 2D a 3D).
     applyDistances();

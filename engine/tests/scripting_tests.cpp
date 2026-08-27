@@ -2793,6 +2793,143 @@ static void test_capas_json_ausente_o_corrupto_da_defaults()
     std::filesystem::remove_all(dir, ec);
 }
 
+// Los bindings de audio que faltaban: distancias, playOnAwake, path y el estado
+// de la voz. Antes, un script tenía diez métodos y ninguno de estos, así que
+// min/maxDistance solo se podían tocar desde el Inspector aunque el componente
+// los soportara desde el principio.
+//
+// Se ejercitan CON valores no neutros y leyéndolos de vuelta por Lua: un
+// binding que existiera pero llamara al setter equivocado (un clásico entre
+// min y max) pasaría cualquier test que solo comprobara que no lanza.
+static void test_audio_bindings_nuevos(ScriptManager& sm, AudioManager& am)
+{
+    if (!am.available())
+    {
+        std::printf("SKIP test_audio_bindings_nuevos (FMOD no disponible)\n");
+        return;
+    }
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Altavoz");
+    auto clip = am.createAudioClipComponent("assets/audio.mp3", /*is3D=*/true, /*loop=*/false);
+    if (!clip)
+    {
+        std::printf("SKIP test_audio_bindings_nuevos (no se pudo crear el clip)\n");
+        return;
+    }
+    go->setAudioClip(clip);
+    sm.rebuildAliveSet();
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    sm.lua().script(R"(
+        local c = e:GetComponent("AudioClip")
+        c:SetMaxDistance(300)
+        c:SetMinDistance(7.5)
+        c:SetPlayOnAwake(true)
+        leidoMin  = c:GetMinDistance()
+        leidoMax  = c:GetMaxDistance()
+        leidoAwake = c:GetPlayOnAwake()
+        leidoPath = c:GetPath()
+        sonando   = c:IsPlaying()
+        pausado   = c:IsPaused()
+    )");
+
+    // Leídos por Lua Y comprobados en el componente: si el binding escribiera
+    // en el sitio equivocado, uno de los dos lados lo delataría.
+    CHECK(nearlyEqual(sm.lua()["leidoMin"].get<float>(), 7.5f));
+    CHECK(nearlyEqual(sm.lua()["leidoMax"].get<float>(), 300.0f));
+    CHECK(nearlyEqual(go->getAudioClip()->getMinDistance(), 7.5f));
+    CHECK(nearlyEqual(go->getAudioClip()->getMaxDistance(), 300.0f));
+    CHECK(sm.lua()["leidoAwake"].get<bool>() == true);
+    CHECK(go->getAudioClip()->getPlayOnAwake() == true);
+    CHECK(sm.lua()["leidoPath"].get<std::string>() == "assets/audio.mp3");
+    // Sin haber llamado a Play: nada suena y nada está pausado.
+    CHECK(sm.lua()["sonando"].get<bool>() == false);
+    CHECK(sm.lua()["pausado"].get<bool>() == false);
+
+    // NaN por los setters nuevos: mismo trato que SetVolume/SetPitch — se
+    // rechaza, se avisa, y el valor anterior queda intacto.
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua().script("e:GetComponent(\"AudioClip\"):SetMinDistance(0/0)");
+    CHECK(nearlyEqual(go->getAudioClip()->getMinDistance(), 7.5f));
+    CHECK(logContains(log, "SetMinDistance"));
+    CHECK(logContains(log, "WARN"));
+    sm.setLogCallback(nullptr);
+}
+
+// Buses desde Lua: por nombre en las dos direcciones, y un nombre desconocido
+// avisa sin cambiar nada (en vez de caer a un bus arbitrario, que es lo que
+// haría un cast desde entero).
+static void test_audio_bus_desde_lua(ScriptManager& sm, AudioManager& am)
+{
+    if (!am.available())
+    {
+        std::printf("SKIP test_audio_bus_desde_lua (FMOD no disponible)\n");
+        return;
+    }
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Altavoz");
+    auto clip = am.createAudioClipComponent("assets/audio.mp3", false, false);
+    if (!clip)
+    {
+        std::printf("SKIP test_audio_bus_desde_lua (no se pudo crear el clip)\n");
+        return;
+    }
+    go->setAudioClip(clip);
+    sm.rebuildAliveSet();
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    sm.lua().script(R"(
+        local c = e:GetComponent("AudioClip")
+        busInicial = c:GetBus()
+        c:SetBus("music")
+        busTrasSet = c:GetBus()
+    )");
+    CHECK(sm.lua()["busInicial"].get<std::string>() == "sfx");
+    CHECK(sm.lua()["busTrasSet"].get<std::string>() == "music");
+    CHECK(go->getAudioClip()->getBus() == AudioBus::Music);
+
+    // Nombre inventado: avisa y CONSERVA el anterior.
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua().script("e:GetComponent(\"AudioClip\"):SetBus(\"reverb\")");
+    CHECK(go->getAudioClip()->getBus() == AudioBus::Music);
+    CHECK(logContains(log, "SetBus"));
+    CHECK(logContains(log, "WARN"));
+
+    // Volúmenes globales por la tabla Audio. Se leen de vuelta por Lua Y del
+    // manager: si el binding escribiera en el bus equivocado, uno de los dos
+    // lados lo delataría.
+    log.clear();
+    sm.lua().script(R"(
+        Audio.SetBusVolume("music", 0.25)
+        Audio.SetBusVolume("sfx", 0.75)
+        volMusic = Audio.GetBusVolume("music")
+        volSfx   = Audio.GetBusVolume("sfx")
+    )");
+    CHECK(nearlyEqual(sm.lua()["volMusic"].get<float>(), 0.25f));
+    CHECK(nearlyEqual(sm.lua()["volSfx"].get<float>(), 0.75f));
+    CHECK(nearlyEqual(am.getBusVolume(AudioBus::Music), 0.25f));
+    CHECK(nearlyEqual(am.getBusVolume(AudioBus::Sfx), 0.75f));
+
+    // Fuera de rango se clampa, y un NaN se rechaza avisando: sin esto, el bus
+    // se quedaría inutilizable el resto de la partida y no hay ningún fichero
+    // donde se vea para depurarlo.
+    sm.lua().script("Audio.SetBusVolume(\"music\", 5.0)");
+    CHECK(nearlyEqual(am.getBusVolume(AudioBus::Music), 1.0f));
+    sm.lua().script("Audio.SetBusVolume(\"sfx\", 0/0)");
+    CHECK(nearlyEqual(am.getBusVolume(AudioBus::Sfx), 0.75f));
+    CHECK(logContains(log, "WARN"));
+    sm.setLogCallback(nullptr);
+
+    // Neutros otra vez: este manager lo comparten todos los tests del binario.
+    am.setBusVolume(AudioBus::Master, 1.0f);
+    am.setBusVolume(AudioBus::Music,  1.0f);
+    am.setBusVolume(AudioBus::Sfx,    1.0f);
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -2827,6 +2964,8 @@ int main()
     test_ui_checkbox_desde_lua(sm);
     test_ui_toggle_desde_lua(sm);
     test_ui_scrollbar_desde_lua(sm);
+    test_audio_bindings_nuevos(sm, am);
+    test_audio_bus_desde_lua(sm, am);
     test_ui_input_field_desde_lua(sm);
     test_ui_input_field_callback_desde_lua(sm);
     test_ui_dropdown_desde_lua(sm);

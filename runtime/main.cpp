@@ -515,22 +515,25 @@ int main(int argc, char** argv)
         // Play en el editor pero sale mudo en el .exe exportado — el diseñador
         // lo activó confiando en lo que oyó, y aquí no hay ningún log que avise.
         //
-        // Gate de reproducción: una escena sin Audio Listener (o con el suyo
-        // deshabilitado) no reproduce ningún clip. El gate vive aquí y en el
-        // editor, NUNCA dentro de AudioManager ni de AudioClipComponent: esas
-        // dos clases se prueban directamente y tienen que seguir sonando sin
-        // escena. Un solo aviso pa toda la escena, no uno por clip.
+        // Una escena sin Audio Listener (o con el suyo deshabilitado) reproduce
+        // sus clips IGUAL: el audio 3D se oye desde la cámara, el fallback que
+        // resuelve el bucle de abajo cada frame. Aquí había un gate que se
+        // saltaba este barrido, y se ha quitado porque solo cubría playOnAwake
+        // —AudioClip:Play de Lua se lo saltaba— y no puede vivir dentro de
+        // AudioManager ni de AudioClipComponent: esas dos clases se prueban
+        // directamente y tienen que seguir sonando sin escena. El aviso se
+        // queda, ahora informativo y cierto. Uno pa toda la escena, no uno por
+        // clip.
         {
             DonTopo::GameObject* listenerGo = scene.findAudioListener();
             const bool listenerActive = listenerGo && listenerGo->getAudioListener()->getEnabled();
             if (!listenerActive)
-                std::cerr << "Sin Audio Listener en la escena: los AudioClip no se reproduciran"
+                std::cerr << "Sin Audio Listener en la escena: el audio 3D se oye desde la camara"
                           << std::endl;
-            else
-                scene.traverse([](DonTopo::GameObject* go) {
-                    if (go->hasAudioClip() && go->getAudioClip()->getPlayOnAwake())
-                        go->getAudioClip()->play(glm::vec3(go->worldTransform[3]));
-                });
+            scene.traverse([](DonTopo::GameObject* go) {
+                if (go->hasAudioClip() && go->getAudioClip()->getPlayOnAwake())
+                    go->getAudioClip()->play(glm::vec3(go->worldTransform[3]));
+            });
         }
 
         // Empareja los canvas de la escena con sus slots del Renderer por
@@ -541,6 +544,9 @@ int main(int argc, char** argv)
         // Y los canvas de PANTALLA en orden de prioridad de input, tambien
         // fuera del bucle por lo mismo: se rellena entero cada frame.
         std::vector<DonTopo::UiCanvas*> uiCanvases;
+        // Buffer del pump de fallos de carga de audio, fuera del bucle por lo
+        // mismo que los dos de arriba.
+        std::vector<std::string> audioFailures;
 
         while (!window.shouldClose())
         {
@@ -644,6 +650,17 @@ int main(int argc, char** argv)
                 }
             }
             audio.update(listenerPos, listenerFwd, listenerUp);
+            // Fallos de carga que FMOD ha detectado desde el frame anterior.
+            // Con FMOD_NONBLOCKING el error no existe cuando createSound
+            // retorna, así que sin este pump un asset que no viajó en el bundle
+            // es silencio absoluto: ni el .exe ni el game.log dicen nada. Cada
+            // sonido se reporta una vez.
+            audioFailures.clear();
+            audio.pollLoadFailures(audioFailures);
+            for (const auto& failed : audioFailures)
+                std::cerr << "No se pudo cargar el audio '" << failed
+                          << "': fichero ausente, formato no soportado o datos corruptos"
+                          << std::endl;
             physics.stepSimulation(dt);
             scene.update(dt, physics);
             scriptManager.update(dt);

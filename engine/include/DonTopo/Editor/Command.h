@@ -1,4 +1,5 @@
 #pragma once
+#include "DonTopo/Audio/AudioBus.h"
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -81,13 +82,26 @@ struct RigidbodyState {
 
 // Snapshot value-type del AudioClipComponent — T de PropertyCommand<T> en la
 // sección Audio Clip del panel Properties. Los cuatro sliders (volumen, pitch y
-// las dos distancias de atenuación 3D): loop, is3D y playOnAwake se escriben
-// directos y no tienen undo.
+// las dos distancias 3D) MÁS los tres checkboxes: antes loop/is3D/playOnAwake se
+// escribían directos y no tenían undo, así que desmarcar "Is 3D?" con un clip
+// sonando lo cortaba en seco y Ctrl+Z no lo devolvía.
+//
+// Los tres van en el mismo struct que los sliders, no en uno aparte: un solo
+// tipo de comando para toda la sección hace que un undo restaure el estado
+// completo aunque se hayan tocado sliders y checkboxes en distinto orden.
 struct AudioClipState {
     float volume;
     float pitch;
     float minDistance;
     float maxDistance;
+    bool  loop;
+    bool  is3D;
+    bool  playOnAwake;
+    // Bus de salida. Va en el mismo snapshot que el resto por lo mismo que los
+    // checkboxes: un solo comando para toda la seccion.
+    AudioBus bus;
+    // Como loop e is3D: cambiarlo recarga el sonido.
+    AudioLoadMode loadMode;
 };
 
 // Snapshot value-type del CameraComponent — T de PropertyCommand<T> en la
@@ -218,6 +232,56 @@ private:
     uint64_t m_id;
     bool m_add;
     CanvasComponent m_state;
+};
+
+// Add/Remove del AudioClipComponent. Mismo patrón que CanvasComponentCommand
+// (resuelve el GameObject por id en cada execute()/undo(), nunca puntero crudo)
+// con una diferencia obligada: AudioClipComponent NO es copiable —envuelve un
+// soundId de FMOD y su destructor descarga el sonido—, así que el snapshot son
+// datos planos (path + AudioClipState) y rehacer el Add recrea el componente
+// con createAudioClipComponent, la misma factory que usa Scene::fromJson.
+//
+// Sin esto, quitar un Audio Clip perdía para siempre volumen, pitch y las dos
+// distancias ajustadas a mano, y Ctrl+Z no devolvía nada.
+class AudioClipComponentCommand : public ICommand {
+public:
+    AudioClipComponentCommand(Scene& scene, AudioManager& audio, std::string label,
+                               uint64_t id, bool add, std::string path, AudioClipState state);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(bool add);
+
+    Scene&         m_scene;
+    AudioManager&  m_audio;
+    std::string    m_label;
+    uint64_t       m_id;
+    bool           m_add;
+    std::string    m_path;
+    AudioClipState m_state;
+};
+
+// Add/Remove del AudioListenerComponent. Su estado entero es un bool, pero el
+// comando existe por la misma razón que los demás: que añadirlo y quitarlo pase
+// por el stack de undo como todo lo demás del panel.
+class AudioListenerComponentCommand : public ICommand {
+public:
+    AudioListenerComponentCommand(Scene& scene, std::string label, uint64_t id,
+                                   bool add, bool enabled);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(bool add);
+
+    Scene&      m_scene;
+    std::string m_label;
+    uint64_t    m_id;
+    bool        m_add;
+    bool        m_enabled;
 };
 
 // Add/Remove del ButtonComponent, calcado de CanvasComponentCommand: resuelve el

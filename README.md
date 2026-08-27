@@ -22,7 +22,7 @@ A game engine written in C++20, with two interchangeable render backends: **Vulk
 - Cubemap skybox (fullscreen quad, inverse view-projection)
 - Wireframe render mode
 - 3D spatial audio (FMOD): `AudioClipComponent` (loop, 3D/2D toggle, per-channel volume and pitch, 3D min/max attenuation distances with viewport gizmo), non-blocking clip loading
-- **Audio Listener component**: one per scene — its GameObject transform is where the scene is heard from (position, `-Z` forward, `+Y` up), falling back to the camera when absent; a scene with no listener plays no clips and says so once in the log
+- **Audio Listener component**: one per scene — its GameObject transform is where the scene is heard from (position, `-Z` forward, `+Y` up), falling back to the camera when absent; a scene with no listener still plays its clips — they are simply heard from the camera, and the log says so once per Play
 - Dockable ImGui editor with offscreen viewport
 - Scene graph (hierarchical transforms), GameObject hierarchy panel (create/delete/rename, drag-drop reorder)
 - Basic shapes menu (Cube/Sphere/Plane/Capsule), Content Browser (asset browsing, rename/delete)
@@ -874,6 +874,71 @@ for _, e in ipairs(Physics.OverlapSphere(Vec3(0,0,0), 250, { hitTriggers = true 
     Log.Info("alcanzado: " .. e.name)
 end
 ```
+
+### Audio from Lua
+
+`GetComponent("AudioClip")` returns the GameObject's audio clip, if it has one — at most one
+per GameObject. `AddComponent("AudioClip", path)` adds one (2D and non-looping; use
+`SetIs3D`/`SetLoop` to change that).
+
+| Method | Notes |
+| --- | --- |
+| `Play()` / `Stop()` | `Play()` restarts the clip and cuts the previous voice of the same clip, like Unity's `AudioSource.Play()`. `Stop()` discards the playback position. |
+| `PlayOneShot()` | **Overlaps** instead of cutting: two footsteps or two shots in a row no longer clip each other. The voice it fires is out of reach afterwards — `Stop()`, `SetVolume()` and `IsPlaying()` do not see it, and it does not follow the object. Short clips only, never loops. |
+| `Pause()` / `Resume()` | Keep the playback position, unlike `Stop()`. |
+| `IsPlaying()` / `IsPaused()` | A **paused** voice still counts as playing, same as FMOD and Unity — `IsPaused()` is what tells them apart. |
+| `SetVolume(v)` / `GetVolume()` | `v` clamped to `[0, 1]`. |
+| `SetPitch(p)` / `GetPitch()` | `p` clamped to `[0.5, 2]`. 0 is not "silence" for FMOD, hence the floor. |
+| `SetLoop(b)` / `GetLoop()` | **Reloads the sound** (loop is baked into the FMOD mode) and cuts whatever was playing. It's configuration, not a per-frame call. |
+| `SetIs3D(b)` / `GetIs3D()` | Same caveat as `SetLoop`: it reloads the sound. |
+| `SetMinDistance(d)` / `GetMinDistance()` | 3D attenuation, clamped to `[0.1, 50]`. Full volume closer than this. |
+| `SetMaxDistance(d)` / `GetMaxDistance()` | Clamped to `[1, 1000]`, never below min. Cheap: no reload. |
+| `SetPlayOnAwake(b)` / `GetPlayOnAwake()` | Whether entering Play starts the clip automatically. |
+| `SetBus(name)` / `GetBus()` | Output bus: `"master"`, `"music"` or `"sfx"` (default). Only affects the **next** playback — the group is picked when the voice starts. An unknown name warns and changes nothing. |
+| `SetLoadMode(name)` | `"sample"` (decompressed in RAM, several voices at once) or `"stream"` (read from disk, tiny memory, but **one voice at a time**). Use stream for music, sample for effects. **Reloads the sound** and cuts whatever was playing. |
+| `GetLoadMode()` | `"sample"` or `"stream"`. |
+| `GetPath()` | The asset path the clip was loaded from. |
+
+Global mixing lives in the `Audio` table, and is what a options menu would drive:
+
+| Function | Notes |
+| --- | --- |
+| `Audio.SetBusVolume(name, v)` | `name` is `"master"`, `"music"` or `"sfx"`; `v` is clamped to `[0, 1]`. Master scales the other two. |
+| `Audio.GetBusVolume(name)` | Returns 1.0 when there is no audio device, so a muted machine does not read as "volume at zero". |
+
+The three volumes are stored in `project.json` and restored when the project opens; the
+editor exposes them under **View → Master / Music / SFX Volume**.
+
+`SetVolume`, `SetPitch`, `SetMinDistance` and `SetMaxDistance` reject non-finite values (a
+`0/0` in a script) and say so in the log instead of letting a `NaN` reach the scene file.
+
+A 3D clip **follows its GameObject**: the position is pushed to the live voice every frame,
+so attenuation and panning track a moving object.
+
+```lua
+function Engine:Start()
+    self.clip = self.entity:GetComponent("AudioClip")
+    if self.clip then
+        self.clip:SetIs3D(true)          -- configuración: fuera del Update
+        self.clip:SetMinDistance(5)
+        self.clip:SetMaxDistance(300)
+        self.clip:Play()
+    end
+end
+
+function Engine:Update(dt)
+    if not self.clip then return end
+    -- El tono sube con la velocidad; volumen y pitch sí se pueden mover por frame
+    self.clip:SetPitch(1.0 + self.throttle * 0.8)
+
+    if Input.IsKeyPressed(Key.P) then
+        if self.clip:IsPaused() then self.clip:Resume() else self.clip:Pause() end
+    end
+end
+```
+
+A scene with no **Audio Listener** still plays its clips: they are heard from the camera, and
+the log says so once per Play.
 
 ### UI from Lua
 
