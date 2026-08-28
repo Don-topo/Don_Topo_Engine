@@ -18,7 +18,7 @@ class GpuDevice;
 // render pass de escena, que gobiernan a varios pases.
 //
 // Ataduras con codigo que no es suyo:
-//  - descLayout()/descPool(): de ahi salen los descriptor sets de compute que
+//  - descLayout()/allocateSet(): de ahi salen los descriptor sets de compute que
 //    aloja initSkinnedRenderObject y libera destroySkinnedRenderObject, que son
 //    del Renderer porque van con los SSBOs de cada malla.
 //  - los objetos y la lista de visibles llegan por el Context: son del
@@ -82,11 +82,28 @@ public:
     // De aqui salen los descriptor sets de compute de cada malla, que aloja y
     // libera el Renderer junto con los SSBOs del objeto.
     VkDescriptorSetLayout descLayout() const { return m_descLayout; }
-    VkDescriptorPool      descPool()   const { return m_descPool; }
+
+    // Aloja un set y devuelve el POOL del que salio, que es lo que hace falta
+    // despues para liberarlo (vkFreeDescriptorSets pide el pool concreto). Si
+    // el ultimo pool esta lleno, crea otro y sigue: antes habia uno solo con
+    // maxSets = 16 y el personaje 17 hacia lanzar en mitad de la carga de
+    // escena.
+    //
+    // Se crece encadenando pools en vez de recreando uno mas grande a proposito:
+    // recrearlo invalidaria los sets de todas las mallas ya cargadas, y habria
+    // que rehacerlos todos con la GPU parada.
+    //
+    // Devuelve VK_NULL_HANDLE si ni siquiera se pudo crear el pool nuevo.
+    VkDescriptorPool allocateSet(const Context& ctx, VkDescriptorSet& outSet);
 
 private:
+    // Crea un pool mas de la cadena. kSetsPerPool sale del tope historico: la
+    // mayoria de escenas caben en el primero y no se paga nada.
+    static constexpr uint32_t kSetsPerPool = 16;
+    bool addPool(const Context& ctx);
+
     VkDescriptorSetLayout m_descLayout       = VK_NULL_HANDLE;
-    VkDescriptorPool      m_descPool         = VK_NULL_HANDLE;
+    std::vector<VkDescriptorPool> m_descPools;
     VkPipelineLayout      m_pipelineLayout   = VK_NULL_HANDLE;
     VkPipeline            m_boneEval         = VK_NULL_HANDLE;
     VkPipeline            m_boneHierarchy    = VK_NULL_HANDLE;

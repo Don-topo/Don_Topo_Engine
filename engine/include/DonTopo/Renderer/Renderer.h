@@ -626,6 +626,18 @@ namespace DonTopo {
             void createDescriptorSetLayout();
             void createUniformBuffers();
             void createDescriptorPool();
+            // Aloja MAX_FRAMES sets seguidos y devuelve el POOL del que salen,
+            // que es lo que hace falta luego para liberarlos. Encadena un pool
+            // nuevo cuando el ultimo se llena, en vez de lanzar: el pool se
+            // dimensionaba UNA vez con las mallas del arranque mas 128 de
+            // margen, y pasado ese margen la carga de escena se caia.
+            //
+            // Se encadena en lugar de recrear uno mayor porque recrearlo
+            // invalidaria los sets de todo lo ya cargado.
+            //
+            // VK_NULL_HANDLE si no se pudo.
+            VkDescriptorPool allocateSharedSets(VkDescriptorSet* outSets);
+            bool             addDescriptorPool();
             void createDescriptorSets();
             void updateUniformBuffer(uint32_t frameIndex);
             void createDepthResources();
@@ -941,7 +953,10 @@ namespace DonTopo {
             VkBuffer                        m_uniformBuffers[MAX_FRAMES]        = {};
             VkDeviceMemory                  m_uniformBuffersMemory[MAX_FRAMES]  = {};
             void*                           m_uniformBuffersMapped[MAX_FRAMES]  = {};
-            VkDescriptorPool                m_descriptorPool                    = VK_NULL_HANDLE;
+            // Cadena de pools, no uno solo: ver allocateSharedSets. Cada
+            // SharedGpuMesh y cada SkinnedMatGfx se acuerda de cual es el suyo.
+            std::vector<VkDescriptorPool>   m_descriptorPools;
+            static constexpr uint32_t       kSharedSetsPerPool                  = 128 * MAX_FRAMES;
             // ── SSBO de transforms por instancia (set 1, binding 0) ──────────
             // Uno por frame-in-flight y mapeado en persistente: el frame
             // anterior puede seguir en vuelo leyendo el suyo. Los dos passes

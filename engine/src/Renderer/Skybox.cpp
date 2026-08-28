@@ -40,6 +40,21 @@ void Skybox::init(GpuDevice& gpu, VkRenderPass renderPass, VkFormat colorFormat,
                   const std::array<std::string, 6>& facePaths,
                   VkSampleCountFlagBits samples)
 {
+    // Re-entrada: sin esto, una segunda llamada pisaba imagen, memoria, vista,
+    // sampler, pool, layout y pipeline sin destruir nada — un cubemap entero
+    // filtrado por cambio de cielo. Hoy no pasa (initSkybox se llama una sola
+    // vez, desde el arranque del sandbox y del runtime), pero IblPass ya está
+    // escrito para que puedan llamarlo otra vez (ver el "Reset y no free" de
+    // IblPass::precompute) y esto era la mitad que faltaba.
+    //
+    // El wait va aquí y no en el llamante porque es quien no puede saberlo: se
+    // paga solo cuando hay algo que destruir, así que en el arranque cuesta
+    // cero.
+    if (isInitialized()) {
+        vkDeviceWaitIdle(gpu.device());
+        shutdown(gpu);
+    }
+
     loadCubemap(gpu, facePaths);
     createDescriptors(gpu);
     createPipeline(gpu, renderPass, colorFormat, samples);
@@ -67,7 +82,20 @@ void Skybox::shutdown(GpuDevice& gpu)
     vkDestroyImageView(dev,           m_view,       nullptr);
     vkDestroyImage(dev,               m_image,      nullptr);
     vkFreeMemory(dev,                 m_memory,     nullptr);
-    m_pipeline = VK_NULL_HANDLE;
+
+    // TODOS a nulo, no solo el pipeline. Mientras esto era solo el apagado
+    // final daba igual, pero init() ahora llama aquí para reiniciarse: si una
+    // recarga fallase a medias, los handles viejos seguirían pareciendo
+    // válidos y el shutdown de verdad los destruiría por segunda vez.
+    m_pipeline   = VK_NULL_HANDLE;
+    m_pipeLayout = VK_NULL_HANDLE;
+    m_descPool   = VK_NULL_HANDLE;
+    m_descSet    = VK_NULL_HANDLE;
+    m_descLayout = VK_NULL_HANDLE;
+    m_sampler    = VK_NULL_HANDLE;
+    m_view       = VK_NULL_HANDLE;
+    m_image      = VK_NULL_HANDLE;
+    m_memory     = VK_NULL_HANDLE;
 }
 
 void Skybox::draw(VkCommandBuffer cmd, const glm::mat4& invViewProj)

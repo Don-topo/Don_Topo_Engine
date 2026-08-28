@@ -71,18 +71,8 @@ void SkinningPass::createPipelines(const Context& ctx)
         throw std::runtime_error("failed to create compute pipeline layout!");
     }
 
-    // --- Descriptor pool: 8 SSBOs * 16 objetos max ---
-    VkDescriptorPoolSize ps{};
-    ps.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    ps.descriptorCount = 8 * 16;
-
-    VkDescriptorPoolCreateInfo poolInfo{};
-    poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes    = &ps;
-    poolInfo.maxSets       = 16;
-    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    if (vkCreateDescriptorPool(ctx.gpu.device(), &poolInfo, nullptr, &m_descPool) != VK_SUCCESS)
+    // --- Descriptor pool: el primero de la cadena (ver allocateSet) ---
+    if (!addPool(ctx))
     {
         throw std::runtime_error("failed to create compute descriptor pool!");
     }
@@ -112,15 +102,71 @@ void SkinningPass::createPipelines(const Context& ctx)
     makePipeline("shaders/skinning.comp.spv",       m_skinning);
 }
 
+bool SkinningPass::addPool(const Context& ctx)
+{
+    // 8 SSBOs por set, que son los ocho buffers que ata initSkinnedRenderObject.
+    VkDescriptorPoolSize ps{};
+    ps.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    ps.descriptorCount = 8 * kSetsPerPool;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes    = &ps;
+    poolInfo.maxSets       = kSetsPerPool;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    if (vkCreateDescriptorPool(ctx.gpu.device(), &poolInfo, nullptr, &pool) != VK_SUCCESS)
+        return false;
+
+    m_descPools.push_back(pool);
+    return true;
+}
+
+VkDescriptorPool SkinningPass::allocateSet(const Context& ctx, VkDescriptorSet& outSet)
+{
+    outSet = VK_NULL_HANDLE;
+
+    VkDescriptorSetAllocateInfo dsAlloc{};
+    dsAlloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsAlloc.descriptorSetCount = 1;
+    dsAlloc.pSetLayouts        = &m_descLayout;
+
+    // Dos intentos: el ultimo pool y, si esta lleno, uno recien creado. No hace
+    // falta recorrer los anteriores — al liberar un set su hueco vuelve a SU
+    // pool, asi que un pool viejo puede tener sitio; lo que se pierde por no
+    // buscarlo es un poco de memoria, no correccion, y a cambio el camino
+    // normal es una sola llamada.
+    for (int intento = 0; intento < 2; ++intento)
+    {
+        if (!m_descPools.empty())
+        {
+            dsAlloc.descriptorPool = m_descPools.back();
+            const VkResult r = vkAllocateDescriptorSets(ctx.gpu.device(), &dsAlloc, &outSet);
+            if (r == VK_SUCCESS)
+                return m_descPools.back();
+            // Cualquier cosa que no sea "este pool esta lleno" no la arregla
+            // otro pool.
+            if (r != VK_ERROR_OUT_OF_POOL_MEMORY && r != VK_ERROR_FRAGMENTED_POOL)
+                return VK_NULL_HANDLE;
+        }
+        if (!addPool(ctx))
+            return VK_NULL_HANDLE;
+    }
+    return VK_NULL_HANDLE;
+}
+
 void SkinningPass::destroyPipelines(const Context& ctx)
 {
-    // El pool ANTES que nada: los descriptor sets de las mallas salen de aqui y
-    // el caller ya ha soltado los suyos.
-    if (m_descPool != VK_NULL_HANDLE)
+    // Los pools ANTES que nada: los descriptor sets de las mallas salen de aqui
+    // y el caller ya ha soltado los suyos.
+    for (VkDescriptorPool pool : m_descPools)
     {
-        vkDestroyDescriptorPool(ctx.gpu.device(), m_descPool, nullptr);
-        m_descPool = VK_NULL_HANDLE;
+        if (pool != VK_NULL_HANDLE)
+            vkDestroyDescriptorPool(ctx.gpu.device(), pool, nullptr);
     }
+    m_descPools.clear();
     vkDestroyPipeline(ctx.gpu.device(), m_boneEval,      nullptr);
     vkDestroyPipeline(ctx.gpu.device(), m_boneHierarchy, nullptr);
     vkDestroyPipeline(ctx.gpu.device(), m_skinning,      nullptr);

@@ -48,6 +48,9 @@ namespace DonTopo
         // normal, shadow, ORM) son idénticos entre objetos que comparten
         // malla y material. Lo por-objeto va por push constants.
         VkDescriptorSet descriptorSets[2] = {};
+        // Pool del que salieron. El Renderer encadena pools segun hacen falta,
+        // asi que liberarlos exige acordarse de cual era el suyo.
+        VkDescriptorPool descPool         = VK_NULL_HANDLE;
 
         // AABB en espacio local, para el frustum culling. hasBounds=false (mesh
         // sin vértices) significa "no se puede acotar": se dibuja siempre.

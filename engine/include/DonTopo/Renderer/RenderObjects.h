@@ -53,6 +53,8 @@ namespace DonTopo {
         float           metallic      = 0.0f;
         float           roughness     = 0.5f;
         VkDescriptorSet descSets[2]   = {};
+        // Pool del que salieron; ver SharedGpuMesh::descPool.
+        VkDescriptorPool descPool     = VK_NULL_HANDLE;
     };
 
     struct SubMeshDraw {
@@ -109,6 +111,10 @@ namespace DonTopo {
         uint32_t       clipCount            = 1;
         // Descriptor set de compute
         VkDescriptorSet computeDescSet      = VK_NULL_HANDLE;
+        // Y el pool del que salio. SkinningPass encadena pools segun hacen
+        // falta, asi que para liberar el set hay que acordarse de CUAL era:
+        // vkFreeDescriptorSets pide el pool concreto, no vale con el ultimo.
+        VkDescriptorPool computeDescPool    = VK_NULL_HANDLE;
         // Texturas y descriptor sets por material
         std::vector<SkinnedMatGfx>  matGfx;
         std::vector<SubMeshDraw>    subMeshes;

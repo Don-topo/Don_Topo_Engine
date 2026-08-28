@@ -607,7 +607,7 @@ namespace DonTopo {
             vkDestroyImageView(m_gpu.device(), imageView, nullptr);
         }                        
         vkDestroySwapchainKHR(m_gpu.device(), m_swapChain, nullptr);
-        // m_descriptorPool se destruye más abajo, DESPUÉS de los dos bucles que
+        // La cadena m_descriptorPools se destruye más abajo, DESPUÉS de los dos bucles que
         // llaman a destroyRenderObject y destroySkinnedRenderObject: ambas
         // funciones liberan sets del pool (creado con
         // FREE_DESCRIPTOR_SET_BIT pa soportar rebuildSkinnedMesh), y destruir
@@ -653,8 +653,13 @@ namespace DonTopo {
 
         m_skinnedObjects.clear();
         // Ahora sí: ya no queda ningún destroySkinnedRenderObject pendiente que
-        // necesite liberar sets de m_descriptorPool.
-        vkDestroyDescriptorPool(m_gpu.device(), m_descriptorPool, nullptr);
+        // necesite liberar sets de la cadena de pools.
+        for (VkDescriptorPool pool : m_descriptorPools)
+        {
+            if (pool != VK_NULL_HANDLE)
+                vkDestroyDescriptorPool(m_gpu.device(), pool, nullptr);
+        }
+        m_descriptorPools.clear();
         // Igual que el de arriba: ya no queda ningun destroySkinnedRenderObject
         // pendiente que necesite liberar sets del pool de compute.
         m_skinningPass.destroyPipelines(skinningCtx());
@@ -2828,7 +2833,7 @@ namespace DonTopo {
         if (vkCreateDescriptorSetLayout(m_gpu.device(), &dslInfo, nullptr, &m_instanceDescLayout) != VK_SUCCESS)
             throw std::runtime_error("failed to create instance descriptor set layout!");
 
-        // Pool propio y no m_descriptorPool: ese se dimensiona por objeto y solo
+        // Pool propio y no la cadena m_descriptorPools: esa se reparte por objeto y solo
         // tiene UNIFORM_BUFFER y COMBINED_IMAGE_SAMPLER. Aquí hacen falta
         // exactamente MAX_FRAMES sets con un STORAGE_BUFFER cada uno, y los sets
         // viven todo el proceso (no se liberan nunca).
@@ -2934,7 +2939,18 @@ namespace DonTopo {
 
     void Renderer::createDescriptorPool()
     {
-        uint32_t n = (uint32_t)((m_objects.size() + 128) * MAX_FRAMES);
+        // El primero de la cadena. Antes esto era el UNICO, dimensionado con las
+        // mallas que hubiera en el arranque mas 128 de margen; pasado el margen,
+        // vkAllocateDescriptorSets fallaba y se lanzaba en mitad de un Load
+        // Scene. Ahora el tamano es fijo y allocateSharedSets encadena otro
+        // cuando hace falta.
+        if (!addDescriptorPool())
+            throw std::runtime_error("failed to create descriptor pool!");
+    }
+
+    bool Renderer::addDescriptorPool()
+    {
+        const uint32_t n = kSharedSetsPerPool;
         VkDescriptorPoolSize poolSizes[2]{};
         poolSizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         poolSizes[0].descriptorCount = n;
@@ -2951,8 +2967,43 @@ namespace DonTopo {
         // consumiría slots hasta agotarlo.
         poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
-        if(vkCreateDescriptorPool(m_gpu.device(), &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
-            throw std::runtime_error("failed to create descriptor pool!");
+        VkDescriptorPool pool = VK_NULL_HANDLE;
+        if (vkCreateDescriptorPool(m_gpu.device(), &poolInfo, nullptr, &pool) != VK_SUCCESS)
+            return false;
+
+        m_descriptorPools.push_back(pool);
+        return true;
+    }
+
+    VkDescriptorPool Renderer::allocateSharedSets(VkDescriptorSet* outSets)
+    {
+        VkDescriptorSetLayout layouts[MAX_FRAMES] = { m_descriptorSetLayout, m_descriptorSetLayout };
+
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorSetCount = MAX_FRAMES;
+        allocInfo.pSetLayouts        = layouts;
+
+        // Dos intentos: el ultimo pool y, si esta lleno, uno recien creado. Los
+        // anteriores no se recorren: al liberar, los huecos vuelven a SU pool y
+        // podrian reaprovecharse, pero buscarlos costaria una llamada fallida
+        // por pool en el camino normal. Lo que se pierde es memoria, no
+        // correccion.
+        for (int intento = 0; intento < 2; ++intento)
+        {
+            if (!m_descriptorPools.empty())
+            {
+                allocInfo.descriptorPool = m_descriptorPools.back();
+                const VkResult r = vkAllocateDescriptorSets(m_gpu.device(), &allocInfo, outSets);
+                if (r == VK_SUCCESS)
+                    return m_descriptorPools.back();
+                if (r != VK_ERROR_OUT_OF_POOL_MEMORY && r != VK_ERROR_FRAGMENTED_POOL)
+                    return VK_NULL_HANDLE;
+            }
+            if (!addDescriptorPool())
+                return VK_NULL_HANDLE;
+        }
+        return VK_NULL_HANDLE;
     }
 
     void Renderer::createDescriptorSets()
@@ -2967,15 +3018,8 @@ namespace DonTopo {
 
     void Renderer::allocateObjectDescriptorSet(SharedGpuMesh& obj)
     {
-        VkDescriptorSetLayout layouts[MAX_FRAMES] = { m_descriptorSetLayout, m_descriptorSetLayout };
-
-        VkDescriptorSetAllocateInfo allocInfo{};
-        allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        allocInfo.descriptorPool     = m_descriptorPool;
-        allocInfo.descriptorSetCount = MAX_FRAMES;
-        allocInfo.pSetLayouts        = layouts;
-
-        if (vkAllocateDescriptorSets(m_gpu.device(), &allocInfo, obj.descriptorSets) != VK_SUCCESS)
+        obj.descPool = allocateSharedSets(obj.descriptorSets);
+        if (obj.descPool == VK_NULL_HANDLE)
             throw std::runtime_error("failed to allocate descriptor sets!");
 
         for (int i = 0; i < MAX_FRAMES; i++)
@@ -3368,11 +3412,11 @@ namespace DonTopo {
 
         // Los sets vuelven al pool (creado con FREE_DESCRIPTOR_SET_BIT), igual
         // que destroySkinnedRenderObject: sin esto, cada removeStaticObject /
-        // rebuild agotaba m_descriptorPool en vez de reciclar sus sets. No hace
+        // rebuild agotaba su pool en vez de reciclar sus sets. No hace
         // falta anularlos: obj es siempre la copia que la cache sacó de la
         // tabla, y el slot original ya quedó vacío.
-        if (obj.descriptorSets[0] != VK_NULL_HANDLE)
-            vkFreeDescriptorSets(m_gpu.device(), m_descriptorPool, MAX_FRAMES, obj.descriptorSets);
+        if (obj.descriptorSets[0] != VK_NULL_HANDLE && obj.descPool != VK_NULL_HANDLE)
+            vkFreeDescriptorSets(m_gpu.device(), obj.descPool, MAX_FRAMES, obj.descriptorSets);
     }
 
     void Renderer::recordShadowPass(VkCommandBuffer cmd)
@@ -3715,17 +3759,19 @@ namespace DonTopo {
 
         // Los sets vuelven al pool (creado con FREE_DESCRIPTOR_SET_BIT): sin
         // esto, reconstruir el objeto lo agotaría.
-        if (obj.computeDescSet != VK_NULL_HANDLE)
+        if (obj.computeDescSet != VK_NULL_HANDLE && obj.computeDescPool != VK_NULL_HANDLE)
         {
-            vkFreeDescriptorSets(m_gpu.device(), m_skinningPass.descPool(), 1, &obj.computeDescSet);
-            obj.computeDescSet = VK_NULL_HANDLE;
+            vkFreeDescriptorSets(m_gpu.device(), obj.computeDescPool, 1, &obj.computeDescSet);
+            obj.computeDescSet  = VK_NULL_HANDLE;
+            obj.computeDescPool = VK_NULL_HANDLE;
         }
         for (auto& mgfx : obj.matGfx)
         {
-            if (mgfx.descSets[0] != VK_NULL_HANDLE)
-                vkFreeDescriptorSets(m_gpu.device(), m_descriptorPool, MAX_FRAMES, mgfx.descSets);
+            if (mgfx.descSets[0] != VK_NULL_HANDLE && mgfx.descPool != VK_NULL_HANDLE)
+                vkFreeDescriptorSets(m_gpu.device(), mgfx.descPool, MAX_FRAMES, mgfx.descSets);
             mgfx.descSets[0] = VK_NULL_HANDLE;
             mgfx.descSets[1] = VK_NULL_HANDLE;
+            mgfx.descPool    = VK_NULL_HANDLE;
         }
 
         obj.matGfx.clear();
@@ -3832,13 +3878,11 @@ namespace DonTopo {
             obj.outputVertexBuffer, obj.outputVertexMemory);
 
         // --- Compute descriptor set ---
-        VkDescriptorSetAllocateInfo dsAlloc{};
-        dsAlloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        const VkDescriptorSetLayout computeLayout = m_skinningPass.descLayout();
-        dsAlloc.descriptorPool     = m_skinningPass.descPool();
-        dsAlloc.descriptorSetCount = 1;
-        dsAlloc.pSetLayouts        = &computeLayout;
-        if (vkAllocateDescriptorSets(m_gpu.device(), &dsAlloc, &obj.computeDescSet) != VK_SUCCESS)
+        // El pase encadena pools segun hacen falta, asi que esto ya no se cae
+        // con el personaje 17. Se guarda de que pool salio: es lo que
+        // destroySkinnedRenderObject necesita para devolverlo.
+        obj.computeDescPool = m_skinningPass.allocateSet(skinningCtx(), obj.computeDescSet);
+        if (obj.computeDescPool == VK_NULL_HANDLE)
             throw std::runtime_error("failed to allocate compute descriptor set!");
 
         VkDescriptorBufferInfo bufInfos[8]{};
@@ -3900,13 +3944,8 @@ namespace DonTopo {
             m_res.createTextureSampler(mgfx.ormSampler);
 
             // Descriptor sets
-            VkDescriptorSetLayout layouts[MAX_FRAMES] = { m_descriptorSetLayout, m_descriptorSetLayout };
-            VkDescriptorSetAllocateInfo gfxAlloc{};
-            gfxAlloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            gfxAlloc.descriptorPool     = m_descriptorPool;
-            gfxAlloc.descriptorSetCount = MAX_FRAMES;
-            gfxAlloc.pSetLayouts        = layouts;
-            if (vkAllocateDescriptorSets(m_gpu.device(), &gfxAlloc, mgfx.descSets) != VK_SUCCESS)
+            mgfx.descPool = allocateSharedSets(mgfx.descSets);
+            if (mgfx.descPool == VK_NULL_HANDLE)
                 throw std::runtime_error("failed to allocate skinned graphics descriptor sets!");
 
             for (int fi = 0; fi < MAX_FRAMES; fi++)
