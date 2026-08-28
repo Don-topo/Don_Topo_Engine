@@ -190,6 +190,18 @@ namespace DonTopo {
             }
         }
 
+        // Sin una sola malla con vertices -escena vacia, o todas vacias- los
+        // extremos se quedan tal cual salieron (bMin en +max y bMax en -max), y
+        // entonces maxDim vale -inf. De ahi pasa a m_cameraDistance y al rango
+        // de profundidad que se deriva de el, y el editor arranca con una
+        // proyeccion de infinitos que no dibuja nada. refitCameraRange() si se
+        // guarda de este caso; este camino no lo hacia.
+        if (bMin.x > bMax.x)
+        {
+            bMin = glm::vec3(-1.0f);
+            bMax = glm::vec3( 1.0f);
+        }
+
         m_cameraTarget   = (bMin + bMax) * 0.5f;
         float maxDim     = glm::max(bMax.x - bMin.x, glm::max(bMax.y - bMin.y, bMax.z - bMin.z));
         m_cameraDistance = maxDim * 1.2f;
@@ -874,6 +886,15 @@ namespace DonTopo {
         uint32_t formatCount;
         if(vkGetPhysicalDeviceSurfaceFormatsKHR(m_gpu.physicalDevice(), m_gpu.surface(), &formatCount, nullptr) != VK_SUCCESS) {
             throw std::runtime_error("failed to get surface formats!");
+        }
+
+        // Un driver que dice soportar la superficie pero no da ni un formato
+        // deja el vector vacio, y la eleccion de mas abajo arranca leyendo
+        // surfaceFormats[0]: acceso fuera de rango en el arranque, sin
+        // diagnostico. Es un caso que no deberia pasar, y por eso mismo hay que
+        // decirlo en vez de leer basura.
+        if (formatCount == 0) {
+            throw std::runtime_error("surface reports zero formats!");
         }
 
         std::vector<VkSurfaceFormatKHR> surfaceFormats(formatCount);
@@ -2743,7 +2764,13 @@ namespace DonTopo {
             bufferInfo.size         = size;
             bufferInfo.usage        = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
             bufferInfo.sharingMode  = VK_SHARING_MODE_EXCLUSIVE;
-            vkCreateBuffer(m_gpu.device(), &bufferInfo, nullptr, &m_uniformBuffers[i]);
+            // Los cuatro VkResult se comprueban: el ultimo deja un puntero en
+            // m_uniformBuffersMapped que updateUniformBuffer usa con memcpy en
+            // CADA frame. Ignorarlos convertia un fallo de memoria en una
+            // escritura sobre un puntero sin inicializar, que es un crash sin
+            // relacion aparente con la causa.
+            if (vkCreateBuffer(m_gpu.device(), &bufferInfo, nullptr, &m_uniformBuffers[i]) != VK_SUCCESS)
+                throw std::runtime_error("failed to create uniform buffer!");
 
             VkMemoryRequirements memoryRequirements;
             vkGetBufferMemoryRequirements(m_gpu.device(), m_uniformBuffers[i], &memoryRequirements);
@@ -2752,11 +2779,14 @@ namespace DonTopo {
             allocInfo.sType             = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
             allocInfo.allocationSize    = memoryRequirements.size;
             allocInfo.memoryTypeIndex   = m_gpu.findMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-            vkAllocateMemory(m_gpu.device(), &allocInfo, NULL, &m_uniformBuffersMemory[i]);
-            vkBindBufferMemory(m_gpu.device(), m_uniformBuffers[i], m_uniformBuffersMemory[i], 0);
+            if (vkAllocateMemory(m_gpu.device(), &allocInfo, NULL, &m_uniformBuffersMemory[i]) != VK_SUCCESS)
+                throw std::runtime_error("failed to allocate uniform buffer memory!");
+            if (vkBindBufferMemory(m_gpu.device(), m_uniformBuffers[i], m_uniformBuffersMemory[i], 0) != VK_SUCCESS)
+                throw std::runtime_error("failed to bind uniform buffer memory!");
 
             // Mapeo persistente — nunca llamamos unmap
-            vkMapMemory(m_gpu.device(), m_uniformBuffersMemory[i], 0, size, 0, &m_uniformBuffersMapped[i]);
+            if (vkMapMemory(m_gpu.device(), m_uniformBuffersMemory[i], 0, size, 0, &m_uniformBuffersMapped[i]) != VK_SUCCESS)
+                throw std::runtime_error("failed to map uniform buffer!");
 
         }
     }
@@ -4659,9 +4689,12 @@ namespace DonTopo {
     void Renderer::createBloomImages()
     {
         m_bloomPass.createImages(bloomCtx());
-        // Sin cadena (viewport diminuto) no hay mip 0 al que apuntar: los sets
-        // de composicion se quedan como estaban, igual que antes.
-        if (m_bloomPass.mipCount() == 0) return;
+        // Los sets se crean SIEMPRE, haya cadena o no. Antes se salia aqui
+        // cuando el viewport era diminuto (<4 px, que es cuando mipCount queda
+        // a 0) y m_compositeSets se quedaba en VK_NULL_HANDLE... que es
+        // exactamente lo que recordCommandBuffer bindea sin preguntar. Y el set
+        // no es solo del bloom: su binding 0 es la escena HDR, sin la cual la
+        // composicion -que es quien tonemapea- no tiene ni entrada.
         createCompositeSets();
     }
 
@@ -4685,8 +4718,20 @@ namespace DonTopo {
             compInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             compInfos[0].imageView   = m_hdrView[f];
             compInfos[0].sampler     = m_bloomPass.sampler();
-            compInfos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            compInfos[1].imageView   = m_bloomPass.mipView0(f);
+            // Sin cadena no hay mip 0 al que apuntar, pero el descriptor tiene
+            // que ser valido igualmente. Se repite la escena en el hueco del
+            // bloom: recordCommandBuffer ya fuerza la intensidad a 0 cuando
+            // mipCount es 0, asi que no suma nada. Ojo al layout, que NO es el
+            // mismo: el mip vive en GENERAL y la escena en SHADER_READ_ONLY.
+            //
+            // Se repite la escena y no se inventa una imagen negra porque aqui
+            // el sustituto es una imagen RENDERIZADA, no memoria sin escribir:
+            // el caso peligroso del backend D3D12 (inf * 0 = NaN sobre un heap
+            // sin poner a cero) no aplica.
+            const bool haveChain     = m_bloomPass.mipCount() > 0;
+            compInfos[1].imageLayout = haveChain ? VK_IMAGE_LAYOUT_GENERAL
+                                                 : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            compInfos[1].imageView   = haveChain ? m_bloomPass.mipView0(f) : m_hdrView[f];
             compInfos[1].sampler     = m_bloomPass.sampler();
 
             VkWriteDescriptorSet compWrites[2]{};
