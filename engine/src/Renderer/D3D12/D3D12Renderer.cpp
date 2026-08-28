@@ -1220,6 +1220,9 @@ struct D3D12Renderer::Impl {
     // comandos en vuelo.
     UINT shadowMapSize        = kShadowMapSizeDefault;
     UINT pendingShadowMapSize = 0;
+    // Ultimo lado del que ya se dejo constancia en el log, para no repetir la
+    // linea en cada frame.
+    UINT loggedShadowSize     = 0;
     void applyPendingShadowSize();
     UINT                         dsvSize = 0;
 
@@ -7735,6 +7738,19 @@ void D3D12Renderer::Impl::computeCascades()
         // Snap del centro a téxeles: sin esto los bordes de sombra hierven al
         // mover la cámara.
         const float unitsPerTexel = (2.0f * radius) / static_cast<float>(shadowMapSize);
+
+        // Una vez por cada tamano distinto, y solo de la cascada 0: es la cifra
+        // que decide si subir la resolucion sirve de algo. El mundo que cubre un
+        // texel tiene que caer a la mitad cada vez que se dobla el lado; si no
+        // cae, el problema esta en este reparto y no en el muestreo.
+        if (c == 0 && shadowMapSize != loggedShadowSize) {
+            loggedShadowSize = shadowMapSize;
+            diagLog("shadow: cascada 0 radio " + std::to_string(radius) + ", mapa " +
+                    std::to_string(shadowMapSize) + " -> " + std::to_string(unitsPerTexel) +
+                    " unidades por texel. Cortes " + std::to_string(cascadeSplits[0]) + "/" +
+                    std::to_string(cascadeSplits[1]) + "/" + std::to_string(cascadeSplits[2]) +
+                    "/" + std::to_string(cascadeSplits[3]) + ".");
+        }
         glm::vec3   centerLS      = glm::vec3(lightRot * glm::vec4(center, 1.0f));
         centerLS.x = std::floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
         centerLS.y = std::floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
