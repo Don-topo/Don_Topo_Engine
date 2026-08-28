@@ -397,15 +397,19 @@ Cada propuesta de API Lua nombra los **tres** sitios que exige la convención de
 > `timeSamples`, `PlayScheduled`, `bypassEffects`, snapshots del mixer (Studio), el
 > AudioMixer visual, multiples listeners y ambisonics.
 >
-> **Lo unico realmente pendiente es la verificacion manual en el editor**, que ningun test
-> headless puede cubrir: seguimiento 3D con un objeto en movimiento, preview del inspector
-> en Edit Mode, el enrutado por bus (clip en Music + Music Volume a 0 mientras otro en SFX
-> se sigue oyendo), la persistencia de los tres volumenes en `project.json`, el doppler de
-> un objeto cruzando delante, y las zonas de reverb al entrar y salir de una.
+> **VERIFICACION MANUAL HECHA (2026-08-28):** el usuario reviso el audio en el editor y lo
+> dio por correcto. Con eso quedan cubiertos los comportamientos que ningun test headless
+> alcanza: seguimiento 3D con un objeto en movimiento, preview del inspector en Edit Mode,
+> el enrutado por bus, la persistencia de los tres volumenes en `project.json`, el doppler
+> y las zonas de reverb.
+>
+> Es decir: **no queda nada pendiente en esta auditoria.**
 >
 > Los dos huecos de cobertura que se decidieron NO tapar con API artificial siguen
 > anotados en el codigo: el enrutado de la voz al bus correcto (`groupForBus`) y el efecto
-> audible del seguimiento 3D.
+> audible del seguimiento 3D. Que la verificacion manual haya pasado NO los cierra — lo que
+> cubre es este estado del codigo, no una regresion futura; por eso los comentarios se
+> quedan donde estan.
 >
 > El plan original se conserva debajo como registro de lo que se hizo y en que orden.
 
