@@ -416,6 +416,8 @@ namespace DonTopo {
         // VkDescriptorSet nuevo. Si corriera despues, ImGui ya habria grabado el
         // viejo -recien destruido- en la lista de dibujo de este frame.
         if (m_aaResourcesDirty) rebuildAaResources();
+        // Mismo sitio y mismo motivo: entre frames y con la GPU parada.
+        if (m_shadowResourcesDirty) rebuildShadowResources();
 
         // Reflection probes: MISMO sitio y mismo motivo que la linea de arriba.
         // Aqui se puede esperar a que la GPU quede libre para bakear una sonda o
@@ -5172,6 +5174,70 @@ namespace DonTopo {
         m_ssaaFactor = v;
         // Solo cambia el tamano de los targets cuando SSAA es el modo activo.
         if (aaMode() == AaMode::Ssaa) m_aaResourcesDirty = true;
+    }
+
+    void Renderer::setShadowResolution(int v)
+    {
+        if (v == shadowResolution() || v <= 0) return;
+        setShadowResolutionFlag(v);
+        // No se rehace aqui: esto lo llama la UI en mitad de un frame, y soltar
+        // el shadow map ahora mismo lo quitaria de debajo de la lista de
+        // comandos en vuelo. Se marca y drawFrame lo atiende entre frames.
+        m_shadowResourcesDirty = true;
+    }
+
+    void Renderer::rebuildShadowResources()
+    {
+        m_shadowResourcesDirty = false;
+
+        // La imagen puede estar en el frame anterior, que todavia no ha
+        // terminado. Es un ajuste de calidad que se toca de uvas a peras: un
+        // wait completo sale mas barato que llevar borrado diferido para esto.
+        vkDeviceWaitIdle(m_gpu.device());
+
+        m_shadowPass.resizeResources(shadowCtx(), (uint32_t)shadowResolution());
+
+        // Y lo que apuntaba a la vista vieja. Sin esto la escena se dibuja
+        // muestreando un descriptor muerto.
+        refreshShadowDescriptors();
+    }
+
+    void Renderer::refreshShadowDescriptors()
+    {
+        VkDescriptorImageInfo shadowInfo{};
+        shadowInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        shadowInfo.imageView   = m_shadowPass.view();
+        shadowInfo.sampler     = m_shadowPass.sampler();
+
+        // El sampler NO cambia en un resize (resizeResources no lo toca), pero
+        // se reescribe igual: el write es uno solo y asi esta funcion vale
+        // tambien si algun dia el sampler pasa a depender del tamano.
+        auto writeBinding3 = [&](VkDescriptorSet set)
+        {
+            if (set == VK_NULL_HANDLE) return;
+            VkWriteDescriptorSet w{};
+            w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet          = set;
+            w.dstBinding      = 3;
+            w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.descriptorCount = 1;
+            w.pImageInfo      = &shadowInfo;
+            vkUpdateDescriptorSets(m_gpu.device(), 1, &w, 0, nullptr);
+        };
+
+        // Mallas estaticas: por ENTRADA COMPARTIDA, que es de quien son los
+        // sets (varios objetos con la misma malla comparten uno).
+        for (int index : m_sharedMeshes.liveIndices())
+        {
+            SharedGpuMesh* mesh = m_sharedMeshes.get(index);
+            if (!mesh) continue;
+            for (int f = 0; f < MAX_FRAMES; f++) writeBinding3(mesh->descriptorSets[f]);
+        }
+
+        // Personajes: un bloque por material, que es como se dibujan.
+        for (SkinnedRenderObject& obj : m_skinnedObjects)
+            for (SkinnedMatGfx& mgfx : obj.matGfx)
+                for (int f = 0; f < MAX_FRAMES; f++) writeBinding3(mgfx.descSets[f]);
     }
 
     void Renderer::setMsaaSamples(int v)

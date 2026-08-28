@@ -29,10 +29,14 @@ struct Light;
 //    que es donde los lee pbr.frag.
 class ShadowPass {
 public:
-    // Lado del mapa, en texeles. El numero de cascadas es SHADOW_CASCADES y
-    // vive en UniformBufferObject.h: tiene que valer lo mismo aqui, en el array
-    // del bloque UBO de los shaders y en las capas de este texture array.
+    // Lado del mapa por defecto, en texeles. El numero de cascadas es
+    // SHADOW_CASCADES y vive en UniformBufferObject.h: tiene que valer lo mismo
+    // alli, en el array del bloque UBO de los shaders y en las capas de este
+    // texture array.
     static constexpr uint32_t kShadowSize = 2048;
+
+    // El lado que se esta usando ahora mismo. Lo cambia resizeResources.
+    uint32_t size() const { return m_size; }
 
     struct Context {
         GpuDevice& gpu;
@@ -52,6 +56,20 @@ public:
     // Una sola vez, en el init. Nada de esto depende del tamano de la ventana.
     void createResources(const Context& ctx);
     void destroyResources(const Context& ctx);
+
+    // Rehace SOLO lo que depende del lado del mapa: imagen, memoria, las vistas
+    // que cuelgan de ella y los framebuffers. Deja en pie el sampler, el render
+    // pass, los pipelines y el PIPELINE LAYOUT, y esto ultimo no es un detalle:
+    // el depth pre-pass toma prestado ese layout (ver Renderer::init), asi que
+    // destruirlo obligaria a rehacer tambien aquel pase.
+    //
+    // El tamano no lo hornea ningun pipeline: viewport y scissor son estado
+    // dinamico.
+    //
+    // Hay que llamarlo con la GPU EN REPOSO, y quien llame tiene que reescribir
+    // despues el binding 3 de TODOS los descriptor sets: apunta a la vista que
+    // aqui se destruye.
+    void resizeResources(const Context& ctx, uint32_t size);
 
     // Reparto de cascadas y matriz de cada una, a partir del frustum de la
     // camara del frame y de la primera luz. Una vez por frame, ANTES de
@@ -97,6 +115,13 @@ private:
     VkImageView    m_view                           = VK_NULL_HANDLE;
     // Una vista de UNA capa por cascada. Solo existen para poder colgar un
     // framebuffer de cada capa; nadie las muestrea.
+    // Lo dependiente del tamano, aparte para poder rehacerlo solo (ver
+    // resizeResources).
+    void createSizedResources(const Context& ctx);
+    void destroySizedResources(const Context& ctx);
+    void createFramebuffers(const Context& ctx);
+
+    uint32_t       m_size                          = kShadowSize;
     VkImageView    m_layerViews[SHADOW_CASCADES]    {};
     VkSampler      m_sampler                        = VK_NULL_HANDLE;
     VkRenderPass   m_renderPass                     = VK_NULL_HANDLE;

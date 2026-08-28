@@ -309,6 +309,7 @@ namespace DonTopo {
             // de mips y la composicion suma bloom cero (el pass LDR NO se salta,
             // que es tambien quien tonemapea).
             void  setBloomEnabled(bool v) override;
+            void  setShadowResolution(int v) override;
             // Coste GPU del bloom + composicion del ultimo frame ya resuelto, en
             // ms. 0 si el dispositivo no soporta timestamps.
             float bloomGpuMs() const         { return m_bloomPass.gpuMs(); }
@@ -834,6 +835,15 @@ namespace DonTopo {
             // consume drawFrame ANTES de grabar nada, con vkDeviceWaitIdle: en
             // mitad de un frame en vuelo no se puede destruir una imagen.
             bool                            m_aaResourcesDirty                  = false;
+            // El shadow map pedido no es el que hay montado. Se atiende entre
+            // frames, igual que m_aaResourcesDirty: recrearlo con la GPU en
+            // marcha soltaria una imagen que el frame en vuelo esta leyendo.
+            bool                            m_shadowResourcesDirty              = false;
+            void rebuildShadowResources();
+            // Reescribe el binding 3 (el shadow map) en TODOS los descriptor
+            // sets: los de cada malla compartida y los de cada material de
+            // personaje. Sin esto, tras un resize apuntan a una vista muerta.
+            void refreshShadowDescriptors();
             // Resolucion INTERNA del render. Igual a m_swapChainExtent salvo en
             // SSAA, donde es m_swapChainExtent * m_ssaaFactor. Gobierna TODOS los
             // targets intermedios (escena HDR, depth, SSAO, SSR, bloom, la imagen

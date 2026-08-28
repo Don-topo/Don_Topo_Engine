@@ -240,6 +240,13 @@ namespace DonTopo
             // interruptor, que es el que mueve recursos.
             virtual void  setBloomEnabled(bool v)  = 0;
 
+            // El lado del shadow map mueve la imagen, sus vistas y los
+            // framebuffers, así que tampoco puede ser un simple int del estado.
+            // El getter ya lo da RendererState. Cada backend decide CUÁNDO
+            // rehacerlo: con la GPU en reposo y reescribiendo después los
+            // descriptores que apuntaban al mapa viejo.
+            virtual void  setShadowResolution(int v) = 0;
+
             // ── Sondas de reflexión ─────────────────────────────────────────
             virtual void  requestProbeBake(uint64_t ownerId) = 0;
             virtual void  requestProbeBakeAll()              = 0;

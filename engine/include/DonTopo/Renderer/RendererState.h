@@ -159,6 +159,14 @@ namespace DonTopo {
             void  setCascadeLambda(float v) { m_cascadeLambda = v; }
             float cascadeLambda() const     { return m_cascadeLambda; }
 
+            // Lado del shadow map, en texeles. A diferencia de los dos de
+            // arriba, cambiarlo MUEVE RECURSOS —la imagen, sus vistas y los
+            // framebuffers—, así que el interruptor de verdad es un virtual de
+            // EditorRenderer y aquí solo vive el valor, igual que pasa con
+            // msaaSamples y con el bloom.
+            int  shadowResolution() const        { return m_shadowResolution; }
+            void setShadowResolutionFlag(int v)  { m_shadowResolution = v; }
+
             // ── Forward+ ─────────────────────────────────────────────────────
             // Culling de luces en GPU. Modos EXCLUYENTES. Off deja el frame
             // exactamente como antes de la feature: ni un dispatch, y pbr.frag
@@ -254,6 +262,7 @@ namespace DonTopo {
             // ajustable: un proyecto sin las claves nuevas se ve igual.
             float                           m_shadowDistance                    = 500.0f;
             float                           m_cascadeLambda                     = 0.75f;
+            int                             m_shadowResolution                  = 2048;
 
             FpMode                          m_fpMode                            = FpMode::Off;
             float                           m_fpLightRadius                     = 2000.0f;

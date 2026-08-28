@@ -50,7 +50,7 @@ static constexpr float kCasterMargin = 200.0f;
 
 // ── recursos ────────────────────────────────────────────────────────────────
 
-void ShadowPass::createResources(const Context& ctx)
+void ShadowPass::createSizedResources(const Context& ctx)
 {
     // 1. Imagen depth para shadow map: un texture array con una capa por
     // cascada. No usa m_res.createImage porque esa fija arrayLayers a 1 y
@@ -59,7 +59,7 @@ void ShadowPass::createResources(const Context& ctx)
     imageInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType     = VK_IMAGE_TYPE_2D;
     imageInfo.format        = VK_FORMAT_D32_SFLOAT;
-    imageInfo.extent        = { kShadowSize, kShadowSize, 1 };
+    imageInfo.extent        = { m_size, m_size, 1 };
     imageInfo.mipLevels     = 1;
     imageInfo.arrayLayers   = SHADOW_CASCADES;
     imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
@@ -110,6 +110,11 @@ void ShadowPass::createResources(const Context& ctx)
             throw std::runtime_error("failed to create shadow layer view!");
         }
     }
+}
+
+void ShadowPass::createResources(const Context& ctx)
+{
+    createSizedResources(ctx);
 
     // 3. Sampler de comparación (PCF listo)
     VkSamplerCreateInfo samplerInfo{};
@@ -176,21 +181,7 @@ void ShadowPass::createResources(const Context& ctx)
 
      // 5. Framebuffers: uno por cascada, cada uno sobre su capa. Todos
      // comparten el render pass (el formato del attachment es el mismo).
-     for (uint32_t c = 0; c < SHADOW_CASCADES; c++)
-     {
-        VkFramebufferCreateInfo fbInfo{};
-        fbInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        fbInfo.renderPass      = m_renderPass;
-        fbInfo.attachmentCount = 1;
-        fbInfo.pAttachments    = &m_layerViews[c];
-        fbInfo.width           = kShadowSize;
-        fbInfo.height          = kShadowSize;
-        fbInfo.layers          = 1;
-        if (vkCreateFramebuffer(ctx.gpu.device(), &fbInfo, nullptr, &m_framebuffers[c]) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create shadow framebuffer!");
-        }
-     }
+     createFramebuffers(ctx);
 
     // 6. Pipeline (vertex-only, sin color attachments)
     auto vertCode = loadSpv("shaders/shadow.vert.spv");
@@ -340,17 +331,59 @@ void ShadowPass::createResources(const Context& ctx)
     vkDestroyShaderModule(ctx.gpu.device(), vertModule, nullptr);
 }
 
-void ShadowPass::destroyResources(const Context& ctx)
+// Los framebuffers cuelgan de las vistas por capa Y del render pass, asi que
+// van aparte: el resize rehace los primeros sin tocar el segundo.
+void ShadowPass::createFramebuffers(const Context& ctx)
 {
-    vkDestroySampler(ctx.gpu.device(), m_sampler, nullptr);
+    for (uint32_t c = 0; c < SHADOW_CASCADES; c++)
+    {
+        VkFramebufferCreateInfo fbInfo{};
+        fbInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fbInfo.renderPass      = m_renderPass;
+        fbInfo.attachmentCount = 1;
+        fbInfo.pAttachments    = &m_layerViews[c];
+        fbInfo.width           = m_size;
+        fbInfo.height          = m_size;
+        fbInfo.layers          = 1;
+        if (vkCreateFramebuffer(ctx.gpu.device(), &fbInfo, nullptr, &m_framebuffers[c]) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create shadow framebuffer!");
+        }
+    }
+}
+
+void ShadowPass::destroySizedResources(const Context& ctx)
+{
     vkDestroyImageView(ctx.gpu.device(), m_view, nullptr);
+    m_view = VK_NULL_HANDLE;
     for (int c = 0; c < SHADOW_CASCADES; c++)
     {
         vkDestroyImageView(ctx.gpu.device(), m_layerViews[c], nullptr);
         vkDestroyFramebuffer(ctx.gpu.device(), m_framebuffers[c], nullptr);
+        m_layerViews[c]   = VK_NULL_HANDLE;
+        m_framebuffers[c] = VK_NULL_HANDLE;
     }
     vkDestroyImage(ctx.gpu.device(), m_image, nullptr);
     vkFreeMemory(ctx.gpu.device(), m_memory, nullptr);
+    m_image  = VK_NULL_HANDLE;
+    m_memory = VK_NULL_HANDLE;
+}
+
+void ShadowPass::resizeResources(const Context& ctx, uint32_t size)
+{
+    if (size == m_size || size == 0) return;
+
+    destroySizedResources(ctx);
+    m_size = size;
+    createSizedResources(ctx);
+    // Detras de la imagen y sus vistas: los framebuffers las referencian.
+    createFramebuffers(ctx);
+}
+
+void ShadowPass::destroyResources(const Context& ctx)
+{
+    vkDestroySampler(ctx.gpu.device(), m_sampler, nullptr);
+    destroySizedResources(ctx);
     vkDestroyPipeline(ctx.gpu.device(), m_pipeline, nullptr);
     vkDestroyPipeline(ctx.gpu.device(), m_skinnedPipeline, nullptr);
     vkDestroyPipelineLayout(ctx.gpu.device(), m_pipelineLayout, nullptr);
@@ -454,7 +487,7 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
         // Snap del centro a téxeles del shadow map, en el espacio de la luz.
         // Sin esto, avanzar la cámara arrastra el volumen de forma continua
         // y los bordes de sombra hierven.
-        const float unitsPerTexel = (2.0f * radius) / (float)kShadowSize;
+        const float unitsPerTexel = (2.0f * radius) / (float)m_size;
         glm::vec3 centerLS = glm::vec3(lightRot * glm::vec4(center, 1.0f));
         centerLS.x = std::floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
         centerLS.y = std::floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
@@ -482,14 +515,14 @@ void ShadowPass::beginCascade(VkCommandBuffer cmd, uint32_t cascade)
     renderPassInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass        = m_renderPass;
     renderPassInfo.framebuffer       = m_framebuffers[cascade];
-    renderPassInfo.renderArea.extent = { kShadowSize, kShadowSize };
+    renderPassInfo.renderArea.extent = { m_size, m_size };
     renderPassInfo.clearValueCount   = 1;
     renderPassInfo.pClearValues      = &clearDepth;
 
     vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    VkViewport vp {0.0f, 0.0f, (float)kShadowSize, (float)kShadowSize, 0.0f, 1.0f};
-    VkRect2D   sc {{0,0}, {kShadowSize, kShadowSize}};
+    VkViewport vp {0.0f, 0.0f, (float)m_size, (float)m_size, 0.0f, 1.0f};
+    VkRect2D   sc {{0,0}, {m_size, m_size}};
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &sc);

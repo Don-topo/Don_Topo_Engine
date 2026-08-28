@@ -259,6 +259,7 @@ public:
     // El bloom aquí no suelta nada al apagarse: la cadena de imágenes vive con
     // los demás targets. El interruptor es el del estado compartido.
     void  setBloomEnabled(bool v) override;
+    void  setShadowResolution(int v) override;
 
     // Sin lote de subidas: aquí cada una se envía y se espera al hacerla.
     void  flushPendingUploads() override;

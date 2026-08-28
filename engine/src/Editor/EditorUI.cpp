@@ -557,6 +557,7 @@ ProjectContext::ViewSettings EditorUI::currentSettings()
         s.fpLightRadius        = m_renderer->forwardPlusLightRadius();
         s.shadowDistance       = m_renderer->shadowDistance();
         s.cascadeLambda        = m_renderer->cascadeLambda();
+        s.shadowResolution     = m_renderer->shadowResolution();
     }
 
     // Capas de física: la fuente de la verdad es el PhysicsManager. Sin él
@@ -680,6 +681,7 @@ void EditorUI::applyProjectSettings()
     m_renderer->setForwardPlusLightRadius(s.fpLightRadius);
     m_renderer->setShadowDistance(s.shadowDistance);
     m_renderer->setCascadeLambda(s.cascadeLambda);
+    m_renderer->setShadowResolution(s.shadowResolution);
 
     // Backend de render: se LEE pero no se aplica. El device de este proceso ya
     // está creado —el selector de proyecto se dibuja sobre él—, así que lo único
@@ -1098,6 +1100,23 @@ void EditorUI::drawMenuBar()
                 // reparten "Shadow distance", asi que bajarla concentra los
                 // mismos texeles en menos mundo y afila la sombra de cerca.
                 ImGui::Separator();
+                // Resolución del mapa. Es la que da el salto más bruto (4096
+                // cuadruplica los texeles de 2048), y la única de las tres que
+                // mueve recursos: por eso va por el backend y no por el estado.
+                {
+                    const int  kSizes[]  = {1024, 2048, 4096, 8192};
+                    const char* kLabels[] = {"1024", "2048", "4096", "8192"};
+                    int current = 1;
+                    for (int i = 0; i < IM_ARRAYSIZE(kSizes); ++i)
+                        if (kSizes[i] == m_renderer->shadowResolution()) current = i;
+                    ImGui::SetNextItemWidth(140.0f);
+                    if (ImGui::Combo("Shadow resolution", &current, kLabels, IM_ARRAYSIZE(kLabels)))
+                    {
+                        m_renderer->setShadowResolution(kSizes[current]);
+                        saveProjectSettings();
+                    }
+                }
+
                 float shadowDist = m_renderer->shadowDistance();
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::SliderFloat("Shadow distance", &shadowDist, 20.0f, 2000.0f, "%.0f"))

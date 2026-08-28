@@ -98,6 +98,7 @@ public:
         // claves se ve exactamente igual que antes.
         float shadowDistance   = 500.0f;
         float cascadeLambda    = 0.75f;
+        int   shadowResolution = 2048;
 
         // --- Volumenes de audio por bus ---------------------------------------
         //

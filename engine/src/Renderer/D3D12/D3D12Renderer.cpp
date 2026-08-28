@@ -229,7 +229,9 @@ struct FpPush {
 // (Renderer.cpp:1016-1025): sin ellos las cascadas cortan a otras distancias y
 // las sombras no coinciden entre backends.
 constexpr int   kShadowCascades    = 4;
-constexpr UINT  kShadowMapSize     = 2048;
+// Lado del shadow map POR DEFECTO. El que se usa vive en RendererState
+// (shadowResolution) y lo aplica applyPendingShadowSize.
+constexpr UINT  kShadowMapSizeDefault = 2048;
 // kCascadeLambda y kShadowMaxDistance ya no viven aqui: los elige el usuario y
 // salen de RendererState (cascadeLambda/shadowDistance), igual que en Vulkan.
 constexpr float kCasterMargin      = 200.0f;
@@ -1206,6 +1208,13 @@ struct D3D12Renderer::Impl {
     ComPtr<ID3D12PipelineState> shadowSkinnedPipeline;  // salida del compute (80 B)
     ComPtr<ID3D12DescriptorHeap> shadowDsvHeap;         // un DSV por cascada
     D3D12MA::Allocation*         shadowMapArrayAllocation = nullptr;
+    // Lado del mapa que hay MONTADO ahora mismo, y el que pide la UI y aun no
+    // se ha aplicado (0 = nada pendiente). El cambio no se hace donde se pide:
+    // soltar el mapa en mitad de un frame lo quitaria de debajo de la lista de
+    // comandos en vuelo.
+    UINT shadowMapSize        = kShadowMapSizeDefault;
+    UINT pendingShadowMapSize = 0;
+    void applyPendingShadowSize();
     UINT                         dsvSize = 0;
 
     glm::mat4 cascadeMatrices[kShadowCascades]{};
@@ -4484,6 +4493,75 @@ void D3D12Renderer::Impl::applyPendingRenderSize()
     computeCascades();
 }
 
+void D3D12Renderer::Impl::applyPendingShadowSize()
+{
+    if (pendingShadowMapSize == 0 || pendingShadowMapSize == shadowMapSize) {
+        pendingShadowMapSize = 0;
+        return;
+    }
+    if (!shadowMapArrayAllocation)
+        return;  // todavia no hay pase de sombras: se cogera el tamano al crearlo
+
+    // El mapa puede estar en el frame anterior. Es un ajuste de calidad que se
+    // toca de uvas a peras, asi que esperar sale mas barato que llevar borrado
+    // diferido para esto.
+    waitForGpu();
+
+    shadowMapSize        = pendingShadowMapSize;
+    pendingShadowMapSize = 0;
+
+    shadowMapArrayAllocation->Release();
+    shadowMapArrayAllocation = nullptr;
+
+    D3D12_RESOURCE_DESC shadowDesc{};
+    shadowDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    shadowDesc.Width            = shadowMapSize;
+    shadowDesc.Height           = shadowMapSize;
+    shadowDesc.DepthOrArraySize = kShadowCascades;
+    shadowDesc.MipLevels        = 1;
+    shadowDesc.Format           = DXGI_FORMAT_R32_TYPELESS;
+    shadowDesc.SampleDesc.Count = 1;
+    shadowDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+    D3D12_CLEAR_VALUE shadowClear{};
+    shadowClear.Format             = DXGI_FORMAT_D32_FLOAT;
+    shadowClear.DepthStencil.Depth = 1.0f;
+
+    D3D12MA::ALLOCATION_DESC defaultDesc{};
+    defaultDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+    throwIfFailed(allocator->CreateResource(&defaultDesc, &shadowDesc,
+                                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                            &shadowClear, &shadowMapArrayAllocation, IID_NULL,
+                                            nullptr),
+                  "D3D12MA::Allocator::CreateResource(shadow map, resize)");
+
+    // El heap de DSV no se rehace —sigue teniendo kShadowCascades huecos— pero
+    // las VISTAS cuelgan del recurso viejo, asi que hay que reescribirlas.
+    for (int cascade = 0; cascade < kShadowCascades; ++cascade) {
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+        dsvDesc.Format                         = DXGI_FORMAT_D32_FLOAT;
+        dsvDesc.ViewDimension                  = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+        dsvDesc.Texture2DArray.FirstArraySlice = cascade;
+        dsvDesc.Texture2DArray.ArraySize       = 1;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = shadowDsvHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr += static_cast<SIZE_T>(cascade) * dsvSize;
+        device->CreateDepthStencilView(shadowMapArrayAllocation->GetResource(), &dsvDesc, handle);
+    }
+
+    // Y todos los t3, igual que hace createShadowResources al montarlo: el
+    // global y el de cada objeto y submalla ya cargados. Sin esto muestrean un
+    // recurso que acaba de morir.
+    createShadowMapSrv(kSrvShadowMap);
+    for (const StaticObject& object : objects)
+        if (object.srvBase != kSrvBaseColor)
+            createShadowMapSrv(object.srvBase + 2);
+    for (const SkinnedObject& character : skinnedObjects)
+        for (const SkinnedSubMesh& sub : character.subMeshes)
+            if (sub.srvBase != kSrvBaseColor)
+                createShadowMapSrv(sub.srvBase + 2);
+}
+
 void D3D12Renderer::Impl::applyPendingSampleCount()
 {
     const UINT wanted = desiredSampleCount();
@@ -7402,8 +7480,8 @@ void D3D12Renderer::Impl::createShadowResources()
     // Mapa de sombras: un array de profundidad, una capa por cascada.
     D3D12_RESOURCE_DESC shadowDesc{};
     shadowDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    shadowDesc.Width            = kShadowMapSize;
-    shadowDesc.Height           = kShadowMapSize;
+    shadowDesc.Width            = shadowMapSize;
+    shadowDesc.Height           = shadowMapSize;
     shadowDesc.DepthOrArraySize = kShadowCascades;
     shadowDesc.MipLevels        = 1;
     // TYPELESS porque el mismo recurso se ve de dos formas: como profundidad
@@ -7623,7 +7701,7 @@ void D3D12Renderer::Impl::computeCascades()
 
         // Snap del centro a téxeles: sin esto los bordes de sombra hierven al
         // mover la cámara.
-        const float unitsPerTexel = (2.0f * radius) / static_cast<float>(kShadowMapSize);
+        const float unitsPerTexel = (2.0f * radius) / static_cast<float>(shadowMapSize);
         glm::vec3   centerLS      = glm::vec3(lightRot * glm::vec4(center, 1.0f));
         centerLS.x = std::floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
         centerLS.y = std::floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
@@ -7796,11 +7874,11 @@ void D3D12Renderer::Impl::recordShadowPasses()
     commandList->ResourceBarrier(1, &toDepthWrite);
 
     D3D12_VIEWPORT shadowViewport{};
-    shadowViewport.Width    = static_cast<float>(kShadowMapSize);
-    shadowViewport.Height   = static_cast<float>(kShadowMapSize);
+    shadowViewport.Width    = static_cast<float>(shadowMapSize);
+    shadowViewport.Height   = static_cast<float>(shadowMapSize);
     shadowViewport.MaxDepth = 1.0f;
-    const D3D12_RECT shadowScissor{0, 0, static_cast<LONG>(kShadowMapSize),
-                                   static_cast<LONG>(kShadowMapSize)};
+    const D3D12_RECT shadowScissor{0, 0, static_cast<LONG>(shadowMapSize),
+                                   static_cast<LONG>(shadowMapSize)};
 
     commandList->SetGraphicsRootSignature(shadowRootSignature.Get());
     commandList->SetGraphicsRootConstantBufferView(
@@ -8519,6 +8597,10 @@ void D3D12Renderer::drawFrame()
     // Y un cambio de anti-aliasing, que mueve targets y pipelines: aquí, entre
     // frames, no en mitad de uno.
     d.applyPendingSampleCount();
+
+    // Y el lado del shadow map, por el mismo motivo: entre frames, no en
+    // mitad de uno.
+    d.applyPendingShadowSize();
 
     // Los tiempos que dejó la última vez que se usó este slot: moveToNextFrame
     // ya esperó su fence, así que están completos. Se leen ANTES de grabar
@@ -9493,6 +9575,14 @@ void D3D12Renderer::replaceStaticTextureWithMissing(int renderIndex, TextureSlot
                                  DXGI_FORMAT_R8G8B8A8_UNORM, object.srvBase + 3);
             break;
     }
+}
+
+void D3D12Renderer::setShadowResolution(int v)
+{
+    if (v <= 0 || v == shadowResolution()) return;
+    setShadowResolutionFlag(v);
+    // Se anota y lo aplica drawFrame entre frames (applyPendingShadowSize).
+    m_impl->pendingShadowMapSize = static_cast<UINT>(v);
 }
 
 void D3D12Renderer::setBloomEnabled(bool v)

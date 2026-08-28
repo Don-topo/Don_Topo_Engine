@@ -159,6 +159,7 @@ nlohmann::json settingsToJson(const ProjectContext::ViewSettings& s)
     j["fpLightRadius"]    = s.fpLightRadius;
     j["shadowDistance"]   = s.shadowDistance;
     j["cascadeLambda"]    = s.cascadeLambda;
+    j["shadowResolution"] = s.shadowResolution;
 
     // Un panel sin dato (-1) no se escribe: el fichero no miente sobre lo que
     // nadie ha decidido todavia.
@@ -294,6 +295,7 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
     s.fpLightRadius        = readFloatField(v, "fpLightRadius", s.fpLightRadius);
     s.shadowDistance       = readFloatField(v, "shadowDistance", s.shadowDistance);
     s.cascadeLambda        = readFloatField(v, "cascadeLambda", s.cascadeLambda);
+    s.shadowResolution     = v.value("shadowResolution", s.shadowResolution);
 
     // Capas de física. Tolerante ELEMENTO A ELEMENTO: un array de otro tamaño,
     // o con un hueco de otro tipo, deja ese índice con su default en vez de
