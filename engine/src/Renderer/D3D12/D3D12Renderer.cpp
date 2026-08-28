@@ -193,6 +193,10 @@ constexpr UINT kProbeFaceSize = 128;
 // de luces los dan por hecho los dos compute de culling y pbr.frag.
 constexpr uint32_t kFpMaxLights     = 256;
 constexpr uint32_t kFpMaxPerCell    = 64;
+// Palabras del bloque de estadisticas del culling, el mismo layout que declara
+// light_cull_tiled.comp: [0] luces repartidas, [1] celdas con alguna luz,
+// [2] celdas desbordadas, [3] sin usar.
+constexpr uint32_t kFpStatsWords    = 4;
 constexpr uint32_t kFpTileSize      = 16;  // tiled
 constexpr uint32_t kFpClusterTile   = 64;  // clustered, XY
 constexpr uint32_t kFpClusterSlices = 24;  // clustered, Z
@@ -1009,6 +1013,20 @@ struct D3D12Renderer::Impl {
     void*  fpParamsMapped = nullptr;
     void*  fpLightsMapped = nullptr;
     D3D12MA::Allocation* fpStatsAllocation = nullptr;
+    // Lectura de las estadisticas del culling. El compute las acumula con
+    // atomicAdd en fpStatsAllocation, que vive en heap DEFAULT y la CPU no
+    // puede leer: se copian a un buffer READBACK con una region por frame en
+    // vuelo y se leen kFrameCount frames despues, exactamente igual que los
+    // timestamps (ver readTimestamps).
+    ComPtr<ID3D12Resource> fpStatsReadback;
+    const uint32_t*        fpStatsMapped = nullptr;
+    // Cuatro ceros en heap UPLOAD. El shader ACUMULA, asi que el buffer tiene
+    // que ir a cero antes de cada dispatch, y en D3D12 un buffer DEFAULT no se
+    // puede memsetear desde la CPU: se le copia esto encima.
+    D3D12MA::Allocation*   fpStatsZeros       = nullptr;
+    void*                  fpStatsZerosMapped = nullptr;
+    float                  fpAvgPerCell       = 0.0f;
+    uint32_t               fpOverflowCells    = 0;
     uint32_t fpCellCount = 0;  // celdas para las que están dimensionados los de salida
 
     // Las listas se quedan como lectura mientras el pase de escena las consume;
@@ -4200,6 +4218,38 @@ void D3D12Renderer::Impl::createForwardPlusBuffers()
     createMapped(sizeof(FpParamsGpu), &fpParamsAllocation, &fpParamsMapped);
     createMapped(sizeof(FpLightGpu) * kFpMaxLights, &fpLightsAllocation, &fpLightsMapped);
 
+    // Los ceros con los que se limpia el bloque de estadisticas antes de cada
+    // dispatch. Se escriben UNA vez: el contenido no cambia nunca.
+    createMapped(kFpStatsWords * sizeof(uint32_t), &fpStatsZeros, &fpStatsZerosMapped);
+    std::memset(fpStatsZerosMapped, 0, kFpStatsWords * sizeof(uint32_t));
+
+    // Y el destino de lectura. Que falle no es motivo para no dibujar: sin el,
+    // las estadisticas se quedan a cero y el resto del Forward+ funciona igual.
+    {
+        D3D12_HEAP_PROPERTIES readbackHeap{};
+        readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width            = static_cast<UINT64>(kFrameCount) * kFpStatsWords * sizeof(uint32_t);
+        desc.Height           = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        if (SUCCEEDED(device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                      D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                      IID_PPV_ARGS(&fpStatsReadback)))) {
+            void* mapped = nullptr;
+            if (SUCCEEDED(fpStatsReadback->Map(0, nullptr, &mapped)))
+                fpStatsMapped = static_cast<const uint32_t*>(mapped);
+            else
+                fpStatsReadback.Reset();
+        }
+    }
+
     // Con Forward+ apagado no hay rejilla, pero los cuatro buffers tienen que
     // estar enlazados igual: pbr.frag los declara sin rama. Una celda basta.
     ensureForwardPlusGrid(1);
@@ -4552,7 +4602,7 @@ void D3D12Renderer::Impl::ensureForwardPlusGrid(uint32_t cells)
     };
     fpCellsAllocation   = createStorage(static_cast<UINT64>(cells) * 2 * sizeof(uint32_t));
     fpIndicesAllocation = createStorage(static_cast<UINT64>(cells) * kFpMaxPerCell * sizeof(uint32_t));
-    fpStatsAllocation   = createStorage(4 * sizeof(uint32_t));
+    fpStatsAllocation   = createStorage(kFpStatsWords * sizeof(uint32_t));
     fpCellCount         = cells;
 }
 
@@ -4649,6 +4699,37 @@ void D3D12Renderer::Impl::recordForwardPlusCull()
     if (!prepassDepthAllocation)
         return;
 
+    // Las del ultimo frame que uso este slot, ANTES de sobrescribirlas. El
+    // slot ya paso por moveToNextFrame, que espero su fence, asi que lo que hay
+    // esta completo. Mismo criterio y mismo desfase que readTimestamps.
+    //
+    // [0] luces repartidas, [1] celdas con alguna luz, [2] celdas desbordadas:
+    // el mismo layout que lee el camino de Vulkan en ForwardPlusPass.
+    if (fpStatsMapped) {
+        const uint32_t* s = fpStatsMapped + static_cast<size_t>(frameIndex) * kFpStatsWords;
+        fpAvgPerCell      = (s[1] > 0) ? static_cast<float>(s[0]) / static_cast<float>(s[1]) : 0.0f;
+        fpOverflowCells   = s[2];
+    }
+
+    // A cero antes del dispatch: el shader ACUMULA con atomicAdd, asi que sin
+    // esto la cuenta seria la de toda la sesion.
+    if (fpStatsZeros) {
+        D3D12_RESOURCE_BARRIER toCopy{};
+        toCopy.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toCopy.Transition.pResource   = fpStatsAllocation->GetResource();
+        toCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        toCopy.Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_DEST;
+        toCopy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &toCopy);
+
+        commandList->CopyBufferRegion(fpStatsAllocation->GetResource(), 0,
+                                      fpStatsZeros->GetResource(), 0,
+                                      kFpStatsWords * sizeof(uint32_t));
+
+        std::swap(toCopy.Transition.StateBefore, toCopy.Transition.StateAfter);
+        commandList->ResourceBarrier(1, &toCopy);
+    }
+
     if (fpListsInPixelState) {
         D3D12_RESOURCE_BARRIER backToUav[2]{};
         for (int i = 0; i < 2; ++i) {
@@ -4707,6 +4788,25 @@ void D3D12Renderer::Impl::recordForwardPlusCull()
         commandList->Dispatch((gridX + 3) / 4, (gridY + 3) / 4, (gridZ + 3) / 4);
     else
         commandList->Dispatch(gridX, gridY, 1);
+
+    // Y a la region de lectura de ESTE slot, para leerla cuando vuelva a tocar.
+    if (fpStatsReadback) {
+        D3D12_RESOURCE_BARRIER toSrc{};
+        toSrc.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toSrc.Transition.pResource   = fpStatsAllocation->GetResource();
+        toSrc.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        toSrc.Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        toSrc.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &toSrc);
+
+        commandList->CopyBufferRegion(
+            fpStatsReadback.Get(),
+            static_cast<UINT64>(frameIndex) * kFpStatsWords * sizeof(uint32_t),
+            fpStatsAllocation->GetResource(), 0, kFpStatsWords * sizeof(uint32_t));
+
+        std::swap(toSrc.Transition.StateBefore, toSrc.Transition.StateAfter);
+        commandList->ResourceBarrier(1, &toSrc);
+    }
 
     // Las listas pasan a lectura del pase de escena, y la profundidad vuelve a
     // escritura para el frame siguiente.
@@ -9754,8 +9854,12 @@ int   D3D12Renderer::statInstances() const { return m_impl->statInstanced; }
 // Objetos que el frustum dejó fuera este frame. Solo estáticos: los personajes
 // se dibujan siempre (ver el pase principal).
 int   D3D12Renderer::statCulled() const { return m_impl->statCulledCount; }
-float    D3D12Renderer::forwardPlusAvgPerCell() const { return 0.0f; }
-uint32_t D3D12Renderer::forwardPlusOverflowCells() const { return 0; }
+// Medidas de verdad: el compute ya las escribia, lo que faltaba era traerlas de
+// vuelta (ver recordForwardPlusCull). Antes iban cableadas a 0/0, asi que el
+// panel decia "0 luces por celda" y su aviso de celdas desbordadas no saltaba
+// jamas bajo DirectX 12: un diagnostico falso, que es peor que no tenerlo.
+float    D3D12Renderer::forwardPlusAvgPerCell() const { return m_impl->fpAvgPerCell; }
+uint32_t D3D12Renderer::forwardPlusOverflowCells() const { return m_impl->fpOverflowCells; }
 
 void D3D12Renderer::setSelection(int staticIndex, int skinnedIndex)
 {
@@ -9982,6 +10086,17 @@ void D3D12Renderer::shutdown()
         d.fpStatsAllocation->Release();
         d.fpStatsAllocation = nullptr;
     }
+    // Los dos del readback de estadisticas: el de subida va mapeado, asi que
+    // primero Unmap, y el de lectura es un ComPtr que se suelta solo. Los dos
+    // ANTES de allocator->Release(), como el resto de lo suballocado.
+    if (d.fpStatsZeros) {
+        d.fpStatsZeros->GetResource()->Unmap(0, nullptr);
+        d.fpStatsZeros->Release();
+        d.fpStatsZeros       = nullptr;
+        d.fpStatsZerosMapped = nullptr;
+    }
+    d.fpStatsMapped = nullptr;
+    d.fpStatsReadback.Reset();
     d.outlinePipeline.Reset();
     d.outlineSkinnedPipeline.Reset();
     d.outlineLdrPipeline.Reset();
