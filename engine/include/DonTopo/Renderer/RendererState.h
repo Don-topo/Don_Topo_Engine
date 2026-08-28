@@ -138,6 +138,27 @@ namespace DonTopo {
             void  setTaaJitterScale(float v)      { m_taaJitterScale = v; }
             float taaJitterScale() const          { return m_taaJitterScale; }
 
+            // ── Sombras en cascada ───────────────────────────────────────────
+            // Los dos viajan al reparto de cascadas (computeCascades) y surten
+            // efecto en el frame siguiente sin recrear nada: el shadow map no
+            // cambia de tamaño, solo cambia QUÉ trozo del mundo cubre cada
+            // cascada. El número de cascadas NO entra aquí: es SHADOW_CASCADES
+            // y tiene que valer lo mismo que el array del bloque UBO que
+            // declaran 5 shaders y que las capas del texture array.
+            //
+            // Alcance máximo de las sombras. Es el ajuste que más se nota: las
+            // 4 cascadas se reparten esta distancia, así que bajarlo concentra
+            // los mismos texeles en menos mundo y afila la sombra de cerca, a
+            // cambio de que más allá no haya sombra.
+            void  setShadowDistance(float v) { m_shadowDistance = v; }
+            float shadowDistance() const     { return m_shadowDistance; }
+            // Mezcla entre el reparto logarítmico (1) y el uniforme (0). El
+            // logarítmico da resolución donde se ve, cerca; el uniforme evita
+            // que la última cascada cubra casi todo. 0.75 tira hacia el
+            // logarítmico, que es lo que se quiere con distancias grandes.
+            void  setCascadeLambda(float v) { m_cascadeLambda = v; }
+            float cascadeLambda() const     { return m_cascadeLambda; }
+
             // ── Forward+ ─────────────────────────────────────────────────────
             // Culling de luces en GPU. Modos EXCLUYENTES. Off deja el frame
             // exactamente como antes de la feature: ni un dispatch, y pbr.frag
@@ -228,6 +249,11 @@ namespace DonTopo {
 
             float                           m_taaFeedback                       = 0.9f;
             float                           m_taaJitterScale                    = 1.0f;
+
+            // Los valores con los que se dibujaba antes de que esto fuera
+            // ajustable: un proyecto sin las claves nuevas se ve igual.
+            float                           m_shadowDistance                    = 500.0f;
+            float                           m_cascadeLambda                     = 0.75f;
 
             FpMode                          m_fpMode                            = FpMode::Off;
             float                           m_fpLightRadius                     = 2000.0f;

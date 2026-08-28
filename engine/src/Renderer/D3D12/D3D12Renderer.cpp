@@ -230,8 +230,8 @@ struct FpPush {
 // las sombras no coinciden entre backends.
 constexpr int   kShadowCascades    = 4;
 constexpr UINT  kShadowMapSize     = 2048;
-constexpr float kCascadeLambda     = 0.75f;
-constexpr float kShadowMaxDistance = 500.0f;
+// kCascadeLambda y kShadowMaxDistance ya no viven aqui: los elige el usuario y
+// salen de RendererState (cascadeLambda/shadowDistance), igual que en Vulkan.
 constexpr float kCasterMargin      = 200.0f;
 
 // Bloom: niveles de la cadena de reducción. Mismo número que usa el camino
@@ -7577,7 +7577,10 @@ void D3D12Renderer::Impl::computeCascades()
     if (!std::isfinite(camNear) || !std::isfinite(camFar) || camNear <= 0.0f || camFar <= camNear)
         return;
 
-    const float shadowFar = (std::min)(camFar, kShadowMaxDistance);
+    // Los dos salen de RendererState desde que son ajustables; los defaults de
+    // alli son los que habia aqui a fuego (500 y 0.75).
+    const float shadowFar = (std::min)(camFar, state->shadowDistance());
+    const float lambda    = state->cascadeLambda();
     if (shadowFar <= camNear)
         return;
 
@@ -7592,7 +7595,7 @@ void D3D12Renderer::Impl::computeCascades()
         const float p        = static_cast<float>(c + 1) / static_cast<float>(kShadowCascades);
         const float logSplit = camNear * std::pow(shadowFar / camNear, p);
         const float uniSplit = camNear + (shadowFar - camNear) * p;
-        const float dist     = kCascadeLambda * logSplit + (1.0f - kCascadeLambda) * uniSplit;
+        const float dist     = lambda * logSplit + (1.0f - lambda) * uniSplit;
         cascadeSplits[c]     = dist;
 
         const float tNear = (prevDist - camNear) / (camFar - camNear);

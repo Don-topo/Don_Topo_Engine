@@ -157,6 +157,8 @@ nlohmann::json settingsToJson(const ProjectContext::ViewSettings& s)
     j["taaFeedback"]      = s.taaFeedback;
     j["taaJitterScale"]   = s.taaJitterScale;
     j["fpLightRadius"]    = s.fpLightRadius;
+    j["shadowDistance"]   = s.shadowDistance;
+    j["cascadeLambda"]    = s.cascadeLambda;
 
     // Un panel sin dato (-1) no se escribe: el fichero no miente sobre lo que
     // nadie ha decidido todavia.
@@ -290,6 +292,8 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
     s.taaFeedback          = readFloatField(v, "taaFeedback", s.taaFeedback);
     s.taaJitterScale       = readFloatField(v, "taaJitterScale", s.taaJitterScale);
     s.fpLightRadius        = readFloatField(v, "fpLightRadius", s.fpLightRadius);
+    s.shadowDistance       = readFloatField(v, "shadowDistance", s.shadowDistance);
+    s.cascadeLambda        = readFloatField(v, "cascadeLambda", s.cascadeLambda);
 
     // Capas de física. Tolerante ELEMENTO A ELEMENTO: un array de otro tamaño,
     // o con un hueco de otro tipo, deja ese índice con su default en vez de

@@ -456,7 +456,8 @@ namespace DonTopo {
         // currentFrameCamera() que ve el culling del pass de sombras.
         {
             const FrameCamera cascadeCam = currentFrameCamera();
-            m_shadowPass.computeCascades(cascadeCam.view, cascadeCam.proj, m_lights);
+            m_shadowPass.computeCascades(cascadeCam.view, cascadeCam.proj, m_lights,
+                                         shadowDistance(), cascadeLambda());
         }
         updateUniformBuffer(m_currentFrame);
 

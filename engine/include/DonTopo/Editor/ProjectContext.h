@@ -93,6 +93,11 @@ public:
         float taaFeedback      = 0.0f;
         float taaJitterScale   = 0.0f;
         float fpLightRadius    = 0.0f;
+        // Sombras en cascada. Defaults = los valores con los que se dibujaba
+        // antes de que fueran ajustables, asi que un project.json sin estas
+        // claves se ve exactamente igual que antes.
+        float shadowDistance   = 500.0f;
+        float cascadeLambda    = 0.75f;
 
         // --- Volumenes de audio por bus ---------------------------------------
         //

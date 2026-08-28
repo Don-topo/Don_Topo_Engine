@@ -555,6 +555,8 @@ ProjectContext::ViewSettings EditorUI::currentSettings()
         s.taaFeedback          = m_renderer->taaFeedback();
         s.taaJitterScale       = m_renderer->taaJitterScale();
         s.fpLightRadius        = m_renderer->forwardPlusLightRadius();
+        s.shadowDistance       = m_renderer->shadowDistance();
+        s.cascadeLambda        = m_renderer->cascadeLambda();
     }
 
     // Capas de física: la fuente de la verdad es el PhysicsManager. Sin él
@@ -676,6 +678,8 @@ void EditorUI::applyProjectSettings()
         m_logPanel.push("Modo de Forward+ desconocido en el proyecto ('" + s.fpMode + "'): se usa Off");
     m_renderer->setForwardPlusMode(fp);
     m_renderer->setForwardPlusLightRadius(s.fpLightRadius);
+    m_renderer->setShadowDistance(s.shadowDistance);
+    m_renderer->setCascadeLambda(s.cascadeLambda);
 
     // Backend de render: se LEE pero no se aplica. El device de este proceso ya
     // está creado —el selector de proyecto se dibuja sobre él—, así que lo único
@@ -1088,6 +1092,28 @@ void EditorUI::drawMenuBar()
                 ImGui::Text("Sondas: %d  (%.2f MB c/u)", probes,
                             (double)Renderer::probeMemoryBytes() / (1024.0 * 1024.0));
                 ImGui::Text("Ultimo bake: %.2f ms de GPU", m_renderer->lastProbeBakeMs());
+
+                // Sombras en cascada. Los dos eran constantes de compilacion
+                // hasta ahora, y son de lo que mas se nota: las 4 cascadas se
+                // reparten "Shadow distance", asi que bajarla concentra los
+                // mismos texeles en menos mundo y afila la sombra de cerca.
+                ImGui::Separator();
+                float shadowDist = m_renderer->shadowDistance();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("Shadow distance", &shadowDist, 20.0f, 2000.0f, "%.0f"))
+                    m_renderer->setShadowDistance(shadowDist);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+
+                float cascadeLambda = m_renderer->cascadeLambda();
+                ImGui::SetNextItemWidth(140.0f);
+                if (ImGui::SliderFloat("Cascade blend", &cascadeLambda, 0.0f, 1.0f, "%.2f"))
+                    m_renderer->setCascadeLambda(cascadeLambda);
+                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("0 = cortes uniformes, 1 = logaritmicos.\n"
+                                      "Alto da resolucion cerca; bajo reparte mas parejo.");
+
+                ImGui::Text("Sombras GPU: %.3f ms", m_renderer->shadowGpuMs());
 
                 // Bloom. Mismo criterio que el ambiente: ajuste de sesion, no se
                 // serializa. Intensity 0 deja la imagen como antes del bloom.

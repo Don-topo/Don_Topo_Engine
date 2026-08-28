@@ -36,15 +36,13 @@ static VkShaderModule makeModule(VkDevice dev, const std::vector<char>& code)
     return m;
 }
 
-// Reparto de los cortes entre cascadas: mezcla del logaritmico (que da
-// resolucion donde de verdad se ve, cerca) y el uniforme (que no deja la
-// ultima cascada cubriendo casi todo el mundo). lambda=0.75 tira hacia el
-// logaritmico, que es lo que se quiere con far grandes.
-static constexpr float kCascadeLambda = 0.75f;
-// Alcance maximo de las sombras. Un far de camara de 5000 repartido entre 4
-// cascadas dejaria la primera cubriendo cientos de unidades: a 2048x2048 eso
-// son sombras de bloques. Mas alla de esta distancia no hay sombra.
-static constexpr float kShadowMaxDistance = 500.0f;
+// El alcance de las sombras y el reparto de los cortes entre cascadas eran
+// constantes de aqui (kShadowMaxDistance = 500 y kCascadeLambda = 0.75). Ahora
+// los elige el usuario y llegan por parametro a computeCascades; lo que
+// significan y por que esos defaults esta documentado en RendererState.h, junto
+// a shadowDistance() y cascadeLambda(). Los valores por defecto de alli son
+// exactamente los que habia aqui, asi que la imagen no cambia sola.
+
 // Margen por detras del volumen de cada cascada, en la direccion de la luz.
 // Sin el, un objeto alto que queda fuera del frustum de la camara pero cuya
 // sombra si cae dentro no se dibujaria en el shadow map.
@@ -362,7 +360,8 @@ void ShadowPass::destroyResources(const Context& ctx)
 // ── cascadas ────────────────────────────────────────────────────────────────
 
 void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
-                                 const std::vector<Light>& lights)
+                                 const std::vector<Light>& lights,
+                                 float maxDistance, float lambda)
 {
     for (int i = 0; i < SHADOW_CASCADES; i++) m_cascadeMatrices[i] = glm::mat4(1.0f);
     m_cascadeSplits = glm::vec4(0.0f);
@@ -401,7 +400,7 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
 
     // Las esquinas ya están puestas con el far REAL (es el que define los
     // rayos del frustum); el reparto de cascadas usa el far recortado.
-    const float shadowFar = std::min(camFar, kShadowMaxDistance);
+    const float shadowFar = std::min(camFar, maxDistance);
     if (shadowFar <= camNear) return;
 
     // Luz direccional: la posición solo da la dirección, igual que antes
@@ -421,7 +420,7 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
         const float p         = (float)(c + 1) / (float)SHADOW_CASCADES;
         const float logSplit  = camNear * std::pow(shadowFar / camNear, p);
         const float uniSplit  = camNear + (shadowFar - camNear) * p;
-        const float dist      = kCascadeLambda * logSplit + (1.0f - kCascadeLambda) * uniSplit;
+        const float dist      = lambda * logSplit + (1.0f - lambda) * uniSplit;
         m_cascadeSplits[c]    = dist;
 
         // Interpolar entre las esquinas cercana y lejana es exacto: la

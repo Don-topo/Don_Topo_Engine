@@ -58,8 +58,13 @@ public:
     // updateUniformBuffer y de la grabacion: los dos consumidores leen la cache.
     // Sin luces (o con una camara degenerada) deja identidad y splits a 0, que
     // es lo que apaga el muestreo en el shader.
+    // maxDistance y lambda salen de RendererState (shadowDistance() y
+    // cascadeLambda()): eran constantes de compilacion y ahora las elige el
+    // usuario. Van como parametros y no por el Context porque este pase no
+    // conoce al Renderer, y el reparto es lo unico suyo que depende de ellas.
     void computeCascades(const glm::mat4& view, const glm::mat4& proj,
-                         const std::vector<Light>& lights);
+                         const std::vector<Light>& lights,
+                         float maxDistance, float lambda);
 
     // Abre el render pass de una cascada con el viewport, el scissor, el
     // pipeline estatico y el push del indice ya puestos. Entre esto y
