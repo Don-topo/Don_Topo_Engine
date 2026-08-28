@@ -1466,12 +1466,39 @@ struct D3D12Renderer::Impl {
     // mismo listado de migas solo entierra el primero, que es el bueno.
     bool deviceRemovedVolcado = false;
 
+    // El protocolo del fence se rompió. Importa porque TODOS los llamantes de
+    // waitForGpu() liberan recursos justo después de que vuelva: si el Signal
+    // falló, la espera no esperó a nadie y lo que se suelta puede seguir en
+    // manos de la GPU. A partir de aquí no se envía más trabajo.
+    //
+    // El aviso NO se da lanzando desde waitForGpu/moveToNextFrame: el
+    // destructor (~D3D12Renderer) pasa por shutdown() y de ahí a waitForGpu(),
+    // y una excepción que sale de un destructor es std::terminate. Se marca
+    // aquí y lo lanza drawFrame, que sí está fuera de ese camino y es donde el
+    // Present ya lanza por lo mismo.
+    bool        deviceLost      = false;
+    HRESULT     deviceLostHr    = S_OK;
+    const char* deviceLostDonde = nullptr;
+
+    // Frames seguidos que no se pudieron grabar ni enviar. Un Reset o un Close
+    // que fallan sueltos son un frame perdido y poco más —no se envía nada, así
+    // que no hay estado a medias en la GPU—, pero encadenados son un device que
+    // ya no responde, y seguir intentándolo solo entierra el primer error.
+    int                  framesDescartadosSeguidos = 0;
+    static constexpr int kMaxFramesDescartados     = 3;
+
     // Pasa a fichero lo que la capa de depuración haya acumulado desde la
     // última vez, y vacía la cola.
     void drainInfoQueue();
     // Motivo de la pérdida + auto-breadcrumbs de DRED (qué operaciones completó
     // la GPU y cuál se quedó a medias) + página fallida, si la hay.
     void dumpDeviceRemoved(const char* donde, HRESULT hr);
+    // Fallo que rompe el protocolo del fence: deja constancia, drena la capa de
+    // depuración y marca el device como perdido. NO lanza (ver deviceLost).
+    void notarDeviceLost(const char* donde, HRESULT hr);
+    // Frame que no se pudo grabar ni enviar. Deja constancia y, si se repite
+    // kMaxFramesDescartados veces seguidas, escala a pérdida de device.
+    void notarFrameDescartado(const char* donde, HRESULT hr);
 
     void waitForGpu();
     void moveToNextFrame();
@@ -1744,6 +1771,49 @@ void D3D12Renderer::Impl::dumpDeviceRemoved(const char* donde, HRESULT hr)
     diagLog("========================================================");
 }
 
+void D3D12Renderer::Impl::notarDeviceLost(const char* donde, HRESULT hr)
+{
+    // El HRESULT de la llamada que falló suele ser la consecuencia, no la
+    // causa: un Signal sobre un device caído devuelve E_FAIL y quien sabe el
+    // motivo de verdad es GetDeviceRemovedReason().
+    const HRESULT motivo = device ? device->GetDeviceRemovedReason() : S_OK;
+    const HRESULT culpa  = FAILED(motivo) ? motivo : hr;
+
+    // Se registra SIEMPRE, aunque ya estuviera marcado: el sitio donde se
+    // detecta la segunda vez dice por dónde siguió el motor tras el primer
+    // fallo, que es justo lo que hoy no se ve.
+    std::string linea = std::string("FALLO IRRECUPERABLE en ") + (donde ? donde : "?") +
+                        ": HRESULT " + hresultToString(hr);
+    if (FAILED(motivo) && motivo != hr)
+        linea += " (GetDeviceRemovedReason: " + hresultToString(motivo) + ")";
+    diagLog(linea);
+
+    drainInfoQueue();
+
+    if (!deviceLost) {
+        deviceLost      = true;
+        deviceLostHr    = culpa;
+        deviceLostDonde = donde;
+        // dumpDeviceRemoved ya tiene su propio pestillo, pero solo se le
+        // pregunta a la GPU cuando hay motivo para creer que se ha ido: un
+        // E_INVALIDARG por grabar mal una lista no tiene migas que enseñar.
+        if (esPerdidaDeDevice(hr) || FAILED(motivo))
+            dumpDeviceRemoved(donde, culpa);
+    }
+}
+
+void D3D12Renderer::Impl::notarFrameDescartado(const char* donde, HRESULT hr)
+{
+    ++framesDescartadosSeguidos;
+    diagLog(std::string("Frame descartado en ") + (donde ? donde : "?") + ": HRESULT " +
+            hresultToString(hr) + " (" + std::to_string(framesDescartadosSeguidos) + " de " +
+            std::to_string(kMaxFramesDescartados) + " seguidos).");
+    drainInfoQueue();
+
+    if (framesDescartadosSeguidos >= kMaxFramesDescartados)
+        notarDeviceLost(donde, hr);
+}
+
 // Espera a que la GPU vacíe TODO lo enviado. Solo para resize y shutdown: por
 // frame se usa moveToNextFrame, que no serializa CPU y GPU.
 void D3D12Renderer::Impl::waitForGpu()
@@ -1752,8 +1822,12 @@ void D3D12Renderer::Impl::waitForGpu()
         return;
 
     const UINT64 target = fenceValues[frameIndex];
-    if (FAILED(queue->Signal(fence.Get(), target)))
+    // Sin Signal no hay a qué esperar, y quien llama libera recursos en cuanto
+    // esto vuelve. Volver callando es corrupción silenciosa, no un aviso.
+    if (const HRESULT hr = queue->Signal(fence.Get(), target); FAILED(hr)) {
+        notarDeviceLost("ID3D12CommandQueue::Signal (waitForGpu)", hr);
         return;
+    }
 
     if (fence->GetCompletedValue() < target) {
         if (SUCCEEDED(fence->SetEventOnCompletion(target, fenceEvent))) {
@@ -1868,8 +1942,13 @@ void D3D12Renderer::Impl::resolveTimestamps()
 void D3D12Renderer::Impl::moveToNextFrame()
 {
     const UINT64 current = fenceValues[frameIndex];
-    if (FAILED(queue->Signal(fence.Get(), current)))
+    // Igual que en waitForGpu: si esto falla, el frame siguiente resetearía un
+    // allocator cuyas listas pueden seguir ejecutándose, porque ni frameIndex
+    // ni fenceValues llegan a avanzar.
+    if (const HRESULT hr = queue->Signal(fence.Get(), current); FAILED(hr)) {
+        notarDeviceLost("ID3D12CommandQueue::Signal (moveToNextFrame)", hr);
         return;
+    }
 
     frameIndex = swapChain->GetCurrentBackBufferIndex();
 
@@ -8205,6 +8284,16 @@ void D3D12Renderer::drawFrame()
     if (!d.initialized)
         return;
 
+    // El device se perdió en algún punto que no podía lanzar (el destructor
+    // pasa por waitForGpu). Aquí sí se puede, y es el mismo desenlace que ya
+    // tiene el Present de más abajo: seguir dibujando sobre un fence roto solo
+    // entierra el error de verdad, que ya está en d3d12_diag.log.
+    if (d.deviceLost) {
+        throw std::runtime_error(std::string("D3D12: device perdido en ") +
+                                 (d.deviceLostDonde ? d.deviceLostDonde : "?") + " (HRESULT " +
+                                 hresultToString(d.deviceLostHr) + ")");
+    }
+
     // Lo primero del frame: el tamaño que anotó el callback de la ventana. Aquí
     // ya estamos en el bucle principal, fuera del WindowProc, así que se puede
     // tocar DXGI y una excepción tiene por dónde salir.
@@ -8251,11 +8340,19 @@ void D3D12Renderer::drawFrame()
     // Y el hueco de oclusion, que depende del interruptor del SSAO.
     d.refreshAoSlots();
 
+    // Un Reset que falla deja el frame sin grabar. No se ha enviado nada, así
+    // que la GPU no queda a medias, pero syncProbes() de más arriba SÍ ha
+    // corrido ya: descartarlo en silencio es como se pierde un horneado sin
+    // que nadie se entere.
     ID3D12CommandAllocator* allocator = d.allocators[d.frameIndex].Get();
-    if (FAILED(allocator->Reset()))
+    if (const HRESULT hr = allocator->Reset(); FAILED(hr)) {
+        d.notarFrameDescartado("ID3D12CommandAllocator::Reset (drawFrame)", hr);
         return;
-    if (FAILED(d.commandList->Reset(allocator, nullptr)))
+    }
+    if (const HRESULT hr = d.commandList->Reset(allocator, nullptr); FAILED(hr)) {
+        d.notarFrameDescartado("ID3D12GraphicsCommandList::Reset (drawFrame)", hr);
         return;
+    }
 
     // TODAS las marcas al arranque del frame, y luego cada pase sobrescribe las
     // suyas. El resolve copia el rango entero, así que una query que este frame
@@ -8507,8 +8604,13 @@ void D3D12Renderer::drawFrame()
     d.markTimestamp(Impl::TsFrame + 1);
     d.resolveTimestamps();
 
-    if (FAILED(d.commandList->Close()))
+    // Igual que los Reset: sin Close no hay nada que ejecutar y el frame se
+    // cae entero. Aquí duele más, porque todo el trabajo del frame ya está
+    // grabado y los timestamps se quedan sin resolver.
+    if (const HRESULT hr = d.commandList->Close(); FAILED(hr)) {
+        d.notarFrameDescartado("ID3D12GraphicsCommandList::Close (drawFrame)", hr);
         return;
+    }
 
     ID3D12CommandList* lists[] = {d.commandList.Get()};
     d.queue->ExecuteCommandLists(1, lists);
@@ -8523,6 +8625,11 @@ void D3D12Renderer::drawFrame()
         throw std::runtime_error("D3D12: device perdido durante Present (HRESULT " +
                                  hresultToString(presentHr) + ")");
     }
+
+    // Frame entero grabado, enviado y presentado: la racha de descartes se
+    // rompe aquí. Sin esto, tres frames malos sueltos a lo largo de una sesión
+    // se sumarían y acabarían dando el device por perdido sin motivo.
+    d.framesDescartadosSeguidos = 0;
 
     // Lo que la capa de depuración haya dicho en este frame, al fichero. Es una
     // cola: si no se drena, se llena y empieza a descartar.
