@@ -9950,6 +9950,22 @@ void D3D12Renderer::shutdown()
         d.releaseProbe(probe);
     d.probes.clear();
 
+    // La profundidad de las capturas NO va en releaseProbe: es UNA sola,
+    // compartida por las seis caras de todas las sondas (createProbeDepth sale
+    // por la puerta si ya existe), así que soltarla ahí la mataría en cuanto se
+    // borrase la primera sonda mientras las demás siguen horneando. Su sitio es
+    // aquí, y no lo tenía: quedaba viva cuando allocator->Release() cierra el
+    // allocator, y D3D12MA hace assert() al destruirse con un bloque no vacío
+    // —en Debug, abort() con exit 3 y ventana de Windows, sin volcado—. Mismo
+    // fallo y mismo desenlace que el de los atlas de UI de más abajo.
+    //
+    // Solo salta si la sesión llegó a hornear una sonda: es bakeProbe quien
+    // llama a createProbeDepth. Un cierre limpio sin sondas no prueba nada.
+    if (d.probeDepthAllocation) {
+        d.probeDepthAllocation->Release();
+        d.probeDepthAllocation = nullptr;
+    }
+
     // Buffers de la UI 2D: van mapeados, así que primero Unmap.
     for (UINT i = 0; i < kFrameCount; ++i) {
         if (d.uiVertexAllocations[i]) {
