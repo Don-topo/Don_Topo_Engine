@@ -4596,10 +4596,18 @@ void D3D12Renderer::Impl::recordForwardPlusCull()
     const uint32_t gridY    = (height + tileSize - 1) / tileSize;
     const uint32_t gridZ    = clustered ? kFpClusterSlices : 1u;
 
-    // El tiled reduce la profundidad del tile: necesita la del pre-pase, que ya
-    // está grabada. El clustered no la lee, pero la declara igual.
-    const bool depthReady = prepassDepthAllocation != nullptr;
-    if (!clustered && !depthReady)
+    // El tiled reduce la profundidad del tile leyéndola; el clustered no la
+    // lee. Pero eso es lo que hace el SHADER: este código la necesita igual en
+    // los dos modos, porque la transiciona dos veces —la barrera de aquí abajo
+    // y su inversa en toScene[2]— y bindea kSrvPrepassDepth en la tabla 6 sin
+    // mirar el modo. Por eso la guarda no puede dejar pasar al clustered.
+    //
+    // Hoy no se alcanza: init() llama a createSsaoTargets() sin condición y el
+    // único sitio que suelta el recurso sin recrearlo es shutdown(). Se
+    // endurece porque la guarda anterior afirmaba lo contrario de lo que el
+    // cuerpo hace, y esa contradicción es la que se cobra la pieza el día que
+    // los targets del SSAO se creen solo con el efecto encendido.
+    if (!prepassDepthAllocation)
         return;
 
     if (fpListsInPixelState) {
