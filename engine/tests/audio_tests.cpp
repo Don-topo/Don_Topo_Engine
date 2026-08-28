@@ -1269,6 +1269,212 @@ static void test_scene_rejects_unsupported_extension(PhysicsManager& pm, AudioMa
     }
 }
 
+// PlayClipAtPoint retiene el sonido en la caché tras el primer uso, y las
+// llamadas siguientes NO vuelven a contar. Es la parte delicada: sin el
+// conjunto de retenidos, cada disparo subiría otra vez el refcount y el sonido
+// quedaría imposible de liberar (no fugaría memoria, pero el contador crecería
+// sin techo y el diagnóstico mentiría).
+static void test_playClipAtPoint_pins_sound_once(AudioManager& am)
+{
+    if (!am.available())
+    {
+        std::printf("SKIP test_playClipAtPoint_pins_sound_once (FMOD no disponible)\n");
+        return;
+    }
+    const size_t before = am.loadedSoundCount();
+    const glm::vec3 pos(10.0f, 0.0f, 0.0f);
+
+    am.playClipAtPoint("assets/audio.mp3", pos);
+    const size_t afterFirst = am.loadedSoundCount();
+    // La primera vez sí carga: es un sonido 3D no-loop, distinto de los que
+    // usan los demás tests (que van en 2D).
+    CHECK(afterFirst == before + 1);
+
+    // Y diez disparos más no cargan nada nuevo.
+    for (int i = 0; i < 10; ++i)
+        am.playClipAtPoint("assets/audio.mp3", pos);
+    CHECK(am.loadedSoundCount() == afterFirst);
+
+    // Preload de la misma ruta tampoco: es idempotente.
+    am.preloadClip("assets/audio.mp3");
+    CHECK(am.loadedSoundCount() == afterFirst);
+
+    // El sonido retenido NO se puede soltar desde fuera: un AudioClipComponent
+    // que use esa misma ruta y modo comparte el slot, y al destruirse no puede
+    // llevarse por delante el sonido que playClipAtPoint mantiene vivo.
+    {
+        auto clip = am.createAudioClipComponent("assets/audio.mp3", /*is3D=*/true, /*loop=*/false);
+        CHECK(clip != nullptr);
+        CHECK(am.loadedSoundCount() == afterFirst); // comparte, no carga otro
+    }
+    CHECK(am.loadedSoundCount() == afterFirst); // y sigue vivo tras destruirlo
+
+    // Una ruta con extensión no soportada no carga nada (la whitelist vive en
+    // el binding de Lua, pero el motor tampoco debe crear un sonido de la nada).
+    am.playClipAtPoint("assets/__no_existe__.mp3", pos);
+    // Sí sube: el path es válido como extensión aunque el fichero no exista —
+    // eso lo reporta pollLoadFailures, no esta ruta. Se comprueba que al menos
+    // no rompe nada y que el fallo se puede observar por el canal de siempre.
+    std::vector<std::string> failures;
+    for (int i = 0; i < 100 && failures.empty(); ++i)
+    {
+        am.update(pos, glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        am.pollLoadFailures(failures);
+        if (failures.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    bool reported = false;
+    for (const auto& f : failures)
+        if (f.find("__no_existe__") != std::string::npos) reported = true;
+    CHECK(reported);
+}
+
+// P12: rolloff, spread, paneo y doppler. Clamps y rechazo de no-finitos, con el
+// mismo criterio que volume/pitch — un NaN acabaría en el .scene como "null".
+static void test_p12_props_clamp_and_reject_nan()
+{
+    auto clip = makeClip();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+
+    CHECK(nearlyEqual(clip->getSpread(), 0.0f));        // neutros por defecto:
+    CHECK(nearlyEqual(clip->getStereoPan(), 0.0f));     // una escena vieja suena
+    CHECK(nearlyEqual(clip->getDopplerLevel(), 0.0f));  // exactamente igual
+    CHECK(clip->getRolloff() == AudioRolloff::Inverse);
+
+    clip->setSpread(90.0f);
+    CHECK(nearlyEqual(clip->getSpread(), 90.0f));
+    clip->setSpread(-10.0f);
+    CHECK(nearlyEqual(clip->getSpread(), 0.0f));
+    clip->setSpread(1000.0f);
+    CHECK(nearlyEqual(clip->getSpread(), 360.0f));
+    clip->setSpread(nan);
+    CHECK(nearlyEqual(clip->getSpread(), 360.0f)); // conserva el anterior
+
+    clip->setStereoPan(-0.5f);
+    CHECK(nearlyEqual(clip->getStereoPan(), -0.5f));
+    clip->setStereoPan(-9.0f);
+    CHECK(nearlyEqual(clip->getStereoPan(), -1.0f));
+    clip->setStereoPan(9.0f);
+    CHECK(nearlyEqual(clip->getStereoPan(), 1.0f));
+    clip->setStereoPan(nan);
+    CHECK(nearlyEqual(clip->getStereoPan(), 1.0f));
+
+    clip->setDopplerLevel(2.5f);
+    CHECK(nearlyEqual(clip->getDopplerLevel(), 2.5f));
+    clip->setDopplerLevel(-1.0f);
+    CHECK(nearlyEqual(clip->getDopplerLevel(), 0.0f));
+    clip->setDopplerLevel(50.0f);
+    CHECK(nearlyEqual(clip->getDopplerLevel(), 5.0f));
+    clip->setDopplerLevel(nan);
+    CHECK(nearlyEqual(clip->getDopplerLevel(), 5.0f));
+}
+
+// Round-trip de los cuatro, y la caché los separa por rolloff: la curva va en el
+// FMOD_MODE, así que el mismo fichero con curva lineal es OTRO sonido. Si el
+// rolloff no entrara en la clave, cambiar la curva de un clip se la cambiaría a
+// todos los que compartan el fichero.
+static void test_p12_round_trip_and_cache(PhysicsManager& pm, AudioManager& am)
+{
+    auto probe = am.createAudioClipComponent("assets/audio.mp3", /*is3D=*/true, false);
+    if (!checkAudioProbe(am, probe, "test_p12_round_trip_and_cache")) return;
+
+    probe->setRolloff(AudioRolloff::Linear);
+
+    // El rolloff tiene que entrar en la clave de la caché: va en el FMOD_MODE,
+    // así que el mismo fichero con dos curvas son dos sonidos. Sin esto,
+    // cambiar la curva de un clip se la cambiaría a todos los que compartan el
+    // fichero.
+    //
+    // Se mide con loadSound directo y con una combinación de flags que no usa
+    // ningún otro test (3D + loop): este binario comparte AudioManager entre
+    // tests y varios dejan sonidos retenidos —playClipAtPoint pinea justo
+    // 3D/no-loop/Sample/Inverse—, así que apoyarse en lo que haya cargado es
+    // atarse al orden de ejecución. Ya me pasó al escribir este test.
+    {
+        const size_t base = am.loadedSoundCount();
+        const int inverse = am.loadSound("assets/audio.mp3", true, true,
+                                          AudioLoadMode::Sample, AudioRolloff::Inverse);
+        CHECK(inverse >= 0);
+        CHECK(am.loadedSoundCount() == base + 1);
+
+        const int linear = am.loadSound("assets/audio.mp3", true, true,
+                                         AudioLoadMode::Sample, AudioRolloff::Linear);
+        CHECK(linear >= 0);
+        CHECK(linear != inverse);
+        CHECK(am.loadedSoundCount() == base + 2);
+
+        // Y que la curva LLEGUE a FMOD, no solo que el componente la recuerde.
+        // Hay que esperar a Ready: con FMOD_NONBLOCKING el modo no está
+        // completo mientras carga (la misma trampa que con CREATESTREAM).
+        for (int i = 0; i < 200 && am.getSoundState(linear) == AudioManager::SoundLoadState::Loading; ++i)
+        {
+            am.update(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(am.getSoundState(linear) == AudioManager::SoundLoadState::Ready);
+        CHECK(am.getSoundRolloff(linear) == AudioRolloff::Linear);
+        CHECK(am.getSoundRolloff(inverse) == AudioRolloff::Inverse);
+
+        am.unloadSound(inverse);
+        am.unloadSound(linear);
+        CHECK(am.loadedSoundCount() == base);
+    }
+
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("altavoz");
+    probe->setSpread(120.0f);
+    probe->setStereoPan(-0.75f);
+    probe->setDopplerLevel(3.0f);
+    go->setAudioClip(probe);
+
+    nlohmann::json j = scene.toJson();
+    CHECK(j["root"]["children"][0]["audioClip"]["rolloff"] == "linear");
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(go->id);
+    CHECK(found != nullptr);
+    if (!found || !found->hasAudioClip()) { CHECK(false); return; }
+    const auto& c = found->getAudioClip();
+    CHECK(c->getRolloff() == AudioRolloff::Linear);
+    CHECK(nearlyEqual(c->getSpread(), 120.0f));
+    CHECK(nearlyEqual(c->getStereoPan(), -0.75f));
+    CHECK(nearlyEqual(c->getDopplerLevel(), 3.0f));
+}
+
+// Back-compat: una escena anterior a P12 no trae ninguno de los cuatro campos y
+// tiene que cargar con los neutros, sin warnings.
+static void test_p12_back_compat(PhysicsManager& pm, AudioManager& am)
+{
+    auto probe = am.createAudioClipComponent("assets/audio.mp3", true, false);
+    if (!checkAudioProbe(am, probe, "test_p12_back_compat")) return;
+
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("altavoz");
+    probe->setSpread(200.0f);
+    probe->setDopplerLevel(4.0f);
+    go->setAudioClip(probe);
+
+    nlohmann::json j = scene.toJson();
+    auto& ac = j["root"]["children"][0]["audioClip"];
+    ac.erase("rolloff"); ac.erase("spread"); ac.erase("stereoPan"); ac.erase("dopplerLevel");
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(go->id);
+    if (!found || !found->hasAudioClip()) { CHECK(false); return; }
+    const auto& c = found->getAudioClip();
+    CHECK(c->getRolloff() == AudioRolloff::Inverse);
+    CHECK(nearlyEqual(c->getSpread(), 0.0f));
+    CHECK(nearlyEqual(c->getStereoPan(), 0.0f));
+    CHECK(nearlyEqual(c->getDopplerLevel(), 0.0f));
+    for (const auto& w : loaded.lastWarnings())
+    {
+        CHECK(w.find("rolloff") == std::string::npos);
+        CHECK(w.find("spread") == std::string::npos);
+        CHECK(w.find("doppler") == std::string::npos);
+    }
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -1318,6 +1524,10 @@ int main()
     test_load_mode_round_trip_and_cache(pm, am);
     test_load_mode_back_compat_and_unknown(pm, am);
     test_scene_rejects_unsupported_extension(pm, am);
+    test_playClipAtPoint_pins_sound_once(am);
+    test_p12_props_clamp_and_reject_nan();
+    test_p12_round_trip_and_cache(pm, am);
+    test_p12_back_compat(pm, am);
 
     am.shutdown();
     pm.shutdown();

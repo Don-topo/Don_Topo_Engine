@@ -642,10 +642,11 @@ private:
     // releerse del componente después de dibujar el widget (ya valdría el
     // nuevo valor); por eso el .cpp hoistea las lecturas antes del slider.
     bool     m_audioDragActive = false;
-    float    m_audioDragBeforeVolume = 1.0f;
-    float    m_audioDragBeforePitch  = 1.0f;
-    float    m_audioDragBeforeMinDistance = 1.0f;
-    float    m_audioDragBeforeMaxDistance = 100.0f;
+    // El snapshot ENTERO, no un float por slider: la seccion ya tiene siete
+    // valores continuos (volumen, pitch, las dos distancias, spread, paneo y
+    // doppler) y mantener un miembro por cada uno se descontrola. Con el struct
+    // completo, anadir un slider mas no toca este header.
+    AudioClipState m_audioDragBefore{};
     // Dueño del snapshot en curso: si el drag se interrumpe sin commit (p.ej.
     // Ctrl+Z a mitad de arrastre reconstruye/borra el GameObject seleccionado)
     // y el siguiente commit llega para otro AudioClip, este id evita aplicar

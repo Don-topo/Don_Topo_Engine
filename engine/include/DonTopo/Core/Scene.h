@@ -158,7 +158,9 @@ namespace DonTopo
             // (Play) y las rutas de host en Edit Mode, que no pasan por update
             // pero sí mueven objetos con el gizmo. Barata: los clips 2D salen en
             // el primer if de AudioClipComponent::updateSpatial.
-            void updateAudioSpatial();
+            // dt alimenta el doppler (velocidad de cada fuente). Con 0 no hay
+            // efecto doppler, que es lo correcto en Edit Mode.
+            void updateAudioSpatial(float dt = 0.0f);
 
             void shutdown(PhysicsManager& physics, AudioManager& audio);
 

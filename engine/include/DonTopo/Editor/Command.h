@@ -102,6 +102,10 @@ struct AudioClipState {
     AudioBus bus;
     // Como loop e is3D: cambiarlo recarga el sonido.
     AudioLoadMode loadMode;
+    AudioRolloff  rolloff;
+    float spread;
+    float stereoPan;
+    float dopplerLevel;
 };
 
 // Snapshot value-type del CameraComponent — T de PropertyCommand<T> en la

@@ -146,12 +146,19 @@ const std::vector<std::string>& baseSymbols()
         "AudioClip:SetMinDistance", "AudioClip:GetMinDistance",
         "AudioClip:SetMaxDistance", "AudioClip:GetMaxDistance",
         "AudioClip:SetPlayOnAwake", "AudioClip:GetPlayOnAwake",
-        "AudioClip:SetBus", "AudioClip:GetBus",
+        "AudioClip:SetBus", "AudioClip:GetBus",
         "AudioClip:SetLoadMode", "AudioClip:GetLoadMode",
+        "AudioClip:SetRolloff", "AudioClip:GetRolloff",
+        "AudioClip:SetSpread", "AudioClip:GetSpread",
+        "AudioClip:SetStereoPan", "AudioClip:GetStereoPan",
+        "AudioClip:SetDopplerLevel", "AudioClip:GetDopplerLevel",
         "AudioClip:GetPath",
 
         // Audio global (volumenes por bus: "master", "music", "sfx")
         "Audio.SetBusVolume", "Audio.GetBusVolume",
+        // Sonido posicional sin GameObject. Preload evita que el primer disparo
+        // se pierda por la carga diferida de FMOD.
+        "Audio.PlayClipAtPoint", "Audio.Preload",
 
         // UI 2D — Canvas (Entity:GetCanvas / Entity:AddCanvas)
         "Canvas.scaleMode", "Canvas.scaleFactor", "Canvas.screenMatch",

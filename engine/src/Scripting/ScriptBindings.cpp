@@ -895,6 +895,61 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
                     return std::string(audioLoadModeToStr(go->getAudioClip()->getLoadMode()));
                 },
+                // Curva de atenuacion por nombre. Como SetLoadMode, RECARGA el
+                // sonido: es configuracion, no algo de tocar por frame.
+                "SetRolloff", [&mgr](const LuaAudioClip& c, const std::string& name) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    AudioRolloff r;
+                    if (!audioRolloffFromStr(name, r))
+                    {
+                        mgr.log("[Lua][WARN] AudioClip.SetRolloff: curva desconocida '" + name +
+                                 "' (usa 'inverse', 'linear' o 'linearSquare'), se conserva la anterior");
+                        return;
+                    }
+                    go->getAudioClip()->setRolloff(r);
+                },
+                "GetRolloff", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return std::string(audioRolloffToStr(go->getAudioClip()->getRolloff()));
+                },
+                // Las tres de la voz: no recargan, pero se leen al arrancar la
+                // reproduccion, asi que cambiarlas con algo sonando no se nota
+                // hasta el siguiente Play.
+                "SetSpread", [&mgr](const LuaAudioClip& c, float d) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!ensureFinite(mgr, "AudioClip.SetSpread", d)) return;
+                    go->getAudioClip()->setSpread(d);
+                },
+                "GetSpread", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return go->getAudioClip()->getSpread();
+                },
+                "SetStereoPan", [&mgr](const LuaAudioClip& c, float p) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!ensureFinite(mgr, "AudioClip.SetStereoPan", p)) return;
+                    go->getAudioClip()->setStereoPan(p);
+                },
+                "GetStereoPan", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return go->getAudioClip()->getStereoPan();
+                },
+                "SetDopplerLevel", [&mgr](const LuaAudioClip& c, float l) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!ensureFinite(mgr, "AudioClip.SetDopplerLevel", l)) return;
+                    go->getAudioClip()->setDopplerLevel(l);
+                },
+                "GetDopplerLevel", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return go->getAudioClip()->getDopplerLevel();
+                },
                 "GetPath", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
@@ -2923,6 +2978,62 @@ namespace DonTopo::ScriptBindings
                 // no hay ningún .scene donde se note para depurarlo después.
                 if (!ensureFinite(mgr, "Audio.SetBusVolume", v)) return;
                 am->setBusVolume(bus, std::clamp(v, 0.0f, 1.0f));
+            };
+
+            // Audio.PlayClipAtPoint(path, x, y, z [, volume, pitch, bus]) — un
+            // sonido en una posición del mundo SIN crear GameObject. Es el
+            // hueco que dejaba PlayOneShot: para un impacto o una explosión no
+            // hay ningún objeto al que colgarle el clip, y muchas veces el
+            // objeto que lo provoca se destruye en ese mismo frame.
+            //
+            // El sonido queda retenido en la caché tras el primer uso. Ojo: por
+            // la carga diferida de FMOD, ese primer disparo casi seguro no se
+            // oye — Audio.Preload(path) en el Start es lo que lo arregla.
+            audio["PlayClipAtPoint"] = [&mgr](const std::string& path, float x, float y, float z,
+                                               sol::optional<float> volume,
+                                               sol::optional<float> pitch,
+                                               sol::optional<std::string> busName) {
+                AudioManager* am = mgr.audioManager();
+                if (!am) return;
+                std::string ext = std::filesystem::path(path).extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(),
+                               [](unsigned char ch) { return (char)std::tolower(ch); });
+                if (!isSupportedAudioExtension(ext))
+                {
+                    mgr.log("[Lua][WARN] Audio.PlayClipAtPoint: formato no soportado '" + ext +
+                             "' (usa .wav, .mp3, .ogg o .flac)");
+                    return;
+                }
+                const float v = volume.value_or(1.0f);
+                const float p = pitch.value_or(1.0f);
+                if (!ensureFinite(mgr, "Audio.PlayClipAtPoint", v)) return;
+                if (!ensureFinite(mgr, "Audio.PlayClipAtPoint", p)) return;
+                if (!ensureFinite(mgr, "Audio.PlayClipAtPoint", x)) return;
+                if (!ensureFinite(mgr, "Audio.PlayClipAtPoint", y)) return;
+                if (!ensureFinite(mgr, "Audio.PlayClipAtPoint", z)) return;
+                AudioBus bus = AudioBus::Sfx;
+                if (busName && !audioBusFromStr(*busName, bus))
+                {
+                    mgr.log("[Lua][WARN] Audio.PlayClipAtPoint: bus desconocido '" + *busName +
+                             "' (usa 'master', 'music' o 'sfx')");
+                    return;
+                }
+                am->playClipAtPoint(path, glm::vec3(x, y, z),
+                                    std::clamp(v, 0.0f, 1.0f), std::clamp(p, 0.5f, 2.0f), bus);
+            };
+
+            audio["Preload"] = [&mgr](const std::string& path) {
+                AudioManager* am = mgr.audioManager();
+                if (!am) return;
+                std::string ext = std::filesystem::path(path).extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(),
+                               [](unsigned char ch) { return (char)std::tolower(ch); });
+                if (!isSupportedAudioExtension(ext))
+                {
+                    mgr.log("[Lua][WARN] Audio.Preload: formato no soportado '" + ext + "'");
+                    return;
+                }
+                am->preloadClip(path);
             };
 
             audio["GetBusVolume"] = [&mgr](const std::string& name) -> float {

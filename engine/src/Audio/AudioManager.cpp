@@ -74,16 +74,47 @@ bool AudioManager::available() const
 #endif
 }
 
-void AudioManager::update(const glm::vec3& pos, const glm::vec3& fwd, const glm::vec3& up)
+#ifdef DT_FMOD_ENABLED
+namespace {
+// Tope de velocidad, en unidades de mundo por segundo. Por encima de esto no se
+// cree el dato: un teleport, una carga de escena o un frame larguísimo darían
+// una velocidad absurda, y el doppler la convertiría en un chirrido que dura lo
+// que dure la voz. Las primitivas de este repo miden 50 unidades, así que 2000
+// u/s es rapidísimo pero todavía plausible para un proyectil.
+constexpr float kMaxSourceSpeed = 2000.0f;
+
+// Velocidad entre dos posiciones, o cero si no es de fiar (dt no positivo,
+// primer frame, o salto demasiado grande para ser movimiento real).
+glm::vec3 safeVelocity(const glm::vec3& current, const glm::vec3& last, bool hasLast, float dt)
+{
+    if (!hasLast || dt <= 0.0f) return glm::vec3(0.0f);
+    const glm::vec3 v = (current - last) / dt;
+    const float speed = glm::length(v);
+    if (!std::isfinite(speed) || speed > kMaxSourceSpeed) return glm::vec3(0.0f);
+    return v;
+}
+} // namespace
+#endif
+
+void AudioManager::update(const glm::vec3& pos, const glm::vec3& fwd, const glm::vec3& up, float dt)
 {
 #ifdef DT_FMOD_ENABLED
     if (!m_system) return;
+    // La velocidad del listener es la mitad del doppler (la otra es la de cada
+    // fuente). Antes iba fija a cero, así que no había efecto por mucho que se
+    // moviera la cámara.
+    const glm::vec3 v = safeVelocity(pos, m_lastListenerPos, m_hasLastListenerPos, dt);
+    m_lastListenerPos = pos;
+    m_hasLastListenerPos = true;
+
     FMOD_VECTOR p   = { pos.x, pos.y, pos.z };
-    FMOD_VECTOR vel = { 0, 0, 0 };
+    FMOD_VECTOR vel = { v.x, v.y, v.z };
     FMOD_VECTOR f   = { fwd.x, fwd.y, fwd.z };
     FMOD_VECTOR u   = { up.x,  up.y,  up.z  };
     SYS->set3DListenerAttributes(0, &p, &vel, &f, &u);
     SYS->update();
+#else
+    (void)dt;
 #endif
 }
 
@@ -97,7 +128,8 @@ void AudioManager::shutdown()
     // Los de la caché también: un init() posterior encontraría el mapa
     // apuntando a slots que ya no existen y devolvería ids de sonidos muertos.
     m_soundRefs.clear(); m_soundKeys.clear(); m_freeSlots.clear();
-    m_soundByKey.clear();
+    m_soundByKey.clear(); m_pinnedSounds.clear();
+    m_soundLastPos.clear(); m_soundHasLastPos.clear();
     if (SFXG) SFXG->release();
     if (MUSICG) MUSICG->release();
     SYS->close();
@@ -108,14 +140,17 @@ void AudioManager::shutdown()
 
 #ifdef DT_FMOD_ENABLED
 std::string AudioManager::soundKey(const std::string& path, bool is3D, bool loop,
-                                    AudioLoadMode loadMode)
+                                    AudioLoadMode loadMode, AudioRolloff rolloff)
 {
     // Los flags delante del path: el path puede contener cualquier cosa, así que
     // el separador va donde no pueda colisionar con su contenido. El modo de
     // carga entra en la clave como is3D y loop: un sonido en streaming y el
     // mismo fichero descomprimido en RAM son dos FMOD::Sound distintos.
+    // El rolloff tambien va en el FMOD_MODE, asi que entra en la clave: el
+    // mismo fichero con curva lineal y con curva inversa son dos sonidos.
     return std::string(is3D ? "3" : "2") + (loop ? "L" : "N")
-         + (loadMode == AudioLoadMode::Stream ? "S|" : "M|") + path;
+         + (loadMode == AudioLoadMode::Stream ? "S" : "M")
+         + audioRolloffToStr(rolloff)[0] + "|" + path;
 }
 #endif
 
@@ -152,7 +187,26 @@ bool AudioManager::isSoundStreaming(int id) const
 #endif
 }
 
-int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, AudioLoadMode loadMode)
+AudioRolloff AudioManager::getSoundRolloff(int id) const
+{
+#ifdef DT_FMOD_ENABLED
+    if (!m_system || id < 0 || id >= (int)m_sounds.size() || !m_sounds[id])
+        return AudioRolloff::Inverse;
+    FMOD_MODE mode = 0;
+    if (reinterpret_cast<FMOD::Sound*>(m_sounds[id])->getMode(&mode) != FMOD_OK)
+        return AudioRolloff::Inverse;
+    if (mode & FMOD_3D_LINEARSQUAREROLLOFF) return AudioRolloff::LinearSquare;
+    if (mode & FMOD_3D_LINEARROLLOFF)       return AudioRolloff::Linear;
+    // Sin flag explicito FMOD usa la inversa, que es nuestro default.
+    return AudioRolloff::Inverse;
+#else
+    (void)id;
+    return AudioRolloff::Inverse;
+#endif
+}
+
+int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, AudioLoadMode loadMode,
+                             AudioRolloff rolloff)
 {
 #ifdef DT_FMOD_ENABLED
     if (!m_system) return -1;
@@ -160,7 +214,7 @@ int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, Audio
     // ¿Ya está cargado ese mismo fichero con el mismo modo? Entonces se comparte
     // el FMOD::Sound y solo sube el contador. Veinte objetos con el mismo
     // disparo eran veinte copias descomprimidas en memoria.
-    const std::string key = soundKey(path, is3D, loop, loadMode);
+    const std::string key = soundKey(path, is3D, loop, loadMode, rolloff);
     if (auto it = m_soundByKey.find(key); it != m_soundByKey.end())
     {
         const int cached = it->second;
@@ -186,6 +240,10 @@ int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, Audio
     // vez (un solo buffer de decodificación), que es la razón por la que este
     // modo es para música y no para efectos.
     if (loadMode == AudioLoadMode::Stream) mode |= FMOD_CREATESTREAM;
+    // Curva de atenuación. Sin ninguno de estos flags FMOD aplica la inversa,
+    // que es justo AudioRolloff::Inverse: por eso ese caso no añade nada.
+    if (rolloff == AudioRolloff::Linear)            mode |= FMOD_3D_LINEARROLLOFF;
+    else if (rolloff == AudioRolloff::LinearSquare) mode |= FMOD_3D_LINEARSQUAREROLLOFF;
     FMOD::Sound* snd;
     if (SYS->createSound(path.c_str(), mode, nullptr, &snd) != FMOD_OK) return -1;
     // Slot reciclado si lo hay: los ids no se reutilizaban nunca y los vectores
@@ -202,6 +260,7 @@ int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, Audio
         m_soundFailureReported[id]  = 0;
         m_soundRefs[id]             = 1;
         m_soundKeys[id]             = key;
+        m_soundHasLastPos[id]       = 0;
     }
     else
     {
@@ -211,6 +270,8 @@ int AudioManager::loadSound(const std::string& path, bool is3D, bool loop, Audio
         m_soundFailureReported.push_back(0);
         m_soundRefs.push_back(1);
         m_soundKeys.push_back(key);
+        m_soundLastPos.push_back(glm::vec3(0.0f));
+        m_soundHasLastPos.push_back(0);
         id = (int)m_sounds.size() - 1;
     }
     m_soundByKey[key] = id;
@@ -242,6 +303,7 @@ void AudioManager::unloadSound(int id)
     // slot que ya es de otro sonido.
     m_soundByKey.erase(m_soundKeys[id]);
     m_soundKeys[id].clear();
+    m_soundHasLastPos[id] = 0;
     m_freeSlots.push_back(id);
 #endif
 }
@@ -358,7 +420,8 @@ void AudioManager::setSound3DMinMaxDistance(int id, float minDistance, float max
 }
 
 void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, float pitch,
-                              AudioBus bus, float minDistance, float maxDistance)
+                              AudioBus bus, float minDistance, float maxDistance,
+                              float spread, float stereoPan, float dopplerLevel)
 {
 #ifdef DT_FMOD_ENABLED
     if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
@@ -398,7 +461,15 @@ void AudioManager::playSound(int id, const glm::vec3& worldPos, float volume, fl
         // A la VOZ, no al FMOD::Sound: el sonido se comparte entre clips y
         // escribirlas alli le cambiaria el radio a todos los demas.
         ch->set3DMinMaxDistance(minDistance, maxDistance);
+        // Ensanchado estereo y sensibilidad al doppler, tambien por voz.
+        ch->set3DSpread(spread);
+        ch->set3DDopplerLevel(dopplerLevel);
     }
+    // El paneo manual solo tiene sentido en 2D: en 3D lo decide la posicion, y
+    // escribirlo ahi pelearia con el paneo espacial de FMOD. Fuera del if, con
+    // su propia condicion, para que quede claro que NO es una propiedad 3D.
+    if (!(mode & FMOD_3D) && stereoPan != 0.0f)
+        ch->setPan(stereoPan);
 
     ch->setPaused(false);
 #else
@@ -446,7 +517,7 @@ void AudioManager::setSoundPaused(int id, bool paused)
 #endif
 }
 
-void AudioManager::setSoundPosition(int id, const glm::vec3& worldPos)
+void AudioManager::setSoundPosition(int id, const glm::vec3& worldPos, float dt)
 {
 #ifdef DT_FMOD_ENABLED
     if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
@@ -458,12 +529,17 @@ void AudioManager::setSoundPosition(int id, const glm::vec3& worldPos)
     if (!(mode & FMOD_3D)) return;
     FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]);
     if (!ch) return;
+    // La velocidad de la fuente sale de su posición del frame anterior; es la
+    // otra mitad del doppler (la del listener la lleva update()). safeVelocity
+    // descarta el primer frame y los saltos imposibles, que es lo que evita el
+    // chirrido de un teleport.
+    const glm::vec3 vel = safeVelocity(worldPos, m_soundLastPos[id],
+                                        m_soundHasLastPos[id] != 0, dt);
+    m_soundLastPos[id]    = worldPos;
+    m_soundHasLastPos[id] = 1;
+
     FMOD_VECTOR p = { worldPos.x, worldPos.y, worldPos.z };
-    // Velocidad a cero, igual que en playSound y que el listener: sin doppler.
-    // Derivarla de la posición del frame anterior es lo que haría falta, y es
-    // una feature aparte (un teleport daría un chirrido si se hiciera a la
-    // ligera).
-    FMOD_VECTOR v = { 0, 0, 0 };
+    FMOD_VECTOR v = { vel.x, vel.y, vel.z };
     ch->set3DAttributes(&p, &v);
 #else
     (void)id; (void)worldPos;
@@ -471,7 +547,8 @@ void AudioManager::setSoundPosition(int id, const glm::vec3& worldPos)
 }
 
 void AudioManager::playSoundOneShot(int id, const glm::vec3& worldPos, float volume, float pitch,
-                                     AudioBus bus, float minDistance, float maxDistance)
+                                     AudioBus bus, float minDistance, float maxDistance,
+                                     float spread, float stereoPan, float dopplerLevel)
 {
 #ifdef DT_FMOD_ENABLED
     if (!m_system || id < 0 || id >= (int)m_sounds.size() || !m_sounds[id]) return;
@@ -502,7 +579,15 @@ void AudioManager::playSoundOneShot(int id, const glm::vec3& worldPos, float vol
         // A la VOZ, no al FMOD::Sound: el sonido se comparte entre clips y
         // escribirlas alli le cambiaria el radio a todos los demas.
         ch->set3DMinMaxDistance(minDistance, maxDistance);
+        // Ensanchado estereo y sensibilidad al doppler, tambien por voz.
+        ch->set3DSpread(spread);
+        ch->set3DDopplerLevel(dopplerLevel);
     }
+    // El paneo manual solo tiene sentido en 2D: en 3D lo decide la posicion, y
+    // escribirlo ahi pelearia con el paneo espacial de FMOD. Fuera del if, con
+    // su propia condicion, para que quede claro que NO es una propiedad 3D.
+    if (!(mode & FMOD_3D) && stereoPan != 0.0f)
+        ch->setPan(stereoPan);
     // Sin referencia guardada, esta voz tampoco la alcanza el seguimiento 3D
     // por frame (setSoundPosition): un one-shot suena donde se disparó. Para
     // clips cortos —que es su caso de uso— la diferencia no se oye.
@@ -523,6 +608,54 @@ void AudioManager::stopSound(int id)
     if (FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id])) ch->stop();
 #else
     (void)id;
+#endif
+}
+
+#ifdef DT_FMOD_ENABLED
+// Carga (o reutiliza) el sonido de una ruta y lo deja RETENIDO en la caché,
+// devolviendo su id. Lo comparten preloadClip y playClipAtPoint: tener un solo
+// sitio que cargue evita el doble loadSound que había aquí antes, con su
+// unloadSound de compensación detrás — dos llamadas que se anulaban y que solo
+// servían para que el refcount cuadrara.
+//
+// 3D y sin bucle: es el perfil de un one-shot posicional. El mismo fichero en
+// 2D es otro sonido, y lo carga el AudioClipComponent que lo pida.
+int AudioManager::acquirePinnedSound(const std::string& path)
+{
+    if (!m_system) return -1;
+    const int id = loadSound(path, /*is3D=*/true, /*loop=*/false, AudioLoadMode::Sample);
+    if (id < 0) return -1;
+    // insert devuelve false si ya estaba retenido: ese loadSound solo ha subido
+    // el refcount otra vez, y se deshace para que el pin siga contando UNA sola
+    // referencia. Sin esto el sonido seguiría vivo igual (el pin no se suelta
+    // nunca), pero el contador crecería sin techo y dejaría de describir la
+    // realidad para cualquiera que lo mire después.
+    if (!m_pinnedSounds.insert(id).second)
+        unloadSound(id);
+    return id;
+}
+#endif
+
+void AudioManager::preloadClip(const std::string& path)
+{
+#ifdef DT_FMOD_ENABLED
+    acquirePinnedSound(path);
+#else
+    (void)path;
+#endif
+}
+
+void AudioManager::playClipAtPoint(const std::string& path, const glm::vec3& worldPos,
+                                    float volume, float pitch, AudioBus bus,
+                                    float minDistance, float maxDistance)
+{
+#ifdef DT_FMOD_ENABLED
+    const int id = acquirePinnedSound(path);
+    if (id < 0) return;
+    playSoundOneShot(id, worldPos, volume, pitch, bus, minDistance, maxDistance);
+#else
+    (void)path; (void)worldPos; (void)volume; (void)pitch;
+    (void)bus; (void)minDistance; (void)maxDistance;
 #endif
 }
 

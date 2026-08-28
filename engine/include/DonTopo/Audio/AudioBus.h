@@ -74,6 +74,44 @@ inline bool audioLoadModeFromStr(const std::string& name, AudioLoadMode& out)
     return false;
 }
 
+// Forma de la curva de atenuación entre minDistance y maxDistance. Hasta ahora
+// solo se podía elegir el RANGO, no la curva: FMOD aplicaba siempre la suya de
+// fábrica (inversa). Va horneada en el FMOD_MODE del sonido, como is3D y loop,
+// así que cambiarla recarga el clip.
+// Las tres son constantes que FMOD Core tiene de verdad (FMOD_3D_*ROLLOFF); no
+// hay un rolloff "sin atenuación" — para eso se sube maxDistance, no se elige
+// una curva. Unity llama "Logarithmic" a la inversa.
+enum class AudioRolloff {
+    // La de fábrica de FMOD: el volumen cae rápido cerca de la fuente y se
+    // estira a lo lejos. La que mejor imita el mundo real.
+    Inverse,
+    // Cae a ritmo constante y llega a CERO justo en maxDistance. La que se
+    // quiere cuando "fuera del radio no se oye" tiene que cumplirse literalmente.
+    Linear,
+    // Lineal al cuadrado: parecida a la inversa en el tramo cercano, pero
+    // también silencia del todo en maxDistance.
+    LinearSquare
+};
+
+inline const char* audioRolloffToStr(AudioRolloff r)
+{
+    switch (r)
+    {
+        case AudioRolloff::Linear:       return "linear";
+        case AudioRolloff::LinearSquare: return "linearSquare";
+        case AudioRolloff::Inverse:
+        default:                         return "inverse";
+    }
+}
+
+inline bool audioRolloffFromStr(const std::string& name, AudioRolloff& out)
+{
+    if (name == "inverse")      { out = AudioRolloff::Inverse;      return true; }
+    if (name == "linear")       { out = AudioRolloff::Linear;       return true; }
+    if (name == "linearSquare") { out = AudioRolloff::LinearSquare; return true; }
+    return false;
+}
+
 // ¿Es una extensión de audio de las que acepta el motor? Vive aquí, y no en el
 // panel de Properties, porque hay CUATRO rutas por las que entra un audio (el
 // diálogo del inspector, su drop-zone, AddComponent desde Lua y la carga de

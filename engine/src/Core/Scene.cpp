@@ -1123,6 +1123,10 @@ namespace
                                 // AudioBus no puede cambiar el bus guardado.
                                 {"bus", audioBusToStr(clip->getBus())},
                                 {"loadMode", audioLoadModeToStr(clip->getLoadMode())},
+                                {"rolloff", audioRolloffToStr(clip->getRolloff())},
+                                {"spread", clip->getSpread()},
+                                {"stereoPan", clip->getStereoPan()},
+                                {"dopplerLevel", clip->getDopplerLevel()},
                                 {"loop", clip->getLoop()},
                                 {"is3D", clip->getIs3D()},
                                 {"playOnAwake", clip->getPlayOnAwake()},
@@ -2520,6 +2524,18 @@ namespace
                     warnings->push_back(ctx + ".loadMode: valor desconocido '" + loadModeName +
                                          "', se usa 'sample'");
                 clip->setLoadMode(loadMode);
+                // Curva de atenuacion: mismo criterio que bus y loadMode.
+                const std::string rolloffName = readString(c, "rolloff", "inverse", warnings, ctx);
+                DonTopo::AudioRolloff rolloff = DonTopo::AudioRolloff::Inverse;
+                if (!DonTopo::audioRolloffFromStr(rolloffName, rolloff) && warnings)
+                    warnings->push_back(ctx + ".rolloff: valor desconocido '" + rolloffName +
+                                         "', se usa 'inverse'");
+                clip->setRolloff(rolloff);
+                // Las tres de la voz. Defaults neutros: una escena anterior a
+                // esta feature suena exactamente igual que antes.
+                clip->setSpread(readFloat(c, "spread", 0.0f, warnings, ctx));
+                clip->setStereoPan(readFloat(c, "stereoPan", 0.0f, warnings, ctx));
+                clip->setDopplerLevel(readFloat(c, "dopplerLevel", 0.0f, warnings, ctx));
                 // Mismo criterio. readFloat además tolera un "null" (NaN
                 // serializado, ver el bloque de comentarios junto a jsonToMat4):
                 // antes, ese null hacía fallar fromJson entero.
@@ -2952,7 +2968,7 @@ namespace DonTopo
         return node;
     }
 
-    void Scene::update(float /*dt*/, PhysicsManager& /*physics*/)
+    void Scene::update(float dt, PhysicsManager& /*physics*/)
     {
         m_root.traverse([](GameObject* go) {
             auto col = go->anyCollider();
@@ -3024,14 +3040,14 @@ namespace DonTopo
 
         // Después de que los transforms estén al día: si se hiciera antes, cada
         // sonido iría un frame por detrás de su objeto.
-        updateAudioSpatial();
+        updateAudioSpatial(dt);
     }
 
-    void Scene::updateAudioSpatial()
+    void Scene::updateAudioSpatial(float dt)
     {
-        m_root.traverse([](GameObject* go) {
+        m_root.traverse([dt](GameObject* go) {
             if (go->hasAudioClip())
-                go->getAudioClip()->updateSpatial(glm::vec3(go->worldTransform[3]));
+                go->getAudioClip()->updateSpatial(glm::vec3(go->worldTransform[3]), dt);
         });
     }
 

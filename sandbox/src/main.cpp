@@ -456,7 +456,7 @@ int main()
                 // Fuera del gate de Play: ver el comentario del camino de Vulkan
                 // (es la única llamada a System::update() y a
                 // set3DListenerAttributes).
-                d3dAudio.update(listenerPos, listenerFwd, listenerUp);
+                d3dAudio.update(listenerPos, listenerFwd, listenerUp, d3dDelta);
 
                 if (editor.isPlaying())
                 {
@@ -474,6 +474,8 @@ int main()
                     d3dScene.getRoot().updateWorldTransforms();
                     // Igual que en el camino de Vulkan: la preview del
                     // inspector sigue al objeto mientras se arrastra.
+                    // Sin dt: en Edit Mode no hay doppler (el objeto lo mueve
+                    // el gizmo, no una velocidad fisica).
                     d3dScene.updateAudioSpatial();
                 }
 
@@ -997,7 +999,9 @@ int main()
             // última sesión de Play —o en el (0,0,0) mirando a -Z de fábrica de
             // FMOD si nunca se entró— y la preview de un clip 3D sonaba atenuada
             // o muda sin motivo aparente.
-            audio.update(listenerPos, listenerFwd, listenerUp);
+            // dt para el doppler: la velocidad del listener sale de comparar
+            // con su posicion del frame anterior.
+            audio.update(listenerPos, listenerFwd, listenerUp, dt);
 
             if (renderer.isPlaying())
             {
@@ -1019,6 +1023,7 @@ int main()
                 // Pero el seguimiento del audio 3D sí hace falta aquí: la
                 // preview del inspector puede estar sonando mientras el usuario
                 // arrastra el objeto con el gizmo. En Play lo hace scene.update.
+                // Sin dt a proposito: arrastrar con el gizmo no es velocidad.
                 scene.updateAudioSpatial();
             }
 

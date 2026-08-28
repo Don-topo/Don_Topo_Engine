@@ -897,6 +897,10 @@ per GameObject. `AddComponent("AudioClip", path)` adds one (2D and non-looping; 
 | `SetBus(name)` / `GetBus()` | Output bus: `"master"`, `"music"` or `"sfx"` (default). Only affects the **next** playback — the group is picked when the voice starts. An unknown name warns and changes nothing. |
 | `SetLoadMode(name)` | `"sample"` (decompressed in RAM, several voices at once) or `"stream"` (read from disk, tiny memory, but **one voice at a time**). Use stream for music, sample for effects. **Reloads the sound** and cuts whatever was playing. |
 | `GetLoadMode()` | `"sample"` or `"stream"`. |
+| `SetRolloff(name)` / `GetRolloff()` | Shape of the falloff between min and max distance: `"inverse"` (default, most realistic), `"linear"` (silent exactly at max distance) or `"linearSquare"`. **Reloads the sound.** |
+| `SetSpread(deg)` / `GetSpread()` | Stereo spread of a 3D source, `[0, 360]`. 0 keeps it a point. |
+| `SetStereoPan(p)` / `GetStereoPan()` | Manual pan `[-1, 1]`, **2D clips only** — in 3D the position decides it. |
+| `SetDopplerLevel(l)` / `GetDopplerLevel()` | How much relative velocity bends the pitch, `[0, 5]`. **0 by default**, and it only acts in Play: Edit Mode computes no velocities. |
 | `GetPath()` | The asset path the clip was loaded from. |
 
 Global mixing lives in the `Audio` table, and is what a options menu would drive:
@@ -905,6 +909,8 @@ Global mixing lives in the `Audio` table, and is what a options menu would drive
 | --- | --- |
 | `Audio.SetBusVolume(name, v)` | `name` is `"master"`, `"music"` or `"sfx"`; `v` is clamped to `[0, 1]`. Master scales the other two. |
 | `Audio.GetBusVolume(name)` | Returns 1.0 when there is no audio device, so a muted machine does not read as "volume at zero". |
+| `Audio.PlayClipAtPoint(path, x, y, z [, volume, pitch, bus])` | A 3D one-shot at a world position, with **no GameObject involved** — for an impact or an explosion whose emitter is destroyed in that same frame. The sound stays cached after first use. |
+| `Audio.Preload(path)` | Loads and keeps a clip without playing it. Worth calling in `Start()`: FMOD loads lazily, so the **first** `PlayClipAtPoint` of a new path is very likely inaudible. Idempotent. |
 
 The three volumes are stored in `project.json` and restored when the project opens; the
 editor exposes them under **View → Master / Music / SFX Volume**.

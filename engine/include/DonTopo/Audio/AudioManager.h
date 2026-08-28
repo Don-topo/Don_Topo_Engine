@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <memory>
 #include <glm/glm.hpp>
@@ -27,9 +28,16 @@ public:
     // de cualquier otro fallo; los tests lo usan para saltarse de verdad los
     // casos que necesitan FMOD.
     bool available() const;
+    // dt en segundos. Se usa SOLO para derivar la velocidad del listener, que es
+    // lo que da el efecto doppler; con dt <= 0 la velocidad queda a cero y el
+    // doppler no actúa (que es como se comportaba esto antes de tenerlo). Un
+    // salto grande de posición —un teleport, o cargar otra escena— produciría
+    // una velocidad absurda y un chirrido: por eso se descarta lo que supere
+    // kMaxListenerSpeed en vez de creérselo.
     void update(const glm::vec3& listenerPos,
                 const glm::vec3& listenerForward,
-                const glm::vec3& listenerUp);
+                const glm::vec3& listenerUp,
+                float dt = 0.0f);
     void shutdown();
 
     // Estado de carga de un sonido. Con FMOD_NONBLOCKING, createSound retorna
@@ -57,7 +65,8 @@ public:
     // reproduce nada — no es un error, solo aún no está listo. Que devuelva un
     // id >= 0 NO significa que el fichero sea válido: eso lo dice getSoundState.
     int  loadSound(const std::string& path, bool is3D = true, bool loop = false,
-                   AudioLoadMode loadMode = AudioLoadMode::Sample);
+                   AudioLoadMode loadMode = AudioLoadMode::Sample,
+                   AudioRolloff rolloff = AudioRolloff::Inverse);
     void unloadSound(int soundId);
 
     // Sonidos FMOD vivos ahora mismo (slots ocupados, no ids repartidos).
@@ -80,14 +89,28 @@ public:
     // feature entera sin efecto (sabotaje verificado). false si el id no existe.
     bool isSoundStreaming(int soundId) const;
 
+    // Curva de atenuacion REAL del sonido, leida de su FMOD_MODE. Existe por lo
+    // mismo que isSoundStreaming: sin ella, la linea que aplica el flag de
+    // rolloff no tiene ninguna cobertura — quitarla dejaba el enum viajando por
+    // la escena, la UI y Lua sin que la curva cambiara nunca (sabotaje
+    // verificado). Ojo: como el streaming, el modo no es fiable hasta que la
+    // carga termina (getSoundState == Ready).
+    AudioRolloff getSoundRolloff(int soundId) const;
+
     // minDistance/maxDistance se aplican a la voz recien arrancada. Van aqui y
     // no en el FMOD::Sound porque el sonido se COMPARTE entre clips (cache por
     // path+modo): escribirlas en el sonido le cambiaria el radio de atenuacion
     // a todos los objetos que usen el mismo fichero.
+    // spread: ensanchado estereo de la fuente 3D en grados [0, 360]. 0 = un
+    // punto (lo de siempre); 360 = envolvente. pan: paneo manual [-1, 1], solo
+    // con efecto en clips 2D — en 3D lo decide la posicion. doppler: cuanto
+    // afecta la velocidad relativa al tono, [0, 5]; 0 lo apaga.
     void playSound(int soundId, const glm::vec3& worldPos = {},
                    float volume = 1.0f, float pitch = 1.0f,
                    AudioBus bus = AudioBus::Sfx,
-                   float minDistance = 1.0f, float maxDistance = 100.0f);
+                   float minDistance = 1.0f, float maxDistance = 100.0f,
+                   float spread = 0.0f, float stereoPan = 0.0f,
+                   float dopplerLevel = 0.0f);
     void stopSound(int soundId);
 
     // Dispara una voz SUELTA del sonido: no se guarda en m_sfxChannels, así que
@@ -103,7 +126,30 @@ public:
     void playSoundOneShot(int soundId, const glm::vec3& worldPos = {},
                           float volume = 1.0f, float pitch = 1.0f,
                           AudioBus bus = AudioBus::Sfx,
-                          float minDistance = 1.0f, float maxDistance = 100.0f);
+                          float minDistance = 1.0f, float maxDistance = 100.0f,
+                          float spread = 0.0f, float stereoPan = 0.0f,
+                          float dopplerLevel = 0.0f);
+
+    // Dispara path en una posición del mundo, SIN GameObject de por medio: el
+    // PlayClipAtPoint de Unity. Es one-shot (se solapa con lo que suene) y 3D.
+    //
+    // El sonido queda RETENIDO en la caché para siempre — igual que en Unity,
+    // donde el AudioClip es un asset cargado. Sin eso habría que descargarlo al
+    // acabar la voz, y esa voz no se guarda en ningún sitio precisamente para
+    // que se solape. Retener no fuga: es un FMOD::Sound por ruta distinta, y la
+    // segunda llamada con la misma ruta no vuelve a contar.
+    //
+    // OJO con el primer disparo: FMOD carga en diferido (FMOD_NONBLOCKING), así
+    // que la primera llamada de una ruta nueva casi seguro no se oye — el
+    // sonido aún no está listo. Para eso está preloadClip.
+    void playClipAtPoint(const std::string& path, const glm::vec3& worldPos,
+                         float volume = 1.0f, float pitch = 1.0f,
+                         AudioBus bus = AudioBus::Sfx,
+                         float minDistance = 1.0f, float maxDistance = 100.0f);
+
+    // Carga y retiene el sonido sin reproducirlo, para que el primer
+    // playClipAtPoint de esa ruta llegue a oírse. Idempotente.
+    void preloadClip(const std::string& path);
 
     // Empujan el valor al canal de la última reproducción de soundId, si
     // sigue siendo suyo. FMOD recicla los Channel*: un canal que ya terminó
@@ -129,7 +175,9 @@ public:
     // sonido clavado donde estaba al pulsar Play (ni atenuación ni paneo
     // cambiaban). No-op si el sonido no es 3D o si no hay voz viva, con la
     // misma comprobación de liveChannel que los setters de volumen/pitch.
-    void setSoundPosition(int soundId, const glm::vec3& worldPos);
+    // dt sirve para derivar la velocidad de la fuente (doppler), igual que en
+    // update() para el listener: con dt <= 0 la velocidad va a cero.
+    void setSoundPosition(int soundId, const glm::vec3& worldPos, float dt = 0.0f);
 
     // ¿Hay una voz viva de este sonido? La lógica ya existía dentro del .cpp
     // (liveChannel, el guard contra el reciclado de voces de FMOD) pero no
@@ -170,7 +218,11 @@ private:
     // path aquí haría que marcar "Is 3D?" en un clip cambiara en silencio el de
     // otro GameObject.
     static std::string soundKey(const std::string& path, bool is3D, bool loop,
-                                 AudioLoadMode loadMode);
+                                 AudioLoadMode loadMode, AudioRolloff rolloff);
+
+    // Carga y retiene el sonido de una ruta, devolviendo su id. Punto único de
+    // carga de playClipAtPoint y preloadClip.
+    int acquirePinnedSound(const std::string& path);
 
     void* m_system   = nullptr;  // FMOD::System*
     void* m_sfxGroup = nullptr;  // FMOD::ChannelGroup*
@@ -194,6 +246,18 @@ private:
     // Play->Stop recrea la escena entera y pedía ids nuevos.
     std::vector<int>         m_freeSlots;
     std::unordered_map<std::string, int> m_soundByKey;
+    // Sonidos retenidos por playClipAtPoint/preloadClip. Sin este conjunto,
+    // cada disparo subiría otra vez el refcount del mismo sonido y el contador
+    // crecería sin techo: el sonido no se liberaría jamás ni aunque se llamara
+    // a unloadSound tantas veces como haga falta.
+    std::unordered_set<int>  m_pinnedSounds;
+    // Ultima posicion conocida del listener y de cada fuente, para derivar la
+    // velocidad que necesita el doppler. m_hasLastListenerPos evita que el
+    // primer frame invente una velocidad enorme desde el origen.
+    glm::vec3                m_lastListenerPos{0.0f};
+    bool                     m_hasLastListenerPos = false;
+    std::vector<glm::vec3>   m_soundLastPos;   // paralelo a m_sounds
+    std::vector<char>        m_soundHasLastPos;
 #endif
 };
 

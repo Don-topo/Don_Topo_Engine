@@ -44,7 +44,7 @@ public:
     // 3D siga al GameObject en vez de quedarse donde estaba al llamar a play().
     // Pensado para llamarse una vez por frame (lo hace Scene::update); no-op
     // barato si el clip es 2D o si no hay nada sonando.
-    void updateSpatial(const glm::vec3& worldPos);
+    void updateSpatial(const glm::vec3& worldPos, float dt = 0.0f);
 
     // No-op si el valor no cambia (evita recargas del sonido en cada frame).
     void setLoop(bool loop);
@@ -81,6 +81,30 @@ public:
     AudioLoadMode getLoadMode() const { return m_loadMode; }
     void setLoadMode(AudioLoadMode mode);
 
+    // Curva de atenuacion. Tambien va en el FMOD_MODE: recarga el clip.
+    AudioRolloff getRolloff() const { return m_rolloff; }
+    void setRolloff(AudioRolloff rolloff);
+
+    // Las tres de abajo son propiedades de la VOZ, no del sonido: no recargan
+    // nada, pero se aplican al arrancar la reproduccion, asi que cambiarlas con
+    // algo ya sonando no se nota hasta el siguiente Play.
+    //
+    // spread: ensanchado estereo de una fuente 3D, en grados [0, 360]. 0 la
+    // deja como un punto (lo de siempre).
+    float getSpread() const { return m_spread; }
+    void setSpread(float degrees);
+
+    // stereoPan: paneo manual [-1, 1] (izquierda a derecha). Solo tiene efecto
+    // en clips 2D — en 3D el paneo lo decide la posicion.
+    float getStereoPan() const { return m_stereoPan; }
+    void setStereoPan(float pan);
+
+    // dopplerLevel: cuanto altera el tono la velocidad relativa, [0, 5]. 0 lo
+    // apaga, que es el valor por defecto — el doppler sorprende si aparece sin
+    // que nadie lo haya pedido.
+    float getDopplerLevel() const { return m_dopplerLevel; }
+    void setDopplerLevel(float level);
+
     bool getLoop() const  { return m_loop; }
     bool getIs3D() const  { return m_is3D; }
     const std::string& getPath() const { return m_path; }
@@ -116,6 +140,13 @@ private:
     // Sample por defecto: es como se cargaba TODO antes de que se pudiera
     // elegir, asi que una escena vieja se comporta igual.
     AudioLoadMode m_loadMode = AudioLoadMode::Sample;
+    // Inverse es la curva de fabrica de FMOD: una escena vieja atenua igual.
+    AudioRolloff  m_rolloff = AudioRolloff::Inverse;
+    float         m_spread = 0.0f;
+    float         m_stereoPan = 0.0f;
+    // Cero, no uno como Unity: encender el doppler por defecto cambiaria el
+    // tono de todo lo que ya suena en las escenas existentes.
+    float         m_dopplerLevel = 0.0f;
     float         m_volume = 1.0f;
     float         m_pitch  = 1.0f;
     // Defaults a la escala de este repo (primitivas de 50 unidades), no a los

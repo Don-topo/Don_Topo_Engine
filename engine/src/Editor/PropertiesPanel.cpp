@@ -258,7 +258,8 @@ static AudioClipState audioClipStateOf(const AudioClipComponent& clip)
     return AudioClipState{ clip.getVolume(), clip.getPitch(),
                             clip.getMinDistance(), clip.getMaxDistance(),
                             clip.getLoop(), clip.getIs3D(), clip.getPlayOnAwake(),
-                            clip.getBus(), clip.getLoadMode() };
+                            clip.getBus(), clip.getLoadMode(), clip.getRolloff(),
+                            clip.getSpread(), clip.getStereoPan(), clip.getDopplerLevel() };
 }
 
 // Resuelve el GameObject por id en cada aplicación, nunca captura el puntero:
@@ -277,6 +278,10 @@ static void applyAudioClipState(Scene& scene, uint64_t ownerId, const AudioClipS
     clip->setBus(s.bus);
     // Recarga el sonido si cambia, como loop/is3D.
     clip->setLoadMode(s.loadMode);
+    clip->setRolloff(s.rolloff);
+    clip->setSpread(s.spread);
+    clip->setStereoPan(s.stereoPan);
+    clip->setDopplerLevel(s.dopplerLevel);
     clip->setVolume(s.volume);
     clip->setPitch(s.pitch);
     // Max antes que min: los dos setters mantienen min <= max entre ellos.
@@ -7817,6 +7822,27 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                                   "Sample para efectos.\nCambiarlo recarga el sonido y corta lo "
                                   "que este sonando.");
 
+            // Curva de atenuacion. Como Load Mode, va en el FMOD_MODE y recarga.
+            // Solo se dibuja en 3D: en 2D no hay atenuacion por distancia que
+            // moldear, igual que las distancias min/max de mas abajo.
+            if (is3D)
+            {
+                const char* kRolloffNames[] = { "Inverse (realista)", "Linear",
+                                                 "Linear Square" };
+                int rolloffIdx = static_cast<int>(clip->getRolloff());
+                if (ImGui::Combo("Rolloff", &rolloffIdx, kRolloffNames, IM_ARRAYSIZE(kRolloffNames)))
+                {
+                    clip->setRolloff(static_cast<AudioRolloff>(rolloffIdx));
+                    toggled = true;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Forma de la caida entre Min y Max distance.\nInverse: cae "
+                                      "rapido de cerca y se estira a lo lejos (la de fabrica, la "
+                                      "mas realista).\nLinear: cae a ritmo constante y calla del "
+                                      "todo en Max distance.\nLinear Square: intermedia, tambien "
+                                      "calla en Max.\nCambiarla recarga el sonido.");
+            }
+
             if (toggled && ctx.scene && ctx.undo)
             {
                 const uint64_t ownerId = ctx.selected->id;
@@ -7843,6 +7869,9 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             const float pitchBefore  = clip->getPitch();
             const float minDistBefore = clip->getMinDistance();
             const float maxDistBefore = clip->getMaxDistance();
+            const float spreadBefore  = clip->getSpread();
+            const float panBefore     = clip->getStereoPan();
+            const float dopplerBefore = clip->getDopplerLevel();
             float volume  = volumeBefore;
             float pitch   = pitchBefore;
             float minDist = minDistBefore;
@@ -7881,6 +7910,42 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 // El clamp de max >= min lo hace el propio setter del
                 // componente (no la UI), así que al soltar ya está aplicado.
                 committed |= ImGui::IsItemDeactivatedAfterEdit();
+
+                // Spread y doppler son propiedades de la VOZ: no recargan nada,
+                // pero se leen al arrancar la reproducción, así que moverlos con
+                // algo ya sonando no se nota hasta el siguiente Play. Van por el
+                // mismo camino de undo que los otros sliders.
+                float spread = spreadBefore;
+                if (ImGui::SliderFloat("Spread", &spread, 0.0f, 360.0f, "%.0f deg"))
+                    clip->setSpread(spread);
+                activated |= ImGui::IsItemActivated();
+                committed |= ImGui::IsItemDeactivatedAfterEdit();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Ensancha la fuente 3D. 0 la deja como un punto; valores "
+                                      "altos la vuelven envolvente al acercarse.");
+
+                float doppler = dopplerBefore;
+                if (ImGui::SliderFloat("Doppler", &doppler, 0.0f, 5.0f, "%.2f"))
+                    clip->setDopplerLevel(doppler);
+                activated |= ImGui::IsItemActivated();
+                committed |= ImGui::IsItemDeactivatedAfterEdit();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Cuanto altera el tono la velocidad relativa entre la "
+                                      "fuente y el listener.\n0 lo apaga (por defecto). Solo "
+                                      "actua en Play: en Edit Mode no se calculan velocidades.");
+            }
+            else
+            {
+                // Paneo manual: SOLO en 2D. En 3D lo decide la posicion de la
+                // fuente, y ofrecerlo aqui haria creer que se puede forzar.
+                float pan = panBefore;
+                if (ImGui::SliderFloat("Stereo pan", &pan, -1.0f, 1.0f, "%.2f"))
+                    clip->setStereoPan(pan);
+                activated |= ImGui::IsItemActivated();
+                committed |= ImGui::IsItemDeactivatedAfterEdit();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("-1 todo a la izquierda, 0 centrado, 1 a la derecha. "
+                                      "Solo para clips 2D.");
             }
 
             // Sin gate por m_audioDragActive: solo un widget de ImGui puede
@@ -7891,12 +7956,20 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             // la siguiente edición —incluso en otro GameObject— reutilizaría.
             if (activated)
             {
-                m_audioDragActive            = true;
-                m_audioDragBeforeVolume      = volumeBefore;
-                m_audioDragBeforePitch       = pitchBefore;
-                m_audioDragBeforeMinDistance = minDistBefore;
-                m_audioDragBeforeMaxDistance = maxDistBefore;
-                m_audioDragOwnerId           = clipOwnerId;
+                m_audioDragActive  = true;
+                m_audioDragOwnerId = clipOwnerId;
+                // Estado actual del clip, pero con los CONTINUOS sustituidos por
+                // las lecturas hoisted de antes de dibujar: un SliderFloat ya ha
+                // saltado al valor bajo el cursor en el frame en que se activa,
+                // así que releerlos del componente daría el valor nuevo.
+                m_audioDragBefore              = audioClipStateOf(*clip);
+                m_audioDragBefore.volume       = volumeBefore;
+                m_audioDragBefore.pitch        = pitchBefore;
+                m_audioDragBefore.minDistance  = minDistBefore;
+                m_audioDragBefore.maxDistance  = maxDistBefore;
+                m_audioDragBefore.spread       = spreadBefore;
+                m_audioDragBefore.stereoPan    = panBefore;
+                m_audioDragBefore.dopplerLevel = dopplerBefore;
             }
 
             // Guarda de propietario: el ActiveId de un slider de ImGui se
@@ -7910,21 +7983,16 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             if (committed && m_audioDragActive && m_audioDragOwnerId == clipOwnerId)
             {
                 m_audioDragActive = false;
-                // Los tres bools del snapshot se toman del estado ACTUAL en las
-                // dos puntas: un arrastre de slider no los cambia, y así el
-                // undo del arrastre no revierte de rebote un checkbox que se
-                // hubiera tocado a mitad de camino.
-                AudioClipState before = audioClipStateOf(*clip);
-                before.volume      = m_audioDragBeforeVolume;
-                before.pitch       = m_audioDragBeforePitch;
-                before.minDistance = m_audioDragBeforeMinDistance;
-                before.maxDistance = m_audioDragBeforeMaxDistance;
-                const AudioClipState after = audioClipStateOf(*clip);
+                const AudioClipState before = m_audioDragBefore;
+                const AudioClipState after  = audioClipStateOf(*clip);
 
                 if (!nearlyEqualF(before.volume, after.volume) ||
                     !nearlyEqualF(before.pitch,  after.pitch)  ||
                     !nearlyEqualF(before.minDistance, after.minDistance) ||
-                    !nearlyEqualF(before.maxDistance, after.maxDistance))
+                    !nearlyEqualF(before.maxDistance, after.maxDistance) ||
+                    !nearlyEqualF(before.spread, after.spread) ||
+                    !nearlyEqualF(before.stereoPan, after.stereoPan) ||
+                    !nearlyEqualF(before.dopplerLevel, after.dopplerLevel))
                 {
                     if (ctx.scene)
                         ctx.undo->push(std::make_unique<PropertyCommand<AudioClipState>>(

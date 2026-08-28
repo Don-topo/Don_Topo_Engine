@@ -31,7 +31,8 @@ void AudioClipComponent::play(const glm::vec3& worldPos)
     // que usen el mismo fichero.
     if (m_audio)
         m_audio->playSound(m_soundId, worldPos, m_volume, m_pitch, m_bus,
-                           m_minDistance, m_maxDistance);
+                           m_minDistance, m_maxDistance,
+                           m_spread, m_stereoPan, m_dopplerLevel);
 }
 
 void AudioClipComponent::stop()
@@ -47,7 +48,8 @@ void AudioClipComponent::playOneShot(const glm::vec3& worldPos)
     // unidades que a 5.
     if (m_audio)
         m_audio->playSoundOneShot(m_soundId, worldPos, m_volume, m_pitch, m_bus,
-                                  m_minDistance, m_maxDistance);
+                                  m_minDistance, m_maxDistance,
+                                  m_spread, m_stereoPan, m_dopplerLevel);
 }
 
 bool AudioClipComponent::isPlaying() const
@@ -70,13 +72,13 @@ void AudioClipComponent::resume()
     if (m_audio) m_audio->setSoundPaused(m_soundId, false);
 }
 
-void AudioClipComponent::updateSpatial(const glm::vec3& worldPos)
+void AudioClipComponent::updateSpatial(const glm::vec3& worldPos, float dt)
 {
     // El gate por m_is3D es local (un bool), así que un clip 2D ni siquiera
     // entra en AudioManager: esto se llama por frame y por cada clip de la
     // escena, y la mayoría son 2D.
     if (!m_audio || !m_is3D) return;
-    m_audio->setSoundPosition(m_soundId, worldPos);
+    m_audio->setSoundPosition(m_soundId, worldPos, dt);
 }
 
 bool AudioClipComponent::hasLoadError() const
@@ -96,6 +98,33 @@ void AudioClipComponent::setLoadMode(AudioLoadMode mode)
     if (mode == m_loadMode) return;
     m_loadMode = mode;
     reload();
+}
+
+void AudioClipComponent::setRolloff(AudioRolloff rolloff)
+{
+    if (rolloff == m_rolloff) return;
+    m_rolloff = rolloff;
+    reload();
+}
+
+// Los tres siguientes NO recargan: son de la voz. Mismo guard de no-finitos que
+// volume/pitch — un NaN aqui acabaria en el .scene como "null".
+void AudioClipComponent::setSpread(float degrees)
+{
+    if (!std::isfinite(degrees)) return;
+    m_spread = std::clamp(degrees, 0.0f, 360.0f);
+}
+
+void AudioClipComponent::setStereoPan(float pan)
+{
+    if (!std::isfinite(pan)) return;
+    m_stereoPan = std::clamp(pan, -1.0f, 1.0f);
+}
+
+void AudioClipComponent::setDopplerLevel(float level)
+{
+    if (!std::isfinite(level)) return;
+    m_dopplerLevel = std::clamp(level, 0.0f, 5.0f);
 }
 
 void AudioClipComponent::setIs3D(bool is3D)
@@ -166,7 +195,7 @@ void AudioClipComponent::reload()
 {
     if (!m_audio) return;
     m_audio->unloadSound(m_soundId);
-    m_soundId = m_audio->loadSound(m_path, m_is3D, m_loop, m_loadMode);
+    m_soundId = m_audio->loadSound(m_path, m_is3D, m_loop, m_loadMode, m_rolloff);
     // El sonido nuevo arranca con el min/max por defecto de FMOD: hay que
     // reescribirle el del componente (importa al pasar de 2D a 3D).
     applyDistances();

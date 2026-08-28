@@ -649,7 +649,7 @@ int main(int argc, char** argv)
                     listenerUp  = glm::normalize(lisUpAxis);
                 }
             }
-            audio.update(listenerPos, listenerFwd, listenerUp);
+            audio.update(listenerPos, listenerFwd, listenerUp, dt);
             // Fallos de carga que FMOD ha detectado desde el frame anterior.
             // Con FMOD_NONBLOCKING el error no existe cuando createSound
             // retorna, así que sin este pump un asset que no viajó en el bundle
