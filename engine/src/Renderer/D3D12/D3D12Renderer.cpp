@@ -1036,6 +1036,32 @@ struct D3D12Renderer::Impl {
     // Cuál de las dos historias se escribe este frame. La otra es la que se lee.
     UINT      taaHistoryIndex = 0;
     bool      taaHistoryValid = false;
+    // ─── Estreno de render targets ───────────────────────────────────────────
+    // D3D12MA reserva con D3D12_HEAP_FLAG_CREATE_NOT_ZEROED, y el primer uso de
+    // un render target salido de un heap así exige un Discard/Clear/Copy ANTES
+    // del draw —aunque el draw lo cubra entero—. Sin eso, la capa de depuración
+    // suelta un id=1422 por recurso en el arranque y en CADA recreación por
+    // resize, y esos errores entierran los de verdad en d3d12_diag.log.
+    //
+    // Uno por recurso porque cada uno se estrena en un momento distinto: el
+    // historial del TAA hace ping-pong y estrena el 0 en un frame y el 1 en el
+    // siguiente. ldrAllocation se declara más abajo, con el resto del post.
+    std::array<bool, 2> taaHistoryInicializada{};
+    bool                viewportInicializado = false;
+    bool                ldrInicializado      = false;
+
+    // Estrena `recurso` si no lo estaba. Hay que llamarlo con el recurso YA en
+    // RENDER_TARGET: es lo que DiscardResource exige. Discard y no Clear porque
+    // el draw que viene detrás escribe todos los píxeles, así que no hace falta
+    // pagar el relleno; lo único que hace falta es dejar de mentirle a la API
+    // sobre si el contenido importa.
+    void estrenarRenderTarget(ID3D12Resource* recurso, bool& estrenado)
+    {
+        if (estrenado || !recurso)
+            return;
+        commandList->DiscardResource(recurso, nullptr);
+        estrenado = true;
+    }
     uint32_t  taaJitterIndex  = 0;
     glm::mat4 taaCurrViewProj{1.0f};
     glm::mat4 taaPrevViewProj{1.0f};
@@ -3359,8 +3385,15 @@ void D3D12Renderer::Impl::releaseHdrTargets()
         if (allocation)
             allocation->Release();
     }
-    taaHistoryAllocations = {};
-    taaHistoryValid       = false;
+    taaHistoryAllocations  = {};
+    taaHistoryValid        = false;
+    // Los recursos nuevos vuelven a salir de un heap sin poner a cero, así que
+    // el estreno hay que repetirlo. Sin esto el arranque deja de avisar pero
+    // cada resize sigue estrenando sin estrenar, que es de donde salían la
+    // mayoría de los id=1422.
+    taaHistoryInicializada = {};
+    viewportInicializado   = false;
+    ldrInicializado        = false;
 
     for (auto** allocation : {&hdrMsAllocation, &depthMsAllocation}) {
         if (*allocation) {
@@ -4756,6 +4789,11 @@ void D3D12Renderer::Impl::recordTaa(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv)
 
     transition(taaHistoryAllocations[writeIndex]->GetResource(),
                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+    // Después de la transición, que es donde DiscardResource lo quiere.
+    estrenarRenderTarget(taaHistoryAllocations[writeIndex]->GetResource(),
+                         taaHistoryInicializada[writeIndex]);
+
     transition(readableDepth(), readableDepthState(),
                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
@@ -7046,6 +7084,11 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     D3D12_CPU_DESCRIPTOR_HANDLE ldrRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
     ldrRtv.ptr += static_cast<SIZE_T>(kFrameCount + 1) * rtvSize;
 
+    // Se crea ya en RENDER_TARGET (ver createHdrTargets) y sigue en ese estado
+    // hasta el transition de después de componer, así que aquí se puede
+    // estrenar tal cual.
+    estrenarRenderTarget(ldrAllocation->GetResource(), ldrInicializado);
+
     commandList->OMSetRenderTargets(1, &ldrRtv, FALSE, nullptr);
     commandList->RSSetViewports(1, &viewport);
     commandList->RSSetScissorRects(1, &scissor);
@@ -8470,6 +8513,10 @@ void D3D12Renderer::drawFrame()
         toTarget.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
         toTarget.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         d.commandList->ResourceBarrier(1, &toTarget);
+
+        // Ya en RENDER_TARGET: el pase final de AA lo escribe entero más
+        // abajo, pero el primero de todos necesita el estreno.
+        d.estrenarRenderTarget(d.viewportAllocation->GetResource(), d.viewportInicializado);
     }
 
     // La escena NO se dibuja en el backbuffer: va al target HDR, que es el
