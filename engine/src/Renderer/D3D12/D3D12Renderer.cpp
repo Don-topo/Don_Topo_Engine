@@ -9113,15 +9113,31 @@ void D3D12Renderer::setLights(const Light* lights, size_t count)
     d.sceneLights.resize(count);
     std::memcpy(d.sceneLights.data(), lights, count * sizeof(ShaderLight));
 
-    // La dirección de las cascadas sale de la POSICIÓN de la primera luz, del
-    // tipo que sea, igual que en el camino de Vulkan: la sombra en cascada la
-    // proyecta siempre la luz 0, y tomar su dirección de otro sitio la pondría
-    // donde no llega la luz.
-    const glm::vec3 first(d.sceneLights[0].position[0], d.sceneLights[0].position[1],
-                          d.sceneLights[0].position[2]);
-    if (glm::length(first) > 1e-6f) {
-        d.lightDirection = -glm::normalize(first);
-        d.computeCascades();
+    // SOLO la luz 0 proyecta sombra. De dónde sale su dirección depende del
+    // tipo, que va en direction.w con la misma convención que usa pbr.frag:
+    // int(w + 0.5). Mismo criterio que ShadowPass en Vulkan.
+    const int tipoLuz = static_cast<int>(d.sceneLights[0].direction[3] + 0.5f);
+
+    if (tipoLuz == static_cast<int>(LightType::Directional)) {
+        // Su PROPIA dirección. Antes se ignoraba y se usaba posición->origen,
+        // así que girar el gizmo de una direccional no movía su sombra.
+        const glm::vec3 dir(d.sceneLights[0].direction[0], d.sceneLights[0].direction[1],
+                            d.sceneLights[0].direction[2]);
+        if (glm::length(dir) > 1e-6f) {
+            d.lightDirection = glm::normalize(dir);
+            d.computeCascades();
+        }
+    } else {
+        // Punto y foco: no hay sombra correcta para ellos todavía —harían falta
+        // cubemaps de sombras y proyección en perspectiva—, así que se apunta de
+        // la luz al origen del mundo. Solo se sostiene con la escena centrada
+        // ahí.
+        const glm::vec3 first(d.sceneLights[0].position[0], d.sceneLights[0].position[1],
+                              d.sceneLights[0].position[2]);
+        if (glm::length(first) > 1e-6f) {
+            d.lightDirection = -glm::normalize(first);
+            d.computeCascades();
+        }
     }
 }
 

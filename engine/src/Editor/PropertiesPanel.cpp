@@ -6506,6 +6506,36 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
         }
     }
 
+    // Lo que el render sabe hacer con las sombras, dicho aquí en vez de que el
+    // usuario lo deduzca mirando una sombra que no cuadra. La regla no depende
+    // de qué luz esté seleccionada, así que se enseña siempre.
+    ImGui::TextDisabled("Sombras: solo la PRIMERA luz de la escena las proyecta.");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("El motor tiene un único juego de shadow maps en cascada.\n"
+                          "Las demás luces iluminan, pero no arrojan sombra.");
+
+    // Y el aviso que de verdad explica lo que se ve: las cascadas son una
+    // técnica de luz DIRECCIONAL. Con Point o Spot la dirección se aproxima
+    // apuntando de la luz al origen del mundo, y la proyección sigue siendo
+    // paralela en vez de diverger desde la luz.
+    const LightType tipo = light->getType();
+    if (tipo == LightType::Point || tipo == LightType::Spot)
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                           "Su sombra es una aproximacion.");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "Las sombras en cascada son de luz DIRECCIONAL: proyectan en\n"
+                "paralelo a lo largo de una direccion. Una luz de punto tendria\n"
+                "que proyectar en perspectiva desde su posicion, y para eso hace\n"
+                "falta un cubemap de sombras que todavia no existe.\n\n"
+                "Mientras tanto la direccion se toma de la luz hacia el origen del\n"
+                "mundo, asi que solo cuadra con la escena centrada ahi: el tamano\n"
+                "de la sombra no cambia con la distancia a la luz.");
+    }
+
+    ImGui::Separator();
+
     // El "before" se lee ANTES de dibujar: el picker cambia el valor en el mismo
     // frame del click y releerlo después daría ya el nuevo.
     const glm::vec3 beforeColor = light->getColor();

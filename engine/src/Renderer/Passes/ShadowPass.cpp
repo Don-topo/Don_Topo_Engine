@@ -436,12 +436,36 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
     const float shadowFar = std::min(camFar, maxDistance);
     if (shadowFar <= camNear) return;
 
-    // Luz direccional: la posición solo da la dirección, igual que antes
-    // (lookAt desde la luz hacia el origen).
-    const glm::vec3 lightPos = glm::vec3(lights[0].position);
-    const float     lightLen = glm::length(lightPos);
-    if (lightLen < 1e-6f) return;                       // luz en el origen: sin dirección
-    const glm::vec3 lightDir = -lightPos / lightLen;    // de la luz hacia la escena
+    // SOLO la luz 0 proyecta sombra, sea del tipo que sea. De donde sale su
+    // direccion depende del tipo, y el tipo va en direction.w con la misma
+    // convencion que usa pbr.frag: int(w + 0.5).
+    const int tipoLuz = static_cast<int>(lights[0].direction.w + 0.5f);
+
+    glm::vec3 lightDir;
+    if (tipoLuz == static_cast<int>(LightType::Directional))
+    {
+        // Su PROPIA direccion, que es el -Z local del GameObject. Antes se
+        // ignoraba y se usaba posicion->origen, asi que girar el gizmo de una
+        // direccional no movia su sombra: la sombra solo cambiaba si movias la
+        // luz de sitio, que es justo lo que a una direccional no deberia
+        // importarle.
+        const glm::vec3 d = glm::vec3(lights[0].direction);
+        const float     l = glm::length(d);
+        if (l < 1e-6f) return;
+        lightDir = d / l;
+    }
+    else
+    {
+        // Punto y foco: NO hay sombra correcta para ellos todavia. Una luz de
+        // punto proyecta en perspectiva desde su posicion y necesita un cubemap
+        // de sombras; esto es una ortografica, o sea paralela. Lo que se hace es
+        // apuntar de la luz al origen del mundo, que es una aproximacion que
+        // solo se sostiene si la escena esta centrada ahi.
+        const glm::vec3 lightPos = glm::vec3(lights[0].position);
+        const float     lightLen = glm::length(lightPos);
+        if (lightLen < 1e-6f) return;                   // luz en el origen: sin direccion
+        lightDir = -lightPos / lightLen;
+    }
     const glm::vec3 up = std::abs(lightDir.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f)
                                                       : glm::vec3(0.0f, 1.0f, 0.0f);
     const glm::mat4 lightRot    = glm::lookAt(glm::vec3(0.0f), lightDir, up);
