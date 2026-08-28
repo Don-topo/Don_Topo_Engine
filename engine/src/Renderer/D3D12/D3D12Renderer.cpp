@@ -357,7 +357,17 @@ constexpr UINT kSrvPerProbe = 1                     // captura
                             + 1 + kIblPrefilterMips;// prefiltrado: lectura y un UAV por mip
 constexpr UINT kSrvProbes   = kSrvUiAtlas + kMaxUiAtlases;
 
-constexpr UINT kSrvHeapSize = kSrvProbes + kMaxProbes * kSrvPerProbe;
+// Pareja contigua para componer con el bloom APAGADO. bloom_composite.frag
+// hace `color += bloom * intensity` SIEMPRE, y su tabla pide [escena, bloom]
+// seguidos, así que apagar el efecto no se puede resolver mandando intensity=0:
+// la cadena de mips sale de un heap sin poner a cero y en R16G16B16A16_FLOAT
+// eso puede ser un inf, con lo que `inf * 0` da NaN. Vulkan lo evita limpiando
+// la cadena a negro (ver Renderer::setBloomEnabled); aquí sale más barato tener
+// una segunda pareja —la misma escena y un negro de 1x1— y no grabar ni un
+// comando con el bloom apagado.
+constexpr UINT kSrvCompositeOff = kSrvProbes + kMaxProbes * kSrvPerProbe;  // +0 escena, +1 negro
+
+constexpr UINT kSrvHeapSize = kSrvCompositeOff + 2;
 
 // Push de ssao.comp y ssao_blur.comp: los dos comparten el bloque, así que el
 // rango de root constants tiene que ser el mismo para los dos pipelines.
@@ -775,12 +785,21 @@ struct D3D12Renderer::Impl {
     // el device por delante cuando algo lo usa.
     UINT                 prefilterMips        = 1;
     D3D12MA::Allocation* ssaoAllocation       = nullptr;
+    // Negro de 1x1 en formato HDR: el "bloom" que lee la composición cuando el
+    // efecto está apagado (ver kSrvCompositeOff).
+    D3D12MA::Allocation* bloomBlackAllocation = nullptr;
 
     // Forward+ apagado, pero los cuatro buffers de space2 EXISTEN: pbr.frag los
     // declara sin rama, y un root SRV a cero es una lectura fuera de recurso.
     // Con mode = 0 el shader ni los mira, pero tienen que estar enlazados.
     D3D12MA::Allocation* fpParamsAllocation  = nullptr;
     D3D12MA::Allocation* fpLightsAllocation  = nullptr;
+    // Alcance por luz que manda el llamante, en el mismo orden que setLights.
+    // Vacío —o más corto que la lista de luces— significa "para esa luz, el
+    // radio global de RendererState". Mismo criterio que ForwardPlusPass en
+    // Vulkan: es el único dato que Light no lleva en el UBO, porque no cabe sin
+    // mover el layout std140 que declaran 5 shaders.
+    std::vector<float> lightRadii;
     D3D12MA::Allocation* fpCellsAllocation   = nullptr;
     D3D12MA::Allocation* fpIndicesAllocation = nullptr;
 
@@ -2813,6 +2832,14 @@ void D3D12Renderer::Impl::createMeshResources()
     const uint8_t noOcclusion[4] = {255, 255, 255, 255};
     ssaoAllocation = uploadTexture(noOcclusion, 1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, 4, kSrvSsao);
 
+    // El "bloom" del camino apagado: negro de 1x1 en el mismo formato que la
+    // cadena. Ocho bytes a cero son (0,0,0,0) en R16G16B16A16_FLOAT, así que la
+    // composición suma exactamente nada — y sin depender de que la cadena de
+    // mips tenga un contenido válido, que apagado no lo tiene.
+    const uint8_t bloomBlack[8] = {};
+    bloomBlackAllocation =
+        uploadTexture(bloomBlack, 1, 1, 1, kHdrFormat, 8, kSrvCompositeOff + 1);
+
     // t5 y t6: entorno neutro, los mismos valores que deja el camino de Vulkan
     // cuando no hay cubemap. Un ambiente plano ilumina de forma aburrida, pero
     // sin ellos pbr.frag leería de un descriptor vacío.
@@ -3638,6 +3665,15 @@ void D3D12Renderer::Impl::createHdrTargets()
 
     D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
     handle.ptr += static_cast<SIZE_T>(kSrvSceneHdr) * srvSize;
+    device->CreateShaderResourceView(hdrAllocation->GetResource(), &hdrSrv, handle);
+
+    // La misma vista, otra vez, en el primer hueco de la pareja del bloom
+    // apagado: la tabla de la composición exige [escena, bloom] CONTIGUOS y el
+    // negro ya vive en el segundo. Duplicar un SRV del mismo recurso es legal y
+    // no cuesta memoria. Va aquí y no en createMeshResources porque hdrAllocation
+    // se rehace en cada resize y la vista tiene que seguirlo.
+    handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<SIZE_T>(kSrvCompositeOff) * srvSize;
     device->CreateShaderResourceView(hdrAllocation->GetResource(), &hdrSrv, handle);
 
     // Vista de escritura del mismo target, la que usa la niebla.
@@ -4567,9 +4603,12 @@ void D3D12Renderer::Impl::updateForwardPlus()
         for (uint32_t i = 0; i < count; ++i) {
             const ShaderLight& light = sceneLights[i];
             const glm::vec3    world(light.position[0], light.position[1], light.position[2]);
-            // El radio no viaja en la luz del UBO: se toma el alcance, que es lo
-            // que el editor ya edita por luz (params.x).
-            const float radius = light.params[0];
+            // El radio no viaja en la luz del UBO. Mismo criterio que
+            // ForwardPlusPass en Vulkan: el que mande el llamante para ESTA luz,
+            // y si no lo hay, el global de RendererState —que es el que edita el
+            // slider "Light radius" del panel Forward+—.
+            const float radius = (i < lightRadii.size()) ? lightRadii[i]
+                                                         : state->forwardPlusLightRadius();
             const glm::vec3 view = glm::vec3(cameraView * glm::vec4(world, 1.0f));
 
             dst[i].posRadius = glm::vec4(world, radius);
@@ -7014,62 +7053,71 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
 
-    commandList->SetComputeRootSignature(bloomRootSignature.Get());
+    // Apagado significa APAGADO: ni un dispatch y ni una barrera de la cadena,
+    // igual que en Vulkan (Renderer.cpp, `if (bloomEnabled())`). La composición
+    // de más abajo se encarga de leer negro en vez de unos mips que se quedan
+    // como estaban. Hasta ahora este flag no se consultaba en ningún sitio del
+    // backend, así que el interruptor del editor no apagaba nada.
+    const bool bloomOn = state->bloomEnabled();
 
-    // Reducción. El primer nivel lee la escena y aplica el umbral; el resto
-    // solo filtra el nivel anterior.
-    for (int level = 0; level < kBloomMips; ++level) {
-        const UINT srcWidth  = (level == 0) ? width : bloomMipWidth[level - 1];
-        const UINT srcHeight = (level == 0) ? height : bloomMipHeight[level - 1];
+    if (bloomOn) {
+        commandList->SetComputeRootSignature(bloomRootSignature.Get());
 
-        BloomPush push{};
-        push.srcTexel[0] = 1.0f / static_cast<float>(srcWidth);
-        push.srcTexel[1] = 1.0f / static_cast<float>(srcHeight);
-        push.threshold   = state->bloomThreshold();
-        push.knee        = state->bloomKnee();
-        push.radius      = bloomRadius;
-        push.prefilter   = (level == 0) ? 1 : 0;
+        // Reducción. El primer nivel lee la escena y aplica el umbral; el resto
+        // solo filtra el nivel anterior.
+        for (int level = 0; level < kBloomMips; ++level) {
+            const UINT srcWidth  = (level == 0) ? width : bloomMipWidth[level - 1];
+            const UINT srcHeight = (level == 0) ? height : bloomMipHeight[level - 1];
 
-        commandList->SetPipelineState(bloomDownPipeline.Get());
-        commandList->SetComputeRoot32BitConstants(0, sizeof(BloomPush) / 4, &push, 0);
-        commandList->SetComputeRootDescriptorTable(
-            1, gpuHandle(level == 0 ? kSrvSceneHdr : kSrvBloomMip + level - 1));
-        commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavBloomMip + level));
-        commandList->Dispatch((bloomMipWidth[level] + 7) / 8, (bloomMipHeight[level] + 7) / 8, 1);
+            BloomPush push{};
+            push.srcTexel[0] = 1.0f / static_cast<float>(srcWidth);
+            push.srcTexel[1] = 1.0f / static_cast<float>(srcHeight);
+            push.threshold   = state->bloomThreshold();
+            push.knee        = state->bloomKnee();
+            push.radius      = bloomRadius;
+            push.prefilter   = (level == 0) ? 1 : 0;
 
-        // Este nivel pasa a ser origen del siguiente paso.
-        transition(bloomMipAllocations[level]->GetResource(),
-                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    }
+            commandList->SetPipelineState(bloomDownPipeline.Get());
+            commandList->SetComputeRoot32BitConstants(0, sizeof(BloomPush) / 4, &push, 0);
+            commandList->SetComputeRootDescriptorTable(
+                1, gpuHandle(level == 0 ? kSrvSceneHdr : kSrvBloomMip + level - 1));
+            commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavBloomMip + level));
+            commandList->Dispatch((bloomMipWidth[level] + 7) / 8, (bloomMipHeight[level] + 7) / 8, 1);
 
-    // Ampliación: cada nivel SUMA el de abajo sobre lo que ya tenía, así que el
-    // destino vuelve a acceso desordenado para poder leerse y escribirse.
-    for (int level = kBloomMips - 2; level >= 0; --level) {
-        BloomPush push{};
-        push.srcTexel[0] = 1.0f / static_cast<float>(bloomMipWidth[level + 1]);
-        push.srcTexel[1] = 1.0f / static_cast<float>(bloomMipHeight[level + 1]);
-        push.threshold   = state->bloomThreshold();
-        push.knee        = state->bloomKnee();
-        push.radius      = bloomRadius;
-        push.prefilter   = 0;
+            // Este nivel pasa a ser origen del siguiente paso.
+            transition(bloomMipAllocations[level]->GetResource(),
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
 
-        transition(bloomMipAllocations[level]->GetResource(),
-                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        // Ampliación: cada nivel SUMA el de abajo sobre lo que ya tenía, así que el
+        // destino vuelve a acceso desordenado para poder leerse y escribirse.
+        for (int level = kBloomMips - 2; level >= 0; --level) {
+            BloomPush push{};
+            push.srcTexel[0] = 1.0f / static_cast<float>(bloomMipWidth[level + 1]);
+            push.srcTexel[1] = 1.0f / static_cast<float>(bloomMipHeight[level + 1]);
+            push.threshold   = state->bloomThreshold();
+            push.knee        = state->bloomKnee();
+            push.radius      = bloomRadius;
+            push.prefilter   = 0;
 
-        commandList->SetPipelineState(bloomUpPipeline.Get());
-        commandList->SetComputeRoot32BitConstants(0, sizeof(BloomPush) / 4, &push, 0);
-        commandList->SetComputeRootDescriptorTable(1, gpuHandle(kSrvBloomMip + level + 1));
-        commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavBloomMip + level));
-        commandList->Dispatch((bloomMipWidth[level] + 7) / 8, (bloomMipHeight[level] + 7) / 8, 1);
+            transition(bloomMipAllocations[level]->GetResource(),
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        // Y vuelve a origen para el nivel siguiente (o para la composición, si
-        // este era el último).
-        transition(bloomMipAllocations[level]->GetResource(),
-                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                   level == 0 ? D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
-                              : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            commandList->SetPipelineState(bloomUpPipeline.Get());
+            commandList->SetComputeRoot32BitConstants(0, sizeof(BloomPush) / 4, &push, 0);
+            commandList->SetComputeRootDescriptorTable(1, gpuHandle(kSrvBloomMip + level + 1));
+            commandList->SetComputeRootDescriptorTable(2, gpuHandle(kUavBloomMip + level));
+            commandList->Dispatch((bloomMipWidth[level] + 7) / 8, (bloomMipHeight[level] + 7) / 8, 1);
+
+            // Y vuelve a origen para el nivel siguiente (o para la composición, si
+            // este era el último).
+            transition(bloomMipAllocations[level]->GetResource(),
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                       level == 0 ? D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+                                  : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
     }
 
     // Composición al backbuffer.
@@ -7104,7 +7152,12 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     commandList->SetGraphicsRootSignature(compositeRootSignature.Get());
     const float bloomIntensity = state->bloomIntensity();
     commandList->SetGraphicsRoot32BitConstants(0, 1, &bloomIntensity, 0);
-    commandList->SetGraphicsRootDescriptorTable(1, gpuHandle(kSrvSceneHdr));
+    // Con el bloom encendido, la pareja de siempre: escena y mip 0 de la
+    // cadena. Apagado, la del final del heap: la misma escena y un negro, para
+    // que el `+= bloom * intensity` del shader sume exactamente cero sin leer
+    // unos mips que este frame no ha escrito nadie.
+    commandList->SetGraphicsRootDescriptorTable(
+        1, gpuHandle(bloomOn ? kSrvSceneHdr : kSrvCompositeOff));
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     // Sin vertex buffer: fullscreen.vert saca las tres posiciones del índice.
     commandList->DrawInstanced(3, 1, 0, 0);
@@ -7201,12 +7254,18 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     // Todo vuelve al estado con el que arranca el frame siguiente.
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
                D3D12_RESOURCE_STATE_RENDER_TARGET);
-    transition(bloomMipAllocations[0]->GetResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    for (int level = 1; level < kBloomMips; ++level) {
-        transition(bloomMipAllocations[level]->GetResource(),
-                   D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+    // Solo si la cadena llegó a correr: con el bloom apagado los mips no se han
+    // movido de UNORDERED_ACCESS, y "devolverlos" desde un estado en el que no
+    // están es un error de barrera, no una corrección.
+    if (bloomOn) {
+        transition(bloomMipAllocations[0]->GetResource(),
+                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        for (int level = 1; level < kBloomMips; ++level) {
+            transition(bloomMipAllocations[level]->GetResource(),
+                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        }
     }
 }
 
@@ -9023,11 +9082,11 @@ void D3D12Renderer::setLights(const std::vector<Light>& lights)
 
 void D3D12Renderer::setLightRadii(const std::vector<float>& radii)
 {
-    // El reparto por celdas saca el radio del alcance de cada luz (params.x),
-    // así que esta lista no hace falta aquí. Se acepta para cumplir la
-    // interfaz y para que el día que se separen los dos valores haya un sitio
-    // donde recogerla.
-    (void)radii;
+    // Se guarda y se usa. Antes se descartaba con un (void), y con ella se
+    // descartaba también el radio global: el reparto por celdas tiraba siempre
+    // de params.x, así que el slider "Light radius" del panel Forward+ no hacía
+    // nada bajo DirectX 12 mientras que en Vulkan sí.
+    m_impl->lightRadii = radii;
 }
 
 void D3D12Renderer::tickDeferredDeletes()
@@ -9875,7 +9934,7 @@ void D3D12Renderer::shutdown()
                               &d.fpParamsAllocation, &d.fpLightsAllocation, &d.fpCellsAllocation,
                               &d.fpIndicesAllocation, &d.groundVertexAllocation,
                               &d.groundIndexAllocation, &d.groundInstanceAllocation,
-                              &d.shadowMapArrayAllocation}) {
+                              &d.shadowMapArrayAllocation, &d.bloomBlackAllocation}) {
         if (*allocation) {
             (*allocation)->Release();
             *allocation = nullptr;
