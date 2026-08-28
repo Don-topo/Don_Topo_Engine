@@ -14,6 +14,7 @@
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/MeshKey.h"
 #include "DonTopo/Renderer/ModelLoader.h"
+#include "DonTopo/Renderer/PlaceholderTexture.h"
 #include "DonTopo/Renderer/Plane.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
@@ -777,6 +778,11 @@ struct D3D12Renderer::Impl {
     // Texturas del material. Hoy son 1x1 generadas: el cubo del motor es
     // procedural y no trae ninguna, pero los shaders las exigen igual.
     D3D12MA::Allocation* baseColorAllocation = nullptr;
+    // El damero de "falta esta textura". Aparte del blanco de arriba a
+    // proposito: el blanco es el relleno legitimo de una primitiva sin
+    // material, y este es la senal de que un fichero declarado no se pudo
+    // leer. Ver PlaceholderTexture.h.
+    D3D12MA::Allocation* missingTextureAllocation = nullptr;
     D3D12MA::Allocation* normalMapAllocation = nullptr;
     D3D12MA::Allocation* shadowMapAllocation = nullptr;
 
@@ -2839,6 +2845,17 @@ void D3D12Renderer::Impl::createMeshResources()
     const uint8_t white[4]      = {255, 255, 255, 255};
     const uint8_t flatNormal[4] = {128, 128, 255, 255};
     baseColorAllocation = uploadTexture(white, 1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, 4, 0);
+    // Y el damero. uploadTexture escribe ademas el SRV del hueco que se le
+    // pase, asi que se le da el 0 y acto seguido se restituye el blanco: ese
+    // hueco global es el neutro, y el damero solo se referencia desde el
+    // bloque del objeto cuya textura ha fallado.
+    {
+        const std::vector<uint8_t> damero = makeMissingTextureRgba();
+        missingTextureAllocation =
+            uploadTexture(damero.data(), kMissingTextureSize, kMissingTextureSize, 1,
+                          DXGI_FORMAT_R8G8B8A8_UNORM, 4, 0);
+        createTexture2DSrv(baseColorAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM, 0);
+    }
     normalMapAllocation = uploadTexture(flatNormal, 1, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, 4, 1);
 
     // Mapa de sombras: 1x1 por cascada a profundidad máxima. Con cascadeSplits
@@ -9215,9 +9232,18 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
         } else {
             object.baseColorAllocation = d.uploadMaterialTexture(
                 mesh.material.texturePath, mesh.material.embeddedTexture, true, slot + 0);
-            if (!object.baseColorAllocation)
-                d.createTexture2DSrv(d.baseColorAllocation->GetResource(),
-                                     DXGI_FORMAT_R8G8B8A8_UNORM, slot + 0);
+            if (!object.baseColorAllocation) {
+                // Sin material que pida textura, blanco; si la pedia y no se
+                // pudo leer, damero. Antes las dos caian en blanco y un fichero
+                // que faltaba no se notaba.
+                const bool sePidio = !mesh.material.texturePath.empty() ||
+                                     !mesh.material.embeddedTexture.empty();
+                ID3D12Resource* relleno =
+                    (sePidio && d.missingTextureAllocation)
+                        ? d.missingTextureAllocation->GetResource()
+                        : d.baseColorAllocation->GetResource();
+                d.createTexture2DSrv(relleno, DXGI_FORMAT_R8G8B8A8_UNORM, slot + 0);
+            }
 
             object.normalMapAllocation = d.uploadMaterialTexture(
                 mesh.material.normalMapPath, mesh.material.embeddedNormalMap, false, slot + 1);
@@ -9579,7 +9605,11 @@ void D3D12Renderer::replaceStaticTextureWithMissing(int renderIndex, TextureSlot
     // es lo que importa cuando una textura no se ha podido leer.
     switch (slot) {
         case TextureSlot::Diffuse:
-            d.createTexture2DSrv(d.baseColorAllocation->GetResource(),
+            // Aqui SIEMPRE es un fallo -para eso se llama a esta funcion-, asi
+            // que va el damero y no el neutro blanco.
+            d.createTexture2DSrv(d.missingTextureAllocation
+                                     ? d.missingTextureAllocation->GetResource()
+                                     : d.baseColorAllocation->GetResource(),
                                  DXGI_FORMAT_R8G8B8A8_UNORM, object.srvBase);
             break;
         case TextureSlot::Normal:
@@ -10147,7 +10177,8 @@ void D3D12Renderer::shutdown()
                               &d.fpParamsAllocation, &d.fpLightsAllocation, &d.fpCellsAllocation,
                               &d.fpIndicesAllocation, &d.groundVertexAllocation,
                               &d.groundIndexAllocation, &d.groundInstanceAllocation,
-                              &d.shadowMapArrayAllocation, &d.bloomBlackAllocation}) {
+                              &d.shadowMapArrayAllocation, &d.bloomBlackAllocation,
+                              &d.missingTextureAllocation}) {
         if (*allocation) {
             (*allocation)->Release();
             *allocation = nullptr;

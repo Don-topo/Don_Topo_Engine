@@ -1,6 +1,7 @@
 #include "DonTopo/Renderer/GpuResources.h"
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/TransferBatch.h"
+#include "DonTopo/Renderer/PlaceholderTexture.h"
 #include <stdexcept>
 #include <cstring>
 #define STB_IMAGE_IMPLEMENTATION
@@ -195,23 +196,21 @@ void GpuResources::createTextureImage(const std::string& path, const std::vector
         fromStb = (pixels != nullptr);
     }
 
-    // Fallback: purple/black checkerboard when no texture or file not found
+    // Sin pixeles hay DOS motivos distintos y hasta ahora los dos acababan en
+    // damero. Ver PlaceholderTexture.h: el material que no pide ninguna textura
+    // -una primitiva procedural- se rellena de blanco, y solo el que la pide y
+    // no se ha podido leer se marca con el damero.
     std::vector<uint8_t> placeholder;
     if (!pixels) {
-        constexpr int SIZE = 64, TILE = 8;
-        placeholder.resize(SIZE * SIZE * 4);
-        for (int py = 0; py < SIZE; py++) {
-            for (int px = 0; px < SIZE; px++) {
-                bool check = ((px / TILE) + (py / TILE)) % 2 == 0;
-                uint8_t* p = placeholder.data() + (py * SIZE + px) * 4;
-                p[0] = check ? 0xCC : 0x88;
-                p[1] = check ? 0xCC : 0x88;
-                p[2] = check ? 0xCC : 0x88;
-                p[3] = 0xFF;
-            }
+        const bool sePidioTextura = !embedded.empty() || !path.empty();
+        if (sePidioTextura) {
+            placeholder = makeMissingTextureRgba();
+            w = h = kMissingTextureSize;
+        } else {
+            placeholder.assign(4, 0xFF);  // 1x1 blanco
+            w = h = 1;
         }
         pixels = placeholder.data();
-        w = h = SIZE;
     }
 
     VkDeviceSize imageSize = w * h * 4;
