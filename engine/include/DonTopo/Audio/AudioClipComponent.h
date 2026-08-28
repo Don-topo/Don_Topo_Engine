@@ -40,6 +40,21 @@ public:
     void pause();
     void resume();
 
+    // Silencio SIN perder el volumen: al desmutear vuelve el que había, sin que
+    // nadie tenga que recordarlo. Es lo que hasta ahora se hacía a mano poniendo
+    // el volumen a 0 y guardándoselo aparte.
+    //
+    // A diferencia de pause/isPlaying, esto SÍ es estado del componente y se
+    // serializa: un objeto puede nacer mudo.
+    bool getMute() const { return m_mute; }
+    void setMute(bool mute);
+
+    // Posición de reproducción en segundos. -1 si no hay nada sonando: 0 sería
+    // mentira, porque ese es el principio del clip. setTime sobre algo que no
+    // suena es no-op — no arranca la reproducción, solo mueve la que haya.
+    float getTime() const;
+    void  setTime(float seconds);
+
     // Empuja la posición del dueño a la voz que esté sonando, para que un clip
     // 3D siga al GameObject en vez de quedarse donde estaba al llamar a play().
     // Pensado para llamarse una vez por frame (lo hace Scene::update); no-op
@@ -147,6 +162,8 @@ private:
     // Cero, no uno como Unity: encender el doppler por defecto cambiaria el
     // tono de todo lo que ya suena en las escenas existentes.
     float         m_dopplerLevel = 0.0f;
+    // Serializado, a diferencia del pause: un objeto puede nacer mudo.
+    bool          m_mute = false;
     float         m_volume = 1.0f;
     float         m_pitch  = 1.0f;
     // Defaults a la escala de este repo (primitivas de 50 unidades), no a los

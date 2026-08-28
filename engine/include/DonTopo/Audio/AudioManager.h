@@ -193,6 +193,29 @@ public:
     // voz: no es estado persistente del componente, es de la voz.
     void setSoundPaused(int soundId, bool paused);
 
+    // Silencia la voz sin tocar su volumen: al quitar el mute vuelve el valor
+    // que tenia, sin que el script tenga que acordarse de cual era. Es la
+    // diferencia con poner el volumen a 0, que es como se hacia hasta ahora.
+    void setSoundMute(int soundId, bool mute);
+
+    // Posicion de reproduccion en SEGUNDOS. Permite arrancar un clip por la
+    // mitad y saber por donde va. -1 si no hay voz viva: 0 seria mentira (ese
+    // es el principio del clip, no "no suena nada").
+    float getSoundTime(int soundId) const;
+    void  setSoundTime(int soundId, float seconds);
+
+    // --- Pausa global ------------------------------------------------------
+    //
+    // Congela TODO lo que suena, conservando la posicion: es el
+    // AudioListener.pause de Unity, lo que quiere un menu de pausa. Actua sobre
+    // el grupo master, del que cuelgan los otros dos buses.
+    //
+    // No lo confundas con un timeScale: el motor no tiene pausa de simulacion,
+    // asi que esto calla el audio pero la escena sigue corriendo si nadie mas
+    // la para.
+    void setAudioPaused(bool paused);
+    bool isAudioPaused() const;
+
     // Volumen por bus, [0, 1]. Es el mando que el jugador espera encontrar en
     // las opciones: Master escala a los otros dos porque Music y Sfx cuelgan de
     // él en FMOD. El getter existe para que la UI dibuje el valor real y no una

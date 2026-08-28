@@ -259,7 +259,8 @@ static AudioClipState audioClipStateOf(const AudioClipComponent& clip)
                             clip.getMinDistance(), clip.getMaxDistance(),
                             clip.getLoop(), clip.getIs3D(), clip.getPlayOnAwake(),
                             clip.getBus(), clip.getLoadMode(), clip.getRolloff(),
-                            clip.getSpread(), clip.getStereoPan(), clip.getDopplerLevel() };
+                            clip.getSpread(), clip.getStereoPan(), clip.getDopplerLevel(),
+                            clip.getMute() };
 }
 
 // Resuelve el GameObject por id en cada aplicación, nunca captura el puntero:
@@ -282,6 +283,7 @@ static void applyAudioClipState(Scene& scene, uint64_t ownerId, const AudioClipS
     clip->setSpread(s.spread);
     clip->setStereoPan(s.stereoPan);
     clip->setDopplerLevel(s.dopplerLevel);
+    clip->setMute(s.mute);
     clip->setVolume(s.volume);
     clip->setPitch(s.pitch);
     // Max antes que min: los dos setters mantienen min <= max entre ellos.
@@ -7843,6 +7845,16 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
                 clip->setIs3D(is3D);
                 toggled = true;
             }
+
+            bool mute = clip->getMute();
+            if (ImGui::Checkbox("Mute", &mute))
+            {
+                clip->setMute(mute);
+                toggled = true;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Silencia sin perder el volumen: al desmarcarlo vuelve el "
+                                  "que habia. Se guarda en la escena.");
 
             bool playOnAwake = clip->getPlayOnAwake();
             if (ImGui::Checkbox("Play On Awake", &playOnAwake))

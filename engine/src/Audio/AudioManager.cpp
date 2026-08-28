@@ -527,6 +527,74 @@ void AudioManager::setSoundPaused(int id, bool paused)
 #endif
 }
 
+void AudioManager::setSoundMute(int id, bool mute)
+{
+#ifdef DT_FMOD_ENABLED
+    if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
+        id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
+    if (FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]))
+        ch->setMute(mute);
+#else
+    (void)id; (void)mute;
+#endif
+}
+
+float AudioManager::getSoundTime(int id) const
+{
+#ifdef DT_FMOD_ENABLED
+    if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
+        id >= (int)m_sfxChannels.size() || !m_sounds[id]) return -1.0f;
+    FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]);
+    if (!ch) return -1.0f;
+    unsigned int ms = 0;
+    if (ch->getPosition(&ms, FMOD_TIMEUNIT_MS) != FMOD_OK) return -1.0f;
+    return (float)ms / 1000.0f;
+#else
+    (void)id;
+    return -1.0f;
+#endif
+}
+
+void AudioManager::setSoundTime(int id, float seconds)
+{
+#ifdef DT_FMOD_ENABLED
+    if (!m_system || id < 0 || id >= (int)m_sounds.size() ||
+        id >= (int)m_sfxChannels.size() || !m_sounds[id]) return;
+    if (!std::isfinite(seconds) || seconds < 0.0f) return;
+    if (FMOD::Channel* ch = liveChannel(m_sfxChannels[id], m_sounds[id]))
+        ch->setPosition((unsigned int)(seconds * 1000.0f), FMOD_TIMEUNIT_MS);
+#else
+    (void)id; (void)seconds;
+#endif
+}
+
+void AudioManager::setAudioPaused(bool paused)
+{
+#ifdef DT_FMOD_ENABLED
+    // Sobre el master, no sobre cada bus: los otros dos cuelgan de él, así que
+    // uno solo los congela a todos —incluidas las voces sueltas de PlayOneShot,
+    // que no se pueden alcanzar de otra forma.
+    if (auto* g = reinterpret_cast<FMOD::ChannelGroup*>(groupForBus(AudioBus::Master)))
+        g->setPaused(paused);
+#else
+    (void)paused;
+#endif
+}
+
+bool AudioManager::isAudioPaused() const
+{
+#ifdef DT_FMOD_ENABLED
+    if (auto* g = reinterpret_cast<FMOD::ChannelGroup*>(groupForBus(AudioBus::Master)))
+    {
+        bool paused = false;
+        if (g->getPaused(&paused) == FMOD_OK) return paused;
+    }
+    return false;
+#else
+    return false;
+#endif
+}
+
 void AudioManager::setSoundPosition(int id, const glm::vec3& worldPos, float dt)
 {
 #ifdef DT_FMOD_ENABLED

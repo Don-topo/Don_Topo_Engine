@@ -106,6 +106,7 @@ struct AudioClipState {
     float spread;
     float stereoPan;
     float dopplerLevel;
+    bool  mute;
 };
 
 // Snapshot value-type del CameraComponent — T de PropertyCommand<T> en la

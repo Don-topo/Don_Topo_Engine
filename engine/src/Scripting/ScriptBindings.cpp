@@ -951,6 +951,32 @@ namespace DonTopo::ScriptBindings
                     if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
                     return go->getAudioClip()->getDopplerLevel();
                 },
+                // Mute: silencio sin perder el volumen. A diferencia de Pause,
+                // esto SI se serializa — un objeto puede nacer mudo.
+                "SetMute", [](const LuaAudioClip& c, bool m) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    go->getAudioClip()->setMute(m);
+                },
+                "GetMute", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return go->getAudioClip()->getMute();
+                },
+                // Posicion de reproduccion en segundos. GetTime devuelve -1 si
+                // no hay nada sonando: 0 seria el principio del clip, que es
+                // una respuesta distinta.
+                "GetTime", [](const LuaAudioClip& c) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    return go->getAudioClip()->getTime();
+                },
+                "SetTime", [&mgr](const LuaAudioClip& c, float t) {
+                    GameObject* go = deref(c.e);
+                    if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
+                    if (!ensureFinite(mgr, "AudioClip.SetTime", t)) return;
+                    go->getAudioClip()->setTime(t);
+                },
                 "GetPath", [](const LuaAudioClip& c) {
                     GameObject* go = deref(c.e);
                     if (!go->hasAudioClip()) throw std::runtime_error("El GameObject ya no tiene AudioClip");
@@ -3090,6 +3116,17 @@ namespace DonTopo::ScriptBindings
                     return;
                 }
                 am->clearBusEffect(bus, effect);
+            };
+
+            // Pausa global: congela TODO lo que suena conservando la posicion.
+            // Es lo que quiere un menu de pausa. Ojo: el motor no tiene pausa de
+            // simulacion, asi que esto calla el audio pero la escena sigue.
+            audio["SetPaused"] = [&mgr](bool paused) {
+                if (AudioManager* am = mgr.audioManager()) am->setAudioPaused(paused);
+            };
+            audio["IsPaused"] = [&mgr]() {
+                AudioManager* am = mgr.audioManager();
+                return am && am->isAudioPaused();
             };
 
             audio["GetBusVolume"] = [&mgr](const std::string& name) -> float {

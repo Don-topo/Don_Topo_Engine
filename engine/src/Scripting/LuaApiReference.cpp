@@ -152,6 +152,8 @@ const std::vector<std::string>& baseSymbols()
         "AudioClip:SetSpread", "AudioClip:GetSpread",
         "AudioClip:SetStereoPan", "AudioClip:GetStereoPan",
         "AudioClip:SetDopplerLevel", "AudioClip:GetDopplerLevel",
+        "AudioClip:SetMute", "AudioClip:GetMute",
+        "AudioClip:GetTime", "AudioClip:SetTime",
         "AudioClip:GetPath",
 
         // Audio global (volumenes por bus: "master", "music", "sfx")
@@ -161,6 +163,7 @@ const std::vector<std::string>& baseSymbols()
         "Audio.PlayClipAtPoint", "Audio.Preload",
         // Efectos por bus: lowPass, highPass, echo, reverb.
         "Audio.SetBusEffect", "Audio.ClearBusEffect",
+        "Audio.SetPaused", "Audio.IsPaused",
 
         // ReverbZone (GetComponent("ReverbZone") / AddComponent("ReverbZone"))
         "ReverbZone:SetPreset", "ReverbZone:GetPreset",

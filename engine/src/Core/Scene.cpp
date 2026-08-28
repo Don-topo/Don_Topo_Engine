@@ -1127,6 +1127,7 @@ namespace
                                 {"spread", clip->getSpread()},
                                 {"stereoPan", clip->getStereoPan()},
                                 {"dopplerLevel", clip->getDopplerLevel()},
+                                {"mute", clip->getMute()},
                                 {"loop", clip->getLoop()},
                                 {"is3D", clip->getIs3D()},
                                 {"playOnAwake", clip->getPlayOnAwake()},
@@ -2546,6 +2547,7 @@ namespace
                 clip->setSpread(readFloat(c, "spread", 0.0f, warnings, ctx));
                 clip->setStereoPan(readFloat(c, "stereoPan", 0.0f, warnings, ctx));
                 clip->setDopplerLevel(readFloat(c, "dopplerLevel", 0.0f, warnings, ctx));
+                clip->setMute(readBool(c, "mute", false, warnings, ctx));
                 // Mismo criterio. readFloat además tolera un "null" (NaN
                 // serializado, ver el bloque de comentarios junto a jsonToMat4):
                 // antes, ese null hacía fallar fromJson entero.

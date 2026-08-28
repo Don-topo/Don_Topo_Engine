@@ -901,6 +901,8 @@ per GameObject. `AddComponent("AudioClip", path)` adds one (2D and non-looping; 
 | `SetSpread(deg)` / `GetSpread()` | Stereo spread of a 3D source, `[0, 360]`. 0 keeps it a point. |
 | `SetStereoPan(p)` / `GetStereoPan()` | Manual pan `[-1, 1]`, **2D clips only** — in 3D the position decides it. |
 | `SetDopplerLevel(l)` / `GetDopplerLevel()` | How much relative velocity bends the pitch, `[0, 5]`. **0 by default**, and it only acts in Play: Edit Mode computes no velocities. |
+| `SetMute(b)` / `GetMute()` | Silence **without losing the volume** — unmuting restores what was there, no need for the script to remember it. Unlike `Pause`, this is serialized: an object can start out muted. A muted clip does not fire `PlayOneShot` either. |
+| `GetTime()` / `SetTime(sec)` | Playback position in seconds. `GetTime()` returns **-1** when nothing is playing — 0 would mean "at the start of the clip", which is a different answer. `SetTime` moves an ongoing playback; it does not start one. |
 | `GetPath()` | The asset path the clip was loaded from. |
 
 Global mixing lives in the `Audio` table, and is what a options menu would drive:
@@ -914,6 +916,7 @@ Global mixing lives in the `Audio` table, and is what a options menu would drive
 
 | `Audio.SetBusEffect(bus, effect, amount)` | Hangs a DSP on a whole bus: `"lowPass"`, `"highPass"`, `"echo"` or `"reverb"`. `amount` is `[0, 1]` — the engine maps it to each effect's real units, so scripts never touch Hz or ms. Idempotent: calling it every frame adjusts the same DSP instead of stacking copies. |
 | `Audio.ClearBusEffect(bus [, effect])` | Removes one effect, or **all** of that bus when the second argument is omitted — which is what you want on leaving the water or closing the pause menu. |
+| `Audio.SetPaused(b)` / `Audio.IsPaused()` | Freezes **everything** that is playing, keeping positions — what a pause menu wants. It acts on the master group, so it also catches the loose `PlayOneShot` voices that cannot be reached any other way. Note the engine has no simulation pause: this silences audio, it does not stop the scene. |
 
 The three volumes are stored in `project.json` and restored when the project opens; the
 editor exposes them under **View → Master / Music / SFX Volume**. Effects are runtime-only

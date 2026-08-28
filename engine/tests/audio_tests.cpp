@@ -1668,6 +1668,98 @@ static void test_reverb_zones(PhysicsManager& pm, AudioManager& am)
     am.clearReverbZones();
 }
 
+// Mute, tiempo de reproducción y pausa global: las tres filas "Ausente" del
+// audit que no estaban descartadas con criterio.
+//
+// El mute es lo único de los tres que se serializa: pausa y posición son
+// estado de la voz, y guardarlos haría que una escena recién cargada arrancara
+// a medias de un clip o en silencio sin que nadie lo hubiera pedido.
+static void test_mute_time_and_global_pause(PhysicsManager& pm, AudioManager& am)
+{
+    // Parte sin FMOD: el estado del componente y su round-trip.
+    auto solo = makeClip();
+    CHECK(solo->getMute() == false);   // neutro: una escena vieja no nace muda
+    solo->setMute(true);
+    CHECK(solo->getMute() == true);
+    // Sin manager no hay voz a la que preguntar la posición.
+    CHECK(solo->getTime() < 0.0f);
+
+    if (!am.available())
+    {
+        std::printf("SKIP test_mute_time_and_global_pause (FMOD no disponible)\n");
+        return;
+    }
+
+    // Round-trip del mute por la escena, con el valor NO neutro.
+    {
+        auto probe = am.createAudioClipComponent("assets/audio.mp3", false, false);
+        if (!checkAudioProbe(am, probe, "test_mute_time_and_global_pause")) return;
+        Scene scene("Test");
+        GameObject* go = scene.addGameObject("altavoz");
+        probe->setMute(true);
+        go->setAudioClip(probe);
+
+        nlohmann::json j = scene.toJson();
+        CHECK(j["root"]["children"][0]["audioClip"]["mute"] == true);
+
+        Scene loaded("Loaded");
+        CHECK(loaded.fromJson(j, pm, am));
+        GameObject* found = loaded.findById(go->id);
+        if (!found || !found->hasAudioClip()) { CHECK(false); return; }
+        CHECK(found->getAudioClip()->getMute() == true);
+
+        // Back-compat: sin el campo, no mudo y sin warning.
+        nlohmann::json old = j;
+        old["root"]["children"][0]["audioClip"].erase("mute");
+        Scene l2("Old");
+        CHECK(l2.fromJson(old, pm, am));
+        GameObject* f2 = l2.findById(go->id);
+        if (!f2 || !f2->hasAudioClip()) { CHECK(false); return; }
+        CHECK(f2->getAudioClip()->getMute() == false);
+        for (const auto& w : l2.lastWarnings())
+            CHECK(w.find("mute") == std::string::npos);
+    }
+
+    // Posición de reproducción sobre una voz de verdad.
+    {
+        auto clip = am.createAudioClipComponent("assets/audio.mp3", false, /*loop=*/true);
+        if (!clip) { CHECK(false); return; }
+        const glm::vec3 pos(0.0f);
+
+        // Sin nada sonando: -1, que es distinto de "está en el segundo 0".
+        CHECK(clip->getTime() < 0.0f);
+
+        bool playing = false;
+        for (int i = 0; i < 600 && !playing; ++i)
+        {
+            clip->play(pos);
+            am.update(pos, glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+            playing = clip->isPlaying();
+            if (!playing) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(playing);
+        if (playing)
+        {
+            CHECK(clip->getTime() >= 0.0f);   // ahora sí hay posición
+            clip->setTime(1.0f);
+            am.update(pos, glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+            // Se comprueba un rango, no la igualdad: el mezclador sigue
+            // avanzando entre el salto y la lectura.
+            const float t = clip->getTime();
+            CHECK(t >= 0.9f && t <= 2.0f);
+        }
+        clip->stop();
+    }
+
+    // Pausa global: es del master, así que también congela lo que salga por
+    // cualquier bus.
+    CHECK(!am.isAudioPaused());
+    am.setAudioPaused(true);
+    CHECK(am.isAudioPaused());
+    am.setAudioPaused(false);
+    CHECK(!am.isAudioPaused());
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -1723,6 +1815,7 @@ int main()
     test_p12_back_compat(pm, am);
     test_bus_effects_are_idempotent_and_released(am);
     test_reverb_zones(pm, am);
+    test_mute_time_and_global_pause(pm, am);
 
     am.shutdown();
     pm.shutdown();

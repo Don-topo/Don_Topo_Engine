@@ -29,10 +29,13 @@ void AudioClipComponent::play(const glm::vec3& worldPos)
     // desde que el sonido se comparte entre clips (caché por path+modo),
     // escribirlas allí le cambiaría el radio de atenuación a todos los objetos
     // que usen el mismo fichero.
-    if (m_audio)
-        m_audio->playSound(m_soundId, worldPos, m_volume, m_pitch, m_bus,
-                           m_minDistance, m_maxDistance,
-                           m_spread, m_stereoPan, m_dopplerLevel);
+    if (!m_audio) return;
+    m_audio->playSound(m_soundId, worldPos, m_volume, m_pitch, m_bus,
+                       m_minDistance, m_maxDistance,
+                       m_spread, m_stereoPan, m_dopplerLevel);
+    // Después de arrancar la voz: así un objeto guardado como mudo sigue mudo
+    // al reproducirlo, en vez de sonar hasta que alguien vuelva a mutearlo.
+    if (m_mute) m_audio->setSoundMute(m_soundId, true);
 }
 
 void AudioClipComponent::stop()
@@ -42,14 +45,18 @@ void AudioClipComponent::stop()
 
 void AudioClipComponent::playOneShot(const glm::vec3& worldPos)
 {
-    // Con distancias, como play(): la voz del one-shot no se guarda en ningún
-    // sitio, así que si no se las damos al arrancar se queda con las de fábrica
-    // de FMOD (1 / 10000) y un disparo 3D se oiría igual de fuerte a 900
-    // unidades que a 5.
-    if (m_audio)
-        m_audio->playSoundOneShot(m_soundId, worldPos, m_volume, m_pitch, m_bus,
-                                  m_minDistance, m_maxDistance,
-                                  m_spread, m_stereoPan, m_dopplerLevel);
+    // Dos cosas van juntas aquí porque salen del mismo hecho: la voz de un
+    // one-shot no se guarda en ningún sitio.
+    //
+    // 1) Las distancias tienen que viajar en la llamada, o el disparo se queda
+    //    con las de fábrica de FMOD (1 / 10000) y se oiría igual de fuerte a
+    //    900 unidades que a 5.
+    // 2) Un clip muteado ni dispara: no habría forma de silenciar esa voz
+    //    después, así que salir aquí es lo único que respeta el mute.
+    if (!m_audio || m_mute) return;
+    m_audio->playSoundOneShot(m_soundId, worldPos, m_volume, m_pitch, m_bus,
+                              m_minDistance, m_maxDistance,
+                              m_spread, m_stereoPan, m_dopplerLevel);
 }
 
 bool AudioClipComponent::isPlaying() const
@@ -70,6 +77,24 @@ void AudioClipComponent::pause()
 void AudioClipComponent::resume()
 {
     if (m_audio) m_audio->setSoundPaused(m_soundId, false);
+}
+
+void AudioClipComponent::setMute(bool mute)
+{
+    m_mute = mute;
+    // Se empuja a la voz viva para que el cambio se oiga ya; y viaja también en
+    // play(), para que una reproducción nueva nazca muda si toca.
+    if (m_audio) m_audio->setSoundMute(m_soundId, mute);
+}
+
+float AudioClipComponent::getTime() const
+{
+    return m_audio ? m_audio->getSoundTime(m_soundId) : -1.0f;
+}
+
+void AudioClipComponent::setTime(float seconds)
+{
+    if (m_audio) m_audio->setSoundTime(m_soundId, seconds);
 }
 
 void AudioClipComponent::updateSpatial(const glm::vec3& worldPos, float dt)
