@@ -4499,8 +4499,17 @@ void D3D12Renderer::Impl::applyPendingShadowSize()
         pendingShadowMapSize = 0;
         return;
     }
-    if (!shadowMapArrayAllocation)
-        return;  // todavia no hay pase de sombras: se cogera el tamano al crearlo
+    if (!shadowMapArrayAllocation) {
+        // Todavia no hay pase de sombras: se cogera el tamano al crearlo. NO se
+        // limpia lo pendiente, para que se aplique en cuanto exista.
+        diagLog("shadow: resize a " + std::to_string(pendingShadowMapSize) +
+                " aplazado, todavia no hay mapa.");
+        return;
+    }
+
+    diagLog("shadow: resize " + std::to_string(shadowMapSize) + " -> " +
+            std::to_string(pendingShadowMapSize) + " (" + std::to_string(objects.size()) +
+            " objetos, " + std::to_string(skinnedObjects.size()) + " personajes).");
 
     // El mapa puede estar en el frame anterior. Es un ajuste de calidad que se
     // toca de uvas a peras, asi que esperar sale mas barato que llevar borrado
@@ -4560,6 +4569,13 @@ void D3D12Renderer::Impl::applyPendingShadowSize()
         for (const SkinnedSubMesh& sub : character.subMeshes)
             if (sub.srvBase != kSrvBaseColor)
                 createShadowMapSrv(sub.srvBase + 2);
+
+    // Del recurso, no de la variable: si esto no dice lo que se pidio, el que
+    // esta mal es el CreateResource de arriba y no el camino que llega hasta el.
+    const D3D12_RESOURCE_DESC hecho = shadowMapArrayAllocation->GetResource()->GetDesc();
+    diagLog("shadow: mapa reconstruido, " + std::to_string(hecho.Width) + "x" +
+            std::to_string(hecho.Height) + ", " + std::to_string(hecho.DepthOrArraySize) +
+            " capas.");
 }
 
 void D3D12Renderer::Impl::applyPendingSampleCount()

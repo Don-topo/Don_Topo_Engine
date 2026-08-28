@@ -147,7 +147,12 @@ float computeShadow(vec3 worldPos, int cascade)
     vec3 proj = lightSpacePos.xyz / lightSpacePos.w;
     proj.xy   = proj.xy * 0.5 + 0.5;
     if (proj.z > 1.0 || proj.z < 0.0) return 1.0;
-    vec2 texelSize = 1.0 / vec2(2048.0);
+    // Del tamano REAL del mapa, no de un 2048 a fuego. Con el valor fijo, subir
+    // la resolucion no ensanchaba ni estrechaba el filtro: a 4096 los nueve taps
+    // se separaban dos texeles reales -mismo desenfoque, solo menos aliasing- y
+    // a 1024 caian dentro de medio texel y el PCF desaparecia. Asi el filtro
+    // escala con la resolucion, que es lo que hace util el ajuste.
+    vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0).xy);
     float shadow = 0.0;
     // PCF 3x3 dentro de la capa de la cascada. Al indexar por capa y no por
     // region de un atlas, los taps del borde no pueden caer en la cascada
