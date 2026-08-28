@@ -663,6 +663,7 @@ int main(int argc, char** argv)
                           << std::endl;
             physics.stepSimulation(dt);
             scene.update(dt, physics);
+            scene.syncReverbZones(audio);
             scriptManager.update(dt);
 
             scene.traverse([&](DonTopo::GameObject* go) {

@@ -4,6 +4,8 @@
 #ifdef DT_FMOD_ENABLED
 #include <fmod.hpp>
 #include <fmod_errors.h>
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 
@@ -130,6 +132,14 @@ void AudioManager::shutdown()
     m_soundRefs.clear(); m_soundKeys.clear(); m_freeSlots.clear();
     m_soundByKey.clear(); m_pinnedSounds.clear();
     m_soundLastPos.clear(); m_soundHasLastPos.clear();
+    // Los DSP ANTES que los grupos de los que cuelgan: liberar el grupo primero
+    // dejaria los DSP colgando de algo que ya no existe. Son recursos nativos,
+    // no punteros sueltos.
+    for (auto& [key, dsp] : m_busEffects)
+        if (dsp) reinterpret_cast<FMOD::DSP*>(dsp)->release();
+    m_busEffects.clear();
+    // Las zonas de reverb son otro recurso nativo con el mismo trato.
+    clearReverbZones();
     if (SFXG) SFXG->release();
     if (MUSICG) MUSICG->release();
     SYS->close();
@@ -689,6 +699,277 @@ void* AudioManager::groupForBus(AudioBus bus) const
     }
 }
 #endif
+
+#ifdef DT_FMOD_ENABLED
+namespace {
+// Tipo de DSP de FMOD para cada efecto nuestro. Todos son de FMOD Core: nada de
+// esto necesita FMOD Studio.
+FMOD_DSP_TYPE fmodDspType(AudioEffect e)
+{
+    switch (e)
+    {
+        case AudioEffect::HighPass: return FMOD_DSP_TYPE_HIGHPASS;
+        case AudioEffect::Echo:     return FMOD_DSP_TYPE_ECHO;
+        case AudioEffect::Reverb:   return FMOD_DSP_TYPE_SFXREVERB;
+        case AudioEffect::LowPass:
+        default:                    return FMOD_DSP_TYPE_LOWPASS;
+    }
+}
+
+// Traduce el [0, 1] de la API pública a las unidades de cada DSP. En UN SOLO
+// sitio: si esto se repartiera por la UI y por Lua, los dos rangos acabarían
+// desincronizados en cuanto alguien tocara uno.
+void applyEffectAmount(FMOD::DSP* dsp, AudioEffect e, float amount)
+{
+    const float a = std::clamp(amount, 0.0f, 1.0f);
+    switch (e)
+    {
+        case AudioEffect::LowPass:
+            // 0 -> muy cerrado (400 Hz, "debajo del agua"); 1 -> casi
+            // transparente (22 kHz). Logarítmico porque el oído lo es: lineal
+            // dejaba todo el efecto apelotonado en el último 10% del slider.
+            dsp->setParameterFloat(FMOD_DSP_LOWPASS_CUTOFF,
+                                   400.0f * std::pow(55.0f, a));
+            break;
+        case AudioEffect::HighPass:
+            // Al revés: 0 no corta nada, 1 se lleva todos los graves.
+            dsp->setParameterFloat(FMOD_DSP_HIGHPASS_CUTOFF,
+                                   10.0f * std::pow(500.0f, a));
+            break;
+        case AudioEffect::Echo:
+            // Retardo entre repeticiones, de casi seguido a casi medio segundo.
+            dsp->setParameterFloat(FMOD_DSP_ECHO_DELAY, 10.0f + a * 490.0f);
+            break;
+        case AudioEffect::Reverb:
+            // Tamaño de la cola, de una sala pequeña a una catedral.
+            dsp->setParameterFloat(FMOD_DSP_SFXREVERB_DECAYTIME, 100.0f + a * 9900.0f);
+            break;
+    }
+}
+} // namespace
+#endif
+
+const std::vector<std::string>& AudioManager::reverbPresetNames()
+{
+    // Un subconjunto de los FMOD_PRESET_*: los ambientes que se piden de
+    // verdad. Ampliar la lista es añadir el nombre aquí y su caso en
+    // fmodReverbPreset. El orden es el del combo del inspector.
+    static const std::vector<std::string> names = {
+        "off", "generic", "room", "bathroom", "stoneroom", "auditorium",
+        "concerthall", "cave", "arena", "hangar", "hallway", "alley",
+        "forest", "city", "mountains", "quarry", "underwater"
+    };
+    return names;
+}
+
+#ifdef DT_FMOD_ENABLED
+namespace {
+// Nombre -> properties de FMOD. Devuelve false si el nombre no existe, para que
+// quien llama pueda avisar en vez de instalar un ambiente arbitrario.
+bool fmodReverbPreset(const std::string& name, FMOD_REVERB_PROPERTIES& out)
+{
+    if (name == "off")         { out = FMOD_PRESET_OFF;         return true; }
+    if (name == "generic")     { out = FMOD_PRESET_GENERIC;     return true; }
+    if (name == "room")        { out = FMOD_PRESET_ROOM;        return true; }
+    if (name == "bathroom")    { out = FMOD_PRESET_BATHROOM;    return true; }
+    if (name == "stoneroom")   { out = FMOD_PRESET_STONEROOM;   return true; }
+    if (name == "auditorium")  { out = FMOD_PRESET_AUDITORIUM;  return true; }
+    if (name == "concerthall") { out = FMOD_PRESET_CONCERTHALL; return true; }
+    if (name == "cave")        { out = FMOD_PRESET_CAVE;        return true; }
+    if (name == "arena")       { out = FMOD_PRESET_ARENA;       return true; }
+    if (name == "hangar")      { out = FMOD_PRESET_HANGAR;      return true; }
+    if (name == "hallway")     { out = FMOD_PRESET_HALLWAY;     return true; }
+    if (name == "alley")       { out = FMOD_PRESET_ALLEY;       return true; }
+    if (name == "forest")      { out = FMOD_PRESET_FOREST;      return true; }
+    if (name == "city")        { out = FMOD_PRESET_CITY;        return true; }
+    if (name == "mountains")   { out = FMOD_PRESET_MOUNTAINS;   return true; }
+    if (name == "quarry")      { out = FMOD_PRESET_QUARRY;      return true; }
+    if (name == "underwater")  { out = FMOD_PRESET_UNDERWATER;  return true; }
+    return false;
+}
+} // namespace
+#endif
+
+bool AudioManager::syncReverbZone(uint64_t ownerId, const glm::vec3& worldPos,
+                                   float minDistance, float maxDistance,
+                                   const std::string& preset, bool enabled)
+{
+#ifdef DT_FMOD_ENABLED
+    if (!m_system) return false;
+
+    FMOD_REVERB_PROPERTIES props;
+    // El preset se valida ANTES de crear nada: con un nombre inventado no se
+    // instala una zona con un ambiente cualquiera, se dice que no y ya.
+    if (!fmodReverbPreset(preset, props)) return false;
+
+    FMOD::Reverb3D* zone = nullptr;
+    if (auto it = m_reverbZones.find(ownerId); it != m_reverbZones.end())
+    {
+        zone = reinterpret_cast<FMOD::Reverb3D*>(it->second);
+    }
+    else
+    {
+        // FMOD limita cuántas instancias 3D puede haber a la vez; si no da más,
+        // se devuelve false y quien llama decide si avisar.
+        if (SYS->createReverb3D(&zone) != FMOD_OK || !zone) return false;
+        m_reverbZones[ownerId] = zone;
+    }
+
+    FMOD_VECTOR p = { worldPos.x, worldPos.y, worldPos.z };
+    zone->set3DAttributes(&p, minDistance, maxDistance);
+    zone->setProperties(&props);
+    // Deshabilitada se queda creada pero sin efecto: así alternar la casilla no
+    // cuesta crear y destruir el recurso cada vez.
+    zone->setActive(enabled);
+    return true;
+#else
+    (void)ownerId; (void)worldPos; (void)minDistance; (void)maxDistance;
+    (void)preset; (void)enabled;
+    return false;
+#endif
+}
+
+void AudioManager::removeReverbZone(uint64_t ownerId)
+{
+#ifdef DT_FMOD_ENABLED
+    auto it = m_reverbZones.find(ownerId);
+    if (it == m_reverbZones.end()) return;
+    reinterpret_cast<FMOD::Reverb3D*>(it->second)->release();
+    m_reverbZones.erase(it);
+#else
+    (void)ownerId;
+#endif
+}
+
+void AudioManager::retainReverbZones(const std::vector<uint64_t>& aliveOwnerIds)
+{
+#ifdef DT_FMOD_ENABLED
+    if (m_reverbZones.empty()) return;
+    for (auto it = m_reverbZones.begin(); it != m_reverbZones.end(); )
+    {
+        const bool alive = std::find(aliveOwnerIds.begin(), aliveOwnerIds.end(), it->first)
+                            != aliveOwnerIds.end();
+        if (alive) { ++it; continue; }
+        // El GameObject que la sostenía ya no está: sin esto su reverb seguiría
+        // aplicándose al resto de la escena para siempre.
+        if (it->second) reinterpret_cast<FMOD::Reverb3D*>(it->second)->release();
+        it = m_reverbZones.erase(it);
+    }
+#else
+    (void)aliveOwnerIds;
+#endif
+}
+
+void AudioManager::clearReverbZones()
+{
+#ifdef DT_FMOD_ENABLED
+    for (auto& [id, zone] : m_reverbZones)
+        if (zone) reinterpret_cast<FMOD::Reverb3D*>(zone)->release();
+    m_reverbZones.clear();
+#endif
+}
+
+size_t AudioManager::reverbZoneCount() const
+{
+#ifdef DT_FMOD_ENABLED
+    return m_reverbZones.size();
+#else
+    return 0;
+#endif
+}
+
+void AudioManager::setBusEffect(AudioBus bus, AudioEffect effect, float amount)
+{
+#ifdef DT_FMOD_ENABLED
+    auto* group = reinterpret_cast<FMOD::ChannelGroup*>(groupForBus(bus));
+    if (!group) return;
+
+    const int key = effectKey(bus, effect);
+    // Ya colgado: solo se reajusta el mando. Sin esta rama, mover un slider
+    // encadenaría un DSP nuevo por frame hasta ahogar el mezclador.
+    if (auto it = m_busEffects.find(key); it != m_busEffects.end())
+    {
+        applyEffectAmount(reinterpret_cast<FMOD::DSP*>(it->second), effect, amount);
+        return;
+    }
+
+    FMOD::DSP* dsp = nullptr;
+    if (SYS->createDSPByType(fmodDspType(effect), &dsp) != FMOD_OK || !dsp) return;
+    applyEffectAmount(dsp, effect, amount);
+    // Si el DSP no se puede enganchar hay que liberarlo aquí mismo: guardarlo
+    // sin conectar dejaría un recurso nativo vivo que nadie volvería a mirar.
+    if (group->addDSP(FMOD_CHANNELCONTROL_DSP_HEAD, dsp) != FMOD_OK)
+    {
+        dsp->release();
+        return;
+    }
+    m_busEffects[key] = dsp;
+#else
+    (void)bus; (void)effect; (void)amount;
+#endif
+}
+
+void AudioManager::clearBusEffect(AudioBus bus, AudioEffect effect)
+{
+#ifdef DT_FMOD_ENABLED
+    const int key = effectKey(bus, effect);
+    auto it = m_busEffects.find(key);
+    if (it == m_busEffects.end()) return;
+    auto* dsp = reinterpret_cast<FMOD::DSP*>(it->second);
+    // Desconectar ANTES de liberar: soltar un DSP todavía enganchado al grupo
+    // deja al mezclador con un puntero muerto en su cadena.
+    if (auto* group = reinterpret_cast<FMOD::ChannelGroup*>(groupForBus(bus)))
+        group->removeDSP(dsp);
+    dsp->release();
+    m_busEffects.erase(it);
+#else
+    (void)bus; (void)effect;
+#endif
+}
+
+void AudioManager::clearBusEffects(AudioBus bus)
+{
+#ifdef DT_FMOD_ENABLED
+    for (AudioEffect e : { AudioEffect::LowPass, AudioEffect::HighPass,
+                            AudioEffect::Echo, AudioEffect::Reverb })
+        clearBusEffect(bus, e);
+#else
+    (void)bus;
+#endif
+}
+
+size_t AudioManager::busDspCount(AudioBus bus) const
+{
+#ifdef DT_FMOD_ENABLED
+    auto* group = reinterpret_cast<FMOD::ChannelGroup*>(groupForBus(bus));
+    if (!group) return 0;
+    int n = 0;
+    if (group->getNumDSPs(&n) != FMOD_OK || n < 0) return 0;
+    return (size_t)n;
+#else
+    (void)bus;
+    return 0;
+#endif
+}
+
+size_t AudioManager::activeEffectCount() const
+{
+#ifdef DT_FMOD_ENABLED
+    return m_busEffects.size();
+#else
+    return 0;
+#endif
+}
+
+bool AudioManager::hasBusEffect(AudioBus bus, AudioEffect effect) const
+{
+#ifdef DT_FMOD_ENABLED
+    return m_busEffects.find(effectKey(bus, effect)) != m_busEffects.end();
+#else
+    (void)bus; (void)effect;
+    return false;
+#endif
+}
 
 void AudioManager::setBusVolume(AudioBus bus, float v)
 {

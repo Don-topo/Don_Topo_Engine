@@ -13,10 +13,17 @@
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Audio/AudioListenerComponent.h"
+#include "DonTopo/Audio/ReverbZoneComponent.h"
 #include "DonTopo/Editor/Command.h"
 #include <nlohmann/json.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/matrix_transform.hpp>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 #include <chrono>
 #include <cmath>
@@ -30,6 +37,11 @@
 
 using namespace DonTopo;
 
+// Los bucles de espera de este fichero (los que aguardan a que FMOD termine de
+// cargar o de reportar un fallo) llevan topes GENEROSOS a proposito: salen en
+// cuanto se cumple la condicion, asi que un tope alto no ralentiza el caso
+// bueno, pero uno ajustado convierte la carga de la maquina en un rojo que no
+// es del codigo. Ya paso una vez, corriendo la suite entera del tiron.
 static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_failures; } } while (0)
 
@@ -712,8 +724,21 @@ static void test_corrupt_file_reports_load_failure(AudioManager& am)
         std::printf("SKIP test_corrupt_file_reports_load_failure (FMOD no disponible)\n");
         return;
     }
+    // Nombre único por proceso. El temporal vive en un directorio compartido y
+    // con un nombre fijo dos instancias simultáneas del test se lo pisarían;
+    // esto es higiene, no el arreglo de un fallo concreto: intenté reproducir
+    // así un rojo intermitente que vi una vez en este binario y NO lo conseguí,
+    // ni con nombre fijo ni con cuatro instancias en paralelo. La causa de aquel
+    // fallo sigue sin identificar.
     const std::filesystem::path bogus =
-        std::filesystem::temp_directory_path() / "dt_audio_corrupto.mp3";
+        std::filesystem::temp_directory_path() /
+        ("dt_audio_corrupto_" + std::to_string(
+#ifdef _WIN32
+             (unsigned long)GetCurrentProcessId()
+#else
+             (unsigned long)getpid()
+#endif
+         ) + ".mp3");
     {
         std::FILE* f = std::fopen(bogus.string().c_str(), "wb");
         if (!f) { std::printf("SKIP test_corrupt_file_reports_load_failure (no se pudo escribir el temporal)\n"); return; }
@@ -732,7 +757,7 @@ static void test_corrupt_file_reports_load_failure(AudioManager& am)
     // test daba un rojo que no era del código.
     bool failed = false;
     if (clip)
-        for (int i = 0; i < 200 && !failed; ++i)
+        for (int i = 0; i < 600 && !failed; ++i)
         {
             am.update(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
             failed = clip->hasLoadError();
@@ -901,7 +926,7 @@ static void test_playOneShot_does_not_register_a_channel(AudioManager& am)
     // esta ayuda con tope; hacerlos inmediatos daba un test intermitente, que
     // es peor que no tenerlo.
     auto waitUntil = [&pump](const std::function<bool()>& cond) {
-        for (int i = 0; i < 400; ++i)
+        for (int i = 0; i < 900; ++i)
         {
             pump();
             if (cond()) return true;
@@ -1151,7 +1176,7 @@ static void test_load_mode_round_trip_and_cache(PhysicsManager& pm, AudioManager
     // OPENSTATE_LOADING. Sin esta espera el aserto fallaba siempre — y de forma
     // engañosa, porque también "fallaba" con el sabotaje puesto y parecía que lo
     // estaba detectando.
-    for (int i = 0; i < 200 && am.getSoundState(streamId) == AudioManager::SoundLoadState::Loading; ++i)
+    for (int i = 0; i < 600 && am.getSoundState(streamId) == AudioManager::SoundLoadState::Loading; ++i)
     {
         am.update(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -1316,7 +1341,7 @@ static void test_playClipAtPoint_pins_sound_once(AudioManager& am)
     // eso lo reporta pollLoadFailures, no esta ruta. Se comprueba que al menos
     // no rompe nada y que el fallo se puede observar por el canal de siempre.
     std::vector<std::string> failures;
-    for (int i = 0; i < 100 && failures.empty(); ++i)
+    for (int i = 0; i < 600 && failures.empty(); ++i)
     {
         am.update(pos, glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
         am.pollLoadFailures(failures);
@@ -1405,7 +1430,7 @@ static void test_p12_round_trip_and_cache(PhysicsManager& pm, AudioManager& am)
         // Y que la curva LLEGUE a FMOD, no solo que el componente la recuerde.
         // Hay que esperar a Ready: con FMOD_NONBLOCKING el modo no está
         // completo mientras carga (la misma trampa que con CREATESTREAM).
-        for (int i = 0; i < 200 && am.getSoundState(linear) == AudioManager::SoundLoadState::Loading; ++i)
+        for (int i = 0; i < 600 && am.getSoundState(linear) == AudioManager::SoundLoadState::Loading; ++i)
         {
             am.update(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -1475,6 +1500,174 @@ static void test_p12_back_compat(PhysicsManager& pm, AudioManager& am)
     }
 }
 
+// P13: efectos DSP por bus. Lo que más importa aquí no es que el filtro suene
+// —eso no se puede medir headless— sino que los DSP se creen UNA vez y se
+// liberen: son recursos nativos de FMOD, y la fuga clásica de este tipo de API
+// es encadenar un DSP por frame mientras se mueve un slider.
+static void test_bus_effects_are_idempotent_and_released(AudioManager& am)
+{
+    if (!am.available())
+    {
+        std::printf("SKIP test_bus_effects_are_idempotent_and_released (FMOD no disponible)\n");
+        return;
+    }
+    CHECK(am.activeEffectCount() == 0);
+    CHECK(!am.hasBusEffect(AudioBus::Music, AudioEffect::LowPass));
+
+    am.setBusEffect(AudioBus::Music, AudioEffect::LowPass, 0.2f);
+    CHECK(am.activeEffectCount() == 1);
+    CHECK(am.hasBusEffect(AudioBus::Music, AudioEffect::LowPass));
+
+    // EL ASERTO QUE IMPORTA: cien reajustes seguidos —lo que hace un slider al
+    // arrastrarse— no pueden crear cien DSP.
+    //
+    // Se mide preguntándole a FMOD cuántos DSP tiene el grupo, NO contando las
+    // entradas del mapa: si setBusEffect encadenara uno nuevo cada vez, la
+    // entrada nueva pisaría a la vieja y el mapa seguiría diciendo 1 mientras el
+    // grupo acumula cien DSP perdidos. Con activeEffectCount, este test pasaba
+    // con la idempotencia saboteada.
+    const size_t dspsWithOneEffect = am.busDspCount(AudioBus::Music);
+    for (int i = 0; i < 100; ++i)
+        am.setBusEffect(AudioBus::Music, AudioEffect::LowPass, i / 100.0f);
+    CHECK(am.activeEffectCount() == 1);
+    CHECK(am.busDspCount(AudioBus::Music) == dspsWithOneEffect);
+
+    // Efectos distintos y buses distintos sí son instancias distintas: un
+    // lowPass en Music y otro en SFX no se pisan.
+    am.setBusEffect(AudioBus::Music, AudioEffect::Reverb, 0.5f);
+    am.setBusEffect(AudioBus::Sfx,   AudioEffect::LowPass, 0.5f);
+    CHECK(am.activeEffectCount() == 3);
+    CHECK(am.hasBusEffect(AudioBus::Sfx, AudioEffect::LowPass));
+    CHECK(!am.hasBusEffect(AudioBus::Sfx, AudioEffect::Reverb));
+
+    // Quitar uno solo deja los otros.
+    am.clearBusEffect(AudioBus::Music, AudioEffect::LowPass);
+    CHECK(am.activeEffectCount() == 2);
+    CHECK(!am.hasBusEffect(AudioBus::Music, AudioEffect::LowPass));
+    CHECK(am.hasBusEffect(AudioBus::Music, AudioEffect::Reverb));
+
+    // Quitar algo que no está puesto es no-op, no un fallo.
+    am.clearBusEffect(AudioBus::Music, AudioEffect::LowPass);
+    CHECK(am.activeEffectCount() == 2);
+
+    // Y el barrido por bus se lleva los suyos y solo los suyos.
+    am.clearBusEffects(AudioBus::Music);
+    CHECK(am.activeEffectCount() == 1);
+    CHECK(am.hasBusEffect(AudioBus::Sfx, AudioEffect::LowPass));
+
+    am.clearBusEffects(AudioBus::Sfx);
+    CHECK(am.activeEffectCount() == 0);
+
+    // Los cuatro tipos se pueden crear: si alguno no existiera en esta versión
+    // de FMOD, createDSPByType fallaría y el contador lo diría.
+    am.setBusEffect(AudioBus::Master, AudioEffect::LowPass,  0.5f);
+    am.setBusEffect(AudioBus::Master, AudioEffect::HighPass, 0.5f);
+    am.setBusEffect(AudioBus::Master, AudioEffect::Echo,     0.5f);
+    am.setBusEffect(AudioBus::Master, AudioEffect::Reverb,   0.5f);
+    CHECK(am.activeEffectCount() == 4);
+    am.clearBusEffects(AudioBus::Master);
+    CHECK(am.activeEffectCount() == 0);
+}
+
+// Zonas de reverb: creación idempotente, round-trip por el .scene y —lo que
+// más importa— que la zona de un GameObject borrado se libere. Sin eso, su
+// reverb se seguiría aplicando a toda la escena para siempre y no habría forma
+// de quitarla.
+static void test_reverb_zones(PhysicsManager& pm, AudioManager& am)
+{
+    if (!am.available())
+    {
+        std::printf("SKIP test_reverb_zones (FMOD no disponible)\n");
+        return;
+    }
+    am.clearReverbZones();
+    CHECK(am.reverbZoneCount() == 0);
+
+    Scene scene("Test");
+    GameObject* cueva = scene.addGameObject("cueva");
+    GameObject* sala  = scene.addGameObject("sala");
+    auto z1 = std::make_shared<ReverbZoneComponent>();
+    z1->setPreset("cave");
+    z1->setMaxDistance(500.0f);
+    z1->setMinDistance(120.0f);
+    cueva->setReverbZone(z1);
+    auto z2 = std::make_shared<ReverbZoneComponent>();
+    z2->setPreset("bathroom");
+    sala->setReverbZone(z2);
+    scene.getRoot().updateWorldTransforms();
+
+    scene.syncReverbZones(am);
+    CHECK(am.reverbZoneCount() == 2);
+
+    // Idempotente: cien frames no crean cien zonas.
+    for (int i = 0; i < 100; ++i) scene.syncReverbZones(am);
+    CHECK(am.reverbZoneCount() == 2);
+
+    // EL ASERTO QUE IMPORTA: quitar el componente libera su zona en el
+    // siguiente sync.
+    sala->setReverbZone(nullptr);
+    scene.syncReverbZones(am);
+    CHECK(am.reverbZoneCount() == 1);
+
+    // Y borrar el GameObject entero, también.
+    scene.removeGameObject(cueva);
+    scene.syncReverbZones(am);
+    CHECK(am.reverbZoneCount() == 0);
+
+    // Un preset inventado no instala una zona con un ambiente cualquiera.
+    CHECK(!am.syncReverbZone(999, glm::vec3(0.0f), 10.0f, 100.0f, "catedral_submarina", true));
+    CHECK(am.reverbZoneCount() == 0);
+
+    // Round-trip por la escena, con valores no neutros y distintos entre sí.
+    Scene s2("RT");
+    GameObject* go = s2.addGameObject("ambiente");
+    auto z = std::make_shared<ReverbZoneComponent>();
+    z->setPreset("hangar");
+    z->setMaxDistance(777.0f);
+    z->setMinDistance(88.0f);
+    z->setEnabled(false);
+    go->setReverbZone(z);
+
+    nlohmann::json j = s2.toJson();
+    CHECK(j["root"]["children"][0]["reverbZone"]["preset"] == "hangar");
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(go->id);
+    CHECK(found != nullptr);
+    if (!found || !found->hasReverbZone()) { CHECK(false); return; }
+    const auto& lz = found->getReverbZone();
+    CHECK(lz->getPreset() == "hangar");
+    CHECK(nearlyEqual(lz->getMinDistance(), 88.0f));
+    CHECK(nearlyEqual(lz->getMaxDistance(), 777.0f));
+    CHECK(lz->getEnabled() == false);
+
+    // Preset desconocido en el .scene: avisa y cae a "room".
+    nlohmann::json bad = j;
+    bad["root"]["children"][0]["reverbZone"]["preset"] = "cripta";
+    Scene loadedBad("Bad");
+    CHECK(loadedBad.fromJson(bad, pm, am));
+    GameObject* fb = loadedBad.findById(go->id);
+    if (!fb || !fb->hasReverbZone()) { CHECK(false); return; }
+    CHECK(fb->getReverbZone()->getPreset() == "room");
+    bool warned = false;
+    for (const auto& w : loadedBad.lastWarnings())
+        if (w.find("preset") != std::string::npos) { warned = true; break; }
+    CHECK(warned);
+
+    // Y el invariante min <= max, atacado desde los dos setters.
+    ReverbZoneComponent inv;
+    inv.setMinDistance(400.0f);
+    inv.setMaxDistance(50.0f);
+    CHECK(inv.getMinDistance() <= inv.getMaxDistance());
+    ReverbZoneComponent inv2;
+    inv2.setMaxDistance(30.0f);
+    inv2.setMinDistance(900.0f);
+    CHECK(inv2.getMinDistance() <= inv2.getMaxDistance());
+
+    am.clearReverbZones();
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -1528,6 +1721,8 @@ int main()
     test_p12_props_clamp_and_reject_nan();
     test_p12_round_trip_and_cache(pm, am);
     test_p12_back_compat(pm, am);
+    test_bus_effects_are_idempotent_and_released(am);
+    test_reverb_zones(pm, am);
 
     am.shutdown();
     pm.shutdown();

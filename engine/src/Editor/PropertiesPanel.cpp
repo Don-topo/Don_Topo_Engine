@@ -552,6 +552,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
             drawLightSection(ctx);
             drawAudioClipSection(ctx);
             drawAudioListenerSection(ctx);
+            drawReverbZoneSection(ctx);
             drawCanvasSection(ctx);
             drawButtonSection(ctx);
             drawTextSection(ctx);
@@ -762,6 +763,68 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
     }
 
     ImGui::TreePop();
+}
+
+void PropertiesPanel::drawReverbZoneSection(EditorContext& ctx)
+{
+    // Add-gate: sin el componente no hay seccion, igual que los colliders.
+    if (!ctx.selected->hasReverbZone()) return;
+
+    ImGui::Separator();
+    bool sectionOpen = ImGui::TreeNodeEx("Reverb Zone",
+                                          ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::SameLine(ImGui::GetWindowWidth() - 30.0f);
+    const bool removeClicked = ImGui::SmallButton("x##reverbZone");
+
+    if (sectionOpen)
+    {
+        auto& zone = ctx.selected->getReverbZone();
+        ImGui::TextWrapped("Ambiente sonoro con forma de esfera: dentro suena todo con esta "
+                           "reverberacion. La posicion sale del Transform. Caben varias por "
+                           "escena, y FMOD mezcla las que se solapen.");
+
+        bool enabled = zone->getEnabled();
+        if (ImGui::Checkbox("Enabled##reverb", &enabled))
+            zone->setEnabled(enabled);
+
+        // Combo por NOMBRE: lo que se guarda en la escena es la cadena, asi que
+        // reordenar esta lista no cambia el ambiente de ningun proyecto.
+        const auto& presets = AudioManager::reverbPresetNames();
+        int current = 0;
+        for (int i = 0; i < (int)presets.size(); ++i)
+            if (presets[i] == zone->getPreset()) { current = i; break; }
+        if (ImGui::BeginCombo("Preset", presets[current].c_str()))
+        {
+            for (int i = 0; i < (int)presets.size(); ++i)
+            {
+                const bool selected = (i == current);
+                if (ImGui::Selectable(presets[i].c_str(), selected))
+                    zone->setPreset(presets[i]);
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+
+        float minD = zone->getMinDistance();
+        if (ImGui::SliderFloat("Min distance##reverb", &minD, 0.1f, 1000.0f, "%.1f"))
+            zone->setMinDistance(minD);
+        float maxD = zone->getMaxDistance();
+        if (ImGui::SliderFloat("Max distance##reverb", &maxD, 1.0f, 2000.0f, "%.1f"))
+            zone->setMaxDistance(maxD);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Dentro de Min la reverb va a tope; entre Min y Max se desvanece. "
+                              "Fuera de Max no hay efecto.");
+
+        ImGui::TreePop();
+    }
+
+    if (removeClicked)
+    {
+        // El recurso de FMOD lo suelta el sync del frame siguiente, que ve que
+        // este id ya no tiene zona (Scene::syncReverbZones -> retainReverbZones).
+        ctx.selected->setReverbZone(nullptr);
+        ctx.pushLog("Componente Reverb Zone quitado de '" + ctx.selected->name + "'");
+    }
 }
 
 void PropertiesPanel::drawAudioListenerSection(EditorContext& ctx)
@@ -8327,6 +8390,18 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         if (existingListener && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Ya hay un Audio Listener en la escena ('%s'): quítalo de ahí "
                               "antes de poner otro", existingListener->name.c_str());
+
+        // Reverb Zone: sin invariante de escena (caben varias, y FMOD mezcla
+        // las que se solapen), asi que el unico gate es no poner dos al mismo
+        // objeto.
+        const bool alreadyHasReverb = ctx.selected->hasReverbZone();
+        ImGui::BeginDisabled(alreadyHasReverb);
+        if (ImGui::Selectable("Reverb Zone") && !alreadyHasReverb)
+        {
+            ctx.selected->setReverbZone(std::make_shared<ReverbZoneComponent>());
+            ctx.pushLog("Componente Reverb Zone añadido a '" + ctx.selected->name + "'");
+        }
+        ImGui::EndDisabled();
 
         // Canvas: raíz de la UI 2D. Sin invariante de escena (caben varios),
         // así que el único gate es no añadir dos al mismo objeto. Pasa por el

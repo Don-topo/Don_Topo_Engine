@@ -38,6 +38,7 @@ add_library(DonTopoCore STATIC
     src/Files/FileManager.cpp
     src/Audio/AudioManager.cpp
     src/Audio/AudioClipComponent.cpp
+    src/Audio/ReverbZoneComponent.cpp
     src/Scripting/ScriptComponent.cpp
     src/Scripting/ScriptManager.cpp
     src/Core/Input.cpp

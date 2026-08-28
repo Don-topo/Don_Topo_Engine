@@ -112,6 +112,46 @@ inline bool audioRolloffFromStr(const std::string& name, AudioRolloff& out)
     return false;
 }
 
+// Efectos que se pueden colgar de un bus. Son los tipos de DSP que FMOD Core
+// trae de serie (System::createDSPByType), así que NO hacen falta ni FMOD Studio
+// ni bancos: eso descarta snapshots y eventos, no los filtros.
+//
+// Cuelgan del BUS y no de cada clip a propósito: un filtro por voz se paga por
+// voz, y el caso de uso real —"todo suena amortiguado dentro del agua", "la
+// música baja de graves en el menú de pausa"— es de grupo.
+enum class AudioEffect {
+    // Corta los agudos por encima de la frecuencia de corte. Es el efecto de
+    // "estoy debajo del agua" o "el sonido viene de la habitación de al lado".
+    LowPass,
+    // Corta los graves por debajo del corte: voz de radio, teléfono.
+    HighPass,
+    // Repeticiones espaciadas del sonido: cueva, megafonía de estadio.
+    Echo,
+    // Cola reverberante: la sensación de estar en un espacio grande.
+    Reverb
+};
+
+inline const char* audioEffectToStr(AudioEffect e)
+{
+    switch (e)
+    {
+        case AudioEffect::HighPass: return "highPass";
+        case AudioEffect::Echo:     return "echo";
+        case AudioEffect::Reverb:   return "reverb";
+        case AudioEffect::LowPass:
+        default:                    return "lowPass";
+    }
+}
+
+inline bool audioEffectFromStr(const std::string& name, AudioEffect& out)
+{
+    if (name == "lowPass")  { out = AudioEffect::LowPass;  return true; }
+    if (name == "highPass") { out = AudioEffect::HighPass; return true; }
+    if (name == "echo")     { out = AudioEffect::Echo;     return true; }
+    if (name == "reverb")   { out = AudioEffect::Reverb;   return true; }
+    return false;
+}
+
 // ¿Es una extensión de audio de las que acepta el motor? Vive aquí, y no en el
 // panel de Properties, porque hay CUATRO rutas por las que entra un audio (el
 // diálogo del inspector, su drop-zone, AddComponent desde Lua y la carga de

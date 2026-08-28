@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -199,6 +200,81 @@ public:
     void  setBusVolume(AudioBus bus, float v);
     float getBusVolume(AudioBus bus) const;
 
+    // --- Zonas de reverberacion --------------------------------------------
+    //
+    // Una zona es un FMOD::Reverb3D: una esfera con preset dentro de la cual
+    // todo lo que suene coge esa reverb. La mezcla entre zonas solapadas y el
+    // desvanecido entre min y max los hace FMOD, no nosotros.
+    //
+    // Se identifican por el id del GameObject dueno, no por indice: asi el
+    // componente se mantiene como datos puros y el recurso nativo tiene un solo
+    // dueno. syncReverbZone crea la zona la primera vez y la actualiza despues,
+    // asi que se puede llamar por frame sin miedo.
+    //
+    // preset: nombre de un FMOD_PRESET_* en minusculas (ver reverbPresetNames).
+    // Uno desconocido deja la zona con el preset anterior y devuelve false.
+    bool syncReverbZone(uint64_t ownerId, const glm::vec3& worldPos,
+                        float minDistance, float maxDistance,
+                        const std::string& preset, bool enabled);
+
+    // Destruye la zona de ese GameObject. No-op si no tenia.
+    void removeReverbZone(uint64_t ownerId);
+
+    // Destruye toda zona cuyo id NO este en la lista. Es como se recogen las
+    // zonas de GameObjects borrados: el manager no ve la escena, asi que es la
+    // escena la que le dice quien sigue vivo.
+    void retainReverbZones(const std::vector<uint64_t>& aliveOwnerIds);
+
+    // Destruye TODAS. La llama la carga de escena: las zonas de la escena
+    // anterior no pueden sobrevivir a la nueva.
+    void clearReverbZones();
+
+    // Zonas vivas. Diagnostico y tests: sin esto, "la zona se creo" y "la zona
+    // se creo y se perdio" son lo mismo desde fuera.
+    size_t reverbZoneCount() const;
+
+    // Presets disponibles, en el orden en que los ensena la UI. Estatico: la
+    // lista es la misma con o sin FMOD compilado, para que el editor pueda
+    // dibujar el combo aunque no haya audio.
+    static const std::vector<std::string>& reverbPresetNames();
+
+    // --- Efectos por bus ---------------------------------------------------
+    //
+    // Cuelgan un DSP de FMOD del ChannelGroup del bus, asi que afectan a TODO lo
+    // que salga por el. Idempotente: pedir dos veces el mismo efecto en el mismo
+    // bus no encadena dos copias.
+    //
+    // El parametro es el unico mando de cada efecto, normalizado a [0, 1] para
+    // que la UI y Lua no tengan que conocer las unidades de FMOD:
+    //   LowPass / HighPass -> frecuencia de corte (0 = mas cerrado, 1 = abierto)
+    //   Echo               -> retardo entre repeticiones
+    //   Reverb             -> tamano de la cola
+    // El mapeo exacto a las unidades de FMOD vive en el .cpp, en un solo sitio.
+    void setBusEffect(AudioBus bus, AudioEffect effect, float amount);
+
+    // Quita el efecto del bus y libera su DSP. No-op si no estaba puesto.
+    void clearBusEffect(AudioBus bus, AudioEffect effect);
+
+    // Quita TODOS los efectos de un bus. Lo usa el editor al cambiar de escena.
+    void clearBusEffects(AudioBus bus);
+
+    // Diagnostico y tests: cuantos DSP hay colgados ahora mismo. Sin esto, "el
+    // efecto se aplico" y "el efecto se creo y se perdio" son indistinguibles
+    // desde fuera, y una fuga de DSP no se ve hasta que el mezclador se ahoga.
+    size_t activeEffectCount() const;
+
+    // DSP realmente conectados al grupo de un bus, preguntandoselo a FMOD. NO es
+    // lo mismo que activeEffectCount, y la diferencia es justo donde vive la
+    // fuga: si setBusEffect encadenara un DSP nuevo en cada llamada en vez de
+    // reajustar el existente, el mapa seguiria teniendo UNA entrada (la nueva
+    // pisa a la vieja) mientras el grupo acumula cien DSP perdidos. Lo descubri
+    // saboteando la idempotencia y viendo que activeEffectCount no se enteraba.
+    //
+    // Incluye el DSP que FMOD pone de serie en cada grupo (el fader), asi que el
+    // valor absoluto no significa nada: se usa por diferencia.
+    size_t busDspCount(AudioBus bus) const;
+    bool   hasBusEffect(AudioBus bus, AudioEffect effect) const;
+
     // Carga path con el modo dado (is3D/loop horneados en el FMOD_MODE) y
     // envuelve el soundId resultante en un AudioClipComponent listo para
     // colgar de un GameObject (GameObject::setAudioClip). nullptr si
@@ -251,6 +327,18 @@ private:
     // crecería sin techo: el sonido no se liberaría jamás ni aunque se llamara
     // a unloadSound tantas veces como haga falta.
     std::unordered_set<int>  m_pinnedSounds;
+    // DSP vivos, indexados por (bus, efecto). El valor es un FMOD::DSP* que hay
+    // que desconectar Y liberar: son recursos nativos, no punteros sueltos, y
+    // olvidarlos es la fuga clasica de este tipo de API.
+    std::unordered_map<int, void*> m_busEffects;
+    // FMOD::Reverb3D* por id de GameObject. Recursos nativos: hay que
+    // liberarlos, y por eso el componente no los guarda.
+    std::unordered_map<uint64_t, void*> m_reverbZones;
+    // Clave del mapa. bus y efecto son enums pequenos, asi que caben de sobra.
+    static int effectKey(AudioBus bus, AudioEffect effect)
+    {
+        return (int)bus * 16 + (int)effect;
+    }
     // Ultima posicion conocida del listener y de cada fuente, para derivar la
     // velocidad que necesita el doppler. m_hasLastListenerPos evita que el
     // primer frame invente una velocidad enorme desde el origen.

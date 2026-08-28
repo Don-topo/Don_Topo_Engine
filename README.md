@@ -912,8 +912,35 @@ Global mixing lives in the `Audio` table, and is what a options menu would drive
 | `Audio.PlayClipAtPoint(path, x, y, z [, volume, pitch, bus])` | A 3D one-shot at a world position, with **no GameObject involved** — for an impact or an explosion whose emitter is destroyed in that same frame. The sound stays cached after first use. |
 | `Audio.Preload(path)` | Loads and keeps a clip without playing it. Worth calling in `Start()`: FMOD loads lazily, so the **first** `PlayClipAtPoint` of a new path is very likely inaudible. Idempotent. |
 
+| `Audio.SetBusEffect(bus, effect, amount)` | Hangs a DSP on a whole bus: `"lowPass"`, `"highPass"`, `"echo"` or `"reverb"`. `amount` is `[0, 1]` — the engine maps it to each effect's real units, so scripts never touch Hz or ms. Idempotent: calling it every frame adjusts the same DSP instead of stacking copies. |
+| `Audio.ClearBusEffect(bus [, effect])` | Removes one effect, or **all** of that bus when the second argument is omitted — which is what you want on leaving the water or closing the pause menu. |
+
 The three volumes are stored in `project.json` and restored when the project opens; the
-editor exposes them under **View → Master / Music / SFX Volume**.
+editor exposes them under **View → Master / Music / SFX Volume**. Effects are runtime-only
+and deliberately not serialized: they model a temporary game state, not a scene property.
+
+**Reverb zones** are spheres of ambience: inside one, everything is heard with that
+reverberation. Several per scene are fine — FMOD blends the overlapping ones and fades
+between min and max distance by itself. Add one in the inspector (**Add → Reverb Zone**,
+with its own wireframe gizmo) or from a script:
+
+| Method | Notes |
+| --- | --- |
+| `SetPreset(name)` / `GetPreset()` | One of FMOD's presets: `"cave"`, `"bathroom"`, `"hangar"`, `"underwater"`, `"forest"`… An unknown name warns and keeps the previous one. |
+| `SetMinDistance(d)` / `SetMaxDistance(d)` | Full reverb inside min, fading out to max, nothing beyond. The position comes from the Transform. |
+| `SetEnabled(b)` / `GetEnabled()` | Disabled keeps the zone allocated but silent, so toggling costs nothing. |
+
+```lua
+-- Todo suena amortiguado bajo el agua, y la musica pierde graves en la pausa
+function Player:OnEnterWater()
+    Audio.SetBusEffect("master", "lowPass", 0.15)
+    Audio.SetBusEffect("master", "reverb", 0.4)
+end
+
+function Player:OnExitWater()
+    Audio.ClearBusEffect("master")   -- sin segundo argumento: todos
+end
+```
 
 `SetVolume`, `SetPitch`, `SetMinDistance` and `SetMaxDistance` reject non-finite values (a
 `0/0` in a script) and say so in the log instead of letting a `NaN` reach the scene file.

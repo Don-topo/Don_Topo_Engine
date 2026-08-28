@@ -159,6 +159,14 @@ const std::vector<std::string>& baseSymbols()
         // Sonido posicional sin GameObject. Preload evita que el primer disparo
         // se pierda por la carga diferida de FMOD.
         "Audio.PlayClipAtPoint", "Audio.Preload",
+        // Efectos por bus: lowPass, highPass, echo, reverb.
+        "Audio.SetBusEffect", "Audio.ClearBusEffect",
+
+        // ReverbZone (GetComponent("ReverbZone") / AddComponent("ReverbZone"))
+        "ReverbZone:SetPreset", "ReverbZone:GetPreset",
+        "ReverbZone:SetMinDistance", "ReverbZone:GetMinDistance",
+        "ReverbZone:SetMaxDistance", "ReverbZone:GetMaxDistance",
+        "ReverbZone:SetEnabled", "ReverbZone:GetEnabled",
 
         // UI 2D — Canvas (Entity:GetCanvas / Entity:AddCanvas)
         "Canvas.scaleMode", "Canvas.scaleFactor", "Canvas.screenMatch",

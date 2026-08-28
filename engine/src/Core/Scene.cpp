@@ -1135,6 +1135,16 @@ namespace
                                 {"minDistance", clip->getMinDistance()},
                                 {"maxDistance", clip->getMaxDistance()} };
         }
+        if (node.hasReverbZone())
+        {
+            const auto& z = node.getReverbZone();
+            // Ni posicion ni radio-en-mundo: la posicion sale del
+            // worldTransform, como en el Audio Listener.
+            j["reverbZone"] = { {"preset", z->getPreset()},
+                                 {"minDistance", z->getMinDistance()},
+                                 {"maxDistance", z->getMaxDistance()},
+                                 {"enabled", z->getEnabled()} };
+        }
         if (node.hasAudioListener())
         {
             // Ni posición ni orientación: salen del worldTransform, que ya se
@@ -2556,6 +2566,33 @@ namespace
         // y cargan igual (version sigue en 1). El invariante de uno por escena
         // NO se impone aquí (nodeFromJson no ve el árbol entero): lo hace
         // pruneExtraAudioListeners al final de fromJson.
+        if (j.contains("reverbZone"))
+        {
+            const auto& z = j["reverbZone"];
+            const std::string zctx = "reverbZone de '" + node->name + "'";
+            auto zone = std::make_shared<DonTopo::ReverbZoneComponent>();
+            // El preset se valida contra la lista real: uno desconocido avisa y
+            // cae a "room" en vez de instalar un ambiente cualquiera.
+            const std::string preset = readString(z, "preset", "room", warnings, zctx);
+            const auto& known = DonTopo::AudioManager::reverbPresetNames();
+            if (std::find(known.begin(), known.end(), preset) == known.end())
+            {
+                if (warnings)
+                    warnings->push_back(zctx + ".preset: desconocido '" + preset +
+                                         "', se usa 'room'");
+                zone->setPreset("room");
+            }
+            else
+            {
+                zone->setPreset(preset);
+            }
+            // Max antes que min, como en el AudioClip: los dos setters mantienen
+            // el invariante entre ellos.
+            zone->setMaxDistance(readFloat(z, "maxDistance", 200.0f, warnings, zctx));
+            zone->setMinDistance(readFloat(z, "minDistance", 50.0f, warnings, zctx));
+            zone->setEnabled(readBool(z, "enabled", true, warnings, zctx));
+            node->setReverbZone(std::move(zone));
+        }
         if (j.contains("audioListener"))
         {
             auto listener = std::make_shared<AudioListenerComponent>();
@@ -3049,6 +3086,23 @@ namespace DonTopo
             if (go->hasAudioClip())
                 go->getAudioClip()->updateSpatial(glm::vec3(go->worldTransform[3]), dt);
         });
+    }
+
+    void Scene::syncReverbZones(AudioManager& audio)
+    {
+        // Los ids vistos en este barrido; lo que el manager tenga y no este aqui
+        // es de un GameObject borrado y hay que soltarlo. Sin esta parte, borrar
+        // un objeto con zona dejaria su reverb sonando para siempre.
+        std::vector<uint64_t> alive;
+        m_root.traverse([&](GameObject* go) {
+            if (!go->hasReverbZone()) return;
+            const auto& z = go->getReverbZone();
+            audio.syncReverbZone(go->id, glm::vec3(go->worldTransform[3]),
+                                  z->getMinDistance(), z->getMaxDistance(),
+                                  z->getPreset(), z->getEnabled());
+            alive.push_back(go->id);
+        });
+        audio.retainReverbZones(alive);
     }
 
     void Scene::shutdown(PhysicsManager& /*physics*/, AudioManager& /*audio*/)

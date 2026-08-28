@@ -284,6 +284,19 @@ void ViewportPanel::drawSelectionGizmo(EditorContext& ctx)
         Gizmos::drawWireSphere(basis, glm::vec3(0.0f), clip.getMinDistance(), kAudioColor);
         Gizmos::drawWireSphere(basis, glm::vec3(0.0f), clip.getMaxDistance(), kAudioColor);
     }
+
+    // Zona de reverb: mismas dos esferas (dentro de min va a tope, entre min y
+    // max se desvanece) en otro color para no confundirla con la atenuacion de
+    // un AudioClip, que se dibuja igual.
+    if (ctx.selected->hasReverbZone())
+    {
+        const glm::vec3 kReverbColor(0.2f, 0.9f, 0.9f);
+        glm::mat4 basis(1.0f);
+        basis[3] = ctx.selected->worldTransform[3];
+        const ReverbZoneComponent& zone = *ctx.selected->getReverbZone();
+        Gizmos::drawWireSphere(basis, glm::vec3(0.0f), zone.getMinDistance(), kReverbColor);
+        Gizmos::drawWireSphere(basis, glm::vec3(0.0f), zone.getMaxDistance(), kReverbColor);
+    }
 }
 
 void ViewportPanel::drawCameraGizmo(EditorContext& ctx)

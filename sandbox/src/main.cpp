@@ -462,6 +462,7 @@ int main()
                 {
                     d3dPhysics.stepSimulation(d3dDelta);
                     d3dScene.update(d3dDelta, d3dPhysics);
+                    d3dScene.syncReverbZones(d3dAudio);
                     d3dScripts.update(d3dDelta);
                 }
                 else
@@ -1007,6 +1008,7 @@ int main()
             {
                 physics.stepSimulation(dt);
                 scene.update(dt, physics);
+                scene.syncReverbZones(audio);
                 scriptManager.update(dt);
             }
             else

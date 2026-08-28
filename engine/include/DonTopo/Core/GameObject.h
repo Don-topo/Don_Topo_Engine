@@ -13,6 +13,7 @@
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Audio/AudioListenerComponent.h"
+#include "DonTopo/Audio/ReverbZoneComponent.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/ReflectionProbeComponent.h"
@@ -119,6 +120,13 @@ namespace DonTopo
             void setAudioListener(std::shared_ptr<AudioListenerComponent> l) { m_audioListener = std::move(l); }
             const std::shared_ptr<AudioListenerComponent>& getAudioListener() const { return m_audioListener; }
             bool hasAudioListener() const { return m_audioListener != nullptr; }
+
+            // Zona de reverberacion: esfera de ambiente sonoro. Varias por
+            // escena, a diferencia del listener. El recurso de FMOD no vive
+            // aqui: lo lleva AudioManager emparejado por este id.
+            void setReverbZone(std::shared_ptr<ReverbZoneComponent> z) { m_reverbZone = std::move(z); }
+            const std::shared_ptr<ReverbZoneComponent>& getReverbZone() const { return m_reverbZone; }
+            bool hasReverbZone() const { return m_reverbZone != nullptr; }
 
             // Cámara de juego: al dar a Play el Renderer renderiza desde este
             // GameObject (su worldTransform da posición y orientación). Como
@@ -310,6 +318,7 @@ namespace DonTopo
             std::shared_ptr<Rigidbody> m_rigidbody;
             std::shared_ptr<AudioClipComponent> m_audioClip;
             std::shared_ptr<AudioListenerComponent> m_audioListener;
+            std::shared_ptr<ReverbZoneComponent> m_reverbZone;
             std::shared_ptr<CameraComponent> m_cameraComponent;
             std::shared_ptr<AnimatorComponent> m_animator;
             std::shared_ptr<ReflectionProbeComponent> m_reflectionProbe;

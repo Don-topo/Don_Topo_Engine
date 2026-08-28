@@ -130,6 +130,7 @@ private:
     // escena — el gate de unicidad está en el popup "Add", contra
     // Scene::findAudioListener.
     void drawAudioListenerSection(EditorContext& ctx);
+    void drawReverbZoneSection(EditorContext& ctx);
     // Canvas: raíz de la UI 2D. Sección tras "Add" como los colliders, con los
     // 10 campos de resolución que resuelve UiCanvas.
     void drawCanvasSection(EditorContext& ctx);

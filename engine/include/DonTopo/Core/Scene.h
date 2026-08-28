@@ -162,6 +162,14 @@ namespace DonTopo
             // efecto doppler, que es lo correcto en Edit Mode.
             void updateAudioSpatial(float dt = 0.0f);
 
+            // Empuja las zonas de reverb de la escena al AudioManager: crea las
+            // nuevas, mueve las que existan y destruye las de GameObjects que ya
+            // no estan. Se llama por frame; syncReverbZone es idempotente.
+            //
+            // Vive aqui y no en el AudioManager porque el manager no conoce la
+            // escena, y no en cada bucle de host porque son tres.
+            void syncReverbZones(AudioManager& audio);
+
             void shutdown(PhysicsManager& physics, AudioManager& audio);
 
             // Serializa el árbol completo (transforms, mesh, colliders, audio

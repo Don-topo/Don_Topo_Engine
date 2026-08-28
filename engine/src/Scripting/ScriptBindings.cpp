@@ -131,6 +131,7 @@ namespace DonTopo::ScriptBindings
         struct LuaCapsuleCollider { LuaEntity e; };
         struct LuaPlaneCollider { LuaEntity e; };
         struct LuaAudioClip { LuaEntity e; };
+        struct LuaReverbZone { LuaEntity e; };
         struct LuaRigidbody { LuaEntity e; };
         struct LuaAnimator { LuaEntity e; };
         struct LuaCanvas { LuaEntity e; };
@@ -2242,6 +2243,7 @@ namespace DonTopo::ScriptBindings
                     if (name == "CapsuleCollider" && go->hasCapsuleCollider()) return sol::make_object(lua, LuaCapsuleCollider{e});
                     if (name == "PlaneCollider"   && go->hasPlaneCollider())   return sol::make_object(lua, LuaPlaneCollider{e});
                     if (name == "AudioClip"       && go->hasAudioClip())       return sol::make_object(lua, LuaAudioClip{e});
+                    if (name == "ReverbZone"      && go->hasReverbZone())      return sol::make_object(lua, LuaReverbZone{e});
                     if (name == "Rigidbody"       && go->hasRigidbody())       return sol::make_object(lua, LuaRigidbody{e});
                     if (name == "Animator"        && go->hasAnimator())        return sol::make_object(lua, LuaAnimator{e});
                     if (name == "Canvas"          && go->hasCanvas())          return sol::make_object(lua, LuaCanvas{e});
@@ -2297,6 +2299,11 @@ namespace DonTopo::ScriptBindings
                         go->setPlaneCollider(mgr->physics()->createPlaneColliderComponent(
                             glm::vec3(0.0f), go->worldTransform));
                         return sol::make_object(lua, LuaPlaneCollider{e});
+                    }
+                    if (name == "ReverbZone" && !go->hasReverbZone())
+                    {
+                        go->setReverbZone(std::make_shared<ReverbZoneComponent>());
+                        return sol::make_object(lua, LuaReverbZone{e});
                     }
                     if (name == "AudioClip" && !go->hasAudioClip() && mgr->audioManager() && arg)
                     {
@@ -2418,6 +2425,7 @@ namespace DonTopo::ScriptBindings
                     else if (name == "CapsuleCollider") go->setCapsuleCollider(nullptr);
                     else if (name == "PlaneCollider")   go->setPlaneCollider(nullptr);
                     else if (name == "AudioClip")       go->setAudioClip(nullptr);
+                    else if (name == "ReverbZone")      go->setReverbZone(nullptr);
                     // Quitar un componente de UI se lleva por delante sus
                     // callbacks: el runtime muere con el componente y el handler
                     // del nodo, que solo tiene un weak_ptr, deja de disparar.
@@ -3036,6 +3044,54 @@ namespace DonTopo::ScriptBindings
                 am->preloadClip(path);
             };
 
+            // Efectos por bus: Audio.SetBusEffect("music", "lowPass", 0.2).
+            // Cuelgan de todo lo que salga por ese bus, que es el caso de uso
+            // real ("todo amortiguado bajo el agua"), y no por clip: un filtro
+            // por voz se paga por voz.
+            audio["SetBusEffect"] = [&mgr](const std::string& busName,
+                                            const std::string& effectName, float amount) {
+                AudioManager* am = mgr.audioManager();
+                if (!am) return;
+                AudioBus bus;
+                if (!audioBusFromStr(busName, bus))
+                {
+                    mgr.log("[Lua][WARN] Audio.SetBusEffect: bus desconocido '" + busName + "'");
+                    return;
+                }
+                AudioEffect effect;
+                if (!audioEffectFromStr(effectName, effect))
+                {
+                    mgr.log("[Lua][WARN] Audio.SetBusEffect: efecto desconocido '" + effectName +
+                             "' (usa 'lowPass', 'highPass', 'echo' o 'reverb')");
+                    return;
+                }
+                if (!ensureFinite(mgr, "Audio.SetBusEffect", amount)) return;
+                am->setBusEffect(bus, effect, std::clamp(amount, 0.0f, 1.0f));
+            };
+
+            audio["ClearBusEffect"] = [&mgr](const std::string& busName,
+                                              sol::optional<std::string> effectName) {
+                AudioManager* am = mgr.audioManager();
+                if (!am) return;
+                AudioBus bus;
+                if (!audioBusFromStr(busName, bus))
+                {
+                    mgr.log("[Lua][WARN] Audio.ClearBusEffect: bus desconocido '" + busName + "'");
+                    return;
+                }
+                // Sin segundo argumento se limpia el bus entero: es lo que se
+                // quiere al salir del agua o cerrar el menu de pausa.
+                if (!effectName) { am->clearBusEffects(bus); return; }
+                AudioEffect effect;
+                if (!audioEffectFromStr(*effectName, effect))
+                {
+                    mgr.log("[Lua][WARN] Audio.ClearBusEffect: efecto desconocido '" +
+                             *effectName + "'");
+                    return;
+                }
+                am->clearBusEffect(bus, effect);
+            };
+
             audio["GetBusVolume"] = [&mgr](const std::string& name) -> float {
                 AudioManager* am = mgr.audioManager();
                 if (!am) return 1.0f;
@@ -3047,6 +3103,61 @@ namespace DonTopo::ScriptBindings
                 }
                 return am->getBusVolume(bus);
             };
+
+            // ReverbZone por GameObject: mismo patron que AudioClip, con el
+            // preset y los radios. La zona viva de FMOD la lleva AudioManager;
+            // aqui solo se tocan los datos, y el sync por frame hace el resto.
+            lua.new_usertype<LuaReverbZone>("ReverbZone",
+                sol::no_constructor,
+                "SetPreset", [&mgr](const LuaReverbZone& z, const std::string& name) {
+                    GameObject* go = deref(z.e);
+                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    const auto& known = AudioManager::reverbPresetNames();
+                    if (std::find(known.begin(), known.end(), name) == known.end())
+                    {
+                        mgr.log("[Lua][WARN] ReverbZone.SetPreset: preset desconocido '" + name +
+                                 "', se conserva el anterior");
+                        return;
+                    }
+                    go->getReverbZone()->setPreset(name);
+                },
+                "GetPreset", [](const LuaReverbZone& z) {
+                    GameObject* go = deref(z.e);
+                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    return go->getReverbZone()->getPreset();
+                },
+                "SetMinDistance", [&mgr](const LuaReverbZone& z, float d) {
+                    GameObject* go = deref(z.e);
+                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    if (!ensureFinite(mgr, "ReverbZone.SetMinDistance", d)) return;
+                    go->getReverbZone()->setMinDistance(d);
+                },
+                "GetMinDistance", [](const LuaReverbZone& z) {
+                    GameObject* go = deref(z.e);
+                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    return go->getReverbZone()->getMinDistance();
+                },
+                "SetMaxDistance", [&mgr](const LuaReverbZone& z, float d) {
+                    GameObject* go = deref(z.e);
+                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    if (!ensureFinite(mgr, "ReverbZone.SetMaxDistance", d)) return;
+                    go->getReverbZone()->setMaxDistance(d);
+                },
+                "GetMaxDistance", [](const LuaReverbZone& z) {
+                    GameObject* go = deref(z.e);
+                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    return go->getReverbZone()->getMaxDistance();
+                },
+                "SetEnabled", [](const LuaReverbZone& z, bool e) {
+                    GameObject* go = deref(z.e);
+                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    go->getReverbZone()->setEnabled(e);
+                },
+                "GetEnabled", [](const LuaReverbZone& z) {
+                    GameObject* go = deref(z.e);
+                    if (!go->hasReverbZone()) throw std::runtime_error("El GameObject ya no tiene ReverbZone");
+                    return go->getReverbZone()->getEnabled();
+                });
 
             sol::table physics = lua.create_named_table("Physics");
 
