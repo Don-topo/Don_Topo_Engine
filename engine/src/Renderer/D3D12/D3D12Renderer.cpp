@@ -7763,6 +7763,12 @@ void D3D12Renderer::Impl::computeCascades()
         // El camino Vulkan hace aquí lightProj[1][1] *= -1. En D3D12 NO: es la
         // misma inversión del eje Y que ya no se aplica a la proyección de
         // cámara, y repetirla dejaría las sombras del revés.
+        //
+        // Ojo: esto por sí solo NO basta, y durante un tiempo faltó la otra
+        // mitad. Quien decide dónde acaba cada texel son la matriz y el
+        // VIEWPORT juntos; con la matriz sin invertir, el pase de sombras tiene
+        // que grabar con altura negativa para caer donde pbr.frag va a mirar.
+        // La cuenta está en recordShadowPasses.
         cascadeMatrices[c] = lightProj * lightView;
 
         prevDist = dist;
@@ -7922,9 +7928,29 @@ void D3D12Renderer::Impl::recordShadowPasses()
     toDepthWrite.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     commandList->ResourceBarrier(1, &toDepthWrite);
 
+    // ALTURA NEGATIVA, por lo mismo que el resto de pases de este backend: el
+    // shader que LEE el mapa da por hecha la orientación de Vulkan.
+    //
+    // Quien decide el mapeo son la matriz y el viewport JUNTOS, y hasta ahora
+    // solo se había mirado la matriz. Con g = la Y del punto en espacio de luz
+    // (convención GL, que es la que sale de orthoRH_ZO sin invertir):
+    //
+    //   Vulkan   lightProj[1][1] *= -1  ->  NDC y = -g, y su viewport manda
+    //            y=-1 ARRIBA, luego escribe en la fila (1-g)/2.
+    //            pbr.frag lee uv.v = (-g)*0.5+0.5 = (1-g)/2.  Coincide.
+    //
+    //   D3D12    sin invertir           ->  NDC y = g, y su viewport manda
+    //            y=+1 ARRIBA, luego escribía también en (1-g)/2 —por eso el
+    //            comentario de computeCascades acierta al no volver a invertir
+    //            la matriz—, PERO el shader lee uv.v = g*0.5+0.5 = (1+g)/2.
+    //            Espejado en vertical.
+    //
+    // Invertir el viewport pone la escritura en (1+g)/2, que es justo donde el
+    // shader mira. La matriz se queda como está.
     D3D12_VIEWPORT shadowViewport{};
+    shadowViewport.TopLeftY = static_cast<float>(shadowMapSize);
     shadowViewport.Width    = static_cast<float>(shadowMapSize);
-    shadowViewport.Height   = static_cast<float>(shadowMapSize);
+    shadowViewport.Height   = -static_cast<float>(shadowMapSize);
     shadowViewport.MaxDepth = 1.0f;
     const D3D12_RECT shadowScissor{0, 0, static_cast<LONG>(shadowMapSize),
                                    static_cast<LONG>(shadowMapSize)};
