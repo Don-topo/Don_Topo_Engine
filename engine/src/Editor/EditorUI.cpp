@@ -192,6 +192,7 @@ void drawCollisionLayersWindow(DonTopo::PhysicsManager* physics,
 EditorUI::EditorUI()
     : m_sceneFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_exportDialog(std::make_unique<IGFD::FileDialog>())
+    , m_skyboxDialog(std::make_unique<IGFD::FileDialog>())
     , m_scriptEditor(std::make_unique<ScriptEditorPanel>())
 {
     m_scriptEditor->setLogCallback([this](const std::string& msg) { m_logPanel.push(msg); });
@@ -746,6 +747,94 @@ void EditorUI::applyProjectSettings()
     applyPanel(VS::PanelInputActions,   m_inputActionsPanel.GetOpenPtr());
 }
 
+void EditorUI::applySkyboxFolder(const std::string& folder)
+{
+    if (folder.empty() || !m_renderer)
+        return;
+
+    // Relativa al proyecto si cae dentro: es lo que se persiste y lo que el
+    // exportador sabe resolver. Una carpeta de fuera se guarda tal cual, y
+    // entonces el export no la encontrara — se avisa en el Log.
+    std::string guardada = folder;
+    if (m_project && m_project->valid())
+    {
+        std::error_code ec;
+        const std::filesystem::path rel =
+            std::filesystem::relative(std::filesystem::path(folder), m_project->root(), ec);
+        if (!ec && !rel.empty() && rel.native().rfind(L"..", 0) != 0)
+            guardada = rel.generic_string();
+        else
+            m_logPanel.push("Skybox: '" + folder +
+                            "' esta fuera del proyecto; el juego exportado no la encontrara.");
+    }
+
+    std::snprintf(m_skyboxFolder, sizeof(m_skyboxFolder), "%s", guardada.c_str());
+
+    ProjectContext::ViewSettings tmp;
+    tmp.skyboxFolder = guardada;
+    m_renderer->initSkybox(tmp.skyboxFaces());
+    saveProjectSettings();
+    m_logPanel.push("Skybox recargado desde '" + guardada + "'");
+}
+
+void EditorUI::drawEnvironmentWindow()
+{
+    if (!m_environmentWindowOpen)
+        return;
+
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 200.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Environment", &m_environmentWindowOpen))
+    {
+        ImGui::TextWrapped(
+            "Carpeta del cielo. Dentro se esperan las seis caras con estos nombres: "
+            "px, nx, py, ny, pz y nz (.png). Cambiarla tambien recalcula la "
+            "iluminacion ambiental, que sale de convolucionar este mismo cubemap.");
+        ImGui::Separator();
+
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputText("##SkyboxFolder", m_skyboxFolder, sizeof(m_skyboxFolder));
+
+        if (ImGui::Button("Browse..."))
+        {
+            IGFD::FileDialogConfig cfg;
+            cfg.path  = (m_project && m_project->valid()) ? m_project->root().string()
+                                                          : std::string(".");
+            cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                        ImGuiFileDialogFlags_HideColumnDate |
+                        ImGuiFileDialogFlags_DisableThumbnailMode |
+                        ImGuiFileDialogFlags_DisablePlaceMode;
+            // filters = nullptr -> IGFD selecciona carpeta, igual que el export.
+            m_skyboxDialog->OpenDialog("SkyboxDlg", "Carpeta del skybox", nullptr, cfg);
+            m_skyboxDlgOpen = true;
+        }
+        ImGui::SameLine();
+        // Recargar sin cambiar de carpeta: util tras sobrescribir las imagenes.
+        if (ImGui::Button("Reload"))
+            applySkyboxFolder(m_skyboxFolder);
+
+        // Zona de arrastre. Acepta DT_ASSET_DIR, que es el payload que el Content
+        // Browser pone SOLO a las carpetas: asi ningun fichero cae aqui.
+        ImGui::BeginChild("##SkyboxDrop", ImVec2(0, 44), true);
+        ImGui::TextDisabled("...o arrastra aqui una carpeta desde el Content Browser");
+        if (ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_DIR"))
+                applySkyboxFolder(std::string(static_cast<const char*>(payload->Data)));
+            ImGui::EndDragDropTarget();
+        }
+        ImGui::EndChild();
+    }
+    ImGui::End();
+
+    if (m_skyboxDlgOpen && m_skyboxDialog->Display("SkyboxDlg"))
+    {
+        if (m_skyboxDialog->IsOk())
+            applySkyboxFolder(m_skyboxDialog->GetCurrentPath());
+        m_skyboxDialog->Close();
+        m_skyboxDlgOpen = false;
+    }
+}
+
 void EditorUI::saveProjectSettings()
 {
     if (!m_project || !m_project->valid())
@@ -810,6 +899,7 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
     drawDockSpace();
     // Después del dockspace: una ventana dibujada antes no se puede acoplar.
     drawCollisionLayersWindow(m_physics, [this] { saveProjectSettings(); });
+    drawEnvironmentWindow();
 
     // Ctx único, construido una vez por frame y compartido por referencia
     // con todos los paneles (patrón fijado aquí para las tareas siguientes).
@@ -1104,23 +1194,14 @@ void EditorUI::drawMenuBar()
                             (double)Renderer::probeMemoryBytes() / (1024.0 * 1024.0));
                 ImGui::Text("Ultimo bake: %.2f ms de GPU", m_renderer->lastProbeBakeMs());
 
-                // Cielo del proyecto. Va junto al ambiente porque el IBL global
-                // sale de convolucionar justo este cubemap: cambiarlo cambia los
-                // dos. Dentro de la carpeta se esperan px/nx/py/ny/pz/nz.png.
+                // El cielo NO se edita desde aqui: sobre un menu de ImGui no se
+                // puede soltar un arrastre —el popup se cierra al soltar fuera—,
+                // asi que vive en su propia ventana. Aqui solo la entrada que la
+                // abre, junto al ambiente porque el IBL global sale de
+                // convolucionar ese mismo cubemap.
                 ImGui::Separator();
-                ImGui::SetNextItemWidth(200.0f);
-                ImGui::InputText("Skybox folder", m_skyboxFolder, sizeof(m_skyboxFolder));
-                ImGui::SameLine();
-                // Al pulsar y no a cada tecla: recargar suelta el cubemap, espera a
-                // la GPU y reconvoluciona el IBL.
-                if (ImGui::Button("Reload sky") && m_renderer)
-                {
-                    ProjectContext::ViewSettings tmp;
-                    tmp.skyboxFolder = m_skyboxFolder;
-                    m_renderer->initSkybox(tmp.skyboxFaces());
-                    saveProjectSettings();
-                    m_logPanel.push("Skybox recargado desde '" + tmp.skyboxFolder + "'");
-                }
+                if (ImGui::MenuItem("Environment (skybox)..."))
+                    m_environmentWindowOpen = true;
 
                 // Sombras en cascada. Los dos eran constantes de compilacion
                 // hasta ahora, y son de lo que mas se nota: las 4 cascadas se

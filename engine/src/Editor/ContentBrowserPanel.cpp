@@ -564,10 +564,16 @@ void ContentBrowserPanel::draw(EditorContext& ctx, GameObject* sceneRoot)
                 }
             }
 
-            if (!isDir && kDraggableExt.count(ext) && ImGui::BeginDragDropSource())
+            // Ficheros y CARPETAS se arrastran con payloads DISTINTOS a
+            // proposito: las 14 zonas de drop que ya existen esperan un fichero
+            // de una extension concreta, y con un tipo aparte ninguna acepta una
+            // carpeta por accidente.
+            const bool arrastrable = isDir || kDraggableExt.count(ext);
+            if (arrastrable && ImGui::BeginDragDropSource())
             {
                 std::string fullPath = path.string();
-                ImGui::SetDragDropPayload("DT_ASSET_PATH", fullPath.c_str(), fullPath.size() + 1);
+                ImGui::SetDragDropPayload(isDir ? "DT_ASSET_DIR" : "DT_ASSET_PATH",
+                                          fullPath.c_str(), fullPath.size() + 1);
                 ImGui::Text("%s", fullPath.c_str());
                 ImGui::EndDragDropSource();
             }

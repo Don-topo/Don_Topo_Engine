@@ -266,6 +266,14 @@ private:
     // pulsar, no a cada tecla: recargarlo suelta el cubemap y reconvoluciona
     // el IBL global.
     char           m_skyboxFolder[260] = "assets/skybox";
+    bool           m_environmentWindowOpen = false;
+    bool           m_skyboxDlgOpen         = false;
+    std::unique_ptr<IGFD::FileDialog> m_skyboxDialog;
+    // Ventana del cielo: navegar a la carpeta, arrastrarla desde el Content
+    // Browser o teclearla. En ventana y no en el menu View porque sobre un
+    // popup de menu no se puede soltar un arrastre.
+    void drawEnvironmentWindow();
+    void applySkyboxFolder(const std::string& folder);
 
     float          m_ssaaPendingFactor = 2.0f;
     bool           m_ssaaSliderActive  = false;
