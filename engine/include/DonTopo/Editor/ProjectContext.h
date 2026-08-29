@@ -49,6 +49,9 @@ public:
         };
 
         bool        ambient = false;
+        // Modo alambre. Era el UNICO campo de RendererState que no se
+        // persistia: se perdia al reabrir y el juego exportado nunca lo veia.
+        bool        wireframe = false;
         bool        bloom   = false;
         bool        ssao    = false;
         bool        ssr     = false;

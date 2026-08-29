@@ -231,7 +231,8 @@ namespace DonTopo
             virtual void  setMsaaSamples(int v)    = 0;
             virtual int   maxMsaaSamples() const   = 0;
             virtual void  setSsaaFactor(float v)   = 0;
-            virtual float ssaaFactor() const       = 0;
+            // El getter lo da RendererState; aqui solo el interruptor, que es
+            // quien mueve los targets.
             virtual void  setSsaoEnabled(bool v)   = 0;
 
             // El bloom se apaga soltando su cadena de imágenes, así que el

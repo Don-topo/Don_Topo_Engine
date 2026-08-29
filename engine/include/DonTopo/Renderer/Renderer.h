@@ -350,7 +350,6 @@ namespace DonTopo {
             // SSAA: multiplicador de resolucion por eje. El coste crece con el
             // CUADRADO, y el tamano se recorta a maxImageDimension2D del device.
             void  setSsaaFactor(float v);
-            float ssaaFactor() const              { return m_ssaaFactor; }
             // Muestras por pixel del MSAA. Se recorta a lo que soporte el device
             // (framebufferColorSampleCounts & framebufferDepthSampleCounts).
             void setMsaaSamples(int v);
@@ -873,7 +872,6 @@ namespace DonTopo {
             // dos matrices view-proj que consume el motion blur.
             AaPass                          m_aaPass;
 
-            float                           m_ssaaFactor                        = 2.0f;
 
             // MSAA. m_msaaSamples es lo que PIDE el usuario; m_aaSampleCount es
             // lo que esta construido ahora mismo en las imagenes, los render

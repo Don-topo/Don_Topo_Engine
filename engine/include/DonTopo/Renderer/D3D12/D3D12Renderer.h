@@ -267,7 +267,6 @@ public:
     // SSAA no está en este backend: se acepta el valor y se guarda, pero no
     // cambia la resolución de render. El panel lo enseña igual.
     void  setSsaaFactor(float v) override;
-    float ssaaFactor() const override;
 
     // Sondas de reflexión: todavía no. Cero sondas y cero milisegundos, que es
     // lo que el panel enseña.

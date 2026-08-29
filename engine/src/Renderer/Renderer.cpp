@@ -5052,7 +5052,7 @@ namespace DonTopo {
             m_gpu, m_res, *this, m_renderExtent, effectiveViewport(), m_currentFrame,
             m_aaActiveMode, m_swapChainFormat, m_offscreenView, m_depthImageView,
             m_compositeRenderPass, m_depthPrepass.views(), m_depthPrepass.sampler(),
-            m_aaQueryPool, m_timestampsSupported, m_ssaaFactor
+            m_aaQueryPool, m_timestampsSupported, ssaaFactor()
         };
     }
 
@@ -5170,8 +5170,8 @@ namespace DonTopo {
 
     void Renderer::setSsaaFactor(float v)
     {
-        if (v == m_ssaaFactor) return;
-        m_ssaaFactor = v;
+        if (v == ssaaFactor()) return;
+        setSsaaFactorFlag(v);
         // Solo cambia el tamano de los targets cuando SSAA es el modo activo.
         if (aaMode() == AaMode::Ssaa) m_aaResourcesDirty = true;
     }
@@ -5283,7 +5283,7 @@ namespace DonTopo {
     {
         const VkExtent2D before = m_renderExtent;
 
-        if (m_aaActiveMode == AaMode::Ssaa && m_ssaaFactor > 1.0f)
+        if (m_aaActiveMode == AaMode::Ssaa && ssaaFactor() > 1.0f)
         {
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(m_gpu.physicalDevice(), &props);
@@ -5291,8 +5291,8 @@ namespace DonTopo {
             // asi que con recortar por este limite basta para los dos.
             const uint32_t limit = props.limits.maxImageDimension2D;
 
-            const uint32_t w = (uint32_t)std::lround(effectiveViewport().width  * (double)m_ssaaFactor);
-            const uint32_t h = (uint32_t)std::lround(effectiveViewport().height * (double)m_ssaaFactor);
+            const uint32_t w = (uint32_t)std::lround(effectiveViewport().width  * (double)ssaaFactor());
+            const uint32_t h = (uint32_t)std::lround(effectiveViewport().height * (double)ssaaFactor());
             m_renderExtent.width  = std::min(w, limit);
             m_renderExtent.height = std::min(h, limit);
         }

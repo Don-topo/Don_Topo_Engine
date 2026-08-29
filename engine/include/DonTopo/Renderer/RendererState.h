@@ -167,6 +167,14 @@ namespace DonTopo {
             int  shadowResolution() const        { return m_shadowResolution; }
             void setShadowResolutionFlag(int v)  { m_shadowResolution = v; }
 
+            // Factor de supermuestreo: se dibuja a este multiplo del tamano de
+            // salida y el pase de resolve promedia. Como msaaSamples, el VALOR
+            // vive aqui y el interruptor que mueve los targets es un virtual de
+            // EditorRenderer. Antes cada backend guardaba el suyo y podian
+            // divergir del que persiste el project.json.
+            float ssaaFactor() const           { return m_ssaaFactor; }
+            void  setSsaaFactorFlag(float v)   { m_ssaaFactor = v; }
+
             // ── Forward+ ─────────────────────────────────────────────────────
             // Culling de luces en GPU. Modos EXCLUYENTES. Off deja el frame
             // exactamente como antes de la feature: ni un dispatch, y pbr.frag
@@ -263,6 +271,7 @@ namespace DonTopo {
             float                           m_shadowDistance                    = 500.0f;
             float                           m_cascadeLambda                     = 0.75f;
             int                             m_shadowResolution                  = 2048;
+            float                           m_ssaaFactor                        = 2.0f;
 
             FpMode                          m_fpMode                            = FpMode::Off;
             float                           m_fpLightRadius                     = 2000.0f;

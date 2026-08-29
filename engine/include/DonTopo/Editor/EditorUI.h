@@ -258,6 +258,13 @@ private:
     // restaurado íntegro al pulsar Stop (tipo Unity Play-In-Editor). No se
     // bloquea la edición mientras está activo — cualquier cambio se
     // descarta igual al restaurar.
+    // Slider del factor de SSAA. Cambiarlo recrea TODOS los targets internos,
+    // asi que se aplica al SOLTAR y hay que conservar el valor en vuelo. Es
+    // miembro y no un static de la funcion: aquel sobrevivia al cambio de
+    // proyecto, y su refresco dependia de IsAnyItemActive(), que es global.
+    float          m_ssaaPendingFactor = 2.0f;
+    bool           m_ssaaSliderActive  = false;
+
     bool           m_isPlaying = false;
     nlohmann::json m_playSnapshot;
 

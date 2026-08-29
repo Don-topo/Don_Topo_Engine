@@ -513,7 +513,8 @@ ProjectContext::ViewSettings EditorUI::currentSettings()
 
     if (m_renderer)
     {
-        s.ambient = m_renderer->ambientEnabled();
+        s.ambient   = m_renderer->ambientEnabled();
+        s.wireframe = m_renderer->isWireframeMode();
         s.bloom   = m_renderer->bloomEnabled();
         s.ssao    = m_renderer->ssaoEnabled();
         s.ssr     = m_renderer->ssrEnabled();
@@ -621,6 +622,7 @@ void EditorUI::applyProjectSettings()
     }
 
     m_renderer->setAmbientEnabled(s.ambient);
+    m_renderer->setWireframeMode(s.wireframe);
     m_renderer->setAmbientIntensity(s.ambientIntensity);
 
     m_renderer->setBloomEnabled(s.bloom);
@@ -1389,16 +1391,25 @@ void EditorUI::drawMenuBar()
                     // que se aplica al soltar el slider y no a cada pixel
                     // arrastrado: reconstruir el render entero 60 veces por
                     // segundo mientras se arrastra congelaria el editor.
-                    static float pendingFactor = m_renderer->ssaaFactor();
-                    if (!ImGui::IsAnyItemActive()) pendingFactor = m_renderer->ssaaFactor();
+                    // Miembro y no `static`: el static sobrevivia al cambio de
+                    // proyecto, y su refresco estaba guardado por IsAnyItemActive(),
+                    // que es GLOBAL — cualquier otro widget en uso congelaba el
+                    // valor mostrado. Ahora solo se congela mientras se arrastra
+                    // ESTE slider.
+                    if (!m_ssaaSliderActive) m_ssaaPendingFactor = m_renderer->ssaaFactor();
                     ImGui::SetNextItemWidth(140.0f);
-                    ImGui::SliderFloat("SSAA factor", &pendingFactor, 1.25f, 2.0f, "%.2fx");
+                    // Rango COMPLETO: el core no clampea y su default es 2.0, asi que
+                    // capar a [1.25, 2.0] dejaba 1.0 (SSAA efectivamente apagado) y
+                    // todo lo que pasa de 2 fuera del alcance del panel.
+                    ImGui::SliderFloat("SSAA factor", &m_ssaaPendingFactor, 1.0f, 4.0f, "%.2fx");
+                    m_ssaaSliderActive = ImGui::IsItemActive();
                     if (ImGui::IsItemDeactivatedAfterEdit())
                     {
-                        m_renderer->setSsaaFactor(pendingFactor);
+                        m_renderer->setSsaaFactor(m_ssaaPendingFactor);
                         saveProjectSettings();
                     }
-                    ImGui::TextDisabled("%.2fx pixeles por frame", pendingFactor * pendingFactor);
+                    ImGui::TextDisabled("%.2fx pixeles por frame",
+                                        m_ssaaPendingFactor * m_ssaaPendingFactor);
                 }
                 else if (aaMode == AaMode::Msaa)
                 {
@@ -1406,10 +1417,12 @@ void EditorUI::drawMenuBar()
                     int samples = m_renderer->msaaSamples();
                     // Solo se ofrecen las cuentas que soporta el device para
                     // color Y profundidad a la vez: el pass de escena usa las dos.
-                    for (int s = 2; s <= 8; s *= 2)
+                    // Desde 1x: es lo que el core acepta como "sin multimuestra"
+                    // y hasta ahora no habia forma de elegirlo desde aqui.
+                    for (int s = 1; s <= 8; s *= 2)
                     {
                         if (s > maxSamples) break;
-                        if (s > 2) ImGui::SameLine();
+                        if (s > 1) ImGui::SameLine();
                         char label[8];
                         snprintf(label, sizeof(label), "%dx", s);
                         if (ImGui::RadioButton(label, samples == s))
@@ -1418,8 +1431,14 @@ void EditorUI::drawMenuBar()
                             saveProjectSettings();
                         }
                     }
+                    // Con maxSamples == 1 el bucle no dibuja nada mas que el 1x, y
+                    // ademas conviene decir por que: el modo se puede elegir igual
+                    // pero el device no lo va a aplicar.
                     ImGui::SameLine();
                     ImGui::TextDisabled("(max %dx)", maxSamples);
+                    if (maxSamples <= 1)
+                        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                                           "Esta GPU no soporta multimuestra: MSAA no hara nada.");
                 }
                 else if (aaMode == AaMode::Taa)
                 {
@@ -1624,7 +1643,10 @@ void EditorUI::drawToolbar()
     if (wireframe)
         ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
     if (ImGui::Button("Wireframe") && m_renderer)
+    {
         m_renderer->setWireframeMode(!wireframe);
+        saveProjectSettings();
+    }
     if (wireframe)
         ImGui::PopStyleColor();
 

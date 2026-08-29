@@ -1067,7 +1067,6 @@ struct D3D12Renderer::Impl {
 
     // Guardado para que el panel conserve el valor; este backend no dibuja a
     // más resolución todavía.
-    float ssaaFactor = 2.0f;
 
     // Destino alternativo del pase final. Con esto encendido el backbuffer solo
     // lleva interfaz, y la escena viaja como textura a quien la dibuje.
@@ -1487,6 +1486,11 @@ struct D3D12Renderer::Impl {
 
     void createTimestampResources();
     void markTimestamp(UINT slot);
+    // Interruptor del PerformancePanel. Con el panel cerrado no se graban
+    // queries ni se cuentan draws: en Vulkan ya era asi (m_perfCapture) y aqui
+    // era un no-op, con lo que el interruptor mentia y las cuentas de los dos
+    // backends no se podian comparar.
+    bool perfCapture = true;
     void readTimestamps();     // los del frame anterior, antes de sobrescribir
     void resolveTimestamps();  // vuelca los de este frame al buffer de lectura
 
@@ -1986,7 +1990,7 @@ void D3D12Renderer::Impl::createTimestampResources()
 
 void D3D12Renderer::Impl::markTimestamp(UINT slot)
 {
-    if (!timestampHeap)
+    if (!timestampHeap || !perfCapture)
         return;
     commandList->EndQuery(timestampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
                           frameIndex * TsCount + slot);
@@ -4484,10 +4488,12 @@ void D3D12Renderer::Impl::applyPendingRenderSize()
     // no falla al crear el recurso, falla al usarlo.
     UINT wanted  = wantedOut;
     UINT wantedH = wantedOutH;
-    if (state->aaMode() == RendererState::AaMode::Ssaa && ssaaFactor > 1.0f) {
+    if (state->aaMode() == RendererState::AaMode::Ssaa && state->ssaaFactor() > 1.0f) {
         constexpr UINT kMaxTextureSide = 16384;
-        wanted  = (std::min)(static_cast<UINT>(std::lround(wantedOut * ssaaFactor)), kMaxTextureSide);
-        wantedH = (std::min)(static_cast<UINT>(std::lround(wantedOutH * ssaaFactor)), kMaxTextureSide);
+        wanted  = (std::min)(static_cast<UINT>(std::lround(wantedOut * state->ssaaFactor())),
+                             kMaxTextureSide);
+        wantedH = (std::min)(static_cast<UINT>(std::lround(wantedOutH * state->ssaaFactor())),
+                             kMaxTextureSide);
     }
 
     if (wanted == width && wantedH == height && wantedOut == outWidth && wantedOutH == outHeight)
@@ -7407,7 +7413,7 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
         SsaaPush ssaaPush{};
         ssaaPush.invSrc[0] = 1.0f / static_cast<float>(width);
         ssaaPush.invSrc[1] = 1.0f / static_cast<float>(height);
-        ssaaPush.taps      = (std::max)(1, static_cast<int>(std::lround(ssaaFactor)));
+        ssaaPush.taps      = (std::max)(1, static_cast<int>(std::lround(state->ssaaFactor())));
 
         commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
         commandList->SetPipelineState(ssaaPipeline.Get());
@@ -8497,7 +8503,7 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
                               Culling::aabbVisible(cameraFrustum, object.aabbMin, object.aabbMax,
                                                    object.transform));
             if (dibujable && !visible)
-                ++statCulledCount;
+                if (perfCapture) ++statCulledCount;
 
             batchCandidates.push_back({object.drawGroup, visible, &object.transform,
                                        state->ssrEnabled() ? object.ssrStrength : 0.0f});
@@ -8537,8 +8543,8 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
             commandList->IASetVertexBuffers(0, 1, &rep.vertexBufferView);
             commandList->IASetIndexBuffer(&rep.indexBufferView);
             commandList->DrawIndexedInstanced(rep.indexCount, batch.instanceCount, 0, 0, 0);
-            ++statDraws;
-            statInstanced += static_cast<int>(batch.instanceCount);
+            if (perfCapture) ++statDraws;
+            if (perfCapture) statInstanced += static_cast<int>(batch.instanceCount);
         }
 
         // Suelo: receptor de sombras y referencia visual, NO parte de la
@@ -8555,8 +8561,8 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
             commandList->IASetVertexBuffers(0, 1, &groundVertexBufferView);
             commandList->IASetIndexBuffer(&groundIndexBufferView);
             commandList->DrawIndexedInstanced(groundIndexCount, 1, 0, 0, 0);
-            ++statDraws;
-            ++statInstanced;
+            if (perfCapture) ++statDraws;
+            if (perfCapture) ++statInstanced;
         }
     }
 
@@ -8598,8 +8604,8 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
                 table.ptr += static_cast<UINT64>(sub.srvBase) * srvSize;
                 commandList->SetGraphicsRootDescriptorTable(2, table);
                 commandList->DrawIndexedInstanced(sub.indexCount, 1, sub.indexStart, 0, 0);
-                ++statDraws;
-                ++statInstanced;
+                if (perfCapture) ++statDraws;
+                if (perfCapture) ++statInstanced;
             }
         }
     }
@@ -10004,14 +10010,14 @@ void D3D12Renderer::setSsaoEnabled(bool v)
 
 void D3D12Renderer::setSsaaFactor(float v)
 {
-    // Se guarda para que el panel conserve el valor, pero este backend no
-    // dibuja a más resolución: el modo SSAA no está implementado aquí.
-    m_impl->ssaaFactor = v;
-}
-
-float D3D12Renderer::ssaaFactor() const
-{
-    return m_impl->ssaaFactor;
+    // SSAA SÍ está implementado en este backend (applyPendingRenderSize escala
+    // el tamaño de dibujo y el pase de resolve promedia): el comentario que
+    // había aquí decía lo contrario y llevaba tiempo obsoleto.
+    //
+    // No hace falta marcar nada: applyPendingRenderSize recalcula el tamaño
+    // pedido en cada frame y sale por su early-out cuando no ha cambiado, así
+    // que tocar el factor ya provoca la recreación en el frame siguiente.
+    setSsaaFactorFlag(v);
 }
 
 void D3D12Renderer::requestProbeBake(uint64_t ownerId)
@@ -10033,7 +10039,7 @@ float D3D12Renderer::probeBakeMs(uint64_t ownerId) const
     return 0.0f;
 }
 
-void     D3D12Renderer::setPerfCaptureEnabled(bool) {}
+void D3D12Renderer::setPerfCaptureEnabled(bool on) { m_impl->perfCapture = on; }
 // Tiempos de GPU: los mide el par de marcas de cada pase, leídos con dos frames
 // de retraso —que es cuando la GPU ya ha terminado el que los escribió— igual
 // que en el camino de Vulkan.

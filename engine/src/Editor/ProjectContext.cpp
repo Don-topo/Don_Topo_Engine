@@ -98,6 +98,7 @@ nlohmann::json defaultSettingsJson()
     nlohmann::json s;
     s["version"] = ProjectContext::kSettingsVersion;
     s["ambient"] = def.ambient;
+    s["wireframe"] = def.wireframe;
     s["bloom"]   = def.bloom;
     s["ssao"]    = def.ssao;
     s["ssr"]     = def.ssr;
@@ -115,6 +116,7 @@ nlohmann::json settingsToJson(const ProjectContext::ViewSettings& s)
     j["version"] = ProjectContext::kSettingsVersion;
 
     j["ambient"] = s.ambient;
+    j["wireframe"] = s.wireframe;
     j["bloom"]   = s.bloom;
     j["ssao"]    = s.ssao;
     j["ssr"]     = s.ssr;
@@ -236,7 +238,8 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
         return s;
     }
 
-    s.ambient = readBoolField(v, "ambient", s.ambient);
+    s.ambient   = readBoolField(v, "ambient", s.ambient);
+    s.wireframe = readBoolField(v, "wireframe", s.wireframe);
     s.bloom   = readBoolField(v, "bloom", s.bloom);
     s.ssao    = readBoolField(v, "ssao", s.ssao);
     s.ssr     = readBoolField(v, "ssr", s.ssr);
