@@ -65,6 +65,22 @@ public:
         // cuando se abre el proyecto, así que solo surte efecto en el arranque
         // siguiente (ver readLastProject). Nombres en RenderBackend.h.
         std::string renderBackend = "Vulkan";
+        // Carpeta del cielo. Dentro se esperan px/nx/py/ny/pz/nz.png, que es
+        // la convencion que ya asumian el sandbox, el runtime, el backend de
+        // DirectX 12 y el exportador. Por defecto la de siempre, asi que un
+        // proyecto sin la clave se ve igual.
+        std::string skyboxFolder  = "assets/skybox";
+
+        // Las seis rutas que espera EditorRenderer::initSkybox, en su orden:
+        // +X, -X, +Y, -Y, +Z, -Z. Aqui y no en cada llamante para que la
+        // convencion de nombres viva en un solo sitio.
+        std::array<std::string, 6> skyboxFaces() const
+        {
+            const std::string base =
+                skyboxFolder.empty() ? std::string("assets/skybox") : skyboxFolder;
+            return {base + "/px.png", base + "/nx.png", base + "/py.png",
+                    base + "/ny.png", base + "/pz.png", base + "/nz.png"};
+        }
 
         float ambientIntensity = 0.0f;
         float bloomThreshold   = 0.0f;

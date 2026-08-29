@@ -118,7 +118,13 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                 const std::filesystem::path& projectRoot,
                                 const std::filesystem::path& scriptsDir,
                                 const std::filesystem::path& runtimeExe,
-                                RenderBackend backend = RenderBackend::Vulkan);
+                                RenderBackend backend = RenderBackend::Vulkan,
+                                // Carpeta de la que salen las 6 caras del cielo,
+                                // relativa al proyecto. El destino dentro del paquete
+                                // es SIEMPRE assets/skybox, que es donde el runtime
+                                // las busca, asi que cambiar de cielo en el editor no
+                                // obliga a tocar el runtime.
+                                const std::string& skyboxFolder = "assets/skybox");
 
 // Export completo: valida, recolecta, reescribe y escribe el paquete.
 // Los mensajes para el usuario van en ExportResult::messages; el llamador
@@ -134,6 +140,8 @@ ExportResult exportGame(Scene& scene,
                         const std::filesystem::path& projectRoot,
                         const std::filesystem::path& scriptsDir,
                         const std::filesystem::path& runtimeExe,
-                        RenderBackend backend = RenderBackend::Vulkan);
+                        RenderBackend backend = RenderBackend::Vulkan,
+                        // Ver writeExportPackage.
+                        const std::string& skyboxFolder = "assets/skybox");
 
 } // namespace DonTopo

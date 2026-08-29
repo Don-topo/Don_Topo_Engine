@@ -259,6 +259,10 @@ public:
     // El bloom aquí no suelta nada al apagarse: la cadena de imágenes vive con
     // los demás targets. El interruptor es el del estado compartido.
     void  setBloomEnabled(bool v) override;
+    // El cielo del proyecto. Antes NO se sobrescribia y este backend usaba
+    // seis rutas a fuego, con lo que ignoraba el skybox de la escena y con el
+    // el IBL global que sale de convolucionarlo.
+    void  initSkybox(const std::array<std::string, 6>& facePaths) override;
     void  setShadowResolution(int v) override;
 
     // Sin lote de subidas: aquí cada una se envía y se espera al hacerla.

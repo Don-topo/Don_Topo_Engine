@@ -417,7 +417,8 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                 const fs::path& projectRoot,
                                 const fs::path& scriptsDir,
                                 const fs::path& runtimeExe,
-                                RenderBackend backend)
+                                RenderBackend backend,
+                                const std::string& skyboxFolder)
 {
     ExportResult r;
     std::error_code ec;
@@ -500,8 +501,11 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     for (const ExportAsset& a : assets)
         ok = copyOne(fs::path(a.sourcePath), pkg / fs::path(a.packagePath)) && ok;
 
-    // Skybox: el runtime lo tiene hardcoded (initSkybox con assets/skybox/*),
-    // así que va siempre aunque la escena no lo "referencie".
+    // Skybox: el ORIGEN es la carpeta que el proyecto tenga elegida, pero el
+    // DESTINO es siempre assets/skybox, porque es donde el runtime lo busca.
+    // Así elegir otro cielo en el editor no obliga a tocar el runtime.
+    //
+    // Va siempre aunque la escena no lo "referencie".
     //
     // Se cuentan las caras copiadas y faltar una es un ERROR, no un salto
     // silencioso: Skybox.cpp:84 lanza std::runtime_error("Skybox: failed to
@@ -511,7 +515,9 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     std::vector<std::string> missingFaces;
     for (const char* face : { "px", "nx", "py", "ny", "pz", "nz" })
     {
-        const fs::path from = projectRoot / "assets" / "skybox" / (std::string(face) + ".png");
+        const fs::path from =
+            projectRoot / fs::path(skyboxFolder.empty() ? "assets/skybox" : skyboxFolder) /
+            (std::string(face) + ".png");
         std::error_code fec;
         if (fs::exists(from, fec) && !fec)
             ok = copyOne(from, pkg / "assets" / "skybox" / from.filename()) && ok;
@@ -792,7 +798,8 @@ ExportResult exportGame(Scene& scene,
                         const fs::path& projectRoot,
                         const fs::path& scriptsDir,
                         const fs::path& runtimeExe,
-                        RenderBackend backend)
+                        RenderBackend backend,
+                        const std::string& skyboxFolder)
 {
     ExportResult r;
 
@@ -845,7 +852,7 @@ ExportResult exportGame(Scene& scene,
     rewriteScenePaths(sceneJson, sourceToPackage);
 
     return writeExportPackage(assets, sceneJson, destDir, gameName, projectRoot, scriptsDir,
-                              runtimeExe, backend);
+                              runtimeExe, backend, skyboxFolder);
 }
 
 } // namespace DonTopo

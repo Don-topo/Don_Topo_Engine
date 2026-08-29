@@ -262,6 +262,11 @@ private:
     // asi que se aplica al SOLTAR y hay que conservar el valor en vuelo. Es
     // miembro y no un static de la funcion: aquel sobrevivia al cambio de
     // proyecto, y su refresco dependia de IsAnyItemActive(), que es global.
+    // Carpeta del cielo del proyecto. Se edita en el menu View y se aplica al
+    // pulsar, no a cada tecla: recargarlo suelta el cubemap y reconvoluciona
+    // el IBL global.
+    char           m_skyboxFolder[260] = "assets/skybox";
+
     float          m_ssaaPendingFactor = 2.0f;
     bool           m_ssaaSliderActive  = false;
 

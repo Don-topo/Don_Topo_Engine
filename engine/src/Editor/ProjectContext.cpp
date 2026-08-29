@@ -115,6 +115,7 @@ nlohmann::json settingsToJson(const ProjectContext::ViewSettings& s)
     nlohmann::json j;
     j["version"] = ProjectContext::kSettingsVersion;
 
+    j["skyboxFolder"] = s.skyboxFolder;
     j["ambient"] = s.ambient;
     j["wireframe"] = s.wireframe;
     j["bloom"]   = s.bloom;
@@ -238,6 +239,8 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
         return s;
     }
 
+    if (v.contains("skyboxFolder") && v["skyboxFolder"].is_string())
+        s.skyboxFolder = v["skyboxFolder"].get<std::string>();
     s.ambient   = readBoolField(v, "ambient", s.ambient);
     s.wireframe = readBoolField(v, "wireframe", s.wireframe);
     s.bloom   = readBoolField(v, "bloom", s.bloom);

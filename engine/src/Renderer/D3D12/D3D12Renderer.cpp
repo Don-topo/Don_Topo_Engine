@@ -926,6 +926,14 @@ struct D3D12Renderer::Impl {
 
     // Carga las seis caras y monta el cubemap. Silenciosa si falta alguna: el
     // fondo se queda en el color de limpieza, que es lo que había antes.
+    // Las seis caras del cielo. Por defecto las de siempre, para que un
+    // llamante que nunca use initSkybox se comporte igual que antes.
+    std::array<std::string, 6> skyboxFacePaths = {
+        "assets/skybox/px.png", "assets/skybox/nx.png", "assets/skybox/py.png",
+        "assets/skybox/ny.png", "assets/skybox/pz.png", "assets/skybox/nz.png"};
+    // Solo el cubemap y su vista, sin el pipeline: es lo unico que hay que
+    // rehacer al cambiar de cielo, y asi la recarga no filtra el PSO.
+    bool loadSkyboxCubemap();
     void createSkyboxResources();
     // Solo la root signature y el pipeline: se rehacen al cambiar de muestras,
     // sin volver a cargar las seis caras.
@@ -4297,21 +4305,25 @@ void D3D12Renderer::Impl::createForwardPlusBuffers()
     std::memcpy(fpParamsMapped, &off, sizeof(off));
 }
 
-void D3D12Renderer::Impl::createSkyboxResources()
+bool D3D12Renderer::Impl::loadSkyboxCubemap()
 {
     // Mismo orden de caras que el camino de Vulkan: +X, -X, +Y, -Y, +Z, -Z,
     // que es el que espera un TextureCube por slice.
-    const char* facePaths[6] = {
-        "assets/skybox/px.png", "assets/skybox/nx.png", "assets/skybox/py.png",
-        "assets/skybox/ny.png", "assets/skybox/pz.png", "assets/skybox/nz.png",
-    };
+    const std::array<std::string, 6>& facePaths = skyboxFacePaths;
+
+    // Recarga: el cubemap anterior se suelta aqui. Quien llame tiene que
+    // haber parado la GPU antes.
+    if (skyboxAllocation) {
+        skyboxAllocation->Release();
+        skyboxAllocation = nullptr;
+    }
 
     int      faceWidth = 0, faceHeight = 0, channels = 0;
     stbi_uc* faces[6] = {};
     bool     ok       = true;
     for (int i = 0; i < 6; ++i) {
         int w = 0, h = 0;
-        faces[i] = stbi_load(facePaths[i], &w, &h, &channels, STBI_rgb_alpha);
+        faces[i] = stbi_load(facePaths[i].c_str(), &w, &h, &channels, STBI_rgb_alpha);
         if (!faces[i]) {
             ok = false;
             break;
@@ -4355,10 +4367,13 @@ void D3D12Renderer::Impl::createSkyboxResources()
         if (face)
             stbi_image_free(face);
 
-    if (!skyboxAllocation)
-        return;
+    return skyboxAllocation != nullptr;
+}
 
-    createSkyboxPipelineOnly();
+void D3D12Renderer::Impl::createSkyboxResources()
+{
+    if (loadSkyboxCubemap())
+        createSkyboxPipelineOnly();
 }
 
 void D3D12Renderer::Impl::createSkyboxPipelineOnly()
@@ -9684,6 +9699,29 @@ void D3D12Renderer::replaceStaticTextureWithMissing(int renderIndex, TextureSlot
             d.createTexture2DSrv(d.metalRoughAllocation->GetResource(),
                                  DXGI_FORMAT_R8G8B8A8_UNORM, object.srvBase + 3);
             break;
+    }
+}
+
+void D3D12Renderer::initSkybox(const std::array<std::string, 6>& facePaths)
+{
+    Impl& d = *m_impl;
+    if (d.skyboxFacePaths == facePaths)
+        return;  // ya es el que hay montado
+
+    d.skyboxFacePaths = facePaths;
+
+    // Antes de init() basta con anotarlas: createSkyboxResources las coge.
+    if (!d.initialized)
+        return;
+
+    // Y si ya hay cielo montado, se cambia en caliente. El cubemap puede
+    // estar en el frame en vuelo, y ademas es la fuente del IBL global, que
+    // hay que reconvolucionar detras.
+    d.waitForGpu();
+    if (d.loadSkyboxCubemap()) {
+        if (!d.skyboxPipeline)
+            d.createSkyboxPipelineOnly();
+        d.precomputeIbl();
     }
 }
 

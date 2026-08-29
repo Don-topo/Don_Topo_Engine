@@ -499,6 +499,7 @@ ProjectContext::ViewSettings EditorUI::currentSettings()
     // El backend NO sale del Renderer: es el que el usuario ha elegido para el
     // próximo arranque, que puede no ser con el que corre este proceso.
     s.renderBackend = renderBackendName(m_selectedBackend);
+    s.skyboxFolder  = m_skyboxFolder;
 
     // Los volúmenes salen del AudioManager, que es la fuente de verdad (los
     // guarda FMOD en los ChannelGroup). Sin audio se quedan los neutros del
@@ -689,6 +690,12 @@ void EditorUI::applyProjectSettings()
     // está creado —el selector de proyecto se dibuja sobre él—, así que lo único
     // que se puede hacer es dejarlo elegido para el próximo arranque y avisar.
     bool backendOk = true;
+    // El cielo del proyecto, ANTES de tocar el backend: initSkybox reconvoluciona
+    // el IBL global, que es de lo que come el ambiente de la escena.
+    std::snprintf(m_skyboxFolder, sizeof(m_skyboxFolder), "%s", s.skyboxFolder.c_str());
+    if (m_renderer)
+        m_renderer->initSkybox(s.skyboxFaces());
+
     m_selectedBackend = renderBackendFromName(s.renderBackend, backendOk);
     if (!backendOk)
         m_logPanel.push("Backend de render desconocido en el proyecto ('" + s.renderBackend +
@@ -1096,6 +1103,24 @@ void EditorUI::drawMenuBar()
                 ImGui::Text("Sondas: %d  (%.2f MB c/u)", probes,
                             (double)Renderer::probeMemoryBytes() / (1024.0 * 1024.0));
                 ImGui::Text("Ultimo bake: %.2f ms de GPU", m_renderer->lastProbeBakeMs());
+
+                // Cielo del proyecto. Va junto al ambiente porque el IBL global
+                // sale de convolucionar justo este cubemap: cambiarlo cambia los
+                // dos. Dentro de la carpeta se esperan px/nx/py/ny/pz/nz.png.
+                ImGui::Separator();
+                ImGui::SetNextItemWidth(200.0f);
+                ImGui::InputText("Skybox folder", m_skyboxFolder, sizeof(m_skyboxFolder));
+                ImGui::SameLine();
+                // Al pulsar y no a cada tecla: recargar suelta el cubemap, espera a
+                // la GPU y reconvoluciona el IBL.
+                if (ImGui::Button("Reload sky") && m_renderer)
+                {
+                    ProjectContext::ViewSettings tmp;
+                    tmp.skyboxFolder = m_skyboxFolder;
+                    m_renderer->initSkybox(tmp.skyboxFaces());
+                    saveProjectSettings();
+                    m_logPanel.push("Skybox recargado desde '" + tmp.skyboxFolder + "'");
+                }
 
                 // Sombras en cascada. Los dos eran constantes de compilacion
                 // hasta ahora, y son de lo que mas se nota: las 4 cascadas se
@@ -2147,7 +2172,7 @@ void EditorUI::runExport()
                                             : RenderBackend::Vulkan;
     ExportResult result = exportGame(*m_scene, scriptPaths, m_exportDestDir,
                                      m_exportNameBuffer, projectRoot, scriptsDir, runtimeExe,
-                                     exportBackend);
+                                     exportBackend, m_skyboxFolder);
     for (const std::string& msg : result.messages)
         m_logPanel.push(msg);
     if (!result.ok)
