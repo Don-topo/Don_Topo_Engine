@@ -333,9 +333,8 @@ void SsrPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& p
     }
 
     SsrPush push{};
-    // Los mismos cuatro coeficientes que usa el SSAO, de la proyección
-    // EFECTIVA del frame (Y-flip incluido): es la que grabó el depth, así que
-    // reconstruir y reproyectar es consistente.
+    // Los mismos cuatro coeficientes que usa el SSAO, de la proyección que
+    // grabó el depth. El signo de p11 se cancela igual que allí: ver ssao.comp.
     push.projP00     = proj[0][0];
     push.projP11     = proj[1][1];
     push.projP22     = proj[2][2];

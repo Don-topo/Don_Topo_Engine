@@ -19,8 +19,9 @@ layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outSsr;
 // shaders y meterle un miembro desplazaria en silencio todo lo de detras por
 // std140, y PushData esta llena a 80 bytes exactos.
 layout(push_constant) uniform SsrPush {
-    // p00, p11, p22, p32 de la proyeccion EFECTIVA del frame (con el Y-flip de
-    // Vulkan ya dentro), la misma con la que se grabo el depth.
+    // p00, p11, p22, p32 de la proyeccion del frame, la misma con la que se
+    // grabo el depth. El signo de p11 es indiferente: ver la nota de ssao.comp,
+    // que explica por que se cancela y por que no hay que "arreglarlo".
     vec4  projParams;
     vec2  invRes;
     float maxDistance;   // alcance del rayo en unidades de view space

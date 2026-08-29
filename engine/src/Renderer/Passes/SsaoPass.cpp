@@ -356,9 +356,13 @@ void SsaoPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& 
 
     // ── Oclusión + blur ──────────────────────────────────────────────────
     SsaoPush push{};
-    // Los cuatro coeficientes de la proyección EFECTIVA del frame, con el
-    // Y-flip de Vulkan ya dentro: es la misma con la que se acaba de grabar
-    // el depth, así que reconstruir y reproyectar es consistente.
+    // Los cuatro coeficientes de la proyección del frame: la misma con la que
+    // se acaba de grabar el depth, así que reconstruir y reproyectar es
+    // consistente.
+    //
+    // Aquí va con el Y-flip de Vulkan dentro y el backend de DirectX 12 manda
+    // el signo contrario, y las dos imágenes salen iguales: el pase no sale de
+    // espacio de pantalla y el signo se cancela. Está explicado en ssao.comp.
     push.projP00   = proj[0][0];
     push.projP11   = proj[1][1];
     push.projP22   = proj[2][2];

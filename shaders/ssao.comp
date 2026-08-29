@@ -33,9 +33,19 @@ float viewZ(float d)
     return push.projParams.w / (-d - push.projParams.z);
 }
 
-// uv en [0,1] sobre el framebuffer -> posicion en view space. El p11 que llega
-// es el de la proyeccion CON el Y-flip de Vulkan ya aplicado, el mismo con el
-// que se grabo el depth, asi que uv.y y ndc.y van en el mismo sentido.
+// uv en [0,1] sobre el framebuffer -> posicion en view space.
+// El SIGNO de p11 da igual, y conviene saberlo porque los dos backends mandan
+// signos OPUESTOS: Vulkan el de su proyeccion con Y-flip, DirectX 12 el de la
+// suya sin flip. Aun asi la imagen sale identica, verificado comparando los dos.
+//
+// Se cancela porque este pase nunca sale del espacio de pantalla: reconstruye
+// con p11, saca la normal de las PROPIAS posiciones reconstruidas y reproyecta
+// con el MISMO p11, asi que sp.y * p11 no cambia al invertir los dos. Invertir
+// el signo "para que cuadre con el comentario" no arregla nada y puede romperlo.
+//
+// Lo que SI depende del signo es cualquier pase que salga a espacio de mundo con
+// la matriz completa: ahi la inversion no tiene con que cancelarse y hay que
+// meterla explicitamente (ver fog.comp y H62 en docs/renderer-audit.md).
 vec3 viewPos(vec2 uv, float d)
 {
     float z   = viewZ(d);

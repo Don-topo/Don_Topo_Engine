@@ -5817,6 +5817,14 @@ void D3D12Renderer::Impl::recordDepthPrepassAndSsao()
 
     // Los cuatro coeficientes con los que el shader reconstruye la posición en
     // view space, sacados de la proyección de ESTE frame.
+    //
+    // SIN el Y-flip que sí lleva el camino de Vulkan, y da igual: este pase no
+    // sale de espacio de pantalla —reconstruye y reproyecta con el MISMO p11—,
+    // así que el signo se cancela. Verificado comparando las dos imágenes.
+    // La explicación completa está en ssao.comp.
+    //
+    // Ojo con generalizarlo: la niebla sí sale a mundo con la matriz completa y
+    // allí la inversión hay que meterla a mano (ver recordFog).
     const glm::mat4 proj = cameraProj();
     SsaoPush        push{};
     push.projParams = glm::vec4(proj[0][0], proj[1][1], proj[2][2], proj[3][2]);
