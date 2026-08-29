@@ -257,17 +257,19 @@ void FogPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& v
     const glm::vec3 camPos = glm::vec3(glm::inverse(view)[3]);
     push.camPosDensity = glm::vec4(camPos, ctx.state.fogDensity());
 
-    // Luz key = la misma que alimenta las cascadas (m_lights[0]), y con el
-    // MISMO criterio que computeCascades: la posición solo da la dirección.
+    // Luz key = la misma que alimenta las cascadas (m_lights[0]) y con su MISMO
+    // criterio, que vive en keyLightDirection.
     // Sin luces, dirección neutra y color negro: la niebla solo absorbe, que
     // es lo correcto cuando no hay nada que disperse.
     glm::vec3 lightDir(0.0f, -1.0f, 0.0f);
     glm::vec3 lightColor(0.0f);
     if (!ctx.lights.empty())
     {
-        const glm::vec3 lightPos = glm::vec3(ctx.lights[0].position);
-        const float     lightLen = glm::length(lightPos);
-        if (lightLen > 1e-6f) lightDir = -lightPos / lightLen;
+        // El MISMO criterio que las cascadas, no una copia: cuando esto derivaba
+        // la direccion por su cuenta y el shadow pass cambio el suyo, el
+        // scattering apuntaba a un lado y el shadow map estaba construido hacia
+        // otro.
+        keyLightDirection(ctx.lights[0].position, ctx.lights[0].direction, lightDir);
         lightColor = glm::vec3(ctx.lights[0].color) * ctx.lights[0].color.a;
     }
     push.lightDirFalloff = glm::vec4(lightDir, ctx.state.fogHeightFalloff());

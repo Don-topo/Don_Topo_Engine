@@ -865,6 +865,9 @@ struct D3D12Renderer::Impl {
         UINT                     indexCount  = 0;
         uint32_t                 boneCount   = 0;
         uint32_t                 vertexCount = 0;
+        // Lado mayor de la caja de la POSE EN REPOSO, en espacio local. Lo usa
+        // el grosor del contorno, que es proporcional al tamano del objeto.
+        float                    restMaxExtent = 0.0f;
 
         // boneInfos va en layout [clip][hueso]: el offset del clip activo es
         // clip * boneCount.
@@ -3227,6 +3230,20 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
     object.boneInfos = uploadBuffer(packed.boneInfos.data(),
                                     packed.boneInfos.size() * sizeof(GpuBoneInfo),
                                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    // Extension de la pose en reposo, para el grosor del contorno. Misma
+    // cuenta que el camino de Vulkan.
+    object.restMaxExtent = 0.0f;
+    if (!mesh.skinnedVertices.empty()) {
+        glm::vec3 bMin(mesh.skinnedVertices[0].position);
+        glm::vec3 bMax = bMin;
+        for (const SkinnedVertex& v : mesh.skinnedVertices) {
+            bMin = (glm::min)(bMin, glm::vec3(v.position));
+            bMax = (glm::max)(bMax, glm::vec3(v.position));
+        }
+        const glm::vec3 e    = bMax - bMin;
+        object.restMaxExtent = (glm::max)(e.x, (glm::max)(e.y, e.z));
+    }
+
     object.inputVerts =
         uploadBuffer(mesh.skinnedVertices.data(), mesh.skinnedVertices.size() * sizeof(SkinnedVertex),
                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -7220,7 +7237,12 @@ void D3D12Renderer::Impl::recordFog()
     // La escena pasa a escritura desordenada y la profundidad a lectura.
     transition(hdrAllocation->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    transition(depthAllocation->GetResource(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+    // readableDepth() y no depthAllocation: con MSAA la profundidad legible es
+    // la del pre-pase, que es OTRO recurso, y la transicion de vuelta de mas
+    // abajo ya usaba readableDepth(). Asimetricas dejaban la del pase de escena
+    // en lectura para siempre y tocaban la del pre-pase desde un estado que no
+    // era el suyo.
+    transition(readableDepth(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
     const glm::mat4  proj   = cameraProj();
@@ -7228,13 +7250,36 @@ void D3D12Renderer::Impl::recordFog()
     const glm::mat4& view   = cameraView;
 
     FogPush push{};
-    // La misma proyección con la que se grabó la profundidad. En Vulkan aquí
-    // entra su inversión de Y; en D3D12 no hay ninguna que meter.
-    push.invViewProj      = glm::inverse(proj * view);
+    // fog.comp reconstruye la posición de mundo con clip = vec4(uv*2-1, d, 1),
+    // o sea que da por hecho que la FILA DE ARRIBA (uv.y = 0) cae en ndc.y = -1.
+    // Eso es la convención de Vulkan, cuya proyección lleva la inversión de Y.
+    //
+    // Los pases GRÁFICOS de este backend compensan eso con el viewport de altura
+    // negativa, pero esto es un COMPUTE: no hay viewport donde meterlo, así que
+    // la inversión tiene que ir en la matriz. Sin ella la reconstrucción sale
+    // espejada en vertical y la niebla se ve del revés.
+    //
+    // El comentario que había aquí decía justo lo contrario -"en D3D12 no hay
+    // ninguna que meter"- y es lo que tapaba el fallo.
+    glm::mat4 projFog = proj;
+    projFog[1][1]    *= -1.0f;
+    push.invViewProj  = glm::inverse(projFog * view);
     push.camPosDensity    = glm::vec4(camPos, state->fogDensity());
     push.lightDirFalloff  = glm::vec4(glm::normalize(lightDirection), state->fogHeightFalloff());
     // El scattering va YA multiplicado por el color y la intensidad de la luz.
-    push.scatterBaseHeight = glm::vec4(state->fogScatter() * glm::vec3(1.0f, 0.98f, 0.94f) * 0.7f,
+    // El color de la luz key se pliega aquí sobre el tinte de la niebla, igual
+    // que en el camino de Vulkan: el shader multiplica una sola vez.
+    //
+    // Antes esto era un tinte CÁLIDO A FUEGO (1.0, 0.98, 0.94) al 70%, que
+    // ignoraba la luz de la escena: elegir blanco puro daba gris, y subir la
+    // intensidad de la luz no aclaraba la niebla.
+    glm::vec3 lightColor(0.0f);
+    if (!sceneLights.empty()) {
+        lightColor = glm::vec3(sceneLights[0].color[0], sceneLights[0].color[1],
+                               sceneLights[0].color[2]) *
+                     sceneLights[0].color[3];
+    }
+    push.scatterBaseHeight = glm::vec4(state->fogScatter() * lightColor,
                                        state->fogBaseHeight());
     push.gStepsRes = glm::vec4(state->fogAnisotropy(), static_cast<float>(state->fogSteps()),
                                static_cast<float>(width), static_cast<float>(height));
@@ -8415,7 +8460,18 @@ void D3D12Renderer::Impl::recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv
         3, instanceAllocation->GetResource()->GetGPUVirtualAddress());
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
+    // Mismo criterio y mismo factor que Renderer::recordSelectionOutline en
+    // Vulkan: el 0.9% del lado mayor del objeto ya escalado a mundo.
+    constexpr float kOutlineFactor = 0.009f;
+    auto grosorContorno = [](float localExtent, const glm::mat4& m) {
+        const float escala = (glm::max)(
+            glm::length(glm::vec3(m[0])),
+            (glm::max)(glm::length(glm::vec3(m[1])), glm::length(glm::vec3(m[2]))));
+        return (glm::max)(localExtent * escala, 1.0f) * kOutlineFactor;
+    };
+
     auto drawOutline = [&](ID3D12PipelineState* pipeline, const glm::mat4& transform,
+                           float localExtent,
                            const D3D12_VERTEX_BUFFER_VIEW& vertexView,
                            const D3D12_INDEX_BUFFER_VIEW& indexView, UINT indexCount) {
         if (indexCount == 0)
@@ -8425,8 +8481,11 @@ void D3D12Renderer::Impl::recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv
         PushData push{};
         push.transform = transform;
         // flags.y lleva el grosor de la extrusión, que es el hueco que esa vec2
-        // tenía libre.
-        push.flags = glm::vec2(0.0f, outlineWidth);
+        // tenía libre. Proporcional al tamaño del objeto EN MUNDO, igual que el
+        // camino de Vulkan: un grosor plano se come los objetos pequeños y no se
+        // ve en los grandes. El mínimo de 1 unidad evita que una malla diminuta
+        // se quede sin contorno.
+        push.flags = glm::vec2(0.0f, grosorContorno(localExtent, transform));
         commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
 
         commandList->IASetVertexBuffers(0, 1, &vertexView);
@@ -8437,15 +8496,42 @@ void D3D12Renderer::Impl::recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv
     if (selectedObject >= 0 && selectedObject < static_cast<int>(objects.size())) {
         const StaticObject& object = objects[static_cast<size_t>(selectedObject)];
         if (object.meshVisible)
-            drawOutline(outlineLdrPipeline.Get(), object.transform, object.vertexBufferView,
-                        object.indexBufferView, object.indexCount);
+        {
+            // La caja del estatico esta en espacio LOCAL (ver StaticObject), que
+            // es justo lo que espera grosorContorno.
+            const glm::vec3 e = object.aabbMax - object.aabbMin;
+            const float ext = object.hasBounds ? (glm::max)(e.x, (glm::max)(e.y, e.z)) : 0.0f;
+            drawOutline(outlineLdrPipeline.Get(), object.transform, ext,
+                        object.vertexBufferView, object.indexBufferView, object.indexCount);
+        }
     }
     if (selectedSkinned >= 0 && selectedSkinned < static_cast<int>(skinnedObjects.size())) {
         const SkinnedObject& character = skinnedObjects[static_cast<size_t>(selectedSkinned)];
-        if (character.visible)
+        if (character.visible && character.vertexCount > 0) {
+            // El buffer de vertices deformados ya NO esta como entrada del
+            // ensamblador: el pase de escena lo devuelve a acceso desordenado en
+            // cuanto termina, porque el compute del frame siguiente lo reescribe.
+            // Este pase va DESPUES de aquello, asi que tiene que pedirlo prestado
+            // y dejarlo como estaba.
+            //
+            // Sin esto el draw es invalido -vertex buffer en UNORDERED_ACCESS- y
+            // el contorno de un personaje sencillamente no se dibujaba. El de un
+            // objeto estatico si, porque su vertex buffer no lo toca el skinning.
+            D3D12_RESOURCE_BARRIER vb{};
+            vb.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            vb.Transition.pResource   = character.outputVerts->GetResource();
+            vb.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            vb.Transition.StateAfter  = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+            vb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            commandList->ResourceBarrier(1, &vb);
+
             drawOutline(outlineSkinnedLdrPipeline.Get(), character.transform,
-                        character.vertexBufferView, character.indexBufferView,
-                        character.indexCount);
+                        character.restMaxExtent, character.vertexBufferView,
+                        character.indexBufferView, character.indexCount);
+
+            std::swap(vb.Transition.StateBefore, vb.Transition.StateAfter);
+            commandList->ResourceBarrier(1, &vb);
+        }
     }
 }
 

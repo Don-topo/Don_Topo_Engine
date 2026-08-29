@@ -28,6 +28,43 @@ namespace DonTopo
         glm::vec4 params {10.0f, 0.9f, 0.7f, 1.0f};
     };
 
+    // Direccion en la que "cae" la luz key: la que construye el shadow map y la
+    // que usa el in-scattering de la niebla. UN SOLO sitio a proposito — cuando
+    // cada consumidor la derivaba por su cuenta, cambiar el criterio en las
+    // cascadas y no en la niebla dejo el scattering apuntando a un lado y el
+    // shadow map construido hacia otro.
+    //
+    //  - Direccional: su PROPIA direccion, que es el -Z local del GameObject.
+    //  - Punto y foco: aproximacion de la luz hacia el origen del mundo. Es lo
+    //    unico que dan de si unas sombras en cascada, que son de luz
+    //    direccional; la sombra correcta de una luz de punto necesita un cubemap
+    //    (ver P21 en docs/renderer-audit.md).
+    //
+    // false = no hay direccion utilizable (luz en el origen, o direccion nula) y
+    // el llamante debe saltarse el pase en vez de dividir por cero.
+    inline bool keyLightDirection(const glm::vec4& position, const glm::vec4& direction,
+                                  glm::vec3& out)
+    {
+        // El tipo va en direction.w, con la misma convencion que usa pbr.frag:
+        // int(w + 0.5).
+        const int tipo = static_cast<int>(direction.w + 0.5f);
+
+        if (tipo == static_cast<int>(LightType::Directional))
+        {
+            const glm::vec3 d(direction);
+            const float     l = glm::length(d);
+            if (l < 1e-6f) return false;
+            out = d / l;
+            return true;
+        }
+
+        const glm::vec3 p(position);
+        const float     l = glm::length(p);
+        if (l < 1e-6f) return false;
+        out = -p / l;
+        return true;
+    }
+
     struct UniformBufferObject
     {
         glm::mat4   view;

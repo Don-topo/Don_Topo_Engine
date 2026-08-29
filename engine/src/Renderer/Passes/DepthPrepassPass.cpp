@@ -1,4 +1,5 @@
 #include "DonTopo/Renderer/Passes/DepthPrepassPass.h"
+#include <glm/glm.hpp>
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/GpuResources.h"
 #include "DonTopo/Renderer/Vertex.h"
@@ -186,12 +187,42 @@ void DepthPrepassPass::createRenderPassAndPipeline(const Context& ctx)
     pipelineInfo.renderPass          = m_renderPass;
     if (vkCreateGraphicsPipelines(ctx.gpu.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipeline) != VK_SUCCESS)
         throw std::runtime_error("failed to create ssao depth pipeline!");
+
+    // Variante para las mallas con huesos. Todo el estado se copia del de
+    // arriba; lo unico distinto es el vertex input, igual que en ShadowPass.
+    //
+    // stride 80 y no sizeof(SkinnedVertex): aquel es el vertice de ENTRADA del
+    // compute (7 x vec4, con indices y pesos de hueso). Lo que se dibuja aqui es
+    // su SALIDA, el OutputVertex de skinning.comp: 5 x vec4 con la posicion en
+    // el primero.
+    VkVertexInputBindingDescription skinnedBinding{};
+    skinnedBinding.binding   = 0;
+    skinnedBinding.stride    = 5 * (uint32_t)sizeof(glm::vec4);  // 80 bytes
+    skinnedBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription skinnedAttr{};
+    skinnedAttr.binding  = 0;
+    skinnedAttr.location = 0;
+    skinnedAttr.format   = VK_FORMAT_R32G32B32_SFLOAT;
+    skinnedAttr.offset   = 0;
+
+    VkPipelineVertexInputStateCreateInfo skinnedVertexInput = vertexInput;
+    skinnedVertexInput.pVertexBindingDescriptions   = &skinnedBinding;
+    skinnedVertexInput.pVertexAttributeDescriptions = &skinnedAttr;
+
+    VkGraphicsPipelineCreateInfo skinnedInfo = pipelineInfo;
+    skinnedInfo.pVertexInputState = &skinnedVertexInput;
+    if (vkCreateGraphicsPipelines(ctx.gpu.device(), VK_NULL_HANDLE, 1, &skinnedInfo, nullptr,
+                                  &m_skinnedPipeline) != VK_SUCCESS)
+        throw std::runtime_error("failed to create skinned depth prepass pipeline!");
+
     vkDestroyShaderModule(ctx.gpu.device(), vertModule, nullptr);
 }
 
 void DepthPrepassPass::destroyRenderPassAndPipeline(const Context& ctx)
 {
     vkDestroyPipeline(ctx.gpu.device(), m_pipeline, nullptr);
+    vkDestroyPipeline(ctx.gpu.device(), m_skinnedPipeline, nullptr);
     vkDestroySampler(ctx.gpu.device(), m_sampler, nullptr);
     vkDestroyRenderPass(ctx.gpu.device(), m_renderPass, nullptr);
     m_renderPass = VK_NULL_HANDLE;
@@ -291,6 +322,11 @@ void DepthPrepassPass::begin(const Context& ctx, VkCommandBuffer cmd)
     vkCmdSetScissor(cmd, 0, 1, &sc);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+}
+
+void DepthPrepassPass::bindSkinnedPipeline(VkCommandBuffer cmd)
+{
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skinnedPipeline);
 }
 
 void DepthPrepassPass::end(VkCommandBuffer cmd)

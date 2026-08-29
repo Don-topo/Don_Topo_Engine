@@ -45,6 +45,10 @@ public:
     // Abre el render pass con el viewport, el scissor y el pipeline puestos.
     // Entre esto y end() el Renderer graba sus draws.
     void begin(const Context& ctx, VkCommandBuffer cmd);
+    // Cambia al pipeline de mallas con huesos SIN cerrar el render pass: su
+    // vertex input es la SALIDA del compute de skinning (5 x vec4), no el
+    // Vertex empaquetado del motor. Mismo reparto que ShadowPass.
+    void bindSkinnedPipeline(VkCommandBuffer cmd);
     void end(VkCommandBuffer cmd);
 
     // La profundidad y su sampler: los muestrean el SSAO, el SSR, el TAA, el
@@ -57,6 +61,7 @@ private:
     VkDeviceMemory m_memory[kFramesInFlight] = {};
     VkImageView    m_view[kFramesInFlight]   = {};
     VkFramebuffer  m_fb[kFramesInFlight]     = {};
+    VkPipeline     m_skinnedPipeline         = VK_NULL_HANDLE;
     VkRenderPass   m_renderPass              = VK_NULL_HANDLE;
     VkPipeline     m_pipeline                = VK_NULL_HANDLE;
     // NEAREST: ni D32_SFLOAT ni R32_SFLOAT tienen garantizado el filtrado

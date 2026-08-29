@@ -4940,8 +4940,14 @@ namespace DonTopo {
 
             // Mismas guardas y mismo frustum que el pass de escena: si aquí
             // entrara algo que allí no se dibuja, el AO oscurecería contra
-            // geometría invisible. Los skinned no entran, igual que en el pass de
-            // sombras: reciben AO pero no lo proyectan.
+            // geometría invisible.
+            //
+            // Los personajes SÍ entran, detrás de los estáticos. Antes no, con el
+            // argumento de que el pass de sombras tampoco los metía — y eso era
+            // falso: sí los dibuja (ver bindSkinnedPipeline más abajo). Esta
+            // profundidad no es solo del AO: la NIEBLA marcha hasta ella, así que
+            // sin los personajes la niebla de su silueta se calculaba hasta lo que
+            // hubiera detrás y salía un recorte con la forma del objeto de atrás.
             m_batchCandidates.clear();
             m_batchCandidates.reserve(m_objects.size());
             for (auto& obj : m_objects)
@@ -4977,6 +4983,55 @@ namespace DonTopo {
                 vkCmdBindVertexBuffers(cmd, 0, 1, vb, offsets);
                 vkCmdBindIndexBuffer(cmd, gpu->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
                 vkCmdDrawIndexed(cmd, gpu->indexCount, batch.instanceCount, 0, 0, batch.firstInstance);
+            }
+
+            // Y los personajes, con su propio pipeline: lo que se dibuja es la
+            // SALIDA del compute de skinning, que tiene otro stride. Mismas
+            // guardas que en el pass de sombras: si el compute no despachó para
+            // este objeto, su buffer lleva una pose vieja.
+            {
+                bool skinnedBound = false;
+                for (size_t si = 0; si < m_skinnedObjects.size(); si++)
+                {
+                    // La MISMA lista de visibles que consumió el compute, igual que
+                    // en el pass de sombras: a un objeto sin despachar le quedaría
+                    // la pose del último frame en que fue visible.
+                    if (si >= m_skinnedVisible.size() || !m_skinnedVisible[si]) continue;
+                    const SkinnedRenderObject& sobj = m_skinnedObjects[si];
+                    if (!sobj.meshVisible) continue;
+                    if (sobj.outputVertexBuffer == VK_NULL_HANDLE || sobj.matGfx.empty())
+                        continue;
+                    // Sin sitio en el SSBO de este frame: mejor sin profundidad que
+                    // pisar el tramo de otro pase.
+                    if (m_instanceCursor >= m_instanceCapacity[m_currentFrame]) break;
+
+                    // El shader saca el model del SSBO por gl_InstanceIndex: una
+                    // entrada por objeto y un draw de una instancia con
+                    // firstInstance apuntando a ella.
+                    const uint32_t instanceIndex = m_instanceCursor++;
+                    ((glm::mat4*)m_instanceMapped[m_currentFrame])[instanceIndex] =
+                        sobj.transform;
+
+                    if (!skinnedBound)
+                    {
+                        m_depthPrepass.bindSkinnedPipeline(cmd);
+                        skinnedBound = true;
+                    }
+
+                    // Set 0 solo por el UBO: este shader no muestrea nada, así que
+                    // vale cualquier set del layout que declara el pipeline.
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        m_shadowPass.pipelineLayout(), 0, 1,
+                        &sobj.matGfx[0].descSets[m_currentFrame], 0, nullptr);
+
+                    VkBuffer     svb[]      = { sobj.outputVertexBuffer };
+                    VkDeviceSize soffsets[] = { 0 };
+                    vkCmdBindVertexBuffers(cmd, 0, 1, svb, soffsets);
+                    vkCmdBindIndexBuffer(cmd, sobj.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                    for (const auto& sm : sobj.subMeshes)
+                        vkCmdDrawIndexed(cmd, sm.indexCount, 1, sm.indexStart, 0,
+                                         instanceIndex);
+                }
             }
 
             m_depthPrepass.end(cmd);
@@ -5197,9 +5252,18 @@ namespace DonTopo {
 
         m_shadowPass.resizeResources(shadowCtx(), (uint32_t)shadowResolution());
 
-        // Y lo que apuntaba a la vista vieja. Sin esto la escena se dibuja
-        // muestreando un descriptor muerto.
+        // Y TODO lo que apuntaba a la vista vieja. Son tres consumidores y hay
+        // que acordarse de los tres: los sets de cada malla y los de cada
+        // material de personaje (binding 3), que rehace refreshShadowDescriptors,
+        // y los del pase de NIEBLA, que se lleva la vista y el sampler en su
+        // Context (ver fogCtx) y por tanto tambien se queda con la vista muerta.
+        //
+        // Olvidar la niebla dejaba un imageView destruido en un set de compute:
+        // el arranque se llenaba de errores de validacion en CADA frame.
         refreshShadowDescriptors();
+        // createSets resetea su pool antes de repartir, asi que re-llamarlo no
+        // lo agota.
+        m_fogPass.createSets(fogCtx());
     }
 
     void Renderer::refreshShadowDescriptors()
