@@ -457,9 +457,19 @@ namespace DonTopo {
         // La camara del frame se muestrea aqui y no dentro del pase: es el mismo
         // currentFrameCamera() que ve el culling del pass de sombras.
         {
+            // El centro de la escena, a donde apunta una luz de punto. Se saca
+            // AQUI, junto a las cascadas, porque es el mismo valor que tiene que
+            // ver la niebla (via fogCtx) en este frame.
+            SceneCenter centro;
+            for (const RenderObject& object : m_objects)      centro.add(object.transform);
+            for (const SkinnedRenderObject& character : m_skinnedObjects)
+                centro.add(character.transform);
+            if (!centro.get(m_sceneCenter))
+                m_sceneCenter = glm::vec3(0.0f);
+
             const FrameCamera cascadeCam = currentFrameCamera();
             m_shadowPass.computeCascades(cascadeCam.view, cascadeCam.proj, m_lights,
-                                         shadowDistance(), cascadeLambda());
+                                         shadowDistance(), cascadeLambda(), m_sceneCenter);
         }
         updateUniformBuffer(m_currentFrame);
 
@@ -5086,7 +5096,7 @@ namespace DonTopo {
             m_gpu, *this, m_renderExtent, m_currentFrame,
             m_hdrImage, m_hdrView, m_depthPrepass.views(), m_depthPrepass.sampler(),
             m_uniformBuffers, m_shadowPass.view(), m_shadowPass.sampler(), m_lights,
-            m_timestampsSupported, m_timestampPeriod
+            m_sceneCenter, m_timestampsSupported, m_timestampPeriod
         };
     }
 

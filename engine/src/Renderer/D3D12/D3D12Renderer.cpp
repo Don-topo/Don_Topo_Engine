@@ -19,6 +19,7 @@
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include "DonTopo/Renderer/UiLayer.h"
+#include "DonTopo/Renderer/UniformBufferObject.h"
 #include "DonTopo/Renderer/Vertex.h"
 #include "DonTopo/UI/UiCanvas.h"
 #include "DonTopo/UI/UiWidgetSync.h"
@@ -7772,6 +7773,33 @@ void D3D12Renderer::Impl::computeCascades()
     if (shadowFar <= camNear)
         return;
 
+    // La direccion de la luz key se decide AQUI y no en setLights: la de una luz
+    // de punto apunta al centro de la ESCENA, que cambia cuando se mueve
+    // cualquier objeto y no solo cuando se tocan las luces. Criterio compartido
+    // con Vulkan y con la niebla —que lee lightDirection—, no una copia: la
+    // copia es justamente lo que dejo el in-scattering apuntando a un lado y el
+    // shadow map construido hacia otro (H65).
+    if (!sceneLights.empty()) {
+        SceneCenter centro;
+        for (const StaticObject& object : objects)
+            centro.add(object.transform);
+        for (const SkinnedObject& character : skinnedObjects)
+            centro.add(character.transform);
+
+        glm::vec3 aim(0.0f);
+        if (centro.get(aim)) {
+            const ShaderLight& key = sceneLights[0];
+            glm::vec3          dir;
+            if (keyLightDirection(glm::vec4(key.position[0], key.position[1], key.position[2],
+                                            key.position[3]),
+                                  glm::vec4(key.direction[0], key.direction[1], key.direction[2],
+                                            key.direction[3]),
+                                  aim, dir)) {
+                lightDirection = dir;
+            }
+        }
+    }
+
     const glm::vec3 lightDir = glm::normalize(lightDirection);
     const glm::vec3 up = std::abs(lightDir.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f)
                                                       : glm::vec3(0.0f, 1.0f, 0.0f);
@@ -9254,32 +9282,11 @@ void D3D12Renderer::setLights(const Light* lights, size_t count)
     d.sceneLights.resize(count);
     std::memcpy(d.sceneLights.data(), lights, count * sizeof(ShaderLight));
 
-    // SOLO la luz 0 proyecta sombra. De dónde sale su dirección depende del
-    // tipo, que va en direction.w con la misma convención que usa pbr.frag:
-    // int(w + 0.5). Mismo criterio que ShadowPass en Vulkan.
-    const int tipoLuz = static_cast<int>(d.sceneLights[0].direction[3] + 0.5f);
-
-    if (tipoLuz == static_cast<int>(LightType::Directional)) {
-        // Su PROPIA dirección. Antes se ignoraba y se usaba posición->origen,
-        // así que girar el gizmo de una direccional no movía su sombra.
-        const glm::vec3 dir(d.sceneLights[0].direction[0], d.sceneLights[0].direction[1],
-                            d.sceneLights[0].direction[2]);
-        if (glm::length(dir) > 1e-6f) {
-            d.lightDirection = glm::normalize(dir);
-            d.computeCascades();
-        }
-    } else {
-        // Punto y foco: no hay sombra correcta para ellos todavía —harían falta
-        // cubemaps de sombras y proyección en perspectiva—, así que se apunta de
-        // la luz al origen del mundo. Solo se sostiene con la escena centrada
-        // ahí.
-        const glm::vec3 first(d.sceneLights[0].position[0], d.sceneLights[0].position[1],
-                              d.sceneLights[0].position[2]);
-        if (glm::length(first) > 1e-6f) {
-            d.lightDirection = -glm::normalize(first);
-            d.computeCascades();
-        }
-    }
+    // SOLO la luz 0 proyecta sombra, y de dónde sale su dirección lo decide
+    // computeCascades: la de una luz de punto apunta al centro del volumen
+    // sombreado, que depende de la cámara. Derivarla aquí la dejaría congelada
+    // en la cámara que hubiera cuando cambiaron las luces.
+    d.computeCascades();
 }
 
 void D3D12Renderer::setClearColor(float r, float g, float b, float a)

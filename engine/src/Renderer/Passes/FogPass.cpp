@@ -268,8 +268,11 @@ void FogPass::record(const Context& ctx, VkCommandBuffer cmd, const glm::mat4& v
         // El MISMO criterio que las cascadas, no una copia: cuando esto derivaba
         // la direccion por su cuenta y el shadow pass cambio el suyo, el
         // scattering apuntaba a un lado y el shadow map estaba construido hacia
-        // otro.
-        keyLightDirection(ctx.lights[0].position, ctx.lights[0].direction, lightDir);
+        // otro. Por eso el punto de mira de una luz de punto no se calcula aqui:
+        // llega por el Context, ya resuelto, y es el mismo objeto que recibieron
+        // las cascadas en este frame.
+        keyLightDirection(ctx.lights[0].position, ctx.lights[0].direction,
+                          ctx.sceneCenter, lightDir);
         lightColor = glm::vec3(ctx.lights[0].color) * ctx.lights[0].color.a;
     }
     push.lightDirFalloff = glm::vec4(lightDir, ctx.state.fogHeightFalloff());

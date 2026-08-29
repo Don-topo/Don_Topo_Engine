@@ -1,5 +1,7 @@
 #pragma once
 #include <glm/glm.hpp>
+#include <algorithm>
+#include <cmath>
 
 namespace DonTopo 
 {
@@ -28,28 +30,71 @@ namespace DonTopo
         glm::vec4 params {10.0f, 0.9f, 0.7f, 1.0f};
     };
 
+    // Punto al que apunta una luz sin direccion propia: el centro de la ESCENA,
+    // como media de los origenes de lo que hay dibujado.
+    //
+    // Estable a proposito. La version anterior apuntaba al centro del frustum de
+    // la camara, que suena mejor —la sombra cae donde estas mirando— pero ata la
+    // direccion de la luz a la camara: girar en el sitio giraba la sombra, y eso
+    // se ve MUCHO peor que el problema que arreglaba. Con el centro de la escena
+    // la sombra solo se mueve cuando se mueve la luz, que es lo que uno espera.
+    //
+    // Los origenes y no las cajas envolventes: esto solo elige la direccion de
+    // una aproximacion, y un centroide exacto no la mejoraria en nada
+    // apreciable. Es el mismo criterio que ya usaba el rango de camara de D3D12
+    // con los personajes.
+    struct SceneCenter
+    {
+        glm::vec3 suma{0.0f};
+        int       n = 0;
+
+        void add(const glm::vec3& origen) { suma += origen; ++n; }
+        // La cuarta columna de un transform de mundo, que es el caso de los dos
+        // backends.
+        void add(const glm::mat4& transform) { add(glm::vec3(transform[3])); }
+
+        // false = escena vacia. El llamante decide: las cascadas se saltan el
+        // pase (no hay nada que sombrear) y la niebla se queda con su direccion
+        // neutra.
+        bool get(glm::vec3& out) const
+        {
+            if (n == 0) return false;
+            out = suma / static_cast<float>(n);
+            return true;
+        }
+    };
+
     // Direccion en la que "cae" la luz key: la que construye el shadow map y la
     // que usa el in-scattering de la niebla. UN SOLO sitio a proposito — cuando
     // cada consumidor la derivaba por su cuenta, cambiar el criterio en las
     // cascadas y no en la niebla dejo el scattering apuntando a un lado y el
     // shadow map construido hacia otro.
     //
-    //  - Direccional: su PROPIA direccion, que es el -Z local del GameObject.
-    //  - Punto y foco: aproximacion de la luz hacia el origen del mundo. Es lo
-    //    unico que dan de si unas sombras en cascada, que son de luz
-    //    direccional; la sombra correcta de una luz de punto necesita un cubemap
-    //    (ver P21 en docs/renderer-audit.md).
+    //  - Direccional y foco: su PROPIA direccion, que es el -Z local del
+    //    GameObject. Un foco tiene cono, o sea que tiene direccion de verdad;
+    //    antes se le aplicaba la aproximacion de la luz de punto y girar su
+    //    gizmo no movia su sombra.
+    //  - Punto: no tiene direccion, asi que se apunta de la luz al centro de la
+    //    escena (aim). Es lo unico que dan de si unas sombras en cascada, que
+    //    son de luz direccional: la proyeccion sigue siendo paralela y el tamano
+    //    de la sombra no cambia con la distancia. La sombra correcta necesita un
+    //    cubemap (ver P21 en docs/renderer-audit.md).
     //
-    // false = no hay direccion utilizable (luz en el origen, o direccion nula) y
-    // el llamante debe saltarse el pase en vez de dividir por cero.
+    // aim sale de SceneCenter. Pasarle el origen del mundo reproduce el
+    // comportamiento anterior, que solo cuadraba con la escena centrada ahi.
+    //
+    // false = no hay direccion utilizable (luz justo en el punto de mira, o
+    // direccion nula) y el llamante debe saltarse el pase en vez de dividir por
+    // cero.
     inline bool keyLightDirection(const glm::vec4& position, const glm::vec4& direction,
-                                  glm::vec3& out)
+                                  const glm::vec3& aim, glm::vec3& out)
     {
         // El tipo va en direction.w, con la misma convencion que usa pbr.frag:
         // int(w + 0.5).
         const int tipo = static_cast<int>(direction.w + 0.5f);
 
-        if (tipo == static_cast<int>(LightType::Directional))
+        if (tipo == static_cast<int>(LightType::Directional) ||
+            tipo == static_cast<int>(LightType::Spot))
         {
             const glm::vec3 d(direction);
             const float     l = glm::length(d);
@@ -58,10 +103,10 @@ namespace DonTopo
             return true;
         }
 
-        const glm::vec3 p(position);
-        const float     l = glm::length(p);
+        const glm::vec3 haciaElCentro = aim - glm::vec3(position);
+        const float     l             = glm::length(haciaElCentro);
         if (l < 1e-6f) return false;
-        out = -p / l;
+        out = haciaElCentro / l;
         return true;
     }
 

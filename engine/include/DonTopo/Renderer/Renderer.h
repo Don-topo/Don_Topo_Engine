@@ -932,6 +932,15 @@ namespace DonTopo {
             FpMode                          m_fpActiveMode                      = FpMode::Off;
             std::vector<float>              m_lightRadii;
 
+            // A donde apunta una luz de PUNTO, que no tiene direccion propia: el
+            // centro de la escena. Se recalcula una vez por frame y lo leen los
+            // DOS consumidores de la direccion de la luz key —las cascadas y la
+            // niebla—, que tienen que ver exactamente el mismo valor o el
+            // in-scattering apunta a un lado y el shadow map esta construido
+            // hacia otro (H65). Escena vacia: se queda en el origen, que es lo
+            // que hacia antes siempre.
+            glm::vec3                       m_sceneCenter                       {0.0f};
+
             VkSemaphore                     m_imageAvailable[MAX_FRAMES]        = {};
             std::vector<VkSemaphore>        m_renderFinished;
             VkFence                         m_inFlight[MAX_FRAMES]              = {};

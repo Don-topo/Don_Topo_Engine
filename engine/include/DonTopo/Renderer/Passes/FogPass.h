@@ -38,6 +38,10 @@ public:
         VkSampler            shadowSampler;
         // La luz key es m_lights[0]; sin luces la niebla solo absorbe.
         const std::vector<Light>& lights;
+        // A donde apunta una luz de PUNTO. El MISMO valor que recibieron las
+        // cascadas este frame: si los dos no coinciden, el in-scattering apunta
+        // a un lado y el shadow map esta construido hacia otro.
+        glm::vec3            sceneCenter;
         // Los resolvio el bloom; aqui solo se leen.
         bool                 timestampsSupported;
         float                timestampPeriod;

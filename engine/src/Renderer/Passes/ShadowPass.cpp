@@ -394,7 +394,8 @@ void ShadowPass::destroyResources(const Context& ctx)
 
 void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
                                  const std::vector<Light>& lights,
-                                 float maxDistance, float lambda)
+                                 float maxDistance, float lambda,
+                                 const glm::vec3& sceneCenter)
 {
     for (int i = 0; i < SHADOW_CASCADES; i++) m_cascadeMatrices[i] = glm::mat4(1.0f);
     m_cascadeSplits = glm::vec4(0.0f);
@@ -439,9 +440,10 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
     // SOLO la luz 0 proyecta sombra. De donde sale su direccion lo decide
     // keyLightDirection, que es el UNICO sitio donde vive ese criterio: la
     // niebla lo necesita identico para que su in-scattering y este shadow map
-    // hablen de la misma luz.
+    // hablen de la misma luz. Una luz de punto no tiene direccion propia y
+    // apunta a sceneCenter, que llega ya calculado desde el Renderer.
     glm::vec3 lightDir;
-    if (!keyLightDirection(lights[0].position, lights[0].direction, lightDir))
+    if (!keyLightDirection(lights[0].position, lights[0].direction, sceneCenter, lightDir))
         return;
     const glm::vec3 up = std::abs(lightDir.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f)
                                                       : glm::vec3(0.0f, 1.0f, 0.0f);

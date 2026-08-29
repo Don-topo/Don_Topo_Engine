@@ -80,9 +80,14 @@ public:
     // cascadeLambda()): eran constantes de compilacion y ahora las elige el
     // usuario. Van como parametros y no por el Context porque este pase no
     // conoce al Renderer, y el reparto es lo unico suyo que depende de ellas.
+    // sceneCenter es a donde apunta una luz de PUNTO, que no tiene direccion
+    // propia. Llega como parametro por el mismo motivo: el pase no ve los
+    // objetos de la escena. Lo calcula el Renderer y se lo pasa identico a la
+    // niebla, que necesita la MISMA direccion de luz que este shadow map.
     void computeCascades(const glm::mat4& view, const glm::mat4& proj,
                          const std::vector<Light>& lights,
-                         float maxDistance, float lambda);
+                         float maxDistance, float lambda,
+                         const glm::vec3& sceneCenter);
 
     // Abre el render pass de una cascada con el viewport, el scissor, el
     // pipeline estatico y el push del indice ya puestos. Entre esto y
