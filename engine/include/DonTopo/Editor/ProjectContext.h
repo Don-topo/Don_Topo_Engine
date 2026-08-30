@@ -118,6 +118,10 @@ public:
         float shadowDistance   = 500.0f;
         float cascadeLambda    = 0.75f;
         int   shadowResolution = 2048;
+        // Modo de presentacion: 0 vsync, 1 mailbox, 2 immediate. Se guarda lo
+        // PEDIDO, no lo que el device pudo dar: si el proyecto se abre en otra
+        // maquina que si lo soporta, vuelve a valer.
+        int   presentMode      = 0;
 
         // --- Volumenes de audio por bus ---------------------------------------
         //

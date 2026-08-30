@@ -310,6 +310,8 @@ namespace DonTopo {
             // que es tambien quien tonemapea).
             void  setBloomEnabled(bool v) override;
             void  setShadowResolution(int v) override;
+            void  setPresentMode(PresentMode v) override;
+            bool  presentModeSupported(PresentMode v) const override;
             // Coste GPU del bloom + composicion del ultimo frame ya resuelto, en
             // ms. 0 si el dispositivo no soporta timestamps.
             float bloomGpuMs() const         { return m_bloomPass.gpuMs(); }
@@ -965,6 +967,11 @@ namespace DonTopo {
             int                             m_outlineStaticIndex                = -1;
             int                             m_outlineSkinnedIndex               = -1;
             bool                            m_framebufferResized                = false;
+            // Modos de presentacion que soporta ESTE device, cacheados al crear
+            // el swapchain (que es donde ya hay surface y physicalDevice). FIFO
+            // no entra: la spec lo garantiza siempre.
+            bool                            m_mailboxDisponible                 = false;
+            bool                            m_immediateDisponible               = false;
             bool                            m_headless                          = false;
             VkDescriptorSetLayout           m_descriptorSetLayout               = VK_NULL_HANDLE;
             VkBuffer                        m_uniformBuffers[MAX_FRAMES]        = {};

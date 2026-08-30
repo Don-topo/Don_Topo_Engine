@@ -1255,6 +1255,10 @@ struct D3D12Renderer::Impl {
     // Cuantas capas del mapa tienen matriz valida en ESTE frame: 4 con las
     // cascadas de una direccional, 1 con la cara en perspectiva de un foco, 0
     // sin luces. Solo acota los DRAWS — el clear de cada capa se hace igual.
+    // El adaptador permite presentar sin esperar al refresco. Se resuelve al
+    // crear el swapchain, que es cuando hay que pedir el flag.
+    bool      tearingDisponible = false;
+
     UINT      activeLayers = 0;
     // Focos secundarios con ranura. Ocupan las capas [kShadowKeyLayers, +extra).
     UINT      extraLayers  = 0;
@@ -8461,6 +8465,25 @@ void D3D12Renderer::init(Window& window)
     scDesc.SwapEffect  = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     scDesc.SampleDesc.Count = 1;
 
+    // Tearing: es lo que permite presentar SIN esperar al refresco, o sea el
+    // equivalente de VK_PRESENT_MODE_IMMEDIATE. Depende del adaptador y del SO,
+    // asi que se pregunta; y el flag hay que pedirlo al CREAR el swapchain,
+    // aunque el modo se elija luego en cada Present. Sin el, un Present(0,
+    // ALLOW_TEARING) falla.
+    {
+        BOOL permitido = FALSE;
+        ComPtr<IDXGIFactory5> factory5;
+        if (SUCCEEDED(d.factory.As(&factory5))) {
+            if (FAILED(factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+                                                     &permitido, sizeof(permitido)))) {
+                permitido = FALSE;
+            }
+        }
+        d.tearingDisponible = (permitido == TRUE);
+        if (d.tearingDisponible)
+            scDesc.Flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+    }
+
     ComPtr<IDXGISwapChain1> swapChain1;
     throwIfFailed(d.factory->CreateSwapChainForHwnd(d.queue.Get(), d.hwnd, &scDesc, nullptr,
                                                     nullptr, &swapChain1),
@@ -9262,9 +9285,19 @@ void D3D12Renderer::drawFrame()
     ID3D12CommandList* lists[] = {d.commandList.Get()};
     d.queue->ExecuteCommandLists(1, lists);
 
-    // Vsync (SyncInterval=1): mismo comportamiento que el camino Vulkan por
-    // defecto, y evita quemar la GPU presentando un clear a miles de fps.
-    const HRESULT presentHr = d.swapChain->Present(1, 0);
+    // Aqui es donde D3D12 elige modo de presentacion, y no al crear el
+    // swapchain como Vulkan: SyncInterval 1 espera al refresco y 0 no.
+    //
+    // Mailbox no tiene equivalente en DXGI, asi que cae a Vsync — la UI ya lo
+    // deshabilita con su motivo. Immediate necesita ademas el flag de tearing,
+    // que solo vale si el swapchain se creo con el suyo.
+    UINT sync  = 1;
+    UINT flags = 0;
+    if (d.state->presentMode() == PresentMode::Immediate && d.tearingDisponible) {
+        sync  = 0;
+        flags = DXGI_PRESENT_ALLOW_TEARING;
+    }
+    const HRESULT presentHr = d.swapChain->Present(sync, flags);
     if (presentHr == DXGI_ERROR_DEVICE_REMOVED || presentHr == DXGI_ERROR_DEVICE_RESET) {
         // El volcado ANTES de lanzar: la excepción se lleva el proceso por
         // delante y con él el device, que es a quien hay que preguntarle.
@@ -9331,8 +9364,14 @@ void D3D12Renderer::Impl::applyPendingResize()
     }
     releaseRenderTargets();
 
+    // El flag de tearing hay que REPETIRLO aqui: ResizeBuffers recrea los
+    // buffers con los flags que se le pasen, no con los que tenia. Perderlo
+    // dejaria el Present(0, ALLOW_TEARING) fallando a partir del primer resize.
     throwIfFailed(swapChain->ResizeBuffers(kFrameCount, pendingWidth, pendingHeight,
-                                           DXGI_FORMAT_R8G8B8A8_UNORM, 0),
+                                           DXGI_FORMAT_R8G8B8A8_UNORM,
+                                           tearingDisponible
+                                               ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+                                               : 0),
                   "IDXGISwapChain3::ResizeBuffers");
 
     swapWidth  = pendingWidth;
@@ -9962,6 +10001,28 @@ void D3D12Renderer::setShadowResolution(int v)
     setShadowResolutionFlag(v);
     // Se anota y lo aplica drawFrame entre frames (applyPendingShadowSize).
     m_impl->pendingShadowMapSize = static_cast<UINT>(v);
+}
+
+void D3D12Renderer::setPresentMode(PresentMode v)
+{
+    // Aquí no hay nada que recrear, al revés que en Vulkan: DXGI elige el modo
+    // en cada Present, así que basta con guardar el valor y el frame siguiente
+    // ya sale con él. El flag de tearing sí va en el swapchain, pero se pide
+    // SIEMPRE que el adaptador lo permita, no solo cuando el modo está activo.
+    setPresentModeFlag(v);
+}
+
+bool D3D12Renderer::presentModeSupported(PresentMode v) const
+{
+    switch (v) {
+        case PresentMode::Vsync:     return true;
+        // DXGI no tiene equivalente de mailbox: el flip model descarta o encola,
+        // pero no hay un modo que ni espere ni rompa la imagen. Se dice que no
+        // en vez de fingir que sí y caer a vsync en silencio.
+        case PresentMode::Mailbox:   return false;
+        case PresentMode::Immediate: return m_impl->tearingDisponible;
+    }
+    return false;
 }
 
 void D3D12Renderer::setBloomEnabled(bool v)

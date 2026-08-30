@@ -264,6 +264,8 @@ public:
     // el IBL global que sale de convolucionarlo.
     void  initSkybox(const std::array<std::string, 6>& facePaths) override;
     void  setShadowResolution(int v) override;
+    void  setPresentMode(PresentMode v) override;
+    bool  presentModeSupported(PresentMode v) const override;
 
     // Sin lote de subidas: aquí cada una se envía y se espera al hacerla.
     void  flushPendingUploads() override;

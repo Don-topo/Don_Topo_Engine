@@ -1010,7 +1010,31 @@ namespace DonTopo {
         createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         createInfo.preTransform = surfaceCapabilities.currentTransform;
         createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-        createInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR; // vsync
+        // Modo de presentacion. FIFO (vsync) es el unico que la spec garantiza,
+        // asi que es el default y el destino de cualquier caida. Los otros se
+        // consultan al device y se cachean aqui, que es donde ya tenemos surface
+        // y physicalDevice; presentModeSupported() lee esa cache.
+        {
+            uint32_t n = 0;
+            vkGetPhysicalDeviceSurfacePresentModesKHR(m_gpu.physicalDevice(), m_gpu.surface(), &n, nullptr);
+            std::vector<VkPresentModeKHR> disponibles(n);
+            if (n) vkGetPhysicalDeviceSurfacePresentModesKHR(m_gpu.physicalDevice(), m_gpu.surface(),
+                                                             &n, disponibles.data());
+            m_mailboxDisponible   = false;
+            m_immediateDisponible = false;
+            for (VkPresentModeKHR m : disponibles)
+            {
+                if (m == VK_PRESENT_MODE_MAILBOX_KHR)    m_mailboxDisponible   = true;
+                if (m == VK_PRESENT_MODE_IMMEDIATE_KHR)  m_immediateDisponible = true;
+            }
+        }
+
+        VkPresentModeKHR modo = VK_PRESENT_MODE_FIFO_KHR;
+        if (presentMode() == PresentMode::Mailbox && m_mailboxDisponible)
+            modo = VK_PRESENT_MODE_MAILBOX_KHR;
+        else if (presentMode() == PresentMode::Immediate && m_immediateDisponible)
+            modo = VK_PRESENT_MODE_IMMEDIATE_KHR;
+        createInfo.presentMode = modo;
         createInfo.clipped = VK_TRUE;
 
         if(vkCreateSwapchainKHR(m_gpu.device(), &createInfo, nullptr, &m_swapChain) != VK_SUCCESS)
@@ -2615,6 +2639,31 @@ namespace DonTopo {
             throw std::runtime_error("failed to create shader module!");
         }
         return shaderModule;
+    }
+
+    void Renderer::setPresentMode(PresentMode v)
+    {
+        if (v == presentMode()) return;
+        setPresentModeFlag(v);
+        // El modo va DENTRO del swapchain, asi que cambiarlo obliga a rehacerlo.
+        // Se reusa la misma senal que un resize de ventana en vez de recrearlo
+        // aqui: ese camino ya espera a que la GPU este en reposo y rehace todo
+        // lo que cuelga del swapchain, y hacerlo a mano seria una segunda copia
+        // de ese teardown.
+        m_framebufferResized = true;
+    }
+
+    bool Renderer::presentModeSupported(PresentMode v) const
+    {
+        switch (v)
+        {
+            // FIFO lo garantiza la spec de Vulkan: no hace falta consultarlo, y
+            // devolver false aqui dejaria a la UI sin ninguna opcion valida.
+            case PresentMode::Vsync:     return true;
+            case PresentMode::Mailbox:   return m_mailboxDisponible;
+            case PresentMode::Immediate: return m_immediateDisponible;
+        }
+        return false;
     }
 
     void Renderer::recreateSwapChain(Window& window)

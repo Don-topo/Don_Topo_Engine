@@ -561,6 +561,7 @@ ProjectContext::ViewSettings EditorUI::currentSettings()
         s.shadowDistance       = m_renderer->shadowDistance();
         s.cascadeLambda        = m_renderer->cascadeLambda();
         s.shadowResolution     = m_renderer->shadowResolution();
+        s.presentMode          = static_cast<int>(m_renderer->presentMode());
     }
 
     // Capas de física: la fuente de la verdad es el PhysicsManager. Sin él
@@ -686,6 +687,7 @@ void EditorUI::applyProjectSettings()
     m_renderer->setShadowDistance(s.shadowDistance);
     m_renderer->setCascadeLambda(s.cascadeLambda);
     m_renderer->setShadowResolution(s.shadowResolution);
+    m_renderer->setPresentMode(static_cast<PresentMode>(s.presentMode));
 
     // Backend de render: se LEE pero no se aplica. El device de este proceso ya
     // está creado —el selector de proyecto se dibuja sobre él—, así que lo único
@@ -1208,6 +1210,64 @@ void EditorUI::drawMenuBar()
                 // reparten "Shadow distance", asi que bajarla concentra los
                 // mismos texeles en menos mundo y afila la sombra de cerca.
                 ImGui::Separator();
+
+                // Modo de presentación. Los que el device no da salen
+                // DESHABILITADOS con su motivo, no escondidos: si el core
+                // soporta N opciones la UI ofrece N, y el matiz se documenta.
+                {
+                    const PresentMode kModos[] = { PresentMode::Vsync,
+                                                   PresentMode::Mailbox,
+                                                   PresentMode::Immediate };
+                    const char* kNombres[] = { "Vsync", "Mailbox", "Immediate" };
+                    // Dos lineas por modo: que hace, y que se paga por ello.
+                    const char* kQueHace[] = {
+                        "Espera al refresco.",
+                        "Triple buffer: ni espera ni rompe la imagen.",
+                        "No espera al refresco.",
+                    };
+                    const char* kQueCuesta[] = {
+                        "Sin tearing, pero clava los FPS a los del monitor.",
+                        "Dibuja frames que se descartan. Solo lo da Vulkan.",
+                        "Aparece tearing, y es el UNICO modo con el que se puede medir"
+                        " el coste real de un frame: con Vsync todo sale a 16 ms.",
+                    };
+
+                    const int actual = static_cast<int>(m_renderer->presentMode());
+                    ImGui::SetNextItemWidth(140.0f);
+                    if (ImGui::BeginCombo("Present mode", kNombres[actual]))
+                    {
+                        for (int i = 0; i < IM_ARRAYSIZE(kModos); ++i)
+                        {
+                            const bool soportado = m_renderer->presentModeSupported(kModos[i]);
+                            ImGui::BeginDisabled(!soportado);
+                            if (ImGui::Selectable(kNombres[i], i == actual))
+                            {
+                                m_renderer->setPresentMode(kModos[i]);
+                                saveProjectSettings();
+                            }
+                            ImGui::EndDisabled();
+                            // El tooltip va FUERA del BeginDisabled: un item
+                            // deshabilitado no recibe hover, y es justo el que
+                            // mas necesita explicar por que no se puede elegir.
+                            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                            {
+                                ImGui::BeginTooltip();
+                                ImGui::TextUnformatted(kQueHace[i]);
+                                ImGui::TextUnformatted(kQueCuesta[i]);
+                                if (!soportado)
+                                {
+                                    ImGui::Separator();
+                                    ImGui::TextColored(
+                                        ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                                        "No disponible en este equipo con el backend activo.");
+                                }
+                                ImGui::EndTooltip();
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                }
+
                 // Resolución del mapa. Es la que da el salto más bruto (4096
                 // cuadruplica los texeles de 2048), y la única de las tres que
                 // mueve recursos: por eso va por el backend y no por el estado.

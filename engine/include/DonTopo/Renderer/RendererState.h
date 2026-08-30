@@ -4,6 +4,24 @@
 
 namespace DonTopo {
 
+    // Como se entregan los frames a la pantalla.
+    //
+    //   Vsync     espera al refresco. Sin tearing y sin quemar GPU, pero clava
+    //             la tasa de frames a la del monitor. Es el default y el UNICO
+    //             que todas las plataformas garantizan.
+    //   Mailbox   triple buffer: no espera y no rompe la imagen, pero dibuja
+    //             frames que se descartan. Solo Vulkan; DXGI no tiene
+    //             equivalente.
+    //   Immediate sin esperar: la tasa sube por encima del refresco y aparece
+    //             tearing. Es el unico modo con el que se puede MEDIR el coste
+    //             real de un frame — con Vsync todo sale a 16 ms y parece que
+    //             da igual lo que hagas.
+    //
+    // El valor vive aqui, pero cambiarlo recrea el swapchain, asi que el
+    // interruptor de verdad es un virtual de EditorRenderer. Igual que
+    // shadowResolution y msaaSamples.
+    enum class PresentMode : int { Vsync = 0, Mailbox = 1, Immediate = 2 };
+
     // Estado escalar de calidad y efectos del render: peso del ambiente y
     // parametros de bloom, SSAO, SSR, niebla, anti-aliasing y Forward+.
     //
@@ -175,6 +193,14 @@ namespace DonTopo {
             float ssaaFactor() const           { return m_ssaaFactor; }
             void  setSsaaFactorFlag(float v)   { m_ssaaFactor = v; }
 
+            // Modo de presentacion. Ver PresentMode. Lo PEDIDO, que no tiene por
+            // que ser lo que el device soporta: quien lo aplica cae a Vsync si
+            // el modo no esta disponible, y presentModeSupported() dice cuales
+            // hay para que la UI pueda deshabilitar los otros con su motivo en
+            // vez de esconderlos.
+            PresentMode presentMode() const              { return m_presentMode; }
+            void        setPresentModeFlag(PresentMode v) { m_presentMode = v; }
+
             // ── Forward+ ─────────────────────────────────────────────────────
             // Culling de luces en GPU. Modos EXCLUYENTES. Off deja el frame
             // exactamente como antes de la feature: ni un dispatch, y pbr.frag
@@ -272,6 +298,7 @@ namespace DonTopo {
             float                           m_cascadeLambda                     = 0.75f;
             int                             m_shadowResolution                  = 2048;
             float                           m_ssaaFactor                        = 2.0f;
+            PresentMode                     m_presentMode                       = PresentMode::Vsync;
 
             FpMode                          m_fpMode                            = FpMode::Off;
             float                           m_fpLightRadius                     = 2000.0f;

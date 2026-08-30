@@ -248,6 +248,24 @@ namespace DonTopo
             // descriptores que apuntaban al mapa viejo.
             virtual void  setShadowResolution(int v) = 0;
 
+            // Modo de presentación. Recrea el swapchain, así que tampoco puede
+            // ser un simple valor del estado. El getter ya lo da RendererState.
+            //
+            // El backend CAE A VSYNC si el modo pedido no está soportado: es el
+            // único que Vulkan garantiza siempre y el que DXGI da sin extensión.
+            // presentMode() sigue devolviendo lo PEDIDO aunque se haya caído,
+            // para que el project.json conserve la intención del usuario si
+            // luego abre el proyecto en una máquina que sí lo soporta.
+            virtual void  setPresentMode(PresentMode v) = 0;
+
+            // Qué modos puede dar ESTE device. Lo consulta la UI para
+            // deshabilitar los que no, con el motivo en un tooltip, en vez de
+            // esconderlos: si el core soporta N opciones, la UI ofrece N y el
+            // matiz se documenta.
+            //
+            // Vsync siempre devuelve true.
+            virtual bool  presentModeSupported(PresentMode v) const = 0;
+
             // ── Sondas de reflexión ─────────────────────────────────────────
             virtual void  requestProbeBake(uint64_t ownerId) = 0;
             virtual void  requestProbeBakeAll()              = 0;
