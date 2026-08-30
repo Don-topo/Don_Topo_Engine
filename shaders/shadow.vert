@@ -3,10 +3,12 @@
 layout(location = 0) in vec3 inPos;
 
 #define SHADOW_CASCADES 4
-// Huecos de matriz de sombra: 4 cascadas de una direccional o 6 caras del
-// cubemap de una de punto. Nunca coexisten. Mismo valor que
-// SHADOW_MATRICES en UniformBufferObject.h.
-#define SHADOW_MATRICES 6
+// Huecos de matriz de sombra. Los 6 primeros son de la luz KEY (4 cascadas,
+// o 6 caras de cubemap, o 1 cara de foco); los 4 de detras son un foco
+// secundario cada uno. Mismo valor que SHADOW_MATRICES en
+// UniformBufferObject.h.
+#define SHADOW_KEY_MATRICES 6
+#define SHADOW_MATRICES 10
 
 layout(set = 0, binding = 0) uniform UBO {
     mat4 view;

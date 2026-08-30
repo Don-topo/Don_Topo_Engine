@@ -11,10 +11,12 @@ layout(location = 0) out vec4 outColor;
 
 #define MAX_LIGHTS 16
 #define SHADOW_CASCADES 4
-// Huecos de matriz de sombra: 4 cascadas de una direccional o 6 caras del
-// cubemap de una de punto. Nunca coexisten. Mismo valor que
-// SHADOW_MATRICES en UniformBufferObject.h.
-#define SHADOW_MATRICES 6
+// Huecos de matriz de sombra. Los 6 primeros son de la luz KEY (4 cascadas,
+// o 6 caras de cubemap, o 1 cara de foco); los 4 de detras son un foco
+// secundario cada uno. Mismo valor que SHADOW_MATRICES en
+// UniformBufferObject.h.
+#define SHADOW_KEY_MATRICES 6
+#define SHADOW_MATRICES 10
 // Mismo layout que DonTopo::Light. direction.w = tipo (0 point, 1 spot,
 // 2 directional, 3 area); params = (range, cos interior, cos exterior, ancho).
 struct Light { vec4 position; vec4 color; vec4 direction; vec4 params; };
@@ -140,6 +142,39 @@ float lightSample(int i, vec3 worldPos, out vec3 L)
 // normalGeo = la normal INTERPOLADA del vertice, no la del normal map: el bias
 // solo tiene que separar la superficie de su propia sombra, y hacerlo seguir los
 // bultos de una textura mete ondulaciones en el borde de la sombra.
+// PCF 3x3 sobre una coordenada ya resuelta. Lo comparten la luz key y los focos
+// secundarios: el filtrado tiene que ser el mismo o la misma geometria daria
+// bordes distintos segun que luz la sombree.
+float dtPcf(vec3 proj, float layer)
+{
+    // Del tamano REAL del mapa, no de un 2048 a fuego. Con el valor fijo, subir
+    // la resolucion no ensanchaba ni estrechaba el filtro: a 4096 los nueve taps
+    // se separaban dos texeles reales -mismo desenfoque, solo menos aliasing- y
+    // a 1024 caian dentro de medio texel y el PCF desaparecia.
+    vec2  texelSize = 1.0 / vec2(textureSize(shadowMap, 0).xy);
+    float shadow    = 0.0;
+    // Se probo 5x5 para el borde de una sombra en perspectiva y se ve PEOR: con
+    // un cubemap los taps de mas se recortan contra el borde de la cara y
+    // ensanchan esa banda dura. Al indexar por capa y no por region de un atlas,
+    // los taps del borde no pueden caer en la capa vecina: el sampler los
+    // recorta contra el borde de SU capa.
+    for (int x = -1; x <= 1; x++)
+        for (int y = -1; y <= 1; y++)
+            shadow += texture(shadowMap, vec4(proj.xy + vec2(x, y) * texelSize, layer, proj.z));
+    return shadow / 9.0;
+}
+
+// Sombra de una luz que no es la key. 1.0 = iluminado, que es lo que devuelve
+// tambien cuando esa luz no proyecta sombra: la inmensa mayoria de las luces de
+// una escena no tienen ranura, y para ellas esto es una comparacion y salir.
+float shadowDeLuz(int luz, vec3 worldPos, vec3 normalGeo)
+{
+    vec3  proj;
+    float layer;
+    if (!dtShadowCoordExtra(luz, worldPos, normalGeo, proj, layer)) return 1.0;
+    return dtPcf(proj, layer);
+}
+
 float computeShadow(vec3 worldPos, vec3 normalGeo)
 {
     // Se reproyecta aqui en vez de traer N varyings del vertex shader: la
@@ -148,23 +183,7 @@ float computeShadow(vec3 worldPos, vec3 normalGeo)
     float layer;
     if (!dtShadowCoord(worldPos, normalGeo, proj, layer)) return 1.0;
 
-    // Del tamano REAL del mapa, no de un 2048 a fuego. Con el valor fijo, subir
-    // la resolucion no ensanchaba ni estrechaba el filtro: a 4096 los nueve taps
-    // se separaban dos texeles reales -mismo desenfoque, solo menos aliasing- y
-    // a 1024 caian dentro de medio texel y el PCF desaparecia. Asi el filtro
-    // escala con la resolucion, que es lo que hace util el ajuste.
-    vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0).xy);
-    float shadow = 0.0;
-    // PCF 3x3 dentro de la capa que toque. Se probo 5x5 para el borde de una
-    // sombra en perspectiva y se ve PEOR: con un cubemap los taps de mas se
-    // recortan contra el borde de la cara y ensanchan esa banda dura.
-    // Al indexar por capa y no por region de un atlas, los taps del borde no
-    // pueden caer en la capa vecina: el sampler los recorta contra el borde de
-    // SU capa.
-    for (int x = -1; x <= 1; x++)
-        for (int y = -1; y <= 1; y++)
-            shadow += texture(shadowMap, vec4(proj.xy + vec2(x, y) * texelSize, layer, proj.z));
-    return shadow / 9.0;
+    return dtPcf(proj, layer);
 }
 
 // Fresnel de Schlick con el termino de rugosidad de Lazarov: sin el, una
@@ -250,7 +269,9 @@ void main()
 
         vec3 kD = (1.0 - F) * (1.0 - metal);
 
-        float s = (i == 0) ? shadow : 1.0;
+        // La luz key usa la sombra ya calculada arriba; las demas, la suya si
+        // consiguieron ranura. Una luz sin ranura devuelve 1.0 sin muestrear.
+        float s = (i == 0) ? shadow : shadowDeLuz(i, fragWorldPos, normalize(fragNormal));
 
         Lo += att * s * (kD * albedo / PI + D * G * F / (4.0 * NdotV * NdotL + 0.0001))
               * radiance * NdotL;
@@ -331,9 +352,10 @@ void main()
 
             vec3 kD = (1.0 - F) * (1.0 - metal);
 
-            // La luz 0 sigue siendo la que proyecta las cascadas, igual que en la
-            // rama de arriba: aqui se compara el indice GLOBAL, no el de la celda.
-            float s = (li == 0u) ? shadow : 1.0;
+            // El indice que se compara es el GLOBAL, no el de la celda: la
+            // ranura de sombra se reparte sobre el array de luces del UBO.
+            float s = (li == 0u) ? shadow
+                                 : shadowDeLuz(int(li), fragWorldPos, normalize(fragNormal));
 
             Lo += s * (kD * albedo / PI + D * G * F / (4.0 * NdotV * NdotL + 0.0001))
                   * radiance * NdotL * att;

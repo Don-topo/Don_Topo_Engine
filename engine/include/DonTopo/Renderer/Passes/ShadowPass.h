@@ -114,15 +114,24 @@ public:
     const glm::mat4& cascadeMatrix(uint32_t c) const { return m_cascadeMatrices[c]; }
     const glm::vec4& cascadeSplits()   const { return m_cascadeSplits; }
 
-    // Cuantas capas del mapa tienen una matriz valida en ESTE frame: 4 con las
-    // cascadas de una luz direccional, 1 con la cara en perspectiva de un foco,
-    // 0 sin luces.
+    // Capas que la luz KEY deja validas en este frame, desde la 0: 4 con las
+    // cascadas de una direccional, 6 con el cubemap de una de punto o un foco
+    // muy abierto, 1 con la cara de un foco normal, 0 sin luces.
     //
-    // Solo acota los DRAWS. Los render pass hay que abrirlos igual en las
-    // SHADOW_CASCADES capas, porque son ellos los que las limpian y las dejan en
-    // el layout que declaran los descriptor sets; una capa sin abrir se queda en
-    // UNDEFINED y la capa de validacion protesta en cada frame.
+    // Solo acota los DRAWS. Los render pass hay que abrirlos igual en TODAS las
+    // capas, porque son ellos los que las limpian y las dejan en el layout que
+    // declaran los descriptor sets; una capa sin abrir se queda en UNDEFINED y
+    // la capa de validacion protesta en cada frame.
     uint32_t activeLayers() const { return m_activeLayers; }
+
+    // Focos secundarios que han conseguido ranura. Ocupan las capas
+    // [SHADOW_KEY_MATRICES, SHADOW_KEY_MATRICES + extraLayers).
+    uint32_t extraLayers() const { return m_extraLayers; }
+
+    // Ranura de cada luz, o -1 si no proyecta. La 0 siempre es -1: la key usa
+    // las SHADOW_KEY_MATRICES primeras y no pasa por aqui. Lo lee el Renderer
+    // para decirselo al shader por position.w.
+    const int* shadowSlots() const { return m_shadowSlot; }
 
 private:
     VkImage        m_image                          = VK_NULL_HANDLE;
@@ -156,6 +165,8 @@ private:
                                                    glm::mat4(1.0f), glm::mat4(1.0f) };
     glm::vec4 m_cascadeSplits { 0.0f };
     uint32_t  m_activeLayers = 0;
+    uint32_t  m_extraLayers  = 0;
+    int       m_shadowSlot[MAX_LIGHTS] = {};
 };
 
 } // namespace DonTopo

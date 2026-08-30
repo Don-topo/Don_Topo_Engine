@@ -400,7 +400,34 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
     for (int i = 0; i < SHADOW_MATRICES; i++) m_cascadeMatrices[i] = glm::mat4(1.0f);
     m_cascadeSplits = glm::vec4(0.0f);
     m_activeLayers  = 0;
+    m_extraLayers   = 0;
+    for (int& r : m_shadowSlot) r = -1;
     if (lights.empty()) return;
+
+    // Los focos secundarios PRIMERO, porque las tres ramas de la luz key de mas
+    // abajo salen con return. Ocupan las ranuras de SHADOW_KEY_MATRICES en
+    // adelante, que la key no toca nunca.
+    {
+        const int n = std::min((int)lights.size(), MAX_LIGHTS);
+        m_extraLayers = repartirSombrasExtra(
+            lights.data(), n,
+            [](const Light& l) { return (int)(l.direction.w + 0.5f); },
+            [](const Light& l) { return l.params; },
+            m_shadowSlot);
+
+        for (int i = 1; i < n; i++)
+        {
+            if (m_shadowSlot[i] < 0) continue;
+            // flipY = true, igual que todo lo demas en Vulkan.
+            if (!spotShadowMatrix(lights[i].position, lights[i].direction, lights[i].params,
+                                  /*flipY=*/true, m_cascadeMatrices[m_shadowSlot[i]]))
+            {
+                // Sin direccion utilizable: se le retira la ranura en vez de
+                // dejar una matriz identidad que sombrearia cualquier cosa.
+                m_shadowSlot[i] = -1;
+            }
+        }
+    }
 
     // PUNTO: cubemap de seis caras. Tampoco usa el frustum de la camara —el
     // volumen lo fija el alcance de la luz—, asi que sale por aqui igual que el
@@ -419,7 +446,7 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
         if (pointShadowMatrices(lights[0].position, lights[0].params,
                                 /*flipY=*/true, m_cascadeMatrices))
         {
-            m_activeLayers = SHADOW_MATRICES;
+            m_activeLayers = SHADOW_KEY_MATRICES;
         }
         return;
     }

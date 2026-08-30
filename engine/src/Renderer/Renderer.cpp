@@ -3254,15 +3254,25 @@ namespace DonTopo {
             ubo.lightSpaceMatrix[i] = m_shadowPass.cascadeMatrix(i);
         }
         ubo.cascadeSplits = m_shadowPass.cascadeSplits();
-        // position.w de la luz key: 1 = su sombra se grabo como CUBEMAP.
-        // El shader lo lee para elegir camino en vez de deducirlo del tipo,
-        // porque un foco muy abierto tambien acaba en el cubemap. Sale de lo
-        // que el pase HIZO —cuantas capas dejo validas—, no de recalcular el
-        // criterio aqui: dos copias de un criterio es lo que rompio H65.
-        // Ese hueco estaba libre; ningun shader leia position.w.
+        // position.w dice al shader QUE sombra tiene cada luz. Ese hueco estaba
+        // libre: ningun shader leia position.w.
+        //
+        //   luz 0 (key):  1 = su sombra se grabo como CUBEMAP, 0 = cascadas o
+        //                 una sola cara, que el shader distingue por el tipo.
+        //   luces 1..n:   indice de matriz + 1, y 0 = no proyecta sombra.
+        //
+        // Todo sale de lo que el pase HIZO —las capas que dejo validas y las
+        // ranuras que reparto—, no de recalcular aqui ningun criterio: dos
+        // copias de un criterio es lo que rompio H65.
         if (ubo.numLights > 0)
+        {
             ubo.lights[0].position.w =
-                (m_shadowPass.activeLayers() == SHADOW_MATRICES) ? 1.0f : 0.0f;
+                (m_shadowPass.activeLayers() == SHADOW_KEY_MATRICES) ? 1.0f : 0.0f;
+
+            const int* ranuras = m_shadowPass.shadowSlots();
+            for (int i = 1; i < ubo.numLights; i++)
+                ubo.lights[i].position.w = (ranuras[i] >= 0) ? (float)(ranuras[i] + 1) : 0.0f;
+        }
 
         memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));
         // El bake de una reflection probe parte de este mismo buffer (luces y
@@ -3500,7 +3510,15 @@ namespace DonTopo {
         // identidad sobre capas que nadie muestrea.
         for (uint32_t cascade = 0; cascade < SHADOW_MATRICES; cascade++)
         {
-            const bool drawCasters = !m_lights.empty() && cascade < m_shadowPass.activeLayers();
+            // Se dibuja en las capas de la luz key (desde la 0) y en las de los
+            // focos secundarios (desde SHADOW_KEY_MATRICES). Las de en medio,
+            // que sobran cuando la key no usa las seis, se abren igual para que
+            // el render pass las limpie y las deje en el layout que declaran los
+            // descriptor sets, pero no se dibuja en ellas.
+            const bool esDeLaKey    = cascade < m_shadowPass.activeLayers();
+            const bool esDeUnExtra  = cascade >= SHADOW_KEY_MATRICES &&
+                                      cascade <  SHADOW_KEY_MATRICES + m_shadowPass.extraLayers();
+            const bool drawCasters  = !m_lights.empty() && (esDeLaKey || esDeUnExtra);
 
             // Render pass, viewport, scissor, pipeline y push del índice: del
             // pase. Los draws de aquí abajo son del Renderer.

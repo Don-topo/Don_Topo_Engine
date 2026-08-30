@@ -11,10 +11,12 @@ layout(location = 0) out vec4 outColor;
 
 #define MAX_LIGHTS 16
 #define SHADOW_CASCADES 4
-// Huecos de matriz de sombra: 4 cascadas de una direccional o 6 caras del
-// cubemap de una de punto. Nunca coexisten. Mismo valor que
-// SHADOW_MATRICES en UniformBufferObject.h.
-#define SHADOW_MATRICES 6
+// Huecos de matriz de sombra. Los 6 primeros son de la luz KEY (4 cascadas,
+// o 6 caras de cubemap, o 1 cara de foco); los 4 de detras son un foco
+// secundario cada uno. Mismo valor que SHADOW_MATRICES en
+// UniformBufferObject.h.
+#define SHADOW_KEY_MATRICES 6
+#define SHADOW_MATRICES 10
 // Mismo layout que DonTopo::Light. direction.w = tipo (0 point, 1 spot,
 // 2 directional, 3 area); params = (range, cos interior, cos exterior, ancho).
 struct Light { vec4 position; vec4 color; vec4 direction; vec4 params; };

@@ -81,9 +81,9 @@ int dtSelectCascade(float viewDepth)
 //
 // normalMundo == vec3(0) -> punto en el AIRE (la marcha de la niebla): no puede
 // auto-sombrearse, asi que solo se aplica el empuje.
-vec3 dtBiasHaciaLaLuz(vec3 worldPos, vec3 normalMundo)
+vec3 dtBiasHaciaLaLuz(int luz, vec3 worldPos, vec3 normalMundo)
 {
-    vec3  aLaLuz  = ubo.lights[0].position.xyz - worldPos;
+    vec3  aLaLuz  = ubo.lights[luz].position.xyz - worldPos;
     float distLuz = length(aLaLuz);
     if (distLuz <= 1e-5) return worldPos;
     return worldPos + (aLaLuz / distLuz) * 0.02 + normalMundo * (distLuz * 0.004);
@@ -92,6 +92,49 @@ vec3 dtBiasHaciaLaLuz(vec3 worldPos, vec3 normalMundo)
 // normalMundo = normal GEOMETRICA de la superficie, para el bias de los caminos
 // en perspectiva. Un punto que no esta sobre ninguna superficie —la marcha de la
 // niebla— pasa vec3(0.0).
+// Una sola cara en perspectiva, en la ranura dada. La usan el foco key (ranura
+// 0) y cada foco secundario (ranuras SHADOW_KEY_MATRICES en adelante), asi que
+// el recorte del cono y el bias viven en un solo sitio.
+bool dtCaraPerspectiva(int luz, int ranura, vec3 worldPos, vec3 normalMundo,
+                       out vec3 uvz, out float layer)
+{
+    worldPos = dtBiasHaciaLaLuz(luz, worldPos, normalMundo);
+
+    vec4 ls = ubo.lightSpaceMatrix[ranura] * vec4(worldPos, 1.0);
+    // Detras de la luz: w <= 0 hace que la division devuelva el punto reflejado,
+    // que caeria dentro del mapa y pintaria una sombra fantasma al otro lado.
+    if (ls.w <= 0.0) return false;
+
+    vec3 p = ls.xyz / ls.w;
+    p.xy   = p.xy * 0.5 + 0.5;
+    // Fuera del frustum del foco no hay nada grabado. El recorte en xy es
+    // obligatorio aqui y no en las cascadas: el volumen de una cascada se ajusta
+    // a lo que se ve, mientras que el cono de un foco deja fuera casi toda la
+    // escena, y sin esto el sampler estira el borde del mapa por todo el resto
+    // del mundo.
+    if (p.z < 0.0 || p.z > 1.0) return false;
+    if (any(lessThan(p.xy, vec2(0.0))) || any(greaterThan(p.xy, vec2(1.0)))) return false;
+
+    uvz   = p;
+    layer = float(ranura);
+    return true;
+}
+
+// Sombra de una luz que NO es la key. Solo focos, una cara cada uno, en la
+// ranura que le dio el reparto —position.w = ranura + 1, y 0 = no proyecta—.
+// false = esta luz no tiene sombra aqui y el llamante la trata como ILUMINADA.
+bool dtShadowCoordExtra(int luz, vec3 worldPos, vec3 normalMundo,
+                        out vec3 uvz, out float layer)
+{
+    uvz   = vec3(0.0);
+    layer = 0.0;
+
+    int ranura = int(ubo.lights[luz].position.w + 0.5) - 1;
+    if (ranura < SHADOW_KEY_MATRICES || ranura >= SHADOW_MATRICES) return false;
+
+    return dtCaraPerspectiva(luz, ranura, worldPos, normalMundo, uvz, layer);
+}
+
 bool dtShadowCoord(vec3 worldPos, vec3 normalMundo, out vec3 uvz, out float layer)
 {
     uvz   = vec3(0.0);
@@ -108,7 +151,7 @@ bool dtShadowCoord(vec3 worldPos, vec3 normalMundo, out vec3 uvz, out float laye
     // copia del criterio, que es justo lo que rompio H65.
     if (ubo.lights[0].position.w > 0.5)   // cubemap de seis caras
     {
-        worldPos = dtBiasHaciaLaLuz(worldPos, normalMundo);
+        worldPos = dtBiasHaciaLaLuz(0, worldPos, normalMundo);
 
         // La cara la decide el eje MAYOR de (fragmento - luz): es la que mira
         // ese semiespacio, y su frustum de 90 grados contiene el punto. Solo se
@@ -136,33 +179,13 @@ bool dtShadowCoord(vec3 worldPos, vec3 normalMundo, out vec3 uvz, out float laye
         return true;
     }
 
-    if (tipo == 1)   // foco
+    if (tipo == 1)   // foco key: una cara, en la ranura 0
     {
         // Se nota al MOVERSE mas que quieto porque el TAA acumula historia
         // mientras la camara esta parada y la rechaza en cuanto se mueve: sin
-        // bias suficiente, el patron de acne cambia con el jitter subpixel y el
-        // TAA ya no lo puede promediar.
-        worldPos = dtBiasHaciaLaLuz(worldPos, normalMundo);
-
-        vec4 ls = ubo.lightSpaceMatrix[0] * vec4(worldPos, 1.0);
-        // Detras de la luz: w <= 0 hace que la division devuelva el punto
-        // reflejado, que caeria dentro del mapa y pintaria una sombra fantasma
-        // al otro lado del foco.
-        if (ls.w <= 0.0) return false;
-
-        vec3 p = ls.xyz / ls.w;
-        p.xy   = p.xy * 0.5 + 0.5;
-        // Fuera del frustum del foco no hay nada grabado. El recorte en xy es
-        // obligatorio aqui y no en las cascadas: el volumen de una cascada se
-        // ajusta a lo que se ve, mientras que el cono de un foco deja fuera casi
-        // toda la escena, y sin esta comprobacion el sampler estira el borde del
-        // mapa por todo el resto del mundo.
-        if (p.z < 0.0 || p.z > 1.0) return false;
-        if (any(lessThan(p.xy, vec2(0.0))) || any(greaterThan(p.xy, vec2(1.0)))) return false;
-
-        uvz   = p;
-        layer = 0.0;
-        return true;
+        // bias suficiente, el patron de acne cambia con el jitter subpixel y
+        // el TAA ya no lo puede promediar.
+        return dtCaraPerspectiva(0, 0, worldPos, normalMundo, uvz, layer);
     }
 
     // Direccional y punto: cascadas.

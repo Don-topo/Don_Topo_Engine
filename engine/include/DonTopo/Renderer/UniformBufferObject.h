@@ -14,15 +14,33 @@ namespace DonTopo
     // desplaza en silencio todo lo que va detrás de lightSpaceMatrix.
     constexpr int SHADOW_CASCADES = 4;
 
-    // Huecos de matriz de sombra en el UBO. Es el MAXIMO de lo que necesita
-    // cada tipo de luz key, porque nunca coexisten: una direccional usa 4
-    // (una por cascada) y una de punto 6 (una por cara del cubemap). Un foco
-    // usa solo el hueco 0.
+    // Cuantas luces ADEMAS de la key pueden proyectar sombra, y cuanto cuesta
+    // cada una.
+    //
+    // Solo FOCOS. Una direccional secundaria necesitaria sus propias 4 cascadas
+    // para no verse peor que no tener sombra, y una de punto son 6 caras; el
+    // foco es el unico tipo que cabe en UNA capa. Las demas luces siguen
+    // iluminando, simplemente no arrojan sombra.
+    //
+    // Cuatro y no mas porque cada una es una capa del shadow map y un render
+    // pass entero por frame: a 2048 son 16 MB y un recorrido mas de los
+    // casters.
+    constexpr int SHADOW_EXTRA_CASTERS = 4;
+
+    // Huecos de matriz de sombra en el UBO, y capas del shadow map.
+    //
+    // Los seis primeros son de la luz KEY, que es la unica que puede usar mas de
+    // uno: 4 si es direccional (una por cascada), 6 si es de punto o un foco muy
+    // abierto (una por cara del cubemap), 1 si es un foco normal. Nunca coexisten
+    // porque solo hay una luz key y solo tiene un tipo.
+    //
+    // Los SHADOW_EXTRA_CASTERS de detras son de un foco cada uno.
     //
     // Tiene que valer lo mismo aqui y en los SEIS shaders que declaran el
     // bloque UBO: si se descuadra, std140 desplaza en silencio todo lo que va
     // detras y no lo delata ninguna capa de validacion.
-    constexpr int SHADOW_MATRICES = 6;
+    constexpr int SHADOW_KEY_MATRICES = 6;
+    constexpr int SHADOW_MATRICES     = SHADOW_KEY_MATRICES + SHADOW_EXTRA_CASTERS;
 
     // Tipo de luz. Va en direction.w (float) y no en un int aparte: std140
     // alinearia el int a 16 bytes igual, asi que ocupar el hueco que la vec4 ya
@@ -214,6 +232,44 @@ namespace DonTopo
         for (int f = 0; f < 6; f++)
             out[f] = proj * glm::lookAt(pos, pos + kDir[f], kUp[f]);
         return true;
+    }
+
+    // Reparte las ranuras de sombra entre las luces que NO son la key.
+    //
+    // Recorre las luces 1..n-1 en orden de escena y le da una ranura a cada FOCO
+    // hasta agotar SHADOW_EXTRA_CASTERS. En orden de escena y no por brillo o
+    // cercania a proposito: si el criterio dependiera de la camara, una luz
+    // ganaria y perderia su sombra al moverte y eso parpadea.
+    //
+    // ranuraDeLuz[i] = indice de matriz/capa de la luz i, o -1 si no proyecta.
+    // La luz 0 siempre sale -1: sus matrices las pone computeCascades y ocupan
+    // los SHADOW_KEY_MATRICES primeros huecos.
+    //
+    // Devuelve cuantas ranuras se ocuparon.
+    //
+    // Vive aqui y no en cada backend porque el reparto tiene que ser IDENTICO en
+    // los dos: la ranura decide en que capa se graba y con que matriz muestrea el
+    // shader, asi que un reparto distinto por backend seria la misma escena con
+    // sombras en luces distintas.
+    template <typename LuzT, typename TipoDeLuz, typename ParamsDeLuz>
+    inline int repartirSombrasExtra(const LuzT* luces, int n,
+                                    TipoDeLuz tipoDe, ParamsDeLuz paramsDe,
+                                    int* ranuraDeLuz /*[n]*/)
+    {
+        for (int i = 0; i < n; i++) ranuraDeLuz[i] = -1;
+
+        int usadas = 0;
+        for (int i = 1; i < n && usadas < SHADOW_EXTRA_CASTERS; i++)
+        {
+            if (tipoDe(luces[i]) != static_cast<int>(LightType::Spot)) continue;
+            // Un foco tan abierto que necesitaria cubemap no cabe en una capa.
+            // Sigue iluminando; solo no proyecta.
+            if (spotNecesitaCubemap(paramsDe(luces[i]))) continue;
+
+            ranuraDeLuz[i] = SHADOW_KEY_MATRICES + usadas;
+            ++usadas;
+        }
+        return usadas;
     }
 
     // Direccion en la que "cae" la luz key: la que construye el shadow map y la

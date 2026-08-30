@@ -91,11 +91,14 @@ struct SceneUbo {
     // SEIS y no cuatro: es el maximo entre las 4 cascadas de una direccional y
     // las 6 caras del cubemap de una de punto, que nunca coexisten. Al crecer
     // desplaza 128 bytes TODO lo que va detras, y de ahi los offsets de abajo.
-    glm::mat4   lightSpaceMatrix[6];     // c8
-    glm::vec4   cascadeSplits;           // c32
-    ShaderLight lights[16];              // c33
-    glm::vec4   viewPos;                 // c97
-    int         numLights;               // c98
+    // DIEZ: seis de la luz key (4 cascadas, o 6 caras de cubemap, o 1 de foco)
+    // mas cuatro focos secundarios de una capa cada uno. Al crecer desplaza todo
+    // lo que va detras, y de ahi los offsets.
+    glm::mat4   lightSpaceMatrix[10];    // c8
+    glm::vec4   cascadeSplits;           // c48
+    ShaderLight lights[16];              // c49
+    glm::vec4   viewPos;                 // c113
+    int         numLights;               // c114
     // En el hueco de padding que ya había detrás de numLights, igual que en
     // GLSL: ningún offset anterior se mueve.
     float       ambientIntensity;
@@ -104,11 +107,11 @@ struct SceneUbo {
 static_assert(offsetof(SceneUbo, view) == 0, "UBO: view debe ir en c0");
 static_assert(offsetof(SceneUbo, proj) == 64, "UBO: proj debe ir en c4");
 static_assert(offsetof(SceneUbo, lightSpaceMatrix) == 128, "UBO: lightSpaceMatrix debe ir en c8");
-static_assert(offsetof(SceneUbo, cascadeSplits) == 512, "UBO: cascadeSplits debe ir en c32");
-static_assert(offsetof(SceneUbo, lights) == 528, "UBO: lights debe ir en c33");
-static_assert(offsetof(SceneUbo, viewPos) == 1552, "UBO: viewPos debe ir en c97");
-static_assert(offsetof(SceneUbo, numLights) == 1568, "UBO: numLights debe ir en c98");
-static_assert(offsetof(SceneUbo, ambientIntensity) == 1572,
+static_assert(offsetof(SceneUbo, cascadeSplits) == 768, "UBO: cascadeSplits debe ir en c48");
+static_assert(offsetof(SceneUbo, lights) == 784, "UBO: lights debe ir en c49");
+static_assert(offsetof(SceneUbo, viewPos) == 1808, "UBO: viewPos debe ir en c113");
+static_assert(offsetof(SceneUbo, numLights) == 1824, "UBO: numLights debe ir en c114");
+static_assert(offsetof(SceneUbo, ambientIntensity) == 1828,
               "UBO: ambientIntensity va pegado a numLights");
 
 // Push constants de triangle.vert/pbr.frag: mat4 + 2 float + vec2 = 80 bytes.
@@ -238,7 +241,9 @@ constexpr int   kShadowCascades    = 4;
 // las 6 caras del cubemap de una de punto, que nunca coexisten porque solo hay
 // una luz key y solo tiene un tipo. Mismo valor que SHADOW_MATRICES en
 // UniformBufferObject.h y que el array lightSpaceMatrix del bloque UBO.
-constexpr int   kShadowLayers      = 6;
+constexpr int   kShadowLayers      = 10;
+// De esas, las que puede usar la luz KEY. Las de detras son focos secundarios.
+constexpr int   kShadowKeyLayers   = 6;
 // Lado del shadow map POR DEFECTO. El que se usa vive en RendererState
 // (shadowResolution) y lo aplica applyPendingShadowSize.
 constexpr UINT  kShadowMapSizeDefault = 2048;
@@ -1251,6 +1256,11 @@ struct D3D12Renderer::Impl {
     // cascadas de una direccional, 1 con la cara en perspectiva de un foco, 0
     // sin luces. Solo acota los DRAWS — el clear de cada capa se hace igual.
     UINT      activeLayers = 0;
+    // Focos secundarios con ranura. Ocupan las capas [kShadowKeyLayers, +extra).
+    UINT      extraLayers  = 0;
+    // Ranura de cada luz, o -1 si no proyecta. La 0 siempre -1: la key usa las
+    // kShadowKeyLayers primeras.
+    int       shadowSlot[MAX_LIGHTS] = {};
     // Dirección de la luz: la misma que se escribe en el UBO. La posición solo
     // sirve para orientar, igual que en computeCascades.
     glm::vec3 lightDirection{-0.4f, -1.0f, -0.5f};
@@ -2998,7 +3008,10 @@ void D3D12Renderer::Impl::updateSceneUbo()
         // capas dejo validas— y no de recalcular el criterio aqui: dos copias
         // de un criterio es lo que rompio H65. Ese hueco estaba libre, ningun
         // shader leia position.w.
-        ubo.lights[0].position[3] = (activeLayers == kShadowLayers) ? 1.0f : 0.0f;
+        ubo.lights[0].position[3] = (activeLayers == kShadowKeyLayers) ? 1.0f : 0.0f;
+        // Y las demas, su ranura + 1 (0 = no proyecta).
+        for (int i = 1; i < ubo.numLights; i++)
+            ubo.lights[i].position[3] = (shadowSlot[i] >= 0) ? (float)(shadowSlot[i] + 1) : 0.0f;
 
         ubo.viewPos          = glm::vec4(cameraPos, 1.0f);
         ubo.ambientIntensity = state->ambientEnabled() ? state->ambientIntensity() : 0.0f;
@@ -7768,6 +7781,36 @@ void D3D12Renderer::Impl::computeCascades()
         matrix = glm::mat4(1.0f);
     cascadeSplits = glm::vec4(0.0f);
     activeLayers  = 0;
+    extraLayers   = 0;
+    for (int& r : shadowSlot) r = -1;
+
+    // Los focos secundarios PRIMERO, porque las ramas de la luz key de mas abajo
+    // salen con return. Mismo helper que Vulkan: el reparto TIENE que ser
+    // identico o la misma escena tendria sombras en luces distintas segun el
+    // backend.
+    if (!sceneLights.empty()) {
+        const int n = (std::min)(static_cast<int>(sceneLights.size()), MAX_LIGHTS);
+        extraLayers = repartirSombrasExtra(
+            sceneLights.data(), n,
+            [](const ShaderLight& l) { return static_cast<int>(l.direction[3] + 0.5f); },
+            [](const ShaderLight& l) {
+                return glm::vec4(l.params[0], l.params[1], l.params[2], l.params[3]);
+            },
+            shadowSlot);
+
+        for (int i = 1; i < n; i++) {
+            if (shadowSlot[i] < 0) continue;
+            const ShaderLight& l = sceneLights[i];
+            // flipY = false: aqui lo absorbe el viewport de altura negativa.
+            if (!spotShadowMatrix(
+                    glm::vec4(l.position[0], l.position[1], l.position[2], l.position[3]),
+                    glm::vec4(l.direction[0], l.direction[1], l.direction[2], l.direction[3]),
+                    glm::vec4(l.params[0], l.params[1], l.params[2], l.params[3]),
+                    /*flipY=*/false, cascadeMatrices[shadowSlot[i]])) {
+                shadowSlot[i] = -1;
+            }
+        }
+    }
 
     // PUNTO: cubemap de seis caras. Tampoco usa el frustum de la camara, asi
     // que sale por aqui igual que el foco.
@@ -7791,7 +7834,7 @@ void D3D12Renderer::Impl::computeCascades()
                 glm::vec4(key.position[0], key.position[1], key.position[2], key.position[3]),
                 glm::vec4(key.params[0], key.params[1], key.params[2], key.params[3]),
                 /*flipY=*/false, cascadeMatrices)) {
-            activeLayers = kShadowLayers;
+            activeLayers = kShadowKeyLayers;
         }
         return;
     }
@@ -8148,11 +8191,15 @@ void D3D12Renderer::Impl::recordShadowPasses()
         commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
         commandList->SetGraphicsRoot32BitConstants(1, 1, &cascade, 0);
 
-        // Con un FOCO solo tiene matriz la capa 0: su sombra es UNA cara en
-        // perspectiva, no cuatro cascadas. Las demas se limpian igual —el clear
-        // de arriba es lo que las deja utilizables— pero dibujar en ellas seria
-        // grabar con la matriz identidad sobre capas que nadie muestrea.
-        if (cascade >= activeLayers)
+        // Se dibuja en las capas de la luz key (desde la 0) y en las de los focos
+        // secundarios (desde kShadowKeyLayers). Las de en medio se limpian igual
+        // —el clear de arriba es lo que las deja utilizables— pero dibujar en
+        // ellas seria grabar con la matriz identidad sobre capas que nadie
+        // muestrea.
+        const bool esDeLaKey   = cascade < activeLayers;
+        const bool esDeUnExtra = cascade >= static_cast<UINT>(kShadowKeyLayers) &&
+                                 cascade <  static_cast<UINT>(kShadowKeyLayers) + extraLayers;
+        if (!esDeLaKey && !esDeUnExtra)
             continue;
 
         // El suelo no se mete en el mapa: es el receptor, y meterlo solo

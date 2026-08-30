@@ -6509,10 +6509,18 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
     // Lo que el render sabe hacer con las sombras, dicho aquí en vez de que el
     // usuario lo deduzca mirando una sombra que no cuadra. La regla no depende
     // de qué luz esté seleccionada, así que se enseña siempre.
-    ImGui::TextDisabled("Sombras: solo la PRIMERA luz de la escena las proyecta.");
+    ImGui::TextDisabled("Sombras: la PRIMERA luz de la escena, y hasta 4 focos mas.");
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("El motor tiene un único juego de shadow maps en cascada.\n"
-                          "Las demás luces iluminan, pero no arrojan sombra.");
+        ImGui::SetTooltip(
+            "La primera luz proyecta sombra sea del tipo que sea, y con la mejor\n"
+            "tecnica para el suyo: cascadas si es direccional, un cubemap de seis\n"
+            "caras si es de punto, una cara en perspectiva si es un foco.\n\n"
+            "Ademas, los 4 primeros FOCOS que vengan detras proyectan tambien, con\n"
+            "una cara cada uno. Solo focos: una direccional secundaria necesitaria\n"
+            "sus propias cuatro cascadas y una de punto seis caras, y no caben.\n\n"
+            "Las demas iluminan, pero no arrojan sombra. El orden es el de la\n"
+            "escena, no el de brillo ni el de cercania: si dependiera de la camara,\n"
+            "una luz ganaria y perderia su sombra al moverte.");
 
     // Ya no hay aviso: los tres tipos tienen su sombra correcta. Una direccional
     // proyecta en paralelo con cascadas, que es lo que corresponde a una luz en
