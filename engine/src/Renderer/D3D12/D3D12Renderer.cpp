@@ -249,7 +249,6 @@ constexpr int   kShadowKeyLayers   = 6;
 constexpr UINT  kShadowMapSizeDefault = 2048;
 // kCascadeLambda y kShadowMaxDistance ya no viven aqui: los elige el usuario y
 // salen de RendererState (cascadeLambda/shadowDistance), igual que en Vulkan.
-constexpr float kCasterMargin      = 200.0f;
 
 // Bloom: niveles de la cadena de reducción. Mismo número que usa el camino
 // Vulkan (su log dice "5 mips").
@@ -7865,42 +7864,15 @@ void D3D12Renderer::Impl::computeCascades()
         return;
     }
 
+    // El reparto de cascadas vive en cascadeShadowMatrices, compartido con el
+    // camino Vulkan: eran las mismas lineas de matematica escritas dos veces, y
+    // una divergencia entre ellas no la detectaba nada (H3).
     const glm::mat4  proj = cameraProj();
     const glm::mat4& view = cameraView;
 
-    // Esquinas del frustum desproyectando el cubo NDC. z de 0 a 1, que es el
-    // rango que clipea D3D12 (y también Vulkan).
-    const glm::mat4 invViewProj = glm::inverse(proj * view);
-    glm::vec3       cornerNear[4], cornerFar[4];
-    const float     ndcX[4] = {-1.0f, 1.0f, 1.0f, -1.0f};
-    const float     ndcY[4] = {-1.0f, -1.0f, 1.0f, 1.0f};
-    for (int i = 0; i < 4; ++i) {
-        const glm::vec4 pn = invViewProj * glm::vec4(ndcX[i], ndcY[i], 0.0f, 1.0f);
-        const glm::vec4 pf = invViewProj * glm::vec4(ndcX[i], ndcY[i], 1.0f, 1.0f);
-        if (std::abs(pn.w) < 1e-8f || std::abs(pf.w) < 1e-8f)
-            return;
-        cornerNear[i] = glm::vec3(pn) / pn.w;
-        cornerFar[i]  = glm::vec3(pf) / pf.w;
-    }
-
-    const float camNear = -(view * glm::vec4(cornerNear[0], 1.0f)).z;
-    const float camFar  = -(view * glm::vec4(cornerFar[0], 1.0f)).z;
-    if (!std::isfinite(camNear) || !std::isfinite(camFar) || camNear <= 0.0f || camFar <= camNear)
-        return;
-
-    // Los dos salen de RendererState desde que son ajustables; los defaults de
-    // alli son los que habia aqui a fuego (500 y 0.75).
-    const float shadowFar = (std::min)(camFar, state->shadowDistance());
-    const float lambda    = state->cascadeLambda();
-    if (shadowFar <= camNear)
-        return;
-
-    // La direccion de la luz key se decide AQUI y no en setLights: la de una luz
-    // de punto apunta al centro de la ESCENA, que cambia cuando se mueve
-    // cualquier objeto y no solo cuando se tocan las luces. Criterio compartido
-    // con Vulkan y con la niebla —que lee lightDirection—, no una copia: la
-    // copia es justamente lo que dejo el in-scattering apuntando a un lado y el
-    // shadow map construido hacia otro (H65).
+    // La direccion de la luz key: la de una luz de punto apunta al centro de la
+    // ESCENA, que cambia cuando se mueve cualquier objeto y no solo cuando se
+    // tocan las luces. Por eso se resuelve aqui y no en setLights.
     if (!sceneLights.empty()) {
         SceneCenter centro;
         for (const StaticObject& object : objects)
@@ -7922,82 +7894,16 @@ void D3D12Renderer::Impl::computeCascades()
         }
     }
 
-    const glm::vec3 lightDir = glm::normalize(lightDirection);
-    const glm::vec3 up = std::abs(lightDir.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f)
-                                                      : glm::vec3(0.0f, 1.0f, 0.0f);
-    const glm::mat4 lightRot    = glm::lookAt(glm::vec3(0.0f), lightDir, up);
-    const glm::mat4 invLightRot = glm::inverse(lightRot);
-    activeLayers                = kShadowCascades;
-
-    float prevDist = camNear;
-    for (int c = 0; c < kShadowCascades; ++c) {
-        const float p        = static_cast<float>(c + 1) / static_cast<float>(kShadowCascades);
-        const float logSplit = camNear * std::pow(shadowFar / camNear, p);
-        const float uniSplit = camNear + (shadowFar - camNear) * p;
-        const float dist     = lambda * logSplit + (1.0f - lambda) * uniSplit;
-        cascadeSplits[c]     = dist;
-
-        const float tNear = (prevDist - camNear) / (camFar - camNear);
-        const float tFar  = (dist - camNear) / (camFar - camNear);
-
-        glm::vec3 corners[8];
-        for (int i = 0; i < 4; ++i) {
-            const glm::vec3 ray = cornerFar[i] - cornerNear[i];
-            corners[i]          = cornerNear[i] + ray * tNear;
-            corners[i + 4]      = cornerNear[i] + ray * tFar;
-        }
-
-        // Esfera envolvente y no AABB: el radio no depende de hacia dónde mire
-        // la cámara, así que girar en el sitio no hace latir las sombras.
-        glm::vec3 center(0.0f);
-        for (const glm::vec3& v : corners)
-            center += v;
-        center /= 8.0f;
-        float radius = 0.0f;
-        for (const glm::vec3& v : corners)
-            radius = (std::max)(radius, glm::length(v - center));
-        radius = std::ceil(radius * 16.0f) / 16.0f;
-        if (radius < 1e-4f)
-            radius = 1e-4f;
-
-        // Snap del centro a téxeles: sin esto los bordes de sombra hierven al
-        // mover la cámara.
-        const float unitsPerTexel = (2.0f * radius) / static_cast<float>(shadowMapSize);
-
-        // Una vez por cada tamano distinto, y solo de la cascada 0: es la cifra
-        // que decide si subir la resolucion sirve de algo. El mundo que cubre un
-        // texel tiene que caer a la mitad cada vez que se dobla el lado; si no
-        // cae, el problema esta en este reparto y no en el muestreo.
-        if (c == 0 && shadowMapSize != loggedShadowSize) {
-            loggedShadowSize = shadowMapSize;
-            diagLog("shadow: cascada 0 radio " + std::to_string(radius) + ", mapa " +
-                    std::to_string(shadowMapSize) + " -> " + std::to_string(unitsPerTexel) +
-                    " unidades por texel. Cortes " + std::to_string(cascadeSplits[0]) + "/" +
-                    std::to_string(cascadeSplits[1]) + "/" + std::to_string(cascadeSplits[2]) +
-                    "/" + std::to_string(cascadeSplits[3]) + ".");
-        }
-        glm::vec3   centerLS      = glm::vec3(lightRot * glm::vec4(center, 1.0f));
-        centerLS.x = std::floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
-        centerLS.y = std::floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
-        center     = glm::vec3(invLightRot * glm::vec4(centerLS, 1.0f));
-
-        const glm::mat4 lightView =
-            glm::lookAt(center - lightDir * (radius + kCasterMargin), center, up);
-        const glm::mat4 lightProj =
-            glm::orthoRH_ZO(-radius, radius, -radius, radius, 0.0f, 2.0f * radius + kCasterMargin);
-        // El camino Vulkan hace aquí lightProj[1][1] *= -1. En D3D12 NO: es la
-        // misma inversión del eje Y que ya no se aplica a la proyección de
-        // cámara, y repetirla dejaría las sombras del revés.
-        //
-        // Ojo: esto por sí solo NO basta, y durante un tiempo faltó la otra
-        // mitad. Quien decide dónde acaba cada texel son la matriz y el
-        // VIEWPORT juntos; con la matriz sin invertir, el pase de sombras tiene
-        // que grabar con altura negativa para caer donde pbr.frag va a mirar.
-        // La cuenta está en recordShadowPasses.
-        cascadeMatrices[c] = lightProj * lightView;
-
-        prevDist = dist;
+    // flipY = false: aqui la convencion de Y la absorbe el viewport de altura
+    // negativa del pase de sombras, no la matriz.
+    if (!cascadeShadowMatrices(view, proj, glm::normalize(lightDirection),
+                               state->shadowDistance(), state->cascadeLambda(),
+                               shadowMapSize, /*flipY=*/false,
+                               cascadeMatrices, cascadeSplits)) {
+        return;
     }
+    activeLayers = kShadowCascades;
+
 }
 
 void D3D12Renderer::Impl::ensureSceneInstanceBuffer(size_t count)

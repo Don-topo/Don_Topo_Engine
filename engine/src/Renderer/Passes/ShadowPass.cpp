@@ -43,10 +43,6 @@ static VkShaderModule makeModule(VkDevice dev, const std::vector<char>& code)
 // a shadowDistance() y cascadeLambda(). Los valores por defecto de alli son
 // exactamente los que habia aqui, asi que la imagen no cambia sola.
 
-// Margen por detras del volumen de cada cascada, en la direccion de la luz.
-// Sin el, un objeto alto que queda fuera del frustum de la camara pero cuya
-// sombra si cae dentro no se dibujaria en el shadow map.
-static constexpr float kCasterMargin = 200.0f;
 
 // ── recursos ────────────────────────────────────────────────────────────────
 
@@ -469,109 +465,24 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
         return;
     }
 
-    // Esquinas del frustum, desproyectando el cubo NDC. z va de 0 a 1 y no
-    // de -1 a 1 porque ese es el rango que Vulkan clipea: lo que se dibuja
-    // de verdad está siempre entre esos dos planos.
-    const glm::mat4 invViewProj = glm::inverse(proj * view);
-    glm::vec3 cornerNear[4], cornerFar[4];
-    const float ndcX[4] = { -1.0f,  1.0f,  1.0f, -1.0f };
-    const float ndcY[4] = { -1.0f, -1.0f,  1.0f,  1.0f };
-    for (int i = 0; i < 4; i++)
-    {
-        glm::vec4 pn = invViewProj * glm::vec4(ndcX[i], ndcY[i], 0.0f, 1.0f);
-        glm::vec4 pf = invViewProj * glm::vec4(ndcX[i], ndcY[i], 1.0f, 1.0f);
-        if (std::abs(pn.w) < 1e-8f || std::abs(pf.w) < 1e-8f) return;   // proyección degenerada
-        cornerNear[i] = glm::vec3(pn) / pn.w;
-        cornerFar[i]  = glm::vec3(pf) / pf.w;
-    }
-
-    // near/far REALES: la profundidad en view space de esos dos planos. No
-    // se sacan de los coeficientes de proj a propósito — el editor
-    // construye su proyección con glm::perspective (z en [-1,1]) y el
-    // CameraComponent con *RH_ZO, así que los mismos coeficientes
-    // significan cosas distintas y la fórmula tendría que saber cuál está
-    // activa. Los planos z=0 y z=1, en cambio, son los mismos en los dos
-    // casos, y las 4 esquinas de cada uno están a profundidad constante.
-    const float camNear = -(view * glm::vec4(cornerNear[0], 1.0f)).z;
-    const float camFar  = -(view * glm::vec4(cornerFar[0],  1.0f)).z;
-    if (!std::isfinite(camNear) || !std::isfinite(camFar) ||
-        camNear <= 0.0f || camFar <= camNear)
-    {
-        return;
-    }
-
-    // Las esquinas ya están puestas con el far REAL (es el que define los
-    // rayos del frustum); el reparto de cascadas usa el far recortado.
-    const float shadowFar = std::min(camFar, maxDistance);
-    if (shadowFar <= camNear) return;
-
-    // SOLO la luz 0 proyecta sombra. De donde sale su direccion lo decide
-    // keyLightDirection, que es el UNICO sitio donde vive ese criterio: la
-    // niebla lo necesita identico para que su in-scattering y este shadow map
-    // hablen de la misma luz. Una luz de punto no tiene direccion propia y
-    // apunta a sceneCenter, que llega ya calculado desde el Renderer.
+    // El reparto de cascadas vive en cascadeShadowMatrices, compartido con
+    // D3D12: eran las mismas 60 lineas de matematica escritas dos veces, y una
+    // divergencia entre ellas no la detectaba nada (H3).
+    //
+    // La direccion la decide keyLightDirection, que es el UNICO sitio donde
+    // vive ese criterio: la niebla lo necesita identico para que su
+    // in-scattering y este shadow map hablen de la misma luz. Una luz de punto
+    // no tiene direccion propia y apunta a sceneCenter, que llega ya calculado
+    // desde el Renderer.
     glm::vec3 lightDir;
     if (!keyLightDirection(lights[0].position, lights[0].direction, sceneCenter, lightDir))
         return;
-    const glm::vec3 up = std::abs(lightDir.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f)
-                                                      : glm::vec3(0.0f, 1.0f, 0.0f);
-    const glm::mat4 lightRot    = glm::lookAt(glm::vec3(0.0f), lightDir, up);
-    const glm::mat4 invLightRot = glm::inverse(lightRot);
 
-    float prevDist = camNear;
-    for (int c = 0; c < SHADOW_CASCADES; c++)
+    // flipY = true: en Vulkan la convencion de Y la absorbe la matriz.
+    if (!cascadeShadowMatrices(view, proj, lightDir, maxDistance, lambda, m_size,
+                               /*flipY=*/true, m_cascadeMatrices, m_cascadeSplits))
     {
-        const float p         = (float)(c + 1) / (float)SHADOW_CASCADES;
-        const float logSplit  = camNear * std::pow(shadowFar / camNear, p);
-        const float uniSplit  = camNear + (shadowFar - camNear) * p;
-        const float dist      = lambda * logSplit + (1.0f - lambda) * uniSplit;
-        m_cascadeSplits[c]    = dist;
-
-        // Interpolar entre las esquinas cercana y lejana es exacto: la
-        // profundidad en view space varía linealmente a lo largo de ese
-        // segmento. Los factores se calculan contra el far REAL porque es el
-        // que sitúa cornerFar.
-        const float tNear = (prevDist - camNear) / (camFar - camNear);
-        const float tFar  = (dist     - camNear) / (camFar - camNear);
-
-        glm::vec3 corners[8];
-        for (int i = 0; i < 4; i++)
-        {
-            const glm::vec3 ray = cornerFar[i] - cornerNear[i];
-            corners[i]     = cornerNear[i] + ray * tNear;
-            corners[i + 4] = cornerNear[i] + ray * tFar;
-        }
-
-        // Esfera envolvente y no AABB: el radio no depende de hacia dónde
-        // mire la cámara, así que girar en el sitio no cambia el tamaño del
-        // volumen y las sombras no laten.
-        glm::vec3 center(0.0f);
-        for (const glm::vec3& v : corners) center += v;
-        center /= 8.0f;
-        float radius = 0.0f;
-        for (const glm::vec3& v : corners) radius = std::max(radius, glm::length(v - center));
-        // Cuantizar el radio evita que un cambio mínimo de la cámara mueva
-        // el borde del volumen y con él todos los téxeles.
-        radius = std::ceil(radius * 16.0f) / 16.0f;
-        if (radius < 1e-4f) radius = 1e-4f;
-
-        // Snap del centro a téxeles del shadow map, en el espacio de la luz.
-        // Sin esto, avanzar la cámara arrastra el volumen de forma continua
-        // y los bordes de sombra hierven.
-        const float unitsPerTexel = (2.0f * radius) / (float)m_size;
-        glm::vec3 centerLS = glm::vec3(lightRot * glm::vec4(center, 1.0f));
-        centerLS.x = std::floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
-        centerLS.y = std::floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
-        center = glm::vec3(invLightRot * glm::vec4(centerLS, 1.0f));
-
-        const glm::mat4 lightView = glm::lookAt(center - lightDir * (radius + kCasterMargin),
-                                                center, up);
-        glm::mat4 lightProj = glm::orthoRH_ZO(-radius, radius, -radius, radius,
-                                              0.0f, 2.0f * radius + kCasterMargin);
-        lightProj[1][1] *= -1.0f;
-        m_cascadeMatrices[c] = lightProj * lightView;
-
-        prevDist = dist;
+        return;
     }
     m_activeLayers = SHADOW_CASCADES;
 }

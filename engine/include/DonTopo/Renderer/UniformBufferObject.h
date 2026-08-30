@@ -234,6 +234,141 @@ namespace DonTopo
         return true;
     }
 
+    // Margen por detras del volumen de cada cascada, en la direccion de la luz.
+    // Sin el, un objeto alto que queda fuera del frustum de la camara pero cuya
+    // sombra si cae dentro no se dibujaria en el shadow map.
+    constexpr float SHADOW_CASTER_MARGIN = 200.0f;
+
+    // Reparto de cascadas de una luz DIRECCIONAL: los cortes de profundidad y la
+    // matriz ortografica de cada una.
+    //
+    // Estaba escrito DOS VECES, una por backend, con la misma matematica y las
+    // mismas constantes. Nadie detectaba una divergencia: un ajuste en una copia
+    // dejaba las sombras distintas en el otro backend y solo se veia poniendo
+    // las dos escenas lado a lado (H3).
+    //
+    //   view/proj      camara del frame. proj puede llevar el Y-flip de Vulkan
+    //                  dentro o no: aqui solo sirve para desproyectar el
+    //                  frustum, y el cubo NDC es simetrico.
+    //   lightDir       direccion ya resuelta por keyLightDirection.
+    //   maxDistance    alcance de las sombras (RendererState::shadowDistance).
+    //   lambda         mezcla entre reparto logaritmico y uniforme.
+    //   shadowMapSize  lado del mapa, para el snap a texeles.
+    //   flipY          igual que en spotShadowMatrix: Vulkan true, D3D12 false.
+    //
+    // false = la proyeccion es degenerada o el alcance no llega ni al near, y el
+    // llamante debe dejar las matrices como estaban.
+    inline bool cascadeShadowMatrices(const glm::mat4& view, const glm::mat4& proj,
+                                      const glm::vec3& lightDir,
+                                      float maxDistance, float lambda,
+                                      uint32_t shadowMapSize, bool flipY,
+                                      glm::mat4* outMatrices /*[SHADOW_CASCADES]*/,
+                                      glm::vec4& outSplits)
+    {
+        if (shadowMapSize == 0) return false;
+
+        // Esquinas del frustum, desproyectando el cubo NDC. z va de 0 a 1 y no
+        // de -1 a 1 porque ese es el rango que clipean Vulkan y D3D12: lo que se
+        // dibuja de verdad esta siempre entre esos dos planos.
+        const glm::mat4 invViewProj = glm::inverse(proj * view);
+        glm::vec3       cornerNear[4], cornerFar[4];
+        const float     ndcX[4] = { -1.0f,  1.0f,  1.0f, -1.0f };
+        const float     ndcY[4] = { -1.0f, -1.0f,  1.0f,  1.0f };
+        for (int i = 0; i < 4; i++)
+        {
+            const glm::vec4 pn = invViewProj * glm::vec4(ndcX[i], ndcY[i], 0.0f, 1.0f);
+            const glm::vec4 pf = invViewProj * glm::vec4(ndcX[i], ndcY[i], 1.0f, 1.0f);
+            if (std::abs(pn.w) < 1e-8f || std::abs(pf.w) < 1e-8f) return false;
+            cornerNear[i] = glm::vec3(pn) / pn.w;
+            cornerFar[i]  = glm::vec3(pf) / pf.w;
+        }
+
+        // near/far REALES: la profundidad en view space de esos dos planos. No
+        // se sacan de los coeficientes de proj a proposito — el editor construye
+        // su proyeccion con glm::perspective (z en [-1,1]) y el CameraComponent
+        // con *RH_ZO, asi que los mismos coeficientes significan cosas distintas
+        // y la formula tendria que saber cual esta activa. Los planos z=0 y z=1,
+        // en cambio, son los mismos en los dos casos.
+        const float camNear = -(view * glm::vec4(cornerNear[0], 1.0f)).z;
+        const float camFar  = -(view * glm::vec4(cornerFar[0],  1.0f)).z;
+        if (!std::isfinite(camNear) || !std::isfinite(camFar) ||
+            camNear <= 0.0f || camFar <= camNear)
+        {
+            return false;
+        }
+
+        // Las esquinas ya estan puestas con el far REAL (es el que define los
+        // rayos del frustum); el reparto de cascadas usa el far recortado.
+        const float shadowFar = (std::min)(camFar, maxDistance);
+        if (shadowFar <= camNear) return false;
+
+        const glm::vec3 up = std::abs(lightDir.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f)
+                                                          : glm::vec3(0.0f, 1.0f, 0.0f);
+        const glm::mat4 lightRot    = glm::lookAt(glm::vec3(0.0f), lightDir, up);
+        const glm::mat4 invLightRot = glm::inverse(lightRot);
+
+        float prevDist = camNear;
+        for (int c = 0; c < SHADOW_CASCADES; c++)
+        {
+            const float p        = (float)(c + 1) / (float)SHADOW_CASCADES;
+            const float logSplit = camNear * std::pow(shadowFar / camNear, p);
+            const float uniSplit = camNear + (shadowFar - camNear) * p;
+            const float dist     = lambda * logSplit + (1.0f - lambda) * uniSplit;
+            outSplits[c]         = dist;
+
+            // Interpolar entre las esquinas cercana y lejana es exacto: la
+            // profundidad en view space varia linealmente a lo largo de ese
+            // segmento. Los factores se calculan contra el far REAL porque es el
+            // que situa cornerFar.
+            const float tNear = (prevDist - camNear) / (camFar - camNear);
+            const float tFar  = (dist     - camNear) / (camFar - camNear);
+
+            glm::vec3 corners[8];
+            for (int i = 0; i < 4; i++)
+            {
+                const glm::vec3 ray = cornerFar[i] - cornerNear[i];
+                corners[i]     = cornerNear[i] + ray * tNear;
+                corners[i + 4] = cornerNear[i] + ray * tFar;
+            }
+
+            // Esfera envolvente y no AABB: el radio no depende de hacia donde
+            // mire la camara, asi que girar en el sitio no cambia el tamano del
+            // volumen y las sombras no laten.
+            glm::vec3 center(0.0f);
+            for (const glm::vec3& v : corners) center += v;
+            center /= 8.0f;
+            float radius = 0.0f;
+            for (const glm::vec3& v : corners)
+                radius = (std::max)(radius, glm::length(v - center));
+            // Cuantizar el radio evita que un cambio minimo de la camara mueva
+            // el borde del volumen y con el todos los texeles.
+            radius = std::ceil(radius * 16.0f) / 16.0f;
+            if (radius < 1e-4f) radius = 1e-4f;
+
+            // Snap del centro a texeles del shadow map, en el espacio de la luz.
+            // Sin esto, avanzar la camara arrastra el volumen de forma continua
+            // y los bordes de sombra hierven.
+            const float unitsPerTexel = (2.0f * radius) / (float)shadowMapSize;
+            glm::vec3   centerLS      = glm::vec3(lightRot * glm::vec4(center, 1.0f));
+            centerLS.x = std::floor(centerLS.x / unitsPerTexel) * unitsPerTexel;
+            centerLS.y = std::floor(centerLS.y / unitsPerTexel) * unitsPerTexel;
+            center     = glm::vec3(invLightRot * glm::vec4(centerLS, 1.0f));
+
+            const glm::mat4 lightView =
+                glm::lookAt(center - lightDir * (radius + SHADOW_CASTER_MARGIN), center, up);
+            glm::mat4 lightProj = glm::orthoRH_ZO(-radius, radius, -radius, radius,
+                                                  0.0f, 2.0f * radius + SHADOW_CASTER_MARGIN);
+            // Sobre la PROYECCION y antes de multiplicar, igual que en
+            // spotShadowMatrix: en el producto la fila 1 ya lleva mezclada la
+            // vista y negar un solo elemento no equivale a negarla entera.
+            if (flipY) lightProj[1][1] *= -1.0f;
+
+            outMatrices[c] = lightProj * lightView;
+            prevDist       = dist;
+        }
+        return true;
+    }
+
     // Reparte las ranuras de sombra entre las luces que NO son la key.
     //
     // Recorre las luces 1..n-1 en orden de escena y le da una ranura a cada FOCO
