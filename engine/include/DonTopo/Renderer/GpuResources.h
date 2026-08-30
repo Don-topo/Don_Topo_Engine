@@ -78,9 +78,50 @@ public:
     // En el teardown del Renderer, con el device todavia vivo.
     void destroySharedSampler();
 
+    // ── Texturas de relleno compartidas ─────────────────────────────────────
+    //
+    // Una malla SIN material recibia hasta ahora sus PROPIAS tres imagenes de
+    // relleno —1x1 blanca, normal plana, ORM blanca—, cada una con su
+    // asignacion de memoria y su buffer de staging, que tambien asigna. Seis
+    // asignaciones por malla para pintar los mismos pocos pixeles una y otra
+    // vez. Y `maxMemoryAllocationCount` suele valer 4096 (ver H72).
+    //
+    // Ahora existen UNA vez y se prestan. Los tres create* de abajo las
+    // devuelven solas cuando el material no pide textura; el llamante no elige,
+    // asi que el criterio de "esto es relleno" vive en un solo sitio.
+    //
+    // Quien las recibe NO debe destruirlas: para eso esta releaseMaterialImage,
+    // que es el UNICO sitio que sabe distinguirlas. Hay tres caminos que
+    // liberan texturas de material (malla estatica, personaje, y el borrado
+    // diferido al cambiar una textura desde el editor) y los tres pasan por el.
+    // La blanca UNORM del slot ORM. Es la unica de las tres que se pide a mano:
+    // createSolidColorImage no se toca porque UiSpriteBatch la usa y SI destruye
+    // la suya.
+    void sharedWhiteOrm(VkImage& img, VkDeviceMemory& mem);
+    bool isSharedPlaceholder(VkImage img) const;
+    // Destruye imagen y memoria SALVO que sean prestadas. La VISTA no entra:
+    // esa si es de cada malla —se crea con createTextureImageView— y la destruye
+    // el llamante como siempre.
+    void releaseMaterialImage(VkImage img, VkDeviceMemory mem);
+    void destroySharedPlaceholders();
+
 private:
+    // Sube una de las tres de relleno la primera vez que hace falta.
+    void ensurePlaceholder(VkImage& img, VkDeviceMemory& mem,
+                           const uint8_t rgba[4], VkFormat fmt);
+
     const GpuDevice& m_gpu;
     VkSampler        m_materialSampler = VK_NULL_HANDLE;
+
+    // Blanca en SRGB (difusa), normal plana en UNORM, y blanca en UNORM (ORM).
+    // El formato importa: la imagen no se crea con MUTABLE_FORMAT, asi que la
+    // vista tiene que usar EXACTAMENTE el mismo con el que se creo.
+    VkImage        m_whiteSrgb        = VK_NULL_HANDLE;
+    VkDeviceMemory m_whiteSrgbMem     = VK_NULL_HANDLE;
+    VkImage        m_flatNormal       = VK_NULL_HANDLE;
+    VkDeviceMemory m_flatNormalMem    = VK_NULL_HANDLE;
+    VkImage        m_whiteUnorm       = VK_NULL_HANDLE;
+    VkDeviceMemory m_whiteUnormMem    = VK_NULL_HANDLE;
 };
 
 } // namespace DonTopo

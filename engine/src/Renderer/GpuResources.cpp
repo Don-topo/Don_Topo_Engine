@@ -184,6 +184,20 @@ void GpuResources::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t w,
 
 void GpuResources::createTextureImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem, TransferBatch* batch)
 {
+    // Material que NO pide textura -una primitiva procedural, por ejemplo-: la
+    // blanca compartida, prestada. Antes cada malla se llevaba su propia 1x1
+    // blanca, con su asignacion de memoria y la de su staging. El caso de
+    // "la pide y no se pudo leer" NO entra aqui: ese sigue con su damero
+    // propio, y es raro por definicion.
+    if (path.empty() && embedded.empty())
+    {
+        static constexpr uint8_t kBlanco[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+        ensurePlaceholder(m_whiteSrgb, m_whiteSrgbMem, kBlanco, VK_FORMAT_R8G8B8A8_SRGB);
+        img = m_whiteSrgb;
+        mem = m_whiteSrgbMem;
+        return;
+    }
+
     int w, h, channels;
     stbi_uc* pixels = nullptr;
     bool fromStb = false;
@@ -250,6 +264,16 @@ void GpuResources::createTextureImage(const std::string& path, const std::vector
 
 void GpuResources::createNormalMapImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem, TransferBatch* batch)
 {
+    // Sin normal map: la plana compartida (0,0,1 en tangent space).
+    if (path.empty() && embedded.empty())
+    {
+        static constexpr uint8_t kNormalPlana[4] = {0x80, 0x80, 0xFF, 0xFF};
+        ensurePlaceholder(m_flatNormal, m_flatNormalMem, kNormalPlana, VK_FORMAT_R8G8B8A8_UNORM);
+        img = m_flatNormal;
+        mem = m_flatNormalMem;
+        return;
+    }
+
     int w, h, channels;
     stbi_uc* pixels = nullptr;
     bool fromStb = false;
@@ -355,6 +379,82 @@ void GpuResources::destroySharedSampler()
         return;
     vkDestroySampler(m_gpu.device(), m_materialSampler, nullptr);
     m_materialSampler = VK_NULL_HANDLE;
+}
+
+// ── Texturas de relleno compartidas ─────────────────────────────────────────
+
+void GpuResources::ensurePlaceholder(VkImage& img, VkDeviceMemory& mem,
+                                     const uint8_t rgba[4], VkFormat fmt)
+{
+    if (img != VK_NULL_HANDLE)
+        return;
+
+    // Sin batch a proposito: son 4 bytes y se suben UNA vez en toda la vida del
+    // proceso. Meterlas en el batch del llamante las ataria a su fence y
+    // obligaria a razonar sobre quien sube primero.
+    VkBuffer       staging;
+    VkDeviceMemory stagingMem;
+    createBuffer(4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                 staging, stagingMem);
+
+    void* data = nullptr;
+    vkMapMemory(m_gpu.device(), stagingMem, 0, 4, 0, &data);
+    memcpy(data, rgba, 4);
+    vkUnmapMemory(m_gpu.device(), stagingMem);
+
+    createImage(1, 1, fmt, VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img, mem);
+
+    transitionImageLayout(img, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, nullptr);
+    copyBufferToImage(staging, img, 1, 1, nullptr);
+    transitionImageLayout(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, nullptr);
+
+    vkDestroyBuffer(m_gpu.device(), staging, nullptr);
+    vkFreeMemory(m_gpu.device(), stagingMem, nullptr);
+}
+
+void GpuResources::sharedWhiteOrm(VkImage& img, VkDeviceMemory& mem)
+{
+    static constexpr uint8_t kBlanco[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+    ensurePlaceholder(m_whiteUnorm, m_whiteUnormMem, kBlanco, VK_FORMAT_R8G8B8A8_UNORM);
+    img = m_whiteUnorm;
+    mem = m_whiteUnormMem;
+}
+
+bool GpuResources::isSharedPlaceholder(VkImage img) const
+{
+    if (img == VK_NULL_HANDLE)
+        return false;
+    return img == m_whiteSrgb || img == m_flatNormal || img == m_whiteUnorm;
+}
+
+void GpuResources::releaseMaterialImage(VkImage img, VkDeviceMemory mem)
+{
+    // Prestada: es de este GpuResources y la comparten todas las mallas sin
+    // material. Destruirla con la primera dejaria a las demas muestreando una
+    // imagen liberada, y eso no lo delata nada hasta que se ve basura.
+    if (isSharedPlaceholder(img))
+        return;
+
+    if (img != VK_NULL_HANDLE) vkDestroyImage(m_gpu.device(), img, nullptr);
+    if (mem != VK_NULL_HANDLE) vkFreeMemory(m_gpu.device(), mem, nullptr);
+}
+
+void GpuResources::destroySharedPlaceholders()
+{
+    auto suelta = [this](VkImage& img, VkDeviceMemory& mem) {
+        if (img != VK_NULL_HANDLE) vkDestroyImage(m_gpu.device(), img, nullptr);
+        if (mem != VK_NULL_HANDLE) vkFreeMemory(m_gpu.device(), mem, nullptr);
+        img = VK_NULL_HANDLE;
+        mem = VK_NULL_HANDLE;
+    };
+    suelta(m_whiteSrgb,  m_whiteSrgbMem);
+    suelta(m_flatNormal, m_flatNormalMem);
+    suelta(m_whiteUnorm, m_whiteUnormMem);
 }
 
 void GpuResources::createSolidColorImage(const uint8_t rgba[4], VkImage& img, VkDeviceMemory& mem, TransferBatch* batch)

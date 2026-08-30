@@ -680,6 +680,8 @@ namespace DonTopo {
         // destroySharedGpuMesh: alli es prestado, y destruirlo con el primer
         // material dejaria a los demas apuntando a un sampler muerto.
         m_res.destroySharedSampler();
+        // Y las tres de relleno que comparten las mallas sin material.
+        m_res.destroySharedPlaceholders();
         // Shadow map. El Context lleva los dos set layouts que ya se han
         // destruido cuatro lineas mas arriba; destroyResources no los toca (un
         // pipeline layout sobrevive a los set layouts con los que se creo).
@@ -3406,8 +3408,10 @@ namespace DonTopo {
         }
         else
         {
-            constexpr uint8_t white[4] = {255, 255, 255, 255};
-            m_res.createSolidColorImage(white, obj.ormImage, obj.ormMem, batch);
+            // La blanca compartida, prestada: sin ORM el shader multiplica por 1
+            // y esa imagen es identica en todas las mallas. createSolidColorImage
+            // se queda para quien SI quiere la suya (UiSpriteBatch la destruye).
+            m_res.sharedWhiteOrm(obj.ormImage, obj.ormMem);
             obj.metallic  = mesh.material.metallic;
             obj.roughness = mesh.material.roughness;
         }
@@ -3444,20 +3448,17 @@ namespace DonTopo {
         // para todo el motor. Destruirlo aqui seria un doble free en cuanto
         // se soltara el segundo material.
         vkDestroyImageView(m_gpu.device(), obj.ormView,       nullptr);
-        vkDestroyImage(m_gpu.device(),     obj.ormImage,      nullptr);
-        vkFreeMemory(m_gpu.device(),       obj.ormMem,        nullptr);
+        m_res.releaseMaterialImage(obj.ormImage, obj.ormMem);
         // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
         // para todo el motor. Destruirlo aqui seria un doble free en cuanto
         // se soltara el segundo material.
         vkDestroyImageView(m_gpu.device(), obj.normalView,    nullptr);
-        vkDestroyImage(m_gpu.device(),     obj.normalImage,   nullptr);
-        vkFreeMemory(m_gpu.device(),       obj.normalMem,     nullptr);
+        m_res.releaseMaterialImage(obj.normalImage, obj.normalMem);
         // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
         // para todo el motor. Destruirlo aqui seria un doble free en cuanto
         // se soltara el segundo material.
         vkDestroyImageView(m_gpu.device(), obj.textureView,   nullptr);
-        vkDestroyImage(m_gpu.device(),     obj.textureImage,  nullptr);
-        vkFreeMemory(m_gpu.device(),       obj.textureMem,    nullptr);
+        m_res.releaseMaterialImage(obj.textureImage, obj.textureMem);
         vkDestroyBuffer(m_gpu.device(),    obj.indexBuffer,   nullptr);
         vkFreeMemory(m_gpu.device(),       obj.indexMemory,   nullptr);
         vkDestroyBuffer(m_gpu.device(),    obj.vertexBuffer,  nullptr);
@@ -3804,20 +3805,17 @@ namespace DonTopo {
             // para todo el motor. Destruirlo aqui seria un doble free en cuanto
             // se soltara el segundo material.
             if (mgfx.ormView       != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.ormView,       nullptr); }
-            if (mgfx.ormImage      != VK_NULL_HANDLE) { vkDestroyImage    (m_gpu.device(), mgfx.ormImage,      nullptr); }
-            if (mgfx.ormMem        != VK_NULL_HANDLE) { vkFreeMemory      (m_gpu.device(), mgfx.ormMem,        nullptr); }
+            m_res.releaseMaterialImage(mgfx.ormImage, mgfx.ormMem);
             // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
             // para todo el motor. Destruirlo aqui seria un doble free en cuanto
             // se soltara el segundo material.
             if (mgfx.normalView    != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.normalView,    nullptr); }
-            if (mgfx.normalImage   != VK_NULL_HANDLE) { vkDestroyImage    (m_gpu.device(), mgfx.normalImage,   nullptr); }
-            if (mgfx.normalMem     != VK_NULL_HANDLE) { vkFreeMemory      (m_gpu.device(), mgfx.normalMem,     nullptr); }
+            m_res.releaseMaterialImage(mgfx.normalImage, mgfx.normalMem);
             // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
             // para todo el motor. Destruirlo aqui seria un doble free en cuanto
             // se soltara el segundo material.
             if (mgfx.textureView   != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.textureView,   nullptr); }
-            if (mgfx.textureImage  != VK_NULL_HANDLE) { vkDestroyImage    (m_gpu.device(), mgfx.textureImage,  nullptr); }
-            if (mgfx.textureMem    != VK_NULL_HANDLE) { vkFreeMemory      (m_gpu.device(), mgfx.textureMem,    nullptr); }
+            m_res.releaseMaterialImage(mgfx.textureImage, mgfx.textureMem);
         }
 
         // Los sets vuelven al pool (creado con FREE_DESCRIPTOR_SET_BIT): sin
@@ -3999,7 +3997,7 @@ namespace DonTopo {
             }
             else
             {
-                m_res.createSolidColorImage(white, mgfx.ormImage, mgfx.ormMem, batch);
+                m_res.sharedWhiteOrm(mgfx.ormImage, mgfx.ormMem);
                 mgfx.metallic  = smat.metallic;
                 mgfx.roughness = smat.roughness;
             }
@@ -4376,10 +4374,18 @@ namespace DonTopo {
         const VkImage        oldImage   = *img;
         const VkDeviceMemory oldMem     = *mem;
         const VkImageView    oldView    = *view;
-        m_deferredDeletes.push([oldImage, oldMem, oldView](VkDevice dev) {
-            vkDestroyImageView(dev, oldView,    nullptr);
-            vkDestroyImage(dev,     oldImage,   nullptr);
-            vkFreeMemory(dev,       oldMem,     nullptr);
+        // Si la vieja era una de relleno COMPARTIDA, la imagen y su memoria no
+        // son de esta malla y destruirlas se llevaria por delante las de todas
+        // las demas. Se pregunta AQUI y no dentro del lambda porque el lambda
+        // solo recibe el VkDevice; el conjunto de compartidas no cambia despues
+        // de crearse, asi que preguntarlo ahora es igual de valido.
+        const bool prestada = m_res.isSharedPlaceholder(oldImage);
+        m_deferredDeletes.push([oldImage, oldMem, oldView, prestada](VkDevice dev) {
+            // La vista SI era de esta malla en los dos casos.
+            vkDestroyImageView(dev, oldView, nullptr);
+            if (prestada) return;
+            vkDestroyImage(dev, oldImage, nullptr);
+            vkFreeMemory(dev,   oldMem,   nullptr);
         });
 
         // path vacío + sin bytes embebidos = createTextureImage genera el
