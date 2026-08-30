@@ -3440,10 +3440,14 @@ namespace DonTopo {
         // las dejan en DEPTH_STENCIL_READ_ONLY_OPTIMAL, que es el layout que
         // declaran los descriptor sets. Lo que se salta es la geometría, que
         // nadie va a muestrear (numLights = 0 apaga el shadow en el shader).
-        const bool drawCasters = !m_lights.empty();
-
+        // Y con un FOCO solo tiene matriz la capa 0: su sombra es UNA cara en
+        // perspectiva, no cuatro cascadas. Las otras tres se abren igual —por lo
+        // del layout— pero dibujar en ellas seria grabar con la matriz identidad
+        // sobre capas que nadie muestrea.
         for (uint32_t cascade = 0; cascade < SHADOW_CASCADES; cascade++)
         {
+            const bool drawCasters = !m_lights.empty() && cascade < m_shadowPass.activeLayers();
+
             // Render pass, viewport, scissor, pipeline y push del índice: del
             // pase. Los draws de aquí abajo son del Renderer.
             m_shadowPass.beginCascade(cmd, cascade);

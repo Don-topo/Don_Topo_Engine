@@ -114,6 +114,16 @@ public:
     const glm::mat4& cascadeMatrix(uint32_t c) const { return m_cascadeMatrices[c]; }
     const glm::vec4& cascadeSplits()   const { return m_cascadeSplits; }
 
+    // Cuantas capas del mapa tienen una matriz valida en ESTE frame: 4 con las
+    // cascadas de una luz direccional, 1 con la cara en perspectiva de un foco,
+    // 0 sin luces.
+    //
+    // Solo acota los DRAWS. Los render pass hay que abrirlos igual en las
+    // SHADOW_CASCADES capas, porque son ellos los que las limpian y las dejan en
+    // el layout que declaran los descriptor sets; una capa sin abrir se queda en
+    // UNDEFINED y la capa de validacion protesta en cada frame.
+    uint32_t activeLayers() const { return m_activeLayers; }
+
 private:
     VkImage        m_image                          = VK_NULL_HANDLE;
     VkDeviceMemory m_memory                         = VK_NULL_HANDLE;
@@ -144,6 +154,7 @@ private:
     glm::mat4 m_cascadeMatrices[SHADOW_CASCADES] { glm::mat4(1.0f), glm::mat4(1.0f),
                                                    glm::mat4(1.0f), glm::mat4(1.0f) };
     glm::vec4 m_cascadeSplits { 0.0f };
+    uint32_t  m_activeLayers = 0;
 };
 
 } // namespace DonTopo

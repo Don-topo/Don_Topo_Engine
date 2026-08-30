@@ -129,24 +129,21 @@ float lightSample(int i, vec3 worldPos, out vec3 L)
     return att;
 }
 
-// Cascada que le toca a un fragmento por su profundidad en view space. Los
-// cortes vienen ya ordenados; el ultimo es el alcance total de las sombras.
-// -1 = mas alla de ese alcance, no hay mapa que muestrear.
-int selectCascade(float viewDepth)
-{
-    for (int i = 0; i < SHADOW_CASCADES; i++)
-        if (viewDepth <= ubo.cascadeSplits[i]) return i;
-    return -1;
-}
+// La eleccion de capa y la reproyeccion las comparte con fog.comp, que muestrea
+// el MISMO mapa; aqui solo queda el filtrado, que si es distinto a proposito.
+#include "shadow_lookup.glsl"
 
-float computeShadow(vec3 worldPos, int cascade)
+// normalGeo = la normal INTERPOLADA del vertice, no la del normal map: el bias
+// solo tiene que separar la superficie de su propia sombra, y hacerlo seguir los
+// bultos de una textura mete ondulaciones en el borde de la sombra.
+float computeShadow(vec3 worldPos, vec3 normalGeo)
 {
     // Se reproyecta aqui en vez de traer N varyings del vertex shader: la
     // cascada no se sabe hasta tener la profundidad del fragmento.
-    vec4 lightSpacePos = ubo.lightSpaceMatrix[cascade] * vec4(worldPos, 1.0);
-    vec3 proj = lightSpacePos.xyz / lightSpacePos.w;
-    proj.xy   = proj.xy * 0.5 + 0.5;
-    if (proj.z > 1.0 || proj.z < 0.0) return 1.0;
+    vec3  proj;
+    float layer;
+    if (!dtShadowCoord(worldPos, normalGeo, proj, layer)) return 1.0;
+
     // Del tamano REAL del mapa, no de un 2048 a fuego. Con el valor fijo, subir
     // la resolucion no ensanchaba ni estrechaba el filtro: a 4096 los nueve taps
     // se separaban dos texeles reales -mismo desenfoque, solo menos aliasing- y
@@ -154,12 +151,12 @@ float computeShadow(vec3 worldPos, int cascade)
     // escala con la resolucion, que es lo que hace util el ajuste.
     vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0).xy);
     float shadow = 0.0;
-    // PCF 3x3 dentro de la capa de la cascada. Al indexar por capa y no por
-    // region de un atlas, los taps del borde no pueden caer en la cascada
-    // vecina: el sampler los recorta contra el borde de SU capa.
+    // PCF 3x3 dentro de la capa que toque. Al indexar por capa y no por region
+    // de un atlas, los taps del borde no pueden caer en la capa vecina: el
+    // sampler los recorta contra el borde de SU capa.
     for (int x = -1; x <= 1; x++)
         for (int y = -1; y <= 1; y++)
-            shadow += texture(shadowMap, vec4(proj.xy + vec2(x, y) * texelSize, float(cascade), proj.z));
+            shadow += texture(shadowMap, vec4(proj.xy + vec2(x, y) * texelSize, layer, proj.z));
     return shadow / 9.0;
 }
 
@@ -203,9 +200,11 @@ void main()
 
     vec3 F0 = mix(vec3(0.04), albedo, metal);
 
+    // Profundidad en view space. Ya no la usa la sombra —la eleccion de capa
+    // vive en shadow_lookup.glsl y la recalcula ahi— pero si el reparto en
+    // slices de Forward+ clustered.
     float viewDepth = -(ubo.view * vec4(fragWorldPos, 1.0)).z;
-    int   cascade   = selectCascade(viewDepth);
-    float shadow    = cascade < 0 ? 1.0 : computeShadow(fragWorldPos, cascade);
+    float shadow    = computeShadow(fragWorldPos, normalize(fragNormal));
     vec3  Lo        = vec3(0.0);
 
     // Forward+ apagado: el bucle de siempre sobre las MAX_LIGHTS del UBO, sin

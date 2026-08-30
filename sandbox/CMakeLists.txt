@@ -21,13 +21,25 @@ file(GLOB GLSL_SOURCES
     "${SHADER_SRC_DIR}/*.comp"
 )
 
+# Trozos de GLSL que se incluyen desde otros shaders. NO entran en el GLOB de
+# arriba —un .glsl no es una etapa y glslc no sabría con qué perfil compilarlo—,
+# pero sí tienen que estar en los DEPENDS: sin eso, editar uno de estos deja los
+# .spv que lo incluyen sin regenerar, y el sintoma es un shader que se comporta
+# como la version anterior sin que nada falle.
+#
+# Existen porque la alternativa es copiar la misma funcion en varios shaders, y
+# eso ya salio mal: pbr.frag y fog.comp muestrean el MISMO shadow map, cada uno
+# tenia su copia del criterio, y cambiar uno y no el otro dejo el in-scattering
+# apuntando a un lado y el shadow map construido hacia otro (H65).
+file(GLOB GLSL_INCLUDES "${SHADER_SRC_DIR}/*.glsl")
+
 foreach(SHADER ${GLSL_SOURCES})
     get_filename_component(SHADER_NAME ${SHADER} NAME)
     set(SPV_OUT "${CMAKE_BINARY_DIR}/spv/${SHADER_NAME}.spv")
     add_custom_command(
         OUTPUT  ${SPV_OUT}
-        COMMAND ${GLSLC} ${SHADER} -o ${SPV_OUT}
-        DEPENDS ${SHADER}
+        COMMAND ${GLSLC} -I ${SHADER_SRC_DIR} ${SHADER} -o ${SPV_OUT}
+        DEPENDS ${SHADER} ${GLSL_INCLUDES}
         COMMENT "Compiling shader ${SHADER_NAME}"
     )
     list(APPEND SPV_FILES ${SPV_OUT})

@@ -6514,34 +6514,25 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
         ImGui::SetTooltip("El motor tiene un único juego de shadow maps en cascada.\n"
                           "Las demás luces iluminan, pero no arrojan sombra.");
 
-    // Y el aviso que de verdad explica lo que se ve: las cascadas son una
-    // técnica de luz DIRECCIONAL, o sea que proyectan en paralelo. Un foco ya
-    // no entra aquí: tiene cono, y por tanto dirección propia, que es lo que
-    // usa desde P22. Lo que le falta es la divergencia, igual que a la de
-    // punto, pero su sombra sí sigue a su gizmo.
+    // Y el aviso que de verdad explica lo que se ve. Ya solo le queda la luz de
+    // PUNTO: un foco tiene su propio shadow map en perspectiva desde P21, asi
+    // que su sombra diverge de verdad y no hay nada que avisar.
     const LightType tipo = light->getType();
-    if (tipo == LightType::Point || tipo == LightType::Spot)
+    if (tipo == LightType::Point)
     {
         ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
                            "Su sombra es una aproximacion.");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
-                tipo == LightType::Point
-                    ? "Las sombras en cascada son de luz DIRECCIONAL: proyectan en\n"
-                      "paralelo a lo largo de una direccion. Una luz de punto tendria\n"
-                      "que proyectar en perspectiva desde su posicion, y para eso hace\n"
-                      "falta un cubemap de sombras que todavia no existe.\n\n"
-                      "Como no tiene direccion propia, se apunta de la luz al centro\n"
-                      "de la escena. Mover la luz mueve su sombra como cabe esperar;\n"
-                      "lo que no hace es diverger, asi que el tamano de la sombra no\n"
-                      "cambia con la distancia a la luz."
-                    : "Las sombras en cascada son de luz DIRECCIONAL: proyectan en\n"
-                      "paralelo a lo largo de una direccion. Un foco tiene direccion\n"
-                      "propia y es la que se usa, asi que su sombra sigue a su gizmo.\n\n"
-                      "Lo que le falta es la divergencia: un foco tendria que proyectar\n"
-                      "en perspectiva desde su posicion, abriendose con el cono, y para\n"
-                      "eso hace falta un shadow map en perspectiva que todavia no\n"
-                      "existe. El tamano de la sombra no cambia con la distancia.");
+                "Una luz de punto ilumina en TODAS las direcciones, asi que su\n"
+                "sombra necesita un cubemap: seis caras en perspectiva desde su\n"
+                "posicion. Todavia no existe.\n\n"
+                "Mientras tanto se le aproxima una direccion, de la luz al centro\n"
+                "de la escena, y se usan las sombras en cascada. Mover la luz mueve\n"
+                "su sombra como cabe esperar; lo que no hace es diverger, asi que el\n"
+                "tamano de la sombra no cambia con la distancia a la luz.\n\n"
+                "Un foco (Spot) si tiene sombra correcta: prueba con uno si\n"
+                "necesitas que la sombra crezca al alejarse.");
     }
 
     ImGui::Separator();

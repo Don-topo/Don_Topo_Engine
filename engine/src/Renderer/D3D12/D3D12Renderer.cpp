@@ -1239,6 +1239,10 @@ struct D3D12Renderer::Impl {
 
     glm::mat4 cascadeMatrices[kShadowCascades]{};
     glm::vec4 cascadeSplits{0.0f};
+    // Cuantas capas del mapa tienen matriz valida en ESTE frame: 4 con las
+    // cascadas de una direccional, 1 con la cara en perspectiva de un foco, 0
+    // sin luces. Solo acota los DRAWS — el clear de cada capa se hace igual.
+    UINT      activeLayers = 0;
     // Dirección de la luz: la misma que se escribe en el UBO. La posición solo
     // sirve para orientar, igual que en computeCascades.
     glm::vec3 lightDirection{-0.4f, -1.0f, -0.5f};
@@ -5942,8 +5946,9 @@ void D3D12Renderer::Impl::createFogAndFxaaPipelines()
 
     // ── Niebla ──────────────────────────────────────────────────────────────
     // u0 = escena (lectura y escritura), t1 = profundidad, t3 = sombras,
-    // b2 = el mismo UBO de escena. Su cbuffer solo declara hasta cascadeSplits,
-    // pero los offsets son los mismos, así que se enlaza el buffer entero.
+    // b2 = el mismo UBO de escena. Su cbuffer declara hasta lights —necesita el
+    // TIPO de la luz key para saber cómo muestrear el shadow map— y para en
+    // seco, pero los offsets son los mismos, así que se enlaza el buffer entero.
     D3D12_DESCRIPTOR_RANGE fogHdrRange{};
     fogHdrRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     fogHdrRange.NumDescriptors     = 1;
@@ -7742,6 +7747,29 @@ void D3D12Renderer::Impl::computeCascades()
     for (auto& matrix : cascadeMatrices)
         matrix = glm::mat4(1.0f);
     cascadeSplits = glm::vec4(0.0f);
+    activeLayers  = 0;
+
+    // FOCO: una sola cara en perspectiva, en la capa 0. No usa el frustum de la
+    // camara para nada —el volumen lo fija el cono de la luz—, asi que sale por
+    // aqui antes de calcularlo. Misma funcion que Vulkan: la matriz TIENE que
+    // ser identica o el bias cuadra en un backend y no en el otro.
+    if (!sceneLights.empty() &&
+        static_cast<int>(sceneLights[0].direction[3] + 0.5f) ==
+            static_cast<int>(LightType::Spot)) {
+        const ShaderLight& key = sceneLights[0];
+        if (spotShadowMatrix(
+                glm::vec4(key.position[0], key.position[1], key.position[2], key.position[3]),
+                glm::vec4(key.direction[0], key.direction[1], key.direction[2], key.direction[3]),
+                glm::vec4(key.params[0], key.params[1], key.params[2], key.params[3]),
+                // flipY = false: aqui la convencion de Y la absorbe el viewport
+                // de altura negativa del pase de sombras, igual que con la
+                // ortografica de las cascadas. Invertir tambien la matriz seria
+                // aplicarla dos veces.
+                /*flipY=*/false, cascadeMatrices[0])) {
+            activeLayers = 1;
+        }
+        return;
+    }
 
     const glm::mat4  proj = cameraProj();
     const glm::mat4& view = cameraView;
@@ -7805,6 +7833,7 @@ void D3D12Renderer::Impl::computeCascades()
                                                       : glm::vec3(0.0f, 1.0f, 0.0f);
     const glm::mat4 lightRot    = glm::lookAt(glm::vec3(0.0f), lightDir, up);
     const glm::mat4 invLightRot = glm::inverse(lightRot);
+    activeLayers                = kShadowCascades;
 
     float prevDist = camNear;
     for (int c = 0; c < kShadowCascades; ++c) {
@@ -8071,6 +8100,13 @@ void D3D12Renderer::Impl::recordShadowPasses()
         commandList->OMSetRenderTargets(0, nullptr, FALSE, &dsv);
         commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
         commandList->SetGraphicsRoot32BitConstants(1, 1, &cascade, 0);
+
+        // Con un FOCO solo tiene matriz la capa 0: su sombra es UNA cara en
+        // perspectiva, no cuatro cascadas. Las demas se limpian igual —el clear
+        // de arriba es lo que las deja utilizables— pero dibujar en ellas seria
+        // grabar con la matriz identidad sobre capas que nadie muestrea.
+        if (cascade >= activeLayers)
+            continue;
 
         // El suelo no se mete en el mapa: es el receptor, y meterlo solo
         // añadiría su propia superficie como oclusor de sí misma.

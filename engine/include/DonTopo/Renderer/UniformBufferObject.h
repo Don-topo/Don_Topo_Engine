@@ -1,5 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cmath>
 
@@ -63,6 +64,79 @@ namespace DonTopo
             return true;
         }
     };
+
+    // Plano cercano del shadow map en perspectiva de un foco. Constante y no
+    // ajustable: lo unico que se nota al subirlo es que un caster pegado a la
+    // bombilla deja de proyectar, y bajarlo mas reparte la precision de z aun
+    // peor. Vive aqui porque los dos backends tienen que usar EXACTAMENTE el
+    // mismo, o el bias de sombra cuadra en uno y no en el otro.
+    constexpr float SPOT_SHADOW_NEAR = 0.05f;
+
+    // Matriz de sombra de un FOCO: proyeccion en PERSPECTIVA desde su posicion,
+    // con el FOV de su cono. Es lo que hace que su sombra DIVERJA —crezca al
+    // alejarse de la luz— en vez de mantener el tamano como la aproximacion en
+    // cascada, que es de luz direccional.
+    //
+    // Va en lightSpaceMatrix[0] y se graba en la capa 0 del mismo shadow map de
+    // siempre: las cascadas y esto no coexisten nunca, porque solo hay una luz
+    // key y solo tiene un tipo. Por eso no hace falta ni un recurso nuevo ni un
+    // binding nuevo.
+    //
+    // flipY: quien absorbe la convencion de Y del backend. Los dos dejan el mapa
+    // en la MISMA orientacion, que es la que el muestreo compartido da por
+    // supuesta, pero por caminos distintos:
+    //
+    //   Vulkan  -> flipY = true.  Lo hace la matriz, igual que la ortografica de
+    //                             las cascadas (ShadowPass.cpp).
+    //   D3D12   -> flipY = false. Lo hace el viewport de altura negativa del
+    //                             pase de sombras (shadowViewport.Height < 0).
+    //
+    // Poner los DOS o NINGUNO no da error en ninguna capa de validacion y el
+    // sintoma no es una sombra desplazada, que se veria enseguida: es un
+    // titileo. Con el mapa espejado en v la comparacion de profundidad cae en un
+    // texel que no tiene nada que ver, asi que sombra y luz salen casi al azar
+    // sobre la superficie y el jitter del TAA los remueve en cada frame — se
+    // confunde facil con falta de bias, y subir el bias no lo toca.
+    //
+    // false = la luz no tiene direccion utilizable y el llamante debe saltarse
+    // el pase.
+    inline bool spotShadowMatrix(const glm::vec4& position, const glm::vec4& direction,
+                                 const glm::vec4& params, bool flipY, glm::mat4& out)
+    {
+        const glm::vec3 d(direction);
+        const float     l = glm::length(d);
+        if (l < 1e-6f) return false;
+        const glm::vec3 dir = d / l;
+        const glm::vec3 pos(position);
+
+        // params.z = COSENO del angulo exterior del cono, o sea el semiangulo.
+        // El FOV del mapa es el angulo completo (el doble) y ademas con margen:
+        // sin el, el borde del cono cae justo en el borde del mapa y los taps
+        // del PCF se salen por un lado.
+        const float cosOuter = glm::clamp(params.z, -0.9999f, 0.9999f);
+        const float fov      = glm::clamp(2.0f * std::acos(cosOuter) * 1.15f,
+                                          glm::radians(5.0f), glm::radians(175.0f));
+
+        // params.x = alcance de la luz. Mas alla no ilumina, asi que tampoco hay
+        // sombra suya que grabar, y acotar el far ahi es lo que le da precision
+        // de profundidad al trozo que si se usa.
+        const float lejos = (std::max)(params.x, SPOT_SHADOW_NEAR * 2.0f);
+
+        const glm::vec3 up = std::abs(dir.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f)
+                                                     : glm::vec3(0.0f, 1.0f, 0.0f);
+
+        // *RH_ZO y no glm::perspective a secas: a secas da z en [-1,1] y Vulkan
+        // clipea la mitad cercana.
+        glm::mat4 proj = glm::perspectiveRH_ZO(fov, 1.0f, SPOT_SHADOW_NEAR, lejos);
+        // Sobre la PROYECCION y antes de multiplicar. Hacerlo despues, sobre
+        // out[1][1], seria otra cosa: en el producto la fila 1 ya lleva mezclada
+        // la vista, y negar un solo elemento de esa fila no equivale a negarla
+        // entera.
+        if (flipY) proj[1][1] *= -1.0f;
+
+        out = proj * glm::lookAt(pos, pos + dir, up);
+        return true;
+    }
 
     // Direccion en la que "cae" la luz key: la que construye el shadow map y la
     // que usa el in-scattering de la niebla. UN SOLO sitio a proposito — cuando

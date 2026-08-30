@@ -5,7 +5,11 @@
 // contribucion florezca y tonemapee como el resto de la imagen.
 
 #define SHADOW_CASCADES 4
+#define MAX_LIGHTS 16
 #define PI 3.14159265359
+
+// Mismo layout que DonTopo::Light y que la declaracion de pbr.frag.
+struct Light { vec4 position; vec4 color; vec4 direction; vec4 params; };
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -17,16 +21,22 @@ layout(set = 0, binding = 0, rgba16f) uniform image2D hdrImage;
 // Profundidad de TODA la escena, del mismo depth pre-pass que alimenta al SSAO
 // y al SSR. NEAREST: D32_SFLOAT no tiene garantizado el filtrado lineal.
 layout(set = 0, binding = 1) uniform sampler2D depthTex;
-// El bloque UBO del frame, declarado SOLO hasta cascadeSplits: los miembros que
-// van detras (lights, viewPos, numLights, ambientIntensity) no se usan aqui y
-// omitirlos no mueve ni un offset, porque std140 los coloca todos DESPUES. De
-// aqui salen la matriz de vista (profundidad en view space para elegir cascada)
-// y las cuatro matrices de la sombra de la luz key.
+// El bloque UBO del frame, declarado SOLO hasta lights: los miembros que van
+// detras (viewPos, numLights, ambientIntensity) no se usan aqui y omitirlos no
+// mueve ni un offset, porque std140 los coloca todos DESPUES. De aqui salen la
+// matriz de vista (profundidad en view space para elegir cascada), las matrices
+// de la sombra de la luz key, y la propia luz key.
+//
+// lights entra aunque de todo el array solo se lea lights[0].direction.w: el
+// TIPO de la luz key decide como se muestrea el shadow map, y ese criterio es
+// compartido con pbr.frag (shadow_lookup.glsl). Meterlo por el push constant no
+// era opcion: son 128 bytes exactos y estan llenos.
 layout(set = 0, binding = 2) uniform UBO {
-    mat4 view;
-    mat4 proj;
-    mat4 lightSpaceMatrix[SHADOW_CASCADES];
-    vec4 cascadeSplits;
+    mat4  view;
+    mat4  proj;
+    mat4  lightSpaceMatrix[SHADOW_CASCADES];
+    vec4  cascadeSplits;
+    Light lights[MAX_LIGHTS];
 } ubo;
 layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadowMap;
 
@@ -46,30 +56,23 @@ layout(push_constant) uniform FogPush {
     vec4 gStepsRes;          // x = anisotropia HG, y = pasos, zw = resolucion
 } push;
 
-// Cascada que le toca a un punto por su profundidad en view space, con el mismo
-// criterio que pbr.frag: los cortes vienen ordenados y el ultimo es el alcance
-// total. -1 = mas alla, no hay mapa que muestrear.
-int selectCascade(float viewDepth)
-{
-    for (int i = 0; i < SHADOW_CASCADES; i++)
-        if (viewDepth <= ubo.cascadeSplits[i]) return i;
-    return -1;
-}
+// La eleccion de capa y la reproyeccion las comparte con pbr.frag, que muestrea
+// el MISMO mapa. Antes habia aqui una copia del criterio y fue exactamente eso
+// lo que se descuadro en H65.
+#include "shadow_lookup.glsl"
 
 // Un solo tap, sin el PCF 3x3 de pbr.frag: aqui se muestrea N veces por pixel
 // (una por paso de marcha) y el ruido que deja un tap unico lo disuelve el
-// propio acumulado mas el dither.
+// propio acumulado mas el dither. Esta diferencia SI es deliberada; la de
+// arriba no lo era.
 float shadowAt(vec3 worldPos)
 {
-    float viewDepth = -(ubo.view * vec4(worldPos, 1.0)).z;
-    int   cascade   = selectCascade(viewDepth);
-    if (cascade < 0) return 1.0;
-
-    vec4 lightSpacePos = ubo.lightSpaceMatrix[cascade] * vec4(worldPos, 1.0);
-    vec3 p = lightSpacePos.xyz / lightSpacePos.w;
-    p.xy   = p.xy * 0.5 + 0.5;
-    if (p.z > 1.0 || p.z < 0.0) return 1.0;
-    return texture(shadowMap, vec4(p.xy, float(cascade), p.z));
+    vec3  p;
+    float layer;
+    // Sin normal: este punto esta en el AIRE, no sobre una superficie, asi que
+    // no hay nada que pueda auto-sombrearse y el normal-offset no aplica.
+    if (!dtShadowCoord(worldPos, vec3(0.0), p, layer)) return 1.0;
+    return texture(shadowMap, vec4(p.xy, layer, p.z));
 }
 
 // Henyey-Greenstein. g > 0 = scattering hacia delante: halo alrededor de la

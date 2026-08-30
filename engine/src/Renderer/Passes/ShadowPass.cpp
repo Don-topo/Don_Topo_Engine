@@ -399,7 +399,26 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
 {
     for (int i = 0; i < SHADOW_CASCADES; i++) m_cascadeMatrices[i] = glm::mat4(1.0f);
     m_cascadeSplits = glm::vec4(0.0f);
+    m_activeLayers  = 0;
     if (lights.empty()) return;
+
+    // FOCO: una sola cara en perspectiva, en la capa 0. No usa el frustum de la
+    // camara para nada —el volumen lo fija el cono de la luz—, asi que sale por
+    // aqui antes de calcularlo. Los cortes se quedan a 0: la rama del foco de
+    // shadow_lookup.glsl no los mira.
+    if (static_cast<int>(lights[0].direction.w + 0.5f) == static_cast<int>(LightType::Spot))
+    {
+        // flipY = true, la MISMA inversion que se le hace a la ortografica de
+        // las cascadas unas lineas mas abajo y por la misma razon: en Vulkan la
+        // convencion de Y la absorbe la matriz, y en D3D12 el viewport de altura
+        // negativa del pase de sombras. Ver el comentario de spotShadowMatrix.
+        if (spotShadowMatrix(lights[0].position, lights[0].direction, lights[0].params,
+                             /*flipY=*/true, m_cascadeMatrices[0]))
+        {
+            m_activeLayers = 1;
+        }
+        return;
+    }
 
     // Esquinas del frustum, desproyectando el cubo NDC. z va de 0 a 1 y no
     // de -1 a 1 porque ese es el rango que Vulkan clipea: lo que se dibuja
@@ -505,6 +524,7 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
 
         prevDist = dist;
     }
+    m_activeLayers = SHADOW_CASCADES;
 }
 
 // ── grabacion ───────────────────────────────────────────────────────────────
