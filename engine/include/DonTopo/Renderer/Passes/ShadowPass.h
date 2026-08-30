@@ -110,7 +110,7 @@ public:
     VkSampler        sampler()        const { return m_sampler; }
     VkPipelineLayout pipelineLayout() const { return m_pipelineLayout; }
 
-    const glm::mat4* cascadeMatrices() const { return m_cascadeMatrices; }  // [SHADOW_CASCADES]
+    const glm::mat4* cascadeMatrices() const { return m_cascadeMatrices; }  // [SHADOW_MATRICES]
     const glm::mat4& cascadeMatrix(uint32_t c) const { return m_cascadeMatrices[c]; }
     const glm::vec4& cascadeSplits()   const { return m_cascadeSplits; }
 
@@ -137,10 +137,10 @@ private:
     void createFramebuffers(const Context& ctx);
 
     uint32_t       m_size                          = kShadowSize;
-    VkImageView    m_layerViews[SHADOW_CASCADES]    {};
+    VkImageView    m_layerViews[SHADOW_MATRICES]    {};
     VkSampler      m_sampler                        = VK_NULL_HANDLE;
     VkRenderPass   m_renderPass                     = VK_NULL_HANDLE;
-    VkFramebuffer  m_framebuffers[SHADOW_CASCADES]  {};
+    VkFramebuffer  m_framebuffers[SHADOW_MATRICES]  {};
     VkPipeline     m_pipeline                       = VK_NULL_HANDLE;
     // Hermano del anterior para las mallas skinned: mismo shadow.vert, mismo
     // layout, mismo render pass y mismo bias. Solo cambia el vertex input,
@@ -151,7 +151,8 @@ private:
 
     // Cache por frame que rellena computeCascades(). Identidad y 0 si la escena
     // no tiene luces: en ese caso el pass solo limpia las capas.
-    glm::mat4 m_cascadeMatrices[SHADOW_CASCADES] { glm::mat4(1.0f), glm::mat4(1.0f),
+    glm::mat4 m_cascadeMatrices[SHADOW_MATRICES] { glm::mat4(1.0f), glm::mat4(1.0f),
+                                                   glm::mat4(1.0f), glm::mat4(1.0f),
                                                    glm::mat4(1.0f), glm::mat4(1.0f) };
     glm::vec4 m_cascadeSplits { 0.0f };
     uint32_t  m_activeLayers = 0;

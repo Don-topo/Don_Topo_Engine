@@ -6514,26 +6514,11 @@ void PropertiesPanel::drawLightSection(EditorContext& ctx)
         ImGui::SetTooltip("El motor tiene un único juego de shadow maps en cascada.\n"
                           "Las demás luces iluminan, pero no arrojan sombra.");
 
-    // Y el aviso que de verdad explica lo que se ve. Ya solo le queda la luz de
-    // PUNTO: un foco tiene su propio shadow map en perspectiva desde P21, asi
-    // que su sombra diverge de verdad y no hay nada que avisar.
-    const LightType tipo = light->getType();
-    if (tipo == LightType::Point)
-    {
-        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                           "Su sombra es una aproximacion.");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(
-                "Una luz de punto ilumina en TODAS las direcciones, asi que su\n"
-                "sombra necesita un cubemap: seis caras en perspectiva desde su\n"
-                "posicion. Todavia no existe.\n\n"
-                "Mientras tanto se le aproxima una direccion, de la luz al centro\n"
-                "de la escena, y se usan las sombras en cascada. Mover la luz mueve\n"
-                "su sombra como cabe esperar; lo que no hace es diverger, asi que el\n"
-                "tamano de la sombra no cambia con la distancia a la luz.\n\n"
-                "Un foco (Spot) si tiene sombra correcta: prueba con uno si\n"
-                "necesitas que la sombra crezca al alejarse.");
-    }
+    // Ya no hay aviso: los tres tipos tienen su sombra correcta. Una direccional
+    // proyecta en paralelo con cascadas, que es lo que corresponde a una luz en
+    // el infinito; un foco con una cara en perspectiva; y una de punto con las
+    // seis de un cubemap. Aqui vivia un TextColored naranja que decia "Su sombra
+    // es una aproximacion" y estuvo bien mientras lo fue.
 
     ImGui::Separator();
 

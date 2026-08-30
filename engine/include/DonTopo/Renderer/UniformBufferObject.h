@@ -14,6 +14,16 @@ namespace DonTopo
     // desplaza en silencio todo lo que va detrás de lightSpaceMatrix.
     constexpr int SHADOW_CASCADES = 4;
 
+    // Huecos de matriz de sombra en el UBO. Es el MAXIMO de lo que necesita
+    // cada tipo de luz key, porque nunca coexisten: una direccional usa 4
+    // (una por cascada) y una de punto 6 (una por cara del cubemap). Un foco
+    // usa solo el hueco 0.
+    //
+    // Tiene que valer lo mismo aqui y en los SEIS shaders que declaran el
+    // bloque UBO: si se descuadra, std140 desplaza en silencio todo lo que va
+    // detras y no lo delata ninguna capa de validacion.
+    constexpr int SHADOW_MATRICES = 6;
+
     // Tipo de luz. Va en direction.w (float) y no en un int aparte: std140
     // alinearia el int a 16 bytes igual, asi que ocupar el hueco que la vec4 ya
     // tenia libre sale gratis.
@@ -100,6 +110,31 @@ namespace DonTopo
     //
     // false = la luz no tiene direccion utilizable y el llamante debe saltarse
     // el pase.
+    // FOV que necesitaria el shadow map de un foco, en radianes. Por encima de
+    // 90 grados una sola cara deja de ser la tecnica adecuada: la huella de un
+    // texel es 2*d*tan(FOV/2)/resolucion, y tan() se dispara cerca de 180 —a 150
+    // grados es 3,7 veces peor que a 90, y a 175 son 23 veces—. De ahi el umbral
+    // de spotNecesitaCubemap.
+    inline float spotShadowFov(const glm::vec4& params)
+    {
+        // params.z = COSENO del angulo exterior del cono, o sea el semiangulo.
+        // El FOV del mapa es el angulo completo (el doble) y ademas con margen:
+        // sin el, el borde del cono cae justo en el borde del mapa y los taps
+        // del PCF se salen por un lado.
+        const float cosOuter = glm::clamp(params.z, -0.9999f, 0.9999f);
+        return glm::clamp(2.0f * std::acos(cosOuter) * 1.15f,
+                          glm::radians(5.0f), glm::radians(175.0f));
+    }
+
+    // Un foco tan abierto que ya no cabe bien en una cara: se le da el cubemap de
+    // seis, igual que a una luz de punto. Su cono sigue recortando la LUZ en el
+    // shader; lo unico que cambia es que el shadow map cubre mas de lo que hace
+    // falta, a cambio de que ninguna cara pase de 90 grados.
+    inline bool spotNecesitaCubemap(const glm::vec4& params)
+    {
+        return spotShadowFov(params) > glm::radians(90.0f);
+    }
+
     inline bool spotShadowMatrix(const glm::vec4& position, const glm::vec4& direction,
                                  const glm::vec4& params, bool flipY, glm::mat4& out)
     {
@@ -109,13 +144,7 @@ namespace DonTopo
         const glm::vec3 dir = d / l;
         const glm::vec3 pos(position);
 
-        // params.z = COSENO del angulo exterior del cono, o sea el semiangulo.
-        // El FOV del mapa es el angulo completo (el doble) y ademas con margen:
-        // sin el, el borde del cono cae justo en el borde del mapa y los taps
-        // del PCF se salen por un lado.
-        const float cosOuter = glm::clamp(params.z, -0.9999f, 0.9999f);
-        const float fov      = glm::clamp(2.0f * std::acos(cosOuter) * 1.15f,
-                                          glm::radians(5.0f), glm::radians(175.0f));
+        const float fov = spotShadowFov(params);
 
         // params.x = alcance de la luz. Mas alla no ilumina, asi que tampoco hay
         // sombra suya que grabar, y acotar el far ahi es lo que le da precision
@@ -135,6 +164,55 @@ namespace DonTopo
         if (flipY) proj[1][1] *= -1.0f;
 
         out = proj * glm::lookAt(pos, pos + dir, up);
+        return true;
+    }
+
+    // Las SEIS matrices del cubemap de sombras de una luz de PUNTO: una por
+    // cara, proyeccion en perspectiva de 90 grados desde su posicion. Es lo que
+    // hace que su sombra diverja en TODAS las direcciones, que es lo que hace una
+    // bombilla; las cascadas solo sabian proyectar en paralelo a lo largo de una.
+    //
+    // Orden de cara: 0 = +X, 1 = -X, 2 = +Y, 3 = -Y, 4 = +Z, 5 = -Z. El shader
+    // elige cara por el eje MAYOR de (fragmento - luz) y luego proyecta con
+    // ESTA MISMA matriz, no con una formula suya. Es deliberado: derivar la UV a
+    // mano obliga a que dos convenciones de cubemap coincidan, y en este motor
+    // eso ya salio mal una vez. Asi lo unico que hay que acertar es CUAL de las
+    // seis, y equivocarse se ve como un corte duro, no como basura sutil.
+    //
+    // Por eso mismo el vector "up" de cada cara da igual mientras sea el mismo
+    // aqui y al grabar: solo gira la cara sobre si misma, y la matriz que
+    // deshace ese giro es la que se usa para muestrear.
+    //
+    // 90 grados exactos y aspecto 1: es lo unico que hace que las seis caras
+    // cubran la esfera entera sin hueco ni solape.
+    //
+    // flipY: lo mismo que en spotShadowMatrix — Vulkan true, D3D12 false.
+    // false = la luz no tiene alcance utilizable.
+    inline bool pointShadowMatrices(const glm::vec4& position, const glm::vec4& params,
+                                    bool flipY, glm::mat4* out /*[6]*/)
+    {
+        const glm::vec3 pos(position);
+        const float     lejos = (std::max)(params.x, SPOT_SHADOW_NEAR * 2.0f);
+        if (!std::isfinite(lejos) || lejos <= SPOT_SHADOW_NEAR) return false;
+
+        glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(90.0f), 1.0f,
+                                               SPOT_SHADOW_NEAR, lejos);
+        if (flipY) proj[1][1] *= -1.0f;
+
+        static const glm::vec3 kDir[6] = {
+            { 1.0f,  0.0f,  0.0f}, {-1.0f,  0.0f,  0.0f},
+            { 0.0f,  1.0f,  0.0f}, { 0.0f, -1.0f,  0.0f},
+            { 0.0f,  0.0f,  1.0f}, { 0.0f,  0.0f, -1.0f},
+        };
+        // Para +Y y -Y el up no puede ser (0,1,0) o lookAt degenera.
+        static const glm::vec3 kUp[6] = {
+            {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+            {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f},
+            {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+        };
+
+        for (int f = 0; f < 6; f++)
+            out[f] = proj * glm::lookAt(pos, pos + kDir[f], kUp[f]);
         return true;
     }
 
@@ -188,7 +266,7 @@ namespace DonTopo
     {
         glm::mat4   view;
         glm::mat4   proj;
-        glm::mat4   lightSpaceMatrix[SHADOW_CASCADES];
+        glm::mat4   lightSpaceMatrix[SHADOW_MATRICES];
         // Distancia (view space, positiva) hasta la que llega cada cascada. La
         // última es el alcance total de las sombras: más allá, el fragment
         // shader devuelve "sin sombra" en vez de muestrear.

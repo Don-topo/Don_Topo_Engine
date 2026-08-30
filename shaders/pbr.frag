@@ -11,6 +11,10 @@ layout(location = 0) out vec4 outColor;
 
 #define MAX_LIGHTS 16
 #define SHADOW_CASCADES 4
+// Huecos de matriz de sombra: 4 cascadas de una direccional o 6 caras del
+// cubemap de una de punto. Nunca coexisten. Mismo valor que
+// SHADOW_MATRICES en UniformBufferObject.h.
+#define SHADOW_MATRICES 6
 // Mismo layout que DonTopo::Light. direction.w = tipo (0 point, 1 spot,
 // 2 directional, 3 area); params = (range, cos interior, cos exterior, ancho).
 struct Light { vec4 position; vec4 color; vec4 direction; vec4 params; };
@@ -18,7 +22,7 @@ struct Light { vec4 position; vec4 color; vec4 direction; vec4 params; };
 layout(set = 0, binding = 0) uniform UBO {
     mat4  view;
     mat4  proj;
-    mat4  lightSpaceMatrix[SHADOW_CASCADES];
+    mat4  lightSpaceMatrix[SHADOW_MATRICES];
     vec4  cascadeSplits;    // distancia (view space, positiva) hasta la que llega cada cascada
     Light lights[MAX_LIGHTS];
     vec4  viewPos;
@@ -151,9 +155,12 @@ float computeShadow(vec3 worldPos, vec3 normalGeo)
     // escala con la resolucion, que es lo que hace util el ajuste.
     vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0).xy);
     float shadow = 0.0;
-    // PCF 3x3 dentro de la capa que toque. Al indexar por capa y no por region
-    // de un atlas, los taps del borde no pueden caer en la capa vecina: el
-    // sampler los recorta contra el borde de SU capa.
+    // PCF 3x3 dentro de la capa que toque. Se probo 5x5 para el borde de una
+    // sombra en perspectiva y se ve PEOR: con un cubemap los taps de mas se
+    // recortan contra el borde de la cara y ensanchan esa banda dura.
+    // Al indexar por capa y no por region de un atlas, los taps del borde no
+    // pueden caer en la capa vecina: el sampler los recorta contra el borde de
+    // SU capa.
     for (int x = -1; x <= 1; x++)
         for (int y = -1; y <= 1; y++)
             shadow += texture(shadowMap, vec4(proj.xy + vec2(x, y) * texelSize, layer, proj.z));

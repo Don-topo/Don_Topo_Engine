@@ -19,12 +19,16 @@ layout(location = 3) in vec3 inNormal;
 // miembro que se anadiera detras leeria de un offset distinto al que escribe
 // el UBO de C++.
 #define SHADOW_CASCADES 4
+// Huecos de matriz de sombra: 4 cascadas de una direccional o 6 caras del
+// cubemap de una de punto. Nunca coexisten. Mismo valor que
+// SHADOW_MATRICES en UniformBufferObject.h.
+#define SHADOW_MATRICES 6
 
 layout(set = 0, binding = 0) uniform UBO
 {
     mat4 view;
     mat4 proj;
-    mat4 lightSpaceMatrix[SHADOW_CASCADES];
+    mat4 lightSpaceMatrix[SHADOW_MATRICES];
 } ubo;
 
 // Mismo layout que el bloque de triangle.vert/pbr.frag: mat4 + 2 float + vec2.

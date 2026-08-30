@@ -88,11 +88,14 @@ struct ShaderLight {
 struct SceneUbo {
     glm::mat4   view;                    // c0
     glm::mat4   proj;                    // c4
-    glm::mat4   lightSpaceMatrix[4];     // c8
-    glm::vec4   cascadeSplits;           // c24
-    ShaderLight lights[16];              // c25
-    glm::vec4   viewPos;                 // c89
-    int         numLights;               // c90
+    // SEIS y no cuatro: es el maximo entre las 4 cascadas de una direccional y
+    // las 6 caras del cubemap de una de punto, que nunca coexisten. Al crecer
+    // desplaza 128 bytes TODO lo que va detras, y de ahi los offsets de abajo.
+    glm::mat4   lightSpaceMatrix[6];     // c8
+    glm::vec4   cascadeSplits;           // c32
+    ShaderLight lights[16];              // c33
+    glm::vec4   viewPos;                 // c97
+    int         numLights;               // c98
     // En el hueco de padding que ya había detrás de numLights, igual que en
     // GLSL: ningún offset anterior se mueve.
     float       ambientIntensity;
@@ -101,11 +104,11 @@ struct SceneUbo {
 static_assert(offsetof(SceneUbo, view) == 0, "UBO: view debe ir en c0");
 static_assert(offsetof(SceneUbo, proj) == 64, "UBO: proj debe ir en c4");
 static_assert(offsetof(SceneUbo, lightSpaceMatrix) == 128, "UBO: lightSpaceMatrix debe ir en c8");
-static_assert(offsetof(SceneUbo, cascadeSplits) == 384, "UBO: cascadeSplits debe ir en c24");
-static_assert(offsetof(SceneUbo, lights) == 400, "UBO: lights debe ir en c25");
-static_assert(offsetof(SceneUbo, viewPos) == 1424, "UBO: viewPos debe ir en c89");
-static_assert(offsetof(SceneUbo, numLights) == 1440, "UBO: numLights debe ir en c90");
-static_assert(offsetof(SceneUbo, ambientIntensity) == 1444,
+static_assert(offsetof(SceneUbo, cascadeSplits) == 512, "UBO: cascadeSplits debe ir en c32");
+static_assert(offsetof(SceneUbo, lights) == 528, "UBO: lights debe ir en c33");
+static_assert(offsetof(SceneUbo, viewPos) == 1552, "UBO: viewPos debe ir en c97");
+static_assert(offsetof(SceneUbo, numLights) == 1568, "UBO: numLights debe ir en c98");
+static_assert(offsetof(SceneUbo, ambientIntensity) == 1572,
               "UBO: ambientIntensity va pegado a numLights");
 
 // Push constants de triangle.vert/pbr.frag: mat4 + 2 float + vec2 = 80 bytes.
@@ -231,6 +234,11 @@ struct FpPush {
 // (Renderer.cpp:1016-1025): sin ellos las cascadas cortan a otras distancias y
 // las sombras no coinciden entre backends.
 constexpr int   kShadowCascades    = 4;
+// Capas del shadow map. Es el MAXIMO entre las 4 cascadas de una direccional y
+// las 6 caras del cubemap de una de punto, que nunca coexisten porque solo hay
+// una luz key y solo tiene un tipo. Mismo valor que SHADOW_MATRICES en
+// UniformBufferObject.h y que el array lightSpaceMatrix del bloque UBO.
+constexpr int   kShadowLayers      = 6;
 // Lado del shadow map POR DEFECTO. El que se usa vive en RendererState
 // (shadowResolution) y lo aplica applyPendingShadowSize.
 constexpr UINT  kShadowMapSizeDefault = 2048;
@@ -1237,7 +1245,7 @@ struct D3D12Renderer::Impl {
     void applyPendingShadowSize();
     UINT                         dsvSize = 0;
 
-    glm::mat4 cascadeMatrices[kShadowCascades]{};
+    glm::mat4 cascadeMatrices[kShadowLayers]{};
     glm::vec4 cascadeSplits{0.0f};
     // Cuantas capas del mapa tienen matriz valida en ESTE frame: 4 con las
     // cascadas de una direccional, 1 con la cara en perspectiva de un foco, 0
@@ -2515,7 +2523,7 @@ void D3D12Renderer::Impl::createShadowMapSrv(UINT srvIndex)
     srvDesc.ViewDimension            = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
     srvDesc.Shader4ComponentMapping  = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.Texture2DArray.MipLevels = 1;
-    srvDesc.Texture2DArray.ArraySize = kShadowCascades;
+    srvDesc.Texture2DArray.ArraySize = kShadowLayers;
 
     D3D12_CPU_DESCRIPTOR_HANDLE handle = srvHeap->GetCPUDescriptorHandleForHeapStart();
     handle.ptr += static_cast<SIZE_T>(srvIndex) * srvSize;
@@ -2970,7 +2978,9 @@ void D3D12Renderer::Impl::updateSceneUbo()
     // NO se invierte.
 
     ubo.cascadeSplits = cascadeSplits;
-    for (int i = 0; i < kShadowCascades; ++i)
+    // Las SEIS, no cuatro: con una luz de punto las caras 4 y 5 tambien llevan
+    // matriz. Copiar solo 4 dejaria dos caras del cubemap con la identidad.
+    for (int i = 0; i < kShadowLayers; ++i)
         ubo.lightSpaceMatrix[i] = cascadeMatrices[i];
 
     if (!sceneLights.empty()) {
@@ -2980,6 +2990,15 @@ void D3D12Renderer::Impl::updateSceneUbo()
         const size_t count = (std::min)(sceneLights.size(), static_cast<size_t>(16));
         std::memcpy(ubo.lights, sceneLights.data(), count * sizeof(ShaderLight));
         ubo.numLights = static_cast<int>(count);
+
+        // DESPUES del memcpy, que si no lo pisa. position.w de la luz key:
+        // 1 = su sombra se grabo como CUBEMAP. El shader lo lee para elegir
+        // camino en vez de deducirlo del tipo, porque un foco muy abierto
+        // tambien acaba en el cubemap. Sale de lo que el pase HIZO —cuantas
+        // capas dejo validas— y no de recalcular el criterio aqui: dos copias
+        // de un criterio es lo que rompio H65. Ese hueco estaba libre, ningun
+        // shader leia position.w.
+        ubo.lights[0].position[3] = (activeLayers == kShadowLayers) ? 1.0f : 0.0f;
 
         ubo.viewPos          = glm::vec4(cameraPos, 1.0f);
         ubo.ambientIntensity = state->ambientEnabled() ? state->ambientIntensity() : 0.0f;
@@ -2995,6 +3014,7 @@ void D3D12Renderer::Impl::updateSceneUbo()
     ubo.lights[0].direction[1] = lightDirection.y;
     ubo.lights[0].direction[2] = lightDirection.z;
     ubo.lights[0].direction[3] = 2.0f;  // directional
+    ubo.lights[0].position[3]  = 0.0f;  // direccional: cascadas, nunca cubemap
     ubo.lights[0].color[0]     = 1.0f;
     ubo.lights[0].color[1]     = 0.98f;
     ubo.lights[0].color[2]     = 0.94f;
@@ -4589,7 +4609,7 @@ void D3D12Renderer::Impl::applyPendingShadowSize()
     shadowDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     shadowDesc.Width            = shadowMapSize;
     shadowDesc.Height           = shadowMapSize;
-    shadowDesc.DepthOrArraySize = kShadowCascades;
+    shadowDesc.DepthOrArraySize = kShadowLayers;
     shadowDesc.MipLevels        = 1;
     shadowDesc.Format           = DXGI_FORMAT_R32_TYPELESS;
     shadowDesc.SampleDesc.Count = 1;
@@ -4609,7 +4629,7 @@ void D3D12Renderer::Impl::applyPendingShadowSize()
 
     // El heap de DSV no se rehace —sigue teniendo kShadowCascades huecos— pero
     // las VISTAS cuelgan del recurso viejo, asi que hay que reescribirlas.
-    for (int cascade = 0; cascade < kShadowCascades; ++cascade) {
+    for (int cascade = 0; cascade < kShadowLayers; ++cascade) {
         D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
         dsvDesc.Format                         = DXGI_FORMAT_D32_FLOAT;
         dsvDesc.ViewDimension                  = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
@@ -7598,7 +7618,7 @@ void D3D12Renderer::Impl::createShadowResources()
     shadowDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     shadowDesc.Width            = shadowMapSize;
     shadowDesc.Height           = shadowMapSize;
-    shadowDesc.DepthOrArraySize = kShadowCascades;
+    shadowDesc.DepthOrArraySize = kShadowLayers;
     shadowDesc.MipLevels        = 1;
     // TYPELESS porque el mismo recurso se ve de dos formas: como profundidad
     // al grabarlo (D32_FLOAT) y como textura al muestrearlo (R32_FLOAT).
@@ -7619,14 +7639,14 @@ void D3D12Renderer::Impl::createShadowResources()
                   "D3D12MA::Allocator::CreateResource(shadow map)");
 
     D3D12_DESCRIPTOR_HEAP_DESC shadowDsvHeapDesc{};
-    shadowDsvHeapDesc.NumDescriptors = kShadowCascades;
+    shadowDsvHeapDesc.NumDescriptors = kShadowLayers;
     shadowDsvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
     throwIfFailed(device->CreateDescriptorHeap(&shadowDsvHeapDesc, IID_PPV_ARGS(&shadowDsvHeap)),
                   "ID3D12Device::CreateDescriptorHeap(shadow DSV)");
     dsvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
 
     // Un DSV por capa: cada cascada se graba por separado.
-    for (int cascade = 0; cascade < kShadowCascades; ++cascade) {
+    for (int cascade = 0; cascade < kShadowLayers; ++cascade) {
         D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
         dsvDesc.Format                         = DXGI_FORMAT_D32_FLOAT;
         dsvDesc.ViewDimension                  = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
@@ -7748,6 +7768,33 @@ void D3D12Renderer::Impl::computeCascades()
         matrix = glm::mat4(1.0f);
     cascadeSplits = glm::vec4(0.0f);
     activeLayers  = 0;
+
+    // PUNTO: cubemap de seis caras. Tampoco usa el frustum de la camara, asi
+    // que sale por aqui igual que el foco.
+    // Un FOCO demasiado abierto entra tambien por aqui, mismo criterio que
+    // Vulkan: por encima de 90 grados de cono una sola cara reparte los texeles
+    // sobre demasiado mundo, y empeora con tan(FOV/2).
+    const int tipoKey = sceneLights.empty()
+                            ? -1
+                            : static_cast<int>(sceneLights[0].direction[3] + 0.5f);
+    const glm::vec4 paramsKey =
+        sceneLights.empty()
+            ? glm::vec4(0.0f)
+            : glm::vec4(sceneLights[0].params[0], sceneLights[0].params[1],
+                        sceneLights[0].params[2], sceneLights[0].params[3]);
+    if (tipoKey == static_cast<int>(LightType::Point) ||
+        (tipoKey == static_cast<int>(LightType::Spot) && spotNecesitaCubemap(paramsKey))) {
+        const ShaderLight& key = sceneLights[0];
+        // flipY = false: aqui la convencion de Y la absorbe el viewport de
+        // altura negativa del pase de sombras, igual que con las cascadas.
+        if (pointShadowMatrices(
+                glm::vec4(key.position[0], key.position[1], key.position[2], key.position[3]),
+                glm::vec4(key.params[0], key.params[1], key.params[2], key.params[3]),
+                /*flipY=*/false, cascadeMatrices)) {
+            activeLayers = kShadowLayers;
+        }
+        return;
+    }
 
     // FOCO: una sola cara en perspectiva, en la capa 0. No usa el frustum de la
     // camara para nada —el volumen lo fija el cono de la luz—, asi que sale por
@@ -8093,7 +8140,7 @@ void D3D12Renderer::Impl::recordShadowPasses()
     commandList->RSSetScissorRects(1, &shadowScissor);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    for (UINT cascade = 0; cascade < kShadowCascades; ++cascade) {
+    for (UINT cascade = 0; cascade < kShadowLayers; ++cascade) {
         D3D12_CPU_DESCRIPTOR_HANDLE dsv = shadowDsvHeap->GetCPUDescriptorHandleForHeapStart();
         dsv.ptr += static_cast<SIZE_T>(cascade) * dsvSize;
 

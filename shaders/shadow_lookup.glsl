@@ -55,12 +55,43 @@ int dtSelectCascade(float viewDepth)
 //    es lo que hace que su sombra DIVERJA: crece al alejarse de la luz, en vez
 //    de mantener el tamano como hacia la aproximacion en cascada.
 //
-// Una luz de PUNTO todavia cae en el camino de cascadas: no tiene direccion
-// propia, se le aproxima una y su sombra sigue sin diverger. Eso es P21 etapa 2
-// (cubemap de 6 caras) en docs/renderer-audit.md.
-// normalMundo = normal GEOMETRICA de la superficie, para el bias del foco. Un
-// punto que no esta sobre ninguna superficie —la marcha de la niebla— pasa
-// vec3(0.0) y se queda solo con el empuje hacia la luz.
+//  - Punto, y foco de mas de 90 grados: CUBEMAP de seis caras, una por semieje,
+//    en las capas 0..5. Cada una es una perspectiva de 90 grados desde la luz,
+//    asi que la sombra diverge en todas las direcciones y ninguna cara reparte
+//    sus texeles sobre mas de un octante. Es el unico camino que usa mas de
+//    cuatro huecos de lightSpaceMatrix, y por eso ese array tiene
+//    SHADOW_MATRICES = 6.
+
+// Bias en ESPACIO DE MUNDO para los dos caminos en PERSPECTIVA (foco y punto).
+// El del rasterizador esta afinado para la ortografica de las cascadas, donde la
+// profundidad NDC es lineal en la distancia real; en perspectiva no lo es, y
+// corregirlo por ahi obligaria a un par de PSO extra en CADA backend porque el
+// bias es estado de pipeline en los dos.
+//
+// Dos terminos, que atacan cosas distintas:
+//
+//  - NORMAL-OFFSET proporcional a la distancia a la luz. En perspectiva la
+//    huella de un texel CRECE con esa distancia, y el error de cuantizacion con
+//    ella; un offset fijo que vale cerca de la bombilla se queda corto lejos.
+//    Separarse por la normal es lo que saca a la superficie de su propia sombra,
+//    porque el error esta en el plano de la superficie.
+//
+//  - Empuje HACIA LA LUZ, pequeno y constante, para la superficie vista casi de
+//    canto desde la luz, donde la normal apenas separa en profundidad.
+//
+// normalMundo == vec3(0) -> punto en el AIRE (la marcha de la niebla): no puede
+// auto-sombrearse, asi que solo se aplica el empuje.
+vec3 dtBiasHaciaLaLuz(vec3 worldPos, vec3 normalMundo)
+{
+    vec3  aLaLuz  = ubo.lights[0].position.xyz - worldPos;
+    float distLuz = length(aLaLuz);
+    if (distLuz <= 1e-5) return worldPos;
+    return worldPos + (aLaLuz / distLuz) * 0.02 + normalMundo * (distLuz * 0.004);
+}
+
+// normalMundo = normal GEOMETRICA de la superficie, para el bias de los caminos
+// en perspectiva. Un punto que no esta sobre ninguna superficie —la marcha de la
+// niebla— pasa vec3(0.0).
 bool dtShadowCoord(vec3 worldPos, vec3 normalMundo, out vec3 uvz, out float layer)
 {
     uvz   = vec3(0.0);
@@ -68,42 +99,50 @@ bool dtShadowCoord(vec3 worldPos, vec3 normalMundo, out vec3 uvz, out float laye
 
     int tipo = dtKeyLightType();
 
+    // position.w de la luz key = 1 cuando su sombra se grabo como CUBEMAP. Lo
+    // pone el renderer a partir de cuantas capas dejo validas el pase, y NO se
+    // deduce aqui del tipo: una luz de punto siempre va por cubemap, pero un
+    // FOCO muy abierto tambien —por encima de 90 grados de cono una sola cara
+    // reparte los texeles sobre tanto mundo que el borde sale escalonado, y
+    // empeora con tan(FOV/2)—. Recalcular ese umbral aqui seria una segunda
+    // copia del criterio, que es justo lo que rompio H65.
+    if (ubo.lights[0].position.w > 0.5)   // cubemap de seis caras
+    {
+        worldPos = dtBiasHaciaLaLuz(worldPos, normalMundo);
+
+        // La cara la decide el eje MAYOR de (fragmento - luz): es la que mira
+        // ese semiespacio, y su frustum de 90 grados contiene el punto. Solo se
+        // elige CUAL; la UV y la profundidad salen de la matriz de esa cara, la
+        // misma con la que se grabo. Derivarlas a mano obligaria a que dos
+        // convenciones de cubemap coincidieran, y aqui eso ya salio mal.
+        vec3  L = worldPos - ubo.lights[0].position.xyz;
+        vec3  a = abs(L);
+        int   cara;
+        if (a.x >= a.y && a.x >= a.z)      cara = L.x > 0.0 ? 0 : 1;
+        else if (a.y >= a.z)               cara = L.y > 0.0 ? 2 : 3;
+        else                               cara = L.z > 0.0 ? 4 : 5;
+
+        vec4 ls = ubo.lightSpaceMatrix[cara] * vec4(worldPos, 1.0);
+        if (ls.w <= 0.0) return false;
+
+        vec3 p = ls.xyz / ls.w;
+        p.xy   = p.xy * 0.5 + 0.5;
+        // Fuera del alcance de la luz no hay nada grabado: mas alla del far de
+        // la proyeccion tampoco ilumina, asi que "sin sombra" es correcto.
+        if (p.z < 0.0 || p.z > 1.0) return false;
+
+        uvz   = p;
+        layer = float(cara);
+        return true;
+    }
+
     if (tipo == 1)   // foco
     {
-        // Bias en ESPACIO DE MUNDO, y no el bias de profundidad del
-        // rasterizador.
-        //
-        // El del rasterizador esta afinado para la ortografica de las cascadas,
-        // donde la profundidad NDC es lineal en la distancia real: un offset
-        // fijo de buffer vale siempre los mismos metros. En perspectiva no, asi
-        // que lejos de la bombilla se queda corto y la superficie se
-        // auto-sombrea. Y corregirlo por ahi obligaria a un par de PSO extra en
-        // CADA backend, porque el bias es estado de pipeline en los dos.
-        //
-        // Dos terminos, porque atacan cosas distintas:
-        //
-        //  - NORMAL-OFFSET, proporcional a la distancia a la luz. En
-        //    perspectiva la huella de un texel del mapa CRECE con esa distancia,
-        //    y el error de cuantizacion con ella; un offset fijo que vale cerca
-        //    de la bombilla se queda corto lejos. Separarse a lo largo de la
-        //    normal es lo que de verdad saca a la superficie de su propia
-        //    sombra, porque el error esta en el plano de la superficie.
-        //
-        //  - Empuje HACIA LA LUZ, pequeno y constante. Es el que cubre el caso
-        //    de una superficie vista casi de canto desde la luz, donde la normal
-        //    apenas separa en profundidad.
-        //
         // Se nota al MOVERSE mas que quieto porque el TAA acumula historia
         // mientras la camara esta parada y la rechaza en cuanto se mueve: sin
         // bias suficiente, el patron de acne cambia con el jitter subpixel y el
         // TAA ya no lo puede promediar.
-        vec3  aLaLuz  = ubo.lights[0].position.xyz - worldPos;
-        float distLuz = length(aLaLuz);
-        if (distLuz > 1e-5)
-        {
-            worldPos += (aLaLuz / distLuz) * 0.02;
-            worldPos += normalMundo * (distLuz * 0.004);
-        }
+        worldPos = dtBiasHaciaLaLuz(worldPos, normalMundo);
 
         vec4 ls = ubo.lightSpaceMatrix[0] * vec4(worldPos, 1.0);
         // Detras de la luz: w <= 0 hace que la division devuelva el punto

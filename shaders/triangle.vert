@@ -16,12 +16,16 @@ layout(location = 5) out vec3 fragBitangent;
 // el fragment shader ya reconstruye la que toca desde fragWorldPos.
 
 #define SHADOW_CASCADES 4
+// Huecos de matriz de sombra: 4 cascadas de una direccional o 6 caras del
+// cubemap de una de punto. Nunca coexisten. Mismo valor que
+// SHADOW_MATRICES en UniformBufferObject.h.
+#define SHADOW_MATRICES 6
 
 layout(set = 0, binding = 0) uniform UBO
 {
     mat4 view;
     mat4 proj;
-    mat4 lightSpaceMatrix[SHADOW_CASCADES];
+    mat4 lightSpaceMatrix[SHADOW_MATRICES];
 } ubo;
 
 // Transforms por instancia, uno por frame-in-flight. Los objetos estaticos que

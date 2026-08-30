@@ -61,7 +61,7 @@ void ShadowPass::createSizedResources(const Context& ctx)
     imageInfo.format        = VK_FORMAT_D32_SFLOAT;
     imageInfo.extent        = { m_size, m_size, 1 };
     imageInfo.mipLevels     = 1;
-    imageInfo.arrayLayers   = SHADOW_CASCADES;
+    imageInfo.arrayLayers   = SHADOW_MATRICES;
     imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -92,14 +92,14 @@ void ShadowPass::createSizedResources(const Context& ctx)
     viewInfo.viewType                       = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     viewInfo.format                         = VK_FORMAT_D32_SFLOAT;
     viewInfo.subresourceRange.aspectMask    = VK_IMAGE_ASPECT_DEPTH_BIT;
-    viewInfo.subresourceRange.layerCount    = SHADOW_CASCADES;
+    viewInfo.subresourceRange.layerCount    = SHADOW_MATRICES;
     viewInfo.subresourceRange.levelCount    = 1;
     if(vkCreateImageView(ctx.gpu.device(), &viewInfo, nullptr, &m_view) != VK_SUCCESS)
     {
         throw std::runtime_error("failed to create shadow image view!");
     }
 
-    for (uint32_t c = 0; c < SHADOW_CASCADES; c++)
+    for (uint32_t c = 0; c < SHADOW_MATRICES; c++)
     {
         VkImageViewCreateInfo layerInfo = viewInfo;
         layerInfo.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
@@ -335,7 +335,7 @@ void ShadowPass::createResources(const Context& ctx)
 // van aparte: el resize rehace los primeros sin tocar el segundo.
 void ShadowPass::createFramebuffers(const Context& ctx)
 {
-    for (uint32_t c = 0; c < SHADOW_CASCADES; c++)
+    for (uint32_t c = 0; c < SHADOW_MATRICES; c++)
     {
         VkFramebufferCreateInfo fbInfo{};
         fbInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -356,7 +356,7 @@ void ShadowPass::destroySizedResources(const Context& ctx)
 {
     vkDestroyImageView(ctx.gpu.device(), m_view, nullptr);
     m_view = VK_NULL_HANDLE;
-    for (int c = 0; c < SHADOW_CASCADES; c++)
+    for (int c = 0; c < SHADOW_MATRICES; c++)
     {
         vkDestroyImageView(ctx.gpu.device(), m_layerViews[c], nullptr);
         vkDestroyFramebuffer(ctx.gpu.device(), m_framebuffers[c], nullptr);
@@ -397,10 +397,32 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
                                  float maxDistance, float lambda,
                                  const glm::vec3& sceneCenter)
 {
-    for (int i = 0; i < SHADOW_CASCADES; i++) m_cascadeMatrices[i] = glm::mat4(1.0f);
+    for (int i = 0; i < SHADOW_MATRICES; i++) m_cascadeMatrices[i] = glm::mat4(1.0f);
     m_cascadeSplits = glm::vec4(0.0f);
     m_activeLayers  = 0;
     if (lights.empty()) return;
+
+    // PUNTO: cubemap de seis caras. Tampoco usa el frustum de la camara —el
+    // volumen lo fija el alcance de la luz—, asi que sale por aqui igual que el
+    // foco. Los cortes se quedan a 0: la rama de punto de shadow_lookup.glsl no
+    // los mira.
+    // Un FOCO demasiado abierto entra tambien por aqui: por encima de 90 grados
+    // de cono, una sola cara reparte los mismos texeles sobre tanto mundo que el
+    // borde de la sombra sale escalonado, y empeora con cada grado porque va con
+    // tan(FOV/2). Seis caras de 90 son estrictamente mejores.
+    const int tipoKey = static_cast<int>(lights[0].direction.w + 0.5f);
+    if (tipoKey == static_cast<int>(LightType::Point) ||
+        (tipoKey == static_cast<int>(LightType::Spot) && spotNecesitaCubemap(lights[0].params)))
+    {
+        // flipY = true, igual que el foco y que la ortografica de las cascadas:
+        // en Vulkan la convencion de Y la absorbe la matriz, no el viewport.
+        if (pointShadowMatrices(lights[0].position, lights[0].params,
+                                /*flipY=*/true, m_cascadeMatrices))
+        {
+            m_activeLayers = SHADOW_MATRICES;
+        }
+        return;
+    }
 
     // FOCO: una sola cara en perspectiva, en la capa 0. No usa el frustum de la
     // camara para nada —el volumen lo fija el cono de la luz—, asi que sale por

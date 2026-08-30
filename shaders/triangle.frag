@@ -11,6 +11,10 @@ layout(location = 0) out vec4 outColor;
 
 #define MAX_LIGHTS 16
 #define SHADOW_CASCADES 4
+// Huecos de matriz de sombra: 4 cascadas de una direccional o 6 caras del
+// cubemap de una de punto. Nunca coexisten. Mismo valor que
+// SHADOW_MATRICES en UniformBufferObject.h.
+#define SHADOW_MATRICES 6
 // Mismo layout que DonTopo::Light. direction.w = tipo (0 point, 1 spot,
 // 2 directional, 3 area); params = (range, cos interior, cos exterior, ancho).
 struct Light { vec4 position; vec4 color; vec4 direction; vec4 params; };
@@ -18,7 +22,7 @@ struct Light { vec4 position; vec4 color; vec4 direction; vec4 params; };
 layout(set = 0, binding = 0) uniform UBO {
     mat4  view;
     mat4  proj;
-    mat4  lightSpaceMatrix[SHADOW_CASCADES];
+    mat4  lightSpaceMatrix[SHADOW_MATRICES];
     vec4  cascadeSplits;    // distancia (view space, positiva) hasta la que llega cada cascada
     Light lights[MAX_LIGHTS];
     vec4  viewPos;

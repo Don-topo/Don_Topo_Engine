@@ -3247,11 +3247,22 @@ namespace DonTopo {
         // recalcularlas es lo que garantiza que el fragment shader muestree con
         // exactamente las mismas matrices con las que se culeó y se grabó el
         // pass de sombras.
-        for (int i = 0; i < SHADOW_CASCADES; i++)
+        // Las SEIS, no cuatro: con una luz de punto las caras 4 y 5 tambien
+        // llevan matriz. Copiar solo 4 dejaria dos caras con la identidad.
+        for (int i = 0; i < SHADOW_MATRICES; i++)
         {
             ubo.lightSpaceMatrix[i] = m_shadowPass.cascadeMatrix(i);
         }
         ubo.cascadeSplits = m_shadowPass.cascadeSplits();
+        // position.w de la luz key: 1 = su sombra se grabo como CUBEMAP.
+        // El shader lo lee para elegir camino en vez de deducirlo del tipo,
+        // porque un foco muy abierto tambien acaba en el cubemap. Sale de lo
+        // que el pase HIZO —cuantas capas dejo validas—, no de recalcular el
+        // criterio aqui: dos copias de un criterio es lo que rompio H65.
+        // Ese hueco estaba libre; ningun shader leia position.w.
+        if (ubo.numLights > 0)
+            ubo.lights[0].position.w =
+                (m_shadowPass.activeLayers() == SHADOW_MATRICES) ? 1.0f : 0.0f;
 
         memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));
         // El bake de una reflection probe parte de este mismo buffer (luces y
@@ -3481,11 +3492,13 @@ namespace DonTopo {
         // las dejan en DEPTH_STENCIL_READ_ONLY_OPTIMAL, que es el layout que
         // declaran los descriptor sets. Lo que se salta es la geometría, que
         // nadie va a muestrear (numLights = 0 apaga el shadow en el shader).
-        // Y con un FOCO solo tiene matriz la capa 0: su sombra es UNA cara en
-        // perspectiva, no cuatro cascadas. Las otras tres se abren igual —por lo
-        // del layout— pero dibujar en ellas seria grabar con la matriz identidad
-        // sobre capas que nadie muestrea.
-        for (uint32_t cascade = 0; cascade < SHADOW_CASCADES; cascade++)
+        // Cuantas capas se dibujan depende del TIPO de la luz key: 4 con las
+        // cascadas de una direccional, 1 con la cara en perspectiva de un foco,
+        // 6 con el cubemap de una de punto. Las que sobran se abren igual —el
+        // render pass es lo que las limpia y las deja en el layout que declaran
+        // los descriptor sets— pero dibujar en ellas seria grabar con la matriz
+        // identidad sobre capas que nadie muestrea.
+        for (uint32_t cascade = 0; cascade < SHADOW_MATRICES; cascade++)
         {
             const bool drawCasters = !m_lights.empty() && cascade < m_shadowPass.activeLayers();
 

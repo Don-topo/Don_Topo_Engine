@@ -3,11 +3,15 @@
 layout(location = 0) in vec3 inPos;
 
 #define SHADOW_CASCADES 4
+// Huecos de matriz de sombra: 4 cascadas de una direccional o 6 caras del
+// cubemap de una de punto. Nunca coexisten. Mismo valor que
+// SHADOW_MATRICES en UniformBufferObject.h.
+#define SHADOW_MATRICES 6
 
 layout(set = 0, binding = 0) uniform UBO {
     mat4 view;
     mat4 proj;
-    mat4 lightSpaceMatrix[SHADOW_CASCADES];
+    mat4 lightSpaceMatrix[SHADOW_MATRICES];
 } ubo;
 
 // Que capa del texture array se esta grabando. Rango propio del pipeline de
