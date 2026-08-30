@@ -278,11 +278,41 @@ namespace DonTopo {
         // original.
         createOffscreenImages();
 
+        // Las subidas van por LOTES, no una a una. Sin batch, el CmdScope de
+        // cada createBuffer/createImage hace endOneTimeCommands al salir, o sea
+        // enviar y ESPERAR a la GPU: medido en una escena de 1000 mallas, 10.970
+        // esperas que costaban 1.886 ms de los ~2.600 que tardaba todo esto. El
+        // 73 %.
+        //
+        // TransferBatch existe justo para eso y lo usaba solo la carga asincrona
+        // (addStaticMesh); este camino, el del arranque, se quedo fuera. La
+        // correccion se mantiene porque las barreras siguen ordenando dentro del
+        // command buffer igual que ordenaban entre submits: lo que desaparece es
+        // la espera, no la sincronizacion.
+        //
+        // Por lotes y no un batch unico para toda la escena porque el staging
+        // vive hasta que la fence senala (TransferBatch::addStaging): un solo
+        // batch mantendria vivas a la vez las copias intermedias de TODAS las
+        // texturas de la escena. El tamano de lote acota ese pico; subirlo
+        // ahorra esperas y cuesta memoria.
+        constexpr size_t kMallasPorLote = 32;
+
         m_objects.resize(meshes.size());
         for(size_t i = 0; i < meshes.size(); i++)
         {
-            buildRenderObject(meshes[i], m_objects[i]);
+            if (!m_pendingBatch)
+                m_pendingBatch = std::make_unique<TransferBatch>(m_gpu);
+
+            buildRenderObject(meshes[i], m_objects[i], m_pendingBatch.get());
+
+            if ((i + 1) % kMallasPorLote == 0)
+                flushUploadsAndWait();
         }
+        // El ultimo lote, que casi nunca sale redondo. Y ademas es lo que deja
+        // este camino SINCRONO como siempre fue: al volver de aqui todo esta
+        // subido y en su layout, que es lo que dan por hecho los
+        // createDescriptorSets de mas abajo y quien llame a initSceneResources.
+        flushUploadsAndWait();
 
         createUniformBuffers();
         createDescriptorPool();
