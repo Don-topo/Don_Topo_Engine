@@ -539,7 +539,12 @@ int main()
                 // propagados y de ahí salen posición y dirección. Por frame y no
                 // en un evento porque mover el GameObject de una luz tiene que
                 // moverla en el acto, igual que el transform de una malla.
-                if (d3dScene.collectLights(d3dLights, d3dLightRadii) > 0)
+                // El TOTAL, no el recortado: collectLights se queda con las
+                // primeras MAX_LIGHTS y descarta el resto en silencio. Sin
+                // guardarlo, el editor no puede avisar de lo que se pierde.
+                const size_t totalLuces = d3dScene.collectLights(d3dLights, d3dLightRadii);
+                d3d12.setSceneLightTotal(totalLuces);
+                if (totalLuces > 0)
                 {
                     d3d12.setLights(d3dLights);
                     d3d12.setLightRadii(d3dLightRadii);
@@ -1101,7 +1106,10 @@ int main()
             // Va por frame y no en un evento porque mover el GameObject de una
             // luz tiene que moverla en el acto, igual que el transform de una
             // malla.
-            if (scene.collectLights(frameLights, frameLightRadii) > 0)
+            // El TOTAL, no el recortado: ver el comentario del camino DX12.
+            const size_t totalLuces = scene.collectLights(frameLights, frameLightRadii);
+            renderer.setSceneLightTotal(totalLuces);
+            if (totalLuces > 0)
             {
                 renderer.setLights(frameLights);
                 renderer.setLightRadii(frameLightRadii);

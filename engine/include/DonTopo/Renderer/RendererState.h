@@ -1,6 +1,7 @@
 #pragma once
 #include <glm/glm.hpp>
 #include <cstdint>
+#include <cstddef>
 
 namespace DonTopo {
 
@@ -201,6 +202,19 @@ namespace DonTopo {
             PresentMode presentMode() const              { return m_presentMode; }
             void        setPresentModeFlag(PresentMode v) { m_presentMode = v; }
 
+            // Cuantas luces tiene la ESCENA, que no es lo mismo que cuantas
+            // iluminan. Scene::collectLights se queda con las primeras
+            // MAX_LIGHTS y descarta el resto EN SILENCIO —es un tope del bloque
+            // UBO, no un error de la escena—, asi que sin este numero no hay
+            // forma de saber que se esta perdiendo mas que contando a mano.
+            //
+            // Aqui y no en un virtual del backend porque no depende de la API:
+            // lo pone quien monta el frame, que es el unico que ve el total, y
+            // lo leen por igual el panel del editor y el menu de opciones de un
+            // juego exportado.
+            size_t sceneLightTotal() const        { return m_sceneLightTotal; }
+            void   setSceneLightTotal(size_t v)   { m_sceneLightTotal = v; }
+
             // ── Forward+ ─────────────────────────────────────────────────────
             // Culling de luces en GPU. Modos EXCLUYENTES. Off deja el frame
             // exactamente como antes de la feature: ni un dispatch, y pbr.frag
@@ -299,6 +313,7 @@ namespace DonTopo {
             int                             m_shadowResolution                  = 2048;
             float                           m_ssaaFactor                        = 2.0f;
             PresentMode                     m_presentMode                       = PresentMode::Vsync;
+            size_t                          m_sceneLightTotal                   = 0;
 
             FpMode                          m_fpMode                            = FpMode::Off;
             float                           m_fpLightRadius                     = 2000.0f;

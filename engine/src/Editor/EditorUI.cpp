@@ -1643,6 +1643,30 @@ void EditorUI::drawMenuBar()
                     saveProjectSettings();
                 }
 
+                // El recorte de luces, dicho. La escena puede tener las que
+                // quiera, pero solo las primeras MAX_LIGHTS llegan al shader y
+                // el resto se descartaba EN SILENCIO: la escena se veía peor
+                // iluminada sin que nada lo explicara.
+                //
+                // Va aquí, bajo Forward+, porque es justo la feature que
+                // promete escalar el número de luces y que este tope capa.
+                {
+                    const size_t total = m_renderer->sceneLightTotal();
+                    if (total > (size_t)MAX_LIGHTS)
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                                           "%zu luces en escena, solo %d iluminan.",
+                                           total, MAX_LIGHTS);
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip(
+                                "El bloque UBO tiene sitio para MAX_LIGHTS luces y se queda "
+                                "con\nlas primeras en orden de escena. Las demas ni iluminan "
+                                "ni\nproyectan sombra.\n\nSubir ese tope obliga a recompilar "
+                                "los shaders que declaran el\nbloque, asi que no es un ajuste "
+                                "de la UI.");
+                    }
+                }
+
                 if (m_renderer->forwardPlusMode() != FpMode::Off)
                 {
                     // El radio es lo que hace que el culling sirva de algo: con
