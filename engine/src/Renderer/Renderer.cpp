@@ -11,6 +11,7 @@
 #include "DonTopo/Renderer/Vertex.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include "DonTopo/Renderer/UniformBufferObject.h"
+#include "DonTopo/Renderer/SelectionOutline.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include <limits>
 #include <cmath>
@@ -1483,12 +1484,6 @@ namespace DonTopo {
         // Grosor del casco relativo al tamaño del objeto en mundo: con un valor
         // fijo, un objeto grande apenas mostraría borde y uno pequeño quedaría
         // engullido por él.
-        constexpr float kOutlineFactor = 0.009f;
-        auto maxWorldScale = [](const glm::mat4& m)
-        {
-            return glm::max(glm::length(glm::vec3(m[0])),
-                   glm::max(glm::length(glm::vec3(m[1])), glm::length(glm::vec3(m[2]))));
-        };
 
         if (m_outlineStaticIndex >= 0 && (size_t)m_outlineStaticIndex < m_objects.size())
         {
@@ -1514,7 +1509,7 @@ namespace DonTopo {
                 push.transform = obj.transform;
                 // flags.x = 0: el outline dibuja UNA instancia con su matriz
                 // aquí, no por el SSBO — ni siquiera lo lee outline.vert.
-                push.flags.y = glm::max(maxExtent * maxWorldScale(obj.transform), 1.0f) * kOutlineFactor;
+                push.flags.y = outlineThickness(maxExtent, obj.transform);
 
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     isWireframeMode() ? m_outlineWirePipeline : m_outlinePipeline);
@@ -1549,8 +1544,7 @@ namespace DonTopo {
                 {
                     PushData push;
                     push.transform = sobj.transform;
-                    push.flags.y = glm::max(sobj.restMaxExtent * maxWorldScale(sobj.transform), 1.0f)
-                                   * kOutlineFactor;
+                    push.flags.y = outlineThickness(sobj.restMaxExtent, sobj.transform);
 
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         isWireframeMode() ? m_skinnedOutlineWirePipeline : m_skinnedOutlinePipeline);
@@ -3244,23 +3238,6 @@ namespace DonTopo {
         // la identidad; a partir de ahí, cero trabajo.
         if (!v)
             m_ssaoPass.markClearPending();
-    }
-
-    // Secuencia de Halton en base b: la sucesión de baja discrepancia con la que
-    // el TAA reparte las muestras dentro del píxel. Cubre el área mucho más
-    // uniformemente que un aleatorio, que es lo que hace que el promedio temporal
-    // converja a un supersampling de verdad.
-    static float halton(uint32_t index, uint32_t base)
-    {
-        float result = 0.0f;
-        float f      = 1.0f;
-        while (index > 0)
-        {
-            f      /= (float)base;
-            result += f * (float)(index % base);
-            index  /= base;
-        }
-        return result;
     }
 
     void Renderer::updateUniformBuffer(uint32_t frameIndex)

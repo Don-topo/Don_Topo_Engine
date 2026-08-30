@@ -15,9 +15,11 @@
 #include "DonTopo/Renderer/MeshKey.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/PlaceholderTexture.h"
+#include "DonTopo/Renderer/SelectionOutline.h"
 #include "DonTopo/Renderer/Plane.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
+#include "DonTopo/Renderer/TaaJitter.h"
 #include "DonTopo/Renderer/UiLayer.h"
 #include "DonTopo/Renderer/UniformBufferObject.h"
 #include "DonTopo/Renderer/Vertex.h"
@@ -167,22 +169,6 @@ inline uint16_t floatToHalf(float value)
     const uint16_t mantissa =
         static_cast<uint16_t>((magnitude - 1.0f) * 1024.0f + 0.5f) & 0x03FFu;
     return static_cast<uint16_t>((negative ? 0x8000u : 0u) | (biased << 10) | mantissa);
-}
-
-// Secuencia de Halton en base b: la sucesión de baja discrepancia con la que el
-// TAA reparte las muestras dentro del píxel. Cubre el área mucho más
-// uniformemente que un aleatorio, que es lo que hace que el promedio temporal
-// converja a un supersampling de verdad.
-inline float halton(uint32_t index, uint32_t base)
-{
-    float result = 0.0f;
-    float f      = 1.0f;
-    while (index > 0) {
-        f      /= static_cast<float>(base);
-        result += f * static_cast<float>(index % base);
-        index  /= base;
-    }
-    return result;
 }
 
 // IBL. Mismos tamaños que el camino de Vulkan (Renderer.h): el prefiltrado
@@ -2968,19 +2954,12 @@ void D3D12Renderer::Impl::updateSceneUbo()
     taaJitteredProj = cameraProj();
 
     if (state->aaMode() == RendererState::AaMode::Taa) {
-        // Halton(2,3) desplazado a [-0.5, 0.5] píxeles: 16 posiciones antes de
-        // repetir, suficientes para que el promedio sea estable y pocas para
-        // que el ciclo no se note al parar la cámara.
-        const glm::vec2 jitter(
-            (halton(taaJitterIndex + 1, 2) - 0.5f) * state->taaJitterScale(),
-            (halton(taaJitterIndex + 1, 3) - 0.5f) * state->taaJitterScale());
-        taaJitterIndex = (taaJitterIndex + 1) % 16;
-
-        // En clip space el ancho completo es 2, de ahí el factor. Va sobre la
-        // columna de la Z para que el desplazamiento sea constante en pantalla
-        // a cualquier profundidad.
-        taaJitteredProj[2][0] += 2.0f * jitter.x / static_cast<float>(width);
-        taaJitteredProj[2][1] += 2.0f * jitter.y / static_cast<float>(height);
+        // Secuencia y aplicación en TaaJitter.h, compartidas con el camino
+        // Vulkan: estaban escritas dos veces y descuadrarlas no da error, solo
+        // hace converger el TAA a una imagen distinta según el backend.
+        const glm::vec2 jitter = taaJitterPixels(taaJitterIndex, state->taaJitterScale());
+        applyTaaJitter(taaJitteredProj, jitter,
+                       static_cast<float>(width), static_cast<float>(height));
     }
 
     SceneUbo ubo{};
@@ -8555,16 +8534,6 @@ void D3D12Renderer::Impl::recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv
         3, instanceAllocation->GetResource()->GetGPUVirtualAddress());
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    // Mismo criterio y mismo factor que Renderer::recordSelectionOutline en
-    // Vulkan: el 0.9% del lado mayor del objeto ya escalado a mundo.
-    constexpr float kOutlineFactor = 0.009f;
-    auto grosorContorno = [](float localExtent, const glm::mat4& m) {
-        const float escala = (glm::max)(
-            glm::length(glm::vec3(m[0])),
-            (glm::max)(glm::length(glm::vec3(m[1])), glm::length(glm::vec3(m[2]))));
-        return (glm::max)(localExtent * escala, 1.0f) * kOutlineFactor;
-    };
-
     auto drawOutline = [&](ID3D12PipelineState* pipeline, const glm::mat4& transform,
                            float localExtent,
                            const D3D12_VERTEX_BUFFER_VIEW& vertexView,
@@ -8580,7 +8549,7 @@ void D3D12Renderer::Impl::recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv
         // camino de Vulkan: un grosor plano se come los objetos pequeños y no se
         // ve en los grandes. El mínimo de 1 unidad evita que una malla diminuta
         // se quede sin contorno.
-        push.flags = glm::vec2(0.0f, grosorContorno(localExtent, transform));
+        push.flags = glm::vec2(0.0f, outlineThickness(localExtent, transform));
         commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
 
         commandList->IASetVertexBuffers(0, 1, &vertexView);
@@ -8593,7 +8562,7 @@ void D3D12Renderer::Impl::recordSelectionOutline(D3D12_CPU_DESCRIPTOR_HANDLE rtv
         if (object.meshVisible)
         {
             // La caja del estatico esta en espacio LOCAL (ver StaticObject), que
-            // es justo lo que espera grosorContorno.
+            // es justo lo que espera outlineThickness.
             const glm::vec3 e = object.aabbMax - object.aabbMin;
             const float ext = object.hasBounds ? (glm::max)(e.x, (glm::max)(e.y, e.z)) : 0.0f;
             drawOutline(outlineLdrPipeline.Get(), object.transform, ext,

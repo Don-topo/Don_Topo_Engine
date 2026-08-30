@@ -1,4 +1,5 @@
 #include "DonTopo/Renderer/Passes/AaPass.h"
+#include "DonTopo/Renderer/TaaJitter.h"
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/GpuResources.h"
 #include <stdexcept>
@@ -34,19 +35,6 @@ static VkShaderModule makeModule(VkDevice dev, const std::vector<char>& code)
     if (vkCreateShaderModule(dev, &ci, nullptr, &m) != VK_SUCCESS)
         throw std::runtime_error("failed to create shader module!");
     return m;
-}
-
-static float halton(uint32_t index, uint32_t base)
-{
-    float result = 0.0f;
-    float f      = 1.0f;
-    while (index > 0)
-    {
-        f      /= (float)base;
-        result += f * (float)(index % base);
-        index  /= base;
-    }
-    return result;
 }
 
 // Los tres modos con pass propio. None y MSAA no lo tienen: en MSAA el resolve
@@ -588,18 +576,12 @@ void AaPass::updateFrameMatrices(const Context& ctx, const glm::mat4& view, cons
     m_jitteredProj = proj;
     if (ctx.activeMode != AaMode::Taa) return;
 
-    // Halton(2,3) desplazado a [-0.5, 0.5] pixeles. 16 posiciones antes
-    // de repetir: suficiente para que el promedio sea estable y corto
-    // para que el ciclo no se note al parar la camara.
-    m_jitter.x = (halton(m_jitterIndex + 1, 2) - 0.5f) * ctx.state.taaJitterScale();
-    m_jitter.y = (halton(m_jitterIndex + 1, 3) - 0.5f) * ctx.state.taaJitterScale();
-    m_jitterIndex = (m_jitterIndex + 1) % 16;
-
-    // Desplazamiento en clip space: el ancho completo del clip es 2, de
-    // ahi el factor. Se aplica sobre la columna de la Z para que el
-    // desplazamiento sea constante en pantalla a cualquier profundidad.
-    m_jitteredProj[2][0] += 2.0f * m_jitter.x / (float)ctx.renderExtent.width;
-    m_jitteredProj[2][1] += 2.0f * m_jitter.y / (float)ctx.renderExtent.height;
+    // Secuencia y aplicacion en TaaJitter.h, compartidas con D3D12: estaban
+    // escritas dos veces y descuadrarlas no da error, solo hace converger el
+    // TAA a una imagen distinta segun el backend.
+    m_jitter = taaJitterPixels(m_jitterIndex, ctx.state.taaJitterScale());
+    applyTaaJitter(m_jitteredProj, m_jitter,
+                   (float)ctx.renderExtent.width, (float)ctx.renderExtent.height);
 }
 
 void AaPass::record(const Context& ctx, VkCommandBuffer cmd)
