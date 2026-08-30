@@ -340,6 +340,23 @@ void GpuResources::createTextureSampler(VkSampler& outSampler)
         throw std::runtime_error("failed to create texture sampler!");
 }
 
+VkSampler GpuResources::sharedMaterialSampler()
+{
+    // Perezoso y no en el constructor: GpuResources se construye con el
+    // GpuDevice, y en ese momento el device de Vulkan todavia no existe.
+    if (m_materialSampler == VK_NULL_HANDLE)
+        createTextureSampler(m_materialSampler);
+    return m_materialSampler;
+}
+
+void GpuResources::destroySharedSampler()
+{
+    if (m_materialSampler == VK_NULL_HANDLE)
+        return;
+    vkDestroySampler(m_gpu.device(), m_materialSampler, nullptr);
+    m_materialSampler = VK_NULL_HANDLE;
+}
+
 void GpuResources::createSolidColorImage(const uint8_t rgba[4], VkImage& img, VkDeviceMemory& mem, TransferBatch* batch)
 {
     VkBuffer sb; VkDeviceMemory sm;

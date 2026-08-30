@@ -676,6 +676,10 @@ namespace DonTopo {
         vkDestroyImageView(m_gpu.device(), m_depthImageView, nullptr);
         vkDestroyImage(m_gpu.device(), m_depthImage, nullptr);
         vkFreeMemory(m_gpu.device(), m_depthImageMemory, nullptr);
+        // El sampler que comparten TODAS las texturas de material. Aqui y no en
+        // destroySharedGpuMesh: alli es prestado, y destruirlo con el primer
+        // material dejaria a los demas apuntando a un sampler muerto.
+        m_res.destroySharedSampler();
         // Shadow map. El Context lleva los dos set layouts que ya se han
         // destruido cuatro lineas mas arriba; destroyResources no los toca (un
         // pipeline layout sobrevive a los set layouts con los que se creo).
@@ -3371,7 +3375,7 @@ namespace DonTopo {
             m_res.createTextureImage(mesh.material.texturePath, mesh.material.embeddedTexture,
                                      obj.textureImage, obj.textureMem, batch);
         m_res.createTextureImageView(obj.textureImage, obj.textureView);
-        m_res.createTextureSampler(obj.sampler);
+        obj.sampler = m_res.sharedMaterialSampler();
 
         if (const DecodedImage* normal = findSlot(DecodedImage::Normal))
             m_res.createNormalMapImageFromPixels(normal->pixels.data(),
@@ -3381,7 +3385,7 @@ namespace DonTopo {
             m_res.createNormalMapImage(mesh.material.normalMapPath, mesh.material.embeddedNormalMap,
                                        obj.normalImage, obj.normalMem, batch);
         m_res.createTextureImageView(obj.normalImage, obj.normalView, VK_FORMAT_R8G8B8A8_UNORM);
-        m_res.createTextureSampler(obj.normalSampler);
+        obj.normalSampler = m_res.sharedMaterialSampler();
 
         if (const DecodedImage* orm = findSlot(DecodedImage::ORM))
         {
@@ -3408,7 +3412,7 @@ namespace DonTopo {
             obj.roughness = mesh.material.roughness;
         }
         m_res.createTextureImageView(obj.ormImage, obj.ormView, VK_FORMAT_R8G8B8A8_UNORM);
-        m_res.createTextureSampler(obj.ormSampler);
+        obj.ormSampler = m_res.sharedMaterialSampler();
     }
 
     int Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImage>* decoded)
@@ -3436,15 +3440,21 @@ namespace DonTopo {
 
     void Renderer::destroySharedGpuMesh(const SharedGpuMesh& obj)
     {
-        vkDestroySampler(m_gpu.device(),   obj.ormSampler,    nullptr);
+        // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
+        // para todo el motor. Destruirlo aqui seria un doble free en cuanto
+        // se soltara el segundo material.
         vkDestroyImageView(m_gpu.device(), obj.ormView,       nullptr);
         vkDestroyImage(m_gpu.device(),     obj.ormImage,      nullptr);
         vkFreeMemory(m_gpu.device(),       obj.ormMem,        nullptr);
-        vkDestroySampler(m_gpu.device(),   obj.normalSampler, nullptr);
+        // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
+        // para todo el motor. Destruirlo aqui seria un doble free en cuanto
+        // se soltara el segundo material.
         vkDestroyImageView(m_gpu.device(), obj.normalView,    nullptr);
         vkDestroyImage(m_gpu.device(),     obj.normalImage,   nullptr);
         vkFreeMemory(m_gpu.device(),       obj.normalMem,     nullptr);
-        vkDestroySampler(m_gpu.device(),   obj.sampler,       nullptr);
+        // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
+        // para todo el motor. Destruirlo aqui seria un doble free en cuanto
+        // se soltara el segundo material.
         vkDestroyImageView(m_gpu.device(), obj.textureView,   nullptr);
         vkDestroyImage(m_gpu.device(),     obj.textureImage,  nullptr);
         vkFreeMemory(m_gpu.device(),       obj.textureMem,    nullptr);
@@ -3790,15 +3800,21 @@ namespace DonTopo {
 
         for (auto& mgfx : obj.matGfx)
         {
-            if (mgfx.ormSampler    != VK_NULL_HANDLE) { vkDestroySampler  (m_gpu.device(), mgfx.ormSampler,    nullptr); }
+            // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
+            // para todo el motor. Destruirlo aqui seria un doble free en cuanto
+            // se soltara el segundo material.
             if (mgfx.ormView       != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.ormView,       nullptr); }
             if (mgfx.ormImage      != VK_NULL_HANDLE) { vkDestroyImage    (m_gpu.device(), mgfx.ormImage,      nullptr); }
             if (mgfx.ormMem        != VK_NULL_HANDLE) { vkFreeMemory      (m_gpu.device(), mgfx.ormMem,        nullptr); }
-            if (mgfx.normalSampler != VK_NULL_HANDLE) { vkDestroySampler  (m_gpu.device(), mgfx.normalSampler, nullptr); }
+            // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
+            // para todo el motor. Destruirlo aqui seria un doble free en cuanto
+            // se soltara el segundo material.
             if (mgfx.normalView    != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.normalView,    nullptr); }
             if (mgfx.normalImage   != VK_NULL_HANDLE) { vkDestroyImage    (m_gpu.device(), mgfx.normalImage,   nullptr); }
             if (mgfx.normalMem     != VK_NULL_HANDLE) { vkFreeMemory      (m_gpu.device(), mgfx.normalMem,     nullptr); }
-            if (mgfx.sampler       != VK_NULL_HANDLE) { vkDestroySampler  (m_gpu.device(), mgfx.sampler,       nullptr); }
+            // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
+            // para todo el motor. Destruirlo aqui seria un doble free en cuanto
+            // se soltara el segundo material.
             if (mgfx.textureView   != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.textureView,   nullptr); }
             if (mgfx.textureImage  != VK_NULL_HANDLE) { vkDestroyImage    (m_gpu.device(), mgfx.textureImage,  nullptr); }
             if (mgfx.textureMem    != VK_NULL_HANDLE) { vkFreeMemory      (m_gpu.device(), mgfx.textureMem,    nullptr); }
@@ -3966,12 +3982,12 @@ namespace DonTopo {
             // Diffuse
             m_res.createTextureImage(smat.texturePath, smat.embeddedTexture, mgfx.textureImage, mgfx.textureMem, batch);
             m_res.createTextureImageView(mgfx.textureImage, mgfx.textureView);
-            m_res.createTextureSampler(mgfx.sampler);
+            mgfx.sampler = m_res.sharedMaterialSampler();
 
             // Normal map
             m_res.createNormalMapImage(smat.normalMapPath, smat.embeddedNormalMap, mgfx.normalImage, mgfx.normalMem, batch);
             m_res.createTextureImageView(mgfx.normalImage, mgfx.normalView, VK_FORMAT_R8G8B8A8_UNORM);
-            m_res.createTextureSampler(mgfx.normalSampler);
+            mgfx.normalSampler = m_res.sharedMaterialSampler();
 
             // ORM
             if (!smat.metallicRoughnessPath.empty() || !smat.embeddedMetallicRoughness.empty())
@@ -3988,7 +4004,7 @@ namespace DonTopo {
                 mgfx.roughness = smat.roughness;
             }
             m_res.createTextureImageView(mgfx.ormImage, mgfx.ormView, VK_FORMAT_R8G8B8A8_UNORM);
-            m_res.createTextureSampler(mgfx.ormSampler);
+            mgfx.ormSampler = m_res.sharedMaterialSampler();
 
             // Descriptor sets
             mgfx.descPool = allocateSharedSets(mgfx.descSets);
@@ -4347,16 +4363,20 @@ namespace DonTopo {
                 break;
         }
 
-        // Los cuatro handles viejos siguen referenciados por el descriptor set
+        // Los tres handles viejos siguen referenciados por el descriptor set
         // que un command buffer en vuelo puede estar usando. Se encolan por
-        // valor: capturar los punteros img/mem/view/sampler sería leer los
-        // NUEVOS cuando el lambda corriera, tres frames después.
+        // valor: capturar los punteros img/mem/view sería leer los NUEVOS
+        // cuando el lambda corriera, tres frames después.
+        //
+        // El sampler NO entra: desde que es el compartido de
+        // GpuResources::sharedMaterialSampler, destruir el viejo aqui se
+        // llevaria por delante el de TODOS los demas materiales. Y el fallo no
+        // saldria al cargar sino solo al cambiar una textura desde el editor,
+        // que es justo lo que no cubre ningun test.
         const VkImage        oldImage   = *img;
         const VkDeviceMemory oldMem     = *mem;
         const VkImageView    oldView    = *view;
-        const VkSampler      oldSampler = *sampler;
-        m_deferredDeletes.push([oldImage, oldMem, oldView, oldSampler](VkDevice dev) {
-            vkDestroySampler(dev,   oldSampler, nullptr);
+        m_deferredDeletes.push([oldImage, oldMem, oldView](VkDevice dev) {
             vkDestroyImageView(dev, oldView,    nullptr);
             vkDestroyImage(dev,     oldImage,   nullptr);
             vkFreeMemory(dev,       oldMem,     nullptr);
@@ -4374,7 +4394,7 @@ namespace DonTopo {
         // validation layer dispara VUID-VkImageViewCreateInfo-image-01762.
         m_res.createTextureImage("", {}, *img, *mem);
         m_res.createTextureImageView(*img, *view);
-        m_res.createTextureSampler(*sampler);
+        *sampler = m_res.sharedMaterialSampler();
 
         for (int i = 0; i < MAX_FRAMES; i++)
         {

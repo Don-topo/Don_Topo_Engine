@@ -59,10 +59,28 @@ public:
                                         TransferBatch* batch = nullptr);
     void createTextureImageView(VkImage img, VkImageView& view,
                                 VkFormat fmt = VK_FORMAT_R8G8B8A8_SRGB);
+    // Crea un sampler NUEVO, que pasa a ser del llamante y este debe destruir.
+    // Para las texturas de un material NO se usa: ver sharedMaterialSampler.
     void createTextureSampler(VkSampler& out);
+
+    // El sampler de las texturas de material. UNO para todo el motor, prestado:
+    // el llamante NO debe destruirlo.
+    //
+    // createTextureSampler no recibe un solo parametro, o sea que todos los
+    // samplers que produce son byte a byte identicos. Aun asi se creaba uno por
+    // TEXTURA y por MALLA —difusa, normal y ORM: tres por malla—, y eso no es
+    // solo desperdicio: maxSamplerAllocationCount suele valer 4000, asi que una
+    // escena de ~1330 mallas se quedaba sin samplers y fallaba al cargar en una
+    // GPU donde sobra memoria. Compartirlo quita ese techo entero.
+    //
+    // Se crea la primera vez que se pide y lo destruye destroySharedSampler.
+    VkSampler sharedMaterialSampler();
+    // En el teardown del Renderer, con el device todavia vivo.
+    void destroySharedSampler();
 
 private:
     const GpuDevice& m_gpu;
+    VkSampler        m_materialSampler = VK_NULL_HANDLE;
 };
 
 } // namespace DonTopo
