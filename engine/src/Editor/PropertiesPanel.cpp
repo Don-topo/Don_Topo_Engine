@@ -752,7 +752,10 @@ void PropertiesPanel::drawReflectionProbeSection(EditorContext& ctx)
         const float ms = ctx.renderer->probeBakeMs(id);
         if (ms < 0.0f) ImGui::TextUnformatted("sin bakear");
         else           ImGui::Text("%.2f ms de GPU", ms);
-        ImGui::Text("Memoria: %.2f MB", (double)Renderer::probeMemoryBytes() / (1024.0 * 1024.0));
+        // Del backend activo, no del de Vulkan por su nombre: cada uno guarda
+        // recursos distintos por sonda (H51).
+        ImGui::Text("Memoria: %.2f MB",
+                    (double)ctx.renderer->probeMemoryBytes() / (1024.0 * 1024.0));
     }
 
     if (ImGui::Button("Remove Reflection Probe"))

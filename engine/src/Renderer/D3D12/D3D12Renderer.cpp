@@ -101,7 +101,7 @@ struct SceneUbo {
     // lo que va detras, y de ahi los offsets.
     glm::mat4   lightSpaceMatrix[10];    // c8
     glm::vec4   cascadeSplits;           // c48
-    ShaderLight lights[16];              // c49
+    ShaderLight lights[MAX_LIGHTS];      // c49
     glm::vec4   viewPos;                 // c113
     int         numLights;               // c114
     // En el hueco de padding que ya había detrás de numLights, igual que en
@@ -118,6 +118,17 @@ static_assert(offsetof(SceneUbo, viewPos) == 1808, "UBO: viewPos debe ir en c113
 static_assert(offsetof(SceneUbo, numLights) == 1824, "UBO: numLights debe ir en c114");
 static_assert(offsetof(SceneUbo, ambientIntensity) == 1828,
               "UBO: ambientIntensity va pegado a numLights");
+// Los offsets de arriba son números fijos A PROPÓSITO: describen el layout que
+// declaran los packoffset del HLSL, que no salen de este fichero. Calcularlos a
+// partir de MAX_LIGHTS los haría seguir al array y dejarían de cazar justo el
+// fallo que vigilan — que C++ y el shader dejen de contar lo mismo.
+//
+// Este assert es el que avisa: subir el tope desplaza viewPos y numLights, así
+// que hay que tocar los seis GLSL, el HLSL traducido y los tres offsets de
+// arriba EN LA MISMA commit. Sin él, el UBO se leería desplazado y en silencio.
+static_assert(MAX_LIGHTS == 16,
+              "MAX_LIGHTS ha cambiado: ajusta los offsets de arriba y los "
+              "packoffset del HLSL, o el shader leerá el bloque desplazado");
 
 // Push constants de triangle.vert/pbr.frag: mat4 + 2 float + vec2 = 80 bytes.
 struct PushData {
@@ -3007,7 +3018,7 @@ void D3D12Renderer::Impl::updateSceneUbo()
         // Las de la escena mandan: sin esto el backend iluminaba con su
         // direccional de relleno y una escena con focos se veía a oscuras
         // aunque los tuviera bien puestos.
-        const size_t count = (std::min)(sceneLights.size(), static_cast<size_t>(16));
+        const size_t count = (std::min)(sceneLights.size(), static_cast<size_t>(MAX_LIGHTS));
         std::memcpy(ubo.lights, sceneLights.data(), count * sizeof(ShaderLight));
         ubo.numLights = static_cast<int>(count);
 
@@ -9497,7 +9508,7 @@ void D3D12Renderer::setLights(const Light* lights, size_t count)
     if (!lights || count == 0)
         return;
 
-    count = (std::min)(count, static_cast<size_t>(16));
+    count = (std::min)(count, static_cast<size_t>(MAX_LIGHTS));
     d.sceneLights.resize(count);
     std::memcpy(d.sceneLights.data(), lights, count * sizeof(ShaderLight));
 
@@ -10452,6 +10463,29 @@ void D3D12Renderer::requestProbeBake(uint64_t ownerId)
 void D3D12Renderer::requestProbeBakeAll() { m_impl->probeBakeAllQueued = true; }
 int   D3D12Renderer::probeCount() const { return static_cast<int>(m_impl->probes.size()); }
 float D3D12Renderer::lastProbeBakeMs() const { return m_impl->probeLastBakeMs; }
+
+uint64_t D3D12Renderer::probeMemoryBytes() const
+{
+    // rgba16f = 8 bytes por texel, 6 caras. Tres recursos por sonda, y ahí está
+    // la diferencia con Vulkan: allí el cubemap de CAPTURA es uno solo para
+    // todas las sondas, aquí lo tiene cada una (ver createProbeResources), así
+    // que la cifra de este backend es mayor. Enseñar la de Vulkan bajo DX12 no
+    // era solo mezclar backends: subestimaba (H51).
+    constexpr uint64_t kBytesPorTexel = 8;
+    constexpr uint64_t kCaras         = 6;
+
+    uint64_t prefiltrado = 0;
+    for (UINT mip = 0; mip < kIblPrefilterMips; ++mip) {
+        const uint64_t lado = kIblPrefilterSize >> mip;
+        prefiltrado += lado * lado * kCaras * kBytesPorTexel;
+    }
+    const uint64_t captura =
+        (uint64_t)kProbeFaceSize * kProbeFaceSize * kCaras * kBytesPorTexel;
+    const uint64_t irradiancia =
+        (uint64_t)kIblIrradianceSize * kIblIrradianceSize * kCaras * kBytesPorTexel;
+
+    return captura + irradiancia + prefiltrado;
+}
 float D3D12Renderer::probeBakeMs(uint64_t ownerId) const
 {
     for (const Impl::GpuProbe& probe : m_impl->probes)

@@ -271,6 +271,15 @@ namespace DonTopo
             virtual void  requestProbeBakeAll()              = 0;
             virtual int   probeCount() const                 = 0;
             virtual float lastProbeBakeMs() const            = 0;
+            // Memoria de GPU de UNA sonda, en bytes. Virtual y no una
+            // constante compartida porque los dos backends guardan cosas
+            // DISTINTAS por sonda: Vulkan cuenta irradiancia y prefiltrado (su
+            // cubemap de captura es uno solo para todas), y D3D12 le suma
+            // ademas el de captura, que ahi es por sonda. El panel llamaba al
+            // constexpr estatico de la clase de Vulkan (H51), asi que bajo
+            // DirectX 12 no solo era la cifra del backend que no corria: la
+            // subestimaba.
+            virtual uint64_t probeMemoryBytes() const = 0;
             virtual float probeBakeMs(uint64_t ownerId) const = 0;
 
             // ── Ranuras de objeto ───────────────────────────────────────────

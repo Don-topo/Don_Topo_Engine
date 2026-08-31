@@ -1280,9 +1280,21 @@ void EditorUI::drawMenuBar()
                 if (ImGui::MenuItem("Bake All Reflection Probes"))
                     m_renderer->requestProbeBakeAll();
                 ImGui::EndDisabled();
+                // La cifra la da el BACKEND ACTIVO: los dos guardan cosas
+                // distintas por sonda y antes se enseñaba siempre la de Vulkan
+                // (H51).
                 ImGui::Text("Sondas: %d  (%.2f MB c/u)", probes,
-                            (double)Renderer::probeMemoryBytes() / (1024.0 * 1024.0));
-                ImGui::Text("Ultimo bake: %.2f ms de GPU", m_renderer->lastProbeBakeMs());
+                            (double)m_renderer->probeMemoryBytes() / (1024.0 * 1024.0));
+                // Sin sondas no hay bake que contar, y un "0.00 ms" se lee como
+                // horneado instantáneo en vez de como "nunca" (H56). Es la
+                // misma distinción que ya hacía la sección Reflection Probe del
+                // panel Properties con su "sin bakear".
+                if (probes == 0)
+                    ImGui::TextDisabled("Ultimo bake: sin sondas en la escena");
+                else if (m_renderer->lastProbeBakeMs() <= 0.0f)
+                    ImGui::TextDisabled("Ultimo bake: sin bakear");
+                else
+                    ImGui::Text("Ultimo bake: %.2f ms de GPU", m_renderer->lastProbeBakeMs());
 
                 // El cielo NO se edita desde aqui: sobre un menu de ImGui no se
                 // puede soltar un arrastre —el popup se cierra al soltar fuera—,

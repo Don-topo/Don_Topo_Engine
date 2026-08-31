@@ -304,10 +304,11 @@ namespace DonTopo {
             int   probeCount() const      { return m_probePass.count(); }
             // Memoria GPU de las capturas persistentes de UNA sonda, en bytes.
             // No cuenta el cubemap de captura, que es uno solo pa todas.
-            static constexpr uint64_t probeMemoryBytes()
+            static constexpr uint64_t staticProbeMemoryBytes()
             {
                 return ReflectionProbePass::probeMemoryBytes();
             }
+            uint64_t probeMemoryBytes() const override { return staticProbeMemoryBytes(); }
             // ms del ultimo bake de UNA sonda concreta, o -1 si nunca se bakeo.
             float probeBakeMs(uint64_t ownerId) const { return m_probePass.bakeMs(ownerId); }
 

@@ -285,6 +285,7 @@ public:
     void  requestProbeBakeAll() override;
     int   probeCount() const override;
     float lastProbeBakeMs() const override;
+    uint64_t probeMemoryBytes() const override;
     float probeBakeMs(uint64_t ownerId) const override;
 
     // Métricas por pase: sin consultas de tiempo en este backend todavía.
