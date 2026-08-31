@@ -1,4 +1,5 @@
 #pragma once
+#include "DonTopo/Renderer/RenderConstants.h"
 #include <vulkan/vulkan.h>
 #include <cstdint>
 
@@ -25,12 +26,17 @@ class GpuDevice;
 //    eso salen a la interfaz publica, por handle.
 class IblPass {
 public:
-    static constexpr uint32_t kIrradianceSize = 32;
-    static constexpr uint32_t kPrefilterSize  = 128;
-    // Si cambia, cambia tambien IBL_PREFILTER_MIPS en shaders/pbr.frag: ahi va
-    // como #define a proposito, pa no tocar el bloque UBO (que esta declarado
-    // en 5 shaders y std140 desplazaria en silencio).
-    static constexpr uint32_t kPrefilterMips  = 5;
+    // Los tres salen de RenderConstants.h: el backend D3D12 los necesita
+    // IGUALES y los tenia copiados con su valor a fuego. Aqui se re-exponen con
+    // el nombre que ya usaba este pase, para no tocar sus llamantes.
+    //
+    // kPrefilterMips vive ademas como #define IBL_PREFILTER_MIPS en
+    // shaders/pbr.frag, y esa tercera copia NO se puede compartir: un shader no
+    // incluye un header de C++, y meterlo en el bloque UBO lo desplazaria en
+    // silencio para los seis shaders que lo declaran (std140).
+    static constexpr uint32_t kIrradianceSize = IBL_IRRADIANCE_SIZE;
+    static constexpr uint32_t kPrefilterSize  = IBL_PREFILTER_SIZE;
+    static constexpr uint32_t kPrefilterMips  = IBL_PREFILTER_MIPS;
     // rgba16f: los cubemaps son HDR. Con 8 bits el especular prefiltrado se
     // bandearia en las zonas de gradiente suave.
     static constexpr VkFormat kFormat = VK_FORMAT_R16G16B16A16_SFLOAT;

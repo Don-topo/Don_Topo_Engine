@@ -15,6 +15,7 @@
 #include "DonTopo/Renderer/MeshKey.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/PlaceholderTexture.h"
+#include "DonTopo/Renderer/RenderConstants.h"
 #include "DonTopo/Renderer/SelectionOutline.h"
 #include "DonTopo/Renderer/Plane.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
@@ -171,12 +172,12 @@ inline uint16_t floatToHalf(float value)
     return static_cast<uint16_t>((negative ? 0x8000u : 0u) | (biased << 10) | mantissa);
 }
 
-// IBL. Mismos tamaños que el camino de Vulkan (Renderer.h): el prefiltrado
-// reparte la rugosidad entre sus mips, y pbr.frag lo da por hecho con un
-// #define propio.
-constexpr UINT kIblIrradianceSize = 32;
-constexpr UINT kIblPrefilterSize  = 128;
-constexpr UINT kIblPrefilterMips  = 5;
+// IBL. Los tamaños viven en RenderConstants.h, compartidos con el camino
+// Vulkan: estaban duplicados aquí con un comentario que decía que eran "los
+// mismos", que era la única defensa contra que dejaran de serlo.
+constexpr UINT kIblIrradianceSize = IBL_IRRADIANCE_SIZE;
+constexpr UINT kIblPrefilterSize  = IBL_PREFILTER_SIZE;
+constexpr UINT kIblPrefilterMips  = IBL_PREFILTER_MIPS;
 
 // Lado de cada cara al capturar una sonda. 128 es lo que usa el camino de
 // Vulkan: entra de sobra en el prefiltrado y seis caras a más resolución no se
@@ -219,17 +220,13 @@ struct FpPush {
     uint32_t screenW, screenH, pad0, pad1;
 };
 
-// Sombras en cascada. Mismos valores que el camino Vulkan
-// (Renderer.cpp:1016-1025): sin ellos las cascadas cortan a otras distancias y
-// las sombras no coinciden entre backends.
-constexpr int   kShadowCascades    = 4;
-// Capas del shadow map. Es el MAXIMO entre las 4 cascadas de una direccional y
-// las 6 caras del cubemap de una de punto, que nunca coexisten porque solo hay
-// una luz key y solo tiene un tipo. Mismo valor que SHADOW_MATRICES en
-// UniformBufferObject.h y que el array lightSpaceMatrix del bloque UBO.
-constexpr int   kShadowLayers      = 10;
-// De esas, las que puede usar la luz KEY. Las de detras son focos secundarios.
-constexpr int   kShadowKeyLayers   = 6;
+// Sombras en cascada. Los tres salen de UniformBufferObject.h, que este fichero
+// ya incluye: estaban copiados aquí con su valor a fuego, y nada obligaba a que
+// siguieran coincidiendo. Los static_assert del SceneUbo NO lo habrían cazado:
+// vigilan los offsets del bloque, no cuántas capas tiene el shadow map.
+constexpr int   kShadowCascades    = SHADOW_CASCADES;
+constexpr int   kShadowLayers      = SHADOW_MATRICES;
+constexpr int   kShadowKeyLayers   = SHADOW_KEY_MATRICES;
 // Lado del shadow map POR DEFECTO. El que se usa vive en RendererState
 // (shadowResolution) y lo aplica applyPendingShadowSize.
 constexpr UINT  kShadowMapSizeDefault = 2048;
@@ -238,7 +235,7 @@ constexpr UINT  kShadowMapSizeDefault = 2048;
 
 // Bloom: niveles de la cadena de reducción. Mismo número que usa el camino
 // Vulkan (su log dice "5 mips").
-constexpr int kBloomMips = 5;
+constexpr int kBloomMips = BLOOM_MIPS;
 
 // Formato del target donde se dibuja la escena. Coma flotante y no UNORM: el
 // umbral del bloom solo tiene sentido si el color puede pasar de 1.0, que es
@@ -1258,6 +1255,10 @@ struct D3D12Renderer::Impl {
     // La escena ya no va directa al backbuffer: se dibuja en un target HDR, el
     // bloom trabaja sobre él y un pase de composición escribe el resultado.
     D3D12MA::Allocation* hdrAllocation = nullptr;
+    // Niveles con tamano util. La reserva es siempre kBloomMips —el reparto de
+    // descriptores lo da por hecho—, pero con el viewport pequeno se usan menos,
+    // igual que en Vulkan.
+    UINT                 bloomMipCount = 0;
     D3D12MA::Allocation* bloomMipAllocations[kBloomMips]{};
     UINT                 bloomMipWidth[kBloomMips]{};
     UINT                 bloomMipHeight[kBloomMips]{};
@@ -3821,6 +3822,25 @@ void D3D12Renderer::Impl::createHdrTargets()
     // Niveles del bloom: texturas independientes en vez de mips de un mismo
     // recurso. Cada una tiene un solo subrecurso, así que su estado se cambia
     // de una pieza y no hay que llevar la cuenta por nivel.
+    // Niveles REALMENTE utiles. El camino Vulkan (BloomPass::createImages) para
+    // en cuanto un nivel bajaria de 2 px, y aqui se usaban los cinco siempre,
+    // recortando a 1x1: con el viewport pequeno D3D12 desenfocaba sobre mips
+    // degenerados —que promedian toda la pantalla— y Vulkan no. Misma regla en
+    // los dos, o el mismo panel estrecho da dos imagenes distintas.
+    //
+    // La RESERVA se queda en kBloomMips porque el reparto de descriptores lo da
+    // por hecho (kUavBloomMip = kSrvBloomMip + kBloomMips); lo que se acota es
+    // cuantos se usan.
+    bloomMipCount = 0;
+    {
+        UINT w = width / 2, h = height / 2;
+        while (bloomMipCount < static_cast<UINT>(kBloomMips) && w >= 2 && h >= 2) {
+            ++bloomMipCount;
+            w /= 2;
+            h /= 2;
+        }
+    }
+
     for (int level = 0; level < kBloomMips; ++level) {
         bloomMipWidth[level]  = (std::max)(1u, width >> (level + 1));
         bloomMipHeight[level] = (std::max)(1u, height >> (level + 1));
@@ -7367,14 +7387,18 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     // de más abajo se encarga de leer negro en vez de unos mips que se quedan
     // como estaban. Hasta ahora este flag no se consultaba en ningún sitio del
     // backend, así que el interruptor del editor no apagaba nada.
-    const bool bloomOn = state->bloomEnabled();
+    // bloomMipCount == 0 es el viewport tan pequeno que no da ni para un nivel.
+    // Entra en el mismo camino que el bloom apagado: la composicion lee negro en
+    // vez de un mip que nadie ha escrito. Vulkan hace lo mismo (BloomPass
+    // devuelve con m_mipCount == 0 y su composicion lo comprueba).
+    const bool bloomOn = state->bloomEnabled() && bloomMipCount > 0;
 
     if (bloomOn) {
         commandList->SetComputeRootSignature(bloomRootSignature.Get());
 
         // Reducción. El primer nivel lee la escena y aplica el umbral; el resto
         // solo filtra el nivel anterior.
-        for (int level = 0; level < kBloomMips; ++level) {
+        for (int level = 0; level < static_cast<int>(bloomMipCount); ++level) {
             const UINT srcWidth  = (level == 0) ? width : bloomMipWidth[level - 1];
             const UINT srcHeight = (level == 0) ? height : bloomMipHeight[level - 1];
 
@@ -7401,7 +7425,7 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
 
         // Ampliación: cada nivel SUMA el de abajo sobre lo que ya tenía, así que el
         // destino vuelve a acceso desordenado para poder leerse y escribirse.
-        for (int level = kBloomMips - 2; level >= 0; --level) {
+        for (int level = static_cast<int>(bloomMipCount) - 2; level >= 0; --level) {
             BloomPush push{};
             push.srcTexel[0] = 1.0f / static_cast<float>(bloomMipWidth[level + 1]);
             push.srcTexel[1] = 1.0f / static_cast<float>(bloomMipHeight[level + 1]);
