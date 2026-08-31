@@ -2,10 +2,13 @@
 
 namespace DonTopo {
 
-void UndoManager::push(std::unique_ptr<ICommand> cmd)
+void UndoManager::push(std::unique_ptr<ICommand> cmd, bool dirtiesScene)
 {
     m_redoStack.clear();
-    m_sceneDirty = true;
+    // Con dirtiesScene=false NO se toca el flag: ni lo marca ni lo limpia. Un
+    // ajuste de render empujado detrás de una edición de escena no puede hacer
+    // que esa edición parezca guardada.
+    if (dirtiesScene) m_sceneDirty = true;
     m_undoStack.push_back(std::move(cmd));
     if (m_undoStack.size() > kMaxHistory)
         m_undoStack.pop_front();

@@ -186,6 +186,50 @@ private:
     // menú View al TERMINAR el cambio (click de checkbox/combo, o el
     // IsItemDeactivatedAfterEdit de un slider), nunca por frame de arrastre.
     void saveProjectSettings();
+
+    // ── Ajustes de render con undo (los ~39 del menú View) ────────────────
+    //
+    // Cuatro envoltorios sobre los widgets de ImGui que hacen SIEMPRE las
+    // cuatro cosas juntas: leer el valor actual, dibujar, aplicar lo que el
+    // usuario haya movido y registrar el paso en el historial. Antes cada
+    // control repetía las tres primeras y ninguno hacía la cuarta (H49).
+    //
+    // Van por std::function y no por template: así el cuerpo se queda en el
+    // .cpp y este header no arrastra ImGui a todo el que lo incluya. Son 39
+    // llamadas dentro de un menú que solo se construye estando abierto, o sea
+    // que el coste de la indirección no se mide.
+    //
+    // Los de arrastre (slider, color) registran el valor del INICIO del
+    // arrastre, no el del frame en que se suelta: si no, deshacer un arrastre
+    // largo devolvería al penúltimo píxel. Y el previo se lee ANTES de dibujar
+    // porque SliderFloat ya salta en el mismo frame del click.
+    void renderSliderFloat(const char* label, float lo, float hi, const char* fmt,
+                           const std::function<float()>& get,
+                           const std::function<void(float)>& set);
+    void renderSliderInt(const char* label, int lo, int hi,
+                         const std::function<int()>& get,
+                         const std::function<void(int)>& set);
+    // Devuelve el valor VIGENTE tras el click, que es lo que los llamantes
+    // usan acto seguido para el BeginDisabled de los sliders del efecto.
+    bool renderCheckbox(const char* label,
+                        const std::function<bool()>& get,
+                        const std::function<void(bool)>& set);
+    void renderColorEdit3(const char* label,
+                          const std::function<glm::vec3()>& get,
+                          const std::function<void(const glm::vec3&)>& set);
+    // Para los controles con forma propia (los cuatro Combo, los RadioButton
+    // del MSAA, el slider del SSAA y el botón Wireframe): el llamante dibuja y
+    // aplica, esto solo registra. No hace nada si before == after.
+    template <typename T>
+    void pushRenderUndo(const char* label, const T& before, const T& after,
+                        std::function<void(const T&)> set)
+    {
+        if (before == after) return;
+        m_undoHistory.push(makeRenderSettingCommand<T>(label, before, after, std::move(set),
+                                                        [this] { saveProjectSettings(); }),
+                            /*dirtiesScene=*/false);
+        saveProjectSettings();
+    }
     // Limpia GPU de la escena actual, reemplaza su contenido con j (vía
     // Scene::fromJson) y re-registra GPU (estático + skinned) de lo que
     // quede — tanto si fromJson tuvo éxito (árbol nuevo) como si falló
@@ -277,6 +321,16 @@ private:
 
     float          m_ssaaPendingFactor = 2.0f;
     bool           m_ssaaSliderActive  = false;
+
+    // Valor con el que empezó el arrastre en curso, para el undo de los
+    // controles del menú View. Uno de cada tipo basta: ImGui solo tiene un
+    // item activo a la vez, así que no puede haber dos arrastres solapados.
+    float          m_editBeginScalar = 0.0f;
+    int            m_editBeginInt    = 0;
+    glm::vec3      m_editBeginColor{0.0f};
+    // ImGuiID del widget cuyo arrastre está en curso, para saber en qué frame
+    // empezó. `unsigned` y no ImGuiID para no arrastrar ImGui a este header.
+    unsigned int   m_editActiveId    = 0;
 
     bool           m_isPlaying = false;
     nlohmann::json m_playSnapshot;

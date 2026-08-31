@@ -1073,6 +1073,98 @@ void EditorUI::handleUndoRedoShortcut()
     }
 }
 
+// ── Ajustes de render con undo (P8/H49) ─────────────────────────────────────
+//
+// Los cuatro envoltorios leen el valor ANTES de dibujar y ese es el que acaba
+// en el comando: `SliderFloat` salta al valor del click en el mismo frame en
+// que se pulsa, así que leerlo después devolvería el destino del salto y no de
+// dónde venía. Los cuatro Combo del menú leen después a propósito y por eso no
+// pasan por aquí: su valor previo es el que el propio Combo estaba mostrando.
+//
+// El arrastre se detecta por FLANCO (el item pasa a activo y su ID no es el que
+// ya teníamos) en vez de por `IsItemActivated()` a secas: `ColorEdit3` es un
+// grupo de sub-widgets y su flag de activación no siempre sube al grupo,
+// mientras que `IsItemActive()` sí funciona en los dos casos.
+void EditorUI::renderSliderFloat(const char* label, float lo, float hi, const char* fmt,
+                                  const std::function<float()>& get,
+                                  const std::function<void(float)>& set)
+{
+    const float prev = get();
+    float v = prev;
+    ImGui::SetNextItemWidth(140.0f);
+    if (ImGui::SliderFloat(label, &v, lo, hi, fmt))
+        set(v);
+
+    const unsigned int id = ImGui::GetItemID();
+    if (ImGui::IsItemActive() && m_editActiveId != id)
+    {
+        m_editActiveId    = id;
+        m_editBeginScalar = prev;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit())
+        pushRenderUndo<float>(label, m_editBeginScalar, get(), set);
+    if (ImGui::IsItemDeactivated())
+        m_editActiveId = 0;
+}
+
+void EditorUI::renderSliderInt(const char* label, int lo, int hi,
+                                const std::function<int()>& get,
+                                const std::function<void(int)>& set)
+{
+    const int prev = get();
+    int v = prev;
+    ImGui::SetNextItemWidth(140.0f);
+    if (ImGui::SliderInt(label, &v, lo, hi))
+        set(v);
+
+    const unsigned int id = ImGui::GetItemID();
+    if (ImGui::IsItemActive() && m_editActiveId != id)
+    {
+        m_editActiveId = id;
+        m_editBeginInt = prev;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit())
+        pushRenderUndo<int>(label, m_editBeginInt, get(), set);
+    if (ImGui::IsItemDeactivated())
+        m_editActiveId = 0;
+}
+
+// Sin arrastre que esperar: el click ya es el cambio entero, así que el comando
+// se empuja en ese mismo frame. Devuelve el valor vigente porque los llamantes
+// lo usan acto seguido para el BeginDisabled de los sliders de su efecto.
+bool EditorUI::renderCheckbox(const char* label, const std::function<bool()>& get,
+                               const std::function<void(bool)>& set)
+{
+    bool v = get();
+    if (ImGui::Checkbox(label, &v))
+    {
+        set(v);
+        pushRenderUndo<bool>(label, !v, v, set);
+    }
+    return v;
+}
+
+void EditorUI::renderColorEdit3(const char* label, const std::function<glm::vec3()>& get,
+                                 const std::function<void(const glm::vec3&)>& set)
+{
+    const glm::vec3 prev = get();
+    glm::vec3 v = prev;
+    ImGui::SetNextItemWidth(140.0f);
+    if (ImGui::ColorEdit3(label, &v.x))
+        set(v);
+
+    const unsigned int id = ImGui::GetItemID();
+    if (ImGui::IsItemActive() && m_editActiveId != id)
+    {
+        m_editActiveId   = id;
+        m_editBeginColor = prev;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit())
+        pushRenderUndo<glm::vec3>(label, m_editBeginColor, get(), set);
+    if (ImGui::IsItemDeactivated())
+        m_editActiveId = 0;
+}
+
 void EditorUI::drawMenuBar()
 {
     if (ImGui::BeginMainMenuBar())
@@ -1162,23 +1254,19 @@ void EditorUI::drawMenuBar()
             // escena, asi que al reabrir el editor vuelve a 1.0.
             if (m_renderer)
             {
-                bool ambientOn = m_renderer->ambientEnabled();
-                if (ImGui::Checkbox("Ambient (IBL)", &ambientOn))
-                {
-                    m_renderer->setAmbientEnabled(ambientOn);
-                    saveProjectSettings();
-                }
+                const bool ambientOn = renderCheckbox("Ambient (IBL)",
+                    [this] { return m_renderer->ambientEnabled(); },
+                    [this](bool v) { m_renderer->setAmbientEnabled(v); });
 
                 // Igual que en el bloom: el slider no se oculta con el ambiente
                 // apagado, se deja desactivado.
                 ImGui::BeginDisabled(!ambientOn);
-                float ambient = m_renderer->ambientIntensity();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("Ambient intensity", &ambient, 0.0f, 3.0f, "%.2f"))
-                    m_renderer->setAmbientIntensity(ambient);
-                // Se guarda al SOLTAR: arrastrar de punta a punta escribe una
-                // vez, no una por frame. Mismo criterio en todos los sliders.
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                // Se guarda al SOLTAR —y en ese mismo momento entra en el
+                // historial—: arrastrar de punta a punta escribe una vez, no
+                // una por frame. Mismo criterio en todos los sliders.
+                renderSliderFloat("Ambient intensity", 0.0f, 3.0f, "%.2f",
+                    [this] { return m_renderer->ambientIntensity(); },
+                    [this](float v) { m_renderer->setAmbientIntensity(v); });
                 ImGui::EndDisabled();
 
                 // Reflection probes: control GLOBAL (rehornear la escena entera).
@@ -1242,8 +1330,15 @@ void EditorUI::drawMenuBar()
                             ImGui::BeginDisabled(!soportado);
                             if (ImGui::Selectable(kNombres[i], i == actual))
                             {
+                                const PresentMode antes = m_renderer->presentMode();
                                 m_renderer->setPresentMode(kModos[i]);
-                                saveProjectSettings();
+                                // El modo CONCEDIDO puede no ser el pedido (un
+                                // device sin Mailbox cae a Vsync), así que el
+                                // "after" se relee en vez de darlo por hecho:
+                                // un undo debe volver a lo que de verdad hubo.
+                                pushRenderUndo<PresentMode>("Present mode", antes,
+                                    m_renderer->presentMode(),
+                                    [this](const PresentMode& v) { m_renderer->setPresentMode(v); });
                             }
                             ImGui::EndDisabled();
                             // El tooltip va FUERA del BeginDisabled: un item
@@ -1280,22 +1375,22 @@ void EditorUI::drawMenuBar()
                     ImGui::SetNextItemWidth(140.0f);
                     if (ImGui::Combo("Shadow resolution", &current, kLabels, IM_ARRAYSIZE(kLabels)))
                     {
+                        const int antes = m_renderer->shadowResolution();
                         m_renderer->setShadowResolution(kSizes[current]);
-                        saveProjectSettings();
+                        // Deshacer esto recrea el texture array otra vez. Es
+                        // caro y es lo correcto: el usuario pidió volver.
+                        pushRenderUndo<int>("Shadow resolution", antes, kSizes[current],
+                            [this](const int& v) { m_renderer->setShadowResolution(v); });
                     }
                 }
 
-                float shadowDist = m_renderer->shadowDistance();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("Shadow distance", &shadowDist, 20.0f, 2000.0f, "%.0f"))
-                    m_renderer->setShadowDistance(shadowDist);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("Shadow distance", 20.0f, 2000.0f, "%.0f",
+                    [this] { return m_renderer->shadowDistance(); },
+                    [this](float v) { m_renderer->setShadowDistance(v); });
 
-                float cascadeLambda = m_renderer->cascadeLambda();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("Cascade blend", &cascadeLambda, 0.0f, 1.0f, "%.2f"))
-                    m_renderer->setCascadeLambda(cascadeLambda);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("Cascade blend", 0.0f, 1.0f, "%.2f",
+                    [this] { return m_renderer->cascadeLambda(); },
+                    [this](float v) { m_renderer->setCascadeLambda(v); });
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("0 = cortes uniformes, 1 = logaritmicos.\n"
                                       "Alto da resolucion cerca; bajo reparte mas parejo.");
@@ -1305,33 +1400,24 @@ void EditorUI::drawMenuBar()
                 // Bloom. Mismo criterio que el ambiente: ajuste de sesion, no se
                 // serializa. Intensity 0 deja la imagen como antes del bloom.
                 ImGui::Separator();
-                bool bloom = m_renderer->bloomEnabled();
-                if (ImGui::Checkbox("Bloom", &bloom))
-                {
-                    m_renderer->setBloomEnabled(bloom);
-                    saveProjectSettings();
-                }
+                const bool bloom = renderCheckbox("Bloom",
+                    [this] { return m_renderer->bloomEnabled(); },
+                    [this](bool v) { m_renderer->setBloomEnabled(v); });
 
                 // Igual que en el SSAO y el SSR: los sliders no se ocultan con el
                 // efecto apagado, se dejan desactivados.
                 ImGui::BeginDisabled(!bloom);
-                float threshold = m_renderer->bloomThreshold();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("Bloom threshold", &threshold, 0.0f, 5.0f, "%.2f"))
-                    m_renderer->setBloomThreshold(threshold);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("Bloom threshold", 0.0f, 5.0f, "%.2f",
+                    [this] { return m_renderer->bloomThreshold(); },
+                    [this](float v) { m_renderer->setBloomThreshold(v); });
 
-                float knee = m_renderer->bloomKnee();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("Bloom knee", &knee, 0.0f, 1.0f, "%.2f"))
-                    m_renderer->setBloomKnee(knee);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("Bloom knee", 0.0f, 1.0f, "%.2f",
+                    [this] { return m_renderer->bloomKnee(); },
+                    [this](float v) { m_renderer->setBloomKnee(v); });
 
-                float intensity = m_renderer->bloomIntensity();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("Bloom intensity", &intensity, 0.0f, 1.0f, "%.3f"))
-                    m_renderer->setBloomIntensity(intensity);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("Bloom intensity", 0.0f, 1.0f, "%.3f",
+                    [this] { return m_renderer->bloomIntensity(); },
+                    [this](float v) { m_renderer->setBloomIntensity(v); });
                 ImGui::EndDisabled();
 
                 ImGui::Text("Bloom GPU: %.3f ms", m_renderer->bloomGpuMs());
@@ -1340,40 +1426,29 @@ void EditorUI::drawMenuBar()
                 // sesion, no se serializa. Apagado deja la imagen exactamente
                 // como antes de la feature y el coste GPU a cero.
                 ImGui::Separator();
-                bool ssao = m_renderer->ssaoEnabled();
-                if (ImGui::Checkbox("SSAO", &ssao))
-                {
-                    m_renderer->setSsaoEnabled(ssao);
-                    saveProjectSettings();
-                }
+                const bool ssao = renderCheckbox("SSAO",
+                    [this] { return m_renderer->ssaoEnabled(); },
+                    [this](bool v) { m_renderer->setSsaoEnabled(v); });
 
                 // Los sliders no se ocultan con el efecto apagado: se dejan
                 // desactivados para que se vea que existen y con que valores
                 // arrancarian.
                 ImGui::BeginDisabled(!ssao);
-                float ssaoRadius = m_renderer->ssaoRadius();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("SSAO radius", &ssaoRadius, 0.05f, 2.0f, "%.2f"))
-                    m_renderer->setSsaoRadius(ssaoRadius);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("SSAO radius", 0.05f, 2.0f, "%.2f",
+                    [this] { return m_renderer->ssaoRadius(); },
+                    [this](float v) { m_renderer->setSsaoRadius(v); });
 
-                float ssaoBias = m_renderer->ssaoBias();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("SSAO bias", &ssaoBias, 0.0f, 0.2f, "%.3f"))
-                    m_renderer->setSsaoBias(ssaoBias);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("SSAO bias", 0.0f, 0.2f, "%.3f",
+                    [this] { return m_renderer->ssaoBias(); },
+                    [this](float v) { m_renderer->setSsaoBias(v); });
 
-                float ssaoIntensity = m_renderer->ssaoIntensity();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("SSAO intensity", &ssaoIntensity, 0.0f, 3.0f, "%.2f"))
-                    m_renderer->setSsaoIntensity(ssaoIntensity);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("SSAO intensity", 0.0f, 3.0f, "%.2f",
+                    [this] { return m_renderer->ssaoIntensity(); },
+                    [this](float v) { m_renderer->setSsaoIntensity(v); });
 
-                float ssaoPower = m_renderer->ssaoPower();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("SSAO power", &ssaoPower, 0.25f, 4.0f, "%.2f"))
-                    m_renderer->setSsaoPower(ssaoPower);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("SSAO power", 0.25f, 4.0f, "%.2f",
+                    [this] { return m_renderer->ssaoPower(); },
+                    [this](float v) { m_renderer->setSsaoPower(v); });
                 ImGui::EndDisabled();
 
                 ImGui::Text("SSAO GPU: %.3f ms", m_renderer->ssaoGpuMs());
@@ -1382,43 +1457,30 @@ void EditorUI::drawMenuBar()
                 // Properties), asi que con esto puesto pero ningun objeto marcado
                 // tampoco se graba nada.
                 ImGui::Separator();
-                bool ssr = m_renderer->ssrEnabled();
-                if (ImGui::Checkbox("SSR", &ssr))
-                {
-                    m_renderer->setSsrEnabled(ssr);
-                    saveProjectSettings();
-                }
+                const bool ssr = renderCheckbox("SSR",
+                    [this] { return m_renderer->ssrEnabled(); },
+                    [this](bool v) { m_renderer->setSsrEnabled(v); });
 
                 ImGui::BeginDisabled(!ssr);
-                float ssrDist = m_renderer->ssrMaxDistance();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("SSR distance", &ssrDist, 0.5f, 50.0f, "%.1f"))
-                    m_renderer->setSsrMaxDistance(ssrDist);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("SSR distance", 0.5f, 50.0f, "%.1f",
+                    [this] { return m_renderer->ssrMaxDistance(); },
+                    [this](float v) { m_renderer->setSsrMaxDistance(v); });
 
-                float ssrThick = m_renderer->ssrThickness();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("SSR thickness", &ssrThick, 0.01f, 3.0f, "%.2f"))
-                    m_renderer->setSsrThickness(ssrThick);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("SSR thickness", 0.01f, 3.0f, "%.2f",
+                    [this] { return m_renderer->ssrThickness(); },
+                    [this](float v) { m_renderer->setSsrThickness(v); });
 
-                int ssrSteps = m_renderer->ssrMaxSteps();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderInt("SSR steps", &ssrSteps, 8, 128))
-                    m_renderer->setSsrMaxSteps(ssrSteps);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderInt("SSR steps", 8, 128,
+                    [this] { return m_renderer->ssrMaxSteps(); },
+                    [this](int v) { m_renderer->setSsrMaxSteps(v); });
 
-                float ssrEdge = m_renderer->ssrEdgeFade();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("SSR edge fade", &ssrEdge, 0.0f, 0.5f, "%.3f"))
-                    m_renderer->setSsrEdgeFade(ssrEdge);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("SSR edge fade", 0.0f, 0.5f, "%.3f",
+                    [this] { return m_renderer->ssrEdgeFade(); },
+                    [this](float v) { m_renderer->setSsrEdgeFade(v); });
 
-                float ssrInt = m_renderer->ssrIntensity();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("SSR intensity", &ssrInt, 0.0f, 2.0f, "%.2f"))
-                    m_renderer->setSsrIntensity(ssrInt);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("SSR intensity", 0.0f, 2.0f, "%.2f",
+                    [this] { return m_renderer->ssrIntensity(); },
+                    [this](float v) { m_renderer->setSsrIntensity(v); });
                 ImGui::EndDisabled();
 
                 ImGui::Text("SSR GPU: %.3f ms", m_renderer->ssrGpuMs());
@@ -1428,51 +1490,36 @@ void EditorUI::drawMenuBar()
                 // deja la imagen exactamente como antes de la feature y el coste
                 // GPU a cero.
                 ImGui::Separator();
-                bool fog = m_renderer->fogEnabled();
-                if (ImGui::Checkbox("Volumetric Fog", &fog))
-                {
-                    m_renderer->setFogEnabled(fog);
-                    saveProjectSettings();
-                }
+                const bool fog = renderCheckbox("Volumetric Fog",
+                    [this] { return m_renderer->fogEnabled(); },
+                    [this](bool v) { m_renderer->setFogEnabled(v); });
 
                 // Como en el SSAO y el SSR: los sliders no se ocultan con el
                 // efecto apagado, se dejan desactivados.
                 ImGui::BeginDisabled(!fog);
-                float fogDensity = m_renderer->fogDensity();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("Fog density", &fogDensity, 0.0f, 0.5f, "%.3f"))
-                    m_renderer->setFogDensity(fogDensity);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("Fog density", 0.0f, 0.5f, "%.3f",
+                    [this] { return m_renderer->fogDensity(); },
+                    [this](float v) { m_renderer->setFogDensity(v); });
 
-                float fogFalloff = m_renderer->fogHeightFalloff();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("Fog height falloff", &fogFalloff, 0.0f, 0.5f, "%.3f"))
-                    m_renderer->setFogHeightFalloff(fogFalloff);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("Fog height falloff", 0.0f, 0.5f, "%.3f",
+                    [this] { return m_renderer->fogHeightFalloff(); },
+                    [this](float v) { m_renderer->setFogHeightFalloff(v); });
 
-                float fogBase = m_renderer->fogBaseHeight();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("Fog base height", &fogBase, -50.0f, 50.0f, "%.1f"))
-                    m_renderer->setFogBaseHeight(fogBase);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("Fog base height", -50.0f, 50.0f, "%.1f",
+                    [this] { return m_renderer->fogBaseHeight(); },
+                    [this](float v) { m_renderer->setFogBaseHeight(v); });
 
-                float fogG = m_renderer->fogAnisotropy();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("Fog anisotropy", &fogG, -0.95f, 0.95f, "%.2f"))
-                    m_renderer->setFogAnisotropy(fogG);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("Fog anisotropy", -0.95f, 0.95f, "%.2f",
+                    [this] { return m_renderer->fogAnisotropy(); },
+                    [this](float v) { m_renderer->setFogAnisotropy(v); });
 
-                int fogSteps = m_renderer->fogSteps();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderInt("Fog steps", &fogSteps, 8, 128))
-                    m_renderer->setFogSteps(fogSteps);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderInt("Fog steps", 8, 128,
+                    [this] { return m_renderer->fogSteps(); },
+                    [this](int v) { m_renderer->setFogSteps(v); });
 
-                glm::vec3 scatter = m_renderer->fogScatter();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::ColorEdit3("Fog scattering", &scatter.x))
-                    m_renderer->setFogScatter(scatter);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderColorEdit3("Fog scattering",
+                    [this] { return m_renderer->fogScatter(); },
+                    [this](const glm::vec3& v) { m_renderer->setFogScatter(v); });
                 ImGui::EndDisabled();
 
                 ImGui::Text("Fog GPU: %.3f ms", m_renderer->fogGpuMs());
@@ -1483,33 +1530,24 @@ void EditorUI::drawMenuBar()
                 // frame anterior, asi que emborrona lo que mueve la CAMARA; un
                 // objeto que se mueve solo con la camara quieta no deja estela.
                 ImGui::Separator();
-                bool motionBlur = m_renderer->motionBlurEnabled();
-                if (ImGui::Checkbox("Motion Blur", &motionBlur))
-                {
-                    m_renderer->setMotionBlurEnabled(motionBlur);
-                    saveProjectSettings();
-                }
+                const bool motionBlur = renderCheckbox("Motion Blur",
+                    [this] { return m_renderer->motionBlurEnabled(); },
+                    [this](bool v) { m_renderer->setMotionBlurEnabled(v); });
 
                 // Como en el SSAO, el SSR y la niebla: los sliders no se ocultan
                 // con el efecto apagado, se dejan desactivados.
                 ImGui::BeginDisabled(!motionBlur);
-                float mbIntensity = m_renderer->motionBlurIntensity();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("Motion blur intensity", &mbIntensity, 0.0f, 4.0f, "%.2f"))
-                    m_renderer->setMotionBlurIntensity(mbIntensity);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("Motion blur intensity", 0.0f, 4.0f, "%.2f",
+                    [this] { return m_renderer->motionBlurIntensity(); },
+                    [this](float v) { m_renderer->setMotionBlurIntensity(v); });
 
-                float mbRadius = m_renderer->motionBlurMaxRadius();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderFloat("Motion blur max radius", &mbRadius, 1.0f, 128.0f, "%.0f px"))
-                    m_renderer->setMotionBlurMaxRadius(mbRadius);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderFloat("Motion blur max radius", 1.0f, 128.0f, "%.0f px",
+                    [this] { return m_renderer->motionBlurMaxRadius(); },
+                    [this](float v) { m_renderer->setMotionBlurMaxRadius(v); });
 
-                int mbSamples = m_renderer->motionBlurSamples();
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::SliderInt("Motion blur samples", &mbSamples, 2, 32))
-                    m_renderer->setMotionBlurSamples(mbSamples);
-                if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                renderSliderInt("Motion blur samples", 2, 32,
+                    [this] { return m_renderer->motionBlurSamples(); },
+                    [this](int v) { m_renderer->setMotionBlurSamples(v); });
                 ImGui::EndDisabled();
 
                 // Anti-aliasing. Modos EXCLUYENTES, cada uno con sus propios
@@ -1523,33 +1561,33 @@ void EditorUI::drawMenuBar()
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::Combo("Anti-aliasing", &aaCurrent, aaNames, IM_ARRAYSIZE(aaNames)))
                 {
+                    // El previo lo da el propio Combo: aaCurrent se leyo ANTES
+                    // de dibujarlo y el widget lo acaba de sobrescribir, asi que
+                    // el valor de antes hay que releerlo del renderer, que
+                    // todavia no ha cambiado.
+                    const AaMode antes = m_renderer->aaMode();
                     m_renderer->setAaMode((AaMode)aaCurrent);
                     // Se guarda el NOMBRE del modo, no este indice: ver
                     // aaModeName() al principio del fichero.
-                    saveProjectSettings();
+                    pushRenderUndo<AaMode>("Anti-aliasing", antes, (AaMode)aaCurrent,
+                        [this](const AaMode& v) { m_renderer->setAaMode(v); });
                 }
 
                 const AaMode aaMode = m_renderer->aaMode();
 
                 if (aaMode == AaMode::Fxaa)
                 {
-                    float fxaaSubpix = m_renderer->fxaaSubpix();
-                    ImGui::SetNextItemWidth(140.0f);
-                    if (ImGui::SliderFloat("FXAA subpixel", &fxaaSubpix, 0.0f, 1.0f, "%.2f"))
-                        m_renderer->setFxaaSubpix(fxaaSubpix);
-                    if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                    renderSliderFloat("FXAA subpixel", 0.0f, 1.0f, "%.2f",
+                        [this] { return m_renderer->fxaaSubpix(); },
+                        [this](float v) { m_renderer->setFxaaSubpix(v); });
 
-                    float fxaaEdge = m_renderer->fxaaEdgeThreshold();
-                    ImGui::SetNextItemWidth(140.0f);
-                    if (ImGui::SliderFloat("FXAA edge threshold", &fxaaEdge, 0.063f, 0.333f, "%.3f"))
-                        m_renderer->setFxaaEdgeThreshold(fxaaEdge);
-                    if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                    renderSliderFloat("FXAA edge threshold", 0.063f, 0.333f, "%.3f",
+                        [this] { return m_renderer->fxaaEdgeThreshold(); },
+                        [this](float v) { m_renderer->setFxaaEdgeThreshold(v); });
 
-                    float fxaaEdgeMin = m_renderer->fxaaEdgeThresholdMin();
-                    ImGui::SetNextItemWidth(140.0f);
-                    if (ImGui::SliderFloat("FXAA edge min", &fxaaEdgeMin, 0.0312f, 0.0833f, "%.4f"))
-                        m_renderer->setFxaaEdgeThresholdMin(fxaaEdgeMin);
-                    if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                    renderSliderFloat("FXAA edge min", 0.0312f, 0.0833f, "%.4f",
+                        [this] { return m_renderer->fxaaEdgeThresholdMin(); },
+                        [this](float v) { m_renderer->setFxaaEdgeThresholdMin(v); });
                 }
                 else if (aaMode == AaMode::Ssaa)
                 {
@@ -1571,8 +1609,14 @@ void EditorUI::drawMenuBar()
                     m_ssaaSliderActive = ImGui::IsItemActive();
                     if (ImGui::IsItemDeactivatedAfterEdit())
                     {
+                        // Este es el unico slider del menu que NO necesita
+                        // recordar donde empezo el arrastre: el valor no se
+                        // aplica hasta soltar, asi que el renderer todavia
+                        // tiene el de antes justo aqui.
+                        const float antes = m_renderer->ssaaFactor();
                         m_renderer->setSsaaFactor(m_ssaaPendingFactor);
-                        saveProjectSettings();
+                        pushRenderUndo<float>("SSAA factor", antes, m_ssaaPendingFactor,
+                            [this](const float& v) { m_renderer->setSsaaFactor(v); });
                     }
                     ImGui::TextDisabled("%.2fx pixeles por frame",
                                         m_ssaaPendingFactor * m_ssaaPendingFactor);
@@ -1593,8 +1637,11 @@ void EditorUI::drawMenuBar()
                         snprintf(label, sizeof(label), "%dx", s);
                         if (ImGui::RadioButton(label, samples == s))
                         {
+                            // `samples` se leyo antes del bucle, o sea que es el
+                            // valor de antes del click.
                             m_renderer->setMsaaSamples(s);
-                            saveProjectSettings();
+                            pushRenderUndo<int>("MSAA samples", samples, s,
+                                [this](const int& v) { m_renderer->setMsaaSamples(v); });
                         }
                     }
                     // Con maxSamples == 1 el bucle no dibuja nada mas que el 1x, y
@@ -1608,17 +1655,13 @@ void EditorUI::drawMenuBar()
                 }
                 else if (aaMode == AaMode::Taa)
                 {
-                    float feedback = m_renderer->taaFeedback();
-                    ImGui::SetNextItemWidth(140.0f);
-                    if (ImGui::SliderFloat("TAA feedback", &feedback, 0.0f, 0.98f, "%.2f"))
-                        m_renderer->setTaaFeedback(feedback);
-                    if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                    renderSliderFloat("TAA feedback", 0.0f, 0.98f, "%.2f",
+                        [this] { return m_renderer->taaFeedback(); },
+                        [this](float v) { m_renderer->setTaaFeedback(v); });
 
-                    float jitter = m_renderer->taaJitterScale();
-                    ImGui::SetNextItemWidth(140.0f);
-                    if (ImGui::SliderFloat("TAA jitter", &jitter, 0.0f, 2.0f, "%.2f"))
-                        m_renderer->setTaaJitterScale(jitter);
-                    if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                    renderSliderFloat("TAA jitter", 0.0f, 2.0f, "%.2f",
+                        [this] { return m_renderer->taaJitterScale(); },
+                        [this](float v) { m_renderer->setTaaJitterScale(v); });
                 }
 
                 // El pass propio solo existe en FXAA, SSAA y TAA. El coste del
@@ -1639,8 +1682,12 @@ void EditorUI::drawMenuBar()
                 ImGui::SetNextItemWidth(140.0f);
                 if (ImGui::Combo("Forward+", &fpCurrent, fpNames, IM_ARRAYSIZE(fpNames)))
                 {
+                    // Igual que en el Combo del AA: el previo se relee del
+                    // renderer, que aun no ha cambiado.
+                    const FpMode antes = m_renderer->forwardPlusMode();
                     m_renderer->setForwardPlusMode((FpMode)fpCurrent);
-                    saveProjectSettings();
+                    pushRenderUndo<FpMode>("Forward+", antes, (FpMode)fpCurrent,
+                        [this](const FpMode& v) { m_renderer->setForwardPlusMode(v); });
                 }
 
                 // El recorte de luces, dicho. La escena puede tener las que
@@ -1671,11 +1718,9 @@ void EditorUI::drawMenuBar()
                 {
                     // El radio es lo que hace que el culling sirva de algo: con
                     // uno enorme toda luz cae en toda celda y la lista se llena.
-                    float radius = m_renderer->forwardPlusLightRadius();
-                    ImGui::SetNextItemWidth(140.0f);
-                    if (ImGui::SliderFloat("Light radius", &radius, 50.0f, 5000.0f, "%.0f"))
-                        m_renderer->setForwardPlusLightRadius(radius);
-                    if (ImGui::IsItemDeactivatedAfterEdit()) saveProjectSettings();
+                    renderSliderFloat("Light radius", 50.0f, 5000.0f, "%.0f",
+                        [this] { return m_renderer->forwardPlusLightRadius(); },
+                        [this](float v) { m_renderer->setForwardPlusLightRadius(v); });
 
                     ImGui::Text("Forward+ GPU: %.3f ms", m_renderer->forwardPlusGpuMs());
                     ImGui::Text("Luces/celda: %.1f", m_renderer->forwardPlusAvgPerCell());
@@ -1835,7 +1880,8 @@ void EditorUI::drawToolbar()
     if (ImGui::Button("Wireframe") && m_renderer)
     {
         m_renderer->setWireframeMode(!wireframe);
-        saveProjectSettings();
+        pushRenderUndo<bool>("Wireframe", wireframe, !wireframe,
+            [this](const bool& v) { m_renderer->setWireframeMode(v); });
     }
     if (wireframe)
         ImGui::PopStyleColor();

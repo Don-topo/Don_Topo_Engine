@@ -14,7 +14,21 @@ public:
     // Registra cmd como ya-aplicado — el caller ejecuta la acción real ANTES
     // de llamar push(); push() nunca llama execute(). Vacía el redo stack
     // (una acción nueva invalida cualquier redo pendiente).
-    void push(std::unique_ptr<ICommand> cmd);
+    //
+    // dirtiesScene distingue las dos familias que comparten este historial.
+    // true (el default, y lo que hace todo el panel Properties): la acción
+    // edita la ESCENA, así que marca isSceneDirty. false: la acción edita
+    // ajustes que viven en el project.json y se guardan solos —los del menú
+    // View: bloom, SSAO, niebla, AA…—, y marcar la escena como sucia haría que
+    // el Content Browser pidiera guardar una escena que nadie ha tocado.
+    //
+    // Comparten stack a propósito: Ctrl+Z deshace la última acción del usuario
+    // en su orden real. Dos historiales darían dos Ctrl+Z y ningún criterio
+    // para elegir cuál atiende la tecla.
+    //
+    // El flag nunca LIMPIA el dirty: un ajuste de render detrás de una edición
+    // de escena no convierte esa edición en guardada.
+    void push(std::unique_ptr<ICommand> cmd, bool dirtiesScene = true);
     // No-op si el undo stack está vacío.
     void undo();
     // No-op si el redo stack está vacío.

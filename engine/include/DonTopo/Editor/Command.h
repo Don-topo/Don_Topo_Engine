@@ -52,6 +52,34 @@ private:
     std::function<void(const T&)> m_apply;
 };
 
+// Comando de un AJUSTE DE RENDER (los del menú View: bloom, SSAO, niebla, AA…).
+//
+// Es un PropertyCommand<T> con dos diferencias que vienen de dónde vive el
+// dato, no de qué tipo tiene:
+//
+//  1. `persist` se llama SIEMPRE junto al setter. Un ajuste de render no está
+//     en la escena, está en el project.json: un undo que aplica el valor pero
+//     no reescribe el fichero corrige la imagen y deja lo deshecho esperando a
+//     que se reabra el proyecto. Ir emparejados en el helper es lo que impide
+//     que un llamante de los 39 se deje uno.
+//  2. Se empuja con `UndoManager::push(cmd, /*dirtiesScene=*/false)`: mover un
+//     slider de bloom no es una edición de la escena y no puede disparar el
+//     modal de «hay cambios sin guardar».
+//
+// El helper NO aplica nada al construirse: el widget de ImGui ya escribió el
+// valor nuevo cuando devolvió true, igual que en el resto del editor.
+template <typename T, typename Setter, typename Persist>
+std::unique_ptr<ICommand> makeRenderSettingCommand(std::string label, T before, T after,
+                                                    Setter set, Persist persist)
+{
+    return std::make_unique<PropertyCommand<T>>(
+        std::move(label), std::move(before), std::move(after),
+        [set = std::move(set), persist = std::move(persist)](const T& v) {
+            set(v);
+            persist();
+        });
+}
+
 // Snapshots value-type pa cada tipo de collider — T de PropertyCommand<T>
 // en las secciones Box/Sphere/Capsule/Plane Collider del panel Properties.
 // La gravedad ya no vive en el collider (pasó al Rigidbody): ver RigidbodyState.
@@ -99,8 +127,8 @@ struct AudioClipState {
     bool  playOnAwake;
     // Bus de salida. Va en el mismo snapshot que el resto por lo mismo que los
     // checkboxes: un solo comando para toda la seccion.
-    AudioBus bus;
-    // Como loop e is3D: cambiarlo recarga el sonido.
+    AudioBus bus;
+    // Como loop e is3D: cambiarlo recarga el sonido.
     AudioLoadMode loadMode;
     AudioRolloff  rolloff;
     float spread;
