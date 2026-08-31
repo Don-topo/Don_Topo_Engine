@@ -215,6 +215,30 @@ void PerformancePanel::draw(EditorContext& ctx)
             ImGui::Text("Instancias:  %d", r.statInstances());
             ImGui::Text("Culleados:   %d", r.statCulled());
             ImGui::TextDisabled("Solo el pass de escena (estaticos instanciados + skinned).");
+
+            // Ranuras de objeto. Aqui y no en el menu View porque es un
+            // diagnostico, no un ajuste: lo que dice es si borrar esta
+            // devolviendo los huecos. Si tras varios ciclos Play/Stop el numero
+            // sube en vez de volver al de partida, hay una fuga.
+            const EditorRenderer::SlotUsage slots = r.slotUsage();
+            auto slotRow = [](const char* label, size_t used, size_t capacity) {
+                if (capacity == 0) {
+                    // Backend sin tope duro: el vector crece, asi que el numero
+                    // solo es util comparado consigo mismo.
+                    ImGui::Text("%s %zu (sin tope)", label, used);
+                    return;
+                }
+                const float uso = (float)used / (float)capacity;
+                if (uso >= 0.9f)
+                    ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "%s %zu / %zu", label,
+                                       used, capacity);
+                else
+                    ImGui::Text("%s %zu / %zu", label, used, capacity);
+            };
+            slotRow("Slots GPU:   ", slots.objects, slots.objectCapacity);
+            slotRow("Slots skinned:", slots.skinned, slots.skinnedCapacity);
+            ImGui::TextDisabled("Pasado el tope, el objeto se dibuja con el bloque global\n"
+                                "de descriptores: sale plano, pero no se sale del heap.");
         }
 
         // ── Proceso: RAM, CPU, VRAM ──────────────────────────────────────────

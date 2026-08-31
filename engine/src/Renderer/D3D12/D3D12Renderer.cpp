@@ -13,6 +13,7 @@
 #include "DonTopo/Renderer/InstanceBatching.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/MeshKey.h"
+#include "DonTopo/Renderer/SlotPool.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/PlaceholderTexture.h"
 #include "DonTopo/Renderer/RenderConstants.h"
@@ -684,6 +685,18 @@ struct D3D12Renderer::Impl {
         // releaseStaticObject, que es quien borra, y no en una lista de sitios
         // desde los que está permitido llamar.
         int  sharedRefs = 0;
+        // Clave de contenido con la que este objeto entró en sharedMeshOwner,
+        // vacía si no es el dueño. Al liberarlo hay que sacar esa entrada del
+        // mapa: si no, una malla nueva con la misma clave reusaría los buffers
+        // de un hueco ya reciclado, que a esas alturas contiene OTRA malla.
+        std::string sharedKey;
+        // Dueño retirado con duplicados todavía vivos. No puede soltar sus
+        // buffers ni ceder su hueco (los duplicados los siguen dibujando), así
+        // que se queda de almacén; el último duplicado en morir lo remata.
+        bool pendingRelease = false;
+        // El hueco está en el pool. Evita que un segundo removeGameObject sobre
+        // el mismo subárbol vuelva a entrar aquí.
+        bool slotFree = false;
 
         // Grupo de dibujo: misma malla Y bloque de descriptores equivalente.
         // Los objetos de un grupo se pintan de un solo draw instanciado. -1
@@ -698,11 +711,28 @@ struct D3D12Renderer::Impl {
     };
     std::vector<StaticObject> objects;
 
-    // Clave de contenido -> objeto que subió esa malla. Es lo único que hace
-    // falta para deduplicar: aquí los objetos no se borran de uno en uno (borrar
-    // uno solo lo apaga, ver removeGameObject), así que no hay refcount que
-    // llevar; clearStaticMeshes se lo lleva todo por delante.
+    // Clave de contenido -> objeto que subió esa malla. La entrada se borra
+    // cuando ese objeto se libera: desde que los huecos se reciclan (P11), un
+    // índice viejo puede apuntar a una malla completamente distinta.
     std::unordered_map<std::string, int> sharedMeshOwner;
+
+    // Huecos libres de `objects`. Reciclarlos recicla ADEMÁS su bloque de
+    // descriptores, porque el bloque se deriva del índice
+    // (kSrvObjects + índice * kSrvPerObject).
+    SlotPool objectSlots;
+    // Ternas del rango skinned que han quedado libres, por srvBase absoluto.
+    // Van aparte de `nextSkinnedSlot` porque se reparten por SUBMALLA y un
+    // personaje se lleva tantas como materiales tenga.
+    std::vector<UINT> freeSkinnedSrv;
+    SlotPool          skinnedSlots;
+
+    // Suelta los recursos del objeto `index` y devuelve su hueco al pool.
+    // Devuelve si el hueco quedó libre: un dueño con duplicados vivos NO puede
+    // cederlo, y entonces se queda apagado hasta que muera el último duplicado.
+    bool releaseObjectSlot(size_t index);
+    // Lo mismo para un personaje. Además devuelve al pool las ternas de sus
+    // submallas.
+    bool releaseSkinnedSlot(size_t index);
 
     // Un representante por grupo de dibujo: de él salen los buffers, la terna de
     // descriptores y los factores PBR, que son iguales para todo el grupo.
@@ -885,6 +915,8 @@ struct D3D12Renderer::Impl {
 
         glm::mat4 transform{1.0f};
         bool      visible = true;
+        // Su hueco está en el pool: ver releaseSkinnedSlot.
+        bool      slotFree = false;
         float     ssrStrength = 0.0f;
 
         std::vector<SkinnedSubMesh>       subMeshes;
@@ -3315,9 +3347,19 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
 
         // Las ternas se reparten entre TODOS los personajes de la escena, no
         // por personaje: pasado el tope, la submalla cae a la terna global.
-        if (nextSkinnedSlot < kMaxSkinnedSlots) {
-            const UINT slot = kSrvSkinned + nextSkinnedSlot * kSrvPerObject;
+        // Primero las que haya devuelto un personaje borrado.
+        UINT slot = 0;
+        bool haySlot = false;
+        if (!freeSkinnedSrv.empty()) {
+            slot = freeSkinnedSrv.back();
+            freeSkinnedSrv.pop_back();
+            haySlot = true;
+        } else if (nextSkinnedSlot < kMaxSkinnedSlots) {
+            slot = kSrvSkinned + nextSkinnedSlot * kSrvPerObject;
             ++nextSkinnedSlot;
+            haySlot = true;
+        }
+        if (haySlot) {
             sub.srvBase = slot;
 
             D3D12MA::Allocation* base = uploadMaterialTexture(
@@ -3354,8 +3396,14 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
         QueryPerformanceCounter(&lastTick);
     }
 
-    skinnedObjects.push_back(std::move(object));
-    return static_cast<int>(skinnedObjects.size() - 1);
+    // Hueco reciclado si lo hay; si no, el vector crece como siempre.
+    const int slot = skinnedSlots.acquire();
+    if (slot < 0) {
+        skinnedObjects.push_back(std::move(object));
+        return static_cast<int>(skinnedObjects.size() - 1);
+    }
+    skinnedObjects[static_cast<size_t>(slot)] = std::move(object);
+    return slot;
 }
 
 void D3D12Renderer::Impl::ensureSkinnedInstanceBuffer(size_t count)
@@ -3418,6 +3466,8 @@ void D3D12Renderer::Impl::releaseSkinnedObjects()
         character.textures.clear();
     }
     skinnedObjects.clear();
+    skinnedSlots.clear();
+    freeSkinnedSrv.clear();
     nextSkinnedSlot = 0;
 }
 
@@ -6629,6 +6679,8 @@ int D3D12Renderer::Impl::refreshProbeAssignment()
         // El CENTRO del objeto en mundo, no su origen: una malla larga con el
         // pivote fuera del radio se quedaría sin sonda por nada.
         const StaticObject& object = objects[i];
+        if (object.slotFree)
+            continue;   // sin malla que asignar a ninguna sonda
         const glm::vec3     center =
             object.hasBounds ? glm::vec3(object.transform *
                                      glm::vec4((object.aabbMin + object.aabbMax) * 0.5f, 1.0f))
@@ -7878,8 +7930,11 @@ void D3D12Renderer::Impl::computeCascades()
     // tocan las luces. Por eso se resuelve aqui y no en setLights.
     if (!sceneLights.empty()) {
         SceneCenter centro;
-        for (const StaticObject& object : objects)
+        for (const StaticObject& object : objects) {
+            if (object.slotFree)
+                continue;   // un hueco libre esta en el origen y tiraria de la media
             centro.add(object.transform);
+        }
         for (const SkinnedObject& character : skinnedObjects)
             centro.add(character.transform);
 
@@ -7988,6 +8043,107 @@ bool D3D12Renderer::Impl::releaseStaticObject(StaticObject& object)
             (*allocation)->Release();
         *allocation = nullptr;
     }
+    return true;
+}
+
+bool D3D12Renderer::Impl::releaseObjectSlot(size_t index)
+{
+    if (index >= objects.size())
+        return false;
+    StaticObject& object = objects[index];
+    if (object.slotFree)
+        return false;
+
+    // Hay que quedarse con esto ANTES de que releaseStaticObject lo toque: a un
+    // duplicado le anula los handles, y luego el struct entero se resetea.
+    const bool duplicado = !object.ownsGpu;
+    const int  duenyo    = object.sharedMesh;
+
+    // Aquí vive el criterio de quién puede soltar; esta función solo decide qué
+    // hacer con el HUECO según lo que aquella haya contestado.
+    const bool solto = releaseStaticObject(object);
+
+    if (!solto && !duplicado) {
+        // Dueño con duplicados vivos. Ceder el hueco los dejaría dibujando
+        // memoria que otro objeto habría reasignado, y eso no lo avisa ni la
+        // capa de validación: los handles siguen siendo válidos, solo que ya no
+        // son suyos. Se apaga y espera.
+        object.meshVisible    = false;
+        object.pendingRelease = true;
+        drawGroupsDirty       = true;
+        return false;
+    }
+
+    const std::string key = object.sharedKey;
+    // El bloque de descriptores se CONSERVA: pertenece al indice, no al objeto
+    // (kSrvObjects + indice * kSrvPerObject), y quien reutilice el hueco va a
+    // calcular exactamente el mismo. Devolverlo a kSrvBaseColor haria que los
+    // bucles que refrescan sondas, sombras y AO para todos los objetos —los que
+    // no filtran por srvBase— escribieran en el hueco GLOBAL: una entrada
+    // muerta pisando la textura neutra que usan los objetos sin material.
+    const UINT srvBase = object.srvBase;
+    object             = StaticObject{};
+    object.srvBase     = srvBase;
+    object.meshVisible = false;
+    object.slotFree    = true;
+    if (!key.empty()) {
+        auto it = sharedMeshOwner.find(key);
+        if (it != sharedMeshOwner.end() && it->second == static_cast<int>(index))
+            sharedMeshOwner.erase(it);
+    }
+    objectSlots.release(static_cast<int>(index));
+    drawGroupsDirty = true;
+
+    // El duplicado que acaba de morir puede haber sido el último que mantenía
+    // en pie a un dueño ya retirado. Sin esto sus buffers se quedaban hasta el
+    // clearStaticMeshes siguiente, que es justo la fuga que cierra P11.
+    if (duplicado && duenyo >= 0 && static_cast<size_t>(duenyo) < objects.size()) {
+        StaticObject& previo = objects[static_cast<size_t>(duenyo)];
+        if (previo.pendingRelease && previo.sharedRefs <= 0) {
+            // releaseStaticObject decrementa antes de comparar, así que se le
+            // deja el recuento en 1 para que baje a 0 y suelte.
+            previo.sharedRefs     = 1;
+            previo.pendingRelease = false;
+            releaseObjectSlot(static_cast<size_t>(duenyo));
+        }
+    }
+    return true;
+}
+
+bool D3D12Renderer::Impl::releaseSkinnedSlot(size_t index)
+{
+    if (index >= skinnedObjects.size())
+        return false;
+    SkinnedObject& character = skinnedObjects[index];
+    if (character.slotFree)
+        return false;
+
+    for (D3D12MA::Allocation** allocation :
+         {&character.posKeys, &character.rotKeys, &character.scaleKeys, &character.boneInfos,
+          &character.inputVerts, &character.localXforms, &character.finalBones,
+          &character.outputVerts, &character.indices}) {
+        if (*allocation) {
+            (*allocation)->Release();
+            *allocation = nullptr;
+        }
+    }
+    for (D3D12MA::Allocation* texture : character.textures)
+        if (texture)
+            texture->Release();
+    character.textures.clear();
+
+    // Las ternas vuelven al pool. Un personaje se lleva una por submalla, así
+    // que sin esto el tope de 16 se agotaba con dos o tres recargas de escena
+    // aunque no quedara ni un personaje vivo.
+    for (const SkinnedSubMesh& sub : character.subMeshes)
+        if (sub.srvBase >= kSrvSkinned &&
+            sub.srvBase < kSrvSkinned + kMaxSkinnedSlots * kSrvPerObject)
+            freeSkinnedSrv.push_back(sub.srvBase);
+
+    character          = SkinnedObject{};
+    character.visible  = false;
+    character.slotFree = true;
+    skinnedSlots.release(static_cast<int>(index));
     return true;
 }
 
@@ -9378,6 +9534,13 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
 
     Impl::StaticObject object;
 
+    // El índice se decide AQUÍ y no al insertar, porque de él salen tres cosas
+    // que se escriben más abajo: el bloque de descriptores, el `sharedMesh` de
+    // quien sube la malla y la entrada de `sharedMeshOwner`. Con huecos
+    // reciclados, `objects.size()` ya no es el índice de este objeto.
+    const int  reciclado = d.objectSlots.acquire();
+    const size_t indice  = reciclado >= 0 ? static_cast<size_t>(reciclado) : d.objects.size();
+
     // ¿Ya está esta misma malla con este mismo material en VRAM? La clave es de
     // CONTENIDO, así que dos cubos creados por separado la comparten. El
     // duplicado se queda con los handles del dueño y no sube ni un byte.
@@ -9436,7 +9599,7 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
         object.aabbMax   = hi;
         object.hasBounds = true;
 
-        object.sharedMesh = static_cast<int>(d.objects.size());
+        object.sharedMesh = static_cast<int>(indice);
         object.ownsGpu    = true;
         object.sharedRefs = 1;  // él mismo
     }
@@ -9451,8 +9614,8 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
     // llevan la sonda de reflexión que le toca a ESTE objeto, y dos cubos
     // iguales en dos habitaciones distintas reflejan cosas distintas. Lo que se
     // comparte son los recursos a los que apuntan, que es donde está la memoria.
-    if (d.objects.size() < kMaxObjectSlots) {
-        const UINT slot = kSrvObjects + static_cast<UINT>(d.objects.size()) * kSrvPerObject;
+    if (indice < kMaxObjectSlots) {
+        const UINT slot = kSrvObjects + static_cast<UINT>(indice) * kSrvPerObject;
         object.srvBase  = slot;
 
         if (reusa) {
@@ -9510,11 +9673,18 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
         }
     }
 
-    d.objects.push_back(object);
-    if (!reusa)
-        d.sharedMeshOwner.emplace(key, static_cast<int>(d.objects.size() - 1));
+    if (!reusa) {
+        // La clave se guarda EN el objeto: al liberarlo hay que sacar su
+        // entrada del mapa, y buscarla por valor seria recorrerlo entero.
+        object.sharedKey = key;
+        d.sharedMeshOwner[key] = static_cast<int>(indice);
+    }
+    if (reciclado >= 0)
+        d.objects[indice] = object;
+    else
+        d.objects.push_back(object);
     d.drawGroupsDirty = true;
-    return static_cast<int>(d.objects.size() - 1);
+    return static_cast<int>(indice);
 }
 
 void D3D12Renderer::setTransform(size_t objectIndex, const glm::mat4& transform)
@@ -9562,6 +9732,21 @@ void D3D12Renderer::setLightRadii(const std::vector<float>& radii)
     // de params.x, así que el slider "Light radius" del panel Forward+ no hacía
     // nada bajo DirectX 12 mientras que en Vulkan sí.
     m_impl->lightRadii = radii;
+}
+
+D3D12Renderer::SlotUsage D3D12Renderer::slotUsage() const
+{
+    const Impl& d = *m_impl;
+    SlotUsage u;
+    // Vivos = entradas del vector menos las que estan en el pool. El tope es el
+    // reparto del heap de descriptores (kSrvObjects + i * kSrvPerObject), no
+    // una decision del vector: pasado ese numero un objeto se dibuja con el
+    // bloque global y sale plano.
+    u.objects         = d.objects.size() - d.objectSlots.freeCount();
+    u.objectCapacity  = kMaxObjectSlots;
+    u.skinned         = d.skinnedObjects.size() - d.skinnedSlots.freeCount();
+    u.skinnedCapacity = kMaxSkinnedSlots;
+    return u;
 }
 
 void D3D12Renderer::tickDeferredDeletes()
@@ -9616,6 +9801,7 @@ void D3D12Renderer::clearStaticMeshes()
         d.releaseStaticObject(object);
 
     d.objects.clear();
+    d.objectSlots.clear();   // los huecos ya no existen: el vector esta vacio
     d.sharedMeshOwner.clear();
     d.drawGroupRep.clear();
     d.drawGroupsDirty = true;
@@ -9804,16 +9990,24 @@ void D3D12Renderer::removeGameObject(GameObject* node)
 
     // Los huecos NO se compactan: los índices de render de los demás objetos
     // están anotados en sus GameObject, y moverlos dejaría a todos apuntando a
-    // otra malla. El objeto se apaga y su sitio queda libre para nada.
+    // otra malla. Lo que sí se hace es SOLTAR sus recursos y devolver el hueco
+    // al pool para que lo estrene el siguiente alta (H32, H43). Antes esto solo
+    // ponía meshVisible a false y la VRAM se quedaba hasta cerrar la escena.
+    //
+    // Una espera para todo el subárbol, no una por hijo: soltar recursos con
+    // trabajo en vuelo es corrupción silenciosa, no un error que avise la API.
+    // Y borrar es una acción de editor, no algo por frame, así que el parón no
+    // se nota. Mismo criterio que clearStaticMeshes.
+    m_impl->waitForGpu();
     node->traverse([this](GameObject* child) {
         if (!child)
             return;
         if (child->staticRenderIndex >= 0) {
-            setObjectMeshVisible(static_cast<size_t>(child->staticRenderIndex), false);
+            m_impl->releaseObjectSlot(static_cast<size_t>(child->staticRenderIndex));
             child->staticRenderIndex = -1;
         }
         if (child->skinnedRenderIndex >= 0) {
-            setSkinnedMeshVisible(child->skinnedRenderIndex, false);
+            m_impl->releaseSkinnedSlot(static_cast<size_t>(child->skinnedRenderIndex));
             child->skinnedRenderIndex = -1;
         }
     });
@@ -9823,12 +10017,15 @@ void D3D12Renderer::removeMeshComponent(GameObject* node)
 {
     if (!node)
         return;
+    if (node->staticRenderIndex < 0 && node->skinnedRenderIndex < 0)
+        return;   // nada que soltar: no vale la pena parar la GPU
+    m_impl->waitForGpu();
     if (node->staticRenderIndex >= 0) {
-        setObjectMeshVisible(static_cast<size_t>(node->staticRenderIndex), false);
+        m_impl->releaseObjectSlot(static_cast<size_t>(node->staticRenderIndex));
         node->staticRenderIndex = -1;
     }
     if (node->skinnedRenderIndex >= 0) {
-        setSkinnedMeshVisible(node->skinnedRenderIndex, false);
+        m_impl->releaseSkinnedSlot(static_cast<size_t>(node->skinnedRenderIndex));
         node->skinnedRenderIndex = -1;
     }
 }
@@ -10448,6 +10645,7 @@ void D3D12Renderer::shutdown()
         d.releaseStaticObject(object);
 
     d.objects.clear();
+    d.objectSlots.clear();
     d.sharedMeshOwner.clear();
     d.drawGroupRep.clear();
 

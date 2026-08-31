@@ -11,6 +11,7 @@
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/EditorRenderer.h"
 #include "DonTopo/Renderer/Frustum.h"
+#include "DonTopo/Renderer/SlotPool.h"
 #include "DonTopo/Renderer/SkinnedBounds.h"
 #include "DonTopo/Renderer/InstanceBatching.h"
 #include "DonTopo/Renderer/RendererState.h"
@@ -365,6 +366,15 @@ namespace DonTopo {
             // hasta el ultimo pass de post. Se mide SIEMPRE, tambien en None, que
             // es justo lo que lo hace util: es la referencia contra la que se
             // compara el sobrecoste real de SSAA y de MSAA.
+            // Sin tope duro: los vectores crecen. Lo que no crece —desde que
+            // hay pool— es el numero de entradas vivas tras un ciclo Play/Stop.
+            SlotUsage slotUsage() const override
+            {
+                SlotUsage u;
+                u.objects = m_objects.size() - m_staticSlots.freeCount();
+                u.skinned = m_skinnedObjects.size() - m_skinnedSlots.freeCount();
+                return u;
+            }
             float renderGpuMs() const             { return m_renderGpuMs; }
 
             // ── Instrumentacion del panel Performance (solo editor) ──────────
@@ -1055,6 +1065,13 @@ namespace DonTopo {
             std::vector<SkinnedRenderObject> m_skinnedObjects;
 
             std::vector<RenderObject> m_objects;
+
+            // Huecos libres de los dos vectores de arriba. Borrar un objeto no
+            // puede compactar —los indices viven anotados en cada GameObject—,
+            // asi que el hueco se recicla en la siguiente alta en vez de
+            // dejarlos crecer sin fin (H19).
+            SlotPool m_staticSlots;
+            SlotPool m_skinnedSlots;
 
             // Recursos GPU compartidos por los objetos estáticos. Los objetos
             // guardan un índice aquí; la tabla los mantiene vivos mientras

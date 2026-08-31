@@ -74,6 +74,12 @@ add_executable(dt_render_settings_undo_tests render_settings_undo_tests.cpp)
 target_link_libraries(dt_render_settings_undo_tests PRIVATE DonTopoEditor)
 target_compile_features(dt_render_settings_undo_tests PRIVATE cxx_std_20)
 
+# Sin enlazar nada: SlotPool es header-only y no arrastra ni GPU ni FMOD, asi
+# que este test solo necesita el include del motor.
+add_executable(dt_slot_pool_tests slot_pool_tests.cpp)
+target_include_directories(dt_slot_pool_tests PRIVATE ${CMAKE_SOURCE_DIR}/engine/include)
+target_compile_features(dt_slot_pool_tests PRIVATE cxx_std_20)
+
 # Los diecisiete ejecutables enlazan DonTopoCore, que arrastra FMOD (Audio). Sin
 # copiar fmod.dll al lado del .exe, un clone limpio falla en runtime con
 # STATUS_ENTRYPOINT_NOT_FOUND. Mismo patrÃ³n que sandbox/CMakeLists.txt.

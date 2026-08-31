@@ -284,6 +284,7 @@ public:
 
     // Métricas por pase: sin consultas de tiempo en este backend todavía.
     void     setPerfCaptureEnabled(bool on) override;
+    SlotUsage slotUsage() const override;
     float    renderGpuMs() const override;
     float    ssaoGpuMs() const override;
     float    ssrGpuMs() const override;

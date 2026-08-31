@@ -273,6 +273,27 @@ namespace DonTopo
             virtual float lastProbeBakeMs() const            = 0;
             virtual float probeBakeMs(uint64_t ownerId) const = 0;
 
+            // ── Ranuras de objeto ───────────────────────────────────────────
+            // Cuántas entradas de render hay vivas y cuántas caben. Borrar un
+            // objeto no compacta el vector —los índices están anotados en cada
+            // GameObject— pero sí devuelve su hueco, así que un ciclo
+            // Play/Stop repetido tiene que dejar `used` donde estaba. Que se
+            // vea es lo que distingue el reciclaje de una fuga (H19, H43).
+            //
+            // capacity == 0 significa "sin tope duro": el backend crece el
+            // vector. Vulkan es así; D3D12 tiene 512 y 16, que son los tamaños
+            // con los que se repartió el heap de descriptores.
+            struct SlotUsage {
+                size_t objects         = 0;
+                size_t objectCapacity  = 0;
+                size_t skinned         = 0;
+                size_t skinnedCapacity = 0;
+            };
+            // No es virtual pura: un backend que no lleve la cuenta devuelve
+            // ceros y el panel lo trata como "sin dato", en vez de obligar a
+            // los dos a implementarla el día que se añada un tercero.
+            virtual SlotUsage slotUsage() const { return {}; }
+
             // ── Métricas ────────────────────────────────────────────────────
             // En milisegundos de GPU del último frame medido. Cero si el
             // backend no las toma.

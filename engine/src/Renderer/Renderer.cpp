@@ -492,7 +492,10 @@ namespace DonTopo {
             // AQUI, junto a las cascadas, porque es el mismo valor que tiene que
             // ver la niebla (via fogCtx) en este frame.
             SceneCenter centro;
-            for (const RenderObject& object : m_objects)      centro.add(object.transform);
+            // sharedIndex < 0 = entrada liberada (o aun sin subir): no tiene
+            // sitio en el mundo y tiraria de la media hacia el origen.
+            for (const RenderObject& object : m_objects)
+                if (object.sharedIndex >= 0) centro.add(object.transform);
             for (const SkinnedRenderObject& character : m_skinnedObjects)
                 centro.add(character.transform);
             if (!centro.get(m_sceneCenter))
@@ -657,6 +660,7 @@ namespace DonTopo {
         // FREE_DESCRIPTOR_SET_BIT pa soportar rebuildSkinnedMesh), y destruir
         // el pool aquí antes dejaría un handle ya destruido al que liberar.
         m_objects.clear();
+        m_staticSlots.clear();
         // Sin refcounts ni diferido: el vkDeviceWaitIdle de arriba garantiza que
         // nadie está leyendo, y a estas alturas ya no queda quien dibuje.
         m_sharedMeshes.destroyAll([this](const SharedGpuMesh& gpu) {
@@ -702,6 +706,7 @@ namespace DonTopo {
         }
 
         m_skinnedObjects.clear();
+        m_skinnedSlots.clear();
         // Ahora sí: ya no queda ningún destroySkinnedRenderObject pendiente que
         // necesite liberar sets de la cadena de pools.
         for (VkDescriptorPool pool : m_descriptorPools)
@@ -3471,8 +3476,17 @@ namespace DonTopo {
         if (!m_pendingBatch)
             m_pendingBatch = std::make_unique<TransferBatch>(m_gpu);
 
-        m_objects.emplace_back();
-        RenderObject& obj = m_objects.back();
+        // Hueco reciclado si lo hay, y si no el vector crece como siempre. Sin
+        // esto, cada ciclo Play/Stop dejaba una entrada muerta más (H19): los
+        // índices están anotados en cada GameObject, así que compactar no es
+        // una opción y la única salida es reutilizar.
+        const int slot = m_staticSlots.acquire();
+        if (slot < 0)
+            m_objects.emplace_back();
+        else
+            m_objects[(size_t)slot] = RenderObject{};   // sin restos del anterior
+        const int index = slot < 0 ? (int)m_objects.size() - 1 : slot;
+        RenderObject& obj = m_objects[(size_t)index];
         const bool created = buildRenderObject(mesh, obj, m_pendingBatch.get(), decoded);
 
         if (created)
@@ -3486,7 +3500,7 @@ namespace DonTopo {
             // suyo, y machacarlo con uno posterior la retrasaría de más.
             gpu.uploadTicket = m_nextUploadTicket;
         }
-        return (int)m_objects.size() - 1;
+        return index;
     }
 
     void Renderer::destroySharedGpuMesh(const SharedGpuMesh& obj)
@@ -3901,13 +3915,19 @@ namespace DonTopo {
         if (!m_pendingBatch)
             m_pendingBatch = std::make_unique<TransferBatch>(m_gpu);
 
-        m_skinnedObjects.emplace_back();
-        SkinnedRenderObject& obj = m_skinnedObjects.back();
+        // Mismo reciclaje que en addStaticMesh.
+        const int slot = m_skinnedSlots.acquire();
+        if (slot < 0)
+            m_skinnedObjects.emplace_back();
+        else
+            m_skinnedObjects[(size_t)slot] = SkinnedRenderObject{};
+        const int index = slot < 0 ? (int)m_skinnedObjects.size() - 1 : slot;
+        SkinnedRenderObject& obj = m_skinnedObjects[(size_t)index];
         initSkinnedRenderObject(obj, mesh, m_pendingBatch.get(), decoded);
 
         // Igual que los estáticos: invisible hasta que la fence del batch señale.
         obj.uploadTicket = m_nextUploadTicket;
-        return (int)m_skinnedObjects.size() - 1;
+        return index;
     }
 
     void Renderer::initSkinnedRenderObject(SkinnedRenderObject& obj, const SkinnedMesh& mesh,
@@ -4321,6 +4341,11 @@ namespace DonTopo {
         RenderObject& obj = m_objects[index];
         if (obj.sharedIndex < 0) return; // ya liberado
         releaseRenderObject(obj);
+        // La entrada queda vacía y su hueco vuelve al pool. Los recursos de GPU
+        // los libera la cola diferida kDelayFrames después, pero la ENTRADA ya
+        // no tiene nada: releaseRenderObject dejó sharedIndex a -1, que es lo
+        // que mira el skip de recordCommandBuffer.
+        m_staticSlots.release(index);
     }
 
     void Renderer::removeSkinnedObject(int index)
@@ -4331,6 +4356,7 @@ namespace DonTopo {
         // queueDestroy... ya deja obj vacío: la asignación de después sobra y
         // pisaría el snapshot si se dejara.
         queueDestroySkinnedRenderObject(obj);
+        m_skinnedSlots.release(index);
     }
 
     void Renderer::removeGameObject(GameObject* node)
