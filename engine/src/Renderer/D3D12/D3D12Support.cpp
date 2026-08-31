@@ -14,8 +14,10 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
-// La descripción del adaptador viene en UTF-16 y el resto del motor habla
-// std::string en UTF-8 (el log, el JSON del proyecto, ImGui).
+
+
+}  // namespace
+
 std::string narrow(const wchar_t* wide) {
     if (wide == nullptr || wide[0] == L'\0') {
         return {};
@@ -28,8 +30,6 @@ std::string narrow(const wchar_t* wide) {
     WideCharToMultiByte(CP_UTF8, 0, wide, -1, out.data(), needed, nullptr, nullptr);
     return out;
 }
-
-}  // namespace
 
 SupportInfo querySupport() {
     SupportInfo info;

@@ -25,11 +25,16 @@ namespace D3D12 {
 
 // Backend de presentación DirectX 12.
 //
-// ALCANCE DE HOY: device, cola de comandos, swapchain, sincronización por
-// fence, resize y limpieza. Presenta un color de fondo y nada más — no hay
-// mallas, materiales, cámaras, sombras, post ni UI. Eso llega en las fases
-// siguientes, y hasta entonces el editor bajo este backend es una ventana que
-// presenta. Está dicho en el Log al arrancar: no es un stub que finja trabajar.
+// ALCANCE DE HOY: paridad con el camino de Vulkan. Mallas estáticas y
+// animadas por compute, materiales PBR, IBL, sombras en cascada y de cubemap,
+// SSAO, SSR, niebla volumétrica, bloom, motion blur, anti-aliasing (FXAA,
+// SSAA, MSAA y TAA), Forward+, sondas de reflexión, contorno de selección y
+// UI. Lo que NO tiene está en la tabla de paridad de docs/renderer-audit.md.
+//
+// (Este bloque decía «presenta un color de fondo y nada más» mucho después de
+// que dejara de ser cierto: H47. El header es lo primero que se lee para
+// decidir si un efecto existe, así que mentir aquí sale más caro que en el
+// .cpp.)
 //
 // El estado de DX12 vive en un Impl oculto para que este header no arrastre
 // d3d12.h a todo el que incluya el motor; por eso las libs van PRIVATE en el
@@ -212,9 +217,9 @@ public:
     // Las subidas de este backend son síncronas: basta con esperar a la GPU.
     void flushUploadsAndWait() override;
 
-    // El rango de profundidad aquí es fijo (0.1 a 500), así que no hay nada que
-    // reajustar. Se implementa para cumplir la interfaz y para que quien la
-    // llame no tenga que preguntar con qué backend corre.
+    // Recalcula near/far desde la caja de la escena, igual que el camino de
+    // Vulkan y con el mismo suelo de 200 unidades, para que los dos backends
+    // den el mismo encuadre. (Antes sí era fijo, y el comentario se quedó.)
     void refitCameraRange() override;
 
     void setOutlineTarget(int staticIndex, int skinnedIndex) override;
@@ -270,12 +275,12 @@ public:
     // Sin lote de subidas: aquí cada una se envía y se espera al hacerla.
     void  flushPendingUploads() override;
 
-    // SSAA no está en este backend: se acepta el valor y se guarda, pero no
-    // cambia la resolución de render. El panel lo enseña igual.
+    // SSAA sí escala aquí la resolución de dibujo: applyPendingRenderSize la
+    // recalcula en el frame siguiente y el resolve promedia.
     void  setSsaaFactor(float v) override;
 
-    // Sondas de reflexión: todavía no. Cero sondas y cero milisegundos, que es
-    // lo que el panel enseña.
+    // Sondas de reflexión, con horneado real: seis caras por sonda, su coste
+    // de GPU medido y el reparto por objeto que hace el pase de escena.
     void  requestProbeBake(uint64_t ownerId) override;
     void  requestProbeBakeAll() override;
     int   probeCount() const override;

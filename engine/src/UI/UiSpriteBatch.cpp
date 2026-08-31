@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
+#include "DonTopo/Renderer/ShaderModule.h"
 
 namespace DonTopo
 {
@@ -1548,28 +1549,6 @@ namespace DonTopo
             }
         }
 
-        std::vector<char> readSpv(const std::string& path)
-        {
-            std::ifstream file(path, std::ios::ate | std::ios::binary);
-            if (!file.is_open()) throw std::runtime_error("failed to open shader file: " + path);
-            const size_t size = (size_t)file.tellg();
-            std::vector<char> buffer(size);
-            file.seekg(0);
-            file.read(buffer.data(), (std::streamsize)size);
-            return buffer;
-        }
-
-        VkShaderModule makeModule(VkDevice device, const std::vector<char>& code)
-        {
-            VkShaderModuleCreateInfo info{};
-            info.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            info.codeSize = code.size();
-            info.pCode    = reinterpret_cast<const uint32_t*>(code.data());
-            VkShaderModule module = VK_NULL_HANDLE;
-            if (vkCreateShaderModule(device, &info, nullptr, &module) != VK_SUCCESS)
-                throw std::runtime_error("failed to create ui shader module!");
-            return module;
-        }
     }
 
     // ── CPU ─────────────────────────────────────────────────────────────────
@@ -1848,8 +1827,8 @@ namespace DonTopo
                                        VkSampleCountFlagBits samples,
                                        bool depthTest, VkPipeline& out)
     {
-        VkShaderModule vert = makeModule(gpu.device(), readSpv("shaders/ui.vert.spv"));
-        VkShaderModule frag = makeModule(gpu.device(), readSpv("shaders/ui.frag.spv"));
+        VkShaderModule vert = loadShaderModule(gpu.device(), "shaders/ui.vert.spv");
+        VkShaderModule frag = loadShaderModule(gpu.device(), "shaders/ui.frag.spv");
 
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

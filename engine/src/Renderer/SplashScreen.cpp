@@ -5,6 +5,7 @@
 #include <fstream>
 #include <vector>
 #include <cstring>
+#include "DonTopo/Renderer/ShaderModule.h"
 
 namespace DonTopo {
 
@@ -22,29 +23,6 @@ bool loadSplashImage(const std::string& path, std::vector<uint8_t>& outRGBA,
 }
 
 // ── helpers (molde: Skybox.cpp) ─────────────────────────────────────────────
-
-static std::vector<char> loadSpv(const std::string& path)
-{
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) throw std::runtime_error("SplashScreen: cannot open shader: " + path);
-    size_t sz = (size_t)f.tellg();
-    std::vector<char> buf(sz);
-    f.seekg(0);
-    f.read(buf.data(), sz);
-    return buf;
-}
-
-static VkShaderModule makeModule(VkDevice dev, const std::vector<char>& code)
-{
-    VkShaderModuleCreateInfo ci{};
-    ci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    ci.codeSize = code.size();
-    ci.pCode    = reinterpret_cast<const uint32_t*>(code.data());
-    VkShaderModule m;
-    if (vkCreateShaderModule(dev, &ci, nullptr, &m) != VK_SUCCESS)
-        throw std::runtime_error("SplashScreen: failed to create shader module");
-    return m;
-}
 
 // ── public ───────────────────────────────────────────────────────────────────
 
@@ -301,11 +279,8 @@ void SplashScreen::createDescriptors(GpuDevice& gpu)
 
 void SplashScreen::createPipeline(GpuDevice& gpu, VkRenderPass renderPass)
 {
-    auto vertCode = loadSpv("shaders/splash.vert.spv");
-    auto fragCode = loadSpv("shaders/splash.frag.spv");
-
-    VkShaderModule vertMod = makeModule(gpu.device(), vertCode);
-    VkShaderModule fragMod = makeModule(gpu.device(), fragCode);
+    VkShaderModule vertMod = loadShaderModule(gpu.device(), "shaders/splash.vert.spv");
+    VkShaderModule fragMod = loadShaderModule(gpu.device(), "shaders/splash.frag.spv");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

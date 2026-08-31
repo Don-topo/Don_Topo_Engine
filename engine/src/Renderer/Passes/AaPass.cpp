@@ -9,33 +9,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include "DonTopo/Renderer/ShaderModule.h"
 
 namespace DonTopo {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-static std::vector<char> loadSpv(const std::string& path)
-{
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) throw std::runtime_error("failed to open shader: " + path);
-    size_t sz = (size_t)f.tellg();
-    std::vector<char> buf(sz);
-    f.seekg(0);
-    f.read(buf.data(), (std::streamsize)sz);
-    return buf;
-}
-
-static VkShaderModule makeModule(VkDevice dev, const std::vector<char>& code)
-{
-    VkShaderModuleCreateInfo ci{};
-    ci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    ci.codeSize = code.size();
-    ci.pCode    = reinterpret_cast<const uint32_t*>(code.data());
-    VkShaderModule m;
-    if (vkCreateShaderModule(dev, &ci, nullptr, &m) != VK_SUCCESS)
-        throw std::runtime_error("failed to create shader module!");
-    return m;
-}
 
 // Los tres modos con pass propio. None y MSAA no lo tienen: en MSAA el resolve
 // ocurre dentro del pass de composicion.
@@ -258,8 +236,7 @@ void AaPass::createPipelines(const Context& ctx)
     // Mismo vertex shader que la composicion: el triangulo sale de
     // gl_VertexIndex y saca la UV en location 0, que es justo lo que esperan
     // los tres fragment shaders.
-    auto vertCode = loadSpv("shaders/fullscreen.vert.spv");
-    VkShaderModule vertModule = makeModule(ctx.gpu.device(), vertCode);
+    VkShaderModule vertModule = loadShaderModule(ctx.gpu.device(), "shaders/fullscreen.vert.spv");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -333,8 +310,7 @@ void AaPass::createPipelines(const Context& ctx)
     auto makePipeline = [&](const char* spv, VkPipelineLayout layout,
                             VkRenderPass pass, uint32_t attachments, VkPipeline& out)
     {
-        auto code = loadSpv(spv);
-        VkShaderModule module = makeModule(ctx.gpu.device(), code);
+        VkShaderModule module = loadShaderModule(ctx.gpu.device(), spv);
         stages[1].module   = module;
         cb.attachmentCount = attachments;
         pci.layout         = layout;

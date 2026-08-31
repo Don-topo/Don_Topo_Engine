@@ -7,33 +7,11 @@
 #include <vector>
 #include <cstdint>
 #include <cstdio>
+#include "DonTopo/Renderer/ShaderModule.h"
 
 namespace DonTopo {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-static std::vector<char> loadSpv(const std::string& path)
-{
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) throw std::runtime_error("failed to open shader: " + path);
-    size_t sz = (size_t)f.tellg();
-    std::vector<char> buf(sz);
-    f.seekg(0);
-    f.read(buf.data(), (std::streamsize)sz);
-    return buf;
-}
-
-static VkShaderModule makeModule(VkDevice dev, const std::vector<char>& code)
-{
-    VkShaderModuleCreateInfo ci{};
-    ci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    ci.codeSize = code.size();
-    ci.pCode    = reinterpret_cast<const uint32_t*>(code.data());
-    VkShaderModule m;
-    if (vkCreateShaderModule(dev, &ci, nullptr, &m) != VK_SUCCESS)
-        throw std::runtime_error("failed to create shader module!");
-    return m;
-}
 
 // Los mismos campos y en el mismo orden que el bloque de
 // motion_blur.comp.
@@ -112,8 +90,7 @@ void MotionBlurPass::createPipeline(const Context& ctx)
     if (vkCreatePipelineLayout(ctx.gpu.device(), &pli, nullptr, &m_pipelineLayout) != VK_SUCCESS)
         throw std::runtime_error("failed to create motion blur pipeline layout!");
 
-    auto code   = loadSpv("shaders/motion_blur.comp.spv");
-    auto module = makeModule(ctx.gpu.device(), code);
+    auto module = loadShaderModule(ctx.gpu.device(), "shaders/motion_blur.comp.spv");
 
     VkComputePipelineCreateInfo ci{};
     ci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;

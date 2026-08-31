@@ -6,33 +6,11 @@
 #include <cstdio>
 #include <cstddef>
 #include <cmath>
+#include "DonTopo/Renderer/ShaderModule.h"
 
 namespace DonTopo {
 
 namespace {
-
-std::vector<char> loadSpv(const std::string& path)
-{
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) throw std::runtime_error("Gizmos: cannot open shader: " + path);
-    size_t sz = (size_t)f.tellg();
-    std::vector<char> buf(sz);
-    f.seekg(0);
-    f.read(buf.data(), sz);
-    return buf;
-}
-
-VkShaderModule makeModule(VkDevice dev, const std::vector<char>& code)
-{
-    VkShaderModuleCreateInfo ci{};
-    ci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    ci.codeSize = code.size();
-    ci.pCode    = reinterpret_cast<const uint32_t*>(code.data());
-    VkShaderModule m;
-    if (vkCreateShaderModule(dev, &ci, nullptr, &m) != VK_SUCCESS)
-        throw std::runtime_error("Gizmos: failed to create shader module");
-    return m;
-}
 
 } // namespace
 
@@ -96,11 +74,8 @@ void Gizmos::createBuffer(GpuDevice& gpu)
 
 void Gizmos::createPipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples)
 {
-    auto vertCode = loadSpv("shaders/gizmo.vert.spv");
-    auto fragCode = loadSpv("shaders/gizmo.frag.spv");
-
-    VkShaderModule vertMod = makeModule(gpu.device(), vertCode);
-    VkShaderModule fragMod = makeModule(gpu.device(), fragCode);
+    VkShaderModule vertMod = loadShaderModule(gpu.device(), "shaders/gizmo.vert.spv");
+    VkShaderModule fragMod = loadShaderModule(gpu.device(), "shaders/gizmo.frag.spv");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

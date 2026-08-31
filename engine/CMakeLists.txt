@@ -1,4 +1,4 @@
-# El motor, sin nada del editor. Es lo unico que enlaza el runtime: por eso
+﻿# El motor, sin nada del editor. Es lo unico que enlaza el runtime: por eso
 # aqui no puede aparecer ninguna de las libs de ImGui ni ningun fuente de
 # src/Editor/.
 add_library(DonTopoCore STATIC
@@ -19,6 +19,7 @@ add_library(DonTopoCore STATIC
     src/Renderer/Passes/SsaoPass.cpp
     src/Renderer/Passes/SsrPass.cpp
     src/Renderer/Passes/MotionBlurPass.cpp
+    src/Renderer/ShaderModule.cpp
     src/Renderer/Skybox.cpp
     src/Renderer/SplashScreen.cpp
     src/Renderer/ModelLoader.cpp

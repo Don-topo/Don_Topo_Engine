@@ -9,33 +9,11 @@
 #include <vector>
 #include <cstddef>
 #include <cstdint>
+#include "DonTopo/Renderer/ShaderModule.h"
 
 namespace DonTopo {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-static std::vector<char> loadSpv(const std::string& path)
-{
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) throw std::runtime_error("failed to open shader: " + path);
-    size_t sz = (size_t)f.tellg();
-    std::vector<char> buf(sz);
-    f.seekg(0);
-    f.read(buf.data(), (std::streamsize)sz);
-    return buf;
-}
-
-static VkShaderModule makeModule(VkDevice dev, const std::vector<char>& code)
-{
-    VkShaderModuleCreateInfo ci{};
-    ci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    ci.codeSize = code.size();
-    ci.pCode    = reinterpret_cast<const uint32_t*>(code.data());
-    VkShaderModule m;
-    if (vkCreateShaderModule(dev, &ci, nullptr, &m) != VK_SUCCESS)
-        throw std::runtime_error("failed to create shader module!");
-    return m;
-}
 
 // ── Depth pre-pass ──────────────────────────────────────────────────────────
 void DepthPrepassPass::createRenderPassAndPipeline(const Context& ctx)
@@ -103,8 +81,7 @@ void DepthPrepassPass::createRenderPassAndPipeline(const Context& ctx)
         throw std::runtime_error("failed to create ssao depth render pass!");
 
     // --- Pipeline del pre-pass (vertex-only, como el de sombras) ---------
-    auto vertCode = loadSpv("shaders/depth_prepass.vert.spv");
-    VkShaderModule vertModule = makeModule(ctx.gpu.device(), vertCode);
+    VkShaderModule vertModule = loadShaderModule(ctx.gpu.device(), "shaders/depth_prepass.vert.spv");
 
     VkPipelineShaderStageCreateInfo vertStage{};
     vertStage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;

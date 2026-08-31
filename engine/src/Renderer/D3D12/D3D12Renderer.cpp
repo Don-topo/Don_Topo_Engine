@@ -14,6 +14,7 @@
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/MeshKey.h"
 #include "DonTopo/Renderer/SlotPool.h"
+#include "DonTopo/Renderer/D3D12/D3D12Support.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/PlaceholderTexture.h"
 #include "DonTopo/Renderer/RenderConstants.h"
@@ -551,17 +552,11 @@ void throwIfFailed(HRESULT hr, const char* step)
     }
 }
 
-std::string narrow(const wchar_t* wide)
-{
-    if (wide == nullptr || wide[0] == L'\0')
-        return {};
-    const int needed = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0, nullptr, nullptr);
-    if (needed <= 1)
-        return {};
-    std::string out(static_cast<size_t>(needed - 1), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide, -1, out.data(), needed, nullptr, nullptr);
-    return out;
-}
+// narrow() vivía aquí, copiada byte a byte de D3D12Support.cpp (H48). Ahora
+// solo hay una, declarada en D3D12Support.h: las dos convertían texto que
+// acaba en el mismo log, así que divergir habría dado dos codificaciones
+// distintas para la misma cadena sin que nada avisara.
+using DonTopo::D3D12::narrow;
 
 }  // namespace
 

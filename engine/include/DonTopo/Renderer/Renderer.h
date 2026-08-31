@@ -243,9 +243,14 @@ namespace DonTopo {
             // Sustituye la textura del slot indicado por el checkerboard
             // "missing" (mismo generador que createTextureImage usa cuando no
             // hay path/bytes). No-op si renderIndex está fuera de rango.
-            // Sincroniza con vkDeviceWaitIdle antes de tocar el descriptor
-            // set (evita pisar un frame en vuelo). Solo cubre meshes
-            // estáticos — no hay UI hoy que asigne meshes skinned.
+            // NO para la GPU: los handles viejos se encolan en la cola de
+            // destrucción diferida en vez de destruirse ya, así que un command
+            // buffer en vuelo que aún referencie el descriptor set los sigue
+            // viendo válidos hasta kDelayFrames frames después. (Este
+            // comentario decía justo lo contrario —«sincroniza con
+            // vkDeviceWaitIdle»— desde antes de que existiera la cola: H26.)
+            // Solo cubre meshes estáticos — no hay UI hoy que asigne meshes
+            // skinned.
             void replaceStaticTextureWithMissing(int renderIndex, TextureSlot slot);
             // facePaths: +X, -X, +Y, -Y, +Z, -Z (cualquier formato soportado por stb_image)
             void initSkybox(const std::array<std::string, 6>& facePaths);

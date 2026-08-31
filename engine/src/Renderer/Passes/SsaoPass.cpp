@@ -8,33 +8,11 @@
 #include <vector>
 #include <cstdint>
 #include <cstdio>
+#include "DonTopo/Renderer/ShaderModule.h"
 
 namespace DonTopo {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-static std::vector<char> loadSpv(const std::string& path)
-{
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) throw std::runtime_error("failed to open shader: " + path);
-    size_t sz = (size_t)f.tellg();
-    std::vector<char> buf(sz);
-    f.seekg(0);
-    f.read(buf.data(), (std::streamsize)sz);
-    return buf;
-}
-
-static VkShaderModule makeModule(VkDevice dev, const std::vector<char>& code)
-{
-    VkShaderModuleCreateInfo ci{};
-    ci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    ci.codeSize = code.size();
-    ci.pCode    = reinterpret_cast<const uint32_t*>(code.data());
-    VkShaderModule m;
-    if (vkCreateShaderModule(dev, &ci, nullptr, &m) != VK_SUCCESS)
-        throw std::runtime_error("failed to create shader module!");
-    return m;
-}
 
 // Compartida por ssao.comp y ssao_blur.comp, que comparten pipeline
 // layout (el blur solo lee invRes).
@@ -109,8 +87,7 @@ void SsaoPass::createPipelines(const Context& ctx)
 
     auto makeSsaoPipeline = [&](const std::string& spv, VkPipeline& pipeline)
     {
-        auto code   = loadSpv(spv);
-        auto module = makeModule(ctx.gpu.device(), code);
+        auto module = loadShaderModule(ctx.gpu.device(), spv);
 
         VkComputePipelineCreateInfo ci{};
         ci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;

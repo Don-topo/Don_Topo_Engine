@@ -23,6 +23,15 @@ struct SupportInfo {
 // device ni deja ningún objeto vivo tras devolver.
 SupportInfo querySupport();
 
+// UTF-16 -> UTF-8. La descripcion de un adaptador y el JSON de estadisticas de
+// D3D12MA llegan en wchar_t, y el resto del motor habla std::string en UTF-8
+// (el log, el project.json, ImGui). Cadena vacia si `wide` es nullptr o vacia.
+//
+// Vive aqui porque estaba escrita DOS veces —esta y otra en D3D12Renderer.cpp,
+// byte a byte la misma salvo el estilo de llaves— y las dos convierten lo que
+// acaba en el mismo log (H48).
+std::string narrow(const wchar_t* wide);
+
 }  // namespace DonTopo::D3D12
 
 #endif  // DT_D3D12_ENABLED
