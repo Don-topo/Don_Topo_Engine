@@ -7,7 +7,6 @@
 #include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
-#include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/Cube.h"
 #include "DonTopo/Renderer/Sphere.h"
 #include "DonTopo/Renderer/Plane.h"
@@ -19,6 +18,7 @@
 #include <cassert>
 #include <cctype>
 #include <cstring>
+#include "DonTopo/Renderer/EditorRenderer.h"
 
 namespace {
 

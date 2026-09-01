@@ -5,7 +5,6 @@
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/Scene.h"
-#include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include <imgui.h>
@@ -17,6 +16,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "DonTopo/Renderer/EditorRenderer.h"
 
 namespace ed = ax::NodeEditor;
 

@@ -1,7 +1,6 @@
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
-#include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
 
@@ -11,6 +10,7 @@
 #include <chrono>
 #include <exception>
 #include <utility>
+#include "DonTopo/Renderer/EditorRenderer.h"
 
 namespace DonTopo
 {

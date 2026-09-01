@@ -10,7 +10,6 @@
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
-#include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Files/FileManager.h"
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Scripting/ScriptBindings.h"
@@ -27,6 +26,7 @@
 #include <fstream>
 #include <cstdio>
 #include <stdexcept>
+#include "DonTopo/Renderer/EditorRenderer.h"
 
 namespace DonTopo {
 
@@ -445,50 +445,50 @@ namespace {
 // literales que ofrecen los combos del menú View (aaNames/fpNames): el ajuste
 // se persiste por nombre, así que reordenar o insertar una opción en el array
 // no cambia lo que ya hay guardado.
-const char* aaModeName(Renderer::AaMode mode)
+const char* aaModeName(EditorRenderer::AaMode mode)
 {
     switch (mode)
     {
-        case Renderer::AaMode::Fxaa: return "FXAA";
-        case Renderer::AaMode::Ssaa: return "SSAA";
-        case Renderer::AaMode::Msaa: return "MSAA";
-        case Renderer::AaMode::Taa:  return "TAA";
+        case EditorRenderer::AaMode::Fxaa: return "FXAA";
+        case EditorRenderer::AaMode::Ssaa: return "SSAA";
+        case EditorRenderer::AaMode::Msaa: return "MSAA";
+        case EditorRenderer::AaMode::Taa:  return "TAA";
         default:                     return "None";
     }
 }
 
 // ok = false si el nombre no es ninguno de los de hoy (fichero de una versión
 // futura, o editado a mano): el caller se cae al default y lo deja en el Log.
-Renderer::AaMode aaModeFromName(const std::string& name, bool& ok)
+EditorRenderer::AaMode aaModeFromName(const std::string& name, bool& ok)
 {
     ok = true;
-    if (name == "None") return Renderer::AaMode::None;
-    if (name == "FXAA") return Renderer::AaMode::Fxaa;
-    if (name == "SSAA") return Renderer::AaMode::Ssaa;
-    if (name == "MSAA") return Renderer::AaMode::Msaa;
-    if (name == "TAA")  return Renderer::AaMode::Taa;
+    if (name == "None") return EditorRenderer::AaMode::None;
+    if (name == "FXAA") return EditorRenderer::AaMode::Fxaa;
+    if (name == "SSAA") return EditorRenderer::AaMode::Ssaa;
+    if (name == "MSAA") return EditorRenderer::AaMode::Msaa;
+    if (name == "TAA")  return EditorRenderer::AaMode::Taa;
     ok = false;
-    return Renderer::AaMode::None;
+    return EditorRenderer::AaMode::None;
 }
 
-const char* fpModeName(Renderer::FpMode mode)
+const char* fpModeName(EditorRenderer::FpMode mode)
 {
     switch (mode)
     {
-        case Renderer::FpMode::Tiled:     return "Tiled";
-        case Renderer::FpMode::Clustered: return "Clustered";
+        case EditorRenderer::FpMode::Tiled:     return "Tiled";
+        case EditorRenderer::FpMode::Clustered: return "Clustered";
         default:                          return "Off";
     }
 }
 
-Renderer::FpMode fpModeFromName(const std::string& name, bool& ok)
+EditorRenderer::FpMode fpModeFromName(const std::string& name, bool& ok)
 {
     ok = true;
-    if (name == "Off")       return Renderer::FpMode::Off;
-    if (name == "Tiled")     return Renderer::FpMode::Tiled;
-    if (name == "Clustered") return Renderer::FpMode::Clustered;
+    if (name == "Off")       return EditorRenderer::FpMode::Off;
+    if (name == "Tiled")     return EditorRenderer::FpMode::Tiled;
+    if (name == "Clustered") return EditorRenderer::FpMode::Clustered;
     ok = false;
-    return Renderer::FpMode::Off;
+    return EditorRenderer::FpMode::Off;
 }
 
 } // namespace
@@ -673,13 +673,13 @@ void EditorUI::applyProjectSettings()
     // Los modos, los últimos: cambiarlos recrea targets, y así se hace una sola
     // vez con los parámetros ya puestos.
     bool aaOk = true;
-    const Renderer::AaMode aa = aaModeFromName(s.aaMode, aaOk);
+    const EditorRenderer::AaMode aa = aaModeFromName(s.aaMode, aaOk);
     if (!aaOk)
         m_logPanel.push("Modo de anti-aliasing desconocido en el proyecto ('" + s.aaMode + "'): se usa None");
     m_renderer->setAaMode(aa);
 
     bool fpOk = true;
-    const Renderer::FpMode fp = fpModeFromName(s.fpMode, fpOk);
+    const EditorRenderer::FpMode fp = fpModeFromName(s.fpMode, fpOk);
     if (!fpOk)
         m_logPanel.push("Modo de Forward+ desconocido en el proyecto ('" + s.fpMode + "'): se usa Off");
     m_renderer->setForwardPlusMode(fp);
@@ -1567,7 +1567,7 @@ void EditorUI::drawMenuBar()
                 // se serializa. En None no se graba ni un comando de mas y la
                 // imagen es identica a la de antes de la feature.
                 ImGui::Separator();
-                using AaMode = Renderer::AaMode;
+                using AaMode = EditorRenderer::AaMode;
                 const char* aaNames[] = { "None", "FXAA", "SSAA", "MSAA", "TAA" };
                 int aaCurrent = (int)m_renderer->aaMode();
                 ImGui::SetNextItemWidth(140.0f);
@@ -1688,7 +1688,7 @@ void EditorUI::drawMenuBar()
                 // siempre. Ajuste de sesion, no se serializa: asi el runtime y el
                 // editor arrancan en el mismo modo y renderizan igual.
                 ImGui::Separator();
-                using FpMode = Renderer::FpMode;
+                using FpMode = EditorRenderer::FpMode;
                 const char* fpNames[] = { "Off", "Tiled", "Clustered" };
                 int fpCurrent = (int)m_renderer->forwardPlusMode();
                 ImGui::SetNextItemWidth(140.0f);

@@ -1,13 +1,13 @@
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
-#include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Audio/AudioListenerComponent.h"
 #include <algorithm>
+#include "DonTopo/Renderer/EditorRenderer.h"
 
 namespace DonTopo {
 

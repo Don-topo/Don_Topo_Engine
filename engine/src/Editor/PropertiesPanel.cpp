@@ -12,7 +12,6 @@
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
 #include "DonTopo/Physics/Rigidbody.h"
-#include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Scripting/ScriptManager.h"
@@ -37,6 +36,8 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/euler_angles.hpp>
+#include "DonTopo/Renderer/EditorRenderer.h"
+#include "DonTopo/Renderer/AsyncAssetLoader.h"
 
 namespace {
 

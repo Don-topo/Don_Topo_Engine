@@ -9,7 +9,6 @@
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
-#include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/UI/ButtonComponent.h"
 #include "DonTopo/UI/TextComponent.h"
 #include "DonTopo/UI/CanvasComponent.h"   // uiWorldCanvasMatrix, UiCanvasRenderMode
@@ -19,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include "DonTopo/Renderer/EditorRenderer.h"
 
 namespace DonTopo {
 

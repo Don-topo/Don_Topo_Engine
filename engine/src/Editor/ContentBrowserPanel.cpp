@@ -4,13 +4,13 @@
 #include "DonTopo/Editor/UndoManager.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
-#include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include <imgui.h>
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <set>
+#include "DonTopo/Renderer/EditorRenderer.h"
 
 namespace {
 
@@ -294,19 +294,19 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
                     {
                         mat->texturePath.clear();
                         if (canSwap)
-                            ctx.renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, Renderer::TextureSlot::Diffuse);
+                            ctx.renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, EditorRenderer::TextureSlot::Diffuse);
                     }
                     if (matches(mat->normalMapPath))
                     {
                         mat->normalMapPath.clear();
                         if (canSwap)
-                            ctx.renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, Renderer::TextureSlot::Normal);
+                            ctx.renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, EditorRenderer::TextureSlot::Normal);
                     }
                     if (matches(mat->metallicRoughnessPath))
                     {
                         mat->metallicRoughnessPath.clear();
                         if (canSwap)
-                            ctx.renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, Renderer::TextureSlot::MetallicRoughness);
+                            ctx.renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, EditorRenderer::TextureSlot::MetallicRoughness);
                     }
                 }
             }

@@ -1,6 +1,5 @@
 #include "DonTopo/Editor/PerformancePanel.h"
 #include "DonTopo/Editor/EditorContext.h"
-#include "DonTopo/Renderer/Renderer.h"
 #include <imgui.h>
 #include <algorithm>
 #include <cstdio>
@@ -15,6 +14,7 @@
 #include <windows.h>
 #include <psapi.h>
 #include <dxgi1_4.h>
+#include "DonTopo/Renderer/EditorRenderer.h"
 // Se enlazan aquí y no desde CMake: son librerías de importación del SDK de
 // Windows y este es el único traductor que las usa.
 #pragma comment(lib, "psapi.lib")
