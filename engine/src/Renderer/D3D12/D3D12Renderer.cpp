@@ -10911,6 +10911,17 @@ void D3D12Renderer::shutdown()
 
     d.fxaaPipeline.Reset();
     d.fxaaRootSignature.Reset();
+    // El SSAA se habia quedado fuera de esta lista, y era la fuga entera de
+    // H78: de los 20 root signatures y 36 PSO del backend, estos dos eran los
+    // UNICOS sin Reset en todo el fichero. Salian como
+    // `Live ID3D12RootSignature: 1` + `ID3D12PipelineState: 1`, y sus dos
+    // referencias eran las que dejaban el device en Refcount 2.
+    //
+    // La lista se escribe a mano y tiene 56 entradas: olvidar una no da error
+    // ni sintoma visible, solo ensucia el informe de fugas. Por eso importa que
+    // ese informe salga LIMPIO — en cuanto tolera ruido, deja de avisar.
+    d.ssaaPipeline.Reset();
+    d.ssaaRootSignature.Reset();
     d.fogPipeline.Reset();
     d.fogRootSignature.Reset();
     d.compositePipeline.Reset();
