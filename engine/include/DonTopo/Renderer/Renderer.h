@@ -14,6 +14,7 @@
 #include "DonTopo/Renderer/SlotPool.h"
 #include "DonTopo/Renderer/SkinnedBounds.h"
 #include "DonTopo/Renderer/InstanceBatching.h"
+#include "DonTopo/Renderer/VisibleSet.h"
 #include "DonTopo/Renderer/RendererState.h"
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/GpuResources.h"
@@ -743,6 +744,22 @@ namespace DonTopo {
             // recordCommandBuffer y updateUniformBuffer.
             FrameCamera currentFrameCamera() const;
 
+            // Evalúa los objetos contra `frustum` (Visibility::gatherCandidates)
+            // y agrupa los visibles en m_instanceBatches, escribiendo sus
+            // transforms en el tramo propio de este pase dentro del SSBO del
+            // frame. Los firstInstance de los batches ya salen con la base de
+            // ese tramo aplicada, así que el llamante solo tiene que dibujar.
+            //
+            // Lo llaman los TRES pases que dibujan geometría estática —escena,
+            // sombras (una vez por cascada) y depth pre-pase—, cada uno con su
+            // frustum: los conjuntos visibles no coinciden, así que cada uno
+            // escribe su propio rango y m_instanceCursor va detrás.
+            //
+            // colorPass = false apaga el SSR en la clave del agrupado: los
+            // pases que no pintan color no lo leen y con un único valor salen
+            // menos draws.
+            void gatherAndBatch(const Frustum& frustum, bool colorPass);
+
             // Pass 1: la escena 3D a su render target propio.
             void recordScenePass(VkCommandBuffer cmd, const FrameCamera& fc,
                                   const Frustum& camFrustum, bool perfStamp);
@@ -1034,8 +1051,9 @@ namespace DonTopo {
             void*                           m_instanceMapped[MAX_FRAMES]        = {};
             uint32_t                        m_instanceCapacity[MAX_FRAMES]      = {}; // en matrices
             uint32_t                        m_instanceCursor                    = 0;
-            // Scratch reutilizado entre frames y entre passes: el agrupado corre
-            // dos veces por frame y no debe alojar nada en ese camino.
+            // Scratch reutilizado entre frames y entre passes: gatherAndBatch
+            // corre una vez por cascada más otras dos (depth pre-pase y escena)
+            // en cada frame, y no debe alojar nada en ese camino.
             std::vector<BatchCandidate>     m_batchCandidates;
             std::vector<InstanceBatch>      m_instanceBatches;
             // Visibilidad de m_skinnedObjects de ESTE frame, en el mismo orden e

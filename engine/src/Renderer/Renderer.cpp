@@ -1494,18 +1494,10 @@ namespace DonTopo {
         {
             const RenderObject&  obj = m_objects[m_outlineStaticIndex];
             const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
-            // Mismas guardas que el bucle de dibujo, en el mismo orden: checkbox
-            // "Visible", entrada borrada, upload en vuelo y frustum. Un objeto
-            // sin contorno porque está fuera de cámara —u oculto— es lo correcto:
-            // el objeto tampoco se ha dibujado.
-            bool visible = obj.meshVisible && gpu && gpu->uploadTicket <= m_lastCompletedTicket;
-            if (visible && gpu->hasBounds &&
-                !aabbVisible(camFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
-            {
-                visible = false;
-            }
-
-            if (visible)
+            // Las mismas guardas que el bucle de dibujo, literalmente: un objeto
+            // sin contorno porque está fuera de cámara —u oculto— es lo correcto,
+            // porque el objeto tampoco se ha dibujado.
+            if (Visibility::objectVisible(obj, gpu, m_lastCompletedTicket, camFrustum))
             {
                 const glm::vec3 extent = gpu->aabbMax - gpu->aabbMin;
                 const float maxExtent  = glm::max(extent.x, glm::max(extent.y, extent.z));
@@ -1627,45 +1619,14 @@ namespace DonTopo {
 
         vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
             isWireframeMode() ? m_wireframePipeline : m_pipeline);
-        // Las guardas y el culling siguen siendo POR OBJETO: se resuelven
-        // aquí, que es donde está la caché GPU, y el agrupado solo ve el
-        // resultado en `visible`. Agrupar antes de cullear dibujaría de más.
-        m_batchCandidates.clear();
-        m_batchCandidates.reserve(m_objects.size());
-        for (auto& obj : m_objects)
-        {
-            const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
-            // !gpu: borrado desde el editor. uploadTicket por delante del
-            // último completado: todavía en vuelo, sus texturas siguen en
-            // TRANSFER_DST_OPTIMAL y samplearlas sería leer basura; aparece
-            // en cuanto la fence de su batch señale.
-            // obj.meshVisible: checkbox "Visible" del componente Mesh. Mismo
-            // filtro en los pases de sombra y de AO: oculto no llega a la GPU
-            // en ninguno, así que no proyecta sombra ni ocluye.
-            bool visible = obj.meshVisible && gpu && gpu->uploadTicket <= m_lastCompletedTicket;
-            // Fuera de cámara: no gasta ni slot en el SSBO. Los objetos sin
-            // AABB (mesh vacío) pasan siempre.
-            if (visible && gpu->hasBounds &&
-                !aabbVisible(camFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
-            {
-                visible = false;
-            }
-            // La fuerza de SSR entra en la clave del agrupado: es una push
-            // constant por grupo, igual que metallic y roughness, así que dos
-            // objetos con la misma malla y distinta fuerza no pueden ir en el
-            // mismo draw. Con el SSR global apagado todos entran a 0 y el
-            // agrupado sale exactamente igual que antes de la feature.
-            const float ssr = m_ssrEnabled ? obj.ssrStrength : 0.0f;
-            m_batchCandidates.push_back({ obj.sharedIndex, visible, &obj.transform, ssr });
-        }
-
-        // El pass de sombras ya ha escrito su parte del buffer: sus
-        // transforms van delante y los de aquí detrás, con el cursor como
-        // base de los firstInstance.
-        const uint32_t instanceBase = m_instanceCursor;
-        glm::mat4* dst = (glm::mat4*)m_instanceMapped[m_currentFrame] + instanceBase;
-        m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
-            dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
+        // El pass de sombras y el depth pre-pass ya han escrito su parte del
+        // buffer: sus transforms van delante y los de aquí detrás. colorPass =
+        // true porque este es el único que pinta color, y por tanto el único
+        // que mete la fuerza de SSR en la clave del agrupado: es una push
+        // constant por grupo, igual que metallic y roughness, así que dos
+        // objetos con la misma malla y distinta fuerza no pueden ir en el
+        // mismo draw.
+        gatherAndBatch(camFrustum, /*colorPass*/ true);
 
         // Contadores del panel Performance: se cuentan sobre los mismos
         // candidatos que acaba de agrupar buildInstanceBatches, asi que
@@ -3062,6 +3023,28 @@ namespace DonTopo {
                                               firstInstanceBase, outBatches);
     }
 
+    void Renderer::gatherAndBatch(const Frustum& frustum, bool colorPass)
+    {
+        // Las guardas y el culling son POR OBJETO y se resuelven aquí, que es
+        // donde está la caché GPU; el agrupado solo ve el resultado en
+        // `visible`. Agrupar antes de cullear dibujaría de más.
+        //
+        // Los tres pases pasaban por aquí con el bucle escrito a mano, y las
+        // tres copias tenían que coincidir: si divergen, el AO oscurece contra
+        // geometría que no se dibuja y las sombras flotan sin objeto. Ahora la
+        // decisión está en Visibility::gatherCandidates, con su test.
+        Visibility::gatherCandidates(m_objects, m_sharedMeshes, m_lastCompletedTicket,
+                                     frustum, colorPass && m_ssrEnabled, m_batchCandidates);
+
+        // Tramo propio dentro del SSBO del frame: los pases comparten buffer y
+        // el cursor marca dónde empieza el de este, que es la base de sus
+        // firstInstance.
+        const uint32_t instanceBase = m_instanceCursor;
+        glm::mat4* dst = (glm::mat4*)m_instanceMapped[m_currentFrame] + instanceBase;
+        m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
+            dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
+    }
+
     void Renderer::createDescriptorPool()
     {
         // El primero de la cadena. Antes esto era el UNICO, dimensionado con las
@@ -3611,31 +3594,7 @@ namespace DonTopo {
             // conjuntos visibles no coinciden, así que cada pass escribe su
             // propio rango del SSBO (las cascadas van primero, una detrás de
             // otra, y el de la escena al final).
-            m_batchCandidates.clear();
-            m_batchCandidates.reserve(m_objects.size());
-            for(auto& obj : m_objects)
-            {
-                const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
-                // !gpu: borrado desde el editor. En vuelo: no debe proyectar
-                // sombra si todavía no es visible, o habría una sombra flotando
-                // sin objeto que la eche. obj.meshVisible (checkbox "Visible"):
-                // un mesh oculto no se manda a la GPU en ningún pass, así que
-                // tampoco proyecta sombra.
-                bool visible = obj.meshVisible && gpu && gpu->uploadTicket <= m_lastCompletedTicket;
-                // Fuera del volumen que cubre esta cascada: su sombra no cabría
-                // en la capa de todos modos.
-                if (visible && gpu->hasBounds &&
-                    !aabbVisible(lightFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
-                {
-                    visible = false;
-                }
-                m_batchCandidates.push_back({ obj.sharedIndex, visible, &obj.transform });
-            }
-
-            const uint32_t instanceBase = m_instanceCursor;
-            glm::mat4* dst = (glm::mat4*)m_instanceMapped[m_currentFrame] + instanceBase;
-            m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
-                dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
+            gatherAndBatch(lightFrustum, /*colorPass*/ false);
 
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPass.pipelineLayout(),
                 1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
@@ -5136,26 +5095,9 @@ namespace DonTopo {
             // profundidad no es solo del AO: la NIEBLA marcha hasta ella, así que
             // sin los personajes la niebla de su silueta se calculaba hasta lo que
             // hubiera detrás y salía un recorte con la forma del objeto de atrás.
-            m_batchCandidates.clear();
-            m_batchCandidates.reserve(m_objects.size());
-            for (auto& obj : m_objects)
-            {
-                const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
-                bool visible = obj.meshVisible && gpu && gpu->uploadTicket <= m_lastCompletedTicket;
-                if (visible && gpu->hasBounds &&
-                    !aabbVisible(camFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
-                {
-                    visible = false;
-                }
-                m_batchCandidates.push_back({ obj.sharedIndex, visible, &obj.transform });
-            }
-
             // Tramo propio del SSBO, detrás del de las cascadas y delante del del
             // pass de escena.
-            const uint32_t instanceBase = m_instanceCursor;
-            glm::mat4* dst = (glm::mat4*)m_instanceMapped[m_currentFrame] + instanceBase;
-            m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
-                dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
+            gatherAndBatch(camFrustum, /*colorPass*/ false);
 
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPass.pipelineLayout(),
                 1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
