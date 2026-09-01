@@ -313,6 +313,10 @@ namespace DonTopo
             virtual float bloomGpuMs() const                  = 0;
             virtual float fogGpuMs() const                    = 0;
             virtual float aaGpuMs() const                     = 0;
+            // Motion blur. Era el UNICO pase sin medir en NINGUN backend, asi
+            // que se encendia a ciegas pese a ser de los caros: un dispatch mas
+            // una copia de la imagen entera.
+            virtual float motionBlurGpuMs() const { return 0.0f; }
             virtual float sceneGpuMs() const                  = 0;
             virtual float shadowGpuMs() const                 = 0;
             virtual float forwardPlusGpuMs() const            = 0;

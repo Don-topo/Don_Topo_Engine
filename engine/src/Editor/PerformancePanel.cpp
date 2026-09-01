@@ -200,6 +200,7 @@ void PerformancePanel::draw(EditorContext& ctx)
                 gpuRow("Forward+ (cull)",  r.forwardPlusGpuMs(), total);
                 gpuRow("SSR",              r.ssrGpuMs(),         total);
                 gpuRow("Niebla",           r.fogGpuMs(),         total);
+                gpuRow("Motion blur",      r.motionBlurGpuMs(),  total);
                 gpuRow("Bloom",            r.bloomGpuMs(),       total);
                 gpuRow("Anti-aliasing",    r.aaGpuMs(),          total);
                 gpuRow("TOTAL (sin UI)",   total,                total);

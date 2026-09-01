@@ -104,6 +104,19 @@ void MotionBlurPass::createPipeline(const Context& ctx)
 
     vkDestroyShaderModule(ctx.gpu.device(), module, nullptr);
 
+    // Medicion del coste en GPU. Dos marcas por frame en vuelo, como el resto
+    // de pases: el soporte y el periodo los resolvio el Renderer y llegan en el
+    // Context.
+    if (ctx.timestampsSupported)
+    {
+        VkQueryPoolCreateInfo qpi{};
+        qpi.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        qpi.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+        qpi.queryCount = kFramesInFlight * 2;
+        if (vkCreateQueryPool(ctx.gpu.device(), &qpi, nullptr, &m_queryPool) != VK_SUCCESS)
+            throw std::runtime_error("failed to create motion blur query pool!");
+    }
+
     printf("motion blur pipeline OK\n"); fflush(stdout);
 }
 
@@ -114,6 +127,12 @@ void MotionBlurPass::destroyPipeline(const Context& ctx)
     vkDestroyPipelineLayout(ctx.gpu.device(), m_pipelineLayout, nullptr);
     vkDestroyDescriptorPool(ctx.gpu.device(), m_descPool, nullptr);
     vkDestroyDescriptorSetLayout(ctx.gpu.device(), m_descLayout, nullptr);
+
+    if (m_queryPool != VK_NULL_HANDLE)
+    {
+        vkDestroyQueryPool(ctx.gpu.device(), m_queryPool, nullptr);
+        m_queryPool = VK_NULL_HANDLE;
+    }
 }
 
 void MotionBlurPass::createImages(const Context& ctx)
@@ -198,13 +217,35 @@ void MotionBlurPass::destroyImages(const Context& ctx)
 
 void MotionBlurPass::record(const Context& ctx, VkCommandBuffer cmd)
 {
+    // Lo del frame ANTERIOR de este mismo slot: su fence ya senalo, asi que el
+    // resultado esta listo y no hay que bloquear a nadie para leerlo.
+    if (ctx.timestampsSupported && m_queryPending[ctx.currentFrame])
+    {
+        uint64_t stamps[2] = {};
+        if (vkGetQueryPoolResults(ctx.gpu.device(), m_queryPool, ctx.currentFrame * 2, 2,
+                                  sizeof(stamps), stamps, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+            m_gpuMs = (float)((double)(stamps[1] - stamps[0]) * ctx.timestampPeriod * 1e-6);
+        m_queryPending[ctx.currentFrame] = false;
+    }
+
     if (!active(ctx) || m_sets[ctx.currentFrame] == VK_NULL_HANDLE)
     {
+        // Apagado no cuesta nada, y decirlo asi en el panel es la respuesta
+        // correcta: no es "0.00 ms de trabajo", es que no hubo trabajo.
+        m_gpuMs = 0.0f;
         // Ni dispatch ni copia ni barreras: el HDR se queda tal y como lo
         // dejaron el pass de escena, el SSR y la niebla, en SHADER_READ_ONLY,
         // que es justo lo que esperan el bloom y la composición. Imagen
         // idéntica a la de antes de esta feature.
         return;
+    }
+
+    if (ctx.timestampsSupported)
+    {
+        vkCmdResetQueryPool(cmd, m_queryPool, ctx.currentFrame * 2, 2);
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_queryPool,
+                            ctx.currentFrame * 2);
     }
 
     MotionBlurPush push{};
@@ -282,6 +323,16 @@ void MotionBlurPass::record(const Context& ctx, VkCommandBuffer cmd)
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                          0, 0, nullptr, 0, nullptr, 1, &b);
+
+    // La marca de salida va aqui y no tras el dispatch: la copia de vuelta es
+    // una imagen entera del tamano del render y forma parte de lo que cuesta
+    // este pase. Medir solo el dispatch daria una cifra optimista.
+    if (ctx.timestampsSupported)
+    {
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_queryPool,
+                            ctx.currentFrame * 2 + 1);
+        m_queryPending[ctx.currentFrame] = true;
+    }
 }
 
 } // namespace DonTopo

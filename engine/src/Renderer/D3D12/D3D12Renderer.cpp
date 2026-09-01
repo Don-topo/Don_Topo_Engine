@@ -1573,7 +1573,10 @@ struct D3D12Renderer::Impl {
         TsFog         = 12,
         TsBloom       = 14,
         TsAa          = 16,
-        TsCount       = 18,
+        // El motion blur se media en NINGUN backend: el pase existia desde
+        // hace tiempo y su coste no aparecia en el panel.
+        TsMotionBlur  = 18,
+        TsCount       = 20,
     };
     ComPtr<ID3D12QueryHeap> timestampHeap;
     ComPtr<ID3D12Resource>  timestampReadback;
@@ -9344,8 +9347,11 @@ void D3D12Renderer::drawFrame()
     // Motion blur detrás de la niebla y antes del bloom: emborrona la imagen tal
     // y como se va a ver, y la estela arrastra los highlights para que florezcan
     // con ellos. Apagado no graba ni un comando.
-    if (d.motionBlurActive())
+    if (d.motionBlurActive()) {
+        d.markTimestamp(Impl::TsMotionBlur);
         d.recordMotionBlur();
+        d.markTimestamp(Impl::TsMotionBlur + 1);
+    }
 
     // Bloom, composición con tone mapping y FXAA hasta el backbuffer. El
     // anti-aliasing se cronometra dentro: TAA y FXAA van cosidos a este pase.
@@ -10555,6 +10561,7 @@ float D3D12Renderer::ssaoGpuMs() const { return m_impl->gpuMs[Impl::TsSsao / 2];
 float D3D12Renderer::ssrGpuMs() const { return m_impl->gpuMs[Impl::TsSsr / 2]; }
 float D3D12Renderer::bloomGpuMs() const { return m_impl->gpuMs[Impl::TsBloom / 2]; }
 float D3D12Renderer::fogGpuMs() const { return m_impl->gpuMs[Impl::TsFog / 2]; }
+float D3D12Renderer::motionBlurGpuMs() const { return m_impl->gpuMs[Impl::TsMotionBlur / 2]; }
 float D3D12Renderer::aaGpuMs() const { return m_impl->gpuMs[Impl::TsAa / 2]; }
 float D3D12Renderer::sceneGpuMs() const { return m_impl->gpuMs[Impl::TsScene / 2]; }
 float D3D12Renderer::shadowGpuMs() const { return m_impl->gpuMs[Impl::TsShadow / 2]; }

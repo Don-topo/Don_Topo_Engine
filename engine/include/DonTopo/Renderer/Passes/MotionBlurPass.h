@@ -39,6 +39,11 @@ public:
         // frames, este el TAA activo o no.
         const glm::mat4&     taaCurrViewProj;
         const glm::mat4&     taaPrevViewProj;
+        // Medicion del coste en GPU, igual que en el bloom. Sin esto el pase
+        // era el UNICO que no se media, o sea que el motion blur se encendia
+        // a ciegas pese a ser de los caros.
+        bool                 timestampsSupported;
+        float                timestampPeriod;
     };
 
     MotionBlurPass()                                 = default;
@@ -59,12 +64,19 @@ public:
     // y florece con ellos. Apagado no graba ni un comando.
     void record(const Context& ctx, VkCommandBuffer cmd);
     bool active(const Context& ctx) const;
+    // ms de GPU del ultimo frame medido. 0 si no hay timestamps o si el
+    // efecto esta apagado.
+    float gpuMs() const { return m_gpuMs; }
 
 private:
     // Imagen intermedia del mismo formato y tamano que el HDR: el shader
     // lee pixeles arbitrarios a lo largo de la velocidad, asi que no
     // puede escribir sobre la imagen que muestrea. La copia de vuelta la
     // hace un vkCmdCopyImage, no un segundo dispatch.
+    VkQueryPool           m_queryPool               = VK_NULL_HANDLE;
+    bool                  m_queryPending[kFramesInFlight] = {};
+    float                 m_gpuMs                   = 0.0f;
+
     VkImage               m_image[kFramesInFlight]  = {};
     VkDeviceMemory        m_memory[kFramesInFlight] = {};
     VkImageView           m_view[kFramesInFlight]   = {};

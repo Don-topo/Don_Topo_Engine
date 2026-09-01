@@ -365,6 +365,7 @@ namespace DonTopo {
             // acumulacion del TAA). En None y en MSAA vale 0: MSAA no tiene pass
             // propio, su coste esta repartido en la escena y en la composicion,
             // y para verlo hay que mirar renderGpuMs().
+            float motionBlurGpuMs() const override { return m_motionBlurPass.gpuMs(); }
             float aaGpuMs() const                 { return m_aaGpuMs; }
             // Coste GPU de TODO el render sin la UI: desde el pass de escena
             // hasta el ultimo pass de post. Se mide SIEMPRE, tambien en None, que

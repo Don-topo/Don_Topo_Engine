@@ -296,6 +296,7 @@ public:
     float    ssrGpuMs() const override;
     float    bloomGpuMs() const override;
     float    fogGpuMs() const override;
+    float    motionBlurGpuMs() const override;
     float    aaGpuMs() const override;
     float    sceneGpuMs() const override;
     float    shadowGpuMs() const override;

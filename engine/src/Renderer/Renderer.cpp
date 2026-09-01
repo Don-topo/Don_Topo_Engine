@@ -5308,7 +5308,8 @@ namespace DonTopo {
             m_gpu, m_res, *this, m_renderExtent, m_currentFrame, kHdrFormat,
             m_hdrImage, m_hdrView, m_depthPrepass.views(),
             m_ssrPass.sampler(), m_depthPrepass.sampler(),
-            m_aaPass.currViewProj(), m_aaPass.prevViewProj()
+            m_aaPass.currViewProj(), m_aaPass.prevViewProj(),
+            m_timestampsSupported, m_timestampPeriod
         };
     }
 
