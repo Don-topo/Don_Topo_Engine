@@ -632,6 +632,12 @@ namespace DonTopo {
             ForwardPlusPass::Context fpCtx();
             void createCommandBuffers();
             void createSyncObjects();
+            // Graba el frame entero. Era una funcion de 755 lineas seguidas
+            // (H7): ahora orquesta, y cada pase grande vive en su metodo, como
+            // ya hacian recordShadowPass y recordSsaoPass. La extraccion fue
+            // corta-pega puro; lo unico que cambio es que las locales que
+            // cruzaban de un bloque a otro pasaron a parametros, y ahi se ve de
+            // un vistazo lo que antes habia que rastrear a mano.
             void recordCommandBuffer(uint32_t imageIndex);
             // Casco invertido del objeto seleccionado, al final del pass de
             // escena y antes del skybox. camFrustum es el mismo del culling del
@@ -735,6 +741,18 @@ namespace DonTopo {
             // decide: antes la proyección estaba duplicada a pelo en
             // recordCommandBuffer y updateUniformBuffer.
             FrameCamera currentFrameCamera() const;
+
+            // Pass 1: la escena 3D a su render target propio.
+            void recordScenePass(VkCommandBuffer cmd, const FrameCamera& fc,
+                                  const Frustum& camFrustum, bool perfStamp);
+            // Bloom y composicion: del HDR de la escena al LDR de pantalla. Se
+            // lleva uiExtent y los contadores de UI porque el canvas de PANTALLA
+            // se dibuja aqui, sobre la imagen ya compuesta.
+            void recordBloomAndComposite(VkCommandBuffer cmd, const FrameCamera& fc,
+                                          const Frustum& camFrustum, VkExtent2D uiExtent,
+                                          uint32_t uiScreenVertices, uint32_t uiScreenIndices);
+            // Pass 2: la UI 2D sobre la imagen del swapchain.
+            void recordUiPass(VkCommandBuffer cmd, uint32_t imageIndex);
 
             GpuDevice                       m_gpu;
             GpuResources                    m_res{ m_gpu };

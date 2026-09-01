@@ -1589,6 +1589,573 @@ namespace DonTopo {
         }
     }
 
+    void Renderer::recordScenePass(VkCommandBuffer cmd, const FrameCamera& fc,
+                                       const Frustum& camFrustum, bool perfStamp)
+    {
+    // ── Pass 1: escena 3D → offscreen ────────────────────────────────────────
+    {
+        VkClearValue clearValues[2];
+        clearValues[0].color        = {0.0f, 0.0f, 0.0f, 1.0f};
+        clearValues[1].depthStencil = {1.0f, 0};
+
+        VkRenderPassBeginInfo rpInfo{};
+        rpInfo.sType               = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rpInfo.renderPass          = m_offscreenRenderPass;
+        rpInfo.framebuffer         = m_offscreenFramebuffer[m_currentFrame];
+        rpInfo.renderArea.extent   = m_renderExtent;
+        rpInfo.renderArea.offset   = {0, 0};
+        rpInfo.clearValueCount     = 2;
+        rpInfo.pClearValues        = clearValues;
+
+        if (perfStamp)
+        {
+            vkCmdWriteTimestamp(m_commandBuffers[m_currentFrame], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                m_perfQueryPool, m_currentFrame * 4 + 2);
+        }
+        vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        VkViewport viewport{};
+        viewport.width    = (float)m_renderExtent.width;
+        viewport.height   = (float)m_renderExtent.height;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(m_commandBuffers[m_currentFrame], 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.extent = m_renderExtent;
+        vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
+
+        vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
+            isWireframeMode() ? m_wireframePipeline : m_pipeline);
+        // Las guardas y el culling siguen siendo POR OBJETO: se resuelven
+        // aquí, que es donde está la caché GPU, y el agrupado solo ve el
+        // resultado en `visible`. Agrupar antes de cullear dibujaría de más.
+        m_batchCandidates.clear();
+        m_batchCandidates.reserve(m_objects.size());
+        for (auto& obj : m_objects)
+        {
+            const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
+            // !gpu: borrado desde el editor. uploadTicket por delante del
+            // último completado: todavía en vuelo, sus texturas siguen en
+            // TRANSFER_DST_OPTIMAL y samplearlas sería leer basura; aparece
+            // en cuanto la fence de su batch señale.
+            // obj.meshVisible: checkbox "Visible" del componente Mesh. Mismo
+            // filtro en los pases de sombra y de AO: oculto no llega a la GPU
+            // en ninguno, así que no proyecta sombra ni ocluye.
+            bool visible = obj.meshVisible && gpu && gpu->uploadTicket <= m_lastCompletedTicket;
+            // Fuera de cámara: no gasta ni slot en el SSBO. Los objetos sin
+            // AABB (mesh vacío) pasan siempre.
+            if (visible && gpu->hasBounds &&
+                !aabbVisible(camFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
+            {
+                visible = false;
+            }
+            // La fuerza de SSR entra en la clave del agrupado: es una push
+            // constant por grupo, igual que metallic y roughness, así que dos
+            // objetos con la misma malla y distinta fuerza no pueden ir en el
+            // mismo draw. Con el SSR global apagado todos entran a 0 y el
+            // agrupado sale exactamente igual que antes de la feature.
+            const float ssr = m_ssrEnabled ? obj.ssrStrength : 0.0f;
+            m_batchCandidates.push_back({ obj.sharedIndex, visible, &obj.transform, ssr });
+        }
+
+        // El pass de sombras ya ha escrito su parte del buffer: sus
+        // transforms van delante y los de aquí detrás, con el cursor como
+        // base de los firstInstance.
+        const uint32_t instanceBase = m_instanceCursor;
+        glm::mat4* dst = (glm::mat4*)m_instanceMapped[m_currentFrame] + instanceBase;
+        m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
+            dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
+
+        // Contadores del panel Performance: se cuentan sobre los mismos
+        // candidatos que acaba de agrupar buildInstanceBatches, asi que
+        // reflejan exactamente lo que se va a dibujar abajo.
+        if (perfStamp)
+        {
+            for (const auto& cand : m_batchCandidates)
+            {
+                if (!cand.visible) m_statCulled++;
+            }
+            m_statDrawCalls += (int)m_instanceBatches.size();
+            for (const InstanceBatch& b : m_instanceBatches)
+            {
+                m_statInstances += (int)b.instanceCount;
+            }
+        }
+
+        // Set 1 una sola vez para todo el pass: el SSBO no cambia entre
+        // draws, y el pipeline skinned de abajo comparte layout, así que
+        // sigue bindeado y válido también para él.
+        vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_pipelineLayout, 1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
+
+        // Forward+: uno por frame y comun a TODOS los draws del pass (estatico
+        // y skinned), asi que se bindea una sola vez aqui. Va DENTRO del pass
+        // de escena y no antes: el pass de sombras y el depth pre-pass usan
+        // el pipeline layout de ShadowPass, que solo declara dos sets, y
+        // bindear con el deja el set 2 sin definir.
+        const VkDescriptorSet fpSceneSet = m_fpPass.set(m_currentFrame);
+        if (fpSceneSet != VK_NULL_HANDLE)
+        {
+            vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                m_pipelineLayout, 2, 1, &fpSceneSet, 0, nullptr);
+        }
+
+        for (const InstanceBatch& batch : m_instanceBatches)
+        {
+            // No puede ser nullptr: solo llegan a un grupo los candidatos
+            // que ya pasaron la guarda de arriba.
+            const SharedGpuMesh* gpu = m_sharedMeshes.get(batch.sharedIndex);
+            vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                m_pipelineLayout, 0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
+            PushData push;
+            // transform se queda en la identidad: con useInstancing = 1 el
+            // vertex shader coge el model matrix del SSBO. metallic y
+            // roughness siguen aquí porque son por ENTRADA compartida (no
+            // por instancia): son constantes dentro del grupo y pbr.frag ya
+            // los lee de este mismo bloque.
+            push.metallic  = gpu->metallic;
+            push.roughness = gpu->roughness;
+            push.flags.x   = 1.0f;
+            // pbr.frag la vuelca al alfa del HDR, que es la máscara por píxel
+            // que lee ssr.comp.
+            push.flags.y   = batch.ssrStrength;
+            vkCmdPushConstants(m_commandBuffers[m_currentFrame], m_pipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(PushData), &push);
+            VkBuffer vbs[]      = { gpu->vertexBuffer };
+            VkDeviceSize offs[] = { 0 };
+            vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vbs, offs);
+            vkCmdBindIndexBuffer(m_commandBuffers[m_currentFrame], gpu->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], gpu->indexCount,
+                batch.instanceCount, 0, 0, batch.firstInstance);
+        }
+
+        if (!m_skinnedObjects.empty())
+        {
+            vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                isWireframeMode() ? m_skinnedWireframePipeline : m_skinnedGfxPipeline);
+
+            for (size_t si = 0; si < m_skinnedObjects.size(); si++)
+            {
+                // Borrado, en vuelo o fuera de cámara: la decisión ya la tomó
+                // el culling del principio del frame, la misma que decidió si
+                // se le despachaba el compute.
+                if (!m_skinnedVisible[si])
+                {
+                    if (perfStamp) m_statCulled++;
+                    continue;
+                }
+                SkinnedRenderObject& sobj = m_skinnedObjects[si];
+                // Checkbox "Visible" del componente Mesh. Va aquí y no en
+                // m_skinnedVisible porque ese flag también gobierna el
+                // despacho del compute (que sigue corriendo: el contorno de
+                // selección lee sus vértices) y el contorno mismo.
+                if (!sobj.meshVisible) continue;
+                VkBuffer     vbs[]  = { sobj.outputVertexBuffer };
+                VkDeviceSize offs[] = { 0 };
+                vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vbs, offs);
+                vkCmdBindIndexBuffer(m_commandBuffers[m_currentFrame],
+                    sobj.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+                for (auto& sm : sobj.subMeshes)
+                {
+                    SkinnedMatGfx& mgfx = sobj.matGfx[sm.materialIndex];
+                    PushData push;
+                    push.transform = sobj.transform;
+                    push.metallic  = mgfx.metallic;
+                    push.roughness = mgfx.roughness;
+                    // flags.x se queda a 0 (ruta skinned, matriz propia).
+                    push.flags.y   = m_ssrEnabled ? sobj.ssrStrength : 0.0f;
+                    vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame],
+                        VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
+                        0, 1, &mgfx.descSets[m_currentFrame], 0, nullptr);
+                    vkCmdPushConstants(m_commandBuffers[m_currentFrame], m_pipelineLayout,
+                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                        0, sizeof(PushData), &push);
+                    vkCmdDrawIndexed(m_commandBuffers[m_currentFrame],
+                        sm.indexCount, 1, sm.indexStart, 0, 0);
+                    if (perfStamp) { m_statDrawCalls++; m_statInstances++; }
+                }
+            }
+        }
+
+        // Contorno del objeto seleccionado: después de toda la geometría
+        // (necesita el depth buffer completo para que el casco solo asome
+        // por el borde) y antes del skybox.
+        // El contorno de selección y los gizmos YA NO se dibujan aquí: se han
+        // mudado al pass de composición, que es LDR. Este pass sale sin
+        // tonemapear y les habría cambiado su color plano.
+
+        // Proyección del skybox (mismo pass, misma cámara que el culling de
+        // arriba). El Y-flip ya viene aplicado desde currentFrameCamera().
+        // Con jitter cuando el modo es TAA: tiene que moverse EXACTAMENTE
+        // igual que la geometría o el TAA vería un borde permanente entre
+        // ambos. Fuera de TAA es fc.proj tal cual.
+        const glm::mat4 proj = m_aaPass.jitteredProj();
+
+        // Skybox — fullscreen quad, depth LEQUAL sin escritura (al final del pass).
+        // Omitido en wireframe: el fondo ya es negro sólido (clearValue por defecto).
+        if (!isWireframeMode() && m_skybox.isInitialized()) {
+            glm::mat4 rotView    = glm::mat4(glm::mat3(fc.view)); // sin traslación
+            glm::mat4 invViewProj = glm::inverse(proj * rotView);
+            m_skybox.draw(m_commandBuffers[m_currentFrame], invViewProj);
+        }
+
+        // ── Canvas de MUNDO ──────────────────────────────────────────────
+        // Lo ultimo del pase, detras de la geometria y del skybox: van con
+        // alpha y tienen que mezclarse sobre lo que ya hay. Aqui —y no en el
+        // pase de UI— es lo que les da perspectiva y lo que hace que una
+        // pared los tape: el depth buffer de la escena esta cargado y la
+        // variante con depthTest lo lee (escribir no escribe ninguna).
+        //
+        // `proj` es la JITTEREADA (la misma que el skybox y que la
+        // geometria): con TAA, un canvas de mundo sin jitter dejaria un
+        // borde permanente contra todo lo que si lo lleva.
+        //
+        // LIMITACION CONOCIDA — los post que reconstruyen posicion desde la
+        // profundidad tratan al canvas como la GEOMETRIA QUE TIENE DETRAS.
+        // Un canvas de mundo NO entra en el depth pre-pass (ese solo graba
+        // mallas) y NO escribe profundidad (depthWrite va apagado en las
+        // tres variantes, a proposito: la UI va con alpha). Asi que en el
+        // pixel que ocupa, el depth que leen los post es el de lo que hay
+        // detras. Los tres afectados, todos muestreando el mismo depthTex
+        // del pre-pass:
+        //   - fog.comp        -> un cartel cerca de la camara delante de una
+        //                        pared lejana recibe la niebla DE LA PARED:
+        //                        sale sobre-nublado.
+        //   - motion_blur.comp-> recibe los vectores de movimiento de la
+        //                        pared: arrastra al mover la camara.
+        //   - taa.frag        -> reproyecta con el depth de la pared.
+        // No se arregla aqui: meterlos en el pre-pass les daria oclusion de
+        // AO y romperia el alpha. Al verificar en GUI hay que mirar los
+        // colores con la NIEBLA APAGADA primero, o se confunde el
+        // sobre-nublado con un fallo de la conversion sRGB->lineal.
+        //
+        // El orden lo pone la funcion libre de UiWidgetSync.h, que es la
+        // que esta probada sin GPU (test_world_canvases_se_ordenan_de_lejos_a_cerca).
+        // El draw data y la matriz de modelo ya estan hechos arriba, antes
+        // del beginFrame.
+        sortWorldCanvasesBackToFront(m_uiSlots, fc.view, m_uiWorldOrder);
+        for (UiCanvasSlot* s : m_uiWorldOrder)
+        {
+            if (s->drawData.empty()) continue;
+            const glm::vec2 tam = s->canvas.referenceResolution;
+            const glm::mat4 mvp = proj * fc.view * s->model;
+            m_uiBatch.recordWorld(m_gpu, m_commandBuffers[m_currentFrame], s->drawData,
+                                  mvp, s->depthTest,
+                                  VkExtent2D{(uint32_t)tam.x, (uint32_t)tam.y},
+                                  m_renderExtent, m_currentFrame);
+        }
+
+        vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
+        if (perfStamp)
+        {
+            vkCmdWriteTimestamp(m_commandBuffers[m_currentFrame], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                m_perfQueryPool, m_currentFrame * 4 + 3);
+            // Las cuatro estan escritas: el slot ya es legible dentro de dos
+            // frames. Si la captura se apaga antes, setPerfCaptureEnabled
+            // limpia el flag y no se lee un pool sin resetear.
+            m_perfQueryPending[m_currentFrame] = true;
+        }
+    }
+
+    // SSR: necesita el color de la escena YA iluminado, así que va DETRÁS del
+    // pass de escena; y suma el reflejo dentro del propio HDR ANTES del bloom,
+    // para que el reflejo genere bloom y pase por el tonemap ACES igual que el
+    // resto de la imagen. Con el efecto apagado no graba nada y el HDR se
+    // queda exactamente como salió del render pass.
+    m_ssrPass.record(ssrCtx(), m_commandBuffers[m_currentFrame], fc.proj);
+
+    // Niebla volumetrica: detrás del SSR (quiere el color ya iluminado y con
+    // los reflejos dentro) y antes del bloom, para que el in-scattering
+    // florezca y pase por el tonemap ACES igual que el resto de la imagen.
+    // Apagada no graba nada.
+    m_fogPass.record(fogCtx(), m_commandBuffers[m_currentFrame], fc.view, fc.proj);
+
+    // Motion blur de cámara: detrás de la niebla (emborrona la imagen tal y
+    // como se va a ver) y antes del bloom, para que la estela arrastre los
+    // highlights y florezca con ellos. Apagado no graba nada.
+    m_motionBlurPass.record(motionBlurCtx(), m_commandBuffers[m_currentFrame]);
+
+    }
+
+    void Renderer::recordBloomAndComposite(VkCommandBuffer cmd, const FrameCamera& fc,
+                                               const Frustum& camFrustum, VkExtent2D uiExtent,
+                                               uint32_t uiScreenVertices, uint32_t uiScreenIndices)
+    {
+    // ── Bloom + composición: HDR → tonemap → offscreen LDR ───────────────────
+    {
+        VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
+
+        if (bloomEnabled())
+        {
+            m_bloomPass.beginQuery(bloomCtx(), cmd);
+            m_bloomPass.record(bloomCtx(), cmd);
+        }
+        else
+        {
+            // Apagado: ni un dispatch de la cadena, y sin timestamps que medir.
+            // El slot deja de tener par pendiente para que al reencender no se
+            // lea una medida de antes del apagón.
+            m_bloomPass.skipQuery(bloomCtx());
+            m_bloomPass.recordClear(bloomCtx(), cmd);
+        }
+
+        VkRenderPassBeginInfo rpInfo{};
+        rpInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rpInfo.renderPass        = m_compositeRenderPass;
+        // Con FXAA, SSAA o TAA la composicion (tonemap + contorno + gizmos)
+        // va a la imagen intermedia y el pass de resolucion la lleva de ahi a
+        // m_offscreenImage. En None y en MSAA escribe directamente en
+        // m_offscreenImage, exactamente como antes de esta feature: mismo
+        // render pass, mismos comandos.
+        rpInfo.framebuffer       = needsAaIntermediate() ? m_aaPass.compositeFramebuffer(m_currentFrame)
+                                                         : m_compositeFramebuffer[m_currentFrame];
+        rpInfo.renderArea.extent = m_renderExtent;
+        rpInfo.renderArea.offset = {0, 0};
+        // Los dos attachments son DONT_CARE/LOAD: nada que limpiar.
+        rpInfo.clearValueCount   = 0;
+
+        vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        VkViewport viewport{};
+        viewport.width    = (float)m_renderExtent.width;
+        viewport.height   = (float)m_renderExtent.height;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.extent = m_renderExtent;
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        // Sin cadena de mips (viewport minúsculo) o con el efecto apagado no
+        // hay nada que sumar: la intensidad se fuerza a 0 y queda solo el
+        // tonemap. El pass NO se puede saltar: es quien tonemapea.
+        const float intensity = (bloomEnabled() && m_bloomPass.mipCount() > 0) ? m_bloomIntensity : 0.0f;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipelineLayout,
+                                0, 1, &m_compositeSets[m_currentFrame], 0, nullptr);
+        vkCmdPushConstants(cmd, m_compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(float), &intensity);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+
+        // Contorno y gizmos, ya sobre la imagen tonemapeada y con la
+        // profundidad de la escena cargada: mismo resultado que cuando vivían
+        // en el pass anterior, pero sin pasar por el tonemap ni por el bloom.
+        recordSelectionOutline(cmd, camFrustum);
+        Gizmos::draw(cmd, fc.proj * fc.view, m_currentFrame);
+
+        vkCmdEndRenderPass(cmd);
+
+        // Solo con el bloom encendido: el par se abre arriba bajo la misma
+        // condición, y escribir aquí sin haber reseteado dejaría la query sucia.
+        if (m_timestampsSupported && bloomEnabled())
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_bloomPass.queryPool(), m_currentFrame * 2 + 1);
+
+        // Anti-aliasing: lo ultimo de la cadena de post, sobre color LDR ya
+        // tonemapeado y con el contorno de seleccion y los gizmos ya dibujados
+        // (asi que tambien se les suavizan los bordes, que es lo deseado: sus
+        // lineas y el casco invertido son lo mas escalonado de la pantalla).
+        m_aaPass.record(aaCtx(), cmd);
+
+        // ── UI de juego, ya sobre la imagen final ─────────────────────────
+        // Despues del AA a proposito: aqui el texto no lo suaviza el FXAA ni
+        // lo arrastra el historial del TAA, y con SSAA se dibuja UNA vez al
+        // tamano de salida en vez de supersamplearse. Es donde la dibuja
+        // tambien el backend de DirectX 12 (sobre el back buffer resuelto).
+        //
+        // Va por encima de la escena, del contorno de seleccion y de los
+        // gizmos, y por debajo de la interfaz del editor, que se graba en el
+        // pass del swapchain. Con el canvas vacio no se abre ni el pass.
+        //
+        // El draw data de TODOS los slots y el beginFrame() del batch ya
+        // estan hechos ARRIBA, antes del pase de escena: los canvas de mundo
+        // se graban alli y necesitan el buffer dimensionado y los cursores
+        // reiniciados antes que nadie. Aqui solo quedan los de PANTALLA, que
+        // se graban uno por uno dentro del MISMO vkCmdBeginRenderPass.
+        //
+        // La condicion de apertura son los de PANTALLA y solo ellos: con el
+        // total del frame, un proyecto con unicamente canvas de mundo
+        // abriria este pase para no grabar ni un draw dentro.
+        if (uiScreenVertices > 0 && uiScreenIndices > 0 && m_uiFramebuffer[m_currentFrame] != VK_NULL_HANDLE)
+        {
+            VkRenderPassBeginInfo uiRp{};
+            uiRp.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            uiRp.renderPass        = m_uiRenderPass;
+            uiRp.framebuffer       = m_uiFramebuffer[m_currentFrame];
+            uiRp.renderArea.extent = uiExtent;
+            uiRp.renderArea.offset = {0, 0};
+            uiRp.clearValueCount   = 0;   // el attachment es LOAD
+
+            vkCmdBeginRenderPass(cmd, &uiRp, VK_SUBPASS_CONTENTS_INLINE);
+
+            // El viewport es estado dinamico y este pass es propio: hay que
+            // ponerlo, no se hereda del de composicion.
+            VkViewport vp{};
+            vp.width    = (float)uiExtent.width;
+            vp.height   = (float)uiExtent.height;
+            vp.minDepth = 0.0f;
+            vp.maxDepth = 1.0f;
+            vkCmdSetViewport(cmd, 0, 1, &vp);
+
+            // Aqui NO va un beginFrame(). El del frame ya se llamo arriba,
+            // antes del pase de escena, con el total de mundo + pantalla.
+            // Llamarlo otra vez reiniciaria los cursores a 0 y los canvas de
+            // pantalla escribirian ENCIMA de los vertices de los de mundo,
+            // que la GPU todavia no ha leido (lee el buffer al EJECUTAR la
+            // lista, no al grabarla): los canvas de mundo saldrian con la
+            // geometria del de pantalla, sin un solo aviso de validacion.
+
+            // bottom=0 y top=alto: (0,0) cae ARRIBA a la izquierda. Parece del revés
+            // y es justo lo contrario: en Vulkan el +Y de NDC va hacia ABAJO, así
+            // que la receta de OpenGL (top=0, bottom=alto) deja [1][1] negativo y
+            // dibuja la UI ENTERA espejada — invisible mientras solo hubo quads de
+            // color, evidente en cuanto se dibujó la primera letra. RH_ZO porque
+            // Vulkan clipea z fuera de [0,1] y glm::ortho a secas da [-1,1].
+            // Del ESPACIO DEL CANVAS (píxeles de salida), no del framebuffer: los
+            // vértices llegan en esos píxeles y el viewport ya estira el NDC al
+            // framebuffer entero. Con SSAA eso deja la UI supersampleada en vez de
+            // encogida a 1/factor, que es lo que salía al proyectar con el extent
+            // del render.
+            const glm::mat4 uiProj = glm::orthoRH_ZO(0.0f, (float)uiExtent.width,
+                                                     0.0f, (float)uiExtent.height,
+                                                     0.0f, 1.0f);
+
+            // Canvas y framebuffer son ya el MISMO espacio (pixeles de
+            // salida): los scissor no se escalan.
+            for (auto& s : m_uiSlots)
+            {
+                if (!s || s->mode != UiCanvasRenderMode::ScreenSpace) continue;
+                m_uiBatch.record(m_gpu, cmd, s->drawData, uiProj, uiExtent, uiExtent, m_currentFrame);
+            }
+            vkCmdEndRenderPass(cmd);
+        }
+
+        // Cierre de la medida del render completo, ya con el AA incluido. Es
+        // la referencia con la que se compara el sobrecoste de SSAA y MSAA,
+        // que no tienen pass propio que medir.
+        if (m_timestampsSupported)
+        {
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_aaQueryPool, m_currentFrame * 4 + 3);
+            m_aaQueryPending[m_currentFrame] = true;
+        }
+    }
+
+    }
+
+    void Renderer::recordUiPass(VkCommandBuffer cmd, uint32_t imageIndex)
+    {
+    // ── Pass 2: UI → swapchain ────────────────────────────────────────────────
+    if (!m_headless)
+    {
+        VkClearValue clearColor{};
+        clearColor.color = {0.12f, 0.12f, 0.12f, 1.0f};
+
+        VkRenderPassBeginInfo rpInfo{};
+        rpInfo.sType               = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rpInfo.renderPass          = m_renderPass;
+        rpInfo.framebuffer         = m_swapChainFramebuffers[imageIndex];
+        rpInfo.renderArea.extent   = m_swapChainExtent;
+        rpInfo.renderArea.offset   = {0, 0};
+        rpInfo.clearValueCount     = 1;
+        rpInfo.pClearValues        = &clearColor;
+
+        vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+        if (m_ui) m_ui->recordUi(static_cast<void*>(m_commandBuffers[m_currentFrame]));
+        vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
+    }
+    else
+    {
+        // ── Pass 2 (headless): offscreen → swapchain ──────────────────────────
+        // Sin editor no hay quien muestree la imagen offscreen, así que se
+        // copia tal cual a la imagen de presentación. Es un blit 1:1: la
+        // offscreen se crea con el mismo formato y extent que el swapchain
+        // (createOffscreenImages). El renderpass offscreen declara
+        // initialLayout=UNDEFINED, así que no hay que restaurar su layout
+        // después del blit.
+        VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
+        const VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+        VkImageMemoryBarrier toTransferSrc{};
+        toTransferSrc.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toTransferSrc.oldLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toTransferSrc.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toTransferSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toTransferSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toTransferSrc.image               = m_offscreenImage[m_currentFrame];
+        toTransferSrc.subresourceRange    = range;
+        toTransferSrc.srcAccessMask       = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        toTransferSrc.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
+
+        VkImageMemoryBarrier toTransferDst{};
+        toTransferDst.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toTransferDst.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+        toTransferDst.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toTransferDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toTransferDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toTransferDst.image               = m_swapChainImages[imageIndex];
+        toTransferDst.subresourceRange    = range;
+        toTransferDst.srcAccessMask       = 0;
+        toTransferDst.dstAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+        // srcStageMask = COLOR_ATTACHMENT_OUTPUT y no TRANSFER: esto no es un
+        // despiste, es lo que ordena esta barrera (y por tanto el blit de abajo)
+        // detrás del semáforo de vkAcquireNextImageKHR. El submit de este frame
+        // solo espera ese semáforo en COLOR_ATTACHMENT_OUTPUT_BIT
+        // (submitInfo.pWaitDstStageMask, más abajo), que no cubre TRANSFER — así
+        // que si la barrera esperase únicamente en TRANSFER, el driver no tendría
+        // ninguna dependencia que la obligue a ir después de la adquisición de la
+        // imagen del swapchain y el blit podría ejecutarse sobre una imagen que
+        // aún no es nuestra (o pisar la del frame anterior in-flight). Que
+        // funcione depende de que el Pass 1 (offscreen) SIEMPRE emita trabajo en
+        // COLOR_ATTACHMENT_OUTPUT antes de esta barrera, así que el srcStageMask
+        // de aquí se encadena con ese trabajo y queda correctamente después del
+        // semáforo. Si algún día "se corrige" este srcStageMask a
+        // VK_PIPELINE_STAGE_TRANSFER_BIT (que es lo que parece obvio a primera
+        // vista), se rompe esa cadena en silencio: sin validation layers de por
+        // medio no hay ningún aviso, solo un blit ocasionalmente sobre una imagen
+        // todavía no adquirida.
+        VkImageMemoryBarrier preBarriers[] = { toTransferSrc, toTransferDst };
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr, 2, preBarriers);
+
+        VkImageBlit blit{};
+        blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        blit.srcOffsets[0]  = { 0, 0, 0 };
+        blit.srcOffsets[1]  = { (int32_t)effectiveViewport().width, (int32_t)effectiveViewport().height, 1 };
+        blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        blit.dstOffsets[0]  = { 0, 0, 0 };
+        blit.dstOffsets[1]  = { (int32_t)m_swapChainExtent.width, (int32_t)m_swapChainExtent.height, 1 };
+
+        vkCmdBlitImage(cmd,
+            m_offscreenImage[m_currentFrame], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            m_swapChainImages[imageIndex],     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1, &blit, VK_FILTER_NEAREST);
+
+        VkImageMemoryBarrier toPresent{};
+        toPresent.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toPresent.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toPresent.newLayout           = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toPresent.image               = m_swapChainImages[imageIndex];
+        toPresent.subresourceRange    = range;
+        toPresent.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toPresent.dstAccessMask       = 0;
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &toPresent);
+    }
+
+    vkEndCommandBuffer(m_commandBuffers[m_currentFrame]);
+    }
+
     void Renderer::recordCommandBuffer(uint32_t imageIndex)
     {
         VkCommandBufferBeginInfo beginInfo{};
@@ -1791,558 +2358,13 @@ namespace DonTopo {
         }
         m_uiBatch.beginFrame(m_gpu, m_currentFrame, uiTotalVertices, uiTotalIndices);
 
-        // ── Pass 1: escena 3D → offscreen ────────────────────────────────────────
-        {
-            VkClearValue clearValues[2];
-            clearValues[0].color        = {0.0f, 0.0f, 0.0f, 1.0f};
-            clearValues[1].depthStencil = {1.0f, 0};
-
-            VkRenderPassBeginInfo rpInfo{};
-            rpInfo.sType               = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-            rpInfo.renderPass          = m_offscreenRenderPass;
-            rpInfo.framebuffer         = m_offscreenFramebuffer[m_currentFrame];
-            rpInfo.renderArea.extent   = m_renderExtent;
-            rpInfo.renderArea.offset   = {0, 0};
-            rpInfo.clearValueCount     = 2;
-            rpInfo.pClearValues        = clearValues;
-
-            if (perfStamp)
-            {
-                vkCmdWriteTimestamp(m_commandBuffers[m_currentFrame], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                                    m_perfQueryPool, m_currentFrame * 4 + 2);
-            }
-            vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-            VkViewport viewport{};
-            viewport.width    = (float)m_renderExtent.width;
-            viewport.height   = (float)m_renderExtent.height;
-            viewport.minDepth = 0.0f;
-            viewport.maxDepth = 1.0f;
-            vkCmdSetViewport(m_commandBuffers[m_currentFrame], 0, 1, &viewport);
-
-            VkRect2D scissor{};
-            scissor.extent = m_renderExtent;
-            vkCmdSetScissor(m_commandBuffers[m_currentFrame], 0, 1, &scissor);
-
-            vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                isWireframeMode() ? m_wireframePipeline : m_pipeline);
-            // Las guardas y el culling siguen siendo POR OBJETO: se resuelven
-            // aquí, que es donde está la caché GPU, y el agrupado solo ve el
-            // resultado en `visible`. Agrupar antes de cullear dibujaría de más.
-            m_batchCandidates.clear();
-            m_batchCandidates.reserve(m_objects.size());
-            for (auto& obj : m_objects)
-            {
-                const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
-                // !gpu: borrado desde el editor. uploadTicket por delante del
-                // último completado: todavía en vuelo, sus texturas siguen en
-                // TRANSFER_DST_OPTIMAL y samplearlas sería leer basura; aparece
-                // en cuanto la fence de su batch señale.
-                // obj.meshVisible: checkbox "Visible" del componente Mesh. Mismo
-                // filtro en los pases de sombra y de AO: oculto no llega a la GPU
-                // en ninguno, así que no proyecta sombra ni ocluye.
-                bool visible = obj.meshVisible && gpu && gpu->uploadTicket <= m_lastCompletedTicket;
-                // Fuera de cámara: no gasta ni slot en el SSBO. Los objetos sin
-                // AABB (mesh vacío) pasan siempre.
-                if (visible && gpu->hasBounds &&
-                    !aabbVisible(camFrustum, gpu->aabbMin, gpu->aabbMax, obj.transform))
-                {
-                    visible = false;
-                }
-                // La fuerza de SSR entra en la clave del agrupado: es una push
-                // constant por grupo, igual que metallic y roughness, así que dos
-                // objetos con la misma malla y distinta fuerza no pueden ir en el
-                // mismo draw. Con el SSR global apagado todos entran a 0 y el
-                // agrupado sale exactamente igual que antes de la feature.
-                const float ssr = m_ssrEnabled ? obj.ssrStrength : 0.0f;
-                m_batchCandidates.push_back({ obj.sharedIndex, visible, &obj.transform, ssr });
-            }
-
-            // El pass de sombras ya ha escrito su parte del buffer: sus
-            // transforms van delante y los de aquí detrás, con el cursor como
-            // base de los firstInstance.
-            const uint32_t instanceBase = m_instanceCursor;
-            glm::mat4* dst = (glm::mat4*)m_instanceMapped[m_currentFrame] + instanceBase;
-            m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
-                dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
-
-            // Contadores del panel Performance: se cuentan sobre los mismos
-            // candidatos que acaba de agrupar buildInstanceBatches, asi que
-            // reflejan exactamente lo que se va a dibujar abajo.
-            if (perfStamp)
-            {
-                for (const auto& cand : m_batchCandidates)
-                {
-                    if (!cand.visible) m_statCulled++;
-                }
-                m_statDrawCalls += (int)m_instanceBatches.size();
-                for (const InstanceBatch& b : m_instanceBatches)
-                {
-                    m_statInstances += (int)b.instanceCount;
-                }
-            }
-
-            // Set 1 una sola vez para todo el pass: el SSBO no cambia entre
-            // draws, y el pipeline skinned de abajo comparte layout, así que
-            // sigue bindeado y válido también para él.
-            vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                m_pipelineLayout, 1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
-
-            // Forward+: uno por frame y comun a TODOS los draws del pass (estatico
-            // y skinned), asi que se bindea una sola vez aqui. Va DENTRO del pass
-            // de escena y no antes: el pass de sombras y el depth pre-pass usan
-            // el pipeline layout de ShadowPass, que solo declara dos sets, y
-            // bindear con el deja el set 2 sin definir.
-            const VkDescriptorSet fpSceneSet = m_fpPass.set(m_currentFrame);
-            if (fpSceneSet != VK_NULL_HANDLE)
-            {
-                vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    m_pipelineLayout, 2, 1, &fpSceneSet, 0, nullptr);
-            }
-
-            for (const InstanceBatch& batch : m_instanceBatches)
-            {
-                // No puede ser nullptr: solo llegan a un grupo los candidatos
-                // que ya pasaron la guarda de arriba.
-                const SharedGpuMesh* gpu = m_sharedMeshes.get(batch.sharedIndex);
-                vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    m_pipelineLayout, 0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
-                PushData push;
-                // transform se queda en la identidad: con useInstancing = 1 el
-                // vertex shader coge el model matrix del SSBO. metallic y
-                // roughness siguen aquí porque son por ENTRADA compartida (no
-                // por instancia): son constantes dentro del grupo y pbr.frag ya
-                // los lee de este mismo bloque.
-                push.metallic  = gpu->metallic;
-                push.roughness = gpu->roughness;
-                push.flags.x   = 1.0f;
-                // pbr.frag la vuelca al alfa del HDR, que es la máscara por píxel
-                // que lee ssr.comp.
-                push.flags.y   = batch.ssrStrength;
-                vkCmdPushConstants(m_commandBuffers[m_currentFrame], m_pipelineLayout,
-                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                    0, sizeof(PushData), &push);
-                VkBuffer vbs[]      = { gpu->vertexBuffer };
-                VkDeviceSize offs[] = { 0 };
-                vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vbs, offs);
-                vkCmdBindIndexBuffer(m_commandBuffers[m_currentFrame], gpu->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-                vkCmdDrawIndexed(m_commandBuffers[m_currentFrame], gpu->indexCount,
-                    batch.instanceCount, 0, 0, batch.firstInstance);
-            }
-
-            if (!m_skinnedObjects.empty())
-            {
-                vkCmdBindPipeline(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    isWireframeMode() ? m_skinnedWireframePipeline : m_skinnedGfxPipeline);
-
-                for (size_t si = 0; si < m_skinnedObjects.size(); si++)
-                {
-                    // Borrado, en vuelo o fuera de cámara: la decisión ya la tomó
-                    // el culling del principio del frame, la misma que decidió si
-                    // se le despachaba el compute.
-                    if (!m_skinnedVisible[si])
-                    {
-                        if (perfStamp) m_statCulled++;
-                        continue;
-                    }
-                    SkinnedRenderObject& sobj = m_skinnedObjects[si];
-                    // Checkbox "Visible" del componente Mesh. Va aquí y no en
-                    // m_skinnedVisible porque ese flag también gobierna el
-                    // despacho del compute (que sigue corriendo: el contorno de
-                    // selección lee sus vértices) y el contorno mismo.
-                    if (!sobj.meshVisible) continue;
-                    VkBuffer     vbs[]  = { sobj.outputVertexBuffer };
-                    VkDeviceSize offs[] = { 0 };
-                    vkCmdBindVertexBuffers(m_commandBuffers[m_currentFrame], 0, 1, vbs, offs);
-                    vkCmdBindIndexBuffer(m_commandBuffers[m_currentFrame],
-                        sobj.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-
-                    for (auto& sm : sobj.subMeshes)
-                    {
-                        SkinnedMatGfx& mgfx = sobj.matGfx[sm.materialIndex];
-                        PushData push;
-                        push.transform = sobj.transform;
-                        push.metallic  = mgfx.metallic;
-                        push.roughness = mgfx.roughness;
-                        // flags.x se queda a 0 (ruta skinned, matriz propia).
-                        push.flags.y   = m_ssrEnabled ? sobj.ssrStrength : 0.0f;
-                        vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame],
-                            VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
-                            0, 1, &mgfx.descSets[m_currentFrame], 0, nullptr);
-                        vkCmdPushConstants(m_commandBuffers[m_currentFrame], m_pipelineLayout,
-                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                            0, sizeof(PushData), &push);
-                        vkCmdDrawIndexed(m_commandBuffers[m_currentFrame],
-                            sm.indexCount, 1, sm.indexStart, 0, 0);
-                        if (perfStamp) { m_statDrawCalls++; m_statInstances++; }
-                    }
-                }
-            }
-
-            // Contorno del objeto seleccionado: después de toda la geometría
-            // (necesita el depth buffer completo para que el casco solo asome
-            // por el borde) y antes del skybox.
-            // El contorno de selección y los gizmos YA NO se dibujan aquí: se han
-            // mudado al pass de composición, que es LDR. Este pass sale sin
-            // tonemapear y les habría cambiado su color plano.
-
-            // Proyección del skybox (mismo pass, misma cámara que el culling de
-            // arriba). El Y-flip ya viene aplicado desde currentFrameCamera().
-            // Con jitter cuando el modo es TAA: tiene que moverse EXACTAMENTE
-            // igual que la geometría o el TAA vería un borde permanente entre
-            // ambos. Fuera de TAA es fc.proj tal cual.
-            const glm::mat4 proj = m_aaPass.jitteredProj();
-
-            // Skybox — fullscreen quad, depth LEQUAL sin escritura (al final del pass).
-            // Omitido en wireframe: el fondo ya es negro sólido (clearValue por defecto).
-            if (!isWireframeMode() && m_skybox.isInitialized()) {
-                glm::mat4 rotView    = glm::mat4(glm::mat3(fc.view)); // sin traslación
-                glm::mat4 invViewProj = glm::inverse(proj * rotView);
-                m_skybox.draw(m_commandBuffers[m_currentFrame], invViewProj);
-            }
-
-            // ── Canvas de MUNDO ──────────────────────────────────────────────
-            // Lo ultimo del pase, detras de la geometria y del skybox: van con
-            // alpha y tienen que mezclarse sobre lo que ya hay. Aqui —y no en el
-            // pase de UI— es lo que les da perspectiva y lo que hace que una
-            // pared los tape: el depth buffer de la escena esta cargado y la
-            // variante con depthTest lo lee (escribir no escribe ninguna).
-            //
-            // `proj` es la JITTEREADA (la misma que el skybox y que la
-            // geometria): con TAA, un canvas de mundo sin jitter dejaria un
-            // borde permanente contra todo lo que si lo lleva.
-            //
-            // LIMITACION CONOCIDA — los post que reconstruyen posicion desde la
-            // profundidad tratan al canvas como la GEOMETRIA QUE TIENE DETRAS.
-            // Un canvas de mundo NO entra en el depth pre-pass (ese solo graba
-            // mallas) y NO escribe profundidad (depthWrite va apagado en las
-            // tres variantes, a proposito: la UI va con alpha). Asi que en el
-            // pixel que ocupa, el depth que leen los post es el de lo que hay
-            // detras. Los tres afectados, todos muestreando el mismo depthTex
-            // del pre-pass:
-            //   - fog.comp        -> un cartel cerca de la camara delante de una
-            //                        pared lejana recibe la niebla DE LA PARED:
-            //                        sale sobre-nublado.
-            //   - motion_blur.comp-> recibe los vectores de movimiento de la
-            //                        pared: arrastra al mover la camara.
-            //   - taa.frag        -> reproyecta con el depth de la pared.
-            // No se arregla aqui: meterlos en el pre-pass les daria oclusion de
-            // AO y romperia el alpha. Al verificar en GUI hay que mirar los
-            // colores con la NIEBLA APAGADA primero, o se confunde el
-            // sobre-nublado con un fallo de la conversion sRGB->lineal.
-            //
-            // El orden lo pone la funcion libre de UiWidgetSync.h, que es la
-            // que esta probada sin GPU (test_world_canvases_se_ordenan_de_lejos_a_cerca).
-            // El draw data y la matriz de modelo ya estan hechos arriba, antes
-            // del beginFrame.
-            sortWorldCanvasesBackToFront(m_uiSlots, fc.view, m_uiWorldOrder);
-            for (UiCanvasSlot* s : m_uiWorldOrder)
-            {
-                if (s->drawData.empty()) continue;
-                const glm::vec2 tam = s->canvas.referenceResolution;
-                const glm::mat4 mvp = proj * fc.view * s->model;
-                m_uiBatch.recordWorld(m_gpu, m_commandBuffers[m_currentFrame], s->drawData,
-                                      mvp, s->depthTest,
-                                      VkExtent2D{(uint32_t)tam.x, (uint32_t)tam.y},
-                                      m_renderExtent, m_currentFrame);
-            }
-
-            vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
-            if (perfStamp)
-            {
-                vkCmdWriteTimestamp(m_commandBuffers[m_currentFrame], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                                    m_perfQueryPool, m_currentFrame * 4 + 3);
-                // Las cuatro estan escritas: el slot ya es legible dentro de dos
-                // frames. Si la captura se apaga antes, setPerfCaptureEnabled
-                // limpia el flag y no se lee un pool sin resetear.
-                m_perfQueryPending[m_currentFrame] = true;
-            }
-        }
-
-        // SSR: necesita el color de la escena YA iluminado, así que va DETRÁS del
-        // pass de escena; y suma el reflejo dentro del propio HDR ANTES del bloom,
-        // para que el reflejo genere bloom y pase por el tonemap ACES igual que el
-        // resto de la imagen. Con el efecto apagado no graba nada y el HDR se
-        // queda exactamente como salió del render pass.
-        m_ssrPass.record(ssrCtx(), m_commandBuffers[m_currentFrame], fc.proj);
-
-        // Niebla volumetrica: detrás del SSR (quiere el color ya iluminado y con
-        // los reflejos dentro) y antes del bloom, para que el in-scattering
-        // florezca y pase por el tonemap ACES igual que el resto de la imagen.
-        // Apagada no graba nada.
-        m_fogPass.record(fogCtx(), m_commandBuffers[m_currentFrame], fc.view, fc.proj);
-
-        // Motion blur de cámara: detrás de la niebla (emborrona la imagen tal y
-        // como se va a ver) y antes del bloom, para que la estela arrastre los
-        // highlights y florezca con ellos. Apagado no graba nada.
-        m_motionBlurPass.record(motionBlurCtx(), m_commandBuffers[m_currentFrame]);
-
-        // ── Bloom + composición: HDR → tonemap → offscreen LDR ───────────────────
-        {
-            VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
-
-            if (bloomEnabled())
-            {
-                m_bloomPass.beginQuery(bloomCtx(), cmd);
-                m_bloomPass.record(bloomCtx(), cmd);
-            }
-            else
-            {
-                // Apagado: ni un dispatch de la cadena, y sin timestamps que medir.
-                // El slot deja de tener par pendiente para que al reencender no se
-                // lea una medida de antes del apagón.
-                m_bloomPass.skipQuery(bloomCtx());
-                m_bloomPass.recordClear(bloomCtx(), cmd);
-            }
-
-            VkRenderPassBeginInfo rpInfo{};
-            rpInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-            rpInfo.renderPass        = m_compositeRenderPass;
-            // Con FXAA, SSAA o TAA la composicion (tonemap + contorno + gizmos)
-            // va a la imagen intermedia y el pass de resolucion la lleva de ahi a
-            // m_offscreenImage. En None y en MSAA escribe directamente en
-            // m_offscreenImage, exactamente como antes de esta feature: mismo
-            // render pass, mismos comandos.
-            rpInfo.framebuffer       = needsAaIntermediate() ? m_aaPass.compositeFramebuffer(m_currentFrame)
-                                                             : m_compositeFramebuffer[m_currentFrame];
-            rpInfo.renderArea.extent = m_renderExtent;
-            rpInfo.renderArea.offset = {0, 0};
-            // Los dos attachments son DONT_CARE/LOAD: nada que limpiar.
-            rpInfo.clearValueCount   = 0;
-
-            vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-            VkViewport viewport{};
-            viewport.width    = (float)m_renderExtent.width;
-            viewport.height   = (float)m_renderExtent.height;
-            viewport.minDepth = 0.0f;
-            viewport.maxDepth = 1.0f;
-            vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-            VkRect2D scissor{};
-            scissor.extent = m_renderExtent;
-            vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-            // Sin cadena de mips (viewport minúsculo) o con el efecto apagado no
-            // hay nada que sumar: la intensidad se fuerza a 0 y queda solo el
-            // tonemap. El pass NO se puede saltar: es quien tonemapea.
-            const float intensity = (bloomEnabled() && m_bloomPass.mipCount() > 0) ? m_bloomIntensity : 0.0f;
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_compositePipelineLayout,
-                                    0, 1, &m_compositeSets[m_currentFrame], 0, nullptr);
-            vkCmdPushConstants(cmd, m_compositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(float), &intensity);
-            vkCmdDraw(cmd, 3, 1, 0, 0);
-
-            // Contorno y gizmos, ya sobre la imagen tonemapeada y con la
-            // profundidad de la escena cargada: mismo resultado que cuando vivían
-            // en el pass anterior, pero sin pasar por el tonemap ni por el bloom.
-            recordSelectionOutline(cmd, camFrustum);
-            Gizmos::draw(cmd, fc.proj * fc.view, m_currentFrame);
-
-            vkCmdEndRenderPass(cmd);
-
-            // Solo con el bloom encendido: el par se abre arriba bajo la misma
-            // condición, y escribir aquí sin haber reseteado dejaría la query sucia.
-            if (m_timestampsSupported && bloomEnabled())
-                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_bloomPass.queryPool(), m_currentFrame * 2 + 1);
-
-            // Anti-aliasing: lo ultimo de la cadena de post, sobre color LDR ya
-            // tonemapeado y con el contorno de seleccion y los gizmos ya dibujados
-            // (asi que tambien se les suavizan los bordes, que es lo deseado: sus
-            // lineas y el casco invertido son lo mas escalonado de la pantalla).
-            m_aaPass.record(aaCtx(), cmd);
-
-            // ── UI de juego, ya sobre la imagen final ─────────────────────────
-            // Despues del AA a proposito: aqui el texto no lo suaviza el FXAA ni
-            // lo arrastra el historial del TAA, y con SSAA se dibuja UNA vez al
-            // tamano de salida en vez de supersamplearse. Es donde la dibuja
-            // tambien el backend de DirectX 12 (sobre el back buffer resuelto).
-            //
-            // Va por encima de la escena, del contorno de seleccion y de los
-            // gizmos, y por debajo de la interfaz del editor, que se graba en el
-            // pass del swapchain. Con el canvas vacio no se abre ni el pass.
-            //
-            // El draw data de TODOS los slots y el beginFrame() del batch ya
-            // estan hechos ARRIBA, antes del pase de escena: los canvas de mundo
-            // se graban alli y necesitan el buffer dimensionado y los cursores
-            // reiniciados antes que nadie. Aqui solo quedan los de PANTALLA, que
-            // se graban uno por uno dentro del MISMO vkCmdBeginRenderPass.
-            //
-            // La condicion de apertura son los de PANTALLA y solo ellos: con el
-            // total del frame, un proyecto con unicamente canvas de mundo
-            // abriria este pase para no grabar ni un draw dentro.
-            if (uiScreenVertices > 0 && uiScreenIndices > 0 && m_uiFramebuffer[m_currentFrame] != VK_NULL_HANDLE)
-            {
-                VkRenderPassBeginInfo uiRp{};
-                uiRp.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-                uiRp.renderPass        = m_uiRenderPass;
-                uiRp.framebuffer       = m_uiFramebuffer[m_currentFrame];
-                uiRp.renderArea.extent = uiExtent;
-                uiRp.renderArea.offset = {0, 0};
-                uiRp.clearValueCount   = 0;   // el attachment es LOAD
-
-                vkCmdBeginRenderPass(cmd, &uiRp, VK_SUBPASS_CONTENTS_INLINE);
-
-                // El viewport es estado dinamico y este pass es propio: hay que
-                // ponerlo, no se hereda del de composicion.
-                VkViewport vp{};
-                vp.width    = (float)uiExtent.width;
-                vp.height   = (float)uiExtent.height;
-                vp.minDepth = 0.0f;
-                vp.maxDepth = 1.0f;
-                vkCmdSetViewport(cmd, 0, 1, &vp);
-
-                // Aqui NO va un beginFrame(). El del frame ya se llamo arriba,
-                // antes del pase de escena, con el total de mundo + pantalla.
-                // Llamarlo otra vez reiniciaria los cursores a 0 y los canvas de
-                // pantalla escribirian ENCIMA de los vertices de los de mundo,
-                // que la GPU todavia no ha leido (lee el buffer al EJECUTAR la
-                // lista, no al grabarla): los canvas de mundo saldrian con la
-                // geometria del de pantalla, sin un solo aviso de validacion.
-
-                // bottom=0 y top=alto: (0,0) cae ARRIBA a la izquierda. Parece del revés
-                // y es justo lo contrario: en Vulkan el +Y de NDC va hacia ABAJO, así
-                // que la receta de OpenGL (top=0, bottom=alto) deja [1][1] negativo y
-                // dibuja la UI ENTERA espejada — invisible mientras solo hubo quads de
-                // color, evidente en cuanto se dibujó la primera letra. RH_ZO porque
-                // Vulkan clipea z fuera de [0,1] y glm::ortho a secas da [-1,1].
-                // Del ESPACIO DEL CANVAS (píxeles de salida), no del framebuffer: los
-                // vértices llegan en esos píxeles y el viewport ya estira el NDC al
-                // framebuffer entero. Con SSAA eso deja la UI supersampleada en vez de
-                // encogida a 1/factor, que es lo que salía al proyectar con el extent
-                // del render.
-                const glm::mat4 uiProj = glm::orthoRH_ZO(0.0f, (float)uiExtent.width,
-                                                         0.0f, (float)uiExtent.height,
-                                                         0.0f, 1.0f);
-
-                // Canvas y framebuffer son ya el MISMO espacio (pixeles de
-                // salida): los scissor no se escalan.
-                for (auto& s : m_uiSlots)
-                {
-                    if (!s || s->mode != UiCanvasRenderMode::ScreenSpace) continue;
-                    m_uiBatch.record(m_gpu, cmd, s->drawData, uiProj, uiExtent, uiExtent, m_currentFrame);
-                }
-                vkCmdEndRenderPass(cmd);
-            }
-
-            // Cierre de la medida del render completo, ya con el AA incluido. Es
-            // la referencia con la que se compara el sobrecoste de SSAA y MSAA,
-            // que no tienen pass propio que medir.
-            if (m_timestampsSupported)
-            {
-                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_aaQueryPool, m_currentFrame * 4 + 3);
-                m_aaQueryPending[m_currentFrame] = true;
-            }
-        }
-
-        // ── Pass 2: UI → swapchain ────────────────────────────────────────────────
-        if (!m_headless)
-        {
-            VkClearValue clearColor{};
-            clearColor.color = {0.12f, 0.12f, 0.12f, 1.0f};
-
-            VkRenderPassBeginInfo rpInfo{};
-            rpInfo.sType               = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-            rpInfo.renderPass          = m_renderPass;
-            rpInfo.framebuffer         = m_swapChainFramebuffers[imageIndex];
-            rpInfo.renderArea.extent   = m_swapChainExtent;
-            rpInfo.renderArea.offset   = {0, 0};
-            rpInfo.clearValueCount     = 1;
-            rpInfo.pClearValues        = &clearColor;
-
-            vkCmdBeginRenderPass(m_commandBuffers[m_currentFrame], &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-            if (m_ui) m_ui->recordUi(static_cast<void*>(m_commandBuffers[m_currentFrame]));
-            vkCmdEndRenderPass(m_commandBuffers[m_currentFrame]);
-        }
-        else
-        {
-            // ── Pass 2 (headless): offscreen → swapchain ──────────────────────────
-            // Sin editor no hay quien muestree la imagen offscreen, así que se
-            // copia tal cual a la imagen de presentación. Es un blit 1:1: la
-            // offscreen se crea con el mismo formato y extent que el swapchain
-            // (createOffscreenImages). El renderpass offscreen declara
-            // initialLayout=UNDEFINED, así que no hay que restaurar su layout
-            // después del blit.
-            VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
-            const VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-
-            VkImageMemoryBarrier toTransferSrc{};
-            toTransferSrc.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            toTransferSrc.oldLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            toTransferSrc.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            toTransferSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toTransferSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toTransferSrc.image               = m_offscreenImage[m_currentFrame];
-            toTransferSrc.subresourceRange    = range;
-            toTransferSrc.srcAccessMask       = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            toTransferSrc.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
-
-            VkImageMemoryBarrier toTransferDst{};
-            toTransferDst.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            toTransferDst.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
-            toTransferDst.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            toTransferDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toTransferDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toTransferDst.image               = m_swapChainImages[imageIndex];
-            toTransferDst.subresourceRange    = range;
-            toTransferDst.srcAccessMask       = 0;
-            toTransferDst.dstAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
-
-            // srcStageMask = COLOR_ATTACHMENT_OUTPUT y no TRANSFER: esto no es un
-            // despiste, es lo que ordena esta barrera (y por tanto el blit de abajo)
-            // detrás del semáforo de vkAcquireNextImageKHR. El submit de este frame
-            // solo espera ese semáforo en COLOR_ATTACHMENT_OUTPUT_BIT
-            // (submitInfo.pWaitDstStageMask, más abajo), que no cubre TRANSFER — así
-            // que si la barrera esperase únicamente en TRANSFER, el driver no tendría
-            // ninguna dependencia que la obligue a ir después de la adquisición de la
-            // imagen del swapchain y el blit podría ejecutarse sobre una imagen que
-            // aún no es nuestra (o pisar la del frame anterior in-flight). Que
-            // funcione depende de que el Pass 1 (offscreen) SIEMPRE emita trabajo en
-            // COLOR_ATTACHMENT_OUTPUT antes de esta barrera, así que el srcStageMask
-            // de aquí se encadena con ese trabajo y queda correctamente después del
-            // semáforo. Si algún día "se corrige" este srcStageMask a
-            // VK_PIPELINE_STAGE_TRANSFER_BIT (que es lo que parece obvio a primera
-            // vista), se rompe esa cadena en silencio: sin validation layers de por
-            // medio no hay ningún aviso, solo un blit ocasionalmente sobre una imagen
-            // todavía no adquirida.
-            VkImageMemoryBarrier preBarriers[] = { toTransferSrc, toTransferDst };
-            vkCmdPipelineBarrier(cmd,
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                VK_PIPELINE_STAGE_TRANSFER_BIT,
-                0, 0, nullptr, 0, nullptr, 2, preBarriers);
-
-            VkImageBlit blit{};
-            blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-            blit.srcOffsets[0]  = { 0, 0, 0 };
-            blit.srcOffsets[1]  = { (int32_t)effectiveViewport().width, (int32_t)effectiveViewport().height, 1 };
-            blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-            blit.dstOffsets[0]  = { 0, 0, 0 };
-            blit.dstOffsets[1]  = { (int32_t)m_swapChainExtent.width, (int32_t)m_swapChainExtent.height, 1 };
-
-            vkCmdBlitImage(cmd,
-                m_offscreenImage[m_currentFrame], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                m_swapChainImages[imageIndex],     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                1, &blit, VK_FILTER_NEAREST);
-
-            VkImageMemoryBarrier toPresent{};
-            toPresent.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            toPresent.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            toPresent.newLayout           = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-            toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toPresent.image               = m_swapChainImages[imageIndex];
-            toPresent.subresourceRange    = range;
-            toPresent.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
-            toPresent.dstAccessMask       = 0;
-
-            vkCmdPipelineBarrier(cmd,
-                VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                0, 0, nullptr, 0, nullptr, 1, &toPresent);
-        }
-
-        vkEndCommandBuffer(m_commandBuffers[m_currentFrame]);
+        // Pass 1 del frame: la escena 3D a su render target propio.
+        recordScenePass(m_commandBuffers[m_currentFrame], fc, camFrustum, perfStamp);
+        // Bloom y composicion: del HDR de la escena al LDR que vera la pantalla.
+        recordBloomAndComposite(m_commandBuffers[m_currentFrame], fc, camFrustum, uiExtent,
+                                uiScreenVertices, uiScreenIndices);
+        // Pass 2 del frame: la UI 2D sobre la imagen del swapchain.
+        recordUiPass(m_commandBuffers[m_currentFrame], imageIndex);
     }
 
     void Renderer::createPipeline()
