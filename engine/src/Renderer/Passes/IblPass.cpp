@@ -357,31 +357,41 @@ void IblPass::precompute(const Context& ctx)
     fflush(stdout);
 }
 
+void IblPass::fillIblWrites(VkDescriptorSet set, VkImageView irradiance,
+                            VkImageView prefilter, VkSampler sampler,
+                            VkDescriptorImageInfo infos[2],
+                            VkWriteDescriptorSet writes[2])
+{
+    const VkImageView vistas[2] = { irradiance, prefilter };
+    for (int i = 0; i < 2; i++)
+    {
+        infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        infos[i].imageView   = vistas[i];
+        infos[i].sampler     = sampler;
+
+        writes[i]                 = VkWriteDescriptorSet{};
+        writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet          = set;
+        writes[i].dstBinding      = kBindingIrradiance + (uint32_t)i;
+        writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].descriptorCount = 1;
+        writes[i].pImageInfo      = &infos[i];
+    }
+    static_assert(kBindingPrefilter == kBindingIrradiance + 1,
+                  "los dos bindings del IBL van seguidos: el bucle da por hecho ese +1");
+}
+
 void IblPass::writeBindings(const Context& ctx, VkDescriptorSet set,
                             VkImageView irradiance, VkImageView prefilter) const
 {
     // Un write suelto sobre un set YA alojado, igual que writeSsaoBinding:
-    // reescribir los bindings 5 y 6 es lo unico que hace falta para que un
-    // objeto pase del IBL global a una sonda. Ni layout nuevo, ni miembro
-    // nuevo en el UBO, ni un indice en PushData (que esta a 80 bytes justos).
+    // reescribir los bindings del IBL es lo unico que hace falta para que un
+    // objeto pase del cubemap global al de una sonda. Ni layout nuevo, ni
+    // miembro nuevo en el UBO, ni un indice en PushData (que esta a 80 bytes
+    // justos).
     VkDescriptorImageInfo infos[2]{};
-    infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    infos[0].imageView   = irradiance;
-    infos[0].sampler     = m_sampler;
-    infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    infos[1].imageView   = prefilter;
-    infos[1].sampler     = m_sampler;
-
-    VkWriteDescriptorSet w[2]{};
-    for (int i = 0; i < 2; i++)
-    {
-        w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[i].dstSet          = set;
-        w[i].dstBinding      = 5 + i;
-        w[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w[i].descriptorCount = 1;
-        w[i].pImageInfo      = &infos[i];
-    }
+    VkWriteDescriptorSet  w[2]{};
+    fillIblWrites(set, irradiance, prefilter, m_sampler, infos, w);
     vkUpdateDescriptorSets(ctx.gpu.device(), 2, w, 0, nullptr);
 }
 

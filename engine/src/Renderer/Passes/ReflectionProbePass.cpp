@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <stdexcept>
 #include <vector>
+#include "DonTopo/Renderer/Passes/IblPass.h"
 
 namespace DonTopo {
 
@@ -252,27 +253,18 @@ void ReflectionProbePass::writeIblBindings(const Context& ctx, VkDescriptorSet s
                                            VkImageView irradiance, VkImageView prefilter) const
 {
     // Un write suelto sobre un set YA alojado, igual que writeSsaoBinding:
-    // reescribir los bindings 5 y 6 es lo unico que hace falta para que un
-    // objeto pase del IBL global a una sonda. Ni layout nuevo, ni miembro
-    // nuevo en el UBO, ni un indice en PushData (que esta a 80 bytes justos).
+    // reescribir los bindings del IBL es lo unico que hace falta para que un
+    // objeto pase del cubemap global al de una sonda. Ni layout nuevo, ni
+    // miembro nuevo en el UBO, ni un indice en PushData (que esta a 80 bytes
+    // justos).
+    //
+    // Los writes salen de IblPass, que es el dueño de esos dos bindings. Esta
+    // era la CUARTA copia del mismo bloque —con las mallas, los personajes y el
+    // propio IblPass—, y divergir aqui es de lo que no avisa nadie: el objeto
+    // muestrearia el ambiente de otro.
     VkDescriptorImageInfo infos[2]{};
-    infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    infos[0].imageView   = irradiance;
-    infos[0].sampler     = ctx.iblSampler;
-    infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    infos[1].imageView   = prefilter;
-    infos[1].sampler     = ctx.iblSampler;
-
-    VkWriteDescriptorSet w[2]{};
-    for (int i = 0; i < 2; i++)
-    {
-        w[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[i].dstSet          = set;
-        w[i].dstBinding      = 5 + i;
-        w[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w[i].descriptorCount = 1;
-        w[i].pImageInfo      = &infos[i];
-    }
+    VkWriteDescriptorSet  w[2]{};
+    IblPass::fillIblWrites(set, irradiance, prefilter, ctx.iblSampler, infos, w);
     vkUpdateDescriptorSets(ctx.gpu.device(), 2, w, 0, nullptr);
 }
 

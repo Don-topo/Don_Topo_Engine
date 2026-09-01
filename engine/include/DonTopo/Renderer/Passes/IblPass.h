@@ -76,6 +76,25 @@ public:
     void writeBindings(const Context& ctx, VkDescriptorSet set,
                        VkImageView irradiance, VkImageView prefilter) const;
 
+    // Los DOS bindings del IBL, en un solo sitio.
+    //
+    // Los escriben TRES caminos —las mallas estaticas, los personajes y el pase
+    // de sondas, que cambia el cubemap global por el de una sonda— y cada uno
+    // tenia su copia del bloque. Divergir no falla en ningun lado: el objeto
+    // muestrea el ambiente de otro y solo se ve comparando capturas, que es
+    // exactamente como se colaron H3, H65, H75 y H76.
+    //
+    // RELLENA los writes, no los envia: mallas y personajes los mandan junto a
+    // sus otros cinco bindings en una sola llamada, y partir eso en dos
+    // vkUpdateDescriptorSets por objeto seria pagar por unificar. `infos` lo
+    // pone el llamante porque tiene que seguir vivo hasta esa llamada.
+    static constexpr uint32_t kBindingIrradiance = 5;
+    static constexpr uint32_t kBindingPrefilter  = 6;
+    static void fillIblWrites(VkDescriptorSet set, VkImageView irradiance,
+                              VkImageView prefilter, VkSampler sampler,
+                              VkDescriptorImageInfo infos[2],
+                              VkWriteDescriptorSet writes[2]);
+
     // Las dos vistas CUBE que van en los descriptor sets de cada objeto.
     VkImageView irradianceView() const { return m_irradianceView; }
     VkImageView prefilterView()  const { return m_prefilterView; }

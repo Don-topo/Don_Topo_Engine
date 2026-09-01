@@ -3175,16 +3175,8 @@ namespace DonTopo {
             ormInfo.sampler     = obj.ormSampler;
 
             // IBL: los mismos dos cubemaps para todos los objetos. Existen desde
-            // init(), asi que estos writes valen aunque no haya skybox.
-            VkDescriptorImageInfo irradianceInfo{};
-            irradianceInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            irradianceInfo.imageView   = m_iblPass.irradianceView();
-            irradianceInfo.sampler     = m_iblPass.sampler();
-
-            VkDescriptorImageInfo prefilterInfo{};
-            prefilterInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            prefilterInfo.imageView   = m_iblPass.prefilterView();
-            prefilterInfo.sampler     = m_iblPass.sampler();
+            // init(), asi que estos writes valen aunque no haya skybox. Los dos
+            // descriptores los rellena IblPass, mas abajo.
 
             VkWriteDescriptorSet writes[7]{};
             writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[0].dstSet = obj.descriptorSets[i];
@@ -3207,13 +3199,12 @@ namespace DonTopo {
             writes[4].dstBinding = 4; writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             writes[4].descriptorCount = 1; writes[4].pImageInfo = &ormInfo;
 
-            writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[5].dstSet = obj.descriptorSets[i];
-            writes[5].dstBinding = 5; writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[5].descriptorCount = 1; writes[5].pImageInfo = &irradianceInfo;
-
-            writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[6].dstSet = obj.descriptorSets[i];
-            writes[6].dstBinding = 6; writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[6].descriptorCount = 1; writes[6].pImageInfo = &prefilterInfo;
+            // Los dos del IBL, del sitio unico: los escriben tambien los
+            // personajes y el pase de sondas.
+            VkDescriptorImageInfo iblInfos[2]{};
+            IblPass::fillIblWrites(obj.descriptorSets[i], m_iblPass.irradianceView(),
+                                   m_iblPass.prefilterView(), m_iblPass.sampler(),
+                                   iblInfos, &writes[5]);
 
             vkUpdateDescriptorSets(m_gpu.device(), 7, writes, 0, nullptr);
 
@@ -4155,15 +4146,6 @@ namespace DonTopo {
                 ormInfo.imageView   = mgfx.ormView;
                 ormInfo.sampler     = mgfx.ormSampler;
 
-                VkDescriptorImageInfo irrInfo{};
-                irrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                irrInfo.imageView   = m_iblPass.irradianceView();
-                irrInfo.sampler     = m_iblPass.sampler();
-
-                VkDescriptorImageInfo preInfo{};
-                preInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                preInfo.imageView   = m_iblPass.prefilterView();
-                preInfo.sampler     = m_iblPass.sampler();
 
                 VkWriteDescriptorSet gw[7]{};
                 gw[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -4191,15 +4173,11 @@ namespace DonTopo {
                 gw[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 gw[4].descriptorCount = 1; gw[4].pImageInfo = &ormInfo;
 
-                gw[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                gw[5].dstSet = mgfx.descSets[fi]; gw[5].dstBinding = 5;
-                gw[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                gw[5].descriptorCount = 1; gw[5].pImageInfo = &irrInfo;
-
-                gw[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                gw[6].dstSet = mgfx.descSets[fi]; gw[6].dstBinding = 6;
-                gw[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                gw[6].descriptorCount = 1; gw[6].pImageInfo = &preInfo;
+                // Mismo sitio unico que las mallas estaticas.
+                VkDescriptorImageInfo iblInfos[2]{};
+                IblPass::fillIblWrites(mgfx.descSets[fi], m_iblPass.irradianceView(),
+                                       m_iblPass.prefilterView(), m_iblPass.sampler(),
+                                       iblInfos, &gw[5]);
 
                 vkUpdateDescriptorSets(m_gpu.device(), 7, gw, 0, nullptr);
 
