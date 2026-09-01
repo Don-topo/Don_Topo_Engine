@@ -94,6 +94,22 @@ void Skybox::loadCubemap(GpuDevice& gpu, const std::array<std::string, 6>& faceP
     int w = 0, h = 0;
     std::array<stbi_uc*, 6> pixels{};
 
+    // Las caras cargadas se liberan pase lo que pase. Las dos salidas de error
+    // de este bucle son las MÁS frecuentes que hay —una ruta mal escrita, o seis
+    // imágenes que el usuario no recortó al mismo tamaño— y las dos lanzaban
+    // dejando reservado todo lo anterior: hasta cinco caras a 2048x2048 son 80
+    // MB de fuga por intento, y el editor sobrevive a la excepción, así que se
+    // podía repetir (H30).
+    struct FreeFaces {
+        std::array<stbi_uc*, 6>& p;
+        bool armado = true;
+        ~FreeFaces()
+        {
+            if (!armado) return;
+            for (stbi_uc*& f : p) { if (f) stbi_image_free(f); f = nullptr; }
+        }
+    } guard{pixels};
+
     for (int i = 0; i < 6; i++) {
         int iw, ih, ch;
         pixels[i] = stbi_load(facePaths[i].c_str(), &iw, &ih, &ch, STBI_rgb_alpha);
@@ -101,7 +117,12 @@ void Skybox::loadCubemap(GpuDevice& gpu, const std::array<std::string, 6>& faceP
             throw std::runtime_error("Skybox: failed to load face: " + facePaths[i]);
         if (i == 0) { w = iw; h = ih; }
         else if (iw != w || ih != h)
-            throw std::runtime_error("Skybox: face size mismatch at index " + std::to_string(i));
+            // Con los tamaños: «face size mismatch» no decía CUÁL sobra ni por
+            // cuánto, y el arreglo es recortar la imagen.
+            throw std::runtime_error("Skybox: la cara " + std::to_string(i) + " mide " +
+                                     std::to_string(iw) + "x" + std::to_string(ih) +
+                                     " y las anteriores " + std::to_string(w) + "x" +
+                                     std::to_string(h) + ": " + facePaths[i]);
     }
 
     VkDeviceSize faceSize  = (VkDeviceSize)w * h * 4;
@@ -131,10 +152,14 @@ void Skybox::loadCubemap(GpuDevice& gpu, const std::array<std::string, 6>& faceP
 
     void* mapped;
     vkMapMemory(gpu.device(), stagingMem, 0, totalSize, 0, &mapped);
+    // Camino bueno: se copian y se liberan aqui, asi que el guard se desarma.
+    // Desde este punto ya no hay nada suyo que soltar.
     for (int i = 0; i < 6; i++) {
         memcpy((uint8_t*)mapped + i * faceSize, pixels[i], (size_t)faceSize);
         stbi_image_free(pixels[i]);
+        pixels[i] = nullptr;
     }
+    guard.armado = false;
     vkUnmapMemory(gpu.device(), stagingMem);
 
     // Cubemap image (6 array layers + CUBE_COMPATIBLE flag)

@@ -14,6 +14,26 @@ namespace DonTopo
     // desplaza en silencio todo lo que va detrás de lightSpaceMatrix.
     constexpr int SHADOW_CASCADES = 4;
 
+    // Matrices que hay que reservar en el SSBO de instancias de un frame, en el
+    // peor caso: cada objeto visible en las CUATRO cascadas del shadow map, mas
+    // el pase de escena, mas el pre-pase de profundidad que alimenta al SSAO y
+    // a la niebla. De ahi el (SHADOW_CASCADES + 2).
+    //
+    // Los personajes cuentan igual que los estaticos y ese era el fallo (H23):
+    // la cuenta salia solo de los estaticos, asi que una escena de puros
+    // personajes reservaba CERO y el pase de sombras se salia por un `break`
+    // mudo. Sin error, sin aviso, y la sombra sencillamente no estaba.
+    //
+    // Satura en vez de envolver: una cuenta absurda tiene que pedir DEMASIADO,
+    // que falla al asignar y se ve, no poco, que vuelve al fallo silencioso.
+    constexpr uint32_t shadowInstanceCapacity(uint32_t staticCount, uint32_t skinnedCount)
+    {
+        constexpr uint64_t kPasses = static_cast<uint64_t>(SHADOW_CASCADES) + 2;
+        const uint64_t total = (static_cast<uint64_t>(staticCount) +
+                                static_cast<uint64_t>(skinnedCount)) * kPasses;
+        return total > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(total);
+    }
+
     // Cuantas luces ADEMAS de la key pueden proyectar sombra, y cuanto cuesta
     // cada una.
     //

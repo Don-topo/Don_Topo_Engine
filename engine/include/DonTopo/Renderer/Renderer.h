@@ -243,14 +243,12 @@ namespace DonTopo {
             // Sustituye la textura del slot indicado por el checkerboard
             // "missing" (mismo generador que createTextureImage usa cuando no
             // hay path/bytes). No-op si renderIndex está fuera de rango.
-            // NO para la GPU: los handles viejos se encolan en la cola de
-            // destrucción diferida en vez de destruirse ya, así que un command
-            // buffer en vuelo que aún referencie el descriptor set los sigue
-            // viendo válidos hasta kDelayFrames frames después. (Este
-            // comentario decía justo lo contrario —«sincroniza con
-            // vkDeviceWaitIdle»— desde antes de que existiera la cola: H26.)
-            // Solo cubre meshes estáticos — no hay UI hoy que asigne meshes
-            // skinned.
+            // Espera a la GPU antes de reescribir el descriptor set: hacerlo
+            // con un command buffer en vuelo que lo tenga bindeado es uso
+            // inválido sin UPDATE_AFTER_BIND, y estos sets no lo piden (H25).
+            // Los RECURSOS viejos, en cambio, van a la cola de destrucción
+            // diferida y no dependen de esa espera. Solo cubre meshes estáticos
+            // — no hay UI hoy que asigne meshes skinned.
             void replaceStaticTextureWithMissing(int renderIndex, TextureSlot slot);
             // facePaths: +X, -X, +Y, -Y, +Z, -Z (cualquier formato soportado por stb_image)
             void initSkybox(const std::array<std::string, 6>& facePaths);
@@ -400,6 +398,11 @@ namespace DonTopo {
             int   statDrawCalls() const           { return m_statDrawCalls; }
             int   statInstances() const           { return m_statInstances; }
             int   statCulled() const              { return m_statCulled; }
+            // Objetos que se quedaron sin sitio en el SSBO de instancias de
+            // este frame y por tanto sin sombra ni profundidad. Debe ser
+            // SIEMPRE 0: si sube, la capacidad esta mal dimensionada. Antes ni
+            // se contaba y el sintoma era una sombra que no estaba (H23).
+            int   statInstanceOverflow() const override { return m_statInstanceOverflow; }
 
             // ── Forward+ ─────────────────────────────────────────────────────
             // Radio POR luz, en el mismo orden que setLights. Vacio (lo normal) =
@@ -934,6 +937,7 @@ namespace DonTopo {
             int                             m_statDrawCalls                     = 0;
             int                             m_statInstances                     = 0;
             int                             m_statCulled                        = 0;
+            int                             m_statInstanceOverflow              = 0;
 
             // ── Forward+ ───────────────────────────────────
             // El pase entero -layout, pipelines, buffers, sets y queries- lo

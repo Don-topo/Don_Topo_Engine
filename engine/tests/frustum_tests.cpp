@@ -275,6 +275,43 @@ static void test_cota_skinned_se_culea_con_el_transform()
     CHECK(!Renderer::aabbVisible(f, cotaMin, cotaMax, at(500.0f, 0.0f, -50.0f))); // al lado
 }
 
+
+// ── Sitio en el SSBO de instancias (H23) ────────────────────────────────────
+//
+// El culling decide QUE se dibuja; esto decide si CABE. Van en el mismo fichero
+// porque los dos contestan a la misma pregunta del pase de sombras, y el fallo
+// de esta parte no se ve: un personaje que no cabe pierde su sombra en silencio.
+
+// Los skinned cuentan. Esta es la regresion: la cuenta salia solo de los
+// objetos estaticos, asi que una escena de puros personajes reservaba CERO.
+static void test_capacidad_cuenta_los_skinned()
+{
+    CHECK(shadowInstanceCapacity(0, 3) == 3u * (SHADOW_CASCADES + 2));
+    CHECK(shadowInstanceCapacity(2, 3) == 5u * (SHADOW_CASCADES + 2));
+}
+
+// El peor caso de verdad: cada objeto visible en las cuatro cascadas, en el
+// pase de escena y en el pre-pase de profundidad.
+static void test_capacidad_es_el_peor_caso()
+{
+    CHECK(shadowInstanceCapacity(10, 0) == 60u);   // 10 * (4 + 2)
+}
+
+// Escena vacia: cero, y que sea el llamante quien ponga su minimo. Devolver un
+// minimo aqui escondería el caso de "no cabe nada" detras de un numero magico.
+static void test_capacidad_de_escena_vacia()
+{
+    CHECK(shadowInstanceCapacity(0, 0) == 0u);
+}
+
+// Una escena absurda no puede dar la vuelta al contador y pedir una capacidad
+// pequena: eso reservaria de menos y volveria al fallo silencioso, pero peor.
+static void test_capacidad_no_desborda()
+{
+    const uint32_t enorme = shadowInstanceCapacity(1000u * 1000u * 1000u, 0);
+    CHECK(enorme == 0xFFFFFFFFu);   // saturado, no envuelto
+}
+
 int main()
 {
     test_dentro_y_fuera(/*zeroToOne=*/true);
@@ -287,6 +324,11 @@ int main()
     test_cota_skinned_sin_clips();
     test_cota_skinned_sin_nada();
     test_cota_skinned_se_culea_con_el_transform();
+
+    test_capacidad_cuenta_los_skinned();
+    test_capacidad_es_el_peor_caso();
+    test_capacidad_de_escena_vacia();
+    test_capacidad_no_desborda();
 
     if (g_failures == 0) std::printf("frustum_tests: OK\n");
     else                 std::printf("frustum_tests: %d FALLOS\n", g_failures);

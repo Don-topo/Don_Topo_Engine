@@ -1607,8 +1607,14 @@ namespace DonTopo {
         // delante (una detrás de otra), la escena al final.
         // +2 y no +1: además del pass de escena, el depth pre-pass del SSAO
         // escribe su propio tramo del SSBO con el conjunto visible de la cámara.
-        ensureInstanceCapacity((uint32_t)m_objects.size() * (SHADOW_CASCADES + 2));
-        m_instanceCursor = 0;
+        // Los personajes cuentan igual que los estáticos: son otro draw con su
+        // matriz en el mismo SSBO. Contar solo los estáticos dejaba a una
+        // escena de puros personajes con capacidad CERO, y los dos pases que
+        // los recorren se salían por un `break` mudo (H23).
+        ensureInstanceCapacity(shadowInstanceCapacity((uint32_t)m_objects.size(),
+                                                       (uint32_t)m_skinnedObjects.size()));
+        m_instanceCursor          = 0;
+        m_statInstanceOverflow    = 0;
 
         // Cámara del frame: la usan el culling de los skinned (aquí abajo), el
         // de los estáticos y, más adelante en el pass principal, el skybox y los
@@ -3641,8 +3647,11 @@ namespace DonTopo {
                 if (!sobj.meshVisible) continue;
                 if (sobj.outputVertexBuffer == VK_NULL_HANDLE || sobj.matGfx.empty()) continue;
                 // Sin sitio en el SSBO de instancias de este frame: mejor sin
-                // sombra que pisar el rango de otro pass.
-                if (m_instanceCursor >= m_instanceCapacity[m_currentFrame]) break;
+                // sombra que pisar el rango de otro pass. Con la capacidad bien
+                // dimensionada esto ya no deberia ocurrir; el contador esta
+                // para que, si ocurre, se vea en el PerformancePanel en vez de
+                // perderse la sombra en silencio (H23).
+                if (m_instanceCursor >= m_instanceCapacity[m_currentFrame]) { ++m_statInstanceOverflow; break; }
 
                 // shadow.vert saca el model matrix del SSBO por gl_InstanceIndex:
                 // una entrada por objeto y un draw de una instancia apuntando a
@@ -4417,10 +4426,21 @@ namespace DonTopo {
         if (!gpuPtr) return;
         SharedGpuMesh& obj = *gpuPtr;
 
-        // Sin vkDeviceWaitIdle: los handles viejos se encolan (ver más abajo) en
-        // lugar de destruirse ya, así que un command buffer en vuelo que aún
-        // referencie el descriptor set los sigue viendo válidos hasta que la
-        // cola los libera kDelayFrames frames después.
+        // Dos problemas distintos, y solo uno lo resolvía la cola diferida.
+        //
+        // Los RECURSOS estaban a salvo: los handles viejos se encolan (ver más
+        // abajo) en lugar de destruirse ya, así que un command buffer en vuelo
+        // que aún referencie el descriptor set los sigue viendo válidos hasta
+        // que la cola los libera kDelayFrames frames después.
+        //
+        // Lo que NO estaba a salvo es el descriptor set en sí: escribirlo
+        // mientras un command buffer que lo tiene bindeado sigue en vuelo es
+        // uso inválido de la especificación —hace falta UPDATE_AFTER_BIND, que
+        // estos sets no piden— por mucho que los recursos aguanten (H25).
+        //
+        // Se espera a la GPU antes de tocarlo. Es caro y da igual: esto solo
+        // corre cuando una textura no se ha podido cargar, o sea una vez por
+        // asset roto y nunca por frame.
 
         VkImage*        img     = nullptr;
         VkDeviceMemory* mem     = nullptr;
@@ -4484,6 +4504,10 @@ namespace DonTopo {
         m_res.createTextureImage("", {}, *img, *mem);
         m_res.createTextureImageView(*img, *view);
         *sampler = m_res.sharedMaterialSampler();
+
+        // El wait va aquí y no arriba: lo que hay que proteger es la escritura
+        // del set, no la creación de la imagen nueva.
+        vkDeviceWaitIdle(m_gpu.device());
 
         for (int i = 0; i < MAX_FRAMES; i++)
         {
@@ -5155,8 +5179,9 @@ namespace DonTopo {
                     if (sobj.outputVertexBuffer == VK_NULL_HANDLE || sobj.matGfx.empty())
                         continue;
                     // Sin sitio en el SSBO de este frame: mejor sin profundidad que
-                    // pisar el tramo de otro pase.
-                    if (m_instanceCursor >= m_instanceCapacity[m_currentFrame]) break;
+                    // pisar el tramo de otro pase. Contado, como en el pase de
+                    // sombras: sin contador no habia forma de saberlo (H23).
+                    if (m_instanceCursor >= m_instanceCapacity[m_currentFrame]) { ++m_statInstanceOverflow; break; }
 
                     // El shader saca el model del SSBO por gl_InstanceIndex: una
                     // entrada por objeto y un draw de una instancia con

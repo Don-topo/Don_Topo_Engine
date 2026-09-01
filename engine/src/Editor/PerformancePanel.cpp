@@ -216,6 +216,15 @@ void PerformancePanel::draw(EditorContext& ctx)
             ImGui::Text("Culleados:   %d", r.statCulled());
             ImGui::TextDisabled("Solo el pass de escena (estaticos instanciados + skinned).");
 
+            // Debe ser siempre 0, asi que solo se pinta cuando NO lo es: una
+            // fila permanente a cero es ruido, y este numero solo importa el
+            // dia que deja de serlo. Mismo criterio que el aviso de celdas
+            // desbordadas de Forward+.
+            if (r.statInstanceOverflow() > 0)
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                                   "%d objetos sin sitio en el SSBO: pierden sombra",
+                                   r.statInstanceOverflow());
+
             // Ranuras de objeto. Aqui y no en el menu View porque es un
             // diagnostico, no un ajuste: lo que dice es si borrar esta
             // devolviendo los huecos. Si tras varios ciclos Play/Stop el numero

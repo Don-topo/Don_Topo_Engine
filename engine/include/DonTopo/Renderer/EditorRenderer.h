@@ -322,6 +322,12 @@ namespace DonTopo
             virtual int statDrawCalls() const = 0;
             virtual int statInstances() const = 0;
             virtual int statCulled() const    = 0;
+            // Objetos que se quedaron sin sitio en el SSBO de instancias del
+            // frame, y por tanto sin sombra ni profundidad. Tiene que ser
+            // SIEMPRE 0: si sube, la capacidad esta mal dimensionada. No es
+            // pura porque no todos los backends reparten asi sus instancias;
+            // el que no lo mida responde 0 y el panel no enseña nada (H23).
+            virtual int statInstanceOverflow() const { return 0; }
             virtual float forwardPlusAvgPerCell() const       = 0;
             virtual uint32_t forwardPlusOverflowCells() const = 0;
     };

@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <vector>
 #include <cstdio>
+#include <cstring>
+#include <algorithm>
 
 #ifdef NDEBUG
     static constexpr bool ENABLE_VALIDATION = false;
@@ -56,12 +58,47 @@ void GpuDevice::createInstance()
 
     const char* validationLayer = "VK_LAYER_KHRONOS_validation";
 
+    // ¿Está instalada? La capa viene con el SDK de Vulkan, no con el driver, así
+    // que una máquina con Vulkan perfectamente funcional puede no tenerla. Pedirla
+    // a ciegas hacía que vkCreateInstance devolviera VK_ERROR_LAYER_NOT_PRESENT y
+    // la build Debug muriera con «failed to create Vulkan instance!», que apunta
+    // al sitio equivocado: parece que la GPU no vale (H27).
+    //
+    // Sin capa se arranca igual y se dice. Perder los mensajes de validación es
+    // muchísimo menos malo que no poder ejecutar.
+    bool validationAvailable = false;
+    if (ENABLE_VALIDATION) {
+        uint32_t layerCount = 0;
+        vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+        std::vector<VkLayerProperties> layers(layerCount);
+        vkEnumerateInstanceLayerProperties(&layerCount, layers.data());
+        for (const VkLayerProperties& layer : layers)
+            if (std::strcmp(layer.layerName, validationLayer) == 0) {
+                validationAvailable = true;
+                break;
+            }
+        if (!validationAvailable) {
+            printf("AVISO: %s no esta instalada (falta el SDK de Vulkan). Se arranca\n"
+                   "       sin capa de validacion: no habra mensajes de uso indebido.\n",
+                   validationLayer);
+            fflush(stdout);
+            // La extensión del messenger la trae la capa: pedirla sin ella es el
+            // mismo fallo un paso más adelante.
+            extensions.erase(std::remove_if(extensions.begin(), extensions.end(),
+                                            [](const char* e) {
+                                                return std::strcmp(
+                                                           e, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0;
+                                            }),
+                             extensions.end());
+        }
+    }
+
     VkInstanceCreateInfo createInfo{};
     createInfo.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo        = &appInfo;
     createInfo.enabledExtensionCount   = (uint32_t)extensions.size();
     createInfo.ppEnabledExtensionNames = extensions.data();
-    if (ENABLE_VALIDATION) {
+    if (validationAvailable) {
         createInfo.enabledLayerCount   = 1;
         createInfo.ppEnabledLayerNames = &validationLayer;
     }
@@ -86,7 +123,12 @@ void GpuDevice::setupDebugMessenger()
 
     auto func = (PFN_vkCreateDebugUtilsMessengerEXT)
         vkGetInstanceProcAddr(m_instance, "vkCreateDebugUtilsMessengerEXT");
-    if (!func || func(m_instance, &createInfo, nullptr, &m_debugMessenger) != VK_SUCCESS)
+    // Sin capa instalada no hay puntero que resolver, y eso NO es un error: la
+    // instancia se creo a proposito sin ella y ya se aviso al crearla. Lanzar
+    // aqui era el mismo fallo de H27 un paso mas adelante — matar el arranque
+    // por no tener una herramienta de diagnostico.
+    if (!func) return;
+    if (func(m_instance, &createInfo, nullptr, &m_debugMessenger) != VK_SUCCESS)
         throw std::runtime_error("failed to set up debug messenger!");
 }
 
