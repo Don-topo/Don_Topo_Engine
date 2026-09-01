@@ -3306,9 +3306,20 @@ namespace DonTopo {
             ubo.lights[0].position.w =
                 (m_shadowPass.activeLayers() == SHADOW_KEY_MATRICES) ? 1.0f : 0.0f;
 
+            // Ranura + 1, con el SIGNO diciendo por que camino se grabo:
+            // positivo = una cara, negativo = cubemap de seis. Va en el mismo
+            // campo porque no hay otro libre en el bloque, y sale de lo que el
+            // pase hizo (shadowFaceCounts) en vez de que el shader lo deduzca
+            // del tipo de luz: deducirlo seria una segunda copia del criterio,
+            // que es lo que rompio H65.
             const int* ranuras = m_shadowPass.shadowSlots();
+            const int* caras   = m_shadowPass.shadowFaceCounts();
             for (int i = 1; i < ubo.numLights; i++)
-                ubo.lights[i].position.w = (ranuras[i] >= 0) ? (float)(ranuras[i] + 1) : 0.0f;
+            {
+                if (ranuras[i] < 0) { ubo.lights[i].position.w = 0.0f; continue; }
+                const float codigo = (float)(ranuras[i] + 1);
+                ubo.lights[i].position.w = (caras[i] == SHADOW_KEY_MATRICES) ? -codigo : codigo;
+            }
         }
 
         memcpy(m_uniformBuffersMapped[frameIndex], &ubo, sizeof(ubo));

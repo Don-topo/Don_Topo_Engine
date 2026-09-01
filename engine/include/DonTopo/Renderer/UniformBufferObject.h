@@ -34,18 +34,22 @@ namespace DonTopo
         return total > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(total);
     }
 
-    // Cuantas luces ADEMAS de la key pueden proyectar sombra, y cuanto cuesta
-    // cada una.
+    // CAPAS —no luces— disponibles para las sombras que no son la key.
     //
-    // Solo FOCOS. Una direccional secundaria necesitaria sus propias 4 cascadas
-    // para no verse peor que no tener sombra, y una de punto son 6 caras; el
-    // foco es el unico tipo que cabe en UNA capa. Las demas luces siguen
-    // iluminando, simplemente no arrojan sombra.
+    // Se cuenta en capas porque cada tipo consume lo suyo: un foco estrecho una,
+    // y una luz de punto (o un foco tan abierto que una sola cara le queda mal)
+    // las seis de un cubemap. Con seis caben UNA luz de punto o seis focos. Una
+    // DIRECCIONAL secundaria no entra: necesitaria sus cuatro cascadas para no
+    // verse peor que sin sombra, y entonces cuesta lo mismo que la key.
     //
-    // Cuatro y no mas porque cada una es una capa del shadow map y un render
-    // pass entero por frame: a 2048 son 16 MB y un recorrido mas de los
-    // casters.
-    constexpr int SHADOW_EXTRA_CASTERS = 4;
+    // El freno es la MEMORIA. Estas capas viven en el MISMO texture array que
+    // las de la key —un array tiene una sola resolucion—, asi que a 2048 cada
+    // una son 16 MB: seis son 96. Darles un array propio mas pequeno (512 = 1 MB
+    // por capa) permitiria subirlas mucho, pero obliga a un binding y un sampler
+    // nuevos en los seis shaders que declaran el bloque, y a rehacer los
+    // descriptor sets de mallas, materiales y niebla. Se dejo fuera a proposito:
+    // no hace falta para que una luz de punto secundaria proyecte.
+    constexpr int SHADOW_EXTRA_LAYERS = 6;
 
     // Huecos de matriz de sombra en el UBO, y capas del shadow map.
     //
@@ -54,13 +58,14 @@ namespace DonTopo
     // abierto (una por cara del cubemap), 1 si es un foco normal. Nunca coexisten
     // porque solo hay una luz key y solo tiene un tipo.
     //
-    // Los SHADOW_EXTRA_CASTERS de detras son de un foco cada uno.
+    // Los SHADOW_EXTRA_LAYERS de detras son de las secundarias: una capa por
+    // foco estrecho, seis por luz de punto o foco muy abierto.
     //
     // Tiene que valer lo mismo aqui y en los SEIS shaders que declaran el
     // bloque UBO: si se descuadra, std140 desplaza en silencio todo lo que va
     // detras y no lo delata ninguna capa de validacion.
     constexpr int SHADOW_KEY_MATRICES = 6;
-    constexpr int SHADOW_MATRICES     = SHADOW_KEY_MATRICES + SHADOW_EXTRA_CASTERS;
+    constexpr int SHADOW_MATRICES     = SHADOW_KEY_MATRICES + SHADOW_EXTRA_LAYERS;
 
     // Tipo de luz. Va en direction.w (float) y no en un int aparte: std140
     // alinearia el int a 16 bytes igual, asi que ocupar el hueco que la vec4 ya
@@ -392,7 +397,7 @@ namespace DonTopo
     // Reparte las ranuras de sombra entre las luces que NO son la key.
     //
     // Recorre las luces 1..n-1 en orden de escena y le da una ranura a cada FOCO
-    // hasta agotar SHADOW_EXTRA_CASTERS. En orden de escena y no por brillo o
+    // hasta agotar SHADOW_EXTRA_LAYERS. En orden de escena y no por brillo o
     // cercania a proposito: si el criterio dependiera de la camara, una luz
     // ganaria y perderia su sombra al moverte y eso parpadea.
     //
@@ -406,23 +411,51 @@ namespace DonTopo
     // los dos: la ranura decide en que capa se graba y con que matriz muestrea el
     // shader, asi que un reparto distinto por backend seria la misma escena con
     // sombras en luces distintas.
+    // capasDeLuz (opcional) recibe CUANTAS capas se llevo cada luz: 1 una cara,
+    // SHADOW_KEY_MATRICES un cubemap, 0 si no proyecta. Sale de aqui y no se
+    // recalcula en el backend ni en el shader a proposito — es el mismo criterio
+    // que decide la reserva, y contestarlo distinto en otro sitio grabaria menos
+    // caras de las reservadas. Es exactamente el fallo de H65.
     template <typename LuzT, typename TipoDeLuz, typename ParamsDeLuz>
     inline int repartirSombrasExtra(const LuzT* luces, int n,
                                     TipoDeLuz tipoDe, ParamsDeLuz paramsDe,
-                                    int* ranuraDeLuz /*[n]*/)
+                                    int* ranuraDeLuz /*[n]*/,
+                                    int* capasDeLuz = nullptr /*[n]*/)
     {
         for (int i = 0; i < n; i++) ranuraDeLuz[i] = -1;
+        if (capasDeLuz) for (int i = 0; i < n; i++) capasDeLuz[i] = 0;
 
         int usadas = 0;
-        for (int i = 1; i < n && usadas < SHADOW_EXTRA_CASTERS; i++)
+        for (int i = 1; i < n && usadas < SHADOW_EXTRA_LAYERS; i++)
         {
-            if (tipoDe(luces[i]) != static_cast<int>(LightType::Spot)) continue;
-            // Un foco tan abierto que necesitaria cubemap no cabe en una capa.
-            // Sigue iluminando; solo no proyecta.
-            if (spotNecesitaCubemap(paramsDe(luces[i]))) continue;
+            const int tipo = tipoDe(luces[i]);
+
+            // Cuantas capas necesita ESTA luz. Una de punto reparte su alcance
+            // en las seis caras de un cubemap; un foco estrecho cabe en una
+            // cara; un foco muy abierto tambien necesita el cubemap, por lo
+            // mismo que la key (la huella de un texel va con tan(FOV/2) y cerca
+            // de 180 grados se dispara).
+            //
+            // Una DIRECCIONAL secundaria se queda fuera: necesitaria sus cuatro
+            // cascadas para no verse peor que sin sombra, y entonces cuesta lo
+            // mismo que la key. Sigue iluminando.
+            int necesita = 0;
+            if (tipo == static_cast<int>(LightType::Point))
+                necesita = SHADOW_KEY_MATRICES;                     // seis caras
+            else if (tipo == static_cast<int>(LightType::Spot))
+                necesita = spotNecesitaCubemap(paramsDe(luces[i])) ? SHADOW_KEY_MATRICES : 1;
+            else
+                continue;
+
+            // O entra COMPLETA o no entra. Reservar tres caras de seis dejaria
+            // al shader muestreando las capas de otra luz al elegir una de las
+            // que faltan, y eso no lo avisa ninguna capa de validacion: la capa
+            // existe y tiene contenido, solo que no es el suyo.
+            if (usadas + necesita > SHADOW_EXTRA_LAYERS) continue;
 
             ranuraDeLuz[i] = SHADOW_KEY_MATRICES + usadas;
-            ++usadas;
+            if (capasDeLuz) capasDeLuz[i] = necesita;
+            usadas += necesita;
         }
         return usadas;
     }

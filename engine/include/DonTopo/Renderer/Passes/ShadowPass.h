@@ -132,6 +132,10 @@ public:
     // las SHADOW_KEY_MATRICES primeras y no pasa por aqui. Lo lee el Renderer
     // para decirselo al shader por position.w.
     const int* shadowSlots() const { return m_shadowSlot; }
+    // Capas que se llevo cada luz: 1 una cara, SHADOW_KEY_MATRICES un cubemap,
+    // 0 si no proyecta. Lo necesita el UBO para decirle al shader por que camino
+    // muestrear, sin que el shader lo deduzca por su cuenta.
+    const int* shadowFaceCounts() const { return m_shadowFaces; }
 
 private:
     VkImage        m_image                          = VK_NULL_HANDLE;
@@ -167,6 +171,7 @@ private:
     uint32_t  m_activeLayers = 0;
     uint32_t  m_extraLayers  = 0;
     int       m_shadowSlot[MAX_LIGHTS] = {};
+    int       m_shadowFaces[MAX_LIGHTS] = {};
 };
 
 } // namespace DonTopo

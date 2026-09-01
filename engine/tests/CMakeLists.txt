@@ -82,6 +82,13 @@ add_executable(dt_shader_module_tests shader_module_tests.cpp)
 target_link_libraries(dt_shader_module_tests PRIVATE DonTopoCore)
 target_compile_features(dt_shader_module_tests PRIVATE cxx_std_20)
 
+# Solo el include del motor: el reparto de ranuras es una plantilla pura en
+# UniformBufferObject.h y no arrastra ni GPU ni FMOD.
+add_executable(dt_shadow_slots_tests shadow_slots_tests.cpp)
+target_include_directories(dt_shadow_slots_tests PRIVATE ${CMAKE_SOURCE_DIR}/engine/include)
+target_link_libraries(dt_shadow_slots_tests PRIVATE glm::glm)
+target_compile_features(dt_shadow_slots_tests PRIVATE cxx_std_20)
+
 add_executable(dt_slot_pool_tests slot_pool_tests.cpp)
 target_include_directories(dt_slot_pool_tests PRIVATE ${CMAKE_SOURCE_DIR}/engine/include)
 target_compile_features(dt_slot_pool_tests PRIVATE cxx_std_20)

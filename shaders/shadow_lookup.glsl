@@ -120,8 +120,52 @@ bool dtCaraPerspectiva(int luz, int ranura, vec3 worldPos, vec3 normalMundo,
     return true;
 }
 
-// Sombra de una luz que NO es la key. Solo focos, una cara cada uno, en la
-// ranura que le dio el reparto —position.w = ranura + 1, y 0 = no proyecta—.
+// Elige cara de un cubemap por el eje MAYOR de (fragmento - luz): es la que
+// mira ese semiespacio, y su frustum de 90 grados contiene el punto.
+//
+// Solo elige CUAL. La UV y la profundidad salen despues de la matriz de esa
+// cara, la misma con la que se grabo — derivarlas a mano obligaria a que dos
+// convenciones de cubemap coincidieran, y aqui eso ya salio mal una vez.
+int dtCaraDelCubemap(vec3 worldPos, vec3 posLuz)
+{
+    vec3 L = worldPos - posLuz;
+    vec3 a = abs(L);
+    if (a.x >= a.y && a.x >= a.z) return L.x > 0.0 ? 0 : 1;
+    if (a.y >= a.z)               return L.y > 0.0 ? 2 : 3;
+    return L.z > 0.0 ? 4 : 5;
+}
+
+// Muestreo en perspectiva desde una ranura ya elegida, sin recortar en xy: lo
+// usan las caras de un cubemap, donde salirse por un lado es normal —el punto
+// pertenece a la cara vecina— y recortarlo dejaria un corte duro en la diagonal.
+bool dtCaraDeCubemap(int luz, int ranura, vec3 worldPos, vec3 normalMundo,
+                     out vec3 uvz, out float layer)
+{
+    worldPos = dtBiasHaciaLaLuz(luz, worldPos, normalMundo);
+
+    vec4 ls = ubo.lightSpaceMatrix[ranura] * vec4(worldPos, 1.0);
+    if (ls.w <= 0.0) return false;
+
+    vec3 p = ls.xyz / ls.w;
+    p.xy   = p.xy * 0.5 + 0.5;
+    // Fuera del alcance de la luz no hay nada grabado, y mas alla del far
+    // tampoco ilumina: "sin sombra" es la respuesta correcta.
+    if (p.z < 0.0 || p.z > 1.0) return false;
+
+    uvz   = p;
+    layer = float(ranura);
+    return true;
+}
+
+// Sombra de una luz que NO es la key, en la ranura que le dio el reparto.
+//
+// position.w codifica las dos cosas en un solo campo, porque en el bloque no
+// queda otro libre: |w| - 1 es la ranura, y el SIGNO dice por que camino se
+// grabo — positivo una sola cara (foco estrecho), negativo las seis de un
+// cubemap (luz de punto, o foco tan abierto que una cara le queda mal). Lo pone
+// el renderer a partir de lo que el pase HIZO; el shader no deduce el camino
+// del tipo de luz, que seria una segunda copia del criterio.
+//
 // false = esta luz no tiene sombra aqui y el llamante la trata como ILUMINADA.
 bool dtShadowCoordExtra(int luz, vec3 worldPos, vec3 normalMundo,
                         out vec3 uvz, out float layer)
@@ -129,10 +173,22 @@ bool dtShadowCoordExtra(int luz, vec3 worldPos, vec3 normalMundo,
     uvz   = vec3(0.0);
     layer = 0.0;
 
-    int ranura = int(ubo.lights[luz].position.w + 0.5) - 1;
+    float codigo = ubo.lights[luz].position.w;
+    if (abs(codigo) < 0.5) return false;          // no proyecta
+
+    int  ranura  = int(abs(codigo) + 0.5) - 1;
+    bool cubemap = codigo < 0.0;
     if (ranura < SHADOW_KEY_MATRICES || ranura >= SHADOW_MATRICES) return false;
 
-    return dtCaraPerspectiva(luz, ranura, worldPos, normalMundo, uvz, layer);
+    if (!cubemap)
+        return dtCaraPerspectiva(luz, ranura, worldPos, normalMundo, uvz, layer);
+
+    // Las seis caras estan en ranuras CONSECUTIVAS desde la que dio el reparto,
+    // en el mismo orden que las grabo pointShadowMatrices.
+    int cara = dtCaraDelCubemap(dtBiasHaciaLaLuz(luz, worldPos, normalMundo),
+                                ubo.lights[luz].position.xyz);
+    if (ranura + cara >= SHADOW_MATRICES) return false;
+    return dtCaraDeCubemap(luz, ranura + cara, worldPos, normalMundo, uvz, layer);
 }
 
 bool dtShadowCoord(vec3 worldPos, vec3 normalMundo, out vec3 uvz, out float layer)

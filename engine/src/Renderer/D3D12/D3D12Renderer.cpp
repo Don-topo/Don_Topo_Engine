@@ -99,7 +99,7 @@ struct SceneUbo {
     // DIEZ: seis de la luz key (4 cascadas, o 6 caras de cubemap, o 1 de foco)
     // mas cuatro focos secundarios de una capa cada uno. Al crecer desplaza todo
     // lo que va detras, y de ahi los offsets.
-    glm::mat4   lightSpaceMatrix[10];    // c8
+    glm::mat4   lightSpaceMatrix[SHADOW_MATRICES];   // c8
     glm::vec4   cascadeSplits;           // c48
     ShaderLight lights[MAX_LIGHTS];      // c49
     glm::vec4   viewPos;                 // c113
@@ -112,11 +112,11 @@ struct SceneUbo {
 static_assert(offsetof(SceneUbo, view) == 0, "UBO: view debe ir en c0");
 static_assert(offsetof(SceneUbo, proj) == 64, "UBO: proj debe ir en c4");
 static_assert(offsetof(SceneUbo, lightSpaceMatrix) == 128, "UBO: lightSpaceMatrix debe ir en c8");
-static_assert(offsetof(SceneUbo, cascadeSplits) == 768, "UBO: cascadeSplits debe ir en c48");
-static_assert(offsetof(SceneUbo, lights) == 784, "UBO: lights debe ir en c49");
-static_assert(offsetof(SceneUbo, viewPos) == 1808, "UBO: viewPos debe ir en c113");
-static_assert(offsetof(SceneUbo, numLights) == 1824, "UBO: numLights debe ir en c114");
-static_assert(offsetof(SceneUbo, ambientIntensity) == 1828,
+static_assert(offsetof(SceneUbo, cascadeSplits) == 896, "UBO: cascadeSplits debe ir en c56");
+static_assert(offsetof(SceneUbo, lights) == 912, "UBO: lights debe ir en c57");
+static_assert(offsetof(SceneUbo, viewPos) == 1936, "UBO: viewPos debe ir en c121");
+static_assert(offsetof(SceneUbo, numLights) == 1952, "UBO: numLights debe ir en c122");
+static_assert(offsetof(SceneUbo, ambientIntensity) == 1956,
               "UBO: ambientIntensity va pegado a numLights");
 // Los offsets de arriba son números fijos A PROPÓSITO: describen el layout que
 // declaran los packoffset del HLSL, que no salen de este fichero. Calcularlos a
@@ -1285,6 +1285,8 @@ struct D3D12Renderer::Impl {
     // Ranura de cada luz, o -1 si no proyecta. La 0 siempre -1: la key usa las
     // kShadowKeyLayers primeras.
     int       shadowSlot[MAX_LIGHTS] = {};
+    // Caras que se llevo cada luz: 1 una cara, SHADOW_KEY_MATRICES un cubemap.
+    int       shadowFaces[MAX_LIGHTS] = {};
     // Dirección de la luz: la misma que se escribe en el UBO. La posición solo
     // sirve para orientar, igual que en computeCascades.
     glm::vec3 lightDirection{-0.4f, -1.0f, -0.5f};
@@ -3031,8 +3033,15 @@ void D3D12Renderer::Impl::updateSceneUbo()
         // shader leia position.w.
         ubo.lights[0].position[3] = (activeLayers == kShadowKeyLayers) ? 1.0f : 0.0f;
         // Y las demas, su ranura + 1 (0 = no proyecta).
-        for (int i = 1; i < ubo.numLights; i++)
-            ubo.lights[i].position[3] = (shadowSlot[i] >= 0) ? (float)(shadowSlot[i] + 1) : 0.0f;
+        // Ranura + 1 con el SIGNO diciendo el camino: positivo una cara,
+        // negativo cubemap de seis. Mismo codigo que en Vulkan, porque lo lee
+        // el mismo shader.
+        for (int i = 1; i < ubo.numLights; i++) {
+            if (shadowSlot[i] < 0) { ubo.lights[i].position[3] = 0.0f; continue; }
+            const float codigo = (float)(shadowSlot[i] + 1);
+            ubo.lights[i].position[3] =
+                (shadowFaces[i] == SHADOW_KEY_MATRICES) ? -codigo : codigo;
+        }
 
         ubo.viewPos          = glm::vec4(cameraPos, 1.0f);
         ubo.ambientIntensity = state->ambientEnabled() ? state->ambientIntensity() : 0.0f;
@@ -7860,18 +7869,28 @@ void D3D12Renderer::Impl::computeCascades()
             [](const ShaderLight& l) {
                 return glm::vec4(l.params[0], l.params[1], l.params[2], l.params[3]);
             },
-            shadowSlot);
+            shadowSlot, shadowFaces);
 
         for (int i = 1; i < n; i++) {
             if (shadowSlot[i] < 0) continue;
             const ShaderLight& l = sceneLights[i];
+            const glm::vec4 pos(l.position[0], l.position[1], l.position[2], l.position[3]);
+            const glm::vec4 dir(l.direction[0], l.direction[1], l.direction[2], l.direction[3]);
+            const glm::vec4 par(l.params[0], l.params[1], l.params[2], l.params[3]);
+
+            // Cuantas caras le toca a esta luz lo dijo el REPARTO, que es
+            // compartido con Vulkan. Preguntarlo aqui otra vez seria una segunda
+            // copia del criterio, y contestar distinto grabaria menos caras de
+            // las reservadas.
             // flipY = false: aqui lo absorbe el viewport de altura negativa.
-            if (!spotShadowMatrix(
-                    glm::vec4(l.position[0], l.position[1], l.position[2], l.position[3]),
-                    glm::vec4(l.direction[0], l.direction[1], l.direction[2], l.direction[3]),
-                    glm::vec4(l.params[0], l.params[1], l.params[2], l.params[3]),
-                    /*flipY=*/false, cascadeMatrices[shadowSlot[i]])) {
-                shadowSlot[i] = -1;
+            const bool ok = (shadowFaces[i] == SHADOW_KEY_MATRICES)
+                ? pointShadowMatrices(pos, par, /*flipY=*/false,
+                                      &cascadeMatrices[shadowSlot[i]])
+                : spotShadowMatrix(pos, dir, par, /*flipY=*/false,
+                                   cascadeMatrices[shadowSlot[i]]);
+            if (!ok) {
+                shadowSlot[i]  = -1;
+                shadowFaces[i] = 0;
             }
         }
     }

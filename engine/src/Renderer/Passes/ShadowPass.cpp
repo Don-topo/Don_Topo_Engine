@@ -386,18 +386,35 @@ void ShadowPass::computeCascades(const glm::mat4& view, const glm::mat4& proj,
             lights.data(), n,
             [](const Light& l) { return (int)(l.direction.w + 0.5f); },
             [](const Light& l) { return l.params; },
-            m_shadowSlot);
+            m_shadowSlot, m_shadowFaces);
 
         for (int i = 1; i < n; i++)
         {
             if (m_shadowSlot[i] < 0) continue;
+
+            // Que tecnica le toca a ESTA luz. Es el mismo criterio que decide
+            // cuantas ranuras le dio el reparto, y por eso se pregunta igual:
+            // si aqui se contestara distinto, se grabarian menos caras de las
+            // reservadas y el shader muestrearia capas de otra luz.
+            const int  tipo = static_cast<int>(lights[i].direction.w + 0.5f);
+            const bool cubemap = tipo == static_cast<int>(LightType::Point) ||
+                                 (tipo == static_cast<int>(LightType::Spot) &&
+                                  spotNecesitaCubemap(lights[i].params));
+
             // flipY = true, igual que todo lo demas en Vulkan.
-            if (!spotShadowMatrix(lights[i].position, lights[i].direction, lights[i].params,
-                                  /*flipY=*/true, m_cascadeMatrices[m_shadowSlot[i]]))
+            const bool ok = cubemap
+                ? pointShadowMatrices(lights[i].position, lights[i].params, /*flipY=*/true,
+                                      &m_cascadeMatrices[m_shadowSlot[i]])
+                : spotShadowMatrix(lights[i].position, lights[i].direction, lights[i].params,
+                                   /*flipY=*/true, m_cascadeMatrices[m_shadowSlot[i]]);
+            if (!ok)
             {
-                // Sin direccion utilizable: se le retira la ranura en vez de
-                // dejar una matriz identidad que sombrearia cualquier cosa.
-                m_shadowSlot[i] = -1;
+                // Sin direccion o sin alcance utilizable: se le retira la ranura
+                // en vez de dejar una matriz identidad que sombrearia cualquier
+                // cosa. Las capas reservadas se quedan sin dibujar, que es lo
+                // correcto: el shader no las va a mirar.
+                m_shadowSlot[i]  = -1;
+                m_shadowFaces[i] = 0;
             }
         }
     }
