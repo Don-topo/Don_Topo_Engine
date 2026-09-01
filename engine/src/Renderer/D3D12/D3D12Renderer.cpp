@@ -492,6 +492,39 @@ std::vector<char> readBinaryFile(const std::string& path)
 // el mismo criterio que usa la swapchain de Vulkan del motor.
 constexpr UINT kFrameCount = 3;
 
+// ── Reparto del heap de RTV ─────────────────────────────────────────────────
+//
+// El heap de SRV lleva desde el principio sus índices con nombre (kSrvObjects,
+// kUavPrefilter…); el de RTV se habia quedado sin ellos. Se pedia
+// `kFrameCount + 6 + 6` y los trece sitios que lo usan sumaban su offset a mano
+// —`kFrameCount + 2`, `kFrameCount + 3 + i`, `kFrameCount + 5`…—, sin un solo
+// static_assert. Encajaba exacto por casualidad, y ese `6 + 6` no significaba
+// lo que parecia: el primer 6 son CINCO targets mas uno, no un grupo (H44).
+//
+// Añadir un target era escribir fuera del heap, que en D3D12 no da error al
+// crear la vista: la escritura cae en memoria de otro descriptor y el fallo
+// aparece luego, en otro sitio y sin relacion aparente.
+constexpr UINT kRtvBackBuffer  = 0;                  // uno por imagen del swapchain
+constexpr UINT kRtvSceneHdr    = kFrameCount;        // color HDR de la escena
+constexpr UINT kRtvLdr         = kRtvSceneHdr + 1;   // resultado tras el tonemap
+constexpr UINT kRtvSceneMsaa   = kRtvLdr + 1;        // escena multimuestreada
+// Historial del TAA: dos, y se alternan por frame (ping-pong).
+constexpr UINT kRtvTaaHistory      = kRtvSceneMsaa + 1;
+constexpr UINT kRtvTaaHistoryCount = 2;
+// Textura a la que dibuja el viewport del editor cuando no se presenta directo.
+constexpr UINT kRtvViewport    = kRtvTaaHistory + kRtvTaaHistoryCount;
+// Las seis caras de UNA sonda: se rehacen para cada sonda que se hornea, que va
+// de una en una.
+constexpr UINT kRtvProbeFace   = kRtvViewport + 1;
+constexpr UINT kRtvProbeFaces  = 6;
+// Lo que hay que pedir. Derivado, para que añadir un target arriba lo mueva
+// solo en vez de obligar a acordarse.
+constexpr UINT kRtvCount       = kRtvProbeFace + kRtvProbeFaces;
+
+static_assert(kRtvCount == kFrameCount + 12,
+              "El reparto del heap de RTV ha cambiado: revisa que nadie sume "
+              "offsets a mano y que kRtvCount siga cubriendo el ultimo indice");
+
 std::string hresultToString(HRESULT hr)
 {
     char buf[32] = {};
@@ -3705,7 +3738,7 @@ void D3D12Renderer::Impl::createHdrTargets()
 
     // El RTV del target va detrás de los de la swapchain, en el mismo heap.
     D3D12_CPU_DESCRIPTOR_HANDLE hdrRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    hdrRtv.ptr += static_cast<SIZE_T>(kFrameCount) * rtvSize;
+    hdrRtv.ptr += static_cast<SIZE_T>(kRtvSceneHdr) * rtvSize;
     device->CreateRenderTargetView(hdrAllocation->GetResource(), nullptr, hdrRtv);
 
     if (sampleCount > 1) {
@@ -3733,7 +3766,7 @@ void D3D12Renderer::Impl::createHdrTargets()
                       "D3D12MA::Allocator::CreateResource(HDR multimuestra)");
 
         D3D12_CPU_DESCRIPTOR_HANDLE msRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
-        msRtv.ptr += static_cast<SIZE_T>(kFrameCount + 2) * rtvSize;
+        msRtv.ptr += static_cast<SIZE_T>(kRtvSceneMsaa) * rtvSize;
         device->CreateRenderTargetView(hdrMsAllocation->GetResource(), nullptr, msRtv);
 
         msDesc.Format = DXGI_FORMAT_D32_FLOAT;
@@ -3781,7 +3814,7 @@ void D3D12Renderer::Impl::createHdrTargets()
                       "D3D12MA::Allocator::CreateResource(viewport)");
 
         D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
-        rtv.ptr += static_cast<SIZE_T>(kFrameCount + 5) * rtvSize;
+        rtv.ptr += static_cast<SIZE_T>(kRtvViewport) * rtvSize;
         device->CreateRenderTargetView(viewportAllocation->GetResource(), nullptr, rtv);
 
         createTexture2DSrv(viewportAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -3812,7 +3845,7 @@ void D3D12Renderer::Impl::createHdrTargets()
                       "D3D12MA::Allocator::CreateResource(historial del TAA)");
 
         D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
-        rtv.ptr += static_cast<SIZE_T>(kFrameCount + 3 + i) * rtvSize;
+        rtv.ptr += static_cast<SIZE_T>(kRtvTaaHistory + i) * rtvSize;
         device->CreateRenderTargetView(taaHistoryAllocations[i]->GetResource(), nullptr, rtv);
 
         createTexture2DSrv(taaHistoryAllocations[i]->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -3872,7 +3905,7 @@ void D3D12Renderer::Impl::createHdrTargets()
                   "D3D12MA::Allocator::CreateResource(LDR)");
 
     D3D12_CPU_DESCRIPTOR_HANDLE ldrRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    ldrRtv.ptr += static_cast<SIZE_T>(kFrameCount + 1) * rtvSize;
+    ldrRtv.ptr += static_cast<SIZE_T>(kRtvLdr) * rtvSize;
     device->CreateRenderTargetView(ldrAllocation->GetResource(), nullptr, ldrRtv);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC ldrSrv{};
@@ -5202,7 +5235,7 @@ void D3D12Renderer::Impl::recordTaa(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv)
                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
     D3D12_CPU_DESCRIPTOR_HANDLE historyRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    historyRtv.ptr += static_cast<SIZE_T>(kFrameCount + 3 + writeIndex) * rtvSize;
+    historyRtv.ptr += static_cast<SIZE_T>(kRtvTaaHistory + writeIndex) * rtvSize;
 
     const D3D12_CPU_DESCRIPTOR_HANDLE targets[2] = {backBufferRtv, historyRtv};
     commandList->OMSetRenderTargets(2, targets, FALSE, nullptr);
@@ -6802,7 +6835,7 @@ void D3D12Renderer::Impl::bakeProbe(GpuProbe& probe)
     const glm::mat4 savedViewProj = viewProj;
 
     // Un RTV por cara, en los seis huecos que el heap reserva al final.
-    const UINT kProbeRtvBase = kFrameCount + 6;
+    const UINT kProbeRtvBase = kRtvProbeFace;
     for (UINT face = 0; face < 6; ++face) {
         D3D12_RENDER_TARGET_VIEW_DESC rtvDesc{};
         rtvDesc.Format                         = kHdrFormat;
@@ -7538,7 +7571,7 @@ void D3D12Renderer::Impl::recordBloomAndComposite(D3D12_CPU_DESCRIPTOR_HANDLE ba
     // La composición NO va al backbuffer: va al target LDR, que es lo que lee
     // FXAA después. Un pase no puede leer y escribir la misma imagen.
     D3D12_CPU_DESCRIPTOR_HANDLE ldrRtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    ldrRtv.ptr += static_cast<SIZE_T>(kFrameCount + 1) * rtvSize;
+    ldrRtv.ptr += static_cast<SIZE_T>(kRtvLdr) * rtvSize;
 
     // Se crea ya en RENDER_TARGET (ver createHdrTargets) y sigue en ese estado
     // hasta el transition de después de componer, así que aquí se puede
@@ -8592,7 +8625,7 @@ void D3D12Renderer::init(Window& window)
     // Los de la swapchain, el HDR, el LDR de la composición y el color
     // multimuestra del pase de escena cuando hay MSAA.
     // + historias del TAA, viewport y las seis caras del horneado de sondas.
-    rtvHeapDesc.NumDescriptors = kFrameCount + 6 + 6;
+    rtvHeapDesc.NumDescriptors = kRtvCount;
     rtvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     throwIfFailed(d.device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&d.rtvHeap)),
@@ -9207,7 +9240,7 @@ void D3D12Renderer::drawFrame()
     const bool toTexture = d.renderToTexture && d.viewportAllocation;
     if (toTexture) {
         sceneRtv = d.rtvHeap->GetCPUDescriptorHandleForHeapStart();
-        sceneRtv.ptr += static_cast<SIZE_T>(kFrameCount + 5) * d.rtvSize;
+        sceneRtv.ptr += static_cast<SIZE_T>(kRtvViewport) * d.rtvSize;
 
         D3D12_RESOURCE_BARRIER toTarget{};
         toTarget.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -9230,7 +9263,7 @@ void D3D12Renderer::drawFrame()
     const bool multisampled = d.sampleCount > 1 && d.hdrMsAllocation && d.depthMsAllocation;
 
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = d.rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    rtv.ptr += static_cast<SIZE_T>(multisampled ? kFrameCount + 2 : kFrameCount) * d.rtvSize;
+    rtv.ptr += static_cast<SIZE_T>(multisampled ? kRtvSceneMsaa : kRtvSceneHdr) * d.rtvSize;
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = d.dsvHeap->GetCPUDescriptorHandleForHeapStart();
     if (multisampled)
         dsv.ptr += d.dsvSize;
@@ -10929,6 +10962,18 @@ void D3D12Renderer::shutdown()
     // El gancho apunta a este Impl: dejarlo puesto tras soltar el device sería
     // preguntarle a un objeto medio muerto.
     g_volcarDeviceRemoved = nullptr;
+
+    // Medicion de tiempos de GPU. No se soltaba, asi que el ReportLiveObjects de
+    // mas abajo salia sucio SIEMPRE y dejaba de servir para lo unico que sirve:
+    // detectar la fuga del dia (H46). El readback ademas se queda mapeado desde
+    // que se crea —a proposito, se lee cada frame—, y hay que desmapearlo antes
+    // de soltarlo.
+    if (d.timestampReadback) {
+        d.timestampReadback->Unmap(0, nullptr);
+        d.timestampMapped = nullptr;
+    }
+    d.timestampReadback.Reset();
+    d.timestampHeap.Reset();
 
     for (auto& allocator : d.allocators)
         allocator.Reset();
