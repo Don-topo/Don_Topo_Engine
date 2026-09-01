@@ -36,6 +36,22 @@ public:
                            uint32_t w, uint32_t h,
                            TransferBatch* batch = nullptr);
 
+    // Sube `w * h * 4` bytes de RGBA a una imagen NUEVA, con su staging, su
+    // copia y sus dos transiciones. Es el cuerpo que estaba copiado en SIETE
+    // sitios —las cinco create*Image de aquí, ensurePlaceholder y
+    // UiTextureAtlas::loadFromPixels—, y lo único que variaba entre ellos era
+    // de dónde salen los píxeles y el formato. Los píxeles se copian dentro,
+    // así que el llamante puede liberarlos al volver.
+    //
+    // Sin `batch`, las tres operaciones van en UN command buffer y por tanto en
+    // UNA espera, no en tres: medido a 0,41 ms por espera, o sea ~1,2 ms por
+    // imagen antes y ~0,4 después. Con `batch` no hay espera ninguna: el submit
+    // y la fence son de quien lo posee, y la imagen no es legible hasta que
+    // señale.
+    void uploadPixelsToImage(const void* pixels, uint32_t w, uint32_t h, VkFormat fmt,
+                             VkImage& img, VkDeviceMemory& mem,
+                             TransferBatch* batch = nullptr);
+
     void createTextureImage(const std::string& path,
                             const std::vector<uint8_t>& embedded,
                             VkImage& img, VkDeviceMemory& mem,

@@ -197,31 +197,10 @@ namespace DonTopo
 
         destroy(gpu);
 
-        const VkDeviceSize bytes = (VkDeviceSize)width * height * 4;
-
-        VkBuffer       staging       = VK_NULL_HANDLE;
-        VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
-        res.createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                         staging, stagingMemory);
-
-        void* mapped = nullptr;
-        vkMapMemory(gpu.device(), stagingMemory, 0, bytes, 0, &mapped);
-        std::memcpy(mapped, rgba, (size_t)bytes);
-        vkUnmapMemory(gpu.device(), stagingMemory);
-
-        res.createImage(width, height, format, VK_IMAGE_TILING_OPTIMAL,
-                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_image, m_memory);
-
-        res.transitionImageLayout(m_image, VK_IMAGE_LAYOUT_UNDEFINED,
-                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        res.copyBufferToImage(staging, m_image, width, height);
-        res.transitionImageLayout(m_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-        vkDestroyBuffer(gpu.device(), staging, nullptr);
-        vkFreeMemory(gpu.device(), stagingMemory, nullptr);
+        // Sin lote: este camino es sincrono a proposito —el atlas tiene que
+        // estar listo antes de dibujar el primer glifo—, y con el helper es UNA
+        // espera en vez de las tres que costaba escribirlo aqui a mano.
+        res.uploadPixelsToImage(rgba, width, height, format, m_image, m_memory);
 
         // La vista se declara con el MISMO formato con el que se subió: es aquí
         // donde un atlas de fuente se queda en UNORM.
