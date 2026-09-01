@@ -8,6 +8,7 @@
 // dentro del frustum se afirma visible, y los casos de fuera se ponen bien
 // lejos para que ninguna holgura conservadora los salve por accidente.
 #include "DonTopo/Renderer/Renderer.h"
+#include "DonTopo/Renderer/GpuDevice.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -312,6 +313,43 @@ static void test_capacidad_no_desborda()
     CHECK(enorme == 0xFFFFFFFFu);   // saturado, no envuelto
 }
 
+
+// ── Tope de asignaciones de memoria del device (H72) ────────────────────────
+//
+// Vulkan pide una asignacion por recurso y cada malla se lleva DOS vivas
+// (vertices e indices), asi que el tope del device se traduce a un numero de
+// mallas. El minimo que garantiza la especificacion es 4096; una NVIDIA
+// devuelve 4.189.151, o sea que el techo es real en unas GPU y no existe en
+// otras. Esto es lo unico de la guarda que se puede probar sin device.
+
+static void test_mallas_que_caben_en_el_minimo_de_la_spec()
+{
+    // 4096 / 2 = 2048 mallas. Es el caso que documenta la auditoria.
+    CHECK(GpuDevice::meshesWithinAllocationLimit(4096) == 2048u);
+}
+
+// Una GPU generosa no tiene techo practico y no debe avisar de nada.
+static void test_una_gpu_generosa_no_tiene_techo()
+{
+    CHECK(GpuDevice::meshesWithinAllocationLimit(4189151u) == 2094575u);
+    CHECK(!GpuDevice::allocationLimitIsTight(4189151u));
+}
+
+// El aviso salta con el minimo de la spec, que es donde el techo se alcanza de
+// verdad con una escena grande.
+static void test_el_minimo_de_la_spec_si_es_estrecho()
+{
+    CHECK(GpuDevice::allocationLimitIsTight(4096));
+}
+
+// Un tope absurdo no puede dar la vuelta ni dividir por cero.
+static void test_tope_degenerado()
+{
+    CHECK(GpuDevice::meshesWithinAllocationLimit(0) == 0u);
+    CHECK(GpuDevice::meshesWithinAllocationLimit(1) == 0u);
+    CHECK(GpuDevice::allocationLimitIsTight(0));
+}
+
 int main()
 {
     test_dentro_y_fuera(/*zeroToOne=*/true);
@@ -329,6 +367,11 @@ int main()
     test_capacidad_es_el_peor_caso();
     test_capacidad_de_escena_vacia();
     test_capacidad_no_desborda();
+
+    test_mallas_que_caben_en_el_minimo_de_la_spec();
+    test_una_gpu_generosa_no_tiene_techo();
+    test_el_minimo_de_la_spec_si_es_estrecho();
+    test_tope_degenerado();
 
     if (g_failures == 0) std::printf("frustum_tests: OK\n");
     else                 std::printf("frustum_tests: %d FALLOS\n", g_failures);

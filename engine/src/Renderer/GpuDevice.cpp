@@ -181,6 +181,26 @@ void GpuDevice::pickPhysicalDevice()
 
     if (m_physicalDevice == VK_NULL_HANDLE)
         throw std::runtime_error("failed to find a suitable GPU!");
+
+    // Tope de asignaciones de memoria del device. Se lee aquí, una vez, porque
+    // varía muchísimo entre implementaciones: la spec garantiza 4096 y una
+    // NVIDIA de escritorio da 4.189.151. Con dos asignaciones vivas por malla,
+    // eso son 2.048 mallas en la peor y dos millones en la otra.
+    //
+    // Solo se avisa cuando el tope es ESTRECHO: en una GPU generosa el mensaje
+    // sería ruido en cada arranque, y avisar de lo que no puede pasar entrena
+    // a no leer los avisos.
+    {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
+        m_maxMemoryAllocations = props.limits.maxMemoryAllocationCount;
+        if (allocationLimitIsTight(m_maxMemoryAllocations))
+            printf("AVISO: esta GPU admite %u asignaciones de memoria a la vez. El motor pide\n"
+                   "       una por recurso, o sea dos por malla, asi que la escena se queda\n"
+                   "       sin memoria sobre las %u mallas aunque sobre VRAM.\n",
+                   m_maxMemoryAllocations,
+                   meshesWithinAllocationLimit(m_maxMemoryAllocations));
+    }
     printf("device OK\n"); fflush(stdout);
 }
 

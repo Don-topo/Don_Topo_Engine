@@ -4,6 +4,7 @@
 #include "DonTopo/Renderer/PlaceholderTexture.h"
 #include <stdexcept>
 #include <cstring>
+#include <string>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
@@ -29,6 +30,27 @@ namespace {
 
 namespace DonTopo {
 
+namespace {
+    // VK_ERROR_TOO_MANY_OBJECTS es el tope de asignaciones VIVAS del device, y
+    // el mensaje generico ("failed to allocate buffer memory") apunta al sitio
+    // equivocado: parece falta de VRAM cuando lo que falta son ranuras. Un
+    // motor que pide una asignacion por recurso lo alcanza con una escena
+    // grande en una GPU que se quede en el minimo de la spec (H72).
+    std::string mensajeDeAsignacion(const char* que, VkResult r, uint32_t maxAllocs)
+    {
+        std::string m = std::string("failed to allocate ") + que + " memory";
+        if (r == VK_ERROR_TOO_MANY_OBJECTS)
+            m += ": alcanzado el tope de " + std::to_string(maxAllocs) +
+                 " asignaciones de memoria de esta GPU (unas " +
+                 std::to_string(maxAllocs / 2) +
+                 " mallas). No es falta de VRAM: es el numero de asignaciones,"
+                 " y el motor pide una por recurso";
+        else if (r == VK_ERROR_OUT_OF_DEVICE_MEMORY)
+            m += ": la GPU se ha quedado sin memoria";
+        return m;
+    }
+}
+
 void GpuResources::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props, VkBuffer& buffer, VkDeviceMemory& memory)
 {
     VkBufferCreateInfo bufferInfo{};
@@ -48,8 +70,9 @@ void GpuResources::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkM
     allocInfo.allocationSize    = req.size;
     allocInfo.memoryTypeIndex   = m_gpu.findMemoryType(req.memoryTypeBits, props);
 
-    if(vkAllocateMemory(m_gpu.device(), &allocInfo, nullptr, &memory) != VK_SUCCESS)
-        throw std::runtime_error("failed to allocate buffer memory!");
+    if(const VkResult r = vkAllocateMemory(m_gpu.device(), &allocInfo, nullptr, &memory);
+       r != VK_SUCCESS)
+        throw std::runtime_error(mensajeDeAsignacion("buffer", r, m_gpu.maxMemoryAllocations()));
 
     vkBindBufferMemory(m_gpu.device(), buffer, memory, 0);
 }
@@ -122,8 +145,9 @@ void GpuResources::createImage(uint32_t w, uint32_t h, VkFormat format, VkImageT
     allocInfo.allocationSize    = memoryRequirement.size;
     allocInfo.memoryTypeIndex   = m_gpu.findMemoryType(memoryRequirement.memoryTypeBits, props);
 
-    if(vkAllocateMemory(m_gpu.device(), &allocInfo, nullptr, &memory) != VK_SUCCESS)
-        throw std::runtime_error("failed to allocate image memory!");
+    if(const VkResult r = vkAllocateMemory(m_gpu.device(), &allocInfo, nullptr, &memory);
+       r != VK_SUCCESS)
+        throw std::runtime_error(mensajeDeAsignacion("image", r, m_gpu.maxMemoryAllocations()));
 
     vkBindImageMemory(m_gpu.device(), image, memory, 0);
 }
