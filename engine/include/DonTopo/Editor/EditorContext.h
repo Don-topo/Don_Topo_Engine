@@ -66,6 +66,16 @@ struct EditorContext {
     // tirar su caché de nombres: sin esto los combos siguen enseñando la lista
     // anterior hasta cambiar de ruta. Vacío por defecto.
     std::function<void()> onSpritesChanged;
+    // Guarda los ajustes del proyecto (project.json). Lo usa RenderingPanel:
+    // sus 41 controles se aplican Y persisten, y el comando de deshacer de cada
+    // uno vuelve a llamarlo para que deshacer deje el fichero como estaba. El
+    // dueño del project.json sigue siendo EditorUI. Vacío por defecto.
+    std::function<void()> saveSettings;
+    // Abre la ventana de ambiente/skybox (EditorUI::m_environmentWindowOpen).
+    // Mismo patrón que openAnimator: la ventana vive en EditorUI —está atada a
+    // su diálogo de carpetas y a applySkyboxFolder— y RenderingPanel solo tiene
+    // el botón que la abre. Vacío por defecto.
+    std::function<void()> openEnvironment;
 
     // Loader de assets asíncrono (vive en main.cpp, no-propietario). Sin él,
     // el drop de FBX no encola nada (loadMeshForSelected es no-op). Lo rellena
