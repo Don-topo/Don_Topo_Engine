@@ -312,6 +312,70 @@ void testPreloadedCacheConsulted()
         CHECK(!nullA->hasMesh(), "sin cache el path inexistente no da mesh");
 }
 
+// Un clon NO puede heredar los indices de render del original (H14).
+//
+// Son la ranura del backend donde vive la malla del original: si el clon se los
+// quedara, moverlo moveria la malla del ORIGINAL, y borrarlo soltaria una
+// ranura que el original sigue usando — que desde que las ranuras se reciclan
+// significa que el siguiente objeto en darse de alta la estrenaria mientras el
+// original la dibuja. Nada de eso da error en ningun sitio.
+//
+// HONESTIDAD SOBRE LO QUE ESTE TEST PRUEBA Y LO QUE NO. Hoy pasa por
+// CONSTRUCCION: cloneGameObject serializa con nodeToJson y reconstruye con
+// nodeFromJson, y los indices NO se serializan, asi que los nodos nuevos ya
+// nacen a -1 por su valor por defecto. Se comprobo quitando el traverse de
+// reseteo de Scene::cloneGameObject y el test seguia verde, o sea que ese
+// traverse es defensivo y hoy no cubre nada.
+//
+// Se queda igualmente porque afirma la PROPIEDAD y no la implementacion: el dia
+// que alguien serialice los indices en nodeToJson, o cambie el clonado a una
+// copia directa en vez de pasar por JSON, este test se pone rojo. Lo que NO
+// hace es proteger ese traverse — para eso habria que poder construir un clon
+// que si llegase con indices puestos, y por ese camino no se puede.
+//
+// Se afirma sobre el ARBOL entero y no solo sobre la raiz del clon: clonar un
+// modelo importado siempre trae jerarquia.
+void testClonNoHeredaIndicesDeRender()
+{
+    DonTopo::Scene scene;
+    CHECK(scene.fromJson(twoNodeScene(), physics(), audio(), nullptr, nullptr),
+          "fromJson debe cargar la escena de dos nodos");
+
+    DonTopo::GameObject* original = nullptr;
+    scene.traverse([&](DonTopo::GameObject* go) { if (go->name == "hijoA") original = go; });
+    CHECK(original, "hijoA debe existir");
+    if (!original) return;
+
+    // Un hijo, para que el clon tenga jerarquia que recorrer.
+    DonTopo::GameObject* hijo = scene.cloneGameObject(original, original, physics(), audio());
+    CHECK(hijo, "el hijo de prueba debe crearse");
+    if (!hijo) return;
+
+    // El original y su hijo YA registrados: valores distintos y no triviales,
+    // para que heredarlos se note y no se confunda con un cero por defecto.
+    original->staticRenderIndex  = 7;
+    original->skinnedRenderIndex = 3;
+    hijo->staticRenderIndex      = 11;
+    hijo->skinnedRenderIndex     = 5;
+
+    DonTopo::GameObject* clon = scene.cloneGameObject(original, &scene.getRoot(),
+                                                      physics(), audio());
+    CHECK(clon, "el clon debe crearse");
+    if (!clon) return;
+
+    int nodos = 0;
+    clon->traverse([&](DonTopo::GameObject* go) {
+        nodos++;
+        CHECK(go->staticRenderIndex  == -1, "el clon no hereda staticRenderIndex");
+        CHECK(go->skinnedRenderIndex == -1, "el clon no hereda skinnedRenderIndex");
+    });
+    CHECK(nodos == 2, "el clon debe traer su hijo (raiz + 1)");
+
+    // Y el original intacto: clonar no le toca los suyos.
+    CHECK(original->staticRenderIndex  == 7, "el original conserva su indice static");
+    CHECK(original->skinnedRenderIndex == 3, "el original conserva su indice skinned");
+}
+
 } // namespace
 
 int main()
@@ -330,6 +394,7 @@ int main()
     testAsyncCreatesNodesImmediately(loader);
     testDeletedTargetIsDiscarded(loader);
     testPreloadedCacheConsulted();
+    testClonNoHeredaIndicesDeRender();
 
     jobSystem.shutdown();
 

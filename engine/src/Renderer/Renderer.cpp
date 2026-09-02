@@ -4176,10 +4176,22 @@ namespace DonTopo {
         // la destrucción kDelayFrames frames, que es más de lo que cualquier
         // command buffer en vuelo puede tardar.
         node->traverse([this](GameObject* go) {
+            // Y los indices a -1 en la MISMA operacion que suelta la ranura:
+            // dejarlos apuntando a un hueco ya liberado no puede sobrevivir a
+            // esta llamada. Desde que las ranuras se reciclan, un indice stale
+            // no apunta a un hueco vacio sino al SIGUIENTE objeto que lo
+            // estrene, y todos los lectores lo dan por bueno con solo mirar que
+            // sea >= 0.
+            //
+            // Lo hacia el llamante, y el backend de DirectX 12 ya lo hacia aqui
+            // (D3D12Renderer::removeGameObject): los dos backends divergian en
+            // esto, con Vulkan dependiendo de que cuatro sitios se acordaran.
             if (go->staticRenderIndex >= 0)
                 removeStaticObject(go->staticRenderIndex);
+            go->staticRenderIndex = -1;
             if (go->skinnedRenderIndex >= 0)
                 removeSkinnedObject(go->skinnedRenderIndex);
+            go->skinnedRenderIndex = -1;
         });
     }
 

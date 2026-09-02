@@ -1994,22 +1994,18 @@ bool EditorUI::reloadSceneFromJson(const nlohmann::json& j, bool async)
     if (!m_scene || !m_renderer || !m_physics || !m_audio)
         return false;
 
-    // Libera recursos GPU de la escena actual y resetea sus índices a -1:
-    // si fromJson falla más abajo por malformación anidada, m_root sigue
-    // siendo este mismo árbol (Scene::fromJson es atómico), y resetear los
-    // índices aquí permite que el traverse de re-registro de abajo lo
-    // vuelva a registrar igual que si fuera el árbol nuevo — sin esto, el
-    // árbol viejo quedaría con índices obsoletos (Renderer::removeGameObject
-    // no los resetea) y sin re-registrar tras un fallo, dejando el viewport
-    // vacío pese a que los datos de Scene no cambiaron.
+    // Libera recursos GPU de la escena actual, y con ellos sus índices: si
+    // fromJson falla más abajo por malformación anidada, m_root sigue siendo
+    // este mismo árbol (Scene::fromJson es atómico), y con los índices a -1 el
+    // traverse de re-registro de abajo lo vuelve a registrar igual que si fuera
+    // el árbol nuevo. Sin eso, el árbol viejo se quedaría con índices obsoletos
+    // y sin re-registrar tras un fallo, dejando el viewport vacío pese a que los
+    // datos de Scene no cambiaron.
+    //
+    // El reseteo lo hace ya removeGameObject en los dos backends (H14): aquí
+    // estaba repetido a mano porque el de Vulkan no lo hacía.
     for (auto& child : m_scene->getRoot().children)
-    {
         m_renderer->removeGameObject(child.get());
-        child->traverse([](GameObject* go) {
-            go->staticRenderIndex = -1;
-            go->skinnedRenderIndex = -1;
-        });
-    }
 
     // Antes de arrancar una Load Scene async, cancela cualquier carga aún en
     // vuelo de una operación anterior: sus resultados resolverían a targets ya
