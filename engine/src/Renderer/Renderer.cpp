@@ -645,8 +645,10 @@ namespace DonTopo {
         }
         vkDestroyPipeline(m_gpu.device(), m_pipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_wireframePipeline, nullptr);
-        vkDestroyPipeline(m_gpu.device(), m_outlinePipeline, nullptr);
-        vkDestroyPipeline(m_gpu.device(), m_outlineWirePipeline, nullptr);
+        // Los CUATRO del contorno, estaticos y con huesos: son de este pase, no
+        // del Renderer. Antes de soltar el pipeline layout, que es el que el
+        // Context le presta.
+        m_outlinePass.destroyResources(outlineCtx());
         vkDestroyPipelineLayout(m_gpu.device(), m_pipelineLayout, nullptr);
         vkDestroyRenderPass(m_gpu.device(), m_renderPass, nullptr);
         for(VkImageView imageView : m_swapChainImageViews)
@@ -696,8 +698,6 @@ namespace DonTopo {
         m_iblPass.destroyResources(iblCtx());
         vkDestroyPipeline(m_gpu.device(), m_skinnedGfxPipeline, nullptr);
         vkDestroyPipeline(m_gpu.device(), m_skinnedWireframePipeline, nullptr);
-        vkDestroyPipeline(m_gpu.device(), m_skinnedOutlinePipeline, nullptr);
-        vkDestroyPipeline(m_gpu.device(), m_skinnedOutlineWirePipeline, nullptr);
         for (auto& obj : m_skinnedObjects)
         {
             destroySkinnedRenderObject(obj);
@@ -1485,16 +1485,19 @@ namespace DonTopo {
 
     void Renderer::recordSelectionOutline(VkCommandBuffer cmd, const Frustum& camFrustum)
     {
-        if (m_outlineStaticIndex < 0 && m_outlineSkinnedIndex < 0)
+        if (!m_outlinePass.hasTarget())
             return;
+
+        const int outlineStatic  = m_outlinePass.staticTarget();
+        const int outlineSkinned = m_outlinePass.skinnedTarget();
 
         // Grosor del casco relativo al tamaño del objeto en mundo: con un valor
         // fijo, un objeto grande apenas mostraría borde y uno pequeño quedaría
         // engullido por él.
 
-        if (m_outlineStaticIndex >= 0 && (size_t)m_outlineStaticIndex < m_objects.size())
+        if (outlineStatic >= 0 && (size_t)outlineStatic < m_objects.size())
         {
-            const RenderObject&  obj = m_objects[m_outlineStaticIndex];
+            const RenderObject&  obj = m_objects[outlineStatic];
             const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
             // Las mismas guardas que el bucle de dibujo, literalmente: un objeto
             // sin contorno porque está fuera de cámara —u oculto— es lo correcto,
@@ -1511,7 +1514,7 @@ namespace DonTopo {
                 push.flags.y = outlineThickness(maxExtent, obj.transform);
 
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    isWireframeMode() ? m_outlineWirePipeline : m_outlinePipeline);
+                    m_outlinePass.staticPipeline(isWireframeMode()));
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
                     0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
                 vkCmdPushConstants(cmd, m_pipelineLayout,
@@ -1525,7 +1528,7 @@ namespace DonTopo {
             }
         }
 
-        if (m_outlineSkinnedIndex >= 0 && (size_t)m_outlineSkinnedIndex < m_skinnedObjects.size())
+        if (outlineSkinned >= 0 && (size_t)outlineSkinned < m_skinnedObjects.size())
         {
             // La visibilidad ya la decidió el culling del principio del frame:
             // es la misma que gobernó el compute de skinning, así que si vale 0
@@ -1533,10 +1536,10 @@ namespace DonTopo {
             // casco sacaría una pose vieja.
             // Con el checkbox "Visible" apagado pasa exactamente lo mismo: el
             // compute no se despacha, así que no hay pose que dibujar.
-            if (m_skinnedVisible[m_outlineSkinnedIndex] &&
-                m_skinnedObjects[m_outlineSkinnedIndex].meshVisible)
+            if (m_skinnedVisible[outlineSkinned] &&
+                m_skinnedObjects[outlineSkinned].meshVisible)
             {
-                const SkinnedRenderObject& sobj = m_skinnedObjects[m_outlineSkinnedIndex];
+                const SkinnedRenderObject& sobj = m_skinnedObjects[outlineSkinned];
                 // matGfx vacío: no habría de dónde sacar el set 0, y el UBO que
                 // lee outline.vert vive ahí. Sin materiales no hay contorno.
                 if (sobj.outputVertexBuffer != VK_NULL_HANDLE && !sobj.matGfx.empty())
@@ -1546,7 +1549,7 @@ namespace DonTopo {
                     push.flags.y = outlineThickness(sobj.restMaxExtent, sobj.transform);
 
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        isWireframeMode() ? m_skinnedOutlineWirePipeline : m_skinnedOutlinePipeline);
+                        m_outlinePass.skinnedPipeline(isWireframeMode()));
                     // Un solo draw sobre todo el index buffer: los submeshes solo
                     // existen para cambiar de material, y el contorno es de un
                     // color plano.
@@ -2536,70 +2539,15 @@ namespace DonTopo {
         // silueta. depthWrite se queda en TRUE a propósito: ese reborde tiene que
         // escribir profundidad o el skybox, que dibuja con LEQUAL donde nada
         // escribió, lo taparía.
-        auto outlineVertCode = loadShaderFile("shaders/outline.vert.spv");
-        auto outlineFragCode = loadShaderFile("shaders/outline.frag.spv");
-        VkShaderModule outlineVertModule = createShaderModule(outlineVertCode);
-        VkShaderModule outlineFragModule = createShaderModule(outlineFragCode);
-
-        VkPipelineShaderStageCreateInfo outlineStages[2]{};
-        outlineStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        outlineStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
-        outlineStages[0].module = outlineVertModule;
-        outlineStages[0].pName  = "main";
-        outlineStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        outlineStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
-        outlineStages[1].module = outlineFragModule;
-        outlineStages[1].pName  = "main";
-
-        VkPipelineRasterizationStateCreateInfo outlineRasterizationInfo = rasterizationInfo;
-        outlineRasterizationInfo.cullMode = VK_CULL_MODE_FRONT_BIT;
-
-        // Vertex input propio: outline.vert solo lee posición y normal, y
-        // declarar los otros tres atributos haría saltar el warning
-        // "Vertex attribute at location N not consumed by vertex shader" de la
-        // capa de validación. Mismo binding y mismos offsets que arriba — solo
-        // se describen menos atributos, el buffer que se bindea es el mismo.
-        VkVertexInputAttributeDescription outlineAttrs[2]{};
-        outlineAttrs[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos) };
-        outlineAttrs[1] = { 3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal) };
-
-        VkPipelineVertexInputStateCreateInfo outlineVertexInput = vertexInput;
-        outlineVertexInput.vertexAttributeDescriptionCount = 2;
-        outlineVertexInput.pVertexAttributeDescriptions    = outlineAttrs;
-
-        VkGraphicsPipelineCreateInfo outlinePipelineInfo = pipelineInfo;
-        outlinePipelineInfo.pStages             = outlineStages;
-        outlinePipelineInfo.pRasterizationState = &outlineRasterizationInfo;
-        outlinePipelineInfo.pVertexInputState   = &outlineVertexInput;
-        // El contorno se dibuja en el pass de composicion (ya en LDR) y no en el
-        // de escena: si fuera por el pass HDR, el tonemap le cambiaria el naranja
-        // plano. Alli el skybox ya esta dibujado, asi que el depthWrite del casco
-        // deja de hacer falta para taparlo — se queda en TRUE igualmente porque
-        // el pipeline hereda el depthStencil de arriba y no molesta a nadie.
-        outlinePipelineInfo.renderPass          = m_compositeRenderPass;
-
-        if(vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &outlinePipelineInfo, nullptr, &m_outlinePipeline) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create outline graphics pipeline!");
-        }
-
-        VkPipelineRasterizationStateCreateInfo outlineWireRasterizationInfo = outlineRasterizationInfo;
-        outlineWireRasterizationInfo.polygonMode = VK_POLYGON_MODE_LINE;
-
-        VkGraphicsPipelineCreateInfo outlineWirePipelineInfo = outlinePipelineInfo;
-        outlineWirePipelineInfo.pRasterizationState = &outlineWireRasterizationInfo;
-
-        if(vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &outlineWirePipelineInfo, nullptr, &m_outlineWirePipeline) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create outline wireframe graphics pipeline!");
-        }
+        m_outlinePass.createStaticPipelines(outlineCtx(), pipelineInfo, rasterizationInfo,
+                                           vertexInput, offsetof(Vertex, pos),
+                                           offsetof(Vertex, normal));
 
         // los módulos se destruyen al final de esta función — solo los necesita el pipeline
         vkDestroyShaderModule(m_gpu.device(), vertModule, nullptr);
         vkDestroyShaderModule(m_gpu.device(), fragModule, nullptr);
         vkDestroyShaderModule(m_gpu.device(), wireFragModule, nullptr);
-        vkDestroyShaderModule(m_gpu.device(), outlineVertModule, nullptr);
-        vkDestroyShaderModule(m_gpu.device(), outlineFragModule, nullptr);
+        // Los del contorno los carga y los suelta SelectionOutlinePass.
         printf("pipeline OK\n"); fflush(stdout);
     }
 
@@ -3793,57 +3741,14 @@ namespace DonTopo {
             // vertex input de stride 80. El buffer que lee es el de SALIDA del
             // compute de skinning, así que el casco se extruye sobre la pose ya
             // deformada de este frame, no sobre la de reposo.
-            auto outlineVertCode = loadShaderFile("shaders/outline.vert.spv");
-            auto outlineFragCode = loadShaderFile("shaders/outline.frag.spv");
-            auto outlineVertMod  = createShaderModule(outlineVertCode);
-            auto outlineFragMod  = createShaderModule(outlineFragCode);
-
-            VkPipelineShaderStageCreateInfo outlineStages[2]{};
-            outlineStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            outlineStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
-            outlineStages[0].module = outlineVertMod; outlineStages[0].pName = "main";
-            outlineStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            outlineStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
-            outlineStages[1].module = outlineFragMod; outlineStages[1].pName = "main";
-
-            VkPipelineRasterizationStateCreateInfo outlineRs = rs;
-            outlineRs.cullMode = VK_CULL_MODE_FRONT_BIT;
-
-            // Solo pos@0 y normal@48 de OutputVertex, por lo mismo que en
-            // createPipeline: outline.vert no consume color, uv ni tangent.
-            VkVertexInputAttributeDescription outlineAttrs[2]{};
-            outlineAttrs[0] = { 0, 0, VK_FORMAT_R32G32B32_SFLOAT,  0 };
-            outlineAttrs[1] = { 3, 0, VK_FORMAT_R32G32B32_SFLOAT, 48 };
-
-            VkPipelineVertexInputStateCreateInfo outlineVi = vi;
-            outlineVi.vertexAttributeDescriptionCount = 2;
-            outlineVi.pVertexAttributeDescriptions    = outlineAttrs;
-
-            VkGraphicsPipelineCreateInfo outlinePci = pci;
-            outlinePci.pStages             = outlineStages;
-            outlinePci.pRasterizationState = &outlineRs;
-            outlinePci.pVertexInputState   = &outlineVi;
-            // Pass de composicion, igual que el contorno estatico: fuera del
-            // tonemap para que el naranja siga siendo el mismo naranja.
-            outlinePci.renderPass          = m_compositeRenderPass;
-
-            if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &outlinePci, nullptr, &m_skinnedOutlinePipeline) != VK_SUCCESS)
-                throw std::runtime_error("failed to create skinned outline pipeline!");
-
-            VkPipelineRasterizationStateCreateInfo outlineWireRs = outlineRs;
-            outlineWireRs.polygonMode = VK_POLYGON_MODE_LINE;
-
-            VkGraphicsPipelineCreateInfo outlineWirePci = outlinePci;
-            outlineWirePci.pRasterizationState = &outlineWireRs;
-
-            if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &outlineWirePci, nullptr, &m_skinnedOutlineWirePipeline) != VK_SUCCESS)
-                throw std::runtime_error("failed to create skinned outline wireframe pipeline!");
+            // pos@0 y normal@48 de OutputVertex, la salida del compute de
+            // skinning: el casco se extruye sobre la pose deformada de ESTE
+            // frame, no sobre la de reposo.
+            m_outlinePass.createSkinnedPipelines(outlineCtx(), pci, rs, vi, 0, 48);
 
             vkDestroyShaderModule(m_gpu.device(), vertMod, nullptr);
             vkDestroyShaderModule(m_gpu.device(), fragMod, nullptr);
             vkDestroyShaderModule(m_gpu.device(), wireFragMod, nullptr);
-            vkDestroyShaderModule(m_gpu.device(), outlineVertMod, nullptr);
-            vkDestroyShaderModule(m_gpu.device(), outlineFragMod, nullptr);
         }
     }
 
@@ -4985,6 +4890,11 @@ namespace DonTopo {
     }
 
     // ── IBL global y sondas ─────────────────────────────────────────────────
+    SelectionOutlinePass::Context Renderer::outlineCtx()
+    {
+        return SelectionOutlinePass::Context{ m_gpu, m_pipelineLayout, m_compositeRenderPass };
+    }
+
     IblPass::Context Renderer::iblCtx()
     {
         // Sin skybox cargado las dos vistas van nulas y precompute() se sale:
@@ -5507,10 +5417,13 @@ namespace DonTopo {
         // Solo los que viven en el pass de escena y en el de composicion. Los de
         // sombras, los del depth pre-pass y los de resolucion del AA tienen
         // render passes propios que siempre van a una muestra.
+        // Los cuatro del contorno NO estan en esta lista: los posee
+        // SelectionOutlinePass y se sueltan abajo con su destroyResources, que
+        // ademas los deja a VK_NULL_HANDLE para que createPipeline y
+        // createSkinnedGraphicsPipelines los rehagan limpios.
         VkPipeline* pipelines[] = {
-            &m_pipeline, &m_wireframePipeline, &m_outlinePipeline, &m_outlineWirePipeline,
+            &m_pipeline, &m_wireframePipeline,
             &m_skinnedGfxPipeline, &m_skinnedWireframePipeline,
-            &m_skinnedOutlinePipeline, &m_skinnedOutlineWirePipeline,
             &m_compositePipeline,
             // Los tres compute del skinning YA NO estan aqui: viven en
             // SkinningPass, no dependen de las muestras y su creacion ya no va
@@ -5525,6 +5438,8 @@ namespace DonTopo {
                 *p = VK_NULL_HANDLE;
             }
         }
+
+        m_outlinePass.destroyResources(outlineCtx());
 
         createPipeline();
         createSkinnedGraphicsPipelines();

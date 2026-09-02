@@ -33,6 +33,7 @@
 #include "DonTopo/Renderer/Passes/ForwardPlusPass.h"
 #include "DonTopo/Renderer/Passes/IblPass.h"
 #include "DonTopo/Renderer/Passes/ReflectionProbePass.h"
+#include "DonTopo/Renderer/Passes/SelectionOutlinePass.h"
 #include "DonTopo/Renderer/Passes/ShadowPass.h"
 #include "DonTopo/Renderer/Passes/SkinningPass.h"
 #include "DonTopo/Renderer/Passes/SsaoPass.h"
@@ -123,8 +124,7 @@ namespace DonTopo {
             // frustum no se dibuja nada.
             void setOutlineTarget(int staticIndex, int skinnedIndex)
             {
-                m_outlineStaticIndex  = staticIndex;
-                m_outlineSkinnedIndex = skinnedIndex;
+                m_outlinePass.setTarget(staticIndex, skinnedIndex);
             }
             // En headless no hay editor que pulse Play: el runtime arranca
             // jugando desde el frame 0. Esto es además lo que hace que
@@ -700,6 +700,11 @@ namespace DonTopo {
             // objetos, que son del Renderer y se quedan aqui.
             IblPass::Context             iblCtx();
             ReflectionProbePass::Context probeCtx();
+            // El contorno solo necesita prestados el layout de las mallas (usa
+            // el mismo set 0 y las mismas push constants) y el render pass de
+            // COMPOSICION, que es donde se dibuja para que el tonemap no le
+            // toque el color.
+            SelectionOutlinePass::Context outlineCtx();
             // Los tres dispatches del skinning viven en SkinningPass; esto arma
             // su paquete de estado compartido (las listas, que son del Renderer).
             SkinningPass::Context skinningCtx();
@@ -1006,22 +1011,6 @@ namespace DonTopo {
             VkPipelineLayout                m_pipelineLayout                    = VK_NULL_HANDLE;
             VkPipeline                      m_pipeline                          = VK_NULL_HANDLE;
             VkPipeline                      m_wireframePipeline                 = VK_NULL_HANDLE;
-            // Casco invertido del objeto seleccionado. Dos pipelines por el
-            // mismo motivo que los dos wireframe: el vertex input estatico
-            // (Vertex) y el skinned (OutputVertex) tienen stride distinto.
-            VkPipeline                      m_outlinePipeline                   = VK_NULL_HANDLE;
-            VkPipeline                      m_skinnedOutlinePipeline            = VK_NULL_HANDLE;
-            // Variante LINE de los dos anteriores, para cuando la escena se
-            // dibuja en wireframe: ahí el interior del objeto no escribe
-            // profundidad (solo lo hacen las aristas rasterizadas), así que un
-            // casco relleno pasaría el depth test entero y taparía el objeto de
-            // color plano en vez de bordearlo.
-            VkPipeline                      m_outlineWirePipeline               = VK_NULL_HANDLE;
-            VkPipeline                      m_skinnedOutlineWirePipeline        = VK_NULL_HANDLE;
-            // Objeto resaltado, -1 = ninguno. Solo los fija el editor
-            // (setOutlineTarget); en runtime se quedan en -1 para siempre.
-            int                             m_outlineStaticIndex                = -1;
-            int                             m_outlineSkinnedIndex               = -1;
             bool                            m_framebufferResized                = false;
             // Modos de presentacion que soporta ESTE device, cacheados al crear
             // el swapchain (que es donde ya hay surface y physicalDevice). FIFO
@@ -1095,6 +1084,12 @@ namespace DonTopo {
             // skinned).
             IblPass                         m_iblPass;
             ReflectionProbePass             m_probePass;
+            // Contorno de seleccion: los cuatro pipelines y el objeto
+            // resaltado. Solo lo usa el editor, y el runtime lo deja en (-1,-1)
+            // toda su vida. Sus DRAWS se quedan en recordSelectionOutline, que
+            // necesita las listas de objetos del Renderer — mismo reparto que
+            // ShadowPass y DepthPrepassPass.
+            SelectionOutlinePass            m_outlinePass;
 
             // El bake copia el UBO del frame 0 (luces, cascadas y su shadow map)
             // y solo le sustituye view/proj: sin un frame previo ese buffer es

@@ -14,6 +14,7 @@ add_library(DonTopoCore STATIC
     src/Renderer/Passes/ForwardPlusPass.cpp
     src/Renderer/Passes/IblPass.cpp
     src/Renderer/Passes/ReflectionProbePass.cpp
+    src/Renderer/Passes/SelectionOutlinePass.cpp
     src/Renderer/Passes/ShadowPass.cpp
     src/Renderer/Passes/SkinningPass.cpp
     src/Renderer/Passes/SsaoPass.cpp
