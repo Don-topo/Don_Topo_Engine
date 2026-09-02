@@ -5,9 +5,10 @@
 // y de los cuatro colliders.
 #include <PxPhysicsAPI.h>
 
+#include "DonTopo/Core/TransformDecompose.h"
+
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
-#include <glm/gtx/matrix_decompose.hpp>
 
 namespace DonTopo
 {
@@ -51,24 +52,12 @@ namespace DonTopo
     inline physx::PxTransform poseFromWorld(const glm::mat4& worldTransform,
                                             glm::vec3* outScale = nullptr)
     {
-        // Inicializadas con valores neutros: si `decompose` no escribe, lo que
-        // quede aquí es lo que se use.
-        glm::vec3 scale{1.0f}, translation{0.0f}, skew{0.0f};
-        glm::vec4 perspective{0.0f};
+        // La descomposicion segura vive en Core/TransformDecompose.h: el mismo
+        // fallo estaba en el inspector y en los bindings de Lua, asi que el
+        // criterio tiene que ser UNO. Aqui solo se traduce a PhysX.
+        glm::vec3 translation{0.0f};
         glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
-        const bool descompuesta =
-            glm::decompose(worldTransform, scale, rotation, translation, skew, perspective);
-
-        translation = glm::vec3(worldTransform[3]);
-        if (!descompuesta)
-            rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-
-        if (outScale)
-        {
-            *outScale = glm::vec3(glm::length(glm::vec3(worldTransform[0])),
-                                  glm::length(glm::vec3(worldTransform[1])),
-                                  glm::length(glm::vec3(worldTransform[2])));
-        }
+        decomposeTransform(worldTransform, &translation, &rotation, outScale);
 
         const physx::PxVec3 p(translation.x, translation.y, translation.z);
         const physx::PxQuat q(rotation.x, rotation.y, rotation.z, rotation.w);

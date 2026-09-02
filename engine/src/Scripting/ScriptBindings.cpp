@@ -1,4 +1,5 @@
 #include "DonTopo/Scripting/ScriptBindings.h"
+#include "DonTopo/Core/TransformDecompose.h"
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Core/Input.h"
 #include "DonTopo/Core/Scene.h"
@@ -156,8 +157,11 @@ namespace DonTopo::ScriptBindings
         // objeto rotado en más de un eje.
         void decomposeLocal(GameObject* go, glm::vec3& pos, glm::vec3& eulerDeg, glm::vec3& scale)
         {
-            glm::quat rot; glm::vec3 skew; glm::vec4 persp;
-            glm::decompose(go->localTransform, scale, rot, pos, skew, persp);
+            glm::quat rot;
+            // Sin mirar lo que devuelve decompose, una escala 0 dejaba las tres
+            // salidas SIN INICIALIZAR y Lua leia basura por Transform.position,
+            // .rotation y .scale.
+            decomposeTransform(go->localTransform, &pos, &rot, &scale);
             glm::mat4 rotOnly = glm::mat4_cast(rot);
             float t1 = 0.0f, t2 = 0.0f, t3 = 0.0f;
             glm::extractEulerAngleXYZ(rotOnly, t1, t2, t3);
@@ -359,8 +363,12 @@ namespace DonTopo::ScriptBindings
                     // que una rotación continua se "atasque" al llegar al
                     // límite (gira y luego se queda casi quieta).
                     if (!ensureFinite(mgr, "Transform.Rotate", dEuler)) return;
-                    glm::vec3 scale, pos, skew; glm::quat rot; glm::vec4 persp;
-                    glm::decompose(go->localTransform, scale, rot, pos, skew, persp);
+                    glm::vec3 scale, pos; glm::quat rot;
+                    // Aqui el descuido era el mas caro de los cuatro: con las
+                    // salidas sin inicializar, el localTransform se REESCRIBIA
+                    // con esa basura y el objeto quedaba destrozado para
+                    // siempre, no solo mal pintado.
+                    decomposeTransform(go->localTransform, &pos, &rot, &scale);
                     rot = rot * glm::quat(glm::radians(dEuler));
                     go->localTransform = glm::translate(glm::mat4(1.0f), pos) *
                                          glm::mat4_cast(rot) *

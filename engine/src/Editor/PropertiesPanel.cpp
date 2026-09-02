@@ -1,4 +1,5 @@
 #include "DonTopo/Editor/PropertiesPanel.h"
+#include "DonTopo/Core/TransformDecompose.h"
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/ProjectContext.h"
 #include "DonTopo/Editor/Command.h"
@@ -379,10 +380,12 @@ void PropertiesPanel::draw(EditorContext& ctx)
             // y rompería posición/rotación de forma permanente.
             if (m_caches.props != ctx.selected)
             {
-                glm::vec3 skew;
-                glm::vec4 perspective;
                 glm::quat orientation;
-                glm::decompose(ctx.selected->localTransform, m_editScale, orientation, m_editPosition, skew, perspective);
+                // Sin mirar lo que devuelve decompose, una escala 0 dejaba aqui
+                // el cuaternion SIN INICIALIZAR, y eulerAngles lo convertia en
+                // los 90 grados que aparecian en X y en Z.
+                decomposeTransform(ctx.selected->localTransform, &m_editPosition,
+                                   &orientation, &m_editScale);
                 m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
                 m_caches.props = ctx.selected;
                 m_meshLoadError.clear();
@@ -398,10 +401,10 @@ void PropertiesPanel::draw(EditorContext& ctx)
             else if (ctx.selected->hasAnyCollider() && ctx.selected->hasRigidbody()
                      && !ctx.selected->getRigidbody()->getIsKinematic() && !m_transformDragActive)
             {
-                glm::vec3 skew, unusedScale;
-                glm::vec4 perspective;
                 glm::quat orientation;
-                glm::decompose(ctx.selected->worldTransform, unusedScale, orientation, m_editPosition, skew, perspective);
+                // Mismo motivo que arriba: con una matriz singular decompose no
+                // escribe nada, y sin comprobarlo lo que se enseñaba era basura.
+                decomposeTransform(ctx.selected->worldTransform, &m_editPosition, &orientation);
                 m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
             }
 
