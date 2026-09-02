@@ -93,6 +93,13 @@ add_executable(dt_slot_pool_tests slot_pool_tests.cpp)
 target_include_directories(dt_slot_pool_tests PRIVATE ${CMAKE_SOURCE_DIR}/engine/include)
 target_compile_features(dt_slot_pool_tests PRIVATE cxx_std_20)
 
+# Solo el include del motor y el de Vulkan: PipelineDefaults.h es header-only y
+# no llama a una sola funcion de la API, solo rellena structs.
+add_executable(dt_pipeline_defaults_tests pipeline_defaults_tests.cpp)
+target_include_directories(dt_pipeline_defaults_tests PRIVATE ${CMAKE_SOURCE_DIR}/engine/include)
+target_link_libraries(dt_pipeline_defaults_tests PRIVATE Vulkan::Vulkan)
+target_compile_features(dt_pipeline_defaults_tests PRIVATE cxx_std_20)
+
 # VisibleSet.h es header-only, pero pide la caché de mallas (SharedGpuMesh.cpp)
 # y vulkan.h: las dos cosas llegan por DonTopoCore.
 add_executable(dt_visible_set_tests visible_set_tests.cpp)

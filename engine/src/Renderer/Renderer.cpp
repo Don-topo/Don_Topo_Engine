@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <fstream>
 #include "DonTopo/Renderer/Vertex.h"
+#include "DonTopo/Renderer/PipelineDefaults.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include "DonTopo/Renderer/UniformBufferObject.h"
 #include "DonTopo/Renderer/SelectionOutline.h"
@@ -2405,50 +2406,14 @@ namespace DonTopo {
         inputAssembly.sType     = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
         inputAssembly.topology  = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-        // 4. Viewport y scissor — dinámicos, los seteamos en recordCommandBuffer
-        VkPipelineViewportStateCreateInfo viewportInfo{};
-        viewportInfo.sType          = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-        viewportInfo.viewportCount  = 1;
-        viewportInfo.scissorCount   = 1;
-
-        // 5. Rasterizer — cómo se rellena el triángulo
-        VkPipelineRasterizationStateCreateInfo rasterizationInfo{};
-        rasterizationInfo.sType         = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-        rasterizationInfo.polygonMode   = VK_POLYGON_MODE_FILL;
-        rasterizationInfo.cullMode      = VK_CULL_MODE_BACK_BIT;
-        rasterizationInfo.frontFace     = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-        rasterizationInfo.lineWidth     = 1.0f;
-
-        // 6. Multisampling — lo fija el modo de AA. Tiene que coincidir con el
-        // numero de muestras del render pass del pipeline (escena para los dos
-        // primeros, composicion para los dos contornos) o el pipeline es invalido.
-        VkPipelineMultisampleStateCreateInfo multisampleInfo{};
-        multisampleInfo.sType                   = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        multisampleInfo.rasterizationSamples    = m_aaSampleCount;
-
-        VkPipelineDepthStencilStateCreateInfo depthStencil{};
-        depthStencil.sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-        depthStencil.depthTestEnable       = VK_TRUE;
-        depthStencil.depthWriteEnable      = VK_TRUE;
-        depthStencil.depthCompareOp        = VK_COMPARE_OP_LESS;
-        depthStencil.depthBoundsTestEnable = VK_FALSE;
-        depthStencil.stencilTestEnable     = VK_FALSE;
-
-        // 7. Color blending — opaco, sin transparencia
-        VkPipelineColorBlendAttachmentState blendAttachment{};
-        blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-
-        VkPipelineColorBlendStateCreateInfo colorBlendInfo{};
-        colorBlendInfo.sType            = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-        colorBlendInfo.attachmentCount  = 1;
-        colorBlendInfo.pAttachments     = &blendAttachment;
-
-        // 8. Dynamic state — viewport y scissor los cambiamos en runtime (no hardcoded aquí)
-        VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-        VkPipelineDynamicStateCreateInfo dynamicInfo{};
-        dynamicInfo.sType               = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-        dynamicInfo.dynamicStateCount   = 2;
-        dynamicInfo.pDynamicStates      = dynamicStates;
+        // 4-8. Todo el estado que comparte con el pipeline de mallas con huesos
+        // y con los cuatro del contorno: viewport y scissor dinamicos, relleno
+        // solido con culling trasero, profundidad LESS con escritura, y opaco
+        // sin blending. Vive en PipelineDefaults.h desde H10 — estaba escrito
+        // aqui y otra vez en createSkinnedGraphicsPipelines, con los mismos
+        // valores. Ojo: NO se puede copiar, sus punteros apuntan a sus propios
+        // miembros y tiene que seguir vivo hasta el vkCreateGraphicsPipelines.
+        const GraphicsPipelineState estadoComun(m_aaSampleCount);
 
         // 9. Pipeline layout — sin descriptors ni push constants por ahora
         VkPushConstantRange pushRange{};
@@ -2486,20 +2451,14 @@ namespace DonTopo {
 
         // 10. Pipeline completo
         VkGraphicsPipelineCreateInfo pipelineInfo{};
-        pipelineInfo.sType                  = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        estadoComun.fill(pipelineInfo);
+        // Y lo que es de ESTE pipeline y no del comun: sus shaders, su vertex
+        // input, el layout y contra que render pass se compila.
         pipelineInfo.stageCount             = 2;
         pipelineInfo.pStages                = stages;
         pipelineInfo.pVertexInputState      = &vertexInput;
-        pipelineInfo.pInputAssemblyState    = &inputAssembly;
-        pipelineInfo.pViewportState         = &viewportInfo;
-        pipelineInfo.pRasterizationState    = &rasterizationInfo;
-        pipelineInfo.pMultisampleState      = &multisampleInfo;
-        pipelineInfo.pColorBlendState       = &colorBlendInfo;
-        pipelineInfo.pDynamicState          = &dynamicInfo;
         pipelineInfo.layout                 = m_pipelineLayout;
         pipelineInfo.renderPass             = m_offscreenRenderPass;
-        pipelineInfo.subpass                = 0;
-        pipelineInfo.pDepthStencilState     = &depthStencil;
 
         if(vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipeline) != VK_SUCCESS)
         {
@@ -2519,7 +2478,7 @@ namespace DonTopo {
 
         VkPipelineShaderStageCreateInfo wireStages[] = { vertStage, wireFragStage };
 
-        VkPipelineRasterizationStateCreateInfo wireRasterizationInfo = rasterizationInfo;
+        VkPipelineRasterizationStateCreateInfo wireRasterizationInfo = estadoComun.rasterization;
         wireRasterizationInfo.polygonMode = VK_POLYGON_MODE_LINE;
 
         VkGraphicsPipelineCreateInfo wirePipelineInfo = pipelineInfo;
@@ -2539,7 +2498,7 @@ namespace DonTopo {
         // silueta. depthWrite se queda en TRUE a propósito: ese reborde tiene que
         // escribir profundidad o el skybox, que dibuja con LEQUAL donde nada
         // escribió, lo taparía.
-        m_outlinePass.createStaticPipelines(outlineCtx(), pipelineInfo, rasterizationInfo,
+        m_outlinePass.createStaticPipelines(outlineCtx(), pipelineInfo, estadoComun.rasterization,
                                            vertexInput, offsetof(Vertex, pos),
                                            offsetof(Vertex, normal));
 
@@ -3658,56 +3617,19 @@ namespace DonTopo {
             vi.vertexBindingDescriptionCount   = 1;  vi.pVertexBindingDescriptions  = &binding;
             vi.vertexAttributeDescriptionCount = 5;  vi.pVertexAttributeDescriptions = attrs;
 
-            VkPipelineInputAssemblyStateCreateInfo ia{};
-            ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-            VkPipelineViewportStateCreateInfo vp{};
-            vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-            vp.viewportCount = 1; vp.scissorCount = 1;
-
-            VkPipelineRasterizationStateCreateInfo rs{};
-            rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-            rs.polygonMode = VK_POLYGON_MODE_FILL;
-            rs.cullMode    = VK_CULL_MODE_BACK_BIT;
-            rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-            rs.lineWidth   = 1.0f;
-
-            VkPipelineMultisampleStateCreateInfo ms{};
-            ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-            // Como los estaticos: estos cuatro viven en el pass de escena y en el
-            // de composicion, que siguen el numero de muestras del modo de AA.
-            ms.rasterizationSamples = m_aaSampleCount;
-
-            VkPipelineDepthStencilStateCreateInfo ds{};
-            ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-            ds.depthTestEnable  = VK_TRUE;
-            ds.depthWriteEnable = VK_TRUE;
-            ds.depthCompareOp   = VK_COMPARE_OP_LESS;
-
-            VkPipelineColorBlendAttachmentState blend{};
-            blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-
-            VkPipelineColorBlendStateCreateInfo cb{};
-            cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-            cb.attachmentCount = 1; cb.pAttachments = &blend;
-
-            VkDynamicState dynStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-            VkPipelineDynamicStateCreateInfo dyn{};
-            dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-            dyn.dynamicStateCount = 2; dyn.pDynamicStates = dynStates;
+            // El MISMO estado que los estaticos, ni un valor distinto: vive en
+            // PipelineDefaults.h desde H10. Lo unico que de verdad separa a este
+            // pipeline del de arriba es el vertex input —la salida del compute
+            // de skinning, stride 80— y sus shaders.
+            const GraphicsPipelineState estadoComun(m_aaSampleCount);
 
             VkGraphicsPipelineCreateInfo pci{};
-            pci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-            pci.stageCount          = 2;  pci.pStages             = stages;
-            pci.pVertexInputState   = &vi; pci.pInputAssemblyState = &ia;
-            pci.pViewportState      = &vp; pci.pRasterizationState = &rs;
-            pci.pMultisampleState   = &ms; pci.pDepthStencilState  = &ds;
-            pci.pColorBlendState    = &cb; pci.pDynamicState       = &dyn;
+            estadoComun.fill(pci);
+            pci.stageCount          = 2;
+            pci.pStages             = stages;
+            pci.pVertexInputState   = &vi;
             pci.layout              = m_pipelineLayout;
             pci.renderPass          = m_offscreenRenderPass;
-            pci.subpass             = 0;
 
             if (vkCreateGraphicsPipelines(m_gpu.device(), VK_NULL_HANDLE, 1, &pci, nullptr, &m_skinnedGfxPipeline) != VK_SUCCESS)
                 throw std::runtime_error("failed to create skinned graphics pipeline!");
@@ -3726,7 +3648,7 @@ namespace DonTopo {
 
             VkPipelineShaderStageCreateInfo wireStages[] = { stages[0], wireFragStage };
 
-            VkPipelineRasterizationStateCreateInfo wireRs = rs;
+            VkPipelineRasterizationStateCreateInfo wireRs = estadoComun.rasterization;
             wireRs.polygonMode = VK_POLYGON_MODE_LINE;
 
             VkGraphicsPipelineCreateInfo wirePci = pci;
@@ -3744,7 +3666,7 @@ namespace DonTopo {
             // pos@0 y normal@48 de OutputVertex, la salida del compute de
             // skinning: el casco se extruye sobre la pose deformada de ESTE
             // frame, no sobre la de reposo.
-            m_outlinePass.createSkinnedPipelines(outlineCtx(), pci, rs, vi, 0, 48);
+            m_outlinePass.createSkinnedPipelines(outlineCtx(), pci, estadoComun.rasterization, vi, 0, 48);
 
             vkDestroyShaderModule(m_gpu.device(), vertMod, nullptr);
             vkDestroyShaderModule(m_gpu.device(), fragMod, nullptr);
