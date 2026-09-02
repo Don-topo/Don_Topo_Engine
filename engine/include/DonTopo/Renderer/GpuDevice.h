@@ -41,6 +41,11 @@ public:
     }
     // Lo que dijo ESTE device. 0 antes de elegir la GPU.
     uint32_t maxMemoryAllocations() const { return m_maxMemoryAllocations; }
+    // El UBO mas grande que acepta ESTE device. La spec garantiza 16 KB como
+    // minimo, pero el minimo de la spec no es el limite real (ver H72): se lee
+    // del device y no se supone. Lo mira createUniformBuffers, que es quien
+    // conoce el tamaño del bloque.
+    uint32_t maxUniformBufferRange() const { return m_maxUniformBufferRange; }
 
     VkDevice         device()         const { return m_device; }
     VkPhysicalDevice physicalDevice() const { return m_physicalDevice; }
@@ -75,7 +80,8 @@ private:
     VkSurfaceKHR             m_surface        = VK_NULL_HANDLE;
     VkPhysicalDevice         m_physicalDevice = VK_NULL_HANDLE;
     // Se lee del device al elegirlo, en pickPhysicalDevice.
-    uint32_t                 m_maxMemoryAllocations = 0;
+    uint32_t                 m_maxMemoryAllocations  = 0;
+    uint32_t                 m_maxUniformBufferRange = 0;
     VkDevice                 m_device         = VK_NULL_HANDLE;
     VkQueue                  m_graphicsQueue  = VK_NULL_HANDLE;
     VkQueue                  m_presentQueue   = VK_NULL_HANDLE;

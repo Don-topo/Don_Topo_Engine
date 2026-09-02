@@ -2759,7 +2759,26 @@ namespace DonTopo {
     void Renderer::createUniformBuffers()
     {
         VkDeviceSize size = sizeof(UniformBufferObject);
-        for (int i = 0; i < MAX_FRAMES; i++) 
+
+        // Que el bloque QUEPA en un UBO de esta GPU. Lo domina MAX_LIGHTS (64
+        // luces son 4 KB de los ~5 que ocupa), asi que subirlo mas es lo que
+        // puede pasarse de la raya. La spec garantiza 16 KB como minimo, pero
+        // el minimo de la spec no es el limite real (H72): se lee del device.
+        //
+        // Pasarse no da un error util —vkCreateBuffer traga, y lo que falla es
+        // el binding del descriptor mas tarde—, asi que se avisa aqui con los
+        // dos numeros y con la causa.
+        const uint32_t topeUbo = m_gpu.maxUniformBufferRange();
+        if (topeUbo > 0 && size > topeUbo)
+        {
+            printf("AVISO: el bloque UBO ocupa %llu bytes y esta GPU admite %u como maximo.\n"
+                   "       Lo domina MAX_LIGHTS (%d luces): bajarlo es lo que lo devuelve\n"
+                   "       dentro del limite.\n",
+                   (unsigned long long)size, topeUbo, MAX_LIGHTS);
+            fflush(stdout);
+        }
+
+        for (int i = 0; i < MAX_FRAMES; i++)
         {
             VkBufferCreateInfo bufferInfo{};
             bufferInfo.sType        = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;

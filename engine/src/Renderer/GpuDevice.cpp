@@ -193,7 +193,8 @@ void GpuDevice::pickPhysicalDevice()
     {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
-        m_maxMemoryAllocations = props.limits.maxMemoryAllocationCount;
+        m_maxMemoryAllocations   = props.limits.maxMemoryAllocationCount;
+        m_maxUniformBufferRange  = props.limits.maxUniformBufferRange;
         if (allocationLimitIsTight(m_maxMemoryAllocations))
             printf("AVISO: esta GPU admite %u asignaciones de memoria a la vez. El motor pide\n"
                    "       una por recurso, o sea dos por malla, asi que la escena se queda\n"

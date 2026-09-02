@@ -9,7 +9,7 @@ layout(location = 5) in vec3 fragBitangent;
 
 layout(location = 0) out vec4 outColor;
 
-#define MAX_LIGHTS 16
+#include "lights_config.glsl"
 #include "shadow_config.glsl"
 // Huecos de matriz de sombra. Los 6 primeros son de la luz KEY (4 cascadas,
 // o 6 caras de cubemap, o 1 cara de foco); los 4 de detras son un foco

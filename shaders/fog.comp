@@ -9,7 +9,7 @@
 // o 6 caras de cubemap, o 1 cara de foco); los 4 de detras son un foco
 // secundario cada uno. Mismo valor que SHADOW_MATRICES en
 // UniformBufferObject.h.
-#define MAX_LIGHTS 16
+#include "lights_config.glsl"
 #define PI 3.14159265359
 
 // Mismo layout que DonTopo::Light y que la declaracion de pbr.frag.

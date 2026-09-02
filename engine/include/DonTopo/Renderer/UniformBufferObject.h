@@ -6,7 +6,28 @@
 
 namespace DonTopo 
 {
-    constexpr int MAX_LIGHTS = 16;
+    // Cuantas luces caben en el UBO, y por tanto cuantas ilumina la escena:
+    // Scene::collectLights descarta las que pasen de aqui.
+    //
+    // Estaba en 16 y el culling de Forward+ repartia hasta 256 que nunca le
+    // llegaban (H1). Se sube a 64 ahora y no antes porque la auditoria
+    // condicionaba el gasto a que el recorte pasara en una escena REAL, y pasa:
+    // lightTest.json del proyecto de pruebas tiene 18 luces (1 direccional y 17
+    // de punto), o sea que se estaban tirando dos.
+    //
+    // El coste es memoria del UBO y nada mas: 2 KB -> 5 KB, con el minimo que
+    // garantiza la spec para maxUniformBufferRange en 16 KB. Y el bucle de los
+    // shaders va hasta numLights, no hasta este tope, asi que subirlo no cuesta
+    // una sola iteracion de GPU.
+    //
+    // Cambiar este numero DESPLAZA todo lo que va detras del array en el bloque
+    // UBO: hay que tocar el #define de los tres shaders que lo declaran
+    // (pbr.frag, triangle.frag, fog.comp) y los offsets del static_assert de
+    // D3D12Renderer.cpp EN LA MISMA COMMIT, o el shader lee el bloque
+    // desplazado — que no da error en ninguna capa de validacion, solo pixeles
+    // raros. El HLSL no se toca: lo genera el build con spirv-cross desde estos
+    // mismos GLSL.
+    constexpr int MAX_LIGHTS = 64;
 
     // Cascaded shadow maps: nº de cascadas del shadow map de la luz key. Tiene
     // que valer lo mismo aquí, en el array del bloque UBO de los shaders y en

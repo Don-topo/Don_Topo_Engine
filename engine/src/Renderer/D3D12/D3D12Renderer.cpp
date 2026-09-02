@@ -86,10 +86,14 @@ struct ShaderLight {
     float params[4];     // range, cos interior, cos exterior, ancho
 };
 
-// El UBO de set 0 binding 0, con los offsets EXACTOS que spirv-cross generó al
-// traducirlo (packoffset c0/c4/c8/c24/c25/c89/c90). Los static_assert de abajo
-// son la única defensa real: un desajuste de offsets CPU/GPU no da error en
-// ninguna capa de validación, solo píxeles raros.
+// El UBO de set 0 binding 0, con los offsets EXACTOS que spirv-cross genera al
+// traducir el GLSL. Los static_assert de abajo son la única defensa real: un
+// desajuste de offsets CPU/GPU no da error en ninguna capa de validación, solo
+// píxeles raros.
+//
+// Los registros concretos van en cada campo y NO en esta lista, que se quedaba
+// vieja cada vez que el bloque crecía: los de aquí eran los de antes de que
+// lightSpaceMatrix pasara a 12 matrices y MAX_LIGHTS a 64.
 struct SceneUbo {
     glm::mat4   view;                    // c0
     glm::mat4   proj;                    // c4
@@ -100,10 +104,10 @@ struct SceneUbo {
     // mas cuatro focos secundarios de una capa cada uno. Al crecer desplaza todo
     // lo que va detras, y de ahi los offsets.
     glm::mat4   lightSpaceMatrix[SHADOW_MATRICES];   // c8
-    glm::vec4   cascadeSplits;           // c48
-    ShaderLight lights[MAX_LIGHTS];      // c49
-    glm::vec4   viewPos;                 // c113
-    int         numLights;               // c114
+    glm::vec4   cascadeSplits;           // c56
+    ShaderLight lights[MAX_LIGHTS];      // c57
+    glm::vec4   viewPos;                 // c313
+    int         numLights;               // c314
     // En el hueco de padding que ya había detrás de numLights, igual que en
     // GLSL: ningún offset anterior se mueve.
     float       ambientIntensity;
@@ -114,9 +118,11 @@ static_assert(offsetof(SceneUbo, proj) == 64, "UBO: proj debe ir en c4");
 static_assert(offsetof(SceneUbo, lightSpaceMatrix) == 128, "UBO: lightSpaceMatrix debe ir en c8");
 static_assert(offsetof(SceneUbo, cascadeSplits) == 896, "UBO: cascadeSplits debe ir en c56");
 static_assert(offsetof(SceneUbo, lights) == 912, "UBO: lights debe ir en c57");
-static_assert(offsetof(SceneUbo, viewPos) == 1936, "UBO: viewPos debe ir en c121");
-static_assert(offsetof(SceneUbo, numLights) == 1952, "UBO: numLights debe ir en c122");
-static_assert(offsetof(SceneUbo, ambientIntensity) == 1956,
+// Los tres de detras del array se movieron 3072 bytes al pasar MAX_LIGHTS de 16
+// a 64 (48 luces mas x 64 bytes): 1936 -> 5008, 1952 -> 5024, 1956 -> 5028.
+static_assert(offsetof(SceneUbo, viewPos) == 5008, "UBO: viewPos debe ir en c313");
+static_assert(offsetof(SceneUbo, numLights) == 5024, "UBO: numLights debe ir en c314");
+static_assert(offsetof(SceneUbo, ambientIntensity) == 5028,
               "UBO: ambientIntensity va pegado a numLights");
 // Los offsets de arriba son números fijos A PROPÓSITO: describen el layout que
 // declaran los packoffset del HLSL, que no salen de este fichero. Calcularlos a
@@ -126,9 +132,10 @@ static_assert(offsetof(SceneUbo, ambientIntensity) == 1956,
 // Este assert es el que avisa: subir el tope desplaza viewPos y numLights, así
 // que hay que tocar los seis GLSL, el HLSL traducido y los tres offsets de
 // arriba EN LA MISMA commit. Sin él, el UBO se leería desplazado y en silencio.
-static_assert(MAX_LIGHTS == 16,
-              "MAX_LIGHTS ha cambiado: ajusta los offsets de arriba y los "
-              "packoffset del HLSL, o el shader leerá el bloque desplazado");
+static_assert(MAX_LIGHTS == 64,
+              "MAX_LIGHTS ha cambiado: ajusta los offsets de arriba y el "
+              "#define de shaders/lights_config.glsl, o el shader leerá el "
+              "bloque desplazado");
 
 // Push constants de triangle.vert/pbr.frag: mat4 + 2 float + vec2 = 80 bytes.
 struct PushData {
