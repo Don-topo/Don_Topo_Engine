@@ -442,6 +442,23 @@ void GpuResources::releaseMaterialImage(VkImage img, VkDeviceMemory mem)
     // Prestada: es de este GpuResources y la comparten todas las mallas sin
     // material. Destruirla con la primera dejaria a las demas muestreando una
     // imagen liberada, y eso no lo delata nada hasta que se ve basura.
+    // Las tres de relleno son las ULTIMAS que se sueltan, asi que llegar aqui
+    // despues significa que el orden del teardown esta mal. Y no es un detalle:
+    // isSharedPlaceholder decide comparando handles contra los tres miembros,
+    // que destroySharedPlaceholders acaba de anular, o sea que la guarda de
+    // abajo ya no los reconoce y los destruiria por segunda vez sin decir una
+    // palabra (H79: eso pasaba con los personajes, que se soltaban 15 lineas
+    // despues). Cerrar en falso convierte un doble free —corrupcion de estado
+    // del driver— en una fuga al salir del proceso, y encima lo dice.
+    if (m_placeholdersDestroyed)
+    {
+        fprintf(stderr, "[GpuResources] releaseMaterialImage(img=%p) despues de "
+                        "destroySharedPlaceholders: el teardown esta soltando "
+                        "texturas de material demasiado tarde. No se destruye "
+                        "nada (ver H79).\n", (void*)img);
+        return;
+    }
+
     if (isSharedPlaceholder(img))
         return;
 
@@ -460,6 +477,9 @@ void GpuResources::destroySharedPlaceholders()
     suelta(m_whiteSrgb,  m_whiteSrgbMem);
     suelta(m_flatNormal, m_flatNormalMem);
     suelta(m_whiteUnorm, m_whiteUnormMem);
+    // A partir de aqui isSharedPlaceholder ya no puede reconocer a nadie: sus
+    // tres handles son VK_NULL_HANDLE. Ver releaseMaterialImage.
+    m_placeholdersDestroyed = true;
 }
 
 void GpuResources::createSolidColorImage(const uint8_t rgba[4], VkImage& img, VkDeviceMemory& mem, TransferBatch* batch)

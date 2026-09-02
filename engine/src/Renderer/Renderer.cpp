@@ -685,8 +685,6 @@ namespace DonTopo {
         // destroySharedGpuMesh: alli es prestado, y destruirlo con el primer
         // material dejaria a los demas apuntando a un sampler muerto.
         m_res.destroySharedSampler();
-        // Y las tres de relleno que comparten las mallas sin material.
-        m_res.destroySharedPlaceholders();
         // Shadow map. El Context lleva los dos set layouts que ya se han
         // destruido cuatro lineas mas arriba; destroyResources no los toca (un
         // pipeline layout sobrevive a los set layouts con los que se creo).
@@ -707,6 +705,10 @@ namespace DonTopo {
 
         m_skinnedObjects.clear();
         m_skinnedSlots.clear();
+        // Las tres de relleno que comparten las mallas sin material, DESPUES de
+        // los personajes: son el ultimo que suelta texturas de material, y
+        // liberarlas antes le dejaba destruyendo handles ya muertos (H79).
+        m_res.destroySharedPlaceholders();
         // Ahora sí: ya no queda ningún destroySkinnedRenderObject pendiente que
         // necesite liberar sets de la cadena de pools.
         for (VkDescriptorPool pool : m_descriptorPools)

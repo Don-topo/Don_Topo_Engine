@@ -115,6 +115,9 @@ public:
     // la suya.
     void sharedWhiteOrm(VkImage& img, VkDeviceMemory& mem);
     bool isSharedPlaceholder(VkImage img) const;
+    // ¿Ya se soltaron las tres de relleno? A partir de ahí NADIE debería estar
+    // liberando texturas de material: los rellenos son las últimas.
+    bool placeholdersDestroyed() const { return m_placeholdersDestroyed; }
     // Destruye imagen y memoria SALVO que sean prestadas. La VISTA no entra:
     // esa si es de cada malla —se crea con createTextureImageView— y la destruye
     // el llamante como siempre.
@@ -138,6 +141,11 @@ private:
     VkDeviceMemory m_flatNormalMem    = VK_NULL_HANDLE;
     VkImage        m_whiteUnorm       = VK_NULL_HANDLE;
     VkDeviceMemory m_whiteUnormMem    = VK_NULL_HANDLE;
+    // isSharedPlaceholder decide comparando contra los tres handles de arriba,
+    // y destroySharedPlaceholders los pone a VK_NULL_HANDLE: sin esta marca, la
+    // guarda se apaga sola y las siguientes liberaciones de material los
+    // destruyen POR SEGUNDA VEZ, en silencio (H79).
+    bool           m_placeholdersDestroyed = false;
 };
 
 } // namespace DonTopo
