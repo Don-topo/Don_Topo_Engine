@@ -5,6 +5,7 @@
 #include <imgui_impl_dx12.h>
 #endif
 #include "DonTopo/Editor/EditorContext.h"
+#include "DonTopo/Editor/GpuTimeFormat.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Physics/PhysicsManager.h"
@@ -1407,7 +1408,8 @@ void EditorUI::drawMenuBar()
                     ImGui::SetTooltip("0 = cortes uniformes, 1 = logaritmicos.\n"
                                       "Alto da resolucion cerca; bajo reparte mas parejo.");
 
-                ImGui::Text("Sombras GPU: %.3f ms", m_renderer->shadowGpuMs());
+                { char b[kGpuMsTextSize];
+                    ImGui::Text("Sombras GPU: %s ms", gpuMsText(m_renderer->shadowGpuMs(), b, kGpuMsTextSize)); }
 
                 // Bloom. Mismo criterio que el ambiente: ajuste de sesion, no se
                 // serializa. Intensity 0 deja la imagen como antes del bloom.
@@ -1432,7 +1434,8 @@ void EditorUI::drawMenuBar()
                     [this](float v) { m_renderer->setBloomIntensity(v); });
                 ImGui::EndDisabled();
 
-                ImGui::Text("Bloom GPU: %.3f ms", m_renderer->bloomGpuMs());
+                { char b[kGpuMsTextSize];
+                    ImGui::Text("Bloom GPU: %s ms", gpuMsText(m_renderer->bloomGpuMs(), b, kGpuMsTextSize)); }
 
                 // SSAO. Mismo criterio que el ambiente y el bloom: ajuste de
                 // sesion, no se serializa. Apagado deja la imagen exactamente
@@ -1463,7 +1466,8 @@ void EditorUI::drawMenuBar()
                     [this](float v) { m_renderer->setSsaoPower(v); });
                 ImGui::EndDisabled();
 
-                ImGui::Text("SSAO GPU: %.3f ms", m_renderer->ssaoGpuMs());
+                { char b[kGpuMsTextSize];
+                    ImGui::Text("SSAO GPU: %s ms", gpuMsText(m_renderer->ssaoGpuMs(), b, kGpuMsTextSize)); }
 
                 // SSR: interruptor global. La fuerza es POR GAMEOBJECT (panel
                 // Properties), asi que con esto puesto pero ningun objeto marcado
@@ -1495,7 +1499,8 @@ void EditorUI::drawMenuBar()
                     [this](float v) { m_renderer->setSsrIntensity(v); });
                 ImGui::EndDisabled();
 
-                ImGui::Text("SSR GPU: %.3f ms", m_renderer->ssrGpuMs());
+                { char b[kGpuMsTextSize];
+                    ImGui::Text("SSR GPU: %s ms", gpuMsText(m_renderer->ssrGpuMs(), b, kGpuMsTextSize)); }
 
                 // Niebla volumetrica: interruptor global, ajuste de sesion (no
                 // se serializa) igual que el bloom, el SSAO y el SSR. Apagada
@@ -1534,7 +1539,8 @@ void EditorUI::drawMenuBar()
                     [this](const glm::vec3& v) { m_renderer->setFogScatter(v); });
                 ImGui::EndDisabled();
 
-                ImGui::Text("Fog GPU: %.3f ms", m_renderer->fogGpuMs());
+                { char b[kGpuMsTextSize];
+                    ImGui::Text("Fog GPU: %s ms", gpuMsText(m_renderer->fogGpuMs(), b, kGpuMsTextSize)); }
 
                 // Motion blur de camara. Apagado por defecto: sin el la imagen
                 // es exactamente la de antes de la feature y no se graba ni un
@@ -1680,8 +1686,10 @@ void EditorUI::drawMenuBar()
                 // MSAA y el del supersampling estan repartidos en el render, y
                 // por eso se muestra tambien el total: comparandolo con el de
                 // None sale el sobrecoste real del modo.
-                ImGui::Text("AA GPU: %.3f ms", m_renderer->aaGpuMs());
-                ImGui::Text("Render GPU: %.3f ms", m_renderer->renderGpuMs());
+                { char b[kGpuMsTextSize];
+                    ImGui::Text("AA GPU: %s ms", gpuMsText(m_renderer->aaGpuMs(), b, kGpuMsTextSize)); }
+                { char b[kGpuMsTextSize];
+                    ImGui::Text("Render GPU: %s ms", gpuMsText(m_renderer->renderGpuMs(), b, kGpuMsTextSize)); }
 
                 // Forward+. Modos EXCLUYENTES, igual que el AA: en Off no se
                 // graba ni un dispatch y pbr.frag recorre las luces del UBO como
@@ -1734,7 +1742,8 @@ void EditorUI::drawMenuBar()
                         [this] { return m_renderer->forwardPlusLightRadius(); },
                         [this](float v) { m_renderer->setForwardPlusLightRadius(v); });
 
-                    ImGui::Text("Forward+ GPU: %.3f ms", m_renderer->forwardPlusGpuMs());
+                    { char b[kGpuMsTextSize];
+                    ImGui::Text("Forward+ GPU: %s ms", gpuMsText(m_renderer->forwardPlusGpuMs(), b, kGpuMsTextSize)); }
                     ImGui::Text("Luces/celda: %.1f", m_renderer->forwardPlusAvgPerCell());
                     const uint32_t overflow = m_renderer->forwardPlusOverflowCells();
                     if (overflow > 0)

@@ -93,6 +93,12 @@ add_executable(dt_slot_pool_tests slot_pool_tests.cpp)
 target_include_directories(dt_slot_pool_tests PRIVATE ${CMAKE_SOURCE_DIR}/engine/include)
 target_compile_features(dt_slot_pool_tests PRIVATE cxx_std_20)
 
+# Solo el include del motor: GpuTimeFormat.h es header-only y no arrastra ni
+# ImGui ni GPU — es formato puro.
+add_executable(dt_gpu_time_format_tests gpu_time_format_tests.cpp)
+target_include_directories(dt_gpu_time_format_tests PRIVATE ${CMAKE_SOURCE_DIR}/engine/include)
+target_compile_features(dt_gpu_time_format_tests PRIVATE cxx_std_20)
+
 # La acumulacion de gizmos no toca la API grafica, pero draw() y el resto viven
 # en Gizmos.cpp, que llega por DonTopoCore.
 add_executable(dt_gizmos_tests gizmos_tests.cpp)

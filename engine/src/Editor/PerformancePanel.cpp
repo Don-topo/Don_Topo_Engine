@@ -1,5 +1,6 @@
 #include "DonTopo/Editor/PerformancePanel.h"
 #include "DonTopo/Editor/EditorContext.h"
+#include "DonTopo/Editor/GpuTimeFormat.h"
 #include <imgui.h>
 #include <algorithm>
 #include <cstdio>
@@ -37,8 +38,13 @@ void gpuRow(const char* name, float ms, float totalMs)
     ImGui::TableSetColumnIndex(0);
     ImGui::TextUnformatted(name);
     ImGui::TableSetColumnIndex(1);
-    if (ms > 0.0f) ImGui::Text("%.3f", ms);
-    else           ImGui::TextDisabled("--");
+    // Mismo formato que el menú View, desde GpuTimeFormat.h: la regla de qué se
+    // enseña cuando NO hay medida vive en un solo sitio (H57). Aquí además se
+    // atenúa, que en una tabla distingue de un vistazo las filas sin dato.
+    char buf[kGpuMsTextSize];
+    gpuMsText(ms, buf, kGpuMsTextSize);
+    if (ms > 0.0f) ImGui::TextUnformatted(buf);
+    else           ImGui::TextDisabled("%s", buf);
     ImGui::TableSetColumnIndex(2);
     if (ms > 0.0f && totalMs > 0.0f) ImGui::Text("%.1f %%", 100.0f * ms / totalMs);
     else                             ImGui::TextDisabled("--");
