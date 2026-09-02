@@ -419,10 +419,12 @@ namespace DonTopo {
         if(result == VK_ERROR_OUT_OF_DATE_KHR)
         {
             recreateSwapChain(window);
-            // Este frame no llega a grabar/dibujar comandos: limpiar aquí evita
-            // que los vértices de gizmos acumulados por drawX(...) antes de esta
-            // llamada se arrastren duplicados al siguiente frame que sí dibuje.
-            Gizmos::clear();
+            // Este frame no llega a grabar/dibujar comandos: descartar aquí
+            // evita que los vértices de gizmos acumulados por drawX(...) antes de
+            // esta llamada se arrastren duplicados al siguiente frame que sí
+            // dibuje. Es el caso raro —tirar el trabajo sin consumirlo—, y por
+            // eso no se llama clear: en el camino normal, Gizmos::draw ya vacía.
+            Gizmos::discard();
             return;
         }
 
@@ -553,10 +555,10 @@ namespace DonTopo {
             throw std::runtime_error("failed to present!");
         }
 
-        // Limpia los vértices de gizmos ya subidos/dibujados este frame, para
-        // que el siguiente ciclo de drawX(...) (llamado por el caller ANTES de
-        // invocar drawFrame) empiece desde un buffer vacío.
-        Gizmos::clear();
+        // Los vértices de gizmos ya los vació Gizmos::draw al consumirlos, así
+        // que el siguiente ciclo de drawX(...) —que el caller llama ANTES de
+        // invocar drawFrame— empieza desde un buffer vacío sin que nadie tenga
+        // que acordarse de nada.
         m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES;
     }
 

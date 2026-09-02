@@ -229,26 +229,45 @@ void Gizmos::shutdown(GpuDevice& gpu)
 void Gizmos::draw(VkCommandBuffer cmd, const glm::mat4& viewProj, int frameIndex)
 {
     Gizmos& g = get();
-    if (!g.m_enabled || g.m_vertices.empty() || g.m_pipeline == VK_NULL_HANDLE) return;
 
-    VkDeviceSize copySize = sizeof(GizmoVertex) * (VkDeviceSize)g.m_vertices.size();
-    memcpy(g.m_mapped[frameIndex], g.m_vertices.data(), (size_t)copySize);
+    // Dibujar es opcional; vaciar NO. Los tres motivos para no dibujar —gizmos
+    // apagados, nada que dibujar, o init() sin llamar— dejaban antes el buffer
+    // intacto, y en el tercero eso significa acumular para siempre. Ver la nota
+    // de H16 en el header.
+    if (g.m_enabled && !g.m_vertices.empty() && g.m_pipeline != VK_NULL_HANDLE)
+    {
+        VkDeviceSize copySize = sizeof(GizmoVertex) * (VkDeviceSize)g.m_vertices.size();
+        memcpy(g.m_mapped[frameIndex], g.m_vertices.data(), (size_t)copySize);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g.m_pipeline);
-    VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &g.m_vertexBuffer[frameIndex], &offset);
-    vkCmdPushConstants(cmd, g.m_pipeLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &viewProj);
-    vkCmdDraw(cmd, (uint32_t)g.m_vertices.size(), 1, 0, 0);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g.m_pipeline);
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &g.m_vertexBuffer[frameIndex], &offset);
+        vkCmdPushConstants(cmd, g.m_pipeLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &viewProj);
+        vkCmdDraw(cmd, (uint32_t)g.m_vertices.size(), 1, 0, 0);
+    }
+
+    g.m_vertices.clear();
+    g.m_capacityWarned = false;
 }
 
-void Gizmos::clear()
+void Gizmos::discard()
 {
     get().m_vertices.clear();
+    get().m_capacityWarned = false;
 }
 
-const std::vector<GizmoVertex>& Gizmos::vertices()
+std::vector<GizmoVertex> Gizmos::takeVertices()
 {
-    return get().m_vertices;
+    Gizmos& g = get();
+    // Se lleva el vector entero y deja uno vacio en su sitio: mover no copia los
+    // vertices, asi que consumir no cuesta mas que mirar. La capacidad se pierde
+    // —el vector nuevo empieza a cero— y eso es justo lo que se quiere: si algo
+    // acumulo 65536 vertices en un frame suelto, esa memoria no se queda
+    // reservada para siempre.
+    std::vector<GizmoVertex> salida = std::move(g.m_vertices);
+    g.m_vertices.clear();
+    g.m_capacityWarned = false;
+    return salida;
 }
 
 void Gizmos::drawRay(const glm::vec3& origin, const glm::vec3& dir, float length, const glm::vec3& color)

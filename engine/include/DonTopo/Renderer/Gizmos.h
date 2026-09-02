@@ -60,16 +60,34 @@ public:
     // en Vulkan 1.0 rasterizationSamples no es estado dinámico.
     static void recreatePipeline(GpuDevice& gpu, VkRenderPass renderPass, VkSampleCountFlagBits samples);
     static void shutdown(GpuDevice& gpu);
-    static void draw(VkCommandBuffer cmd, const glm::mat4& viewProj, int frameIndex);
-    static void clear();
 
-    // Los vértices acumulados en este ciclo. Vulkan no lo necesita —draw() los
-    // lee del singleton— pero un backend que no sea Vulkan tiene que poder
-    // subirlos por su cuenta (D3D12Renderer::submitDebugLines). Quien los
-    // consuma es TAMBIÉN quien tiene que llamar a clear(): sin eso el vector
-    // crece frame tras frame hasta agotar kMaxGizmoVertices, y lo único que se
-    // ve es el aviso de capacidad.
-    static const std::vector<GizmoVertex>& vertices();
+    // ── Consumir VACÍA, y por eso no hay un clear() que se pueda olvidar ─────
+    //
+    // Antes esto era un `vertices()` que solo miraba, más un `clear()` aparte
+    // que el consumidor tenía que acordarse de llamar. Se olvidó: el camino de
+    // DirectX 12 leía los vértices y no vaciaba, así que el vector crecía frame
+    // tras frame hasta agotar kMaxGizmoVertices y lo único que se veía era el
+    // aviso de capacidad (H16). Se arregló añadiendo un clear() a mano, que es
+    // exactamente lo mismo que se puede volver a olvidar en el siguiente
+    // backend.
+    //
+    // Sube y dibuja los vértices de este ciclo, y deja el buffer vacío. Vacía
+    // SIEMPRE, aunque no llegue a dibujar —gizmos apagados, o init() todavía no
+    // llamado—: si el vaciado dependiera de haber dibujado, el caso de no
+    // dibujar volvería a acumular para siempre.
+    static void draw(VkCommandBuffer cmd, const glm::mat4& viewProj, int frameIndex);
+
+    // Se lleva los vértices de este ciclo y deja el buffer vacío. Para los
+    // backends que no son Vulkan, que los suben por su cuenta
+    // (D3D12Renderer::submitDebugLines).
+    static std::vector<GizmoVertex> takeVertices();
+
+    // Tira lo acumulado SIN dibujarlo. Solo para el frame que no se llega a
+    // dibujar —swapchain obsoleto, o el selector de proyectos delante—: si no,
+    // esas líneas se arrastrarían duplicadas al siguiente frame que sí dibuje.
+    // Se llama discard y no clear a propósito: obliga a justificar por qué se
+    // tira el trabajo, en vez de parecerse a "ya lo he consumido".
+    static void discard();
 
     // Debe coincidir con Renderer::MAX_FRAMES (comprobado con static_assert en Renderer.cpp).
     static constexpr int kFramesInFlight = 2;

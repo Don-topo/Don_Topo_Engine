@@ -406,9 +406,11 @@ int main()
                     editor.buildUiFrame(d3d12.viewportTexture(), &d3dScene.getRoot(),
                                         d3dCamera.getViewMatrix());
                     // Con el selector delante no se dibuja escena, pero el
-                    // singleton de gizmos es global: vaciarlo aquí también evita
-                    // que lo que quedara de antes se arrastre.
-                    DonTopo::Gizmos::clear();
+                    // singleton de gizmos es global: descartarlo aquí también
+                    // evita que lo que quedara de antes se arrastre. Es el otro
+                    // caso legítimo de tirar sin consumir, como el frame que se
+                    // aborta por swapchain obsoleto.
+                    DonTopo::Gizmos::discard();
                     d3d12.drawFrame();
                     continue;
                 }
@@ -647,16 +649,18 @@ int main()
                 // Gizmos: los rellena el panel del viewport dentro de
                 // buildUiFrame (colliders, luces, frustum de la cámara, ejes de
                 // la selección) y aquí se suben al backend. En Vulkan de esto se
-                // encarga Renderer::drawFrame, que los lee del singleton y los
-                // limpia; este camino no pasaba por ahí, así que ni se dibujaban
-                // ni se vaciaban NUNCA: el vector crecía frame a frame hasta
-                // reventar kMaxGizmoVertices, y lo único que se veía era el
-                // aviso de "capacidad de 65536 vertices excedida".
+                // encarga Renderer::drawFrame.
+                //
+                // takeVertices se los lleva Y vacía el buffer de una vez: este
+                // camino llegó a leerlos sin vaciar y el vector crecía frame a
+                // frame hasta reventar kMaxGizmoVertices, con el aviso de
+                // capacidad como único síntoma. Ahora consumir vacía, así que el
+                // siguiente backend no puede repetirlo (H16).
                 {
-                    const auto& lineas = DonTopo::Gizmos::vertices();
+                    const std::vector<DonTopo::GizmoVertex> lineas =
+                        DonTopo::Gizmos::takeVertices();
                     d3d12.submitDebugLines(
                         lineas.empty() ? nullptr : &lineas[0].pos.x, lineas.size());
-                    DonTopo::Gizmos::clear();
                 }
 
                 d3d12.drawFrame();
