@@ -3,6 +3,7 @@
 #ifdef DT_PHYSX_ENABLED
 #define GLM_ENABLE_EXPERIMENTAL
 #include <PxPhysicsAPI.h>
+#include "../PxPose.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
@@ -145,12 +146,7 @@ void SphereCollider::syncTransform(const glm::mat4& worldTransform)
     glm::vec3 scale, translation, skew;
     glm::vec4 perspective;
     glm::quat rotation;
-    glm::decompose(worldTransform, scale, rotation, translation, skew, perspective);
-
-    PxTransform pose(
-        PxVec3(translation.x, translation.y, translation.z),
-        PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
-    );
+    const PxTransform pose = poseFromWorld(worldTransform, &scale);
     // La escala no cabe en la PxTransform: se hornea en la geometría. No-op si
     // no cambió desde la última vez (el caso normal, escala 1).
     setWorldScale(scale);
@@ -172,12 +168,7 @@ void SphereCollider::teleport(const glm::mat4& worldTransform)
     glm::vec3 scale, translation, skew;
     glm::vec4 perspective;
     glm::quat rotation;
-    glm::decompose(worldTransform, scale, rotation, translation, skew, perspective);
-
-    PxTransform pose(
-        PxVec3(translation.x, translation.y, translation.z),
-        PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
-    );
+    const PxTransform pose = poseFromWorld(worldTransform, &scale);
 
     setWorldScale(scale); // ver nota en syncTransform
 

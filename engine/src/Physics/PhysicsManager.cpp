@@ -11,6 +11,7 @@
 #ifdef DT_PHYSX_ENABLED
 #define GLM_ENABLE_EXPERIMENTAL
 #include <PxPhysicsAPI.h>
+#include "PxPose.h"
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <stdexcept>
@@ -21,6 +22,7 @@ using namespace physx;
 namespace {
     PxDefaultAllocator      g_allocator;
     PxDefaultErrorCallback  g_errorCallback;
+
 
     // Valores del PxMaterial que se crea por collider. Coinciden con los
     // defaults de Collider (m_staticFriction/m_dynamicFriction/m_restitution) y
@@ -279,12 +281,7 @@ std::shared_ptr<BoxCollider> PhysicsManager::createBoxColliderComponent(
     glm::vec3 scale, translation, skew;
     glm::vec4 perspective;
     glm::quat rotation;
-    glm::decompose(worldTransform, scale, rotation, translation, skew, perspective);
-
-    PxTransform pose(
-        PxVec3(translation.x, translation.y, translation.z),
-        PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
-    );
+    const PxTransform pose = poseFromWorld(worldTransform, &scale);
 
     auto* physics = static_cast<PxPhysics*>(m_physics);
     auto* scene = static_cast<PxScene*>(m_scene);
@@ -352,12 +349,7 @@ std::shared_ptr<SphereCollider> PhysicsManager::createSphereColliderComponent(
     glm::vec3 scale, translation, skew;
     glm::vec4 perspective;
     glm::quat rotation;
-    glm::decompose(worldTransform, scale, rotation, translation, skew, perspective);
-
-    PxTransform pose(
-        PxVec3(translation.x, translation.y, translation.z),
-        PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
-    );
+    const PxTransform pose = poseFromWorld(worldTransform, &scale);
 
     auto* physics = static_cast<PxPhysics*>(m_physics);
     auto* scene = static_cast<PxScene*>(m_scene);
@@ -412,12 +404,7 @@ std::shared_ptr<CapsuleCollider> PhysicsManager::createCapsuleColliderComponent(
     glm::vec3 scale, translation, skew;
     glm::vec4 perspective;
     glm::quat rotation;
-    glm::decompose(worldTransform, scale, rotation, translation, skew, perspective);
-
-    PxTransform pose(
-        PxVec3(translation.x, translation.y, translation.z),
-        PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
-    );
+    const PxTransform pose = poseFromWorld(worldTransform, &scale);
 
     auto* physics = static_cast<PxPhysics*>(m_physics);
     auto* scene = static_cast<PxScene*>(m_scene);
@@ -469,12 +456,7 @@ std::shared_ptr<PlaneCollider> PhysicsManager::createPlaneColliderComponent(
     glm::vec3 scale, translation, skew;
     glm::vec4 perspective;
     glm::quat rotation;
-    glm::decompose(worldTransform, scale, rotation, translation, skew, perspective);
-
-    PxTransform pose(
-        PxVec3(translation.x, translation.y, translation.z),
-        PxQuat(rotation.x, rotation.y, rotation.z, rotation.w)
-    );
+    const PxTransform pose = poseFromWorld(worldTransform, &scale);
 
     auto* physics = static_cast<PxPhysics*>(m_physics);
     auto* scene = static_cast<PxScene*>(m_scene);

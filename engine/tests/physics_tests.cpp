@@ -17,6 +17,8 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/matrix_decompose.hpp>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -1076,6 +1078,124 @@ static void test_scale_mirror_and_zero_are_clamped(PhysicsManager& pm)
     CHECK(he.z > 0.0f && he.z < 1e-3f);
 }
 
+// Una MATRIZ con un eje a 0 —Scale.Y = 0 en el inspector, sin ir mas lejos— es
+// singular: glm::decompose normaliza las columnas dividiendo por su longitud, y
+// con longitud 0 saca un cuaternion con NaN. PhysX rechaza el actor, physxCheck
+// lanza, nadie lo captura y el proceso MUERE: exit code 3 y cero salida, ni
+// siquiera los printf de los tests que ya habian pasado.
+//
+// Este test existe porque el de arriba tuvo que rodear el problema (probaba la
+// escala 0 con setWorldScale, no con matriz). Que el proceso siga vivo al
+// terminar ES el resultado: si la guarda no esta, no hay assert que falle
+// porque no llega a ejecutarse nada mas.
+//
+// Se prueban los CUATRO tipos de collider porque cada uno hace su propia
+// conversion a PxTransform: la guarda tiene que estar en todas.
+static void test_matriz_singular_no_mata_el_proceso(PhysicsManager& pm)
+{
+    // Escala 0 en Y, que es el caso que sale de poner un 0 en el inspector.
+    //
+    // CON TRASLACION, y no en el origen: la posicion es lo que hay que
+    // conservar cuando la descomposicion falla, y con el objeto en (0,0,0) el
+    // test no distinguiria conservarla de perderla.
+    const glm::mat4 singular = glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, 20.0f, -7.0f)) *
+                               glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 2.0f));
+
+    auto caja = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f),
+                                              singular, /*dynamic=*/false);
+    CHECK(caja != nullptr);
+
+    auto esfera = pm.createSphereColliderComponent(1.0f, glm::vec3(0.0f),
+                                                   singular, /*dynamic=*/false);
+    CHECK(esfera != nullptr);
+
+    auto capsula = pm.createCapsuleColliderComponent(1.0f, 1.0f, glm::vec3(0.0f),
+                                                     singular, /*dynamic=*/false);
+    CHECK(capsula != nullptr);
+
+    // El plano no lleva dynamic: siempre es estatico.
+    auto plano = pm.createPlaneColliderComponent(glm::vec3(0.0f), singular);
+    CHECK(plano != nullptr);
+
+    // Y que la simulacion siga corriendo con ellos dentro: un actor con una pose
+    // NaN que colara la creacion envenenaria la escena entera.
+    step(pm, 5, 1.0f / 60.0f);
+
+    // Y AHORA el caso que mata al editor de verdad: darle Rigidbody, que es lo
+    // que pasa al entrar en Play. PxRigidBodyExt::setMassAndUpdateInertia
+    // recalcula el tensor de inercia a partir de las shapes, y con una forma
+    // degenerada ese tensor sale no finito: salta el PX_ASSERT de
+    // ExtInertiaTensor.h, que en Debug abre el dialogo modal de la CRT —la app
+    // se queda congelada— y luego muere con 0x80000003.
+    auto dinamica = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f),
+                                                  singular, /*dynamic=*/true);
+    CHECK(dinamica != nullptr);
+    // Por syncTransform, que es el camino del editor: la escala la saca el
+    // propio decompose de la matriz, no se le pasa un vector limpio a mano.
+    dinamica->syncTransform(singular);
+
+    // La geometria tiene que salir del tamaño REAL del objeto. Con la escala que
+    // devolvia glm::decompose de esa matriz salian 1.07374e+08 en los tres ejes,
+    // y una caja de 1e8 hace desbordar el tensor de inercia en cuanto se le da
+    // masa. Se afirma un techo generoso: lo que se caza aqui no es un pixel de
+    // diferencia, es un valor absurdo.
+    const physx::PxVec3 he = shapeHalfExtents(dinamica);
+    CHECK(std::isfinite(he.x) && std::isfinite(he.y) && std::isfinite(he.z));
+    CHECK(he.x < 1e3f && he.y < 1e3f && he.z < 1e3f);
+    // El eje aplastado se acota a un minimo POSITIVO (PhysX rechaza extents <=
+    // 0) y los otros dos conservan su escala de verdad.
+    CHECK(he.y > 0.0f && he.y < 1e-3f);
+    CHECK(std::fabs(he.x - 2.0f) < 1e-4f);
+    CHECK(std::fabs(he.z - 2.0f) < 1e-4f);
+
+    auto rb = std::make_shared<Rigidbody>();
+    pm.attachRigidbody(dinamica, rb);
+    step(pm, 5, 1.0f / 60.0f);
+
+    // El porque de todo esto, fijado aqui para que nadie vuelva a usar
+    // glm::decompose sin mirar lo que devuelve: con una matriz singular
+    // devuelve FALSE y no escribe NINGUNA de sus salidas. Quien no lo compruebe
+    // se queda con las locales sin inicializar — en Debug, el patron 0xCDCDCDCD
+    // de la CRT, que como float es -1.07e8.
+    {
+        glm::vec3 s2{7.0f}, t2{7.0f}, sk2{7.0f};
+        glm::vec4 pe2{7.0f};
+        glm::quat r2{7.0f, 7.0f, 7.0f, 7.0f};
+        const bool ok = glm::decompose(singular, s2, r2, t2, sk2, pe2);
+        CHECK(!ok);
+        // Y ni las toca: siguen valiendo el 7 con el que se inicializaron. Es
+        // lo que demuestra que los valores basura no son un calculo que se
+        // desmadra, sino memoria que nadie escribio.
+        CHECK(s2.x == 7.0f && t2.x == 7.0f && r2.x == 7.0f);
+    }
+
+    // Y lo que de verdad importa: lo que el editor lee de vuelta para escribirlo
+    // en el GameObject tiene que ser un transform sano. Antes salia
+    // pos = -1.07e8 y el objeto se iba a tomar viento en cuanto se tocaba su
+    // escala.
+    const glm::mat4 vuelta = dinamica->getWorldTransform();
+    for (int c = 0; c < 4; ++c)
+        for (int f = 0; f < 4; ++f)
+            CHECK(std::isfinite(vuelta[c][f]));
+    // La POSICION se conserva: es la cuarta columna de la matriz y no depende de
+    // que la descomposicion salga bien. X y Z se afirman exactas —la gravedad
+    // solo toca Y— y eso es lo que distingue conservarla de perderla: si se
+    // cogiera del decompose fallido saldria 0 (o basura), no 3 y -7.
+    CHECK(std::fabs(vuelta[3][0] - 3.0f) < 1e-3f);
+    CHECK(std::fabs(vuelta[3][2] + 7.0f) < 1e-3f);
+    // Y en Y ha caido desde 20, que es lo suyo con gravedad. El rango sale del
+    // numero real: la gravedad de este motor es -981 (unidades de centimetro),
+    // asi que en 5 pasos de 1/60 son 0.5*981*(5/60)^2 = 3.4 aproximadamente.
+    // Se deja holgura por el integrador, pero acotado por los dos lados: lo que
+    // se caza aqui es tanto que no caiga como que salga disparado.
+    // La Y se afirma con holgura y a proposito: este test crea antes los cuatro
+    // colliders estaticos en el MISMO punto, asi que el dinamico nace solapado
+    // con ellos y PhysX lo empuja al resolver la penetracion (sale ~22, no 20).
+    // Modelar eso seria atar el test a un detalle del solver; lo que aqui
+    // importa es que la Y siga siendo la de un objeto de la escena y no 1e8.
+    CHECK(std::fabs(vuelta[3][1] - 20.0f) < 5.0f);
+}
+
 // Una esfera con escala no uniforme sigue siendo esfera: manda el eje mayor.
 // La cápsula reparte: radio con max(|x|,|z|), medio-alto con |y|.
 static void test_scale_non_uniform_sphere_and_capsule(PhysicsManager& pm)
@@ -1236,6 +1356,7 @@ int main()
     test_scale_uniform_sphere(pm);
     test_scale_non_uniform_box(pm);
     test_scale_mirror_and_zero_are_clamped(pm);
+    test_matriz_singular_no_mata_el_proceso(pm);
     test_scale_non_uniform_sphere_and_capsule(pm);
     test_scale_one_is_identical(pm);
     test_scale_reapplied_on_change(pm);
