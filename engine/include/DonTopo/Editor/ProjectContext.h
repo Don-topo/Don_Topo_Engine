@@ -2,6 +2,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,16 @@ public:
     // del Renderer).
     struct ViewSettings {
         // Indices de la visibilidad de panel, en el mismo orden que el menu View.
+        //
+        // El ORDEN de este enum no es parte del formato en disco: cada panel se
+        // guarda por su nombre (kPanelKeys, en ProjectContext.cpp), asi que
+        // reordenar o insertar en medio no invalida ningun project.json. Lo que
+        // si es obligatorio es que kPanelKeys lleve el mismo orden, y eso lo
+        // vigila un static_assert.
+        //
+        // Sprite Editor y Collision Layers NO estan aqui a proposito: se abren
+        // para una tarea concreta y se cierran, no son paneles que uno quiera
+        // encontrarse abiertos al arrancar. Es la unica ausencia deliberada.
         enum Panel {
             PanelScene = 0,
             PanelViewport,
@@ -44,6 +55,7 @@ public:
             PanelScriptEditor,
             PanelAnimator,
             PanelPerformance,
+            PanelRendering,
             PanelInputActions,
             PanelCount
         };
@@ -132,9 +144,16 @@ public:
         float musicVolume  = 1.0f;
         float sfxVolume    = 1.0f;
 
-        // Tri-estado: -1 = sin dato guardado, el panel se queda como este. Los
-        // paneles NO entran en la regla de "todo apagado".
-        int panelOpen[PanelCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1};
+        // Vacio = sin dato guardado: el panel se queda como este, que NO es lo
+        // mismo que cerrado. Los paneles no entran en la regla de "todo
+        // apagado".
+        //
+        // `optional` y no un int con -1 por centinela: esto era una lista de
+        // nueve -1 escritos a mano, y anadir el decimo panel al enum le habria
+        // dado un 0 —"cerrado"— en vez de "sin dato", cerrando el panel nuevo
+        // en todos los proyectos que ya existen. El hueco de un panel nuevo
+        // tiene que nacer vacio SOLO.
+        std::optional<bool> panelOpen[PanelCount] = {};
 
         // --- Capas de colisión de física -------------------------------------
         //

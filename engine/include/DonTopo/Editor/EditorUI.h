@@ -1,5 +1,6 @@
 #pragma once
 #include <vulkan/vulkan.h>
+#include <array>
 #include <vector>
 #include <string>
 #include <deque>
@@ -176,9 +177,23 @@ private:
     bool projectAllows(const std::filesystem::path& path, const char* what);
     // --- Ajustes del menú View persistidos por proyecto -------------------
     // Foto del estado actual: los efectos se leen del Renderer y la visibilidad
-    // de los 9 paneles de sus GetOpenPtr(). El Renderer es la única fuente de
+    // de los paneles de sus GetOpenPtr(). El Renderer es la única fuente de
     // verdad, así que no hay copia que mantener sincronizada control a control.
     ProjectContext::ViewSettings currentSettings();
+
+    // El flag `abierto` de cada panel persistido, indexado por
+    // ViewSettings::Panel. UN solo sitio donde un panel se ata a su índice:
+    // guardar y aplicar leen los dos de aquí, así que no pueden desincronizarse.
+    //
+    // Antes eran dos listas escritas a mano, una en currentSettings() y otra en
+    // applyProjectSettings(), y el panel Rendering se quedó fuera de las dos: su
+    // posición dockeada seguía en imgui.ini, pero arrancaba cerrado y la
+    // pestaña desaparecía. Un panel que falte aquí falta en las dos mitades a la
+    // vez, que es un fallo visible, no uno que se pierde a medias.
+    //
+    // Un puntero puede ser nullptr (el Script Editor no existe sin proyecto):
+    // eso cuenta como cerrado al guardar y no se aplica nada al leer.
+    std::array<bool*, ProjectContext::ViewSettings::PanelCount> panelOpenPtrs();
     // Vuelca al Renderer y a los paneles los ajustes del proyecto recién
     // abierto. Se llama cada frame desde draw() y sólo hace algo cuando
     // m_project cambia. Sin proyecto (tests headless) no toca nada.

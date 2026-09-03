@@ -56,6 +56,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -2793,6 +2794,134 @@ static void test_capas_json_ausente_o_corrupto_da_defaults()
     std::filesystem::remove_all(dir, ec);
 }
 
+// --- Persistencia de la visibilidad de panel ---------------------------------
+
+// El bug: el panel Rendering se dockeaba como pestana y desaparecia al reabrir
+// el editor. Su POSICION si estaba guardada (imgui.ini la tenia, con DockId y
+// todo); lo que no se guardaba era que estuviera ABIERTO, porque "rendering" no
+// existia ni en el enum Panel ni en kPanelKeys. El menu View ya llamaba a
+// saveProjectSettings() al marcarlo, asi que la mitad de guardar parecia hecha.
+//
+// Se afirma el round-trip ENTERO pasando por disco, que es donde se perdia, y
+// para TODOS los paneles del enum: el fallo fue de omision, asi que un test que
+// solo mire Rendering se volveria a quedar corto con el panel siguiente.
+static void test_visibilidad_de_panel_round_trip()
+{
+    using VS = ProjectContext::ViewSettings;
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "dt_paneles_round_trip";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir, ec);
+
+    // Su clave en disco, panel a panel. La lista esta AQUI a proposito, y
+    // repetida a mano: es una segunda opinion sobre la de ProjectContext.cpp, y
+    // sin ella el test no valdria nada.
+    //
+    // Un round-trip no puede ver el enum cruzado con kPanelKeys, porque escribir
+    // y leer usan el MISMO mapa equivocado y el viaje sale bien igual —
+    // comprobado saboteandolo: mover "rendering" de sitio en kPanelKeys dejaba
+    // el test verde. Lo que hay que afirmar es el par indice-nombre, y para eso
+    // se escribe UN solo panel y se mira que clave aparece.
+    const struct { int panel; const char* clave; } kEsperado[] = {
+        {VS::PanelScene,          "scene"},
+        {VS::PanelViewport,       "viewport"},
+        {VS::PanelProperties,     "properties"},
+        {VS::PanelLog,            "log"},
+        {VS::PanelContentBrowser, "contentBrowser"},
+        {VS::PanelScriptEditor,   "scriptEditor"},
+        {VS::PanelAnimator,       "animator"},
+        {VS::PanelPerformance,    "performance"},
+        {VS::PanelRendering,      "rendering"},
+        {VS::PanelInputActions,   "inputActions"},
+    };
+    CHECK(std::size(kEsperado) == static_cast<size_t>(VS::PanelCount));
+
+    for (const auto& e : kEsperado)
+    {
+        // Solo este panel tiene dato; los otros nueve no se escriben.
+        ProjectContext::ViewSettings s;
+        s.panelOpen[e.panel] = true;
+        CHECK(ProjectContext::writeSettings(dir, s));
+
+        std::ifstream in(dir / "project.json");
+        const std::string json((std::istreambuf_iterator<char>(in)),
+                                std::istreambuf_iterator<char>());
+
+        // Aparece la suya...
+        if (json.find(std::string("\"") + e.clave + "\"") == std::string::npos)
+            std::printf("FAIL: falta la clave '%s' del panel %d\n", e.clave, e.panel);
+        CHECK(json.find(std::string("\"") + e.clave + "\"") != std::string::npos);
+
+        // ...y NINGUNA otra. Esto es lo que caza el cruce: con el enum y las
+        // claves desalineados, escribir el panel N saca la clave de otro.
+        for (const auto& otro : kEsperado)
+        {
+            if (otro.panel == e.panel) continue;
+            const bool sobra = json.find(std::string("\"") + otro.clave + "\"") != std::string::npos;
+            if (sobra)
+                std::printf("FAIL: al escribir solo el panel %d ('%s') sale ademas '%s'\n",
+                            e.panel, e.clave, otro.clave);
+            CHECK(!sobra);
+        }
+
+        // Y vuelve al MISMO indice del enum: el viaje completo, no solo la ida.
+        const ProjectContext::ViewSettings leido =
+            ProjectContext::readSettings(dir, ProjectContext::ViewSettings{});
+        CHECK(!leido.loadFailed);
+        for (int i = 0; i < VS::PanelCount; ++i)
+            CHECK(leido.panelOpen[i].has_value() == (i == e.panel));
+        CHECK(leido.panelOpen[e.panel] == true);
+    }
+
+    std::filesystem::remove_all(dir, ec);
+}
+
+// Un panel SIN dato guardado se queda como este, que no es lo mismo que
+// cerrado. Importa por lo que costo: el inicializador de panelOpen era una
+// lista de nueve -1 escritos a mano, asi que anadir el decimo panel al enum le
+// habria dado un 0 —"cerrado"— en vez de "sin dato", y habria CERRADO el panel
+// nuevo en todos los proyectos que ya existen. Con optional el hueco nuevo nace
+// vacio solo.
+static void test_panel_sin_dato_no_es_cerrado()
+{
+    using VS = ProjectContext::ViewSettings;
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "dt_paneles_sin_dato";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir, ec);
+
+    // Un project.json que solo sabe de un panel: el resto no tiene dato.
+    escribirProjectJson(dir,
+        "{ \"name\": \"x\", \"settings\": { \"panels\": { \"log\": false } } }");
+
+    ProjectContext::ViewSettings s = ProjectContext::readSettings(dir, ProjectContext::ViewSettings{});
+    CHECK(!s.loadFailed);
+
+    CHECK(s.panelOpen[VS::PanelLog].has_value());
+    CHECK(s.panelOpen[VS::PanelLog] == false);           // dato: cerrado
+    CHECK(!s.panelOpen[VS::PanelRendering].has_value()); // sin dato: NO es cerrado
+    CHECK(!s.panelOpen[VS::PanelScene].has_value());
+
+    // Y un ViewSettings recien construido no trae dato de ninguno.
+    const ProjectContext::ViewSettings limpio;
+    for (int i = 0; i < VS::PanelCount; ++i)
+        CHECK(!limpio.panelOpen[i].has_value());
+
+    // Lo que no tiene dato no se ESCRIBE: el fichero no debe mentir diciendo
+    // "cerrado" sobre lo que nadie ha decidido. Se reescribe lo leido y solo
+    // "log" tiene que quedar dentro de panels.
+    CHECK(ProjectContext::writeSettings(dir, s));
+    std::ifstream in(dir / "project.json");
+    const std::string json((std::istreambuf_iterator<char>(in)),
+                            std::istreambuf_iterator<char>());
+    CHECK(json.find("\"log\"") != std::string::npos);
+    CHECK(json.find("\"rendering\"") == std::string::npos);
+
+    std::filesystem::remove_all(dir, ec);
+}
+
 // Los bindings de audio que faltaban: distancias, playOnAwake, path y el estado
 // de la voz. Antes, un script tenía diez métodos y ninguno de estos, así que
 // min/maxDistance solo se podían tocar desde el Inspector aunque el componente
@@ -3009,6 +3138,8 @@ int main()
     test_matriz_de_capas_desde_lua(sm, pm);
     test_capas_round_trip_en_project_json();
     test_capas_json_ausente_o_corrupto_da_defaults();
+    test_visibilidad_de_panel_round_trip();
+    test_panel_sin_dato_no_es_cerrado();
 
     am.shutdown();
     pm.shutdown();

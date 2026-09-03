@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <iterator>
 #include <utility>
 #include <system_error>
 
@@ -52,9 +53,16 @@ fs::path executableDir()
 
 // Claves de la visibilidad de panel, en el orden del enum Panel. Son parte del
 // formato en disco: renombrar una pierde el ajuste guardado de ese panel.
-const char* const kPanelKeys[ProjectContext::ViewSettings::PanelCount] = {
+//
+// Sin tamano explicito y con el static_assert debajo a proposito: declarado
+// como [PanelCount], un panel anadido al enum sin clave aqui dejaba un
+// **nullptr** que se acaba usando como clave de JSON. Asi no compila.
+const char* const kPanelKeys[] = {
     "scene", "viewport", "properties", "log", "contentBrowser",
-    "scriptEditor", "animator", "performance", "inputActions"};
+    "scriptEditor", "animator", "performance", "rendering", "inputActions"};
+static_assert(std::size(kPanelKeys) == ProjectContext::ViewSettings::PanelCount,
+              "kPanelKeys y el enum Panel van a la par: cada panel del enum necesita su clave, "
+              "en el mismo orden");
 
 // Lectores tolerantes: la clave que falta, o que trae otro tipo, devuelve el
 // default sin lanzar. Es lo que hace que un "settings" a medias siga abriendo.
@@ -165,12 +173,12 @@ nlohmann::json settingsToJson(const ProjectContext::ViewSettings& s)
     j["shadowResolution"] = s.shadowResolution;
     j["presentMode"]      = s.presentMode;
 
-    // Un panel sin dato (-1) no se escribe: el fichero no miente sobre lo que
-    // nadie ha decidido todavia.
+    // Un panel sin dato no se escribe: el fichero no miente sobre lo que nadie
+    // ha decidido todavia.
     nlohmann::json panels = nlohmann::json::object();
     for (int i = 0; i < ProjectContext::ViewSettings::PanelCount; ++i) {
-        if (s.panelOpen[i] >= 0)
-            panels[kPanelKeys[i]] = (s.panelOpen[i] != 0);
+        if (s.panelOpen[i].has_value())
+            panels[kPanelKeys[i]] = *s.panelOpen[i];
     }
     j["panels"] = panels;
 
@@ -216,8 +224,10 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
     s.layerActive = def.layerActive;
     s.loadFailed = false;
     s.unknownEnum.clear();
+    // A "sin dato", no a lo que trajera la `base`: la visibilidad de panel del
+    // proyecto anterior no debe filtrarse al que se abre ahora.
     for (int i = 0; i < ViewSettings::PanelCount; ++i)
-        s.panelOpen[i] = -1;
+        s.panelOpen[i].reset();
 
     std::ifstream in(projectDir / "project.json");
     if (!in.is_open())
@@ -344,7 +354,7 @@ ProjectContext::ViewSettings ProjectContext::readSettings(const fs::path& projec
         for (int i = 0; i < ViewSettings::PanelCount; ++i) {
             const auto p = panels->find(kPanelKeys[i]);
             if (p != panels->end() && p->is_boolean())
-                s.panelOpen[i] = p->get<bool>() ? 1 : 0;
+                s.panelOpen[i] = p->get<bool>();
         }
     }
 

@@ -580,18 +580,31 @@ ProjectContext::ViewSettings EditorUI::currentSettings()
         }
     }
 
-    using VS = ProjectContext::ViewSettings;
-    auto flag = [](bool* open) { return (open && *open) ? 1 : 0; };
-    s.panelOpen[VS::PanelScene]          = flag(m_scenePanel.GetOpenPtr());
-    s.panelOpen[VS::PanelViewport]       = flag(m_viewportPanel.GetOpenPtr());
-    s.panelOpen[VS::PanelProperties]     = flag(m_propertiesPanel.GetOpenPtr());
-    s.panelOpen[VS::PanelLog]            = flag(m_logPanel.GetOpenPtr());
-    s.panelOpen[VS::PanelContentBrowser] = flag(m_contentBrowserPanel.GetOpenPtr());
-    s.panelOpen[VS::PanelScriptEditor]   = flag(m_scriptEditor ? m_scriptEditor->GetOpenPtr() : nullptr);
-    s.panelOpen[VS::PanelAnimator]       = flag(m_animatorPanel.GetOpenPtr());
-    s.panelOpen[VS::PanelPerformance]    = flag(m_performancePanel.GetOpenPtr());
-    s.panelOpen[VS::PanelInputActions]   = flag(m_inputActionsPanel.GetOpenPtr());
+    // Guardar es una foto COMPLETA: al escribir, todo panel de la tabla queda
+    // con dato. El "sin dato" solo existe leyendo un project.json que no lo
+    // traía (uno de antes de que ese panel se persistiera).
+    const auto punteros = panelOpenPtrs();
+    for (int i = 0; i < ProjectContext::ViewSettings::PanelCount; ++i)
+        s.panelOpen[i] = (punteros[static_cast<size_t>(i)] != nullptr) &&
+                         *punteros[static_cast<size_t>(i)];
     return s;
+}
+
+std::array<bool*, ProjectContext::ViewSettings::PanelCount> EditorUI::panelOpenPtrs()
+{
+    using VS = ProjectContext::ViewSettings;
+    std::array<bool*, VS::PanelCount> t{};
+    t[VS::PanelScene]          = m_scenePanel.GetOpenPtr();
+    t[VS::PanelViewport]       = m_viewportPanel.GetOpenPtr();
+    t[VS::PanelProperties]     = m_propertiesPanel.GetOpenPtr();
+    t[VS::PanelLog]            = m_logPanel.GetOpenPtr();
+    t[VS::PanelContentBrowser] = m_contentBrowserPanel.GetOpenPtr();
+    t[VS::PanelScriptEditor]   = m_scriptEditor ? m_scriptEditor->GetOpenPtr() : nullptr;
+    t[VS::PanelAnimator]       = m_animatorPanel.GetOpenPtr();
+    t[VS::PanelPerformance]    = m_performancePanel.GetOpenPtr();
+    t[VS::PanelRendering]      = m_renderingPanel.GetOpenPtr();
+    t[VS::PanelInputActions]   = m_inputActionsPanel.GetOpenPtr();
+    return t;
 }
 
 void EditorUI::applyProjectSettings()
@@ -733,21 +746,30 @@ void EditorUI::applyProjectSettings()
 
     // Visibilidad de panel: el project.json manda sobre imgui.ini en QUÉ paneles
     // están abiertos; el layout (docking, tamaños) lo sigue llevando imgui.ini.
-    // Un panel sin dato guardado (-1) se queda como esté.
-    using VS = ProjectContext::ViewSettings;
-    auto applyPanel = [&](int index, bool* open) {
-        if (open && s.panelOpen[index] >= 0)
-            *open = (s.panelOpen[index] != 0);
-    };
-    applyPanel(VS::PanelScene,          m_scenePanel.GetOpenPtr());
-    applyPanel(VS::PanelViewport,       m_viewportPanel.GetOpenPtr());
-    applyPanel(VS::PanelProperties,     m_propertiesPanel.GetOpenPtr());
-    applyPanel(VS::PanelLog,            m_logPanel.GetOpenPtr());
-    applyPanel(VS::PanelContentBrowser, m_contentBrowserPanel.GetOpenPtr());
-    applyPanel(VS::PanelScriptEditor,   m_scriptEditor ? m_scriptEditor->GetOpenPtr() : nullptr);
-    applyPanel(VS::PanelAnimator,       m_animatorPanel.GetOpenPtr());
-    applyPanel(VS::PanelPerformance,    m_performancePanel.GetOpenPtr());
-    applyPanel(VS::PanelInputActions,   m_inputActionsPanel.GetOpenPtr());
+    // Un panel sin dato guardado se queda como esté, que no es lo mismo que
+    // cerrado: un project.json de antes de que ese panel se persistiera no debe
+    // cerrarlo.
+    const auto punteros = panelOpenPtrs();
+    for (int i = 0; i < ProjectContext::ViewSettings::PanelCount; ++i)
+    {
+        bool* open = punteros[static_cast<size_t>(i)];
+        if (open && s.panelOpen[i].has_value())
+            *open = *s.panelOpen[i];
+
+        // Un hueco de la tabla sin rellenar es EXACTAMENTE el fallo que costó
+        // esto: el panel Rendering existía, se dibujaba, guardaba su posición en
+        // imgui.ini, y arrancaba cerrado porque nadie lo había atado a su
+        // índice. Un nullptr aquí no hace nada visible —el panel simplemente no
+        // se persiste—, así que se dice.
+        //
+        // No hay test que lo cace: la tabla vive en EditorUI, que no se puede
+        // construir sin ventana ni Renderer. Este aviso es lo que hay, y sale al
+        // abrir cualquier proyecto. El único nullptr legítimo es el del Script
+        // Editor, que no existe hasta que hay proyecto.
+        if (!open && i != ProjectContext::ViewSettings::PanelScriptEditor)
+            m_logPanel.push("EditorUI: el panel " + std::to_string(i) +
+                            " no esta en panelOpenPtrs(); su visibilidad no se guarda.");
+    }
 }
 
 void EditorUI::applySkyboxFolder(const std::string& folder)
