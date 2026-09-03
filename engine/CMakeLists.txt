@@ -56,6 +56,7 @@ add_library(DonTopoCore STATIC
     src/Renderer/GpuResources.cpp
     src/Renderer/SharedGpuMesh.cpp
     src/Renderer/InstanceBatching.cpp
+    src/Renderer/InstanceBuffers.cpp
     src/Renderer/DeferredDelete.cpp
     src/Renderer/TransferBatch.cpp
     src/Renderer/AsyncAssetLoader.cpp

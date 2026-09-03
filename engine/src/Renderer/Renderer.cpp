@@ -209,8 +209,8 @@ namespace DonTopo {
         m_cameraDistance = maxDim * 1.2f;
 
         // ANTES de createPipeline y createShadowResources: los dos pipeline
-        // layouts declaran m_instanceDescLayout como set 1.
-        createInstanceResources();
+        // layouts declaran m_instanceBuffers.descLayout() como set 1.
+        m_instanceBuffers.create(instanceCtx());
         createDescriptorSetLayout();
         // ANTES de createPipeline: el pipeline layout de escena declara
         // m_fpDescLayout como set 2. Los buffers que SI dependen del tamano (la
@@ -677,12 +677,10 @@ namespace DonTopo {
             vkFreeMemory(m_gpu.device(), m_uniformBuffersMemory[i], nullptr);
         }
         vkDestroyDescriptorSetLayout(m_gpu.device(), m_descriptorSetLayout, nullptr);
-        // SSBO de instancias: los sets salen con el pool (sin
-        // FREE_DESCRIPTOR_SET, viven todo el proceso).
-        for (int i = 0; i < MAX_FRAMES; i++)
-            destroyInstanceBuffer(i);
-        vkDestroyDescriptorPool(m_gpu.device(), m_instanceDescPool, nullptr);
-        vkDestroyDescriptorSetLayout(m_gpu.device(), m_instanceDescLayout, nullptr);
+        // SSBO de instancias: buffers, pool, sets y layout. Una línea, como los
+        // trece pases de al lado — antes eran cuatro y había que acordarse de
+        // las cuatro.
+        m_instanceBuffers.destroy(instanceCtx());
         vkDestroyImageView(m_gpu.device(), m_depthImageView, nullptr);
         vkDestroyImage(m_gpu.device(), m_depthImage, nullptr);
         vkFreeMemory(m_gpu.device(), m_depthImageMemory, nullptr);
@@ -1655,8 +1653,9 @@ namespace DonTopo {
         // Set 1 una sola vez para todo el pass: el SSBO no cambia entre
         // draws, y el pipeline skinned de abajo comparte layout, así que
         // sigue bindeado y válido también para él.
+        const VkDescriptorSet instSet = m_instanceBuffers.set(m_currentFrame);
         vkCmdBindDescriptorSets(m_commandBuffers[m_currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS,
-            m_pipelineLayout, 1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
+            m_pipelineLayout, 1, 1, &instSet, 0, nullptr);
 
         // Forward+: uno por frame y comun a TODOS los draws del pass (estatico
         // y skinned), asi que se bindea una sola vez aqui. Va DENTRO del pass
@@ -2147,9 +2146,13 @@ namespace DonTopo {
         // matriz en el mismo SSBO. Contar solo los estáticos dejaba a una
         // escena de puros personajes con capacidad CERO, y los dos pases que
         // los recorren se salían por un `break` mudo (H23).
-        ensureInstanceCapacity(shadowInstanceCapacity((uint32_t)m_objects.size(),
-                                                       (uint32_t)m_skinnedObjects.size()));
-        m_instanceCursor          = 0;
+        // Asegurar la capacidad y poner el cursor a 0 son la MISMA operación y
+        // por eso van juntas: crecer recrea el buffer, y un cursor que sobrevive
+        // a eso apunta a memoria liberada. Antes eran dos líneas seguidas que
+        // había que acordarse de escribir en ese orden.
+        m_instanceBuffers.beginFrame(instanceCtx(), m_currentFrame,
+                                     shadowInstanceCapacity((uint32_t)m_objects.size(),
+                                                            (uint32_t)m_skinnedObjects.size()));
         m_statInstanceOverflow    = 0;
 
         // Cámara del frame: la usan el culling de los skinned (aquí abajo), el
@@ -2434,7 +2437,7 @@ namespace DonTopo {
         // a reescribir el descriptor set de CADA objeto. Solo lo lee pbr.frag; el
         // wireframe, el skinned y el outline comparten layout y no lo declaran,
         // que es legal mientras no lo usen.
-        VkDescriptorSetLayout setLayouts[] = { m_descriptorSetLayout, m_instanceDescLayout, m_fpPass.descLayout() };
+        VkDescriptorSetLayout setLayouts[] = { m_descriptorSetLayout, m_instanceBuffers.descLayout(), m_fpPass.descLayout() };
 
         VkPipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.sType                    = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -2812,132 +2815,6 @@ namespace DonTopo {
         }
     }
 
-    // ── Instancing: SSBO de transforms ──────────────────────────────────────
-    // Capacidad inicial. No es un límite: ensureInstanceCapacity crece si la
-    // escena tiene más objetos. 1024 matrices = 64 KB por frame, lo que cubre
-    // sin realojar cualquier escena normal.
-    static constexpr uint32_t kInstanceInitialCapacity = 1024;
-
-    void Renderer::destroyInstanceBuffer(int frame)
-    {
-        if (m_instanceBuffers[frame] == VK_NULL_HANDLE) return;
-        // El mapeo persistente muere con la memoria; no hace falta unmap
-        // explícito, pero sí olvidar el puntero para no escribir en él si algo
-        // fallara entre el destroy y el create.
-        m_instanceMapped[frame] = nullptr;
-        vkDestroyBuffer(m_gpu.device(), m_instanceBuffers[frame], nullptr);
-        vkFreeMemory(m_gpu.device(), m_instanceMemory[frame], nullptr);
-        m_instanceBuffers[frame]  = VK_NULL_HANDLE;
-        m_instanceMemory[frame]   = VK_NULL_HANDLE;
-        m_instanceCapacity[frame] = 0;
-    }
-
-    void Renderer::createInstanceResources()
-    {
-        // Set 1: un solo storage buffer, solo lo lee el vertex shader
-        // (triangle.vert y shadow.vert).
-        VkDescriptorSetLayoutBinding binding{};
-        binding.binding         = 0;
-        binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        binding.descriptorCount = 1;
-        binding.stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
-
-        VkDescriptorSetLayoutCreateInfo dslInfo{};
-        dslInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dslInfo.bindingCount = 1;
-        dslInfo.pBindings    = &binding;
-        if (vkCreateDescriptorSetLayout(m_gpu.device(), &dslInfo, nullptr, &m_instanceDescLayout) != VK_SUCCESS)
-            throw std::runtime_error("failed to create instance descriptor set layout!");
-
-        // Pool propio y no la cadena m_descriptorPools: esa se reparte por objeto y solo
-        // tiene UNIFORM_BUFFER y COMBINED_IMAGE_SAMPLER. Aquí hacen falta
-        // exactamente MAX_FRAMES sets con un STORAGE_BUFFER cada uno, y los sets
-        // viven todo el proceso (no se liberan nunca).
-        VkDescriptorPoolSize poolSize{};
-        poolSize.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        poolSize.descriptorCount = MAX_FRAMES;
-
-        VkDescriptorPoolCreateInfo poolInfo{};
-        poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.poolSizeCount = 1;
-        poolInfo.pPoolSizes    = &poolSize;
-        poolInfo.maxSets       = MAX_FRAMES;
-        if (vkCreateDescriptorPool(m_gpu.device(), &poolInfo, nullptr, &m_instanceDescPool) != VK_SUCCESS)
-            throw std::runtime_error("failed to create instance descriptor pool!");
-
-        VkDescriptorSetLayout layouts[MAX_FRAMES] = { m_instanceDescLayout, m_instanceDescLayout };
-        VkDescriptorSetAllocateInfo allocInfo{};
-        allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        allocInfo.descriptorPool     = m_instanceDescPool;
-        allocInfo.descriptorSetCount = MAX_FRAMES;
-        allocInfo.pSetLayouts        = layouts;
-        if (vkAllocateDescriptorSets(m_gpu.device(), &allocInfo, m_instanceDescSets) != VK_SUCCESS)
-            throw std::runtime_error("failed to allocate instance descriptor sets!");
-
-        // Los buffers de los DOS frames, no solo el actual: el descriptor set de
-        // cada frame tiene que apuntar a algo válido desde el primer draw.
-        const int saved = m_currentFrame;
-        for (int i = 0; i < MAX_FRAMES; i++)
-        {
-            m_currentFrame = i;
-            ensureInstanceCapacity(kInstanceInitialCapacity);
-        }
-        m_currentFrame = saved;
-    }
-
-    void Renderer::ensureInstanceCapacity(uint32_t matrices)
-    {
-        const int frame = m_currentFrame;
-        if (matrices <= m_instanceCapacity[frame]) return;
-
-        // Duplicar en vez de ajustar al pelo: instanciar un objeto por frame
-        // (scripts Lua) no debe recrear el buffer en cada uno.
-        uint32_t capacity = m_instanceCapacity[frame] ? m_instanceCapacity[frame] : kInstanceInitialCapacity;
-        while (capacity < matrices) capacity *= 2;
-
-        destroyInstanceBuffer(frame);
-
-        VkDeviceSize size = (VkDeviceSize)capacity * sizeof(glm::mat4);
-
-        VkBufferCreateInfo bufferInfo{};
-        bufferInfo.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufferInfo.size        = size;
-        bufferInfo.usage       = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        if (vkCreateBuffer(m_gpu.device(), &bufferInfo, nullptr, &m_instanceBuffers[frame]) != VK_SUCCESS)
-            throw std::runtime_error("failed to create instance buffer!");
-
-        VkMemoryRequirements memReq;
-        vkGetBufferMemoryRequirements(m_gpu.device(), m_instanceBuffers[frame], &memReq);
-
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize  = memReq.size;
-        allocInfo.memoryTypeIndex = m_gpu.findMemoryType(memReq.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        if (vkAllocateMemory(m_gpu.device(), &allocInfo, nullptr, &m_instanceMemory[frame]) != VK_SUCCESS)
-            throw std::runtime_error("failed to allocate instance buffer memory!");
-        vkBindBufferMemory(m_gpu.device(), m_instanceBuffers[frame], m_instanceMemory[frame], 0);
-
-        // Mapeo persistente, como los uniform buffers: se escribe cada frame.
-        vkMapMemory(m_gpu.device(), m_instanceMemory[frame], 0, size, 0, &m_instanceMapped[frame]);
-        m_instanceCapacity[frame] = capacity;
-
-        VkDescriptorBufferInfo dbi{};
-        dbi.buffer = m_instanceBuffers[frame];
-        dbi.offset = 0;
-        dbi.range  = size;
-
-        VkWriteDescriptorSet write{};
-        write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet          = m_instanceDescSets[frame];
-        write.dstBinding      = 0;
-        write.descriptorCount = 1;
-        write.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.pBufferInfo     = &dbi;
-        vkUpdateDescriptorSets(m_gpu.device(), 1, &write, 0, nullptr);
-    }
-
     uint32_t Renderer::buildInstanceBatches(const BatchCandidate* candidates,
                                             size_t                count,
                                             glm::mat4*            outTransforms,
@@ -2969,10 +2846,10 @@ namespace DonTopo {
         // Tramo propio dentro del SSBO del frame: los pases comparten buffer y
         // el cursor marca dónde empieza el de este, que es la base de sus
         // firstInstance.
-        const uint32_t instanceBase = m_instanceCursor;
-        glm::mat4* dst = (glm::mat4*)m_instanceMapped[m_currentFrame] + instanceBase;
-        m_instanceCursor += buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
-            dst, m_instanceCapacity[m_currentFrame] - instanceBase, instanceBase, m_instanceBatches);
+        const InstanceCursor::Span libre = m_instanceBuffers.cur().rest();
+        m_instanceBuffers.cur().commit(
+            buildInstanceBatches(m_batchCandidates.data(), m_batchCandidates.size(),
+                                 libre.data, libre.capacity, libre.base, m_instanceBatches));
     }
 
     void Renderer::createDescriptorPool()
@@ -3526,8 +3403,9 @@ namespace DonTopo {
             // otra, y el de la escena al final).
             gatherAndBatch(lightFrustum, /*colorPass*/ false);
 
+            const VkDescriptorSet instSet = m_instanceBuffers.set(m_currentFrame);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPass.pipelineLayout(),
-                1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
+                1, 1, &instSet, 0, nullptr);
 
             for (const InstanceBatch& batch : m_instanceBatches)
             {
@@ -3564,13 +3442,15 @@ namespace DonTopo {
                 // dimensionada esto ya no deberia ocurrir; el contador esta
                 // para que, si ocurre, se vea en el PerformancePanel en vez de
                 // perderse la sombra en silencio (H23).
-                if (m_instanceCursor >= m_instanceCapacity[m_currentFrame]) { ++m_statInstanceOverflow; break; }
-
+                //
                 // shadow.vert saca el model matrix del SSBO por gl_InstanceIndex:
                 // una entrada por objeto y un draw de una instancia apuntando a
-                // ella con firstInstance.
-                const uint32_t instanceIndex = m_instanceCursor++;
-                ((glm::mat4*)m_instanceMapped[m_currentFrame])[instanceIndex] = sobj.transform;
+                // ella con firstInstance. Sin sitio no hay puntero, así que no
+                // hay forma de escribir sin haber mirado.
+                uint32_t instanceIndex = 0;
+                glm::mat4* slot = m_instanceBuffers.cur().alloc(1, &instanceIndex);
+                if (!slot) { ++m_statInstanceOverflow; break; }
+                *slot = sobj.transform;
 
                 if (!skinnedBound)
                 {
@@ -4841,7 +4721,7 @@ namespace DonTopo {
     {
         // Los dos sets que declara shadow.vert. El pipeline layout que sale de
         // ellos lo presta el pase al depth pre-pass, que declara los mismos.
-        return ShadowPass::Context{ m_gpu, m_descriptorSetLayout, m_instanceDescLayout };
+        return ShadowPass::Context{ m_gpu, m_descriptorSetLayout, m_instanceBuffers.descLayout() };
     }
 
     // ── IBL global y sondas ─────────────────────────────────────────────────
@@ -4874,7 +4754,7 @@ namespace DonTopo {
             m_iblPass.irradianceView(),     m_iblPass.prefilterView(),
             m_renderExtent, m_offscreenRenderPass, m_offscreenFramebuffer[0],
             m_hdrImage[0], m_pipeline, m_skinnedGfxPipeline, m_pipelineLayout,
-            m_instanceDescSets[0], m_uniformBuffersMapped[0], m_uboWritten[0],
+            m_instanceBuffers.set(0), m_uniformBuffersMapped[0], m_uboWritten[0],
             m_fpPass,
             m_objects, m_sharedMeshes, m_skinnedObjects, m_lastCompletedTicket,
             m_ssaoPass.blurImage(0),
@@ -4966,8 +4846,9 @@ namespace DonTopo {
             // pass de escena.
             gatherAndBatch(camFrustum, /*colorPass*/ false);
 
+            const VkDescriptorSet instSet = m_instanceBuffers.set(m_currentFrame);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPass.pipelineLayout(),
-                1, 1, &m_instanceDescSets[m_currentFrame], 0, nullptr);
+                1, 1, &instSet, 0, nullptr);
 
             for (const InstanceBatch& batch : m_instanceBatches)
             {
@@ -5001,14 +4882,14 @@ namespace DonTopo {
                     // Sin sitio en el SSBO de este frame: mejor sin profundidad que
                     // pisar el tramo de otro pase. Contado, como en el pase de
                     // sombras: sin contador no habia forma de saberlo (H23).
-                    if (m_instanceCursor >= m_instanceCapacity[m_currentFrame]) { ++m_statInstanceOverflow; break; }
-
+                    //
                     // El shader saca el model del SSBO por gl_InstanceIndex: una
                     // entrada por objeto y un draw de una instancia con
-                    // firstInstance apuntando a ella.
-                    const uint32_t instanceIndex = m_instanceCursor++;
-                    ((glm::mat4*)m_instanceMapped[m_currentFrame])[instanceIndex] =
-                        sobj.transform;
+                    // firstInstance apuntando a ella. Sin sitio no hay puntero.
+                    uint32_t instanceIndex = 0;
+                    glm::mat4* slot = m_instanceBuffers.cur().alloc(1, &instanceIndex);
+                    if (!slot) { ++m_statInstanceOverflow; break; }
+                    *slot = sobj.transform;
 
                     if (!skinnedBound)
                     {

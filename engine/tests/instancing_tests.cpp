@@ -10,6 +10,7 @@
 // vez de escribir fuera del SSBO. Por eso cada transform lleva una traslación
 // única y se comprueba la matriz slot a slot, no solo los contadores.
 #include "DonTopo/Renderer/Renderer.h"
+#include "DonTopo/Renderer/InstanceBuffers.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -233,6 +234,128 @@ static void test_trunca_sin_desbordar()
         CHECK(markerOf(out[i]) == kUnwritten);
 }
 
+
+// --- Reparto dentro del SSBO de instancias -----------------------------------
+
+// InstanceCursor es la mitad SIN Vulkan de InstanceBuffers, y por eso se puede
+// afirmar aqui entera. Lo que protege es la guarda que antes estaba copiada a
+// mano en tres sitios del Renderer: comprobar el tope, avanzar el cursor y hacer
+// la aritmetica de punteros. Saltarse la comprobacion en cualquiera de los tres
+// escribia fuera del buffer sin que nada avisara.
+static void test_cursor_reparte_contiguo()
+{
+    glm::mat4 buffer[8];
+    for (auto& m : buffer) m = markerAt(kUnwritten);
+
+    InstanceCursor cur;
+    cur.reset(buffer, 8);
+    CHECK(cur.cursor() == 0);
+    CHECK(cur.capacity() == 8);
+
+    glm::mat4* a = cur.alloc(3);
+    CHECK(a == buffer);          // el primero empieza en el principio
+    CHECK(cur.cursor() == 3);
+
+    glm::mat4* b = cur.alloc(2);
+    CHECK(b == buffer + 3);      // el siguiente va DETRAS, sin pisar
+    CHECK(cur.cursor() == 5);
+
+    // Lo que se escribe por el puntero acaba en el slot que su draw va a leer.
+    a[0] = markerAt(10.0f);
+    b[0] = markerAt(20.0f);
+    CHECK(markerOf(buffer[0]) == 10.0f);
+    CHECK(markerOf(buffer[3]) == 20.0f);
+}
+
+// No cabe: nullptr y el cursor NO se mueve. Las dos mitades importan — devolver
+// nullptr pero haber avanzado dejaria un hueco muerto en el buffer.
+static void test_cursor_no_cabe_devuelve_nulo()
+{
+    glm::mat4 buffer[4];
+    InstanceCursor cur;
+    cur.reset(buffer, 4);
+
+    CHECK(cur.alloc(3) != nullptr);
+    CHECK(cur.cursor() == 3);
+
+    CHECK(cur.alloc(2) == nullptr);   // pide 2, queda 1
+    CHECK(cur.cursor() == 3);         // y no se ha movido
+
+    CHECK(cur.alloc(1) != nullptr);   // el ultimo hueco si cabe
+    CHECK(cur.cursor() == 4);
+    CHECK(cur.alloc(1) == nullptr);   // lleno
+    CHECK(cur.cursor() == 4);
+}
+
+// La suma cursor + n va en 64 bits: en 32 daria la vuelta y pasaria la
+// comprobacion, que es la forma silenciosa de escribir fuera del buffer.
+static void test_cursor_no_desborda_el_uint32()
+{
+    glm::mat4 buffer[4];
+    InstanceCursor cur;
+    cur.reset(buffer, 4);
+    CHECK(cur.alloc(3) != nullptr);
+
+    // 3 + 0xFFFFFFFF da la vuelta a 2, que "cabe" en 4 si la suma es de 32 bits.
+    CHECK(cur.alloc(0xFFFFFFFFu) == nullptr);
+    CHECK(cur.cursor() == 3);
+}
+
+// Un buffer sin mapear (el frame cuyo buffer aun no existe) no acepta nada, en
+// vez de entregar un puntero nulo con desplazamiento.
+static void test_cursor_sin_buffer_no_reparte()
+{
+    InstanceCursor cur;
+    cur.reset(nullptr, 1024);         // capacidad mentida a proposito
+    CHECK(cur.capacity() == 0);       // no se la cree
+    CHECK(cur.alloc(1) == nullptr);
+    CHECK(cur.rest().data == nullptr);
+    CHECK(cur.rest().capacity == 0);
+}
+
+// rest() da la cola libre para quien no sabe cuanto va a escribir hasta que
+// termina, y commit() la cierra. Es el camino del agrupado por lotes.
+static void test_cursor_rest_y_commit()
+{
+    glm::mat4 buffer[10];
+    InstanceCursor cur;
+    cur.reset(buffer, 10);
+    CHECK(cur.alloc(4) != nullptr);
+
+    InstanceCursor::Span s = cur.rest();
+    CHECK(s.data == buffer + 4);
+    CHECK(s.capacity == 6);
+    CHECK(s.base == 4);               // la base de los firstInstance del lote
+
+    cur.commit(2);
+    CHECK(cur.cursor() == 6);
+    CHECK(cur.rest().base == 6);
+    CHECK(cur.rest().capacity == 4);
+
+    // Un commit que se pasa se recorta: mover el cursor fuera del buffer dejaria
+    // al siguiente pase escribiendo en tierra de nadie.
+    cur.commit(999);
+    CHECK(cur.cursor() == 10);
+    CHECK(cur.rest().data == nullptr);   // lleno: no queda cola
+    CHECK(cur.rest().capacity == 0);
+    CHECK(cur.alloc(1) == nullptr);
+}
+
+// El buffer se comparte entre los dos pases del frame (sombras primero, escena
+// detras). reset() es lo que separa un frame del siguiente.
+static void test_cursor_reset_entre_frames()
+{
+    glm::mat4 buffer[4];
+    InstanceCursor cur;
+    cur.reset(buffer, 4);
+    CHECK(cur.alloc(4) != nullptr);
+    CHECK(cur.alloc(1) == nullptr);   // agotado
+
+    cur.reset(buffer, 4);             // frame nuevo
+    CHECK(cur.cursor() == 0);
+    CHECK(cur.alloc(4) != nullptr);   // vuelve a caber entero
+}
+
 int main()
 {
     test_misma_entrada_un_solo_grupo();
@@ -240,6 +363,13 @@ int main()
     test_no_visibles_excluidos();
     test_base_de_first_instance();
     test_trunca_sin_desbordar();
+
+    test_cursor_reparte_contiguo();
+    test_cursor_no_cabe_devuelve_nulo();
+    test_cursor_no_desborda_el_uint32();
+    test_cursor_sin_buffer_no_reparte();
+    test_cursor_rest_y_commit();
+    test_cursor_reset_entre_frames();
 
     if (g_failures == 0) std::printf("instancing_tests: OK\n");
     else                 std::printf("instancing_tests: %d FALLOS\n", g_failures);

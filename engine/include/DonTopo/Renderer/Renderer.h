@@ -14,6 +14,7 @@
 #include "DonTopo/Renderer/SlotPool.h"
 #include "DonTopo/Renderer/SkinnedBounds.h"
 #include "DonTopo/Renderer/InstanceBatching.h"
+#include "DonTopo/Renderer/InstanceBuffers.h"
 #include "DonTopo/Renderer/VisibleSet.h"
 #include "DonTopo/Renderer/RendererState.h"
 #include "DonTopo/Renderer/GpuDevice.h"
@@ -758,7 +759,7 @@ namespace DonTopo {
             // Lo llaman los TRES pases que dibujan geometría estática —escena,
             // sombras (una vez por cascada) y depth pre-pase—, cada uno con su
             // frustum: los conjuntos visibles no coinciden, así que cada uno
-            // escribe su propio rango y m_instanceCursor va detrás.
+            // escribe su propio rango y el cursor de m_instanceBuffers va detrás.
             //
             // colorPass = false apaga el SSR en la clave del agrupado: los
             // pases que no pintan color no lo leen y con un único valor salen
@@ -1027,19 +1028,15 @@ namespace DonTopo {
             std::vector<VkDescriptorPool>   m_descriptorPools;
             static constexpr uint32_t       kSharedSetsPerPool                  = 128 * MAX_FRAMES;
             // ── SSBO de transforms por instancia (set 1, binding 0) ──────────
-            // Uno por frame-in-flight y mapeado en persistente: el frame
-            // anterior puede seguir en vuelo leyendo el suyo. Los dos passes
-            // (sombras primero, escena después) comparten el buffer del frame:
-            // m_instanceCursor es el nº de matrices ya escritas y hace de base
-            // del siguiente pass.
-            VkDescriptorSetLayout           m_instanceDescLayout                = VK_NULL_HANDLE;
-            VkDescriptorPool                m_instanceDescPool                  = VK_NULL_HANDLE;
-            VkDescriptorSet                 m_instanceDescSets[MAX_FRAMES]      = {};
-            VkBuffer                        m_instanceBuffers[MAX_FRAMES]       = {};
-            VkDeviceMemory                  m_instanceMemory[MAX_FRAMES]        = {};
-            void*                           m_instanceMapped[MAX_FRAMES]        = {};
-            uint32_t                        m_instanceCapacity[MAX_FRAMES]      = {}; // en matrices
-            uint32_t                        m_instanceCursor                    = 0;
+            // Ocho miembros y tres métodos hasta H8; ahora los lleva su propia
+            // clase, con el mismo contrato que los pases. Lo que se ganó no es
+            // el recuento: el cursor y la aritmética de punteros dejan de estar
+            // al alcance de quien escribe, y su guarda de desbordamiento estaba
+            // copiada a mano en tres sitios de este fichero.
+            InstanceBuffers                 m_instanceBuffers;
+            static_assert(MAX_FRAMES == InstanceBuffers::kFrames,
+                          "Los frames en vuelo del Renderer y los de InstanceBuffers tienen que "
+                          "ser los mismos: los sets de los frames de mas nacerian sin buffer");
             // Scratch reutilizado entre frames y entre passes: gatherAndBatch
             // corre una vez por cascada más otras dos (depth pre-pase y escena)
             // en cada frame, y no debe alojar nada en ese camino.
@@ -1053,12 +1050,10 @@ namespace DonTopo {
             // objeto que luego SÍ se dibuja, su outputVertexBuffer conservaría
             // la pose del último frame en que fue visible.
             std::vector<uint8_t>            m_skinnedVisible;
-            void createInstanceResources();
-            // Asegura sitio para `matrices` en el buffer del frame actual. Se
-            // llama al principio de recordCommandBuffer, con la fence del frame
-            // ya esperada: recrear el buffer aquí no pisa nada en vuelo.
-            void ensureInstanceCapacity(uint32_t matrices);
-            void destroyInstanceBuffer(int frame);
+            // Los tres métodos del SSBO de instancias se fueron con él a
+            // InstanceBuffers (H8): create/destroy y el crecer del buffer. El
+            // `ctx` de un campo, como el de los pases.
+            InstanceBuffers::Context instanceCtx() { return InstanceBuffers::Context{ m_gpu }; }
             VkImage                         m_depthImage                        = VK_NULL_HANDLE;
             VkDeviceMemory                  m_depthImageMemory                  = VK_NULL_HANDLE;
             VkImageView                     m_depthImageView                    = VK_NULL_HANDLE;
