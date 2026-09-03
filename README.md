@@ -12,14 +12,15 @@ A game engine written in C++20, with two interchangeable render backends: **Vulk
 - **SSAO**: depth-only pre-pass + compute occlusion (16-sample hemisphere kernel, normals reconstructed from depth) and a blur, applied to the ambient term only; toggle plus `radius`/`bias`/`intensity`/`power` sliders (see below)
 - **Screen space reflections**: view-space ray march with binary refinement, added into the HDR target *before* bloom so reflections bloom and tonemap like everything else; enabled and weighted **per GameObject**, with a global switch and 5 sliders (see below)
 - **Volumetric fog**: height-exponential fog ray-marched in a compute pass over the HDR target, with Henyey-Greenstein in-scattering from the key light and its cascaded shadows; global switch, off by default, and 6 sliders (see below)
-- **Light component**: any GameObject can be a light — `Point` / `Spot` / `Directional` / `Area`, several of each per scene (16 reach the shader), position and direction taken from its transform, with a direction gizmo in the editor (see below)
+- **Light component**: any GameObject can be a light — `Point` / `Spot` / `Directional` / `Area`, several of each per scene (64 reach the shader, and the editor says so when a scene holds more), position and direction taken from its transform, with a direction gizmo in the editor (see below)
 - **Reflection probes**: placeable environment probes that capture the scene from their position into a cubemap and replace the global IBL for the objects inside their radius; baked on demand, never per frame (see below)
 - **Anti-aliasing**: `None` / `FXAA` / `SSAA` / `MSAA` / `TAA`, mutually exclusive and switchable at runtime from the View menu, each with its own resources rebuilt between frames
 - **Forward+ light culling**: `Off` / `Tiled` / `Clustered`, a compute pre-pass that bins lights into a screen grid so `pbr.frag` only iterates the ones that reach each pixel; `Off` records no commands and lights exactly as before
 - GPU skeletal animation (compute shader skinning: bone eval → hierarchy → skinning)
-- Cascaded shadow maps (4 cascades, PCF 3×3)
+- **Shadows**: 4 cascades for the key light, PCF 3×3 sized from the map's *real* resolution; `1024`–`8192` map resolution, shadow distance and cascade split all live from the editor. Beyond the key light, secondary `Spot` and `Point` lights also cast — a narrow spot in perspective, a point light (or a spot open enough that one face would look bad) through a 6-face cubemap — sharing a budget of 6 extra layers (see below)
+- **Motion blur**: **camera** motion blur in a compute pass, the per-pixel velocity taken from reprojecting the depth pre-pass with the same `prevViewProj × inverse(currViewProj)` the TAA already uses; it runs after the fog and before the bloom, so the streak blooms with the highlights. `intensity`, `max radius` and `samples` sliders, off by default, both backends. Objects that move on their own contribute no velocity of their own — that would need a per-object velocity buffer
 - Normal maps + tangent space
-- Cubemap skybox (fullscreen quad, inverse view-projection)
+- Cubemap skybox (fullscreen quad, inverse view-projection), **picked per project and swapped live**: the **Environment** window takes a folder holding the six faces (`px`/`nx`/`py`/`ny`/`pz`/`nz`), by typing it, by browsing, or by dragging a folder in from the Content Browser. Changing it also re-convolves the ambient lighting, which comes from that same cubemap
 - Wireframe render mode
 - 3D spatial audio (FMOD): `AudioClipComponent` (loop, 3D/2D toggle, per-channel volume and pitch, 3D min/max attenuation distances with viewport gizmo), non-blocking clip loading
 - **Audio Listener component**: one per scene — its GameObject transform is where the scene is heard from (position, `-Z` forward, `+Y` up), falling back to the camera when absent; a scene with no listener still plays its clips — they are simply heard from the camera, and the log says so once per Play
@@ -36,6 +37,7 @@ A game engine written in C++20, with two interchangeable render backends: **Vulk
 - Scene serialization (JSON save/load, full GameObject tree incl. mesh/colliders/audio/scripts)
 - Play Mode (edit/play toggle, snapshot restore, physics gated to Play), undo/redo of editor actions
 - Log Console panel (edit-action history, live value editing)
+- **Rendering panel**: the 41 render settings — ambient, probes, skybox, presentation, shadows, bloom, SSAO, SSR, fog, motion blur, anti-aliasing, Forward+ and the backend selector — as a **dockable panel** instead of a menu that closed on mouse release, so an effect can be tuned while watching the viewport. Every control is undoable with `Ctrl+Z` and persisted to `project.json`, and each section prints its own GPU time (see below)
 - **Performance panel**: live framerate/frame-time graphs, GPU time per pass from timestamp queries (read from frame `N-2`, never blocking), draw/instance/culled counters, and process RAM/CPU/VRAM — and it costs literally nothing while closed (see below)
 - **Frustum culling** in the main, shadow and skinned passes; skinned meshes bounded by a pose-independent sphere so no character can vanish mid-animation
 - **Draw batching**: objects sharing a mesh+material collapse into one instanced draw, and their GPU resources (buffers, textures) are deduplicated by a content key so identical meshes are uploaded once — in both backends
@@ -190,10 +192,15 @@ layouts: spirv-cross names vertex inputs by *location*, so every semantic comes 
 `TEXCOORD`n, `POSITION` included.
 
 Feature parity with the Vulkan path: PBR and image-based lighting, cascaded shadows, SSAO, SSR,
-volumetric fog, bloom, the five anti-aliasing modes, Forward+ light culling, frustum culling,
-reflection probes, the 2D game UI, instanced draws of repeated meshes, per-pass GPU timings in
-the Performance panel (D3D12 timestamp queries, same read-from-`N-2` rule), the scene
-`CameraComponent` on Play, and the exported runtime.
+volumetric fog, motion blur, bloom, the five anti-aliasing modes, Forward+ light culling,
+frustum culling, reflection probes, the 2D game UI, instanced draws of repeated meshes,
+per-pass GPU timings in the Performance panel (D3D12 timestamp queries, same read-from-`N-2`
+rule), the scene `CameraComponent` on Play, and the exported runtime.
+
+The Forward+ **statistics** — average lights per cell and the number of cells that overflowed
+their list — are read back from the GPU here too, rather than being wired to zero: the two
+numbers are what tells you whether the culling is doing anything, so a backend that reports
+zero is indistinguishable from one where every cell is empty.
 
 Four places where the implementation differs rather than the result:
 
@@ -360,8 +367,12 @@ degenerate light either. Everything is serialised under a `light` block that old
 simply don't have (they load unchanged).
 
 **Several lights of each type per scene.** `Scene::collectLights()` walks the tree in pre-order
-every frame and hands the renderer the first `MAX_LIGHTS` (16) it finds; the rest are dropped
-silently — that is a limit of the UBO block, not an error in the scene. The block grew from two
+every frame and hands the renderer the first `MAX_LIGHTS` (**64**) it finds; the rest are
+dropped — that is a limit of the UBO block, not an error in the scene. It is no longer dropped
+*silently*: when the scene holds more than 64, the Rendering panel says so under **Forward+**,
+in amber, with how many there are and how many actually light — because that is precisely the
+feature that promises to scale the light count and that this ceiling caps. Raising the ceiling
+means recompiling the shaders that declare the block, so it is not a UI setting. The block grew from two
 `vec4` per light to four (`direction` carries the type in its `w`, `params` carries range, the
 two cosines and the area width), which is why the shaders that declare it were all touched: in
 std140 a struct that changes size shifts everything behind it.
@@ -371,6 +382,47 @@ Under **Forward+** the same data reaches the culling compute shaders, with one s
 cluster instead of being tested against the volume. The radius used for binning is the same
 reach the fragment shader uses (`Range`, or `Width / 2` for an area light) — if they differed, a
 light would pop off as it crossed a tile edge.
+
+### Shadows beyond the key light
+
+The shadow map is a **12-layer** array. The first six belong to the **key** light, which is
+the only one that can use more than one: 4 if it is `Directional` (one per cascade), 6 if it
+is `Point` or a spot open enough to need a cubemap, 1 if it is an ordinary spot. They never
+coexist — there is one key light and it has one type.
+
+The remaining **six** layers are shared by the secondary lights: **one layer per narrow
+spot**, **six per point light** (or per spot whose shadow FOV would exceed 90°, where a
+single face stops being the right technique — a texel's footprint goes with `tan(FOV/2)`, so
+at 150° it is 3.7× worse than at 90°). A light either fits **whole or not at all**: reserving
+three faces out of six would leave the shader sampling another light's layers, and no
+validation layer catches that — the layer exists and has content, it just is not the right
+one. A **secondary `Directional`** never casts: it would need its own four cascades to not
+look worse than no shadow, and then it costs the same as the key. It still lights the scene.
+
+Slots are handed out **in scene order**, not by brightness or distance to the camera, on
+purpose: a camera-dependent criterion would make a light win and lose its shadow as you move,
+and that flickers. The distribution lives in shared code rather than in each backend, because
+the slot decides which layer is written *and* which matrix the shader samples — a different
+split per backend would be the same scene with different lights shadowed.
+
+The ceiling is **memory**: these layers share the texture array with the key's, and an array
+has a single resolution, so at 2048 each one is 16 MB. Giving them a smaller array of their
+own would allow many more, but it means a new binding and sampler in the six shaders that
+declare the block, plus rebuilding the mesh, material and fog descriptor sets.
+
+Filtering is **PCF 3×3** taken from the map's *real* size (`textureSize`), not a hardcoded
+2048 — with a fixed value, raising the resolution neither widened nor narrowed the filter, and
+at 1024 the nine taps fell inside half a texel and the PCF vanished. The key light and the
+secondary spots share it, or the same geometry would get different edges depending on which
+light shadowed it.
+
+Three settings are live in **View → Rendering → Shadows**: the map **resolution**
+(`1024`/`2048`/`4096`/`8192` — the only one of the three that moves resources), the **shadow
+distance** the four cascades divide up (lowering it packs the same texels into less world and
+sharpens nearby shadows, at the cost of nothing beyond), and the **cascade split** blend
+between a logarithmic (1) and a uniform (0) distribution. The number of cascades is not among
+them: it has to match the UBO array that five shaders declare and the layers of the texture
+array.
 
 In the editor an **orange gizmo** shows each light: a wire sphere of its range for `Point`,
 that sphere plus the four edge generatrices of the cone for `Spot`, a long ray for
@@ -564,23 +616,11 @@ The graph only evaluates transitions in **Play** mode. In **Edit** the entry sta
 previews in place. Stopping Play resets to the entry state — the scene rebuilds from its JSON,
 so no runtime state is carried over.
 
-Drive it from Lua via `GetComponent("Animator")`:
-
-```lua
-local anim = self.entity:GetComponent("Animator")
-anim:SetBool("running", true)
-anim:SetTrigger("jump")
-anim:SetInt("combo", anim:GetInt("combo") + 1)
-if anim:GetState() == "Jump" then
-    -- ...
-end
-```
-
-`SetInt(name, v)` / `GetInt(name)` and `SetFloat(name, v)` / `GetFloat(name)` read/write
-the graph's numeric parameters the same way `SetBool`/`GetBool` do. All four setters
-silently ignore an undeclared name or a name of the wrong type; the getters return `0`
-for an unknown name — none of them throws over a bad *name*. (They do still throw if the
-GameObject lost its Animator component between `GetComponent` and the call.)
+It is driven from Lua via `GetComponent("Animator")`: the graph's `bool`, `trigger`, `int`
+and `float` parameters are read and written **by name**, and the active state, the blend
+weight and the state being faded out can be queried. Parameter names are never fatal — an
+undeclared name is ignored by the setters and returns the neutral value from the getters.
+See [`Scripts/README.md`](Scripts/README.md) for the method list.
 
 The whole graph — nodes, canvas positions, links, conditions, parameters, per-node loop and
 the entry state — is saved in the scene file. Clips are referenced **by name**, so
@@ -594,8 +634,10 @@ Open it with **View → Performance**. It is an editor-only panel — nothing in
 
 - **CPU**: framerate and frame time in ms, with a 120-sample history (`PlotLines` for the
   frame time, `PlotHistogram` for the FPS).
-- **GPU per pass**: shadows, scene, AO, Forward+ culling, SSR, fog, bloom and anti-aliasing,
-  in ms and as a share of the total render time (everything but the UI pass).
+- **GPU per pass**: shadows, scene, AO, Forward+ culling, SSR, fog, motion blur, bloom and
+  anti-aliasing, in ms and as a share of the total render time (everything but the UI pass).
+  The same numbers also appear per effect in the Rendering panel, next to the sliders that
+  move them.
 - **Draw counters**: draw calls, instances and culled objects of the scene pass (instanced
   statics + skinned).
 - **Process**: RAM working set and peak, CPU usage of the process, and VRAM in use against
@@ -611,6 +653,10 @@ panel through its own query heap and readback buffer, with the same non-blocking
 every slot is written at the start of the frame, so a pass that did not run reads zero instead
 of keeping a stale tick from three frames ago.
 
+A pass with nothing measured prints `--`, not `0.000 ms`: zero is a legitimate reading for a
+pass that ran and cost almost nothing, so it cannot double as "no data". The formatting rule
+is shared by both panels.
+
 Closing the panel costs exactly nothing. `PerformancePanel::draw` calls
 `Renderer::setPerfCaptureEnabled(false)`, and with the capture off the renderer records no
 query reset, no timestamp and touches no counter — the frame is byte-for-byte the one it
@@ -623,437 +669,72 @@ which reports the usage of *this process*: Vulkan cannot report it without
 `VK_EXT_memory_budget`, and enabling that extension would mean touching device creation in
 Core for a number only the editor displays.
 
+## Rendering Panel
+
+Open it with **View → Rendering**. It gathers the 41 render settings that used to live
+inside the `View` menu: **Ambient (IBL)**, **Reflection probes**, **Skybox**,
+**Presentation (vsync)**, **Shadows**, **Bloom**, **SSAO**, **SSR**, **Fog**, **Motion
+blur**, **Anti-aliasing**, **Forward+** and the **render backend** selector, one
+`CollapsingHeader` each — only the first open by default, since eleven expanded sections
+do not fit a narrow column. ImGui remembers in `imgui.ini` which ones you left open, and
+the panel's own visibility is stored per project in `project.json`.
+
+The reason it stopped being a menu is that an ImGui menu closes the moment you release
+the mouse, so tuning bloom or fog *while watching the viewport* meant reopening it on
+every nudge. Docked, it stays put and the effect is visible while the slider is being
+dragged. Like the Performance panel, it is editor-only: none of it links into
+`DonTopoCore` or the exported runtime.
+
+Every control does four things — draw the widget, apply the value, push an **undo**
+command and persist to `project.json` — through a shared `RenderSettingControls`
+wrapper, so `Ctrl+Z` walks back a render setting exactly like it walks back a transform,
+and undoing one leaves the project file as it was. The drag widgets register the value
+from the **start** of the drag, not the frame the mouse is released, so undoing a long
+drag does not land on the second-to-last pixel.
+
+Two settings do not apply while you drag them, because each change would rebuild render
+targets: the **SSAA factor** is held until the slider is released, and the **shadow map
+resolution** moves the image, its views and its framebuffers, so it goes through the
+backend rather than the settings object.
+
+**Presentation** offers `Vsync`, `Mailbox` and `Immediate`. Modes the device does not
+provide are shown **disabled with their reason**, not hidden — if the core supports N
+options the UI offers N. The mode that is *granted* need not be the one requested (a
+device with no Mailbox falls back to Vsync), so the undo entry re-reads what actually
+took effect instead of assuming. `Immediate` is the only mode in which a frame's real
+cost can be measured: with Vsync everything reads 16 ms.
+
+Each effect's section also prints its own **GPU time**, from the same timestamp queries
+the Performance panel reads, so the cost of a setting is visible right next to the
+slider that changes it. A pass that measured nothing reads `--`, never `0.000 ms`.
+
 ## Lua Scripting
 
-Attach one or more `ScriptComponent`s to a GameObject via **Properties → Add → Script**
-(or **Add → Script → Nuevo Script...** to scaffold a new `.lua` file from a template).
-Editing a loaded script while the engine is running hot-reloads it (~1s polling),
-preserving serializable property values.
-
-Double-clicking a `.lua` file in the Content Browser (or the **Edit** button next to a
-`ScriptComponent` in Properties) opens it in the **Script Editor** panel — a multi-tab
-code editor (ImGuiColorTextEdit, Lua syntax highlighting) docked alongside the other
-panels. `Ctrl+S` or the **Save** button writes the file to disk; the existing hot-reload
-polling picks up the change like any external edit. Closing a tab with unsaved changes
-prompts to save/discard/cancel.
-
-Saving (`Ctrl+S`/**Save**) also runs a syntax-only compile check; a Lua syntax
-error is shown as an inline marker on the offending line (hover for the
-message) and clears automatically on the next successful save. While typing,
-an autocomplete popup suggests Lua keywords and the scripting API (`Entity`,
-`Transform`, `Log`, `Input`, colliders, `Scene`, etc.) filtered by prefix —
-`Enter`/`Tab` accepts, `Escape` dismisses, `Ctrl+Space` re-opens it manually.
-
-```lua
--- Scripts/Rotator.lua — filename == global table name (the script's class)
-Rotator = {
-    speed = 45   -- serializable props (number/boolean/string) auto-show in the editor
-}
-
-function Rotator:Awake() end
-function Rotator:Start() end
-function Rotator:Update(dt)
-    local t = self.entity:GetTransform()
-    t:Rotate(Vec3.new(0, self.speed * dt, 0))
-end
-function Rotator:FixedUpdate(dt) end
-function Rotator:LateUpdate() end
-function Rotator:OnDestroy() end
-```
-
-### Scene switching from Lua
-
-`DonTopo.loadScene(path)` swaps the running scene for the one stored at `path`
-(a Save Scene file: `version: 1` + `root`), through the same load path the editor's
-**File → Load Scene** uses. It works in Play Mode and in the exported runtime.
-
-```lua
-function Menu:Update(dt)
-    if Input.IsKeyPressed(Key.R) then
-        if not DonTopo.loadScene("Scenes/Empty.json") then
-            Log.Error("Error loading scene")
-        end
-    end
-end
-```
-
-The call does **not** load anything itself: it validates the path and queues the
-request, and the scene's owner performs the load on the next frame, outside the
-script tick — loading mid-`Update` would destroy the very GameObject running that
-script. So the returned `bool` reports the *validation* (file readable, JSON
-parseable, v1 scene structure), not the load, whose outcome is logged one frame
-later. After the call the old scene is gone, your script included — treat it as the
-last useful line. Multiple requests in one frame: the last one wins. Outside Play
-Mode the request is ignored with a Log Console warning.
-
-### Physics from Lua
-
-Colliders and `Rigidbody` are reached through `GetComponent` and expose the same
-fields the Properties panel edits.
-
-```lua
--- Scripts/Caja.lua
-Caja = {}
-
-function Caja:Start()
-    local rb = self.entity:GetComponent("Rigidbody")
-    rb.mass       = 3.0
-    rb.useGravity = true
-    rb.drag       = 0.1
-    -- constraints is a bitmask: OR the RigidbodyConstraints constants
-    rb.constraints = RigidbodyConstraints.FreezePositionY | RigidbodyConstraints.FreezeRotationX
-
-    local col = self.entity:GetComponent("BoxCollider")
-    col.staticFriction  = 0.6     -- this collider's own PhysX material
-    col.dynamicFriction = 0.4
-    col.bounciness      = 0.9
-    col.isTrigger       = false   -- true = overlap without collision + OnTrigger* callbacks
-    col.layer           = 3       -- collision layer, 0-31 (0 = "Default")
-
-    -- layers 3 and 7 stop colliding, scene-wide and both ways
-    Physics.SetLayerCollision(3, 7, false)
-end
-
-function Caja:Update(dt)
-    local rb = self.entity:GetComponent("Rigidbody")
-    rb:AddForce(0, 500 * dt, 0)
-    -- optional 4th argument: the force mode (defaults to ForceMode.Force)
-    rb:AddForce(0, 8, 0, ForceMode.VelocityChange)   -- instant jump, mass-independent
-end
-```
-
-`Rigidbody` properties: `mass`, `useGravity`, `isKinematic`, `drag`, `angularDrag`,
-`constraints`, `ccd`, `interpolate`, `velocity`, `angularVelocity`; methods
-`AddForce`/`AddTorque`/`AddImpulse`
-(three loose floats, not a `Vec3`). `RigidbodyConstraints` is an integer constant table
-with `None`, `FreezePositionX/Y/Z` and `FreezeRotationX/Y/Z`; bits outside those six are
-masked away rather than raising, so an OR too many never takes down the script.
-
-`ccd` and `interpolate` are two independent booleans, both `false` by default, so no
-existing scene changes behaviour. `ccd` turns on continuous collision detection: PhysX
-sweeps the body's path within the fixed step instead of only testing start and end pose,
-which is what stops a fast projectile from tunnelling through thin geometry. It costs CPU
-and PhysX does not support it on kinematic bodies — setting it there keeps your intent
-but the flag only reaches the actor while the body is non-kinematic. `interpolate`
-smooths the *visible* pose between fixed steps (the render runs one physics step behind);
-it does not change the simulation at all, so raycasts, overlaps and triggers still see
-the real pose.
-
-```lua
-function Bala:Start()
-    local rb = self.entity:GetComponent("Rigidbody")
-    rb.ccd = true             -- fast projectile: do not tunnel through walls
-    rb.interpolate = true     -- and render it smoothly between fixed steps
-end
-```
-
-`AddForce` and `AddTorque` take an optional fourth argument, the force mode, from the
-`ForceMode` constant table: `Force` (continuous, mass- and dt-dependent — the default,
-so three-argument calls behave exactly as before), `Acceleration` (continuous, ignores
-mass), `Impulse` (instantaneous, mass-dependent — same as `AddImpulse`) and
-`VelocityChange` (instantaneous, ignores mass). A mode outside those four is warned
-about in the Log Console and the force is dropped, rather than raising.
-
-The four colliders (`BoxCollider`, `SphereCollider`, `CapsuleCollider`, `PlaneCollider`)
-all carry `staticFriction`, `dynamicFriction` and `bounciness` — each collider owns its
-own PhysX material, so two objects in the same scene can slide and bounce differently —
-plus `isTrigger` and `layer`. Shape stays on methods (`GetHalfExtents`/`SetHalfExtents`,
-`GetRadius`/`SetRadius`, `GetHalfHeight`/`SetHalfHeight`, `GetCenter`/`SetCenter`),
-since Lua has no vector type.
-
-`layer` is the collider's **collision layer**, an index into the project's layer list.
-Layer 0 is `"Default"` and always exists; the rest are **created on demand** from
-**View → Collision Layers** (`Add Layer`, rename inline, `x` to delete — with a
-confirmation, since deleting cannot be undone). Deleting a layer **compacts** the list:
-colliders using it fall back to layer 0, layers above it shift down one index, and the
-matrix loses that row and column. A script that hardcodes layer indices therefore points
-at a different layer after a deletion. The ceiling is **32** layers. Which layers actually
-collide is decided by a global, symmetric matrix:
-
-| Call | Does |
-| --- | --- |
-| `Physics.SetLayerCollision(a, b, enabled)` | turns the pair on/off, **both ways** — setting `(a,b)` also sets `(b,a)` |
-| `Physics.GetLayerCollision(a, b)` | `true` if layers `a` and `b` collide |
-
-The matrix starts **all `true`**, so a project that never touches it behaves exactly as
-before layers existed. A filtered pair produces neither contacts nor `OnTrigger*` events —
-the check runs before the trigger branch of the filter shader — and both the collider's
-`layer` and the matrix take effect **mid-play**: the underlying PhysX filter data of every
-live shape is rewritten on the spot. An index outside `0..31` **raises a Lua error** (it is
-not clamped: a silent clamp would leave the script filtering by a layer it never asked for).
-Lua accepts the full `0..31` range the core supports, even for layers not created in the
-editor yet; the Properties dropdown only offers the ones that exist.
-Outside Play Mode there is no PhysX scene, so `SetLayerCollision` is a no-op and
-`GetLayerCollision` answers `true`, the default matrix. Layer names and the matrix are
-saved per project in the `settings` section of `project.json`; the collider's own `layer`
-is runtime/editor state and is not serialised with the scene.
-
-Writing `isTrigger` goes through the PhysicsManager, not the collider alone, so the
-`OnTriggerEnter`/`OnTriggerStay`/`OnTriggerExit` bookkeeping stays in sync; outside Play
-Mode there is no live PhysX scene and the write is a silent no-op.
-
-### Collision callbacks
-
-`OnCollisionEnter`, `OnCollisionStay` and `OnCollisionExit` are the twins of the
-`OnTrigger*` callbacks for pairs that actually collide — that is, where **neither** collider
-is a trigger. They take the same single argument, the other `Entity`, and run at the same
-point in the frame (physics first, then `Update`).
-
-```lua
-function Bala:OnCollisionEnter(other)
-    Log.Info("hit " .. other.name)
-    DestroyGameObject(self.entity)
-end
-```
-
-Differences worth knowing:
-
-| | `OnTrigger*` | `OnCollision*` |
-| --- | --- | --- |
-| When | one collider has `isTrigger = true` | neither collider is a trigger |
-| Who gets called | the script on the **trigger's** object | the scripts on **both** objects |
-| Physical response | none, they pass through | PhysX resolves the impact |
-| `Stay` source | synthesised once per physics sub-step | native PhysX `TOUCH_PERSISTS` |
-
-The two are mutually exclusive per pair: a trigger generates no contacts at all, so marking
-`isTrigger = true` mid-play silently swaps which family of callbacks that collider gets.
-The collision layer matrix filters both alike — a pair turned off in
-`Physics.SetLayerCollision` produces neither. And the same "at least one Rigidbody" rule
-applies: two static colliders never form a pair, so neither family fires. `Physics.Raycast(origin,
-dir, maxDistance)` returns a table (`entity`, `point`, `normal`, `distance`) or `nil`, and
-`Physics.RaycastHit(...)` the boolean-only variant; both return `nil`/`false` outside Play.
-
-`Physics.RaycastAll(origin, dir, maxDistance, options)` is the multi-hit variant: instead of
-stopping at the first impact it collects **every** collider along the ray and returns a
-1-indexed array of hit tables, each with exactly the same shape as `Physics.Raycast`,
-**sorted by ascending `distance`**. It always returns a table — no hits (or outside Play,
-or bad arguments, which also log a warning) gives an **empty** table, never `nil`, so
-`#hits` and `ipairs` are always safe. It takes the same `options` as `Physics.Raycast`
-(`hitTriggers`, `static`, `dynamic`, `ignore`). The hit buffer holds at most **64** hits
-per call; if a ray crosses more, the extra ones are dropped (PhysX truncates arbitrarily,
-so what is dropped is *not* necessarily the farthest) and a `[Lua][WARN]` line is logged
-to the Log Console.
-
-```lua
-for i, hit in ipairs(Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100)) do
-    Log.Info(i .. ": " .. hit.entity.name .. " @ " .. hit.distance)  -- nearest first
-end
-```
-
-Three more read-only scene queries take the **same `options` table** as the raycasts
-(`hitTriggers`, `static`, `dynamic`, `ignore`) and, like them, do nothing outside Play:
-
-| Query | Returns |
-| --- | --- |
-| `Physics.SphereCast(origin, direction, radius, maxDistance, options)` | one hit table `{ entity, point, normal, distance }` — exactly the shape `Physics.Raycast` returns — or `nil` |
-| `Physics.OverlapSphere(center, radius, options)` | 1-indexed array of `Entity` (empty table, never `nil`) |
-| `Physics.OverlapBox(center, halfExtents, rotation, options)` | 1-indexed array of `Entity` (empty table, never `nil`) |
-
-`SphereCast` is the raycast "with thickness": a sphere of `radius` starts centred on
-`origin` and sweeps along `direction`, so it catches what a zero-width ray slips past —
-the usual way to move a character without clipping corners. If the sphere already overlaps
-something at `origin`, PhysX reports `distance = 0` and `point`/`normal` are meaningless.
-
-The two `Overlap*` queries answer "what is inside this volume **right now**", so they
-return the `Entity` list directly, not hit tables: an overlap has no point, no normal and
-no distance. Each entity appears **once** even if several of its shapes overlap, actors
-with no GameObject behind them are skipped, and the order is PhysX's, not sorted. In
-`OverlapBox`, `rotation` is an optional `Vec3` of Euler degrees (same convention as
-`transform.rotation`) and is told apart from `options` by its type, so
-`Physics.OverlapBox(c, h, { hitTriggers = true })` works with no rotation. Both cap at
-**64** overlaps per call and log a `[Lua][WARN]` when the buffer fills, same as
-`RaycastAll`.
-
-```lua
--- ¿hay suelo delante antes de saltar?
-local ground = Physics.SphereCast(self.entity.transform.position, Vec3(0,-1,0), 30, 200)
-if ground then Log.Info("suelo a " .. ground.distance) end
-
--- todo lo que hay dentro del radio de la explosión
-for _, e in ipairs(Physics.OverlapSphere(Vec3(0,0,0), 250, { hitTriggers = true })) do
-    Log.Info("alcanzado: " .. e.name)
-end
-```
-
-### Audio from Lua
-
-`GetComponent("AudioClip")` returns the GameObject's audio clip, if it has one — at most one
-per GameObject. `AddComponent("AudioClip", path)` adds one (2D and non-looping; use
-`SetIs3D`/`SetLoop` to change that).
-
-| Method | Notes |
-| --- | --- |
-| `Play()` / `Stop()` | `Play()` restarts the clip and cuts the previous voice of the same clip, like Unity's `AudioSource.Play()`. `Stop()` discards the playback position. |
-| `PlayOneShot()` | **Overlaps** instead of cutting: two footsteps or two shots in a row no longer clip each other. The voice it fires is out of reach afterwards — `Stop()`, `SetVolume()` and `IsPlaying()` do not see it, and it does not follow the object. Short clips only, never loops. |
-| `Pause()` / `Resume()` | Keep the playback position, unlike `Stop()`. |
-| `IsPlaying()` / `IsPaused()` | A **paused** voice still counts as playing, same as FMOD and Unity — `IsPaused()` is what tells them apart. |
-| `SetVolume(v)` / `GetVolume()` | `v` clamped to `[0, 1]`. |
-| `SetPitch(p)` / `GetPitch()` | `p` clamped to `[0.5, 2]`. 0 is not "silence" for FMOD, hence the floor. |
-| `SetLoop(b)` / `GetLoop()` | **Reloads the sound** (loop is baked into the FMOD mode) and cuts whatever was playing. It's configuration, not a per-frame call. |
-| `SetIs3D(b)` / `GetIs3D()` | Same caveat as `SetLoop`: it reloads the sound. |
-| `SetMinDistance(d)` / `GetMinDistance()` | 3D attenuation, clamped to `[0.1, 50]`. Full volume closer than this. |
-| `SetMaxDistance(d)` / `GetMaxDistance()` | Clamped to `[1, 1000]`, never below min. Cheap: no reload. |
-| `SetPlayOnAwake(b)` / `GetPlayOnAwake()` | Whether entering Play starts the clip automatically. |
-| `SetBus(name)` / `GetBus()` | Output bus: `"master"`, `"music"` or `"sfx"` (default). Only affects the **next** playback — the group is picked when the voice starts. An unknown name warns and changes nothing. |
-| `SetLoadMode(name)` | `"sample"` (decompressed in RAM, several voices at once) or `"stream"` (read from disk, tiny memory, but **one voice at a time**). Use stream for music, sample for effects. **Reloads the sound** and cuts whatever was playing. |
-| `GetLoadMode()` | `"sample"` or `"stream"`. |
-| `SetRolloff(name)` / `GetRolloff()` | Shape of the falloff between min and max distance: `"inverse"` (default, most realistic), `"linear"` (silent exactly at max distance) or `"linearSquare"`. **Reloads the sound.** |
-| `SetSpread(deg)` / `GetSpread()` | Stereo spread of a 3D source, `[0, 360]`. 0 keeps it a point. |
-| `SetStereoPan(p)` / `GetStereoPan()` | Manual pan `[-1, 1]`, **2D clips only** — in 3D the position decides it. |
-| `SetDopplerLevel(l)` / `GetDopplerLevel()` | How much relative velocity bends the pitch, `[0, 5]`. **0 by default**, and it only acts in Play: Edit Mode computes no velocities. |
-| `SetMute(b)` / `GetMute()` | Silence **without losing the volume** — unmuting restores what was there, no need for the script to remember it. Unlike `Pause`, this is serialized: an object can start out muted. A muted clip does not fire `PlayOneShot` either. |
-| `GetTime()` / `SetTime(sec)` | Playback position in seconds. `GetTime()` returns **-1** when nothing is playing — 0 would mean "at the start of the clip", which is a different answer. `SetTime` moves an ongoing playback; it does not start one. |
-| `GetPath()` | The asset path the clip was loaded from. |
-
-Global mixing lives in the `Audio` table, and is what a options menu would drive:
-
-| Function | Notes |
-| --- | --- |
-| `Audio.SetBusVolume(name, v)` | `name` is `"master"`, `"music"` or `"sfx"`; `v` is clamped to `[0, 1]`. Master scales the other two. |
-| `Audio.GetBusVolume(name)` | Returns 1.0 when there is no audio device, so a muted machine does not read as "volume at zero". |
-| `Audio.PlayClipAtPoint(path, x, y, z [, volume, pitch, bus])` | A 3D one-shot at a world position, with **no GameObject involved** — for an impact or an explosion whose emitter is destroyed in that same frame. The sound stays cached after first use. |
-| `Audio.Preload(path)` | Loads and keeps a clip without playing it. Worth calling in `Start()`: FMOD loads lazily, so the **first** `PlayClipAtPoint` of a new path is very likely inaudible. Idempotent. |
-
-| `Audio.SetBusEffect(bus, effect, amount)` | Hangs a DSP on a whole bus: `"lowPass"`, `"highPass"`, `"echo"` or `"reverb"`. `amount` is `[0, 1]` — the engine maps it to each effect's real units, so scripts never touch Hz or ms. Idempotent: calling it every frame adjusts the same DSP instead of stacking copies. |
-| `Audio.ClearBusEffect(bus [, effect])` | Removes one effect, or **all** of that bus when the second argument is omitted — which is what you want on leaving the water or closing the pause menu. |
-| `Audio.SetPaused(b)` / `Audio.IsPaused()` | Freezes **everything** that is playing, keeping positions — what a pause menu wants. It acts on the master group, so it also catches the loose `PlayOneShot` voices that cannot be reached any other way. Note the engine has no simulation pause: this silences audio, it does not stop the scene. |
-
-The three volumes are stored in `project.json` and restored when the project opens; the
-editor exposes them under **View → Master / Music / SFX Volume**. Effects are runtime-only
-and deliberately not serialized: they model a temporary game state, not a scene property.
-
-**Reverb zones** are spheres of ambience: inside one, everything is heard with that
-reverberation. Several per scene are fine — FMOD blends the overlapping ones and fades
-between min and max distance by itself. Add one in the inspector (**Add → Reverb Zone**,
-with its own wireframe gizmo) or from a script:
-
-| Method | Notes |
-| --- | --- |
-| `SetPreset(name)` / `GetPreset()` | One of FMOD's presets: `"cave"`, `"bathroom"`, `"hangar"`, `"underwater"`, `"forest"`… An unknown name warns and keeps the previous one. |
-| `SetMinDistance(d)` / `SetMaxDistance(d)` | Full reverb inside min, fading out to max, nothing beyond. The position comes from the Transform. |
-| `SetEnabled(b)` / `GetEnabled()` | Disabled keeps the zone allocated but silent, so toggling costs nothing. |
-
-```lua
--- Todo suena amortiguado bajo el agua, y la musica pierde graves en la pausa
-function Player:OnEnterWater()
-    Audio.SetBusEffect("master", "lowPass", 0.15)
-    Audio.SetBusEffect("master", "reverb", 0.4)
-end
-
-function Player:OnExitWater()
-    Audio.ClearBusEffect("master")   -- sin segundo argumento: todos
-end
-```
-
-`SetVolume`, `SetPitch`, `SetMinDistance` and `SetMaxDistance` reject non-finite values (a
-`0/0` in a script) and say so in the log instead of letting a `NaN` reach the scene file.
-
-A 3D clip **follows its GameObject**: the position is pushed to the live voice every frame,
-so attenuation and panning track a moving object.
-
-```lua
-function Engine:Start()
-    self.clip = self.entity:GetComponent("AudioClip")
-    if self.clip then
-        self.clip:SetIs3D(true)          -- configuración: fuera del Update
-        self.clip:SetMinDistance(5)
-        self.clip:SetMaxDistance(300)
-        self.clip:Play()
-    end
-end
-
-function Engine:Update(dt)
-    if not self.clip then return end
-    -- El tono sube con la velocidad; volumen y pitch sí se pueden mover por frame
-    self.clip:SetPitch(1.0 + self.throttle * 0.8)
-
-    if Input.IsKeyPressed(Key.P) then
-        if self.clip:IsPaused() then self.clip:Resume() else self.clip:Pause() end
-    end
-end
-```
-
-A scene with no **Audio Listener** still plays its clips: they are heard from the camera, and
-the log says so once per Play.
-
-### UI from Lua
-
-All fourteen UI components are reachable from any script, with the same reach as the
-Properties panel: read/write **every** field, add or remove the component, and —
-for the interactive ones — register Lua callbacks and read the resolved state.
-
-```lua
--- Scripts/BotonDemo.lua
-BotonDemo = {}
-
-function BotonDemo:Start()
-    local b = self.entity:GetButton()          -- nil if the GameObject has none
-    if b == nil then return end
-
-    b.text = "Play"                            -- scalars/strings/bools/enums: properties
-    b:SetSize(220, 48)                         -- vectors: methods (Lua has no vec2/vec4)
-    b:SetNormalColor(0.1, 0.5, 0.9, 1)
-    b.transition = UiButtonTransition.Animation
-
-    b:OnClick(function() print("click!") end)
-    b:OnDoubleClick(function() print("double!") end)
-end
-
-function BotonDemo:Update(dt)
-    if self.entity:GetButton():GetState() == UiButtonState.Hover then
-        self.entity:GetProgressBar().value = 1.0
-    end
-end
-```
-
-`entity:GetCanvas()/GetPanel()/GetImage()/GetText()/GetButton()/GetSlider()/GetCheckbox()/GetToggle()/GetScrollbar()/GetProgressBar()/GetInputField()/GetDropdown()/GetScrollView()/GetLayout()`
-return `nil` when the component is absent; the matching `AddCanvas()/AddPanel()/…` create it
-(returning the wrapper, and returning the existing one if it is already there) and
-`RemoveCanvas()/…` drop it. The same names also work through
-`GetComponent`/`AddComponent`/`RemoveComponent`. Enums travel as integer constant
-tables: `UiScaleMode`, `UiScreenMatch`, `UiCanvasRenderMode`, `UiBillboard`,
-`UiTextAlign`, `UiTextVAlign`, `UiTextOverflow`, `UiImageMode`, `UiFillDirection`,
-`UiFillOrigin`, `UiProgressFillDirection`, `UiSliderDirection`,
-`UiScrollbarDirection`, `UiInputContentType`, `UiButtonTransition`,
-`UiButtonState`, `UiLayoutMode`, `UiCrossAlign`.
-
-Setters always write to the **component**, never to the live canvas node — the
-per-frame sync dumps the component onto the node and would overwrite any direct
-write. Writing an atlas/font path loads nothing at that instant: resolving assets
-is the sync's job.
-
-Button callbacks are owned by the component, not by the canvas node, and the sync
-reinstalls them every time it rebuilds the canvas root (which happens whenever any
-widget is added to or removed from the scene) — so a handler registered once keeps
-firing. They are invalidated when the script is hot-reloaded and when Play stops:
-re-register in `Start`, which is where a reloaded script runs again. An error inside
-a callback is logged to the Log Console and never takes down the frame.
-
-In the editor the **mouse only reaches the UI in Play Mode and while the cursor is
-over the viewport image** (like Unity, a button does not light up in edit mode);
-coordinates are canvas pixels from the top-left corner of that image. With several
-screen canvases, the pointer goes to the **topmost one under the cursor** (last drawn
-wins) and the rest are told the pointer is away, so nothing stays stuck in hover;
-keyboard and gamepad go to whichever canvas holds focus, not to the one under the
-mouse. World-space canvases take no pointer input at all.
-
-API surface: `self.entity` (`GetTransform`, `GetComponent`/`AddComponent`/`RemoveComponent`,
-`GetCanvas`/`GetPanel`/`GetImage`/`GetText`/`GetButton`/`GetSlider`/`GetCheckbox`/`GetToggle`/`GetScrollbar`/`GetProgressBar`/`GetInputField`/`GetDropdown`/`GetScrollView`/`GetLayout` + `Add*`/`Remove*`,
-`GetParent`/`GetChildren`), `Transform` (position/rotation/scale, `Translate`/`Rotate`),
-`Scene` (`Find`/`CreateGameObject`/`Instantiate`/`Destroy`), the 14 UI components
-(incl. widget callbacks and button state), physics (the four colliders with shape,
-material and `isTrigger`, `Rigidbody` with `constraints` and forces, `Physics.Raycast`/`RaycastAll`/`SphereCast`/`OverlapSphere`/`OverlapBox`),
-`DonTopo.loadScene`,
-`Input` (`IsKeyDown`/`IsKeyPressed`/
-`IsKeyReleased`, `Key.*`), `Log.Info/Warn/Error` (+ `print`) routed to the Log Console. Scripts
-only run in Play Mode; a broken script never crashes the engine (compile/runtime errors are
-logged and the component is quarantined). See `Scripts/Rotator.lua` and `Scripts/Mover.lua`.
+Gameplay is scripted in **Lua 5.4** (sol2). Attach one or more `ScriptComponent`s to a
+GameObject via **Properties → Add → Script**; the scripts themselves are `.lua` files
+under `Scripts/`, one global table per file, with a Unity-style lifecycle
+(`Awake`/`Start`/`Update`/`FixedUpdate`/`LateUpdate`/`OnDestroy` plus the trigger and
+collision callbacks) and serializable properties that show up in Properties on their
+own.
+
+They are edited in the built-in **Script Editor** panel — multi-tab, Lua highlighting,
+a syntax check on save and an autocomplete popup over the whole API — or in any
+external editor: either way the running engine hot-reloads the file and keeps the
+property values.
+
+From a script you reach the entity and its transform, the scene graph, input, physics
+(the four colliders, `Rigidbody`, raycasts, sphere casts, overlaps and collision
+layers), audio (clips, the global mixer, reverb zones), the animator, the fourteen UI
+components and runtime scene switching with `DonTopo.loadScene`.
+
+**The complete API reference is in [`Scripts/README.md`](Scripts/README.md)** — every
+table and every method, with the caveats that are otherwise found out the hard way.
 
 ## Planned
 
 | System | Candidates |
 | --- | --- |
-| Post-processing | Motion blur, depth of field |
+| Post-processing | Depth of field, per-object motion vectors |
 | Platforms | Linux and macOS — the Vulkan backend already covers Linux on paper, but the window/build/tooling layer is Windows-only today; macOS would need a Metal backend |
 
 ## License

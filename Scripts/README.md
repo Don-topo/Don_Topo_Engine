@@ -35,6 +35,9 @@ function Rotator:OnDestroy() end
 | `OnTriggerEnter(other)` | Otro collider entra en este trigger |
 | `OnTriggerStay(other)` | Cada frame de física mientras siguen solapando |
 | `OnTriggerExit(other)` | El otro collider sale |
+| `OnCollisionEnter(other)` | Choque real (ningún collider es trigger): empieza el contacto |
+| `OnCollisionStay(other)` | Siguen en contacto |
+| `OnCollisionExit(other)` | Se separan |
 
 Todos son opcionales — solo se llaman los que el script define. Un error en
 cualquiera loguea el mensaje y **desactiva ese componente** (deja de recibir
@@ -62,6 +65,37 @@ loguear ahí inunda la consola enseguida.
 Ejemplos: `Scripts/TriggerProbe.lua` (cuenta entradas y salidas) y
 `Scripts/TriggerTest.lua` (destruye su GameObject en el Enter).
 
+### Colisiones
+
+`OnCollisionEnter`, `OnCollisionStay` y `OnCollisionExit` son los gemelos de los
+`OnTrigger*` para los pares que **chocan de verdad**, o sea aquellos en los que
+**ninguno** de los dos colliders es trigger. Reciben el mismo argumento único —la
+otra `Entity`— y corren en el mismo punto del frame (primero la física, luego los
+`Update`).
+
+```lua
+function Bala:OnCollisionEnter(other)
+    Log.Info("impacto contra " .. other.name)
+    DestroyGameObject(self.entity)
+end
+```
+
+Las diferencias que conviene tener claras:
+
+| | `OnTrigger*` | `OnCollision*` |
+| --- | --- | --- |
+| Cuándo | uno de los colliders tiene `isTrigger = true` | ninguno de los dos es trigger |
+| A quién se llama | al script del objeto **trigger** | a los scripts de **los dos** objetos |
+| Respuesta física | ninguna, se atraviesan | PhysX resuelve el impacto |
+| De dónde sale `Stay` | sintetizado, uno por sub-paso de física | `TOUCH_PERSISTS` nativo de PhysX |
+
+Las dos familias son **mutuamente excluyentes por par**: un trigger no genera
+contactos, así que poner `isTrigger = true` a media partida cambia en silencio qué
+familia recibe ese collider. La matriz de capas filtra las dos igual: un par apagado
+en `Physics.SetLayerCollision` no produce ninguna de las dos. Y sigue valiendo la
+regla de "al menos un Rigidbody": dos colliders estáticos no forman par, así que no
+salta ninguna de las dos familias.
+
 Scripts solo corren en **Play Mode**. `self.entity` (tipo `Entity`, ver abajo)
 se inyecta automáticamente en la instancia.
 
@@ -77,12 +111,35 @@ se serializan en la escena.
 Editar un `.lua` cargado mientras el motor corre lo recarga (~1s de polling),
 preservando los valores de props ya asignados.
 
+## Script Editor
+
+Doble clic en un `.lua` del Content Browser —o el botón **Edit** que hay junto al
+`ScriptComponent` en Properties— lo abre en el panel **Script Editor**: un editor de
+código multi-pestaña (ImGuiColorTextEdit, resaltado de Lua) acoplado junto al resto de
+paneles. `Ctrl+S` o el botón **Save** escriben el fichero a disco; el polling de hot
+reload recoge el cambio como el de cualquier edición externa. Cerrar una pestaña con
+cambios sin guardar pregunta guardar/descartar/cancelar.
+
+Guardar además pasa una **comprobación de sintaxis** (solo compila, no ejecuta): un
+error de sintaxis sale como marca en la línea culpable —con el mensaje al pasar el
+ratón— y desaparece sola en el siguiente guardado correcto. Mientras se teclea, un
+popup de **autocompletado** sugiere las palabras clave de Lua y la API de scripting
+(`Entity`, `Transform`, `Log`, `Input`, los colliders, `Scene`…) filtradas por prefijo:
+`Enter`/`Tab` acepta, `Escape` cierra y `Ctrl+Space` lo vuelve a abrir a mano.
+
+También se crea un script desde cero con **Properties → Add → Script → Nuevo
+Script...**, que genera un `.lua` a partir de una plantilla.
+
 ---
 
 ## Vec3
 
-Constructor `Vec3.new(x, y, z)` o `Vec3.new()` (cero). Campos `.x/.y/.z`.
+Constructor `Vec3.new(x, y, z)` o `Vec3.new()` (cero). La tabla también es
+**invocable**, así que `Vec3(x, y, z)` y `Vec3()` hacen exactamente lo mismo; los
+ejemplos de este documento usan las dos formas indistintamente. Campos `.x/.y/.z`.
 Operadores `+`, `-`, `* escalar`, `tostring`.
+
+No tiene `Length()`: la longitud se calcula a mano con `math.sqrt`.
 
 ## Log
 
@@ -103,9 +160,21 @@ que `Log.Info`).
 | `Input.IsKeyPressed(key)` | true solo en el frame que se apretó |
 | `Input.IsKeyReleased(key)` | true solo en el frame que se soltó |
 | `Input.IsMouseButtonDown(button)` | true mientras el botón está apretado |
+| `Input.IsActionDown(name)` | true mientras la **acción** está activa |
+| `Input.IsActionPressed(name)` | true solo en el frame en que se activó |
+| `Input.IsActionReleased(name)` | true solo en el frame en que se soltó |
 
 Tablas de constantes: `Key.Space/Enter/Escape/Tab/LeftShift/LeftControl/
 Up/Down/Left/Right/A..Z/Num0..Num9`, `MouseButton.Left/Right/Middle`.
+
+### Acciones con nombre
+
+Las tres `IsAction*` consultan las **acciones** que se definen en el panel **Input
+Actions**, no una tecla concreta: es la forma de que "saltar" sea la barra o el botón
+A del mando sin que el script sepa cuál. El nombre es el de la acción, tal cual.
+
+Un nombre desconocido devuelve `false` y avisa **una sola vez por nombre y sesión**:
+la llamada típica vive en `Update()` y un aviso por frame ahogaría el Log Console.
 
 ## Entity (`self.entity`)
 
@@ -116,7 +185,7 @@ Up/Down/Left/Right/A..Z/Num0..Num9`, `MouseButton.Left/Right/Middle`.
 | `entity:GetTransform()` | Devuelve `Transform` |
 | `entity:GetParent()` | `Entity` del padre, o `nil` si es raíz |
 | `entity:GetChildren()` | Tabla (array 1-based) de `Entity` hijos |
-| `entity:GetComponent(name)` | Devuelve el componente si existe, si no `nil`. `name`: `"BoxCollider"`, `"SphereCollider"`, `"CapsuleCollider"`, `"PlaneCollider"`, `"AudioClip"`, `"Rigidbody"`, `"Animator"`, `"Canvas"`, `"Button"`, `"Text"`, `"ProgressBar"`, `"Layout"`, `"Panel"`, `"Image"`, `"Slider"`, `"Checkbox"`, `"Toggle"`, `"Scrollbar"`, `"InputField"`, `"Dropdown"`, `"ScrollView"`, o `"Script:<NombreClase>"` pa acceder a la instancia de otro script en el mismo GameObject |
+| `entity:GetComponent(name)` | Devuelve el componente si existe, si no `nil`. `name`: `"BoxCollider"`, `"SphereCollider"`, `"CapsuleCollider"`, `"PlaneCollider"`, `"AudioClip"`, `"ReverbZone"`, `"Rigidbody"`, `"Animator"`, `"Canvas"`, `"Button"`, `"Text"`, `"ProgressBar"`, `"Layout"`, `"Panel"`, `"Image"`, `"Slider"`, `"Checkbox"`, `"Toggle"`, `"Scrollbar"`, `"InputField"`, `"Dropdown"`, `"ScrollView"`, o `"Script:<NombreClase>"` pa acceder a la instancia de otro script en el mismo GameObject |
 | `entity:AddComponent(name, arg?)` | Añade componente (mismos defaults que el botón Add del editor; colliders mutuamente excluyentes). `AudioClip` requiere `arg` = ruta del asset. Los de UI no se excluyen entre sí (caben todos en el mismo GameObject) y pedir uno que ya está devuelve el que hay. `"Script:<Nombre>"` añade el script (Awake/Start se disparan en el siguiente lifecycle update) |
 | `entity:RemoveComponent(name)` | Quita el componente (scripts se remueven diferido, al final del frame) |
 | `entity:GetCanvas()` / `GetButton()` / `GetText()` / `GetProgressBar()` / `GetLayout()` / `GetPanel()` / `GetImage()` / `GetSlider()` / `GetCheckbox()` / `GetToggle()` / `GetScrollbar()` / `GetInputField()` / `GetDropdown()` / `GetScrollView()` | El componente de UI, o `nil` si no lo tiene |
@@ -162,13 +231,20 @@ necesita resolución de colisión. Por eso un objeto puede disparar
 
 ## Physics
 
-Consultas de rayo contra la escena de física. Solo hay escena de física en Play:
-fuera de Play `Raycast` devuelve `nil` y `RaycastHit` devuelve `false`.
+Consultas contra la escena de física, y la matriz de capas de colisión. Solo hay
+escena de física en Play: fuera de Play `Raycast` devuelve `nil` y `RaycastHit`
+devuelve `false`.
 
 | Método | Descripción |
 | --- | --- |
 | `Physics.Raycast(origin, direction, maxDistance, options)` | Tabla con el impacto, o `nil` si no choca nada |
 | `Physics.RaycastHit(origin, direction, maxDistance, options)` | `true` / `false`; no construye la tabla del impacto |
+| `Physics.RaycastAll(origin, direction, maxDistance, options)` | **Todos** los impactos del rayo, en un array 1-based ordenado por `distance` ascendente |
+| `Physics.SphereCast(origin, direction, radius, maxDistance, options)` | Un impacto, con la misma forma que devuelve `Raycast`, o `nil` |
+| `Physics.OverlapSphere(center, radius, options)` | Array 1-based de `Entity` dentro de la esfera |
+| `Physics.OverlapBox(center, halfExtents, rotation, options)` | Array 1-based de `Entity` dentro de la caja |
+| `Physics.SetLayerCollision(a, b, enabled)` | Enciende/apaga el par de capas, **en los dos sentidos** |
+| `Physics.GetLayerCollision(a, b)` | `true` si las capas `a` y `b` colisionan |
 
 `origin` y `direction` son `Vec3`. `direction` se normaliza dentro, así que no
 hace falta pasarla unitaria; con longitud 0 la llamada devuelve `nil` sin
@@ -222,6 +298,92 @@ function Disparo:Update()
 end
 ```
 
+### RaycastAll — todos los impactos
+
+En vez de pararse en el primero, recoge **todos** los colliders que hay a lo largo
+del rayo y devuelve un array 1-based de tablas de impacto, cada una con exactamente
+los mismos campos que `Physics.Raycast`, **ordenadas por `distance` ascendente**.
+Acepta las mismas `options`.
+
+Siempre devuelve una tabla: sin impactos —o fuera de Play, o con argumentos malos,
+que además dejan un aviso en el Log— devuelve una tabla **vacía**, nunca `nil`, así
+que `#hits` e `ipairs` son siempre seguros. El buffer aguanta **64** impactos por
+llamada; si el rayo cruza más, los sobrantes se pierden (PhysX trunca de forma
+arbitraria, así que lo que se cae **no** es necesariamente lo más lejano) y sale un
+`[Lua][WARN]` en el Log Console.
+
+```lua
+for i, hit in ipairs(Physics.RaycastAll(Vec3(0,2,0), Vec3(0,0,1), 100)) do
+    Log.Info(i .. ": " .. hit.entity.name .. " @ " .. hit.distance)  -- el más cercano primero
+end
+```
+
+### SphereCast y los Overlap
+
+Las tres toman la **misma tabla `options`** que los raycasts (`hitTriggers`,
+`static`, `dynamic`, `ignore`) y, como ellos, no hacen nada fuera de Play.
+
+`SphereCast` es el raycast "con grosor": una esfera de `radius` arranca centrada en
+`origin` y barre a lo largo de `direction`, así que pilla lo que un rayo de anchura
+cero se salta — es la forma habitual de mover un personaje sin que se cuele por las
+esquinas. Si la esfera ya solapa algo en `origin`, PhysX reporta `distance = 0` y
+`point`/`normal` no significan nada.
+
+Los dos `Overlap*` contestan "qué hay dentro de este volumen **ahora mismo**", así
+que devuelven la lista de `Entity` directamente, no tablas de impacto: un solape no
+tiene punto, ni normal, ni distancia. Cada entity sale **una sola vez** aunque
+varias de sus shapes solapen, los actores que no cuelgan de ningún GameObject se
+saltan, y el orden es el de PhysX, sin ordenar. En `OverlapBox`, `rotation` es un
+`Vec3` **opcional** de grados euler (misma convención que `Transform:SetRotation`) y
+se distingue de `options` por su tipo, así que
+`Physics.OverlapBox(c, h, { hitTriggers = true })` funciona sin rotación. Las dos
+topan en **64** solapes por llamada y avisan con un `[Lua][WARN]` al llenarse, igual
+que `RaycastAll`.
+
+```lua
+-- ¿hay suelo delante antes de saltar?
+local suelo = Physics.SphereCast(self.entity:GetTransform():GetWorldPosition(),
+                                 Vec3(0,-1,0), 30, 200)
+if suelo then Log.Info("suelo a " .. suelo.distance) end
+
+-- todo lo que hay dentro del radio de la explosión
+for _, e in ipairs(Physics.OverlapSphere(Vec3(0,0,0), 250, { hitTriggers = true })) do
+    Log.Info("alcanzado: " .. e.name)
+end
+```
+
+### Capas de colisión
+
+`col.layer` es la **capa de colisión** del collider, un índice en la lista de capas
+del proyecto. La capa 0 es `"Default"` y siempre existe; las demás se **crean bajo
+demanda** desde **View → Collision Layers** (`Add Layer`, renombrar en línea, `x`
+para borrar — con confirmación, porque borrar no se puede deshacer). Borrar una capa
+**compacta** la lista: los colliders que la usaban caen a la capa 0, las capas por
+encima bajan un índice y la matriz pierde esa fila y esa columna. O sea que un script
+que cablee índices de capa apunta a otra capa distinta después de un borrado. El tope
+son **32** capas.
+
+Qué capas chocan de verdad lo decide una matriz global y **simétrica**:
+`Physics.SetLayerCollision(a, b, enabled)` pone el par en los dos sentidos —fijar
+`(a,b)` fija también `(b,a)`—, y `Physics.GetLayerCollision(a, b)` lo consulta.
+
+La matriz arranca **toda a `true`**, así que un proyecto que no la toque se comporta
+igual que antes de que existieran las capas. Un par filtrado no produce ni contactos
+ni eventos `OnTrigger*` —la comprobación va antes de la rama de trigger del filter
+shader— y tanto el `layer` del collider como la matriz surten efecto **a media
+partida**: la filter data de PhysX de todas las shapes vivas se reescribe en el acto.
+
+Un índice fuera de `0..31` **lanza un error de Lua**; no se recorta, porque un
+recorte silencioso dejaría al script filtrando por una capa que nunca pidió. Lua
+acepta el rango `0..31` completo que soporta el core, incluso capas que aún no se han
+creado en el editor; el desplegable de Properties solo ofrece las que existen.
+
+Fuera de Play no hay escena de PhysX, así que `SetLayerCollision` no hace nada y
+`GetLayerCollision` contesta `true`, que es la matriz por defecto. Los nombres de las
+capas y la matriz se guardan por proyecto en la sección `settings` del `project.json`;
+el `layer` del collider es estado de runtime/editor y **no** se serializa con la
+escena.
+
 ## DonTopo — cambio de escena en runtime
 
 | Método | Descripción |
@@ -268,12 +430,121 @@ recibir más callbacks hasta el hot reload o Stop.
 Obtenidos vía `entity:GetComponent("...Collider")`. Todos lanzan error Lua
 si el componente ya no existe en el GameObject.
 
-| Componente | Métodos |
+La **forma** va en métodos, porque en Lua no hay tipo vector:
+
+| Componente | Métodos de forma |
 | --- | --- |
-| `BoxCollider` | `GetUseGravity/SetUseGravity(bool)`, `GetHalfExtents/SetHalfExtents(Vec3)`, `GetCenter/SetCenter(Vec3)`, `IsDynamic()` |
-| `SphereCollider` | `GetUseGravity/SetUseGravity(bool)`, `GetRadius/SetRadius(float)`, `GetCenter/SetCenter(Vec3)`, `IsDynamic()` |
-| `CapsuleCollider` | `GetUseGravity/SetUseGravity(bool)`, `GetRadius/SetRadius(float)`, `GetHalfHeight/SetHalfHeight(float)`, `GetCenter/SetCenter(Vec3)`, `IsDynamic()` |
-| `PlaneCollider` | `GetCenter/SetCenter(Vec3)` (estático, sin gravedad/dinámica) |
+| `BoxCollider` | `GetHalfExtents/SetHalfExtents(Vec3)`, `GetCenter/SetCenter(Vec3)` |
+| `SphereCollider` | `GetRadius/SetRadius(float)`, `GetCenter/SetCenter(Vec3)` |
+| `CapsuleCollider` | `GetRadius/SetRadius(float)`, `GetHalfHeight/SetHalfHeight(float)`, `GetCenter/SetCenter(Vec3)` |
+| `PlaneCollider` | `GetCenter/SetCenter(Vec3)` |
+
+Los **cuatro** llevan además estas cinco propiedades (escalares, así que son campos,
+no métodos):
+
+| Propiedad | Descripción |
+| --- | --- |
+| `staticFriction` | Fricción estática. Cada collider tiene su **propio** material de PhysX, así que dos objetos de la misma escena pueden deslizar distinto |
+| `dynamicFriction` | Fricción dinámica |
+| `bounciness` | Restitución |
+| `isTrigger` | `true` = solapa sin colisionar y dispara los `OnTrigger*`. La escritura pasa por el PhysicsManager, no por el collider a secas, para que la contabilidad de `OnTriggerEnter`/`Stay`/`Exit` no se descuadre; fuera de Play no hay escena viva de PhysX y la escritura no hace nada, en silencio |
+| `layer` | Capa de colisión, `0..31` (ver [Capas de colisión](#capas-de-colisión)) |
+
+```lua
+local col = self.entity:GetComponent("BoxCollider")
+col.staticFriction  = 0.6
+col.dynamicFriction = 0.4
+col.bounciness      = 0.9
+col.isTrigger       = false
+col.layer           = 3
+```
+
+La **gravedad y la dinámica no viven aquí**: son del `Rigidbody`. Un collider sin
+Rigidbody es un actor estático.
+
+## Rigidbody
+
+`entity:GetComponent("Rigidbody")`. Los mismos campos que edita el panel Properties.
+
+| Propiedad | Descripción |
+| --- | --- |
+| `mass` | Masa |
+| `useGravity` | Si le afecta la gravedad de la escena |
+| `isKinematic` | Kinemático: lo mueves tú, la física no lo empuja |
+| `drag` / `angularDrag` | Amortiguación lineal y angular |
+| `constraints` | **Bitmask** de ejes congelados (ver `RigidbodyConstraints`) |
+| `ccd` | Detección continua de colisión |
+| `interpolate` | Suavizado visual entre pasos fijos |
+| `velocity` / `angularVelocity` | `Vec3`, lectura y escritura |
+
+| Método | Descripción |
+| --- | --- |
+| `rb:AddForce(x, y, z [, modo])` | Tres floats sueltos, **no** un `Vec3`. `modo` opcional, de `ForceMode` |
+| `rb:AddTorque(x, y, z [, modo])` | Ídem |
+| `rb:AddImpulse(x, y, z)` | Impulso instantáneo dependiente de la masa (equivale a `AddForce` con `ForceMode.Impulse`) |
+
+`RigidbodyConstraints` es una tabla de constantes enteras con `None`,
+`FreezePositionX/Y/Z` y `FreezeRotationX/Y/Z`, que se combinan con el OR bit a bit de
+Lua 5.4. Los bits que caen fuera de esos seis se **enmascaran** en vez de lanzar, así
+que un OR de más nunca tumba el script.
+
+`ForceMode` es el cuarto argumento opcional de `AddForce`/`AddTorque`:
+
+| Modo | Qué hace |
+| --- | --- |
+| `ForceMode.Force` | Continuo, depende de la masa y del dt. **Es el default**, o sea que las llamadas de tres argumentos se comportan exactamente igual que siempre |
+| `ForceMode.Acceleration` | Continuo, ignora la masa |
+| `ForceMode.Impulse` | Instantáneo, depende de la masa — lo mismo que `AddImpulse` |
+| `ForceMode.VelocityChange` | Instantáneo, ignora la masa |
+
+Un modo fuera de esos cuatro se avisa por el Log Console y **la fuerza se descarta**,
+en vez de lanzar: un índice mal calculado no debe tumbar la partida. Los valores no
+finitos (un `0/0` en un script) se rechazan igual, con su aviso.
+
+### ccd e interpolate
+
+Dos booleanos **independientes** entre sí y `false` por defecto, así que ninguna
+escena existente cambia de comportamiento.
+
+`ccd` enciende la detección continua de colisión: PhysX barre el recorrido del cuerpo
+dentro del paso fijo en vez de probar solo la pose inicial y la final, que es lo que
+evita que un proyectil rápido se cuele a través de geometría fina. Cuesta CPU, y
+**PhysX no lo soporta en cuerpos kinemáticos**: ponerlo ahí conserva tu intención,
+pero el flag solo llega al actor mientras el cuerpo no sea kinemático.
+
+`interpolate` suaviza la pose **visible** entre pasos fijos (el render va un paso de
+física por detrás). No cambia la simulación en absoluto, así que raycasts, overlaps y
+triggers siguen viendo la pose real.
+
+```lua
+function Bala:Start()
+    local rb = self.entity:GetComponent("Rigidbody")
+    rb.ccd = true             -- proyectil rápido: que no atraviese la pared
+    rb.interpolate = true     -- y que se vea suave entre pasos fijos
+end
+```
+
+```lua
+-- Scripts/Caja.lua
+Caja = {}
+
+function Caja:Start()
+    local rb = self.entity:GetComponent("Rigidbody")
+    rb.mass       = 3.0
+    rb.useGravity = true
+    rb.drag       = 0.1
+    rb.constraints = RigidbodyConstraints.FreezePositionY | RigidbodyConstraints.FreezeRotationX
+
+    -- las capas 3 y 7 dejan de chocar, en toda la escena y en los dos sentidos
+    Physics.SetLayerCollision(3, 7, false)
+end
+
+function Caja:Update(dt)
+    local rb = self.entity:GetComponent("Rigidbody")
+    rb:AddForce(0, 500 * dt, 0)
+    rb:AddForce(0, 8, 0, ForceMode.VelocityChange)   -- salto instantáneo, sin mirar la masa
+end
+```
 
 ## AudioClip
 
@@ -282,18 +553,60 @@ de un asset) o vía `entity:AddComponent("AudioClip", path)`.
 
 | Método | Descripción |
 | --- | --- |
-| `clip:Play()` | Reproduce en la posición mundial actual del GameObject |
-| `clip:Stop()` | Detiene la reproducción |
-| `clip:SetLoop(bool)` | Activa/desactiva loop (recarga el sonido si cambia) |
-| `clip:GetLoop()` | Estado actual de loop |
-| `clip:SetVolume(v)` | Volumen del clip, recortado a `[0, 1]`. Se MULTIPLICA con el del grupo SFX y el master, no los sustituye (esos dos sólo se ajustan desde C++, con `AudioManager::setSfxVolume`/`setMasterVolume`; el grupo BGM no interviene). Seguro de llamar en `Update`: sólo escribe en el canal. |
-| `clip:GetVolume()` | Volumen actual. |
-| `clip:SetPitch(p)` | Pitch del clip, recortado a `[0.5, 2]`. `2.0` es una octava arriba y el doble de velocidad. Seguro en `Update`. |
-| `clip:GetPitch()` | Pitch actual. |
-| `clip:SetIs3D(b)` | Cambia entre 2D y 3D. **Recarga el sonido y corta lo que esté sonando**: es configuración, no lo llames por frame. |
-| `clip:GetIs3D()` | `true` si el clip es 3D. |
+| `clip:Play()` / `clip:Stop()` | `Play()` reproduce en la posición mundial actual del GameObject: **reinicia** el clip y corta la voz anterior del mismo clip, como el `AudioSource.Play()` de Unity. `Stop()` descarta la posición de reproducción |
+| `clip:PlayOneShot()` | **Se solapa** en vez de cortar: dos pasos o dos disparos seguidos ya no se pisan. La voz que dispara queda fuera de alcance después — `Stop()`, `SetVolume()` e `IsPlaying()` no la ven, y no sigue al objeto. Solo para clips cortos, nunca en loop |
+| `clip:Pause()` / `clip:Resume()` | Conservan la posición de reproducción, al contrario que `Stop()` |
+| `clip:IsPlaying()` / `clip:IsPaused()` | Una voz **pausada sigue contando como reproduciéndose**, igual que en FMOD y en Unity: `IsPaused()` es lo que las distingue |
+| `clip:SetVolume(v)` / `GetVolume()` | Volumen del clip, recortado a `[0, 1]`. Se MULTIPLICA con el del bus y el master, no los sustituye. Seguro de llamar en `Update`: sólo escribe en el canal |
+| `clip:SetPitch(p)` / `GetPitch()` | Pitch, recortado a `[0.5, 2]`. `2.0` es una octava arriba y el doble de velocidad. Para FMOD el 0 no es "silencio", de ahí el suelo. Seguro en `Update` |
+| `clip:SetLoop(b)` / `GetLoop()` | **Recarga el sonido** (el loop va horneado en el modo de FMOD) y corta lo que estuviera sonando. Es configuración, no una llamada por frame |
+| `clip:SetIs3D(b)` / `GetIs3D()` | Cambia entre 2D y 3D. Mismo aviso que `SetLoop`: recarga el sonido |
+| `clip:SetMinDistance(d)` / `GetMinDistance()` | Atenuación 3D, recortado a `[0.1, 50]`. Más cerca que esto suena a volumen pleno |
+| `clip:SetMaxDistance(d)` / `GetMaxDistance()` | Recortado a `[1, 1000]`, nunca por debajo del min. Barato: no recarga |
+| `clip:SetPlayOnAwake(b)` / `GetPlayOnAwake()` | Si entrar en Play arranca el clip solo |
+| `clip:SetBus(name)` / `GetBus()` | Bus de salida: `"master"`, `"music"` o `"sfx"` (default). Solo afecta a la **siguiente** reproducción — el grupo se elige al arrancar la voz. Un nombre desconocido avisa y no cambia nada |
+| `clip:SetLoadMode(name)` / `GetLoadMode()` | `"sample"` (descomprimido en RAM, varias voces a la vez) o `"stream"` (se lee de disco, memoria mínima, pero **una sola voz cada vez**). Stream para música, sample para efectos. **Recarga el sonido** y corta lo que sonara |
+| `clip:SetRolloff(name)` / `GetRolloff()` | Forma de la caída entre min y max: `"inverse"` (default, la más realista), `"linear"` (silencio exacto en max) o `"linearSquare"`. **Recarga el sonido** |
+| `clip:SetSpread(deg)` / `GetSpread()` | Apertura estéreo de una fuente 3D, `[0, 360]`. Con 0 sigue siendo un punto |
+| `clip:SetStereoPan(p)` / `GetStereoPan()` | Pan manual `[-1, 1]`, **solo clips 2D** — en 3D lo decide la posición |
+| `clip:SetDopplerLevel(l)` / `GetDopplerLevel()` | Cuánto dobla el pitch la velocidad relativa, `[0, 5]`. **0 por defecto**, y solo actúa en Play: en Edit Mode no se calculan velocidades |
+| `clip:SetMute(b)` / `GetMute()` | Silencia **sin perder el volumen** — al desmutear vuelve el que había, sin que el script tenga que recordarlo. Al contrario que `Pause`, esto **sí** se serializa: un objeto puede empezar mudo. Un clip muteado tampoco dispara `PlayOneShot` |
+| `clip:GetTime()` / `clip:SetTime(sec)` | Posición de reproducción en segundos. `GetTime()` devuelve **-1** cuando no suena nada — 0 significaría "al principio del clip", que es otra respuesta. `SetTime` mueve una reproducción en curso; no arranca ninguna |
+| `clip:GetPath()` | La ruta del asset desde el que se cargó |
+
+`SetVolume`, `SetPitch`, `SetMinDistance` y `SetMaxDistance` rechazan los valores no
+finitos (un `0/0` en un script) y lo dicen en el Log, en vez de dejar que un `NaN`
+llegue al fichero de escena.
+
+Un clip 3D **sigue a su GameObject**: la posición se empuja a la voz viva cada frame,
+así que la atenuación y el paneo acompañan a un objeto en movimiento.
+
+Una escena sin **Audio Listener** reproduce sus clips igualmente: se oyen desde la
+cámara, y el log lo dice una vez por Play.
 
 Ver `Scripts/AudioFade.lua` para un fade completo.
+
+```lua
+function Motor:Start()
+    self.clip = self.entity:GetComponent("AudioClip")
+    if self.clip then
+        self.clip:SetIs3D(true)          -- configuración: fuera del Update
+        self.clip:SetMinDistance(5)
+        self.clip:SetMaxDistance(300)
+        self.clip:Play()
+    end
+end
+
+function Motor:Update(dt)
+    if not self.clip then return end
+    -- El tono sube con la velocidad; volumen y pitch sí se pueden mover por frame
+    self.clip:SetPitch(1.0 + self.acelerador * 0.8)
+
+    if Input.IsKeyPressed(Key.P) then
+        if self.clip:IsPaused() then self.clip:Resume() else self.clip:Pause() end
+    end
+end
+```
 
 ```lua
 -- Scripts/AudioTest.lua
@@ -311,12 +624,62 @@ function AudioTest:Update(dt)
 end
 ```
 
+## Audio — mezcla global
+
+La tabla `Audio` es lo que conduciría un menú de opciones. No cuelga de ningún
+GameObject.
+
+| Función | Descripción |
+| --- | --- |
+| `Audio.SetBusVolume(name, v)` | `name` es `"master"`, `"music"` o `"sfx"`; `v` se recorta a `[0, 1]`. El master escala a los otros dos |
+| `Audio.GetBusVolume(name)` | Devuelve 1.0 cuando no hay dispositivo de audio, para que una máquina muda no se lea como "volumen a cero" |
+| `Audio.PlayClipAtPoint(path, x, y, z [, volume, pitch, bus])` | Un one-shot 3D en una posición del mundo, **sin GameObject de por medio** — para un impacto o una explosión cuyo emisor muere en ese mismo frame. El sonido queda cacheado tras el primer uso |
+| `Audio.Preload(path)` | Carga y retiene un clip sin reproducirlo. Merece la pena llamarlo en `Start()`: FMOD carga en diferido, así que el **primer** `PlayClipAtPoint` de una ruta nueva es muy probable que no se oiga. Idempotente |
+| `Audio.SetBusEffect(bus, effect, amount)` | Cuelga un DSP de un bus entero: `"lowPass"`, `"highPass"`, `"echo"` o `"reverb"`. `amount` va de `[0, 1]` — el motor lo mapea a las unidades reales de cada efecto, así que los scripts nunca tocan Hz ni ms. Idempotente: llamarlo cada frame ajusta el mismo DSP en vez de apilar copias |
+| `Audio.ClearBusEffect(bus [, effect])` | Quita un efecto, o **todos** los de ese bus si se omite el segundo argumento — que es lo que quieres al salir del agua o al cerrar el menú de pausa |
+| `Audio.SetPaused(b)` / `Audio.IsPaused()` | Congela **todo** lo que esté sonando, conservando las posiciones: lo que quiere un menú de pausa. Actúa sobre el grupo master, así que también pilla las voces sueltas de `PlayOneShot`, que no se pueden alcanzar de ninguna otra forma. Ojo: el motor no tiene pausa de simulación — esto calla el audio, no para la escena |
+
+Los tres volúmenes se guardan en el `project.json` y se restauran al abrir el
+proyecto; el editor los expone en **View → Master / Music / SFX Volume**. Los efectos
+son solo de runtime y **a propósito no se serializan**: modelan un estado temporal
+del juego, no una propiedad de la escena.
+
+```lua
+-- Todo suena amortiguado bajo el agua
+function Player:OnEnterWater()
+    Audio.SetBusEffect("master", "lowPass", 0.15)
+    Audio.SetBusEffect("master", "reverb", 0.4)
+end
+
+function Player:OnExitWater()
+    Audio.ClearBusEffect("master")   -- sin segundo argumento: todos
+end
+```
+
+## ReverbZone
+
+Esferas de ambiente: dentro de una, todo se oye con esa reverberación. Varias por
+escena no dan problema — FMOD mezcla las que se solapan y funde entre min y max él
+solo. Se añade desde el inspector (**Add → Reverb Zone**, con su propio gizmo de
+alambre) o desde un script con `entity:AddComponent("ReverbZone")`; se obtiene con
+`entity:GetComponent("ReverbZone")`. Una por GameObject.
+
+| Método | Descripción |
+| --- | --- |
+| `z:SetPreset(name)` / `z:GetPreset()` | Uno de los presets de FMOD: `"cave"`, `"bathroom"`, `"hangar"`, `"underwater"`, `"forest"`… Un nombre desconocido avisa y conserva el anterior |
+| `z:SetMinDistance(d)` / `z:GetMinDistance()` | Reverberación plena dentro de min. Recortado a `[0.1, 5000]` |
+| `z:SetMaxDistance(d)` / `z:GetMaxDistance()` | Se va apagando hasta max, y más allá nada. Recortado a `[1, 10000]` |
+| `z:SetEnabled(b)` / `z:GetEnabled()` | Deshabilitada sigue reservada pero muda, así que encenderla y apagarla no cuesta nada |
+
+La posición sale del Transform del GameObject.
+
 ## Animator
 
 `entity:GetComponent("Animator")`. Los parámetros no son propiedades: se
 declaran en el grafo (panel Animator) y se leen y escriben **por nombre**. Un
 nombre no declarado, o de otro tipo, se ignora en el setter y devuelve el valor
-neutro en el getter — nunca lanza.
+neutro en el getter — nunca lanza por un **nombre** malo. Lo que sí lanza es que el
+GameObject haya perdido su Animator entre el `GetComponent` y la llamada.
 
 | Método | Descripción |
 | --- | --- |
@@ -397,9 +760,12 @@ end
 
 ## UI — Canvas / Button / Text / ProgressBar / Layout / Panel / Image / Slider / Checkbox / Toggle / Scrollbar / InputField / Dropdown / ScrollView
 
-Los siete se obtienen con `entity:GetCanvas()`, `entity:GetButton()`,
-`entity:GetText()`, `entity:GetProgressBar()`, `entity:GetLayout()`,
-`entity:GetPanel()` y `entity:GetImage()` (o `GetComponent("Button")`, etc.).
+Los catorce se obtienen con `entity:GetCanvas()`, `entity:GetPanel()`,
+`entity:GetImage()`, `entity:GetText()`, `entity:GetButton()`, `entity:GetSlider()`,
+`entity:GetCheckbox()`, `entity:GetToggle()`, `entity:GetScrollbar()`,
+`entity:GetProgressBar()`, `entity:GetInputField()`, `entity:GetDropdown()`,
+`entity:GetScrollView()` y `entity:GetLayout()` (o `GetComponent("Button")`, etc.),
+y los `Add*`/`Remove*` correspondientes los crean y los quitan.
 Devuelven `nil` si el componente no está; el wrapper resuelve el componente **en
 cada acceso**, así que usarlo después de quitarlo da error de Lua, no memoria
 liberada.
@@ -418,6 +784,7 @@ Los enums viajan como tablas de constantes enteras:
 | `UiCanvasRenderMode` | `ScreenSpace`, `World` |
 | `UiBillboard` | `None`, `YawOnly`, `Full` |
 | `UiTextAlign` | `Left`, `Center`, `Right`, `Justify` |
+| `UiTextVAlign` | `Top`, `Middle`, `Bottom` |
 | `UiTextOverflow` | `Overflow`, `Clip`, `Ellipsis` |
 | `UiProgressFillDirection` | `LeftToRight`, `RightToLeft`, `BottomToTop`, `TopToBottom` |
 | `UiButtonTransition` | `ColorTint`, `SpriteSwap`, `Animation` |
@@ -428,6 +795,8 @@ Los enums viajan como tablas de constantes enteras:
 | `UiSliderDirection` | `LeftToRight`, `RightToLeft`, `BottomToTop`, `TopToBottom` |
 | `UiScrollbarDirection` | `LeftToRight`, `RightToLeft`, `TopToBottom`, `BottomToTop` |
 | `UiInputContentType` | `Standard`, `IntegerNumber`, `DecimalNumber`, `Alphanumeric`, `Password` |
+| `UiLayoutMode` | `None`, `Horizontal`, `Vertical`, `Grid` |
+| `UiCrossAlign` | `Start`, `Center`, `End` |
 
 ### Canvas
 
@@ -879,16 +1248,26 @@ end
 
 ### Autocompletado en el Script Editor
 
-Toda esta API de UI está en la lista de identificadores del Script Editor: al
-teclear `Canvas.`, `Button:`, `Text.`, `ProgressBar:`, `Entity:Get`, o cualquiera
-de las siete tablas de enums (`UiScaleMode.`, `UiScreenMatch.`, `UiTextAlign.`,
-`UiTextOverflow.`, `UiProgressFillDirection.`, `UiButtonTransition.`,
-`UiButtonState.`) salen las sugerencias. Propiedades con `.`, métodos con `:`,
-igual que el resto de la lista.
+Toda esta API está en la lista de identificadores del Script Editor: al teclear
+`Canvas.`, `Button:`, `Text.`, `ProgressBar:`, `Entity:Get`, `Physics.`, `Audio.`,
+`ReverbZone:`, `Input.`, `RigidbodyConstraints.`, `ForceMode.` o cualquiera de las
+tablas de enums de UI (`UiScaleMode.`, `UiScreenMatch.`, `UiCanvasRenderMode.`,
+`UiBillboard.`, `UiTextAlign.`, `UiTextOverflow.`, `UiProgressFillDirection.`,
+`UiLayoutMode.`, `UiCrossAlign.`, `UiImageMode.`, `UiFillDirection.`,
+`UiFillOrigin.`, `UiSliderDirection.`, `UiScrollbarDirection.`,
+`UiInputContentType.`, `UiButtonTransition.`, `UiButtonState.`) salen las
+sugerencias. Propiedades con `.`, métodos con `:`, igual que el resto de la lista.
+
+La única tabla de constantes que existe en el binding pero **no** está en la lista
+del autocompletado es `UiTextVAlign`.
 
 ## Ejemplos existentes
 
 `Scripts/Mover.lua` (Input + Transform), `Scripts/Rotator.lua` (rotación
 continua), `Scripts/AudioTest.lua` (AudioClip Play/Stop/Loop),
-`Scripts/AudioFade.lua` (AudioClip SetVolume/GetVolume por frame), `Scripts/Test.lua`
-(plantilla vacía).
+`Scripts/AudioFade.lua` (AudioClip SetVolume/GetVolume por frame),
+`Scripts/TriggerProbe.lua` (cuenta entradas y salidas de un trigger),
+`Scripts/TriggerTest.lua` (se autodestruye en el Enter),
+`Scripts/PushMe.lua` (AddForce/AddImpulse sobre el Rigidbody, o sea la forma que
+**sí** colisiona), `Scripts/DeleteGameObject.lua` (autodestrucción en `Start`),
+`Scripts/Test.lua` (plantilla vacía).
