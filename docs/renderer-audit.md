@@ -1,5 +1,30 @@
 # Auditoría del módulo Renderer
 
+> **CERRADA el 2026-09-03. Esto no es una lista de tareas.**
+>
+> Las 79 filas de hallazgo y las 22 de propuesta están todas marcadas: hechas,
+> cerradas, o **descartadas por medición**. No queda ninguna abierta.
+>
+> Se conserva por lo que descarta, no por lo que propone. Los callejones sin
+> salida ya recorridos —partir el `Renderer` no acelera la compilación (15→6
+> ficheros, 27→**28** s, H8); los pases de D3D12 no ganan nada siendo clases (ese
+> `.cpp` compila entero en 10 s, H37); el overhead por-draw no es rentable
+> (P14)— no tienen otro sitio donde vivir: los comentarios del código explican lo
+> que hay, nunca lo que se rechazó y por qué. Antes de rehacer algo de aquí,
+> **léase primero la medición que ya lo tumbó**.
+>
+> **Los `fichero:línea` están congelados en la fecha de cada fila y ya no
+> cuadran.** `Renderer.cpp` pasó de 5472 a 5353 líneas al cerrar H8, y muchas
+> filas son de agosto. Sirven para saber de qué se hablaba, no para navegar:
+> búsquese por nombre.
+>
+> **Un patrón que se repitió lo bastante como para desconfiar del enunciado de
+> cualquier fila**: al ir a hacerla, el motivo declarado resultaba ser otro
+> (H8, H14, H15, H37, H72) o el recuento no cuadraba (H58 decía 39 controles y
+> eran 41; H9, H10, H12, H13, H57 igual) —siempre subestimando los duplicados y
+> sobrestimando el volumen—. Cada fila lleva escrito lo que se encontró de
+> verdad, que rara vez es lo que decía al abrirse. Medir antes de tocar.
+
 Fecha: 2026-08-28. Rama: `main` (`e906cd2`).
 
 Alcance leído: `engine/src/Renderer/**`, `engine/include/DonTopo/Renderer/**` y los
