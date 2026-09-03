@@ -630,18 +630,43 @@ silently pointing at the wrong animation).
 ## Performance Panel
 
 Open it with **View → Performance**. It is an editor-only panel — nothing in it links into
-`DonTopoCore` or the exported runtime — and it monitors four things live:
+`DonTopoCore` or the exported runtime — and it monitors, live, in collapsible sections:
 
-- **CPU**: framerate and frame time in ms, with a 120-sample history (`PlotLines` for the
-  frame time, `PlotHistogram` for the FPS).
+- **Summary** (always visible): framerate, CPU frame time, and the verdict on what paces the
+  frame — *CPU-bound* or *GPU-bound*, from the average CPU time against the GPU total. Under
+  Vsync the comparison is meaningless (everything lands on the refresh interval) and the panel
+  says so instead of printing a verdict.
+- **CPU (history)**: a 120-sample history (`PlotLines` for the frame time, `PlotHistogram` for
+  the FPS) plus min / average / max in ms and the **1% low** in FPS — the 99th-percentile
+  frame, which is the number that exposes a micro-stutter the average swallows.
 - **GPU per pass**: shadows, scene, AO, Forward+ culling, SSR, fog, motion blur, bloom and
   anti-aliasing, in ms and as a share of the total render time (everything but the UI pass).
-  The same numbers also appear per effect in the Rendering panel, next to the sliders that
-  move them.
+  The share column is a proportional bar, and the most expensive pass of the frame is marked
+  in the panel's warning orange. Rows are listed in pipeline order — that order is information
+  in itself — and the `ms` column is sortable if you would rather rank them. The same numbers
+  also appear per effect in the Rendering panel, next to the sliders that move them.
 - **Draw counters**: draw calls, instances and culled objects of the scene pass (instanced
-  statics + skinned).
+  statics + skinned), plus GPU object slots against their capacity.
+- **Scene**: objects in the hierarchy and how many carry a mesh or a light; scene lights
+  against `MAX_LIGHTS` (past that they neither light nor cast — it warns); Forward+ average
+  lights per cell and overflowed cells when the culling is on; reflection probes, their VRAM
+  per probe *as reported by the active backend* and the last bake time.
+- **Active configuration**: internal render resolution and megapixels, output size and the
+  SSAA factor when they differ, AA mode (with the MSAA sample count), shadow map side and
+  distance, requested present mode, and a warning while wireframe is on. It is read-only
+  context — you change all of it in the Rendering panel — but without it a pass timing cannot
+  be compared against the one you took yesterday.
 - **Process**: RAM working set and peak, CPU usage of the process, and VRAM in use against
   the budget the system grants it.
+
+Everything in the Scene and Active configuration sections comes from getters the renderer and
+the scene already exposed (`probeCount`, `sceneLightTotal`, `forwardPlusOverflowCells`,
+`renderWidth`/`uiWidth`, …); the panel adds no measurement of its own for them, and the derived
+statistics — min/avg/max, 1% low, the CPU-versus-GPU delta — are computed from the same 120
+samples the graph already plots. The scene walk that counts objects and lights runs only while
+the panel is open. Warning orange (`1.0, 0.6, 0.2`) means the same thing everywhere in the
+panel: the instance-SSBO overflow, slots or VRAM at 90% of capacity, lights past `MAX_LIGHTS`,
+overflowed Forward+ cells, wireframe mode, and the hottest pass.
 
 The GPU times come from timestamp queries written into the command buffer that is
 already being recorded — no extra pass, pipeline or render target. Results are read from the
@@ -663,8 +688,24 @@ query reset, no timestamp and touches no counter — the frame is byte-for-byte 
 recorded before the feature existed. Pending query slots are invalidated on the way out, so
 reopening never reads a pool that was left unreset.
 
-RAM, CPU and VRAM are the expensive reads, so they are cached and refreshed at ~2 Hz rather
-than once per frame. VRAM comes from DXGI (`IDXGIAdapter3::QueryVideoMemoryInfo`, adapter 0),
+**One clock drives the whole panel.** Every number and bar in it — framerate, per-pass GPU times,
+draw counters, scene and probe counts, RAM/CPU/VRAM — is frozen and refreshed once a second, on
+the same tick. A figure that changes 60 times a second cannot be read, and a bar that dances
+hides the very comparison it exists for. The graphs advance on that tick too — one point per
+second, so 120 points are two minutes of trend instead of two seconds of blur. Each point is the
+**worst** frame of its second on the ms curve (a stutter lasting three frames vanishes from an
+average of sixty, and that stutter is what you are looking for) and the average FPS on the
+histogram, where a worst case would read as a rate it never ran at.
+
+Two histories are kept, and the difference matters: the plotted one is per second, but min /
+average / max and the **1% low** come from a separate per-frame ring — the 1% low *is* the worst
+individual frame, so it cannot be computed from anything coarser. Nothing about the
+*measurement* slows down either: the GPU capture still runs every frame, and what ticks at 1 Hz
+is the readout. That same tick is the window of the process CPU percentage, computed as a
+difference between two samples, so it averages over a full second.
+
+RAM, CPU and VRAM are the expensive reads, and they ride the same tick rather than being polled
+once per frame. VRAM comes from DXGI (`IDXGIAdapter3::QueryVideoMemoryInfo`, adapter 0),
 which reports the usage of *this process*: Vulkan cannot report it without
 `VK_EXT_memory_budget`, and enabling that extension would mean touching device creation in
 Core for a number only the editor displays.
