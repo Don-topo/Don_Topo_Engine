@@ -3853,7 +3853,7 @@ namespace DonTopo::ScriptBindings
             // Global estilo Unity Destroy(): destruye el GameObject y todo su
             // subtree durante Play. Misma cola diferida que Scene.Destroy — el
             // teardown (OnDestroy en scripts, liberación de GPU vía
-            // m_onDestroying, destructor de GameObject que suelta colliders/
+            // Scene::setOnNodeRemoved, destructor de GameObject que suelta colliders/
             // audio y lo saca de los managers) lo procesa el lifecycle al final
             // del frame. Diferido a propósito: destruir en mitad de Update
             // rompería la iteración del lifecycle. deref valida que la entity

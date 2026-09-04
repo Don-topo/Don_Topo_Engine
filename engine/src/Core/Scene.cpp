@@ -2655,6 +2655,12 @@ namespace DonTopo
     {
         if (!node || !node->parent) return;
 
+        // ANTES del erase, no después: el oyente recorre el subárbol para
+        // soltar sus ranuras de GPU, y para eso tiene que seguir existiendo.
+        // Va tras la guarda de arriba a propósito — de lo que no se borra no se
+        // avisa, o el Renderer soltaría las ranuras de una escena viva.
+        if (m_onNodeRemoved) m_onNodeRemoved(node);
+
         auto& siblings = node->parent->children;
         siblings.erase(
             std::remove_if(siblings.begin(), siblings.end(),

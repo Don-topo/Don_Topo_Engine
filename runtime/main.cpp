@@ -461,7 +461,9 @@ int main(int argc, char** argv)
                 else                n->staticRenderIndex  = renderer.addStaticMesh(*n->getMesh());
             });
         });
-        scriptManager.setOnDestroying([&renderer](DonTopo::GameObject* go) {
+        // Lo avisa Scene y no el ScriptManager: en el runtime solo borra Lua,
+        // pero el contrato es el mismo que en el editor y vive en un sitio.
+        scene.setOnNodeRemoved([&renderer](DonTopo::GameObject* go) {
             renderer.removeGameObject(go);
         });
         // Scripts/ va dentro del paquete, junto al ejecutable — a diferencia

@@ -543,7 +543,8 @@ namespace DonTopo
                 for (auto& s : n->getScripts()) subtreeScripts.push_back(s.get());
             });
             for (ScriptComponent* s : subtreeScripts) callOnDestroy(*s);
-            if (m_onDestroying) m_onDestroying(go);
+            // La GPU y la seleccion las suelta ahora Scene::removeGameObject via
+            // su oyente: un solo sitio para los tres llamantes.
             m_scene->removeGameObject(go);
             rebuildAliveSet();
         }

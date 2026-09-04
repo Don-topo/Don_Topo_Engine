@@ -194,8 +194,7 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
 
         ctx.pushLog("GameObject '" + target->name + "' eliminado");
 
-        // Snapshot pa Undo, tomado ANTES de tocar nada (onDelete libera GPU
-        // pero no cambia los datos de Scene que subtreeToJson serializa).
+        // Snapshot pa Undo, tomado ANTES de tocar nada.
         bool canUndoDelete = ctx.scene && ctx.physics && ctx.audio && ctx.renderer && target->parent;
         uint64_t parentId = 0;
         size_t index = 0;
@@ -211,8 +210,10 @@ void ScenePanel::draw(EditorContext& ctx, GameObject* sceneRoot)
             snapshot = ctx.scene->subtreeToJson(target);
         }
 
-        if (ctx.onDelete)
-            ctx.onDelete(target);
+        // La GPU la suelta ahora Scene::removeGameObject vía su oyente, más
+        // abajo. Antes se liberaba AQUÍ, o sea antes de correr los OnDestroy de
+        // Lua: el objeto seguía vivo para el script pero ya sin sus recursos.
+        // Ahora se libera después, que es el orden correcto.
 
         // Sin esto, borrar desde el editor en Play salta OnDestroy y deja
         // punteros muertos en el alive-set hasta el siguiente update

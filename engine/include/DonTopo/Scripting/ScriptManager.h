@@ -99,7 +99,6 @@ public:
     void rebuildAliveSet();
 
     void setOnInstantiated(std::function<void(GameObject*)> cb) { m_onInstantiated = std::move(cb); }
-    void setOnDestroying(std::function<void(GameObject*)> cb)   { m_onDestroying = std::move(cb); }
     // Borrado diferido — procesado al final del frame del lifecycle.
     void queueDestroy(GameObject* go) { m_destroyQueue.push_back(go); }
     // Crea la tabla instancia del comp (defaults+overrides), inyecta
@@ -203,7 +202,6 @@ private:
 
     std::vector<GameObject*> m_destroyQueue;
     std::function<void(GameObject*)> m_onInstantiated;
-    std::function<void(GameObject*)> m_onDestroying;
 };
 
 } // namespace DonTopo

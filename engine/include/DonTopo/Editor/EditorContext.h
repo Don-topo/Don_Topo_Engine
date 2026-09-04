@@ -46,7 +46,9 @@ struct EditorContext {
         if (pushLog)
             pushLog("[" + module + "] " + message);
     }
-    std::function<void(GameObject*)>          onDelete;
+    // Aquí vivía onDelete, que servía para soltar la GPU del subárbol antes de
+    // borrarlo. Se fue: ahora avisa Scene::setOnNodeRemoved, que cubre a los
+    // tres llamantes de removeGameObject en vez de solo a este panel.
     std::function<void(const glm::vec3&)>     onAxisSelected;
     // Abre path en el Script Editor (EditorUI::m_scriptEditor, fuera del
     // Consumes original de PropertiesPanel — Task 5 añadió este callback

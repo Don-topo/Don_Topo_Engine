@@ -90,7 +90,6 @@ public:
     // Notificado justo antes de desenganchar node de su padre (node sigue
     // siendo válido y su subárbol completo también), para que el dueño
     // pueda liberar recursos externos (meshes/texturas en GPU) asociados.
-    void setOnDelete(std::function<void(GameObject*)> cb) { m_onDelete = std::move(cb); }
     // Llamado con el eje mundo (1,0,0 / 0,1,0 / 0,0,1) al clicar la bola del axis gizmo.
     void setOnAxisSelected(std::function<void(const glm::vec3&)> cb) { m_onAxisSelected = std::move(cb); }
     // Puntero no-propietario: PhysicsManager vive en main.cpp, fuera del
@@ -323,7 +322,6 @@ private:
 
     // Scene selection
     GameObject* m_selected = nullptr;
-    std::function<void(GameObject*)> m_onDelete;
     std::function<void(const glm::vec3&)> m_onAxisSelected;
 
     // Con qué API se arrancó la interfaz. Decide qué backend de ImGui se usa

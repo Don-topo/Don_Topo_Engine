@@ -372,6 +372,88 @@ static void test_single_warning_has_no_suffix(PhysicsManager& pm, AudioManager& 
 // anterior en vez de apilar los suyos encima. Sin el clear, m_warnings crecía
 // durante toda la sesión de editor y lastWarnings() dejaba de significar "la
 // última operación", que es lo que su contrato promete.
+// --- P8 de docs/core-audit.md: el aviso de "este nodo se va" ---
+//
+// `removeGameObject` llevaba una obligación del llamante que el header NO
+// documentaba: soltar antes los recursos de GPU del subárbol. No es que
+// estuviera sin cumplir — los tres llamantes la cumplían — es que estaba
+// implementada TRES veces (EditorUI::onDelete, ScriptManager::onDestroying y a
+// pelo en DeleteGameObjectCommand), y un cuarto llamante habría necesitado una
+// cuarta. Ahora avisa Scene y hay un solo sitio.
+//
+// Lo que NO se puede probar aquí es la punta del hilo (que la ranura del pool se
+// libere de verdad): haría falta un EditorRenderer, que son 58 virtuales puras.
+// Eso se verifica en GUI. Aquí se prueba el mecanismo.
+static void test_remove_notifies_listener()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Victima");
+    const uint64_t id = go->id;
+
+    int veces = 0;
+    uint64_t avisadoId = 0;
+    scene.setOnNodeRemoved([&](GameObject* n) { ++veces; avisadoId = n->id; });
+
+    scene.removeGameObject(go);
+    CHECK(veces == 1);
+    CHECK(avisadoId == id);
+    CHECK(scene.findById(id) == nullptr);
+}
+
+// El aviso llega ANTES de soltarlo del árbol: quien escucha tiene que poder
+// recorrer el subárbol entero y leer sus índices de GPU, que es exactamente lo
+// que hace Renderer::removeGameObject. Avisar después dejaría al oyente con un
+// puntero a un objeto ya destruido.
+static void test_remove_notifies_before_destroying()
+{
+    Scene scene("Test");
+    GameObject* padre = scene.addGameObject("Padre");
+    GameObject* hijo  = scene.addGameObject("Hijo", padre);
+    hijo->staticRenderIndex = 7;
+
+    int nodosVistos = 0;
+    int indiceLeido = -1;
+    bool seguiaEnElArbol = false;
+    scene.setOnNodeRemoved([&](GameObject* n) {
+        n->traverse([&](GameObject* m) {
+            ++nodosVistos;
+            if (m->staticRenderIndex >= 0) indiceLeido = m->staticRenderIndex;
+        });
+        // Y el nodo sigue colgando de su padre: el aviso es previo al erase.
+        seguiaEnElArbol = (n->parent != nullptr) && !n->parent->children.empty();
+    });
+
+    scene.removeGameObject(padre);
+    CHECK(nodosVistos == 2);        // el subárbol entero, no solo la raíz
+    CHECK(indiceLeido == 7);        // los índices todavía se pueden leer
+    CHECK(seguiaEnElArbol);
+    CHECK(scene.getRoot().children.empty());
+}
+
+// Sin oyente no pasa nada: los tests y cualquier host que no lo cablee siguen
+// funcionando igual.
+static void test_remove_without_listener_is_fine()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Victima");
+    scene.removeGameObject(go);
+    CHECK(scene.getRoot().children.empty());
+}
+
+// Y no avisa de lo que no se va: un nodo nulo o la raíz (que no cuelga de
+// nadie) salen por la guarda de arriba sin tocar el oyente. Sin esto, el
+// Renderer soltaría las ranuras de una escena que sigue viva.
+static void test_remove_does_not_notify_for_non_removals()
+{
+    Scene scene("Test");
+    int veces = 0;
+    scene.setOnNodeRemoved([&](GameObject*) { ++veces; });
+
+    scene.removeGameObject(nullptr);
+    scene.removeGameObject(&scene.getRoot());
+    CHECK(veces == 0);
+}
+
 static void test_insert_from_json_resets_warnings(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -7339,6 +7421,10 @@ int main()
     test_load_with_one_camera_has_no_warnings(pm, am);
     test_repeated_warnings_are_collapsed(pm, am);
     test_single_warning_has_no_suffix(pm, am);
+    test_remove_notifies_listener();
+    test_remove_notifies_before_destroying();
+    test_remove_without_listener_is_fine();
+    test_remove_does_not_notify_for_non_removals();
     test_insert_from_json_resets_warnings(pm, am);
     test_corrupt_id_does_not_lose_scene(pm, am);
     test_missing_children_does_not_lose_scene(pm, am);

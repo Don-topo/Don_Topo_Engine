@@ -318,7 +318,10 @@ int main()
                         n->staticRenderIndex = d3d12.addStaticMesh(*n->getMesh());
                 });
             });
-            d3dScripts.setOnDestroying([&d3d12, &editor](DonTopo::GameObject* go) {
+            // Un solo sitio para "este nodo se va": lo avisa Scene, así que
+            // cubre los tres caminos (panel Scene, Undo de Delete y
+            // Scene.Destroy de Lua) en vez de solo el de los scripts.
+            d3dScene.setOnNodeRemoved([&d3d12, &editor](DonTopo::GameObject* go) {
                 // La selección primero: si el editor se queda apuntando a lo que
                 // se va a liberar, crashea al dibujar Properties el frame
                 // siguiente.
@@ -801,7 +804,10 @@ int main()
                 else                n->staticRenderIndex  = renderer.addStaticMesh(*n->getMesh());
             });
         });
-        scriptManager.setOnDestroying([&renderer, &editor](DonTopo::GameObject* go) {
+        // Un solo sitio para "este nodo se va": lo avisa Scene, así que cubre
+        // los tres caminos (panel Scene, Undo de Delete y Scene.Destroy de Lua)
+        // en vez de solo el de los scripts.
+        scene.setOnNodeRemoved([&renderer, &editor](DonTopo::GameObject* go) {
             // Suelta la selección del editor si apunta a go o su subtree ANTES de
             // liberar nada — si no, m_selected queda colgando y el editor crashea
             // al dibujar Properties/gizmo el frame siguiente.

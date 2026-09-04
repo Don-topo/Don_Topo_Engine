@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -32,7 +33,34 @@ namespace DonTopo
             const GameObject& getRoot() const { return m_root; }
 
             GameObject* addGameObject(const std::string& name, GameObject* parent = nullptr);
+
+            // Saca node del árbol y lo destruye con todo su subárbol. No hace
+            // nada si node es nulo o es la raíz (la raíz no cuelga de nadie).
+            //
+            // Avisa a setOnNodeRemoved ANTES de soltarlo: es ahí donde el host
+            // libera lo que Core no conoce (las ranuras de GPU del subárbol y,
+            // en el editor, la selección). Ver el comentario de ese setter para
+            // por qué el aviso vive aquí y no en cada llamante.
             void removeGameObject(GameObject* node);
+
+            // Se llama justo ANTES de destruir un nodo en removeGameObject, con
+            // el subárbol todavía entero y recorrible: quien escucha necesita
+            // leer los staticRenderIndex/skinnedRenderIndex de TODOS sus
+            // descendientes, no solo los de la raíz.
+            //
+            // Existe porque esa obligación —"acuérdate de soltar la GPU antes de
+            // borrar"— estaba implementada TRES veces (EditorUI::onDelete,
+            // ScriptManager::onDestroying y a pelo en DeleteGameObjectCommand) y
+            // un cuarto llamante habría necesitado una cuarta. Los tres la
+            // cumplían; el problema no era que fallara, es que era olvidable.
+            //
+            // Core no conoce el Renderer, así que el cableado es del host (ver
+            // los main.cpp del sandbox y del runtime). Sin oyente, borrar
+            // funciona igual: los tests no lo ponen.
+            void setOnNodeRemoved(std::function<void(GameObject*)> cb)
+            {
+                m_onNodeRemoved = std::move(cb);
+            }
 
             // Mueve node para que cuelgue de newParent (nullptr = la raíz de la
             // escena), insertándolo en la posición index de los hijos del
@@ -257,5 +285,6 @@ namespace DonTopo
             void collapseWarnings();
 
             std::vector<std::string> m_warnings;
+            std::function<void(GameObject*)> m_onNodeRemoved;
     };
 }

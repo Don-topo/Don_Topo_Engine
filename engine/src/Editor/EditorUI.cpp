@@ -197,13 +197,11 @@ EditorUI::EditorUI()
     , m_scriptEditor(std::make_unique<ScriptEditorPanel>())
 {
     m_scriptEditor->setLogCallback([this](const std::string& msg) { m_logPanel.push(msg); });
-    // Liberar los recursos GPU del subárbol justo antes de desengancharlo: lo
-    // hacía el Renderer al fijar la raíz de escena, y ahora lo cablea el
-    // editor. El lambda se ejecuta mucho después, con el backend ya puesto.
-    setOnDelete([this](GameObject* node) {
-        if (m_renderer)
-            m_renderer->removeGameObject(node);
-    });
+    // Aquí se cableaba onDelete para soltar la GPU del subárbol antes de
+    // borrarlo. Ya no hace falta: lo avisa Scene::setOnNodeRemoved, que lo
+    // cablea el host una sola vez y cubre a los tres llamantes de
+    // removeGameObject —este panel, el comando de Undo y Scene.Destroy de Lua—
+    // en vez de solo a uno.
 }
 
 EditorUI::~EditorUI() = default;
@@ -938,7 +936,6 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
         m_scriptManager,
         &m_undoHistory,
         [this](const std::string& msg) { m_logPanel.push(msg); },
-        m_onDelete,
         m_onAxisSelected,
         [this](const std::filesystem::path& p) {
             // Los .lua registrados viven en la carpeta Scripts/ que vigila
@@ -1415,7 +1412,6 @@ void EditorUI::focusSelected(Camera& camera)
         m_scriptManager,
         &m_undoHistory,
         [this](const std::string& msg) { m_logPanel.push(msg); },
-        m_onDelete,
         m_onAxisSelected,
     };
     m_viewportPanel.focusSelected(ctx, camera);

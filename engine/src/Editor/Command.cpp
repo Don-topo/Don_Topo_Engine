@@ -46,7 +46,8 @@ void DeleteGameObjectCommand::execute()
     uint64_t id = m_snapshot.value("id", uint64_t{0});
     GameObject* node = m_scene.findById(id);
     if (!node) return;
-    m_renderer.removeGameObject(node);
+    // La GPU la suelta Scene::removeGameObject via su oyente (P8): este era
+    // el tercer sitio que tenia que acordarse, y el unico sin hook propio.
     m_scene.removeGameObject(node);
 }
 
