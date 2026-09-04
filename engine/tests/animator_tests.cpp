@@ -78,6 +78,32 @@ static void test_has_bones_detects_rigged_fbx()
     CHECK(ModelLoader::hasBones("assets/modelAnimation.fbx") == true);
 }
 
+// loadSkinned con un fichero que no existe MATABA el proceso: la guarda de
+// ModelLoader.cpp:180 detecta el fallo y acto seguido desreferencia `scene` en
+// un printf de depuración — justo cuando `!scene` es una de las tres
+// condiciones que la activan. Segfault mudo, exit 139, sin una línea en el log.
+//
+// Importa más allá del crash: nodeFromJson envuelve la carga de malla en un
+// try/catch cuyo comentario promete que un asset movido o borrado deja el nodo
+// sin mesh y "el resto de la escena sigue cargando" (Scene.cpp:1683-1697). No
+// podía cumplirlo por el camino skinned — el proceso moría antes del catch —,
+// así que abrir una escena cuyo personaje ya no está en disco tumbaba el editor
+// en vez de avisar. El hermano load() (ModelLoader.cpp:87-89) ya lanzaba bien;
+// era solo este sitio.
+static void test_loadSkinned_missing_file_throws()
+{
+    bool lanzo = false;
+    try
+    {
+        ModelLoader::loadSkinned("assets/este_fichero_no_existe.fbx");
+    }
+    catch (const std::exception&)
+    {
+        lanzo = true;
+    }
+    CHECK(lanzo);
+}
+
 // Escribe un OBJ mínimo (triángulo, sin huesos: el formato OBJ no tiene
 // concepto de esqueleto) en el directorio temporal del sistema. Helper
 // compartido por los dos tests de "modelo sin rig" de abajo: cada uno pide un
@@ -982,6 +1008,62 @@ static void test_clone_of_rigged_mesh_stays_skinned(PhysicsManager& pm, AudioMan
     if (!sm) return;
     CHECK(!sm->skeleton.names.empty());
     CHECK(sm->sourcePath == "assets/modelAnimation.fbx");
+}
+
+// H14 de docs/core-audit.md, y la mitad que le faltaba al test de arriba. Aquel
+// fix sembró la cache de hasBones para que el clon no SONDEARA el FBX; pero el
+// camino skinned seguía llamando a ModelLoader::loadSkinned, o sea reparseando
+// el fichero ENTERO desde disco. En pleno Play, una vez por spawn: el único
+// caller de cloneGameObject es Scene.Instantiate de Lua.
+//
+// No se comprueba "no ha leído disco" —eso no es observable desde aquí— sino su
+// consecuencia, que es lo que de verdad importa y además es el argumento que ya
+// escribió el comentario de Scene.cpp:2726-2731 para la cache de hasBones: la
+// respuesta autoritativa está EN MEMORIA (la malla del objeto origen), así que
+// el clon no puede depender de que el fichero siga ahí ni de que siga siendo el
+// mismo. Un artista reexportando el FBX a mitad de partida no puede cambiar de
+// qué se clona un objeto que ya está cargado.
+//
+// El fichero se copia a un temporal porque la prueba lo BORRA: no se toca un
+// asset del repo para esto.
+static void test_clone_of_rigged_mesh_does_not_reread_disk(PhysicsManager& pm, AudioManager& am)
+{
+    const std::filesystem::path temporal =
+        std::filesystem::temp_directory_path() / "dt_clone_sin_disco.fbx";
+    std::error_code ec;
+    std::filesystem::remove(temporal, ec);
+    std::filesystem::copy_file("assets/modelAnimation.fbx", temporal, ec);
+    CHECK(!ec);
+    if (ec) return;
+
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    go->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned(temporal.string())));
+    CHECK(go->isSkinned());
+    const SkinnedMesh* origen = go->getSkinnedMesh();
+    CHECK(origen != nullptr);
+    if (!origen) return;
+    const size_t vertsOrigen = origen->vertices.size();
+    const size_t clipsOrigen = origen->animationClips.size();
+    const size_t huesosOrigen = origen->skeleton.names.size();
+
+    // A partir de aquí el fichero sobra: la malla ya está en memoria.
+    std::filesystem::remove(temporal, ec);
+    CHECK(!std::filesystem::exists(temporal));
+
+    GameObject* clone = scene.cloneGameObject(go, nullptr, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+
+    CHECK(clone->isSkinned());
+    const SkinnedMesh* sm = clone->getSkinnedMesh();
+    CHECK(sm != nullptr);
+    if (!sm) return;
+    // Copia profunda de verdad, no un esqueleto vacío que pase el isSkinned().
+    CHECK(sm->vertices.size() == vertsOrigen);
+    CHECK(sm->animationClips.size() == clipsOrigen);
+    CHECK(sm->skeleton.names.size() == huesosOrigen);
+    CHECK(sm != origen);   // no comparten el objeto: el clon tiene el suyo
 }
 
 // Mismo finding, la otra ruta que pasaba nullptr: insertFromJson, que es el
@@ -3892,6 +3974,7 @@ int main()
     test_edit_mode_finished_leaks_into_play_without_reset();
 
     test_has_bones_detects_rigged_fbx();
+    test_loadSkinned_missing_file_throws();
     test_has_bones_rejects_unrigged_model();
     test_has_bones_survives_missing_file();
     test_clip_has_motion_criterion();
@@ -3924,6 +4007,7 @@ int main()
     test_scene_load_warns_on_load_exception(pm, am);
     test_scene_load_shares_has_bones_cache_across_nodes(pm, am);
     test_clone_of_rigged_mesh_stays_skinned(pm, am);
+    test_clone_of_rigged_mesh_does_not_reread_disk(pm, am);
     test_delete_undo_restores_rigged_mesh_as_skinned(pm, am);
 
     test_animator_command_add_undo_redo();

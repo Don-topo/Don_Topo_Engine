@@ -179,13 +179,18 @@ namespace DonTopo
 
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
         {
-            printf("meshes: %u, anims: %u, bones in mesh[0]: %u\n",
-            scene->mNumMeshes,
-            scene->mNumAnimations,
-            scene->mNumMeshes > 0 ? scene->mMeshes[0]->mNumBones : 0);
-            fflush(stdout);
-            throw std::runtime_error("Assimp loadSkinned: " + std::string(importer.GetErrorString()));
-        }        
+            // Aquí había un printf de depuración que leía scene->mNumMeshes —
+            // dentro del if cuya PRIMERA condición es !scene—. Un fichero que no
+            // existe mataba el proceso con un segfault mudo en vez de lanzar, y
+            // eso convertía en mentira el catch de nodeFromJson
+            // (Scene.cpp:1683), que promete que un asset movido o borrado deja
+            // el nodo sin mesh y el resto de la escena carga igual: el editor se
+            // caía antes de llegar al catch. La ruta lleva ya al mensaje —
+            // GetErrorString no la incluye— porque el Log Console lo enseña sin
+            // más contexto que este.
+            throw std::runtime_error("Assimp loadSkinned '" + path + "': " +
+                                     std::string(importer.GetErrorString()));
+        }
         
         // --- Registro de huesos desde TODOS los meshes ---
         std::unordered_map<std::string, int> boneMapOld;

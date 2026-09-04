@@ -2736,12 +2736,31 @@ namespace DonTopo
         // mientras el artista reexporta el FBX vuelva con un tipo de malla
         // distinto al del objeto del que se clonó. Si el clon es un subárbol,
         // la cache además dedup entre todos sus nodos.
+        //
+        // Las MALLAS van por el mismo razonamiento y el mismo camino: el objeto
+        // origen ya las tiene en memoria, así que nodeFromJson las copia en
+        // profundidad en vez de reparsear el fichero. Sin esto, el sondeo de
+        // huesos salía de la cache pero el parseo entero seguía yendo a disco —
+        // medido en Release, 24,5 ms por clon de un personaje rigged, o sea
+        // frame y medio a 60 fps por cada Instantiate.
+        //
+        // Se recorre el SUBÁRBOL, no solo la raíz: un personaje suele traer sus
+        // mallas colgando, y sembrar únicamente src dejaba a los hijos yendo a
+        // disco igual. Vale para las dos cachés, que se llenan en la misma
+        // pasada.
         std::unordered_map<std::string, bool> cache;
-        if (src->hasMesh() && !src->getMesh()->sourcePath.empty())
-            cache[src->getMesh()->sourcePath] = src->isSkinned();
+        PreloadedMeshCache mallas;
+        src->traverse([&](GameObject* n) {
+            if (!n->hasMesh()) return;
+            const std::string& ruta = n->getMesh()->sourcePath;
+            if (ruta.empty()) return;   // procedural: no hay fichero que evitar
+            cache[ruta]  = n->isSkinned();
+            mallas[ruta] = n->getMesh();
+        });
         try
         {
-            nodeFromJson(j, clone, target->worldTransform, physics, audio, &m_warnings, &cache);
+            nodeFromJson(j, clone, target->worldTransform, physics, audio, &m_warnings, &cache,
+                         /*loader=*/nullptr, &mallas);
         }
         catch (const nlohmann::json::exception&)
         {
