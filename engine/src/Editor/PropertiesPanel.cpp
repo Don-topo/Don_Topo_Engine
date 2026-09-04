@@ -39,6 +39,11 @@
 #include <glm/gtx/euler_angles.hpp>
 #include "DonTopo/Renderer/EditorRenderer.h"
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
+#include "DonTopo/Audio/AudioListenerComponent.h"
+#include "DonTopo/Core/LightComponent.h"
+#include "DonTopo/Renderer/UniformBufferObject.h"
+#include "DonTopo/Core/ReflectionProbeComponent.h"
+#include "DonTopo/Audio/ReverbZoneComponent.h"
 
 namespace {
 

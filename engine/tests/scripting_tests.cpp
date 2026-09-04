@@ -66,6 +66,7 @@
 #include <string>
 #include <system_error>
 #include <vector>
+#include "DonTopo/Audio/AudioClipComponent.h"
 
 using namespace DonTopo;
 

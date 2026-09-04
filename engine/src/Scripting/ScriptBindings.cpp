@@ -44,6 +44,7 @@
 #include <set>
 #include <tuple>
 #include <vector>
+#include "DonTopo/Audio/ReverbZoneComponent.h"
 
 namespace DonTopo::ScriptBindings
 {

@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <vector>
 #include "DonTopo/Renderer/Passes/IblPass.h"
+#include "DonTopo/Core/ReflectionProbeComponent.h"
 
 namespace DonTopo {
 

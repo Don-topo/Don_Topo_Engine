@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <stdexcept>
 #include "DonTopo/Renderer/EditorRenderer.h"
+#include "DonTopo/Audio/AudioListenerComponent.h"
 
 namespace DonTopo {
 

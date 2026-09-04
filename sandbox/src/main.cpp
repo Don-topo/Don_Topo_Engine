@@ -36,6 +36,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #ifdef DT_PHYSX_ENABLED
 #include <PxPhysicsAPI.h>
+#include "DonTopo/Audio/AudioListenerComponent.h"
+#include "DonTopo/Physics/Colliders/BoxCollider.h"
 #endif
 
 namespace {

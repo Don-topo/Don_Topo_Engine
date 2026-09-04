@@ -14,6 +14,9 @@
 #include <cctype>
 #include <fstream>
 #include <system_error>
+#include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/UI/ProgressBarComponent.h"
+#include "DonTopo/UI/TextComponent.h"
 
 namespace fs = std::filesystem;
 

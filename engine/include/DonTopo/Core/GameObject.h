@@ -4,37 +4,55 @@
 #include <vector>
 #include <string>
 #include <memory>
-#include "DonTopo/Renderer/Mesh.h"
-#include "DonTopo/Renderer/SkinnedMesh.h"
-#include "DonTopo/Physics/Colliders/BoxCollider.h"
-#include "DonTopo/Physics/Colliders/SphereCollider.h"
-#include "DonTopo/Physics/Colliders/CapsuleCollider.h"
-#include "DonTopo/Physics/Colliders/PlaneCollider.h"
-#include "DonTopo/Physics/Rigidbody.h"
-#include "DonTopo/Audio/AudioClipComponent.h"
-#include "DonTopo/Audio/AudioListenerComponent.h"
-#include "DonTopo/Audio/ReverbZoneComponent.h"
-#include "DonTopo/Core/CameraComponent.h"
-#include "DonTopo/Core/AnimatorComponent.h"
-#include "DonTopo/Core/ReflectionProbeComponent.h"
-#include "DonTopo/Core/LightComponent.h"
-#include "DonTopo/UI/CanvasComponent.h"
-#include "DonTopo/UI/ButtonComponent.h"
-#include "DonTopo/UI/ImageComponent.h"
-#include "DonTopo/UI/LayoutComponent.h"
-#include "DonTopo/UI/PanelComponent.h"
-#include "DonTopo/UI/TextComponent.h"
-#include "DonTopo/UI/ProgressBarComponent.h"
-#include "DonTopo/UI/SliderComponent.h"
-#include "DonTopo/UI/CheckboxComponent.h"
-#include "DonTopo/UI/ToggleComponent.h"
-#include "DonTopo/UI/ScrollbarComponent.h"
-#include "DonTopo/UI/InputFieldComponent.h"
-#include "DonTopo/UI/DropdownComponent.h"
-#include "DonTopo/UI/ScrollViewComponent.h"
+
+// Los 28 componentes van DECLARADOS, no incluidos. Antes se incluían aquí sus
+// headers concretos, y como todo el editor incluye GameObject.h —directamente o
+// vía Scene.h—, tocar cualquiera de ellos reconstruía medio repo: `touch
+// UI/SliderComponent.h`, cien líneas, arrastraba 23 TUs y 266 s, MÁS que un
+// build limpio entero (223 s). Medido el 2026-09-04; ver H19 de
+// docs/core-audit.md.
+//
+// Se puede porque los miembros son `std::shared_ptr<T>`, que vale con tipo
+// incompleto, y porque el destructor de GameObject está FUERA DE LÍNEA: es en
+// el .cpp donde los tipos tienen que estar completos, y allí se incluyen los 28.
+// Los tres inline que también lo exigían —isSkinned y getSkinnedMesh por el
+// dynamic_cast, anyCollider por la conversión de shared_ptr derivado a base— se
+// mudaron al .cpp por el mismo motivo.
+//
+// Quien use un componente concreto incluye SU header, que es lo que tenía que
+// haber hecho en vez de vivir del include transitivo.
 
 namespace DonTopo
 {
+    struct Mesh;
+    struct SkinnedMesh;
+    class Collider;
+    class BoxCollider;
+    class SphereCollider;
+    class CapsuleCollider;
+    class PlaneCollider;
+    class Rigidbody;
+    class AudioClipComponent;
+    class AudioListenerComponent;
+    class ReverbZoneComponent;
+    class CameraComponent;
+    class AnimatorComponent;
+    class ReflectionProbeComponent;
+    class LightComponent;
+    class CanvasComponent;
+    class ButtonComponent;
+    class ImageComponent;
+    class LayoutComponent;
+    class PanelComponent;
+    class TextComponent;
+    class ProgressBarComponent;
+    class SliderComponent;
+    class CheckboxComponent;
+    class ToggleComponent;
+    class ScrollbarComponent;
+    class InputFieldComponent;
+    class DropdownComponent;
+    class ScrollViewComponent;
     class ScriptComponent;
 
     class GameObject
@@ -76,8 +94,9 @@ namespace DonTopo
             void setMesh(std::shared_ptr<Mesh> mesh) { m_mesh = std::move(mesh); }
             const std::shared_ptr<Mesh>& getMesh() const { return m_mesh; }
             bool hasMesh()   const { return m_mesh != nullptr; }
-            bool isSkinned() const { return m_mesh && dynamic_cast<SkinnedMesh*>(m_mesh.get()) != nullptr; }
-            SkinnedMesh* getSkinnedMesh() const { return m_mesh ? dynamic_cast<SkinnedMesh*>(m_mesh.get()) : nullptr; }
+            // Fuera de línea: el dynamic_cast necesita SkinnedMesh completo.
+            bool isSkinned() const;
+            SkinnedMesh* getSkinnedMesh() const;
 
             void setBoxCollider(std::shared_ptr<BoxCollider> bc) { m_boxCollider = std::move(bc); }
             const std::shared_ptr<BoxCollider>& getBoxCollider() const { return m_boxCollider; }
@@ -107,14 +126,9 @@ namespace DonTopo
             // mucho uno por la exclusividad mutua), o nullptr si no tiene.
             // Usado por el scripting para registrar el listener de triggers sin
             // ramificar por tipo concreto.
-            std::shared_ptr<Collider> anyCollider() const
-            {
-                if (m_boxCollider)     return m_boxCollider;
-                if (m_sphereCollider)  return m_sphereCollider;
-                if (m_capsuleCollider) return m_capsuleCollider;
-                if (m_planeCollider)   return m_planeCollider;
-                return nullptr;
-            }
+            // Fuera de línea: convertir shared_ptr<BoxCollider> a
+            // shared_ptr<Collider> exige ver la herencia.
+            std::shared_ptr<Collider> anyCollider() const;
 
             // Rigidbody: dinámica del cuerpo (masa/gravedad/fuerzas/constraints).
             // Requiere un collider que aporte la forma; uno por objeto.

@@ -37,6 +37,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include <cstdio>
+#include "DonTopo/Core/LightComponent.h"
 
 using namespace DonTopo;
 

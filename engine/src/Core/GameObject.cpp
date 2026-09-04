@@ -1,4 +1,35 @@
 #include "DonTopo/Core/GameObject.h"
+// Los 28 componentes se incluyen AQUÍ y no en el header (ver la nota de
+// GameObject.h): el destructor de GameObject destruye los 28 shared_ptr, así
+// que es esta unidad de traducción la que necesita los tipos completos.
+#include "DonTopo/Renderer/Mesh.h"
+#include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Physics/Colliders/BoxCollider.h"
+#include "DonTopo/Physics/Colliders/SphereCollider.h"
+#include "DonTopo/Physics/Colliders/CapsuleCollider.h"
+#include "DonTopo/Physics/Colliders/PlaneCollider.h"
+#include "DonTopo/Physics/Rigidbody.h"
+#include "DonTopo/Audio/AudioClipComponent.h"
+#include "DonTopo/Audio/AudioListenerComponent.h"
+#include "DonTopo/Audio/ReverbZoneComponent.h"
+#include "DonTopo/Core/CameraComponent.h"
+#include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Core/ReflectionProbeComponent.h"
+#include "DonTopo/Core/LightComponent.h"
+#include "DonTopo/UI/CanvasComponent.h"
+#include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/UI/ImageComponent.h"
+#include "DonTopo/UI/LayoutComponent.h"
+#include "DonTopo/UI/PanelComponent.h"
+#include "DonTopo/UI/TextComponent.h"
+#include "DonTopo/UI/ProgressBarComponent.h"
+#include "DonTopo/UI/SliderComponent.h"
+#include "DonTopo/UI/CheckboxComponent.h"
+#include "DonTopo/UI/ToggleComponent.h"
+#include "DonTopo/UI/ScrollbarComponent.h"
+#include "DonTopo/UI/InputFieldComponent.h"
+#include "DonTopo/UI/DropdownComponent.h"
+#include "DonTopo/UI/ScrollViewComponent.h"
 #include "DonTopo/Scripting/ScriptComponent.h"
 #include <algorithm>
 #include <atomic>
@@ -28,6 +59,25 @@ namespace DonTopo
     GameObject::~GameObject() = default;
     GameObject::GameObject(GameObject&&) noexcept = default;
     GameObject& GameObject::operator=(GameObject&&) noexcept = default;
+
+    bool GameObject::isSkinned() const
+    {
+        return m_mesh && dynamic_cast<SkinnedMesh*>(m_mesh.get()) != nullptr;
+    }
+
+    SkinnedMesh* GameObject::getSkinnedMesh() const
+    {
+        return m_mesh ? dynamic_cast<SkinnedMesh*>(m_mesh.get()) : nullptr;
+    }
+
+    std::shared_ptr<Collider> GameObject::anyCollider() const
+    {
+        if (m_boxCollider)     return m_boxCollider;
+        if (m_sphereCollider)  return m_sphereCollider;
+        if (m_capsuleCollider) return m_capsuleCollider;
+        if (m_planeCollider)   return m_planeCollider;
+        return nullptr;
+    }
 
     GameObject* GameObject::addChild(std::string childName)
     {

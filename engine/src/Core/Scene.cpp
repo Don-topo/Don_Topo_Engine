@@ -29,6 +29,21 @@
 #include <unordered_map>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/type_ptr.hpp>
+#include "DonTopo/Renderer/UniformBufferObject.h"
+#include "DonTopo/UI/CanvasComponent.h"
+#include "DonTopo/UI/UiWidgets.h"
+#include "DonTopo/UI/UiCanvas.h"
+#include "DonTopo/UI/InputFieldComponent.h"
+#include "DonTopo/UI/ProgressBarComponent.h"
+#include "DonTopo/UI/ScrollbarComponent.h"
+#include "DonTopo/UI/SliderComponent.h"
+#include "DonTopo/Audio/AudioListenerComponent.h"
+#include "DonTopo/Core/LightComponent.h"
+#include "DonTopo/Core/ReflectionProbeComponent.h"
+#include "DonTopo/Audio/ReverbZoneComponent.h"
+#include "DonTopo/UI/ButtonComponent.h"
+#include "DonTopo/UI/PanelComponent.h"
+#include "DonTopo/UI/TextComponent.h"
 
 namespace
 {

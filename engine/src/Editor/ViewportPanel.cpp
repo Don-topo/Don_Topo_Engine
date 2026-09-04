@@ -19,6 +19,12 @@
 #include <cmath>
 #include <limits>
 #include "DonTopo/Renderer/EditorRenderer.h"
+#include "DonTopo/Audio/AudioClipComponent.h"
+#include "DonTopo/Core/LightComponent.h"
+#include "DonTopo/Renderer/UniformBufferObject.h"
+#include "DonTopo/Renderer/Mesh.h"
+#include "DonTopo/Audio/ReverbZoneComponent.h"
+#include "DonTopo/Renderer/SkinnedMesh.h"
 
 namespace DonTopo {
 

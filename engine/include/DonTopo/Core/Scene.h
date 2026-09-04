@@ -10,6 +10,14 @@
 
 namespace DonTopo
 {
+    // Declarados, no incluidos: los dos solo aparecen como `std::vector<T>&`
+    // en parametros, y eso vale con tipo incompleto. Incluir sus headers
+    // desharia el trabajo de GameObject.h: `UiWidgetSync.h` arrastra los 14
+    // componentes de UI, asi que Scene.h volveria a reconstruir medio repo
+    // cada vez que alguien tocara un slider.
+    struct Light;
+    struct UiCanvasBinding;
+
     class PhysicsManager;
     class AudioManager;
     class AsyncAssetLoader;

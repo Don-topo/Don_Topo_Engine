@@ -39,6 +39,9 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Audio/AudioClipComponent.h"
+#include "DonTopo/Audio/AudioListenerComponent.h"
 #endif
 
 namespace {
