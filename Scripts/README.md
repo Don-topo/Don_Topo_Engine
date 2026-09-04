@@ -116,16 +116,48 @@ preservando los valores de props ya asignados.
 Doble clic en un `.lua` del Content Browser —o el botón **Edit** que hay junto al
 `ScriptComponent` en Properties— lo abre en el panel **Script Editor**: un editor de
 código multi-pestaña (ImGuiColorTextEdit, resaltado de Lua) acoplado junto al resto de
-paneles. `Ctrl+S` o el botón **Save** escriben el fichero a disco; el polling de hot
+paneles. `Ctrl+S` o el botón **Guardar** escriben el fichero a disco; el polling de hot
 reload recoge el cambio como el de cualquier edición externa. Cerrar una pestaña con
 cambios sin guardar pregunta guardar/descartar/cancelar.
 
-Guardar además pasa una **comprobación de sintaxis** (solo compila, no ejecuta): un
-error de sintaxis sale como marca en la línea culpable —con el mensaje al pasar el
-ratón— y desaparece sola en el siguiente guardado correcto. Mientras se teclea, un
-popup de **autocompletado** sugiere las palabras clave de Lua y la API de scripting
-(`Entity`, `Transform`, `Log`, `Input`, los colliders, `Scene`…) filtradas por prefijo:
-`Enter`/`Tab` acepta, `Escape` cierra y `Ctrl+Space` lo vuelve a abrir a mano.
+| Atajo | Qué hace |
+| --- | --- |
+| `Ctrl+S` | Guardar |
+| `Ctrl+F` | Abrir la barra de **buscar / reemplazar** |
+| `F3` / `Shift+F3` | Siguiente / anterior coincidencia, sin volver a la barra |
+| `Ctrl+G` | **Ir a línea** |
+| `Ctrl+Space` | Abrir el autocompletado a mano |
+| `Enter` / `Tab` | Aceptar la sugerencia |
+| `Escape` | Cerrar el popup, o la barra de búsqueda si el foco está en ella |
+
+La búsqueda **envuelve** por el extremo contrario al llegar al final, y la
+casilla `Aa` decide si distingue mayúsculas. **Reemplazar** solo sustituye si lo
+seleccionado *es* la coincidencia: el primer clic sin haber buscado antes solo
+busca, no toca nada. **Todo** sustituye de una pasada sobre el texto entero y
+dice cuántas veces.
+
+La **comprobación de sintaxis** (solo compila, no ejecuta) corre **mientras se
+escribe**, no solo al guardar: espera unos frames de calma para no saltar en
+mitad de una palabra a medio teclear. El error sale como marca en la línea
+culpable —con el mensaje al pasar el ratón— y también en la **barra de estado**
+de abajo, que además lleva línea, columna y total de líneas; un clic en el
+mensaje lleva el cursor a la línea del error. Un fichero que ya venga roto de
+disco enseña el error nada más abrirlo.
+
+Cuando Lua reporta el error en `<eof>` —lo que pasa al borrar un `end`, y cae
+en una línea que no existe— se marca la línea donde se **abrió** el bloque que
+quedó sin cerrar, que es donde está el problema de verdad.
+
+Si el fichero **cambia en disco** mientras está abierto, la pestaña se entera:
+si no tiene cambios propios se recarga sola y lo dice en el Log Console; si los
+tiene, pregunta, porque cualquiera de las dos opciones pierde trabajo de
+alguien. El botón **Recargar** hace lo mismo a mano.
+
+Abrir un `.lua` —desde el Content Browser o desde el botón **Edit** del
+`ScriptComponent` en Properties— además de abrir el panel lo **trae al frente**.
+Si estaba acoplado detrás de otra pestaña, esa pestaña pasa a estar delante; sin
+eso, el fichero se abría donde no se veía. Lo mismo hace **Editar sprites...**
+con el panel Sprite Editor.
 
 También se crea un script desde cero con **Properties → Add → Script → Nuevo
 Script...**, que genera un `.lua` a partir de una plantilla.
@@ -137,9 +169,53 @@ Script...**, que genera un `.lua` a partir de una plantilla.
 Constructor `Vec3.new(x, y, z)` o `Vec3.new()` (cero). La tabla también es
 **invocable**, así que `Vec3(x, y, z)` y `Vec3()` hacen exactamente lo mismo; los
 ejemplos de este documento usan las dos formas indistintamente. Campos `.x/.y/.z`.
-Operadores `+`, `-`, `* escalar`, `tostring`.
 
-No tiene `Length()`: la longitud se calcula a mano con `math.sqrt`.
+Operadores: `+`, `-` (binario y unario), `* escalar` **por los dos lados**
+(`v * 2` y `2 * v`), `/ escalar`, `==` (componente a componente) y `tostring`.
+
+| Método | Descripción |
+| --- | --- |
+| `v:Length()` | Longitud del vector |
+| `v:Normalized()` | Copia de longitud 1. El vector cero se devuelve **tal cual**, no `NaN` |
+| `a:Dot(b)` | Producto escalar |
+| `a:Cross(b)` | Producto vectorial |
+| `a:Distance(b)` | Distancia entre los dos puntos |
+| `a:Lerp(b, t)` | Interpolación lineal. `t` fuera de `[0,1]` **extrapola** (como `glm::mix`, a diferencia de Unity) |
+
+Ninguno muta el receptor: todos devuelven un valor nuevo.
+
+Dividir por cero da `inf`/`NaN`. No revienta ahí mismo: lo ataja el guard de
+valores no finitos en cuanto el resultado intenta entrar en un setter del motor
+(se ignora el valor y se avisa por el Log Console).
+
+## Time
+
+Reloj de los scripts. Lo rellena el motor **en cada `update`**, antes de llamar
+a ningún callback, así que `Awake` y `Start` de un componente nuevo ya ven el
+`Time` de su propio frame.
+
+| Campo | Descripción |
+| --- | --- |
+| `Time.deltaTime` | Segundos del último frame. Lo mismo que el argumento que recibe `Update` |
+| `Time.fixedDeltaTime` | Paso fijo de `FixedUpdate`, en segundos. Constante |
+| `Time.time` | Segundos desde que empezó el Play **actual** |
+| `Time.frameCount` | Frames desde que empezó el Play actual |
+
+Entrar en Play reinicia `time` y `frameCount` a cero: un segundo Play tras un
+Stop no continúa donde lo dejó la partida anterior. Un `dt` no finito (un frame
+degenerado) se ignora entero en vez de dejar `Time.time` en `NaN` para siempre.
+
+La tabla es escribible desde Lua, pero no sirve de nada: el acumulador de
+verdad vive en C++ y el frame siguiente restaura el valor correcto.
+
+```lua
+function Contador:Update(dt)
+    -- dt y Time.deltaTime son el mismo número.
+    if Time.time > 5.0 then
+        Log.Info("han pasado 5 segundos y " .. Time.frameCount .. " frames")
+    end
+end
+```
 
 ## Log
 
@@ -167,6 +243,37 @@ que `Log.Info`).
 Tablas de constantes: `Key.Space/Enter/Escape/Tab/LeftShift/LeftControl/
 Up/Down/Left/Right/A..Z/Num0..Num9`, `MouseButton.Left/Right/Middle`.
 
+### Mando
+
+Lo normal es usar **acciones con nombre** (el panel Input Actions ya sabe de
+mando y así el script no depende del dispositivo). Estas cuatro son el mando
+crudo, para cuando el script quiere un botón concreto:
+
+| Método | Descripción |
+| --- | --- |
+| `Input.IsPadButtonDown(boton)` | true mientras el botón está apretado |
+| `Input.IsPadButtonPressed(boton)` | true solo en el frame del flanco |
+| `Input.IsPadAxisDown(codigo)` | true mientras la dirección de eje está activa |
+| `Input.IsPadAxisPressed(codigo)` | true solo en el frame del flanco |
+
+Sin mando conectado devuelven `false`, nunca error. Se refieren al primer mando
+conectado con mapeo conocido.
+
+`PadButton.A/B/X/Y/LeftBumper/RightBumper/Back/Start/Guide/LeftThumb/
+RightThumb/DpadUp/DpadRight/DpadDown/DpadLeft`.
+
+Los **ejes** (sticks y gatillos) no se consultan por eje sino por **dirección**:
+un eje son dos bindings distintos, porque "stick izquierdo hacia arriba" y
+"hacia abajo" son dos cosas. Constantes ya compuestas:
+`PadAxis.LeftStickUp/Down/Left/Right`, `PadAxis.RightStickUp/Down/Left/Right`,
+`PadAxis.LeftTrigger`, `PadAxis.RightTrigger`. Cualquier otra se compone con
+`PadAxis.Code(eje, negativo)`.
+
+Los nombres dicen hacia dónde se empuja, no el signo: en GLFW el eje Y de los
+sticks crece hacia abajo, así que `Up` es el eje negativo. Los gatillos vienen
+en `[-1,1]` con el reposo en `-1` y el motor los renormaliza a `[0,1]`, así que
+solo tienen dirección positiva.
+
 ### Acciones con nombre
 
 Las tres `IsAction*` consultan las **acciones** que se definen en el panel **Input
@@ -181,9 +288,11 @@ la llamada típica vive en `Update()` y un aviso por frame ahogaría el Log Cons
 | Método/prop | Descripción |
 | --- | --- |
 | `entity.name` | Lectura/escritura del nombre del GameObject |
+| `entity.meshVisible` | Dibuja o esconde la malla. El objeto sigue vivo, colisionando y ejecutando sus scripts |
 | `entity:IsValid()` | false si la entity fue destruida |
 | `entity:GetTransform()` | Devuelve `Transform` |
 | `entity:GetParent()` | `Entity` del padre, o `nil` si es raíz |
+| `entity:SetParent(padre?, mantenerPoseDeMundo?)` | Cambia de padre. Sin argumento (o `nil`) lo cuelga de la raíz. Devuelve `false` si el destino no vale |
 | `entity:GetChildren()` | Tabla (array 1-based) de `Entity` hijos |
 | `entity:GetComponent(name)` | Devuelve el componente si existe, si no `nil`. `name`: `"BoxCollider"`, `"SphereCollider"`, `"CapsuleCollider"`, `"PlaneCollider"`, `"AudioClip"`, `"ReverbZone"`, `"Rigidbody"`, `"Animator"`, `"Canvas"`, `"Button"`, `"Text"`, `"ProgressBar"`, `"Layout"`, `"Panel"`, `"Image"`, `"Slider"`, `"Checkbox"`, `"Toggle"`, `"Scrollbar"`, `"InputField"`, `"Dropdown"`, `"ScrollView"`, o `"Script:<NombreClase>"` pa acceder a la instancia de otro script en el mismo GameObject |
 | `entity:AddComponent(name, arg?)` | Añade componente (mismos defaults que el botón Add del editor; colliders mutuamente excluyentes). `AudioClip` requiere `arg` = ruta del asset. Los de UI no se excluyen entre sí (caben todos en el mismo GameObject) y pedir uno que ya está devuelve el que hay. `"Script:<Nombre>"` añade el script (Awake/Start se disparan en el siguiente lifecycle update) |
@@ -191,6 +300,96 @@ la llamada típica vive en `Update()` y un aviso por frame ahogaría el Log Cons
 | `entity:GetCanvas()` / `GetButton()` / `GetText()` / `GetProgressBar()` / `GetLayout()` / `GetPanel()` / `GetImage()` / `GetSlider()` / `GetCheckbox()` / `GetToggle()` / `GetScrollbar()` / `GetInputField()` / `GetDropdown()` / `GetScrollView()` | El componente de UI, o `nil` si no lo tiene |
 | `entity:AddCanvas()` / `AddButton()` / `AddText()` / `AddProgressBar()` / `AddLayout()` / `AddPanel()` / `AddImage()` / `AddSlider()` / `AddCheckbox()` / `AddToggle()` / `AddScrollbar()` / `AddInputField()` / `AddDropdown()` / `AddScrollView()` | Lo crea con los valores por defecto del componente y devuelve el wrapper; si ya existe devuelve el que hay sin pisarlo |
 | `entity:RemoveCanvas()` / `RemoveButton()` / `RemoveText()` / `RemoveProgressBar()` / `RemoveLayout()` / `RemovePanel()` / `RemoveImage()` / `RemoveSlider()` / `RemoveCheckbox()` / `RemoveToggle()` / `RemoveScrollbar()` / `RemoveInputField()` / `RemoveDropdown()` / `RemoveScrollView()` | Lo quita del GameObject |
+| `entity:GetLight()` / `AddLight()` / `RemoveLight()` | Componente de luz, con el mismo contrato que los de UI (`Get` devuelve `nil` si no está, `Add` no pisa el que hubiera) |
+| `entity:GetCamera()` / `AddCamera()` / `RemoveCamera()` | Cámara de juego, mismo contrato |
+
+`"Light"` y `"Camera"` también valen como nombre en
+`GetComponent`/`AddComponent`/`RemoveComponent`.
+
+### Cambiar de padre
+
+`SetParent` conserva por defecto la **pose de mundo**, como el
+`transform.parent` de Unity: el objeto se queda exactamente donde está y lo que
+se recalcula es su transform local.
+
+```lua
+local arma  = Scene.Find("Pistola")
+local mano  = Scene.Find("ManoDerecha")
+
+arma:SetParent(mano)          -- se queda donde está y pasa a seguir a la mano
+arma:SetParent(mano, false)   -- conserva el local: SALTA al origen de la mano
+arma:SetParent()              -- la suelta: vuelve a colgar de la raíz
+```
+
+El `false` es lo que hace arrastrar en la jerarquía del editor.
+
+Devuelve `false` **sin tocar nada** —y avisa por el Log Console— si el destino
+está dentro del propio subárbol del objeto. No es una escena rara: eso
+desengancharía el subárbol del árbol y se llevaría por delante lo que lo
+mantiene vivo.
+
+Los `worldTransform` del subárbol quedan al día **en el acto**, no en el frame
+siguiente: un `GetWorldPosition()` en la línea de después ya lee lo correcto.
+
+Un padre con escala 0 no tiene inversa. En ese caso se conserva la pose local y
+se avisa, en vez de hornear un `NaN` en la matriz que arrastraría a los hijos.
+
+Si el objeto lleva collider, mover con `mantenerPoseDeMundo` a `true` no lo
+mueve, así que no hay teleport. Con `false` salta, y vale lo mismo que dice
+[Mover por Transform NO colisiona](#mover-por-transform-no-colisiona).
+
+## Light
+
+Luz de escena (`GetComponent("Light")` o `entity:GetLight()`). **No guarda
+posición ni dirección**: las dos salen del transform del GameObject —posición
+del objeto, dirección `-Z` local—, así que para mover o apuntar una luz se mueve
+o se gira su objeto.
+
+| Prop/método | Descripción |
+| --- | --- |
+| `light.type` | `LightType.Point/Spot/Directional/Area` |
+| `light.intensity` | Multiplicador del color, acotado a `0..100` |
+| `light.range` | Alcance de point y spot. La directional no atenúa y lo ignora; la area usa su ancho/2 |
+| `light.innerAngle` / `light.outerAngle` | Cono del spot, en **grados de semiángulo**. El interior nunca pasa del exterior |
+| `light.areaWidth` / `light.areaHeight` | Lado del rectángulo de la luz de área |
+| `light:GetColor()` / `light:SetColor(Vec3)` | Color rgb `0..1`, **sin** la intensidad premultiplicada |
+
+El color va por método y no por propiedad a propósito: siendo un `Vec3`,
+`light.color.x = 1` escribiría en una copia temporal y se perdería sin avisar.
+
+Los rangos los acota el core, no la UI, así que un valor fuera de rango se
+recorta (`intensity = 500` deja 100). Un `type` que no esté en la tabla
+`LightType` **no se aplica**: se avisa por el Log Console y se conserva el
+anterior. `NaN`/`Inf`, lo mismo.
+
+No hay invariante de unicidad: caben varias luces por escena, y el motor se
+queda con las primeras `MAX_LIGHTS` en orden de escena.
+
+## Camera
+
+Cámara de juego (`GetComponent("Camera")` o `entity:GetCamera()`). Tampoco
+guarda posición ni orientación —salen del transform— ni aspect ratio, que lo
+dicta el viewport.
+
+| Prop | Descripción |
+| --- | --- |
+| `camera.mode` | `CameraProjection.Perspective` u `Orthographic` |
+| `camera.fov` | Campo de visión en grados. **Solo** en perspectiva |
+| `camera.orthographicSize` | Semi-altura visible en unidades de mundo. **Solo** en ortográfica |
+| `camera.near` / `camera.far` | Planos de recorte |
+
+Añadir una cámara desde Lua **no** comprueba que no haya otra en la escena: el
+invariante de "una por escena" lo impone el motor quedándose con la primera en
+pre-orden, igual que con el AudioListener.
+
+```lua
+function Interruptor:Update(dt)
+    local l = self.entity:GetLight()
+    if l then
+        l.intensity = 2.0 + math.sin(Time.time * 3.0)
+    end
+end
+```
 
 ## Transform
 
@@ -202,6 +401,24 @@ la llamada típica vive en `Update()` y un aviso por frame ahogaría el Log Cons
 | `t:GetWorldPosition()` | Posición mundial (traducción de la world matrix) |
 | `t:Translate(Vec3 delta)` | Suma delta a la posición local |
 | `t:Rotate(Vec3 deltaEulerGrados)` | Rotación incremental compuesta como quaternion (no se atasca en rotación continua multi-eje) |
+| `t:SetWorldPosition(Vec3)` | Coloca el objeto en esa posición **de mundo** (deshace la transformada del padre) |
+| `t:GetForward()` | Eje `-Z` del objeto en mundo, normalizado |
+| `t:GetRight()` | Eje `+X` del objeto en mundo, normalizado |
+| `t:GetUp()` | Eje `+Y` del objeto en mundo, normalizado |
+| `t:LookAt(objetivo: Vec3, up: Vec3?)` | Gira el objeto para que su forward apunte al punto. `up` por defecto `(0,1,0)` |
+
+La convención es la de la cámara y la de `glm::lookAt`: se mira hacia `-Z`
+local. Los tres ejes salen ya normalizados — leídos crudos, un objeto escalado
+daría vectores más largos que 1.
+
+`LookAt` conserva posición y escala, y solo toca la rotación. Los dos casos
+degenerados —mirarse a sí mismo, o un `up` paralelo a la dirección de vista— no
+tienen respuesta: se avisa por el Log Console y la rotación **se queda como
+estaba**, en vez de instalar una matriz con `NaN` que arrastraría a los hijos.
+
+Con padre, `GetWorldPosition` y `GetPosition` no son lo mismo: el segundo es
+local. `SetWorldPosition` sobre un objeto con un padre de escala 0 no puede
+resolverse (matriz singular) y también se ignora con aviso.
 
 ### Mover por Transform NO colisiona
 
@@ -785,6 +1002,7 @@ Los enums viajan como tablas de constantes enteras:
 | `UiBillboard` | `None`, `YawOnly`, `Full` |
 | `UiTextAlign` | `Left`, `Center`, `Right`, `Justify` |
 | `UiTextVAlign` | `Top`, `Middle`, `Bottom` |
+| `UiTextVAlign` | `Top`, `Middle`, `Bottom` |
 | `UiTextOverflow` | `Overflow`, `Clip`, `Ellipsis` |
 | `UiProgressFillDirection` | `LeftToRight`, `RightToLeft`, `BottomToTop`, `TopToBottom` |
 | `UiButtonTransition` | `ColorTint`, `SpriteSwap`, `Animation` |
@@ -871,7 +1089,7 @@ graba el canvas, y conviene tenerlas escritas antes de tropezar con ellas.
 | `b.transition` | `UiButtonTransition.*` |
 | `b.normalSprite` / `hoverSprite` / `pressedSprite` / `disabledSprite` / `selectedSprite` | Nombres dentro del MISMO atlas |
 | `b.fadeDuration` | Segundos del fundido de `Animation` |
-| `b.text` / `b.fontPath` / `b.fontSize` / `b.textAlign` | Etiqueta (hijo `Text` que monta el sync); `fontPath` vacío = fuente por defecto |
+| `b.text` / `b.fontPath` / `b.fontSize` / `b.textAlign` / `b.textVAlign` | Etiqueta (hijo `Text` que monta el sync); `fontPath` vacío = fuente por defecto. `textAlign` es `UiTextAlign.*` y `textVAlign` es `UiTextVAlign.*` |
 | `b.sprite`, `b.normalSprite`, … | **Nombre de un sub-rect del atlas**, no una ruta. Los define el Sprite Editor del editor y viven en `<atlas>.sprites.json`; un nombre que no esté en ese fichero dibuja la imagen entera |
 | `b:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect, en píxeles y anclas normalizadas |
 | `b:GetColor/SetColor(r,g,b,a)` | Color base |
@@ -886,7 +1104,7 @@ graba el canvas, y conviene tenerlas escritas antes de tropezar con ellas.
 | --- | --- |
 | `t.visible`, `t.text`, `t.fontPath`, `t.fontSize` | Lo básico; `fontPath` vacío = fuente por defecto |
 | `t.outlineWidth` | 0 = sin contorno |
-| `t.align` / `t.overflow` / `t.wordWrap` | `UiTextAlign.*`, `UiTextOverflow.*`, salto de línea |
+| `t.align` / `t.vAlign` / `t.overflow` / `t.wordWrap` | `UiTextAlign.*` (horizontal), `UiTextVAlign.*` (vertical), `UiTextOverflow.*`, salto de línea |
 | `t.boldStrength` / `t.italicSkew` | Negrita y cursiva simuladas |
 | `t:GetPosition/SetPosition`, `GetSize/SetSize`, `GetAnchorMin/SetAnchorMin`, `GetAnchorMax/SetAnchorMax`, `GetPivot/SetPivot` | Rect |
 | `t:GetColor/SetColor(r,g,b,a)` | Relleno del glifo |
@@ -1255,11 +1473,33 @@ tablas de enums de UI (`UiScaleMode.`, `UiScreenMatch.`, `UiCanvasRenderMode.`,
 `UiBillboard.`, `UiTextAlign.`, `UiTextOverflow.`, `UiProgressFillDirection.`,
 `UiLayoutMode.`, `UiCrossAlign.`, `UiImageMode.`, `UiFillDirection.`,
 `UiFillOrigin.`, `UiSliderDirection.`, `UiScrollbarDirection.`,
-`UiInputContentType.`, `UiButtonTransition.`, `UiButtonState.`) salen las
-sugerencias. Propiedades con `.`, métodos con `:`, igual que el resto de la lista.
+`UiInputContentType.`, `UiTextVAlign.`, `UiButtonTransition.`, `UiButtonState.`)
+salen las sugerencias. Propiedades con `.`, métodos con `:`, igual que el resto
+de la lista.
 
-La única tabla de constantes que existe en el binding pero **no** está en la lista
-del autocompletado es `UiTextVAlign`.
+**No hace falta escribir el nombre del tipo.** El filtro también busca por
+nombre de **miembro**, que es lo que hace falta cuando se llama a través de una
+variable, que es lo normal en código real:
+
+```lua
+local t = self.entity:GetTransform()
+t:GetPos      -- sugiere Transform:GetPosition
+```
+
+Al aceptar, se conserva el `t:` escrito y solo se completa el miembro: nunca
+queda un `t:Transform:GetPosition`. El separador se respeta — con `.` solo salen
+propiedades y con `:` solo métodos —, así que la sugerencia siempre compila.
+
+El orden es: primero lo que empieza por lo escrito entero, después lo hallado
+por miembro; a igualdad, lo más corto, y a igualdad de longitud, alfabético.
+
+El popup enseña la **firma** de cada entrada al lado del nombre (`(pos: Vec3)`,
+`() -> number`…) y una línea de descripción de la seleccionada. El símbolo que
+no tenga firma anotada sale igual, solo que sin ella.
+
+Se abre solo al escribir dos caracteres, y también justo al teclear un `.` o un
+`:` —que es cuando se quiere ver qué hay dentro del receptor—. `Escape` lo
+descarta hasta que se cambia de palabra.
 
 ## Ejemplos existentes
 

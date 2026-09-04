@@ -22,6 +22,9 @@
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Scripting/ScriptBindings.h"
 #include "DonTopo/Scripting/LuaSyntaxCheck.h"
+#include "DonTopo/Scripting/LuaApiReference.h"
+#include "DonTopo/Core/LightComponent.h"
+#include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Physics/PhysicsManager.h"
@@ -30,6 +33,7 @@
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Editor/ProjectContext.h"
+#include "DonTopo/Editor/Command.h"
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
 #include "DonTopo/UI/TextComponent.h"
@@ -52,6 +56,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -3059,6 +3064,547 @@ static void test_audio_bus_desde_lua(ScriptManager& sm, AudioManager& am)
     am.setBusVolume(AudioBus::Sfx,    1.0f);
 }
 
+// ---------------------------------------------------------------------------
+// Autocompletado: el filtro vive en LuaApiReference (Core), no en el panel, y
+// por eso se puede probar aquí sin ImGui ni ventana.
+// ---------------------------------------------------------------------------
+
+// true si alguna sugerencia tiene ese símbolo exacto.
+static bool tieneSimbolo(const std::vector<LuaApiMatch>& ms, const std::string& s)
+{
+    for (const auto& m : ms) if (m.symbol == s) return true;
+    return false;
+}
+
+static const LuaApiMatch* buscaSimbolo(const std::vector<LuaApiMatch>& ms, const std::string& s)
+{
+    for (const auto& m : ms) if (m.symbol == s) return &m;
+    return nullptr;
+}
+
+// Escribir el nombre del tipo entero: el comportamiento de siempre, que no se
+// puede haber roto al añadir el filtro por miembro. La sustitución cubre el
+// fragmento entero (offset 0) y lo que se escribe es el símbolo completo.
+static void test_autocomplete_prefijo_de_tipo()
+{
+    auto ms = luaApiMatches("Transform:Set");
+    CHECK(tieneSimbolo(ms, "Transform:SetPosition"));
+    CHECK(tieneSimbolo(ms, "Transform:SetRotation"));
+    const LuaApiMatch* m = buscaSimbolo(ms, "Transform:SetPosition");
+    CHECK(m != nullptr);
+    if (m)
+    {
+        CHECK(m->replaceOffset == 0);
+        CHECK(m->insert == "Transform:SetPosition");
+    }
+    // Sin distinguir mayúsculas.
+    CHECK(tieneSimbolo(luaApiMatches("transform:set"), "Transform:SetPosition"));
+}
+
+// El caso que antes no daba NADA: el receptor es una variable local, así que
+// se busca por el nombre del miembro. Lo que se escribe es SOLO el miembro y
+// la sustitución empieza detrás del ':', para no dejar "t:Transform:...".
+static void test_autocomplete_por_miembro_conserva_receptor()
+{
+    auto ms = luaApiMatches("t:GetPosi");
+    const LuaApiMatch* m = buscaSimbolo(ms, "Transform:GetPosition");
+    CHECK(m != nullptr);
+    if (m)
+    {
+        CHECK(m->insert == "GetPosition");
+        CHECK(m->replaceOffset == 2);   // detrás de "t:"
+    }
+    // Con un receptor más largo el offset sigue cayendo detrás del separador.
+    auto ms2 = luaApiMatches("miRigidbody:AddFor");
+    const LuaApiMatch* m2 = buscaSimbolo(ms2, "Rigidbody:AddForce");
+    CHECK(m2 != nullptr);
+    if (m2)
+    {
+        CHECK(m2->insert == "AddForce");
+        CHECK(m2->replaceOffset == std::string("miRigidbody:").size());
+    }
+}
+
+// '.' es propiedad y ':' es método: sugerir un método donde se escribió un
+// punto daría código que no compila.
+static void test_autocomplete_respeta_el_separador()
+{
+    auto conPunto = luaApiMatches("t.GetPosi");
+    CHECK(!tieneSimbolo(conPunto, "Transform:GetPosition"));
+
+    auto conDosPuntos = luaApiMatches("rb.mas");
+    CHECK(tieneSimbolo(conDosPuntos, "Rigidbody.mass"));
+    CHECK(!tieneSimbolo(luaApiMatches("rb:mas"), "Rigidbody.mass"));
+}
+
+// Orden: primero lo que empieza por el fragmento entero, después lo hallado
+// por miembro. Y fragmento vacío no abre nada.
+static void test_autocomplete_orden_y_vacio()
+{
+    CHECK(luaApiMatches("").empty());
+
+    auto ms = luaApiMatches("Text.v");
+    // "Text.vAlign" empieza por el fragmento; "InputField...".vAlign no existe,
+    // pero el orden general sí se puede fijar con un caso con los dos rangos.
+    CHECK(!ms.empty());
+    if (!ms.empty()) CHECK(ms.front().symbol == "Text.vAlign");
+
+    auto mixtas = luaApiMatches("Button:GetSi");
+    CHECK(!mixtas.empty());
+    if (!mixtas.empty()) CHECK(mixtas.front().symbol == "Button:GetSize");
+
+    // El límite se respeta.
+    CHECK(luaApiMatches("Entity:", 3).size() == 3);
+}
+
+// Todo binding nuevo tiene que estar en la tabla o el autocompletado no lo
+// enseña nunca (regla del proyecto). Incluye los cinco huecos que la auditoría
+// encontró ya registrados en ScriptBindings pero ausentes de la lista.
+static void test_autocomplete_simbolos_nuevos_en_la_tabla()
+{
+    const std::vector<std::string> esperados = {
+        // Huecos preexistentes
+        "Vec3.x", "Entity:GetLayout", "Text.vAlign", "Button.textVAlign",
+        "UiTextVAlign.Top",
+        // Bindings nuevos
+        "Time.deltaTime", "Time.fixedDeltaTime", "Time.time", "Time.frameCount",
+        "Vec3:Length", "Vec3:Dot", "Vec3:Lerp",
+        "Transform:GetForward", "Transform:LookAt", "Transform:SetWorldPosition",
+        "Input.IsPadButtonDown", "PadButton.A", "PadAxis.LeftStickUp",
+        "Light.type", "Light:SetColor", "LightType.Spot",
+        "Camera.fov", "CameraProjection.Orthographic",
+        "Entity.meshVisible", "Entity:AddLight", "Entity:GetCamera",
+    };
+    const std::vector<std::string>& tabla = luaApiSymbols();
+    for (const std::string& s : esperados)
+    {
+        const bool esta = std::find(tabla.begin(), tabla.end(), s) != tabla.end();
+        if (!esta) std::printf("FAIL: falta '%s' en luaApiSymbols()\n", s.c_str());
+        CHECK(esta);
+    }
+}
+
+// Firma y documentación: las anotadas salen, y un símbolo sin anotar no
+// desaparece del popup — solo va sin texto de ayuda.
+static void test_autocomplete_firma_y_doc()
+{
+    std::string firma, doc;
+    luaApiDoc("Transform:SetPosition", firma, doc);
+    CHECK(firma == "(pos: Vec3)");
+    CHECK(!doc.empty());
+
+    luaApiDoc("Button:GetSize", firma, doc);
+    CHECK(firma == "() -> ancho, alto");   // generada en bucle para los 14 widgets
+
+    // Una keyword de Lua no tiene firma, pero sigue estando en la tabla.
+    luaApiDoc("while", firma, doc);
+    CHECK(firma.empty());
+    CHECK(doc.empty());
+    CHECK(tieneSimbolo(luaApiMatches("whil"), "while"));
+
+    // La firma viaja dentro de la sugerencia, que es lo que pinta el popup.
+    // El vector va a una local a propósito: buscaSimbolo devuelve un puntero
+    // DENTRO de él, y pasarle el temporal directamente lo dejaría colgando.
+    const std::vector<LuaApiMatch> deVec3 = luaApiMatches("Vec3:Len");
+    const LuaApiMatch* m = buscaSimbolo(deVec3, "Vec3:Length");
+    CHECK(m != nullptr);
+    if (m) CHECK(m->signature == "() -> number");
+}
+
+// ---------------------------------------------------------------------------
+// Bindings nuevos
+// ---------------------------------------------------------------------------
+
+static void test_vec3_algebra_desde_lua(ScriptManager& sm)
+{
+    sm.lua().script(R"(
+        local a = Vec3.new(3, 4, 0)
+        local b = Vec3.new(0, 0, 2)
+        lon   = a:Length()
+        norm  = a:Normalized():Length()
+        punto = a:Dot(Vec3.new(1, 0, 0))
+        cruz  = a:Cross(b):Length()
+        dist  = a:Distance(Vec3.new(3, 0, 0))
+        lerpY = Vec3.new(0, 0, 0):Lerp(Vec3.new(0, 10, 0), 0.25).y
+        divX  = (Vec3.new(8, 0, 0) / 2).x
+        negX  = (-Vec3.new(5, 0, 0)).x
+        iguales  = (Vec3.new(1, 2, 3) == Vec3.new(1, 2, 3))
+        distintos = (Vec3.new(1, 2, 3) == Vec3.new(9, 2, 3))
+        izq   = (2 * Vec3.new(3, 0, 0)).x
+        cero  = Vec3.new(0, 0, 0):Normalized():Length()
+    )");
+    CHECK(nearlyEqual(sm.lua()["lon"], 5.0f));
+    CHECK(nearlyEqual(sm.lua()["norm"], 1.0f));
+    CHECK(nearlyEqual(sm.lua()["punto"], 3.0f));
+    CHECK(nearlyEqual(sm.lua()["cruz"], 10.0f));   // |(3,4,0)x(0,0,2)| = 10
+    CHECK(nearlyEqual(sm.lua()["dist"], 4.0f));
+    CHECK(nearlyEqual(sm.lua()["lerpY"], 2.5f));
+    CHECK(nearlyEqual(sm.lua()["divX"], 4.0f));
+    CHECK(nearlyEqual(sm.lua()["negX"], -5.0f));
+    CHECK(sm.lua()["iguales"] == true);
+    CHECK(sm.lua()["distintos"] == false);
+    // El escalar a la izquierda: sin la segunda sobrecarga de __mul esto era
+    // un error de tipos que tumbaba el script.
+    CHECK(nearlyEqual(sm.lua()["izq"], 6.0f));
+    // Normalizar el vector cero da cero, no NaN.
+    CHECK(nearlyEqual(sm.lua()["cero"], 0.0f));
+}
+
+// Time se llena desde ScriptManager::update, no desde el binding: sin la
+// llamada a tickTime la tabla se queda en los ceros del registro.
+static void test_time_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    sm.rebuildAliveSet();
+
+    // fixedDeltaTime es constante y ya está antes de jugar nada.
+    CHECK(nearlyEqual(sm.lua()["Time"]["fixedDeltaTime"], ScriptManager::kFixedStep, 0.0001f));
+
+    sm.onPlayStart();
+    CHECK(nearlyEqual(sm.lua()["Time"]["time"], 0.0f));
+
+    sm.update(0.5f);
+    CHECK(nearlyEqual(sm.lua()["Time"]["deltaTime"], 0.5f));
+    CHECK(nearlyEqual(sm.lua()["Time"]["time"], 0.5f));
+    CHECK(static_cast<int>(sm.lua()["Time"]["frameCount"]) == 1);
+
+    sm.update(0.25f);
+    CHECK(nearlyEqual(sm.lua()["Time"]["deltaTime"], 0.25f));
+    CHECK(nearlyEqual(sm.lua()["Time"]["time"], 0.75f));
+    CHECK(static_cast<int>(sm.lua()["Time"]["frameCount"]) == 2);
+
+    // Un dt no finito no envenena el acumulado.
+    sm.update(std::nanf(""));
+    CHECK(nearlyEqual(sm.lua()["Time"]["time"], 0.75f));
+
+    // Volver a jugar reinicia el reloj.
+    sm.onPlayStop();
+    sm.onPlayStart();
+    CHECK(nearlyEqual(sm.lua()["Time"]["time"], 0.0f));
+    CHECK(static_cast<int>(sm.lua()["Time"]["frameCount"]) == 0);
+    sm.onPlayStop();
+}
+
+static void test_transform_ejes_y_lookat(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Mirador");
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    // Sin rotar: forward = -Z, right = +X, up = +Y.
+    sm.lua().script(R"(
+        local t = e:GetTransform()
+        f = t:GetForward(); r = t:GetRight(); u = t:GetUp()
+    )");
+    CHECK(nearlyEqual(sm.lua()["f"]["z"], -1.0f));
+    CHECK(nearlyEqual(sm.lua()["r"]["x"], 1.0f));
+    CHECK(nearlyEqual(sm.lua()["u"]["y"], 1.0f));
+
+    // Mirar a +X deja el forward apuntando a +X.
+    sm.lua().script(R"(
+        local t = e:GetTransform()
+        t:LookAt(Vec3.new(100, 0, 0))
+        f2 = t:GetForward()
+    )");
+    CHECK(nearlyEqual(sm.lua()["f2"]["x"], 1.0f, 0.02f));
+    CHECK(nearlyEqual(sm.lua()["f2"]["z"], 0.0f, 0.02f));
+
+    // Mirarse a sí mismo no tiene respuesta: se avisa y la rotación no cambia.
+    log.clear();
+    sm.lua().script(R"(
+        local t = e:GetTransform()
+        t:LookAt(t:GetWorldPosition())
+        f3 = t:GetForward()
+    )");
+    CHECK(logContains(log, "WARN"));
+    CHECK(logContains(log, "LookAt"));
+    CHECK(nearlyEqual(sm.lua()["f3"]["x"], 1.0f, 0.02f));   // sigue mirando a +X
+
+    // 'up' paralelo a la dirección: mismo trato.
+    log.clear();
+    sm.lua().script("e:GetTransform():LookAt(Vec3.new(0, 100, 0), Vec3.new(0, 1, 0))");
+    CHECK(logContains(log, "WARN"));
+
+    sm.setLogCallback(nullptr);
+}
+
+// Con padre, la posición de mundo NO es la local: si SetWorldPosition no
+// deshiciera la transformada del padre, el objeto acabaría al doble de lejos.
+static void test_transform_set_world_position_con_padre(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* padre = scene.addGameObject("Padre");
+    padre->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 0.0f, 0.0f));
+    GameObject* hijo = scene.addGameObject("Hijo", padre);
+    padre->updateWorldTransforms(glm::mat4(1.0f));
+    sm.rebuildAliveSet();
+
+    sm.lua()["e"] = LuaEntity{ hijo, &sm };
+    sm.lua().script("e:GetTransform():SetWorldPosition(Vec3.new(0, 0, 0))");
+
+    // Local = -10 en X para acabar en el origen del mundo.
+    const glm::vec3 local(hijo->localTransform[3]);
+    CHECK(nearlyEqual(local.x, -10.0f));
+    const glm::vec3 mundo(hijo->worldTransform[3]);
+    CHECK(nearlyEqual(mundo.x, 0.0f));
+}
+
+static void test_light_y_camera_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Farola");
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    // Antes de añadirla, el getter devuelve nil (no error).
+    sm.lua().script("sinLuz = (e:GetLight() == nil)");
+    CHECK(sm.lua()["sinLuz"] == true);
+
+    sm.lua().script(R"(
+        local l = e:AddLight()
+        l.type = LightType.Spot
+        l.intensity = 3.5
+        l.range = 250
+        l.innerAngle = 15
+        l.outerAngle = 40
+        l:SetColor(Vec3.new(1, 0.5, 0))
+        tipo = l.type
+        col = l:GetColor()
+        -- El mismo componente por la vía genérica.
+        porNombre = (e:GetComponent("Light") ~= nil)
+    )");
+    CHECK(go->hasLight());
+    CHECK(go->getLight()->getType() == LightType::Spot);
+    CHECK(nearlyEqual(go->getLight()->getIntensity(), 3.5f));
+    CHECK(nearlyEqual(go->getLight()->getRange(), 250.0f));
+    CHECK(nearlyEqual(go->getLight()->getOuterAngle(), 40.0f));
+    CHECK(nearlyEqual(sm.lua()["col"]["y"], 0.5f));
+    CHECK(sm.lua()["porNombre"] == true);
+
+    // Clamp del core: 500 se recorta a 100, no se escribe tal cual.
+    sm.lua().script("e:GetLight().intensity = 500");
+    CHECK(nearlyEqual(go->getLight()->getIntensity(), 100.0f));
+
+    // Tipo fuera del enum: aviso y sin cambio.
+    log.clear();
+    sm.lua().script("e:GetLight().type = 99");
+    CHECK(logContains(log, "WARN"));
+    CHECK(go->getLight()->getType() == LightType::Spot);
+
+    // NaN: mismo contrato que el resto de setters.
+    log.clear();
+    sm.lua().script("e:GetLight().range = 0/0");
+    CHECK(logContains(log, "WARN"));
+    CHECK(nearlyEqual(go->getLight()->getRange(), 250.0f));
+
+    sm.lua().script("e:RemoveLight()");
+    CHECK(!go->hasLight());
+
+    // Cámara.
+    sm.lua().script(R"(
+        local c = e:AddCamera()
+        c.mode = CameraProjection.Orthographic
+        c.fov = 70
+        c.orthographicSize = 42
+        c.near = 2
+        c.far = 900
+        modo = c.mode
+    )");
+    CHECK(go->hasCameraComponent());
+    CHECK(go->getCameraComponent()->getMode() == CameraComponent::ProjectionMode::Orthographic);
+    CHECK(nearlyEqual(go->getCameraComponent()->getFov(), 70.0f));
+    CHECK(nearlyEqual(go->getCameraComponent()->getOrthographicSize(), 42.0f));
+    CHECK(nearlyEqual(go->getCameraComponent()->getFar(), 900.0f));
+
+    log.clear();
+    sm.lua().script("e:GetCamera().mode = 7");
+    CHECK(logContains(log, "WARN"));
+    CHECK(go->getCameraComponent()->getMode() == CameraComponent::ProjectionMode::Orthographic);
+
+    sm.lua().script("e:RemoveComponent('Camera')");
+    CHECK(!go->hasCameraComponent());
+
+    sm.setLogCallback(nullptr);
+}
+
+static void test_entity_mesh_visible_desde_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Caja");
+    sm.rebuildAliveSet();
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    CHECK(go->meshVisible);            // default del core
+    sm.lua().script("antes = e.meshVisible; e.meshVisible = false");
+    CHECK(sm.lua()["antes"] == true);
+    CHECK(!go->meshVisible);
+    sm.lua().script("e.meshVisible = true");
+    CHECK(go->meshVisible);
+}
+
+// ---------------------------------------------------------------------------
+// Entity:SetParent — el movimiento vive en Scene::reparent (Core) y lo comparten
+// Lua y el reparent de la jerarquía del editor.
+// ---------------------------------------------------------------------------
+
+// Por defecto se conserva la pose de MUNDO (como transform.parent de Unity): el
+// objeto se queda donde estaba y lo que se recalcula es su local.
+static void test_set_parent_mantiene_la_pose_de_mundo(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* padre = scene.addGameObject("Padre");
+    padre->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(100.0f, 0.0f, 0.0f));
+    GameObject* suelto = scene.addGameObject("Suelto");
+    suelto->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(30.0f, 0.0f, 0.0f));
+    scene.getRoot().updateWorldTransforms();
+    sm.rebuildAliveSet();
+
+    sm.lua()["hijo"]  = LuaEntity{ suelto, &sm };
+    sm.lua()["papa"]  = LuaEntity{ padre,  &sm };
+    sm.lua().script("ok = hijo:SetParent(papa)");
+
+    CHECK(sm.lua()["ok"] == true);
+    CHECK(suelto->parent == padre);
+    // Sigue en x=30 en MUNDO...
+    CHECK(nearlyEqual(glm::vec3(suelto->worldTransform[3]).x, 30.0f));
+    // ...y por eso su local pasa a ser -70 (30 - 100).
+    CHECK(nearlyEqual(glm::vec3(suelto->localTransform[3]).x, -70.0f));
+
+    // El world está al día YA, sin esperar al frame siguiente.
+    sm.lua().script("wx = hijo:GetTransform():GetWorldPosition().x");
+    CHECK(nearlyEqual(sm.lua()["wx"], 30.0f));
+}
+
+// Con false se conserva el LOCAL y el objeto salta con su padre nuevo — que es
+// lo que hace arrastrar en la jerarquía del editor.
+static void test_set_parent_conservando_el_local(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* padre = scene.addGameObject("Padre");
+    padre->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(100.0f, 0.0f, 0.0f));
+    GameObject* suelto = scene.addGameObject("Suelto");
+    suelto->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(30.0f, 0.0f, 0.0f));
+    scene.getRoot().updateWorldTransforms();
+    sm.rebuildAliveSet();
+
+    sm.lua()["hijo"] = LuaEntity{ suelto, &sm };
+    sm.lua()["papa"] = LuaEntity{ padre,  &sm };
+    sm.lua().script("hijo:SetParent(papa, false)");
+
+    CHECK(nearlyEqual(glm::vec3(suelto->localTransform[3]).x, 30.0f));   // local intacto
+    CHECK(nearlyEqual(glm::vec3(suelto->worldTransform[3]).x, 130.0f));  // world saltó
+}
+
+// Sin argumento vuelve a la raíz, y GetParent lo refleja.
+static void test_set_parent_nil_vuelve_a_la_raiz(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* padre = scene.addGameObject("Padre");
+    GameObject* hijo  = scene.addGameObject("Hijo", padre);
+    scene.getRoot().updateWorldTransforms();
+    sm.rebuildAliveSet();
+
+    sm.lua()["h"] = LuaEntity{ hijo, &sm };
+    sm.lua().script(R"(
+        antes = h:GetParent().name
+        h:SetParent()
+        -- Colgando de la raíz, GetParent devuelve nil (contrato de siempre).
+        enRaiz = (h:GetParent() == nil)
+    )");
+    CHECK(sm.lua()["antes"] == std::string("Padre"));
+    CHECK(hijo->parent == &scene.getRoot());
+    CHECK(sm.lua()["enRaiz"] == true);
+    CHECK(padre->children.empty());
+}
+
+// Colgar un objeto de su propio descendiente desengancharía el subárbol del
+// árbol y se llevaría por delante el unique_ptr que lo mantiene vivo.
+static void test_set_parent_rechaza_el_ciclo(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* abuelo = scene.addGameObject("Abuelo");
+    GameObject* nieto  = scene.addGameObject("Nieto", abuelo);
+    scene.getRoot().updateWorldTransforms();
+    sm.rebuildAliveSet();
+
+    std::vector<std::string> log;
+    sm.setLogCallback([&](const std::string& m) { log.push_back(m); });
+    sm.lua()["a"] = LuaEntity{ abuelo, &sm };
+    sm.lua()["n"] = LuaEntity{ nieto,  &sm };
+    sm.lua().script("ok = a:SetParent(n)");
+
+    CHECK(sm.lua()["ok"] == false);
+    CHECK(logContains(log, "WARN"));
+    CHECK(logContains(log, "SetParent"));
+    // El árbol sigue como estaba.
+    CHECK(nieto->parent == abuelo);
+    CHECK(abuelo->parent == &scene.getRoot());
+    CHECK(abuelo->children.size() == 1);
+    sm.setLogCallback(nullptr);
+}
+
+// El reparent de la jerarquía del editor pasa ahora por Scene::reparent: este
+// test protege que execute/undo sigan dejando el nodo donde tocaba. Sin él, el
+// haber sacado el algoritmo de ReparentCommand no lo comprobaba nadie.
+static void test_reparent_command_sigue_moviendo_y_deshaciendo()
+{
+    Scene scene("Test");
+    GameObject* a = scene.addGameObject("A");
+    GameObject* b = scene.addGameObject("B");
+    GameObject* c = scene.addGameObject("C", a);
+
+    ReparentCommand cmd(scene, "Mover 'C'", c->id,
+                        a->id, /*oldIndex=*/0,
+                        b->id, /*newIndex=*/0);
+    cmd.execute();
+    CHECK(c->parent == b);
+    CHECK(b->children.size() == 1);
+    CHECK(a->children.empty());
+
+    cmd.undo();
+    CHECK(c->parent == a);
+    CHECK(a->children.size() == 1);
+    CHECK(b->children.empty());
+
+    // Con UN solo hijo el índice da igual, así que hace falta un caso donde
+    // importe: reordenar dentro del mismo padre. Un reparent que ignorase el
+    // índice y añadiese siempre al final pasaría el bloque de arriba entero.
+    GameObject* p  = scene.addGameObject("P");
+    GameObject* h0 = scene.addGameObject("H0", p);
+    GameObject* h1 = scene.addGameObject("H1", p);
+    GameObject* h2 = scene.addGameObject("H2", p);
+
+    ReparentCommand orden(scene, "Mover 'H2'", h2->id,
+                          p->id, /*oldIndex=*/2,
+                          p->id, /*newIndex=*/1);
+    orden.execute();
+    CHECK(p->children.size() == 3);
+    CHECK(p->children[0].get() == h0);
+    CHECK(p->children[1].get() == h2);   // se coló en medio
+    CHECK(p->children[2].get() == h1);
+
+    orden.undo();
+    CHECK(p->children[0].get() == h0);
+    CHECK(p->children[1].get() == h1);
+    CHECK(p->children[2].get() == h2);   // vuelve al final
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -3140,6 +3686,24 @@ int main()
     test_capas_json_ausente_o_corrupto_da_defaults();
     test_visibilidad_de_panel_round_trip();
     test_panel_sin_dato_no_es_cerrado();
+
+    test_autocomplete_prefijo_de_tipo();
+    test_autocomplete_por_miembro_conserva_receptor();
+    test_autocomplete_respeta_el_separador();
+    test_autocomplete_orden_y_vacio();
+    test_autocomplete_simbolos_nuevos_en_la_tabla();
+    test_autocomplete_firma_y_doc();
+    test_vec3_algebra_desde_lua(sm);
+    test_time_desde_lua(sm);
+    test_transform_ejes_y_lookat(sm);
+    test_transform_set_world_position_con_padre(sm);
+    test_light_y_camera_desde_lua(sm);
+    test_entity_mesh_visible_desde_lua(sm);
+    test_set_parent_mantiene_la_pose_de_mundo(sm);
+    test_set_parent_conservando_el_local(sm);
+    test_set_parent_nil_vuelve_a_la_raiz(sm);
+    test_set_parent_rechaza_el_ciclo(sm);
+    test_reparent_command_sigue_moviendo_y_deshaciendo();
 
     am.shutdown();
     pm.shutdown();

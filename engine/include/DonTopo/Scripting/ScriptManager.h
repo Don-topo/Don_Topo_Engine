@@ -124,6 +124,11 @@ public:
     // Hot reload: detecta cambios de mtime y .lua nuevos en Scripts/.
     // Llamable cada frame — solo escanea 1 de cada 60 llamadas (~1s a 60fps).
     void pollChanges();
+
+    // Paso fijo de FixedUpdate. Público porque los bindings lo publican tal
+    // cual como Time.fixedDeltaTime: duplicar la constante allí dejaría dos
+    // fuentes de verdad que se separarían en cuanto una de las dos cambiase.
+    static constexpr float kFixedStep = 1.0f / 60.0f;
 private:
     // Núcleo de instantiateComponent parametrizado por valores (el hot
     // reload instancia con los valores actuales, no con comp.overrides).
@@ -167,7 +172,6 @@ private:
     std::vector<std::weak_ptr<Collider>> m_collisionListenerColliders;
     // Todos los ScriptComponent vivos de la escena, en orden de traverse.
     std::vector<ScriptComponent*> collectComponents();
-    static constexpr float kFixedStep = 1.0f / 60.0f;
     static constexpr float kMaxAccumulator = 0.25f;   // anti spiral-of-death
     float m_fixedAccumulator = 0.0f;
     bool  m_playing = false;

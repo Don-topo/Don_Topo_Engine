@@ -25,20 +25,14 @@ void ReparentCommand::moveTo(uint64_t parentId, size_t index)
 {
     GameObject* node = m_scene.findById(m_id);
     GameObject* newParent = m_scene.findById(parentId);
-    if (!node || !newParent || !node->parent) return;
+    if (!node || !newParent) return;
 
-    auto& oldSiblings = node->parent->children;
-    auto it = std::find_if(oldSiblings.begin(), oldSiblings.end(),
-        [node](const std::unique_ptr<GameObject>& c) { return c.get() == node; });
-    if (it == oldSiblings.end()) return;
-
-    std::unique_ptr<GameObject> moved = std::move(*it);
-    oldSiblings.erase(it);
-
-    moved->parent = newParent;
-    auto& newSiblings = newParent->children;
-    size_t clampedIndex = std::min(index, newSiblings.size());
-    newSiblings.insert(newSiblings.begin() + static_cast<long>(clampedIndex), std::move(moved));
+    // El movimiento en sí vive en Scene::reparent (Core) desde que Lua también
+    // lo necesita: dos copias del mismo corta-y-pega sobre unique_ptr es como
+    // se arreglan los ciclos en una y no en la otra. Los índices que este
+    // comando guarda ya son índices sobre la lista sin el nodo, que es
+    // exactamente lo que reparent espera.
+    m_scene.reparent(node, newParent, index);
 }
 
 DeleteGameObjectCommand::DeleteGameObjectCommand(Scene& scene, PhysicsManager& physics, AudioManager& audio,

@@ -50,6 +50,11 @@ namespace DonTopo
     void SpriteEditorPanel::open(EditorContext& ctx, const std::string& imagePath)
     {
         m_open = true;
+        // Pulsar "Editar sprites..." es una petición explícita de mirar el
+        // atlas: la ventana tiene que ponerse delante, no solo existir. Va
+        // ANTES del early-return de abajo a propósito — volver a pedir el mismo
+        // atlas no recarga nada, pero sí tiene que traer la ventana al frente.
+        m_focusRequested = true;
         // La misma imagen que ya está abierta no se recarga: perderían los
         // cambios sin guardar por pulsar dos veces el mismo botón.
         if (imagePath == m_path && !m_path.empty()) return;
@@ -554,6 +559,11 @@ namespace DonTopo
         if (!m_open) return;
 
         ImGui::SetNextWindowSize(ImVec2(900.0f, 560.0f), ImGuiCond_FirstUseEver);
+        if (m_focusRequested)
+        {
+            ImGui::SetNextWindowFocus();
+            m_focusRequested = false;
+        }
         if (!ImGui::Begin("Sprite Editor", &m_open))
         {
             ImGui::End();

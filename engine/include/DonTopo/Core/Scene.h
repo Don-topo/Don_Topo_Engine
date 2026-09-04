@@ -34,6 +34,28 @@ namespace DonTopo
             GameObject* addGameObject(const std::string& name, GameObject* parent = nullptr);
             void removeGameObject(GameObject* node);
 
+            // Mueve node para que cuelgue de newParent (nullptr = la raíz de la
+            // escena), insertándolo en la posición index de los hijos del
+            // destino. index se interpreta sobre la lista YA SIN node, así que
+            // un valor >= al tamaño resultante lo deja al final (que es lo que
+            // hace el default).
+            //
+            // Devuelve false —sin tocar nada— si node es nulo o es la raíz (la
+            // raíz no cuelga de nadie), o si newParent está DENTRO del subárbol
+            // de node: eso desengancharía el subárbol del árbol y perdería el
+            // unique_ptr que lo mantiene vivo, así que es un cuelgue seguro, no
+            // una escena rara.
+            //
+            // NO toca transforms a propósito: conservar la pose local (el
+            // objeto salta con el padre) o la de mundo (se queda donde está)
+            // son las dos cosas que se quieren, y la decisión es del caller.
+            // Quien quiera la pose de mundo la lee ANTES y la reescribe DESPUÉS.
+            // Los dos callers de hoy son el reparent de la jerarquía del editor
+            // (vía ReparentCommand, que además necesita el index exacto para
+            // deshacer) y Entity:SetParent de Lua.
+            bool reparent(GameObject* node, GameObject* newParent,
+                          size_t index = static_cast<size_t>(-1));
+
             // Busca por GameObject::id en todo el árbol (incluida la raíz).
             // nullptr si ningún nodo tiene ese id. O(n) sobre el árbol — usado
             // por los comandos de Undo/Redo (Command.cpp) pa resolver su

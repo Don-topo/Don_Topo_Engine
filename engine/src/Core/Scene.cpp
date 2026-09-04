@@ -2653,6 +2653,42 @@ namespace DonTopo
             siblings.end());
     }
 
+    bool Scene::reparent(GameObject* node, GameObject* newParent, size_t index)
+    {
+        // La raíz no cuelga de nadie: sin parent no hay lista de la que sacarlo.
+        if (!node || !node->parent) return false;
+
+        GameObject* target = newParent ? newParent : &m_root;
+        if (target == node) return false;
+
+        // Ciclo: soltar un nodo dentro de su propio subárbol desengancharía ese
+        // subárbol del árbol, y con él el unique_ptr que lo mantiene vivo.
+        bool cycle = false;
+        node->traverse([&](GameObject* go) { if (go == target) cycle = true; });
+        if (cycle) return false;
+
+        auto& oldSiblings = node->parent->children;
+        auto it = std::find_if(oldSiblings.begin(), oldSiblings.end(),
+            [node](const std::unique_ptr<GameObject>& c) { return c.get() == node; });
+        // El nodo dice tener padre pero no está en su lista: árbol incoherente,
+        // mejor no tocarlo.
+        if (it == oldSiblings.end()) return false;
+
+        // El unique_ptr se saca ANTES de calcular el hueco: index se interpreta
+        // sobre la lista de destino ya sin el nodo, así el mismo índice vale
+        // esté el nodo donde esté (y el Undo del editor puede guardar el índice
+        // final tal cual).
+        std::unique_ptr<GameObject> moved = std::move(*it);
+        oldSiblings.erase(it);
+
+        moved->parent = target;
+        auto& newSiblings = target->children;
+        const size_t clamped = std::min(index, newSiblings.size());
+        newSiblings.insert(newSiblings.begin() + static_cast<ptrdiff_t>(clamped),
+                           std::move(moved));
+        return true;
+    }
+
     GameObject* Scene::cloneGameObject(GameObject* src, GameObject* parent,
                                        PhysicsManager& physics, AudioManager& audio)
     {

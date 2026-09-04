@@ -43,7 +43,7 @@ A game engine written in C++20, with two interchangeable render backends: **Vulk
 - **Draw batching**: objects sharing a mesh+material collapse into one instanced draw, and their GPU resources (buffers, textures) are deduplicated by a content key so identical meshes are uploaded once — in both backends
 - **Async asset loading**: worker thread pool (`JobSystem`), off-thread image decode, batched GPU uploads with deferred visibility and deferred destruction — no `vkDeviceWaitIdle` stalls on drop or scene load
 - **Export Game**: packages a standalone runtime (scene, assets, scripts, shaders, splash screen, FMOD and MSVC CRT DLLs) that links no editor code at all
-- **Lua scripting**: `ScriptComponent` (multiple per GameObject), Unity-style lifecycle (Awake/Start/Update/FixedUpdate/LateUpdate/OnDestroy), Entity/Transform/Scene/Input/Audio API, runtime scene switching (`DonTopo.loadScene`), hot reload, auto-generated property UI
+- **Lua scripting**: `ScriptComponent` (multiple per GameObject), Unity-style lifecycle (Awake/Start/Update/FixedUpdate/LateUpdate/OnDestroy), Entity/Transform/Scene/Time/Input/Audio/Light/Camera API, runtime scene switching (`DonTopo.loadScene`), hot reload, auto-generated property UI
 - **UI components** (14): `Canvas` (scale modes, reference resolution, safe area), `Panel`, `Image` (simple/sliced/tiled/filled), `Text` (font, size, outline, shadow, align, wrap/overflow), `Button` (5 states, color-tint/sprite-swap/fade transitions, optional text label), `Slider`, `Checkbox`, `Toggle`, `Scrollbar`, `ProgressBar` (value range, fill direction, background/fill sprites), `InputField` (caret, content types), `Dropdown`, `ScrollView` and `Layout` (horizontal/vertical/grid auto-layout with padding, spacing, cell size, cross-axis alignment, content-size fitters and per-child `ignoreLayout`; on a GameObject with no other UI component it builds its own non-drawing container that groups, places and clips). They are **data-only** components of the scene: a single per-frame sync rebuilds/updates the live canvas tree from them, so what you see in Play and in the exported game comes from the scene, not from a hand-wired tree. Editable in Properties and **fully scriptable from Lua** — every field, plus `OnClick`/`OnDoubleClick` callbacks and the button state (see below)
 - **World-space canvases and multi-canvas**: a `Canvas` can render as a quad **inside the scene** instead of on the screen (`renderMode`, `worldScale`, `billboard` none/yaw-only/full, `depthTest`) — health bars over enemies, diegetic screens. World canvases are drawn in the scene pass, sorted back-to-front, so geometry occludes them; screen canvases stay on top as before. A scene can hold **any number of canvases**, each with its own tree; pointer input goes to the topmost one under the cursor, and a canvas that owns a press keeps it until release. Both backends. Three known limits: a world canvas cannot be clicked (select it from the Hierarchy), `clipChildren` does not clip on one, and fog/motion blur/TAA read the depth of whatever is *behind* it
 - FBX / OBJ model loading (embedded textures supported)
@@ -759,13 +759,18 @@ collision callbacks) and serializable properties that show up in Properties on t
 own.
 
 They are edited in the built-in **Script Editor** panel — multi-tab, Lua highlighting,
-a syntax check on save and an autocomplete popup over the whole API — or in any
-external editor: either way the running engine hot-reloads the file and keeps the
-property values.
+a live syntax check with a status bar, find/replace (`Ctrl+F`), go-to-line (`Ctrl+G`),
+reload-on-external-change and an autocomplete popup that shows each entry's signature
+and matches by member name, so `t:GetPos` on a local variable suggests
+`Transform:GetPosition` — or in any external editor: either way the running engine
+hot-reloads the file and keeps the property values.
 
-From a script you reach the entity and its transform, the scene graph, input, physics
-(the four colliders, `Rigidbody`, raycasts, sphere casts, overlaps and collision
-layers), audio (clips, the global mixer, reverb zones), the animator, the fourteen UI
+From a script you reach the entity and its transform (including world position, the
+object's axes and `LookAt`), the scene graph (including reparenting, which keeps the
+world pose by default), the frame clock (`Time`), input
+(keyboard, mouse, named actions and raw gamepad), physics (the four colliders,
+`Rigidbody`, raycasts, sphere casts, overlaps and collision layers), audio (clips, the
+global mixer, reverb zones), the animator, lights and the game camera, the fourteen UI
 components and runtime scene switching with `DonTopo.loadScene`.
 
 **The complete API reference is in [`Scripts/README.md`](Scripts/README.md)** — every

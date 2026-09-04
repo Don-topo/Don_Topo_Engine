@@ -414,6 +414,9 @@ namespace DonTopo
     {
         m_playing = true;
         m_fixedAccumulator = 0.0f;
+        // Time.time cuenta desde este instante: un segundo Play tras un Stop
+        // empieza de cero, no continúa donde lo dejó la partida anterior.
+        ScriptBindings::resetTime(*this);
         m_destroyQueue.clear();
         rebuildAliveSet();
 
@@ -463,6 +466,9 @@ namespace DonTopo
     void ScriptManager::update(float dt)
     {
         if (!m_playing || !m_scene) return;
+        // Antes de cualquier callback: Awake y Start de los componentes nuevos
+        // ya deben ver el Time de ESTE frame, no el del anterior.
+        ScriptBindings::tickTime(*this, dt);
         rebuildAliveSet();
 
         // Snapshot de punteros: los scripts pueden añadir componentes en

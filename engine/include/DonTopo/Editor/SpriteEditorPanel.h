@@ -57,6 +57,11 @@ namespace DonTopo
         int  indexOfName(const std::string& name) const;
 
         bool        m_open = false;
+        // Petición de traer la ventana al frente, puesta por open() y consumida
+        // por el siguiente draw(). m_open no basta: acoplado en un grupo de
+        // pestañas, "abierto" solo quiere decir que la pestaña existe, y el
+        // atlas se abría detrás de la pestaña que tuviera el foco.
+        bool        m_focusRequested = false;
         std::string m_path;                    // imagen abierta; vacío = ninguna
         std::string m_error;                   // por qué no se pudo abrir
         uint64_t    m_textureId = 0;           // handle de ImGui, 0 = sin imagen

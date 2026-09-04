@@ -13,6 +13,8 @@
 #include "DonTopo/Physics/Colliders/PlaneCollider.h"
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Core/LightComponent.h"
+#include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
 #include "DonTopo/UI/TextComponent.h"
@@ -135,6 +137,8 @@ namespace DonTopo::ScriptBindings
         struct LuaReverbZone { LuaEntity e; };
         struct LuaRigidbody { LuaEntity e; };
         struct LuaAnimator { LuaEntity e; };
+        struct LuaLight { LuaEntity e; };
+        struct LuaCamera { LuaEntity e; };
         struct LuaCanvas { LuaEntity e; };
         struct LuaButton { LuaEntity e; };
         struct LuaText { LuaEntity e; };
@@ -168,6 +172,17 @@ namespace DonTopo::ScriptBindings
             eulerDeg = glm::degrees(glm::vec3(t1, t2, t3));
         }
 
+        // Normaliza una columna del worldTransform. Un objeto con escala 0 en
+        // ese eje deja la columna a cero y normalize() devolvería NaN, que
+        // desde Lua viaja a un setter y de ahí al JSON de la escena: con escala
+        // degenerada se devuelve el eje canónico, que al menos es una dirección
+        // válida.
+        glm::vec3 safeAxis(const glm::vec3& column, const glm::vec3& fallback)
+        {
+            const float len = glm::length(column);
+            return len > 1e-6f ? column / len : fallback;
+        }
+
         void recomposeLocal(GameObject* go, const glm::vec3& pos, const glm::vec3& eulerDeg, const glm::vec3& scale)
         {
             glm::mat4 r = glm::eulerAngleXYZ(glm::radians(eulerDeg.x),
@@ -189,12 +204,47 @@ namespace DonTopo::ScriptBindings
                 "x", &glm::vec3::x,
                 "y", &glm::vec3::y,
                 "z", &glm::vec3::z,
+                // Álgebra que antes había que escribir a mano con math.sqrt.
+                // Todas devuelven valores nuevos: ninguna muta el receptor, así
+                // que 'local d = a:Normalized()' deja 'a' intacto.
+                "Length", [](const glm::vec3& v) { return glm::length(v); },
+                // Vector de longitud 1. El vector cero no tiene dirección: se
+                // devuelve cero tal cual en vez de un NaN, que se colaría hasta
+                // el JSON de la escena (ver ensureFinite).
+                "Normalized", [](const glm::vec3& v) {
+                    const float len = glm::length(v);
+                    return len > 0.0f ? v / len : glm::vec3(0.0f);
+                },
+                "Dot", [](const glm::vec3& a, const glm::vec3& b) { return glm::dot(a, b); },
+                "Cross", [](const glm::vec3& a, const glm::vec3& b) { return glm::cross(a, b); },
+                "Distance", [](const glm::vec3& a, const glm::vec3& b) { return glm::length(b - a); },
+                // Interpolación lineal SIN acotar t: con t fuera de [0,1]
+                // extrapola, igual que glm::mix y a diferencia de Unity.
+                "Lerp", [](const glm::vec3& a, const glm::vec3& b, float t) {
+                    return a + (b - a) * t;
+                },
                 sol::meta_function::addition,
                     [](const glm::vec3& a, const glm::vec3& b) { return a + b; },
                 sol::meta_function::subtraction,
                     [](const glm::vec3& a, const glm::vec3& b) { return a - b; },
-                sol::meta_function::multiplication,
+                // Lua prueba el __mul del operando IZQUIERDO y, si no le vale,
+                // el del derecho — pero con los argumentos en el orden escrito.
+                // Sin la segunda sobrecarga, '2 * v' llegaba aquí como
+                // (float, vec3) y reventaba con un error de tipos.
+                sol::meta_function::multiplication, sol::overload(
                     [](const glm::vec3& v, float s) { return v * s; },
+                    [](float s, const glm::vec3& v) { return v * s; }),
+                // Dividir por cero da inf/NaN, que ensureFinite ataja en cuanto
+                // el resultado intenta entrar en un setter del motor.
+                sol::meta_function::division,
+                    [](const glm::vec3& v, float s) { return v / s; },
+                sol::meta_function::unary_minus,
+                    [](const glm::vec3& v) { return -v; },
+                // Igualdad exacta componente a componente. Lua solo llama a
+                // __eq cuando los dos operandos son del mismo tipo, así que
+                // 'v == nil' sigue siendo false sin pasar por aquí.
+                sol::meta_function::equal_to,
+                    [](const glm::vec3& a, const glm::vec3& b) { return a == b; },
                 sol::meta_function::to_string,
                     [](const glm::vec3& v) {
                         return "(" + std::to_string(v.x) + ", " + std::to_string(v.y) +
@@ -263,6 +313,174 @@ namespace DonTopo::ScriptBindings
             };
         }
 
+        // Reloj de los scripts. Los tres valores acumulados viven aquí y no en
+        // la tabla Lua porque la tabla es escribible desde un script: si
+        // alguien hiciera Time.time = 0, el acumulador de C++ seguiría siendo
+        // el bueno y el frame siguiente restauraría el valor correcto.
+        float g_timeSincePlay = 0.0f;
+        int   g_frameCount    = 0;
+
+        void registerTime(ScriptManager& mgr)
+        {
+            sol::state& lua = mgr.lua();
+            sol::table time = lua.create_named_table("Time");
+            // fixedDeltaTime es constante (el paso fijo de ScriptManager) y se
+            // escribe una sola vez; los otros tres los pisa tickTime.
+            time["fixedDeltaTime"] = ScriptManager::kFixedStep;
+            time["deltaTime"]      = 0.0f;
+            time["time"]           = 0.0f;
+            time["frameCount"]     = 0;
+        }
+
+        // Luz y cámara de juego. Los dos componentes existían en el core desde
+        // hace mucho y no llegaban a Lua: encender una luz, cambiarle el color
+        // o abrir el FOV eran cosas que solo se podían hacer a mano en el
+        // inspector. Ninguno de los dos guarda posición ni orientación —salen
+        // del worldTransform del GameObject—, así que aquí solo hay ajustes.
+        //
+        // Todos los setters del core ya acotan (LightComponent.h,
+        // CameraComponent.cpp): no se repite el clamp aquí, pero sí el filtro
+        // de NaN, porque std::clamp(NaN,...) devuelve NaN y se colaría entero.
+        void registerLighting(ScriptManager& mgr)
+        {
+            sol::state& lua = mgr.lua();
+
+            lua["LightType"] = lua.create_table_with(
+                "Point", static_cast<int>(LightType::Point),
+                "Spot", static_cast<int>(LightType::Spot),
+                "Directional", static_cast<int>(LightType::Directional),
+                "Area", static_cast<int>(LightType::Area));
+            lua["CameraProjection"] = lua.create_table_with(
+                "Perspective", static_cast<int>(CameraComponent::ProjectionMode::Perspective),
+                "Orthographic", static_cast<int>(CameraComponent::ProjectionMode::Orthographic));
+
+            auto lightOf = [](const LuaLight& c) -> LightComponent* {
+                GameObject* go = deref(c.e);
+                if (!go->hasLight()) throw std::runtime_error("El GameObject ya no tiene Light");
+                return go->getLight().get();
+            };
+            lua.new_usertype<LuaLight>("Light",
+                sol::no_constructor,
+                // Tipo fuera del enum: se avisa y se ignora, mismo criterio que
+                // ForceMode. Un valor cualquiera viajaría a direction.w del UBO
+                // y el shader elegiría una rama que no existe.
+                "type", sol::property(
+                    [lightOf](const LuaLight& c) { return static_cast<int>(lightOf(c)->getType()); },
+                    [lightOf, &mgr](const LuaLight& c, int v) {
+                        LightComponent* l = lightOf(c);
+                        if (v < static_cast<int>(LightType::Point) ||
+                            v > static_cast<int>(LightType::Area))
+                        {
+                            mgr.log("[Lua][WARN] Light.type: valor fuera de rango (" +
+                                    std::to_string(v) + "), usa la tabla LightType");
+                            return;
+                        }
+                        l->setType(static_cast<LightType>(v));
+                    }),
+                "intensity", sol::property(
+                    [lightOf](const LuaLight& c) { return lightOf(c)->getIntensity(); },
+                    [lightOf, &mgr](const LuaLight& c, float v) {
+                        LightComponent* l = lightOf(c);
+                        if (!ensureFinite(mgr, "Light.intensity", v)) return;
+                        l->setIntensity(v);
+                    }),
+                "range", sol::property(
+                    [lightOf](const LuaLight& c) { return lightOf(c)->getRange(); },
+                    [lightOf, &mgr](const LuaLight& c, float v) {
+                        LightComponent* l = lightOf(c);
+                        if (!ensureFinite(mgr, "Light.range", v)) return;
+                        l->setRange(v);
+                    }),
+                "innerAngle", sol::property(
+                    [lightOf](const LuaLight& c) { return lightOf(c)->getInnerAngle(); },
+                    [lightOf, &mgr](const LuaLight& c, float v) {
+                        LightComponent* l = lightOf(c);
+                        if (!ensureFinite(mgr, "Light.innerAngle", v)) return;
+                        l->setInnerAngle(v);
+                    }),
+                "outerAngle", sol::property(
+                    [lightOf](const LuaLight& c) { return lightOf(c)->getOuterAngle(); },
+                    [lightOf, &mgr](const LuaLight& c, float v) {
+                        LightComponent* l = lightOf(c);
+                        if (!ensureFinite(mgr, "Light.outerAngle", v)) return;
+                        l->setOuterAngle(v);
+                    }),
+                "areaWidth", sol::property(
+                    [lightOf](const LuaLight& c) { return lightOf(c)->getAreaWidth(); },
+                    [lightOf, &mgr](const LuaLight& c, float v) {
+                        LightComponent* l = lightOf(c);
+                        if (!ensureFinite(mgr, "Light.areaWidth", v)) return;
+                        l->setAreaWidth(v);
+                    }),
+                "areaHeight", sol::property(
+                    [lightOf](const LuaLight& c) { return lightOf(c)->getAreaHeight(); },
+                    [lightOf, &mgr](const LuaLight& c, float v) {
+                        LightComponent* l = lightOf(c);
+                        if (!ensureFinite(mgr, "Light.areaHeight", v)) return;
+                        l->setAreaHeight(v);
+                    }),
+                // El color va por método y no por propiedad porque es un Vec3:
+                // 'light.color.x = 1' sobre una propiedad escribiría en una
+                // COPIA temporal y se perdería sin avisar.
+                "GetColor", [lightOf](const LuaLight& c) { return lightOf(c)->getColor(); },
+                "SetColor", [lightOf, &mgr](const LuaLight& c, const glm::vec3& col) {
+                    LightComponent* l = lightOf(c);
+                    if (!ensureFinite(mgr, "Light.SetColor", col)) return;
+                    l->setColor(col);
+                });
+
+            auto camOf = [](const LuaCamera& c) -> CameraComponent* {
+                GameObject* go = deref(c.e);
+                if (!go->hasCameraComponent()) throw std::runtime_error("El GameObject ya no tiene Camera");
+                return go->getCameraComponent().get();
+            };
+            lua.new_usertype<LuaCamera>("Camera",
+                sol::no_constructor,
+                "mode", sol::property(
+                    [camOf](const LuaCamera& c) { return static_cast<int>(camOf(c)->getMode()); },
+                    [camOf, &mgr](const LuaCamera& c, int v) {
+                        CameraComponent* cam = camOf(c);
+                        if (v < static_cast<int>(CameraComponent::ProjectionMode::Perspective) ||
+                            v > static_cast<int>(CameraComponent::ProjectionMode::Orthographic))
+                        {
+                            mgr.log("[Lua][WARN] Camera.mode: valor fuera de rango (" +
+                                    std::to_string(v) + "), usa la tabla CameraProjection");
+                            return;
+                        }
+                        cam->setMode(static_cast<CameraComponent::ProjectionMode>(v));
+                    }),
+                // Solo lo usa el modo perspectiva; el ortográfico lo ignora.
+                "fov", sol::property(
+                    [camOf](const LuaCamera& c) { return camOf(c)->getFov(); },
+                    [camOf, &mgr](const LuaCamera& c, float v) {
+                        CameraComponent* cam = camOf(c);
+                        if (!ensureFinite(mgr, "Camera.fov", v)) return;
+                        cam->setFov(v);
+                    }),
+                // Semi-altura en unidades de mundo; solo lo usa el ortográfico.
+                "orthographicSize", sol::property(
+                    [camOf](const LuaCamera& c) { return camOf(c)->getOrthographicSize(); },
+                    [camOf, &mgr](const LuaCamera& c, float v) {
+                        CameraComponent* cam = camOf(c);
+                        if (!ensureFinite(mgr, "Camera.orthographicSize", v)) return;
+                        cam->setOrthographicSize(v);
+                    }),
+                "near", sol::property(
+                    [camOf](const LuaCamera& c) { return camOf(c)->getNear(); },
+                    [camOf, &mgr](const LuaCamera& c, float v) {
+                        CameraComponent* cam = camOf(c);
+                        if (!ensureFinite(mgr, "Camera.near", v)) return;
+                        cam->setNear(v);
+                    }),
+                "far", sol::property(
+                    [camOf](const LuaCamera& c) { return camOf(c)->getFar(); },
+                    [camOf, &mgr](const LuaCamera& c, float v) {
+                        CameraComponent* cam = camOf(c);
+                        if (!ensureFinite(mgr, "Camera.far", v)) return;
+                        cam->setFar(v);
+                    }));
+        }
+
         void registerInput(ScriptManager& mgr)
         {
             sol::state& lua = mgr.lua();
@@ -307,6 +525,53 @@ namespace DonTopo::ScriptBindings
             mb["Left"]   = GLFW_MOUSE_BUTTON_LEFT;
             mb["Right"]  = GLFW_MOUSE_BUTTON_RIGHT;
             mb["Middle"] = GLFW_MOUSE_BUTTON_MIDDLE;
+
+            // Mando crudo. Lo normal es usar acciones con nombre (el panel
+            // Input Actions ya sabe de mando), pero el core expone el mando
+            // directo y el panel lo usa para capturar bindings: no capamos en
+            // Lua lo que el motor da. Sin mando conectado todo devuelve false,
+            // nunca error.
+            input["IsPadButtonDown"]    = [](int b) { return Input::isPadButtonDown(b); };
+            input["IsPadButtonPressed"] = [](int b) { return Input::isPadButtonPressed(b); };
+            // Los ejes se consultan por CÓDIGO, no por eje: un eje son dos
+            // direcciones (arriba/abajo) y cada una vale como binding aparte.
+            // El código lo compone PadAxis.Code(eje, negativo) o, más cómodo,
+            // se lee de las constantes ya compuestas de la tabla PadAxis.
+            input["IsPadAxisDown"]      = [](int code) { return Input::isPadAxisDown(code); };
+            input["IsPadAxisPressed"]   = [](int code) { return Input::isPadAxisPressed(code); };
+
+            sol::table pad = lua.create_named_table("PadButton");
+            pad["A"] = GLFW_GAMEPAD_BUTTON_A;  pad["B"] = GLFW_GAMEPAD_BUTTON_B;
+            pad["X"] = GLFW_GAMEPAD_BUTTON_X;  pad["Y"] = GLFW_GAMEPAD_BUTTON_Y;
+            pad["LeftBumper"]  = GLFW_GAMEPAD_BUTTON_LEFT_BUMPER;
+            pad["RightBumper"] = GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER;
+            pad["Back"]  = GLFW_GAMEPAD_BUTTON_BACK;
+            pad["Start"] = GLFW_GAMEPAD_BUTTON_START;
+            pad["Guide"] = GLFW_GAMEPAD_BUTTON_GUIDE;
+            pad["LeftThumb"]  = GLFW_GAMEPAD_BUTTON_LEFT_THUMB;
+            pad["RightThumb"] = GLFW_GAMEPAD_BUTTON_RIGHT_THUMB;
+            pad["DpadUp"]    = GLFW_GAMEPAD_BUTTON_DPAD_UP;
+            pad["DpadRight"] = GLFW_GAMEPAD_BUTTON_DPAD_RIGHT;
+            pad["DpadDown"]  = GLFW_GAMEPAD_BUTTON_DPAD_DOWN;
+            pad["DpadLeft"]  = GLFW_GAMEPAD_BUTTON_DPAD_LEFT;
+
+            // Códigos ya compuestos, uno por dirección. Los nombres describen
+            // hacia dónde se empuja, no el signo del eje: en GLFW el eje Y de
+            // los sticks crece hacia ABAJO, así que "Up" es el negativo.
+            sol::table axis = lua.create_named_table("PadAxis");
+            axis["Code"] = [](int a, bool negative) { return Input::padAxisCode(a, negative); };
+            axis["LeftStickRight"] = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_X, false);
+            axis["LeftStickLeft"]  = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_X, true);
+            axis["LeftStickDown"]  = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_Y, false);
+            axis["LeftStickUp"]    = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_Y, true);
+            axis["RightStickRight"] = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_X, false);
+            axis["RightStickLeft"]  = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_X, true);
+            axis["RightStickDown"]  = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_Y, false);
+            axis["RightStickUp"]    = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_Y, true);
+            // Los gatillos son analógicos con reposo en -1: Input los
+            // renormaliza a [0,1], así que solo tienen dirección positiva.
+            axis["LeftTrigger"]  = Input::padAxisCode(GLFW_GAMEPAD_AXIS_LEFT_TRIGGER, false);
+            axis["RightTrigger"] = Input::padAxisCode(GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER, false);
         }
 
         void registerTransform(ScriptManager& mgr)
@@ -348,6 +613,81 @@ namespace DonTopo::ScriptBindings
                 "GetWorldPosition", [](const LuaTransform& t) {
                     GameObject* go = deref(t.e);
                     return glm::vec3(go->worldTransform[3]);
+                },
+                // Coloca el objeto en una posición de MUNDO: convierte a local
+                // deshaciendo el worldTransform del padre. Sin padre es lo
+                // mismo que SetPosition. Un padre con escala 0 da una matriz
+                // singular y su inversa son infinitos: ensureFinite atrapa el
+                // resultado antes de escribirlo, que si no dejaría el objeto
+                // fuera del universo y sin vuelta atrás.
+                "SetWorldPosition", [&mgr](const LuaTransform& t, const glm::vec3& wp) {
+                    GameObject* go = deref(t.e);
+                    if (!ensureFinite(mgr, "Transform.SetWorldPosition", wp)) return;
+                    glm::vec3 local = wp;
+                    if (go->parent)
+                        local = glm::vec3(glm::inverse(go->parent->worldTransform) * glm::vec4(wp, 1.0f));
+                    if (!ensureFinite(mgr, "Transform.SetWorldPosition", local)) return;
+                    glm::vec3 p, r, s; decomposeLocal(go, p, r, s);
+                    recomposeLocal(go, local, r, s);
+                },
+                // Ejes del objeto en MUNDO, ya normalizados (un objeto escalado
+                // daría vectores más largos que 1 si se leyeran crudos). La
+                // convención es la de CameraComponent y glm::lookAt: se mira
+                // hacia -Z local, +Y es arriba y +X la derecha.
+                "GetForward", [](const LuaTransform& t) {
+                    GameObject* go = deref(t.e);
+                    return safeAxis(-glm::vec3(go->worldTransform[2]), glm::vec3(0.0f, 0.0f, -1.0f));
+                },
+                "GetRight", [](const LuaTransform& t) {
+                    GameObject* go = deref(t.e);
+                    return safeAxis(glm::vec3(go->worldTransform[0]), glm::vec3(1.0f, 0.0f, 0.0f));
+                },
+                "GetUp", [](const LuaTransform& t) {
+                    GameObject* go = deref(t.e);
+                    return safeAxis(glm::vec3(go->worldTransform[1]), glm::vec3(0.0f, 1.0f, 0.0f));
+                },
+                // Orienta el objeto para que su forward (-Z) apunte al punto de
+                // mundo dado, conservando posición y escala. El up opcional
+                // (por defecto +Y) resuelve el giro sobrante alrededor del
+                // forward. Casos degenerados —mirarse a sí mismo, o un up
+                // paralelo al forward— no tienen respuesta: se avisa y se deja
+                // la rotación como estaba, en vez de instalar una matriz con
+                // NaN que arrastraría a los hijos.
+                "LookAt", [&mgr](const LuaTransform& t, const glm::vec3& target,
+                                 sol::optional<glm::vec3> up) {
+                    GameObject* go = deref(t.e);
+                    if (!ensureFinite(mgr, "Transform.LookAt", target)) return;
+                    const glm::vec3 upVec = up ? *up : glm::vec3(0.0f, 1.0f, 0.0f);
+                    if (!ensureFinite(mgr, "Transform.LookAt", upVec)) return;
+
+                    glm::vec3 p, r, s; decomposeLocal(go, p, r, s);
+                    const glm::vec3 worldPos = glm::vec3(go->worldTransform[3]);
+                    const glm::vec3 dir = target - worldPos;
+                    if (glm::length(dir) <= 1e-6f || glm::length(upVec) <= 1e-6f)
+                    {
+                        mgr.log("[Lua][WARN] Transform.LookAt: objetivo en la propia posicion "
+                                "o 'up' nulo, rotacion sin cambios");
+                        return;
+                    }
+                    const glm::vec3 fwd = glm::normalize(dir);
+                    if (std::abs(glm::dot(fwd, glm::normalize(upVec))) > 0.9999f)
+                    {
+                        mgr.log("[Lua][WARN] Transform.LookAt: 'up' paralelo a la direccion de "
+                                "vista, rotacion sin cambios");
+                        return;
+                    }
+                    // lookAt devuelve una VIEW (mundo -> cámara); la pose del
+                    // objeto es su inversa. Se compone en mundo y, si hay
+                    // padre, se pasa a local: si no, un objeto con padre rotado
+                    // miraría a cualquier sitio menos al objetivo.
+                    glm::mat4 world = glm::inverse(glm::lookAt(worldPos, target, upVec));
+                    if (go->parent)
+                        world = glm::inverse(go->parent->worldTransform) * world;
+                    float t1 = 0.0f, t2 = 0.0f, t3 = 0.0f;
+                    glm::extractEulerAngleXYZ(world, t1, t2, t3);
+                    const glm::vec3 eulerDeg = glm::degrees(glm::vec3(t1, t2, t3));
+                    if (!ensureFinite(mgr, "Transform.LookAt", eulerDeg)) return;
+                    recomposeLocal(go, p, eulerDeg, s);
                 },
                 "Translate", [&mgr](const LuaTransform& t, const glm::vec3& d) {
                     GameObject* go = deref(t.e);
@@ -2093,9 +2433,102 @@ namespace DonTopo::ScriptBindings
                 "name", sol::property(
                     [](const LuaEntity& e) { return deref(e)->name; },
                     [](const LuaEntity& e, const std::string& n) { deref(e)->name = n; }),
+                // Oculta o muestra la malla sin destruir nada: el objeto sigue
+                // vivo, sigue colisionando y sus scripts siguen corriendo, solo
+                // deja de dibujarse. Es el "SetActive de lo visible" que todo
+                // juego necesita y que hasta ahora solo se podía tocar desde el
+                // inspector. Un objeto sin malla acepta el flag igual (no es un
+                // error): si luego se le pone una, ya nace con esta visibilidad.
+                "meshVisible", sol::property(
+                    [](const LuaEntity& e) { return deref(e)->meshVisible; },
+                    [](const LuaEntity& e, bool v) { deref(e)->meshVisible = v; }),
                 "IsValid", [](const LuaEntity& e) {
                     return e.go && e.mgr && e.mgr->isAlive(e.go);
                 },
+                // Luz y cámara: mismos atajos con nombre que la UI. Los Get
+                // devuelven nil si el componente no está —comprobarlo es lo
+                // primero que hace un script— y los Add son idempotentes.
+                // Cambia de padre. Sin argumento (o con nil) lo cuelga de la
+                // raíz de la escena. El segundo argumento decide qué se
+                // conserva —por defecto la pose de MUNDO, como el
+                // transform.parent de Unity: el objeto se queda donde está y lo
+                // que se recalcula es su transform local. Con false se conserva
+                // el LOCAL y el objeto salta con su padre nuevo, que es lo que
+                // hace arrastrar en la jerarquía del editor.
+                //
+                // Devuelve false —sin tocar nada— si el destino está dentro del
+                // propio subárbol: eso desengancharía el subárbol del árbol.
+                "SetParent", [&mgr](const LuaEntity& e, sol::optional<LuaEntity> parent,
+                                    sol::optional<bool> keepWorld) -> bool {
+                    GameObject* go = deref(e);
+                    if (!mgr.scene()) return false;
+                    // deref del padre ANTES de nada: un padre ya destruido tiene
+                    // que dar error de Lua como en cualquier otro método, no un
+                    // false silencioso (mismo criterio que el hallazgo 4 de
+                    // ensureFinite).
+                    GameObject* newParent = parent ? deref(*parent) : nullptr;
+
+                    const bool mantenerMundo = keepWorld.value_or(true);
+                    const glm::mat4 mundoAntes = go->worldTransform;
+
+                    if (!mgr.scene()->reparent(go, newParent))
+                    {
+                        mgr.log("[Lua][WARN] Entity:SetParent: destino invalido "
+                                "(la raiz, o un descendiente del propio objeto)");
+                        return false;
+                    }
+
+                    if (mantenerMundo)
+                    {
+                        const glm::mat4 padreMundo =
+                            go->parent ? go->parent->worldTransform : glm::mat4(1.0f);
+                        const glm::mat4 nuevoLocal = glm::inverse(padreMundo) * mundoAntes;
+                        // Un padre con escala 0 da una matriz singular y su
+                        // inversa son infinitos. Se conserva el local que había
+                        // (el objeto salta, pero sigue siendo un transform
+                        // válido) en vez de hornear NaN en la matriz, que se
+                        // llevaría por delante a todos los hijos.
+                        bool finito = true;
+                        for (int c = 0; c < 4 && finito; ++c)
+                            for (int r = 0; r < 4 && finito; ++r)
+                                if (!std::isfinite(nuevoLocal[c][r])) finito = false;
+                        if (finito)
+                            go->localTransform = nuevoLocal;
+                        else
+                            mgr.log("[Lua][WARN] Entity:SetParent: el padre tiene una "
+                                    "transformada degenerada, se conserva la pose local");
+                    }
+
+                    // Los world del subárbol se recalculan ya, no el frame que
+                    // viene: un script que llame a GetWorldPosition en la línea
+                    // siguiente leería la posición vieja.
+                    go->updateWorldTransforms(
+                        go->parent ? go->parent->worldTransform : glm::mat4(1.0f));
+                    return true;
+                },
+                "GetLight", [](const LuaEntity& e) -> sol::object {
+                    GameObject* go = deref(e);
+                    if (!go->hasLight()) return sol::nil;
+                    return sol::make_object(e.mgr->lua(), LuaLight{e});
+                },
+                "AddLight", [](const LuaEntity& e) {
+                    GameObject* go = deref(e);
+                    if (!go->hasLight()) go->setLight(std::make_shared<LightComponent>());
+                    return LuaLight{e};
+                },
+                "RemoveLight", [](const LuaEntity& e) { deref(e)->setLight(nullptr); },
+                "GetCamera", [](const LuaEntity& e) -> sol::object {
+                    GameObject* go = deref(e);
+                    if (!go->hasCameraComponent()) return sol::nil;
+                    return sol::make_object(e.mgr->lua(), LuaCamera{e});
+                },
+                "AddCamera", [](const LuaEntity& e) {
+                    GameObject* go = deref(e);
+                    if (!go->hasCameraComponent())
+                        go->setCameraComponent(std::make_shared<CameraComponent>());
+                    return LuaCamera{e};
+                },
+                "RemoveCamera", [](const LuaEntity& e) { deref(e)->setCameraComponent(nullptr); },
                 "GetTransform", [](const LuaEntity& e) { deref(e); return LuaTransform{e}; },
                 // UI: atajos con nombre para los cuatro componentes, además del
                 // GetComponent("Button") de siempre. El getter devuelve nil si
@@ -2280,6 +2713,8 @@ namespace DonTopo::ScriptBindings
                     if (name == "ReverbZone"      && go->hasReverbZone())      return sol::make_object(lua, LuaReverbZone{e});
                     if (name == "Rigidbody"       && go->hasRigidbody())       return sol::make_object(lua, LuaRigidbody{e});
                     if (name == "Animator"        && go->hasAnimator())        return sol::make_object(lua, LuaAnimator{e});
+                    if (name == "Light"           && go->hasLight())           return sol::make_object(lua, LuaLight{e});
+                    if (name == "Camera"          && go->hasCameraComponent()) return sol::make_object(lua, LuaCamera{e});
                     if (name == "Canvas"          && go->hasCanvas())          return sol::make_object(lua, LuaCanvas{e});
                     if (name == "Button"          && go->hasButton())          return sol::make_object(lua, LuaButton{e});
                     if (name == "Text"            && go->hasText())            return sol::make_object(lua, LuaText{e});
@@ -2365,6 +2800,22 @@ namespace DonTopo::ScriptBindings
                         go->setRigidbody(rb);
                         if (auto col = go->anyCollider()) mgr->physics()->attachRigidbody(col, rb);
                         return sol::make_object(lua, LuaRigidbody{e});
+                    }
+                    // Luz y cámara: datos puros, sin nada que resolver contra
+                    // los managers. La cámara NO comprueba que no haya otra en
+                    // la escena: el invariante de unicidad lo impone
+                    // Scene::findCamera quedándose con la primera, igual que
+                    // con el AudioListener.
+                    if (name == "Light")
+                    {
+                        if (!go->hasLight()) go->setLight(std::make_shared<LightComponent>());
+                        return sol::make_object(lua, LuaLight{e});
+                    }
+                    if (name == "Camera")
+                    {
+                        if (!go->hasCameraComponent())
+                            go->setCameraComponent(std::make_shared<CameraComponent>());
+                        return sol::make_object(lua, LuaCamera{e});
                     }
                     // UI: sin dependencias que resolver (son SOLO datos) y sin
                     // gate de exclusión — los cuatro conviven en el mismo
@@ -2460,6 +2911,8 @@ namespace DonTopo::ScriptBindings
                     else if (name == "PlaneCollider")   go->setPlaneCollider(nullptr);
                     else if (name == "AudioClip")       go->setAudioClip(nullptr);
                     else if (name == "ReverbZone")      go->setReverbZone(nullptr);
+                    else if (name == "Light")           go->setLight(nullptr);
+                    else if (name == "Camera")          go->setCameraComponent(nullptr);
                     // Quitar un componente de UI se lleva por delante sus
                     // callbacks: el runtime muere con el componente y el handler
                     // del nodo, que solo tiene un weak_ptr, deja de disparar.
@@ -3462,13 +3915,41 @@ namespace DonTopo::ScriptBindings
         mgr.lua()[kUiCallbackTable] = mgr.lua().create_table();
     }
 
+    void tickTime(ScriptManager& mgr, float dt)
+    {
+        // dt no finito (un frame degenerado, o un test que pasa un NaN) no debe
+        // envenenar el acumulado: se ignora el frame entero en vez de dejar
+        // Time.time en NaN para siempre.
+        if (!std::isfinite(dt)) return;
+        g_timeSincePlay += dt;
+        ++g_frameCount;
+        sol::table time = mgr.lua()["Time"];
+        if (!time.valid()) return;
+        time["deltaTime"]  = dt;
+        time["time"]       = g_timeSincePlay;
+        time["frameCount"] = g_frameCount;
+    }
+
+    void resetTime(ScriptManager& mgr)
+    {
+        g_timeSincePlay = 0.0f;
+        g_frameCount    = 0;
+        sol::table time = mgr.lua()["Time"];
+        if (!time.valid()) return;
+        time["deltaTime"]  = 0.0f;
+        time["time"]       = 0.0f;
+        time["frameCount"] = 0;
+    }
+
     void registerAll(ScriptManager& mgr)
     {
         registerVec3(mgr.lua());
+        registerTime(mgr);
         registerLog(mgr);
         registerInput(mgr);
         registerTransform(mgr);
         registerComponents(mgr);
+        registerLighting(mgr); // antes que Entity: GetLight/GetCamera devuelven estos tipos
         registerUi(mgr);      // antes que Entity: sus getters devuelven estos tipos
         registerEntity(mgr);
         registerScene(mgr);   // Task 7

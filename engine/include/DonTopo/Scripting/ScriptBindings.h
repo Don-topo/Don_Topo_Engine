@@ -31,6 +31,15 @@ namespace ScriptBindings {
     // consume); false si no había ninguna.
     bool takePendingSceneLoad(std::string& outPath);
 
+    // Tabla Time: la escriben estas dos funciones, no el binding, porque sus
+    // valores cambian cada frame y una tabla Lua no puede tener propiedades
+    // calculadas sin un metatable por campo (más caro que reescribir cuatro
+    // números). Las llama ScriptManager: tick() una vez por Update, reset() al
+    // entrar en Play. Fuera de Play los valores se quedan congelados en los del
+    // último frame jugado, que es lo que un script vería igualmente.
+    void tickTime(ScriptManager& mgr, float dt);
+    void resetTime(ScriptManager& mgr);
+
     // Vacía la tabla del lua_State donde viven las funciones Lua enganchadas a
     // los botones. La llama ScriptManager::invalidateScriptCallbacks junto con
     // el relevo de la época: la época deja mudos a los callbacks viejos y esto
