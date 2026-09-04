@@ -21,6 +21,23 @@ class EditorRenderer;
 class PhysicsManager;
 class AudioManager;
 
+class GameObject;
+
+// Duplica `src` como HERMANO suyo —mismo padre, no hijo del original— y
+// devuelve el clon, o nullptr si no se puede duplicar (raíz de la escena, o
+// fallo de Scene::cloneGameObject).
+//
+// El copiado en sí es Scene::cloneGameObject y no se reimplementa aquí: lo
+// único que añade esta función es la DECISIÓN de padre. Vive fuera de EditorUI
+// para poder probarla sin GUI, igual que `makeRenderSettingCommand` es el seam
+// de los ajustes de render: EditorUI solo mira el gate del atajo, llama aquí y
+// apila un CreateGameObjectCommand con el snapshot del resultado.
+//
+// NO da de alta el clon en la GPU ni lo apila en el undo: eso es del caller,
+// que es quien tiene el EditorRenderer y el UndoManager.
+GameObject* duplicateAsSibling(Scene& scene, GameObject* src,
+                                PhysicsManager& physics, AudioManager& audio);
+
 class ICommand {
 public:
     virtual ~ICommand() = default;

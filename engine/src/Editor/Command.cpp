@@ -11,6 +11,17 @@
 
 namespace DonTopo {
 
+GameObject* duplicateAsSibling(Scene& scene, GameObject* src,
+                                PhysicsManager& physics, AudioManager& audio)
+{
+    // Sin padre es la raíz de la escena: no tiene hermanos posibles y
+    // cloneGameObject la rechaza igualmente.
+    if (!src || !src->parent) return nullptr;
+    // HERMANO: el padre del duplicado es el del ORIGINAL, no el original. Pasar
+    // `src` aquí lo colgaría de sí mismo y cada Ctrl+D anidaría un nivel más.
+    return scene.cloneGameObject(src, src->parent, physics, audio);
+}
+
 ReparentCommand::ReparentCommand(Scene& scene, std::string label, uint64_t id,
                                   uint64_t oldParentId, size_t oldIndex,
                                   uint64_t newParentId, size_t newIndex)

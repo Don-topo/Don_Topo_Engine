@@ -1100,6 +1100,54 @@ void EditorUI::handleUndoRedoShortcut()
         m_propertiesPanel.invalidateCaches();
         m_logPanel.push("Redo: " + m_undoHistory.lastLabel());
     }
+    if (ImGui::IsKeyPressed(ImGuiKey_D))
+        duplicateSelection();
+}
+
+void EditorUI::duplicateSelection()
+{
+    // El root de la escena (parent == nullptr) no se duplica: es el mismo gate
+    // que usa ScenePanel para Supr/F2. cloneGameObject también lo rechaza, pero
+    // así no se llega a él con una selección que no tiene hermanos posibles.
+    if (!m_selected || !m_selected->parent) return;
+    if (!m_scene || !m_physics || !m_audio || !m_renderer) return;
+
+    GameObject* parent = m_selected->parent;
+    // La decisión de padre (hermano, no hijo) vive en duplicateAsSibling para
+    // poder probarla sin GUI; el copiado sigue siendo Scene::cloneGameObject.
+    GameObject* clone = duplicateAsSibling(*m_scene, m_selected, *m_physics, *m_audio);
+    if (!clone)
+    {
+        m_logPanel.push("No se pudo duplicar '" + m_selected->name + "'");
+        return;
+    }
+
+    // cloneGameObject deja los índices de render a -1; esto los da de alta.
+    // flush síncrono por el mismo motivo que CreateGameObjectCommand::execute:
+    // sin él el duplicado quedaría invisible ~2 frames.
+    m_renderer->registerGameObject(clone);
+    m_renderer->flushUploadsAndWait();
+
+    // Los avisos que cloneGameObject dejó en la escena (p.ej. el descarte del
+    // CameraComponent) los conoce Core pero no el Log Console: los vuelca aquí
+    // quien sí lo conoce, igual que la carga de escena.
+    for (const auto& w : m_scene->lastWarnings())
+        m_logPanel.push(w);
+
+    // El clon YA existe, así que no se ejecuta el comando: push() nunca llama a
+    // execute(). Mismo patrón que ScenePanel::createBasicShape — el snapshot se
+    // toma con el objeto ya montado, y undo()/redo() lo borran y lo
+    // reconstruyen por id desde ese JSON. Por eso no hace falta un comando
+    // nuevo: CreateGameObjectCommand no supone que el objeto esté vacío.
+    const size_t index = parent->children.size() - 1;
+    nlohmann::json snapshot = m_scene->subtreeToJson(clone);
+    m_undoHistory.push(std::make_unique<CreateGameObjectCommand>(
+        *m_scene, *m_physics, *m_audio, *m_renderer,
+        "Duplicar '" + m_selected->name + "'", parent->id, index, std::move(snapshot)));
+
+    m_selected = clone;
+    m_propertiesPanel.invalidateCaches();
+    m_logPanel.push("GameObject '" + clone->name + "' duplicado");
 }
 
 // ── Ajustes de render con undo (P8/H49) ─────────────────────────────────────

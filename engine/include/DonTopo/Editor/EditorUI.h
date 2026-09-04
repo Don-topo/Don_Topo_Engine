@@ -161,10 +161,13 @@ public:
 
 private:
     static constexpr float kToolbarHeight = 30.0f;
-    // Ctrl+Z/Ctrl+Y — no-op si !m_scene, si m_isPlaying, o si algún widget de
+    // Ctrl+Z/Ctrl+Y/Ctrl+D — no-op si !m_scene, si m_isPlaying, o si algún widget de
     // texto tiene el foco (WantTextInput, evita chocar con el undo nativo de
     // un ImGuiInputTextMultiline como el del Script Editor).
     void handleUndoRedoShortcut();
+    // Ctrl+D — duplica m_selected como HERMANO suyo (mismo padre, no hijo).
+    // Mismo gating que el undo/redo: lo llama handleUndoRedoShortcut.
+    void duplicateSelection();
     void drawMenuBar();
     void drawToolbar();
     void drawDockSpace();

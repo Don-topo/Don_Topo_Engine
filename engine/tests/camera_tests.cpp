@@ -764,6 +764,149 @@ static void test_undo_delete_keeps_original_id(PhysicsManager& pm, AudioManager&
     CHECK(scene.findById(originalId) == restored);
 }
 
+// ── Ctrl+D del editor: duplicar el GameObject seleccionado ──────────────────
+//
+// El sujeto de prueba es `duplicateAsSibling` (Command.cpp), que es el seam:
+// EditorUI solo mira el gate del atajo (nada en Play, nada con foco de texto,
+// nada sin selección), llama aquí y apila un CreateGameObjectCommand con el
+// snapshot del clon. Lo que NO se puede probar aquí es la parte de GPU
+// (registerGameObject) ni el propio comando ejecutándose: construirlo exige un
+// EditorRenderer, que son 73 virtuales puras — el mismo motivo por el que
+// test_remove_notifies_listener se queda en el mecanismo. Aquí se prueban la
+// colocación, los ids y el round-trip del snapshot del que dependen undo/redo.
+
+// El duplicado es HERMANO del original, no hijo suyo. Si lo fuera, cada Ctrl+D
+// anidaría un nivel más y el original cambiaría de forma al duplicarlo.
+static void test_duplicate_is_sibling_not_child(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* padre    = scene.addGameObject("Padre");
+    GameObject* original = scene.addGameObject("Original", padre);
+    const size_t hijosAntes = original->children.size();
+
+    GameObject* clone = duplicateAsSibling(scene, original, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+
+    CHECK(clone->parent == original->parent);
+    CHECK(clone->parent == padre);
+    CHECK(clone != original);
+    // Y el original no ha ganado un hijo por el camino.
+    CHECK(original->children.size() == hijosAntes);
+    bool cloneCuelgaDelOriginal = false;
+    original->traverse([&](GameObject* n) { if (n == clone) cloneCuelgaDelOriginal = true; });
+    CHECK(!cloneCuelgaDelOriginal);
+    CHECK(padre->children.size() == 2);
+}
+
+// Un objeto colgado directamente del root de la escena también sale hermano:
+// su padre es el root, no nullptr.
+static void test_duplicate_of_root_child_is_sibling(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* original = scene.addGameObject("Original");
+
+    GameObject* clone = duplicateAsSibling(scene, original, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+    CHECK(clone->parent == original->parent);
+}
+
+// El root de la escena no se duplica (no tiene hermanos posibles). Es el mismo
+// gate que ScenePanel usa para Supr/F2.
+static void test_duplicate_rejects_scene_root(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    CHECK(duplicateAsSibling(scene, nullptr, pm, am) == nullptr);
+    CHECK(duplicateAsSibling(scene, &scene.getRoot(), pm, am) == nullptr);
+}
+
+// Los hijos se copian recursivamente y con ids DISTINTOS de los del original.
+// Sin esto findById devuelve el último del recorrido —el clon— y los comandos
+// del stack resueltos por id escriben en el objeto equivocado.
+static void test_duplicate_subtree_has_unique_ids(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* original = scene.addGameObject("Original");
+    GameObject* hijo     = scene.addGameObject("Hijo", original);
+    GameObject* nieto    = scene.addGameObject("Nieto", hijo);
+    nieto->localTransform = glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, 4.0f, 5.0f));
+
+    GameObject* clone = duplicateAsSibling(scene, original, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+
+    // Jerarquía copiada entera, no solo la raíz.
+    CHECK(clone->children.size() == 1);
+    if (clone->children.empty()) return;
+    GameObject* hijoClon = clone->children[0].get();
+    CHECK(hijoClon->children.size() == 1);
+    if (hijoClon->children.empty()) return;
+    GameObject* nietoClon = hijoClon->children[0].get();
+    CHECK(nietoClon->localTransform == nieto->localTransform);
+
+    // Ningún id repetido en TODA la escena, no solo entre las dos raíces.
+    std::vector<uint64_t> ids;
+    scene.traverse([&](GameObject* n) { ids.push_back(n->id); });
+    std::sort(ids.begin(), ids.end());
+    CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
+
+    // Y los ids del original siguen resolviendo AL original.
+    CHECK(scene.findById(hijo->id) == hijo);
+    CHECK(scene.findById(nieto->id) == nieto);
+}
+
+// Undo/redo del duplicado. Se replica lo que hacen CreateGameObjectCommand::
+// undo() y ::execute() con la misma pareja (parentId, index) que calcula
+// EditorUI::duplicateSelection — el comando en sí no se puede instanciar sin
+// EditorRenderer, así que lo que se prueba es el mecanismo del que depende:
+// que el snapshot del clon baste para borrarlo y reconstruirlo entero.
+static void test_duplicate_undo_redo_restores_object_count(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* original = scene.addGameObject("Original");
+    scene.addGameObject("Hijo", original);
+
+    auto contarObjetos = [&scene]() {
+        int n = 0;
+        scene.traverse([&](GameObject*) { ++n; });
+        return n;
+    };
+    const int antes = contarObjetos();
+
+    GameObject* clone = duplicateAsSibling(scene, original, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+    // Original (2 nodos) + clon (2 nodos).
+    CHECK(contarObjetos() == antes + 2);
+
+    // Lo que apila EditorUI::duplicateSelection.
+    GameObject* parent      = clone->parent;
+    const uint64_t parentId = parent->id;
+    const size_t index      = parent->children.size() - 1;
+    const uint64_t cloneId  = clone->id;
+    nlohmann::json snapshot = scene.subtreeToJson(clone);
+
+    // Undo.
+    scene.removeGameObject(scene.findById(cloneId));
+    CHECK(contarObjetos() == antes);
+    CHECK(scene.findById(cloneId) == nullptr);
+    // El original sobrevive al undo del duplicado.
+    CHECK(scene.findById(original->id) != nullptr);
+
+    // Redo.
+    GameObject* rehecho = scene.insertFromJson(snapshot, scene.findById(parentId), index, pm, am);
+    CHECK(rehecho != nullptr);
+    if (!rehecho) return;
+    CHECK(contarObjetos() == antes + 2);
+    CHECK(rehecho->parent == parent);
+    CHECK(rehecho->children.size() == 1);
+    // El redo reusa el id del snapshot a propósito (ver
+    // test_undo_delete_keeps_original_id): sigue sin chocar con el original.
+    CHECK(rehecho->id == cloneId);
+    CHECK(scene.findById(original->id) == original);
+}
+
 // La contrapartida de los tres de arriba, por el camino que NO tenían cubierto:
 // CARGAR una escena. nodeFromJson reusa el id que trae el fichero (y hace bien,
 // ver el test de arriba), pero el contador global de ids —que vive en
@@ -7439,6 +7582,11 @@ int main()
     test_clone_gets_fresh_id(pm, am);
     test_clone_subtree_gets_fresh_ids(pm, am);
     test_undo_delete_keeps_original_id(pm, am);
+    test_duplicate_is_sibling_not_child(pm, am);
+    test_duplicate_of_root_child_is_sibling(pm, am);
+    test_duplicate_rejects_scene_root(pm, am);
+    test_duplicate_subtree_has_unique_ids(pm, am);
+    test_duplicate_undo_redo_restores_object_count(pm, am);
     test_load_advances_id_counter(pm, am);
     test_camera_command_add_undo_redo();
     test_camera_command_remove();
