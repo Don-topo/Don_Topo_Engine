@@ -119,9 +119,10 @@ que arreglar en ella.
 **H22** (por P7); **H2 queda reducido** — sus 7 accesos crudos ya no existen,
 pero siguen sus 57 `.value(...)`. Cada fila lo dice en su celda de estado.
 **H12, H13 y H18 se descartaron por medición** (P4, P5 y P6), sin tocar
-producción; **H3, H4 y H5 se cerraron** (P8, P10 y P9) y **H19 se hizo a
+producción; **H3, H4, H5 y H15 se cerraron** (P8, P10, P9 y —H15— por
+medición, con su arreglo aplazado al Apéndice B) y **H19 se hizo a
 medias** (el arreglo entró y está medido; lo que queda de coste vive fuera del
-Core). **Quedan 11 abiertas**, todas Media o Baja.
+Core). **Quedan 10 abiertas**, todas Baja salvo H2-reducido.
 
 ### 2.1 Identidad de los objetos
 
@@ -165,7 +166,7 @@ Core). **Quedan 11 abiertas**, todas Media o Baja.
 | H14 | **Alta** · **CERRADO** | `src/Core/Scene.cpp:2737` → `:1567-1568` | `cloneGameObject` llama a `nodeFromJson` con **7 argumentos**: `loader` y `preloaded` caen a sus `nullptr` por defecto. Para un origen skinned, eso lleva la ejecución a `ModelLoader::loadSkinned(sourcePath)`: **una lectura síncrona de disco con Assimp, en pleno bucle de Play**. | El único llamante de `cloneGameObject` es `Scene.Instantiate` de Lua (`ScriptBindings.cpp:3870`), que por definición corre en Play. Spawnear un personaje animado desde un script reparsea su FBX entero desde disco, cada vez. La ironía está a 4 líneas: `:2732-2734` siembra una cache **solo para `hasBones`** —precisamente para no sondear el FBX— y acto seguido el camino skinned lo lee entero igual. El propio comentario de `:2726-2731` explica que leer disco al clonar es peligroso porque un reexport a media partida devuelve un tipo de malla distinto; el argumento vale igual para la malla en sí. Ya **medido** (ver P3): **24,5 ms por clon** en Release, o sea frame y medio a 60 fps por cada spawn. **Cerrado por P3.** | M |
 | H12 | Media · **DESCARTADO POR MEDICIÓN** | `src/Core/Scene.cpp:3048, 3114, 3118, 3135, 2952, 2897, 2793` | **9 recorridos completos del árbol por frame** en Play y en el runtime, 6 en Edit Mode. La tabla 1.3 los enumera uno a uno con su línea. | Cada uno vuelve a pagar el mismo salto de punteros por un árbol de `unique_ptr` con nodos de ~700 bytes (H19). Cuatro de los nueve (`updateWorldTransforms`, `updateAudioSpatial`, `collectLights`, `findAudioListener`) podrían compartir una sola pasada sin cambiar ningún resultado, porque los cuatro leen `worldTransform` después de propagarlo. `findCamera` desde el Renderer (`Renderer.cpp:909`) es un recorrido entero para encontrar **un** nodo, por frame. **Ya medido** (ver P4): los 9 recorridos juntos son **238 µs con 5.000 nodos** en Release, el **1,4 % de un frame a 60 fps** — y lo que una fusión ahorraría de verdad son **64 µs, el 0,38 %**. El recuento de 9 era correcto; lo que estaba mal era suponer que importaba. | M |
 | H13 | Media · **DESCARTADO POR MEDICIÓN** | `include/DonTopo/Core/GameObject.h:97-104`, usado en `src/Core/Scene.cpp:3049` | `anyCollider()` devuelve `std::shared_ptr<Collider>` **por valor**, y además construido desde un `shared_ptr` de tipo derivado: cada llamada es un incremento y un decremento atómicos del contador. | `Scene::update` la llama **una vez por GameObject y por frame** (`:3049`), incluidos todos los nodos que no tienen collider (ahí devuelve un `shared_ptr` nulo, que sigue siendo una construcción). En una escena de N nodos son 2N operaciones atómicas por frame sin ninguna utilidad: el valor solo se usa para comprobar `!col` y llamar a tres métodos, todos dentro del mismo scope donde el `GameObject` está vivo. Devolver `Collider*` crudo es equivalente en seguridad aquí. **CORRECCIÓN, y es lo que invalida la fila**: lo de "2N operaciones atómicas por frame" es **falso**. Copiar un `shared_ptr` **nulo no toca ningún contador atómico**, y el nodo típico no tiene collider — o sea que justo el caso que la fila señalaba como desperdicio es el que ya era gratis. Y en los nodos que **sí** tienen collider, el átomo queda enterrado bajo el trabajo real de al lado (`getWorldTransform`, la comparación de 16 flotantes, `getWorldScale`). Medido con ablación: **sin diferencia** (ver P5). | S |
-| H15 | Media · **ABIERTO, medido** | `src/Core/Scene.cpp:685-689` y `:1666-1671` | Para una malla **procedural** (sin `sourcePath`), `nodeToJson` serializa cada vértice como un objeto JSON con 5 sub-arrays, y `nodeFromJson` lo reparsea con `jsonToVertex`. `cloneGameObject` pasa por los dos (`:2698` y `:2737`). | Una esfera por defecto son `(32+1)×(16+1) = 561` vértices (`Sphere.h:11`), o sea **8.415 números** por `Instantiate`, más los índices. Y no es solo el JSON: `jsonToVertex` (`:1423-1435`) construye **5 strings de contexto por vértice** (`contexto + ".pos"`, `+ ".color"`, …) sobre el string que el bucle de `:1669` ya construye por vértice — 6 asignaciones de heap por vértice, ~3.400 por esfera clonada, todas para un mensaje de aviso que casi nunca se emite. El camino de disco (H14) y este cubren entre los dos los dos tipos de malla que se pueden clonar.<br><br>**Medido el 2026-09-05** (Release, 20 clones por dato). Y de paso se comprobó que **P3 no lo cubre**: la caché que se sembró allí se salta a propósito las mallas sin fichero (`if (ruta.empty()) return;`), así que las procedurales siguen yendo por el round-trip de JSON.<br><br>| primitiva | vértices | por clon |<br>|---|---|---|<br>| cubo | 24 | **0,10 ms** |<br>| esfera | 561 | **2,36 ms** |<br><br>Una esfera son **~14 % de un frame a 60 fps** por spawn. Real, pero un orden de magnitud menos que H14 (que eran 1,5 frames).<br><br>**Y el mecanismo que esta fila daba por bueno era falso.** Culpaba a las ~6 asignaciones de heap por vértice de los strings de contexto; se ablacionaron —contexto construido una vez fuera del bucle y sin concatenar por campo— y el resultado fue **2,70 ms frente a 2,36**: ninguna mejora, ruido. El coste es el round-trip de JSON en sí (561 × 15 números boxeados como valores de nlohmann), no los strings.<br><br>**Por eso sigue abierta y no cerrada**: el arreglo ya no es barato. Habría que evitar serializar la geometría, y las dos vías tienen pega — una clave sintética en `sourcePath` para reusar la caché de P3 (riesgo de que se cuele en un `.scene` guardado) o un recorrido en paralelo de src y clon (frágil si los dos árboles se desincronizan). **Decisión pendiente de si alguien instancia primitivas procedurales en Play**; si no se hace, no se toca. | M |
+| H15 | Media · **CERRADO POR MEDICIÓN** (el arreglo se aplaza, ver Apéndice B) | `src/Core/Scene.cpp:685-689` y `:1666-1671` | Para una malla **procedural** (sin `sourcePath`), `nodeToJson` serializa cada vértice como un objeto JSON con 5 sub-arrays, y `nodeFromJson` lo reparsea con `jsonToVertex`. `cloneGameObject` pasa por los dos (`:2698` y `:2737`). | Una esfera por defecto son `(32+1)×(16+1) = 561` vértices (`Sphere.h:11`), o sea **8.415 números** por `Instantiate`, más los índices. Y no es solo el JSON: `jsonToVertex` (`:1423-1435`) construye **5 strings de contexto por vértice** (`contexto + ".pos"`, `+ ".color"`, …) sobre el string que el bucle de `:1669` ya construye por vértice — 6 asignaciones de heap por vértice, ~3.400 por esfera clonada, todas para un mensaje de aviso que casi nunca se emite. El camino de disco (H14) y este cubren entre los dos los dos tipos de malla que se pueden clonar.<br><br>**Medido el 2026-09-05** (Release, 20 clones por dato). Y de paso se comprobó que **P3 no lo cubre**: la caché que se sembró allí se salta a propósito las mallas sin fichero (`if (ruta.empty()) return;`), así que las procedurales siguen yendo por el round-trip de JSON.<br><br>| primitiva | vértices | por clon |<br>|---|---|---|<br>| cubo | 24 | **0,10 ms** |<br>| esfera | 561 | **2,36 ms** |<br><br>Una esfera son **~14 % de un frame a 60 fps** por spawn. Real, pero un orden de magnitud menos que H14 (que eran 1,5 frames).<br><br>**Y el mecanismo que esta fila daba por bueno era falso.** Culpaba a las ~6 asignaciones de heap por vértice de los strings de contexto; se ablacionaron —contexto construido una vez fuera del bucle y sin concatenar por campo— y el resultado fue **2,70 ms frente a 2,36**: ninguna mejora, ruido. El coste es el round-trip de JSON en sí (561 × 15 números boxeados como valores de nlohmann), no los strings.<br><br>Eso cambia el precio del arreglo: ya no vale con sacar un string del bucle, hay que **evitar serializar la geometría**. Y las dos vías posibles salen hacks — una clave sintética en `sourcePath` (que se puede colar en un `.scene` guardado) o un recorrido en paralelo de src y clon (que asigna mallas cruzadas en silencio si se desincroniza).<br><br>**Se cierra sin arreglar, y el motivo está una capa más arriba**: los 2,36 ms no son un problema de esta función, son el síntoma de que `Mesh` guarda la geometría (asset compartible) y el `Material` (estado por objeto) en el mismo struct. Por eso cada clon necesita su propia copia de la geometría, por eso hay que pasarla por JSON, y por eso los dos arreglos posibles salían hacks. Ver **Apéndice B**: el arreglo bueno mata esta fila de propina, y se aplaza a la auditoría del módulo de animación. | M |
 | H16 | Baja · ABIERTO | `include/DonTopo/Core/GameObject.h:278-283` | `traverse` toma `Fn fn` **por valor** y recursa con `c->traverse(fn)`, también por valor: una copia del functor por cada hijo y por cada nivel. | Con lambdas de captura pequeña es ruido; con las de `Scene::update` (`:3048`) y `collectLights` (`:2952`), que capturan por referencia, también. Se menciona porque el arreglo es de una línea (`Fn&& fn` + `std::forward`) y porque multiplica el coste de H12 por el número de nodos, no por el de recorridos. | S |
 
 ### 2.6 Arquitectura
@@ -347,3 +348,69 @@ con 139. **Un `catch` no vale de nada si lo que hay debajo no lanza.**
 
 Arreglado en el mismo commit, con su test
 (`test_loadSkinned_missing_file_throws`, `animator_tests.cpp:93`).
+
+---
+
+## Apéndice B. Para la auditoría del módulo de animación
+
+Salió al medir H15 y **no se arregla aquí a propósito**: la causa no está en
+`Core`, está en cómo se modela una malla, y eso es territorio del módulo que
+posee `Mesh`, `SkinnedMesh` y `ModelLoader`. Se deja escrito con el
+diagnóstico hecho para no volver a medir lo mismo desde cero.
+
+### El dato
+
+```cpp
+struct Mesh {
+    std::string           name;
+    std::vector<Vertex>   vertices;   // el ASSET: geometría
+    std::vector<uint32_t> indices;    // el ASSET
+    Material              material;   // <- estado POR INSTANCIA
+    std::string           sourcePath;
+};
+```
+
+El `Material` **se edita por GameObject**: `ContentBrowserPanel.cpp:86` y
+`GameExporter.cpp:56` cogen punteros **no const** a `go->getMesh()->material`
+para reescribir rutas de textura. O sea que cada objeto necesita **su propia
+copia de la geometría** únicamente para poder tener su propio material.
+
+### Lo que eso arrastra
+
+- **Clonar es caro y por eso pasa por JSON.** `cloneGameObject` serializa y
+  reparsea porque necesita una copia profunda; de ahí H14 (24,5 ms, ya
+  cerrada) y H15 (2,36 ms por esfera). Los dos son el mismo síntoma.
+- **RAM duplicada.** Una esfera son ~31 KB de vértices; cien clones son ~3 MB
+  de geometría idéntica repetida. (Calculado desde `sizeof(Vertex)` = 14
+  floats, no medido.)
+- **Los dos arreglos posibles de H15 son hacks**: una clave sintética en
+  `sourcePath` (que se puede colar en un `.scene` guardado) o un recorrido en
+  paralelo de src y clon (que asigna mallas cruzadas en silencio si se
+  desincroniza). Que las dos salgan feas es la pista de que el problema no
+  está donde se está tocando.
+
+### Y el motor ya resolvió esto... en el otro lado
+
+`makeSharedMeshKey` (`Renderer/MeshKey.h`) hashea geometría **más** rutas de
+textura y metallic/roughness, y `SharedGpuMesh` lleva refcount: dos objetos
+con la misma malla y el mismo material **comparten un único recurso GPU**. El
+lado CPU se quedó con N copias completas. La asimetría no es un descuido de
+diseño del Renderer: es que el CPU nunca hizo el mismo movimiento.
+
+### La forma del arreglo
+
+Partir `Mesh` en geometría compartida (`shared_ptr`, inmutable, con la clave
+de contenido que ya existe) + `Material` por objeto. Clonar pasa a ser
+compartir un puntero y copiar un struct de strings, y **H15 muere de
+propina**, sin clave sintética ni recorrido en paralelo.
+
+**Por qué NO se hace ahora**: misma vara con la que se cerraron P4, P5 y P6 —
+no hay ningún problema medido empujando. Es una L larga (toca `Mesh`,
+`SkinnedMesh`, `ModelLoader`, la serialización de escena, el registro del
+Renderer y los dos sitios que editan material) y hoy el único síntoma son
+2,36 ms en un caso de uso que nadie ha confirmado que exista.
+
+**Qué lo reabre**: que alguien instancie primitivas procedurales en Play
+(proyectiles, pickups), o que la RAM de geometría duplicada aparezca en un
+perfil. Si pasa cualquiera de las dos, el diagnóstico ya está hecho: no hay
+que volver a medir los 2,36 ms ni a proponer el parche que aquí se descartó.
