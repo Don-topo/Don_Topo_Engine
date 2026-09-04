@@ -505,6 +505,58 @@ static void test_undo_delete_keeps_original_id(PhysicsManager& pm, AudioManager&
     CHECK(scene.findById(originalId) == restored);
 }
 
+// La contrapartida de los tres de arriba, por el camino que NO tenían cubierto:
+// CARGAR una escena. nodeFromJson reusa el id que trae el fichero (y hace bien,
+// ver el test de arriba), pero el contador global de ids —que vive en
+// GameObject.cpp y solo lo mueve el constructor— no se entera. Un fichero
+// guardado en OTRA sesión trae ids más altos que los que este proceso ha
+// repartido, así que tras cargarlo el contador se queda POR DETRÁS de ids que
+// ya viven en el árbol, y el siguiente GameObject que cree el usuario estrena
+// uno repetido.
+//
+// A partir de ahí es el mismo fallo que el del clon: findById se queda con el
+// ÚLTIMO del recorrido, y los 31 sitios de Command.cpp que resuelven su
+// objetivo por id acaban escribiendo en el objeto equivocado, sin decir nada.
+//
+// La sonda de abajo es lo que hace el test determinista sin depender del orden
+// en que se ejecuten los demás: el id de un GameObject recién construido dice
+// por dónde va el contador AHORA, y el fichero se fabrica con uno bastante por
+// delante para que el bucle de altas lo alcance con margen.
+static void test_load_advances_id_counter(PhysicsManager& pm, AudioManager& am)
+{
+    GameObject sonda("sonda");
+    const uint64_t idDelFichero = sonda.id + 20;
+
+    // Escena de origen serializada con la API real (no un JSON a mano): así el
+    // nodo trae localTransform, ssr y children bien formados y lo único
+    // artificial es el id, que es justo lo que se está probando.
+    Scene origen("Origen");
+    GameObject* nodo = origen.addGameObject("Cargado");
+    CHECK(nodo != nullptr);
+    nlohmann::json j = origen.toJson();
+    j["root"]["children"][0]["id"] = idDelFichero;
+
+    Scene scene("Test");
+    CHECK(scene.fromJson(j, pm, am));
+    GameObject* cargado = scene.findById(idDelFichero);
+    CHECK(cargado != nullptr);
+    if (!cargado) return;
+
+    // Altas nuevas suficientes para rebasar el id del fichero. Si la carga no
+    // adelantó el contador, una de ellas lo repite.
+    for (int i = 0; i < 30; ++i)
+        CHECK(scene.addGameObject("Nuevo") != nullptr);
+
+    std::vector<uint64_t> ids;
+    scene.traverse([&](GameObject* n) { ids.push_back(n->id); });
+    std::sort(ids.begin(), ids.end());
+    CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
+
+    // Y el id del fichero tiene que seguir resolviendo al nodo CARGADO, no a un
+    // objeto nuevo que se lo haya llevado por delante.
+    CHECK(scene.findById(idDelFichero) == cargado);
+}
+
 // El Add/Remove de cámara pasa por el stack de Undo (a diferencia de los Add de
 // collider/Rigidbody): si no, un Undo de Delete podría resucitar una cámara
 // borrada estando ya otra en escena. Ver spec, "The One-Camera Invariant".
@@ -6804,6 +6856,7 @@ int main()
     test_clone_gets_fresh_id(pm, am);
     test_clone_subtree_gets_fresh_ids(pm, am);
     test_undo_delete_keeps_original_id(pm, am);
+    test_load_advances_id_counter(pm, am);
     test_camera_command_add_undo_redo();
     test_camera_command_remove();
     test_camera_command_survives_missing_target();

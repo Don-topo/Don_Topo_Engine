@@ -47,6 +47,19 @@ namespace DonTopo
             // un GameObject* crudo quedaría colgado.
             uint64_t id;
 
+            // Adelanta el contador global para que nunca vuelva a repartir id
+            // (ni ninguno por debajo). La necesita quien ASIGNA un id a mano en
+            // vez de dejar que lo ponga el constructor: hoy, la carga de escena
+            // (Scene.cpp, nodeFromJson), que reusa el id que trae el fichero.
+            //
+            // Sin esto, un .scene guardado en otra sesión —con ids más altos
+            // que los que este proceso ha repartido— deja el contador POR
+            // DETRÁS de ids que ya viven en el árbol, y el siguiente
+            // GameObject que se cree estrena uno repetido. A partir de ahí
+            // findById se queda con el último del recorrido y los comandos de
+            // Undo escriben en el objeto equivocado, en silencio.
+            static void reserveIdAtLeast(uint64_t id);
+
             // JobId de la carga de mesh en vuelo, 0 = ninguna. Es un uint64_t
             // opaco a propósito: Core no conoce AsyncAssetLoader, y el
             // destructor NO cancela nada — el pump ya descarta los resultados

@@ -1468,7 +1468,14 @@ namespace
         // Undo de Delete reconstruye el GameObject con el id original y los
         // comandos siguientes en el stack lo siguen resolviendo bien.
         if (j.contains("id"))
+        {
             node->id = j.at("id").get<uint64_t>();
+            // El contador global de ids no ve esta asignación: sin adelantarlo,
+            // un fichero de otra sesión (ids más altos que los repartidos aquí)
+            // deja el contador por detrás de ids que ya están en el árbol y el
+            // siguiente GameObject nuevo repite uno. Ver reserveIdAtLeast.
+            GameObject::reserveIdAtLeast(node->id);
+        }
         node->localTransform = jsonToMat4(j.value("localTransform", nlohmann::json::array()),
                                            warnings, "localTransform de '" + node->name + "'");
         node->worldTransform = parentWorld * node->localTransform;
