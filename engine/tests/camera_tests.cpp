@@ -390,6 +390,181 @@ static void test_insert_from_json_resets_warnings(PhysicsManager& pm, AudioManag
     CHECK(loaded.lastWarnings().empty());
 }
 
+// --- P2 de docs/core-audit.md: los accesos JSON crudos de nodeFromJson ---
+//
+// Todos compartían forma: un campo corrupto lanzaba json::exception, la
+// excepción subía hasta el catch de Scene::fromJson y se perdía la carga de la
+// escena ENTERA — sin decir qué campo, y por un valor que el resto del fichero
+// sí sabe tolerar. El criterio de Scene.cpp está escrito en su comentario de
+// :1189 y es justo el contrario: avisar nombrando el campo y seguir cargando.
+//
+// Cada test corrompe UN campo sobre una escena de dos nodos y exige las tres
+// cosas: que la carga funcione, que el nodo sano llegue entero, y que el aviso
+// nombre el campo. Sin la tercera, el arreglo sería "tragárselo en silencio",
+// que es peor que fallar.
+static nlohmann::json escenaDeDosNodos()
+{
+    Scene scene("Origen");
+    scene.addGameObject("Roto");
+    scene.addGameObject("Sano");
+    return scene.toJson();
+}
+
+// Comprobaciones comunes: la escena carga y el segundo nodo no se ha perdido.
+static void checkEscenaSobrevive(const Scene& loaded)
+{
+    CHECK(loaded.getRoot().children.size() == 2);
+    if (loaded.getRoot().children.size() == 2)
+        CHECK(loaded.getRoot().children[1]->name == "Sano");
+}
+
+// "id" nulo. Además del aviso, el nodo tiene que quedarse con el id que le puso
+// el constructor: uno inventado podría chocar con otro del árbol.
+static void test_corrupt_id_does_not_lose_scene(PhysicsManager& pm, AudioManager& am)
+{
+    nlohmann::json j = escenaDeDosNodos();
+    j["root"]["children"][0]["id"] = nullptr;
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    checkEscenaSobrevive(loaded);
+    CHECK(countWarnings(loaded, "nodo 'Roto'.id") == 1);
+
+    // Y ningún id repetido, que es lo que pasaría si el campo corrupto acabara
+    // en un 0 para todos los nodos rotos.
+    std::vector<uint64_t> ids;
+    loaded.traverse([&](GameObject* n) { ids.push_back(n->id); });
+    std::sort(ids.begin(), ids.end());
+    CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
+}
+
+// "children" ausente. nodeToJson lo escribe SIEMPRE (Scene.cpp:1182), así que
+// su ausencia nunca es back-compat: es corrupción y toca nombrarla.
+static void test_missing_children_does_not_lose_scene(PhysicsManager& pm, AudioManager& am)
+{
+    nlohmann::json j = escenaDeDosNodos();
+    j["root"]["children"][0].erase("children");
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    checkEscenaSobrevive(loaded);
+    CHECK(countWarnings(loaded, "nodo 'Roto'.children") == 1);
+}
+
+// "name" ausente en un hijo. El nodo se conserva (sin nombre), no se descarta:
+// puede llevar colgando media escena.
+static void test_missing_child_name_does_not_lose_scene(PhysicsManager& pm, AudioManager& am)
+{
+    nlohmann::json j = escenaDeDosNodos();
+    j["root"]["children"][0].erase("name");
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    CHECK(loaded.getRoot().children.size() == 2);
+    CHECK(countWarnings(loaded, ".name") == 1);
+}
+
+// "indices" con un elemento que no es número: el mesh procedural no se puede
+// reconstruir. Se avisa y el nodo se queda sin malla — media geometría sería
+// peor que ninguna, mismo criterio que jsonToMat4 con la matriz.
+static void test_corrupt_mesh_indices_does_not_lose_scene(PhysicsManager& pm, AudioManager& am)
+{
+    nlohmann::json j = escenaDeDosNodos();
+    j["root"]["children"][0]["mesh"] = { {"sourcePath", ""},
+                                          {"name", "Cube"},
+                                          {"skinned", false},
+                                          {"visible", true},
+                                          {"vertices", nlohmann::json::array()},
+                                          {"indices", nlohmann::json::array({0, "no soy un indice", 2})} };
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    checkEscenaSobrevive(loaded);
+    CHECK(countWarnings(loaded, "indices") == 1);
+    if (loaded.getRoot().children.size() == 2)
+        CHECK(!loaded.getRoot().children[0]->hasMesh());
+}
+
+// "useGravity" legacy con un tipo que no es bool. Es el camino de back-compat
+// de las escenas anteriores al Rigidbody, así que lo que llega por aquí es por
+// definición un fichero viejo: tumbar la carga entera era el peor sitio posible
+// para ser estricto.
+static void test_corrupt_legacy_usegravity_does_not_lose_scene(PhysicsManager& pm, AudioManager& am)
+{
+    nlohmann::json j = escenaDeDosNodos();
+    j["root"]["children"][0]["boxCollider"] = { {"halfExtents", nlohmann::json::array({25.0, 25.0, 25.0})},
+                                                 {"center", nlohmann::json::array({0.0, 0.0, 0.0})},
+                                                 {"isTrigger", false},
+                                                 {"useGravity", "si"} };
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    checkEscenaSobrevive(loaded);
+    CHECK(countWarnings(loaded, "useGravity") == 1);
+    // Sin Rigidbody sintetizado: un campo corrupto no decide la dinámica.
+    if (loaded.getRoot().children.size() == 2)
+        CHECK(!loaded.getRoot().children[0]->hasRigidbody());
+}
+
+// Un script sin "name". El componente se descarta (sin nombre no hay fichero
+// .lua que cargar) pero el GameObject y el resto de la escena siguen.
+static void test_corrupt_script_name_does_not_lose_scene(PhysicsManager& pm, AudioManager& am)
+{
+    nlohmann::json j = escenaDeDosNodos();
+    j["root"]["children"][0]["scripts"] =
+        nlohmann::json::array({ nlohmann::json{ {"overrides", nlohmann::json::object()} } });
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    checkEscenaSobrevive(loaded);
+    CHECK(countWarnings(loaded, "scripts") == 1);
+    if (loaded.getRoot().children.size() == 2)
+        CHECK(!loaded.getRoot().children[0]->hasScripts());
+}
+
+// --- P7: las 14 lambdas readStr duplicadas de nodeFromJson ---
+//
+// Cada bloque de componente de UI llevaba su propia copia de readStr, que ante
+// un valor corrupto devolvía "" SIN AVISAR — mientras que la readString del
+// namespace, para el mismo caso, sí avisa. O sea: en el MISMO componente, un
+// float corrupto se reportaba al Log y un string corrupto se tragaba en
+// silencio, según por cuál de las dos rutas casi idénticas pasara.
+// Se tocan CUATRO componentes distintos y no solo uno: la lambda estaba copiada
+// 14 veces, así que un test sobre un único bloque dejaría los otros 13 sin red
+// — y volver a meter una copia en cualquiera de ellos pasaría desapercibido.
+// Cuatro no son catorce; lo que de verdad cierra el hueco es que ya no queda
+// ninguna lambda que copiar (grep de "auto readStr" == 0), y esto lo respalda.
+static void test_corrupt_ui_string_warns(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Origen");
+    scene.addGameObject("Boton")->setButton(std::make_shared<ButtonComponent>());
+    scene.addGameObject("Panel")->setPanel(std::make_shared<PanelComponent>());
+    scene.addGameObject("Texto")->setText(std::make_shared<TextComponent>());
+    scene.addGameObject("Imagen")->setImage(std::make_shared<ImageComponent>());
+
+    nlohmann::json j = scene.toJson();
+    nlohmann::json& hijos = j["root"]["children"];
+    hijos[0]["button"]["text"]     = nullptr;
+    hijos[0]["button"]["fontSize"] = nullptr;   // el float, para el contraste
+    hijos[1]["panel"]["sprite"]    = nullptr;
+    hijos[2]["text"]["fontPath"]   = nullptr;
+    hijos[3]["image"]["atlasPath"] = nullptr;
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    CHECK(loaded.getRoot().children.size() == 4);
+
+    // El float ya avisaba antes de P7; los strings son los que faltaban. En el
+    // botón los dos campos son del MISMO componente: ese contraste —un float
+    // que se reporta y un string que se tragaba en silencio, a dos líneas de
+    // distancia— es el hallazgo entero.
+    CHECK(countWarnings(loaded, "fontSize") == 1);
+    CHECK(countWarnings(loaded, "button de 'Boton'.text") == 1);
+    CHECK(countWarnings(loaded, "panel de 'Panel'.sprite") == 1);
+    CHECK(countWarnings(loaded, "text de 'Texto'.fontPath") == 1);
+    CHECK(countWarnings(loaded, "image de 'Imagen'.atlasPath") == 1);
+}
+
 // Clonar un GameObject con cámara NO puede dar dos cámaras. Su único caller es
 // Instantiate de Lua, que corre en Play: ningún gate de UI puede evitarlo, así
 // que la regla vive en Scene.
@@ -6851,6 +7026,13 @@ int main()
     test_repeated_warnings_are_collapsed(pm, am);
     test_single_warning_has_no_suffix(pm, am);
     test_insert_from_json_resets_warnings(pm, am);
+    test_corrupt_id_does_not_lose_scene(pm, am);
+    test_missing_children_does_not_lose_scene(pm, am);
+    test_missing_child_name_does_not_lose_scene(pm, am);
+    test_corrupt_mesh_indices_does_not_lose_scene(pm, am);
+    test_corrupt_legacy_usegravity_does_not_lose_scene(pm, am);
+    test_corrupt_script_name_does_not_lose_scene(pm, am);
+    test_corrupt_ui_string_warns(pm, am);
     test_clone_never_keeps_camera(pm, am);
     test_clone_strips_camera_from_descendant(pm, am);
     test_clone_gets_fresh_id(pm, am);

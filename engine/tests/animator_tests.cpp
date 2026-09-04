@@ -1066,6 +1066,52 @@ static void test_clone_of_rigged_mesh_does_not_reread_disk(PhysicsManager& pm, A
     CHECK(sm != origen);   // no comparten el objeto: el clon tiene el suyo
 }
 
+// P2 de docs/core-audit.md, el séptimo acceso crudo: los nombres de clip
+// guardados de una fuente de animación se leían con
+// get<std::vector<std::string>>(), así que un solo elemento que no fuera string
+// lanzaba.
+//
+// OJO, que la auditoría lo contaba mal y esto se vio al escribir el test: aquí
+// la escena NO se perdía. Este acceso cae dentro del try/catch de la carga de
+// malla (Scene.cpp:1683), así que la excepción se atrapaba mucho antes de
+// llegar al catch de fromJson. El daño era otro y peor de diagnosticar: el
+// personaje se cargaba **sin rig** —sin Animator, sin esqueleto— y el único
+// aviso decía "no se pudo cargar la malla", sin nombrar el campo ni el clip.
+// Un fallo silencioso disfrazado de otro. Verificado saboteando el arreglo: el
+// test cae por isSkinned(), no por fromJson().
+//
+// La lista se descarta ENTERA, no elemento a elemento: los nombres se aplican
+// POSICIONALMENTE (applyClipNamesPositionally), así que saltarse el elemento
+// malo correría todos los siguientes un puesto y renombraría los clips
+// equivocados — una escena que carga "bien" con las animaciones cambiadas de
+// sitio es peor que una que avisa.
+static void test_corrupt_clip_names_does_not_lose_scene(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Origen");
+    GameObject* go = scene.addGameObject("Personaje");
+    go->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx")));
+    scene.addGameObject("Sano");
+    nlohmann::json j = scene.toJson();
+
+    nlohmann::json& fuentes = j["root"]["children"][0]["mesh"]["animationSources"];
+    CHECK(fuentes.is_array() && !fuentes.empty());
+    if (!fuentes.is_array() || fuentes.empty()) return;
+    fuentes[0]["clips"] = nlohmann::json::array({ "Caminar", 42 });
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    // El nodo sano y el personaje siguen ahí, y el personaje conserva su rig.
+    CHECK(loaded.getRoot().children.size() == 2);
+    if (loaded.getRoot().children.size() != 2) return;
+    CHECK(loaded.getRoot().children[0]->isSkinned());
+    CHECK(loaded.getRoot().children[1]->name == "Sano");
+
+    int avisos = 0;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("clips") != std::string::npos) ++avisos;
+    CHECK(avisos == 1);
+}
+
 // Mismo finding, la otra ruta que pasaba nullptr: insertFromJson, que es el
 // undo de un Delete. Se reproduce el ciclo completo del comando —snapshot con
 // subtreeToJson, borrado, reinserción— porque es ahí donde el tipo de malla se
@@ -4008,6 +4054,7 @@ int main()
     test_scene_load_shares_has_bones_cache_across_nodes(pm, am);
     test_clone_of_rigged_mesh_stays_skinned(pm, am);
     test_clone_of_rigged_mesh_does_not_reread_disk(pm, am);
+    test_corrupt_clip_names_does_not_lose_scene(pm, am);
     test_delete_undo_restores_rigged_mesh_as_skinned(pm, am);
 
     test_animator_command_add_undo_redo();

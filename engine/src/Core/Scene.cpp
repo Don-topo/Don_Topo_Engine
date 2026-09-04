@@ -1469,12 +1469,27 @@ namespace
         // comandos siguientes en el stack lo siguen resolviendo bien.
         if (j.contains("id"))
         {
-            node->id = j.at("id").get<uint64_t>();
-            // El contador global de ids no ve esta asignación: sin adelantarlo,
-            // un fichero de otra sesión (ids más altos que los repartidos aquí)
-            // deja el contador por detrás de ids que ya están en el árbol y el
-            // siguiente GameObject nuevo repite uno. Ver reserveIdAtLeast.
-            GameObject::reserveIdAtLeast(node->id);
+            // Un id que no sea entero sin signo NO se acepta: antes se leía con
+            // .at().get<uint64_t>() y un null (o un string) lanzaba, la
+            // excepción subía hasta el catch de fromJson y se perdía la carga de
+            // la escena ENTERA por un campo. Se conserva el id que ya puso el
+            // constructor, que además es el único valor seguro: inventar un 0
+            // para todos los nodos rotos los haría chocar entre ellos.
+            if (j["id"].is_number_unsigned())
+            {
+                node->id = j["id"].get<uint64_t>();
+                // El contador global de ids no ve esta asignación: sin
+                // adelantarlo, un fichero de otra sesión (ids más altos que los
+                // repartidos aquí) deja el contador por detrás de ids que ya
+                // están en el árbol y el siguiente GameObject nuevo repite uno.
+                // Ver reserveIdAtLeast.
+                GameObject::reserveIdAtLeast(node->id);
+            }
+            else if (warnings)
+            {
+                warnings->push_back("nodo '" + node->name + "'.id: valor corrupto en la escena, "
+                                     "el objeto estrena un id nuevo");
+            }
         }
         node->localTransform = jsonToMat4(j.value("localTransform", nlohmann::json::array()),
                                            warnings, "localTransform de '" + node->name + "'");
@@ -1587,9 +1602,27 @@ namespace
                         {
                             const std::string path = sj.value("path", std::string());
                             const bool builtin     = sj.value("builtin", false);
+                            // Los nombres se aplican POSICIONALMENTE, así que
+                            // una lista a medias no es "casi bien": corre todos
+                            // los nombres siguientes un puesto y renombra los
+                            // clips equivocados. O entra entera o no entra
+                            // ninguna — mismo criterio que jsonToMat4 con la
+                            // matriz. Antes, un solo elemento que no fuera
+                            // string lanzaba y se perdía la escena entera.
                             std::vector<std::string> names;
                             if (sj.contains("clips"))
-                                names = sj["clips"].get<std::vector<std::string>>();
+                            {
+                                const nlohmann::json& cj = sj["clips"];
+                                bool clipsOk = cj.is_array();
+                                for (size_t ci = 0; clipsOk && ci < cj.size(); ++ci)
+                                    clipsOk = cj[ci].is_string();
+                                if (clipsOk)
+                                    names = cj.get<std::vector<std::string>>();
+                                else if (warnings)
+                                    warnings->push_back("mesh de '" + node->name +
+                                                         "'.animationSources.clips: lista corrupta en la "
+                                                         "escena, se ignoran los nombres guardados de esa fuente");
+                            }
 
                             if (builtin)
                             {
@@ -1670,12 +1703,35 @@ namespace
                     // guardados con este fix o posteriores): reconstruye el
                     // mesh exacto, sin depender de qué parámetros lo
                     // generaron originalmente.
-                    auto mesh = std::make_shared<DonTopo::Mesh>();
-                    mesh->name = meshName;
-                    for (const auto& vj : j["mesh"]["vertices"])
-                        mesh->vertices.push_back(jsonToVertex(vj, warnings, "mesh de '" + node->name + "'"));
-                    mesh->indices = j["mesh"]["indices"].get<std::vector<uint32_t>>();
-                    node->setMesh(std::move(mesh));
+                    // Los índices se validan ANTES de parsear los vértices: si
+                    // la lista está rota no hay malla que montar y parsearlos
+                    // sería trabajo tirado (y un aviso por vértice de propina).
+                    // Antes, un solo elemento no numérico lanzaba desde
+                    // get<vector<uint32_t>>; lo salvaba el catch de abajo, así
+                    // que la escena no se perdía — pero el aviso hablaba de
+                    // "no se pudo cargar la malla" sin nombrar el campo, que es
+                    // lo que manda a mirar al sitio equivocado.
+                    const nlohmann::json& idx = j["mesh"]["indices"];
+                    bool indicesOk = idx.is_array();
+                    for (size_t ii = 0; indicesOk && ii < idx.size(); ++ii)
+                        indicesOk = idx[ii].is_number_unsigned();
+                    if (!indicesOk)
+                    {
+                        // Media geometría es peor que ninguna: mismo criterio
+                        // que jsonToMat4 con la matriz.
+                        if (warnings)
+                            warnings->push_back("mesh de '" + node->name + "'.indices: lista corrupta "
+                                                 "en la escena, el objeto se carga sin malla");
+                    }
+                    else
+                    {
+                        auto mesh = std::make_shared<DonTopo::Mesh>();
+                        mesh->name = meshName;
+                        for (const auto& vj : j["mesh"]["vertices"])
+                            mesh->vertices.push_back(jsonToVertex(vj, warnings, "mesh de '" + node->name + "'"));
+                        mesh->indices = idx.get<std::vector<uint32_t>>();
+                        node->setMesh(std::move(mesh));
+                    }
                 }
                 else if (auto mesh = proceduralMeshByName(meshName))
                 {
@@ -1779,9 +1835,22 @@ namespace
         // == false (kinematic sin gravedad) equivale a un collider static, que
         // es justo el estado por defecto → no se crea Rigidbody.
         auto legacyGravity = [&](const char* key) -> int {
-            if (j.contains(key) && j[key].contains("useGravity"))
-                return j[key]["useGravity"].get<bool>() ? 1 : 0;
-            return -1; // sin campo legacy
+            if (!j.contains(key) || !j[key].contains("useGravity")) return -1; // sin campo legacy
+            const nlohmann::json& g = j[key]["useGravity"];
+            if (!g.is_boolean())
+            {
+                // Este es el camino de compatibilidad de las escenas ANTERIORES
+                // al Rigidbody: por definición lo que llega por aquí es un
+                // fichero viejo, o sea el peor sitio posible para ser estricto.
+                // Antes, un get<bool>() sobre un valor corrupto lanzaba y se
+                // perdía la carga entera. Se avisa y se trata como "sin campo
+                // legacy", que deja el collider static — el estado por defecto.
+                if (warnings)
+                    warnings->push_back(std::string(key) + " de '" + node->name +
+                                         "'.useGravity: valor corrupto en la escena, se ignora");
+                return -1;
+            }
+            return g.get<bool>() ? 1 : 0;
         };
         if (j.contains("rigidbody"))
         {
@@ -1879,13 +1948,6 @@ namespace
             // Un bool o un string corrupto (null, o del tipo que no toca) cae al
             // default en vez de lanzar: .value() sí lanza con un null, y un
             // campo roto no puede tumbar la carga de la escena entera.
-            auto readBool = [&](const char* key, bool def) {
-                return (c.contains(key) && c[key].is_boolean()) ? c[key].get<bool>() : def;
-            };
-            auto readStr = [&](const char* key) {
-                return (c.contains(key) && c[key].is_string())
-                           ? c[key].get<std::string>() : std::string();
-            };
             auto canvas = std::make_shared<CanvasComponent>();
             canvas->scaleMode = uiScaleModeFromStr(
                 c.value("scaleMode", std::string("constantPixelSize")));
@@ -1907,10 +1969,10 @@ namespace
             canvas->safeArea.right  = readFloat(safe, "right", 0.0f, warnings, ctx + ".safeArea");
             canvas->safeArea.bottom = readFloat(safe, "bottom", 0.0f, warnings, ctx + ".safeArea");
             canvas->aspectRatio = readFloat(c, "aspectRatio", 0.0f, warnings, ctx);
-            canvas->renderMode = uiCanvasRenderModeFromStr(readStr("renderMode"));
+            canvas->renderMode = uiCanvasRenderModeFromStr(readString(c, "renderMode", std::string(), warnings, ctx));
             canvas->worldScale = readFloat(c, "worldScale", 0.001f, warnings, ctx);
-            canvas->billboard  = uiBillboardFromStr(readStr("billboard"));
-            canvas->depthTest  = readBool("depthTest", true);
+            canvas->billboard  = uiBillboardFromStr(readString(c, "billboard", std::string(), warnings, ctx));
+            canvas->depthTest  = readBool(c, "depthTest", true, warnings, ctx);
             node->setCanvas(std::move(canvas));
         }
         // Bloque aditivo, misma regla que el canvas: una escena guardada antes
@@ -1922,13 +1984,6 @@ namespace
             // Un bool o un string corrupto (null, o del tipo que no toca) cae al
             // default en vez de lanzar: .value() sí lanza con un null, y un
             // campo roto no puede tumbar la carga de la escena entera.
-            auto readBool = [&](const char* key, bool def) {
-                return (b.contains(key) && b[key].is_boolean()) ? b[key].get<bool>() : def;
-            };
-            auto readStr = [&](const char* key) {
-                return (b.contains(key) && b[key].is_string())
-                           ? b[key].get<std::string>() : std::string();
-            };
             auto btn = std::make_shared<ButtonComponent>();
             btn->anchorMin = readVec2XY(b, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             btn->anchorMax = readVec2XY(b, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -1936,13 +1991,13 @@ namespace
             btn->position  = readVec2XY(b, "position", glm::vec2(0.0f), warnings, ctx);
             btn->size      = readVec2XY(b, "size", glm::vec2(160.0f, 40.0f), warnings, ctx);
             btn->color     = readVec4XYZW(b, "color", glm::vec4(1.0f), warnings, ctx);
-            btn->visible   = readBool("visible", true);
-            btn->atlasPath = readStr("atlasPath");
-            btn->sprite    = readStr("sprite");
+            btn->visible   = readBool(b, "visible", true, warnings, ctx);
+            btn->atlasPath = readString(b, "atlasPath", std::string(), warnings, ctx);
+            btn->sprite    = readString(b, "sprite", std::string(), warnings, ctx);
 
-            btn->interactable = readBool("interactable", true);
-            btn->selected     = readBool("selected", false);
-            btn->transition   = uiButtonTransitionFromStr(readStr("transition"));
+            btn->interactable = readBool(b, "interactable", true, warnings, ctx);
+            btn->selected     = readBool(b, "selected", false, warnings, ctx);
+            btn->transition   = uiButtonTransitionFromStr(readString(b, "transition", std::string(), warnings, ctx));
 
             btn->normalColor   = readVec4XYZW(b, "normalColor", glm::vec4(1.0f), warnings, ctx);
             btn->hoverColor    = readVec4XYZW(b, "hoverColor", glm::vec4(1.0f), warnings, ctx);
@@ -1950,16 +2005,16 @@ namespace
             btn->disabledColor = readVec4XYZW(b, "disabledColor", glm::vec4(1.0f), warnings, ctx);
             btn->selectedColor = readVec4XYZW(b, "selectedColor", glm::vec4(1.0f), warnings, ctx);
 
-            btn->normalSprite   = readStr("normalSprite");
-            btn->hoverSprite    = readStr("hoverSprite");
-            btn->pressedSprite  = readStr("pressedSprite");
-            btn->disabledSprite = readStr("disabledSprite");
-            btn->selectedSprite = readStr("selectedSprite");
+            btn->normalSprite   = readString(b, "normalSprite", std::string(), warnings, ctx);
+            btn->hoverSprite    = readString(b, "hoverSprite", std::string(), warnings, ctx);
+            btn->pressedSprite  = readString(b, "pressedSprite", std::string(), warnings, ctx);
+            btn->disabledSprite = readString(b, "disabledSprite", std::string(), warnings, ctx);
+            btn->selectedSprite = readString(b, "selectedSprite", std::string(), warnings, ctx);
 
             btn->fadeDuration = readFloat(b, "fadeDuration", 0.1f, warnings, ctx);
 
-            btn->text      = readStr("text");
-            btn->fontPath  = readStr("fontPath");
+            btn->text      = readString(b, "text", std::string(), warnings, ctx);
+            btn->fontPath  = readString(b, "fontPath", std::string(), warnings, ctx);
             btn->fontSize  = readFloat(b, "fontSize", 16.0f, warnings, ctx);
             btn->textColor = readVec4XYZW(b, "textColor", glm::vec4(1.0f), warnings, ctx);
             // Sin clave el default es Center (el del componente), no Left: por
@@ -1985,13 +2040,6 @@ namespace
             // Mismo criterio que el Button: un bool o un string corrupto cae al
             // default en vez de lanzar, que un campo roto no puede tumbar la
             // carga de la escena entera.
-            auto readBool = [&](const char* key, bool def) {
-                return (t.contains(key) && t[key].is_boolean()) ? t[key].get<bool>() : def;
-            };
-            auto readStr = [&](const char* key) {
-                return (t.contains(key) && t[key].is_string())
-                           ? t[key].get<std::string>() : std::string();
-            };
             auto txt = std::make_shared<TextComponent>();
             txt->anchorMin = readVec2XY(t, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             txt->anchorMax = readVec2XY(t, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -1999,10 +2047,10 @@ namespace
             txt->position  = readVec2XY(t, "position", glm::vec2(0.0f), warnings, ctx);
             txt->size      = readVec2XY(t, "size", glm::vec2(160.0f, 40.0f), warnings, ctx);
             txt->color     = readVec4XYZW(t, "color", glm::vec4(1.0f), warnings, ctx);
-            txt->visible   = readBool("visible", true);
+            txt->visible   = readBool(t, "visible", true, warnings, ctx);
 
-            txt->text     = readStr("text");
-            txt->fontPath = readStr("fontPath");
+            txt->text     = readString(t, "text", std::string(), warnings, ctx);
+            txt->fontPath = readString(t, "fontPath", std::string(), warnings, ctx);
             txt->fontSize = readFloat(t, "fontSize", 16.0f, warnings, ctx);
 
             txt->outlineWidth = readFloat(t, "outlineWidth", 0.0f, warnings, ctx);
@@ -2012,10 +2060,10 @@ namespace
             txt->shadowColor  = readVec4XYZW(t, "shadowColor",
                                              glm::vec4(0.0f, 0.0f, 0.0f, 0.5f), warnings, ctx);
 
-            txt->align    = uiTextAlignFromStr(readStr("align"));
-            txt->vAlign   = uiTextVAlignFromStr(readStr("vAlign"), UiTextVAlign::Top);
-            txt->overflow = uiTextOverflowFromStr(readStr("overflow"));
-            txt->wordWrap = readBool("wordWrap", false);
+            txt->align    = uiTextAlignFromStr(readString(t, "align", std::string(), warnings, ctx));
+            txt->vAlign   = uiTextVAlignFromStr(readString(t, "vAlign", std::string(), warnings, ctx), UiTextVAlign::Top);
+            txt->overflow = uiTextOverflowFromStr(readString(t, "overflow", std::string(), warnings, ctx));
+            txt->wordWrap = readBool(t, "wordWrap", false, warnings, ctx);
 
             txt->boldStrength = readFloat(t, "boldStrength", 0.08f, warnings, ctx);
             txt->italicSkew   = readFloat(t, "italicSkew", 0.25f, warnings, ctx);
@@ -2028,13 +2076,6 @@ namespace
         {
             const auto& p = j["progressBar"];
             const std::string ctx = "progressBar de '" + node->name + "'";
-            auto readBool = [&](const char* key, bool def) {
-                return (p.contains(key) && p[key].is_boolean()) ? p[key].get<bool>() : def;
-            };
-            auto readStr = [&](const char* key) {
-                return (p.contains(key) && p[key].is_string())
-                           ? p[key].get<std::string>() : std::string();
-            };
             auto bar = std::make_shared<ProgressBarComponent>();
             bar->anchorMin = readVec2XY(p, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             bar->anchorMax = readVec2XY(p, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2043,7 +2084,7 @@ namespace
             bar->size      = readVec2XY(p, "size", glm::vec2(160.0f, 20.0f), warnings, ctx);
             bar->color     = readVec4XYZW(p, "color", glm::vec4(0.2f, 0.2f, 0.2f, 1.0f),
                                           warnings, ctx);
-            bar->visible   = readBool("visible", true);
+            bar->visible   = readBool(p, "visible", true, warnings, ctx);
 
             bar->value    = readFloat(p, "value", 0.5f, warnings, ctx);
             bar->minValue = readFloat(p, "minValue", 0.0f, warnings, ctx);
@@ -2051,11 +2092,11 @@ namespace
 
             bar->fillColor = readVec4XYZW(p, "fillColor", glm::vec4(0.25f, 0.7f, 1.0f, 1.0f),
                                           warnings, ctx);
-            bar->fillDirection = uiProgressFillDirectionFromStr(readStr("fillDirection"));
+            bar->fillDirection = uiProgressFillDirectionFromStr(readString(p, "fillDirection", std::string(), warnings, ctx));
 
-            bar->atlasPath      = readStr("atlasPath");
-            bar->backgroundPath = readStr("backgroundPath");
-            bar->fillPath       = readStr("fillPath");
+            bar->atlasPath      = readString(p, "atlasPath", std::string(), warnings, ctx);
+            bar->backgroundPath = readString(p, "backgroundPath", std::string(), warnings, ctx);
+            bar->fillPath       = readString(p, "fillPath", std::string(), warnings, ctx);
             node->setProgressBar(std::move(bar));
         }
         // Bloque aditivo, misma regla que los demás componentes de UI: una
@@ -2065,13 +2106,6 @@ namespace
         {
             const auto& p = j["panel"];
             const std::string ctx = "panel de '" + node->name + "'";
-            auto readBool = [&](const char* key, bool def) {
-                return (p.contains(key) && p[key].is_boolean()) ? p[key].get<bool>() : def;
-            };
-            auto readStr = [&](const char* key) {
-                return (p.contains(key) && p[key].is_string())
-                           ? p[key].get<std::string>() : std::string();
-            };
             auto panel = std::make_shared<PanelComponent>();
             panel->anchorMin = readVec2XY(p, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             panel->anchorMax = readVec2XY(p, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2079,25 +2113,18 @@ namespace
             panel->position  = readVec2XY(p, "position", glm::vec2(0.0f), warnings, ctx);
             panel->size      = readVec2XY(p, "size", glm::vec2(200.0f, 120.0f), warnings, ctx);
             panel->color     = readVec4XYZW(p, "color", glm::vec4(1.0f), warnings, ctx);
-            panel->visible   = readBool("visible", true);
+            panel->visible   = readBool(p, "visible", true, warnings, ctx);
 
-            panel->raycastTarget = readBool("raycastTarget", true);
+            panel->raycastTarget = readBool(p, "raycastTarget", true, warnings, ctx);
 
-            panel->atlasPath = readStr("atlasPath");
-            panel->sprite    = readStr("sprite");
+            panel->atlasPath = readString(p, "atlasPath", std::string(), warnings, ctx);
+            panel->sprite    = readString(p, "sprite", std::string(), warnings, ctx);
             node->setPanel(std::move(panel));
         }
         if (j.contains("image"))
         {
             const auto& im = j["image"];
             const std::string ctx = "image de '" + node->name + "'";
-            auto readBool = [&](const char* key, bool def) {
-                return (im.contains(key) && im[key].is_boolean()) ? im[key].get<bool>() : def;
-            };
-            auto readStr = [&](const char* key) {
-                return (im.contains(key) && im[key].is_string())
-                           ? im[key].get<std::string>() : std::string();
-            };
             auto img = std::make_shared<ImageComponent>();
             img->anchorMin = readVec2XY(im, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             img->anchorMax = readVec2XY(im, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2105,20 +2132,20 @@ namespace
             img->position  = readVec2XY(im, "position", glm::vec2(0.0f), warnings, ctx);
             img->size      = readVec2XY(im, "size", glm::vec2(100.0f), warnings, ctx);
             img->color     = readVec4XYZW(im, "color", glm::vec4(1.0f), warnings, ctx);
-            img->visible   = readBool("visible", true);
+            img->visible   = readBool(im, "visible", true, warnings, ctx);
 
-            img->raycastTarget = readBool("raycastTarget", true);
+            img->raycastTarget = readBool(im, "raycastTarget", true, warnings, ctx);
 
-            img->atlasPath = readStr("atlasPath");
-            img->sprite    = readStr("sprite");
+            img->atlasPath = readString(im, "atlasPath", std::string(), warnings, ctx);
+            img->sprite    = readString(im, "sprite", std::string(), warnings, ctx);
 
-            img->mode = uiImageModeFromStr(readStr("mode"));
+            img->mode = uiImageModeFromStr(readString(im, "mode", std::string(), warnings, ctx));
 
             img->borderLeft   = readFloat(im, "borderLeft", 0.0f, warnings, ctx);
             img->borderRight  = readFloat(im, "borderRight", 0.0f, warnings, ctx);
             img->borderTop    = readFloat(im, "borderTop", 0.0f, warnings, ctx);
             img->borderBottom = readFloat(im, "borderBottom", 0.0f, warnings, ctx);
-            img->fillCenter   = readBool("fillCenter", true);
+            img->fillCenter   = readBool(im, "fillCenter", true, warnings, ctx);
 
             // Sin negativos ni un tope absurdo: maxTiles acota los quads que
             // puede emitir el batcher, y un JSON editado a mano con -1 daría una
@@ -2126,8 +2153,8 @@ namespace
             const float tiles = readFloat(im, "maxTiles", 1024.0f, warnings, ctx);
             img->maxTiles = tiles > 0.0f ? (uint32_t)tiles : 0u;
 
-            img->fillDirection = uiFillDirectionFromStr(readStr("fillDirection"));
-            img->fillOrigin    = uiFillOriginFromStr(readStr("fillOrigin"));
+            img->fillDirection = uiFillDirectionFromStr(readString(im, "fillDirection", std::string(), warnings, ctx));
+            img->fillOrigin    = uiFillOriginFromStr(readString(im, "fillOrigin", std::string(), warnings, ctx));
             img->fillAmount    = readFloat(im, "fillAmount", 1.0f, warnings, ctx);
             node->setImage(std::move(img));
         }
@@ -2138,13 +2165,6 @@ namespace
         {
             const auto& sl = j["slider"];
             const std::string ctx = "slider de '" + node->name + "'";
-            auto readBool = [&](const char* key, bool def) {
-                return (sl.contains(key) && sl[key].is_boolean()) ? sl[key].get<bool>() : def;
-            };
-            auto readStr = [&](const char* key) {
-                return (sl.contains(key) && sl[key].is_string())
-                           ? sl[key].get<std::string>() : std::string();
-            };
             auto slider = std::make_shared<SliderComponent>();
             slider->anchorMin = readVec2XY(sl, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             slider->anchorMax = readVec2XY(sl, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2153,25 +2173,25 @@ namespace
             slider->size      = readVec2XY(sl, "size", glm::vec2(200.0f, 20.0f), warnings, ctx);
             slider->color     = readVec4XYZW(sl, "color", glm::vec4(0.2f, 0.2f, 0.2f, 1.0f),
                                              warnings, ctx);
-            slider->visible      = readBool("visible", true);
-            slider->interactable = readBool("interactable", true);
+            slider->visible      = readBool(sl, "visible", true, warnings, ctx);
+            slider->interactable = readBool(sl, "interactable", true, warnings, ctx);
 
             slider->value    = readFloat(sl, "value", 0.0f, warnings, ctx);
             slider->minValue = readFloat(sl, "minValue", 0.0f, warnings, ctx);
             slider->maxValue = readFloat(sl, "maxValue", 1.0f, warnings, ctx);
-            slider->wholeNumbers = readBool("wholeNumbers", false);
+            slider->wholeNumbers = readBool(sl, "wholeNumbers", false, warnings, ctx);
 
-            slider->direction = uiSliderDirectionFromStr(readStr("direction"));
+            slider->direction = uiSliderDirectionFromStr(readString(sl, "direction", std::string(), warnings, ctx));
 
             slider->fillColor   = readVec4XYZW(sl, "fillColor", glm::vec4(0.25f, 0.7f, 1.0f, 1.0f),
                                                warnings, ctx);
             slider->handleColor = readVec4XYZW(sl, "handleColor", glm::vec4(1.0f), warnings, ctx);
             slider->handleSize  = readFloat(sl, "handleSize", 20.0f, warnings, ctx);
 
-            slider->atlasPath        = readStr("atlasPath");
-            slider->backgroundSprite = readStr("backgroundSprite");
-            slider->fillSprite       = readStr("fillSprite");
-            slider->handleSprite     = readStr("handleSprite");
+            slider->atlasPath        = readString(sl, "atlasPath", std::string(), warnings, ctx);
+            slider->backgroundSprite = readString(sl, "backgroundSprite", std::string(), warnings, ctx);
+            slider->fillSprite       = readString(sl, "fillSprite", std::string(), warnings, ctx);
+            slider->handleSprite     = readString(sl, "handleSprite", std::string(), warnings, ctx);
             node->setSlider(std::move(slider));
         }
         // Bloque aditivo, misma regla que los demas componentes de UI.
@@ -2179,13 +2199,6 @@ namespace
         {
             const auto& cb = j["checkbox"];
             const std::string ctx = "checkbox de '" + node->name + "'";
-            auto readBool = [&](const char* key, bool def) {
-                return (cb.contains(key) && cb[key].is_boolean()) ? cb[key].get<bool>() : def;
-            };
-            auto readStr = [&](const char* key) {
-                return (cb.contains(key) && cb[key].is_string())
-                           ? cb[key].get<std::string>() : std::string();
-            };
             auto chk = std::make_shared<CheckboxComponent>();
             chk->anchorMin = readVec2XY(cb, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             chk->anchorMax = readVec2XY(cb, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2194,38 +2207,31 @@ namespace
             chk->size      = readVec2XY(cb, "size", glm::vec2(24.0f), warnings, ctx);
             chk->color     = readVec4XYZW(cb, "color", glm::vec4(0.2f, 0.2f, 0.2f, 1.0f),
                                           warnings, ctx);
-            chk->visible      = readBool("visible", true);
-            chk->interactable = readBool("interactable", true);
-            chk->isOn         = readBool("isOn", false);
+            chk->visible      = readBool(cb, "visible", true, warnings, ctx);
+            chk->interactable = readBool(cb, "interactable", true, warnings, ctx);
+            chk->isOn         = readBool(cb, "isOn", false, warnings, ctx);
 
             chk->checkColor   = readVec4XYZW(cb, "checkColor", glm::vec4(1.0f), warnings, ctx);
             chk->checkPadding = readFloat(cb, "checkPadding", 4.0f, warnings, ctx);
 
-            chk->atlasPath        = readStr("atlasPath");
-            chk->backgroundSprite = readStr("backgroundSprite");
-            chk->checkmarkSprite  = readStr("checkmarkSprite");
+            chk->atlasPath        = readString(cb, "atlasPath", std::string(), warnings, ctx);
+            chk->backgroundSprite = readString(cb, "backgroundSprite", std::string(), warnings, ctx);
+            chk->checkmarkSprite  = readString(cb, "checkmarkSprite", std::string(), warnings, ctx);
             node->setCheckbox(std::move(chk));
         }
         if (j.contains("toggle"))
         {
             const auto& tg = j["toggle"];
             const std::string ctx = "toggle de '" + node->name + "'";
-            auto readBool = [&](const char* key, bool def) {
-                return (tg.contains(key) && tg[key].is_boolean()) ? tg[key].get<bool>() : def;
-            };
-            auto readStr = [&](const char* key) {
-                return (tg.contains(key) && tg[key].is_string())
-                           ? tg[key].get<std::string>() : std::string();
-            };
             auto tog = std::make_shared<ToggleComponent>();
             tog->anchorMin = readVec2XY(tg, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             tog->anchorMax = readVec2XY(tg, "anchorMax", glm::vec2(0.0f), warnings, ctx);
             tog->pivot     = readVec2XY(tg, "pivot", glm::vec2(0.0f), warnings, ctx);
             tog->position  = readVec2XY(tg, "position", glm::vec2(0.0f), warnings, ctx);
             tog->size      = readVec2XY(tg, "size", glm::vec2(56.0f, 28.0f), warnings, ctx);
-            tog->visible      = readBool("visible", true);
-            tog->interactable = readBool("interactable", true);
-            tog->isOn         = readBool("isOn", false);
+            tog->visible      = readBool(tg, "visible", true, warnings, ctx);
+            tog->interactable = readBool(tg, "interactable", true, warnings, ctx);
+            tog->isOn         = readBool(tg, "isOn", false, warnings, ctx);
 
             tog->offColor  = readVec4XYZW(tg, "offColor", glm::vec4(0.3f, 0.3f, 0.3f, 1.0f),
                                           warnings, ctx);
@@ -2236,22 +2242,15 @@ namespace
             tog->knobSize    = readFloat(tg, "knobSize", 20.0f, warnings, ctx);
             tog->knobPadding = readFloat(tg, "knobPadding", 4.0f, warnings, ctx);
 
-            tog->atlasPath        = readStr("atlasPath");
-            tog->backgroundSprite = readStr("backgroundSprite");
-            tog->knobSprite       = readStr("knobSprite");
+            tog->atlasPath        = readString(tg, "atlasPath", std::string(), warnings, ctx);
+            tog->backgroundSprite = readString(tg, "backgroundSprite", std::string(), warnings, ctx);
+            tog->knobSprite       = readString(tg, "knobSprite", std::string(), warnings, ctx);
             node->setToggle(std::move(tog));
         }
         if (j.contains("scrollbar"))
         {
             const auto& sb = j["scrollbar"];
             const std::string ctx = "scrollbar de '" + node->name + "'";
-            auto readBool = [&](const char* key, bool def) {
-                return (sb.contains(key) && sb[key].is_boolean()) ? sb[key].get<bool>() : def;
-            };
-            auto readStr = [&](const char* key) {
-                return (sb.contains(key) && sb[key].is_string())
-                           ? sb[key].get<std::string>() : std::string();
-            };
             auto scr = std::make_shared<ScrollbarComponent>();
             scr->anchorMin = readVec2XY(sb, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             scr->anchorMax = readVec2XY(sb, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2260,12 +2259,12 @@ namespace
             scr->size      = readVec2XY(sb, "size", glm::vec2(20.0f, 200.0f), warnings, ctx);
             scr->color     = readVec4XYZW(sb, "color", glm::vec4(0.15f, 0.15f, 0.15f, 1.0f),
                                           warnings, ctx);
-            scr->visible      = readBool("visible", true);
-            scr->interactable = readBool("interactable", true);
+            scr->visible      = readBool(sb, "visible", true, warnings, ctx);
+            scr->interactable = readBool(sb, "interactable", true, warnings, ctx);
 
             scr->value          = readFloat(sb, "value", 0.0f, warnings, ctx);
             scr->handleFraction = readFloat(sb, "handleFraction", 0.25f, warnings, ctx);
-            scr->direction      = uiScrollbarDirectionFromStr(readStr("direction"));
+            scr->direction      = uiScrollbarDirectionFromStr(readString(sb, "direction", std::string(), warnings, ctx));
 
             // Sin negativos: numberOfSteps es un contador, y un JSON editado a
             // mano con -1 daria una vuelta al uint32.
@@ -2276,9 +2275,9 @@ namespace
                                             warnings, ctx);
             scr->scrollStep  = readFloat(sb, "scrollStep", 0.1f, warnings, ctx);
 
-            scr->atlasPath        = readStr("atlasPath");
-            scr->backgroundSprite = readStr("backgroundSprite");
-            scr->handleSprite     = readStr("handleSprite");
+            scr->atlasPath        = readString(sb, "atlasPath", std::string(), warnings, ctx);
+            scr->backgroundSprite = readString(sb, "backgroundSprite", std::string(), warnings, ctx);
+            scr->handleSprite     = readString(sb, "handleSprite", std::string(), warnings, ctx);
             node->setScrollbar(std::move(scr));
         }
         // Bloque aditivo, misma regla que los demas componentes de UI.
@@ -2286,13 +2285,6 @@ namespace
         {
             const auto& fj = j["inputField"];
             const std::string ctx = "inputField de '" + node->name + "'";
-            auto readBool = [&](const char* key, bool def) {
-                return (fj.contains(key) && fj[key].is_boolean()) ? fj[key].get<bool>() : def;
-            };
-            auto readStr = [&](const char* key) {
-                return (fj.contains(key) && fj[key].is_string())
-                           ? fj[key].get<std::string>() : std::string();
-            };
             auto f = std::make_shared<InputFieldComponent>();
             f->anchorMin = readVec2XY(fj, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             f->anchorMax = readVec2XY(fj, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2301,18 +2293,18 @@ namespace
             f->size      = readVec2XY(fj, "size", glm::vec2(200.0f, 32.0f), warnings, ctx);
             f->color     = readVec4XYZW(fj, "color", glm::vec4(0.15f, 0.15f, 0.15f, 1.0f),
                                         warnings, ctx);
-            f->visible      = readBool("visible", true);
-            f->interactable = readBool("interactable", true);
-            f->readOnly     = readBool("readOnly", false);
+            f->visible      = readBool(fj, "visible", true, warnings, ctx);
+            f->interactable = readBool(fj, "interactable", true, warnings, ctx);
+            f->readOnly     = readBool(fj, "readOnly", false, warnings, ctx);
 
-            f->text        = readStr("text");
-            f->placeholder = readStr("placeholder");
-            f->fontPath    = readStr("fontPath");
+            f->text        = readString(fj, "text", std::string(), warnings, ctx);
+            f->placeholder = readString(fj, "placeholder", std::string(), warnings, ctx);
+            f->fontPath    = readString(fj, "fontPath", std::string(), warnings, ctx);
             f->fontSize    = readFloat(fj, "fontSize", 16.0f, warnings, ctx);
             f->textColor   = readVec4XYZW(fj, "textColor", glm::vec4(1.0f), warnings, ctx);
             f->placeholderColor = readVec4XYZW(fj, "placeholderColor",
                                                glm::vec4(0.6f, 0.6f, 0.6f, 1.0f), warnings, ctx);
-            f->align   = uiTextAlignFromStr(readStr("align"));
+            f->align   = uiTextAlignFromStr(readString(fj, "align", std::string(), warnings, ctx));
             f->padding = readFloat(fj, "padding", 6.0f, warnings, ctx);
 
             // Sin negativos: es un contador, y un JSON editado a mano con -1
@@ -2320,7 +2312,7 @@ namespace
             const float lim = readFloat(fj, "characterLimit", 0.0f, warnings, ctx);
             f->characterLimit = lim > 0.0f ? (uint32_t)lim : 0u;
 
-            f->contentType  = uiInputContentTypeFromStr(readStr("contentType"));
+            f->contentType  = uiInputContentTypeFromStr(readString(fj, "contentType", std::string(), warnings, ctx));
             // Vacio en el JSON se respeta: displayText ya cae al asterisco.
             f->passwordChar = (fj.contains("passwordChar") && fj["passwordChar"].is_string())
                                   ? fj["passwordChar"].get<std::string>() : std::string("*");
@@ -2329,8 +2321,8 @@ namespace
             f->caretWidth     = readFloat(fj, "caretWidth", 1.0f, warnings, ctx);
             f->caretBlinkRate = readFloat(fj, "caretBlinkRate", 0.5f, warnings, ctx);
 
-            f->atlasPath        = readStr("atlasPath");
-            f->backgroundSprite = readStr("backgroundSprite");
+            f->atlasPath        = readString(fj, "atlasPath", std::string(), warnings, ctx);
+            f->backgroundSprite = readString(fj, "backgroundSprite", std::string(), warnings, ctx);
             // El cursor arranca al final del texto cargado, que es donde lo
             // espera cualquiera que pinche en un campo ya relleno.
             f->caretEnd();
@@ -2340,13 +2332,6 @@ namespace
         {
             const auto& dj = j["dropdown"];
             const std::string ctx = "dropdown de '" + node->name + "'";
-            auto readBool = [&](const char* key, bool def) {
-                return (dj.contains(key) && dj[key].is_boolean()) ? dj[key].get<bool>() : def;
-            };
-            auto readStr = [&](const char* key) {
-                return (dj.contains(key) && dj[key].is_string())
-                           ? dj[key].get<std::string>() : std::string();
-            };
             auto d = std::make_shared<DropdownComponent>();
             d->anchorMin = readVec2XY(dj, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             d->anchorMax = readVec2XY(dj, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2355,8 +2340,8 @@ namespace
             d->size      = readVec2XY(dj, "size", glm::vec2(200.0f, 32.0f), warnings, ctx);
             d->color     = readVec4XYZW(dj, "color", glm::vec4(0.2f, 0.2f, 0.2f, 1.0f),
                                         warnings, ctx);
-            d->visible      = readBool("visible", true);
-            d->interactable = readBool("interactable", true);
+            d->visible      = readBool(dj, "visible", true, warnings, ctx);
+            d->interactable = readBool(dj, "interactable", true, warnings, ctx);
 
             // Las opciones que no sean cadenas se DESCARTAN una a una en vez de
             // tirar la lista entera: perder un combo por una entrada corrupta
@@ -2377,28 +2362,21 @@ namespace
             d->itemSelectedColor = readVec4XYZW(dj, "itemSelectedColor", glm::vec4(0.25f, 0.45f, 0.7f, 1.0f), warnings, ctx);
             d->arrowColor        = readVec4XYZW(dj, "arrowColor", glm::vec4(1.0f), warnings, ctx);
 
-            d->fontPath  = readStr("fontPath");
+            d->fontPath  = readString(dj, "fontPath", std::string(), warnings, ctx);
             d->fontSize  = readFloat(dj, "fontSize", 16.0f, warnings, ctx);
             d->textColor = readVec4XYZW(dj, "textColor", glm::vec4(1.0f), warnings, ctx);
             d->padding   = readFloat(dj, "padding", 6.0f, warnings, ctx);
 
-            d->atlasPath        = readStr("atlasPath");
-            d->backgroundSprite = readStr("backgroundSprite");
-            d->arrowSprite      = readStr("arrowSprite");
-            d->itemSprite       = readStr("itemSprite");
+            d->atlasPath        = readString(dj, "atlasPath", std::string(), warnings, ctx);
+            d->backgroundSprite = readString(dj, "backgroundSprite", std::string(), warnings, ctx);
+            d->arrowSprite      = readString(dj, "arrowSprite", std::string(), warnings, ctx);
+            d->itemSprite       = readString(dj, "itemSprite", std::string(), warnings, ctx);
             node->setDropdown(std::move(d));
         }
         if (j.contains("scrollView"))
         {
             const auto& vj = j["scrollView"];
             const std::string ctx = "scrollView de '" + node->name + "'";
-            auto readBool = [&](const char* key, bool def) {
-                return (vj.contains(key) && vj[key].is_boolean()) ? vj[key].get<bool>() : def;
-            };
-            auto readStr = [&](const char* key) {
-                return (vj.contains(key) && vj[key].is_string())
-                           ? vj[key].get<std::string>() : std::string();
-            };
             auto v = std::make_shared<ScrollViewComponent>();
             v->anchorMin = readVec2XY(vj, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             v->anchorMax = readVec2XY(vj, "anchorMax", glm::vec2(0.0f), warnings, ctx);
@@ -2407,38 +2385,31 @@ namespace
             v->size      = readVec2XY(vj, "size", glm::vec2(200.0f), warnings, ctx);
             v->color     = readVec4XYZW(vj, "color", glm::vec4(0.1f, 0.1f, 0.1f, 1.0f),
                                         warnings, ctx);
-            v->visible    = readBool("visible", true);
-            v->horizontal = readBool("horizontal", false);
-            v->vertical   = readBool("vertical", true);
+            v->visible    = readBool(vj, "visible", true, warnings, ctx);
+            v->horizontal = readBool(vj, "horizontal", false, warnings, ctx);
+            v->vertical   = readBool(vj, "vertical", true, warnings, ctx);
 
             v->contentSize        = readVec2XY(vj, "contentSize", glm::vec2(200.0f, 400.0f), warnings, ctx);
             v->normalizedPosition = readVec2XY(vj, "normalizedPosition", glm::vec2(0.0f), warnings, ctx);
             v->scrollSensitivity  = readFloat(vj, "scrollSensitivity", 40.0f, warnings, ctx);
 
-            v->atlasPath        = readStr("atlasPath");
-            v->backgroundSprite = readStr("backgroundSprite");
+            v->atlasPath        = readString(vj, "atlasPath", std::string(), warnings, ctx);
+            v->backgroundSprite = readString(vj, "backgroundSprite", std::string(), warnings, ctx);
             node->setScrollView(std::move(v));
         }
         if (j.contains("layout"))
         {
             const auto& l = j["layout"];
             const std::string ctx = "layout de '" + node->name + "'";
-            auto readBool = [&](const char* key, bool def) {
-                return (l.contains(key) && l[key].is_boolean()) ? l[key].get<bool>() : def;
-            };
-            auto readStr = [&](const char* key) {
-                return (l.contains(key) && l[key].is_string())
-                           ? l[key].get<std::string>() : std::string();
-            };
             auto layout = std::make_shared<LayoutComponent>();
             layout->anchorMin = readVec2XY(l, "anchorMin", glm::vec2(0.0f), warnings, ctx);
             layout->anchorMax = readVec2XY(l, "anchorMax", glm::vec2(0.0f), warnings, ctx);
             layout->pivot     = readVec2XY(l, "pivot", glm::vec2(0.0f), warnings, ctx);
             layout->position  = readVec2XY(l, "position", glm::vec2(0.0f), warnings, ctx);
             layout->size      = readVec2XY(l, "size", glm::vec2(200.0f, 200.0f), warnings, ctx);
-            layout->visible   = readBool("visible", true);
+            layout->visible   = readBool(l, "visible", true, warnings, ctx);
 
-            layout->mode = uiLayoutModeFromStr(readStr("mode"));
+            layout->mode = uiLayoutModeFromStr(readString(l, "mode", std::string(), warnings, ctx));
 
             layout->paddingLeft   = readFloat(l, "paddingLeft", 0.0f, warnings, ctx);
             layout->paddingRight  = readFloat(l, "paddingRight", 0.0f, warnings, ctx);
@@ -2452,13 +2423,13 @@ namespace
             const float cols = readFloat(l, "columns", 0.0f, warnings, ctx);
             layout->columns = cols > 0.0f ? (uint32_t)cols : 0u;
 
-            layout->crossAlign = uiCrossAlignFromStr(readStr("crossAlign"));
+            layout->crossAlign = uiCrossAlignFromStr(readString(l, "crossAlign", std::string(), warnings, ctx));
 
-            layout->fitWidth  = readBool("fitWidth", false);
-            layout->fitHeight = readBool("fitHeight", false);
+            layout->fitWidth  = readBool(l, "fitWidth", false, warnings, ctx);
+            layout->fitHeight = readBool(l, "fitHeight", false, warnings, ctx);
 
-            layout->ignoreLayout = readBool("ignoreLayout", false);
-            layout->clipChildren = readBool("clipChildren", false);
+            layout->ignoreLayout = readBool(l, "ignoreLayout", false, warnings, ctx);
+            layout->clipChildren = readBool(l, "clipChildren", false, warnings, ctx);
             node->setLayout(std::move(layout));
         }
         // Bloque aditivo: las escenas guardadas antes de este campo no lo traen
@@ -2612,8 +2583,15 @@ namespace
         {
             for (const auto& sj : j["scripts"])
             {
-                auto comp = std::make_unique<DonTopo::ScriptComponent>(
-                    sj.at("name").get<std::string>(), node);
+                // Sin nombre no hay fichero .lua que cargar, así que ese
+                // componente se descarta — pero el GameObject y el resto de la
+                // escena siguen. Antes era un .at() y se perdía la carga entera.
+                const std::string scriptName =
+                    readString(sj, "name", std::string(), warnings,
+                                "scripts de '" + node->name + "'", /*required=*/true);
+                if (scriptName.empty())
+                    continue;   // readString ya ha avisado
+                auto comp = std::make_unique<DonTopo::ScriptComponent>(scriptName, node);
                 if (sj.contains("overrides"))
                 {
                     for (const auto& [key, val] : sj["overrides"].items())
@@ -2631,9 +2609,33 @@ namespace
             }
         }
 
-        for (const auto& childJson : j.at("children"))
+        // "children" lo escribe nodeToJson SIEMPRE (ver el final de esa
+        // función), así que su ausencia nunca es back-compat: es corrupción, y
+        // hasta ahora un .at() la convertía en "se pierde la escena entera".
+        // Ahora el nodo se carga sin hijos y se nombra el problema.
+        auto childrenIt = j.find("children");
+        if (childrenIt == j.end() || !childrenIt->is_array())
         {
-            GameObject* child = node->addChild(childJson.at("name").get<std::string>());
+            if (warnings)
+                warnings->push_back("nodo '" + node->name + "'.children: falta o no es una lista "
+                                     "en la escena, el objeto se carga sin hijos");
+            return;
+        }
+        for (const auto& childJson : *childrenIt)
+        {
+            if (!childJson.is_object())
+            {
+                if (warnings)
+                    warnings->push_back("nodo '" + node->name + "'.children: hay una entrada que no "
+                                         "es un objeto, se descarta");
+                continue;
+            }
+            // El nombre también lo escribe nodeToJson siempre. Un nodo sin él se
+            // conserva igual (puede llevar medio árbol colgando) pero con el
+            // nombre vacío y su aviso, en vez de tumbar la carga.
+            GameObject* child = node->addChild(
+                readString(childJson, "name", std::string(), warnings,
+                            "nodo '" + node->name + "'.children", /*required=*/true));
             nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, hasBonesCache, loader, preloaded);
         }
     }
