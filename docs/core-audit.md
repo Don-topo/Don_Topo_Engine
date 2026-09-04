@@ -209,14 +209,16 @@ encargo.
 | `Scene`: `reparent` | `scripting_tests.cpp:3458-3600` | Vía `Entity:SetParent` y vía `ReparentCommand`, incluido el reordenar dentro del mismo padre |
 | `Scene::update` (física) | `physics_tests.cpp:1297-1311` | Las tres ramas del sync (dinámico, kinematic, static) |
 | `Scene::collectCanvases` | `camera_tests.cpp` | Canvas anidados y cadena de anclaje |
+| `DonTopo::Camera` (la del editor) | `camera_tests.cpp:7016` | **Nuevo 2026-09-04.** Front por defecto a -Z, clamp de pitch, `mouseSens`, `lookAlongAxis` (solo rota), `focusOn` (distancia, radio mínimo y el caso degenerado de estar YA en el centro) y que `getViewMatrix` es el `lookAt` que el resto del motor asume. `update()` fuera: pide un `GLFWwindow*` |
+| `Scene::collectLights` | `camera_tests.cpp:7162` | **Nuevo 2026-09-04.** Recorte a `MAX_LIGHTS` devolviendo el TOTAL, vaciado de las salidas, posición y dirección desde el `worldTransform`, **la guarda de NaN con escala 0 en Z**, ángulos en coseno y el radio de Forward+ (area = ancho/2) |
 | `Scene::fromJson` / `insertFromJson` | `camera_tests.cpp`, `scene_async_tests.cpp`, `audio_tests.cpp`, `animator_tests.cpp` | Round-trip, carga async, avisos, back-compat de `useGravity` |
 
 ### 4.2 Lo que no toca ningún test
 
 | Sin cubrir | LOC | Por qué importa |
 |---|---|---|
-| `src/Core/Camera.cpp` | 98 | **Cero referencias en los 25 ficheros de test** (`grep` de `lookAlongAxis`, `focusOn`, `processMouse`, `getViewMatrix`, `camera.update` sobre `engine/tests/*.cpp`: ninguna coincidencia). Incluye el clamp de pitch a ±89°, la zona muerta del mando y la trigonometría de `focusOn`, que es lo que hace la tecla F |
-| `Scene::collectLights` | 52 (`:2946-2997`) | **Cero tests.** Es lo que alimenta el UBO de iluminación entero: el recorte a `MAX_LIGHTS`, el `total` que distingue "sin luces" de "más de las que caben", la conversión de ángulos a coseno y **la guarda de NaN cuando el eje Z tiene escala 0** (`:2967-2969`) — una guarda contra el mismo fallo que ya costó tres síntomas distintos en este repo |
+| ~~`src/Core/Camera.cpp`~~ | 98 | **CUBIERTO el 2026-09-04**: 7 tests. Queda fuera solo `update()`, que pide un `GLFWwindow*` (y con él la zona muerta del mando) |
+| ~~`Scene::collectLights`~~ | 52 | **CUBIERTO el 2026-09-04**: 6 tests, uno por cosa que hace |
 | `src/Core/Window.cpp` | 75 | Sin arnés (necesita GLFW). Aceptable, pero incluye el arranque oculto anti-flash |
 | `src/Core/Engine.cpp` | 9 | No hay nada que probar (ver H21) |
 | ~~El camino de carga de ids~~ | — | Era H1. **Cubierto desde 2026-09-04** por `test_load_advances_id_counter` (`camera_tests.cpp:509`) |
@@ -243,6 +245,15 @@ Es el patrón exacto que el encargo pide buscar. La pregunta que lo caza: *¿qu�
 tendría que romperse para que este `CHECK` fallara?* Aquí, nada de lo que el
 test dice cubrir.
 
+**Cómo se comprobó que los 13 tests nuevos (§4.1) no son de esa familia**: 15
+sabotajes, **uno a uno**, cada uno tumbando el test que decía proteger y
+revirtiendo antes del siguiente. En bloque no vale: tocar `updateVectors`
+tumba TODOS los tests de `Camera` a la vez y la atribución se pierde — se
+intentó primero así y hubo que rehacerlo. Los 15 cayeron por su test. Las
+caídas colaterales que quedan son dependencias reales y no ruido: `focusOn`
+llama a `lookAlongAxis`, y todo lo que lee `front` depende de
+`updateVectors`.
+
 Contraste con un test que **sí** sabe lo que protege:
 `jobsystem_tests.cpp:207-210` escribe su propio sabotaje en el comentario
 (*"quitar el `--m_inFlight`… y el assert final salta"*), y `camera_tests.cpp:487-494`
@@ -259,7 +270,7 @@ explica por qué existe (*"sin este test, mover el strip a `nodeFromJson`
 | ~~2~~ | **P3** (H14, carga de disco síncrona al `Instantiate`) — **HECHO 2026-09-04** | Era la otra Alta. 24,5 → 1,8 ms por clon, medido en Release. Al hacerla salió un fallo **fuera del alcance de esta auditoría** que la tapaba: ver la nota de abajo sobre `ModelLoader::loadSkinned` |
 | ~~3~~ | **P2 + P7** (H2 y H22) — **HECHO 2026-09-04** | Hechas juntas. P2 dejó H2 **reducido, no cerrado**: los 7 accesos crudos ya no existen, pero siguen los **57 `.value(...)`**. Y corrigió lo que la propia fila decía: solo 5 de los 7 perdían la escena; los otros dos perdían la malla en silencio, que es peor de diagnosticar |
 | 4 | **P9 + P10** (H5 y H4) | Dos S independientes con criterio binario. P9 reconecta un canal de diagnóstico muerto desde el primer día; P10 impide que tocar el grafo en Play borre los parámetros de la partida |
-| 5 | **Tests de `collectLights` y de `Camera.cpp`** (§4.2) | Antes que cualquier propuesta de rendimiento: P4 y P5 tocan `Scene::update` y el recorrido de luces, y hoy no hay red debajo. Escribirlos primero es lo que convierte P4/P5 en cambios verificables en vez de en apuestas |
+| ~~5~~ | **Tests de `collectLights` y de `Camera.cpp`** (§4.2) — **HECHO 2026-09-04** | 13 tests, 15 sabotajes uno a uno. Ya hay red debajo de P4/P5 |
 | 6 | **P4 + P5** (H12 y H13, recorridos y `shared_ptr` por frame) | **Sin medir**: lo primero de esta fila es la ablación en Release, no el refactor. Si los cuatro recorridos no pasan del 3 % del frame, la fila se cierra como no rentable y se anota — igual que se cerró P14 del Renderer |
 | 7 | **P8** (H3, obligación del llamante) | Solo merece la pena en su versión con callback, la que tiene criterio comprobable. La versión de solo-documentar deja el mismo pie en el que tropezar |
 | 8 | **P6** (H18, partir `Scene.cpp`) | La última a propósito. Es una L, no arregla ningún bug, y su beneficio es de acoplamiento, no de tiempo de build (que ya se midió y no mejora). Hacerla antes que P1/P3 sería mover 2.601 líneas por encima de dos fallos abiertos |
@@ -278,10 +289,15 @@ explica por qué existe (*"sin este test, mover el strip a `nodeFromJson`
 > corregir solo el resumen deja la corrección invisible para quien lea la
 > tabla.
 >
+> Y la **cobertura** de `Scene::collectLights` y `Camera.cpp` (§4.1), que no
+> era una fila pero iba antes que P4/P5 justamente para que esas dos dejen de
+> ser apuestas.
+>
 > **Lo que queda abierto: 18 filas** (H2 reducido incluido), todas Media o
-> Baja. La siguiente del orden recomendado es la **cobertura de
-> `Scene::collectLights` y `Camera.cpp`**, que van ANTES que P4/P5 porque esas
-> dos tocan justo el código que hoy no tiene ni un test debajo.
+> Baja. La siguiente del orden recomendado es **P4 + P5**, y lo primero de esa
+> fila es la ablación en Release —no el refactor—: si los cuatro recorridos no
+> pasan del 3 % del frame, se cierra como no rentable y se anota, igual que se
+> hizo con P14 del Renderer.
 
 ---
 

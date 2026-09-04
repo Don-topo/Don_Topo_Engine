@@ -7,6 +7,7 @@
 // main() y se pasa por referencia: aquí sólo hace falta porque Scene::fromJson/
 // insertFromJson/cloneGameObject lo exigen en su firma para recrear colliders,
 // no porque estos tests simulen física.
+#include "DonTopo/Core/Camera.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
@@ -6995,6 +6996,306 @@ static void test_world_canvas_gizmo_proyecta_el_rect_de_un_widget()
     CHECK(nearlyEqual(punto[2].y, 297.8520f, 0.02f));
 }
 
+// ===========================================================================
+// DonTopo::Camera — la cámara de vuelo del EDITOR (Core/Camera.cpp)
+// ===========================================================================
+//
+// §4.2 de docs/core-audit.md: 98 LOC con CERO referencias en los 25 ficheros de
+// test. No es la CameraComponent de arriba (esa sí estaba cubierta): es la que
+// mueve el punto de vista del viewport con WASD, la que reorienta el axis gizmo
+// y la que ejecuta la tecla F.
+//
+// update() se queda fuera a propósito: pide un GLFWwindow* y no hay ventana en
+// un test headless. Todo lo demás —la trigonometría, el clamp, el encuadre— es
+// aritmética pura y no tenía nada debajo.
+
+// El yaw por defecto es -90°, y esa elección es justo lo que hace que la cámara
+// mire a -Z como glm::lookAt y como CameraComponent::viewFromWorld. Si alguien
+// "arregla" la trigonometría de updateVectors, las dos convenciones dejan de
+// coincidir y el gizmo de frustum empieza a mentir sobre lo que se ve en Play.
+static void test_camera_default_front_is_minus_z()
+{
+    Camera cam;
+    const glm::vec3 f = cam.getFront();
+    CHECK(nearlyEqual(f.x, 0.0f, 1e-5f));
+    CHECK(nearlyEqual(f.y, 0.0f, 1e-5f));
+    CHECK(nearlyEqual(f.z, -1.0f, 1e-5f));
+    CHECK(nearlyEqual(glm::length(f), 1.0f, 1e-5f));
+}
+
+// El pitch se clampa a ±89°: a 90 el front se alinea con el up y el producto
+// vectorial de update() (right = cross(front, up)) degenera. Sin clamp, un
+// arrastre largo del ratón pasa de 90 y la cámara se da la vuelta.
+static void test_camera_pitch_is_clamped()
+{
+    Camera arriba;
+    arriba.processMouse(0.0f, -100000.0f);   // yOffset negativo sube el pitch
+    CHECK(arriba.getFront().y <= 1.0f);
+    // sin(89°) = 0.99985. Sin el clamp el pitch se pasa de 90 y la componente
+    // vuelve a BAJAR (sin(200°) es negativo), que es lo que caza este umbral.
+    CHECK(arriba.getFront().y > 0.999f);
+    CHECK(nearlyEqual(glm::length(arriba.getFront()), 1.0f, 1e-5f));
+
+    Camera abajo;
+    abajo.processMouse(0.0f, 100000.0f);
+    CHECK(abajo.getFront().y < -0.999f);
+}
+
+// mouseSens multiplica el offset. Es un campo público que el editor expone en
+// preferencias: si processMouse dejara de aplicarlo, el deslizador no haría
+// nada y nadie lo notaría desde el código.
+static void test_camera_mouse_sensitivity_scales_offset()
+{
+    Camera lenta;
+    Camera rapida;
+    rapida.mouseSens = lenta.mouseSens * 2.0f;
+
+    lenta.processMouse(10.0f, 0.0f);
+    rapida.processMouse(5.0f, 0.0f);
+    // Mismo giro efectivo: 10 * s == 5 * 2s.
+    CHECK(nearlyEqual(lenta.getFront().x, rapida.getFront().x, 1e-5f));
+    CHECK(nearlyEqual(lenta.getFront().z, rapida.getFront().z, 1e-5f));
+
+    // Y que de verdad ha girado, no que las dos se hayan quedado quietas.
+    Camera quieta;
+    CHECK(!nearlyEqual(lenta.getFront().x, quieta.getFront().x, 1e-3f));
+}
+
+// lookAlongAxis SOLO rota: lo usa el axis gizmo del viewport, y mover la
+// posición al pulsarlo teletransportaría al usuario sin pedirlo.
+static void test_camera_look_along_axis_only_rotates()
+{
+    Camera cam(glm::vec3(10.0f, 20.0f, 30.0f));
+    const glm::vec3 antes = cam.getPos();
+
+    cam.lookAlongAxis(glm::vec3(0.0f, 0.0f, 1.0f));
+
+    CHECK(nearlyEqual(cam.getPos().x, antes.x, 1e-5f));
+    CHECK(nearlyEqual(cam.getPos().y, antes.y, 1e-5f));
+    CHECK(nearlyEqual(cam.getPos().z, antes.z, 1e-5f));
+    // Mirar "a lo largo del eje +Z" es mirar HACIA -Z: el eje que se pasa es
+    // desde dónde se mira, no hacia dónde.
+    CHECK(nearlyEqual(cam.getFront().z, -1.0f, 1e-4f));
+}
+
+// focusOn (la tecla F) retrocede por el vector cámara→objeto y encuadra. La
+// distancia sale de max(radio, 5) * 2.5: sin el mínimo, encuadrar un objeto
+// diminuto metería la cámara dentro de él.
+static void test_camera_focus_on_frames_the_object()
+{
+    Camera cam(glm::vec3(0.0f, 0.0f, 100.0f));
+    const glm::vec3 centro(0.0f, 0.0f, 0.0f);
+
+    cam.focusOn(centro, 40.0f);
+
+    // Se queda en la dirección en la que ya estaba (+Z), a 40 * 2.5 = 100.
+    CHECK(nearlyEqual(glm::length(cam.getPos() - centro), 100.0f, 1e-3f));
+    CHECK(cam.getPos().z > 0.0f);
+    // Y mirando al objeto.
+    const glm::vec3 haciaElCentro = glm::normalize(centro - cam.getPos());
+    CHECK(nearlyEqual(glm::dot(cam.getFront(), haciaElCentro), 1.0f, 1e-4f));
+
+    // Un objeto diminuto no se encuadra a 0: el mínimo de radio (5) manda.
+    Camera cerca(glm::vec3(0.0f, 0.0f, 100.0f));
+    cerca.focusOn(centro, 0.0f);
+    CHECK(nearlyEqual(glm::length(cerca.getPos() - centro), 12.5f, 1e-3f));
+}
+
+// El caso degenerado: la cámara YA está exactamente en el centro del objeto.
+// El vector cámara→centro es cero y normalizarlo da NaN; la guarda del épsilon
+// cae al -front actual. Sin ella, la posición se va a NaN y el viewport se
+// queda en negro sin decir por qué.
+static void test_camera_focus_on_from_the_center_does_not_nan()
+{
+    const glm::vec3 centro(7.0f, 8.0f, 9.0f);
+    Camera cam(centro);
+
+    cam.focusOn(centro, 10.0f);
+
+    const glm::vec3 p = cam.getPos();
+    CHECK(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z));
+    const glm::vec3 f = cam.getFront();
+    CHECK(std::isfinite(f.x) && std::isfinite(f.y) && std::isfinite(f.z));
+    CHECK(nearlyEqual(glm::length(cam.getPos() - centro), 25.0f, 1e-3f));
+}
+
+// getViewMatrix tiene que ser exactamente el lookAt que el resto del motor
+// asume, o el gizmo y el render dejan de coincidir.
+static void test_camera_view_matrix_is_lookat()
+{
+    Camera cam(glm::vec3(3.0f, 4.0f, 5.0f));
+    cam.processMouse(37.0f, -11.0f);   // una orientación cualquiera, no la de fábrica
+
+    const glm::mat4 esperado = glm::lookAt(cam.getPos(), cam.getPos() + cam.getFront(), cam.getUp());
+    const glm::mat4 obtenido = cam.getViewMatrix();
+    for (int c = 0; c < 4; ++c)
+        for (int f = 0; f < 4; ++f)
+            CHECK(nearlyEqual(obtenido[c][f], esperado[c][f], 1e-5f));
+}
+
+// ===========================================================================
+// Scene::collectLights
+// ===========================================================================
+//
+// §4.2 de docs/core-audit.md: cero tests, y es lo que alimenta el bloque de
+// iluminación ENTERO — el recorte a MAX_LIGHTS, el total que distingue "escena
+// sin luces" de "escena con más de las que caben", la conversión de ángulos a
+// coseno, el radio que tiene que coincidir con el del shader, y la guarda de
+// NaN cuando el eje Z tiene escala 0.
+
+// Helper: cuelga de la raíz un GameObject con luz y el transform dado.
+static GameObject* addLight(Scene& scene, const char* nombre, const glm::mat4& local,
+                            LightType tipo = LightType::Point)
+{
+    GameObject* go = scene.addGameObject(nombre);
+    auto luz = std::make_shared<LightComponent>();
+    luz->setType(tipo);
+    go->setLight(luz);
+    go->localTransform = local;
+    return go;
+}
+
+// El tope es del bloque UBO, no de la escena: se recortan las luces que sobran
+// pero se devuelve el TOTAL, que es lo único que permite al editor avisar "hay
+// 70 luces y solo caben 64". Devolver el tamaño recortado dejaría ese aviso
+// mudo para siempre.
+static void test_collect_lights_caps_but_reports_total()
+{
+    Scene scene("Test");
+    const int extra = 3;
+    for (int i = 0; i < MAX_LIGHTS + extra; ++i)
+        addLight(scene, "Luz", glm::mat4(1.0f));
+    scene.getRoot().updateWorldTransforms();
+
+    std::vector<Light> luces;
+    std::vector<float> radios;
+    const size_t total = scene.collectLights(luces, radios);
+
+    CHECK(total == (size_t)(MAX_LIGHTS + extra));
+    CHECK(luces.size() == (size_t)MAX_LIGHTS);
+    CHECK(radios.size() == (size_t)MAX_LIGHTS);   // los dos vectores en paralelo
+}
+
+// Las dos salidas se vacían al entrar: se llaman UNA VEZ POR FRAME sobre los
+// mismos vectores del host, así que sin el clear crecerían sin parar hasta
+// desbordar el UBO con luces de frames viejos.
+static void test_collect_lights_clears_previous_output()
+{
+    Scene scene("Test");
+    addLight(scene, "Unica", glm::mat4(1.0f));
+    scene.getRoot().updateWorldTransforms();
+
+    std::vector<Light> luces(10);
+    std::vector<float> radios(10);
+    CHECK(scene.collectLights(luces, radios) == 1);
+    CHECK(luces.size() == 1);
+    CHECK(radios.size() == 1);
+
+    // Y una escena sin luces las deja vacías, no con lo del frame anterior.
+    Scene vacia("Vacia");
+    CHECK(vacia.collectLights(luces, radios) == 0);
+    CHECK(luces.empty());
+    CHECK(radios.empty());
+}
+
+// Posición y dirección salen del worldTransform, no del componente: mover o
+// rotar el GameObject tiene que mover la luz. La dirección es -Z local.
+static void test_collect_lights_position_and_direction_from_transform()
+{
+    Scene scene("Test");
+    glm::mat4 t = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 20.0f, 30.0f));
+    t = glm::rotate(t, glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    addLight(scene, "Luz", t, LightType::Spot);
+    scene.getRoot().updateWorldTransforms();
+
+    std::vector<Light> luces;
+    std::vector<float> radios;
+    CHECK(scene.collectLights(luces, radios) == 1);
+    if (luces.size() != 1) return;
+
+    CHECK(nearlyEqual(luces[0].position.x, 10.0f, 1e-4f));
+    CHECK(nearlyEqual(luces[0].position.y, 20.0f, 1e-4f));
+    CHECK(nearlyEqual(luces[0].position.z, 30.0f, 1e-4f));
+    CHECK(nearlyEqual(luces[0].position.w, 1.0f, 1e-5f));
+
+    // Girada 90° sobre Y, la columna Z pasa a ser (1,0,0) y el "hacia dónde
+    // mira" es su NEGADO. Sin el signo, la luz alumbra al revés.
+    CHECK(nearlyEqual(luces[0].direction.x, -1.0f, 1e-4f));
+    CHECK(nearlyEqual(luces[0].direction.y, 0.0f, 1e-4f));
+    CHECK(nearlyEqual(luces[0].direction.z, 0.0f, 1e-4f));
+    // El tipo viaja en la w de direction.
+    CHECK(nearlyEqual(luces[0].direction.w, (float)(int)LightType::Spot, 1e-5f));
+}
+
+// LA guarda. Escala 0 en Z se puede poner desde Properties: normalizar un
+// vector nulo da NaN, y ese NaN llega al shader y ensucia la iluminación de
+// TODA la escena, no solo la de esa luz. El repliegue es -Y.
+static void test_collect_lights_zero_scale_z_does_not_nan()
+{
+    Scene scene("Test");
+    addLight(scene, "Aplastada", glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, 1.0f, 0.0f)));
+    scene.getRoot().updateWorldTransforms();
+
+    std::vector<Light> luces;
+    std::vector<float> radios;
+    CHECK(scene.collectLights(luces, radios) == 1);
+    if (luces.size() != 1) return;
+
+    CHECK(std::isfinite(luces[0].direction.x));
+    CHECK(std::isfinite(luces[0].direction.y));
+    CHECK(std::isfinite(luces[0].direction.z));
+    CHECK(nearlyEqual(luces[0].direction.x, 0.0f, 1e-5f));
+    CHECK(nearlyEqual(luces[0].direction.y, -1.0f, 1e-5f));
+    CHECK(nearlyEqual(luces[0].direction.z, 0.0f, 1e-5f));
+}
+
+// Los ángulos del cono viajan YA en coseno: el shader compara contra el coseno
+// del ángulo con el eje en vez de llamar a cos() por fragmento. Mandar grados
+// daría un cono absurdo (cos(20) ≈ 0.94 frente a 20.0) sin que nada fallara al
+// compilar.
+static void test_collect_lights_angles_travel_as_cosines()
+{
+    Scene scene("Test");
+    GameObject* go = addLight(scene, "Foco", glm::mat4(1.0f), LightType::Spot);
+    go->getLight()->setOuterAngle(30.0f);
+    go->getLight()->setInnerAngle(20.0f);
+    go->getLight()->setRange(500.0f);
+    scene.getRoot().updateWorldTransforms();
+
+    std::vector<Light> luces;
+    std::vector<float> radios;
+    CHECK(scene.collectLights(luces, radios) == 1);
+    if (luces.size() != 1) return;
+
+    CHECK(nearlyEqual(luces[0].params.x, 500.0f, 1e-3f));
+    CHECK(nearlyEqual(luces[0].params.y, std::cos(glm::radians(20.0f)), 1e-5f));
+    CHECK(nearlyEqual(luces[0].params.z, std::cos(glm::radians(30.0f)), 1e-5f));
+}
+
+// El radio del binning de Forward+ tiene que ser EL MISMO alcance que usa el
+// fragment shader, o una luz se apaga de golpe al cruzar el borde de un tile.
+// El area se aproxima como un point de radio ancho/2; el resto usa su range.
+static void test_collect_lights_radius_matches_the_shader()
+{
+    Scene scene("Test");
+    GameObject* punto = addLight(scene, "Punto", glm::mat4(1.0f), LightType::Point);
+    punto->getLight()->setRange(300.0f);
+    punto->getLight()->setAreaWidth(999.0f);   // no debe influir en un point
+
+    GameObject* area = addLight(scene, "Area", glm::mat4(1.0f), LightType::Area);
+    area->getLight()->setRange(300.0f);        // no debe influir en un area
+    area->getLight()->setAreaWidth(80.0f);
+    scene.getRoot().updateWorldTransforms();
+
+    std::vector<Light> luces;
+    std::vector<float> radios;
+    CHECK(scene.collectLights(luces, radios) == 2);
+    if (radios.size() != 2) return;
+
+    CHECK(nearlyEqual(radios[0], 300.0f, 1e-3f));   // point: su range
+    CHECK(nearlyEqual(radios[1], 40.0f, 1e-3f));    // area: ancho/2
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -7011,6 +7312,19 @@ int main()
     test_projection_has_vulkan_y_flip();
     test_projection_modes_differ();
     test_projection_degenerate_aspect();
+    test_camera_default_front_is_minus_z();
+    test_camera_pitch_is_clamped();
+    test_camera_mouse_sensitivity_scales_offset();
+    test_camera_look_along_axis_only_rotates();
+    test_camera_focus_on_frames_the_object();
+    test_camera_focus_on_from_the_center_does_not_nan();
+    test_camera_view_matrix_is_lookat();
+    test_collect_lights_caps_but_reports_total();
+    test_collect_lights_clears_previous_output();
+    test_collect_lights_position_and_direction_from_transform();
+    test_collect_lights_zero_scale_z_does_not_nan();
+    test_collect_lights_angles_travel_as_cosines();
+    test_collect_lights_radius_matches_the_shader();
     test_orthographic_uses_vulkan_depth_range();
     test_perspective_uses_vulkan_depth_range();
     test_view_from_world_translation();
