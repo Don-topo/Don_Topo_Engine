@@ -79,8 +79,13 @@ public:
     // Relee el fichero: el editor la llama al guardar el panel para que una
     // acción recién creada valga en el siguiente Play sin reiniciar.
     static void reloadActions();
-    // Avisos acumulados al cargar (bindings de mando ignorados). Se vacía al
-    // leerla: el consumidor los vuelca al Log una sola vez.
+    // Avisos de la ÚLTIMA carga: bindings descartados por tener un código de
+    // eje fuera de rango o un dispositivo que Core no sabe traducir. Se vacía
+    // al leerla —el consumidor los vuelca al Log una sola vez— y también al
+    // empezar cada carga, así que no se acumulan entre recargas del panel.
+    //
+    // Sin esto, una acción que no dispara nunca porque su binding se descartó
+    // al cargar es indistinguible de una acción mal configurada.
     static std::vector<std::string> takeActionDiagnostics();
 
 private:

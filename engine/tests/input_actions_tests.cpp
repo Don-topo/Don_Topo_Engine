@@ -13,7 +13,11 @@
 
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <set>
+#include <string>
+#include <vector>
 
 using namespace DonTopo;
 
@@ -207,6 +211,68 @@ static void testPadAxisWithoutGamepad()
     CHECK(!Input::isPadAxisDown(Input::kPadAxisBindingCount));
 }
 
+// H5 de docs/core-audit.md: takeActionDiagnostics() devolvia SIEMPRE una lista
+// vacia. El canal existe —el header lo promete y ScriptBindings.cpp:501 lo
+// vuelca al Log— pero nadie escribia nunca en el: los dos sitios que descartan
+// un binding al cargar (codigo de eje fuera de rango y dispositivo desconocido)
+// lo hacian con un `continue` mudo.
+//
+// Lo que costaba: una accion que no dispara nunca porque su binding se descarto
+// al cargar es indistinguible de una accion mal configurada.
+//
+// El fichero vive en el directorio de trabajo y es EL MISMO que usa el editor,
+// asi que el test respalda el del usuario y lo devuelve al terminar.
+static void testActionDiagnosticsReportDiscardedBindings()
+{
+    const char* kFile = "input_actions.json";
+    std::string previo;
+    bool habia = false;
+    {
+        std::ifstream in(kFile, std::ios::binary);
+        if (in)
+        {
+            habia = true;
+            previo.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+    }
+
+    {
+        std::ofstream out(kFile);
+        out << "{\"actions\":[{\"name\":\"Saltar\",\"glfw\":["
+               "{\"device\":\"volante\",\"code\":3},"
+               "{\"device\":\"padaxis\",\"code\":999},"
+               "{\"device\":\"key\",\"code\":32}]}]}";
+    }
+
+    Input::reloadActions();
+    std::vector<std::string> avisos = Input::takeActionDiagnostics();
+
+    // Dos descartes: el dispositivo que no existe y el eje fuera de rango.
+    CHECK(avisos.size() == 2);
+    int nombran = 0;
+    for (const std::string& a : avisos)
+        if (a.find("Saltar") != std::string::npos) ++nombran;
+    CHECK(nombran == 2);
+
+    // Se vacia al leerla: el consumidor los vuelca al Log una sola vez.
+    CHECK(Input::takeActionDiagnostics().empty());
+
+    // Y la accion sigue existiendo con su binding bueno: descartar uno malo no
+    // se lleva por delante los demas.
+    CHECK(Input::hasAction("Saltar"));
+    CHECK(Input::isActionDown("Saltar") == false);   // sin ventana, sin teclas
+
+    if (habia)
+    {
+        std::ofstream out(kFile, std::ios::binary);
+        out << previo;
+    }
+    else
+    {
+        std::remove(kFile);
+    }
+}
+
 int main()
 {
     testPadRoundTrip();
@@ -218,6 +284,7 @@ int main()
     testPadAxisHysteresis();
     testPadTriggerRange();
     testPadAxisWithoutGamepad();
+    testActionDiagnosticsReportDiscardedBindings();
 
     if (g_failures == 0) std::printf("input_actions_tests: OK\n");
     else                 std::printf("input_actions_tests: %d FAILURES\n", g_failures);

@@ -49,7 +49,32 @@ namespace DonTopo
         if (m_entryState == idx)      m_entryState = m_states.empty() ? -1 : 0;
         else if (m_entryState > idx)  m_entryState--;
 
-        reset();
+        // El playhead se reindexa igual que las transiciones: borrar OTRO estado
+        // no tiene por qué mover al usuario de sitio. Sólo si se borra el actual
+        // hay que caer a la entrada, porque el actual ya no existe.
+        //
+        // Antes esto era un reset() a secas, que además borraba todos los
+        // parámetros — y el AnimatorPanel llama aquí sin mirar si se está en
+        // Play, así que reordenar el grafo a mitad de partida se llevaba por
+        // delante los bool/trigger/int/float que el script venía escribiendo.
+        if (m_currentState == idx)
+        {
+            m_currentState = m_entryState;
+            m_animTime     = 0.0f;
+            m_finished     = false;
+        }
+        else if (m_currentState > idx)
+        {
+            m_currentState--;
+        }
+
+        // El cross-fade se corta siempre: el estado que se apagaba puede haberse
+        // ido o haberse reindexado, y mezclar contra un índice movido daría la
+        // pose de otro clip.
+        m_prevState     = -1;
+        m_prevAnimTime  = 0.0f;
+        m_blendElapsed  = 0.0f;
+        m_blendDuration = 0.0f;
     }
 
     void AnimatorComponent::removeTransition(int idx)
@@ -62,7 +87,9 @@ namespace DonTopo
     {
         if (idx < 0 || idx >= (int)m_states.size()) return;
         m_entryState = idx;
-        reset();
+        // Mueve el playhead a la entrada nueva (el preview del editor tiene que
+        // seguirla) pero sin borrar los parámetros: esto también corre en Play.
+        resetPlayback();
     }
 
     void AnimatorComponent::addParameter(std::string name, ParamType type)
@@ -277,18 +304,23 @@ namespace DonTopo
         return m_states[m_prevState].name;
     }
 
-    void AnimatorComponent::reset()
+    void AnimatorComponent::resetPlayback()
     {
         m_currentState  = m_entryState;
         m_animTime      = 0.0f;
         m_finished      = false;
-        // Corta cualquier cross-fade en vuelo: tras un reset el estado previo
-        // puede ni existir (el editor acaba de reeditar el grafo), y mezclar
-        // contra él dejaría una pose imposible o un índice fuera de rango.
+        // Corta cualquier cross-fade en vuelo: tras esto el estado previo puede
+        // ni existir (el editor acaba de reeditar el grafo), y mezclar contra él
+        // dejaría una pose imposible o un índice fuera de rango.
         m_prevState     = -1;
         m_prevAnimTime  = 0.0f;
         m_blendElapsed  = 0.0f;
         m_blendDuration = 0.0f;
+    }
+
+    void AnimatorComponent::reset()
+    {
+        resetPlayback();
         for (auto& b : m_bools)    b.second = false;
         for (auto& t : m_triggers) t.second = false;
         for (auto& i : m_ints)     i.second = 0;

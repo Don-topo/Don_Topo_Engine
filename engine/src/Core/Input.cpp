@@ -142,6 +142,11 @@ namespace DonTopo
 
     void Input::loadActionsFromDisk()
     {
+        // Los avisos son los de ESTA carga: se limpian al entrar, nunca durante.
+        // Sin esto, guardar dos veces el panel con un binding malo los duplicaría
+        // (mismo criterio que Scene::m_warnings).
+        s_actionDiagnostics.clear();
+
         std::ifstream file(kInputActionsFile);
         if (!file.is_open()) return;   // sin fichero de acciones: mapa vacío, no es un error
 
@@ -183,11 +188,27 @@ namespace DonTopo
                     else if (device == "padaxis")
                     {
                         // Código fuera de rango (fichero de otra versión, edición
-                        // a mano): se descarta aquí y no en cada consulta.
-                        if (b.code < 0 || b.code >= kPadAxisBindingCount) continue;
+                        // a mano): se descarta aquí y no en cada consulta. Y se
+                        // NOMBRA: una acción que no dispara nunca porque su
+                        // binding se descartó al cargar es indistinguible de una
+                        // mal configurada si esto se traga en silencio.
+                        if (b.code < 0 || b.code >= kPadAxisBindingCount)
+                        {
+                            s_actionDiagnostics.push_back(
+                                "Input: la acción '" + name + "' tiene un binding de eje de mando "
+                                "con un código fuera de rango (" + std::to_string(b.code) +
+                                "); se descarta ese binding");
+                            continue;
+                        }
                         b.device = ActionDevice::PadAxis;
                     }
-                    else continue;
+                    else
+                    {
+                        s_actionDiagnostics.push_back(
+                            "Input: la acción '" + name + "' tiene un binding de un dispositivo "
+                            "desconocido ('" + device + "'); se descarta ese binding");
+                        continue;
+                    }
                     bindings.push_back(b);
                 }
             }

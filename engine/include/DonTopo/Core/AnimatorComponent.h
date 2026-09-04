@@ -237,9 +237,20 @@ namespace DonTopo
             // Vuelve al estado de entrada, tiempo a 0, parámetros y triggers a
             // false. El Stop de Play no necesita llamarlo (reconstruye la escena
             // desde JSON), pero el editor sí al reeditar el grafo.
+            //
+            // OJO: borra los parámetros del usuario, así que NO vale para las
+            // operaciones que pueden correr a mitad de Play — el AnimatorPanel
+            // deja editar el grafo sin gate de isPlaying. Ésas usan
+            // resetPlayback(), que mueve el playhead sin tocar los valores (la
+            // misma distinción que hay entre bindClips y rebindClips).
             void reset();
 
         private:
+            // Deja el playhead en el estado de entrada y corta cualquier
+            // cross-fade, SIN tocar bools/triggers/ints/floats. Es la mitad de
+            // reset() que sí es segura a mitad de partida.
+            void resetPlayback();
+
             bool conditionsMet(const Transition& t) const;
             // Avanza el reloj de un estado dt segundos, aplicando su loop. Lo
             // usan el estado actual y el que se apaga durante un cross-fade:

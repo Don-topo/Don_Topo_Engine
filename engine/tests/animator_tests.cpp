@@ -3944,6 +3944,118 @@ static void test_state_without_lock_root_motion_field_loads(PhysicsManager& pm, 
     CHECK(!st.lockRootMotion);
 }
 
+// H4 de docs/core-audit.md: removeState y setEntryState terminaban en reset(),
+// que borra el estado actual Y TODOS los parametros del usuario. El header ya
+// documenta ese peligro palabra por palabra —y por eso existe rebindClips, que
+// es bindClips sin el reset()— pero solo para el camino de las fuentes de
+// animacion; los dos vecinos se quedaron con el reset() puesto.
+//
+// Y son alcanzables en Play: AnimatorPanel.cpp llama a los dos y ese fichero no
+// consulta isPlaying ni una vez. Tocar el grafo a mitad de partida reseteaba la
+// maquina de estados y los bool/trigger/int/float que el script Lua venia
+// escribiendo.
+static void test_remove_state_keeps_params_and_playhead()
+{
+    AnimatorComponent a;
+    AnimatorComponent::State idle;    idle.name    = "Idle";
+    AnimatorComponent::State andar;   andar.name   = "Andar";
+    AnimatorComponent::State correr;  correr.name  = "Correr";
+    a.addState(idle); a.addState(andar); a.addState(correr);
+
+    // El playhead en "Correr" (indice 2), y luego los parametros: al reves no
+    // valdria, porque setEntryState los borraria.
+    a.setEntryState(2);
+    CHECK(a.currentStateName() == "Correr");
+    a.addParameter("velocidad", AnimatorComponent::ParamType::Float);
+    a.addParameter("saltando", AnimatorComponent::ParamType::Bool);
+    a.setFloat("velocidad", 0.75f);
+    a.setBool("saltando", true);
+
+    // Se borra un estado que NO es el actual: el usuario esta reordenando el
+    // grafo, no reiniciando la partida.
+    a.removeState(0);
+
+    CHECK(a.getFloat("velocidad") == 0.75f);
+    CHECK(a.getBool("saltando"));
+    // El playhead sigue en el MISMO estado, aunque su indice se haya corrido.
+    CHECK(a.currentStateName() == "Correr");
+    CHECK(a.currentState() == 1);
+}
+
+// Si el que se borra ES el actual no hay donde seguir, asi que el playhead cae
+// al estado de entrada — pero los parametros siguen sin tener nada que ver.
+static void test_remove_current_state_falls_back_but_keeps_params()
+{
+    AnimatorComponent a;
+    AnimatorComponent::State uno; uno.name = "Uno";
+    AnimatorComponent::State dos; dos.name = "Dos";
+    a.addState(uno); a.addState(dos);
+    a.setEntryState(1);
+    a.addParameter("vida", AnimatorComponent::ParamType::Int);
+    a.setInt("vida", 3);
+    CHECK(a.currentStateName() == "Dos");
+
+    a.removeState(1);   // el actual
+
+    CHECK(a.getInt("vida") == 3);
+    CHECK(a.currentStateName() == "Uno");
+}
+
+// setEntryState mueve el playhead a proposito (el preview del editor tiene que
+// seguir a la entrada nueva), pero eso no es motivo para borrar parametros.
+static void test_set_entry_state_keeps_params()
+{
+    AnimatorComponent a;
+    AnimatorComponent::State uno; uno.name = "Uno";
+    AnimatorComponent::State dos; dos.name = "Dos";
+    a.addState(uno); a.addState(dos);
+    a.addParameter("mana", AnimatorComponent::ParamType::Float);
+    a.setFloat("mana", 12.5f);
+
+    a.setEntryState(1);
+
+    CHECK(a.getFloat("mana") == 12.5f);
+    CHECK(a.currentStateName() == "Dos");
+}
+
+// El playhead se REINDEXA, no salta a la entrada. Este test existe porque el
+// anterior no lo distinguia: alli la entrada ERA el estado actual, asi que
+// "reindexar" y "saltar a la entrada" daban el mismo resultado y un sabotaje
+// que cambiaba lo uno por lo otro pasaba desapercibido. Aqui se llega a
+// "Correr" por una TRANSICION, con la entrada en otro sitio: borrar un tercer
+// estado no puede devolver al usuario al principio del grafo.
+static void test_remove_state_reindexes_playhead_not_resets_it()
+{
+    AnimatorComponent a;
+    AnimatorComponent::State idle;   idle.name   = "Idle";
+    AnimatorComponent::State andar;  andar.name  = "Andar";
+    AnimatorComponent::State correr; correr.name = "Correr";
+    a.addState(idle); a.addState(andar); a.addState(correr);
+    a.addParameter("ir", AnimatorComponent::ParamType::Bool);
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0;
+    t.toState   = 2;
+    AnimatorComponent::Condition c;
+    c.type      = AnimatorComponent::ConditionType::Bool;
+    c.paramName = "ir";
+    c.expected  = true;
+    t.conditions.push_back(c);
+    a.addTransition(t);
+
+    a.setBool("ir", true);
+    a.update(1.0f / 60.0f, /*evaluateTransitions=*/true);
+    CHECK(a.currentStateName() == "Correr");
+    CHECK(a.currentState() == 2);
+    CHECK(a.entryState() == 0);
+
+    a.removeState(1);   // ni el actual ni la entrada
+
+    CHECK(a.currentStateName() == "Correr");
+    CHECK(a.currentState() == 1);     // reindexado 2 -> 1, no devuelto a 0
+    CHECK(a.entryState() == 0);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -3955,6 +4067,10 @@ int main()
     AudioManager am;
     am.init();
 
+    test_remove_state_keeps_params_and_playhead();
+    test_remove_state_reindexes_playhead_not_resets_it();
+    test_remove_current_state_falls_back_but_keeps_params();
+    test_set_entry_state_keeps_params();
     test_loader_reads_all_clips();
     test_loader_registers_builtin_source();
     test_unique_clip_name();
