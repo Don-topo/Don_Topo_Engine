@@ -94,16 +94,16 @@ namespace DonTopo
 
         for (MaterialTextureOverride& ov : go.materialOverrides)
         {
-            // Indice que ya no existe: el FBX se reexporto con menos submallas.
-            // Se ignora en silencio aqui; el aviso lo da el lector de escena,
+            // Índice que ya no existe: el FBX se reexportó con menos submallas.
+            // Se ignora en silencio aquí; el aviso lo da el lector de escena,
             // que es quien tiene canal para darlo.
             if (ov.index < 0 || ov.index >= (int)mats.size()) continue;
             Material& mat = *mats[(size_t)ov.index];
 
             // El baseline se captura UNA vez por slot, la primera que se pisa:
             // si se recapturase en cada pasada, el segundo cambio de textura
-            // guardaria como "original" el override anterior y el Clear
-            // devolveria una textura del usuario en vez de la del modelo.
+            // guardaría como "original" el override anterior y el Clear
+            // devolvería una textura del usuario en vez de la del modelo.
             auto aplica = [](const std::string& override_, std::string& base,
                              bool& baseTomado, std::string& destino)
             {
@@ -111,7 +111,7 @@ namespace DonTopo
                 {
                     // Sin override: si alguna vez lo hubo, se vuelve al
                     // baseline. Si nunca lo hubo, no se toca nada — escribir el
-                    // base vacio aqui borraria la ruta que trae el FBX.
+                    // base vacío aquí borraría la ruta que trae el FBX.
                     if (baseTomado) destino = base;
                     return;
                 }
@@ -123,10 +123,13 @@ namespace DonTopo
                 destino = override_;
             };
 
-            // baseTomado se deriva de que el slot tenga override o baseline no
-            // vacios... y eso NO basta: un baseline legitimamente vacio (mesh
-            // procedural sin textura) seria indistinguible de "aun no tomado".
-            // De ahi los tres flags explicitos.
+            // Los tres flags explícitos son necesarios porque baseTomado NO se
+            // puede deducir de que el slot tenga override o baseline no
+            // vacíos: un baseline legítimamente vacío (mesh procedural sin
+            // textura) sería indistinguible de "aún no tomado", y con la
+            // heurística "base vacío = no tomado" el Clear dejaría puesta la
+            // textura del usuario en vez de devolver el slot a su vacío
+            // original.
             aplica(ov.albedo, ov.baseAlbedo, ov.baseAlbedoTaken, mat.texturePath);
             aplica(ov.normal, ov.baseNormal, ov.baseNormalTaken, mat.normalMapPath);
             aplica(ov.orm,    ov.baseOrm,    ov.baseOrmTaken,    mat.metallicRoughnessPath);

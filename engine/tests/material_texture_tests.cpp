@@ -159,6 +159,60 @@ static void test_slots_are_independent()
     CHECK(go->getMesh()->material.metallicRoughnessPath == "assets/fbx_orm.png");
 }
 
+// El override de normal y el de ORM escriben cada uno su propio campo, no el
+// de al lado. Sin este test, un cableado con copy-paste equivocado en
+// applyMaterialOverrides (p.ej. pasar mat.texturePath como destino del
+// normal) habría pasado los tests de arriba: ninguno de ellos toca ov.normal
+// ni ov.orm.
+static void test_normal_and_orm_overrides_write_their_own_field()
+{
+    auto go = makeStaticFixture();
+    go->getMesh()->material.normalMapPath         = "assets/fbx_normal.png";
+    go->getMesh()->material.metallicRoughnessPath = "assets/fbx_orm.png";
+
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.normal = "assets/mi_normal.png";
+    ov.orm    = "assets/mi_orm.png";
+    go->materialOverrides.push_back(ov);
+
+    applyMaterialOverrides(*go);
+
+    CHECK(go->getMesh()->material.normalMapPath == "assets/mi_normal.png");
+    CHECK(go->getMesh()->material.metallicRoughnessPath == "assets/mi_orm.png");
+    // El albedo, sin override en este slot, no se ha tocado.
+    CHECK(go->getMesh()->material.texturePath == "assets/fbx_albedo.png");
+    CHECK(go->materialOverrides[0].baseNormal == "assets/fbx_normal.png");
+    CHECK(go->materialOverrides[0].baseOrm    == "assets/fbx_orm.png");
+}
+
+// Caso que justifica los flags baseAlbedoTaken/baseNormalTaken/baseOrmTaken:
+// un mesh procedural (sin textura del FBX) tiene texturePath vacío DESDE EL
+// PRINCIPIO, y ese vacío legítimo no se puede distinguir de "aún no se ha
+// tomado el baseline" mirando solo si base* está vacío. Si applyMaterialOverrides
+// usara esa heurística en vez de los flags explícitos, Clear no restauraría
+// el vacío original: dejaría puesta la textura que puso el usuario.
+static void test_clear_restores_empty_baseline_on_procedural_mesh()
+{
+    auto go = std::make_unique<GameObject>("Procedural");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->name = "esfera";
+    // texturePath se deja vacío a propósito: no viene de ningún FBX.
+    go->setMesh(std::move(mesh));
+
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = "assets/mia.png";
+    go->materialOverrides.push_back(ov);
+    applyMaterialOverrides(*go);
+    CHECK(go->getMesh()->material.texturePath == "assets/mia.png");
+
+    go->materialOverrides[0].albedo.clear();
+    applyMaterialOverrides(*go);
+
+    CHECK(go->getMesh()->material.texturePath.empty());
+}
+
 // Un GameObject sin mesh no revienta.
 static void test_no_mesh_is_noop()
 {
@@ -178,6 +232,8 @@ int main()
     test_skinned_override_touches_only_its_index();
     test_out_of_range_index_is_ignored();
     test_slots_are_independent();
+    test_normal_and_orm_overrides_write_their_own_field();
+    test_clear_restores_empty_baseline_on_procedural_mesh();
     test_no_mesh_is_noop();
     if (g_failures == 0) std::printf("ALL MATERIAL TEXTURE TESTS PASSED\n");
     std::fflush(stdout);
