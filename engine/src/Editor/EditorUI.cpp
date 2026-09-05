@@ -619,6 +619,12 @@ void EditorUI::applyProjectSettings()
     if (!m_project || !m_project->valid())
         return; // tests headless / arranque previo al selector: como siempre.
 
+    // Raiz contra la que Scene relativiza/resuelve las rutas de textura
+    // asignadas a mano (Task 6): se fija aqui porque es donde ya se sabe que
+    // el proyecto es valido, y no antes.
+    if (m_scene)
+        m_scene->setAssetRoot(m_project->root().string());
+
     // La base son los valores de AHORA del Renderer: cada parámetro que el
     // project.json no traiga se queda con el default del Renderer. Los enables
     // no: readSettings los fuerza a apagado cuando faltan.

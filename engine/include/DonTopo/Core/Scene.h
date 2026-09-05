@@ -269,9 +269,20 @@ namespace DonTopo
                       AsyncAssetLoader* loader = nullptr,
                       const PreloadedMeshCache* preloaded = nullptr);
 
+            // Raiz del proyecto contra la que se relativizan las rutas de
+            // textura al guardar y se resuelven al cargar. Vacia = las rutas van
+            // y vuelven tal cual, que es lo que hacen los tests y cualquier
+            // caller que no la fije (su directorio de trabajo ya es la raiz).
+            //
+            // Vive aqui y no se saca de ProjectContext porque Scene esta en
+            // Core, y Core no puede depender del Editor.
+            void setAssetRoot(std::string root) { m_assetRoot = std::move(root); }
+            const std::string& assetRoot() const { return m_assetRoot; }
+
         private:
             std::string m_name;
             GameObject  m_root;
+            std::string m_assetRoot;
 
             // Impone el invariante de una cámara por escena tras reconstruir el
             // árbol: se queda con la primera en pre-orden y le quita el

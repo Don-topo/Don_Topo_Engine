@@ -1,11 +1,16 @@
 // Test headless de los overrides de textura del Mesh (sin GPU). Plain main +
 // asserts, sin framework — mismo patrón que content_browser_tests.cpp.
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/Scene.h"
+#include "DonTopo/Physics/PhysicsManager.h"
+#include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Renderer/MaterialTextureSource.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include <nlohmann/json.hpp>
 
 #include <cstdio>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -254,8 +259,234 @@ static void test_path_when_no_embedded()
     CHECK(chooseTextureSource("assets/x.png", {}) == TextureSource::Path);
 }
 
+// Round-trip: los overrides de TODOS los indices sobreviven a guardar y cargar.
+static void test_overrides_survive_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto mesh = std::make_shared<SkinnedMesh>();
+    mesh->sourcePath = "assets/hero.fbx";
+    mesh->materials.resize(3);
+    go->setMesh(std::move(mesh));
+
+    MaterialTextureOverride a; a.index = 0; a.albedo = "assets/cuerpo.png";
+    MaterialTextureOverride b; b.index = 2; b.albedo = "assets/pelo.png";
+                               b.normal = "assets/pelo_n.png";
+    go->materialOverrides = {a, b};
+
+    const nlohmann::json j = scene.toJson();
+
+    Scene cargada("Vacia");
+    CHECK(cargada.fromJson(j, pm, am));
+    GameObject* leido = nullptr;
+    cargada.traverse([&](GameObject* n) { if (n->name == "Personaje") leido = n; });
+    CHECK(leido != nullptr);
+    if (!leido) return;
+    CHECK(leido->materialOverrides.size() == 2);
+    if (leido->materialOverrides.size() != 2) return;
+    CHECK(leido->materialOverrides[0].index  == 0);
+    CHECK(leido->materialOverrides[0].albedo == "assets/cuerpo.png");
+    CHECK(leido->materialOverrides[1].index  == 2);
+    CHECK(leido->materialOverrides[1].normal == "assets/pelo_n.png");
+    // El baseline NO viaja: se recaptura al aplicar sobre el material recien
+    // derivado del FBX.
+    CHECK(leido->materialOverrides[0].baseAlbedo.empty());
+}
+
+// Un objeto sin overrides no escribe la clave: las escenas viejas y las nuevas
+// sin texturas tocadas son byte a byte iguales.
+static void test_no_overrides_writes_no_key()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->sourcePath = "assets/cubo.fbx";
+    go->setMesh(std::move(mesh));
+
+    const nlohmann::json j = scene.toJson();
+    // El nodo raiz cuelga de "root"; localizar el hijo por nombre en vez de
+    // asumir el indice.
+    CHECK(!j.dump().empty());
+    CHECK(j.dump().find("\"materials\"") == std::string::npos);
+}
+
+// Escena SIN la clave materials: carga exactamente igual que hoy, sin overrides
+// y sin avisos.
+static void test_scene_without_materials_key_loads_clean(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->sourcePath = "assets/cubo.fbx";
+    go->setMesh(std::move(mesh));
+    nlohmann::json j = scene.toJson();
+
+    Scene cargada("Vacia");
+    CHECK(cargada.fromJson(j, pm, am));
+    GameObject* leido = nullptr;
+    cargada.traverse([&](GameObject* n) { if (n->name == "Cubo") leido = n; });
+    CHECK(leido != nullptr);
+    if (leido) CHECK(leido->materialOverrides.empty());
+}
+
+// Con raiz de proyecto fijada, una ruta bajo ella se guarda RELATIVA con "/".
+static void test_path_under_root_is_stored_relative(PhysicsManager& pm, AudioManager& am)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "dt_mat_root";
+
+    Scene scene("Test");
+    scene.setAssetRoot(root.string());
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->sourcePath = "assets/cubo.fbx";
+    go->setMesh(std::move(mesh));
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = (root / "assets" / "x.png").string();
+    go->materialOverrides.push_back(ov);
+
+    const std::string texto = scene.toJson().dump();
+    CHECK(texto.find("assets/x.png") != std::string::npos);
+    CHECK(texto.find(root.string()) == std::string::npos);
+
+    // Y al leerla con la misma raiz vuelve absoluta.
+    Scene cargada("Vacia");
+    cargada.setAssetRoot(root.string());
+    CHECK(cargada.fromJson(scene.toJson(), pm, am));
+    GameObject* leido = nullptr;
+    cargada.traverse([&](GameObject* n) { if (n->name == "Cubo") leido = n; });
+    CHECK(leido != nullptr);
+    if (leido && leido->materialOverrides.size() == 1)
+        CHECK(fs::path(leido->materialOverrides[0].albedo) == (root / "assets" / "x.png"));
+}
+
+// Una ruta FUERA de la raiz se guarda absoluta tal cual: relativizarla daria
+// una ristra de ".." que no sobrevive a mover el proyecto.
+static void test_path_outside_root_stays_absolute()
+{
+    namespace fs = std::filesystem;
+    const fs::path root  = fs::temp_directory_path() / "dt_mat_root";
+    const fs::path fuera = fs::temp_directory_path() / "dt_otro" / "y.png";
+
+    Scene scene("Test");
+    scene.setAssetRoot(root.string());
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->sourcePath = "assets/cubo.fbx";
+    go->setMesh(std::move(mesh));
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = fuera.string();
+    go->materialOverrides.push_back(ov);
+
+    const std::string texto = scene.toJson().dump();
+    CHECK(texto.find("y.png") != std::string::npos);
+    CHECK(texto.find("..") == std::string::npos);
+}
+
+// Sin raiz fijada (tests, runtime headless), la ruta va y vuelve IDENTICA.
+static void test_without_root_path_is_verbatim(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->sourcePath = "assets/cubo.fbx";
+    go->setMesh(std::move(mesh));
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = "assets/tal/cual.png";
+    go->materialOverrides.push_back(ov);
+
+    Scene cargada("Vacia");
+    CHECK(cargada.fromJson(scene.toJson(), pm, am));
+    GameObject* leido = nullptr;
+    cargada.traverse([&](GameObject* n) { if (n->name == "Cubo") leido = n; });
+    if (leido && leido->materialOverrides.size() == 1)
+        CHECK(leido->materialOverrides[0].albedo == "assets/tal/cual.png");
+}
+
+// Un bloque "materials" corrupto no tumba la carga: avisa y sigue.
+static void test_corrupt_materials_block_warns(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->sourcePath = "assets/cubo.fbx";
+    go->setMesh(std::move(mesh));
+    nlohmann::json j = scene.toJson();
+
+    // Inyectar basura donde iria el bloque: un objeto en vez de un array.
+    // Localizar el nodo del cubo recorriendo el JSON por nombre: toJson()
+    // cuelga los hijos de la raiz de root->children, cada uno con su propio
+    // "mesh" (aqui sin "materials" porque el Cubo no tiene overrides todavia).
+    nlohmann::json& hijos = j["root"]["children"];
+    nlohmann::json* cuboJson = nullptr;
+    for (auto& hijo : hijos)
+        if (hijo.value("name", std::string()) == "Cubo") cuboJson = &hijo;
+    CHECK(cuboJson != nullptr);
+    if (!cuboJson) return;
+    (*cuboJson)["mesh"]["materials"] = nlohmann::json::object();
+
+    Scene cargada("Vacia");
+    CHECK(cargada.fromJson(j, pm, am));
+    CHECK(!cargada.lastWarnings().empty());
+}
+
+// Una entrada sin "index" valido se descarta con aviso, sin tirar las demas
+// del mismo array: mismo fichero editado a mano que solo corrompe una entrada.
+static void test_materials_entry_without_valid_index_is_discarded(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->sourcePath = "assets/cubo.fbx";
+    go->setMesh(std::move(mesh));
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = "assets/valida.png";
+    go->materialOverrides.push_back(ov);
+
+    nlohmann::json j = scene.toJson();
+    nlohmann::json& hijos = j["root"]["children"];
+    nlohmann::json* cuboJson = nullptr;
+    for (auto& hijo : hijos)
+        if (hijo.value("name", std::string()) == "Cubo") cuboJson = &hijo;
+    CHECK(cuboJson != nullptr);
+    if (!cuboJson) return;
+    CHECK((*cuboJson)["mesh"].contains("materials"));
+    // Se anade una segunda entrada sin "index": tiene que descartarse SOLA,
+    // dejando viva la primera.
+    (*cuboJson)["mesh"]["materials"].push_back({ {"albedo", "assets/sin_indice.png"} });
+
+    Scene cargada("Vacia");
+    CHECK(cargada.fromJson(j, pm, am));
+    GameObject* leido = nullptr;
+    cargada.traverse([&](GameObject* n) { if (n->name == "Cubo") leido = n; });
+    CHECK(leido != nullptr);
+    if (!leido) return;
+    CHECK(leido->materialOverrides.size() == 1);
+    if (leido->materialOverrides.size() == 1)
+        CHECK(leido->materialOverrides[0].albedo == "assets/valida.png");
+
+    bool warned = false;
+    for (const auto& w : cargada.lastWarnings())
+        if (w.find("index") != std::string::npos) { warned = true; break; }
+    CHECK(warned);
+}
+
 int main()
 {
+    // PhysicsManager/AudioManager comparten instancia entre los tests que la
+    // necesitan: crear y destruir un PhysicsManager por test crashea al
+    // segundo init (una PxFoundation por proceso), mismo patron que
+    // audio_tests.cpp.
+    PhysicsManager pm;
+    pm.init();
+    AudioManager am;
+    if (!am.init())
+        std::printf("AVISO: FMOD no disponible; los tests que lo necesitan se saltaran\n");
+
     test_materials_of_static_mesh();
     test_materials_of_skinned_mesh();
     test_override_writes_material_and_captures_baseline();
@@ -271,6 +502,17 @@ int main()
     test_embedded_when_no_path();
     test_none_when_empty();
     test_path_when_no_embedded();
+    test_overrides_survive_round_trip(pm, am);
+    test_no_overrides_writes_no_key();
+    test_scene_without_materials_key_loads_clean(pm, am);
+    test_path_under_root_is_stored_relative(pm, am);
+    test_path_outside_root_stays_absolute();
+    test_without_root_path_is_verbatim(pm, am);
+    test_corrupt_materials_block_warns(pm, am);
+    test_materials_entry_without_valid_index_is_discarded(pm, am);
+
+    am.shutdown();
+    pm.shutdown();
     if (g_failures == 0) std::printf("ALL MATERIAL TEXTURE TESTS PASSED\n");
     std::fflush(stdout);
     return g_failures == 0 ? 0 : 1;

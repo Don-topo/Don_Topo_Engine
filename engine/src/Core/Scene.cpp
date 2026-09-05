@@ -48,6 +48,7 @@
 namespace
 {
     using DonTopo::GameObject;
+    using DonTopo::MaterialTextureOverride;
     using DonTopo::Rigidbody;
     using DonTopo::CameraComponent;
     using DonTopo::AnimatorComponent;
@@ -667,7 +668,28 @@ namespace
                  {"tangent", vec3ToJson(v.tangent)} };
     }
 
-    nlohmann::json nodeToJson(const GameObject& node)
+    // Ruta que va al fichero: relativa con "/" si cae bajo la raiz, y absoluta
+    // tal cual si no. Fuera de la raiz una relativa seria una ristra de ".."
+    // que no sobrevive a mover el proyecto de sitio.
+    std::string toStoredPath(const std::string& path, const std::string& assetRoot)
+    {
+        if (path.empty() || assetRoot.empty()) return path;
+        std::error_code ec;
+        std::filesystem::path rel = std::filesystem::relative(path, assetRoot, ec);
+        if (ec || rel.empty() || *rel.begin() == "..") return path;
+        return rel.generic_string();
+    }
+
+    // La inversa. Una ruta ya absoluta se devuelve tal cual.
+    std::string fromStoredPath(const std::string& stored, const std::string& assetRoot)
+    {
+        if (stored.empty() || assetRoot.empty()) return stored;
+        std::filesystem::path p(stored);
+        if (p.is_absolute()) return stored;
+        return (std::filesystem::path(assetRoot) / p).string();
+    }
+
+    nlohmann::json nodeToJson(const GameObject& node, const std::string& assetRoot)
     {
         nlohmann::json j;
         j["id"] = node.id;
@@ -716,6 +738,24 @@ namespace
                                         {"clips", src.clipNames} });
                 meshJson["animationSources"] = std::move(sources);
             }
+
+            // Rutas de textura puestas a mano desde Properties. Solo los
+            // materiales con algo que decir, y dentro de cada uno solo las
+            // claves no vacias: un objeto sin overrides no escribe la clave, y
+            // las escenas viejas siguen siendo validas sin tocarlas.
+            nlohmann::json mats = nlohmann::json::array();
+            for (const MaterialTextureOverride& ov : node.materialOverrides)
+            {
+                if (ov.albedo.empty() && ov.normal.empty() && ov.orm.empty()) continue;
+                nlohmann::json entry = { {"index", ov.index} };
+                if (!ov.albedo.empty()) entry["albedo"] = toStoredPath(ov.albedo, assetRoot);
+                if (!ov.normal.empty()) entry["normal"] = toStoredPath(ov.normal, assetRoot);
+                if (!ov.orm.empty())    entry["orm"]    = toStoredPath(ov.orm,    assetRoot);
+                mats.push_back(std::move(entry));
+            }
+            if (!mats.empty())
+                meshJson["materials"] = std::move(mats);
+
             j["mesh"] = std::move(meshJson);
         }
         if (node.hasBoxCollider())
@@ -1196,7 +1236,7 @@ namespace
 
         j["children"] = nlohmann::json::array();
         for (const auto& child : node.children)
-            j["children"].push_back(nodeToJson(*child));
+            j["children"].push_back(nodeToJson(*child, assetRoot));
 
         return j;
     }
@@ -1473,6 +1513,7 @@ namespace
                        DonTopo::PhysicsManager& physics, DonTopo::AudioManager& audio,
                        std::vector<std::string>* warnings,
                        std::unordered_map<std::string, bool>* hasBonesCache,
+                       const std::string& assetRoot,
                        DonTopo::AsyncAssetLoader* loader = nullptr,
                        const DonTopo::PreloadedMeshCache* preloaded = nullptr)
     {
@@ -1772,6 +1813,40 @@ namespace
                 {
                     const std::string ref = sourcePath.empty() ? meshName : sourcePath;
                     warnings->push_back(ref + ": no se pudo cargar la malla (" + e.what() + ")");
+                }
+            }
+
+            // Overrides de textura. Un bloque que no sea array, o una entrada
+            // sin "index" numerico, se descarta con aviso: media configuracion
+            // es peor que ninguna, mismo criterio que jsonToMat4 con la matriz.
+            if (j["mesh"].contains("materials"))
+            {
+                const nlohmann::json& mats = j["mesh"]["materials"];
+                if (!mats.is_array())
+                {
+                    if (warnings)
+                        warnings->push_back("mesh de '" + node->name + "'.materials: no es una lista, "
+                                            "las texturas asignadas a mano se descartan");
+                }
+                else
+                {
+                    for (const auto& entry : mats)
+                    {
+                        if (!entry.is_object() || !entry.contains("index")
+                            || !entry["index"].is_number_integer())
+                        {
+                            if (warnings)
+                                warnings->push_back("mesh de '" + node->name + "'.materials: entrada sin "
+                                                    "index valido, se descarta");
+                            continue;
+                        }
+                        MaterialTextureOverride ov;
+                        ov.index  = entry["index"].get<int>();
+                        ov.albedo = fromStoredPath(entry.value("albedo", ""), assetRoot);
+                        ov.normal = fromStoredPath(entry.value("normal", ""), assetRoot);
+                        ov.orm    = fromStoredPath(entry.value("orm",    ""), assetRoot);
+                        node->materialOverrides.push_back(std::move(ov));
+                    }
                 }
             }
         }
@@ -2651,7 +2726,7 @@ namespace
             GameObject* child = node->addChild(
                 readString(childJson, "name", std::string(), warnings,
                             "nodo '" + node->name + "'.children", /*required=*/true));
-            nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, hasBonesCache, loader, preloaded);
+            nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, hasBonesCache, assetRoot, loader, preloaded);
         }
     }
 }
@@ -2725,7 +2800,7 @@ namespace DonTopo
         if (!src || src == &m_root) return nullptr;
 
         GameObject* target = parent ? parent : (src->parent ? src->parent : &m_root);
-        nlohmann::json j = nodeToJson(*src);
+        nlohmann::json j = nodeToJson(*src, m_assetRoot);
 
         // Fuera los "id" del árbol serializado, para que addChild/GameObject
         // dejen los suyos recién generados.
@@ -2782,7 +2857,7 @@ namespace DonTopo
         });
         try
         {
-            nodeFromJson(j, clone, target->worldTransform, physics, audio, &m_warnings, &cache,
+            nodeFromJson(j, clone, target->worldTransform, physics, audio, &m_warnings, &cache, m_assetRoot,
                          /*loader=*/nullptr, &mallas);
         }
         catch (const nlohmann::json::exception&)
@@ -3047,7 +3122,7 @@ namespace DonTopo
 
     nlohmann::json Scene::subtreeToJson(const GameObject* node) const
     {
-        return nodeToJson(*node);
+        return nodeToJson(*node, m_assetRoot);
     }
 
     GameObject* Scene::insertFromJson(const nlohmann::json& j, GameObject* parent, size_t index,
@@ -3067,7 +3142,7 @@ namespace DonTopo
         std::unordered_map<std::string, bool> cache;
         try
         {
-            nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings, &cache);
+            nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings, &cache, m_assetRoot);
         }
         catch (const nlohmann::json::exception&)
         {
@@ -3208,7 +3283,7 @@ namespace DonTopo
     {
         nlohmann::json root;
         root["version"] = 1;
-        root["root"] = nodeToJson(m_root);
+        root["root"] = nodeToJson(m_root, m_assetRoot);
         return root;
     }
 
@@ -3247,7 +3322,7 @@ namespace DonTopo
         std::unordered_map<std::string, bool> hasBonesCache;
         try
         {
-            nodeFromJson(rootJson, &newRoot, glm::mat4(1.0f), physics, audio, &m_warnings, &hasBonesCache, loader, preloaded);
+            nodeFromJson(rootJson, &newRoot, glm::mat4(1.0f), physics, audio, &m_warnings, &hasBonesCache, m_assetRoot, loader, preloaded);
         }
         catch (const nlohmann::json::exception&)
         {
