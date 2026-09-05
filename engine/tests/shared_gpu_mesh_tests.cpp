@@ -294,6 +294,69 @@ static void test_live_indices_son_entradas_no_objetos()
     CHECK(gpu.creations == 2);
 }
 
+// Tras re-clavear, la entrada se encuentra por la clave nueva y la vieja queda
+// libre para una entrada distinta.
+static void test_rekey_moves_the_entry()
+{
+    SharedGpuMeshCache cache;
+    int creadas = 0;
+    auto crear  = [&](SharedGpuMesh&) { ++creadas; };
+
+    const int idx = cache.acquire("vieja", crear);
+    CHECK(cache.rekey(idx, "nueva"));
+
+    // La clave nueva devuelve la MISMA entrada, sin crear otra.
+    CHECK(cache.acquire("nueva", crear) == idx);
+    CHECK(creadas == 1);
+    // Y la vieja ya no la encuentra: crea una entrada distinta.
+    CHECK(cache.acquire("vieja", crear) != idx);
+    CHECK(creadas == 2);
+}
+
+// Re-clavear a una clave que ya tiene OTRA entrada se rechaza: dejaria una de
+// las dos inalcanzable en el mapa, o sea una fuga de recursos GPU.
+static void test_rekey_rejects_collision()
+{
+    SharedGpuMeshCache cache;
+    auto crear = [](SharedGpuMesh&) {};
+    const int a = cache.acquire("a", crear);
+    const int b = cache.acquire("b", crear);
+    CHECK(a != b);
+    CHECK(!cache.rekey(a, "b"));
+    // Y la de a sigue encontrandose por su clave de siempre.
+    CHECK(cache.acquire("a", crear) == a);
+}
+
+// Indice muerto: no hace nada y lo dice.
+static void test_rekey_on_dead_index()
+{
+    SharedGpuMeshCache cache;
+    CHECK(!cache.rekey(0, "loquesea"));
+    CHECK(!cache.rekey(-1, "loquesea"));
+}
+
+// Re-clavear a la clave que ya tenia es un no-op que devuelve true.
+static void test_rekey_to_same_key()
+{
+    SharedGpuMeshCache cache;
+    auto crear = [](SharedGpuMesh&) {};
+    const int idx = cache.acquire("k", crear);
+    CHECK(cache.rekey(idx, "k"));
+    CHECK(cache.acquire("k", crear) == idx);
+}
+
+// El refcount no lo toca: dos duenos antes, dos duenos despues.
+static void test_rekey_preserves_refcount()
+{
+    SharedGpuMeshCache cache;
+    auto crear = [](SharedGpuMesh&) {};
+    const int idx = cache.acquire("k", crear);
+    cache.acquire("k", crear);
+    CHECK(cache.refCount(idx) == 2);
+    CHECK(cache.rekey(idx, "otra"));
+    CHECK(cache.refCount(idx) == 2);
+}
+
 int main()
 {
     test_objetos_identicos_comparten_handles();
@@ -302,6 +365,11 @@ int main()
     test_reutilizar_slot_no_pisa_el_snapshot();
     test_destroy_all_libera_cada_entrada_una_vez();
     test_live_indices_son_entradas_no_objetos();
+    test_rekey_moves_the_entry();
+    test_rekey_rejects_collision();
+    test_rekey_on_dead_index();
+    test_rekey_to_same_key();
+    test_rekey_preserves_refcount();
 
     if (g_failures == 0) std::printf("shared_gpu_mesh_tests: OK\n");
     else                 std::printf("shared_gpu_mesh_tests: %d FALLOS\n", g_failures);

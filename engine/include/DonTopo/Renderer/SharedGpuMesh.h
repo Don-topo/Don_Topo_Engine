@@ -89,6 +89,18 @@ namespace DonTopo
             // real sigue diferida. No-op si el índice no está vivo.
             void release(int index, const Destroyer& destroy);
 
+            // Cambia la clave con la que se encuentra la entrada `index`, sin
+            // tocar refs ni handles. false si el indice no esta vivo o si la
+            // clave nueva ya es de OTRA entrada — dos entradas con la misma
+            // clave dejarian una inalcanzable en el mapa, o sea una fuga de
+            // recursos GPU que nadie liberaria nunca.
+            //
+            // La necesita el cambio de textura en caliente: cuando una entrada
+            // con un solo dueno cambia de material, su contenido deja de
+            // corresponder a su clave, y sin re-clavear el siguiente objeto que
+            // pidiera la clave vieja recibiria la malla con la textura nueva.
+            bool rekey(int index, const std::string& newKey);
+
             // Fuerza la destrucción de todo lo vivo, ignorando refcounts. SOLO
             // desde Renderer::shutdown, donde ya no queda nadie que dibuje.
             void destroyAll(const Destroyer& destroy);

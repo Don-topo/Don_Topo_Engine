@@ -135,6 +135,22 @@ namespace DonTopo
         destroy(snapshot);
     }
 
+    bool SharedGpuMeshCache::rekey(int index, const std::string& newKey)
+    {
+        if (index < 0 || index >= (int)m_entries.size()) return false;
+        Entry& e = m_entries[(size_t)index];
+        if (!e.live) return false;
+        if (e.key == newKey) return true;
+
+        auto choque = m_byKey.find(newKey);
+        if (choque != m_byKey.end() && choque->second != index) return false;
+
+        m_byKey.erase(e.key);
+        e.key = newKey;
+        m_byKey[newKey] = index;
+        return true;
+    }
+
     void SharedGpuMeshCache::destroyAll(const Destroyer& destroy)
     {
         for (Entry& e : m_entries)
