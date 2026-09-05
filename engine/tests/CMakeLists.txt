@@ -149,3 +149,10 @@ if(FMOD_FOUND AND WIN32)
         endforeach()
     endif()
 endif()
+
+# DonTopoEditor y no DonTopoCore: en la Task 8 este mismo binario cubre
+# MaterialTextureCommand, que vive en la libreria del editor. Mismo enlace que
+# dt_audio_tests, y por el mismo motivo.
+add_executable(dt_material_texture_tests material_texture_tests.cpp)
+target_link_libraries(dt_material_texture_tests PRIVATE DonTopoEditor)
+target_compile_features(dt_material_texture_tests PRIVATE cxx_std_20)

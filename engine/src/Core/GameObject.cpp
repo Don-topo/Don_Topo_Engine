@@ -70,6 +70,69 @@ namespace DonTopo
         return m_mesh ? dynamic_cast<SkinnedMesh*>(m_mesh.get()) : nullptr;
     }
 
+    std::vector<Material*> materialsOfMesh(GameObject& go)
+    {
+        std::vector<Material*> out;
+        if (!go.hasMesh()) return out;
+
+        // Mismo criterio que materialsOf() del Content Browser: en un skinned
+        // con submallas, el Material heredado no lo mira nadie.
+        if (SkinnedMesh* sm = go.getSkinnedMesh(); sm && !sm->materials.empty())
+        {
+            out.reserve(sm->materials.size());
+            for (Material& m : sm->materials) out.push_back(&m);
+            return out;
+        }
+
+        out.push_back(&go.getMesh()->material);
+        return out;
+    }
+
+    void applyMaterialOverrides(GameObject& go)
+    {
+        std::vector<Material*> mats = materialsOfMesh(go);
+
+        for (MaterialTextureOverride& ov : go.materialOverrides)
+        {
+            // Indice que ya no existe: el FBX se reexporto con menos submallas.
+            // Se ignora en silencio aqui; el aviso lo da el lector de escena,
+            // que es quien tiene canal para darlo.
+            if (ov.index < 0 || ov.index >= (int)mats.size()) continue;
+            Material& mat = *mats[(size_t)ov.index];
+
+            // El baseline se captura UNA vez por slot, la primera que se pisa:
+            // si se recapturase en cada pasada, el segundo cambio de textura
+            // guardaria como "original" el override anterior y el Clear
+            // devolveria una textura del usuario en vez de la del modelo.
+            auto aplica = [](const std::string& override_, std::string& base,
+                             bool& baseTomado, std::string& destino)
+            {
+                if (override_.empty())
+                {
+                    // Sin override: si alguna vez lo hubo, se vuelve al
+                    // baseline. Si nunca lo hubo, no se toca nada — escribir el
+                    // base vacio aqui borraria la ruta que trae el FBX.
+                    if (baseTomado) destino = base;
+                    return;
+                }
+                if (!baseTomado)
+                {
+                    base       = destino;
+                    baseTomado = true;
+                }
+                destino = override_;
+            };
+
+            // baseTomado se deriva de que el slot tenga override o baseline no
+            // vacios... y eso NO basta: un baseline legitimamente vacio (mesh
+            // procedural sin textura) seria indistinguible de "aun no tomado".
+            // De ahi los tres flags explicitos.
+            aplica(ov.albedo, ov.baseAlbedo, ov.baseAlbedoTaken, mat.texturePath);
+            aplica(ov.normal, ov.baseNormal, ov.baseNormalTaken, mat.normalMapPath);
+            aplica(ov.orm,    ov.baseOrm,    ov.baseOrmTaken,    mat.metallicRoughnessPath);
+        }
+    }
+
     std::shared_ptr<Collider> GameObject::anyCollider() const
     {
         if (m_boxCollider)     return m_boxCollider;

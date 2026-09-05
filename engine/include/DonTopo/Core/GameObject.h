@@ -26,6 +26,7 @@ namespace DonTopo
 {
     struct Mesh;
     struct SkinnedMesh;
+    struct Material;
     class Collider;
     class BoxCollider;
     class SphereCollider;
@@ -54,6 +55,30 @@ namespace DonTopo
     class DropdownComponent;
     class ScrollViewComponent;
     class ScriptComponent;
+
+    // Rutas de textura que el usuario ha puesto a mano desde Properties, por
+    // encima de lo que trajera el FBX.
+    //
+    // Viven aqui y no en Material a proposito: Material es lo que leen los
+    // uploaders de los dos backends y lo que entra en la clave de dedup de
+    // SharedGpuMesh, y no sabe distinguir "esto lo puso el modelo" de "esto lo
+    // puso el usuario". Sin esa distincion no hay Clear posible.
+    //
+    // Los base* son lo que habia en el material la PRIMERA vez que se piso ese
+    // slot: es a lo que vuelve Clear en caliente. No se serializan — al cargar
+    // la escena el material se re-deriva del FBX y el baseline se vuelve a
+    // capturar solo.
+    struct MaterialTextureOverride
+    {
+        int         index = 0;   // indice en SkinnedMesh::materials; 0 = Mesh::material
+        std::string albedo, normal, orm;
+        std::string baseAlbedo, baseNormal, baseOrm;
+        // "Ya se tomo el baseline de este slot". No se puede deducir de que
+        // base* este vacio: un baseline legitimamente vacio (mesh procedural
+        // sin textura) seria indistinguible de "aun no tomado", y el Clear
+        // dejaria puesta la textura del usuario en vez de quitarla.
+        bool        baseAlbedoTaken = false, baseNormalTaken = false, baseOrmTaken = false;
+    };
 
     class GameObject
     {
@@ -326,6 +351,10 @@ namespace DonTopo
             // vía setObjectMeshVisible/setSkinnedMeshVisible, igual que el SSR.
             bool meshVisible = true;
 
+            // Vacio = el material es tal cual lo trajo el FBX. Ver
+            // MaterialTextureOverride.
+            std::vector<MaterialTextureOverride> materialOverrides;
+
             // Screen Space Reflections por objeto. No es un componente: son dos
             // campos del propio GameObject, igual que el transform, porque lo que
             // configuran es cómo se dibuja SU malla. ssrIntensity es la
@@ -366,4 +395,17 @@ namespace DonTopo
             std::shared_ptr<ScrollViewComponent> m_scrollView;
             std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
     };
+
+    // Los materiales EDITABLES de un objeto, en el orden que indexan los
+    // overrides: los de submalla si es un skinned que los trae, y si no el
+    // heredado de Mesh. Vacio si no hay mesh.
+    //
+    // Fuera de linea: el dynamic_cast necesita SkinnedMesh completo, mismo
+    // motivo que isSkinned().
+    std::vector<Material*> materialsOfMesh(GameObject& go);
+
+    // Escribe los overrides sobre los materiales, capturando el baseline la
+    // primera vez que pisa cada slot. Idempotente: llamarla dos veces seguidas
+    // deja lo mismo.
+    void applyMaterialOverrides(GameObject& go);
 }
