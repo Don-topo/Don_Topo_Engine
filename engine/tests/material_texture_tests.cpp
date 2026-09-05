@@ -1,6 +1,7 @@
 // Test headless de los overrides de textura del Mesh (sin GPU). Plain main +
 // asserts, sin framework — mismo patrón que content_browser_tests.cpp.
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Renderer/MaterialTextureSource.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 
@@ -222,6 +223,36 @@ static void test_no_mesh_is_noop()
     CHECK(materialsOfMesh(go).empty());
 }
 
+// La ruta explicita GANA a los bytes embebidos. Es lo contrario de lo que hacia
+// el motor antes de esta feature, y es lo que hace posible el Clear: si ganara
+// la embebida, asignar una textura a mano exigiria destruir los bytes del FBX y
+// no habria a que volver.
+static void test_path_wins_over_embedded()
+{
+    const std::vector<uint8_t> bytes{1, 2, 3};
+    CHECK(chooseTextureSource("assets/x.png", bytes) == TextureSource::Path);
+}
+
+// Sin ruta, la embebida.
+static void test_embedded_when_no_path()
+{
+    const std::vector<uint8_t> bytes{1, 2, 3};
+    CHECK(chooseTextureSource("", bytes) == TextureSource::Embedded);
+}
+
+// Sin nada, nada: el caller pone su relleno (blanca compartida en Vulkan,
+// neutro global en D3D12).
+static void test_none_when_empty()
+{
+    CHECK(chooseTextureSource("", {}) == TextureSource::None);
+}
+
+// Solo ruta.
+static void test_path_when_no_embedded()
+{
+    CHECK(chooseTextureSource("assets/x.png", {}) == TextureSource::Path);
+}
+
 int main()
 {
     test_materials_of_static_mesh();
@@ -235,6 +266,10 @@ int main()
     test_normal_and_orm_overrides_write_their_own_field();
     test_clear_restores_empty_baseline_on_procedural_mesh();
     test_no_mesh_is_noop();
+    test_path_wins_over_embedded();
+    test_embedded_when_no_path();
+    test_none_when_empty();
+    test_path_when_no_embedded();
     if (g_failures == 0) std::printf("ALL MATERIAL TEXTURE TESTS PASSED\n");
     std::fflush(stdout);
     return g_failures == 0 ? 0 : 1;

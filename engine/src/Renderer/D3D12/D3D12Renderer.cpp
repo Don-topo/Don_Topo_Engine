@@ -13,6 +13,7 @@
 #include "DonTopo/Renderer/InstanceBatching.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/MeshKey.h"
+#include "DonTopo/Renderer/MaterialTextureSource.h"
 #include "DonTopo/Renderer/SlotPool.h"
 #include "DonTopo/Renderer/D3D12/D3D12Support.h"
 #include "DonTopo/Renderer/ModelLoader.h"
@@ -2552,11 +2553,17 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadMaterialTexture(
 {
     int      w = 0, h = 0, channels = 0;
     stbi_uc* pixels = nullptr;
-    if (!embedded.empty())
-        pixels = stbi_load_from_memory(embedded.data(), static_cast<int>(embedded.size()), &w, &h,
-                                       &channels, STBI_rgb_alpha);
-    else if (!path.empty())
-        pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+    switch (chooseTextureSource(path, embedded)) {
+        case TextureSource::Path:
+            pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+            break;
+        case TextureSource::Embedded:
+            pixels = stbi_load_from_memory(embedded.data(), static_cast<int>(embedded.size()), &w, &h,
+                                           &channels, STBI_rgb_alpha);
+            break;
+        case TextureSource::None:
+            break;  // pixels queda nullptr: el caller (fuera de esta funcion) pone su relleno
+    }
 
     if (!pixels)
         return nullptr;

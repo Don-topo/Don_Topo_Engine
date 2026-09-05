@@ -2,6 +2,7 @@
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/TransferBatch.h"
 #include "DonTopo/Renderer/PlaceholderTexture.h"
+#include "DonTopo/Renderer/MaterialTextureSource.h"
 #include <stdexcept>
 #include <cstring>
 #include <string>
@@ -290,12 +291,17 @@ void GpuResources::createTextureImage(const std::string& path, const std::vector
     stbi_uc* pixels = nullptr;
     bool fromStb = false;
 
-    if (!embedded.empty()) {
-        pixels = stbi_load_from_memory(embedded.data(), (int)embedded.size(), &w, &h, &channels, STBI_rgb_alpha);
-        fromStb = (pixels != nullptr);
-    } else if (!path.empty()) {
-        pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
-        fromStb = (pixels != nullptr);
+    switch (chooseTextureSource(path, embedded)) {
+        case TextureSource::Path:
+            pixels  = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+            fromStb = (pixels != nullptr);
+            break;
+        case TextureSource::Embedded:
+            pixels  = stbi_load_from_memory(embedded.data(), (int)embedded.size(), &w, &h, &channels, STBI_rgb_alpha);
+            fromStb = (pixels != nullptr);
+            break;
+        case TextureSource::None:
+            break;  // el early-return de arriba ya cubre este caso
     }
 
     // Sin pixeles hay DOS motivos distintos y hasta ahora los dos acababan en

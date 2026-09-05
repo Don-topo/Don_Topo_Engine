@@ -1,4 +1,5 @@
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
+#include "DonTopo/Renderer/MaterialTextureSource.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Core/Scene.h"
@@ -26,11 +27,17 @@ namespace DonTopo
             int w = 0, h = 0, channels = 0;
             stbi_uc* px = nullptr;
 
-            if (!embedded.empty())
-                px = stbi_load_from_memory(embedded.data(), static_cast<int>(embedded.size()),
-                                           &w, &h, &channels, STBI_rgb_alpha);
-            else if (!path.empty())
-                px = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+            switch (chooseTextureSource(path, embedded)) {
+                case TextureSource::Path:
+                    px = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+                    break;
+                case TextureSource::Embedded:
+                    px = stbi_load_from_memory(embedded.data(), static_cast<int>(embedded.size()),
+                                               &w, &h, &channels, STBI_rgb_alpha);
+                    break;
+                case TextureSource::None:
+                    break;  // px queda nullptr: el fallback lo pone GpuResources en el hilo principal
+            }
 
             if (!px) return false;
 
