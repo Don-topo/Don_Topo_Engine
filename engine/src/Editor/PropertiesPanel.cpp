@@ -379,11 +379,29 @@ void PropertiesPanel::draw(EditorContext& ctx)
         }
         else
         {
-            // Solo re-sincroniza el cache de edición al cambiar de selección: si se
-            // recompusiera desde localTransform en cada frame, un valor intermedio
-            // inválido (p.ej. escala 0 mientras se teclea "0.5") se re-descompondría
-            // y rompería posición/rotación de forma permanente.
-            if (m_caches.props != ctx.selected)
+            // Cuerpo simulado (Rigidbody no-kinematic): PhysX le mueve
+            // localTransform CADA frame, así que no puede entrar por la rama de
+            // "cambio externo" de abajo — se llevaría los valores de mundo que
+            // enseña su propia rama.
+            const bool simulado = ctx.selected->hasAnyCollider() && ctx.selected->hasRigidbody()
+                                  && !ctx.selected->getRigidbody()->getIsKinematic();
+            const bool seleccionNueva = m_caches.props != ctx.selected;
+            // Alguien de FUERA de este panel movió el objeto sin cambiar la
+            // selección: el gizmo de traslación del viewport, un script, un
+            // Ctrl+Z. Sin esto los campos se quedaban en el valor de cuando se
+            // seleccionó y, peor, el siguiente toque a un DragFloat recomponía
+            // la matriz desde esa caché rancia y borraba el movimiento.
+            const bool movidoDeFuera = !simulado && !m_transformDragActive
+                                       && ctx.selected->localTransform != m_transformCached;
+
+            // Lo que NO se hace es recomponer en cada frame: un valor
+            // intermedio inválido (p.ej. escala 0 mientras se teclea "0.5") se
+            // re-descompondría y rompería posición/rotación de forma
+            // permanente. De ahí el `!m_transformDragActive` de arriba, y el
+            // guardado de m_transformCached junto a cada escritura de la matriz
+            // más abajo, que impide que lo que escribe este mismo panel se lea
+            // como cambio externo en el frame siguiente.
+            if (seleccionNueva || movidoDeFuera)
             {
                 glm::quat orientation;
                 // Sin mirar lo que devuelve decompose, una escala 0 dejaba aqui
@@ -392,19 +410,25 @@ void PropertiesPanel::draw(EditorContext& ctx)
                 decomposeTransform(ctx.selected->localTransform, &m_editPosition,
                                    &orientation, &m_editScale);
                 m_editRotationDeg = glm::degrees(glm::eulerAngles(orientation));
-                m_caches.props = ctx.selected;
-                m_meshLoadError.clear();
-                m_audioLoadError.clear();
+                m_transformCached = ctx.selected->localTransform;
+                // Los errores de carga son de la SELECCIÓN, no del transform:
+                // moverla con el gizmo no puede hacer desaparecer el mensaje de
+                // "no se pudo cargar el FBX".
+                if (seleccionNueva)
+                {
+                    m_caches.props = ctx.selected;
+                    m_meshLoadError.clear();
+                    m_audioLoadError.clear();
+                }
             }
-            // Cuerpo simulado (Rigidbody no-kinematic): PhysX mueve worldTransform (y
-            // localTransform, ver traverse en el loop principal) cada frame, pero eso
-            // nunca toca este cache de edición — sin este refresco, Position/Rotation
-            // mostrados quedan congelados en el valor de cuando se seleccionó, aunque
-            // el objeto siga cayendo/rotando por física. Solo posición+rotación (la
-            // escala es puramente del editor, physx no la conoce); se salta mientras
-            // se está arrastrando un slider pa no pelear con el drag del usuario.
-            else if (ctx.selected->hasAnyCollider() && ctx.selected->hasRigidbody()
-                     && !ctx.selected->getRigidbody()->getIsKinematic() && !m_transformDragActive)
+            // PhysX mueve worldTransform (y localTransform, ver traverse en el loop
+            // principal) cada frame, pero eso nunca toca este cache de edición — sin
+            // este refresco, Position/Rotation mostrados quedan congelados en el valor
+            // de cuando se seleccionó, aunque el objeto siga cayendo/rotando por
+            // física. Solo posición+rotación (la escala es puramente del editor, physx
+            // no la conoce); se salta mientras se está arrastrando un slider pa no
+            // pelear con el drag del usuario.
+            else if (simulado && !m_transformDragActive)
             {
                 glm::quat orientation;
                 // Mismo motivo que arriba: con una matriz singular decompose no
@@ -508,6 +532,11 @@ void PropertiesPanel::draw(EditorContext& ctx)
                 glm::mat4 r = glm::mat4_cast(glm::quat(glm::radians(m_editRotationDeg)));
                 glm::mat4 s = glm::scale(glm::mat4(1.0f), m_editScale);
                 ctx.selected->localTransform = t * r * s;
+                // Lo que acaba de escribir este panel no es un cambio externo:
+                // sin esta línea, el frame siguiente vería la matriz distinta
+                // de la cacheada y re-descompondría, convirtiendo un "370" que
+                // el usuario está tecleando en Rotation.X en un "10".
+                m_transformCached = ctx.selected->localTransform;
 
                 if (ctx.selected->hasAnyCollider())
                 {

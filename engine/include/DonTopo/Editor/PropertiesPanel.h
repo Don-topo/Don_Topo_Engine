@@ -300,6 +300,17 @@ private:
     // Rotation/Scale (primer IsItemActivated de la sesión) — "before" del
     // PropertyCommand<glm::mat4> que se empuja al confirmar (commit).
     glm::mat4   m_transformBeforeEdit{1.0f};
+    // El localTransform del que salieron los tres m_edit* de arriba. Existe
+    // para detectar que alguien de FUERA movió el objeto sin cambiar la
+    // selección —el gizmo del viewport, un script Lua, un Ctrl+Z— y volver a
+    // descomponer.
+    //
+    // Sin esto los campos se quedaban congelados en el valor de cuando se
+    // seleccionó, y era peor que cosmético: el siguiente toque a cualquier
+    // DragFloat recomponía la matriz desde esa caché rancia y BORRABA el
+    // movimiento. Va aquí, en el dueño de la caché, y no como un aviso que
+    // cada sitio que mueva un objeto tenga que acordarse de mandar.
+    glm::mat4   m_transformCached{1.0f};
 
     // Reflection Probe – drag de Radius/Intensity. Mismo patrón que SSR: el
     // "before" se toma en IsItemActivated y el owner id evita aplicar un
