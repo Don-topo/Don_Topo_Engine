@@ -383,6 +383,50 @@ static void test_rekey_on_freed_slot_in_range()
     CHECK(cache.get(nuevo) != nullptr);
 }
 
+// keyOf es lo que lee rebuildStaticMesh antes de mutar una entrada en su sitio:
+// compara el prefijo de geometría de esta clave contra el de la clave nueva. Si
+// devolviera la clave de un slot muerto —o sea, la del inquilino anterior—, esa
+// comparación diría "misma geometría" sobre una entrada que ya no es la que se
+// creyó, y el dedup repartiría la malla equivocada. Por eso lo que se afirma no
+// es solo que acierte con la viva, sino que la muerta da VACÍO.
+static void test_key_of_entrada_viva_y_muerta()
+{
+    SharedGpuMeshCache cache;
+    auto crear = [](SharedGpuMesh&) {};
+    auto nada  = [](const SharedGpuMesh&) {};
+
+    const int idx = cache.acquire("12|30|difusa.png", crear);
+    CHECK(cache.keyOf(idx) == "12|30|difusa.png");
+
+    // Sigue a la entrada cuando se re-clavea: es lo que la hace utilizable
+    // después de un cambio de material.
+    CHECK(cache.rekey(idx, "12|30|otra.png"));
+    CHECK(cache.keyOf(idx) == "12|30|otra.png");
+
+    // Fuera de rango por arriba y por abajo. Esto SÍ discrimina: sin la
+    // comprobación de límites, keyOf(-1) indexa el vector fuera de sitio.
+    CHECK(cache.keyOf(idx + 1).empty());
+    CHECK(cache.keyOf(-1).empty());
+
+    // Índice EN rango cuyo slot se liberó. Aviso para quien lea esto creyendo
+    // que prueba la guarda `live` de keyOf: NO la prueba. release deja la
+    // entrada en Entry{}, o sea con la clave ya vacía, así que esto pasaría
+    // igual sin esa guarda (comprobado saboteándola). Lo que afirma es la
+    // pareja —release limpia Y keyOf no delata claves de entradas muertas—,
+    // que es la propiedad de la que depende el llamante.
+    cache.release(idx, nada);
+    CHECK(cache.keyOf(idx).empty());
+
+    // Y el caso que de verdad tiene filo: el slot vuelve al freelist y lo
+    // estrena otra entrada. keyOf tiene que dar la clave del INQUILINO NUEVO.
+    // Quien se guardara la clave de antes y la comparase contra esta —que es
+    // exactamente lo que hace el camino rápido de rebuildStaticMesh— tiene que
+    // ver que ha cambiado, no la clave del muerto.
+    const int reciclado = cache.acquire("99|7|otra_malla.png", crear);
+    CHECK(reciclado == idx);
+    CHECK(cache.keyOf(reciclado) == "99|7|otra_malla.png");
+}
+
 int main()
 {
     test_objetos_identicos_comparten_handles();
@@ -397,6 +441,7 @@ int main()
     test_rekey_to_same_key();
     test_rekey_preserves_refcount();
     test_rekey_on_freed_slot_in_range();
+    test_key_of_entrada_viva_y_muerta();
 
     if (g_failures == 0) std::printf("shared_gpu_mesh_tests: OK\n");
     else                 std::printf("shared_gpu_mesh_tests: %d FALLOS\n", g_failures);

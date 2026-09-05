@@ -108,6 +108,22 @@ namespace DonTopo
             SharedGpuMesh*       get(int index);
             const SharedGpuMesh* get(int index) const;
 
+            // La clave con la que está indexada la entrada `index`, o una
+            // cadena VACÍA si no está viva (o el índice está fuera de rango).
+            //
+            // La pide el cambio de material en caliente: makeSharedMeshKey
+            // pone el número de vértices y el de índices en claro y como los
+            // dos primeros campos, así que comparar ese prefijo contra el de
+            // la clave nueva dice si la geometría sigue siendo la misma sin
+            // rehashear la malla. Quien muta una entrada en su sitio necesita
+            // saberlo: mutar sin resubir geometría y re-clavear después dejaría
+            // la entrada anunciándose con una clave que no describe lo que
+            // tiene, y por el dedup eso se lo lleva el SIGUIENTE que la pida.
+            //
+            // La referencia vale hasta el siguiente acquire/release/rekey, que
+            // pueden mover el vector de entradas.
+            const std::string& keyOf(int index) const;
+
             // 0 si el índice no está vivo.
             int    refCount(int index) const;
             size_t liveCount() const;

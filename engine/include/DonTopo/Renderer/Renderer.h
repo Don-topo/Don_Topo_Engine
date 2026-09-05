@@ -440,7 +440,7 @@ namespace DonTopo {
             // un solo dueño se sustituyen las tres imágenes de la entrada
             // compartida en su sitio y se re-clavea, y con más de uno el objeto
             // se separa a una entrada propia.
-            void rebuildStaticMesh(int index, const Mesh& mesh);
+            void rebuildStaticMesh(int index, const Mesh& mesh) override;
             // Cierra y envía el batch del pump actual. Llamar UNA vez tras
             // procesar todos los resultados del frame.
             void flushPendingUploads();

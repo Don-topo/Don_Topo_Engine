@@ -4294,6 +4294,28 @@ namespace DonTopo {
             }
         };
 
+        // `obj.name` NO se refresca aquí, y no es un olvido: buildRenderObject
+        // sí lo hace porque es el camino de REGISTRO, donde el RenderObject
+        // acaba de nacer vacío. Aquí el objeto ya tiene el nombre que le puso el
+        // editor, es dato por instancia y de depuración —no entra en la clave de
+        // dedup ni en un solo byte de lo que se sube—, así que pisarlo desde el
+        // mesh metería en una llamada que trata del material una segunda
+        // responsabilidad que nadie ha pedido.
+
+        // Los dos primeros campos de la clave son, en claro y separados por '|',
+        // el número de vértices y el de índices: makeSharedMeshKey los pone
+        // delante justamente por ser discriminantes exactos. Comparar ese
+        // prefijo contra el de la clave vieja cubre los dos recuentos sin
+        // rehashear la malla.
+        auto prefijoGeometria = [](const std::string& clave) {
+            const size_t primera = clave.find('|');
+            if (primera == std::string::npos) return clave;
+            // npos = no hay segundo '|' (clave que no salió de
+            // makeSharedMeshKey): se compara la cadena entera, que es el lado
+            // conservador — a lo sumo manda al camino general.
+            return clave.substr(0, clave.find('|', primera + 1));
+        };
+
         // Con más de un dueño no se puede mutar en su sitio: se le cambiaría la
         // textura a los otros objetos, que no han pedido nada.
         //
@@ -4301,13 +4323,17 @@ namespace DonTopo {
         // camino rápido no vuelve a subir vértices ni índices, así que la
         // entrada quedaría re-clavada a una clave que describe una geometría que
         // no tiene, y el siguiente objeto que pidiera esa clave se llevaría la
-        // vieja —corrupción silenciosa y compartida, del mismo tipo que el
-        // dedup existe para evitar—. El recuento de índices es lo único
-        // comparable sin rehashear la malla entera: no PRUEBA que la geometría
-        // sea la misma (por eso el contrato del header dice que cambiarla no
-        // está soportado), pero pilla gratis el caso que se puede pillar.
+        // vieja —corrupción silenciosa y COMPARTIDA, del tipo que el dedup
+        // existe para evitar—.
+        //
+        // Ojo con lo que este prefijo prueba y lo que no: compara los dos
+        // RECUENTOS, no el contenido. Una malla con los mismos vértices e
+        // índices contados pero movidos se cuela, y por eso el contrato del
+        // header sigue diciendo que cambiar la geometría por aquí no está
+        // soportado. Lo que cierra es el caso realista —una malla distinta— sin
+        // pagar un rehasheo por clic.
         if (m_sharedMeshes.refCount(viejo) > 1 ||
-            gpuPtr->indexCount != (uint32_t)mesh.indices.size())
+            prefijoGeometria(m_sharedMeshes.keyOf(viejo)) != prefijoGeometria(nuevaClave))
         {
             separarAEntradaPropia();
             return;
@@ -4443,12 +4469,31 @@ namespace DonTopo {
         // sin re-clavear el siguiente objeto que pidiera la vieja recibiría esta
         // malla con la textura nueva.
         //
+        // Y va lo ÚLTIMO a propósito, aunque eso signifique tirar tres subidas
+        // de imagen y un vkDeviceWaitIdle cuando el rekey se rechaza. Adelantarlo
+        // sería más barato en ese caso y peor en todos: entre el rekey y aquí hay
+        // cuatro llamadas que pueden lanzar (createTextureImage tira
+        // runtime_error si no puede crear la imagen o el buffer de staging), y
+        // con la entrada ya anunciada bajo la clave nueva, salir por excepción a
+        // medias la dejaría PUBLICADA con un material a medio hacer: el
+        // siguiente objeto que pidiera esa clave la adquiriría y compartiría el
+        // destrozo. Re-clavando al final, una excepción a medias deja una
+        // entrada incoherente pero todavía bajo su clave vieja y con un solo
+        // dueño, que es este objeto — el daño no sale de aquí. Barato en el
+        // camino raro, contenido en el peor.
+        //
         // El rekey se rechaza cuando OTRA entrada ya tiene esta clave exacta
         // —dos con la misma dejarían una inalcanzable en el mapa, o sea una fuga
         // de recursos GPU que nadie liberaría—. Entonces este objeto se va a esa
-        // otra y suelta la suya, que ya no la quiere nadie. A partir de aquí
-        // `gpu` y `gpuPtr` no se pueden tocar: el acquire puede hacer crecer el
-        // vector de entradas y dejarlos colgando.
+        // otra y suelta la suya, que ya no la quiere nadie.
+        //
+        // Regla general del lambda: después de su acquire, `gpu` y `gpuPtr` no
+        // se pueden tocar, porque un acquire que CREA entrada puede hacer crecer
+        // el vector de la cache y dejarlos colgando. Aquí en concreto no crece
+        // —si el rekey se rechazó es porque esa clave ya tiene entrada viva, así
+        // que el acquire la encuentra y no crea nada—, pero el código no se
+        // apoya en eso: la regla es del lambda, que también corre desde el
+        // camino general, donde sí puede crear.
         if (!m_sharedMeshes.rekey(viejo, nuevaClave))
             separarAEntradaPropia();
     }

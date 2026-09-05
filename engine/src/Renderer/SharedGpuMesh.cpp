@@ -179,6 +179,16 @@ namespace DonTopo
         return e.live ? &e.gpu : nullptr;
     }
 
+    const std::string& SharedGpuMeshCache::keyOf(int index) const
+    {
+        // Estática y no un temporal: se devuelve por referencia, así que tiene
+        // que sobrevivir a la llamada igual que la clave de una entrada viva.
+        static const std::string kSinClave;
+        if (index < 0 || index >= (int)m_entries.size()) return kSinClave;
+        const Entry& e = m_entries[(size_t)index];
+        return e.live ? e.key : kSinClave;
+    }
+
     int SharedGpuMeshCache::refCount(int index) const
     {
         if (index < 0 || index >= (int)m_entries.size()) return 0;
