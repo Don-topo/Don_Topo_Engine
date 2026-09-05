@@ -15,6 +15,12 @@
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/PropertiesPanel.h"
+#include "DonTopo/Editor/ViewportPanel.h"
+// ImGuizmo.h no se basta solo: usa tipos de ImGui (ImVec2, ImU32) sin
+// incluirlo. Aquí se necesita para comparar los enums de gizmoImGuizmoEnums
+// contra los de verdad, que es todo el sentido de ese test.
+#include <imgui.h>
+#include <ImGuizmo.h>
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
 #include "DonTopo/UI/ImageComponent.h"
@@ -37,6 +43,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include "DonTopo/Core/LightComponent.h"
 
 using namespace DonTopo;
@@ -7522,6 +7529,271 @@ static void test_collect_lights_radius_matches_the_shader()
     CHECK(nearlyEqual(radios[1], 40.0f, 1e-3f));    // area: ancho/2
 }
 
+// ── Gizmo de traslación del viewport (ImGuizmo) ─────────────────────────────
+//
+// El sujeto de prueba son los dos seams de ViewportPanel.h: `localFromWorld`,
+// que convierte lo que devuelve el manipulador (una matriz de MUNDO) en lo que
+// se edita y se serializa (`localTransform`), y `applyLocalTransform`, que es
+// literalmente el cuerpo de la lambda del PropertyCommand que se apila al
+// soltar. Lo que NO se puede probar aquí es la interacción de ratón: ImGuizmo
+// necesita un contexto de ImGui vivo y eventos de puntero, así que el flanco
+// de entrada/salida del arrastre —y con él "un comando por arrastre"— se
+// verifica a mano en la GUI.
+
+// El caso trivial, que es también el que ESCONDE el bug: con el padre en la
+// identidad, poner la inversa o no ponerla, y multiplicar en un orden o en el
+// otro, dan las cuatro el mismo resultado.
+static void test_gizmo_local_from_world_identity_parent()
+{
+    const glm::mat4 mundo = glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, -7.0f, 11.0f)) *
+                            glm::rotate(glm::mat4(1.0f), glm::radians(30.0f), glm::vec3(0, 1, 0));
+
+    const glm::mat4 local = localFromWorld(glm::mat4(1.0f), mundo);
+    for (int c = 0; c < 4; ++c)
+        for (int f = 0; f < 4; ++f)
+            CHECK(nearlyEqual(local[c][f], mundo[c][f], 1e-5f));
+}
+
+// El caso que de verdad manda: padre TRASLADADO Y ROTADO. Un hijo movido con el
+// gizmo no puede saltar, y saltaría de las dos formas equivocadas —escribir el
+// mundo tal cual en el local, o multiplicar por la inversa por el lado que no
+// es—, que aquí dan tres resultados distintos.
+static void test_gizmo_local_from_world_translated_rotated_parent()
+{
+    const glm::mat4 padre = glm::translate(glm::mat4(1.0f), glm::vec3(5.0f, -3.0f, 2.0f)) *
+                            glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0, 1, 0));
+    // Lo que devolvería ImGuizmo al arrastrar el hijo hasta (10, 4, -6) de mundo.
+    const glm::mat4 mundo = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 4.0f, -6.0f));
+
+    const glm::mat4 local = localFromWorld(padre, mundo);
+
+    // A mano: inverse(padre) = Ry(-90)·T(-5,3,-2), así que la traslación local
+    // es Ry(-90)·(5,7,-8) = (8,7,5).
+    //
+    // Escribir el mundo tal cual daría (10,4,-6), y multiplicar al revés
+    // (mundo · inverse(padre)) daría (12,7,-11). Ninguno de los dos pasa por
+    // aquí.
+    CHECK(nearlyEqual(local[3][0], 8.0f, 1e-4f));
+    CHECK(nearlyEqual(local[3][1], 7.0f, 1e-4f));
+    CHECK(nearlyEqual(local[3][2], 5.0f, 1e-4f));
+
+    // Y la vuelta: recomponer el mundo desde el local devuelve la matriz de
+    // partida ENTERA, no solo la posición. Es lo mismo que hace
+    // updateWorldTransforms el frame siguiente, así que si esto no cuadra el
+    // objeto se mueve solo al soltar.
+    const glm::mat4 rehecho = padre * local;
+    for (int c = 0; c < 4; ++c)
+        for (int f = 0; f < 4; ++f)
+            CHECK(nearlyEqual(rehecho[c][f], mundo[c][f], 1e-4f));
+}
+
+// El PropertyCommand que se apila al soltar: deshace y rehace, y resuelve el
+// objeto por ID. El puntero se mete a propósito en el comando para NO usarlo.
+static void test_gizmo_transform_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Movido");
+    const uint64_t id = go->id;
+
+    const glm::mat4 antes   = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f));
+    const glm::mat4 despues = glm::translate(glm::mat4(1.0f), glm::vec3(40.0f, -5.0f, 9.0f));
+    go->localTransform = antes;
+
+    Scene* pScene = &scene;
+    PropertyCommand<glm::mat4> cmd(
+        "Transform de 'Movido'", antes, despues,
+        [pScene, id](const glm::mat4& t) { applyLocalTransform(*pScene, id, t); });
+
+    cmd.execute();
+    CHECK(nearlyEqual(go->localTransform[3][0], 40.0f, 1e-5f));
+    CHECK(nearlyEqual(go->localTransform[3][1], -5.0f, 1e-5f));
+    CHECK(nearlyEqual(go->localTransform[3][2], 9.0f, 1e-5f));
+    // El mundo se propaga en el mismo golpe: sin esto el objeto se vería en su
+    // sitio viejo hasta el traverse siguiente.
+    CHECK(nearlyEqual(go->worldTransform[3][0], 40.0f, 1e-5f));
+
+    cmd.undo();
+    CHECK(nearlyEqual(go->localTransform[3][0], 1.0f, 1e-5f));
+    CHECK(nearlyEqual(go->localTransform[3][1], 2.0f, 1e-5f));
+    CHECK(nearlyEqual(go->localTransform[3][2], 3.0f, 1e-5f));
+
+    cmd.execute();
+    CHECK(nearlyEqual(go->localTransform[3][0], 40.0f, 1e-5f));
+}
+
+// Y lo que obliga a resolver por id: entre apilar el comando y deshacerlo cabe
+// un borrado + una reconstrucción (el undo de un Delete, la carga de una
+// escena). El GameObject reconstruido conserva el id pero NO la dirección: un
+// GameObject* capturado apuntaría a memoria liberada.
+static void test_gizmo_transform_command_survives_rebuild(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Movido");
+    const uint64_t id = go->id;
+
+    const glm::mat4 antes   = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f));
+    const glm::mat4 despues = glm::translate(glm::mat4(1.0f), glm::vec3(40.0f, -5.0f, 9.0f));
+    go->localTransform = despues;
+
+    Scene* pScene = &scene;
+    PropertyCommand<glm::mat4> cmd(
+        "Transform de 'Movido'", antes, despues,
+        [pScene, id](const glm::mat4& t) { applyLocalTransform(*pScene, id, t); });
+
+    // Borrado y reconstrucción por el mismo camino que el undo de un Delete
+    // (ver test_undo_delete_keeps_original_id), que conserva el id.
+    nlohmann::json snapshot = scene.subtreeToJson(go);
+    scene.removeGameObject(go);
+    CHECK(scene.findById(id) == nullptr);
+    // Un undo con el objeto AUSENTE no puede petar: es no-op y ya.
+    cmd.undo();
+
+    GameObject* rehecho = scene.insertFromJson(snapshot, nullptr, 0, pm, am);
+    CHECK(rehecho != nullptr);
+    if (!rehecho) return;
+    // Mismo id, objeto nuevo: el viejo `go` es memoria liberada y un
+    // GameObject* capturado en el comando apuntaría ahí. (No se comparan las
+    // direcciones: el asignador puede reusar la misma y eso no probaría nada.)
+    CHECK(rehecho->id == id);
+
+    cmd.undo();
+    CHECK(nearlyEqual(rehecho->localTransform[3][0], 1.0f, 1e-5f));
+    CHECK(nearlyEqual(rehecho->localTransform[3][1], 2.0f, 1e-5f));
+    CHECK(nearlyEqual(rehecho->localTransform[3][2], 3.0f, 1e-5f));
+}
+
+// ── Modos del gizmo: rotar y escalar ────────────────────────────────────────
+//
+// Lo que se puede afirmar sin GUI es qué CANAL informa cada modo. El resto
+// —qué handles dibuja ImGuizmo, si los anillos salen alineados al objeto— es
+// de la librería y de la pantalla.
+//
+// Vale la pena probarlo porque el fallo tiene una pinta muy concreta y muy
+// silenciosa: los tres modos comparten camino, escriben la misma `mat4` y
+// apilan el mismo comando, así que un copia-pega que deje Rotate informando de
+// la posición compila, corre y solo se nota leyendo el Log Console.
+
+// El despacho a ImGuizmo. Mandar Rotate a TRANSLATE compila y corre: el objeto
+// se movería en vez de girar y ningún otro test se enteraría (comprobado
+// saboteándolo antes de escribir este). Lo que se afirma es también la decisión
+// de espacio, que es deliberada y distinta por modo.
+static void test_gizmo_imguizmo_enums_per_mode()
+{
+    int op = -1, espacio = -1;
+
+    gizmoImGuizmoEnums(GizmoMode::Translate, op, espacio);
+    CHECK(op == ImGuizmo::TRANSLATE);
+    CHECK(espacio == ImGuizmo::WORLD);   // la X del mundo, se mida el objeto como se mida
+
+    gizmoImGuizmoEnums(GizmoMode::Rotate, op, espacio);
+    CHECK(op == ImGuizmo::ROTATE);
+    CHECK(espacio == ImGuizmo::LOCAL);   // anillos pegados a los ejes del objeto
+
+    gizmoImGuizmoEnums(GizmoMode::Scale, op, espacio);
+    CHECK(op == ImGuizmo::SCALE);
+    // LOCAL obligatorio: ImGuizmo hace (operation & SCALE) ? LOCAL : mode y
+    // descarta lo que se le pase. Pasar WORLD aquí sería una llamada que miente.
+    CHECK(espacio == ImGuizmo::LOCAL);
+}
+
+static void test_gizmo_channel_label_per_mode()
+{
+    CHECK(std::string(gizmoChannelLabel(GizmoMode::Translate)) == "Position");
+    CHECK(std::string(gizmoChannelLabel(GizmoMode::Rotate))    == "Rotation");
+    CHECK(std::string(gizmoChannelLabel(GizmoMode::Scale))     == "Scale");
+}
+
+// Una sola matriz con las tres cosas distintas entre sí, para que ningún modo
+// pueda acertar por accidente leyendo el canal de otro.
+static void test_gizmo_logged_value_reads_its_own_channel()
+{
+    // 35° y no 90°: a 90 la Y del euler cae justo en la singularidad del `asin`
+    // de glm::eulerAngles, donde el error de normalizar columnas en float se
+    // amplifica y salen 89.98. Eso es precisión, no canal equivocado, y un test
+    // que lo tolerase con 0.1 de margen dejaría de distinguir la posición de la
+    // rotación. Se prueba lejos del borde y se afirma fuerte.
+    const glm::mat4 local =
+        glm::translate(glm::mat4(1.0f), glm::vec3(4.0f, -2.0f, 7.0f)) *
+        glm::rotate(glm::mat4(1.0f), glm::radians(35.0f), glm::vec3(0, 1, 0)) *
+        glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 3.0f, 5.0f));
+
+    const glm::vec3 pos = gizmoLoggedValue(GizmoMode::Translate, local);
+    CHECK(nearlyEqual(pos.x, 4.0f, 1e-4f));
+    CHECK(nearlyEqual(pos.y, -2.0f, 1e-4f));
+    CHECK(nearlyEqual(pos.z, 7.0f, 1e-4f));
+
+    // GRADOS, no radianes: 35, no 0.61. Es la diferencia entre una línea de log
+    // que se puede comparar con la de Properties y una que no.
+    const glm::vec3 rot = gizmoLoggedValue(GizmoMode::Rotate, local);
+    CHECK(nearlyEqual(rot.x, 0.0f, 1e-3f));
+    CHECK(nearlyEqual(rot.y, 35.0f, 1e-3f));
+    CHECK(nearlyEqual(rot.z, 0.0f, 1e-3f));
+
+    const glm::vec3 esc = gizmoLoggedValue(GizmoMode::Scale, local);
+    CHECK(nearlyEqual(esc.x, 2.0f, 1e-4f));
+    CHECK(nearlyEqual(esc.y, 3.0f, 1e-4f));
+    CHECK(nearlyEqual(esc.z, 5.0f, 1e-4f));
+}
+
+// Una escala a 0 hace singular la matriz —y el modo Scale del gizmo llega
+// hasta ahí—, con lo que `glm::decompose` a pelo devuelve false y NO escribe
+// sus salidas. El log tiene que pasar por decomposeTransform, el wrapper del
+// repo, que sí las escribe siempre.
+//
+// Se afirman los VALORES concretos y no `isfinite`: el patrón 0xCDCDCDCD de la
+// CRT de Debug es -1.07e8, que es un número perfectamente finito, así que un
+// test de isfinite pasa con la basura dentro y no protege nada.
+static void test_gizmo_logged_value_survives_singular_matrix()
+{
+    const glm::mat4 local = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)) *
+                            glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 5.0f));
+
+    // Un eje aplastado no define ninguna orientación: identidad, o sea 0°.
+    const glm::vec3 rot = gizmoLoggedValue(GizmoMode::Rotate, local);
+    CHECK(nearlyEqual(rot.x, 0.0f, 1e-4f));
+    CHECK(nearlyEqual(rot.y, 0.0f, 1e-4f));
+    CHECK(nearlyEqual(rot.z, 0.0f, 1e-4f));
+
+    // La escala sale ENTERA y correcta, ceros incluidos: son las longitudes de
+    // las columnas, que no dependen de que se pudiera descomponer.
+    const glm::vec3 esc = gizmoLoggedValue(GizmoMode::Scale, local);
+    CHECK(nearlyEqual(esc.x, 2.0f, 1e-4f));
+    CHECK(nearlyEqual(esc.y, 0.0f, 1e-4f));
+    CHECK(nearlyEqual(esc.z, 5.0f, 1e-4f));
+
+    // Y la traslación igual: cuarta columna, no pasa por la descomposición.
+    const glm::vec3 pos = gizmoLoggedValue(GizmoMode::Translate, local);
+    CHECK(nearlyEqual(pos.y, 2.0f, 1e-5f));
+}
+
+// La conversión mundo→local con una ROTACIÓN, que es lo que devuelve ImGuizmo
+// en modo Rotate. Es el mismo `localFromWorld` de la traslación, pero el caso
+// que importa es distinto: la local tiene que ser la rotación RELATIVA al
+// padre, no la absoluta.
+static void test_gizmo_rotation_through_rotated_parent_is_relative()
+{
+    const glm::mat4 padre = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0, 1, 0));
+    // El gizmo deja al hijo mirando a 145° de mundo.
+    const glm::mat4 mundo = glm::rotate(glm::mat4(1.0f), glm::radians(145.0f), glm::vec3(0, 1, 0));
+
+    const glm::mat4 local = localFromWorld(padre, mundo);
+
+    // 145 − 90 = 55, no 145: el padre ya aporta sus 90.
+    const glm::vec3 grados = gizmoLoggedValue(GizmoMode::Rotate, local);
+    CHECK(nearlyEqual(grados.y, 55.0f, 1e-3f));
+    // Y sin escala parásita: una inversa mal puesta la mete y no se ve en el
+    // ángulo.
+    const glm::vec3 esc = gizmoLoggedValue(GizmoMode::Scale, local);
+    CHECK(nearlyEqual(esc.x, 1.0f, 1e-4f));
+    CHECK(nearlyEqual(esc.y, 1.0f, 1e-4f));
+    CHECK(nearlyEqual(esc.z, 1.0f, 1e-4f));
+
+    const glm::mat4 rehecho = padre * local;
+    for (int c = 0; c < 4; ++c)
+        for (int f = 0; f < 4; ++f)
+            CHECK(nearlyEqual(rehecho[c][f], mundo[c][f], 1e-4f));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido
@@ -7591,6 +7863,16 @@ int main()
     test_camera_command_add_undo_redo();
     test_camera_command_remove();
     test_camera_command_survives_missing_target();
+
+    test_gizmo_local_from_world_identity_parent();
+    test_gizmo_local_from_world_translated_rotated_parent();
+    test_gizmo_transform_command_undo_redo();
+    test_gizmo_transform_command_survives_rebuild(pm, am);
+    test_gizmo_imguizmo_enums_per_mode();
+    test_gizmo_channel_label_per_mode();
+    test_gizmo_logged_value_reads_its_own_channel();
+    test_gizmo_logged_value_survives_singular_matrix();
+    test_gizmo_rotation_through_rotated_parent_is_relative();
 
     test_canvas_round_trip(pm, am);
     test_scene_without_canvas_block_still_loads(pm, am);

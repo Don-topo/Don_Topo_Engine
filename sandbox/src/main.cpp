@@ -645,8 +645,13 @@ int main()
                     d3dLastX = mouseX;
                     d3dLastY = mouseY;
 
+                    // El TECLADO de la cámara solo con el botón derecho
+                    // pulsado, como en Unity: sin eso, W/E/R —los atajos del
+                    // modo del gizmo— adelantarían y subirían la cámara en vez
+                    // de cambiar de modo. El mando no entra en el reparto: no
+                    // compite con ningún atajo y sigue volando siempre.
                     if (editor.isViewportHovered())
-                        d3dCamera.update(native, d3dDelta);
+                        d3dCamera.update(native, d3dDelta, /*keyboardEnabled=*/rightDown);
 
                     d3d12.setCamera(d3dCamera);
                 }
@@ -976,8 +981,21 @@ int main()
             float dt = std::chrono::duration<float>(now - last).count();
             last = now;
 
+            // Mismo reparto que el camino de D3D12: el TECLADO de la cámara
+            // solo mientras se mantiene el botón derecho, que es lo que deja
+            // W/E/R libres para los atajos del modo del gizmo. El mando queda
+            // fuera del reparto y sigue volando siempre.
+            //
+            // Aquí el botón se consulta a GLFW en vez de reusar una variable:
+            // en el camino de Vulkan el mouse-look vive en el callback de
+            // cursor, no en el bucle, así que no hay ningún `rightDown` que
+            // tomar prestado.
             if (editor.isViewportHovered())
-                camera.update(window.getNativeWindow(), dt);
+            {
+                const bool rightDown = glfwGetMouseButton(window.getNativeWindow(),
+                                                          GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+                camera.update(window.getNativeWindow(), dt, /*keyboardEnabled=*/rightDown);
+            }
             renderer.setCamera(camera);
 
             // Listener 3D. En Play, si la escena tiene un Audio Listener (y está

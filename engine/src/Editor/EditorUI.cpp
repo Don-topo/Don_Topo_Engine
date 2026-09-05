@@ -918,6 +918,7 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
     }
 
     handleUndoRedoShortcut();
+    handleGizmoModeShortcut();
     drawMenuBar();
     drawToolbar();
     drawDockSpace();
@@ -1077,6 +1078,27 @@ void EditorUI::onGameObjectDestroyed(GameObject* node)
         m_selected = nullptr;               // el objeto va a liberarse: no dejar puntero colgante
         m_propertiesPanel.invalidateCaches(); // los caches de edición apuntaban a componentes ya liberados
     }
+}
+
+void EditorUI::handleGizmoModeShortcut()
+{
+    ImGuiIO& io = ImGui::GetIO();
+    // Renombrar un GameObject en el Hierarchy, o escribir en el Script Editor,
+    // no puede cambiar el modo del gizmo: la W es una letra antes que un atajo.
+    if (io.WantTextInput || ImGui::IsAnyItemActive())
+        return;
+    // Ctrl+W / Ctrl+R son otra cosa (o nada) en cualquier editor: no se comen
+    // aquí. Y con el botón derecho pulsado, W/E son la cámara de vuelo — es
+    // justo el reparto que hace posible reusar las teclas de Unity.
+    if (io.KeyCtrl || io.KeyAlt || ImGui::IsMouseDown(ImGuiMouseButton_Right))
+        return;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_W))
+        m_viewportPanel.setGizmoMode(GizmoMode::Translate);
+    else if (ImGui::IsKeyPressed(ImGuiKey_E))
+        m_viewportPanel.setGizmoMode(GizmoMode::Rotate);
+    else if (ImGui::IsKeyPressed(ImGuiKey_R))
+        m_viewportPanel.setGizmoMode(GizmoMode::Scale);
 }
 
 void EditorUI::handleUndoRedoShortcut()
@@ -1362,6 +1384,36 @@ void EditorUI::drawToolbar()
         }
     }
     ImGui::EndDisabled();
+
+    // Modo del gizmo del viewport. Tres botones excluyentes, el activo con el
+    // color de ImGuiCol_ButtonActive — el mismo idiom que ya usan Stop y
+    // Wireframe aquí al lado, para que "pulsado" se lea igual en toda la barra.
+    //
+    // El estado vive en ViewportPanel (quien lo lee es su manipulador); aquí
+    // solo se pinta y se escribe. Los atajos W/E/R hacen lo mismo desde
+    // handleGizmoModeShortcut.
+    ImGui::SameLine();
+    ImGui::TextUnformatted("|");
+    const struct { GizmoMode mode; const char* label; const char* tip; } kGizmoBtns[] = {
+        { GizmoMode::Translate, "Move",   "Mover (W)"   },
+        { GizmoMode::Rotate,    "Rotate", "Rotar (E)"   },
+        { GizmoMode::Scale,     "Scale",  "Escalar (R)" },
+    };
+    for (const auto& b : kGizmoBtns)
+    {
+        ImGui::SameLine();
+        const bool activo = m_viewportPanel.gizmoMode() == b.mode;
+        if (activo)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        if (ImGui::Button(b.label))
+            m_viewportPanel.setGizmoMode(b.mode);
+        if (activo)
+            ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", b.tip);
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted("|");
 
     ImGui::SameLine();
     bool wireframe = m_renderer && m_renderer->isWireframeMode();

@@ -9,7 +9,12 @@ namespace DonTopo
     {
         public:
             Camera(glm::vec3 position = {0,0,3}, float yaw = -90.0f, float pitch = 0.0f);
-            void update(GLFWwindow* window, float deltaTime);
+            // keyboardEnabled=false deja el TECLADO fuera (W/A/S/D/Q/E) pero no
+            // el mando: el editor libera esas letras para los atajos del gizmo
+            // mientras no se mantenga el botón derecho, y el mando no compite
+            // con ningún atajo, así que sigue moviendo la cámara siempre.
+            // Default true: el runtime y los tests no cambian.
+            void update(GLFWwindow* window, float deltaTime, bool keyboardEnabled = true);
             void processMouse(float xOffset, float yOffset);
             // Reorienta la cámara pa mirar hacia el eje dado (usado por el
             // axis gizmo del viewport); solo rota, no cambia posición.

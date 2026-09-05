@@ -27,7 +27,7 @@ A game engine written in C++20, with two interchangeable render backends: **Vulk
 - Dockable ImGui editor with offscreen viewport
 - Scene graph (hierarchical transforms), GameObject hierarchy panel (create/delete/rename, drag-drop reorder)
 - Basic shapes menu (Cube/Sphere/Plane/Capsule), Content Browser (asset browsing, rename/delete)
-- ImGuizmo transform gizmo (translate/rotate/scale, camera-oriented axis gizmo), debug-draw gizmos, collider gizmos
+- **Transform gizmo in the viewport** (ImGuizmo): move, rotate and scale the selected object by dragging it, live; the mode is picked with three toolbar buttons or with `W` / `E` / `R`, and releasing leaves a single `Ctrl+Z`-able command. Plus the camera-oriented axis gizmo, debug-draw gizmos and collider gizmos
 - **Mesh visibility toggle**: a `Visible` checkbox on the Mesh component; unchecked, the mesh is submitted to no pass at all — no scene draw, no shadow, no AO, and no skinning dispatch — while physics, colliders, picking and scripting are untouched (see below)
 - **Selection outline**: the selected GameObject is traced with an orange contour in the viewport (see below)
 - **Click-to-select in the viewport**: left-clicking a mesh in the viewport selects it, clicking empty space clears the selection (CPU ray picking, see below)
@@ -567,6 +567,70 @@ The click only picks when it is really a click on the scene: the image is hovere
 widget is active, no ImGuizmo handle is hovered or being dragged, the camera axis gizmo did not
 take the click, and no load modal is up. Dragging the transform gizmo therefore never changes the
 selection.
+
+## Viewport Transform Gizmo
+
+Selecting a GameObject puts an ImGuizmo handle on it: drag it and the object moves, rotates or
+scales live in the viewport, with the Properties panel and the collider keeping up. One mode at a
+time — three handle sets at once would be unclickable — picked from the three toolbar buttons
+(the active one takes the `ImGuiCol_ButtonActive` colour, the same idiom as `Wireframe` beside
+it) or with **`W` / `E` / `R`**.
+
+Those are Unity's keys, and they were not free: the editor fly camera uses `W`/`A`/`S`/`D` plus
+`Q`/`E`. They were freed the way Unity frees them — `Camera::update` now takes a
+`keyboardEnabled` flag, and both backends pass "is the right mouse button down". **Hold right
+mouse to fly, release it and `W`/`E`/`R` switch gizmo mode.** The gamepad is deliberately outside
+that split: it competes with no shortcut, so it still flies the camera at all times.
+
+The handle **space** is not the same in all three, which is a decision and not an oversight.
+Translate works in `WORLD`, so dragging "X" moves along world X however the object is oriented.
+Rotate works in `LOCAL`, so the rings sit on the object's own axes — in `WORLD` they are drawn
+world-aligned and, the moment the object is tilted, they match nothing on screen. Scale is
+`LOCAL` because ImGuizmo forces it: `ComputeContext(..., (operation & SCALE) ? LOCAL : mode)`
+discards whatever mode you pass. It gets `LOCAL` explicitly so the call does not lie. Scale
+cannot be dragged through zero either — ImGuizmo clamps each axis at `0.001`, the same floor as
+the Properties `DragFloat`, so no singular matrix ever reaches PhysX.
+
+Three things make it agree with what is on screen.
+
+**The projection is the frame's, minus the Vulkan Y-flip.** The renderer negates `proj[1][1]`
+because Vulkan's NDC has Y pointing down (and D3D12 reaches the same image from the other side,
+with a *negative-height* viewport). ImGuizmo does neither: it projects on the CPU and maps to
+pixels with `y = 1 - y`, the OpenGL convention, Y up. Handing it the flipped matrix mirrors the
+gizmo vertically — glued to the object only at the exact centre of the screen, and dragging Y
+backwards. The canvas gizmos next door *do* use the flipped matrix, because their own pixel
+mapping has no `1 - y` and the two negations cancel; here there is only one.
+
+**What gets edited is `localTransform`, not the world matrix.** ImGuizmo manipulates a world
+matrix; the scene serializes, the inspector edits and undo stores the *local* one. The
+conversion is `inverse(parentWorld) * newWorld` — the inverse on the **left**, since
+`world = parentWorld * local`. Writing the world matrix straight into the local one works for
+root objects and teleports every child of a moved parent, which is why the tests use a parent
+that is both translated *and* rotated: with an identity parent all four wrong variants agree
+with the right one.
+
+**One drag is one undo command, whatever the mode.** All three modes edit the same `glm::mat4`,
+so rotate and scale needed no new command type — but they do report a different channel, and the
+Log Console line is written to be indistinguishable from the one Properties emits for the same
+edit (`Rotation de 'Cubo' cambiado a (0.00, 35.00, 0.00)`, in degrees, not radians). The mode is
+latched when the drag *starts*: the shortcuts stay live while dragging, so pressing `E` halfway
+through a move would otherwise mislabel the log. The `before` snapshot is taken on the frame ImGuizmo starts
+being used and the `PropertyCommand<glm::mat4>` is pushed on the frame it stops — not once per
+frame, and not at all if the object ended where it started. The object is resolved by **id**
+through `Scene::findById`, never by a captured `GameObject*`: a delete and a scene load both fit
+between grabbing the handle and pressing `Ctrl+Z`, and a rebuilt GameObject keeps its id but not
+its address. Moving the transform does not move the PhysX actor, so the collider is
+`teleport()`-ed in the same step — otherwise the object renders in its new place and collides in
+the old one, silently.
+
+Two things this also fixed. `ImGuizmo::BeginFrame()` had never been called anywhere in the
+repo, so the `IsOver() || IsUsing()` guard that keeps a click on the gizmo from changing the
+selection was returning `false` unconditionally — a gate that closed nothing. And the Properties
+panel only re-read its edit cache when the *selection* changed, so anything that moved an object
+without changing the selection (this gizmo, a Lua script, an undo) left the Position fields
+frozen — and the next touch of any `DragFloat` recomposed the matrix from that stale cache and
+wiped the move. It now also re-reads when `localTransform` differs from what it last decomposed
+and no drag is in progress.
 
 ## Camera
 

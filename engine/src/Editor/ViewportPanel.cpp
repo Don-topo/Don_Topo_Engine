@@ -12,9 +12,16 @@
 #include "DonTopo/UI/ButtonComponent.h"
 #include "DonTopo/UI/TextComponent.h"
 #include "DonTopo/UI/CanvasComponent.h"   // uiWorldCanvasMatrix, UiCanvasRenderMode
+#include "DonTopo/Editor/Command.h"
+#include "DonTopo/Editor/UndoManager.h"
+#include "DonTopo/Core/TransformDecompose.h"
+#include <cstdio>
+#include <memory>
+#include <string>
 #include <imgui.h>
 #include <ImGuizmo.h>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -226,6 +233,207 @@ void ViewportPanel::focusSelected(EditorContext& ctx, Camera& camera)
     }
 
     camera.focusOn(center, radius);
+}
+
+glm::mat4 localFromWorld(const glm::mat4& parentWorld, const glm::mat4& newWorld)
+{
+    // El orden importa y no es simétrico: worldTransform = parentWorld * local,
+    // así que despejar el local pide la inversa POR LA IZQUIERDA. Con la
+    // multiplicación al revés (newWorld * inverse(parentWorld)) un padre
+    // rotado manda el hijo a otra parte, y con un padre en la identidad —el
+    // caso de prueba fácil— las dos formas dan lo mismo y el error no sale.
+    return glm::inverse(parentWorld) * newWorld;
+}
+
+void applyLocalTransform(Scene& scene, uint64_t id, const glm::mat4& t)
+{
+    GameObject* obj = scene.findById(id);
+    if (!obj)
+        return;
+    obj->localTransform = t;
+    obj->updateWorldTransforms(obj->parent ? obj->parent->worldTransform : glm::mat4(1.0f));
+    // Mover el transform NO mueve el actor de PhysX: sin el teleport el objeto
+    // se ve donde toca y colisiona donde estaba, y falla en silencio.
+    if (auto col = obj->anyCollider())
+        col->teleport(obj->worldTransform);
+}
+
+const char* gizmoChannelLabel(GizmoMode mode)
+{
+    switch (mode)
+    {
+        case GizmoMode::Rotate: return "Rotation";
+        case GizmoMode::Scale:  return "Scale";
+        default:                return "Position";
+    }
+}
+
+glm::vec3 gizmoLoggedValue(GizmoMode mode, const glm::mat4& localTransform)
+{
+    if (mode == GizmoMode::Translate)
+        return glm::vec3(localTransform[3]);   // la cuarta columna, sin descomponer
+
+    // decomposeTransform (el wrapper del repo), NO glm::decompose a pelo. El de
+    // glm devuelve false ante una matriz singular —una escala a 0, que es donde
+    // ImGuizmo deja llegar el modo Scale— y NO escribe ninguna de sus salidas,
+    // así que al log irían los bytes de relleno del stack (0xCDCDCDCD =
+    // -1.07e8 en Debug; en Release, lo que hubiera). El wrapper escribe siempre
+    // las tres: posición de la cuarta columna, escala de las longitudes de
+    // columna, y rotación IDENTIDAD cuando no hay ninguna que sacar.
+    glm::vec3 pos, escala;
+    glm::quat rot;
+    decomposeTransform(localTransform, &pos, &rot, &escala);
+
+    // Grados, no radianes: el inspector enseña grados y las dos líneas del log
+    // —la del gizmo y la de Properties— tienen que poder compararse.
+    return mode == GizmoMode::Rotate ? glm::degrees(glm::eulerAngles(rot)) : escala;
+}
+
+void gizmoImGuizmoEnums(GizmoMode mode, int& outOperation, int& outSpace)
+{
+    switch (mode)
+    {
+        case GizmoMode::Rotate:
+            outOperation = ImGuizmo::ROTATE;
+            outSpace     = ImGuizmo::LOCAL;
+            break;
+        case GizmoMode::Scale:
+            outOperation = ImGuizmo::SCALE;
+            outSpace     = ImGuizmo::LOCAL;
+            break;
+        case GizmoMode::Translate:
+        default:
+            outOperation = ImGuizmo::TRANSLATE;
+            outSpace     = ImGuizmo::WORLD;
+            break;
+    }
+}
+
+void ViewportPanel::drawTransformGizmo(EditorContext& ctx, const glm::mat4& cameraView,
+                                        const glm::vec2& imagePos, const glm::vec2& imageSize)
+{
+    // Mismas puertas que el resto de la edición: sin selección no hay nada que
+    // mover, y con el modal de carga en vuelo la escena no se toca.
+    if (!ctx.selected || ctx.editingLocked || !ctx.renderer)
+        return;
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f)
+        return;
+
+    // La cámara del frame, la misma receta que pickObject y worldCanvasMvp: en
+    // edición 45° fijos, en Play manda el CameraComponent de la escena.
+    //
+    // PERO SIN el `proj[1][1] *= -1` de Vulkan. No es una excepción arbitraria:
+    // el Renderer flipea la proyección porque la NDC de Vulkan tiene la Y hacia
+    // abajo (y D3D12 llega a la misma imagen por otro camino, con un viewport
+    // de altura NEGATIVA). ImGuizmo no dibuja con ninguna de las dos: proyecta
+    // en CPU y mapea a píxel con `y = 1 - y`, o sea la convención de OpenGL,
+    // con la Y hacia arriba. Pasarle la matriz flipeada le da el gizmo
+    // espejado en vertical: separado del objeto salvo en el centro exacto de
+    // la pantalla, y arrastrando en Y al revés.
+    //
+    // Los gizmos de canvas de al lado sí usan la flipeada porque su mapeo a
+    // píxel NO lleva el `1 - y`: allí las dos negaciones se cancelan. Aquí solo
+    // hay una.
+    const float aspect = ctx.renderer->viewportAspect();
+    glm::mat4 view = cameraView;
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 1000.0f);
+    bool ortho = false;
+    if (ctx.isPlaying && ctx.scene)
+    {
+        if (GameObject* cam = ctx.scene->findCamera())
+        {
+            const CameraComponent& cc = *cam->getCameraComponent();
+            view = CameraComponent::viewFromWorld(cam->worldTransform);
+            proj = cc.projectionMatrix(aspect);
+            proj[1][1] *= -1.0f;   // deshace el flip que acaba de meter projectionMatrix
+            ortho = cc.getMode() == CameraComponent::ProjectionMode::Orthographic;
+        }
+    }
+
+    // El manipulador dibuja en el draw list de ESTA ventana (y no en el suyo,
+    // que BeginFrame deja apuntando a una ventana a pantalla completa): sin
+    // esto el gizmo se pintaría por encima de los paneles acoplados encima del
+    // viewport.
+    ImGuizmo::SetOrthographic(ortho);
+    ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
+    ImGuizmo::SetRect(imagePos.x, imagePos.y, imageSize.x, imageSize.y);
+
+    // Qué operación y en qué espacio, decidido en gizmoImGuizmoEnums (ahí está
+    // el porqué de que el espacio no sea el mismo en los tres modos).
+    int op = 0, espacio = 0;
+    gizmoImGuizmoEnums(m_gizmoMode, op, espacio);
+
+    // ImGuizmo manipula MUNDO. El local se recompone después.
+    glm::mat4 world = ctx.selected->worldTransform;
+    const bool moved = ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj),
+                                            (ImGuizmo::OPERATION)op, (ImGuizmo::MODE)espacio,
+                                            glm::value_ptr(world));
+    const bool usando = ImGuizmo::IsUsing();
+
+    // Flanco de ENTRADA: se guarda el estado previo del arrastre entero. Si se
+    // capturara en cada frame en que hay movimiento, el `before` sería el del
+    // frame anterior y deshacer retrocedería un pixel.
+    if (usando && !m_gizmoUsing)
+    {
+        m_gizmoBefore = ctx.selected->localTransform;
+        m_gizmoId     = ctx.selected->id;
+        m_gizmoName   = ctx.selected->name;
+        // El modo también, y no se lee al soltar: los atajos W/E/R siguen vivos
+        // durante el arrastre, así que pulsar E a media rotación dejaría el log
+        // hablando del canal equivocado.
+        m_gizmoModeAtGrab = m_gizmoMode;
+    }
+
+    if (moved)
+    {
+        const glm::mat4 parentWorld = ctx.selected->parent ? ctx.selected->parent->worldTransform
+                                                           : glm::mat4(1.0f);
+        ctx.selected->localTransform = localFromWorld(parentWorld, world);
+        // El world se recalcula aquí y no se espera al traverse del bucle
+        // principal: ese ya pasó este frame, y el manipulador del frame
+        // siguiente vuelve a leer worldTransform. Sin esto el gizmo se
+        // arrastraría a sí mismo un frame por detrás del ratón.
+        ctx.selected->updateWorldTransforms(parentWorld);
+        // Y el collider por separado: mover el transform NO mueve el actor de
+        // PhysX, y la colisión falla en silencio. teleport (setGlobalPose) y no
+        // syncTransform (setKinematicTarget, sólo válido en kinematic), igual
+        // que en PropertiesPanel.
+        if (auto col = ctx.selected->anyCollider())
+            col->teleport(ctx.selected->worldTransform);
+    }
+
+    // Flanco de SALIDA: un arrastre, un comando. El objeto se resuelve por id
+    // —pudo desaparecer entre el clic y el soltar— y no por el ctx.selected de
+    // ahora, que pudo cambiar.
+    if (!usando && m_gizmoUsing)
+    {
+        const bool tieneUndo = ctx.scene && ctx.undo;
+        GameObject* go = tieneUndo ? ctx.scene->findById(m_gizmoId) : nullptr;
+        // Un arrastre que acaba donde empezó (un clic sin mover) no es una
+        // edición: apilarlo dejaría un Ctrl+Z que no hace nada visible.
+        if (go && go->localTransform != m_gizmoBefore)
+        {
+            Scene* scene       = ctx.scene;
+            const uint64_t id  = m_gizmoId;
+            const glm::mat4 before = m_gizmoBefore;
+            const glm::mat4 after  = go->localTransform;
+            ctx.undo->push(std::make_unique<PropertyCommand<glm::mat4>>(
+                "Transform de '" + m_gizmoName + "'", before, after,
+                [scene, id](const glm::mat4& t) { applyLocalTransform(*scene, id, t); }));
+
+            // Misma forma exacta que la línea que emite PropertiesPanel al
+            // editar el mismo valor a mano, canal incluido: "Rotation de 'X'
+            // cambiado a (0.00, 90.00, 0.00)".
+            char buf[64];
+            const glm::vec3 v = gizmoLoggedValue(m_gizmoModeAtGrab, after);
+            std::snprintf(buf, sizeof(buf), "(%.2f, %.2f, %.2f)", v.x, v.y, v.z);
+            if (ctx.pushLog)
+                ctx.pushLog(std::string(gizmoChannelLabel(m_gizmoModeAtGrab)) + " de '" +
+                            m_gizmoName + "' cambiado a " + std::string(buf));
+        }
+    }
+
+    m_gizmoUsing = usando;
 }
 
 void ViewportPanel::drawSelectionGizmo(EditorContext& ctx)
@@ -1100,6 +1308,18 @@ GameObject* ViewportPanel::pickObject(EditorContext& ctx, const glm::mat4& camer
 
 void ViewportPanel::draw(EditorContext& ctx, uint64_t viewportTexture, const glm::mat4& cameraView)
 {
+    // Arranque de frame de ImGuizmo. Va lo PRIMERO y sin condiciones —incluso
+    // con el panel cerrado— porque es lo que rota el flag de hover del frame
+    // anterior; saltárselo un frame dejaría IsOver() devolviendo el valor del
+    // último frame en que sí se llamó.
+    //
+    // Hasta que existió este manipulador no había ninguna llamada a BeginFrame
+    // en todo el repo, y el `ImGuizmo::IsOver() || ImGuizmo::IsUsing()` que
+    // guarda el picking de más abajo era SIEMPRE false: IsOver() se apoya en un
+    // flag que sólo escriben BeginFrame y Manipulate, e IsUsing() en un estado
+    // que sólo enciende Manipulate. Era una puerta que no cerraba nada.
+    ImGuizmo::BeginFrame();
+
     // Contorno del objeto seleccionado. Se fija SIEMPRE y sin condiciones, aquí
     // arriba: si se hiciera solo cuando hay selección, el Renderer se quedaría
     // con el índice del objeto anterior al deseleccionar y lo seguiría
@@ -1165,6 +1385,13 @@ void ViewportPanel::draw(EditorContext& ctx, uint64_t viewportTexture, const glm
     drawScrollbarGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawPanelGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
     drawImageGizmo(ctx, glm::vec2(vpPos.x, vpPos.y), glm::vec2(vpSize.x, vpSize.y));
+    // El manipulador, el último de los que pintan sobre la imagen para que sus
+    // flechas queden por encima de todo lo demás. Es también el único que edita.
+    //
+    // No mete items de ImGui (sólo dibuja y pide la captura del ratón), así que
+    // el IsItemHovered de la línea siguiente sigue refiriéndose a la Image.
+    drawTransformGizmo(ctx, cameraView, glm::vec2(vpPos.x, vpPos.y),
+                        glm::vec2(vpSize.x, vpSize.y));
     // Hover de la IMAGEN, no de la ventana: con esto un popup o cualquier otra
     // ventana por encima ya no cuenta como clic en la escena.
     const bool imageHovered = ImGui::IsItemHovered();

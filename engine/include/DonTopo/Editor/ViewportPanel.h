@@ -1,12 +1,81 @@
 #pragma once
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
+#include <cstdint>
+#include <string>
 
 namespace DonTopo {
 
 class GameObject;
 class Camera;
+class Scene;
 struct EditorContext;
+
+// Qué manipula el gizmo del viewport sobre el objeto seleccionado. Uno de los
+// tres a la vez, como en Unity: los tres juegos de handles a la vez serían
+// imposibles de clicar.
+//
+// Enum propio y no `ImGuizmo::OPERATION` para no meter ImGuizmo.h —y con él
+// imgui.h— en un header que incluyen la toolbar y los tests. La traducción a
+// los enums de la librería vive en el .cpp, en un solo sitio.
+enum class GizmoMode { Translate, Rotate, Scale };
+
+// Etiqueta del canal que edita cada modo, tal y como la escriben el Log Console
+// y el panel Properties: "Position", "Rotation", "Scale". Es lo que hace que la
+// línea del log del gizmo sea indistinguible de la que emite Properties al
+// editar el mismo valor a mano.
+const char* gizmoChannelLabel(GizmoMode mode);
+
+// Los tres números que enseña el log tras un arrastre, sacados de la matriz
+// LOCAL resultante: la posición en unidades de mundo, la rotación en GRADOS
+// (no radianes: el inspector enseña grados) o la escala como factor.
+//
+// Va junto a gizmoChannelLabel y no dentro de él porque es lo que de verdad se
+// puede equivocar — un copia-pega que deje el modo Rotate informando de la
+// posición compila igual de bien y solo se nota leyendo el log.
+glm::vec3 gizmoLoggedValue(GizmoMode mode, const glm::mat4& localTransform);
+
+// Qué se le pide a ImGuizmo para cada modo: `outOperation` es un
+// `ImGuizmo::OPERATION` y `outSpace` un `ImGuizmo::MODE`, los dos como int para
+// no arrastrar ImGuizmo.h —y con él imgui.h— hasta este header. Quien los use
+// los vuelve a castear; quien los pruebe los compara contra los enums de
+// verdad.
+//
+// El espacio NO es el mismo en los tres, y es una decisión, no un descuido:
+//   - Translate → WORLD: arrastrar "X" mueve en la X del mundo.
+//   - Rotate    → LOCAL: los anillos salen pegados a los ejes del objeto; en
+//     WORLD se dibujan alineados al mundo y, con el objeto inclinado, no se
+//     corresponden con nada de lo que se ve.
+//   - Scale     → LOCAL obligatorio. ImGuizmo hace
+//     `ComputeContext(..., (operation & SCALE) ? LOCAL : mode)` y descarta lo
+//     que se le pase; se le pasa LOCAL para que la llamada no mienta.
+//
+// Está aquí fuera porque es lo ÚNICO del despacho por modo que se puede probar
+// sin GUI: mandar Rotate a TRANSLATE compila, corre y solo se ve en pantalla.
+void gizmoImGuizmoEnums(GizmoMode mode, int& outOperation, int& outSpace);
+
+// Matriz LOCAL que deja al objeto exactamente en newWorld, dado el
+// worldTransform de su padre (identidad si no tiene padre).
+//
+// ImGuizmo manipula una matriz de MUNDO, pero lo que la escena serializa, lo
+// que edita el panel Properties y lo que apila el undo es `localTransform`.
+// Escribir el mundo en el local funcionaría SOLO en las raíces: un hijo daría
+// el salto de aplicarle el transform del padre por segunda vez.
+//
+// Vive fuera de la clase —y en el header— porque es el único trozo de la
+// manipulación que se puede probar sin GUI: la interacción de ratón no se
+// puede simular headless, la aritmética de matrices sí.
+glm::mat4 localFromWorld(const glm::mat4& parentWorld, const glm::mat4& newWorld);
+
+// Escribe t como localTransform del objeto con ese id, propaga el mundo a sus
+// hijos y teletransporta su collider si tiene. No-op si el id ya no existe.
+//
+// Es el cuerpo del comando de undo del manipulador, aquí fuera por lo mismo que
+// localFromWorld: es la parte que se puede afirmar sin GUI. El objeto se busca
+// por ID y no por puntero a propósito — entre apilar el comando y deshacerlo
+// caben un borrado y una carga de escena, y el GameObject reconstruido conserva
+// el id pero no la dirección.
+void applyLocalTransform(Scene& scene, uint64_t id, const glm::mat4& t);
 
 // Ventana "Viewport" — render 3D embebido (textura del Renderer) + gizmo de
 // ejes/wireframe de collider sobre la selección activa.
@@ -37,8 +106,24 @@ public:
     glm::vec2 imagePos()     const { return m_imagePos; }
     bool      imageHovered() const { return m_imageHovered; }
 
+    // Modo del gizmo. Lo escriben los tres botones de la toolbar y los atajos
+    // W/E/R, los dos en EditorUI; el estado vive aquí porque es de este panel
+    // —quien lo lee es el manipulador— y así no hace falta un campo más en
+    // EditorContext ni que el panel y la toolbar se pasen el dato cada frame.
+    GizmoMode gizmoMode() const     { return m_gizmoMode; }
+    void setGizmoMode(GizmoMode m)  { m_gizmoMode = m; }
+
 private:
     void drawSelectionGizmo(EditorContext& ctx);
+    // Manipulador de transformación (ImGuizmo) sobre el objeto seleccionado, en
+    // el modo que diga m_gizmoMode. Es lo único de este panel que EDITA la
+    // escena: drawSelectionGizmo y los otros trece solo pintan.
+    //
+    // imagePos/imageSize son el rect de la IMAGEN, no el de la ventana: el
+    // manipulador tiene que caer sobre el mismo pixel que el objeto, y la
+    // ventana lleva encima la barra de título y los bordes del dock.
+    void drawTransformGizmo(EditorContext& ctx, const glm::mat4& cameraView,
+                             const glm::vec2& imagePos, const glm::vec2& imageSize);
     // Wireframe del frustum de la cámara de la escena, siempre visible en
     // edición (no solo al seleccionarla). Solo el frustum: los ejes del
     // transform ya los dibuja drawSelectionGizmo al seleccionar cualquier
@@ -129,6 +214,25 @@ private:
     // firmas sería lo mismo con más ruido; lo que NO vale es un estático de
     // fichero, que dejaría el dato fuera del alcance del panel.
     glm::mat4 m_cameraView{1.0f};
+
+    // Estado del arrastre del manipulador de traslación. Existe para que un
+    // arrastre entero deje UN solo comando en el undo, no uno por frame: el
+    // `before` se captura en el flanco de entrada y el comando se apila en el
+    // de salida, igual que PropertiesPanel hace con IsItemActivated /
+    // IsItemDeactivatedAfterEdit en sus DragFloat.
+    GizmoMode m_gizmoMode  = GizmoMode::Translate;
+    // El modo con el que EMPEZÓ el arrastre en curso, para la línea del log.
+    // Los atajos siguen respondiendo mientras se arrastra.
+    GizmoMode m_gizmoModeAtGrab = GizmoMode::Translate;
+    bool      m_gizmoUsing = false;
+    glm::mat4 m_gizmoBefore{1.0f};
+    // Y el objeto se recuerda por ID, no por puntero: entre el flanco de
+    // entrada y el de salida caben una carga de escena y un borrado, y un
+    // GameObject* guardado se quedaría colgando. Mismo criterio que la lambda
+    // del PropertyCommand, que también resuelve por findById.
+    uint64_t    m_gizmoId = 0;
+    std::string m_gizmoName;
+
     bool m_hovered = false;
     bool m_imageHovered = false;
     glm::vec2 m_imagePos{0.0f};

@@ -165,6 +165,14 @@ private:
     // texto tiene el foco (WantTextInput, evita chocar con el undo nativo de
     // un ImGuiInputTextMultiline como el del Script Editor).
     void handleUndoRedoShortcut();
+    // W/E/R — modo del gizmo del viewport (mover / rotar / escalar), las mismas
+    // teclas que Unity. Se pueden reusar porque la cámara de vuelo ya solo
+    // atiende al teclado con el BOTÓN DERECHO pulsado (ver Camera::update): sin
+    // ese reparto, W adelantaría la cámara y E la subiría.
+    //
+    // No comparte gating con handleUndoRedoShortcut: aquel exige Ctrl y se
+    // apaga en Play, y este es lo contrario en las dos cosas.
+    void handleGizmoModeShortcut();
     // Ctrl+D — duplica m_selected como HERMANO suyo (mismo padre, no hijo).
     // Mismo gating que el undo/redo: lo llama handleUndoRedoShortcut.
     void duplicateSelection();

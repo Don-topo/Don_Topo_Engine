@@ -12,18 +12,22 @@ namespace DonTopo
         updateVectors();
     }
 
-    void Camera::update(GLFWwindow* window, float deltaTime)
+    void Camera::update(GLFWwindow* window, float deltaTime, bool keyboardEnabled)
     {
         float velocity = moveSpeed * deltaTime;
         glm::vec3 right = glm::normalize(glm::cross(m_front, m_up));
 
-        // Keyboard
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) m_pos += m_front * velocity;
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) m_pos -= m_front * velocity;
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) m_pos -= right * velocity;
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) m_pos += right * velocity;
-        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) m_pos += m_up * velocity;
-        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) m_pos -= m_up * velocity;
+        // Keyboard. Se puede apagar sin apagar el mando: el editor necesita
+        // W/E/R libres para los atajos del gizmo mientras no se esté volando.
+        if (keyboardEnabled)
+        {
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) m_pos += m_front * velocity;
+            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) m_pos -= m_front * velocity;
+            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) m_pos -= right * velocity;
+            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) m_pos += right * velocity;
+            if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) m_pos += m_up * velocity;
+            if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) m_pos -= m_up * velocity;
+        }
 
         // Gamepad
         GLFWgamepadstate gp{};
