@@ -86,14 +86,66 @@ void LogPanel::push(const std::string& message, const std::string& module)
     char timeStr[16];
     std::strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &tmBuf);
 
-    Entry e;
-    e.prefix  = std::string("[") + timeStr + "] ";
-    e.message = message;
-    e.module  = module.empty() ? kDefaultModule : module;
-    e.id      = m_nextId++;
-    m_entries.push_back(std::move(e));
-    if (m_entries.size() > kLogMaxEntries)
-        m_entries.pop_front();
+    const std::string prefix = std::string("[") + timeStr + "] ";
+    const std::string mod    = module.empty() ? kDefaultModule : module;
+
+    // Una entrada por LÍNEA, no por mensaje. El panel pinta las filas con
+    // ImGuiListClipper, que da por hecho que todas miden lo mismo: le basta
+    // medir la primera visible para colocar las 200. Un mensaje con '\n'
+    // dentro —los errores de Lua traen "stack traceback:" en varias líneas—
+    // ocupa 3 renglones donde el clipper cuenta 1, así que el contenido real
+    // acaba más abajo de donde el clipper cree que acaba. Lo que se veía:
+    // SetScrollHereY(1.0f) apuntaba al fondo SEGÚN EL CLIPPER, 52 px por
+    // encima del fondo de verdad (medido con dos errores de Lua en el log),
+    // y el panel se subía solo cada vez que el usuario llegaba abajo con la
+    // rueda o soltaba la barra de scroll.
+    //
+    // El troceado va aquí y no en el caller porque los callers son decenas
+    // (EditorContext::pushLog, ScriptManager, los paneles) y ninguno sabe si
+    // el texto que reenvía trae saltos dentro.
+    //
+    // Una línea vacía intermedia no genera fila: separa visualmente en un
+    // terminal, en el panel solo sería un renglón en blanco. Un mensaje vacío
+    // sí deja su fila, que es lo que hacía antes.
+    size_t start   = 0;
+    bool   anyLine = false;
+    while (start <= message.size()) {
+        size_t nl  = message.find('\n', start);
+        size_t end = (nl == std::string::npos) ? message.size() : nl;
+        // Un "\r\n" deja el retorno de carro pegado al final de la línea: sin
+        // quitarlo se cuela en el portapapeles al copiar.
+        size_t stop = end;
+        if (stop > start && message[stop - 1] == '\r')
+            --stop;
+
+        if (stop > start) {
+            Entry e;
+            e.prefix  = prefix;
+            e.message = message.substr(start, stop - start);
+            e.module  = mod;
+            e.id      = m_nextId++;
+            m_entries.push_back(std::move(e));
+            // El tope se aplica por FILA: un solo mensaje de 500 líneas no
+            // puede saltárselo.
+            if (m_entries.size() > kLogMaxEntries)
+                m_entries.pop_front();
+            anyLine = true;
+        }
+
+        if (nl == std::string::npos)
+            break;
+        start = nl + 1;
+    }
+
+    if (!anyLine) {
+        Entry e;
+        e.prefix = prefix;
+        e.module = mod;
+        e.id     = m_nextId++;
+        m_entries.push_back(std::move(e));
+        if (m_entries.size() > kLogMaxEntries)
+            m_entries.pop_front();
+    }
 }
 
 void LogPanel::handleRowClick(size_t index)

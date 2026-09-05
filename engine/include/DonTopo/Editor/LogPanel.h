@@ -19,6 +19,13 @@ public:
     void draw();
     bool* GetOpenPtr() { return &m_open; }
 
+    // Lectura del buffer. Existe para que el troceado por líneas de push()
+    // se pueda comprobar sin ventana ni contexto de ImGui: el panel no se
+    // puede dibujar en un test, pero el buffer sí se puede mirar.
+    size_t             entryCount() const { return m_entries.size(); }
+    const std::string& entryMessage(size_t index) const { return m_entries[index].message; }
+    const std::string& entryModule(size_t index) const { return m_entries[index].module; }
+
     // Módulo de las entradas que llegan sin uno (todos los callers actuales
     // de pushLog): sin chip, se pintan exactamente igual que antes.
     static constexpr const char* kDefaultModule = "General";
