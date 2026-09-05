@@ -342,12 +342,17 @@ void GpuResources::createNormalMapImage(const std::string& path, const std::vect
     stbi_uc* pixels = nullptr;
     bool fromStb = false;
 
-    if (!embedded.empty()) {
-        pixels = stbi_load_from_memory(embedded.data(), (int)embedded.size(), &w, &h, &channels, STBI_rgb_alpha);
-        fromStb = (pixels != nullptr);
-    } else if (!path.empty()) {
-        pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
-        fromStb = (pixels != nullptr);
+    switch (chooseTextureSource(path, embedded)) {
+        case TextureSource::Path:
+            pixels  = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+            fromStb = (pixels != nullptr);
+            break;
+        case TextureSource::Embedded:
+            pixels  = stbi_load_from_memory(embedded.data(), (int)embedded.size(), &w, &h, &channels, STBI_rgb_alpha);
+            fromStb = (pixels != nullptr);
+            break;
+        case TextureSource::None:
+            break;  // el early-return de arriba ya cubre este caso
     }
 
     // Fallback: flat normal (0,0,1) en tangent space = (128,128,255)
