@@ -10146,6 +10146,18 @@ void D3D12Renderer::replaceStaticTextureWithMissing(int renderIndex, TextureSlot
     }
 }
 
+void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
+{
+    // Cuerpo real en la Task 5. Vacío y NO abstracto a propósito: la interfaz
+    // la declara pura, así que sin esta definición D3D12Renderer no se podría
+    // instanciar y no compilaría ni el editor ni el runtime.
+    //
+    // Mientras tanto, cambiar una textura con este backend no hace nada visible
+    // hasta reiniciar; no hace nada MAL, que es lo que importa de un hueco.
+    (void)index;
+    (void)mesh;
+}
+
 void D3D12Renderer::initSkybox(const std::array<std::string, 6>& facePaths)
 {
     Impl& d = *m_impl;

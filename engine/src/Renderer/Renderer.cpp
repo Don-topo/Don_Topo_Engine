@@ -14,6 +14,7 @@
 #include "DonTopo/Renderer/UniformBufferObject.h"
 #include "DonTopo/Renderer/SelectionOutline.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
+#include "DonTopo/Renderer/MaterialTextureSource.h"
 #include <limits>
 #include <cmath>
 #include <chrono>
@@ -4238,6 +4239,218 @@ namespace DonTopo {
 
             vkUpdateDescriptorSets(m_gpu.device(), 1, &write, 0, nullptr);
         }
+    }
+
+    void Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
+    {
+        if (index < 0 || index >= (int)m_objects.size()) return;
+        RenderObject& obj = m_objects[(size_t)index];
+
+        const int      viejo  = obj.sharedIndex;
+        SharedGpuMesh* gpuPtr = m_sharedMeshes.get(viejo);
+        // sharedIndex a -1 (objeto ya liberado desde el editor): no hay entrada
+        // que rehacer, y crearla aquí resucitaría un objeto que nadie ha pedido.
+        if (!gpuPtr) return;
+
+        const std::string nuevaClave = makeSharedMeshKey(mesh);
+
+        // Camino GENERAL: este objeto se separa a la entrada de `nuevaClave`
+        // —creándola si no existía— y suelta la vieja. Vale para cualquier
+        // cambio, geometría incluida, porque vuelve a subirlo todo.
+        //
+        // El acquire va ANTES del release a propósito: al revés, soltar al
+        // último dueño devolvería su hueco al freelist y el acquire podría
+        // reutilizar ESE mismo hueco para la entrada nueva, justo cuando la
+        // destrucción de la anterior sigue encolada sobre una copia de sus
+        // handles (ver SharedGpuMeshCache::release). En este orden el hueco
+        // viejo no se libera hasta que el nuevo ya está cogido.
+        auto separarAEntradaPropia = [&]() {
+            if (!m_pendingBatch)
+                m_pendingBatch = std::make_unique<TransferBatch>(m_gpu);
+
+            bool      creada = false;
+            const int nuevo  = m_sharedMeshes.acquire(
+                nuevaClave,
+                [&](SharedGpuMesh& g) { createSharedGpuMesh(mesh, g, m_pendingBatch.get(), nullptr); },
+                &creada);
+
+            // La vieja por el MISMO camino que borrar el objeto: si este era su
+            // último dueño, la destrucción de verdad NO ocurre aquí sino
+            // kDelayFrames frames después, porque un command buffer en vuelo
+            // todavía la referencia. releaseRenderObject deja sharedIndex a -1,
+            // así que el orden importa: primero soltar, luego apuntar.
+            releaseRenderObject(obj);
+            obj.sharedIndex = nuevo;
+
+            if (creada)
+            {
+                // Las dos cosas que hace addStaticMesh con una entrada recién
+                // creada, y las dos hacen falta: alojar su descriptor set, y
+                // marcarle el ticket del batch en curso para que no se dibuje
+                // con sus texturas todavía en TRANSFER_DST_OPTIMAL.
+                SharedGpuMesh& nueva = *m_sharedMeshes.get(nuevo);
+                allocateObjectDescriptorSet(nueva);
+                nueva.uploadTicket = m_nextUploadTicket;
+            }
+        };
+
+        // Con más de un dueño no se puede mutar en su sitio: se le cambiaría la
+        // textura a los otros objetos, que no han pedido nada.
+        //
+        // Y con la geometría cambiada tampoco, aunque el dueño sea único: el
+        // camino rápido no vuelve a subir vértices ni índices, así que la
+        // entrada quedaría re-clavada a una clave que describe una geometría que
+        // no tiene, y el siguiente objeto que pidiera esa clave se llevaría la
+        // vieja —corrupción silenciosa y compartida, del mismo tipo que el
+        // dedup existe para evitar—. El recuento de índices es lo único
+        // comparable sin rehashear la malla entera: no PRUEBA que la geometría
+        // sea la misma (por eso el contrato del header dice que cambiarla no
+        // está soportado), pero pilla gratis el caso que se puede pillar.
+        if (m_sharedMeshes.refCount(viejo) > 1 ||
+            gpuPtr->indexCount != (uint32_t)mesh.indices.size())
+        {
+            separarAEntradaPropia();
+            return;
+        }
+
+        // Camino RÁPIDO: dueño único y misma geometría. Se sustituyen las tres
+        // imágenes en su sitio y se reescriben los descriptores; los buffers de
+        // vértices e índices, el descriptor set y el índice de la entrada se
+        // quedan como están, así que el sharedIndex del objeto sigue valiendo y
+        // el uploadTicket que tuviera sigue describiendo su geometría.
+        SharedGpuMesh& gpu = *gpuPtr;
+
+        struct SlotRefs
+        {
+            VkImage*        img;
+            VkDeviceMemory* mem;
+            VkImageView*    view;
+            VkSampler*      sampler;
+            uint32_t        binding;
+        };
+        const SlotRefs slots[3] = {
+            { &gpu.textureImage, &gpu.textureMem, &gpu.textureView, &gpu.sampler,       1 },
+            { &gpu.normalImage,  &gpu.normalMem,  &gpu.normalView,  &gpu.normalSampler, 2 },
+            { &gpu.ormImage,     &gpu.ormMem,     &gpu.ormView,     &gpu.ormSampler,    4 },
+        };
+
+        // Las tres viejas, encoladas ANTES de que las nuevas pisen los campos.
+        // Mismas tres cautelas que replaceStaticTextureWithMissing, y por las
+        // mismas razones:
+        //
+        //  - Por VALOR, no capturando los punteros: el lambda corre
+        //    kDelayFrames frames después y para entonces *s.img ya es la imagen
+        //    NUEVA, o sea que capturar el puntero sería destruir justo la que se
+        //    acaba de crear.
+        //  - Encoladas y no destruidas ya: el descriptor set que las nombra
+        //    puede estar bindeado en un command buffer en vuelo.
+        //  - `prestada` se resuelve AQUÍ y no dentro del lambda. Las de relleno
+        //    son de GpuResources y las comparten todas las mallas sin material:
+        //    destruirlas se llevaría por delante las de todas las demás. Se
+        //    pregunta ahora porque el conjunto de compartidas no cambia después
+        //    de crearse, y porque isSharedPlaceholder decide COMPARANDO
+        //    handles: en el teardown esos handles se anulan y la guarda dejaría
+        //    de reconocerlas (H79).
+        //
+        // El sampler no entra en la cola: es el compartido de todos los
+        // materiales (sharedMaterialSampler) y destruirlo dejaría sin sampler a
+        // la escena entera.
+        for (const SlotRefs& s : slots)
+        {
+            const VkImage        oldImage = *s.img;
+            const VkDeviceMemory oldMem   = *s.mem;
+            const VkImageView    oldView  = *s.view;
+            const bool           prestada = m_res.isSharedPlaceholder(oldImage);
+            m_deferredDeletes.push([oldImage, oldMem, oldView, prestada](VkDevice dev) {
+                // La vista SÍ era de esta malla en los dos casos: la crea
+                // createTextureImageView por entrada, también sobre la prestada.
+                vkDestroyImageView(dev, oldView, nullptr);
+                if (prestada) return;
+                vkDestroyImage(dev, oldImage, nullptr);
+                vkFreeMemory(dev,   oldMem,   nullptr);
+            });
+        }
+
+        // Las tres nuevas por el mismo camino y con los mismos formatos que
+        // createSharedGpuMesh: SRGB en la difusa (el que createTextureImage
+        // hardcodea) y UNORM en normal y ORM. La imagen no se crea con
+        // MUTABLE_FORMAT, así que la vista tiene que declarar EXACTAMENTE el
+        // formato con el que se creó.
+        //
+        // Sin TransferBatch: la variante síncrona espera ella misma a la cola,
+        // así que al volver las imágenes ya son legibles. Es lo que quiere esta
+        // ruta —un clic del usuario, no un frame— y evita tener que tocar el
+        // uploadTicket de una entrada que ya se está dibujando.
+        m_res.createTextureImage(mesh.material.texturePath, mesh.material.embeddedTexture,
+                                 gpu.textureImage, gpu.textureMem);
+        m_res.createTextureImageView(gpu.textureImage, gpu.textureView);
+        gpu.sampler = m_res.sharedMaterialSampler();
+
+        m_res.createNormalMapImage(mesh.material.normalMapPath, mesh.material.embeddedNormalMap,
+                                   gpu.normalImage, gpu.normalMem);
+        m_res.createTextureImageView(gpu.normalImage, gpu.normalView, VK_FORMAT_R8G8B8A8_UNORM);
+        gpu.normalSampler = m_res.sharedMaterialSampler();
+
+        // Mismo reparto que addStaticMesh: con mapa ORM los factores valen 1 y
+        // los pone la textura; sin él, la blanca compartida y los factores del
+        // material. chooseTextureSource es el sitio único que decide de dónde
+        // salen los píxeles (la ruta gana a los bytes embebidos).
+        if (chooseTextureSource(mesh.material.metallicRoughnessPath,
+                                mesh.material.embeddedMetallicRoughness) != TextureSource::None)
+        {
+            m_res.createNormalMapImage(mesh.material.metallicRoughnessPath,
+                                       mesh.material.embeddedMetallicRoughness,
+                                       gpu.ormImage, gpu.ormMem);
+            gpu.metallic  = 1.0f;
+            gpu.roughness = 1.0f;
+        }
+        else
+        {
+            m_res.sharedWhiteOrm(gpu.ormImage, gpu.ormMem);
+            gpu.metallic  = mesh.material.metallic;
+            gpu.roughness = mesh.material.roughness;
+        }
+        m_res.createTextureImageView(gpu.ormImage, gpu.ormView, VK_FORMAT_R8G8B8A8_UNORM);
+        gpu.ormSampler = m_res.sharedMaterialSampler();
+
+        // El wait va AQUÍ y no antes de crear las imágenes: lo que hay que
+        // proteger es la ESCRITURA del set. Escribir uno que un command buffer
+        // en vuelo tiene bindeado es uso inválido de la especificación —haría
+        // falta UPDATE_AFTER_BIND, que estos sets no piden— por mucho que los
+        // recursos aguanten (H25). Es caro y da igual: esto corre cuando el
+        // usuario cambia una textura, no por frame.
+        vkDeviceWaitIdle(m_gpu.device());
+
+        for (int i = 0; i < MAX_FRAMES; i++)
+            for (const SlotRefs& s : slots)
+            {
+                VkDescriptorImageInfo imageInfo{};
+                imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                imageInfo.imageView   = *s.view;
+                imageInfo.sampler     = *s.sampler;
+
+                VkWriteDescriptorSet write{};
+                write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                write.dstSet          = gpu.descriptorSets[i];
+                write.dstBinding      = s.binding;
+                write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                write.descriptorCount = 1;
+                write.pImageInfo      = &imageInfo;
+                vkUpdateDescriptorSets(m_gpu.device(), 1, &write, 0, nullptr);
+            }
+
+        // Lo último: el contenido de la entrada ya no corresponde a su clave, y
+        // sin re-clavear el siguiente objeto que pidiera la vieja recibiría esta
+        // malla con la textura nueva.
+        //
+        // El rekey se rechaza cuando OTRA entrada ya tiene esta clave exacta
+        // —dos con la misma dejarían una inalcanzable en el mapa, o sea una fuga
+        // de recursos GPU que nadie liberaría—. Entonces este objeto se va a esa
+        // otra y suelta la suya, que ya no la quiere nadie. A partir de aquí
+        // `gpu` y `gpuPtr` no se pueden tocar: el acquire puede hacer crecer el
+        // vector de entradas y dejarlos colgando.
+        if (!m_sharedMeshes.rekey(viejo, nuevaClave))
+            separarAEntradaPropia();
     }
 
     // ─── Offscreen images ────────────────────────────────────────────────────────

@@ -214,6 +214,11 @@ public:
 
     void replaceStaticTextureWithMissing(int renderIndex, TextureSlot slot) override;
 
+    // Contrato en EditorRenderer::rebuildStaticMesh. Declarado aquí porque es
+    // pura en la interfaz: sin esto D3D12Renderer sería abstracta y no
+    // compilaría nada. El cuerpo real es la Task 5.
+    void rebuildStaticMesh(int index, const Mesh& mesh) override;
+
     // Las subidas de este backend son síncronas: basta con esperar a la GPU.
     void flushUploadsAndWait() override;
 

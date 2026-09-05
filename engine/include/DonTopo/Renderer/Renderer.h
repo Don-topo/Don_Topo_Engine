@@ -434,6 +434,13 @@ namespace DonTopo {
             // registra en m_objects. Devuelve el índice para GameObject::staticRenderIndex.
             // decoded: mismo contrato que addSkinnedMesh (nullptr = camino síncrono).
             int addStaticMesh(const Mesh& mesh, const std::vector<DecodedImage>* decoded = nullptr);
+            // Rehace el MATERIAL del mesh estático `index` sin moverlo de sitio.
+            // El contrato entero está en EditorRenderer::rebuildStaticMesh, que
+            // es lo que lee el otro backend; aquí solo lo que es de Vulkan: con
+            // un solo dueño se sustituyen las tres imágenes de la entrada
+            // compartida en su sitio y se re-clavea, y con más de uno el objeto
+            // se separa a una entrada propia.
+            void rebuildStaticMesh(int index, const Mesh& mesh);
             // Cierra y envía el batch del pump actual. Llamar UNA vez tras
             // procesar todos los resultados del frame.
             void flushPendingUploads();

@@ -95,6 +95,22 @@ namespace DonTopo
             virtual int  addStaticMesh(const Mesh& mesh,
                                        const std::vector<DecodedImage>* decoded = nullptr) = 0;
             virtual void rebuildSkinnedMesh(int index, const SkinnedMesh& mesh)            = 0;
+            // Rehace los recursos de GPU de un mesh ESTÁTICO ya registrado, sin
+            // moverle el índice de render: transform, visibilidad y SSR se
+            // conservan, y los comandos de undo que guardan ese índice siguen
+            // valiendo. Es lo que usa el cambio de textura desde Properties.
+            //
+            // Los objetos que compartían malla y material con este NO cambian
+            // de aspecto: al cambiar el material cambia la clave de dedup, así
+            // que este objeto se separa del grupo y los demás se quedan con la
+            // entrada de antes, intacta.
+            //
+            // `mesh` es el mismo mesh ya registrado CON EL MATERIAL CAMBIADO, y
+            // eso es lo único que esto rehace: el backend da la geometría por
+            // buena y reaprovecha la que ya subió. Cambiar los vértices por aquí
+            // NO está soportado (ver el aviso de Renderer::rebuildStaticMesh);
+            // para eso está volver a registrar el objeto.
+            virtual void rebuildStaticMesh(int index, const Mesh& mesh)                    = 0;
             virtual void registerGameObject(GameObject* node)                              = 0;
             virtual void removeGameObject(GameObject* node)                                = 0;
             virtual void removeMeshComponent(GameObject* node)                             = 0;
