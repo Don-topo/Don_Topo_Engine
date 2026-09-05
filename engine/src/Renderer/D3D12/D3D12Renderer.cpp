@@ -10186,23 +10186,29 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
     // aparece ninguno: entonces no se toca nada, porque repartir a ciegas la
     // propiedad de un recurso nativo es justo lo que acaba en doble free.
     auto cederPropiedad = [&](int duenyo) -> int {
-        Impl::StaticObject& viejo   = d.objects[static_cast<size_t>(duenyo)];
-        int                 elegido = -1;
+        Impl::StaticObject& viejo = d.objects[static_cast<size_t>(duenyo)];
+
+        // La clave se copia a un local ANTES de tocar nada: asignar un
+        // std::string reserva memoria y puede lanzar, y hacerlo con la
+        // propiedad ya movida dejaría a los dos objetos marcados dueños de las
+        // MISMAS cinco allocations, que es un doble free en el teardown.
+        const std::string claveDelDuenyo = viejo.sharedKey;
+
+        int elegido = -1;
         for (size_t i = 0; i < d.objects.size(); ++i) {
             Impl::StaticObject& otro = d.objects[i];
             if (static_cast<int>(i) == duenyo || otro.ownsGpu || otro.slotFree ||
                 otro.sharedMesh != duenyo)
                 continue;
             if (elegido < 0) {
+                otro.sharedKey  = claveDelDuenyo;  // lo único de aquí que puede lanzar
                 elegido         = static_cast<int>(i);
-                otro.ownsGpu    = true;
                 otro.sharedMesh = elegido;
                 // El recuento NO cambia al ceder: siguen siendo los mismos
                 // objetos apuntando a la misma malla —el que se va incluido,
                 // que hasta que no se separe la sigue dibujando—, lo único que
                 // se mueve es quién la suelta.
                 otro.sharedRefs = viejo.sharedRefs;
-                otro.sharedKey  = viejo.sharedKey;
             } else {
                 otro.sharedMesh = elegido;
             }
@@ -10212,15 +10218,20 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         // El mapa tiene que apuntar al nuevo dueño: si siguiera apuntando aquí,
         // el siguiente objeto con esta clave copiaría los punteros de quien ya
         // no posee nada y que encima está a punto de cambiarlos.
-        if (!viejo.sharedKey.empty()) {
-            auto it = d.sharedMeshOwner.find(viejo.sharedKey);
+        if (!claveDelDuenyo.empty()) {
+            auto it = d.sharedMeshOwner.find(claveDelDuenyo);
             if (it != d.sharedMeshOwner.end() && it->second == duenyo)
                 it->second = elegido;
         }
         viejo.sharedKey.clear();
         viejo.sharedRefs = 0;
-        viejo.ownsGpu    = false;
         viejo.sharedMesh = elegido;
+
+        // El traspaso de propiedad, en dos líneas seguidas y las ÚLTIMAS del
+        // bloque: entre ellas no queda nada que pueda fallar, así que no existe
+        // ni un instante con dos objetos marcados dueños de lo mismo.
+        d.objects[static_cast<size_t>(elegido)].ownsGpu = true;
+        viejo.ownsGpu                                   = false;
         return elegido;
     };
 
@@ -10312,6 +10323,42 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
         d.createTexture2DSrv(d.metalRoughAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
                              slot + 3);
 
+    // La clave nueva y la comparación de prefijos, también aquí arriba: las dos
+    // construyen std::string (`makeSharedMeshKey` uno entero, `prefijoGeometria`
+    // un substr), y un bad_alloc ahí abajo ocurriría DESPUÉS de que el objeto
+    // tenga ya el material nuevo pero ANTES de sacar del mapa la entrada vieja
+    // —que se quedaría diciendo que esta clave describe a este objeto, que es
+    // justo la mentira que el re-clavado existe para borrar—.
+    //
+    // Los dos primeros campos de la clave son, en claro y separados por '|', el
+    // número de vértices y el de índices: makeSharedMeshKey los pone delante
+    // por ser discriminantes exactos, así que comparar ese prefijo dice si una
+    // clave describe la geometría que hay REALMENTE en VRAM sin rehashear la
+    // malla. El helper es el mismo que usa Renderer::rebuildStaticMesh.
+    auto prefijoGeometria = [](const std::string& clave) {
+        const size_t primera = clave.find('|');
+        if (primera == std::string::npos)
+            return clave;
+        // npos = no hay segundo '|' (clave que no salió de makeSharedMeshKey):
+        // se compara la cadena entera, que es el lado conservador.
+        return clave.substr(0, clave.find('|', primera + 1));
+    };
+
+    const std::string nuevaClave = makeSharedMeshKey(mesh);
+
+    // Si se separó, la geometría se acaba de subir DESDE `mesh` y la clave
+    // nueva la describe por construcción. Si el cambio fue in situ hay que
+    // preguntárselo a la vieja: ese camino NO resube geometría, y el contrato
+    // dice que cambiarla por aquí no está soportado pero nada lo impide.
+    const bool claveHonesta =
+        seSepara || (!object.sharedKey.empty() &&
+                     prefijoGeometria(object.sharedKey) == prefijoGeometria(nuevaClave));
+    if (!claveHonesta)
+        diagLog("rebuildStaticMesh: al objeto " + std::to_string(index) +
+                " le llega un mesh con otra geometría (el contrato dice que por aquí no se "
+                "cambia). Se le cambia solo el material y sale del mapa de dedup: sigue "
+                "dibujando la geometría que tiene en VRAM.");
+
     // ── Y ya sin nada que pueda lanzar, el cambio de estado ──────────────
     if (seSepara) {
         // Se queda con la copia propia de la geometría y con su caja, y solo
@@ -10391,39 +10438,10 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
     object.metallic             = mesh.material.metallic;
     object.roughness            = mesh.material.roughness;
 
-    // Los dos primeros campos de la clave son, en claro y separados por '|', el
-    // número de vértices y el de índices: makeSharedMeshKey los pone delante
-    // por ser discriminantes exactos. Comparar ese prefijo dice si una clave
-    // describe la geometría que hay REALMENTE en VRAM sin rehashear la malla.
-    // Mismo helper y misma decisión que Renderer::rebuildStaticMesh en Vulkan:
-    // los dos backends tienen que contestar igual al mismo input.
-    auto prefijoGeometria = [](const std::string& clave) {
-        const size_t primera = clave.find('|');
-        if (primera == std::string::npos)
-            return clave;
-        // npos = no hay segundo '|' (clave que no salió de makeSharedMeshKey):
-        // se compara la cadena entera, que es el lado conservador.
-        return clave.substr(0, clave.find('|', primera + 1));
-    };
-
-    const std::string nuevaClave = makeSharedMeshKey(mesh);
-
-    // Si se separó, la geometría se acaba de subir DESDE `mesh` y la clave
-    // nueva la describe por construcción. Si el cambio fue in situ hay que
-    // preguntárselo a la vieja: ese camino NO resube geometría, y el contrato
-    // dice que cambiarla por aquí no está soportado pero nada lo impide.
-    // Re-clavar entonces dejaría el mapa diciendo que esta entrada tiene una
-    // geometría que no tiene, y el siguiente addStaticMesh con esa clave se
-    // llevaría la malla equivocada por la rama `reusa`: corrupción silenciosa y
-    // COMPARTIDA, que es justo lo que el dedup existe para evitar.
-    const bool claveHonesta =
-        seSepara || (!object.sharedKey.empty() &&
-                     prefijoGeometria(object.sharedKey) == prefijoGeometria(nuevaClave));
-
-    // La vieja sale SIEMPRE, honesta o no: el mapa está clavado por contenido Y
-    // material —makeSharedMeshKey mete los paths de textura y los factores
-    // PBR—, así que describe un material que este objeto ya no tiene. Dejarla
-    // haría que el siguiente objeto con el material VIEJO copiara estos
+    // La entrada vieja sale SIEMPRE, honesta o no: el mapa está clavado por
+    // contenido Y material —makeSharedMeshKey mete los paths de textura y los
+    // factores PBR—, así que describe un material que este objeto ya no tiene.
+    // Dejarla haría que el siguiente objeto con el material VIEJO copiara estos
     // punteros y saliera con el material nuevo sin haberlo pedido.
     if (!object.sharedKey.empty()) {
         auto it = d.sharedMeshOwner.find(object.sharedKey);
@@ -10431,10 +10449,34 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
             d.sharedMeshOwner.erase(it);
         object.sharedKey.clear();
     }
-    // Y se apunta con la nueva si no hay ya dueño para ella: el mapa solo
-    // admite uno por clave, y el que llegó antes se queda.
+    // Y se apunta con la nueva si describe lo que hay en VRAM y no hay ya dueño
+    // para ella: el mapa solo admite uno por clave y el que llegó antes se
+    // queda. Este `emplace` es lo único que queda aquí abajo que pueda lanzar, y
+    // se deja a propósito para el final: como el `erase` ya ha corrido, que
+    // falle solo pierde dedup —el objeto se queda con copia privada— y nunca
+    // deja una clave mintiendo, que es el único desenlace inaceptable.
     if (claveHonesta && d.sharedMeshOwner.emplace(nuevaClave, index).second)
         object.sharedKey = nuevaClave;
+
+    // Ojo al comparar este fichero con su hermano de Vulkan: ante el MISMO
+    // input —dueño único al que le llega un mesh con otra geometría— los dos
+    // backends son seguros pero NO hacen lo mismo, y ninguno de los dos tiene
+    // un bug ahí.
+    //
+    //  - Vulkan manda ese caso al camino general (`separarAEntradaPropia`), que
+    //    vuelve a crear la entrada entera: acaba dibujando la geometría nueva y
+    //    conservando el dedup.
+    //  - Aquí el desajuste de prefijo solo suprime el re-clavado: el objeto
+    //    sigue dibujando la geometría que ya tenía en VRAM y se queda fuera del
+    //    mapa. Lo hace explícito el diagLog de arriba.
+    //
+    // La divergencia se puede vivir porque el contrato de
+    // EditorRenderer::rebuildStaticMesh declara ese input NO soportado —para
+    // cambiar vértices hay que volver a registrar el objeto—, y lo que sí
+    // comparten los dos backends es lo que importa: ninguno deja el mapa de
+    // dedup diciendo que una clave describe una geometría que la entrada no
+    // tiene, que es la corrupción silenciosa y COMPARTIDA que este bloque
+    // existe para cerrar.
 }
 
 void D3D12Renderer::initSkybox(const std::array<std::string, 6>& facePaths)
