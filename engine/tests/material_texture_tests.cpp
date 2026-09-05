@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <vector>
 
 using namespace DonTopo;
 
@@ -223,10 +224,10 @@ static void test_no_mesh_is_noop()
     CHECK(materialsOfMesh(go).empty());
 }
 
-// La ruta explicita GANA a los bytes embebidos. Es lo contrario de lo que hacia
+// La ruta explícita GANA a los bytes embebidos. Es lo contrario de lo que hacía
 // el motor antes de esta feature, y es lo que hace posible el Clear: si ganara
-// la embebida, asignar una textura a mano exigiria destruir los bytes del FBX y
-// no habria a que volver.
+// la embebida, asignar una textura a mano exigiría destruir los bytes del FBX y
+// no habría a que volver.
 static void test_path_wins_over_embedded()
 {
     const std::vector<uint8_t> bytes{1, 2, 3};

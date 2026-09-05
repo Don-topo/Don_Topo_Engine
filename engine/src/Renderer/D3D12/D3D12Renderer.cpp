@@ -2562,7 +2562,7 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadMaterialTexture(
                                            &channels, STBI_rgb_alpha);
             break;
         case TextureSource::None:
-            break;  // pixels queda nullptr: el caller (fuera de esta funcion) pone su relleno
+            break;  // pixels queda nullptr: el caller (fuera de esta función) pone su relleno
     }
 
     if (!pixels)
