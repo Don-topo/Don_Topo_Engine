@@ -214,9 +214,10 @@ public:
 
     void replaceStaticTextureWithMissing(int renderIndex, TextureSlot slot) override;
 
-    // Contrato en EditorRenderer::rebuildStaticMesh. Declarado aquí porque es
-    // pura en la interfaz: sin esto D3D12Renderer sería abstracta y no
-    // compilaría nada. El cuerpo real es la Task 5.
+    // Contrato en EditorRenderer::rebuildStaticMesh. Aquí el objeto que cambia
+    // de material se separa del grupo de la malla compartida: la propiedad de
+    // los recursos es una sola marca para los cinco (`ownsGpu`), así que darle
+    // texturas propias exige darle también copia propia de la geometría.
     void rebuildStaticMesh(int index, const Mesh& mesh) override;
 
     // Las subidas de este backend son síncronas: basta con esperar a la GPU.

@@ -10148,14 +10148,211 @@ void D3D12Renderer::replaceStaticTextureWithMissing(int renderIndex, TextureSlot
 
 void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
 {
-    // Cuerpo real en la Task 5. Vacío y NO abstracto a propósito: la interfaz
-    // la declara pura, así que sin esta definición D3D12Renderer no se podría
-    // instanciar y no compilaría ni el editor ni el runtime.
+    Impl& d = *m_impl;
+    if (index < 0 || index >= static_cast<int>(d.objects.size()))
+        return;
+
+    Impl::StaticObject& object = d.objects[static_cast<size_t>(index)];
+    // Hueco reciclado, o dueño ya retirado que solo espera a que muera el
+    // último duplicado: en los dos casos el GameObject que podría haber pedido
+    // esto ya no existe, y sus recursos los siguen dibujando otros.
+    if (object.slotFree || object.pendingRelease)
+        return;
+    if (object.srvBase == kSrvBaseColor)
+        return;  // sin bloque propio: dibuja con los neutros globales
+
+    // `ownsGpu` es la ÚNICA marca de propiedad que hay, y vale para las cinco
+    // allocations a la vez: la rama `reusa` de addStaticMesh copia también las
+    // TRES de textura del dueño, y releaseStaticObject las suelta en el mismo
+    // bucle que los buffers. No existe un campo que diga "la geometría es
+    // prestada pero estas texturas son mías".
     //
-    // Mientras tanto, cambiar una textura con este backend no hace nada visible
-    // hasta reiniciar; no hace nada MAL, que es lo que importa de un hueco.
-    (void)index;
-    (void)mesh;
+    // De ahí sale todo lo de abajo: para que las texturas nuevas tengan quien
+    // las suelte, un objeto que comparta malla tiene que separarse del grupo
+    // con copia propia de TODO, que es lo que hace el camino general de Vulkan.
+    // Y separarse exige volver a subir la geometría, así que sin ella no se
+    // toca nada: mejor no hacer nada que dejar el objeto a medias.
+    const bool comparte = !object.ownsGpu || object.sharedRefs > 1;
+    if (comparte && (mesh.vertices.empty() || mesh.indices.empty()))
+        return;
+
+    // Su bloque deja de decir lo mismo que el de los que comparten esta malla,
+    // así que deja de poder compartir draw con ellos.
+    ++object.materialVariant;
+    d.drawGroupsDirty = true;
+
+    // Los recursos viejos pueden estar en uso por el último frame presentado, y
+    // además las subidas de aquí abajo resetean el command allocator de este
+    // frame. Una sola espera cubre las dos cosas: lo que se suba después vuelve
+    // a esperar por dentro, así que al soltar la GPU sigue parada.
+    d.waitForGpu();
+
+    // Cede la propiedad de la malla compartida al primer duplicado y redirige
+    // hacia él a los demás. -1 si el recuento dice que hay duplicados pero no
+    // aparece ninguno: entonces no se toca nada, porque repartir a ciegas la
+    // propiedad de un recurso nativo es justo lo que acaba en doble free.
+    auto cederPropiedad = [&](int duenyo) -> int {
+        Impl::StaticObject& viejo   = d.objects[static_cast<size_t>(duenyo)];
+        int                 elegido = -1;
+        for (size_t i = 0; i < d.objects.size(); ++i) {
+            Impl::StaticObject& otro = d.objects[i];
+            if (static_cast<int>(i) == duenyo || otro.ownsGpu || otro.slotFree ||
+                otro.sharedMesh != duenyo)
+                continue;
+            if (elegido < 0) {
+                elegido         = static_cast<int>(i);
+                otro.ownsGpu    = true;
+                otro.sharedMesh = elegido;
+                // El recuento NO cambia al ceder: siguen siendo los mismos
+                // objetos apuntando a la misma malla —el que se va incluido,
+                // que hasta que no se separe la sigue dibujando—, lo único que
+                // se mueve es quién la suelta.
+                otro.sharedRefs = viejo.sharedRefs;
+                otro.sharedKey  = viejo.sharedKey;
+            } else {
+                otro.sharedMesh = elegido;
+            }
+        }
+        if (elegido < 0)
+            return -1;
+        // El mapa tiene que apuntar al nuevo dueño: si siguiera apuntando aquí,
+        // el siguiente objeto con esta clave copiaría los punteros de quien ya
+        // no posee nada y que encima está a punto de cambiarlos.
+        if (!viejo.sharedKey.empty()) {
+            auto it = d.sharedMeshOwner.find(viejo.sharedKey);
+            if (it != d.sharedMeshOwner.end() && it->second == duenyo)
+                it->second = elegido;
+        }
+        viejo.sharedKey.clear();
+        viejo.sharedRefs = 0;
+        viejo.ownsGpu    = false;
+        viejo.sharedMesh = elegido;
+        return elegido;
+    };
+
+    if (object.ownsGpu && object.sharedRefs > 1) {
+        // Los duplicados dibujan ESTOS recursos y sus SRV apuntan a ellos:
+        // soltarlos aquí no lo avisa ninguna validación, se paga con el device
+        // perdido más tarde. Se les cede la malla entera y este objeto pasa a
+        // ser uno más de los que la tienen prestada.
+        if (cederPropiedad(index) < 0)
+            return;
+    }
+
+    if (!object.ownsGpu) {
+        // Prestado: se suelta la referencia al dueño —y se le remata si este
+        // era el último que lo mantenía en pie, igual que hace
+        // releaseObjectSlot— y se sube una copia propia de la geometría. Los
+        // punteros de textura son copias de los suyos: se olvidan SIN soltar.
+        const int duenyo = object.sharedMesh;
+        if (duenyo >= 0 && duenyo < static_cast<int>(d.objects.size())) {
+            Impl::StaticObject& previo = d.objects[static_cast<size_t>(duenyo)];
+            --previo.sharedRefs;
+            if (previo.pendingRelease && previo.sharedRefs <= 0) {
+                // releaseObjectSlot decrementa antes de comparar, así que se le
+                // deja el recuento en 1 para que baje a 0 y suelte.
+                previo.sharedRefs     = 1;
+                previo.pendingRelease = false;
+                d.releaseObjectSlot(static_cast<size_t>(duenyo));
+            }
+        }
+
+        object.vertexAllocation =
+            d.uploadBuffer(mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex),
+                           D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        object.vertexBufferView.BufferLocation =
+            object.vertexAllocation->GetResource()->GetGPUVirtualAddress();
+        object.vertexBufferView.SizeInBytes =
+            static_cast<UINT>(mesh.vertices.size() * sizeof(Vertex));
+        object.vertexBufferView.StrideInBytes = sizeof(Vertex);
+
+        object.indexAllocation =
+            d.uploadBuffer(mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t),
+                           D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        object.indexBufferView.BufferLocation =
+            object.indexAllocation->GetResource()->GetGPUVirtualAddress();
+        object.indexBufferView.SizeInBytes =
+            static_cast<UINT>(mesh.indices.size() * sizeof(uint32_t));
+        object.indexBufferView.Format = DXGI_FORMAT_R32_UINT;
+        object.indexCount             = static_cast<UINT>(mesh.indices.size());
+
+        // La caja envolvente NO se recalcula: esto es una COPIA de la misma
+        // geometría —el contrato dice que por aquí no cambia—, así que la que
+        // heredó del dueño la sigue describiendo.
+        object.sharedMesh = index;
+        object.ownsGpu    = true;
+        object.sharedRefs = 1;  // él mismo
+
+        object.baseColorAllocation  = nullptr;
+        object.normalMapAllocation  = nullptr;
+        object.metalRoughAllocation = nullptr;
+    }
+
+    // A partir de aquí el objeto es dueño único: lo que quede en los tres
+    // punteros de textura es suyo y no lo mira nadie más.
+    const UINT slot = object.srvBase;
+
+    // Las nuevas ANTES de soltar las viejas: así ninguna vista del bloque
+    // apunta jamás a un recurso ya liberado, ni siquiera si una subida lanza.
+    D3D12MA::Allocation* nuevoColor = d.uploadMaterialTexture(
+        mesh.material.texturePath, mesh.material.embeddedTexture, true, slot + 0);
+    if (!nuevoColor) {
+        // La pidió y no se pudo leer: damero, que se note. No la pidió: blanco.
+        const bool sePidio =
+            chooseTextureSource(mesh.material.texturePath, mesh.material.embeddedTexture) !=
+            TextureSource::None;
+        ID3D12Resource* relleno = (sePidio && d.missingTextureAllocation)
+                                      ? d.missingTextureAllocation->GetResource()
+                                      : d.baseColorAllocation->GetResource();
+        d.createTexture2DSrv(relleno, DXGI_FORMAT_R8G8B8A8_UNORM, slot + 0);
+    }
+
+    D3D12MA::Allocation* nuevaNormal = d.uploadMaterialTexture(
+        mesh.material.normalMapPath, mesh.material.embeddedNormalMap, false, slot + 1);
+    if (!nuevaNormal)
+        d.createTexture2DSrv(d.normalMapAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
+                             slot + 1);
+
+    // El ORM propio va en +3, pisando el neutro que dejó fillSharedSlots; sin
+    // él, se vuelve a poner ese neutro. Los demás huecos compartidos (+2 y
+    // +4..+7) NO se tocan: la sonda de reflexión que lleva este objeto es suya
+    // y rellenarlos otra vez la cambiaría por la global.
+    D3D12MA::Allocation* nuevoOrm =
+        d.uploadMaterialTexture(mesh.material.metallicRoughnessPath,
+                                mesh.material.embeddedMetallicRoughness, false, slot + 3);
+    if (!nuevoOrm)
+        d.createTexture2DSrv(d.metalRoughAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
+                             slot + 3);
+
+    for (D3D12MA::Allocation** vieja : {&object.baseColorAllocation, &object.normalMapAllocation,
+                                        &object.metalRoughAllocation}) {
+        if (*vieja)
+            (*vieja)->Release();
+        *vieja = nullptr;
+    }
+
+    object.baseColorAllocation  = nuevoColor;
+    object.normalMapAllocation  = nuevaNormal;
+    object.metalRoughAllocation = nuevoOrm;
+    object.metallic             = mesh.material.metallic;
+    object.roughness            = mesh.material.roughness;
+
+    // El mapa de dedup está clavado por contenido Y material —makeSharedMeshKey
+    // mete los paths de textura y los factores PBR—, así que la clave con la
+    // que este objeto entró ya no lo describe. Dejarla ahí haría que el
+    // siguiente objeto con el material VIEJO copiara estos punteros y saliera
+    // con el material nuevo sin haberlo pedido.
+    if (!object.sharedKey.empty()) {
+        auto it = d.sharedMeshOwner.find(object.sharedKey);
+        if (it != d.sharedMeshOwner.end() && it->second == index)
+            d.sharedMeshOwner.erase(it);
+        object.sharedKey.clear();
+    }
+    // Y se apunta con la nueva si no hay ya dueño para ella: el mapa solo
+    // admite uno por clave, y el que llegó antes se queda.
+    const std::string nuevaClave = makeSharedMeshKey(mesh);
+    if (d.sharedMeshOwner.emplace(nuevaClave, index).second)
+        object.sharedKey = nuevaClave;
 }
 
 void D3D12Renderer::initSkybox(const std::array<std::string, 6>& facePaths)
