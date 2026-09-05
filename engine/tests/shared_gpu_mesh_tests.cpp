@@ -357,6 +357,32 @@ static void test_rekey_preserves_refcount()
     CHECK(cache.refCount(idx) == 2);
 }
 
+// Indice EN RANGO pero cuyo slot se liberó: es el caso que de verdad justifica
+// la comprobación de `live` (los índices fuera de rango ya caen antes, por los
+// límites del vector). Tiene que rechazarse y, sobre todo, no puede dejar en
+// el mapa una entrada apuntando a un slot muerto: un acquire posterior con esa
+// clave nueva tiene que crear una entrada de verdad, no reciclar el índice
+// muerto.
+static void test_rekey_on_freed_slot_in_range()
+{
+    SharedGpuMeshCache cache;
+    int creadas = 0;
+    auto crear  = [&](SharedGpuMesh&) { ++creadas; };
+    auto nada   = [](const SharedGpuMesh&) {};
+
+    const int idx = cache.acquire("k", crear);
+    CHECK(creadas == 1);
+    cache.release(idx, nada);
+
+    CHECK(!cache.rekey(idx, "otra"));
+
+    // El mapa no quedó apuntando al slot muerto bajo "otra": acquire crea una
+    // entrada nueva, no devuelve el índice reciclado.
+    const int nuevo = cache.acquire("otra", crear);
+    CHECK(creadas == 2);
+    CHECK(cache.get(nuevo) != nullptr);
+}
+
 int main()
 {
     test_objetos_identicos_comparten_handles();
@@ -370,6 +396,7 @@ int main()
     test_rekey_on_dead_index();
     test_rekey_to_same_key();
     test_rekey_preserves_refcount();
+    test_rekey_on_freed_slot_in_range();
 
     if (g_failures == 0) std::printf("shared_gpu_mesh_tests: OK\n");
     else                 std::printf("shared_gpu_mesh_tests: %d FALLOS\n", g_failures);
