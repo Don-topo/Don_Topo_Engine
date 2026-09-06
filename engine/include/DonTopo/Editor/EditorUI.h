@@ -144,7 +144,12 @@ public:
 
     // Proyecto elegido, no-propietario (vive en main()). Viaja a los paneles por
     // EditorContext::project: es el que decide qué rutas se pueden leer/escribir.
-    void setProject(const ProjectContext* project) { m_project = project; }
+    //
+    // Fuera de línea (no inline aquí): fija también la raíz de assets de la
+    // escena viva (Scene::setAssetRoot), y Scene solo está forward-declarada en
+    // este header. Ver el comentario junto a la definición en EditorUI.cpp para
+    // el porqué de que viva AQUÍ y no en applyProjectSettings.
+    void setProject(const ProjectContext* project);
 
     // Backend con el que ARRANCÓ este proceso, que main() ya resolvió antes de
     // crear el Renderer. El combo del menú View lo compara con el elegido para

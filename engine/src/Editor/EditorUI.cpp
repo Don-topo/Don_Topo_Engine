@@ -219,6 +219,25 @@ void EditorUI::setRenderer(std::unique_ptr<EditorRenderer> renderer)
         m_renderer->setUiLayer(this);
 }
 
+void EditorUI::setProject(const ProjectContext* project)
+{
+    m_project = project;
+
+    // Raíz contra la que Scene relativiza/resuelve las rutas de textura
+    // asignadas a mano (Task 6). Tiene que fijarse AQUÍ, antes de
+    // openProjectScene(), y no en applyProjectSettings(): mientras el selector
+    // de proyecto sigue en pantalla, draw() cede el frame entero al callback y
+    // vuelve sin llegar a applyProjectSettings, así que la escena de arranque
+    // —la que openChosenProject() carga sincrónamente dentro de ese mismo
+    // callback, justo después de este setProject()— se cargaría con la raíz
+    // todavía vacía y sus rutas relativas se quedarían sin resolver. Fijarla
+    // aquí cubre los tres caminos de carga: la escena de arranque (a través de
+    // este setProject), el Load Scene del menú File y el restore de Play->Stop
+    // (los dos últimos ya corren con el proyecto aplicado, mucho después).
+    if (m_scene && project && project->valid())
+        m_scene->setAssetRoot(project->root().string());
+}
+
 EditorRenderer& EditorUI::renderer() { return *m_renderer; }
 
 // ─── UiLayer: backend de ImGui ───────────────────────────────────────────────
@@ -618,12 +637,6 @@ void EditorUI::applyProjectSettings()
     m_appliedProject = m_project;
     if (!m_project || !m_project->valid())
         return; // tests headless / arranque previo al selector: como siempre.
-
-    // Raiz contra la que Scene relativiza/resuelve las rutas de textura
-    // asignadas a mano (Task 6): se fija aqui porque es donde ya se sabe que
-    // el proyecto es valido, y no antes.
-    if (m_scene)
-        m_scene->setAssetRoot(m_project->root().string());
 
     // La base son los valores de AHORA del Renderer: cada parámetro que el
     // project.json no traiga se queda con el default del Renderer. Los enables

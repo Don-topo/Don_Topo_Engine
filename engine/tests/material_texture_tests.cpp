@@ -411,15 +411,22 @@ static void test_corrupt_materials_block_warns(PhysicsManager& pm, AudioManager&
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Cubo");
+    // Mesh PROCEDURAL (sourcePath vacío), no "assets/cubo.fbx": ese fichero no
+    // existe en assets/, así que ModelLoader::load lanzaría, el catch de
+    // nodeFromJson empujaría SU PROPIO aviso de "no se pudo cargar la malla" y
+    // lastWarnings() ya saldría no-vacío ANTES de mirar el bloque materials —
+    // el CHECK de abajo pasaría aunque se borrara el aviso que dice comprobar.
+    // Con un mesh procedural (vértices/índices vacíos, se reconstruye sin
+    // tocar disco) el único aviso posible de esta carga es el del bloque
+    // materials corrupto.
     auto mesh = std::make_shared<Mesh>();
-    mesh->sourcePath = "assets/cubo.fbx";
     go->setMesh(std::move(mesh));
     nlohmann::json j = scene.toJson();
 
-    // Inyectar basura donde iria el bloque: un objeto en vez de un array.
+    // Inyectar basura donde iría el bloque: un objeto en vez de un array.
     // Localizar el nodo del cubo recorriendo el JSON por nombre: toJson()
-    // cuelga los hijos de la raiz de root->children, cada uno con su propio
-    // "mesh" (aqui sin "materials" porque el Cubo no tiene overrides todavia).
+    // cuelga los hijos de la raíz de root->children, cada uno con su propio
+    // "mesh" (aquí sin "materials" porque el Cubo no tiene overrides todavía).
     nlohmann::json& hijos = j["root"]["children"];
     nlohmann::json* cuboJson = nullptr;
     for (auto& hijo : hijos)
@@ -430,7 +437,13 @@ static void test_corrupt_materials_block_warns(PhysicsManager& pm, AudioManager&
 
     Scene cargada("Vacia");
     CHECK(cargada.fromJson(j, pm, am));
-    CHECK(!cargada.lastWarnings().empty());
+    // La SUBCADENA del aviso que le toca a ESTE bloque, no solo "hay algún
+    // aviso": eso último pasaría igual aunque se borrara el push_back de la
+    // rama "!mats.is_array()" y algún otro aviso ajeno colara por casualidad.
+    bool warned = false;
+    for (const auto& w : cargada.lastWarnings())
+        if (w.find("no es una lista") != std::string::npos) { warned = true; break; }
+    CHECK(warned);
 }
 
 // Una entrada sin "index" valido se descarta con aviso, sin tirar las demas

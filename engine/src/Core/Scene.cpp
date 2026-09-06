@@ -2800,7 +2800,14 @@ namespace DonTopo
         if (!src || src == &m_root) return nullptr;
 
         GameObject* target = parent ? parent : (src->parent ? src->parent : &m_root);
-        nlohmann::json j = nodeToJson(*src, m_assetRoot);
+        // Raíz VACÍA a propósito, no m_assetRoot: este JSON no toca disco, va
+        // directo de nodeToJson a nodeFromJson unas líneas más abajo. Con la
+        // raíz real el viaje absoluta->relativa->absoluta sería trabajo tirado
+        // (y una llamada a filesystem::relative, que SÍ toca disco, por cada
+        // override) — y este camino es el que usa Scene.Instantiate de Lua EN
+        // PLAY, ya optimizado a propósito para no ir a disco por spawn (ver el
+        // comentario de PreloadedMeshCache más abajo, 24,5 ms/clon medidos).
+        nlohmann::json j = nodeToJson(*src, std::string());
 
         // Fuera los "id" del árbol serializado, para que addChild/GameObject
         // dejen los suyos recién generados.
@@ -2857,7 +2864,11 @@ namespace DonTopo
         });
         try
         {
-            nodeFromJson(j, clone, target->worldTransform, physics, audio, &m_warnings, &cache, m_assetRoot,
+            // Raíz vacía, pareja de la de arriba: j se serializó con raíz vacía
+            // (rutas verbatim), así que se lee igual — sin fromStoredPath
+            // tocando el filesystem ni reescribiendo separadores en memoria por
+            // cada clon.
+            nodeFromJson(j, clone, target->worldTransform, physics, audio, &m_warnings, &cache, std::string(),
                          /*loader=*/nullptr, &mallas);
         }
         catch (const nlohmann::json::exception&)
@@ -3122,7 +3133,12 @@ namespace DonTopo
 
     nlohmann::json Scene::subtreeToJson(const GameObject* node) const
     {
-        return nodeToJson(*node, m_assetRoot);
+        // Raíz vacía a propósito: este JSON es el snapshot en memoria que usan
+        // CreateGameObjectCommand/DeleteGameObjectCommand para Undo/Redo, nunca
+        // toca disco. Pareja con la misma raíz vacía de insertFromJson, más
+        // abajo — mismo razonamiento que cloneGameObject: sin ida y vuelta por
+        // filesystem::relative en cada ciclo de deshacer.
+        return nodeToJson(*node, std::string());
     }
 
     GameObject* Scene::insertFromJson(const nlohmann::json& j, GameObject* parent, size_t index,
@@ -3142,7 +3158,9 @@ namespace DonTopo
         std::unordered_map<std::string, bool> cache;
         try
         {
-            nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings, &cache, m_assetRoot);
+            // Raíz vacía, pareja de subtreeToJson: j vino de ahí con raíz
+            // vacía (rutas verbatim), así que se lee igual.
+            nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings, &cache, std::string());
         }
         catch (const nlohmann::json::exception&)
         {
