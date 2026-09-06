@@ -220,6 +220,31 @@ static void test_clear_restores_empty_baseline_on_procedural_mesh()
     CHECK(go->getMesh()->material.texturePath.empty());
 }
 
+// Task 7: el override se aplica sobre la malla que LLEGA, no despues: si se
+// aplicara tras registrar en el renderer (AsyncAssetLoader::applyLoadedMesh),
+// la GPU subiria la textura del FBX y la del usuario no se veria hasta el
+// siguiente rebuild. Este test es el mecanismo puro (sin EditorRenderer, que
+// son 73 virtuales puras); que applyLoadedMesh lo llame en el orden correcto
+// se verifica en GUI, igual que test_remove_notifies_listener en
+// camera_tests.cpp.
+static void test_overrides_applied_to_incoming_mesh()
+{
+    auto go = makeStaticFixture();
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = "assets/mia.png";
+    go->materialOverrides.push_back(ov);
+
+    // La malla que "llega" trae lo del FBX.
+    auto llegada = std::make_shared<Mesh>();
+    llegada->material.texturePath = "assets/fbx_albedo.png";
+    go->setMesh(llegada);
+
+    applyMaterialOverrides(*go);
+
+    CHECK(go->getMesh()->material.texturePath == "assets/mia.png");
+}
+
 // Un GameObject sin mesh no revienta.
 static void test_no_mesh_is_noop()
 {
@@ -554,6 +579,101 @@ static void test_undo_redo_keeps_override_path_verbatim_with_root_set(PhysicsMan
         CHECK(restored->materialOverrides[0].albedo == original);
 }
 
+// Task 7: nodeFromJson tiene que llamar a applyMaterialOverrides con la malla
+// YA PUESTA, para cada una de las tres ramas de carga (aquí, la procedural).
+// Sin esa llamada, un objeto recien cargado desde disco se ve con la textura
+// del FBX hasta el primer edit que dispare un applyMaterialOverrides externo.
+static void test_scene_load_applies_override_to_material(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();   // procedural: sourcePath vacio
+    go->setMesh(std::move(mesh));
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = "assets/mia.png";
+    go->materialOverrides.push_back(ov);
+
+    const nlohmann::json j = scene.toJson();
+    Scene cargada("Vacia");
+    CHECK(cargada.fromJson(j, pm, am));
+    GameObject* leido = nullptr;
+    cargada.traverse([&](GameObject* n) { if (n->name == "Cubo") leido = n; });
+    CHECK(leido != nullptr);
+    if (!leido) return;
+    CHECK(leido->hasMesh());
+    if (leido->hasMesh())
+        CHECK(leido->getMesh()->material.texturePath == "assets/mia.png");
+}
+
+// Task 7, punto 2 de la revision: el comentario de GameObject::applyMaterialOverrides
+// promete que "el aviso [de index fuera de rango] lo da el lector de escena,
+// que es quien tiene canal para darlo". Este test es esa promesa cumplida: un
+// index que ya no existe en el mesh recien cargado deja un aviso en
+// lastWarnings(), no un fallo silencioso.
+static void test_out_of_range_index_warns_on_scene_load(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();   // procedural: expone UN material (índice 0)
+    go->setMesh(std::move(mesh));
+    MaterialTextureOverride ov;
+    ov.index  = 3;   // fuera de rango: el mesh procedural solo tiene el índice 0
+    ov.albedo = "assets/fantasma.png";
+    go->materialOverrides.push_back(ov);
+
+    const nlohmann::json j = scene.toJson();
+    Scene cargada("Vacia");
+    CHECK(cargada.fromJson(j, pm, am));
+
+    // La SUBCADENA de ESTE aviso, no solo "hay algún aviso": mismo criterio
+    // que test_corrupt_materials_block_warns.
+    bool warned = false;
+    for (const auto& w : cargada.lastWarnings())
+        if (w.find("fuera de rango") != std::string::npos) { warned = true; break; }
+    CHECK(warned);
+}
+
+// Task 7, punto 1 de la revision: la trampa del clon. cloneGameObject siembra
+// la malla del clon desde una PreloadedMeshCache con la malla VIVA del
+// original, es decir con el material YA PISADO por el override. Sin el
+// baseline real viajando en el JSON de clonado (carryOverrideBaseline), el
+// clon capturaria como "original" la textura del override, y un Clear sobre
+// el clon dejaria puesta esa textura en vez de devolver la del FBX.
+static void test_clone_clear_restores_fbx_texture_not_override(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    // sourcePath no vacio: es lo que hace que cloneGameObject use la
+    // PreloadedMeshCache (mallas) en vez de ir a disco (que fallaria, el
+    // fichero no existe, y el clon se quedaria sin mesh).
+    mesh->sourcePath = "assets/cubo.fbx";
+    mesh->material.texturePath = "assets/fbx_albedo.png";
+    go->setMesh(std::move(mesh));
+
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = "assets/mia.png";
+    go->materialOverrides.push_back(ov);
+    // El material VIVO de go ya trae el override horneado, igual que un
+    // objeto editado en el editor antes de duplicarlo.
+    applyMaterialOverrides(*go);
+    CHECK(go->getMesh()->material.texturePath == "assets/mia.png");
+
+    GameObject* clone = scene.cloneGameObject(go, nullptr, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+    CHECK(clone->materialOverrides.size() == 1);
+    if (clone->materialOverrides.empty()) return;
+
+    // Clear en el CLON, no en el original.
+    clone->materialOverrides[0].albedo.clear();
+    applyMaterialOverrides(*clone);
+
+    CHECK(clone->getMesh()->material.texturePath == "assets/fbx_albedo.png");
+}
+
 int main()
 {
     // PhysicsManager/AudioManager comparten instancia entre los tests que la
@@ -591,6 +711,10 @@ int main()
     test_materials_entry_without_valid_index_is_discarded(pm, am);
     test_clone_keeps_override_path_verbatim_with_root_set(pm, am);
     test_undo_redo_keeps_override_path_verbatim_with_root_set(pm, am);
+    test_overrides_applied_to_incoming_mesh();
+    test_scene_load_applies_override_to_material(pm, am);
+    test_out_of_range_index_warns_on_scene_load(pm, am);
+    test_clone_clear_restores_fbx_texture_not_override(pm, am);
 
     am.shutdown();
     pm.shutdown();

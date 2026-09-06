@@ -49,6 +49,8 @@ namespace
 {
     using DonTopo::GameObject;
     using DonTopo::MaterialTextureOverride;
+    using DonTopo::applyMaterialOverrides;
+    using DonTopo::materialsOfMesh;
     using DonTopo::Rigidbody;
     using DonTopo::CameraComponent;
     using DonTopo::AnimatorComponent;
@@ -689,7 +691,11 @@ namespace
         return (std::filesystem::path(assetRoot) / p).string();
     }
 
-    nlohmann::json nodeToJson(const GameObject& node, const std::string& assetRoot)
+    // carryOverrideBaseline: ver el comentario grande junto a "baseAlbedo" más
+    // abajo. Default false (comportamiento de disco); los dos callers de
+    // memoria (cloneGameObject, subtreeToJson) lo fijan a true a propósito.
+    nlohmann::json nodeToJson(const GameObject& node, const std::string& assetRoot,
+                               bool carryOverrideBaseline = false)
     {
         nlohmann::json j;
         j["id"] = node.id;
@@ -751,6 +757,40 @@ namespace
                 if (!ov.albedo.empty()) entry["albedo"] = toStoredPath(ov.albedo, assetRoot);
                 if (!ov.normal.empty()) entry["normal"] = toStoredPath(ov.normal, assetRoot);
                 if (!ov.orm.empty())    entry["orm"]    = toStoredPath(ov.orm,    assetRoot);
+                // El baseline (base*/base*Taken) SOLO viaja cuando este JSON es
+                // un salto de MEMORIA (clonar un GameObject, o el snapshot de
+                // Undo/Redo de Create/Delete) y nunca cuando es un guardado a
+                // disco de verdad — el criterio no es "assetRoot vacío": los
+                // tests de Task 6 (y cualquier caller sin proyecto abierto)
+                // llaman a Scene::toJson()/fromJson(), la API de disco, con
+                // m_assetRoot también vacío, así que esa condición sola
+                // confundiría los dos casos. carryOverrideBaseline es el
+                // parámetro explícito que sí los distingue: cloneGameObject y
+                // subtreeToJson lo fijan a true, Scene::toJson() nunca lo toca
+                // (default false).
+                //
+                // Por qué hace falta en memoria: al clonar, la malla del clon
+                // se siembra desde una PreloadedMeshCache con la malla VIVA del
+                // original —que ya tiene el override horneado en el material—,
+                // así que sin el baseline real viajando aquí, el clon
+                // capturaría como "original" la textura del override, y un
+                // Clear sobre el clon no devolvería la del FBX (ver
+                // test_clone_clear_restores_fbx_texture_not_override).
+                //
+                // Por qué NO hace falta en disco: allí el material se
+                // rederiva del FBX real en cada carga, así que el baseline se
+                // recaptura solo y en el valor correcto — guardar uno viejo
+                // arriesgaría dejarlo desincronizado si el artista reexportó
+                // el modelo entre dos guardados.
+                if (carryOverrideBaseline)
+                {
+                    entry["baseAlbedo"]      = toStoredPath(ov.baseAlbedo, assetRoot);
+                    entry["baseAlbedoTaken"] = ov.baseAlbedoTaken;
+                    entry["baseNormal"]      = toStoredPath(ov.baseNormal, assetRoot);
+                    entry["baseNormalTaken"] = ov.baseNormalTaken;
+                    entry["baseOrm"]         = toStoredPath(ov.baseOrm, assetRoot);
+                    entry["baseOrmTaken"]    = ov.baseOrmTaken;
+                }
                 mats.push_back(std::move(entry));
             }
             if (!mats.empty())
@@ -1236,7 +1276,7 @@ namespace
 
         j["children"] = nlohmann::json::array();
         for (const auto& child : node.children)
-            j["children"].push_back(nodeToJson(*child, assetRoot));
+            j["children"].push_back(nodeToJson(*child, assetRoot, carryOverrideBaseline));
 
         return j;
     }
@@ -1509,13 +1549,17 @@ namespace
     // sus hijos. parentWorld es el worldTransform ya resuelto del padre —
     // necesario para pasar un worldTransform correcto a las factories de
     // collider (que fijan la pose inicial del actor PhysX a partir de él).
+    // carryOverrideBaseline: pareja de lectura del mismo flag de nodeToJson —
+    // ver su comentario grande, junto a "baseAlbedo". Default false (disco);
+    // cloneGameObject e insertFromJson lo fijan a true.
     void nodeFromJson(const nlohmann::json& j, GameObject* node, const glm::mat4& parentWorld,
                        DonTopo::PhysicsManager& physics, DonTopo::AudioManager& audio,
                        std::vector<std::string>* warnings,
                        std::unordered_map<std::string, bool>* hasBonesCache,
                        const std::string& assetRoot,
                        DonTopo::AsyncAssetLoader* loader = nullptr,
-                       const DonTopo::PreloadedMeshCache* preloaded = nullptr)
+                       const DonTopo::PreloadedMeshCache* preloaded = nullptr,
+                       bool carryOverrideBaseline = false)
     {
         // "id" no existe en ficheros .scene guardados antes de este campo —
         // se deja el id que el constructor de GameObject ya asignó (contador
@@ -1845,9 +1889,55 @@ namespace
                         ov.albedo = fromStoredPath(entry.value("albedo", ""), assetRoot);
                         ov.normal = fromStoredPath(entry.value("normal", ""), assetRoot);
                         ov.orm    = fromStoredPath(entry.value("orm",    ""), assetRoot);
+                        // El baseline SOLO se lee en el camino de MEMORIA (ver
+                        // el comentario grande de nodeToJson, junto al mismo
+                        // flag): en disco estos campos, aunque estuvieran en el
+                        // JSON, se ignoran a propósito — el baseline correcto de
+                        // una carga de disco es el que capture
+                        // applyMaterialOverrides sobre el material recién
+                        // derivado del FBX, no uno guardado que podría ser de
+                        // OTRO export del modelo.
+                        if (carryOverrideBaseline)
+                        {
+                            ov.baseAlbedo      = fromStoredPath(entry.value("baseAlbedo", ""), assetRoot);
+                            ov.baseAlbedoTaken = entry.value("baseAlbedoTaken", false);
+                            ov.baseNormal      = fromStoredPath(entry.value("baseNormal", ""), assetRoot);
+                            ov.baseNormalTaken = entry.value("baseNormalTaken", false);
+                            ov.baseOrm         = fromStoredPath(entry.value("baseOrm", ""), assetRoot);
+                            ov.baseOrmTaken    = entry.value("baseOrmTaken", false);
+                        }
                         node->materialOverrides.push_back(std::move(ov));
                     }
                 }
+            }
+
+            // Overrides aplicados AHORA que la malla (si la hubo: las tres
+            // ramas de arriba, más el fallback procedural) ya está puesta. En
+            // el camino ASÍNCRONO (loader->requestMesh, más arriba) no hay
+            // malla todavía y esta llamada no hace nada — la aplicación la
+            // hace AsyncAssetLoader::applyLoadedMesh cuando el worker entregue.
+            if (node->hasMesh())
+            {
+                // El aviso de índice fuera de rango que promete el comentario
+                // de GameObject::applyMaterialOverrides ("lo avisa el lector de
+                // escena, que es quien tiene canal para darlo"): aquí, y no
+                // allí, es donde existen las dos cosas que hacen falta para
+                // darlo — el canal `warnings` y el número real de materiales
+                // del mesh que acaba de llegar. GameObject::applyMaterialOverrides
+                // no tiene ninguna de las dos.
+                if (warnings)
+                {
+                    const size_t nMats = materialsOfMesh(*node).size();
+                    for (const MaterialTextureOverride& ov : node->materialOverrides)
+                    {
+                        if (ov.index < 0 || static_cast<size_t>(ov.index) >= nMats)
+                            warnings->push_back("mesh de '" + node->name + "'.materials: index " +
+                                                 std::to_string(ov.index) + " fuera de rango (" +
+                                                 std::to_string(nMats) + " material(es) en el mesh), "
+                                                 "el override de ese slot se ignora");
+                    }
+                }
+                applyMaterialOverrides(*node);
             }
         }
 
@@ -2726,7 +2816,7 @@ namespace
             GameObject* child = node->addChild(
                 readString(childJson, "name", std::string(), warnings,
                             "nodo '" + node->name + "'.children", /*required=*/true));
-            nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, hasBonesCache, assetRoot, loader, preloaded);
+            nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, hasBonesCache, assetRoot, loader, preloaded, carryOverrideBaseline);
         }
     }
 }
@@ -2807,7 +2897,15 @@ namespace DonTopo
         // override) — y este camino es el que usa Scene.Instantiate de Lua EN
         // PLAY, ya optimizado a propósito para no ir a disco por spawn (ver el
         // comentario de PreloadedMeshCache más abajo, 24,5 ms/clon medidos).
-        nlohmann::json j = nodeToJson(*src, std::string());
+        //
+        // carryOverrideBaseline = true: la malla del clon se siembra más abajo
+        // desde `mallas`, la caché de PreloadedMeshCache con la malla VIVA de
+        // src — que si tiene overrides ya los lleva horneados en el material.
+        // Sin el baseline real viajando en este JSON, applyMaterialOverrides
+        // capturaría como "original" esa textura ya pisada, y un Clear sobre
+        // el clon no devolvería la del FBX. Ver el comentario grande de
+        // nodeToJson junto a "baseAlbedo".
+        nlohmann::json j = nodeToJson(*src, std::string(), /*carryOverrideBaseline=*/true);
 
         // Fuera los "id" del árbol serializado, para que addChild/GameObject
         // dejen los suyos recién generados.
@@ -2869,7 +2967,7 @@ namespace DonTopo
             // tocando el filesystem ni reescribiendo separadores en memoria por
             // cada clon.
             nodeFromJson(j, clone, target->worldTransform, physics, audio, &m_warnings, &cache, std::string(),
-                         /*loader=*/nullptr, &mallas);
+                         /*loader=*/nullptr, &mallas, /*carryOverrideBaseline=*/true);
         }
         catch (const nlohmann::json::exception&)
         {
@@ -3138,7 +3236,12 @@ namespace DonTopo
         // toca disco. Pareja con la misma raíz vacía de insertFromJson, más
         // abajo — mismo razonamiento que cloneGameObject: sin ida y vuelta por
         // filesystem::relative en cada ciclo de deshacer.
-        return nodeToJson(*node, std::string());
+        //
+        // carryOverrideBaseline = true: mismo camino de memoria que
+        // cloneGameObject (ver su comentario), así que el baseline viaja igual
+        // aquí — es el snapshot exacto del objeto en el momento del Delete, no
+        // una re-derivación desde el FBX.
+        return nodeToJson(*node, std::string(), /*carryOverrideBaseline=*/true);
     }
 
     GameObject* Scene::insertFromJson(const nlohmann::json& j, GameObject* parent, size_t index,
@@ -3159,8 +3262,10 @@ namespace DonTopo
         try
         {
             // Raíz vacía, pareja de subtreeToJson: j vino de ahí con raíz
-            // vacía (rutas verbatim), así que se lee igual.
-            nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings, &cache, std::string());
+            // vacía (rutas verbatim), así que se lee igual. carryOverrideBaseline
+            // a juego con el mismo true de subtreeToJson.
+            nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings, &cache, std::string(),
+                         /*loader=*/nullptr, /*preloaded=*/nullptr, /*carryOverrideBaseline=*/true);
         }
         catch (const nlohmann::json::exception&)
         {
@@ -3301,6 +3406,11 @@ namespace DonTopo
     {
         nlohmann::json root;
         root["version"] = 1;
+        // carryOverrideBaseline NO se pasa (default false): esta es la API de
+        // disco de verdad, aunque m_assetRoot esté vacío (proyecto sin abrir,
+        // o los tests de Task 6 que no llaman a setAssetRoot) — assetRoot
+        // vacío por sí solo NO distingue disco de memoria, ver el comentario
+        // grande de nodeToJson.
         root["root"] = nodeToJson(m_root, m_assetRoot);
         return root;
     }
@@ -3340,6 +3450,10 @@ namespace DonTopo
         std::unordered_map<std::string, bool> hasBonesCache;
         try
         {
+            // carryOverrideBaseline NO se pasa (default false), a propósito:
+            // esta es la carga de disco de verdad, así que el baseline de cada
+            // override se rederiva del material que acaba de salir del FBX, no
+            // de uno guardado. Ver el comentario grande de nodeToJson.
             nodeFromJson(rootJson, &newRoot, glm::mat4(1.0f), physics, audio, &m_warnings, &hasBonesCache, m_assetRoot, loader, preloaded);
         }
         catch (const nlohmann::json::exception&)

@@ -338,20 +338,39 @@ namespace DonTopo
         }
         if (!r.mesh) return false;
 
-        // Registrar en el Renderer ANTES de setMesh, igual que la ruta síncrona
-        // de PropertiesPanel:144-150: si el registro lanza, el GameObject queda
-        // intacto y el reintento funciona en vez de ser un no-op silencioso.
+        // Orden: setMesh -> applyMaterialOverrides -> registro en el Renderer.
+        // ANTES el orden era registro -> setMesh (el registro iba primero para
+        // que, si lanzaba, target->setMesh nunca se llegara a ejecutar y el
+        // GameObject quedara intacto). Se invierte porque addSkinnedMesh/
+        // addStaticMesh SUBEN A GPU el material tal cual esté en r.mesh en ESE
+        // instante: si el override se aplicara después de registrar, la GPU se
+        // llevaría la textura del FBX y la del usuario no se vería hasta el
+        // siguiente rebuild. applyMaterialOverrides opera sobre el
+        // GameObject (lee target->materialOverrides y escribe en
+        // target->getMesh()->material), así que necesita el setMesh ya hecho
+        // — no puede ir suelta sobre r.mesh antes de tener target enlazado.
+        //
+        // La garantía de "GameObject intacto si el registro lanza" se
+        // conserva invirtiendo la reparación en vez del orden: en el catch se
+        // deshace el setMesh (target->setMesh(nullptr)). Es seguro porque
+        // applyLoadedMesh SOLO se llama para un target que todavía no tenía
+        // mesh — PropertiesPanel::loadMeshForSelected exige
+        // !ctx.selected->hasMesh() antes de encolar la petición async que
+        // termina aquí — así que setMesh(nullptr) restaura EXACTAMENTE el
+        // estado previo a esta llamada, no borra una malla que ya funcionaba.
         try
         {
+            target->setMesh(r.mesh);
+            applyMaterialOverrides(*target);
+
             if (SkinnedMesh* sk = dynamic_cast<SkinnedMesh*>(r.mesh.get()))
                 target->skinnedRenderIndex = renderer.addSkinnedMesh(*sk, &r.images);
             else
                 target->staticRenderIndex  = renderer.addStaticMesh(*r.mesh, &r.images);
-
-            target->setMesh(r.mesh);
         }
         catch (const std::exception& e)
         {
+            target->setMesh(nullptr);
             if (outError) *outError = std::string("Error subiendo a GPU '") + r.path + "': " + e.what();
             return false;
         }
