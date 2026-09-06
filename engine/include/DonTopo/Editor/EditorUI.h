@@ -105,7 +105,12 @@ public:
     // vida del EditorUI (mismo patrón que m_physics/m_audio). Necesario
     // para delegar el borrado diferido (ScenePanel::m_pendingDelete) en
     // Scene::removeGameObject en vez de mutar children a mano.
-    void setScene(Scene* scene) { m_scene = scene; }
+    //
+    // Fuera de línea, mismo motivo que setProject: fija también la raíz de
+    // assets si el proyecto YA está puesto. Ver el comentario junto a la
+    // definición en EditorUI.cpp para por qué la misma fijación vive en los
+    // DOS setters (setScene y setProject) y no es duplicación a limpiar.
+    void setScene(Scene* scene);
     // Centra la cámara en m_selected (no-op si no hay selección). Usado por
     // el atajo de teclado "F" en main.cpp.
     void focusSelected(Camera& camera);

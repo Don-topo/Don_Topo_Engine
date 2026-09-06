@@ -488,17 +488,83 @@ static void test_materials_entry_without_valid_index_is_discarded(PhysicsManager
     CHECK(warned);
 }
 
+// GUARDA DE LA DECISIÓN "en los caminos de memoria la ruta viaja verbatim"
+// (ronda 2 de revisión): con la raíz FIJADA en la escena, clonar un objeto
+// cuyo override es una ruta ABSOLUTA bajo esa raíz tiene que dejar al clon con
+// la MISMA cadena, byte a byte — ni relativizada, ni con los separadores
+// reescritos por el viaje relative()/weakly_canonical de toStoredPath. Sin
+// este test, devolver m_assetRoot a cloneGameObject deja la suite en verde
+// mientras el clon recibe una ruta distinta de la del original.
+static void test_clone_keeps_override_path_verbatim_with_root_set(PhysicsManager& pm, AudioManager& am)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "dt_mat_root";
+
+    Scene scene("Test");
+    scene.setAssetRoot(root.string());
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->sourcePath = "assets/cubo.fbx";
+    go->setMesh(std::move(mesh));
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = (root / "assets" / "x.png").string();
+    go->materialOverrides.push_back(ov);
+
+    const std::string original = go->materialOverrides[0].albedo;
+
+    GameObject* clone = scene.cloneGameObject(go, nullptr, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+    CHECK(clone->materialOverrides.size() == 1);
+    if (clone->materialOverrides.size() == 1)
+        CHECK(clone->materialOverrides[0].albedo == original);
+}
+
+// Misma guarda para el par subtreeToJson/insertFromJson que usa Undo/Redo de
+// Create/Delete: el ciclo completo (capturar snapshot, borrar el original,
+// reinsertar desde el snapshot) tiene que devolver la ruta idéntica.
+static void test_undo_redo_keeps_override_path_verbatim_with_root_set(PhysicsManager& pm, AudioManager& am)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "dt_mat_root";
+
+    Scene scene("Test");
+    scene.setAssetRoot(root.string());
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->sourcePath = "assets/cubo.fbx";
+    go->setMesh(std::move(mesh));
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = (root / "assets" / "y.png").string();
+    go->materialOverrides.push_back(ov);
+
+    const std::string original = go->materialOverrides[0].albedo;
+    const nlohmann::json snapshot = scene.subtreeToJson(go);
+
+    // El ciclo real de un Undo de Delete: el nodo se destruye y se reconstruye
+    // desde el snapshot capturado ANTES de borrarlo.
+    scene.removeGameObject(go);
+    GameObject* restored = scene.insertFromJson(snapshot, nullptr, 0, pm, am);
+    CHECK(restored != nullptr);
+    if (!restored) return;
+    CHECK(restored->materialOverrides.size() == 1);
+    if (restored->materialOverrides.size() == 1)
+        CHECK(restored->materialOverrides[0].albedo == original);
+}
+
 int main()
 {
     // PhysicsManager/AudioManager comparten instancia entre los tests que la
     // necesitan: crear y destruir un PhysicsManager por test crashea al
-    // segundo init (una PxFoundation por proceso), mismo patron que
+    // segundo init (una PxFoundation por proceso), mismo patrón que
     // audio_tests.cpp.
     PhysicsManager pm;
     pm.init();
     AudioManager am;
     if (!am.init())
-        std::printf("AVISO: FMOD no disponible; los tests que lo necesitan se saltaran\n");
+        std::printf("AVISO: FMOD no disponible; los tests que lo necesitan se saltarán\n");
 
     test_materials_of_static_mesh();
     test_materials_of_skinned_mesh();
@@ -523,6 +589,8 @@ int main()
     test_without_root_path_is_verbatim(pm, am);
     test_corrupt_materials_block_warns(pm, am);
     test_materials_entry_without_valid_index_is_discarded(pm, am);
+    test_clone_keeps_override_path_verbatim_with_root_set(pm, am);
+    test_undo_redo_keeps_override_path_verbatim_with_root_set(pm, am);
 
     am.shutdown();
     pm.shutdown();

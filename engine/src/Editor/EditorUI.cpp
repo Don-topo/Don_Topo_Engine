@@ -234,8 +234,33 @@ void EditorUI::setProject(const ProjectContext* project)
     // aquí cubre los tres caminos de carga: la escena de arranque (a través de
     // este setProject), el Load Scene del menú File y el restore de Play->Stop
     // (los dos últimos ya corren con el proyecto aplicado, mucho después).
+    //
+    // MISMA fijación repetida en setScene, más abajo: NO es duplicación a
+    // limpiar. main() llama a setScene y a setProject en dos sitios distintos
+    // del cableado, y nada obliga a un orden concreto entre los dos — antes de
+    // este fix había red (applyProjectSettings corría cada frame y la fijaba
+    // igual, aunque un frame tarde, que es justo el bug de más arriba). Sin
+    // esa red, si alguien invierte el orden en main.cpp o un host nuevo llama
+    // a setScene después de setProject, la raíz se quedaría vacía en
+    // silencio — el patrón "obligación del llamante" que en este repo ya ha
+    // costado varios bugs (ver caller_obligation_is_a_latent_bug.md). Cada
+    // setter cubre el orden en el que ÉL llega segundo.
     if (m_scene && project && project->valid())
         m_scene->setAssetRoot(project->root().string());
+}
+
+void EditorUI::setScene(Scene* scene)
+{
+    m_scene = scene;
+
+    // Ver el comentario de setProject, justo arriba: esta es la MISMA
+    // fijación, repetida a propósito para cubrir el orden inverso de
+    // cableado (setScene llamado después de setProject). Si m_project
+    // todavía no está puesto (el orden normal de hoy: setScene corre antes
+    // que setProject en main.cpp), este es un no-op y setProject se encarga
+    // cuando le toque.
+    if (m_scene && m_project && m_project->valid())
+        m_scene->setAssetRoot(m_project->root().string());
 }
 
 EditorRenderer& EditorUI::renderer() { return *m_renderer; }
