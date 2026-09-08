@@ -7817,10 +7817,13 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
             ctx.renderer->removeMeshComponent(ctx.selected);
             // OJO: esto NO llama a GameObject::setMesh(nullptr) en los dos
             // backends. En Vulkan (Renderer::removeMeshComponent) sí lo hace,
-            // así que hasMesh() pasa a false y el reset de materialOverrides
-            // que trae ese setMesh ya deja el objeto sin overrides. En D3D12
-            // (D3D12Renderer::removeMeshComponent) SOLO libera los huecos de
-            // GPU (releaseObjectSlot/releaseSkinnedSlot) y nunca llama a
+            // así que hasMesh() pasa a false; pero ese setMesh(nullptr) SOLO
+            // resetea los baselines (base*/base*Taken) de cada entrada de
+            // materialOverrides -- ver GameObject.h::setMesh --, no vacía el
+            // vector. Quien de verdad lo vacía es el clear() de aquí abajo,
+            // que en Vulkan corre porque hasMesh() ya es false en este punto.
+            // En D3D12 (D3D12Renderer::removeMeshComponent) SOLO libera los
+            // huecos de GPU (releaseObjectSlot/releaseSkinnedSlot) y nunca llama a
             // setMesh: el GameObject se queda con hasMesh()==true, mesh y
             // Material intactos, como si el botón no hubiera hecho nada a
             // nivel de datos. Por eso el clear() de abajo va condicionado a
