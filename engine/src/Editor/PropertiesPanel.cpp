@@ -7815,21 +7815,39 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
         if (removeClicked && ctx.renderer)
         {
             ctx.renderer->removeMeshComponent(ctx.selected);
-            // Los overrides de textura no se limpian dentro de
-            // GameObject::setMesh(nullptr) (que removeMeshComponent llama por
-            // debajo): ese setMesh también lo usa el catch de
-            // AsyncAssetLoader::applyLoadedMesh para deshacer una carga fallida,
-            // y ahí SÍ hay que conservar los overrides (pueden venir recién
-            // leídos del .scene, de una malla que aún no ha terminado de
-            // cargar). Quitar el componente Mesh a mano con este botón es la
-            // acción explícita de "ya no quiero este mesh ni lo que tenía
-            // puesto", así que es aquí donde se vacían: sin esto, un "x" +
-            // "Add > Mesh" con un FBX de menos materiales reescribe overrides
-            // con índices que ya no existen en el mesh nuevo (mismo síntoma que
-            // el Critical de la ronda anterior, pero por un camino que ningún
+            // OJO: esto NO llama a GameObject::setMesh(nullptr) en los dos
+            // backends. En Vulkan (Renderer::removeMeshComponent) sí lo hace,
+            // así que hasMesh() pasa a false y el reset de materialOverrides
+            // que trae ese setMesh ya deja el objeto sin overrides. En D3D12
+            // (D3D12Renderer::removeMeshComponent) SOLO libera los huecos de
+            // GPU (releaseObjectSlot/releaseSkinnedSlot) y nunca llama a
+            // setMesh: el GameObject se queda con hasMesh()==true, mesh y
+            // Material intactos, como si el botón no hubiera hecho nada a
+            // nivel de datos. Por eso el clear() de abajo va condicionado a
+            // hasMesh(): usar la MISMA señal que ya gobierna si esta sección y
+            // la de Textures se siguen dibujando (más arriba) y si
+            // loadMeshForSelected acepta cargar un reemplazo, en vez de una
+            // señal propia que podría desincronizarse de esas dos. Si se
+            // vaciara siempre, en D3D12 el registro serializable
+            // (materialOverrides) quedaría vacío mientras el Material sigue
+            // enseñando la textura del override: el panel seguiría mostrando
+            // la asignación (la lee del Material, no del registro), pero el
+            // siguiente guardado no escribiría el bloque `materials` y la
+            // asignación se perdería al recargar, sin que nada en el editor lo
+            // avisara. Con la guarda, en D3D12 el clear no ocurre — el
+            // registro se queda igual de "vivo" que el Material al que
+            // describe, así que lo que se guarda sigue siendo lo que se ve — y
+            // en Vulkan hasMesh() ya es false aquí, así que el clear corre
+            // igual que antes: quitar el componente Mesh a mano con este botón
+            // es la acción explícita de "ya no quiero este mesh ni lo que
+            // tenía puesto", y sin vaciar el registro un "x" + "Add > Mesh" con
+            // un FBX de menos materiales reescribiría overrides con índices
+            // que ya no existen en el mesh nuevo (mismo síntoma que el
+            // Critical de la ronda anterior, pero por un camino que ningún
             // clamp de índice detecta, porque el índice era válido cuando se
             // escribió).
-            ctx.selected->materialOverrides.clear();
+            if (!ctx.selected->hasMesh())
+                ctx.selected->materialOverrides.clear();
             // Vuelve a ocultar la sección tras quitar el mesh — hay que
             // pulsar "Add > Mesh" de nuevo para reabrirla.
             m_meshAddRequestedFor = nullptr;

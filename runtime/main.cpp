@@ -240,6 +240,20 @@ int main(int argc, char** argv)
 
         DonTopo::Scene scene;
 
+        // La spec dice "el editor la fija al abrir proyecto y el runtime a su
+        // directorio de trabajo" (ver EditorUI::setProject/setScene para el
+        // lado del editor). Hasta ahora esto último no pasaba: funcionaba de
+        // casualidad porque las rutas dentro del paquete se guardan relativas
+        // y dos relativizaciones independientes (la del editor al exportar, la
+        // de toStoredPath al cargar sin raíz) producen la misma cadena. Fijarla
+        // aquí la vuelve una garantía explícita, no una coincidencia de
+        // formato de ruta. exeDir es el directorio de trabajo real del
+        // runtime desde la línea 146 (current_path ya apunta ahí, antes
+        // incluso de leer argv[1]) y es donde exportGame coloca assets/,
+        // shaders/, Scripts/, game.scene y game.cfg — la misma raíz que
+        // resolvería toStoredPath si esto se dejara sin fijar.
+        scene.setAssetRoot(exeDir.string());
+
         // Antes de initPresentation(): initImGui y createOffscreenImages leen
         // el flag durante esa inicialización. Adelantado respecto al orden
         // original porque ahora initPresentation corre ANTES de scene.load (ver

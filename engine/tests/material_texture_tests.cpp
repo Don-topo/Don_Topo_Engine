@@ -882,6 +882,50 @@ static void test_command_on_object_without_mesh_is_noop(PhysicsManager& pm, Audi
     (void)pm; (void)am;
 }
 
+// El índice era válido cuando se construyó el comando (skinned con 3
+// materiales, índice 2 = "pelo"), pero antes de que undo/redo lo reproduzca
+// la malla cambia a un Mesh plano de UN solo material -- el mismo escenario
+// que describe el comentario de la guarda en Command.cpp. Sin
+// "m_materialIndex >= mats.size()" en apply(), setMaterialTextureOverride
+// crearía igual una entrada huérfana con index=2 en materialOverrides (el
+// propio corte de applyMaterialOverrides evita la escritura fuera de rango
+// en el Material, pero no evita la entrada huérfana): el objeto se queda con
+// un override serializable que no describe ningún material real del mesh
+// actual, silencioso hasta el siguiente guardado.
+static void test_command_stale_index_after_mesh_shrinks(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto skinned = std::make_shared<SkinnedMesh>();
+    skinned->materials.resize(3);
+    skinned->materials[0].texturePath = "assets/cuerpo.png";
+    skinned->materials[1].texturePath = "assets/ropa.png";
+    skinned->materials[2].texturePath = "assets/pelo.png";
+    go->setMesh(skinned);
+    const uint64_t id = go->id;
+
+    // Comando construido para el índice 2 ("pelo") mientras el mesh es
+    // skinned con 3 materiales.
+    MaterialTextureCommand cmd(scene, nullptr, "Textura de pelo", id, 2,
+                                MaterialTextureSlot::Albedo, "", "assets/mia.png");
+
+    // La malla se sustituye por un Mesh estático plano: UN solo material, sin
+    // que el comando se entere -- exactamente el reordenamiento que el
+    // comentario de la guarda advierte.
+    auto plano = std::make_shared<Mesh>();
+    plano->material.texturePath = "assets/plano.png";
+    go->setMesh(plano);
+
+    cmd.execute();
+    CHECK(scene.findById(id)->materialOverrides.empty());
+    CHECK(scene.findById(id)->getMesh()->material.texturePath == "assets/plano.png");
+
+    cmd.undo();
+    CHECK(scene.findById(id)->materialOverrides.empty());
+    CHECK(scene.findById(id)->getMesh()->material.texturePath == "assets/plano.png");
+    (void)pm; (void)am;
+}
+
 int main()
 {
     // PhysicsManager/AudioManager comparten instancia entre los tests que la
@@ -931,6 +975,7 @@ int main()
     test_command_undo_of_clear(pm, am);
     test_command_survives_object_rebuild(pm, am);
     test_command_on_object_without_mesh_is_noop(pm, am);
+    test_command_stale_index_after_mesh_shrinks(pm, am);
 
     am.shutdown();
     pm.shutdown();
