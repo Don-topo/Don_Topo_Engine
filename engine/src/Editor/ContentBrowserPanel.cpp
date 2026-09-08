@@ -212,6 +212,33 @@ void updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
                 updateField(mat->normalMapPath);
                 updateField(mat->metallicRoughnessPath);
             }
+            // GameObject::materialOverrides es lo que de verdad sobrevive a un
+            // guardado (mesh.materials, Task 6): el bucle de arriba solo
+            // corrige el Material EN MEMORIA para lo que quede de sesión. Sin
+            // esto, el override guardado sigue apuntando al nombre viejo, el
+            // siguiente Save escribe esa ruta muerta tal cual, y al reabrir la
+            // textura no carga — justo la pérdida de datos que este encargo
+            // pide cerrar. Mismo updateField (mismo criterio de comparación:
+            // pathUnderDir/samePath) que el resto de la función.
+            //
+            // baseAlbedo/baseNormal/baseOrm NO se tocan aquí a propósito: no
+            // se serializan fuera de los caminos de MEMORIA de clonar/undo
+            // (ver el comentario grande junto a "baseAlbedo" en
+            // Scene.cpp::nodeToJson) — en disco se ignoran y se recapturan
+            // solos desde el material recién derivado del FBX en cada carga,
+            // así que dejarlos con el nombre viejo no puede causar la pérdida
+            // de datos entre sesiones que se arregla aquí. Sí queda una
+            // rendija dentro de la MISMA sesión: si el fichero renombrado es
+            // el que dio el baseline (no el override activo), un Clear()
+            // posterior seguiría devolviendo el nombre viejo. Es un caso más
+            // estrecho —hace falta un override activo Y que el fichero base
+            // se renombre por separado— y no es el que este fix cierra.
+            for (MaterialTextureOverride& ov : go->materialOverrides)
+            {
+                updateField(ov.albedo);
+                updateField(ov.normal);
+                updateField(ov.orm);
+            }
         }
         if (go->hasAudioClip())
         {
@@ -283,17 +310,12 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
                 // intentase stbi_load sobre una ruta que ya no existe. Para un
                 // slot SIN override de usuario esto basta también entre
                 // sesiones: el material se re-deriva del FBX en cada carga y
-                // ya no queda nada apuntando al fichero borrado. Para un slot
-                // CON override (GameObject::materialOverrides, serializado en
-                // mesh.materials desde la Task 6) este clear solo afecta al
-                // Material en memoria — el override guardado sigue apuntando
-                // al fichero borrado y se reaplicará tal cual en la siguiente
-                // carga, hasta que el usuario lo toque o lo limpie desde
-                // Properties. El hot-swap a la textura "missing", en cambio,
-                // sólo existe para el pipeline estático
-                // (replaceStaticTextureWithMissing indexa m_objects), así que
-                // en skinned el path queda vacío pero la GPU sigue mostrando
-                // la textura vieja hasta la siguiente carga de la malla.
+                // ya no queda nada apuntando al fichero borrado. El hot-swap a
+                // la textura "missing", en cambio, sólo existe para el
+                // pipeline estático (replaceStaticTextureWithMissing indexa
+                // m_objects), así que en skinned el path queda vacío pero la
+                // GPU sigue mostrando la textura vieja hasta la siguiente
+                // carga de la malla.
                 const bool canSwap = ctx.renderer && go->staticRenderIndex >= 0;
                 for (Material* mat : materialsOf(go))
                 {
@@ -315,6 +337,26 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
                         if (canSwap)
                             ctx.renderer->replaceStaticTextureWithMissing(go->staticRenderIndex, EditorRenderer::TextureSlot::MetallicRoughness);
                     }
+                }
+                // GameObject::materialOverrides es lo que se serializa
+                // (mesh.materials, Task 6): sin limpiarlo aquí también, el
+                // override guardado sigue apuntando al fichero que se acaba de
+                // borrar, y el siguiente Save reescribe esa ruta muerta tal
+                // cual — al reabrir, applyMaterialOverrides la reaplica sobre
+                // el material recién derivado del FBX y la textura no carga.
+                // Mismo criterio de comparación (matches) que el resto de la
+                // función.
+                //
+                // baseAlbedo/baseNormal/baseOrm no se tocan: no se serializan
+                // fuera de los caminos de memoria de clonar/undo (ver el
+                // comentario de "baseAlbedo" en Scene.cpp::nodeToJson), así
+                // que un baseline con el nombre viejo no puede perderse entre
+                // sesiones. Mismo razonamiento que en updateSceneReferencesForRename.
+                for (MaterialTextureOverride& ov : go->materialOverrides)
+                {
+                    if (matches(ov.albedo)) ov.albedo.clear();
+                    if (matches(ov.normal)) ov.normal.clear();
+                    if (matches(ov.orm))    ov.orm.clear();
                 }
             }
         }

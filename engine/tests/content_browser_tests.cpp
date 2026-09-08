@@ -155,6 +155,60 @@ static void test_detach_clears_skinned_material_path()
     CHECK(go->getSkinnedMesh()->materials[0].texturePath.empty());
 }
 
+// El rename tenía el mismo punto ciego con GameObject::materialOverrides que
+// antes tenía con SkinnedMesh::materials: reescribía el Material EN MEMORIA
+// pero no el override, que es lo que de verdad sobrevive a un guardado
+// (mesh.materials, Task 6). Sin esto, el override serializado seguía
+// apuntando al nombre viejo y el siguiente Load no encontraba la textura —
+// pérdida de datos silenciosa. Los tres slots a la vez: la guarda tiene que
+// cubrir albedo, normal y orm, no solo el primero que se pruebe.
+static void test_rename_rewrites_material_override_path()
+{
+    const std::string oldPath = "assets/knownTexture.png";
+    const std::string newPath = "assets/renamedTexture.png";
+    auto go = makeSkinnedFixture(oldPath);
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = oldPath;
+    ov.normal = oldPath;
+    ov.orm    = oldPath;
+    go->materialOverrides.push_back(ov);
+
+    GameObject* selected = nullptr;
+    bool isPlaying = false;
+    EditorContext ctx{selected, isPlaying};
+    updateSceneReferencesForRename(ctx, go.get(), oldPath, newPath, /*isDir=*/false);
+
+    CHECK(go->materialOverrides[0].albedo == newPath);
+    CHECK(go->materialOverrides[0].normal == newPath);
+    CHECK(go->materialOverrides[0].orm    == newPath);
+}
+
+// Mismo caso que arriba pero para borrar: el override que apunte al fichero
+// que se borra tiene que vaciarse igual que el Material, o el siguiente Save
+// reescribe la ruta muerta y el siguiente Load la reaplica sobre el material
+// recién derivado del FBX.
+static void test_detach_clears_material_override_path()
+{
+    const std::string knownPath = "assets/knownTexture.png";
+    auto go = makeSkinnedFixture(knownPath);
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = knownPath;
+    ov.normal = knownPath;
+    ov.orm    = knownPath;
+    go->materialOverrides.push_back(ov);
+
+    GameObject* selected = nullptr;
+    bool isPlaying = false;
+    EditorContext ctx{selected, isPlaying};
+    detachSceneReferencesForDelete(ctx, go.get(), knownPath, /*isDir=*/false);
+
+    CHECK(go->materialOverrides[0].albedo.empty());
+    CHECK(go->materialOverrides[0].normal.empty());
+    CHECK(go->materialOverrides[0].orm.empty());
+}
+
 int main()
 {
     fs::path root = makeFixture();
@@ -167,6 +221,8 @@ int main()
     test_count_references_finds_skinned_material_texture();
     test_rename_rewrites_skinned_material_path();
     test_detach_clears_skinned_material_path();
+    test_rename_rewrites_material_override_path();
+    test_detach_clears_material_override_path();
     std::error_code ec;
     fs::remove_all(root, ec);
     if (g_failures == 0) std::printf("ALL CONTENT BROWSER TESTS PASSED\n");
