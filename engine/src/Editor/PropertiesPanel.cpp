@@ -7815,6 +7815,21 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
         if (removeClicked && ctx.renderer)
         {
             ctx.renderer->removeMeshComponent(ctx.selected);
+            // Los overrides de textura no se limpian dentro de
+            // GameObject::setMesh(nullptr) (que removeMeshComponent llama por
+            // debajo): ese setMesh también lo usa el catch de
+            // AsyncAssetLoader::applyLoadedMesh para deshacer una carga fallida,
+            // y ahí SÍ hay que conservar los overrides (pueden venir recién
+            // leídos del .scene, de una malla que aún no ha terminado de
+            // cargar). Quitar el componente Mesh a mano con este botón es la
+            // acción explícita de "ya no quiero este mesh ni lo que tenía
+            // puesto", así que es aquí donde se vacían: sin esto, un "x" +
+            // "Add > Mesh" con un FBX de menos materiales reescribe overrides
+            // con índices que ya no existen en el mesh nuevo (mismo síntoma que
+            // el Critical de la ronda anterior, pero por un camino que ningún
+            // clamp de índice detecta, porque el índice era válido cuando se
+            // escribió).
+            ctx.selected->materialOverrides.clear();
             // Vuelve a ocultar la sección tras quitar el mesh — hay que
             // pulsar "Add > Mesh" de nuevo para reabrirla.
             m_meshAddRequestedFor = nullptr;

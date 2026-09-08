@@ -679,6 +679,19 @@ void MaterialTextureCommand::apply(const std::string& path)
     GameObject* go = m_scene.findById(m_id);
     if (!go || !go->hasMesh()) return;
 
+    // El material_index era válido cuando se construyó este comando, pero el
+    // replay (undo/redo) puede llegar mucho después: quitar el componente Mesh
+    // no apila comando (no reordena la pila), así que un Ctrl+Y sobre ESTE
+    // comando puede caer con el GameObject ya llevando OTRA malla, con menos
+    // materiales que la de entonces. setMaterialTextureOverride se deja SIN
+    // este corte a propósito —es la primitiva compartida con el lector de
+    // escena, y su tolerancia a un índice fuera de rango es la que permite que
+    // un .scene con más materiales de los que trae el mesh cargado ahora mismo
+    // no pierda el override—, pero este llamante sí conoce el mesh vivo y
+    // puede evitar escribir un índice que ya no existe en él.
+    const std::vector<Material*> mats = materialsOfMesh(*go);
+    if (m_materialIndex < 0 || m_materialIndex >= (int)mats.size()) return;
+
     setMaterialTextureOverride(*go, m_materialIndex, m_slot, path);
 
     if (!m_renderer) return;
