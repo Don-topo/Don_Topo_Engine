@@ -879,6 +879,23 @@ static void test_command_survives_object_rebuild(PhysicsManager& pm, AudioManage
     (void)pm; (void)am;
 }
 
+// Sin setMesh: el objeto no tiene material donde aplicar nada. Sin la guarda
+// !go->hasMesh() en apply(), setMaterialTextureOverride le crearia igual una
+// entrada huerfana en materialOverrides -- un override escrito sobre un
+// objeto que no tiene malla, sin efecto visible y sin que nada lo delate.
+static void test_command_on_object_without_mesh_is_noop(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("SinMalla");
+    const uint64_t id = go->id;
+
+    MaterialTextureCommand cmd(scene, nullptr, "Textura", id, 0,
+                                MaterialTextureSlot::Albedo, "", "assets/mia.png");
+    cmd.execute();
+    CHECK(scene.findById(id)->materialOverrides.empty());
+    (void)pm; (void)am;
+}
+
 int main()
 {
     // PhysicsManager/AudioManager comparten instancia entre los tests que la
@@ -928,6 +945,7 @@ int main()
     test_command_undo_redo_assignment(pm, am);
     test_command_undo_of_clear(pm, am);
     test_command_survives_object_rebuild(pm, am);
+    test_command_on_object_without_mesh_is_noop(pm, am);
 
     am.shutdown();
     pm.shutdown();
