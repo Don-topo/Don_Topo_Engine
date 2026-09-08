@@ -7906,7 +7906,13 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
     std::vector<Material*> mats = materialsOfMesh(*ctx.selected);
     if (mats.empty()) return;
 
-    if (!ImGui::CollapsingHeader("Textures")) return;
+    // Desplegada por defecto, como el propio TreeNode del Mesh. Plegada era
+    // invisible en la práctica: las texturas no son un componente aparte —no
+    // hay "Material" en el menú Add— así que quien las busca mira ahí, no
+    // dentro del Mesh, y una cabecera cerrada bajo el checkbox Visible no
+    // dice que ahí estén. El coste es que la sección Mesh es más alta
+    // siempre, y bastante más en un skinned con varios materiales.
+    if (!ImGui::CollapsingHeader("Textures", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
     // Capturado UNA vez, no leído de ctx.selected en cada callback: el drop y
     // el Clear son síncronos (se resuelven en este mismo frame, sobre el
