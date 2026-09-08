@@ -119,8 +119,12 @@ private:
     // está puesto.
     void drawTexturesSection(EditorContext& ctx);
     // path vacío = Clear. Un solo sitio del que salen las seis llamadas
-    // (tres slots x drop y browse) y el único que apila el comando.
-    void assignMaterialTexture(EditorContext& ctx, int materialIndex,
+    // (tres slots x drop y browse) y el único que apila el comando. ownerId en
+    // vez de leer ctx.selected: el resultado del diálogo de Browse llega varios
+    // frames después de abrirlo, y ningún diálogo de este panel es modal —la
+    // selección pudo cambiar mientras tanto—, así que resuelve el GameObject
+    // por id, mismo patrón que setButtonAssetPath.
+    void assignMaterialTexture(EditorContext& ctx, uint64_t ownerId, int materialIndex,
                                 MaterialTextureSlot slot, const std::string& path);
     // Screen Space Reflections del objeto. No es un componente y no pasa por
     // "Add": son dos campos del GameObject (como el transform), así que la
@@ -546,8 +550,9 @@ private:
     // Mensaje del último intento fallido de carga de Mesh (vacío si no hay
     // error pendiente); se limpia al cambiar de selección o al cargar bien.
     std::string m_meshLoadError;
-    // Textura de material rechazada por extensión no soportada. Igual que
-    // m_buttonPathError: no se limpia al cambiar de selección (ver ahí).
+    // Textura de material rechazada por extensión no soportada. Se limpia al
+    // cambiar de selección, mismo motivo que m_meshLoadError: si no, el error
+    // del objeto anterior se queda pintado bajo las texturas del nuevo.
     std::string m_textureLoadError;
     // Instancia propia de ImGuiFileDialog para la sección Textures, nunca
     // compartida con m_meshFileDialog ni con m_audioFileDialog (mismo motivo
@@ -555,8 +560,13 @@ private:
     // de la que lo dibuja).
     bool m_textureDlgOpen = false;
     std::unique_ptr<IGFD::FileDialog> m_textureFileDialog;
-    // A qué material y qué slot vuelve el resultado del Browse cuando el modal
-    // se cierre, varios frames después.
+    // A qué objeto, material y slot vuelve el resultado del Browse cuando el
+    // modal se cierre, varios frames después: ninguno de los diálogos de este
+    // panel es modal (cero ImGuiFileDialogFlags_Modal), así que el Hierarchy
+    // sigue clicable y la selección puede haber cambiado para entonces. Sin
+    // m_textureDlgOwner el resultado se aplicaría al objeto seleccionado EN ESE
+    // MOMENTO, no al que abrió el diálogo.
+    uint64_t            m_textureDlgOwner    = 0;
     int                 m_textureDlgMaterial = 0;
     MaterialTextureSlot m_textureDlgSlot     = MaterialTextureSlot::Albedo;
     // GameObject para el que se pulsó "Add > Mesh" (revela la sección

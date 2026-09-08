@@ -454,6 +454,7 @@ void PropertiesPanel::draw(EditorContext& ctx)
                     m_caches.props = ctx.selected;
                     m_meshLoadError.clear();
                     m_audioLoadError.clear();
+                    m_textureLoadError.clear();
                 }
             }
             // PhysX mueve worldTransform (y localTransform, ver traverse en el loop
@@ -7871,6 +7872,15 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
 
     if (!ImGui::CollapsingHeader("Textures")) return;
 
+    // Capturado UNA vez, no leído de ctx.selected en cada callback: el drop y
+    // el Clear son síncronos (se resuelven en este mismo frame, sobre el
+    // objeto que se está dibujando ahora mismo), pero el Browse no — su
+    // resultado llega varios frames después, cuando la selección ya pudo
+    // cambiar. Todos los callbacks de abajo pasan este id explícitamente en
+    // vez de volver a mirar ctx.selected, para que los seis caminos (drop y
+    // browse de los tres slots) usen la misma fuente de verdad.
+    const uint64_t ownerId = ctx.selected->id;
+
     struct SlotDesc { const char* nombre; MaterialTextureSlot slot; };
     static const SlotDesc kSlots[3] = {
         { "Albedo",             MaterialTextureSlot::Albedo },
@@ -7904,8 +7914,18 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
             const MaterialTextureSlot slot = d.slot;
             drawAssetDropBox(
                 ctx, d.nombre, "Drop image here",
-                [this, materialIndex, slot]() {
+                [this, &ctx, ownerId, materialIndex, slot]() {
+                    // Gate propio: drawAssetDropBox es compartido por otras 15
+                    // cajas y no condiciona el botón Browse a editingLocked
+                    // (solo el drop). Sin esto, con el modal de Load Scene
+                    // abierto el diálogo se abría igual y la elección se
+                    // descartaba después en silencio (assignMaterialTexture ya
+                    // corta por editingLocked, pero para entonces el usuario ya
+                    // navegó el diálogo entero sin ningún aviso).
+                    if (ctx.editingLocked) return;
+
                     m_textureDlgOpen     = true;
+                    m_textureDlgOwner    = ownerId;
                     m_textureDlgMaterial = materialIndex;
                     m_textureDlgSlot     = slot;
                     IGFD::FileDialogConfig cfg;
@@ -7921,13 +7941,13 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                     m_textureFileDialog->OpenDialog("PickTextureDlg", "Choose image",
                                                      ".png,.jpg,.jpeg,.bmp,.tga", cfg);
                 },
-                [this, &ctx, materialIndex, slot](const std::string& path) {
-                    assignMaterialTexture(ctx, materialIndex, slot, path);
+                [this, &ctx, ownerId, materialIndex, slot](const std::string& path) {
+                    assignMaterialTexture(ctx, ownerId, materialIndex, slot, path);
                 });
 
             ImGui::BeginDisabled(ctx.editingLocked || !hasOverride(*ctx.selected, materialIndex, slot));
             if (ImGui::Button("Clear"))
-                assignMaterialTexture(ctx, materialIndex, slot, "");
+                assignMaterialTexture(ctx, ownerId, materialIndex, slot, "");
             ImGui::EndDisabled();
 
             ImGui::PopID();
@@ -7939,14 +7959,47 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_textureLoadError.c_str());
 }
 
-void PropertiesPanel::assignMaterialTexture(EditorContext& ctx, int materialIndex,
+void PropertiesPanel::assignMaterialTexture(EditorContext& ctx, uint64_t ownerId, int materialIndex,
                                              MaterialTextureSlot slot, const std::string& path)
 {
     // ctx.scene puede ser nullptr (m_scene por defecto en EditorUI): sin esta
-    // guarda, *ctx.scene más abajo desreferenciaría null si esta función se
-    // llegara a invocar sin escena activa. Mismo patrón que setButtonAssetPath
-    // y el resto de setters de asset de este fichero.
-    if (!ctx.selected || !ctx.selected->hasMesh() || ctx.editingLocked || !ctx.scene) return;
+    // guarda, findById de abajo desreferenciaría null.
+    if (!ctx.scene) return;
+
+    // Resuelto por id, NUNCA leído de ctx.selected: el resultado del diálogo
+    // de Browse llega varios frames después de abrirlo y ninguno de los
+    // diálogos de este panel es modal (cero ImGuiFileDialogFlags_Modal en todo
+    // el fichero), así que el Hierarchy sigue clicable mientras está abierto.
+    // Sin resolver por el id capturado al abrir, el resultado se aplicaría al
+    // objeto seleccionado EN ESE MOMENTO, no al que abrió el diálogo.
+    GameObject* go = ctx.scene->findById(ownerId);
+    if (!go)
+    {
+        // El objeto se borró (o el snapshot es de un undo/redo de por medio)
+        // mientras el diálogo seguía abierto: sin este aviso la elección se
+        // descartaría en silencio y parecería que Browse no hizo nada.
+        ctx.logModule("Mesh", "No se pudo aplicar la textura: el objeto ya no existe");
+        return;
+    }
+    if (!go->hasMesh() || ctx.editingLocked) return;
+
+    // Segunda línea de defensa contra el mismo escenario de arriba: el diálogo
+    // se abrió sobre un material de UN objeto (p.ej. el índice 2 de un skinned
+    // con 3 materiales) y para cuando se cierra, ownerId resuelve a OTRO
+    // objeto con menos materiales. setMaterialTextureOverride no valida el
+    // índice (lo tolera a propósito para overrides de escenas con más
+    // materiales de los que trae el mesh cargado ahora mismo — ver los tests
+    // de índice fuera de rango), así que sin este corte aquí, en el panel, se
+    // escribiría un override que applyMaterialOverrides ignora en silencio hoy
+    // pero que nodeToJson serializa igual, y que dispararía el aviso de
+    // "índice fuera de rango" en la siguiente carga de escena.
+    const std::vector<Material*> mats = materialsOfMesh(*go);
+    if (materialIndex < 0 || materialIndex >= (int)mats.size())
+    {
+        ctx.logModule("Mesh", "No se pudo aplicar la textura: el material ya no existe en '"
+                              + go->name + "'");
+        return;
+    }
 
     // Clear entra con path vacío y sin comprobar extensión: no hay extensión
     // que validar, y lo que se valida es lo que se ASIGNA, no lo que se quita.
@@ -7963,18 +8016,23 @@ void PropertiesPanel::assignMaterialTexture(EditorContext& ctx, int materialInde
         }
     }
 
-    const std::string antes = currentOverride(*ctx.selected, materialIndex, slot);
+    const std::string antes = currentOverride(*go, materialIndex, slot);
+    // Misma textura que ya había: nada que hacer. Sin este corte, reasignar lo
+    // mismo apilaría un comando inerte (un Ctrl+Z que aparentemente no
+    // responde) y dispararía una resubida completa a GPU para nada. Mismo
+    // criterio que setButtonAssetPath.
+    if (antes == path) return;
     m_textureLoadError.clear();
 
     auto cmd = std::make_unique<MaterialTextureCommand>(
         *ctx.scene, ctx.renderer,
-        (path.empty() ? "Quitar textura de '" : "Textura de '") + ctx.selected->name + "'",
-        ctx.selected->id, materialIndex, slot, antes, path);
+        (path.empty() ? "Quitar textura de '" : "Textura de '") + go->name + "'",
+        go->id, materialIndex, slot, antes, path);
     cmd->execute();
     if (ctx.undo) ctx.undo->push(std::move(cmd));
 
     ctx.pushLog((path.empty() ? "Textura quitada de '" : "Textura asignada a '")
-                + ctx.selected->name + "'");
+                + go->name + "'");
 }
 
 void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
@@ -8001,7 +8059,7 @@ void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
     {
         if (m_textureFileDialog->IsOk() &&
             assetAllowed(ctx, m_textureFileDialog->GetFilePathName()))
-            assignMaterialTexture(ctx, m_textureDlgMaterial, m_textureDlgSlot,
+            assignMaterialTexture(ctx, m_textureDlgOwner, m_textureDlgMaterial, m_textureDlgSlot,
                                   m_textureFileDialog->GetFilePathName());
         m_textureFileDialog->Close();
         m_textureDlgOpen = false;
