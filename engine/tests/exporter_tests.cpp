@@ -354,6 +354,77 @@ static void test_rewrite_leaves_unknown_paths(const fs::path& root)
     CHECK(j["root"]["mesh"]["sourcePath"].get<std::string>() == "C:/otro/sitio/x.fbx");
 }
 
+// El bloque mesh.materials (overrides de textura puestos a mano desde
+// Properties, Task 6) es tan asset como sourcePath o audioClip, pero
+// rewriteNode no lo conocía: el fichero SÍ se empaquetaba de sobra
+// (collectSceneAssets ya lo recorre vía materialsOf), pero la ruta que
+// quedaba escrita en el game.scene del paquete seguía siendo la de disco del
+// editor. Un override FUERA de la raíz del proyecto es el caso que lo
+// delata: toStoredPath ya la deja absoluta para ese caso (igual que hace con
+// sourcePath), así que sin el fix llega intacta al paquete, apuntando a la
+// máquina que exportó y no a assets/_external/.
+static void test_rewrite_materials_override_outside_root(const fs::path& root)
+{
+    std::error_code ec;
+    fs::path tempRoot = fs::temp_directory_path(ec);
+    if (ec || tempRoot.empty())
+    {
+        // Mismo criterio que test_external_assets: sin temp_directory_path no
+        // hay dónde escribir con seguridad.
+        CHECK(false);
+        return;
+    }
+    fs::path outside = tempRoot / "dt_exporter_materials_outside";
+    fs::remove_all(outside, ec);
+    fs::create_directories(outside, ec);
+    const fs::path albedoFile = outside / "override_albedo.png";
+    std::ofstream(albedoFile) << "png";
+
+    Scene scene;
+    scene.setAssetRoot(root.string());
+
+    auto* go = scene.addGameObject("prop");
+    auto mesh = makeMesh(root / "assets" / "hero.fbx");
+    // El override vive en dos sitios a la vez: Material (lo que
+    // collectSceneAssets recorre vía materialsOf) y
+    // GameObject::materialOverrides (lo que nodeToJson serializa). En el
+    // camino real los pone applyMaterialOverrides juntos; aquí, con la malla
+    // construida a mano, se replican los dos a propósito.
+    mesh->material.texturePath = albedoFile.string();
+    go->setMesh(mesh);
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = albedoFile.string();
+    go->materialOverrides.push_back(ov);
+
+    std::vector<ExportAsset> assets = collectSceneAssets(scene, root, {});
+    std::map<std::string, std::string> sourceToPackage;
+    for (const ExportAsset& a : assets)
+        sourceToPackage[exportPathKey(a.sourcePath)] = a.packagePath;
+    const std::string expectedPackagePath = sourceToPackage[exportPathKey(albedoFile.string())];
+    CHECK(!expectedPackagePath.empty());
+
+    nlohmann::json j = scene.toJson();
+    // Antes de reescribir: el override sigue absoluto, tal cual toStoredPath
+    // lo dejó por caer fuera de la raíz. Si esto fallara, el resto del test
+    // no estaría probando lo que dice probar.
+    CHECK(j["root"]["children"][0]["mesh"]["materials"][0]["albedo"].get<std::string>()
+          == albedoFile.string());
+
+    int rewritten = rewriteScenePaths(j, sourceToPackage);
+    // sourcePath (hero.fbx, dentro de la raíz) + materials[0].albedo: 2 campos.
+    CHECK(rewritten == 2);
+
+    const nlohmann::json& mats = j["root"]["children"][0]["mesh"]["materials"];
+    CHECK(mats.size() == 1);
+    const std::string albedoAfter = mats[0]["albedo"].get<std::string>();
+    CHECK(albedoAfter == expectedPackagePath);
+    // Y sobre todo: ya no es la ruta absoluta de la máquina que exportó.
+    CHECK(albedoAfter.find(':') == std::string::npos);
+
+    fs::remove_all(outside, ec);
+}
+
 // El paquete contiene el exe renombrado, game.scene, los assets del plan, el
 // skybox, los shaders y Scripts/ — y ningún asset del proyecto que la escena
 // no referencie (criterio de aceptación 3).
@@ -900,6 +971,7 @@ int main()
     test_missing_asset_flagged(root);
     test_rewrite_makes_paths_relative(root);
     test_rewrite_leaves_unknown_paths(root);
+    test_rewrite_materials_override_outside_root(root);
     test_package_contents(root);
     test_package_includes_splash(root);
     test_package_overwrite_is_clean(root);

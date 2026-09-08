@@ -670,8 +670,8 @@ namespace
                  {"tangent", vec3ToJson(v.tangent)} };
     }
 
-    // Ruta que va al fichero: relativa con "/" si cae bajo la raiz, y absoluta
-    // tal cual si no. Fuera de la raiz una relativa seria una ristra de ".."
+    // Ruta que va al fichero: relativa con "/" si cae bajo la raíz, y absoluta
+    // tal cual si no. Fuera de la raíz una relativa sería una ristra de ".."
     // que no sobrevive a mover el proyecto de sitio.
     std::string toStoredPath(const std::string& path, const std::string& assetRoot)
     {
@@ -1861,7 +1861,7 @@ namespace
             }
 
             // Overrides de textura. Un bloque que no sea array, o una entrada
-            // sin "index" numerico, se descarta con aviso: media configuracion
+            // sin "index" numérico, se descarta con aviso: media configuración
             // es peor que ninguna, mismo criterio que jsonToMat4 con la matriz.
             if (j["mesh"].contains("materials"))
             {

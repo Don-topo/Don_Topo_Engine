@@ -198,11 +198,14 @@ void updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
             // heredado. Sin esto, renombrar una textura dejaba a todos los
             // personajes con rig apuntando en memoria al nombre viejo durante
             // el resto de la sesión — en silencio, hasta el siguiente intento
-            // de tocar esa ruta. No es cuestión de durabilidad entre
-            // sesiones: nodeToJson (Scene.cpp) no serializa texturePath/
-            // normalMapPath/metallicRoughnessPath, así que al recargar la
-            // escena el material se re-deriva del FBX igual, con o sin este
-            // fix.
+            // de tocar esa ruta. Para un slot SIN override de usuario esto
+            // basta también entre sesiones: el material se re-deriva del FBX
+            // en cada carga. Para un slot CON override
+            // (GameObject::materialOverrides, que desde la Task 6 sí se
+            // serializa en mesh.materials) este fix solo corrige el Material
+            // en memoria — el override guardado sigue apuntando al nombre
+            // viejo hasta que el usuario vuelva a tocar ese slot desde
+            // Properties.
             for (Material* mat : materialsOf(go))
             {
                 updateField(mat->texturePath);
@@ -277,16 +280,20 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
                 // El path se limpia SIEMPRE que casa, aunque no haya hot-swap:
                 // el fichero se va del disco, y dejar el path apuntando a él
                 // haría que un registerGameObject/re-register posterior
-                // intentase stbi_load sobre una ruta que ya no existe. No es
-                // cuestión de durabilidad entre sesiones — nodeToJson
-                // (Scene.cpp) no serializa texturePath/normalMapPath/
-                // metallicRoughnessPath, así que al recargar la escena el
-                // material se re-deriva del FBX de todas formas. El hot-swap
-                // a la textura "missing", en cambio, sólo existe para el
-                // pipeline estático (replaceStaticTextureWithMissing indexa
-                // m_objects), así que en skinned el path queda vacío pero la
-                // GPU sigue mostrando la textura vieja hasta la siguiente
-                // carga de la malla.
+                // intentase stbi_load sobre una ruta que ya no existe. Para un
+                // slot SIN override de usuario esto basta también entre
+                // sesiones: el material se re-deriva del FBX en cada carga y
+                // ya no queda nada apuntando al fichero borrado. Para un slot
+                // CON override (GameObject::materialOverrides, serializado en
+                // mesh.materials desde la Task 6) este clear solo afecta al
+                // Material en memoria — el override guardado sigue apuntando
+                // al fichero borrado y se reaplicará tal cual en la siguiente
+                // carga, hasta que el usuario lo toque o lo limpie desde
+                // Properties. El hot-swap a la textura "missing", en cambio,
+                // sólo existe para el pipeline estático
+                // (replaceStaticTextureWithMissing indexa m_objects), así que
+                // en skinned el path queda vacío pero la GPU sigue mostrando
+                // la textura vieja hasta la siguiente carga de la malla.
                 const bool canSwap = ctx.renderer && go->staticRenderIndex >= 0;
                 for (Material* mat : materialsOf(go))
                 {

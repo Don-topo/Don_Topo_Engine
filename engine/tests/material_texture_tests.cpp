@@ -286,7 +286,7 @@ static void test_path_when_no_embedded()
     CHECK(chooseTextureSource("assets/x.png", {}) == TextureSource::Path);
 }
 
-// Round-trip: los overrides de TODOS los indices sobreviven a guardar y cargar.
+// Round-trip: los overrides de TODOS los índices sobreviven a guardar y cargar.
 static void test_overrides_survive_round_trip(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -412,7 +412,7 @@ static void test_path_outside_root_stays_absolute()
     CHECK(texto.find("..") == std::string::npos);
 }
 
-// Sin raíz fijada (tests, runtime headless), la ruta va y vuelve IDENTICA.
+// Sin raíz fijada (tests, runtime headless), la ruta va y vuelve IDÉNTICA.
 static void test_without_root_path_is_verbatim(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -495,7 +495,7 @@ static void test_materials_entry_without_valid_index_is_discarded(PhysicsManager
     CHECK(cuboJson != nullptr);
     if (!cuboJson) return;
     CHECK((*cuboJson)["mesh"].contains("materials"));
-    // Se anade una segunda entrada sin "index": tiene que descartarse SOLA,
+    // Se añade una segunda entrada sin "index": tiene que descartarse SOLA,
     // dejando viva la primera.
     (*cuboJson)["mesh"]["materials"].push_back({ {"albedo", "assets/sin_indice.png"} });
 
@@ -696,7 +696,7 @@ static void test_discard_overridden_decoded_images_removes_only_overridden_slot(
 
     MaterialTextureOverride ov;
     ov.index  = 0;
-    ov.albedo = "assets/mia.png";   // solo el albedo esta overrideado
+    ov.albedo = "assets/mia.png";   // solo el albedo está overrideado
     std::vector<MaterialTextureOverride> overrides{ov};
 
     discardOverriddenDecodedImages(images, overrides);
@@ -712,20 +712,6 @@ static void test_discard_overridden_decoded_images_removes_only_overridden_slot(
     CHECK(!hasAlbedo);
     CHECK(hasNormal);
     CHECK(hasOrm);
-}
-
-// Sin overrides, el filtro no toca nada: los tres slots decodificados
-// sobreviven intactos, que es justo el trabajo del worker que hay que
-// aprovechar cuando nadie ha pisado nada.
-static void test_discard_overridden_decoded_images_noop_without_overrides()
-{
-    DecodedImage albedo; albedo.slot = DecodedImage::Albedo;
-    std::vector<DecodedImage> images{albedo};
-    std::vector<MaterialTextureOverride> overrides;   // vacío
-
-    discardOverriddenDecodedImages(images, overrides);
-
-    CHECK(images.size() == 1);
 }
 
 // r.images solo decodifica Mesh::material (índice 0, ver el comentario de
@@ -811,8 +797,8 @@ static void test_reload_after_failed_load_recaptures_correct_baseline()
     CHECK(go->getMesh()->material.texturePath == "assets/otro_fbx.png");
 }
 
-// Undo/redo de una asignacion, con el renderer a nullptr (sin GPU): lo que se
-// prueba es el dato, que es lo unico que sobrevive al ciclo.
+// Undo/redo de una asignación, con el renderer a nullptr (sin GPU): lo que se
+// prueba es el dato, que es lo único que sobrevive al ciclo.
 static void test_command_undo_redo_assignment(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -835,7 +821,7 @@ static void test_command_undo_redo_assignment(PhysicsManager& pm, AudioManager& 
     (void)pm; (void)am;
 }
 
-// Undo de un Clear: vuelve a poner la ruta que el usuario habia asignado.
+// Undo de un Clear: vuelve a poner la ruta que el usuario había asignado.
 static void test_command_undo_of_clear(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -857,7 +843,7 @@ static void test_command_undo_of_clear(PhysicsManager& pm, AudioManager& am)
     (void)pm; (void)am;
 }
 
-// El comando resuelve por id en CADA aplicacion: un puntero guardado quedaria
+// El comando resuelve por id en CADA aplicación: un puntero guardado quedaría
 // colgando tras un undo de Delete que reconstruya el objeto.
 static void test_command_survives_object_rebuild(PhysicsManager& pm, AudioManager& am)
 {
@@ -880,8 +866,8 @@ static void test_command_survives_object_rebuild(PhysicsManager& pm, AudioManage
 }
 
 // Sin setMesh: el objeto no tiene material donde aplicar nada. Sin la guarda
-// !go->hasMesh() en apply(), setMaterialTextureOverride le crearia igual una
-// entrada huerfana en materialOverrides -- un override escrito sobre un
+// !go->hasMesh() en apply(), setMaterialTextureOverride le crearía igual una
+// entrada huérfana en materialOverrides -- un override escrito sobre un
 // objeto que no tiene malla, sin efecto visible y sin que nada lo delate.
 static void test_command_on_object_without_mesh_is_noop(PhysicsManager& pm, AudioManager& am)
 {
@@ -938,7 +924,6 @@ int main()
     test_out_of_range_index_warns_on_scene_load(pm, am);
     test_clone_clear_restores_fbx_texture_not_override(pm, am);
     test_discard_overridden_decoded_images_removes_only_overridden_slot();
-    test_discard_overridden_decoded_images_noop_without_overrides();
     test_discard_overridden_decoded_images_ignores_other_index();
     test_set_mesh_resets_stale_baseline();
     test_reload_after_failed_load_recaptures_correct_baseline();

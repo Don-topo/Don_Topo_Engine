@@ -313,7 +313,7 @@ static void test_rekey_moves_the_entry()
     CHECK(creadas == 2);
 }
 
-// Re-clavear a una clave que ya tiene OTRA entrada se rechaza: dejaria una de
+// Re-clavear a una clave que ya tiene OTRA entrada se rechaza: dejaría una de
 // las dos inalcanzable en el mapa, o sea una fuga de recursos GPU.
 static void test_rekey_rejects_collision()
 {
@@ -323,11 +323,11 @@ static void test_rekey_rejects_collision()
     const int b = cache.acquire("b", crear);
     CHECK(a != b);
     CHECK(!cache.rekey(a, "b"));
-    // Y la de a sigue encontrandose por su clave de siempre.
+    // Y la de a sigue encontrándose por su clave de siempre.
     CHECK(cache.acquire("a", crear) == a);
 }
 
-// Indice muerto: no hace nada y lo dice.
+// Índice muerto: no hace nada y lo dice.
 static void test_rekey_on_dead_index()
 {
     SharedGpuMeshCache cache;
@@ -335,7 +335,7 @@ static void test_rekey_on_dead_index()
     CHECK(!cache.rekey(-1, "loquesea"));
 }
 
-// Re-clavear a la clave que ya tenia es un no-op que devuelve true.
+// Re-clavear a la clave que ya tenía es un no-op que devuelve true.
 static void test_rekey_to_same_key()
 {
     SharedGpuMeshCache cache;
@@ -345,7 +345,7 @@ static void test_rekey_to_same_key()
     CHECK(cache.acquire("k", crear) == idx);
 }
 
-// El refcount no lo toca: dos duenos antes, dos duenos despues.
+// El refcount no lo toca: dos dueños antes, dos dueños después.
 static void test_rekey_preserves_refcount()
 {
     SharedGpuMeshCache cache;

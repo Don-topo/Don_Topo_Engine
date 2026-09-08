@@ -696,9 +696,9 @@ void MaterialTextureCommand::apply(const std::string& path)
 
     if (!m_renderer) return;
 
-    // Skinned y estatico van por caminos distintos porque los recursos de GPU
-    // lo son: el personaje se reconstruye entero (es lo unico que hay), el
-    // estatico solo cambia de material.
+    // Skinned y estático van por caminos distintos porque los recursos de GPU
+    // lo son: el personaje se reconstruye entero (es lo único que hay), el
+    // estático solo cambia de material.
     if (SkinnedMesh* sm = go->getSkinnedMesh(); sm && go->skinnedRenderIndex >= 0)
         m_renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *sm);
     else if (go->staticRenderIndex >= 0)

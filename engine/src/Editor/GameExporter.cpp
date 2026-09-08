@@ -363,6 +363,22 @@ int rewriteNode(nlohmann::json& node, const std::map<std::string, std::string>& 
         if (mesh.contains("animationSources") && mesh["animationSources"].is_array())
             for (nlohmann::json& src : mesh["animationSources"])
                 n += rewriteField(src, "path", sourceToPackage);
+        // Overrides de textura puestos a mano (Scene::nodeToJson, bloque
+        // "materials"). Sin esto el fichero SÍ se empaqueta (collectSceneAssets
+        // ya conoce estas rutas) pero la que queda escrita en el game.scene del
+        // paquete sigue siendo la de disco del editor: un override que apunte
+        // fuera de la raíz del proyecto viaja absoluto y el juego exportado
+        // busca la textura en la máquina que lo generó. baseAlbedo/baseNormal/
+        // baseOrm no se tocan: nodeToJson solo los escribe con
+        // carryOverrideBaseline=true (clonar, undo/redo en memoria), y
+        // exportGame llama a scene.toJson() con el default false.
+        if (mesh.contains("materials") && mesh["materials"].is_array())
+            for (nlohmann::json& mat : mesh["materials"])
+            {
+                n += rewriteField(mat, "albedo", sourceToPackage);
+                n += rewriteField(mat, "normal", sourceToPackage);
+                n += rewriteField(mat, "orm", sourceToPackage);
+            }
     }
     if (node.contains("audioClip") && node["audioClip"].is_object())
         n += rewriteField(node["audioClip"], "path", sourceToPackage);
