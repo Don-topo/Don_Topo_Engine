@@ -188,12 +188,47 @@ void drawColliderLayerCombo(DonTopo::EditorContext& ctx, const char* label,
         }));
 }
 
+// La ruta que hay AHORA en el material para ese slot (override aplicado o lo
+// que trajo el FBX): es lo que se enseña.
+std::string currentTexturePath(const DonTopo::Material& mat, DonTopo::MaterialTextureSlot slot)
+{
+    switch (slot)
+    {
+        case DonTopo::MaterialTextureSlot::Albedo: return mat.texturePath;
+        case DonTopo::MaterialTextureSlot::Normal: return mat.normalMapPath;
+        case DonTopo::MaterialTextureSlot::Orm:    return mat.metallicRoughnessPath;
+    }
+    return {};
+}
+
+// La ruta del OVERRIDE, que no es lo mismo: vacía significa "esto es del FBX",
+// y es lo que decide si Clear tiene algo que hacer.
+std::string currentOverride(const DonTopo::GameObject& go, int materialIndex,
+                            DonTopo::MaterialTextureSlot slot)
+{
+    for (const DonTopo::MaterialTextureOverride& ov : go.materialOverrides)
+        if (ov.index == materialIndex)
+            switch (slot)
+            {
+                case DonTopo::MaterialTextureSlot::Albedo: return ov.albedo;
+                case DonTopo::MaterialTextureSlot::Normal: return ov.normal;
+                case DonTopo::MaterialTextureSlot::Orm:    return ov.orm;
+            }
+    return {};
+}
+
+bool hasOverride(const DonTopo::GameObject& go, int materialIndex, DonTopo::MaterialTextureSlot slot)
+{
+    return !currentOverride(go, materialIndex, slot).empty();
+}
+
 } // namespace
 
 namespace DonTopo {
 
 PropertiesPanel::PropertiesPanel()
     : m_meshFileDialog(std::make_unique<IGFD::FileDialog>())
+    , m_textureFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_audioFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_fontFileDialog(std::make_unique<IGFD::FileDialog>())
     , m_uiAtlasFileDialog(std::make_unique<IGFD::FileDialog>())
@@ -7770,6 +7805,9 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
                         }));
                 }
             }
+
+            drawTexturesSection(ctx);
+
             ImGui::TreePop();
         }
 
@@ -7824,6 +7862,121 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_meshLoadError.c_str());
 }
 
+void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
+{
+    if (!ctx.selected || !ctx.selected->hasMesh()) return;
+
+    std::vector<Material*> mats = materialsOfMesh(*ctx.selected);
+    if (mats.empty()) return;
+
+    if (!ImGui::CollapsingHeader("Textures")) return;
+
+    struct SlotDesc { const char* nombre; MaterialTextureSlot slot; };
+    static const SlotDesc kSlots[3] = {
+        { "Albedo",             MaterialTextureSlot::Albedo },
+        { "Normal Map",         MaterialTextureSlot::Normal },
+        { "Metallic/Roughness", MaterialTextureSlot::Orm    },
+    };
+
+    for (int m = 0; m < (int)mats.size(); ++m)
+    {
+        // PushID por material: CollapsingHeader NO abre scope de ID propio (a
+        // diferencia de BeginMenu), así que sin esto los tres slots del
+        // material 0 y los del 1 colisionan entre sí y el drop de uno se lo
+        // come el otro.
+        ImGui::PushID(m);
+        if (mats.size() > 1)
+            ImGui::Text("Material %d", m);
+
+        for (const SlotDesc& d : kSlots)
+        {
+            // PushID por slot, dentro del de material: los tres botones
+            // "Browse..."/"Clear" de un mismo material comparten nombre entre
+            // slots y colisionarían igual que los materiales entre sí.
+            ImGui::PushID(d.nombre);
+
+            const std::string actual = currentTexturePath(*mats[(size_t)m], d.slot);
+            ImGui::Text("%s: %s", d.nombre,
+                        actual.empty() ? "None"
+                                       : std::filesystem::path(actual).filename().string().c_str());
+
+            const int materialIndex = m;
+            const MaterialTextureSlot slot = d.slot;
+            drawAssetDropBox(
+                ctx, d.nombre, "Drop image here",
+                [this, materialIndex, slot]() {
+                    m_textureDlgOpen     = true;
+                    m_textureDlgMaterial = materialIndex;
+                    m_textureDlgSlot     = slot;
+                    IGFD::FileDialogConfig cfg;
+                    cfg.path  = "assets";
+                    cfg.flags = ImGuiFileDialogFlags_HideColumnType |
+                                ImGuiFileDialogFlags_HideColumnDate |
+                                ImGuiFileDialogFlags_DisableThumbnailMode |
+                                ImGuiFileDialogFlags_DisablePlaceMode;
+                    // Key sin "##": Display() construye el nombre de la ventana
+                    // como título+"##"+key, y un "###" ahí rompe el ID que
+                    // guarda el layout (mismo motivo documentado en
+                    // drawMeshSection para "AddMeshDlg").
+                    m_textureFileDialog->OpenDialog("PickTextureDlg", "Choose image",
+                                                     ".png,.jpg,.jpeg,.bmp,.tga", cfg);
+                },
+                [this, &ctx, materialIndex, slot](const std::string& path) {
+                    assignMaterialTexture(ctx, materialIndex, slot, path);
+                });
+
+            ImGui::BeginDisabled(ctx.editingLocked || !hasOverride(*ctx.selected, materialIndex, slot));
+            if (ImGui::Button("Clear"))
+                assignMaterialTexture(ctx, materialIndex, slot, "");
+            ImGui::EndDisabled();
+
+            ImGui::PopID();
+        }
+        ImGui::PopID();
+    }
+
+    if (!m_textureLoadError.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_textureLoadError.c_str());
+}
+
+void PropertiesPanel::assignMaterialTexture(EditorContext& ctx, int materialIndex,
+                                             MaterialTextureSlot slot, const std::string& path)
+{
+    // ctx.scene puede ser nullptr (m_scene por defecto en EditorUI): sin esta
+    // guarda, *ctx.scene más abajo desreferenciaría null si esta función se
+    // llegara a invocar sin escena activa. Mismo patrón que setButtonAssetPath
+    // y el resto de setters de asset de este fichero.
+    if (!ctx.selected || !ctx.selected->hasMesh() || ctx.editingLocked || !ctx.scene) return;
+
+    // Clear entra con path vacío y sin comprobar extensión: no hay extensión
+    // que validar, y lo que se valida es lo que se ASIGNA, no lo que se quita.
+    if (!path.empty())
+    {
+        std::string ext = std::filesystem::path(path).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        static const std::set<std::string> kImagenes =
+            { ".png", ".jpg", ".jpeg", ".bmp", ".tga" };
+        if (!kImagenes.count(ext))
+        {
+            m_textureLoadError = "Formato no soportado: " + ext;
+            return;
+        }
+    }
+
+    const std::string antes = currentOverride(*ctx.selected, materialIndex, slot);
+    m_textureLoadError.clear();
+
+    auto cmd = std::make_unique<MaterialTextureCommand>(
+        *ctx.scene, ctx.renderer,
+        (path.empty() ? "Quitar textura de '" : "Textura de '") + ctx.selected->name + "'",
+        ctx.selected->id, materialIndex, slot, antes, path);
+    cmd->execute();
+    if (ctx.undo) ctx.undo->push(std::move(cmd));
+
+    ctx.pushLog((path.empty() ? "Textura quitada de '" : "Textura asignada a '")
+                + ctx.selected->name + "'");
+}
+
 void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
 {
     // Se ejecuta cada frame independientemente de ctx.selected/hasMesh(): si no
@@ -7839,6 +7992,19 @@ void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
             loadMeshForSelected(ctx, m_meshFileDialog->GetFilePathName());
         m_meshFileDialog->Close();
         m_meshDlgOpen = false;
+    }
+
+    // Mismo drenado, mismo motivo, para el diálogo de Textures: instancia
+    // propia (m_textureFileDialog), así que redimensionar este popup no toca
+    // el estado interno del de Mesh ni el de Audio.
+    if (m_textureDlgOpen && m_textureFileDialog->Display("PickTextureDlg"))
+    {
+        if (m_textureFileDialog->IsOk() &&
+            assetAllowed(ctx, m_textureFileDialog->GetFilePathName()))
+            assignMaterialTexture(ctx, m_textureDlgMaterial, m_textureDlgSlot,
+                                  m_textureFileDialog->GetFilePathName());
+        m_textureFileDialog->Close();
+        m_textureDlgOpen = false;
     }
 }
 

@@ -114,6 +114,14 @@ private:
     void drawCameraSection(EditorContext& ctx);
     void drawAnimatorSection(EditorContext& ctx);
     void drawMeshSection(EditorContext& ctx);
+    // Las tres texturas de cada material del mesh. Va DENTRO de la sección
+    // Mesh, sin Add-gate propio: no es un componente nuevo, es parte del que ya
+    // está puesto.
+    void drawTexturesSection(EditorContext& ctx);
+    // path vacío = Clear. Un solo sitio del que salen las seis llamadas
+    // (tres slots x drop y browse) y el único que apila el comando.
+    void assignMaterialTexture(EditorContext& ctx, int materialIndex,
+                                MaterialTextureSlot slot, const std::string& path);
     // Screen Space Reflections del objeto. No es un componente y no pasa por
     // "Add": son dos campos del GameObject (como el transform), así que la
     // sección aparece sobre cualquier objeto con malla.
@@ -538,6 +546,19 @@ private:
     // Mensaje del último intento fallido de carga de Mesh (vacío si no hay
     // error pendiente); se limpia al cambiar de selección o al cargar bien.
     std::string m_meshLoadError;
+    // Textura de material rechazada por extensión no soportada. Igual que
+    // m_buttonPathError: no se limpia al cambiar de selección (ver ahí).
+    std::string m_textureLoadError;
+    // Instancia propia de ImGuiFileDialog para la sección Textures, nunca
+    // compartida con m_meshFileDialog ni con m_audioFileDialog (mismo motivo
+    // documentado arriba: redimensionar el popup de una toca el estado interno
+    // de la que lo dibuja).
+    bool m_textureDlgOpen = false;
+    std::unique_ptr<IGFD::FileDialog> m_textureFileDialog;
+    // A qué material y qué slot vuelve el resultado del Browse cuando el modal
+    // se cierre, varios frames después.
+    int                 m_textureDlgMaterial = 0;
+    MaterialTextureSlot m_textureDlgSlot     = MaterialTextureSlot::Albedo;
     // GameObject para el que se pulsó "Add > Mesh" (revela la sección
     // Browse/drop hasta que se asigne un mesh o se pulse "x" para quitarlo).
     // nullptr = sección oculta. No se limpia al cambiar de selección: si el
