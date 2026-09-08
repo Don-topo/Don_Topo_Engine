@@ -638,4 +638,58 @@ void ClipRenameCommand::apply(const std::string& from, const std::string& to)
         go->getAnimator()->renameClipReferences(from, to);
 }
 
+void setMaterialTextureOverride(GameObject& go, int materialIndex,
+                                 MaterialTextureSlot slot, const std::string& path)
+{
+    MaterialTextureOverride* ov = nullptr;
+    for (auto& candidato : go.materialOverrides)
+        if (candidato.index == materialIndex) { ov = &candidato; break; }
+
+    if (!ov)
+    {
+        MaterialTextureOverride nuevo;
+        nuevo.index = materialIndex;
+        go.materialOverrides.push_back(nuevo);
+        ov = &go.materialOverrides.back();
+    }
+
+    switch (slot)
+    {
+        case MaterialTextureSlot::Albedo: ov->albedo = path; break;
+        case MaterialTextureSlot::Normal: ov->normal = path; break;
+        case MaterialTextureSlot::Orm:    ov->orm    = path; break;
+    }
+
+    applyMaterialOverrides(go);
+}
+
+MaterialTextureCommand::MaterialTextureCommand(Scene& scene, EditorRenderer* renderer,
+                                                std::string label, uint64_t id,
+                                                int materialIndex, MaterialTextureSlot slot,
+                                                std::string before, std::string after)
+    : m_scene(scene), m_renderer(renderer), m_label(std::move(label)), m_id(id),
+      m_materialIndex(materialIndex), m_slot(slot),
+      m_before(std::move(before)), m_after(std::move(after)) {}
+
+void MaterialTextureCommand::execute() { apply(m_after); }
+void MaterialTextureCommand::undo()    { apply(m_before); }
+
+void MaterialTextureCommand::apply(const std::string& path)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go || !go->hasMesh()) return;
+
+    setMaterialTextureOverride(*go, m_materialIndex, m_slot, path);
+
+    if (!m_renderer) return;
+
+    // Skinned y estatico van por caminos distintos porque los recursos de GPU
+    // lo son: el personaje se reconstruye entero (es lo unico que hay), el
+    // estatico solo cambia de material.
+    if (SkinnedMesh* sm = go->getSkinnedMesh(); sm && go->skinnedRenderIndex >= 0)
+        m_renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *sm);
+    else if (go->staticRenderIndex >= 0)
+        m_renderer->rebuildStaticMesh(go->staticRenderIndex, *go->getMesh());
+}
+
 } // namespace DonTopo

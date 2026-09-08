@@ -711,4 +711,45 @@ private:
     std::string m_newName;
 };
 
+enum class MaterialTextureSlot { Albedo, Normal, Orm };
+
+// Escribe UNA ruta de textura en el override del material `materialIndex` y la
+// aplica al Material. Crea la entrada del override si no existe.
+//
+// Existe para que "escribir el override" y "aplicarlo" no puedan ir por
+// separado: son dos pasos, se olvidaría el segundo, y el síntoma sería que el
+// panel enseña la ruta nueva y el viewport la vieja. El comando y el panel
+// (mas adelante) llaman los dos por aquí, nunca directamente a
+// go.materialOverrides.
+void setMaterialTextureOverride(GameObject& go, int materialIndex,
+                                 MaterialTextureSlot slot, const std::string& path);
+
+// Cambio de UNA textura de UN material, por el stack de undo.
+//
+// El renderer es PUNTERO y puede ser nullptr (tests headless): mismo patrón
+// que AnimationSourceCommand. Resuelve el GameObject por id en cada
+// aplicación, nunca por puntero, para sobrevivir a un undo de Delete que lo
+// reconstruya.
+class MaterialTextureCommand : public ICommand {
+public:
+    MaterialTextureCommand(Scene& scene, EditorRenderer* renderer, std::string label,
+                            uint64_t id, int materialIndex, MaterialTextureSlot slot,
+                            std::string before, std::string after);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(const std::string& path);
+
+    Scene&              m_scene;
+    EditorRenderer*     m_renderer;
+    std::string         m_label;
+    uint64_t            m_id;
+    int                 m_materialIndex;
+    MaterialTextureSlot m_slot;
+    std::string         m_before;
+    std::string         m_after;
+};
+
 } // namespace DonTopo

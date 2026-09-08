@@ -8,6 +8,7 @@
 #include "DonTopo/Renderer/MaterialTextureSource.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Editor/Command.h"
 #include <nlohmann/json.hpp>
 
 #include <cstdio>
@@ -810,6 +811,74 @@ static void test_reload_after_failed_load_recaptures_correct_baseline()
     CHECK(go->getMesh()->material.texturePath == "assets/otro_fbx.png");
 }
 
+// Undo/redo de una asignacion, con el renderer a nullptr (sin GPU): lo que se
+// prueba es el dato, que es lo unico que sobrevive al ciclo.
+static void test_command_undo_redo_assignment(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->material.texturePath = "assets/fbx_albedo.png";
+    go->setMesh(std::move(mesh));
+    const uint64_t id = go->id;
+
+    MaterialTextureCommand cmd(scene, nullptr, "Textura de 'Cubo'", id, 0,
+                                MaterialTextureSlot::Albedo, "", "assets/mia.png");
+    cmd.execute();
+    CHECK(scene.findById(id)->getMesh()->material.texturePath == "assets/mia.png");
+
+    cmd.undo();
+    CHECK(scene.findById(id)->getMesh()->material.texturePath == "assets/fbx_albedo.png");
+
+    cmd.execute();
+    CHECK(scene.findById(id)->getMesh()->material.texturePath == "assets/mia.png");
+    (void)pm; (void)am;
+}
+
+// Undo de un Clear: vuelve a poner la ruta que el usuario habia asignado.
+static void test_command_undo_of_clear(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->material.texturePath = "assets/fbx_albedo.png";
+    go->setMesh(std::move(mesh));
+    const uint64_t id = go->id;
+
+    setMaterialTextureOverride(*go, 0, MaterialTextureSlot::Albedo, "assets/mia.png");
+
+    MaterialTextureCommand clear(scene, nullptr, "Quitar textura", id, 0,
+                                  MaterialTextureSlot::Albedo, "assets/mia.png", "");
+    clear.execute();
+    CHECK(scene.findById(id)->getMesh()->material.texturePath == "assets/fbx_albedo.png");
+
+    clear.undo();
+    CHECK(scene.findById(id)->getMesh()->material.texturePath == "assets/mia.png");
+    (void)pm; (void)am;
+}
+
+// El comando resuelve por id en CADA aplicacion: un puntero guardado quedaria
+// colgando tras un undo de Delete que reconstruya el objeto.
+static void test_command_survives_object_rebuild(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->material.texturePath = "assets/fbx_albedo.png";
+    go->setMesh(std::move(mesh));
+    const uint64_t id = go->id;
+
+    MaterialTextureCommand cmd(scene, nullptr, "Textura", id, 0,
+                                MaterialTextureSlot::Albedo, "", "assets/mia.png");
+
+    // El objeto desaparece: el comando no puede reventar ni escribir en memoria
+    // liberada, solo no hacer nada.
+    scene.removeGameObject(scene.findById(id));
+    cmd.execute();
+    CHECK(scene.findById(id) == nullptr);
+    (void)pm; (void)am;
+}
+
 int main()
 {
     // PhysicsManager/AudioManager comparten instancia entre los tests que la
@@ -856,6 +925,9 @@ int main()
     test_discard_overridden_decoded_images_ignores_other_index();
     test_set_mesh_resets_stale_baseline();
     test_reload_after_failed_load_recaptures_correct_baseline();
+    test_command_undo_redo_assignment(pm, am);
+    test_command_undo_of_clear(pm, am);
+    test_command_survives_object_rebuild(pm, am);
 
     am.shutdown();
     pm.shutdown();
