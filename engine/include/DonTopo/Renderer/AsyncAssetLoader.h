@@ -37,6 +37,20 @@ namespace DonTopo
         std::string               error;          // no vacío = falló
     };
 
+    struct MaterialTextureOverride;   // GameObject.h; solo referencia, ver más abajo
+
+    // Quita de `images` los slots que un override ACTIVO (index == 0, el
+    // único que decodeSlot llega a poblar — ver el comentario de runJob en el
+    // .cpp) haya pisado. Pura función de datos, sin GPU ni Scene, para que el
+    // seam entre "qué decodificó el worker" y "qué pidió el usuario" se pueda
+    // probar sin EditorRenderer: applyLoadedMesh es su único caller, y lo
+    // llama tras applyMaterialOverrides y antes de subir nada a GPU, porque
+    // Renderer::createSharedGpuMesh (Vulkan) PREFIERE una imagen ya decodificada
+    // sobre la ruta del material — sin este filtro, un override sobre un FBX
+    // que trae textura propia subiría a GPU la del FBX, no la del override.
+    void discardOverriddenDecodedImages(std::vector<DecodedImage>& images,
+                                        const std::vector<MaterialTextureOverride>& overrides);
+
     // Traduce peticiones de asset a jobs y guarda los resultados en un buzón que
     // el hilo principal drena una vez por frame.
     //

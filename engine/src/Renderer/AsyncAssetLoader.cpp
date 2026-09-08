@@ -52,6 +52,25 @@ namespace DonTopo
         }
     }
 
+    void discardOverriddenDecodedImages(std::vector<DecodedImage>& images,
+                                        const std::vector<MaterialTextureOverride>& overrides)
+    {
+        // r.images solo decodifica DonTopo::Mesh::material (el campo singular,
+        // no SkinnedMesh::materials), así que solo el override de índice 0 le
+        // afecta — ver el comentario grande de runJob(), más abajo. Un índice
+        // distinto no tiene nada que descartar aquí.
+        for (const MaterialTextureOverride& ov : overrides)
+        {
+            if (ov.index != 0) continue;
+            if (!ov.albedo.empty())
+                std::erase_if(images, [](const DecodedImage& d) { return d.slot == DecodedImage::Albedo; });
+            if (!ov.normal.empty())
+                std::erase_if(images, [](const DecodedImage& d) { return d.slot == DecodedImage::Normal; });
+            if (!ov.orm.empty())
+                std::erase_if(images, [](const DecodedImage& d) { return d.slot == DecodedImage::ORM; });
+        }
+    }
+
     JobSystem::JobId AsyncAssetLoader::requestMesh(const std::string& path, uint64_t targetId)
     {
         // El id se reserva ANTES de tocar el grupo: el primer waiter de un path
@@ -338,30 +357,55 @@ namespace DonTopo
         }
         if (!r.mesh) return false;
 
-        // Orden: setMesh -> applyMaterialOverrides -> registro en el Renderer.
-        // ANTES el orden era registro -> setMesh (el registro iba primero para
-        // que, si lanzaba, target->setMesh nunca se llegara a ejecutar y el
-        // GameObject quedara intacto). Se invierte porque addSkinnedMesh/
-        // addStaticMesh SUBEN A GPU el material tal cual esté en r.mesh en ESE
-        // instante: si el override se aplicara después de registrar, la GPU se
-        // llevaría la textura del FBX y la del usuario no se vería hasta el
-        // siguiente rebuild. applyMaterialOverrides opera sobre el
-        // GameObject (lee target->materialOverrides y escribe en
-        // target->getMesh()->material), así que necesita el setMesh ya hecho
-        // — no puede ir suelta sobre r.mesh antes de tener target enlazado.
+        // Precondición IMPUESTA, no solo documentada: los dos callers de hoy
+        // (PropertiesPanel::loadMeshForSelected, y la rama async de
+        // Scene::nodeFromJson cuando encola loader->requestMesh) encolan la
+        // petición con el target todavía sin malla, pero nada obliga a que
+        // siga siendo así mañana. Guardar la malla previa aquí y restaurarla
+        // en el catch cubre el fallo Y deja de ser un contrato que el
+        // siguiente caller pudiera romper sin que nada lo delate.
+        const std::shared_ptr<Mesh> previousMesh = target->getMesh();
+
+        // Los overrides pisan mesh.material más abajo (applyMaterialOverrides),
+        // pero r.images sigue trayendo los píxeles que decodeSlot sacó del FBX
+        // EN EL WORKER (runJob(), más arriba en este fichero), ANTES de que
+        // nadie pisara nada. Renderer::createSharedGpuMesh (Vulkan) PREFIERE
+        // esos píxeles ya decodificados sobre la ruta del material: sin este
+        // filtro, un override sobre un FBX que trae textura propia —el caso
+        // normal— subiría a GPU la del FBX pese al override, exactamente el
+        // síntoma que el reordenamiento de abajo dice estar evitando. Peor
+        // aún: la clave de SharedGpuMesh SÍ lee la ruta ya pisada
+        // (makeSharedMeshKey), así que la entrada quedaría registrada con la
+        // clave del override pero los píxeles del FBX dentro — cualquier otro
+        // objeto que comparta FBX y el mismo override reutilizaría esa
+        // entrada envenenada, y ni rebuildStaticMesh la arregla (su acquire()
+        // encuentra la clave ya viva y no sube ni un byte). D3D12 no lo sufre
+        // —su addStaticMesh ignora el parámetro de imágenes decodificadas—
+        // pero el filtro se aplica aquí, antes de llamar a ningún backend,
+        // para que el resultado no dependa de cuál esté activo.
+        //
+        // Orden: setMesh -> applyMaterialOverrides -> filtro de decoded ->
+        // registro en el Renderer. ANTES el orden era registro -> setMesh (el
+        // registro iba primero para que, si lanzaba, target->setMesh nunca se
+        // llegara a ejecutar y el GameObject quedara intacto). Se invierte
+        // porque addSkinnedMesh/addStaticMesh SUBEN A GPU el material y las
+        // imágenes decodificadas tal cual estén en ESE instante; el filtro
+        // necesita ir DESPUÉS de applyMaterialOverrides (para saber qué pisó
+        // el override) y ANTES del registro (para que lo filtrado no llegue a
+        // subir). applyMaterialOverrides opera sobre el GameObject (lee
+        // target->materialOverrides y escribe en target->getMesh()->material),
+        // así que necesita el setMesh ya hecho — no puede ir suelta sobre
+        // r.mesh antes de tener target enlazado.
         //
         // La garantía de "GameObject intacto si el registro lanza" se
         // conserva invirtiendo la reparación en vez del orden: en el catch se
-        // deshace el setMesh (target->setMesh(nullptr)). Es seguro porque
-        // applyLoadedMesh SOLO se llama para un target que todavía no tenía
-        // mesh — PropertiesPanel::loadMeshForSelected exige
-        // !ctx.selected->hasMesh() antes de encolar la petición async que
-        // termina aquí — así que setMesh(nullptr) restaura EXACTAMENTE el
-        // estado previo a esta llamada, no borra una malla que ya funcionaba.
+        // restaura la malla previa (target->setMesh(previousMesh), guardada
+        // arriba) en vez de asumir que siempre era nullptr.
         try
         {
             target->setMesh(r.mesh);
             applyMaterialOverrides(*target);
+            discardOverriddenDecodedImages(r.images, target->materialOverrides);
 
             if (SkinnedMesh* sk = dynamic_cast<SkinnedMesh*>(r.mesh.get()))
                 target->skinnedRenderIndex = renderer.addSkinnedMesh(*sk, &r.images);
@@ -370,7 +414,7 @@ namespace DonTopo
         }
         catch (const std::exception& e)
         {
-            target->setMesh(nullptr);
+            target->setMesh(previousMesh);
             if (outError) *outError = std::string("Error subiendo a GPU '") + r.path + "': " + e.what();
             return false;
         }

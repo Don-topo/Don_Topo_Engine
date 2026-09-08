@@ -1911,12 +1911,24 @@ namespace
                 }
             }
 
-            // Overrides aplicados AHORA que la malla (si la hubo: las tres
-            // ramas de arriba, más el fallback procedural) ya está puesta. En
-            // el camino ASÍNCRONO (loader->requestMesh, más arriba) no hay
-            // malla todavía y esta llamada no hace nada — la aplicación la
-            // hace AsyncAssetLoader::applyLoadedMesh cuando el worker entregue.
-            if (node->hasMesh())
+            // Overrides aplicados AHORA que la malla (si la hubo: cualquiera
+            // de los CINCO setMesh de las ramas de arriba — skinned; cacheada
+            // y disco, las dos de la rama estática; serializada y fallback
+            // por nombre, las dos de la procedural) ya está puesta. En el
+            // camino ASÍNCRONO (loader->requestMesh, más arriba) no hay malla
+            // todavía y esta llamada no hace nada — la aplicación la hace
+            // AsyncAssetLoader::applyLoadedMesh cuando el worker entregue.
+            //
+            // Gateado también por !materialOverrides.empty(): sin overrides,
+            // el bucle de abajo no tiene nada que recorrer, pero
+            // materialsOfMesh (aquí, Y otra vez dentro de
+            // applyMaterialOverrides) construiría igual un
+            // std::vector<Material*> en el heap por cada nodo con malla. Este
+            // camino lo pisa cloneGameObject en cada Scene.Instantiate de Lua
+            // en Play, con un presupuesto medido de 24,5 ms/clon (ver su
+            // comentario) — dos allocs de más por nodo, la mayoría sin ningún
+            // override, no son gratis ahí.
+            if (node->hasMesh() && !node->materialOverrides.empty())
             {
                 // El aviso de índice fuera de rango que promete el comentario
                 // de GameObject::applyMaterialOverrides ("lo avisa el lector de

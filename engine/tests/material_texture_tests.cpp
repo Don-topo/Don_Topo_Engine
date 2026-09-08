@@ -4,6 +4,7 @@
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
+#include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/MaterialTextureSource.h"
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
@@ -220,9 +221,9 @@ static void test_clear_restores_empty_baseline_on_procedural_mesh()
     CHECK(go->getMesh()->material.texturePath.empty());
 }
 
-// Task 7: el override se aplica sobre la malla que LLEGA, no despues: si se
+// Task 7: el override se aplica sobre la malla que LLEGA, no después: si se
 // aplicara tras registrar en el renderer (AsyncAssetLoader::applyLoadedMesh),
-// la GPU subiria la textura del FBX y la del usuario no se veria hasta el
+// la GPU subiría la textura del FBX y la del usuario no se vería hasta el
 // siguiente rebuild. Este test es el mecanismo puro (sin EditorRenderer, que
 // son 73 virtuales puras); que applyLoadedMesh lo llame en el orden correcto
 // se verifica en GUI, igual que test_remove_notifies_listener en
@@ -313,7 +314,7 @@ static void test_overrides_survive_round_trip(PhysicsManager& pm, AudioManager& 
     CHECK(leido->materialOverrides[0].albedo == "assets/cuerpo.png");
     CHECK(leido->materialOverrides[1].index  == 2);
     CHECK(leido->materialOverrides[1].normal == "assets/pelo_n.png");
-    // El baseline NO viaja: se recaptura al aplicar sobre el material recien
+    // El baseline NO viaja: se recaptura al aplicar sobre el material recién
     // derivado del FBX.
     CHECK(leido->materialOverrides[0].baseAlbedo.empty());
 }
@@ -329,8 +330,8 @@ static void test_no_overrides_writes_no_key()
     go->setMesh(std::move(mesh));
 
     const nlohmann::json j = scene.toJson();
-    // El nodo raiz cuelga de "root"; localizar el hijo por nombre en vez de
-    // asumir el indice.
+    // El nodo raíz cuelga de "root"; localizar el hijo por nombre en vez de
+    // asumir el índice.
     CHECK(!j.dump().empty());
     CHECK(j.dump().find("\"materials\"") == std::string::npos);
 }
@@ -354,7 +355,7 @@ static void test_scene_without_materials_key_loads_clean(PhysicsManager& pm, Aud
     if (leido) CHECK(leido->materialOverrides.empty());
 }
 
-// Con raiz de proyecto fijada, una ruta bajo ella se guarda RELATIVA con "/".
+// Con raíz de proyecto fijada, una ruta bajo ella se guarda RELATIVA con "/".
 static void test_path_under_root_is_stored_relative(PhysicsManager& pm, AudioManager& am)
 {
     namespace fs = std::filesystem;
@@ -375,7 +376,7 @@ static void test_path_under_root_is_stored_relative(PhysicsManager& pm, AudioMan
     CHECK(texto.find("assets/x.png") != std::string::npos);
     CHECK(texto.find(root.string()) == std::string::npos);
 
-    // Y al leerla con la misma raiz vuelve absoluta.
+    // Y al leerla con la misma raíz vuelve absoluta.
     Scene cargada("Vacia");
     cargada.setAssetRoot(root.string());
     CHECK(cargada.fromJson(scene.toJson(), pm, am));
@@ -386,7 +387,7 @@ static void test_path_under_root_is_stored_relative(PhysicsManager& pm, AudioMan
         CHECK(fs::path(leido->materialOverrides[0].albedo) == (root / "assets" / "x.png"));
 }
 
-// Una ruta FUERA de la raiz se guarda absoluta tal cual: relativizarla daria
+// Una ruta FUERA de la raíz se guarda absoluta tal cual: relativizarla daría
 // una ristra de ".." que no sobrevive a mover el proyecto.
 static void test_path_outside_root_stays_absolute()
 {
@@ -410,7 +411,7 @@ static void test_path_outside_root_stays_absolute()
     CHECK(texto.find("..") == std::string::npos);
 }
 
-// Sin raiz fijada (tests, runtime headless), la ruta va y vuelve IDENTICA.
+// Sin raíz fijada (tests, runtime headless), la ruta va y vuelve IDENTICA.
 static void test_without_root_path_is_verbatim(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -471,7 +472,7 @@ static void test_corrupt_materials_block_warns(PhysicsManager& pm, AudioManager&
     CHECK(warned);
 }
 
-// Una entrada sin "index" valido se descarta con aviso, sin tirar las demas
+// Una entrada sin "index" válido se descarta con aviso, sin tirar las demás
 // del mismo array: mismo fichero editado a mano que solo corrompe una entrada.
 static void test_materials_entry_without_valid_index_is_discarded(PhysicsManager& pm, AudioManager& am)
 {
@@ -581,13 +582,13 @@ static void test_undo_redo_keeps_override_path_verbatim_with_root_set(PhysicsMan
 
 // Task 7: nodeFromJson tiene que llamar a applyMaterialOverrides con la malla
 // YA PUESTA, para cada una de las tres ramas de carga (aquí, la procedural).
-// Sin esa llamada, un objeto recien cargado desde disco se ve con la textura
+// Sin esa llamada, un objeto recién cargado desde disco se ve con la textura
 // del FBX hasta el primer edit que dispare un applyMaterialOverrides externo.
 static void test_scene_load_applies_override_to_material(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Cubo");
-    auto mesh = std::make_shared<Mesh>();   // procedural: sourcePath vacio
+    auto mesh = std::make_shared<Mesh>();   // procedural: sourcePath vacío
     go->setMesh(std::move(mesh));
     MaterialTextureOverride ov;
     ov.index  = 0;
@@ -606,10 +607,10 @@ static void test_scene_load_applies_override_to_material(PhysicsManager& pm, Aud
         CHECK(leido->getMesh()->material.texturePath == "assets/mia.png");
 }
 
-// Task 7, punto 2 de la revision: el comentario de GameObject::applyMaterialOverrides
+// Task 7, punto 2 de la revisión: el comentario de GameObject::applyMaterialOverrides
 // promete que "el aviso [de index fuera de rango] lo da el lector de escena,
 // que es quien tiene canal para darlo". Este test es esa promesa cumplida: un
-// index que ya no existe en el mesh recien cargado deja un aviso en
+// index que ya no existe en el mesh recién cargado deja un aviso en
 // lastWarnings(), no un fallo silencioso.
 static void test_out_of_range_index_warns_on_scene_load(PhysicsManager& pm, AudioManager& am)
 {
@@ -634,20 +635,20 @@ static void test_out_of_range_index_warns_on_scene_load(PhysicsManager& pm, Audi
     CHECK(warned);
 }
 
-// Task 7, punto 1 de la revision: la trampa del clon. cloneGameObject siembra
+// Task 7, punto 1 de la revisión: la trampa del clon. cloneGameObject siembra
 // la malla del clon desde una PreloadedMeshCache con la malla VIVA del
 // original, es decir con el material YA PISADO por el override. Sin el
 // baseline real viajando en el JSON de clonado (carryOverrideBaseline), el
-// clon capturaria como "original" la textura del override, y un Clear sobre
-// el clon dejaria puesta esa textura en vez de devolver la del FBX.
+// clon capturaría como "original" la textura del override, y un Clear sobre
+// el clon dejaría puesta esa textura en vez de devolver la del FBX.
 static void test_clone_clear_restores_fbx_texture_not_override(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
     GameObject* go = scene.addGameObject("Cubo");
     auto mesh = std::make_shared<Mesh>();
-    // sourcePath no vacio: es lo que hace que cloneGameObject use la
-    // PreloadedMeshCache (mallas) en vez de ir a disco (que fallaria, el
-    // fichero no existe, y el clon se quedaria sin mesh).
+    // sourcePath no vacío: es lo que hace que cloneGameObject use la
+    // PreloadedMeshCache (mallas) en vez de ir a disco (que fallaría, el
+    // fichero no existe, y el clon se quedaría sin mesh).
     mesh->sourcePath = "assets/cubo.fbx";
     mesh->material.texturePath = "assets/fbx_albedo.png";
     go->setMesh(std::move(mesh));
@@ -672,6 +673,141 @@ static void test_clone_clear_restores_fbx_texture_not_override(PhysicsManager& p
     applyMaterialOverrides(*clone);
 
     CHECK(clone->getMesh()->material.texturePath == "assets/fbx_albedo.png");
+}
+
+// Ronda de revisión de Task 7, punto 1 (Critical): r.images trae los píxeles
+// que el worker decodificó del FBX ANTES de que ningún override pisara nada
+// (AsyncAssetLoader::runJob), y Renderer::createSharedGpuMesh (Vulkan)
+// PREFIERE esos píxeles ya decodificados sobre la ruta del material — sin
+// filtrarlos, un override sobre un FBX con textura propia subiría a GPU la
+// del FBX. Este es el único seam de ese bug que se puede probar sin GPU: la
+// función de filtrado en sí, aislada de applyLoadedMesh (que sí necesita un
+// EditorRenderer real y se queda sin cubrir a nivel de test, igual que el
+// resto de esa función — se verifica en GUI). Comprueba que SOLO se descarta
+// el slot que el override pisa, dejando los demás intactos para que el
+// trabajo del worker no se tire entero.
+static void test_discard_overridden_decoded_images_removes_only_overridden_slot()
+{
+    DecodedImage albedo; albedo.slot = DecodedImage::Albedo; albedo.w = 1; albedo.h = 1; albedo.pixels = {1, 2, 3, 4};
+    DecodedImage normal; normal.slot = DecodedImage::Normal; normal.w = 1; normal.h = 1; normal.pixels = {5, 6, 7, 8};
+    DecodedImage orm;    orm.slot    = DecodedImage::ORM;    orm.w    = 1; orm.h    = 1; orm.pixels = {9, 10, 11, 12};
+    std::vector<DecodedImage> images{albedo, normal, orm};
+
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = "assets/mia.png";   // solo el albedo esta overrideado
+    std::vector<MaterialTextureOverride> overrides{ov};
+
+    discardOverriddenDecodedImages(images, overrides);
+
+    CHECK(images.size() == 2);
+    bool hasAlbedo = false, hasNormal = false, hasOrm = false;
+    for (const DecodedImage& img : images)
+    {
+        if (img.slot == DecodedImage::Albedo) hasAlbedo = true;
+        if (img.slot == DecodedImage::Normal) hasNormal = true;
+        if (img.slot == DecodedImage::ORM)    hasOrm    = true;
+    }
+    CHECK(!hasAlbedo);
+    CHECK(hasNormal);
+    CHECK(hasOrm);
+}
+
+// Sin overrides, el filtro no toca nada: los tres slots decodificados
+// sobreviven intactos, que es justo el trabajo del worker que hay que
+// aprovechar cuando nadie ha pisado nada.
+static void test_discard_overridden_decoded_images_noop_without_overrides()
+{
+    DecodedImage albedo; albedo.slot = DecodedImage::Albedo;
+    std::vector<DecodedImage> images{albedo};
+    std::vector<MaterialTextureOverride> overrides;   // vacío
+
+    discardOverriddenDecodedImages(images, overrides);
+
+    CHECK(images.size() == 1);
+}
+
+// r.images solo decodifica Mesh::material (índice 0, ver el comentario de
+// runJob): un override de OTRO índice (SkinnedMesh multi-material) no tiene
+// nada que descartar en este vector.
+static void test_discard_overridden_decoded_images_ignores_other_index()
+{
+    DecodedImage albedo; albedo.slot = DecodedImage::Albedo;
+    std::vector<DecodedImage> images{albedo};
+    MaterialTextureOverride ov;
+    ov.index  = 2;
+    ov.albedo = "assets/mia.png";
+    std::vector<MaterialTextureOverride> overrides{ov};
+
+    discardOverriddenDecodedImages(images, overrides);
+
+    CHECK(images.size() == 1);
+}
+
+// Ronda de revisión de Task 7, punto 2 (Important): el baseline pertenece a
+// LA MALLA de la que salió. setMesh es el único punto por el que cambia la
+// malla, así que tiene que resetear ahí los base*/base*Taken — si
+// sobrevivieran a un cambio de malla (a null, o a otra distinta), un Clear
+// posterior devolvería la textura de un modelo que ya no es el que está
+// cargado.
+static void test_set_mesh_resets_stale_baseline()
+{
+    auto go = makeStaticFixture();
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = "assets/mia.png";
+    go->materialOverrides.push_back(ov);
+    applyMaterialOverrides(*go);
+    CHECK(go->materialOverrides[0].baseAlbedoTaken);
+    CHECK(go->materialOverrides[0].baseAlbedo == "assets/fbx_albedo.png");
+
+    // setMesh(nullptr): lo que hace el catch de AsyncAssetLoader::applyLoadedMesh
+    // (antes de este fix, restauraba la malla pero no el baseline) y lo que
+    // hace Renderer::removeMeshComponent al quitar el componente.
+    go->setMesh(nullptr);
+
+    CHECK(!go->materialOverrides[0].baseAlbedoTaken);
+    CHECK(go->materialOverrides[0].baseAlbedo.empty());
+    // El override en sí sigue vivo (Remove no lo borra): solo el baseline se
+    // invalida.
+    CHECK(go->materialOverrides[0].albedo == "assets/mia.png");
+}
+
+// Mismo mecanismo que el test de arriba, pero de punta a punta con el
+// escenario exacto que describía la revisión: un load fallido captura un
+// baseline de una malla que nunca llega a cuajar, y el siguiente load
+// (distinto FBX) tiene que capturar el SUYO, no heredar el de antes.
+static void test_reload_after_failed_load_recaptures_correct_baseline()
+{
+    auto go = makeStaticFixture();   // material.texturePath == "assets/fbx_albedo.png"
+    MaterialTextureOverride ov;
+    ov.index  = 0;
+    ov.albedo = "assets/mia.png";
+    go->materialOverrides.push_back(ov);
+    applyMaterialOverrides(*go);
+    CHECK(go->materialOverrides[0].baseAlbedo == "assets/fbx_albedo.png");
+
+    // Simula el catch de applyLoadedMesh: el registro en GPU lanzó, se
+    // deshace el setMesh. Sin el reset de setMesh, el baseline de arriba
+    // ("assets/fbx_albedo.png") sobreviviría aquí aunque esa malla nunca
+    // llegó a quedarse cargada.
+    go->setMesh(nullptr);
+
+    // Simula el siguiente intento con OTRO FBX, esta vez con éxito: setMesh
+    // seguido de applyMaterialOverrides, igual que hace applyLoadedMesh.
+    auto otraMalla = std::make_shared<Mesh>();
+    otraMalla->material.texturePath = "assets/otro_fbx.png";
+    go->setMesh(otraMalla);
+    applyMaterialOverrides(*go);
+
+    CHECK(go->materialOverrides[0].baseAlbedo == "assets/otro_fbx.png");
+    CHECK(go->getMesh()->material.texturePath == "assets/mia.png");
+
+    // Clear: sin el fix, esto devolvía "assets/fbx_albedo.png" (la malla que
+    // nunca llegó a cargar), no la del FBX realmente cargado.
+    go->materialOverrides[0].albedo.clear();
+    applyMaterialOverrides(*go);
+    CHECK(go->getMesh()->material.texturePath == "assets/otro_fbx.png");
 }
 
 int main()
@@ -715,6 +851,11 @@ int main()
     test_scene_load_applies_override_to_material(pm, am);
     test_out_of_range_index_warns_on_scene_load(pm, am);
     test_clone_clear_restores_fbx_texture_not_override(pm, am);
+    test_discard_overridden_decoded_images_removes_only_overridden_slot();
+    test_discard_overridden_decoded_images_noop_without_overrides();
+    test_discard_overridden_decoded_images_ignores_other_index();
+    test_set_mesh_resets_stale_baseline();
+    test_reload_after_failed_load_recaptures_correct_baseline();
 
     am.shutdown();
     pm.shutdown();

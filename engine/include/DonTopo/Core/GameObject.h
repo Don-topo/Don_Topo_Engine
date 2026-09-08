@@ -116,7 +116,35 @@ namespace DonTopo
 
             GameObject* addChild(std::string childName);
 
-            void setMesh(std::shared_ptr<Mesh> mesh) { m_mesh = std::move(mesh); }
+            // El baseline de cada override (base*/base*Taken) pertenece a LA
+            // MALLA de la que salió, no al GameObject: si sobreviviera a un
+            // cambio de malla, un Clear posterior devolvería la textura de un
+            // modelo que ya no es el que está cargado. Dos callers lo rompían
+            // antes de este reset: AsyncAssetLoader::applyLoadedMesh hace
+            // setMesh(nullptr) en su catch DESPUÉS de que applyMaterialOverrides
+            // ya hubiera capturado el baseline de la malla que no llegó a
+            // cuajar, y Renderer::removeMeshComponent quita la malla sin tocar
+            // materialOverrides — un Remove + Add con otro FBX heredaba el
+            // baseline del anterior. Resetear aquí, en el ÚNICO punto por el
+            // que cambia la malla, cubre los dos (y cualquier futuro) sin
+            // depender de que cada sitio que suelta una malla se acuerde de
+            // limpiar también los overrides.
+            //
+            // Seguro para el camino de carga de escena (Scene::nodeFromJson):
+            // este setMesh corre SIEMPRE antes de que se lean/carguen los
+            // overrides del JSON sobre `materialOverrides` (que en ese punto
+            // está vacío para un nodo recién creado), así que el reset no
+            // pisa nada — ver la nota de order en nodeFromJson.
+            void setMesh(std::shared_ptr<Mesh> mesh)
+            {
+                m_mesh = std::move(mesh);
+                for (MaterialTextureOverride& ov : materialOverrides)
+                {
+                    ov.baseAlbedo.clear(); ov.baseAlbedoTaken = false;
+                    ov.baseNormal.clear(); ov.baseNormalTaken = false;
+                    ov.baseOrm.clear();    ov.baseOrmTaken    = false;
+                }
+            }
             const std::shared_ptr<Mesh>& getMesh() const { return m_mesh; }
             bool hasMesh()   const { return m_mesh != nullptr; }
             // Fuera de línea: el dynamic_cast necesita SkinnedMesh completo.
