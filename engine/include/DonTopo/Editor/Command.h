@@ -760,9 +760,13 @@ enum class MaterialFactorSlot { Metallic, Roughness };
 // el único sitio (junto al de texturas) que escribe en materialOverrides —el
 // comando y el panel llaman aquí, nunca directamente a go.materialOverrides.
 //
-// `value` es el valor real que va a quedar en el slider (0..1); el centinela
-// -1.0f de "sin override" (ver MaterialOverride en GameObject.h) es cosa de
-// applyMaterialOverrides, no de este setter.
+// `value` puede ser un valor de slider (0..1) O el centinela -1.0f de "sin
+// override" (ver MaterialOverride en GameObject.h) -- el undo de la primera
+// edición de un factor pasa el centinela aquí en producción (ver
+// currentFactorOverride() en PropertiesPanel.cpp, que es de donde sale el
+// "before" del comando). Este setter no distingue los dos casos: escribe
+// `value` tal cual en el override y deja que applyMaterialOverrides sea
+// quien interprete el signo.
 void setMaterialFactorOverride(GameObject& go, int materialIndex,
                                 MaterialFactorSlot slot, float value);
 

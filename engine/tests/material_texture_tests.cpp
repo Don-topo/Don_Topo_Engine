@@ -1043,16 +1043,23 @@ static void test_factor_overrides_survive_round_trip(PhysicsManager& pm, AudioMa
     if (leido->materialOverrides.empty()) return;
     CHECK(leido->materialOverrides[0].metallic  == 0.6f);
     CHECK(leido->materialOverrides[0].roughness == 0.2f);
-    // El baseline NO viaja por disco (mismo criterio que
-    // test_overrides_survive_round_trip con baseAlbedo, ver su comentario):
-    // el JSON de disco nunca escribe baseMetallic/baseMetallicTaken (gateado
-    // por carryOverrideBaseline, que Scene::toJson() nunca pone a true), así
-    // que lo que hay aquí es SIEMPRE recapturado en la carga, no leído del
-    // fichero. Con una malla procedural (a diferencia del SkinnedMesh de
-    // test_overrides_survive_round_trip, cuyo FBX no existe y se queda sin
-    // malla) la carga SÍ cuaja y applyMaterialOverrides SÍ corre, así que el
-    // baseline queda TOMADO -- capturado del default fresco de Material
-    // (0.0f), no de nada que hubiera viajado en el JSON.
+    // El baseline NO viaja por disco: la aserción que de verdad lo prueba es
+    // que la CADENA "baseMetallic"/"baseRoughness" no aparece en el propio
+    // JSON (gateado por carryOverrideBaseline, que Scene::toJson() nunca
+    // pone a true) -- mismo criterio que
+    // test_factor_absent_in_json_does_not_touch_material con "metallic".
+    // Ronda de revisión: comprobar baseMetallicTaken/baseMetallic del objeto
+    // RECARGADO no discrimina nada, porque en este fixture el origen ya
+    // tiene baseMetallicTaken=false y baseMetallic=0.0f -- si el bug
+    // escribiera esas claves también en disco, LEERLAS daría los mismos dos
+    // valores (recapturar desde un Material fresco con metallic=0.0 produce
+    // exactamente "taken=true, base=0.0" igual que si esos valores
+    // vinieran del JSON), y el test pasaría con el bug puesto.
+    CHECK(j.dump().find("baseMetallic")  == std::string::npos);
+    CHECK(j.dump().find("baseRoughness") == std::string::npos);
+    // Estas dos siguen siendo ciertas y documentan el comportamiento real
+    // (recaptura en la carga, no lectura del fichero), pero no son las que
+    // defienden la regresión -- las de arriba sí.
     CHECK(leido->materialOverrides[0].baseMetallicTaken);
     CHECK(leido->materialOverrides[0].baseMetallic == 0.0f);
     // Y ya aplicados sobre el material (nodeFromJson llama a
