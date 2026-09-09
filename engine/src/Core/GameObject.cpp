@@ -56,6 +56,15 @@ namespace DonTopo
         {
         }
     }
+
+    uint64_t GameObject::allocateId()
+    {
+        // El mismo contador y el mismo orden de memoria que el constructor:
+        // no es una reserva (que solo empuja un suelo), es una entrega real,
+        // así que el valor devuelto no puede volver a salir de aquí.
+        return s_nextId++;
+    }
+
     GameObject::~GameObject() = default;
     GameObject::GameObject(GameObject&&) noexcept = default;
     GameObject& GameObject::operator=(GameObject&&) noexcept = default;

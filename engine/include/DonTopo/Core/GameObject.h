@@ -122,6 +122,14 @@ namespace DonTopo
             // Undo escriben en el objeto equivocado, en silencio.
             static void reserveIdAtLeast(uint64_t id);
 
+            // Reparte un id nuevo, único frente a TODO lo repartido o
+            // reservado hasta ahora (mismo contador que el constructor y que
+            // reserveIdAtLeast). Lo usa Scene::insertFromJson para dar de
+            // baja un id del snapshot que choca con uno ya vivo en el resto
+            // del árbol — reusar el de reserveIdAtLeast ahí no vale porque
+            // ese solo ADELANTA el contador, no entrega un valor.
+            static uint64_t allocateId();
+
             // JobId de la carga de mesh en vuelo, 0 = ninguna. Es un uint64_t
             // opaco a propósito: Core no conoce AsyncAssetLoader, y el
             // destructor NO cancela nada — el pump ya descarta los resultados

@@ -771,6 +771,98 @@ static void test_undo_delete_keeps_original_id(PhysicsManager& pm, AudioManager&
     CHECK(scene.findById(originalId) == restored);
 }
 
+// Bug real reproducido en sesión de usuario: un snapshot de Undo/Redo puede
+// traer un id que YA está vivo en OTRA parte de la escena — por ejemplo si el
+// snapshot es de antes de una recarga que repartió ese mismo id a un objeto
+// nuevo (aquí se fuerza a mano, sin depender de una recarga real, escribiendo
+// el id de un objeto vivo dentro del snapshot de otro). Sin la guarda de
+// insertFromJson el árbol se queda con dos nodos con el mismo id y findById
+// resuelve el que menos tiempo lleva en el árbol — así fue como una textura
+// asignada a 'Plane' acabó aplicada a un personaje skinned reinsertado con el
+// id de 'Plane'.
+static void test_insert_from_json_reassigns_colliding_id(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* plane = scene.addGameObject("Plane");
+    const uint64_t planeId = plane->id;
+
+    // Snapshot de OTRO objeto, con el id de 'Plane' encima a mano: es el
+    // mismo estado que dejaría un snapshot viejo del stack de Undo/Redo tras
+    // una recarga de escena que le hubiera dado ese id a 'Plane'.
+    GameObject* victima = scene.addGameObject("Victima");
+    nlohmann::json snapshot = scene.subtreeToJson(victima);
+    snapshot["id"] = planeId;
+    scene.removeGameObject(victima);
+
+    GameObject* reinsertado = scene.insertFromJson(snapshot, nullptr, 0, pm, am);
+    CHECK(reinsertado != nullptr);
+    if (!reinsertado) return;
+
+    // El reinsertado estrena id: no puede quedarse con el de 'Plane'.
+    CHECK(reinsertado->id != planeId);
+
+    // 'Plane' — el que YA estaba vivo — se queda con el suyo. Es el objeto
+    // que puede tener referencias más frescas apuntándole (la selección
+    // actual, un comando recién ejecutado) que el snapshot reinsertado.
+    CHECK(scene.findById(planeId) == plane);
+
+    // Y queda aviso: la invariante estuvo a punto de romperse y el Log
+    // Console (que lee lastWarnings()) tiene que enterarse.
+    bool avisoEncontrado = false;
+    for (const auto& w : scene.lastWarnings())
+        if (w.find("ya estaba en uso") != std::string::npos) avisoEncontrado = true;
+    CHECK(avisoEncontrado);
+
+    // Ningún id repetido en toda la escena.
+    std::vector<uint64_t> ids;
+    scene.traverse([&](GameObject* n) { ids.push_back(n->id); });
+    std::sort(ids.begin(), ids.end());
+    CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
+}
+
+// findById con un id único no cambia de comportamiento tras pasar a "gana el
+// primero": sigue devolviendo ESE objeto. El cambio de determinismo solo
+// importa cuando hay más de un nodo con el mismo id (invariante ya rota),
+// que es el caso del test de arriba y del de abajo.
+static void test_find_by_id_unique_id_still_resolves()
+{
+    Scene scene("Test");
+    GameObject* a = scene.addGameObject("A");
+    GameObject* b = scene.addGameObject("B");
+    GameObject* c = scene.addGameObject("C", b);
+
+    CHECK(scene.findById(a->id) == a);
+    CHECK(scene.findById(b->id) == b);
+    CHECK(scene.findById(c->id) == c);
+    CHECK(scene.findById(0) == nullptr); // el contador empieza en 1; 0 no se reparte nunca
+}
+
+// El caso que reprodujo el usuario, a nivel de datos: dos objetos vivos con
+// el MISMO id (el estado que insertFromJson ya no debería dejar aparecer,
+// pero se fuerza a mano para probar el efecto de raíz, con independencia de
+// cómo se llegue a él). Con findById determinista (gana el primero en
+// pre-orden) escribir "por id" —como hace PropertiesPanel al aplicar una
+// textura sobre la selección— cae SIEMPRE sobre el mismo objeto y NUNCA sobre
+// el otro. Antes (ganaba el último del recorrido) dependía del orden de
+// inserción, que es justo lo que hizo que la textura de 'Plane' acabara en
+// el personaje skinned insertado después.
+static void test_find_by_id_duplicate_writes_only_first_never_the_other()
+{
+    Scene scene("Test");
+    GameObject* plane   = scene.addGameObject("Plane");
+    GameObject* skinned = scene.addGameObject("GameObject");
+    skinned->id = plane->id; // fuerza el duplicado del diagnóstico del usuario
+
+    // "Asignar una textura" simplificado a nivel de datos: escribir un campo
+    // resuelto por id, como el ownerId de la selección en PropertiesPanel.
+    GameObject* resuelto = scene.findById(plane->id);
+    CHECK(resuelto == plane); // el primero en pre-orden, nunca "GameObject"
+    resuelto->name = "Plane (con textura)";
+
+    CHECK(plane->name == "Plane (con textura)");
+    CHECK(skinned->name == "GameObject"); // el otro NO se toca
+}
+
 // ── Ctrl+D del editor: duplicar el GameObject seleccionado ──────────────────
 //
 // El sujeto de prueba es `duplicateAsSibling` (Command.cpp), que es el seam:
@@ -7854,6 +7946,9 @@ int main()
     test_clone_gets_fresh_id(pm, am);
     test_clone_subtree_gets_fresh_ids(pm, am);
     test_undo_delete_keeps_original_id(pm, am);
+    test_insert_from_json_reassigns_colliding_id(pm, am);
+    test_find_by_id_unique_id_still_resolves();
+    test_find_by_id_duplicate_writes_only_first_never_the_other();
     test_duplicate_is_sibling_not_child(pm, am);
     test_duplicate_of_root_child_is_sibling(pm, am);
     test_duplicate_rejects_scene_root(pm, am);

@@ -96,6 +96,11 @@ namespace DonTopo
             // nullptr si ningún nodo tiene ese id. O(n) sobre el árbol — usado
             // por los comandos de Undo/Redo (Command.cpp) pa resolver su
             // objetivo en vivo en cada execute()/undo(), nunca un puntero crudo.
+            // Determinista: si (por invariante roto) hubiera más de un nodo
+            // con ese id, gana el PRIMERO en pre-orden, nunca el último. El id
+            // es en teoría único (Scene::insertFromJson reasigna cualquiera
+            // que choque con uno ya vivo al reinsertar un subárbol), pero
+            // findById no lo vuelve a comprobar aquí.
             GameObject* findById(uint64_t id);
 
             // Única fuente de verdad del invariante "como mucho una cámara por

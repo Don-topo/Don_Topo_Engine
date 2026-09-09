@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/type_ptr.hpp>
 #include "DonTopo/Renderer/UniformBufferObject.h"
@@ -3051,8 +3052,16 @@ namespace DonTopo
 
     GameObject* Scene::findById(uint64_t id)
     {
+        // Primer match en pre-orden (gana el primero, igual que findCamera/
+        // findAudioListener/findCanvas más abajo), NO el último: antes se
+        // quedaba con el último nodo visitado, así que un id duplicado (que
+        // no debería existir — ver la guarda de insertFromJson — pero si el
+        // invariante se rompe por otra vía nadie más lo comprueba) elegía en
+        // silencio el objeto que menos tiempo llevaba en el árbol. Determinista
+        // no arregla el invariante roto, pero deja de depender del orden de
+        // inserción para decidir cuál gana.
         GameObject* found = nullptr;
-        m_root.traverse([&](GameObject* n) { if (n->id == id) found = n; });
+        m_root.traverse([&](GameObject* n) { if (!found && n->id == id) found = n; });
         return found;
     }
 
@@ -3302,6 +3311,22 @@ namespace DonTopo
                                        PhysicsManager& physics, AudioManager& audio)
     {
         GameObject* target = parent ? parent : &m_root;
+
+        // Ids ya vivos en el resto de la escena, tomados ANTES de insertar
+        // nada: nodeFromJson reusa a propósito el id que traiga j (ver su
+        // comentario grande — es lo que permite que un Undo de Delete
+        // reconstruya el objeto con su id original) pero no comprueba que ese
+        // id no esté YA vivo en otro nodo. Un snapshot capturado por un
+        // comando viejo del stack de Undo/Redo puede quedar por detrás de una
+        // recarga de escena que repartió ese mismo id a otro objeto distinto;
+        // sin esta guarda el árbol se queda con dos nodos con el mismo id y
+        // findById resuelve el equivocado en silencio (bug reproducido: una
+        // textura asignada a 'Plane' acabó aplicada a un personaje skinned
+        // que compartía su id porque una reinserción vieja lo trajo de vuelta
+        // con ese id ya ocupado).
+        std::unordered_set<uint64_t> idsVivos;
+        m_root.traverse([&](GameObject* n) { idsVivos.insert(n->id); });
+
         GameObject* node = target->addChild(j.value("name", std::string()));
         // Igual que fromJson y cloneGameObject: los avisos son de ESTA operación.
         // Sin este clear, cada undo de un Delete apilaba los suyos sobre los de
@@ -3327,9 +3352,39 @@ namespace DonTopo
             return nullptr;
         }
 
-        node->traverse([](GameObject* n) {
+        // nodeFromJson ya reusó (o dejó, si j no traía "id") los ids de node
+        // y de todo su subárbol; ahora que está completo, cualquiera que
+        // choque con idsVivos (el resto de la escena, capturado ANTES de
+        // insertar) estrena uno nuevo del contador global. Nunca al revés: el
+        // nodo que YA estaba vivo se queda con el suyo, porque puede tener
+        // referencias más frescas apuntándole (la selección actual, un
+        // comando que se acaba de ejecutar) que el snapshot que se está
+        // reinsertando — ver el razonamiento completo arriba, junto a
+        // idsVivos. También cubre un choque DENTRO del propio subárbol
+        // reinsertado (dos nodos del snapshot con el mismo id): idsVivos se
+        // va ampliando con cada id ya aceptado en este mismo recorrido.
+        //
+        // Efecto secundario conocido, fuera de alcance de este arreglo: si el
+        // reasignado es `node` (la raíz de este subárbol), el propio comando
+        // que llamó a insertFromJson sigue guardando el id ANTIGUO en su
+        // snapshot. Su próximo execute()/undo() resolverá ese id por
+        // findById y no encontrará este objeto — no-op silencioso, no
+        // corrompe otro objeto (que es justo lo que esta guarda evita), pero
+        // el comando queda inservible. Arreglarlo del todo pide invalidar el
+        // historial de Undo/Redo al recargar escena; es una auditoría aparte
+        // del sistema de ids, no este parche puntual.
+        node->traverse([&](GameObject* n) {
             n->staticRenderIndex  = -1;
             n->skinnedRenderIndex = -1;
+            if (idsVivos.count(n->id))
+            {
+                const uint64_t idViejo = n->id;
+                n->id = GameObject::allocateId();
+                m_warnings.push_back("nodo '" + n->name + "': el id " + std::to_string(idViejo) +
+                                      " del snapshot ya estaba en uso en la escena; se reasigna a " +
+                                      std::to_string(n->id) + " para no chocar con el objeto vivo");
+            }
+            idsVivos.insert(n->id);
         });
 
         // addChild() insertó al final; reposicionar a index si no es ya ahí.
