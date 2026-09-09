@@ -8265,7 +8265,7 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
     // Oculto por defecto: solo se dibuja si ya tiene AudioClip, o si se
     // pulsó "Add > Audio Clip" para este GameObject concreto
     // (m_audioClipAddRequestedFor).
-    if (!ctx.selected->hasAudioClip() && m_audioClipAddRequestedFor != ctx.selected)
+    if (!ctx.selected->hasAudioClip() && m_audioClipAddRequestedFor != ctx.selected->id)
         return;
 
     ImGui::Separator();
@@ -8584,7 +8584,7 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
             }
             // Vuelve a ocultar la sección tras quitar el clip — hay que
             // pulsar "Add > Audio Clip" de nuevo para reabrirla.
-            m_audioClipAddRequestedFor = nullptr;
+            m_audioClipAddRequestedFor = 0;
             ctx.pushLog("Componente Audio Clip quitado de '" + ctx.selected->name + "'");
         }
 
@@ -8857,7 +8857,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         bool alreadyHasAudio = ctx.selected->hasAudioClip();
         ImGui::BeginDisabled(alreadyHasAudio);
         if (ImGui::Selectable("Audio Clip") && !alreadyHasAudio)
-            m_audioClipAddRequestedFor = ctx.selected;
+            m_audioClipAddRequestedFor = ctx.selected->id;
         ImGui::EndDisabled();
 
         // Audio Listener: como mucho uno por escena, mismo criterio que la
@@ -9170,7 +9170,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
                     ImGui::Separator();
                 if (ImGui::MenuItem("Nuevo Script..."))
                 {
-                    m_newScriptTarget = ctx.selected;
+                    m_newScriptTargetId = ctx.selected->id;
                     m_newScriptNameBuffer[0] = '\0';
                     m_newScriptError.clear();
                     m_openNewScriptPopup = true;
@@ -9240,18 +9240,20 @@ void PropertiesPanel::drawNewScriptPopup(EditorContext& ctx)
                     ctx.openScript(path);
 
                     // El GameObject pudo borrarse mientras el popup estaba
-                    // abierto — comprobar que sigue vivo antes de añadir.
-                    bool targetAlive = false;
-                    if (ctx.scene && m_newScriptTarget)
-                        ctx.scene->traverse([&](GameObject* go) {
-                            if (go == m_newScriptTarget) targetAlive = true;
-                        });
-                    if (targetAlive)
+                    // abierto — resolver por id, que es lo único que distingue
+                    // "sigue vivo" de "otro objeto ha reciclado su dirección"
+                    // (ver m_newScriptTargetId). El traverse comparando
+                    // punteros que había aquí no lo distinguía, y el script se
+                    // añadía al recién llegado.
+                    GameObject* target = ctx.scene && m_newScriptTargetId
+                                             ? ctx.scene->findById(m_newScriptTargetId)
+                                             : nullptr;
+                    if (target)
                     {
-                        m_newScriptTarget->addScript(
-                            std::make_unique<ScriptComponent>(name, m_newScriptTarget));
+                        target->addScript(
+                            std::make_unique<ScriptComponent>(name, target));
                         ctx.pushLog("Script '" + name + "' creado y añadido a '" +
-                                m_newScriptTarget->name + "'");
+                                target->name + "'");
                     }
                     else
                         ctx.pushLog("Script '" + name + "' creado (el GameObject ya no existe)");

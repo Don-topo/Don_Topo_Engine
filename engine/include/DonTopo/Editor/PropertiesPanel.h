@@ -719,9 +719,13 @@ private:
     std::unique_ptr<IGFD::FileDialog> m_imageAtlasFileDialog;
     std::string m_imagePathError;
     // Mismo patrón que m_meshLoadError/m_meshAddRequestedFor pero para el
-    // componente AudioClip.
+    // componente AudioClip — el id incluido, y por el mismo motivo: nadie lo
+    // limpia al borrar el GameObject y sobrevive a los cambios de selección a
+    // propósito, así que el puntero podía quedar colgando y un objeto nuevo
+    // que reciclara esa dirección abría la sección Audio Clip sin pedirlo.
+    // 0 = sección oculta.
     std::string m_audioLoadError;
-    GameObject* m_audioClipAddRequestedFor = nullptr;
+    uint64_t    m_audioClipAddRequestedFor = 0;
 
     // Snapshot al empezar el drag de los sliders de audio: un drag continuo no
     // puede empujar un comando por frame, así que se captura al activar y se
@@ -750,12 +754,22 @@ private:
     uint64_t m_ssrDragOwnerId = 0;
 
     // Popup "Nuevo Script" — disparado desde Add > Script > Nuevo Script...
-    // m_newScriptTarget se captura al abrir (ctx.selected puede cambiar con
-    // el popup abierto) y se revalida contra la escena antes de añadir.
+    // El dueño se captura al abrir (ctx.selected puede cambiar con el popup
+    // abierto) y se resuelve contra la escena antes de añadir.
+    //
+    // Por id y no por puntero: la revalidación de antes recorría la escena
+    // comparando DIRECCIONES, y esa comprobación no distingue "sigue vivo" de
+    // "otro GameObject ha reciclado su dirección" — el asignador reutiliza
+    // bloques del mismo tamaño, así que borrar el objetivo y crear otro con el
+    // popup abierto daba el visto bueno y el script se añadía al objeto
+    // equivocado. Y aquí el puntero SÍ se desreferencia (addScript, y el
+    // ScriptComponent se queda con él como dueño), así que no era solo un
+    // panel abriéndose de más. Ver m_meshAddRequestedFor, mismo defecto sin
+    // desreferencia. 0 = nadie.
     bool        m_openNewScriptPopup = false;
     char        m_newScriptNameBuffer[64] = {};
     std::string m_newScriptError;
-    GameObject* m_newScriptTarget = nullptr;
+    uint64_t    m_newScriptTargetId = 0;
 };
 
 } // namespace DonTopo
