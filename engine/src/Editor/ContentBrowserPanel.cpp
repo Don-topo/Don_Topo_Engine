@@ -221,23 +221,25 @@ void updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
             // pide cerrar. Mismo updateField (mismo criterio de comparación:
             // pathUnderDir/samePath) que el resto de la función.
             //
-            // baseAlbedo/baseNormal/baseOrm NO se tocan aquí a propósito: no
-            // se serializan fuera de los caminos de MEMORIA de clonar/undo
-            // (ver el comentario grande junto a "baseAlbedo" en
-            // Scene.cpp::nodeToJson) — en disco se ignoran y se recapturan
-            // solos desde el material recién derivado del FBX en cada carga,
-            // así que dejarlos con el nombre viejo no puede causar la pérdida
-            // de datos entre sesiones que se arregla aquí. Sí queda una
-            // rendija dentro de la MISMA sesión: si el fichero renombrado es
-            // el que dio el baseline (no el override activo), un Clear()
-            // posterior seguiría devolviendo el nombre viejo. Es un caso más
-            // estrecho —hace falta un override activo Y que el fichero base
-            // se renombre por separado— y no es el que este fix cierra.
+            // baseAlbedo/baseNormal/baseOrm entran en el mismo bucle. No se
+            // serializan fuera de los caminos de MEMORIA de clonar/undo (ver
+            // el comentario grande junto a "baseAlbedo" en
+            // Scene.cpp::nodeToJson), así que no son la pérdida de datos ENTRE
+            // sesiones que cierra el bucle de arriba; lo que cierran es la
+            // rendija de la MISMA sesión: si el fichero renombrado es el que
+            // dio el baseline y no el override activo, un Clear() posterior
+            // devolvía el nombre viejo, y el fichero con ese nombre ya no
+            // existe. Renombrar es exactamente el caso en que el baseline SÍ
+            // se puede corregir en vez de tirarse: el asset sigue ahí, solo ha
+            // cambiado de nombre.
             for (MaterialOverride& ov : go->materialOverrides)
             {
                 updateField(ov.albedo);
                 updateField(ov.normal);
                 updateField(ov.orm);
+                updateField(ov.baseAlbedo);
+                updateField(ov.baseNormal);
+                updateField(ov.baseOrm);
             }
         }
         if (go->hasAudioClip())
@@ -347,16 +349,32 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
                 // Mismo criterio de comparación (matches) que el resto de la
                 // función.
                 //
-                // baseAlbedo/baseNormal/baseOrm no se tocan: no se serializan
-                // fuera de los caminos de memoria de clonar/undo (ver el
-                // comentario de "baseAlbedo" en Scene.cpp::nodeToJson), así
-                // que un baseline con el nombre viejo no puede perderse entre
-                // sesiones. Mismo razonamiento que en updateSceneReferencesForRename.
+                // Los base* también, y aquí NO por lo que se guarda en disco
+                // —no se serializan fuera de los caminos de memoria de
+                // clonar/undo, ver el comentario de "baseAlbedo" en
+                // Scene.cpp::nodeToJson— sino por lo que pasa dentro de esta
+                // misma sesión: un baseline apuntando al fichero recién
+                // borrado se REESCRIBE en el Material en el siguiente
+                // applyMaterialOverrides (la rama "sin override: vuelve al
+                // baseline"), y ese siguiente puede ser el de editar OTRO slot
+                // cualquiera. Es decir, deshacía el
+                // replaceStaticTextureWithMissing que se acaba de hacer, sin
+                // que nada lo dijera. El disparador no es "hacer Clear", que
+                // es como estaba descrito, sino cualquier reaplicación.
+                //
+                // Se vacía en vez de corregirse (a diferencia del renombrado,
+                // donde el asset sigue existiendo con otro nombre): el fichero
+                // ya no está, y el flag *Taken se deja EN ALTO a propósito, que
+                // es lo que hace que un Clear posterior devuelva el slot a
+                // vacío en vez de resucitar la ruta muerta.
                 for (MaterialOverride& ov : go->materialOverrides)
                 {
                     if (matches(ov.albedo)) ov.albedo.clear();
                     if (matches(ov.normal)) ov.normal.clear();
                     if (matches(ov.orm))    ov.orm.clear();
+                    if (matches(ov.baseAlbedo)) ov.baseAlbedo.clear();
+                    if (matches(ov.baseNormal)) ov.baseNormal.clear();
+                    if (matches(ov.baseOrm))    ov.baseOrm.clear();
                 }
             }
         }

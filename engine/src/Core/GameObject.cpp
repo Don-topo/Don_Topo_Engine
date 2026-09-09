@@ -97,6 +97,25 @@ namespace DonTopo
         return out;
     }
 
+    void collectMaterialOverrideWarnings(GameObject& go, std::vector<std::string>& out)
+    {
+        if (!go.hasMesh()) return;
+
+        const size_t nMats = materialsOfMesh(go).size();
+        for (const MaterialOverride& ov : go.materialOverrides)
+        {
+            // MISMA condición que la del `continue` de applyMaterialOverrides,
+            // y por eso está pegada a ella en el fichero: si una de las dos se
+            // toca sin la otra, el aviso deja de describir lo que de verdad se
+            // ignora, que es peor que no avisar.
+            if (ov.index >= 0 && static_cast<size_t>(ov.index) < nMats) continue;
+            out.push_back("mesh de '" + go.name + "'.materials: index " +
+                          std::to_string(ov.index) + " fuera de rango (" +
+                          std::to_string(nMats) + " material(es) en el mesh), "
+                          "el override de ese slot se ignora");
+        }
+    }
+
     void applyMaterialOverrides(GameObject& go)
     {
         std::vector<Material*> mats = materialsOfMesh(go);

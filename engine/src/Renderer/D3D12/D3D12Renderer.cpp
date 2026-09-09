@@ -10180,10 +10180,28 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
     // Hueco reciclado, o dueño ya retirado que solo espera a que muera el
     // último duplicado: en los dos casos el GameObject que podría haber pedido
     // esto ya no existe, y sus recursos los siguen dibujando otros.
-    if (object.slotFree || object.pendingRelease)
+    //
+    // Las dos salidas de aquí llevan diagLog por lo mismo que las otras dos de
+    // esta función: son no-ops, el usuario ha pedido un cambio de material y no
+    // va a ver ninguno, y sin una línea no queda ni rastro de por qué.
+    if (object.slotFree || object.pendingRelease) {
+        diagLog("rebuildStaticMesh: el hueco " + std::to_string(index) +
+                (object.slotFree ? " está libre" : " es de un dueño ya retirado") +
+                ", así que no hay a quién cambiarle el material; no se toca nada.");
         return;
-    if (object.srvBase == kSrvBaseColor)
-        return;  // sin bloque propio: dibuja con los neutros globales
+    }
+    if (object.srvBase == kSrvBaseColor) {
+        // Alcanzable de verdad: pasado kMaxObjectSlots un objeto se dibuja con
+        // los neutros globales y no tiene bloque de descriptores propio que
+        // escribir. En Vulkan el mismo cambio SÍ se ve, así que sin esta línea
+        // la diferencia entre backends no tiene explicación por ningún lado.
+        diagLog("rebuildStaticMesh: el objeto " + std::to_string(index) +
+                " no tiene bloque de descriptores propio (pasado el límite de " +
+                std::to_string(kMaxObjectSlots) +
+                " huecos), así que dibuja con los neutros globales y su material no se puede "
+                "cambiar en este backend.");
+        return;
+    }
 
     // `ownsGpu` es la ÚNICA marca de propiedad que hay, y vale para las cinco
     // allocations a la vez: la rama `reusa` de addStaticMesh copia también las
@@ -10296,92 +10314,139 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
     // hueco ya reciclado: eso no es una fuga, es memoria liberada en el pase de
     // dibujo. Es la misma cautela que addStaticMesh, que arma un StaticObject
     // local y solo lo inserta cuando ya está entero.
+    //
+    // Matiz que el comentario de antes se callaba: "no se toca nada" vale para
+    // los CAMPOS del objeto y para soltar recursos, no para todo — cederPropiedad,
+    // ++materialVariant y las vistas que escriben las subidas ya han corrido a
+    // estas alturas. Lo primero es reversible sin recursos de por medio (deja al
+    // objeto dibujando lo prestado, que sigue vivo); lo de las vistas lo repara
+    // el catch de abajo.
     const bool seSepara = !object.ownsGpu;
+    const UINT slot     = object.srvBase;
 
     D3D12MA::Allocation* nuevosVertices = nullptr;
     D3D12MA::Allocation* nuevosIndices  = nullptr;
-    if (seSepara) {
-        nuevosVertices =
-            d.uploadBuffer(mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex),
-                           D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-        nuevosIndices =
-            d.uploadBuffer(mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t),
-                           D3D12_RESOURCE_STATE_INDEX_BUFFER);
-    }
+    D3D12MA::Allocation* nuevoColor     = nullptr;
+    D3D12MA::Allocation* nuevaNormal    = nullptr;
+    D3D12MA::Allocation* nuevoOrm       = nullptr;
+    std::string          nuevaClave;
+    bool                 claveHonesta = false;
 
-    const UINT slot = object.srvBase;
+    // Las cinco allocations son locales hasta el bloque de commit, así que si
+    // una subida lanza a mitad NADIE las suelta: el objeto se queda con las
+    // suyas de antes y estas se pierden hasta cerrar el proceso. Con el catch
+    // se sueltan aquí mismo. Ojo al orden dentro del catch: uploadTexture ya ha
+    // escrito la vista de lo que se acaba de soltar, así que hay que devolver
+    // los tres huecos a los neutros globales ANTES de salir — si no, la fuga se
+    // convierte en algo peor, un descriptor apuntando a memoria liberada que el
+    // pase de dibujo lee al frame siguiente.
+    try {
+        if (seSepara) {
+            nuevosVertices =
+                d.uploadBuffer(mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex),
+                               D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+            nuevosIndices =
+                d.uploadBuffer(mesh.indices.data(), mesh.indices.size() * sizeof(uint32_t),
+                               D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        }
 
-    // Las nuevas ANTES de soltar las viejas: así ninguna vista del bloque
-    // apunta jamás a un recurso ya liberado, ni siquiera si una subida lanza.
-    // Y de paso, al salir de aquí los tres huecos apuntan a recursos nuevos o a
-    // los neutros globales, nunca a las texturas PRESTADAS del dueño del que
-    // este objeto está a punto de desengancharse.
-    D3D12MA::Allocation* nuevoColor = d.uploadMaterialTexture(
-        mesh.material.texturePath, mesh.material.embeddedTexture, true, slot + 0);
-    if (!nuevoColor) {
-        // La pidió y no se pudo leer: damero, que se note. No la pidió: blanco.
-        const bool sePidio =
-            chooseTextureSource(mesh.material.texturePath, mesh.material.embeddedTexture) !=
-            TextureSource::None;
-        ID3D12Resource* relleno = (sePidio && d.missingTextureAllocation)
-                                      ? d.missingTextureAllocation->GetResource()
-                                      : d.baseColorAllocation->GetResource();
-        d.createTexture2DSrv(relleno, DXGI_FORMAT_R8G8B8A8_UNORM, slot + 0);
-    }
+        // Las nuevas ANTES de soltar las viejas: así ninguna vista del bloque
+        // apunta jamás a un recurso ya liberado, ni siquiera si una subida lanza.
+        // Y de paso, al salir de aquí los tres huecos apuntan a recursos nuevos o a
+        // los neutros globales, nunca a las texturas PRESTADAS del dueño del que
+        // este objeto está a punto de desengancharse.
+        nuevoColor = d.uploadMaterialTexture(mesh.material.texturePath,
+                                             mesh.material.embeddedTexture, true, slot + 0);
+        if (!nuevoColor) {
+            // La pidió y no se pudo leer: damero, que se note. No la pidió: blanco.
+            const bool sePidio =
+                chooseTextureSource(mesh.material.texturePath, mesh.material.embeddedTexture) !=
+                TextureSource::None;
+            ID3D12Resource* relleno = (sePidio && d.missingTextureAllocation)
+                                          ? d.missingTextureAllocation->GetResource()
+                                          : d.baseColorAllocation->GetResource();
+            d.createTexture2DSrv(relleno, DXGI_FORMAT_R8G8B8A8_UNORM, slot + 0);
+        }
 
-    D3D12MA::Allocation* nuevaNormal = d.uploadMaterialTexture(
-        mesh.material.normalMapPath, mesh.material.embeddedNormalMap, false, slot + 1);
-    if (!nuevaNormal)
+        nuevaNormal = d.uploadMaterialTexture(mesh.material.normalMapPath,
+                                              mesh.material.embeddedNormalMap, false, slot + 1);
+        if (!nuevaNormal)
+            d.createTexture2DSrv(d.normalMapAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
+                                 slot + 1);
+
+        // El ORM propio va en +3, pisando el neutro que dejó fillSharedSlots; sin
+        // él, se vuelve a poner ese neutro. Los demás huecos compartidos (+2 y
+        // +4..+6, que el bloque es de kSrvPerObject = 7 huecos) NO se tocan: la
+        // sonda de reflexión que lleva este objeto es suya y rellenarlos otra vez
+        // la cambiaría por la global.
+        nuevoOrm = d.uploadMaterialTexture(mesh.material.metallicRoughnessPath,
+                                           mesh.material.embeddedMetallicRoughness, false,
+                                           slot + 3);
+        if (!nuevoOrm)
+            d.createTexture2DSrv(d.metalRoughAllocation->GetResource(),
+                                 DXGI_FORMAT_R8G8B8A8_UNORM, slot + 3);
+
+        // La clave nueva y la comparación de prefijos, también aquí arriba: las dos
+        // construyen std::string (`makeSharedMeshKey` uno entero, `prefijoGeometria`
+        // un substr), y un bad_alloc ahí abajo ocurriría DESPUÉS de que el objeto
+        // tenga ya el material nuevo pero ANTES de sacar del mapa la entrada vieja
+        // —que se quedaría diciendo que esta clave describe a este objeto, que es
+        // justo la mentira que el re-clavado existe para borrar—.
+        //
+        // Los dos primeros campos de la clave son, en claro y separados por '|', el
+        // número de vértices y el de índices: makeSharedMeshKey los pone delante
+        // por ser discriminantes exactos, así que comparar ese prefijo dice si una
+        // clave describe la geometría que hay REALMENTE en VRAM sin rehashear la
+        // malla. El helper es el mismo que usa Renderer::rebuildStaticMesh.
+        auto prefijoGeometria = [](const std::string& clave) {
+            const size_t primera = clave.find('|');
+            if (primera == std::string::npos)
+                return clave;
+            // npos = no hay segundo '|' (clave que no salió de makeSharedMeshKey):
+            // se compara la cadena entera, que es el lado conservador.
+            return clave.substr(0, clave.find('|', primera + 1));
+        };
+
+        nuevaClave = makeSharedMeshKey(mesh);
+
+        // Si se separó, la geometría se acaba de subir DESDE `mesh` y la clave
+        // nueva la describe por construcción. Si el cambio fue in situ hay que
+        // preguntárselo a la vieja: ese camino NO resube geometría, y el contrato
+        // dice que cambiarla por aquí no está soportado pero nada lo impide.
+        claveHonesta = seSepara || (!object.sharedKey.empty() &&
+                                    prefijoGeometria(object.sharedKey) ==
+                                        prefijoGeometria(nuevaClave));
+        if (!claveHonesta)
+            diagLog("rebuildStaticMesh: al objeto " + std::to_string(index) +
+                    " le llega un mesh con otra geometría (el contrato dice que por aquí no se "
+                    "cambia). Se le cambia solo el material y sale del mapa de dedup: sigue "
+                    "dibujando la geometría que tiene en VRAM.");
+    } catch (...) {
+        for (D3D12MA::Allocation* nueva :
+             {nuevosVertices, nuevosIndices, nuevoColor, nuevaNormal, nuevoOrm})
+            if (nueva)
+                nueva->Release();
+
+        // Los tres huecos vuelven a los neutros GLOBALES y no a las texturas de
+        // antes: object.*Allocation sigue vivo, pero una de esas se creó con
+        // formato _SRGB y una vista UNORM sobre un recurso tipado en sRGB no es
+        // válida en D3D12 (haría falta que el recurso fuese typeless), así que
+        // reconstruir la vista anterior desde aquí no se puede hacer sin
+        // arrastrar también con qué formato se creó cada una. Los neutros son
+        // UNORM y siempre válidos: el objeto se queda sin sus texturas hasta el
+        // siguiente rebuild, que es un desenlace pobre pero seguro para algo
+        // que solo pasa con OOM o device perdido.
+        d.createTexture2DSrv(d.baseColorAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
+                             slot + 0);
         d.createTexture2DSrv(d.normalMapAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
                              slot + 1);
-
-    // El ORM propio va en +3, pisando el neutro que dejó fillSharedSlots; sin
-    // él, se vuelve a poner ese neutro. Los demás huecos compartidos (+2 y
-    // +4..+6, que el bloque es de kSrvPerObject = 7 huecos) NO se tocan: la
-    // sonda de reflexión que lleva este objeto es suya y rellenarlos otra vez
-    // la cambiaría por la global.
-    D3D12MA::Allocation* nuevoOrm =
-        d.uploadMaterialTexture(mesh.material.metallicRoughnessPath,
-                                mesh.material.embeddedMetallicRoughness, false, slot + 3);
-    if (!nuevoOrm)
         d.createTexture2DSrv(d.metalRoughAllocation->GetResource(), DXGI_FORMAT_R8G8B8A8_UNORM,
                              slot + 3);
-
-    // La clave nueva y la comparación de prefijos, también aquí arriba: las dos
-    // construyen std::string (`makeSharedMeshKey` uno entero, `prefijoGeometria`
-    // un substr), y un bad_alloc ahí abajo ocurriría DESPUÉS de que el objeto
-    // tenga ya el material nuevo pero ANTES de sacar del mapa la entrada vieja
-    // —que se quedaría diciendo que esta clave describe a este objeto, que es
-    // justo la mentira que el re-clavado existe para borrar—.
-    //
-    // Los dos primeros campos de la clave son, en claro y separados por '|', el
-    // número de vértices y el de índices: makeSharedMeshKey los pone delante
-    // por ser discriminantes exactos, así que comparar ese prefijo dice si una
-    // clave describe la geometría que hay REALMENTE en VRAM sin rehashear la
-    // malla. El helper es el mismo que usa Renderer::rebuildStaticMesh.
-    auto prefijoGeometria = [](const std::string& clave) {
-        const size_t primera = clave.find('|');
-        if (primera == std::string::npos)
-            return clave;
-        // npos = no hay segundo '|' (clave que no salió de makeSharedMeshKey):
-        // se compara la cadena entera, que es el lado conservador.
-        return clave.substr(0, clave.find('|', primera + 1));
-    };
-
-    const std::string nuevaClave = makeSharedMeshKey(mesh);
-
-    // Si se separó, la geometría se acaba de subir DESDE `mesh` y la clave
-    // nueva la describe por construcción. Si el cambio fue in situ hay que
-    // preguntárselo a la vieja: ese camino NO resube geometría, y el contrato
-    // dice que cambiarla por aquí no está soportado pero nada lo impide.
-    const bool claveHonesta =
-        seSepara || (!object.sharedKey.empty() &&
-                     prefijoGeometria(object.sharedKey) == prefijoGeometria(nuevaClave));
-    if (!claveHonesta)
-        diagLog("rebuildStaticMesh: al objeto " + std::to_string(index) +
-                " le llega un mesh con otra geometría (el contrato dice que por aquí no se "
-                "cambia). Se le cambia solo el material y sale del mapa de dedup: sigue "
-                "dibujando la geometría que tiene en VRAM.");
+        diagLog("rebuildStaticMesh: una subida del objeto " + std::to_string(index) +
+                " ha lanzado; se sueltan las allocations a medio hacer y sus tres huecos de "
+                "textura vuelven a los neutros globales.");
+        throw;
+    }
 
     // ── Y ya sin nada que pueda lanzar, el cambio de estado ──────────────
     if (seSepara) {

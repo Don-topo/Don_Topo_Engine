@@ -1096,8 +1096,15 @@ void EditorUI::onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, Edi
 {
     for (auto& r : results)
     {
-        std::string err;
-        if (!applyLoadedMesh(r, scene, renderer, &err) && !err.empty())
+        std::string              err;
+        std::vector<std::string> avisos;
+        // Los avisos salen al Log pasara lo que pasara con la carga: describen
+        // overrides que no se van a aplicar, y eso vale igual si el registro en
+        // GPU acabó fallando después.
+        const bool ok = applyLoadedMesh(r, scene, renderer, &err, &avisos);
+        for (const std::string& aviso : avisos)
+            m_logPanel.push(aviso);
+        if (!ok && !err.empty())
             m_logPanel.push(err);
     }
 

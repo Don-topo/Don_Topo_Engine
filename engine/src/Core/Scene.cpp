@@ -51,6 +51,7 @@ namespace
     using DonTopo::GameObject;
     using DonTopo::MaterialOverride;
     using DonTopo::applyMaterialOverrides;
+    using DonTopo::collectMaterialOverrideWarnings;
     using DonTopo::materialsOfMesh;
     using DonTopo::Rigidbody;
     using DonTopo::CameraComponent;
@@ -758,6 +759,21 @@ namespace
                 // cadena vacia de las tres texturas: por debajo de 0 no hay
                 // override activo, y no entra en la condicion de "nada que
                 // decir".
+                //
+                // Este descarte corre TAMBIEN con carryOverrideBaseline, o sea
+                // en clonar y en los snapshots de Undo/Redo, asi que una
+                // entrada sin nada activo pero con base*Taken en alto (un slot
+                // que tuvo override y se limpio con Clear) NO viaja: el bloque
+                // de baseline de mas abajo solo se escribe para las entradas
+                // que sobreviven a esta linea. Es inofensivo, y por dos
+                // razones INDEPENDIENTES -- de ahi que no se toque--: en el
+                // clon, la malla se siembra ya con el material restaurado por
+                // ese mismo Clear, asi que el baseline que se recaptura vale lo
+                // mismo que el que se habria copiado; y en el Undo de un
+                // Create/Delete, insertFromJson recarga la malla del disco, que
+                // deja el material en su estado del FBX por el mismo motivo.
+                // Se deja escrito aqui porque comprobarlo cuesta las dos
+                // derivaciones enteras cada vez que alguien lee este bloque.
                 if (ov.albedo.empty() && ov.normal.empty() && ov.orm.empty()
                     && ov.metallic < 0.0f && ov.roughness < 0.0f) continue;
                 nlohmann::json entry = { {"index", ov.index} };
@@ -1974,24 +1990,15 @@ namespace
             if (node->hasMesh() && !node->materialOverrides.empty())
             {
                 // El aviso de índice fuera de rango que promete el comentario
-                // de GameObject::applyMaterialOverrides ("lo avisa el lector de
-                // escena, que es quien tiene canal para darlo"): aquí, y no
-                // allí, es donde existen las dos cosas que hacen falta para
-                // darlo — el canal `warnings` y el número real de materiales
-                // del mesh que acaba de llegar. GameObject::applyMaterialOverrides
-                // no tiene ninguna de las dos.
+                // de GameObject::applyMaterialOverrides ("lo avisa quien tenga
+                // canal para darlo"): aquí existe `warnings`, así que se da.
+                // El texto sale de collectMaterialOverrideWarnings y no de un
+                // bucle propio, porque el pump asíncrono —el camino normal de
+                // una escena grande— tiene que dar EXACTAMENTE el mismo aviso
+                // por su canal, y con dos bucles gemelos eso dura lo que tarde
+                // alguien en tocar uno solo.
                 if (warnings)
-                {
-                    const size_t nMats = materialsOfMesh(*node).size();
-                    for (const MaterialOverride& ov : node->materialOverrides)
-                    {
-                        if (ov.index < 0 || static_cast<size_t>(ov.index) >= nMats)
-                            warnings->push_back("mesh de '" + node->name + "'.materials: index " +
-                                                 std::to_string(ov.index) + " fuera de rango (" +
-                                                 std::to_string(nMats) + " material(es) en el mesh), "
-                                                 "el override de ese slot se ignora");
-                    }
-                }
+                    collectMaterialOverrideWarnings(*node, *warnings);
                 applyMaterialOverrides(*node);
             }
         }

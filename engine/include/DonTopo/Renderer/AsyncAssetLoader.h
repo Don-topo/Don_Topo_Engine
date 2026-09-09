@@ -140,6 +140,14 @@ namespace DonTopo
     //
     // No llama a flushPendingUploads: el caller decide cuándo cerrar el batch,
     // porque el sentido de todo esto es agrupar N resultados en UN submit.
+    //
+    // outWarnings es un canal APARTE de outError, y no un segundo mensaje por
+    // el mismo: un índice de material fuera de rango no hace fallar la carga
+    // —la malla entra igual y el resto de overrides se aplican—, así que
+    // meterlo en outError, que el caller lee como "esto ha fallado", diría lo
+    // que no es. Nulo = no interesa. Este es el camino normal de una escena
+    // grande: sin él, el aviso que Scene::fromJson sí da se pierde entero.
     bool applyLoadedMesh(LoadedMesh& r, Scene& scene, EditorRenderer& renderer,
-                         std::string* outError);
+                         std::string* outError,
+                         std::vector<std::string>* outWarnings = nullptr);
 }

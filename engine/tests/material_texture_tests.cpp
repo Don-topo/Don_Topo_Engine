@@ -636,6 +636,67 @@ static void test_out_of_range_index_warns_on_scene_load(PhysicsManager& pm, Audi
     CHECK(warned);
 }
 
+// El mismo aviso, pero por el camino ASÍNCRONO. El de arriba solo cubre
+// Scene::fromJson; una escena grande carga sus mallas por el pump
+// (AsyncAssetLoader::applyLoadedMesh), que llamaba a applyMaterialOverrides a
+// secas y se comía el índice inválido sin una línea. El aviso vive ahora en
+// collectMaterialOverrideWarnings, que es lo que se prueba aquí: los dos
+// caminos dicen lo mismo porque llaman a la misma función.
+static void test_override_warnings_helper()
+{
+    GameObject go("Cubo");
+    auto mesh = std::make_shared<Mesh>();   // procedural: UN material (índice 0)
+    go.setMesh(std::move(mesh));
+
+    MaterialOverride dentro;
+    dentro.index  = 0;
+    dentro.albedo = "assets/mia.png";
+    go.materialOverrides.push_back(dentro);
+
+    std::vector<std::string> avisos;
+    collectMaterialOverrideWarnings(go, avisos);
+    // Un índice válido no dice nada: si avisara siempre, el aviso no
+    // distinguiría nada y el camino async se llenaría de ruido por cada
+    // objeto con overrides de una escena grande.
+    CHECK(avisos.empty());
+
+    MaterialOverride fuera;
+    fuera.index  = 3;
+    fuera.albedo = "assets/fantasma.png";
+    go.materialOverrides.push_back(fuera);
+
+    collectMaterialOverrideWarnings(go, avisos);
+    CHECK(avisos.size() == 1);
+    if (avisos.size() == 1)
+    {
+        // El texto, no solo el número: es lo que el usuario lee en el Log, y
+        // tiene que decir de QUÉ objeto e índice habla.
+        CHECK(avisos[0].find("Cubo") != std::string::npos);
+        CHECK(avisos[0].find("index 3") != std::string::npos);
+        CHECK(avisos[0].find("fuera de rango") != std::string::npos);
+    }
+
+    // Un negativo cuenta igual que un índice pasado: applyMaterialOverrides los
+    // descarta por la misma condición.
+    MaterialOverride negativo;
+    negativo.index  = -1;
+    negativo.albedo = "assets/otro.png";
+    go.materialOverrides.push_back(negativo);
+    avisos.clear();
+    collectMaterialOverrideWarnings(go, avisos);
+    CHECK(avisos.size() == 2);
+
+    // Sin malla no hay materiales contra los que comparar: no es que todos los
+    // índices estén fuera de rango, es que la pregunta no aplica todavía (el
+    // pump llama a esto DESPUÉS del setMesh, pero el orden lo garantiza el
+    // caller, no esta función).
+    GameObject sinMalla("Vacio");
+    sinMalla.materialOverrides.push_back(fuera);
+    avisos.clear();
+    collectMaterialOverrideWarnings(sinMalla, avisos);
+    CHECK(avisos.empty());
+}
+
 // Task 7, punto 1 de la revisión: la trampa del clon. cloneGameObject siembra
 // la malla del clon desde una PreloadedMeshCache con la malla VIVA del
 // original, es decir con el material YA PISADO por el override. Sin el
@@ -1337,6 +1398,7 @@ int main()
     test_overrides_applied_to_incoming_mesh();
     test_scene_load_applies_override_to_material(pm, am);
     test_out_of_range_index_warns_on_scene_load(pm, am);
+    test_override_warnings_helper();
     test_clone_clear_restores_fbx_texture_not_override(pm, am);
     test_discard_overridden_decoded_images_removes_only_overridden_slot();
     test_discard_overridden_decoded_images_ignores_other_index();

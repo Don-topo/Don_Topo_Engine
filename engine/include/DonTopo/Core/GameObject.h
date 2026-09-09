@@ -475,4 +475,14 @@ namespace DonTopo
     // primera vez que pisa cada slot. Idempotente: llamarla dos veces seguidas
     // deja lo mismo.
     void applyMaterialOverrides(GameObject& go);
+
+    // Los índices que applyMaterialOverrides va a ignorar en silencio (el FBX
+    // se reexportó con menos submallas), en texto y para el canal que tenga el
+    // caller. Va aparte porque applyMaterialOverrides no tiene dónde escribir
+    // un aviso y no se le va a dar uno: los dos caminos que cargan mallas
+    // —Scene::nodeFromJson con su vector de warnings, y el pump asíncrono con
+    // el Log del editor— tienen canales distintos, y este helper es lo que hace
+    // que los dos digan exactamente lo mismo. Añade a `out`, no lo limpia.
+    // Sin malla no escribe nada: no hay materiales contra los que comparar.
+    void collectMaterialOverrideWarnings(GameObject& go, std::vector<std::string>& out);
 }

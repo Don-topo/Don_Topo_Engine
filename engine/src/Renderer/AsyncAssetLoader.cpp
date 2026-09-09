@@ -336,7 +336,7 @@ namespace DonTopo
     }
 
     bool applyLoadedMesh(LoadedMesh& r, Scene& scene, EditorRenderer& renderer,
-                         std::string* outError)
+                         std::string* outError, std::vector<std::string>* outWarnings)
     {
         // Recorrido en vivo, no una lista cacheada: el editor permite borrar
         // GameObjects en cualquier frame, así que un puntero guardado en la
@@ -404,6 +404,13 @@ namespace DonTopo
         try
         {
             target->setMesh(r.mesh);
+            // ANTES de aplicar, que es cuando `mats` todavia describe lo que
+            // el usuario guardo: el aviso solo necesita el numero de materiales
+            // del mesh recien puesto, y applyMaterialOverrides no cambia ese
+            // numero, asi que el orden da igual para el contenido -- se pone
+            // aqui porque leerlo pegado al setMesh dice de que malla habla.
+            if (outWarnings)
+                collectMaterialOverrideWarnings(*target, *outWarnings);
             applyMaterialOverrides(*target);
             discardOverriddenDecodedImages(r.images, target->materialOverrides);
 

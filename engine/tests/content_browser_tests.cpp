@@ -209,6 +209,75 @@ static void test_detach_clears_material_override_path()
     CHECK(go->materialOverrides[0].orm.empty());
 }
 
+// El baseline (base*) apuntando al fichero que se acaba de borrar no era un
+// detalle cosmético: con el override vacío y el flag *Taken en alto,
+// applyMaterialOverrides toma la rama "vuelve al baseline" y REESCRIBE esa
+// ruta muerta en el Material. Y el siguiente applyMaterialOverrides puede ser
+// el de editar cualquier OTRO slot, así que deshacía en silencio el
+// replaceStaticTextureWithMissing que el borrado acababa de hacer.
+//
+// El flag se queda en alto a propósito (se comprueba abajo): es lo que hace
+// que la reaplicación deje el slot VACÍO en vez de resucitar el fichero
+// borrado.
+static void test_detach_clears_material_override_baseline()
+{
+    const std::string knownPath = "assets/knownTexture.png";
+    auto go = makeSkinnedFixture(knownPath);
+    MaterialOverride ov;
+    ov.index           = 0;
+    ov.baseAlbedo      = knownPath;   // el usuario ya hizo Clear: override vacío,
+    ov.baseAlbedoTaken = true;        // baseline tomado y apuntando al fichero
+    ov.baseNormal      = knownPath;
+    ov.baseNormalTaken = true;
+    ov.baseOrm         = knownPath;
+    ov.baseOrmTaken    = true;
+    go->materialOverrides.push_back(ov);
+
+    GameObject* selected = nullptr;
+    bool isPlaying = false;
+    EditorContext ctx{selected, isPlaying};
+    detachSceneReferencesForDelete(ctx, go.get(), knownPath, /*isDir=*/false);
+
+    CHECK(go->materialOverrides[0].baseAlbedo.empty());
+    CHECK(go->materialOverrides[0].baseNormal.empty());
+    CHECK(go->materialOverrides[0].baseOrm.empty());
+    CHECK(go->materialOverrides[0].baseAlbedoTaken);
+
+    // La prueba de que importaba: reaplicar ahora NO devuelve el fichero
+    // borrado al material. Antes del fix, esta línea lo resucitaba.
+    applyMaterialOverrides(*go);
+    CHECK(go->getSkinnedMesh()->materials[0].texturePath.empty());
+}
+
+// La cara del renombrado: ahí el asset SIGUE existiendo con otro nombre, así
+// que el baseline se corrige en vez de tirarse. Sin esto, un Clear posterior
+// devolvía al material el nombre viejo, que ya no existe en disco.
+static void test_rename_rewrites_material_override_baseline()
+{
+    const std::string oldPath = "assets/knownTexture.png";
+    const std::string newPath = "assets/renamedTexture.png";
+    auto go = makeSkinnedFixture(oldPath);
+    MaterialOverride ov;
+    ov.index           = 0;
+    ov.albedo          = "assets/override.png";
+    ov.baseAlbedo      = oldPath;
+    ov.baseAlbedoTaken = true;
+    ov.baseNormal      = oldPath;
+    ov.baseNormalTaken = true;
+    ov.baseOrm         = oldPath;
+    ov.baseOrmTaken    = true;
+    go->materialOverrides.push_back(ov);
+
+    GameObject* selected = nullptr;
+    bool isPlaying = false;
+    EditorContext ctx{selected, isPlaying};
+    updateSceneReferencesForRename(ctx, go.get(), oldPath, newPath, /*isDir=*/false);
+
+    CHECK(go->materialOverrides[0].baseAlbedo == newPath);
+    CHECK(go->materialOverrides[0].baseNormal == newPath);
+    CHECK(go->materialOverrides[0].baseOrm    == newPath);
+}
+
 int main()
 {
     fs::path root = makeFixture();
@@ -223,6 +292,8 @@ int main()
     test_detach_clears_skinned_material_path();
     test_rename_rewrites_material_override_path();
     test_detach_clears_material_override_path();
+    test_detach_clears_material_override_baseline();
+    test_rename_rewrites_material_override_baseline();
     std::error_code ec;
     fs::remove_all(root, ec);
     if (g_failures == 0) std::printf("ALL CONTENT BROWSER TESTS PASSED\n");
