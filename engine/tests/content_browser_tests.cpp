@@ -167,7 +167,7 @@ static void test_rename_rewrites_material_override_path()
     const std::string oldPath = "assets/knownTexture.png";
     const std::string newPath = "assets/renamedTexture.png";
     auto go = makeSkinnedFixture(oldPath);
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = oldPath;
     ov.normal = oldPath;
@@ -192,7 +192,7 @@ static void test_detach_clears_material_override_path()
 {
     const std::string knownPath = "assets/knownTexture.png";
     auto go = makeSkinnedFixture(knownPath);
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = knownPath;
     ov.normal = knownPath;

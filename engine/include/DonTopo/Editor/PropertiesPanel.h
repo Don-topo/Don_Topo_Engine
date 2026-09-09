@@ -569,6 +569,34 @@ private:
     uint64_t            m_textureDlgOwner    = 0;
     int                 m_textureDlgMaterial = 0;
     MaterialTextureSlot m_textureDlgSlot     = MaterialTextureSlot::Albedo;
+
+    // Snapshot al empezar el drag de los sliders Metallic/Roughness de la
+    // sección Material — mismo patrón que m_audioDragActive/m_ssrDragActive
+    // (SliderFloat salta al valor bajo el cursor en el frame del clic, así
+    // que el "before" se hoistea antes de dibujar el widget) con una
+    // diferencia: NO se escribe nada en vivo mientras se arrastra. Un slider
+    // de audio o de SSR solo toca un campo suelto; este, al pasar por
+    // applyMaterialOverrides + rebuildStaticMesh/rebuildSkinnedMesh
+    // (makeSharedMeshKey mete los factores PBR en la clave de dedup, así que
+    // cambiar uno obliga a re-clavear el objeto), y rebuildStaticMesh hace
+    // waitForGpu() y resube tres texturas — pagar eso en cada frame de un
+    // arrastre dejaría el editor tartamudeando. Por eso aquí SOLO pasa algo
+    // al soltar (IsItemDeactivatedAfterEdit): mientras se arrastra, el número
+    // se mueve (el propio widget lo hace) pero el viewport no, y todo el
+    // trabajo (override + Material + GPU + comando) llega de una vez al
+    // soltar — un compromiso deliberado frente al "vivo mientras se
+    // arrastra" del resto del panel.
+    //
+    // Un solo juego de miembros para los dos sliders (no dos): solo un
+    // widget de ImGui puede tener el ActiveId a la vez, así que Metallic y
+    // Roughness nunca están en drag simultáneamente, y m_materialFactorDragSlot
+    // dice cuál de los dos es.
+    bool                m_materialFactorDragActive        = false;
+    uint64_t            m_materialFactorDragOwnerId       = 0;
+    int                 m_materialFactorDragMaterialIndex = 0;
+    MaterialFactorSlot  m_materialFactorDragSlot          = MaterialFactorSlot::Metallic;
+    float               m_materialFactorDragBefore        = 0.0f;
+
     // GameObject para el que se pulsó "Add > Mesh" (revela la sección
     // Browse/drop hasta que se asigne un mesh o se pulse "x" para quitarlo).
     // nullptr = sección oculta. No se limpia al cambiar de selección: si el

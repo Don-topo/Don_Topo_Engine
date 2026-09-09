@@ -72,7 +72,7 @@ static void test_materials_of_skinned_mesh()
 static void test_override_writes_material_and_captures_baseline()
 {
     auto go = makeStaticFixture();
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = "assets/mia.png";
     go->materialOverrides.push_back(ov);
@@ -89,7 +89,7 @@ static void test_override_writes_material_and_captures_baseline()
 static void test_second_override_keeps_original_baseline()
 {
     auto go = makeStaticFixture();
-    go->materialOverrides.push_back(MaterialTextureOverride{});
+    go->materialOverrides.push_back(MaterialOverride{});
     go->materialOverrides[0].index  = 0;
     go->materialOverrides[0].albedo = "assets/primera.png";
     applyMaterialOverrides(*go);
@@ -105,7 +105,7 @@ static void test_second_override_keeps_original_baseline()
 static void test_clear_restores_baseline()
 {
     auto go = makeStaticFixture();
-    go->materialOverrides.push_back(MaterialTextureOverride{});
+    go->materialOverrides.push_back(MaterialOverride{});
     go->materialOverrides[0].index  = 0;
     go->materialOverrides[0].albedo = "assets/mia.png";
     applyMaterialOverrides(*go);
@@ -120,7 +120,7 @@ static void test_clear_restores_baseline()
 static void test_skinned_override_touches_only_its_index()
 {
     auto go = makeSkinnedFixture();
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 2;
     ov.albedo = "assets/pelo_rubio.png";
     go->materialOverrides.push_back(ov);
@@ -138,7 +138,7 @@ static void test_skinned_override_touches_only_its_index()
 static void test_out_of_range_index_is_ignored()
 {
     auto go = makeSkinnedFixture();
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 7;
     ov.albedo = "assets/fantasma.png";
     go->materialOverrides.push_back(ov);
@@ -158,7 +158,7 @@ static void test_slots_are_independent()
     go->getMesh()->material.normalMapPath          = "assets/fbx_normal.png";
     go->getMesh()->material.metallicRoughnessPath  = "assets/fbx_orm.png";
 
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = "assets/mia.png";
     go->materialOverrides.push_back(ov);
@@ -179,7 +179,7 @@ static void test_normal_and_orm_overrides_write_their_own_field()
     go->getMesh()->material.normalMapPath         = "assets/fbx_normal.png";
     go->getMesh()->material.metallicRoughnessPath = "assets/fbx_orm.png";
 
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.normal = "assets/mi_normal.png";
     ov.orm    = "assets/mi_orm.png";
@@ -209,7 +209,7 @@ static void test_clear_restores_empty_baseline_on_procedural_mesh()
     // texturePath se deja vacío a propósito: no viene de ningún FBX.
     go->setMesh(std::move(mesh));
 
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = "assets/mia.png";
     go->materialOverrides.push_back(ov);
@@ -232,7 +232,7 @@ static void test_clear_restores_empty_baseline_on_procedural_mesh()
 static void test_overrides_applied_to_incoming_mesh()
 {
     auto go = makeStaticFixture();
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = "assets/mia.png";
     go->materialOverrides.push_back(ov);
@@ -251,7 +251,7 @@ static void test_overrides_applied_to_incoming_mesh()
 static void test_no_mesh_is_noop()
 {
     GameObject go("Vacio");
-    go.materialOverrides.push_back(MaterialTextureOverride{});
+    go.materialOverrides.push_back(MaterialOverride{});
     applyMaterialOverrides(go);
     CHECK(materialsOfMesh(go).empty());
 }
@@ -296,8 +296,8 @@ static void test_overrides_survive_round_trip(PhysicsManager& pm, AudioManager& 
     mesh->materials.resize(3);
     go->setMesh(std::move(mesh));
 
-    MaterialTextureOverride a; a.index = 0; a.albedo = "assets/cuerpo.png";
-    MaterialTextureOverride b; b.index = 2; b.albedo = "assets/pelo.png";
+    MaterialOverride a; a.index = 0; a.albedo = "assets/cuerpo.png";
+    MaterialOverride b; b.index = 2; b.albedo = "assets/pelo.png";
                                b.normal = "assets/pelo_n.png";
     go->materialOverrides = {a, b};
 
@@ -368,7 +368,7 @@ static void test_path_under_root_is_stored_relative(PhysicsManager& pm, AudioMan
     auto mesh = std::make_shared<Mesh>();
     mesh->sourcePath = "assets/cubo.fbx";
     go->setMesh(std::move(mesh));
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = (root / "assets" / "x.png").string();
     go->materialOverrides.push_back(ov);
@@ -402,7 +402,7 @@ static void test_path_outside_root_stays_absolute()
     auto mesh = std::make_shared<Mesh>();
     mesh->sourcePath = "assets/cubo.fbx";
     go->setMesh(std::move(mesh));
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = fuera.string();
     go->materialOverrides.push_back(ov);
@@ -420,7 +420,7 @@ static void test_without_root_path_is_verbatim(PhysicsManager& pm, AudioManager&
     auto mesh = std::make_shared<Mesh>();
     mesh->sourcePath = "assets/cubo.fbx";
     go->setMesh(std::move(mesh));
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = "assets/tal/cual.png";
     go->materialOverrides.push_back(ov);
@@ -482,7 +482,7 @@ static void test_materials_entry_without_valid_index_is_discarded(PhysicsManager
     auto mesh = std::make_shared<Mesh>();
     mesh->sourcePath = "assets/cubo.fbx";
     go->setMesh(std::move(mesh));
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = "assets/valida.png";
     go->materialOverrides.push_back(ov);
@@ -533,7 +533,7 @@ static void test_clone_keeps_override_path_verbatim_with_root_set(PhysicsManager
     auto mesh = std::make_shared<Mesh>();
     mesh->sourcePath = "assets/cubo.fbx";
     go->setMesh(std::move(mesh));
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = (root / "assets" / "x.png").string();
     go->materialOverrides.push_back(ov);
@@ -562,7 +562,7 @@ static void test_undo_redo_keeps_override_path_verbatim_with_root_set(PhysicsMan
     auto mesh = std::make_shared<Mesh>();
     mesh->sourcePath = "assets/cubo.fbx";
     go->setMesh(std::move(mesh));
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = (root / "assets" / "y.png").string();
     go->materialOverrides.push_back(ov);
@@ -591,7 +591,7 @@ static void test_scene_load_applies_override_to_material(PhysicsManager& pm, Aud
     GameObject* go = scene.addGameObject("Cubo");
     auto mesh = std::make_shared<Mesh>();   // procedural: sourcePath vacío
     go->setMesh(std::move(mesh));
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = "assets/mia.png";
     go->materialOverrides.push_back(ov);
@@ -619,7 +619,7 @@ static void test_out_of_range_index_warns_on_scene_load(PhysicsManager& pm, Audi
     GameObject* go = scene.addGameObject("Cubo");
     auto mesh = std::make_shared<Mesh>();   // procedural: expone UN material (índice 0)
     go->setMesh(std::move(mesh));
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 3;   // fuera de rango: el mesh procedural solo tiene el índice 0
     ov.albedo = "assets/fantasma.png";
     go->materialOverrides.push_back(ov);
@@ -654,7 +654,7 @@ static void test_clone_clear_restores_fbx_texture_not_override(PhysicsManager& p
     mesh->material.texturePath = "assets/fbx_albedo.png";
     go->setMesh(std::move(mesh));
 
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = "assets/mia.png";
     go->materialOverrides.push_back(ov);
@@ -694,10 +694,10 @@ static void test_discard_overridden_decoded_images_removes_only_overridden_slot(
     DecodedImage orm;    orm.slot    = DecodedImage::ORM;    orm.w    = 1; orm.h    = 1; orm.pixels = {9, 10, 11, 12};
     std::vector<DecodedImage> images{albedo, normal, orm};
 
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = "assets/mia.png";   // solo el albedo está overrideado
-    std::vector<MaterialTextureOverride> overrides{ov};
+    std::vector<MaterialOverride> overrides{ov};
 
     discardOverriddenDecodedImages(images, overrides);
 
@@ -721,10 +721,10 @@ static void test_discard_overridden_decoded_images_ignores_other_index()
 {
     DecodedImage albedo; albedo.slot = DecodedImage::Albedo;
     std::vector<DecodedImage> images{albedo};
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 2;
     ov.albedo = "assets/mia.png";
-    std::vector<MaterialTextureOverride> overrides{ov};
+    std::vector<MaterialOverride> overrides{ov};
 
     discardOverriddenDecodedImages(images, overrides);
 
@@ -740,7 +740,7 @@ static void test_discard_overridden_decoded_images_ignores_other_index()
 static void test_set_mesh_resets_stale_baseline()
 {
     auto go = makeStaticFixture();
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = "assets/mia.png";
     go->materialOverrides.push_back(ov);
@@ -767,7 +767,7 @@ static void test_set_mesh_resets_stale_baseline()
 static void test_reload_after_failed_load_recaptures_correct_baseline()
 {
     auto go = makeStaticFixture();   // material.texturePath == "assets/fbx_albedo.png"
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = "assets/mia.png";
     go->materialOverrides.push_back(ov);
@@ -926,6 +926,296 @@ static void test_command_stale_index_after_mesh_shrinks(PhysicsManager& pm, Audi
     (void)pm; (void)am;
 }
 
+// ---------------------------------------------------------------------------
+// Factores PBR (metallic/roughness) del material: mismo mecanismo que los
+// tres slots de textura de arriba, pero con un centinela float (-1.0f, fuera
+// del rango 0..1 del slider) en vez de una cadena vacía — ver la nota grande
+// de MaterialOverride en GameObject.h.
+// ---------------------------------------------------------------------------
+
+// Asignar un factor pisa el material y guarda como baseline lo que traía el
+// modelo (aquí, los defaults de Material: metallic=0.0f, roughness=0.5f). El
+// factor que no se toca se queda en su centinela, sin baseline capturado.
+static void test_factor_override_writes_material_and_captures_baseline()
+{
+    auto go = makeStaticFixture();
+    MaterialOverride ov;
+    ov.index    = 0;
+    ov.metallic = 0.8f;
+    go->materialOverrides.push_back(ov);
+
+    applyMaterialOverrides(*go);
+
+    CHECK(go->getMesh()->material.metallic == 0.8f);
+    CHECK(go->materialOverrides[0].baseMetallic == 0.0f);
+    CHECK(go->materialOverrides[0].baseMetallicTaken);
+    // roughness no se tocó: sigue en el centinela, y el material se queda con
+    // el default del modelo, no con 0.0.
+    CHECK(go->materialOverrides[0].roughness < 0.0f);
+    CHECK(!go->materialOverrides[0].baseRoughnessTaken);
+    CHECK(go->getMesh()->material.roughness == 0.5f);
+}
+
+// Cambiar de valor NO mueve el baseline: sigue siendo el del modelo, no el
+// primer valor que puso el usuario. Mismo motivo que
+// test_second_override_keeps_original_baseline con las texturas.
+static void test_factor_second_change_keeps_original_baseline()
+{
+    auto go = makeStaticFixture();
+    go->materialOverrides.push_back(MaterialOverride{});
+    go->materialOverrides[0].index    = 0;
+    go->materialOverrides[0].metallic = 0.3f;
+    applyMaterialOverrides(*go);
+
+    go->materialOverrides[0].metallic = 0.9f;
+    applyMaterialOverrides(*go);
+
+    CHECK(go->getMesh()->material.metallic == 0.9f);
+    CHECK(go->materialOverrides[0].baseMetallic == 0.0f);
+}
+
+// Clear (el centinela -1.0f) = el material vuelve al baseline capturado, o
+// sea al valor del modelo. No hay botón "Clear" propio para los factores en
+// el panel (a diferencia de las texturas), pero el mecanismo de datos es el
+// mismo y se prueba igual, directo sobre el override.
+static void test_factor_clear_restores_baseline()
+{
+    auto go = makeStaticFixture();
+    go->materialOverrides.push_back(MaterialOverride{});
+    go->materialOverrides[0].index    = 0;
+    go->materialOverrides[0].metallic = 0.75f;
+    applyMaterialOverrides(*go);
+    CHECK(go->getMesh()->material.metallic == 0.75f);
+
+    go->materialOverrides[0].metallic = -1.0f;
+    applyMaterialOverrides(*go);
+
+    CHECK(go->getMesh()->material.metallic == 0.0f);
+}
+
+// El baseline de un factor pertenece a LA MALLA de la que salió, igual que el
+// de una textura: setMesh es el único punto por el que cambia la malla, así
+// que tiene que resetear ahí baseMetallicTaken/baseRoughnessTaken.
+static void test_set_mesh_resets_stale_factor_baseline()
+{
+    auto go = makeStaticFixture();
+    MaterialOverride ov;
+    ov.index    = 0;
+    ov.metallic = 0.5f;
+    go->materialOverrides.push_back(ov);
+    applyMaterialOverrides(*go);
+    CHECK(go->materialOverrides[0].baseMetallicTaken);
+
+    go->setMesh(nullptr);
+
+    CHECK(!go->materialOverrides[0].baseMetallicTaken);
+    // El override en sí sigue vivo (Remove no lo borra): solo el baseline se
+    // invalida.
+    CHECK(go->materialOverrides[0].metallic == 0.5f);
+}
+
+// Round-trip: metallic Y roughness sobreviven a guardar y cargar.
+static void test_factor_overrides_survive_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    // Procedural: "assets/cubo.fbx" no existe en disco (ver el comentario de
+    // test_factor_absent_in_json_does_not_touch_material, más abajo) y este
+    // test SÍ necesita que la recarga deje malla puesta para comprobar el
+    // material.
+    auto mesh = std::make_shared<Mesh>();
+    go->setMesh(std::move(mesh));
+    MaterialOverride ov;
+    ov.index     = 0;
+    ov.metallic  = 0.6f;
+    ov.roughness = 0.2f;
+    go->materialOverrides = {ov};
+
+    const nlohmann::json j = scene.toJson();
+
+    Scene cargada("Vacia");
+    CHECK(cargada.fromJson(j, pm, am));
+    GameObject* leido = nullptr;
+    cargada.traverse([&](GameObject* n) { if (n->name == "Cubo") leido = n; });
+    CHECK(leido != nullptr);
+    if (!leido) return;
+    CHECK(leido->materialOverrides.size() == 1);
+    if (leido->materialOverrides.empty()) return;
+    CHECK(leido->materialOverrides[0].metallic  == 0.6f);
+    CHECK(leido->materialOverrides[0].roughness == 0.2f);
+    // Y ya aplicados sobre el material (nodeFromJson llama a
+    // applyMaterialOverrides con la malla puesta, Task 7).
+    CHECK(leido->hasMesh());
+    if (leido->hasMesh())
+    {
+        CHECK(leido->getMesh()->material.metallic  == 0.6f);
+        CHECK(leido->getMesh()->material.roughness == 0.2f);
+    }
+}
+
+// Un metallic/roughness ausente en el JSON no toca el material: se queda con
+// el default del modelo, no se fuerza a 0. El override de albedo SÍ está
+// presente (para que el bloque "materials" exista en el JSON) pero sin las
+// claves "metallic"/"roughness".
+static void test_factor_absent_in_json_does_not_touch_material(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    // Procedural (sourcePath vacío): "assets/cubo.fbx" no existe en disco, y
+    // con un sourcePath que no resuelve, ModelLoader::load lanza y el catch de
+    // nodeFromJson deja el nodo sin mesh -- justo lo que este test necesita
+    // evitar para poder comprobar el material tras la recarga (mismo motivo
+    // que documenta test_corrupt_materials_block_warns más arriba).
+    auto mesh = std::make_shared<Mesh>();
+    go->setMesh(std::move(mesh));
+    MaterialOverride ov;
+    ov.index  = 0;
+    ov.albedo = "assets/mia.png";
+    go->materialOverrides.push_back(ov);
+
+    const std::string texto = scene.toJson().dump();
+    CHECK(texto.find("\"metallic\"") == std::string::npos);
+    CHECK(texto.find("\"roughness\"") == std::string::npos);
+
+    Scene cargada("Vacia");
+    CHECK(cargada.fromJson(scene.toJson(), pm, am));
+    GameObject* leido = nullptr;
+    cargada.traverse([&](GameObject* n) { if (n->name == "Cubo") leido = n; });
+    CHECK(leido != nullptr);
+    if (!leido || !leido->hasMesh()) return;
+    CHECK(leido->getMesh()->material.metallic  == 0.0f);
+    CHECK(leido->getMesh()->material.roughness == 0.5f);
+    CHECK(leido->materialOverrides[0].metallic  < 0.0f);
+    CHECK(leido->materialOverrides[0].roughness < 0.0f);
+}
+
+// Undo/redo de un MaterialFactorCommand, calcado de
+// test_command_undo_redo_assignment con las texturas: el "antes" es el
+// centinela -1.0f (sin override), igual que "" lo es para una ruta.
+static void test_factor_command_undo_redo(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    go->setMesh(std::move(mesh));
+    const uint64_t id = go->id;
+
+    MaterialFactorCommand cmd(scene, nullptr, "Metallic de 'Cubo'", id, 0,
+                               MaterialFactorSlot::Metallic, -1.0f, 0.8f);
+    cmd.execute();
+    CHECK(scene.findById(id)->getMesh()->material.metallic == 0.8f);
+
+    cmd.undo();
+    CHECK(scene.findById(id)->getMesh()->material.metallic == 0.0f);
+
+    cmd.execute();
+    CHECK(scene.findById(id)->getMesh()->material.metallic == 0.8f);
+    (void)pm; (void)am;
+}
+
+// Sin setMesh: mismo criterio que test_command_on_object_without_mesh_is_noop.
+static void test_factor_command_on_object_without_mesh_is_noop(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("SinMalla");
+    const uint64_t id = go->id;
+
+    MaterialFactorCommand cmd(scene, nullptr, "Metallic", id, 0,
+                               MaterialFactorSlot::Metallic, -1.0f, 0.8f);
+    cmd.execute();
+    CHECK(scene.findById(id)->materialOverrides.empty());
+    (void)pm; (void)am;
+}
+
+// Índice válido al construir el comando, mesh encogido antes del replay:
+// mismo escenario que test_command_stale_index_after_mesh_shrinks.
+static void test_factor_command_stale_index_after_mesh_shrinks(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto skinned = std::make_shared<SkinnedMesh>();
+    skinned->materials.resize(3);
+    go->setMesh(skinned);
+    const uint64_t id = go->id;
+
+    MaterialFactorCommand cmd(scene, nullptr, "Metallic de pelo", id, 2,
+                               MaterialFactorSlot::Metallic, -1.0f, 0.8f);
+
+    auto plano = std::make_shared<Mesh>();
+    go->setMesh(plano);
+
+    cmd.execute();
+    CHECK(scene.findById(id)->materialOverrides.empty());
+
+    cmd.undo();
+    CHECK(scene.findById(id)->materialOverrides.empty());
+    (void)pm; (void)am;
+}
+
+// El objeto desaparece entre construir el comando y ejecutarlo: mismo
+// criterio que test_command_survives_object_rebuild.
+static void test_factor_command_survives_object_rebuild(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    go->setMesh(std::move(mesh));
+    const uint64_t id = go->id;
+
+    MaterialFactorCommand cmd(scene, nullptr, "Metallic", id, 0,
+                               MaterialFactorSlot::Metallic, -1.0f, 0.8f);
+
+    scene.removeGameObject(scene.findById(id));
+    cmd.execute();
+    CHECK(scene.findById(id) == nullptr);
+    (void)pm; (void)am;
+}
+
+// GUARDA para el mismo hallazgo que el baseline de textura en clonar (ver
+// test_clone_clear_restores_fbx_texture_not_override): sin
+// baseMetallic/baseMetallicTaken viajando en el JSON de MEMORIA
+// (carryOverrideBaseline, el que usa cloneGameObject), el clon capturaría
+// como "original" el valor YA HORNEADO del override, y un Clear sobre el
+// clon devolvería ESE valor en vez del metallic del modelo. Sin este test
+// pasaba desapercibido: ningún otro cubre el camino de memoria para los
+// factores, solo el de disco (test_factor_overrides_survive_round_trip,
+// que nunca lleva el baseline).
+static void test_factor_clone_clear_restores_model_value_not_override(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    // sourcePath no vacío: mismo motivo que
+    // test_clone_clear_restores_fbx_texture_not_override -- hace que
+    // cloneGameObject reuse la malla YA CARGADA (PreloadedMeshCache) en vez
+    // de ir a disco, donde "assets/cubo.fbx" no existe.
+    auto mesh = std::make_shared<Mesh>();
+    mesh->sourcePath = "assets/cubo.fbx";
+    go->setMesh(std::move(mesh));
+
+    MaterialOverride ov;
+    ov.index    = 0;
+    ov.metallic = 0.9f;
+    go->materialOverrides.push_back(ov);
+    // El material VIVO de go ya trae el override horneado, igual que un
+    // objeto editado en el editor antes de duplicarlo.
+    applyMaterialOverrides(*go);
+    CHECK(go->getMesh()->material.metallic == 0.9f);
+
+    GameObject* clone = scene.cloneGameObject(go, nullptr, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+    CHECK(clone->materialOverrides.size() == 1);
+    if (clone->materialOverrides.empty()) return;
+
+    // Clear en el CLON, no en el original.
+    clone->materialOverrides[0].metallic = -1.0f;
+    applyMaterialOverrides(*clone);
+
+    // Sin el fix, esto devolvía 0.9 (el override horneado que trajo el
+    // clon), no el default del modelo.
+    CHECK(clone->getMesh()->material.metallic == 0.0f);
+}
+
 int main()
 {
     // PhysicsManager/AudioManager comparten instancia entre los tests que la
@@ -976,6 +1266,18 @@ int main()
     test_command_survives_object_rebuild(pm, am);
     test_command_on_object_without_mesh_is_noop(pm, am);
     test_command_stale_index_after_mesh_shrinks(pm, am);
+
+    test_factor_override_writes_material_and_captures_baseline();
+    test_factor_second_change_keeps_original_baseline();
+    test_factor_clear_restores_baseline();
+    test_set_mesh_resets_stale_factor_baseline();
+    test_factor_overrides_survive_round_trip(pm, am);
+    test_factor_absent_in_json_does_not_touch_material(pm, am);
+    test_factor_command_undo_redo(pm, am);
+    test_factor_command_on_object_without_mesh_is_noop(pm, am);
+    test_factor_command_stale_index_after_mesh_shrinks(pm, am);
+    test_factor_command_survives_object_rebuild(pm, am);
+    test_factor_clone_clear_restores_model_value_not_override(pm, am);
 
     am.shutdown();
     pm.shutdown();

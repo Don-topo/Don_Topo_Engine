@@ -9682,8 +9682,18 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
         object.sharedRefs = 1;  // él mismo
     }
 
-    object.metallic  = mesh.material.metallic;
-    object.roughness = mesh.material.roughness;
+    // Con mapa ORM, el mapa manda: se fuerzan los dos a 1.0 para que
+    // clamp(orm.g/b * push.factor, ...) del shader deje pasar el texel tal
+    // cual, sin que el factor del material lo escale. Mismo criterio que
+    // Renderer::createSharedGpuMesh (Vulkan) en el mismo punto — antes de este
+    // fix, D3D12 copiaba mesh.material.metallic/roughness sin mirar si había
+    // ORM, y un material con mapa pero metallic=0.0 (el default) salía con
+    // metalicidad muerta solo en este backend.
+    const bool tieneMapaOrm = chooseTextureSource(mesh.material.metallicRoughnessPath,
+                                                   mesh.material.embeddedMetallicRoughness) !=
+                              TextureSource::None;
+    object.metallic  = tieneMapaOrm ? 1.0f : mesh.material.metallic;
+    object.roughness = tieneMapaOrm ? 1.0f : mesh.material.roughness;
 
     // Terna propia en el heap mientras queden huecos. Pasado el tope se queda
     // con la global: peor aspecto, pero nunca escribe fuera del heap.
@@ -10435,8 +10445,13 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
     object.baseColorAllocation  = nuevoColor;
     object.normalMapAllocation  = nuevaNormal;
     object.metalRoughAllocation = nuevoOrm;
-    object.metallic             = mesh.material.metallic;
-    object.roughness            = mesh.material.roughness;
+    // Mismo criterio que addStaticMesh (y que Vulkan): con mapa ORM, el mapa
+    // manda y los dos factores se fuerzan a 1.0.
+    const bool tieneMapaOrm = chooseTextureSource(mesh.material.metallicRoughnessPath,
+                                                   mesh.material.embeddedMetallicRoughness) !=
+                              TextureSource::None;
+    object.metallic  = tieneMapaOrm ? 1.0f : mesh.material.metallic;
+    object.roughness = tieneMapaOrm ? 1.0f : mesh.material.roughness;
 
     // La entrada vieja sale SIEMPRE, honesta o no: el mapa está clavado por
     // contenido Y material —makeSharedMeshKey mete los paths de textura y los

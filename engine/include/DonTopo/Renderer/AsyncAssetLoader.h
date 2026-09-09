@@ -37,7 +37,7 @@ namespace DonTopo
         std::string               error;          // no vacío = falló
     };
 
-    struct MaterialTextureOverride;   // GameObject.h; solo referencia, ver más abajo
+    struct MaterialOverride;   // GameObject.h; solo referencia, ver más abajo
 
     // Quita de `images` los slots que un override ACTIVO (index == 0, el
     // único que decodeSlot llega a poblar — ver el comentario de runJob en el
@@ -49,7 +49,7 @@ namespace DonTopo
     // sobre la ruta del material — sin este filtro, un override sobre un FBX
     // que trae textura propia subiría a GPU la del FBX, no la del override.
     void discardOverriddenDecodedImages(std::vector<DecodedImage>& images,
-                                        const std::vector<MaterialTextureOverride>& overrides);
+                                        const std::vector<MaterialOverride>& overrides);
 
     // Traduce peticiones de asset a jobs y guarda los resultados en un buzón que
     // el hilo principal drena una vez por frame.

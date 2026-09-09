@@ -53,13 +53,13 @@ namespace DonTopo
     }
 
     void discardOverriddenDecodedImages(std::vector<DecodedImage>& images,
-                                        const std::vector<MaterialTextureOverride>& overrides)
+                                        const std::vector<MaterialOverride>& overrides)
     {
         // r.images solo decodifica DonTopo::Mesh::material (el campo singular,
         // no SkinnedMesh::materials), así que solo el override de índice 0 le
         // afecta — ver el comentario grande de runJob(), más abajo. Un índice
         // distinto no tiene nada que descartar aquí.
-        for (const MaterialTextureOverride& ov : overrides)
+        for (const MaterialOverride& ov : overrides)
         {
             if (ov.index != 0) continue;
             if (!ov.albedo.empty())

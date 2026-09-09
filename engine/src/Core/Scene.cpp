@@ -48,7 +48,7 @@
 namespace
 {
     using DonTopo::GameObject;
-    using DonTopo::MaterialTextureOverride;
+    using DonTopo::MaterialOverride;
     using DonTopo::applyMaterialOverrides;
     using DonTopo::materialsOfMesh;
     using DonTopo::Rigidbody;
@@ -750,13 +750,23 @@ namespace
             // claves no vacias: un objeto sin overrides no escribe la clave, y
             // las escenas viejas siguen siendo validas sin tocarlas.
             nlohmann::json mats = nlohmann::json::array();
-            for (const MaterialTextureOverride& ov : node.materialOverrides)
+            for (const MaterialOverride& ov : node.materialOverrides)
             {
-                if (ov.albedo.empty() && ov.normal.empty() && ov.orm.empty()) continue;
+                // metallic/roughness usan el centinela -1.0f (ver
+                // MaterialOverride en GameObject.h) como equivalente de la
+                // cadena vacia de las tres texturas: por debajo de 0 no hay
+                // override activo, y no entra en la condicion de "nada que
+                // decir".
+                if (ov.albedo.empty() && ov.normal.empty() && ov.orm.empty()
+                    && ov.metallic < 0.0f && ov.roughness < 0.0f) continue;
                 nlohmann::json entry = { {"index", ov.index} };
                 if (!ov.albedo.empty()) entry["albedo"] = toStoredPath(ov.albedo, assetRoot);
                 if (!ov.normal.empty()) entry["normal"] = toStoredPath(ov.normal, assetRoot);
                 if (!ov.orm.empty())    entry["orm"]    = toStoredPath(ov.orm,    assetRoot);
+                // Ausente = no tocado, y el valor efectivo sale del modelo al
+                // recargar (mismo criterio que las tres texturas de arriba).
+                if (ov.metallic  >= 0.0f) entry["metallic"]  = ov.metallic;
+                if (ov.roughness >= 0.0f) entry["roughness"] = ov.roughness;
                 // El baseline (base*/base*Taken) SOLO viaja cuando este JSON es
                 // un salto de MEMORIA (clonar un GameObject, o el snapshot de
                 // Undo/Redo de Create/Delete) y nunca cuando es un guardado a
@@ -790,6 +800,12 @@ namespace
                     entry["baseNormalTaken"] = ov.baseNormalTaken;
                     entry["baseOrm"]         = toStoredPath(ov.baseOrm, assetRoot);
                     entry["baseOrmTaken"]    = ov.baseOrmTaken;
+                    // Mismo camino de memoria (clonar, snapshot de Undo/Redo),
+                    // mismo motivo que los tres de arriba.
+                    entry["baseMetallic"]       = ov.baseMetallic;
+                    entry["baseMetallicTaken"]  = ov.baseMetallicTaken;
+                    entry["baseRoughness"]      = ov.baseRoughness;
+                    entry["baseRoughnessTaken"] = ov.baseRoughnessTaken;
                 }
                 mats.push_back(std::move(entry));
             }
@@ -1884,11 +1900,16 @@ namespace
                                                     "index valido, se descarta");
                             continue;
                         }
-                        MaterialTextureOverride ov;
+                        MaterialOverride ov;
                         ov.index  = entry["index"].get<int>();
                         ov.albedo = fromStoredPath(entry.value("albedo", ""), assetRoot);
                         ov.normal = fromStoredPath(entry.value("normal", ""), assetRoot);
                         ov.orm    = fromStoredPath(entry.value("orm",    ""), assetRoot);
+                        // Ausente = -1.0f (el centinela de "sin override"; ver
+                        // MaterialOverride en GameObject.h), mismo criterio que
+                        // "ausente = string vacío" de las tres rutas de arriba.
+                        ov.metallic  = entry.value("metallic",  -1.0f);
+                        ov.roughness = entry.value("roughness", -1.0f);
                         // El baseline SOLO se lee en el camino de MEMORIA (ver
                         // el comentario grande de nodeToJson, junto al mismo
                         // flag): en disco estos campos, aunque estuvieran en el
@@ -1905,6 +1926,10 @@ namespace
                             ov.baseNormalTaken = entry.value("baseNormalTaken", false);
                             ov.baseOrm         = fromStoredPath(entry.value("baseOrm", ""), assetRoot);
                             ov.baseOrmTaken    = entry.value("baseOrmTaken", false);
+                            ov.baseMetallic       = entry.value("baseMetallic", 0.0f);
+                            ov.baseMetallicTaken  = entry.value("baseMetallicTaken", false);
+                            ov.baseRoughness      = entry.value("baseRoughness", 0.0f);
+                            ov.baseRoughnessTaken = entry.value("baseRoughnessTaken", false);
                         }
                         node->materialOverrides.push_back(std::move(ov));
                     }
@@ -1940,7 +1965,7 @@ namespace
                 if (warnings)
                 {
                     const size_t nMats = materialsOfMesh(*node).size();
-                    for (const MaterialTextureOverride& ov : node->materialOverrides)
+                    for (const MaterialOverride& ov : node->materialOverrides)
                     {
                         if (ov.index < 0 || static_cast<size_t>(ov.index) >= nMats)
                             warnings->push_back("mesh de '" + node->name + "'.materials: index " +

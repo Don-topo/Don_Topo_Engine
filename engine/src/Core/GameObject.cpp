@@ -92,7 +92,7 @@ namespace DonTopo
     {
         std::vector<Material*> mats = materialsOfMesh(go);
 
-        for (MaterialTextureOverride& ov : go.materialOverrides)
+        for (MaterialOverride& ov : go.materialOverrides)
         {
             // Índice que ya no existe: el FBX se reexportó con menos submallas.
             // Se ignora en silencio aquí; el aviso lo da el lector de escena,
@@ -133,6 +133,28 @@ namespace DonTopo
             aplica(ov.albedo, ov.baseAlbedo, ov.baseAlbedoTaken, mat.texturePath);
             aplica(ov.normal, ov.baseNormal, ov.baseNormalTaken, mat.normalMapPath);
             aplica(ov.orm,    ov.baseOrm,    ov.baseOrmTaken,    mat.metallicRoughnessPath);
+
+            // Mismo mecanismo que `aplica`, pero con un centinela float en vez
+            // de una cadena vacía: 0.0 y 1.0 son valores válidos de slider, así
+            // que no sirven de "sin override" como sí sirve "" para una ruta.
+            // -1.0 está fuera del rango 0..1 del slider (ver la nota de
+            // MaterialOverride) y hace ese papel.
+            auto aplicaFactor = [](float override_, float& base, bool& baseTomado, float& destino)
+            {
+                if (override_ < 0.0f)
+                {
+                    if (baseTomado) destino = base;
+                    return;
+                }
+                if (!baseTomado)
+                {
+                    base       = destino;
+                    baseTomado = true;
+                }
+                destino = override_;
+            };
+            aplicaFactor(ov.metallic,  ov.baseMetallic,  ov.baseMetallicTaken,  mat.metallic);
+            aplicaFactor(ov.roughness, ov.baseRoughness, ov.baseRoughnessTaken, mat.roughness);
         }
     }
 

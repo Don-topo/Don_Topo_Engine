@@ -233,7 +233,7 @@ void updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
             // posterior seguiría devolviendo el nombre viejo. Es un caso más
             // estrecho —hace falta un override activo Y que el fichero base
             // se renombre por separado— y no es el que este fix cierra.
-            for (MaterialTextureOverride& ov : go->materialOverrides)
+            for (MaterialOverride& ov : go->materialOverrides)
             {
                 updateField(ov.albedo);
                 updateField(ov.normal);
@@ -352,7 +352,7 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
                 // comentario de "baseAlbedo" en Scene.cpp::nodeToJson), así
                 // que un baseline con el nombre viejo no puede perderse entre
                 // sesiones. Mismo razonamiento que en updateSceneReferencesForRename.
-                for (MaterialTextureOverride& ov : go->materialOverrides)
+                for (MaterialOverride& ov : go->materialOverrides)
                 {
                     if (matches(ov.albedo)) ov.albedo.clear();
                     if (matches(ov.normal)) ov.normal.clear();

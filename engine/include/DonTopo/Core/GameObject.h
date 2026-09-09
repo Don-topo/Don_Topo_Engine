@@ -56,8 +56,8 @@ namespace DonTopo
     class ScrollViewComponent;
     class ScriptComponent;
 
-    // Rutas de textura que el usuario ha puesto a mano desde Properties, por
-    // encima de lo que trajera el FBX.
+    // Rutas de textura y factores PBR que el usuario ha puesto a mano desde
+    // Properties, por encima de lo que trajera el FBX.
     //
     // Viven aquí y no en Material a propósito: Material es lo que leen los
     // uploaders de los dos backends y lo que entra en la clave de dedup de
@@ -68,7 +68,19 @@ namespace DonTopo
     // slot: es a lo que vuelve Clear en caliente. No se serializan — al cargar
     // la escena el material se re-deriva del FBX y el baseline se vuelve a
     // capturar solo.
-    struct MaterialTextureOverride
+    //
+    // metallic/roughness llevan el MISMO mecanismo que las tres texturas, pero
+    // con un centinela en vez de una cadena vacía: 0.0 y 1.0 son valores
+    // válidos de slider (no metálico / totalmente rugoso), así que no sirven
+    // de "sin override" como sí sirve "" para una ruta. -1.0 está fuera del
+    // rango 0..1 del slider y no se puede llegar a él arrastrando, así que es
+    // un centinela seguro. baseXTaken hace DOBLE trabajo aquí (a diferencia de
+    // las texturas, que necesitan el flag SOLO para el baseline): también dice
+    // si hay override activo, porque a diferencia de una textura, un factor no
+    // tiene botón "Clear" propio en el panel que lo desactive sin des-tocarlo
+    // — nunca hace falta distinguir "tocado pero ahora inactivo" de "nunca
+    // tocado", así que un solo flag por factor basta.
+    struct MaterialOverride
     {
         int         index = 0;   // índice en SkinnedMesh::materials; 0 = Mesh::material
         std::string albedo, normal, orm;
@@ -78,6 +90,13 @@ namespace DonTopo
         // sin textura) sería indistinguible de "aún no tomado", y el Clear
         // dejaría puesta la textura del usuario en vez de quitarla.
         bool        baseAlbedoTaken = false, baseNormalTaken = false, baseOrmTaken = false;
+
+        // -1.0 = sin override activo (centinela; ver la nota de arriba).
+        float       metallic  = -1.0f;
+        float       roughness = -1.0f;
+        float       baseMetallic  = 0.0f;
+        float       baseRoughness = 0.0f;
+        bool        baseMetallicTaken = false, baseRoughnessTaken = false;
     };
 
     class GameObject
@@ -142,11 +161,19 @@ namespace DonTopo
             void setMesh(std::shared_ptr<Mesh> mesh)
             {
                 m_mesh = std::move(mesh);
-                for (MaterialTextureOverride& ov : materialOverrides)
+                for (MaterialOverride& ov : materialOverrides)
                 {
                     ov.baseAlbedo.clear(); ov.baseAlbedoTaken = false;
                     ov.baseNormal.clear(); ov.baseNormalTaken = false;
                     ov.baseOrm.clear();    ov.baseOrmTaken    = false;
+                    // Mismo motivo que los tres de arriba: el baseline de un
+                    // factor pertenece a LA MALLA de la que salió, no al
+                    // GameObject. baseMetallic/baseRoughness no llevan valor
+                    // "vacío" que limpiar (son floats, no std::string): basta
+                    // con bajar el flag, que es lo único que
+                    // applyMaterialOverrides mira para decidir si recaptura.
+                    ov.baseMetallicTaken  = false;
+                    ov.baseRoughnessTaken = false;
                 }
             }
             const std::shared_ptr<Mesh>& getMesh() const { return m_mesh; }
@@ -384,8 +411,8 @@ namespace DonTopo
             bool meshVisible = true;
 
             // Vacío = el material es tal cual lo trajo el FBX. Ver
-            // MaterialTextureOverride.
-            std::vector<MaterialTextureOverride> materialOverrides;
+            // MaterialOverride.
+            std::vector<MaterialOverride> materialOverrides;
 
             // Screen Space Reflections por objeto. No es un componente: son dos
             // campos del propio GameObject, igual que el transform, porque lo que

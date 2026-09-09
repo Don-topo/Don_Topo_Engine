@@ -752,4 +752,52 @@ private:
     std::string         m_after;
 };
 
+enum class MaterialFactorSlot { Metallic, Roughness };
+
+// Escribe UN factor PBR (metallic o roughness) en el override del material
+// `materialIndex` y lo aplica al Material. Simétrico a
+// setMaterialTextureOverride: crea la entrada del override si no existe, y es
+// el único sitio (junto al de texturas) que escribe en materialOverrides —el
+// comando y el panel llaman aquí, nunca directamente a go.materialOverrides.
+//
+// `value` es el valor real que va a quedar en el slider (0..1); el centinela
+// -1.0f de "sin override" (ver MaterialOverride en GameObject.h) es cosa de
+// applyMaterialOverrides, no de este setter.
+void setMaterialFactorOverride(GameObject& go, int materialIndex,
+                                MaterialFactorSlot slot, float value);
+
+// Cambio de UN factor PBR de UN material, por el stack de undo. Calcado de
+// MaterialTextureCommand (mismos tres guardas: resuelve el GameObject por id
+// en cada aplicación, corta si el índice ya no describe un material del mesh
+// vivo, y rebuild solo si hay renderer) con el tipo del valor cambiado de
+// std::string a float — dos comandos independientes (Metallic y Roughness
+// son dos MaterialFactorSlot distintos) en vez de uno que cargue los dos
+// factores a la vez: si compartieran un solo comando con snapshot combinado
+// como AudioClipState, arrastrar SOLO Metallic tendría que reescribir
+// también el override de Roughness con su valor actual para poder deshacer
+// los dos juntos, y eso lo "tocaría" (activaría su centinela) aunque el
+// usuario nunca lo arrastró — el factor que no se tocó se serializaría igual
+// que el que sí.
+class MaterialFactorCommand : public ICommand {
+public:
+    MaterialFactorCommand(Scene& scene, EditorRenderer* renderer, std::string label,
+                           uint64_t id, int materialIndex, MaterialFactorSlot slot,
+                           float before, float after);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(float value);
+
+    Scene&             m_scene;
+    EditorRenderer*    m_renderer;
+    std::string        m_label;
+    uint64_t           m_id;
+    int                m_materialIndex;
+    MaterialFactorSlot m_slot;
+    float              m_before;
+    float              m_after;
+};
+
 } // namespace DonTopo

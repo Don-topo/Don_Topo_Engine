@@ -641,13 +641,13 @@ void ClipRenameCommand::apply(const std::string& from, const std::string& to)
 void setMaterialTextureOverride(GameObject& go, int materialIndex,
                                  MaterialTextureSlot slot, const std::string& path)
 {
-    MaterialTextureOverride* ov = nullptr;
+    MaterialOverride* ov = nullptr;
     for (auto& candidato : go.materialOverrides)
         if (candidato.index == materialIndex) { ov = &candidato; break; }
 
     if (!ov)
     {
-        MaterialTextureOverride nuevo;
+        MaterialOverride nuevo;
         nuevo.index = materialIndex;
         go.materialOverrides.push_back(nuevo);
         ov = &go.materialOverrides.back();
@@ -699,6 +699,66 @@ void MaterialTextureCommand::apply(const std::string& path)
     // Skinned y estático van por caminos distintos porque los recursos de GPU
     // lo son: el personaje se reconstruye entero (es lo único que hay), el
     // estático solo cambia de material.
+    if (SkinnedMesh* sm = go->getSkinnedMesh(); sm && go->skinnedRenderIndex >= 0)
+        m_renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *sm);
+    else if (go->staticRenderIndex >= 0)
+        m_renderer->rebuildStaticMesh(go->staticRenderIndex, *go->getMesh());
+}
+
+void setMaterialFactorOverride(GameObject& go, int materialIndex,
+                                MaterialFactorSlot slot, float value)
+{
+    MaterialOverride* ov = nullptr;
+    for (auto& candidato : go.materialOverrides)
+        if (candidato.index == materialIndex) { ov = &candidato; break; }
+
+    if (!ov)
+    {
+        MaterialOverride nuevo;
+        nuevo.index = materialIndex;
+        go.materialOverrides.push_back(nuevo);
+        ov = &go.materialOverrides.back();
+    }
+
+    switch (slot)
+    {
+        case MaterialFactorSlot::Metallic:  ov->metallic  = value; break;
+        case MaterialFactorSlot::Roughness: ov->roughness = value; break;
+    }
+
+    applyMaterialOverrides(go);
+}
+
+MaterialFactorCommand::MaterialFactorCommand(Scene& scene, EditorRenderer* renderer,
+                                              std::string label, uint64_t id,
+                                              int materialIndex, MaterialFactorSlot slot,
+                                              float before, float after)
+    : m_scene(scene), m_renderer(renderer), m_label(std::move(label)), m_id(id),
+      m_materialIndex(materialIndex), m_slot(slot), m_before(before), m_after(after) {}
+
+void MaterialFactorCommand::execute() { apply(m_after); }
+void MaterialFactorCommand::undo()    { apply(m_before); }
+
+void MaterialFactorCommand::apply(float value)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go || !go->hasMesh()) return;
+
+    // Mismo corte que MaterialTextureCommand::apply, mismo motivo: el índice
+    // era válido cuando se construyó este comando, pero el replay (undo/redo)
+    // puede llegar con el GameObject llevando otra malla, con menos
+    // materiales que la de entonces.
+    const std::vector<Material*> mats = materialsOfMesh(*go);
+    if (m_materialIndex < 0 || m_materialIndex >= (int)mats.size()) return;
+
+    setMaterialFactorOverride(*go, m_materialIndex, m_slot, value);
+
+    if (!m_renderer) return;
+
+    // makeSharedMeshKey mete los factores PBR en la clave de dedup del mesh
+    // estático (MeshKey.h): sin este rebuild, el objeto se queda dibujando
+    // con los recursos de GPU keyados por el factor VIEJO aunque el Material
+    // en CPU ya lleve el nuevo.
     if (SkinnedMesh* sm = go->getSkinnedMesh(); sm && go->skinnedRenderIndex >= 0)
         m_renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *sm);
     else if (go->staticRenderIndex >= 0)

@@ -206,7 +206,7 @@ std::string currentTexturePath(const DonTopo::Material& mat, DonTopo::MaterialTe
 std::string currentOverride(const DonTopo::GameObject& go, int materialIndex,
                             DonTopo::MaterialTextureSlot slot)
 {
-    for (const DonTopo::MaterialTextureOverride& ov : go.materialOverrides)
+    for (const DonTopo::MaterialOverride& ov : go.materialOverrides)
         if (ov.index == materialIndex)
             switch (slot)
             {
@@ -7907,12 +7907,15 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
     if (mats.empty()) return;
 
     // Desplegada por defecto, como el propio TreeNode del Mesh. Plegada era
-    // invisible en la práctica: las texturas no son un componente aparte —no
-    // hay "Material" en el menú Add— así que quien las busca mira ahí, no
+    // invisible en la práctica: el material no es un componente aparte —no
+    // hay "Material" en el menú Add— así que quien lo busca mira ahí, no
     // dentro del Mesh, y una cabecera cerrada bajo el checkbox Visible no
-    // dice que ahí estén. El coste es que la sección Mesh es más alta
+    // dice que ahí esté. El coste es que la sección Mesh es más alta
     // siempre, y bastante más en un skinned con varios materiales.
-    if (!ImGui::CollapsingHeader("Textures", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    //
+    // "Material" y no "Textures": la sección ya no es solo de texturas desde
+    // que suma los sliders Metallic/Roughness de más abajo.
+    if (!ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
     // Capturado UNA vez, no leído de ctx.selected en cada callback: el drop y
     // el Clear son síncronos (se resuelven en este mismo frame, sobre el
@@ -7994,6 +7997,98 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
 
             ImGui::PopID();
         }
+
+        // Metallic/Roughness del material: dos sliders, no una textura más,
+        // así que fuera del bucle kSlots de arriba pero dentro del mismo
+        // PushID(m) — sin él, "Metallic"/"Roughness" del material 0 y el 1
+        // colisionarían igual que los tres botones de textura.
+        {
+            Material& mat = *mats[(size_t)m];
+            // El path EFECTIVO del Material (FBX u override, applyMaterialOverrides
+            // ya lo dejó puesto), no el override crudo: es justo lo que decide
+            // si el mapa manda en el shader (D3D12Renderer::addStaticMesh /
+            // Renderer::createSharedGpuMesh miran lo mismo).
+            const bool hasOrmMap = !mat.metallicRoughnessPath.empty();
+            const int  materialIndex = m;
+
+            // El "before" se lee ANTES de dibujar el slider: SliderFloat salta
+            // al valor bajo el cursor en el mismo frame del clic (ver la nota
+            // grande de m_materialFactorDragActive en el header), así que
+            // releerlo después de dibujar ya daría el valor nuevo.
+            const float beforeMetallic  = mat.metallic;
+            const float beforeRoughness = mat.roughness;
+            float metallic  = beforeMetallic;
+            float roughness = beforeRoughness;
+
+            ImGui::BeginDisabled(ctx.editingLocked || hasOrmMap);
+            ImGui::SliderFloat("Metallic", &metallic, 0.0f, 1.0f, "%.2f");
+            ImGui::EndDisabled();
+            if (hasOrmMap && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Hay un mapa Metallic/Roughness asignado: manda el mapa, "
+                                  "este slider no tiene efecto mientras siga puesto.");
+            if (ImGui::IsItemActivated())
+            {
+                m_materialFactorDragActive        = true;
+                m_materialFactorDragOwnerId       = ownerId;
+                m_materialFactorDragMaterialIndex = materialIndex;
+                m_materialFactorDragSlot          = MaterialFactorSlot::Metallic;
+                m_materialFactorDragBefore        = beforeMetallic;
+            }
+            // Guarda de propietario, mismo motivo que en Audio Clip: el
+            // ActiveId del slider sobrevive a un cambio de selección a mitad
+            // de arrastre, y sin comparar dueño+índice+slot el commit se
+            // aplicaría al objeto/material equivocado.
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_materialFactorDragActive &&
+                m_materialFactorDragOwnerId == ownerId &&
+                m_materialFactorDragMaterialIndex == materialIndex &&
+                m_materialFactorDragSlot == MaterialFactorSlot::Metallic)
+            {
+                m_materialFactorDragActive = false;
+                if (!nearlyEqualF(m_materialFactorDragBefore, metallic) && ctx.scene)
+                {
+                    auto cmd = std::make_unique<MaterialFactorCommand>(
+                        *ctx.scene, ctx.renderer, "Metallic de '" + ctx.selected->name + "'",
+                        ownerId, materialIndex, MaterialFactorSlot::Metallic,
+                        m_materialFactorDragBefore, metallic);
+                    cmd->execute();
+                    if (ctx.undo) ctx.undo->push(std::move(cmd));
+                    ctx.pushLog("Metallic de '" + ctx.selected->name + "' cambiado");
+                }
+            }
+
+            ImGui::BeginDisabled(ctx.editingLocked || hasOrmMap);
+            ImGui::SliderFloat("Roughness", &roughness, 0.0f, 1.0f, "%.2f");
+            ImGui::EndDisabled();
+            if (hasOrmMap && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Hay un mapa Metallic/Roughness asignado: manda el mapa, "
+                                  "este slider no tiene efecto mientras siga puesto.");
+            if (ImGui::IsItemActivated())
+            {
+                m_materialFactorDragActive        = true;
+                m_materialFactorDragOwnerId       = ownerId;
+                m_materialFactorDragMaterialIndex = materialIndex;
+                m_materialFactorDragSlot          = MaterialFactorSlot::Roughness;
+                m_materialFactorDragBefore        = beforeRoughness;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit() && m_materialFactorDragActive &&
+                m_materialFactorDragOwnerId == ownerId &&
+                m_materialFactorDragMaterialIndex == materialIndex &&
+                m_materialFactorDragSlot == MaterialFactorSlot::Roughness)
+            {
+                m_materialFactorDragActive = false;
+                if (!nearlyEqualF(m_materialFactorDragBefore, roughness) && ctx.scene)
+                {
+                    auto cmd = std::make_unique<MaterialFactorCommand>(
+                        *ctx.scene, ctx.renderer, "Roughness de '" + ctx.selected->name + "'",
+                        ownerId, materialIndex, MaterialFactorSlot::Roughness,
+                        m_materialFactorDragBefore, roughness);
+                    cmd->execute();
+                    if (ctx.undo) ctx.undo->push(std::move(cmd));
+                    ctx.pushLog("Roughness de '" + ctx.selected->name + "' cambiado");
+                }
+            }
+        }
+
         ImGui::PopID();
     }
 

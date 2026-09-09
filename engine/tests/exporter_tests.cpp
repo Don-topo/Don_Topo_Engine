@@ -392,7 +392,7 @@ static void test_rewrite_materials_override_outside_root(const fs::path& root)
     // construida a mano, se replican los dos a propósito.
     mesh->material.texturePath = albedoFile.string();
     go->setMesh(mesh);
-    MaterialTextureOverride ov;
+    MaterialOverride ov;
     ov.index  = 0;
     ov.albedo = albedoFile.string();
     go->materialOverrides.push_back(ov);
