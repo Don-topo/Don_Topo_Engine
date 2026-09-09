@@ -820,6 +820,54 @@ static void test_insert_from_json_reassigns_colliding_id(PhysicsManager& pm, Aud
     CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
 }
 
+// La colisión del test de arriba es contra un objeto EXTERNO al subárbol
+// reinsertado. Este cubre la otra mitad: dos nodos del MISMO snapshot con el
+// mismo id ENTRE ELLOS, sin ningún objeto vivo externo de por medio — el
+// padre y su propio hijo. idsVivos se captura antes de insertar (vacío para
+// estos dos ids, porque los originales se borran) y se AMPLÍA con cada id ya
+// aceptado dentro del mismo recorrido del subárbol reinsertado; sin esa
+// ampliación (justo la línea que se sabotea para probarlo) el hijo se cuela
+// con el mismo id que su padre y nadie se entera.
+static void test_insert_from_json_reassigns_id_colliding_within_same_subtree(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* padre = scene.addGameObject("Padre");
+    scene.addGameObject("Hijo", padre);
+
+    nlohmann::json snapshot = scene.subtreeToJson(padre);
+    CHECK(snapshot.contains("children") && snapshot["children"].size() == 1);
+    if (!snapshot.contains("children") || snapshot["children"].size() != 1) return;
+    // El hijo se queda con el id del padre, a mano, DENTRO del propio
+    // snapshot — nada externo participa en esta colisión.
+    snapshot["children"][0]["id"] = snapshot["id"];
+
+    // Los originales desaparecen: la única colisión posible tras esto es la
+    // interna que se acaba de forzar, no una contra un objeto vivo de fuera
+    // (eso ya lo prueba test_insert_from_json_reassigns_colliding_id).
+    scene.removeGameObject(padre);
+
+    GameObject* reinsertado = scene.insertFromJson(snapshot, nullptr, 0, pm, am);
+    CHECK(reinsertado != nullptr);
+    if (!reinsertado) return;
+    CHECK(reinsertado->children.size() == 1);
+    if (reinsertado->children.empty()) return;
+
+    GameObject* hijoReinsertado = reinsertado->children[0].get();
+    CHECK(reinsertado->id != hijoReinsertado->id);
+
+    bool avisoEncontrado = false;
+    for (const auto& w : scene.lastWarnings())
+        if (w.find("ya estaba en uso") != std::string::npos) avisoEncontrado = true;
+    CHECK(avisoEncontrado);
+
+    // Ningún id repetido en toda la escena, por si acaso: el objetivo final
+    // es exactamente esa invariante.
+    std::vector<uint64_t> ids;
+    scene.traverse([&](GameObject* n) { ids.push_back(n->id); });
+    std::sort(ids.begin(), ids.end());
+    CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
+}
+
 // findById con un id único no cambia de comportamiento tras pasar a "gana el
 // primero": sigue devolviendo ESE objeto. El cambio de determinismo solo
 // importa cuando hay más de un nodo con el mismo id (invariante ya rota),
@@ -7947,6 +7995,7 @@ int main()
     test_clone_subtree_gets_fresh_ids(pm, am);
     test_undo_delete_keeps_original_id(pm, am);
     test_insert_from_json_reassigns_colliding_id(pm, am);
+    test_insert_from_json_reassigns_id_colliding_within_same_subtree(pm, am);
     test_find_by_id_unique_id_still_resolves();
     test_find_by_id_duplicate_writes_only_first_never_the_other();
     test_duplicate_is_sibling_not_child(pm, am);
