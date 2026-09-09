@@ -15,6 +15,7 @@
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Renderer/ModelLoader.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
+#include "DonTopo/Renderer/MaterialTextureSource.h"
 #include "DonTopo/Scripting/ScriptManager.h"
 #include "DonTopo/Scripting/ScriptComponent.h"
 #include "DonTopo/Core/CameraComponent.h"
@@ -220,6 +221,28 @@ std::string currentOverride(const DonTopo::GameObject& go, int materialIndex,
 bool hasOverride(const DonTopo::GameObject& go, int materialIndex, DonTopo::MaterialTextureSlot slot)
 {
     return !currentOverride(go, materialIndex, slot).empty();
+}
+
+// El factor del OVERRIDE, CRUDO (el centinela -1.0f si no hay ninguno para
+// ese slot), simétrico a currentOverride() con las texturas -- y por el
+// mismo motivo: mat.metallic/mat.roughness son el valor YA APLICADO (FBX u
+// override), y usar ESO como "before" de un comando rompería el undo. Un
+// PropertyCommand<float> con before=valor-del-FBX y slot="antes no había
+// override" son datos distintos aunque el número coincida: deshacer tiene
+// que devolver "sin override" (el centinela), no re-escribir el valor del
+// FBX COMO override activo -- que es justo lo que nodeToJson serializa, y
+// clavaría el factor en el .scene aunque el usuario nunca lo hubiera tocado.
+float currentFactorOverride(const DonTopo::GameObject& go, int materialIndex,
+                            DonTopo::MaterialFactorSlot slot)
+{
+    for (const DonTopo::MaterialOverride& ov : go.materialOverrides)
+        if (ov.index == materialIndex)
+            switch (slot)
+            {
+                case DonTopo::MaterialFactorSlot::Metallic:  return ov.metallic;
+                case DonTopo::MaterialFactorSlot::Roughness: return ov.roughness;
+            }
+    return -1.0f;
 }
 
 } // namespace
@@ -7828,7 +7851,7 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
             // Material intactos, como si el botón no hubiera hecho nada a
             // nivel de datos. Por eso el clear() de abajo va condicionado a
             // hasMesh(): usar la MISMA señal que ya gobierna si esta sección y
-            // la de Textures se siguen dibujando (más arriba) y si
+            // la de Material se siguen dibujando (más arriba) y si
             // loadMeshForSelected acepta cargar un reemplazo, en vez de una
             // señal propia que podría desincronizarse de esas dos. Si se
             // vaciara siempre, en D3D12 el registro serializable
@@ -8004,11 +8027,17 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
         // colisionarían igual que los tres botones de textura.
         {
             Material& mat = *mats[(size_t)m];
-            // El path EFECTIVO del Material (FBX u override, applyMaterialOverrides
-            // ya lo dejó puesto), no el override crudo: es justo lo que decide
-            // si el mapa manda en el shader (D3D12Renderer::addStaticMesh /
-            // Renderer::createSharedGpuMesh miran lo mismo).
-            const bool hasOrmMap = !mat.metallicRoughnessPath.empty();
+            // MISMA condición que miran los dos backends para decidir si el
+            // mapa manda (D3D12Renderer::addStaticMesh/rebuildStaticMesh,
+            // Renderer::createSharedGpuMesh), no !path.empty(): un modelo con
+            // el ORM EMBEBIDO (un .glb, metallicRoughnessPath vacío pero
+            // embeddedMetallicRoughness lleno) tiene mapa igual, y con el
+            // chequeo de solo-path los sliders salían habilitados sin avisar
+            // aunque los dos backends fuerzan 1.0 e ignoran el valor —un
+            // widget que no hacía nada.
+            const bool hasOrmMap = chooseTextureSource(mat.metallicRoughnessPath,
+                                                        mat.embeddedMetallicRoughness) !=
+                                   TextureSource::None;
             const int  materialIndex = m;
 
             // El "before" se lee ANTES de dibujar el slider: SliderFloat salta
@@ -8046,10 +8075,20 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                 m_materialFactorDragActive = false;
                 if (!nearlyEqualF(m_materialFactorDragBefore, metallic) && ctx.scene)
                 {
+                    // El "before" del comando es el override CRUDO (el
+                    // centinela si nunca hubo uno), no m_materialFactorDragBefore
+                    // (el valor EFECTIVO que se enseñaba antes del arrastre,
+                    // usado arriba solo para saber si algo cambió). Con el
+                    // efectivo como "before", deshacer la primera edición
+                    // escribiría el valor del FBX COMO OVERRIDE ACTIVO —
+                    // nodeToJson lo serializaría, clavando el factor en el
+                    // .scene aunque el usuario nunca lo hubiera tocado.
+                    const float beforeOverride =
+                        currentFactorOverride(*ctx.selected, materialIndex, MaterialFactorSlot::Metallic);
                     auto cmd = std::make_unique<MaterialFactorCommand>(
                         *ctx.scene, ctx.renderer, "Metallic de '" + ctx.selected->name + "'",
                         ownerId, materialIndex, MaterialFactorSlot::Metallic,
-                        m_materialFactorDragBefore, metallic);
+                        beforeOverride, metallic);
                     cmd->execute();
                     if (ctx.undo) ctx.undo->push(std::move(cmd));
                     ctx.pushLog("Metallic de '" + ctx.selected->name + "' cambiado");
@@ -8078,10 +8117,14 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                 m_materialFactorDragActive = false;
                 if (!nearlyEqualF(m_materialFactorDragBefore, roughness) && ctx.scene)
                 {
+                    // Mismo motivo que el bloque de Metallic: el override
+                    // CRUDO, no el efectivo.
+                    const float beforeOverride =
+                        currentFactorOverride(*ctx.selected, materialIndex, MaterialFactorSlot::Roughness);
                     auto cmd = std::make_unique<MaterialFactorCommand>(
                         *ctx.scene, ctx.renderer, "Roughness de '" + ctx.selected->name + "'",
                         ownerId, materialIndex, MaterialFactorSlot::Roughness,
-                        m_materialFactorDragBefore, roughness);
+                        beforeOverride, roughness);
                     cmd->execute();
                     if (ctx.undo) ctx.undo->push(std::move(cmd));
                     ctx.pushLog("Roughness de '" + ctx.selected->name + "' cambiado");

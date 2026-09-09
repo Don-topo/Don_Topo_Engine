@@ -554,7 +554,7 @@ private:
     // cambiar de selección, mismo motivo que m_meshLoadError: si no, el error
     // del objeto anterior se queda pintado bajo las texturas del nuevo.
     std::string m_textureLoadError;
-    // Instancia propia de ImGuiFileDialog para la sección Textures, nunca
+    // Instancia propia de ImGuiFileDialog para la sección Material, nunca
     // compartida con m_meshFileDialog ni con m_audioFileDialog (mismo motivo
     // documentado arriba: redimensionar el popup de una toca el estado interno
     // de la que lo dibuja).

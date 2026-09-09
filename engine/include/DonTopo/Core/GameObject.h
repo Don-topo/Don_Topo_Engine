@@ -74,12 +74,12 @@ namespace DonTopo
     // válidos de slider (no metálico / totalmente rugoso), así que no sirven
     // de "sin override" como sí sirve "" para una ruta. -1.0 está fuera del
     // rango 0..1 del slider y no se puede llegar a él arrastrando, así que es
-    // un centinela seguro. baseXTaken hace DOBLE trabajo aquí (a diferencia de
-    // las texturas, que necesitan el flag SOLO para el baseline): también dice
-    // si hay override activo, porque a diferencia de una textura, un factor no
-    // tiene botón "Clear" propio en el panel que lo desactive sin des-tocarlo
-    // — nunca hace falta distinguir "tocado pero ahora inactivo" de "nunca
-    // tocado", así que un solo flag por factor basta.
+    // un centinela seguro. baseMetallicTaken/baseRoughnessTaken hacen
+    // EXACTAMENTE el mismo trabajo que baseAlbedoTaken y compañía —"ya se
+    // capturó el baseline de este slot"—, nada más: quien decide si hay
+    // override ACTIVO es el propio valor (override_ < 0.0f en
+    // applyMaterialOverrides), el centinela, igual que para una textura lo
+    // decide que la ruta esté vacía.
     struct MaterialOverride
     {
         int         index = 0;   // índice en SkinnedMesh::materials; 0 = Mesh::material

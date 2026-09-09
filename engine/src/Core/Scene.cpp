@@ -1908,8 +1908,21 @@ namespace
                         // Ausente = -1.0f (el centinela de "sin override"; ver
                         // MaterialOverride en GameObject.h), mismo criterio que
                         // "ausente = string vacío" de las tres rutas de arriba.
-                        ov.metallic  = entry.value("metallic",  -1.0f);
-                        ov.roughness = entry.value("roughness", -1.0f);
+                        // Por readFloat y no por entry.value<float>() a pelo:
+                        // este bloque entero NO está dentro de ningún try, y un
+                        // "metallic": null o "metallic": "0.5" con .value<float>()
+                        // lanza type_error.302 — la excepción sube hasta
+                        // fromJson(), que devuelve false, y SE PIERDE LA ESCENA
+                        // ENTERA sin decir por qué. readFloat es la misma guarda
+                        // que ya usa el resto del fichero para este problema:
+                        // avisa nombrando el campo y cae al centinela.
+                        // clamp(-1..1) corta además un "metallic": 5.0 mal
+                        // escrito a mano antes de que llegue al Material y a la
+                        // clave de dedup — el centinela (negativo) no se ve
+                        // afectado, clamp(-1, -1, 1) lo deja igual.
+                        const std::string materialesCtx = "mesh de '" + node->name + "'.materials";
+                        ov.metallic  = std::clamp(readFloat(entry, "metallic",  -1.0f, warnings, materialesCtx), -1.0f, 1.0f);
+                        ov.roughness = std::clamp(readFloat(entry, "roughness", -1.0f, warnings, materialesCtx), -1.0f, 1.0f);
                         // El baseline SOLO se lee en el camino de MEMORIA (ver
                         // el comentario grande de nodeToJson, junto al mismo
                         // flag): en disco estos campos, aunque estuvieran en el
@@ -1926,10 +1939,14 @@ namespace
                             ov.baseNormalTaken = entry.value("baseNormalTaken", false);
                             ov.baseOrm         = fromStoredPath(entry.value("baseOrm", ""), assetRoot);
                             ov.baseOrmTaken    = entry.value("baseOrmTaken", false);
-                            ov.baseMetallic       = entry.value("baseMetallic", 0.0f);
-                            ov.baseMetallicTaken  = entry.value("baseMetallicTaken", false);
-                            ov.baseRoughness      = entry.value("baseRoughness", 0.0f);
-                            ov.baseRoughnessTaken = entry.value("baseRoughnessTaken", false);
+                            // Mismo motivo que metallic/roughness más arriba:
+                            // readFloat/readBool en vez de entry.value<T>() a
+                            // pelo, para que un campo corrupto avise y caiga al
+                            // default en vez de tumbar fromJson() entero.
+                            ov.baseMetallic       = readFloat(entry, "baseMetallic", 0.0f, warnings, materialesCtx);
+                            ov.baseMetallicTaken  = readBool(entry, "baseMetallicTaken", false, warnings, materialesCtx);
+                            ov.baseRoughness      = readFloat(entry, "baseRoughness", 0.0f, warnings, materialesCtx);
+                            ov.baseRoughnessTaken = readBool(entry, "baseRoughnessTaken", false, warnings, materialesCtx);
                         }
                         node->materialOverrides.push_back(std::move(ov));
                     }

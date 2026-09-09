@@ -1043,6 +1043,18 @@ static void test_factor_overrides_survive_round_trip(PhysicsManager& pm, AudioMa
     if (leido->materialOverrides.empty()) return;
     CHECK(leido->materialOverrides[0].metallic  == 0.6f);
     CHECK(leido->materialOverrides[0].roughness == 0.2f);
+    // El baseline NO viaja por disco (mismo criterio que
+    // test_overrides_survive_round_trip con baseAlbedo, ver su comentario):
+    // el JSON de disco nunca escribe baseMetallic/baseMetallicTaken (gateado
+    // por carryOverrideBaseline, que Scene::toJson() nunca pone a true), así
+    // que lo que hay aquí es SIEMPRE recapturado en la carga, no leído del
+    // fichero. Con una malla procedural (a diferencia del SkinnedMesh de
+    // test_overrides_survive_round_trip, cuyo FBX no existe y se queda sin
+    // malla) la carga SÍ cuaja y applyMaterialOverrides SÍ corre, así que el
+    // baseline queda TOMADO -- capturado del default fresco de Material
+    // (0.0f), no de nada que hubiera viajado en el JSON.
+    CHECK(leido->materialOverrides[0].baseMetallicTaken);
+    CHECK(leido->materialOverrides[0].baseMetallic == 0.0f);
     // Y ya aplicados sobre el material (nodeFromJson llama a
     // applyMaterialOverrides con la malla puesta, Task 7).
     CHECK(leido->hasMesh());
@@ -1111,6 +1123,68 @@ static void test_factor_command_undo_redo(PhysicsManager& pm, AudioManager& am)
     cmd.execute();
     CHECK(scene.findById(id)->getMesh()->material.metallic == 0.8f);
     (void)pm; (void)am;
+}
+
+// Ronda de revisión: el "before" de un MaterialFactorCommand construido por
+// el panel tiene que ser el OVERRIDE CRUDO (el centinela, si el slot nunca
+// se había tocado), NO el valor EFECTIVO ya aplicado (mat.metallic) --
+// exactamente el bug que tenía PropertiesPanel::drawTexturesSection antes de
+// este fix (antes de que currentFactorOverride() sustituyera a mat.metallic
+// como "before" en la construcción del comando). Con el efectivo como
+// "before", deshacer la PRIMERA edición sobre un factor nunca tocado
+// escribiría el valor del modelo COMO OVERRIDE ACTIVO -- y nodeToJson SÍ
+// serializa un override activo: el factor quedaría clavado en el .scene
+// para siempre, resucitando en cada carga aunque el usuario nunca lo
+// hubiera tocado (y pisando en silencio un metallic distinto si el FBX se
+// reexporta más tarde).
+static void test_factor_command_undo_of_first_edit_leaves_no_active_override(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    // Sin override todavía: el estado que currentFactorOverride() lee como
+    // "-1.0f, sin override" y que mat.metallic lee como "0.0f, el default"
+    // -- las dos lecturas que el bug confundía.
+    go->setMesh(std::move(mesh));
+    const uint64_t id = go->id;
+    CHECK(go->getMesh()->material.metallic == 0.0f);   // el EFECTIVO
+    CHECK(go->materialOverrides.empty());               // el override CRUDO: ninguno
+
+    // before = -1.0f (el centinela; lo que currentFactorOverride() devuelve
+    // para un slot sin entrada en materialOverrides), NO 0.0f (lo que
+    // devolvería mat.metallic, el bug).
+    MaterialFactorCommand cmd(scene, nullptr, "Metallic de 'Cubo'", id, 0,
+                               MaterialFactorSlot::Metallic, -1.0f, 0.8f);
+    cmd.execute();
+    CHECK(scene.findById(id)->materialOverrides.size() == 1);
+    if (scene.findById(id)->materialOverrides.size() == 1)
+        CHECK(scene.findById(id)->materialOverrides[0].metallic == 0.8f);
+
+    cmd.undo();
+
+    // Con el bug (before=0.0f, el efectivo) esto habría dejado
+    // materialOverrides[0].metallic == 0.0f -- un override ACTIVO con el
+    // valor del modelo, no el centinela. Con el fix, vuelve a -1.0f: sin
+    // override.
+    GameObject* despues = scene.findById(id);
+    CHECK(despues->materialOverrides.size() == 1);
+    if (!despues->materialOverrides.empty())
+        CHECK(despues->materialOverrides[0].metallic < 0.0f);
+    CHECK(despues->getMesh()->material.metallic == 0.0f);
+
+    // Y el round-trip por JSON no lo resucita: sin override activo (el
+    // centinela), nodeToJson no escribe la clave "metallic" para este
+    // objeto, así que una recarga no trae de vuelta nada.
+    const std::string texto = scene.toJson().dump();
+    CHECK(texto.find("\"metallic\"") == std::string::npos);
+
+    Scene cargada("Vacia");
+    CHECK(cargada.fromJson(scene.toJson(), pm, am));
+    GameObject* leido = nullptr;
+    cargada.traverse([&](GameObject* n) { if (n->name == "Cubo") leido = n; });
+    CHECK(leido != nullptr);
+    if (leido && leido->hasMesh())
+        CHECK(leido->getMesh()->material.metallic == 0.0f);
 }
 
 // Sin setMesh: mismo criterio que test_command_on_object_without_mesh_is_noop.
@@ -1274,6 +1348,7 @@ int main()
     test_factor_overrides_survive_round_trip(pm, am);
     test_factor_absent_in_json_does_not_touch_material(pm, am);
     test_factor_command_undo_redo(pm, am);
+    test_factor_command_undo_of_first_edit_leaves_no_active_override(pm, am);
     test_factor_command_on_object_without_mesh_is_noop(pm, am);
     test_factor_command_stale_index_after_mesh_shrinks(pm, am);
     test_factor_command_survives_object_rebuild(pm, am);
