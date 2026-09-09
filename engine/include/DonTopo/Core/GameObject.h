@@ -150,16 +150,16 @@ namespace DonTopo
             // antes de este reset: AsyncAssetLoader::applyLoadedMesh hace
             // setMesh(nullptr) en su catch DESPUÉS de que applyMaterialOverrides
             // ya hubiera capturado el baseline de la malla que no llegó a
-            // cuajar, y Renderer::removeMeshComponent (Vulkan) quita la malla
-            // sin tocar materialOverrides — un Remove + Add con otro FBX
-            // heredaba el baseline del anterior. Resetear aquí, en el ÚNICO
-            // punto por el que cambia la malla, cubre los dos en Vulkan sin
-            // depender de que cada sitio que suelta una malla se acuerde de
-            // limpiar también los overrides. NO cubre D3D12:
-            // D3D12Renderer::removeMeshComponent libera los huecos de GPU sin
-            // llamar a setMesh en absoluto, así que un Remove + Add en ese
-            // backend puede heredar el baseline del FBX anterior sin que este
-            // reset intervenga.
+            // cuajar, y removeMeshComponent quita la malla sin tocar
+            // materialOverrides — un Remove + Add con otro FBX heredaba el
+            // baseline del anterior. Resetear aquí, en el ÚNICO punto por el
+            // que cambia la malla, cubre los dos sin depender de que cada sitio
+            // que suelta una malla se acuerde de limpiar también los overrides.
+            // Cubre los DOS backends: D3D12Renderer::removeMeshComponent
+            // llamaba solo a releaseObjectSlot/releaseSkinnedSlot y se saltaba
+            // este reset entero; desde que llama a setMesh(nullptr) igual que
+            // el de Vulkan, un Remove + Add ya no puede heredar el baseline del
+            // FBX anterior en ninguno de los dos.
             //
             // Seguro para el camino de carga de escena (Scene::nodeFromJson):
             // este setMesh corre SIEMPRE antes de que se lean/carguen los

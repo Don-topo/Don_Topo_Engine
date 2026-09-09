@@ -269,7 +269,10 @@ private:
     void drawScriptsSection(EditorContext& ctx);
     void drawAddComponentButton(EditorContext& ctx);
     void drawNewScriptPopup(EditorContext& ctx);
-    void loadMeshForSelected(EditorContext& ctx, const std::string& path);
+    // ownerId, no ctx.selected: el diálogo de Browse no es modal y se drena
+    // varios frames después de abrirse, con la selección ya cambiada. Mismo
+    // patrón que assignMaterialTexture y setScrollbarAtlasPath.
+    void loadMeshForSelected(EditorContext& ctx, uint64_t ownerId, const std::string& path);
     void loadAudioClipForSelected(EditorContext& ctx, const std::string& path);
 
     bool m_open = true;
@@ -546,6 +549,13 @@ private:
     // redimensionar el popup de uno mientras el otro seguía abierto el mismo
     // frame. unique_ptr porque IGFD::FileDialog es tipo incompleto aquí.
     bool m_meshDlgOpen = false;
+    // A qué GameObject vuelve el FBX elegido cuando el diálogo se cierre, varios
+    // frames después de abrirse: ninguno de los diálogos de este panel es modal
+    // (cero ImGuiFileDialogFlags_Modal), así que el Hierarchy sigue clicable y la
+    // selección puede haber cambiado para entonces. Sin esto la malla se cargaba
+    // en el objeto seleccionado EN ESE MOMENTO, no en el que abrió el diálogo.
+    // Mismo patrón, y mismo motivo, que m_textureDlgOwner y m_fontDlgOwner.
+    uint64_t m_meshDlgOwner = 0;
     std::unique_ptr<IGFD::FileDialog> m_meshFileDialog;
     // Mensaje del último intento fallido de carga de Mesh (vacío si no hay
     // error pendiente); se limpia al cambiar de selección o al cargar bien.
@@ -599,10 +609,18 @@ private:
 
     // GameObject para el que se pulsó "Add > Mesh" (revela la sección
     // Browse/drop hasta que se asigne un mesh o se pulse "x" para quitarlo).
-    // nullptr = sección oculta. No se limpia al cambiar de selección: si el
+    // 0 = sección oculta. No se limpia al cambiar de selección: si el
     // usuario vuelve al mismo GameObject sin haber completado la carga, la
     // sección sigue visible (igual que dejar un diálogo de collider a medias).
-    GameObject* m_meshAddRequestedFor = nullptr;
+    //
+    // El id y no el puntero: nadie limpia esto al borrar el GameObject, y como
+    // sobrevive a cambios de selección a propósito, el puntero podía quedarse
+    // apuntando a memoria liberada. Nunca se desreferencia (solo se compara),
+    // así que el daño no era un crash sino peor de ver: un GameObject nuevo
+    // reciclando esa dirección abría la sección Mesh sin que nadie la hubiera
+    // pedido. Los ids arrancan en 1 (GameObject.cpp: s_nextId{1}), así que 0
+    // nunca colisiona con uno real.
+    uint64_t m_meshAddRequestedFor = 0;
 
     // Misma razón que m_meshFileDialog: instancia propia, nunca compartida
     // con m_meshFileDialog.

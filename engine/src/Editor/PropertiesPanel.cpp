@@ -288,13 +288,30 @@ void PropertiesPanel::invalidateCaches()
     m_caches = EditCaches{};
 }
 
-void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, const std::string& path)
+void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, uint64_t ownerId,
+                                          const std::string& path)
 {
+    if (!ctx.assetLoader || !ctx.scene) return;
+
+    // Resuelto por id en el momento de aplicar, nunca por ctx.selected: el
+    // diálogo de Browse no es modal y se drena varios frames después, con el
+    // Hierarchy clicable de por medio. Leer la selección aquí cargaba el FBX en
+    // el objeto equivocado. El drop pasa por aquí igual (con el id del objeto
+    // sobre el que se suelta), donde da lo mismo porque es inmediato.
+    GameObject* owner = ctx.scene->findById(ownerId);
+    if (!owner)
+    {
+        // En el log y no en silencio: el usuario ha navegado un diálogo entero
+        // y su elección no va a ninguna parte (mismo criterio que
+        // assignMaterialTexture).
+        ctx.pushLog("El objeto que pidió el mesh ya no existe; carga descartada");
+        return;
+    }
+
     // El guard de hasMesh() ya no basta: mientras la carga está en vuelo
     // hasMesh() es falso, así que un segundo drop encolaría una carga duplicada
     // y el segundo resultado pisaría al primero. pendingMeshJob != 0 lo corta.
-    if (!ctx.selected || !ctx.assetLoader
-        || ctx.selected->hasMesh() || ctx.selected->pendingMeshJob != 0)
+    if (owner->hasMesh() || owner->pendingMeshJob != 0)
         return;
 
     std::string ext = std::filesystem::path(path).extension().string();
@@ -308,7 +325,7 @@ void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, const std::string&
     // No carga: encola. El registro en el Renderer (addSkinnedMesh/addStaticMesh)
     // y el setMesh los hace EditorUI::onAssetsLoaded (vía applyLoadedMesh) cuando
     // el worker termine y el pump por frame lo recoja.
-    ctx.selected->pendingMeshJob = ctx.assetLoader->requestMesh(path, ctx.selected->id);
+    owner->pendingMeshJob = ctx.assetLoader->requestMesh(path, owner->id);
     m_meshLoadError.clear();
     ctx.pushLog("Cargando '" + path + "'...");
 }
@@ -7793,7 +7810,7 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
 {
     // Oculto por defecto: solo se dibuja si ya tiene mesh, o si se pulsó
     // "Add > Mesh" para este GameObject concreto (m_meshAddRequestedFor).
-    if (!ctx.selected->hasMesh() && m_meshAddRequestedFor != ctx.selected)
+    if (!ctx.selected->hasMesh() && m_meshAddRequestedFor != ctx.selected->id)
         return;
 
     ImGui::Separator();
@@ -7838,45 +7855,38 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
         if (removeClicked && ctx.renderer)
         {
             ctx.renderer->removeMeshComponent(ctx.selected);
-            // OJO: esto NO llama a GameObject::setMesh(nullptr) en los dos
-            // backends. En Vulkan (Renderer::removeMeshComponent) sí lo hace,
-            // así que hasMesh() pasa a false; pero ese setMesh(nullptr) SOLO
-            // resetea los baselines (base*/base*Taken) de cada entrada de
+            // Los DOS backends llaman ya a GameObject::setMesh(nullptr) (en
+            // D3D12 faltaba: el objeto se quedaba con hasMesh()==true y el
+            // botón no hacía nada a nivel de datos), así que hasMesh() es false
+            // en este punto en cualquiera de ellos. Pero ese setMesh(nullptr)
+            // SOLO resetea los baselines (base*/base*Taken) de cada entrada de
             // materialOverrides -- ver GameObject.h::setMesh --, no vacía el
-            // vector. Quien de verdad lo vacía es el clear() de aquí abajo,
-            // que en Vulkan corre porque hasMesh() ya es false en este punto.
-            // En D3D12 (D3D12Renderer::removeMeshComponent) SOLO libera los
-            // huecos de GPU (releaseObjectSlot/releaseSkinnedSlot) y nunca llama a
-            // setMesh: el GameObject se queda con hasMesh()==true, mesh y
-            // Material intactos, como si el botón no hubiera hecho nada a
-            // nivel de datos. Por eso el clear() de abajo va condicionado a
-            // hasMesh(): usar la MISMA señal que ya gobierna si esta sección y
-            // la de Material se siguen dibujando (más arriba) y si
-            // loadMeshForSelected acepta cargar un reemplazo, en vez de una
-            // señal propia que podría desincronizarse de esas dos. Si se
-            // vaciara siempre, en D3D12 el registro serializable
-            // (materialOverrides) quedaría vacío mientras el Material sigue
-            // enseñando la textura del override: el panel seguiría mostrando
-            // la asignación (la lee del Material, no del registro), pero el
+            // vector: quien lo vacía es el clear() de aquí abajo.
+            //
+            // La guarda por hasMesh() se queda: es la MISMA señal que gobierna
+            // si esta sección y la de Material se siguen dibujando (más arriba)
+            // y si loadMeshForSelected acepta cargar un reemplazo, en vez de una
+            // señal propia que podría desincronizarse de esas dos. Si un backend
+            // volviera a dejar la malla puesta, vaciar el registro igualmente
+            // dejaría materialOverrides vacío mientras el Material sigue
+            // enseñando la textura del override: el panel seguiría mostrando la
+            // asignación (la lee del Material, no del registro), pero el
             // siguiente guardado no escribiría el bloque `materials` y la
-            // asignación se perdería al recargar, sin que nada en el editor lo
-            // avisara. Con la guarda, en D3D12 el clear no ocurre — el
-            // registro se queda igual de "vivo" que el Material al que
-            // describe, así que lo que se guarda sigue siendo lo que se ve — y
-            // en Vulkan hasMesh() ya es false aquí, así que el clear corre
-            // igual que antes: quitar el componente Mesh a mano con este botón
-            // es la acción explícita de "ya no quiero este mesh ni lo que
-            // tenía puesto", y sin vaciar el registro un "x" + "Add > Mesh" con
-            // un FBX de menos materiales reescribiría overrides con índices
-            // que ya no existen en el mesh nuevo (mismo síntoma que el
-            // Critical de la ronda anterior, pero por un camino que ningún
-            // clamp de índice detecta, porque el índice era válido cuando se
-            // escribió).
+            // asignación se perdería al recargar, sin que nada lo avisara.
+            //
+            // Y cuando sí corre —lo normal ahora— vaciar es lo correcto: quitar
+            // el componente Mesh a mano con este botón es la acción explícita de
+            // "ya no quiero este mesh ni lo que tenía puesto", y sin vaciar el
+            // registro un "x" + "Add > Mesh" con un FBX de menos materiales
+            // reescribiría overrides con índices que ya no existen en el mesh
+            // nuevo (mismo síntoma que el Critical de la ronda anterior, pero
+            // por un camino que ningún clamp de índice detecta, porque el índice
+            // era válido cuando se escribió).
             if (!ctx.selected->hasMesh())
                 ctx.selected->materialOverrides.clear();
             // Vuelve a ocultar la sección tras quitar el mesh — hay que
             // pulsar "Add > Mesh" de nuevo para reabrirla.
-            m_meshAddRequestedFor = nullptr;
+            m_meshAddRequestedFor = 0;
             ctx.pushLog("Componente Mesh quitado de '" + ctx.selected->name + "'");
         }
 
@@ -7886,7 +7896,10 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
     ImGui::Text("Mesh");
     if (ImGui::Button("Browse..."))
     {
-        m_meshDlgOpen = true;
+        m_meshDlgOpen  = true;
+        // El dueño se fija AQUÍ, al abrir: cuando el diálogo se drene la
+        // selección puede ser otra (ver m_meshDlgOwner).
+        m_meshDlgOwner = ctx.selected->id;
         IGFD::FileDialogConfig cfg;
         cfg.path  = "assets";
         cfg.flags = ImGuiFileDialogFlags_HideColumnType |
@@ -7913,7 +7926,8 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
     if (!ctx.editingLocked && ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DT_ASSET_PATH"))
-            loadMeshForSelected(ctx, std::string(static_cast<const char*>(payload->Data)));
+            loadMeshForSelected(ctx, ctx.selected->id,
+                                std::string(static_cast<const char*>(payload->Data)));
         ImGui::EndDragDropTarget();
     }
     ImGui::EndChild();
@@ -8227,7 +8241,7 @@ void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
     {
         if (m_meshFileDialog->IsOk() &&
             assetAllowed(ctx, m_meshFileDialog->GetFilePathName()))
-            loadMeshForSelected(ctx, m_meshFileDialog->GetFilePathName());
+            loadMeshForSelected(ctx, m_meshDlgOwner, m_meshFileDialog->GetFilePathName());
         m_meshFileDialog->Close();
         m_meshDlgOpen = false;
     }
@@ -8837,7 +8851,7 @@ void PropertiesPanel::drawAddComponentButton(EditorContext& ctx)
         bool alreadyHasMesh = ctx.selected->hasMesh();
         ImGui::BeginDisabled(alreadyHasMesh);
         if (ImGui::Selectable("Mesh") && !alreadyHasMesh)
-            m_meshAddRequestedFor = ctx.selected;
+            m_meshAddRequestedFor = ctx.selected->id;
         ImGui::EndDisabled();
 
         bool alreadyHasAudio = ctx.selected->hasAudioClip();

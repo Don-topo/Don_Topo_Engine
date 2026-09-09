@@ -10103,19 +10103,33 @@ void D3D12Renderer::removeGameObject(GameObject* node)
 
 void D3D12Renderer::removeMeshComponent(GameObject* node)
 {
-    if (!node)
+    // Misma guarda que Renderer::removeMeshComponent (Vulkan): la señal es
+    // hasMesh(), no los huecos de GPU. Un objeto con malla y sin hueco -- la
+    // carga asincrona todavia en vuelo, o pasado kMaxObjectSlots -- tambien
+    // tiene que perder el componente; antes salia por el return de abajo con
+    // hasMesh() intacto.
+    if (!node || !node->hasMesh())
         return;
-    if (node->staticRenderIndex < 0 && node->skinnedRenderIndex < 0)
-        return;   // nada que soltar: no vale la pena parar la GPU
-    m_impl->waitForGpu();
-    if (node->staticRenderIndex >= 0) {
-        m_impl->releaseObjectSlot(static_cast<size_t>(node->staticRenderIndex));
-        node->staticRenderIndex = -1;
+    // El waitForGpu solo si de verdad hay un hueco que soltar: parar la GPU
+    // para no soltar nada no lo justifica.
+    if (node->staticRenderIndex >= 0 || node->skinnedRenderIndex >= 0) {
+        m_impl->waitForGpu();
+        if (node->staticRenderIndex >= 0) {
+            m_impl->releaseObjectSlot(static_cast<size_t>(node->staticRenderIndex));
+            node->staticRenderIndex = -1;
+        }
+        if (node->skinnedRenderIndex >= 0) {
+            m_impl->releaseSkinnedSlot(static_cast<size_t>(node->skinnedRenderIndex));
+            node->skinnedRenderIndex = -1;
+        }
     }
-    if (node->skinnedRenderIndex >= 0) {
-        m_impl->releaseSkinnedSlot(static_cast<size_t>(node->skinnedRenderIndex));
-        node->skinnedRenderIndex = -1;
-    }
+    // Paridad con Vulkan, y lo unico que hace que quitar el componente signifique
+    // algo fuera de la GPU: sin esto hasMesh() seguia true, la seccion Mesh se
+    // seguia dibujando con su nombre y sus texturas, loadMeshForSelected se negaba
+    // a cargar un reemplazo y el Log decia "Componente Mesh quitado" igualmente.
+    // El otro llamante (ContentBrowserPanel, al borrar el asset en uso) se quedaba
+    // con la malla de un fichero que ya no existe en disco.
+    node->setMesh(nullptr);
 }
 
 void D3D12Renderer::replaceStaticTextureWithMissing(int renderIndex, TextureSlot slot)
