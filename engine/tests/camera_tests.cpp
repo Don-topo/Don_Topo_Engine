@@ -721,6 +721,46 @@ static void test_scene_shutdown_releases_every_component(PhysicsManager& pm, Aud
     CHECK(wAnimHijo.expired());
 }
 
+// H17/P11 de docs/core-audit.md. Los cuatro buscadores de Scene (findById,
+// findCamera, findAudioListener, findCanvas) emulaban "gana el primero" con un
+// traverse y un `if (!found && ...)`, pero traverse visita el arbol ENTERO: tras
+// encontrarlo seguian bajando por todo lo demas para nada.
+//
+// Medido en /O2 con 5000 nodos y 20.000 busquedas: recorrido completo 175 ms
+// pase lo que pase; cortando, 0,007 ms si esta en la raiz y 50 ms si esta a un
+// tercio. Son 8,8 us por busqueda, y PropertiesPanel -que se dibuja cada frame-
+// hace varias.
+//
+// Se prueba el CORTE, no el tiempo: el predicado cuenta cuantas veces lo llaman,
+// asi que si el recorrido siguiera despues del acierto el numero se dispararia.
+static void test_find_first_stops_at_the_first_hit()
+{
+    Scene escena("Test");
+    GameObject* primero = escena.addGameObject("primero");
+    for (int i = 0; i < 50; ++i)
+        escena.addGameObject("relleno", primero);   // 50 hijos DESPUES del acierto
+
+    int visitas = 0;
+    GameObject* hit = escena.getRoot().findFirst([&](const GameObject* n) {
+        ++visitas;
+        return n->name == "primero";
+    });
+
+    CHECK(hit == primero);
+    // raiz + primero = 2. Con el recorrido completo serian 52.
+    CHECK(visitas == 2);
+
+    // Sin acierto se recorre entero, que es el unico caso en el que cortar no
+    // ahorra nada: 1 raiz + 1 primero + 50 hijos.
+    visitas = 0;
+    GameObject* nada = escena.getRoot().findFirst([&](const GameObject*) {
+        ++visitas;
+        return false;
+    });
+    CHECK(nada == nullptr);
+    CHECK(visitas == 52);
+}
+
 // H16 de docs/core-audit.md. traverse tomaba el functor POR VALOR y recursaba
 // con una copia, asi que cada hijo -y cada nivel- recibia la suya.
 //
@@ -8289,6 +8329,7 @@ int main()
     test_scene_shutdown_releases_every_component(pm, am);
     test_window_without_init_is_inert();
     test_traverse_does_not_copy_stateful_functor();
+    test_find_first_stops_at_the_first_hit();
     test_insert_from_json_discards_second_camera(pm, am);
     test_insert_from_json_keeps_camera_when_none_alive(pm, am);
     test_insert_from_json_discards_second_audio_listener(pm, am);

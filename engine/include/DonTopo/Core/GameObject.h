@@ -394,6 +394,30 @@ namespace DonTopo
 
             void updateWorldTransforms(const glm::mat4& parentWorld = glm::mat4(1.0f));
 
+            // Primero en preorden que cumpla `pred`, o nullptr. CORTA en cuanto
+            // aparece: `traverse` no puede: visita el árbol entero, así que los
+            // cuatro buscadores de Scene lo emulaban con un `if (!found && ...)`
+            // que seguía bajando por todo lo demás para nada.
+            //
+            // Lo que cuesta eso, medido en /O2 con 5000 nodos y 20.000 búsquedas:
+            // recorrido completo 175 ms pase lo que pase; cortando, 0,007 ms si
+            // el nodo está en la raíz, 50 ms si está a un tercio y 160 ms si NO
+            // está (ahí no hay nada que ahorrar, es el único caso que sigue
+            // costando lo mismo). O sea 8,8 us por búsqueda hoy — y
+            // PropertiesPanel, que se dibuja cada frame, hace varias.
+            //
+            // Devuelve GameObject* y no bool para que el caller no tenga que
+            // capturar el resultado a mano, que es justo el patrón que se está
+            // quitando.
+            template <typename Pred>
+            GameObject* findFirst(Pred&& pred)
+            {
+                if (pred(this)) return this;
+                for (auto& c : children)
+                    if (GameObject* hit = c->findFirst(pred)) return hit;
+                return nullptr;
+            }
+
             // Fn&& y no Fn: por valor se copiaba el functor por cada hijo Y por
             // cada nivel. Con los callers de hoy eso no cuesta NADA medible —son
             // lambdas [&] de 8 bytes; medido en /O2 con 5000 nodos x 2000

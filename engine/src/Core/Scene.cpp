@@ -3106,20 +3106,16 @@ namespace DonTopo
         // silencio el objeto que menos tiempo llevaba en el árbol. Determinista
         // no arregla el invariante roto, pero deja de depender del orden de
         // inserción para decidir cuál gana.
-        GameObject* found = nullptr;
-        m_root.traverse([&](GameObject* n) { if (!found && n->id == id) found = n; });
-        return found;
+        return m_root.findFirst([id](const GameObject* n) { return n->id == id; });
     }
 
     GameObject* Scene::findCamera()
     {
-        GameObject* found = nullptr;
-        // traverse es pre-orden (fn(this) antes que los hijos) y no permite
-        // early-exit: el guard de !found deja ganar a la primera igualmente.
-        m_root.traverse([&](GameObject* n) {
-            if (!found && n->hasCameraComponent()) found = n;
-        });
-        return found;
+        // findFirst es pre-orden y CORTA: gana la primera, y además se deja de
+        // bajar por el resto del árbol. El `traverse` con guard de !found que
+        // había aquí visitaba los 5000 nodos de una escena grande para nada, y
+        // esto corre por frame (resolveFrameCamera).
+        return m_root.findFirst([](const GameObject* n) { return n->hasCameraComponent(); });
     }
 
     const GameObject* Scene::findCamera() const
@@ -3131,11 +3127,7 @@ namespace DonTopo
 
     GameObject* Scene::findAudioListener()
     {
-        GameObject* found = nullptr;
-        m_root.traverse([&](GameObject* n) {
-            if (!found && n->hasAudioListener()) found = n;
-        });
-        return found;
+        return m_root.findFirst([](const GameObject* n) { return n->hasAudioListener(); });
     }
 
     const GameObject* Scene::findAudioListener() const
@@ -3145,11 +3137,7 @@ namespace DonTopo
 
     GameObject* Scene::findCanvas()
     {
-        GameObject* found = nullptr;
-        m_root.traverse([&](GameObject* n) {
-            if (!found && n->hasCanvas()) found = n;
-        });
-        return found;
+        return m_root.findFirst([](const GameObject* n) { return n->hasCanvas(); });
     }
 
     const GameObject* Scene::findCanvas() const
