@@ -295,6 +295,11 @@ namespace DonTopo
             // el componente). Así un .scene editado a mano con dos cámaras se
             // abre igual, con aviso, en vez de fallar la carga o quedar en un
             // estado donde findCamera() decide sobre una escena incoherente.
+            // Repara un fichero con ids repetidos: el segundo y siguientes
+            // estrenan id y queda aviso. Sin esto, findById -y con el el
+            // gizmo, los comandos de undo y el panel- resuelven al objeto
+            // equivocado, que se lleva la matriz entera del otro.
+            void pruneDuplicateIds();
             void pruneExtraCameras();
 
             // Lo mismo pal Audio Listener: se queda con el primero en pre-orden

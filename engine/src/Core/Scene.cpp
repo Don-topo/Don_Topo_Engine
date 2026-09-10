@@ -3222,6 +3222,37 @@ namespace DonTopo
         m_warnings = std::move(unicos);
     }
 
+    void Scene::pruneDuplicateIds()
+    {
+        // Mismo tipo de reparación que pruneExtraCameras: el FICHERO puede venir
+        // roto y la carga no puede propagarlo. nodeFromJson reusa el id que trae
+        // cada nodo —tiene que hacerlo, es lo que permite que un Undo de Delete
+        // reconstruya el objeto con su id original— pero nadie comprobaba que no
+        // se repitieran, así que una escena guardada con dos nodos del mismo id
+        // volvía a cargarse rota una y otra vez.
+        //
+        // Y el daño no es cosmético: TODO el editor resuelve por id (el gizmo
+        // por applyLocalTransform, los comandos de undo, el panel), y findById
+        // devuelve el primero en preorden. Con dos nodos compartiendo id,
+        // arrastrar el segundo escribía su matriz entera —posición, rotación y
+        // ESCALA— en el primero. Con un personaje de FBX, el otro objeto pegaba
+        // un salto de tamaño sin que nada lo explicara.
+        //
+        // Gana el PRIMERO en preorden, por dos motivos que apuntan al mismo
+        // lado: es lo que ya devuelve findById, y es el criterio de
+        // insertFromJson (el que ya estaba se queda con el suyo).
+        std::unordered_set<uint64_t> vistos;
+        m_root.traverse([&](GameObject* n) {
+            if (vistos.insert(n->id).second) return;
+            const uint64_t idViejo = n->id;
+            n->id = GameObject::allocateId();
+            vistos.insert(n->id);
+            m_warnings.push_back("nodo '" + n->name + "': el id " + std::to_string(idViejo) +
+                                  " ya estaba en uso en la escena cargada; se reasigna a " +
+                                  std::to_string(n->id));
+        });
+    }
+
     void Scene::pruneExtraCameras()
     {
         GameObject* first = nullptr;
@@ -3594,7 +3625,11 @@ namespace DonTopo
 
         m_root.updateWorldTransforms();
 
-        // Tras reconstruir: el fichero puede traer dos cámaras (editado a mano).
+        // Tras reconstruir, las reparaciones de lo que el FICHERO pueda traer mal.
+        // Los ids primero: los otros dos prunes avisan nombrando nodos, y con
+        // ids repetidos el editor ya estaría resolviendo al objeto equivocado.
+        pruneDuplicateIds();
+        // El fichero puede traer dos cámaras (editado a mano).
         pruneExtraCameras();
         // Igual que las cámaras: el fichero puede traer dos listeners.
         pruneExtraAudioListeners();

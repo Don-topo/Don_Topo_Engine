@@ -828,6 +828,73 @@ static void test_insert_from_json_reassigns_colliding_id(PhysicsManager& pm, Aud
 // aceptado dentro del mismo recorrido del subárbol reinsertado; sin esa
 // ampliación (justo la línea que se sabotea para probarlo) el hijo se cuela
 // con el mismo id que su padre y nadie se entera.
+// REPRODUCCION del bug de test7: cargar una escena cuyo fichero trae DOS nodos
+// con el mismo id. insertFromJson (Undo/Redo) ya reasigna el que choca, pero
+// Scene::fromJson -el camino por el que se abre una escena de disco- reusa el id
+// del JSON tal cual y no comprueba nada.
+//
+// El dano no es que haya dos ids iguales, es que TODO el editor resuelve por id:
+// findById devuelve el primero en preorden, asi que arrastrar el gizmo del
+// SEGUNDO objeto escribe su matriz -posicion, rotacion Y ESCALA- en el PRIMERO.
+// Con un personaje escalado como los trae un FBX, el otro objeto pega un salto
+// de tamano. Esa es la comprobacion de abajo, y es exactamente lo que se ve en
+// pantalla.
+static void test_scene_load_reassigns_duplicate_ids(PhysicsManager& pm, AudioManager& am)
+{
+    Scene origen("Test");
+    GameObject* plano     = origen.addGameObject("Plane");
+    GameObject* personaje = origen.addGameObject("Personaje");
+    plano->localTransform     = glm::mat4(1.0f);
+    personaje->localTransform = glm::scale(glm::mat4(1.0f), glm::vec3(100.0f));
+
+    nlohmann::json j = origen.toJson();
+    CHECK(j.contains("root") && j["root"].contains("children"));
+    if (!j.contains("root") || !j["root"].contains("children")) return;
+    nlohmann::json& hijos = j["root"]["children"];
+    CHECK(hijos.size() == 2);
+    if (hijos.size() != 2) return;
+    // La colision, escrita en el fichero: el personaje llega con el id del
+    // plano. Es lo que deja en disco cualquier bug de ids anterior al arreglo,
+    // y una vez guardado se reproduce en cada carga.
+    hijos[1]["id"] = hijos[0]["id"];
+
+    Scene cargada("Vacia");
+    CHECK(cargada.fromJson(j, pm, am));
+
+    // 1. La invariante: ningun id repetido tras cargar.
+    std::vector<uint64_t> ids;
+    cargada.traverse([&](GameObject* n) { ids.push_back(n->id); });
+    std::sort(ids.begin(), ids.end());
+    CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
+
+    // 2. Y con aviso: sin el, el usuario no tiene forma de saber que su fichero
+    //    venia roto (mismo criterio que insertFromJson).
+    bool aviso = false;
+    for (const auto& w : cargada.lastWarnings())
+        if (w.find("ya estaba en uso") != std::string::npos) aviso = true;
+    CHECK(aviso);
+
+    // 3. La consecuencia visible: mover el personaje NO puede tocar al plano.
+    //    Se resuelve por id igual que hacen el gizmo (applyLocalTransform) y el
+    //    panel, y se comprueba que la escala del plano sigue siendo la suya.
+    GameObject* planoCargado = nullptr;
+    GameObject* pjCargado    = nullptr;
+    cargada.traverse([&](GameObject* n) {
+        if (n->name == "Plane")     planoCargado = n;
+        if (n->name == "Personaje") pjCargado    = n;
+    });
+    CHECK(planoCargado != nullptr && pjCargado != nullptr);
+    if (!planoCargado || !pjCargado) return;
+
+    const glm::mat4 movido = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 5.0f, 0.0f)) *
+                             glm::scale(glm::mat4(1.0f), glm::vec3(100.0f));
+    applyLocalTransform(cargada, pjCargado->id, movido);
+
+    CHECK(pjCargado->localTransform == movido);
+    // La escala del plano intacta: [0][0] valia 1 y no puede pasar a 100.
+    CHECK(planoCargado->localTransform[0][0] == 1.0f);
+}
+
 static void test_insert_from_json_reassigns_id_colliding_within_same_subtree(PhysicsManager& pm, AudioManager& am)
 {
     Scene scene("Test");
@@ -7996,6 +8063,7 @@ int main()
     test_undo_delete_keeps_original_id(pm, am);
     test_insert_from_json_reassigns_colliding_id(pm, am);
     test_insert_from_json_reassigns_id_colliding_within_same_subtree(pm, am);
+    test_scene_load_reassigns_duplicate_ids(pm, am);
     test_find_by_id_unique_id_still_resolves();
     test_find_by_id_duplicate_writes_only_first_never_the_other();
     test_duplicate_is_sibling_not_child(pm, am);
