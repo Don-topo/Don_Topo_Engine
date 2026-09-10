@@ -10,6 +10,7 @@
 #include "DonTopo/Core/Camera.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/Scene.h"
+#include "DonTopo/Core/Window.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
@@ -718,6 +719,37 @@ static void test_scene_shutdown_releases_every_component(PhysicsManager& pm, Aud
     CHECK(wReverb.expired());
     CHECK(wListener.expired());
     CHECK(wAnimHijo.expired());
+}
+
+// H9 de docs/core-audit.md. shouldClose() le pasaba m_window a GLFW sin mirar si
+// era nulo, a diferencia de show(), que sí lo hace. Un Window sin init -o ya
+// cerrado- le daba nullptr a GLFW, que lo trata como error de programacion.
+//
+// Y la respuesta correcta sin ventana no es "false": el bucle de los dos hosts
+// es `while (!window.shouldClose())`, asi que false ahi seria girar para siempre
+// sobre una ventana que no existe. Sin ventana, cerrar.
+//
+// Esto es lo unico de H9 que se puede afirmar sin pantalla: con m_window nulo
+// ninguna de estas llamadas toca GLFW. La otra mitad -el glfwTerminate() dentro
+// del shutdown de UNA instancia- se arregla en el mismo commit pero no se puede
+// probar aqui: haria falta crear dos ventanas de verdad, y observar el fallo
+// (usar el handle de la segunda despues de terminar GLFW) es UB.
+static void test_window_without_init_is_inert()
+{
+    Window w;   // sin init: m_window == nullptr
+
+    // Sin ventana, el bucle principal tiene que terminar.
+    CHECK(w.shouldClose());
+    CHECK(w.getNativeWindow() == nullptr);
+
+    // Y todo lo demas es no-op: si alguna de estas tocara GLFW con nullptr,
+    // saltaria su callback de error.
+    w.show();
+    w.pollEvents();
+    w.shutdown();
+    w.shutdown();   // dos veces seguidas tambien
+    CHECK(w.getNativeWindow() == nullptr);
+    CHECK(w.shouldClose());
 }
 
 // H7 de docs/core-audit.md. El invariante "como mucho una camara por escena" lo
@@ -8215,6 +8247,7 @@ int main()
     test_corrupt_ui_string_warns(pm, am);
     test_clone_never_keeps_camera(pm, am);
     test_scene_shutdown_releases_every_component(pm, am);
+    test_window_without_init_is_inert();
     test_insert_from_json_discards_second_camera(pm, am);
     test_insert_from_json_keeps_camera_when_none_alive(pm, am);
     test_insert_from_json_discards_second_audio_listener(pm, am);
