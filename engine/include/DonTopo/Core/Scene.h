@@ -215,7 +215,7 @@ namespace DonTopo
             template <typename Fn>
             void traverse(Fn fn) { m_root.traverse(fn); }
 
-            void update(float dt, PhysicsManager& physics);
+            void update(float dt);
             // Empuja la posición de cada GameObject a la voz que tenga sonando,
             // para que los AudioClip 3D sigan a su objeto. La llama Scene::update
             // (Play) y las rutas de host en Edit Mode, que no pasan por update
@@ -241,13 +241,18 @@ namespace DonTopo
             // esto evita. La raiz sobrevive (conserva id y nombre) pero se queda
             // sin hijos y sin componentes.
             //
-            // Los dos parametros NO se usan: se piden para que la firma diga a
-            // que managers hay que sobrevivir, y para que quede constancia en el
-            // sitio de la llamada de que el orden importa.
-            //
             // Despues de esto la escena no se vuelve a usar: sus tres llamantes o
             // la reemplazan (fromJson) o estan cerrando el proceso.
-            void shutdown(PhysicsManager& physics, AudioManager& audio);
+            //
+            // OBLIGACION DEL LLAMANTE, y ahora la firma no la insinua: llamarla
+            // ANTES de destruir PhysicsManager y AudioManager. Los dos managers
+            // eran parametros que esta funcion NO usaba, y pedirlos no garantizaba
+            // nada -se podia pasar uno ya apagado- mientras obligaba a todo
+            // llamante a tener uno vivo: los tests montaban un PhysicsManager solo
+            // para satisfacer la firma, y como PhysX admite una sola PxFoundation
+            // por proceso, habia que compartirlo entre todos los tests del binario.
+            // Un parametro muerto imponiendo una restriccion real (H20).
+            void shutdown();
 
             // Serializa el árbol completo (transforms, mesh, colliders, audio
             // clip) a un nlohmann::json en memoria.

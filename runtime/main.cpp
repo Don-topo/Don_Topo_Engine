@@ -679,7 +679,7 @@ int main(int argc, char** argv)
                           << "': fichero ausente, formato no soportado o datos corruptos"
                           << std::endl;
             physics.stepSimulation(dt);
-            scene.update(dt, physics);
+            scene.update(dt);
             scene.syncReverbZones(audio);
             scriptManager.update(dt);
 
@@ -796,7 +796,7 @@ int main(int argc, char** argv)
         // (En este punto ya no debería quedar nada pendiente —la precarga se
         // drenó entera antes del bucle— pero el orden se respeta igualmente.)
         jobSystem.shutdown();
-        scene.shutdown(physics, audio);
+        scene.shutdown();
         audio.shutdown();
         physics.shutdown();
         renderer.shutdown();

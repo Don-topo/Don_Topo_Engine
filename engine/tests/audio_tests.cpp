@@ -823,7 +823,7 @@ static void test_scene_updateAudioSpatial_walks_tree(PhysicsManager& pm, AudioMa
     // Sin nada sonando: no-op limpio en todos los nodos.
     scene.updateAudioSpatial();
     // Y por la ruta real, la que corre en Play.
-    scene.update(0.016f, pm);
+    scene.update(0.016f);
     CHECK(scene.findById(vacio->id) != nullptr);
 }
 

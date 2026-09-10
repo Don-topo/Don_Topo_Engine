@@ -3542,7 +3542,7 @@ namespace DonTopo
         return node;
     }
 
-    void Scene::update(float dt, PhysicsManager& /*physics*/)
+    void Scene::update(float dt)
     {
         m_root.traverse([](GameObject* go) {
             auto col = go->anyCollider();
@@ -3642,7 +3642,7 @@ namespace DonTopo
         audio.retainReverbZones(alive);
     }
 
-    void Scene::shutdown(PhysicsManager& /*physics*/, AudioManager& /*audio*/)
+    void Scene::shutdown()
     {
         // Suelta TODO lo que la escena tiene cogido, destruyendo el árbol. Los
         // tres llamantes (fromJson, y la salida del sandbox y del runtime) o
@@ -3731,7 +3731,7 @@ namespace DonTopo
             return false;
         }
 
-        shutdown(physics, audio);
+        shutdown();
         m_root = std::move(newRoot);
         // addChild() (llamado dentro de nodeFromJson vía newRoot.addChild/
         // node->addChild) apunta el parent de cada hijo directo al objeto

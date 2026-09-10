@@ -713,7 +713,7 @@ static void test_scene_shutdown_releases_every_component(PhysicsManager& pm, Aud
     CHECK(!wRb.expired());
     CHECK(!wAnim.expired());
 
-    scene.shutdown(pm, am);
+    scene.shutdown();
 
     CHECK(wRb.expired());
     CHECK(wAnim.expired());

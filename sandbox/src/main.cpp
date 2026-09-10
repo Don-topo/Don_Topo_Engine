@@ -466,7 +466,7 @@ int main()
                 if (editor.isPlaying())
                 {
                     d3dPhysics.stepSimulation(d3dDelta);
-                    d3dScene.update(d3dDelta, d3dPhysics);
+                    d3dScene.update(d3dDelta);
                     d3dScene.syncReverbZones(d3dAudio);
                     d3dScripts.update(d3dDelta);
                 }
@@ -704,7 +704,7 @@ int main()
         if (!backend.message.empty())
             editor.pushExternalLog(backend.message);
 
-        // scene.shutdown(physics, audio) libera explícitamente los colliders/
+        // scene.shutdown() libera explícitamente los colliders/
         // audioclips de la escena antes de destruir physics/audio (ver más abajo).
         // physics/audio se siguen declarando antes que scene como red de
         // seguridad ante una salida por excepción anterior a ese shutdown
@@ -1040,7 +1040,7 @@ int main()
             if (renderer.isPlaying())
             {
                 physics.stepSimulation(dt);
-                scene.update(dt, physics);
+                scene.update(dt);
                 scene.syncReverbZones(audio);
                 scriptManager.update(dt);
             }
@@ -1235,7 +1235,7 @@ int main()
         // physics/audio: sin esto, ~BoxCollider() intentaría release() un
         // PxRigidDynamic sobre una PxScene ya liberada (o ~AudioClipComponent
         // llamaría a un AudioManager ya destruido).
-        scene.shutdown(physics, audio);
+        scene.shutdown();
         audio.shutdown();
         physics.shutdown();
         renderer.shutdown();

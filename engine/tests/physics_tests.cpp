@@ -1294,21 +1294,21 @@ static void test_scale_change_during_play_reaches_physx(PhysicsManager& pm)
                                              go->worldTransform, /*dynamic=*/false);
     go->setBoxCollider(col);
 
-    scene.update(1.0f / 60.0f, pm);
+    scene.update(1.0f / 60.0f);
     CHECK(shapeHalfExtents(col).x == 1.0f); // sin tocar: escala 1
 
     // Dos updates: el traverse lee worldTransform y la propagación
     // local->world corre AL FINAL de update, así que el cambio entra en el
     // frame siguiente (misma latencia que vería un script Lua).
     go->localTransform = glm::scale(glm::mat4(1.0f), glm::vec3(3.0f));
-    scene.update(1.0f / 60.0f, pm);
-    scene.update(1.0f / 60.0f, pm);
+    scene.update(1.0f / 60.0f);
+    scene.update(1.0f / 60.0f);
     CHECK(std::fabs(shapeHalfExtents(col).x - 3.0f) < 1e-4f);
 
     // Y con la escala ya estable la geometría se queda quieta: no se re-escala
     // sobre sí misma frame a frame. (Que ADEMÁS no se llame a teleport no se
     // puede ver desde aquí: el collider no lleva cuenta de teletransportes.)
-    scene.update(1.0f / 60.0f, pm);
+    scene.update(1.0f / 60.0f);
     CHECK(std::fabs(shapeHalfExtents(col).x - 3.0f) < 1e-4f);
 
     // El GameObject muere con la Scene; el collider lo sigue teniendo el
