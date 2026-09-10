@@ -1,7 +1,6 @@
 // Runtime del juego: carga un .scene y lo ejecuta. Es el wiring de
 // sandbox/src/main.cpp menos todo lo del editor — sin ImGui, sin gizmos de
 // depuración, sin hot reload y en Play desde el frame 0.
-#include "DonTopo/Core/Engine.h"
 #include "DonTopo/Core/Window.h"
 #include "DonTopo/Core/Input.h"
 #include "DonTopo/Core/GameObject.h"
@@ -201,7 +200,6 @@ int main(int argc, char** argv)
             requestedBackend = sel.backend;
         }
 
-        DonTopo::Engine engine;
         DonTopo::Window window;
         // Oculta de entrada: se enseña tras presentar el primer frame (el del
         // splash). Sin esto, la ventana se hacia visible aqui y Windows pintaba

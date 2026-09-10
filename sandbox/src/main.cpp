@@ -1,4 +1,3 @@
-#include "DonTopo/Core/Engine.h"
 #include "DonTopo/Core/Window.h"
 #include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/ModelLoader.h"
@@ -174,7 +173,6 @@ bool openChosenProject(DonTopo::EditorUI& editor, DonTopo::ProjectContext& proje
 int main()
 {
     try {
-        DonTopo::Engine engine;
         DonTopo::Window window;
         window.init(1280, 720, "Don Topo Engine", "assets/MainEngineLogo.png");
         DonTopo::Input::init(window.getNativeWindow());
