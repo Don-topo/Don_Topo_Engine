@@ -394,8 +394,26 @@ namespace DonTopo
 
             void updateWorldTransforms(const glm::mat4& parentWorld = glm::mat4(1.0f));
 
+            // Fn&& y no Fn: por valor se copiaba el functor por cada hijo Y por
+            // cada nivel. Con los callers de hoy eso no cuesta NADA medible —son
+            // lambdas [&] de 8 bytes; medido en /O2 con 5000 nodos x 2000
+            // recorridos: 25,3 ms por valor contra 24,3 ms por referencia, o sea
+            // ruido—. Con un functor de 264 bytes la misma medida da 62-69 ms
+            // contra 26-29: 2,4x. O sea que el coste existe y hoy nadie lo paga.
+            //
+            // Se cambia por lo OTRO, que no es rendimiento: por valor, un functor
+            // MUTABLE que acumule en su propio estado pierde en silencio lo que
+            // sumen los hijos, porque cada subárbol recibe su copia. Hoy no hay
+            // ni una lambda mutable en los traverse del repo (grep), así que esto
+            // no arregla nada roto: cierra la puerta antes de que alguien la
+            // encuentre depurando por qué su contador sale a cero.
+            //
+            // Fn&& y NO Fn&: casi todos los callers pasan la lambda en la propia
+            // llamada, y un temporal no se puede enganchar a una referencia
+            // lvalue. Dentro se recursa con `fn`, que ya es un lvalue con nombre,
+            // así que el hijo deduce Fn& y no se copia nada.
             template <typename Fn>
-            void traverse(Fn fn)
+            void traverse(Fn&& fn)
             {
                 fn(this);
                 for (auto& c : children) c->traverse(fn);

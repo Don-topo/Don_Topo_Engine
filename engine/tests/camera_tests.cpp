@@ -721,6 +721,46 @@ static void test_scene_shutdown_releases_every_component(PhysicsManager& pm, Aud
     CHECK(wAnimHijo.expired());
 }
 
+// H16 de docs/core-audit.md. traverse tomaba el functor POR VALOR y recursaba
+// con una copia, asi que cada hijo -y cada nivel- recibia la suya.
+//
+// Lo que se fija aqui no es el rendimiento (medido en /O2 con 5000 nodos x 2000
+// recorridos: con las lambdas [&] de 8 bytes que usa todo el repo la diferencia
+// es ruido, 25,3 ms contra 24,3; solo con un functor de 264 bytes se va a 2,4x).
+// Lo que se fija es la SEMANTICA: un functor con estado propio perdia en
+// silencio todo lo que sumaran los hijos, porque quien sumaba era una copia.
+//
+// El contador de abajo daba CERO con el traverse por valor -ni siquiera contaba
+// la raiz, porque tambien opera sobre una copia- y da el numero de nodos con el
+// de ahora.
+static void test_traverse_does_not_copy_stateful_functor()
+{
+    Scene escena("Test");
+    GameObject* a = escena.addGameObject("a");
+    GameObject* b = escena.addGameObject("b", a);
+    escena.addGameObject("c", b);      // tres niveles: raiz -> a -> b -> c
+    escena.addGameObject("d", a);
+
+    struct Contador
+    {
+        int vistos = 0;
+        void operator()(GameObject*) { ++vistos; }
+    };
+
+    Contador contador;
+    escena.getRoot().traverse(contador);
+
+    // 5 = raiz + a + b + c + d. Con el functor copiado por hijo esto era 0.
+    CHECK(contador.vistos == 5);
+
+    // Y el caso de siempre sigue valiendo: una lambda temporal, escrita en la
+    // propia llamada, que es como la pasan casi todos los callers. Si traverse
+    // tomara Fn& en vez de Fn&&, esto ni compilaria.
+    int porLambda = 0;
+    escena.getRoot().traverse([&porLambda](GameObject*) { ++porLambda; });
+    CHECK(porLambda == 5);
+}
+
 // H9 de docs/core-audit.md. shouldClose() le pasaba m_window a GLFW sin mirar si
 // era nulo, a diferencia de show(), que sí lo hace. Un Window sin init -o ya
 // cerrado- le daba nullptr a GLFW, que lo trata como error de programacion.
@@ -8248,6 +8288,7 @@ int main()
     test_clone_never_keeps_camera(pm, am);
     test_scene_shutdown_releases_every_component(pm, am);
     test_window_without_init_is_inert();
+    test_traverse_does_not_copy_stateful_functor();
     test_insert_from_json_discards_second_camera(pm, am);
     test_insert_from_json_keeps_camera_when_none_alive(pm, am);
     test_insert_from_json_discards_second_audio_listener(pm, am);
