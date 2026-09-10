@@ -59,8 +59,31 @@ namespace {
 // assets compartidos del repo: mallas, fuentes, audio) se sigue permitiendo,
 // mismo criterio que la carpeta Scripts/ o el skybox del motor. Sin proyecto
 // abierto (tests headless) pasa todo, como antes de que el concepto existiera.
-bool assetAllowed(const DonTopo::EditorContext& ctx, const std::filesystem::path& path)
+// Los 18 diálogos de assets de este panel pasan por aquí al drenarse, y NADIE
+// aplica una ruta sin preguntar antes. Por eso el veto de edición vive en esta
+// función y no en cada botón "Browse...": gatear el botón solo tapa el caso de
+// abrir el diálogo con el modal ya puesto, y deja fuera el que de verdad pasa
+// —el diálogo abierto ANTES, que sigue vivo porque ninguno de estos es modal
+// (cero ImGuiFileDialogFlags_Modal en src/) y la toolbar sigue clicable—.
+// Puesto aquí, el diálogo número 19 lo hereda por el mero hecho de seguir el
+// patrón de los otros 18.
+//
+// El nombre dice "aceptar", no "pertenece al proyecto", justo porque ya
+// responde a dos preguntas: de quién es el asset, y si el panel está en
+// condiciones de aplicarlo ahora mismo.
+bool canAcceptAsset(const DonTopo::EditorContext& ctx, const std::filesystem::path& path)
 {
+    // Veto mientras el modal de Load Scene está activo: la escena sobre la que
+    // se abrió el diálogo está siendo reemplazada, así que aplicar la elección
+    // escribiría en un objeto que ya no es el que el usuario tenía delante. Con
+    // línea en el Log, que es lo único que distingue esto de "el Browse no ha
+    // hecho nada".
+    if (ctx.editingLocked)
+    {
+        ctx.logModule("Project", "Carga de escena en curso: el asset elegido se descarta");
+        return false;
+    }
+
     if (!ctx.project || !ctx.project->valid()) return true;
     if (ctx.project->contains(path))           return true;
 
@@ -424,8 +447,16 @@ void PropertiesPanel::drawAssetDropBox(EditorContext& ctx, const char* idSuffix,
                                        const std::function<void()>& onBrowse,
                                        const std::function<void(const std::string&)>& onDrop)
 {
+    // Deshabilitado durante la carga de escena, y aquí dentro para las 16 cajas
+    // de una vez. Es la mitad que COMUNICA: quien impide de verdad es
+    // canAcceptAsset al drenar el diálogo (un diálogo ya abierto sobrevive al
+    // modal, así que el botón gris no basta). Mismo reparto que el de la IO de
+    // escena en Play: widget deshabilitado avisa, guarda en la función que hace
+    // el trabajo impide.
+    ImGui::BeginDisabled(ctx.editingLocked);
     if (ImGui::Button((std::string("Browse...##") + idSuffix).c_str()))
         onBrowse();
+    ImGui::EndDisabled();
 
     // Sin SameLine y con 40 px de alto: es el layout del Mesh, y las cajas de
     // UI venían cada una con el suyo (ruta y botón en la misma línea, hijo de
@@ -1294,7 +1325,7 @@ void PropertiesPanel::drawButtonPathDialogs(EditorContext& ctx)
     if (m_fontDlgOpen && m_fontFileDialog->Display("ButtonFontDlg"))
     {
         if (m_fontFileDialog->IsOk() &&
-            assetAllowed(ctx, m_fontFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_fontFileDialog->GetFilePathName()))
             setButtonAssetPath(ctx, m_fontDlgOwner, /*isFont=*/true,
                                 m_fontFileDialog->GetFilePathName());
         m_fontFileDialog->Close();
@@ -1304,7 +1335,7 @@ void PropertiesPanel::drawButtonPathDialogs(EditorContext& ctx)
     if (m_uiAtlasDlgOpen && m_uiAtlasFileDialog->Display("ButtonAtlasDlg"))
     {
         if (m_uiAtlasFileDialog->IsOk() &&
-            assetAllowed(ctx, m_uiAtlasFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_uiAtlasFileDialog->GetFilePathName()))
             setButtonAssetPath(ctx, m_uiAtlasDlgOwner, /*isFont=*/false,
                                 m_uiAtlasFileDialog->GetFilePathName());
         m_uiAtlasFileDialog->Close();
@@ -1757,7 +1788,7 @@ void PropertiesPanel::drawTextPathDialog(EditorContext& ctx)
     if (m_textFontDlgOpen && m_textFontFileDialog->Display("TextFontDlg"))
     {
         if (m_textFontFileDialog->IsOk() &&
-            assetAllowed(ctx, m_textFontFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_textFontFileDialog->GetFilePathName()))
             setTextFontPath(ctx, m_textFontDlgOwner, m_textFontFileDialog->GetFilePathName());
         m_textFontFileDialog->Close();
         m_textFontDlgOpen = false;
@@ -2137,7 +2168,7 @@ void PropertiesPanel::drawProgressBarPathDialog(EditorContext& ctx)
     if (m_barAtlasDlgOpen && m_barAtlasFileDialog->Display("BarImageDlg"))
     {
         if (m_barAtlasFileDialog->IsOk() &&
-            assetAllowed(ctx, m_barAtlasFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_barAtlasFileDialog->GetFilePathName()))
             setProgressBarImagePath(ctx, m_barAtlasDlgOwner, m_barAtlasDlgField,
                                     m_barAtlasFileDialog->GetFilePathName());
         m_barAtlasFileDialog->Close();
@@ -2775,7 +2806,7 @@ void PropertiesPanel::drawPanelPathDialog(EditorContext& ctx)
     if (m_panelAtlasDlgOpen && m_panelAtlasFileDialog->Display("PanelAtlasDlg"))
     {
         if (m_panelAtlasFileDialog->IsOk() &&
-            assetAllowed(ctx, m_panelAtlasFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_panelAtlasFileDialog->GetFilePathName()))
             setPanelAtlasPath(ctx, m_panelAtlasDlgOwner,
                               m_panelAtlasFileDialog->GetFilePathName());
         m_panelAtlasFileDialog->Close();
@@ -3091,7 +3122,7 @@ void PropertiesPanel::drawImagePathDialog(EditorContext& ctx)
     if (m_imageAtlasDlgOpen && m_imageAtlasFileDialog->Display("ImageAtlasDlg"))
     {
         if (m_imageAtlasFileDialog->IsOk() &&
-            assetAllowed(ctx, m_imageAtlasFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_imageAtlasFileDialog->GetFilePathName()))
             setImageAtlasPath(ctx, m_imageAtlasDlgOwner,
                               m_imageAtlasFileDialog->GetFilePathName());
         m_imageAtlasFileDialog->Close();
@@ -3545,7 +3576,7 @@ void PropertiesPanel::drawSliderPathDialog(EditorContext& ctx)
     if (m_sliderAtlasDlgOpen && m_sliderAtlasFileDialog->Display("SliderAtlasDlg"))
     {
         if (m_sliderAtlasFileDialog->IsOk() &&
-            assetAllowed(ctx, m_sliderAtlasFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_sliderAtlasFileDialog->GetFilePathName()))
             setSliderAtlasPath(ctx, m_sliderAtlasDlgOwner, m_sliderAtlasFileDialog->GetFilePathName());
         m_sliderAtlasFileDialog->Close();
         m_sliderAtlasDlgOpen = false;
@@ -3944,7 +3975,7 @@ void PropertiesPanel::drawCheckboxPathDialog(EditorContext& ctx)
     if (m_checkboxAtlasDlgOpen && m_checkboxAtlasFileDialog->Display("CheckboxAtlasDlg"))
     {
         if (m_checkboxAtlasFileDialog->IsOk() &&
-            assetAllowed(ctx, m_checkboxAtlasFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_checkboxAtlasFileDialog->GetFilePathName()))
             setCheckboxAtlasPath(ctx, m_checkboxAtlasDlgOwner, m_checkboxAtlasFileDialog->GetFilePathName());
         m_checkboxAtlasFileDialog->Close();
         m_checkboxAtlasDlgOpen = false;
@@ -4326,7 +4357,7 @@ void PropertiesPanel::drawTogglePathDialog(EditorContext& ctx)
     if (m_toggleAtlasDlgOpen && m_toggleAtlasFileDialog->Display("ToggleAtlasDlg"))
     {
         if (m_toggleAtlasFileDialog->IsOk() &&
-            assetAllowed(ctx, m_toggleAtlasFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_toggleAtlasFileDialog->GetFilePathName()))
             setToggleAtlasPath(ctx, m_toggleAtlasDlgOwner, m_toggleAtlasFileDialog->GetFilePathName());
         m_toggleAtlasFileDialog->Close();
         m_toggleAtlasDlgOpen = false;
@@ -4712,7 +4743,7 @@ void PropertiesPanel::drawScrollbarPathDialog(EditorContext& ctx)
     if (m_scrollbarAtlasDlgOpen && m_scrollbarAtlasFileDialog->Display("ScrollbarAtlasDlg"))
     {
         if (m_scrollbarAtlasFileDialog->IsOk() &&
-            assetAllowed(ctx, m_scrollbarAtlasFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_scrollbarAtlasFileDialog->GetFilePathName()))
             setScrollbarAtlasPath(ctx, m_scrollbarAtlasDlgOwner, m_scrollbarAtlasFileDialog->GetFilePathName());
         m_scrollbarAtlasFileDialog->Close();
         m_scrollbarAtlasDlgOpen = false;
@@ -5177,7 +5208,7 @@ void PropertiesPanel::drawInputFieldPathDialog(EditorContext& ctx)
     if (m_inputFieldAtlasDlgOpen && m_inputFieldAtlasFileDialog->Display("InputFieldAtlasDlg"))
     {
         if (m_inputFieldAtlasFileDialog->IsOk() &&
-            assetAllowed(ctx, m_inputFieldAtlasFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_inputFieldAtlasFileDialog->GetFilePathName()))
             setInputFieldAtlasPath(ctx, m_inputFieldAtlasDlgOwner, m_inputFieldAtlasFileDialog->GetFilePathName());
         m_inputFieldAtlasFileDialog->Close();
         m_inputFieldAtlasDlgOpen = false;
@@ -5186,7 +5217,7 @@ void PropertiesPanel::drawInputFieldPathDialog(EditorContext& ctx)
     if (m_inputFieldFontDlgOpen && m_inputFieldFontFileDialog->Display("InputFieldFontDlg"))
     {
         if (m_inputFieldFontFileDialog->IsOk() &&
-            assetAllowed(ctx, m_inputFieldFontFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_inputFieldFontFileDialog->GetFilePathName()))
             setInputFieldFontPath(ctx, m_inputFieldFontDlgOwner, m_inputFieldFontFileDialog->GetFilePathName());
         m_inputFieldFontFileDialog->Close();
         m_inputFieldFontDlgOpen = false;
@@ -5687,7 +5718,7 @@ void PropertiesPanel::drawDropdownPathDialog(EditorContext& ctx)
     if (m_dropdownAtlasDlgOpen && m_dropdownAtlasFileDialog->Display("DropdownAtlasDlg"))
     {
         if (m_dropdownAtlasFileDialog->IsOk() &&
-            assetAllowed(ctx, m_dropdownAtlasFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_dropdownAtlasFileDialog->GetFilePathName()))
             setDropdownAtlasPath(ctx, m_dropdownAtlasDlgOwner, m_dropdownAtlasFileDialog->GetFilePathName());
         m_dropdownAtlasFileDialog->Close();
         m_dropdownAtlasDlgOpen = false;
@@ -5696,7 +5727,7 @@ void PropertiesPanel::drawDropdownPathDialog(EditorContext& ctx)
     if (m_dropdownFontDlgOpen && m_dropdownFontFileDialog->Display("DropdownFontDlg"))
     {
         if (m_dropdownFontFileDialog->IsOk() &&
-            assetAllowed(ctx, m_dropdownFontFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_dropdownFontFileDialog->GetFilePathName()))
             setDropdownFontPath(ctx, m_dropdownFontDlgOwner, m_dropdownFontFileDialog->GetFilePathName());
         m_dropdownFontFileDialog->Close();
         m_dropdownFontDlgOpen = false;
@@ -6237,7 +6268,7 @@ void PropertiesPanel::drawScrollViewPathDialog(EditorContext& ctx)
     if (m_scrollViewAtlasDlgOpen && m_scrollViewAtlasFileDialog->Display("ScrollViewAtlasDlg"))
     {
         if (m_scrollViewAtlasFileDialog->IsOk() &&
-            assetAllowed(ctx, m_scrollViewAtlasFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_scrollViewAtlasFileDialog->GetFilePathName()))
             setScrollViewAtlasPath(ctx, m_scrollViewAtlasDlgOwner, m_scrollViewAtlasFileDialog->GetFilePathName());
         m_scrollViewAtlasFileDialog->Close();
         m_scrollViewAtlasDlgOpen = false;
@@ -7894,6 +7925,10 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
     }
 
     ImGui::Text("Mesh");
+    // Mismo reparto que en drawAssetDropBox: el gris avisa, canAcceptAsset
+    // impide. Esta caja no sale de ese helper (tiene su propia drop zone), asi
+    // que el BeginDisabled hay que ponerlo a mano.
+    ImGui::BeginDisabled(ctx.editingLocked);
     if (ImGui::Button("Browse..."))
     {
         m_meshDlgOpen  = true;
@@ -7918,6 +7953,7 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
         // usa keys planas (sin "##"), como aquí.
         m_meshFileDialog->OpenDialog("AddMeshDlg", "Choose FBX", ".fbx", cfg);
     }
+    ImGui::EndDisabled();
 
     ImGui::BeginChild("##MeshDropZone", ImVec2(0, 40), true);
     ImGui::TextDisabled("Drop .fbx here");
@@ -7997,15 +8033,10 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
             drawAssetDropBox(
                 ctx, d.nombre, "Drop image here",
                 [this, &ctx, ownerId, materialIndex, slot]() {
-                    // Gate propio: drawAssetDropBox es compartido por otras 15
-                    // cajas y no condiciona el botón Browse a editingLocked
-                    // (solo el drop). Sin esto, con el modal de Load Scene
-                    // abierto el diálogo se abría igual y la elección se
-                    // descartaba después en silencio (assignMaterialTexture ya
-                    // corta por editingLocked, pero para entonces el usuario ya
-                    // navegó el diálogo entero sin ningún aviso).
-                    if (ctx.editingLocked) return;
-
+                    // Sin gate propio: este callback ya no puede correr con la
+                    // escena cargándose, porque drawAssetDropBox deshabilita el
+                    // botón para sus 16 cajas —el gate que aquí estaba
+                    // duplicado, mientras las otras 15 se quedaban sin él—.
                     m_textureDlgOpen     = true;
                     m_textureDlgOwner    = ownerId;
                     m_textureDlgMaterial = materialIndex;
@@ -8240,7 +8271,7 @@ void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
     if (m_meshDlgOpen && m_meshFileDialog->Display("AddMeshDlg"))
     {
         if (m_meshFileDialog->IsOk() &&
-            assetAllowed(ctx, m_meshFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_meshFileDialog->GetFilePathName()))
             loadMeshForSelected(ctx, m_meshDlgOwner, m_meshFileDialog->GetFilePathName());
         m_meshFileDialog->Close();
         m_meshDlgOpen = false;
@@ -8252,7 +8283,7 @@ void PropertiesPanel::drawMeshDialog(EditorContext& ctx)
     if (m_textureDlgOpen && m_textureFileDialog->Display("PickTextureDlg"))
     {
         if (m_textureFileDialog->IsOk() &&
-            assetAllowed(ctx, m_textureFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_textureFileDialog->GetFilePathName()))
             assignMaterialTexture(ctx, m_textureDlgOwner, m_textureDlgMaterial, m_textureDlgSlot,
                                   m_textureFileDialog->GetFilePathName());
         m_textureFileDialog->Close();
@@ -8592,7 +8623,10 @@ void PropertiesPanel::drawAudioClipSection(EditorContext& ctx)
     }
 
     ImGui::Text("Audio Clip");
-    ImGui::BeginDisabled(ctx.audio == nullptr);
+    // Dos motivos para el gris, y ninguno tapa al otro: sin AudioManager no hay
+    // nada que cargar, y con la escena cargandose la eleccion se descartaria al
+    // drenar (canAcceptAsset).
+    ImGui::BeginDisabled(ctx.audio == nullptr || ctx.editingLocked);
     if (ImGui::Button("Browse..."))
     {
         m_audioDlgOpen = true;
@@ -8633,7 +8667,7 @@ void PropertiesPanel::drawAudioClipDialog(EditorContext& ctx)
     if (m_audioDlgOpen && m_audioFileDialog->Display("AddAudioDlg"))
     {
         if (m_audioFileDialog->IsOk() &&
-            assetAllowed(ctx, m_audioFileDialog->GetFilePathName()))
+            canAcceptAsset(ctx, m_audioFileDialog->GetFilePathName()))
             loadAudioClipForSelected(ctx, m_audioFileDialog->GetFilePathName());
         m_audioFileDialog->Close();
         m_audioDlgOpen = false;
