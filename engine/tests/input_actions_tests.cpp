@@ -273,6 +273,71 @@ static void testActionDiagnosticsReportDiscardedBindings()
     }
 }
 
+// H10 de docs/core-audit.md, ampliado por lo que se vio al mirarlo: el cargador
+// ya tiene escrita la regla en su propio comentario -"codigo fuera de rango: se
+// descarta AQUI y no en cada consulta, y se NOMBRA"- pero solo la aplicaba a
+// padaxis. Los codigos de key, mouse y pad entraban sin mirar.
+//
+// Lo que costaba, por dispositivo:
+//   - mouse: isActionDown resolvia con isMouseButtonDown, que le pasaba el
+//     codigo a GLFW sin acotar -un error de GLFW por consulta y por frame-,
+//     mientras isActionPressed/Released lo descartaban. Tres funciones de la
+//     misma familia, tres comportamientos ante el MISMO fichero.
+//   - key y pad: el binding se quedaba vivo y mudo, y una accion que no dispara
+//     nunca es indistinguible de una mal configurada.
+//
+// Se prueba en el cargador y no en las consultas a proposito: sin ventana de
+// GLFW toda consulta devuelve false pase lo que pase, asi que un test ahi
+// pasaria igual de roto -es el caso del fixture que nunca llega a la linea-.
+static void testOutOfRangeCodesDiscardedForEveryDevice()
+{
+    const char* kFile = "input_actions.json";
+    std::string previo;
+    bool habia = false;
+    {
+        std::ifstream in(kFile, std::ios::binary);
+        if (in)
+        {
+            habia = true;
+            previo.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+    }
+
+    {
+        std::ofstream out(kFile);
+        out << "{\"actions\":[{\"name\":\"Disparar\",\"glfw\":["
+               "{\"device\":\"mouse\",\"code\":99},"      // fuera de rango
+               "{\"device\":\"mouse\",\"code\":-1},"      // negativo
+               "{\"device\":\"key\",\"code\":50000},"     // fuera de rango
+               "{\"device\":\"pad\",\"code\":77},"        // fuera de rango
+               "{\"device\":\"mouse\",\"code\":0}]}]}";   // el bueno, se queda
+    }
+
+    Input::reloadActions();
+    std::vector<std::string> avisos = Input::takeActionDiagnostics();
+
+    // Cuatro descartes, uno por binding malo, y todos NOMBRAN la accion: sin el
+    // nombre el aviso no sirve para arreglar el fichero.
+    CHECK(avisos.size() == 4);
+    int nombran = 0;
+    for (const std::string& a : avisos)
+        if (a.find("Disparar") != std::string::npos) ++nombran;
+    CHECK(nombran == 4);
+
+    // Y el binding bueno sobrevive: descartar los malos no se lleva la accion.
+    CHECK(Input::hasAction("Disparar"));
+
+    if (habia)
+    {
+        std::ofstream out(kFile, std::ios::binary);
+        out << previo;
+    }
+    else
+    {
+        std::remove(kFile);
+    }
+}
+
 int main()
 {
     testPadRoundTrip();
@@ -285,6 +350,7 @@ int main()
     testPadTriggerRange();
     testPadAxisWithoutGamepad();
     testActionDiagnosticsReportDiscardedBindings();
+    testOutOfRangeCodesDiscardedForEveryDevice();
 
     if (g_failures == 0) std::printf("input_actions_tests: OK\n");
     else                 std::printf("input_actions_tests: %d FAILURES\n", g_failures);

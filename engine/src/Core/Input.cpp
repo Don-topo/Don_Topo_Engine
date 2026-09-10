@@ -88,7 +88,13 @@ namespace DonTopo
     }
     bool Input::isMouseButtonDown(int button)
     {
-        return s_window && glfwGetMouseButton(s_window, button) == GLFW_PRESS;
+        // Acotado y contra el snapshot del frame, exactamente igual que
+        // isKeyDown de aquí arriba. Antes preguntaba a GLFW en vivo y sin
+        // acotar, con dos consecuencias: un código inválido provocaba un error
+        // de GLFW por consulta y por frame, y el valor podía no coincidir con el
+        // que ven isActionPressed/isActionReleased, que sí leen s_mCurr/s_mPrev.
+        // Down, Pressed y Released miran ahora la misma foto.
+        return button >= 0 && button <= GLFW_MOUSE_BUTTON_LAST && s_mCurr[button];
     }
     bool Input::isPadButtonDown(int button)
     {
@@ -182,22 +188,60 @@ namespace DonTopo
                     const std::string device = devIt->get<std::string>();
                     ActionBinding b;
                     b.code = codeIt->get<int>();
-                    if (device == "key")        b.device = ActionDevice::Key;
-                    else if (device == "mouse") b.device = ActionDevice::Mouse;
-                    else if (device == "pad")   b.device = ActionDevice::Pad;
+
+                    // Código fuera de rango (fichero de otra versión, edición a
+                    // mano): se descarta AQUÍ y no en cada consulta. Y se NOMBRA:
+                    // una acción que no dispara nunca porque su binding se
+                    // descartó al cargar es indistinguible de una mal
+                    // configurada si esto se traga en silencio.
+                    //
+                    // La regla estaba escrita —con este mismo comentario— pero
+                    // aplicada SOLO a padaxis, así que los códigos de key, mouse
+                    // y pad entraban sin mirar. El de mouse era el que más se
+                    // notaba: isActionDown lo resolvía con isMouseButtonDown, que
+                    // se lo pasaba a GLFW sin acotar (un error de GLFW por
+                    // consulta y por frame), mientras isActionPressed y
+                    // isActionReleased sí lo acotaban — tres funciones de la
+                    // misma familia comportándose distinto ante el mismo fichero.
+                    //
+                    // Validar en el cargador y no en las tres consultas es lo que
+                    // hace que la cuarta consulta que alguien escriba herede la
+                    // guarda sin tener que acordarse.
+                    const auto descarta = [&](const char* queDispositivo) {
+                        s_actionDiagnostics.push_back(
+                            "Input: la acción '" + name + "' tiene un binding de " +
+                            queDispositivo + " con un código fuera de rango (" +
+                            std::to_string(b.code) + "); se descarta ese binding");
+                    };
+
+                    if (device == "key")
+                    {
+                        if (b.code < 0 || b.code > GLFW_KEY_LAST) { descarta("tecla"); continue; }
+                        b.device = ActionDevice::Key;
+                    }
+                    else if (device == "mouse")
+                    {
+                        if (b.code < 0 || b.code > GLFW_MOUSE_BUTTON_LAST)
+                        {
+                            descarta("botón de ratón");
+                            continue;
+                        }
+                        b.device = ActionDevice::Mouse;
+                    }
+                    else if (device == "pad")
+                    {
+                        if (b.code < 0 || b.code > GLFW_GAMEPAD_BUTTON_LAST)
+                        {
+                            descarta("botón de mando");
+                            continue;
+                        }
+                        b.device = ActionDevice::Pad;
+                    }
                     else if (device == "padaxis")
                     {
-                        // Código fuera de rango (fichero de otra versión, edición
-                        // a mano): se descarta aquí y no en cada consulta. Y se
-                        // NOMBRA: una acción que no dispara nunca porque su
-                        // binding se descartó al cargar es indistinguible de una
-                        // mal configurada si esto se traga en silencio.
                         if (b.code < 0 || b.code >= kPadAxisBindingCount)
                         {
-                            s_actionDiagnostics.push_back(
-                                "Input: la acción '" + name + "' tiene un binding de eje de mando "
-                                "con un código fuera de rango (" + std::to_string(b.code) +
-                                "); se descarta ese binding");
+                            descarta("eje de mando");
                             continue;
                         }
                         b.device = ActionDevice::PadAxis;
