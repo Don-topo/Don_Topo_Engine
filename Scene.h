@@ -1,0 +1,338 @@
+#pragma once
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <nlohmann/json_fwd.hpp>
+#include "DonTopo/Core/GameObject.h"
+
+namespace DonTopo
+{
+    // Declarados, no incluidos: los dos solo aparecen como `std::vector<T>&`
+    // en parametros, y eso vale con tipo incompleto. Incluir sus headers
+    // desharia el trabajo de GameObject.h: `UiWidgetSync.h` arrastra los 14
+    // componentes de UI, asi que Scene.h volveria a reconstruir medio repo
+    // cada vez que alguien tocara un slider.
+    struct Light;
+    struct UiCanvasBinding;
+
+    class PhysicsManager;
+    class AudioManager;
+    class AsyncAssetLoader;
+    struct Mesh;
+
+    // Cache opcional de mallas ya cargadas en RAM, indexada por sourcePath. La
+    // consulta la carga de escena (nodeFromJson) para saltarse el ReadFile de
+    // disco de un sourcePath que ya se precargó — el runtime la rellena en
+    // paralelo con el JobSystem y muestra progreso en el splash mientras tanto.
+    // Los valores pueden ser SkinnedMesh (un FBX con rig): la carga hace un
+    // dynamic_cast para reconstruir el tipo correcto. El caller conserva la
+    // propiedad; la carga hace copia profunda de la malla que use.
+    using PreloadedMeshCache = std::unordered_map<std::string, std::shared_ptr<Mesh>>;
+
+    class Scene
+    {
+        public:
+            explicit Scene(std::string name = "Scene");
+
+            GameObject& getRoot() { return m_root; }
+            const GameObject& getRoot() const { return m_root; }
+
+            GameObject* addGameObject(const std::string& name, GameObject* parent = nullptr);
+
+            // Saca node del árbol y lo destruye con todo su subárbol. No hace
+            // nada si node es nulo o es la raíz (la raíz no cuelga de nadie).
+            //
+            // Avisa a setOnNodeRemoved ANTES de soltarlo: es ahí donde el host
+            // libera lo que Core no conoce (las ranuras de GPU del subárbol y,
+            // en el editor, la selección). Ver el comentario de ese setter para
+            // por qué el aviso vive aquí y no en cada llamante.
+            void removeGameObject(GameObject* node);
+
+            // Se llama justo ANTES de destruir un nodo en removeGameObject, con
+            // el subárbol todavía entero y recorrible: quien escucha necesita
+            // leer los staticRenderIndex/skinnedRenderIndex de TODOS sus
+            // descendientes, no solo los de la raíz.
+            //
+            // Existe porque esa obligación —"acuérdate de soltar la GPU antes de
+            // borrar"— estaba implementada TRES veces (EditorUI::onDelete,
+            // ScriptManager::onDestroying y a pelo en DeleteGameObjectCommand) y
+            // un cuarto llamante habría necesitado una cuarta. Los tres la
+            // cumplían; el problema no era que fallara, es que era olvidable.
+            //
+            // Core no conoce el Renderer, así que el cableado es del host (ver
+            // los main.cpp del sandbox y del runtime). Sin oyente, borrar
+            // funciona igual: los tests no lo ponen.
+            void setOnNodeRemoved(std::function<void(GameObject*)> cb)
+            {
+                m_onNodeRemoved = std::move(cb);
+            }
+
+            // Mueve node para que cuelgue de newParent (nullptr = la raíz de la
+            // escena), insertándolo en la posición index de los hijos del
+            // destino. index se interpreta sobre la lista YA SIN node, así que
+            // un valor >= al tamaño resultante lo deja al final (que es lo que
+            // hace el default).
+            //
+            // Devuelve false —sin tocar nada— si node es nulo o es la raíz (la
+            // raíz no cuelga de nadie), o si newParent está DENTRO del subárbol
+            // de node: eso desengancharía el subárbol del árbol y perdería el
+            // unique_ptr que lo mantiene vivo, así que es un cuelgue seguro, no
+            // una escena rara.
+            //
+            // NO toca transforms a propósito: conservar la pose local (el
+            // objeto salta con el padre) o la de mundo (se queda donde está)
+            // son las dos cosas que se quieren, y la decisión es del caller.
+            // Quien quiera la pose de mundo la lee ANTES y la reescribe DESPUÉS.
+            // Los dos callers de hoy son el reparent de la jerarquía del editor
+            // (vía ReparentCommand, que además necesita el index exacto para
+            // deshacer) y Entity:SetParent de Lua.
+            bool reparent(GameObject* node, GameObject* newParent,
+                          size_t index = static_cast<size_t>(-1));
+
+            // Busca por GameObject::id en todo el árbol (incluida la raíz).
+            // nullptr si ningún nodo tiene ese id. O(n) sobre el árbol — usado
+            // por los comandos de Undo/Redo (Command.cpp) pa resolver su
+            // objetivo en vivo en cada execute()/undo(), nunca un puntero crudo.
+            // Determinista: si (por invariante roto) hubiera más de un nodo
+            // con ese id, gana el PRIMERO en pre-orden, nunca el último. El id
+            // es en teoría único (Scene::insertFromJson reasigna cualquiera
+            // que choque con uno ya vivo al reinsertar un subárbol), pero
+            // findById no lo vuelve a comprobar aquí.
+            GameObject* findById(uint64_t id);
+
+            // Única fuente de verdad del invariante "como mucho una cámara por
+            // escena": la buscan el gate de "Add" de Properties, el menú
+            // contextual del panel Scene, el switch de cámara del Renderer y el
+            // aviso al dar a Play — ninguno guarda estado propio. Pre-orden
+            // desde la raíz (gana la primera), nullptr si no hay ninguna. O(n)
+            // sobre el árbol, igual que findById.
+            GameObject* findCamera();
+            const GameObject* findCamera() const;
+
+            // Misma idea pa el invariante "como mucho un Audio Listener por
+            // escena": lo consultan el gate de "Add" de Properties, el gate de
+            // reproducción al entrar en Play y la resolución del listener que se
+            // le pasa a AudioManager::update cada frame. Pre-orden desde la raíz
+            // (gana el primero), nullptr si no hay ninguno.
+            GameObject* findAudioListener();
+            const GameObject* findAudioListener() const;
+
+            // Canvas de UI que se aplica al canvas vivo del Renderer. Aquí no
+            // hay invariante que imponer (caben varios en la escena), pero el
+            // UiCanvas del Renderer es uno solo: gana el primero en pre-orden.
+            // Lo consultan el bucle del editor y el del runtime exportado, cada
+            // frame, y el gizmo del área útil. nullptr si no hay ninguno.
+            GameObject* findCanvas();
+            const GameObject* findCanvas() const;
+
+            // Cada canvas de la escena con SUS widgets, listos para
+            // syncUiWidgets: uno por CanvasComponent, con su propia
+            // UiWidgetLists (lista por tipo y JERARQUÍA aplanada a (id, id del
+            // padre) en pre-orden, con 0 para los que cuelgan de la raíz de ESE
+            // canvas). Antes había un único saco (collectUiWidgets) porque solo
+            // cabía un Canvas en la escena; con varios, meterlos todos junto
+            // pintaría el menú de pausa encima del HUD sin que nada lo dijera.
+            //
+            // El "padre" de un widget es el ancestro más cercano DENTRO DEL
+            // MISMO CANVAS que TENGA algún componente de UI, no el padre
+            // inmediato: un GameObject intermedio sin UI no aporta rect contra
+            // el que anclarse, así que no puede sostener a nadie y sus hijos
+            // suben al primero que sí. Un Canvas anidado abre su propio binding
+            // y corta esa cadena: lo que cuelgue de él se ancla a SU raíz.
+            //
+            // Un widget sin ningún Canvas por encima no aparece en ningún
+            // binding: no se dibuja. El editor ya lo impide (uiComponentsAvailable
+            // exige un Canvas ancestro), así que esto solo pasa en escenas hechas
+            // a mano.
+            //
+            // Vive aquí y no en cada bucle porque lo necesitan los tres (editor
+            // con los dos backends y runtime exportado), y tres copias de este
+            // recorrido es como se desincronizan.
+            void collectCanvases(std::vector<UiCanvasBinding>& out) const;
+
+            // Avisos de la última operación que tuvo que corregir la escena
+            // cargada (campos corruptos, varias cámaras, clips que ya no casan).
+            // Core no conoce el Log Console: EditorUI los vuelca tras cargar. Se
+            // limpian al principio de cada operación que los pueda rellenar, así
+            // que nunca crecen sin control.
+            //
+            // Los repetidos vienen colapsados a una sola entrada con " (xN)" al
+            // final: un mesh corrupto genera un aviso IDÉNTICO por vértice (el
+            // contexto es el nombre del objeto, no el índice), y sin colapsar una
+            // sola malla rota escribe miles de líneas en el Log y sepulta los
+            // demás avisos de esa misma carga.
+            //
+            // OJO: hoy solo los drena el editor tras cargar escena. El aviso del
+            // clone (Instantiate de Lua, en Play) no tiene consumidor de Log —
+            // queda registrado pa los tests y pa un futuro consumidor.
+            const std::vector<std::string>& lastWarnings() const { return m_warnings; }
+
+            // Serializa solo el subárbol de node (mismo formato de nodo que
+            // usa toJson() internamente, incluido su id) — usado por
+            // CreateGameObjectCommand/DeleteGameObjectCommand (Command.cpp)
+            // pa capturar el snapshot de un GameObject sin serializar la
+            // escena entera.
+            nlohmann::json subtreeToJson(const GameObject* node) const;
+
+            // Reconstruye un subárbol desde j como hijo de parent (o de la
+            // raíz si parent es nullptr, mismo criterio que cloneGameObject),
+            // insertado en la posición index de parent->children (si index
+            // queda fuera de rango, al final). Los render indices del
+            // subtree quedan a -1: el caller debe registrar los meshes en
+            // GPU (ver Renderer::registerGameObject). nullptr si la
+            // reconstrucción falla (subárbol malformado).
+            GameObject* insertFromJson(const nlohmann::json& j, GameObject* parent, size_t index,
+                                        PhysicsManager& physics, AudioManager& audio);
+
+            // Deep clone de src (transform, mesh, colliders, audio, scripts
+            // con overrides) como hijo nuevo de parent (o del padre de src si
+            // parent es nullptr). Los render indices del subtree quedan a -1:
+            // el caller debe registrar los meshes en GPU. nullptr si src es
+            // la raíz o la reconstrucción falla.
+            GameObject* cloneGameObject(GameObject* src, GameObject* parent,
+                                        PhysicsManager& physics, AudioManager& audio);
+
+            // Recolecta las luces de la escena en el formato que come el
+            // Renderer (setLights/setLightRadii). Pre-orden desde la raíz, y se
+            // queda con las primeras MAX_LIGHTS: el resto se descarta EN
+            // SILENCIO — es un tope del bloque UBO, no un error de la escena.
+            //
+            // La posición y la dirección salen del worldTransform de cada
+            // GameObject (columna 3 y -Z local), así que hay que llamarlo
+            // DESPUÉS de propagar los transforms del frame. Devuelve cuántos
+            // GameObject con luz había en total, que es lo que permite al caller
+            // distinguir "escena sin luces" de "escena con más de las que caben".
+            //
+            // Core no conoce el Renderer: los dos setters los llama el caller
+            // (una escena sin luces no tiene por qué dejar el viewport a
+            // oscuras, y esa decisión es de quien monta el frame).
+            size_t collectLights(std::vector<Light>& outLights,
+                                 std::vector<float>& outRadii) const;
+
+            template <typename Fn>
+            void traverse(Fn fn) { m_root.traverse(fn); }
+
+            void update(float dt);
+            // Empuja la posición de cada GameObject a la voz que tenga sonando,
+            // para que los AudioClip 3D sigan a su objeto. La llama Scene::update
+            // (Play) y las rutas de host en Edit Mode, que no pasan por update
+            // pero sí mueven objetos con el gizmo. Barata: los clips 2D salen en
+            // el primer if de AudioClipComponent::updateSpatial.
+            // dt alimenta el doppler (velocidad de cada fuente). Con 0 no hay
+            // efecto doppler, que es lo correcto en Edit Mode.
+            void updateAudioSpatial(float dt = 0.0f);
+
+            // Empuja las zonas de reverb de la escena al AudioManager: crea las
+            // nuevas, mueve las que existan y destruye las de GameObjects que ya
+            // no estan. Se llama por frame; syncReverbZone es idempotente.
+            //
+            // Vive aqui y no en el AudioManager porque el manager no conoce la
+            // escena, y no en cada bucle de host porque son tres.
+            void syncReverbZones(AudioManager& audio);
+
+            // Deja la escena VACIA: destruye el arbol entero, asi que corren los
+            // destructores de todos los componentes de todos los nodos. Para eso
+            // existe -no para 'limpiar un poco'-: los dos hosts la llaman justo
+            // antes de destruir PhysicsManager y AudioManager, y un ~Collider
+            // corriendo despues, contra una PxScene ya liberada, es el fallo que
+            // esto evita. La raiz sobrevive (conserva id y nombre) pero se queda
+            // sin hijos y sin componentes.
+            //
+            // Despues de esto la escena no se vuelve a usar: sus tres llamantes o
+            // la reemplazan (fromJson) o estan cerrando el proceso.
+            //
+            // OBLIGACION DEL LLAMANTE, y ahora la firma no la insinua: llamarla
+            // ANTES de destruir PhysicsManager y AudioManager. Los dos managers
+            // eran parametros que esta funcion NO usaba, y pedirlos no garantizaba
+            // nada -se podia pasar uno ya apagado- mientras obligaba a todo
+            // llamante a tener uno vivo: los tests montaban un PhysicsManager solo
+            // para satisfacer la firma, y como PhysX admite una sola PxFoundation
+            // por proceso, habia que compartirlo entre todos los tests del binario.
+            // Un parametro muerto imponiendo una restriccion real (H20).
+            void shutdown();
+
+            // Serializa el árbol completo (transforms, mesh, colliders, audio
+            // clip) a un nlohmann::json en memoria.
+            nlohmann::json toJson() const;
+            // Reemplaza el árbol actual por el contenido de j. Limpia la
+            // escena existente (shutdown + move-assignment) SOLO si j es
+            // válido — una carga fallida no modifica la escena en memoria.
+            // Recrea colliders/audio vía physics/audio (mismas factories que
+            // usa EditorUI). No toca Renderer — el caller debe registrar/
+            // liberar los meshes en GPU (ver EditorUI::reloadSceneFromJson).
+            //
+            // loader == nullptr → carga síncrona, comportamiento idéntico al de
+            // siempre. Es lo que usan el restore de Play→Stop y los tests.
+            //
+            // loader != nullptr → los GameObject se crean completos pero sin
+            // mesh, y cada sourcePath encola una petición. El caller es
+            // responsable de bombear y de mostrar el progreso.
+            //
+            // preloaded == nullptr → sin cache, cada sourcePath se lee de disco
+            // como siempre. preloaded != nullptr → antes de leer el disco se
+            // consulta la cache por sourcePath y, si está, se usa una copia
+            // profunda de la malla precargada (skinned incluido). Un miss cae al
+            // camino de disco normal, así que el resultado es idéntico salvo por
+            // no repetir el ReadFile. Va DESPUÉS de loader a propósito: los
+            // callers existentes (editor, tests) no lo pasan y quedan byte a
+            // byte iguales.
+            bool fromJson(const nlohmann::json& j, PhysicsManager& physics, AudioManager& audio,
+                          AsyncAssetLoader* loader = nullptr,
+                          const PreloadedMeshCache* preloaded = nullptr);
+
+            // Serializa el árbol completo a path en formato JSON (vía
+            // toJson()). false si la escritura falla.
+            bool save(const std::string& path) const;
+            // Lee y parsea path, delega en fromJson(...). false si el
+            // fichero no existe o el JSON es inválido. Ver fromJson para el
+            // contrato de loader.
+            bool load(const std::string& path, PhysicsManager& physics, AudioManager& audio,
+                      AsyncAssetLoader* loader = nullptr,
+                      const PreloadedMeshCache* preloaded = nullptr);
+
+            // Raiz del proyecto contra la que se relativizan las rutas de
+            // textura al guardar y se resuelven al cargar. Vacia = las rutas van
+            // y vuelven tal cual, que es lo que hacen los tests y cualquier
+            // caller que no la fije (su directorio de trabajo ya es la raiz).
+            //
+            // Vive aqui y no se saca de ProjectContext porque Scene esta en
+            // Core, y Core no puede depender del Editor.
+            void setAssetRoot(std::string root) { m_assetRoot = std::move(root); }
+            const std::string& assetRoot() const { return m_assetRoot; }
+
+        private:
+            std::string m_name;
+            GameObject  m_root;
+            std::string m_assetRoot;
+
+            // Impone el invariante de una cámara por escena tras reconstruir el
+            // árbol: se queda con la primera en pre-orden y le quita el
+            // CameraComponent al resto (el GameObject se conserva — solo se cae
+            // el componente). Así un .scene editado a mano con dos cámaras se
+            // abre igual, con aviso, en vez de fallar la carga o quedar en un
+            // estado donde findCamera() decide sobre una escena incoherente.
+            // Repara un fichero con ids repetidos: el segundo y siguientes
+            // estrenan id y queda aviso. Sin esto, findById -y con el el
+            // gizmo, los comandos de undo y el panel- resuelven al objeto
+            // equivocado, que se lleva la matriz entera del otro.
+            void pruneDuplicateIds();
+            void pruneExtraCameras();
+
+            // Lo mismo pal Audio Listener: se queda con el primero en pre-orden
+            // y le quita el componente al resto, dejando un aviso por objeto
+            // descartado. El GameObject se conserva.
+            void pruneExtraAudioListeners();
+
+            // Colapsa los avisos repetidos de m_warnings in situ, conservando el
+            // orden de primera aparición y añadiendo " (xN)" a los que salieron
+            // más de una vez. Se llama al final de cada operación que rellena
+            // m_warnings, nunca durante: los productores empujan sin mirar.
+            void collapseWarnings();
+
+            std::vector<std::string> m_warnings;
+            std::function<void(GameObject*)> m_onNodeRemoved;
+    };
+}

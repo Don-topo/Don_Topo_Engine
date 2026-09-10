@@ -11,6 +11,8 @@
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/Window.h"
+#include <fstream>
+#include <iterator>
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
@@ -720,6 +722,51 @@ static void test_scene_shutdown_releases_every_component(PhysicsManager& pm, Aud
     CHECK(wReverb.expired());
     CHECK(wListener.expired());
     CHECK(wAnimHijo.expired());
+}
+
+// H19 de docs/core-audit.md, la mitad que se hizo el 2026-09-04: GameObject.h
+// DECLARA los 28 componentes en vez de incluirlos. Puede, porque sus miembros
+// son shared_ptr -validos con tipo incompleto- y su destructor esta fuera de
+// linea.
+//
+// Lo que se gano, medido entonces: tocar un componente de UI de cien lineas
+// pasaba de 34 TUs y 286 s a 25 TUs y 253 s. Y con ninja -n el 2026-09-11 sigue
+// en 26 TUs, o sea que aguanta.
+//
+// Este test existe porque ese arreglo YA SE DESHIZO UNA VEZ sin que nadie se
+// enterara: al hacerlo, meter un include en Scene.h para resolver un tipo
+// devolvio la medicion a 33 TUs, peor que el baseline. Un include transitivo no
+// rompe nada, no sale en ningun test y no da error: solo hace el build lento
+// otra vez. Asi que la guarda tiene que leer el fichero.
+//
+// Lee el header desde la raiz del repo, que es desde donde se lanzan los tests
+// (igual que los que abren assets/). Si no lo encuentra, NO pasa en silencio.
+static void test_gameobject_header_declares_components_instead_of_including()
+{
+    const char* kRuta = "engine/include/DonTopo/Core/GameObject.h";
+    std::ifstream in(kRuta, std::ios::binary);
+    CHECK(in.good());   // lanzado desde otro cwd: se entera, no aprueba
+    if (!in.good()) return;
+
+    const std::string texto((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    CHECK(!texto.empty());
+
+    // Los tres prefijos de componente concreto que GameObject.h llego a incluir.
+    // Core/ NO entra: de ahi si incluye cosas legitimas (y Camera.h no es un
+    // componente).
+    const char* kProhibidos[] = {
+        "#include \"DonTopo/UI/",
+        "#include \"DonTopo/Physics/",
+        "#include \"DonTopo/Audio/",
+    };
+    for (const char* prohibido : kProhibidos)
+        CHECK(texto.find(prohibido) == std::string::npos);
+
+    // Y la otra mitad: que siga declarandolos. Sin esto, alguien podria
+    // "arreglar" el test borrando las declaraciones y los includes a la vez.
+    CHECK(texto.find("class SliderComponent;")   != std::string::npos);
+    CHECK(texto.find("class BoxCollider;")       != std::string::npos);
+    CHECK(texto.find("class AudioClipComponent;") != std::string::npos);
 }
 
 // H2 de docs/core-audit.md. Quedan ~52 `.value("clave", default)` en los bloques
@@ -8392,6 +8439,7 @@ int main()
     test_traverse_does_not_copy_stateful_functor();
     test_find_first_stops_at_the_first_hit();
     test_corrupt_field_costs_its_node_not_the_scene(pm, am);
+    test_gameobject_header_declares_components_instead_of_including();
     test_insert_from_json_discards_second_camera(pm, am);
     test_insert_from_json_keeps_camera_when_none_alive(pm, am);
     test_insert_from_json_discards_second_audio_listener(pm, am);

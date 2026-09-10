@@ -1,0 +1,530 @@
+#pragma once
+#include <cstdint>
+#include <glm/glm.hpp>
+#include <vector>
+#include <string>
+#include <memory>
+
+// Los 28 componentes van DECLARADOS, no incluidos. Antes se incluían aquí sus
+// headers concretos, y como todo el editor incluye GameObject.h —directamente o
+// vía Scene.h—, tocar cualquiera de ellos reconstruía medio repo: `touch
+// UI/SliderComponent.h`, cien líneas, arrastraba 23 TUs y 266 s, MÁS que un
+// build limpio entero (223 s). Medido el 2026-09-04; ver H19 de
+// docs/core-audit.md.
+//
+// Se puede porque los miembros son `std::shared_ptr<T>`, que vale con tipo
+// incompleto, y porque el destructor de GameObject está FUERA DE LÍNEA: es en
+// el .cpp donde los tipos tienen que estar completos, y allí se incluyen los 28.
+// Los tres inline que también lo exigían —isSkinned y getSkinnedMesh por el
+// dynamic_cast, anyCollider por la conversión de shared_ptr derivado a base— se
+// mudaron al .cpp por el mismo motivo.
+//
+// Quien use un componente concreto incluye SU header, que es lo que tenía que
+// haber hecho en vez de vivir del include transitivo.
+
+namespace DonTopo
+{
+    struct Mesh;
+    struct SkinnedMesh;
+    struct Material;
+    class Collider;
+    class BoxCollider;
+    class SphereCollider;
+    class CapsuleCollider;
+    class PlaneCollider;
+    class Rigidbody;
+    class AudioClipComponent;
+    class AudioListenerComponent;
+    class ReverbZoneComponent;
+    class CameraComponent;
+    class AnimatorComponent;
+    class ReflectionProbeComponent;
+    class LightComponent;
+    class CanvasComponent;
+    class ButtonComponent;
+    class ImageComponent;
+    class LayoutComponent;
+    class PanelComponent;
+    class TextComponent;
+    class ProgressBarComponent;
+    class SliderComponent;
+    class CheckboxComponent;
+    class ToggleComponent;
+    class ScrollbarComponent;
+    class InputFieldComponent;
+    class DropdownComponent;
+    class ScrollViewComponent;
+    class ScriptComponent;
+
+    // Rutas de textura y factores PBR que el usuario ha puesto a mano desde
+    // Properties, por encima de lo que trajera el FBX.
+    //
+    // Viven aquí y no en Material a propósito: Material es lo que leen los
+    // uploaders de los dos backends y lo que entra en la clave de dedup de
+    // SharedGpuMesh, y no sabe distinguir "esto lo puso el modelo" de "esto lo
+    // puso el usuario". Sin esa distinción no hay Clear posible.
+    //
+    // Los base* son lo que había en el material la PRIMERA vez que se pisó ese
+    // slot: es a lo que vuelve Clear en caliente. No se serializan — al cargar
+    // la escena el material se re-deriva del FBX y el baseline se vuelve a
+    // capturar solo.
+    //
+    // metallic/roughness llevan el MISMO mecanismo que las tres texturas, pero
+    // con un centinela en vez de una cadena vacía: 0.0 y 1.0 son valores
+    // válidos de slider (no metálico / totalmente rugoso), así que no sirven
+    // de "sin override" como sí sirve "" para una ruta. -1.0 está fuera del
+    // rango 0..1 del slider y no se puede llegar a él arrastrando, así que es
+    // un centinela seguro. baseMetallicTaken/baseRoughnessTaken hacen
+    // EXACTAMENTE el mismo trabajo que baseAlbedoTaken y compañía —"ya se
+    // capturó el baseline de este slot"—, nada más: quien decide si hay
+    // override ACTIVO es el propio valor (override_ < 0.0f en
+    // applyMaterialOverrides), el centinela, igual que para una textura lo
+    // decide que la ruta esté vacía.
+    struct MaterialOverride
+    {
+        int         index = 0;   // índice en SkinnedMesh::materials; 0 = Mesh::material
+        std::string albedo, normal, orm;
+        std::string baseAlbedo, baseNormal, baseOrm;
+        // "Ya se tomó el baseline de este slot". No se puede deducir de que
+        // base* esté vacío: un baseline legítimamente vacío (mesh procedural
+        // sin textura) sería indistinguible de "aún no tomado", y el Clear
+        // dejaría puesta la textura del usuario en vez de quitarla.
+        bool        baseAlbedoTaken = false, baseNormalTaken = false, baseOrmTaken = false;
+
+        // -1.0 = sin override activo (centinela; ver la nota de arriba).
+        float       metallic  = -1.0f;
+        float       roughness = -1.0f;
+        float       baseMetallic  = 0.0f;
+        float       baseRoughness = 0.0f;
+        bool        baseMetallicTaken = false, baseRoughnessTaken = false;
+    };
+
+    class GameObject
+    {
+        public:
+            // Único entre todos los GameObject de la sesión (contador atómico
+            // en el constructor) — usado por los comandos de Undo/Redo pa
+            // resolver el objeto en vivo vía Scene::findById tras un ciclo
+            // undo/redo que reconstruye el GameObject (Undo de Delete), donde
+            // un GameObject* crudo quedaría colgado.
+            uint64_t id;
+
+            // Adelanta el contador global para que nunca vuelva a repartir id
+            // (ni ninguno por debajo). La necesita quien ASIGNA un id a mano en
+            // vez de dejar que lo ponga el constructor: hoy, la carga de escena
+            // (Scene.cpp, nodeFromJson), que reusa el id que trae el fichero.
+            //
+            // Sin esto, un .scene guardado en otra sesión —con ids más altos
+            // que los que este proceso ha repartido— deja el contador POR
+            // DETRÁS de ids que ya viven en el árbol, y el siguiente
+            // GameObject que se cree estrena uno repetido. A partir de ahí
+            // findById se queda con el último del recorrido y los comandos de
+            // Undo escriben en el objeto equivocado, en silencio.
+            static void reserveIdAtLeast(uint64_t id);
+
+            // Reparte un id nuevo, único frente a TODO lo repartido o
+            // reservado hasta ahora (mismo contador que el constructor y que
+            // reserveIdAtLeast). Lo usa Scene::insertFromJson para dar de
+            // baja un id del snapshot que choca con uno ya vivo en el resto
+            // del árbol — reusar el de reserveIdAtLeast ahí no vale porque
+            // ese solo ADELANTA el contador, no entrega un valor.
+            static uint64_t allocateId();
+
+            // JobId de la carga de mesh en vuelo, 0 = ninguna. Es un uint64_t
+            // opaco a propósito: Core no conoce AsyncAssetLoader, y el
+            // destructor NO cancela nada — el pump ya descarta los resultados
+            // cuyo targetId no existe.
+            uint64_t pendingMeshJob = 0;
+
+            explicit GameObject(std::string name = "");
+            ~GameObject();
+            GameObject(GameObject&&) noexcept;
+            GameObject& operator=(GameObject&&) noexcept;
+
+            GameObject* addChild(std::string childName);
+
+            // El baseline de cada override (base*/base*Taken) pertenece a LA
+            // MALLA de la que salió, no al GameObject: si sobreviviera a un
+            // cambio de malla, un Clear posterior devolvería la textura de un
+            // modelo que ya no es el que está cargado. Dos callers lo rompían
+            // antes de este reset: AsyncAssetLoader::applyLoadedMesh hace
+            // setMesh(nullptr) en su catch DESPUÉS de que applyMaterialOverrides
+            // ya hubiera capturado el baseline de la malla que no llegó a
+            // cuajar, y removeMeshComponent quita la malla sin tocar
+            // materialOverrides — un Remove + Add con otro FBX heredaba el
+            // baseline del anterior. Resetear aquí, en el ÚNICO punto por el
+            // que cambia la malla, cubre los dos sin depender de que cada sitio
+            // que suelta una malla se acuerde de limpiar también los overrides.
+            // Cubre los DOS backends: D3D12Renderer::removeMeshComponent
+            // llamaba solo a releaseObjectSlot/releaseSkinnedSlot y se saltaba
+            // este reset entero; desde que llama a setMesh(nullptr) igual que
+            // el de Vulkan, un Remove + Add ya no puede heredar el baseline del
+            // FBX anterior en ninguno de los dos.
+            //
+            // Seguro para el camino de carga de escena (Scene::nodeFromJson):
+            // este setMesh corre SIEMPRE antes de que se lean/carguen los
+            // overrides del JSON sobre `materialOverrides` (que en ese punto
+            // está vacío para un nodo recién creado), así que el reset no
+            // pisa nada — ver la nota de orden en nodeFromJson.
+            void setMesh(std::shared_ptr<Mesh> mesh)
+            {
+                m_mesh = std::move(mesh);
+                for (MaterialOverride& ov : materialOverrides)
+                {
+                    ov.baseAlbedo.clear(); ov.baseAlbedoTaken = false;
+                    ov.baseNormal.clear(); ov.baseNormalTaken = false;
+                    ov.baseOrm.clear();    ov.baseOrmTaken    = false;
+                    // Mismo motivo que los tres de arriba: el baseline de un
+                    // factor pertenece a LA MALLA de la que salió, no al
+                    // GameObject. baseMetallic/baseRoughness no llevan valor
+                    // "vacío" que limpiar (son floats, no std::string): basta
+                    // con bajar el flag, que es lo único que
+                    // applyMaterialOverrides mira para decidir si recaptura.
+                    ov.baseMetallicTaken  = false;
+                    ov.baseRoughnessTaken = false;
+                }
+            }
+            const std::shared_ptr<Mesh>& getMesh() const { return m_mesh; }
+            bool hasMesh()   const { return m_mesh != nullptr; }
+            // Fuera de línea: el dynamic_cast necesita SkinnedMesh completo.
+            bool isSkinned() const;
+            SkinnedMesh* getSkinnedMesh() const;
+
+            void setBoxCollider(std::shared_ptr<BoxCollider> bc) { m_boxCollider = std::move(bc); }
+            const std::shared_ptr<BoxCollider>& getBoxCollider() const { return m_boxCollider; }
+            bool hasBoxCollider() const { return m_boxCollider != nullptr; }
+
+            void setSphereCollider(std::shared_ptr<SphereCollider> sc) { m_sphereCollider = std::move(sc); }
+            const std::shared_ptr<SphereCollider>& getSphereCollider() const { return m_sphereCollider; }
+            bool hasSphereCollider() const { return m_sphereCollider != nullptr; }
+
+            void setCapsuleCollider(std::shared_ptr<CapsuleCollider> cc) { m_capsuleCollider = std::move(cc); }
+            const std::shared_ptr<CapsuleCollider>& getCapsuleCollider() const { return m_capsuleCollider; }
+            bool hasCapsuleCollider() const { return m_capsuleCollider != nullptr; }
+
+            void setPlaneCollider(std::shared_ptr<PlaneCollider> pc) { m_planeCollider = std::move(pc); }
+            const std::shared_ptr<PlaneCollider>& getPlaneCollider() const { return m_planeCollider; }
+            bool hasPlaneCollider() const { return m_planeCollider != nullptr; }
+
+            // true si tiene cualquiera de los 4 tipos de collider — los 4 son
+            // mutuamente excluyentes (impuesto por EditorUI, no por esta clase),
+            // usado como guard único en el popup "Add".
+            bool hasAnyCollider() const
+            {
+                return m_boxCollider || m_sphereCollider || m_capsuleCollider || m_planeCollider;
+            }
+
+            // Devuelve el collider del GameObject como base Collider (hay como
+            // mucho uno por la exclusividad mutua), o nullptr si no tiene.
+            // Usado por el scripting para registrar el listener de triggers sin
+            // ramificar por tipo concreto.
+            // Fuera de línea: convertir shared_ptr<BoxCollider> a
+            // shared_ptr<Collider> exige ver la herencia.
+            std::shared_ptr<Collider> anyCollider() const;
+
+            // Rigidbody: dinámica del cuerpo (masa/gravedad/fuerzas/constraints).
+            // Requiere un collider que aporte la forma; uno por objeto.
+            void setRigidbody(std::shared_ptr<Rigidbody> rb) { m_rigidbody = std::move(rb); }
+            const std::shared_ptr<Rigidbody>& getRigidbody() const { return m_rigidbody; }
+            bool hasRigidbody() const { return m_rigidbody != nullptr; }
+
+            void setAudioClip(std::shared_ptr<AudioClipComponent> clip) { m_audioClip = std::move(clip); }
+            const std::shared_ptr<AudioClipComponent>& getAudioClip() const { return m_audioClip; }
+            bool hasAudioClip() const { return m_audioClip != nullptr; }
+
+            // Audio Listener: desde dónde se oye el audio 3D. Como mucho uno por
+            // escena, igual que la cámara — el invariante lo impone
+            // Scene::findAudioListener, no esta clase. La posición y los ejes
+            // salen del worldTransform, no del componente.
+            void setAudioListener(std::shared_ptr<AudioListenerComponent> l) { m_audioListener = std::move(l); }
+            const std::shared_ptr<AudioListenerComponent>& getAudioListener() const { return m_audioListener; }
+            bool hasAudioListener() const { return m_audioListener != nullptr; }
+
+            // Zona de reverberacion: esfera de ambiente sonoro. Varias por
+            // escena, a diferencia del listener. El recurso de FMOD no vive
+            // aqui: lo lleva AudioManager emparejado por este id.
+            void setReverbZone(std::shared_ptr<ReverbZoneComponent> z) { m_reverbZone = std::move(z); }
+            const std::shared_ptr<ReverbZoneComponent>& getReverbZone() const { return m_reverbZone; }
+            bool hasReverbZone() const { return m_reverbZone != nullptr; }
+
+            // Cámara de juego: al dar a Play el Renderer renderiza desde este
+            // GameObject (su worldTransform da posición y orientación). Como
+            // mucho una por escena — el invariante lo impone Scene::findCamera,
+            // no esta clase, igual que la exclusividad de colliders la impone
+            // el editor.
+            void setCameraComponent(std::shared_ptr<CameraComponent> camera) { m_cameraComponent = std::move(camera); }
+            const std::shared_ptr<CameraComponent>& getCameraComponent() const { return m_cameraComponent; }
+            bool hasCameraComponent() const { return m_cameraComponent != nullptr; }
+
+            // Animator: máquina de estados que decide qué clip del SkinnedMesh
+            // se reproduce. A diferencia de la cámara, no hay invariante de
+            // unicidad por escena: cada GameObject skinned lleva el suyo.
+            void setAnimator(std::shared_ptr<AnimatorComponent> a) { m_animator = std::move(a); }
+            const std::shared_ptr<AnimatorComponent>& getAnimator() const { return m_animator; }
+            bool hasAnimator() const { return m_animator != nullptr; }
+
+            // Reflection Probe: sonda de entorno. Sin invariante de unicidad
+            // por escena (al contrario que la cámara): caben las que quepan en
+            // memoria, y el Renderer resuelve qué sonda ilumina cada objeto por
+            // radio de influencia.
+            void setReflectionProbe(std::shared_ptr<ReflectionProbeComponent> p) { m_reflectionProbe = std::move(p); }
+            const std::shared_ptr<ReflectionProbeComponent>& getReflectionProbe() const { return m_reflectionProbe; }
+            bool hasReflectionProbe() const { return m_reflectionProbe != nullptr; }
+
+            // Luz. Tampoco tiene invariante de unicidad: caben varias del mismo
+            // tipo por escena, y es Scene quien se queda con las primeras
+            // MAX_LIGHTS al recolectarlas para el Renderer. La posición y la
+            // dirección salen del worldTransform, no del componente.
+            void setLight(std::shared_ptr<LightComponent> l) { m_light = std::move(l); }
+            const std::shared_ptr<LightComponent>& getLight() const { return m_light; }
+            bool hasLight() const { return m_light != nullptr; }
+
+            // Canvas: la raíz de la UI 2D. Sin invariante de unicidad por
+            // escena (como la luz, no como la cámara), pero el canvas VIVO es
+            // uno solo —el del Renderer—, así que quien dibuja aplica el
+            // primero en pre-orden (Scene::findCanvas). La posición no sale del
+            // worldTransform: la UI es espacio de pantalla.
+            void setCanvas(std::shared_ptr<CanvasComponent> c) { m_canvas = std::move(c); }
+            const std::shared_ptr<CanvasComponent>& getCanvas() const { return m_canvas; }
+            bool hasCanvas() const { return m_canvas != nullptr; }
+
+            // Button: un widget de la UI 2D. Solo tiene sentido colgando de un
+            // Canvas (el gate del editor es PropertiesPanel::uiComponentsAvailable),
+            // y como el Canvas, es SOLO DATOS: el nodo vivo lo monta quien dibuja
+            // con syncUiWidgets(). Uno por GameObject, igual que la luz.
+            void setButton(std::shared_ptr<ButtonComponent> b) { m_button = std::move(b); }
+            const std::shared_ptr<ButtonComponent>& getButton() const { return m_button; }
+            bool hasButton() const { return m_button != nullptr; }
+
+            // Text: una etiqueta de la UI 2D. Mismo contrato que el Button —
+            // solo tiene sentido colgando de un Canvas y es SOLO DATOS: el nodo
+            // vivo lo monta quien dibuja con syncUiWidgets(). Uno por
+            // GameObject, y compatible con el Button en el mismo objeto (son
+            // dos nodos hermanos con nombres distintos).
+            void setText(std::shared_ptr<TextComponent> t) { m_text = std::move(t); }
+            const std::shared_ptr<TextComponent>& getText() const { return m_text; }
+            bool hasText() const { return m_text != nullptr; }
+
+            // Barra de progreso de la UI 2D. Mismo contrato que el Text: SOLO
+            // DATOS, y el nodo vivo (fondo + relleno) lo monta syncUiWidgets().
+            // Compatible con Button y Text en el mismo GameObject: son nodos
+            // hermanos con prefijos de nombre distintos.
+            void setProgressBar(std::shared_ptr<ProgressBarComponent> p) { m_progressBar = std::move(p); }
+            const std::shared_ptr<ProgressBarComponent>& getProgressBar() const { return m_progressBar; }
+            bool hasProgressBar() const { return m_progressBar != nullptr; }
+
+            // Panel: el rectángulo de fondo de la UI 2D. Mismo contrato que el
+            // resto — SOLO DATOS, y el nodo vivo lo monta syncUiWidgets(). Uno
+            // por GameObject, y compatible con los demás componentes de UI en el
+            // mismo objeto: son nodos hermanos con prefijos de nombre distintos.
+            void setPanel(std::shared_ptr<PanelComponent> p) { m_panel = std::move(p); }
+            const std::shared_ptr<PanelComponent>& getPanel() const { return m_panel; }
+            bool hasPanel() const { return m_panel != nullptr; }
+
+            // Image: un sprite de la UI 2D con sus cuatro modos de reparto
+            // (Normal, Tiled, Sliced, Filled). Mismo contrato que el Panel.
+            void setImage(std::shared_ptr<ImageComponent> i) { m_image = std::move(i); }
+            const std::shared_ptr<ImageComponent>& getImage() const { return m_image; }
+            bool hasImage() const { return m_image != nullptr; }
+
+            // Slider: el widget de valor arrastrable de la UI 2D. Mismo
+            // contrato que el resto — SOLO DATOS —, con una diferencia: el nodo
+            // vivo tiene handlers de raton que ESCRIBEN `value` aqui, asi que el
+            // sync lo recibe por puntero no const.
+            void setSlider(std::shared_ptr<SliderComponent> s) { m_slider = std::move(s); }
+            const std::shared_ptr<SliderComponent>& getSlider() const { return m_slider; }
+            bool hasSlider() const { return m_slider != nullptr; }
+
+            // Checkbox: la casilla de verificacion. Como el Slider, su nodo
+            // vivo tiene un handler de click que escribe `isOn` AQUI, asi que el
+            // sync lo recibe por puntero no const.
+            void setCheckbox(std::shared_ptr<CheckboxComponent> c) { m_checkbox = std::move(c); }
+            const std::shared_ptr<CheckboxComponent>& getCheckbox() const { return m_checkbox; }
+            bool hasCheckbox() const { return m_checkbox != nullptr; }
+
+            // Toggle: el interruptor deslizante. Mismo dato que el Checkbox (un
+            // bool) pero otros campos, asi que otro componente.
+            void setToggle(std::shared_ptr<ToggleComponent> t) { m_toggle = std::move(t); }
+            const std::shared_ptr<ToggleComponent>& getToggle() const { return m_toggle; }
+            bool hasToggle() const { return m_toggle != nullptr; }
+
+            // Scrollbar: el canal con asa de tamano variable. Interactivo por
+            // arrastre Y por rueda, asi que tambien por puntero no const.
+            void setScrollbar(std::shared_ptr<ScrollbarComponent> s) { m_scrollbar = std::move(s); }
+            const std::shared_ptr<ScrollbarComponent>& getScrollbar() const { return m_scrollbar; }
+            bool hasScrollbar() const { return m_scrollbar != nullptr; }
+
+            // InputField: el campo de texto. Interactivo y ademas el unico que
+            // recibe TECLADO, asi que el sync lo toma por puntero no const.
+            void setInputField(std::shared_ptr<InputFieldComponent> f) { m_inputField = std::move(f); }
+            const std::shared_ptr<InputFieldComponent>& getInputField() const { return m_inputField; }
+            bool hasInputField() const { return m_inputField != nullptr; }
+
+            // Dropdown: el desplegable. Su subarbol cambia de forma con el numero
+            // de opciones, cosa que el sync tiene en cuenta al decidir si
+            // reconstruye.
+            void setDropdown(std::shared_ptr<DropdownComponent> d) { m_dropdown = std::move(d); }
+            const std::shared_ptr<DropdownComponent>& getDropdown() const { return m_dropdown; }
+            bool hasDropdown() const { return m_dropdown != nullptr; }
+
+            // ScrollView: la vista desplazable. OJO: los hijos de este GameObject
+            // cuelgan de su nodo de CONTENIDO, no del viewport — si colgaran del
+            // viewport, desplazarse no los arrastraria.
+            void setScrollView(std::shared_ptr<ScrollViewComponent> s) { m_scrollView = std::move(s); }
+            const std::shared_ptr<ScrollViewComponent>& getScrollView() const { return m_scrollView; }
+            bool hasScrollView() const { return m_scrollView != nullptr; }
+
+            // Auto-layout: coloca a los HIJOS de este GameObject, y con
+            // ignoreLayout saca a este de la colocacion de su padre. Mismo
+            // contrato que el resto: SOLO DATOS, y el nodo lo resuelve
+            // syncUiWidgets(). Sin ningun otro componente de UI en el objeto, el
+            // sync le monta un contenedor propio (no dibujable); con el, escribe
+            // los campos de layout en el nodo de aquel.
+            void setLayout(std::shared_ptr<LayoutComponent> l) { m_layout = std::move(l); }
+            const std::shared_ptr<LayoutComponent>& getLayout() const { return m_layout; }
+            bool hasLayout() const { return m_layout != nullptr; }
+
+            // Scripts Lua — a diferencia del resto de slots, vector: se
+            // permiten varios scripts por GameObject (incluso repetidos).
+            void addScript(std::unique_ptr<ScriptComponent> script);
+            void removeScript(ScriptComponent* script);
+            std::vector<std::unique_ptr<ScriptComponent>>&       getScripts()       { return m_scripts; }
+            const std::vector<std::unique_ptr<ScriptComponent>>& getScripts() const { return m_scripts; }
+            bool hasScripts() const { return !m_scripts.empty(); }
+
+            void updateWorldTransforms(const glm::mat4& parentWorld = glm::mat4(1.0f));
+
+            // Primero en preorden que cumpla `pred`, o nullptr. CORTA en cuanto
+            // aparece: `traverse` no puede: visita el árbol entero, así que los
+            // cuatro buscadores de Scene lo emulaban con un `if (!found && ...)`
+            // que seguía bajando por todo lo demás para nada.
+            //
+            // Lo que cuesta eso, medido en /O2 con 5000 nodos y 20.000 búsquedas:
+            // recorrido completo 175 ms pase lo que pase; cortando, 0,007 ms si
+            // el nodo está en la raíz, 50 ms si está a un tercio y 160 ms si NO
+            // está (ahí no hay nada que ahorrar, es el único caso que sigue
+            // costando lo mismo). O sea 8,8 us por búsqueda hoy — y
+            // PropertiesPanel, que se dibuja cada frame, hace varias.
+            //
+            // Devuelve GameObject* y no bool para que el caller no tenga que
+            // capturar el resultado a mano, que es justo el patrón que se está
+            // quitando.
+            template <typename Pred>
+            GameObject* findFirst(Pred&& pred)
+            {
+                if (pred(this)) return this;
+                for (auto& c : children)
+                    if (GameObject* hit = c->findFirst(pred)) return hit;
+                return nullptr;
+            }
+
+            // Fn&& y no Fn: por valor se copiaba el functor por cada hijo Y por
+            // cada nivel. Con los callers de hoy eso no cuesta NADA medible —son
+            // lambdas [&] de 8 bytes; medido en /O2 con 5000 nodos x 2000
+            // recorridos: 25,3 ms por valor contra 24,3 ms por referencia, o sea
+            // ruido—. Con un functor de 264 bytes la misma medida da 62-69 ms
+            // contra 26-29: 2,4x. O sea que el coste existe y hoy nadie lo paga.
+            //
+            // Se cambia por lo OTRO, que no es rendimiento: por valor, un functor
+            // MUTABLE que acumule en su propio estado pierde en silencio lo que
+            // sumen los hijos, porque cada subárbol recibe su copia. Hoy no hay
+            // ni una lambda mutable en los traverse del repo (grep), así que esto
+            // no arregla nada roto: cierra la puerta antes de que alguien la
+            // encuentre depurando por qué su contador sale a cero.
+            //
+            // Fn&& y NO Fn&: casi todos los callers pasan la lambda en la propia
+            // llamada, y un temporal no se puede enganchar a una referencia
+            // lvalue. Dentro se recursa con `fn`, que ya es un lvalue con nombre,
+            // así que el hijo deduce Fn& y no se copia nada.
+            template <typename Fn>
+            void traverse(Fn&& fn)
+            {
+                fn(this);
+                for (auto& c : children) c->traverse(fn);
+            }
+
+            std::string name;
+            glm::mat4   localTransform {1.0f};
+            glm::mat4   worldTransform {1.0f};
+            GameObject* parent = nullptr;
+            std::vector<std::unique_ptr<GameObject>> children;
+
+            // El Renderer mantiene dos colecciones/pipelines separados (estático vs skinned),
+            // por eso hacen falta dos índices en vez de un único meshIndex plano.
+            int staticRenderIndex  = -1;
+            int skinnedRenderIndex = -1;
+
+            // Visibilidad del componente Mesh. false = la malla no se manda a la
+            // GPU: ni pass de escena, ni sombras, ni AO. Física, colisiones y
+            // selección en el viewport siguen igual. Llega al Renderer por frame
+            // vía setObjectMeshVisible/setSkinnedMeshVisible, igual que el SSR.
+            bool meshVisible = true;
+
+            // Vacío = el material es tal cual lo trajo el FBX. Ver
+            // MaterialOverride.
+            std::vector<MaterialOverride> materialOverrides;
+
+            // Screen Space Reflections por objeto. No es un componente: son dos
+            // campos del propio GameObject, igual que el transform, porque lo que
+            // configuran es cómo se dibuja SU malla. ssrIntensity es la
+            // reflectividad a incidencia normal (F0 en ssr.comp): 1 = espejo,
+            // valores bajos reflejan sobre todo de canto. El Renderer los recibe
+            // por frame vía setObjectSsr/setSkinnedSsr, y con ssrEnabled a false
+            // el objeto no aporta máscara ninguna.
+            bool  ssrEnabled   = false;
+            float ssrIntensity = 0.5f;
+
+        private:
+            std::shared_ptr<Mesh> m_mesh;
+            std::shared_ptr<BoxCollider> m_boxCollider;
+            std::shared_ptr<SphereCollider> m_sphereCollider;
+            std::shared_ptr<CapsuleCollider> m_capsuleCollider;
+            std::shared_ptr<PlaneCollider> m_planeCollider;
+            std::shared_ptr<Rigidbody> m_rigidbody;
+            std::shared_ptr<AudioClipComponent> m_audioClip;
+            std::shared_ptr<AudioListenerComponent> m_audioListener;
+            std::shared_ptr<ReverbZoneComponent> m_reverbZone;
+            std::shared_ptr<CameraComponent> m_cameraComponent;
+            std::shared_ptr<AnimatorComponent> m_animator;
+            std::shared_ptr<ReflectionProbeComponent> m_reflectionProbe;
+            std::shared_ptr<LightComponent> m_light;
+            std::shared_ptr<CanvasComponent> m_canvas;
+            std::shared_ptr<ButtonComponent> m_button;
+            std::shared_ptr<TextComponent> m_text;
+            std::shared_ptr<ProgressBarComponent> m_progressBar;
+            std::shared_ptr<LayoutComponent> m_layout;
+            std::shared_ptr<PanelComponent> m_panel;
+            std::shared_ptr<ImageComponent> m_image;
+            std::shared_ptr<SliderComponent> m_slider;
+            std::shared_ptr<CheckboxComponent> m_checkbox;
+            std::shared_ptr<ToggleComponent> m_toggle;
+            std::shared_ptr<ScrollbarComponent> m_scrollbar;
+            std::shared_ptr<InputFieldComponent> m_inputField;
+            std::shared_ptr<DropdownComponent> m_dropdown;
+            std::shared_ptr<ScrollViewComponent> m_scrollView;
+            std::vector<std::unique_ptr<ScriptComponent>> m_scripts;
+    };
+
+    // Los materiales EDITABLES de un objeto, en el orden que indexan los
+    // overrides: los de submalla si es un skinned que los trae, y si no el
+    // heredado de Mesh. Vacío si no hay mesh.
+    //
+    // Fuera de línea: el dynamic_cast necesita SkinnedMesh completo, mismo
+    // motivo que isSkinned().
+    std::vector<Material*> materialsOfMesh(GameObject& go);
+
+    // Escribe los overrides sobre los materiales, capturando el baseline la
+    // primera vez que pisa cada slot. Idempotente: llamarla dos veces seguidas
+    // deja lo mismo.
+    void applyMaterialOverrides(GameObject& go);
+
+    // Los índices que applyMaterialOverrides va a ignorar en silencio (el FBX
+    // se reexportó con menos submallas), en texto y para el canal que tenga el
+    // caller. Va aparte porque applyMaterialOverrides no tiene dónde escribir
+    // un aviso y no se le va a dar uno: los dos caminos que cargan mallas
+    // —Scene::nodeFromJson con su vector de warnings, y el pump asíncrono con
+    // el Log del editor— tienen canales distintos, y este helper es lo que hace
+    // que los dos digan exactamente lo mismo. Añade a `out`, no lo limpia.
+    // Sin malla no escribe nada: no hay materiales contra los que comparar.
+    void collectMaterialOverrideWarnings(GameObject& go, std::vector<std::string>& out);
+}
