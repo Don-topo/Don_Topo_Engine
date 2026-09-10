@@ -917,6 +917,16 @@ struct D3D12Renderer::Impl {
         UINT indexStart = 0;
         UINT indexCount = 0;
         UINT srvBase    = kSrvBaseColor;
+        // Por SUBMALLA y no por personaje, porque es lo que son: un material
+        // por submalla, igual que la terna de texturas de al lado. Mientras
+        // vivieron fuera de aquí eran dos constantes en el pase de dibujo
+        // (0.0 y 0.7), así que en este backend un personaje no podía ser
+        // metálico ni con el slider ni con un mapa ORM — el bug que motivó la
+        // feature de factores, vivo solo para skinned. Los defaults son los de
+        // Material (Material.h) para que una submalla que no llegue a
+        // rellenarse se vea como la malla sin tocar, no como un valor inventado.
+        float metallic  = 0.0f;
+        float roughness = 0.5f;
     };
 
     // Un personaje animado. Cada uno tiene su esqueleto, sus claves y su
@@ -3409,6 +3419,23 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
         SkinnedSubMesh sub;
         sub.indexStart = range.start;
         sub.indexCount = range.count;
+
+        // Mismo criterio que addStaticMesh y que Vulkan (SkinnedMatGfx): con
+        // mapa ORM manda el mapa y los dos factores se fuerzan a 1.0, porque el
+        // shader los MULTIPLICA por lo que lea de la textura. Se decide aquí,
+        // con el material delante, y no en el pase de dibujo, que ya no tiene
+        // de dónde sacarlo.
+        //
+        // Se rellena aunque la submalla se quede sin terna propia (haySlot
+        // false, pasado kMaxSkinnedSlots): entonces muestrea el ORM neutro
+        // global, así que el factor sigue siendo lo único que decide. Es lo
+        // mismo que hace addStaticMesh, que también los escribe antes de saber
+        // si habrá hueco.
+        const bool tieneMapaOrm =
+            chooseTextureSource(range.material->metallicRoughnessPath,
+                                range.material->embeddedMetallicRoughness) != TextureSource::None;
+        sub.metallic  = tieneMapaOrm ? 1.0f : range.material->metallic;
+        sub.roughness = tieneMapaOrm ? 1.0f : range.material->roughness;
 
         // Las ternas se reparten entre TODOS los personajes de la escena, no
         // por personaje: pasado el tope, la submalla cae a la terna global.
@@ -9008,18 +9035,23 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
             // flags.x = 0: el model sale de aquí, no del buffer de instancias,
             // que es la ruta que usa el motor para skinne
             push.transform = character.transform;
-            push.metallic  = 0.0f;
-            push.roughness = 0.7f;
             push.flags = glm::vec2(0.0f, state->ssrEnabled() ? character.ssrStrength : 0.0f);
-            commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
 
             commandList->IASetVertexBuffers(0, 1, &character.vertexBufferView);
             commandList->IASetIndexBuffer(&character.indexBufferView);
 
-            // Un draw por submalla, cada una con la terna de su material.
+            // Un draw por submalla, cada una con la terna de su material Y con
+            // sus factores. El push se escribe DENTRO del bucle por eso: antes
+            // se escribía una vez por personaje con dos constantes, así que las
+            // submallas de un mismo personaje no podían tener acabados
+            // distintos ni responder a los sliders. Es lo que ya hacía Vulkan
+            // (un push por submalla, leyendo de matGfx[sm.materialIndex]).
             for (const SkinnedSubMesh& sub : character.subMeshes) {
                 if (sub.indexCount == 0)
                     continue;
+                push.metallic  = sub.metallic;
+                push.roughness = sub.roughness;
+                commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
                 D3D12_GPU_DESCRIPTOR_HANDLE table = srvHeap->GetGPUDescriptorHandleForHeapStart();
                 table.ptr += static_cast<UINT64>(sub.srvBase) * srvSize;
                 commandList->SetGraphicsRootDescriptorTable(2, table);
