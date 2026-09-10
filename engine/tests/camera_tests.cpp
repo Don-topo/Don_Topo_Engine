@@ -13,6 +13,7 @@
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
+#include "DonTopo/Audio/AudioListenerComponent.h"
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/PropertiesPanel.h"
 #include "DonTopo/Editor/ViewportPanel.h"
@@ -654,6 +655,99 @@ static void test_corrupt_ui_string_warns(PhysicsManager& pm, AudioManager& am)
     CHECK(countWarnings(loaded, "panel de 'Panel'.sprite") == 1);
     CHECK(countWarnings(loaded, "text de 'Texto'.fontPath") == 1);
     CHECK(countWarnings(loaded, "image de 'Imagen'.atlasPath") == 1);
+}
+
+// H7 de docs/core-audit.md. El invariante "como mucho una camara por escena" lo
+// imponen fromJson (pruneExtraCameras) y cloneGameObject (el test de arriba),
+// pero insertFromJson -el camino del Undo de un Delete- no imponia NADA.
+//
+// El escenario es de uso normal, no rebuscado: borras la camara, pones otra, y
+// deshaces el borrado. Sin guarda quedan DOS, findCamera devuelve la primera en
+// preorden y Play usa esa, en silencio. Mismo patron que los ids duplicados: la
+// regla estaba en dos de los tres caminos que insertan nodos.
+static void test_insert_from_json_discards_second_camera(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* original = scene.addGameObject("CamaraVieja");
+    original->setCameraComponent(std::make_shared<CameraComponent>());
+
+    // El snapshot que guardaria DeleteGameObjectCommand, y el borrado.
+    const nlohmann::json snapshot = scene.subtreeToJson(original);
+    scene.removeGameObject(original);
+    CHECK(scene.findCamera() == nullptr);
+
+    // Entre el borrado y el undo, el usuario pone otra camara. Esta es la que
+    // esta viva cuando llega el Ctrl+Z.
+    GameObject* nueva = scene.addGameObject("CamaraNueva");
+    nueva->setCameraComponent(std::make_shared<CameraComponent>());
+
+    GameObject* reinsertado = scene.insertFromJson(snapshot, nullptr, 0, pm, am);
+    CHECK(reinsertado != nullptr);
+    if (!reinsertado) return;
+
+    // El GameObject vuelve -eso es lo que el usuario pidio al deshacer- pero
+    // sin la camara: gana la que YA estaba viva, mismo criterio que la guarda
+    // de ids de esta misma funcion y que pruneExtraCameras.
+    CHECK(!reinsertado->hasCameraComponent());
+    CHECK(nueva->hasCameraComponent());
+    CHECK(scene.findCamera() == nueva);
+
+    int camaras = 0;
+    scene.traverse([&](GameObject* n) { if (n->hasCameraComponent()) ++camaras; });
+    CHECK(camaras == 1);
+
+    // Con aviso: perder un componente al deshacer no puede ser mudo.
+    bool aviso = false;
+    for (const auto& w : scene.lastWarnings())
+        if (w.find("cámara") != std::string::npos || w.find("camara") != std::string::npos)
+            aviso = true;
+    CHECK(aviso);
+}
+
+// La otra cara, y la que evita que la guarda se pase de lista: si NO hay camara
+// viva, deshacer el borrado tiene que devolver la camara intacta. Una guarda que
+// descarte siempre pasaria el test de arriba y romperia el caso normal.
+static void test_insert_from_json_keeps_camera_when_none_alive(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* original = scene.addGameObject("Camara");
+    original->setCameraComponent(std::make_shared<CameraComponent>());
+
+    const nlohmann::json snapshot = scene.subtreeToJson(original);
+    scene.removeGameObject(original);
+    CHECK(scene.findCamera() == nullptr);
+
+    GameObject* reinsertado = scene.insertFromJson(snapshot, nullptr, 0, pm, am);
+    CHECK(reinsertado != nullptr);
+    if (!reinsertado) return;
+    CHECK(reinsertado->hasCameraComponent());
+    CHECK(scene.findCamera() == reinsertado);
+}
+
+// Mismo invariante, mismo agujero, otro componente: como mucho un AudioListener
+// por escena. Lo imponen el gate del popup Add y pruneExtraAudioListeners al
+// cargar; insertFromJson tampoco lo imponia.
+static void test_insert_from_json_discards_second_audio_listener(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* original = scene.addGameObject("OyenteViejo");
+    original->setAudioListener(std::make_shared<AudioListenerComponent>());
+
+    const nlohmann::json snapshot = scene.subtreeToJson(original);
+    scene.removeGameObject(original);
+
+    GameObject* nuevo = scene.addGameObject("OyenteNuevo");
+    nuevo->setAudioListener(std::make_shared<AudioListenerComponent>());
+
+    GameObject* reinsertado = scene.insertFromJson(snapshot, nullptr, 0, pm, am);
+    CHECK(reinsertado != nullptr);
+    if (!reinsertado) return;
+    CHECK(!reinsertado->hasAudioListener());
+    CHECK(nuevo->hasAudioListener());
+
+    int oyentes = 0;
+    scene.traverse([&](GameObject* n) { if (n->hasAudioListener()) ++oyentes; });
+    CHECK(oyentes == 1);
 }
 
 // Clonar un GameObject con cámara NO puede dar dos cámaras. Su único caller es
@@ -8057,6 +8151,9 @@ int main()
     test_corrupt_script_name_does_not_lose_scene(pm, am);
     test_corrupt_ui_string_warns(pm, am);
     test_clone_never_keeps_camera(pm, am);
+    test_insert_from_json_discards_second_camera(pm, am);
+    test_insert_from_json_keeps_camera_when_none_alive(pm, am);
+    test_insert_from_json_discards_second_audio_listener(pm, am);
     test_clone_strips_camera_from_descendant(pm, am);
     test_clone_gets_fresh_id(pm, am);
     test_clone_subtree_gets_fresh_ids(pm, am);

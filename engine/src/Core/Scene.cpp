@@ -3365,6 +3365,12 @@ namespace DonTopo
         std::unordered_set<uint64_t> idsVivos;
         m_root.traverse([&](GameObject* n) { idsVivos.insert(n->id); });
 
+        // Los dos componentes de los que la escena admite UNO, mirados ANTES de
+        // insertar por el mismo motivo que idsVivos: después ya no se distingue
+        // el que estaba vivo del que acaba de llegar en el snapshot.
+        bool yaHayCamara  = findCamera() != nullptr;
+        bool yaHayOyente  = findAudioListener() != nullptr;
+
         GameObject* node = target->addChild(j.value("name", std::string()));
         // Igual que fromJson y cloneGameObject: los avisos son de ESTA operación.
         // Sin este clear, cada undo de un Delete apilaba los suyos sobre los de
@@ -3423,6 +3429,49 @@ namespace DonTopo
                                       std::to_string(n->id) + " para no chocar con el objeto vivo");
             }
             idsVivos.insert(n->id);
+
+            // "Como mucho una cámara (y un AudioListener) por escena" lo imponían
+            // fromJson (pruneExtraCameras) y cloneGameObject, pero NO este
+            // camino, que es el Undo de un Delete. Escenario de uso normal:
+            // borras la cámara, pones otra, deshaces el borrado — y la escena se
+            // quedaba con dos. findCamera devuelve la primera en preorden, así
+            // que Play podía acabar mirando por la que el usuario creía haber
+            // sustituido, sin una sola línea que lo dijera.
+            //
+            // Gana la que YA estaba viva, mismo criterio que la guarda de ids de
+            // aquí arriba y que pruneExtraCameras. El GameObject vuelve entero
+            // —que es lo que el usuario pidió al deshacer—, solo se queda sin el
+            // componente, y con aviso: perder algo al deshacer no puede ser mudo.
+            //
+            // Las banderas se ACTUALIZAN al aceptar uno, así que un snapshot que
+            // traiga dos cámaras dentro de sí mismo también queda con una sola
+            // (mismo caso que dos ids iguales dentro del propio subárbol).
+            if (n->hasCameraComponent())
+            {
+                if (yaHayCamara)
+                {
+                    n->setCameraComponent(nullptr);
+                    m_warnings.push_back("nodo '" + n->name +
+                                          "': se descarta su cámara (ya hay una cámara en la escena)");
+                }
+                else
+                {
+                    yaHayCamara = true;
+                }
+            }
+            if (n->hasAudioListener())
+            {
+                if (yaHayOyente)
+                {
+                    n->setAudioListener(nullptr);
+                    m_warnings.push_back("nodo '" + n->name +
+                                          "': se descarta su Audio Listener (ya hay uno en la escena)");
+                }
+                else
+                {
+                    yaHayOyente = true;
+                }
+            }
         });
 
         // addChild() insertó al final; reposicionar a index si no es ya ahí.
