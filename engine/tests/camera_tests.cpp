@@ -18,6 +18,7 @@
 #include "DonTopo/Audio/ReverbZoneComponent.h"
 #include "DonTopo/Physics/Rigidbody.h"
 #include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Core/LightComponent.h"
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/PropertiesPanel.h"
 #include "DonTopo/Editor/ViewportPanel.h"
@@ -719,6 +720,66 @@ static void test_scene_shutdown_releases_every_component(PhysicsManager& pm, Aud
     CHECK(wReverb.expired());
     CHECK(wListener.expired());
     CHECK(wAnimHijo.expired());
+}
+
+// H2 de docs/core-audit.md. Quedan ~52 `.value("clave", default)` en los bloques
+// de componente, y `.value` LANZA json::type_error si la clave existe con el
+// tipo que no toca -comprobado aparte: string, bool, int y float lanzan; los que
+// tienen un `json` de default NO, porque cualquier tipo convierte a json, asi
+// que esa mitad de la fila no era cierta-.
+//
+// Lo que costaba: la excepcion subia hasta el catch de fromJson y se perdia la
+// escena ENTERA, sin decir de que nodo venia. Un `.scene` editado a mano, o
+// escrito por una version distinta, se volvia incargable por un campo.
+static void test_corrupt_field_costs_its_node_not_the_scene(PhysicsManager& pm, AudioManager& am)
+{
+    Scene escena("Test");
+    GameObject* bueno = escena.addGameObject("Bueno");
+    bueno->setCameraComponent(std::make_shared<CameraComponent>());
+    GameObject* malo  = escena.addGameObject("Malo");
+    malo->setLight(std::make_shared<LightComponent>());
+    GameObject* otro  = escena.addGameObject("Otro");
+
+    nlohmann::json j = escena.toJson();
+    auto& hijos = j["root"]["children"];
+    CHECK(hijos.size() == 3);
+    if (hijos.size() != 3) return;
+
+    // El campo corrupto tiene que ser uno de los ~52 CRUDOS, no uno ya
+    // convertido a readFloat/readBool -esos no lanzan, defaultean-. `light.type`
+    // lo es: `l.value("type", std::string("point"))`, y aqui llega un numero.
+    // Antes de la guarda, esto tumbaba la carga entera y fromJson devolvia false.
+    hijos[1]["light"]["type"] = 42;
+
+    Scene cargada("Vacia");
+    CHECK(cargada.fromJson(j, pm, am));   // <- lo importante: la escena CARGA
+
+    // Los tres nodos siguen ahi, el corrupto incluido: pierde sus componentes,
+    // no su sitio en el arbol.
+    int nodos = 0;
+    GameObject* maloCargado = nullptr;
+    GameObject* buenoCargado = nullptr;
+    cargada.traverse([&](GameObject* n) {
+        ++nodos;
+        if (n->name == "Malo")  maloCargado  = n;
+        if (n->name == "Bueno") buenoCargado = n;
+    });
+    CHECK(nodos == 4);   // raiz + 3
+    CHECK(maloCargado != nullptr);
+    CHECK(buenoCargado != nullptr);
+
+    // El vecino conserva SU componente: el dano no se propaga.
+    if (buenoCargado) CHECK(buenoCargado->hasCameraComponent());
+    // Y el corrupto se queda sin el suyo, que es el precio.
+    if (maloCargado)  CHECK(!maloCargado->hasLight());
+
+    // Con aviso que NOMBRA el nodo: sin eso hay que adivinar cual de los 3 era.
+    bool avisoConNombre = false;
+    for (const auto& w : cargada.lastWarnings())
+        if (w.find("Malo") != std::string::npos) avisoConNombre = true;
+    CHECK(avisoConNombre);
+
+    (void)otro;
 }
 
 // H17/P11 de docs/core-audit.md. Los cuatro buscadores de Scene (findById,
@@ -8330,6 +8391,7 @@ int main()
     test_window_without_init_is_inert();
     test_traverse_does_not_copy_stateful_functor();
     test_find_first_stops_at_the_first_hit();
+    test_corrupt_field_costs_its_node_not_the_scene(pm, am);
     test_insert_from_json_discards_second_camera(pm, am);
     test_insert_from_json_keeps_camera_when_none_alive(pm, am);
     test_insert_from_json_discards_second_audio_listener(pm, am);

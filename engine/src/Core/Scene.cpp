@@ -2917,7 +2917,36 @@ namespace
             GameObject* child = node->addChild(
                 readString(childJson, "name", std::string(), warnings,
                             "nodo '" + node->name + "'.children", /*required=*/true));
-            nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, hasBonesCache, assetRoot, loader, preloaded, carryOverrideBaseline);
+            // El nodo hijo se carga DENTRO de un try. Motivo: los ~52 `.value(...)`
+            // que quedan en los bloques de componente lanzan `json::type_error`
+            // si la clave EXISTE con el tipo que no toca (comprobado: string,
+            // bool, int y float lanzan; los `.value` cuyo default es un `json`
+            // NO —cualquier tipo convierte a json—, que es la mitad de la fila
+            // H2 que resultó no ser cierta). Sin esta guarda, un solo campo
+            // corrupto subía hasta el catch de fromJson y se perdía la escena
+            // ENTERA, sin decir de qué nodo venía.
+            //
+            // Cuesta el subárbol de ESE nodo, no la escena: el hijo se queda
+            // creado y con su nombre —ya se añadió arriba— y el recorrido sigue
+            // con sus hermanos. Y se nombra, que es lo que faltaba: el mensaje
+            // de nlohmann dice el tipo esperado y el encontrado, y este aviso
+            // pone el nodo.
+            //
+            // Se captura aquí y no dentro de cada bloque de componente porque
+            // aquí cubre los 32 que hay Y los que se añadan: envolver cada uno
+            // sería la lista escrita a mano de siempre.
+            try
+            {
+                nodeFromJson(childJson, child, node->worldTransform, physics, audio, warnings, hasBonesCache, assetRoot, loader, preloaded, carryOverrideBaseline);
+            }
+            catch (const nlohmann::json::exception& e)
+            {
+                if (warnings)
+                    warnings->push_back("nodo '" + child->name + "': un campo trae un tipo que no "
+                                         "toca (" + std::string(e.what()) + "). El nodo se queda sin "
+                                         "sus componentes y sin sus hijos; el resto de la escena "
+                                         "carga igual");
+            }
         }
     }
 }
