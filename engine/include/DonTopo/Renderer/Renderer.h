@@ -274,6 +274,12 @@ namespace DonTopo {
                 if (index >= 0 && index < (int)m_skinnedObjects.size())
                     m_skinnedObjects[index].ssrStrength = strength;
             }
+            // Ver EditorRenderer::setObjectMaterialFactors. Pasa por
+            // setEffectiveFactors, que es donde vive la regla de "con mapa ORM
+            // manda el mapa": sin eso, arrastrar el slider sobre un objeto con
+            // mapa le metería el valor del slider justo donde el registro pone
+            // 1.0. Fuera de línea porque necesita mirar la entrada compartida.
+            void setObjectMaterialFactors(size_t objectIndex, float metallic, float roughness);
             // Visibilidad del mesh (false = no se dibuja). Se sincroniza por frame
             // junto al transform, igual que el SSR, así que Play Mode, Undo y la
             // carga de escena no necesitan camino propio. La consumen los pases de
@@ -686,6 +692,12 @@ namespace DonTopo {
             bool buildRenderObject(const Mesh& mesh, RenderObject& obj,
                                    TransferBatch* batch = nullptr,
                                    const std::vector<DecodedImage>* decoded = nullptr);
+            // Escribe los factores EFECTIVOS del objeto aplicando la regla de
+            // "con mapa ORM manda el mapa". Los dos caminos que fijan factores
+            // —registrar el objeto y el setter del editor— pasan por aquí para
+            // que no puedan discrepar.
+            static void setEffectiveFactors(RenderObject& obj, const SharedGpuMesh& gpu,
+                                            float metallic, float roughness);
             // Rellena una entrada recién creada. Es el cuerpo que antes estaba
             // en buildRenderObject, sin la parte de resolución de la clave.
             void createSharedGpuMesh(const Mesh& mesh, SharedGpuMesh& gpu,

@@ -41,8 +41,20 @@ namespace DonTopo
         VkImageView     ormView       = VK_NULL_HANDLE;
         VkSampler       ormSampler    = VK_NULL_HANDLE;
 
-        float           metallic      = 0.0f;
-        float           roughness     = 0.5f;
+        // Aquí vivían metallic y roughness. Se fueron al RenderObject
+        // (RenderObjects.h) porque son POR OBJETO: mientras estuvieron en esta
+        // entrada tenían que entrar en la clave de dedup —dos objetos con
+        // distinto acabado no podían compartirla—, y mover un slider obligaba a
+        // re-clavear el objeto y rehacer sus recursos de GPU, con waitForGpu y
+        // resubida de tres texturas. Por eso los sliders solo aplicaban al
+        // soltar.
+        //
+        // Lo que sí es de la entrada es esto: si el material trae MAPA ORM. La
+        // textura es compartida y su ruta sigue en la clave, así que la
+        // respuesta vale para todos los objetos que comparten la entrada. Es lo
+        // que hace que el setter por objeto no pueda pisar un mapa con un
+        // slider: con mapa, los dos factores van a 1.0 y manda la textura.
+        bool            hasOrmMap     = false;
 
         // Un solo descriptor set por entrada: sus cinco bindings (UBO, difusa,
         // normal, shadow, ORM) son idénticos entre objetos que comparten

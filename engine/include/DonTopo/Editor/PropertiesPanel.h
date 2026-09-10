@@ -118,6 +118,10 @@ private:
     // Mesh, sin Add-gate propio: no es un componente nuevo, es parte del que ya
     // está puesto.
     void drawTexturesSection(EditorContext& ctx);
+    // Empuje en vivo de los factores mientras se arrastra un slider: va a la
+    // GPU y NO al Material ni al stack de undo (ver el comentario del .cpp).
+    void previewMaterialFactors(EditorContext& ctx, uint64_t ownerId,
+                                float metallic, float roughness);
     // path vacío = Clear. Un solo sitio del que salen las seis llamadas
     // (tres slots x drop y browse) y el único que apila el comando. ownerId en
     // vez de leer ctx.selected: el resultado del diálogo de Browse llega varios

@@ -1679,12 +1679,13 @@ namespace DonTopo {
                 m_pipelineLayout, 0, 1, &gpu->descriptorSets[m_currentFrame], 0, nullptr);
             PushData push;
             // transform se queda en la identidad: con useInstancing = 1 el
-            // vertex shader coge el model matrix del SSBO. metallic y
-            // roughness siguen aquí porque son por ENTRADA compartida (no
-            // por instancia): son constantes dentro del grupo y pbr.frag ya
-            // los lee de este mismo bloque.
-            push.metallic  = gpu->metallic;
-            push.roughness = gpu->roughness;
+            // vertex shader coge el model matrix del SSBO. metallic y roughness
+            // salen del GRUPO y ya no de la entrada compartida: desde que son
+            // por objeto, "misma entrada" no implica "mismos factores" — quien
+            // garantiza que el valor vale para todas las instancias del draw es
+            // que los dos entran en la clave de agrupado (InstanceBatching.h).
+            push.metallic  = batch.metallic;
+            push.roughness = batch.roughness;
             push.flags.x   = 1.0f;
             // pbr.frag la vuelca al alfa del HDR, que es la máscara por píxel
             // que lee ssr.comp.
@@ -2842,7 +2843,8 @@ namespace DonTopo {
         // geometría que no se dibuja y las sombras flotan sin objeto. Ahora la
         // decisión está en Visibility::gatherCandidates, con su test.
         Visibility::gatherCandidates(m_objects, m_sharedMeshes, m_lastCompletedTicket,
-                                     frustum, colorPass && m_ssrEnabled, m_batchCandidates);
+                                     frustum, colorPass && m_ssrEnabled, colorPass,
+                                     m_batchCandidates);
 
         // Tramo propio dentro del SSBO del frame: los pases comparten buffer y
         // el cursor marca dónde empieza el de este, que es la base de sus
@@ -3205,7 +3207,41 @@ namespace DonTopo {
             makeSharedMeshKey(mesh),
             [&](SharedGpuMesh& gpu) { createSharedGpuMesh(mesh, gpu, batch, decoded); },
             &created);
+
+        // Los factores del OBJETO, aquí y no en la entrada compartida: es lo que
+        // permite que dos objetos con la misma malla y distinto acabado
+        // compartan VRAM. Se leen de la entrada —no del material— si trae mapa
+        // ORM, que es el único que puede contestar eso para una entrada
+        // reutilizada (created == false, cuando createSharedGpuMesh ni corre).
+        if (const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex))
+            setEffectiveFactors(obj, *gpu, mesh.material.metallic, mesh.material.roughness);
         return created;
+    }
+
+    void Renderer::setObjectMaterialFactors(size_t objectIndex, float metallic, float roughness)
+    {
+        if (objectIndex >= m_objects.size()) return;
+        RenderObject& obj = m_objects[objectIndex];
+        // Sin entrada compartida no hay a quién preguntarle por el mapa ORM, y
+        // tampoco hay nada que dibujar: el objeto está sin construir o ya
+        // liberado. Se sale sin escribir, que es lo mismo que hacen los demás
+        // setters ante un índice que no describe nada.
+        const SharedGpuMesh* gpu = m_sharedMeshes.get(obj.sharedIndex);
+        if (!gpu) return;
+        setEffectiveFactors(obj, *gpu, metallic, roughness);
+    }
+
+    void Renderer::setEffectiveFactors(RenderObject& obj, const SharedGpuMesh& gpu,
+                                       float metallic, float roughness)
+    {
+        // La regla de "con mapa ORM manda el mapa", en UN sitio: la comparten el
+        // registro del objeto y setObjectMaterialFactors, que es por donde
+        // entran los sliders. Escrita dos veces, arrastrar un slider sobre un
+        // objeto con mapa ORM le habría metido el valor del slider donde el
+        // registro pone 1.0, y el objeto habría cambiado de aspecto según qué
+        // camino lo tocó el último.
+        obj.metallic  = gpu.hasOrmMap ? 1.0f : metallic;
+        obj.roughness = gpu.hasOrmMap ? 1.0f : roughness;
     }
 
     void Renderer::createSharedGpuMesh(const Mesh& mesh, SharedGpuMesh& obj,
@@ -3267,8 +3303,7 @@ namespace DonTopo {
             m_res.createNormalMapImageFromPixels(orm->pixels.data(),
                                                  (uint32_t)orm->w, (uint32_t)orm->h,
                                                  obj.ormImage, obj.ormMem, batch);
-            obj.metallic  = 1.0f;
-            obj.roughness = 1.0f;
+            obj.hasOrmMap = true;
         }
         else if (!mesh.material.metallicRoughnessPath.empty()
                  || !mesh.material.embeddedMetallicRoughness.empty())
@@ -3276,8 +3311,7 @@ namespace DonTopo {
             m_res.createNormalMapImage(mesh.material.metallicRoughnessPath,
                                        mesh.material.embeddedMetallicRoughness,
                                        obj.ormImage, obj.ormMem, batch);
-            obj.metallic  = 1.0f;
-            obj.roughness = 1.0f;
+            obj.hasOrmMap = true;
         }
         else
         {
@@ -3285,8 +3319,7 @@ namespace DonTopo {
             // y esa imagen es identica en todas las mallas. createSolidColorImage
             // se queda para quien SI quiere la suya (UiSpriteBatch la destruye).
             m_res.sharedWhiteOrm(obj.ormImage, obj.ormMem);
-            obj.metallic  = mesh.material.metallic;
-            obj.roughness = mesh.material.roughness;
+            obj.hasOrmMap = false;
         }
         m_res.createTextureImageView(obj.ormImage, obj.ormView, VK_FORMAT_R8G8B8A8_UNORM);
         obj.ormSampler = m_res.sharedMaterialSampler();
@@ -4427,14 +4460,12 @@ namespace DonTopo {
             m_res.createNormalMapImage(mesh.material.metallicRoughnessPath,
                                        mesh.material.embeddedMetallicRoughness,
                                        gpu.ormImage, gpu.ormMem);
-            gpu.metallic  = 1.0f;
-            gpu.roughness = 1.0f;
+            gpu.hasOrmMap = true;
         }
         else
         {
             m_res.sharedWhiteOrm(gpu.ormImage, gpu.ormMem);
-            gpu.metallic  = mesh.material.metallic;
-            gpu.roughness = mesh.material.roughness;
+            gpu.hasOrmMap = false;
         }
         m_res.createTextureImageView(gpu.ormImage, gpu.ormView, VK_FORMAT_R8G8B8A8_UNORM);
         gpu.ormSampler = m_res.sharedMaterialSampler();

@@ -20,12 +20,20 @@ namespace DonTopo
             int      sharedIndex   = -1;
             uint32_t firstInstance = 0;
             uint32_t instanceCount = 0;
-            // Fuerza de SSR común al grupo. Entra en la CLAVE de agrupado junto
-            // a sharedIndex: metallic y roughness ya viajaban por entrada
-            // compartida, así que dos objetos con la misma malla y distinta
-            // fuerza de SSR no pueden compartir push constants. Solo se parten
-            // en dos draws cuando los valores difieren.
+            // Los tres valores POR GRUPO que viajan por push constant, y por eso
+            // los tres entran en la CLAVE de agrupado junto a sharedIndex: dos
+            // objetos que no coincidan en ellos no pueden compartir draw.
+            //
+            // metallic y roughness llegaron aquí al sacarlos de la clave de
+            // dedup (makeSharedMeshKey). Mientras vivieron ahí, "misma entrada
+            // compartida" ya implicaba "mismos factores" y esta clave no tenía
+            // que mirarlos —es la premisa que este comentario documentaba antes,
+            // y que ha dejado de ser cierta—. A cambio, dos cubos idénticos con
+            // distinto metallic ahora COMPARTEN la malla en VRAM (antes eran dos
+            // copias) y solo se parten en dos draws, que es mucho más barato.
             float    ssrStrength   = 0.0f;
+            float    metallic      = 0.0f;
+            float    roughness     = 0.5f;
         };
 
         // Un objeto ya evaluado por el pase que lo va a dibujar. Las guardas
@@ -37,10 +45,14 @@ namespace DonTopo
             int              sharedIndex = -1;
             bool             visible     = false;
             const glm::mat4* transform   = nullptr;
-            // Los passes que no pintan color (sombras, depth pre-pass) lo dejan
-            // a 0: con un único valor el agrupado sale idéntico al de antes de
-            // la feature.
+            // Los passes que no pintan color (sombras, depth pre-pass) dejan los
+            // tres en su valor por defecto: con un único valor el agrupado sale
+            // idéntico al de antes de la feature, que es lo que se quiere ahí —
+            // esos pases no leen material, así que partir grupos por factores
+            // solo les costaría draws.
             float            ssr         = 0.0f;
+            float            metallic    = 0.0f;
+            float            roughness   = 0.5f;
         };
 
         // Agrupa por sharedIndex los candidatos VISIBLES y deja sus transforms

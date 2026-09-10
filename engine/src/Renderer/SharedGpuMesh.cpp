@@ -47,12 +47,21 @@ namespace DonTopo
 
         // Los discriminantes exactos van en claro delante del hash: para que dos
         // meshes DISTINTOS colisionen no basta con una colisión de FNV, tienen
-        // que coincidir además en tamaños, paths y factores PBR. Compartir dos
-        // mallas distintas sería corrupción visible, así que el coste de esta
-        // cadena de más está justificado.
+        // que coincidir además en tamaños y paths. Compartir dos mallas
+        // distintas sería corrupción visible, así que el coste de esta cadena de
+        // más está justificado.
+        //
+        // metallic y roughness ESTABAN aquí y se fueron a propósito: son por
+        // objeto (RenderObject) y viajan por push constant, así que no dicen
+        // nada sobre los recursos de GPU que esta clave nombra. Mientras
+        // estuvieron, cambiar un número obligaba a re-clavear el objeto y
+        // rehacer sus recursos —waitForGpu y tres texturas de vuelta—, que es
+        // exactamente por lo que los sliders no podían aplicar en vivo; y de
+        // paso dos cubos idénticos con distinto metallic no compartían VRAM.
+        // Lo que SÍ sigue aquí es la RUTA del mapa ORM, que nombra una textura
+        // de verdad.
         char tail[64];
-        std::snprintf(tail, sizeof(tail), "|%llu|%a|%a",
-                      (unsigned long long)h, (double)m.metallic, (double)m.roughness);
+        std::snprintf(tail, sizeof(tail), "|%llu", (unsigned long long)h);
 
         std::string key;
         key.reserve(m.texturePath.size() + m.normalMapPath.size()

@@ -550,8 +550,12 @@ void ReflectionProbePass::bake(const Context& ctx, GpuProbe& probe)
             // la ruta que ya usan los skinned. Asi el bake no toca el SSBO
             // del frame ni su cursor.
             push.transform = obj.transform;
-            push.metallic  = gpu->metallic;
-            push.roughness = gpu->roughness;
+            // Del OBJETO, como el transform de la línea de arriba: los factores
+            // dejaron de vivir en la entrada compartida. Aquí no hay agrupado
+            // que consultar —el bake dibuja objeto a objeto—, así que se leen
+            // directamente y sin intermediario.
+            push.metallic  = obj.metallic;
+            push.roughness = obj.roughness;
             push.flags.x   = 0.0f;
             // flags.y = 0: el alfa del HDR es la mascara de SSR y aqui no hay
             // pass de SSR que la lea.

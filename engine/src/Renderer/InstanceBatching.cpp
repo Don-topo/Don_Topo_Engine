@@ -4,6 +4,28 @@
 
 namespace DonTopo::Batching
 {
+    namespace
+    {
+        // La clave de agrupado, en UN sitio. Las dos pasadas de abajo recorren
+        // la misma cadena buscando el mismo grupo, y mientras la comparación
+        // estuvo escrita dos veces bastaba con tocar una para que la pasada 2
+        // metiera transforms en el grupo equivocado — un objeto dibujándose con
+        // el material de otro, sin error en ningún lado.
+        //
+        // sharedIndex NO entra: la cadena ya sale de slotOf[sharedIndex], así
+        // que todos sus eslabones lo comparten por construcción.
+        //
+        // Comparación exacta de floats a propósito: no se busca "parecido" sino
+        // "el mismo valor", que es lo que garantiza que el push constant del
+        // grupo vale para todas sus instancias. Dos valores que difieran en el
+        // último bit tienen que salir en draws distintos.
+        bool mismaClave(const InstanceBatch& b, const BatchCandidate& c)
+        {
+            return b.ssrStrength == c.ssr && b.metallic == c.metallic &&
+                   b.roughness == c.roughness;
+        }
+    }
+
     uint32_t buildInstanceBatches(const BatchCandidate* candidates,
                                   size_t                count,
                                   glm::mat4*            outTransforms,
@@ -42,12 +64,12 @@ namespace DonTopo::Batching
             int  slot  = -1;
             for (int s = first; s >= 0; s = nextOf[(size_t)s])
             {
-                if (outBatches[(size_t)s].ssrStrength == c.ssr) { slot = s; break; }
+                if (mismaClave(outBatches[(size_t)s], c)) { slot = s; break; }
             }
             if (slot < 0)
             {
                 slot = (int)outBatches.size();
-                outBatches.push_back({ c.sharedIndex, 0, 0, c.ssr });
+                outBatches.push_back({ c.sharedIndex, 0, 0, c.ssr, c.metallic, c.roughness });
                 nextOf.push_back(first);
                 first = slot;
             }
@@ -80,7 +102,7 @@ namespace DonTopo::Batching
             int found = -1;
             for (int s = slotOf[(size_t)c.sharedIndex]; s >= 0; s = nextOf[(size_t)s])
             {
-                if (outBatches[(size_t)s].ssrStrength == c.ssr) { found = s; break; }
+                if (mismaClave(outBatches[(size_t)s], c)) { found = s; break; }
             }
             if (found < 0) continue;
             const size_t slot = (size_t)found;

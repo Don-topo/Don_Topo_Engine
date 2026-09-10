@@ -141,8 +141,9 @@ static void test_objetos_identicos_comparten_handles()
     CHECK(cache.refCount(ia) == 3);
 }
 
-// El otro modo de fallo: compartir de más. Geometría distinta, material
-// distinto o factores PBR distintos tienen que dar entradas separadas.
+// El otro modo de fallo: compartir de más. Geometría distinta o material
+// distinto tienen que dar entradas separadas. Los factores PBR ya NO: ver
+// test_factores_distintos_si_comparten justo debajo.
 static void test_mallas_distintas_no_comparten()
 {
     FakeGpu gpu;
@@ -153,8 +154,8 @@ static void test_mallas_distintas_no_comparten()
     Mesh otraGeometria = makeMesh("B", /*x=*/5.0f);
     Mesh otraTextura   = makeMesh("C");
     otraTextura.material.texturePath = "assets/wood.png";
-    Mesh otroPbr       = makeMesh("D");
-    otroPbr.material.roughness = 0.1f;
+    Mesh otroOrm       = makeMesh("D");
+    otroOrm.material.metallicRoughnessPath = "assets/rusty_orm.png";
     Mesh menosIndices  = makeMesh("E");
     menosIndices.indices.pop_back();
     Mesh conEmbebida   = makeMesh("F");
@@ -163,7 +164,7 @@ static void test_mallas_distintas_no_comparten()
     const int i0 = cache.acquire(makeSharedMeshKey(base),          gpu.creator());
     const int i1 = cache.acquire(makeSharedMeshKey(otraGeometria), gpu.creator());
     const int i2 = cache.acquire(makeSharedMeshKey(otraTextura),   gpu.creator());
-    const int i3 = cache.acquire(makeSharedMeshKey(otroPbr),       gpu.creator());
+    const int i3 = cache.acquire(makeSharedMeshKey(otroOrm),       gpu.creator());
     const int i4 = cache.acquire(makeSharedMeshKey(menosIndices),  gpu.creator());
     const int i5 = cache.acquire(makeSharedMeshKey(conEmbebida),   gpu.creator());
 
@@ -182,6 +183,36 @@ static void test_mallas_distintas_no_comparten()
             CHECK(ga->vertexBuffer != gb->vertexBuffer);
             CHECK(ga->textureImage != gb->textureImage);
         }
+}
+
+// El reverso, y la razón de ser del arrastre en vivo: dos mallas iguales que
+// solo difieren en los factores PBR ahora COMPARTEN entrada. Mientras los
+// factores estuvieron en la clave, esto eran dos copias de la misma geometría y
+// las mismas texturas en VRAM, y mover un slider obligaba a re-clavear el objeto
+// —rehaciendo sus recursos— en vez de escribir dos floats.
+//
+// Lo que NO puede pasar es que se cuele el mapa ORM: su ruta nombra una textura
+// de verdad y sigue partiendo la entrada (lo cubre el test de arriba, con
+// otroOrm).
+static void test_factores_distintos_si_comparten()
+{
+    FakeGpu gpu;
+    SharedGpuMeshCache cache;
+
+    Mesh mate = makeMesh("Cube");
+    mate.material.metallic  = 0.0f;
+    mate.material.roughness = 0.9f;
+
+    Mesh metalico = makeMesh("Cube (1)");
+    metalico.material.metallic  = 1.0f;
+    metalico.material.roughness = 0.1f;
+
+    const int i0 = cache.acquire(makeSharedMeshKey(mate),     gpu.creator());
+    const int i1 = cache.acquire(makeSharedMeshKey(metalico), gpu.creator());
+
+    CHECK(i0 == i1);
+    CHECK(gpu.creations == 1);
+    CHECK(cache.refCount(i0) == 2);
 }
 
 // Borrar uno de N objetos idénticos NO puede destruir nada: los N-1 que quedan
@@ -431,6 +462,7 @@ int main()
 {
     test_objetos_identicos_comparten_handles();
     test_mallas_distintas_no_comparten();
+    test_factores_distintos_si_comparten();
     test_borrar_uno_deja_vivos_los_demas();
     test_reutilizar_slot_no_pisa_el_snapshot();
     test_destroy_all_libera_cada_entrada_una_vez();

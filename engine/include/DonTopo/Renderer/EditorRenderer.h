@@ -158,6 +158,22 @@ namespace DonTopo
             virtual void setObjectSsr(size_t objectIndex, float strength) = 0;
             virtual void setSkinnedSsr(int index, float strength)         = 0;
 
+            // Factores PBR del objeto, sin subir ni rehacer NADA: son dos floats
+            // por objeto que viajan por push constant, igual que la fuerza de
+            // SSR de arriba. Ese es todo el motivo de que exista — el camino
+            // anterior (rebuildStaticMesh) hacía waitForGpu y resubía tres
+            // texturas, así que un slider solo podía aplicar al soltar; por aquí
+            // se puede arrastrar en vivo.
+            //
+            // Si el material del objeto trae MAPA ORM, el backend ignora estos
+            // valores y deja los dos en 1.0: manda la textura, que es la misma
+            // regla que ya aplican addStaticMesh y Vulkan al registrar. Llamar
+            // aquí con un mapa puesto no es un error, simplemente no hace nada.
+            //
+            // Índice fuera de rango: no-op, como los setters de arriba.
+            virtual void setObjectMaterialFactors(size_t objectIndex, float metallic,
+                                                  float roughness) = 0;
+
             // Avanza el tiempo de animación de un personaje, o fija el que ya
             // calculó un Animator en CPU.
             virtual void updateAnimation(int index, float deltaTime)                    = 0;

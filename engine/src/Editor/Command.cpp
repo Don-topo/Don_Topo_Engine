@@ -755,14 +755,23 @@ void MaterialFactorCommand::apply(float value)
 
     if (!m_renderer) return;
 
-    // makeSharedMeshKey mete los factores PBR en la clave de dedup del mesh
-    // estático (MeshKey.h): sin este rebuild, el objeto se queda dibujando
-    // con los recursos de GPU keyados por el factor VIEJO aunque el Material
-    // en CPU ya lleve el nuevo.
+    // El estático ya NO se reconstruye: los factores salieron de la clave de
+    // dedup (makeSharedMeshKey), así que son dos floats por objeto y basta con
+    // escribirlos. Antes hacía falta un rebuildStaticMesh entero —con
+    // waitForGpu y tres texturas de vuelta— solo porque cambiar un número
+    // cambiaba la clave del objeto.
+    //
+    // El SKINNED sigue con su rebuild: sus factores viven por SUBMALLA (Vulkan
+    // en SkinnedMatGfx, D3D12 en SkinnedSubMesh) y no hay setter por submalla,
+    // que sería otro método público más. Es el camino caro, pero un personaje
+    // tiene un puñado de submallas y esto solo corre al SOLTAR el slider o en un
+    // undo, nunca por frame de arrastre.
     if (SkinnedMesh* sm = go->getSkinnedMesh(); sm && go->skinnedRenderIndex >= 0)
         m_renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *sm);
     else if (go->staticRenderIndex >= 0)
-        m_renderer->rebuildStaticMesh(go->staticRenderIndex, *go->getMesh());
+        m_renderer->setObjectMaterialFactors(static_cast<size_t>(go->staticRenderIndex),
+                                             mats[(size_t)m_materialIndex]->metallic,
+                                             mats[(size_t)m_materialIndex]->roughness);
 }
 
 } // namespace DonTopo

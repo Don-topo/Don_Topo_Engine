@@ -62,11 +62,18 @@ namespace DonTopo
         // quieren los pases que no pintan color (sombras, profundidad): el SSR
         // entra en la clave del agrupado, así que con un único valor salen
         // menos draws y el mapa resultante es idéntico.
+        // colorPass gobierna los factores PBR y NO se puede fundir con
+        // ssrEnabled, por mucho que el llamante pase `colorPass && ssrEnabled`
+        // en el otro: ssrEnabled es el interruptor GLOBAL de SSR, así que
+        // apagarlo dejaría los factores a su valor por defecto en el pase que
+        // sí pinta color — todos los objetos con metallic 0 y roughness 0.5, la
+        // escena entera mate, por tocar un ajuste que no tiene nada que ver.
         inline void gatherCandidates(const std::vector<RenderObject>& objects,
                                      const SharedGpuMeshCache& meshes,
                                      uint64_t lastCompletedTicket,
                                      const Culling::Frustum& frustum,
                                      bool ssrEnabled,
+                                     bool colorPass,
                                      std::vector<Batching::BatchCandidate>& out)
         {
             out.clear();
@@ -76,7 +83,14 @@ namespace DonTopo
                 const SharedGpuMesh* gpu = meshes.get(obj.sharedIndex);
                 const bool visible = objectVisible(obj, gpu, lastCompletedTicket, frustum);
                 const float ssr    = ssrEnabled ? obj.ssrStrength : 0.0f;
-                out.push_back({ obj.sharedIndex, visible, &obj.transform, ssr });
+                // Los defaults de BatchCandidate y no los del objeto: es lo que
+                // colapsa los grupos en sombras y profundidad, donde el material
+                // no se lee.
+                const Batching::BatchCandidate neutro{};
+                const float metallic  = colorPass ? obj.metallic  : neutro.metallic;
+                const float roughness = colorPass ? obj.roughness : neutro.roughness;
+                out.push_back({ obj.sharedIndex, visible, &obj.transform, ssr,
+                                metallic, roughness });
             }
         }
     }

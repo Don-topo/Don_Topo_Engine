@@ -150,7 +150,8 @@ static void test_gather()
     // dibujaría también los candidatos del pase anterior.
     out.push_back({ 99, true, nullptr, 0.0f });
 
-    Visibility::gatherCandidates(e.objects, e.meshes, 0, cam, /*ssrEnabled*/ true, out);
+    Visibility::gatherCandidates(e.objects, e.meshes, 0, cam, /*ssrEnabled*/ true,
+                                 /*colorPass*/ true, out);
 
     // Los invisibles TAMBIÉN entran, con visible = false: el agrupado los
     // salta, pero el panel Performance los cuenta como culleados. Devolver solo
@@ -171,7 +172,8 @@ static void test_gather()
     // Los pases que no pintan color lo dejan a 0 aunque el objeto tenga fuerza:
     // el SSR entra en la clave del agrupado, y con un único valor salen menos
     // draws y el mapa resultante es idéntico.
-    Visibility::gatherCandidates(e.objects, e.meshes, 0, cam, /*ssrEnabled*/ false, out);
+    Visibility::gatherCandidates(e.objects, e.meshes, 0, cam, /*ssrEnabled*/ false,
+                                 /*colorPass*/ true, out);
     CHECK(out.size() == 2);
     CHECK(out[0].ssr == 0.0f);
     CHECK(out[1].ssr == 0.0f);
@@ -180,11 +182,51 @@ static void test_gather()
     CHECK(!out[1].visible);
 }
 
+// Los factores PBR viajan por candidato desde que salieron de la entrada
+// compartida, y los gobierna colorPass, NO ssrEnabled. Son dos flags separados
+// a proposito: fundirlos dejaria la escena entera mate -todos los objetos con
+// los factores por defecto- por apagar el SSR, que no tiene nada que ver.
+static void test_gather_factores()
+{
+    const Culling::Frustum cam = camaraEnOrigen();
+
+    Escena e;
+    e.anade("a", en(0.0f, 0.0f, -50.0f));
+    e.anade("b", en(0.0f, 0.0f, -60.0f));
+    e.objects[0].metallic  = 1.0f;
+    e.objects[0].roughness = 0.2f;
+    e.objects[1].metallic  = 0.25f;
+    e.objects[1].roughness = 0.8f;
+
+    std::vector<Batching::BatchCandidate> out;
+
+    // Pase de color con el SSR APAGADO: los factores tienen que llegar igual.
+    // Es el caso que se rompe si alguien reusa ssrEnabled para gatearlos.
+    Visibility::gatherCandidates(e.objects, e.meshes, 0, cam, /*ssrEnabled*/ false,
+                                 /*colorPass*/ true, out);
+    CHECK(out.size() == 2);
+    CHECK(out[0].metallic  == 1.0f);
+    CHECK(out[0].roughness == 0.2f);
+    CHECK(out[1].metallic  == 0.25f);
+    CHECK(out[1].roughness == 0.8f);
+
+    // Sombras y profundidad: mismo valor para todos, que es lo que colapsa los
+    // grupos. Iguales ENTRE SI es lo que importa aqui, no el numero concreto.
+    Visibility::gatherCandidates(e.objects, e.meshes, 0, cam, /*ssrEnabled*/ true,
+                                 /*colorPass*/ false, out);
+    CHECK(out.size() == 2);
+    CHECK(out[0].metallic  == out[1].metallic);
+    CHECK(out[0].roughness == out[1].roughness);
+    // Y no es que se hayan quedado con los del objeto por casualidad.
+    CHECK(out[0].metallic != e.objects[0].metallic);
+}
+
 int main()
 {
     test_guardas_una_a_una();
     test_dos_frustums_mismo_objeto();
     test_gather();
+    test_gather_factores();
 
     if (g_failures == 0) std::printf("visible_set_tests: OK\n");
     else                 std::printf("visible_set_tests: %d FALLOS\n", g_failures);

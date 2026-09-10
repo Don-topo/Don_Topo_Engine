@@ -32,6 +32,18 @@ namespace DonTopo {
         // 0 = no refleja. Lo sincroniza el bucle de la aplicación desde
         // el GameObject, igual que el transform.
         float           ssrStrength         = 0.0f;
+        // Factores PBR POR OBJETO. Vivían en la entrada compartida
+        // (SharedGpuMesh), que es lo que obligaba a re-clavear el objeto y
+        // rehacer sus recursos de GPU para mover un slider: cambiar un número
+        // cambiaba la clave de dedup. Aquí no cuestan nada moverlos —viajan por
+        // push constant, como el transform— y de paso dos objetos con la misma
+        // malla y distinto acabado comparten la VRAM.
+        //
+        // Con mapa ORM van los dos a 1.0 y manda la textura: el shader
+        // multiplica. Esa decisión la toma quien registra el objeto, no el pase
+        // de dibujo, que ya no tiene el material delante.
+        float           metallic            = 0.0f;
+        float           roughness           = 0.5f;
         // false = lo saltan los pases de escena, de sombras y de AO: el
         // mesh no se manda a la GPU, así que tampoco proyecta ni ocluye.
         bool            meshVisible         = true;

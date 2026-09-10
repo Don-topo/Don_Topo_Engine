@@ -700,6 +700,11 @@ struct D3D12Renderer::Impl {
         UINT  srvBase   = kSrvBaseColor;
         float metallic  = 0.0f;
         float roughness = 0.6f;
+        // Si el material trae mapa ORM. Se decide al registrar y al reconstruir,
+        // que es donde esta el material delante, y lo consulta
+        // setObjectMaterialFactors: con mapa, los sliders no pueden pisar la
+        // textura y los dos factores se quedan en 1.0.
+        bool  hasOrmMap = false;
 
         // Fuerza de reflejo del objeto. pbr.frag la vuelca al alfa de la
         // escena, y de ahí la lee el trazado: a cero, ese píxel no refleja.
@@ -8295,7 +8300,10 @@ void D3D12Renderer::Impl::buildShadowBatches()
 
     // Sin frustum: el pase de sombras dibuja las cuatro cascadas y el pre-pase
     // cubre la pantalla entera, así que los dos quieren TODO lo visible. La
-    // fuerza de SSR se deja a 0 porque ninguno de los dos pinta color.
+    // fuerza de SSR se deja a 0 y los factores PBR en su valor por defecto
+    // porque ninguno de los dos pinta color: los tres entran en la clave del
+    // agrupado, así que con un único valor salen MENOS draws y el mapa
+    // resultante es idéntico.
     batchCandidates.clear();
     batchCandidates.reserve(objects.size());
     for (const StaticObject& object : objects)
@@ -8952,8 +8960,12 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
             if (dibujable && !visible)
                 if (perfCapture) ++statCulledCount;
 
+            // Los factores entran en la clave del agrupado: desde que salieron
+            // de makeSharedMeshKey, dos objetos del mismo drawGroup pueden tener
+            // acabados distintos y no pueden compartir push constant.
             batchCandidates.push_back({object.drawGroup, visible, &object.transform,
-                                       state->ssrEnabled() ? object.ssrStrength : 0.0f});
+                                       state->ssrEnabled() ? object.ssrStrength : 0.0f,
+                                       object.metallic, object.roughness});
         }
 
         const uint32_t sceneBase =
@@ -8982,8 +8994,13 @@ void D3D12Renderer::Impl::recordSceneGeometry(D3D12_CPU_DESCRIPTOR_HANDLE rtv,
             PushData push{};
             // flags.x = 1: el model sale del buffer de instancias, uno por
             // instancia. El transform del push constant no se mira.
-            push.metallic  = rep.metallic;
-            push.roughness = rep.roughness;
+            // Del GRUPO y no del representante: rep es el primer objeto del
+            // drawGroup, y desde que los factores salieron de la clave de dedup
+            // sus valores no tienen por que ser los de este batch. El agrupado
+            // ya ha partido por factores, asi que el del batch vale para todas
+            // sus instancias; el de rep se dibujaria en objetos que no son el.
+            push.metallic  = batch.metallic;
+            push.roughness = batch.roughness;
             push.flags     = glm::vec2(1.0f, batch.ssrStrength);
             commandList->SetGraphicsRoot32BitConstants(1, sizeof(PushData) / 4, &push, 0);
 
@@ -9726,6 +9743,7 @@ int D3D12Renderer::addStaticMesh(const Mesh& mesh, const std::vector<DecodedImag
                               TextureSource::None;
     object.metallic  = tieneMapaOrm ? 1.0f : mesh.material.metallic;
     object.roughness = tieneMapaOrm ? 1.0f : mesh.material.roughness;
+    object.hasOrmMap = tieneMapaOrm;
 
     // Terna propia en el heap mientras queden huecos. Pasado el tope se queda
     // con la global: peor aspecto, pero nunca escribe fuera del heap.
@@ -9817,6 +9835,26 @@ void D3D12Renderer::setObjectSsr(size_t objectIndex, float strength)
 {
     if (objectIndex < m_impl->objects.size())
         m_impl->objects[objectIndex].ssrStrength = strength;
+}
+
+// Ver EditorRenderer::setObjectMaterialFactors. Aqui los factores YA vivian por
+// objeto (StaticObject), asi que esto es escribir dos floats: ni waitForGpu, ni
+// resubida, ni tocar el heap de descriptores. Lo unico que hay que respetar es
+// la regla del mapa ORM, que en este backend se decide al registrar
+// (addStaticMesh / rebuildStaticMesh) y se recuerda en hasOrmMap.
+//
+// drawGroupsDirty NO se levanta a proposito: los factores dejaron de estar en la
+// clave del grupo de dibujo -salieron de makeSharedMeshKey- y quien los separa
+// ahora es la clave del AGRUPADO DE INSTANCIAS, que se rehace cada frame en
+// recordSceneGeometry. Levantarlo aqui reharia los grupos por cada frame de un
+// arrastre sin que ninguno cambiara.
+void D3D12Renderer::setObjectMaterialFactors(size_t objectIndex, float metallic, float roughness)
+{
+    if (objectIndex >= m_impl->objects.size())
+        return;
+    Impl::StaticObject& object = m_impl->objects[objectIndex];
+    object.metallic  = object.hasOrmMap ? 1.0f : metallic;
+    object.roughness = object.hasOrmMap ? 1.0f : roughness;
 }
 
 void D3D12Renderer::setSkinnedSsr(int index, float strength)
@@ -10563,6 +10601,7 @@ void D3D12Renderer::rebuildStaticMesh(int index, const Mesh& mesh)
                               TextureSource::None;
     object.metallic  = tieneMapaOrm ? 1.0f : mesh.material.metallic;
     object.roughness = tieneMapaOrm ? 1.0f : mesh.material.roughness;
+    object.hasOrmMap = tieneMapaOrm;
 
     // La entrada vieja sale SIEMPRE, honesta o no: el mapa está clavado por
     // contenido Y material —makeSharedMeshKey mete los paths de textura y los

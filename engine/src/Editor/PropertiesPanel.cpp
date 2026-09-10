@@ -8108,6 +8108,16 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                 m_materialFactorDragSlot          = MaterialFactorSlot::Metallic;
                 m_materialFactorDragBefore        = beforeMetallic;
             }
+            // El viewport sigue al slider mientras se arrastra. `roughness` va
+            // sin tocar: el setter escribe los dos, así que hay que pasarle el
+            // que NO se está moviendo tal cual está.
+            if (ImGui::IsItemActive())
+                previewMaterialFactors(ctx, ownerId, metallic, roughness);
+            // Soltar sin haber editado (un clic seco) deja la GPU con lo último
+            // que se le empujó: se devuelve lo que dice el Material, que es lo
+            // que el arrastre nunca llegó a tocar.
+            if (ImGui::IsItemDeactivated() && !ImGui::IsItemDeactivatedAfterEdit())
+                previewMaterialFactors(ctx, ownerId, mat.metallic, mat.roughness);
             // Guarda de propietario, mismo motivo que en Audio Clip: el
             // ActiveId del slider sobrevive a un cambio de selección a mitad
             // de arrastre, y sin comparar dueño+índice+slot el commit se
@@ -8154,6 +8164,11 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                 m_materialFactorDragSlot          = MaterialFactorSlot::Roughness;
                 m_materialFactorDragBefore        = beforeRoughness;
             }
+            // Mismo par que en Metallic, con los papeles cambiados.
+            if (ImGui::IsItemActive())
+                previewMaterialFactors(ctx, ownerId, metallic, roughness);
+            if (ImGui::IsItemDeactivated() && !ImGui::IsItemDeactivatedAfterEdit())
+                previewMaterialFactors(ctx, ownerId, mat.metallic, mat.roughness);
             if (ImGui::IsItemDeactivatedAfterEdit() && m_materialFactorDragActive &&
                 m_materialFactorDragOwnerId == ownerId &&
                 m_materialFactorDragMaterialIndex == materialIndex &&
@@ -8182,6 +8197,31 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
 
     if (!m_textureLoadError.empty())
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_textureLoadError.c_str());
+}
+
+// Empuja los factores a la GPU MIENTRAS se arrastra, sin tocar el Material de
+// CPU y sin pasar por el stack de undo. Las dos cosas son deliberadas:
+//
+//  - Sin tocar el Material porque el baseline (base*/base*Taken) se captura la
+//    PRIMERA vez que applyMaterialOverrides pisa el slot, y eso ocurre al
+//    soltar. Si el arrastre escribiera mat.metallic, esa captura tomaría como
+//    "original" el valor a medio arrastrar en vez del que trae el FBX, y un
+//    Clear posterior devolvería una posición cualquiera del slider.
+//  - Sin comando porque un arrastre son decenas de frames: uno por frame
+//    llenaría el historial y Ctrl+Z tendría que pulsarse cincuenta veces para
+//    deshacer un gesto. El comando lo empuja el commit, con el valor final.
+//
+// Solo estático: en skinned los factores viven por SUBMALLA y no hay setter para
+// eso, así que ahí se sigue aplicando al soltar (ver MaterialFactorCommand).
+void PropertiesPanel::previewMaterialFactors(EditorContext& ctx, uint64_t ownerId,
+                                              float metallic, float roughness)
+{
+    if (!ctx.renderer || !ctx.scene) return;
+    GameObject* go = ctx.scene->findById(ownerId);
+    if (!go || !go->hasMesh() || go->staticRenderIndex < 0) return;
+    if (go->getSkinnedMesh()) return;
+    ctx.renderer->setObjectMaterialFactors(static_cast<size_t>(go->staticRenderIndex),
+                                          metallic, roughness);
 }
 
 void PropertiesPanel::assignMaterialTexture(EditorContext& ctx, uint64_t ownerId, int materialIndex,

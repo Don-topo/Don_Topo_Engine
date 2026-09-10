@@ -356,6 +356,87 @@ static void test_cursor_reset_entre_frames()
     CHECK(cur.alloc(4) != nullptr);   // vuelve a caber entero
 }
 
+// Dos objetos de la MISMA malla con factores PBR distintos no pueden compartir
+// draw: metallic y roughness viajan por push constant, que es por grupo. Antes
+// de sacarlos de la clave de dedup el caso no existia -la malla compartida ya
+// era otra-, y por eso este test nace con la feature de arrastre en vivo.
+static void test_factores_distintos_parten_el_grupo()
+{
+    std::vector<glm::mat4> tf = { markerAt(10.0f), markerAt(20.0f), markerAt(30.0f) };
+    std::vector<Renderer::BatchCandidate> cands;
+    // Misma entrada compartida (7) y mismo ssr en los tres: lo unico que separa
+    // al del medio es el metallic.
+    cands.push_back({ 7, true, &tf[0], 0.0f, 0.0f, 0.5f });
+    cands.push_back({ 7, true, &tf[1], 0.0f, 1.0f, 0.5f });
+    cands.push_back({ 7, true, &tf[2], 0.0f, 0.0f, 0.5f });
+
+    std::vector<glm::mat4> out = makeOut(8);
+    std::vector<Renderer::InstanceBatch> batches;
+    const uint32_t written = Renderer::buildInstanceBatches(cands.data(), cands.size(),
+        out.data(), (uint32_t)out.size(), 0, batches);
+
+    CHECK(written == 3);
+    CHECK(batches.size() == 2);
+    if (batches.size() == 2)
+    {
+        // El grupo de los dos con metallic 0 sale primero (orden de primera
+        // aparicion) y CONTIGUO, aunque en la entrada estuvieran separados.
+        CHECK(batches[0].instanceCount == 2);
+        CHECK(batches[0].metallic      == 0.0f);
+        CHECK(batches[1].instanceCount == 1);
+        CHECK(batches[1].metallic      == 1.0f);
+    }
+    CHECK(markerOf(out[0]) == 10.0f);
+    CHECK(markerOf(out[1]) == 30.0f);
+    CHECK(markerOf(out[2]) == 20.0f);
+}
+
+// El roughness parte igual que el metallic: la clave son los DOS. Con solo el
+// metallic comparado, dos objetos con el mismo metal y distinta rugosidad
+// compartirian push constant y uno de los dos se dibujaria con la del otro.
+static void test_roughness_tambien_parte_el_grupo()
+{
+    std::vector<glm::mat4> tf = { markerAt(10.0f), markerAt(20.0f) };
+    std::vector<Renderer::BatchCandidate> cands;
+    cands.push_back({ 7, true, &tf[0], 0.0f, 1.0f, 0.2f });
+    cands.push_back({ 7, true, &tf[1], 0.0f, 1.0f, 0.8f });
+
+    std::vector<glm::mat4> out = makeOut(4);
+    std::vector<Renderer::InstanceBatch> batches;
+    Renderer::buildInstanceBatches(cands.data(), cands.size(), out.data(),
+                                   (uint32_t)out.size(), 0, batches);
+
+    CHECK(batches.size() == 2);
+    if (batches.size() == 2)
+    {
+        CHECK(batches[0].roughness == 0.2f);
+        CHECK(batches[1].roughness == 0.8f);
+    }
+}
+
+// Y el caso que paga la factura: MISMOS factores siguen siendo UN solo draw.
+// Sin esto, la feature podria haber partido todos los grupos y nadie se
+// enteraria hasta mirar el contador de draws del panel Performance.
+static void test_mismos_factores_no_parten_el_grupo()
+{
+    std::vector<glm::mat4> tf = { markerAt(10.0f), markerAt(20.0f), markerAt(30.0f) };
+    std::vector<Renderer::BatchCandidate> cands;
+    for (auto& m : tf) cands.push_back({ 7, true, &m, 0.0f, 0.75f, 0.25f });
+
+    std::vector<glm::mat4> out = makeOut(8);
+    std::vector<Renderer::InstanceBatch> batches;
+    Renderer::buildInstanceBatches(cands.data(), cands.size(), out.data(),
+                                   (uint32_t)out.size(), 0, batches);
+
+    CHECK(batches.size() == 1);
+    if (batches.size() == 1)
+    {
+        CHECK(batches[0].instanceCount == 3);
+        CHECK(batches[0].metallic      == 0.75f);
+        CHECK(batches[0].roughness     == 0.25f);
+    }
+}
+
 int main()
 {
     test_misma_entrada_un_solo_grupo();
@@ -363,6 +444,9 @@ int main()
     test_no_visibles_excluidos();
     test_base_de_first_instance();
     test_trunca_sin_desbordar();
+    test_factores_distintos_parten_el_grupo();
+    test_roughness_tambien_parte_el_grupo();
+    test_mismos_factores_no_parten_el_grupo();
 
     test_cursor_reparte_contiguo();
     test_cursor_no_cabe_devuelve_nulo();

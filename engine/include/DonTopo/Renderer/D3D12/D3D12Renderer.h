@@ -151,6 +151,7 @@ public:
     // Cuánto refleja este objeto. Sale al alfa de la escena, que es de donde lo
     // lee el trazado de reflejos; a cero, ese objeto no refleja nada.
     void setObjectSsr(size_t objectIndex, float strength) override;
+    void setObjectMaterialFactors(size_t objectIndex, float metallic, float roughness) override;
     void setSkinnedSsr(int index, float strength) override;
     size_t objectCount() const;
 
