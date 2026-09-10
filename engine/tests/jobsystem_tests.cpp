@@ -311,6 +311,51 @@ void testCancelBeforeSubmitWithId()
 
 } // namespace
 
+// H11 de docs/core-audit.md. m_cancelled solo se vaciaba cuando el WORKER
+// desencolaba el job cancelado, asi que un cancel() que llega cuando el job YA
+// ESTA CORRIENDO deja su id dentro para el resto de la vida del pool: el worker
+// ya lo desencolo, nadie va a volver a mirarlo.
+//
+// No es un bug de correccion -los ids nunca se reutilizan, m_nextId solo sube-
+// pero AsyncAssetLoader cancela cargas en vuelo, asi que en una sesion larga de
+// editor con muchos Load Scene el set crece y no baja nunca.
+//
+// El caso de "cancelar algo ya terminado" no lo cubre esto y no hace falta: el
+// loader ya detecta que el resultado esta en el buzon y NO llama a cancel().
+void testCancelOfRunningJobDoesNotLeak()
+{
+    for (int it = 0; it < kIters; ++it)
+    {
+        DonTopo::JobSystem js;
+        js.start(1);
+
+        std::atomic<bool> arrancado{false};
+        std::atomic<bool> release{false};
+
+        // El job avisa de que ya esta DENTRO y se queda esperando: eso garantiza
+        // que el cancel de abajo llega con el job en vuelo, no en la cola.
+        DonTopo::JobSystem::JobId enVuelo = js.submit([&arrancado, &release] {
+            arrancado.store(true, std::memory_order_release);
+            while (!release.load(std::memory_order_acquire)) {}
+        });
+
+        while (!arrancado.load(std::memory_order_acquire)) {}
+        js.cancel(enVuelo);
+        assert(js.pendingCancellations() == 1 &&
+               "el cancel de un job en vuelo se anota");
+
+        release.store(true, std::memory_order_release);
+
+        // Se espera a que el pool se quede sin trabajo: al terminar el job, su
+        // marca tiene que haberse ido con el.
+        while (!js.idle()) {}
+        assert(js.pendingCancellations() == 0 &&
+               "al terminar el job, su marca de cancelacion no puede quedarse");
+
+        js.shutdown();
+    }
+}
+
 int main()
 {
     testAllJobsRun();
@@ -324,6 +369,7 @@ int main()
     testJobExceptionDoesNotTerminate();
     testReserveIdIsUniqueAndUsable();
     testCancelBeforeSubmitWithId();
+    testCancelOfRunningJobDoesNotLeak();
     std::printf("jobsystem_tests OK\n");
     return 0;
 }

@@ -147,6 +147,12 @@ namespace DonTopo
         m_cancelled.insert(id);
     }
 
+    size_t JobSystem::pendingCancellations() const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_cancelled.size();
+    }
+
     bool JobSystem::idle() const
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -193,6 +199,20 @@ namespace DonTopo
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
                 --m_inFlight;
+                // La marca de cancelación se retira TAMBIÉN aquí, no solo al
+                // desencolar. Un cancel() que llega con el job ya corriendo no
+                // lo puede parar —eso ya lo dice el header: un Assimp::ReadFile
+                // no se interrumpe a medias— pero su id se quedaba en el set
+                // para el resto de la vida del pool, porque el worker ya lo
+                // había desencolado y nadie iba a volver a mirarlo. Y ese es
+                // justo el caso que se da de verdad: AsyncAssetLoader cancela
+                // cargas en vuelo, así que una sesión larga de editor con
+                // muchos Load Scene hacía crecer el set y no bajarlo nunca.
+                //
+                // Retirarla aquí no cambia nada de lo que ya estaba decidido: el
+                // job ha terminado, y quien descarta su resultado es el
+                // consumidor (pumpCompleted), que no consulta este set.
+                m_cancelled.erase(job.id);
             }
         }
     }

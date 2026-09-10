@@ -81,6 +81,13 @@ namespace DonTopo
             // consumidor quien descarta su resultado.
             void cancel(JobId id);
 
+            // Cuantas marcas de cancelacion siguen vivas. Diagnostico: en regimen
+            // normal baja a 0 sola -el worker retira la marca al descartar el job,
+            // y tambien al terminarlo si el cancel llego con el ya en vuelo-, asi
+            // que un numero que solo sube dice que alguien cancela ids que este
+            // pool no llego a ver.
+            size_t   pendingCancellations() const;
+
             bool     idle() const;
             unsigned threadCount() const;
 
