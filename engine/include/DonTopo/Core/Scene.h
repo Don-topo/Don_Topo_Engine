@@ -233,6 +233,20 @@ namespace DonTopo
             // escena, y no en cada bucle de host porque son tres.
             void syncReverbZones(AudioManager& audio);
 
+            // Deja la escena VACIA: destruye el arbol entero, asi que corren los
+            // destructores de todos los componentes de todos los nodos. Para eso
+            // existe -no para 'limpiar un poco'-: los dos hosts la llaman justo
+            // antes de destruir PhysicsManager y AudioManager, y un ~Collider
+            // corriendo despues, contra una PxScene ya liberada, es el fallo que
+            // esto evita. La raiz sobrevive (conserva id y nombre) pero se queda
+            // sin hijos y sin componentes.
+            //
+            // Los dos parametros NO se usan: se piden para que la firma diga a
+            // que managers hay que sobrevivir, y para que quede constancia en el
+            // sitio de la llamada de que el orden importa.
+            //
+            // Despues de esto la escena no se vuelve a usar: sus tres llamantes o
+            // la reemplazan (fromJson) o estan cerrando el proceso.
             void shutdown(PhysicsManager& physics, AudioManager& audio);
 
             // Serializa el árbol completo (transforms, mesh, colliders, audio

@@ -3588,14 +3588,32 @@ namespace DonTopo
 
     void Scene::shutdown(PhysicsManager& /*physics*/, AudioManager& /*audio*/)
     {
-        m_root.traverse([](GameObject* go) {
-            go->setBoxCollider(nullptr);
-            go->setSphereCollider(nullptr);
-            go->setCapsuleCollider(nullptr);
-            go->setPlaneCollider(nullptr);
-            go->setAudioClip(nullptr);
-            go->getScripts().clear();
-        });
+        // Suelta TODO lo que la escena tiene cogido, destruyendo el árbol. Los
+        // tres llamantes (fromJson, y la salida del sandbox y del runtime) o
+        // reemplazan la escena acto seguido o están cerrando el proceso, así
+        // que ninguno la vuelve a usar; lo que sí necesitan los dos hosts —y lo
+        // dicen en un comentario al llamar— es que los destructores de los
+        // componentes corran ANTES de destruir PhysicsManager y AudioManager.
+        // Un ~Collider contra una PxScene ya liberada es el fallo que esto
+        // existe para evitar.
+        //
+        // Antes esto era una lista escrita a mano: los 4 colliders, el
+        // AudioClip y los scripts. Se quedaba en 6 de los 28 componentes, así
+        // que Rigidbody, Animator, ReverbZone y AudioListener sobrevivían — y
+        // el número 29 habría necesitado acordarse de una séptima línea. Es el
+        // mismo patrón que ya falló CUATRO veces en invalidateCaches del panel
+        // de Properties, y se cierra igual: en vez de enumerar lo que hay que
+        // limpiar, se tira lo que lo contiene. El destructor de GameObject no
+        // se puede quedar corto.
+        //
+        // La raíz conserva id y nombre porque es la identidad de la escena, no
+        // un objeto suyo: `fromJson` la sobrescribe una línea después, pero los
+        // dos hosts la dejan viva hasta que Scene se destruye.
+        const uint64_t    idRaiz     = m_root.id;
+        const std::string nombreRaiz = m_root.name;
+        m_root        = GameObject(nombreRaiz);
+        m_root.id     = idRaiz;
+        m_root.parent = nullptr;
     }
 
     nlohmann::json Scene::toJson() const

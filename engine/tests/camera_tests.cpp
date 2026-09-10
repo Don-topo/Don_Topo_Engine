@@ -14,6 +14,9 @@
 #include "DonTopo/Physics/PhysicsManager.h"
 #include "DonTopo/Audio/AudioManager.h"
 #include "DonTopo/Audio/AudioListenerComponent.h"
+#include "DonTopo/Audio/ReverbZoneComponent.h"
+#include "DonTopo/Physics/Rigidbody.h"
+#include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/PropertiesPanel.h"
 #include "DonTopo/Editor/ViewportPanel.h"
@@ -655,6 +658,66 @@ static void test_corrupt_ui_string_warns(PhysicsManager& pm, AudioManager& am)
     CHECK(countWarnings(loaded, "panel de 'Panel'.sprite") == 1);
     CHECK(countWarnings(loaded, "text de 'Texto'.fontPath") == 1);
     CHECK(countWarnings(loaded, "image de 'Imagen'.atlasPath") == 1);
+}
+
+// H6 de docs/core-audit.md. Scene::shutdown existe para una cosa muy concreta,
+// y los dos hosts lo dicen en un comentario al llamarlo: soltar lo que la escena
+// tiene cogido de PhysX y de FMOD ANTES de destruir esos managers. Sin eso, un
+// ~Collider corre contra una PxScene ya liberada.
+//
+// El problema no era que fallara, es que la lista estaba escrita A MANO y se
+// quedaba en 6 de los componentes: Rigidbody, Animator, ReverbZone y
+// AudioListener sobrevivian. Es el mismo patron que ya fallo CUATRO veces en
+// invalidateCaches del panel -enumerar a mano lo que hay que limpiar-, asi que
+// no se arregla anadiendo cuatro lineas mas.
+//
+// weak_ptr y no has*(): lo que hay que demostrar es que el componente se ha
+// DESTRUIDO, no que el GameObject haya dejado de apuntarlo. Con un shared_ptr
+// vivo en otro sitio, has*() diria que si y el recurso nativo seguiria ahi.
+static void test_scene_shutdown_releases_every_component(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Todo");
+
+    // Los cuatro que la lista escrita a mano se saltaba. Los colliders y el
+    // AudioClip -los que SI limpiaba- no entran aqui porque sus constructores
+    // piden un actor de PhysX o el AudioManager: lo que se prueba es la regla,
+    // y estos cuatro se construyen solos.
+    auto rb       = std::make_shared<Rigidbody>();
+    auto anim     = std::make_shared<AnimatorComponent>();
+    auto reverb   = std::make_shared<ReverbZoneComponent>();
+    auto listener = std::make_shared<AudioListenerComponent>();
+
+    go->setRigidbody(rb);
+    go->setAnimator(anim);
+    go->setReverbZone(reverb);
+    go->setAudioListener(listener);
+
+    // Un hijo con lo suyo: shutdown tiene que bajar por el arbol entero, no solo
+    // por los hijos directos de la raiz.
+    GameObject* hijo = scene.addGameObject("Hijo", go);
+    auto animHijo = std::make_shared<AnimatorComponent>();
+    hijo->setAnimator(animHijo);
+
+    std::weak_ptr<Rigidbody>              wRb(rb);
+    std::weak_ptr<AnimatorComponent>      wAnim(anim);
+    std::weak_ptr<ReverbZoneComponent>    wReverb(reverb);
+    std::weak_ptr<AudioListenerComponent> wListener(listener);
+    std::weak_ptr<AnimatorComponent>      wAnimHijo(animHijo);
+
+    // Las referencias locales se sueltan: a partir de aqui el unico dueno es la
+    // escena, que es la premisa de todo lo de abajo.
+    rb.reset(); anim.reset(); reverb.reset(); listener.reset(); animHijo.reset();
+    CHECK(!wRb.expired());
+    CHECK(!wAnim.expired());
+
+    scene.shutdown(pm, am);
+
+    CHECK(wRb.expired());
+    CHECK(wAnim.expired());
+    CHECK(wReverb.expired());
+    CHECK(wListener.expired());
+    CHECK(wAnimHijo.expired());
 }
 
 // H7 de docs/core-audit.md. El invariante "como mucho una camara por escena" lo
@@ -8151,6 +8214,7 @@ int main()
     test_corrupt_script_name_does_not_lose_scene(pm, am);
     test_corrupt_ui_string_warns(pm, am);
     test_clone_never_keeps_camera(pm, am);
+    test_scene_shutdown_releases_every_component(pm, am);
     test_insert_from_json_discards_second_camera(pm, am);
     test_insert_from_json_keeps_camera_when_none_alive(pm, am);
     test_insert_from_json_discards_second_audio_listener(pm, am);
