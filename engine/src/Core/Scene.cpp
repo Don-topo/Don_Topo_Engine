@@ -654,12 +654,51 @@ namespace
                         tr.conditions.push_back(cond);
                     }
                 }
+                // Índices contra los estados que ACABAN de cargarse. Un grafo
+                // guardado puede traer transiciones que ya no apuntan a nada:
+                // el FBX se reexportó con menos clips y alguien borró estados, o
+                // el .scene se editó a mano. Sin esto entraban tal cual, y los
+                // dos síntomas eran mudos — el AnimatorPanel las salta al
+                // dibujar (no se ven) y update las descarta al evaluar (no se
+                // usan), pero se volvían a serializar en cada guardado: un
+                // pasajero invisible y permanente.
+                //
+                // Se DESCARTAN, no se acotan: un índice inventado no se puede
+                // adivinar, y dejar la transición apuntando a un estado
+                // arbitrario sería peor que no tenerla. Mismo criterio que
+                // pruneExtraCameras y que la reasignación de ids duplicados —
+                // el fichero vino roto, se repara y se dice.
+                const int nEstados = (int)a->states().size();
+                if (tr.fromState < 0 || tr.fromState >= nEstados ||
+                    tr.toState   < 0 || tr.toState   >= nEstados)
+                {
+                    if (warnings)
+                        warnings->push_back("animator.transition[" + std::to_string(tr.fromState) +
+                                             "->" + std::to_string(tr.toState) +
+                                             "]: índice de estado fuera de rango (" +
+                                             std::to_string(nEstados) +
+                                             " estado(s) en el grafo), la transición se descarta");
+                    continue;
+                }
                 a->addTransition(tr);
             }
         }
 
-        // Después de addState: setEntryState valida contra m_states.size().
-        a->setEntryState(j.value("entryState", 0));
+        // Después de addState: setEntryState valida contra m_states.size() y
+        // RETORNA SIN HACER NADA si el índice no vale, así que el personaje
+        // arrancaría en el estado 0 sin que nadie dijera por qué. El
+        // comportamiento se deja igual —0 es lo único seguro— pero deja de ser
+        // mudo.
+        //
+        // Solo se avisa si el grafo TIENE estados: con la lista vacía cualquier
+        // índice está fuera de rango, y un animator recién creado sin estados no
+        // es un fichero corrupto.
+        const int entrada = j.value("entryState", 0);
+        if (!a->states().empty() && (entrada < 0 || entrada >= (int)a->states().size()) && warnings)
+            warnings->push_back("animator.entryState: " + std::to_string(entrada) +
+                                 " fuera de rango (" + std::to_string(a->states().size()) +
+                                 " estado(s) en el grafo), se arranca en el estado 0");
+        a->setEntryState(entrada);
         return a;
     }
 

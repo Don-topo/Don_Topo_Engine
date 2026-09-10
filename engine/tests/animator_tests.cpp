@@ -730,6 +730,130 @@ static void test_missing_animation_source_does_not_break_load(PhysicsManager& pm
 }
 
 // Fix de review (finding 2, task-6): el aviso de una fuente que no carga
+// H8 de docs/core-audit.md. Un grafo de animator guardado puede traer indices
+// que ya no existen -el FBX se reexporto con menos clips y alguien borro
+// estados, o el .scene se edito a mano-, y animatorFromJson los aceptaba tal
+// cual. Los dos sintomas son mudos, que es lo peor de todo:
+//
+//   - entryState fuera de rango: setEntryState valida y RETORNA SIN HACER NADA,
+//     asi que el personaje arranca en el estado 0 y nadie dice por que.
+//   - una transicion con from/to invalido: el panel la salta al dibujar (no se
+//     ve) y update la descarta al evaluar (no se usa), pero se sigue
+//     serializando en cada guardado. Un pasajero invisible y permanente.
+//
+// El resto del fichero ya avisa de este tipo de anomalia y animatorFromJson ya
+// recibe el canal `warnings` -lo usa para los readFloat-, asi que el arreglo es
+// usarlo.
+static void test_animator_out_of_range_entry_state_warns(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s0; s0.name = "Idle";
+    AnimatorComponent::State s1; s1.name = "Run";
+    a->addState(s0);
+    a->addState(s1);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+    // Dos estados (indices 0 y 1) y el fichero pide el 3.
+    j["root"]["children"][0]["animator"]["entryState"] = 3;
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+
+    // El comportamiento no cambia -sigue arrancando en 0, que es lo unico
+    // seguro- pero deja de ser mudo.
+    CHECK(found->getAnimator()->entryState() == 0);
+    bool aviso = false;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("entryState") != std::string::npos) aviso = true;
+    CHECK(aviso);
+}
+
+// La transicion con indices imposibles se DESCARTA al cargar, no se guarda
+// muerta. Criterio de pruneExtraCameras y de los ids duplicados: el fichero
+// vino roto, se repara y se dice.
+static void test_animator_out_of_range_transition_is_dropped(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s0; s0.name = "Idle";
+    AnimatorComponent::State s1; s1.name = "Run";
+    a->addState(s0);
+    a->addState(s1);
+    AnimatorComponent::Transition buena; buena.fromState = 0; buena.toState = 1;
+    a->addTransition(buena);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+    auto& trs = j["root"]["children"][0]["animator"]["transitions"];
+    trs.push_back({ {"from", 0}, {"to", 7}, {"duration", 0.0f} });   // destino que no existe
+    trs.push_back({ {"from", -1}, {"to", 1}, {"duration", 0.0f} });  // origen sin poner
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+
+    // Solo sobrevive la buena.
+    const auto& cargadas = found->getAnimator()->transitions();
+    CHECK(cargadas.size() == 1u);
+    if (cargadas.size() == 1u)
+    {
+        CHECK(cargadas[0].fromState == 0);
+        CHECK(cargadas[0].toState   == 1);
+    }
+
+    int avisos = 0;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("transition") != std::string::npos) ++avisos;
+    CHECK(avisos == 2);
+}
+
+// El contrapeso, que impide que la guarda se pase: un grafo SANO se carga
+// entero, sin perder transiciones y sin un solo aviso. Una guarda que
+// descartara de mas pasaria los dos tests de arriba y romperia el caso normal.
+static void test_animator_valid_graph_loads_untouched(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s0; s0.name = "Idle";
+    AnimatorComponent::State s1; s1.name = "Run";
+    a->addState(s0);
+    a->addState(s1);
+    a->setEntryState(1);
+    AnimatorComponent::Transition t0; t0.fromState = 0; t0.toState = 1;
+    AnimatorComponent::Transition t1; t1.fromState = 1; t1.toState = 0;
+    a->addTransition(t0);
+    a->addTransition(t1);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+
+    CHECK(found->getAnimator()->transitions().size() == 2u);
+    CHECK(found->getAnimator()->entryState() == 1);
+    for (const auto& w : loaded.lastWarnings())
+    {
+        CHECK(w.find("entryState") == std::string::npos);
+        CHECK(w.find("transition") == std::string::npos);
+    }
+}
+
 // tenía que llegar a Scene::lastWarnings() —lo que lee el Log Console del
 // editor— y no solo a stdout vía std::printf, invisible en un build sin
 // consola. Mismo escenario que el test anterior, pero comprobando el
@@ -4162,6 +4286,9 @@ int main()
     test_animation_sources_survive_scene_round_trip(pm, am);
     test_missing_animation_source_does_not_break_load(pm, am);
     test_missing_animation_source_warns_through_scene(pm, am);
+    test_animator_out_of_range_entry_state_warns(pm, am);
+    test_animator_out_of_range_transition_is_dropped(pm, am);
+    test_animator_valid_graph_loads_untouched(pm, am);
     test_scene_without_animation_sources_loads(pm, am);
     test_scene_load_ignores_stale_skinned_false(pm, am);
     test_scene_load_warns_when_rig_disappeared(pm, am);
