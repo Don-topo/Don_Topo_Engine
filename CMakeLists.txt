@@ -21,6 +21,10 @@ FetchContent_Declare(
     GIT_TAG        3.4
 )
 FetchContent_MakeAvailable(glfw)
+# El motor no usa OpenGL: sin esto glfw3.h incluye GL/gl.h, que en Linux exige
+# el paquete de desarrollo de OpenGL (en Windows viene con el SDK y no se nota).
+# INTERFACE: llega a todo lo que enlaza glfw sin tocar el build de la propia GLFW.
+target_compile_definitions(glfw INTERFACE GLFW_INCLUDE_NONE)
 
 # GLM — math (header-only)
 FetchContent_Declare(
