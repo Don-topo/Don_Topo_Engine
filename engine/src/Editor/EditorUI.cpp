@@ -829,7 +829,7 @@ void EditorUI::applySkyboxFolder(const std::string& folder)
         std::error_code ec;
         const std::filesystem::path rel =
             std::filesystem::relative(std::filesystem::path(folder), m_project->root(), ec);
-        if (!ec && !rel.empty() && rel.native().rfind(L"..", 0) != 0)
+        if (!ec && !rel.empty() && *rel.begin() != "..")
             guardada = rel.generic_string();
         else
             m_logPanel.push("Skybox: '" + folder +
