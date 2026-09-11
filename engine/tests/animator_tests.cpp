@@ -11,6 +11,7 @@
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Editor/Command.h"
+#include "DonTopo/Editor/AnimatorGraphUndo.h"
 #include "DonTopo/Core/AnimatorSerialization.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -4575,6 +4576,146 @@ static void test_graph_command_rebinds_clips()
     CHECK(a->states()[1].clipIndex == 1);
 }
 
+// ---- AnimatorGraphUndoTracker: un comando por gesto ----
+
+// Un drag son varios frames con el widget activo y un frame de soltar. Todo el
+// drag tiene que ser UN comando, y su 'before' es el grafo de antes del primer
+// frame.
+static void test_tracker_drag_yields_one_command()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto a = std::make_shared<AnimatorComponent>();
+    makeBaseGraph(*a);
+    go->setAnimator(a);
+    const nlohmann::json keyBefore = animatorGraphKey(*a);
+
+    AnimatorGraphUndoTracker tr;
+    const uint64_t rev = 7;
+    int durante = 0;
+    for (int f = 0; f < 3; f++)
+    {
+        tr.beginFrame(go->id, a.get(), rev);
+        a->transitionsMutable()[0].duration += 0.1f;
+        if (tr.endFrame(scene, a.get(), /*anyItemActive=*/true, rev)) durante++;
+    }
+    tr.beginFrame(go->id, a.get(), rev);
+    std::unique_ptr<ICommand> cmd = tr.endFrame(scene, a.get(), /*anyItemActive=*/false, rev);
+
+    CHECK(durante == 0);
+    CHECK(cmd != nullptr);
+    if (cmd)
+    {
+        cmd->undo();
+        CHECK(animatorGraphKey(*a) == keyBefore);
+    }
+}
+
+// Un drag que acaba donde empezó no es una edición.
+static void test_tracker_drag_back_to_start_yields_nothing()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto a = std::make_shared<AnimatorComponent>();
+    makeBaseGraph(*a);
+    go->setAnimator(a);
+    const float original = a->transitions()[0].duration;
+
+    AnimatorGraphUndoTracker tr;
+    tr.beginFrame(go->id, a.get(), 1);
+    a->transitionsMutable()[0].duration = 3.0f;
+    CHECK(tr.endFrame(scene, a.get(), true, 1) == nullptr);
+    tr.beginFrame(go->id, a.get(), 1);
+    a->transitionsMutable()[0].duration = original;
+    CHECK(tr.endFrame(scene, a.get(), false, 1) == nullptr);
+}
+
+// Si el historial se movió durante el gesto (un comando propio del panel, un
+// Ctrl+Z, el clear() de Play), la diferencia ya no es solo del usuario: no se
+// emite nada. Y la nueva línea base es buena: el frame siguiente, sin cambios,
+// tampoco emite nada.
+static void test_tracker_revision_change_rebases()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto a = std::make_shared<AnimatorComponent>();
+    makeBaseGraph(*a);
+    go->setAnimator(a);
+
+    AnimatorGraphUndoTracker tr;
+    tr.beginFrame(go->id, a.get(), 1);
+    a->statesMutable()[0].clipName = "idle";   // p. ej. un ClipRenameCommand
+    CHECK(tr.endFrame(scene, a.get(), false, /*undoRevision=*/2) == nullptr);
+
+    tr.beginFrame(go->id, a.get(), 2);
+    CHECK(tr.endFrame(scene, a.get(), false, 2) == nullptr);
+}
+
+// Cambiar de GameObject cierra la sesión del anterior: su 'before' no puede
+// acabar en un comando contra el objeto nuevo.
+static void test_tracker_selection_change_discards_session()
+{
+    Scene scene("Test");
+    GameObject* goA = scene.addGameObject("A");
+    GameObject* goB = scene.addGameObject("B");
+    auto a = std::make_shared<AnimatorComponent>();
+    auto b = std::make_shared<AnimatorComponent>();
+    makeBaseGraph(*a);
+    makeBaseGraph(*b);
+    // B distinto de A: si la sesión de A sobreviviera al cambio de selección,
+    // su 'before' (el grafo base) no casaría con B y saldría un comando.
+    b->statesMutable()[0].name = "OtroGrafo";
+    goA->setAnimator(a);
+    goB->setAnimator(b);
+
+    AnimatorGraphUndoTracker tr;
+    tr.beginFrame(goA->id, a.get(), 1);
+    a->transitionsMutable()[0].duration = 3.0f;
+    CHECK(tr.endFrame(scene, a.get(), true, 1) == nullptr);   // drag en curso sobre A
+
+    tr.beginFrame(goB->id, b.get(), 1);                       // la selección pasa a B
+    CHECK(tr.endFrame(scene, b.get(), false, 1) == nullptr);  // B no ha cambiado
+}
+
+// Mover nodos no entra en el undo.
+static void test_tracker_node_move_yields_nothing()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto a = std::make_shared<AnimatorComponent>();
+    makeBaseGraph(*a);
+    go->setAnimator(a);
+
+    AnimatorGraphUndoTracker tr;
+    tr.beginFrame(go->id, a.get(), 1);
+    a->statesMutable()[0].editorPos = glm::vec2(99.0f, 99.0f);
+    CHECK(tr.endFrame(scene, a.get(), false, 1) == nullptr);
+}
+
+// El label que pone un sitio del panel vale para ESE gesto; el siguiente
+// vuelve al genérico.
+static void test_tracker_label_is_per_gesture()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto a = std::make_shared<AnimatorComponent>();
+    makeBaseGraph(*a);
+    go->setAnimator(a);
+
+    AnimatorGraphUndoTracker tr;
+    tr.beginFrame(go->id, a.get(), 1);
+    tr.setLabel("Borrar estado");
+    a->removeState(1);
+    std::unique_ptr<ICommand> c1 = tr.endFrame(scene, a.get(), false, 1);
+
+    tr.beginFrame(go->id, a.get(), 1);
+    a->statesMutable()[0].loop = !a->states()[0].loop;
+    std::unique_ptr<ICommand> c2 = tr.endFrame(scene, a.get(), false, 1);
+
+    CHECK(c1 && c1->label() == "Borrar estado");
+    CHECK(c2 && c2->label() == "Editar Animator");
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -4723,6 +4864,13 @@ int main()
     test_graph_command_round_trip_for_each_mutation();
     test_graph_command_noop_without_animator();
     test_graph_command_rebinds_clips();
+
+    test_tracker_drag_yields_one_command();
+    test_tracker_drag_back_to_start_yields_nothing();
+    test_tracker_revision_change_rebases();
+    test_tracker_selection_change_discards_session();
+    test_tracker_node_move_yields_nothing();
+    test_tracker_label_is_per_gesture();
 
     am.shutdown();
     pm.shutdown();
