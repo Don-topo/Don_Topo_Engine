@@ -4180,6 +4180,183 @@ static void test_remove_state_reindexes_playhead_not_resets_it()
     CHECK(a.entryState() == 0);
 }
 
+// ---- applyGraph: el undo del grafo sustituye lo autorado sin tocar el runtime ----
+
+// Estado mínimo con clip de 100 ticks a 10 ticks/s: 1 s de update = 10 ticks.
+static AnimatorComponent::State makeTimedState(const char* name)
+{
+    AnimatorComponent::State s;
+    s.name = name; s.clipName = name;
+    s.duration = 100.0f; s.ticksPerSecond = 10.0f;
+    return s;
+}
+
+// Los valores que el script venía escribiendo sobreviven a un undo si el
+// parámetro sigue siendo el mismo (nombre Y tipo). Uno que cambió de tipo
+// vuelve a su valor por defecto: el valor viejo no significa nada en el tipo
+// nuevo.
+static void test_apply_graph_keeps_param_values_of_same_name_and_type()
+{
+    AnimatorComponent a;
+    a.addState(makeTimedState("A"));
+    a.addParameter("speed", AnimatorComponent::ParamType::Float);
+    a.addParameter("jump",  AnimatorComponent::ParamType::Bool);
+    a.setFloat("speed", 3.5f);
+    a.setBool("jump", true);
+
+    AnimatorComponent::Graph g = a.graph();
+    for (auto& p : g.parameters)
+        if (p.name == "jump") p.type = AnimatorComponent::ParamType::Int;
+    a.applyGraph(g);
+
+    CHECK(nearlyEqual(a.getFloat("speed"), 3.5f));
+    CHECK(a.getInt("jump") == 0);
+    CHECK(!a.getBool("jump"));
+}
+
+// Un undo que reinserta un estado DELANTE del actual cambia el índice del
+// actual. El playhead se casa por editorId: sigue en el mismo estado, con su
+// tiempo.
+static void test_apply_graph_playhead_follows_editor_id()
+{
+    AnimatorComponent a;
+    a.addState(makeTimedState("A"));
+    a.addState(makeTimedState("B"));
+    a.setEntryState(1);
+    a.update(1.0f, false);   // B, 10 ticks
+    CHECK(a.currentStateName() == "B");
+
+    AnimatorComponent::Graph g = a.graph();
+    AnimatorComponent::State c = makeTimedState("C");
+    c.editorId = 99;
+    g.states.insert(g.states.begin(), c);
+    g.entryState = 2;
+    a.applyGraph(g);
+
+    CHECK(a.currentState() == 2);
+    CHECK(a.currentStateName() == "B");
+    CHECK(nearlyEqual(a.animTime(), 10.0f));
+}
+
+// Si el grafo aplicado ya no tiene el estado actual, no hay nada que casar:
+// cae a la entrada con tiempo 0.
+static void test_apply_graph_missing_current_state_falls_to_entry()
+{
+    AnimatorComponent a;
+    a.addState(makeTimedState("A"));
+    a.addState(makeTimedState("B"));
+    a.setEntryState(1);
+    a.update(1.0f, false);
+
+    AnimatorComponent::Graph g = a.graph();
+    g.states.erase(g.states.begin() + 1);
+    g.entryState = 0;
+    a.applyGraph(g);
+
+    CHECK(a.currentState() == 0);
+    CHECK(nearlyEqual(a.animTime(), 0.0f));
+}
+
+// Deshacer el alta de B deja el grafo con solo A, pero el id de B no se puede
+// volver a repartir: un redo lo traerá de vuelta y dos nodos con el mismo id
+// comparten slot visual en imgui-node-editor.
+static void test_apply_graph_never_lowers_next_editor_id()
+{
+    AnimatorComponent a;
+    a.addState(makeTimedState("A"));
+    const AnimatorComponent::Graph soloA = a.graph();
+    const int idB = a.states()[a.addState(makeTimedState("B"))].editorId;
+
+    a.applyGraph(soloA);
+    const int idC = a.states()[a.addState(makeTimedState("C"))].editorId;
+
+    CHECK(idC != idB);
+    CHECK(idC != a.states()[0].editorId);
+}
+
+// Mover nodos no entra en el undo: al deshacer otra cosa, un nodo vivo se queda
+// donde está AHORA. Solo el que vuelve de un borrado toma la posición del
+// snapshot.
+static void test_apply_graph_live_states_keep_position()
+{
+    AnimatorComponent a;
+    a.addState(makeTimedState("A"));
+    AnimatorComponent::State b = makeTimedState("B");
+    b.editorPos = glm::vec2(7.0f, 8.0f);
+    a.addState(b);
+    const AnimatorComponent::Graph snapshot = a.graph();
+
+    a.statesMutable()[0].editorPos = glm::vec2(50.0f, 60.0f);   // el usuario mueve A
+    a.removeState(1);                                            // y borra B
+    a.applyGraph(snapshot);                                      // undo del borrado
+
+    CHECK(a.states().size() == 2);
+    CHECK(a.states()[0].editorPos == glm::vec2(50.0f, 60.0f));
+    CHECK(a.states()[1].editorPos == glm::vec2(7.0f, 8.0f));
+}
+
+// A -> B por trigger con cross-fade de 1 s, ya disparada: deja una mezcla en
+// vuelo con A apagándose.
+static void makeCrossfadeInFlight(AnimatorComponent& a)
+{
+    a.addState(makeTimedState("A"));
+    a.addState(makeTimedState("B"));
+    a.addParameter("t", AnimatorComponent::ParamType::Trigger);
+    a.addParameter("v", AnimatorComponent::ParamType::Float);
+    AnimatorComponent::Transition tr;
+    tr.fromState = 0; tr.toState = 1; tr.duration = 1.0f;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "t";
+    tr.conditions.push_back(c);
+    a.addTransition(tr);
+
+    a.setFloat("v", 2.0f);
+    a.update(0.1f, true);
+    a.setTrigger("t");
+    a.update(0.1f, true);
+}
+
+// Aplicar el propio grafo no puede cambiar nada que se vea: ni parámetros, ni
+// playhead, ni la mezcla en vuelo. Es el caso de deshacer, en Play, una
+// edición que no toca a los estados que se están mezclando.
+static void test_apply_own_graph_changes_nothing()
+{
+    AnimatorComponent a;
+    makeCrossfadeInFlight(a);
+    CHECK(a.blending());
+
+    const int   cur = a.currentState(),  prev = a.previousState();
+    const float t   = a.animTime(),      pt   = a.previousAnimTime();
+    const float w   = a.blendWeight();
+
+    a.applyGraph(a.graph());
+
+    CHECK(a.blending());
+    CHECK(a.currentState() == cur);
+    CHECK(a.previousState() == prev);
+    CHECK(nearlyEqual(a.animTime(), t));
+    CHECK(nearlyEqual(a.previousAnimTime(), pt));
+    CHECK(nearlyEqual(a.blendWeight(), w));
+    CHECK(nearlyEqual(a.getFloat("v"), 2.0f));
+}
+
+// Sin el estado que se apaga no hay contra qué mezclar: la mezcla se corta.
+static void test_apply_graph_without_fading_state_cuts_crossfade()
+{
+    AnimatorComponent a;
+    makeCrossfadeInFlight(a);
+    CHECK(a.blending());
+
+    AnimatorComponent::Graph g = a.graph();
+    g.states.erase(g.states.begin());   // A, el que se apagaba
+    g.transitions.clear();              // apuntaban a A
+    g.entryState = 0;
+    a.applyGraph(g);
+
+    CHECK(!a.blending());
+    CHECK(a.currentStateName() == "B");
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -4312,6 +4489,14 @@ int main()
     test_animation_source_command_undo_add_after_interleaved_remove_undo();
     test_clip_rename_command();
     test_animation_source_command_survives_missing_target();
+
+    test_apply_graph_keeps_param_values_of_same_name_and_type();
+    test_apply_graph_playhead_follows_editor_id();
+    test_apply_graph_missing_current_state_falls_to_entry();
+    test_apply_graph_never_lowers_next_editor_id();
+    test_apply_graph_live_states_keep_position();
+    test_apply_own_graph_changes_nothing();
+    test_apply_graph_without_fading_state_cuts_crossfade();
 
     am.shutdown();
     pm.shutdown();

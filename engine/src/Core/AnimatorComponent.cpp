@@ -142,6 +142,105 @@ namespace DonTopo
             m_transitions.end());
     }
 
+    AnimatorComponent::Graph AnimatorComponent::graph() const
+    {
+        return Graph{ m_states, m_transitions, m_parameters, m_entryState };
+    }
+
+    void AnimatorComponent::applyGraph(const Graph& g)
+    {
+        // Identidades vivas ANTES de sustituir nada: tras copiar g ya no se
+        // sabría qué editorId era el actual, cuál el que se apagaba, ni dónde
+        // estaba cada nodo en el canvas.
+        auto editorIdAt = [this](int idx) {
+            return (idx >= 0 && idx < (int)m_states.size()) ? m_states[idx].editorId : -1;
+        };
+        const int curId  = editorIdAt(m_currentState);
+        const int prevId = editorIdAt(m_prevState);
+        std::unordered_map<int, glm::vec2> livePos;
+        for (const auto& s : m_states) livePos[s.editorId] = s.editorPos;
+
+        const std::vector<Parameter> oldParams = m_parameters;
+        auto oldBools    = m_bools;
+        auto oldTriggers = m_triggers;
+        auto oldInts     = m_ints;
+        auto oldFloats   = m_floats;
+
+        m_states      = g.states;
+        m_transitions = g.transitions;
+        m_parameters  = g.parameters;
+        m_entryState  = g.entryState;
+
+        // Dos pasadas: primero adelantar el contador con los ids que ya
+        // traen los estados, después repartir a los que llegan sin id (-1).
+        // Al revés, un estado sin id podría recibir uno que otro trae ya.
+        for (auto& s : m_states)
+        {
+            if (s.editorId < 0) continue;
+            m_nextEditorId = std::max(m_nextEditorId, s.editorId + 1);
+            auto it = livePos.find(s.editorId);
+            if (it != livePos.end()) s.editorPos = it->second;
+        }
+        for (auto& s : m_states)
+            if (s.editorId < 0) s.editorId = m_nextEditorId++;
+
+        m_bools.clear();
+        m_triggers.clear();
+        m_ints.clear();
+        m_floats.clear();
+        for (const auto& p : m_parameters)
+        {
+            bool mismoTipo = false;
+            for (const auto& o : oldParams)
+                if (o.name == p.name) { mismoTipo = (o.type == p.type); break; }
+            switch (p.type)
+            {
+                case ParamType::Bool:    m_bools[p.name]    = mismoTipo ? oldBools[p.name]    : false; break;
+                case ParamType::Trigger: m_triggers[p.name] = mismoTipo ? oldTriggers[p.name] : false; break;
+                case ParamType::Int:     m_ints[p.name]     = mismoTipo ? oldInts[p.name]     : 0;     break;
+                case ParamType::Float:   m_floats[p.name]   = mismoTipo ? oldFloats[p.name]   : 0.0f;  break;
+            }
+        }
+
+        auto indexOf = [this](int editorId) {
+            if (editorId < 0) return -1;
+            for (int i = 0; i < (int)m_states.size(); i++)
+                if (m_states[i].editorId == editorId) return i;
+            return -1;
+        };
+        const int cur  = indexOf(curId);
+        const int prev = indexOf(prevId);
+
+        if (curId < 0)
+        {
+            // No había playhead (grafo sin arrancar): update() lo pondrá en la
+            // entrada, igual que antes de aplicar nada.
+            m_currentState = -1;
+        }
+        else if (cur >= 0)
+        {
+            m_currentState = cur;
+        }
+        else
+        {
+            m_currentState = m_entryState;
+            m_animTime     = 0.0f;
+            m_finished     = false;
+        }
+
+        if (m_prevState >= 0 && cur >= 0 && prev >= 0)
+        {
+            m_prevState = prev;
+        }
+        else
+        {
+            m_prevState     = -1;
+            m_prevAnimTime  = 0.0f;
+            m_blendElapsed  = 0.0f;
+            m_blendDuration = 0.0f;
+        }
+    }
+
     bool AnimatorComponent::hasParam(const std::string& n, ParamType type) const
     {
         for (const auto& p : m_parameters)

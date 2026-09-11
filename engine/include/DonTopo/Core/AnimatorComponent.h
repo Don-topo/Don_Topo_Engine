@@ -125,6 +125,20 @@ namespace DonTopo
                 ParamType   type = ParamType::Bool;
             };
 
+            // Lo AUTORADO del grafo, sin nada de runtime: lo que guarda y
+            // restaura el undo del editor (AnimatorGraphCommand). Los estados
+            // van enteros —editorId y editorPos incluidos— porque applyGraph
+            // necesita el editorId para casar los estados vivos con los del
+            // snapshot, y la posición para colocar un nodo que vuelve de un
+            // borrado.
+            struct Graph
+            {
+                std::vector<State>      states;
+                std::vector<Transition> transitions;
+                std::vector<Parameter>  parameters;
+                int                     entryState = -1;
+            };
+
             // --- Diseño (editor / carga de escena) ---
             int  addState(State s);                 // devuelve el índice del nuevo estado
             void addTransition(Transition t);
@@ -133,6 +147,23 @@ namespace DonTopo
             void setEntryState(int idx);
             void addParameter(std::string name, ParamType type);
             void removeParameter(const std::string& name);
+
+            Graph graph() const;
+            // Sustituye estados, transiciones, parámetros y entrada por los de
+            // g SIN pasar por reset(): corre en Play (undo a mitad de partida).
+            //  - El playhead se casa por editorId, no por índice: si el estado
+            //    actual sigue en g conserva su tiempo aunque cambie de índice;
+            //    si no, cae a la entrada con tiempo 0. El que se apaga en un
+            //    cross-fade se casa igual, y la mezcla solo se corta si falta
+            //    alguno de los dos.
+            //  - Un parámetro conserva su valor si ya existía con el mismo
+            //    nombre Y el mismo tipo; si no, arranca a su valor por defecto.
+            //  - Los estados vivos (mismo editorId) conservan su editorPos
+            //    actual: mover nodos no entra en el undo.
+            //  - m_nextEditorId nunca baja.
+            // NO resuelve clips: el caché de clipIndex lo rehace el llamante
+            // con rebindClips.
+            void applyGraph(const Graph& g);
 
             const std::vector<State>&      states()      const { return m_states; }
             const std::vector<Transition>& transitions() const { return m_transitions; }
