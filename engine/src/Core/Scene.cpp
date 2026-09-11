@@ -5,6 +5,7 @@
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Core/AnimatorSerialization.h"
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Physics/Colliders/SphereCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
@@ -515,6 +516,14 @@ namespace
         return AnimatorComponent::Compare::Greater;
     }
 
+}   // namespace (anónimo)
+
+// Fuera del namespace anónimo porque el undo del editor la usa (ver
+// AnimatorSerialization.h). Sigue en este fichero porque el formato es de la
+// escena, y sus helpers (paramTypeToStr, condTypeToStr, compareToStr) se quedan
+// dentro del anónimo: desde aquí se ven igual.
+namespace DonTopo
+{
     nlohmann::json animatorToJson(const AnimatorComponent& a)
     {
         auto states = nlohmann::json::array();
@@ -582,6 +591,16 @@ namespace
                  {"transitions", transitions} };
     }
 
+    nlohmann::json animatorGraphKey(const AnimatorComponent& a)
+    {
+        nlohmann::json key = animatorToJson(a);
+        for (auto& s : key["states"]) s.erase("pos");
+        return key;
+    }
+}   // namespace DonTopo
+
+namespace
+{
     // No deserializa estado runtime (estado actual, animTime, valores de
     // parámetros, triggers pendientes) porque no se serializa: el Stop de Play
     // reconstruye la escena desde JSON, así que el reset al estado de entrada

@@ -11,6 +11,7 @@
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Editor/Command.h"
+#include "DonTopo/Core/AnimatorSerialization.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
@@ -19,8 +20,11 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 using namespace DonTopo;
 
@@ -4376,6 +4380,114 @@ static void test_apply_graph_without_current_state_cuts_crossfade()
     CHECK(a.currentStateName() == "A");
 }
 
+// ---- Clave del undo del grafo: lo que se guarda, menos la posición de los nodos ----
+
+// Grafo base de los tests de undo: dos estados (A mezcla con otro clip, así
+// animatorToJson emite también los campos de blend), un parámetro Bool, uno
+// Float y uno Int, y una transición A->B con una condición Bool y otra Float
+// (así se emiten expected, compare y threshold).
+static void makeBaseGraph(AnimatorComponent& a)
+{
+    AnimatorComponent::State sa;
+    sa.name = "A"; sa.clipName = "walk";
+    sa.blendClipName = "run"; sa.blendParam = "speed";
+    sa.blendMin = 0.0f; sa.blendMax = 1.0f;
+    sa.duration = 40.0f; sa.ticksPerSecond = 20.0f;
+    AnimatorComponent::State sb;
+    sb.name = "B"; sb.clipName = "run";
+    sb.duration = 100.0f; sb.ticksPerSecond = 50.0f;
+    a.addState(sa);
+    a.addState(sb);
+    a.addParameter("go",    AnimatorComponent::ParamType::Bool);
+    a.addParameter("speed", AnimatorComponent::ParamType::Float);
+    a.addParameter("hits",  AnimatorComponent::ParamType::Int);
+
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 0.25f;
+    AnimatorComponent::Condition cb;
+    cb.type = AnimatorComponent::ConditionType::Bool;
+    cb.paramName = "go"; cb.expected = true;
+    AnimatorComponent::Condition cf;
+    cf.type = AnimatorComponent::ConditionType::Float;
+    cf.paramName = "speed";
+    cf.compare = AnimatorComponent::Compare::Greater; cf.threshold = 0.5f;
+    t.conditions = { cb, cf };
+    a.addTransition(t);
+}
+
+// Una mutación por cada cosa que el AnimatorPanel puede cambiar y el .scene
+// guarda, hecha por la misma API de Core que usa el panel. Sobre makeBaseGraph.
+using GraphMutation = std::pair<const char*, std::function<void(AnimatorComponent&)>>;
+static std::vector<GraphMutation> graphMutations()
+{
+    using A = AnimatorComponent;
+    return {
+        { "state.name",           [](A& a) { a.statesMutable()[0].name = "X"; } },
+        { "state.clip",           [](A& a) { a.statesMutable()[0].clipName = "idle"; } },
+        { "state.loop",           [](A& a) { a.statesMutable()[0].loop = !a.states()[0].loop; } },
+        { "state.blendClip",      [](A& a) { a.statesMutable()[0].blendClipName = "idle"; } },
+        { "state.blendParam",     [](A& a) { a.statesMutable()[0].blendParam = "hits"; } },
+        { "state.blendMin",       [](A& a) { a.statesMutable()[0].blendMin = 0.25f; } },
+        { "state.blendMax",       [](A& a) { a.statesMutable()[0].blendMax = 2.0f; } },
+        { "state.lockRootMotion", [](A& a) { a.statesMutable()[0].lockRootMotion = true; } },
+        { "addState",             [](A& a) { A::State s; s.name = "C"; s.clipName = "idle"; a.addState(s); } },
+        { "removeState",          [](A& a) { a.removeState(1); } },
+        { "entryState",           [](A& a) { a.setEntryState(1); } },
+        { "addParameter",         [](A& a) { a.addParameter("nuevo", A::ParamType::Trigger); } },
+        { "removeParameter",      [](A& a) { a.removeParameter("hits"); } },
+        { "parameter.name",       [](A& a) { A::Graph g = a.graph(); g.parameters[2].name = "golpes"; a.applyGraph(g); } },
+        { "parameter.type",       [](A& a) { A::Graph g = a.graph(); g.parameters[2].type = A::ParamType::Float; a.applyGraph(g); } },
+        { "addTransition",        [](A& a) { A::Transition t; t.fromState = 1; t.toState = 0; a.addTransition(t); } },
+        { "removeTransition",     [](A& a) { a.removeTransition(0); } },
+        { "transition.from",      [](A& a) { a.transitionsMutable()[0].fromState = 1; } },
+        { "transition.to",        [](A& a) { a.transitionsMutable()[0].toState = 0; } },
+        { "transition.duration",  [](A& a) { a.transitionsMutable()[0].duration = 1.5f; } },
+        { "condition.add",        [](A& a) { A::Condition c; c.type = A::ConditionType::AnimationFinished;
+                                              a.transitionsMutable()[0].conditions.push_back(c); } },
+        { "condition.remove",     [](A& a) { a.transitionsMutable()[0].conditions.pop_back(); } },
+        { "condition.type",       [](A& a) { a.transitionsMutable()[0].conditions[0].type = A::ConditionType::Trigger; } },
+        { "condition.param",      [](A& a) { a.transitionsMutable()[0].conditions[0].paramName = "otro"; } },
+        { "condition.expected",   [](A& a) { a.transitionsMutable()[0].conditions[0].expected = false; } },
+        { "condition.compare",    [](A& a) { a.transitionsMutable()[0].conditions[1].compare = A::Compare::Less; } },
+        { "condition.threshold",  [](A& a) { a.transitionsMutable()[0].conditions[1].threshold = 9.0f; } },
+    };
+}
+
+// Mover un nodo no es una edición para el undo (decisión de diseño). El
+// formato del .scene SÍ guarda la posición: se comprueba también, para que el
+// test no pase solo porque animatorToJson dejara de emitirla.
+static void test_graph_key_ignores_node_position()
+{
+    AnimatorComponent a;
+    makeBaseGraph(a);
+    const nlohmann::json k0 = animatorGraphKey(a);
+
+    a.statesMutable()[0].editorPos = glm::vec2(123.0f, 456.0f);
+
+    CHECK(animatorGraphKey(a) == k0);
+    CHECK(animatorToJson(a)["states"][0].contains("pos"));
+}
+
+// Todo lo que se guarda tiene que verse en la clave: un campo que no se viera
+// sería una edición que no deja entrada en el undo, y sin avisar.
+static void test_graph_key_sees_every_saved_field()
+{
+    AnimatorComponent base;
+    makeBaseGraph(base);
+    const nlohmann::json k0 = animatorGraphKey(base);
+
+    for (const auto& [name, mutate] : graphMutations())
+    {
+        AnimatorComponent a = base;
+        mutate(a);
+        if (animatorGraphKey(a) == k0)
+        {
+            std::printf("FAIL: la clave del grafo no ve '%s'\n", name);
+            ++g_failures;
+        }
+    }
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -4517,6 +4629,9 @@ int main()
     test_apply_own_graph_changes_nothing();
     test_apply_graph_without_fading_state_cuts_crossfade();
     test_apply_graph_without_current_state_cuts_crossfade();
+
+    test_graph_key_ignores_node_position();
+    test_graph_key_sees_every_saved_field();
 
     am.shutdown();
     pm.shutdown();
