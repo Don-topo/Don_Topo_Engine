@@ -1363,7 +1363,7 @@ static void test_factor_clone_clear_restores_model_value_not_override(PhysicsMan
     CHECK(clone->getMesh()->material.metallic == 0.0f);
 }
 
-// --- RemoveMeshCommand: quitar el Mesh por el stack de undo ---
+// --- MeshComponentCommand: añadir y quitar el Mesh por el stack de undo ---
 //
 // Deuda aceptada en su dia: la "x" del Mesh quitaba la malla y vaciaba los
 // overrides fuera del undo, asi que Ctrl+Z no devolvia nada y las texturas
@@ -1388,7 +1388,7 @@ static void test_remove_mesh_undo_restores_mesh_and_overrides()
     setMaterialTextureOverride(*go, 0, MaterialTextureSlot::Albedo, "assets/mia.png");
     setMaterialFactorOverride(*go, 0, MaterialFactorSlot::Metallic, 0.8f);
 
-    RemoveMeshCommand cmd(scene, nullptr, "Quitar Mesh", *go);
+    MeshComponentCommand cmd(scene, nullptr, "Quitar Mesh", *go, /*add=*/false);
     cmd.execute();
     CHECK(!scene.findById(id)->hasMesh());
     CHECK(scene.findById(id)->materialOverrides.empty());
@@ -1425,7 +1425,7 @@ static void test_remove_mesh_undo_does_not_overwrite_newer_mesh()
     const uint64_t id = go->id;
     setMaterialTextureOverride(*go, 0, MaterialTextureSlot::Albedo, "assets/mia.png");
 
-    RemoveMeshCommand cmd(scene, nullptr, "Quitar Mesh", *go);
+    MeshComponentCommand cmd(scene, nullptr, "Quitar Mesh", *go, /*add=*/false);
     cmd.execute();
 
     auto b = std::make_shared<Mesh>();
@@ -1442,6 +1442,55 @@ static void test_remove_mesh_undo_does_not_overwrite_newer_mesh()
     cmd.undo();
     CHECK(!scene.findById(id)->hasMesh());
     CHECK(scene.findById(id)->materialOverrides.empty());
+}
+
+// Añadir: el comando se apila cuando la carga YA aterrizo (applyLoadedMesh hizo
+// el setMesh y aplico los overrides), SIN execute. Undo la quita; redo devuelve
+// la misma malla con sus overrides y el baseline del FBX intacto.
+static void test_add_mesh_command_undo_redo()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->material.texturePath = "assets/fbx_albedo.png";
+    go->setMesh(mesh);   // lo que hace applyLoadedMesh al aterrizar
+    const uint64_t id = go->id;
+    setMaterialTextureOverride(*go, 0, MaterialTextureSlot::Albedo, "assets/mia.png");
+
+    MeshComponentCommand cmd(scene, nullptr, "Añadir Mesh", *go, /*add=*/true);
+
+    cmd.undo();
+    CHECK(!scene.findById(id)->hasMesh());
+    CHECK(scene.findById(id)->materialOverrides.empty());
+
+    cmd.execute();
+    CHECK(scene.findById(id)->getMesh() == mesh);
+    CHECK(mesh->material.texturePath == "assets/mia.png");
+    setMaterialTextureOverride(*scene.findById(id), 0, MaterialTextureSlot::Albedo, "");
+    CHECK(mesh->material.texturePath == "assets/fbx_albedo.png");
+}
+
+// Deshacer "añadir A" solo quita A. Si la malla ya es otra -llego por un camino
+// sin undo, como borrar el FBX en uso desde el Content Browser y cargar otro-,
+// este comando no se la lleva.
+static void test_add_mesh_undo_only_removes_its_own_mesh()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto a = std::make_shared<Mesh>();
+    go->setMesh(a);
+    const uint64_t id = go->id;
+
+    MeshComponentCommand cmd(scene, nullptr, "Añadir Mesh", *go, /*add=*/true);
+
+    auto b = std::make_shared<Mesh>();
+    b->material.texturePath = "assets/b.png";
+    setMaterialTextureOverride(*scene.findById(id), 0, MaterialTextureSlot::Albedo, "assets/mia.png");
+    scene.findById(id)->setMesh(b);
+
+    cmd.undo();
+    CHECK(scene.findById(id)->getMesh() == b);
+    CHECK(scene.findById(id)->materialOverrides.size() == 1);
 }
 
 // --- decodeMaterialTexture: la ruta gana, en los CUATRO uploaders ---
@@ -1745,6 +1794,8 @@ int main()
 
     test_remove_mesh_undo_restores_mesh_and_overrides();
     test_remove_mesh_undo_does_not_overwrite_newer_mesh();
+    test_add_mesh_command_undo_redo();
+    test_add_mesh_undo_only_removes_its_own_mesh();
 
     am.shutdown();
     pm.shutdown();

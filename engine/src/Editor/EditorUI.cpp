@@ -1106,6 +1106,20 @@ void EditorUI::onAssetsLoaded(std::vector<LoadedMesh> results, Scene& scene, Edi
             m_logPanel.push(aviso);
         if (!ok && !err.empty())
             m_logPanel.push(err);
+
+        // Añadir un Mesh entra en el undo AQUÍ y no al pulsar el botón: la
+        // carga es asíncrona, y hasta que applyLoadedMesh no hace el setMesh no
+        // hay malla que guardar. Solo las que pidió el usuario desde Properties
+        // (la carga de escena pasa por este mismo pump), y se consulta aunque
+        // haya fallado, para que no se quede apuntada. Se apila SIN execute():
+        // el setMesh ya está hecho.
+        const bool delUsuario = m_propertiesPanel.consumeUserMeshJob(r.targetId, r.job);
+        if (ok && delUsuario)
+        {
+            if (GameObject* go = scene.findById(r.targetId))
+                m_undoHistory.push(std::make_unique<MeshComponentCommand>(
+                    scene, &renderer, "Añadir Mesh a '" + go->name + "'", *go, /*add=*/true));
+        }
     }
 
     // Un solo submit para todos los uploads de este pump. Es lo que convierte

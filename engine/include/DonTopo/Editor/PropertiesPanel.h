@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <glm/glm.hpp>
 #include "DonTopo/Editor/UndoManager.h" // BoxColliderState, SphereColliderState, CapsuleColliderState, PlaneColliderState
 #include "DonTopo/Editor/DeferredSlider.h"
@@ -43,6 +44,15 @@ public:
     //   - Undo/Redo: mutan los componentes en sitio, así que la sección tiene
     //     que volver a leerlos o se queda enseñando el valor deshecho.
     void invalidateCaches();
+
+    // ¿La carga `job` que acaba de aterrizar en `targetId` la pidió el usuario
+    // desde la sección Mesh? Si sí, la olvida y devuelve true. La llama
+    // EditorUI::onAssetsLoaded para decidir si apila el undo de "añadir Mesh":
+    // la carga de escena usa el mismo requestMesh y no es una edición. Por
+    // objeto Y job, no solo por objeto: una recarga de la misma escena
+    // conserva los ids, así que una petición cancelada que se quedara aquí
+    // colaría la carga de escena de ese objeto como si fuera del usuario.
+    bool consumeUserMeshJob(uint64_t targetId, uint64_t job);
 
     // Un GameObject solo ofrece los componentes de UI si YA tiene Canvas: el
     // Canvas es la raíz de la que cuelgan. Es la única fuente de verdad del
@@ -624,6 +634,11 @@ private:
     // pedido. Los ids arrancan en 1 (GameObject.cpp: s_nextId{1}), así que 0
     // nunca colisiona con uno real.
     uint64_t m_meshAddRequestedFor = 0;
+
+    // Cargas de mesh pedidas desde la sección Mesh, objeto -> job, hasta que
+    // aterrizan (ver consumeUserMeshJob). Una por objeto como mucho: el
+    // pendingMeshJob de loadMeshForSelected no deja pedir otra en vuelo.
+    std::unordered_map<uint64_t, uint64_t> m_userMeshJobs;
 
     // Misma razón que m_meshFileDialog: instancia propia, nunca compartida
     // con m_meshFileDialog.

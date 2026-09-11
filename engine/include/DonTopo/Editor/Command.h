@@ -8,7 +8,7 @@
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 #include "DonTopo/Core/CameraComponent.h"
-#include "DonTopo/Core/GameObject.h" // MaterialOverride y Mesh, para RemoveMeshCommand
+#include "DonTopo/Core/GameObject.h" // MaterialOverride y Mesh, para MeshComponentCommand
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
@@ -805,7 +805,18 @@ private:
     float              m_after;
 };
 
-// Quitar el componente Mesh, por el stack de undo.
+// Añadir o quitar el componente Mesh, por el stack de undo. Mismo contrato que
+// CameraComponentCommand: `add` dice qué hace execute(), y undo() hace lo
+// contrario. Las dos direcciones son las mismas dos operaciones -poner esta
+// malla con estos overrides, y quitarla- con los papeles cambiados.
+//
+// QUITAR: el panel construye, llama a execute() y apila, como el resto.
+//
+// AÑADIR: se apila SIN execute(), cuando la carga ya ha aterrizado. Añadir un
+// Mesh es asíncrono: el botón solo encola, y hasta que applyLoadedMesh no hace
+// el setMesh no hay malla que guardar. Por eso lo apila EditorUI::onAssetsLoaded
+// y no el panel, y solo para las cargas que pidió el usuario desde Properties
+// (la carga de escena usa el mismo requestMesh y no es una edición).
 //
 // Antes la "x" de la sección Mesh quitaba la malla y VACIABA materialOverrides
 // fuera del undo: Ctrl+Z no la devolvía, y con ella se perdían las texturas y
@@ -823,27 +834,36 @@ private:
 // recapturaría como "original del FBX" la textura del usuario, y un Clear
 // posterior la devolvería a ella.
 //
-// El undo NO hace nada si el objeto ya tiene otra malla, o una carga en vuelo:
-// añadir un Mesh no pasa por el undo (es asíncrono), así que "quitar A, añadir
-// B, Ctrl+Z" llegaría aquí con B puesta, y restaurar A la pisaría sin que B se
-// pudiera recuperar.
+// Dos guardas, una por dirección, porque hay caminos que cambian la malla SIN
+// pasar por el undo (borrar un FBX en uso desde el Content Browser, o una
+// carga que aterriza después):
+//  - poner no hace nada si el objeto ya tiene una malla o una carga en vuelo:
+//    restaurar la nuestra pisaría la otra sin que se pudiera recuperar;
+//  - quitar solo quita LA NUESTRA (misma instancia): si la malla ya es otra, no
+//    es este comando quien debe llevársela.
 //
 // El renderer es PUNTERO y puede ser nullptr (tests headless), como en
 // MaterialTextureCommand.
-class RemoveMeshCommand : public ICommand {
+class MeshComponentCommand : public ICommand {
 public:
-    // Captura la malla y los overrides de `go` tal como están AHORA: se
-    // construye justo antes del execute().
-    RemoveMeshCommand(Scene& scene, EditorRenderer* renderer, std::string label, GameObject& go);
+    // Captura la malla y los overrides de `go` tal como están AHORA: con add
+    // = false, justo antes del execute(); con add = true, justo después de que
+    // la carga aterrizó.
+    MeshComponentCommand(Scene& scene, EditorRenderer* renderer, std::string label,
+                          GameObject& go, bool add);
     void execute() override;
     void undo() override;
     std::string label() const override { return m_label; }
 
 private:
+    void put();
+    void remove();
+
     Scene&                        m_scene;
     EditorRenderer*               m_renderer;
     std::string                   m_label;
     uint64_t                      m_id;
+    bool                          m_add;
     std::shared_ptr<Mesh>         m_mesh;
     std::vector<MaterialOverride> m_overrides;
 };

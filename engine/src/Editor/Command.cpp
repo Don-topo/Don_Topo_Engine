@@ -774,15 +774,20 @@ void MaterialFactorCommand::apply(float value)
                                              mats[(size_t)m_materialIndex]->roughness);
 }
 
-RemoveMeshCommand::RemoveMeshCommand(Scene& scene, EditorRenderer* renderer, std::string label,
-                                     GameObject& go)
+MeshComponentCommand::MeshComponentCommand(Scene& scene, EditorRenderer* renderer,
+                                           std::string label, GameObject& go, bool add)
     : m_scene(scene), m_renderer(renderer), m_label(std::move(label)), m_id(go.id),
-      m_mesh(go.getMesh()), m_overrides(go.materialOverrides) {}
+      m_add(add), m_mesh(go.getMesh()), m_overrides(go.materialOverrides) {}
 
-void RemoveMeshCommand::execute()
+void MeshComponentCommand::execute() { if (m_add) put();    else remove(); }
+void MeshComponentCommand::undo()    { if (m_add) remove(); else put();    }
+
+void MeshComponentCommand::remove()
 {
     GameObject* go = m_scene.findById(m_id);
-    if (!go || !go->hasMesh()) return;
+    // Solo la NUESTRA: si llegó otra por un camino sin undo, no es de este
+    // comando.
+    if (!go || !go->hasMesh() || go->getMesh() != m_mesh) return;
 
     // El backend suelta la GPU y hace setMesh(nullptr). Sin renderer (tests
     // headless) queda solo la parte de CPU.
@@ -798,7 +803,7 @@ void RemoveMeshCommand::execute()
         go->materialOverrides.clear();
 }
 
-void RemoveMeshCommand::undo()
+void MeshComponentCommand::put()
 {
     GameObject* go = m_scene.findById(m_id);
     if (!go || !m_mesh) return;

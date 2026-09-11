@@ -349,8 +349,19 @@ void PropertiesPanel::loadMeshForSelected(EditorContext& ctx, uint64_t ownerId,
     // y el setMesh los hace EditorUI::onAssetsLoaded (vía applyLoadedMesh) cuando
     // el worker termine y el pump por frame lo recoja.
     owner->pendingMeshJob = ctx.assetLoader->requestMesh(path, owner->id);
+    // Para que, al aterrizar, EditorUI sepa que esta carga es una edición y
+    // apile su undo (ver consumeUserMeshJob).
+    m_userMeshJobs[owner->id] = owner->pendingMeshJob;
     m_meshLoadError.clear();
     ctx.pushLog("Cargando '" + path + "'...");
+}
+
+bool PropertiesPanel::consumeUserMeshJob(uint64_t targetId, uint64_t job)
+{
+    const auto it = m_userMeshJobs.find(targetId);
+    if (it == m_userMeshJobs.end() || it->second != job) return false;
+    m_userMeshJobs.erase(it);
+    return true;
 }
 
 // Snapshot y restauración del AudioClipComponent, en un solo sitio: los usan
@@ -7887,11 +7898,11 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
         {
             // Por el stack de undo: el comando quita la malla, vacía
             // materialOverrides y lo devuelve todo en un Ctrl+Z. El porqué de
-            // vaciar, y de la guarda por hasMesh(), vive ahora en
-            // RemoveMeshCommand (Command.h), que es quien lo hace.
-            auto cmd = std::make_unique<RemoveMeshCommand>(
+            // vaciar, y de la guarda por hasMesh(), vive en
+            // MeshComponentCommand (Command.h), que es quien lo hace.
+            auto cmd = std::make_unique<MeshComponentCommand>(
                 *ctx.scene, ctx.renderer, "Quitar Mesh de '" + ctx.selected->name + "'",
-                *ctx.selected);
+                *ctx.selected, /*add=*/false);
             cmd->execute();
             if (ctx.undo) ctx.undo->push(std::move(cmd));
             // Vuelve a ocultar la sección tras quitar el mesh — hay que
