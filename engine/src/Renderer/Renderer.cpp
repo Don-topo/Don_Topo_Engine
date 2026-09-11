@@ -4,6 +4,7 @@
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include <GLFW/glfw3.h>
+#include <cstring>
 #include <stdexcept>
 #include "DonTopo/Core/Window.h"
 #include <algorithm>

@@ -30,7 +30,9 @@ jobs:
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
       - name: Compilar
-        run: ./build.sh linux-release 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
+        # -k 0: seguir tras el primer fallo, para ver TODOS los errores en un run
+        # (con el valor por defecto Ninja para en el primer fichero).
+        run: cmake --build --preset linux-release -- -k 0 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
       # Los errores del compilador como UNA anotacion: se leen desde la API de
       # GitHub sin descargar el log entero.
       - name: Resumen de errores
@@ -38,7 +40,7 @@ jobs:
         run: |
           for f in configure.log build.log; do
             [ -f "$f" ] || continue
-            resumen=$(grep -E "error|Error|FAILED" "$f" | head -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
+            resumen=$(grep -E "error:|Error|FAILED" "$f" | sed "s#.*/Don_Topo_Engine/##" | sort -u | head -150 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
             [ -n "$resumen" ] && echo "::error title=$f::$resumen"
           done
       - name: Tests (desde la raiz del repo)
