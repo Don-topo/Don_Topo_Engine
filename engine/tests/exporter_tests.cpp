@@ -897,7 +897,9 @@ static void test_release_package_bundles_msvc_crt()
     fs::remove_all(dest, ec);
 
     ExportResult r2 = writeExportPackage({}, scene.toJson(), dest, "MiJuego",
-                                         fixRoot, fixRoot / "Scripts", fixRoot / "DonTopoRuntime.exe");
+                                         fixRoot, fixRoot / "Scripts", fixRoot / "DonTopoRuntime.exe",
+                                         RenderBackend::Vulkan, "assets/skybox",
+                                         exportPlatformFor(platform::Os::Windows));
     CHECK(r2.ok);
     bool avisaCrt = std::any_of(r2.messages.begin(), r2.messages.end(), [](const std::string& m) {
         return m.find("CRT de MSVC") != std::string::npos &&
