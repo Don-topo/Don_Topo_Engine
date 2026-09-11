@@ -142,6 +142,22 @@ build.bat
 for %f in (build-ninja\engine\tests\dt_*_tests.exe) do @%f
 ```
 
+## Build (Linux)
+
+Ubuntu/Debian recientes (GCC 12+, cmake 3.25+):
+
+```bash
+sudo apt install build-essential cmake ninja-build glslc libvulkan-dev \
+    libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+    libwayland-dev libxkbcommon-dev wayland-protocols pkg-config
+# FMOD: descargar "FMOD Engine" para Linux de fmod.com y extraerlo en third_party/fmod
+./configure.sh && ./build.sh                               # Debug   (build-linux/)
+./configure.sh linux-release && ./build.sh linux-release   # Release (build-linux-release/)
+```
+
+Los tests se lanzan desde la raíz del repo (`build-linux/engine/tests/dt_*`).
+El backend DirectX 12 no existe en Linux; el editor usa Vulkan.
+
 ## Project Structure
 
 ```text

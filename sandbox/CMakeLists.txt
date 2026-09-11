@@ -1,7 +1,10 @@
 add_executable(Sandbox
     src/main.cpp
-    Sandbox.rc
 )
+# Recurso de Windows (icono del .exe): no existe fuera de Windows.
+if(WIN32)
+    target_sources(Sandbox PRIVATE Sandbox.rc)
+endif()
 
 # DonTopoEditor arrastra DonTopoCore como PUBLIC.
 target_link_libraries(Sandbox
@@ -10,7 +13,7 @@ target_link_libraries(Sandbox
 )
 
 # Compilar shaders GLSL -> SPIR-V con glslc
-find_program(GLSLC glslc HINTS $ENV{VULKAN_SDK}/Bin)
+find_program(GLSLC glslc HINTS $ENV{VULKAN_SDK}/Bin $ENV{VULKAN_SDK}/bin)
 
 set(SHADER_SRC_DIR ${CMAKE_SOURCE_DIR}/shaders)
 set(SHADER_OUT_DIR $<TARGET_FILE_DIR:Sandbox>/shaders)
@@ -158,16 +161,4 @@ if(MSVC AND CMAKE_BUILD_TYPE STREQUAL "Release")
     endif()
 endif()
 
-# Copy FMOD runtime DLL next to the executable (Windows only)
-if(FMOD_FOUND AND WIN32)
-    get_filename_component(_fmod_lib_dir "${FMOD_LIBRARY}" DIRECTORY)
-    set(_fmod_dll "${_fmod_lib_dir}/fmod.dll")
-    if(EXISTS "${_fmod_dll}")
-        add_custom_command(TARGET Sandbox POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_fmod_dll}"
-                "$<TARGET_FILE_DIR:Sandbox>/fmod.dll"
-            COMMENT "Copying fmod.dll to output"
-        )
-    endif()
-endif()
+dt_copy_fmod_runtime(Sandbox)

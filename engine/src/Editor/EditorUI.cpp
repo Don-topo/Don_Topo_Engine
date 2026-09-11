@@ -1952,7 +1952,7 @@ void EditorUI::runExport()
     fs::path canon = fs::canonical(projectRoot, ec);
     if (!ec) projectRoot = canon;
 
-    const fs::path runtimeExe = projectRoot / "DonTopoRuntime.exe";
+    const fs::path runtimeExe = projectRoot / DT_RUNTIME_FILE_NAME;
     const fs::path scriptsDir = m_scriptManager ? m_scriptManager->scriptsDirPath()
                                                 : projectRoot / "Scripts";
 

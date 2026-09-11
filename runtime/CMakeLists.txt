@@ -26,8 +26,8 @@ endif()
 add_custom_command(TARGET DonTopoRuntime POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:DonTopoRuntime>
-        $<TARGET_FILE_DIR:Sandbox>/DonTopoRuntime.exe
-    COMMENT "Copying DonTopoRuntime.exe next to the editor"
+        $<TARGET_FILE_DIR:Sandbox>/${DT_RUNTIME_FILE_NAME}
+    COMMENT "Copying ${DT_RUNTIME_FILE_NAME} next to the editor"
 )
 
 # Shaders y assets junto al binario del runtime, para poder EJECUTARLO desde su
@@ -67,3 +67,5 @@ if(DTE_ENABLE_D3D12)
         COMMENT "Copying DXIL shaders next to DonTopoRuntime"
     )
 endif()
+
+dt_copy_fmod_runtime(DonTopoRuntime)

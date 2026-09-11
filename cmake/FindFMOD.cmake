@@ -59,6 +59,7 @@ if(WIN32)
         PATHS ${_FMOD_ROOTS}
         PATH_SUFFIXES
             "api/core/lib/${_FMOD_ARCH}"
+            "api/core/lib/x86_64"
             api/core/lib
             lib
         NO_DEFAULT_PATH
@@ -69,6 +70,7 @@ else()
         PATHS ${_FMOD_ROOTS}
         PATH_SUFFIXES
             "api/core/lib/${_FMOD_ARCH}"
+            "api/core/lib/x86_64"
             api/core/lib
             lib
         NO_DEFAULT_PATH

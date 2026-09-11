@@ -79,6 +79,7 @@ endif()
 # Not REQUIRED here: FMOD may not be installed yet.
 # Pass -DFMOD_DIR=<install_root> to cmake or set the FMOD_DIR environment variable.
 find_package(FMOD)
+include(cmake/FmodRuntime.cmake)
 if(NOT FMOD_FOUND)
     message(WARNING
         "FMOD SDK not found — audio will not be available.\n"
@@ -358,6 +359,16 @@ set(CMAKE_CXX_FLAGS_DEBUG "${DT_FLAGS_CXX_DEBUG_ORIG}")
 # FetchContent_Declare(gainput ...) # dedicated input
 
 # ─── Targets ─────────────────────────────────────────────────────────────────
+
+# Linux: los binarios buscan libfmod.so en su propia carpeta (el juego
+# exportado depende de lo mismo). Solo afecta a los targets de aqui abajo.
+if(UNIX AND NOT APPLE)
+    set(CMAKE_BUILD_RPATH "\$ORIGIN")
+endif()
+
+# Nombre del binario del runtime, UNA vez: lo usan el POST_BUILD que lo copia
+# junto al editor y el editor al exportar (DT_RUNTIME_FILE_NAME).
+set(DT_RUNTIME_FILE_NAME "DonTopoRuntime${CMAKE_EXECUTABLE_SUFFIX}")
 
 add_subdirectory(engine)
 add_subdirectory(sandbox)

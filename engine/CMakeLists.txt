@@ -159,6 +159,9 @@ add_library(DonTopoEditor STATIC
     src/Editor/GameExporter.cpp
 )
 
+# El exportador busca el runtime por este nombre (lo fija el CMakeLists raiz).
+target_compile_definitions(DonTopoEditor PRIVATE DT_RUNTIME_FILE_NAME="${DT_RUNTIME_FILE_NAME}")
+
 target_link_libraries(DonTopoEditor
     PUBLIC
         DonTopoCore

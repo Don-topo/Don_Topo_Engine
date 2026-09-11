@@ -1,0 +1,4 @@
+# Scripts de shell y workflows de CI en LF siempre: bash no ejecuta un .sh con
+# CRLF, aunque el resto del repo vaya en CRLF.
+*.sh  text eol=lf
+*.yml text eol=lf
