@@ -287,22 +287,9 @@ void GpuResources::createTextureImage(const std::string& path, const std::vector
         return;
     }
 
-    int w, h, channels;
-    stbi_uc* pixels = nullptr;
-    bool fromStb = false;
-
-    switch (chooseTextureSource(path, embedded)) {
-        case TextureSource::Path:
-            pixels  = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
-            fromStb = (pixels != nullptr);
-            break;
-        case TextureSource::Embedded:
-            pixels  = stbi_load_from_memory(embedded.data(), (int)embedded.size(), &w, &h, &channels, STBI_rgb_alpha);
-            fromStb = (pixels != nullptr);
-            break;
-        case TextureSource::None:
-            break;  // el early-return de arriba ya cubre este caso
-    }
+    const DecodedTexture tex = decodeMaterialTexture(path, embedded);
+    int w = tex.w, h = tex.h;
+    const unsigned char* pixels = tex.pixels.get();
 
     // Sin pixeles hay DOS motivos distintos y hasta ahora los dos acababan en
     // damero. Ver PlaceholderTexture.h: el material que no pide ninguna textura
@@ -321,9 +308,8 @@ void GpuResources::createTextureImage(const std::string& path, const std::vector
         pixels = placeholder.data();
     }
 
+    // Copiados al staging aquí dentro: `tex` suelta los de stb al salir.
     uploadPixelsToImage(pixels, (uint32_t)w, (uint32_t)h, VK_FORMAT_R8G8B8A8_SRGB, img, mem, batch);
-    // Copiados ya al staging: stb puede soltarlos.
-    if (fromStb) stbi_image_free(pixels);
 }
 
 void GpuResources::createNormalMapImage(const std::string& path, const std::vector<uint8_t>& embedded, VkImage& img, VkDeviceMemory& mem, TransferBatch* batch)
@@ -338,22 +324,9 @@ void GpuResources::createNormalMapImage(const std::string& path, const std::vect
         return;
     }
 
-    int w, h, channels;
-    stbi_uc* pixels = nullptr;
-    bool fromStb = false;
-
-    switch (chooseTextureSource(path, embedded)) {
-        case TextureSource::Path:
-            pixels  = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
-            fromStb = (pixels != nullptr);
-            break;
-        case TextureSource::Embedded:
-            pixels  = stbi_load_from_memory(embedded.data(), (int)embedded.size(), &w, &h, &channels, STBI_rgb_alpha);
-            fromStb = (pixels != nullptr);
-            break;
-        case TextureSource::None:
-            break;  // el early-return de arriba ya cubre este caso
-    }
+    const DecodedTexture tex = decodeMaterialTexture(path, embedded);
+    int w = tex.w, h = tex.h;
+    const unsigned char* pixels = tex.pixels.get();
 
     // Fallback: flat normal (0,0,1) en tangent space = (128,128,255)
     uint8_t flatNormal[4] = { 0x80, 0x80, 0xFF, 0xFF };
@@ -363,7 +336,6 @@ void GpuResources::createNormalMapImage(const std::string& path, const std::vect
     }
 
     uploadPixelsToImage(pixels, (uint32_t)w, (uint32_t)h, VK_FORMAT_R8G8B8A8_UNORM, img, mem, batch);
-    if (fromStb) stbi_image_free(pixels);
 }
 
 void GpuResources::createTextureImageView(VkImage image, VkImageView& view, VkFormat format)

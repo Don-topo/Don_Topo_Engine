@@ -16,6 +16,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -1361,6 +1363,76 @@ static void test_factor_clone_clear_restores_model_value_not_override(PhysicsMan
     CHECK(clone->getMesh()->material.metallic == 0.0f);
 }
 
+// --- decodeMaterialTexture: la ruta gana, en los CUATRO uploaders ---
+//
+// Deuda aceptada en su dia: cada uploader llevaba su propio switch sobre
+// chooseTextureSource, y los tests de chooseTextureSource no ataban a ninguno.
+// Revertir uno solo a "la embebida gana" dejaba la suite en verde. Ahora
+// decodifican todos por decodeMaterialTexture, y estos dos tests cubren las dos
+// mitades: que esa funcion elige bien, y que nadie decodifica por su cuenta.
+
+static std::vector<uint8_t> leeFichero(const std::string& ruta)
+{
+    std::ifstream f(ruta, std::ios::binary);
+    return std::vector<uint8_t>(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+}
+
+// Dos PNG de TAMAÑO distinto, para saber cual se decodifico sin comparar
+// pixeles: la ruta mide 512x512 y la "embebida" 672x768.
+static void test_decode_material_texture_path_beats_embedded()
+{
+    const std::string          ruta     = "assets/skybox/_test_nx.png";
+    const std::vector<uint8_t> embebida = leeFichero("assets/MainEngineLogo.png");
+    // Lanzado desde otro cwd no encuentra los assets: FALLA, no aprueba.
+    CHECK(std::filesystem::exists(ruta));
+    CHECK(!embebida.empty());
+
+    const DecodedTexture lasDos = decodeMaterialTexture(ruta, embebida);
+    CHECK(lasDos && lasDos.w == 512 && lasDos.h == 512);
+
+    const DecodedTexture soloEmbebida = decodeMaterialTexture("", embebida);
+    CHECK(soloEmbebida && soloEmbebida.w == 672 && soloEmbebida.h == 768);
+
+    // Ruta rota con la embebida puesta: NADA, no la del FBX. Una ruta rota
+    // tiene que verse (damero en el caller), nunca taparse con la original.
+    const DecodedTexture rota = decodeMaterialTexture("assets/no_existe_en_el_repo.png", embebida);
+    CHECK(!rota && rota.w == 0 && rota.h == 0);
+
+    CHECK(!decodeMaterialTexture("", {}));
+}
+
+// La otra mitad: decodificar la embebida exige stbi_load_from_memory, asi que
+// un uploader que volviera a su propio switch tendria que llamarlo. Lee el
+// codigo en disco, como el test de includes de GameObject.h en camera_tests.
+static void test_no_uploader_decodes_embedded_on_its_own()
+{
+    int ficheros = 0;
+    std::vector<std::string> culpables;
+    for (const char* raiz : { "engine/src", "engine/include" })
+    {
+        CHECK(std::filesystem::is_directory(raiz));
+        if (!std::filesystem::is_directory(raiz)) continue;
+        for (const auto& e : std::filesystem::recursive_directory_iterator(raiz))
+        {
+            if (!e.is_regular_file()) continue;
+            const std::string ext = e.path().extension().string();
+            if (ext != ".cpp" && ext != ".h") continue;
+            ++ficheros;
+            // El .cpp la llama y el .h la nombra en el comentario que explica
+            // todo esto: los dos son la casa de la funcion.
+            if (e.path().stem() == "MaterialTextureSource") continue;
+            const std::vector<uint8_t> bytes = leeFichero(e.path().string());
+            const std::string texto(bytes.begin(), bytes.end());
+            if (texto.find("stbi_load_from_memory") != std::string::npos)
+                culpables.push_back(e.path().generic_string());
+        }
+    }
+    for (const std::string& c : culpables)
+        std::printf("  stbi_load_from_memory fuera de decodeMaterialTexture: %s\n", c.c_str());
+    CHECK(ficheros > 100);   // de verdad recorrio el arbol
+    CHECK(culpables.empty());
+}
+
 // --- Sliders de Metallic/Roughness contra un ImGui de VERDAD, sin ventana ---
 //
 // El bug que tapan estos tests no estaba en ningun comando ni en el Material:
@@ -1586,6 +1658,9 @@ int main()
     test_imgui_slider_release_frame_does_not_deliver_value();
     test_deferred_slider_commits_dragged_value();
     test_deferred_slider_forgets_drag_of_vanished_widget();
+
+    test_decode_material_texture_path_beats_embedded();
+    test_no_uploader_decodes_embedded_on_its_own();
 
     am.shutdown();
     pm.shutdown();

@@ -2566,38 +2566,19 @@ D3D12MA::Allocation* D3D12Renderer::Impl::uploadTexture(const void* pixels, UINT
 D3D12MA::Allocation* D3D12Renderer::Impl::uploadMaterialTexture(
     const std::string& path, const std::vector<uint8_t>& embedded, bool srgb, UINT srvIndex)
 {
-    int      w = 0, h = 0, channels = 0;
-    stbi_uc* pixels = nullptr;
-    switch (chooseTextureSource(path, embedded)) {
-        case TextureSource::Path:
-            pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
-            break;
-        case TextureSource::Embedded:
-            pixels = stbi_load_from_memory(embedded.data(), static_cast<int>(embedded.size()), &w, &h,
-                                           &channels, STBI_rgb_alpha);
-            break;
-        case TextureSource::None:
-            break;  // pixels queda nullptr: el caller (fuera de esta función) pone su relleno
-    }
-
-    if (!pixels)
-        return nullptr;
+    const DecodedTexture tex = decodeMaterialTexture(path, embedded);
+    if (!tex)
+        return nullptr;  // el caller (fuera de esta función) pone su relleno
 
     // sRGB para el color base y lineal para las normales: una normal
     // interpretada como color se descodifica con gamma y apunta a otro sitio.
     const DXGI_FORMAT format =
         srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
 
-    D3D12MA::Allocation* allocation = nullptr;
-    try {
-        allocation = uploadTexture(pixels, static_cast<UINT>(w), static_cast<UINT>(h), 1, format, 4,
-                                   srvIndex);
-    } catch (...) {
-        stbi_image_free(pixels);
-        throw;
-    }
-    stbi_image_free(pixels);
-    return allocation;
+    // `tex` suelta los píxeles al salir, también si uploadTexture lanza: el
+    // try/catch que había aquí solo existía para no fugarlos en ese caso.
+    return uploadTexture(tex.pixels.get(), static_cast<UINT>(tex.w), static_cast<UINT>(tex.h), 1,
+                         format, 4, srvIndex);
 }
 
 void D3D12Renderer::Impl::createTexture2DSrv(ID3D12Resource* resource, DXGI_FORMAT format,

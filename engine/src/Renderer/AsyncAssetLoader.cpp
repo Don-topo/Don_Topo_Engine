@@ -5,7 +5,6 @@
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
 
-#include <stb_image.h>
 
 #include <algorithm>
 #include <chrono>
@@ -24,29 +23,15 @@ namespace DonTopo
         bool decodeSlot(const std::string& path, const std::vector<uint8_t>& embedded,
                         DecodedImage::Slot slot, std::vector<DecodedImage>& out)
         {
-            int w = 0, h = 0, channels = 0;
-            stbi_uc* px = nullptr;
-
-            switch (chooseTextureSource(path, embedded)) {
-                case TextureSource::Path:
-                    px = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
-                    break;
-                case TextureSource::Embedded:
-                    px = stbi_load_from_memory(embedded.data(), static_cast<int>(embedded.size()),
-                                               &w, &h, &channels, STBI_rgb_alpha);
-                    break;
-                case TextureSource::None:
-                    break;  // px queda nullptr: el fallback lo pone GpuResources en el hilo principal
-            }
-
-            if (!px) return false;
+            const DecodedTexture tex = decodeMaterialTexture(path, embedded);
+            if (!tex) return false;  // el fallback lo pone GpuResources en el hilo principal
 
             DecodedImage img;
             img.slot = slot;
-            img.w    = w;
-            img.h    = h;
-            img.pixels.assign(px, px + static_cast<size_t>(w) * h * 4);
-            stbi_image_free(px);
+            img.w    = tex.w;
+            img.h    = tex.h;
+            img.pixels.assign(tex.pixels.get(),
+                              tex.pixels.get() + static_cast<size_t>(tex.w) * tex.h * 4);
             out.push_back(std::move(img));
             return true;
         }

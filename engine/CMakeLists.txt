@@ -53,6 +53,7 @@ add_library(DonTopoCore STATIC
     src/Physics/Colliders/PlaneCollider.cpp
     src/Renderer/GpuDevice.cpp
     src/Renderer/GpuResources.cpp
+    src/Renderer/MaterialTextureSource.cpp
     src/Renderer/SharedGpuMesh.cpp
     src/Renderer/InstanceBatching.cpp
     src/Renderer/InstanceBuffers.cpp
