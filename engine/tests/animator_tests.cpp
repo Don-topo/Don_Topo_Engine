@@ -4488,6 +4488,93 @@ static void test_graph_key_sees_every_saved_field()
     }
 }
 
+// ---- AnimatorGraphCommand ----
+
+// Por cada cosa que el panel puede editar: undo deja el grafo como estaba y
+// redo lo vuelve a dejar editado.
+static void test_graph_command_round_trip_for_each_mutation()
+{
+    for (const auto& [name, mutate] : graphMutations())
+    {
+        Scene scene("Test");
+        GameObject* go = scene.addGameObject("Personaje");
+        auto a = std::make_shared<AnimatorComponent>();
+        makeBaseGraph(*a);
+        go->setAnimator(a);
+
+        const AnimatorComponent::Graph before    = a->graph();
+        const nlohmann::json           keyBefore = animatorGraphKey(*a);
+        mutate(*a);
+        const nlohmann::json           keyAfter  = animatorGraphKey(*a);
+
+        AnimatorGraphCommand cmd(scene, name, go->id, before, a->graph());
+
+        cmd.undo();
+        if (animatorGraphKey(*a) != keyBefore)
+        {
+            std::printf("FAIL: el undo de '%s' no restaura el grafo\n", name);
+            ++g_failures;
+        }
+        cmd.execute();
+        if (animatorGraphKey(*a) != keyAfter)
+        {
+            std::printf("FAIL: el redo de '%s' no vuelve a aplicar el grafo\n", name);
+            ++g_failures;
+        }
+    }
+}
+
+// El Animator puede haber desaparecido entre el gesto y el undo (un
+// AnimatorComponentCommand posterior lo quitó), o el objeto entero.
+static void test_graph_command_noop_without_animator()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto a = std::make_shared<AnimatorComponent>();
+    makeBaseGraph(*a);
+    go->setAnimator(a);
+    const uint64_t id = go->id;
+
+    AnimatorGraphCommand cmd(scene, "Editar Animator", id, a->graph(), a->graph());
+
+    go->setAnimator(nullptr);
+    cmd.undo();
+    cmd.execute();
+    CHECK(!go->hasAnimator());
+
+    scene.removeGameObject(go);
+    cmd.undo();      // findById devuelve nullptr y sale sin tocar nada
+    cmd.execute();
+}
+
+// El snapshot trae clipIndex de cuando se tomó; entretanto una fuente de
+// animación puede haber cambiado la lista de clips. Tras aplicar, los índices
+// salen resueltos contra el mesh ACTUAL.
+static void test_graph_command_rebinds_clips()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto mesh = std::make_shared<SkinnedMesh>();
+    AnimationClip walk; walk.name = "walk"; walk.duration = 40.0f;  walk.ticksPerSecond = 20.0f;
+    AnimationClip run;  run.name  = "run";  run.duration  = 100.0f; run.ticksPerSecond  = 50.0f;
+    mesh->animationClips = { walk, run };
+    go->setMesh(mesh);
+
+    auto a = std::make_shared<AnimatorComponent>();
+    makeBaseGraph(*a);   // A usa "walk" (+ "run" de blend), B usa "run"
+    go->setAnimator(a);
+
+    AnimatorComponent::Graph stale = a->graph();
+    for (auto& s : stale.states) { s.clipIndex = -1; s.blendClipIndex = -1; }
+
+    AnimatorGraphCommand cmd(scene, "Editar Animator", go->id, stale, stale);
+    cmd.undo();
+
+    CHECK(a->states()[0].clipIndex == 0);
+    CHECK(a->states()[0].blendClipIndex == 1);
+    CHECK(a->states()[1].clipIndex == 1);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -4632,6 +4719,10 @@ int main()
 
     test_graph_key_ignores_node_position();
     test_graph_key_sees_every_saved_field();
+
+    test_graph_command_round_trip_for_each_mutation();
+    test_graph_command_noop_without_animator();
+    test_graph_command_rebinds_clips();
 
     am.shutdown();
     pm.shutdown();

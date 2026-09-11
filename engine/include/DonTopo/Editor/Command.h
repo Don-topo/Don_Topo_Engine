@@ -643,6 +643,36 @@ private:
     AnimatorComponent m_state;
 };
 
+// Edición del GRAFO de un Animator que ya existe (estados, transiciones,
+// condiciones, parámetros, entrada), por el stack de undo. La crea
+// AnimatorGraphUndoTracker al terminar un gesto en el AnimatorPanel, con el
+// cambio YA aplicado: se empuja sin execute().
+//
+// A diferencia de AnimatorComponentCommand, que pone o quita el componente
+// entero, esto aplica solo lo autorado vía applyGraph: los valores de los
+// parámetros y el playhead sobreviven, así que un undo en Play no se lleva por
+// delante lo que el script venía escribiendo (H4).
+//
+// Resuelve el GameObject por id en cada aplicación, nunca por puntero. Si el
+// objeto o su Animator ya no existen, no hace nada.
+class AnimatorGraphCommand : public ICommand {
+public:
+    AnimatorGraphCommand(Scene& scene, std::string label, uint64_t id,
+                          AnimatorComponent::Graph before, AnimatorComponent::Graph after);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    void apply(const AnimatorComponent::Graph& g);
+
+    Scene& m_scene;
+    std::string m_label;
+    uint64_t m_id;
+    AnimatorComponent::Graph m_before;
+    AnimatorComponent::Graph m_after;
+};
+
 // Añade (add=true) o quita (add=false) una fuente de animación del SkinnedMesh
 // del GameObject id; undo() hace lo contrario. Mismo contrato que el resto:
 // resuelve el GameObject por id en cada execute()/undo().

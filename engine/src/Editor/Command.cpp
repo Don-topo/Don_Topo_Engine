@@ -474,6 +474,28 @@ void AnimatorComponentCommand::apply(bool add)
     go->setAnimator(std::make_shared<AnimatorComponent>(m_state));
 }
 
+AnimatorGraphCommand::AnimatorGraphCommand(Scene& scene, std::string label, uint64_t id,
+                                           AnimatorComponent::Graph before,
+                                           AnimatorComponent::Graph after)
+    : m_scene(scene), m_label(std::move(label)), m_id(id),
+      m_before(std::move(before)), m_after(std::move(after)) {}
+
+void AnimatorGraphCommand::execute() { apply(m_after); }
+void AnimatorGraphCommand::undo()    { apply(m_before); }
+
+void AnimatorGraphCommand::apply(const AnimatorComponent::Graph& g)
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go || !go->getAnimator()) return;
+    go->getAnimator()->applyGraph(g);
+    // El snapshot trae los clipIndex de cuando se tomó, y una fuente de
+    // animación añadida o quitada entretanto cambia la lista de clips: se
+    // vuelven a resolver por nombre. rebindClips y no bindClips: esto corre
+    // en Play y bindClips haría reset().
+    if (SkinnedMesh* mesh = go->getSkinnedMesh())
+        go->getAnimator()->rebindClips(*mesh, nullptr);
+}
+
 AnimationSourceCommand::AnimationSourceCommand(Scene& scene, EditorRenderer* renderer,
                                                 std::string label, uint64_t id, bool add,
                                                 std::string path,
