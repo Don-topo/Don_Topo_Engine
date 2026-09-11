@@ -977,9 +977,12 @@ static void test_export_platform_rows()
 
     const ExportPlatform l = exportPlatformFor(platform::Os::Linux);
     CHECK(l.executableSuffix.empty() && l.setExecutableBit && !l.copyMsvcCrt && !l.warnDebugCrt && l.warnGlibc);
-    CHECK(l.audioLibPrefixes == std::vector<std::string>{"libfmod.so"});
+    CHECK(l.audioLibPrefixes == std::vector<std::string>{"libfmod.so."});
 
-    CHECK(isAudioLibFile("libfmod.so.13", l) && isAudioLibFile("libfmod.so", l));
+    // Solo el soname: la .so de desarrollo y la version completa son el mismo
+    // fichero repetido.
+    CHECK(isAudioLibFile("libfmod.so.13", l));
+    CHECK(!isAudioLibFile("libfmod.so", l) && !isAudioLibFile("libfmod.so.13.2", l));
     CHECK(!isAudioLibFile("libfmodL.so.13", l));   // la variante de logging no va
     CHECK(isAudioLibFile("fmod.dll", w) && !isAudioLibFile("fmodL.dll", w));
 }
@@ -992,6 +995,7 @@ static void test_linux_package(const fs::path& root)
     std::error_code ec;
     std::ofstream(root / "libfmod.so.13")  << "so";
     std::ofstream(root / "libfmodL.so.13") << "so";
+    std::ofstream(root / "libfmod.so")     << "so";
     std::ofstream(root / "msvcp140.dll")   << "dll";
 
     Scene scene;
@@ -1010,6 +1014,7 @@ static void test_linux_package(const fs::path& root)
     CHECK(fs::exists(pkg / "MiJuego") && !fs::exists(pkg / "MiJuego.exe"));
     CHECK(!fs::exists(pkg / "msvcp140.dll"));     // el CRT de MSVC no va en Linux
     CHECK(!fs::exists(pkg / "libfmodL.so.13"));
+    CHECK(!fs::exists(pkg / "libfmod.so"));
 #ifdef DT_FMOD_ENABLED
     CHECK(fs::exists(pkg / "libfmod.so.13"));
 #endif
@@ -1020,7 +1025,7 @@ static void test_linux_package(const fs::path& root)
     }
 
     fs::remove_all(dest, ec);
-    for (const char* f : { "libfmod.so.13", "libfmodL.so.13", "msvcp140.dll" })
+    for (const char* f : { "libfmod.so.13", "libfmodL.so.13", "libfmod.so", "msvcp140.dll" })
         fs::remove(root / f, ec);
 }
 

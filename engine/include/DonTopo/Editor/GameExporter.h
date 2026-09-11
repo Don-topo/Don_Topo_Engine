@@ -117,7 +117,7 @@ ExportTargetState inspectExportTarget(const std::filesystem::path& pkg);
 struct ExportPlatform {
     std::string              executableSuffix;   // ".exe" | ""
     bool                     setExecutableBit;   // chmod +x al ejecutable
-    std::vector<std::string> audioLibPrefixes;   // fichero exacto, o prefijo + "."
+    std::vector<std::string> audioLibPrefixes;   // fichero exacto; si acaba en ".", + un numero
     bool                     copyMsvcCrt;        // msvcp140* / vcruntime140* junto al editor
     bool                     warnDebugCrt;       // aviso de CRT de depuracion no redistribuible
     bool                     warnGlibc;          // aviso de version minima de glibc
@@ -125,9 +125,11 @@ struct ExportPlatform {
 
 ExportPlatform exportPlatformFor(platform::Os os);
 
-// ¿Es `fileName` una biblioteca de audio que el paquete debe llevar? Coincide el
-// nombre exacto o el prefijo seguido de "." (libfmod.so.13); la variante de
-// logging de FMOD (libfmodL, fmodL.dll) no entra.
+// ¿Es `fileName` una biblioteca de audio que el paquete debe llevar? Una entrada
+// que acaba en "." admite solo ese prefijo mas un numero: "libfmod.so." acepta
+// libfmod.so.14 (el soname, lo que pide el binario) y no libfmod.so ni
+// libfmod.so.14.14, que son el mismo fichero repetido. La variante de logging de
+// FMOD (libfmodL, fmodL.dll) no entra.
 bool isAudioLibFile(const std::string& fileName, const ExportPlatform& plat);
 
 ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,

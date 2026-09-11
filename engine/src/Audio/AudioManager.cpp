@@ -23,6 +23,17 @@ namespace DonTopo {
 
 AudioManager::~AudioManager() { shutdown(); }
 
+std::string AudioManager::outputWarningFor(int fmodOutputType)
+{
+#ifdef DT_FMOD_ENABLED
+    if (fmodOutputType == FMOD_OUTPUTTYPE_NOSOUND)
+        return "Audio sin salida: FMOD no encontro ningun dispositivo de sonido y no sonara "
+               "nada. En Linux faltan libpulse0 o libasound2t64.";
+#endif
+    (void)fmodOutputType;
+    return {};
+}
+
 bool AudioManager::init()
 {
 #ifdef DT_FMOD_ENABLED
@@ -44,6 +55,14 @@ bool AudioManager::init()
         m_system   = sys;
         m_sfxGroup = sfx;
         m_musicGroup = music;
+
+        // init() "funciona" aunque no haya por donde sacar el sonido: FMOD cae a
+        // NOSOUND en silencio. Se pregunta la salida elegida para poder avisar.
+        FMOD_OUTPUTTYPE salida = FMOD_OUTPUTTYPE_AUTODETECT;
+        if (sys->getOutput(&salida) == FMOD_OK)
+            m_outputWarning = outputWarningFor((int)salida);
+        if (!m_outputWarning.empty())
+            std::cerr << m_outputWarning << std::endl;
         return true;
     }
     catch (const std::exception& e)

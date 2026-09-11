@@ -12,6 +12,9 @@
 #include "DonTopo/Physics/Colliders/BoxCollider.h"
 #include "DonTopo/Physics/Colliders/CapsuleCollider.h"
 #include "DonTopo/Audio/AudioManager.h"
+#ifdef DT_FMOD_ENABLED
+#include <fmod.hpp>
+#endif
 #include "DonTopo/Audio/AudioListenerComponent.h"
 #include "DonTopo/Audio/ReverbZoneComponent.h"
 #include "DonTopo/Editor/Command.h"
@@ -78,6 +81,18 @@ static std::shared_ptr<AudioClipComponent> makeClip()
 // Un clip recién creado suena tal cual está grabado: sin atenuar y sin
 // alterar el tono. Si estos defaults cambiaran, toda escena guardada antes
 // de esta feature sonaría distinta al recargarla.
+// FMOD sin salida arranca "bien" y no suena nada: ese caso tiene que dar aviso,
+// y una salida real no.
+static void test_output_warning_only_without_output()
+{
+#ifdef DT_FMOD_ENABLED
+    CHECK(!AudioManager::outputWarningFor(FMOD_OUTPUTTYPE_NOSOUND).empty());
+    CHECK(AudioManager::outputWarningFor(FMOD_OUTPUTTYPE_PULSEAUDIO).empty());
+    CHECK(AudioManager::outputWarningFor(FMOD_OUTPUTTYPE_WASAPI).empty());
+#endif
+    CHECK(AudioManager::outputWarningFor(-12345).empty());
+}
+
 static void test_defaults_are_neutral()
 {
     auto clip = makeClip();
@@ -1764,7 +1779,8 @@ int main()
     if (!am.init())
         std::printf("AVISO: FMOD no disponible; los tests que lo necesitan se saltaran\n");
 
-    test_defaults_are_neutral();
+test_output_warning_only_without_output();
+        test_defaults_are_neutral();
     test_volume_clamps_to_range();
     test_pitch_clamps_to_range();
     test_setters_survive_without_manager();

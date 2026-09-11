@@ -433,13 +433,23 @@ ExportPlatform exportPlatformFor(platform::Os os)
 {
     if (os == platform::Os::Windows)
         return { ".exe", false, { "fmod.dll" }, true, true, false };
-    return { "", true, { "libfmod.so" }, false, false, true };
+    return { "", true, { "libfmod.so." }, false, false, true };
 }
 
 bool isAudioLibFile(const std::string& n, const ExportPlatform& plat)
 {
     for (const std::string& p : plat.audioLibPrefixes)
-        if (n == p || n.rfind(p + ".", 0) == 0) return true;
+    {
+        if (!p.empty() && p.back() == '.')
+        {
+            if (n.size() > p.size() && n.rfind(p, 0) == 0 &&
+                std::all_of(n.begin() + (std::ptrdiff_t)p.size(), n.end(),
+                            [](unsigned char c) { return std::isdigit(c) != 0; }))
+                return true;
+        }
+        else if (n == p)
+            return true;
+    }
     return false;
 }
 
@@ -750,9 +760,13 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
             else                                                  ok = false;
         }
         if (audioCopied == 0)
-            r.messages.push_back("Aviso: no se encontro " + (projectRoot / plat.audioLibPrefixes[0]).string() +
+        {
+            std::string lib = plat.audioLibPrefixes[0];
+            if (!lib.empty() && lib.back() == '.') lib += "N";
+            r.messages.push_back("Aviso: no se encontro " + (projectRoot / lib).string() +
                                  "; el motor se compilo con FMOD, asi que el juego exportado no "
                                  "arrancara hasta que copies esa biblioteca junto al ejecutable.");
+        }
     }
 #endif
 

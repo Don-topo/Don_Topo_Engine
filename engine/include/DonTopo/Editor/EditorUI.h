@@ -374,6 +374,8 @@ private:
     // no local para no reasignar un vector en cada frame; se limpia antes de
     // cada uso.
     std::vector<std::string> m_audioFailures;
+    // El aviso de FMOD sin salida se enseña UNA vez, no uno por frame.
+    bool                     m_audioOutputWarned = false;
     Scene*          m_scene = nullptr;
     ScriptManager*  m_scriptManager = nullptr;
 

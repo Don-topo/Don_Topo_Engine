@@ -937,6 +937,11 @@ void EditorUI::draw(uint64_t viewportTexture, GameObject* sceneRoot, const glm::
         for (const auto& path : m_audioFailures)
             m_logPanel.push("No se pudo cargar el audio '" + path +
                              "': fichero ausente, formato no soportado o datos corruptos");
+        if (!m_audioOutputWarned && !m_audio->outputWarning().empty())
+        {
+            m_logPanel.push(m_audio->outputWarning());
+            m_audioOutputWarned = true;
+        }
     }
 
     // Ajustes del menú View del proyecto abierto: se vuelcan al Renderer y a la

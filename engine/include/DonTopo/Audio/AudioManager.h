@@ -29,6 +29,18 @@ public:
     // de cualquier otro fallo; los tests lo usan para saltarse de verdad los
     // casos que necesitan FMOD.
     bool available() const;
+
+    // FMOD arranco pero SIN dispositivo de salida (FMOD_OUTPUTTYPE_NOSOUND): el
+    // motor funciona y no suena nada, sin ningun error. Pasa en Linux sin
+    // libpulse ni libasound (la imagen minima de WSL). Vacio si hay salida o si
+    // no hay FMOD. El host lo enseña (Log Console); init() ya lo escribe en
+    // stderr, que en el runtime acaba en game.log.
+    const std::string& outputWarning() const { return m_outputWarning; }
+
+    // El texto de ese aviso para un tipo de salida de FMOD (FMOD_OUTPUTTYPE como
+    // int, para no arrastrar fmod.hpp a este header). Aparte para poder probarlo
+    // sin quitarle a la maquina su tarjeta de sonido.
+    static std::string outputWarningFor(int fmodOutputType);
     // dt en segundos. Se usa SOLO para derivar la velocidad del listener, que es
     // lo que da el efecto doppler; con dt <= 0 la velocidad queda a cero y el
     // doppler no actúa (que es como se comportaba esto antes de tenerlo). Un
@@ -367,6 +379,7 @@ private:
     // primer frame invente una velocidad enorme desde el origen.
     glm::vec3                m_lastListenerPos{0.0f};
     bool                     m_hasLastListenerPos = false;
+    std::string              m_outputWarning;
     std::vector<glm::vec3>   m_soundLastPos;   // paralelo a m_sounds
     std::vector<char>        m_soundHasLastPos;
 #endif

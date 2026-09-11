@@ -1,5 +1,5 @@
 # Copia la biblioteca de FMOD junto al binario del target: fmod.dll en Windows,
-# libfmod.so* (con su soname) en Linux. Un solo sitio para Sandbox, runtime y
+# solo su soname (libfmod.so.N) en Linux. Un solo sitio para Sandbox, runtime y
 # tests; antes era un bloque solo-Windows con una lista de targets a mano.
 function(dt_copy_fmod_runtime target)
     if(NOT FMOD_FOUND)
@@ -9,7 +9,14 @@ function(dt_copy_fmod_runtime target)
     if(WIN32)
         set(_files "${_dir}/fmod.dll")
     else()
-        file(GLOB _files "${_dir}/libfmod.so*")
+        # Solo la que pide el binario, su soname (libfmod.so.14). La .so de
+        # desarrollo y la .so.14.14 completa son el mismo fichero repetido.
+        file(READ_ELF "${FMOD_LIBRARY}" SONAME _soname)
+        if(_soname)
+            set(_files "${_dir}/${_soname}")
+        else()
+            file(GLOB _files "${_dir}/libfmod.so.*")
+        endif()
     endif()
     foreach(_f IN LISTS _files)
         if(EXISTS "${_f}")
