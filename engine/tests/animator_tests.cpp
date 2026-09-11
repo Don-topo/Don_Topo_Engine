@@ -4357,6 +4357,25 @@ static void test_apply_graph_without_fading_state_cuts_crossfade()
     CHECK(a.currentStateName() == "B");
 }
 
+// La otra mitad: si el que falta es el estado ACTUAL (B), el playhead cae a la
+// entrada, y mezclar desde A hacia un estado que no es el de la transición
+// sería una pose que nadie pidió. La mezcla también se corta.
+static void test_apply_graph_without_current_state_cuts_crossfade()
+{
+    AnimatorComponent a;
+    makeCrossfadeInFlight(a);
+    CHECK(a.blending());
+
+    AnimatorComponent::Graph g = a.graph();
+    g.states.erase(g.states.begin() + 1);   // B, el actual
+    g.transitions.clear();                  // apuntaban a B
+    g.entryState = 0;
+    a.applyGraph(g);
+
+    CHECK(!a.blending());
+    CHECK(a.currentStateName() == "A");
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -4497,6 +4516,7 @@ int main()
     test_apply_graph_live_states_keep_position();
     test_apply_own_graph_changes_nothing();
     test_apply_graph_without_fading_state_cuts_crossfade();
+    test_apply_graph_without_current_state_cuts_crossfade();
 
     am.shutdown();
     pm.shutdown();
