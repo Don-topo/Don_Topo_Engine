@@ -774,4 +774,51 @@ void MaterialFactorCommand::apply(float value)
                                              mats[(size_t)m_materialIndex]->roughness);
 }
 
+RemoveMeshCommand::RemoveMeshCommand(Scene& scene, EditorRenderer* renderer, std::string label,
+                                     GameObject& go)
+    : m_scene(scene), m_renderer(renderer), m_label(std::move(label)), m_id(go.id),
+      m_mesh(go.getMesh()), m_overrides(go.materialOverrides) {}
+
+void RemoveMeshCommand::execute()
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go || !go->hasMesh()) return;
+
+    // El backend suelta la GPU y hace setMesh(nullptr). Sin renderer (tests
+    // headless) queda solo la parte de CPU.
+    if (m_renderer) m_renderer->removeMeshComponent(go);
+    else            go->setMesh(nullptr);
+
+    // Guarda por hasMesh(), la MISMA señal que decide si el panel dibuja la
+    // sección Mesh y si acepta cargar un reemplazo. Si un backend volviera a
+    // dejar la malla puesta, vaciar igualmente dejaría el Material enseñando
+    // la textura del override sin nada que la escriba en el .scene: la
+    // asignación se perdería al recargar sin que nada lo avisara.
+    if (!go->hasMesh())
+        go->materialOverrides.clear();
+}
+
+void RemoveMeshCommand::undo()
+{
+    GameObject* go = m_scene.findById(m_id);
+    if (!go || !m_mesh) return;
+    if (go->hasMesh() || go->pendingMeshJob != 0) return;
+
+    go->setMesh(m_mesh);
+    // DESPUÉS de setMesh, que baja los base*Taken: con los baselines del
+    // snapshot en alto, applyMaterialOverrides no recaptura como original lo
+    // que la malla guardada ya lleva horneado.
+    go->materialOverrides = m_overrides;
+    applyMaterialOverrides(*go);
+
+    if (!m_renderer) return;
+    if (SkinnedMesh* sk = go->getSkinnedMesh())
+        go->skinnedRenderIndex = m_renderer->addSkinnedMesh(*sk, nullptr);
+    else
+        go->staticRenderIndex  = m_renderer->addStaticMesh(*m_mesh, nullptr);
+    // Mismo motivo que DeleteGameObjectCommand::undo: sin esperar, el objeto
+    // recuperado aparecería ~2 frames tarde.
+    m_renderer->flushUploadsAndWait();
+}
+
 } // namespace DonTopo

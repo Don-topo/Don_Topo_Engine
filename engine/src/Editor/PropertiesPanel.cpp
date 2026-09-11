@@ -7883,38 +7883,17 @@ void PropertiesPanel::drawMeshSection(EditorContext& ctx)
             ImGui::TreePop();
         }
 
-        if (removeClicked && ctx.renderer)
+        if (removeClicked && ctx.renderer && ctx.scene)
         {
-            ctx.renderer->removeMeshComponent(ctx.selected);
-            // Los DOS backends llaman ya a GameObject::setMesh(nullptr) (en
-            // D3D12 faltaba: el objeto se quedaba con hasMesh()==true y el
-            // botón no hacía nada a nivel de datos), así que hasMesh() es false
-            // en este punto en cualquiera de ellos. Pero ese setMesh(nullptr)
-            // SOLO resetea los baselines (base*/base*Taken) de cada entrada de
-            // materialOverrides -- ver GameObject.h::setMesh --, no vacía el
-            // vector: quien lo vacía es el clear() de aquí abajo.
-            //
-            // La guarda por hasMesh() se queda: es la MISMA señal que gobierna
-            // si esta sección y la de Material se siguen dibujando (más arriba)
-            // y si loadMeshForSelected acepta cargar un reemplazo, en vez de una
-            // señal propia que podría desincronizarse de esas dos. Si un backend
-            // volviera a dejar la malla puesta, vaciar el registro igualmente
-            // dejaría materialOverrides vacío mientras el Material sigue
-            // enseñando la textura del override: el panel seguiría mostrando la
-            // asignación (la lee del Material, no del registro), pero el
-            // siguiente guardado no escribiría el bloque `materials` y la
-            // asignación se perdería al recargar, sin que nada lo avisara.
-            //
-            // Y cuando sí corre —lo normal ahora— vaciar es lo correcto: quitar
-            // el componente Mesh a mano con este botón es la acción explícita de
-            // "ya no quiero este mesh ni lo que tenía puesto", y sin vaciar el
-            // registro un "x" + "Add > Mesh" con un FBX de menos materiales
-            // reescribiría overrides con índices que ya no existen en el mesh
-            // nuevo (mismo síntoma que el Critical de la ronda anterior, pero
-            // por un camino que ningún clamp de índice detecta, porque el índice
-            // era válido cuando se escribió).
-            if (!ctx.selected->hasMesh())
-                ctx.selected->materialOverrides.clear();
+            // Por el stack de undo: el comando quita la malla, vacía
+            // materialOverrides y lo devuelve todo en un Ctrl+Z. El porqué de
+            // vaciar, y de la guarda por hasMesh(), vive ahora en
+            // RemoveMeshCommand (Command.h), que es quien lo hace.
+            auto cmd = std::make_unique<RemoveMeshCommand>(
+                *ctx.scene, ctx.renderer, "Quitar Mesh de '" + ctx.selected->name + "'",
+                *ctx.selected);
+            cmd->execute();
+            if (ctx.undo) ctx.undo->push(std::move(cmd));
             // Vuelve a ocultar la sección tras quitar el mesh — hay que
             // pulsar "Add > Mesh" de nuevo para reabrirla.
             m_meshAddRequestedFor = 0;

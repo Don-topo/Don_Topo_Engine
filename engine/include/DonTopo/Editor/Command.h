@@ -8,6 +8,7 @@
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 #include "DonTopo/Core/CameraComponent.h"
+#include "DonTopo/Core/GameObject.h" // MaterialOverride y Mesh, para RemoveMeshCommand
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/UI/CanvasComponent.h"
 #include "DonTopo/UI/ButtonComponent.h"
@@ -802,6 +803,49 @@ private:
     MaterialFactorSlot m_slot;
     float              m_before;
     float              m_after;
+};
+
+// Quitar el componente Mesh, por el stack de undo.
+//
+// Antes la "x" de la sección Mesh quitaba la malla y VACIABA materialOverrides
+// fuera del undo: Ctrl+Z no la devolvía, y con ella se perdían las texturas y
+// los factores asignados a mano. Vaciar es lo correcto -sin eso, un Remove +
+// Add con un FBX de menos materiales reescribiría overrides con índices que ya
+// no existen, por un camino que ningún clamp detecta porque el índice era
+// válido cuando se escribió-; lo que faltaba era poder deshacerlo.
+//
+// Guarda el shared_ptr de la malla, no su ruta: el undo es síncrono, sin volver
+// a leer el FBX ni pasar por la carga async, y devuelve EXACTAMENTE la misma
+// malla (un procedural no tiene ruta que releer). Y guarda los overrides
+// ENTEROS, baselines incluidos, para restaurarlos DESPUÉS de setMesh: setMesh
+// baja los flags base*Taken, y la malla guardada ya lleva los overrides
+// horneados en su Material, así que sin ese orden applyMaterialOverrides
+// recapturaría como "original del FBX" la textura del usuario, y un Clear
+// posterior la devolvería a ella.
+//
+// El undo NO hace nada si el objeto ya tiene otra malla, o una carga en vuelo:
+// añadir un Mesh no pasa por el undo (es asíncrono), así que "quitar A, añadir
+// B, Ctrl+Z" llegaría aquí con B puesta, y restaurar A la pisaría sin que B se
+// pudiera recuperar.
+//
+// El renderer es PUNTERO y puede ser nullptr (tests headless), como en
+// MaterialTextureCommand.
+class RemoveMeshCommand : public ICommand {
+public:
+    // Captura la malla y los overrides de `go` tal como están AHORA: se
+    // construye justo antes del execute().
+    RemoveMeshCommand(Scene& scene, EditorRenderer* renderer, std::string label, GameObject& go);
+    void execute() override;
+    void undo() override;
+    std::string label() const override { return m_label; }
+
+private:
+    Scene&                        m_scene;
+    EditorRenderer*               m_renderer;
+    std::string                   m_label;
+    uint64_t                      m_id;
+    std::shared_ptr<Mesh>         m_mesh;
+    std::vector<MaterialOverride> m_overrides;
 };
 
 } // namespace DonTopo

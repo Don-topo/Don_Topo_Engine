@@ -1363,6 +1363,87 @@ static void test_factor_clone_clear_restores_model_value_not_override(PhysicsMan
     CHECK(clone->getMesh()->material.metallic == 0.0f);
 }
 
+// --- RemoveMeshCommand: quitar el Mesh por el stack de undo ---
+//
+// Deuda aceptada en su dia: la "x" del Mesh quitaba la malla y vaciaba los
+// overrides fuera del undo, asi que Ctrl+Z no devolvia nada y las texturas
+// asignadas a mano se perdian. Sin renderer (nullptr): lo que se prueba es la
+// parte de CPU, que es donde vivian los dos riesgos de verdad.
+
+// Quitar y deshacer devuelve LA MISMA malla con sus overrides, y un Clear
+// posterior devuelve lo del FBX, no lo del usuario. Esa segunda mitad es la que
+// exige restaurar los overrides DESPUES de setMesh: la malla guardada lleva lo
+// del usuario horneado en su Material, y con los baselines bajados
+// applyMaterialOverrides lo recapturaria como "original". El metallic de
+// partida es 0.3 y no el 0.0 por defecto, que no probaria que se leyo nada.
+static void test_remove_mesh_undo_restores_mesh_and_overrides()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto mesh = std::make_shared<Mesh>();
+    mesh->material.texturePath = "assets/fbx_albedo.png";
+    mesh->material.metallic    = 0.3f;
+    go->setMesh(mesh);
+    const uint64_t id = go->id;
+    setMaterialTextureOverride(*go, 0, MaterialTextureSlot::Albedo, "assets/mia.png");
+    setMaterialFactorOverride(*go, 0, MaterialFactorSlot::Metallic, 0.8f);
+
+    RemoveMeshCommand cmd(scene, nullptr, "Quitar Mesh", *go);
+    cmd.execute();
+    CHECK(!scene.findById(id)->hasMesh());
+    CHECK(scene.findById(id)->materialOverrides.empty());
+
+    cmd.undo();
+    GameObject* vuelto = scene.findById(id);
+    CHECK(vuelto->getMesh() == mesh);   // la MISMA, no una recarga
+    CHECK(vuelto->materialOverrides.size() == 1);
+    CHECK(mesh->material.texturePath == "assets/mia.png");
+    CHECK(mesh->material.metallic == 0.8f);
+
+    // Clear de los dos: tiene que volver lo del FBX.
+    setMaterialTextureOverride(*vuelto, 0, MaterialTextureSlot::Albedo, "");
+    CHECK(mesh->material.texturePath == "assets/fbx_albedo.png");
+    setMaterialFactorOverride(*vuelto, 0, MaterialFactorSlot::Metallic, -1.0f);
+    CHECK(mesh->material.metallic == 0.3f);
+
+    // Redo: se vuelve a quitar.
+    cmd.execute();
+    CHECK(!scene.findById(id)->hasMesh());
+    CHECK(scene.findById(id)->materialOverrides.empty());
+}
+
+// Añadir un Mesh NO pasa por el undo (es asincrono). "Quitar A, poner B,
+// Ctrl+Z" no puede pisar B con A: B no se podria recuperar. Y lo mismo con B
+// todavia cargando: su resultado aterrizaria encima de A.
+static void test_remove_mesh_undo_does_not_overwrite_newer_mesh()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Cubo");
+    auto a = std::make_shared<Mesh>();
+    a->material.texturePath = "assets/a.png";
+    go->setMesh(a);
+    const uint64_t id = go->id;
+    setMaterialTextureOverride(*go, 0, MaterialTextureSlot::Albedo, "assets/mia.png");
+
+    RemoveMeshCommand cmd(scene, nullptr, "Quitar Mesh", *go);
+    cmd.execute();
+
+    auto b = std::make_shared<Mesh>();
+    b->material.texturePath = "assets/b.png";
+    scene.findById(id)->setMesh(b);
+
+    cmd.undo();
+    CHECK(scene.findById(id)->getMesh() == b);
+    CHECK(b->material.texturePath == "assets/b.png");
+    CHECK(scene.findById(id)->materialOverrides.empty());
+
+    scene.findById(id)->setMesh(nullptr);
+    scene.findById(id)->pendingMeshJob = 7;
+    cmd.undo();
+    CHECK(!scene.findById(id)->hasMesh());
+    CHECK(scene.findById(id)->materialOverrides.empty());
+}
+
 // --- decodeMaterialTexture: la ruta gana, en los CUATRO uploaders ---
 //
 // Deuda aceptada en su dia: cada uploader llevaba su propio switch sobre
@@ -1661,6 +1742,9 @@ int main()
 
     test_decode_material_texture_path_beats_embedded();
     test_no_uploader_decodes_embedded_on_its_own();
+
+    test_remove_mesh_undo_restores_mesh_and_overrides();
+    test_remove_mesh_undo_does_not_overwrite_newer_mesh();
 
     am.shutdown();
     pm.shutdown();
