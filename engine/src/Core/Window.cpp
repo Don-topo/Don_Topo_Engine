@@ -71,7 +71,15 @@ void Window::init(int width, int height, const char* title, const char* iconPath
     // Con showOnInit=false la ventana se queda oculta: la enseña el caller con
     // show() tras presentar su primer frame, para que lo primero que se vea sea
     // ese frame y no el fondo blanco por defecto de la ventana.
-    if (showOnInit)
+    //
+    // En Wayland se enseña YA, ignore lo que pida el caller: alli no hay flash
+    // blanco que evitar (el compositor no pinta la ventana hasta recibir su
+    // primer buffer), y mostrar una ventana a la que Vulkan ya le presento un
+    // frame es un error de protocolo ("xdg_surface must not have a buffer at
+    // creation") que deja el juego sin ventana. Lo cazo el runtime exportado en
+    // WSLg; Ubuntu de escritorio usa Wayland por defecto. El show() posterior
+    // del caller no hace nada: glfwShowWindow es idempotente.
+    if (showOnInit || glfwGetPlatform() == GLFW_PLATFORM_WAYLAND)
         glfwShowWindow(m_window);
 }
 

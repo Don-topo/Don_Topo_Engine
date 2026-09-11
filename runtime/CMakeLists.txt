@@ -75,4 +75,10 @@ dt_copy_fmod_runtime(DonTopoRuntime)
 # el exportador avisa de la version minima.
 if(UNIX AND NOT APPLE)
     target_link_options(DonTopoRuntime PRIVATE -static-libstdc++ -static-libgcc)
+    # Solo $ORIGIN en el rpath: CMake añade por su cuenta la carpeta de FMOD de
+    # la maquina que compila, una ruta absoluta que no pinta nada en un juego
+    # que se reparte.
+    set_target_properties(DonTopoRuntime PROPERTIES
+        BUILD_WITH_INSTALL_RPATH ON
+        INSTALL_RPATH "\$ORIGIN")
 endif()
