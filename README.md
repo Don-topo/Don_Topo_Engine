@@ -158,6 +158,11 @@ sudo apt install build-essential cmake ninja-build glslc libvulkan-dev \
 Los tests se lanzan desde la raíz del repo (`build-linux/engine/tests/dt_*`).
 El backend DirectX 12 no existe en Linux; el editor usa Vulkan.
 
+Audio: FMOD saca el sonido por PulseAudio o ALSA (`libpulse0`, `libasound2t64`).
+Un Ubuntu de escritorio ya las trae; la imagen mínima de WSL no, y sin ellas
+FMOD arranca sin salida y no suena nada. En WSLg funciona todo (ventana y
+audio), con Vulkan por software (llvmpipe).
+
 ## Project Structure
 
 ```text
