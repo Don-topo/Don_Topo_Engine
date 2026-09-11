@@ -5,6 +5,7 @@
 #include <string>
 #include <glm/glm.hpp>
 #include "DonTopo/Editor/UndoManager.h" // BoxColliderState, SphereColliderState, CapsuleColliderState, PlaneColliderState
+#include "DonTopo/Editor/DeferredSlider.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/GameObject.h" // uiComponentsAvailable necesita el tipo completo
 
@@ -585,21 +586,18 @@ private:
     MaterialTextureSlot m_textureDlgSlot     = MaterialTextureSlot::Albedo;
 
     // Snapshot al empezar el drag de los sliders Metallic/Roughness de la
-    // sección Material — mismo patrón que m_audioDragActive/m_ssrDragActive
-    // (SliderFloat salta al valor bajo el cursor en el frame del clic, así
-    // que el "before" se hoistea antes de dibujar el widget) con una
-    // diferencia: NO se escribe nada en vivo mientras se arrastra. Un slider
-    // de audio o de SSR solo toca un campo suelto; este, al pasar por
-    // applyMaterialOverrides + rebuildStaticMesh/rebuildSkinnedMesh
-    // (makeSharedMeshKey mete los factores PBR en la clave de dedup, así que
-    // cambiar uno obliga a re-clavear el objeto), y rebuildStaticMesh hace
-    // waitForGpu() y resube tres texturas — pagar eso en cada frame de un
-    // arrastre dejaría el editor tartamudeando. Por eso aquí SOLO pasa algo
-    // al soltar (IsItemDeactivatedAfterEdit): mientras se arrastra, el número
-    // se mueve (el propio widget lo hace) pero el viewport no, y todo el
-    // trabajo (override + Material + GPU + comando) llega de una vez al
-    // soltar — un compromiso deliberado frente al "vivo mientras se
-    // arrastra" del resto del panel.
+    // sección Material — mismo patrón que m_audioDragActive/m_ssrDragActive,
+    // con una diferencia: el Material NO se escribe mientras se arrastra. El
+    // viewport sí sigue al slider (previewMaterialFactors empuja los dos floats
+    // a la GPU), pero el override, el Material y el comando llegan una sola vez
+    // al soltar. Escribir el Material en vivo capturaría como baseline del FBX
+    // un valor a medio arrastrar (ver previewMaterialFactors).
+    //
+    // Y porque el Material no se escribe en vivo, el valor pendiente vive en
+    // m_materialFactorSlider y no en una local: ImGui no entrega el valor en el
+    // frame de soltar, y con una local el commit veía "no ha cambiado nada"
+    // (ver DeferredSlider.h). Una sola instancia para los dos sliders, por lo
+    // mismo que el resto de estos miembros.
     //
     // Un solo juego de miembros para los dos sliders (no dos): solo un
     // widget de ImGui puede tener el ActiveId a la vez, así que Metallic y
@@ -610,6 +608,7 @@ private:
     int                 m_materialFactorDragMaterialIndex = 0;
     MaterialFactorSlot  m_materialFactorDragSlot          = MaterialFactorSlot::Metallic;
     float               m_materialFactorDragBefore        = 0.0f;
+    DeferredSliderFloat m_materialFactorSlider;
 
     // GameObject para el que se pulsó "Add > Mesh" (revela la sección
     // Browse/drop hasta que se asigne un mesh o se pulse "x" para quitarlo).

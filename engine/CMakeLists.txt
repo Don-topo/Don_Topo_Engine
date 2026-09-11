@@ -142,6 +142,7 @@ add_library(DonTopoEditor STATIC
     src/Editor/PerformancePanel.cpp
     src/Editor/RenderingPanel.cpp
     src/Editor/RenderSettingControls.cpp
+    src/Editor/DeferredSlider.cpp
     src/Editor/InputActionsPanel.cpp
     src/Editor/Command.cpp
     src/Editor/UndoManager.cpp

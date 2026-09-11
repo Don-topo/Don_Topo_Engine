@@ -8085,50 +8085,54 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                                    TextureSource::None;
             const int  materialIndex = m;
 
-            // El "before" se lee ANTES de dibujar el slider: SliderFloat salta
-            // al valor bajo el cursor en el mismo frame del clic (ver la nota
-            // grande de m_materialFactorDragActive en el header), así que
-            // releerlo después de dibujar ya daría el valor nuevo.
-            const float beforeMetallic  = mat.metallic;
-            const float beforeRoughness = mat.roughness;
-            float metallic  = beforeMetallic;
-            float roughness = beforeRoughness;
-
+            // Los dos sliders van por m_materialFactorSlider y no por un
+            // SliderFloat a pelo: el valor NO se escribe en el Material mientras
+            // se arrastra (solo se previsualiza en la GPU), y en ese caso ImGui
+            // no entrega el valor en el frame de soltar (ver DeferredSlider.h).
+            // Con el SliderFloat a pelo el commit leía una local que ese frame
+            // valía lo de antes del arrastre: no se creaba el comando, el slider
+            // volvía a 0 y el objeto se quedaba con lo último previsualizado.
+            // El helper también lee el "before" antes de dibujar, que SliderFloat
+            // salta al valor bajo el cursor en el mismo frame del clic.
             ImGui::BeginDisabled(ctx.editingLocked || hasOrmMap);
-            ImGui::SliderFloat("Metallic", &metallic, 0.0f, 1.0f, "%.2f");
+            const DeferredSliderFloat::Result rm =
+                m_materialFactorSlider.draw("Metallic", mat.metallic, 0.0f, 1.0f, "%.2f");
             ImGui::EndDisabled();
             if (hasOrmMap && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                 ImGui::SetTooltip("Hay un mapa Metallic/Roughness asignado: manda el mapa, "
                                   "este slider no tiene efecto mientras siga puesto.");
-            if (ImGui::IsItemActivated())
+            if (rm.activated)
             {
                 m_materialFactorDragActive        = true;
                 m_materialFactorDragOwnerId       = ownerId;
                 m_materialFactorDragMaterialIndex = materialIndex;
                 m_materialFactorDragSlot          = MaterialFactorSlot::Metallic;
-                m_materialFactorDragBefore        = beforeMetallic;
+                m_materialFactorDragBefore        = rm.begin;
             }
-            // El viewport sigue al slider mientras se arrastra. `roughness` va
-            // sin tocar: el setter escribe los dos, así que hay que pasarle el
-            // que NO se está moviendo tal cual está.
-            if (ImGui::IsItemActive())
-                previewMaterialFactors(ctx, ownerId, metallic, roughness);
-            // Soltar sin haber editado (un clic seco) deja la GPU con lo último
-            // que se le empujó: se devuelve lo que dice el Material, que es lo
-            // que el arrastre nunca llegó a tocar.
-            if (ImGui::IsItemDeactivated() && !ImGui::IsItemDeactivatedAfterEdit())
-                previewMaterialFactors(ctx, ownerId, mat.metallic, mat.roughness);
             // Guarda de propietario, mismo motivo que en Audio Clip: el
             // ActiveId del slider sobrevive a un cambio de selección a mitad
             // de arrastre, y sin comparar dueño+índice+slot el commit se
-            // aplicaría al objeto/material equivocado.
-            if (ImGui::IsItemDeactivatedAfterEdit() && m_materialFactorDragActive &&
+            // aplicaría al objeto/material equivocado. La previsualización pasa
+            // por la misma guarda: sin ella, el arrastre empezado en un objeto
+            // se pintaría encima del que se seleccionó a mitad.
+            const bool dragDeMetallic = m_materialFactorDragActive &&
                 m_materialFactorDragOwnerId == ownerId &&
                 m_materialFactorDragMaterialIndex == materialIndex &&
-                m_materialFactorDragSlot == MaterialFactorSlot::Metallic)
+                m_materialFactorDragSlot == MaterialFactorSlot::Metallic;
+            // El viewport sigue al slider mientras se arrastra. Roughness va tal
+            // cual está: el setter escribe los dos, así que hay que pasarle el
+            // que NO se está moviendo.
+            if (rm.active && dragDeMetallic)
+                previewMaterialFactors(ctx, ownerId, rm.value, mat.roughness);
+            // Soltar sin commit (un clic seco, o un arrastre de otro dueño) deja
+            // la GPU con lo último que se le empujó: se devuelve lo que dice el
+            // Material, que es lo que el arrastre nunca llegó a tocar.
+            if (rm.cancelled || (rm.committed && !dragDeMetallic))
+                previewMaterialFactors(ctx, ownerId, mat.metallic, mat.roughness);
+            if (rm.committed && dragDeMetallic)
             {
                 m_materialFactorDragActive = false;
-                if (!nearlyEqualF(m_materialFactorDragBefore, metallic) && ctx.scene)
+                if (!nearlyEqualF(m_materialFactorDragBefore, rm.value) && ctx.scene)
                 {
                     // El "before" del comando es el override CRUDO (el
                     // centinela si nunca hubo uno), no m_materialFactorDragBefore
@@ -8143,7 +8147,7 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                     auto cmd = std::make_unique<MaterialFactorCommand>(
                         *ctx.scene, ctx.renderer, "Metallic de '" + ctx.selected->name + "'",
                         ownerId, materialIndex, MaterialFactorSlot::Metallic,
-                        beforeOverride, metallic);
+                        beforeOverride, rm.value);
                     cmd->execute();
                     if (ctx.undo) ctx.undo->push(std::move(cmd));
                     ctx.pushLog("Metallic de '" + ctx.selected->name + "' cambiado");
@@ -8151,31 +8155,33 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
             }
 
             ImGui::BeginDisabled(ctx.editingLocked || hasOrmMap);
-            ImGui::SliderFloat("Roughness", &roughness, 0.0f, 1.0f, "%.2f");
+            const DeferredSliderFloat::Result rr =
+                m_materialFactorSlider.draw("Roughness", mat.roughness, 0.0f, 1.0f, "%.2f");
             ImGui::EndDisabled();
             if (hasOrmMap && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                 ImGui::SetTooltip("Hay un mapa Metallic/Roughness asignado: manda el mapa, "
                                   "este slider no tiene efecto mientras siga puesto.");
-            if (ImGui::IsItemActivated())
+            if (rr.activated)
             {
                 m_materialFactorDragActive        = true;
                 m_materialFactorDragOwnerId       = ownerId;
                 m_materialFactorDragMaterialIndex = materialIndex;
                 m_materialFactorDragSlot          = MaterialFactorSlot::Roughness;
-                m_materialFactorDragBefore        = beforeRoughness;
+                m_materialFactorDragBefore        = rr.begin;
             }
-            // Mismo par que en Metallic, con los papeles cambiados.
-            if (ImGui::IsItemActive())
-                previewMaterialFactors(ctx, ownerId, metallic, roughness);
-            if (ImGui::IsItemDeactivated() && !ImGui::IsItemDeactivatedAfterEdit())
-                previewMaterialFactors(ctx, ownerId, mat.metallic, mat.roughness);
-            if (ImGui::IsItemDeactivatedAfterEdit() && m_materialFactorDragActive &&
+            // Mismo trío que en Metallic, con los papeles cambiados.
+            const bool dragDeRoughness = m_materialFactorDragActive &&
                 m_materialFactorDragOwnerId == ownerId &&
                 m_materialFactorDragMaterialIndex == materialIndex &&
-                m_materialFactorDragSlot == MaterialFactorSlot::Roughness)
+                m_materialFactorDragSlot == MaterialFactorSlot::Roughness;
+            if (rr.active && dragDeRoughness)
+                previewMaterialFactors(ctx, ownerId, mat.metallic, rr.value);
+            if (rr.cancelled || (rr.committed && !dragDeRoughness))
+                previewMaterialFactors(ctx, ownerId, mat.metallic, mat.roughness);
+            if (rr.committed && dragDeRoughness)
             {
                 m_materialFactorDragActive = false;
-                if (!nearlyEqualF(m_materialFactorDragBefore, roughness) && ctx.scene)
+                if (!nearlyEqualF(m_materialFactorDragBefore, rr.value) && ctx.scene)
                 {
                     // Mismo motivo que el bloque de Metallic: el override
                     // CRUDO, no el efectivo.
@@ -8184,7 +8190,7 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
                     auto cmd = std::make_unique<MaterialFactorCommand>(
                         *ctx.scene, ctx.renderer, "Roughness de '" + ctx.selected->name + "'",
                         ownerId, materialIndex, MaterialFactorSlot::Roughness,
-                        beforeOverride, roughness);
+                        beforeOverride, rr.value);
                     cmd->execute();
                     if (ctx.undo) ctx.undo->push(std::move(cmd));
                     ctx.pushLog("Roughness de '" + ctx.selected->name + "' cambiado");

@@ -9,8 +9,11 @@
 #include "DonTopo/Renderer/Mesh.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Editor/Command.h"
+#include "DonTopo/Editor/DeferredSlider.h"
+#include <imgui.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <memory>
@@ -1358,6 +1361,163 @@ static void test_factor_clone_clear_restores_model_value_not_override(PhysicsMan
     CHECK(clone->getMesh()->material.metallic == 0.0f);
 }
 
+// --- Sliders de Metallic/Roughness contra un ImGui de VERDAD, sin ventana ---
+//
+// El bug que tapan estos tests no estaba en ningun comando ni en el Material:
+// estaba en QUE FRAME entrega ImGui el valor de un SliderFloat. Por eso se
+// conduce el widget real con eventos de raton, en vez de llamar a draw() con
+// valores inventados: un doble del slider habria heredado la misma suposicion
+// falsa que causo el bug.
+struct ImGuiSinVentana
+{
+    ImGuiContext* ctx = nullptr;
+
+    ImGuiSinVentana()
+    {
+        ctx = ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();
+        io.IniFilename  = nullptr;
+        io.LogFilename  = nullptr;
+        io.DisplaySize  = ImVec2(800.0f, 600.0f);
+        io.DeltaTime    = 1.0f / 60.0f;
+        // Sin backend de render: con este flag el atlas de fuentes se construye
+        // solo en NewFrame y nadie tiene que subir la textura a ningun lado.
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+        io.Fonts->AddFontDefault();
+    }
+    ~ImGuiSinVentana() { ImGui::DestroyContext(ctx); }
+
+    template<typename Fn> void frame(Fn&& body)
+    {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+        ImGui::SetNextWindowSize(ImVec2(400.0f, 200.0f));
+        ImGui::Begin("Test", nullptr, ImGuiWindowFlags_NoDecoration |
+                                      ImGuiWindowFlags_NoMove |
+                                      ImGuiWindowFlags_NoSavedSettings);
+        body();
+        ImGui::End();
+        ImGui::Render();
+    }
+};
+
+// Clic al 10 % del slider, arrastre hasta pasado el tope derecho (clampa a 1.0)
+// y soltar. Un evento por frame: ImGui los reparte asi de todos modos
+// (ConfigInputTrickleEventQueue), y separados se sabe que frame hace que.
+// `body` dibuja el slider y nada detras, para que GetItemRect* sea el suyo.
+template<typename Fn>
+static void arrastraHastaElTope(ImGuiSinVentana& ui, Fn&& drawSlider)
+{
+    ImVec2 min(0.0f, 0.0f), max(0.0f, 0.0f);
+    auto body = [&] {
+        drawSlider();
+        min = ImGui::GetItemRectMin();
+        max = ImGui::GetItemRectMax();
+    };
+    ImGuiIO& io = ImGui::GetIO();
+    ui.frame(body);                                                  // layout
+    const float y = (min.y + max.y) * 0.5f;
+    io.AddMousePosEvent(min.x + (max.x - min.x) * 0.1f, y); ui.frame(body);  // hover
+    io.AddMouseButtonEvent(0, true);                        ui.frame(body);  // clic
+    io.AddMousePosEvent(max.x + 50.0f, y);                  ui.frame(body);  // arrastre
+    io.AddMouseButtonEvent(0, false);                       ui.frame(body);  // soltar
+    ui.frame(body);
+}
+
+// CARACTERIZACION de ImGui, no de codigo nuestro: es la premisa del arreglo, y
+// si una version futura de ImGui la cambia este test lo dice antes que nadie.
+// El patron que tenia el panel -local desde el dato, commit leyendo la local en
+// IsItemDeactivatedAfterEdit- con un dato que NO se escribe en vivo: ImGui SI
+// avisa de que hubo edicion, pero ese frame no escribe el valor, y la local
+// vale lo de antes del arrastre.
+static void test_imgui_slider_release_frame_does_not_deliver_value()
+{
+    ImGuiSinVentana ui;
+    const float material = 0.0f;
+    float maxVisto = -1.0f, commitIngenuo = -1.0f;
+    bool  huboCommit = false;
+    arrastraHastaElTope(ui, [&] {
+        float v = material;
+        ImGui::SliderFloat("Metallic", &v, 0.0f, 1.0f, "%.2f");
+        if (ImGui::IsItemActive()) maxVisto = std::max(maxVisto, v);
+        if (ImGui::IsItemDeactivatedAfterEdit()) { huboCommit = true; commitIngenuo = v; }
+    });
+    CHECK(maxVisto > 0.99f);            // el arrastre llego al tope
+    CHECK(huboCommit);                  // e ImGui avisa de que hubo edicion
+    CHECK(commitIngenuo == material);   // pero la local no trae el valor
+}
+
+// El bug que vio el usuario: arrastrar Metallic a 1 y que al soltar el slider
+// volviera a 0 aunque el objeto se viera metalico. El commit tiene que traer el
+// valor ARRASTRADO, y `begin` el del dato antes del clic -0.25-, no el 0.1 al
+// que SliderFloat salta en el frame del clic.
+static void test_deferred_slider_commits_dragged_value()
+{
+    ImGuiSinVentana ui;
+    DeferredSliderFloat slider;
+    float material = 0.25f;
+    int   commits = 0;
+    bool  vivo = false;
+    float begin = -1.0f, value = -1.0f;
+    arrastraHastaElTope(ui, [&] {
+        const auto r = slider.draw("Metallic", material, 0.0f, 1.0f, "%.2f");
+        if (r.active) vivo = true;
+        if (r.committed)
+        {
+            ++commits;
+            begin    = r.begin;
+            value    = r.value;
+            material = r.value;   // lo que hace MaterialFactorCommand
+        }
+    });
+    CHECK(vivo);
+    CHECK(commits == 1);
+    CHECK(begin == 0.25f);
+    CHECK(value > 0.99f);
+    CHECK(material > 0.99f);
+}
+
+// El widget desaparece a mitad de arrastre (la seleccion pasa a un objeto sin
+// malla) y vuelve despues: tiene que enseñar el dato, no el pendiente de un
+// arrastre que nunca se entrego. Sin la comprobacion de frame en draw(),
+// m_activeId se queda puesto y el slider reaparece con el valor abandonado.
+static void test_deferred_slider_forgets_drag_of_vanished_widget()
+{
+    ImGuiSinVentana ui;
+    DeferredSliderFloat slider;
+    const float material = 0.25f;
+    ImVec2 min(0.0f, 0.0f), max(0.0f, 0.0f);
+    DeferredSliderFloat::Result r;
+    auto conSlider = [&] {
+        r   = slider.draw("Metallic", material, 0.0f, 1.0f, "%.2f");
+        min = ImGui::GetItemRectMin();
+        max = ImGui::GetItemRectMax();
+    };
+    auto sinSlider = [] { ImGui::TextUnformatted("otro objeto"); };
+
+    ImGuiIO& io = ImGui::GetIO();
+    ui.frame(conSlider);
+    const float y = (min.y + max.y) * 0.5f;
+    io.AddMousePosEvent(min.x + (max.x - min.x) * 0.1f, y); ui.frame(conSlider);
+    io.AddMouseButtonEvent(0, true);                        ui.frame(conSlider);
+    io.AddMousePosEvent(max.x + 50.0f, y);                  ui.frame(conSlider);
+    CHECK(r.active && r.value > 0.99f);   // el arrastre esta en marcha
+
+    // Varios frames sin el widget, como al ir a otro objeto y volver con un clic
+    // en el Hierarchy. Con UNO solo no vale: ImGui deja que un widget que
+    // reaparece justo al frame siguiente de perder el ActiveId vea esa
+    // desactivacion (IsItemDeactivatedAfterEdit), y eso ya es comportamiento de
+    // ImGui, no del arrastre abandonado que se prueba aqui.
+    ui.frame(sinSlider);
+    io.AddMouseButtonEvent(0, false); ui.frame(sinSlider);
+    io.AddMousePosEvent(0.0f, 0.0f);  ui.frame(sinSlider);
+    ui.frame(sinSlider);
+    ui.frame(conSlider);
+    CHECK(!r.active);
+    CHECK(!r.committed);
+    CHECK(r.value == material);
+}
+
 int main()
 {
     // PhysicsManager/AudioManager comparten instancia entre los tests que la
@@ -1422,6 +1582,10 @@ int main()
     test_factor_command_stale_index_after_mesh_shrinks(pm, am);
     test_factor_command_survives_object_rebuild(pm, am);
     test_factor_clone_clear_restores_model_value_not_override(pm, am);
+
+    test_imgui_slider_release_frame_does_not_deliver_value();
+    test_deferred_slider_commits_dragged_value();
+    test_deferred_slider_forgets_drag_of_vanished_widget();
 
     am.shutdown();
     pm.shutdown();
