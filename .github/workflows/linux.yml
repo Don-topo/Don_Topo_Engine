@@ -1,0 +1,56 @@
+name: linux
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build glslc libvulkan-dev pkg-config ccache \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libxkbcommon-dev wayland-protocols
+      - uses: actions/cache@v4
+        with:
+          path: |
+            build-linux-release/_deps/*-src
+            ~/.cache/ccache
+          key: linux-${{ hashFiles('CMakeLists.txt', 'cmake/**') }}-${{ github.sha }}
+          restore-keys: linux-${{ hashFiles('CMakeLists.txt', 'cmake/**') }}-
+      # Sin FMOD: su licencia impide descargarlo aqui. Todo tiene que compilar y
+      # pasar tambien sin audio.
+      - name: Configurar
+        run: ./configure.sh linux-release 2>&1 | tee configure.log; exit ${PIPESTATUS[0]}
+        env:
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      - name: Compilar
+        run: ./build.sh linux-release 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
+      # Los errores del compilador como UNA anotacion: se leen desde la API de
+      # GitHub sin descargar el log entero.
+      - name: Resumen de errores
+        if: failure()
+        run: |
+          for f in configure.log build.log; do
+            [ -f "$f" ] || continue
+            resumen=$(grep -E "error|Error|FAILED" "$f" | head -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
+            [ -n "$resumen" ] && echo "::error title=$f::$resumen"
+          done
+      - name: Tests (desde la raiz del repo)
+        run: |
+          fallos=0
+          for t in build-linux-release/engine/tests/dt_*; do
+            [ -f "$t" ] && [ -x "$t" ] || continue
+            if ! "$t" > /tmp/salida.txt 2>&1; then
+              resumen=$(grep -E "FAIL" /tmp/salida.txt | head -20 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
+              echo "::error title=$(basename "$t")::FALLA%0A$resumen"
+              cat /tmp/salida.txt
+              fallos=1
+            fi
+          done
+          exit $fallos
