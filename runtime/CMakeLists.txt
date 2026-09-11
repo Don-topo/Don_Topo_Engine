@@ -69,3 +69,10 @@ if(DTE_ENABLE_D3D12)
 endif()
 
 dt_copy_fmod_runtime(DonTopoRuntime)
+
+# El juego exportado no depende de la libstdc++ del jugador (evita el
+# "GLIBCXX_3.4.xx not found" en distros viejas). glibc sigue siendo dinamica:
+# el exportador avisa de la version minima.
+if(UNIX AND NOT APPLE)
+    target_link_options(DonTopoRuntime PRIVATE -static-libstdc++ -static-libgcc)
+endif()

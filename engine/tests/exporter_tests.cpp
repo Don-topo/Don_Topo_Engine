@@ -472,7 +472,9 @@ static void test_package_contents(const fs::path& root)
 
     const fs::path pkg = dest / "MiJuego";
     CHECK(r.ok);
-    CHECK(fs::exists(pkg / "MiJuego.exe"));
+    // El nombre del ejecutable lo decide la tabla de la plataforma que exporta:
+    // MiJuego.exe en Windows, MiJuego en Linux.
+    CHECK(fs::exists(pkg / ("MiJuego" + exportPlatformFor(platform::currentOs()).executableSuffix)));
     CHECK(fs::exists(pkg / "game.scene"));
     CHECK(fs::exists(pkg / "assets" / "hero.fbx"));
     CHECK(fs::exists(pkg / "assets" / "skybox" / "px.png"));
@@ -807,7 +809,10 @@ static void test_debug_build_warns_about_crt(const fs::path& root)
 
     Scene scene;
     ExportResult r = writeExportPackage({}, scene.toJson(), dest, "MiJuego",
-                                        fixRoot, fixRoot / "Scripts", fixRoot / "DonTopoRuntime.exe");
+                                        fixRoot, fixRoot / "Scripts", fixRoot / "DonTopoRuntime.exe",
+                                        // Prueba el CRT de MSVC: fila de Windows, se ejecute donde se ejecute.
+                                        RenderBackend::Vulkan, "assets/skybox",
+                                        exportPlatformFor(platform::Os::Windows));
     CHECK(r.ok); // el paquete es correcto: esto es un aviso, no un error
 
     bool avisa = std::any_of(r.messages.begin(), r.messages.end(), [](const std::string& m) {
@@ -859,7 +864,10 @@ static void test_release_package_bundles_msvc_crt()
 
     Scene scene;
     ExportResult r = writeExportPackage({}, scene.toJson(), dest, "MiJuego",
-                                        fixRoot, fixRoot / "Scripts", fixRoot / "DonTopoRuntime.exe");
+                                        fixRoot, fixRoot / "Scripts", fixRoot / "DonTopoRuntime.exe",
+                                        // Prueba el CRT de MSVC: fila de Windows, se ejecute donde se ejecute.
+                                        RenderBackend::Vulkan, "assets/skybox",
+                                        exportPlatformFor(platform::Os::Windows));
     const fs::path pkg = dest / "MiJuego";
     CHECK(r.ok);
 
@@ -957,6 +965,63 @@ static void test_exportGame_aborts_missing_asset(const fs::path& root)
     fs::remove_all(dest, ec);
 }
 
+// Las dos filas de la tabla, comprobadas desde cualquier SO: la de Linux no
+// queda sin probar hasta que alguien exporte en Linux.
+static void test_export_platform_rows()
+{
+    const ExportPlatform w = exportPlatformFor(platform::Os::Windows);
+    CHECK(w.executableSuffix == ".exe" && !w.setExecutableBit && w.copyMsvcCrt && w.warnDebugCrt && !w.warnGlibc);
+    CHECK(w.audioLibPrefixes == std::vector<std::string>{"fmod.dll"});
+
+    const ExportPlatform l = exportPlatformFor(platform::Os::Linux);
+    CHECK(l.executableSuffix.empty() && l.setExecutableBit && !l.copyMsvcCrt && !l.warnDebugCrt && l.warnGlibc);
+    CHECK(l.audioLibPrefixes == std::vector<std::string>{"libfmod.so"});
+
+    CHECK(isAudioLibFile("libfmod.so.13", l) && isAudioLibFile("libfmod.so", l));
+    CHECK(!isAudioLibFile("libfmodL.so.13", l));   // la variante de logging no va
+    CHECK(isAudioLibFile("fmod.dll", w) && !isAudioLibFile("fmodL.dll", w));
+}
+
+// Un paquete de LINUX escrito desde cualquier SO. Reutiliza el skybox, los
+// shaders y el runtime falso que test_package_contents dejo en root. Va el
+// ultimo en main: deja bibliotecas falsas en root y las borra al acabar.
+static void test_linux_package(const fs::path& root)
+{
+    std::error_code ec;
+    std::ofstream(root / "libfmod.so.13")  << "so";
+    std::ofstream(root / "libfmodL.so.13") << "so";
+    std::ofstream(root / "msvcp140.dll")   << "dll";
+
+    Scene scene;
+    scene.addGameObject("hero")->setMesh(makeMesh(root / "assets" / "hero.fbx"));
+    const fs::path tempRoot = fs::temp_directory_path(ec);
+    if (ec || tempRoot.empty()) { CHECK(!ec && !tempRoot.empty()); return; }
+    const fs::path dest = tempRoot / "dt_exporter_linux";
+    fs::remove_all(dest, ec);
+
+    const ExportResult r = writeExportPackage(collectSceneAssets(scene, root, {}), scene.toJson(),
+                                              dest, "MiJuego", root, root / "Scripts",
+                                              root / "DonTopoRuntime.exe", RenderBackend::Vulkan,
+                                              "assets/skybox", exportPlatformFor(platform::Os::Linux));
+    const fs::path pkg = dest / "MiJuego";
+    CHECK(r.ok);
+    CHECK(fs::exists(pkg / "MiJuego") && !fs::exists(pkg / "MiJuego.exe"));
+    CHECK(!fs::exists(pkg / "msvcp140.dll"));     // el CRT de MSVC no va en Linux
+    CHECK(!fs::exists(pkg / "libfmodL.so.13"));
+#ifdef DT_FMOD_ENABLED
+    CHECK(fs::exists(pkg / "libfmod.so.13"));
+#endif
+    if (platform::currentOs() == platform::Os::Linux)
+    {
+        const fs::perms pr = fs::status(pkg / "MiJuego", ec).permissions();
+        CHECK((pr & fs::perms::owner_exec) != fs::perms::none);
+    }
+
+    fs::remove_all(dest, ec);
+    for (const char* f : { "libfmod.so.13", "libfmodL.so.13", "msvcp140.dll" })
+        fs::remove(root / f, ec);
+}
+
 int main()
 {
     fs::path root = makeProjectFixture();
@@ -974,6 +1039,7 @@ int main()
     test_rewrite_materials_override_outside_root(root);
     test_package_contents(root);
     test_package_includes_splash(root);
+    test_export_platform_rows();
     test_package_overwrite_is_clean(root);
     test_writeExportPackage_aborts_on_occupied(root);
     test_missing_runtime_aborts(root);
@@ -985,6 +1051,7 @@ int main()
     test_release_package_bundles_msvc_crt();
     test_exportGame_aborts_without_camera(root);
     test_exportGame_aborts_missing_asset(root);
+    test_linux_package(root);
 
     std::error_code ec;
     fs::remove_all(root, ec);

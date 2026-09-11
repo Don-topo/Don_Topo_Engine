@@ -429,6 +429,20 @@ int rewriteScenePaths(nlohmann::json& sceneJson,
     return rewriteNode(sceneJson, sourceToPackage);
 }
 
+ExportPlatform exportPlatformFor(platform::Os os)
+{
+    if (os == platform::Os::Windows)
+        return { ".exe", false, { "fmod.dll" }, true, true, false };
+    return { "", true, { "libfmod.so" }, false, false, true };
+}
+
+bool isAudioLibFile(const std::string& n, const ExportPlatform& plat)
+{
+    for (const std::string& p : plat.audioLibPrefixes)
+        if (n == p || n.rfind(p + ".", 0) == 0) return true;
+    return false;
+}
+
 ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                 const nlohmann::json& rewrittenScene,
                                 const fs::path& destDir,
@@ -437,7 +451,8 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                 const fs::path& scriptsDir,
                                 const fs::path& runtimeExe,
                                 RenderBackend backend,
-                                const std::string& skyboxFolder)
+                                const std::string& skyboxFolder,
+                                const ExportPlatform& plat)
 {
     ExportResult r;
     std::error_code ec;
@@ -515,7 +530,21 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
         return true;
     };
 
-    bool ok = copyOne(runtimeExe, pkg / (gameName + ".exe"));
+    const fs::path exeDst = pkg / (gameName + plat.executableSuffix);
+    bool ok = copyOne(runtimeExe, exeDst);
+    // Linux: sin el bit de ejecucion el juego no arranca con doble clic ni desde
+    // la terminal, aunque el fichero sea el binario correcto.
+    if (ok && plat.setExecutableBit)
+    {
+        std::error_code pec;
+        fs::permissions(exeDst, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+                        fs::perm_options::add, pec);
+        if (pec)
+        {
+            r.messages.push_back("No se pudo marcar " + exeDst.string() + " como ejecutable");
+            ok = false;
+        }
+    }
 
     for (const ExportAsset& a : assets)
         ok = copyOne(fs::path(a.sourcePath), pkg / fs::path(a.packagePath)) && ok;
@@ -708,12 +737,23 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     // shaders: el resto del paquete es correcto y se arregla copiando un
     // fichero al lado del .exe, sin re-exportar.
 #ifdef DT_FMOD_ENABLED
-    if (fs::exists(projectRoot / "fmod.dll", ec) && !ec)
-        ok = copyOne(projectRoot / "fmod.dll", pkg / "fmod.dll") && ok;
-    else
-        r.messages.push_back("Aviso: no se encontro " + (projectRoot / "fmod.dll").string() +
-                             "; el motor se compilo con FMOD, asi que el juego exportado no "
-                             "arrancara hasta que copies esa DLL junto al .exe.");
+    {
+        // fmod.dll en Windows; libfmod.so.N (el nombre de su soname, que es el
+        // que pide el binario) en Linux. La tabla dice cuales.
+        int audioCopied = 0;
+        std::error_code aec;
+        for (fs::directory_iterator it(projectRoot, aec), end; !aec && it != end; it.increment(aec))
+        {
+            if (!it->is_regular_file()) continue;
+            if (!isAudioLibFile(it->path().filename().string(), plat)) continue;
+            if (copyOne(it->path(), pkg / it->path().filename())) ++audioCopied;
+            else                                                  ok = false;
+        }
+        if (audioCopied == 0)
+            r.messages.push_back("Aviso: no se encontro " + (projectRoot / plat.audioLibPrefixes[0]).string() +
+                                 "; el motor se compilo con FMOD, asi que el juego exportado no "
+                                 "arrancara hasta que copies esa biblioteca junto al ejecutable.");
+    }
 #endif
 
     // El CRT de MSVC (VCRUNTIME140.dll, MSVCP140.dll y companeros) no esta en
@@ -738,6 +778,7 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     // Aviso y no error, mismo criterio que fmod.dll: el resto del paquete es
     // correcto y se arregla copiando ficheros junto al .exe, sin re-exportar.
 #ifdef NDEBUG
+    if (plat.copyMsvcCrt)
     {
         int crtCopied = 0;
         std::error_code cdec;
@@ -780,12 +821,19 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
     // Aviso y no error, mismo criterio que fmod.dll: exportar en Debug para
     // probar en local es legitimo y el resto del paquete es correcto.
 #ifndef NDEBUG
+    if (plat.warnDebugCrt)
     r.messages.push_back("Aviso: exportado en configuracion Debug. Este paquete solo arranca en "
                          "maquinas con Visual Studio instalado, porque enlaza el CRT de "
                          "depuracion de MSVC (ucrtbased.dll y companeros), que no es "
                          "redistribuible. Para repartir el juego: configure-release.bat, "
                          "build-release.bat, y exporta desde build-ninja-release.");
 #endif
+
+    // glibc no se puede empaquetar: el juego necesita la de esta maquina o una
+    // mas nueva. libstdc++ si va dentro del runtime (runtime/CMakeLists.txt).
+    if (plat.warnGlibc && !platform::libcVersion().empty())
+        r.messages.push_back("Aviso: el juego necesita glibc " + platform::libcVersion() +
+                             " o superior; no arrancara en distros mas antiguas que esta.");
 
     if (!FileManager::writeJson((pkg / "game.scene").string(), rewrittenScene))
     {

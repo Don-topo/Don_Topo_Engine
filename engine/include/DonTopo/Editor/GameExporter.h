@@ -7,6 +7,7 @@
 #include <nlohmann/json_fwd.hpp>
 
 #include "DonTopo/Renderer/RenderBackend.h"
+#include "DonTopo/Core/Platform.h"
 
 namespace DonTopo {
 
@@ -111,6 +112,24 @@ ExportTargetState inspectExportTarget(const std::filesystem::path& pkg);
 // 'backend' solo decide lo que se escribe en game.cfg y si la ausencia de
 // .dxil se avisa: los shaders de los dos backends se copian siempre, para que
 // el paquete siga arrancando si alguien edita ese campo a mano.
+// Que lleva el paquete exportado en cada plataforma. writeExportPackage recorre
+// esto en vez de tener ramas por sistema: macOS sera otra fila.
+struct ExportPlatform {
+    std::string              executableSuffix;   // ".exe" | ""
+    bool                     setExecutableBit;   // chmod +x al ejecutable
+    std::vector<std::string> audioLibPrefixes;   // fichero exacto, o prefijo + "."
+    bool                     copyMsvcCrt;        // msvcp140* / vcruntime140* junto al editor
+    bool                     warnDebugCrt;       // aviso de CRT de depuracion no redistribuible
+    bool                     warnGlibc;          // aviso de version minima de glibc
+};
+
+ExportPlatform exportPlatformFor(platform::Os os);
+
+// ¿Es `fileName` una biblioteca de audio que el paquete debe llevar? Coincide el
+// nombre exacto o el prefijo seguido de "." (libfmod.so.13); la variante de
+// logging de FMOD (libfmodL, fmodL.dll) no entra.
+bool isAudioLibFile(const std::string& fileName, const ExportPlatform& plat);
+
 ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                 const nlohmann::json& rewrittenScene,
                                 const std::filesystem::path& destDir,
@@ -124,7 +143,11 @@ ExportResult writeExportPackage(const std::vector<ExportAsset>& assets,
                                 // es SIEMPRE assets/skybox, que es donde el runtime
                                 // las busca, asi que cambiar de cielo en el editor no
                                 // obliga a tocar el runtime.
-                                const std::string& skyboxFolder = "assets/skybox");
+                                const std::string& skyboxFolder = "assets/skybox",
+                                // Para que plataforma es el paquete. Por defecto, la
+                                // del editor que exporta; los tests escriben el de
+                                // otra para cubrir las dos filas desde cualquier SO.
+                                const ExportPlatform& plat = exportPlatformFor(platform::currentOs()));
 
 // Export completo: valida, recolecta, reescribe y escribe el paquete.
 // Los mensajes para el usuario van en ExportResult::messages; el llamador
