@@ -1,4 +1,5 @@
 #include "DonTopo/Editor/LogPanel.h"
+#include "DonTopo/Core/Platform.h"
 #include <imgui.h>
 #include <cctype>
 #include <chrono>
@@ -81,8 +82,7 @@ void LogPanel::push(const std::string& message)
 void LogPanel::push(const std::string& message, const std::string& module)
 {
     std::time_t t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    std::tm     tmBuf{};
-    localtime_s(&tmBuf, &t);
+    const std::tm tmBuf = platform::localTime(t);
     char timeStr[16];
     std::strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &tmBuf);
 

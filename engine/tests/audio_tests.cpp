@@ -19,11 +19,7 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/matrix_transform.hpp>
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
+#include "DonTopo/Core/Platform.h"
 
 #include <chrono>
 #include <cmath>
@@ -733,11 +729,7 @@ static void test_corrupt_file_reports_load_failure(AudioManager& am)
     const std::filesystem::path bogus =
         std::filesystem::temp_directory_path() /
         ("dt_audio_corrupto_" + std::to_string(
-#ifdef _WIN32
-             (unsigned long)GetCurrentProcessId()
-#else
-             (unsigned long)getpid()
-#endif
+             DonTopo::platform::processId()
          ) + ".mp3");
     {
         std::FILE* f = std::fopen(bogus.string().c_str(), "wb");

@@ -13,9 +13,7 @@
 #include <utility>
 #include <system_error>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
+#include "DonTopo/Core/Platform.h"
 
 namespace fs = std::filesystem;
 
@@ -40,15 +38,7 @@ bool equalsNoCase(const std::string& a, const std::string& b)
 // se lance el editor.
 fs::path executableDir()
 {
-#ifdef _WIN32
-    wchar_t buffer[MAX_PATH] = {};
-    DWORD   n                = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-    if (n > 0 && n < MAX_PATH)
-        return fs::path(buffer).parent_path();
-#endif
-    std::error_code ec;
-    fs::path        cwd = fs::current_path(ec);
-    return ec ? fs::path{} : cwd;
+    return platform::executableDir();
 }
 
 // Claves de la visibilidad de panel, en el orden del enum Panel. Son parte del

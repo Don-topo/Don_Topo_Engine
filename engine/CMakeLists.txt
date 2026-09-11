@@ -120,6 +120,14 @@ endif()
 
 target_compile_features(DonTopoCore PUBLIC cxx_std_20)
 
+# Una implementacion de DonTopo::platform por sistema (ver Platform.h).
+if(WIN32)
+    target_sources(DonTopoCore PRIVATE src/Core/Platform_win.cpp)
+    target_link_libraries(DonTopoCore PRIVATE psapi dxgi)
+else()
+    target_sources(DonTopoCore PRIVATE src/Core/Platform_posix.cpp)
+endif()
+
 # ScriptBindings.cpp registra muchos usertypes de sol2 en una sola TU: el
 # volumen de plantillas generadas supera el límite de secciones de MSVC
 # (C1128) sin /bigobj.

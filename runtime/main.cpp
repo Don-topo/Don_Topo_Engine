@@ -36,12 +36,10 @@
 #include <unordered_set>
 #include <vector>
 
-#ifdef _WIN32
-#include <windows.h>
 #include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Core/Platform.h"
 #include "DonTopo/Audio/AudioClipComponent.h"
 #include "DonTopo/Audio/AudioListenerComponent.h"
-#endif
 
 namespace {
 
@@ -70,18 +68,7 @@ void onChar(GLFWwindow*, unsigned int codepoint)
 // ejecutable, no contra el cwd de quien lo lanzó — deliberado, mismo motivo.
 std::filesystem::path executableDir()
 {
-#ifdef _WIN32
-    wchar_t buffer[MAX_PATH] = {};
-    DWORD n = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-    if (n == 0 || n == MAX_PATH)
-        return std::filesystem::current_path();
-    return std::filesystem::path(buffer).parent_path();
-#else
-    std::error_code ec;
-    std::filesystem::path self = std::filesystem::read_symlink("/proc/self/exe", ec);
-    if (ec) return std::filesystem::current_path();
-    return self.parent_path();
-#endif
+    return DonTopo::platform::executableDir();
 }
 
 // Manda std::cout y std::cerr a game.log, junto al ejecutable. El runtime se
@@ -121,18 +108,7 @@ void redirectStdioToLogFile()
 void reportFatal(const std::string& msg)
 {
     std::cerr << msg << std::endl;
-#ifdef _WIN32
-    // MessageBoxW y no MessageBoxA: los mensajes vienen en UTF-8 (lo que hay en
-    // los .cpp y lo que devuelve what()), y la version ANSI los interpretaria
-    // con la codepage del sistema — cualquier acento saldria como garabatos.
-    const int wlen = MultiByteToWideChar(CP_UTF8, 0, msg.c_str(), -1, nullptr, 0);
-    if (wlen > 0)
-    {
-        std::wstring wmsg(wlen, L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, msg.c_str(), -1, wmsg.data(), wlen);
-        MessageBoxW(nullptr, wmsg.c_str(), L"Don Topo Engine", MB_OK | MB_ICONERROR);
-    }
-#endif
+    DonTopo::platform::showFatalError("Don Topo Engine", msg);
 }
 
 } // namespace

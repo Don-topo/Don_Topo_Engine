@@ -3,28 +3,13 @@
 #include "DonTopo/Editor/GpuTimeFormat.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Scene.h"
-// Fuera del #ifdef de Windows: draw() habla con el Renderer en TODAS las
-// plataformas; lo unico que es de Windows son las lecturas del proceso.
 #include "DonTopo/Renderer/EditorRenderer.h"
 #include <imgui.h>
 #include <algorithm>
 #include <cstdio>
 
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <psapi.h>
-#include <dxgi1_4.h>
-// Se enlazan aquí y no desde CMake: son librerías de importación del SDK de
-// Windows y este es el único traductor que las usa.
-#pragma comment(lib, "psapi.lib")
-#pragma comment(lib, "dxgi.lib")
-#endif
+#include "DonTopo/Core/Platform.h"
+#include <thread>
 
 namespace DonTopo {
 
@@ -90,94 +75,41 @@ void gpuRow(const char* name, float ms, float totalMs, bool hottest)
 
 } // namespace
 
-PerformancePanel::~PerformancePanel()
-{
-#ifdef _WIN32
-    if (m_dxgiAdapter)
-    {
-        ((IDXGIAdapter3*)m_dxgiAdapter)->Release();
-        m_dxgiAdapter = nullptr;
-    }
-#endif
-}
+PerformancePanel::~PerformancePanel() = default;
 
 void PerformancePanel::sampleProcess()
 {
     // El reloj lo lleva draw(): esto se llama SOLO en el frame del refresco.
     // Antes decidía aquí dentro, y como la llamada estaba dentro de la sección
     // "Proceso", con esa sección plegada el reloj no avanzaba nunca.
-#ifdef _WIN32
     const double now = ImGui::GetTime();
-    PROCESS_MEMORY_COUNTERS pmc{};
-    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+    const platform::ProcessStats st = platform::processStats();
+    if (st.valid)
     {
-        m_workingSetMb  = (float)((double)pmc.WorkingSetSize / (1024.0 * 1024.0));
-        m_peakWorkingMb = (float)((double)pmc.PeakWorkingSetSize / (1024.0 * 1024.0));
+        m_workingSetMb  = (float)st.workingSetMb;
+        m_peakWorkingMb = (float)st.peakWorkingSetMb;
     }
 
     // CPU del proceso: tiempo de kernel + usuario consumido desde la muestra
-    // anterior, repartido entre el tiempo de pared y los núcleos. Sin dividir
-    // por los núcleos, un proceso con 8 hilos saturados marcaría 800 %.
-    FILETIME ftCreate{}, ftExit{}, ftKernel{}, ftUser{};
-    if (GetProcessTimes(GetCurrentProcess(), &ftCreate, &ftExit, &ftKernel, &ftUser))
+    // anterior, repartido entre el tiempo de pared y los nucleos. Sin dividir
+    // por los nucleos, un proceso con 8 hilos saturados marcaria 800 %.
+    if (m_lastCpuSeconds >= 0.0)
     {
-        ULARGE_INTEGER k{}, u{};
-        k.LowPart  = ftKernel.dwLowDateTime;  k.HighPart  = ftKernel.dwHighDateTime;
-        u.LowPart  = ftUser.dwLowDateTime;    u.HighPart  = ftUser.dwHighDateTime;
-        const uint64_t ticks = (uint64_t)k.QuadPart + (uint64_t)u.QuadPart;
-        if (m_lastCpuTicks != 0)
-        {
-            const double wall = now - m_lastCpuWall;
-            SYSTEM_INFO si{};
-            GetSystemInfo(&si);
-            const double cores = si.dwNumberOfProcessors > 0 ? (double)si.dwNumberOfProcessors : 1.0;
-            if (wall > 0.0)
-            {
-                // Los FILETIME van en unidades de 100 ns: 1e7 por segundo.
-                const double busy = (double)(ticks - m_lastCpuTicks) / 1e7;
-                m_cpuPercent = (float)std::clamp(100.0 * busy / (wall * cores), 0.0, 100.0);
-            }
-        }
-        m_lastCpuTicks = ticks;
-        m_lastCpuWall  = now;
+        const double wall  = now - m_lastCpuWall;
+        const double cores = (double)std::max(1u, std::thread::hardware_concurrency());
+        if (wall > 0.0)
+            m_cpuPercent = (float)std::clamp(100.0 * (st.cpuSeconds - m_lastCpuSeconds) / (wall * cores),
+                                             0.0, 100.0);
     }
+    m_lastCpuSeconds = st.cpuSeconds;
+    m_lastCpuWall    = now;
 
-    // VRAM: DXGI da el uso REAL del proceso y el presupuesto que le concede el
-    // sistema, que es justo lo que interesa vigilar. Vulkan por sí solo no lo
-    // expone sin VK_EXT_memory_budget, y esa extensión habría que habilitarla
-    // en la creación del device (Core), así que se mide desde aquí.
-    if (!m_dxgiTried)
+    // VRAM del proceso y presupuesto: solo donde el sistema lo da (DXGI).
+    if (const auto vram = platform::gpuMemoryBudget())
     {
-        m_dxgiTried = true;
-        IDXGIFactory1* factory = nullptr;
-        if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&factory)) && factory)
-        {
-            IDXGIAdapter1* adapter1 = nullptr;
-            // Adaptador 0: el motor no expone el LUID del device de Vulkan, y en
-            // una máquina de un solo GPU dedicado es el mismo.
-            if (SUCCEEDED(factory->EnumAdapters1(0, &adapter1)) && adapter1)
-            {
-                IDXGIAdapter3* adapter3 = nullptr;
-                if (SUCCEEDED(adapter1->QueryInterface(__uuidof(IDXGIAdapter3), (void**)&adapter3)))
-                {
-                    m_dxgiAdapter = adapter3;
-                }
-                adapter1->Release();
-            }
-            factory->Release();
-        }
+        m_gpuUsedMb   = (float)vram->usedMb;
+        m_gpuBudgetMb = (float)vram->budgetMb;
     }
-    if (m_dxgiAdapter)
-    {
-        DXGI_QUERY_VIDEO_MEMORY_INFO info{};
-        if (SUCCEEDED(((IDXGIAdapter3*)m_dxgiAdapter)->QueryVideoMemoryInfo(
-                0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)))
-        {
-            m_gpuUsedMb   = (float)((double)info.CurrentUsage / (1024.0 * 1024.0));
-            m_gpuBudgetMb = (float)((double)info.Budget / (1024.0 * 1024.0));
-        }
-    }
-#endif
 }
 
 void PerformancePanel::draw(EditorContext& ctx)
@@ -613,7 +545,6 @@ void PerformancePanel::draw(EditorContext& ctx)
         ImGui::PushID("proceso");
         if (ImGui::CollapsingHeader("Proceso", ImGuiTreeNodeFlags_DefaultOpen))
         {
-#ifdef _WIN32
             ImGui::Text("RAM (working set): %.1f MB  (pico %.1f MB)", m_workingSetMb, m_peakWorkingMb);
             ImGui::Text("CPU del proceso:   %.1f %%", m_cpuPercent);
             if (m_gpuBudgetMb > 0.0f)
@@ -633,12 +564,9 @@ void PerformancePanel::draw(EditorContext& ctx)
             }
             else
             {
-                ImGui::TextDisabled("VRAM: no disponible (sin DXGI).");
+                ImGui::TextDisabled("VRAM: no disponible en esta plataforma.");
             }
             ImGui::TextDisabled("Lecturas del kernel/driver, no por frame.");
-#else
-            ImGui::TextDisabled("RAM/CPU/VRAM del proceso: solo en Windows.");
-#endif
         }
         ImGui::PopID();
     }

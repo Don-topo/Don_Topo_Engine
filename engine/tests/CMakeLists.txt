@@ -139,6 +139,12 @@ add_executable(dt_material_texture_tests material_texture_tests.cpp)
 target_link_libraries(dt_material_texture_tests PRIVATE DonTopoEditor)
 target_compile_features(dt_material_texture_tests PRIVATE cxx_std_20)
 
+# Lee el codigo en disco. Enlaza DonTopoCore porque tambien prueba
+# DonTopo::platform (la capa de plataforma).
+add_executable(dt_portability_tests portability_tests.cpp)
+target_link_libraries(dt_portability_tests PRIVATE DonTopoCore)
+target_compile_features(dt_portability_tests PRIVATE cxx_std_20)
+
 # Los diecisiete ejecutables enlazan DonTopoCore, que arrastra FMOD (Audio). Sin
 # copiar fmod.dll al lado del .exe, un clone limpio falla en runtime con
 # STATUS_ENTRYPOINT_NOT_FOUND. Mismo patrÃ³n que sandbox/CMakeLists.txt.

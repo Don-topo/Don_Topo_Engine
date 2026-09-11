@@ -1,4 +1,5 @@
 #include "DonTopo/Editor/PropertiesPanel.h"
+#include "DonTopo/Core/CopyToBuffer.h"
 #include "DonTopo/Core/TransformDecompose.h"
 #include "DonTopo/Editor/EditorContext.h"
 #include "DonTopo/Editor/ProjectContext.h"
@@ -1537,7 +1538,7 @@ void PropertiesPanel::drawButtonSection(EditorContext& ctx)
         {
             const std::string before = acc(*b);
             char buf[512] = {};
-            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            copyToBuffer(buf, before);
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
             if (ImGui::InputText(label, buf, sizeof(buf)))
                 acc(*b) = std::string(buf);
@@ -1982,7 +1983,7 @@ void PropertiesPanel::drawTextSection(EditorContext& ctx)
         {
             const std::string before = acc(*t);
             char buf[512] = {};
-            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            copyToBuffer(buf, before);
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
             if (ImGui::InputText(label, buf, sizeof(buf)))
                 acc(*t) = std::string(buf);
@@ -2363,7 +2364,7 @@ void PropertiesPanel::drawProgressBarSection(EditorContext& ctx)
         {
             const std::string before = acc(*p);
             char buf[512] = {};
-            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            copyToBuffer(buf, before);
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
             if (ImGui::InputText(label, buf, sizeof(buf)))
                 acc(*p) = std::string(buf);
@@ -2944,7 +2945,7 @@ void PropertiesPanel::drawPanelSection(EditorContext& ctx)
         {
             const std::string before = acc(*p);
             char buf[512] = {};
-            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            copyToBuffer(buf, before);
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
             if (ImGui::InputText(label, buf, sizeof(buf)))
                 acc(*p) = std::string(buf);
@@ -3313,7 +3314,7 @@ void PropertiesPanel::drawImageSection(EditorContext& ctx)
         {
             const std::string before = acc(*im);
             char buf[512] = {};
-            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            copyToBuffer(buf, before);
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
             if (ImGui::InputText(label, buf, sizeof(buf)))
                 acc(*im) = std::string(buf);
@@ -3773,7 +3774,7 @@ void PropertiesPanel::drawSliderSection(EditorContext& ctx)
         {
             const std::string before = acc(*sl);
             char buf[512] = {};
-            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            copyToBuffer(buf, before);
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
             if (ImGui::InputText(label, buf, sizeof(buf)))
                 acc(*sl) = std::string(buf);
@@ -4172,7 +4173,7 @@ void PropertiesPanel::drawCheckboxSection(EditorContext& ctx)
         {
             const std::string before = acc(*cb);
             char buf[512] = {};
-            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            copyToBuffer(buf, before);
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
             if (ImGui::InputText(label, buf, sizeof(buf)))
                 acc(*cb) = std::string(buf);
@@ -4554,7 +4555,7 @@ void PropertiesPanel::drawToggleSection(EditorContext& ctx)
         {
             const std::string before = acc(*tg);
             char buf[512] = {};
-            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            copyToBuffer(buf, before);
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
             if (ImGui::InputText(label, buf, sizeof(buf)))
                 acc(*tg) = std::string(buf);
@@ -4940,7 +4941,7 @@ void PropertiesPanel::drawScrollbarSection(EditorContext& ctx)
         {
             const std::string before = acc(*sb);
             char buf[512] = {};
-            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            copyToBuffer(buf, before);
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
             if (ImGui::InputText(label, buf, sizeof(buf)))
                 acc(*sb) = std::string(buf);
@@ -5413,7 +5414,7 @@ void PropertiesPanel::drawInputFieldSection(EditorContext& ctx)
         {
             const std::string before = acc(*fld);
             char buf[512] = {};
-            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            copyToBuffer(buf, before);
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
             if (ImGui::InputText(label, buf, sizeof(buf)))
                 acc(*fld) = std::string(buf);
@@ -5923,7 +5924,7 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
         {
             const std::string before = acc(*dd);
             char buf[512] = {};
-            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            copyToBuffer(buf, before);
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
             if (ImGui::InputText(label, buf, sizeof(buf)))
                 acc(*dd) = std::string(buf);
@@ -6032,7 +6033,7 @@ void PropertiesPanel::drawDropdownSection(EditorContext& ctx)
             {
                 ImGui::PushID((int)k);
                 char buf[256] = {};
-                strncpy_s(buf, dd->options[k].c_str(), sizeof(buf) - 1);
+                copyToBuffer(buf, dd->options[k]);
                 ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14);
                 if (ImGui::InputText("##opt", buf, sizeof(buf)))
                 {
@@ -6464,7 +6465,7 @@ void PropertiesPanel::drawScrollViewSection(EditorContext& ctx)
         {
             const std::string before = acc(*sv);
             char buf[512] = {};
-            strncpy_s(buf, before.c_str(), sizeof(buf) - 1);
+            copyToBuffer(buf, before);
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
             if (ImGui::InputText(label, buf, sizeof(buf)))
                 acc(*sv) = std::string(buf);
@@ -8792,7 +8793,7 @@ void PropertiesPanel::drawScriptsSection(EditorContext& ctx)
                     {
                         char buf[256] = {};
                         const std::string& s = std::get<std::string>(value);
-                        strncpy_s(buf, s.c_str(), sizeof(buf) - 1);
+                        copyToBuffer(buf, s);
                         if (ImGui::InputText(label.c_str(), buf, sizeof(buf)))
                         { value = std::string(buf); edited = true; }
                     }

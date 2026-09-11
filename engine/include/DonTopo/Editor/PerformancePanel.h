@@ -107,13 +107,10 @@ private:
     float    m_cpuPercent     = 0.0f;
     float    m_gpuUsedMb      = 0.0f;
     float    m_gpuBudgetMb    = 0.0f;
-    // Contadores previos de GetProcessTimes, en unidades de 100 ns.
-    uint64_t m_lastCpuTicks   = 0;
-    double   m_lastCpuWall     = 0.0;
-    // IDXGIAdapter3 cacheado (void* para no arrastrar dxgi.h al header). Lo
-    // libera el destructor.
-    void*    m_dxgiAdapter    = nullptr;
-    bool     m_dxgiTried      = false;
+    // Muestra anterior de platform::processStats().cpuSeconds; < 0 = aun no
+    // hay muestra (la primera no da porcentaje).
+    double   m_lastCpuSeconds = -1.0;
+    double   m_lastCpuWall    = 0.0;
 };
 
 } // namespace DonTopo
