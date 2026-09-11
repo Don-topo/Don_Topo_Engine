@@ -11,12 +11,11 @@ function(dt_copy_fmod_runtime target)
     else()
         # Solo la que pide el binario, su soname (libfmod.so.14). La .so de
         # desarrollo y la .so.14.14 completa son el mismo fichero repetido.
-        file(READ_ELF "${FMOD_LIBRARY}" SONAME _soname)
-        if(_soname)
-            set(_files "${_dir}/${_soname}")
-        else()
-            file(GLOB _files "${_dir}/libfmod.so.*")
-        endif()
+        # Por nombre y no leyendo el ELF: file(READ_ELF) no tiene opcion SONAME
+        # (solo RPATH/RUNPATH/BUILD_ID) y la ignora en silencio. Misma regla que
+        # isAudioLibFile en el exportador: prefijo + un solo numero.
+        file(GLOB _files "${_dir}/libfmod.so.*")
+        list(FILTER _files INCLUDE REGEX "/libfmod[.]so[.][0-9]+$")
     endif()
     foreach(_f IN LISTS _files)
         if(EXISTS "${_f}")
