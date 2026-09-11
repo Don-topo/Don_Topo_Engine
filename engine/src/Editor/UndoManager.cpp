@@ -12,6 +12,7 @@ void UndoManager::push(std::unique_ptr<ICommand> cmd, bool dirtiesScene)
     m_undoStack.push_back(std::move(cmd));
     if (m_undoStack.size() > kMaxHistory)
         m_undoStack.pop_front();
+    ++m_revision;
 }
 
 void UndoManager::undo()
@@ -22,6 +23,7 @@ void UndoManager::undo()
     cmd->undo();
     m_lastLabel = cmd->label();
     m_redoStack.push_back(std::move(cmd));
+    ++m_revision;
 }
 
 void UndoManager::redo()
@@ -32,6 +34,7 @@ void UndoManager::redo()
     cmd->execute();
     m_lastLabel = cmd->label();
     m_undoStack.push_back(std::move(cmd));
+    ++m_revision;
 }
 
 void UndoManager::clear()
@@ -39,6 +42,7 @@ void UndoManager::clear()
     m_undoStack.clear();
     m_redoStack.clear();
     m_lastLabel.clear();
+    ++m_revision;
 }
 
 } // namespace DonTopo

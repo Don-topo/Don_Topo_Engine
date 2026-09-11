@@ -1,5 +1,6 @@
 #pragma once
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <string>
@@ -44,6 +45,12 @@ public:
     void markSceneSaved() { m_sceneDirty = false; }
     bool canUndo() const { return !m_undoStack.empty(); }
     bool canRedo() const { return !m_redoStack.empty(); }
+    // Cambia cada vez que se mueve el historial: push, undo y redo que hacen
+    // algo, y clear. AnimatorGraphUndoTracker la compara entre el principio y
+    // el final de un gesto para saber si la diferencia que ve en el grafo es
+    // solo del usuario o también de un comando ajeno (un Ctrl+Z en mitad de un
+    // drag, un ClipRenameCommand del propio panel, el clear() de Play).
+    uint64_t revision() const { return m_revision; }
     // Label del comando que acaba de deshacerse/rehacerse — solo válido
     // justo después de una llamada a undo()/redo() que sí hizo algo
     // (comprobar canUndo()/canRedo() antes de llamar).
@@ -54,6 +61,7 @@ private:
     std::deque<std::unique_ptr<ICommand>> m_redoStack;
     std::string m_lastLabel;
     bool m_sceneDirty = false;
+    uint64_t m_revision = 0;
 };
 
 } // namespace DonTopo

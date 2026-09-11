@@ -275,6 +275,37 @@ static void test_un_push_de_render_invalida_el_redo()
     CHECK(!undo.canRedo());
 }
 
+// revision() es la señal con la que AnimatorGraphUndoTracker sabe que alguien
+// ha tocado el historial en mitad de un gesto. Tiene que cambiar con TODO lo
+// que mueve los stacks y con nada más: si no cambiara en un undo, el tracker
+// metería lo deshecho dentro del comando del gesto; si cambiara en un undo
+// vacío, descartaría gestos del usuario sin motivo.
+static void test_revision_cambia_con_cada_movimiento_del_historial()
+{
+    UndoManager undo;
+    int target = 0;
+
+    const uint64_t r0 = undo.revision();
+    undo.undo();   // stacks vacíos: no hacen nada
+    undo.redo();
+    CHECK(undo.revision() == r0);
+
+    undo.push(makeSceneCommand(target, 0, 1));
+    const uint64_t r1 = undo.revision();
+    CHECK(r1 != r0);
+
+    undo.undo();
+    const uint64_t r2 = undo.revision();
+    CHECK(r2 != r1);
+
+    undo.redo();
+    const uint64_t r3 = undo.revision();
+    CHECK(r3 != r2);
+
+    undo.clear();
+    CHECK(undo.revision() != r3);
+}
+
 int main()
 {
     test_push_de_render_no_ensucia_la_escena();
@@ -290,6 +321,8 @@ int main()
     test_undo_y_redo_persisten();
     test_orden_unico_mezclando_escena_y_render();
     test_un_push_de_render_invalida_el_redo();
+
+    test_revision_cambia_con_cada_movimiento_del_historial();
 
     if (g_failures == 0) std::printf("ALL RENDER SETTINGS UNDO TESTS PASSED\n");
     std::fflush(stdout);
