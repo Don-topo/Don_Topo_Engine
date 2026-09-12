@@ -1,6 +1,7 @@
 #include "DonTopo/Core/Window.h"
 #include "DonTopo/Renderer/Renderer.h"
 #include "DonTopo/Renderer/ModelLoader.h"
+#include "DonTopo/Renderer/SkinnedFrameSync.h"
 #include "DonTopo/Renderer/Cube.h"
 #include "DonTopo/Renderer/Sphere.h"
 #include "DonTopo/Renderer/Plane.h"
@@ -504,40 +505,9 @@ int main()
                                                    go->meshVisible);
                     }
 
-                    if (go->skinnedRenderIndex >= 0)
-                    {
-                        // La visibilidad antes de tocar la animación: el reloj de
-                        // un mesh oculto se congela, así que el flag tiene que
-                        // estar ya puesto o iría un frame por detrás.
-                        d3d12.setSkinnedMeshVisible(go->skinnedRenderIndex, go->meshVisible);
-                        if (const auto& anim = go->getAnimator())
-                        {
-                            // El Animator es el único dueño de animTime: evalúa
-                            // en CPU y el backend solo recibe el resultado. En
-                            // Edit el grafo no evalúa transiciones.
-                            // El estado de Play lo lleva el editor; el backend de
-                            // DirectX 12 no lo conoce.
-                            anim->update(d3dDelta, editor.isPlaying());
-                            // setAnimationBlend siempre: los pose* resuelven ya
-                            // el cross-fade y el blend por parámetro, y sin
-                            // ninguno de los dos el peso vale 1 y el backend ni
-                            // mira el segundo clip.
-                            d3d12.setAnimationBlend(go->skinnedRenderIndex,
-                                                    (uint32_t)anim->poseClipB(),
-                                                    anim->poseTimeB(),
-                                                    (uint32_t)anim->poseClipA(),
-                                                    anim->poseTimeA(),
-                                                    anim->poseWeight(),
-                                                    anim->poseLockRootMotion());
-                        }
-                        else
-                        {
-                            d3d12.updateAnimation(go->skinnedRenderIndex, d3dDelta);
-                        }
-                        d3d12.setSkinnedTransform(go->skinnedRenderIndex, go->worldTransform);
-                        d3d12.setSkinnedSsr(go->skinnedRenderIndex,
-                                            go->ssrEnabled ? go->ssrIntensity : 0.0f);
-                    }
+                    // El estado de Play lo lleva el editor; el backend de
+                    // DirectX 12 no lo conoce.
+                    applySkinnedFrame(*go, d3d12, d3dDelta, editor.isPlaying());
                 });
 
                 // Luces después del recorrido: sus worldTransform ya están
@@ -1090,43 +1060,10 @@ int main()
                     renderer.setObjectMeshVisible(go->staticRenderIndex, go->meshVisible);
                 }
 
-                if (go->skinnedRenderIndex >= 0)
-                {
-                    // Antes de tocar la animación: updateAnimation congela el
-                    // reloj de un mesh oculto, así que el flag tiene que estar ya
-                    // puesto o iría un frame por detrás.
-                    renderer.setSkinnedMeshVisible(go->skinnedRenderIndex, go->meshVisible);
-                    if (const auto& anim = go->getAnimator())
-                    {
-                        // El Animator es el único dueño de animTime: calcula en
-                        // CPU y el Renderer solo recibe el resultado. En Edit el
-                        // grafo no evalúa transiciones (solo avanza el tiempo del
-                        // estado de entrada); si no, las condiciones "animation
-                        // finished" pasearían el grafo solo en el editor.
-                        anim->update(dt, renderer.isPlaying());
-                        // setAnimationBlend siempre: los pose* resuelven ya el
-                        // cross-fade y el blend por parámetro, y sin ninguno de
-                        // los dos el peso vale 1 y el Renderer ni mira el
-                        // segundo clip.
-                        renderer.setAnimationBlend(go->skinnedRenderIndex,
-                                                    (uint32_t)anim->poseClipB(),
-                                                    anim->poseTimeB(),
-                                                    (uint32_t)anim->poseClipA(),
-                                                    anim->poseTimeA(),
-                                                    anim->poseWeight(),
-                                                    anim->poseLockRootMotion());
-                    }
-                    else
-                    {
-                        // Sin Animator: clip 0 en bucle, exactamente como antes
-                        // de que existiera el componente. Los dos caminos no se
-                        // pisan.
-                        renderer.updateAnimation(go->skinnedRenderIndex, dt);
-                    }
-                    renderer.setSkinnedTransform(go->skinnedRenderIndex, go->worldTransform);
-                    renderer.setSkinnedSsr(go->skinnedRenderIndex,
-                                           go->ssrEnabled ? go->ssrIntensity : 0.0f);
-                }
+                // En Edit el grafo no evalúa transiciones (solo avanza el tiempo
+                // del estado de entrada); si no, las condiciones "animation
+                // finished" pasearían el grafo solo en el editor.
+                applySkinnedFrame(*go, renderer, dt, renderer.isPlaying());
             });
 
             // Luces de la escena, después del traverse: los worldTransform del

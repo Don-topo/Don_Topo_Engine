@@ -10,6 +10,7 @@
 #include "DonTopo/Renderer/AsyncAssetLoader.h"
 #include "DonTopo/Renderer/RenderBackend.h"
 #include "DonTopo/Renderer/EditorRenderer.h"
+#include "DonTopo/Renderer/SkinnedFrameSync.h"
 #include "DonTopo/UI/UiInputBridge.h"
 #ifdef DT_D3D12_ENABLED
 #include "DonTopo/Renderer/D3D12/D3D12Renderer.h"
@@ -670,34 +671,8 @@ int main(int argc, char** argv)
                     renderer.setObjectMeshVisible(go->staticRenderIndex, go->meshVisible);
                 }
 
-                if (go->skinnedRenderIndex >= 0)
-                {
-                    // Antes de tocar la animación: updateAnimation congela el
-                    // reloj de un mesh oculto, así que el flag tiene que estar ya
-                    // puesto o iría un frame por detrás.
-                    renderer.setSkinnedMeshVisible(go->skinnedRenderIndex, go->meshVisible);
-                    if (const auto& anim = go->getAnimator())
-                    {
-                        anim->update(dt, /*playing=*/true);
-                        // setAnimationBlend siempre: los pose* resuelven ya el
-                        // cross-fade y el blend por parámetro; sin ninguno de
-                        // los dos el peso vale 1 y el segundo clip ni se mira.
-                        renderer.setAnimationBlend(go->skinnedRenderIndex,
-                                                    (uint32_t)anim->poseClipB(),
-                                                    anim->poseTimeB(),
-                                                    (uint32_t)anim->poseClipA(),
-                                                    anim->poseTimeA(),
-                                                    anim->poseWeight(),
-                                                    anim->poseLockRootMotion());
-                    }
-                    else
-                    {
-                        renderer.updateAnimation(go->skinnedRenderIndex, dt);
-                    }
-                    renderer.setSkinnedTransform(go->skinnedRenderIndex, go->worldTransform);
-                    renderer.setSkinnedSsr(go->skinnedRenderIndex,
-                                           go->ssrEnabled ? go->ssrIntensity : 0.0f);
-                }
+                // El runtime siempre juega: el grafo evalúa transiciones.
+                applySkinnedFrame(*go, renderer, dt, /*evaluateTransitions=*/true);
             });
 
             // Antes de drawFrame: los scripts Lua pueden instanciar/borrar

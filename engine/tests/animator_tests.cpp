@@ -10,6 +10,7 @@
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
+#include "DonTopo/Renderer/SkinnedFrameSync.h"
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/AnimatorGraphUndo.h"
 #include "DonTopo/Core/AnimatorSerialization.h"
@@ -4728,6 +4729,191 @@ static void test_tracker_label_is_per_gesture()
     CHECK(c2 && c2->label() == "Editar Animator");
 }
 
+// ---- applySkinnedFrame: el bloque que los tres hosts repetían ----
+
+// Doble con los CINCO métodos que toca el helper y ninguno más. Por eso el
+// helper es plantilla y no toma `EditorRenderer&`: esa interfaz son 75 métodos
+// puros, y un doble de 75 stubs para probar cinco llamadas no lo escribe nadie.
+// Apunta el ORDEN, que es la mitad de lo que hay que proteger aquí.
+struct SkinnedRendererDoble
+{
+    std::vector<std::string> orden;
+    bool      visible       = false;
+    uint32_t  clipB         = 0xFFFFFFFFu;
+    uint32_t  clipA         = 0xFFFFFFFFu;
+    float     timeB         = -1.0f;
+    float     timeA         = -1.0f;
+    float     weight        = -1.0f;
+    bool      lockRoot      = false;
+    float     dtSinAnimator = -1.0f;
+    glm::mat4 transform     = glm::mat4(0.0f);
+    float     ssr           = -1.0f;
+
+    void setSkinnedMeshVisible(int, bool v) { orden.push_back("visible"); visible = v; }
+    void updateAnimation(int, float dt)     { orden.push_back("updateAnimation"); dtSinAnimator = dt; }
+    void setAnimationBlend(int, uint32_t cb, float tb, uint32_t ca, float ta, float w, bool lock)
+    {
+        orden.push_back("blend");
+        clipB = cb; timeB = tb; clipA = ca; timeA = ta; weight = w; lockRoot = lock;
+    }
+    void setSkinnedTransform(int, const glm::mat4& m) { orden.push_back("transform"); transform = m; }
+    void setSkinnedSsr(int, float s)                  { orden.push_back("ssr"); ssr = s; }
+
+    int indiceDe(const char* nombre) const
+    {
+        for (size_t i = 0; i < orden.size(); i++)
+            if (orden[i] == nombre) return (int)i;
+        return -1;
+    }
+};
+
+static GameObject* makeSkinnedGameObject(Scene& scene, std::shared_ptr<AnimatorComponent> anim)
+{
+    GameObject* go = scene.addGameObject("Personaje");
+    go->skinnedRenderIndex = 0;
+    go->meshVisible        = true;
+    go->ssrEnabled         = true;
+    go->ssrIntensity       = 0.4f;
+    if (anim) go->setAnimator(std::move(anim));
+    return go;
+}
+
+// Grafo A->B por trigger, con el trigger YA armado y el playhead en la entrada.
+static std::shared_ptr<AnimatorComponent> makeArmedTriggerGraph()
+{
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State sa;
+    sa.name = "A"; sa.clipName = "A"; sa.duration = 100.0f; sa.ticksPerSecond = 10.0f;
+    AnimatorComponent::State sb = sa;
+    sb.name = "B"; sb.clipName = "B";
+    a->addState(sa);
+    a->addState(sb);
+    a->addParameter("t", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition tr;
+    tr.fromState = 0; tr.toState = 1;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "t";
+    tr.conditions.push_back(c);
+    a->addTransition(tr);
+    a->update(0.0f, false);      // fija el playhead en la entrada
+    a->setTrigger("t");
+    return a;
+}
+
+// El flag de visible tiene que ir ANTES de tocar la animación: el backend
+// congela el reloj de un mesh oculto, así que ponerlo después lo deja un frame
+// por detrás. Hoy esa regla vivía en un comentario de runtime/main.cpp, o sea
+// que se perdía en cuanto alguien copiaba el bloque a otro sitio.
+static void test_apply_skinned_frame_sets_visible_before_animation()
+{
+    Scene scene("Test");
+    auto a = std::make_shared<AnimatorComponent>();
+    makeCrossfadeInFlight(*a);
+    GameObject* go = makeSkinnedGameObject(scene, a);
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
+
+    CHECK(r.indiceDe("visible") == 0);
+    CHECK(r.indiceDe("blend") > r.indiceDe("visible"));
+    CHECK(r.visible);
+}
+
+// Los siete valores de la pose, y sobre todo CUÁL va en cada sitio: el backend
+// recibe primero el clip actual (B) y después el que se apaga (A). Con los dos
+// intercambiados la mezcla sale al revés y ningún test lo veía.
+static void test_apply_skinned_frame_passes_pose_b_then_a()
+{
+    Scene scene("Test");
+    auto a = std::make_shared<AnimatorComponent>();
+    makeCrossfadeInFlight(*a);
+    // Clips resueltos y DISTINTOS: sin esto los dos caerían al 0 por defecto y
+    // el test pasaría con los argumentos cambiados.
+    a->statesMutable()[0].clipIndex = 3;
+    a->statesMutable()[1].clipIndex = 7;
+    GameObject* go = makeSkinnedGameObject(scene, a);
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
+
+    CHECK(a->poseClipA() != a->poseClipB());
+    CHECK(!nearlyEqual(a->poseTimeA(), a->poseTimeB()));
+    CHECK(r.clipB == (uint32_t)a->poseClipB());
+    CHECK(r.clipA == (uint32_t)a->poseClipA());
+    CHECK(nearlyEqual(r.timeB, a->poseTimeB()));
+    CHECK(nearlyEqual(r.timeA, a->poseTimeA()));
+    CHECK(nearlyEqual(r.weight, a->poseWeight()));
+    CHECK(r.lockRoot == a->poseLockRootMotion());
+}
+
+// Sin Animator el reloj lo lleva el backend, como antes de que el componente
+// existiera. Los dos caminos no se pisan.
+static void test_apply_skinned_frame_without_animator_advances_backend_clock()
+{
+    Scene scene("Test");
+    GameObject* go = makeSkinnedGameObject(scene, nullptr);
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 0.033f, /*evaluateTransitions=*/true);
+
+    CHECK(r.indiceDe("updateAnimation") >= 0);
+    CHECK(r.indiceDe("blend") < 0);
+    CHECK(nearlyEqual(r.dtSinAnimator, 0.033f));
+}
+
+// evaluateTransitions es lo único que distingue Edit de Play en este camino:
+// en Edit el tiempo avanza pero el grafo no se mueve.
+static void test_apply_skinned_frame_edit_mode_does_not_move_the_graph()
+{
+    Scene scene("Test");
+    auto a = makeArmedTriggerGraph();
+    GameObject* go = makeSkinnedGameObject(scene, a);
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/false);
+    CHECK(a->currentStateName() == "A");
+
+    applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
+    CHECK(a->currentStateName() == "B");
+}
+
+// Un objeto que no está dado de alta en el backend no tiene índice: ni se
+// dibuja ni se le avanza el reloj, igual que hacía el `if` de los hosts.
+static void test_apply_skinned_frame_ignores_unregistered_object()
+{
+    Scene scene("Test");
+    auto a = makeArmedTriggerGraph();
+    GameObject* go = makeSkinnedGameObject(scene, a);
+    go->skinnedRenderIndex = -1;
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
+
+    CHECK(r.orden.empty());
+    CHECK(nearlyEqual(a->animTime(), 0.0f));
+}
+
+// Transform y SSR van al backend con el resto del bloque, y el SSR apagado
+// manda un 0 en vez de la intensidad (el backend no conoce el flag).
+static void test_apply_skinned_frame_forwards_transform_and_ssr()
+{
+    Scene scene("Test");
+    GameObject* go = makeSkinnedGameObject(scene, nullptr);
+    glm::mat4 m(1.0f);
+    m[3] = glm::vec4(1.0f, 2.0f, 3.0f, 1.0f);
+    go->worldTransform = m;
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
+    CHECK(r.transform[3] == glm::vec4(1.0f, 2.0f, 3.0f, 1.0f));
+    CHECK(nearlyEqual(r.ssr, 0.4f));
+
+    go->ssrEnabled = false;
+    SkinnedRendererDoble apagado;
+    applySkinnedFrame(*go, apagado, 0.016f, /*evaluateTransitions=*/true);
+    CHECK(nearlyEqual(apagado.ssr, 0.0f));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -4883,6 +5069,13 @@ int main()
     test_tracker_selection_change_discards_session();
     test_tracker_node_move_yields_nothing();
     test_tracker_label_is_per_gesture();
+
+    test_apply_skinned_frame_sets_visible_before_animation();
+    test_apply_skinned_frame_passes_pose_b_then_a();
+    test_apply_skinned_frame_without_animator_advances_backend_clock();
+    test_apply_skinned_frame_edit_mode_does_not_move_the_graph();
+    test_apply_skinned_frame_ignores_unregistered_object();
+    test_apply_skinned_frame_forwards_transform_and_ssr();
 
     am.shutdown();
     pm.shutdown();
