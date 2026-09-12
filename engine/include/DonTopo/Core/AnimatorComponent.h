@@ -38,6 +38,11 @@ namespace DonTopo
             // asignado con setFloat sí.
             enum class Compare       { Greater, Less, Equals, NotEquals };
 
+            // fromState de una transición que sale de "Any State": vale desde
+            // cualquier estado. Negativo a propósito: removeState solo
+            // reindexa índices >= 0, así que el centinela sobrevive intacto.
+            static constexpr int kAnyState = -2;
+
             struct Condition
             {
                 ConditionType type     = ConditionType::Bool;
@@ -66,6 +71,20 @@ namespace DonTopo
                 // Transition por miembros y las condiciones se serializan por
                 // nombre.
                 float duration = 0.0f;
+                // --- Exit time (como Unity) ---
+                // Con hasExitTime la transición espera a que el estado de
+                // origen llegue a exitTime, en tiempo NORMALIZADO (1 = fin del
+                // clip). Por debajo de 1 se comprueba en cada vuelta; a partir
+                // de 1 cuenta vueltas acumuladas (2.5 = dos vueltas y media).
+                // Sin condiciones basta el tiempo; con condiciones hacen falta
+                // las dos cosas. Al final del struct y apagado por defecto: es
+                // lo que traen las escenas guardadas sin estos campos.
+                bool  hasExitTime = false;
+                float exitTime    = 1.0f;
+                // Solo se lee en transiciones que salen de Any State: si puede
+                // volver al estado en el que ya se está. Apagado por defecto:
+                // encendido y con un bool, reiniciaría el estado cada frame.
+                bool  canTransitionToSelf = false;
             };
 
             struct State
@@ -285,6 +304,18 @@ namespace DonTopo
             void resetPlayback();
 
             bool conditionsMet(const Transition& t) const;
+            // Único punto de entrada a un estado: fija el actual y pone a 0 su
+            // reloj, su finished y el reloj normalizado acumulado. Todo camino
+            // que reinicie el playhead pasa por aquí, para que el reloj del
+            // exit time no quede colgado en el que se olvide.
+            void enterState(int idx);
+            // Si la transición puede disparar este frame. n0/n1: tiempo
+            // normalizado acumulado del estado actual antes y después de
+            // avanzar el reloj. hasDuration false = clip de duración 0 o sin
+            // resolver, donde el exit time cuenta como alcanzado.
+            bool transitionReady(const Transition& t, double n0, double n1, bool hasDuration) const;
+            // La regla del exit time, aislada para que se lea en un sitio.
+            static bool exitTimeCrossed(double n0, double n1, float exitTime);
             // Avanza el reloj de un estado dt segundos, aplicando su loop. Lo
             // usan el estado actual y el que se apaga durante un cross-fade:
             // los dos tienen su propio ticksPerSecond y su propio loop, y
@@ -322,6 +353,11 @@ namespace DonTopo
             int                     m_currentState = -1;
             float                   m_animTime     = 0.0f;
             bool                    m_finished     = false;
+            // Ticks avanzados desde que se entró en el estado actual, SIN fmod:
+            // en un loop sigue creciendo, que es lo que permite contar vueltas
+            // para el exit time. double y no float: en una sesión larga un
+            // float pierde resolución para decidir un cruce. No se serializa.
+            double                  m_stateTicks   = 0.0;
 
             // Cross-fade en curso. m_prevState a -1 significa "sin mezcla", y es
             // el estado en el que queda todo con transiciones de duración 0.

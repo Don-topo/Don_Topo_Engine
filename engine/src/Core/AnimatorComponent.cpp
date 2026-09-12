@@ -28,6 +28,14 @@ namespace DonTopo
 
     void AnimatorComponent::addTransition(Transition t) { m_transitions.push_back(std::move(t)); }
 
+    void AnimatorComponent::enterState(int idx)
+    {
+        m_currentState = idx;
+        m_animTime     = 0.0f;
+        m_finished     = false;
+        m_stateTicks   = 0.0;
+    }
+
     void AnimatorComponent::removeState(int idx)
     {
         if (idx < 0 || idx >= (int)m_states.size()) return;
@@ -59,9 +67,7 @@ namespace DonTopo
         // delante los bool/trigger/int/float que el script venía escribiendo.
         if (m_currentState == idx)
         {
-            m_currentState = m_entryState;
-            m_animTime     = 0.0f;
-            m_finished     = false;
+            enterState(m_entryState);
         }
         else if (m_currentState > idx)
         {
@@ -223,9 +229,7 @@ namespace DonTopo
         }
         else
         {
-            m_currentState = m_entryState;
-            m_animTime     = 0.0f;
-            m_finished     = false;
+            enterState(m_entryState);
         }
 
         if (m_prevState >= 0 && cur >= 0 && prev >= 0)
@@ -405,9 +409,7 @@ namespace DonTopo
 
     void AnimatorComponent::resetPlayback()
     {
-        m_currentState  = m_entryState;
-        m_animTime      = 0.0f;
-        m_finished      = false;
+        enterState(m_entryState);
         // Corta cualquier cross-fade en vuelo: tras esto el estado previo puede
         // ni existir (el editor acaba de reeditar el grafo), y mezclar contra él
         // dejaría una pose imposible o un índice fuera de rango.
@@ -526,6 +528,34 @@ namespace DonTopo
         return true;
     }
 
+    bool AnimatorComponent::exitTimeCrossed(double n0, double n1, float exitTime)
+    {
+        const double e = exitTime;
+        // A partir de 1 cuenta vueltas acumuladas: listo en cualquier frame
+        // que ya las haya dado.
+        if (e >= 1.0) return n1 >= e;
+        // Primer update tras entrar con exitTime 0: el inicio de la vuelta
+        // cero es un cruce, o no dispararía hasta la segunda.
+        if (e == 0.0 && n0 == 0.0) return true;
+        // Por debajo de 1, en cada vuelta: ¿hay un entero k con
+        // n0 < k + e <= n1? Cubre también el dt que da la vuelta cruzando e.
+        return std::floor(n1 - e) > std::floor(n0 - e);
+    }
+
+    bool AnimatorComponent::transitionReady(const Transition& t, double n0, double n1,
+                                            bool hasDuration) const
+    {
+        if (t.hasExitTime)
+        {
+            if (hasDuration && !exitTimeCrossed(n0, n1, t.exitTime)) return false;
+            // Solo por tiempo: no hace falta ninguna condición.
+            if (t.conditions.empty()) return true;
+        }
+        // Sin exit time y sin condiciones, conditionsMet devuelve false: una
+        // transición así no dispara nunca, como siempre.
+        return conditionsMet(t);
+    }
+
     void AnimatorComponent::consumeTriggers(const Transition& t)
     {
         // Solo los de la transición que gana: un trigger que nadie consume sigue
@@ -576,7 +606,12 @@ namespace DonTopo
             if (m_currentState < 0 || m_currentState >= (int)m_states.size()) return;
         }
 
-        advanceClock(m_states[m_currentState], m_animTime, &m_finished, dt);
+        const State& actual      = m_states[m_currentState];
+        const bool   conDuracion = actual.duration > 0.0f && actual.ticksPerSecond > 0.0f;
+        const double ticks0      = m_stateTicks;
+        if (conDuracion)
+            m_stateTicks += (double)dt * actual.ticksPerSecond;
+        advanceClock(actual, m_animTime, &m_finished, dt);
 
         // Cross-fade en curso: el estado que se apaga sigue animándose con SU
         // ritmo y SU loop mientras dura la mezcla. Congelarlo daría un salto
@@ -601,14 +636,35 @@ namespace DonTopo
 
         if (!evaluateTransitions) return;
 
-        // Orden de declaración: la primera cuyo AND se cumple, gana. Determinista
-        // y sin prioridades explícitas que mantener.
+        const double n0 = conDuracion ? ticks0 / actual.duration : 0.0;
+        const double n1 = conDuracion ? m_stateTicks / actual.duration : 0.0;
+
+        // Primero Any State y después las del estado actual, cada grupo por
+        // orden de declaración: la primera lista, gana. Es la prioridad de
+        // Unity, y lo que espera quien viene de allí.
+        const Transition* elegida = nullptr;
         for (const auto& t : m_transitions)
         {
-            if (t.fromState != m_currentState) continue;
+            if (t.fromState != kAnyState) continue;
             if (t.toState < 0 || t.toState >= (int)m_states.size()) continue;
-            if (!conditionsMet(t)) continue;
+            // Hacia el estado actual solo con el flag: con un bool, reentrar
+            // reiniciaría el estado cada frame.
+            if (t.toState == m_currentState && !t.canTransitionToSelf) continue;
+            if (transitionReady(t, n0, n1, conDuracion)) { elegida = &t; break; }
+        }
+        if (!elegida)
+        {
+            for (const auto& t : m_transitions)
+            {
+                if (t.fromState != m_currentState) continue;
+                if (t.toState < 0 || t.toState >= (int)m_states.size()) continue;
+                if (transitionReady(t, n0, n1, conDuracion)) { elegida = &t; break; }
+            }
+        }
+        if (!elegida) return;
 
+        {
+            const Transition& t = *elegida;
             consumeTriggers(t);
 
             if (t.duration > 0.0f)
@@ -632,10 +688,7 @@ namespace DonTopo
                 m_blendDuration = 0.0f;
             }
 
-            m_currentState = t.toState;
-            m_animTime     = 0.0f;
-            m_finished     = false;
-            return;                  // una transición por update
+            enterState(t.toState);   // una transición por update
         }
     }
 

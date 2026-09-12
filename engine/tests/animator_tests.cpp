@@ -4922,6 +4922,287 @@ static void test_apply_skinned_frame_forwards_transform_and_ssr()
     CHECK(nearlyEqual(apagado.ssr, 0.0f));
 }
 
+// ---- Exit time ----
+
+// A -> B con exit time, y opcionalmente una condición bool "ok". Playhead en
+// la entrada SIN evaluar transiciones: con exitTime 0 un update(0, true) ya
+// dispararía. makeTimedState: 100 ticks a 10 ticks/s, así que un segundo de
+// update sube el tiempo normalizado 0.1 y una vuelta son 10 s.
+static AnimatorComponent makeExitTimeGraph(float exitTime, bool conCondicion)
+{
+    AnimatorComponent a;
+    a.addState(makeTimedState("A"));
+    a.addState(makeTimedState("B"));
+    a.addParameter("ok", AnimatorComponent::ParamType::Bool);
+    AnimatorComponent::Transition t;
+    t.fromState   = 0;
+    t.toState     = 1;
+    t.hasExitTime = true;
+    t.exitTime    = exitTime;
+    if (conCondicion)
+    {
+        AnimatorComponent::Condition c;
+        c.type = AnimatorComponent::ConditionType::Bool; c.paramName = "ok"; c.expected = true;
+        t.conditions.push_back(c);
+    }
+    a.addTransition(t);
+    a.update(0.0f, false);
+    return a;
+}
+
+// Exit time < 1 sin condiciones: dispara en el frame que CRUZA el 0.9, no antes.
+static void test_exit_time_below_one_fires_when_crossed()
+{
+    AnimatorComponent a = makeExitTimeGraph(0.9f, false);
+    a.update(8.5f, true);                 // N = 0.85
+    CHECK(a.currentStateName() == "A");
+    a.update(1.0f, true);                 // N = 0.95: cruza 0.9
+    CHECK(a.currentStateName() == "B");
+}
+
+// Con condición, se mira SOLO en el frame del cruce: si no se cumple ahí,
+// espera a la vuelta siguiente aunque se cumpla justo después.
+static void test_exit_time_below_one_checks_conditions_only_at_the_crossing()
+{
+    AnimatorComponent a = makeExitTimeGraph(0.9f, true);
+    a.update(9.5f, true);                 // N = 0.95: cruza con ok == false
+    CHECK(a.currentStateName() == "A");
+    a.setBool("ok", true);
+    a.update(0.1f, true);                 // N = 0.96: el 0.9 de esta vuelta ya pasó
+    CHECK(a.currentStateName() == "A");
+    a.update(8.5f, true);                 // N = 1.81: todavía no llega a 1.9
+    CHECK(a.currentStateName() == "A");
+    a.update(1.0f, true);                 // N = 1.91: cruza el 0.9 de la segunda vuelta
+    CHECK(a.currentStateName() == "B");
+}
+
+// Un dt grande que da la vuelta pasando por el 0.9 también es un cruce. Una
+// regla que mirara solo la fase de la vuelta (0.95 -> 0.92) no lo vería.
+static void test_exit_time_below_one_fires_when_a_big_dt_wraps_past_it()
+{
+    AnimatorComponent a = makeExitTimeGraph(0.9f, true);
+    a.update(9.5f, true);                 // N = 0.95, cruza con ok == false
+    CHECK(a.currentStateName() == "A");
+    a.setBool("ok", true);
+    a.update(9.7f, true);                 // N = 1.92 de golpe: pasa por 1.9
+    CHECK(a.currentStateName() == "B");
+}
+
+// Exit time >= 1 cuenta vueltas: 2.5 no dispara con 2 vueltas.
+static void test_exit_time_above_one_counts_loops()
+{
+    AnimatorComponent a = makeExitTimeGraph(2.5f, false);
+    a.update(20.0f, true);                // N = 2.0
+    CHECK(a.currentStateName() == "A");
+    a.update(5.0f, true);                 // N = 2.5
+    CHECK(a.currentStateName() == "B");
+}
+
+// Sin condiciones y sin exit time no dispara nunca (lo de siempre); con exit
+// time, sí.
+static void test_transition_without_conditions_needs_exit_time()
+{
+    AnimatorComponent sinExit;
+    sinExit.addState(makeTimedState("A"));
+    sinExit.addState(makeTimedState("B"));
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    sinExit.addTransition(t);
+    sinExit.update(0.0f, false);
+    sinExit.update(50.0f, true);
+    CHECK(sinExit.currentStateName() == "A");
+
+    AnimatorComponent conExit = makeExitTimeGraph(0.5f, false);
+    conExit.update(6.0f, true);
+    CHECK(conExit.currentStateName() == "B");
+}
+
+// Un clip de duración 0 (o sin resolver) no tiene tiempo normalizado: el exit
+// time cuenta como alcanzado en el primer update.
+static void test_exit_time_on_zero_duration_state_is_reached_at_once()
+{
+    AnimatorComponent a;
+    AnimatorComponent::State cero = makeTimedState("A");
+    cero.duration = 0.0f;
+    a.addState(cero);
+    a.addState(makeTimedState("B"));
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.hasExitTime = true; t.exitTime = 0.9f;
+    a.addTransition(t);
+    a.update(0.0f, false);
+    a.update(0.016f, true);
+    CHECK(a.currentStateName() == "B");
+}
+
+// El reloj acumulado se reinicia al entrar en un estado por una transición:
+// 1.5 vueltas cuentan desde que se entró en B, no desde que arrancó el grafo.
+static void test_exit_time_clock_restarts_when_entering_a_state()
+{
+    AnimatorComponent a;
+    a.addState(makeTimedState("A"));
+    a.addState(makeTimedState("B"));
+    a.addState(makeTimedState("C"));
+    a.addParameter("go", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition ab;
+    ab.fromState = 0; ab.toState = 1;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "go";
+    ab.conditions.push_back(c);
+    a.addTransition(ab);
+    AnimatorComponent::Transition bc;
+    bc.fromState = 1; bc.toState = 2; bc.hasExitTime = true; bc.exitTime = 1.5f;
+    a.addTransition(bc);
+    a.update(0.0f, false);
+
+    a.update(12.0f, true);                // 1.2 vueltas en A
+    a.setTrigger("go");
+    a.update(0.0f, true);                 // entra en B
+    CHECK(a.currentStateName() == "B");
+    a.update(14.0f, true);                // 1.4 en B (2.6 si el reloj no se reiniciara)
+    CHECK(a.currentStateName() == "B");
+    a.update(1.0f, true);                 // 1.5
+    CHECK(a.currentStateName() == "C");
+}
+
+// Lo mismo por el otro camino que reinicia el playhead: setEntryState pasa
+// por resetPlayback.
+static void test_exit_time_clock_restarts_on_reset_playback()
+{
+    AnimatorComponent a = makeExitTimeGraph(1.5f, false);
+    a.update(12.0f, true);                // 1.2 vueltas en A
+    CHECK(a.currentStateName() == "A");
+    a.setEntryState(0);                   // resetPlayback
+    a.update(5.0f, true);                 // 0.5 (1.7 si no se reiniciara)
+    CHECK(a.currentStateName() == "A");
+}
+
+// ---- Any State ----
+
+static AnimatorComponent::Condition triggerCond(const char* nombre)
+{
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger;
+    c.paramName = nombre;
+    return c;
+}
+
+// Una transición Any State dispara desde cualquier estado.
+static void test_any_state_fires_from_every_state()
+{
+    AnimatorComponent a;
+    a.addState(makeTimedState("A"));
+    a.addState(makeTimedState("B"));
+    a.addState(makeTimedState("C"));
+    a.addParameter("hit", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition t;
+    t.fromState = AnimatorComponent::kAnyState; t.toState = 2;
+    t.conditions.push_back(triggerCond("hit"));
+    a.addTransition(t);
+
+    a.update(0.0f, false);                // en A
+    a.setTrigger("hit");
+    a.update(0.016f, true);
+    CHECK(a.currentStateName() == "C");
+
+    a.setEntryState(1);                   // ahora en B
+    a.setTrigger("hit");
+    a.update(0.016f, true);
+    CHECK(a.currentStateName() == "C");
+}
+
+// Any State va antes que las transiciones del estado actual, aunque la del
+// estado esté declarada antes.
+static void test_any_state_wins_over_the_current_state_transition()
+{
+    AnimatorComponent a;
+    a.addState(makeTimedState("A"));
+    a.addState(makeTimedState("B"));
+    a.addState(makeTimedState("C"));
+    a.addParameter("go", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition propia;
+    propia.fromState = 0; propia.toState = 1;
+    propia.conditions.push_back(triggerCond("go"));
+    a.addTransition(propia);
+    AnimatorComponent::Transition any;
+    any.fromState = AnimatorComponent::kAnyState; any.toState = 2;
+    any.conditions.push_back(triggerCond("go"));
+    a.addTransition(any);
+
+    a.update(0.0f, false);
+    a.setTrigger("go");
+    a.update(0.016f, true);
+    CHECK(a.currentStateName() == "C");
+}
+
+// Con canTransitionToSelf apagado, Any State no reentra al estado actual: si
+// lo hiciera con un bool, el estado se reiniciaría cada frame.
+static void test_any_state_does_not_reenter_the_current_state_by_default()
+{
+    AnimatorComponent a;
+    a.addState(makeTimedState("A"));
+    a.addState(makeTimedState("B"));
+    a.addParameter("b", AnimatorComponent::ParamType::Bool);
+    AnimatorComponent::Transition t;
+    t.fromState = AnimatorComponent::kAnyState; t.toState = 0;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Bool; c.paramName = "b"; c.expected = true;
+    t.conditions.push_back(c);
+    a.addTransition(t);
+
+    a.update(0.0f, false);
+    a.setBool("b", true);
+    a.update(1.0f, true);                 // si reentrara, animTime volvería a 0
+    CHECK(a.currentStateName() == "A");
+    CHECK(nearlyEqual(a.animTime(), 10.0f));
+}
+
+// Con el flag encendido, un trigger reentra al mismo estado desde el principio.
+static void test_any_state_reenters_with_can_transition_to_self()
+{
+    AnimatorComponent a;
+    a.addState(makeTimedState("A"));
+    a.addState(makeTimedState("B"));
+    a.addParameter("again", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition t;
+    t.fromState = AnimatorComponent::kAnyState; t.toState = 0;
+    t.canTransitionToSelf = true;
+    t.conditions.push_back(triggerCond("again"));
+    a.addTransition(t);
+
+    a.update(0.0f, false);
+    a.update(1.0f, true);
+    CHECK(nearlyEqual(a.animTime(), 10.0f));
+    a.setTrigger("again");
+    a.update(0.5f, true);                 // reentra: el reloj vuelve a 0
+    CHECK(a.currentStateName() == "A");
+    CHECK(nearlyEqual(a.animTime(), 0.0f));
+}
+
+// removeState con Any State: la que apuntaba al borrado se va, la otra se
+// reindexa. El centinela no se toca.
+static void test_remove_state_drops_and_reindexes_any_state_transitions()
+{
+    AnimatorComponent a;
+    a.addState(makeTimedState("A"));
+    a.addState(makeTimedState("B"));
+    a.addState(makeTimedState("C"));
+    AnimatorComponent::Transition haciaB;
+    haciaB.fromState = AnimatorComponent::kAnyState; haciaB.toState = 1;
+    a.addTransition(haciaB);
+    AnimatorComponent::Transition haciaC;
+    haciaC.fromState = AnimatorComponent::kAnyState; haciaC.toState = 2;
+    a.addTransition(haciaC);
+
+    a.removeState(1);
+
+    CHECK(a.transitions().size() == 1u);
+    if (a.transitions().size() == 1u)
+    {
+        CHECK(a.transitions()[0].fromState == AnimatorComponent::kAnyState);
+        CHECK(a.transitions()[0].toState == 1);
+    }
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -5084,6 +5365,20 @@ int main()
     test_apply_skinned_frame_edit_mode_does_not_move_the_graph();
     test_apply_skinned_frame_ignores_unregistered_object();
     test_apply_skinned_frame_forwards_transform_and_ssr();
+
+    test_exit_time_below_one_fires_when_crossed();
+    test_exit_time_below_one_checks_conditions_only_at_the_crossing();
+    test_exit_time_below_one_fires_when_a_big_dt_wraps_past_it();
+    test_exit_time_above_one_counts_loops();
+    test_transition_without_conditions_needs_exit_time();
+    test_exit_time_on_zero_duration_state_is_reached_at_once();
+    test_exit_time_clock_restarts_when_entering_a_state();
+    test_exit_time_clock_restarts_on_reset_playback();
+    test_any_state_fires_from_every_state();
+    test_any_state_wins_over_the_current_state_transition();
+    test_any_state_does_not_reenter_the_current_state_by_default();
+    test_any_state_reenters_with_can_transition_to_self();
+    test_remove_state_drops_and_reindexes_any_state_transitions();
 
     am.shutdown();
     pm.shutdown();
