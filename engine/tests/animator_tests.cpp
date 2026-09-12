@@ -4890,7 +4890,10 @@ static void test_apply_skinned_frame_ignores_unregistered_object()
     applySkinnedFrame(*go, r, 0.016f, /*evaluateTransitions=*/true);
 
     CHECK(r.orden.empty());
-    CHECK(nearlyEqual(a->animTime(), 0.0f));
+    // El estado y no animTime: el trigger está armado, así que si el helper
+    // llegara a correr la transición dispararía y dejaría animTime a 0 de todas
+    // formas — esa aserción pasaría con la guarda quitada y no probaría nada.
+    CHECK(a->currentStateName() == "A");
 }
 
 // Transform y SSR van al backend con el resto del bloque, y el SSR apagado
