@@ -4414,7 +4414,15 @@ static void makeBaseGraph(AnimatorComponent& a)
     cf.paramName = "speed";
     cf.compare = AnimatorComponent::Compare::Greater; cf.threshold = 0.5f;
     t.conditions = { cb, cf };
+    t.hasExitTime = true;       // así el .scene emite exitTime y las mutaciones lo ven
+    t.exitTime    = 0.75f;
     a.addTransition(t);
+
+    // Una transición Any State, para que canTransitionToSelf se pueda mutar.
+    AnimatorComponent::Transition any;
+    any.fromState = AnimatorComponent::kAnyState;
+    any.toState   = 1;
+    a.addTransition(any);
 }
 
 // Una mutación por cada cosa que el AnimatorPanel puede cambiar y el .scene
@@ -4452,6 +4460,11 @@ static std::vector<GraphMutation> graphMutations()
         { "condition.expected",   [](A& a) { a.transitionsMutable()[0].conditions[0].expected = false; } },
         { "condition.compare",    [](A& a) { a.transitionsMutable()[0].conditions[1].compare = A::Compare::Less; } },
         { "condition.threshold",  [](A& a) { a.transitionsMutable()[0].conditions[1].threshold = 9.0f; } },
+        { "transition.hasExitTime",       [](A& a) { a.transitionsMutable()[0].hasExitTime = false; } },
+        { "transition.exitTime",          [](A& a) { a.transitionsMutable()[0].exitTime = 0.25f; } },
+        { "anyState.canTransitionToSelf", [](A& a) { a.transitionsMutable()[1].canTransitionToSelf = true; } },
+        { "anyState.addTransition",       [](A& a) { A::Transition t; t.fromState = A::kAnyState; t.toState = 0;
+                                                     a.addTransition(t); } },
     };
 }
 
@@ -4468,6 +4481,12 @@ static void test_graph_key_ignores_node_position()
 
     CHECK(animatorGraphKey(a) == k0);
     CHECK(animatorToJson(a)["states"][0].contains("pos"));
+
+    // Y mover el nodo Any State tampoco es una edición.
+    const nlohmann::json k1 = animatorGraphKey(a);
+    a.setAnyStateEditorPos(glm::vec2(9.0f, 9.0f));
+    CHECK(animatorGraphKey(a) == k1);
+    CHECK(animatorToJson(a).contains("anyStatePos"));
 }
 
 // Todo lo que se guarda tiene que verse en la clave: un campo que no se viera
@@ -5203,6 +5222,167 @@ static void test_remove_state_drops_and_reindexes_any_state_transitions()
     }
 }
 
+// ---- Exit time y Any State en el .scene ----
+
+static void test_exit_time_and_any_state_survive_scene_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s0; s0.name = "Idle"; s0.clipName = "ClipIdle";
+    AnimatorComponent::State s1; s1.name = "Hit";  s1.clipName = "ClipHit";
+    a->addState(s0);
+    a->addState(s1);
+    a->addParameter("hit", AnimatorComponent::ParamType::Trigger);
+
+    AnimatorComponent::Transition vuelta;
+    vuelta.fromState = 1; vuelta.toState = 0;
+    vuelta.hasExitTime = true; vuelta.exitTime = 0.75f;
+    a->addTransition(vuelta);
+
+    AnimatorComponent::Transition any;
+    any.fromState = AnimatorComponent::kAnyState; any.toState = 1;
+    any.canTransitionToSelf = true;
+    any.conditions.push_back({ AnimatorComponent::ConditionType::Trigger, "hit" });
+    a->addTransition(any);
+    a->setAnyStateEditorPos(glm::vec2(-300.0f, 55.0f));
+
+    go->setAnimator(a);
+    nlohmann::json j = scene.toJson();
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+
+    const AnimatorComponent& b = *found->getAnimator();
+    CHECK(b.transitions().size() == 2u);
+    if (b.transitions().size() != 2u) return;
+    CHECK(b.transitions()[0].hasExitTime);
+    CHECK(nearlyEqual(b.transitions()[0].exitTime, 0.75f));
+    CHECK(b.transitions()[1].fromState == AnimatorComponent::kAnyState);
+    CHECK(b.transitions()[1].toState == 1);
+    CHECK(b.transitions()[1].canTransitionToSelf);
+    CHECK(b.anyStateEditorPos() == glm::vec2(-300.0f, 55.0f));
+}
+
+// Retrocompatibilidad: una escena sin los campos nuevos carga con sus
+// defaults. Se guarda con valores DISTINTOS de los defaults y luego se le
+// quitan los campos, para que un lector roto se note.
+static void test_scene_without_exit_time_fields_loads(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s0; s0.name = "Idle";
+    AnimatorComponent::State s1; s1.name = "Run";
+    a->addState(s0);
+    a->addState(s1);
+    AnimatorComponent::Transition t; t.fromState = 0; t.toState = 1;
+    a->addTransition(t);
+    a->setAnyStateEditorPos(glm::vec2(123.0f, 456.0f));
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+    auto& anim = j["root"]["children"][0]["animator"];
+    anim.erase("anyStatePos");
+    for (auto& tr : anim["transitions"])
+    {
+        tr.erase("hasExitTime");
+        tr.erase("exitTime");
+        tr.erase("canTransitionToSelf");
+    }
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const AnimatorComponent& b = *found->getAnimator();
+    CHECK(b.transitions().size() == 1u);
+    if (b.transitions().size() != 1u) return;
+    CHECK(!b.transitions()[0].hasExitTime);
+    CHECK(nearlyEqual(b.transitions()[0].exitTime, 1.0f));
+    CHECK(!b.transitions()[0].canTransitionToSelf);
+    CHECK(b.anyStateEditorPos() != glm::vec2(123.0f, 456.0f));
+    CHECK(b.anyStateEditorPos() == AnimatorComponent().anyStateEditorPos());
+}
+
+// Any State con destino fuera de rango se descarta con aviso, igual que una
+// normal; una Any State buena sobrevive; from = -1 sigue siendo inválido.
+static void test_any_state_transition_with_bad_target_is_dropped(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s0; s0.name = "Idle";
+    AnimatorComponent::State s1; s1.name = "Run";
+    a->addState(s0);
+    a->addState(s1);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+    auto& trs = j["root"]["children"][0]["animator"]["transitions"];
+    trs.push_back({ {"from", -2}, {"to", 1}, {"duration", 0.0f} });   // buena
+    trs.push_back({ {"from", -2}, {"to", 7}, {"duration", 0.0f} });   // destino que no existe
+    trs.push_back({ {"from", -1}, {"to", 1}, {"duration", 0.0f} });   // origen sin poner
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+
+    const auto& cargadas = found->getAnimator()->transitions();
+    CHECK(cargadas.size() == 1u);
+    if (cargadas.size() == 1u)
+    {
+        CHECK(cargadas[0].fromState == AnimatorComponent::kAnyState);
+        CHECK(cargadas[0].toState   == 1);
+    }
+    int avisos = 0;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("transition") != std::string::npos) ++avisos;
+    CHECK(avisos == 2);
+}
+
+// Un exitTime negativo en el .scene se acota a 0 y se avisa.
+static void test_negative_exit_time_is_clamped_with_warning(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s0; s0.name = "Idle";
+    AnimatorComponent::State s1; s1.name = "Run";
+    a->addState(s0);
+    a->addState(s1);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+    j["root"]["children"][0]["animator"]["transitions"].push_back(
+        { {"from", 0}, {"to", 1}, {"duration", 0.0f}, {"hasExitTime", true}, {"exitTime", -3.0f} });
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& cargadas = found->getAnimator()->transitions();
+    CHECK(cargadas.size() == 1u);
+    if (cargadas.size() == 1u) CHECK(nearlyEqual(cargadas[0].exitTime, 0.0f));
+
+    bool avisado = false;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("exitTime") != std::string::npos) avisado = true;
+    CHECK(avisado);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -5379,6 +5559,10 @@ int main()
     test_any_state_does_not_reenter_the_current_state_by_default();
     test_any_state_reenters_with_can_transition_to_self();
     test_remove_state_drops_and_reindexes_any_state_transitions();
+    test_exit_time_and_any_state_survive_scene_round_trip(pm, am);
+    test_scene_without_exit_time_fields_loads(pm, am);
+    test_any_state_transition_with_bad_target_is_dropped(pm, am);
+    test_negative_exit_time_is_clamped_with_warning(pm, am);
 
     am.shutdown();
     pm.shutdown();

@@ -166,6 +166,11 @@ namespace DonTopo
             void setEntryState(int idx);
             void addParameter(std::string name, ParamType type);
             void removeParameter(const std::string& name);
+            // Posición del nodo Any State en el canvas del AnimatorPanel. Va
+            // fuera de Graph a propósito: como la de los estados, mover un nodo
+            // no entra en el undo.
+            glm::vec2 anyStateEditorPos() const         { return m_anyStateEditorPos; }
+            void      setAnyStateEditorPos(glm::vec2 p) { m_anyStateEditorPos = p; }
 
             Graph graph() const;
             // Sustituye estados, transiciones, parámetros y entrada por los de
@@ -375,6 +380,9 @@ namespace DonTopo
             // abierto en el mismo frame de un borrado, un id repetido volvería a
             // liar la identidad visual que este campo existe para evitar.
             int                     m_nextEditorId = 0;
+
+            // A la izquierda del primer estado que crea el panel (40, 40).
+            glm::vec2               m_anyStateEditorPos{ -220.0f, 40.0f };
     };
 
     // Etiqueta legible de un tipo de parámetro, compartida por AnimatorPanel y

@@ -587,20 +587,35 @@ namespace DonTopo
             // self-contained, sin depender de ningún asset externo.
             // "duration" es el cross-fade en segundos; 0 (corte seco) es lo que
             // asume toda escena guardada antes de que el campo existiera.
-            transitions.push_back({ {"from", t.fromState}, {"to", t.toState},
-                                    {"duration", t.duration}, {"conditions", conds} });
+            nlohmann::json tj = { {"from", t.fromState}, {"to", t.toState},
+                                  {"duration", t.duration}, {"conditions", conds} };
+            // Exit time y Any State: solo si se usan, igual que los campos de
+            // blend. Any State se guarda como "from": -2 (kAnyState), que sigue
+            // siendo un entero: el lector de "from" no cambia.
+            if (t.hasExitTime)
+            {
+                tj["hasExitTime"] = true;
+                tj["exitTime"]    = t.exitTime;
+            }
+            if (t.fromState == AnimatorComponent::kAnyState && t.canTransitionToSelf)
+                tj["canTransitionToSelf"] = true;
+            transitions.push_back(tj);
         }
 
         return { {"entryState", a.entryState()},
                  {"parameters", params},
                  {"states", states},
-                 {"transitions", transitions} };
+                 {"transitions", transitions},
+                 {"anyStatePos", nlohmann::json::array({ a.anyStateEditorPos().x,
+                                                          a.anyStateEditorPos().y })} };
     }
 
     nlohmann::json animatorGraphKey(const AnimatorComponent& a)
     {
         nlohmann::json key = animatorToJson(a);
         for (auto& s : key["states"]) s.erase("pos");
+        // Mover el nodo Any State tampoco es una edición.
+        key.erase("anyStatePos");
         return key;
     }
 }   // namespace DonTopo
@@ -650,6 +665,12 @@ namespace
             }
         }
 
+        // Ausente en escenas anteriores a Any State: se queda la posición por
+        // defecto del componente.
+        if (j.contains("anyStatePos") && j["anyStatePos"].is_array() && j["anyStatePos"].size() == 2)
+            a->setAnyStateEditorPos(glm::vec2(readArrayFloat(j["anyStatePos"], 0, -220.0f, warnings, "animator.anyStatePos"),
+                                              readArrayFloat(j["anyStatePos"], 1, 40.0f, warnings, "animator.anyStatePos")));
+
         if (j.contains("transitions"))
         {
             for (const auto& t : j["transitions"])
@@ -662,6 +683,22 @@ namespace
                 tr.duration  = readFloat(t, "duration", 0.0f, warnings,
                                           "animator.transition[" + std::to_string(tr.fromState) +
                                           "->" + std::to_string(tr.toState) + "]");
+                // Ausentes en escenas anteriores al exit time y a Any State:
+                // caen en los defaults del struct.
+                tr.hasExitTime = t.value("hasExitTime", false);
+                tr.exitTime    = readFloat(t, "exitTime", 1.0f, warnings,
+                                            "animator.transition[" + std::to_string(tr.fromState) +
+                                            "->" + std::to_string(tr.toState) + "].exitTime");
+                if (tr.exitTime < 0.0f)
+                {
+                    if (warnings)
+                        warnings->push_back("animator.transition[" + std::to_string(tr.fromState) +
+                                             "->" + std::to_string(tr.toState) +
+                                             "].exitTime negativo (" + std::to_string(tr.exitTime) +
+                                             "), se acota a 0");
+                    tr.exitTime = 0.0f;
+                }
+                tr.canTransitionToSelf = t.value("canTransitionToSelf", false);
                 if (t.contains("conditions"))
                 {
                     for (const auto& c : t["conditions"])
@@ -694,8 +731,11 @@ namespace
                 // pruneExtraCameras y que la reasignación de ids duplicados —
                 // el fichero vino roto, se repara y se dice.
                 const int nEstados = (int)a->states().size();
-                if (tr.fromState < 0 || tr.fromState >= nEstados ||
-                    tr.toState   < 0 || tr.toState   >= nEstados)
+                // Any State (kAnyState) es un origen válido; -1 u otro negativo
+                // sigue sin serlo. El destino se exige siempre en rango.
+                const bool origenValido = tr.fromState == AnimatorComponent::kAnyState ||
+                                          (tr.fromState >= 0 && tr.fromState < nEstados);
+                if (!origenValido || tr.toState < 0 || tr.toState >= nEstados)
                 {
                     if (warnings)
                         warnings->push_back("animator.transition[" + std::to_string(tr.fromState) +
