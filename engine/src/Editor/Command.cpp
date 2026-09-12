@@ -490,8 +490,13 @@ void AnimatorGraphCommand::apply(const AnimatorComponent::Graph& g)
     go->getAnimator()->applyGraph(g);
     // El snapshot trae los clipIndex de cuando se tomó, y una fuente de
     // animación añadida o quitada entretanto cambia la lista de clips: se
-    // vuelven a resolver por nombre. rebindClips y no bindClips: esto corre
-    // en Play y bindClips haría reset().
+    // vuelven a resolver por nombre. rebindClips y no bindClips: esto corre en
+    // Edit Mode —Ctrl+Z está deshabilitado en Play (ver
+    // EditorUI::handleUndoRedoShortcut)—, donde el reloj de previsualización
+    // sigue corriendo y los valores de parámetro que se ven en el panel son
+    // los vivos; bindClips's reset() los pondría a cero y el preview saltaría
+    // de golpe al estado de entrada, visible para el usuario. Secundariamente
+    // también protege un futuro undo a mitad de Play.
     if (SkinnedMesh* mesh = go->getSkinnedMesh())
         go->getAnimator()->rebindClips(*mesh, nullptr);
 }

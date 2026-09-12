@@ -32,7 +32,7 @@ A game engine written in C++20, with two interchangeable render backends: **Vulk
 - **Selection outline**: the selected GameObject is traced with an orange contour in the viewport (see below)
 - **Click-to-select in the viewport**: left-clicking a mesh in the viewport selects it, clicking empty space clears the selection (CPU ray picking, see below)
 - **Camera component**: any GameObject can be the scene camera (perspective/orthographic, fov, near/far); frustum gizmo in edit mode, renders from it on Play
-- **Animator component**: Unity-style animation state graph (node = clip, link = transition; `bool`/`trigger`/`animation finished` conditions), edited in a node panel; instant-cut transitions (no blending), driven from Lua
+- **Animator component**: Unity-style animation state graph (node = clip, link = transition; `bool`/`trigger`/`animation finished` conditions), edited in a node panel; transitions cross-fade over a configurable duration (0 = instant cut, the default), a state can blend two clips by a float parameter, driven from Lua
 - Physics (PhysX): Box/Sphere/Capsule/Plane colliders (shape, per-collider material — static/dynamic friction and bounciness — and `Is Trigger`) + `Rigidbody` (mass, gravity, drag, kinematic, 6-axis constraints, forces/impulses), raycasting. All of it editable in Properties and scriptable from Lua (see below)
 - Scene serialization (JSON save/load, full GameObject tree incl. mesh/colliders/audio/scripts)
 - Play Mode (edit/play toggle, snapshot restore, physics gated to Play), undo/redo of editor actions
@@ -676,9 +676,11 @@ falls back to the editor camera, and logs why the view didn't change.
 ## Animator
 
 A Unity-style animation state machine for skinned meshes. A **node** is a state holding one
-of the model's animation clips; a **link** is a directed transition. There is no blending —
-a transition is an instant cut. The component is opt-in: **Properties → Add → Animator**,
-greyed out on non-skinned objects (an Animator has no clips to name without a skeleton).
+of the model's animation clips; a **link** is a directed transition. A transition cross-fades
+over a duration in seconds (0 = instant cut, the default, and what every old scene carries);
+a state can also blend two of its clips by a float parameter. The component is opt-in:
+**Properties → Add → Animator**, greyed out on non-skinned objects (an Animator has no clips
+to name without a skeleton).
 
 Open the graph with **View → Animator**. In the node panel:
 
@@ -688,7 +690,9 @@ Open the graph with **View → Animator**. In the node panel:
   clip name no longer resolves against the model is flagged red.
 - Right-click a link to edit its **conditions**; each node has a **loop** checkbox.
 
-Every edit to the graph (states, transitions, conditions, parameters, blend, entry state) is undoable with Ctrl+Z, one step per gesture — dragging a value is a single step. Moving nodes on the canvas is not recorded.
+Every edit to the graph (states, transitions, conditions, parameters, blend, entry state) is
+undoable with Ctrl+Z, one step per gesture — dragging a value is a single step. Moving nodes
+on the canvas is not recorded.
 
 A parameter is one of four types — **`bool`**, **`trigger`**, **`int`** or **`float`** —
 declared in the Animator's parameter list and set/queried from code by name. A condition

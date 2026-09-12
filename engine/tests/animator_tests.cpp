@@ -4568,12 +4568,24 @@ static void test_graph_command_rebinds_clips()
     AnimatorComponent::Graph stale = a->graph();
     for (auto& s : stale.states) { s.clipIndex = -1; s.blendClipIndex = -1; }
 
+    // Runtime vivo antes del undo: valor de parámetro y reloj avanzado. Si
+    // apply() usara bindClips en vez de rebindClips, su reset() los borraría
+    // y las CHECK de abajo lo delatarían aunque los clipIndex salgan bien.
+    a->setFloat("speed", 3.5f);
+    a->update(0.5f, /*evaluateTransitions=*/false);
+    const float tiempo = a->animTime();
+
     AnimatorGraphCommand cmd(scene, "Editar Animator", go->id, stale, stale);
     cmd.undo();
 
     CHECK(a->states()[0].clipIndex == 0);
     CHECK(a->states()[0].blendClipIndex == 1);
     CHECK(a->states()[1].clipIndex == 1);
+    // rebindClips, no bindClips: el runtime (parámetro y playhead) sobrevive
+    // al undo. bindClips pasaría las tres CHECK de arriba y aun así borraría
+    // esto en silencio.
+    CHECK(nearlyEqual(a->getFloat("speed"), 3.5f));
+    CHECK(nearlyEqual(a->animTime(), tiempo));
 }
 
 // ---- AnimatorGraphUndoTracker: un comando por gesto ----

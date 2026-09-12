@@ -163,6 +163,8 @@ namespace DonTopo
             //  - m_nextEditorId nunca baja.
             // NO resuelve clips: el caché de clipIndex lo rehace el llamante
             // con rebindClips.
+            // Precondición: g viene de graph() (editorId únicos, índices dentro
+            // de rango); applyGraph no lo valida.
             void applyGraph(const Graph& g);
 
             const std::vector<State>&      states()      const { return m_states; }

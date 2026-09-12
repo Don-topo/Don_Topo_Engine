@@ -522,6 +522,12 @@ namespace
 // AnimatorSerialization.h). Sigue en este fichero porque el formato es de la
 // escena, y sus helpers (paramTypeToStr, condTypeToStr, compareToStr) se quedan
 // dentro del anónimo: desde aquí se ven igual.
+//
+// Cada campo que se vuelca aquí es lo que el undo del editor compara
+// (animatorGraphKey, ver AnimatorSerialization.h): un campo nuevo que no pase
+// por esta función es invisible para el undo aunque se edite desde el panel.
+// Un campo nuevo necesita también su mutación en graphMutations()
+// (engine/tests/animator_tests.cpp) o nada se entera de que no es undoable.
 namespace DonTopo
 {
     nlohmann::json animatorToJson(const AnimatorComponent& a)

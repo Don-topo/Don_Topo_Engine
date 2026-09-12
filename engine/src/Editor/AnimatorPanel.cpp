@@ -975,6 +975,10 @@ void AnimatorPanel::draw(EditorContext& ctx)
                     // Cambio de selección: el canvas todavía tiene las posiciones del
                     // objeto anterior. Se vuelca una vez, no cada frame — si no, el
                     // usuario no podría arrastrar los nodos.
+                    // Un movimiento del historial (undo/redo, o cualquier push) puede
+                    // haber reinsertado estados cuyo editorId el canvas no conoce, así
+                    // que las posiciones se vuelcan una vez también en ese caso: no es
+                    // solo por un undo, dispara con cualquier movimiento del historial.
                     ed::SetCurrentEditor(m_ctx);
                     syncPositionsFromComponent(go);
                     ed::SetCurrentEditor(nullptr);
