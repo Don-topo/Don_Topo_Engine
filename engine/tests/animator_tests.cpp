@@ -4859,6 +4859,11 @@ static void test_apply_skinned_frame_without_animator_advances_backend_clock()
     CHECK(r.indiceDe("updateAnimation") >= 0);
     CHECK(r.indiceDe("blend") < 0);
     CHECK(nearlyEqual(r.dtSinAnimator, 0.033f));
+    // Aquí es donde el orden SÍ importa: el updateAnimation de Vulkan congela
+    // el reloj de un mesh oculto, así que tiene que ver ya el flag de visible.
+    // El test del orden con Animator mira una rama donde el orden no tiene
+    // efecto en ningún backend.
+    CHECK(r.indiceDe("visible") < r.indiceDe("updateAnimation"));
 }
 
 // evaluateTransitions es lo único que distingue Edit de Play en este camino:

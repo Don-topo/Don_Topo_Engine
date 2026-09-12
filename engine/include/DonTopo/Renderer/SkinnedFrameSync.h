@@ -28,9 +28,13 @@ namespace DonTopo
         // avanza el reloj.
         if (go.skinnedRenderIndex < 0) return;
 
-        // ANTES de tocar la animación: el backend congela el reloj de un mesh
-        // oculto, así que el flag tiene que estar ya puesto o iría un frame por
-        // detrás.
+        // ANTES de tocar la animación. Hoy donde de verdad importa es el camino
+        // sin Animator en Vulkan: `Renderer::updateAnimation` congela el reloj
+        // de un mesh oculto, así que el flag tiene que estar ya puesto o iría un
+        // frame por detrás. Con Animator el orden no cambia nada (el reloj lo
+        // lleva la CPU y `setAnimationBlend` no mira la visibilidad), y D3D12 no
+        // congela en ningún camino; se mantiene un único orden para los dos
+        // para que esa diferencia no dependa de quién llama.
         renderer.setSkinnedMeshVisible(go.skinnedRenderIndex, go.meshVisible);
 
         if (const auto& anim = go.getAnimator())
