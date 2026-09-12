@@ -168,6 +168,7 @@ void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
     // Diferido: borrar dentro del for-range invalidaría el iterador.
     if (!toRemove.empty())
     {
+        m_graphUndo.setLabel("Quitar parámetro");
         anim->removeParameter(toRemove);
         ctx.pushLog("Animator: parámetro '" + toRemove + "' eliminado");
     }
@@ -182,6 +183,7 @@ void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
     ImGui::Combo("##newparamtype", &m_newParamType, types, IM_ARRAYSIZE(types));
     if (ImGui::Button("Add Parameter") && m_newParamName[0] != '\0')
     {
+        m_graphUndo.setLabel("Añadir parámetro");
         anim->addParameter(m_newParamName, (AnimatorComponent::ParamType)m_newParamType);
         ctx.pushLog(std::string("Animator: parámetro '") + m_newParamName + "' añadido");
         m_newParamName[0] = '\0';
@@ -377,6 +379,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                     tr.toState   = toIdx;
                     // Sin condiciones no dispara nunca (por diseño): el usuario las
                     // añade con doble clic en el link.
+                    m_graphUndo.setLabel("Crear transición");
                     anim->addTransition(tr);
                     ctx.pushLog("Animator: transición creada (sin condiciones todavía)");
                 }
@@ -429,6 +432,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         // encima de idx, así que hay que ir de atrás hacia adelante pa que cada
         // erase no invalide los índices ya calculados y pendientes en este mismo
         // vector (statesToRemove son índices tomados ANTES de borrar nada).
+        if (!statesToRemove.empty()) m_graphUndo.setLabel("Borrar estado");
         std::sort(statesToRemove.rbegin(), statesToRemove.rend());
         for (int idx : statesToRemove)
             // removeState reindexa las transiciones supervivientes.
@@ -898,6 +902,9 @@ void AnimatorPanel::draw(EditorContext& ctx)
     // pareja pase lo que pase (regla de ImGui), de ahí el End() incondicional
     // dentro del if(m_open). Mismo patrón que PropertiesPanel::draw +
     // drawMeshDialog.
+    // Solo hay sesión de undo mientras se dibuja un grafo: panel cerrado,
+    // colapsado o sin Animator la descartan (ver el final de la función).
+    bool grafoDibujado = false;
     if (m_open)
     {
         if (ImGui::Begin("Animator", &m_open))
@@ -918,6 +925,13 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 // buffer del clip del objeto anterior durante un frame.
                 const bool selectionChanged = (m_boundTo != go);
                 if (selectionChanged) m_renamingClip.clear();
+
+                // Undo del grafo: el bracket envuelve TODO lo que puede mutar el
+                // componente en este frame, desde drawAnimationSources hasta el
+                // popup de condiciones que se dibuja dentro de drawGraph.
+                m_graphUndo.beginFrame(go->id, go->getAnimator().get(), ctx.undo->revision());
+                grafoDibujado = true;
+                const bool historialMovido = ctx.undo->revision() != m_lastUndoRevision;
 
                 drawAnimationSources(ctx, go);
 
@@ -956,7 +970,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 ImGui::SameLine();
 
                 ImGui::BeginChild("canvas", ImVec2(0, 0), false);
-                if (selectionChanged)
+                if (selectionChanged || historialMovido)
                 {
                     // Cambio de selección: el canvas todavía tiene las posiciones del
                     // objeto anterior. Se vuelca una vez, no cada frame — si no, el
@@ -975,11 +989,24 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 ed::SetCurrentEditor(m_ctx);
                 syncPositionsToComponent(go);
                 ed::SetCurrentEditor(nullptr);
+
+                // Fin del bracket del undo. IsAnyItemActive: mientras un drag
+                // siga activo, el gesto no ha terminado y no se apila nada.
+                if (auto cmd = m_graphUndo.endFrame(*ctx.scene, go->getAnimator().get(),
+                                                    ImGui::IsAnyItemActive(), ctx.undo->revision()))
+                {
+                    ctx.pushLog("Animator: " + cmd->label());
+                    // Sin execute(): el cambio ya está aplicado (contrato de push).
+                    ctx.undo->push(std::move(cmd));
+                }
+                m_lastUndoRevision = ctx.undo->revision();
                 ImGui::EndChild();
             }
         }
         ImGui::End();
     }
+
+    if (!grafoDibujado) m_graphUndo.discard();
 
     // Incondicional y fuera de la ventana: tiene que drenarse aunque el panel
     // esté cerrado/colapsado o la selección haya cambiado mientras el diálogo

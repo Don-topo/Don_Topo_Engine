@@ -3,6 +3,7 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include "DonTopo/Editor/AnimatorGraphUndo.h"
 
 namespace ax::NodeEditor { struct EditorContext; }
 namespace IGFD { class FileDialog; }
@@ -71,6 +72,14 @@ private:
     // la vez no hace falta la indirección de la state storage de ImGui, y un
     // miembro es más fácil de razonar y de testear a ojo.
     int m_nodeCtxTarget = -1;
+
+    // Undo del grafo: convierte las ediciones en vivo de este panel en un
+    // comando por gesto (ver AnimatorGraphUndo.h).
+    AnimatorGraphUndoTracker m_graphUndo;
+    // Revisión del historial en el frame anterior. Si cambia (undo, redo o un
+    // push), los nodos que un undo haya reinsertado se recolocan desde el
+    // componente: el canvas no los conocía.
+    uint64_t m_lastUndoRevision = 0;
 
     char m_newParamName[64] = {};
     int  m_newParamType     = 0;   // índice en ParamType: 0 bool, 1 trigger, 2 int, 3 float

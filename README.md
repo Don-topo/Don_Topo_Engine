@@ -688,6 +688,8 @@ Open the graph with **View → Animator**. In the node panel:
   clip name no longer resolves against the model is flagged red.
 - Right-click a link to edit its **conditions**; each node has a **loop** checkbox.
 
+Every edit to the graph (states, transitions, conditions, parameters, blend, entry state) is undoable with Ctrl+Z, one step per gesture — dragging a value is a single step. Moving nodes on the canvas is not recorded.
+
 A parameter is one of four types — **`bool`**, **`trigger`**, **`int`** or **`float`** —
 declared in the Animator's parameter list and set/queried from code by name. A condition
 matches a `bool` or `trigger` parameter's own value, or, independent of any parameter,
