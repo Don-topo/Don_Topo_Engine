@@ -43,6 +43,16 @@ namespace {
     int editorIdFromRawId(int rawId) { return (rawId - 1) / 3; }
     bool isOutputPin(int pin) { return (pin - 1) % 3 == 2; }
 
+    // Nodo Any State: ids FUERA del esquema de los estados (eid*3+1..3) y de
+    // los links (100000+idx). Se comprueban SIEMPRE antes de decodificar con
+    // editorIdFromRawId: pasados por esa fórmula casarían con un editorId
+    // (300000) que ningún grafo alcanza, pero isOutputPin los clasificaría
+    // mal — por eso esPinDeSalida.
+    const int kAnyStateNodeId   = 900001;
+    const int kAnyStateOutPinId = 900002;
+
+    bool esPinDeSalida(int pin) { return pin == kAnyStateOutPinId || (pin != kAnyStateNodeId && isOutputPin(pin)); }
+
     // Un pin (o un nodo) solo trae el editorId estable, y las transiciones
     // guardan índices del vector m_states (no editorIds) porque ese es el
     // contrato de AnimatorComponent::Transition. Este helper hace el puente:
@@ -100,6 +110,12 @@ void AnimatorPanel::syncPositionsFromComponent(GameObject* go)
     const auto& states = go->getAnimator()->states();
     for (size_t i = 0; i < states.size(); i++)
         ed::SetNodePosition(nodeId(states[i].editorId), ImVec2(states[i].editorPos.x, states[i].editorPos.y));
+    // El nodo Any State existe mientras haya al menos un estado.
+    if (!states.empty())
+    {
+        const glm::vec2 p = go->getAnimator()->anyStateEditorPos();
+        ed::SetNodePosition(kAnyStateNodeId, ImVec2(p.x, p.y));
+    }
 }
 
 void AnimatorPanel::syncPositionsToComponent(GameObject* go)
@@ -109,6 +125,11 @@ void AnimatorPanel::syncPositionsToComponent(GameObject* go)
     {
         const ImVec2 p = ed::GetNodePosition(nodeId(states[i].editorId));
         states[i].editorPos = glm::vec2(p.x, p.y);
+    }
+    if (!states.empty())
+    {
+        const ImVec2 p = ed::GetNodePosition(kAnyStateNodeId);
+        go->getAnimator()->setAnyStateEditorPos(glm::vec2(p.x, p.y));
     }
 }
 
@@ -338,6 +359,20 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         ed::EndNode();
     }
 
+    // --- Nodo Any State ---
+    // Solo si hay estados: sin ellos no hay adónde ir. Solo tiene salida.
+    if (!states.empty())
+    {
+        ed::PushStyleColor(ed::StyleColor_NodeBg, ImVec4(0.30f, 0.20f, 0.45f, 0.90f));
+        ed::BeginNode(kAnyStateNodeId);
+        ImGui::TextUnformatted("Any State");
+        ed::BeginPin(kAnyStateOutPinId, ed::PinKind::Output);
+        ImGui::TextUnformatted("out ->");
+        ed::EndPin();
+        ed::EndNode();
+        ed::PopStyleColor();
+    }
+
     // --- Links ---
     const auto& transitions = anim->transitions();
     for (size_t t = 0; t < transitions.size(); t++)
@@ -347,9 +382,11 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         // fromState/toState son índices del vector m_states (no editorIds: ese
         // es el contrato de Transition, ver comentario en el header). Hay que
         // convertirlos a editorId antes de construir los ids de pin del canvas.
-        if (from < 0 || from >= (int)states.size() || to < 0 || to >= (int)states.size()) continue;
+        const bool desdeAny = from == AnimatorComponent::kAnyState;
+        if ((!desdeAny && (from < 0 || from >= (int)states.size())) ||
+            to < 0 || to >= (int)states.size()) continue;
         ed::Link(linkId((int)t),
-                 outputPinId(states[from].editorId),
+                 desdeAny ? kAnyStateOutPinId : outputPinId(states[from].editorId),
                  inputPinId(states[to].editorId));
     }
 
@@ -363,16 +400,20 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             const int pb = (int)b.Get();
             // El usuario puede arrastrar en cualquier dirección: se normaliza a
             // (salida -> entrada).
-            const int outPin = isOutputPin(pa) ? pa : pb;
-            const int inPin  = isOutputPin(pa) ? pb : pa;
+            const int outPin = esPinDeSalida(pa) ? pa : pb;
+            const int inPin  = esPinDeSalida(pa) ? pb : pa;
 
-            if (isOutputPin(outPin) && !isOutputPin(inPin) && ed::AcceptNewItem())
+            if (esPinDeSalida(outPin) && !esPinDeSalida(inPin) && inPin != kAnyStateNodeId &&
+                ed::AcceptNewItem())
             {
                 // stateFromPin (índice) en vez de directamente el editorId: las
-                // transiciones guardan índices del vector, no editorIds.
-                const int fromIdx = stateIndexFromPin(*anim, outPin);
+                // transiciones guardan índices del vector, no editorIds. El pin
+                // de Any State no se decodifica: es el centinela.
+                const int fromIdx = (outPin == kAnyStateOutPinId)
+                                    ? AnimatorComponent::kAnyState
+                                    : stateIndexFromPin(*anim, outPin);
                 const int toIdx   = stateIndexFromPin(*anim, inPin);
-                if (fromIdx >= 0 && toIdx >= 0)
+                if ((fromIdx >= 0 || fromIdx == AnimatorComponent::kAnyState) && toIdx >= 0)
                 {
                     AnimatorComponent::Transition tr;
                     tr.fromState = fromIdx;
@@ -414,11 +455,15 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         std::vector<int> statesToRemove;
         ed::NodeId dn;
         while (ed::QueryDeletedNode(&dn))
+        {
+            // El nodo Any State no se borra: existe mientras haya estados.
+            if ((int)dn.Get() == kAnyStateNodeId) { ed::RejectDeletedItem(); continue; }
             if (ed::AcceptDeletedItem())
             {
                 const int idx = stateIndexFromPin(*anim, (int)dn.Get());
                 if (idx >= 0) statesToRemove.push_back(idx);
             }
+        }
 
         std::sort(transitionsToRemove.rbegin(), transitionsToRemove.rend());
         for (int idx : transitionsToRemove)
@@ -513,6 +558,30 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
     // DragFloat con min 0 ya lo impide al arrastrar, pero no al teclear un
     // valor: un negativo dejaria blendWeight fuera de [0,1].
     if (tr.duration < 0.0f) tr.duration = 0.0f;
+
+    // Exit time: la transición espera a que el estado de origen llegue a
+    // exitTime (normalizado; 1 = fin del clip, >1 cuenta vueltas). Sin
+    // condiciones dispara solo por tiempo.
+    ImGui::PushID("exit_time");
+    ImGui::Checkbox("Has Exit Time", &tr.hasExitTime);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Espera a que el estado de origen llegue a 'exit time'. Sin condiciones, dispara solo por tiempo.");
+    if (tr.hasExitTime)
+    {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(80);
+        ImGui::DragFloat("exit time", &tr.exitTime, 0.01f, 0.0f, 100.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Tiempo normalizado: 0.9 = al 90%% del clip, 2.5 = tras dos vueltas y media.");
+        if (tr.exitTime < 0.0f) tr.exitTime = 0.0f;
+    }
+    if (tr.fromState == AnimatorComponent::kAnyState)
+    {
+        ImGui::Checkbox("Can Transition To Self", &tr.canTransitionToSelf);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Si puede volver al estado en el que ya se está. Encendido con un bool, lo reiniciaría cada frame.");
+    }
+    ImGui::PopID();
 
     ImGui::Separator();
     ImGui::TextUnformatted("Conditions (AND)");
@@ -614,7 +683,7 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
     }
     ImGui::EndDisabled();
     if (fromLoops && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("El estado de origen está en loop: 'animation finished' nunca dispara aquí (un clip en loop nunca termina).");
+        ImGui::SetTooltip("El estado de origen está en loop: 'animation finished' nunca dispara aquí. Para salir por tiempo, usa 'Has Exit Time'.");
 
     ImGui::EndPopup();
 }

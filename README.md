@@ -690,6 +690,17 @@ Open the graph with **View → Animator**. In the node panel:
   clip name no longer resolves against the model is flagged red.
 - Right-click a link to edit its **conditions**; each node has a **loop** checkbox.
 
+A transition can also wait for time. **Has Exit Time** makes it fire when the source state
+reaches **exit time**, in normalized time: `0.9` is 90% of the clip, and values above `1`
+count loops (`2.5` waits two and a half loops). On a looping state an exit time below `1` is
+checked once per loop. With no conditions it fires on time alone; with conditions it needs
+both.
+
+The **Any State** node holds transitions that apply from whichever state is current. They are
+evaluated before the current state's own transitions. By default an Any State transition
+never re-enters the state that is already playing; turn on **Can Transition To Self** on that
+transition to allow it (for example, a hit reaction that restarts on every trigger).
+
 Every edit to the graph (states, transitions, conditions, parameters, blend, entry state) is
 undoable with Ctrl+Z, one step per gesture — dragging a value is a single step. Moving nodes
 on the canvas is not recorded.
