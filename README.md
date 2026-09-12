@@ -32,7 +32,7 @@ A game engine written in C++20, with two interchangeable render backends: **Vulk
 - **Selection outline**: the selected GameObject is traced with an orange contour in the viewport (see below)
 - **Click-to-select in the viewport**: left-clicking a mesh in the viewport selects it, clicking empty space clears the selection (CPU ray picking, see below)
 - **Camera component**: any GameObject can be the scene camera (perspective/orthographic, fov, near/far); frustum gizmo in edit mode, renders from it on Play
-- **Animator component**: Unity-style animation state graph (node = clip, link = transition; `bool`/`trigger`/`animation finished` conditions), edited in a node panel; transitions cross-fade over a configurable duration (0 = instant cut, the default), a state can blend two clips by a float parameter, driven from Lua
+- **Animator component**: Unity-style animation state graph (node = clip, link = transition; `bool`/`trigger`/`int`/`float`/`animation finished` conditions), edited in a node panel with undo (one step per gesture); transitions cross-fade over a configurable duration (0 = instant cut, the default), can wait for an exit time, and can start from an **Any State** node; a state can blend two clips by a float parameter; driven from Lua
 - Physics (PhysX): Box/Sphere/Capsule/Plane colliders (shape, per-collider material — static/dynamic friction and bounciness — and `Is Trigger`) + `Rigidbody` (mass, gravity, drag, kinematic, 6-axis constraints, forces/impulses), raycasting. All of it editable in Properties and scriptable from Lua (see below)
 - Scene serialization (JSON save/load, full GameObject tree incl. mesh/colliders/audio/scripts)
 - Play Mode (edit/play toggle, snapshot restore, physics gated to Play), undo/redo of editor actions
@@ -688,7 +688,10 @@ Open the graph with **View → Animator**. In the node panel:
 - Drag from a node's **output pin** to another's **input pin** to create a transition.
 - Right-click a node → **Set as Entry** to mark the entry state (shown tinted); a state whose
   clip name no longer resolves against the model is flagged red.
-- Right-click a link to edit its **conditions**; each node has a **loop** checkbox.
+- Right-click a link to edit its **conditions**, its cross-fade and its exit time; each node
+  has a **loop** checkbox.
+- The purple **Any State** node is always there while the graph has states: drag from its
+  output pin to create an Any State transition. It cannot be deleted; its links can.
 
 A transition can also wait for time. **Has Exit Time** makes it fire when the source state
 reaches **exit time**, in normalized time: `0.9` is 90% of the clip, and values above `1`
