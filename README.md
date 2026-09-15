@@ -723,7 +723,11 @@ so no runtime state is carried over.
 
 It is driven from Lua via `GetComponent("Animator")`: the graph's `bool`, `trigger`, `int`
 and `float` parameters are read and written **by name**, and the active state, the blend
-weight and the state being faded out can be queried. Parameter names are never fatal — an
+weight and the state being faded out can be queried. Scripts can also drive the graph
+directly: `Play(state)` and `CrossFade(state, seconds)` jump to a state by name (returning
+`false` for an unknown one), `ResetTrigger(name)` disarms a pending trigger, and
+`GetNormalizedTime()` reports how far into the current state it is (it keeps growing on a
+loop, so `2.5` is two and a half loops). Parameter names are never fatal — an
 undeclared name is ignored by the setters and returns the neutral value from the getters.
 See [`Scripts/README.md`](Scripts/README.md) for the method list.
 

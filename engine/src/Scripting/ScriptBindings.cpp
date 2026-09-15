@@ -1493,6 +1493,23 @@ namespace DonTopo::ScriptBindings
                 "SetBool",    [animOf](const LuaAnimator& c, const std::string& n, bool v) { animOf(c)->setBool(n, v); },
                 "GetBool",    [animOf](const LuaAnimator& c, const std::string& n) { return animOf(c)->getBool(n); },
                 "SetTrigger", [animOf](const LuaAnimator& c, const std::string& n) { animOf(c)->setTrigger(n); },
+                "ResetTrigger", [animOf](const LuaAnimator& c, const std::string& n) { animOf(c)->resetTrigger(n); },
+                // Control directo del grafo. Un estado que no existe devuelve
+                // false y deja aviso en el log, sin lanzar: igual que los
+                // parámetros, un nombre mal escrito no tumba el script.
+                "Play", [animOf, &mgr](const LuaAnimator& c, const std::string& estado) {
+                    const bool ok = animOf(c)->play(estado);
+                    if (!ok) mgr.log("[Lua][WARN] Animator.Play: no hay ningún estado '" + estado + "'");
+                    return ok;
+                },
+                "CrossFade", [animOf, &mgr](const LuaAnimator& c, const std::string& estado, float segundos) {
+                    AnimatorComponent* anim = animOf(c);
+                    if (!ensureFinite(mgr, "Animator.CrossFade", segundos)) return false;
+                    const bool ok = anim->crossFade(estado, segundos);
+                    if (!ok) mgr.log("[Lua][WARN] Animator.CrossFade: no hay ningún estado '" + estado + "'");
+                    return ok;
+                },
+                "GetNormalizedTime", [animOf](const LuaAnimator& c) { return animOf(c)->normalizedTime(); },
                 // Numéricos: mismo contrato que los bools — un nombre no
                 // declarado (o de otro tipo) se ignora en el setter y devuelve 0
                 // en el getter, nunca lanza.

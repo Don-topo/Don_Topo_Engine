@@ -23,6 +23,7 @@
 #include "DonTopo/Scripting/ScriptBindings.h"
 #include "DonTopo/Scripting/LuaSyntaxCheck.h"
 #include "DonTopo/Scripting/LuaApiReference.h"
+#include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/LightComponent.h"
 #include "DonTopo/Core/CameraComponent.h"
 #include "DonTopo/Core/Scene.h"
@@ -3606,6 +3607,77 @@ static void test_reparent_command_sigue_moviendo_y_deshaciendo()
     CHECK(p->children[2].get() == h2);   // vuelve al final
 }
 
+// Animator desde Lua: Play, CrossFade, ResetTrigger y GetNormalizedTime.
+static void test_animator_lua_play_crossfade_reset_and_time(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Personaje");
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s;
+    s.duration = 100.0f; s.ticksPerSecond = 10.0f;     // 10 s por vuelta
+    s.name = "Idle"; s.clipName = "Idle"; a->addState(s);
+    s.name = "Run";  s.clipName = "Run";  a->addState(s);
+    a->addParameter("go", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "go";
+    t.conditions.push_back(c);
+    a->addTransition(t);
+    go->setAnimator(a);
+    a->update(0.0f, false);
+    sm.rebuildAliveSet();
+    sm.lua()["e"] = LuaEntity{ go, &sm };
+
+    auto r = sm.lua().safe_script(R"(
+        local an = e:GetComponent("Animator")
+        okPlay   = an:Play("Run")
+        noExiste = an:Play("Nada")
+        okFade   = an:CrossFade("Idle", 0.5)
+        an:SetTrigger("go")
+        an:ResetTrigger("go")
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    // Sin esto, un script roto deja los globales a nil y get<bool> hace saltar
+    // el panic de sol2, que tumba el ejecutable entero en vez de un FAIL.
+    if (!r.valid()) return;
+    CHECK(sm.lua()["okPlay"].get<bool>());
+    CHECK(!sm.lua()["noExiste"].get<bool>());
+    CHECK(sm.lua()["okFade"].get<bool>());
+    CHECK(a->currentStateName() == "Idle");
+    CHECK(a->previousStateName() == "Run");
+
+    // El trigger desarmado no dispara Idle -> Run.
+    a->update(0.016f, true);
+    CHECK(a->currentStateName() == "Idle");
+
+    a->update(2.484f, false);                          // 0.25 vueltas en Idle
+    auto r2 = sm.lua().safe_script("tn = e:GetComponent('Animator'):GetNormalizedTime()",
+                                   sol::script_pass_on_error);
+    CHECK(r2.valid());
+    if (!r2.valid()) return;
+    CHECK(nearlyEqual(sm.lua()["tn"].get<float>(), 0.25f));
+}
+
+// Regla del repo: todo binding nuevo va también al autocompletado.
+static void test_animator_lua_new_methods_are_in_the_reference()
+{
+    const auto& simbolos = luaApiSymbols();
+    for (const char* nombre : { "Animator:Play", "Animator:CrossFade",
+                                "Animator:ResetTrigger", "Animator:GetNormalizedTime" })
+    {
+        std::string firma, doc;
+        luaApiDoc(nombre, firma, doc);
+        const bool esta = std::find(simbolos.begin(), simbolos.end(), nombre) != simbolos.end();
+        if (!esta || firma.empty() || doc.empty())
+        {
+            std::printf("FAIL: %s no esta completo en LuaApiReference\n", nombre);
+            ++g_failures;
+        }
+    }
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -3621,6 +3693,8 @@ int main()
     sm.setPhysicsManager(&pm);
     sm.setAudioManager(&am);
 
+    test_animator_lua_play_crossfade_reset_and_time(sm);
+    test_animator_lua_new_methods_are_in_the_reference();
     test_set_position_rejects_nan(sm);
     test_set_position_applies_finite_value(sm);
     test_set_radius_rejects_nan(sm, pm);

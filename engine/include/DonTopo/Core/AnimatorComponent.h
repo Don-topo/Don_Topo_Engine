@@ -238,6 +238,24 @@ namespace DonTopo
             void  setFloat(const std::string& n, float v);
             float getFloat(const std::string& n) const;
 
+            // Desarma un trigger que nadie ha consumido todavía. Nombre no
+            // declarado o de otro tipo: no hace nada, como setTrigger.
+            void  resetTrigger(const std::string& n);
+
+            // --- Control desde código (Lua) ---
+            // Entran en el estado con ese NOMBRE sin esperar a ninguna
+            // transición. false si no existe (no se mueve nada). Hacia el
+            // estado actual lo reinician: una llamada explícita es intención,
+            // no el rebote que canTransitionToSelf evita en el grafo.
+            // play corta cualquier mezcla; crossFade mezcla durante seconds
+            // (<= 0 = corte, igual que play).
+            bool  play(const std::string& stateName);
+            bool  crossFade(const std::string& stateName, float seconds);
+            // Tiempo normalizado ACUMULADO del estado actual: 1 = una vuelta, y
+            // en un loop sigue creciendo (como normalizedTime en Unity). 0 si
+            // el clip no tiene duración.
+            float normalizedTime() const;
+
             // evaluateTransitions == false (Edit Mode): avanza el tiempo del
             // estado actual pero no mueve el grafo.
             void update(float dt, bool evaluateTransitions);
@@ -314,6 +332,12 @@ namespace DonTopo
             // que reinicie el playhead pasa por aquí, para que el reloj del
             // exit time no quede colgado en el que se olvide.
             void enterState(int idx);
+            // Arranca el paso al estado idx: con duration > 0 el actual pasa a
+            // apagarse, si no se corta cualquier mezcla; después enterState.
+            // Lo comparten una transición del grafo, play y crossFade.
+            void startTransitionTo(int idx, float duration);
+            // Índice del estado con ese nombre, -1 si no hay.
+            int  stateIndexByName(const std::string& name) const;
             // Si la transición puede disparar este frame. n0/n1: tiempo
             // normalizado acumulado del estado actual antes y después de
             // avanzar el reloj. hasDuration false = clip de duración 0 o sin

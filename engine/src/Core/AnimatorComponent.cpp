@@ -270,6 +270,12 @@ namespace DonTopo
         m_triggers[n] = true;
     }
 
+    void AnimatorComponent::resetTrigger(const std::string& n)
+    {
+        if (!hasParam(n, ParamType::Trigger)) return;
+        m_triggers[n] = false;
+    }
+
     bool AnimatorComponent::isTriggerSet(const std::string& n) const
     {
         auto it = m_triggers.find(n);
@@ -664,32 +670,67 @@ namespace DonTopo
         if (!elegida) return;
 
         {
-            const Transition& t = *elegida;
-            consumeTriggers(t);
-
-            if (t.duration > 0.0f)
-            {
-                // El estado que dejamos pasa a ser el que se apaga, con el
-                // tiempo que llevara. Si YA había una mezcla en vuelo se
-                // descarta: mezclar tres clips necesitaría un tercer bloque en
-                // el SSBO y en el push constant, así que la mezcla anterior se
-                // corta aquí (mismo criterio que Unity con su capa base).
-                m_prevState     = m_currentState;
-                m_prevAnimTime  = m_animTime;
-                m_blendElapsed  = 0.0f;
-                m_blendDuration = t.duration;
-            }
-            else
-            {
-                // Corte seco: ni estado previo ni mezcla, el camino de siempre.
-                m_prevState     = -1;
-                m_prevAnimTime  = 0.0f;
-                m_blendElapsed  = 0.0f;
-                m_blendDuration = 0.0f;
-            }
-
-            enterState(t.toState);   // una transición por update
+            consumeTriggers(*elegida);
+            startTransitionTo(elegida->toState, elegida->duration);   // una por update
         }
+    }
+
+    void AnimatorComponent::startTransitionTo(int idx, float duration)
+    {
+        if (duration > 0.0f)
+        {
+            // El estado que dejamos pasa a ser el que se apaga, con el tiempo
+            // que llevara. Si YA había una mezcla en vuelo se descarta:
+            // mezclar tres clips necesitaría un tercer bloque en el SSBO y en
+            // el push constant, así que la mezcla anterior se corta aquí
+            // (mismo criterio que Unity con su capa base).
+            m_prevState     = m_currentState;
+            m_prevAnimTime  = m_animTime;
+            m_blendElapsed  = 0.0f;
+            m_blendDuration = duration;
+        }
+        else
+        {
+            // Corte seco: ni estado previo ni mezcla, el camino de siempre.
+            m_prevState     = -1;
+            m_prevAnimTime  = 0.0f;
+            m_blendElapsed  = 0.0f;
+            m_blendDuration = 0.0f;
+        }
+        enterState(idx);
+    }
+
+    int AnimatorComponent::stateIndexByName(const std::string& name) const
+    {
+        for (int i = 0; i < (int)m_states.size(); i++)
+            if (m_states[i].name == name) return i;
+        return -1;
+    }
+
+    bool AnimatorComponent::play(const std::string& stateName)
+    {
+        const int idx = stateIndexByName(stateName);
+        if (idx < 0) return false;
+        startTransitionTo(idx, 0.0f);
+        return true;
+    }
+
+    bool AnimatorComponent::crossFade(const std::string& stateName, float seconds)
+    {
+        const int idx = stateIndexByName(stateName);
+        if (idx < 0) return false;
+        // Sin estado actual no hay nada que apagar: se entra con corte.
+        const bool hayActual = m_currentState >= 0 && m_currentState < (int)m_states.size();
+        startTransitionTo(idx, hayActual ? seconds : 0.0f);
+        return true;
+    }
+
+    float AnimatorComponent::normalizedTime() const
+    {
+        if (m_currentState < 0 || m_currentState >= (int)m_states.size()) return 0.0f;
+        const State& st = m_states[m_currentState];
+        if (st.duration <= 0.0f) return 0.0f;
+        return (float)(m_stateTicks / st.duration);
     }
 
     const char* paramTypeLabel(AnimatorComponent::ParamType t)

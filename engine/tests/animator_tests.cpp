@@ -5405,6 +5405,103 @@ static void test_clamp_clip_index_falls_back_to_zero()
     CHECK(clampClipIndex((uint32_t)-1, 2u) == 0u);
 }
 
+// ---- API de código: play, crossFade, resetTrigger, normalizedTime ----
+
+// A, B y C de 10 s por vuelta, playhead en A.
+static AnimatorComponent makeThreeStates()
+{
+    AnimatorComponent a;
+    a.addState(makeTimedState("A"));
+    a.addState(makeTimedState("B"));
+    a.addState(makeTimedState("C"));
+    a.update(0.0f, false);
+    return a;
+}
+
+// Un nombre que no existe no mueve nada y lo dice devolviendo false.
+static void test_play_and_crossfade_reject_unknown_state()
+{
+    AnimatorComponent a = makeThreeStates();
+    a.update(1.0f, false);
+    CHECK(!a.play("NoExiste"));
+    CHECK(!a.crossFade("NoExiste", 0.5f));
+    CHECK(a.currentStateName() == "A");
+    CHECK(nearlyEqual(a.animTime(), 10.0f));
+    CHECK(!a.blending());
+}
+
+// play entra ya, con el tiempo a 0, y corta la mezcla que hubiera.
+static void test_play_enters_at_once_and_cuts_the_blend()
+{
+    AnimatorComponent a = makeThreeStates();
+    CHECK(a.crossFade("B", 1.0f));
+    CHECK(a.blending());
+    a.update(0.2f, false);
+    CHECK(a.play("C"));
+    CHECK(a.currentStateName() == "C");
+    CHECK(nearlyEqual(a.animTime(), 0.0f));
+    CHECK(!a.blending());
+}
+
+// crossFade: el actual pasa a apagarse, con la duración pedida.
+static void test_crossfade_starts_a_blend_from_the_current_state()
+{
+    AnimatorComponent a = makeThreeStates();
+    a.update(1.0f, false);
+    CHECK(a.crossFade("B", 0.5f));
+    CHECK(a.currentStateName() == "B");
+    CHECK(a.previousStateName() == "A");
+    CHECK(a.blending());
+    a.update(0.25f, false);
+    CHECK(nearlyEqual(a.blendWeight(), 0.5f));
+}
+
+// Con 0 segundos es un corte seco.
+static void test_crossfade_with_zero_seconds_is_a_cut()
+{
+    AnimatorComponent a = makeThreeStates();
+    CHECK(a.crossFade("B", 0.0f));
+    CHECK(a.currentStateName() == "B");
+    CHECK(!a.blending());
+}
+
+// Hacia el estado actual reinicia: una llamada explícita es intención.
+static void test_play_to_the_current_state_restarts_it()
+{
+    AnimatorComponent a = makeThreeStates();
+    a.update(1.0f, false);
+    CHECK(a.play("A"));
+    CHECK(nearlyEqual(a.animTime(), 0.0f));
+}
+
+// resetTrigger desarma: la transición que lo esperaba ya no dispara.
+static void test_reset_trigger_disarms_it()
+{
+    AnimatorComponent a = makeThreeStates();
+    a.addParameter("go", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "go";
+    t.conditions.push_back(c);
+    a.addTransition(t);
+
+    a.setTrigger("go");
+    a.resetTrigger("go");
+    a.update(0.016f, true);
+    CHECK(a.currentStateName() == "A");
+}
+
+// normalizedTime acumula vueltas (pasa de 1 en un loop) y vuelve a 0 al entrar.
+static void test_normalized_time_accumulates_and_restarts()
+{
+    AnimatorComponent a = makeThreeStates();
+    a.update(25.0f, false);                // 2.5 vueltas
+    CHECK(nearlyEqual(a.normalizedTime(), 2.5f));
+    a.play("B");
+    CHECK(nearlyEqual(a.normalizedTime(), 0.0f));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -5588,6 +5685,14 @@ int main()
 
     test_clip_count_is_at_least_one();
     test_clamp_clip_index_falls_back_to_zero();
+
+    test_play_and_crossfade_reject_unknown_state();
+    test_play_enters_at_once_and_cuts_the_blend();
+    test_crossfade_starts_a_blend_from_the_current_state();
+    test_crossfade_with_zero_seconds_is_a_cut();
+    test_play_to_the_current_state_restarts_it();
+    test_reset_trigger_disarms_it();
+    test_normalized_time_accumulates_and_restarts();
 
     am.shutdown();
     pm.shutdown();

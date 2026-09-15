@@ -189,6 +189,7 @@ const std::vector<std::string>& baseSymbols()
         "Animator:SetInt", "Animator:GetInt", "Animator:SetFloat", "Animator:GetFloat",
         "Animator:GetState", "Animator:IsBlending", "Animator:GetBlendWeight",
         "Animator:GetPreviousState", "Animator:GetPoseWeight",
+        "Animator:Play", "Animator:CrossFade", "Animator:ResetTrigger", "Animator:GetNormalizedTime",
 
         // AudioClip (GetComponent("AudioClip"))
         "AudioClip:Play", "AudioClip:PlayOneShot", "AudioClip:Stop",
@@ -683,7 +684,11 @@ const std::unordered_map<std::string, DocEntry>& docTable()
             {"Animator:GetPreviousState", {"() -> string", "Estado del que se viene durante un cross-fade."}},
             {"Animator:IsBlending", {"() -> boolean", "Si hay un cross-fade en curso."}},
             {"Animator:GetBlendWeight", {"() -> number", "Peso 0..1 del cross-fade en curso."}},
-            {"Animator:GetPoseWeight", {"() -> number", "Peso del blend de dos clips por parámetro."}},
+            {"Animator:GetPoseWeight", {"() -> number", "Peso que va a la GPU: el del cross-fade si lo hay, si no el del blend por parámetro."}},
+            {"Animator:Play", {"(estado) -> boolean", "Entra ya en ese estado, sin mezcla. false si no existe."}},
+            {"Animator:CrossFade", {"(estado, segundos) -> boolean", "Mezcla hacia ese estado durante los segundos dados. false si no existe."}},
+            {"Animator:ResetTrigger", {"(nombre)", "Desarma un trigger que todavía no se ha consumido."}},
+            {"Animator:GetNormalizedTime", {"() -> number", "Tiempo normalizado del estado actual: 1 = una vuelta; en loop sigue creciendo."}},
 
             // --- Audio ---
             {"Audio.SetBusVolume", {"(bus, volumen)", "Volumen 0..1 de \"master\", \"music\" o \"sfx\"."}},

@@ -902,6 +902,10 @@ GameObject haya perdido su Animator entre el `GetComponent` y la llamada.
 | --- | --- |
 | `a:SetBool(n, v)` / `a:GetBool(n)` | Parámetro `bool` |
 | `a:SetTrigger(n)` | Arma un `trigger`; lo consume la transición que dispara |
+| `a:ResetTrigger(n)` | Desarma un `trigger` que todavía no se ha consumido |
+| `a:Play(estado)` | Entra ya en ese estado, sin mezcla y con el tiempo a 0 (también si ya estaba en él). `false` si no existe, con aviso en el log |
+| `a:CrossFade(estado, segundos)` | Mezcla hacia ese estado durante `segundos`; con 0, igual que `Play`. `false` si no existe, con aviso |
+| `a:GetNormalizedTime()` | Tiempo del estado actual normalizado: 1 = una vuelta, y en loop sigue creciendo (2.5 = dos vueltas y media). 0 si el clip no tiene duración |
 | `a:SetInt(n, v)` / `a:GetInt(n)` | Parámetro `int` |
 | `a:SetFloat(n, v)` / `a:GetFloat(n)` | Parámetro `float` (NaN/Inf se ignora con aviso) |
 | `a:GetState()` | Nombre del estado activo, `""` si el grafo está vacío |
