@@ -42,6 +42,11 @@ private:
     void drawParameterList(EditorContext& ctx, GameObject* go);
     void drawGraph(EditorContext& ctx, GameObject* go);
     void drawConditionsPopup(EditorContext& ctx, GameObject* go);
+    // Lista de clips ("blend") o de parámetros float ("by") de un estado. Se
+    // abre FUERA del nodo, entre ed::Suspend y ed::Resume: un BeginCombo dentro
+    // del nodo pinta su lista en coordenadas del canvas (con zoom y pan), así
+    // que salía desplazada y no recibía los clics.
+    void drawBlendPickPopup(GameObject* go);
     // Lista de ficheros FBX que aportan clips, con Add/Remove y rename inline.
     void drawAnimationSources(EditorContext& ctx, GameObject* go);
     // Drena el diálogo de fichero cada frame, incondicionalmente — incluso si
@@ -72,6 +77,13 @@ private:
     // la vez no hace falta la indirección de la state storage de ImGui, y un
     // miembro es más fácil de razonar y de testear a ojo.
     int m_nodeCtxTarget = -1;
+
+    // Popup de blend pendiente: el botón del nodo lo pide y drawBlendPickPopup
+    // lo abre ya en coordenadas de pantalla. Por editorId, no por índice: el
+    // vector de estados puede reindexarse entre el clic y el popup.
+    bool m_blendPickRequested = false;
+    int  m_blendPickEditorId  = -1;
+    bool m_blendPickParam     = false;   // false = clip ("blend"), true = parámetro ("by")
 
     // Undo del grafo: convierte las ediciones en vivo de este panel en un
     // comando por gesto (ver AnimatorGraphUndo.h).

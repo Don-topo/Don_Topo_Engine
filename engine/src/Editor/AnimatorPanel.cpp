@@ -272,35 +272,14 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         {
             const std::string blendLabel = stMut.blendClipName.empty()
                                            ? std::string("(ninguno)") : stMut.blendClipName;
-            ImGui::SetNextItemWidth(140.0f);
-            bool blendClipChanged = false;
-            if (ImGui::BeginCombo("blend", blendLabel.c_str()))
+            // Botón y no BeginCombo: la lista se abre fuera del nodo (ver
+            // drawBlendPickPopup).
+            if (ImGui::Button(("blend: " + blendLabel + "##blend").c_str(), ImVec2(140.0f, 0.0f)))
             {
-                if (ImGui::Selectable("(ninguno)", stMut.blendClipName.empty()))
-                {
-                    stMut.blendClipName.clear();
-                    blendClipChanged = true;
-                }
-                for (const auto& c : mesh->animationClips)
-                {
-                    // Mezclar un clip consigo mismo no da nada nuevo, así que
-                    // el primario no se ofrece como segundo.
-                    if (c.name == stMut.clipName) continue;
-                    if (ImGui::Selectable(c.name.c_str(), c.name == stMut.blendClipName))
-                    {
-                        stMut.blendClipName = c.name;
-                        blendClipChanged    = true;
-                    }
-                }
-                ImGui::EndCombo();
+                m_blendPickRequested = true;
+                m_blendPickEditorId  = eid;
+                m_blendPickParam     = false;
             }
-            // El índice y la duración del segundo clip los resuelve rebindClips
-            // por nombre; sin esto el estado quedaría con blendClipIndex a -1 y
-            // no mezclaría nada hasta recargar la escena. rebindClips y no
-            // bindClips: puede estar corriendo Play Mode y bindClips reiniciaría
-            // el grafo y los parámetros del usuario.
-            if (blendClipChanged)
-                anim->rebindClips(*mesh, nullptr);
 
             if (!stMut.blendClipName.empty())
             {
@@ -309,16 +288,11 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 // declarar uno abajo, en Parameters.
                 const std::string paramLabel = stMut.blendParam.empty()
                                                ? std::string("(sin parametro)") : stMut.blendParam;
-                ImGui::SetNextItemWidth(140.0f);
-                if (ImGui::BeginCombo("by", paramLabel.c_str()))
+                if (ImGui::Button(("by: " + paramLabel + "##by").c_str(), ImVec2(140.0f, 0.0f)))
                 {
-                    for (const auto& p : anim->parameters())
-                    {
-                        if (p.type != AnimatorComponent::ParamType::Float) continue;
-                        if (ImGui::Selectable(p.name.c_str(), p.name == stMut.blendParam))
-                            stMut.blendParam = p.name;
-                    }
-                    ImGui::EndCombo();
+                    m_blendPickRequested = true;
+                    m_blendPickEditorId  = eid;
+                    m_blendPickParam     = true;
                 }
 
                 ImGui::SetNextItemWidth(60.0f);
@@ -533,10 +507,82 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         ImGui::EndPopup();
     }
     drawConditionsPopup(ctx, go);
+    drawBlendPickPopup(go);
     ed::Resume();
 
     ed::End();
     ed::SetCurrentEditor(nullptr);
+}
+
+void AnimatorPanel::drawBlendPickPopup(GameObject* go)
+{
+    if (m_blendPickRequested)
+    {
+        ImGui::OpenPopup("blend_pick");
+        m_blendPickRequested = false;
+    }
+    if (!ImGui::BeginPopup("blend_pick")) return;
+
+    auto anim = go->getAnimator();
+    SkinnedMesh* mesh = go->getSkinnedMesh();
+    int idx = -1;
+    for (int i = 0; i < (int)anim->states().size(); i++)
+        if (anim->states()[i].editorId == m_blendPickEditorId) { idx = i; break; }
+    // El estado se borró (o la malla desapareció) con la lista abierta.
+    if (idx < 0 || !mesh)
+    {
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+    auto& st = anim->statesMutable()[idx];
+
+    if (!m_blendPickParam)
+    {
+        // Lista TODOS los clips de la malla (más "(ninguno)"), no solo los que
+        // ya usa el grafo: el motor admite cualquiera de ellos.
+        bool cambio = false;
+        if (ImGui::Selectable("(ninguno)", st.blendClipName.empty()))
+        {
+            st.blendClipName.clear();
+            cambio = true;
+        }
+        for (const auto& c : mesh->animationClips)
+        {
+            // Mezclar un clip consigo mismo no da nada nuevo, así que el
+            // primario no se ofrece como segundo.
+            if (c.name == st.clipName) continue;
+            if (ImGui::Selectable(c.name.c_str(), c.name == st.blendClipName))
+            {
+                st.blendClipName = c.name;
+                cambio = true;
+            }
+        }
+        // El índice y la duración del segundo clip los resuelve rebindClips
+        // por nombre; sin esto el estado quedaría con blendClipIndex a -1 y no
+        // mezclaría nada hasta recargar la escena. rebindClips y no bindClips:
+        // puede estar corriendo Play Mode y bindClips reiniciaría el grafo y
+        // los parámetros del usuario.
+        if (cambio)
+            anim->rebindClips(*mesh, nullptr);
+    }
+    else
+    {
+        // Solo parámetros float: son los únicos que dan un peso continuo. Que
+        // la lista salga vacía es la pista de que hay que declarar uno en
+        // Parameters.
+        bool alguno = false;
+        for (const auto& p : anim->parameters())
+        {
+            if (p.type != AnimatorComponent::ParamType::Float) continue;
+            alguno = true;
+            if (ImGui::Selectable(p.name.c_str(), p.name == st.blendParam))
+                st.blendParam = p.name;
+        }
+        if (!alguno)
+            ImGui::TextDisabled("No hay parámetros float: declara uno en Parameters.");
+    }
+    ImGui::EndPopup();
 }
 
 void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
