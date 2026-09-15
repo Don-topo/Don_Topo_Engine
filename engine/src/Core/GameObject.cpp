@@ -71,30 +71,67 @@ namespace DonTopo
 
     bool GameObject::isSkinned() const
     {
-        return m_mesh && dynamic_cast<SkinnedMesh*>(m_mesh.get()) != nullptr;
+        return m_mesh && dynamic_cast<const SkinnedMesh*>(m_mesh.get()) != nullptr;
     }
 
-    SkinnedMesh* GameObject::getSkinnedMesh() const
+    const SkinnedMesh* GameObject::getSkinnedMesh() const
     {
-        return m_mesh ? dynamic_cast<SkinnedMesh*>(m_mesh.get()) : nullptr;
+        return m_mesh ? dynamic_cast<const SkinnedMesh*>(m_mesh.get()) : nullptr;
     }
 
-    std::vector<Material*> materialsOfMesh(GameObject& go)
+    std::vector<const Material*> materialsOfMesh(const GameObject& go)
     {
-        std::vector<Material*> out;
+        std::vector<const Material*> out;
         if (!go.hasMesh()) return out;
 
         // Mismo criterio que materialsOf() del Content Browser: en un skinned
         // con submallas, el Material heredado no lo mira nadie.
-        if (SkinnedMesh* sm = go.getSkinnedMesh(); sm && !sm->materials.empty())
+        if (const SkinnedMesh* sm = go.getSkinnedMesh(); sm && !sm->materials.empty())
         {
             out.reserve(sm->materials.size());
-            for (Material& m : sm->materials) out.push_back(&m);
+            for (const Material& m : sm->materials) out.push_back(&m);
             return out;
         }
 
         out.push_back(&go.getMesh()->material);
         return out;
+    }
+
+    std::vector<Material*> editMaterialsOfMesh(GameObject& go)
+    {
+        std::vector<Material*> out;
+        if (!go.hasMesh()) return out;
+        // Mismo criterio que materialsOfMesh, pero por editMesh: copia la malla
+        // si está compartida antes de dar punteros escribibles.
+        if (SkinnedMesh* sm = go.editSkinnedMesh(); sm && !sm->materials.empty())
+        {
+            out.reserve(sm->materials.size());
+            for (Material& m : sm->materials) out.push_back(&m);
+            return out;
+        }
+        out.push_back(&go.editMesh()->material);
+        return out;
+    }
+
+    Mesh* GameObject::editMesh()
+    {
+        if (!m_mesh) return nullptr;
+        if (m_mesh.use_count() > 1)
+        {
+            // Conserva el tipo: un skinned copiado como Mesh a secas perdería
+            // esqueleto y clips sin avisar.
+            if (auto* sk = dynamic_cast<const SkinnedMesh*>(m_mesh.get()))
+                m_mesh = std::make_shared<SkinnedMesh>(*sk);
+            else
+                m_mesh = std::make_shared<Mesh>(*m_mesh);
+        }
+        return std::const_pointer_cast<Mesh>(m_mesh).get();
+    }
+
+    SkinnedMesh* GameObject::editSkinnedMesh()
+    {
+        if (!dynamic_cast<const SkinnedMesh*>(m_mesh.get())) return nullptr;
+        return static_cast<SkinnedMesh*>(editMesh());
     }
 
     void collectMaterialOverrideWarnings(GameObject& go, std::vector<std::string>& out)
@@ -118,7 +155,19 @@ namespace DonTopo
 
     void applyMaterialOverrides(GameObject& go)
     {
-        std::vector<Material*> mats = materialsOfMesh(go);
+        // Se aplica sobre una COPIA de los materiales y solo se escribe en la
+        // malla si algo cambia: la malla puede estar compartida (clon, undo de
+        // Delete) y escribir obliga a copiarla entera (editMesh). Un clon con
+        // los mismos overrides que su original no cambia nada y la sigue
+        // compartiendo. Los baselines se capturan en `ov` en esta pasada, igual
+        // que antes, porque la copia tiene los mismos valores que la malla.
+        const std::vector<const Material*> actuales = materialsOfMesh(go);
+        std::vector<Material> copia;
+        copia.reserve(actuales.size());
+        for (const Material* m : actuales) copia.push_back(*m);
+        std::vector<Material*> mats;
+        mats.reserve(copia.size());
+        for (Material& m : copia) mats.push_back(&m);
 
         for (MaterialOverride& ov : go.materialOverrides)
         {
@@ -183,6 +232,27 @@ namespace DonTopo
             };
             aplicaFactor(ov.metallic,  ov.baseMetallic,  ov.baseMetallicTaken,  mat.metallic);
             aplicaFactor(ov.roughness, ov.baseRoughness, ov.baseRoughnessTaken, mat.roughness);
+        }
+
+        auto distinto = [](const Material& a, const Material& b)
+        {
+            return a.texturePath != b.texturePath || a.normalMapPath != b.normalMapPath ||
+                   a.metallicRoughnessPath != b.metallicRoughnessPath ||
+                   a.metallic != b.metallic || a.roughness != b.roughness;
+        };
+        bool cambia = false;
+        for (size_t i = 0; i < copia.size() && !cambia; i++)
+            cambia = distinto(copia[i], *actuales[i]);
+        if (!cambia) return;
+
+        std::vector<Material*> destino = editMaterialsOfMesh(go);
+        for (size_t i = 0; i < copia.size() && i < destino.size(); i++)
+        {
+            destino[i]->texturePath           = copia[i].texturePath;
+            destino[i]->normalMapPath         = copia[i].normalMapPath;
+            destino[i]->metallicRoughnessPath = copia[i].metallicRoughnessPath;
+            destino[i]->metallic              = copia[i].metallic;
+            destino[i]->roughness             = copia[i].roughness;
         }
     }
 

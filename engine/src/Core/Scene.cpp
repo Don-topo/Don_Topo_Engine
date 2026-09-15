@@ -3168,7 +3168,7 @@ namespace DonTopo
             const std::string& ruta = n->getMesh()->sourcePath;
             if (ruta.empty()) return;   // procedural: no hay fichero que evitar
             cache[ruta]  = n->isSkinned();
-            mallas[ruta] = n->getMesh();
+            mallas[ruta] = n->getMesh();   // compartida: PreloadedMeshCache es de const Mesh
         });
         try
         {

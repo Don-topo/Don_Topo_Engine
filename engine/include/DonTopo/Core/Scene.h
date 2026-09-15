@@ -30,7 +30,7 @@ namespace DonTopo
     // Los valores pueden ser SkinnedMesh (un FBX con rig): la carga hace un
     // dynamic_cast para reconstruir el tipo correcto. El caller conserva la
     // propiedad; la carga hace copia profunda de la malla que use.
-    using PreloadedMeshCache = std::unordered_map<std::string, std::shared_ptr<Mesh>>;
+    using PreloadedMeshCache = std::unordered_map<std::string, std::shared_ptr<const Mesh>>;
 
     class Scene
     {

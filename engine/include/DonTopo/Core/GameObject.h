@@ -166,7 +166,7 @@ namespace DonTopo
             // overrides del JSON sobre `materialOverrides` (que en ese punto
             // está vacío para un nodo recién creado), así que el reset no
             // pisa nada — ver la nota de orden en nodeFromJson.
-            void setMesh(std::shared_ptr<Mesh> mesh)
+            void setMesh(std::shared_ptr<const Mesh> mesh)
             {
                 m_mesh = std::move(mesh);
                 for (MaterialOverride& ov : materialOverrides)
@@ -184,11 +184,20 @@ namespace DonTopo
                     ov.baseRoughnessTaken = false;
                 }
             }
-            const std::shared_ptr<Mesh>& getMesh() const { return m_mesh; }
+            // Solo lectura: la malla puede estar COMPARTIDA con otros objetos
+            // (clon, undo de Delete). Para modificarla, editMesh().
+            const std::shared_ptr<const Mesh>& getMesh() const { return m_mesh; }
             bool hasMesh()   const { return m_mesh != nullptr; }
             // Fuera de línea: el dynamic_cast necesita SkinnedMesh completo.
             bool isSkinned() const;
-            SkinnedMesh* getSkinnedMesh() const;
+            const SkinnedMesh* getSkinnedMesh() const;
+            // Única vía de escritura. Si la malla está compartida
+            // (use_count > 1) la copia primero —conservando su tipo— y el
+            // objeto pasa a apuntar a su copia. Las referencias que no son de
+            // otro GameObject (caché de precarga, un comando del undo) también
+            // cuentan: como mucho una copia de más, nunca un resultado mal.
+            Mesh*        editMesh();
+            SkinnedMesh* editSkinnedMesh();
 
             void setBoxCollider(std::shared_ptr<BoxCollider> bc) { m_boxCollider = std::move(bc); }
             const std::shared_ptr<BoxCollider>& getBoxCollider() const { return m_boxCollider; }
@@ -475,7 +484,7 @@ namespace DonTopo
             float ssrIntensity = 0.5f;
 
         private:
-            std::shared_ptr<Mesh> m_mesh;
+            std::shared_ptr<const Mesh> m_mesh;
             std::shared_ptr<BoxCollider> m_boxCollider;
             std::shared_ptr<SphereCollider> m_sphereCollider;
             std::shared_ptr<CapsuleCollider> m_capsuleCollider;
@@ -511,7 +520,10 @@ namespace DonTopo
     //
     // Fuera de línea: el dynamic_cast necesita SkinnedMesh completo, mismo
     // motivo que isSkinned().
-    std::vector<Material*> materialsOfMesh(GameObject& go);
+    std::vector<const Material*> materialsOfMesh(const GameObject& go);
+    // Igual, pero escribible: pasa por editMesh(), así que copia la malla si
+    // está compartida.
+    std::vector<Material*> editMaterialsOfMesh(GameObject& go);
 
     // Escribe los overrides sobre los materiales, capturando el baseline la
     // primera vez que pisa cada slot. Idempotente: llamarla dos veces seguidas

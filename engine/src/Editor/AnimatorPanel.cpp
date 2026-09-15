@@ -289,7 +289,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         // El combo lista TODOS los clips de la malla (más "(ninguno)"), no solo
         // los que ya usa el grafo: el motor admite cualquiera de ellos.
         auto& stMut = anim->statesMutable()[i];
-        if (SkinnedMesh* mesh = go->getSkinnedMesh())
+        if (const SkinnedMesh* mesh = go->getSkinnedMesh())
         {
             const std::string blendLabel = stMut.blendClipName.empty()
                                            ? std::string("(ninguno)") : stMut.blendClipName;
@@ -545,7 +545,7 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
     if (!ImGui::BeginPopup("blend_pick")) return;
 
     auto anim = go->getAnimator();
-    SkinnedMesh* mesh = go->getSkinnedMesh();
+    const SkinnedMesh* mesh = go->getSkinnedMesh();
     int idx = -1;
     for (int i = 0; i < (int)anim->states().size(); i++)
         if (anim->states()[i].editorId == m_blendPickEditorId) { idx = i; break; }
@@ -773,7 +773,7 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
 
 void AnimatorPanel::importAnimationSource(EditorContext& ctx, GameObject* go, const std::string& path)
 {
-    SkinnedMesh* mesh = go->getSkinnedMesh();
+    const SkinnedMesh* mesh = go->getSkinnedMesh();
     if (!mesh) return;
 
     std::string ext = std::filesystem::path(path).extension().string();
@@ -812,7 +812,7 @@ void AnimatorPanel::importAnimationSource(EditorContext& ctx, GameObject* go, co
 
 void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
 {
-    SkinnedMesh* mesh = go->getSkinnedMesh();
+    const SkinnedMesh* mesh = go->getSkinnedMesh();
     if (!mesh) return;
 
     if (!ImGui::CollapsingHeader("Animation Sources", ImGuiTreeNodeFlags_DefaultOpen))
@@ -1088,7 +1088,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 drawAnimationSources(ctx, go);
 
                 // --- Añadir estado desde los clips del modelo ---
-                SkinnedMesh* mesh = go->getSkinnedMesh();
+                const SkinnedMesh* mesh = go->getSkinnedMesh();
                 if (!mesh || mesh->animationClips.empty())
                 {
                     ImGui::TextDisabled("El GameObject no tiene un mesh skinned con animaciones.");

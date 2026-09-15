@@ -75,16 +75,41 @@ std::string replacePathPrefix(const std::string& original,
 // tracking de texturas — borrar una textura suya decía "0 objetos afectados"
 // en un diálogo destructivo. Devuelve punteros al material real para que los
 // callers puedan limpiar campos, no copias.
-std::vector<DonTopo::Material*> materialsOf(DonTopo::GameObject* go)
+std::vector<const DonTopo::Material*> materialsOf(const DonTopo::GameObject* go)
 {
-    std::vector<DonTopo::Material*> out;
+    std::vector<const DonTopo::Material*> out;
     if (!go->hasMesh()) return out;
-    if (DonTopo::SkinnedMesh* sm = go->getSkinnedMesh())
-        for (DonTopo::Material& m : sm->materials)
+    if (const DonTopo::SkinnedMesh* sm = go->getSkinnedMesh())
+        for (const DonTopo::Material& m : sm->materials)
             out.push_back(&m);
     else
         out.push_back(&go->getMesh()->material);
     return out;
+}
+
+// Mismo criterio, escribible. Pasa por editMesh: copia la malla si está
+// compartida, así que solo se llama cuando algo del material VA a cambiar
+// (ver tocaAlgunMaterial), nunca para recorrer por si acaso.
+std::vector<DonTopo::Material*> editMaterialsOf(DonTopo::GameObject* go)
+{
+    std::vector<DonTopo::Material*> out;
+    if (!go->hasMesh()) return out;
+    if (DonTopo::SkinnedMesh* sm = go->editSkinnedMesh())
+        for (DonTopo::Material& m : sm->materials)
+            out.push_back(&m);
+    else
+        out.push_back(&go->editMesh()->material);
+    return out;
+}
+
+// true si alguna ruta de algún material del objeto cumple `coincide`.
+template <typename Pred>
+bool tocaAlgunMaterial(const DonTopo::GameObject* go, Pred coincide)
+{
+    for (const DonTopo::Material* m : materialsOf(go))
+        if (coincide(m->texturePath) || coincide(m->normalMapPath) || coincide(m->metallicRoughnessPath))
+            return true;
+    return false;
 }
 
 // Nombre de fichero/carpeta válido: no vacío tras trim, sin separadores de
@@ -182,17 +207,22 @@ void updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
 
     sceneRoot->traverse([&](GameObject* go)
     {
+        auto coincide = [&](const std::string& field)
+        {
+            return !field.empty() && (isDir ? pathUnderDir(field, oldPath) : samePath(field, oldPath));
+        };
         auto updateField = [&](std::string& field)
         {
-            if (field.empty()) return;
-            bool matches = isDir ? pathUnderDir(field, oldPath) : samePath(field, oldPath);
-            if (matches)
+            if (coincide(field))
                 field = isDir ? replacePathPrefix(field, oldPath, newPath) : newPath.string();
         };
 
         if (go->hasMesh())
         {
-            updateField(go->getMesh()->sourcePath);
+            // Escribir en la malla la copia si está compartida: solo cuando
+            // algo coincide, no para cada objeto que se recorre.
+            if (coincide(go->getMesh()->sourcePath))
+                updateField(go->editMesh()->sourcePath);
             // Mismo punto ciego que en count/detach: en skinned los materiales
             // viven en SkinnedMesh::materials, nunca en el Mesh::material
             // heredado. Sin esto, renombrar una textura dejaba a todos los
@@ -206,7 +236,7 @@ void updateSceneReferencesForRename(EditorContext& ctx, GameObject* sceneRoot,
             // en memoria — el override guardado sigue apuntando al nombre
             // viejo hasta que el usuario vuelva a tocar ese slot desde
             // Properties.
-            for (Material* mat : materialsOf(go))
+            for (Material* mat : tocaAlgunMaterial(go, coincide) ? editMaterialsOf(go) : std::vector<Material*>{})
             {
                 updateField(mat->texturePath);
                 updateField(mat->normalMapPath);
@@ -298,7 +328,7 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
 
         if (go->hasMesh())
         {
-            Mesh* mesh = go->getMesh().get();
+            const Mesh* mesh = go->getMesh().get();
             if (matches(mesh->sourcePath))
             {
                 if (ctx.renderer)
@@ -319,7 +349,10 @@ void detachSceneReferencesForDelete(EditorContext& ctx, GameObject* sceneRoot,
                 // GPU sigue mostrando la textura vieja hasta la siguiente
                 // carga de la malla.
                 const bool canSwap = ctx.renderer && go->staticRenderIndex >= 0;
-                for (Material* mat : materialsOf(go))
+                // Solo se pide la versión escribible (que copia una malla
+                // compartida) si de verdad hay algo que limpiar.
+                const bool hayQueLimpiar = tocaAlgunMaterial(go, matches);
+                for (Material* mat : hayQueLimpiar ? editMaterialsOf(go) : std::vector<Material*>{})
                 {
                     if (matches(mat->texturePath))
                     {

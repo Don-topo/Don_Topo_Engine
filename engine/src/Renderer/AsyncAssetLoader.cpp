@@ -349,7 +349,7 @@ namespace DonTopo
         // siga siendo así mañana. Guardar la malla previa aquí y restaurarla
         // en el catch cubre el fallo Y deja de ser un contrato que el
         // siguiente caller pudiera romper sin que nada lo delate.
-        const std::shared_ptr<Mesh> previousMesh = target->getMesh();
+        const std::shared_ptr<const Mesh> previousMesh = target->getMesh();
 
         // Los overrides pisan mesh.material más abajo (applyMaterialOverrides),
         // pero r.images sigue trayendo los píxeles que decodeSlot sacó del FBX
