@@ -571,11 +571,26 @@ namespace DonTopo
                 m_triggers[c.paramName] = false;
     }
 
-    void AnimatorComponent::advanceClock(const State& st, float& time, bool* finished, float dt)
+    float AnimatorComponent::stateRate(const State& st) const
+    {
+        float mult = st.speed;
+        if (!st.speedParam.empty() && hasParam(st.speedParam, ParamType::Float))
+            mult *= getFloat(st.speedParam);
+        // Negativo o NaN congela: !(x > 0) es true también para NaN.
+        if (!(mult > 0.0f)) mult = 0.0f;
+        return st.ticksPerSecond * mult;
+    }
+
+    void AnimatorComponent::setSpeed(float s)
+    {
+        m_speed = (s > 0.0f) ? s : 0.0f;   // negativo o NaN -> 0
+    }
+
+    void AnimatorComponent::advanceClock(const State& st, float rate, float& time, bool* finished, float dt)
     {
         if (st.duration > 0.0f && st.ticksPerSecond > 0.0f)
         {
-            time += dt * st.ticksPerSecond;
+            time += dt * rate;
             if (time >= st.duration)
             {
                 if (st.loop)
@@ -612,12 +627,16 @@ namespace DonTopo
             if (m_currentState < 0 || m_currentState >= (int)m_states.size()) return;
         }
 
+        // Velocidad global: escala el dt entero, cross-fade incluido.
+        dt *= m_speed;
+
         const State& actual      = m_states[m_currentState];
         const bool   conDuracion = actual.duration > 0.0f && actual.ticksPerSecond > 0.0f;
+        const float  ritmo       = stateRate(actual);
         const double ticks0      = m_stateTicks;
         if (conDuracion)
-            m_stateTicks += (double)dt * actual.ticksPerSecond;
-        advanceClock(actual, m_animTime, &m_finished, dt);
+            m_stateTicks += (double)dt * ritmo;
+        advanceClock(actual, ritmo, m_animTime, &m_finished, dt);
 
         // Cross-fade en curso: el estado que se apaga sigue animándose con SU
         // ritmo y SU loop mientras dura la mezcla. Congelarlo daría un salto
@@ -626,7 +645,8 @@ namespace DonTopo
         if (m_prevState >= 0)
         {
             if (m_prevState < (int)m_states.size())
-                advanceClock(m_states[m_prevState], m_prevAnimTime, nullptr, dt);
+                advanceClock(m_states[m_prevState], stateRate(m_states[m_prevState]),
+                             m_prevAnimTime, nullptr, dt);
 
             m_blendElapsed += dt;
             if (m_blendDuration <= 0.0f || m_blendElapsed >= m_blendDuration)

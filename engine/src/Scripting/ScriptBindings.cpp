@@ -1510,6 +1510,15 @@ namespace DonTopo::ScriptBindings
                     return ok;
                 },
                 "GetNormalizedTime", [animOf](const LuaAnimator& c) { return animOf(c)->normalizedTime(); },
+                // Velocidad global del Animator (runtime, no se guarda). La
+                // velocidad por estado es autoría del grafo: se conduce con
+                // SetFloat sobre su parámetro multiplicador.
+                "SetSpeed", [animOf, &mgr](const LuaAnimator& c, float v) {
+                    AnimatorComponent* anim = animOf(c);
+                    if (!ensureFinite(mgr, "Animator.SetSpeed", v)) return;
+                    anim->setSpeed(v);
+                },
+                "GetSpeed", [animOf](const LuaAnimator& c) { return animOf(c)->speed(); },
                 // Numéricos: mismo contrato que los bools — un nombre no
                 // declarado (o de otro tipo) se ignora en el setter y devuelve 0
                 // en el getter, nunca lanza.

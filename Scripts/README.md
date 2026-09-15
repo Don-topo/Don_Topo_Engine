@@ -905,6 +905,7 @@ GameObject haya perdido su Animator entre el `GetComponent` y la llamada.
 | `a:ResetTrigger(n)` | Desarma un `trigger` que todavía no se ha consumido |
 | `a:Play(estado)` | Entra ya en ese estado, sin mezcla y con el tiempo a 0 (también si ya estaba en él). `false` si no existe, con aviso en el log |
 | `a:CrossFade(estado, segundos)` | Mezcla hacia ese estado durante `segundos`; con 0, igual que `Play`. `false` si no existe, con aviso |
+| `a:SetSpeed(v)` / `a:GetSpeed()` | Velocidad global del Animator (1 = normal, 0 = congelado; negativo se acota a 0, NaN/Inf se ignora con aviso). No se guarda en la escena. La velocidad por estado se edita en el grafo y se conduce con `SetFloat` sobre su parámetro multiplicador |
 | `a:GetNormalizedTime()` | Tiempo del estado actual normalizado: 1 = una vuelta, y en loop sigue creciendo (2.5 = dos vueltas y media). 0 si el clip no tiene duración |
 | `a:SetInt(n, v)` / `a:GetInt(n)` | Parámetro `int` |
 | `a:SetFloat(n, v)` / `a:GetFloat(n)` | Parámetro `float` (NaN/Inf se ignora con aviso) |

@@ -136,6 +136,14 @@ namespace DonTopo
                 // Va AL FINAL del struct y false es el comportamiento de
                 // siempre, que es lo que trae toda escena guardada sin él.
                 bool        lockRootMotion = false;
+                // --- Velocidad (como el Speed + Multiplier de Unity) ---
+                // Ritmo = ticksPerSecond x speed x valor de speedParam (si es un
+                // float declarado; si no, x1). Negativo o NaN congela (0): ir
+                // hacia atrás exigiría redefinir loop, finished y exit time. Al
+                // final del struct y a x1 por defecto, que es lo que traen las
+                // escenas guardadas sin estos campos.
+                float       speed          = 1.0f;
+                std::string speedParam;
             };
 
             struct Parameter
@@ -255,6 +263,11 @@ namespace DonTopo
             // en un loop sigue creciendo (como normalizedTime en Unity). 0 si
             // el clip no tiene duración.
             float normalizedTime() const;
+            // Velocidad global del Animator (animator.speed de Unity): escala el
+            // dt de todo update, cross-fade incluido. Runtime, no se guarda en
+            // la escena. Negativo o NaN se acota a 0 (congela).
+            void  setSpeed(float s);
+            float speed() const { return m_speed; }
 
             // evaluateTransitions == false (Edit Mode): avanza el tiempo del
             // estado actual pero no mueve el grafo.
@@ -350,7 +363,10 @@ namespace DonTopo
             // los dos tienen su propio ticksPerSecond y su propio loop, y
             // duplicar el bucle dejaría que se desincronizaran. finished solo
             // lo escribe el del estado actual (al previo ya no le importa).
-            static void advanceClock(const State& st, float& time, bool* finished, float dt);
+            static void advanceClock(const State& st, float rate, float& time, bool* finished, float dt);
+            // Ticks por segundo efectivos del estado: ticksPerSecond x speed x
+            // parámetro multiplicador, nunca negativo.
+            float stateRate(const State& st) const;
             // true si el estado tiene un segundo clip RESUELTO y un parámetro
             // que existe: solo entonces hay mezcla que hacer.
             bool  stateBlends(int stateIdx) const;
@@ -387,6 +403,7 @@ namespace DonTopo
             // para el exit time. double y no float: en una sesión larga un
             // float pierde resolución para decidir un cruce. No se serializa.
             double                  m_stateTicks   = 0.0;
+            float                   m_speed        = 1.0f;
 
             // Cross-fade en curso. m_prevState a -1 significa "sin mezcla", y es
             // el estado en el que queda todo con transiciones de duración 0.

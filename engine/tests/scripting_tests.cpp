@@ -3658,6 +3658,20 @@ static void test_animator_lua_play_crossfade_reset_and_time(ScriptManager& sm)
     CHECK(r2.valid());
     if (!r2.valid()) return;
     CHECK(nearlyEqual(sm.lua()["tn"].get<float>(), 0.25f));
+
+    // Velocidad global desde Lua; un negativo congela (0).
+    auto r3 = sm.lua().safe_script(R"(
+        local an = e:GetComponent("Animator")
+        an:SetSpeed(1.5)
+        v1 = an:GetSpeed()
+        an:SetSpeed(-4)
+        v2 = an:GetSpeed()
+    )", sol::script_pass_on_error);
+    CHECK(r3.valid());
+    if (!r3.valid()) return;
+    CHECK(nearlyEqual(sm.lua()["v1"].get<float>(), 1.5f));
+    CHECK(nearlyEqual(sm.lua()["v2"].get<float>(), 0.0f));
+    CHECK(nearlyEqual(a->speed(), 0.0f));
 }
 
 // Regla del repo: todo binding nuevo va también al autocompletado.
@@ -3665,7 +3679,8 @@ static void test_animator_lua_new_methods_are_in_the_reference()
 {
     const auto& simbolos = luaApiSymbols();
     for (const char* nombre : { "Animator:Play", "Animator:CrossFade",
-                                "Animator:ResetTrigger", "Animator:GetNormalizedTime" })
+                                "Animator:ResetTrigger", "Animator:GetNormalizedTime",
+                                "Animator:SetSpeed", "Animator:GetSpeed" })
     {
         std::string firma, doc;
         luaApiDoc(nombre, firma, doc);

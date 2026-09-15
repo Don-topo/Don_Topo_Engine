@@ -690,6 +690,9 @@ Open the graph with **View → Animator**. In the node panel:
   clip name no longer resolves against the model is flagged red.
 - Right-click a link to edit its **conditions**, its cross-fade and its exit time; each node
   has a **loop** checkbox.
+- Each node has a **speed** multiplier (`1` = normal, `0` = frozen; it never plays
+  backwards) and an optional **x parameter**: a float parameter that multiplies that speed,
+  so a script can drive it with `SetFloat`.
 - The purple **Any State** node is always there while the graph has states: drag from its
   output pin to create an Any State transition. It cannot be deleted; its links can.
 
@@ -725,7 +728,8 @@ It is driven from Lua via `GetComponent("Animator")`: the graph's `bool`, `trigg
 and `float` parameters are read and written **by name**, and the active state, the blend
 weight and the state being faded out can be queried. Scripts can also drive the graph
 directly: `Play(state)` and `CrossFade(state, seconds)` jump to a state by name (returning
-`false` for an unknown one), `ResetTrigger(name)` disarms a pending trigger, and
+`false` for an unknown one), `ResetTrigger(name)` disarms a pending trigger, `SetSpeed(v)`/`GetSpeed()` scale the whole
+Animator (runtime only, not saved), and
 `GetNormalizedTime()` reports how far into the current state it is (it keeps growing on a
 loop, so `2.5` is two and a half loops). Parameter names are never fatal — an
 undeclared name is ignored by the setters and returns the neutral value from the getters.

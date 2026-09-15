@@ -264,6 +264,27 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Clava la traslacion del hueso raiz a su bind pose: el clip se reproduce en el sitio. La rotacion de la raiz y el resto de huesos animan igual.");
 
+        // Velocidad del estado y parámetro float que la multiplica (opcional).
+        // DragFloat en vivo: el undo lo recoge el tracker del grafo.
+        ImGui::SetNextItemWidth(60.0f);
+        ImGui::DragFloat("speed", &anim->statesMutable()[i].speed, 0.01f, 0.0f, 100.0f, "%.2f");
+        if (anim->statesMutable()[i].speed < 0.0f) anim->statesMutable()[i].speed = 0.0f;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Multiplica el ritmo del clip (1 = normal, 0 = congelado).");
+        ImGui::SameLine();
+        {
+            const std::string& sp = states[i].speedParam;
+            const std::string etiqueta = "x " + (sp.empty() ? std::string("(ninguno)") : sp) + "##speedparam";
+            if (ImGui::Button(etiqueta.c_str()))
+            {
+                m_blendPickRequested = true;
+                m_blendPickEditorId  = eid;
+                m_blendPickKind      = 2;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Parametro float que multiplica la velocidad (como el Multiplier de Unity).");
+        }
+
         // --- Blend por parámetro: segundo clip del estado ---
         // El combo lista TODOS los clips de la malla (más "(ninguno)"), no solo
         // los que ya usa el grafo: el motor admite cualquiera de ellos.
@@ -278,7 +299,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             {
                 m_blendPickRequested = true;
                 m_blendPickEditorId  = eid;
-                m_blendPickParam     = false;
+                m_blendPickKind      = 0;
             }
 
             if (!stMut.blendClipName.empty())
@@ -292,7 +313,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 {
                     m_blendPickRequested = true;
                     m_blendPickEditorId  = eid;
-                    m_blendPickParam     = true;
+                    m_blendPickKind      = 1;
                 }
 
                 ImGui::SetNextItemWidth(60.0f);
@@ -537,7 +558,23 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
     }
     auto& st = anim->statesMutable()[idx];
 
-    if (!m_blendPickParam)
+    if (m_blendPickKind == 2)
+    {
+        // Multiplicador de velocidad: "(ninguno)" o cualquier parámetro float.
+        if (ImGui::Selectable("(ninguno)", st.speedParam.empty()))
+            st.speedParam.clear();
+        bool alguno = false;
+        for (const auto& p : anim->parameters())
+        {
+            if (p.type != AnimatorComponent::ParamType::Float) continue;
+            alguno = true;
+            if (ImGui::Selectable(p.name.c_str(), p.name == st.speedParam))
+                st.speedParam = p.name;
+        }
+        if (!alguno)
+            ImGui::TextDisabled("No hay parámetros float: declara uno en Parameters.");
+    }
+    else if (m_blendPickKind == 0)
     {
         // Lista TODOS los clips de la malla (más "(ninguno)"), no solo los que
         // ya usa el grafo: el motor admite cualquiera de ellos.

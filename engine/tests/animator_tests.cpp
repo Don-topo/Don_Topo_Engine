@@ -4440,6 +4440,8 @@ static std::vector<GraphMutation> graphMutations()
         { "state.blendMin",       [](A& a) { a.statesMutable()[0].blendMin = 0.25f; } },
         { "state.blendMax",       [](A& a) { a.statesMutable()[0].blendMax = 2.0f; } },
         { "state.lockRootMotion", [](A& a) { a.statesMutable()[0].lockRootMotion = true; } },
+        { "state.speed",          [](A& a) { a.statesMutable()[0].speed = 2.0f; } },
+        { "state.speedParam",     [](A& a) { a.statesMutable()[0].speedParam = "speed"; } },
         { "addState",             [](A& a) { A::State s; s.name = "C"; s.clipName = "idle"; a.addState(s); } },
         { "removeState",          [](A& a) { a.removeState(1); } },
         { "entryState",           [](A& a) { a.setEntryState(1); } },
@@ -5502,6 +5504,131 @@ static void test_normalized_time_accumulates_and_restarts()
     CHECK(nearlyEqual(a.normalizedTime(), 0.0f));
 }
 
+// ---- Velocidad por estado y global ----
+
+// speed 2 duplica el tiempo del clip; un parámetro a 0.5 lo deja en x1.
+static void test_state_speed_and_param_multiply_the_clock()
+{
+    AnimatorComponent a;
+    AnimatorComponent::State s = makeTimedState("A");
+    s.speed = 2.0f;
+    a.addState(s);
+    a.update(0.0f, false);
+    a.update(1.0f, false);
+    CHECK(nearlyEqual(a.animTime(), 20.0f));
+
+    a.addParameter("mult", AnimatorComponent::ParamType::Float);
+    a.statesMutable()[0].speedParam = "mult";
+    a.setFloat("mult", 0.5f);
+    a.play("A");
+    a.update(1.0f, false);
+    CHECK(nearlyEqual(a.animTime(), 10.0f));
+}
+
+// Velocidad 0 congela: nunca termina ni cruza un exit time.
+static void test_zero_speed_never_finishes_nor_reaches_exit_time()
+{
+    AnimatorComponent a = makeExitTimeGraph(0.5f, false);
+    a.statesMutable()[0].speed = 0.0f;
+    a.statesMutable()[0].loop  = false;
+    a.update(100.0f, true);
+    CHECK(a.currentStateName() == "A");
+    CHECK(!a.finished());
+    CHECK(nearlyEqual(a.animTime(), 0.0f));
+}
+
+// Un negativo (en el estado o en el parámetro) congela en vez de ir hacia atrás.
+static void test_negative_speed_freezes_instead_of_reversing()
+{
+    AnimatorComponent a;
+    AnimatorComponent::State s = makeTimedState("A");
+    s.speed = -1.0f;
+    a.addState(s);
+    a.update(0.0f, false);
+    a.update(1.0f, false);
+    CHECK(nearlyEqual(a.animTime(), 0.0f));
+}
+
+// Durante un cross-fade, el estado que se apaga avanza con SU velocidad.
+static void test_fading_state_uses_its_own_speed()
+{
+    AnimatorComponent a = makeThreeStates();
+    a.statesMutable()[0].speed = 3.0f;       // A
+    a.crossFade("B", 10.0f);
+    a.update(1.0f, false);
+    CHECK(nearlyEqual(a.previousAnimTime(), 30.0f));
+    CHECK(nearlyEqual(a.animTime(), 10.0f));
+}
+
+// La velocidad global escala el dt entero, mezcla incluida; negativa -> 0.
+static void test_global_speed_scales_clock_and_blend()
+{
+    AnimatorComponent a = makeThreeStates();
+    a.setSpeed(2.0f);
+    a.crossFade("B", 1.0f);
+    a.update(0.25f, false);                  // 0.5 s efectivos
+    CHECK(nearlyEqual(a.animTime(), 5.0f));
+    CHECK(nearlyEqual(a.blendWeight(), 0.5f));
+
+    a.setSpeed(-3.0f);
+    CHECK(nearlyEqual(a.speed(), 0.0f));
+}
+
+static void test_state_speed_survives_scene_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s0; s0.name = "Walk"; s0.speed = 1.75f; s0.speedParam = "mult";
+    AnimatorComponent::State s1; s1.name = "Idle";
+    a->addState(s0);
+    a->addState(s1);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+    CHECK(!j["root"]["children"][0]["animator"]["states"][1].contains("speed"));   // x1 no se escribe
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& st = found->getAnimator()->states();
+    CHECK(st.size() == 2u);
+    if (st.size() != 2u) return;
+    CHECK(nearlyEqual(st[0].speed, 1.75f));
+    CHECK(st[0].speedParam == "mult");
+    CHECK(nearlyEqual(st[1].speed, 1.0f));
+    CHECK(st[1].speedParam.empty());
+}
+
+// Un speed negativo en el .scene se acota a 0 y se avisa.
+static void test_negative_state_speed_is_clamped_on_load(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s0; s0.name = "Walk";
+    a->addState(s0);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+    j["root"]["children"][0]["animator"]["states"][0]["speed"] = -2.0f;
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found != nullptr && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    CHECK(nearlyEqual(found->getAnimator()->states()[0].speed, 0.0f));
+    bool avisado = false;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("speed") != std::string::npos) avisado = true;
+    CHECK(avisado);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -5693,6 +5820,14 @@ int main()
     test_play_to_the_current_state_restarts_it();
     test_reset_trigger_disarms_it();
     test_normalized_time_accumulates_and_restarts();
+
+    test_state_speed_and_param_multiply_the_clock();
+    test_zero_speed_never_finishes_nor_reaches_exit_time();
+    test_negative_speed_freezes_instead_of_reversing();
+    test_fading_state_uses_its_own_speed();
+    test_global_speed_scales_clock_and_blend();
+    test_state_speed_survives_scene_round_trip(pm, am);
+    test_negative_state_speed_is_clamped_on_load(pm, am);
 
     am.shutdown();
     pm.shutdown();

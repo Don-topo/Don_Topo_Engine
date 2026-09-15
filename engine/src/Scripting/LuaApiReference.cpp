@@ -190,6 +190,7 @@ const std::vector<std::string>& baseSymbols()
         "Animator:GetState", "Animator:IsBlending", "Animator:GetBlendWeight",
         "Animator:GetPreviousState", "Animator:GetPoseWeight",
         "Animator:Play", "Animator:CrossFade", "Animator:ResetTrigger", "Animator:GetNormalizedTime",
+        "Animator:SetSpeed", "Animator:GetSpeed",
 
         // AudioClip (GetComponent("AudioClip"))
         "AudioClip:Play", "AudioClip:PlayOneShot", "AudioClip:Stop",
@@ -688,6 +689,8 @@ const std::unordered_map<std::string, DocEntry>& docTable()
             {"Animator:Play", {"(estado) -> boolean", "Entra ya en ese estado, sin mezcla. false si no existe."}},
             {"Animator:CrossFade", {"(estado, segundos) -> boolean", "Mezcla hacia ese estado durante los segundos dados. false si no existe."}},
             {"Animator:ResetTrigger", {"(nombre)", "Desarma un trigger que todavía no se ha consumido."}},
+            {"Animator:SetSpeed", {"(velocidad)", "Velocidad global del Animator (1 = normal, 0 = congelado). Negativo se acota a 0."}},
+            {"Animator:GetSpeed", {"() -> number", "Velocidad global actual del Animator."}},
             {"Animator:GetNormalizedTime", {"() -> number", "Tiempo normalizado del estado actual: 1 = una vuelta; en loop sigue creciendo."}},
 
             // --- Audio ---

@@ -556,6 +556,11 @@ namespace DonTopo
             // que traen todas las escenas anteriores a esta opción.
             if (s.lockRootMotion)
                 sj["lockRootMotion"] = true;
+            // Velocidad: solo si no es la de siempre (x1, sin multiplicador).
+            if (s.speed != 1.0f)
+                sj["speed"] = s.speed;
+            if (!s.speedParam.empty())
+                sj["speedParam"] = s.speedParam;
             states.push_back(sj);
         }
 
@@ -656,6 +661,16 @@ namespace
                                               "animator.state." + st.name);
                 // Ausente en toda escena anterior al bloqueo de raíz: false.
                 st.lockRootMotion = s.value("lockRootMotion", false);
+                // Ausentes en escenas anteriores a la velocidad por estado: x1.
+                st.speed      = readFloat(s, "speed", 1.0f, warnings, "animator.state." + st.name + ".speed");
+                st.speedParam = s.value("speedParam", std::string());
+                if (st.speed < 0.0f)
+                {
+                    if (warnings)
+                        warnings->push_back("animator.state." + st.name + ".speed negativo (" +
+                                             std::to_string(st.speed) + "), se acota a 0");
+                    st.speed = 0.0f;
+                }
                 if (s.contains("pos") && s["pos"].is_array() && s["pos"].size() == 2)
                     st.editorPos = glm::vec2(readArrayFloat(s["pos"], 0, 0.0f, warnings, "animator.state." + st.name + ".pos"),
                                               readArrayFloat(s["pos"], 1, 0.0f, warnings, "animator.state." + st.name + ".pos"));
