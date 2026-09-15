@@ -423,6 +423,12 @@ no hay ningún problema medido empujando. Es una L larga (toca `Mesh`,
 Renderer y los dos sitios que editan material) y hoy el único síntoma son
 2,36 ms en un caso de uso que nadie ha confirmado que exista.
 
+**REABIERTO el 2026-09-15 por medición** (fila 11 de `docs/animation-audit.md`):
+clonar un personaje skinned de 101k vértices cuesta **~19-22 ms** en Release, y la
+ablación demuestra que es la copia de sus **11,9 MB de geometría** (el JSON son
+0,006 ms; los clips, 148 KB). Es el síntoma que esta sección predecía, un orden de
+magnitud por encima del de las primitivas.
+
 **Qué lo reabre**: que alguien instancie primitivas procedurales en Play
 (proyectiles, pickups), o que la RAM de geometría duplicada aparezca en un
 perfil. Si pasa cualquiera de las dos, el diagnóstico ya está hecho: no hay
