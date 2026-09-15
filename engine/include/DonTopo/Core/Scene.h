@@ -28,9 +28,16 @@ namespace DonTopo
     // disco de un sourcePath que ya se precargó — el runtime la rellena en
     // paralelo con el JobSystem y muestra progreso en el splash mientras tanto.
     // Los valores pueden ser SkinnedMesh (un FBX con rig): la carga hace un
-    // dynamic_cast para reconstruir el tipo correcto. El caller conserva la
-    // propiedad; la carga hace copia profunda de la malla que use.
+    // dynamic_cast para reconstruir el tipo correcto. Si la configuración de
+    // animación del JSON coincide con la de la malla, la carga la COMPARTE
+    // (clon, undo de Delete); si no, hace copia profunda y configura.
     using PreloadedMeshCache = std::unordered_map<std::string, std::shared_ptr<const Mesh>>;
+
+    struct SkinnedMesh;
+    // true si las fuentes de animación de la malla (ruta, builtin y nombres de
+    // clip, en orden) son exactamente las del bloque "animationSources" del
+    // .scene. Decide si una malla precargada se puede COMPARTIR tal cual.
+    bool meshMatchesAnimationConfig(const SkinnedMesh& mesh, const nlohmann::json& animationSources);
 
     class Scene
     {
@@ -184,8 +191,16 @@ namespace DonTopo
             // subtree quedan a -1: el caller debe registrar los meshes en
             // GPU (ver Renderer::registerGameObject). nullptr si la
             // reconstrucción falla (subárbol malformado).
+            // preloaded: mallas vivas por sourcePath (el undo de Delete las
+            // guarda antes de borrar). Con ellas no se relee el FBX y, si su
+            // configuración coincide, se comparten.
             GameObject* insertFromJson(const nlohmann::json& j, GameObject* parent, size_t index,
-                                        PhysicsManager& physics, AudioManager& audio);
+                                        PhysicsManager& physics, AudioManager& audio,
+                                        const PreloadedMeshCache* preloaded = nullptr);
+
+            // Las mallas del subárbol que tienen fichero, por sourcePath. Es lo
+            // que siembra la caché de precarga del clon y del undo de Delete.
+            static PreloadedMeshCache collectMeshes(GameObject* root);
 
             // Deep clone de src (transform, mesh, colliders, audio, scripts
             // con overrides) como hijo nuevo de parent (o del padre de src si

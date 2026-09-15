@@ -285,7 +285,13 @@ void testPreloadedCacheConsulted()
             CHECK(hijoA->getMesh()->vertices.size() == 1 &&
                   hijoA->getMesh()->vertices[0].pos == glm::vec3(7.0f, 8.0f, 9.0f),
                   "los vertices deben ser los de la malla cacheada");
-            CHECK(hijoA->getMesh().get() != fabricated.get(), "debe ser copia profunda, no el mismo objeto compartido");
+            // Contrato desde el Apéndice B: la malla estática precargada se
+            // COMPARTE (es const para el GameObject), y editarla copia, así que
+            // la de la caché no se toca.
+            CHECK(hijoA->getMesh().get() == fabricated.get(), "la malla precargada se comparte, no se copia");
+            hijoA->editMesh()->name = "editada";
+            CHECK(fabricated->name == "malla_precargada_ficticia", "editar el nodo no debe tocar la malla de la cache");
+            CHECK(hijoA->getMesh().get() != fabricated.get(), "tras editar, el nodo tiene su propia copia");
         }
     }
 

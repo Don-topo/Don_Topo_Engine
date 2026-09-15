@@ -57,6 +57,7 @@ void DeleteGameObjectCommand::execute()
     uint64_t id = m_snapshot.value("id", uint64_t{0});
     GameObject* node = m_scene.findById(id);
     if (!node) return;
+    m_meshes = m_scene.collectMeshes(node);
     // La GPU la suelta Scene::removeGameObject via su oyente (P8): este era
     // el tercer sitio que tenia que acordarse, y el unico sin hook propio.
     m_scene.removeGameObject(node);
@@ -65,7 +66,7 @@ void DeleteGameObjectCommand::execute()
 void DeleteGameObjectCommand::undo()
 {
     GameObject* parent = m_scene.findById(m_parentId);
-    GameObject* node = m_scene.insertFromJson(m_snapshot, parent, m_index, m_physics, m_audio);
+    GameObject* node = m_scene.insertFromJson(m_snapshot, parent, m_index, m_physics, m_audio, &m_meshes);
     if (node)
     {
         m_renderer.registerGameObject(node);

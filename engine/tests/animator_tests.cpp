@@ -1203,7 +1203,9 @@ static void test_clone_of_rigged_mesh_does_not_reread_disk(PhysicsManager& pm, A
     CHECK(sm->vertices.size() == vertsOrigen);
     CHECK(sm->animationClips.size() == clipsOrigen);
     CHECK(sm->skeleton.names.size() == huesosOrigen);
-    CHECK(sm != origen);   // no comparten el objeto: el clon tiene el suyo
+    // Desde el Apéndice B la COMPARTEN: el clon no copia la malla hasta que
+    // alguien la edite (editMesh).
+    CHECK(sm == origen);
 }
 
 // P2 de docs/core-audit.md, el séptimo acceso crudo: los nombres de clip
@@ -5710,6 +5712,67 @@ static void test_equal_material_override_does_not_copy()
     CHECK(a->getMesh()->material.texturePath == "igual.png");
 }
 
+// El clon comparte la malla en vez de copiarla.
+static void test_clone_shares_the_mesh(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    go->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx")));
+    GameObject* clone = scene.cloneGameObject(go, nullptr, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+    CHECK(clone->getMesh().get() == go->getMesh().get());
+}
+
+// Misma configuración de fuentes: coincide. Una fuente de más o un clip
+// renombrado: no.
+static void test_mesh_matches_animation_config()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    nlohmann::json fuentes = nlohmann::json::array();
+    for (const auto& s : m.animationSources)
+        fuentes.push_back({ {"path", s.path}, {"builtin", s.builtin}, {"clips", s.clipNames} });
+    CHECK(meshMatchesAnimationConfig(m, fuentes));
+
+    nlohmann::json mas = fuentes;
+    mas.push_back({ {"path", "otro.fbx"}, {"builtin", false}, {"clips", nlohmann::json::array({"x"})} });
+    CHECK(!meshMatchesAnimationConfig(m, mas));
+
+    nlohmann::json renombrada = fuentes;
+    CHECK(!renombrada.empty() && !renombrada[0]["clips"].empty());
+    if (!renombrada.empty() && !renombrada[0]["clips"].empty())
+    {
+        renombrada[0]["clips"][0] = "renombrado";
+        CHECK(!meshMatchesAnimationConfig(m, renombrada));
+    }
+}
+
+// Undo de Delete con las mallas vivas: comparte y no lee disco.
+static void test_insert_from_json_reuses_preloaded_mesh(PhysicsManager& pm, AudioManager& am)
+{
+    const std::filesystem::path temporal = std::filesystem::temp_directory_path() / "dt_undo_sin_disco.fbx";
+    std::error_code ec;
+    std::filesystem::remove(temporal, ec);
+    std::filesystem::copy_file("assets/modelAnimation.fbx", temporal, ec);
+    CHECK(!ec);
+    if (ec) return;
+
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    go->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned(temporal.string())));
+    nlohmann::json snap = scene.subtreeToJson(go);
+    const PreloadedMeshCache mallas = Scene::collectMeshes(go);
+    const Mesh* original = go->getMesh().get();
+    scene.removeGameObject(go);
+    std::filesystem::remove(temporal, ec);              // sin fichero: leer disco fallaría
+
+    GameObject* r = scene.insertFromJson(snap, nullptr, 0, pm, am, &mallas);
+    CHECK(r != nullptr);
+    if (!r) return;
+    CHECK(r->isSkinned());
+    CHECK(r->getMesh().get() == original);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -5910,6 +5973,10 @@ int main()
     test_state_speed_survives_scene_round_trip(pm, am);
     test_negative_state_speed_is_clamped_on_load(pm, am);
 
+    test_clone_with_animation_source_keeps_clip_count(pm, am);
+    test_clone_shares_the_mesh(pm, am);
+    test_mesh_matches_animation_config();
+    test_insert_from_json_reuses_preloaded_mesh(pm, am);
     test_edit_mesh_copies_only_when_shared();
     test_equal_material_override_does_not_copy();
 
