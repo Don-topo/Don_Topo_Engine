@@ -3737,7 +3737,7 @@ namespace DonTopo {
         // --- Flatten keyframes de TODOS los clips a formato GPU ---
         // (packSkinnedClips vive fuera pa poder probarse sin un VkDevice)
         const PackedClips packed = packSkinnedClips(mesh);
-        obj.clipCount = (uint32_t)(mesh.animationClips.empty() ? 1u : mesh.animationClips.size());
+        obj.clipCount = skinnedClipCount(mesh);
 
         // --- Upload SSBOs estáticos ---
         m_res.uploadBuffer(packed.pos.data(),   packed.pos.size()   * sizeof(GpuPosKey),
@@ -3947,7 +3947,7 @@ namespace DonTopo {
         // Clamp: la lista de clips puede haber encogido y activeClip apuntaría
         // fuera del SSBO de BoneInfos, con el compute leyendo basura en
         // silencio. Mismo criterio que setAnimationState.
-        obj.activeClip = (activeClip < obj.clipCount) ? activeClip : 0;
+        obj.activeClip = clampClipIndex(activeClip, obj.clipCount);
     }
 
     void Renderer::updateAnimation(int index, float deltaTime)
@@ -3970,7 +3970,7 @@ namespace DonTopo {
         // Clamp y no assert: un clipIndex fuera de rango (escena con un grafo que
         // referencia un clip que el FBX ya no trae) haría que clipBase apuntara
         // fuera del SSBO de BoneInfos, y el compute leería basura en silencio.
-        obj.activeClip = (clipIndex < obj.clipCount) ? clipIndex : 0;
+        obj.activeClip = clampClipIndex(clipIndex, obj.clipCount);
         obj.animTime   = animTime;
         // Un objeto que deja de mezclar tiene que volver a peso 1 o el compute
         // seguiría leyendo el clip previo del frame anterior para siempre. Por
@@ -3989,7 +3989,7 @@ namespace DonTopo {
         auto& obj = m_skinnedObjects[index];
         // Mismo clamp que el clip activo: el clip previo también indexa el SSBO
         // de BoneInfos y un índice fuera de rango leería basura en silencio.
-        obj.prevClip     = (prevClipIndex < obj.clipCount) ? prevClipIndex : 0;
+        obj.prevClip     = clampClipIndex(prevClipIndex, obj.clipCount);
         obj.prevAnimTime = prevAnimTime;
         obj.blendWeight  = (weight < 0.0f) ? 0.0f : (weight > 1.0f ? 1.0f : weight);
         obj.lockRootMotion = lockRootMotion;

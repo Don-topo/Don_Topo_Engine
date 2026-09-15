@@ -30,4 +30,23 @@ namespace DonTopo
     // Renderer::addSkinnedMesh este empaquetado solo se podría probar con un
     // VkDevice vivo, es decir, no se podría probar.
     PackedClips packSkinnedClips(const SkinnedMesh& mesh);
+
+    // Bloques de clip que lleva el SSBO de BoneInfos. Nunca 0: sin animaciones
+    // se empaqueta igual un bloque, así que el clip 0 siempre es válido.
+    inline uint32_t skinnedClipCount(const SkinnedMesh& mesh)
+    {
+        return mesh.animationClips.empty() ? 1u : (uint32_t)mesh.animationClips.size();
+    }
+
+    // Índice de clip listo para multiplicar por boneCount. Fuera de rango cae al
+    // clip 0: la lista de clips puede haber encogido, o llegar un -1 de un
+    // estado sin resolver (0xFFFFFFFF tras el cast), y clip * boneCount
+    // apuntaría fuera del SSBO con el compute leyendo basura en silencio.
+    //
+    // Vive aquí y no en cada backend porque la guarda existía en Vulkan y
+    // faltaba en D3D12: una sola función impide que vuelvan a separarse.
+    inline uint32_t clampClipIndex(uint32_t clip, uint32_t clipCount)
+    {
+        return clip < clipCount ? clip : 0u;
+    }
 }

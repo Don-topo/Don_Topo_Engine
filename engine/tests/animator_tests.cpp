@@ -5383,6 +5383,28 @@ static void test_negative_exit_time_is_clamped_with_warning(PhysicsManager& pm, 
     CHECK(avisado);
 }
 
+// ---- Índice de clip acotado (A12) ----
+
+// Cuántos bloques de clip lleva el SSBO: packSkinnedClips empaqueta al menos
+// uno aunque la malla no traiga animaciones.
+static void test_clip_count_is_at_least_one()
+{
+    SkinnedMesh sinClips;
+    CHECK(skinnedClipCount(sinClips) == 1u);
+    SkinnedMesh conDos = makeTwoClipFixture();
+    CHECK(skinnedClipCount(conDos) == 2u);
+}
+
+// Un índice fuera de rango cae al clip 0 en vez de apuntar fuera del SSBO. El
+// -1 que llega de un int sin resolver se ve como 0xFFFFFFFF tras el cast.
+static void test_clamp_clip_index_falls_back_to_zero()
+{
+    CHECK(clampClipIndex(1u, 2u) == 1u);
+    CHECK(clampClipIndex(2u, 2u) == 0u);
+    CHECK(clampClipIndex(7u, 2u) == 0u);
+    CHECK(clampClipIndex((uint32_t)-1, 2u) == 0u);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -5563,6 +5585,9 @@ int main()
     test_scene_without_exit_time_fields_loads(pm, am);
     test_any_state_transition_with_bad_target_is_dropped(pm, am);
     test_negative_exit_time_is_clamped_with_warning(pm, am);
+
+    test_clip_count_is_at_least_one();
+    test_clamp_clip_index_falls_back_to_zero();
 
     am.shutdown();
     pm.shutdown();

@@ -953,6 +953,9 @@ struct D3D12Renderer::Impl {
         UINT                     indexCount  = 0;
         uint32_t                 boneCount   = 0;
         uint32_t                 vertexCount = 0;
+        // Bloques de clip del SSBO de BoneInfos, para acotar el índice que
+        // llega de fuera antes de multiplicarlo por boneCount (clampClipIndex).
+        uint32_t                 clipCount   = 1;
         // Lado mayor de la caja de la POSE EN REPOSO, en espacio local. Lo usa
         // el grosor del contorno, que es proporcional al tamano del objeto.
         float                    restMaxExtent = 0.0f;
@@ -3331,6 +3334,7 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
 
     SkinnedObject object;
     object.boneCount    = static_cast<uint32_t>(mesh.skeleton.names.size());
+    object.clipCount    = skinnedClipCount(mesh);
     object.vertexCount  = static_cast<uint32_t>(mesh.skinnedVertices.size());
     object.clipBase     = 0;
     object.animDuration = mesh.animationClips.empty() ? 0.0f : mesh.animationClips[0].duration;
@@ -9972,7 +9976,8 @@ void D3D12Renderer::setAnimationState(int index, uint32_t clipIndex, float animT
     if (index < 0 || static_cast<size_t>(index) >= d.skinnedObjects.size())
         return;
     Impl::SkinnedObject& character = d.skinnedObjects[index];
-    character.clipBase             = clipIndex * character.boneCount;
+    // Acotado como en Vulkan: fuera de rango, clip 0 (ver clampClipIndex).
+    character.clipBase             = clampClipIndex(clipIndex, character.clipCount) * character.boneCount;
     character.animTime             = animTime;
     // Un objeto que deja de mezclar vuelve a peso 1 o el compute seguiría
     // leyendo el clip previo del frame anterior para siempre.
@@ -9994,7 +9999,7 @@ void D3D12Renderer::setAnimationBlend(int index, uint32_t clipIndex, float animT
     if (index < 0 || static_cast<size_t>(index) >= d.skinnedObjects.size())
         return;
     Impl::SkinnedObject& character = d.skinnedObjects[index];
-    character.prevClipBase         = prevClipIndex * character.boneCount;
+    character.prevClipBase         = clampClipIndex(prevClipIndex, character.clipCount) * character.boneCount;
     character.prevAnimTime         = prevAnimTime;
     character.blendWeight          = (weight < 0.0f) ? 0.0f : (weight > 1.0f ? 1.0f : weight);
     character.lockRootMotion       = lockRootMotion;
