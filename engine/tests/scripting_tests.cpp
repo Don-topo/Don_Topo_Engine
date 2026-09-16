@@ -23,6 +23,7 @@
 #include "DonTopo/Scripting/ScriptBindings.h"
 #include "DonTopo/Scripting/LuaSyntaxCheck.h"
 #include "DonTopo/Scripting/LuaApiReference.h"
+#include "DonTopo/Scripting/ScriptComponent.h"
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/LightComponent.h"
 #include "DonTopo/Core/CameraComponent.h"
@@ -3693,6 +3694,46 @@ static void test_animator_lua_new_methods_are_in_the_reference()
     }
 }
 
+// OnAnimationEvent: un evento que dispara el Animator llega a los scripts del
+// mismo GameObject en el siguiente ScriptManager::update, una sola vez.
+static void test_animation_event_reaches_lua(ScriptManager& sm)
+{
+    Scene scene("Test");
+    sm.setScene(&scene);
+    GameObject* go = scene.addGameObject("Personaje");
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s;
+    s.name = "Walk"; s.clipName = "Walk"; s.duration = 40.0f; s.ticksPerSecond = 20.0f;
+    s.events.push_back({ "paso", 0.5f });
+    a->addState(s);
+    go->setAnimator(a);
+    sm.rebuildAliveSet();
+    sm.onPlayStart();
+
+    auto r = sm.lua().safe_script(R"(
+        recibidos = ""
+        OyenteEventos = {}
+        function OyenteEventos:OnAnimationEvent(nombre) recibidos = recibidos .. nombre .. ";" end
+    )", sol::script_pass_on_error);
+    CHECK(r.valid());
+    if (!r.valid()) { sm.onPlayStop(); return; }
+    // Instancia a mano y ya arrancada: no hay .lua en disco que cargar.
+    auto comp = std::make_unique<ScriptComponent>("OyenteEventos", go);
+    comp->instance = sm.lua()["OyenteEventos"];
+    comp->started  = true;
+    go->addScript(std::move(comp));
+
+    a->update(1.1f, true);                 // cruza la mitad del ciclo de 2 s
+    CHECK(a->firedEvents().size() == 1u);
+    sm.update(0.016f);
+    CHECK(sm.lua()["recibidos"].get<std::string>() == "paso;");
+
+    a->update(0.1f, true);                 // no cruza nada
+    sm.update(0.016f);
+    CHECK(sm.lua()["recibidos"].get<std::string>() == "paso;");
+    sm.onPlayStop();
+}
+
 int main()
 {
     PhysicsManager pm;
@@ -3709,6 +3750,7 @@ int main()
     sm.setAudioManager(&am);
 
     test_animator_lua_play_crossfade_reset_and_time(sm);
+    test_animation_event_reaches_lua(sm);
     test_animator_lua_new_methods_are_in_the_reference();
     test_set_position_rejects_nan(sm);
     test_set_position_applies_finite_value(sm);

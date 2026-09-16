@@ -219,6 +219,9 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
 
     ed::SetCurrentEditor(m_ctx);
     ed::Begin("AnimatorCanvas");
+    // Escribiendo en un campo de un nodo (nombre de evento), Supr borraría el
+    // nodo seleccionado: imgui-node-editor mira la tecla, no el foco de texto.
+    ed::EnableShortcuts(!ImGui::GetIO().WantTextInput);
 
     // --- Nodos ---
     const auto& states = anim->states();
@@ -348,6 +351,34 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 stMut.blendEntries.push_back(nueva);
             }
         }
+
+        // --- Eventos del estado ---
+        // No dependen de la malla: son instantes del ciclo con nombre, que en
+        // Play llegan a Lua como OnAnimationEvent.
+        ImGui::PushID("eventos");
+        int quitarEvento = -1;
+        for (int k = 0; k < (int)stMut.events.size(); k++)
+        {
+            auto& ev = stMut.events[k];
+            ImGui::PushID(k);
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%s", ev.name.c_str());
+            ImGui::SetNextItemWidth(90.0f);
+            if (ImGui::InputText("##evName", buf, sizeof(buf))) ev.name = buf;
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(50.0f);
+            ImGui::DragFloat("##evTime", &ev.time, 0.005f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Instante del ciclo, normalizado (0 = inicio, 1 = final).");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("x")) quitarEvento = k;
+            ImGui::PopID();
+        }
+        if (quitarEvento >= 0)
+            stMut.events.erase(stMut.events.begin() + quitarEvento);
+        if (ImGui::Button("+ evento##addEvent", ImVec2(140.0f, 0.0f)))
+            stMut.events.push_back({ "", 0.5f });
+        ImGui::PopID();
         ImGui::PopID();
 
         ImGui::EndGroup();

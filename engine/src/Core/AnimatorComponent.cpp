@@ -637,8 +637,33 @@ namespace DonTopo
         }
     }
 
+    void AnimatorComponent::collectEvents(const State& st, double ticks0, double ticks1)
+    {
+        if (st.events.empty() || st.duration <= 0.0f || ticks1 <= ticks0) return;
+        const double dur = st.duration;
+        for (const auto& ev : st.events)
+        {
+            // Instantes k·dur + c, k >= 0, dentro de [ticks0, ticks1). El reloj
+            // acumulado no tiene wrap, así que cruzar el loop o saltarse ciclos
+            // enteros con un dt grande sale del mismo cálculo.
+            const double c    = (double)ev.time * dur;
+            double       kMin = std::ceil((ticks0 - c) / dur);
+            if (kMin < 0.0) kMin = 0.0;
+            double       kMax = std::ceil((ticks1 - c) / dur) - 1.0;
+            if (!st.loop) kMax = std::min(kMax, 0.0);
+            if (kMax < kMin) continue;
+            // Tope: un hitch de varios segundos no debe llenar la lista.
+            const double veces = std::min(kMax - kMin + 1.0, (double)kMaxEventCyclesPerUpdate);
+            for (int i = 0; i < (int)veces; i++)
+                m_firedEvents.push_back(ev.name);
+        }
+    }
+
     void AnimatorComponent::update(float dt, bool evaluateTransitions)
     {
+        // Solo lo de ESTE update: se vacía antes de cualquier return.
+        m_firedEvents.clear();
+
         if (m_currentState < 0 || m_currentState >= (int)m_states.size())
         {
             m_currentState = m_entryState;
@@ -679,6 +704,12 @@ namespace DonTopo
         }
 
         if (!evaluateTransitions) return;
+
+        // Eventos ANTES de las transiciones: si este update sale del estado,
+        // su tramo final ya ha disparado. Solo el estado actual; el que se
+        // apaga en un fade no, o las pisadas saldrían dobles.
+        if (conDuracion)
+            collectEvents(actual, ticks0, m_stateTicks);
 
         const double n0 = conDuracion ? ticks0 / actual.duration : 0.0;
         const double n1 = conDuracion ? m_stateTicks / actual.duration : 0.0;

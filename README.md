@@ -681,7 +681,9 @@ over a duration in seconds (0 = instant cut, the default, and what every old sce
 a state can also be a **1D blend** of any number of its clips: each clip has a threshold on a
 float parameter, and the two clips around the parameter's value mix linearly (below the first
 threshold or above the last, only that clip plays; with equal thresholds the first one wins).
-Scenes saved with the old two-clip blend load with the same pose. The component is opt-in:
+Scenes saved with the old two-clip blend load with the same pose. Each state can also
+carry named **animation events** at normalized times of its cycle, delivered to Lua as
+`OnAnimationEvent`. The component is opt-in:
 **Properties → Add → Animator**, greyed out on non-skinned objects (an Animator has no clips
 to name without a skeleton).
 
@@ -870,9 +872,11 @@ slider that changes it. A pass that measured nothing reads `--`, never `0.000 ms
 Gameplay is scripted in **Lua 5.4** (sol2). Attach one or more `ScriptComponent`s to a
 GameObject via **Properties → Add → Script**; the scripts themselves are `.lua` files
 under `Scripts/`, one global table per file, with a Unity-style lifecycle
-(`Awake`/`Start`/`Update`/`FixedUpdate`/`LateUpdate`/`OnDestroy` plus the trigger and
-collision callbacks) and serializable properties that show up in Properties on their
-own.
+(`Awake`/`Start`/`Update`/`FixedUpdate`/`LateUpdate`/`OnDestroy` plus the trigger,
+collision and animation-event callbacks) and serializable properties that show up in
+Properties on their own. `OnAnimationEvent(name)` fires on every script of a GameObject
+whose Animator crosses one of its current state's events: Play only, once per cycle
+(twice if a long frame skips two), and during a cross-fade only the incoming state fires.
 
 They are edited in the built-in **Script Editor** panel — multi-tab, Lua highlighting,
 a live syntax check with a status bar, find/replace (`Ctrl+F`), go-to-line (`Ctrl+G`),

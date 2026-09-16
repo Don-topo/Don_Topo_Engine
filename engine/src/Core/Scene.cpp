@@ -558,6 +558,14 @@ namespace DonTopo
             // que traen todas las escenas anteriores a esta opción.
             if (s.lockRootMotion)
                 sj["lockRootMotion"] = true;
+            // Eventos: solo si hay alguno, como el blend.
+            if (!s.events.empty())
+            {
+                nlohmann::json eventos = nlohmann::json::array();
+                for (const auto& ev : s.events)
+                    eventos.push_back({ {"name", ev.name}, {"time", ev.time} });
+                sj["events"] = std::move(eventos);
+            }
             // Velocidad: solo si no es la de siempre (x1, sin multiplicador).
             if (s.speed != 1.0f)
                 sj["speed"] = s.speed;
@@ -684,6 +692,24 @@ namespace
                 }
                 // Ausente en toda escena anterior al bloqueo de raíz: false.
                 st.lockRootMotion = s.value("lockRootMotion", false);
+                // Ausentes en escenas anteriores a los eventos: ninguno.
+                if (s.contains("events") && s["events"].is_array())
+                {
+                    const std::string ctxEv = "animator.state." + st.name + ".events";
+                    for (const auto& ej : s["events"])
+                    {
+                        if (!ej.is_object()) continue;
+                        AnimatorComponent::AnimationEvent ev;
+                        ev.name = ej.value("name", std::string());
+                        ev.time = readFloat(ej, "time", 0.0f, warnings, ctxEv);
+                        if (ev.time < 0.0f || ev.time > 1.0f)
+                        {
+                            if (warnings) warnings->push_back(ctxEv + ": time fuera de [0,1], se ajusta");
+                            ev.time = std::clamp(ev.time, 0.0f, 1.0f);
+                        }
+                        st.events.push_back(std::move(ev));
+                    }
+                }
                 // Ausentes en escenas anteriores a la velocidad por estado: x1.
                 st.speed      = readFloat(s, "speed", 1.0f, warnings, "animator.state." + st.name + ".speed");
                 st.speedParam = s.value("speedParam", std::string());
