@@ -970,9 +970,9 @@ struct D3D12Renderer::Impl {
         uint32_t prevClipBase = 0;
         float    prevAnimTime = 0.0f;
         float    blendWeight  = 1.0f;
-        // Bloqueo del movimiento de raíz (traslación del hueso raíz clavada a
-        // su bind pose). false = comportamiento de siempre.
-        bool     lockRootMotion = false;
+        // Modo de la raíz: 0 libre, 1 clavada a bind, 2 solo X y Z clavadas
+        // (root motion). 0 = comportamiento de siempre.
+        uint32_t rootMotionMode = 0;
         // Quién manda en animTime. En cuanto alguien de fuera lo mueve
         // —updateAnimation o setAnimationState— el backend deja de avanzarlo por
         // su cuenta: los dos relojes sumando dejarían el clip al doble.
@@ -3572,7 +3572,7 @@ void D3D12Renderer::Impl::recordSkinning()
         push.prevAnimTime = object.prevAnimTime;
         push.prevClipBase = object.prevClipBase;
         push.blendWeight  = object.blendWeight;
-        push.lockRootMotion = object.lockRootMotion ? 1u : 0u;
+        push.lockRootMotion = object.rootMotionMode;
         push.animTime    = object.animTime;
         push.boneCount   = object.boneCount;
         push.vertexCount = object.vertexCount;
@@ -9984,7 +9984,7 @@ void D3D12Renderer::setAnimationState(int index, uint32_t clipIndex, float animT
     character.blendWeight          = 1.0f;
     // Y suelta el bloqueo de raíz por lo mismo: lo fija setAnimationBlend cada
     // frame para quien lo quiera.
-    character.lockRootMotion       = false;
+    character.rootMotionMode       = 0;
     // El Animator del GameObject es el dueño del reloj: el backend no vuelve a
     // sumarle tiempo por su cuenta.
     character.externalClock = true;
@@ -9992,7 +9992,7 @@ void D3D12Renderer::setAnimationState(int index, uint32_t clipIndex, float animT
 
 void D3D12Renderer::setAnimationBlend(int index, uint32_t clipIndex, float animTime,
                                       uint32_t prevClipIndex, float prevAnimTime, float weight,
-                                      bool lockRootMotion)
+                                      uint32_t rootMotionMode)
 {
     setAnimationState(index, clipIndex, animTime);
     Impl& d = *m_impl;
@@ -10002,7 +10002,7 @@ void D3D12Renderer::setAnimationBlend(int index, uint32_t clipIndex, float animT
     character.prevClipBase         = clampClipIndex(prevClipIndex, character.clipCount) * character.boneCount;
     character.prevAnimTime         = prevAnimTime;
     character.blendWeight          = (weight < 0.0f) ? 0.0f : (weight > 1.0f ? 1.0f : weight);
-    character.lockRootMotion       = lockRootMotion;
+    character.rootMotionMode       = rootMotionMode;
 }
 
 size_t D3D12Renderer::skinnedCount() const

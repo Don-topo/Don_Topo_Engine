@@ -105,6 +105,12 @@ namespace DonTopo
                 float       time = 0.0f;
             };
 
+            // Qué hace la traslación de la raíz del clip. Off: la pose la
+            // mueve (lo de siempre). Lock: se clava a su bind y el clip se ve
+            // en el sitio. Apply: la GPU clava solo X y Z (el vaivén vertical
+            // se ve) y el desplazamiento horizontal mueve al GameObject.
+            enum class RootMotion { Off, Lock, Apply };
+
             struct State
             {
                 std::string name;
@@ -141,17 +147,11 @@ namespace DonTopo
                 // nodo borrado en imgui-node-editor, que los cachea por id. NO se
                 // serializa (ver Scene.cpp): se regenera en addState al cargar.
                 int         editorId = -1;
-                // Bloqueo del movimiento de raíz: la traslación del hueso raíz
-                // (el de parentIndex < 0) vuelve a la de su bind pose en los
-                // TRES ejes, así que un clip que desplaza el modelo —un "correr"
-                // exportado con desplazamiento— se reproduce en el sitio. La
-                // rotación y la escala de la raíz NO se tocan, y el resto de
-                // huesos animan igual. Esto NO es root motion: el desplazamiento
-                // se descarta, no se traslada al GameObject.
-                //
-                // Va AL FINAL del struct y false es el comportamiento de
-                // siempre, que es lo que trae toda escena guardada sin él.
-                bool        lockRootMotion = false;
+                // Traslación de la raíz (el hueso de parentIndex < 0), ver
+                // RootMotion. La rotación y la escala de la raíz NO se tocan en
+                // ningún modo. Off es lo que traen todas las escenas guardadas
+                // sin el campo.
+                RootMotion  rootMotion = RootMotion::Off;
                 // --- Velocidad (como el Speed + Multiplier de Unity) ---
                 // Ritmo = ticksPerSecond x speed x valor de speedParam (si es un
                 // float declarado; si no, x1). Negativo o NaN congela (0): ir
@@ -329,13 +329,12 @@ namespace DonTopo
             // principio de cada update: quien los lea una vez por frame los ve
             // una sola vez.
             const std::vector<std::string>& firedEvents() const { return m_firedEvents; }
-            // Bloqueo del movimiento de raíz de la pose que sale a la GPU.
+            // Modo de raíz de la pose que sale a la GPU: 0 Off, 1 Lock, 2 Apply.
             // Durante un cross-fade manda el estado DESTINO —el mismo que aporta
-            // poseClipB—: el push constant lleva UN solo flag para toda la
+            // poseClipB—: el push constant lleva UN solo modo para toda la
             // mezcla, y el destino es el estado al que se está entrando, así que
-            // la pose acaba de acuerdo con él. Un origen bloqueado deja de serlo
-            // en cuanto arranca la transición hacia un estado que no lo está.
-            bool  poseLockRootMotion() const;
+            // la pose acaba de acuerdo con él.
+            uint32_t poseRootMotionMode() const;
             // Nombre del estado actual, "" si el grafo está vacío. Lo consume Lua.
             std::string currentStateName() const;
             // Nombre del estado que se está apagando en un cross-fade, "" si no

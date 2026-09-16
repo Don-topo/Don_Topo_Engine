@@ -259,13 +259,27 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         if (ImGui::Checkbox("loop", &loop))
             anim->statesMutable()[i].loop = loop;
 
-        // Bloqueo del movimiento de raíz: un clip que desplaza el modelo
-        // ("correr" exportado con desplazamiento) se reproduce en el sitio.
-        bool lockRoot = states[i].lockRootMotion;
-        if (ImGui::Checkbox("lock root motion", &lockRoot))
-            anim->statesMutable()[i].lockRootMotion = lockRoot;
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Clava la traslacion del hueso raiz a su bind pose: el clip se reproduce en el sitio. La rotacion de la raiz y el resto de huesos animan igual.");
+        // Modo de la raíz. RadioButton y no combo: una lista dentro del nodo
+        // se abre en espacio de canvas (ver drawBlendPickPopup).
+        {
+            using RM = AnimatorComponent::RootMotion;
+            int modo = (int)states[i].rootMotion;
+            ImGui::TextUnformatted("raiz:");
+            ImGui::SameLine();
+            if (ImGui::RadioButton("normal##rm", modo == 0)) modo = 0;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("La pose mueve la raiz: el clip se desplaza con su animacion.");
+            ImGui::SameLine();
+            if (ImGui::RadioButton("bloq.##rm", modo == 1)) modo = 1;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Clava la traslacion de la raiz a su bind pose: el clip se reproduce en el sitio. La rotacion de la raiz y el resto de huesos animan igual.");
+            ImGui::SameLine();
+            if (ImGui::RadioButton("root motion##rm", modo == 2)) modo = 2;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("El avance horizontal de la raiz mueve al GameObject (con Rigidbody dinamico, como velocidad). La Y se queda en la pose y la rotacion no se aplica.");
+            if (modo != (int)states[i].rootMotion)
+                anim->statesMutable()[i].rootMotion = (RM)modo;
+        }
 
         // Velocidad del estado y parámetro float que la multiplica (opcional).
         // DragFloat en vivo: el undo lo recoge el tracker del grafo.

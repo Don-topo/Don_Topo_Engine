@@ -4176,12 +4176,12 @@ static AnimatorComponent makeRootLockFadeGraph(bool lockFrom, bool lockTo)
     AnimatorComponent::State from;
     from.name = "Walk"; from.clipName = "Walk";
     from.clipIndex = 0; from.duration = 40.0f; from.ticksPerSecond = 20.0f;
-    from.lockRootMotion = lockFrom;
+    from.rootMotion = lockFrom ? AnimatorComponent::RootMotion::Lock : AnimatorComponent::RootMotion::Off;
 
     AnimatorComponent::State to;
     to.name = "Run"; to.clipName = "Run";
     to.clipIndex = 1; to.duration = 100.0f; to.ticksPerSecond = 50.0f;
-    to.lockRootMotion = lockTo;
+    to.rootMotion = lockTo ? AnimatorComponent::RootMotion::Lock : AnimatorComponent::RootMotion::Off;
 
     a.addState(from);
     a.addState(to);
@@ -4208,19 +4208,19 @@ static void test_crossfade_root_lock_follows_destination_state()
     AnimatorComponent a = makeRootLockFadeGraph(false, true);
     a.bindClips(mesh, nullptr);
     a.update(0.0f, true);
-    CHECK(!a.poseLockRootMotion());
+    CHECK(a.poseRootMotionMode() == 0u);
     a.setBool("go", true);
     a.update(0.0f, true);
     a.update(0.15f, true);
     CHECK(nearlyEqual(a.blendWeight(), 0.3f));
-    CHECK(a.poseLockRootMotion());
+    CHECK(a.poseRootMotionMode() == 1u);
 
     const glm::mat4 mezclaLibre = evalLocalXformBlended(
         p, (size_t)a.poseClipA() * B, (size_t)a.poseClipB() * B, 0,
         a.poseTimeA(), a.poseTimeB(), a.poseWeight(), false);
     const glm::mat4 mezclaBloqueada = evalLocalXformBlended(
         p, (size_t)a.poseClipA() * B, (size_t)a.poseClipB() * B, 0,
-        a.poseTimeA(), a.poseTimeB(), a.poseWeight(), a.poseLockRootMotion());
+        a.poseTimeA(), a.poseTimeB(), a.poseWeight(), a.poseRootMotionMode() == 1u);
 
     // mix(4, 10, 0.3) = 5.8 sin bloqueo; con bloqueo, la traslación de bind pose.
     CHECK(nearlyEqual(mezclaLibre[3].x, 5.8f));
@@ -4233,12 +4233,12 @@ static void test_crossfade_root_lock_follows_destination_state()
     AnimatorComponent b = makeRootLockFadeGraph(true, false);
     b.bindClips(mesh, nullptr);
     b.update(0.0f, true);
-    CHECK(b.poseLockRootMotion());
+    CHECK(b.poseRootMotionMode() == 1u);
     b.setBool("go", true);
     b.update(0.0f, true);
     b.update(0.15f, true);
     CHECK(b.blending());
-    CHECK(!b.poseLockRootMotion());
+    CHECK(b.poseRootMotionMode() == 0u);
 }
 
 // Round-trip de escena con un estado bloqueado y otro no en el MISMO grafo.
@@ -4250,9 +4250,9 @@ static void test_root_lock_survives_scene_round_trip(PhysicsManager& pm, AudioMa
 
     auto a = std::make_shared<AnimatorComponent>();
     AnimatorComponent::State run;
-    run.name = "Run"; run.clipName = "ClipRun"; run.lockRootMotion = true;
+    run.name = "Run"; run.clipName = "ClipRun"; run.rootMotion = AnimatorComponent::RootMotion::Lock;
     AnimatorComponent::State jump;
-    jump.name = "Jump"; jump.clipName = "ClipJump"; jump.lockRootMotion = false;
+    jump.name = "Jump"; jump.clipName = "ClipJump"; jump.rootMotion = AnimatorComponent::RootMotion::Off;
     a->addState(run);
     a->addState(jump);
     go->setAnimator(a);
@@ -4264,8 +4264,8 @@ static void test_root_lock_survives_scene_round_trip(PhysicsManager& pm, AudioMa
     for (auto& node : j["root"]["children"])
     {
         if (!node.contains("animator")) continue;
-        CHECK(node["animator"]["states"][0].contains("lockRootMotion"));
-        CHECK(!node["animator"]["states"][1].contains("lockRootMotion"));
+        CHECK(node["animator"]["states"][0].contains("rootMotion"));
+        CHECK(!node["animator"]["states"][1].contains("rootMotion"));
         checked = true;
     }
     CHECK(checked);
@@ -4278,8 +4278,8 @@ static void test_root_lock_survives_scene_round_trip(PhysicsManager& pm, AudioMa
 
     const auto& st = found->getAnimator()->states();
     CHECK(st.size() == 2u);
-    CHECK(st[0].lockRootMotion);
-    CHECK(!st[1].lockRootMotion);
+    CHECK(st[0].rootMotion == AnimatorComponent::RootMotion::Lock);
+    CHECK(st[1].rootMotion == AnimatorComponent::RootMotion::Off);
 }
 
 // Retrocompatibilidad: un estado guardado antes de esta feature no trae la clave
@@ -4292,7 +4292,7 @@ static void test_state_without_lock_root_motion_field_loads(PhysicsManager& pm, 
 
     auto a = std::make_shared<AnimatorComponent>();
     AnimatorComponent::State s;
-    s.name = "Run"; s.clipName = "ClipRun"; s.lockRootMotion = true;
+    s.name = "Run"; s.clipName = "ClipRun"; s.rootMotion = AnimatorComponent::RootMotion::Lock;
     a->addState(s);
     go->setAnimator(a);
 
@@ -4302,7 +4302,7 @@ static void test_state_without_lock_root_motion_field_loads(PhysicsManager& pm, 
     for (auto& node : j["root"]["children"])
     {
         if (!node.contains("animator")) continue;
-        node["animator"]["states"][0].erase("lockRootMotion");
+        node["animator"]["states"][0].erase("rootMotion");
         stripped = true;
     }
     CHECK(stripped);
@@ -4316,7 +4316,7 @@ static void test_state_without_lock_root_motion_field_loads(PhysicsManager& pm, 
 
     const auto& st = found->getAnimator()->states()[0];
     CHECK(st.name == "Run");
-    CHECK(!st.lockRootMotion);
+    CHECK(st.rootMotion == AnimatorComponent::RootMotion::Off);
 }
 
 // H4 de docs/core-audit.md: removeState y setEntryState terminaban en reset(),
@@ -4686,7 +4686,7 @@ static std::vector<GraphMutation> graphMutations()
         { "state.blendEntry.threshold", [](A& a) { a.statesMutable()[0].blendEntries[0].threshold = 2.0f; } },
         { "state.addBlendEntry",        [](A& a) { a.statesMutable()[0].blendEntries.push_back(entrada("idle", -1, 0.0f, 3.0f)); } },
         { "state.events",               [](A& a) { a.statesMutable()[0].events.push_back({ "paso", 0.5f }); } },
-        { "state.lockRootMotion", [](A& a) { a.statesMutable()[0].lockRootMotion = true; } },
+        { "state.rootMotion",     [](A& a) { a.statesMutable()[0].rootMotion = A::RootMotion::Apply; } },
         { "state.speed",          [](A& a) { a.statesMutable()[0].speed = 2.0f; } },
         { "state.speedParam",     [](A& a) { a.statesMutable()[0].speedParam = "speed"; } },
         { "addState",             [](A& a) { A::State s; s.name = "C"; s.clipName = "idle"; a.addState(s); } },
@@ -5012,17 +5012,17 @@ struct SkinnedRendererDoble
     float     timeB         = -1.0f;
     float     timeA         = -1.0f;
     float     weight        = -1.0f;
-    bool      lockRoot      = false;
+    uint32_t  rootMode      = 0xFFFFFFFFu;
     float     dtSinAnimator = -1.0f;
     glm::mat4 transform     = glm::mat4(0.0f);
     float     ssr           = -1.0f;
 
     void setSkinnedMeshVisible(int, bool v) { orden.push_back("visible"); visible = v; }
     void updateAnimation(int, float dt)     { orden.push_back("updateAnimation"); dtSinAnimator = dt; }
-    void setAnimationBlend(int, uint32_t cb, float tb, uint32_t ca, float ta, float w, bool lock)
+    void setAnimationBlend(int, uint32_t cb, float tb, uint32_t ca, float ta, float w, uint32_t mode)
     {
         orden.push_back("blend");
-        clipB = cb; timeB = tb; clipA = ca; timeA = ta; weight = w; lockRoot = lock;
+        clipB = cb; timeB = tb; clipA = ca; timeA = ta; weight = w; rootMode = mode;
     }
     void setSkinnedTransform(int, const glm::mat4& m) { orden.push_back("transform"); transform = m; }
     void setSkinnedSsr(int, float s)                  { orden.push_back("ssr"); ssr = s; }
@@ -5111,7 +5111,7 @@ static void test_apply_skinned_frame_passes_pose_b_then_a()
     CHECK(nearlyEqual(r.timeB, a->poseTimeB()));
     CHECK(nearlyEqual(r.timeA, a->poseTimeA()));
     CHECK(nearlyEqual(r.weight, a->poseWeight()));
-    CHECK(r.lockRoot == a->poseLockRootMotion());
+    CHECK(r.rootMode == a->poseRootMotionMode());
 }
 
 // Sin Animator el reloj lo lleva el backend, como antes de que el componente
@@ -6163,6 +6163,41 @@ static void test_events_scene_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(ev[1].name == "golpe" && nearlyEqual(ev[1].time, 1.0f));
 }
 
+// El bool viejo lockRootMotion carga como Lock; "apply" va y vuelve.
+static void test_root_motion_mode_migration(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s;
+    s.name = "Viejo"; s.clipName = "Run"; a->addState(s);
+    s.name = "Nuevo"; s.clipName = "Run"; s.rootMotion = AnimatorComponent::RootMotion::Apply; a->addState(s);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+    bool tocado = false;
+    for (auto& node : j["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        CHECK(node["animator"]["states"][1]["rootMotion"] == "apply");
+        node["animator"]["states"][0]["lockRootMotion"] = true;
+        tocado = true;
+    }
+    CHECK(tocado);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& st = found->getAnimator()->states();
+    CHECK(st.size() == 2u);
+    if (st.size() != 2u) return;
+    CHECK(st[0].rootMotion == AnimatorComponent::RootMotion::Lock);
+    CHECK(st[1].rootMotion == AnimatorComponent::RootMotion::Apply);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -6280,6 +6315,7 @@ int main()
     test_event_fading_out_state_is_silent();
     test_fired_events_cleared_each_update();
     test_events_scene_round_trip(pm, am);
+    test_root_motion_mode_migration(pm, am);
     test_state_without_blend_fields_loads(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);

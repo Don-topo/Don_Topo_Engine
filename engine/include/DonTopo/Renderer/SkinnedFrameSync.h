@@ -52,7 +52,7 @@ namespace DonTopo
                                        (uint32_t)anim->poseClipA(),
                                        anim->poseTimeA(),
                                        anim->poseWeight(),
-                                       anim->poseLockRootMotion());
+                                       anim->poseRootMotionMode());
         }
         else
         {

@@ -3977,12 +3977,12 @@ namespace DonTopo {
         // lo mismo se suelta el bloqueo de raíz: quien lo quiera pasa por
         // setAnimationBlend, que lo fija cada frame.
         obj.blendWeight = 1.0f;
-        obj.lockRootMotion = false;
+        obj.rootMotionMode = 0;
     }
 
     void Renderer::setAnimationBlend(int index, uint32_t clipIndex, float animTime,
                                      uint32_t prevClipIndex, float prevAnimTime, float weight,
-                                     bool lockRootMotion)
+                                     uint32_t rootMotionMode)
     {
         setAnimationState(index, clipIndex, animTime);
         if (index < 0 || index >= (int)m_skinnedObjects.size()) return;
@@ -3992,7 +3992,7 @@ namespace DonTopo {
         obj.prevClip     = clampClipIndex(prevClipIndex, obj.clipCount);
         obj.prevAnimTime = prevAnimTime;
         obj.blendWeight  = (weight < 0.0f) ? 0.0f : (weight > 1.0f ? 1.0f : weight);
-        obj.lockRootMotion = lockRootMotion;
+        obj.rootMotionMode = rootMotionMode;
     }
 
     void Renderer::setSkinnedTransform(int index, const glm::mat4& t)
