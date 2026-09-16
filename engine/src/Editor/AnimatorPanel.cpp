@@ -866,7 +866,12 @@ void AnimatorPanel::drawAnimationSources(EditorContext& ctx, GameObject* go)
         const std::string label = file + "  (" + std::to_string(src.clipNames.size()) + " clips)"
                                 + (src.builtin ? "  [modelo]" : "");
 
-        const bool open = ImGui::TreeNodeEx("##src", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", label.c_str());
+        // AllowOverlap: el nodo ocupa la fila entera (SpanAvailWidth) y la "X"
+        // se pinta ENCIMA de él. Sin el flag, ImGui da el clic al primer item
+        // enviado, el nodo, y la X no hacía nada más que plegar la fila.
+        const bool open = ImGui::TreeNodeEx("##src",
+                                            ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_AllowOverlap,
+                                            "%s", label.c_str());
 
         // La fuente builtin es el FBX del modelo: quitarla dejaría la malla sin
         // el fichero que la creó, así que el botón existe pero deshabilitado
