@@ -12,6 +12,10 @@
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Renderer/SkinnedFrameSync.h"
 #include "DonTopo/Renderer/RootMotion.h"
+#include "DonTopo/Core/RootMotionApply.h"
+#include "DonTopo/Physics/Rigidbody.h"
+#include "DonTopo/Physics/Colliders/BoxCollider.h"
+#include <glm/gtc/matrix_transform.hpp>
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/AnimatorGraphUndo.h"
 #include "DonTopo/Core/AnimatorSerialization.h"
@@ -6367,6 +6371,68 @@ static void test_root_motion_crossfade_uses_prev_clock()
     CHECK(nearlyEqual(rootMotionDelta(m, a).x, 0.75f * prev + 0.25f * 3.75f, 0.01f));
 }
 
+// Sin Rigidbody: el transform avanza el delta en mundo (con la escala del
+// objeto) y, con padre rotado, la posición local lo compensa.
+static void test_apply_root_motion_moves_transform()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    go->localTransform = glm::scale(glm::mat4(1.0f), glm::vec3(0.5f));
+    scene.getRoot().updateWorldTransforms();
+    applyRootMotion(*go, glm::vec3(4.0f, 9.0f, 0.0f), 0.016f);
+    CHECK(nearlyEqual(go->worldTransform[3].x, 2.0f));
+    CHECK(nearlyEqual(go->worldTransform[3].y, 0.0f));
+
+    GameObject* padre = scene.addGameObject("Padre");
+    padre->localTransform = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0, 1, 0));
+    GameObject* hijo = scene.addGameObject("Hijo", padre);
+    scene.getRoot().updateWorldTransforms();
+    applyRootMotion(*hijo, glm::vec3(1.0f, 0.0f, 0.0f), 0.016f);
+    // X del hijo en modelo = −Z en mundo (rotación de 90° en Y del padre).
+    CHECK(nearlyEqual(hijo->worldTransform[3].z, -1.0f));
+    CHECK(nearlyEqual(hijo->worldTransform[3].x, 0.0f));
+}
+
+// Con Rigidbody dinámico: velocidad X/Z = delta/dt y la Y se conserva; el
+// transform no se toca.
+static void test_apply_root_motion_sets_rigidbody_velocity(PhysicsManager& pm)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto rb  = std::make_shared<Rigidbody>();
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/true);
+    pm.attachRigidbody(col, rb);
+    go->setRigidbody(rb);
+    rb->setVelocity(glm::vec3(0.0f, -3.0f, 0.0f));
+    scene.getRoot().updateWorldTransforms();
+
+    applyRootMotion(*go, glm::vec3(0.5f, 0.0f, 0.25f), 0.5f);
+    const glm::vec3 v = rb->getVelocity();
+    CHECK(nearlyEqual(v.x, 1.0f));
+    CHECK(nearlyEqual(v.z, 0.5f));
+    CHECK(nearlyEqual(v.y, -3.0f));
+    CHECK(nearlyEqual(go->worldTransform[3].x, 0.0f));
+}
+
+// applySkinnedFrame encadena el root motion ANTES de mandar el transform: el
+// backend recibe ya la posición avanzada en este mismo frame.
+static void test_apply_skinned_frame_applies_root_motion()
+{
+    Scene scene("Test");
+    GameObject* go = makeSkinnedGameObject(scene, std::make_shared<AnimatorComponent>(makeRootMotionGraph()));
+    go->setMesh(std::make_shared<SkinnedMesh>(makeRootMotionMesh()));
+    scene.getRoot().updateWorldTransforms();
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 1.0f, /*evaluateTransitions=*/true);   // 20 ticks = 5 en X
+    CHECK(nearlyEqual(go->worldTransform[3].x, 5.0f));
+    CHECK(nearlyEqual(r.transform[3].x, 5.0f));
+
+    // En Edit no se mueve.
+    applySkinnedFrame(*go, r, 1.0f, /*evaluateTransitions=*/false);
+    CHECK(nearlyEqual(go->worldTransform[3].x, 5.0f));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -6493,6 +6559,9 @@ int main()
     test_root_motion_crossfade_uses_prev_clock();
     test_root_motion_samples_only_in_play_with_apply();
     test_root_motion_space_is_model_y_up();
+    test_apply_root_motion_moves_transform();
+    test_apply_root_motion_sets_rigidbody_velocity(pm);
+    test_apply_skinned_frame_applies_root_motion();
     test_state_without_blend_fields_loads(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);
