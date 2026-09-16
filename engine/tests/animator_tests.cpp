@@ -11,6 +11,7 @@
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Renderer/SkinnedFrameSync.h"
+#include "DonTopo/Renderer/RootMotion.h"
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/AnimatorGraphUndo.h"
 #include "DonTopo/Core/AnimatorSerialization.h"
@@ -6202,6 +6203,137 @@ static void test_root_motion_mode_migration(PhysicsManager& pm, AudioManager& am
     CHECK(st[1].rootMotion == AnimatorComponent::RootMotion::Apply);
 }
 
+// ── Root motion ──────────────────────────────────────────────────────────────
+//
+// Malla sintética: esqueleto de un hueso raíz y clips cuya raíz avanza en X
+// linealmente `avance` unidades por ciclo de `dur` ticks (y a 1 de altura, con
+// Y creciente en el clip 2 para comprobar que se descarta).
+static SkinnedMesh makeRootMotionMesh()
+{
+    SkinnedMesh m;
+    m.skeleton.names = { "Hips" };
+    m.skeleton.parentIndex = { -1 };
+    m.skeleton.inverseBindPose = { glm::mat4(1.0f) };
+    m.skeleton.boneMap["Hips"] = 0;
+    auto clip = [](const char* n, float dur, glm::vec3 fin) {
+        AnimationClip c; c.name = n; c.duration = dur; c.ticksPerSecond = 20.0f;
+        BoneChannel ch; ch.boneIndex = 0;
+        ch.posKeys = { { 0.0f, glm::vec3(0.0f, 1.0f, 0.0f) }, { dur, fin } };
+        c.channels.push_back(ch);
+        return c;
+    };
+    m.animationClips = { clip("Walk", 40.0f, glm::vec3(10.0f, 1.0f, 0.0f)),
+                         clip("Run",  80.0f, glm::vec3(30.0f, 1.0f, 0.0f)),
+                         clip("Sube", 40.0f, glm::vec3(10.0f, 5.0f, 0.0f)) };
+    return m;
+}
+
+static void test_root_displacement_counts_cycles()
+{
+    const SkinnedMesh m = makeRootMotionMesh();
+    CHECK(nearlyEqual(rootDisplacement(m, 0, 40.0, 40.0, true).x, 10.0f));
+    CHECK(nearlyEqual(rootDisplacement(m, 0, 100.0, 40.0, true).x, 25.0f));
+    CHECK(nearlyEqual(rootDisplacement(m, 0, 100.0, 40.0, false).x, 10.0f));
+    CHECK(nearlyEqual(rootDisplacement(m, 0, 0.0, 40.0, true).x, 0.0f));
+}
+
+static AnimatorComponent makeRootMotionGraph(int clip = 0, float dur = 40.0f)
+{
+    AnimatorComponent a;
+    AnimatorComponent::State s;
+    s.name = "Walk"; s.clipName = "Walk"; s.clipIndex = clip; s.duration = dur;
+    s.ticksPerSecond = 20.0f; s.loop = true; s.rootMotion = AnimatorComponent::RootMotion::Apply;
+    a.addState(s);
+    a.setEntryState(0);
+    a.reset();
+    return a;
+}
+
+// Un update que cruza el wrap da el avance real, sin salto negativo.
+static void test_root_motion_delta_across_wrap()
+{
+    const SkinnedMesh m = makeRootMotionMesh();
+    AnimatorComponent a = makeRootMotionGraph();
+    a.update(1.9f, true);                          // 38 ticks
+    a.update(0.2f, true);                          // 38 -> 42
+    CHECK(nearlyEqual(rootMotionDelta(m, a).x, 1.0f));
+}
+
+// Solo X y Z: la Y de la raíz se queda en la pose.
+static void test_root_motion_delta_drops_y()
+{
+    const SkinnedMesh m = makeRootMotionMesh();
+    AnimatorComponent a = makeRootMotionGraph(2);
+    a.update(1.0f, true);                          // 20 ticks: Y sube 2
+    const glm::vec3 d = rootMotionDelta(m, a);
+    CHECK(nearlyEqual(d.x, 5.0f));
+    CHECK(nearlyEqual(d.y, 0.0f));
+}
+
+// Blend 1D: cada clip en su fase y el delta ponderado.
+static void test_root_motion_delta_blend_weighted()
+{
+    const SkinnedMesh m = makeRootMotionMesh();
+    AnimatorComponent a = makeRootMotionGraph();
+    auto& s = a.statesMutable()[0];
+    s.blendParam = "speed"; s.clipThreshold = 0.0f;
+    s.blendEntries = { entrada("Run", 1, 80.0f, 1.0f) };
+    a.addParameter("speed", AnimatorComponent::ParamType::Float);
+    a.setFloat("speed", 0.5f);
+    a.update(1.0f, true);                          // fase 0,5: Walk 5, Run 15
+    CHECK(nearlyEqual(rootMotionDelta(m, a).x, 10.0f));
+}
+
+// Cross-fade entre dos Apply: 1 − w del que sale, w del que entra.
+static void test_root_motion_delta_crossfade_weighted()
+{
+    const SkinnedMesh m = makeRootMotionMesh();
+    AnimatorComponent a = makeRootMotionGraph();
+    AnimatorComponent::State b;
+    b.name = "Run"; b.clipName = "Run"; b.clipIndex = 1; b.duration = 40.0f;   // 30 por cada 40 ticks
+    b.ticksPerSecond = 20.0f; b.loop = true; b.rootMotion = AnimatorComponent::RootMotion::Apply;
+    a.addState(b);
+    a.addParameter("go", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 2.0f;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "go";
+    t.conditions.push_back(c);
+    a.addTransition(t);
+
+    a.setTrigger("go");
+    a.update(0.016f, true);                        // sale a Run con fade de 2 s
+    a.update(0.5f, true);                          // w = 0,25; 10 ticks cada uno
+    // Walk: 10 ticks = 2,5. Run (clip de 80 ticks estirado a 40): 10 ticks de
+    // la malla = 3,75. Delta = 0,75·2,5 + 0,25·3,75.
+    CHECK(a.blending());
+    CHECK(nearlyEqual(rootMotionDelta(m, a).x, 0.75f * 2.5f + 0.25f * 3.75f));
+}
+
+// Sin Apply, o en Edit, no hay muestras.
+static void test_root_motion_samples_only_in_play_with_apply()
+{
+    AnimatorComponent a = makeRootMotionGraph();
+    a.update(0.5f, false);
+    CHECK(a.rootMotionSamples().empty());
+    a.statesMutable()[0].rootMotion = AnimatorComponent::RootMotion::Lock;
+    a.update(0.5f, true);
+    CHECK(a.rootMotionSamples().empty());
+}
+
+// Espacio: en el FBX real la Y de la raíz es su mayor componente (altura de
+// cadera). Si falla, las claves de la raíz no están en espacio de modelo con Y
+// arriba y el diseño hay que revisarlo, no el test.
+static void test_root_motion_space_is_model_y_up()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    CHECK(!m.animationClips.empty());
+    if (m.animationClips.empty()) return;
+    const glm::vec3 p = sampleRootPosition(m, 0, 0.0);
+    CHECK(std::fabs(p.y) > std::fabs(p.x));
+    CHECK(std::fabs(p.y) > std::fabs(p.z));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -6320,6 +6452,13 @@ int main()
     test_fired_events_cleared_each_update();
     test_events_scene_round_trip(pm, am);
     test_root_motion_mode_migration(pm, am);
+    test_root_displacement_counts_cycles();
+    test_root_motion_delta_across_wrap();
+    test_root_motion_delta_drops_y();
+    test_root_motion_delta_blend_weighted();
+    test_root_motion_delta_crossfade_weighted();
+    test_root_motion_samples_only_in_play_with_apply();
+    test_root_motion_space_is_model_y_up();
     test_state_without_blend_fields_loads(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);

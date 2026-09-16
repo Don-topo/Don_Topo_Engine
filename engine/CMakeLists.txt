@@ -25,6 +25,7 @@ add_library(DonTopoCore STATIC
     src/Renderer/ModelLoader.cpp
     src/Renderer/SkinnedBounds.cpp
     src/Renderer/SkinnedMeshPacking.cpp
+    src/Renderer/RootMotion.cpp
     src/Renderer/SkinnedMeshAnimations.cpp
     src/Renderer/Cube.cpp
     src/Renderer/Sphere.cpp

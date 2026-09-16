@@ -329,6 +329,12 @@ namespace DonTopo
             // principio de cada update: quien los lea una vez por frame los ve
             // una sola vez.
             const std::vector<std::string>& firedEvents() const { return m_firedEvents; }
+            // Lo que avanzó cada clip con root motion en el ÚLTIMO update (solo
+            // Play y solo si el estado actual es Apply), con su peso en la pose.
+            // Ticks acumulados, sin wrap. Lo convierte en delta rootMotionDelta
+            // (Renderer/RootMotion.h), que es quien tiene los keyframes.
+            struct RootMotionSample { int clip; double ticks0; double ticks1; float duration; bool loop; float weight; };
+            const std::vector<RootMotionSample>& rootMotionSamples() const { return m_rootMotionSamples; }
             // Modo de raíz de la pose que sale a la GPU: 0 Off, 1 Lock, 2 Apply.
             // Durante un cross-fade manda el estado DESTINO —el mismo que aporta
             // poseClipB—: el push constant lleva UN solo modo para toda la
@@ -387,6 +393,10 @@ namespace DonTopo
             // [ticks0, ticks1), una vez por ciclo cruzado (solo el primero
             // sin loop), con tope de kMaxEventCyclesPerUpdate por evento.
             void collectEvents(const State& st, double ticks0, double ticks1);
+            // Rellena m_rootMotionSamples con lo avanzado en este update por el
+            // estado actual (y el que se apaga, en un fade). ticks0 y
+            // prevTicks0: los relojes acumulados ANTES de avanzar.
+            void collectRootMotion(double ticks0, double prevTicks0);
             static constexpr int kMaxEventCyclesPerUpdate = 16;
             // Ticks por segundo efectivos del estado: ticksPerSecond x speed x
             // parámetro multiplicador, nunca negativo.
@@ -395,7 +405,8 @@ namespace DonTopo
             // es un Float declarado: solo entonces hay mezcla que hacer.
             bool stateBlends(int stateIdx) const;
             // Los dos clips vecinos del parámetro, sus tiempos y el peso.
-            struct BlendPair { int clipA; float timeA; int clipB; float timeB; float weight; };
+            struct BlendPair { int clipA; float timeA; int clipB; float timeB; float weight;
+                               float durA = 0.0f; float durB = 0.0f; };   // duración de cada clip, ticks
             BlendPair stateBlendPair(int stateIdx) const;
             // Estático porque no toca estado: aísla los cuatro comparadores en
             // un sitio y sirve tanto a Int como a Float.
@@ -429,6 +440,10 @@ namespace DonTopo
             // float pierde resolución para decidir un cruce. No se serializa.
             double                  m_stateTicks   = 0.0;
             std::vector<std::string> m_firedEvents;
+            std::vector<RootMotionSample> m_rootMotionSamples;
+            // Reloj acumulado (sin wrap) del estado que se apaga en un fade:
+            // lo necesita el root motion para no saltar en su wrap.
+            double                  m_prevStateTicks = 0.0;
             float                   m_speed        = 1.0f;
 
             // Cross-fade en curso. m_prevState a -1 significa "sin mezcla", y es

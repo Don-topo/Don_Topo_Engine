@@ -353,7 +353,8 @@ namespace DonTopo
     AnimatorComponent::BlendPair AnimatorComponent::stateBlendPair(int stateIdx) const
     {
         const int clip = currentClipIndex();
-        BlendPair out{ clip, m_animTime, clip, m_animTime, 1.0f };
+        const float durActual = (stateIdx >= 0 && stateIdx < (int)m_states.size()) ? m_states[stateIdx].duration : 0.0f;
+        BlendPair out{ clip, m_animTime, clip, m_animTime, 1.0f, durActual, durActual };
         if (!stateBlends(stateIdx)) return out;
 
         const State& st    = m_states[stateIdx];
@@ -391,6 +392,9 @@ namespace DonTopo
         out.clipB  = clipDe(hi);
         out.timeB  = tiempoDe(hi);
         out.weight = (lo == hi) ? 1.0f : (p - loT) / (hiT - loT);
+        auto durDe = [&](int k) { return k < 0 ? st.duration : st.blendEntries[k].duration; };
+        out.durA   = durDe(lo);
+        out.durB   = durDe(hi);
         return out;
     }
 
@@ -659,10 +663,43 @@ namespace DonTopo
         }
     }
 
+    void AnimatorComponent::collectRootMotion(double ticks0, double prevTicks0)
+    {
+        const State& st = m_states[m_currentState];
+        // En un fade la pose usa el clip PRIMARIO de cada lado (ver poseClipB):
+        // el movimiento sale de lo mismo que se ve.
+        if (blending())
+        {
+            const float w = blendWeight();
+            m_rootMotionSamples.push_back({ st.clipIndex, ticks0, m_stateTicks, st.duration, st.loop, w });
+            if (m_prevState >= 0 && m_prevState < (int)m_states.size())
+            {
+                const State& prev = m_states[m_prevState];
+                if (prev.rootMotion == RootMotion::Apply && prev.duration > 0.0f)
+                    m_rootMotionSamples.push_back({ prev.clipIndex, prevTicks0, m_prevStateTicks,
+                                                    prev.duration, prev.loop, 1.0f - w });
+            }
+            return;
+        }
+        const BlendPair bp = stateBlendPair(m_currentState);
+        // Cada clip del blend va en la fase del principal: sus ticks acumulados
+        // son los del principal escalados a su duración.
+        const double escA = st.duration > 0.0f ? (double)bp.durA / st.duration : 0.0;
+        const double escB = st.duration > 0.0f ? (double)bp.durB / st.duration : 0.0;
+        if (bp.clipA == bp.clipB)
+        {
+            m_rootMotionSamples.push_back({ bp.clipA, ticks0 * escA, m_stateTicks * escA, bp.durA, st.loop, 1.0f });
+            return;
+        }
+        m_rootMotionSamples.push_back({ bp.clipA, ticks0 * escA, m_stateTicks * escA, bp.durA, st.loop, 1.0f - bp.weight });
+        m_rootMotionSamples.push_back({ bp.clipB, ticks0 * escB, m_stateTicks * escB, bp.durB, st.loop, bp.weight });
+    }
+
     void AnimatorComponent::update(float dt, bool evaluateTransitions)
     {
         // Solo lo de ESTE update: se vacía antes de cualquier return.
         m_firedEvents.clear();
+        m_rootMotionSamples.clear();
 
         if (m_currentState < 0 || m_currentState >= (int)m_states.size())
         {
@@ -677,6 +714,7 @@ namespace DonTopo
         const bool   conDuracion = actual.duration > 0.0f && actual.ticksPerSecond > 0.0f;
         const float  ritmo       = stateRate(actual);
         const double ticks0      = m_stateTicks;
+        const double prevTicks0  = m_prevStateTicks;
         if (conDuracion)
             m_stateTicks += (double)dt * ritmo;
         advanceClock(actual, ritmo, m_animTime, &m_finished, dt);
@@ -688,8 +726,11 @@ namespace DonTopo
         if (m_prevState >= 0)
         {
             if (m_prevState < (int)m_states.size())
+            {
                 advanceClock(m_states[m_prevState], stateRate(m_states[m_prevState]),
                              m_prevAnimTime, nullptr, dt);
+                m_prevStateTicks += (double)dt * stateRate(m_states[m_prevState]);
+            }
 
             m_blendElapsed += dt;
             if (m_blendDuration <= 0.0f || m_blendElapsed >= m_blendDuration)
@@ -710,6 +751,10 @@ namespace DonTopo
         // apaga en un fade no, o las pisadas saldrían dobles.
         if (conDuracion)
             collectEvents(actual, ticks0, m_stateTicks);
+
+        // Root motion con el mismo tramo: también antes de las transiciones.
+        if (conDuracion && actual.rootMotion == RootMotion::Apply)
+            collectRootMotion(ticks0, prevTicks0);
 
         const double n0 = conDuracion ? ticks0 / actual.duration : 0.0;
         const double n1 = conDuracion ? m_stateTicks / actual.duration : 0.0;
@@ -754,6 +799,7 @@ namespace DonTopo
             // el push constant, así que la mezcla anterior se corta aquí
             // (mismo criterio que Unity con su capa base).
             m_prevState     = m_currentState;
+            m_prevStateTicks = m_stateTicks;
             m_prevAnimTime  = m_animTime;
             m_blendElapsed  = 0.0f;
             m_blendDuration = duration;
@@ -761,6 +807,7 @@ namespace DonTopo
         else
         {
             // Corte seco: ni estado previo ni mezcla, el camino de siempre.
+            m_prevStateTicks = 0.0;
             m_prevState     = -1;
             m_prevAnimTime  = 0.0f;
             m_blendElapsed  = 0.0f;
