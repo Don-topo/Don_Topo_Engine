@@ -543,14 +543,16 @@ namespace DonTopo
                                   {"pos", nlohmann::json::array({ s.editorPos.x, s.editorPos.y })} };
             // Blend por parámetro: solo si el estado lo usa. Emitirlo siempre
             // llenaría de campos vacíos el .scene de cualquier grafo normal.
-            // blendClipIndex/blendDuration NO se guardan: son del FBX, los
-            // rellena bindClips igual que clipIndex.
-            if (!s.blendClipName.empty())
+            // clipIndex/duration de cada entrada NO se guardan: son del FBX,
+            // los rellena bindClips igual que el clipIndex del estado.
+            if (!s.blendEntries.empty())
             {
-                sj["blendClip"]  = s.blendClipName;
-                sj["blendParam"] = s.blendParam;
-                sj["blendMin"]   = s.blendMin;
-                sj["blendMax"]   = s.blendMax;
+                sj["blendParam"]    = s.blendParam;
+                sj["clipThreshold"] = s.clipThreshold;
+                nlohmann::json entradas = nlohmann::json::array();
+                for (const auto& e : s.blendEntries)
+                    entradas.push_back({ {"clip", e.clipName}, {"threshold", e.threshold} });
+                sj["blendEntries"] = std::move(entradas);
             }
             // Bloqueo de raíz: solo si está puesto. Ausente = false, que es lo
             // que traen todas las escenas anteriores a esta opción.
@@ -652,13 +654,34 @@ namespace
                 st.clipName = s.value("clip", std::string());
                 st.loop     = s.value("loop", true);
                 // Ausentes en escenas anteriores al blend por parámetro: sin
-                // blendClip el estado es de un solo clip, como siempre.
-                st.blendClipName = s.value("blendClip", std::string());
-                st.blendParam    = s.value("blendParam", std::string());
-                st.blendMin      = readFloat(s, "blendMin", 0.0f, warnings,
-                                              "animator.state." + st.name);
-                st.blendMax      = readFloat(s, "blendMax", 1.0f, warnings,
-                                              "animator.state." + st.name);
+                // entradas el estado es de un solo clip, como siempre.
+                const std::string ctxBlend = "animator.state." + st.name;
+                st.blendParam = s.value("blendParam", std::string());
+                if (s.contains("blendEntries") && s["blendEntries"].is_array())
+                {
+                    st.clipThreshold = readFloat(s, "clipThreshold", 0.0f, warnings, ctxBlend);
+                    for (const auto& ej : s["blendEntries"])
+                    {
+                        if (!ej.is_object()) continue;
+                        AnimatorComponent::BlendEntry e;
+                        e.clipName  = ej.value("clip", std::string());
+                        e.threshold = readFloat(ej, "threshold", 0.0f, warnings, ctxBlend + ".blendEntries");
+                        st.blendEntries.push_back(std::move(e));
+                    }
+                }
+                else if (!s.value("blendClip", std::string()).empty())
+                {
+                    // Formato anterior a N clips: el par (clip, blendClip) con
+                    // [blendMin, blendMax]. Como umbrales dan la MISMA pose,
+                    // incluidos span negativo (A/B salen intercambiados con el
+                    // peso complementario) y span 0 (el empate descarta la
+                    // entrada, como el peso 0 de antes).
+                    st.clipThreshold = readFloat(s, "blendMin", 0.0f, warnings, ctxBlend);
+                    AnimatorComponent::BlendEntry e;
+                    e.clipName  = s.value("blendClip", std::string());
+                    e.threshold = readFloat(s, "blendMax", 1.0f, warnings, ctxBlend);
+                    st.blendEntries.push_back(std::move(e));
+                }
                 // Ausente en toda escena anterior al bloqueo de raíz: false.
                 st.lockRootMotion = s.value("lockRootMotion", false);
                 // Ausentes en escenas anteriores a la velocidad por estado: x1.
