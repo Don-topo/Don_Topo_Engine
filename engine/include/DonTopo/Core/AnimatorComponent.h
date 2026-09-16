@@ -87,6 +87,16 @@ namespace DonTopo
                 bool  canTransitionToSelf = false;
             };
 
+            // Un clip extra de un blend 1D. El nombre es la autoría; índice y
+            // duración los resuelve rebindClips desde la malla y no se guardan.
+            struct BlendEntry
+            {
+                std::string clipName;
+                int         clipIndex = -1;
+                float       duration  = 0.0f;   // ticks
+                float       threshold = 0.0f;
+            };
+
             struct State
             {
                 std::string name;
@@ -103,19 +113,14 @@ namespace DonTopo
                 // el SkinnedMesh se reconstruye desde el FBX en cada carga y no
                 // se serializa, así que un loop guardado ahí se perdería.
                 bool        loop           = true;
-                // --- Blend por parámetro (dos clips en el mismo estado) ---
-                // Segundo clip de la mezcla, por NOMBRE igual que clipName.
-                // Vacío = estado de un solo clip, que es lo que hacía el motor
-                // antes de este campo y lo que traen las escenas viejas.
-                std::string blendClipName;
-                int         blendClipIndex = -1;   // lo resuelve rebindClips
-                float       blendDuration  = 0.0f; // ticks, cacheado del clip
-                // Parámetro float que manda en el peso, remapeado de
-                // [blendMin, blendMax] a [0, 1] y clampado. Vacío, o un
-                // parámetro no declarado, deja el peso a 0 (solo clipName).
-                std::string blendParam;
-                float       blendMin       = 0.0f;
-                float       blendMax       = 1.0f;
+                // --- Blend 1D por parámetro ---
+                // El clip principal (clipName) es una entrada más, con
+                // clipThreshold; blendEntries son los extra. Suenan los dos
+                // vecinos del valor de blendParam (ver stateBlendPair). Sin
+                // entradas, o con un parámetro no declarado, un solo clip.
+                std::string             blendParam;
+                float                   clipThreshold = 0.0f;
+                std::vector<BlendEntry> blendEntries;
                 // Posición del nodo en el canvas del AnimatorPanel.
                 glm::vec2   editorPos{0.0f};
                 // Id estable pa el nodo del canvas del editor (AnimatorPanel), NO
@@ -298,8 +303,8 @@ namespace DonTopo
             // relojes y el peso (pose = mix(A, B, w)). Resuelven los DOS
             // orígenes de mezcla que hay:
             //   - cross-fade en vuelo: A = estado que se apaga, B = el nuevo.
-            //   - si no, estado con blendClip: A = su clip, B = su blendClip,
-            //     peso del parámetro float.
+            //   - si no, estado con blend: los dos clips vecinos del valor del
+            //     parámetro entre sus umbrales, con peso lineal.
             //   - ninguno de los dos: A == B y peso 1 (una sola evaluación).
             // El cross-fade MANDA sobre el blend del estado: en el push
             // constant solo caben dos clips, así que mientras dura la
@@ -367,11 +372,12 @@ namespace DonTopo
             // Ticks por segundo efectivos del estado: ticksPerSecond x speed x
             // parámetro multiplicador, nunca negativo.
             float stateRate(const State& st) const;
-            // true si el estado tiene un segundo clip RESUELTO y un parámetro
-            // que existe: solo entonces hay mezcla que hacer.
-            bool  stateBlends(int stateIdx) const;
-            // Peso del blend del estado, ya remapeado y clampado.
-            float stateBlendWeight(int stateIdx) const;
+            // true si hay al menos una entrada con clip RESUELTO y blendParam
+            // es un Float declarado: solo entonces hay mezcla que hacer.
+            bool stateBlends(int stateIdx) const;
+            // Los dos clips vecinos del parámetro, sus tiempos y el peso.
+            struct BlendPair { int clipA; float timeA; int clipB; float timeB; float weight; };
+            BlendPair stateBlendPair(int stateIdx) const;
             // Estático porque no toca estado: aísla los cuatro comparadores en
             // un sitio y sirve tanto a Int como a Float.
             template <typename T>

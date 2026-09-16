@@ -285,24 +285,14 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 ImGui::SetTooltip("Parametro float que multiplica la velocidad (como el Multiplier de Unity).");
         }
 
-        // --- Blend por parámetro: segundo clip del estado ---
-        // El combo lista TODOS los clips de la malla (más "(ninguno)"), no solo
-        // los que ya usa el grafo: el motor admite cualquiera de ellos.
+        // --- Blend 1D: clips extra con su umbral ---
+        // Cada fila abre la lista de TODOS los clips de la malla con un botón y
+        // no BeginCombo: la lista se abre fuera del nodo (ver
+        // drawBlendPickPopup). Una entrada sin clip resuelto sale en rojo.
         auto& stMut = anim->statesMutable()[i];
-        if (const SkinnedMesh* mesh = go->getSkinnedMesh())
+        if (go->getSkinnedMesh())
         {
-            const std::string blendLabel = stMut.blendClipName.empty()
-                                           ? std::string("(ninguno)") : stMut.blendClipName;
-            // Botón y no BeginCombo: la lista se abre fuera del nodo (ver
-            // drawBlendPickPopup).
-            if (ImGui::Button(("blend: " + blendLabel + "##blend").c_str(), ImVec2(140.0f, 0.0f)))
-            {
-                m_blendPickRequested = true;
-                m_blendPickEditorId  = eid;
-                m_blendPickKind      = 0;
-            }
-
-            if (!stMut.blendClipName.empty())
+            if (!stMut.blendEntries.empty())
             {
                 // Solo parámetros float: son los únicos que dan un peso
                 // continuo. Que la lista salga vacía es la pista de que hay que
@@ -315,15 +305,47 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                     m_blendPickEditorId  = eid;
                     m_blendPickKind      = 1;
                 }
-
                 ImGui::SetNextItemWidth(60.0f);
-                ImGui::DragFloat("min", &stMut.blendMin, 0.01f);
+                ImGui::DragFloat("umbral##clipThr", &stMut.clipThreshold, 0.01f);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Umbral del clip principal del estado.");
+            }
+
+            int quitar = -1;
+            for (int k = 0; k < (int)stMut.blendEntries.size(); k++)
+            {
+                auto& e = stMut.blendEntries[k];
+                ImGui::PushID(k);
+                const bool roto = e.clipIndex < 0;
+                if (roto) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+                const std::string lbl = e.clipName.empty() ? std::string("(elige clip)") : e.clipName;
+                if (ImGui::Button((lbl + "##clip").c_str(), ImVec2(90.0f, 0.0f)))
+                {
+                    m_blendPickRequested = true;
+                    m_blendPickEditorId  = eid;
+                    m_blendPickKind      = 0;
+                    m_blendPickEntry     = k;
+                }
+                if (roto) ImGui::PopStyleColor();
                 ImGui::SameLine();
-                ImGui::SetNextItemWidth(60.0f);
-                ImGui::DragFloat("max", &stMut.blendMax, 0.01f);
+                ImGui::SetNextItemWidth(50.0f);
+                ImGui::DragFloat("##thr", &e.threshold, 0.01f);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("x")) quitar = k;
+                ImGui::PopID();
+            }
+            if (quitar >= 0)
+                stMut.blendEntries.erase(stMut.blendEntries.begin() + quitar);
 
-                if (stMut.blendClipIndex < 0)
-                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "blend: clip no resuelto");
+            if (ImGui::Button("+ blend clip##addBlend", ImVec2(140.0f, 0.0f)))
+            {
+                // Umbral por encima de todos: la entrada nueva no roba el peso
+                // a las que ya estaban hasta que el usuario la mueva.
+                float maxT = stMut.clipThreshold;
+                for (const auto& e : stMut.blendEntries) maxT = std::max(maxT, e.threshold);
+                AnimatorComponent::BlendEntry nueva;
+                nueva.threshold = maxT + 1.0f;
+                stMut.blendEntries.push_back(nueva);
             }
         }
         ImGui::PopID();
@@ -576,32 +598,33 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
     }
     else if (m_blendPickKind == 0)
     {
-        // Lista TODOS los clips de la malla (más "(ninguno)"), no solo los que
-        // ya usa el grafo: el motor admite cualquiera de ellos.
-        bool cambio = false;
-        if (ImGui::Selectable("(ninguno)", st.blendClipName.empty()))
+        // Lista TODOS los clips de la malla, no solo los que ya usa el grafo:
+        // el motor admite cualquiera de ellos, el principal incluido (en un 1D,
+        // el mismo clip con otro umbral hace de meseta). La entrada puede haber
+        // desaparecido: se quitó con la "x" con el popup abierto.
+        if (m_blendPickEntry < 0 || m_blendPickEntry >= (int)st.blendEntries.size())
         {
-            st.blendClipName.clear();
-            cambio = true;
+            ImGui::CloseCurrentPopup();
         }
-        for (const auto& c : mesh->animationClips)
+        else
         {
-            // Mezclar un clip consigo mismo no da nada nuevo, así que el
-            // primario no se ofrece como segundo.
-            if (c.name == st.clipName) continue;
-            if (ImGui::Selectable(c.name.c_str(), c.name == st.blendClipName))
+            auto& e = st.blendEntries[m_blendPickEntry];
+            bool cambio = false;
+            for (const auto& c : mesh->animationClips)
             {
-                st.blendClipName = c.name;
-                cambio = true;
+                if (ImGui::Selectable(c.name.c_str(), c.name == e.clipName))
+                {
+                    e.clipName = c.name;
+                    cambio = true;
+                }
             }
+            // El índice y la duración los resuelve rebindClips por nombre; sin
+            // esto la entrada quedaría a -1 hasta recargar la escena.
+            // rebindClips y no bindClips: puede estar corriendo Play Mode y
+            // bindClips reiniciaría el grafo y los parámetros del usuario.
+            if (cambio)
+                anim->rebindClips(*mesh, nullptr);
         }
-        // El índice y la duración del segundo clip los resuelve rebindClips
-        // por nombre; sin esto el estado quedaría con blendClipIndex a -1 y no
-        // mezclaría nada hasta recargar la escena. rebindClips y no bindClips:
-        // puede estar corriendo Play Mode y bindClips reiniciaría el grafo y
-        // los parámetros del usuario.
-        if (cambio)
-            anim->rebindClips(*mesh, nullptr);
     }
     else
     {

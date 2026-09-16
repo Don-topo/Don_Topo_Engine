@@ -339,64 +339,85 @@ namespace DonTopo
     {
         if (stateIdx < 0 || stateIdx >= (int)m_states.size()) return false;
         const State& st = m_states[stateIdx];
-        // blendClipIndex a -1 = el nombre no existe en la malla (bindClips ya
-        // avisó). Mezclar contra un índice inválido leería otro clip, o fuera
-        // del SSBO: el estado se comporta como uno normal y se ve el aviso.
-        if (st.blendClipName.empty() || st.blendClipIndex < 0) return false;
+        // Una entrada a -1 = el clip no existe en la malla (rebindClips ya
+        // avisó): mezclar contra ella leería otro clip o fuera del SSBO.
+        bool alguna = false;
+        for (const auto& e : st.blendEntries)
+            if (e.clipIndex >= 0) { alguna = true; break; }
+        if (!alguna) return false;
         // Un parámetro no declarado devolvería 0.0f en getFloat y clavaría el
         // peso en un extremo sin decir por qué; mejor no mezclar.
         return hasParam(st.blendParam, ParamType::Float);
     }
 
-    float AnimatorComponent::stateBlendWeight(int stateIdx) const
+    AnimatorComponent::BlendPair AnimatorComponent::stateBlendPair(int stateIdx) const
     {
-        if (!stateBlends(stateIdx)) return 0.0f;
-        const State& st = m_states[stateIdx];
-        const float  span = st.blendMax - st.blendMin;
-        // Rango degenerado (el usuario dejó min == max): sin él no hay mapeo
-        // posible, así que el segundo clip no entra.
-        if (std::fabs(span) < 1e-6f) return 0.0f;
-        const float w = (getFloat(st.blendParam) - st.blendMin) / span;
-        return w < 0.0f ? 0.0f : (w > 1.0f ? 1.0f : w);
+        const int clip = currentClipIndex();
+        BlendPair out{ clip, m_animTime, clip, m_animTime, 1.0f };
+        if (!stateBlends(stateIdx)) return out;
+
+        const State& st    = m_states[stateIdx];
+        const float  p     = getFloat(st.blendParam);
+        const float  phase = st.duration > 0.0f ? m_animTime / st.duration : 0.0f;
+
+        // Vecino de abajo (mayor umbral <= p) y de arriba (menor umbral > p),
+        // sin ordenar ni asignar memoria. -1 es el principal, que se mira
+        // primero: la comparación ESTRICTA hace que con umbrales iguales se
+        // quede el primero visto.
+        const int kNinguno = -2;
+        int   lo  = kNinguno, hi  = kNinguno;
+        float loT = 0.0f,     hiT = 0.0f;
+        auto considerar = [&](int k, float t) {
+            if (t <= p) { if (lo == kNinguno || t > loT) { lo = k; loT = t; } }
+            else        { if (hi == kNinguno || t < hiT) { hi = k; hiT = t; } }
+        };
+        considerar(-1, st.clipThreshold);
+        for (int k = 0; k < (int)st.blendEntries.size(); k++)
+            if (st.blendEntries[k].clipIndex >= 0)
+                considerar(k, st.blendEntries[k].threshold);
+
+        // Por debajo del primer umbral o por encima del último: solo el extremo.
+        if (lo == kNinguno) lo = hi;
+        if (hi == kNinguno) hi = lo;
+
+        // Todos en la MISMA fase normalizada del principal: un walk de 40
+        // ticks y un run de 100 mezclados por tiempo absoluto se desincronizan
+        // y las piernas patinan; por fase, el pie de apoyo de uno cae sobre el
+        // del otro.
+        auto clipDe   = [&](int k) { return k < 0 ? st.clipIndex : st.blendEntries[k].clipIndex; };
+        auto tiempoDe = [&](int k) { return k < 0 ? m_animTime : phase * st.blendEntries[k].duration; };
+        out.clipA  = clipDe(lo);
+        out.timeA  = tiempoDe(lo);
+        out.clipB  = clipDe(hi);
+        out.timeB  = tiempoDe(hi);
+        out.weight = (lo == hi) ? 1.0f : (p - loT) / (hiT - loT);
+        return out;
     }
 
     int AnimatorComponent::poseClipA() const
     {
-        return blending() ? previousClipIndex() : currentClipIndex();
+        return blending() ? previousClipIndex() : stateBlendPair(m_currentState).clipA;
     }
 
     float AnimatorComponent::poseTimeA() const
     {
-        return blending() ? m_prevAnimTime : m_animTime;
+        return blending() ? m_prevAnimTime : stateBlendPair(m_currentState).timeA;
     }
 
     int AnimatorComponent::poseClipB() const
     {
         // Cross-fade: el destino aporta su clip PRIMARIO (solo caben dos clips).
-        if (blending()) return currentClipIndex();
-        if (!stateBlends(m_currentState)) return currentClipIndex();
-        return m_states[m_currentState].blendClipIndex;
+        return blending() ? currentClipIndex() : stateBlendPair(m_currentState).clipB;
     }
 
     float AnimatorComponent::poseTimeB() const
     {
-        if (blending()) return m_animTime;
-        if (!stateBlends(m_currentState)) return m_animTime;
-
-        // Los dos clips se muestrean en la MISMA fase normalizada. Un walk de
-        // 40 ticks y un run de 100 mezclados por tiempo absoluto se
-        // desincronizan y las piernas patinan; por fase, el pie de apoyo de uno
-        // cae sobre el del otro.
-        const State& st = m_states[m_currentState];
-        if (st.duration <= 0.0f) return 0.0f;
-        return (m_animTime / st.duration) * st.blendDuration;
+        return blending() ? m_animTime : stateBlendPair(m_currentState).timeB;
     }
 
     float AnimatorComponent::poseWeight() const
     {
-        if (blending()) return blendWeight();
-        if (!stateBlends(m_currentState)) return 1.0f;
-        return stateBlendWeight(m_currentState);
+        return blending() ? blendWeight() : stateBlendPair(m_currentState).weight;
     }
 
     bool AnimatorComponent::poseLockRootMotion() const
@@ -444,22 +465,18 @@ namespace DonTopo
 
         for (auto& st : m_states)
         {
-            // El segundo clip del blend se resuelve SIEMPRE, aunque el primario
-            // falle: los dos avisos son independientes y ver solo uno de ellos
-            // mandaría a buscar al sitio equivocado.
-            if (st.blendClipName.empty())
+            // Las entradas del blend se resuelven SIEMPRE, aunque el primario
+            // falle: los avisos son independientes y ver solo uno mandaría a
+            // buscar al sitio equivocado. Una entrada recién añadida en el
+            // editor todavía no tiene clip: no es un error, no avisa.
+            for (auto& e : st.blendEntries)
             {
-                st.blendClipIndex = -1;
-                st.blendDuration  = 0.0f;
-            }
-            else
-            {
-                const int b = findClip(st.blendClipName);
-                st.blendClipIndex = b;
-                st.blendDuration  = (b >= 0) ? mesh.animationClips[b].duration : 0.0f;
-                if (b < 0 && warnings)
+                const int b = e.clipName.empty() ? -1 : findClip(e.clipName);
+                e.clipIndex = b;
+                e.duration  = (b >= 0) ? mesh.animationClips[b].duration : 0.0f;
+                if (b < 0 && !e.clipName.empty() && warnings)
                     warnings->push_back("Animator: el estado '" + st.name + "' mezcla con el clip '" +
-                                        st.blendClipName + "', que no existe en el modelo");
+                                        e.clipName + "', que no existe en el modelo");
             }
 
             const int found = findClip(st.clipName);
@@ -494,7 +511,8 @@ namespace DonTopo
             // lo que se devuelve son estados afectados, no referencias.
             bool touched = false;
             if (st.clipName == oldName)      { st.clipName      = newName; touched = true; }
-            if (st.blendClipName == oldName) { st.blendClipName = newName; touched = true; }
+            for (auto& e : st.blendEntries)
+                if (e.clipName == oldName) { e.clipName = newName; touched = true; }
             if (touched) changed++;
         }
         return changed;

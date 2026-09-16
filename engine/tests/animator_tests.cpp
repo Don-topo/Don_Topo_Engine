@@ -2445,9 +2445,16 @@ static void test_crossfade_pose_interpolates_between_clips()
 // ── Blend por parámetro float ────────────────────────────────────────────────
 //
 // Un estado con dos clips: el suyo y blendClip, mezclados por el valor de un
-// parámetro float mapeado de [blendMin, blendMax] a [0, 1]. Los límites NO son
+// parámetro float entre sus dos umbrales (clipThreshold y el de la entrada). Los límites NO son
 // 0 y 1 a propósito (1.5 y 6.5): un mapeo que se olvidara del rango pasaría
 // desapercibido con 0..1.
+static AnimatorComponent::BlendEntry entrada(const char* clip, int index, float duration, float threshold)
+{
+    AnimatorComponent::BlendEntry e;
+    e.clipName = clip; e.clipIndex = index; e.duration = duration; e.threshold = threshold;
+    return e;
+}
+
 static AnimatorComponent makeBlendStateGraph()
 {
     AnimatorComponent a;
@@ -2455,12 +2462,9 @@ static AnimatorComponent makeBlendStateGraph()
     AnimatorComponent::State s;
     s.name = "Locomotion"; s.clipName = "From";
     s.clipIndex = 0; s.duration = 40.0f; s.ticksPerSecond = 20.0f; s.loop = true;
-    s.blendClipName  = "To";
-    s.blendClipIndex = 1;
-    s.blendDuration  = 100.0f;
-    s.blendParam     = "speed";
-    s.blendMin       = 1.5f;
-    s.blendMax       = 6.5f;
+    s.blendParam    = "speed";
+    s.clipThreshold = 1.5f;
+    s.blendEntries  = { entrada("To", 1, 100.0f, 6.5f) };
 
     a.addState(s);
     a.setEntryState(0);
@@ -2469,7 +2473,7 @@ static AnimatorComponent makeBlendStateGraph()
     return a;
 }
 
-// El peso sale del parámetro, remapeado por [blendMin, blendMax] y clampado.
+// El peso sale del parámetro entre los dos umbrales, clampado.
 static void test_blend_state_weight_from_float_param()
 {
     AnimatorComponent a = makeBlendStateGraph();
@@ -2484,15 +2488,21 @@ static void test_blend_state_weight_from_float_param()
     a.update(0.016f, true);
     CHECK(nearlyEqual(a.poseWeight(), 0.7f));
 
-    // Fuera de rango por los dos lados: clamp, no extrapolación
+    // Fuera de rango por los dos lados: clamp, no extrapolación. Suena solo el
+    // clip del extremo (A == B, peso 1): la misma pose que peso 0 o 1 del par.
     a.setFloat("speed", -100.0f);
     a.update(0.016f, true);
-    CHECK(nearlyEqual(a.poseWeight(), 0.0f));
+    CHECK(a.poseClipA() == 0 && a.poseClipB() == 0);
+    CHECK(nearlyEqual(a.poseWeight(), 1.0f));
     a.setFloat("speed", 999.0f);
     a.update(0.016f, true);
+    CHECK(a.poseClipA() == 1 && a.poseClipB() == 1);
     CHECK(nearlyEqual(a.poseWeight(), 1.0f));
 
-    // Y los dos clips que salen son los del estado, no dos veces el mismo
+    // Y dentro del rango, los dos clips que salen son los del estado, no dos
+    // veces el mismo
+    a.setFloat("speed", 3.0f);
+    a.update(0.016f, true);
     CHECK(a.poseClipA() == 0);
     CHECK(a.poseClipB() == 1);
 }
@@ -2536,8 +2546,8 @@ static void test_crossfade_takes_priority_over_blend_state()
     AnimatorComponent::State loco;
     loco.name = "Locomotion"; loco.clipName = "From";
     loco.clipIndex = 0; loco.duration = 40.0f; loco.ticksPerSecond = 20.0f; loco.loop = true;
-    loco.blendClipName = "To"; loco.blendClipIndex = 1; loco.blendDuration = 100.0f;
-    loco.blendParam = "speed"; loco.blendMin = 0.0f; loco.blendMax = 10.0f;
+    loco.blendParam = "speed"; loco.clipThreshold = 0.0f;
+    loco.blendEntries = { entrada("To", 1, 100.0f, 10.0f) };
 
     a.addState(idle);
     a.addState(loco);
@@ -2578,18 +2588,18 @@ static void test_bind_clips_resolves_blend_clip()
 
     AnimatorComponent a;
     AnimatorComponent::State ok;
-    ok.name = "Ok"; ok.clipName = "From"; ok.blendClipName = "To";
+    ok.name = "Ok"; ok.clipName = "From"; ok.blendEntries = { entrada("To", -1, 0.0f, 1.0f) };
     AnimatorComponent::State bad;
-    bad.name = "Bad"; bad.clipName = "From"; bad.blendClipName = "NoExiste";
+    bad.name = "Bad"; bad.clipName = "From"; bad.blendEntries = { entrada("NoExiste", -1, 0.0f, 1.0f) };
     a.addState(ok);
     a.addState(bad);
 
     std::vector<std::string> warnings;
     a.bindClips(mesh, &warnings);
 
-    CHECK(a.states()[0].blendClipIndex == 1);
-    CHECK(nearlyEqual(a.states()[0].blendDuration, 100.0f));
-    CHECK(a.states()[1].blendClipIndex == -1);
+    CHECK(a.states()[0].blendEntries[0].clipIndex == 1);
+    CHECK(nearlyEqual(a.states()[0].blendEntries[0].duration, 100.0f));
+    CHECK(a.states()[1].blendEntries[0].clipIndex == -1);
     CHECK(warnings.size() == 1u);
 
     // El estado con el blendClip roto no mezcla: peso 1, un solo clip
@@ -2611,7 +2621,7 @@ static void test_blend_state_pose_interpolates_between_clips()
     AnimatorComponent a = makeBlendStateGraph();
     a.bindClips(mesh, nullptr);
     CHECK(a.states()[0].clipIndex == 0);
-    CHECK(a.states()[0].blendClipIndex == 1);
+    CHECK(a.states()[0].blendEntries[0].clipIndex == 1);
 
     a.setFloat("speed", 3.0f);               // peso 0.3
     a.update(0.016f, true);
@@ -3717,6 +3727,229 @@ static void test_transition_without_duration_field_loads(PhysicsManager& pm, Aud
     CHECK(nearlyEqual(found->getAnimator()->transitions()[0].duration, 0.0f));
 }
 
+// ── Blend 1D de N clips ──────────────────────────────────────────────────────
+//
+// Principal "Walk" (clip 0, umbral 1) EN MEDIO, y las entradas desordenadas a
+// propósito: "Run" (clip 2, umbral 4) antes que "Idle" (clip 1, umbral 0). Los
+// umbrales no están equiespaciados: un peso calculado con la posición en la
+// lista en vez del umbral no pasaría.
+static AnimatorComponent makeBlend1DGraph(float runThreshold = 4.0f, float idleThreshold = 0.0f)
+{
+    AnimatorComponent a;
+    AnimatorComponent::State s;
+    s.name = "Loco"; s.clipName = "Walk"; s.clipIndex = 0; s.duration = 40.0f;
+    s.ticksPerSecond = 20.0f; s.loop = true;
+    s.blendParam = "speed"; s.clipThreshold = 1.0f;
+    s.blendEntries = { entrada("Run", 2, 100.0f, runThreshold), entrada("Idle", 1, 20.0f, idleThreshold) };
+    a.addState(s);
+    a.setEntryState(0);
+    a.addParameter("speed", AnimatorComponent::ParamType::Float);
+    a.reset();
+    return a;
+}
+
+static void poner(AnimatorComponent& a, float speed)
+{
+    a.setFloat("speed", speed);
+    a.update(0.0f, true);
+}
+
+// Entre dos umbrales: la pareja vecina con peso lineal, esté donde esté el
+// principal en la lista.
+static void test_blend1d_picks_neighbours_by_threshold()
+{
+    AnimatorComponent a = makeBlend1DGraph();
+    poner(a, 2.5f);                              // entre Walk(1) y Run(4)
+    CHECK(a.poseClipA() == 0);
+    CHECK(a.poseClipB() == 2);
+    CHECK(nearlyEqual(a.poseWeight(), 0.5f));    // (2.5-1)/(4-1)
+    poner(a, 0.25f);                             // entre Idle(0) y Walk(1)
+    CHECK(a.poseClipA() == 1);
+    CHECK(a.poseClipB() == 0);
+    CHECK(nearlyEqual(a.poseWeight(), 0.25f));
+}
+
+// Fuera de rango: solo el extremo, sin extrapolar.
+static void test_blend1d_clamps_to_extremes()
+{
+    AnimatorComponent a = makeBlend1DGraph();
+    poner(a, -5.0f);
+    CHECK(a.poseClipA() == 1 && a.poseClipB() == 1);
+    CHECK(nearlyEqual(a.poseWeight(), 1.0f));
+    poner(a, 9.0f);
+    CHECK(a.poseClipA() == 2 && a.poseClipB() == 2);
+    CHECK(nearlyEqual(a.poseWeight(), 1.0f));
+    poner(a, 4.0f);                              // justo en el último umbral
+    CHECK(a.poseClipA() == 2 && a.poseClipB() == 2);
+}
+
+// Umbrales iguales: solo cuenta el primero (principal antes que entradas, y
+// entre entradas, la anterior), por encima y por debajo.
+static void test_blend1d_equal_thresholds_first_wins()
+{
+    AnimatorComponent a = makeBlend1DGraph(/*run=*/1.0f, /*idle=*/0.0f);   // Run empata con Walk
+    poner(a, 3.0f);
+    CHECK(a.poseClipA() == 0 && a.poseClipB() == 0);
+    poner(a, 0.5f);
+    CHECK(a.poseClipA() == 1 && a.poseClipB() == 0);
+    CHECK(nearlyEqual(a.poseWeight(), 0.5f));
+
+    AnimatorComponent b = makeBlend1DGraph(/*run=*/4.0f, /*idle=*/4.0f);   // Idle empata con Run
+    poner(b, 5.0f);
+    CHECK(b.poseClipA() == 2 && b.poseClipB() == 2);
+    poner(b, 2.5f);
+    CHECK(b.poseClipB() == 2);
+}
+
+// Una entrada sin clip resuelto no participa; sin ninguna válida, el estado es
+// de un solo clip.
+static void test_blend1d_ignores_unresolved_entries()
+{
+    AnimatorComponent a = makeBlend1DGraph();
+    a.statesMutable()[0].blendEntries[1].clipIndex = -1;   // Idle sin resolver
+    poner(a, 0.25f);
+    CHECK(a.poseClipA() == 0 && a.poseClipB() == 0);
+    CHECK(nearlyEqual(a.poseWeight(), 1.0f));
+
+    a.statesMutable()[0].blendEntries[0].clipIndex = -1;   // y Run tampoco
+    poner(a, 2.5f);
+    CHECK(a.poseClipA() == 0 && a.poseClipB() == 0);
+    CHECK(nearlyEqual(a.poseTimeB(), a.animTime()));
+}
+
+// Cada clip se muestrea en la fase del principal, escalada a SU duración.
+static void test_blend1d_samples_every_clip_at_principal_phase()
+{
+    AnimatorComponent a = makeBlend1DGraph();
+    a.setFloat("speed", 2.5f);
+    a.update(0.5f, true);                        // 10 ticks de 40 = fase 0.25
+    CHECK(nearlyEqual(a.poseTimeA(), 10.0f));    // Walk
+    CHECK(nearlyEqual(a.poseTimeB(), 25.0f));    // Run: 0.25 * 100
+    poner(a, 0.25f);
+    CHECK(nearlyEqual(a.poseTimeA(), 5.0f));     // Idle: 0.25 * 20
+    CHECK(nearlyEqual(a.poseTimeB(), 10.0f));    // Walk
+}
+
+// Renombrar toca las entradas; rebindClips sin el clip deja la entrada a -1 y
+// NO la borra (el nombre se conserva para cuando vuelva el FBX).
+static void test_blend1d_rename_and_rebind_entries()
+{
+    AnimatorComponent a = makeBlend1DGraph();
+    CHECK(a.renameClipReferences("Run", "Sprint") == 1);
+    CHECK(a.states()[0].blendEntries[0].clipName == "Sprint");
+
+    SkinnedMesh mesh;
+    AnimationClip walk; walk.name = "Walk"; walk.duration = 40.0f;
+    AnimationClip idle; idle.name = "Idle"; idle.duration = 20.0f;
+    mesh.animationClips = { walk, idle };
+    std::vector<std::string> avisos;
+    a.rebindClips(mesh, &avisos);
+    CHECK(a.states()[0].blendEntries.size() == 2u);
+    CHECK(a.states()[0].blendEntries[0].clipIndex == -1);
+    CHECK(a.states()[0].blendEntries[1].clipIndex == 1);
+    CHECK(nearlyEqual(a.states()[0].blendEntries[1].duration, 20.0f));
+    CHECK(avisos.size() == 1u);
+}
+
+// Peso de cada clip en la pose (A == B cuenta como peso 1 a ese clip).
+static float pesoDeClip(const AnimatorComponent& a, int clip)
+{
+    if (a.poseClipA() == a.poseClipB()) return a.poseClipA() == clip ? 1.0f : 0.0f;
+    float w = 0.0f;
+    if (a.poseClipA() == clip) w += 1.0f - a.poseWeight();
+    if (a.poseClipB() == clip) w += a.poseWeight();
+    return w;
+}
+
+// Una escena guardada con el par viejo (blendClip/blendMin/blendMax) carga con
+// la MISMA pose: mismo peso por clip, con span positivo, negativo y 0. A/B no
+// se comparan: con span negativo salen intercambiados.
+static void test_blend1d_migrates_old_pair(PhysicsManager& pm, AudioManager& am)
+{
+    const float spans[][2] = { {1.5f, 6.5f}, {6.5f, 1.5f}, {2.0f, 2.0f} };
+    for (const auto& mm : spans)
+    {
+        Scene scene("Test");
+        GameObject* go = scene.addGameObject("Personaje");
+        const uint64_t id = go->id;
+        auto a = std::make_shared<AnimatorComponent>();
+        AnimatorComponent::State s;
+        s.name = "Loco"; s.clipName = "Walk"; s.blendParam = "speed";
+        s.blendEntries = { entrada("Run", -1, 0.0f, 0.0f) };
+        a->addState(s);
+        a->addParameter("speed", AnimatorComponent::ParamType::Float);
+        go->setAnimator(a);
+
+        nlohmann::json j = scene.toJson();
+        bool convertido = false;
+        for (auto& node : j["root"]["children"])
+        {
+            if (!node.contains("animator")) continue;
+            auto& js = node["animator"]["states"][0];
+            js.erase("blendEntries");
+            js.erase("clipThreshold");
+            js["blendClip"] = "Run";
+            js["blendMin"]  = mm[0];
+            js["blendMax"]  = mm[1];
+            convertido = true;
+        }
+        CHECK(convertido);
+
+        Scene loaded("Loaded");
+        CHECK(loaded.fromJson(j, pm, am));
+        GameObject* found = loaded.findById(id);
+        CHECK(found && found->hasAnimator());
+        if (!found || !found->hasAnimator()) return;
+        AnimatorComponent& b = *found->getAnimator();
+        CHECK(b.states()[0].blendEntries.size() == 1u);
+        if (b.states()[0].blendEntries.size() != 1u) return;
+        // Sin malla: se resuelven a mano los índices.
+        b.statesMutable()[0].clipIndex = 0;
+        b.statesMutable()[0].duration  = 40.0f;
+        b.statesMutable()[0].blendEntries[0].clipIndex = 1;
+        b.statesMutable()[0].blendEntries[0].duration  = 40.0f;
+
+        for (float p : { -1.0f, 1.5f, 2.0f, 3.0f, 5.0f, 6.5f, 9.0f })
+        {
+            const float span = mm[1] - mm[0];
+            float wViejo = std::fabs(span) < 1e-6f ? 0.0f : (p - mm[0]) / span;
+            wViejo = wViejo < 0.0f ? 0.0f : (wViejo > 1.0f ? 1.0f : wViejo);
+            b.setFloat("speed", p);
+            b.update(0.0f, true);
+            CHECK(nearlyEqual(pesoDeClip(b, 0), 1.0f - wViejo));
+            CHECK(nearlyEqual(pesoDeClip(b, 1), wViejo));
+        }
+    }
+}
+
+// Ida y vuelta del formato nuevo; al guardar no sale el formato viejo.
+static void test_blend1d_scene_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>(makeBlend1DGraph());
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+    const std::string texto = j.dump();
+    CHECK(texto.find("\"blendClip\"") == std::string::npos);
+    CHECK(texto.find("\"blendMin\"") == std::string::npos);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& st = found->getAnimator()->states()[0];
+    CHECK(st.blendParam == "speed");
+    CHECK(nearlyEqual(st.clipThreshold, 1.0f));
+    CHECK(st.blendEntries.size() == 2u);
+    if (st.blendEntries.size() != 2u) return;
+    CHECK(st.blendEntries[0].clipName == "Run" && nearlyEqual(st.blendEntries[0].threshold, 4.0f));
+    CHECK(st.blendEntries[1].clipName == "Idle" && nearlyEqual(st.blendEntries[1].threshold, 0.0f));
+}
+
 // El blend por parámetro sobrevive guardar -> cargar. Valores no neutros y
 // distintos entre sí: min 1.5 y max 6.5 (no 0/1), y un segundo estado SIN blend
 // para que un "se aplica a todos por igual" se vea.
@@ -3729,10 +3962,9 @@ static void test_blend_state_survives_scene_round_trip(PhysicsManager& pm, Audio
     auto a = std::make_shared<AnimatorComponent>();
     AnimatorComponent::State loco;
     loco.name = "Locomotion"; loco.clipName = "ClipWalk";
-    loco.blendClipName = "ClipRun";
     loco.blendParam    = "speed";
-    loco.blendMin      = 1.5f;
-    loco.blendMax      = 6.5f;
+    loco.clipThreshold = 1.5f;
+    loco.blendEntries  = { entrada("ClipRun", -1, 0.0f, 6.5f) };
     AnimatorComponent::State idle;
     idle.name = "Idle"; idle.clipName = "ClipIdle";
     a->addState(loco);
@@ -3750,13 +3982,15 @@ static void test_blend_state_survives_scene_round_trip(PhysicsManager& pm, Audio
 
     const auto& st = found->getAnimator()->states();
     CHECK(st.size() == 2u);
-    CHECK(st[0].blendClipName == "ClipRun");
+    CHECK(st[0].blendEntries.size() == 1u);
+    if (st[0].blendEntries.size() != 1u) return;
+    CHECK(st[0].blendEntries[0].clipName == "ClipRun");
     CHECK(st[0].blendParam    == "speed");
-    CHECK(nearlyEqual(st[0].blendMin, 1.5f));
-    CHECK(nearlyEqual(st[0].blendMax, 6.5f));
-    CHECK(!nearlyEqual(st[0].blendMin, st[0].blendMax));
+    CHECK(nearlyEqual(st[0].clipThreshold, 1.5f));
+    CHECK(nearlyEqual(st[0].blendEntries[0].threshold, 6.5f));
+    CHECK(!nearlyEqual(st[0].clipThreshold, st[0].blendEntries[0].threshold));
     // El estado sin blend sigue sin blend
-    CHECK(st[1].blendClipName.empty());
+    CHECK(st[1].blendEntries.empty());
     CHECK(st[1].blendParam.empty());
 }
 
@@ -3771,24 +4005,23 @@ static void test_state_without_blend_fields_loads(PhysicsManager& pm, AudioManag
     auto a = std::make_shared<AnimatorComponent>();
     AnimatorComponent::State s;
     s.name = "Locomotion"; s.clipName = "ClipWalk";
-    s.blendClipName = "ClipRun"; s.blendParam = "speed";
-    s.blendMin = 1.5f; s.blendMax = 6.5f;
+    s.blendParam = "speed"; s.clipThreshold = 1.5f;
+    s.blendEntries = { entrada("ClipRun", -1, 0.0f, 6.5f) };
     a->addState(s);
     a->addParameter("speed", AnimatorComponent::ParamType::Float);
     go->setAnimator(a);
 
     nlohmann::json j = scene.toJson();
 
-    // Se borran a mano los cuatro campos: eso ES un estado viejo.
+    // Se borran a mano los campos del blend: eso ES un estado viejo.
     bool stripped = false;
     for (auto& node : j["root"]["children"])
     {
         if (!node.contains("animator")) continue;
         auto& js = node["animator"]["states"][0];
-        js.erase("blendClip");
+        js.erase("blendEntries");
         js.erase("blendParam");
-        js.erase("blendMin");
-        js.erase("blendMax");
+        js.erase("clipThreshold");
         stripped = true;
     }
     CHECK(stripped);
@@ -3803,9 +4036,9 @@ static void test_state_without_blend_fields_loads(PhysicsManager& pm, AudioManag
     const auto& st = found->getAnimator()->states()[0];
     CHECK(st.name == "Locomotion");
     CHECK(st.clipName == "ClipWalk");
-    CHECK(st.blendClipName.empty());
+    CHECK(st.blendEntries.empty());
     CHECK(st.blendParam.empty());
-    // Y sin blendClip el estado no mezcla, pase lo que pase con min/max
+    // Y sin entradas el estado no mezcla
     found->getAnimator()->update(0.016f, true);
     CHECK(nearlyEqual(found->getAnimator()->poseWeight(), 1.0f));
 }
@@ -4404,8 +4637,8 @@ static void makeBaseGraph(AnimatorComponent& a)
 {
     AnimatorComponent::State sa;
     sa.name = "A"; sa.clipName = "walk";
-    sa.blendClipName = "run"; sa.blendParam = "speed";
-    sa.blendMin = 0.0f; sa.blendMax = 1.0f;
+    sa.blendParam = "speed"; sa.clipThreshold = 0.0f;
+    sa.blendEntries = { entrada("run", -1, 0.0f, 1.0f) };
     sa.duration = 40.0f; sa.ticksPerSecond = 20.0f;
     AnimatorComponent::State sb;
     sb.name = "B"; sb.clipName = "run";
@@ -4447,10 +4680,11 @@ static std::vector<GraphMutation> graphMutations()
         { "state.name",           [](A& a) { a.statesMutable()[0].name = "X"; } },
         { "state.clip",           [](A& a) { a.statesMutable()[0].clipName = "idle"; } },
         { "state.loop",           [](A& a) { a.statesMutable()[0].loop = !a.states()[0].loop; } },
-        { "state.blendClip",      [](A& a) { a.statesMutable()[0].blendClipName = "idle"; } },
-        { "state.blendParam",     [](A& a) { a.statesMutable()[0].blendParam = "hits"; } },
-        { "state.blendMin",       [](A& a) { a.statesMutable()[0].blendMin = 0.25f; } },
-        { "state.blendMax",       [](A& a) { a.statesMutable()[0].blendMax = 2.0f; } },
+        { "state.blendEntry.clip",      [](A& a) { a.statesMutable()[0].blendEntries[0].clipName = "idle"; } },
+        { "state.blendParam",           [](A& a) { a.statesMutable()[0].blendParam = "hits"; } },
+        { "state.clipThreshold",        [](A& a) { a.statesMutable()[0].clipThreshold = 0.25f; } },
+        { "state.blendEntry.threshold", [](A& a) { a.statesMutable()[0].blendEntries[0].threshold = 2.0f; } },
+        { "state.addBlendEntry",        [](A& a) { a.statesMutable()[0].blendEntries.push_back(entrada("idle", -1, 0.0f, 3.0f)); } },
         { "state.lockRootMotion", [](A& a) { a.statesMutable()[0].lockRootMotion = true; } },
         { "state.speed",          [](A& a) { a.statesMutable()[0].speed = 2.0f; } },
         { "state.speedParam",     [](A& a) { a.statesMutable()[0].speedParam = "speed"; } },
@@ -4600,7 +4834,7 @@ static void test_graph_command_rebinds_clips()
     go->setAnimator(a);
 
     AnimatorComponent::Graph stale = a->graph();
-    for (auto& s : stale.states) { s.clipIndex = -1; s.blendClipIndex = -1; }
+    for (auto& s : stale.states) { s.clipIndex = -1; for (auto& e : s.blendEntries) e.clipIndex = -1; }
 
     // Runtime vivo antes del undo: valor de parámetro y reloj avanzado. Si
     // apply() usara bindClips en vez de rebindClips, su reset() los borraría
@@ -4613,7 +4847,7 @@ static void test_graph_command_rebinds_clips()
     cmd.undo();
 
     CHECK(a->states()[0].clipIndex == 0);
-    CHECK(a->states()[0].blendClipIndex == 1);
+    CHECK(a->states()[0].blendEntries[0].clipIndex == 1);
     CHECK(a->states()[1].clipIndex == 1);
     // rebindClips, no bindClips: el runtime (parámetro y playhead) sobrevive
     // al undo. bindClips pasaría las tres CHECK de arriba y aun así borraría
@@ -5873,6 +6107,14 @@ int main()
     test_crossfade_duration_survives_scene_round_trip(pm, am);
     test_transition_without_duration_field_loads(pm, am);
     test_blend_state_survives_scene_round_trip(pm, am);
+    test_blend1d_picks_neighbours_by_threshold();
+    test_blend1d_clamps_to_extremes();
+    test_blend1d_equal_thresholds_first_wins();
+    test_blend1d_ignores_unresolved_entries();
+    test_blend1d_samples_every_clip_at_principal_phase();
+    test_blend1d_rename_and_rebind_entries();
+    test_blend1d_migrates_old_pair(pm, am);
+    test_blend1d_scene_round_trip(pm, am);
     test_state_without_blend_fields_loads(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);
