@@ -6334,6 +6334,39 @@ static void test_root_motion_space_is_model_y_up()
     CHECK(std::fabs(p.y) > std::fabs(p.z));
 }
 
+// El estado que se apaga usa SU reloj acumulado, no uno que empiece en 0: con
+// un clip no lineal y el fade cruzando su wrap, empezar en 0 da otro avance.
+static void test_root_motion_crossfade_uses_prev_clock()
+{
+    SkinnedMesh m = makeRootMotionMesh();
+    // Walk rápido en la primera mitad (8) y lento en la segunda (2).
+    m.animationClips[0].channels[0].posKeys = { { 0.0f,  glm::vec3(0.0f, 1.0f, 0.0f) },
+                                                { 20.0f, glm::vec3(8.0f, 1.0f, 0.0f) },
+                                                { 40.0f, glm::vec3(10.0f, 1.0f, 0.0f) } };
+    AnimatorComponent a = makeRootMotionGraph();
+    AnimatorComponent::State b;
+    b.name = "Run"; b.clipName = "Run"; b.clipIndex = 1; b.duration = 40.0f;
+    b.ticksPerSecond = 20.0f; b.loop = true; b.rootMotion = AnimatorComponent::RootMotion::Apply;
+    a.addState(b);
+    a.addParameter("go", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 2.0f;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "go";
+    t.conditions.push_back(c);
+    a.addTransition(t);
+
+    a.update(1.8f, true);                          // Walk en 36 ticks
+    a.setTrigger("go");
+    a.update(0.016f, true);                        // 36,32: sale a Run
+    a.update(0.5f, true);                          // Walk 36,32 -> 46,32 cruza su wrap
+    CHECK(a.blending());
+    const float prev = rootDisplacement(m, 0, 46.32, 40.0, true).x - rootDisplacement(m, 0, 36.32, 40.0, true).x;
+    // Empezando en 0 serían 10 ticks del tramo rápido = 4: el test distingue.
+    CHECK(std::fabs(prev - 4.0f) > 0.5f);
+    CHECK(nearlyEqual(rootMotionDelta(m, a).x, 0.75f * prev + 0.25f * 3.75f, 0.01f));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -6457,6 +6490,7 @@ int main()
     test_root_motion_delta_drops_y();
     test_root_motion_delta_blend_weighted();
     test_root_motion_delta_crossfade_weighted();
+    test_root_motion_crossfade_uses_prev_clock();
     test_root_motion_samples_only_in_play_with_apply();
     test_root_motion_space_is_model_y_up();
     test_state_without_blend_fields_loads(pm, am);
