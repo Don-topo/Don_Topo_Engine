@@ -97,6 +97,14 @@ namespace DonTopo
                 float       threshold = 0.0f;
             };
 
+            // Evento con nombre en un instante del ciclo del estado. time es
+            // fase normalizada [0, 1] sobre la duración del clip principal.
+            struct AnimationEvent
+            {
+                std::string name;
+                float       time = 0.0f;
+            };
+
             struct State
             {
                 std::string name;
@@ -121,6 +129,9 @@ namespace DonTopo
                 std::string             blendParam;
                 float                   clipThreshold = 0.0f;
                 std::vector<BlendEntry> blendEntries;
+                // Eventos del estado: disparan en Play (ver collectEvents) y
+                // llegan a Lua como OnAnimationEvent(name).
+                std::vector<AnimationEvent> events;
                 // Posición del nodo en el canvas del AnimatorPanel.
                 glm::vec2   editorPos{0.0f};
                 // Id estable pa el nodo del canvas del editor (AnimatorPanel), NO
@@ -314,6 +325,10 @@ namespace DonTopo
             int   poseClipB() const;
             float poseTimeB() const;   // ticks
             float poseWeight() const;
+            // Nombres disparados en el ÚLTIMO update, en orden. Se vacía al
+            // principio de cada update: quien los lea una vez por frame los ve
+            // una sola vez.
+            const std::vector<std::string>& firedEvents() const { return m_firedEvents; }
             // Bloqueo del movimiento de raíz de la pose que sale a la GPU.
             // Durante un cross-fade manda el estado DESTINO —el mismo que aporta
             // poseClipB—: el push constant lleva UN solo flag para toda la
@@ -369,6 +384,11 @@ namespace DonTopo
             // duplicar el bucle dejaría que se desincronizaran. finished solo
             // lo escribe el del estado actual (al previo ya no le importa).
             static void advanceClock(const State& st, float rate, float& time, bool* finished, float dt);
+            // Empuja a m_firedEvents los eventos de st cuyo instante cae en
+            // [ticks0, ticks1), una vez por ciclo cruzado (solo el primero
+            // sin loop), con tope de kMaxEventCyclesPerUpdate por evento.
+            void collectEvents(const State& st, double ticks0, double ticks1);
+            static constexpr int kMaxEventCyclesPerUpdate = 16;
             // Ticks por segundo efectivos del estado: ticksPerSecond x speed x
             // parámetro multiplicador, nunca negativo.
             float stateRate(const State& st) const;
@@ -409,6 +429,7 @@ namespace DonTopo
             // para el exit time. double y no float: en una sesión larga un
             // float pierde resolución para decidir un cruce. No se serializa.
             double                  m_stateTicks   = 0.0;
+            std::vector<std::string> m_firedEvents;
             float                   m_speed        = 1.0f;
 
             // Cross-fade en curso. m_prevState a -1 significa "sin mezcla", y es

@@ -4685,6 +4685,7 @@ static std::vector<GraphMutation> graphMutations()
         { "state.clipThreshold",        [](A& a) { a.statesMutable()[0].clipThreshold = 0.25f; } },
         { "state.blendEntry.threshold", [](A& a) { a.statesMutable()[0].blendEntries[0].threshold = 2.0f; } },
         { "state.addBlendEntry",        [](A& a) { a.statesMutable()[0].blendEntries.push_back(entrada("idle", -1, 0.0f, 3.0f)); } },
+        { "state.events",               [](A& a) { a.statesMutable()[0].events.push_back({ "paso", 0.5f }); } },
         { "state.lockRootMotion", [](A& a) { a.statesMutable()[0].lockRootMotion = true; } },
         { "state.speed",          [](A& a) { a.statesMutable()[0].speed = 2.0f; } },
         { "state.speedParam",     [](A& a) { a.statesMutable()[0].speedParam = "speed"; } },
@@ -6007,6 +6008,161 @@ static void test_insert_from_json_reuses_preloaded_mesh(PhysicsManager& pm, Audi
     CHECK(r->getMesh().get() == original);
 }
 
+// ── Eventos de animación ─────────────────────────────────────────────────────
+//
+// Walk: 40 ticks a 20 tps = 2 s por ciclo, en loop, con "paso" en la mitad.
+static AnimatorComponent makeEventGraph(float eventTime = 0.5f, bool loop = true)
+{
+    AnimatorComponent a;
+    AnimatorComponent::State s;
+    s.name = "Walk"; s.clipName = "Walk"; s.clipIndex = 0;
+    s.duration = 40.0f; s.ticksPerSecond = 20.0f; s.loop = loop;
+    s.events.push_back({ "paso", eventTime });
+    a.addState(s);
+    a.setEntryState(0);
+    a.reset();
+    return a;
+}
+
+static int contar(const AnimatorComponent& a, const char* nombre)
+{
+    int n = 0;
+    for (const auto& e : a.firedEvents()) if (e == nombre) n++;
+    return n;
+}
+
+// Una vez por ciclo con dt de frame, y nunca dos en el mismo update.
+static void test_event_fires_once_per_cycle()
+{
+    AnimatorComponent a = makeEventGraph();
+    int total = 0;
+    bool dobleEnUno = false;
+    for (int i = 0; i < 250; i++)                  // 4 s = 2 ciclos
+    {
+        a.update(0.016f, true);
+        const int n = contar(a, "paso");
+        total += n;
+        if (n > 1) dobleEnUno = true;
+    }
+    CHECK(total == 2);
+    CHECK(!dobleEnUno);
+}
+
+// Un dt que cruza el wrap del loop dispara el evento del principio del ciclo.
+static void test_event_fires_across_loop_wrap()
+{
+    AnimatorComponent a = makeEventGraph(0.02f);   // 0,8 ticks
+    a.update(1.9f, true);                          // 38 ticks
+    a.update(0.2f, true);                          // 38 -> 42: cruza 40,8
+    CHECK(contar(a, "paso") == 1);
+}
+
+// Un dt que salta dos ciclos dispara dos veces.
+static void test_event_fires_per_skipped_cycle()
+{
+    AnimatorComponent a = makeEventGraph();
+    a.update(4.2f, true);                          // 84 ticks: cruza 20 y 60
+    CHECK(contar(a, "paso") == 2);
+}
+
+// Sin loop, una sola vez aunque el reloj siga.
+static void test_event_non_loop_fires_once()
+{
+    AnimatorComponent a = makeEventGraph(0.5f, /*loop=*/false);
+    int total = 0;
+    for (int i = 0; i < 10; i++) { a.update(1.0f, true); total += contar(a, "paso"); }
+    CHECK(total == 1);
+}
+
+// Evento en 0: dispara en el primer update con dt > 0, no en uno de dt 0.
+static void test_event_at_zero_fires_on_entry()
+{
+    AnimatorComponent a = makeEventGraph(0.0f);
+    a.update(0.0f, true);
+    CHECK(contar(a, "paso") == 0);
+    a.update(0.1f, true);
+    CHECK(contar(a, "paso") == 1);
+}
+
+// En Edit (sin evaluar transiciones) no dispara nada.
+static void test_event_not_fired_in_edit_mode()
+{
+    AnimatorComponent a = makeEventGraph();
+    a.update(4.2f, false);
+    CHECK(a.firedEvents().empty());
+}
+
+// Durante un cross-fade dispara solo el destino; el que se apaga, no.
+static void test_event_fading_out_state_is_silent()
+{
+    AnimatorComponent a = makeEventGraph(0.1f);    // 4 ticks
+    AnimatorComponent::State b;
+    b.name = "Idle"; b.clipName = "Idle"; b.clipIndex = 1;
+    b.duration = 40.0f; b.ticksPerSecond = 20.0f; b.loop = true;
+    a.addState(b);
+    a.addParameter("go", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 2.0f;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "go";
+    t.conditions.push_back(c);
+    a.addTransition(t);
+
+    a.setTrigger("go");
+    a.update(0.016f, true);                        // sale a Idle con fade de 2 s
+    CHECK(a.currentStateName() == "Idle");
+    CHECK(a.blending());
+    a.update(0.9f, true);                          // Walk sigue: 0,32 -> 18,32, cruza 4
+    CHECK(a.blending());
+    CHECK(a.firedEvents().empty());
+}
+
+// firedEvents solo guarda lo del último update.
+static void test_fired_events_cleared_each_update()
+{
+    AnimatorComponent a = makeEventGraph();
+    a.update(1.1f, true);                          // cruza 20
+    CHECK(contar(a, "paso") == 1);
+    a.update(0.01f, true);
+    CHECK(a.firedEvents().empty());
+}
+
+// Ida y vuelta de events; un time fuera de rango se clampa con aviso.
+static void test_events_scene_round_trip(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>(makeEventGraph(0.25f));
+    a->statesMutable()[0].events.push_back({ "golpe", 0.75f });
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+    bool tocado = false;
+    for (auto& node : j["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        node["animator"]["states"][0]["events"][1]["time"] = 3.0f;
+        tocado = true;
+    }
+    CHECK(tocado);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool aviso = false;
+    for (const auto& w : loaded.lastWarnings())
+        if (w.find("time fuera de [0,1]") != std::string::npos) aviso = true;
+    CHECK(aviso);
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& ev = found->getAnimator()->states()[0].events;
+    CHECK(ev.size() == 2u);
+    if (ev.size() != 2u) return;
+    CHECK(ev[0].name == "paso" && nearlyEqual(ev[0].time, 0.25f));
+    CHECK(ev[1].name == "golpe" && nearlyEqual(ev[1].time, 1.0f));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -6115,6 +6271,15 @@ int main()
     test_blend1d_rename_and_rebind_entries();
     test_blend1d_migrates_old_pair(pm, am);
     test_blend1d_scene_round_trip(pm, am);
+    test_event_fires_once_per_cycle();
+    test_event_fires_across_loop_wrap();
+    test_event_fires_per_skipped_cycle();
+    test_event_non_loop_fires_once();
+    test_event_at_zero_fires_on_entry();
+    test_event_not_fired_in_edit_mode();
+    test_event_fading_out_state_is_silent();
+    test_fired_events_cleared_each_update();
+    test_events_scene_round_trip(pm, am);
     test_state_without_blend_fields_loads(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);
