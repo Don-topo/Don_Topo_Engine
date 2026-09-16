@@ -5099,6 +5099,9 @@ static void test_apply_skinned_frame_passes_pose_b_then_a()
     // el test pasaría con los argumentos cambiados.
     a->statesMutable()[0].clipIndex = 3;
     a->statesMutable()[1].clipIndex = 7;
+    // Modo de raíz distinto de 0 (el default del doble y del backend): si el
+    // host no lo pasara, este test no lo vería.
+    for (auto& s : a->statesMutable()) s.rootMotion = AnimatorComponent::RootMotion::Lock;
     GameObject* go = makeSkinnedGameObject(scene, a);
 
     SkinnedRendererDoble r;
@@ -5111,6 +5114,7 @@ static void test_apply_skinned_frame_passes_pose_b_then_a()
     CHECK(nearlyEqual(r.timeB, a->poseTimeB()));
     CHECK(nearlyEqual(r.timeA, a->poseTimeA()));
     CHECK(nearlyEqual(r.weight, a->poseWeight()));
+    CHECK(r.rootMode == 1u);
     CHECK(r.rootMode == a->poseRootMotionMode());
 }
 
