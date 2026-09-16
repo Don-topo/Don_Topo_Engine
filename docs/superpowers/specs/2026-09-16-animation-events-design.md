@@ -51,7 +51,7 @@ Consecuencias del intervalo semiabierto `[ticks0, ticks1)`:
 
 En `ScriptManager::update`, después de `drainTriggerQueue()` y antes de `Update`, se llama a `deliverAnimationEvents()`. Recorre la escena (`m_scene->traverse`) y, para cada GameObject vivo con Animator, `firedEvents()` no vacío y scripts, llama a `OnAnimationEvent(name)` en cada script por cada nombre, en orden. Se sigue el patrón de `callOptionalCallback`: se sondea si el script define la función y, si falla, se marca `hasError` y se registra en el log. Hace falta una sobrecarga que pase un `std::string`.
 
-El Animator avanza en el frame (`applySkinnedFrame`) y los scripts corren una vez por frame, así que cada tanda se lee una vez sin depender del orden entre los dos. Si en un frame avanza el Animator y no corren los scripts, esos eventos se pierden: queda documentado. [sin verificar] qué hace hoy el editor con Pause; el plan lo comprueba.
+El Animator avanza en el frame (`applySkinnedFrame`) y los scripts corren una vez por frame, así que cada tanda se lee una vez sin depender del orden entre los dos. Si en un frame avanza el Animator y no corren los scripts, esos eventos se pierden: queda documentado. El editor no tiene Pause (comprobado al planificar): hoy no hay frames en Play con Animator y sin scripts.
 
 ## Serialización (`Scene.cpp`)
 
