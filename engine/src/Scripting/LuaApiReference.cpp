@@ -48,10 +48,13 @@ const std::vector<std::string>& baseSymbols()
         // al destruir; OnTrigger* cuando otro collider entra/permanece/sale de
         // un collider Is Trigger (reciben la Entity que lo provocó);
         // OnCollision* lo mismo para colisiones DE VERDAD (ninguno de los dos
-        // colliders es trigger), en los dos objetos del par.
+        // colliders es trigger), en los dos objetos del par; OnAnimationEvent
+        // recibe el nombre del evento cuando el Animator del objeto lo cruza
+        // (solo en Play).
         "Awake", "Start", "Update", "FixedUpdate", "LateUpdate", "OnDestroy",
         "OnTriggerEnter", "OnTriggerStay", "OnTriggerExit",
         "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit",
+        "OnAnimationEvent",
 
         // Log
         "Log.Info", "Log.Warn", "Log.Error",

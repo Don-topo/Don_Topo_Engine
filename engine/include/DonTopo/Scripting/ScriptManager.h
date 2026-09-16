@@ -145,6 +145,8 @@ private:
     // lookup de tabla, el mismo que ya hace callTriggerCallback para obtener la
     // función, así que no hay lookup de más por evento despachado.
     void callOptionalCallback(ScriptComponent& comp, const char* fn, GameObject* other);
+    // Como callOptionalCallback, con un string de argumento (OnAnimationEvent).
+    void callOptionalStringCallback(ScriptComponent& comp, const char* fn, const std::string& arg);
 
     // Registra un ScriptTriggerListener Y un ScriptCollisionListener en el
     // collider de cada GameObject que tenga uno (onPlayStart); los desregistra
@@ -154,6 +156,9 @@ private:
     void registerTriggerListeners();
     void clearTriggerListeners();
     void drainTriggerQueue();
+    // Entrega los firedEvents() de cada Animator a OnAnimationEvent de los
+    // scripts de su GameObject. Corre una vez por update, antes de Update.
+    void deliverAnimationEvents();
 
     // Un evento de física pendiente de despachar a Lua.
     struct QueuedTrigger {

@@ -2,6 +2,7 @@
 #include "DonTopo/Scripting/ScriptBindings.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Physics/Colliders/Collider.h"
 #include <algorithm>
 
@@ -291,6 +292,44 @@ namespace DonTopo
         }
     }
 
+    void ScriptManager::callOptionalStringCallback(ScriptComponent& comp, const char* fn, const std::string& arg)
+    {
+        if (comp.hasError || !comp.instance.valid()) return;
+        sol::object entry = comp.instance[fn];
+        if (entry.get_type() != sol::type::function) return; // el script no lo define
+        sol::protected_function f = entry;
+        auto r = f(comp.instance, arg);
+        if (!r.valid())
+        {
+            sol::error err = r;
+            log("Script '" + comp.scriptName + "' " + fn + ": " + std::string(err.what()));
+            comp.hasError = true;
+        }
+    }
+
+    void ScriptManager::deliverAnimationEvents()
+    {
+        // Primero se recogen y luego se llama: un callback puede instanciar o
+        // destruir objetos, y eso no debe pasar con el traverse abierto.
+        std::vector<GameObject*> conEventos;
+        m_scene->traverse([&](GameObject* go) {
+            const auto& anim = go->getAnimator();
+            if (anim && !anim->firedEvents().empty() && !go->getScripts().empty())
+                conEventos.push_back(go);
+        });
+        for (GameObject* go : conEventos)
+        {
+            if (!isAlive(go) || !go->getAnimator()) continue;
+            // Copia: un callback puede tocar el Animator (Play, CrossFade).
+            const std::vector<std::string> nombres = go->getAnimator()->firedEvents();
+            std::vector<ScriptComponent*> scripts;
+            for (auto& s : go->getScripts()) scripts.push_back(s.get());
+            for (const std::string& n : nombres)
+                for (ScriptComponent* s : scripts)
+                    callOptionalStringCallback(*s, "OnAnimationEvent", n);
+        }
+    }
+
     void ScriptManager::callOnDestroy(ScriptComponent& comp)
     {
         if (comp.hasOnDestroy) callCallback(comp, "OnDestroy", nullptr);
@@ -496,6 +535,10 @@ namespace DonTopo
         // loop principal): OnTrigger*/OnCollision* antes de Update, cercano al
         // orden de Unity (callbacks de física preceden a Update).
         drainTriggerQueue();
+
+        // Eventos del Animator del último avance (applySkinnedFrame): uno por
+        // frame de cada lado, así que cada tanda se entrega una vez.
+        deliverAnimationEvents();
 
         for (auto* c : comps) if (c->hasUpdate) callCallback(*c, "Update", &dt);
 
