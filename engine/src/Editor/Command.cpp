@@ -57,6 +57,7 @@ void DeleteGameObjectCommand::execute()
     uint64_t id = m_snapshot.value("id", uint64_t{0});
     GameObject* node = m_scene.findById(id);
     if (!node) return;
+    m_meshes = m_scene.collectMeshes(node);
     // La GPU la suelta Scene::removeGameObject via su oyente (P8): este era
     // el tercer sitio que tenia que acordarse, y el unico sin hook propio.
     m_scene.removeGameObject(node);
@@ -65,7 +66,7 @@ void DeleteGameObjectCommand::execute()
 void DeleteGameObjectCommand::undo()
 {
     GameObject* parent = m_scene.findById(m_parentId);
-    GameObject* node = m_scene.insertFromJson(m_snapshot, parent, m_index, m_physics, m_audio);
+    GameObject* node = m_scene.insertFromJson(m_snapshot, parent, m_index, m_physics, m_audio, &m_meshes);
     if (node)
     {
         m_renderer.registerGameObject(node);
@@ -497,7 +498,7 @@ void AnimatorGraphCommand::apply(const AnimatorComponent::Graph& g)
     // los vivos; bindClips's reset() los pondría a cero y el preview saltaría
     // de golpe al estado de entrada, visible para el usuario. Secundariamente
     // también protege un futuro undo a mitad de Play.
-    if (SkinnedMesh* mesh = go->getSkinnedMesh())
+    if (const SkinnedMesh* mesh = go->getSkinnedMesh())
         go->getAnimator()->rebindClips(*mesh, nullptr);
 }
 
@@ -517,7 +518,8 @@ void AnimationSourceCommand::applyAdd()
 {
     GameObject* go = m_scene.findById(m_id);
     if (!go) return;
-    SkinnedMesh* mesh = go->getSkinnedMesh();
+    // Escribe clips/fuentes: editSkinnedMesh copia la malla si está compartida.
+    SkinnedMesh* mesh = go->editSkinnedMesh();
     if (!mesh) return;
 
     std::vector<std::string> warnings;
@@ -563,7 +565,8 @@ void AnimationSourceCommand::applyRemove()
 {
     GameObject* go = m_scene.findById(m_id);
     if (!go) return;
-    SkinnedMesh* mesh = go->getSkinnedMesh();
+    // Escribe clips/fuentes: editSkinnedMesh copia la malla si está compartida.
+    SkinnedMesh* mesh = go->editSkinnedMesh();
     if (!mesh) return;
 
     // Localización por IDENTIDAD, no por posición: m_pathOccurrence es
@@ -658,7 +661,8 @@ void ClipRenameCommand::apply(const std::string& from, const std::string& to)
 {
     GameObject* go = m_scene.findById(m_id);
     if (!go) return;
-    SkinnedMesh* mesh = go->getSkinnedMesh();
+    // Escribe clips/fuentes: editSkinnedMesh copia la malla si está compartida.
+    SkinnedMesh* mesh = go->editSkinnedMesh();
     if (!mesh) return;
     if (!renameClip(*mesh, from, to)) return;
     if (go->hasAnimator())
@@ -716,7 +720,7 @@ void MaterialTextureCommand::apply(const std::string& path)
     // un .scene con más materiales de los que trae el mesh cargado ahora mismo
     // no pierda el override—, pero este llamante sí conoce el mesh vivo y
     // puede evitar escribir un índice que ya no existe en él.
-    const std::vector<Material*> mats = materialsOfMesh(*go);
+    const std::vector<const Material*> mats = materialsOfMesh(*go);
     if (m_materialIndex < 0 || m_materialIndex >= (int)mats.size()) return;
 
     setMaterialTextureOverride(*go, m_materialIndex, m_slot, path);
@@ -726,7 +730,7 @@ void MaterialTextureCommand::apply(const std::string& path)
     // Skinned y estático van por caminos distintos porque los recursos de GPU
     // lo son: el personaje se reconstruye entero (es lo único que hay), el
     // estático solo cambia de material.
-    if (SkinnedMesh* sm = go->getSkinnedMesh(); sm && go->skinnedRenderIndex >= 0)
+    if (const SkinnedMesh* sm = go->getSkinnedMesh(); sm && go->skinnedRenderIndex >= 0)
         m_renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *sm);
     else if (go->staticRenderIndex >= 0)
         m_renderer->rebuildStaticMesh(go->staticRenderIndex, *go->getMesh());
@@ -775,7 +779,7 @@ void MaterialFactorCommand::apply(float value)
     // era válido cuando se construyó este comando, pero el replay (undo/redo)
     // puede llegar con el GameObject llevando otra malla, con menos
     // materiales que la de entonces.
-    const std::vector<Material*> mats = materialsOfMesh(*go);
+    const std::vector<const Material*> mats = materialsOfMesh(*go);
     if (m_materialIndex < 0 || m_materialIndex >= (int)mats.size()) return;
 
     setMaterialFactorOverride(*go, m_materialIndex, m_slot, value);
@@ -793,7 +797,7 @@ void MaterialFactorCommand::apply(float value)
     // que sería otro método público más. Es el camino caro, pero un personaje
     // tiene un puñado de submallas y esto solo corre al SOLTAR el slider o en un
     // undo, nunca por frame de arrastre.
-    if (SkinnedMesh* sm = go->getSkinnedMesh(); sm && go->skinnedRenderIndex >= 0)
+    if (const SkinnedMesh* sm = go->getSkinnedMesh(); sm && go->skinnedRenderIndex >= 0)
         m_renderer->rebuildSkinnedMesh(go->skinnedRenderIndex, *sm);
     else if (go->staticRenderIndex >= 0)
         m_renderer->setObjectMaterialFactors(static_cast<size_t>(go->staticRenderIndex),
@@ -804,7 +808,7 @@ void MaterialFactorCommand::apply(float value)
 MeshComponentCommand::MeshComponentCommand(Scene& scene, EditorRenderer* renderer,
                                            std::string label, GameObject& go, bool add)
     : m_scene(scene), m_renderer(renderer), m_label(std::move(label)), m_id(go.id),
-      m_add(add), m_mesh(go.getMesh()), m_overrides(go.materialOverrides) {}
+      m_add(add), m_meshVista(go.getMesh()), m_overrides(go.materialOverrides) {}
 
 void MeshComponentCommand::execute() { if (m_add) put();    else remove(); }
 void MeshComponentCommand::undo()    { if (m_add) remove(); else put();    }
@@ -814,7 +818,10 @@ void MeshComponentCommand::remove()
     GameObject* go = m_scene.findById(m_id);
     // Solo la NUESTRA: si llegó otra por un camino sin undo, no es de este
     // comando.
-    if (!go || !go->hasMesh() || go->getMesh() != m_mesh) return;
+    if (!go || !go->hasMesh() || go->getMesh() != m_meshVista.lock()) return;
+
+    // A partir de aquí el comando es el dueño: el objeto la suelta ahora.
+    m_mesh = go->getMesh();
 
     // El backend suelta la GPU y hace setMesh(nullptr). Sin renderer (tests
     // headless) queda solo la parte de CPU.
@@ -837,6 +844,10 @@ void MeshComponentCommand::put()
     if (go->hasMesh() || go->pendingMeshJob != 0) return;
 
     go->setMesh(m_mesh);
+    // Vuelve a ser del objeto: el comando la suelta para no contar como dueño
+    // (ver m_meshVista) y se queda solo con la vista.
+    m_meshVista = m_mesh;
+    m_mesh.reset();
     // DESPUÉS de setMesh, que baja los base*Taken: con los baselines del
     // snapshot en alto, applyMaterialOverrides no recaptura como original lo
     // que la malla guardada ya lleva horneado.
@@ -844,10 +855,10 @@ void MeshComponentCommand::put()
     applyMaterialOverrides(*go);
 
     if (!m_renderer) return;
-    if (SkinnedMesh* sk = go->getSkinnedMesh())
+    if (const SkinnedMesh* sk = go->getSkinnedMesh())
         go->skinnedRenderIndex = m_renderer->addSkinnedMesh(*sk, nullptr);
     else
-        go->staticRenderIndex  = m_renderer->addStaticMesh(*m_mesh, nullptr);
+        go->staticRenderIndex  = m_renderer->addStaticMesh(*go->getMesh(), nullptr);
     // Mismo motivo que DeleteGameObjectCommand::undo: sin esperar, el objeto
     // recuperado aparecería ~2 frames tarde.
     m_renderer->flushUploadsAndWait();

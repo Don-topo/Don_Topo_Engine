@@ -35,6 +35,16 @@ static int g_failures = 0;
 
 static bool nearlyEqual(float a, float b, float eps = 0.001f) { return std::fabs(a - b) < eps; }
 
+// Alias de la malla que NO cuenta como dueño. Un test que guarda el
+// shared_ptr para inspeccionar la malla haría que el GameObject la viera
+// compartida, y editMesh() la copiaría: el test miraría la copia vieja. Con
+// esto el GameObject sigue siendo el único dueño; el alias no la mantiene viva.
+template <typename M>
+static std::shared_ptr<M> soloObservador(const std::shared_ptr<M>& m)
+{
+    return std::shared_ptr<M>(m.get(), [](M*) {});
+}
+
 // Criterio 1: todo clip cargado del FBX tiene nombre no vacío y único, duration
 // y ticksPerSecond válidos. Ejercita el bucle sobre mAnimations aunque el asset
 // del repo traiga una sola animación.
@@ -663,7 +673,7 @@ static void test_animation_sources_survive_scene_round_trip(PhysicsManager& pm, 
     const std::string importedName = mesh->animationSources[1].clipNames[0];
     CHECK(renameClip(*mesh, importedName, "SaltoRenombrado"));
     const std::string builtinName = mesh->animationSources[0].clipNames[0];
-    go->setMesh(mesh);
+    go->setMesh(mesh); mesh = soloObservador(mesh);
 
     // Un estado que usa el clip importado y renombrado: tras cargar tiene que
     // seguir resolviendo
@@ -681,7 +691,7 @@ static void test_animation_sources_survive_scene_round_trip(PhysicsManager& pm, 
     CHECK(found != nullptr);
     if (!found) return;
 
-    SkinnedMesh* lm = found->getSkinnedMesh();
+    const SkinnedMesh* lm = found->getSkinnedMesh();
     CHECK(lm != nullptr);
     if (!lm) return;
 
@@ -714,7 +724,7 @@ static void test_missing_animation_source_does_not_break_load(PhysicsManager& pm
     GameObject* go = scene.addGameObject("Personaje");
     const uint64_t id = go->id;
     auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
-    go->setMesh(mesh);
+    go->setMesh(mesh); mesh = soloObservador(mesh);
 
     nlohmann::json j = scene.toJson();
     // Se inyecta a mano una fuente que apunta a un fichero inexistente: simula
@@ -727,7 +737,7 @@ static void test_missing_animation_source_does_not_break_load(PhysicsManager& pm
     GameObject* found = loaded.findById(id);
     CHECK(found != nullptr);
     if (!found) return;
-    SkinnedMesh* lm = found->getSkinnedMesh();
+    const SkinnedMesh* lm = found->getSkinnedMesh();
     CHECK(lm != nullptr);
     if (!lm) return;
     // La fuente fantasma no se registra; el modelo sigue entero
@@ -870,7 +880,7 @@ static void test_missing_animation_source_warns_through_scene(PhysicsManager& pm
     GameObject* go = scene.addGameObject("Personaje");
     const uint64_t id = go->id;
     auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
-    go->setMesh(mesh);
+    go->setMesh(mesh); mesh = soloObservador(mesh);
 
     nlohmann::json j = scene.toJson();
     j["root"]["children"][0]["mesh"]["animationSources"].push_back(
@@ -908,7 +918,7 @@ static void test_scene_without_animation_sources_loads(PhysicsManager& pm, Audio
     GameObject* found = loaded.findById(id);
     CHECK(found != nullptr);
     if (!found) return;
-    SkinnedMesh* lm = found->getSkinnedMesh();
+    const SkinnedMesh* lm = found->getSkinnedMesh();
     CHECK(lm != nullptr);
     if (!lm) return;
     CHECK(lm->animationSources.size() == 1u);
@@ -925,7 +935,7 @@ static void test_scene_load_ignores_stale_skinned_false(PhysicsManager& pm, Audi
     GameObject* go = scene.addGameObject("Personaje");
     const uint64_t id = go->id;
     auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
-    go->setMesh(mesh);
+    go->setMesh(mesh); mesh = soloObservador(mesh);
 
     nlohmann::json j = scene.toJson();
     // Simula el fichero viejo: flag a false sobre un FBX que sí tiene huesos.
@@ -937,7 +947,7 @@ static void test_scene_load_ignores_stale_skinned_false(PhysicsManager& pm, Audi
     CHECK(found != nullptr);
     if (!found) return;
 
-    SkinnedMesh* lm = found->getSkinnedMesh();
+    const SkinnedMesh* lm = found->getSkinnedMesh();
     CHECK(lm != nullptr);
     if (!lm) return;
     CHECK(!lm->skeleton.names.empty());
@@ -1101,13 +1111,13 @@ static void test_scene_load_shares_has_bones_cache_across_nodes(PhysicsManager& 
     if (!found1 || !found2) return;
 
     // Primer nodo: rama MISS de la cache (la puebla).
-    SkinnedMesh* sm1 = found1->getSkinnedMesh();
+    const SkinnedMesh* sm1 = found1->getSkinnedMesh();
     CHECK(sm1 != nullptr);
     if (sm1) CHECK(!sm1->skeleton.names.empty());
 
     // Segundo nodo: rama HIT de la cache — debe dar la MISMA respuesta que el
     // primero, no una lectura fallida ni un Mesh estático.
-    SkinnedMesh* sm2 = found2->getSkinnedMesh();
+    const SkinnedMesh* sm2 = found2->getSkinnedMesh();
     CHECK(sm2 != nullptr);
     if (sm2) CHECK(!sm2->skeleton.names.empty());
 }
@@ -1133,7 +1143,7 @@ static void test_clone_of_rigged_mesh_stays_skinned(PhysicsManager& pm, AudioMan
 
     CHECK(clone != go);
     CHECK(clone->isSkinned());
-    SkinnedMesh* sm = clone->getSkinnedMesh();
+    const SkinnedMesh* sm = clone->getSkinnedMesh();
     CHECK(sm != nullptr);
     if (!sm) return;
     CHECK(!sm->skeleton.names.empty());
@@ -1193,7 +1203,9 @@ static void test_clone_of_rigged_mesh_does_not_reread_disk(PhysicsManager& pm, A
     CHECK(sm->vertices.size() == vertsOrigen);
     CHECK(sm->animationClips.size() == clipsOrigen);
     CHECK(sm->skeleton.names.size() == huesosOrigen);
-    CHECK(sm != origen);   // no comparten el objeto: el clon tiene el suyo
+    // Desde el Apéndice B la COMPARTEN: el clon no copia la malla hasta que
+    // alguien la edite (editMesh).
+    CHECK(sm == origen);
 }
 
 // P2 de docs/core-audit.md, el séptimo acceso crudo: los nombres de clip
@@ -1267,7 +1279,7 @@ static void test_delete_undo_restores_rigged_mesh_as_skinned(PhysicsManager& pm,
     // resolviendo contra el mismo GameObject.
     CHECK(restored->id == id);
     CHECK(restored->isSkinned());
-    SkinnedMesh* sm = restored->getSkinnedMesh();
+    const SkinnedMesh* sm = restored->getSkinnedMesh();
     CHECK(sm != nullptr);
     if (!sm) return;
     CHECK(!sm->skeleton.names.empty());
@@ -2945,7 +2957,7 @@ static void test_animation_source_command_add_undo_redo()
     const uint64_t id = go->id;
     auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
     const size_t before = mesh->animationClips.size();
-    go->setMesh(mesh);
+    go->setMesh(mesh); mesh = soloObservador(mesh);
 
     AnimationSourceCommand cmd(scene, /*renderer=*/nullptr, "Añadir animaciones",
                                 id, /*add=*/true, "assets/modelAnimation.fbx",
@@ -2975,7 +2987,7 @@ static void test_animation_source_command_remove_restores_names()
     GameObject* go = scene.addGameObject("Personaje");
     const uint64_t id = go->id;
     auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
-    go->setMesh(mesh);
+    go->setMesh(mesh); mesh = soloObservador(mesh);
 
     std::vector<std::string> warnings;
     CHECK(addAnimationSource(*mesh, "assets/modelAnimation.fbx", warnings));
@@ -3017,7 +3029,7 @@ static void test_animation_source_command_remove_rebinds_clip_indices()
     GameObject* go = scene.addGameObject("Personaje");
     const uint64_t id = go->id;
     auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
-    go->setMesh(mesh);
+    go->setMesh(mesh); mesh = soloObservador(mesh);
 
     std::vector<std::string> warnings;
     CHECK(addAnimationSource(*mesh, "assets/modelAnimation.fbx", warnings));
@@ -3090,7 +3102,7 @@ static void test_animation_source_command_remove_targets_clicked_occurrence()
     GameObject* go = scene.addGameObject("Personaje");
     const uint64_t id = go->id;
     auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
-    go->setMesh(mesh);
+    go->setMesh(mesh); mesh = soloObservador(mesh);
 
     std::vector<std::string> warnings;
     CHECK(addAnimationSource(*mesh, "assets/modelAnimation.fbx", warnings));
@@ -3134,7 +3146,7 @@ static void test_animation_source_command_remove_noop_when_occurrence_missing()
     GameObject* go = scene.addGameObject("Personaje");
     const uint64_t id = go->id;
     auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
-    go->setMesh(mesh);
+    go->setMesh(mesh); mesh = soloObservador(mesh);
 
     std::vector<std::string> warnings;
     CHECK(addAnimationSource(*mesh, "assets/modelAnimation.fbx", warnings));
@@ -3178,7 +3190,7 @@ static void test_animation_source_command_undo_add_after_interleaved_remove_undo
     GameObject* go = scene.addGameObject("Personaje");
     const uint64_t id = go->id;
     auto mesh = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
-    go->setMesh(mesh);
+    go->setMesh(mesh); mesh = soloObservador(mesh);
 
     // Estado de partida del repro: [B, S1]. S1 se importa fuera del undo
     // stack (representa "lo que ya había antes de que arrancara este
@@ -3235,7 +3247,7 @@ static void test_clip_rename_command()
     AnimationClip c; c.name = "walk"; mesh->animationClips.push_back(c);
     AnimationSource src; src.path = "x.fbx"; src.builtin = true; src.clipNames = { "walk" };
     mesh->animationSources.push_back(src);
-    go->setMesh(mesh);
+    go->setMesh(mesh); mesh = soloObservador(mesh);
 
     auto a = std::make_shared<AnimatorComponent>();
     AnimatorComponent::State st; st.name = "Andar"; st.clipName = "walk";
@@ -4581,7 +4593,7 @@ static void test_graph_command_rebinds_clips()
     AnimationClip walk; walk.name = "walk"; walk.duration = 40.0f;  walk.ticksPerSecond = 20.0f;
     AnimationClip run;  run.name  = "run";  run.duration  = 100.0f; run.ticksPerSecond  = 50.0f;
     mesh->animationClips = { walk, run };
-    go->setMesh(mesh);
+    go->setMesh(mesh); mesh = soloObservador(mesh);
 
     auto a = std::make_shared<AnimatorComponent>();
     makeBaseGraph(*a);   // A usa "walk" (+ "run" de blend), B usa "run"
@@ -5629,6 +5641,138 @@ static void test_negative_state_speed_is_clamped_on_load(PhysicsManager& pm, Aud
     CHECK(avisado);
 }
 
+// ---- Malla compartida (Apéndice B) ----
+
+// Clonar un objeto con un FBX de animación añadido NO duplica sus clips: el
+// clon trae la configuración de fuentes del JSON, y re-aplicarla sobre una
+// malla que ya la tiene la duplicaría (y releería el FBX).
+static void test_clone_with_animation_source_keeps_clip_count(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto sm = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx"));
+    std::vector<std::string> w;
+    CHECK(addAnimationSource(*sm, "assets/modelAnimation.fbx", w));
+    const size_t clips = sm->animationClips.size();
+    go->setMesh(sm);
+
+    GameObject* clone = scene.cloneGameObject(go, nullptr, pm, am);
+    CHECK(clone != nullptr && clone->isSkinned());
+    if (!clone || !clone->getSkinnedMesh()) return;
+    CHECK(clone->getSkinnedMesh()->animationClips.size() == clips);
+    CHECK(clone->getSkinnedMesh()->animationSources.size() == 2u);
+}
+
+// editMesh sobre una malla única no copia; sobre una compartida, sí, y el otro
+// dueño no ve el cambio.
+static void test_edit_mesh_copies_only_when_shared()
+{
+    Scene scene("Test");
+    GameObject* a = scene.addGameObject("A");
+    GameObject* b = scene.addGameObject("B");
+    auto m = std::make_shared<SkinnedMesh>(makeTwoClipFixture());
+    a->setMesh(m);
+    m.reset();                                   // A es el único dueño
+    const Mesh* antes = a->getMesh().get();
+    CHECK(a->editMesh() == antes);               // única: sin copia
+
+    b->setMesh(std::const_pointer_cast<Mesh>(a->getMesh()));   // ahora compartida
+    SkinnedMesh* editada = b->editSkinnedMesh();
+    CHECK(editada != nullptr);
+    if (!editada) return;
+    CHECK(editada != a->getSkinnedMesh());       // B copió
+    editada->material.texturePath = "solo_b.png";
+    editada->animationClips.pop_back();
+    CHECK(a->getMesh()->material.texturePath != "solo_b.png");
+    CHECK(a->getSkinnedMesh()->animationClips.size() == 2u);
+    CHECK(dynamic_cast<const SkinnedMesh*>(b->getMesh().get()) != nullptr);   // conserva el tipo
+}
+
+// Un override igual al valor que ya tiene la malla no fuerza la copia.
+static void test_equal_material_override_does_not_copy()
+{
+    Scene scene("Test");
+    GameObject* a = scene.addGameObject("A");
+    GameObject* b = scene.addGameObject("B");
+    auto m = std::make_shared<SkinnedMesh>(makeTwoClipFixture());
+    m->material.texturePath = "igual.png";
+    a->setMesh(m);
+    b->setMesh(m);
+    m.reset();
+
+    MaterialOverride ov; ov.index = 0; ov.albedo = "igual.png";
+    b->materialOverrides.push_back(ov);
+    applyMaterialOverrides(*b);
+    CHECK(b->getMesh().get() == a->getMesh().get());
+
+    b->materialOverrides[0].albedo = "distinto.png";
+    applyMaterialOverrides(*b);
+    CHECK(b->getMesh().get() != a->getMesh().get());
+    CHECK(b->getMesh()->material.texturePath == "distinto.png");
+    CHECK(a->getMesh()->material.texturePath == "igual.png");
+}
+
+// El clon comparte la malla en vez de copiarla.
+static void test_clone_shares_the_mesh(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    go->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned("assets/modelAnimation.fbx")));
+    GameObject* clone = scene.cloneGameObject(go, nullptr, pm, am);
+    CHECK(clone != nullptr);
+    if (!clone) return;
+    CHECK(clone->getMesh().get() == go->getMesh().get());
+}
+
+// Misma configuración de fuentes: coincide. Una fuente de más o un clip
+// renombrado: no.
+static void test_mesh_matches_animation_config()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    nlohmann::json fuentes = nlohmann::json::array();
+    for (const auto& s : m.animationSources)
+        fuentes.push_back({ {"path", s.path}, {"builtin", s.builtin}, {"clips", s.clipNames} });
+    CHECK(meshMatchesAnimationConfig(m, fuentes));
+
+    nlohmann::json mas = fuentes;
+    mas.push_back({ {"path", "otro.fbx"}, {"builtin", false}, {"clips", nlohmann::json::array({"x"})} });
+    CHECK(!meshMatchesAnimationConfig(m, mas));
+
+    nlohmann::json renombrada = fuentes;
+    CHECK(!renombrada.empty() && !renombrada[0]["clips"].empty());
+    if (!renombrada.empty() && !renombrada[0]["clips"].empty())
+    {
+        renombrada[0]["clips"][0] = "renombrado";
+        CHECK(!meshMatchesAnimationConfig(m, renombrada));
+    }
+}
+
+// Undo de Delete con las mallas vivas: comparte y no lee disco.
+static void test_insert_from_json_reuses_preloaded_mesh(PhysicsManager& pm, AudioManager& am)
+{
+    const std::filesystem::path temporal = std::filesystem::temp_directory_path() / "dt_undo_sin_disco.fbx";
+    std::error_code ec;
+    std::filesystem::remove(temporal, ec);
+    std::filesystem::copy_file("assets/modelAnimation.fbx", temporal, ec);
+    CHECK(!ec);
+    if (ec) return;
+
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    go->setMesh(std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned(temporal.string())));
+    nlohmann::json snap = scene.subtreeToJson(go);
+    const PreloadedMeshCache mallas = Scene::collectMeshes(go);
+    const Mesh* original = go->getMesh().get();
+    scene.removeGameObject(go);
+    std::filesystem::remove(temporal, ec);              // sin fichero: leer disco fallaría
+
+    GameObject* r = scene.insertFromJson(snap, nullptr, 0, pm, am, &mallas);
+    CHECK(r != nullptr);
+    if (!r) return;
+    CHECK(r->isSkinned());
+    CHECK(r->getMesh().get() == original);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -5828,6 +5972,13 @@ int main()
     test_global_speed_scales_clock_and_blend();
     test_state_speed_survives_scene_round_trip(pm, am);
     test_negative_state_speed_is_clamped_on_load(pm, am);
+
+    test_clone_with_animation_source_keeps_clip_count(pm, am);
+    test_clone_shares_the_mesh(pm, am);
+    test_mesh_matches_animation_config();
+    test_insert_from_json_reuses_preloaded_mesh(pm, am);
+    test_edit_mesh_copies_only_when_shared();
+    test_equal_material_override_does_not_copy();
 
     am.shutdown();
     pm.shutdown();

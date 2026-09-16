@@ -1830,15 +1830,31 @@ namespace
                     // de clips de abajo se reaplica igual sobre la copia, así que
                     // el resultado es equivalente al camino síncrono sin repetir
                     // el ReadFile. Miss (o entrada no-skinned inesperada) → disco.
+                    //
+                    // Si la precargada YA tiene la misma configuración de
+                    // fuentes que pide el JSON (el caso del clon y del undo de
+                    // Delete, que siembran la caché con la malla viva), se
+                    // COMPARTE sin tocarla: ni copia de 12 MB ni re-aplicar
+                    // fuentes, que duplicaba sus clips. Si no coincide (un FBX
+                    // recién precargado con otra configuración), copia y
+                    // configura como siempre.
+                    std::shared_ptr<const DonTopo::Mesh> compartida;
                     std::shared_ptr<DonTopo::SkinnedMesh> mesh;
                     if (preloaded)
                     {
                         auto it = preloaded->find(sourcePath);
                         if (it != preloaded->end())
                             if (const auto* sk = dynamic_cast<const DonTopo::SkinnedMesh*>(it->second.get()))
-                                mesh = std::make_shared<DonTopo::SkinnedMesh>(*sk);
+                            {
+                                const nlohmann::json fuentesPedidas = j["mesh"].contains("animationSources")
+                                    ? j["mesh"]["animationSources"] : nlohmann::json::array();
+                                if (DonTopo::meshMatchesAnimationConfig(*sk, fuentesPedidas))
+                                    compartida = it->second;
+                                else
+                                    mesh = std::make_shared<DonTopo::SkinnedMesh>(*sk);
+                            }
                     }
-                    if (!mesh)
+                    if (!mesh && !compartida)
                         mesh = std::make_shared<DonTopo::SkinnedMesh>(DonTopo::ModelLoader::loadSkinned(sourcePath));
 
                     // Fuentes de animación. La builtin ya la creó loadSkinned:
@@ -1847,8 +1863,8 @@ namespace
                     // renameClip: eso colisiona consigo mismo ante un swap de
                     // dos nombres y no aplica nada) hasta el menor de los dos
                     // tamaños — un FBX reexportado con más o menos clips no
-                    // debe romper la carga.
-                    if (j["mesh"].contains("animationSources"))
+                    // debe romper la carga. Una malla compartida ya las trae.
+                    if (!compartida && j["mesh"].contains("animationSources"))
                     {
                         for (const auto& sj : j["mesh"]["animationSources"])
                         {
@@ -1909,7 +1925,8 @@ namespace
                         }
                     }
 
-                    node->setMesh(std::move(mesh));
+                    if (compartida) node->setMesh(compartida);
+                    else            node->setMesh(std::move(mesh));
                 }
                 else if (!sourcePath.empty())
                 {
@@ -1918,17 +1935,15 @@ namespace
                     // disco (o de encolar una petición). Un rig cacheado como
                     // SkinnedMesh se copia como tal por robustez, aunque en la
                     // rama estática lo normal es un Mesh plano.
-                    std::shared_ptr<DonTopo::Mesh> cached;
+                    // Se COMPARTE: una malla estática no tiene configuración
+                    // que aplicar, y quien la edite (material) la copia en ese
+                    // momento vía editMesh.
+                    std::shared_ptr<const DonTopo::Mesh> cached;
                     if (preloaded)
                     {
                         auto it = preloaded->find(sourcePath);
                         if (it != preloaded->end() && it->second)
-                        {
-                            if (const auto* sk = dynamic_cast<const DonTopo::SkinnedMesh*>(it->second.get()))
-                                cached = std::make_shared<DonTopo::SkinnedMesh>(*sk);
-                            else
-                                cached = std::make_shared<DonTopo::Mesh>(*it->second);
-                        }
+                            cached = it->second;
                     }
 
                     if (cached)
@@ -3162,14 +3177,9 @@ namespace DonTopo
         // disco igual. Vale para las dos cachés, que se llenan en la misma
         // pasada.
         std::unordered_map<std::string, bool> cache;
-        PreloadedMeshCache mallas;
-        src->traverse([&](GameObject* n) {
-            if (!n->hasMesh()) return;
-            const std::string& ruta = n->getMesh()->sourcePath;
-            if (ruta.empty()) return;   // procedural: no hay fichero que evitar
-            cache[ruta]  = n->isSkinned();
-            mallas[ruta] = n->getMesh();
-        });
+        const PreloadedMeshCache mallas = collectMeshes(src);
+        for (const auto& [ruta, m] : mallas)
+            cache[ruta] = dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr;
         try
         {
             // Raíz vacía, pareja de la de arriba: j se serializó con raíz vacía
@@ -3481,8 +3491,42 @@ namespace DonTopo
         return nodeToJson(*node, std::string(), /*carryOverrideBaseline=*/true);
     }
 
+    bool meshMatchesAnimationConfig(const SkinnedMesh& mesh, const nlohmann::json& animationSources)
+    {
+        if (!animationSources.is_array()) return false;
+        if (animationSources.size() != mesh.animationSources.size()) return false;
+        for (size_t i = 0; i < animationSources.size(); i++)
+        {
+            const nlohmann::json& sj = animationSources[i];
+            const AnimationSource& src = mesh.animationSources[i];
+            if (!sj.is_object()) return false;
+            if (sj.value("path", std::string()) != src.path) return false;
+            if (sj.value("builtin", false) != src.builtin) return false;
+            if (!sj.contains("clips") || !sj["clips"].is_array()) return src.clipNames.empty();
+            const nlohmann::json& cj = sj["clips"];
+            if (cj.size() != src.clipNames.size()) return false;
+            for (size_t c = 0; c < cj.size(); c++)
+                if (!cj[c].is_string() || cj[c].get<std::string>() != src.clipNames[c]) return false;
+        }
+        return true;
+    }
+
+    PreloadedMeshCache Scene::collectMeshes(GameObject* root)
+    {
+        PreloadedMeshCache out;
+        if (!root) return out;
+        root->traverse([&](GameObject* n) {
+            if (!n->hasMesh()) return;
+            const std::string& ruta = n->getMesh()->sourcePath;
+            if (ruta.empty()) return;   // procedural: no hay fichero que evitar
+            out[ruta] = n->getMesh();
+        });
+        return out;
+    }
+
     GameObject* Scene::insertFromJson(const nlohmann::json& j, GameObject* parent, size_t index,
-                                       PhysicsManager& physics, AudioManager& audio)
+                                       PhysicsManager& physics, AudioManager& audio,
+                                       const PreloadedMeshCache* preloaded)
     {
         GameObject* target = parent ? parent : &m_root;
 
@@ -3514,17 +3558,21 @@ namespace DonTopo
         // de lo que promete lastWarnings() en el header.
         m_warnings.clear();
         // Sin objeto vivo al que preguntar (esto reconstruye un subárbol ya
-        // borrado: el undo de un Delete), así que la cache arranca vacía y
-        // sólo aporta el dedup entre los nodos de ESE subárbol — que ya evita
-        // repetir el ReadFile de Assimp por cada nodo que comparta sourcePath.
+        // borrado: el undo de un Delete). Si el llamante trae las mallas vivas
+        // (preloaded), la cache de hasBones se siembra con ellas y no se toca
+        // el disco; si no, arranca vacía y sólo aporta el dedup entre los
+        // nodos de ESE subárbol.
         std::unordered_map<std::string, bool> cache;
+        if (preloaded)
+            for (const auto& [ruta, m] : *preloaded)
+                cache[ruta] = dynamic_cast<const SkinnedMesh*>(m.get()) != nullptr;
         try
         {
             // Raíz vacía, pareja de subtreeToJson: j vino de ahí con raíz
             // vacía (rutas verbatim), así que se lee igual. carryOverrideBaseline
             // a juego con el mismo true de subtreeToJson.
             nodeFromJson(j, node, target->worldTransform, physics, audio, &m_warnings, &cache, std::string(),
-                         /*loader=*/nullptr, /*preloaded=*/nullptr, /*carryOverrideBaseline=*/true);
+                         /*loader=*/nullptr, preloaded, /*carryOverrideBaseline=*/true);
         }
         catch (const nlohmann::json::exception&)
         {

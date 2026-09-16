@@ -429,6 +429,32 @@ ablación demuestra que es la copia de sus **11,9 MB de geometría** (el JSON so
 0,006 ms; los clips, 148 KB). Es el síntoma que esta sección predecía, un orden de
 magnitud por encima del de las primitivas.
 
+**CERRADO el 2026-09-16** (rama `feat/shared-mesh-cow`, `c6f9561` + `a03d1ca`).
+No se partió `Mesh`: se hizo **copia al modificar** sobre la malla entera, que
+consigue lo mismo para el clon con mucho menos radio. `GameObject::getMesh()`
+devuelve `shared_ptr<const Mesh>` y la única vía de escritura es `editMesh()`,
+que copia si la malla está compartida: el compilador señaló los ~25 sitios
+que escribían, y dejó de haber forma de editar una malla ajena por descuido.
+El clon y el undo de Delete comparten la malla viva siempre que su
+configuración de animación coincida con la del JSON.
+
+| Release, 101k vértices | antes | después |
+|---|---|---|
+| clonar un skinned | ~19-22 ms | **0,011-0,015 ms** |
+| undo de Delete de un skinned | 159-162 ms (releyendo el FBX) | **0,007 ms** |
+
+Lo que **no** cubre, a sabiendas:
+- **Editar el material del clon copia la geometría una vez**, en ese momento
+  (~20 ms para ese personaje). El coste pasa del Instantiate a la primera
+  edición de material, que en el editor es un gesto del usuario y en Play no
+  existe.
+- **H15 sigue igual**: las primitivas procedurales no tienen `sourcePath`,
+  `collectMeshes` se las salta y siguen haciendo el round-trip de JSON
+  (2,36 ms por esfera). Lo que la reabriría es lo mismo que se dice abajo.
+- De paso arregló un bug que ya estaba en main: clonar un objeto con un FBX de
+  animación añadido duplicaba sus clips (se re-aplicaban las fuentes sobre una
+  copia que ya las tenía). Tiene test.
+
 **Qué lo reabre**: que alguien instancie primitivas procedurales en Play
 (proyectiles, pickups), o que la RAM de geometría duplicada aparezca en un
 perfil. Si pasa cualquiera de las dos, el diagnóstico ya está hecho: no hay

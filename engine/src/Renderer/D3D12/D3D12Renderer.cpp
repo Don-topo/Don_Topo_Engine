@@ -10115,7 +10115,7 @@ void D3D12Renderer::registerGameObject(GameObject* node)
             return;
         }
 
-        const std::shared_ptr<Mesh> mesh = child->getMesh();
+        const std::shared_ptr<const Mesh> mesh = child->getMesh();
         if (!mesh)
             return;
         const int index = addStaticMesh(*mesh);

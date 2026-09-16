@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
@@ -208,6 +209,11 @@ private:
     uint64_t m_parentId;
     size_t m_index;
     nlohmann::json m_snapshot;
+    // Mallas vivas del subárbol, tomadas en execute() antes de borrar: el undo
+    // las reutiliza en vez de releer los FBX (~230 ms por personaje).
+    // Mismo tipo que Scene::PreloadedMeshCache, escrito a mano para no arrastrar
+    // Scene.h a todo el que incluye Command.h.
+    std::unordered_map<std::string, std::shared_ptr<const Mesh>> m_meshes;
 };
 
 // Inverso de DeleteGameObjectCommand: reconstruye desde snapshot (execute) /
@@ -894,7 +900,12 @@ private:
     std::string                   m_label;
     uint64_t                      m_id;
     bool                          m_add;
-    std::shared_ptr<Mesh>         m_mesh;
+    // Dueño de la malla SOLO mientras está quitada. Mientras está puesta en el
+    // objeto, el comando no la retiene (m_meshVista): si la retuviera, el objeto
+    // la vería compartida, editMesh() la copiaría al primer cambio de material,
+    // y la comparación "¿es la nuestra?" de remove() dejaría de casar sola.
+    std::shared_ptr<const Mesh>   m_mesh;
+    std::weak_ptr<const Mesh>     m_meshVista;
     std::vector<MaterialOverride> m_overrides;
 };
 

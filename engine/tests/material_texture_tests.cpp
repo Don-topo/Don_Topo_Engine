@@ -25,6 +25,15 @@
 using namespace DonTopo;
 
 static int g_failures = 0;
+
+// Alias de la malla que NO cuenta como dueño (ver el mismo helper en
+// animator_tests.cpp): sin él, el shared_ptr del test haría que editMesh()
+// viera la malla compartida y la copiara.
+template <typename M>
+static std::shared_ptr<M> soloObservador(const std::shared_ptr<M>& m)
+{
+    return std::shared_ptr<M>(m.get(), [](M*) {});
+}
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL: %s (line %d)\n", #cond, __LINE__); ++g_failures; } } while (0)
 
 // Estático con una textura de albedo venida del FBX.
@@ -57,7 +66,7 @@ static std::unique_ptr<GameObject> makeSkinnedFixture()
 static void test_materials_of_static_mesh()
 {
     auto go = makeStaticFixture();
-    std::vector<Material*> mats = materialsOfMesh(*go);
+    std::vector<const Material*> mats = materialsOfMesh(*go);
     CHECK(mats.size() == 1);
     if (mats.size() == 1)
         CHECK(mats[0]->texturePath == "assets/fbx_albedo.png");
@@ -67,7 +76,7 @@ static void test_materials_of_static_mesh()
 static void test_materials_of_skinned_mesh()
 {
     auto go = makeSkinnedFixture();
-    std::vector<Material*> mats = materialsOfMesh(*go);
+    std::vector<const Material*> mats = materialsOfMesh(*go);
     CHECK(mats.size() == 3);
     if (mats.size() == 3)
         CHECK(mats[2]->texturePath == "assets/pelo.png");
@@ -132,7 +141,7 @@ static void test_skinned_override_touches_only_its_index()
 
     applyMaterialOverrides(*go);
 
-    SkinnedMesh* sm = go->getSkinnedMesh();
+    const SkinnedMesh* sm = go->getSkinnedMesh();
     CHECK(sm->materials[2].texturePath == "assets/pelo_rubio.png");
     CHECK(sm->materials[0].texturePath == "assets/cuerpo.png");
     CHECK(sm->materials[1].texturePath == "assets/ropa.png");
@@ -150,7 +159,7 @@ static void test_out_of_range_index_is_ignored()
 
     applyMaterialOverrides(*go);
 
-    SkinnedMesh* sm = go->getSkinnedMesh();
+    const SkinnedMesh* sm = go->getSkinnedMesh();
     CHECK(sm->materials[0].texturePath == "assets/cuerpo.png");
     CHECK(sm->materials[1].texturePath == "assets/ropa.png");
     CHECK(sm->materials[2].texturePath == "assets/pelo.png");
@@ -160,8 +169,8 @@ static void test_out_of_range_index_is_ignored()
 static void test_slots_are_independent()
 {
     auto go = makeStaticFixture();
-    go->getMesh()->material.normalMapPath          = "assets/fbx_normal.png";
-    go->getMesh()->material.metallicRoughnessPath  = "assets/fbx_orm.png";
+    go->editMesh()->material.normalMapPath          = "assets/fbx_normal.png";
+    go->editMesh()->material.metallicRoughnessPath  = "assets/fbx_orm.png";
 
     MaterialOverride ov;
     ov.index  = 0;
@@ -181,8 +190,8 @@ static void test_slots_are_independent()
 static void test_normal_and_orm_overrides_write_their_own_field()
 {
     auto go = makeStaticFixture();
-    go->getMesh()->material.normalMapPath         = "assets/fbx_normal.png";
-    go->getMesh()->material.metallicRoughnessPath = "assets/fbx_orm.png";
+    go->editMesh()->material.normalMapPath         = "assets/fbx_normal.png";
+    go->editMesh()->material.metallicRoughnessPath = "assets/fbx_orm.png";
 
     MaterialOverride ov;
     ov.index  = 0;
@@ -1383,7 +1392,7 @@ static void test_remove_mesh_undo_restores_mesh_and_overrides()
     auto mesh = std::make_shared<Mesh>();
     mesh->material.texturePath = "assets/fbx_albedo.png";
     mesh->material.metallic    = 0.3f;
-    go->setMesh(mesh);
+    go->setMesh(mesh); mesh = soloObservador(mesh);
     const uint64_t id = go->id;
     setMaterialTextureOverride(*go, 0, MaterialTextureSlot::Albedo, "assets/mia.png");
     setMaterialFactorOverride(*go, 0, MaterialFactorSlot::Metallic, 0.8f);
@@ -1400,11 +1409,13 @@ static void test_remove_mesh_undo_restores_mesh_and_overrides()
     CHECK(mesh->material.texturePath == "assets/mia.png");
     CHECK(mesh->material.metallic == 0.8f);
 
-    // Clear de los dos: tiene que volver lo del FBX.
+    // Clear de los dos: tiene que volver lo del FBX. Se lee a través del
+    // objeto: el comando sigue guardando la malla (para un redo), así que
+    // editarla la copia — es lo previsto — y `mesh` es la de antes.
     setMaterialTextureOverride(*vuelto, 0, MaterialTextureSlot::Albedo, "");
-    CHECK(mesh->material.texturePath == "assets/fbx_albedo.png");
+    CHECK(vuelto->getMesh()->material.texturePath == "assets/fbx_albedo.png");
     setMaterialFactorOverride(*vuelto, 0, MaterialFactorSlot::Metallic, -1.0f);
-    CHECK(mesh->material.metallic == 0.3f);
+    CHECK(vuelto->getMesh()->material.metallic == 0.3f);
 
     // Redo: se vuelve a quitar.
     cmd.execute();
@@ -1453,7 +1464,7 @@ static void test_add_mesh_command_undo_redo()
     GameObject* go = scene.addGameObject("Cubo");
     auto mesh = std::make_shared<Mesh>();
     mesh->material.texturePath = "assets/fbx_albedo.png";
-    go->setMesh(mesh);   // lo que hace applyLoadedMesh al aterrizar
+    go->setMesh(mesh); mesh = soloObservador(mesh);   // lo que hace applyLoadedMesh al aterrizar
     const uint64_t id = go->id;
     setMaterialTextureOverride(*go, 0, MaterialTextureSlot::Albedo, "assets/mia.png");
 
@@ -1467,7 +1478,8 @@ static void test_add_mesh_command_undo_redo()
     CHECK(scene.findById(id)->getMesh() == mesh);
     CHECK(mesh->material.texturePath == "assets/mia.png");
     setMaterialTextureOverride(*scene.findById(id), 0, MaterialTextureSlot::Albedo, "");
-    CHECK(mesh->material.texturePath == "assets/fbx_albedo.png");
+    // A través del objeto: el comando guarda la malla y editarla la copia.
+    CHECK(scene.findById(id)->getMesh()->material.texturePath == "assets/fbx_albedo.png");
 }
 
 // Deshacer "añadir A" solo quita A. Si la malla ya es otra -llego por un camino

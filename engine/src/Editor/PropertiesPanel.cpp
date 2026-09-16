@@ -7967,7 +7967,7 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
 {
     if (!ctx.selected || !ctx.selected->hasMesh()) return;
 
-    std::vector<Material*> mats = materialsOfMesh(*ctx.selected);
+    const std::vector<const Material*> mats = materialsOfMesh(*ctx.selected);
     if (mats.empty()) return;
 
     // Desplegada por defecto, como el propio TreeNode del Mesh. Plegada era
@@ -8062,7 +8062,7 @@ void PropertiesPanel::drawTexturesSection(EditorContext& ctx)
         // PushID(m) — sin él, "Metallic"/"Roughness" del material 0 y el 1
         // colisionarían igual que los tres botones de textura.
         {
-            Material& mat = *mats[(size_t)m];
+            const Material& mat = *mats[(size_t)m];
             // MISMA condición que miran los dos backends para decidir si el
             // mapa manda (D3D12Renderer::addStaticMesh/rebuildStaticMesh,
             // Renderer::createSharedGpuMesh), no !path.empty(): un modelo con
@@ -8255,7 +8255,7 @@ void PropertiesPanel::assignMaterialTexture(EditorContext& ctx, uint64_t ownerId
     // escribiría un override que applyMaterialOverrides ignora en silencio hoy
     // pero que nodeToJson serializa igual, y que dispararía el aviso de
     // "índice fuera de rango" en la siguiente carga de escena.
-    const std::vector<Material*> mats = materialsOfMesh(*go);
+    const std::vector<const Material*> mats = materialsOfMesh(*go);
     if (materialIndex < 0 || materialIndex >= (int)mats.size())
     {
         ctx.logModule("Mesh", "No se pudo aplicar la textura: el material ya no existe en '"
