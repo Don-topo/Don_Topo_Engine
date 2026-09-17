@@ -11,6 +11,11 @@
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
 #include "DonTopo/Renderer/SkinnedFrameSync.h"
+#include "DonTopo/Renderer/RootMotion.h"
+#include "DonTopo/Core/RootMotionApply.h"
+#include "DonTopo/Physics/Rigidbody.h"
+#include "DonTopo/Physics/Colliders/BoxCollider.h"
+#include <glm/gtc/matrix_transform.hpp>
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Editor/AnimatorGraphUndo.h"
 #include "DonTopo/Core/AnimatorSerialization.h"
@@ -4176,12 +4181,12 @@ static AnimatorComponent makeRootLockFadeGraph(bool lockFrom, bool lockTo)
     AnimatorComponent::State from;
     from.name = "Walk"; from.clipName = "Walk";
     from.clipIndex = 0; from.duration = 40.0f; from.ticksPerSecond = 20.0f;
-    from.lockRootMotion = lockFrom;
+    from.rootMotion = lockFrom ? AnimatorComponent::RootMotion::Lock : AnimatorComponent::RootMotion::Off;
 
     AnimatorComponent::State to;
     to.name = "Run"; to.clipName = "Run";
     to.clipIndex = 1; to.duration = 100.0f; to.ticksPerSecond = 50.0f;
-    to.lockRootMotion = lockTo;
+    to.rootMotion = lockTo ? AnimatorComponent::RootMotion::Lock : AnimatorComponent::RootMotion::Off;
 
     a.addState(from);
     a.addState(to);
@@ -4208,19 +4213,19 @@ static void test_crossfade_root_lock_follows_destination_state()
     AnimatorComponent a = makeRootLockFadeGraph(false, true);
     a.bindClips(mesh, nullptr);
     a.update(0.0f, true);
-    CHECK(!a.poseLockRootMotion());
+    CHECK(a.poseRootMotionMode() == 0u);
     a.setBool("go", true);
     a.update(0.0f, true);
     a.update(0.15f, true);
     CHECK(nearlyEqual(a.blendWeight(), 0.3f));
-    CHECK(a.poseLockRootMotion());
+    CHECK(a.poseRootMotionMode() == 1u);
 
     const glm::mat4 mezclaLibre = evalLocalXformBlended(
         p, (size_t)a.poseClipA() * B, (size_t)a.poseClipB() * B, 0,
         a.poseTimeA(), a.poseTimeB(), a.poseWeight(), false);
     const glm::mat4 mezclaBloqueada = evalLocalXformBlended(
         p, (size_t)a.poseClipA() * B, (size_t)a.poseClipB() * B, 0,
-        a.poseTimeA(), a.poseTimeB(), a.poseWeight(), a.poseLockRootMotion());
+        a.poseTimeA(), a.poseTimeB(), a.poseWeight(), a.poseRootMotionMode() == 1u);
 
     // mix(4, 10, 0.3) = 5.8 sin bloqueo; con bloqueo, la traslación de bind pose.
     CHECK(nearlyEqual(mezclaLibre[3].x, 5.8f));
@@ -4233,12 +4238,12 @@ static void test_crossfade_root_lock_follows_destination_state()
     AnimatorComponent b = makeRootLockFadeGraph(true, false);
     b.bindClips(mesh, nullptr);
     b.update(0.0f, true);
-    CHECK(b.poseLockRootMotion());
+    CHECK(b.poseRootMotionMode() == 1u);
     b.setBool("go", true);
     b.update(0.0f, true);
     b.update(0.15f, true);
     CHECK(b.blending());
-    CHECK(!b.poseLockRootMotion());
+    CHECK(b.poseRootMotionMode() == 0u);
 }
 
 // Round-trip de escena con un estado bloqueado y otro no en el MISMO grafo.
@@ -4250,9 +4255,9 @@ static void test_root_lock_survives_scene_round_trip(PhysicsManager& pm, AudioMa
 
     auto a = std::make_shared<AnimatorComponent>();
     AnimatorComponent::State run;
-    run.name = "Run"; run.clipName = "ClipRun"; run.lockRootMotion = true;
+    run.name = "Run"; run.clipName = "ClipRun"; run.rootMotion = AnimatorComponent::RootMotion::Lock;
     AnimatorComponent::State jump;
-    jump.name = "Jump"; jump.clipName = "ClipJump"; jump.lockRootMotion = false;
+    jump.name = "Jump"; jump.clipName = "ClipJump"; jump.rootMotion = AnimatorComponent::RootMotion::Off;
     a->addState(run);
     a->addState(jump);
     go->setAnimator(a);
@@ -4264,8 +4269,8 @@ static void test_root_lock_survives_scene_round_trip(PhysicsManager& pm, AudioMa
     for (auto& node : j["root"]["children"])
     {
         if (!node.contains("animator")) continue;
-        CHECK(node["animator"]["states"][0].contains("lockRootMotion"));
-        CHECK(!node["animator"]["states"][1].contains("lockRootMotion"));
+        CHECK(node["animator"]["states"][0].contains("rootMotion"));
+        CHECK(!node["animator"]["states"][1].contains("rootMotion"));
         checked = true;
     }
     CHECK(checked);
@@ -4278,8 +4283,8 @@ static void test_root_lock_survives_scene_round_trip(PhysicsManager& pm, AudioMa
 
     const auto& st = found->getAnimator()->states();
     CHECK(st.size() == 2u);
-    CHECK(st[0].lockRootMotion);
-    CHECK(!st[1].lockRootMotion);
+    CHECK(st[0].rootMotion == AnimatorComponent::RootMotion::Lock);
+    CHECK(st[1].rootMotion == AnimatorComponent::RootMotion::Off);
 }
 
 // Retrocompatibilidad: un estado guardado antes de esta feature no trae la clave
@@ -4292,7 +4297,7 @@ static void test_state_without_lock_root_motion_field_loads(PhysicsManager& pm, 
 
     auto a = std::make_shared<AnimatorComponent>();
     AnimatorComponent::State s;
-    s.name = "Run"; s.clipName = "ClipRun"; s.lockRootMotion = true;
+    s.name = "Run"; s.clipName = "ClipRun"; s.rootMotion = AnimatorComponent::RootMotion::Lock;
     a->addState(s);
     go->setAnimator(a);
 
@@ -4302,7 +4307,7 @@ static void test_state_without_lock_root_motion_field_loads(PhysicsManager& pm, 
     for (auto& node : j["root"]["children"])
     {
         if (!node.contains("animator")) continue;
-        node["animator"]["states"][0].erase("lockRootMotion");
+        node["animator"]["states"][0].erase("rootMotion");
         stripped = true;
     }
     CHECK(stripped);
@@ -4316,7 +4321,7 @@ static void test_state_without_lock_root_motion_field_loads(PhysicsManager& pm, 
 
     const auto& st = found->getAnimator()->states()[0];
     CHECK(st.name == "Run");
-    CHECK(!st.lockRootMotion);
+    CHECK(st.rootMotion == AnimatorComponent::RootMotion::Off);
 }
 
 // H4 de docs/core-audit.md: removeState y setEntryState terminaban en reset(),
@@ -4686,7 +4691,7 @@ static std::vector<GraphMutation> graphMutations()
         { "state.blendEntry.threshold", [](A& a) { a.statesMutable()[0].blendEntries[0].threshold = 2.0f; } },
         { "state.addBlendEntry",        [](A& a) { a.statesMutable()[0].blendEntries.push_back(entrada("idle", -1, 0.0f, 3.0f)); } },
         { "state.events",               [](A& a) { a.statesMutable()[0].events.push_back({ "paso", 0.5f }); } },
-        { "state.lockRootMotion", [](A& a) { a.statesMutable()[0].lockRootMotion = true; } },
+        { "state.rootMotion",     [](A& a) { a.statesMutable()[0].rootMotion = A::RootMotion::Apply; } },
         { "state.speed",          [](A& a) { a.statesMutable()[0].speed = 2.0f; } },
         { "state.speedParam",     [](A& a) { a.statesMutable()[0].speedParam = "speed"; } },
         { "addState",             [](A& a) { A::State s; s.name = "C"; s.clipName = "idle"; a.addState(s); } },
@@ -5012,17 +5017,17 @@ struct SkinnedRendererDoble
     float     timeB         = -1.0f;
     float     timeA         = -1.0f;
     float     weight        = -1.0f;
-    bool      lockRoot      = false;
+    uint32_t  rootMode      = 0xFFFFFFFFu;
     float     dtSinAnimator = -1.0f;
     glm::mat4 transform     = glm::mat4(0.0f);
     float     ssr           = -1.0f;
 
     void setSkinnedMeshVisible(int, bool v) { orden.push_back("visible"); visible = v; }
     void updateAnimation(int, float dt)     { orden.push_back("updateAnimation"); dtSinAnimator = dt; }
-    void setAnimationBlend(int, uint32_t cb, float tb, uint32_t ca, float ta, float w, bool lock)
+    void setAnimationBlend(int, uint32_t cb, float tb, uint32_t ca, float ta, float w, uint32_t mode)
     {
         orden.push_back("blend");
-        clipB = cb; timeB = tb; clipA = ca; timeA = ta; weight = w; lockRoot = lock;
+        clipB = cb; timeB = tb; clipA = ca; timeA = ta; weight = w; rootMode = mode;
     }
     void setSkinnedTransform(int, const glm::mat4& m) { orden.push_back("transform"); transform = m; }
     void setSkinnedSsr(int, float s)                  { orden.push_back("ssr"); ssr = s; }
@@ -5099,6 +5104,9 @@ static void test_apply_skinned_frame_passes_pose_b_then_a()
     // el test pasaría con los argumentos cambiados.
     a->statesMutable()[0].clipIndex = 3;
     a->statesMutable()[1].clipIndex = 7;
+    // Modo de raíz distinto de 0 (el default del doble y del backend): si el
+    // host no lo pasara, este test no lo vería.
+    for (auto& s : a->statesMutable()) s.rootMotion = AnimatorComponent::RootMotion::Lock;
     GameObject* go = makeSkinnedGameObject(scene, a);
 
     SkinnedRendererDoble r;
@@ -5111,7 +5119,8 @@ static void test_apply_skinned_frame_passes_pose_b_then_a()
     CHECK(nearlyEqual(r.timeB, a->poseTimeB()));
     CHECK(nearlyEqual(r.timeA, a->poseTimeA()));
     CHECK(nearlyEqual(r.weight, a->poseWeight()));
-    CHECK(r.lockRoot == a->poseLockRootMotion());
+    CHECK(r.rootMode == 1u);
+    CHECK(r.rootMode == a->poseRootMotionMode());
 }
 
 // Sin Animator el reloj lo lleva el backend, como antes de que el componente
@@ -6163,6 +6172,267 @@ static void test_events_scene_round_trip(PhysicsManager& pm, AudioManager& am)
     CHECK(ev[1].name == "golpe" && nearlyEqual(ev[1].time, 1.0f));
 }
 
+// El bool viejo lockRootMotion carga como Lock; "apply" va y vuelve.
+static void test_root_motion_mode_migration(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>();
+    AnimatorComponent::State s;
+    s.name = "Viejo"; s.clipName = "Run"; a->addState(s);
+    s.name = "Nuevo"; s.clipName = "Run"; s.rootMotion = AnimatorComponent::RootMotion::Apply; a->addState(s);
+    go->setAnimator(a);
+
+    nlohmann::json j = scene.toJson();
+    bool tocado = false;
+    for (auto& node : j["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        CHECK(node["animator"]["states"][1]["rootMotion"] == "apply");
+        node["animator"]["states"][0]["lockRootMotion"] = true;
+        tocado = true;
+    }
+    CHECK(tocado);
+
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& st = found->getAnimator()->states();
+    CHECK(st.size() == 2u);
+    if (st.size() != 2u) return;
+    CHECK(st[0].rootMotion == AnimatorComponent::RootMotion::Lock);
+    CHECK(st[1].rootMotion == AnimatorComponent::RootMotion::Apply);
+}
+
+// ── Root motion ──────────────────────────────────────────────────────────────
+//
+// Malla sintética: esqueleto de un hueso raíz y clips cuya raíz avanza en X
+// linealmente `avance` unidades por ciclo de `dur` ticks (y a 1 de altura, con
+// Y creciente en el clip 2 para comprobar que se descarta).
+static SkinnedMesh makeRootMotionMesh()
+{
+    SkinnedMesh m;
+    m.skeleton.names = { "Hips" };
+    m.skeleton.parentIndex = { -1 };
+    m.skeleton.inverseBindPose = { glm::mat4(1.0f) };
+    m.skeleton.boneMap["Hips"] = 0;
+    auto clip = [](const char* n, float dur, glm::vec3 fin) {
+        AnimationClip c; c.name = n; c.duration = dur; c.ticksPerSecond = 20.0f;
+        BoneChannel ch; ch.boneIndex = 0;
+        ch.posKeys = { { 0.0f, glm::vec3(0.0f, 1.0f, 0.0f) }, { dur, fin } };
+        c.channels.push_back(ch);
+        return c;
+    };
+    m.animationClips = { clip("Walk", 40.0f, glm::vec3(10.0f, 1.0f, 0.0f)),
+                         clip("Run",  80.0f, glm::vec3(30.0f, 1.0f, 0.0f)),
+                         clip("Sube", 40.0f, glm::vec3(10.0f, 5.0f, 0.0f)) };
+    return m;
+}
+
+static void test_root_displacement_counts_cycles()
+{
+    const SkinnedMesh m = makeRootMotionMesh();
+    CHECK(nearlyEqual(rootDisplacement(m, 0, 40.0, 40.0, true).x, 10.0f));
+    CHECK(nearlyEqual(rootDisplacement(m, 0, 100.0, 40.0, true).x, 25.0f));
+    CHECK(nearlyEqual(rootDisplacement(m, 0, 100.0, 40.0, false).x, 10.0f));
+    CHECK(nearlyEqual(rootDisplacement(m, 0, 0.0, 40.0, true).x, 0.0f));
+}
+
+static AnimatorComponent makeRootMotionGraph(int clip = 0, float dur = 40.0f)
+{
+    AnimatorComponent a;
+    AnimatorComponent::State s;
+    s.name = "Walk"; s.clipName = "Walk"; s.clipIndex = clip; s.duration = dur;
+    s.ticksPerSecond = 20.0f; s.loop = true; s.rootMotion = AnimatorComponent::RootMotion::Apply;
+    a.addState(s);
+    a.setEntryState(0);
+    a.reset();
+    return a;
+}
+
+// Un update que cruza el wrap da el avance real, sin salto negativo.
+static void test_root_motion_delta_across_wrap()
+{
+    const SkinnedMesh m = makeRootMotionMesh();
+    AnimatorComponent a = makeRootMotionGraph();
+    a.update(1.9f, true);                          // 38 ticks
+    a.update(0.2f, true);                          // 38 -> 42
+    CHECK(nearlyEqual(rootMotionDelta(m, a).x, 1.0f));
+}
+
+// Solo X y Z: la Y de la raíz se queda en la pose.
+static void test_root_motion_delta_drops_y()
+{
+    const SkinnedMesh m = makeRootMotionMesh();
+    AnimatorComponent a = makeRootMotionGraph(2);
+    a.update(1.0f, true);                          // 20 ticks: Y sube 2
+    const glm::vec3 d = rootMotionDelta(m, a);
+    CHECK(nearlyEqual(d.x, 5.0f));
+    CHECK(nearlyEqual(d.y, 0.0f));
+}
+
+// Blend 1D: cada clip en su fase y el delta ponderado.
+static void test_root_motion_delta_blend_weighted()
+{
+    const SkinnedMesh m = makeRootMotionMesh();
+    AnimatorComponent a = makeRootMotionGraph();
+    auto& s = a.statesMutable()[0];
+    s.blendParam = "speed"; s.clipThreshold = 0.0f;
+    s.blendEntries = { entrada("Run", 1, 80.0f, 1.0f) };
+    a.addParameter("speed", AnimatorComponent::ParamType::Float);
+    a.setFloat("speed", 0.5f);
+    a.update(1.0f, true);                          // fase 0,5: Walk 5, Run 15
+    CHECK(nearlyEqual(rootMotionDelta(m, a).x, 10.0f));
+}
+
+// Cross-fade entre dos Apply: 1 − w del que sale, w del que entra.
+static void test_root_motion_delta_crossfade_weighted()
+{
+    const SkinnedMesh m = makeRootMotionMesh();
+    AnimatorComponent a = makeRootMotionGraph();
+    AnimatorComponent::State b;
+    b.name = "Run"; b.clipName = "Run"; b.clipIndex = 1; b.duration = 40.0f;   // 30 por cada 40 ticks
+    b.ticksPerSecond = 20.0f; b.loop = true; b.rootMotion = AnimatorComponent::RootMotion::Apply;
+    a.addState(b);
+    a.addParameter("go", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 2.0f;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "go";
+    t.conditions.push_back(c);
+    a.addTransition(t);
+
+    a.setTrigger("go");
+    a.update(0.016f, true);                        // sale a Run con fade de 2 s
+    a.update(0.5f, true);                          // w = 0,25; 10 ticks cada uno
+    // Walk: 10 ticks = 2,5. Run (clip de 80 ticks estirado a 40): 10 ticks de
+    // la malla = 3,75. Delta = 0,75·2,5 + 0,25·3,75.
+    CHECK(a.blending());
+    CHECK(nearlyEqual(rootMotionDelta(m, a).x, 0.75f * 2.5f + 0.25f * 3.75f));
+}
+
+// Sin Apply, o en Edit, no hay muestras.
+static void test_root_motion_samples_only_in_play_with_apply()
+{
+    AnimatorComponent a = makeRootMotionGraph();
+    a.update(0.5f, false);
+    CHECK(a.rootMotionSamples().empty());
+    a.statesMutable()[0].rootMotion = AnimatorComponent::RootMotion::Lock;
+    a.update(0.5f, true);
+    CHECK(a.rootMotionSamples().empty());
+}
+
+// Espacio: en el FBX real la Y de la raíz es su mayor componente (altura de
+// cadera). Si falla, las claves de la raíz no están en espacio de modelo con Y
+// arriba y el diseño hay que revisarlo, no el test.
+static void test_root_motion_space_is_model_y_up()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    CHECK(!m.animationClips.empty());
+    if (m.animationClips.empty()) return;
+    const glm::vec3 p = sampleRootPosition(m, 0, 0.0);
+    CHECK(std::fabs(p.y) > std::fabs(p.x));
+    CHECK(std::fabs(p.y) > std::fabs(p.z));
+}
+
+// El estado que se apaga usa SU reloj acumulado, no uno que empiece en 0: con
+// un clip no lineal y el fade cruzando su wrap, empezar en 0 da otro avance.
+static void test_root_motion_crossfade_uses_prev_clock()
+{
+    SkinnedMesh m = makeRootMotionMesh();
+    // Walk rápido en la primera mitad (8) y lento en la segunda (2).
+    m.animationClips[0].channels[0].posKeys = { { 0.0f,  glm::vec3(0.0f, 1.0f, 0.0f) },
+                                                { 20.0f, glm::vec3(8.0f, 1.0f, 0.0f) },
+                                                { 40.0f, glm::vec3(10.0f, 1.0f, 0.0f) } };
+    AnimatorComponent a = makeRootMotionGraph();
+    AnimatorComponent::State b;
+    b.name = "Run"; b.clipName = "Run"; b.clipIndex = 1; b.duration = 40.0f;
+    b.ticksPerSecond = 20.0f; b.loop = true; b.rootMotion = AnimatorComponent::RootMotion::Apply;
+    a.addState(b);
+    a.addParameter("go", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 2.0f;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "go";
+    t.conditions.push_back(c);
+    a.addTransition(t);
+
+    a.update(1.8f, true);                          // Walk en 36 ticks
+    a.setTrigger("go");
+    a.update(0.016f, true);                        // 36,32: sale a Run
+    a.update(0.5f, true);                          // Walk 36,32 -> 46,32 cruza su wrap
+    CHECK(a.blending());
+    const float prev = rootDisplacement(m, 0, 46.32, 40.0, true).x - rootDisplacement(m, 0, 36.32, 40.0, true).x;
+    // Empezando en 0 serían 10 ticks del tramo rápido = 4: el test distingue.
+    CHECK(std::fabs(prev - 4.0f) > 0.5f);
+    CHECK(nearlyEqual(rootMotionDelta(m, a).x, 0.75f * prev + 0.25f * 3.75f, 0.01f));
+}
+
+// Sin Rigidbody: el transform avanza el delta en mundo (con la escala del
+// objeto) y, con padre rotado, la posición local lo compensa.
+static void test_apply_root_motion_moves_transform()
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    go->localTransform = glm::scale(glm::mat4(1.0f), glm::vec3(0.5f));
+    scene.getRoot().updateWorldTransforms();
+    applyRootMotion(*go, glm::vec3(4.0f, 9.0f, 0.0f), 0.016f);
+    CHECK(nearlyEqual(go->worldTransform[3].x, 2.0f));
+    CHECK(nearlyEqual(go->worldTransform[3].y, 0.0f));
+
+    GameObject* padre = scene.addGameObject("Padre");
+    padre->localTransform = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0, 1, 0));
+    GameObject* hijo = scene.addGameObject("Hijo", padre);
+    scene.getRoot().updateWorldTransforms();
+    applyRootMotion(*hijo, glm::vec3(1.0f, 0.0f, 0.0f), 0.016f);
+    // X del hijo en modelo = −Z en mundo (rotación de 90° en Y del padre).
+    CHECK(nearlyEqual(hijo->worldTransform[3].z, -1.0f));
+    CHECK(nearlyEqual(hijo->worldTransform[3].x, 0.0f));
+}
+
+// Con Rigidbody dinámico: velocidad X/Z = delta/dt y la Y se conserva; el
+// transform no se toca.
+static void test_apply_root_motion_sets_rigidbody_velocity(PhysicsManager& pm)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto rb  = std::make_shared<Rigidbody>();
+    auto col = pm.createBoxColliderComponent(glm::vec3(1.0f), glm::vec3(0.0f), glm::mat4(1.0f), /*dynamic=*/true);
+    pm.attachRigidbody(col, rb);
+    go->setRigidbody(rb);
+    rb->setVelocity(glm::vec3(0.0f, -3.0f, 0.0f));
+    scene.getRoot().updateWorldTransforms();
+
+    applyRootMotion(*go, glm::vec3(0.5f, 0.0f, 0.25f), 0.5f);
+    const glm::vec3 v = rb->getVelocity();
+    CHECK(nearlyEqual(v.x, 1.0f));
+    CHECK(nearlyEqual(v.z, 0.5f));
+    CHECK(nearlyEqual(v.y, -3.0f));
+    CHECK(nearlyEqual(go->worldTransform[3].x, 0.0f));
+}
+
+// applySkinnedFrame encadena el root motion ANTES de mandar el transform: el
+// backend recibe ya la posición avanzada en este mismo frame.
+static void test_apply_skinned_frame_applies_root_motion()
+{
+    Scene scene("Test");
+    GameObject* go = makeSkinnedGameObject(scene, std::make_shared<AnimatorComponent>(makeRootMotionGraph()));
+    go->setMesh(std::make_shared<SkinnedMesh>(makeRootMotionMesh()));
+    scene.getRoot().updateWorldTransforms();
+
+    SkinnedRendererDoble r;
+    applySkinnedFrame(*go, r, 1.0f, /*evaluateTransitions=*/true);   // 20 ticks = 5 en X
+    CHECK(nearlyEqual(go->worldTransform[3].x, 5.0f));
+    CHECK(nearlyEqual(r.transform[3].x, 5.0f));
+
+    // En Edit no se mueve.
+    applySkinnedFrame(*go, r, 1.0f, /*evaluateTransitions=*/false);
+    CHECK(nearlyEqual(go->worldTransform[3].x, 5.0f));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -6280,6 +6550,18 @@ int main()
     test_event_fading_out_state_is_silent();
     test_fired_events_cleared_each_update();
     test_events_scene_round_trip(pm, am);
+    test_root_motion_mode_migration(pm, am);
+    test_root_displacement_counts_cycles();
+    test_root_motion_delta_across_wrap();
+    test_root_motion_delta_drops_y();
+    test_root_motion_delta_blend_weighted();
+    test_root_motion_delta_crossfade_weighted();
+    test_root_motion_crossfade_uses_prev_clock();
+    test_root_motion_samples_only_in_play_with_apply();
+    test_root_motion_space_is_model_y_up();
+    test_apply_root_motion_moves_transform();
+    test_apply_root_motion_sets_rigidbody_velocity(pm);
+    test_apply_skinned_frame_applies_root_motion();
     test_state_without_blend_fields_loads(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);

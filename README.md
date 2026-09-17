@@ -683,7 +683,10 @@ float parameter, and the two clips around the parameter's value mix linearly (be
 threshold or above the last, only that clip plays; with equal thresholds the first one wins).
 Scenes saved with the old two-clip blend load with the same pose. Each state can also
 carry named **animation events** at normalized times of its cycle, delivered to Lua as
-`OnAnimationEvent`. The component is opt-in:
+`OnAnimationEvent`. The root of each state has three modes: **normal** (the pose moves it),
+**locked** (the clip plays in place) and **root motion**: the horizontal travel of the root
+moves the GameObject — as a velocity when it has a dynamic Rigidbody, so it collides and falls —
+while the vertical bob stays in the pose; rotation isn't applied. The component is opt-in:
 **Properties → Add → Animator**, greyed out on non-skinned objects (an Animator has no clips
 to name without a skeleton).
 

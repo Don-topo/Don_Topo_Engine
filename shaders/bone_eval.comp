@@ -111,13 +111,16 @@ void sampleBone(BoneInfo info, float T, out vec3 pos, out vec4 rot, out vec3 scl
     }
 }
 
-// Único punto de override del bloqueo de raíz, compartido por el camino rápido
-// y el de mezcla: la posición ya calculada (o ya mezclada) se sustituye por la
-// traslación de bind pose del hueso raíz. Cualquier otro hueso sale tal cual.
+// Único punto de override de la raíz, compartido por el camino rápido y el de
+// mezcla (la posición ya calculada o ya mezclada). push.lockRootMotion es un
+// MODO: 1 clava toda la traslación a la de bind (el clip en el sitio); 2 (root
+// motion) clava solo X y Z, la Y se queda para que el vaivén del paso se vea y
+// el avance lo pone el GameObject. Cualquier otro hueso sale tal cual.
 vec3 applyRootLock(BoneInfo info, vec3 pos)
 {
-    if (push.lockRootMotion != 0u && info.parentIndex < 0)
-        return info.bindLocal[3].xyz;
+    if (info.parentIndex >= 0) return pos;
+    if (push.lockRootMotion == 1u) return info.bindLocal[3].xyz;
+    if (push.lockRootMotion == 2u) return vec3(info.bindLocal[3].x, pos.y, info.bindLocal[3].z);
     return pos;
 }
 

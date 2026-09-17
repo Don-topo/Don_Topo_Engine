@@ -105,6 +105,12 @@ namespace DonTopo
                 float       time = 0.0f;
             };
 
+            // Qué hace la traslación de la raíz del clip. Off: la pose la
+            // mueve (lo de siempre). Lock: se clava a su bind y el clip se ve
+            // en el sitio. Apply: la GPU clava solo X y Z (el vaivén vertical
+            // se ve) y el desplazamiento horizontal mueve al GameObject.
+            enum class RootMotion { Off, Lock, Apply };
+
             struct State
             {
                 std::string name;
@@ -141,17 +147,11 @@ namespace DonTopo
                 // nodo borrado en imgui-node-editor, que los cachea por id. NO se
                 // serializa (ver Scene.cpp): se regenera en addState al cargar.
                 int         editorId = -1;
-                // Bloqueo del movimiento de raíz: la traslación del hueso raíz
-                // (el de parentIndex < 0) vuelve a la de su bind pose en los
-                // TRES ejes, así que un clip que desplaza el modelo —un "correr"
-                // exportado con desplazamiento— se reproduce en el sitio. La
-                // rotación y la escala de la raíz NO se tocan, y el resto de
-                // huesos animan igual. Esto NO es root motion: el desplazamiento
-                // se descarta, no se traslada al GameObject.
-                //
-                // Va AL FINAL del struct y false es el comportamiento de
-                // siempre, que es lo que trae toda escena guardada sin él.
-                bool        lockRootMotion = false;
+                // Traslación de la raíz (el hueso de parentIndex < 0), ver
+                // RootMotion. La rotación y la escala de la raíz NO se tocan en
+                // ningún modo. Off es lo que traen todas las escenas guardadas
+                // sin el campo.
+                RootMotion  rootMotion = RootMotion::Off;
                 // --- Velocidad (como el Speed + Multiplier de Unity) ---
                 // Ritmo = ticksPerSecond x speed x valor de speedParam (si es un
                 // float declarado; si no, x1). Negativo o NaN congela (0): ir
@@ -329,13 +329,18 @@ namespace DonTopo
             // principio de cada update: quien los lea una vez por frame los ve
             // una sola vez.
             const std::vector<std::string>& firedEvents() const { return m_firedEvents; }
-            // Bloqueo del movimiento de raíz de la pose que sale a la GPU.
+            // Lo que avanzó cada clip con root motion en el ÚLTIMO update (solo
+            // Play y solo si el estado actual es Apply), con su peso en la pose.
+            // Ticks acumulados, sin wrap. Lo convierte en delta rootMotionDelta
+            // (Renderer/RootMotion.h), que es quien tiene los keyframes.
+            struct RootMotionSample { int clip; double ticks0; double ticks1; float duration; bool loop; float weight; };
+            const std::vector<RootMotionSample>& rootMotionSamples() const { return m_rootMotionSamples; }
+            // Modo de raíz de la pose que sale a la GPU: 0 Off, 1 Lock, 2 Apply.
             // Durante un cross-fade manda el estado DESTINO —el mismo que aporta
-            // poseClipB—: el push constant lleva UN solo flag para toda la
+            // poseClipB—: el push constant lleva UN solo modo para toda la
             // mezcla, y el destino es el estado al que se está entrando, así que
-            // la pose acaba de acuerdo con él. Un origen bloqueado deja de serlo
-            // en cuanto arranca la transición hacia un estado que no lo está.
-            bool  poseLockRootMotion() const;
+            // la pose acaba de acuerdo con él.
+            uint32_t poseRootMotionMode() const;
             // Nombre del estado actual, "" si el grafo está vacío. Lo consume Lua.
             std::string currentStateName() const;
             // Nombre del estado que se está apagando en un cross-fade, "" si no
@@ -388,6 +393,10 @@ namespace DonTopo
             // [ticks0, ticks1), una vez por ciclo cruzado (solo el primero
             // sin loop), con tope de kMaxEventCyclesPerUpdate por evento.
             void collectEvents(const State& st, double ticks0, double ticks1);
+            // Rellena m_rootMotionSamples con lo avanzado en este update por el
+            // estado actual (y el que se apaga, en un fade). ticks0 y
+            // prevTicks0: los relojes acumulados ANTES de avanzar.
+            void collectRootMotion(double ticks0, double prevTicks0);
             static constexpr int kMaxEventCyclesPerUpdate = 16;
             // Ticks por segundo efectivos del estado: ticksPerSecond x speed x
             // parámetro multiplicador, nunca negativo.
@@ -396,7 +405,8 @@ namespace DonTopo
             // es un Float declarado: solo entonces hay mezcla que hacer.
             bool stateBlends(int stateIdx) const;
             // Los dos clips vecinos del parámetro, sus tiempos y el peso.
-            struct BlendPair { int clipA; float timeA; int clipB; float timeB; float weight; };
+            struct BlendPair { int clipA; float timeA; int clipB; float timeB; float weight;
+                               float durA = 0.0f; float durB = 0.0f; };   // duración de cada clip, ticks
             BlendPair stateBlendPair(int stateIdx) const;
             // Estático porque no toca estado: aísla los cuatro comparadores en
             // un sitio y sirve tanto a Int como a Float.
@@ -430,6 +440,10 @@ namespace DonTopo
             // float pierde resolución para decidir un cruce. No se serializa.
             double                  m_stateTicks   = 0.0;
             std::vector<std::string> m_firedEvents;
+            std::vector<RootMotionSample> m_rootMotionSamples;
+            // Reloj acumulado (sin wrap) del estado que se apaga en un fade:
+            // lo necesita el root motion para no saltar en su wrap.
+            double                  m_prevStateTicks = 0.0;
             float                   m_speed        = 1.0f;
 
             // Cross-fade en curso. m_prevState a -1 significa "sin mezcla", y es

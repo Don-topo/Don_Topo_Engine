@@ -25,6 +25,7 @@ add_library(DonTopoCore STATIC
     src/Renderer/ModelLoader.cpp
     src/Renderer/SkinnedBounds.cpp
     src/Renderer/SkinnedMeshPacking.cpp
+    src/Renderer/RootMotion.cpp
     src/Renderer/SkinnedMeshAnimations.cpp
     src/Renderer/Cube.cpp
     src/Renderer/Sphere.cpp
@@ -34,6 +35,7 @@ add_library(DonTopoCore STATIC
     src/Core/CameraComponent.cpp
     src/Core/AnimatorComponent.cpp
     src/Core/GameObject.cpp
+    src/Core/RootMotionApply.cpp
     src/Core/JobSystem.cpp
     src/Core/Scene.cpp
     src/Files/FileManager.cpp

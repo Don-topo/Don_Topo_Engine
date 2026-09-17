@@ -2,6 +2,9 @@
 #include <cstdint>
 #include "DonTopo/Core/AnimatorComponent.h"
 #include "DonTopo/Core/GameObject.h"
+#include "DonTopo/Core/RootMotionApply.h"
+#include "DonTopo/Renderer/RootMotion.h"
+#include "DonTopo/Renderer/SkinnedMesh.h"
 
 namespace DonTopo
 {
@@ -42,6 +45,12 @@ namespace DonTopo
             // El Animator es el único dueño de animTime: calcula en CPU y el
             // backend solo recibe el resultado.
             anim->update(dt, evaluateTransitions);
+            // Root motion antes de mandar el transform: el avance de este
+            // update ya sale en la posición que recibe el backend. dt es el
+            // del frame: la velocidad del Animator ya va en los ticks.
+            if (!anim->rootMotionSamples().empty())
+                if (const SkinnedMesh* sk = go.getSkinnedMesh())
+                    applyRootMotion(go, rootMotionDelta(*sk, *anim), dt);
             // setAnimationBlend siempre: los pose* resuelven ya el cross-fade y
             // el blend por parámetro, y sin ninguno de los dos el peso vale 1 y
             // el backend ni mira el segundo clip. Primero el clip actual (B),
@@ -52,7 +61,7 @@ namespace DonTopo
                                        (uint32_t)anim->poseClipA(),
                                        anim->poseTimeA(),
                                        anim->poseWeight(),
-                                       anim->poseLockRootMotion());
+                                       anim->poseRootMotionMode());
         }
         else
         {

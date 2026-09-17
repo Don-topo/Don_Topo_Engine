@@ -149,9 +149,9 @@ namespace DonTopo {
         uint32_t  prevClip       = 0;
         float     prevAnimTime   = 0.0f;
         float     blendWeight    = 1.0f;
-        // Bloqueo del movimiento de raíz: la traslación del hueso raíz vuelve a
-        // la de su bind pose. false = comportamiento de siempre.
-        bool      lockRootMotion = false;
+        // Modo de la raíz (ver EditorRenderer::setAnimationBlend): 0 libre,
+        // 1 clavada a bind, 2 solo X y Z clavadas. 0 = comportamiento de siempre.
+        uint32_t  rootMotionMode = 0;
         float     duration       = 0.0f;
         float     ticksPerSecond = 24.0f;
         glm::mat4 transform      {1.0f};

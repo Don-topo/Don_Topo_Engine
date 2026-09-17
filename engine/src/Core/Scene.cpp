@@ -554,10 +554,10 @@ namespace DonTopo
                     entradas.push_back({ {"clip", e.clipName}, {"threshold", e.threshold} });
                 sj["blendEntries"] = std::move(entradas);
             }
-            // Bloqueo de raíz: solo si está puesto. Ausente = false, que es lo
-            // que traen todas las escenas anteriores a esta opción.
-            if (s.lockRootMotion)
-                sj["lockRootMotion"] = true;
+            // Modo de raíz: solo si no es Off, que es lo que traen todas las
+            // escenas anteriores a esta opción.
+            if (s.rootMotion == AnimatorComponent::RootMotion::Lock)  sj["rootMotion"] = "lock";
+            if (s.rootMotion == AnimatorComponent::RootMotion::Apply) sj["rootMotion"] = "apply";
             // Eventos: solo si hay alguno, como el blend.
             if (!s.events.empty())
             {
@@ -690,8 +690,19 @@ namespace
                     e.threshold = readFloat(s, "blendMax", 1.0f, warnings, ctxBlend);
                     st.blendEntries.push_back(std::move(e));
                 }
-                // Ausente en toda escena anterior al bloqueo de raíz: false.
-                st.lockRootMotion = s.value("lockRootMotion", false);
+                // "rootMotion" desde el root motion real; antes, un bool
+                // lockRootMotion que equivale a Lock. Ausentes los dos: Off.
+                const std::string rm = s.value("rootMotion", std::string());
+                if (rm == "lock")       st.rootMotion = AnimatorComponent::RootMotion::Lock;
+                else if (rm == "apply") st.rootMotion = AnimatorComponent::RootMotion::Apply;
+                else if (!rm.empty())
+                {
+                    if (warnings)
+                        warnings->push_back("animator.state." + st.name + ": rootMotion '" + rm +
+                                            "' desconocido, se usa normal");
+                }
+                else if (s.value("lockRootMotion", false))
+                    st.rootMotion = AnimatorComponent::RootMotion::Lock;
                 // Ausentes en escenas anteriores a los eventos: ninguno.
                 if (s.contains("events") && s["events"].is_array())
                 {

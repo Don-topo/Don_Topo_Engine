@@ -472,11 +472,11 @@ namespace DonTopo {
             void setAnimationState(int index, uint32_t clipIndex, float animTime);
             // Igual que setAnimationState pero con el segundo clip de un
             // cross-fade. weight 0 = solo prevClip, 1 = solo clipIndex.
-            // lockRootMotion clava la traslación del hueso raíz a la de su bind
-            // pose. Default false = comportamiento de siempre.
+            // rootMotionMode: 0 pose libre, 1 raíz clavada a su bind, 2 solo X
+            // y Z clavadas (root motion). Default 0 = comportamiento de siempre.
             void setAnimationBlend(int index, uint32_t clipIndex, float animTime,
                                    uint32_t prevClipIndex, float prevAnimTime, float weight,
-                                   bool lockRootMotion = false);
+                                   uint32_t rootMotionMode = 0);
             void setSkinnedTransform(int index, const glm::mat4& transform);
 
             // ── Frustum culling ──────────────────────────────────────────────
