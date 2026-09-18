@@ -1187,9 +1187,18 @@ namespace DonTopo {
         // COMPUTE tambien en el src: el lector de la imagen HDR ya no es solo el
         // fragment shader de la composicion, tambien el downsample del bloom del
         // frame anterior, y esta dependencia es la que impide pisarla.
-        deps[0].srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-        deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        //
+        // Y las pruebas de fragmento del frame ANTERIOR: m_depthImage es una sola
+        // imagen para los dos frames en vuelo, y este pass la estrena cada frame
+        // desde UNDEFINED con un clear. Sin esperar a sus escrituras de depth
+        // (este pass y la composición, que la carga), la transición y el clear
+        // de un frame podían solaparse con el depth que el otro aún escribía
+        // (WRITE_AFTER_WRITE de la validación de sincronización).
+        deps[0].srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        deps[0].dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         deps[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
