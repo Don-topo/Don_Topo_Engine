@@ -1,5 +1,8 @@
 #version 450
-layout(local_size_x = 1) in;
+// Un workgroup por personaje (el dispatch sigue siendo 1,1,1). Antes era un
+// solo hilo recorriendo todos los huesos en serie: 1,93 ms de 11,16 con 30
+// personajes (docs/animation-audit.md, fila 10).
+layout(local_size_x = 64) in;
 
 // Layout std430, espejo de GpuBoneInfo (engine/include/DonTopo/Renderer/SkinnedMesh.h)
 // y del mismo struct en bone_eval.comp. Este shader no lee bindLocal, pero el
@@ -9,7 +12,7 @@ struct BoneInfo {
     int posOffset, posCount;
     int rotOffset, rotCount;
     int scaleOffset, scaleCount;
-    int parentIndex, pad;
+    int parentIndex, depth;
     mat4 inverseBindPose;
     mat4 bindLocal;
 };
@@ -32,18 +35,41 @@ layout(push_constant) uniform PC {
     uint  padLockRootMotion;
 } push;
 
+shared uint sMaxDepth;
+
 void main()
 {
-    // Pass 1: world transforms (topological order guarantees parent < child)
-    for (uint i = 0; i < push.boneCount; i++)
+    const uint t = gl_LocalInvocationID.x;
+
+    // Profundidad máxima del esqueleto, reducida en memoria compartida: no hay
+    // hueco libre en el push constant (los que quedan los usa bone_eval).
+    if (t == 0u) sMaxDepth = 0u;
+    barrier();
+    for (uint i = t; i < push.boneCount; i += 64u)
+        atomicMax(sMaxDepth, uint(boneInfos.data[i].depth));
+    barrier();
+    const uint maxDepth = sMaxDepth;
+
+    // Pasada 1: transform de mundo, nivel a nivel. Todos los huesos de un nivel
+    // son independientes entre sí; el padre está en el nivel anterior, ya
+    // escrito y visible tras la barrera. maxDepth es uniforme en el workgroup,
+    // así que todos los hilos llegan a las mismas barreras.
+    for (uint d = 0u; d <= maxDepth; d++)
     {
-        int parent = boneInfos.data[i].parentIndex;
-        finalBones.data[i] = (parent < 0)
-            ? localXforms.data[i]
-            : finalBones.data[parent] * localXforms.data[i];
+        for (uint i = t; i < push.boneCount; i += 64u)
+        {
+            if (uint(boneInfos.data[i].depth) != d) continue;
+            int parent = boneInfos.data[i].parentIndex;
+            finalBones.data[i] = (parent < 0)
+                ? localXforms.data[i]
+                : finalBones.data[parent] * localXforms.data[i];
+        }
+        memoryBarrierBuffer();
+        barrier();
     }
 
-    // Pass 2: apply inverse bind pose
-    for (uint i = 0; i < push.boneCount; i++)
+    // Pasada 2: inverse bind pose, independiente hueso a hueso. Va después de
+    // la última barrera: sobrescribe en sitio y nadie lee ya el de mundo.
+    for (uint i = t; i < push.boneCount; i += 64u)
         finalBones.data[i] = finalBones.data[i] * boneInfos.data[i].inverseBindPose;
 }

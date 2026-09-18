@@ -104,7 +104,11 @@ namespace DonTopo
         int32_t rotOffset, rotCount;
         int32_t scaleOffset, scaleCount;
         int32_t parentIndex;
-        int32_t pad;
+        // Niveles por debajo de su raíz (0 = raíz). bone_hierarchy.comp evalúa
+        // la jerarquía en paralelo nivel a nivel, así que exige que cada hueso
+        // valga exactamente uno más que su padre. Ocupa el hueco que antes era
+        // relleno: el layout std430 no cambia.
+        int32_t depth;
         glm::mat4 inverseBindPose;
         // Transform local del hueso en bind pose, o sea el que tiene respecto a
         // su padre tal y como lo rigearon. Es el valor por defecto de un hueso

@@ -10,7 +10,7 @@ struct BoneInfo {
     int posOffset, posCount;
     int rotOffset, rotCount;
     int scaleOffset, scaleCount;
-    int parentIndex, pad;
+    int parentIndex, depth;   // depth: solo lo lee bone_hierarchy
     mat4 inverseBindPose;
     mat4 bindLocal;
 };
