@@ -23,6 +23,7 @@
 #include "DonTopo/Renderer/Plane.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
+#include "DonTopo/Renderer/SharedTextureCache.h"
 #include "DonTopo/Renderer/TaaJitter.h"
 #include "DonTopo/Renderer/UiLayer.h"
 #include "DonTopo/Renderer/UniformBufferObject.h"
@@ -988,6 +989,10 @@ struct D3D12Renderer::Impl {
         std::vector<D3D12MA::Allocation*> textures;
     };
     std::vector<SkinnedObject> skinnedObjects;
+    // Texturas de material de los personajes, compartidas entre los que salen
+    // del mismo FBX (antes cada uno subía su copia: ~218 MB por personaje con
+    // modelAnimation.fbx). Las vistas siguen siendo de la terna de cada uno.
+    SharedTextureCache<D3D12MA::Allocation*> skinnedTextures;
 
     // Huecos del rango skinned ya repartidos, en ternas. No se reaprovechan al
     // borrar un objeto suelto porque los personajes se cargan de golpe con la
@@ -3444,16 +3449,35 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
         if (haySlot) {
             sub.srvBase = slot;
 
-            D3D12MA::Allocation* base = uploadMaterialTexture(
-                range.material->texturePath, range.material->embeddedTexture, true, slot);
+            // Compartida entre personajes del mismo FBX. En fallo de caché sube
+            // y escribe la vista (uploadMaterialTexture); en acierto solo
+            // escribe la vista de este personaje sobre la imagen ya subida, con
+            // el mismo formato. nullptr = sin textura: el llamante pone su
+            // relleno, y la caché no lo guarda.
+            auto pedirTextura = [&](const std::string& ruta, const std::vector<uint8_t>& emb,
+                                    TextureKind tipo, UINT srvIndex) -> D3D12MA::Allocation* {
+                const bool srgb = tipo == TextureKind::BaseColor;
+                bool creada = false;
+                D3D12MA::Allocation* a = skinnedTextures.acquire(
+                    makeTextureKey(ruta, emb, tipo),
+                    [&] { return uploadMaterialTexture(ruta, emb, srgb, srvIndex); }, &creada);
+                if (a && !creada)
+                    createTexture2DSrv(a->GetResource(),
+                                       srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM,
+                                       srvIndex);
+                return a;
+            };
+
+            D3D12MA::Allocation* base = pedirTextura(
+                range.material->texturePath, range.material->embeddedTexture, TextureKind::BaseColor, slot);
             if (base)
                 object.textures.push_back(base);
             else
                 createTexture2DSrv(baseColorAllocation->GetResource(),
                                    DXGI_FORMAT_R8G8B8A8_UNORM, slot);
 
-            D3D12MA::Allocation* normal = uploadMaterialTexture(
-                range.material->normalMapPath, range.material->embeddedNormalMap, false, slot + 1);
+            D3D12MA::Allocation* normal = pedirTextura(
+                range.material->normalMapPath, range.material->embeddedNormalMap, TextureKind::Normal, slot + 1);
             if (normal)
                 object.textures.push_back(normal);
             else
@@ -3463,9 +3487,9 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
             fillSharedSlots(slot);
 
             if (D3D12MA::Allocation* orm =
-                    uploadMaterialTexture(range.material->metallicRoughnessPath,
-                                          range.material->embeddedMetallicRoughness, false,
-                                          slot + 3))
+                    pedirTextura(range.material->metallicRoughnessPath,
+                                 range.material->embeddedMetallicRoughness, TextureKind::Orm,
+                                 slot + 3))
                 object.textures.push_back(orm);
         }
         object.subMeshes.push_back(sub);
@@ -3544,10 +3568,15 @@ void D3D12Renderer::Impl::releaseSkinnedObjects()
         }
         for (D3D12MA::Allocation* texture : character.textures)
             if (texture)
-                texture->Release();
+                skinnedTextures.release(texture, [](D3D12MA::Allocation* const& a) { a->Release(); });
         character.textures.clear();
     }
     skinnedObjects.clear();
+    // Todos los personajes se soltaron: la caché tiene que estar vacía. Si no,
+    // alguien se saltó el release; se avisa y no se libera nada a ciegas.
+    if (skinnedTextures.size() != 0)
+        diagLog("[D3D12] " + std::to_string(skinnedTextures.size()) +
+                " texturas de personaje sin soltar al cerrar");
     skinnedSlots.clear();
     freeSkinnedSrv.clear();
     nextSkinnedSlot = 0;
@@ -8237,7 +8266,7 @@ bool D3D12Renderer::Impl::releaseSkinnedSlot(size_t index)
     }
     for (D3D12MA::Allocation* texture : character.textures)
         if (texture)
-            texture->Release();
+            skinnedTextures.release(texture, [](D3D12MA::Allocation* const& a) { a->Release(); });
     character.textures.clear();
 
     // Las ternas vuelven al pool. Un personaje se lleva una por submalla, así
