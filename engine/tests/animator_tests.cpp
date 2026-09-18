@@ -6482,6 +6482,47 @@ static void test_packing_depth_invariant_real_rig()
     CHECK(maxDepth > 0 && maxDepth < (int)B / 2);
 }
 
+// Una escena guardada antes de que existiera "animationSources" no lleva la
+// clave: significa "solo las animaciones del propio FBX". Con la malla
+// precargada tal cual sale del fichero, se comparte en vez de copiarse por
+// nodo (antes cada nodo se llevaba ~80 MB). Y si la precargada trae una fuente
+// extra, NO se comparte: no es lo que esa escena pedía.
+static void test_legacy_scene_without_sources_shares_preloaded(PhysicsManager& pm, AudioManager& am)
+{
+    const std::string ruta = "assets/modelAnimation.fbx";
+    auto pristina = std::make_shared<SkinnedMesh>(ModelLoader::loadSkinned(ruta));
+    CHECK(pristina->animationSources.size() == 1u);
+
+    Scene fuente("Fuente");
+    GameObject* go = fuente.addGameObject("Personaje");
+    go->setMesh(pristina);
+    nlohmann::json snap = fuente.subtreeToJson(go);
+    CHECK(snap["mesh"].contains("animationSources"));
+    snap["mesh"].erase("animationSources");             // escena anterior a la clave
+
+    PreloadedMeshCache cache;
+    cache[ruta] = pristina;
+    Scene scene("Test");
+    GameObject* r = scene.insertFromJson(snap, nullptr, 0, pm, am, &cache);
+    CHECK(r != nullptr);
+    if (!r) return;
+    CHECK(r->isSkinned());
+    CHECK(r->getMesh().get() == pristina.get());
+
+    // Con una fuente extra en la precargada, la escena sin clave no la pide:
+    // copia y la configura, sin compartir.
+    auto conExtra = std::make_shared<SkinnedMesh>(*pristina);
+    AnimationSource extra; extra.path = "otra.fbx"; extra.builtin = false; extra.clipNames = { "x" };
+    conExtra->animationSources.push_back(extra);
+    PreloadedMeshCache cache2;
+    cache2[ruta] = conExtra;
+    Scene scene2("Test2");
+    GameObject* r2 = scene2.insertFromJson(snap, nullptr, 0, pm, am, &cache2);
+    CHECK(r2 != nullptr);
+    if (!r2) return;
+    CHECK(r2->getMesh().get() != conExtra.get());
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -6717,6 +6758,7 @@ int main()
     test_clone_shares_the_mesh(pm, am);
     test_mesh_matches_animation_config();
     test_insert_from_json_reuses_preloaded_mesh(pm, am);
+    test_legacy_scene_without_sources_shares_preloaded(pm, am);
     test_edit_mesh_copies_only_when_shared();
     test_equal_material_override_does_not_copy();
 
