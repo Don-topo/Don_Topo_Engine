@@ -721,6 +721,12 @@ namespace DonTopo {
         // Las tres de relleno que comparten las mallas sin material, DESPUES de
         // los personajes: son el ultimo que suelta texturas de material, y
         // liberarlas antes le dejaba destruyendo handles ya muertos (H79).
+        // Todos los personajes se soltaron arriba: la caché de sus texturas
+        // tiene que estar vacía. Si no, alguien se saltó el release; se avisa y
+        // no se destruye nada a ciegas (mismo criterio que H79).
+        if (m_skinnedTextures.size() != 0)
+            fprintf(stderr, "[Renderer] %zu texturas de personaje sin soltar al cerrar\n",
+                    m_skinnedTextures.size());
         m_res.destroySharedPlaceholders();
         // Ahora sí: ya no queda ningún destroySkinnedRenderObject pendiente que
         // necesite liberar sets de la cadena de pools.
@@ -3637,23 +3643,33 @@ namespace DonTopo {
         destroy(obj.outputVertexBuffer,   obj.outputVertexMemory);
         destroy(obj.indexBuffer,          obj.indexMemory);
 
+        // Compartida: se destruye cuando la suelta el último personaje. Si no es
+        // de la caché (la blanca de relleno), releaseMaterialImage sabe que es
+        // prestada y no la destruye.
+        auto soltarMaterial = [&](VkImage img, VkDeviceMemory mem) {
+            const MaterialImage m{ img, mem };
+            if (m_skinnedTextures.contains(m))
+                m_skinnedTextures.release(m, [&](const MaterialImage& h) { m_res.releaseMaterialImage(h.image, h.mem); });
+            else
+                m_res.releaseMaterialImage(img, mem);
+        };
         for (auto& mgfx : obj.matGfx)
         {
             // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
             // para todo el motor. Destruirlo aqui seria un doble free en cuanto
             // se soltara el segundo material.
             if (mgfx.ormView       != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.ormView,       nullptr); }
-            m_res.releaseMaterialImage(mgfx.ormImage, mgfx.ormMem);
+            soltarMaterial(mgfx.ormImage, mgfx.ormMem);
             // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
             // para todo el motor. Destruirlo aqui seria un doble free en cuanto
             // se soltara el segundo material.
             if (mgfx.normalView    != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.normalView,    nullptr); }
-            m_res.releaseMaterialImage(mgfx.normalImage, mgfx.normalMem);
+            soltarMaterial(mgfx.normalImage, mgfx.normalMem);
             // El sampler es PRESTADO (GpuResources::sharedMaterialSampler): uno solo
             // para todo el motor. Destruirlo aqui seria un doble free en cuanto
             // se soltara el segundo material.
             if (mgfx.textureView   != VK_NULL_HANDLE) { vkDestroyImageView(m_gpu.device(), mgfx.textureView,   nullptr); }
-            m_res.releaseMaterialImage(mgfx.textureImage, mgfx.textureMem);
+            soltarMaterial(mgfx.textureImage, mgfx.textureMem);
         }
 
         // Los sets vuelven al pool (creado con FREE_DESCRIPTOR_SET_BIT): sin
@@ -3821,21 +3837,38 @@ namespace DonTopo {
             const Material& smat = mesh.materials[mi];
             SkinnedMatGfx& mgfx = obj.matGfx[mi];
 
+            // Color, normal y ORM, compartidos entre personajes del mismo FBX
+            // (m_skinnedTextures). Sin textura, la blanca de relleno de siempre,
+            // que no entra en la caché.
+            auto pedir = [&](const std::string& ruta, const std::vector<uint8_t>& emb, TextureKind tipo,
+                             VkImage& img, VkDeviceMemory& mem) {
+                const MaterialImage m = m_skinnedTextures.acquire(makeTextureKey(ruta, emb, tipo), [&] {
+                    MaterialImage nueva;
+                    if (tipo == TextureKind::BaseColor)
+                        m_res.createTextureImage(ruta, emb, nueva.image, nueva.mem, batch);
+                    else
+                        m_res.createNormalMapImage(ruta, emb, nueva.image, nueva.mem, batch);
+                    return nueva;
+                });
+                img = m.image;
+                mem = m.mem;
+            };
+
             // Diffuse
-            m_res.createTextureImage(smat.texturePath, smat.embeddedTexture, mgfx.textureImage, mgfx.textureMem, batch);
+            pedir(smat.texturePath, smat.embeddedTexture, TextureKind::BaseColor, mgfx.textureImage, mgfx.textureMem);
             m_res.createTextureImageView(mgfx.textureImage, mgfx.textureView);
             mgfx.sampler = m_res.sharedMaterialSampler();
 
             // Normal map
-            m_res.createNormalMapImage(smat.normalMapPath, smat.embeddedNormalMap, mgfx.normalImage, mgfx.normalMem, batch);
+            pedir(smat.normalMapPath, smat.embeddedNormalMap, TextureKind::Normal, mgfx.normalImage, mgfx.normalMem);
             m_res.createTextureImageView(mgfx.normalImage, mgfx.normalView, VK_FORMAT_R8G8B8A8_UNORM);
             mgfx.normalSampler = m_res.sharedMaterialSampler();
 
             // ORM
             if (!smat.metallicRoughnessPath.empty() || !smat.embeddedMetallicRoughness.empty())
             {
-                m_res.createNormalMapImage(smat.metallicRoughnessPath, smat.embeddedMetallicRoughness,
-                                     mgfx.ormImage, mgfx.ormMem, batch);
+                pedir(smat.metallicRoughnessPath, smat.embeddedMetallicRoughness, TextureKind::Orm,
+                      mgfx.ormImage, mgfx.ormMem);
                 mgfx.metallic  = 1.0f;
                 mgfx.roughness = 1.0f;
             }

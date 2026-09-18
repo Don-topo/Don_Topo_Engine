@@ -20,6 +20,7 @@
 #include "DonTopo/Renderer/GpuDevice.h"
 #include "DonTopo/Renderer/GpuResources.h"
 #include "DonTopo/Renderer/SharedGpuMesh.h"
+#include "DonTopo/Renderer/SharedTextureCache.h"
 #include "DonTopo/Renderer/RenderObjects.h"
 #include "DonTopo/Renderer/DeferredDelete.h"
 #include "DonTopo/Renderer/TransferBatch.h"
@@ -1134,6 +1135,16 @@ namespace DonTopo {
             // quede algún holder. (Los skinned no comparten: sus SSBOs de
             // salida los escribe el compute por instancia.)
             SharedGpuMeshCache m_sharedMeshes;
+            // Imagen de material de un personaje skinned, compartida entre los
+            // que salen del mismo FBX (antes, 218 MB por personaje: la VRAM se
+            // agotaba entre 33 y 40). Las vistas siguen siendo por personaje.
+            struct MaterialImage
+            {
+                VkImage        image = VK_NULL_HANDLE;
+                VkDeviceMemory mem   = VK_NULL_HANDLE;
+                bool operator==(const MaterialImage& o) const { return image == o.image && mem == o.mem; }
+            };
+            SharedTextureCache<MaterialImage> m_skinnedTextures;
 
             // Batch abierto donde caen los uploads del pump actual. Se envía en
             // flushPendingUploads() y pasa a m_inFlightBatches.

@@ -42,6 +42,7 @@ dt_add_test(dt_scene_async_tests scene_async_tests.cpp DonTopoCore)
 dt_add_test(dt_frustum_tests frustum_tests.cpp DonTopoCore)
 
 dt_add_test(dt_shared_gpu_mesh_tests shared_gpu_mesh_tests.cpp DonTopoCore)
+dt_add_test(dt_shared_texture_cache_tests shared_texture_cache_tests.cpp DonTopoCore)
 
 dt_add_test(dt_instancing_tests instancing_tests.cpp DonTopoCore)
 
