@@ -3555,80 +3555,96 @@ void D3D12Renderer::Impl::releaseSkinnedObjects()
 
 void D3D12Renderer::Impl::recordSkinning()
 {
-    // Barrera de UAV, no de transición: los pases no cambian de estado, solo
-    // hay que garantizar que lo escrito por uno lo vea el siguiente.
-    auto uavBarrier = [&](ID3D12Resource* resource) {
+    std::vector<const SkinnedObject*> activos;
+    activos.reserve(skinnedObjects.size());
+    for (const SkinnedObject& object : skinnedObjects)
+        if (object.vertexCount != 0)
+            activos.push_back(&object);
+    if (activos.empty())
+        return;
+
+    auto pushDe = [](const SkinnedObject& object) {
+        ComputePush push{};
+        push.prevAnimTime   = object.prevAnimTime;
+        push.prevClipBase   = object.prevClipBase;
+        push.blendWeight    = object.blendWeight;
+        push.lockRootMotion = object.rootMotionMode;
+        push.animTime       = object.animTime;
+        push.boneCount      = object.boneCount;
+        push.vertexCount    = object.vertexCount;
+        push.clipBase       = object.clipBase;
+        return push;
+    };
+    auto gpu = [](const auto& buffer) { return buffer->GetResource()->GetGPUVirtualAddress(); };
+
+    // Tres FASES para todos los personajes, no tres pases por personaje: los
+    // buffers de cada uno son suyos, así que dentro de una fase no dependen
+    // entre sí y basta UNA barrera entre fases. Antes eran dos barreras UAV
+    // por personaje, que serializaban a todos (docs/animation-audit.md, fila
+    // 9). La barrera UAV sin recurso cubre todos los accesos UAV de la lista.
+    // Barrera de UAV y no de transición: los pases no cambian de estado, solo
+    // hay que garantizar que lo escrito por una fase lo vea la siguiente.
+    auto barreraEntreFases = [&]() {
         D3D12_RESOURCE_BARRIER barrier{};
         barrier.Type          = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        barrier.UAV.pResource = resource;
+        barrier.UAV.pResource = nullptr;
         commandList->ResourceBarrier(1, &barrier);
     };
 
-    for (const SkinnedObject& object : skinnedObjects) {
-        if (object.vertexCount == 0)
-            continue;
-
-        ComputePush push{};
-        push.prevAnimTime = object.prevAnimTime;
-        push.prevClipBase = object.prevClipBase;
-        push.blendWeight  = object.blendWeight;
-        push.lockRootMotion = object.rootMotionMode;
-        push.animTime    = object.animTime;
-        push.boneCount   = object.boneCount;
-        push.vertexCount = object.vertexCount;
-        push.clipBase    = object.clipBase;
-
-        const D3D12_GPU_VIRTUAL_ADDRESS posKeys     = object.posKeys->GetResource()->GetGPUVirtualAddress();
-        const D3D12_GPU_VIRTUAL_ADDRESS rotKeys     = object.rotKeys->GetResource()->GetGPUVirtualAddress();
-        const D3D12_GPU_VIRTUAL_ADDRESS scaleKeys   = object.scaleKeys->GetResource()->GetGPUVirtualAddress();
-        const D3D12_GPU_VIRTUAL_ADDRESS boneInfos   = object.boneInfos->GetResource()->GetGPUVirtualAddress();
-        const D3D12_GPU_VIRTUAL_ADDRESS localXforms = object.localXforms->GetResource()->GetGPUVirtualAddress();
-        const D3D12_GPU_VIRTUAL_ADDRESS finalBones  = object.finalBones->GetResource()->GetGPUVirtualAddress();
-        const D3D12_GPU_VIRTUAL_ADDRESS inputVerts  = object.inputVerts->GetResource()->GetGPUVirtualAddress();
-        const D3D12_GPU_VIRTUAL_ADDRESS outputVerts = object.outputVerts->GetResource()->GetGPUVirtualAddress();
-
-        // 1) Claves de animación -> transformaciones locales. Un hilo por hueso.
-        commandList->SetComputeRootSignature(boneEvalRootSignature.Get());
-        commandList->SetPipelineState(boneEvalPipeline.Get());
+    // 1) Claves de animación -> transformaciones locales. Un hilo por hueso.
+    commandList->SetComputeRootSignature(boneEvalRootSignature.Get());
+    commandList->SetPipelineState(boneEvalPipeline.Get());
+    for (const SkinnedObject* object : activos) {
+        const ComputePush push = pushDe(*object);
         commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
-        commandList->SetComputeRootShaderResourceView(1, posKeys);
-        commandList->SetComputeRootShaderResourceView(2, rotKeys);
-        commandList->SetComputeRootShaderResourceView(3, scaleKeys);
-        commandList->SetComputeRootShaderResourceView(4, boneInfos);
-        commandList->SetComputeRootUnorderedAccessView(5, localXforms);
-        commandList->Dispatch((object.boneCount + 63) / 64, 1, 1);
-        uavBarrier(object.localXforms->GetResource());
-
-        // 2) Jerarquía: acumula padre a hijo. Un SOLO hilo a propósito — depende
-        // de que el padre ya esté resuelto, y el orden topológico lo garantiza.
-        commandList->SetComputeRootSignature(boneHierarchyRootSignature.Get());
-        commandList->SetPipelineState(boneHierarchyPipeline.Get());
-        commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
-        commandList->SetComputeRootShaderResourceView(1, boneInfos);
-        commandList->SetComputeRootShaderResourceView(2, localXforms);
-        commandList->SetComputeRootUnorderedAccessView(3, finalBones);
-        commandList->Dispatch(1, 1, 1);
-        uavBarrier(object.finalBones->GetResource());
-
-        // 3) Deformación de los vértices. Un hilo por vértice.
-        commandList->SetComputeRootSignature(skinningRootSignature.Get());
-        commandList->SetPipelineState(skinningPipeline.Get());
-        commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
-        commandList->SetComputeRootShaderResourceView(1, finalBones);
-        commandList->SetComputeRootShaderResourceView(2, inputVerts);
-        commandList->SetComputeRootUnorderedAccessView(3, outputVerts);
-        commandList->Dispatch((object.vertexCount + 63) / 64, 1, 1);
-
-        // De escritura por compute a entrada del ensamblador de vértices: aquí sí
-        // cambia el uso del buffer, así que hace falta transición.
-        D3D12_RESOURCE_BARRIER toVertexBuffer{};
-        toVertexBuffer.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        toVertexBuffer.Transition.pResource   = object.outputVerts->GetResource();
-        toVertexBuffer.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        toVertexBuffer.Transition.StateAfter  = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
-        toVertexBuffer.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        commandList->ResourceBarrier(1, &toVertexBuffer);
+        commandList->SetComputeRootShaderResourceView(1, gpu(object->posKeys));
+        commandList->SetComputeRootShaderResourceView(2, gpu(object->rotKeys));
+        commandList->SetComputeRootShaderResourceView(3, gpu(object->scaleKeys));
+        commandList->SetComputeRootShaderResourceView(4, gpu(object->boneInfos));
+        commandList->SetComputeRootUnorderedAccessView(5, gpu(object->localXforms));
+        commandList->Dispatch((object->boneCount + 63) / 64, 1, 1);
     }
+    barreraEntreFases();
+
+    // 2) Jerarquía: acumula padre a hijo. Un workgroup por personaje, que va
+    // por niveles de profundidad (bone_hierarchy.comp).
+    commandList->SetComputeRootSignature(boneHierarchyRootSignature.Get());
+    commandList->SetPipelineState(boneHierarchyPipeline.Get());
+    for (const SkinnedObject* object : activos) {
+        const ComputePush push = pushDe(*object);
+        commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
+        commandList->SetComputeRootShaderResourceView(1, gpu(object->boneInfos));
+        commandList->SetComputeRootShaderResourceView(2, gpu(object->localXforms));
+        commandList->SetComputeRootUnorderedAccessView(3, gpu(object->finalBones));
+        commandList->Dispatch(1, 1, 1);
+    }
+    barreraEntreFases();
+
+    // 3) Deformación de los vértices. Un hilo por vértice.
+    commandList->SetComputeRootSignature(skinningRootSignature.Get());
+    commandList->SetPipelineState(skinningPipeline.Get());
+    for (const SkinnedObject* object : activos) {
+        const ComputePush push = pushDe(*object);
+        commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
+        commandList->SetComputeRootShaderResourceView(1, gpu(object->finalBones));
+        commandList->SetComputeRootShaderResourceView(2, gpu(object->inputVerts));
+        commandList->SetComputeRootUnorderedAccessView(3, gpu(object->outputVerts));
+        commandList->Dispatch((object->vertexCount + 63) / 64, 1, 1);
+    }
+
+    // De escritura por compute a entrada del ensamblador de vértices: aquí sí
+    // cambia el uso del buffer, así que hace falta transición. Todas en una
+    // misma llamada.
+    std::vector<D3D12_RESOURCE_BARRIER> alDibujo(activos.size());
+    for (size_t i = 0; i < activos.size(); i++) {
+        D3D12_RESOURCE_BARRIER& b = alDibujo[i];
+        b.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource   = activos[i]->outputVerts->GetResource();
+        b.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        b.Transition.StateAfter  = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    }
+    commandList->ResourceBarrier((UINT)alDibujo.size(), alDibujo.data());
 }
 
 void D3D12Renderer::Impl::releaseHdrTargets()

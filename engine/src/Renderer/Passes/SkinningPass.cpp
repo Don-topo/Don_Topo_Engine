@@ -157,90 +157,84 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
 {
     if (ctx.skinnedObjects.empty()) return;
 
-    auto ssboBarrier = [](VkBuffer buf) {
-        VkBufferMemoryBarrier b{};
-        b.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        b.buffer        = buf;
-        b.offset        = 0;
-        b.size          = VK_WHOLE_SIZE;
-        return b;
-    };
-
+    // Personajes a skinear este frame. Borrado desde el editor, aún en vuelo
+    // (despachar skinning sobre un SSBO cuyo batch no ha señalado sería un
+    // read-after-write que la validación de sync marca) o fuera de cámara: los
+    // tres casos los resolvió el culling del principio del frame, y el bucle
+    // de dibujo de más abajo lee ESA misma lista. Saltar aquí un objeto que sí
+    // se dibujara le dejaría la pose del último frame en que fue visible. Y con
+    // el checkbox "Visible" apagado no se dibuja en ningún pass: skinearlo
+    // sería trabajo de GPU que nadie lee, y la pose se queda congelada igual
+    // que hace el culling con un personaje fuera de cámara.
+    std::vector<size_t> activos;
+    activos.reserve(ctx.skinnedObjects.size());
     for (size_t i = 0; i < ctx.skinnedObjects.size(); i++)
     {
-        // Borrado desde el editor, aún en vuelo (despachar skinning sobre un
-        // SSBO cuyo batch no ha señalado sería un read-after-write que la
-        // validación de sync marca) o fuera de cámara: los tres casos los
-        // resolvió el culling del principio del frame, y el bucle de dibujo
-        // de más abajo lee ESA misma lista. Saltar aquí un objeto que sí se
-        // dibujara le dejaría la pose del último frame en que fue visible.
         if (i >= ctx.skinnedVisible.size() || !ctx.skinnedVisible[i]) continue;
-        SkinnedRenderObject& obj = ctx.skinnedObjects[i];
-        // Checkbox "Visible" apagado: no se dibuja en ningún pass, así que
-        // skinearlo sería trabajo de GPU que nadie lee. La pose se queda
-        // congelada en la del último frame visible, igual que hace el culling
-        // con un personaje fuera de cámara.
-        if (!obj.meshVisible) continue;
-        Push push{};
-        push.animTime     = obj.animTime;
-        push.boneCount    = obj.boneCount;
-        push.vertexCount  = obj.vertexCount;
-        push.clipBase     = obj.activeClip * obj.boneCount;
-        push.prevAnimTime = obj.prevAnimTime;
-        push.prevClipBase = obj.prevClip * obj.boneCount;
-        push.blendWeight  = obj.blendWeight;
-        push.lockRootMotion = obj.rootMotionMode;
-
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-            m_pipelineLayout, 0, 1, &obj.computeDescSet, 0, nullptr);
-
-        // --- Pass 1: bone_eval (local transforms) ---
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_boneEval);
-        vkCmdPushConstants(cmd, m_pipelineLayout,
-            VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Push), &push);
-        vkCmdDispatch(cmd, (obj.boneCount + 63) / 64, 1, 1);
-
-        // Barrier: localTransform escrito → leído por bone_hierarchy
-        VkBufferMemoryBarrier b1 = ssboBarrier(obj.localTransformBuffer);
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            0, 0, nullptr, 1, &b1, 0, nullptr);
-
-        // --- Pass 2: bone_hierarchy (world transforms + inverse bind pose) ---
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_boneHierarchy);
-        vkCmdPushConstants(cmd, m_pipelineLayout,
-            VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Push), &push);
-        vkCmdDispatch(cmd, 1, 1, 1);
-
-        // Barrier: finalBone escrito → leído por skinning
-        VkBufferMemoryBarrier b2 = ssboBarrier(obj.finalBoneBuffer);
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            0, 0, nullptr, 1, &b2, 0, nullptr);
-
-        // --- Pass 3: skinning (output vertex buffer) ---
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_skinning);
-        vkCmdPushConstants(cmd, m_pipelineLayout,
-            VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Push), &push);
-        vkCmdDispatch(cmd, (obj.vertexCount + 63) / 64, 1, 1);
-
-        // Barrier: outputVertexBuffer escrito por compute → leído como VB en vertex shader
-        VkBufferMemoryBarrier b3{};
-        b3.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        b3.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        b3.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-        b3.buffer        = obj.outputVertexBuffer;
-        b3.offset        = 0;
-        b3.size          = VK_WHOLE_SIZE;
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
-            0, 0, nullptr, 1, &b3, 0, nullptr);
+        if (!ctx.skinnedObjects[i].meshVisible) continue;
+        activos.push_back(i);
     }
+    if (activos.empty()) return;
+
+    // Tres FASES para todos los personajes, no tres pases por personaje: los
+    // buffers de cada uno son suyos, así que dentro de una fase no dependen
+    // entre sí y basta UNA barrera entre fases. Antes eran dos barreras por
+    // personaje, que serializaban a todos: 1,41 ms de 11,16 con 30 personajes
+    // (docs/animation-audit.md, fila 9). De paso cada pipeline se enlaza una
+    // vez por frame y no una por personaje.
+    auto fase = [&](VkPipeline pipeline, auto grupos) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+        for (size_t i : activos)
+        {
+            SkinnedRenderObject& obj = ctx.skinnedObjects[i];
+            Push push{};
+            push.animTime       = obj.animTime;
+            push.boneCount      = obj.boneCount;
+            push.vertexCount    = obj.vertexCount;
+            push.clipBase       = obj.activeClip * obj.boneCount;
+            push.prevAnimTime   = obj.prevAnimTime;
+            push.prevClipBase   = obj.prevClip * obj.boneCount;
+            push.blendWeight    = obj.blendWeight;
+            push.lockRootMotion = obj.rootMotionMode;
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                m_pipelineLayout, 0, 1, &obj.computeDescSet, 0, nullptr);
+            vkCmdPushConstants(cmd, m_pipelineLayout,
+                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Push), &push);
+            vkCmdDispatch(cmd, grupos(obj), 1, 1);
+        }
+    };
+    // Lo escrito por compute en una fase lo lee compute en la siguiente.
+    auto barreraEntreFases = [&]() {
+        VkMemoryBarrier mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &mb, 0, nullptr, 0, nullptr);
+    };
+
+    // 1) bone_eval: claves -> transformaciones locales. Un hilo por hueso.
+    fase(m_boneEval, [](const SkinnedRenderObject& o) { return (o.boneCount + 63) / 64; });
+    barreraEntreFases();
+    // 2) bone_hierarchy: locales -> finales (mundo x inverse bind pose). Un
+    //    workgroup por personaje, por niveles de profundidad.
+    fase(m_boneHierarchy, [](const SkinnedRenderObject&) { return 1u; });
+    barreraEntreFases();
+    // 3) skinning: vértices deformados. Un hilo por vértice.
+    fase(m_skinning, [](const SkinnedRenderObject& o) { return (o.vertexCount + 63) / 64; });
+
+    // Los vértices escritos por compute los lee el ensamblador de vértices de
+    // los pases de dibujo: una sola barrera para todos los personajes.
+    VkMemoryBarrier alDibujo{};
+    alDibujo.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    alDibujo.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    alDibujo.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+        0, 1, &alDibujo, 0, nullptr, 0, nullptr);
 }
 
 } // namespace DonTopo
