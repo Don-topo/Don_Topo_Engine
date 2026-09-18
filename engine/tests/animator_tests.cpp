@@ -6433,6 +6433,55 @@ static void test_apply_skinned_frame_applies_root_motion()
     CHECK(nearlyEqual(go->worldTransform[3].x, 5.0f));
 }
 
+// La jerarquía se evalúa en paralelo por niveles de profundidad: el shader
+// solo acierta si cada hueso va exactamente un nivel por debajo de su padre.
+// Dos raíces (una cadena de 3 y otra de 2), y dos clips: la profundidad se
+// repite en el bloque de cada clip.
+static void test_packing_fills_bone_depth()
+{
+    SkinnedMesh m;
+    m.skeleton.names       = { "a", "b", "c", "r2", "d" };
+    m.skeleton.parentIndex = { -1, 0, 1, -1, 3 };
+    m.skeleton.inverseBindPose.assign(5, glm::mat4(1.0f));
+    AnimationClip c1; c1.name = "uno";  c1.duration = 10.0f; c1.ticksPerSecond = 10.0f;
+    AnimationClip c2; c2.name = "dos";  c2.duration = 10.0f; c2.ticksPerSecond = 10.0f;
+    m.animationClips = { c1, c2 };
+
+    const PackedClips p = packSkinnedClips(m);
+    CHECK(p.boneInfos.size() == 10u);
+    if (p.boneInfos.size() != 10u) return;
+    const int esperada[5] = { 0, 1, 2, 0, 1 };
+    for (size_t clip = 0; clip < 2; clip++)
+        for (int b = 0; b < 5; b++)
+        {
+            const GpuBoneInfo& bi = p.boneInfos[clip * 5 + b];
+            CHECK(bi.depth == esperada[b]);
+            if (bi.parentIndex >= 0)
+                CHECK(bi.depth == p.boneInfos[clip * 5 + bi.parentIndex].depth + 1);
+        }
+}
+
+// Con el FBX real, el invariante se cumple en todos los huesos.
+static void test_packing_depth_invariant_real_rig()
+{
+    SkinnedMesh m = ModelLoader::loadSkinned("assets/modelAnimation.fbx");
+    const PackedClips p = packSkinnedClips(m);
+    const size_t B = m.skeleton.names.size();
+    CHECK(B > 0 && p.boneInfos.size() >= B);
+    if (B == 0 || p.boneInfos.size() < B) return;
+    int maxDepth = 0;
+    for (size_t b = 0; b < B; b++)
+    {
+        const GpuBoneInfo& bi = p.boneInfos[b];
+        CHECK(bi.parentIndex < (int)b);                        // orden topológico
+        CHECK(bi.depth == (bi.parentIndex < 0 ? 0 : p.boneInfos[bi.parentIndex].depth + 1));
+        maxDepth = std::max(maxDepth, bi.depth);
+    }
+    // Un rig humanoide tiene muchos menos niveles que huesos: es lo que hace
+    // que ir por niveles gane frente al recorrido en serie.
+    CHECK(maxDepth > 0 && maxDepth < (int)B / 2);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -6562,6 +6611,8 @@ int main()
     test_apply_root_motion_moves_transform();
     test_apply_root_motion_sets_rigidbody_velocity(pm);
     test_apply_skinned_frame_applies_root_motion();
+    test_packing_fills_bone_depth();
+    test_packing_depth_invariant_real_rig();
     test_state_without_blend_fields_loads(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);

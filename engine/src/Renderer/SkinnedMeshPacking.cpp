@@ -1,4 +1,5 @@
 #include "DonTopo/Renderer/SkinnedMeshPacking.h"
+#include <vector>
 
 namespace DonTopo
 {
@@ -12,6 +13,18 @@ namespace DonTopo
         PackedClips out;
         out.boneInfos.resize(clipCount * (size_t)boneCount);
 
+        // Profundidad de cada hueso, una vez por malla (es del esqueleto, no
+        // del clip). El orden es topológico (padre < hijo, ModelLoader), así
+        // que basta una pasada. Un padre fuera de rango o posterior se trata
+        // como raíz: mejor una raíz de más que leer una profundidad aún sin
+        // calcular.
+        std::vector<int32_t> depth((size_t)boneCount, 0);
+        for (int b = 0; b < boneCount; b++)
+        {
+            const int padre = skel.parentIndex[b];
+            depth[b] = (padre >= 0 && padre < b) ? depth[padre] + 1 : 0;
+        }
+
         for (size_t c = 0; c < clipCount; c++)
         {
             const AnimationClip* clip = mesh.animationClips.empty() ? nullptr : &mesh.animationClips[c];
@@ -21,7 +34,7 @@ namespace DonTopo
                 GpuBoneInfo& bi    = out.boneInfos[c * (size_t)boneCount + (size_t)b];
                 bi.parentIndex     = skel.parentIndex[b];
                 bi.inverseBindPose = skel.inverseBindPose[b];
-                bi.pad             = 0;
+                bi.depth           = depth[b];
 
                 // Local de bind pose, el valor por defecto de un hueso del que
                 // el clip activo no dice nada. La identidad NO sirve: borraría
