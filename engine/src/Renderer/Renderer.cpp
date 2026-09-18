@@ -573,6 +573,16 @@ namespace DonTopo {
         // esto destruiría recursos que la GPU todavía puede estar leyendo.
         m_deferredDeletes.flushAll(m_gpu.device());
 
+        // Los batches de subida, AHORA y no como miembros tras m_gpu.shutdown():
+        // una excepción a media carga (p. ej. la VRAM agotada en addSkinnedMesh)
+        // deja m_pendingBatch abierto, y su destructor libera su command buffer
+        // y su staging con el device. Destruido después del device, eso era un
+        // vkFreeCommandBuffers sobre un device inválido y el loader abortaba el
+        // proceso (0xC0000409) antes de que el catch del host dijera nada. Tras
+        // el WaitIdle de arriba, los en vuelo ya han terminado.
+        m_inFlightBatches.clear();
+        m_pendingBatch.reset();
+
         destroyOffscreenImages();
         if (!m_headless && m_ui) m_ui->shutdownUi();
         vkDestroyRenderPass(m_gpu.device(), m_offscreenRenderPass, nullptr);
