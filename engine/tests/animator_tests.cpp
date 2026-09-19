@@ -7052,6 +7052,12 @@ static void test_layers_management()
     CHECK(a.layerCount() == 2);
     CHECK(a.layer(1).name == "Brazos");
     a.setLayerWeight(0, 0.3f);  CHECK(nearlyEqual(a.layerWeight(0), 1.0f));   // la base no cambia
+    CHECK(nearlyEqual(a.layer(0).weight, 1.0f));                                // ni el campo guardado
+    // Y aunque alguien escriba el campo a mano, la pose ve la base a peso 1.
+    a.layerMutable(0).weight = 0.2f;
+    CHECK(nearlyEqual(a.layerWeight(0), 1.0f));
+    CHECK(nearlyEqual(a.pose().layers[0].weight, 1.0f));
+    a.layerMutable(0).weight = 1.0f;
     a.setLayerWeight(1, 1.7f);  CHECK(nearlyEqual(a.layerWeight(1), 1.0f));
     a.setLayerWeight(1, 0.25f); CHECK(nearlyEqual(a.layerWeight(1), 0.25f));
     for (int i = 2; i < AnimatorComponent::kMaxLayers; i++) CHECK(a.addLayer("x") == i);
