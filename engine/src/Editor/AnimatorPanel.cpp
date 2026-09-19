@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -159,20 +160,20 @@ AnimatorPanel::~AnimatorPanel()
 
 void AnimatorPanel::syncPositionsFromComponent(GameObject* go)
 {
-    const auto& states = go->getAnimator()->states();
+    const auto& states = go->getAnimator()->states(m_layer);
     for (size_t i = 0; i < states.size(); i++)
         ed::SetNodePosition(nodeId(states[i].editorId), ImVec2(states[i].editorPos.x, states[i].editorPos.y));
     // El nodo Any State existe mientras haya al menos un estado.
     if (!states.empty())
     {
-        const glm::vec2 p = go->getAnimator()->anyStateEditorPos();
+        const glm::vec2 p = go->getAnimator()->anyStateEditorPos(m_layer);
         ed::SetNodePosition(kAnyStateNodeId, ImVec2(p.x, p.y));
     }
 }
 
 void AnimatorPanel::syncPositionsToComponent(GameObject* go)
 {
-    auto& states = go->getAnimator()->statesMutable();
+    auto& states = go->getAnimator()->statesMutable(m_layer);
     for (size_t i = 0; i < states.size(); i++)
     {
         const ImVec2 p = ed::GetNodePosition(nodeId(states[i].editorId));
@@ -181,7 +182,7 @@ void AnimatorPanel::syncPositionsToComponent(GameObject* go)
     if (!states.empty())
     {
         const ImVec2 p = ed::GetNodePosition(kAnyStateNodeId);
-        go->getAnimator()->setAnyStateEditorPos(glm::vec2(p.x, p.y));
+        go->getAnimator()->setAnyStateEditorPos(glm::vec2(p.x, p.y), m_layer);
     }
 }
 
@@ -265,6 +266,187 @@ void AnimatorPanel::drawParameterList(EditorContext& ctx, GameObject* go)
     ImGui::EndChild();
 }
 
+void AnimatorPanel::drawLayerBar(EditorContext& ctx, GameObject* go)
+{
+    auto anim = go->getAnimator();
+    ImGui::PushID("capas");
+    m_layer = std::clamp(m_layer, 0, anim->layerCount() - 1);
+    ImGui::TextUnformatted("Layers");
+    for (int li = 0; li < anim->layerCount(); li++)
+    {
+        ImGui::PushID(li);
+        if (m_renamingLayer == li)
+        {
+            if (m_focusRename) { ImGui::SetKeyboardFocusHere(); m_focusRename = false; }
+            ImGui::SetNextItemWidth(200.0f);
+            ImGui::InputText("##nombre", m_layerNameBuf, sizeof(m_layerNameBuf),
+                             ImGuiInputTextFlags_AutoSelectAll);
+            // Al soltar el foco (Enter, clic fuera): se guarda si no está vacío.
+            if (ImGui::IsItemDeactivated())
+            {
+                if (m_layerNameBuf[0] != '\0') anim->layerMutable(li).name = m_layerNameBuf;
+                m_renamingLayer = -1;
+            }
+        }
+        else if (ImGui::Selectable(anim->layer(li).name.c_str(), m_layer == li,
+                                   ImGuiSelectableFlags_AllowDoubleClick, ImVec2(200.0f, 0.0f)))
+        {
+            m_layer = li;
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+                m_renamingLayer = li;
+                m_focusRename   = true;
+                std::snprintf(m_layerNameBuf, sizeof(m_layerNameBuf), "%s", anim->layer(li).name.c_str());
+            }
+        }
+        if (li == 0 && ImGui::IsItemHovered())
+            ImGui::SetTooltip("Capa base: siempre override, peso 1 y todo el cuerpo.");
+        ImGui::PopID();
+    }
+
+    ImGui::BeginDisabled(anim->layerCount() >= AnimatorComponent::kMaxLayers);
+    if (ImGui::Button("+##addLayer"))
+    {
+        const int n = anim->addLayer("Layer " + std::to_string(anim->layerCount()));
+        if (n >= 0)
+        {
+            m_layer = n;
+            ctx.pushLog("Animator: capa '" + anim->layer(n).name + "' añadida");
+        }
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(m_layer == 0);
+    if (ImGui::Button("-##removeLayer"))
+    {
+        ctx.pushLog("Animator: capa '" + anim->layer(m_layer).name + "' quitada");
+        anim->removeLayer(m_layer);
+        m_layer = std::min(m_layer, anim->layerCount() - 1);
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(m_layer <= 1);
+    if (ImGui::ArrowButton("##layerUp", ImGuiDir_Up))
+    {
+        anim->moveLayer(m_layer, m_layer - 1);
+        m_layer--;
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(m_layer == 0 || m_layer >= anim->layerCount() - 1);
+    if (ImGui::ArrowButton("##layerDown", ImGuiDir_Down))
+    {
+        anim->moveLayer(m_layer, m_layer + 1);
+        m_layer++;
+    }
+    ImGui::EndDisabled();
+
+    // La base no tiene peso, modo ni máscara propios.
+    if (m_layer > 0)
+    {
+        const auto& L = anim->layer(m_layer);
+        float peso = L.weight;
+        ImGui::SetNextItemWidth(200.0f);
+        if (ImGui::SliderFloat("Weight##lw", &peso, 0.0f, 1.0f, "%.2f"))
+            anim->setLayerWeight(m_layer, peso);
+        int modo = (int)L.mode;
+        const char* modos[] = { "Override", "Additive" };
+        ImGui::SetNextItemWidth(200.0f);
+        if (ImGui::Combo("Mode##lm", &modo, modos, 2))
+            anim->setLayerMode(m_layer, (AnimatorComponent::LayerMode)modo);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Override sustituye la pose de los huesos de la máscara;\n"
+                              "Additive le suma la diferencia de cada clip con su primer fotograma.");
+        const std::string etiqueta = L.maskBones.empty()
+            ? std::string("Mask: todo el cuerpo")
+            : "Mask: " + std::to_string(L.maskBones.size()) + " hueso(s)";
+        if (ImGui::Button((etiqueta + "##lmask").c_str(), ImVec2(200.0f, 0.0f)))
+            ImGui::OpenPopup("layerMask");
+        drawLayerMaskPopup(go);
+    }
+    ImGui::PopID();
+}
+
+void AnimatorPanel::drawLayerMaskPopup(GameObject* go)
+{
+    if (!ImGui::BeginPopup("layerMask")) return;
+    auto anim = go->getAnimator();
+    const SkinnedMesh* mesh = go->getSkinnedMesh();
+    auto& L = anim->layerMutable(m_layer);
+    bool cambio = false;
+    if (ImGui::Button("Todo el cuerpo"))
+    {
+        L.maskBones.clear();
+        cambio = true;
+    }
+    if (!mesh)
+    {
+        ImGui::TextDisabled("El GameObject no tiene un mesh skinned.");
+    }
+    else
+    {
+        ImGui::TextDisabled("Clic: el hueso y su rama. Ctrl+clic: solo el hueso.");
+        const auto& nombres = mesh->skeleton.names;
+        const auto& padres  = mesh->skeleton.parentIndex;
+        const int   n       = (int)nombres.size();
+        std::vector<uint8_t> marcado((size_t)n, 0);
+        for (const auto& b : L.maskBones)
+            for (int i = 0; i < n; i++)
+                if (nombres[(size_t)i] == b) marcado[(size_t)i] = 1;
+        std::vector<std::vector<int>> hijos((size_t)n);
+        std::vector<int> raices;
+        for (int i = 0; i < n; i++)
+        {
+            const int p = i < (int)padres.size() ? padres[(size_t)i] : -1;
+            if (p >= 0 && p < n) hijos[(size_t)p].push_back(i); else raices.push_back(i);
+        }
+        // La rama de b a v: el hueso y todos sus descendientes.
+        auto ponerRama = [&](int b, bool v) {
+            std::vector<int> pila = { b };
+            while (!pila.empty())
+            {
+                const int x = pila.back();
+                pila.pop_back();
+                marcado[(size_t)x] = v ? 1 : 0;
+                for (int h : hijos[(size_t)x]) pila.push_back(h);
+            }
+        };
+        std::function<void(int)> nodo = [&](int b) {
+            ImGui::PushID(b);
+            const bool hoja = hijos[(size_t)b].empty();
+            bool v = marcado[(size_t)b] != 0;
+            if (ImGui::Checkbox("##m", &v))
+            {
+                if (ImGui::GetIO().KeyCtrl) marcado[(size_t)b] = v ? 1 : 0;
+                else                        ponerRama(b, v);
+                cambio = true;
+            }
+            ImGui::SameLine();
+            ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth;
+            if (hoja) fl |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+            const bool abierto = ImGui::TreeNodeEx(nombres[(size_t)b].c_str(), fl);
+            if (abierto && !hoja)
+            {
+                for (int h : hijos[(size_t)b]) nodo(h);
+                ImGui::TreePop();
+            }
+            ImGui::PopID();
+        };
+        ImGui::BeginChild("arbolMascara", ImVec2(320.0f, 420.0f), true);
+        for (int r : raices) nodo(r);
+        ImGui::EndChild();
+        if (cambio)
+        {
+            L.maskBones.clear();
+            for (int i = 0; i < n; i++)
+                if (marcado[(size_t)i]) L.maskBones.push_back(nombres[(size_t)i]);
+        }
+    }
+    // rebindClips y no bindClips: puede estar corriendo Play Mode.
+    if (cambio && mesh) anim->rebindClips(*mesh, nullptr);
+    ImGui::EndPopup();
+}
+
 void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
 {
     auto anim = go->getAnimator();
@@ -276,7 +458,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     ed::EnableShortcuts(!ImGui::GetIO().WantTextInput);
 
     // --- Nodos ---
-    const auto& states = anim->states();
+    const auto& states = anim->states(m_layer);
     for (size_t i = 0; i < states.size(); i++)
     {
         const int eid = states[i].editorId;
@@ -287,7 +469,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         // abajo lo necesita para separar "-> in" (izquierda) de "out ->" (derecha).
         ImGui::BeginGroup();
 
-        const bool isEntry = ((int)i == anim->entryState());
+        const bool isEntry = ((int)i == anim->entryState(m_layer));
         if (isEntry)
         {
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", states[i].name.c_str());
@@ -309,7 +491,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         ImGui::PushID((int)i);
         bool loop = states[i].loop;
         if (ImGui::Checkbox("loop", &loop))
-            anim->statesMutable()[i].loop = loop;
+            anim->statesMutable(m_layer)[i].loop = loop;
 
         // Modo de la raíz. RadioButton y no combo: una lista dentro del nodo
         // se abre en espacio de canvas (ver drawBlendPickPopup).
@@ -330,14 +512,14 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("El avance horizontal de la raiz mueve al GameObject (con Rigidbody dinamico, como velocidad). La Y se queda en la pose y la rotacion no se aplica.");
             if (modo != (int)states[i].rootMotion)
-                anim->statesMutable()[i].rootMotion = (RM)modo;
+                anim->statesMutable(m_layer)[i].rootMotion = (RM)modo;
         }
 
         // Velocidad del estado y parámetro float que la multiplica (opcional).
         // DragFloat en vivo: el undo lo recoge el tracker del grafo.
         ImGui::SetNextItemWidth(60.0f);
-        ImGui::DragFloat("speed", &anim->statesMutable()[i].speed, 0.01f, 0.0f, 100.0f, "%.2f");
-        if (anim->statesMutable()[i].speed < 0.0f) anim->statesMutable()[i].speed = 0.0f;
+        ImGui::DragFloat("speed", &anim->statesMutable(m_layer)[i].speed, 0.01f, 0.0f, 100.0f, "%.2f");
+        if (anim->statesMutable(m_layer)[i].speed < 0.0f) anim->statesMutable(m_layer)[i].speed = 0.0f;
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Multiplica el ritmo del clip (1 = normal, 0 = congelado).");
         ImGui::SameLine();
@@ -358,7 +540,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         // Cada fila abre la lista de TODOS los clips de la malla con un botón y
         // no BeginCombo: la lista se abre fuera del nodo (ver
         // drawBlendPickPopup). Una entrada sin clip resuelto sale en rojo.
-        auto& stMut = anim->statesMutable()[i];
+        auto& stMut = anim->statesMutable(m_layer)[i];
         if (go->getSkinnedMesh())
         {
             if (!stMut.blendEntries.empty())
@@ -536,7 +718,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     }
 
     // --- Links ---
-    const auto& transitions = anim->transitions();
+    const auto& transitions = anim->transitions(m_layer);
     for (size_t t = 0; t < transitions.size(); t++)
     {
         const int from = transitions[t].fromState;
@@ -583,7 +765,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                     // Sin condiciones no dispara nunca (por diseño): el usuario las
                     // añade con doble clic en el link.
                     m_graphUndo.setLabel("Crear transición");
-                    anim->addTransition(tr);
+                    anim->addTransition(tr, m_layer);
                     ctx.pushLog("Animator: transición creada (sin condiciones todavía)");
                 }
             }
@@ -629,7 +811,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
 
         std::sort(transitionsToRemove.rbegin(), transitionsToRemove.rend());
         for (int idx : transitionsToRemove)
-            anim->removeTransition(idx);
+            anim->removeTransition(idx, m_layer);
 
         // Se borran los links explícitamente pedidos antes que los estados: un
         // estado borrado se lleva también sus transiciones (removeState las
@@ -643,7 +825,7 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
         std::sort(statesToRemove.rbegin(), statesToRemove.rend());
         for (int idx : statesToRemove)
             // removeState reindexa las transiciones supervivientes.
-            anim->removeState(idx);
+            anim->removeState(idx, m_layer);
 
         // A diferencia de antes (Task 10), YA NO hace falta desvincular
         // m_boundTo aquí: con ids estables por editorId, un superviviente no
@@ -684,12 +866,12 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
     if (ImGui::BeginPopup("node_ctx"))
     {
         const int idx = m_nodeCtxTarget;
-        if (idx >= 0 && idx < (int)anim->states().size())
+        if (idx >= 0 && idx < (int)anim->states(m_layer).size())
         {
             if (ImGui::MenuItem("Set as Entry"))
             {
-                anim->setEntryState(idx);
-                ctx.pushLog("Animator: '" + anim->states()[idx].name + "' es ahora el estado de entrada");
+                anim->setEntryState(idx, m_layer);
+                ctx.pushLog("Animator: '" + anim->states(m_layer)[idx].name + "' es ahora el estado de entrada");
             }
         }
         ImGui::EndPopup();
@@ -714,8 +896,8 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
     auto anim = go->getAnimator();
     const SkinnedMesh* mesh = go->getSkinnedMesh();
     int idx = -1;
-    for (int i = 0; i < (int)anim->states().size(); i++)
-        if (anim->states()[i].editorId == m_blendPickEditorId) { idx = i; break; }
+    for (int i = 0; i < (int)anim->states(m_layer).size(); i++)
+        if (anim->states(m_layer)[i].editorId == m_blendPickEditorId) { idx = i; break; }
     // El estado se borró (o la malla desapareció) con la lista abierta.
     if (idx < 0 || !mesh)
     {
@@ -723,7 +905,7 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
         ImGui::EndPopup();
         return;
     }
-    auto& st = anim->statesMutable()[idx];
+    auto& st = anim->statesMutable(m_layer)[idx];
 
     if (m_blendPickKind == 2)
     {
@@ -794,11 +976,11 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
 void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
 {
     auto anim = go->getAnimator();
-    if (m_conditionsFor < 0 || m_conditionsFor >= (int)anim->transitions().size()) return;
+    if (m_conditionsFor < 0 || m_conditionsFor >= (int)anim->transitions(m_layer).size()) return;
 
     if (!ImGui::BeginPopup("conditions")) return;
 
-    auto& tr = anim->transitionsMutable()[m_conditionsFor];
+    auto& tr = anim->transitionsMutable(m_layer)[m_conditionsFor];
 
     // Cross-fade de ESTA transición, en segundos. 0 = corte seco, que es lo que
     // hacía el motor antes y lo que traen las escenas viejas.
@@ -924,8 +1106,8 @@ void AnimatorPanel::drawConditionsPopup(EditorContext& ctx, GameObject* go)
     // clip en loop nunca "termina", ver AnimatorComponent::update): se deja
     // el item pero deshabilitado, con tooltip, para que el usuario no arme un
     // link muerto sin saberlo.
-    const bool fromLoops = tr.fromState >= 0 && tr.fromState < (int)anim->states().size()
-                            && anim->states()[tr.fromState].loop;
+    const bool fromLoops = tr.fromState >= 0 && tr.fromState < (int)anim->states(m_layer).size()
+                            && anim->states(m_layer)[tr.fromState].loop;
     ImGui::BeginDisabled(fromLoops);
     if (ImGui::Selectable("Add: animation finished", false, ImGuiSelectableFlags_DontClosePopups))
     {
@@ -1250,7 +1432,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 // nombre en el nuevo GameObject heredaría el modo edición y el
                 // buffer del clip del objeto anterior durante un frame.
                 const bool selectionChanged = (m_boundTo != go);
-                if (selectionChanged) m_renamingClip.clear();
+                if (selectionChanged) { m_renamingClip.clear(); m_layer = 0; m_renamingLayer = -1; }
 
                 // Undo del grafo: el bracket envuelve TODO lo que puede mutar el
                 // componente en este frame, desde drawAnimationSources hasta el
@@ -1260,6 +1442,7 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 const bool historialMovido = ctx.undo->revision() != m_lastUndoRevision;
 
                 drawAnimationSources(ctx, go);
+                drawLayerBar(ctx, go);
 
                 // --- Añadir estado desde los clips del modelo ---
                 const SkinnedMesh* mesh = go->getSkinnedMesh();
@@ -1278,10 +1461,10 @@ void AnimatorPanel::draw(EditorContext& ctx)
                         st.clipIndex      = (int)i;
                         st.duration       = mesh->animationClips[i].duration;
                         st.ticksPerSecond = mesh->animationClips[i].ticksPerSecond;
-                        st.editorPos      = glm::vec2(40.0f + 40.0f * (float)go->getAnimator()->states().size(),
-                                                       40.0f + 30.0f * (float)go->getAnimator()->states().size());
-                        const int idx = go->getAnimator()->addState(st);
-                        const int eid = go->getAnimator()->states()[idx].editorId;
+                        st.editorPos      = glm::vec2(40.0f + 40.0f * (float)go->getAnimator()->states(m_layer).size(),
+                                                       40.0f + 30.0f * (float)go->getAnimator()->states(m_layer).size());
+                        const int idx = go->getAnimator()->addState(st, m_layer);
+                        const int eid = go->getAnimator()->states(m_layer)[idx].editorId;
                         // El nodo es nuevo: hay que colocarlo en el canvas a mano, el
                         // sync general solo corre al cambiar de objeto.
                         ed::SetCurrentEditor(m_ctx);
@@ -1296,7 +1479,10 @@ void AnimatorPanel::draw(EditorContext& ctx)
                 ImGui::SameLine();
 
                 ImGui::BeginChild("canvas", ImVec2(0, 0), false);
-                if (selectionChanged || historialMovido)
+                // El undo puede haber quitado la capa seleccionada.
+                m_layer = std::clamp(m_layer, 0, go->getAnimator()->layerCount() - 1);
+                const bool capaCambiada = (m_layer != m_boundLayer);
+                if (selectionChanged || historialMovido || capaCambiada)
                 {
                     // Cambio de selección: el canvas todavía tiene las posiciones del
                     // objeto anterior. Se vuelca una vez, no cada frame — si no, el
@@ -1308,7 +1494,8 @@ void AnimatorPanel::draw(EditorContext& ctx)
                     ed::SetCurrentEditor(m_ctx);
                     syncPositionsFromComponent(go);
                     ed::SetCurrentEditor(nullptr);
-                    m_boundTo = go;
+                    m_boundTo    = go;
+                    m_boundLayer = m_layer;
                 }
                 drawGraph(ctx, go);
                 // Sync inverso cada frame, incondicional (ya no hace falta el guardia
