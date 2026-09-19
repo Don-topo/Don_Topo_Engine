@@ -7600,6 +7600,76 @@ static void test_ik_chain_resolution()
     CHECK(nombre && cadena);
 }
 
+static void test_ik_serialization(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>(makeIkAnimator());
+    a->ikConstraintsMutable()[0].aimAxis  = { 0.0f, 1.0f, 0.0f };
+    a->ikConstraintsMutable()[0].maxAngle = 55.0f;
+    a->setIkWeight("mano", 0.5f);
+    go->setAnimator(a);
+    nlohmann::json j = scene.toJson();
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& ik = found->getAnimator()->ikConstraints();
+    CHECK(ik.size() == 2u);
+    if (ik.size() != 2u) return;
+    CHECK(ik[0].name == "mirar" && ik[0].type == AnimatorComponent::IkType::LookAt);
+    CHECK(ik[0].boneName == "head" && ik[0].targetId == 7u);
+    CHECK(nearlyEqual(ik[0].maxAngle, 55.0f) && nearlyEqual(ik[0].aimAxis.y, 1.0f));
+    CHECK(ik[1].type == AnimatorComponent::IkType::TwoBone);
+    CHECK(ik[1].poleId == 9u && nearlyEqual(ik[1].weight, 0.5f));
+    // Un animator sin IK no escribe la clave.
+    AnimatorComponent sinIk;
+    CHECK(!animatorToJson(sinIk).contains("ik"));
+    CHECK(animatorToJson(*a).contains("ik"));
+}
+
+static void test_ik_bad_file_warns(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    go->setAnimator(std::make_shared<AnimatorComponent>(makeIkAnimator()));
+    nlohmann::json j = scene.toJson();
+    for (auto& node : j["root"]["children"])
+    {
+        if (!node.contains("animator")) continue;
+        node["animator"]["ik"][0]["type"] = "loQueSea";
+        while (node["animator"]["ik"].size() < 6) node["animator"]["ik"].push_back(node["animator"]["ik"][1]);
+    }
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool tipo = false, tope = false;
+    for (const auto& w : loaded.lastWarnings())
+    {
+        if (w.find("loQueSea") != std::string::npos) tipo = true;
+        if (w.find("restricciones") != std::string::npos) tope = true;
+    }
+    CHECK(tipo && tope);
+    GameObject* found = loaded.getRoot().children[0].get();
+    CHECK(found->getAnimator()->ikConstraints().size() == (size_t)AnimatorComponent::kMaxIkConstraints);
+    CHECK(found->getAnimator()->ikConstraints()[0].type == AnimatorComponent::IkType::LookAt);
+}
+
+static void test_ik_graph_key_and_apply_graph()
+{
+    AnimatorComponent a = makeIkAnimator();
+    const auto k0 = animatorGraphKey(a);
+    a.setIkWeight("mano", 0.25f);
+    CHECK(animatorGraphKey(a) != k0);
+    const AnimatorComponent::Graph snap = a.graph();
+    a.removeIkConstraint(0);
+    a.setIkWeight("mano", 1.0f);
+    a.applyGraph(snap);
+    CHECK(a.ikConstraints().size() == 2u);
+    CHECK(nearlyEqual(a.ikWeight("mano"), 0.25f));
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -7759,6 +7829,7 @@ int main()
     test_layers_state_index_by_editor_id();
     test_ik_constraint_management();
     test_ik_chain_resolution();
+    test_ik_graph_key_and_apply_graph();
     test_pose_block_layout();
     test_layers_override_mask_criterion();
     test_layers_additive_delta();
@@ -7767,6 +7838,8 @@ int main()
     test_blend2d_serialization(pm, am);
     test_layers_serialization(pm, am);
     test_layers_too_many_warns(pm, am);
+    test_ik_serialization(pm, am);
+    test_ik_bad_file_warns(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);
     test_animation_sources_survive_scene_round_trip(pm, am);

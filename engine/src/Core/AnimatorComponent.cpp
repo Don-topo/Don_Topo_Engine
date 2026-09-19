@@ -164,13 +164,17 @@ namespace DonTopo
     AnimatorComponent::Graph AnimatorComponent::graph() const
     {
         const Layer& L = m_layers[0];
-        Graph g{ L.states, L.transitions, m_parameters, L.entryState, {} };
+        Graph g{ L.states, L.transitions, m_parameters, L.entryState, {}, m_ik };
         g.extraLayers.assign(m_layers.begin() + 1, m_layers.end());
         return g;
     }
 
     void AnimatorComponent::applyGraph(const Graph& g)
     {
+        // La IK es diseño entero: entra tal cual (sus índices los rehace
+        // rebindClips, como los clipIndex).
+        m_ik = g.ik;
+
         const std::vector<Parameter> oldParams = m_parameters;
         auto oldBools    = m_bools;
         auto oldTriggers = m_triggers;

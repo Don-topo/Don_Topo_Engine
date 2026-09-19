@@ -271,6 +271,9 @@ namespace DonTopo
                 int                     entryState = -1;
                 // Capas 1..N enteras (el diseño; su ejecución se ignora).
                 std::vector<Layer>      extraLayers;
+                // Las restricciones de IK son diseño entero: no tienen
+                // ejecución que conservar.
+                std::vector<IkConstraint> ik;
             };
 
             // --- Diseño (editor / carga de escena) ---
