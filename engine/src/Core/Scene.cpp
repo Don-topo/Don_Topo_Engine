@@ -532,108 +532,138 @@ namespace DonTopo
 {
     nlohmann::json animatorToJson(const AnimatorComponent& a)
     {
-        auto states = nlohmann::json::array();
-        for (const auto& s : a.states())
-        {
-            // El clip va por NOMBRE: el índice depende del orden de mAnimations
-            // en el FBX, y reexportar el modelo lo baraja en silencio.
-            nlohmann::json sj = { {"name", s.name},
-                                  {"clip", s.clipName},
-                                  {"loop", s.loop},
-                                  {"pos", nlohmann::json::array({ s.editorPos.x, s.editorPos.y })} };
-            // Blend por parámetro: solo si el estado lo usa. Emitirlo siempre
-            // llenaría de campos vacíos el .scene de cualquier grafo normal.
-            // clipIndex/duration de cada entrada NO se guardan: son del FBX,
-            // los rellena bindClips igual que el clipIndex del estado.
-            if (!s.blendEntries.empty())
+        // Estados y transiciones de UNA capa: la 0 va en las claves de siempre
+        // y las demás, con el mismo formato, en "layers".
+        auto grafo = [&a](int capa) {
+            auto states = nlohmann::json::array();
+            for (const auto& s : a.states(capa))
             {
-                sj["blendParam"]    = s.blendParam;
-                sj["clipThreshold"] = s.clipThreshold;
-                // Blend 2D: solo si lo usa, así un 1D se guarda como siempre.
-                const bool dosD = !s.blendParamY.empty();
-                if (dosD)
+                // El clip va por NOMBRE: el índice depende del orden de mAnimations
+                // en el FBX, y reexportar el modelo lo baraja en silencio.
+                nlohmann::json sj = { {"name", s.name},
+                                      {"clip", s.clipName},
+                                      {"loop", s.loop},
+                                      {"pos", nlohmann::json::array({ s.editorPos.x, s.editorPos.y })} };
+                // Blend por parámetro: solo si el estado lo usa. Emitirlo siempre
+                // llenaría de campos vacíos el .scene de cualquier grafo normal.
+                // clipIndex/duration de cada entrada NO se guardan: son del FBX,
+                // los rellena bindClips igual que el clipIndex del estado.
+                if (!s.blendEntries.empty())
                 {
-                    sj["blendParamY"]    = s.blendParamY;
-                    sj["clipThresholdY"] = s.clipThresholdY;
+                    sj["blendParam"]    = s.blendParam;
+                    sj["clipThreshold"] = s.clipThreshold;
+                    // Blend 2D: solo si lo usa, así un 1D se guarda como siempre.
+                    const bool dosD = !s.blendParamY.empty();
+                    if (dosD)
+                    {
+                        sj["blendParamY"]    = s.blendParamY;
+                        sj["clipThresholdY"] = s.clipThresholdY;
+                    }
+                    nlohmann::json entradas = nlohmann::json::array();
+                    for (const auto& e : s.blendEntries)
+                    {
+                        nlohmann::json ej = { {"clip", e.clipName}, {"threshold", e.threshold} };
+                        if (dosD) ej["thresholdY"] = e.thresholdY;
+                        entradas.push_back(std::move(ej));
+                    }
+                    sj["blendEntries"] = std::move(entradas);
                 }
-                nlohmann::json entradas = nlohmann::json::array();
-                for (const auto& e : s.blendEntries)
+                // Modo de raíz: solo si no es Off, que es lo que traen todas las
+                // escenas anteriores a esta opción.
+                if (s.rootMotion == AnimatorComponent::RootMotion::Lock)  sj["rootMotion"] = "lock";
+                if (s.rootMotion == AnimatorComponent::RootMotion::Apply) sj["rootMotion"] = "apply";
+                // Eventos: solo si hay alguno, como el blend.
+                if (!s.events.empty())
                 {
-                    nlohmann::json ej = { {"clip", e.clipName}, {"threshold", e.threshold} };
-                    if (dosD) ej["thresholdY"] = e.thresholdY;
-                    entradas.push_back(std::move(ej));
+                    nlohmann::json eventos = nlohmann::json::array();
+                    for (const auto& ev : s.events)
+                        eventos.push_back({ {"name", ev.name}, {"time", ev.time} });
+                    sj["events"] = std::move(eventos);
                 }
-                sj["blendEntries"] = std::move(entradas);
+                // Velocidad: solo si no es la de siempre (x1, sin multiplicador).
+                if (s.speed != 1.0f)
+                    sj["speed"] = s.speed;
+                if (!s.speedParam.empty())
+                    sj["speedParam"] = s.speedParam;
+                states.push_back(sj);
             }
-            // Modo de raíz: solo si no es Off, que es lo que traen todas las
-            // escenas anteriores a esta opción.
-            if (s.rootMotion == AnimatorComponent::RootMotion::Lock)  sj["rootMotion"] = "lock";
-            if (s.rootMotion == AnimatorComponent::RootMotion::Apply) sj["rootMotion"] = "apply";
-            // Eventos: solo si hay alguno, como el blend.
-            if (!s.events.empty())
+
+
+            auto transitions = nlohmann::json::array();
+            for (const auto& t : a.transitions(capa))
             {
-                nlohmann::json eventos = nlohmann::json::array();
-                for (const auto& ev : s.events)
-                    eventos.push_back({ {"name", ev.name}, {"time", ev.time} });
-                sj["events"] = std::move(eventos);
+                auto conds = nlohmann::json::array();
+                for (const auto& c : t.conditions)
+                {
+                    nlohmann::json cj = { {"type", condTypeToStr(c.type)} };
+                    if (c.type != AnimatorComponent::ConditionType::AnimationFinished)
+                        cj["param"] = c.paramName;
+                    if (c.type == AnimatorComponent::ConditionType::Bool)
+                        cj["expected"] = c.expected;
+                    // Solo las numéricas: en una Bool serían ruido en el .scene.
+                    if (c.type == AnimatorComponent::ConditionType::Int ||
+                        c.type == AnimatorComponent::ConditionType::Float)
+                    {
+                        cj["compare"]   = compareToStr(c.compare);
+                        cj["threshold"] = c.threshold;
+                    }
+                    conds.push_back(cj);
+                }
+                // from/to son índices al array "states" de ESTE mismo JSON:
+                // self-contained, sin depender de ningún asset externo.
+                // "duration" es el cross-fade en segundos; 0 (corte seco) es lo que
+                // asume toda escena guardada antes de que el campo existiera.
+                nlohmann::json tj = { {"from", t.fromState}, {"to", t.toState},
+                                      {"duration", t.duration}, {"conditions", conds} };
+                // Exit time y Any State: solo si se usan, igual que los campos de
+                // blend. Any State se guarda como "from": -2 (kAnyState), que sigue
+                // siendo un entero: el lector de "from" no cambia.
+                if (t.hasExitTime)
+                {
+                    tj["hasExitTime"] = true;
+                    tj["exitTime"]    = t.exitTime;
+                }
+                if (t.fromState == AnimatorComponent::kAnyState && t.canTransitionToSelf)
+                    tj["canTransitionToSelf"] = true;
+                transitions.push_back(tj);
             }
-            // Velocidad: solo si no es la de siempre (x1, sin multiplicador).
-            if (s.speed != 1.0f)
-                sj["speed"] = s.speed;
-            if (!s.speedParam.empty())
-                sj["speedParam"] = s.speedParam;
-            states.push_back(sj);
-        }
+
+            return std::make_pair(std::move(states), std::move(transitions));
+        };
 
         auto params = nlohmann::json::array();
         for (const auto& p : a.parameters())
             params.push_back({ {"name", p.name}, {"type", paramTypeToStr(p.type)} });
 
-        auto transitions = nlohmann::json::array();
-        for (const auto& t : a.transitions())
+        auto base = grafo(0);
+        nlohmann::json out = { {"entryState", a.entryState()},
+                               {"parameters", params},
+                               {"states", std::move(base.first)},
+                               {"transitions", std::move(base.second)},
+                               {"anyStatePos", nlohmann::json::array({ a.anyStateEditorPos().x,
+                                                                        a.anyStateEditorPos().y })} };
+        // Capas: solo si hay más de una, así una escena de una capa se guarda
+        // exactamente como antes de que existieran.
+        if (a.layerCount() > 1)
         {
-            auto conds = nlohmann::json::array();
-            for (const auto& c : t.conditions)
+            auto capas = nlohmann::json::array();
+            for (int li = 1; li < a.layerCount(); li++)
             {
-                nlohmann::json cj = { {"type", condTypeToStr(c.type)} };
-                if (c.type != AnimatorComponent::ConditionType::AnimationFinished)
-                    cj["param"] = c.paramName;
-                if (c.type == AnimatorComponent::ConditionType::Bool)
-                    cj["expected"] = c.expected;
-                // Solo las numéricas: en una Bool serían ruido en el .scene.
-                if (c.type == AnimatorComponent::ConditionType::Int ||
-                    c.type == AnimatorComponent::ConditionType::Float)
-                {
-                    cj["compare"]   = compareToStr(c.compare);
-                    cj["threshold"] = c.threshold;
-                }
-                conds.push_back(cj);
+                const auto& L = a.layer(li);
+                auto g = grafo(li);
+                nlohmann::json lj = { {"name", L.name},
+                                      {"weight", L.weight},
+                                      {"mode", L.mode == AnimatorComponent::LayerMode::Additive ? "additive" : "override"},
+                                      {"entryState", L.entryState},
+                                      {"states", std::move(g.first)},
+                                      {"transitions", std::move(g.second)},
+                                      {"anyStatePos", nlohmann::json::array({ L.anyStatePos.x, L.anyStatePos.y })} };
+                if (!L.maskBones.empty()) lj["mask"] = L.maskBones;
+                capas.push_back(std::move(lj));
             }
-            // from/to son índices al array "states" de ESTE mismo JSON:
-            // self-contained, sin depender de ningún asset externo.
-            // "duration" es el cross-fade en segundos; 0 (corte seco) es lo que
-            // asume toda escena guardada antes de que el campo existiera.
-            nlohmann::json tj = { {"from", t.fromState}, {"to", t.toState},
-                                  {"duration", t.duration}, {"conditions", conds} };
-            // Exit time y Any State: solo si se usan, igual que los campos de
-            // blend. Any State se guarda como "from": -2 (kAnyState), que sigue
-            // siendo un entero: el lector de "from" no cambia.
-            if (t.hasExitTime)
-            {
-                tj["hasExitTime"] = true;
-                tj["exitTime"]    = t.exitTime;
-            }
-            if (t.fromState == AnimatorComponent::kAnyState && t.canTransitionToSelf)
-                tj["canTransitionToSelf"] = true;
-            transitions.push_back(tj);
+            out["layers"] = std::move(capas);
         }
-
-        return { {"entryState", a.entryState()},
-                 {"parameters", params},
-                 {"states", states},
-                 {"transitions", transitions},
-                 {"anyStatePos", nlohmann::json::array({ a.anyStateEditorPos().x,
-                                                          a.anyStateEditorPos().y })} };
+        return out;
     }
 
     nlohmann::json animatorGraphKey(const AnimatorComponent& a)
@@ -642,6 +672,12 @@ namespace DonTopo
         for (auto& s : key["states"]) s.erase("pos");
         // Mover el nodo Any State tampoco es una edición.
         key.erase("anyStatePos");
+        if (key.contains("layers"))
+            for (auto& lj : key["layers"])
+            {
+                for (auto& s : lj["states"]) s.erase("pos");
+                lj.erase("anyStatePos");
+            }
         return key;
     }
 }   // namespace DonTopo
@@ -664,195 +700,226 @@ namespace
                 a->addParameter(p.value("name", std::string()),
                                 paramTypeFromStr(p.value("type", std::string("bool"))));
 
-        if (j.contains("states"))
+        // El grafo de UNA capa (estados, Any State, transiciones, entrada):
+        // la 0 sale de las claves de siempre y las demás de "layers".
+        auto leerGrafo = [&](const nlohmann::json& g, int capa)
         {
-            for (const auto& s : j["states"])
+            if (g.contains("states"))
             {
-                AnimatorComponent::State st;
-                st.name     = s.value("name", std::string());
-                st.clipName = s.value("clip", std::string());
-                st.loop     = s.value("loop", true);
-                // Ausentes en escenas anteriores al blend por parámetro: sin
-                // entradas el estado es de un solo clip, como siempre.
-                const std::string ctxBlend = "animator.state." + st.name;
-                st.blendParam  = s.value("blendParam", std::string());
-                st.blendParamY = s.value("blendParamY", std::string());
-                if (s.contains("blendEntries") && s["blendEntries"].is_array())
+                for (const auto& s : g["states"])
                 {
-                    st.clipThreshold  = readFloat(s, "clipThreshold", 0.0f, warnings, ctxBlend);
-                    st.clipThresholdY = readFloat(s, "clipThresholdY", 0.0f, warnings, ctxBlend);
-                    for (const auto& ej : s["blendEntries"])
+                    AnimatorComponent::State st;
+                    st.name     = s.value("name", std::string());
+                    st.clipName = s.value("clip", std::string());
+                    st.loop     = s.value("loop", true);
+                    // Ausentes en escenas anteriores al blend por parámetro: sin
+                    // entradas el estado es de un solo clip, como siempre.
+                    const std::string ctxBlend = "animator.state." + st.name;
+                    st.blendParam  = s.value("blendParam", std::string());
+                    st.blendParamY = s.value("blendParamY", std::string());
+                    if (s.contains("blendEntries") && s["blendEntries"].is_array())
                     {
-                        if (!ej.is_object()) continue;
+                        st.clipThreshold  = readFloat(s, "clipThreshold", 0.0f, warnings, ctxBlend);
+                        st.clipThresholdY = readFloat(s, "clipThresholdY", 0.0f, warnings, ctxBlend);
+                        for (const auto& ej : s["blendEntries"])
+                        {
+                            if (!ej.is_object()) continue;
+                            AnimatorComponent::BlendEntry e;
+                            e.clipName  = ej.value("clip", std::string());
+                            e.threshold  = readFloat(ej, "threshold", 0.0f, warnings, ctxBlend + ".blendEntries");
+                            e.thresholdY = readFloat(ej, "thresholdY", 0.0f, warnings, ctxBlend + ".blendEntries");
+                            st.blendEntries.push_back(std::move(e));
+                        }
+                    }
+                    else if (!s.value("blendClip", std::string()).empty())
+                    {
+                        // Formato anterior a N clips: el par (clip, blendClip) con
+                        // [blendMin, blendMax]. Como umbrales dan la MISMA pose,
+                        // incluidos span negativo (A/B salen intercambiados con el
+                        // peso complementario) y span 0 (el empate descarta la
+                        // entrada, como el peso 0 de antes).
+                        st.clipThreshold = readFloat(s, "blendMin", 0.0f, warnings, ctxBlend);
                         AnimatorComponent::BlendEntry e;
-                        e.clipName  = ej.value("clip", std::string());
-                        e.threshold  = readFloat(ej, "threshold", 0.0f, warnings, ctxBlend + ".blendEntries");
-                        e.thresholdY = readFloat(ej, "thresholdY", 0.0f, warnings, ctxBlend + ".blendEntries");
+                        e.clipName  = s.value("blendClip", std::string());
+                        e.threshold = readFloat(s, "blendMax", 1.0f, warnings, ctxBlend);
                         st.blendEntries.push_back(std::move(e));
                     }
-                }
-                else if (!s.value("blendClip", std::string()).empty())
-                {
-                    // Formato anterior a N clips: el par (clip, blendClip) con
-                    // [blendMin, blendMax]. Como umbrales dan la MISMA pose,
-                    // incluidos span negativo (A/B salen intercambiados con el
-                    // peso complementario) y span 0 (el empate descarta la
-                    // entrada, como el peso 0 de antes).
-                    st.clipThreshold = readFloat(s, "blendMin", 0.0f, warnings, ctxBlend);
-                    AnimatorComponent::BlendEntry e;
-                    e.clipName  = s.value("blendClip", std::string());
-                    e.threshold = readFloat(s, "blendMax", 1.0f, warnings, ctxBlend);
-                    st.blendEntries.push_back(std::move(e));
-                }
-                // "rootMotion" desde el root motion real; antes, un bool
-                // lockRootMotion que equivale a Lock. Ausentes los dos: Off.
-                const std::string rm = s.value("rootMotion", std::string());
-                if (rm == "lock")       st.rootMotion = AnimatorComponent::RootMotion::Lock;
-                else if (rm == "apply") st.rootMotion = AnimatorComponent::RootMotion::Apply;
-                else if (!rm.empty())
-                {
-                    if (warnings)
-                        warnings->push_back("animator.state." + st.name + ": rootMotion '" + rm +
-                                            "' desconocido, se usa normal");
-                }
-                else if (s.value("lockRootMotion", false))
-                    st.rootMotion = AnimatorComponent::RootMotion::Lock;
-                // Ausentes en escenas anteriores a los eventos: ninguno.
-                if (s.contains("events") && s["events"].is_array())
-                {
-                    const std::string ctxEv = "animator.state." + st.name + ".events";
-                    for (const auto& ej : s["events"])
+                    // "rootMotion" desde el root motion real; antes, un bool
+                    // lockRootMotion que equivale a Lock. Ausentes los dos: Off.
+                    const std::string rm = s.value("rootMotion", std::string());
+                    if (rm == "lock")       st.rootMotion = AnimatorComponent::RootMotion::Lock;
+                    else if (rm == "apply") st.rootMotion = AnimatorComponent::RootMotion::Apply;
+                    else if (!rm.empty())
                     {
-                        if (!ej.is_object()) continue;
-                        AnimatorComponent::AnimationEvent ev;
-                        ev.name = ej.value("name", std::string());
-                        ev.time = readFloat(ej, "time", 0.0f, warnings, ctxEv);
-                        if (ev.time < 0.0f || ev.time > 1.0f)
+                        if (warnings)
+                            warnings->push_back("animator.state." + st.name + ": rootMotion '" + rm +
+                                                "' desconocido, se usa normal");
+                    }
+                    else if (s.value("lockRootMotion", false))
+                        st.rootMotion = AnimatorComponent::RootMotion::Lock;
+                    // Ausentes en escenas anteriores a los eventos: ninguno.
+                    if (s.contains("events") && s["events"].is_array())
+                    {
+                        const std::string ctxEv = "animator.state." + st.name + ".events";
+                        for (const auto& ej : s["events"])
                         {
-                            if (warnings) warnings->push_back(ctxEv + ": time fuera de [0,1], se ajusta");
-                            ev.time = std::clamp(ev.time, 0.0f, 1.0f);
+                            if (!ej.is_object()) continue;
+                            AnimatorComponent::AnimationEvent ev;
+                            ev.name = ej.value("name", std::string());
+                            ev.time = readFloat(ej, "time", 0.0f, warnings, ctxEv);
+                            if (ev.time < 0.0f || ev.time > 1.0f)
+                            {
+                                if (warnings) warnings->push_back(ctxEv + ": time fuera de [0,1], se ajusta");
+                                ev.time = std::clamp(ev.time, 0.0f, 1.0f);
+                            }
+                            st.events.push_back(std::move(ev));
                         }
-                        st.events.push_back(std::move(ev));
                     }
-                }
-                // Ausentes en escenas anteriores a la velocidad por estado: x1.
-                st.speed      = readFloat(s, "speed", 1.0f, warnings, "animator.state." + st.name + ".speed");
-                st.speedParam = s.value("speedParam", std::string());
-                if (st.speed < 0.0f)
-                {
-                    if (warnings)
-                        warnings->push_back("animator.state." + st.name + ".speed negativo (" +
-                                             std::to_string(st.speed) + "), se acota a 0");
-                    st.speed = 0.0f;
-                }
-                if (s.contains("pos") && s["pos"].is_array() && s["pos"].size() == 2)
-                    st.editorPos = glm::vec2(readArrayFloat(s["pos"], 0, 0.0f, warnings, "animator.state." + st.name + ".pos"),
-                                              readArrayFloat(s["pos"], 1, 0.0f, warnings, "animator.state." + st.name + ".pos"));
-                // duration/ticksPerSecond/clipIndex los rellena bindClips contra
-                // el SkinnedMesh: son del FBX, no del fichero de escena.
-                a->addState(st);
-            }
-        }
-
-        // Ausente en escenas anteriores a Any State: se queda la posición por
-        // defecto del componente.
-        if (j.contains("anyStatePos") && j["anyStatePos"].is_array() && j["anyStatePos"].size() == 2)
-            a->setAnyStateEditorPos(glm::vec2(readArrayFloat(j["anyStatePos"], 0, -220.0f, warnings, "animator.anyStatePos"),
-                                              readArrayFloat(j["anyStatePos"], 1, 40.0f, warnings, "animator.anyStatePos")));
-
-        if (j.contains("transitions"))
-        {
-            for (const auto& t : j["transitions"])
-            {
-                AnimatorComponent::Transition tr;
-                tr.fromState = t.value("from", -1);
-                tr.toState   = t.value("to", -1);
-                // Ausente en escenas anteriores al cross-fade: 0 = corte seco,
-                // exactamente lo que hacían.
-                tr.duration  = readFloat(t, "duration", 0.0f, warnings,
-                                          "animator.transition[" + std::to_string(tr.fromState) +
-                                          "->" + std::to_string(tr.toState) + "]");
-                // Ausentes en escenas anteriores al exit time y a Any State:
-                // caen en los defaults del struct.
-                tr.hasExitTime = t.value("hasExitTime", false);
-                tr.exitTime    = readFloat(t, "exitTime", 1.0f, warnings,
-                                            "animator.transition[" + std::to_string(tr.fromState) +
-                                            "->" + std::to_string(tr.toState) + "].exitTime");
-                if (tr.exitTime < 0.0f)
-                {
-                    if (warnings)
-                        warnings->push_back("animator.transition[" + std::to_string(tr.fromState) +
-                                             "->" + std::to_string(tr.toState) +
-                                             "].exitTime negativo (" + std::to_string(tr.exitTime) +
-                                             "), se acota a 0");
-                    tr.exitTime = 0.0f;
-                }
-                tr.canTransitionToSelf = t.value("canTransitionToSelf", false);
-                if (t.contains("conditions"))
-                {
-                    for (const auto& c : t["conditions"])
+                    // Ausentes en escenas anteriores a la velocidad por estado: x1.
+                    st.speed      = readFloat(s, "speed", 1.0f, warnings, "animator.state." + st.name + ".speed");
+                    st.speedParam = s.value("speedParam", std::string());
+                    if (st.speed < 0.0f)
                     {
-                        AnimatorComponent::Condition cond;
-                        cond.type      = condTypeFromStr(c.value("type", std::string("bool")));
-                        cond.paramName = c.value("param", std::string());
-                        cond.expected  = c.value("expected", true);
-                        // Ausentes en escenas anteriores a los parámetros
-                        // numéricos: caen en los defaults del struct.
-                        cond.compare   = compareFromStr(c.value("compare", std::string("greater")));
-                        cond.threshold = readFloat(c, "threshold", 0.0f, warnings,
-                                                    "animator.transition[" + std::to_string(tr.fromState) +
-                                                    "->" + std::to_string(tr.toState) + "].condition");
-                        tr.conditions.push_back(cond);
+                        if (warnings)
+                            warnings->push_back("animator.state." + st.name + ".speed negativo (" +
+                                                 std::to_string(st.speed) + "), se acota a 0");
+                        st.speed = 0.0f;
                     }
+                    if (s.contains("pos") && s["pos"].is_array() && s["pos"].size() == 2)
+                        st.editorPos = glm::vec2(readArrayFloat(s["pos"], 0, 0.0f, warnings, "animator.state." + st.name + ".pos"),
+                                                  readArrayFloat(s["pos"], 1, 0.0f, warnings, "animator.state." + st.name + ".pos"));
+                    // duration/ticksPerSecond/clipIndex los rellena bindClips contra
+                    // el SkinnedMesh: son del FBX, no del fichero de escena.
+                    a->addState(st, capa);
                 }
-                // Índices contra los estados que ACABAN de cargarse. Un grafo
-                // guardado puede traer transiciones que ya no apuntan a nada:
-                // el FBX se reexportó con menos clips y alguien borró estados, o
-                // el .scene se editó a mano. Sin esto entraban tal cual, y los
-                // dos síntomas eran mudos — el AnimatorPanel las salta al
-                // dibujar (no se ven) y update las descarta al evaluar (no se
-                // usan), pero se volvían a serializar en cada guardado: un
-                // pasajero invisible y permanente.
-                //
-                // Se DESCARTAN, no se acotan: un índice inventado no se puede
-                // adivinar, y dejar la transición apuntando a un estado
-                // arbitrario sería peor que no tenerla. Mismo criterio que
-                // pruneExtraCameras y que la reasignación de ids duplicados —
-                // el fichero vino roto, se repara y se dice.
-                const int nEstados = (int)a->states().size();
-                // Any State (kAnyState) es un origen válido; -1 u otro negativo
-                // sigue sin serlo. El destino se exige siempre en rango.
-                const bool origenValido = tr.fromState == AnimatorComponent::kAnyState ||
-                                          (tr.fromState >= 0 && tr.fromState < nEstados);
-                if (!origenValido || tr.toState < 0 || tr.toState >= nEstados)
+            }
+
+            // Ausente en escenas anteriores a Any State: se queda la posición por
+            // defecto del componente.
+            if (g.contains("anyStatePos") && g["anyStatePos"].is_array() && g["anyStatePos"].size() == 2)
+                a->setAnyStateEditorPos(glm::vec2(readArrayFloat(g["anyStatePos"], 0, -220.0f, warnings, "animator.anyStatePos"),
+                                                  readArrayFloat(g["anyStatePos"], 1, 40.0f, warnings, "animator.anyStatePos")), capa);
+
+            if (g.contains("transitions"))
+            {
+                for (const auto& t : g["transitions"])
                 {
-                    if (warnings)
-                        warnings->push_back("animator.transition[" + std::to_string(tr.fromState) +
-                                             "->" + std::to_string(tr.toState) +
-                                             "]: índice de estado fuera de rango (" +
-                                             std::to_string(nEstados) +
-                                             " estado(s) en el grafo), la transición se descarta");
-                    continue;
+                    AnimatorComponent::Transition tr;
+                    tr.fromState = t.value("from", -1);
+                    tr.toState   = t.value("to", -1);
+                    // Ausente en escenas anteriores al cross-fade: 0 = corte seco,
+                    // exactamente lo que hacían.
+                    tr.duration  = readFloat(t, "duration", 0.0f, warnings,
+                                              "animator.transition[" + std::to_string(tr.fromState) +
+                                              "->" + std::to_string(tr.toState) + "]");
+                    // Ausentes en escenas anteriores al exit time y a Any State:
+                    // caen en los defaults del struct.
+                    tr.hasExitTime = t.value("hasExitTime", false);
+                    tr.exitTime    = readFloat(t, "exitTime", 1.0f, warnings,
+                                                "animator.transition[" + std::to_string(tr.fromState) +
+                                                "->" + std::to_string(tr.toState) + "].exitTime");
+                    if (tr.exitTime < 0.0f)
+                    {
+                        if (warnings)
+                            warnings->push_back("animator.transition[" + std::to_string(tr.fromState) +
+                                                 "->" + std::to_string(tr.toState) +
+                                                 "].exitTime negativo (" + std::to_string(tr.exitTime) +
+                                                 "), se acota a 0");
+                        tr.exitTime = 0.0f;
+                    }
+                    tr.canTransitionToSelf = t.value("canTransitionToSelf", false);
+                    if (t.contains("conditions"))
+                    {
+                        for (const auto& c : t["conditions"])
+                        {
+                            AnimatorComponent::Condition cond;
+                            cond.type      = condTypeFromStr(c.value("type", std::string("bool")));
+                            cond.paramName = c.value("param", std::string());
+                            cond.expected  = c.value("expected", true);
+                            // Ausentes en escenas anteriores a los parámetros
+                            // numéricos: caen en los defaults del struct.
+                            cond.compare   = compareFromStr(c.value("compare", std::string("greater")));
+                            cond.threshold = readFloat(c, "threshold", 0.0f, warnings,
+                                                        "animator.transition[" + std::to_string(tr.fromState) +
+                                                        "->" + std::to_string(tr.toState) + "].condition");
+                            tr.conditions.push_back(cond);
+                        }
+                    }
+                    // Índices contra los estados que ACABAN de cargarse. Un grafo
+                    // guardado puede traer transiciones que ya no apuntan a nada:
+                    // el FBX se reexportó con menos clips y alguien borró estados, o
+                    // el .scene se editó a mano. Sin esto entraban tal cual, y los
+                    // dos síntomas eran mudos — el AnimatorPanel las salta al
+                    // dibujar (no se ven) y update las descarta al evaluar (no se
+                    // usan), pero se volvían a serializar en cada guardado: un
+                    // pasajero invisible y permanente.
+                    //
+                    // Se DESCARTAN, no se acotan: un índice inventado no se puede
+                    // adivinar, y dejar la transición apuntando a un estado
+                    // arbitrario sería peor que no tenerla. Mismo criterio que
+                    // pruneExtraCameras y que la reasignación de ids duplicados —
+                    // el fichero vino roto, se repara y se dice.
+                    const int nEstados = (int)a->states(capa).size();
+                    // Any State (kAnyState) es un origen válido; -1 u otro negativo
+                    // sigue sin serlo. El destino se exige siempre en rango.
+                    const bool origenValido = tr.fromState == AnimatorComponent::kAnyState ||
+                                              (tr.fromState >= 0 && tr.fromState < nEstados);
+                    if (!origenValido || tr.toState < 0 || tr.toState >= nEstados)
+                    {
+                        if (warnings)
+                            warnings->push_back("animator.transition[" + std::to_string(tr.fromState) +
+                                                 "->" + std::to_string(tr.toState) +
+                                                 "]: índice de estado fuera de rango (" +
+                                                 std::to_string(nEstados) +
+                                                 " estado(s) en el grafo), la transición se descarta");
+                        continue;
+                    }
+                    a->addTransition(tr, capa);
                 }
-                a->addTransition(tr);
+            }
+
+            // Después de addState: setEntryState valida contra m_states.size() y
+            // RETORNA SIN HACER NADA si el índice no vale, así que el personaje
+            // arrancaría en el estado 0 sin que nadie dijera por qué. El
+            // comportamiento se deja igual —0 es lo único seguro— pero deja de ser
+            // mudo.
+            //
+            // Solo se avisa si el grafo TIENE estados: con la lista vacía cualquier
+            // índice está fuera de rango, y un animator recién creado sin estados no
+            // es un fichero corrupto.
+            const int entrada = g.value("entryState", 0);
+            if (!a->states(capa).empty() && (entrada < 0 || entrada >= (int)a->states(capa).size()) && warnings)
+                warnings->push_back("animator.entryState: " + std::to_string(entrada) +
+                                     " fuera de rango (" + std::to_string(a->states(capa).size()) +
+                                     " estado(s) en el grafo), se arranca en el estado 0");
+            a->setEntryState(entrada, capa);
+        };
+        leerGrafo(j, 0);
+
+        if (j.contains("layers") && j["layers"].is_array())
+        {
+            const auto& capas = j["layers"];
+            if ((int)capas.size() > AnimatorComponent::kMaxLayers - 1 && warnings)
+                warnings->push_back("Animator: el fichero trae " + std::to_string(capas.size() + 1) +
+                                     " capas; se cargan las " + std::to_string(AnimatorComponent::kMaxLayers));
+            for (const auto& lj : capas)
+            {
+                if (!lj.is_object()) continue;
+                const int li = a->addLayer(lj.value("name", std::string("Layer")));
+                if (li < 0) break;
+                a->setLayerWeight(li, readFloat(lj, "weight", 1.0f, warnings, "animator.layer.weight"));
+                const std::string modo = lj.value("mode", std::string("override"));
+                if (modo == "additive")
+                    a->setLayerMode(li, AnimatorComponent::LayerMode::Additive);
+                else if (modo != "override" && warnings)
+                    warnings->push_back("animator.layer." + a->layer(li).name + ": mode '" + modo +
+                                         "' desconocido, se usa override");
+                if (lj.contains("mask") && lj["mask"].is_array())
+                    for (const auto& b : lj["mask"])
+                        if (b.is_string()) a->layerMutable(li).maskBones.push_back(b.get<std::string>());
+                leerGrafo(lj, li);
             }
         }
-
-        // Después de addState: setEntryState valida contra m_states.size() y
-        // RETORNA SIN HACER NADA si el índice no vale, así que el personaje
-        // arrancaría en el estado 0 sin que nadie dijera por qué. El
-        // comportamiento se deja igual —0 es lo único seguro— pero deja de ser
-        // mudo.
-        //
-        // Solo se avisa si el grafo TIENE estados: con la lista vacía cualquier
-        // índice está fuera de rango, y un animator recién creado sin estados no
-        // es un fichero corrupto.
-        const int entrada = j.value("entryState", 0);
-        if (!a->states().empty() && (entrada < 0 || entrada >= (int)a->states().size()) && warnings)
-            warnings->push_back("animator.entryState: " + std::to_string(entrada) +
-                                 " fuera de rango (" + std::to_string(a->states().size()) +
-                                 " estado(s) en el grafo), se arranca en el estado 0");
-        a->setEntryState(entrada);
         return a;
     }
 

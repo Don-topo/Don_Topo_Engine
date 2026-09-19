@@ -164,46 +164,19 @@ namespace DonTopo
     AnimatorComponent::Graph AnimatorComponent::graph() const
     {
         const Layer& L = m_layers[0];
-        return Graph{ L.states, L.transitions, m_parameters, L.entryState };
+        Graph g{ L.states, L.transitions, m_parameters, L.entryState, {} };
+        g.extraLayers.assign(m_layers.begin() + 1, m_layers.end());
+        return g;
     }
 
     void AnimatorComponent::applyGraph(const Graph& g)
     {
-        Layer& L = m_layers[0];
-        // Identidades vivas ANTES de sustituir nada: tras copiar g ya no se
-        // sabría qué editorId era el actual, cuál el que se apagaba, ni dónde
-        // estaba cada nodo en el canvas.
-        auto editorIdAt = [&L](int idx) {
-            return (idx >= 0 && idx < (int)L.states.size()) ? L.states[idx].editorId : -1;
-        };
-        const int curId  = editorIdAt(L.currentState);
-        const int prevId = editorIdAt(L.prevState);
-        std::unordered_map<int, glm::vec2> livePos;
-        for (const auto& s : L.states) livePos[s.editorId] = s.editorPos;
-
         const std::vector<Parameter> oldParams = m_parameters;
         auto oldBools    = m_bools;
         auto oldTriggers = m_triggers;
         auto oldInts     = m_ints;
         auto oldFloats   = m_floats;
-
-        L.states      = g.states;
-        L.transitions = g.transitions;
-        m_parameters  = g.parameters;
-        L.entryState  = g.entryState;
-
-        // Dos pasadas: primero adelantar el contador con los ids que ya
-        // traen los estados, después repartir a los que llegan sin id (-1).
-        // Al revés, un estado sin id podría recibir uno que otro trae ya.
-        for (auto& s : L.states)
-        {
-            if (s.editorId < 0) continue;
-            m_nextEditorId = std::max(m_nextEditorId, s.editorId + 1);
-            auto it = livePos.find(s.editorId);
-            if (it != livePos.end()) s.editorPos = it->second;
-        }
-        for (auto& s : L.states)
-            if (s.editorId < 0) s.editorId = m_nextEditorId++;
+        m_parameters = g.parameters;
 
         m_bools.clear();
         m_triggers.clear();
@@ -222,6 +195,73 @@ namespace DonTopo
                 case ParamType::Float:   m_floats[p.name]   = mismoTipo ? oldFloats[p.name]   : 0.0f;  break;
             }
         }
+
+        // Capas: la base y las del snapshot. Una capa que ya existía en ese
+        // índice conserva su playhead (casado por editorId, único en todo el
+        // componente) y su Any State en el canvas; una nueva arranca de cero.
+        const int n = 1 + (int)g.extraLayers.size();
+        if ((int)m_layers.size() > n) m_layers.resize((size_t)n);
+        for (int li = 0; li < n; li++)
+        {
+            if (li >= (int)m_layers.size())
+            {
+                Layer nueva = g.extraLayers[(size_t)li - 1];
+                nueva.states.clear();
+                nueva.transitions.clear();
+                nueva.currentState = -1;
+                nueva.prevState    = -1;
+                nueva.frozenFade   = nueva.freezePending = false;
+                m_layers.push_back(std::move(nueva));
+            }
+            else if (li > 0)
+            {
+                const Layer& src = g.extraLayers[(size_t)li - 1];
+                Layer& L = m_layers[li];
+                L.name      = src.name;
+                L.weight    = src.weight;
+                L.mode      = src.mode;
+                L.maskBones = src.maskBones;
+            }
+            if (li == 0) applyLayerGraph(0, g.states, g.transitions, g.entryState);
+            else
+            {
+                const Layer& src = g.extraLayers[(size_t)li - 1];
+                applyLayerGraph(li, src.states, src.transitions, src.entryState);
+            }
+        }
+    }
+
+    void AnimatorComponent::applyLayerGraph(int li, const std::vector<State>& states,
+                                            const std::vector<Transition>& transitions, int entryState)
+    {
+        Layer& L = m_layers[li];
+        // Identidades vivas ANTES de sustituir nada: tras copiar el grafo ya no
+        // se sabría qué editorId era el actual, cuál el que se apagaba, ni
+        // dónde estaba cada nodo en el canvas.
+        auto editorIdAt = [&L](int idx) {
+            return (idx >= 0 && idx < (int)L.states.size()) ? L.states[idx].editorId : -1;
+        };
+        const int curId  = editorIdAt(L.currentState);
+        const int prevId = editorIdAt(L.prevState);
+        std::unordered_map<int, glm::vec2> livePos;
+        for (const auto& s : L.states) livePos[s.editorId] = s.editorPos;
+
+        L.states      = states;
+        L.transitions = transitions;
+        L.entryState  = entryState;
+
+        // Dos pasadas: primero adelantar el contador con los ids que ya
+        // traen los estados, después repartir a los que llegan sin id (-1).
+        // Al revés, un estado sin id podría recibir uno que otro trae ya.
+        for (auto& s : L.states)
+        {
+            if (s.editorId < 0) continue;
+            m_nextEditorId = std::max(m_nextEditorId, s.editorId + 1);
+            auto it = livePos.find(s.editorId);
+            if (it != livePos.end()) s.editorPos = it->second;
+        }
+        for (auto& s : L.states)
+            if (s.editorId < 0) s.editorId = m_nextEditorId++;
 
         auto indexOf = [&L](int editorId) {
             if (editorId < 0) return -1;
@@ -244,7 +284,7 @@ namespace DonTopo
         }
         else
         {
-            enterState(L.entryState);
+            enterState(L.entryState, li);
         }
 
         if (L.frozenFade && cur >= 0)

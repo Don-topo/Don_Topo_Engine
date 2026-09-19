@@ -7145,6 +7145,98 @@ static void test_layers_mask_resolution()
     CHECK(p.layers[1].mask == nullptr);
 }
 
+static void test_layers_serialization(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>(makeTwoLayers());
+    const int l2 = a->addLayer("Respirar");
+    a->setLayerWeight(1, 0.6f);
+    a->setLayerMode(l2, AnimatorComponent::LayerMode::Additive);
+    a->layerMutable(1).maskBones = { "arm", "hand" };
+    go->setAnimator(a);
+    nlohmann::json j = scene.toJson();
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& b = *found->getAnimator();
+    CHECK(b.layerCount() == 3);
+    if (b.layerCount() != 3) return;
+    CHECK(b.layer(1).name == "Brazos" && nearlyEqual(b.layer(1).weight, 0.6f));
+    CHECK(b.layer(1).maskBones.size() == 2u);
+    CHECK(b.layer(1).states.size() == 2u && b.layer(1).transitions.size() == 1u);
+    CHECK(b.layer(2).mode == AnimatorComponent::LayerMode::Additive);
+    CHECK(b.layer(2).maskBones.empty());
+}
+
+// Una capa: ninguna clave nueva en el JSON.
+static void test_layers_single_layer_json_unchanged()
+{
+    AnimatorComponent a = makeTwoBlendStates();
+    const nlohmann::json j = animatorToJson(a);
+    CHECK(!j.contains("layers"));
+    AnimatorComponent b = makeTwoLayers();
+    CHECK(animatorToJson(b).contains("layers"));
+}
+
+static void test_layers_too_many_warns(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    auto a = std::make_shared<AnimatorComponent>(makeTwoLayers());
+    go->setAnimator(a);
+    nlohmann::json j = scene.toJson();
+    for (auto& node : j["root"]["children"])
+        if (node.contains("animator"))
+            while (node["animator"]["layers"].size() < 9) node["animator"]["layers"].push_back(node["animator"]["layers"][0]);
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    bool avisado = false;
+    for (const auto& w : loaded.lastWarnings()) if (w.find("capas") != std::string::npos) avisado = true;
+    CHECK(avisado);
+}
+
+// El undo de la capa: la clave del grafo cambia al tocar peso, modo o máscara.
+static void test_layers_graph_key_sees_layer_edits()
+{
+    AnimatorComponent a = makeTwoLayers();
+    const auto k0 = animatorGraphKey(a);
+    a.setLayerWeight(1, 0.5f);
+    const auto k1 = animatorGraphKey(a);
+    CHECK(k0 != k1);
+    a.layerMutable(1).maskBones = { "arm" };
+    CHECK(animatorGraphKey(a) != k1);
+}
+
+// El undo de las capas pasa por graph()/applyGraph: el snapshot devuelve las
+// capas (nombre, peso, modo, máscara, grafo) y quita las que se añadieron.
+static void test_layers_apply_graph_restores()
+{
+    AnimatorComponent a = makeTwoLayers();
+    a.update(0.1f, true);
+    const AnimatorComponent::Graph antes = a.graph();
+    a.setLayerWeight(1, 0.3f);
+    a.layerMutable(1).maskBones = { "arm" };
+    a.addState(a.states(1)[0], 1);
+    a.addLayer("Nueva");
+    a.applyGraph(antes);
+    CHECK(a.layerCount() == 2);
+    CHECK(nearlyEqual(a.layer(1).weight, 1.0f));
+    CHECK(a.layer(1).maskBones.empty());
+    CHECK(a.states(1).size() == 2u);
+    CHECK(a.currentState(1) == 0);          // conserva su playhead
+    // Y rehacer: vuelve la capa añadida.
+    AnimatorComponent b = makeTwoLayers();
+    b.addLayer("Nueva");
+    const AnimatorComponent::Graph despues = b.graph();
+    a.applyGraph(despues);
+    CHECK(a.layerCount() == 3);
+    CHECK(a.layer(2).name == "Nueva");
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -7298,8 +7390,13 @@ int main()
     test_layers_pose_tags_and_weights();
     test_layers_events_and_root_motion();
     test_layers_mask_resolution();
+    test_layers_single_layer_json_unchanged();
+    test_layers_graph_key_sees_layer_edits();
+    test_layers_apply_graph_restores();
     test_state_without_blend_fields_loads(pm, am);
     test_blend2d_serialization(pm, am);
+    test_layers_serialization(pm, am);
+    test_layers_too_many_warns(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);
     test_animation_sources_survive_scene_round_trip(pm, am);

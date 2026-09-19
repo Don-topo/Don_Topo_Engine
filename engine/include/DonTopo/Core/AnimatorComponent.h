@@ -236,6 +236,8 @@ namespace DonTopo
                 std::vector<Transition> transitions;
                 std::vector<Parameter>  parameters;
                 int                     entryState = -1;
+                // Capas 1..N enteras (el diseño; su ejecución se ignora).
+                std::vector<Layer>      extraLayers;
             };
 
             // --- Diseño (editor / carga de escena) ---
@@ -489,6 +491,10 @@ namespace DonTopo
             // El update de UNA capa. No consume triggers: apunta la transición
             // elegida en `consumir`, y update los consume tras todas las capas,
             // así un mismo trigger puede mover varias capas en el mismo frame.
+            // Lo de applyGraph que es de UNA capa: sustituye su grafo y recoloca
+            // su playhead por editorId (ver applyGraph).
+            void applyLayerGraph(int li, const std::vector<State>& states,
+                                 const std::vector<Transition>& transitions, int entryState);
             void updateLayer(int li, float dt, bool evaluateTransitions,
                              std::vector<const Transition*>& consumir);
             static constexpr int kMaxEventCyclesPerUpdate = 16;
