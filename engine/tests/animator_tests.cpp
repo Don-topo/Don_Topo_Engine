@@ -6609,7 +6609,8 @@ static void test_pose_samples_fade_between_blends()
     CHECK(nearlyEqual(pesoMuestra(p, 1), w * 0.5f));
     CHECK(nearlyEqual(pesoMuestra(p, 3), w * 0.5f));
     for (int i = 0; i < p.count; i++)
-        if (p.samples[i].clip == 0) CHECK(nearlyEqual(p.samples[i].time, a.previousAnimTime()));
+        if (p.samples[i].clip == 0 || p.samples[i].clip == 2)
+            CHECK(nearlyEqual(p.samples[i].time, a.previousAnimTime()));   // Run: fase del previo x 40
 }
 
 // Interrumpir un fade congela la pose una vez y el estado previo deja de
