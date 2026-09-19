@@ -20,26 +20,25 @@ layout(set=0, binding=1, std430) readonly buffer RotKeys    { RotKey  data[]; } 
 layout(set=0, binding=2, std430) readonly buffer ScaleKeys  { PosKey  data[]; } scaleKeys;
 layout(set=0, binding=3, std430) readonly buffer BoneInfos  { BoneInfo data[]; } boneInfos;
 layout(set=0, binding=4, std430) buffer LocalXforms         { mat4 data[]; } localXforms;
-// Pose resultante en TRS, 3 vec4 por hueso (pos, rot, escala). escala.w = 0
-// marca "este hueso vale su bindLocal" (ninguna muestra lo anima). La copia a
-// frozenTrs al interrumpir un fade es la pose congelada del siguiente.
+// Pose de cada CAPA en TRS, 3 vec4 por hueso (pos, rot, escala), un bloque de
+// boneCount por capa. escala.w = 0 marca "esta capa no anima el hueso". La de
+// una capa additive es su delta. La copia a frozenTrs al interrumpir un fade
+// es la pose congelada del siguiente, capa a capa.
 layout(set=0, binding=8, std430) buffer PoseTrs             { vec4 data[]; } poseTrs;
 layout(set=0, binding=9, std430) readonly buffer FrozenTrs  { vec4 data[]; } frozenTrs;
+// Bloque de pose (capas, muestras, máscaras), una copia por frame en vuelo.
+// Layout en engine/include/DonTopo/Renderer/PoseBlock.h.
+layout(set=0, binding=10, std430) readonly buffer PoseBlock { uint data[]; } poseBlock;
 
 layout(push_constant) uniform PC {
-    uint  boneCount;
-    uint  vertexCount;
+    uint boneCount;
+    uint vertexCount;
     // --- Solo los lee bone_eval.comp ---
-    // Hasta 6 muestras (clip * boneCount, tiempo en ticks, peso) y el peso de
-    // la pose congelada. Escalares y no arrays: en HLSL un array de un cbuffer
-    // ocupa 16 bytes por elemento, y spirv-cross no lo iguala. El mismo bloque
-    // en los tres .comp, en SkinningPass::Push y en ComputePush de D3D12.
-    uint  sampleCount;
-    uint  rootMotionMode;   // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
-    float frozenWeight;
-    uint  clipBase0; uint clipBase1; uint clipBase2; uint clipBase3; uint clipBase4; uint clipBase5;
-    float time0;     float time1;    float time2;    float time3;    float time4;    float time5;
-    float weight0;   float weight1;  float weight2;  float weight3;  float weight4;  float weight5;
+    uint rootMotionMode;    // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
+    // Offset (en uints) de la copia de este frame del bloque de pose. El mismo
+    // bloque de 16 bytes en los tres .comp, en SkinningPass::Push y en
+    // ComputePush de D3D12.
+    uint poseBlockOffset;
 } push;
 
 vec4 slerpQ(vec4 a, vec4 b, float t)
@@ -128,14 +127,141 @@ bool boneHasNoChannel(BoneInfo info)
     return info.posCount == 0 && info.rotCount == 0 && info.scaleCount == 0;
 }
 
-void muestra(uint k, out uint cb, out float t, out float w)
+// Offsets del bloque de pose: los mismos que PoseBlock.h.
+const uint kLayers  = 4u;
+const uint kSamples = 36u;
+const uint kMasks   = 228u;
+uint  pb(uint i)  { return poseBlock.data[push.poseBlockOffset + i]; }
+float pbf(uint i) { return uintBitsToFloat(pb(i)); }
+
+vec4 qmul(vec4 a, vec4 b)
 {
-    if (k == 0u)      { cb = push.clipBase0; t = push.time0; w = push.weight0; }
-    else if (k == 1u) { cb = push.clipBase1; t = push.time1; w = push.weight1; }
-    else if (k == 2u) { cb = push.clipBase2; t = push.time2; w = push.weight2; }
-    else if (k == 3u) { cb = push.clipBase3; t = push.time3; w = push.weight3; }
-    else if (k == 4u) { cb = push.clipBase4; t = push.time4; w = push.weight4; }
-    else              { cb = push.clipBase5; t = push.time5; w = push.weight5; }
+    return vec4(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz));
+}
+
+// Inversa de trs(): escala = longitud de las columnas, rotación de las columnas
+// normalizadas. Solo para el bindLocal de un hueso que la base no anima y sobre
+// el que una capa sí actúa.
+void decomposeTrs(mat4 m, out vec3 pos, out vec4 q, out vec3 scl)
+{
+    pos = m[3].xyz;
+    scl = vec3(length(m[0].xyz), length(m[1].xyz), length(m[2].xyz));
+    mat3 r = mat3(m[0].xyz / max(scl.x, 1e-8), m[1].xyz / max(scl.y, 1e-8), m[2].xyz / max(scl.z, 1e-8));
+    float tr = r[0][0] + r[1][1] + r[2][2];
+    if (tr > 0.0)
+    {
+        float s = sqrt(tr + 1.0) * 2.0;
+        q = vec4((r[1][2] - r[2][1]) / s, (r[2][0] - r[0][2]) / s, (r[0][1] - r[1][0]) / s, 0.25 * s);
+    }
+    else if (r[0][0] > r[1][1] && r[0][0] > r[2][2])
+    {
+        float s = sqrt(1.0 + r[0][0] - r[1][1] - r[2][2]) * 2.0;
+        q = vec4(0.25 * s, (r[1][0] + r[0][1]) / s, (r[2][0] + r[0][2]) / s, (r[1][2] - r[2][1]) / s);
+    }
+    else if (r[1][1] > r[2][2])
+    {
+        float s = sqrt(1.0 + r[1][1] - r[0][0] - r[2][2]) * 2.0;
+        q = vec4((r[1][0] + r[0][1]) / s, 0.25 * s, (r[2][1] + r[1][2]) / s, (r[2][0] - r[0][2]) / s);
+    }
+    else
+    {
+        float s = sqrt(1.0 + r[2][2] - r[0][0] - r[1][1]) * 2.0;
+        q = vec4((r[2][0] + r[0][2]) / s, (r[2][1] + r[1][2]) / s, 0.25 * s, (r[0][1] - r[1][0]) / s);
+    }
+    q = normalize(q);
+}
+
+// La pose de la capa L para el hueso bi: suma ponderada de sus muestras y de
+// su congelada (posición y escala lineales, rotación con el signo alineado y
+// normalizada: nlerp). En additive cada muestra aporta su delta respecto al
+// primer fotograma de su clip, y la referencia del signo es la identidad.
+// Escribe la pose de la capa en poseTrs (lo que congela un fade). Devuelve
+// false si es override y ninguna muestra anima el hueso. Réplica en CPU:
+// capaTrs en animator_tests.cpp.
+bool evalCapa(uint L, bool additive, uint bi, out vec3 pos, out vec4 q, out vec3 scl)
+{
+    pos = vec3(0.0);
+    scl = vec3(0.0);
+    q   = vec4(0.0);
+    vec4  ref    = vec4(0.0, 0.0, 0.0, 1.0);
+    bool  hayRef = additive;
+    bool  alguna = false;
+    float total  = 0.0;
+    uint  n      = pb(1u);
+    for (uint k = 0u; k < n; k++)
+    {
+        uint o = kSamples + 4u * k;
+        if (pb(o + 3u) != L) continue;
+        uint  cb = pb(o);
+        float t  = pbf(o + 1u);
+        float w  = pbf(o + 2u);
+        BoneInfo info = boneInfos.data[cb + bi];
+        vec3 p = vec3(0.0);
+        vec4 r = vec4(0.0, 0.0, 0.0, 1.0);
+        vec3 s = vec3(1.0);
+        // Una muestra sin canal en este hueso aporta TRS identidad (en
+        // additive, delta identidad), como la mezcla de dos clips de siempre.
+        if (!boneHasNoChannel(info))
+        {
+            sampleBone(info, t, p, r, s);
+            alguna = true;
+            if (additive)
+            {
+                vec3 p0; vec4 r0; vec3 s0;
+                sampleBone(info, 0.0, p0, r0, s0);
+                p = p - p0;
+                r = qmul(r, vec4(-r0.xyz, r0.w));
+                s = vec3(s0.x != 0.0 ? s.x / s0.x : 1.0,
+                         s0.y != 0.0 ? s.y / s0.y : 1.0,
+                         s0.z != 0.0 ? s.z / s0.z : 1.0);
+            }
+        }
+        if (!hayRef) { ref = r; hayRef = true; }
+        if (dot(r, ref) < 0.0) r = -r;
+        pos += w * p; scl += w * s; q += w * r; total += w;
+    }
+
+    uint  base = (L * push.boneCount + bi) * 3u;
+    float fw   = pbf(kLayers + 4u * L + 2u);
+    if (fw > 0.0)
+    {
+        vec4 fp = frozenTrs.data[base + 0u];
+        vec4 fr = frozenTrs.data[base + 1u];
+        vec4 fs = frozenTrs.data[base + 2u];
+        // Si el hueso congelado no lo animaba la capa, no entra: el resto se
+        // renormaliza.
+        if (fs.w != 0.0)
+        {
+            if (!hayRef) { ref = fr; hayRef = true; }
+            if (dot(fr, ref) < 0.0) fr = -fr;
+            pos += fw * fp.xyz; scl += fw * fs.xyz; q += fw * fr; total += fw;
+            alguna = true;
+        }
+    }
+
+    if (!additive && !alguna)
+    {
+        pos = vec3(0.0); q = vec4(0.0, 0.0, 0.0, 1.0); scl = vec3(1.0);
+        poseTrs.data[base + 0u] = vec4(0.0);
+        poseTrs.data[base + 1u] = vec4(0.0, 0.0, 0.0, 1.0);
+        poseTrs.data[base + 2u] = vec4(1.0, 1.0, 1.0, 0.0);
+        return false;
+    }
+    if (total <= 0.0)
+    {
+        // Capa additive sin muestras: delta identidad (y no escala 0).
+        pos = vec3(0.0); q = vec4(0.0, 0.0, 0.0, 1.0); scl = vec3(1.0);
+    }
+    else
+    {
+        if (abs(total - 1.0) > 1e-4) { pos /= total; scl /= total; q /= total; }
+        float len = length(q);
+        q = len > 1e-6 ? q / len : vec4(0.0, 0.0, 0.0, 1.0);
+    }
+    poseTrs.data[base + 0u] = vec4(pos, 0.0);
+    poseTrs.data[base + 1u] = q;
+    poseTrs.data[base + 2u] = vec4(scl, 1.0);
+    return true;
 }
 
 void main()
@@ -143,71 +269,52 @@ void main()
     uint bi = gl_GlobalInvocationID.x;
     if (bi >= push.boneCount) return;
 
-    // Suma ponderada de hasta 6 muestras y de la pose congelada: posición y
-    // escala lineales, rotación con el signo alineado a la primera y normalizada
-    // al final (nlerp). Así un fade desde un estado con blend aporta su pareja
-    // entera (A3) y una interrupción sale de la pose que había (A4). Réplica en
-    // CPU: evalPoseTrs en animator_tests.cpp.
-    vec3  pos = vec3(0.0);
-    vec3  scl = vec3(0.0);
-    vec4  q   = vec4(0.0);
-    vec4  ref = vec4(0.0, 0.0, 0.0, 1.0);
-    bool  hayRef = false;
-    bool  alguna = false;
-    float total  = 0.0;
     // parentIndex y bindLocal son del esqueleto: iguales en todos los bloques.
-    BoneInfo info0 = boneInfos.data[push.clipBase0 + bi];
+    uint     cb0   = pb(1u) > 0u ? pb(kSamples) : 0u;
+    BoneInfo info0 = boneInfos.data[cb0 + bi];
 
-    for (uint k = 0u; k < push.sampleCount; k++)
+    // La base (capa 0), y cada capa encima, en orden, con m = peso x máscara:
+    // override mezcla hacia la capa, additive le suma su delta. Réplica en
+    // CPU: evalLayeredTrs en animator_tests.cpp.
+    vec3 pos; vec4 q; vec3 scl;
+    bool bind = !evalCapa(0u, false, bi, pos, q, scl);
+    uint nL   = pb(0u);
+    for (uint L = 1u; L < nL; L++)
     {
-        uint cb; float t; float w;
-        muestra(k, cb, t, w);
-        BoneInfo info = boneInfos.data[cb + bi];
-        vec3 p = vec3(0.0);
-        vec4 r = vec4(0.0, 0.0, 0.0, 1.0);
-        vec3 s = vec3(1.0);
-        // Una muestra sin canal en este hueso aporta TRS identidad, como la
-        // mezcla de dos clips de siempre.
-        if (!boneHasNoChannel(info)) { sampleBone(info, t, p, r, s); alguna = true; }
-        if (!hayRef) { ref = r; hayRef = true; }
-        if (dot(r, ref) < 0.0) r = -r;
-        pos += w * p; scl += w * s; q += w * r; total += w;
-    }
-
-    if (push.frozenWeight > 0.0)
-    {
-        vec4 fp = frozenTrs.data[bi * 3u + 0u];
-        vec4 fr = frozenTrs.data[bi * 3u + 1u];
-        vec4 fs = frozenTrs.data[bi * 3u + 2u];
-        // Si el hueso congelado era "bind", no entra: el resto se renormaliza.
-        if (fs.w != 0.0)
+        uint  o        = kLayers + 4u * L;
+        float peso     = pbf(o);
+        bool  additive = pb(o + 1u) == 1u;
+        bool  mascara  = pb(o + 3u) != 0u;
+        vec3 lp; vec4 lq; vec3 ls;
+        // Se evalúa siempre: su poseTrs es lo que congela un fade de la capa.
+        bool anima = evalCapa(L, additive, bi, lp, lq, ls);
+        float m = peso * (mascara ? float(pb(kMasks + L * push.boneCount + bi)) : 1.0);
+        if (m <= 0.0 || !anima) continue;
+        if (bind) { decomposeTrs(info0.bindLocal, pos, q, scl); bind = false; }
+        if (!additive)
         {
-            float w = push.frozenWeight;
-            if (!hayRef) { ref = fr; hayRef = true; }
-            if (dot(fr, ref) < 0.0) fr = -fr;
-            pos += w * fp.xyz; scl += w * fs.xyz; q += w * fr; total += w;
-            alguna = true;
+            if (dot(lq, q) < 0.0) lq = -lq;
+            pos = mix(pos, lp, m);
+            scl = mix(scl, ls, m);
+            q   = normalize(mix(q, lq, m));
+        }
+        else
+        {
+            if (lq.w < 0.0) lq = -lq;
+            vec4 d = normalize(mix(vec4(0.0, 0.0, 0.0, 1.0), lq, m));
+            q   = normalize(qmul(d, q));
+            pos += m * lp;
+            scl *= mix(vec3(1.0), ls, m);
         }
     }
 
-    // Ninguna muestra dice nada de este hueso: conserva su local de bind pose
-    // (con la identidad colapsaría sobre su padre y arrastraría su cadena).
-    if (!alguna)
+    // Nada anima este hueso: conserva su local de bind pose (con la identidad
+    // colapsaría sobre su padre y arrastraría su cadena).
+    if (bind)
     {
         localXforms.data[bi] = info0.bindLocal;
-        poseTrs.data[bi * 3u + 0u] = vec4(0.0);
-        poseTrs.data[bi * 3u + 1u] = vec4(0.0, 0.0, 0.0, 1.0);
-        poseTrs.data[bi * 3u + 2u] = vec4(1.0, 1.0, 1.0, 0.0);
         return;
     }
-
-    if (total > 0.0 && abs(total - 1.0) > 1e-4) { pos /= total; scl /= total; q /= total; }
-    float len = length(q);
-    q = len > 1e-6 ? q / len : vec4(0.0, 0.0, 0.0, 1.0);
     pos = applyRootLock(info0, pos);
-
     localXforms.data[bi] = trs(pos, q, scl);
-    poseTrs.data[bi * 3u + 0u] = vec4(pos, 0.0);
-    poseTrs.data[bi * 3u + 1u] = q;
-    poseTrs.data[bi * 3u + 2u] = vec4(scl, 1.0);
 }

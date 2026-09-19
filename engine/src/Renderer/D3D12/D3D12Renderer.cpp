@@ -1,3 +1,4 @@
+#include "DonTopo/Renderer/PoseBlock.h"
 #include "DonTopo/Renderer/D3D12/D3D12Renderer.h"
 
 #ifdef DT_D3D12_ENABLED
@@ -156,17 +157,10 @@ struct ComputePush {
     uint32_t boneCount;
     uint32_t vertexCount;
     // --- Solo los lee bone_eval.comp ---
-    // Hasta 6 muestras (clip * boneCount, tiempo en ticks, peso) y el peso
-    // de la pose congelada. Escalares y no arrays: en HLSL un array de un
-    // cbuffer ocupa 16 bytes por elemento y spirv-cross no lo iguala.
-    uint32_t sampleCount;
-    uint32_t rootMotionMode;   // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
-    float    frozenWeight;
-    uint32_t clipBase0, clipBase1, clipBase2, clipBase3, clipBase4, clipBase5;
-    float    time0, time1, time2, time3, time4, time5;
-    float    weight0, weight1, weight2, weight3, weight4, weight5;
+    uint32_t rootMotionMode;    // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
+    uint32_t poseBlockOffset;   // en uints: copia del bloque de pose del frame
 };
-static_assert(sizeof(ComputePush) == 92, "ComputePush: espejo de SkinningPass::Push y de los 3 .comp");
+static_assert(sizeof(ComputePush) == 16, "ComputePush: espejo de SkinningPass::Push y de los 3 .comp");
 
 // Medio flotante a mano: los neutros del IBL son cuatro texels y no compensa
 // arrastrar DirectXMath por ellos. Vale para valores normales y pequeños, que
@@ -949,6 +943,13 @@ struct D3D12Renderer::Impl {
         // TRS de la pose (lo escribe bone_eval) y la congelada, 3 vec4 por hueso.
         D3D12MA::Allocation* poseTrs     = nullptr;
         D3D12MA::Allocation* frozenTrs   = nullptr;
+        // Bloque de pose (PoseBlock.h), una copia por frame en vuelo, en un
+        // heap UPLOAD mapeado para siempre.
+        D3D12MA::Allocation* poseBlock   = nullptr;
+        void*                poseBlockMapped = nullptr;
+        // Copia de las máscaras de la pose (la del Animator solo vale durante
+        // setAnimationPose).
+        std::vector<uint8_t> poseMasks[kMaxLayersPose];
         D3D12MA::Allocation* outputVerts = nullptr;
         D3D12MA::Allocation* indices     = nullptr;
 
@@ -3218,7 +3219,10 @@ void D3D12Renderer::Impl::createSkinningPipelines()
                         // poseTrs (u8, escribible) y frozenTrs (t9, solo lectura):
                         // spirv-cross da el registro del binding.
                         {RT::D3D12_ROOT_PARAMETER_TYPE_UAV, 8},
-                        {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 9}},
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 9},
+                        // Bloque de pose (t10), una copia por frame: el offset
+                        // de la de este frame va en las root constants.
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 10}},
                        boneEvalRootSignature, "bone_eval");
     // bone_hierarchy: lee huesos y locales (t3, t4), escribe matrices finales (u5)
     buildRootSignature({{RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 3},
@@ -3378,10 +3382,30 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     object.finalBones  = createStorageBuffer(static_cast<UINT64>(object.boneCount) * sizeof(glm::mat4),
                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    object.poseTrs     = createStorageBuffer(static_cast<UINT64>(object.boneCount) * 3 * sizeof(glm::vec4),
+    object.poseTrs     = createStorageBuffer(static_cast<UINT64>(object.boneCount) * 3 * sizeof(glm::vec4) * kMaxLayersPose,
                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    object.frozenTrs   = createStorageBuffer(static_cast<UINT64>(object.boneCount) * 3 * sizeof(glm::vec4),
+    object.frozenTrs   = createStorageBuffer(static_cast<UINT64>(object.boneCount) * 3 * sizeof(glm::vec4) * kMaxLayersPose,
                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width            = static_cast<UINT64>(kFrameCount) * poseBlockUints(object.boneCount) * sizeof(uint32_t);
+        desc.Height           = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels        = 1;
+        desc.Format           = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        D3D12MA::ALLOCATION_DESC allocDesc{};
+        allocDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+        throwIfFailed(allocator->CreateResource(&allocDesc, &desc, D3D12_RESOURCE_STATE_GENERIC_READ,
+                                                nullptr, &object.poseBlock, IID_NULL, nullptr),
+                      "D3D12MA::Allocator::CreateResource(bloque de pose)");
+        object.poseBlock->GetResource()->SetName(L"skinning pose block");
+        const D3D12_RANGE noRead{0, 0};
+        throwIfFailed(object.poseBlock->GetResource()->Map(0, &noRead, &object.poseBlockMapped),
+                      "ID3D12Resource::Map(bloque de pose)");
+    }
     object.outputVerts = createStorageBuffer(
         static_cast<UINT64>(object.vertexCount) * kSkinnedOutputStride,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -3566,7 +3590,7 @@ void D3D12Renderer::Impl::releaseSkinnedObjects()
     for (SkinnedObject& character : skinnedObjects) {
         for (D3D12MA::Allocation** allocation :
              {&character.posKeys, &character.rotKeys, &character.scaleKeys, &character.boneInfos,
-              &character.inputVerts, &character.localXforms, &character.finalBones, &character.poseTrs, &character.frozenTrs,
+              &character.inputVerts, &character.localXforms, &character.finalBones, &character.poseTrs, &character.frozenTrs, &character.poseBlock,
               &character.outputVerts, &character.indices}) {
             if (*allocation) {
                 (*allocation)->Release();
@@ -3599,59 +3623,59 @@ void D3D12Renderer::Impl::recordSkinning()
     if (activos.empty())
         return;
 
-    // Push de un personaje: la pose por muestras si la mandó un Animator, o una
-    // sola muestra (clipBase en animTime) si su reloj va por el backend.
-    auto pushDe = [](const SkinnedObject& object) {
-        ComputePush push{};
-        push.boneCount   = object.boneCount;
-        push.vertexCount = object.vertexCount;
-        const uint32_t B = object.boneCount;
+    // El bloque de pose de este frame, en su copia: la pose del Animator o,
+    // sin él, una muestra (clipBase en animTime) con el reloj del backend.
+    for (SkinnedObject* object : activos) {
+        if (!object->poseBlockMapped)
+            continue;
+        const uint32_t B = object->boneCount;
         AnimationPose unica;
         unica.count = 1;
-        unica.samples[0] = { B > 0 ? (int)(object.clipBase / B) : 0, object.animTime, 1.0f };
-        const AnimationPose& pose = object.hasPose ? object.pose : unica;
-        // Hasta el bloque de pose por capas, la GPU solo ve la capa 0.
-        PoseSample base[kMaxPoseSamplesPerLayer];
-        int nBase = 0;
-        for (int k = 0; k < pose.count && nBase < kMaxPoseSamplesPerLayer; k++)
-            if (pose.samples[k].layer == 0) base[nBase++] = pose.samples[k];
-        push.sampleCount    = static_cast<uint32_t>(nBase);
-        push.rootMotionMode = pose.rootMotionMode;
-        push.frozenWeight   = pose.layers[0].frozenWeight;
-        uint32_t* cb[kMaxPoseSamplesPerLayer] = { &push.clipBase0, &push.clipBase1, &push.clipBase2, &push.clipBase3, &push.clipBase4, &push.clipBase5 };
-        float*    tt[kMaxPoseSamplesPerLayer] = { &push.time0, &push.time1, &push.time2, &push.time3, &push.time4, &push.time5 };
-        float*    ww[kMaxPoseSamplesPerLayer] = { &push.weight0, &push.weight1, &push.weight2, &push.weight3, &push.weight4, &push.weight5 };
-        for (int k = 0; k < kMaxPoseSamplesPerLayer; k++) {
-            const bool usada = k < nBase;
-            *cb[k] = usada ? static_cast<uint32_t>(base[k].clip) * B : 0u;
-            *tt[k] = usada ? base[k].time : 0.0f;
-            *ww[k] = usada ? base[k].weight : 0.0f;
-        }
+        unica.samples[0] = { B > 0 ? static_cast<int>(object->clipBase / B) : 0, object->animTime, 1.0f, 0 };
+        AnimationPose& pose = object->hasPose ? object->pose : unica;
+        // Las máscaras apuntan a la copia del objeto (la del Animator ya no vale).
+        for (int L = 0; L < kMaxLayersPose; L++)
+            pose.layers[L].mask = object->poseMasks[L].empty() ? nullptr : &object->poseMasks[L];
+        writePoseBlock(pose, B, static_cast<uint32_t*>(object->poseBlockMapped) +
+                                    static_cast<size_t>(frameIndex) * poseBlockUints(B));
+    }
+
+    auto pushDe = [this](const SkinnedObject& object) {
+        ComputePush push{};
+        push.boneCount       = object.boneCount;
+        push.vertexCount     = object.vertexCount;
+        push.rootMotionMode  = object.hasPose ? object.pose.rootMotionMode : 0u;
+        push.poseBlockOffset = frameIndex * poseBlockUints(object.boneCount);
         return push;
     };
 
-    // Congelar la pose de pantalla (fade interrumpido) antes de evaluar:
-    // poseTrs tiene la del frame anterior. Una vez por petición.
+    // Congelar la pose de pantalla de cada capa con un fade interrumpido antes
+    // de evaluar: poseTrs tiene la del frame anterior. Una vez por petición.
     for (SkinnedObject* object : activos) {
-        if (!object->hasPose || !object->pose.layers[0].freezeNow)
+        if (!object->hasPose)
             continue;
-        D3D12_RESOURCE_BARRIER aCopia[2]{};
-        for (int b = 0; b < 2; b++) {
-            aCopia[b].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            aCopia[b].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            aCopia[b].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        const UINT64 capa = static_cast<UINT64>(object->boneCount) * 3 * sizeof(glm::vec4);
+        for (int L = 0; L < object->pose.layerCount; L++) {
+            if (!object->pose.layers[L].freezeNow)
+                continue;
+            D3D12_RESOURCE_BARRIER aCopia[2]{};
+            for (int b = 0; b < 2; b++) {
+                aCopia[b].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                aCopia[b].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+                aCopia[b].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            }
+            aCopia[0].Transition.pResource  = object->poseTrs->GetResource();
+            aCopia[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            aCopia[1].Transition.pResource  = object->frozenTrs->GetResource();
+            aCopia[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            commandList->ResourceBarrier(2, aCopia);
+            commandList->CopyBufferRegion(object->frozenTrs->GetResource(), capa * L,
+                                          object->poseTrs->GetResource(), capa * L, capa);
+            for (int b = 0; b < 2; b++)
+                std::swap(aCopia[b].Transition.StateBefore, aCopia[b].Transition.StateAfter);
+            commandList->ResourceBarrier(2, aCopia);
+            object->pose.layers[L].freezeNow = false;
         }
-        aCopia[0].Transition.pResource  = object->poseTrs->GetResource();
-        aCopia[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-        aCopia[1].Transition.pResource  = object->frozenTrs->GetResource();
-        aCopia[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-        commandList->ResourceBarrier(2, aCopia);
-        commandList->CopyBufferRegion(object->frozenTrs->GetResource(), 0, object->poseTrs->GetResource(), 0,
-                                      static_cast<UINT64>(object->boneCount) * 3 * sizeof(glm::vec4));
-        for (int b = 0; b < 2; b++)
-            std::swap(aCopia[b].Transition.StateBefore, aCopia[b].Transition.StateAfter);
-        commandList->ResourceBarrier(2, aCopia);
-        object->pose.layers[0].freezeNow = false;
     }
     auto gpu = [](const auto& buffer) { return buffer->GetResource()->GetGPUVirtualAddress(); };
 
@@ -3682,6 +3706,7 @@ void D3D12Renderer::Impl::recordSkinning()
         commandList->SetComputeRootUnorderedAccessView(5, gpu(object->localXforms));
         commandList->SetComputeRootUnorderedAccessView(6, gpu(object->poseTrs));
         commandList->SetComputeRootShaderResourceView(7, gpu(object->frozenTrs));
+        commandList->SetComputeRootShaderResourceView(8, gpu(object->poseBlock));
         commandList->Dispatch((object->boneCount + 63) / 64, 1, 1);
     }
     barreraEntreFases();
@@ -8308,7 +8333,7 @@ bool D3D12Renderer::Impl::releaseSkinnedSlot(size_t index)
 
     for (D3D12MA::Allocation** allocation :
          {&character.posKeys, &character.rotKeys, &character.scaleKeys, &character.boneInfos,
-          &character.inputVerts, &character.localXforms, &character.finalBones, &character.poseTrs, &character.frozenTrs,
+          &character.inputVerts, &character.localXforms, &character.finalBones, &character.poseTrs, &character.frozenTrs, &character.poseBlock,
           &character.outputVerts, &character.indices}) {
         if (*allocation) {
             (*allocation)->Release();
@@ -10091,6 +10116,13 @@ void D3D12Renderer::setAnimationPose(int index, const AnimationPose& pose)
     Impl::SkinnedObject& character = d.skinnedObjects[index];
     character.pose    = pose;
     character.hasPose = true;
+    // La máscara de cada capa se copia: la del Animator solo vale durante esta
+    // llamada. recordSkinning reapunta la pose a estas copias.
+    for (int L = 0; L < kMaxLayersPose; L++) {
+        const std::vector<uint8_t>* m = (L < pose.layerCount) ? pose.layers[L].mask : nullptr;
+        if (m) character.poseMasks[L] = *m; else character.poseMasks[L].clear();
+        character.pose.layers[L].mask = nullptr;
+    }
     // El Animator es el dueño del reloj: el backend no suma tiempo por su cuenta.
     character.externalClock = true;
     // Acotado como en Vulkan: un clip fuera de rango leería otro bloque.

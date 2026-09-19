@@ -1,3 +1,4 @@
+#include "DonTopo/Renderer/PoseBlock.h"
 #include "DonTopo/Renderer/Passes/SkinningPass.h"
 #include "DonTopo/Renderer/GpuDevice.h"
 #include <stdexcept>
@@ -17,8 +18,8 @@ void SkinningPass::createPipelines(const Context& ctx)
 {
     // --- Descriptor set layout: 10 storage buffers (8 y 9: poseTrs y
     // frozenTrs, solo de bone_eval) ---
-    VkDescriptorSetLayoutBinding bindings[10]{};
-    for (uint32_t i = 0; i < 10; i++)
+    VkDescriptorSetLayoutBinding bindings[11]{};
+    for (uint32_t i = 0; i < 11; i++)
     {
         bindings[i].binding         = i;
         bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -28,7 +29,7 @@ void SkinningPass::createPipelines(const Context& ctx)
 
     VkDescriptorSetLayoutCreateInfo dslInfo{};
     dslInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dslInfo.bindingCount = 10;
+    dslInfo.bindingCount = 11;
     dslInfo.pBindings    = bindings;
     if (vkCreateDescriptorSetLayout(ctx.gpu.device(), &dslInfo, nullptr, &m_descLayout) != VK_SUCCESS)
         throw std::runtime_error("failed to create compute descriptor set layout!");
@@ -82,10 +83,10 @@ void SkinningPass::createPipelines(const Context& ctx)
 
 bool SkinningPass::addPool(const Context& ctx)
 {
-    // 10 SSBOs por set, que son los diez buffers que ata initSkinnedRenderObject.
+    // 11 SSBOs por set, que son los once buffers que ata initSkinnedRenderObject.
     VkDescriptorPoolSize ps{};
     ps.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    ps.descriptorCount = 10 * kSetsPerPool;
+    ps.descriptorCount = 11 * kSetsPerPool;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -177,43 +178,44 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
     }
     if (activos.empty()) return;
 
-    // Push de un personaje: la pose por muestras si la mandó un Animator, o una
-    // sola muestra (clip activo, peso 1) si su reloj va por updateAnimation.
-    auto pushDe = [](const SkinnedRenderObject& obj) {
-        Push push{};
-        push.boneCount   = obj.boneCount;
-        push.vertexCount = obj.vertexCount;
+    // El bloque de pose de este frame, en su copia: la pose del Animator o,
+    // sin él, una muestra (clip activo, peso 1) con el reloj de updateAnimation.
+    for (size_t i : activos)
+    {
+        SkinnedRenderObject& obj = ctx.skinnedObjects[i];
+        if (!obj.poseBlockMapped) continue;
         AnimationPose unica;
         unica.count = 1;
-        unica.samples[0] = { (int)obj.activeClip, obj.animTime, 1.0f };
-        const AnimationPose& pose = obj.hasPose ? obj.pose : unica;
-        // Hasta el bloque de pose por capas, la GPU solo ve la capa 0.
-        PoseSample base[kMaxPoseSamplesPerLayer];
-        int nBase = 0;
-        for (int k = 0; k < pose.count && nBase < kMaxPoseSamplesPerLayer; k++)
-            if (pose.samples[k].layer == 0) base[nBase++] = pose.samples[k];
-        push.sampleCount    = (uint32_t)nBase;
-        push.rootMotionMode = pose.rootMotionMode;
-        push.frozenWeight   = pose.layers[0].frozenWeight;
-        const uint32_t B = obj.boneCount;
-        uint32_t* cb[kMaxPoseSamplesPerLayer] = { &push.clipBase0, &push.clipBase1, &push.clipBase2, &push.clipBase3, &push.clipBase4, &push.clipBase5 };
-        float*    tt[kMaxPoseSamplesPerLayer] = { &push.time0, &push.time1, &push.time2, &push.time3, &push.time4, &push.time5 };
-        float*    ww[kMaxPoseSamplesPerLayer] = { &push.weight0, &push.weight1, &push.weight2, &push.weight3, &push.weight4, &push.weight5 };
-        for (int k = 0; k < kMaxPoseSamplesPerLayer; k++)
-        {
-            const bool usada = k < nBase;
-            *cb[k] = usada ? (uint32_t)base[k].clip * B : 0u;
-            *tt[k] = usada ? base[k].time : 0.0f;
-            *ww[k] = usada ? base[k].weight : 0.0f;
-        }
+        unica.samples[0] = { (int)obj.activeClip, obj.animTime, 1.0f, 0 };
+        AnimationPose& pose = obj.hasPose ? obj.pose : unica;
+        // Las máscaras apuntan a la copia del objeto: el vector de objetos
+        // puede haberse realojado desde setAnimationPose.
+        for (int L = 0; L < kMaxLayersPose; L++)
+            pose.layers[L].mask = obj.poseMasks[L].empty() ? nullptr : &obj.poseMasks[L];
+        writePoseBlock(pose, obj.boneCount,
+                       static_cast<uint32_t*>(obj.poseBlockMapped) + (size_t)ctx.frameIndex * poseBlockUints(obj.boneCount));
+    }
+
+    auto pushDe = [&ctx](const SkinnedRenderObject& obj) {
+        Push push{};
+        push.boneCount       = obj.boneCount;
+        push.vertexCount     = obj.vertexCount;
+        push.rootMotionMode  = obj.hasPose ? obj.pose.rootMotionMode : 0u;
+        push.poseBlockOffset = ctx.frameIndex * poseBlockUints(obj.boneCount);
         return push;
     };
 
-    // Congelar la pose de pantalla (un fade interrumpido) ANTES de evaluar:
-    // poseTrs tiene la del frame anterior. Se hace una vez por petición.
+    // Congelar la pose de pantalla de cada capa con un fade interrumpido
+    // ANTES de evaluar: poseTrs tiene la del frame anterior. Una vez por
+    // petición.
+    auto pideCongelar = [](const SkinnedRenderObject& o) {
+        if (!o.hasPose) return false;
+        for (int L = 0; L < o.pose.layerCount; L++) if (o.pose.layers[L].freezeNow) return true;
+        return false;
+    };
     bool hayCongelacion = false;
     for (size_t i : activos)
-        if (ctx.skinnedObjects[i].hasPose && ctx.skinnedObjects[i].pose.layers[0].freezeNow) hayCongelacion = true;
+        if (pideCongelar(ctx.skinnedObjects[i])) hayCongelacion = true;
     if (hayCongelacion)
     {
         VkMemoryBarrier antes{};
@@ -225,11 +227,17 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
         for (size_t i : activos)
         {
             SkinnedRenderObject& obj = ctx.skinnedObjects[i];
-            if (!obj.hasPose || !obj.pose.layers[0].freezeNow) continue;
-            VkBufferCopy region{};
-            region.size = (VkDeviceSize)obj.boneCount * 3 * sizeof(float) * 4;
-            vkCmdCopyBuffer(cmd, obj.poseTrsBuffer, obj.frozenTrsBuffer, 1, &region);
-            obj.pose.layers[0].freezeNow = false;
+            if (!pideCongelar(obj)) continue;
+            const VkDeviceSize capa = (VkDeviceSize)obj.boneCount * 3 * sizeof(float) * 4;
+            for (int L = 0; L < obj.pose.layerCount; L++)
+            {
+                if (!obj.pose.layers[L].freezeNow) continue;
+                VkBufferCopy region{};
+                region.srcOffset = region.dstOffset = capa * (VkDeviceSize)L;
+                region.size      = capa;
+                vkCmdCopyBuffer(cmd, obj.poseTrsBuffer, obj.frozenTrsBuffer, 1, &region);
+                obj.pose.layers[L].freezeNow = false;
+            }
         }
         VkMemoryBarrier despues{};
         despues.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
