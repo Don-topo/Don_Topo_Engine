@@ -191,10 +191,10 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
         push.rootMotionMode = pose.rootMotionMode;
         push.frozenWeight   = pose.frozenWeight;
         const uint32_t B = obj.boneCount;
-        uint32_t* cb[4] = { &push.clipBase0, &push.clipBase1, &push.clipBase2, &push.clipBase3 };
-        float*    tt[4] = { &push.time0, &push.time1, &push.time2, &push.time3 };
-        float*    ww[4] = { &push.weight0, &push.weight1, &push.weight2, &push.weight3 };
-        for (int k = 0; k < 4; k++)
+        uint32_t* cb[kMaxPoseSamples] = { &push.clipBase0, &push.clipBase1, &push.clipBase2, &push.clipBase3, &push.clipBase4, &push.clipBase5 };
+        float*    tt[kMaxPoseSamples] = { &push.time0, &push.time1, &push.time2, &push.time3, &push.time4, &push.time5 };
+        float*    ww[kMaxPoseSamples] = { &push.weight0, &push.weight1, &push.weight2, &push.weight3, &push.weight4, &push.weight5 };
+        for (int k = 0; k < kMaxPoseSamples; k++)
         {
             const bool usada = k < pose.count;
             *cb[k] = usada ? (uint32_t)pose.samples[k].clip * B : 0u;

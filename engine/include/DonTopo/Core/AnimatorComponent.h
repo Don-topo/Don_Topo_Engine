@@ -321,8 +321,9 @@ namespace DonTopo
             // diciendo solo lo primero, que es lo que miran el root motion y
             // la pareja principal.
             bool  fading()            const { return m_prevState >= 0 || m_frozenFade; }
-            // Lo que va a la GPU: hasta 4 muestras ponderadas (el estado que
-            // sale y el que entra, cada uno con su pareja de blend) y la pose
+            // Lo que va a la GPU: hasta 6 muestras ponderadas (el estado que
+            // sale y el que entra, cada uno con sus muestras de blend, hasta 3
+            // en 2D) y la pose
             // congelada si un fade se interrumpió. Los pesos suman 1.
             AnimationPose pose() const;
             // La petición de congelar se manda UNA vez: la apaga quien acaba de
