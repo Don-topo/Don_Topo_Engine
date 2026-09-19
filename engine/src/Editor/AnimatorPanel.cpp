@@ -4,6 +4,7 @@
 #include "DonTopo/Editor/Command.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Core/Blend2D.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include "DonTopo/Renderer/SkinnedMeshAnimations.h"
@@ -21,6 +22,57 @@
 namespace ed = ax::NodeEditor;
 
 namespace DonTopo {
+
+namespace {
+    // Lienzo de solo lectura del blend 2D: los puntos con su clip, las aristas
+    // de la triangulación y el valor actual de (X, Y). Los puntos son los de
+    // stateBlendSamples: el principal y las entradas con clip resuelto.
+    void drawBlend2DCanvas(const AnimatorComponent& anim, const AnimatorComponent::State& st)
+    {
+        ImGui::PushID("lienzo2d");
+        std::vector<glm::vec2>          pts;
+        std::vector<const std::string*> nombres;
+        pts.push_back({ st.clipThreshold, st.clipThresholdY });
+        nombres.push_back(&st.clipName);
+        for (const auto& e : st.blendEntries)
+            if (e.clipIndex >= 0)
+            {
+                pts.push_back({ e.threshold, e.thresholdY });
+                nombres.push_back(&e.clipName);
+            }
+        const glm::vec2 valor(anim.getFloat(st.blendParam), anim.getFloat(st.blendParamY));
+
+        // Caja de los puntos con un 10 % de margen; el valor se acota a ella.
+        glm::vec2 lo = pts[0], hi = pts[0];
+        for (const auto& p : pts) { lo = glm::min(lo, p); hi = glm::max(hi, p); }
+        glm::vec2 lado = glm::max(hi - lo, glm::vec2(1e-3f));
+        lo -= lado * 0.1f;
+        hi += lado * 0.1f;
+        lado = hi - lo;
+
+        const float tam = 160.0f;
+        ImGui::Dummy(ImVec2(tam, tam));
+        const ImVec2 r0 = ImGui::GetItemRectMin();
+        ImDrawList*  dl = ImGui::GetWindowDrawList();
+        // Y hacia arriba, como en una gráfica.
+        auto aPantalla = [&](glm::vec2 p) {
+            const glm::vec2 n = glm::clamp((p - lo) / lado, glm::vec2(0.0f), glm::vec2(1.0f));
+            return ImVec2(r0.x + n.x * tam, r0.y + (1.0f - n.y) * tam);
+        };
+        dl->AddRect(r0, ImVec2(r0.x + tam, r0.y + tam), IM_COL32(90, 90, 90, 255));
+        for (const auto& t : triangulate2D(pts))
+            dl->AddTriangle(aPantalla(pts[t.a]), aPantalla(pts[t.b]), aPantalla(pts[t.c]),
+                            IM_COL32(140, 140, 140, 255));
+        for (size_t i = 0; i < pts.size(); i++)
+        {
+            const ImVec2 p = aPantalla(pts[i]);
+            dl->AddCircleFilled(p, 3.0f, IM_COL32(220, 220, 220, 255));
+            dl->AddText(ImVec2(p.x + 4.0f, p.y - 14.0f), IM_COL32(200, 200, 200, 255), nombres[i]->c_str());
+        }
+        dl->AddCircleFilled(aPantalla(valor), 4.0f, IM_COL32(255, 150, 40, 255));
+        ImGui::PopID();
+    }
+}
 
 namespace {
     // IDs del node editor: tienen que ser != 0 y no colisionar entre nodos,
@@ -326,6 +378,45 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 ImGui::DragFloat("umbral##clipThr", &stMut.clipThreshold, 0.01f);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Umbral del clip principal del estado.");
+
+                // --- Blend 2D ---
+                // Con un segundo parámetro cada clip es un punto (umbral, Y) y
+                // suenan los 3 del triángulo donde cae (X, Y).
+                bool dosD = !stMut.blendParamY.empty();
+                if (ImGui::Checkbox("2D##blend2d", &dosD))
+                {
+                    if (dosD)
+                    {
+                        // El primer Float que no sea el de X; si no hay otro, el
+                        // mismo (se cambia en el selector). Sin ninguno Float la
+                        // casilla no se queda marcada.
+                        std::string elegido;
+                        for (const auto& p : anim->parameters())
+                        {
+                            if (p.type != AnimatorComponent::ParamType::Float) continue;
+                            if (elegido.empty()) elegido = p.name;
+                            if (p.name != stMut.blendParam) { elegido = p.name; break; }
+                        }
+                        stMut.blendParamY = elegido;
+                    }
+                    else
+                        stMut.blendParamY.clear();
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Blend 2D: cada clip es un punto (umbral X, umbral Y).");
+                if (!stMut.blendParamY.empty())
+                {
+                    if (ImGui::Button(("Y: " + stMut.blendParamY + "##byY").c_str(), ImVec2(140.0f, 0.0f)))
+                    {
+                        m_blendPickRequested = true;
+                        m_blendPickEditorId  = eid;
+                        m_blendPickKind      = 3;
+                    }
+                    ImGui::SetNextItemWidth(60.0f);
+                    ImGui::DragFloat("Y##clipThrY", &stMut.clipThresholdY, 0.01f);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Umbral Y del clip principal del estado.");
+                }
             }
 
             int quitar = -1;
@@ -347,6 +438,12 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(50.0f);
                 ImGui::DragFloat("##thr", &e.threshold, 0.01f);
+                if (!stMut.blendParamY.empty())
+                {
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(50.0f);
+                    ImGui::DragFloat("##thrY", &e.thresholdY, 0.01f);
+                }
                 ImGui::SameLine();
                 if (ImGui::SmallButton("x")) quitar = k;
                 ImGui::PopID();
@@ -364,6 +461,9 @@ void AnimatorPanel::drawGraph(EditorContext& ctx, GameObject* go)
                 nueva.threshold = maxT + 1.0f;
                 stMut.blendEntries.push_back(nueva);
             }
+
+            if (!stMut.blendEntries.empty() && !stMut.blendParamY.empty())
+                drawBlend2DCanvas(*anim, stMut);
         }
 
         // --- Eventos del estado ---
@@ -673,16 +773,17 @@ void AnimatorPanel::drawBlendPickPopup(GameObject* go)
     }
     else
     {
-        // Solo parámetros float: son los únicos que dan un peso continuo. Que
-        // la lista salga vacía es la pista de que hay que declarar uno en
-        // Parameters.
+        // Parámetro X (kind 1) o Y (kind 3) del blend. Solo parámetros float:
+        // son los únicos que dan un peso continuo. Que la lista salga vacía es
+        // la pista de que hay que declarar uno en Parameters.
+        std::string& destino = (m_blendPickKind == 3) ? st.blendParamY : st.blendParam;
         bool alguno = false;
         for (const auto& p : anim->parameters())
         {
             if (p.type != AnimatorComponent::ParamType::Float) continue;
             alguno = true;
-            if (ImGui::Selectable(p.name.c_str(), p.name == st.blendParam))
-                st.blendParam = p.name;
+            if (ImGui::Selectable(p.name.c_str(), p.name == destino))
+                destino = p.name;
         }
         if (!alguno)
             ImGui::TextDisabled("No hay parámetros float: declara uno en Parameters.");
