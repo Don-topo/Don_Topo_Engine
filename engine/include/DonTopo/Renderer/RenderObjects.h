@@ -144,7 +144,7 @@ namespace DonTopo {
         // Índice del clip que se evalúa este frame. Los demás residen en el
         // SSBO y no se leen.
         uint32_t  activeClip     = 0;
-        // La pose que manda un Animator (setAnimationPose): hasta 4 muestras y
+        // La pose que manda un Animator (setAnimationPose): hasta 6 muestras y
         // la congelada. Sin ella (hasPose false), bone_eval evalúa una sola
         // muestra: activeClip en animTime, que es el camino de updateAnimation.
         AnimationPose pose;

@@ -549,9 +549,20 @@ namespace DonTopo
             {
                 sj["blendParam"]    = s.blendParam;
                 sj["clipThreshold"] = s.clipThreshold;
+                // Blend 2D: solo si lo usa, así un 1D se guarda como siempre.
+                const bool dosD = !s.blendParamY.empty();
+                if (dosD)
+                {
+                    sj["blendParamY"]    = s.blendParamY;
+                    sj["clipThresholdY"] = s.clipThresholdY;
+                }
                 nlohmann::json entradas = nlohmann::json::array();
                 for (const auto& e : s.blendEntries)
-                    entradas.push_back({ {"clip", e.clipName}, {"threshold", e.threshold} });
+                {
+                    nlohmann::json ej = { {"clip", e.clipName}, {"threshold", e.threshold} };
+                    if (dosD) ej["thresholdY"] = e.thresholdY;
+                    entradas.push_back(std::move(ej));
+                }
                 sj["blendEntries"] = std::move(entradas);
             }
             // Modo de raíz: solo si no es Off, que es lo que traen todas las
@@ -664,16 +675,19 @@ namespace
                 // Ausentes en escenas anteriores al blend por parámetro: sin
                 // entradas el estado es de un solo clip, como siempre.
                 const std::string ctxBlend = "animator.state." + st.name;
-                st.blendParam = s.value("blendParam", std::string());
+                st.blendParam  = s.value("blendParam", std::string());
+                st.blendParamY = s.value("blendParamY", std::string());
                 if (s.contains("blendEntries") && s["blendEntries"].is_array())
                 {
-                    st.clipThreshold = readFloat(s, "clipThreshold", 0.0f, warnings, ctxBlend);
+                    st.clipThreshold  = readFloat(s, "clipThreshold", 0.0f, warnings, ctxBlend);
+                    st.clipThresholdY = readFloat(s, "clipThresholdY", 0.0f, warnings, ctxBlend);
                     for (const auto& ej : s["blendEntries"])
                     {
                         if (!ej.is_object()) continue;
                         AnimatorComponent::BlendEntry e;
                         e.clipName  = ej.value("clip", std::string());
-                        e.threshold = readFloat(ej, "threshold", 0.0f, warnings, ctxBlend + ".blendEntries");
+                        e.threshold  = readFloat(ej, "threshold", 0.0f, warnings, ctxBlend + ".blendEntries");
+                        e.thresholdY = readFloat(ej, "thresholdY", 0.0f, warnings, ctxBlend + ".blendEntries");
                         st.blendEntries.push_back(std::move(e));
                     }
                 }

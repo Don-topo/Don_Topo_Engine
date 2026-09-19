@@ -471,7 +471,7 @@ namespace DonTopo {
             // AnimatorComponent. Los dos no se pisan: quien tiene Animator nunca
             // pasa por updateAnimation.
             void setAnimationState(int index, uint32_t clipIndex, float animTime);
-            // La pose de un Animator: hasta 4 muestras y la congelada (ver
+            // La pose de un Animator: hasta 6 muestras y la congelada (ver
             // AnimationPose). Cada clip se acota como en setAnimationState.
             void setAnimationPose(int index, const AnimationPose& pose);
             void setSkinnedTransform(int index, const glm::mat4& transform);

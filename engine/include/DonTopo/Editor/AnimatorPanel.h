@@ -83,7 +83,7 @@ private:
     // vector de estados puede reindexarse entre el clic y el popup.
     bool m_blendPickRequested = false;
     int  m_blendPickEditorId  = -1;
-    int  m_blendPickKind      = 0;       // 0 clip de una entrada del blend, 1 parámetro ("by"), 2 multiplicador de velocidad.
+    int  m_blendPickKind      = 0;       // 0 clip de una entrada del blend, 1 parámetro ("by"), 2 multiplicador de velocidad, 3 parámetro Y del blend 2D.
     int  m_blendPickEntry     = -1;      // índice en blendEntries para kind 0.
     // Undo del grafo: convierte las ediciones en vivo de este panel en un
     // comando por gesto (ver AnimatorGraphUndo.h).

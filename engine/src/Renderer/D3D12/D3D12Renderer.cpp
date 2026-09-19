@@ -156,17 +156,17 @@ struct ComputePush {
     uint32_t boneCount;
     uint32_t vertexCount;
     // --- Solo los lee bone_eval.comp ---
-    // Hasta 4 muestras (clip * boneCount, tiempo en ticks, peso) y el peso
+    // Hasta 6 muestras (clip * boneCount, tiempo en ticks, peso) y el peso
     // de la pose congelada. Escalares y no arrays: en HLSL un array de un
     // cbuffer ocupa 16 bytes por elemento y spirv-cross no lo iguala.
     uint32_t sampleCount;
     uint32_t rootMotionMode;   // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
     float    frozenWeight;
-    uint32_t clipBase0, clipBase1, clipBase2, clipBase3;
-    float    time0, time1, time2, time3;
-    float    weight0, weight1, weight2, weight3;
+    uint32_t clipBase0, clipBase1, clipBase2, clipBase3, clipBase4, clipBase5;
+    float    time0, time1, time2, time3, time4, time5;
+    float    weight0, weight1, weight2, weight3, weight4, weight5;
 };
-static_assert(sizeof(ComputePush) == 68, "ComputePush: espejo de SkinningPass::Push y de los 3 .comp");
+static_assert(sizeof(ComputePush) == 92, "ComputePush: espejo de SkinningPass::Push y de los 3 .comp");
 
 // Medio flotante a mano: los neutros del IBL son cuatro texels y no compensa
 // arrastrar DirectXMath por ellos. Vale para valores normales y pequeños, que
@@ -3613,10 +3613,10 @@ void D3D12Renderer::Impl::recordSkinning()
         push.sampleCount    = static_cast<uint32_t>(pose.count);
         push.rootMotionMode = pose.rootMotionMode;
         push.frozenWeight   = pose.frozenWeight;
-        uint32_t* cb[4] = { &push.clipBase0, &push.clipBase1, &push.clipBase2, &push.clipBase3 };
-        float*    tt[4] = { &push.time0, &push.time1, &push.time2, &push.time3 };
-        float*    ww[4] = { &push.weight0, &push.weight1, &push.weight2, &push.weight3 };
-        for (int k = 0; k < 4; k++) {
+        uint32_t* cb[kMaxPoseSamples] = { &push.clipBase0, &push.clipBase1, &push.clipBase2, &push.clipBase3, &push.clipBase4, &push.clipBase5 };
+        float*    tt[kMaxPoseSamples] = { &push.time0, &push.time1, &push.time2, &push.time3, &push.time4, &push.time5 };
+        float*    ww[kMaxPoseSamples] = { &push.weight0, &push.weight1, &push.weight2, &push.weight3, &push.weight4, &push.weight5 };
+        for (int k = 0; k < kMaxPoseSamples; k++) {
             const bool usada = k < pose.count;
             *cb[k] = usada ? static_cast<uint32_t>(pose.samples[k].clip) * B : 0u;
             *tt[k] = usada ? pose.samples[k].time : 0.0f;

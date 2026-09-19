@@ -2,6 +2,7 @@
 // estados y serialización. Plain main + asserts, sin framework — coherente con
 // camera_tests.cpp y physics_tests.cpp.
 #include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Core/Blend2D.h"
 #include "DonTopo/Core/GameObject.h"
 #include "DonTopo/Core/Scene.h"
 #include "DonTopo/Physics/PhysicsManager.h"
@@ -6770,6 +6771,254 @@ static void test_pose_continuity_interrupted_fade()
     CHECK(glm::length(despues - antes) < 0.5f);
 }
 
+// ── Blend 2D: triangulación y pesos ────────────────────────────────────────
+static float peso2D(const Blend2DWeight* w, int n, int point)
+{
+    float s = 0.0f;
+    for (int i = 0; i < n; i++) if (w[i].point == point) s += w[i].weight;
+    return s;
+}
+static float suma2D(const Blend2DWeight* w, int n)
+{
+    float s = 0.0f;
+    for (int i = 0; i < n; i++) s += w[i].weight;
+    return s;
+}
+
+static void test_blend2d_inside_triangle_barycentric()
+{
+    const std::vector<glm::vec2> pts = { {0, 0}, {2, 0}, {0, 2} };
+    Blend2DWeight w[3];
+    const int n = blend2DWeights(pts, {0.5f, 0.5f}, w);
+    CHECK(n == 3);
+    CHECK(nearlyEqual(peso2D(w, n, 0), 0.5f));
+    CHECK(nearlyEqual(peso2D(w, n, 1), 0.25f));
+    CHECK(nearlyEqual(peso2D(w, n, 2), 0.25f));
+}
+
+static void test_blend2d_vertex_edge_outside()
+{
+    const std::vector<glm::vec2> pts = { {0, 0}, {2, 0}, {0, 2} };
+    Blend2DWeight w[3];
+    int n = blend2DWeights(pts, {2, 0}, w);                 // vértice
+    CHECK(n == 1 && w[0].point == 1 && nearlyEqual(w[0].weight, 1.0f));
+    n = blend2DWeights(pts, {1, 0}, w);                     // arista
+    CHECK(n == 2);
+    CHECK(nearlyEqual(peso2D(w, n, 0), 0.5f) && nearlyEqual(peso2D(w, n, 1), 0.5f));
+    n = blend2DWeights(pts, {1, -3}, w);                    // fuera: arista inferior
+    CHECK(n == 2);
+    CHECK(nearlyEqual(peso2D(w, n, 0), 0.5f) && nearlyEqual(peso2D(w, n, 1), 0.5f));
+    n = blend2DWeights(pts, {5, 5}, w);                     // fuera: hipotenusa, en su centro
+    CHECK(n == 2);
+    CHECK(nearlyEqual(peso2D(w, n, 1), 0.5f) && nearlyEqual(peso2D(w, n, 2), 0.5f));
+}
+
+static void test_blend2d_degenerate_cases()
+{
+    Blend2DWeight w[3];
+    // Alineados: el valor cae entre el 2º y el 3º por orden a lo largo de la
+    // recta, aunque el índice del medio sea el último.
+    const std::vector<glm::vec2> linea = { {0, 0}, {4, 4}, {1, 1} };
+    CHECK(triangulate2D(linea).empty());
+    int n = blend2DWeights(linea, {2.5f, 2.5f}, w);
+    CHECK(n == 2);
+    CHECK(nearlyEqual(peso2D(w, n, 2), 0.5f) && nearlyEqual(peso2D(w, n, 1), 0.5f));
+    // Dos puntos, y el valor fuera por un lado.
+    const std::vector<glm::vec2> dos = { {0, 0}, {1, 0} };
+    n = blend2DWeights(dos, {-1, 3}, w);
+    CHECK(n == 1 && w[0].point == 0);
+    // Uno solo.
+    n = blend2DWeights({ {3, 3} }, {0, 0}, w);
+    CHECK(n == 1 && w[0].point == 0 && nearlyEqual(w[0].weight, 1.0f));
+    // Repetido: cuenta el primero, el otro nunca recibe peso.
+    const std::vector<glm::vec2> rep = { {0, 0}, {2, 0}, {0, 2}, {2, 0} };
+    CHECK(triangulate2D(rep).size() == 1u);
+    n = blend2DWeights(rep, {2, 0}, w);
+    CHECK(n == 1 && w[0].point == 1);
+}
+
+// Rejilla concíclica: las dos diagonales son Delaunay; solo puede quedar una.
+static void test_blend2d_cocircular_square()
+{
+    const std::vector<glm::vec2> pts = { {-1, -1}, {1, -1}, {-1, 1}, {1, 1} };
+    CHECK(triangulate2D(pts).size() == 2u);
+    Blend2DWeight w[3];
+    for (int i = 0; i <= 100; i++)
+    {
+        const float t = -1.0f + 0.02f * (float)i;
+        const int n = blend2DWeights(pts, {t, t}, w);
+        CHECK(nearlyEqual(suma2D(w, n), 1.0f));
+    }
+}
+
+// Cuadrilátero con la diagonal larga (A-B) primera en orden lexicográfico:
+// el círculo de ABC contiene a D, así que Delaunay se queda con la corta (C-D).
+// Sin el test del círculo, el filtro de solapes aceptaría ABC y ABD igual.
+static void test_blend2d_prefers_delaunay_diagonal()
+{
+    const std::vector<glm::vec2> pts = { {-2, 0}, {2, 0}, {0, 1}, {0, -1} };
+    CHECK(triangulate2D(pts).size() == 2u);
+    Blend2DWeight w[3];
+    const int n = blend2DWeights(pts, {0.1f, 0.2f}, w);     // dentro de BCD
+    CHECK(nearlyEqual(peso2D(w, n, 0), 0.0f));
+    CHECK(peso2D(w, n, 1) > 0.0f);
+}
+
+static void test_blend2d_continuity_sweep()
+{
+    const std::vector<glm::vec2> pts = { {-1, -1}, {1, -1}, {-1, 1}, {1, 1}, {0.2f, 0.1f} };
+    CHECK(triangulate2D(pts).size() == 4u);
+    float prev[2][301][5] = {};
+    float maxSalto = 0.0f, maxErrSuma = 0.0f;
+    for (int iy = 0; iy <= 300; iy++)
+        for (int ix = 0; ix <= 300; ix++)
+        {
+            const glm::vec2 p(-1.5f + 0.01f * ix, -1.5f + 0.01f * iy);
+            Blend2DWeight w[3];
+            const int n = blend2DWeights(pts, p, w);
+            maxErrSuma = std::max(maxErrSuma, std::fabs(suma2D(w, n) - 1.0f));
+            float* cur = prev[iy & 1][ix];
+            for (int k = 0; k < 5; k++) cur[k] = peso2D(w, n, k);
+            for (int k = 0; k < 5; k++)
+            {
+                if (ix > 0) maxSalto = std::max(maxSalto, std::fabs(cur[k] - prev[iy & 1][ix - 1][k]));
+                if (iy > 0) maxSalto = std::max(maxSalto, std::fabs(cur[k] - prev[(iy - 1) & 1][ix][k]));
+            }
+        }
+    CHECK(maxErrSuma < 1e-4f);
+    CHECK(maxSalto < 0.05f);
+}
+
+// Estado 2D: clips 0..3 en las esquinas de [0,1]², parámetros "x" e "y".
+static AnimatorComponent makeBlend2DState()
+{
+    AnimatorComponent a;
+    AnimatorComponent::State s;
+    s.name = "Mov"; s.clipName = "C0"; s.clipIndex = 0; s.duration = 40.0f;
+    s.ticksPerSecond = 20.0f; s.loop = true;
+    s.blendParam = "x"; s.blendParamY = "y";
+    s.clipThreshold = 0.0f; s.clipThresholdY = 0.0f;
+    s.blendEntries = { entrada("C1", 1, 20.0f, 1.0f), entrada("C2", 2, 80.0f, 0.0f), entrada("C3", 3, 40.0f, 1.0f) };
+    s.blendEntries[0].thresholdY = 0.0f;
+    s.blendEntries[1].thresholdY = 1.0f;
+    s.blendEntries[2].thresholdY = 1.0f;
+    a.addState(s);
+    a.setEntryState(0);
+    a.addParameter("x", AnimatorComponent::ParamType::Float);
+    a.addParameter("y", AnimatorComponent::ParamType::Float);
+    a.reset();
+    return a;
+}
+
+static void test_blend2d_state_samples()
+{
+    AnimatorComponent a = makeBlend2DState();
+    CHECK(a.stateBlends2D(0));
+    a.setFloat("x", 0.25f); a.setFloat("y", 0.25f);
+    a.update(0.5f, true);                               // 10 ticks: fase 0.25
+    AnimatorComponent::BlendSample bs[3];
+    const int n = a.stateBlendSamples(0, a.animTime(), bs);
+    CHECK(n == 3);
+    float suma = 0.0f;
+    for (int i = 0; i < n; i++)
+    {
+        suma += bs[i].weight;
+        CHECK(nearlyEqual(bs[i].time, 0.25f * bs[i].duration));   // misma fase
+    }
+    CHECK(nearlyEqual(suma, 1.0f));
+    // Sin parámetro Y declarado: vuelve a ser el 1D de siempre.
+    AnimatorComponent b = makeBlend2DState();
+    b.statesMutable()[0].blendParamY = "noExiste";
+    CHECK(!b.stateBlends2D(0));
+    CHECK(b.stateBlendSamples(0, 0.0f, bs) <= 2);
+}
+
+static void test_blend2d_pose_and_fade()
+{
+    AnimatorComponent a = makeBlend2DState();
+    a.setFloat("x", 0.3f); a.setFloat("y", 0.6f);
+    a.update(0.1f, true);
+    AnimationPose p = a.pose();
+    CHECK(p.count == 3);
+    // Segundo estado 2D (mismos clips) y fade de 1 s entre los dos.
+    AnimatorComponent::State s2 = a.states()[0];
+    s2.name = "Mov2";
+    a.addState(s2);
+    a.addParameter("go", AnimatorComponent::ParamType::Trigger);
+    AnimatorComponent::Transition t;
+    t.fromState = 0; t.toState = 1; t.duration = 1.0f;
+    AnimatorComponent::Condition c;
+    c.type = AnimatorComponent::ConditionType::Trigger; c.paramName = "go";
+    t.conditions.push_back(c);
+    a.addTransition(t);
+    a.setTrigger("go");
+    a.update(0.016f, true);
+    a.update(0.3f, true);
+    p = a.pose();
+    CHECK(p.count == 6);
+    float suma = 0.0f;
+    for (int i = 0; i < p.count; i++) suma += p.samples[i].weight;
+    CHECK(nearlyEqual(suma, 1.0f));
+}
+
+static void test_blend2d_legacy_pair_is_two_heaviest()
+{
+    AnimatorComponent a = makeBlend2DState();
+    a.setFloat("x", 0.9f); a.setFloat("y", 0.2f);      // triángulo con C1 dominante
+    a.update(0.1f, true);
+    AnimatorComponent::BlendSample bs[3];
+    const int n = a.stateBlendSamples(0, a.animTime(), bs);
+    int best = 0, second = -1;
+    for (int i = 1; i < n; i++) if (bs[i].weight > bs[best].weight) best = i;
+    for (int i = 0; i < n; i++) if (i != best && (second < 0 || bs[i].weight > bs[second].weight)) second = i;
+    CHECK(a.poseClipB() == bs[best].clip);
+    CHECK(a.poseClipA() == bs[second].clip);
+    CHECK(nearlyEqual(a.poseWeight(), bs[best].weight / (bs[best].weight + bs[second].weight)));
+}
+
+static void test_blend2d_root_motion_samples()
+{
+    AnimatorComponent a = makeBlend2DState();
+    a.statesMutable()[0].rootMotion = AnimatorComponent::RootMotion::Apply;
+    a.setFloat("x", 0.3f); a.setFloat("y", 0.6f);
+    a.update(0.1f, true);
+    a.update(0.1f, true);
+    const auto& rm = a.rootMotionSamples();
+    CHECK(rm.size() == 3u);
+    const AnimationPose p = a.pose();
+    for (const auto& s : rm) CHECK(nearlyEqual(s.weight, pesoMuestra(p, s.clip)));
+}
+
+static void test_blend2d_serialization(PhysicsManager& pm, AudioManager& am)
+{
+    Scene scene("Test");
+    GameObject* go = scene.addGameObject("Personaje");
+    const uint64_t id = go->id;
+    auto a = std::make_shared<AnimatorComponent>(makeBlend2DState());
+    a->statesMutable()[0].clipThresholdY = 0.125f;
+    go->setAnimator(a);
+    nlohmann::json j = scene.toJson();
+    Scene loaded("Loaded");
+    CHECK(loaded.fromJson(j, pm, am));
+    GameObject* found = loaded.findById(id);
+    CHECK(found && found->hasAnimator());
+    if (!found || !found->hasAnimator()) return;
+    const auto& st = found->getAnimator()->states()[0];
+    CHECK(st.blendParamY == "y");
+    CHECK(nearlyEqual(st.clipThresholdY, 0.125f));
+    CHECK(st.blendEntries.size() == 3u);
+    if (st.blendEntries.size() == 3u) CHECK(nearlyEqual(st.blendEntries[2].thresholdY, 1.0f));
+    // Un 1D no escribe ninguna clave nueva.
+    auto b = std::make_shared<AnimatorComponent>(makeTwoBlendStates());
+    GameObject* go2 = scene.addGameObject("Otro");
+    go2->setAnimator(b);
+    const std::string texto = scene.toJson().dump();
+    size_t apariciones = 0;
+    // "hresholdY" casa con clipThresholdY y con thresholdY.
+    for (size_t pos = texto.find("hresholdY"); pos != std::string::npos; pos = texto.find("hresholdY", pos + 1)) apariciones++;
+    CHECK(apariciones == 4u);   // solo el estado 2D: clipThresholdY + 3 entradas
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -6907,7 +7156,18 @@ int main()
     test_pose_weights_sum_to_one();
     test_pose_continuity_fade_from_blend();
     test_pose_continuity_interrupted_fade();
+    test_blend2d_inside_triangle_barycentric();
+    test_blend2d_vertex_edge_outside();
+    test_blend2d_degenerate_cases();
+    test_blend2d_cocircular_square();
+    test_blend2d_prefers_delaunay_diagonal();
+    test_blend2d_continuity_sweep();
+    test_blend2d_state_samples();
+    test_blend2d_pose_and_fade();
+    test_blend2d_legacy_pair_is_two_heaviest();
+    test_blend2d_root_motion_samples();
     test_state_without_blend_fields_loads(pm, am);
+    test_blend2d_serialization(pm, am);
     test_root_lock_survives_scene_round_trip(pm, am);
     test_state_without_lock_root_motion_field_loads(pm, am);
     test_animation_sources_survive_scene_round_trip(pm, am);

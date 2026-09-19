@@ -1,4 +1,5 @@
 #include "DonTopo/Core/AnimatorComponent.h"
+#include "DonTopo/Core/Blend2D.h"
 #include "DonTopo/Renderer/SkinnedMesh.h"
 #include <algorithm>
 #include <cmath>
@@ -360,6 +361,61 @@ namespace DonTopo
 
     AnimatorComponent::BlendPair AnimatorComponent::stateBlendPair(int stateIdx, float animTime) const
     {
+        if (!stateBlends2D(stateIdx)) return stateBlendPair1D(stateIdx, animTime);
+        // 2D: la vista de dos clips son las dos muestras que más pesan.
+        BlendSample bs[3];
+        const int n = stateBlendSamples(stateIdx, animTime, bs);
+        int b = 0, a = -1;
+        for (int i = 1; i < n; i++) if (bs[i].weight > bs[b].weight) b = i;
+        for (int i = 0; i < n; i++) if (i != b && (a < 0 || bs[i].weight > bs[a].weight)) a = i;
+        if (a < 0) a = b;
+        const float wa = bs[a].weight, wb = bs[b].weight;
+        return { bs[a].clip, bs[a].time, bs[b].clip, bs[b].time,
+                 (a == b || wa + wb <= 0.0f) ? 1.0f : wb / (wa + wb), bs[a].duration, bs[b].duration };
+    }
+
+    bool AnimatorComponent::stateBlends2D(int stateIdx) const
+    {
+        return stateBlends(stateIdx) && hasParam(m_states[stateIdx].blendParamY, ParamType::Float);
+    }
+
+    int AnimatorComponent::stateBlendSamples(int stateIdx, float animTime, BlendSample out[3]) const
+    {
+        if (!stateBlends2D(stateIdx))
+        {
+            const BlendPair bp = stateBlendPair1D(stateIdx, animTime);
+            if (bp.clipA == bp.clipB) { out[0] = { bp.clipB, bp.timeB, 1.0f, bp.durB }; return 1; }
+            out[0] = { bp.clipA, bp.timeA, 1.0f - bp.weight, bp.durA };
+            out[1] = { bp.clipB, bp.timeB, bp.weight, bp.durB };
+            return 2;
+        }
+        const State& st    = m_states[stateIdx];
+        const float  phase = st.duration > 0.0f ? animTime / st.duration : 0.0f;
+        // Puntos: el principal primero (desempata), luego las entradas con clip.
+        std::vector<glm::vec2> pts;
+        std::vector<int>       quien;   // -1 principal, k entrada
+        pts.push_back({ st.clipThreshold, st.clipThresholdY });
+        quien.push_back(-1);
+        for (int k = 0; k < (int)st.blendEntries.size(); k++)
+            if (st.blendEntries[k].clipIndex >= 0)
+            {
+                pts.push_back({ st.blendEntries[k].threshold, st.blendEntries[k].thresholdY });
+                quien.push_back(k);
+            }
+        Blend2DWeight w[3];
+        const int n = blend2DWeights(pts, { getFloat(st.blendParam), getFloat(st.blendParamY) }, w);
+        for (int i = 0; i < n; i++)
+        {
+            const int k = quien[w[i].point];
+            if (k < 0) out[i] = { st.clipIndex, animTime, w[i].weight, st.duration };
+            else       out[i] = { st.blendEntries[k].clipIndex, phase * st.blendEntries[k].duration,
+                                  w[i].weight, st.blendEntries[k].duration };
+        }
+        return n;
+    }
+
+    AnimatorComponent::BlendPair AnimatorComponent::stateBlendPair1D(int stateIdx, float animTime) const
+    {
         const int clip = (stateIdx >= 0 && stateIdx < (int)m_states.size() && m_states[stateIdx].clipIndex >= 0)
                              ? m_states[stateIdx].clipIndex : 0;
         const float durActual = (stateIdx >= 0 && stateIdx < (int)m_states.size()) ? m_states[stateIdx].duration : 0.0f;
@@ -413,16 +469,15 @@ namespace DonTopo
         out.rootMotionMode = poseRootMotionMode();
         out.freezeNow      = m_freezePending;
         auto add = [&](int clip, float time, float w) {
-            if (w <= 0.0f || out.count >= 4) return;
+            if (w <= 0.0f || out.count >= kMaxPoseSamples) return;
             out.samples[out.count++] = { clip < 0 ? 0 : clip, time, w };
         };
-        // La pareja de blend de un estado, con SU reloj, escalada por el peso
-        // que ese estado tiene en el fade.
-        auto addPair = [&](int stateIdx, float time, float scale) {
-            const BlendPair bp = stateBlendPair(stateIdx, time);
-            if (bp.clipA == bp.clipB) { add(bp.clipB, bp.timeB, scale); return; }
-            add(bp.clipA, bp.timeA, scale * (1.0f - bp.weight));
-            add(bp.clipB, bp.timeB, scale * bp.weight);
+        // Las muestras de blend de un estado (1D o 2D), con SU reloj, escaladas
+        // por el peso que ese estado tiene en el fade.
+        auto addMuestras = [&](int stateIdx, float time, float scale) {
+            BlendSample bs[3];
+            const int n = stateBlendSamples(stateIdx, time, bs);
+            for (int i = 0; i < n; i++) add(bs[i].clip, bs[i].time, scale * bs[i].weight);
         };
         if (m_currentState < 0 || m_currentState >= (int)m_states.size())
         {
@@ -433,16 +488,16 @@ namespace DonTopo
         if (m_frozenFade)
         {
             out.frozenWeight = 1.0f - w;
-            addPair(m_currentState, m_animTime, w);
+            addMuestras(m_currentState, m_animTime, w);
         }
         else if (blending() && m_prevState < (int)m_states.size())
         {
             // El que sale aporta su pareja completa, no solo su principal (A3).
-            addPair(m_prevState, m_prevAnimTime, 1.0f - w);
-            addPair(m_currentState, m_animTime, w);
+            addMuestras(m_prevState, m_prevAnimTime, 1.0f - w);
+            addMuestras(m_currentState, m_animTime, w);
         }
         else
-            addPair(m_currentState, m_animTime, 1.0f);
+            addMuestras(m_currentState, m_animTime, 1.0f);
         return out;
     }
 
@@ -731,18 +786,16 @@ namespace DonTopo
             }
             return;
         }
-        const BlendPair bp = stateBlendPair(m_currentState, m_animTime);
-        // Cada clip del blend va en la fase del principal: sus ticks acumulados
-        // son los del principal escalados a su duración.
-        const double escA = st.duration > 0.0f ? (double)bp.durA / st.duration : 0.0;
-        const double escB = st.duration > 0.0f ? (double)bp.durB / st.duration : 0.0;
-        if (bp.clipA == bp.clipB)
+        BlendSample bs[3];
+        const int n = stateBlendSamples(m_currentState, m_animTime, bs);
+        // Cada clip va en la fase del principal: sus ticks acumulados son los
+        // del principal escalados a su duración.
+        for (int i = 0; i < n; i++)
         {
-            m_rootMotionSamples.push_back({ bp.clipA, ticks0 * escA, m_stateTicks * escA, bp.durA, st.loop, 1.0f });
-            return;
+            const double esc = st.duration > 0.0f ? (double)bs[i].duration / st.duration : 0.0;
+            m_rootMotionSamples.push_back({ bs[i].clip, ticks0 * esc, m_stateTicks * esc, bs[i].duration,
+                                            st.loop, n == 1 ? 1.0f : bs[i].weight });
         }
-        m_rootMotionSamples.push_back({ bp.clipA, ticks0 * escA, m_stateTicks * escA, bp.durA, st.loop, 1.0f - bp.weight });
-        m_rootMotionSamples.push_back({ bp.clipB, ticks0 * escB, m_stateTicks * escB, bp.durB, st.loop, bp.weight });
     }
 
     void AnimatorComponent::update(float dt, bool evaluateTransitions)

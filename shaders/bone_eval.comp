@@ -30,16 +30,16 @@ layout(push_constant) uniform PC {
     uint  boneCount;
     uint  vertexCount;
     // --- Solo los lee bone_eval.comp ---
-    // Hasta 4 muestras (clip * boneCount, tiempo en ticks, peso) y el peso de
+    // Hasta 6 muestras (clip * boneCount, tiempo en ticks, peso) y el peso de
     // la pose congelada. Escalares y no arrays: en HLSL un array de un cbuffer
     // ocupa 16 bytes por elemento, y spirv-cross no lo iguala. El mismo bloque
     // en los tres .comp, en SkinningPass::Push y en ComputePush de D3D12.
     uint  sampleCount;
     uint  rootMotionMode;   // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
     float frozenWeight;
-    uint  clipBase0; uint clipBase1; uint clipBase2; uint clipBase3;
-    float time0;     float time1;    float time2;    float time3;
-    float weight0;   float weight1;  float weight2;  float weight3;
+    uint  clipBase0; uint clipBase1; uint clipBase2; uint clipBase3; uint clipBase4; uint clipBase5;
+    float time0;     float time1;    float time2;    float time3;    float time4;    float time5;
+    float weight0;   float weight1;  float weight2;  float weight3;  float weight4;  float weight5;
 } push;
 
 vec4 slerpQ(vec4 a, vec4 b, float t)
@@ -133,7 +133,9 @@ void muestra(uint k, out uint cb, out float t, out float w)
     if (k == 0u)      { cb = push.clipBase0; t = push.time0; w = push.weight0; }
     else if (k == 1u) { cb = push.clipBase1; t = push.time1; w = push.weight1; }
     else if (k == 2u) { cb = push.clipBase2; t = push.time2; w = push.weight2; }
-    else              { cb = push.clipBase3; t = push.time3; w = push.weight3; }
+    else if (k == 3u) { cb = push.clipBase3; t = push.time3; w = push.weight3; }
+    else if (k == 4u) { cb = push.clipBase4; t = push.time4; w = push.weight4; }
+    else              { cb = push.clipBase5; t = push.time5; w = push.weight5; }
 }
 
 void main()
@@ -141,7 +143,7 @@ void main()
     uint bi = gl_GlobalInvocationID.x;
     if (bi >= push.boneCount) return;
 
-    // Suma ponderada de hasta 4 muestras y de la pose congelada: posición y
+    // Suma ponderada de hasta 6 muestras y de la pose congelada: posición y
     // escala lineales, rotación con el signo alineado a la primera y normalizada
     // al final (nlerp). Así un fade desde un estado con blend aporta su pareja
     // entera (A3) y una interrupción sale de la pose que había (A4). Réplica en
