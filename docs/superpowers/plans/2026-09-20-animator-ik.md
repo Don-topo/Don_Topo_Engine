@@ -486,14 +486,17 @@ static std::vector<glm::mat4> componer(const std::vector<glm::mat4>& locales, co
     return mundo;
 }
 
-// Cadena recta en +Y: A en el origen, B a 2, C a 4. El padre de A es la raíz.
+// Cadena en +Y: A en el origen, B a 2, C a 4. El padre de A es la raíz.
+// B se separa un poco en Z para que el plano del codo esté DEFINIDO: con la
+// cadena perfectamente recta, cross(C-A, B-A) es nulo y entra el eje de
+// reserva, que no es lo que quiere medir el test del pole.
 static void cadenaDePrueba(std::vector<glm::mat4>& locales, std::vector<int>& padres)
 {
     padres  = { -1, 0, 1, 2 };                       // raíz, A, B, C
     locales = { glm::mat4(1.0f),
                 glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, 0)),
-                glm::translate(glm::mat4(1.0f), glm::vec3(0, 2, 0)),
-                glm::translate(glm::mat4(1.0f), glm::vec3(0, 2, 0)) };
+                glm::translate(glm::mat4(1.0f), glm::vec3(0, 2, 0.05f)),
+                glm::translate(glm::mat4(1.0f), glm::vec3(0, 2, -0.05f)) };
 }
 
 static void test_ik_lookat()
@@ -549,7 +552,7 @@ static void test_ik_twobone_reaches_target()
     resolverIk(ik, mundo, padres, conIk);
     const auto mundo2 = componer(conIk, padres);
     const glm::vec3 c = glm::vec3(mundo2[3][3]), a = glm::vec3(mundo2[1][3]);
-    CHECK(std::fabs(glm::length(c - a) - 4.0f) < 1e-3f);
+    CHECK(std::fabs(glm::length(c - a) - 4.0f) < 1e-2f);   // la cadena mide 4 salvo el codillo en Z
     CHECK(glm::length(glm::normalize(c - a) - glm::vec3(0, 1, 0)) < 1e-3f);
     CHECK(std::isfinite(c.x) && std::isfinite(c.y) && std::isfinite(c.z));
 
