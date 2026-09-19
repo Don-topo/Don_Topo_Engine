@@ -7384,7 +7384,9 @@ static Trs evalLayeredTrs(const PackedClips& p, size_t boneCount, size_t i, cons
 
 // Cadera -> columna -> brazo. Clip 0 "Base": cada hueso en (i, 0, 0), sin
 // rotar. Clip 1 "Brazo": (0, 5 + i, 0) y 90 grados en Z. Clip 2 "Suma": de
-// (0,0,0) y sin rotar en t = 0 a (0,1,0) y 90 grados en X en t = 10.
+// (0,2,0) y 30 grados en Y en t = 0 a (0,3,0) y además 90 grados en X en
+// t = 10: su delta respecto al primer fotograma es +Y y giro en X, y SIN
+// restar el primer fotograma sale otra cosa.
 static SkinnedMesh makeLayerFixture()
 {
     SkinnedMesh m;
@@ -7395,6 +7397,7 @@ static SkinnedMesh makeLayerFixture()
     const glm::quat id(1, 0, 0, 0);
     const glm::quat rz = glm::angleAxis(glm::half_pi<float>(), glm::vec3(0, 0, 1));
     const glm::quat rx = glm::angleAxis(glm::half_pi<float>(), glm::vec3(1, 0, 0));
+    const glm::quat ry = glm::angleAxis(glm::radians(30.0f), glm::vec3(0, 1, 0));
     const char* nombres[3] = { "Base", "Brazo", "Suma" };
     for (int c = 0; c < 3; c++)
     {
@@ -7406,8 +7409,8 @@ static SkinnedMesh makeLayerFixture()
                           ch.rotKeys = { { 0.0f, id }, { 10.0f, id } }; }
             if (c == 1) { ch.posKeys = { { 0.0f, glm::vec3(0, 5.0f + b, 0) }, { 10.0f, glm::vec3(0, 5.0f + b, 0) } };
                           ch.rotKeys = { { 0.0f, rz }, { 10.0f, rz } }; }
-            if (c == 2) { ch.posKeys = { { 0.0f, glm::vec3(0) }, { 10.0f, glm::vec3(0, 1, 0) } };
-                          ch.rotKeys = { { 0.0f, id }, { 10.0f, rx } }; }
+            if (c == 2) { ch.posKeys = { { 0.0f, glm::vec3(0, 2, 0) }, { 10.0f, glm::vec3(0, 3, 0) } };
+                          ch.rotKeys = { { 0.0f, ry }, { 10.0f, rx * ry } }; }
             ch.scaleKeys = { { 0.0f, glm::vec3(1.0f) }, { 10.0f, glm::vec3(1.0f) } };
             clip.channels.push_back(ch);
         }
