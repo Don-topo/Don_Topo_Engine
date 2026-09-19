@@ -7512,6 +7512,94 @@ static void test_layers_state_index_by_editor_id()
     CHECK(a.stateIndexByEditorId(eidCapa, 7) == -1);   // capa que no existe
 }
 
+// Esqueleto de brazo: hips -> spine -> shoulder -> elbow -> hand, y head.
+static SkinnedMesh makeIkSkeleton()
+{
+    SkinnedMesh m;
+    m.skeleton.names       = { "hips", "spine", "shoulder", "elbow", "hand", "head" };
+    m.skeleton.parentIndex = { -1, 0, 1, 2, 3, 1 };
+    m.skeleton.inverseBindPose.assign(6, glm::mat4(1.0f));
+    for (int i = 0; i < 6; i++) m.skeleton.boneMap[m.skeleton.names[(size_t)i]] = i;
+    AnimationClip clip; clip.name = "Idle"; clip.duration = 10.0f; clip.ticksPerSecond = 10.0f;
+    m.animationClips.push_back(clip);
+    return m;
+}
+
+static AnimatorComponent makeIkAnimator()
+{
+    AnimatorComponent a;
+    AnimatorComponent::State s;
+    s.name = "Idle"; s.clipName = "Idle"; s.duration = 10.0f; s.ticksPerSecond = 10.0f;
+    a.addState(s);
+    a.setEntryState(0);
+    AnimatorComponent::IkConstraint mirar;
+    mirar.name = "mirar"; mirar.type = AnimatorComponent::IkType::LookAt;
+    mirar.boneName = "head"; mirar.targetId = 7;
+    AnimatorComponent::IkConstraint mano;
+    mano.name = "mano"; mano.type = AnimatorComponent::IkType::TwoBone;
+    mano.boneName = "hand"; mano.targetId = 8; mano.poleId = 9;
+    a.addIkConstraint(mirar);
+    a.addIkConstraint(mano);
+    return a;
+}
+
+static void test_ik_constraint_management()
+{
+    AnimatorComponent a = makeIkAnimator();
+    CHECK(a.ikConstraints().size() == 2u);
+    for (int i = 2; i < AnimatorComponent::kMaxIkConstraints; i++)
+    {
+        AnimatorComponent::IkConstraint c;
+        c.name = "x" + std::to_string(i);
+        CHECK(a.addIkConstraint(c) == i);
+    }
+    AnimatorComponent::IkConstraint sobra;
+    sobra.name = "sobra";
+    CHECK(a.addIkConstraint(sobra) == -1);
+    a.setIkWeight("mano", 1.7f);   CHECK(nearlyEqual(a.ikWeight("mano"), 1.0f));
+    a.setIkWeight("mano", -1.0f);  CHECK(nearlyEqual(a.ikWeight("mano"), 0.0f));
+    a.setIkWeight("mano", 0.25f);  CHECK(nearlyEqual(a.ikWeight("mano"), 0.25f));
+    a.setIkWeight("noExiste", 1.0f);
+    CHECK(nearlyEqual(a.ikWeight("noExiste"), 0.0f));
+    a.setIkTarget("mirar", 42);    CHECK(a.ikConstraints()[0].targetId == 42u);
+    a.setIkPole("mano", 43);       CHECK(a.ikConstraints()[1].poleId == 43u);
+    a.setIkTarget("noExiste", 99);   // no revienta ni toca nada
+    CHECK(a.ikConstraints()[0].targetId == 42u);
+    a.removeIkConstraint(0);
+    CHECK(a.ikConstraints().size() == (size_t)AnimatorComponent::kMaxIkConstraints - 1);
+    CHECK(a.ikConstraints()[0].name == "mano");
+}
+
+static void test_ik_chain_resolution()
+{
+    const SkinnedMesh m = makeIkSkeleton();
+    AnimatorComponent a = makeIkAnimator();
+    std::vector<std::string> avisos;
+    a.bindClips(m, &avisos);
+    const auto& mirar = a.ikConstraints()[0];
+    CHECK(mirar.boneIndex == 5 && mirar.parentIndex == 1);
+    const auto& mano = a.ikConstraints()[1];
+    CHECK(mano.boneIndex == 4 && mano.parentIndex == 3 && mano.grandParentIndex == 2);
+    CHECK(avisos.empty());
+
+    // Hueso que no existe: aviso y restricción inactiva.
+    a.ikConstraintsMutable()[0].boneName = "noExiste";
+    // Cadena demasiado corta para TwoBone: hips no tiene ni padre ni abuelo.
+    a.ikConstraintsMutable()[1].boneName = "hips";
+    avisos.clear();
+    a.rebindClips(m, &avisos);
+    CHECK(a.ikConstraints()[0].boneIndex == -1);
+    CHECK(a.ikConstraints()[1].boneIndex == -1);
+    CHECK(avisos.size() == 2u);
+    bool nombre = false, cadena = false;
+    for (const auto& w : avisos)
+    {
+        if (w.find("noExiste") != std::string::npos) nombre = true;
+        if (w.find("cadena")   != std::string::npos) cadena = true;
+    }
+    CHECK(nombre && cadena);
+}
+
 int main()
 {
     // Una sola PxFoundation por proceso: un único PhysicsManager compartido por
@@ -7669,6 +7757,8 @@ int main()
     test_layers_graph_key_sees_layer_edits();
     test_layers_apply_graph_restores();
     test_layers_state_index_by_editor_id();
+    test_ik_constraint_management();
+    test_ik_chain_resolution();
     test_pose_block_layout();
     test_layers_override_mask_criterion();
     test_layers_additive_delta();
