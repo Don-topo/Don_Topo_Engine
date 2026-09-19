@@ -681,7 +681,11 @@ over a duration in seconds (0 = instant cut, the default, and what every old sce
 a state can also be a **1D blend** of any number of its clips: each clip has a threshold on a
 float parameter, and the two clips around the parameter's value mix linearly (below the first
 threshold or above the last, only that clip plays; with equal thresholds the first one wins).
-Scenes saved with the old two-clip blend load with the same pose. Cross-fades are continuous: fading
+Scenes saved with the old two-clip blend load with the same pose. Ticking **2D** on a blend state adds a
+second float parameter: each clip becomes a point (X threshold, Y threshold), the points are
+triangulated (Delaunay) and the three clips of the triangle holding (X, Y) mix by barycentric
+weight; outside the points it takes the nearest edge, and with all points on a line it blends
+along it. The node draws the points, the triangles and the current value. Cross-fades are continuous: fading
 out of a blend state fades the whole blend, not just its first clip, and a transition that fires
 while a cross-fade is still running starts from the pose on screen instead of jumping. Each state can also
 carry named **animation events** at normalized times of its cycle, delivered to Lua as
