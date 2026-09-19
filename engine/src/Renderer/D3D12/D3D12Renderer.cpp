@@ -1,3 +1,4 @@
+#include "DonTopo/Renderer/IkBlock.h"
 #include "DonTopo/Renderer/PoseBlock.h"
 #include "DonTopo/Renderer/D3D12/D3D12Renderer.h"
 
@@ -159,8 +160,11 @@ struct ComputePush {
     // --- Solo los lee bone_eval.comp ---
     uint32_t rootMotionMode;    // 0 libre, 1 raíz clavada a bind, 2 solo X y Z
     uint32_t poseBlockOffset;   // en uints: copia del bloque de pose del frame
+    // --- bone_ik.comp y bone_hierarchy.comp ---
+    uint32_t ikBlockOffset;     // en uints: copia del bloque de IK del frame
+    uint32_t flags;             // bit 0: la jerarquía escribe solo mundo
 };
-static_assert(sizeof(ComputePush) == 16, "ComputePush: espejo de SkinningPass::Push y de los 3 .comp");
+static_assert(sizeof(ComputePush) == 24, "ComputePush: espejo de SkinningPass::Push y de los 4 .comp");
 
 // Medio flotante a mano: los neutros del IBL son cuatro texels y no compensa
 // arrastrar DirectXMath por ellos. Vale para valores normales y pequeños, que
@@ -903,9 +907,11 @@ struct D3D12Renderer::Impl {
     //   skinning       vértices + matrices -> vértices ya deformados
     ComPtr<ID3D12RootSignature> boneEvalRootSignature;
     ComPtr<ID3D12RootSignature> boneHierarchyRootSignature;
+    ComPtr<ID3D12RootSignature> boneIkRootSignature;
     ComPtr<ID3D12RootSignature> skinningRootSignature;
     ComPtr<ID3D12PipelineState> boneEvalPipeline;
     ComPtr<ID3D12PipelineState> boneHierarchyPipeline;
+    ComPtr<ID3D12PipelineState> boneIkPipeline;
     ComPtr<ID3D12PipelineState> skinningPipeline;
     ComPtr<ID3D12PipelineState> skinnedMeshPipeline;
     ComPtr<ID3D12PipelineState> skinnedMeshWirePipeline;
@@ -950,6 +956,10 @@ struct D3D12Renderer::Impl {
         // Copia de las máscaras de la pose (la del Animator solo vale durante
         // setAnimationPose).
         std::vector<uint8_t> poseMasks[kMaxLayersPose];
+        // IK: lo que manda el Animator y su bloque, con una copia por frame.
+        AnimationIk          ik;
+        D3D12MA::Allocation* ikBlock = nullptr;
+        void*                ikBlockMapped = nullptr;
         D3D12MA::Allocation* outputVerts = nullptr;
         D3D12MA::Allocation* indices     = nullptr;
 
@@ -3229,6 +3239,13 @@ void D3D12Renderer::Impl::createSkinningPipelines()
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 4},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_UAV, 5}},
                        boneHierarchyRootSignature, "bone_hierarchy");
+    // bone_ik: escribe los locales (u4) y lee los mundos de la jerarquía (t5),
+    // los huesos (t3) y el bloque de IK (t11).
+    buildRootSignature({{RT::D3D12_ROOT_PARAMETER_TYPE_UAV, 4},
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 5},
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 3},
+                        {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 11}},
+                       boneIkRootSignature, "bone_ik");
     // skinning: lee matrices y vértices (t5, t6), escribe vértices deformados (u7)
     buildRootSignature({{RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 5},
                         {RT::D3D12_ROOT_PARAMETER_TYPE_SRV, 6},
@@ -3249,6 +3266,7 @@ void D3D12Renderer::Impl::createSkinningPipelines()
                          boneEvalPipeline);
     buildComputePipeline("shaders/bone_hierarchy.comp.dxil", boneHierarchyRootSignature.Get(),
                          boneHierarchyPipeline);
+    buildComputePipeline("shaders/bone_ik.comp.dxil", boneIkRootSignature.Get(), boneIkPipeline);
     buildComputePipeline("shaders/skinning.comp.dxil", skinningRootSignature.Get(),
                          skinningPipeline);
 
@@ -3405,6 +3423,14 @@ int D3D12Renderer::Impl::createSkinnedObject(const SkinnedMesh& mesh)
         const D3D12_RANGE noRead{0, 0};
         throwIfFailed(object.poseBlock->GetResource()->Map(0, &noRead, &object.poseBlockMapped),
                       "ID3D12Resource::Map(bloque de pose)");
+
+        desc.Width = static_cast<UINT64>(kFrameCount) * ikBlockUints() * sizeof(uint32_t);
+        throwIfFailed(allocator->CreateResource(&allocDesc, &desc, D3D12_RESOURCE_STATE_GENERIC_READ,
+                                                nullptr, &object.ikBlock, IID_NULL, nullptr),
+                      "D3D12MA::Allocator::CreateResource(bloque de IK)");
+        object.ikBlock->GetResource()->SetName(L"skinning ik block");
+        throwIfFailed(object.ikBlock->GetResource()->Map(0, &noRead, &object.ikBlockMapped),
+                      "ID3D12Resource::Map(bloque de IK)");
     }
     object.outputVerts = createStorageBuffer(
         static_cast<UINT64>(object.vertexCount) * kSkinnedOutputStride,
@@ -3590,7 +3616,7 @@ void D3D12Renderer::Impl::releaseSkinnedObjects()
     for (SkinnedObject& character : skinnedObjects) {
         for (D3D12MA::Allocation** allocation :
              {&character.posKeys, &character.rotKeys, &character.scaleKeys, &character.boneInfos,
-              &character.inputVerts, &character.localXforms, &character.finalBones, &character.poseTrs, &character.frozenTrs, &character.poseBlock,
+              &character.inputVerts, &character.localXforms, &character.finalBones, &character.poseTrs, &character.frozenTrs, &character.poseBlock, &character.ikBlock,
               &character.outputVerts, &character.indices}) {
             if (*allocation) {
                 (*allocation)->Release();
@@ -3638,6 +3664,9 @@ void D3D12Renderer::Impl::recordSkinning()
             pose.layers[L].mask = object->poseMasks[L].empty() ? nullptr : &object->poseMasks[L];
         writePoseBlock(pose, B, static_cast<uint32_t*>(object->poseBlockMapped) +
                                     static_cast<size_t>(frameIndex) * poseBlockUints(B));
+        if (object->ikBlockMapped)
+            writeIkBlock(object->ik, static_cast<uint32_t*>(object->ikBlockMapped) +
+                                         static_cast<size_t>(frameIndex) * ikBlockUints());
     }
 
     auto pushDe = [this](const SkinnedObject& object) {
@@ -3646,6 +3675,7 @@ void D3D12Renderer::Impl::recordSkinning()
         push.vertexCount     = object.vertexCount;
         push.rootMotionMode  = object.hasPose ? object.pose.rootMotionMode : 0u;
         push.poseBlockOffset = frameIndex * poseBlockUints(object.boneCount);
+        push.ikBlockOffset   = frameIndex * ikBlockUints();
         return push;
     };
 
@@ -3710,6 +3740,40 @@ void D3D12Renderer::Impl::recordSkinning()
         commandList->Dispatch((object->boneCount + 63) / 64, 1, 1);
     }
     barreraEntreFases();
+
+    // 1b) Personajes con IK: la jerarquía corre una vez de más, SIN la pasada
+    // 2 (flags bit 0), para que bone_ik pueda leer los transforms de mundo y
+    // corregir los locales. Los demás no pagan nada.
+    std::vector<SkinnedObject*> conIk;
+    for (SkinnedObject* object : activos)
+        if (object->ik.count > 0) conIk.push_back(object);
+    if (!conIk.empty()) {
+        commandList->SetComputeRootSignature(boneHierarchyRootSignature.Get());
+        commandList->SetPipelineState(boneHierarchyPipeline.Get());
+        for (const SkinnedObject* object : conIk) {
+            ComputePush push = pushDe(*object);
+            push.flags = 1u;
+            commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
+            commandList->SetComputeRootShaderResourceView(1, gpu(object->boneInfos));
+            commandList->SetComputeRootShaderResourceView(2, gpu(object->localXforms));
+            commandList->SetComputeRootUnorderedAccessView(3, gpu(object->finalBones));
+            commandList->Dispatch(1, 1, 1);
+        }
+        barreraEntreFases();
+        commandList->SetComputeRootSignature(boneIkRootSignature.Get());
+        commandList->SetPipelineState(boneIkPipeline.Get());
+        for (const SkinnedObject* object : conIk) {
+            ComputePush push = pushDe(*object);
+            push.flags = 1u;
+            commandList->SetComputeRoot32BitConstants(0, sizeof(ComputePush) / 4, &push, 0);
+            commandList->SetComputeRootUnorderedAccessView(1, gpu(object->localXforms));
+            commandList->SetComputeRootShaderResourceView(2, gpu(object->finalBones));
+            commandList->SetComputeRootShaderResourceView(3, gpu(object->boneInfos));
+            commandList->SetComputeRootShaderResourceView(4, gpu(object->ikBlock));
+            commandList->Dispatch(1, 1, 1);
+        }
+        barreraEntreFases();
+    }
 
     // 2) Jerarquía: acumula padre a hijo. Un workgroup por personaje, que va
     // por niveles de profundidad (bone_hierarchy.comp).
@@ -8333,7 +8397,7 @@ bool D3D12Renderer::Impl::releaseSkinnedSlot(size_t index)
 
     for (D3D12MA::Allocation** allocation :
          {&character.posKeys, &character.rotKeys, &character.scaleKeys, &character.boneInfos,
-          &character.inputVerts, &character.localXforms, &character.finalBones, &character.poseTrs, &character.frozenTrs, &character.poseBlock,
+          &character.inputVerts, &character.localXforms, &character.finalBones, &character.poseTrs, &character.frozenTrs, &character.poseBlock, &character.ikBlock,
           &character.outputVerts, &character.indices}) {
         if (*allocation) {
             (*allocation)->Release();
@@ -10106,6 +10170,20 @@ void D3D12Renderer::setAnimationState(int index, uint32_t clipIndex, float animT
     // El Animator del GameObject es el dueño del reloj: el backend no vuelve a
     // sumarle tiempo por su cuenta.
     character.externalClock = true;
+}
+
+void D3D12Renderer::setAnimationIk(int index, const AnimationIk& ik)
+{
+    Impl& d = *m_impl;
+    if (index < 0 || static_cast<size_t>(index) >= d.skinnedObjects.size())
+        return;
+    Impl::SkinnedObject& character = d.skinnedObjects[index];
+    character.ik = ik;
+    // Los índices vienen del Animator, resueltos contra el MISMO esqueleto:
+    // solo se filtra lo que no cabe en el SSBO.
+    for (int k = 0; k < character.ik.count; k++)
+        if (character.ik.solves[k].bone >= static_cast<int>(character.boneCount))
+            character.ik.solves[k].bone = -1;
 }
 
 void D3D12Renderer::setAnimationPose(int index, const AnimationPose& pose)

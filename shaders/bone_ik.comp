@@ -1,0 +1,224 @@
+#version 450
+// Un hilo por restricción de IK (tope 4), un workgroup por personaje. Corre
+// entre una jerarquía "solo mundo" (bone_hierarchy con flags bit 0) y la
+// jerarquía normal: lee los transforms de MUNDO y corrige los LOCALES, que es
+// lo que hace que la corrección se propague a los hijos (los dedos siguen a la
+// mano). Réplica en CPU: resolverIk en animator_tests.cpp.
+layout(local_size_x = 4) in;
+
+// Layout std430, espejo de GpuBoneInfo (engine/include/DonTopo/Renderer/SkinnedMesh.h)
+// y del mismo struct en bone_eval.comp y bone_hierarchy.comp: los cuatro
+// comparten la SSBO del binding 3, así que ningún campo se puede omitir.
+struct BoneInfo {
+    int posOffset, posCount;
+    int rotOffset, rotCount;
+    int scaleOffset, scaleCount;
+    int parentIndex, depth;
+    mat4 inverseBindPose;
+    mat4 bindLocal;
+};
+
+layout(set=0, binding=3,  std430) readonly buffer BoneInfos   { BoneInfo data[]; } boneInfos;
+layout(set=0, binding=4,  std430)          buffer LocalXforms { mat4 data[]; }     localXforms;
+layout(set=0, binding=5,  std430) readonly buffer FinalBones  { mat4 data[]; }     finalBones;
+// Bloque de IK; layout en engine/include/DonTopo/Renderer/IkBlock.h.
+layout(set=0, binding=11, std430) readonly buffer IkBlock     { uint data[]; }     ikBlock;
+
+layout(push_constant) uniform PC {
+    uint boneCount;
+    uint vertexCount;
+    uint rootMotionMode;
+    uint poseBlockOffset;
+    uint ikBlockOffset;
+    uint flags;
+} push;
+
+const uint kSolves     = 4u;
+const uint kSolveUints = 16u;
+uint  ib(uint i)  { return ikBlock.data[push.ikBlockOffset + i]; }
+float ibf(uint i) { return uintBitsToFloat(ib(i)); }
+
+vec4 qmul(vec4 a, vec4 b)
+{
+    return vec4(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz));
+}
+
+vec3 qrot(vec4 q, vec3 v)
+{
+    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+}
+
+vec4 qAxisAngle(vec3 eje, float ang)
+{
+    const float s = sin(ang * 0.5);
+    return vec4(normalize(eje) * s, cos(ang * 0.5));
+}
+
+// Rotación de un transform de mundo. Se asume escala uniforme (limitación
+// documentada de la IK).
+vec4 rotDe(mat4 m)
+{
+    vec3 c0 = normalize(m[0].xyz), c1 = normalize(m[1].xyz), c2 = normalize(m[2].xyz);
+    mat3 r  = mat3(c0, c1, c2);
+    float tr = r[0][0] + r[1][1] + r[2][2];
+    vec4 q;
+    if (tr > 0.0)
+    {
+        float s = sqrt(tr + 1.0) * 2.0;
+        q = vec4((r[1][2] - r[2][1]) / s, (r[2][0] - r[0][2]) / s, (r[0][1] - r[1][0]) / s, 0.25 * s);
+    }
+    else if (r[0][0] > r[1][1] && r[0][0] > r[2][2])
+    {
+        float s = sqrt(1.0 + r[0][0] - r[1][1] - r[2][2]) * 2.0;
+        q = vec4(0.25 * s, (r[1][0] + r[0][1]) / s, (r[2][0] + r[0][2]) / s, (r[1][2] - r[2][1]) / s);
+    }
+    else if (r[1][1] > r[2][2])
+    {
+        float s = sqrt(1.0 + r[1][1] - r[0][0] - r[2][2]) * 2.0;
+        q = vec4((r[1][0] + r[0][1]) / s, 0.25 * s, (r[2][1] + r[1][2]) / s, (r[2][0] - r[0][2]) / s);
+    }
+    else
+    {
+        float s = sqrt(1.0 + r[2][2] - r[0][0] - r[1][1]) * 2.0;
+        q = vec4((r[2][0] + r[0][2]) / s, (r[2][1] + r[1][2]) / s, 0.25 * s, (r[0][1] - r[1][0]) / s);
+    }
+    return normalize(q);
+}
+
+// Giro mínimo de a a b (unitarios). Con vectores opuestos cualquier eje
+// perpendicular vale: se elige uno estable.
+vec4 giroEntre(vec3 a, vec3 b)
+{
+    float d = clamp(dot(a, b), -1.0, 1.0);
+    if (d > 0.9999) return vec4(0.0, 0.0, 0.0, 1.0);
+    if (d < -0.9999)
+    {
+        vec3 eje = cross(a, vec3(1.0, 0.0, 0.0));
+        if (length(eje) < 1e-4) eje = cross(a, vec3(0.0, 1.0, 0.0));
+        return qAxisAngle(eje, 3.14159265);
+    }
+    return qAxisAngle(cross(a, b), acos(d));
+}
+
+// Acota el giro a maxAngle grados y lo escala por el peso.
+vec4 acotaYPesa(vec4 q, float maxAngleDeg, float weight)
+{
+    vec4  u   = normalize(q);
+    float ang = 2.0 * acos(clamp(u.w, -1.0, 1.0));
+    if (ang < 1e-6) return vec4(0.0, 0.0, 0.0, 1.0);
+    vec3  eje = u.xyz / sin(ang * 0.5);
+    ang = min(ang, radians(clamp(maxAngleDeg, 0.0, 180.0)));
+    return qAxisAngle(eje, ang * clamp(weight, 0.0, 1.0));
+}
+
+vec4 slerpDesdeIdentidad(vec4 q, float t)
+{
+    vec4  u   = normalize(q);
+    float ang = 2.0 * acos(clamp(u.w, -1.0, 1.0));
+    if (ang < 1e-6) return vec4(0.0, 0.0, 0.0, 1.0);
+    return qAxisAngle(u.xyz / sin(ang * 0.5), ang * clamp(t, 0.0, 1.0));
+}
+
+// Escribe la rotación de mundo `nueva` como LOCAL del hueso i, conservando su
+// posición y su escala locales.
+void escribeRot(int i, vec4 nuevaMundo)
+{
+    int  padre = boneInfos.data[i].parentIndex;
+    vec4 rp    = padre >= 0 ? rotDe(finalBones.data[padre]) : vec4(0.0, 0.0, 0.0, 1.0);
+    vec4 local = normalize(qmul(vec4(-rp.xyz, rp.w), nuevaMundo));
+    mat4 m     = localXforms.data[i];
+    vec3 t     = m[3].xyz;
+    vec3 s     = vec3(length(m[0].xyz), length(m[1].xyz), length(m[2].xyz));
+    // mat4_cast + escala por columnas, igual que trs() de bone_eval.
+    vec3 x = qrot(local, vec3(1.0, 0.0, 0.0)) * s.x;
+    vec3 y = qrot(local, vec3(0.0, 1.0, 0.0)) * s.y;
+    vec3 z = qrot(local, vec3(0.0, 0.0, 1.0)) * s.z;
+    localXforms.data[i] = mat4(vec4(x, 0.0), vec4(y, 0.0), vec4(z, 0.0), vec4(t, 1.0));
+}
+
+void main()
+{
+    uint k = gl_LocalInvocationID.x;
+    if (k >= ib(0u)) return;
+
+    uint  o     = kSolves + kSolveUints * k;
+    uint  tipo  = ib(o);
+    int   C     = int(ib(o + 1u));
+    int   B     = int(ib(o + 2u));
+    int   A     = int(ib(o + 3u));
+    float peso  = ibf(o + 4u);
+    vec3  obj   = vec3(ibf(o + 5u), ibf(o + 6u), ibf(o + 7u));
+    vec3  pole  = vec3(ibf(o + 8u), ibf(o + 9u), ibf(o + 10u));
+    bool  conPole = ib(o + 11u) != 0u;
+    vec3  aim   = vec3(ibf(o + 12u), ibf(o + 13u), ibf(o + 14u));
+    float maxAng = ibf(o + 15u);
+    if (C < 0 || C >= int(push.boneCount) || peso <= 0.0) return;
+
+    if (tipo == 0u)
+    {
+        vec3 p = finalBones.data[C][3].xyz;
+        vec3 d = obj - p;
+        if (length(d) < 1e-5 || length(aim) < 1e-5) return;
+        vec4 R      = rotDe(finalBones.data[C]);
+        vec3 actual = normalize(qrot(R, normalize(aim)));
+        vec4 giro   = acotaYPesa(giroEntre(actual, normalize(d)), maxAng, peso);
+        escribeRot(C, normalize(qmul(giro, R)));
+        return;
+    }
+
+    // TwoBone: A abuelo, B padre, C extremo.
+    if (A < 0 || B < 0 || A >= int(push.boneCount) || B >= int(push.boneCount)) return;
+    vec3  pA = finalBones.data[A][3].xyz;
+    vec3  pB = finalBones.data[B][3].xyz;
+    vec3  pC = finalBones.data[C][3].xyz;
+    float lAB = length(pB - pA), lBC = length(pC - pB);
+    if (lAB < 1e-5 || lBC < 1e-5) return;
+    vec3 haciaT = obj - pA;
+    if (length(haciaT) < 1e-5) return;
+    float lAT = clamp(length(haciaT), 1e-4, lAB + lBC - 1e-4);
+
+    // 1) Codo: ángulo actual y deseado por la ley de cosenos.
+    vec3  BA   = normalize(pA - pB), BC = normalize(pC - pB);
+    float ang0 = acos(clamp(dot(BA, BC), -1.0, 1.0));
+    float ang1 = acos(clamp((lAB * lAB + lBC * lBC - lAT * lAT) / (2.0 * lAB * lBC), -1.0, 1.0));
+    vec3  eje  = cross(pC - pA, pB - pA);
+    if (length(eje) < 1e-5) eje = cross(pC - pA, vec3(0.0, 0.0, 1.0));
+    if (length(eje) < 1e-5) eje = vec3(0.0, 1.0, 0.0);
+    vec4 flex = qAxisAngle(eje, (ang1 - ang0) * clamp(peso, 0.0, 1.0));
+
+    // 2) Hombro: lleva el extremo (ya flexionado) al objetivo.
+    vec3 pCflex = pB + qrot(flex, pC - pB);
+    vec4 giro   = slerpDesdeIdentidad(giroEntre(normalize(pCflex - pA), normalize(haciaT)), peso);
+
+    // 3) Pole: gira alrededor del eje A->objetivo hasta meter el codo en su plano.
+    if (conPole)
+    {
+        vec3 ejeT    = normalize(haciaT);
+        // El codo solo lo mueve el giro del hombro: la flexión es la rotación del
+        // PROPIO codo y no cambia su posición.
+        vec3 pBnuevo = pA + qrot(giro, pB - pA);
+        vec3 actual  = pBnuevo - pA - ejeT * dot(pBnuevo - pA, ejeT);
+        vec3 deseado = pole - pA - ejeT * dot(pole - pA, ejeT);
+        if (length(actual) > 1e-5 && length(deseado) > 1e-5)
+        {
+            vec4 q = slerpDesdeIdentidad(giroEntre(normalize(actual), normalize(deseado)), peso);
+            giro = normalize(qmul(q, giro));
+        }
+    }
+
+    vec4 RA = rotDe(finalBones.data[A]);
+    vec4 RB = rotDe(finalBones.data[B]);
+    vec4 RAnuevo = normalize(qmul(giro, RA));
+    vec4 RBnuevo = normalize(qmul(giro, qmul(flex, RB)));
+    escribeRot(A, RAnuevo);
+    // B se mide contra el mundo NUEVO de A, que escribeRot no ha propagado (la
+    // jerarquía corre después): se compone a mano.
+    vec4 local = normalize(qmul(vec4(-RAnuevo.xyz, RAnuevo.w), RBnuevo));
+    mat4 mB = localXforms.data[B];
+    vec3 t  = mB[3].xyz;
+    vec3 s  = vec3(length(mB[0].xyz), length(mB[1].xyz), length(mB[2].xyz));
+    vec3 x  = qrot(local, vec3(1.0, 0.0, 0.0)) * s.x;
+    vec3 y  = qrot(local, vec3(0.0, 1.0, 0.0)) * s.y;
+    vec3 z  = qrot(local, vec3(0.0, 0.0, 1.0)) * s.z;
+    localXforms.data[B] = mat4(vec4(x, 0.0), vec4(y, 0.0), vec4(z, 0.0), vec4(t, 1.0));
+}

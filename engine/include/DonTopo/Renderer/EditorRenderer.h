@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DonTopo/Core/AnimationIk.h"
 #include "DonTopo/Core/AnimationPose.h"
 #include "DonTopo/Renderer/RendererState.h"
 #include "DonTopo/Renderer/UniformBufferObject.h"
@@ -187,6 +188,11 @@ namespace DonTopo
             // muestras (clip, tiempo, peso), el peso de la pose congelada y la
             // petición de congelar, más el modo de raíz (ver AnimationPose).
             virtual void setAnimationPose(int index, const AnimationPose& pose) = 0;
+            // IK del frame (fila 15 del audit de animación): hasta 4
+            // restricciones ya resueltas contra la escena, con el objetivo y el
+            // pole en espacio del MODELO. count 0 = sin IK, y hay que llamarlo
+            // igual para apagar la del frame anterior.
+            virtual void setAnimationIk(int index, const AnimationIk& ik) = 0;
 
             // Suelta lo que quedó pendiente de borrar cuando la GPU lo permita.
             virtual void tickDeferredDeletes() = 0;

@@ -1,3 +1,4 @@
+#include "DonTopo/Renderer/IkBlock.h"
 #include "DonTopo/Renderer/PoseBlock.h"
 #include "DonTopo/Renderer/Passes/SkinningPass.h"
 #include "DonTopo/Renderer/GpuDevice.h"
@@ -18,8 +19,8 @@ void SkinningPass::createPipelines(const Context& ctx)
 {
     // --- Descriptor set layout: 10 storage buffers (8 y 9: poseTrs y
     // frozenTrs, solo de bone_eval) ---
-    VkDescriptorSetLayoutBinding bindings[11]{};
-    for (uint32_t i = 0; i < 11; i++)
+    VkDescriptorSetLayoutBinding bindings[12]{};
+    for (uint32_t i = 0; i < 12; i++)
     {
         bindings[i].binding         = i;
         bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -29,7 +30,7 @@ void SkinningPass::createPipelines(const Context& ctx)
 
     VkDescriptorSetLayoutCreateInfo dslInfo{};
     dslInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dslInfo.bindingCount = 11;
+    dslInfo.bindingCount = 12;
     dslInfo.pBindings    = bindings;
     if (vkCreateDescriptorSetLayout(ctx.gpu.device(), &dslInfo, nullptr, &m_descLayout) != VK_SUCCESS)
         throw std::runtime_error("failed to create compute descriptor set layout!");
@@ -78,15 +79,16 @@ void SkinningPass::createPipelines(const Context& ctx)
 
     makePipeline("shaders/bone_eval.comp.spv",      m_boneEval);
     makePipeline("shaders/bone_hierarchy.comp.spv", m_boneHierarchy);
+    makePipeline("shaders/bone_ik.comp.spv",        m_boneIk);
     makePipeline("shaders/skinning.comp.spv",       m_skinning);
 }
 
 bool SkinningPass::addPool(const Context& ctx)
 {
-    // 11 SSBOs por set, que son los once buffers que ata initSkinnedRenderObject.
+    // 12 SSBOs por set, que son los doce buffers que ata initSkinnedRenderObject.
     VkDescriptorPoolSize ps{};
     ps.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    ps.descriptorCount = 11 * kSetsPerPool;
+    ps.descriptorCount = 12 * kSetsPerPool;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -148,6 +150,7 @@ void SkinningPass::destroyPipelines(const Context& ctx)
     m_descPools.clear();
     vkDestroyPipeline(ctx.gpu.device(), m_boneEval,      nullptr);
     vkDestroyPipeline(ctx.gpu.device(), m_boneHierarchy, nullptr);
+    vkDestroyPipeline(ctx.gpu.device(), m_boneIk,        nullptr);
     vkDestroyPipeline(ctx.gpu.device(), m_skinning,      nullptr);
     vkDestroyPipelineLayout(ctx.gpu.device(), m_pipelineLayout, nullptr);
     vkDestroyDescriptorSetLayout(ctx.gpu.device(), m_descLayout, nullptr);
@@ -194,6 +197,8 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
             pose.layers[L].mask = obj.poseMasks[L].empty() ? nullptr : &obj.poseMasks[L];
         writePoseBlock(pose, obj.boneCount,
                        static_cast<uint32_t*>(obj.poseBlockMapped) + (size_t)ctx.frameIndex * poseBlockUints(obj.boneCount));
+        if (obj.ikBlockMapped)
+            writeIkBlock(obj.ik, static_cast<uint32_t*>(obj.ikBlockMapped) + (size_t)ctx.frameIndex * ikBlockUints());
     }
 
     auto pushDe = [&ctx](const SkinnedRenderObject& obj) {
@@ -202,6 +207,7 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
         push.vertexCount     = obj.vertexCount;
         push.rootMotionMode  = obj.hasPose ? obj.pose.rootMotionMode : 0u;
         push.poseBlockOffset = ctx.frameIndex * poseBlockUints(obj.boneCount);
+        push.ikBlockOffset   = ctx.frameIndex * ikBlockUints();
         return push;
     };
 
@@ -253,12 +259,14 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
     // personaje, que serializaban a todos: 1,41 ms de 11,16 con 30 personajes
     // (docs/animation-audit.md, fila 9). De paso cada pipeline se enlaza una
     // vez por frame y no una por personaje.
-    auto fase = [&](VkPipeline pipeline, auto grupos) {
+    auto fase = [&](VkPipeline pipeline, const std::vector<size_t>& lista, uint32_t flags, auto grupos) {
+        if (lista.empty()) return;
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-        for (size_t i : activos)
+        for (size_t i : lista)
         {
             SkinnedRenderObject& obj = ctx.skinnedObjects[i];
-            const Push push = pushDe(obj);
+            Push push = pushDe(obj);
+            push.flags = flags;
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                 m_pipelineLayout, 0, 1, &obj.computeDescSet, 0, nullptr);
             vkCmdPushConstants(cmd, m_pipelineLayout,
@@ -278,15 +286,31 @@ void SkinningPass::record(const Context& ctx, VkCommandBuffer cmd)
             0, 1, &mb, 0, nullptr, 0, nullptr);
     };
 
+    // Los personajes con IK necesitan los transforms de MUNDO entre la
+    // jerarquía y el skinning, así que su jerarquía corre dos veces: la primera
+    // sin la pasada 2 (flags bit 0), bone_ik corrige los locales y la segunda
+    // deja ya las matrices de skinning. Los demás no pagan nada.
+    std::vector<size_t> conIk;
+    for (size_t i : activos)
+        if (ctx.skinnedObjects[i].ik.count > 0) conIk.push_back(i);
+
     // 1) bone_eval: claves -> transformaciones locales. Un hilo por hueso.
-    fase(m_boneEval, [](const SkinnedRenderObject& o) { return (o.boneCount + 63) / 64; });
+    fase(m_boneEval, activos, 0u, [](const SkinnedRenderObject& o) { return (o.boneCount + 63) / 64; });
     barreraEntreFases();
+    if (!conIk.empty())
+    {
+        // 2a) jerarquía solo mundo y 2b) IK sobre los locales.
+        fase(m_boneHierarchy, conIk, 1u, [](const SkinnedRenderObject&) { return 1u; });
+        barreraEntreFases();
+        fase(m_boneIk, conIk, 1u, [](const SkinnedRenderObject&) { return 1u; });
+        barreraEntreFases();
+    }
     // 2) bone_hierarchy: locales -> finales (mundo x inverse bind pose). Un
     //    workgroup por personaje, por niveles de profundidad.
-    fase(m_boneHierarchy, [](const SkinnedRenderObject&) { return 1u; });
+    fase(m_boneHierarchy, activos, 0u, [](const SkinnedRenderObject&) { return 1u; });
     barreraEntreFases();
     // 3) skinning: vértices deformados. Un hilo por vértice.
-    fase(m_skinning, [](const SkinnedRenderObject& o) { return (o.vertexCount + 63) / 64; });
+    fase(m_skinning, activos, 0u, [](const SkinnedRenderObject& o) { return (o.vertexCount + 63) / 64; });
 
     // Los vértices escritos por compute los lee el ensamblador de vértices de
     // los pases de dibujo: una sola barrera para todos los personajes.
