@@ -322,19 +322,16 @@ namespace DonTopo
             // enviar la pose al backend (applySkinnedFrame).
             void clearFreezeRequest() { m_freezePending = false; }
 
-            // --- La pose que sale a la GPU ---
-            // Los cinco valores que consume el Renderer: dos clips, sus dos
-            // relojes y el peso (pose = mix(A, B, w)). Resuelven los DOS
-            // orígenes de mezcla que hay:
-            //   - cross-fade en vuelo: A = estado que se apaga, B = el nuevo.
+            // --- La pareja PRINCIPAL de la pose ---
+            // Dos clips, sus dos relojes y el peso (mix(A, B, w)):
+            //   - cross-fade en vuelo: A = estado que se apaga, B = el nuevo,
+            //     cada uno con su clip primario.
             //   - si no, estado con blend: los dos clips vecinos del valor del
             //     parámetro entre sus umbrales, con peso lineal.
-            //   - ninguno de los dos: A == B y peso 1 (una sola evaluación).
-            // El cross-fade MANDA sobre el blend del estado: en el push
-            // constant solo caben dos clips, así que mientras dura la
-            // transición cada lado aporta su clip primario.
-            // La pareja PRINCIPAL: la vista de dos clips de siempre, para Lua y los
-            // tests. Lo que va a la GPU es pose().
+            //   - ninguno de los dos: A == B y peso 1.
+            // Es la vista de dos clips de siempre, para Lua y los tests. Lo que
+            // va a la GPU es pose(), que en un fade lleva las parejas enteras de
+            // los dos estados (y la pose congelada si se interrumpió).
             int   poseClipA() const;
             float poseTimeA() const;   // ticks
             int   poseClipB() const;
